@@ -1,6 +1,9 @@
 package entity_semantics
 
 import (
+	"fmt"
+
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/graphenrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
@@ -165,10 +168,12 @@ func registerAll() {
   1) Place this market in hierarchy (parent/children) via HAS_MARKET_SEGMENT.
   2) Resolve market structure: marketDomain, marketVertical, marketChannels, tags.
   3) Resolve players and leaders via PARTICIPATES_IN (leaders via qualifiers.marketRole=leader|dominant).
-  4) Resolve market metrics (TAM/CAGR/CR4/HHI) and concentration evidence.
+  4) Resolve traded products via TRADED_IN when the market explicitly trades, benchmarks, or price-discovers products/commodities.
+  5) Resolve market metrics (TAM/CAGR/CR4/HHI) and concentration evidence.
 - Identify critical infrastructure dependencies: transport chokepoints (straits, canals, pipelines) through which this market's flows pass. Create DEPENDS_ON edges to these infrastructure nodes.
 - Taxonomically correct edge types:
   - Required/primary: HAS_MARKET_SEGMENT, PARTICIPATES_IN
+  - Use TRADED_IN only for PRODUCT -> MARKET trading/price-discovery context.
   - Allowed when evidence exists: REGULATES, DEPENDS_ON, INFLUENCES
   - Avoid for market decomposition: generic RELATED_TO without concrete semantics.
 - Missing info priorities:
@@ -180,10 +185,12 @@ func registerAll() {
   1) Place this market in hierarchy (parent/children) via HAS_MARKET_SEGMENT.
   2) Resolve market structure: marketDomain, marketVertical, marketChannels, tags.
   3) Resolve players and leaders via PARTICIPATES_IN (leaders via qualifiers.marketRole=leader|dominant).
-  4) Resolve market metrics (TAM/CAGR/CR4/HHI) and concentration evidence.
+  4) Resolve traded products via TRADED_IN when the market explicitly trades, benchmarks, or price-discovers products/commodities.
+  5) Resolve market metrics (TAM/CAGR/CR4/HHI) and concentration evidence.
 - Identify critical infrastructure dependencies: transport chokepoints through which this market's flows pass. Create DEPENDS_ON edges.
 - Taxonomically correct edge types:
   - Required/primary: HAS_MARKET_SEGMENT, PARTICIPATES_IN
+  - Use TRADED_IN only for PRODUCT -> MARKET trading/price-discovery context.
   - Allowed when evidence exists: REGULATES, DEPENDS_ON, INFLUENCES
   - Avoid for market decomposition: generic RELATED_TO without concrete semantics.
 - Missing info priorities:
@@ -193,14 +200,15 @@ func registerAll() {
 		MissingInfoRules: []MissingInfoRule{
 			{Trigger: TriggerRelationMissing, RelationType: "HAS_MARKET_SEGMENT", QuestionTemplate: "What are the key immediate sub-markets of %s? Return 5-10 /market/... canonical paths and HAS_MARKET_SEGMENT edges (broader -> narrower; child path = parent path + one segment)."},
 			{Trigger: TriggerRelationMissing, RelationType: "PARTICIPATES_IN", QuestionTemplate: "Who are the key players in %s and who dominates? Provide top players and (if available) market shares."},
-			{Trigger: TriggerFieldEmpty, FieldPath: "MarketDomain", QuestionTemplate: "What is the market domain and vertical for %s? Return marketDomain (finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate) and marketVertical (specific vertical) with sources."},
+			{Trigger: TriggerRelationMissing, RelationType: "TRADED_IN", QuestionTemplate: "Which products or commodities are explicitly traded, benchmarked, or price-discovered in %s? Return PRODUCT -> MARKET TRADED_IN edges only when this market truly trades or prices the product."},
+			{Trigger: TriggerFieldEmpty, FieldPath: "MarketDomain", QuestionTemplate: fmt.Sprintf("What is the market domain and vertical for %%s? Return marketDomain (%s) and marketVertical (specific vertical) with sources. Prefer graphenrich-aligned verticals such as: %s.", graphenrich.SupportedMarketDomainsForPrompt(), graphenrich.DomainVerticalHintsForPrompt())},
 			{Trigger: TriggerFieldEmpty, FieldPath: "MarketVertical", QuestionTemplate: "What is the market domain and vertical for %s? Return marketDomain and marketVertical with sources."},
 			{Trigger: TriggerFieldEmpty, FieldPath: "State./metric/market/tam_usd", QuestionTemplate: "What is the TAM (total addressable market) in USD for %s (latest available year)? Provide value (number), year, and sources."},
 			{Trigger: TriggerFieldEmpty, FieldPath: "State./metric/market/cagr_percent", QuestionTemplate: "What is the market CAGR percent for %s (provide period, e.g. 2024-2029)? Provide percent and sources."},
 			{Trigger: TriggerFieldEmpty, FieldPath: "State./metric/market/cr4_percent", QuestionTemplate: "What is the market concentration for %s? Provide CR4 (top-4 share percent) and/or HHI (0..10000) with sources."},
 			{Trigger: TriggerRelationCountBelow, MinCount: 1, QuestionTemplate: "relationships with other entities for %s"},
 			{Trigger: TriggerSeed, QuestionTemplate: "Comprehensive information about entity '%s' is missing. Identify its type, location, key metrics, description, and relationships."},
-			{Trigger: TriggerSeed, QuestionTemplate: "What is the market domain and vertical for %s? Return marketDomain (finance|technology|industrial|consumer|healthcare|energy|materials|telecom|real-estate) and marketVertical (specific vertical) with sources."},
+			{Trigger: TriggerSeed, QuestionTemplate: fmt.Sprintf("What is the market domain and vertical for %%s? Return marketDomain (%s) and marketVertical (specific vertical) with sources. Prefer graphenrich-aligned verticals such as: %s.", graphenrich.SupportedMarketDomainsForPrompt(), graphenrich.DomainVerticalHintsForPrompt())},
 			{Trigger: TriggerSeed, QuestionTemplate: "What is the TAM (total addressable market) in USD for %s (latest available year)? Provide value (number), year, and sources."},
 			{Trigger: TriggerSeed, QuestionTemplate: "What is the market CAGR percent for %s (provide period, e.g. 2024-2029)? Provide percent and sources."},
 			{Trigger: TriggerSeed, QuestionTemplate: "What is the market concentration for %s? Provide CR4 (top-4 share percent) and/or HHI (0..10000) with sources."},
@@ -230,7 +238,7 @@ func registerAll() {
 - Identify critical infrastructure dependencies: transport chokepoints (straits, canals, pipelines) through which this product's supply chain flows. Create DEPENDS_ON edges to these infrastructure nodes.
 - Taxonomically correct edge types:
   - Required/primary: TRANSFORMS_INTO, PRODUCES, SUPPLIES_TO
-  - Allowed when evidence exists: SUPPLIES_TO, DEPENDS_ON, PARTICIPATES_IN
+  - Allowed when evidence exists: SUPPLIES_TO, DEPENDS_ON, TRADED_IN
   - Avoid: OWNS for actor-product commercial flows.
   - Avoid: PRODUCT -> PRODUCT with PRODUCES; use TRANSFORMS_INTO.
   - Avoid: APPLIES_TO unless source is an explicit /mechanism/... fragment.
@@ -247,7 +255,7 @@ func registerAll() {
 - Identify critical infrastructure dependencies: transport chokepoints through which this product's supply chain flows. Create DEPENDS_ON edges.
 - Taxonomically correct edge types:
   - Required/primary: TRANSFORMS_INTO, PRODUCES, SUPPLIES_TO
-  - Allowed when evidence exists: SUPPLIES_TO, DEPENDS_ON, PARTICIPATES_IN
+  - Allowed when evidence exists: SUPPLIES_TO, DEPENDS_ON, TRADED_IN
   - Avoid: OWNS for actor-product commercial flows.
   - Avoid: PRODUCT -> PRODUCT with PRODUCES; use TRANSFORMS_INTO.
   - Avoid: APPLIES_TO unless source is an explicit /mechanism/... fragment.
@@ -834,7 +842,8 @@ var supplyChainExtractionBlockOverrides = map[EntityTypeKey]string{
 	EntityTypeProduct: `ENTITY TYPE: PRODUCT (supply chain scope)
 - Required: TRANSFORMS_INTO (upstream/downstream), PRODUCES (actor→product), SUPPLIES_TO (flow).
 - Do NOT use DEPENDS_ON. Use TRANSFORMS_INTO for product chain; PRODUCES/SUPPLIES_TO for actor links.
-- Taxonomically correct edge types: TRANSFORMS_INTO, PRODUCES, SUPPLIES_TO, PARTICIPATES_IN.
+- Taxonomically correct edge types: TRANSFORMS_INTO, PRODUCES, SUPPLIES_TO.
+- Do NOT use PARTICIPATES_IN for PRODUCT -> MARKET. If market trading context is explicitly needed, use TRADED_IN only outside the operational supply-chain contract.
 - Missing info priorities: upstream inputs, downstream products, producers, consumers.`,
 	EntityTypeFacility: `ENTITY TYPE: FACILITY (supply chain scope)
 - Required: PRODUCES (outputs), SUPPLIES_TO (product→org for inputs, supplier→customer for flow), LOCATED_IN, OPERATES_IN.

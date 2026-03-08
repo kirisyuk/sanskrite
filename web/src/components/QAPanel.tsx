@@ -57,7 +57,24 @@ type QAAnswer = {
   confidence: number;
   evidence?: Array<{ type?: string; canonicalPath?: string; summary?: string; confidence?: number; verified?: boolean }>;
   impactBreakdown?: Array<{ entity?: string; entityName?: string; axis?: string; amplitude?: number; hops?: number }>;
-  chainImpacts?: Array<{ chainName?: string; affected?: number; total?: number }>;
+  chainImpacts?: Array<{
+    displayName?: string;
+    chainName?: string;
+    affected?: number;
+    total?: number;
+    affectedNodes?: number;
+    totalNodes?: number;
+    affectedLegs?: number;
+    legCount?: number;
+    pathStressScore?: number;
+    bottleneckLegIndex?: number;
+    recoveryLatencyHours?: number;
+    bottleneckSummary?: string;
+    dominantFactors?: string[];
+    flowRefs?: string[];
+    zoneRefs?: string[];
+    affectedZoneRefs?: string[];
+  }>;
   seedFailures?: Array<{ seed?: string; reason?: string }>;
   alternatives?: Array<{ entity?: string; entityName?: string; description?: string; tradeOff?: string }>;
   dataGaps?: Array<{ description?: string; whyItMatters?: string }>;
@@ -658,25 +675,57 @@ export const QAPanel: React.FC<QAPanelProps> = ({
           )}
 
           {answer?.chainImpacts && answer.chainImpacts.length > 0 && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
               {answer.chainImpacts.map((c, i) => (
                 <div
                   key={i}
                   style={{
-                    padding: '10px 14px',
+                    padding: '12px 14px',
                     borderRadius: 12,
                     border: '1px solid var(--border-subtle)',
                     background: 'var(--bg-elevated)',
-                    minWidth: 160,
                   }}
                 >
                   <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-heading)', marginBottom: 4 }}>
-                    {c.chainName || `Chain ${i + 1}`}
+                    {c.displayName || c.chainName || `Chain ${i + 1}`}
                   </div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--accent-primary, #3B82F6)' }}>
-                    {c.affected ?? 0}<span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary-strong)' }}>/{c.total ?? 0}</span>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--accent-primary, #3B82F6)' }}>
+                      {Math.round(((c.pathStressScore ?? 0) * 100))}%
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>path stress</div>
                   </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', marginTop: 2 }}>exposed nodes</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', marginTop: 6 }}>
+                    {(c.affectedNodes ?? c.affected ?? 0)}/{(c.totalNodes ?? c.total ?? 0)} nodes · {(c.affectedLegs ?? 0)}/{(c.legCount ?? 0)} legs
+                  </div>
+                  {c.bottleneckSummary && (
+                    <div style={{ fontSize: 12, color: 'var(--text-heading)', marginTop: 8, fontWeight: 600 }}>
+                      Bottleneck: {c.bottleneckSummary}
+                    </div>
+                  )}
+                  {typeof c.recoveryLatencyHours === 'number' && c.recoveryLatencyHours > 0 && (
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', marginTop: 6 }}>
+                      Recovery ≈ {Math.round(c.recoveryLatencyHours)}h
+                    </div>
+                  )}
+                  {c.dominantFactors && c.dominantFactors.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                      {c.dominantFactors.slice(0, 3).map((factor) => (
+                        <span
+                          key={factor}
+                          style={{
+                            padding: '3px 7px',
+                            borderRadius: 999,
+                            fontSize: 10,
+                            color: 'var(--text-secondary-strong)',
+                            border: '1px solid var(--border-subtle)',
+                          }}
+                        >
+                          {factor}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

@@ -79,6 +79,13 @@ func (d *FacilityDeduplicator) DeduplicateFacility(ctx context.Context, fragment
 	}
 
 	geo := extractFacilityGeoFromPath(cp)
+	if geo == "" && shouldAttemptGlobalPlaceholderFacilityMatch(fragment) {
+		if existing := d.findGlobalPlaceholderMatch(ctx, fragment); existing != nil {
+			atomic.AddInt64(&d.hitExactLabel, 1)
+			fmt.Printf("[FacilityDeduplicator] Found global placeholder match: %s -> %s\n", cp, existing.CanonicalPath)
+			return existing, nil
+		}
+	}
 	if geo == "" || geo == "na" {
 		return fragment, nil
 	}
@@ -155,6 +162,60 @@ func (d *FacilityDeduplicator) DeduplicateFacility(ctx context.Context, fragment
 	return fragment, nil
 }
 
+func (d *FacilityDeduplicator) findGlobalPlaceholderMatch(ctx context.Context, fragment *models.HorizonFragment) *models.HorizonFragment {
+	if d == nil || d.fragmentsRepo == nil || fragment == nil {
+		return nil
+	}
+	candidates := make([]*models.HorizonFragment, 0, 8)
+	seen := map[string]struct{}{}
+	add := func(list []*models.HorizonFragment) {
+		for _, cand := range list {
+			if cand == nil || cand.Type != models.FragmentTypeFacility {
+				continue
+			}
+			id := strings.TrimSpace(cand.ID)
+			if id == "" || id == strings.TrimSpace(fragment.ID) {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			candidates = append(candidates, cand)
+		}
+	}
+
+	if labelEN := strings.TrimSpace(fragment.Labels["en"]); labelEN != "" {
+		if cands, err := d.fragmentsRepo.FindByLabel(ctx, "en", labelEN, models.FragmentTypeFacility); err == nil {
+			add(cands)
+		}
+	}
+	if shortName := strings.TrimSpace(fragment.Identifiers["shortName"]); shortName != "" {
+		if cands, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "shortName", shortName, models.FragmentTypeFacility); err == nil {
+			add(cands)
+		}
+	}
+	if slugLabel := facilitySlugHumanLabel(fragment.CanonicalPath); slugLabel != "" {
+		if cands, err := d.fragmentsRepo.FindByLabel(ctx, "en", slugLabel, models.FragmentTypeFacility); err == nil {
+			add(cands)
+		}
+	}
+
+	var best *models.HorizonFragment
+	bestScore := -1
+	for _, cand := range candidates {
+		if !isFacilityPlaceholderMatchCandidate(fragment, cand) {
+			continue
+		}
+		score := facilityPlaceholderCandidateScore(cand)
+		if score > bestScore {
+			best = cand
+			bestScore = score
+		}
+	}
+	return best
+}
+
 // Stats returns a snapshot of deduplication statistics.
 func (d *FacilityDeduplicator) Stats() FacilityDeduplicatorStats {
 	if d == nil {
@@ -223,6 +284,82 @@ func facilityPathHasLowInformationSlug(path string) bool {
 	return canonical.FacilitySlugLowInformation(extractFacilityNameFromPath(path))
 }
 
+func shouldAttemptGlobalPlaceholderFacilityMatch(fragment *models.HorizonFragment) bool {
+	if fragment == nil || fragment.Type != models.FragmentTypeFacility {
+		return false
+	}
+	cp := strings.TrimSpace(fragment.CanonicalPath)
+	if extractFacilityGeoTokenFromPath(cp) != "na" {
+		return false
+	}
+	slug := extractFacilityNameFromPath(cp)
+	if canonical.FacilitySlugForbiddenPlaceholder(slug) {
+		return false
+	}
+	return canonical.FacilitySlugCriticalDedupAnchor(slug)
+}
+
+func facilitySlugHumanLabel(path string) string {
+	slug := extractFacilityNameFromPath(path)
+	if slug == "" {
+		return ""
+	}
+	return strings.TrimSpace(strings.NewReplacer("-", " ", "_", " ").Replace(slug))
+}
+
+func isFacilityPlaceholderMatchCandidate(incoming, candidate *models.HorizonFragment) bool {
+	if incoming == nil || candidate == nil {
+		return false
+	}
+	if strings.TrimSpace(candidate.CanonicalPath) == "" {
+		return false
+	}
+	incomingSlug := extractFacilityNameFromPath(incoming.CanonicalPath)
+	candidateSlug := extractFacilityNameFromPath(candidate.CanonicalPath)
+	if incomingSlug == "" || candidateSlug == "" {
+		return false
+	}
+	incomingKey := normalizeFacilityGlobalMatchKey(strings.ReplaceAll(incomingSlug, "-", " "))
+	if incomingKey == "" {
+		return false
+	}
+	if incomingKey != normalizeFacilityGlobalMatchKey(strings.ReplaceAll(candidateSlug, "-", " ")) {
+		incomingLabel := normalizeFacilityGlobalMatchKey(strings.TrimSpace(incoming.Labels["en"]))
+		candidateLabel := normalizeFacilityGlobalMatchKey(strings.TrimSpace(candidate.Labels["en"]))
+		if incomingLabel == "" || candidateLabel == "" || incomingLabel != candidateLabel {
+			return false
+		}
+	}
+	return !canonical.IsPlaceholderCanonicalPath(candidate.CanonicalPath) || !canonical.IsPlaceholderCanonicalPath(incoming.CanonicalPath)
+}
+
+func facilityPlaceholderCandidateScore(candidate *models.HorizonFragment) int {
+	if candidate == nil {
+		return -1
+	}
+	score := 0
+	if !canonical.IsPlaceholderCanonicalPath(candidate.CanonicalPath) {
+		score += 200
+	}
+	if candidate.Coordinates != nil && models.IsRealGeoCoordinate(candidate.Coordinates.Lat, candidate.Coordinates.Lon) {
+		score += 80
+	}
+	if kind := taxonomy.NormalizeFacilityKind(strings.TrimSpace(candidate.Identifiers["facilityKind"])); kind != taxonomy.FacilityKindUnknown && kind != taxonomy.FacilityKindOther {
+		score += 60
+	}
+	if place := strings.TrimSpace(candidate.Identifiers["geoVerifiedPlaceId"]); place != "" {
+		score += 40
+	}
+	score += len(candidate.KBRefs) * 10
+	if label := strings.TrimSpace(candidate.Labels["en"]); label != "" {
+		score += 10
+	}
+	if !candidate.CreatedAt.IsZero() {
+		score += 1
+	}
+	return score
+}
+
 // normalizeFacilityAliasKey normalizes facility names for dedupe matching:
 // - lowercases, strips punctuation, removes stopwords, collapses whitespace.
 // Returns empty string if fewer than 3 meaningful tokens (avoids false positives).
@@ -253,6 +390,37 @@ func normalizeFacilityAliasKey(name string) string {
 		out = append(out, t)
 	}
 	if len(out) < 3 {
+		return ""
+	}
+	return strings.Join(out, " ")
+}
+
+func normalizeFacilityGlobalMatchKey(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(r)
+		default:
+			b.WriteRune(' ')
+		}
+	}
+	toks := strings.Fields(b.String())
+	stop := map[string]struct{}{
+		"by": {}, "the": {}, "of": {}, "and": {}, "at": {},
+	}
+	out := make([]string, 0, len(toks))
+	for _, t := range toks {
+		if _, ok := stop[t]; ok {
+			continue
+		}
+		out = append(out, t)
+	}
+	if len(out) == 0 {
 		return ""
 	}
 	return strings.Join(out, " ")

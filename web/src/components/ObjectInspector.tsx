@@ -750,6 +750,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       REGULATES: 'Regulates',
       IMPACTS: 'Impacts',
       EXTRACTS_FROM: 'Extracts',
+      TRADED_IN: 'Traded In',
     };
     if (MAP[u]) return MAP[u];
     const human = u

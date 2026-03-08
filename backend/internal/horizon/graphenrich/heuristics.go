@@ -11,32 +11,17 @@ import (
 )
 
 func ApplyFragmentHeuristics(fragment *horizonmodels.HorizonFragment) bool {
+	return ApplyFragmentHeuristicsWithContext(fragment, FragmentContext{})
+}
+
+func ApplyFragmentHeuristicsWithContext(fragment *horizonmodels.HorizonFragment, ctx FragmentContext) bool {
 	if fragment == nil {
 		return false
 	}
 	changed := false
-
-	if infer := inferGeoFeatureType(fragment); strings.TrimSpace(fragment.GeoFeatureType) == "" && infer != "" {
-		fragment.GeoFeatureType = infer
+	report := AnalyzeFragmentHeuristicsWithContext(fragment, ctx)
+	if applyFragmentReport(fragment, report) {
 		changed = true
-	}
-	if infer := inferGovType(fragment); strings.TrimSpace(fragment.GovType) == "" && infer != "" {
-		fragment.GovType = infer
-		changed = true
-	}
-	if domain, vertical := inferMarketProfile(fragment); strings.TrimSpace(fragment.MarketDomain) == "" && domain != "" {
-		fragment.MarketDomain = domain
-		changed = true
-		if strings.TrimSpace(fragment.MarketVertical) == "" && vertical != "" {
-			fragment.MarketVertical = vertical
-			changed = true
-		}
-	}
-	if strings.TrimSpace(fragment.MarketVertical) == "" {
-		if _, vertical := inferMarketProfile(fragment); vertical != "" {
-			fragment.MarketVertical = vertical
-			changed = true
-		}
 	}
 	if len(fragment.MarketSegments) > 0 {
 		norm := taxonomy.NormalizeSegmentPaths(fragment.MarketSegments)
@@ -44,16 +29,6 @@ func ApplyFragmentHeuristics(fragment *horizonmodels.HorizonFragment) bool {
 			fragment.MarketSegments = norm
 			changed = true
 		}
-	}
-	if len(fragment.IndustryPaths) == 0 {
-		if inferred := inferIndustryPaths(fragment); len(inferred) > 0 {
-			fragment.IndustryPaths = horizonmodels.NormalizeIndexPaths(16, inferred)
-			changed = true
-		}
-	}
-	if shouldTagChokepoint(fragment) && !hasTag(fragment.Tags, "chokepoint") {
-		fragment.Tags = append(fragment.Tags, "chokepoint")
-		changed = true
 	}
 	return changed
 }
@@ -66,6 +41,7 @@ func ApplyEdgeHeuristics(edge *horizonmodels.DependencyEdge, sourcePath, targetP
 		edge.Qualifiers = map[string]interface{}{}
 	}
 	changed := false
+	report := AnalyzeEdgeHeuristics(edge, sourcePath, targetPath)
 	normalizedVia, viaChanged := normalizeTransportViaQualifiers(edge.Qualifiers)
 	if viaChanged {
 		changed = true
@@ -74,7 +50,7 @@ func ApplyEdgeHeuristics(edge *horizonmodels.DependencyEdge, sourcePath, targetP
 		changed = true
 	}
 	if strings.TrimSpace(string(edge.GetFacet())) == "" {
-		if facet := inferEdgeFacet(edge, sourcePath, targetPath); facet != "" {
+		if facet := strings.TrimSpace(report.Facet.Value); facet != "" && report.Facet.Confidence >= 0.34 {
 			edge.Qualifiers["facet"] = facet
 			changed = true
 		}
@@ -125,233 +101,10 @@ func ApplyEdgeHeuristics(edge *horizonmodels.DependencyEdge, sourcePath, targetP
 			}
 		}
 	}
-
+	if writeEdgeHeuristicReport(edge, report) {
+		changed = true
+	}
 	return changed
-}
-
-func inferGeoFeatureType(fragment *horizonmodels.HorizonFragment) string {
-	if fragment == nil {
-		return ""
-	}
-	text := fragmentText(fragment)
-	for _, item := range []struct {
-		token string
-		kind  string
-	}{
-		{"hormuz", "strait"},
-		{"mandeb", "strait"},
-		{"bosporus", "strait"},
-		{"malacca", "strait"},
-		{"strait", "strait"},
-		{"canal", "canal"},
-		{"pass", "pass"},
-		{"border-crossing", "border-crossing"},
-		{"border crossing", "border-crossing"},
-		{"pipeline-corridor", "pipeline-corridor"},
-		{"pipeline corridor", "pipeline-corridor"},
-		{"airspace", "airspace"},
-		{"airport", "port"},
-		{"seaport", "port"},
-		{"port", "port"},
-		{"city", "city"},
-		{"province", "region"},
-		{"region", "region"},
-		{"state", "region"},
-	} {
-		if strings.Contains(text, item.token) {
-			return item.kind
-		}
-	}
-	if strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/loc/") {
-		switch depth := geoDepth(fragment.CanonicalPath); {
-		case depth >= 4:
-			return "city"
-		case depth == 3:
-			return "region"
-		case depth == 2:
-			return "country"
-		}
-	}
-	return ""
-}
-
-func inferGovType(fragment *horizonmodels.HorizonFragment) string {
-	if fragment == nil {
-		return ""
-	}
-	cp := strings.ToLower(strings.TrimSpace(fragment.CanonicalPath))
-	if !strings.HasPrefix(cp, "/gov/") {
-		return ""
-	}
-	slug := pathSlug(cp)
-	for _, item := range []struct {
-		token string
-		kind  string
-	}{
-		{"ministry-of-", "ministry"},
-		{"department-of-", "department"},
-		{"-authority", "authority"},
-		{"-agency", "agency"},
-		{"-service", "service"},
-		{"-bureau", "bureau"},
-		{"-office", "office"},
-		{"-commission", "commission"},
-		{"-council", "council"},
-		{"-committee", "committee"},
-		{"-regulator", "regulator"},
-		{"government", "government"},
-	} {
-		if strings.Contains(slug, item.token) {
-			return item.kind
-		}
-	}
-	return ""
-}
-
-func inferMarketProfile(fragment *horizonmodels.HorizonFragment) (string, string) {
-	if fragment == nil {
-		return "", ""
-	}
-	cp := strings.TrimSpace(fragment.CanonicalPath)
-	if strings.HasPrefix(cp, "/market/") {
-		parts := strings.Split(strings.Trim(cp, "/"), "/")
-		if len(parts) >= 4 {
-			return strings.TrimSpace(parts[2]), strings.TrimSpace(parts[3])
-		}
-	}
-	if len(fragment.MarketSegments) > 0 {
-		if seg, ok := taxonomy.NormalizeSegmentPath(fragment.MarketSegments[0]); ok {
-			parts := strings.Split(strings.Trim(seg, "/"), "/")
-			if len(parts) >= 4 && parts[0] == "segment" {
-				return strings.TrimSpace(parts[1]), strings.TrimSpace(parts[2])
-			}
-		}
-	}
-	text := fragmentText(fragment)
-	for _, item := range []struct {
-		token    string
-		domain   string
-		vertical string
-	}{
-		{"semiconductor", "technology", "semiconductors"},
-		{"chip", "technology", "semiconductors"},
-		{"battery", "industrial", "ev-batteries"},
-		{"automotive", "industrial", "automotive"},
-		{"vehicle", "industrial", "automotive"},
-		{"steel", "materials", "steel"},
-		{"aluminum", "materials", "aluminum"},
-		{"oil", "energy", "oil-and-gas"},
-		{"gas", "energy", "oil-and-gas"},
-		{"lng", "energy", "lng"},
-		{"shipping", "industrial", "shipping"},
-		{"port", "industrial", "port-services"},
-		{"logistics", "industrial", "logistics"},
-		{"pharma", "healthcare", "pharmaceuticals"},
-		{"hospital", "healthcare", "health-services"},
-		{"telecom", "telecom", "telecommunications"},
-		{"cloud", "technology", "cloud"},
-	} {
-		if strings.Contains(text, item.token) {
-			return item.domain, item.vertical
-		}
-	}
-	return "", ""
-}
-
-func inferIndustryPaths(fragment *horizonmodels.HorizonFragment) []string {
-	if fragment == nil {
-		return nil
-	}
-	text := fragmentText(fragment)
-	for _, item := range []struct {
-		token string
-		path  string
-	}{
-		{"semiconductor", "/industry/technology/electronics/semiconductors/semiconductor-manufacturing"},
-		{"chip", "/industry/technology/electronics/semiconductors/semiconductor-manufacturing"},
-		{"battery", "/industry/industrial/manufacturing/electrical-equipment/ev-batteries"},
-		{"automotive", "/industry/industrial/manufacturing/automotive/automotive-manufacturing"},
-		{"vehicle", "/industry/industrial/manufacturing/automotive/automotive-manufacturing"},
-		{"shipping", "/industry/industrial/transportation/maritime/shipping-services"},
-		{"port", "/industry/industrial/transportation/logistics/port-operations"},
-		{"logistics", "/industry/industrial/transportation/logistics/logistics-services"},
-		{"oil", "/industry/energy/hydrocarbons/oil-and-gas/upstream"},
-		{"gas", "/industry/energy/hydrocarbons/oil-and-gas/upstream"},
-		{"lng", "/industry/energy/hydrocarbons/lng/lng-infrastructure"},
-		{"steel", "/industry/materials/metals/steel/steel-production"},
-		{"pharma", "/industry/healthcare/pharmaceuticals/pharmaceuticals/pharmaceutical-manufacturing"},
-	} {
-		if strings.Contains(text, item.token) {
-			return []string{item.path}
-		}
-	}
-	if strings.TrimSpace(fragment.MarketDomain) != "" || strings.TrimSpace(fragment.MarketVertical) != "" {
-		switch strings.TrimSpace(fragment.MarketDomain) {
-		case "energy":
-			return []string{"/industry/energy/hydrocarbons/oil-and-gas"}
-		case "industrial":
-			if strings.Contains(strings.TrimSpace(fragment.MarketVertical), "shipping") {
-				return []string{"/industry/industrial/transportation/maritime/shipping-services"}
-			}
-			if strings.Contains(strings.TrimSpace(fragment.MarketVertical), "port") {
-				return []string{"/industry/industrial/transportation/logistics/port-operations"}
-			}
-			return []string{"/industry/industrial/manufacturing"}
-		case "technology":
-			return []string{"/industry/technology"}
-		case "materials":
-			return []string{"/industry/materials"}
-		case "healthcare":
-			return []string{"/industry/healthcare"}
-		case "telecom":
-			return []string{"/industry/telecom"}
-		}
-	}
-	return nil
-}
-
-func shouldTagChokepoint(fragment *horizonmodels.HorizonFragment) bool {
-	feature := strings.ToLower(strings.TrimSpace(fragment.GeoFeatureType))
-	switch feature {
-	case "strait", "canal", "pass", "pipeline-corridor":
-		return true
-	}
-	text := fragmentText(fragment)
-	for _, token := range []string{"strait", "canal", "hormuz", "mandeb", "suez", "malacca", "bosporus"} {
-		if strings.Contains(text, token) {
-			return true
-		}
-	}
-	return false
-}
-
-func inferEdgeFacet(edge *horizonmodels.DependencyEdge, sourcePath, targetPath string) string {
-	if edge == nil {
-		return ""
-	}
-	text := strings.ToLower(strings.Join([]string{
-		strings.TrimSpace(string(edge.Type)),
-		strings.TrimSpace(sourcePath),
-		strings.TrimSpace(targetPath),
-	}, " "))
-	if len(normalizeTransportVia(edge.Qualifiers)) > 0 || strings.Contains(text, "port") || strings.Contains(text, "shipping") || strings.Contains(text, "strait") || strings.Contains(text, "canal") {
-		return string(horizonmodels.FacetLogistics)
-	}
-	switch edge.Type {
-	case horizonmodels.DependencyTypeSuppliesTo, horizonmodels.DependencyTypeProduces, horizonmodels.DependencyTypeExtractsFrom:
-		return string(horizonmodels.FacetSupply)
-	case horizonmodels.DependencyTypeDependsOn:
-		if strings.Contains(text, "regulator") || strings.Contains(text, "/gov/") {
-			return string(horizonmodels.FacetRegulatory)
-		}
-		if strings.Contains(text, "grid") || strings.Contains(text, "pipeline") || strings.Contains(text, "terminal") || strings.Contains(text, "power") {
-			return string(horizonmodels.FacetInfrastructure)
-		}
-		return string(horizonmodels.FacetSupply)
-	case horizonmodels.DependencyTypeParticipatesIn, horizonmodels.DependencyTypeHasMarketSegment, horizonmodels.DependencyTypeHasSubmarket:
-		return string(horizonmodels.FacetDistribution)
-	}
-	return ""
 }
 
 func fragmentText(fragment *horizonmodels.HorizonFragment) string {
@@ -365,12 +118,21 @@ func fragmentText(fragment *horizonmodels.HorizonFragment) string {
 		strings.ToLower(strings.TrimSpace(fragment.MarketDomain)),
 		strings.ToLower(strings.TrimSpace(fragment.MarketVertical)),
 		strings.ToLower(strings.TrimSpace(fragment.GovType)),
+		strings.ToLower(strings.TrimSpace(fragment.EntityPath)),
+		strings.ToLower(strings.TrimSpace(fragment.SectorPath)),
+		strings.ToLower(strings.TrimSpace(fragment.ParentPath)),
 	}
 	for _, v := range fragment.Labels {
 		parts = append(parts, strings.ToLower(strings.TrimSpace(v)))
 	}
 	for _, tag := range fragment.Tags {
 		parts = append(parts, strings.ToLower(strings.TrimSpace(tag)))
+	}
+	for _, seg := range fragment.MarketSegments {
+		parts = append(parts, strings.ToLower(strings.TrimSpace(seg)))
+	}
+	for _, path := range fragment.IndustryPaths {
+		parts = append(parts, strings.ToLower(strings.TrimSpace(path)))
 	}
 	return strings.Join(parts, " ")
 }
@@ -381,14 +143,6 @@ func geoDepth(path string) int {
 		return 0
 	}
 	return len(parts) - 1
-}
-
-func pathSlug(path string) string {
-	parts := strings.Split(strings.Trim(strings.TrimSpace(path), "/"), "/")
-	if len(parts) == 0 {
-		return ""
-	}
-	return parts[len(parts)-1]
 }
 
 func hasTag(tags []string, want string) bool {
@@ -484,7 +238,7 @@ func compactStrings(in []string) []string {
 
 func looksRouteConstrained(sourcePath, targetPath string, via []string) bool {
 	text := strings.ToLower(strings.Join(append([]string{sourcePath, targetPath}, via...), " "))
-	for _, token := range []string{"strait", "canal", "hormuz", "mandeb", "suez", "malacca", "port", "terminal", "pipeline"} {
+	for _, token := range []string{"strait", "canal", "hormuz", "mandeb", "suez", "malacca", "port", "terminal", "pipeline", "airport", "shipping"} {
 		if strings.Contains(text, token) {
 			return true
 		}
@@ -557,13 +311,7 @@ func metricPercent(v float64, edge *horizonmodels.DependencyEdge) horizonmodels.
 		conf = 0.7
 	}
 	now := time.Now().UTC()
-	return horizonmodels.MetricValue{
-		Value:      v,
-		Unit:       &unit,
-		Confidence: conf,
-		ObservedAt: now,
-		Provenance: horizonmodels.Provenance{Method: "best_effort_edge_sync"},
-	}
+	return horizonmodels.MetricValue{Value: v, Unit: &unit, Confidence: conf, ObservedAt: now, Provenance: horizonmodels.Provenance{Method: "best_effort_edge_sync"}}
 }
 
 func hasOwnershipPercent(edge *horizonmodels.DependencyEdge) bool {
@@ -774,7 +522,7 @@ func addTransmissionHints(edge *horizonmodels.DependencyEdge) bool {
 	if facet == "" {
 		return addEdgeEnrichmentHint(edge, "Classify DEPENDS_ON facet (logistics/infrastructure/supply/payment/distribution/regulatory/...) to improve transmission reasoning.")
 	}
-	needsTransmissionQualifiers := facet == horizonmodels.FacetLogistics || facet == horizonmodels.FacetInfrastructure || facet == horizonmodels.FacetSupply || facet == horizonmodels.FacetDistribution
+	needsTransmissionQualifiers := facet == horizonmodels.FacetLogistics || facet == horizonmodels.FacetInfrastructure || facet == horizonmodels.FacetSupply || facet == horizonmodels.FacetDistribution || facet == horizonmodels.FacetPayment
 	if !needsTransmissionQualifiers {
 		return false
 	}
@@ -887,13 +635,7 @@ func qualifierToMetric(edge *horizonmodels.DependencyEdge, key string, unit *str
 		conf = 0.7
 	}
 	now := time.Now().UTC()
-	edge.Metrics[key] = horizonmodels.MetricValue{
-		Value:      v,
-		Unit:       unit,
-		Confidence: conf,
-		ObservedAt: now,
-		Provenance: horizonmodels.Provenance{Method: "best_effort_transmission_sync"},
-	}
+	edge.Metrics[key] = horizonmodels.MetricValue{Value: v, Unit: unit, Confidence: conf, ObservedAt: now, Provenance: horizonmodels.Provenance{Method: "best_effort_transmission_sync"}}
 	return true
 }
 

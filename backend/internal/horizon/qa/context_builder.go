@@ -85,6 +85,7 @@ func (b *AnswerContextBuilder) BuildContext(
 	}
 
 	sb.WriteString(b.buildScenarioWindowsSection(simResult))
+	sb.WriteString(b.buildChainStressSection(simResult))
 	impactSection := b.buildImpactMapSection(simResult)
 	sb.WriteString(impactSection)
 
@@ -349,13 +350,35 @@ func (b *AnswerContextBuilder) buildImpactMapSection(
 func (b *AnswerContextBuilder) buildScenarioWindowsSection(simResult *horizonmodels.SimulationResult) string {
 	var sb strings.Builder
 	sb.WriteString("-- TIME WINDOWS / HOW THE EFFECT UNFOLDS --\n")
-	if simResult == nil || len(simResult.NodeImpacts) == 0 {
+	if simResult == nil || (len(simResult.NodeImpacts) == 0 && len(simResult.ChainImpacts) == 0) {
 		sb.WriteString("(no projected time-window effects)\n\n")
 		return sb.String()
 	}
 	firstOrder := make([]string, 0, 3)
 	secondOrder := make([]string, 0, 3)
+	for _, ci := range simResult.ChainImpacts {
+		label := strings.TrimSpace(ci.DisplayName)
+		if label == "" {
+			continue
+		}
+		line := fmt.Sprintf("%s — %s path stress %.2f", horizonLabelForChainImpact(ci), label, ci.PathStressScore)
+		if ci.BottleneckSummary != "" {
+			line += " via " + ci.BottleneckSummary
+		}
+		if ci.BottleneckLegIndex <= 0 {
+			if len(firstOrder) < 3 {
+				firstOrder = append(firstOrder, line)
+			}
+			continue
+		}
+		if len(secondOrder) < 3 {
+			secondOrder = append(secondOrder, line)
+		}
+	}
 	for _, ni := range simResult.NodeImpacts {
+		if len(firstOrder) >= 3 && len(secondOrder) >= 3 {
+			break
+		}
 		label := strings.TrimSpace(ni.Name)
 		if label == "" {
 			label = strings.TrimSpace(ni.CanonicalPath)
@@ -393,6 +416,66 @@ func (b *AnswerContextBuilder) buildScenarioWindowsSection(simResult *horizonmod
 	}
 	sb.WriteString("\n")
 	return sb.String()
+}
+
+func (b *AnswerContextBuilder) buildChainStressSection(simResult *horizonmodels.SimulationResult) string {
+	var sb strings.Builder
+	sb.WriteString("-- PATH STRESS / BOTTLENECK CHAINS --\n")
+	if simResult == nil || len(simResult.ChainImpacts) == 0 {
+		sb.WriteString("(no stressed materialized paths detected)\n\n")
+		return sb.String()
+	}
+	limit := minInt(4, len(simResult.ChainImpacts))
+	for i := 0; i < limit; i++ {
+		ci := simResult.ChainImpacts[i]
+		name := strings.TrimSpace(ci.DisplayName)
+		if name == "" {
+			name = "Chain"
+		}
+		sb.WriteString(fmt.Sprintf("- %s: stress %.2f, affected %d/%d nodes, %d/%d legs\n",
+			name,
+			ci.PathStressScore,
+			ci.AffectedNodes,
+			ci.TotalNodes,
+			ci.AffectedLegs,
+			ci.LegCount,
+		))
+		if ci.BottleneckSummary != "" {
+			sb.WriteString(fmt.Sprintf("  bottleneck: %s\n", ci.BottleneckSummary))
+		}
+		if ci.RecoveryLatencyHours > 0 {
+			sb.WriteString(fmt.Sprintf("  recovery: %.0f hours\n", ci.RecoveryLatencyHours))
+		}
+		if len(ci.DominantFactors) > 0 {
+			sb.WriteString(fmt.Sprintf("  dominant factors: %s\n", strings.Join(ci.DominantFactors[:minInt(3, len(ci.DominantFactors))], ", ")))
+		}
+		if len(ci.FlowRefs) > 0 {
+			sb.WriteString(fmt.Sprintf("  flows: %s\n", strings.Join(ci.FlowRefs[:minInt(3, len(ci.FlowRefs))], ", ")))
+		}
+		if len(ci.ZoneRefs) > 0 || len(ci.AffectedZoneRefs) > 0 {
+			parts := make([]string, 0, 2)
+			if len(ci.ZoneRefs) > 0 {
+				parts = append(parts, "zones "+strings.Join(ci.ZoneRefs[:minInt(2, len(ci.ZoneRefs))], ", "))
+			}
+			if len(ci.AffectedZoneRefs) > 0 {
+				parts = append(parts, "affected "+strings.Join(ci.AffectedZoneRefs[:minInt(2, len(ci.AffectedZoneRefs))], ", "))
+			}
+			sb.WriteString(fmt.Sprintf("  spatial bindings: %s\n", strings.Join(parts, " | ")))
+		}
+	}
+	sb.WriteString("\n")
+	return sb.String()
+}
+
+func horizonLabelForChainImpact(ci horizonmodels.ChainImpact) string {
+	switch {
+	case ci.PathStressScore >= 0.75:
+		return "Immediate bottleneck"
+	case ci.PathStressScore >= 0.5:
+		return "Near-term stress"
+	default:
+		return "Latent downstream stress"
+	}
 }
 
 // buildTracesSection renders the PROPAGATION CHAINS section.

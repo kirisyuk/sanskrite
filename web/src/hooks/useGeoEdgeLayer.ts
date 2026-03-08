@@ -87,6 +87,7 @@ const EDGE_PRIORITY: Record<string, number> = {
   OPERATES_IN: 76,
   LOCATED_IN: 74,
   PARTICIPATES_IN: 72,
+  TRADED_IN: 73,
   SUPPORTS: 70,
   PARTNERS_WITH: 68,
 };
@@ -150,7 +151,7 @@ function edgeFamily(type: string): EdgeFamily {
   if (['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN'].includes(type)) {
     return 'location';
   }
-  if (['PARTICIPATES_IN', 'HAS_MARKET_SEGMENT', 'HAS_SUBMARKET'].includes(type)) {
+  if (['PARTICIPATES_IN', 'TRADED_IN', 'HAS_MARKET_SEGMENT', 'HAS_SUBMARKET'].includes(type)) {
     return 'market';
   }
   if (['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES'].includes(type)) {
@@ -218,6 +219,9 @@ function businessMeaningForEdgeType(edgeType: string): string {
     case 'HEADQUARTERED_IN':
       return 'Geographic operating context';
     case 'PARTICIPATES_IN':
+      return 'Market participation context';
+    case 'TRADED_IN':
+      return 'Product trading and price-discovery context';
     case 'HAS_MARKET_SEGMENT':
     case 'HAS_SUBMARKET':
       return 'Market positioning context';

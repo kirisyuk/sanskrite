@@ -144,6 +144,9 @@ func facilityGeoValidationQueries(fragment *models.HorizonFragment) []string {
 		place = strings.TrimSpace(fragment.HomeLocation.Name)
 	}
 	for _, name := range collectFacilityNameCandidates(fragment) {
+		if facilityAllowsPlainNameGeocode(fragment) {
+			add(name)
+		}
 		if place != "" {
 			add(name + ", " + place)
 		}
@@ -255,6 +258,15 @@ func inferPlaceHintFromFacilityLabel(label string) string {
 	if len(normalized) < 2 {
 		return ""
 	}
+	if len(normalized) >= 3 && normalized[0] == "port" && normalized[1] == "of" {
+		return strings.Join(normalized[2:], " ")
+	}
+	if len(normalized) >= 3 && normalized[0] == "strait" && normalized[1] == "of" {
+		return strings.Join(normalized[2:], " ")
+	}
+	if len(normalized) >= 3 && normalized[0] == "canal" && normalized[1] == "of" {
+		return strings.Join(normalized[2:], " ")
+	}
 	keywords := map[string]struct{}{
 		"airport": {}, "port": {}, "terminal": {}, "fab": {}, "facility": {}, "plant": {},
 		"refinery": {}, "field": {}, "mine": {}, "barrage": {}, "dam": {}, "base": {},
@@ -270,6 +282,41 @@ func inferPlaceHintFromFacilityLabel(label string) string {
 		return strings.Join(normalized[:idx], " ")
 	}
 	return ""
+}
+
+func facilityAllowsPlainNameGeocode(fragment *models.HorizonFragment) bool {
+	if fragment == nil {
+		return false
+	}
+	cp := strings.TrimSpace(fragment.CanonicalPath)
+	slug := ""
+	if parts := strings.Split(strings.Trim(cp, "/"), "/"); len(parts) >= 3 {
+		slug = strings.TrimSpace(parts[len(parts)-1])
+	}
+	if canonical.FacilitySlugCriticalDedupAnchor(slug) {
+		return true
+	}
+	kind := taxonomy.InferFacilityKind(
+		cp,
+		fragment.Labels["en"],
+		fragment.Description,
+		fragment.EntityPath,
+		fragment.SectorPath,
+		fragment.Identifiers["facilityType"],
+		fragment.Identifiers["supplyChainRole"],
+	)
+	if kind == taxonomy.FacilityKindSeaport ||
+		kind == taxonomy.FacilityKindAirport ||
+		kind == taxonomy.FacilityKindPipeline ||
+		kind == taxonomy.FacilityKindTerminal ||
+		kind == taxonomy.FacilityKindRefinery ||
+		kind == taxonomy.FacilityKindCable ||
+		kind == taxonomy.FacilityKindMine ||
+		kind == taxonomy.FacilityKindPowerPlant ||
+		kind == taxonomy.FacilityKindSubstation {
+		return true
+	}
+	return kind == taxonomy.FacilityKindFactory && canonical.FacilitySlugCriticalDedupAnchor(slug)
 }
 
 func currentFacilityISO2(fragment *models.HorizonFragment) string {
@@ -348,7 +395,7 @@ func containsNormalizedGeoPhrase(haystack string, needle string) bool {
 	if h == "" || n == "" {
 		return false
 	}
-	return strings.Contains(h, n)
+	return strings.Contains(" "+h+" ", " "+n+" ")
 }
 
 func normalizeGeoPhrase(raw string) string {

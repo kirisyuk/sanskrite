@@ -21,3 +21,20 @@ func TestFacilitySlugLowInformation(t *testing.T) {
 		}
 	}
 }
+
+func TestFacilitySlugHasSyntheticTail(t *testing.T) {
+	tests := []struct {
+		slug string
+		want bool
+	}{
+		{slug: "general-production", want: true},
+		{slug: "arm-china-general-production", want: true},
+		{slug: "label-vie-general-logistics", want: true},
+		{slug: "canon-oita-manufacturing-facility", want: false},
+	}
+	for _, tc := range tests {
+		if got := FacilitySlugHasSyntheticTail(tc.slug); got != tc.want {
+			t.Fatalf("slug=%q got=%v want=%v", tc.slug, got, tc.want)
+		}
+	}
+}

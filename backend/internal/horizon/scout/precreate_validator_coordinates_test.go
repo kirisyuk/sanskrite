@@ -146,6 +146,36 @@ func TestPreCreateValidator_RevalidatesFacilityGeoMismatchViaGeocoding(t *testin
 	}
 }
 
+func TestPreCreateValidator_RevalidatesHighSignalFacilityFromPlainName(t *testing.T) {
+	v := NewPreCreateValidator(nil, nil, nil).WithGeocodingClient(&fakeGeocodingClient{
+		results: map[string]*coreontology.GeocodingResult{
+			"Port of Charleston": {
+				Lat:              32.7765,
+				Lon:              -79.9311,
+				FormattedAddress: "Port of Charleston, Charleston, SC, USA",
+				PlaceID:          "google-place-charleston-port",
+			},
+		},
+	})
+
+	frag := &models.HorizonFragment{
+		Type:          models.FragmentTypeFacility,
+		CanonicalPath: "/fac/na/port-of-charleston",
+		Labels:        map[string]string{"en": "Port of Charleston"},
+	}
+
+	res, err := v.ValidateAndProcess(context.Background(), frag)
+	if err != nil {
+		t.Fatalf("ValidateAndProcess() error = %v", err)
+	}
+	if res == nil || !res.IsValid {
+		t.Fatalf("expected valid result, got %+v", res)
+	}
+	if frag.CanonicalPath != "/fac/us/port-of-charleston" {
+		t.Fatalf("expected upgraded facility path, got %q", frag.CanonicalPath)
+	}
+}
+
 func TestPreCreateValidator_RevalidatesOrgGeoMismatchViaGeocoding(t *testing.T) {
 	v := NewPreCreateValidator(nil, nil, nil).WithGeocodingClient(&fakeGeocodingClient{
 		results: map[string]*coreontology.GeocodingResult{
@@ -181,6 +211,144 @@ func TestPreCreateValidator_RevalidatesOrgGeoMismatchViaGeocoding(t *testing.T) 
 	}
 	if frag.CanonicalPath != "/org/kz/kazatomprom" {
 		t.Fatalf("expected upgraded org path, got %q", frag.CanonicalPath)
+	}
+}
+
+func TestPreCreateValidator_BlocksForbiddenFacilityPlaceholder(t *testing.T) {
+	v := NewPreCreateValidator(nil, nil, nil)
+
+	frag := &models.HorizonFragment{
+		Type:          models.FragmentTypeFacility,
+		CanonicalPath: "/fac/na/general-plant",
+		Labels:        map[string]string{"en": "General Production"},
+	}
+
+	res, err := v.ValidateAndProcess(context.Background(), frag)
+	if err != nil {
+		t.Fatalf("ValidateAndProcess() error = %v", err)
+	}
+	if res == nil {
+		t.Fatalf("expected validation result")
+	}
+	if res.IsValid {
+		t.Fatalf("expected forbidden placeholder to be blocked")
+	}
+	if !strings.Contains(strings.ToLower(res.BlockReason), "forbidden /fac/ placeholder slug") {
+		t.Fatalf("unexpected block reason: %q", res.BlockReason)
+	}
+}
+
+func TestPreCreateValidator_BlocksMalformedSyntheticFacilityPlaceholder(t *testing.T) {
+	v := NewPreCreateValidator(nil, nil, nil)
+
+	frag := &models.HorizonFragment{
+		Type:          models.FragmentTypeFacility,
+		CanonicalPath: "/fac/asml-japan-co-ltd/general-production",
+		Labels:        map[string]string{"en": "General Production"},
+	}
+
+	res, err := v.ValidateAndProcess(context.Background(), frag)
+	if err != nil {
+		t.Fatalf("ValidateAndProcess() error = %v", err)
+	}
+	if res == nil {
+		t.Fatalf("expected validation result")
+	}
+	if res.IsValid {
+		t.Fatalf("expected malformed synthetic facility placeholder to be blocked")
+	}
+	if !strings.Contains(strings.ToLower(res.BlockReason), "forbidden /fac/ placeholder slug") {
+		t.Fatalf("unexpected block reason: %q", res.BlockReason)
+	}
+}
+
+func TestPreCreateValidator_RepairsSyntheticFacilityPlaceholderFromSpecificLabel(t *testing.T) {
+	v := NewPreCreateValidator(nil, nil, nil)
+
+	frag := &models.HorizonFragment{
+		Type:          models.FragmentTypeFacility,
+		CanonicalPath: "/fac/na/general-production",
+		Labels:        map[string]string{"en": "Canon Oita Manufacturing Facility"},
+	}
+
+	res, err := v.ValidateAndProcess(context.Background(), frag)
+	if err != nil {
+		t.Fatalf("ValidateAndProcess() error = %v", err)
+	}
+	if res == nil || !res.IsValid {
+		t.Fatalf("expected valid result, got %+v", res)
+	}
+	if frag.CanonicalPath != "/fac/na/canon-oita-manufacturing-facility" {
+		t.Fatalf("expected repaired facility path, got %q", frag.CanonicalPath)
+	}
+}
+
+func TestPreCreateValidator_RepairsSyntheticFacilityPlaceholderUsingCountryHintInLabel(t *testing.T) {
+	v := NewPreCreateValidator(nil, nil, nil)
+
+	frag := &models.HorizonFragment{
+		Type:          models.FragmentTypeFacility,
+		CanonicalPath: "/fac/na/general-production",
+		Labels:        map[string]string{"en": "AEON Malaysia Distribution"},
+	}
+
+	res, err := v.ValidateAndProcess(context.Background(), frag)
+	if err != nil {
+		t.Fatalf("ValidateAndProcess() error = %v", err)
+	}
+	if res == nil || !res.IsValid {
+		t.Fatalf("expected valid result, got %+v", res)
+	}
+	if frag.CanonicalPath != "/fac/my/aeon-malaysia-distribution" {
+		t.Fatalf("expected repaired facility path with country hint, got %q", frag.CanonicalPath)
+	}
+}
+
+func TestPreCreateValidator_BlocksSyntheticOrgPlaceholder(t *testing.T) {
+	v := NewPreCreateValidator(nil, nil, nil)
+
+	frag := &models.HorizonFragment{
+		Type:          models.FragmentTypeOrganization,
+		CanonicalPath: "/org/na/retailer",
+		Labels:        map[string]string{"en": "Retailer"},
+	}
+
+	res, err := v.ValidateAndProcess(context.Background(), frag)
+	if err != nil {
+		t.Fatalf("ValidateAndProcess() error = %v", err)
+	}
+	if res == nil {
+		t.Fatalf("expected validation result")
+	}
+	if res.IsValid {
+		t.Fatalf("expected synthetic org placeholder to be blocked")
+	}
+	if !strings.Contains(strings.ToLower(res.BlockReason), "forbidden synthetic /org/ placeholder slug") {
+		t.Fatalf("unexpected block reason: %q", res.BlockReason)
+	}
+}
+
+func TestPreCreateValidator_BlocksSyntheticGovPlaceholder(t *testing.T) {
+	v := NewPreCreateValidator(nil, nil, nil)
+
+	frag := &models.HorizonFragment{
+		Type:          models.FragmentTypeOrganization,
+		CanonicalPath: "/gov/na/ministry-of",
+		Labels:        map[string]string{"en": "Ministry Of"},
+	}
+
+	res, err := v.ValidateAndProcess(context.Background(), frag)
+	if err != nil {
+		t.Fatalf("ValidateAndProcess() error = %v", err)
+	}
+	if res == nil {
+		t.Fatalf("expected validation result")
+	}
+	if res.IsValid {
+		t.Fatalf("expected synthetic gov placeholder to be blocked")
+	}
+	if !strings.Contains(strings.ToLower(res.BlockReason), "forbidden synthetic /gov/ placeholder slug") {
+		t.Fatalf("unexpected block reason: %q", res.BlockReason)
 	}
 }
 

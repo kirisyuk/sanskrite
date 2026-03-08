@@ -205,6 +205,7 @@ func classifyPathFamilies(ev SignalPropagationTraceEvent) []string {
 		string(horizonmodels.DependencyTypeProduces):
 		add("energy_supply_chain")
 	case string(horizonmodels.DependencyTypeParticipatesIn),
+		string(horizonmodels.DependencyTypeTradedIn),
 		string(horizonmodels.DependencyTypeHasMarketSegment),
 		string(horizonmodels.DependencyTypeHasSubmarket),
 		string(horizonmodels.DependencyTypeDominates):

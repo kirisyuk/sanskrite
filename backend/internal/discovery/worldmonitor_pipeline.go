@@ -1748,16 +1748,6 @@ func mergeTrackFragment(dst, src *horizonmodels.HorizonFragment) bool {
 	return changed
 }
 
-func (p *HorizonMonitorPipeline) upsertAffectedZoneFragment(
-	ctx context.Context,
-	tenantID, sourceID string,
-	e *horizonMonitorFeedEvent,
-	cls horizonMonitorNewsClassification,
-) error {
-	candidate := inferAffectedZoneCandidate(e, cls)
-	return p.upsertAffectedZoneFragmentCandidate(ctx, tenantID, sourceID, e, cls, candidate)
-}
-
 func (p *HorizonMonitorPipeline) upsertAffectedZoneFragmentCandidate(
 	ctx context.Context,
 	tenantID, sourceID string,

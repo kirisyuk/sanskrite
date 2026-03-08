@@ -1114,9 +1114,14 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				Status:      artifact.PathStatus,
 			}
 			if artifact.Kind == models.MaterializedKindSupplyChainPath {
+				models.PopulateSupplyChainPathIndexes(artifact)
+				ref := lens.ScopeArtifacts[artKey]
+				ref.GeoRefs = append([]string(nil), artifact.GeoRefs...)
+				ref.FlowRefs = append([]string(nil), artifact.FlowRefs...)
+				ref.ZoneRefs = append([]string(nil), artifact.ZoneRefs...)
+				ref.AffectedZoneRefs = append([]string(nil), artifact.AffectedZoneRefs...)
 				if parsed, err := models.ParseSupplyChainPathPayload(artifact.Payload); err == nil && parsed != nil {
 					summary := models.SummarizeSupplyChainPathBindings(parsed)
-					ref := lens.ScopeArtifacts[artKey]
 					ref.GeoRefs = summary.GeoRefs
 					ref.FlowRefs = summary.FlowRefs
 					ref.ZoneRefs = summary.ZoneRefs
@@ -1986,9 +1991,14 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 				Status:      artifact.PathStatus,
 			}
 			if artifact.Kind == models.MaterializedKindSupplyChainPath {
+				models.PopulateSupplyChainPathIndexes(artifact)
+				ref := lens.ScopeArtifacts[artKey]
+				ref.GeoRefs = append([]string(nil), artifact.GeoRefs...)
+				ref.FlowRefs = append([]string(nil), artifact.FlowRefs...)
+				ref.ZoneRefs = append([]string(nil), artifact.ZoneRefs...)
+				ref.AffectedZoneRefs = append([]string(nil), artifact.AffectedZoneRefs...)
 				if parsed, err := models.ParseSupplyChainPathPayload(artifact.Payload); err == nil && parsed != nil {
 					summary := models.SummarizeSupplyChainPathBindings(parsed)
-					ref := lens.ScopeArtifacts[artKey]
 					ref.GeoRefs = summary.GeoRefs
 					ref.FlowRefs = summary.FlowRefs
 					ref.ZoneRefs = summary.ZoneRefs

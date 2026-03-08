@@ -19,3 +19,12 @@ func TestInferPlaceHintFromFacilityLabel(t *testing.T) {
 		}
 	}
 }
+
+func TestContainsNormalizedGeoPhrase_UsesPhraseBoundaries(t *testing.T) {
+	if containsNormalizedGeoPhrase("FAMA Corporation Processing Plant", "roc") {
+		t.Fatalf("expected alias roc not to match inside corporation")
+	}
+	if !containsNormalizedGeoPhrase("AEON Malaysia Distribution", "malaysia") {
+		t.Fatalf("expected malaysia phrase to match")
+	}
+}

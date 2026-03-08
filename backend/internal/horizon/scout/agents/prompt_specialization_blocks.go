@@ -6,6 +6,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/graphenrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -218,9 +219,13 @@ func GovEntityRelationRulesBlock() string {
 }
 
 func buildCoreBusinessTaxonomyBlock() string {
+	domainContract := graphenrich.SupportedMarketDomainsForPrompt()
+	verticalHints := graphenrich.DomainVerticalHintsForPrompt()
 	return `BUSINESS TAXONOMY CONTRACT (single source for typical business objects):
 - ORG/FAC/GOV:
   - marketSegments: /segment/{domain}/{vertical}/{geo} (geo = ISO2 or global/regional token)
+  - marketDomain must use graphenrich canonical domains: ` + domainContract + `
+  - marketVertical should align with canonical graphenrich verticals where inferable. Hints: ` + verticalHints + `
   - orgSize: sme | le | enterprise | mega | na
   - tags: 3-6 canonical /biz/... paths
 - GOV (canonicalPath starts with /gov/):

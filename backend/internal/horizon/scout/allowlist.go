@@ -1,19 +1,38 @@
 package scout
 
 import (
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
-// EdgeAllowlistByDomainMode delegates to edgesemantics (single source of truth).
+// EdgeAllowlistByDomainMode delegates to contract semantics as the source of truth
+// for runtime contract isolation.
 func EdgeAllowlistByDomainMode(mode string) []models.DependencyType {
-	return edgesemantics.EdgeAllowlistByDomainMode(mode)
+	profile := contractsemantics.ProfileForDomainMode(mode)
+	if len(profile.AllowedEdges) == 0 {
+		return nil
+	}
+	out := make([]models.DependencyType, 0, len(profile.AllowedEdges))
+	for _, edgeType := range profile.AllowedEdges {
+		out = append(out, edgeType)
+	}
+	return out
 }
 
-// EdgeAllowlistByDomainModes delegates to edgesemantics (single source of truth).
+// EdgeAllowlistByDomainModes returns the deduplicated union of allowed edges across
+// normalized domain modes, preserving contract semantics as the source of truth.
 func EdgeAllowlistByDomainModes(modes []string) []models.DependencyType {
-	return edgesemantics.EdgeAllowlistByDomainModes(modes)
+	composed := contractsemantics.ComposeDomainModes(modes)
+	if len(composed.AllowedEdges) == 0 {
+		return nil
+	}
+	out := make([]models.DependencyType, 0, len(composed.AllowedEdges))
+	for _, edgeType := range composed.AllowedEdges {
+		out = append(out, edgeType)
+	}
+	return out
 }
 
 // AllowlistContains delegates to edgesemantics (single source of truth).

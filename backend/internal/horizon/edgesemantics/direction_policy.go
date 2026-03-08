@@ -295,12 +295,16 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 			models.FragmentTypeOrganization,
 			models.FragmentTypeFacility,
 			models.FragmentTypeCommunity,
-			models.FragmentTypeProduct,
 			models.FragmentTypeProgram,
 			models.FragmentTypePerson,
 		},
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeMarket},
 		Description:      "Entity participates in market",
+	},
+	models.DependencyTypeTradedIn: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeProduct},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeMarket},
+		Description:      "Product is traded or price-discovered in market",
 	},
 	models.DependencyTypeDominates: {
 		ValidSourceTypes: []models.FragmentType{

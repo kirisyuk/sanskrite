@@ -125,6 +125,16 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisInfoReputation:      0.90,
 		},
 	},
+	horizonmodels.DependencyTypeTradedIn: {
+		BaseFactor:        0.96,
+		DefaultAxisFactor: 0.70,
+		AxisFactor: map[string]float64{
+			horizonmodels.AxisPhysicalFlowDemand:  1.10,
+			horizonmodels.AxisFinancialSettlement: 1.12,
+			horizonmodels.AxisFinancialCredit:     1.00,
+			horizonmodels.AxisInfoReputation:      0.92,
+		},
+	},
 	horizonmodels.DependencyTypeOperatesIn: {
 		BaseFactor:        0.88,
 		DefaultAxisFactor: 0.60,

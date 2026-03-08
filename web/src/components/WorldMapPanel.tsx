@@ -10,6 +10,7 @@ import { usePathLegLayer } from '../hooks/usePathLegLayer';
 import { useVesselLayer, vesselsApiAvailable as isVesselsApiAvailable } from '../hooks/useVesselLayer';
 import { MapFilterPanel } from './MapFilterPanel';
 import { MapObjectDetail } from './MapObjectDetail';
+import { MapObjectStackPanel } from './MapObjectStackPanel';
 import { STATIC_ZONE_DATA, deriveZoneTypeCounts, type StaticZoneFeature, type StaticZoneType } from '../lib/staticZones';
 import {
   STATIC_TRANSPORT_FLOW_DATA,
@@ -19,6 +20,7 @@ import {
 } from '../lib/staticTransportFlows';
 import { api } from '../lib/api';
 import type { MaterializedArtifact } from './SupplyChainOverlay';
+import type { GeoMarkerSelection } from '../hooks/useGeoMarkerLayer';
 
 export interface WorldMapPanelProps {
   scope?: { lensId: string };
@@ -27,6 +29,7 @@ export interface WorldMapPanelProps {
 type MapActivityPayload = Awaited<ReturnType<typeof api.getHorizonMapActivity>>;
 type ZoneActivityItem = MapActivityPayload['zones'][number];
 type FlowActivityItem = MapActivityPayload['flows'][number];
+type MapObjectStackSelection = Extract<GeoMarkerSelection, { kind: 'stack' }>;
 
 export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
@@ -45,9 +48,15 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [hops, setHops] = React.useState(3);
   const vesselsApiAvailable = isVesselsApiAvailable();
   const [selectedObject, setSelectedObject] = React.useState<GeoObject | null>(null);
+  const [stackSelection, setStackSelection] = React.useState<MapObjectStackSelection | null>(null);
   const [zoneActivityById, setZoneActivityById] = React.useState<Record<string, ZoneActivityItem>>({});
   const [flowActivityById, setFlowActivityById] = React.useState<Record<string, FlowActivityItem>>({});
   const [pathArtifacts, setPathArtifacts] = React.useState<MaterializedArtifact[]>([]);
+  const stackSelectionRef = React.useRef<MapObjectStackSelection | null>(null);
+
+  React.useEffect(() => {
+    stackSelectionRef.current = stackSelection;
+  }, [stackSelection]);
 
   const filters = React.useMemo(
     () => ({ dateFrom, dateTo, activeTypes }),
@@ -134,9 +143,35 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     };
   }, [scope?.lensId]);
 
-  useGeoMarkerLayer(map, isReady, styleEpoch, mapObjects, theme, (obj) => {
-    setSelectedObject(obj);
-  });
+  const clearStackSelection = React.useCallback(() => {
+    stackSelectionRef.current?.clearTransient?.();
+    stackSelectionRef.current = null;
+    setStackSelection(null);
+  }, []);
+
+  React.useEffect(() => () => {
+    stackSelectionRef.current?.clearTransient?.();
+  }, []);
+
+  const handleMarkerSelection = React.useCallback((selection: GeoMarkerSelection) => {
+    if (selection.kind === 'clear') {
+      clearStackSelection();
+      setSelectedObject(null);
+      return;
+    }
+
+    if (selection.kind === 'object') {
+      clearStackSelection();
+      setSelectedObject(selection.object);
+      return;
+    }
+
+    clearStackSelection();
+    setSelectedObject(null);
+    setStackSelection(selection);
+  }, [clearStackSelection]);
+
+  useGeoMarkerLayer(map, isReady, styleEpoch, mapObjects, theme, handleMarkerSelection);
   useGeoZoneLayer(map, isReady, styleEpoch, mapObjects, theme);
   useStaticZoneLayer(map, isReady, styleEpoch, filteredStaticZones, theme, zonesEnabled, zoneActivityById, mapObjects);
   useTransportFlowLayer(map, isReady, styleEpoch, filteredTransportFlows, theme, flowsEnabled, flowActivityById);
@@ -261,7 +296,21 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
           {vesselsEnabled ? ' | Vessels (AIS)' : ''}
         </div>
 
-        {selectedObject && (
+        {stackSelection && (
+          <MapObjectStackPanel
+            objects={stackSelection.objects}
+            isDark={isDark}
+            paletteTheme={theme}
+            onClose={clearStackSelection}
+            onShowFan={stackSelection.canSpiderfy ? stackSelection.spiderfy : undefined}
+            onSelectObject={(object) => {
+              clearStackSelection();
+              setSelectedObject(object);
+            }}
+          />
+        )}
+
+        {selectedObject && !stackSelection && (
           <MapObjectDetail
             object={selectedObject}
             isDark={isDark}

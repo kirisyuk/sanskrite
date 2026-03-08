@@ -62,6 +62,9 @@ const (
 	// --- Market participation ---
 	// PARTICIPATES_IN: org/facility participates in a market (player relationship).
 	DependencyTypeParticipatesIn DependencyType = "PARTICIPATES_IN"
+	// TRADED_IN: product is traded/price-discovered in a market.
+	// Direction: PRODUCT -> MARKET. This is not the same as market participation by an actor.
+	DependencyTypeTradedIn DependencyType = "TRADED_IN"
 	// DOMINATES: org/facility dominates a market (leader relationship).
 	DependencyTypeDominates DependencyType = "DOMINATES"
 	// HAS_MARKET_SEGMENT: market hierarchy (parent market has segment = child/narrower market).

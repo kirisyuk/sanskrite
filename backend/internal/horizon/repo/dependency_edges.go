@@ -92,7 +92,18 @@ func (r *DependencyEdgesRepository) WithTelemetryRepo(repo *HorizonTelemetryRepo
 
 // WithOnUpsert registers a best-effort callback after successful edge create/update writes.
 func (r *DependencyEdgesRepository) WithOnUpsert(fn func(ctx context.Context, edge *models.DependencyEdge)) *DependencyEdgesRepository {
-	r.onUpsert = fn
+	if fn == nil {
+		return r
+	}
+	if r.onUpsert == nil {
+		r.onUpsert = fn
+		return r
+	}
+	prev := r.onUpsert
+	r.onUpsert = func(ctx context.Context, edge *models.DependencyEdge) {
+		prev(ctx, edge)
+		fn(ctx, edge)
+	}
 	return r
 }
 

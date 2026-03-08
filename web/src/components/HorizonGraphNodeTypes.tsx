@@ -1778,6 +1778,8 @@ export const getEdgeColor = (edgeType: string | undefined): string => {
   if (['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES'].includes(type)) return '#EF4444';
   // Participation (org in market) — Teal (neutral, distinct from red competes)
   if (type === 'PARTICIPATES_IN') return '#0D9488';
+  // Product traded in market — Teal dashed family
+  if (type === 'TRADED_IN') return '#14B8A6';
   // Partnership/Cooperation — Green
   if (['PARTNERS_WITH', 'COOPERATES_WITH', 'SUPPLIES_TO', 'SUPPORTS'].includes(type)) return '#22C55E';
   // Products/Output — Cyan
@@ -2192,6 +2194,7 @@ const edgeCaptionShort = (raw: any): string => {
     IMPACTS: 'Impacts',
     // Market / hierarchy
     PARTICIPATES_IN: 'Participates',
+    TRADED_IN: 'Traded In',
     DOMINATES: 'Dominates',
     HAS_MARKET_SEGMENT: 'Segment',
     HAS_SUBMARKET: 'Segment', // deprecated

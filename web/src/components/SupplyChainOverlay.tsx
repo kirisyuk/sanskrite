@@ -12,6 +12,17 @@ export interface MaterializedArtifact {
   kind: string;
   displayName?: string;
   nodeRefs?: string[];
+  flowRefs?: string[];
+  zoneRefs?: string[];
+  affectedZoneRefs?: string[];
+  anchorSupplier?: string;
+  anchorCustomer?: string;
+  productAxis?: string;
+  discoverySource?: string;
+  discoveryReason?: string;
+  matchedRefs?: string[];
+  overlapScore?: number;
+  isPinned?: boolean;
   payload?: {
     v?: number;
     nodes?: Array<{ type: string; ref: string }>;
@@ -82,6 +93,8 @@ export function SupplyChainOverlay({
   refreshKey = 0,
 }: SupplyChainOverlayProps) {
   const [chains, setChains] = React.useState<MaterializedArtifact[]>([]);
+  const [scopedTotal, setScopedTotal] = React.useState(0);
+  const [discoveredTotal, setDiscoveredTotal] = React.useState(0);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -98,6 +111,8 @@ export function SupplyChainOverlay({
       .then((res) => {
         if (cancelled) return;
         setChains(res.chains || []);
+        setScopedTotal(Number(res.scopedTotal || 0));
+        setDiscoveredTotal(Number(res.discoveredTotal || 0));
       })
       .catch((err: any) => {
         if (cancelled) return;
@@ -155,6 +170,7 @@ export function SupplyChainOverlay({
         zoneCount: Array.from(zoneRefs).filter(Boolean).length,
         affectedZoneCount: Array.from(affectedZoneRefs).filter(Boolean).length,
         spatialSemantics: Array.from(semantics).filter(Boolean),
+        overlapScore: typeof c.overlapScore === 'number' ? c.overlapScore : 0,
       };
     });
   }, [chains, canonicalPathsOnGraph]);
@@ -198,6 +214,12 @@ export function SupplyChainOverlay({
         }}
       >
         Supply Chains
+        {(scopedTotal > 0 || discoveredTotal > 0) && (
+          <span style={{ marginLeft: 8, fontWeight: 500, opacity: 0.75 }}>
+            {scopedTotal > 0 ? `${scopedTotal} pinned` : '0 pinned'}
+            {discoveredTotal > 0 ? ` • ${discoveredTotal} discovered` : ''}
+          </span>
+        )}
       </div>
       {loading && (
         <div style={{ padding: 16, color: 'var(--text-secondary-strong)', fontSize: 12 }}>Loading…</div>
@@ -230,7 +252,7 @@ export function SupplyChainOverlay({
       )}
       {!loading && !error && chainStatus.length > 0 && (
         <div style={{ padding: '8px 0' }}>
-          {chainStatus.map(({ artifact, onGraph, legCount, pathStressScore, bindingConfidence, flowCount, zoneCount, affectedZoneCount, spatialSemantics }) => (
+          {chainStatus.map(({ artifact, onGraph, legCount, pathStressScore, bindingConfidence, flowCount, zoneCount, affectedZoneCount, spatialSemantics, overlapScore }) => (
             <button
               key={artifact.id}
               type="button"
@@ -255,9 +277,41 @@ export function SupplyChainOverlay({
                 e.currentTarget.style.background = 'transparent';
               }}
             >
-              <span style={{ fontWeight: 600 }}>
-                {artifact.displayName || artifact.id || 'Unnamed chain'}
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <span style={{ fontWeight: 600 }}>
+                  {artifact.displayName || artifact.id || 'Unnamed chain'}
+                </span>
+                <span
+                  style={{
+                    fontSize: 10,
+                    padding: '2px 6px',
+                    borderRadius: 999,
+                    border: artifact.isPinned ? '1px solid rgba(59,130,246,0.25)' : '1px solid rgba(148,163,184,0.2)',
+                    background: artifact.isPinned ? 'rgba(59,130,246,0.12)' : 'rgba(148,163,184,0.1)',
+                    color: artifact.isPinned ? 'var(--text-accent)' : 'var(--text-secondary-strong)',
+                    fontWeight: 700,
+                    letterSpacing: '0.02em',
+                    textTransform: 'uppercase',
+                  }}
+                >
+                  {artifact.isPinned ? 'Pinned' : 'Discovered'}
+                </span>
+              </div>
+              {artifact.discoveryReason && (
+                <span style={{ color: 'var(--text-secondary-strong)', fontSize: 11 }}>
+                  {artifact.discoveryReason}
+                </span>
+              )}
+              {!artifact.isPinned && overlapScore > 0 && (
+                <span style={{ color: 'var(--text-secondary-strong)', fontSize: 11 }}>
+                  overlap {overlapScore.toFixed(1)}
+                </span>
+              )}
+              {Array.isArray(artifact.matchedRefs) && artifact.matchedRefs.length > 0 && (
+                <span style={{ color: 'var(--text-secondary-strong)', fontSize: 11 }}>
+                  matched {artifact.matchedRefs.slice(0, 3).join(', ')}
+                </span>
+              )}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {legCount > 0 && (
                   <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>

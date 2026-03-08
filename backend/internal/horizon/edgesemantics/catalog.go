@@ -78,6 +78,7 @@ func IsDomainScaffoldRelationType(t models.DependencyType) bool {
 // Used when source is /market/... to allow market-anchor relations in supply-chain mode.
 var marketRelationTypes = []models.DependencyType{
 	models.DependencyTypeParticipatesIn,
+	models.DependencyTypeTradedIn,
 	models.DependencyTypeHasMarketSegment,
 }
 
@@ -125,6 +126,7 @@ var domainModeAllowlists = map[string][]models.DependencyType{
 	},
 	taxonomy.DomainModeMarket: {
 		models.DependencyTypeParticipatesIn,
+		models.DependencyTypeTradedIn,
 		models.DependencyTypeHasMarketSegment,
 	},
 	taxonomy.DomainModeStrategic: {
@@ -144,12 +146,14 @@ var domainModeAllowlists = map[string][]models.DependencyType{
 		models.DependencyTypeInfluences,
 		models.DependencyTypeDependsOn,
 		models.DependencyTypeParticipatesIn,
+		models.DependencyTypeTradedIn,
 		models.DependencyTypeLocatedIn,
 		models.DependencyTypeOperatesIn,
 		models.DependencyTypeAdministers,
 	},
 	taxonomy.DomainModeEcosystem: {
 		models.DependencyTypeParticipatesIn,
+		models.DependencyTypeTradedIn,
 		models.DependencyTypeOwns,
 		models.DependencyTypeSubsidiaryOf,
 		models.DependencyTypeControls,

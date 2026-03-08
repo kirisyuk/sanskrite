@@ -33,6 +33,7 @@
 ### UX и пользовательские сценарии
 
 - **[Типовой UX-сценарий](ux/user-journey.md)** — описание пользовательского пути от входа до работы в Cockpit UI
+- **[Horizon Watch](ux/horizon-watch.md)** — продуктовая спецификация обзорной и персонализированной monitoring-страницы поверх графа, сигналов и артефактов
 - **[Workflow Propagation](workflows/propagation-workflow.md)** — алгоритм распространения изменений в графе зависимостей
 - **[Жизненный цикл](workflows/lifecycle.md)** — жизненный цикл HorizonFragment (Active → Dormant → Archived)
 
@@ -137,4 +138,3 @@ ExposurePath — **канонический, типизированный арт
 - **Мультитенантность** — через TenantID во всех моделях
 
 Подробнее см. [Интеграция с Sanskrite](architecture/integration.md).
-

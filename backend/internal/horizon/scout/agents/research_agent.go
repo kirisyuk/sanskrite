@@ -759,10 +759,12 @@ Choose relationType to match the CORRECT semantic direction:
 - MERGED_INTO: source organization merged into target organization.
 - SPUN_OFF_FROM: source organization spun off from target organization.
 - ACQUIRED_BY: source organization acquired by target organization.
-- PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON -> MARKET).
+- PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY/COMMUNITY/PROGRAM/PERSON -> MARKET).
   Clarification: entity is an active market participant (player).
   - If THIS FRAGMENT is MARKET, you may still emit PARTICIPATES_IN relations to player entities; backend will reverse the edge direction.
   - Put market share in relation.metrics["market_share_percent"] (unit="percent") when known.
+- TRADED_IN: product is traded or price-discovered in a market (canonical direction: PRODUCT -> MARKET).
+  Use this only for product↔market trading or pricing context. Do NOT use PARTICIPATES_IN for PRODUCT -> MARKET.
 - For ORGANIZATION ↔ MARKET pairs, use PARTICIPATES_IN (ORG -> MARKET).
   Exception: GOV entities (/gov/...) may use REGULATES (domestic regulatory oversight only), CONTROLS_ACCESS (sanctions, restrictions), or INFLUENCES toward MARKET targets.
   Never use OPERATES_IN, DEPENDS_ON, or other non-market types between regular ORGANIZATION and MARKET.

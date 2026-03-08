@@ -9,10 +9,12 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathbinding"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathstress"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/supplysemantics"
 )
 
 // pathBuilderCacheEntry holds a cached value with expiry.
@@ -139,6 +141,8 @@ type PathSegment struct {
 	CustomerFacilityRef *string
 	// TransportViaRefs: ordered facility paths product passes through (ports, terminals, pipelines, warehouses)
 	TransportViaRefs []string
+	// SegmentClass distinguishes real external product flow from internal support/self-loop junk.
+	SegmentClass string
 	// Confidence for this segment (0..1)
 	Confidence float64
 	// TenantID of the link ("global" or tenant)
@@ -472,6 +476,18 @@ func (b *SupplyChainPathBuilder) findSupplyLinksByCustomerAndTenant(
 				metrics[k] = v
 			}
 		}
+		segmentClass := ""
+		if link.Qualifiers != nil {
+			if rawClass, ok := link.Qualifiers["segmentClass"].(string); ok {
+				segmentClass = strings.TrimSpace(rawClass)
+			}
+		}
+		if segmentClass == "" {
+			segmentClass = supplysemantics.ClassifySegment(supplierRef, productRefVal, "", customerRefVal, link.TransportViaRefs).Class
+		}
+		if !supplysemantics.IsMaterializableSegmentClass(segmentClass) {
+			continue
+		}
 		var supplierFacilityRef *string
 		if link.SupplierFacilityRef != nil {
 			if normalized := canonical.NormalizeCanonicalPathForPersist(*link.SupplierFacilityRef); normalized != "" {
@@ -495,6 +511,7 @@ func (b *SupplyChainPathBuilder) findSupplyLinksByCustomerAndTenant(
 			SupplierFacilityRef: supplierFacilityRef,
 			CustomerFacilityRef: customerFacilityRef,
 			TransportViaRefs:    link.TransportViaRefs,
+			SegmentClass:        segmentClass,
 			Confidence:          confidence,
 			TenantID:            link.TenantID,
 			IsTenantSpecific:    link.TenantID != "global",
@@ -772,6 +789,7 @@ func (b *SupplyChainPathBuilder) MaterializePath(
 	ctx context.Context,
 	path *SupplyChainPath,
 	tenantID string,
+	lensID string,
 	canonicalKey string,
 ) (string, error) {
 	if path == nil {
@@ -783,26 +801,33 @@ func (b *SupplyChainPathBuilder) MaterializePath(
 
 	nodes, edges, legs, stress := b.pathToMaterializedPayload(ctx, path)
 
-	payload := models.BuildSupplyChainPathPayload(nodes, edges, legs, stress, map[string]interface{}{
-		"buildMode":  path.BuildMode,
-		"maxDepth":   fmt.Sprintf("%d", path.MaxDepth),
-		"confidence": path.Confidence,
-	})
+	payload := models.BuildSupplyChainPathPayload(nodes, edges, legs, stress, buildSupplyChainArtifactNotes(path, legs, stress))
 
 	displayName := buildChainDisplayName(path.Segments)
 	labels := buildChainLabels(path.Segments)
 	nodeRefs := collectNodeRefs(path.Segments)
+	parsedPayload, _ := models.ParseSupplyChainPathPayload(payload)
+	bindingSummary := models.SummarizeSupplyChainPathBindings(parsedPayload)
 
 	artifact := &models.MaterializedArtifact{
-		TenantID:     tenantID,
-		Kind:         models.MaterializedKindSupplyChainPath,
-		CanonicalKey: canonicalKey,
-		Payload:      payload,
-		PathStatus:   "hypothesis",
-		DisplayName:  displayName,
-		Labels:       labels,
-		NodeRefs:     nodeRefs,
+		TenantID:         tenantID,
+		LensID:           strings.TrimSpace(lensID),
+		Kind:             models.MaterializedKindSupplyChainPath,
+		CanonicalKey:     canonicalKey,
+		Payload:          payload,
+		PathStatus:       "hypothesis",
+		DisplayName:      displayName,
+		Labels:           labels,
+		NodeRefs:         nodeRefs,
+		GeoRefs:          bindingSummary.GeoRefs,
+		FlowRefs:         bindingSummary.FlowRefs,
+		ZoneRefs:         bindingSummary.ZoneRefs,
+		AffectedZoneRefs: bindingSummary.AffectedZoneRefs,
+		AnchorSupplier:   strings.TrimSpace(labels["anchorSupplier"]),
+		AnchorCustomer:   strings.TrimSpace(labels["anchorCustomer"]),
+		ProductAxis:      strings.TrimSpace(labels["productAxis"]),
 	}
+	models.PopulateSupplyChainPathIndexes(artifact)
 
 	// Check if artifact already exists — merge instead of overwrite
 	existing, err := b.artifactsRepo.GetByCanonicalKey(ctx, tenantID, models.MaterializedKindSupplyChainPath, canonicalKey)
@@ -853,6 +878,7 @@ func (b *SupplyChainPathBuilder) MaterializePathsBatch(
 	ctx context.Context,
 	paths []*SupplyChainPath,
 	tenantID string,
+	lensID string,
 	canonicalKeys []string,
 ) ([]string, error) {
 	if b.artifactsRepo == nil || len(paths) == 0 || len(canonicalKeys) == 0 {
@@ -875,24 +901,31 @@ func (b *SupplyChainPathBuilder) MaterializePathsBatch(
 			continue
 		}
 		nodes, edges, legs, stress := b.pathToMaterializedPayload(ctx, path)
-		payload := models.BuildSupplyChainPathPayload(nodes, edges, legs, stress, map[string]interface{}{
-			"buildMode":  path.BuildMode,
-			"maxDepth":   fmt.Sprintf("%d", path.MaxDepth),
-			"confidence": path.Confidence,
-		})
+		payload := models.BuildSupplyChainPathPayload(nodes, edges, legs, stress, buildSupplyChainArtifactNotes(path, legs, stress))
 		displayName := buildChainDisplayName(path.Segments)
 		labels := buildChainLabels(path.Segments)
 		nodeRefs := collectNodeRefs(path.Segments)
+		parsedPayload, _ := models.ParseSupplyChainPathPayload(payload)
+		bindingSummary := models.SummarizeSupplyChainPathBindings(parsedPayload)
 		artifact := &models.MaterializedArtifact{
-			TenantID:     tenantID,
-			Kind:         models.MaterializedKindSupplyChainPath,
-			CanonicalKey: key,
-			Payload:      payload,
-			PathStatus:   "hypothesis",
-			DisplayName:  displayName,
-			Labels:       labels,
-			NodeRefs:     nodeRefs,
+			TenantID:         tenantID,
+			LensID:           strings.TrimSpace(lensID),
+			Kind:             models.MaterializedKindSupplyChainPath,
+			CanonicalKey:     key,
+			Payload:          payload,
+			PathStatus:       "hypothesis",
+			DisplayName:      displayName,
+			Labels:           labels,
+			NodeRefs:         nodeRefs,
+			GeoRefs:          bindingSummary.GeoRefs,
+			FlowRefs:         bindingSummary.FlowRefs,
+			ZoneRefs:         bindingSummary.ZoneRefs,
+			AffectedZoneRefs: bindingSummary.AffectedZoneRefs,
+			AnchorSupplier:   strings.TrimSpace(labels["anchorSupplier"]),
+			AnchorCustomer:   strings.TrimSpace(labels["anchorCustomer"]),
+			ProductAxis:      strings.TrimSpace(labels["productAxis"]),
 		}
+		models.PopulateSupplyChainPathIndexes(artifact)
 		if existing := existingMap[key]; existing != nil {
 			merged := models.MergePayloads(existing.Payload, artifact.Payload)
 			artifact.Payload = merged
@@ -971,17 +1004,17 @@ func (b *SupplyChainPathBuilder) RebuildFromSupplyLinks(ctx context.Context, art
 
 	bestPath := paths[0]
 	nodes, edges, legs, stress := b.pathToMaterializedPayload(ctx, bestPath)
-	newPayload := models.BuildSupplyChainPathPayload(nodes, edges, legs, stress, map[string]interface{}{
-		"buildMode":  "rebuild_from_supply_links",
-		"maxDepth":   fmt.Sprintf("%d", maxDepth),
-		"confidence": bestPath.Confidence,
-	})
+	rebuildPath := *bestPath
+	rebuildPath.BuildMode = "rebuild_from_supply_links"
+	rebuildPath.MaxDepth = maxDepth
+	newPayload := models.BuildSupplyChainPathPayload(nodes, edges, legs, stress, buildSupplyChainArtifactNotes(&rebuildPath, legs, stress))
 
 	merged := models.MergePayloads(artifact.Payload, newPayload)
 	newNodeRefs := collectNodeRefs(bestPath.Segments)
 
 	artifact.Payload = merged
 	artifact.NodeRefs = mergeStringSlices(artifact.NodeRefs, newNodeRefs)
+	models.PopulateSupplyChainPathIndexes(artifact)
 	artifact.UpdatedAt = time.Now().UTC()
 
 	if artifact.PathStatus == "validated" && models.PayloadNodesChanged(artifact.Payload, merged) {
@@ -1025,6 +1058,9 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 
 	// Build nodes array and index map
 	for _, segment := range path.Segments {
+		if !supplysemantics.IsMaterializableSegmentClass(segment.SegmentClass) {
+			continue
+		}
 		// Add supplier node
 		if segment.SupplierRef != "" && segment.SupplierRef != "natural" {
 			if _, exists := nodeIndexMap[segment.SupplierRef]; !exists {
@@ -1093,6 +1129,9 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 
 	// Build edges array
 	for i, segment := range path.Segments {
+		if !supplysemantics.IsMaterializableSegmentClass(segment.SegmentClass) {
+			continue
+		}
 		supplierIdx := -1
 		productIdx := -1
 		customerIdx := -1
@@ -1326,4 +1365,26 @@ func buildPathEdgeQualifiers(segment PathSegment, leg models.SupplyChainPathLeg,
 
 func intPtr(v int) *int {
 	return &v
+}
+
+func buildSupplyChainArtifactNotes(path *SupplyChainPath, legs []models.SupplyChainPathLeg, stress *models.SupplyChainPathStress) map[string]interface{} {
+	profile := contractsemantics.ProfileForDomainMode("supply_chain")
+	notes := map[string]interface{}{
+		"buildMode":          path.BuildMode,
+		"maxDepth":           fmt.Sprintf("%d", path.MaxDepth),
+		"confidence":         path.Confidence,
+		"graphLayer":         string(profile.PrimaryLayer),
+		"allowedEdges":       dependencyTypesToStrings(profile.AllowedEdges),
+		"pathCarriedEdges":   dependencyTypesToStrings(profile.PathCarriedEdges),
+		"overlayEdges":       dependencyTypesToStrings(profile.OverlayEdges),
+		"complementaryModes": append([]string(nil), profile.ComplementaryModes...),
+		"artifactKind":       string(models.MaterializedKindSupplyChainPath),
+		"legCount":           len(legs),
+	}
+	if stress != nil {
+		notes["pathStressScore"] = stress.PathScore
+		notes["bottleneckLegIndex"] = stress.BottleneckLegIndex
+		notes["recoveryLatencyHours"] = stress.RecoveryLatencyHrs
+	}
+	return notes
 }

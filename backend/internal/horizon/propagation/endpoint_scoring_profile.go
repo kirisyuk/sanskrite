@@ -25,6 +25,8 @@ type EndpointScoringProfile struct {
 	ProductHubPenalty         float64
 	GenericLocPenalty         float64
 	GenericOrgPenalty         float64
+	SyntheticOrgPenalty       float64
+	SyntheticFacilityPenalty  float64
 	UnknownGeoFacilityPenalty float64
 	UnknownJurisdictionPenalty float64
 	ConcreteFacilityBonus     float64
@@ -77,6 +79,8 @@ func DefaultEndpointScoringProfile() EndpointScoringProfile {
 		ProductHubPenalty:         0.24,
 		GenericLocPenalty:         0.28,
 		GenericOrgPenalty:         0.10,
+		SyntheticOrgPenalty:       0.28,
+		SyntheticFacilityPenalty:  0.32,
 		UnknownGeoFacilityPenalty: 0.22,
 		UnknownJurisdictionPenalty: 0.12,
 		ConcreteFacilityBonus:     0.08,

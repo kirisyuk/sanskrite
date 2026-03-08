@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -22,6 +23,7 @@ type CriticPipelineRunner struct {
 // for Core + all non-strategic domain modes. Strategic mode uses a dedicated overlay prompt.
 // Falls back to per-validator sequential loop when composed mode is unsuitable.
 func (p *CriticPipelineRunner) Validate(ctx context.Context, input CriticValidatorInput, domainModes []string) (*ValidationResult, error) {
+	domainModes = contractsemantics.SortDomainModesForExecution(domainModes)
 	hasStrategic := taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeStrategic)
 	nonStrategicModes := filterOutMode(domainModes, taxonomy.DomainModeStrategic)
 
@@ -160,6 +162,7 @@ func filterOutMode(modes []string, exclude string) []string {
 
 // validatorsForModes returns the list of validators to run: Core first, then by mode.
 func (p *CriticPipelineRunner) validatorsForModes(modes []string) []CriticValidator {
+	modes = contractsemantics.SortDomainModesForExecution(modes)
 	out := make([]CriticValidator, 0, 5)
 	// Core always first
 	out = append(out, &CoreValidator{agent: p.agent})

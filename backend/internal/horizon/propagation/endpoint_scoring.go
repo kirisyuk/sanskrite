@@ -465,6 +465,12 @@ func endpointAbstractionPenalty(frag *horizonmodels.HorizonFragment, overlay Pro
 		reasons = append(reasons, "generic_org_tail")
 	}
 	switch canonical.ClassifyPlaceholderCanonicalPath(path) {
+	case canonical.PlaceholderPathFacilitySynthetic:
+		penalty += profile.SyntheticFacilityPenalty
+		reasons = append(reasons, "facility_synthetic_placeholder")
+	case canonical.PlaceholderPathOrgSynthetic, canonical.PlaceholderPathGovSynthetic:
+		penalty += profile.SyntheticOrgPenalty
+		reasons = append(reasons, "synthetic_org_placeholder")
 	case canonical.PlaceholderPathFacilityUnknownGeo:
 		penalty += profile.UnknownGeoFacilityPenalty
 		reasons = append(reasons, "facility_unknown_geo")

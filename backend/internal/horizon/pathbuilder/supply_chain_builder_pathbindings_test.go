@@ -3,6 +3,8 @@ package pathbuilder
 import (
 	"context"
 	"testing"
+
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
 func TestPathToMaterializedPayload_IncludesViaNodesAndLegs(t *testing.T) {
@@ -73,5 +75,34 @@ func TestPathToMaterializedPayload_IncludesViaNodesAndLegs(t *testing.T) {
 	}
 	if legs[0].Stress == nil || legs[0].Stress.StressScore <= 0 {
 		t.Fatal("expected leg stress")
+	}
+}
+
+func TestBuildSupplyChainArtifactNotes_IncludeContractAndStressMetadata(t *testing.T) {
+	path := &SupplyChainPath{
+		Confidence: 0.77,
+		BuildMode:  "test_mode",
+		MaxDepth:   4,
+	}
+	stress := &models.SupplyChainPathStress{
+		PathScore:          0.61,
+		BottleneckLegIndex: 2,
+		RecoveryLatencyHrs: 48,
+	}
+	notes := buildSupplyChainArtifactNotes(path, []models.SupplyChainPathLeg{{Index: 0}, {Index: 1}}, stress)
+	if notes["graphLayer"] != "path_carried" {
+		t.Fatalf("graphLayer=%v, want path_carried", notes["graphLayer"])
+	}
+	if notes["artifactKind"] != "SUPPLY_CHAIN_PATH" {
+		t.Fatalf("artifactKind=%v, want SUPPLY_CHAIN_PATH", notes["artifactKind"])
+	}
+	if notes["legCount"] != 2 {
+		t.Fatalf("legCount=%v, want 2", notes["legCount"])
+	}
+	if _, ok := notes["pathCarriedEdges"]; !ok {
+		t.Fatal("expected pathCarriedEdges in notes")
+	}
+	if notes["pathStressScore"] != 0.61 {
+		t.Fatalf("pathStressScore=%v, want 0.61", notes["pathStressScore"])
 	}
 }

@@ -81,3 +81,8 @@ func inferOrgCanonicalPathFromHints(fragment *models.HorizonFragment) string {
 	return taxonomy.OrgCanonicalPath(geo, label)
 }
 
+// InferOrgCanonicalPathFromHints is an exported wrapper for deterministic org/gov placeholder
+// repair and backfill tools. It shares the same logic as create-time repair.
+func InferOrgCanonicalPathFromHints(fragment *models.HorizonFragment) string {
+	return inferOrgCanonicalPathFromHints(fragment)
+}

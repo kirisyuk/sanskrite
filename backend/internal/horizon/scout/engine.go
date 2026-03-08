@@ -1068,10 +1068,6 @@ func filterDiscoveredRelationsByDomainModesWithDomainAnchorAndLog(sourceFragment
 	return out, dropped
 }
 
-func allowSupplyChainOwnsByPath(sourcePath, targetPath string) bool {
-	return allowSupplyChainOwnershipOrControlByPath(sourcePath, targetPath)
-}
-
 func allowSupplyChainOwnershipOrControlByPath(sourcePath, targetPath string) bool {
 	sourcePath = strings.TrimSpace(sourcePath)
 	targetPath = strings.TrimSpace(targetPath)
@@ -1877,10 +1873,13 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 				if pre.ReplacementFrag != nil && strings.TrimSpace(pre.ReplacementFrag.ID) != "" {
 					return pre.ReplacementFrag, nil
 				}
-				// Keep fail-open behavior: block only for truly critical path issues.
+				// Keep fail-open behavior, but block placeholder facility debt that directly harms propagation quality.
 				if !pre.IsValid && strings.TrimSpace(pre.BlockReason) != "" {
 					reason := strings.TrimSpace(pre.BlockReason)
-					if strings.Contains(reason, "/discovered/") || strings.Contains(strings.ToLower(reason), "canonical path is required") {
+					lowerReason := strings.ToLower(reason)
+					if strings.Contains(reason, "/discovered/") ||
+						strings.Contains(lowerReason, "canonical path is required") ||
+						strings.Contains(lowerReason, "forbidden /fac/na placeholder slug") {
 						return nil, fmt.Errorf("dimension seed blocked: %s", reason)
 					}
 				}
@@ -3338,6 +3337,43 @@ func (e *ScoutEngine) logLine(ctx context.Context, job *models.ScoutingJob, leve
 		"level":               level,
 		"line":                line,
 	})
+}
+
+func (e *ScoutEngine) logLineHuman(ctx context.Context, job *models.ScoutingJob, level string, line string, title string, description string) {
+	if e == nil || job == nil {
+		return
+	}
+	line = strings.TrimSpace(line)
+	title = strings.TrimSpace(title)
+	description = strings.TrimSpace(description)
+	if line == "" && title == "" && description == "" {
+		return
+	}
+	if level == "" {
+		level = "info"
+	}
+	evt := map[string]interface{}{
+		"tenantId":            job.TenantID,
+		"projectId":           job.ProjectID,
+		"lensId":              strings.TrimSpace(job.LensID),
+		"jobId":               job.ID,
+		"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+		"level":               level,
+	}
+	if line != "" {
+		evt["line"] = line
+	}
+	if title != "" || description != "" {
+		hr := map[string]interface{}{}
+		if title != "" {
+			hr["title"] = title
+		}
+		if description != "" {
+			hr["description"] = description
+		}
+		evt["humanReadable"] = hr
+	}
+	e.publish(ctx, realtime.EventType("horizon.scout.job.log"), evt)
 }
 
 // ExecuteScoutingJob выполняет полный цикл ScoutingJob

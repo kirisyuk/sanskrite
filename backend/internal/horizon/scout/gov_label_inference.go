@@ -108,7 +108,7 @@ func inferISO2FromLabel(label string, fragment *models.HorizonFragment) string {
 
 	if cp := GetCountryCanonicalPath(bestMatch); strings.HasPrefix(cp, "/loc/") {
 		parts := strings.Split(strings.Trim(cp, "/"), "/")
-		if len(parts) == 4 && len(parts[1]) == 2 {
+		if len(parts) >= 2 && parts[0] == "loc" && len(parts[1]) == 2 {
 			return strings.ToLower(parts[1])
 		}
 	}

@@ -159,7 +159,8 @@ const supplyChainOperationalModelBlock = `CRITICAL — Supply chain operational 
 4. Product = catalog entity. One product type, one node. Do not duplicate products for transport steps. Use transportVia array on the supplies edge. A product must NOT appear more than once in a single supply chain path — no pseudo-cycles.
 5. Use only PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM.
 6. For long-haul, cross-border, maritime, pipeline, rail, or chokepoint-sensitive supply legs, include transportVia with real facility/chokepoint canonical paths whenever evidence or geography makes the route reasonably inferable.
-7. Prefer canonical ports, terminals, pipelines, straits, canals, warehouses, and intermodal nodes in transportVia over vague words like "shipping", "logistics", or "distribution".`
+7. Prefer canonical ports, terminals, pipelines, straits, canals, warehouses, and intermodal nodes in transportVia over vague words like "shipping", "logistics", or "distribution".
+8. Only product-carrying flow belongs in the chain. If an organization merely owns, controls, manages, or operates an adjacent facility, emit OWNS / CONTROLS / MANAGES separately. Do NOT encode that as FACILITY → PRODUCT → ORG.`
 
 const supplyChainProductGranularityBlock = `PRODUCT GRANULARITY (what counts as a product node):
 - Tech/consumer products: use MODEL LINE / product family level. NOT specific SKU or version.
@@ -1699,7 +1700,8 @@ WHAT TO FIND (org→fac→product→fac→org trees, 1-to-many at each level):
 1. From ORG: ALL child organizations (subsidiaries, controlled, partners) AND all its own facilities. One org → many orgs + many facs. Output /org/ and /fac/ paths.
 2. From FAC: ALL products/services THIS facility creates directly. One fac → many products. NOT products of related or parent companies. Output /product/ paths.
 3. From PRODUCT: ALL org-recipients (orgs that receive this product via their facilities). One product → many recipients. Output /org/ paths.
-4. Chains: one chain per leaf path. fac→product→fac. Nodes alternate actor→product→actor. Use /fac/ for all actors. transportVia optional.
+4. Chains: one chain per leaf path. Preferred pattern: org→fac→product→fac→org. Nodes alternate actor→product→actor; actor nodes use their real types (/org/, /fac/, /deposit/), not forced /fac/.
+   transportVia is expected for cross-border, maritime, pipeline, chokepoint, rail, or otherwise route-sensitive legs when a plausible route is inferable.
 5. Extractive: EXTRACTS_FROM (FACILITY→DEPOSIT). If CURRENT FRAGMENT is DEPOSIT: incoming edges with sourceCanonicalPath.
 
 INTEGRATION_TYPE qualifier (for SUPPLIES_TO): When the relationship nature is clear, add qualifiers.integration_type:
@@ -1720,8 +1722,8 @@ Return a JSON object:
   "supplyChains": [ { "nodes": [ { "canonicalPath", "name", "type", "role"? } ], "confidence", "reason", "transportVia"?: ["/fac/us/port-long-beach", "/fac/ae/jebel-ali-port"] } ]
 }
 If you update fragment.homeLocation, set iso3166_1 only when the country is explicit or strongly corroborated by the place clue/source. If the place clue and ISO2 conflict, correct the ISO2 or omit it; never keep contradictory geo.
-Nodes MUST alternate actor→product. Include FACILITY where transformation happens (product→facility→product).
-For SUPPLIES_TO: add qualifiers.transport_via when transport route known. transportVia in chains = facilities product passes through.
+Nodes MUST alternate actor→product. Include FACILITY where transformation happens (product→facility→product). Keep ORGANIZATION endpoints when the chain meaningfully starts or ends at org level.
+For SUPPLIES_TO: add qualifiers.transport_via when transport route is known or reasonably inferable for route-sensitive legs. transportVia in chains = facilities/chokepoints the product passes through.
 
 %s
 
@@ -1812,8 +1814,9 @@ CANONICAL PATH RULES:
 
 OUTPUT: JSON with "supplyChains" array. Each chain:
 - nodes: org→fac→product→fac→org chain. Actors: /org/, /fac/, or /deposit/.
+- use node.role when it clarifies flow semantics (supplier, processor, distributor, customer); use owner/operator/manager/controller only for non-product-carrying adjacency that should become OWNS / MANAGES / CONTROLS outside the chain.
 - segmentMetrics: volume, share, period per segment when known.
-- transportVia: facility paths product passes through (optional).
+- transportVia: facility/chokepoint paths product passes through. For route-sensitive legs, include it unless evidence is genuinely absent.
 - confidence, reason.
 
 Return ONLY valid JSON: { "supplyChains": [ { "nodes": [...], "segmentMetrics": [...], "confidence", "reason" } ] }
@@ -1973,7 +1976,7 @@ func (a *ResearchAgent) buildMarketEnrichmentPrompt(input ResearchStrategyInput)
 	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for MARKET context. Aim for COMPLETE market picture:
 
-ENTITY TYPES in market: %s. PARTICIPATES_IN source can be any of these. Use correct targetType for each relation.
+ENTITY TYPES in market: %s. PARTICIPATES_IN source can be active market players; TRADED_IN source is PRODUCT. Use correct targetType for each relation.
 
 CANONICAL PATH RULES (targetCanonicalPath, sourceCanonicalPath MUST follow):
 %s
@@ -1986,10 +1989,14 @@ Use ONLY these relation types: %s.
 Do NOT use DOMINATES, COMPETES_WITH, or other non-market types.
 STRICT DIRECTION/TYPING RULES (MANDATORY):
 - PARTICIPATES_IN direction is participant -> market.
-  - source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON.
+  - source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM/PERSON.
   - target MUST be MARKET and targetCanonicalPath MUST start with /market/.
   - targetCanonicalPath MUST NOT start with /domain/.
   - For ORGANIZATION ↔ MARKET pairs, use PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES (domestic oversight), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES.
+- TRADED_IN direction is PRODUCT -> MARKET.
+  - source MUST be PRODUCT.
+  - target MUST be MARKET.
+  - Use for product trading, benchmark pricing, or market venue context. Do NOT use PARTICIPATES_IN for PRODUCT -> MARKET.
 - HAS_MARKET_SEGMENT direction is parent-market -> child-market (segment).
   - source and target MUST both be MARKET paths (/market/...).
   - Ideal rule: child path = parent path + exactly one segment (e.g. /market/sa/finance -> /market/sa/finance/banking; /market/global/technology -> /market/global/technology/semiconductors).
@@ -2001,7 +2008,8 @@ STRICT DIRECTION/TYPING RULES (MANDATORY):
 - Never emit non-domain relations with targetCanonicalPath /domain/... in this strategy.
 
 WHAT TO FIND (prioritize completeness):
-1. Market participation: PARTICIPATES_IN (entity→market). Source: ORGANIZATION, FACILITY, COMMUNITY, or PROGRAM. metrics.market_share (0..1 or percent). marketRole: participant, leader, dominant.
+1. Market participation: PARTICIPATES_IN (entity→market). Source: ORGANIZATION, FACILITY, COMMUNITY, PROGRAM, or PERSON. metrics.market_share (0..1 or percent). marketRole: participant, leader, dominant.
+1b. Traded products: TRADED_IN (product→market). Use when the market explicitly trades, benchmarks, or price-discovers the product.
 2. Full market hierarchy: HAS_MARKET_SEGMENT (MARKET→MARKET, parent→segment). Child path = parent path + one segment. Build 3 levels when possible (e.g. market→sub-market→segment).
 3. Top 10 players: For MARKET entities, find top 10 player entities (orgs, facilities, communities, programs) by market share and emit PARTICIPATES_IN as player -> market using explicit sourceCanonicalPath.
 4. Full sizing: fragment.state: /metric/market/tam_usd, /metric/market/cagr_percent, /metric/market/hhi, /metric/market/cr4_percent. Only if you find reliable data; do NOT fabricate.
@@ -2107,10 +2115,13 @@ Do NOT use generic relation types outside this list.
 STRICT DIRECTION/TYPING RULES (MANDATORY):
 - Domain is config, not a graph node: targetCanonicalPath MUST NOT start with /domain/.
 - PARTICIPATES_IN direction is participant -> market.
-  - source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON.
+  - source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM/PERSON.
   - target MUST be MARKET and targetCanonicalPath MUST start with /market/.
   - For ORGANIZATION ↔ MARKET pairs, use PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES (domestic oversight), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES.
   - When CURRENT FRAGMENT is MARKET, use explicit sourceCanonicalPath/sourceType/sourceName for participant -> THIS MARKET.
+- TRADED_IN direction is PRODUCT -> MARKET.
+  - source MUST be PRODUCT, target MUST be MARKET.
+  - Use for product trading/price-discovery context only.
 - REGULATES/ADMINISTERS must originate from regulator/admin source (/gov/...), not from affected market/entity. REGULATES is for same-jurisdiction oversight only; for sanctions use CONTROLS_ACCESS.
 - For any relation where semantic source is not CURRENT FRAGMENT, explicit sourceCanonicalPath/sourceType/sourceName is REQUIRED.
 
@@ -2178,7 +2189,8 @@ Use ONLY these relation types: %s.
 Do NOT use generic relation types outside this list.
 STRICT DIRECTION/TYPING RULES (MANDATORY):
 - Domain is config, not a graph node: targetCanonicalPath MUST NOT start with /domain/.
-- PARTICIPATES_IN direction is participant -> market. source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON. target MUST be MARKET.
+- PARTICIPATES_IN direction is participant -> market. source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM/PERSON. target MUST be MARKET.
+- TRADED_IN direction is PRODUCT -> MARKET for traded commodity/product exposure.
 - OWNS direction is owner -> owned.
 - SUBSIDIARY_OF direction is subsidiary -> parent.
 - REGULATES direction is regulator -> regulated (same-jurisdiction domestic oversight only; for sanctions/restrictions use CONTROLS_ACCESS or IMPOSES_CONDITION).

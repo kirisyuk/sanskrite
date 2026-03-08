@@ -456,6 +456,17 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 					existing.CanonicalPath, existing.ID))
 		}
 	}
+	if fragment.Type == models.FragmentTypeFacility && result.ReplacementFrag == nil {
+		if repairedPath, reason, ok := RepairSyntheticFacilityCanonicalPath(ctx, fragment, v.geocodingClient); ok {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("%s: %q", reason, repairedPath))
+			fragment.CanonicalPath = repairedPath
+		}
+		if slug, blocked := forbiddenPlaceholderFacilitySlug(fragment.CanonicalPath); blocked {
+			v.recordFacilityIdentityTelemetry(ctx, fragment, slug, "forbidden_placeholder_slug")
+			result.IsValid = false
+			result.BlockReason = fmt.Sprintf("forbidden /fac/ placeholder slug %q; do not create synthetic general facility nodes, keep org->product or provide concrete facility identity/geo", slug)
+		}
+	}
 
 	// ==========================================================================
 	// Policy 5: Organization deduplication
@@ -468,6 +479,24 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 			result.Warnings = append(result.Warnings,
 				fmt.Sprintf("found existing organization %q (%s) - using instead of creating new",
 					existing.CanonicalPath, existing.ID))
+		}
+	}
+	if fragment.Type == models.FragmentTypeOrganization && result.ReplacementFrag == nil {
+		if repairedPath, reason, ok := RepairSyntheticOrgCanonicalPath(fragment); ok {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("%s: %q", reason, repairedPath))
+			fragment.CanonicalPath = repairedPath
+		}
+		if cp := strings.TrimSpace(fragment.CanonicalPath); strings.HasPrefix(cp, "/org/na/") {
+			if slug := lastPathSlug(cp); canonical.OrgSlugForbiddenPlaceholder(slug) {
+				result.IsValid = false
+				result.BlockReason = fmt.Sprintf("forbidden synthetic /org/ placeholder slug %q; provide a concrete organization identity or move the meaning into contract/path context", slug)
+			}
+		}
+		if cp := strings.TrimSpace(fragment.CanonicalPath); strings.HasPrefix(cp, "/gov/na/") {
+			if slug := lastPathSlug(cp); canonical.GovSlugForbiddenPlaceholder(slug) {
+				result.IsValid = false
+				result.BlockReason = fmt.Sprintf("forbidden synthetic /gov/ placeholder slug %q; provide a concrete jurisdictional authority or keep it as policy/context metadata", slug)
+			}
 		}
 	}
 
@@ -640,16 +669,28 @@ func parseMarketGeoSectorForDedup(canonicalPath string) (string, string, string)
 	return parseMarketDedupScope(canonicalPath)
 }
 
+func forbiddenPlaceholderFacilitySlug(canonicalPath string) (string, bool) {
+	cp := strings.TrimSpace(canonicalPath)
+	if !strings.HasPrefix(cp, "/fac/") {
+		return "", false
+	}
+	parts := strings.Split(strings.Trim(cp, "/"), "/")
+	if len(parts) != 3 {
+		return "", false
+	}
+	slug := strings.TrimSpace(parts[2])
+	if slug == "" {
+		return "", false
+	}
+	return slug, canonical.FacilitySlugHasSyntheticTail(slug)
+}
+
 func maybeUpgradeFacilityPathFromHomeLocation(fragment *models.HorizonFragment) string {
 	if newPath, ok := canonical.InferFacilityCanonicalPathFromGeo(fragment); ok {
 		fragment.CanonicalPath = newPath
 		return newPath
 	}
 	return ""
-}
-
-func inferFacilityISO2(fragment *models.HorizonFragment) string {
-	return canonical.InferFacilityISO2(fragment)
 }
 
 func (v *PreCreateValidator) recordFacilityIdentityTelemetry(

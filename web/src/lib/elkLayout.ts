@@ -118,6 +118,7 @@ const EDGE_TYPE_PRIORITY: Record<string, number> = {
   'ASSOCIATED_WITH': 3,
   // Market participation (org in market)
   'PARTICIPATES_IN': 3,
+  'TRADED_IN': 3,
   // Person-person social graph (peers)
   'RELATED_TO': 3,
   'RELATIVE_OF': 3,
@@ -480,6 +481,7 @@ export function getSemanticGroup(edgeType: string | undefined, isOutgoing: boole
     case 'COOPERATES_WITH':
     case 'ASSOCIATED_WITH':
     case 'PARTICIPATES_IN':
+    case 'TRADED_IN':
     case 'RELATED_TO':
     case 'RELATIVE_OF':
     case 'SIMILAR_TO':
@@ -1283,7 +1285,7 @@ export async function layoutLevelsTwoPane<T = any>(
   ]);
   const DOCK_SUPPLY = new Set(['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO']);
   const DOCK_DEPENDENCIES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'EXTRACTS_FROM']);
-  const DOCK_STRUCTURE = new Set(['DOMINATES', 'HAS_MARKET_SEGMENT', 'HAS_SUBGROUP', 'PARTICIPATES_IN']);
+  const DOCK_STRUCTURE = new Set(['DOMINATES', 'HAS_MARKET_SEGMENT', 'HAS_SUBGROUP', 'PARTICIPATES_IN', 'TRADED_IN']);
 
   const rightDockCategoryForEdgeType = (edgeType: string | undefined): RightDockKey | null => {
     const et = normalizeEdgeType(edgeType);
@@ -1373,9 +1375,10 @@ export async function layoutLevelsTwoPane<T = any>(
     'NEEDS',
     'USES',
     'EXTRACTS_FROM',
-    // Market participation is directional: participant -> market.
-    // Participant should appear to the LEFT of the market node.
+    // Market participation/trading is directional: participant/product -> market.
+    // Participant/product should appear to the LEFT of the market node.
     'PARTICIPATES_IN',
+    'TRADED_IN',
     // Governance/employment: PERSON -(EMPLOYED_BY)-> ORG means ORG is the "more ultimate" node (parent).
     'EMPLOYED_BY',
     'LOCATED_IN',
@@ -1576,12 +1579,12 @@ export async function layoutLevelsTwoPane<T = any>(
         const enabled = rightDockEnabledSetForNode(pid);
         if (!enabled.has(cat)) continue;
       }
-      // Orgs participating in a market (PARTICIPATES_IN, DOMINATES) must stay in left group, not right backbone.
+      // Market-linked nodes (PARTICIPATES_IN, TRADED_IN, DOMINATES) must stay in left group, not right backbone.
       const parentNode = fragmentById.get(pid);
       const pt = String((parentNode?.data as any)?.type || '').trim().toUpperCase();
       const pc = String((parentNode?.data as any)?.canonicalPath || '').trim().toLowerCase();
       const isMarketParent = pt === 'MARKET' || pc.startsWith('/market/');
-      if (isMarketParent && (etp === 'PARTICIPATES_IN' || etp === 'DOMINATES')) continue;
+      if (isMarketParent && (etp === 'PARTICIPATES_IN' || etp === 'TRADED_IN' || etp === 'DOMINATES')) continue;
 
       if (
         d?.directionFromParent === 'incoming' &&
@@ -1961,7 +1964,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'NEEDS', 'USES', 'EXTRACTS_FROM',
   ]);
   const MARKET_EDGE_SET = new Set([
-    'COMPETES_WITH', 'PARTICIPATES_IN', 'DOMINATES', 'HAS_MARKET_SEGMENT',
+    'COMPETES_WITH', 'PARTICIPATES_IN', 'TRADED_IN', 'DOMINATES', 'HAS_MARKET_SEGMENT',
   ]);
   const STRATEGIC_EDGE_SET = new Set([
     'CONTROLS_ACCESS', 'IMPOSES_CONDITION', 'GATEKEEPS_DECISION', 'USES_MECHANISM', 'APPLIES_TO',
@@ -2282,6 +2285,7 @@ export async function layoutLevelsTwoPane<T = any>(
       IMPACTS: 'Impacts',
       // Market / hierarchy
       PARTICIPATES_IN: 'Participates',
+      TRADED_IN: 'Traded In',
       DOMINATES: 'Dominates',
       HAS_MARKET_SEGMENT: 'Segment',
       HAS_SUBMARKET: 'Segment', // deprecated
@@ -2394,6 +2398,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'IN_GEO_SCOPE': { outgoing: 'Operates in', incoming: 'Operates in' },
     'COMPETES_WITH': { outgoing: 'Competes with', incoming: 'Competes with' },
     'PARTICIPATES_IN': { outgoing: 'Participants of this market', incoming: 'Participants of this market' },
+    'TRADED_IN': { outgoing: 'Traded in markets', incoming: 'Products traded here' },
     'DOMINATES': { outgoing: 'Dominates in markets', incoming: 'Dominated in markets by' },
     'HAS_MARKET_SEGMENT': { outgoing: 'Segments:', incoming: 'Segment of' },
     'HAS_SUBMARKET': { outgoing: 'Segments:', incoming: 'Segment of' }, // deprecated
@@ -5966,9 +5971,10 @@ export function deriveLevelsTreeMetadata<T = any>(
     // but keep this here for robustness when legacy edges leak through.
     'SUBSIDIARY_OF',
     'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'EXTRACTS_FROM',
-    // Market participation is directional: participant -> market.
-    // Participant should appear to the LEFT of the market node.
+    // Market participation/trading is directional: participant/product -> market.
+    // Participant/product should appear to the LEFT of the market node.
     'PARTICIPATES_IN',
+    'TRADED_IN',
     // Context acts like upstream/parent
     'LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN'
   ]);

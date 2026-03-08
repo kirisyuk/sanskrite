@@ -690,6 +690,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       IMPACTS: 'Impacts',
       // Market / hierarchy
       PARTICIPATES_IN: 'Participates',
+      TRADED_IN: 'Traded In',
       DOMINATES: 'Dominates',
       HAS_MARKET_SEGMENT: 'Segment',
       HAS_SUBMARKET: 'Segment', // deprecated, backward compat for existing edges
@@ -1862,6 +1863,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       'LINKED_TO',
       // Org participates in market (key for market expansion)
       'PARTICIPATES_IN',
+      // Product traded / price-discovered in market
+      'TRADED_IN',
       // Org dominates market
       'DOMINATES',
       // Market skeleton
@@ -1912,6 +1915,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     'REGULATES',
     'ADMINISTERS',
     'PARTICIPATES_IN',
+    'TRADED_IN',
     'DOMINATES',
     'INFLUENCES',
     'AFFECTS',
@@ -3897,9 +3901,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const baseWidth = criticality ? Math.max(1, criticality * 2) : 1.5;
 
     if (useSemanticGroupColors) {
-      // PARTICIPATES_IN: neutral participation, not conflict — override market red
+      // Market overlays: neutral participation/trading, not conflict — override market red
       if (type === 'PARTICIPATES_IN') {
         return { stroke: '#0D9488', strokeWidth: baseWidth }; // teal-600
+      }
+      if (type === 'TRADED_IN') {
+        return {
+          stroke: '#14B8A6', // teal-500
+          strokeWidth: Math.max(1.4, baseWidth),
+          strokeDasharray: '5 3',
+        };
       }
       // HAS_MARKET_SEGMENT: hierarchy/skeleton — dashed gray (distinct from red competes)
       if (type === 'HAS_MARKET_SEGMENT' || type === 'HAS_SUBMARKET') {
@@ -3919,6 +3930,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       return {
         stroke: '#0D9488', // teal-600
         strokeWidth: baseWidth,
+      };
+    }
+
+    // 🟢 Product trading / price discovery in market — Teal dashed
+    if (type === 'TRADED_IN') {
+      return {
+        stroke: '#14B8A6', // teal-500
+        strokeWidth: Math.max(1.4, baseWidth),
+        strokeDasharray: '5 3',
       };
     }
 
@@ -4102,7 +4122,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const OWNERSHIP = ['OWNS', 'SUBSIDIARY_OF', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF'];
       const DEPENDENCIES = ['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO', 'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM'];
       const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES', 'ASSURES', 'AUDITED_BY', 'EXTRACTS_FROM', 'ADMINISTERS'];
-      const MARKET = ['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES', 'PARTNERS_WITH', 'COOPERATES_WITH', 'RELATED_TO', 'RELATIVE_OF', 'SIMILAR_TO', 'LINKED_TO', 'PARTICIPATES_IN', 'DOMINATES', 'HAS_MARKET_SEGMENT', 'HAS_SUBGROUP'];
+      const MARKET = ['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES', 'PARTNERS_WITH', 'COOPERATES_WITH', 'RELATED_TO', 'RELATIVE_OF', 'SIMILAR_TO', 'LINKED_TO', 'PARTICIPATES_IN', 'TRADED_IN', 'DOMINATES', 'HAS_MARKET_SEGMENT', 'HAS_SUBGROUP'];
       const INFLUENCE = ['INFLUENCES', 'AFFECTS', 'IMPACTS'];
       const out = new Set<string>();
       if (draft.scopes.ownership) for (const t of OWNERSHIP) out.add(t);
@@ -4850,6 +4870,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     'HAS_MARKET_SEGMENT': 3,
     'HAS_SUBGROUP': 3,
     'ADMINISTERS': 3,
+    'TRADED_IN': 3,
     // 4. Партнёрство/Поставки — средний приоритет
     'PARTNERS_WITH': 4,
     'COOPERATES_WITH': 4,
@@ -4887,6 +4908,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // (e.g. ORG→PROGRAM PRODUCES + PROGRAM→ORG Depends → suppress Depends)
       const STRONG_VS_DEPENDS = new Set([
         'PRODUCES', 'SUPPLIES_TO', 'TRANSFORMS_INTO', 'PARTICIPATES_IN',
+        'TRADED_IN',
         'PARTNERS_WITH', 'COOPERATES_WITH', 'SUPPORTS', 'INFLUENCES', 'AFFECTS', 'IMPACTS', 'REGULATES',
         'OWNS', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'FOUNDED', 'EMPLOYED_BY', 'BOARD_MEMBER_OF',
       ]);
@@ -8051,12 +8073,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           _corridorTotalPaths: corridorPaths.length,
         };
       } else {
-        // When expanding a MARKET (levels only), always include PARTICIPATES_IN and DOMINATES so participants appear in left group
+        // When expanding a MARKET (levels only), include participation + traded products + dominance
         // Supply-chain layout: use supply-chain edge types only
         const edgeTypesForRequest =
           (isLevelsLayout && levelsExpandEdgeTypes.length > 0)
             ? isMarket
-              ? Array.from(new Set([...levelsExpandEdgeTypes, 'PARTICIPATES_IN', 'DOMINATES']))
+              ? Array.from(new Set([...levelsExpandEdgeTypes, 'PARTICIPATES_IN', 'TRADED_IN', 'DOMINATES']))
               : levelsExpandEdgeTypes
             : isSupplyChainLayout && supplyChainExpandEdgeTypes.length > 0
               ? supplyChainExpandEdgeTypes
@@ -8125,7 +8147,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           // fetch incoming participants explicitly and merge with the generic "both" payload.
           const incomingMarketDeps = await api.getFragmentDependencies(fragmentId, {
             direction: 'incoming',
-            edgeTypes: ['PARTICIPATES_IN', 'DOMINATES'],
+            edgeTypes: ['PARTICIPATES_IN', 'TRADED_IN', 'DOMINATES'],
             includeFragments: true,
             includeUnindexed: true,
             maxNeighbors: 72,
@@ -8144,13 +8166,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const dEdges = Array.isArray(dependencies?.edges) ? dependencies.edges : [];
         const participatesEdges = dEdges.filter((e: any) => {
           const et = String(e?.type || e?.edgeType || '').toUpperCase().trim();
-          return et === 'PARTICIPATES_IN' || et === 'DOMINATES';
+          return et === 'PARTICIPATES_IN' || et === 'TRADED_IN' || et === 'DOMINATES';
         });
         const canvasEdgesToMarket = (edgesStateRef.current || []).filter((e: any) => {
           return norm(e.target) === fragmentId || norm(e.source) === fragmentId;
         });
-        console.warn('[MARKET-DEBUG] API returned edges:', dEdges.length, 'PARTICIPATES_IN/DOMINATES:', participatesEdges.length);
-        console.warn('[MARKET-DEBUG] PARTICIPATES_IN edges:', participatesEdges.map((e: any) => ({
+        console.warn('[MARKET-DEBUG] API returned edges:', dEdges.length, 'PARTICIPATES_IN/TRADED_IN/DOMINATES:', participatesEdges.length);
+        console.warn('[MARKET-DEBUG] market participation/trading edges:', participatesEdges.map((e: any) => ({
           source: e?.sourceFragmentId, target: e?.targetFragmentId, type: e?.type || e?.edgeType,
         })));
         console.warn('[MARKET-DEBUG] Canvas edges touching market:', canvasEdgesToMarket.length, canvasEdgesToMarket.map((e: any) => ({
@@ -8500,6 +8522,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         ADMINISTERS: 24,
         DOMINATES: 30,
         PARTICIPATES_IN: 32,
+        TRADED_IN: 33,
         HAS_MARKET_SEGMENT: 34,
         HAS_SUBMARKET: 34,
         HAS_SUBGROUP: 34,
@@ -8530,7 +8553,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       };
       const directionPreferenceForType = (edgeType: string): 'incoming' | 'outgoing' | 'any' => {
         const et = normalizeEdgeTypeKeyLocal(edgeType);
-        if (et === 'LOCATED_IN' || et === 'PRODUCES' || et === 'PARTICIPATES_IN' || et === 'DOMINATES') return 'outgoing';
+        if (et === 'LOCATED_IN' || et === 'PRODUCES' || et === 'PARTICIPATES_IN' || et === 'TRADED_IN' || et === 'DOMINATES') return 'outgoing';
         if (layoutMode === 'linear' && DEP_TYPES.has(et)) return 'incoming';
         return 'any';
       };
@@ -8661,8 +8684,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           allEdgeTypes.set(et, (allEdgeTypes.get(et) || 0) + 1);
         }
         console.warn('[MARKET-DEBUG] fragmentEdgeType summary:', Object.fromEntries(allEdgeTypes));
-        const participatesNodes = Array.from(fragmentEdgeType.entries()).filter(([, et]) => et === 'PARTICIPATES_IN' || et === 'DOMINATES');
-        console.warn('[MARKET-DEBUG] PARTICIPATES_IN/DOMINATES nodes:', participatesNodes.length, participatesNodes);
+        const participatesNodes = Array.from(fragmentEdgeType.entries()).filter(([, et]) => et === 'PARTICIPATES_IN' || et === 'TRADED_IN' || et === 'DOMINATES');
+        console.warn('[MARKET-DEBUG] PARTICIPATES_IN/TRADED_IN/DOMINATES nodes:', participatesNodes.length, participatesNodes);
         console.warn('[MARKET-DEBUG] fragmentDirection for those:', participatesNodes.map(([nid]) => [nid, fragmentDirection.get(nid)]));
       }
 

@@ -52,6 +52,7 @@ import (
 	horizoncriticalpath "github.com/igorkirisyuk/sanskrite/internal/horizon/critical_path"
 	horizonenrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	horizonfeedback "github.com/igorkirisyuk/sanskrite/internal/horizon/feedback"
+	horizongraphenrich "github.com/igorkirisyuk/sanskrite/internal/horizon/graphenrich"
 	horizonimportance "github.com/igorkirisyuk/sanskrite/internal/horizon/importance"
 	horizoninterp "github.com/igorkirisyuk/sanskrite/internal/horizon/interpretation"
 	horizonlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
@@ -173,6 +174,130 @@ type server struct {
 	projectsHandler  *httphandlers.ProjectsHandler
 	discoveryHandler *httphandlers.DiscoveryHandler
 	logger           *log.Logger
+}
+
+func buildGraphEnrichFragmentContext(ctx context.Context, tenantID string, frag *horizonmodels.HorizonFragment, frRepo *horizonrepo.HorizonFragmentsRepository, edgesRepo *horizonrepo.DependencyEdgesRepository) horizongraphenrich.FragmentContext {
+	if frag == nil || frRepo == nil || edgesRepo == nil || strings.TrimSpace(frag.ID) == "" {
+		return horizongraphenrich.FragmentContext{}
+	}
+	outgoing, _ := edgesRepo.ListBySource(ctx, tenantID, frag.ID, nil, 20)
+	incoming, _ := edgesRepo.ListByTarget(ctx, tenantID, frag.ID, nil, 20)
+	neighborIDs := map[string]struct{}{}
+	routeHints := make([]string, 0, 8)
+	zoneHints := make([]string, 0, 8)
+	pathHints := []string{frag.CanonicalPath, frag.ParentPath, frag.ParentGovPath, frag.ParentMarketPath, frag.EntityPath, frag.SectorPath}
+	collectEdge := func(edge *horizonmodels.DependencyEdge) {
+		if edge == nil {
+			return
+		}
+		if id := strings.TrimSpace(edge.SourceFragmentID); id != "" && id != strings.TrimSpace(frag.ID) {
+			neighborIDs[id] = struct{}{}
+		}
+		if id := strings.TrimSpace(edge.TargetFragmentID); id != "" && id != strings.TrimSpace(frag.ID) {
+			neighborIDs[id] = struct{}{}
+		}
+		if edge.Qualifiers != nil {
+			routeHints = append(routeHints,
+				qualifierStringValues(edge.Qualifiers[horizonmodels.QualifierTransportVia])...)
+			routeHints = append(routeHints,
+				qualifierStringValues(edge.Qualifiers[horizonmodels.QualifierFlowRefs])...)
+			zoneHints = append(zoneHints,
+				qualifierStringValues(edge.Qualifiers[horizonmodels.QualifierZoneRefs])...)
+			zoneHints = append(zoneHints,
+				qualifierStringValues(edge.Qualifiers[horizonmodels.QualifierAffectedZoneRefs])...)
+		}
+		pathHints = append(pathHints, string(edge.Type), string(edge.GetFacet()))
+	}
+	for _, edge := range outgoing {
+		collectEdge(edge)
+	}
+	for _, edge := range incoming {
+		collectEdge(edge)
+	}
+	ids := make([]string, 0, len(neighborIDs))
+	for id := range neighborIDs {
+		ids = append(ids, id)
+	}
+	nearby := make([]*horizonmodels.HorizonFragment, 0, len(ids))
+	if len(ids) > 0 {
+		if neighbors, err := frRepo.GetMany(ctx, ids); err == nil {
+			for _, id := range ids {
+				if n := neighbors[id]; n != nil {
+					nearby = append(nearby, n)
+					pathHints = append(pathHints, n.CanonicalPath, n.EntityPath, n.SectorPath)
+				}
+			}
+		}
+	}
+	return horizongraphenrich.FragmentContext{
+		NearbyFragments: nearby,
+		IncomingEdges:   incoming,
+		OutgoingEdges:   outgoing,
+		RouteHints:      compactHintStrings(routeHints),
+		ZoneHints:       compactHintStrings(zoneHints),
+		PathHints:       compactHintStrings(pathHints),
+	}
+}
+
+func runtimeReenrichFragment(ctx context.Context, frag *horizonmodels.HorizonFragment, frRepo *horizonrepo.HorizonFragmentsRepository, edgesRepo *horizonrepo.DependencyEdgesRepository) {
+	if frag == nil || frRepo == nil || edgesRepo == nil || strings.TrimSpace(frag.ID) == "" {
+		return
+	}
+	tenantID := strings.TrimSpace(frag.TenantID)
+	if tenantID == "" {
+		tenantID = "global"
+	}
+	clone := *frag
+	ctxHints := buildGraphEnrichFragmentContext(ctx, tenantID, &clone, frRepo, edgesRepo)
+	if !horizongraphenrich.ApplyFragmentHeuristicsWithContext(&clone, ctxHints) {
+		return
+	}
+	clone.IndexPaths = horizonmodels.BuildIndexPaths(&clone, nil)
+	if err := frRepo.UpdateDerived(ctx, &clone); err != nil {
+		log.Printf("WARNING: runtime graphenrich fragment update failed: id=%s path=%s err=%v", strings.TrimSpace(clone.ID), strings.TrimSpace(clone.CanonicalPath), err)
+	}
+}
+
+func qualifierStringValues(v interface{}) []string {
+	switch raw := v.(type) {
+	case []string:
+		return compactHintStrings(raw)
+	case []interface{}:
+		out := make([]string, 0, len(raw))
+		for _, item := range raw {
+			s := strings.TrimSpace(fmt.Sprint(item))
+			if s != "" && s != "<nil>" {
+				out = append(out, s)
+			}
+		}
+		return compactHintStrings(out)
+	default:
+		s := strings.TrimSpace(fmt.Sprint(v))
+		if s != "" && s != "<nil>" {
+			return []string{s}
+		}
+		return nil
+	}
+}
+
+func compactHintStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func main() {
@@ -1139,6 +1264,24 @@ func main() {
 			logger.Printf("Horizon importance runtime updater enabled")
 		}
 		horizonFragmentsRepo.WithEdgesRepo(horizonEdgesRepo)
+		horizonFragmentsRepo.WithOnUpsert(func(ctx context.Context, fragment *horizonmodels.HorizonFragment) {
+			runtimeReenrichFragment(ctx, fragment, horizonFragmentsRepo, horizonEdgesRepo)
+		})
+		horizonEdgesRepo.WithOnUpsert(func(ctx context.Context, edge *horizonmodels.DependencyEdge) {
+			if edge == nil {
+				return
+			}
+			if srcID := strings.TrimSpace(edge.SourceFragmentID); srcID != "" {
+				if src, err := horizonFragmentsRepo.Get(ctx, srcID); err == nil && src != nil {
+					runtimeReenrichFragment(ctx, src, horizonFragmentsRepo, horizonEdgesRepo)
+				}
+			}
+			if tgtID := strings.TrimSpace(edge.TargetFragmentID); tgtID != "" && tgtID != strings.TrimSpace(edge.SourceFragmentID) {
+				if tgt, err := horizonFragmentsRepo.Get(ctx, tgtID); err == nil && tgt != nil {
+					runtimeReenrichFragment(ctx, tgt, horizonFragmentsRepo, horizonEdgesRepo)
+				}
+			}
+		})
 		enforcementJobsRepo := horizonrepo.NewEnforcementJobsRepository(fsClient.Client())
 		policyCheckResultsRepo := horizonrepo.NewPolicyCheckResultsRepository(fsClient.Client())
 		horizonCascadeVisitedRepo := horizonrepo.NewCascadeVisitedRepository(fsClient.Client())
@@ -1151,6 +1294,35 @@ func main() {
 			horizonFragmentMergeAuditRepo,
 		).WithRedirectsRepo(horizonCanonicalPathRedirectsRepo).
 			WithLensesRepo(horizonLensesRepo)
+		horizonFragmentsRepo.WithOnUpsert(func(ctx context.Context, fragment *horizonmodels.HorizonFragment) {
+			if fragment == nil {
+				return
+			}
+			cp := strings.TrimSpace(fragment.CanonicalPath)
+			if cp == "" {
+				return
+			}
+			dups, err := horizonFragmentsRepo.ListByCanonicalPath(ctx, cp)
+			if err != nil || len(dups) < 2 {
+				return
+			}
+			canonicalFrag, err := horizonFragmentsRepo.GetByCanonicalPath(ctx, cp)
+			if err != nil || canonicalFrag == nil || strings.TrimSpace(canonicalFrag.ID) == "" {
+				return
+			}
+			for _, dup := range dups {
+				if dup == nil {
+					continue
+				}
+				dupID := strings.TrimSpace(dup.ID)
+				if dupID == "" || dupID == strings.TrimSpace(canonicalFrag.ID) {
+					continue
+				}
+				if _, err := horizonFragmentsMergeRepo.MergeFragment(ctx, strings.TrimSpace(canonicalFrag.ID), dupID, "global", "runtime_on_upsert_collision", "server_on_upsert_collision", "", ""); err != nil {
+					logger.Printf("[HorizonFragments] WARNING: runtime canonicalPath collision merge failed path=%s canonical=%s duplicate=%s err=%v", cp, canonicalFrag.ID, dupID, err)
+				}
+			}
+		})
 		horizonTelemetryRepo = horizonrepo.NewHorizonTelemetryRepository(fsClient.Client())
 		horizonEdgesRepo.WithTelemetryRepo(horizonTelemetryRepo)
 		horizonWatchdogRepo := horizonrepo.NewWatchdogConfigsRepository(fsClient.Client())

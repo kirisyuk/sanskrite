@@ -78,17 +78,21 @@ func (r *MaterializedArtifactsRepository) uploadToGCS(ctx context.Context, artif
 			"rawBytes": base64.StdEncoding.EncodeToString([]byte(content)),
 		},
 		"structData": map[string]interface{}{
-			"tenantId":     artifact.TenantID,
-			"type":         "supply_chain",
-			"kind":         string(artifact.Kind),
-			"displayName":  artifact.DisplayName,
-			"canonicalKey": artifact.CanonicalKey,
-			"labels":       artifact.Labels,
-			"nodeRefs":     artifact.NodeRefs,
-			"pathStatus":   artifact.PathStatus,
-			"status":       artifact.Status,
-			"updatedAt":    artifact.UpdatedAt.Format(time.RFC3339),
-			"uri":          gcsURI,
+			"tenantId":         artifact.TenantID,
+			"type":             "supply_chain",
+			"kind":             string(artifact.Kind),
+			"displayName":      artifact.DisplayName,
+			"canonicalKey":     artifact.CanonicalKey,
+			"labels":           artifact.Labels,
+			"nodeRefs":         artifact.NodeRefs,
+			"geoRefs":          artifact.GeoRefs,
+			"flowRefs":         artifact.FlowRefs,
+			"zoneRefs":         artifact.ZoneRefs,
+			"affectedZoneRefs": artifact.AffectedZoneRefs,
+			"pathStatus":       artifact.PathStatus,
+			"status":           artifact.Status,
+			"updatedAt":        artifact.UpdatedAt.Format(time.RFC3339),
+			"uri":              gcsURI,
 		},
 	}
 
@@ -119,6 +123,7 @@ func (r *MaterializedArtifactsRepository) Create(ctx context.Context, artifact *
 	if artifact == nil {
 		return "", fmt.Errorf("artifact is nil")
 	}
+	horizonmodels.PopulateSupplyChainPathIndexes(artifact)
 
 	if err := artifact.Validate(); err != nil {
 		return "", fmt.Errorf("validation failed: %w", err)
@@ -254,6 +259,7 @@ func (r *MaterializedArtifactsRepository) Update(ctx context.Context, artifact *
 	if artifact.ID == "" {
 		return fmt.Errorf("id is required")
 	}
+	horizonmodels.PopulateSupplyChainPathIndexes(artifact)
 
 	if err := artifact.Validate(); err != nil {
 		return fmt.Errorf("validation failed: %w", err)
@@ -334,6 +340,7 @@ func (r *MaterializedArtifactsRepository) BatchUpsert(ctx context.Context, artif
 			if a == nil {
 				continue
 			}
+			horizonmodels.PopulateSupplyChainPathIndexes(a)
 			if err := a.Validate(); err != nil {
 				return ids, fmt.Errorf("artifact validation failed: %w", err)
 			}
@@ -383,6 +390,7 @@ func (r *MaterializedArtifactsRepository) Upsert(ctx context.Context, artifact *
 	if artifact.CanonicalKey == "" {
 		return fmt.Errorf("canonicalKey is required for upsert")
 	}
+	horizonmodels.PopulateSupplyChainPathIndexes(artifact)
 	if artifact.TenantID == "" {
 		return fmt.Errorf("tenantID is required")
 	}
@@ -499,6 +507,96 @@ func (r *MaterializedArtifactsRepository) FindByNodeRef(ctx context.Context, ten
 	}
 
 	return artifacts, nil
+}
+
+func (r *MaterializedArtifactsRepository) FindByNodeRefsAny(ctx context.Context, tenantID string, nodeCanonicalPaths []string, kind horizonmodels.MaterializedKind, limit int) ([]*horizonmodels.MaterializedArtifact, error) {
+	return r.findByArrayFieldAny(ctx, tenantID, "nodeRefs", nodeCanonicalPaths, kind, limit)
+}
+
+func (r *MaterializedArtifactsRepository) FindByFlowRefsAny(ctx context.Context, tenantID string, flowRefs []string, kind horizonmodels.MaterializedKind, limit int) ([]*horizonmodels.MaterializedArtifact, error) {
+	return r.findByArrayFieldAny(ctx, tenantID, "flowRefs", flowRefs, kind, limit)
+}
+
+func (r *MaterializedArtifactsRepository) FindByZoneRefsAny(ctx context.Context, tenantID string, zoneRefs []string, kind horizonmodels.MaterializedKind, limit int) ([]*horizonmodels.MaterializedArtifact, error) {
+	return r.findByArrayFieldAny(ctx, tenantID, "zoneRefs", zoneRefs, kind, limit)
+}
+
+func (r *MaterializedArtifactsRepository) FindByAffectedZoneRefsAny(ctx context.Context, tenantID string, refs []string, kind horizonmodels.MaterializedKind, limit int) ([]*horizonmodels.MaterializedArtifact, error) {
+	return r.findByArrayFieldAny(ctx, tenantID, "affectedZoneRefs", refs, kind, limit)
+}
+
+func (r *MaterializedArtifactsRepository) findByArrayFieldAny(ctx context.Context, tenantID, field string, values []string, kind horizonmodels.MaterializedKind, limit int) ([]*horizonmodels.MaterializedArtifact, error) {
+	if tenantID == "" || field == "" {
+		return nil, nil
+	}
+	values = uniqueQueryValues(values)
+	if len(values) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	const chunkSize = 30
+	result := make([]*horizonmodels.MaterializedArtifact, 0, min(limit, len(values)))
+	seen := make(map[string]struct{}, limit)
+	for i := 0; i < len(values) && len(result) < limit; i += chunkSize {
+		end := i + chunkSize
+		if end > len(values) {
+			end = len(values)
+		}
+		q := r.col.
+			Where("tenantId", "==", tenantID).
+			Where("kind", "==", string(kind)).
+			Where(field, "array-contains-any", values[i:end]).
+			Limit(limit)
+		docs, err := q.Documents(ctx).GetAll()
+		if err != nil {
+			return nil, fmt.Errorf("firestore query failed for %s: %w", field, err)
+		}
+		for _, doc := range docs {
+			if len(result) >= limit {
+				break
+			}
+			var artifact horizonmodels.MaterializedArtifact
+			if err := doc.DataTo(&artifact); err != nil {
+				continue
+			}
+			horizonmodels.PopulateSupplyChainPathIndexes(&artifact)
+			if _, ok := seen[artifact.ID]; ok {
+				continue
+			}
+			seen[artifact.ID] = struct{}{}
+			result = append(result, &artifact)
+		}
+	}
+	return result, nil
+}
+
+func uniqueQueryValues(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // Delete удаляет MaterializedArtifact

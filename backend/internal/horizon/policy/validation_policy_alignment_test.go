@@ -35,16 +35,25 @@ func TestValidationPolicy_ControlsAllowsCommunitySource(t *testing.T) {
 	}
 }
 
-func TestValidationPolicy_ParticipatesInAllowsProductAndProgram(t *testing.T) {
+func TestValidationPolicy_ProductMarketUsesTradedInAndProgramUsesParticipatesIn(t *testing.T) {
 	p := &ValidationPolicy{}
 
-	validProduct, _, _ := p.validateEdgeDirection(
+	validProductParticipates, _, _ := p.validateEdgeDirection(
 		horizonmodels.DependencyTypeParticipatesIn,
 		horizonmodels.FragmentTypeProduct,
 		horizonmodels.FragmentTypeMarket,
 	)
-	if !validProduct {
-		t.Fatalf("expected PARTICIPATES_IN PRODUCT -> MARKET to be valid")
+	if validProductParticipates {
+		t.Fatalf("expected PARTICIPATES_IN PRODUCT -> MARKET to be invalid")
+	}
+
+	validProductTradedIn, _, _ := p.validateEdgeDirection(
+		horizonmodels.DependencyTypeTradedIn,
+		horizonmodels.FragmentTypeProduct,
+		horizonmodels.FragmentTypeMarket,
+	)
+	if !validProductTradedIn {
+		t.Fatalf("expected TRADED_IN PRODUCT -> MARKET to be valid")
 	}
 
 	validProgram, _, _ := p.validateEdgeDirection(
@@ -54,6 +63,25 @@ func TestValidationPolicy_ParticipatesInAllowsProductAndProgram(t *testing.T) {
 	)
 	if !validProgram {
 		t.Fatalf("expected PARTICIPATES_IN PROGRAM -> MARKET to be valid")
+	}
+}
+
+func TestValidationPolicy_DecideQuarantinesProductMarketNonTradedIn(t *testing.T) {
+	p := &ValidationPolicy{rulesRepo: testValidationRulesRepo{}}
+	decision, err := p.Decide(context.Background(), PolicyInput{
+		Kind: "edge",
+		Context: map[string]interface{}{
+			"validationKind": "edge",
+			"sourceType":     string(horizonmodels.FragmentTypeProduct),
+			"targetType":     string(horizonmodels.FragmentTypeMarket),
+			"relationType":   string(horizonmodels.DependencyTypeParticipatesIn),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if decision.Action != ActionQuarantineSoft {
+		t.Fatalf("expected %s for PRODUCT->MARKET PARTICIPATES_IN, got %s", ActionQuarantineSoft, decision.Action)
 	}
 }
 

@@ -241,7 +241,7 @@ Example: { "relationType": "DEPENDS_ON", "qualifiers": { "facet": "communication
 		relationEnum = taxonomy.SupplyChainEdgeTypesForPrompt()
 		relationRulesBlock = relationRulesBlockSupplyChain
 		validationSuffix = validationSuffixSupplyChain
-		dependsOnBlock = `SUPPLY CHAIN: Do NOT use DEPENDS_ON. Use PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM, PARTICIPATES_IN for supply chain links.
+		dependsOnBlock = `SUPPLY CHAIN: Do NOT use DEPENDS_ON. Use PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM, PARTICIPATES_IN for supply chain links. Use TRADED_IN only for explicit product↔market trading context, not for operational flow.
 `
 	}
 
@@ -430,7 +430,7 @@ Do NOT use DEPENDS_ON, PARTNERS_WITH, COMPETES_WITH, SUBSIDIARY_OF, OWNS, INVEST
 - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT.
 - LOCATED_IN: target MUST be GEO_REGION.
 - OPERATES_IN: source MUST be ORGANIZATION|PERSON, target MUST be GEO_REGION|FACILITY|DEPOSIT.
-- PARTICIPATES_IN: source MUST be ORGANIZATION|FACILITY|COMMUNITY|PROGRAM|PRODUCT|PERSON, target MUST be MARKET.
+- PARTICIPATES_IN: source MUST be ORGANIZATION|FACILITY|COMMUNITY|PROGRAM|PERSON, target MUST be MARKET.
 - HAS_MARKET_SEGMENT: source MUST be MARKET, target MUST be MARKET (parent -> child segment).
 - MARKET source guard in supply_chain:
   MARKET may emit only PARTICIPATES_IN / HAS_MARKET_SEGMENT (plus DOMAIN scaffold when source is /domain/...).
@@ -442,6 +442,6 @@ Do NOT use DEPENDS_ON, PARTNERS_WITH, COMPETES_WITH, SUBSIDIARY_OF, OWNS, INVEST
 `
 
 	validationSuffixSupplyChain = `  - For PRODUCT -> PRODUCT steps, use TRANSFORMS_INTO (not PRODUCES).
-  - In supply_chain mode, MARKET source may emit only PARTICIPATES_IN or HAS_MARKET_SEGMENT.
+  - In supply_chain mode, MARKET source may emit only PARTICIPATES_IN or HAS_MARKET_SEGMENT. PRODUCT -> MARKET uses TRADED_IN only when explicit trading/pricing context exists.
 `
 )

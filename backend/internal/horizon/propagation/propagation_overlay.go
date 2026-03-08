@@ -51,6 +51,16 @@ func BuildPropagationNodeOverlay(fragment *horizonmodels.HorizonFragment) Propag
 	forceBusiness := func(role string) {
 		overlay.BusinessRole = role
 	}
+	applyDomainSemantic := func(role, business string, operational, bridge, criticality float64, exposures ...string) {
+		setPrimary(role)
+		setBusiness(business)
+		for _, exposure := range exposures {
+			addExposure(exposure)
+		}
+		overlay.OperationalScore = maxOverlayFloat(overlay.OperationalScore, operational)
+		overlay.BridgeScore = maxOverlayFloat(overlay.BridgeScore, bridge)
+		overlay.CriticalityScore = maxOverlayFloat(overlay.CriticalityScore, criticality)
+	}
 
 	switch {
 	case fragment.Type == horizonmodels.FragmentTypeAffectedZone:
@@ -86,6 +96,7 @@ func BuildPropagationNodeOverlay(fragment *horizonmodels.HorizonFragment) Propag
 		overlay.OperationalScore = 0.92
 		overlay.BridgeScore = 0.95
 		overlay.CriticalityScore = 0.94
+	case overlayApplyMarketDomainSemantics(fragment, &overlay, addRole, addExposure, setPrimary, setBusiness, forceBusiness, applyDomainSemantic):
 	case overlayHasAny(text, "naval base", "air base", "air-defense", "air defense", "air-defence", "arsenal", "missile", "fighter", "air force", "navy", "defense", "defence", "military"):
 		setPrimary("defense_operator")
 		setBusiness("operator")
@@ -175,6 +186,123 @@ func BuildPropagationNodeOverlay(fragment *horizonmodels.HorizonFragment) Propag
 		addRole("source")
 	}
 	return overlay
+}
+
+func overlayApplyMarketDomainSemantics(
+	fragment *horizonmodels.HorizonFragment,
+	overlay *PropagationNodeOverlay,
+	addRole func(string),
+	addExposure func(string),
+	setPrimary func(string),
+	setBusiness func(string),
+	forceBusiness func(string),
+	applyDomainSemantic func(string, string, float64, float64, float64, ...string),
+) bool {
+	if fragment == nil || overlay == nil {
+		return false
+	}
+	domain := strings.ToLower(strings.TrimSpace(fragment.MarketDomain))
+	vertical := strings.ToLower(strings.TrimSpace(fragment.MarketVertical))
+	if domain == "" {
+		return false
+	}
+	switch domain {
+	case "energy":
+		applyDomainSemantic("energy_asset", "producer", 0.82, 0.34, 0.86, "energy_input")
+		if overlayHasAny(vertical, "lng", "oil-and-gas", "chemicals-and-petrochemicals", "power-and-utilities") {
+			addRole("source")
+		}
+		if overlayHasAny(vertical, "lng", "oil-and-gas", "power-and-utilities") {
+			addExposure("route_dependency")
+			overlay.BridgeScore = maxOverlayFloat(overlay.BridgeScore, 0.48)
+		}
+		return true
+	case "materials":
+		applyDomainSemantic("materials_operator", "producer", 0.74, 0.26, 0.78, "component_input")
+		addRole("source")
+		return true
+	case "industrial":
+		if overlayHasAny(vertical, "shipping", "logistics", "port-services", "aviation") {
+			applyDomainSemantic("logistics_hub", "shipper", 0.72, 0.82, 0.70, "route_dependency", "direct_geo")
+			addRole("bridge")
+			return true
+		}
+		if overlayHasAny(vertical, "construction-and-building-materials", "automotive", "aerospace") {
+			applyDomainSemantic("manufacturing_operator", "assembler", 0.76, 0.32, 0.70, "component_input", "energy_input")
+			addRole("sink")
+			addRole("source")
+			return true
+		}
+	case "technology":
+		if overlayHasAny(vertical, "semiconductors", "electronics-assembly") {
+			applyDomainSemantic("manufacturing_operator", "assembler", 0.80, 0.28, 0.74, "component_input", "energy_input")
+			addRole("sink")
+			addRole("source")
+			return true
+		}
+		if overlayHasAny(vertical, "cloud-and-software") {
+			applyDomainSemantic("digital_operator", "operator", 0.62, 0.34, 0.56, "infrastructure", "communication")
+			return true
+		}
+	case "telecom":
+		applyDomainSemantic("network_operator", "operator", 0.68, 0.58, 0.64, "infrastructure", "communication")
+		addRole("bridge")
+		return true
+	case "finance":
+		if overlayHasAny(vertical, "payments", "market-infrastructure") {
+			applyDomainSemantic("financial_infrastructure", "market_operator", 0.60, 0.62, 0.66, "payment", "regulatory")
+			addRole("bridge")
+			addRole("controller")
+			return true
+		}
+		if overlayHasAny(vertical, "banking", "insurance") {
+			applyDomainSemantic("financial_operator", "market_operator", 0.54, 0.36, 0.58, "payment", "market_demand")
+			return true
+		}
+	case "consumer":
+		if overlayHasAny(vertical, "retail", "ecommerce", "hospitality-and-leisure") {
+			applyDomainSemantic("market_aggregator", "distributor", 0.56, 0.52, 0.50, "market_demand")
+			addRole("amplifier")
+			return true
+		}
+	case "agri-food":
+		if overlayHasAny(vertical, "agriculture", "food-processing") {
+			applyDomainSemantic("agri_operator", "producer", 0.66, 0.24, 0.62, "component_input", "market_demand")
+			addRole("source")
+			return true
+		}
+	case "healthcare":
+		if overlayHasAny(vertical, "pharmaceuticals") {
+			applyDomainSemantic("healthcare_operator", "producer", 0.72, 0.22, 0.70, "component_input", "regulatory")
+			addRole("source")
+			return true
+		}
+		if overlayHasAny(vertical, "health-services") {
+			applyDomainSemantic("healthcare_provider", "operator", 0.58, 0.18, 0.64, "regulatory")
+			return true
+		}
+	case "defense":
+		applyDomainSemantic("defense_operator", "operator", 0.88, 0.40, 0.78, "direct_geo")
+		addRole("controller")
+		return true
+	case "real-estate":
+		applyDomainSemantic("property_operator", "operator", 0.48, 0.22, 0.46, "direct_geo")
+		return true
+	case "professional-services":
+		applyDomainSemantic("service_operator", "operator", 0.44, 0.20, 0.40, "regulatory")
+		return true
+	case "public-sector":
+		applyDomainSemantic("regulator", "infrastructure_controller", 0.60, 0.34, 0.60, "regulatory")
+		addRole("controller")
+		return true
+	case "education":
+		applyDomainSemantic("service_operator", "operator", 0.38, 0.14, 0.34, "direct_geo")
+		return true
+	case "media":
+		applyDomainSemantic("media_operator", "operator", 0.42, 0.28, 0.38, "communication")
+		return true
+	}
+	return false
 }
 
 func (o PropagationNodeOverlay) HasRole(role string) bool {

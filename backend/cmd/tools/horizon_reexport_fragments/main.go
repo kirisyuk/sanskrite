@@ -46,10 +46,10 @@ func main() {
 	defer cancel()
 
 	if *bucket == "" {
-		*bucket = os.Getenv("HORIZON_FRAGMENTS_BUCKET")
+		*bucket = firstNonEmpty(os.Getenv("ETIGRAM_FRAGMENTS_BUCKET"), os.Getenv("HORIZON_FRAGMENTS_BUCKET"))
 	}
 	if *bucket == "" {
-		*bucket = fmt.Sprintf("%s-horizon-fragments", *projectID)
+		*bucket = defaultHorizonFragmentsBucket(*projectID)
 		log.Printf(`INFO: HORIZON_FRAGMENTS_BUCKET not set; defaulting to %q`, *bucket)
 	}
 
@@ -272,6 +272,23 @@ DONE:
 	log.Printf("Successfully exported: %d", exported)
 	log.Printf("Errors: %d", errCount)
 	log.Printf("Time elapsed: %v (%.1f frags/sec)", elapsed, float64(count)/elapsed.Seconds())
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+func defaultHorizonFragmentsBucket(projectID string) string {
+	projectID = strings.TrimSpace(projectID)
+	if strings.EqualFold(projectID, "etigram") {
+		return "etigram-horizon-fragments"
+	}
+	return fmt.Sprintf("%s-horizon-fragments", projectID)
 }
 
 func getenvDefault(key, defaultValue string) string {

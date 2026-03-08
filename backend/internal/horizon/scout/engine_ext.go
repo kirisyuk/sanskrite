@@ -28,6 +28,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/pipeline"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/supplysemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
@@ -6896,6 +6897,9 @@ func buildSegmentsFromParsed(parsed *ParsedChainResult, pathRewrites map[string]
 	}
 	segments := make([]pathbuilder.PathSegment, 0, len(parsed.SupplyLinkSegments))
 	for _, seg := range parsed.SupplyLinkSegments {
+		if seg == nil || !supplysemantics.IsMaterializableSegmentClass(seg.SegmentClass) {
+			continue
+		}
 		supplier := strings.TrimSpace(seg.SupplierRef)
 		product := strings.TrimSpace(seg.ProductRef)
 		customer := strings.TrimSpace(seg.CustomerRef)
@@ -6947,6 +6951,7 @@ func buildSegmentsFromParsed(parsed *ParsedChainResult, pathRewrites map[string]
 			SupplierFacilityRef: supFac,
 			CustomerFacilityRef: custFac,
 			TransportViaRefs:    viaRefs,
+			SegmentClass:        seg.SegmentClass,
 			Confidence:          seg.Confidence,
 			TenantID:            "global",
 			IsTenantSpecific:    false,
@@ -6994,8 +6999,30 @@ func (e *ScoutEngine) enqueueEdgeTriggeredPropagation(ctx context.Context, edge 
 	}
 
 	if srcErr == nil && tgtErr == nil {
-		e.logLine(ctx, job, "info", fmt.Sprintf("[EdgeTriggeredPropagation] enqueued=%d signals=%d edge=%s",
-			len(fragIDs), len(signals), edge.ID))
+		sourceName := strings.TrimSpace(firstNonEmpty(
+			srcFrag.Labels["en"],
+			srcFrag.Labels["name"],
+			srcFrag.CanonicalPath,
+		))
+		targetName := strings.TrimSpace(firstNonEmpty(
+			tgtFrag.Labels["en"],
+			tgtFrag.Labels["name"],
+			tgtFrag.CanonicalPath,
+		))
+		title := "I queued downstream propagation"
+		desc := fmt.Sprintf("%d signal(s) across the new link", len(signals))
+		if sourceName != "" && targetName != "" {
+			desc = fmt.Sprintf("%d signal(s) from %s to %s", len(signals), sourceName, targetName)
+		}
+		if len(fragIDs) > 0 {
+			desc = fmt.Sprintf("%s • %d affected fragment(s) added to the queue", desc, len(fragIDs))
+		}
+		e.logLineHuman(ctx, job, "info",
+			fmt.Sprintf("[EdgeTriggeredPropagation] I queued downstream propagation from a new link (%d signal(s), %d affected fragment(s))",
+				len(signals), len(fragIDs)),
+			title,
+			desc,
+		)
 	}
 }
 
@@ -8188,6 +8215,10 @@ func (e *ScoutEngine) processSupplyChains(
 	supplyLinksCreated := 0
 	supplyLinksSkipped := 0
 	for _, seg := range result.SupplyLinkSegments {
+		if seg == nil || !supplysemantics.IsMaterializableSegmentClass(seg.SegmentClass) {
+			supplyLinksSkipped++
+			continue
+		}
 		supplier := strings.TrimSpace(seg.SupplierRef)
 		customer := strings.TrimSpace(seg.CustomerRef)
 		product := strings.TrimSpace(seg.ProductRef)
@@ -8236,6 +8267,7 @@ func (e *ScoutEngine) processSupplyChains(
 		}
 		slFrag.Qualifiers = map[string]interface{}{
 			"fromSupplyChain": true,
+			"segmentClass":    seg.SegmentClass,
 		}
 		if seg.FlowEdgeContract != nil {
 			q := map[string]interface{}{
@@ -8458,14 +8490,19 @@ func (e *ScoutEngine) processSupplyChains(
 				chainReuseMerged, materializationStage, strings.Join(mergeSamples, " | ")))
 		}
 		if len(pathsToMaterialize) > 0 {
-			ids, err := e.supplyChainPathBuilder.MaterializePathsBatch(ctx, pathsToMaterialize, tenantID, keysToMaterialize)
+			ids, err := e.supplyChainPathBuilder.MaterializePathsBatch(ctx, pathsToMaterialize, tenantID, lensID, keysToMaterialize)
 			if err != nil {
 				e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainMaterialize] batch failed: %v", err))
 			} else {
 				materializedCount := len(ids)
 				for i, id := range ids {
 					canonicalKey := keysToMaterialize[i]
-					e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainMaterialize] artifact=%s chain=%d segments=%d", id, i, len(pathsToMaterialize[i].Segments)))
+					segmentCount := len(pathsToMaterialize[i].Segments)
+					segmentLabel := "segments"
+					if segmentCount == 1 {
+						segmentLabel = "segment"
+					}
+					e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainMaterialize] Materialized supply path %d with %d %s", i+1, segmentCount, segmentLabel))
 					if criticPassed && canonicalKey != "" {
 						if updErr := e.supplyChainPathBuilder.UpdatePathStatus(ctx, tenantID, canonicalKey, "validated"); updErr != nil {
 							e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainMaterialize] PathStatus update failed key=%s err=%v", canonicalKey, updErr))
@@ -8481,12 +8518,12 @@ func (e *ScoutEngine) processSupplyChains(
 					}
 				}
 				if materializedCount > 0 || chainReuseSkipped > 0 || chainReuseMerged > 0 {
-					e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainMaterialize] done artifacts=%d skipped=%d merged=%d scopeAdded=%d",
+					e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainMaterialize] Completed: %d new paths, %d reused, %d merged, %d added to lens",
 						materializedCount, chainReuseSkipped, chainReuseMerged, chainReuseScopeAdded))
 				}
 			}
 		} else if chainReuseSkipped > 0 || chainReuseMerged > 0 {
-			e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainMaterialize] done artifacts=0 skipped=%d merged=%d scopeAdded=%d",
+			e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainMaterialize] Completed: 0 new paths, %d reused, %d merged, %d added to lens",
 				chainReuseSkipped, chainReuseMerged, chainReuseScopeAdded))
 		}
 	}

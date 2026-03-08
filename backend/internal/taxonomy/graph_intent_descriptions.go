@@ -55,6 +55,7 @@ func GraphIntentRelationTypeDescriptions(types []string) string {
 		"TRANSFORMS_INTO":      "Transformation of entity/product",
 		"EXTRACTS_FROM":        "Extracts from source",
 		"PARTICIPATES_IN":      "Entity participates in a market",
+		"TRADED_IN":            "Product is traded or price-discovered in a market",
 		"DOMINATES":            "Legacy market-leadership label (prefer PARTICIPATES_IN + marketRole)",
 		"HAS_MARKET_SEGMENT":   "Parent market has segment (child path = parent path + one segment)",
 		"ADMINISTERS":          "Administrative oversight (e.g. ministry over agency)",

@@ -24,6 +24,7 @@ var (
 	bucket    = flag.String("bucket", "", "GCS bucket for fragment export (optional, for re-export)")
 	tenantID  = flag.String("tenant", "global", "Tenant ID to process (default: global)")
 	limit     = flag.Int("limit", 0, "Limit number of canonical paths to process (0 = all)")
+	prefix    = flag.String("prefix", "", "Canonical path prefix filter (optional)")
 	verbose   = flag.Bool("verbose", false, "Verbose logging")
 )
 
@@ -58,10 +59,10 @@ func main() {
 	// Determine bucket (use provided or default)
 	bucketName := *bucket
 	if bucketName == "" {
-		bucketName = os.Getenv("HORIZON_FRAGMENTS_BUCKET")
+		bucketName = firstNonEmpty(os.Getenv("ETIGRAM_FRAGMENTS_BUCKET"), os.Getenv("HORIZON_FRAGMENTS_BUCKET"))
 	}
 	if bucketName == "" {
-		bucketName = fmt.Sprintf("%s-horizon-fragments", *projectID)
+		bucketName = defaultHorizonFragmentsBucket(*projectID)
 		log.Printf("INFO: Using default bucket: %s", bucketName)
 	}
 
@@ -78,7 +79,7 @@ func main() {
 	log.Printf("Starting deduplication scan (dry-run=%v, tenant=%s)...", *dryRun, *tenantID)
 
 	// Step 1: Find all duplicates by canonicalPath
-	duplicates, err := findDuplicates(ctx, fragmentsRepo, *tenantID)
+	duplicates, err := findDuplicates(ctx, fragmentsRepo, *tenantID, strings.TrimSpace(*prefix))
 	if err != nil {
 		log.Fatalf("Failed to find duplicates: %v", err)
 	}
@@ -452,14 +453,36 @@ type DeduplicationStats struct {
 	DryRunDuplicates     int
 }
 
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+func defaultHorizonFragmentsBucket(projectID string) string {
+	projectID = strings.TrimSpace(projectID)
+	if strings.EqualFold(projectID, "etigram") {
+		return "etigram-horizon-fragments"
+	}
+	return fmt.Sprintf("%s-horizon-fragments", projectID)
+}
+
 // findDuplicates finds all canonical paths that have multiple fragments
-func findDuplicates(ctx context.Context, fragmentsRepo *repo.HorizonFragmentsRepository, _ string) (map[string][]string, error) {
+func findDuplicates(ctx context.Context, fragmentsRepo *repo.HorizonFragmentsRepository, _ string, prefix string) (map[string][]string, error) {
 	duplicates := make(map[string][]string)
 
 	// Query all fragments for the tenant
 	// fragmentsRepo.Query() already scopes to tenantId=="global" for Horizon.
 	// Keep tenantID argument for API compatibility, but don't add redundant/contradictory filters.
 	q := fragmentsRepo.Query()
+	if prefix != "" {
+		q = q.Where("canonicalPath", ">=", prefix).
+			Where("canonicalPath", "<", prefix+"\ufffd").
+			OrderBy("canonicalPath", firestore.Asc)
+	}
 	iter := q.Documents(ctx)
 	defer iter.Stop()
 

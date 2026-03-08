@@ -3,6 +3,7 @@ package agents
 import (
 	"strings"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 )
 
@@ -11,7 +12,7 @@ func domainScaffoldRelationTypesPromptString() string {
 }
 
 func relationTypesPromptForDomainMode(mode string) string {
-	types := edgesemantics.EdgeAllowlistStrings([]string{mode})
+	types := contractsemantics.AllowedEdgeStringsForDomainMode(mode)
 	if len(types) == 0 {
 		return ""
 	}

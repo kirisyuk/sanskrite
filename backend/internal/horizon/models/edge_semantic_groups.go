@@ -45,6 +45,7 @@ var edgeTypeToSemanticGroup = map[DependencyType]string{
 	DependencyTypeRegulates: SemanticGroupAssurance,
 	// market
 	DependencyTypeParticipatesIn:  SemanticGroupMarket,
+	DependencyTypeTradedIn:        SemanticGroupMarket,
 	DependencyTypeHasMarketSegment: SemanticGroupMarket,
 	DependencyTypeDominates:        SemanticGroupMarket,
 	// strategic

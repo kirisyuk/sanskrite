@@ -81,12 +81,22 @@ type LeafSignalEvidence struct {
 
 // ChainImpact describes impact on a materialized chain.
 type ChainImpact struct {
-	ArtifactID    string  `json:"artifactId" firestore:"artifactId"`
-	DisplayName   string  `json:"displayName" firestore:"displayName"`
-	Kind          string  `json:"kind" firestore:"kind"`
-	MaxAmplitude  float64 `json:"maxAmplitude" firestore:"maxAmplitude"`
-	AffectedNodes int     `json:"affectedNodes" firestore:"affectedNodes"`
-	TotalNodes    int     `json:"totalNodes" firestore:"totalNodes"`
+	ArtifactID           string   `json:"artifactId" firestore:"artifactId"`
+	DisplayName          string   `json:"displayName" firestore:"displayName"`
+	Kind                 string   `json:"kind" firestore:"kind"`
+	MaxAmplitude         float64  `json:"maxAmplitude" firestore:"maxAmplitude"`
+	AffectedNodes        int      `json:"affectedNodes" firestore:"affectedNodes"`
+	TotalNodes           int      `json:"totalNodes" firestore:"totalNodes"`
+	LegCount             int      `json:"legCount,omitempty" firestore:"legCount,omitempty"`
+	AffectedLegs         int      `json:"affectedLegs,omitempty" firestore:"affectedLegs,omitempty"`
+	PathStressScore      float64  `json:"pathStressScore,omitempty" firestore:"pathStressScore,omitempty"`
+	BottleneckLegIndex   int      `json:"bottleneckLegIndex,omitempty" firestore:"bottleneckLegIndex,omitempty"`
+	RecoveryLatencyHours float64  `json:"recoveryLatencyHours,omitempty" firestore:"recoveryLatencyHours,omitempty"`
+	BottleneckSummary    string   `json:"bottleneckSummary,omitempty" firestore:"bottleneckSummary,omitempty"`
+	DominantFactors      []string `json:"dominantFactors,omitempty" firestore:"dominantFactors,omitempty"`
+	FlowRefs             []string `json:"flowRefs,omitempty" firestore:"flowRefs,omitempty"`
+	ZoneRefs             []string `json:"zoneRefs,omitempty" firestore:"zoneRefs,omitempty"`
+	AffectedZoneRefs     []string `json:"affectedZoneRefs,omitempty" firestore:"affectedZoneRefs,omitempty"`
 }
 
 // SimulationResultSummary is a Firestore-safe summary (not full trace).
@@ -118,6 +128,7 @@ type QAAnswer struct {
 	HighlightedNodeIDs     []string         `json:"highlightedNodeIds" firestore:"highlightedNodeIds"`
 	HighlightedEdgeIDs     []string         `json:"highlightedEdgeIds" firestore:"highlightedEdgeIds"`
 	TracePaths             []TracePath      `json:"tracePaths" firestore:"tracePaths"`
+	ChainImpacts           []ChainImpact    `json:"chainImpacts,omitempty" firestore:"chainImpacts,omitempty"`
 	ImpactBreakdown        []ImpactItem     `json:"impactBreakdown,omitempty" firestore:"impactBreakdown,omitempty"`
 	Alternatives           []QAAlternative  `json:"alternatives,omitempty" firestore:"alternatives,omitempty"`
 	DataGaps               []QADataGap      `json:"dataGaps,omitempty" firestore:"dataGaps,omitempty"`

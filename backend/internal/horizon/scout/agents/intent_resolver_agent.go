@@ -181,6 +181,7 @@ func (a *IntentResolverAgent) ResolveWithContext(ctx context.Context, query stri
 	if query == "" {
 		return nil, fmt.Errorf("query is required")
 	}
+	initialProfile := inferIntentScenarioProfile(query, nil)
 
 	prompt := buildUnifiedIntentPrompt(query, existingDomains)
 
@@ -292,7 +293,7 @@ func (a *IntentResolverAgent) ResolveWithContext(ctx context.Context, query stri
 			}
 		}
 		nAnchors = append(nAnchors, an)
-		if len(nAnchors) >= 5 {
+		if len(nAnchors) >= initialProfile.anchorCap() {
 			break
 		}
 	}
@@ -395,7 +396,7 @@ func (a *IntentResolverAgent) ResolveWithContext(ctx context.Context, query stri
 			// Projections are free-form but we cap/dedupe.
 			d.Projections = dedupStrings(d.Projections, 12)
 			validDomains = append(validDomains, d)
-			if len(validDomains) >= 3 {
+			if len(validDomains) >= initialProfile.domainCap() {
 				break
 			}
 		}
@@ -478,6 +479,7 @@ func (a *IntentResolverAgent) ResolveWithContext(ctx context.Context, query stri
 			}
 		}
 	}
+	applyIntentResolutionQualityRules(query, &out)
 
 	// Must have at least one valid anchor or domain after normalization.
 	if len(out.Anchors) == 0 && len(out.Domains) == 0 {
@@ -655,9 +657,14 @@ DOMAIN RULES
   SECTOR: sector-overview, industry-structure (aliases: vertical-deep-dive → sector-overview)
   FALLBACK: other (only if none above fit): /domain/v1/other/{custom-slug}/...
 - SUPPLY CHAIN PLAN: When contractType is supply-chain or value-chain, you MUST include supplyChainExecutionPlan with 1-10 queries. CRITICAL: The FIRST queries must go FROM ORGANIZATIONS (as producers/suppliers for downstream, or as consumers for upstream). Supply chains are actor-centric: org→product→org. direction: use "upstream" when the query asks about suppliers, raw materials, inputs, "who supplies X", "where does X get its materials", sourcing; use "downstream" when asking about customers, buyers, "who buys X", distribution; use "both" for full chain mapping. For upstream: anchors are the CONSUMER orgs (e.g. Coca-Cola for "who supplies Coca-Cola"). For downstream: anchors are PRODUCER orgs. For product+geo queries (e.g. "Thai rice supply chain"): contractType MUST be supply-chain, facets MUST include geo and product or material. anchorType MUST be org. Use anchors (or anchors array) with canonical /org/... paths. Each query: anchor (single) or anchors (array), anchorType (org|product|deposit), direction (upstream|downstream|both), depth (3-6), productFilter/geoFilter from facets, reason. overlayQueries (Stage 2) optional.
+- ROUTE-SENSITIVE SUPPLY CHAIN: If the query mentions chokepoints, shipping routes, sea lanes, ports, terminals, pipelines, carriers, rerouting, "through/via", LNG/LPG shipping, or "from production to end-users", structure the intent for path execution. Include 3-8 anchors when evidence exists across these roles: producer org, upstream deposit/field, export facility, chokepoint/route geo, import terminal or market hub, downstream industrial consumer.
 - REGULATORY IMPACT PLAN: When contractType is policy-impact or regulatory-impact, you MUST include regulatoryImpactExecutionPlan with 1-5 queries. Each query: instrument (canonical path /mechanism/... or /program/...), jurisdiction (ISO2), parameters (rate_from, rate_to, effective_date when applicable), impactScope (economy-wide|sector-specific|entity-specific), depth (3-5), sectorFilter from facets, reason.
+- POLICY / REGULATORY TRANSMISSION: If the query asks what happens when a tax, tariff, VAT, CBAM-like cost, export control, sanctions measure, subsidy, capital rule, customs rule, licensing requirement, or compliance burden changes, include both the policy side and the exposed operational side. Do not return only the regulator/mechanism anchor.
 - GOVERNANCE PLAN: When contractType is ownership-structure or control-map, you MUST include governanceExecutionPlan with 1-5 queries. Each query: target (canonical path /org/... or /gov/...), targetType (org|gov|person), direction (upward|downward|both), depth (3-6), includeBoard (true/false), geoFilter, reason.
 - ECOSYSTEM PLAN: When contractType is ecosystem-mapping or influence-network, you MUST include ecosystemExecutionPlan with 1-5 queries. Each query: focus (canonical path or description), focusType (geo|sector|market|org), depth (3-5), actorTypes (subset of [ORGANIZATION, GOV, PERSON, FACILITY]), sectorFilter, geoFilter, reason.
+- AFFECTED-ZONE / EXPOSURE: For conflict, disaster, earthquake, flood, tension, humanitarian, and security-zone queries, include anchors for zone geography plus exposed operators, facilities, markets, routes, or chokepoints when inferable. Do not reduce the intent to only /loc/... if the query implies operational exposure.
+- FINANCE / MARKET INFRASTRUCTURE: For banking, payments, insurance, exchanges, clearing, custody, portfolio exposure, or trade-finance questions, include anchors across the transmission chain when inferable: institutions, market infrastructure, regulators, sectors, and exposed corporate endpoints.
+- SECTOR / INDUSTRY STRUCTURE: For sector-overview, competitive-landscape, and industry-structure queries, include anchors across the chain when inferable: producers, facilities, markets, logistics hubs, major downstream consumers, and relevant regulators.
 - BILATERAL: If query is about relations between two countries → contractType bilateral-relations, geo = {cc1}-{cc2} (alphabetically sorted lowercase ISO2).
 - AFFECTED ZONE: If query asks about conflict zones, military conflicts, disaster zones, earthquake-affected areas, tension zones, humanitarian crisis areas, flood zones → contractType affected-zone, facet geo. geo: " + taxonomy.ISO2GeoDescriptionForPrompts() + ". Examples: /domain/v1/affected-zone/geo/tr-sy, /domain/v1/affected-zone/geo/sy, /domain/v1/affected-zone/geo/africa, /domain/v1/affected-zone/geo/ssa.
 - OWNERSHIP: If query asks who owns/controls an entity → contractType ownership-structure, facet subject.
@@ -691,7 +698,7 @@ DECOMPOSITION HINTS (REQUIRED for MARKET/PROGRAM anchors):
 - searchQueries: 3-5 concrete English web search queries designed to yield real-world entity names (NOT abstract "market size" queries).
 
 GENERAL:
-- Provide 1-3 anchors (what the Lens should attach to).
+- Provide 1-3 anchors for narrow entity questions. Provide 3-8 anchors for route-sensitive, transmission-heavy, affected-zone, finance/market-infrastructure, or sector-structure queries when evidence exists.
 - Prefer stable, specific anchors.
 - Return ONLY JSON. No markdown. No commentary.`, query, existingDomainsBlock, quotedBlock, multiHint, anchorNamingBlock)
 }
@@ -791,6 +798,100 @@ func IsAffectedZoneContractType(contractType string) bool {
 
 const maxSupplyChainQueriesPerPlan = 10
 
+type intentScenarioProfile struct {
+	supply         bool
+	routeSensitive bool
+	affectedZone   bool
+	policy         bool
+	governance     bool
+	ecosystem      bool
+	investment     bool
+	marketInfra    bool
+	sector         bool
+}
+
+func inferIntentScenarioProfile(query string, domains []DomainResolution) intentScenarioProfile {
+	text := strings.ToLower(strings.TrimSpace(query))
+	p := intentScenarioProfile{}
+	for _, d := range domains {
+		switch normalizeContractTypeAlias(d.ContractType) {
+		case "supply-chain", "value-chain":
+			p.supply = true
+		case "affected-zone", "geopolitical-risk", "bilateral-relations", "sanctions-exposure":
+			p.affectedZone = true
+		case "policy-impact", "regulatory-impact":
+			p.policy = true
+		case "ownership-structure", "control-map":
+			p.governance = true
+		case "ecosystem-mapping", "influence-network", "commonality-analysis":
+			p.ecosystem = true
+		case "investment-thesis", "portfolio-exposure":
+			p.investment = true
+		case "sector-overview", "industry-structure", "competitive-landscape", "market-opportunity":
+			p.sector = true
+		}
+	}
+	if containsAnyIntentToken(text, "supply chain", "value chain", "downstream", "upstream", "industrial end-users", "industrial consumers", "producers", "receiving terminal", "export terminal") {
+		p.supply = true
+	}
+	if containsAnyIntentToken(text, "route", "shipping", "sea lane", "pipeline", "port", "terminal", "carrier", "strait", "canal", "reroute", "transit", "through ", "via ", "crossing", "lng", "lpg", "container") {
+		p.routeSensitive = true
+	}
+	if containsAnyIntentToken(text, "conflict", "tension", "earthquake", "flood", "humanitarian", "security incidents", "security incident", "war", "affected zone", "conflict zone", "disaster", "military escalation", "escalation") {
+		p.affectedZone = true
+	}
+	if containsAnyIntentToken(text, "vat", "tax", "tariff", "cbam", "carbon border", "export control", "sanction", "licensing", "license", "regulation", "regulatory", "subsid", "customs", "capital rule", "compliance") {
+		p.policy = true
+	}
+	if containsAnyIntentToken(text, "ownership", "owned by", "who owns", "control map", "shareholder", "board", "beneficial owner", "ultimate owner", "controlled by") {
+		p.governance = true
+	}
+	if containsAnyIntentToken(text, "ecosystem", "stakeholder", "influence network", "partnership", "power dynamics", "commonality", "what connects") {
+		p.ecosystem = true
+	}
+	if containsAnyIntentToken(text, "portfolio", "valuation", "funding", "bank", "payments", "insurance", "exchange", "clearing", "custody", "trade finance", "lender", "credit") {
+		p.investment = true
+	}
+	if containsAnyIntentToken(text, "payments", "clearing", "custody", "exchange", "trading venue", "market infrastructure", "payment rail", "correspondent banking") {
+		p.marketInfra = true
+	}
+	if containsAnyIntentToken(text, "sector", "industry", "competitive landscape", "market landscape", "industry structure", "vertical") {
+		p.sector = true
+	}
+	return p
+}
+
+func (p intentScenarioProfile) anchorCap() int {
+	switch {
+	case p.routeSensitive || p.affectedZone || p.policy || p.marketInfra || p.investment:
+		return 8
+	case p.supply || p.sector || p.ecosystem || p.governance:
+		return 6
+	default:
+		return 5
+	}
+}
+
+func (p intentScenarioProfile) domainCap() int {
+	switch {
+	case p.routeSensitive || p.policy || p.affectedZone || p.investment || p.marketInfra:
+		return 5
+	case p.supply || p.sector || p.ecosystem || p.governance:
+		return 4
+	default:
+		return 3
+	}
+}
+
+func containsAnyIntentToken(text string, tokens ...string) bool {
+	for _, token := range tokens {
+		if strings.Contains(text, strings.ToLower(strings.TrimSpace(token))) {
+			return true
+		}
+	}
+	return false
+}
+
 // applySupplyChainPlanQualityRule caps queries at budget and prioritizes by firstOrderEntities.
 func applySupplyChainPlanQualityRule(domains []DomainResolution, anchors []struct {
 	CanonicalPath string  `json:"canonicalPath"`
@@ -846,6 +947,529 @@ func applySupplyChainPlanQualityRule(domains []DomainResolution, anchors []struc
 		})
 		d.SupplyChainExecutionPlan.Queries = queries[:maxSupplyChainQueriesPerPlan]
 	}
+}
+
+func applyIntentResolutionQualityRules(query string, out *IntentResolution) {
+	if out == nil {
+		return
+	}
+	profile := inferIntentScenarioProfile(query, out.Domains)
+	if capN := profile.anchorCap(); len(out.Anchors) > capN {
+		out.Anchors = out.Anchors[:capN]
+	}
+	if capN := profile.domainCap(); len(out.Domains) > capN {
+		out.Domains = prioritizeIntentDomains(out.Domains, profile)[:capN]
+	}
+	for i := range out.Domains {
+		d := &out.Domains[i]
+		d.ContractType = normalizeContractTypeAlias(d.ContractType)
+		switch {
+		case IsSupplyChainContractType(d.ContractType):
+			applySupplyChainDomainQuality(query, d, out.Anchors, profile)
+		case IsPolicyImpactContractType(d.ContractType):
+			applyPolicyImpactDomainQuality(query, d, out.Anchors, profile)
+		case IsGovernanceContractType(d.ContractType):
+			applyGovernanceDomainQuality(query, d, out.Anchors)
+		case IsEcosystemContractType(d.ContractType):
+			applyEcosystemDomainQuality(query, d, out.Anchors, profile)
+		case IsAffectedZoneContractType(d.ContractType):
+			applyAffectedZoneDomainQuality(d, out.Anchors, profile)
+		}
+	}
+}
+
+func prioritizeIntentDomains(domains []DomainResolution, profile intentScenarioProfile) []DomainResolution {
+	out := append([]DomainResolution(nil), domains...)
+	score := func(d DomainResolution) int {
+		ct := normalizeContractTypeAlias(d.ContractType)
+		switch {
+		case profile.supply && (ct == "supply-chain" || ct == "value-chain"):
+			return 100
+		case profile.policy && (ct == "policy-impact" || ct == "regulatory-impact"):
+			return 95
+		case profile.governance && (ct == "ownership-structure" || ct == "control-map"):
+			return 92
+		case profile.affectedZone && ct == "affected-zone":
+			return 90
+		case profile.ecosystem && (ct == "ecosystem-mapping" || ct == "influence-network"):
+			return 88
+		case profile.investment && (ct == "investment-thesis" || ct == "portfolio-exposure"):
+			return 85
+		case profile.sector && (ct == "sector-overview" || ct == "industry-structure" || ct == "competitive-landscape"):
+			return 80
+		default:
+			return 50
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return score(out[i]) > score(out[j])
+	})
+	return out
+}
+
+func applySupplyChainDomainQuality(
+	query string,
+	d *DomainResolution,
+	anchors []struct {
+		CanonicalPath string  `json:"canonicalPath"`
+		Type          string  `json:"type"`
+		Name          string  `json:"name,omitempty"`
+		Confidence    float64 `json:"confidence"`
+		Reason        string  `json:"reason"`
+	},
+	profile intentScenarioProfile,
+) {
+	if d == nil {
+		return
+	}
+	d.Projections = dedupStrings(append(d.Projections,
+		"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET", "GEO_REGION", "DEPOSIT"), 12)
+	d.FirstOrderEntities = normalizeCanonicalPathsList(append(d.FirstOrderEntities,
+		collectIntentAnchorPathsByPrefix(anchors, "/org/", "/fac/", "/deposit/", "/market/", "/loc/")...), 16)
+	if d.SupplyChainExecutionPlan == nil || len(d.SupplyChainExecutionPlan.Queries) == 0 {
+		if plan := synthesizeSupplyChainExecutionPlan(query, d, anchors, profile); plan != nil {
+			d.SupplyChainExecutionPlan = plan
+		}
+	} else {
+		for i := range d.SupplyChainExecutionPlan.Queries {
+			if d.SupplyChainExecutionPlan.Queries[i].Depth <= 0 {
+				d.SupplyChainExecutionPlan.Queries[i].Depth = 4
+			}
+			if strings.TrimSpace(d.SupplyChainExecutionPlan.Queries[i].Direction) == "" {
+				d.SupplyChainExecutionPlan.Queries[i].Direction = inferSupplyChainDirection(query)
+			}
+		}
+		if profile.routeSensitive && len(d.SupplyChainExecutionPlan.OverlayQueries) == 0 {
+			overlayAnchors := collectIntentAnchorPathsByPrefix(anchors, "/org/", "/fac/", "/market/")
+			if len(overlayAnchors) > 0 {
+				d.SupplyChainExecutionPlan.OverlayQueries = []SupplyChainOverlayQuery{{
+					Type:    "market",
+					Anchors: overlayAnchors[:minInt(len(overlayAnchors), 6)],
+					Scope:   "both",
+				}}
+			}
+		}
+	}
+}
+
+func applyPolicyImpactDomainQuality(
+	query string,
+	d *DomainResolution,
+	anchors []struct {
+		CanonicalPath string  `json:"canonicalPath"`
+		Type          string  `json:"type"`
+		Name          string  `json:"name,omitempty"`
+		Confidence    float64 `json:"confidence"`
+		Reason        string  `json:"reason"`
+	},
+	profile intentScenarioProfile,
+) {
+	if d == nil {
+		return
+	}
+	d.Projections = dedupStrings(append(d.Projections,
+		"GOV", "ORGANIZATION", "MARKET", "FACILITY", "PRODUCT", "PROGRAM"), 12)
+	d.FirstOrderEntities = normalizeCanonicalPathsList(append(d.FirstOrderEntities,
+		collectIntentAnchorPathsByPrefix(anchors, "/gov/", "/org/", "/market/", "/product/", "/program/", "/loc/")...), 16)
+	if d.RegulatoryImpactExecutionPlan == nil || len(d.RegulatoryImpactExecutionPlan.Queries) == 0 {
+		if plan := synthesizeRegulatoryImpactExecutionPlan(query, d, anchors, profile); plan != nil {
+			d.RegulatoryImpactExecutionPlan = plan
+		}
+	}
+}
+
+func applyGovernanceDomainQuality(
+	query string,
+	d *DomainResolution,
+	anchors []struct {
+		CanonicalPath string  `json:"canonicalPath"`
+		Type          string  `json:"type"`
+		Name          string  `json:"name,omitempty"`
+		Confidence    float64 `json:"confidence"`
+		Reason        string  `json:"reason"`
+	},
+) {
+	if d == nil {
+		return
+	}
+	d.Projections = dedupStrings(append(d.Projections,
+		"ORGANIZATION", "GOV", "PERSON", "FACILITY", "PROGRAM"), 12)
+	d.FirstOrderEntities = normalizeCanonicalPathsList(append(d.FirstOrderEntities,
+		collectIntentAnchorPathsByPrefix(anchors, "/org/", "/gov/", "/person/", "/fac/")...), 16)
+	if d.GovernanceExecutionPlan == nil || len(d.GovernanceExecutionPlan.Queries) == 0 {
+		if plan := synthesizeGovernanceExecutionPlan(query, d, anchors); plan != nil {
+			d.GovernanceExecutionPlan = plan
+		}
+	}
+}
+
+func applyEcosystemDomainQuality(
+	query string,
+	d *DomainResolution,
+	anchors []struct {
+		CanonicalPath string  `json:"canonicalPath"`
+		Type          string  `json:"type"`
+		Name          string  `json:"name,omitempty"`
+		Confidence    float64 `json:"confidence"`
+		Reason        string  `json:"reason"`
+	},
+	profile intentScenarioProfile,
+) {
+	if d == nil {
+		return
+	}
+	d.Projections = dedupStrings(append(d.Projections,
+		"ORGANIZATION", "GOV", "FACILITY", "MARKET", "PRODUCT", "GEO_REGION"), 12)
+	d.FirstOrderEntities = normalizeCanonicalPathsList(append(d.FirstOrderEntities,
+		collectIntentAnchorPathsByPrefix(anchors, "/org/", "/gov/", "/fac/", "/market/", "/product/", "/loc/")...), 16)
+	if d.EcosystemExecutionPlan == nil || len(d.EcosystemExecutionPlan.Queries) == 0 {
+		if plan := synthesizeEcosystemExecutionPlan(query, d, anchors, profile); plan != nil {
+			d.EcosystemExecutionPlan = plan
+		}
+	}
+}
+
+func applyAffectedZoneDomainQuality(
+	d *DomainResolution,
+	anchors []struct {
+		CanonicalPath string  `json:"canonicalPath"`
+		Type          string  `json:"type"`
+		Name          string  `json:"name,omitempty"`
+		Confidence    float64 `json:"confidence"`
+		Reason        string  `json:"reason"`
+	},
+	profile intentScenarioProfile,
+) {
+	if d == nil {
+		return
+	}
+	d.Projections = dedupStrings(append(d.Projections,
+		"GEO_REGION", "FACILITY", "ORGANIZATION", "MARKET", "TRACK", "EVENT"), 12)
+	prefixes := []string{"/loc/", "/zone/", "/fac/", "/org/", "/market/", "/track/"}
+	if profile.routeSensitive {
+		prefixes = append(prefixes, "/deposit/")
+	}
+	d.FirstOrderEntities = normalizeCanonicalPathsList(append(d.FirstOrderEntities,
+		collectIntentAnchorPathsByPrefix(anchors, prefixes...)...), 16)
+}
+
+func collectIntentAnchorPathsByPrefix(
+	anchors []struct {
+		CanonicalPath string  `json:"canonicalPath"`
+		Type          string  `json:"type"`
+		Name          string  `json:"name,omitempty"`
+		Confidence    float64 `json:"confidence"`
+		Reason        string  `json:"reason"`
+	},
+	prefixes ...string,
+) []string {
+	if len(prefixes) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(anchors))
+	for _, a := range anchors {
+		cp := strings.TrimSpace(a.CanonicalPath)
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(cp, prefix) {
+				out = append(out, cp)
+				break
+			}
+		}
+	}
+	return dedupStrings(out, len(out))
+}
+
+func inferSupplyChainDirection(query string) string {
+	text := strings.ToLower(strings.TrimSpace(query))
+	switch {
+	case containsAnyIntentToken(text, "supplier", "suppliers", "inputs", "source from", "sourcing", "where does", "upstream"):
+		return "upstream"
+	case containsAnyIntentToken(text, "buyers", "customers", "distribution", "who buys", "end-users", "downstream"):
+		return "downstream"
+	default:
+		return "both"
+	}
+}
+
+func synthesizeSupplyChainExecutionPlan(
+	query string,
+	d *DomainResolution,
+	anchors []struct {
+		CanonicalPath string  `json:"canonicalPath"`
+		Type          string  `json:"type"`
+		Name          string  `json:"name,omitempty"`
+		Confidence    float64 `json:"confidence"`
+		Reason        string  `json:"reason"`
+	},
+	profile intentScenarioProfile,
+) *SupplyChainExecutionPlan {
+	anchorPaths := collectIntentAnchorPathsByPrefix(anchors, "/org/", "/deposit/", "/product/")
+	if len(anchorPaths) == 0 {
+		return nil
+	}
+	productFilter := domainFacetValues(d, "product", "material", "commodity", "goods", "item")
+	geoFilter := domainFacetValues(d, "geo")
+	queries := make([]SupplyChainQuery, 0, minInt(len(anchorPaths), 4))
+	for _, cp := range anchorPaths {
+		q := SupplyChainQuery{
+			Anchor:        cp,
+			Direction:     inferSupplyChainDirection(query),
+			Depth:         4,
+			ProductFilter: productFilter,
+			GeoFilter:     geoFilter,
+			Reason:        "deterministic fallback from intent anchors and domain facets",
+		}
+		switch {
+		case strings.HasPrefix(cp, "/org/"):
+			q.AnchorType = "org"
+		case strings.HasPrefix(cp, "/deposit/"):
+			q.AnchorType = "deposit"
+		case strings.HasPrefix(cp, "/product/"):
+			q.AnchorType = "product"
+		default:
+			continue
+		}
+		if profile.routeSensitive {
+			q.Depth = 5
+		}
+		queries = append(queries, q)
+		if len(queries) >= 4 {
+			break
+		}
+	}
+	if len(queries) == 0 {
+		return nil
+	}
+	plan := &SupplyChainExecutionPlan{Queries: queries}
+	if profile.routeSensitive {
+		overlayAnchors := collectIntentAnchorPathsByPrefix(anchors, "/org/", "/fac/", "/market/")
+		if len(overlayAnchors) > 0 {
+			plan.OverlayQueries = []SupplyChainOverlayQuery{{
+				Type:    "market",
+				Anchors: overlayAnchors[:minInt(len(overlayAnchors), 6)],
+				Scope:   "both",
+			}}
+		}
+	}
+	return plan
+}
+
+func synthesizeRegulatoryImpactExecutionPlan(
+	query string,
+	d *DomainResolution,
+	anchors []struct {
+		CanonicalPath string  `json:"canonicalPath"`
+		Type          string  `json:"type"`
+		Name          string  `json:"name,omitempty"`
+		Confidence    float64 `json:"confidence"`
+		Reason        string  `json:"reason"`
+	},
+	profile intentScenarioProfile,
+) *RegulatoryImpactExecutionPlan {
+	instrument := ""
+	for _, cp := range collectIntentAnchorPathsByPrefix(anchors, "/mechanism/", "/program/") {
+		instrument = cp
+		break
+	}
+	if instrument == "" {
+		instrument = inferMechanismFromQuery(query)
+	}
+	jurisdiction := firstGeoFacetOrAnchor(d, anchors)
+	if instrument == "" || jurisdiction == "" || jurisdiction == "global" {
+		return nil
+	}
+	impactScope := "economy-wide"
+	sectorFilter := domainFacetValues(d, "sector", "industry", "market")
+	if len(sectorFilter) > 0 || profile.marketInfra || profile.sector {
+		impactScope = "sector-specific"
+	}
+	return &RegulatoryImpactExecutionPlan{
+		Queries: []RegulatoryImpactQuery{{
+			Instrument:   instrument,
+			Jurisdiction: jurisdiction,
+			ImpactScope:  impactScope,
+			Depth:        4,
+			SectorFilter: sectorFilter,
+			Reason:       "deterministic fallback from policy query and intent facets",
+		}},
+	}
+}
+
+func synthesizeGovernanceExecutionPlan(
+	query string,
+	d *DomainResolution,
+	anchors []struct {
+		CanonicalPath string  `json:"canonicalPath"`
+		Type          string  `json:"type"`
+		Name          string  `json:"name,omitempty"`
+		Confidence    float64 `json:"confidence"`
+		Reason        string  `json:"reason"`
+	},
+) *GovernanceExecutionPlan {
+	target := ""
+	targetType := ""
+	for _, cp := range collectIntentAnchorPathsByPrefix(anchors, "/org/", "/gov/", "/person/") {
+		target = cp
+		switch {
+		case strings.HasPrefix(cp, "/org/"):
+			targetType = "org"
+		case strings.HasPrefix(cp, "/gov/"):
+			targetType = "gov"
+		case strings.HasPrefix(cp, "/person/"):
+			targetType = "person"
+		}
+		break
+	}
+	if target == "" || targetType == "" {
+		return nil
+	}
+	direction := "both"
+	text := strings.ToLower(strings.TrimSpace(query))
+	if containsAnyIntentToken(text, "who owns", "owned by", "shareholder", "beneficial owner", "ultimate owner") {
+		direction = "upward"
+	}
+	return &GovernanceExecutionPlan{
+		Queries: []GovernanceQuery{{
+			Target:       target,
+			TargetType:   targetType,
+			Direction:    direction,
+			Depth:        4,
+			IncludeBoard: containsAnyIntentToken(text, "board", "director", "executive"),
+			GeoFilter:    domainFacetValues(d, "geo"),
+			Reason:       "deterministic fallback from governance query and anchors",
+		}},
+	}
+}
+
+func synthesizeEcosystemExecutionPlan(
+	query string,
+	d *DomainResolution,
+	anchors []struct {
+		CanonicalPath string  `json:"canonicalPath"`
+		Type          string  `json:"type"`
+		Name          string  `json:"name,omitempty"`
+		Confidence    float64 `json:"confidence"`
+		Reason        string  `json:"reason"`
+	},
+	profile intentScenarioProfile,
+) *EcosystemExecutionPlan {
+	focus := ""
+	focusType := "sector"
+	if cps := collectIntentAnchorPathsByPrefix(anchors, "/org/", "/market/", "/loc/", "/fac/"); len(cps) > 0 {
+		focus = cps[0]
+		switch {
+		case strings.HasPrefix(focus, "/org/"):
+			focusType = "org"
+		case strings.HasPrefix(focus, "/market/"):
+			focusType = "market"
+		case strings.HasPrefix(focus, "/loc/"):
+			focusType = "geo"
+		}
+	}
+	if focus == "" {
+		if sector := firstNonEmpty(domainFacetValues(d, "sector", "industry", "market")); sector != "" {
+			focus = sector
+		} else {
+			focus = strings.TrimSpace(d.Title)
+		}
+	}
+	if focus == "" {
+		return nil
+	}
+	actorTypes := []string{"ORGANIZATION", "GOV", "FACILITY"}
+	if profile.ecosystem || profile.investment {
+		actorTypes = append(actorTypes, "PERSON")
+	}
+	return &EcosystemExecutionPlan{
+		Queries: []EcosystemQuery{{
+			Focus:        focus,
+			FocusType:    focusType,
+			Depth:        4,
+			ActorTypes:   actorTypes,
+			SectorFilter: domainFacetValues(d, "sector", "industry", "market"),
+			GeoFilter:    domainFacetValues(d, "geo"),
+			Reason:       "deterministic fallback from ecosystem query and anchors",
+		}},
+	}
+}
+
+func domainFacetValues(d *DomainResolution, keys ...string) []string {
+	if d == nil || d.Facets == nil {
+		return nil
+	}
+	out := make([]string, 0, len(keys))
+	for _, want := range keys {
+		for k, vals := range d.Facets {
+			if !strings.EqualFold(strings.TrimSpace(k), want) {
+				continue
+			}
+			for _, v := range vals {
+				v = strings.TrimSpace(v)
+				if v != "" {
+					out = append(out, v)
+				}
+			}
+		}
+	}
+	return dedupStrings(out, len(out))
+}
+
+func firstGeoFacetOrAnchor(
+	d *DomainResolution,
+	anchors []struct {
+		CanonicalPath string  `json:"canonicalPath"`
+		Type          string  `json:"type"`
+		Name          string  `json:"name,omitempty"`
+		Confidence    float64 `json:"confidence"`
+		Reason        string  `json:"reason"`
+	},
+) string {
+	if vals := domainFacetValues(d, "geo"); len(vals) > 0 {
+		return strings.TrimSpace(strings.ToLower(vals[0]))
+	}
+	ccs, _ := extractCountryAnchors(anchors)
+	if len(ccs) > 0 {
+		return strings.TrimSpace(strings.ToLower(ccs[0]))
+	}
+	return "global"
+}
+
+func inferMechanismFromQuery(query string) string {
+	text := strings.ToLower(strings.TrimSpace(query))
+	switch {
+	case containsAnyIntentToken(text, "vat", "sales tax"):
+		return "/mechanism/regulatory/vat-rate"
+	case containsAnyIntentToken(text, "tariff", "customs duty", "import duty"):
+		return "/mechanism/regulatory/tariff"
+	case containsAnyIntentToken(text, "cbam", "carbon border"):
+		return "/mechanism/regulatory/carbon-border-adjustment"
+	case containsAnyIntentToken(text, "export control", "entity list", "license requirement"):
+		return "/mechanism/regulatory/export-control"
+	case containsAnyIntentToken(text, "sanction", "embargo"):
+		return "/mechanism/political/sanctions"
+	case containsAnyIntentToken(text, "subsid", "incentive"):
+		return "/mechanism/economic/subsidy"
+	case containsAnyIntentToken(text, "capital rule", "capital adequacy"):
+		return "/mechanism/regulatory/capital-adequacy"
+	default:
+		return ""
+	}
+}
+
+func firstNonEmpty(values []string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func parseDomainPathForIntent(canonicalPath string) (contractType string, facets map[string][]string) {

@@ -43,6 +43,7 @@ export type DependencyType =
   | 'TRANSFORMS_INTO'
   | 'EXTRACTS_FROM'
   | 'PARTICIPATES_IN'
+  | 'TRADED_IN'
   | 'DOMINATES'
   | 'HAS_MARKET_SEGMENT'
   | 'HAS_SUBGROUP'
@@ -124,7 +125,6 @@ export interface LensItem {
   createdAt: string;
   updatedAt: string;
 }
-
 
 
 

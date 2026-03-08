@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
@@ -411,7 +412,21 @@ func extractionAllowedRelationTypesByDomainModes(domainModes []string) []string 
 	if len(specific) == 0 {
 		return nil
 	}
-	allowed := edgesemantics.EdgeAllowlistStrings(specific)
+	allowedSet := map[string]struct{}{}
+	allowed := make([]string, 0, 16)
+	for _, mode := range specific {
+		for _, edgeType := range contractsemantics.AllowedEdgeStringsForDomainMode(mode) {
+			edgeType = strings.TrimSpace(edgeType)
+			if edgeType == "" {
+				continue
+			}
+			if _, ok := allowedSet[edgeType]; ok {
+				continue
+			}
+			allowedSet[edgeType] = struct{}{}
+			allowed = append(allowed, edgeType)
+		}
+	}
 	// Supply-chain mode allows OWNS/CONTROLS for supply-relevant ownership/control links
 	// (ORG/GOV -> ORG/FAC/DEPOSIT). We include both in generation guardrails
 	// and enforce exact path predicate during phase-A filtering.
@@ -508,7 +523,8 @@ const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends 
    - PARTNERS_WITH: partnership/collaboration (symmetric; still output as source->target).
    - COMPETES_WITH: competitor relationship (direction is not important, still output as source->target).
    - INFLUENCES: source influences target (soft power; avoid for formal authority/ownership).
-   - PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY/COMMUNITY/PROGRAM/PRODUCT/PERSON -> MARKET).
+   - PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY/COMMUNITY/PROGRAM/PERSON -> MARKET).
+   - TRADED_IN: product is traded or price-discovered in a market (canonical direction: PRODUCT -> MARKET).
    - For ORGANIZATION ↔ MARKET pairs, relationType MUST be PARTICIPATES_IN (direction: ORGANIZATION -> MARKET).
      Exception: GOV entities (/gov/...) may use REGULATES (domestic oversight only), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES toward MARKET targets.
      Use qualifiers.marketRole ("leader"/"dominant") + market_share metrics for leadership semantics.
@@ -585,6 +601,7 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
      - OPERATES_IN source MUST be ORGANIZATION|PERSON, target MUST be GEO_REGION|FACILITY|DEPOSIT.
      - MARKET MUST NOT be source for OPERATES_IN.
    - PARTICIPATES_IN: ORG/FACILITY -> MARKET (commercial market participation). For "market depends on org" use PARTICIPATES_IN with ORG as source.
+   - TRADED_IN: PRODUCT -> MARKET only for product trading/price-discovery context.
    - MARKET source guard in supply_chain: MARKET may emit only PARTICIPATES_IN and HAS_MARKET_SEGMENT (plus DOMAIN scaffold when source is /domain/...).
      Never emit PRODUCES/SUPPLIES_TO/TRANSFORMS_INTO/EXTRACTS_FROM/OPERATES_IN from MARKET.
    - REGULATES: GOV entity (/gov/...) -> MARKET or ORG (domestic regulatory oversight). NEVER use DEPENDS_ON for government regulation.
@@ -618,6 +635,7 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeMarket) {
 		b.WriteString(`   MARKET MODE:
    - PARTICIPATES_IN: entity -> market.
+   - TRADED_IN: product -> market for traded commodity/product exposure.
    - ORGANIZATION ↔ MARKET: PARTICIPATES_IN (ORG -> MARKET). GOV entities may also REGULATES (domestic oversight), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES market.
    - HAS_MARKET_SEGMENT: parent market -> segment (child path = parent path + one segment).
    - Keep focus on market structure and placement, not supply/governance edges.
@@ -635,7 +653,7 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
    - REGULATES/ADMINISTERS for formal domestic public-policy authority (same jurisdiction). For sanctions, trade bans, or extra-territorial restrictions use CONTROLS_ACCESS or IMPOSES_CONDITION.
    - CONTROLS_ACCESS/IMPOSES_CONDITION/USES_MECHANISM/APPLIES_TO for explicit instruments and constraints (including sanctions).
    - INFLUENCES for soft or second-order impact channels when formal authority is absent.
-   - DEPENDS_ON/PARTICIPATES_IN/LOCATED_IN/OPERATES_IN for exposure context needed in impact modeling.
+   - DEPENDS_ON/PARTICIPATES_IN/TRADED_IN/LOCATED_IN/OPERATES_IN for exposure context needed in impact modeling.
 `)
 	}
 
@@ -742,12 +760,14 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 - Preferred chain model: org → fac → product → fac → org. Organizations at chain ends, facilities in the middle, products between facilities.
 - Fallback model (only when concrete production facility is unknown or not separable for a small org): org → product.
 - Use /org/ for organizations, /fac/ for facilities, /product/ for products, /deposit/ for deposits. Do NOT invent synthetic /fac/*-general-production placeholders.
-- Each chain has: nodes[], confidence, reason, optional transportVia[].
+- Each chain has: nodes[], confidence, reason, optional transportVia[] (but expected for route-sensitive legs when inferable).
 - Node shape: canonicalPath (REQUIRED), name (REQUIRED), type (REQUIRED enum: ORGANIZATION|FACILITY|PRODUCT|DEPOSIT), role?
 - Nodes follow: org → fac → product → fac → org (1-to-many at each level). org → product is allowed only for unknown/non-separated production.
 - Include FACILITY where transformation occurs (product → facility → product).
 - For extractive flows: facility → deposit → product.
-- transportVia should contain facility canonical paths for ports/terminals/pipelines/warehouses when known.
+- Only product-carrying flow belongs in supplyChains. If an adjacent organization merely owns, controls, manages, or operates a facility, emit OWNS / CONTROLS / MANAGES separately and do NOT encode FACILITY → PRODUCT → ORG.
+- transportVia should contain facility canonical paths for ports/terminals/pipelines/warehouses/chokepoints when known or reasonably inferable from a route-sensitive cross-border flow.
+- For maritime, pipeline, rail, corridor, chokepoint, or sanctions-sensitive flows, leaving transportVia empty requires genuine evidence gap, not convenience.
 - Product granularity: use model line/product family (iPhone, MacBook, Claude Code), NOT specific SKU (iPhone 17, MacBook Pro M4, Claude Opus). Natural resources: keep taxonomy granularity, avoid over-generalization.`
 
 	return joinPromptBlocks(

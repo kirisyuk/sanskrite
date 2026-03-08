@@ -8,6 +8,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/supplysemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
@@ -45,6 +46,7 @@ type SupplyLinkSegment struct {
 	SupplierFacilityRef string
 	CustomerFacilityRef string
 	TransportViaRefs    []string
+	SegmentClass        string
 	Confidence          float64
 	// State holds metrics (volume, share, etc.) from SegmentMetrics for SupplyLink.State
 	State map[string]models.MetricValue
@@ -81,6 +83,8 @@ type ParsedChainStats struct {
 	EdgesInvertedToDependsOn  int `json:"edgesInvertedToDependsOn"`
 	EdgesAbstainedUnknownPair int `json:"edgesAbstainedUnknownPair"`
 	ConsecutiveSameTypeNodes  int `json:"consecutiveSameTypeNodes"`
+	SegmentsSkippedSelfLoop   int `json:"segmentsSkippedSelfLoop"`
+	SegmentsSkippedSupport    int `json:"segmentsSkippedInternalSupport"`
 }
 
 // ChainEdge represents an edge in a supply chain graph.
@@ -263,11 +267,51 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 					fmt.Sprintf("segment %s→%s skipped SUPPLIES_TO: financial-flow product %s", srcPath, dstPath, prodPath))
 				continue
 			}
+			classification := supplysemantics.ClassifySegmentWithContext(
+				srcPath,
+				a.Name,
+				a.Role,
+				prodPath,
+				prod.Name,
+				dstPath,
+				b.Name,
+				b.Role,
+				chain.TransportVia,
+			)
+			switch classification.Class {
+			case supplysemantics.SegmentClassInvalidSelfLoop:
+				result.Stats.SegmentsSkippedSelfLoop++
+				result.ParseWarnings = append(result.ParseWarnings,
+					fmt.Sprintf("segment %s→%s skipped SUPPLIES_TO: invalid self-loop product %s (%s)",
+						srcPath, dstPath, prodPath, strings.Join(classification.Reasons, ",")))
+				continue
+			case supplysemantics.SegmentClassInternalSupport:
+				result.Stats.SegmentsSkippedSupport++
+				result.ParseWarnings = append(result.ParseWarnings,
+					fmt.Sprintf("segment %s→%s skipped SUPPLIES_TO: internal support product %s (%s)",
+						srcPath, dstPath, prodPath, strings.Join(classification.Reasons, ",")))
+				if overlay := p.maybeCreateFacilityActorOverlay(a, b, chain.Confidence, chain.Reason, classification.Reasons); overlay != nil {
+					result.Edges = append(result.Edges, overlay)
+					result.Stats.EdgesCreated++
+				}
+				continue
+			case supplysemantics.SegmentClassInternalActorLink:
+				result.Stats.SegmentsSkippedSupport++
+				result.ParseWarnings = append(result.ParseWarnings,
+					fmt.Sprintf("segment %s→%s skipped SUPPLIES_TO: internal actor relation for product %s (%s)",
+						srcPath, dstPath, prodPath, strings.Join(classification.Reasons, ",")))
+				if overlay := p.maybeCreateFacilityActorOverlay(a, b, chain.Confidence, chain.Reason, classification.Reasons); overlay != nil {
+					result.Edges = append(result.Edges, overlay)
+					result.Stats.EdgesCreated++
+				}
+				continue
+			}
 			seg := &SupplyLinkSegment{
-				SupplierRef: srcPath,
-				ProductRef:  prodPath,
-				CustomerRef: dstPath,
-				Confidence:  chain.Confidence,
+				SupplierRef:  srcPath,
+				ProductRef:   prodPath,
+				CustomerRef:  dstPath,
+				SegmentClass: classification.Class,
+				Confidence:   chain.Confidence,
 			}
 			for _, pth := range chain.TransportVia {
 				pth = strings.TrimSpace(pth)
@@ -350,11 +394,12 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 								altState["cost_to_switch"] = models.MetricValue{Value: sup.CostToSwitch.Value, Unit: &u, Confidence: sup.CostToSwitch.Confidence}
 							}
 							altSeg := &SupplyLinkSegment{
-								SupplierRef: supRef,
-								ProductRef:  prodPath,
-								CustomerRef: dstPath,
-								Confidence:  sup.Confidence,
-								State:       altState,
+								SupplierRef:  supRef,
+								ProductRef:   prodPath,
+								CustomerRef:  dstPath,
+								SegmentClass: classification.Class,
+								Confidence:   sup.Confidence,
+								State:        altState,
 							}
 							result.SupplyLinkSegments = append(result.SupplyLinkSegments, altSeg)
 						}
@@ -643,9 +688,10 @@ func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNo
 	case fromIsProduct && toIsFac:
 		return nil, true
 
-	// fac → org: facility is owned by org (reverse ownership, use SUPPLIES_TO as the chain flow direction)
+	// fac → org: abstain. Product-carrying flow is inferred only from actor→product→actor segments.
+	// Treating facility→operator/org as SUPPLIES_TO creates internal operator/control loops.
 	case fromIsFac && toIsOrg:
-		return mkEdge(string(models.DependencyTypeSuppliesTo)), false
+		return nil, true
 
 	// Generic actor → product (fallback for non-fac actors)
 	case fromIsActor && toIsProduct:
@@ -679,6 +725,57 @@ func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNo
 
 	default:
 		return nil, true
+	}
+}
+
+func (p *SupplyChainParser) maybeCreateFacilityActorOverlay(
+	facilityNode agents.SupplyChainNode,
+	actorNode agents.SupplyChainNode,
+	confidence float64,
+	reason string,
+	classificationReasons []string,
+) *ChainEdge {
+	facPath := normalizeSupplyChainCanonicalPath(facilityNode.CanonicalPath)
+	actorPath := normalizeSupplyChainCanonicalPath(actorNode.CanonicalPath)
+	if facPath == "" || actorPath == "" {
+		return nil
+	}
+	if !strings.HasPrefix(facPath, "/fac/") {
+		return nil
+	}
+	if !strings.HasPrefix(actorPath, "/org/") && !strings.HasPrefix(actorPath, "/gov/") {
+		return nil
+	}
+
+	role := strings.ToLower(strings.TrimSpace(actorNode.Role))
+	role = strings.ReplaceAll(role, "-", "_")
+	role = strings.ReplaceAll(role, " ", "_")
+
+	rel := ""
+	switch {
+	case strings.HasPrefix(actorPath, "/gov/"):
+		rel = string(models.DependencyTypeControls)
+	case strings.Contains(role, "owner"), strings.Contains(role, "parent"), strings.Contains(role, "holding"):
+		rel = string(models.DependencyTypeOwns)
+	case strings.Contains(role, "operator"), strings.Contains(role, "manager"), strings.Contains(role, "manages"), strings.Contains(role, "managed"):
+		rel = string(models.DependencyTypeManages)
+	case strings.Contains(role, "controller"), strings.Contains(role, "state"), strings.Contains(role, "administrator"), strings.Contains(role, "admin"):
+		rel = string(models.DependencyTypeControls)
+	default:
+		return nil
+	}
+
+	return &ChainEdge{
+		SourceCanonicalPath: actorPath,
+		TargetCanonicalPath: facPath,
+		RelationType:        rel,
+		Confidence:          confidence,
+		Reason:              fmt.Sprintf("Supply chain overlay: %s is related to %s as %s (%s). %s", actorNode.Name, facilityNode.Name, strings.TrimSpace(actorNode.Role), strings.Join(classificationReasons, ","), reason),
+		Qualifiers: map[string]interface{}{
+			"direction_basis": "supply_chain_internal_actor_overlay",
+			"source_role":     strings.TrimSpace(actorNode.Role),
+			"target_role":     strings.TrimSpace(facilityNode.Role),
+		},
 	}
 }
 

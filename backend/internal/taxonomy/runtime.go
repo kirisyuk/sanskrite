@@ -104,6 +104,7 @@ var builtInAllowedRelationTypes = map[string]struct{}{
 	"EXTRACTS_FROM":   {}, // FACILITY → DEPOSIT
 	// Market participation
 	"PARTICIPATES_IN": {},
+	"TRADED_IN":       {},
 	"DOMINATES":       {},
 	// Market hierarchy
 	"HAS_MARKET_SEGMENT": {},

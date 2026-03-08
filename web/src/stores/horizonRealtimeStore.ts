@@ -620,10 +620,42 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
             // Already handled at the end, but let's just set the defaults if it's not present
           } else {
             const l = String(rawLine || '').trim();
+            const supplyPathMatch = l.match(/^\[SupplyChainMaterialize\]\s+artifact=([^\s]+)\s+chain=(\d+)\s+segments=(\d+)\s*$/i);
+            const supplyDoneMatch = l.match(/^\[SupplyChainMaterialize\]\s+done\s+artifacts=(\d+)\s+skipped=(\d+)\s+merged=(\d+)\s+scopeAdded=(\d+)\s*$/i);
+            const edgePropagationMatch = l.match(/^\[EdgeTriggeredPropagation\]\s+enqueued=(\d+)\s+signals=(\d+)\s+edge=([^\s]+)\s*$/i);
+            if (supplyPathMatch) {
+              const chainIndex = Number(supplyPathMatch[2] || 0);
+              const segmentCount = Number(supplyPathMatch[3] || 0);
+              const segmentLabel = segmentCount === 1 ? 'segment' : 'segments';
+              text = `Materialized supply path ${chainIndex + 1}`;
+              humanReadable = {
+                title: 'Supply Path Materialized',
+                description: `${segmentCount} ${segmentLabel} in this path`,
+              };
+            } else if (supplyDoneMatch) {
+              const created = Number(supplyDoneMatch[1] || 0);
+              const reused = Number(supplyDoneMatch[2] || 0);
+              const merged = Number(supplyDoneMatch[3] || 0);
+              const scopeAdded = Number(supplyDoneMatch[4] || 0);
+              text = `Supply path materialization complete`;
+              humanReadable = {
+                title: 'Supply Paths Updated',
+                description: `${created} new, ${reused} reused, ${merged} merged, ${scopeAdded} added to lens`,
+              };
+            } else if (edgePropagationMatch) {
+              const enqueued = Number(edgePropagationMatch[1] || 0);
+              const signals = Number(edgePropagationMatch[2] || 0);
+              text = 'I queued downstream propagation';
+              humanReadable = {
+                title: 'Downstream Propagation Queued',
+                description: `${signals} signal(s) across the new link • ${enqueued} fragment(s) added to the queue`,
+              };
+            } else {
             const cleaned = l.replace(/^\[[^\]]+\]\s*/, '');
             const line = short(cleaned);
             text = line || 'Scout activity';
             humanReadable = { title: 'Scout Activity', description: line };
+            }
           }
         } else if (type === 'horizon.scout.job.created') {
           icon = 'scout';

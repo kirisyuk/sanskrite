@@ -62,6 +62,46 @@ func TestCanonicalizeEdge_MarketOrganizationAlwaysParticipatesWithSwap(t *testin
 	}
 }
 
+func TestCanonicalizeEdge_ProductMarketAlwaysTradedIn(t *testing.T) {
+	newType, shouldSwap, changed, reason := CanonicalizeEdge(
+		DependencyTypeDependsOn,
+		FragmentTypeProduct,
+		FragmentTypeMarket,
+	)
+	if !changed {
+		t.Fatalf("expected canonicalization change")
+	}
+	if newType != DependencyTypeTradedIn {
+		t.Fatalf("expected TRADED_IN, got %s", newType)
+	}
+	if shouldSwap {
+		t.Fatalf("expected shouldSwap=false")
+	}
+	if reason == "" {
+		t.Fatalf("expected non-empty canonicalization reason")
+	}
+}
+
+func TestCanonicalizeEdge_MarketProductAlwaysTradedInWithSwap(t *testing.T) {
+	newType, shouldSwap, changed, reason := CanonicalizeEdge(
+		DependencyTypeParticipatesIn,
+		FragmentTypeMarket,
+		FragmentTypeProduct,
+	)
+	if !changed {
+		t.Fatalf("expected canonicalization change")
+	}
+	if newType != DependencyTypeTradedIn {
+		t.Fatalf("expected TRADED_IN, got %s", newType)
+	}
+	if !shouldSwap {
+		t.Fatalf("expected shouldSwap=true")
+	}
+	if reason == "" {
+		t.Fatalf("expected non-empty canonicalization reason")
+	}
+}
+
 func TestCanonicalizeEdge_NonMechanismAppliesToMarket_ToInfluences(t *testing.T) {
 	newType, shouldSwap, changed, reason := CanonicalizeEdge(
 		DependencyTypeAppliesTo,

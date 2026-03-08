@@ -111,6 +111,7 @@ func classifyEdgeFamily(axis string, fromFrag *horizonmodels.HorizonFragment, ed
 		}
 		return "facility_dependency"
 	case horizonmodels.DependencyTypeParticipatesIn,
+		horizonmodels.DependencyTypeTradedIn,
 		horizonmodels.DependencyTypeHasMarketSegment,
 		horizonmodels.DependencyTypeHasSubmarket,
 		horizonmodels.DependencyTypeDominates:

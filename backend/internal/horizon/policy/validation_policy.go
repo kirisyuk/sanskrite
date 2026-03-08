@@ -461,6 +461,24 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 	}
 
 	// Policy 2.55: HAS_MARKET_SEGMENT path rule (best-effort). Ideal: child path = parent path + one segment.
+	// Policy 2.56: PRODUCT↔MARKET must use TRADED_IN.
+	isProductMarketPair := (sourceType == string(horizonmodels.FragmentTypeProduct) && targetType == string(horizonmodels.FragmentTypeMarket)) ||
+		(sourceType == string(horizonmodels.FragmentTypeMarket) && targetType == string(horizonmodels.FragmentTypeProduct))
+	if isProductMarketPair &&
+		relationType != string(horizonmodels.DependencyTypeTradedIn) {
+		reason := "PRODUCT↔MARKET edges must use TRADED_IN (direction PRODUCT -> MARKET); PARTICIPATES_IN is for actors, not products"
+		log.Printf("%s QUARANTINE: %s", logPrefix, reason)
+		return PolicyDecision{
+			Action: ActionQuarantineSoft,
+			Params: map[string]interface{}{
+				"penalty": 0.35,
+				"reason":  reason,
+			},
+			DecisionPath: "rule:hardcoded:product_market_traded_in_only",
+			Confidence:   0.85,
+		}, nil
+	}
+
 	// Policy 2.57: ORG↔MARKET must be PARTICIPATES_IN — except GOV entities which may
 	// REGULATES/CONTROLS_ACCESS/INFLUENCES/ADMINISTERS markets.
 	isOrgMarketPair := (sourceType == string(horizonmodels.FragmentTypeOrganization) && targetType == string(horizonmodels.FragmentTypeMarket)) ||

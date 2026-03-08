@@ -93,6 +93,7 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 				models.DependencyTypeLocatedIn,
 				models.DependencyTypeOperatesIn,
 				models.DependencyTypeParticipatesIn,
+				models.DependencyTypeTradedIn,
 				models.DependencyTypeHasMarketSegment,
 			},
 			ComplementaryModes: []string{
@@ -158,6 +159,7 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 				models.DependencyTypeAppliesTo,
 				models.DependencyTypeAdministers,
 				models.DependencyTypeParticipatesIn,
+				models.DependencyTypeTradedIn,
 				models.DependencyTypeLocatedIn,
 				models.DependencyTypeOperatesIn,
 			},
@@ -196,6 +198,7 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 			AllowedEdges:    allowedEdges,
 			OverlayEdges: []models.DependencyType{
 				models.DependencyTypeParticipatesIn,
+				models.DependencyTypeTradedIn,
 				models.DependencyTypeOwns,
 				models.DependencyTypeSubsidiaryOf,
 				models.DependencyTypeControls,
@@ -218,6 +221,22 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 	default:
 		return DomainModeProfile{Mode: mode, PrimaryLayer: GraphLayerInterpretive}
 	}
+}
+
+func AllowedEdgeStringsForDomainMode(mode string) []string {
+	profile := ProfileForDomainMode(mode)
+	if len(profile.AllowedEdges) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(profile.AllowedEdges))
+	for _, edgeType := range profile.AllowedEdges {
+		normalized := strings.TrimSpace(string(edgeType))
+		if normalized == "" {
+			continue
+		}
+		out = append(out, normalized)
+	}
+	return out
 }
 
 func ComposeDomainModes(modes []string) ComposedProfile {

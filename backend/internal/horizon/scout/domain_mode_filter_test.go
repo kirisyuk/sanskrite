@@ -1,6 +1,7 @@
 package scout
 
 import (
+	"context"
 	"testing"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
@@ -42,6 +43,23 @@ func TestEdgeAllowlistByDomainMode_AssuranceExcludesLegacyAuditedBy(t *testing.T
 	allow := EdgeAllowlistByDomainMode(taxonomy.DomainModeAssurance)
 	if AllowlistContains(allow, "AUDITED_BY") {
 		t.Fatalf("assurance allowlist must not include legacy AUDITED_BY output")
+	}
+}
+
+func TestEdgeAllowlistByDomainModes_ComposedFromContractSemantics(t *testing.T) {
+	allow := EdgeAllowlistByDomainModes([]string{taxonomy.DomainModeGovernance, taxonomy.DomainModeSupplyChain})
+	for _, want := range []models.DependencyType{
+		models.DependencyTypeProduces,
+		models.DependencyTypeSuppliesTo,
+		models.DependencyTypeOwns,
+		models.DependencyTypeBoardMemberOf,
+	} {
+		if !AllowlistContains(allow, want) {
+			t.Fatalf("composed allowlist must include %s", want)
+		}
+	}
+	if AllowlistContains(allow, models.DependencyTypeInfluences) {
+		t.Fatalf("composed allowlist must not leak interpretive INFLUENCES into supply+governance runtime contract")
 	}
 }
 
@@ -177,6 +195,56 @@ func TestFilterDiscoveredRelationsByDomainModes_SupplyChainControlsAllowedForRel
 		if r.TargetCanonicalPath == "/market/us/energy/oil-gas" {
 			t.Fatalf("market target must not pass supply-chain CONTROLS predicate")
 		}
+	}
+}
+
+func TestFilterDomainRelations_GovernanceAllowsFacilityTargets(t *testing.T) {
+	in := []agents.DiscoveredRelation{{
+		RelationType:        "OWNS",
+		SourceCanonicalPath: "/org/de/infineon",
+		TargetCanonicalPath: "/fac/de/dresden-fab",
+	}}
+	out, dropped := agents.FilterDomainRelations(context.Background(), taxonomy.DomainModeGovernance, in)
+	if dropped != 0 || len(out) != 1 {
+		t.Fatalf("governance should keep org->facility OWNS, dropped=%d out=%d", dropped, len(out))
+	}
+}
+
+func TestFilterDomainRelations_StrategicAllowsAffectedOperationalTargets(t *testing.T) {
+	in := []agents.DiscoveredRelation{
+		{
+			RelationType:        "CONTROLS_ACCESS",
+			SourceCanonicalPath: "/decision/export-controls/chip-license-gate",
+			TargetCanonicalPath: "/fac/tw/fab-21",
+		},
+		{
+			RelationType:        "APPLIES_TO",
+			SourceCanonicalPath: "/mechanism/regulatory/export-license-requirement",
+			TargetCanonicalPath: "/product/finished/electronic/assembly/gpu",
+		},
+	}
+	out, dropped := agents.FilterDomainRelations(context.Background(), taxonomy.DomainModeStrategic, in)
+	if dropped != 0 || len(out) != 2 {
+		t.Fatalf("strategic should keep operational targets, dropped=%d out=%d", dropped, len(out))
+	}
+}
+
+func TestFilterDomainRelations_PolicyImpactAllowsFacilityAndProductTargets(t *testing.T) {
+	in := []agents.DiscoveredRelation{
+		{
+			RelationType:        "IMPOSES_CONDITION",
+			SourceCanonicalPath: "/gov/eu/european-commission",
+			TargetCanonicalPath: "/fac/de/basf-ludwigshafen",
+		},
+		{
+			RelationType:        "REGULATES",
+			SourceCanonicalPath: "/gov/us/fda",
+			TargetCanonicalPath: "/product/finished/chemical/processing/api",
+		},
+	}
+	out, dropped := agents.FilterDomainRelations(context.Background(), taxonomy.DomainModePolicyImpact, in)
+	if dropped != 0 || len(out) != 2 {
+		t.Fatalf("policy_impact should keep facility/product targets, dropped=%d out=%d", dropped, len(out))
 	}
 }
 

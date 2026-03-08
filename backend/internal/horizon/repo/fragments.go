@@ -108,6 +108,136 @@ func PrepareFragmentForValidation(fragment *models.HorizonFragment) {
 	ensurePersistInvariants(fragment)
 }
 
+func validateForbiddenSyntheticPlaceholderForCreate(fragment *models.HorizonFragment) error {
+	if fragment == nil {
+		return nil
+	}
+	cp := strings.TrimSpace(fragment.CanonicalPath)
+	if cp == "" {
+		return nil
+	}
+	switch canonical.ClassifyPlaceholderCanonicalPath(cp) {
+	case canonical.PlaceholderPathFacilitySynthetic,
+		canonical.PlaceholderPathOrgSynthetic,
+		canonical.PlaceholderPathGovSynthetic:
+		return fmt.Errorf("forbidden synthetic placeholder canonical path: %s", cp)
+	default:
+		return nil
+	}
+}
+
+func (r *HorizonFragmentsRepository) buildGraphEnrichContext(ctx context.Context, fragment *models.HorizonFragment) graphenrich.FragmentContext {
+	if r == nil || r.edgesRepo == nil || fragment == nil || strings.TrimSpace(fragment.ID) == "" {
+		return graphenrich.FragmentContext{}
+	}
+	tenantID := strings.TrimSpace(fragment.TenantID)
+	if tenantID == "" {
+		tenantID = "global"
+	}
+	outgoing, _ := r.edgesRepo.ListBySource(ctx, tenantID, fragment.ID, nil, 20)
+	incoming, _ := r.edgesRepo.ListByTarget(ctx, tenantID, fragment.ID, nil, 20)
+	neighborIDs := map[string]struct{}{}
+	routeHints := make([]string, 0, 8)
+	zoneHints := make([]string, 0, 8)
+	pathHints := []string{fragment.CanonicalPath, fragment.ParentPath, fragment.ParentGovPath, fragment.ParentMarketPath, fragment.EntityPath, fragment.SectorPath}
+	collectEdge := func(edge *models.DependencyEdge) {
+		if edge == nil {
+			return
+		}
+		if id := strings.TrimSpace(edge.SourceFragmentID); id != "" && id != strings.TrimSpace(fragment.ID) {
+			neighborIDs[id] = struct{}{}
+		}
+		if id := strings.TrimSpace(edge.TargetFragmentID); id != "" && id != strings.TrimSpace(fragment.ID) {
+			neighborIDs[id] = struct{}{}
+		}
+		if edge.Qualifiers != nil {
+			routeHints = append(routeHints, graphEnrichQualifierStrings(edge.Qualifiers[models.QualifierTransportVia])...)
+			routeHints = append(routeHints, graphEnrichQualifierStrings(edge.Qualifiers[models.QualifierFlowRefs])...)
+			zoneHints = append(zoneHints, graphEnrichQualifierStrings(edge.Qualifiers[models.QualifierZoneRefs])...)
+			zoneHints = append(zoneHints, graphEnrichQualifierStrings(edge.Qualifiers[models.QualifierAffectedZoneRefs])...)
+		}
+		pathHints = append(pathHints, string(edge.Type), string(edge.GetFacet()))
+	}
+	for _, edge := range outgoing {
+		collectEdge(edge)
+	}
+	for _, edge := range incoming {
+		collectEdge(edge)
+	}
+	ids := make([]string, 0, len(neighborIDs))
+	for id := range neighborIDs {
+		ids = append(ids, id)
+	}
+	nearby := make([]*models.HorizonFragment, 0, len(ids))
+	if len(ids) > 0 {
+		if neighbors, err := r.GetMany(ctx, ids); err == nil {
+			for _, id := range ids {
+				if n := neighbors[id]; n != nil {
+					nearby = append(nearby, n)
+					pathHints = append(pathHints, n.CanonicalPath, n.EntityPath, n.SectorPath)
+				}
+			}
+		}
+	}
+	return graphenrich.FragmentContext{
+		NearbyFragments: nearby,
+		IncomingEdges:   incoming,
+		OutgoingEdges:   outgoing,
+		RouteHints:      graphEnrichCompactStrings(routeHints),
+		ZoneHints:       graphEnrichCompactStrings(zoneHints),
+		PathHints:       graphEnrichCompactStrings(pathHints),
+	}
+}
+
+func (r *HorizonFragmentsRepository) applyGraphEnrich(ctx context.Context, fragment *models.HorizonFragment) bool {
+	if fragment == nil {
+		return false
+	}
+	return graphenrich.ApplyFragmentHeuristicsWithContext(fragment, r.buildGraphEnrichContext(ctx, fragment))
+}
+
+func graphEnrichQualifierStrings(v interface{}) []string {
+	switch raw := v.(type) {
+	case []string:
+		return graphEnrichCompactStrings(raw)
+	case []interface{}:
+		out := make([]string, 0, len(raw))
+		for _, item := range raw {
+			s := strings.TrimSpace(fmt.Sprint(item))
+			if s != "" && s != "<nil>" {
+				out = append(out, s)
+			}
+		}
+		return graphEnrichCompactStrings(out)
+	default:
+		s := strings.TrimSpace(fmt.Sprint(v))
+		if s != "" && s != "<nil>" {
+			return []string{s}
+		}
+		return nil
+	}
+}
+
+func graphEnrichCompactStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
 // ensurePersistInvariants applies minimal required defaults before Validate().
 // This keeps repository writes robust even when callers bypass ContractNormalizer.
 func ensurePersistInvariants(fragment *models.HorizonFragment) {
@@ -237,7 +367,18 @@ func (r *HorizonFragmentsRepository) WithVertexSearchDelete(deleteFn func(ctx co
 // WithOnUpsert registers a best-effort callback called after Create/Update succeeds.
 // Intended for side-effects like linking/enriching Entities.
 func (r *HorizonFragmentsRepository) WithOnUpsert(fn func(ctx context.Context, fragment *models.HorizonFragment)) *HorizonFragmentsRepository {
-	r.onUpsert = fn
+	if fn == nil {
+		return r
+	}
+	if r.onUpsert == nil {
+		r.onUpsert = fn
+		return r
+	}
+	prev := r.onUpsert
+	r.onUpsert = func(ctx context.Context, fragment *models.HorizonFragment) {
+		prev(ctx, fragment)
+		fn(ctx, fragment)
+	}
 	return r
 }
 
@@ -687,6 +828,9 @@ func (r *HorizonFragmentsRepository) Create(ctx context.Context, fragment *model
 	if err := fragment.Validate(); err != nil {
 		return "", fmt.Errorf("validation error: %w", err)
 	}
+	if err := validateForbiddenSyntheticPlaceholderForCreate(fragment); err != nil {
+		return "", err
+	}
 	cp := strings.TrimSpace(fragment.CanonicalPath)
 	if cp != "" && !strings.HasPrefix(cp, "/supply-link/") {
 		if err := taxonomy.ValidateCanonicalPath(cp); err != nil {
@@ -739,6 +883,8 @@ func (r *HorizonFragmentsRepository) Create(ctx context.Context, fragment *model
 		doc = r.col.Doc(canonicalPathDocID(tenantKey, cp))
 	}
 	fragment.ID = doc.ID
+
+	r.applyGraphEnrich(ctx, fragment)
 
 	// Build index paths for search/filtering
 	fragment.IndexPaths = models.BuildIndexPaths(fragment, nil)
@@ -1208,6 +1354,7 @@ func (r *HorizonFragmentsRepository) updateWithOptions(ctx context.Context, frag
 		return ErrInvalidDocument
 	}
 	PrepareFragmentForValidation(fragment)
+	r.applyGraphEnrich(ctx, fragment)
 	if err := fragment.Validate(); err != nil {
 		return fmt.Errorf("validation error: %w", err)
 	}
@@ -1293,7 +1440,7 @@ func (r *HorizonFragmentsRepository) UpdateGovernance(ctx context.Context, id st
 		bestEffortAssembleCanonicalPathFromParts(&fragment)
 		// Best-effort: shared canonical-path normalization at repository boundary.
 		canonical.NormalizeFragmentForPersist(&fragment)
-		graphenrich.ApplyFragmentHeuristics(&fragment)
+		r.applyGraphEnrich(ctx, &fragment)
 		fragment.IndexPaths = models.BuildIndexPaths(&fragment, nil)
 		return tx.Set(docRef, fragment)
 	})

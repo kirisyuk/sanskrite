@@ -95,6 +95,25 @@ func ResolveEdgeDirectionAutoFix(
 			Reason:     "canonicalize: MARKET * ORGANIZATION -> ORGANIZATION PARTICIPATES_IN MARKET",
 			Confidence: 0.95,
 		}, true
+	// PRODUCT <-> MARKET should use TRADED_IN, not PARTICIPATES_IN/DEPENDS_ON.
+	case edgeType != horizonmodels.DependencyTypeTradedIn &&
+		sourceType == horizonmodels.FragmentTypeProduct &&
+		targetType == horizonmodels.FragmentTypeMarket:
+		return EdgeDirectionAutoFix{
+			NewType:    horizonmodels.DependencyTypeTradedIn,
+			ShouldSwap: false,
+			Reason:     "canonicalize: PRODUCT * MARKET -> PRODUCT TRADED_IN MARKET",
+			Confidence: 0.95,
+		}, true
+	case edgeType != horizonmodels.DependencyTypeTradedIn &&
+		sourceType == horizonmodels.FragmentTypeMarket &&
+		targetType == horizonmodels.FragmentTypeProduct:
+		return EdgeDirectionAutoFix{
+			NewType:    horizonmodels.DependencyTypeTradedIn,
+			ShouldSwap: true,
+			Reason:     "canonicalize: MARKET * PRODUCT -> PRODUCT TRADED_IN MARKET",
+			Confidence: 0.95,
+		}, true
 	case edgeType == horizonmodels.DependencyTypeInvestsIn &&
 		sourceType == horizonmodels.FragmentTypeMarket &&
 		targetType == horizonmodels.FragmentTypeOrganization:

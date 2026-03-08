@@ -7,8 +7,11 @@ func TestClassifyPlaceholderCanonicalPath(t *testing.T) {
 		path string
 		want PlaceholderPathKind
 	}{
+		{"/fac/na/general-production", PlaceholderPathFacilitySynthetic},
 		{"/fac/na/port-of-shanghai", PlaceholderPathFacilityUnknownGeo},
+		{"/org/na/retailer", PlaceholderPathOrgSynthetic},
 		{"/org/na/bureau-of-land-management", PlaceholderPathOrgUnknownJurisdiction},
+		{"/gov/na/ministry-of", PlaceholderPathGovSynthetic},
 		{"/gov/na/navy", PlaceholderPathGovUnknownJurisdiction},
 		{"/loc/us/na/na", PlaceholderPathLocPlaceholderAdmin12},
 		{"/loc/us/california/na", PlaceholderPathLocPlaceholderAdmin2},
@@ -30,7 +33,7 @@ func TestNormalizePlaceholderCanonicalPath(t *testing.T) {
 	}{
 		{"/loc/us/na/na", "/loc/us", true},
 		{"/loc/us/california/na", "/loc/us/california", true},
-		{"/fac/na/general-production", "", false},
+		{"/fac/na/unresolved-plant", "", false},
 	}
 	for _, tc := range cases {
 		got, ok := NormalizePlaceholderCanonicalPath(tc.path)

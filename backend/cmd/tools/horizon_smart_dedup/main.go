@@ -676,7 +676,13 @@ func main() {
 		log.Fatalf("FATAL: failed to init GCS client: %v", err)
 	}
 
-	bucketName := getEnvDefault("HORIZON_FRAGMENTS_BUCKET", fmt.Sprintf("%s-horizon-fragments", *projectID))
+	bucketName := firstNonEmpty(
+		strings.TrimSpace(os.Getenv("ETIGRAM_FRAGMENTS_BUCKET")),
+		strings.TrimSpace(os.Getenv("HORIZON_FRAGMENTS_BUCKET")),
+	)
+	if bucketName == "" {
+		bucketName = defaultHorizonFragmentsBucket(*projectID)
+	}
 	log.Printf("GCS bucket: %s", bucketName)
 
 	fragmentsRepo := repo.NewHorizonFragmentsRepository(db).
@@ -921,7 +927,7 @@ func main() {
 	productNameIndex := make(map[string][]*models.HorizonFragment)            // product_name -> product fragments
 	productAliasIndex := make(map[string][]*models.HorizonFragment)           // product_alias_key -> product fragments (label/short/legal + legacy slug aliases)
 	personPhoneticIndex := make(map[string][]*models.HorizonFragment)         // phonetic_key -> person fragments (catches Tahnoon/Tahnoun, Khalid/Halid)
-	orgPhoneticIndex := make(map[string][]*models.HorizonFragment)             // type:org:iso2:phonetic_key -> org fragments (telecom/telekom, c/k transliteration)
+	orgPhoneticIndex := make(map[string][]*models.HorizonFragment)            // type:org:iso2:phonetic_key -> org fragments (telecom/telekom, c/k transliteration)
 
 	for _, f := range fragments {
 		if f == nil {
@@ -2789,6 +2795,23 @@ SUMMARY:
 	if !*apply {
 		log.Printf("\n[DRY-RUN] No changes made. Use --apply to execute.")
 	}
+}
+
+func defaultHorizonFragmentsBucket(projectID string) string {
+	projectID = strings.TrimSpace(projectID)
+	if strings.EqualFold(projectID, "etigram") {
+		return "etigram-horizon-fragments"
+	}
+	return fmt.Sprintf("%s-horizon-fragments", projectID)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 func loadAllFragments(ctx context.Context, db *firestore.Client, tenantID, typeFilter string) ([]*models.HorizonFragment, error) {

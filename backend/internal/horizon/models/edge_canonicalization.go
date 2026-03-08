@@ -343,12 +343,12 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		targetType == FragmentTypeFacility {
 		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET DEPENDS_ON FACILITY -> FACILITY PARTICIPATES_IN MARKET"
 	}
-	// DEPENDS(MARKET → PRODUCT) → PARTICIPATES_IN (swap)
-	// Market "depends on" product category means product participates in that market.
+	// DEPENDS(MARKET → PRODUCT) → TRADED_IN (swap)
+	// Market "depends on" product category usually means the product is traded/price-discovered in that market.
 	if edgeType == DependencyTypeDependsOn &&
 		sourceType == FragmentTypeMarket &&
 		targetType == FragmentTypeProduct {
-		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET DEPENDS_ON PRODUCT -> PRODUCT PARTICIPATES_IN MARKET"
+		return DependencyTypeTradedIn, true, true, "canonicalize: MARKET DEPENDS_ON PRODUCT -> PRODUCT TRADED_IN MARKET"
 	}
 
 	// REGULATES(MARKET → ORGANIZATION) → REGULATES (swap)
@@ -395,12 +395,12 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		return DependencyTypeDominates, true, true, "canonicalize: MARKET DOMINATES ENTITY -> ENTITY DOMINATES MARKET"
 	}
 
-	// PRODUCES(MARKET → PRODUCT) → PARTICIPATES_IN (swap)
-	// A market doesn't "produce" a product; this usually means the product participates in that market.
+	// PRODUCES(MARKET → PRODUCT) → TRADED_IN (swap)
+	// A market doesn't "produce" a product; best-effort intent is that the product is traded in that market.
 	if edgeType == DependencyTypeProduces &&
 		sourceType == FragmentTypeMarket &&
 		targetType == FragmentTypeProduct {
-		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET PRODUCES PRODUCT -> PRODUCT PARTICIPATES_IN MARKET"
+		return DependencyTypeTradedIn, true, true, "canonicalize: MARKET PRODUCES PRODUCT -> PRODUCT TRADED_IN MARKET"
 	}
 
 	// PRODUCES(MARKET → FACILITY) → PARTICIPATES_IN (swap)
@@ -444,12 +444,12 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		return DependencyTypeTransformsInto, false, true, "canonicalize: PRODUCT PRODUCES PRODUCT -> PRODUCT TRANSFORMS_INTO PRODUCT"
 	}
 
-	// SUPPLIES_TO(PRODUCT → MARKET) → PARTICIPATES_IN
-	// If a product supplies to a market, canonical intent is market participation/coverage.
+	// SUPPLIES_TO(PRODUCT → MARKET) → TRADED_IN
+	// If a product supplies to a market, canonical intent is market trading/price discovery.
 	if edgeType == DependencyTypeSuppliesTo &&
 		sourceType == FragmentTypeProduct &&
 		targetType == FragmentTypeMarket {
-		return DependencyTypeParticipatesIn, false, true, "canonicalize: PRODUCT SUPPLIES_TO MARKET -> PRODUCT PARTICIPATES_IN MARKET"
+		return DependencyTypeTradedIn, false, true, "canonicalize: PRODUCT SUPPLIES_TO MARKET -> PRODUCT TRADED_IN MARKET"
 	}
 
 	// OPERATES_IN(GEO → ENTITY) is reversed; canonicalize to ENTITY LOCATED_IN GEO (swap).
@@ -460,13 +460,32 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		return DependencyTypeLocatedIn, true, true, "canonicalize: GEO OPERATES_IN ENTITY -> ENTITY LOCATED_IN GEO"
 	}
 
-	// PARTICIPATES_IN(PRODUCT → MARKET) → DEPENDS_ON (swap)
-	// Market depends on the product category/value chain, not vice versa.
-	// NOTE: per policy, allow PRODUCT PARTICIPATES_IN MARKET (no canonicalization).
+	// PARTICIPATES_IN(MARKET → PRODUCT) → TRADED_IN (swap)
+	// Product is traded in the market; actors participate in markets.
 	if edgeType == DependencyTypeParticipatesIn &&
 		sourceType == FragmentTypeMarket &&
 		targetType == FragmentTypeProduct {
-		return DependencyTypeParticipatesIn, true, true, "canonicalize: MARKET PARTICIPATES_IN PRODUCT -> PRODUCT PARTICIPATES_IN MARKET"
+		return DependencyTypeTradedIn, true, true, "canonicalize: MARKET PARTICIPATES_IN PRODUCT -> PRODUCT TRADED_IN MARKET"
+	}
+	if edgeType == DependencyTypeParticipatesIn &&
+		sourceType == FragmentTypeProduct &&
+		targetType == FragmentTypeMarket {
+		return DependencyTypeTradedIn, false, true, "canonicalize: PRODUCT PARTICIPATES_IN MARKET -> PRODUCT TRADED_IN MARKET"
+	}
+	if edgeType == DependencyTypeRelatedTo &&
+		sourceType == FragmentTypeProduct &&
+		targetType == FragmentTypeMarket {
+		return DependencyTypeTradedIn, false, true, "canonicalize: PRODUCT RELATED_TO MARKET -> PRODUCT TRADED_IN MARKET"
+	}
+	if edgeType == DependencyTypeRelatedTo &&
+		sourceType == FragmentTypeMarket &&
+		targetType == FragmentTypeProduct {
+		return DependencyTypeTradedIn, true, true, "canonicalize: MARKET RELATED_TO PRODUCT -> PRODUCT TRADED_IN MARKET"
+	}
+	if edgeType == DependencyTypeDependsOn &&
+		sourceType == FragmentTypeProduct &&
+		targetType == FragmentTypeMarket {
+		return DependencyTypeTradedIn, false, true, "canonicalize: PRODUCT DEPENDS_ON MARKET -> PRODUCT TRADED_IN MARKET"
 	}
 
 	// CONSUMES(actor→product) → SUPPLIES_TO (swap): legacy CONSUMES removed from taxonomy.

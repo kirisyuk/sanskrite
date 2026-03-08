@@ -81,6 +81,22 @@ type MaterializedArtifact struct {
 	// NodeRefs lists canonical paths of all participating entities.
 	// Used as a reverse index (Firestore array-contains) to find chains through a given node.
 	NodeRefs []string `json:"nodeRefs,omitempty" firestore:"nodeRefs,omitempty"`
+
+	// Top-level spatial/path indexes for overlap discovery without parsing payload at read time.
+	GeoRefs          []string `json:"geoRefs,omitempty" firestore:"geoRefs,omitempty"`
+	FlowRefs         []string `json:"flowRefs,omitempty" firestore:"flowRefs,omitempty"`
+	ZoneRefs         []string `json:"zoneRefs,omitempty" firestore:"zoneRefs,omitempty"`
+	AffectedZoneRefs []string `json:"affectedZoneRefs,omitempty" firestore:"affectedZoneRefs,omitempty"`
+	AnchorSupplier   string   `json:"anchorSupplier,omitempty" firestore:"anchorSupplier,omitempty"`
+	AnchorCustomer   string   `json:"anchorCustomer,omitempty" firestore:"anchorCustomer,omitempty"`
+	ProductAxis      string   `json:"productAxis,omitempty" firestore:"productAxis,omitempty"`
+
+	// Response-only selection metadata. Not persisted.
+	DiscoverySource string   `json:"discoverySource,omitempty" firestore:"-"`
+	DiscoveryReason string   `json:"discoveryReason,omitempty" firestore:"-"`
+	MatchedRefs     []string `json:"matchedRefs,omitempty" firestore:"-"`
+	OverlapScore    float64  `json:"overlapScore,omitempty" firestore:"-"`
+	IsPinned        bool     `json:"isPinned,omitempty" firestore:"-"`
 }
 
 // Validate checks if MaterializedArtifact is valid.

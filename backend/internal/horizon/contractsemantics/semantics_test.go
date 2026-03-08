@@ -44,3 +44,43 @@ func TestEdgeLayerClassification(t *testing.T) {
 		t.Fatalf("expected interpretive, got %s", got)
 	}
 }
+
+func TestSupplyChainContractDoesNotLeakOverlayOnlyEdges(t *testing.T) {
+	profile := ProfileForDomainMode(taxonomy.DomainModeSupplyChain)
+	for _, forbidden := range []models.DependencyType{
+		models.DependencyTypeRegulates,
+		models.DependencyTypeControlsAccess,
+		models.DependencyTypeImposesCondition,
+		models.DependencyTypeGatekeepsDecision,
+		models.DependencyTypeUsesMechanism,
+		models.DependencyTypeAppliesTo,
+		models.DependencyTypeInfluences,
+		models.DependencyTypeDependsOn,
+	} {
+		if ModeAllowsEdge(taxonomy.DomainModeSupplyChain, forbidden) {
+			t.Fatalf("supply_chain must not allow %s", forbidden)
+		}
+	}
+	if len(profile.PathCarriedEdges) == 0 {
+		t.Fatal("expected path-carried edges for supply_chain")
+	}
+}
+
+func TestGovernanceAndPolicyRemainOverlayContracts(t *testing.T) {
+	for _, mode := range []string{taxonomy.DomainModeGovernance, taxonomy.DomainModeAssurance, taxonomy.DomainModePolicyImpact, taxonomy.DomainModeStrategic} {
+		profile := ProfileForDomainMode(mode)
+		if profile.PrimaryLayer != GraphLayerContractOverlay {
+			t.Fatalf("%s primary layer=%s, want contract_overlay", mode, profile.PrimaryLayer)
+		}
+		for _, forbidden := range []models.DependencyType{
+			models.DependencyTypeProduces,
+			models.DependencyTypeSuppliesTo,
+			models.DependencyTypeTransformsInto,
+			models.DependencyTypeExtractsFrom,
+		} {
+			if ModeAllowsEdge(mode, forbidden) {
+				t.Fatalf("%s must not allow path-carried edge %s", mode, forbidden)
+			}
+		}
+	}
+}

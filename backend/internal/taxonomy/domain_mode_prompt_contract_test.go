@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
@@ -25,7 +25,7 @@ func TestDomainModePromptRelationSetsMatchUSOTAllowlist(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.mode, func(t *testing.T) {
-			expected := makeSet(edgesemantics.EdgeAllowlistStrings([]string{tc.mode}))
+			expected := makeSet(contractsemantics.AllowedEdgeStringsForDomainMode(tc.mode))
 			got := makeSet(parseCSV(tc.csv))
 			if !setsEqual(expected, got) {
 				t.Fatalf("prompt relation set drift for mode=%s; expected=%v got=%v", tc.mode, sortedSetValues(expected), sortedSetValues(got))

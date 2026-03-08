@@ -24,7 +24,7 @@ func TestFacilityKindFromSlug(t *testing.T) {
 		{"datacenter-ashburn", FacilityKindDatacenter},
 		{"power-plant-belchatow", FacilityKindPowerPlant},
 		{"pepsico-cork-concentrate-plant", FacilityKindFactory},
-		{"marwin-general-distribution", FacilityKindWarehouse},
+		{"marwin-distribution-center", FacilityKindWarehouse},
 		{"munich-airport-cargo-terminal", FacilityKindAirport},
 		{"unknown-facility-xyz", FacilityKindOther},
 	}
@@ -67,8 +67,8 @@ func TestInferFacilityKind(t *testing.T) {
 	}
 
 	got = InferFacilityKind(
-		"/fac/kz/marwin-general-distribution",
-		"Marwin General Distribution",
+		"/fac/kz/marwin-distribution-center",
+		"Marwin Distribution Center",
 		"Logistics hub",
 		"",
 		"",

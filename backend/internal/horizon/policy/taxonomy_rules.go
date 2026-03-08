@@ -240,7 +240,8 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 				{EdgeType: "INVESTS_IN", Direction: "ORG|PERSON → ORG|PROGRAM|PRODUCT", ValidSource: []string{"ORGANIZATION", "PERSON"}, ValidTarget: []string{"ORGANIZATION", "PROGRAM", "PRODUCT"}},
 				// PROGRAM can participate in markets (e.g., government programs active in a sector/segment).
 				// GOV entities (/gov/...) may also use REGULATES/CONTROLS_ACCESS/INFLUENCES toward MARKET.
-				{EdgeType: "PARTICIPATES_IN", Direction: "ORG|FACILITY|COMMUNITY|PRODUCT|PROGRAM → MARKET", ValidSource: []string{"ORGANIZATION", "FACILITY", "COMMUNITY", "PRODUCT", "PROGRAM"}, ValidTarget: []string{"MARKET"}},
+				{EdgeType: "PARTICIPATES_IN", Direction: "ORG|FACILITY|COMMUNITY|PROGRAM → MARKET", ValidSource: []string{"ORGANIZATION", "FACILITY", "COMMUNITY", "PROGRAM"}, ValidTarget: []string{"MARKET"}},
+				{EdgeType: "TRADED_IN", Direction: "PRODUCT → MARKET", ValidSource: []string{"PRODUCT"}, ValidTarget: []string{"MARKET"}},
 				{EdgeType: "DOMINATES", Direction: "ORG|FACILITY|COMMUNITY → MARKET", ValidSource: []string{"ORGANIZATION", "FACILITY", "COMMUNITY"}, ValidTarget: []string{"MARKET"}},
 				{EdgeType: "HAS_MARKET_SEGMENT", Direction: "MARKET → MARKET", ValidSource: []string{"MARKET"}, ValidTarget: []string{"MARKET"}},
 				{EdgeType: "ADMINISTERS", Direction: "ORGANIZATION|GEO_REGION → ORGANIZATION|PROGRAM|GEO_REGION|FACILITY|DEPOSIT", ValidSource: []string{"ORGANIZATION", "GEO_REGION"}, ValidTarget: []string{"ORGANIZATION", "PROGRAM", "GEO_REGION", "FACILITY", "DEPOSIT"}, Description: "Government hierarchy"},

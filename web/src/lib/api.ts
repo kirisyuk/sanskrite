@@ -2380,7 +2380,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
    * GET /api/horizon/supply-chains/by-lens?lensId=...
    * Returns materialized supply chain artifacts for a lens.
    */
-  async getSupplyChainsByLens(lensId: string): Promise<{ chains: any[]; total: number; lensId: string }> {
+  async getSupplyChainsByLens(lensId: string): Promise<{ chains: any[]; total: number; lensId: string; scopedTotal?: number; discoveredTotal?: number }> {
     try {
       const response = await this.client.get('/api/horizon/supply-chains/by-lens', {
         params: { lensId },

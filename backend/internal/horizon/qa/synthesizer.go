@@ -105,6 +105,7 @@ func (s *AnswerSynthesizer) Synthesize(ctx context.Context, contextPrompt string
 		}
 	}
 	answer.TracePaths = simResult.TracePaths
+	answer.ChainImpacts = append(answer.ChainImpacts, simResult.ChainImpacts...)
 
 	// Evidence
 	if evArr, ok := m["evidence"].([]interface{}); ok {
@@ -386,7 +387,37 @@ func applyScenarioFallbacks(answer *horizonmodels.QAAnswer, simResult *horizonmo
 func fallbackEffectsFromSimulation(simResult *horizonmodels.SimulationResult) ([]horizonmodels.QAEffect, []horizonmodels.QAEffect) {
 	first := make([]horizonmodels.QAEffect, 0, 3)
 	second := make([]horizonmodels.QAEffect, 0, 3)
+	for _, ci := range simResult.ChainImpacts {
+		summary := strings.TrimSpace(ci.DisplayName)
+		if summary == "" {
+			continue
+		}
+		if ci.BottleneckSummary != "" {
+			summary += " is exposed through " + ci.BottleneckSummary
+		} else {
+			summary += " shows rising path stress"
+		}
+		effect := horizonmodels.QAEffect{
+			Summary:          summary,
+			Horizon:          horizonForChainImpact(ci),
+			Severity:         severityForAmplitude(maxFloat(ci.PathStressScore, ci.MaxAmplitude)),
+			AffectedEntities: []string{strings.TrimSpace(ci.DisplayName)},
+			Mechanism:        chainMechanismLabel(ci),
+		}
+		if ci.BottleneckLegIndex <= 0 {
+			if len(first) < 3 {
+				first = append(first, effect)
+			}
+			continue
+		}
+		if len(second) < 3 {
+			second = append(second, effect)
+		}
+	}
 	for _, ni := range simResult.NodeImpacts {
+		if len(first) >= 3 && len(second) >= 3 {
+			break
+		}
 		axis, amp := strongestImpactAxis(ni.AxisAmplitudes)
 		summary := humanizeImpactSummary(ni, axis, amp)
 		effect := horizonmodels.QAEffect{
@@ -411,6 +442,27 @@ func fallbackEffectsFromSimulation(simResult *horizonmodels.SimulationResult) ([
 
 func fallbackWatchpoints(simResult *horizonmodels.SimulationResult) []horizonmodels.QAWatchpoint {
 	out := make([]horizonmodels.QAWatchpoint, 0, 3)
+	for _, ci := range simResult.ChainImpacts {
+		if len(out) >= 3 {
+			break
+		}
+		signal := strings.TrimSpace(ci.BottleneckSummary)
+		if signal == "" {
+			signal = strings.TrimSpace(ci.DisplayName)
+		}
+		if signal == "" {
+			continue
+		}
+		why := "Confirms whether route stress is concentrating on a specific leg."
+		if len(ci.DominantFactors) > 0 {
+			why = "Watch for " + strings.Join(ci.DominantFactors[:minInt(3, len(ci.DominantFactors))], ", ") + " on the stressed chain."
+		}
+		out = append(out, horizonmodels.QAWatchpoint{
+			Signal:         signal,
+			WhyItMatters:   why,
+			ExpectedWithin: horizonForChainImpact(ci),
+		})
+	}
 	for _, le := range simResult.LeafEvidence {
 		if len(out) >= 3 {
 			break
@@ -429,6 +481,41 @@ func fallbackWatchpoints(simResult *horizonmodels.SimulationResult) []horizonmod
 		})
 	}
 	return out
+}
+
+func horizonForChainImpact(ci horizonmodels.ChainImpact) string {
+	switch {
+	case ci.RecoveryLatencyHours >= 24*30 || ci.BottleneckLegIndex > 0:
+		return "medium_term"
+	case ci.PathStressScore >= 0.65:
+		return "short_term"
+	default:
+		return "immediate"
+	}
+}
+
+func chainMechanismLabel(ci horizonmodels.ChainImpact) string {
+	parts := make([]string, 0, 3)
+	if len(ci.FlowRefs) > 0 {
+		parts = append(parts, "flow-constrained")
+	}
+	if len(ci.AffectedZoneRefs) > 0 {
+		parts = append(parts, "affected-zone pressure")
+	}
+	if len(ci.ZoneRefs) > 0 && len(ci.AffectedZoneRefs) == 0 {
+		parts = append(parts, "zone-bound route")
+	}
+	if len(parts) == 0 {
+		return "path_stress"
+	}
+	return strings.Join(parts, " + ")
+}
+
+func maxFloat(a, b float64) float64 {
+	if b > a {
+		return b
+	}
+	return a
 }
 
 func strongestImpactAxis(axisAmplitudes map[string]float64) (string, float64) {

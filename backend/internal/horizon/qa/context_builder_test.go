@@ -39,9 +39,23 @@ func TestBuildContext_ImpactMap(t *testing.T) {
 			{
 				FragmentID:    "f1",
 				CanonicalPath: "/org/pt-vale-indonesia",
-				Axis:         "physical_flow/supply",
-				Amplitude:    0.45,
-				Summary:      "AIS: 3 vessels delayed",
+				Axis:          "physical_flow/supply",
+				Amplitude:     0.45,
+				Summary:       "AIS: 3 vessels delayed",
+			},
+		},
+		ChainImpacts: []horizonmodels.ChainImpact{
+			{
+				DisplayName:          "Indonesia Nickel Chain",
+				PathStressScore:      0.74,
+				AffectedNodes:        2,
+				TotalNodes:           3,
+				AffectedLegs:         1,
+				LegCount:             1,
+				BottleneckSummary:    "/fac/id/port -> /sea-route/malacca -> /fac/cn/refinery",
+				RecoveryLatencyHours: 96,
+				DominantFactors:      []string{"affected_zone_pressure", "reroute_penalty"},
+				FlowRefs:             []string{"malacca_metals_east_asia"},
 			},
 		},
 	}
@@ -62,6 +76,12 @@ func TestBuildContext_ImpactMap(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "PROPAGATION CHAINS") {
 		t.Error("expected PROPAGATION CHAINS section")
+	}
+	if !strings.Contains(prompt, "PATH STRESS / BOTTLENECK CHAINS") {
+		t.Error("expected chain stress section")
+	}
+	if !strings.Contains(prompt, "Indonesia Nickel Chain") {
+		t.Error("expected chain impact in context")
 	}
 }
 

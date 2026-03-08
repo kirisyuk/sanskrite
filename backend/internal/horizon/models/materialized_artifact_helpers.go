@@ -292,6 +292,75 @@ func SummarizeSupplyChainPathBindings(parsed *SupplyChainPathPayload) SupplyChai
 	return out
 }
 
+// PopulateSupplyChainPathIndexes fills top-level overlap indexes from payload and labels.
+// It is safe for both new and legacy artifacts and does not require persistence.
+func PopulateSupplyChainPathIndexes(artifact *MaterializedArtifact) {
+	if artifact == nil || artifact.Kind != MaterializedKindSupplyChainPath {
+		return
+	}
+	artifact.NodeRefs = uniqueTrimmedStrings(artifact.NodeRefs)
+	artifact.GeoRefs = uniqueTrimmedStrings(artifact.GeoRefs)
+	artifact.FlowRefs = uniqueTrimmedStrings(artifact.FlowRefs)
+	artifact.ZoneRefs = uniqueTrimmedStrings(artifact.ZoneRefs)
+	artifact.AffectedZoneRefs = uniqueTrimmedStrings(artifact.AffectedZoneRefs)
+
+	if parsed, err := ParseSupplyChainPathPayload(artifact.Payload); err == nil && parsed != nil {
+		summary := SummarizeSupplyChainPathBindings(parsed)
+		artifact.NodeRefs = mergeUniqueStrings(artifact.NodeRefs, collectParsedNodeRefs(parsed))
+		artifact.GeoRefs = mergeUniqueStrings(artifact.GeoRefs, summary.GeoRefs)
+		artifact.FlowRefs = mergeUniqueStrings(artifact.FlowRefs, summary.FlowRefs)
+		artifact.ZoneRefs = mergeUniqueStrings(artifact.ZoneRefs, summary.ZoneRefs)
+		artifact.AffectedZoneRefs = mergeUniqueStrings(artifact.AffectedZoneRefs, summary.AffectedZoneRefs)
+	}
+
+	if artifact.Labels != nil {
+		if artifact.AnchorSupplier == "" {
+			artifact.AnchorSupplier = strings.TrimSpace(artifact.Labels["anchorSupplier"])
+		}
+		if artifact.AnchorCustomer == "" {
+			artifact.AnchorCustomer = strings.TrimSpace(artifact.Labels["anchorCustomer"])
+		}
+		if artifact.ProductAxis == "" {
+			artifact.ProductAxis = strings.TrimSpace(artifact.Labels["productAxis"])
+		}
+	}
+}
+
+func collectParsedNodeRefs(parsed *SupplyChainPathPayload) []string {
+	if parsed == nil || len(parsed.Nodes) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(parsed.Nodes))
+	for _, node := range parsed.Nodes {
+		ref := strings.TrimSpace(node.Ref)
+		if ref != "" {
+			out = append(out, ref)
+		}
+	}
+	return uniqueTrimmedStrings(out)
+}
+
+func uniqueTrimmedStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // FindNodeByRef finds a node index by canonical path reference.
 func FindNodeByRef(nodes []SupplyChainPathNode, ref string) int {
 	for i, node := range nodes {

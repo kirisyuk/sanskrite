@@ -252,6 +252,137 @@ func TestParseSupplyChains_OrgToFacilityUsesOwns(t *testing.T) {
 	}
 }
 
+func TestParseSupplyChains_FacilityToOrgAbstainsInsteadOfSuppliesTo(t *testing.T) {
+	parser := NewSupplyChainParser()
+	chains := []agents.SupplyChain{
+		{
+			Confidence: 0.84,
+			Nodes: []agents.SupplyChainNode{
+				{
+					CanonicalPath: "/fac/nl/pernis-refinery",
+					Type:          "FACILITY",
+					Name:          "Pernis Refinery",
+				},
+				{
+					CanonicalPath: "/org/gb/shell-plc",
+					Type:          "ORGANIZATION",
+					Name:          "Shell Plc",
+				},
+			},
+		},
+	}
+
+	result, err := parser.ParseSupplyChains(chains, "/fac/nl/pernis-refinery")
+	if err != nil {
+		t.Fatalf("ParseSupplyChains() error = %v", err)
+	}
+	for _, edge := range result.Edges {
+		if edge != nil && edge.RelationType == string(models.DependencyTypeSuppliesTo) {
+			t.Fatalf("unexpected SUPPLIES_TO edge: %s -> %s", edge.SourceCanonicalPath, edge.TargetCanonicalPath)
+		}
+	}
+	if result.Stats.EdgesAbstainedUnknownPair != 1 {
+		t.Fatalf("EdgesAbstainedUnknownPair=%d, want 1", result.Stats.EdgesAbstainedUnknownPair)
+	}
+}
+
+func TestParseSupplyChains_SkipsSelfLoopSupplySegment(t *testing.T) {
+	parser := NewSupplyChainParser()
+	chains := []agents.SupplyChain{
+		{
+			Confidence: 0.68,
+			Reason:     "Internal port operations",
+			Nodes: []agents.SupplyChainNode{
+				{CanonicalPath: "/fac/qa/ras-laffan-port", Type: "FACILITY", Name: "Ras Laffan Port"},
+				{CanonicalPath: "/product/services/logistics/port-operations", Type: "PRODUCT", Name: "Port Operations"},
+				{CanonicalPath: "/fac/qa/ras-laffan-port", Type: "FACILITY", Name: "Ras Laffan Port"},
+			},
+		},
+	}
+
+	result, err := parser.ParseSupplyChains(chains, "/fac/qa/ras-laffan-port")
+	if err != nil {
+		t.Fatalf("ParseSupplyChains() error = %v", err)
+	}
+	if len(result.SupplyLinkSegments) != 0 {
+		t.Fatalf("expected no SupplyLinkSegments, got %d", len(result.SupplyLinkSegments))
+	}
+	if result.Stats.SegmentsSkippedSelfLoop != 1 {
+		t.Fatalf("SegmentsSkippedSelfLoop=%d, want 1", result.Stats.SegmentsSkippedSelfLoop)
+	}
+	for _, edge := range result.Edges {
+		if edge != nil && edge.RelationType == string(models.DependencyTypeSuppliesTo) {
+			t.Fatalf("unexpected SUPPLIES_TO edge: %s -> %s", edge.SourceCanonicalPath, edge.TargetCanonicalPath)
+		}
+	}
+}
+
+func TestParseSupplyChains_SkipsInternalSupportSupplySegment(t *testing.T) {
+	parser := NewSupplyChainParser()
+	chains := []agents.SupplyChain{
+		{
+			Confidence: 0.71,
+			Reason:     "Port operational support for LNG exports",
+			Nodes: []agents.SupplyChainNode{
+				{CanonicalPath: "/fac/qa/ras-laffan-port", Type: "FACILITY", Name: "Ras Laffan Port"},
+				{CanonicalPath: "/product/services/logistics/port-operations", Type: "PRODUCT", Name: "Port Operations"},
+				{CanonicalPath: "/org/qa/qatarenergy", Type: "ORGANIZATION", Name: "QatarEnergy"},
+			},
+		},
+	}
+
+	result, err := parser.ParseSupplyChains(chains, "/fac/qa/ras-laffan-port")
+	if err != nil {
+		t.Fatalf("ParseSupplyChains() error = %v", err)
+	}
+	if len(result.SupplyLinkSegments) != 0 {
+		t.Fatalf("expected no SupplyLinkSegments, got %d", len(result.SupplyLinkSegments))
+	}
+	if result.Stats.SegmentsSkippedSupport != 1 {
+		t.Fatalf("SegmentsSkippedSupport=%d, want 1", result.Stats.SegmentsSkippedSupport)
+	}
+	for _, edge := range result.Edges {
+		if edge != nil && edge.RelationType == string(models.DependencyTypeSuppliesTo) {
+			t.Fatalf("unexpected SUPPLIES_TO edge: %s -> %s", edge.SourceCanonicalPath, edge.TargetCanonicalPath)
+		}
+	}
+}
+
+func TestParseSupplyChains_RewritesFacilityProductOwnerOrgToOverlay(t *testing.T) {
+	parser := NewSupplyChainParser()
+	chains := []agents.SupplyChain{
+		{
+			Confidence: 0.77,
+			Reason:     "Terminal operated by QatarEnergy",
+			Nodes: []agents.SupplyChainNode{
+				{CanonicalPath: "/fac/gb/south-hook-terminal", Type: "FACILITY", Name: "South Hook LNG Terminal"},
+				{CanonicalPath: "/product/raw/hydrocarbon/distribution/lng", Type: "PRODUCT", Name: "Liquefied Natural Gas"},
+				{CanonicalPath: "/org/qa/qatarenergy", Type: "ORGANIZATION", Name: "QatarEnergy", Role: "owner"},
+			},
+		},
+	}
+
+	result, err := parser.ParseSupplyChains(chains, "/org/qa/qatarenergy")
+	if err != nil {
+		t.Fatalf("ParseSupplyChains() error = %v", err)
+	}
+	if len(result.SupplyLinkSegments) != 0 {
+		t.Fatalf("expected no SupplyLinkSegments, got %d", len(result.SupplyLinkSegments))
+	}
+	var foundOwns bool
+	for _, edge := range result.Edges {
+		if edge != nil &&
+			edge.RelationType == string(models.DependencyTypeOwns) &&
+			edge.SourceCanonicalPath == "/org/qa/qatarenergy" &&
+			edge.TargetCanonicalPath == "/fac/gb/south-hook-terminal" {
+			foundOwns = true
+		}
+	}
+	if !foundOwns {
+		t.Fatalf("expected OWNS overlay edge instead of SUPPLIES_TO")
+	}
+}
+
 func TestParseSupplyChains_GovToFacilityUsesControls(t *testing.T) {
 	parser := NewSupplyChainParser()
 	chains := []agents.SupplyChain{

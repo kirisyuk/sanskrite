@@ -25,6 +25,7 @@ const CLUSTER_RADIUS = 40;
 const MARKER_PX = 28;
 const ICON_PX = 16;
 const PIXEL_RATIO = 2;
+const SAME_COORDINATE_PRECISION = 6;
 
 const CLUSTER_RING_RADIUS: maplibregl.ExpressionSpecification = ['step', ['get', 'point_count'], 13, 10, 17, 50, 22, 200, 28];
 const CLUSTER_GLOW_RADIUS: maplibregl.ExpressionSpecification = ['step', ['get', 'point_count'], 16, 10, 19, 50, 24, 200, 30];
@@ -58,6 +59,10 @@ function canAccessMapStyle(map: maplibregl.Map): boolean {
   } catch {
     return false;
   }
+}
+
+function coordinateKey(lon: number, lat: number): string {
+  return `${lon.toFixed(SAME_COORDINATE_PRECISION)}:${lat.toFixed(SAME_COORDINATE_PRECISION)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -160,25 +165,92 @@ function buildFeatureCollection(
   objects: GeoObject[],
   theme: 'dark' | 'light',
 ): GeoJSON.FeatureCollection {
-  const features: GeoJSON.Feature[] = objects.map((obj) => {
-    const lat = obj.coordinates?.lat ?? 0;
-    const lon = obj.coordinates?.lon ?? 0;
-    const { vt, color } = resolveVisualTypeAndColor(obj, theme);
-    return {
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: [lon, lat] },
-      properties: {
-        id: obj.id,
-        iconKey: iconKey(vt, color),
-        color,
-        opacity: obj.inScope === false ? 0.5 : 1.0,
-        type: obj.type,
-        label: obj.label || obj.canonicalPath,
-      },
-    };
-  });
+  const features: GeoJSON.Feature[] = objects.map((obj) => buildPointFeature(obj, theme));
   return { type: 'FeatureCollection', features };
 }
+
+function buildPointFeature(
+  obj: GeoObject,
+  theme: 'dark' | 'light',
+): GeoJSON.Feature<GeoJSON.Point> {
+  const lat = obj.coordinates?.lat ?? 0;
+  const lon = obj.coordinates?.lon ?? 0;
+  const { vt, color } = resolveVisualTypeAndColor(obj, theme);
+  return {
+    type: 'Feature',
+    geometry: { type: 'Point', coordinates: [lon, lat] },
+    properties: {
+      id: obj.id,
+      iconKey: iconKey(vt, color),
+      color,
+      opacity: obj.inScope === false ? 0.5 : 1.0,
+      type: obj.type,
+      label: obj.label || obj.canonicalPath,
+    },
+  };
+}
+
+function buildSpiderFeatureCollection(
+  map: maplibregl.Map,
+  origin: [number, number],
+  pointFeatures: Array<GeoJSON.Feature<GeoJSON.Point>>,
+): GeoJSON.FeatureCollection {
+  const projected = map.project(origin as maplibregl.LngLatLike);
+  const spiderFeatures: GeoJSON.Feature[] = [];
+  const legFeatures: GeoJSON.Feature[] = [];
+  const n = pointFeatures.length;
+
+  for (let i = 0; i < n; i++) {
+    const angle = (2 * Math.PI * i) / Math.max(n, 1);
+    const radius = 30 + (n > 8 ? i * 4 : 0);
+    const offsetPx = {
+      x: projected.x + Math.cos(angle) * radius,
+      y: projected.y + Math.sin(angle) * radius,
+    };
+    const offsetLngLat = map.unproject(offsetPx as maplibregl.PointLike);
+    const leaf = pointFeatures[i];
+
+    spiderFeatures.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [offsetLngLat.lng, offsetLngLat.lat] },
+      properties: { ...(leaf.properties || {}), _spider: true },
+    });
+    legFeatures.push({
+      type: 'Feature',
+      geometry: {
+        type: 'LineString',
+        coordinates: [origin, [offsetLngLat.lng, offsetLngLat.lat]],
+      },
+      properties: {},
+    });
+  }
+
+  return {
+    type: 'FeatureCollection',
+    features: [...legFeatures, ...spiderFeatures],
+  };
+}
+
+function clonePointFeature(feature: GeoJSON.Feature<GeoJSON.Point>): GeoJSON.Feature<GeoJSON.Point> {
+  const coordinates = (feature.geometry as GeoJSON.Point).coordinates as [number, number];
+  return {
+    type: 'Feature',
+    geometry: { type: 'Point', coordinates: [...coordinates] as [number, number] },
+    properties: { ...(feature.properties || {}) },
+  };
+}
+
+export type GeoMarkerSelection =
+  | { kind: 'clear' }
+  | { kind: 'object'; object: GeoObject | null; anchor?: [number, number] }
+  | {
+      kind: 'stack';
+      objects: GeoObject[];
+      anchor: [number, number];
+      canSpiderfy: boolean;
+      spiderfy?: () => void;
+      clearTransient?: () => void;
+    };
 
 // ---------------------------------------------------------------------------
 // Hook
@@ -190,11 +262,12 @@ export function useGeoMarkerLayer(
   styleEpoch: number,
   objects: GeoObject[],
   theme: 'dark' | 'light',
-  onSelect: (obj: GeoObject | null, anchor?: [number, number]) => void,
+  onSelect: (selection: GeoMarkerSelection) => void,
 ) {
   const objectsRef = useRef(objects);
   objectsRef.current = objects;
   const spiderActiveRef = useRef(false);
+  const suppressMapClickClearRef = useRef(false);
 
   const clearSpider = useCallback((m: maplibregl.Map) => {
     if (!spiderActiveRef.current) return;
@@ -211,6 +284,44 @@ export function useGeoMarkerLayer(
     if (!map || !isReady) return;
 
     const isDark = theme === 'dark';
+
+    const renderSpider = (origin: [number, number], pointFeatures: Array<GeoJSON.Feature<GeoJSON.Point>>) => {
+      if (pointFeatures.length === 0) return;
+      clearSpider(map);
+      const spiderFc = buildSpiderFeatureCollection(map, origin, pointFeatures);
+      map.addSource(SPIDER_SRC, { type: 'geojson', data: spiderFc });
+      map.addLayer({
+        id: SPIDER_LEGS,
+        type: 'line',
+        source: SPIDER_SRC,
+        filter: ['==', '$type', 'LineString'],
+        paint: {
+          'line-color': isDark ? 'rgba(148,163,184,0.5)' : 'rgba(100,116,139,0.4)',
+          'line-width': 1,
+          'line-dasharray': [2, 2],
+        },
+      });
+      map.addLayer({
+        id: SPIDER_POINTS,
+        type: 'symbol',
+        source: SPIDER_SRC,
+        filter: ['==', '$type', 'Point'],
+        layout: {
+          'icon-image': ['get', 'iconKey'],
+          'icon-size': 1,
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true,
+        },
+      });
+      spiderActiveRef.current = true;
+    };
+
+    const resolveObjectsByIds = (ids: string[]): GeoObject[] => {
+      const byId = new Map(objectsRef.current.map((obj) => [obj.id, obj] as const));
+      return ids
+        .map((id) => byId.get(id))
+        .filter((obj): obj is GeoObject => Boolean(obj));
+    };
 
     map.addSource(SRC, {
       type: 'geojson',
@@ -294,106 +405,118 @@ export function useGeoMarkerLayer(
     // ---- click handlers ----
 
     const handlePointClick = (e: maplibregl.MapMouseEvent & { features?: maplibregl.MapGeoJSONFeature[] }) => {
+      suppressMapClickClearRef.current = true;
       const feat = e.features?.[0];
       if (!feat) return;
+      const clickedCoords = (feat.geometry as GeoJSON.Point).coordinates as [number, number];
+      const clickedKey = coordinateKey(clickedCoords[0], clickedCoords[1]);
+      const overlaps = map
+        .queryRenderedFeatures(e.point, { layers: [POINTS] })
+        .filter((item) => item.geometry.type === 'Point')
+        .filter((item) => {
+          const coords = (item.geometry as GeoJSON.Point).coordinates as [number, number];
+          return coordinateKey(coords[0], coords[1]) === clickedKey;
+        });
+      const overlapObjects = resolveObjectsByIds(
+        Array.from(new Set(overlaps.map((item) => String(item.properties?.id || '')).filter(Boolean))),
+      );
+      const anchor: [number, number] = [e.lngLat.lng, e.lngLat.lat];
+
+      if (overlapObjects.length > 1) {
+        const spiderFeatures = overlapObjects.map((obj) => buildPointFeature(obj, theme));
+        onSelect({
+          kind: 'stack',
+          objects: overlapObjects,
+          anchor,
+          canSpiderfy: true,
+          spiderfy: () => renderSpider(clickedCoords, spiderFeatures),
+          clearTransient: () => clearSpider(map),
+        });
+        return;
+      }
+
       const id = feat.properties?.id;
       const match = objectsRef.current.find((o) => o.id === id);
-      const anchor: [number, number] = [e.lngLat.lng, e.lngLat.lat];
-      onSelect(match ?? null, anchor);
+      onSelect({ kind: 'object', object: match ?? null, anchor });
     };
 
     const handleClusterClick = (e: maplibregl.MapMouseEvent & { features?: maplibregl.MapGeoJSONFeature[] }) => {
+      suppressMapClickClearRef.current = true;
       const feat = e.features?.[0];
       if (!feat) return;
       const clusterId = feat.properties?.cluster_id;
+      const pointCount = Number(feat.properties?.point_count);
       const src = map.getSource(SRC) as maplibregl.GeoJSONSource;
       if (!src || clusterId == null) return;
 
-      src.getClusterExpansionZoom(clusterId).then((zoom) => {
+      Promise.all([
+        src.getClusterExpansionZoom(clusterId),
+        src.getClusterLeaves(clusterId, Number.isFinite(pointCount) ? Math.min(pointCount, 250) : 50, 0),
+      ]).then(([zoom, leaves]) => {
+        if (!leaves.length) return;
         const center = (feat.geometry as GeoJSON.Point).coordinates as [number, number];
-        if (zoom > CLUSTER_MAX_ZOOM) {
-          src.getClusterLeaves(clusterId, 50, 0).then((leaves) => {
-            if (!leaves.length) return;
-            clearSpider(map);
-            const origin = (leaves[0].geometry as GeoJSON.Point).coordinates as [number, number];
-            const n = leaves.length;
-            const spiderFeatures: GeoJSON.Feature[] = [];
-            const legFeatures: GeoJSON.Feature[] = [];
+        const uniqueCoords = new Set(
+          leaves
+            .filter((leaf) => leaf.geometry.type === 'Point')
+            .map((leaf) => {
+              const coords = (leaf.geometry as GeoJSON.Point).coordinates as [number, number];
+              return coordinateKey(coords[0], coords[1]);
+            }),
+        );
 
-            for (let i = 0; i < n; i++) {
-              const angle = (2 * Math.PI * i) / n;
-              const radius = 30 + (n > 8 ? i * 4 : 0);
-              const projected = map.project(origin as maplibregl.LngLatLike);
-              const offsetPx = {
-                x: projected.x + Math.cos(angle) * radius,
-                y: projected.y + Math.sin(angle) * radius,
-              };
-              const offsetLngLat = map.unproject(offsetPx as maplibregl.PointLike);
-              const leaf = leaves[i];
-
-              spiderFeatures.push({
-                type: 'Feature',
-                geometry: { type: 'Point', coordinates: [offsetLngLat.lng, offsetLngLat.lat] },
-                properties: { ...(leaf.properties || {}), _spider: true },
-              });
-              legFeatures.push({
-                type: 'Feature',
-                geometry: {
-                  type: 'LineString',
-                  coordinates: [origin, [offsetLngLat.lng, offsetLngLat.lat]],
-                },
-                properties: {},
-              });
-            }
-
-            const spiderFc: GeoJSON.FeatureCollection = {
-              type: 'FeatureCollection',
-              features: [...legFeatures, ...spiderFeatures],
-            };
-            map.addSource(SPIDER_SRC, { type: 'geojson', data: spiderFc });
-            map.addLayer({
-              id: SPIDER_LEGS,
-              type: 'line',
-              source: SPIDER_SRC,
-              filter: ['==', '$type', 'LineString'],
-              paint: {
-                'line-color': isDark ? 'rgba(148,163,184,0.5)' : 'rgba(100,116,139,0.4)',
-                'line-width': 1,
-                'line-dasharray': [2, 2],
-              },
-            });
-            map.addLayer({
-              id: SPIDER_POINTS,
-              type: 'symbol',
-              source: SPIDER_SRC,
-              filter: ['==', '$type', 'Point'],
-              layout: {
-                'icon-image': ['get', 'iconKey'],
-                'icon-size': 1,
-                'icon-allow-overlap': true,
-                'icon-ignore-placement': true,
-              },
-            });
-            spiderActiveRef.current = true;
+        if (uniqueCoords.size === 1) {
+          const origin = (leaves[0].geometry as GeoJSON.Point).coordinates as [number, number];
+          const stackObjects = resolveObjectsByIds(
+            Array.from(new Set(leaves.map((leaf) => String(leaf.properties?.id || '')).filter(Boolean))),
+          );
+          const spiderFeatures = leaves
+            .filter((leaf): leaf is GeoJSON.Feature<GeoJSON.Point> => leaf.geometry.type === 'Point')
+            .map((leaf) => clonePointFeature(leaf));
+          clearSpider(map);
+          onSelect({
+            kind: 'stack',
+            objects: stackObjects,
+            anchor: [e.lngLat.lng, e.lngLat.lat],
+            canSpiderfy: spiderFeatures.length > 1,
+            spiderfy: spiderFeatures.length > 1 ? () => renderSpider(origin, spiderFeatures) : undefined,
+            clearTransient: () => clearSpider(map),
           });
+          return;
+        }
+
+        if (zoom > CLUSTER_MAX_ZOOM) {
+          const origin = (leaves[0].geometry as GeoJSON.Point).coordinates as [number, number];
+          const spiderFeatures = leaves
+            .filter((leaf): leaf is GeoJSON.Feature<GeoJSON.Point> => leaf.geometry.type === 'Point')
+            .map((leaf) => clonePointFeature(leaf));
+          renderSpider(origin, spiderFeatures);
         } else {
           clearSpider(map);
+          onSelect({ kind: 'clear' });
           map.easeTo({ center, zoom });
         }
       });
     };
 
     const handleSpiderClick = (e: maplibregl.MapMouseEvent & { features?: maplibregl.MapGeoJSONFeature[] }) => {
+      suppressMapClickClearRef.current = true;
       const feat = e.features?.[0];
       if (!feat) return;
       const id = feat.properties?.id;
       const match = objectsRef.current.find((o) => o.id === id);
       const anchor: [number, number] = [e.lngLat.lng, e.lngLat.lat];
-      onSelect(match ?? null, anchor);
+      onSelect({ kind: 'object', object: match ?? null, anchor });
     };
 
-    const handleMapClick = () => {
+    const handleMapClick = (e: maplibregl.MapMouseEvent) => {
+      if (suppressMapClickClearRef.current) {
+        suppressMapClickClearRef.current = false;
+        return;
+      }
+      const interactiveFeatures = map.queryRenderedFeatures(e.point, { layers: [POINTS, CLUSTERS, SPIDER_POINTS] });
+      if (interactiveFeatures.length > 0) return;
       if (spiderActiveRef.current) clearSpider(map);
+      onSelect({ kind: 'clear' });
     };
 
     map.on('click', POINTS, handlePointClick);
@@ -422,7 +545,7 @@ export function useGeoMarkerLayer(
         if (map.getSource(SRC)) map.removeSource(SRC);
       } catch { /* disposed */ }
     };
-  }, [styleEpoch]);
+  }, [styleEpoch, theme, clearSpider, onSelect]);
 
   // ---- Effect 2: load icon images & push data on object/theme changes ----
   useEffect(() => {

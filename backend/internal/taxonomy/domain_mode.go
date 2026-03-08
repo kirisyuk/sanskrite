@@ -72,15 +72,15 @@ func EntityTypesForDomainMode(mode string) string {
 	case DomainModeSupplyChain:
 		return "FACILITY (primary actor for supplies/produces), ORGANIZATION (OWNS, LOCATED_IN — supply flow endpoints are FACILITY), PRODUCT, GEO_REGION, DEPOSIT, COMMUNITY (informal trade), PROGRAM (procurement)"
 	case DomainModeGovernance:
-		return "ORGANIZATION (including /gov/ government bodies), PERSON, COMMUNITY (dynasty/tribe can OWNS), PROGRAM (ADMINISTERS target)"
+		return "ORGANIZATION (including /gov/ government bodies), FACILITY, DEPOSIT, PERSON, COMMUNITY (dynasty/tribe can OWNS), PROGRAM (ADMINISTERS target)"
 	case DomainModeAssurance:
-		return "ORGANIZATION (audit firms, certifiers, regulators as assurers), FACILITY, PROGRAM (assurees)"
+		return "ORGANIZATION (audit firms, certifiers, regulators as assurers), FACILITY, PRODUCT, PROGRAM (assurees)"
 	case DomainModeMarket:
 		return "ORGANIZATION, FACILITY, COMMUNITY, PROGRAM, MARKET"
 	case DomainModeStrategic:
-		return "ORGANIZATION (including /gov/), PERSON, COMMUNITY, DECISION_POINT, MECHANISM"
+		return "ORGANIZATION (including /gov/), FACILITY, PRODUCT, MARKET, PROGRAM, PERSON, COMMUNITY, DECISION_POINT, MECHANISM"
 	case DomainModePolicyImpact:
-		return "ORGANIZATION (including /gov/), PROGRAM, MARKET, COMMUNITY, GEO_REGION, DECISION_POINT, MECHANISM"
+		return "ORGANIZATION (including /gov/), FACILITY, PRODUCT, PROGRAM, MARKET, COMMUNITY, GEO_REGION, DECISION_POINT, MECHANISM"
 	case DomainModeEcosystem:
 		return "ORGANIZATION (including /gov/), FACILITY, PERSON, COMMUNITY, PROGRAM, MARKET, GEO_REGION, PRODUCT"
 	default:
@@ -102,6 +102,8 @@ func EntityActorTypesForDomainMode(mode string) string {
 		return "ORGANIZATION, FACILITY, COMMUNITY, PROGRAM"
 	case DomainModePolicyImpact:
 		return "ORGANIZATION (including /gov/), PROGRAM, COMMUNITY"
+	case DomainModeStrategic:
+		return "ORGANIZATION (including /gov/), PROGRAM, COMMUNITY, PERSON, DECISION_POINT"
 	case DomainModeEcosystem:
 		return "ORGANIZATION, PERSON, COMMUNITY, PROGRAM"
 	default:
@@ -173,9 +175,9 @@ var GovernanceEdgeTypes = []string{
 }
 
 // GovernanceEdgeTypesString returns comma-separated list for prompts.
-// Must stay in sync with GovernanceEdgeTypes (EXECUTIVE_OF excluded — display alias for EMPLOYED_BY).
+// Must stay in sync with GovernanceEdgeTypes.
 func GovernanceEdgeTypesString() string {
-	return "OWNS, SUBSIDIARY_OF, CONTROLS, MANAGES, INVESTS_IN, BOARD_MEMBER_OF, EMPLOYED_BY, FOUNDED, ADMINISTERS, ASSURES"
+	return "OWNS, SUBSIDIARY_OF, CONTROLS, MANAGES, INVESTS_IN, BOARD_MEMBER_OF, EXECUTIVE_OF, EMPLOYED_BY, FOUNDED, ADMINISTERS, ASSURES"
 }
 
 // AssuranceEdgeTypes — Third Line: independent audit, certification, regulatory approval, inspection.
@@ -212,6 +214,7 @@ func EcosystemEdgeTypesString() string {
 // MarketEdgeTypes is the allowlist for market mode.
 var MarketEdgeTypes = []string{
 	"PARTICIPATES_IN", "HAS_MARKET_SEGMENT",
+	"TRADED_IN",
 }
 
 // MarketEdgeTypesString returns comma-separated list for prompts (market/competitive analysis).
@@ -231,7 +234,7 @@ func StrategicEdgeTypesString() string {
 
 // PolicyImpactEdgeTypes is the allowlist for policy_impact mode.
 var PolicyImpactEdgeTypes = []string{
-	"REGULATES", "CONTROLS_ACCESS", "IMPOSES_CONDITION", "GATEKEEPS_DECISION", "USES_MECHANISM", "APPLIES_TO", "INFLUENCES", "DEPENDS_ON", "PARTICIPATES_IN", "LOCATED_IN", "OPERATES_IN", "ADMINISTERS",
+	"REGULATES", "CONTROLS_ACCESS", "IMPOSES_CONDITION", "GATEKEEPS_DECISION", "USES_MECHANISM", "APPLIES_TO", "INFLUENCES", "DEPENDS_ON", "PARTICIPATES_IN", "TRADED_IN", "LOCATED_IN", "OPERATES_IN", "ADMINISTERS",
 }
 
 // PolicyImpactEdgeTypesString returns comma-separated list for prompts (regulatory impact).
@@ -245,15 +248,15 @@ func AllowedEntityTypesForDomainMode(mode string) []string {
 	case DomainModeSupplyChain:
 		return []string{"ORGANIZATION", "FACILITY", "PRODUCT", "GEO_REGION", "DEPOSIT", "COMMUNITY", "PROGRAM"}
 	case DomainModeGovernance:
-		return []string{"ORGANIZATION", "PERSON", "COMMUNITY", "PROGRAM"}
+		return []string{"ORGANIZATION", "FACILITY", "DEPOSIT", "PERSON", "COMMUNITY", "PROGRAM"}
 	case DomainModeAssurance:
-		return []string{"ORGANIZATION", "FACILITY", "PROGRAM"}
+		return []string{"ORGANIZATION", "FACILITY", "PRODUCT", "PROGRAM"}
 	case DomainModeMarket:
 		return []string{"ORGANIZATION", "FACILITY", "COMMUNITY", "PROGRAM", "MARKET"}
 	case DomainModeStrategic:
-		return []string{"ORGANIZATION", "PERSON", "COMMUNITY", "DECISION_POINT", "MECHANISM"}
+		return []string{"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET", "PROGRAM", "PERSON", "COMMUNITY", "DECISION_POINT", "MECHANISM"}
 	case DomainModePolicyImpact:
-		return []string{"ORGANIZATION", "PROGRAM", "MARKET", "COMMUNITY", "GEO_REGION", "DECISION_POINT", "MECHANISM"}
+		return []string{"ORGANIZATION", "FACILITY", "PRODUCT", "PROGRAM", "MARKET", "COMMUNITY", "GEO_REGION", "DECISION_POINT", "MECHANISM"}
 	case DomainModeEcosystem:
 		return []string{"ORGANIZATION", "FACILITY", "PERSON", "COMMUNITY", "PROGRAM", "MARKET", "GEO_REGION", "PRODUCT"}
 	default:

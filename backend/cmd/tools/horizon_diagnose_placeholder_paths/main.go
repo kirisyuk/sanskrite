@@ -11,6 +11,7 @@ import (
   "google.golang.org/api/iterator"
 
   "github.com/igorkirisyuk/sanskrite/internal/gcp"
+  "github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
   h "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
@@ -58,29 +59,7 @@ func main() {
 }
 
 func classify(cp string) string {
- p:=strings.TrimSpace(cp)
- switch {
- case strings.HasPrefix(p, "/fac/na/"):
-   return "facility_unknown_geo"
- case strings.HasPrefix(p, "/org/na/"):
-   return "org_unknown_jurisdiction"
- case strings.HasPrefix(p, "/gov/na/"):
-   return "gov_unknown_jurisdiction"
- case strings.HasPrefix(p, "/loc/"):
-   parts:=strings.Split(strings.Trim(p,"/"), "/")
-   if len(parts)>=3 && parts[1] != "na" && parts[2]=="na" {
-     if len(parts)==3 {
-       return "loc_placeholder_admin1"
-     }
-     if len(parts)>=4 && parts[3]=="na" {
-       return "loc_placeholder_admin1_admin2"
-     }
-   }
-   if len(parts)>=4 && parts[1] != "na" && parts[2] != "na" && parts[3]=="na" {
-     return "loc_placeholder_admin2"
-   }
- }
- return ""
+ return string(canonical.ClassifyPlaceholderCanonicalPath(strings.TrimSpace(cp)))
 }
 func firstNonEmpty(v ...string) string { for _,s:= range v { if strings.TrimSpace(s)!="" { return strings.TrimSpace(s) } }; return "" }
 func topCounts(m map[string]int, limit int) []kv { out:=make([]kv,0,len(m)); for k,v:= range m { out=append(out, kv{k,v}) }; sort.Slice(out, func(i,j int) bool { if out[i].Count==out[j].Count { return out[i].Key<out[j].Key }; return out[i].Count>out[j].Count }); if limit>0 && len(out)>limit { out=out[:limit] }; return out }

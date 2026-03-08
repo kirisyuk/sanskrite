@@ -43,6 +43,7 @@ type fragmentSnapshot struct {
 	marketSegments []string
 	tags           []string
 	indexPaths     []string
+	qualifiers     map[string]interface{}
 }
 
 type edgeSnapshot struct {
@@ -81,10 +82,10 @@ func main() {
 
 	switch strings.ToLower(strings.TrimSpace(*mode)) {
 	case "all":
-		processFragments(ctx, db, frRepo, strings.TrimSpace(*tenantID), prefix, strings.TrimSpace(*startAfter), *pageSize, *limit, *apply, time.Duration(*sleepPerPageMs)*time.Millisecond, st)
+		processFragments(ctx, db, frRepo, edgesRepo, strings.TrimSpace(*tenantID), prefix, strings.TrimSpace(*startAfter), *pageSize, *limit, *apply, time.Duration(*sleepPerPageMs)*time.Millisecond, st)
 		processEdges(ctx, db, frRepo, edgesRepo, strings.TrimSpace(*tenantID), prefix, strings.TrimSpace(*startAfter), *pageSize, *limit, *apply, time.Duration(*sleepPerPageMs)*time.Millisecond, st)
 	case "fragments":
-		processFragments(ctx, db, frRepo, strings.TrimSpace(*tenantID), prefix, strings.TrimSpace(*startAfter), *pageSize, *limit, *apply, time.Duration(*sleepPerPageMs)*time.Millisecond, st)
+		processFragments(ctx, db, frRepo, edgesRepo, strings.TrimSpace(*tenantID), prefix, strings.TrimSpace(*startAfter), *pageSize, *limit, *apply, time.Duration(*sleepPerPageMs)*time.Millisecond, st)
 	case "edges":
 		processEdges(ctx, db, frRepo, edgesRepo, strings.TrimSpace(*tenantID), prefix, strings.TrimSpace(*startAfter), *pageSize, *limit, *apply, time.Duration(*sleepPerPageMs)*time.Millisecond, st)
 	default:
@@ -94,7 +95,7 @@ func main() {
 	printStats(st, *apply)
 }
 
-func processFragments(ctx context.Context, db *firestore.Client, frRepo *hrepo.HorizonFragmentsRepository, tenantID, pathPrefix, startAfter string, pageSize, limit int, apply bool, sleepPerPage time.Duration, st *stats) {
+func processFragments(ctx context.Context, db *firestore.Client, frRepo *hrepo.HorizonFragmentsRepository, edgesRepo *hrepo.DependencyEdgesRepository, tenantID, pathPrefix, startAfter string, pageSize, limit int, apply bool, sleepPerPage time.Duration, st *stats) {
 	if pageSize <= 0 {
 		pageSize = 200
 	}
@@ -134,7 +135,8 @@ func processFragments(ctx context.Context, db *firestore.Client, frRepo *hrepo.H
 			}
 			st.fragmentsScanned++
 			before := snapshotFragment(&frag)
-			graphenrich.ApplyFragmentHeuristics(&frag)
+			ctxHints := buildFragmentContext(ctx, frRepo, edgesRepo, strings.TrimSpace(tenantID), &frag)
+			graphenrich.ApplyFragmentHeuristicsWithContext(&frag, ctxHints)
 			frag.IndexPaths = hmodels.BuildIndexPaths(&frag, nil)
 			after := snapshotFragment(&frag)
 			changes := diffFragmentSnapshot(before, after)
@@ -267,7 +269,96 @@ func processEdges(ctx context.Context, db *firestore.Client, frRepo *hrepo.Horiz
 	}
 }
 
+func buildFragmentContext(ctx context.Context, frRepo *hrepo.HorizonFragmentsRepository, edgesRepo *hrepo.DependencyEdgesRepository, tenantID string, frag *hmodels.HorizonFragment) graphenrich.FragmentContext {
+	if frag == nil || frRepo == nil || edgesRepo == nil || strings.TrimSpace(frag.ID) == "" {
+		return graphenrich.FragmentContext{}
+	}
+	outgoing, _ := edgesRepo.ListBySource(ctx, tenantID, frag.ID, nil, 40)
+	incoming, _ := edgesRepo.ListByTarget(ctx, tenantID, frag.ID, nil, 40)
+	neighborIDs := map[string]struct{}{}
+	routeHints := make([]string, 0, 8)
+	zoneHints := make([]string, 0, 8)
+	pathHints := []string{frag.CanonicalPath, frag.ParentPath, frag.ParentGovPath, frag.ParentMarketPath, frag.EntityPath, frag.SectorPath}
+	collectFromEdge := func(edge *hmodels.DependencyEdge) {
+		if edge == nil {
+			return
+		}
+		if id := strings.TrimSpace(edge.SourceFragmentID); id != "" && id != strings.TrimSpace(frag.ID) {
+			neighborIDs[id] = struct{}{}
+		}
+		if id := strings.TrimSpace(edge.TargetFragmentID); id != "" && id != strings.TrimSpace(frag.ID) {
+			neighborIDs[id] = struct{}{}
+		}
+		if edge.Qualifiers != nil {
+			routeHints = append(routeHints,
+				stringSliceValues(edge.Qualifiers[hmodels.QualifierTransportVia])...)
+			routeHints = append(routeHints,
+				stringSliceValues(edge.Qualifiers[hmodels.QualifierFlowRefs])...)
+			zoneHints = append(zoneHints,
+				stringSliceValues(edge.Qualifiers[hmodels.QualifierZoneRefs])...)
+			zoneHints = append(zoneHints,
+				stringSliceValues(edge.Qualifiers[hmodels.QualifierAffectedZoneRefs])...)
+		}
+		pathHints = append(pathHints, string(edge.Type), string(edge.GetFacet()))
+	}
+	for _, edge := range outgoing {
+		collectFromEdge(edge)
+	}
+	for _, edge := range incoming {
+		collectFromEdge(edge)
+	}
+	ids := make([]string, 0, len(neighborIDs))
+	for id := range neighborIDs {
+		ids = append(ids, id)
+	}
+	nearby := make([]*hmodels.HorizonFragment, 0, len(ids))
+	if len(ids) > 0 {
+		if m, err := frRepo.GetMany(ctx, ids); err == nil {
+			for _, id := range ids {
+				if n := m[id]; n != nil {
+					nearby = append(nearby, n)
+					pathHints = append(pathHints, n.CanonicalPath, n.EntityPath, n.SectorPath)
+				}
+			}
+		}
+	}
+	return graphenrich.FragmentContext{
+		NearbyFragments: nearby,
+		IncomingEdges:   incoming,
+		OutgoingEdges:   outgoing,
+		RouteHints:      compactStrings(routeHints),
+		ZoneHints:       compactStrings(zoneHints),
+		PathHints:       compactStrings(pathHints),
+	}
+}
+
+func stringSliceValues(v interface{}) []string {
+	switch raw := v.(type) {
+	case []string:
+		return compactStrings(raw)
+	case []interface{}:
+		out := make([]string, 0, len(raw))
+		for _, item := range raw {
+			s := strings.TrimSpace(fmt.Sprint(item))
+			if s != "" && s != "<nil>" {
+				out = append(out, s)
+			}
+		}
+		return compactStrings(out)
+	default:
+		s := strings.TrimSpace(fmt.Sprint(v))
+		if s != "" && s != "<nil>" {
+			return []string{s}
+		}
+		return nil
+	}
+}
+
 func snapshotFragment(f *hmodels.HorizonFragment) fragmentSnapshot {
+	qualifiers := map[string]interface{}{}
+	for k, v := range f.Qualifiers {
+		qualifiers[k] = v
+	}
 	return fragmentSnapshot{
 		geoFeatureType: strings.TrimSpace(f.GeoFeatureType),
 		govType:        strings.TrimSpace(f.GovType),
@@ -277,6 +368,7 @@ func snapshotFragment(f *hmodels.HorizonFragment) fragmentSnapshot {
 		marketSegments: append([]string(nil), f.MarketSegments...),
 		tags:           append([]string(nil), f.Tags...),
 		indexPaths:     append([]string(nil), f.IndexPaths...),
+		qualifiers:     qualifiers,
 	}
 }
 
@@ -305,6 +397,9 @@ func diffFragmentSnapshot(before, after fragmentSnapshot) []string {
 	}
 	if !reflect.DeepEqual(before.indexPaths, after.indexPaths) {
 		changed = append(changed, "index_paths")
+	}
+	if !reflect.DeepEqual(before.qualifiers, after.qualifiers) {
+		changed = append(changed, "qualifiers")
 	}
 	return changed
 }
@@ -380,4 +475,24 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func compactStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }

@@ -10,8 +10,11 @@ type PlaceholderPathKind string
 
 const (
 	PlaceholderPathNone                   PlaceholderPathKind = ""
+	PlaceholderPathFacilitySynthetic      PlaceholderPathKind = "facility_synthetic_placeholder"
 	PlaceholderPathFacilityUnknownGeo     PlaceholderPathKind = "facility_unknown_geo"
+	PlaceholderPathOrgSynthetic           PlaceholderPathKind = "org_synthetic_placeholder"
 	PlaceholderPathOrgUnknownJurisdiction PlaceholderPathKind = "org_unknown_jurisdiction"
+	PlaceholderPathGovSynthetic           PlaceholderPathKind = "gov_synthetic_placeholder"
 	PlaceholderPathGovUnknownJurisdiction PlaceholderPathKind = "gov_unknown_jurisdiction"
 	PlaceholderPathLocPlaceholderAdmin1   PlaceholderPathKind = "loc_placeholder_admin1"
 	PlaceholderPathLocPlaceholderAdmin12  PlaceholderPathKind = "loc_placeholder_admin1_admin2"
@@ -25,10 +28,21 @@ func ClassifyPlaceholderCanonicalPath(path string) PlaceholderPathKind {
 	}
 	switch {
 	case strings.HasPrefix(cp, "/fac/na/"):
+		if FacilitySlugHasSyntheticTail(pathSlug(cp)) {
+			return PlaceholderPathFacilitySynthetic
+		}
 		return PlaceholderPathFacilityUnknownGeo
+	case strings.HasPrefix(cp, "/fac/") && FacilitySlugHasSyntheticTail(pathSlug(cp)):
+		return PlaceholderPathFacilitySynthetic
 	case strings.HasPrefix(cp, "/org/na/"):
+		if OrgSlugForbiddenPlaceholder(pathSlug(cp)) {
+			return PlaceholderPathOrgSynthetic
+		}
 		return PlaceholderPathOrgUnknownJurisdiction
 	case strings.HasPrefix(cp, "/gov/na/"):
+		if GovSlugForbiddenPlaceholder(pathSlug(cp)) {
+			return PlaceholderPathGovSynthetic
+		}
 		return PlaceholderPathGovUnknownJurisdiction
 	case strings.HasPrefix(cp, "/loc/"):
 		cc, level1, level2, ok := taxonomy.ParseLocCanonicalPath(cp)
@@ -45,6 +59,14 @@ func ClassifyPlaceholderCanonicalPath(path string) PlaceholderPathKind {
 		}
 	}
 	return PlaceholderPathNone
+}
+
+func pathSlug(path string) string {
+	parts := strings.Split(strings.Trim(strings.TrimSpace(path), "/"), "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[len(parts)-1]
 }
 
 func IsPlaceholderCanonicalPath(path string) bool {

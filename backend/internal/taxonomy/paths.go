@@ -1127,25 +1127,6 @@ func GovCanonicalPath(countryAlpha2OrNA string, agencyLabel string) string {
 	return JoinPath("gov", cc, slug)
 }
 
-// FacilityGeneralProductionPath returns a fallback facility path when the specific facility is unknown.
-// Format: /fac/{geo}/{orgSlug}-general-production when orgSlug is provided (from org path).
-// Format: /fac/{geo}/general-production when only geo is known (fallback from fac path when no org found).
-// geo: ISO2 or "na" when unknown.
-func FacilityGeneralProductionPath(geo string, orgSlug string) string {
-	g := strings.ToLower(strings.TrimSpace(geo))
-	if g == "" {
-		g = "na"
-	}
-	if g != "na" && !reCountryAlpha2.MatchString(g) && !isCompositeGeo(g) && !IsRegionalGeoToken(g) {
-		g = "na"
-	}
-	slug := Slugify(orgSlug)
-	if slug == "" {
-		return JoinPath("fac", g, "general-production")
-	}
-	return JoinPath("fac", g, slug+"-general-production")
-}
-
 // FacilityCanonicalPath returns a Horizon-canonical facility path:
 // /fac/{geo}/{facilitySlug} — geo like org/gov (ISO2, na, or regional)
 //

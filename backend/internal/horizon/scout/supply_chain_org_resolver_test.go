@@ -32,12 +32,12 @@ func TestSupplyChainOrgResolver_Resolve_NoFacPaths(t *testing.T) {
 	}
 }
 
-func TestSupplyChainOrgResolver_Resolve_SkipsGeneralProduction(t *testing.T) {
+func TestSupplyChainOrgResolver_Resolve_SkipsUnresolvedFacilityPlaceholder(t *testing.T) {
 	resolver := NewSupplyChainOrgResolver(nil, nil)
 	ctx := context.Background()
 	// No fallback is synthesized anymore: unresolved facilities stay unmapped.
 	pathToID := map[string]string{
-		"/fac/na/general-production": "frag-1",
+		"/fac/na/unresolved-plant": "frag-1",
 	}
 	result := resolver.Resolve(ctx, "global", pathToID)
 	if result == nil || len(result.FacToOrg) != 0 {

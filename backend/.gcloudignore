@@ -11,11 +11,15 @@ test-agent-orchestrator
 *.dylib
 *.test
 *.out
+**/*.test
+**/*.out
 # All Go binaries (catch-all)
 cmd/*/main
 cmd/*/server
 cmd/*/verified-proxy
 cmd/*/etigram-ws
+cmd/tmp_*/
+cmd/tmp_*/**
 
 # Local tool binaries produced by `go build` / `go install` for cmd/tools (often 40-80MB each)
 horizon_*

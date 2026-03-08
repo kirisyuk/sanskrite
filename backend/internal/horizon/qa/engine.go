@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -124,7 +125,7 @@ func (e *Engine) CollectLeafEvidence(ctx context.Context, fragments []*horizonmo
 	return e.leafEvidence.Collect(ctx, fragments, affectedIDs)
 }
 
-// ComputeChainImpacts computes impact on materialized chains. Stub for now (will be implemented separately).
+// ComputeChainImpacts computes path-aware impact summaries on materialized chains.
 func ComputeChainImpacts(artifacts []*horizonmodels.MaterializedArtifact, nodeImpacts []horizonmodels.NodeImpact) []horizonmodels.ChainImpact {
 	if len(artifacts) == 0 || len(nodeImpacts) == 0 {
 		return nil
@@ -163,18 +164,143 @@ func ComputeChainImpacts(artifacts []*horizonmodels.MaterializedArtifact, nodeIm
 				name = strings.TrimSpace(dn)
 			}
 		}
-		out = append(out, horizonmodels.ChainImpact{
+		impact := horizonmodels.ChainImpact{
 			ArtifactID:    a.ID,
 			DisplayName:   name,
 			Kind:          string(a.Kind),
 			MaxAmplitude:  maxAmp,
 			AffectedNodes: affected,
 			TotalNodes:    len(a.NodeRefs),
-		})
+		}
+		if a.Kind == horizonmodels.MaterializedKindSupplyChainPath {
+			if parsed, err := horizonmodels.ParseSupplyChainPathPayload(a.Payload); err == nil && parsed != nil {
+				impact.LegCount = len(parsed.Legs)
+				if parsed.Stress != nil {
+					impact.PathStressScore = parsed.Stress.PathScore
+					impact.BottleneckLegIndex = parsed.Stress.BottleneckLegIndex
+					impact.RecoveryLatencyHours = parsed.Stress.RecoveryLatencyHrs
+					impact.DominantFactors = append([]string(nil), parsed.Stress.DominantFactors...)
+				}
+				flowRefs := make(map[string]struct{})
+				zoneRefs := make(map[string]struct{})
+				affectedZoneRefs := make(map[string]struct{})
+				for _, leg := range parsed.Legs {
+					legAffected := false
+					for _, ref := range chainLegRefs(leg) {
+						if _, ok := affectedPaths[ref]; ok {
+							legAffected = true
+							break
+						}
+					}
+					if legAffected {
+						impact.AffectedLegs++
+					}
+					for _, ref := range leg.FlowRefs {
+						if ref = strings.TrimSpace(ref); ref != "" {
+							flowRefs[ref] = struct{}{}
+						}
+					}
+					for _, ref := range leg.ZoneRefs {
+						if ref = strings.TrimSpace(ref); ref != "" {
+							zoneRefs[ref] = struct{}{}
+						}
+					}
+					for _, ref := range leg.AffectedZoneRefs {
+						if ref = strings.TrimSpace(ref); ref != "" {
+							affectedZoneRefs[ref] = struct{}{}
+						}
+					}
+				}
+				impact.FlowRefs = sortedRefKeys(flowRefs)
+				impact.ZoneRefs = sortedRefKeys(zoneRefs)
+				impact.AffectedZoneRefs = sortedRefKeys(affectedZoneRefs)
+				impact.BottleneckSummary = summarizeChainBottleneck(parsed)
+			}
+		}
+		out = append(out, impact)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		return out[i].MaxAmplitude > out[j].MaxAmplitude
+		if out[i].PathStressScore == out[j].PathStressScore {
+			return out[i].MaxAmplitude > out[j].MaxAmplitude
+		}
+		return out[i].PathStressScore > out[j].PathStressScore
 	})
+	return out
+}
+
+func chainLegRefs(leg horizonmodels.SupplyChainPathLeg) []string {
+	refs := make([]string, 0, 3+len(leg.TransportViaRefs))
+	if ref := strings.TrimSpace(leg.SupplierRef); ref != "" {
+		refs = append(refs, ref)
+	}
+	if ref := strings.TrimSpace(leg.CustomerRef); ref != "" {
+		refs = append(refs, ref)
+	}
+	if ref := strings.TrimSpace(leg.ProductRef); ref != "" {
+		refs = append(refs, ref)
+	}
+	for _, ref := range leg.TransportViaRefs {
+		if ref = strings.TrimSpace(ref); ref != "" {
+			refs = append(refs, ref)
+		}
+	}
+	return refs
+}
+
+func sortedRefKeys(m map[string]struct{}) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(m))
+	for key := range m {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func summarizeChainBottleneck(parsed *horizonmodels.SupplyChainPathPayload) string {
+	if parsed == nil || parsed.Stress == nil || len(parsed.Legs) == 0 {
+		return ""
+	}
+	idx := parsed.Stress.BottleneckLegIndex
+	if idx < 0 || idx >= len(parsed.Legs) {
+		return ""
+	}
+	leg := parsed.Legs[idx]
+	parts := make([]string, 0, 3)
+	if supplier := strings.TrimSpace(leg.SupplierRef); supplier != "" {
+		parts = append(parts, supplier)
+	}
+	if len(leg.TransportViaRefs) > 0 {
+		parts = append(parts, strings.Join(trimmedRefs(leg.TransportViaRefs, 2), " -> "))
+	}
+	if customer := strings.TrimSpace(leg.CustomerRef); customer != "" {
+		parts = append(parts, customer)
+	}
+	summary := strings.Join(parts, " -> ")
+	if summary == "" {
+		summary = "Leg " + strconv.Itoa(idx+1)
+	}
+	if parsed.Stress.PathScore > 0 {
+		summary += fmt.Sprintf(" (stress %.2f)", parsed.Stress.PathScore)
+	}
+	return summary
+}
+
+func trimmedRefs(refs []string, max int) []string {
+	if max <= 0 {
+		return nil
+	}
+	out := make([]string, 0, max)
+	for _, ref := range refs {
+		if ref = strings.TrimSpace(ref); ref != "" {
+			out = append(out, ref)
+			if len(out) >= max {
+				break
+			}
+		}
+	}
 	return out
 }
 
@@ -391,7 +517,7 @@ func (e *Engine) simulateHypothetical(
 					}
 				}
 			}
-			
+
 			// Only include paths that end at a significant node (one of the top impacted nodes)
 			// AND have non-trivial amplitude at the end.
 			if lastAmp < 0.05 {
@@ -423,7 +549,7 @@ func (e *Engine) simulateHypothetical(
 	if len(allNodeImpacts) > 20 {
 		allNodeImpacts = allNodeImpacts[:20]
 	}
-	
+
 	// Sort trace paths by final amplitude and cap at 50 to avoid UI flood
 	sort.Slice(allTracePaths, func(i, j int) bool {
 		endI := 0.0

@@ -1,0 +1,64 @@
+package agents
+
+import "testing"
+
+func TestApplyIntentResolutionQualityRules_SynthesizesSupplyPlan(t *testing.T) {
+	out := IntentResolution{
+		Domains: []DomainResolution{{
+			CanonicalPath: "/domain/v1/supply-chain/geo/qa/geo/eu/product/lng",
+			ContractType:  "supply-chain",
+			Facets:        map[string][]string{"geo": {"qa", "eu"}, "product": {"lng"}},
+		}},
+		Anchors: []struct {
+			CanonicalPath string  `json:"canonicalPath"`
+			Type          string  `json:"type"`
+			Name          string  `json:"name,omitempty"`
+			Confidence    float64 `json:"confidence"`
+			Reason        string  `json:"reason"`
+		}{
+			{CanonicalPath: "/org/qa/qatarenergy", Type: "ORGANIZATION", Confidence: 0.9},
+			{CanonicalPath: "/deposit/qa/north-field", Type: "DEPOSIT", Confidence: 0.8},
+		},
+	}
+	applyIntentResolutionQualityRules("Map the Qatari LNG supply chain through the Strait of Hormuz to European industrial consumers", &out)
+	if out.Domains[0].SupplyChainExecutionPlan == nil || len(out.Domains[0].SupplyChainExecutionPlan.Queries) == 0 {
+		t.Fatalf("expected synthesized supply chain plan")
+	}
+	if got := out.Domains[0].SupplyChainExecutionPlan.Queries[0].Direction; got != "both" {
+		t.Fatalf("expected direction both, got %q", got)
+	}
+	if len(out.Domains[0].SupplyChainExecutionPlan.OverlayQueries) == 0 {
+		t.Fatalf("expected route-sensitive overlay query")
+	}
+}
+
+func TestApplyIntentResolutionQualityRules_SynthesizesRegulatoryPlan(t *testing.T) {
+	out := IntentResolution{
+		Domains: []DomainResolution{{
+			CanonicalPath: "/domain/v1/policy-impact/geo/eu/industry/steel",
+			ContractType:  "policy-impact",
+			Facets:        map[string][]string{"geo": {"eu"}, "industry": {"steel"}},
+		}},
+	}
+	applyIntentResolutionQualityRules("What happens if the EU increases CBAM costs on imported steel?", &out)
+	plan := out.Domains[0].RegulatoryImpactExecutionPlan
+	if plan == nil || len(plan.Queries) == 0 {
+		t.Fatalf("expected synthesized regulatory impact plan")
+	}
+	if got := plan.Queries[0].Instrument; got != "/mechanism/regulatory/carbon-border-adjustment" {
+		t.Fatalf("unexpected mechanism: %q", got)
+	}
+}
+
+func TestInferIntentScenarioProfile_ExpandsCapsForTransmissionScenarios(t *testing.T) {
+	p := inferIntentScenarioProfile("What happens if military escalation around the Strait of Hormuz disrupts LNG shipments from Qatar for 90 days?", nil)
+	if !p.routeSensitive || !p.affectedZone {
+		t.Fatalf("expected route-sensitive affected-zone profile: %+v", p)
+	}
+	if p.anchorCap() < 8 {
+		t.Fatalf("expected expanded anchor cap, got %d", p.anchorCap())
+	}
+	if p.domainCap() < 5 {
+		t.Fatalf("expected expanded domain cap, got %d", p.domainCap())
+	}
+}

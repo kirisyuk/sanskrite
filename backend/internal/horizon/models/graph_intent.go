@@ -846,6 +846,7 @@ var graphIntentAllowedRuntimeRelationTypes = map[string]struct{}{
 	string(DependencyTypeTransformsInto):      {},
 	string(DependencyTypeExtractsFrom):        {},
 	string(DependencyTypeParticipatesIn):      {},
+	string(DependencyTypeTradedIn):            {},
 	string(DependencyTypeDominates):           {},
 	string(DependencyTypeHasMarketSegment):    {},
 	string(DependencyTypeAdministers):         {},

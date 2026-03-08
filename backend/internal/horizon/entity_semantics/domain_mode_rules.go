@@ -25,6 +25,7 @@ var DomainModeMissingInfoRules = map[string][]MissingInfoRule{
 	},
 	taxonomy.DomainModeMarket: {
 		{Trigger: TriggerRelationMissing, RelationType: "PARTICIPATES_IN", DomainMode: taxonomy.DomainModeMarket, QuestionTemplate: "major market participants and market share for %s"},
+		{Trigger: TriggerRelationMissing, RelationType: "TRADED_IN", DomainMode: taxonomy.DomainModeMarket, QuestionTemplate: "products or commodities explicitly traded, benchmarked, or price-discovered in %s"},
 		{Trigger: TriggerRelationMissing, RelationType: "HAS_MARKET_SEGMENT", DomainMode: taxonomy.DomainModeMarket, QuestionTemplate: "market hierarchy and segment breakdown for %s"},
 	},
 	taxonomy.DomainModeAssurance: {
