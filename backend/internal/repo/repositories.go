@@ -570,7 +570,7 @@ func (r *DataSourcesRepository) Create(ctx context.Context, ds *models.DataSourc
 	if ds == nil {
 		return "", ErrInvalidDocument
 	}
-	ds.SyncCompatForWrite()
+	ds.NormalizeCompat()
 	now := time.Now().UTC()
 	ds.CreatedAt = now
 	ds.UpdatedAt = now
@@ -737,7 +737,7 @@ func (r *DataSourcesRepository) Upsert(ctx context.Context, ds *models.DataSourc
 	if ds == nil || ds.ID == "" {
 		return ErrInvalidDocument
 	}
-	ds.SyncCompatForWrite()
+	ds.NormalizeCompat()
 	now := time.Now().UTC()
 	if ds.CreatedAt.IsZero() {
 		ds.CreatedAt = now
@@ -763,7 +763,7 @@ func (r *DataSourcesRepository) Get(ctx context.Context, id string) (*models.Dat
 	if err := snap.DataTo(&ds); err != nil {
 		return nil, err
 	}
-	ds.SyncCompatForWrite()
+	ds.NormalizeCompat()
 	return &ds, nil
 }
 
@@ -881,7 +881,7 @@ func (r *DataSourcesRepository) ListByProject(ctx context.Context, tenantID, pro
 		if err := d.DataTo(&ds); err != nil {
 			continue
 		}
-		ds.SyncCompatForWrite()
+		ds.NormalizeCompat()
 		if _, ok := ids[ds.ID]; ok {
 			sources = append(sources, &ds)
 		}
@@ -935,7 +935,7 @@ func (r *DataSourcesRepository) ListActiveByKinds(ctx context.Context, kinds []s
 		if err := d.DataTo(&ds); err != nil {
 			continue
 		}
-		ds.SyncCompatForWrite()
+		ds.NormalizeCompat()
 		res = append(res, &ds)
 	}
 	return res, nil
@@ -960,7 +960,7 @@ func (r *DataSourcesRepository) ListByKinds(ctx context.Context, kinds []string)
 		if err := d.DataTo(&ds); err != nil {
 			continue
 		}
-		ds.SyncCompatForWrite()
+		ds.NormalizeCompat()
 		res = append(res, &ds)
 	}
 	return res, nil
@@ -1046,7 +1046,7 @@ func (r *DataSourcesRepository) ListByTenant(ctx context.Context, tenantID strin
 		if err := d.DataTo(&ds); err != nil {
 			continue
 		}
-		ds.SyncCompatForWrite()
+		ds.NormalizeCompat()
 		// Deduplicate by ID (in case same source appears in both tenant and global queries)
 		if _, ok := seen[ds.ID]; !ok {
 			res = append(res, &ds)

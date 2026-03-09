@@ -1579,7 +1579,7 @@ func main() {
 		}
 
 		// Wire coordinate enrichment for ontology facts.
-		// Spatial source of truth: Google Geocoding primary, Nominatim fallback, fragment lookup.
+		// Spatial source of truth: Nominatim primary, Google Geocoding fallback, fragment lookup.
 		{
 			var gcForFacts ontology.GeocodingClientInterface
 			{
@@ -1598,13 +1598,13 @@ func main() {
 					nomBase = horizontelemetry.NewNominatimTelemetryWrapper(nomRaw, horizonTelemetryRepo)
 				}
 				nomCached := geocoding.NewCachedClient(nomBase, externalCacheRepo, geocoding.CacheOptionsFromEnv())
-				gcForFacts = geocoding.NewFallbackClient(googleFacts, nomCached, logger)
+				gcForFacts = geocoding.NewFallbackClient(nomCached, googleFacts, logger)
 			}
 			if gcForFacts != nil {
 				enricher := horizonenrich.NewFactCoordinateEnricher(nil, gcForFacts).WithFragmentsRepo(horizonFragmentsRepo)
 				ontologyFactsRepo = ontologyFactsRepo.WithCoordinateEnricher(enricher)
 				ontologyExtractor = ontologyExtractor.WithFactsRepo(ontologyFactsRepo)
-				logger.Printf("Ontology facts: coordinate enrichment enabled (Google Geocoding primary, Nominatim fallback, fragment lookup)")
+				logger.Printf("Ontology facts: coordinate enrichment enabled (Nominatim primary, Google Geocoding fallback, fragment lookup)")
 			}
 		}
 
@@ -2083,7 +2083,7 @@ func main() {
 				logger.Printf("OpenCorporates skipped: OPEN_CORPORATES_API_TOKEN not set (API requires token; add open_corporates_api_token secret)")
 			}
 			// Wire geocoding into Scout for address-to-coordinates (org/facility/gov).
-			// Primary: Google Geocoding. Fallback: Nominatim.
+			// Primary: Nominatim. Fallback: Google Geocoding.
 			// Both wrapped with telemetry and cached via external_data_cache.
 			{
 				var googleClient ontology.GeocodingClientInterface
@@ -2094,7 +2094,7 @@ func main() {
 						gcBase = horizontelemetry.NewGeocodingTelemetryWrapper(gcAdapter, horizonTelemetryRepo)
 					}
 					googleClient = geocoding.NewCachedClient(gcBase, externalCacheRepo, geocoding.CacheOptionsFromEnv())
-					logger.Printf("Google Geocoding client wired (primary)")
+					logger.Printf("Google Geocoding client wired (fallback)")
 				}
 
 				nomRaw := geocoding.NominatimOptionsFromEnv()
@@ -2103,9 +2103,9 @@ func main() {
 					nomBase = horizontelemetry.NewNominatimTelemetryWrapper(nomRaw, horizonTelemetryRepo)
 				}
 				nominatimClient := geocoding.NewCachedClient(nomBase, externalCacheRepo, geocoding.CacheOptionsFromEnv())
-				logger.Printf("Nominatim geocoding client wired (fallback)")
+				logger.Printf("Nominatim geocoding client wired (primary)")
 
-				combined := geocoding.NewFallbackClient(googleClient, nominatimClient, logger)
+				combined := geocoding.NewFallbackClient(nominatimClient, googleClient, logger)
 				if combined != nil {
 					scoutEngine.WithGeocodingClient(combined)
 				}

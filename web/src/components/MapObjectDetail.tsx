@@ -373,6 +373,35 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
                           : ''}
                       </div>
                     )}
+                    {traceSummary.pathArtifactCount > 0 && (
+                      <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        <span style={{ fontSize: 10, padding: '4px 8px', borderRadius: 999, background: isDark ? 'rgba(14, 165, 233, 0.14)' : 'rgba(14, 165, 233, 0.08)', border: isDark ? '1px solid rgba(125, 211, 252, 0.18)' : '1px solid rgba(14, 165, 233, 0.14)' }}>
+                          Pinned {traceSummary.pinnedPathCount}
+                        </span>
+                        <span style={{ fontSize: 10, padding: '4px 8px', borderRadius: 999, background: isDark ? 'rgba(250, 204, 21, 0.12)' : 'rgba(250, 204, 21, 0.08)', border: isDark ? '1px solid rgba(250, 204, 21, 0.18)' : '1px solid rgba(202, 138, 4, 0.14)' }}>
+                          Discovered {traceSummary.discoveredPathCount}
+                        </span>
+                        {traceSummary.stressedPathCount > 0 && (
+                          <span style={{ fontSize: 10, padding: '4px 8px', borderRadius: 999, background: isDark ? 'rgba(248, 113, 113, 0.12)' : 'rgba(239, 68, 68, 0.08)', border: isDark ? '1px solid rgba(248, 113, 113, 0.18)' : '1px solid rgba(220, 38, 38, 0.14)' }}>
+                            High stress {traceSummary.stressedPathCount}
+                          </span>
+                        )}
+                        {traceSummary.bottleneckPathCount > 0 && (
+                          <span style={{ fontSize: 10, padding: '4px 8px', borderRadius: 999, background: isDark ? 'rgba(251, 146, 60, 0.12)' : 'rgba(249, 115, 22, 0.08)', border: isDark ? '1px solid rgba(251, 146, 60, 0.18)' : '1px solid rgba(234, 88, 12, 0.14)' }}>
+                            Bottlenecks {traceSummary.bottleneckPathCount}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {traceSummary.pathArtifactCount > 0 && (
+                      <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.5, color: 'var(--text-secondary-strong)' }}>
+                        Path discovery mix:
+                        {traceSummary.directPathCount > 0 ? ` direct ${traceSummary.directPathCount}` : ''}
+                        {traceSummary.routePathCount > 0 ? ` • route ${traceSummary.routePathCount}` : ''}
+                        {traceSummary.zonePathCount > 0 ? ` • zone ${traceSummary.zonePathCount}` : ''}
+                        {traceSummary.affectedPathCount > 0 ? ` • affected ${traceSummary.affectedPathCount}` : ''}
+                      </div>
+                    )}
                     {traceSummary.countryHighlights.length > 0 && (
                       <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
                         {traceSummary.countryHighlights.map((country) => (

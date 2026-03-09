@@ -16,13 +16,13 @@ func TestNormalizeHorizonMonitorIngestMode(t *testing.T) {
 	}
 
 	v := wmIngestModeOntologyFact
-	ds.Details.HorizonMonitorIngestMode = &v
+	ds.Details.OutputMode = &v
 	if got := normalizeHorizonMonitorIngestMode(ds); got != wmIngestModeOntologyFact {
 		t.Fatalf("expected mode %s, got %s", wmIngestModeOntologyFact, got)
 	}
 
 	bad := "unknown_mode"
-	ds.Details.HorizonMonitorIngestMode = &bad
+	ds.Details.OutputMode = &bad
 	if got := normalizeHorizonMonitorIngestMode(ds); got != wmIngestModeDocumentFeed {
 		t.Fatalf("expected fallback mode %s, got %s", wmIngestModeDocumentFeed, got)
 	}
@@ -428,6 +428,334 @@ func TestInferAffectedZoneCoordinates_GeoPrecision(t *testing.T) {
 	_, _, hasCoord2, precision2 := inferAffectedZoneCoordinates(nil, "", "IR")
 	if !hasCoord2 || precision2 != "approximate_country" {
 		t.Fatalf("expected approximate country geo fallback, got hasCoord=%v precision=%q", hasCoord2, precision2)
+	}
+}
+
+func TestInferAffectedZoneCandidate_SuppressesOpinionAndStaleDrift(t *testing.T) {
+	cases := []horizonMonitorFeedEvent{
+		{
+			Title:   "McCain Delivers His Own Foreign Policy Speech",
+			Summary: "Commentary on foreign policy positioning.",
+			URL:     "https://www.realcleardefense.com/2016/05/02/mccain_delivers_his_own_foreign_policy_speech_281567.html",
+		},
+		{
+			Title:   "At a Glance: the U.S. Defense Industrial Base",
+			Summary: "Overview of the current industrial base posture.",
+			URL:     "https://warontherocks.com/2026/01/at-a-glance-the-u-s-defense-industrial-base/",
+		},
+		{
+			Title:   "WHO validates Brazil for eliminating mother-to-child transmission of HIV",
+			Summary: "Public health validation and progress update.",
+			URL:     "https://www.who.int/news/item/18-12-2025-who-validates-brazil-for-eliminating-mother-to-child-transmission-of-hiv",
+		},
+	}
+	for _, e := range cases {
+		cls := normalizeClassificationWithSourceHint(classifyHorizonMonitorNewsKeyword(e.Title), &e)
+		if c := inferAffectedZoneCandidate(&e, cls); c != nil {
+			t.Fatalf("expected no candidate for %q, got %+v", e.Title, c)
+		}
+	}
+}
+
+func TestInferAffectedZoneCandidate_PlaceOverridesCountryMentions(t *testing.T) {
+	e := &horizonMonitorFeedEvent{
+		Title:       "How the War in Iran Is Disrupting the World's Oil",
+		Summary:     "Strait of Hormuz shipping and tanker risk remain in focus.",
+		CountryCode: "IL",
+		CountryName: "Israel",
+		URL:         "https://www.nytimes.com/video/world/middleeast/100000010750140/how-the-war-in-iran-is-disrupting-the-worlds-oil.html",
+	}
+	cls := normalizeClassificationWithSourceHint(classifyHorizonMonitorNewsKeyword(strings.Join([]string{e.Title, e.Summary}, " ")), e)
+	c := inferAffectedZoneCandidate(e, cls)
+	if c == nil {
+		t.Fatal("expected candidate")
+	}
+	if !strings.Contains(c.CanonicalPath, "/strait-of-hormuz") {
+		t.Fatalf("expected strait slug, got %s", c.CanonicalPath)
+	}
+	if strings.Contains(c.CanonicalPath, "/il/") {
+		t.Fatalf("expected place-based geo override, got %s", c.CanonicalPath)
+	}
+}
+
+func TestExtractKnownPlaceFromText_DoesNotFallbackToCountryMention(t *testing.T) {
+	text := "From Bush Sr to Trump: the risks, lessons and legacy of US interference in the Middle East"
+	if got := extractKnownPlaceFromText(text); got != "" {
+		t.Fatalf("expected no extracted place from generic country mention, got %q", got)
+	}
+}
+
+func TestShouldSkipAffectedZoneAsStale(t *testing.T) {
+	now := time.Date(2026, 3, 8, 22, 0, 0, 0, time.UTC)
+	c := &affectedZoneCandidate{ConditionType: "military_conflict"}
+	if !shouldSkipAffectedZoneAsStale(now, now.Add(-45*24*time.Hour), &horizonMonitorFeedEvent{URL: "https://www.realcleardefense.com/2024/03/26/japan_and_us_deepen_military_connections_against_china_1020679.html"}, c) {
+		t.Fatal("expected stale observation to be skipped")
+	}
+	if shouldSkipAffectedZoneAsStale(now, now.Add(-2*24*time.Hour), &horizonMonitorFeedEvent{URL: "https://www.nytimes.com/video/world/middleeast/100000010750140/how-the-war-in-iran-is-disrupting-the-worlds-oil.html"}, c) {
+		t.Fatal("did not expect fresh observation to be skipped")
+	}
+}
+
+func TestExtractAffectedZoneObjectAnchors_FiltersGenericCountrySeeds(t *testing.T) {
+	e := &horizonMonitorFeedEvent{
+		Title:       "At a Glance: the U.S. Defense Industrial Base",
+		Summary:     "The United Kingdom and Greece were referenced in a broad industry snapshot.",
+		CountryCode: "US",
+		CountryName: "United States",
+	}
+	got := extractAffectedZoneObjectAnchors(e, 8)
+	joined := strings.ToLower(strings.Join(got, " | "))
+	for _, bad := range []string{"united kingdom", "greece", "united states government"} {
+		if strings.Contains(joined, bad) {
+			t.Fatalf("unexpected generic anchor %q in %v", bad, got)
+		}
+	}
+}
+
+func TestShouldAttemptAffectedZoneEntityAnchor(t *testing.T) {
+	weak := &horizonMonitorFeedEvent{
+		Title:   "Iran conflict hits South Hook LNG Terminal logistics",
+		Summary: "Operators warned of disruption at the terminal.",
+	}
+	if !shouldAttemptAffectedZoneEntityAnchor("Iran", "Iran", "approximate_country", false, weak) {
+		t.Fatal("expected weak place with operational anchor to attempt entity-anchor lookup")
+	}
+	strong := &horizonMonitorFeedEvent{
+		Title:   "Explosion reported near Bandar Abbas refinery",
+		Summary: "Local emergency services responded at the refinery site.",
+	}
+	if shouldAttemptAffectedZoneEntityAnchor("Bandar Abbas refinery", "Iran", "precise", true, strong) {
+		t.Fatal("did not expect precise operational place to trigger entity-anchor lookup")
+	}
+}
+
+func TestNormalizeAffectedZonePlace_StripsSystemArtifacts(t *testing.T) {
+	if got := normalizeAffectedZonePlace("domain-v1-affected-zone-geo-strait-of-hormuz", "Iran"); got != "Iran" {
+		t.Fatalf("expected country fallback, got %q", got)
+	}
+	if got := normalizeAffectedZonePlace("supply-chain/global/ras-laffan", "Qatar"); got != "Qatar" {
+		t.Fatalf("expected country fallback, got %q", got)
+	}
+}
+
+func TestInferAffectedZoneCandidate_SuppressesHeadlineLikeGlobalGarbage(t *testing.T) {
+	e := &horizonMonitorFeedEvent{
+		Title:   "Decision to authorize seismic code implementation but warn of last 24 hours European risks",
+		Summary: "Analysis roundup of implementation and warning themes.",
+		URL:     "https://example.com/analysis",
+	}
+	cls := normalizeClassificationWithSourceHint(classifyHorizonMonitorNewsKeyword(strings.Join([]string{e.Title, e.Summary}, " ")), e)
+	if got := inferAffectedZoneCandidate(e, cls); got != nil {
+		t.Fatalf("expected no candidate for headline-like global garbage, got %+v", got)
+	}
+}
+
+func TestExtractPlaceFromTitle_RejectsNonPlaceHeadlineTail(t *testing.T) {
+	title := "Conflict decision in authorize seismic code implementation triggers debate"
+	if got := extractPlaceFromTitle(title); got != "" {
+		t.Fatalf("expected no place from non-place title tail, got %q", got)
+	}
+}
+
+func TestInferAffectedZoneCandidate_SuppressesWeakEconomicPseudoZone(t *testing.T) {
+	e := &horizonMonitorFeedEvent{
+		Title:    "Energy prices and inflation remain under pressure",
+		Summary:  "Economic analysis of market conditions and policy outlook.",
+		Category: "economic",
+		URL:      "https://example.com/economy",
+	}
+	cls := normalizeClassificationWithSourceHint(classifyHorizonMonitorNewsKeyword(strings.Join([]string{e.Title, e.Summary}, " ")), e)
+	if got := inferAffectedZoneCandidate(e, cls); got != nil {
+		t.Fatalf("expected weak economic pseudo-event to be suppressed, got %+v", got)
+	}
+}
+
+func TestInferAffectedZoneCandidate_SuppressesCyberAdvisoryPseudoEvent(t *testing.T) {
+	e := &horizonMonitorFeedEvent{
+		Title:   "Google Confirms CVE-2026-21385 in Qualcomm Android Component Exploited",
+		Summary: "Google disclosed a high-severity flaw impacting an open-source Qualcomm component used in Android devices has been exploited in the wild.",
+		URL:     "https://thehackernews.com/2026/03/google-confirms-cve-2026-21385-in.html",
+	}
+	cls := normalizeClassificationWithSourceHint(classifyHorizonMonitorNewsKeyword(strings.Join([]string{e.Title, e.Summary}, " ")), e)
+	if cls.Level != "low" || cls.Category != "cyber" {
+		t.Fatalf("expected downgraded cyber advisory classification, got %+v", cls)
+	}
+	if got := inferAffectedZoneCandidate(e, cls); got != nil {
+		t.Fatalf("expected no affected zone for cyber advisory pseudo-event, got %+v", got)
+	}
+}
+
+func TestInferAffectedZoneCandidate_SuppressesAnalysisBroadRegionRoundup(t *testing.T) {
+	e := &horizonMonitorFeedEvent{
+		Title:   "Breaking the Cycle: Building Wildfire Resilience Across Latin America - World Bank Blogs",
+		Summary: "Breaking the Cycle: Building Wildfire Resilience Across Latin America World Bank Blogs",
+		URL:     "https://news.google.com/rss/articles/example",
+	}
+	cls := normalizeClassificationWithSourceHint(classifyHorizonMonitorNewsKeyword(strings.Join([]string{e.Title, e.Summary}, " ")), e)
+	if got := inferAffectedZoneCandidate(e, cls); got != nil {
+		t.Fatalf("expected no affected zone for analysis/broad-region roundup, got %+v", got)
+	}
+}
+
+func TestKnownZoneHotspotCoordinates_SeaAndResidualRegions(t *testing.T) {
+	for _, tc := range []struct {
+		place string
+		cc    string
+	}{
+		{place: "Bab el-Mandeb", cc: ""},
+		{place: "Fergana Valley", cc: ""},
+		{place: "North Kivu", cc: "CD"},
+		{place: "English Channel", cc: ""},
+		{place: "Strait of Gibraltar", cc: ""},
+		{place: "Malacca Strait", cc: ""},
+		{place: "Panama Canal", cc: "PA"},
+	} {
+		if _, _, ok := knownZoneHotspotCoordinates(tc.place, tc.cc); !ok {
+			t.Fatalf("expected hotspot coordinates for %q", tc.place)
+		}
+	}
+}
+
+func TestInferAffectedZoneCandidate_SuppressesPlaceQualityGarbage(t *testing.T) {
+	cases := []struct {
+		name    string
+		title   string
+		summary string
+		wantNil bool
+	}{
+		{
+			name:    "web shell campaign garbage",
+			title:   "Ongoing web shell compromises target multiple industries",
+			summary: "Researchers warn the campaign affected 16 countries but do not report a concrete outage.",
+			wantNil: true,
+		},
+		{
+			name:    "numeric pseudo place",
+			title:   "Critical cyber exposure hits 16 countries",
+			summary: "The campaign expands, but no specific facility outage or service disruption is confirmed.",
+			wantNil: true,
+		},
+		{
+			name:    "time phrase pseudo place",
+			title:   "Violence in West Bank this week",
+			summary: "A running weekly recap of incidents and political statements.",
+			wantNil: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			event := &horizonMonitorFeedEvent{
+				Title:       tc.title,
+				Summary:     tc.summary,
+				CountryCode: "IL",
+				CountryName: "Israel",
+				URL:         "https://thehackernews.com/example",
+			}
+			cls := horizonMonitorNewsClassification{Category: "cyber", Level: "high"}
+			candidate := inferAffectedZoneCandidate(event, cls)
+			if tc.wantNil && candidate != nil {
+				t.Fatalf("expected candidate to be suppressed, got %+v", candidate)
+			}
+		})
+	}
+}
+
+func TestNormalizeAffectedZonePlace_StripsTimeSuffixes(t *testing.T) {
+	if got := normalizeAffectedZonePlace("West Bank this week", "Palestine"); got != "West Bank" {
+		t.Fatalf("expected trailing time suffix to be stripped, got %q", got)
+	}
+}
+
+func TestCountryCentroidFallback_NewCountries(t *testing.T) {
+	for _, cc := range []string{"BD", "BH", "KP"} {
+		lat, lon, ok := countryCentroid(cc)
+		if !ok {
+			t.Fatalf("expected centroid for %s", cc)
+		}
+		if lat == 0 && lon == 0 {
+			t.Fatalf("unexpected zero centroid for %s", cc)
+		}
+	}
+}
+
+func TestInferZoneGeo_DoesNotTrustPublisherCountryForMilitaryConflict(t *testing.T) {
+	event := &horizonMonitorFeedEvent{
+		Title:       "US, Israel strikes hit oil depot in Tehran",
+		Summary:     "France24 coverage of strikes in Tehran.",
+		CountryCode: "FR",
+		CountryName: "France",
+		URL:         "https://www.france24.com/en/us-israel-hit-oil-depot-in-tehran",
+	}
+	geo, cc, _ := inferZoneGeo(event, "", strings.Join([]string{event.Title, event.Summary}, " "), "military_conflict")
+	if geo != "global" || cc != "" {
+		t.Fatalf("expected publisher country fallback to be ignored for military conflict, got geo=%q cc=%q", geo, cc)
+	}
+}
+
+func TestInferZoneGeo_TrustsOfficialDisasterCountryFallback(t *testing.T) {
+	event := &horizonMonitorFeedEvent{
+		Title:       "M 4.9 - 157 km SSE of Vilyuchinsk, Russia",
+		Summary:     "USGS earthquake event page.",
+		CountryCode: "RU",
+		CountryName: "Russia",
+		URL:         "https://earthquake.usgs.gov/earthquakes/eventpage/us7000s2zf",
+	}
+	geo, cc, _ := inferZoneGeo(event, "", strings.Join([]string{event.Title, event.Summary}, " "), "earthquake_affected")
+	if geo != "ru" || cc != "RU" {
+		t.Fatalf("expected official disaster fallback to retain country, got geo=%q cc=%q", geo, cc)
+	}
+}
+
+func TestInferAffectedZoneCandidate_SuppressesAdministrativeStrikePseudoConflict(t *testing.T) {
+	e := &horizonMonitorFeedEvent{
+		Title:       "Ireland strikes new five-year drug pricing deals, speeding access to medicines - Euractiv",
+		Summary:     "Drug pricing agreement accelerates access to medicines.",
+		CountryCode: "IE",
+		CountryName: "Ireland",
+		URL:         "https://news.google.com/rss/articles/example",
+	}
+	cls := normalizeClassificationWithSourceHint(classifyHorizonMonitorNewsKeyword(strings.Join([]string{e.Title, e.Summary}, " ")), e)
+	if got := inferAffectedZoneCandidate(e, cls); got != nil {
+		t.Fatalf("expected no affected zone for administrative strike/deal wording, got %+v", got)
+	}
+}
+
+func TestInferAffectedZoneCandidate_SuppressesCivilExplosionPseudoConflict(t *testing.T) {
+	e := &horizonMonitorFeedEvent{
+		Title:       "Police in Norway investigate an explosion outside the US Embassy in Oslo - AP News",
+		Summary:     "Police investigate the incident outside the embassy compound.",
+		CountryCode: "NO",
+		CountryName: "Norway",
+		URL:         "https://news.google.com/rss/articles/example",
+	}
+	cls := normalizeClassificationWithSourceHint(classifyHorizonMonitorNewsKeyword(strings.Join([]string{e.Title, e.Summary}, " ")), e)
+	if cls.Category != "crime" {
+		t.Fatalf("expected crime-style downgrade for civil explosion, got %+v", cls)
+	}
+	if got := inferAffectedZoneCandidate(e, cls); got != nil {
+		t.Fatalf("expected no affected zone for civil explosion pseudo-conflict, got %+v", got)
+	}
+}
+
+func TestInferAffectedZoneCandidate_SuppressesAdministrativeConflictCommentary(t *testing.T) {
+	e := &horizonMonitorFeedEvent{
+		Title:       "Iran: New Supreme Leader set to be announced",
+		Summary:     "Political succession coverage and commentary.",
+		CountryCode: "IR",
+		CountryName: "Iran",
+		URL:         "https://www.france24.com/en/iran-new-supreme-leader-set-to-be-announced",
+	}
+	cls := normalizeClassificationWithSourceHint(classifyHorizonMonitorNewsKeyword(strings.Join([]string{e.Title, e.Summary}, " ")), e)
+	if got := inferAffectedZoneCandidate(e, cls); got != nil {
+		t.Fatalf("expected no affected zone for administrative/political succession commentary, got %+v", got)
+	}
+}
+
+func TestExtractUSGSPlaceFromTitle(t *testing.T) {
+	got := extractUSGSPlaceFromTitle("M 5.5 - 2 km SSE of Rodotópi, Greece")
+	if got != "Rodotópi, Greece" {
+		t.Fatalf("unexpected USGS place extraction: %q", got)
 	}
 }
 

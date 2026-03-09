@@ -1,8 +1,8 @@
 # Ignore build artifacts and service binaries
-server
-verified-proxy
-etigram-ws
-main
+/server
+/verified-proxy
+/etigram-ws
+/main
 *.exe
 *.dll
 *.dylib
@@ -11,29 +11,29 @@ main
 
 # Local tool binaries (can be very large; not needed for Docker builds)
 # Go build outputs from cmd/tools/* and cmd/* - exclude all known patterns
-horizon_*
-supply_chain_*
-unstuck_*
-add_*
-check_*
-check-*
-seed_*
-migrate_*
-inspect_*
-purge_*
-geonames_*
-loc_*
-watchdog_*
-test_*
-test-*
-sync-*
-reindex-*
-update-*
-clear_*
-run_*
-find_*
-gemini_*
-openai_*
+/horizon_*
+/supply_chain_*
+/unstuck_*
+/add_*
+/check_*
+/check-*
+/seed_*
+/migrate_*
+/inspect_*
+/purge_*
+/geonames_*
+/loc_*
+/watchdog_*
+/test_*
+/test-*
+/sync-*
+/reindex-*
+/update_*
+/clear_*
+/run_*
+/find_*
+/gemini_*
+/openai_*
 
 # Local build artifacts and caches
 bin/

@@ -16,6 +16,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	httphandlers "github.com/igorkirisyuk/sanskrite/internal/http"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
+	coreRepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
 type sample struct {
@@ -52,7 +53,8 @@ func main() {
 	}
 	defer fs.Close()
 
-	geoClient := googleGeoClient()
+	externalCacheRepo := coreRepo.NewExternalDataCacheRepository(fs.Client())
+	geoClient := googleGeoClient(externalCacheRepo)
 	if geoClient == nil {
 		panic("google geocoding client is not configured")
 	}
@@ -143,9 +145,9 @@ func main() {
 	}
 }
 
-func googleGeoClient() coreontology.GeocodingClientInterface {
+func googleGeoClient(cacheRepo *coreRepo.ExternalDataCacheRepository) coreontology.GeocodingClientInterface {
 	if gc := httphandlers.GetGoogleGeocodingClientFromEnv(); gc != nil {
-		return geocoding.NewAdapter(gc)
+		return geocoding.NewCachedClient(geocoding.NewAdapter(gc), cacheRepo, geocoding.CacheOptionsFromEnv())
 	}
 	return nil
 }

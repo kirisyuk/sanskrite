@@ -2994,6 +2994,17 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     supplyChains?: {
       chains: any[];
       total: number;
+      summary?: {
+        pinnedCount?: number;
+        discoveredCount?: number;
+        directCount?: number;
+        routeCount?: number;
+        zoneCount?: number;
+        affectedCount?: number;
+        highStressCount?: number;
+        bottleneckCount?: number;
+        strongBindingCount?: number;
+      };
     };
     propagation?: {
       sourceFragmentId: string;

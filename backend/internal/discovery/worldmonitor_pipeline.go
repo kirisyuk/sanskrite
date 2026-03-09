@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
@@ -38,6 +39,9 @@ const (
 
 	rssSignalTelemetryComponent = "rss_signal_pipeline"
 	rssSignalTelemetryMetric    = "wm_signal_flow"
+
+	affectedZoneCoolingStep  = 2 * time.Hour
+	affectedZoneCoolingLimit = 1000
 )
 
 var (
@@ -46,10 +50,10 @@ var (
 )
 
 func normalizeHorizonMonitorIngestMode(ds *coremodels.DataSource) string {
-	if ds == nil || ds.Details.HorizonMonitorIngestMode == nil {
+	if ds == nil {
 		return wmIngestModeDocumentFeed
 	}
-	mode := strings.ToLower(strings.TrimSpace(*ds.Details.HorizonMonitorIngestMode))
+	mode := strings.ToLower(strings.TrimSpace(coremodels.SourceOutputModeValue(ds)))
 	switch mode {
 	case wmIngestModeDocumentFeed, wmIngestModeOntologyFact, wmIngestModeQueryOnly:
 		return mode
@@ -170,6 +174,7 @@ type affectedZoneCandidate struct {
 	ConditionType  string
 	ZoneType       string
 	ZoneSubType    string
+	InferenceScore float64
 	GeoToken       string
 	CountryCode    string
 	CountryName    string
@@ -435,7 +440,7 @@ func (q *rssHeuristicsQualityCounters) observe(classification horizonMonitorNews
 		q.zonesGeocodedTotal++
 	}
 	switch strings.ToLower(strings.TrimSpace(zone.GeoPrecision)) {
-	case "precise":
+	case "precise", "entity_anchor":
 		q.zonesPreciseGeoTotal++
 	case "approximate_country":
 		q.zonesApproxGeoTotal++
@@ -446,7 +451,7 @@ func (q *rssHeuristicsQualityCounters) observe(classification horizonMonitorNews
 	if zone.WarmOnly {
 		q.zonesWarmOnlyTotal++
 	}
-	if strings.EqualFold(strings.TrimSpace(zone.GeoPrecision), "precise") &&
+	if (strings.EqualFold(strings.TrimSpace(zone.GeoPrecision), "precise") || strings.EqualFold(strings.TrimSpace(zone.GeoPrecision), "entity_anchor")) &&
 		zone.HasCoordinates && zone.RadiusKm > 0 &&
 		strings.TrimSpace(zone.ZoneType) != "" &&
 		strings.TrimSpace(zone.ZoneSubType) != "" {
@@ -499,6 +504,7 @@ type horizonMonitorCountryBriefOutput struct {
 type HorizonMonitorPipeline struct {
 	factsRepo          *corerepo.OntologyFactsRepository
 	fragmentsRepo      *horizonrepo.HorizonFragmentsRepository
+	edgesRepo          *horizonrepo.DependencyEdgesRepository
 	telemetryRepo      *horizonrepo.HorizonTelemetryRepository
 	realtimePublisher  *realtime.Publisher
 	vertexSearch       *ai.VertexAISearchClient
@@ -540,6 +546,7 @@ func NewHorizonMonitorPipeline(
 	return &HorizonMonitorPipeline{
 		factsRepo:          factsRepo,
 		fragmentsRepo:      fragmentsRepo,
+		edgesRepo:          edgesRepo,
 		exec:               exec,
 		mapActivityEngine:  mapactivity.NewEngine(factsRepo, logger),
 		seedInjector:       seedInjector,
@@ -678,7 +685,7 @@ func (p *HorizonMonitorPipeline) ProcessDocuments(ctx context.Context, tenantID 
 			strings.TrimSpace(classification.Level),
 		}, " "))
 		nonEventFiltered := zoneText != "" && isLikelyNonEventText(zoneText)
-		zoneCandidate := inferAffectedZoneCandidate(event, classification)
+		zoneCandidate := p.inferAffectedZoneCandidate(ctx, event, classification)
 		qualityCounters.observe(classification, zoneCandidate, nonEventFiltered)
 		if err := p.upsertAffectedZoneFragmentCandidate(ctx, tenantID, ds.ID, event, classification, zoneCandidate); err != nil {
 			p.logf("horizon monitor pipeline: failed to upsert affected zone source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
@@ -739,6 +746,9 @@ func (p *HorizonMonitorPipeline) ProcessDocuments(ctx context.Context, tenantID 
 				p.logf("horizon monitor pipeline: failed to upsert country briefs: %v", err)
 			}
 		}
+	}
+	if err := p.coolAffectedZones(ctx, tenantID, ds.ID, affectedZoneCoolingLimit); err != nil {
+		p.logf("horizon monitor pipeline: failed to cool affected zones: %v", err)
 	}
 
 	return nil
@@ -826,7 +836,7 @@ func (p *HorizonMonitorPipeline) ProcessFeedEvents(ctx context.Context, tenantID
 			strings.TrimSpace(classification.Level),
 		}, " "))
 		nonEventFiltered := zoneText != "" && isLikelyNonEventText(zoneText)
-		zoneCandidate := inferAffectedZoneCandidate(event, classification)
+		zoneCandidate := p.inferAffectedZoneCandidate(ctx, event, classification)
 		qualityCounters.observe(classification, zoneCandidate, nonEventFiltered)
 		if err := p.upsertAffectedZoneFragmentCandidate(ctx, tenantID, ds.ID, event, classification, zoneCandidate); err != nil {
 			p.logf("horizon monitor pipeline: failed to upsert affected zone source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
@@ -884,6 +894,9 @@ func (p *HorizonMonitorPipeline) ProcessFeedEvents(ctx context.Context, tenantID
 				p.logf("horizon monitor pipeline: failed to upsert country briefs: %v", err)
 			}
 		}
+	}
+	if err := p.coolAffectedZones(ctx, tenantID, ds.ID, affectedZoneCoolingLimit); err != nil {
+		p.logf("horizon monitor pipeline: failed to cool affected zones: %v", err)
 	}
 	return nil
 }
@@ -1763,7 +1776,6 @@ func (p *HorizonMonitorPipeline) upsertAffectedZoneFragmentCandidate(
 	if matchedAt.IsZero() {
 		matchedAt = now
 	}
-	boost := affectedZoneBoost(e, cls, candidate)
 
 	existing, err := p.fragmentsRepo.GetByCanonicalPath(ctx, candidate.CanonicalPath)
 	if err != nil && !errors.Is(err, horizonrepo.ErrFragmentNotFound) {
@@ -1779,6 +1791,28 @@ func (p *HorizonMonitorPipeline) upsertAffectedZoneFragmentCandidate(
 			existing = matched
 		}
 	}
+	if shouldSkipAffectedZoneAsStale(now, matchedAt, e, candidate) {
+		if existing == nil {
+			return nil
+		}
+		st := parseAffectedZoneState(existing)
+		prevScore := st.Score
+		prevHits1h := st.Hits1h
+		prevHits24h := st.Hits24h
+		prevMentions := st.TotalMentions
+		st.applyDecay(now)
+		if st.Score == prevScore && st.Hits1h == prevHits1h && st.Hits24h == prevHits24h && st.TotalMentions == prevMentions {
+			return nil
+		}
+		applyAffectedZoneState(existing, st, now, st.LastMatchedAt, sourceID, e)
+		if existing.Qualifiers == nil {
+			existing.Qualifiers = map[string]interface{}{}
+		}
+		existing.Qualifiers["staleObservationIgnored"] = true
+		existing.Qualifiers["staleObservationAgeHours"] = math.Round(now.Sub(matchedAt).Hours())
+		return p.fragmentsRepo.Update(ctx, existing)
+	}
+	boost := affectedZoneBoost(e, cls, candidate)
 	if existing == nil {
 		if candidate.WarmOnly {
 			return nil
@@ -2295,6 +2329,47 @@ func (p *HorizonMonitorPipeline) publishAffectedZoneUpsert(
 	_ = p.realtimePublisher.PublishJSON(ctx, realtime.EventType("horizon.graph.node.upserted"), tenantID, payload)
 }
 
+func (p *HorizonMonitorPipeline) coolAffectedZones(ctx context.Context, tenantID, sourceID string, limit int) error {
+	if p == nil || p.fragmentsRepo == nil {
+		return nil
+	}
+	if limit <= 0 {
+		limit = affectedZoneCoolingLimit
+	}
+	items, err := p.fragmentsRepo.ListByTypeAndTenant(ctx, strings.TrimSpace(firstNonEmptyString(tenantID, "global")), horizonmodels.FragmentTypeAffectedZone, limit)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	for _, frag := range items {
+		if frag == nil || frag.Type != horizonmodels.FragmentTypeAffectedZone {
+			continue
+		}
+		st := parseAffectedZoneState(frag)
+		if now.Sub(st.LastUpdatedAt) < affectedZoneCoolingStep {
+			continue
+		}
+		prevScore := st.Score
+		prevHits1h := st.Hits1h
+		prevHits24h := st.Hits24h
+		st.applyDecay(now)
+		if math.Abs(st.Score-prevScore) < 0.05 && math.Abs(st.Hits1h-prevHits1h) < 0.05 && math.Abs(st.Hits24h-prevHits24h) < 0.05 {
+			continue
+		}
+		applyAffectedZoneState(frag, st, now, st.LastMatchedAt, sourceID, nil)
+		if frag.Metadata.LastUpdatedAt.Before(now) {
+			frag.Metadata.LastUpdatedAt = now
+		}
+		if frag.Metadata.LastVerifiedAt.Before(now) {
+			frag.Metadata.LastVerifiedAt = now
+		}
+		if err := p.fragmentsRepo.Update(ctx, frag); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func applyAffectedZoneCoordinates(f *horizonmodels.HorizonFragment, c *affectedZoneCandidate) bool {
 	if f == nil || c == nil {
 		return false
@@ -2349,16 +2424,20 @@ func applyAffectedZoneState(
 		f.State = map[string]horizonmodels.MetricValue{}
 	}
 	putMetric := func(name string, value, confidence float64, observedAt time.Time) {
+		sourceRefs := []horizonmodels.SourceRef{}
+		if e != nil {
+			if refID := firstNonEmptyString(strings.TrimSpace(e.URL), strings.TrimSpace(e.ExternalID)); refID != "" {
+				sourceRefs = append(sourceRefs, horizonmodels.SourceRef{SourceID: refID, SourceType: "rss"})
+			}
+		}
 		f.State[name] = horizonmodels.MetricValue{
 			Value:      value,
 			Confidence: confidence,
 			ObservedAt: observedAt,
 			Provenance: horizonmodels.Provenance{
-				Method:    "heuristic_rss_zone",
-				SourceIDs: uniqueStrings([]string{strings.TrimSpace(sourceID)}),
-				SourceRefs: []horizonmodels.SourceRef{
-					{SourceID: firstNonEmptyString(strings.TrimSpace(e.URL), strings.TrimSpace(e.ExternalID)), SourceType: "rss"},
-				},
+				Method:     "heuristic_rss_zone",
+				SourceIDs:  uniqueStrings([]string{strings.TrimSpace(sourceID)}),
+				SourceRefs: sourceRefs,
 				ObservedAt: &observedAt,
 			},
 		}
@@ -2371,6 +2450,7 @@ func applyAffectedZoneState(
 	putMetric(zoneMetricLastMatchTS, float64(matchedAt.Unix()), 0.98, now)
 	// For compatibility with generic zone semantics in Horizon profiles.
 	putMetric("zone_severity_score", clamp(st.Score/10.0, 0, 10), 0.90, now)
+	applyAffectedZoneStatusQualifiers(f, st)
 }
 
 func parseAffectedZoneState(f *horizonmodels.HorizonFragment) affectedZoneState {
@@ -2445,6 +2525,20 @@ func (s *affectedZoneState) applyObservation(now, matchedAt time.Time, boost flo
 	s.LastUpdatedAt = now.UTC()
 }
 
+func applyAffectedZoneStatusQualifiers(f *horizonmodels.HorizonFragment, st affectedZoneState) {
+	if f == nil {
+		return
+	}
+	if f.Qualifiers == nil {
+		f.Qualifiers = map[string]interface{}{}
+	}
+	f.Qualifiers["hypeStatus"] = activityStatus(st.Score)
+	f.Qualifiers["hypeIndicator"] = hypeIndicator(st.Score)
+	if !st.LastMatchedAt.IsZero() {
+		f.Qualifiers["lastMatchedAt"] = st.LastMatchedAt.UTC().Format(time.RFC3339)
+	}
+}
+
 func affectedZoneBoost(e *horizonMonitorFeedEvent, cls horizonMonitorNewsClassification, c *affectedZoneCandidate) float64 {
 	levelW := map[string]float64{
 		"critical": 1.45,
@@ -2477,6 +2571,19 @@ func affectedZoneBoost(e *horizonMonitorFeedEvent, cls horizonMonitorNewsClassif
 	if c != nil && c.WarmOnly {
 		base *= 0.72
 	}
+	if e != nil && !e.OccurredAt.IsZero() {
+		age := time.Since(e.OccurredAt.UTC())
+		switch {
+		case age > 14*24*time.Hour:
+			base *= 0.22
+		case age > 7*24*time.Hour:
+			base *= 0.40
+		case age > 72*time.Hour:
+			base *= 0.62
+		case age > 24*time.Hour:
+			base *= 0.82
+		}
+	}
 	return clamp(base, 2.0, 22.0)
 }
 
@@ -2490,6 +2597,7 @@ func affectedZoneQualifiers(
 		"conditionType":          strings.TrimSpace(c.ConditionType),
 		"zoneType":               strings.TrimSpace(c.ZoneType),
 		"zoneSubType":            strings.TrimSpace(c.ZoneSubType),
+		"zoneInferenceScore":     c.InferenceScore,
 		"classificationCategory": strings.TrimSpace(cls.Category),
 		"classificationLevel":    strings.TrimSpace(cls.Level),
 		"classificationSource":   strings.TrimSpace(cls.Source),
@@ -2509,6 +2617,18 @@ func affectedZoneQualifiers(
 	}
 	if e != nil && strings.TrimSpace(e.URL) != "" {
 		out["sourceUrl"] = strings.TrimSpace(e.URL)
+	}
+	if e != nil && strings.TrimSpace(e.Title) != "" {
+		out["sourceTitle"] = strings.TrimSpace(e.Title)
+	}
+	if e != nil && strings.TrimSpace(e.Summary) != "" {
+		out["sourceSummary"] = truncateString(strings.TrimSpace(e.Summary), 1200)
+	}
+	if e != nil && !e.OccurredAt.IsZero() {
+		out["sourceOccurredAt"] = e.OccurredAt.UTC().Format(time.RFC3339)
+	}
+	if e != nil && strings.TrimSpace(e.CountryCode) != "" {
+		out["sourceCountryCode"] = strings.ToUpper(strings.TrimSpace(e.CountryCode))
 	}
 	return out
 }
@@ -2553,8 +2673,19 @@ func affectedZoneTags(c *affectedZoneCandidate, cls horizonMonitorNewsClassifica
 	return tagSet{items: tags}
 }
 
+func (p *HorizonMonitorPipeline) inferAffectedZoneCandidate(ctx context.Context, e *horizonMonitorFeedEvent, cls horizonMonitorNewsClassification) *affectedZoneCandidate {
+	return inferAffectedZoneCandidateWithContext(ctx, p, e, cls)
+}
+
 func inferAffectedZoneCandidate(e *horizonMonitorFeedEvent, cls horizonMonitorNewsClassification) *affectedZoneCandidate {
+	return inferAffectedZoneCandidateWithContext(context.Background(), nil, e, cls)
+}
+
+func inferAffectedZoneCandidateWithContext(ctx context.Context, p *HorizonMonitorPipeline, e *horizonMonitorFeedEvent, cls horizonMonitorNewsClassification) *affectedZoneCandidate {
 	if e == nil {
+		return nil
+	}
+	if shouldSuppressAffectedZoneBySourceProfile(e) {
 		return nil
 	}
 	text := normalizeKeywordText(strings.Join([]string{
@@ -2566,19 +2697,55 @@ func inferAffectedZoneCandidate(e *horizonMonitorFeedEvent, cls horizonMonitorNe
 	if text == "" {
 		return nil
 	}
-	if isLikelyNonEventText(text) {
+	profile := wmHeuristics().ProfileArticle(text, affectedZoneSourceHost(e))
+	if isLikelyNonEventText(text) && !looksLikeWarmConflictPosture(text, cls) {
 		return nil
 	}
-	conditionType, zoneType, zoneSubType := inferZoneConditionAndSubtype(text, cls)
+	if shouldSuppressAffectedZoneBySemanticDrift(text, e, cls) {
+		return nil
+	}
+	conditionType, zoneType, zoneSubType, inferenceScore := inferZoneConditionAndSubtypeScored(text, cls)
 	if conditionType == "" {
+		return nil
+	}
+	if shouldSuppressAffectedZoneByEventProfile(text, e, cls, conditionType, profile) {
+		return nil
+	}
+	if shouldSuppressWeakAffectedZoneInference(text, e, cls, conditionType, inferenceScore) {
 		return nil
 	}
 	warmOnly := !shouldCreateAffectedZone(text, cls.Level, conditionType)
 
-	geoToken, countryCode, countryName := inferZoneGeo(e)
 	place := inferZonePlaceName(e)
+	geoToken, countryCode, countryName := inferZoneGeo(e, place, text, conditionType)
+	var anchor *affectedZoneEntityAnchor
+	if shouldAttemptAffectedZoneEntityAnchor(place, countryName, "none", false, e) {
+		anchorCountryCode := countryCode
+		if shouldRelaxAffectedZoneAnchorCountryHint(place, countryName, countryCode) {
+			anchorCountryCode = ""
+		}
+		anchor = resolveAffectedZoneEntityAnchor(ctx, p, e, place, anchorCountryCode)
+	}
+	if anchor != nil {
+		if isWeakAffectedZonePlace(place, countryName) || placeSpecificScopeLooksUnreliable(place, countryName, "approximate_country", false) {
+			place = firstNonEmptyString(anchor.Place, place)
+		}
+		if strings.TrimSpace(countryCode) == "" {
+			countryCode = strings.TrimSpace(anchor.CountryCode)
+		}
+		if strings.TrimSpace(countryName) == "" {
+			countryName = strings.TrimSpace(anchor.CountryName)
+		}
+		if strings.TrimSpace(geoToken) == "" || strings.EqualFold(strings.TrimSpace(geoToken), "global") {
+			geoToken = strings.TrimSpace(anchor.GeoToken)
+		}
+	}
 	if strings.TrimSpace(place) == "" {
 		place = firstNonEmptyString(countryName, countryCode, "emerging hotspot")
+	}
+	place = normalizeAffectedZonePlace(place, countryName)
+	if shouldSuppressAffectedZoneByPlaceQuality(place, countryName, conditionType, text, e) {
+		return nil
 	}
 	pathSlug := canonicalPathSlug(place)
 	if pathSlug == "" || pathSlug == "na" {
@@ -2593,6 +2760,30 @@ func inferAffectedZoneCandidate(e *horizonMonitorFeedEvent, cls horizonMonitorNe
 		label = firstNonEmptyString(countryName, strings.ToUpper(countryCode), "Affected Zone")
 	}
 	lat, lon, hasCoord, geoPrecision := inferAffectedZoneCoordinates(e, place, countryCode)
+	if shouldPreferAffectedZoneAnchor(anchor, place, countryName, geoPrecision, hasCoord) {
+		place = firstNonEmptyString(anchor.Place, place)
+		geoToken = firstNonEmptyString(anchor.GeoToken, geoToken)
+		countryCode = firstNonEmptyString(anchor.CountryCode, countryCode)
+		countryName = firstNonEmptyString(anchor.CountryName, countryName)
+		lat = anchor.Lat
+		lon = anchor.Lon
+		hasCoord = anchor.HasCoordinates
+		geoPrecision = strings.TrimSpace(anchor.GeoPrecision)
+	}
+	if placeSpecificScopeLooksUnreliable(place, countryName, geoPrecision, hasCoord) {
+		place = firstNonEmptyString(countryName, countryNameFromCode(countryCode), place)
+		pathSlug = canonicalPathSlug(place)
+		if pathSlug == "" || pathSlug == "na" {
+			pathSlug = "emerging-hotspot"
+		}
+		label = humanizeZoneLabel(place, countryName, zoneSubType)
+	}
+	if shouldSuppressAffectedZoneByGeoCoherence(place, geoToken, countryCode, geoPrecision, e) {
+		return nil
+	}
+	if shouldSuppressGenericAffectedZone(geoToken, place, pathSlug, conditionType) {
+		return nil
+	}
 
 	return &affectedZoneCandidate{
 		CanonicalPath:  "/zone/" + geoToken + "/" + conditionType + "/" + pathSlug,
@@ -2600,6 +2791,7 @@ func inferAffectedZoneCandidate(e *horizonMonitorFeedEvent, cls horizonMonitorNe
 		ConditionType:  conditionType,
 		ZoneType:       zoneType,
 		ZoneSubType:    zoneSubType,
+		InferenceScore: inferenceScore,
 		GeoToken:       geoToken,
 		CountryCode:    strings.ToUpper(strings.TrimSpace(countryCode)),
 		CountryName:    strings.TrimSpace(countryName),
@@ -2661,51 +2853,175 @@ func shouldCreateAffectedZone(text, level, conditionType string) bool {
 }
 
 func inferZoneConditionAndSubtype(text string, cls horizonMonitorNewsClassification) (conditionType, zoneType, zoneSubType string) {
-	if cond, ztyp, sub, _ := wmHeuristics().InferZoneCondition(text); cond != "" {
-		return cond, ztyp, sub
+	conditionType, zoneType, zoneSubType, _ = inferZoneConditionAndSubtypeScored(text, cls)
+	return conditionType, zoneType, zoneSubType
+}
+
+func inferZoneConditionAndSubtypeScored(text string, cls horizonMonitorNewsClassification) (conditionType, zoneType, zoneSubType string, score float64) {
+	if cond, ztyp, sub, zoneScore := wmHeuristics().InferZoneCondition(text); cond != "" {
+		score = zoneScore
+		return cond, ztyp, sub, score
 	}
 	switch strings.ToLower(strings.TrimSpace(cls.Category)) {
 	case "military", "conflict":
-		return "military_conflict", "military_conflict", "armed_tension"
+		if looksLikeAdministrativeCommentaryText(text) {
+			return "", "", "", 0
+		}
+		if looksLikeCivilIncidentWithoutMilitaryContext(text) {
+			return "political_tension", "political_tension", "public_security", 0.84
+		}
+		return "military_conflict", "military_conflict", "armed_tension", 1.18
 	case "disaster":
-		return "natural_disaster", "natural_disaster", "multi_hazard"
+		return "natural_disaster", "natural_disaster", "multi_hazard", 1.12
 	case "health":
-		return "disease_outbreak", "humanitarian_crisis", "epidemic"
+		return "disease_outbreak", "humanitarian_crisis", "epidemic", 1.10
 	case "environmental":
-		return "environmental_hazard", "natural_disaster", "toxic_pollution"
+		return "environmental_hazard", "natural_disaster", "toxic_pollution", 1.08
 	case "terrorism":
-		return "military_conflict", "military_conflict", "terror_threat"
+		return "military_conflict", "military_conflict", "terror_threat", 1.04
 	case "crime":
-		return "political_tension", "political_tension", "public_security"
+		return "political_tension", "political_tension", "public_security", 0.92
 	case "protest", "diplomatic":
-		return "political_tension", "political_tension", "civil_tension"
+		return "political_tension", "political_tension", "civil_tension", 0.90
 	case "cyber", "infrastructure", "tech":
-		return "infrastructure_disruption", "infrastructure_disruption", "systems_disruption"
+		if wmHeuristics().ProfileArticle(text, "").likelyAdvisoryCampaignWithoutOutage() {
+			return "", "", "", 0
+		}
+		return "infrastructure_disruption", "infrastructure_disruption", "systems_disruption", 0.94
 	case "economic":
-		return "political_tension", "political_tension", "economic_pressure"
+		return "political_tension", "political_tension", "economic_pressure", 0.86
 	default:
-		return "", "", ""
+		return "", "", "", 0
 	}
 }
 
-func inferZoneGeo(e *horizonMonitorFeedEvent) (geoToken, countryCode, countryName string) {
-	countryCode = strings.ToUpper(strings.TrimSpace(e.CountryCode))
-	countryName = strings.TrimSpace(e.CountryName)
+func shouldSuppressWeakAffectedZoneInference(
+	text string,
+	e *horizonMonitorFeedEvent,
+	cls horizonMonitorNewsClassification,
+	conditionType string,
+	inferenceScore float64,
+) bool {
+	if strings.TrimSpace(conditionType) == "" {
+		return true
+	}
+	if inferenceScore >= 1.55 {
+		return false
+	}
+	text = normalizeKeywordText(text)
+	eventScore := wmHeuristics().strongEventScore(text)
+	host := affectedZoneSourceHost(e)
+	profile := wmHeuristics().ProfileArticle(text, host)
+	if inferenceScore < 0.92 {
+		return true
+	}
+	if profile.likelyAnalysisRoundup() && !looksLikeWarmConflictPosture(text, cls) {
+		return true
+	}
+	if hasAnyKeyword(text,
+		"last 24 hours", "what to know", "live blog", "live updates", "roundup", "at a glance",
+		"decision", "authorize", "implementation", "analysis", "opinion", "speech", "warn",
+		"why ", "how ",
+	) && eventScore < 1.65 {
+		if !(strings.TrimSpace(conditionType) == "military_conflict" && hasAnyKeyword(text,
+			"air defence", "air defense", "fighter", "interceptor", "deployment", "deterrence", "reinforce", "reinforcement", "typhoon", "navies", "regional confrontation",
+		)) {
+			return true
+		}
+	}
+	switch strings.TrimSpace(conditionType) {
+	case "political_tension":
+		if looksLikeAdministrativeCommentaryText(text) && !hasAnyKeyword(text, "sanctions", "embargo", "border clash", "ceasefire collapse", "protest", "riot", "unrest") {
+			return true
+		}
+		if eventScore < 1.20 && !hasAnyKeyword(text, "protest", "riot", "unrest", "state of emergency", "sanctions", "embargo", "border clash", "ceasefire collapse") {
+			return true
+		}
+	case "infrastructure_disruption", "cyber_disruption":
+		hasConcreteOutage := hasAnyKeyword(text, "outage", "blackout", "closure", "breach", "ransomware", "cable cut", "pipeline sabotage", "port closure", "shutdown", "offline", "operations suspended")
+		if hasAnyKeyword(text, "no specific", "no concrete", "no confirmed", "without a concrete outage", "without confirmed disruption") {
+			hasConcreteOutage = false
+		}
+		if profile.likelyAdvisoryCampaignWithoutOutage() {
+			return true
+		}
+		if eventScore < 1.12 && !hasConcreteOutage {
+			return true
+		}
+		if hasAnyKeyword(text, "countries", "multiple countries", "16 countries", "campaign", "botnet", "web shell", "researchers warn") &&
+			!hasConcreteOutage {
+			return true
+		}
+	case "military_conflict":
+		if looksLikeAdministrativeCommentaryText(text) || looksLikeCivilIncidentWithoutMilitaryContext(text) {
+			return true
+		}
+		if eventScore < 1.08 && !hasAnyKeyword(text,
+			"attack", "strike", "missile", "shelling", "drone strike", "airstrike", "clash", "troops", "warship", "hostage", "terror attack",
+			"air defence", "air defense", "fighter", "interceptor", "deployment", "deterrence", "reinforce", "reinforcement", "typhoon", "navies",
+		) {
+			return true
+		}
+	case "natural_disaster":
+		if eventScore < 1.18 && !hasAnyKeyword(text, "hurricane", "typhoon", "cyclone", "storm surge", "displaced", "evacuation") {
+			return true
+		}
+	}
+	if profile.likelyBroadRegionalRoundup() && conditionType != "military_conflict" {
+		return true
+	}
+	if (host == "realcleardefense.com" || host == "warontherocks.com" || host == "foreignpolicy.com") && inferenceScore < 1.35 && eventScore < 1.55 {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(cls.Category), "economic") && eventScore < 1.35 {
+		return true
+	}
+	return false
+}
+
+func looksLikeWarmConflictPosture(text string, cls horizonMonitorNewsClassification) bool {
+	if !strings.EqualFold(strings.TrimSpace(cls.Category), "military") && !strings.EqualFold(strings.TrimSpace(cls.Category), "conflict") {
+		return false
+	}
+	text = normalizeKeywordText(text)
+	if !hasAnyKeyword(text, "conflict", "tension", "regional confrontation", "force posture", "air defence", "air defense") {
+		return false
+	}
+	return hasAnyKeyword(text,
+		"fighter", "interceptor", "deployment", "deterrence", "reinforce", "reinforcement", "typhoon", "navies", "air defence", "air defense",
+	)
+}
+
+func inferZoneGeo(e *horizonMonitorFeedEvent, place, text, conditionType string) (geoToken, countryCode, countryName string) {
+	if geoToken, countryCode, countryName = inferZoneGeoFromPlace(place); geoToken != "" {
+		return geoToken, countryCode, countryName
+	}
+	countryCode = ""
+	countryName = ""
+	if e != nil {
+		countryCode = strings.ToUpper(strings.TrimSpace(e.CountryCode))
+		countryName = strings.TrimSpace(e.CountryName)
+	}
 	if countryCode == "" && e != nil {
 		countryCode = inferCountryCodeFromText(strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary)}, " "))
 		if countryCode != "" {
 			countryName = firstNonEmptyString(countryName, countryNameFromCode(countryCode))
 		}
 	}
-	if len(countryCode) == 2 {
-		return strings.ToLower(countryCode), countryCode, firstNonEmptyString(countryName, countryNameFromCode(countryCode))
-	}
 	if lp := strings.TrimSpace(e.LocationPath); strings.HasPrefix(lp, "/loc/") {
 		parts := strings.Split(strings.Trim(lp, "/"), "/")
 		if len(parts) >= 2 && len(strings.TrimSpace(parts[1])) == 2 {
 			cc := strings.ToUpper(strings.TrimSpace(parts[1]))
-			return strings.ToLower(cc), cc, firstNonEmptyString(countryName, countryNameFromCode(cc))
+			if shouldTrustAffectedZoneCountryFallback(e, text, conditionType, cc) ||
+				(strings.TrimSpace(place) != "" &&
+					!isWeakAffectedZonePlace(place, firstNonEmptyString(countryName, countryNameFromCode(cc))) &&
+					!looksLikeBadAffectedZonePlaceHint(place)) {
+				return strings.ToLower(cc), cc, firstNonEmptyString(countryName, countryNameFromCode(cc))
+			}
 		}
+	}
+	if len(countryCode) == 2 && shouldTrustAffectedZoneCountryFallback(e, text, conditionType, countryCode) {
+		return strings.ToLower(countryCode), countryCode, firstNonEmptyString(countryName, countryNameFromCode(countryCode))
 	}
 	if countryName == "" {
 		countryName = "Global"
@@ -2713,9 +3029,39 @@ func inferZoneGeo(e *horizonMonitorFeedEvent) (geoToken, countryCode, countryNam
 	return "global", "", countryName
 }
 
+func shouldTrustAffectedZoneCountryFallback(e *horizonMonitorFeedEvent, text, conditionType, countryCode string) bool {
+	countryCode = strings.ToUpper(strings.TrimSpace(countryCode))
+	if countryCode == "" {
+		return false
+	}
+	if e != nil {
+		if lp := strings.TrimSpace(e.LocationPath); strings.HasPrefix(lp, "/loc/") {
+			if strings.EqualFold(countryFromLocationPathString(lp), countryCode) {
+				return true
+			}
+		}
+	}
+	text = normalizeKeywordText(text)
+	countryName := normalizeKeywordText(countryNameFromCode(countryCode))
+	hasCountryMention := countryName != "" && strings.Contains(text, countryName)
+	switch strings.TrimSpace(conditionType) {
+	case "military_conflict", "political_tension":
+		return false
+	case "cyber_disruption", "infrastructure_disruption":
+		return hasCountryMention &&
+			hasAnyKeyword(text, "outage", "shutdown", "closure", "blackout", "offline", "spill", "port closure", "operations suspended") &&
+			affectedZoneSourceHost(e) != "news.google.com"
+	default:
+		return hasCountryMention || affectedZoneSourceHost(e) == "earthquake.usgs.gov" || affectedZoneSourceHost(e) == "who.int"
+	}
+}
+
 func inferZonePlaceName(e *horizonMonitorFeedEvent) string {
 	if e == nil {
 		return ""
+	}
+	if v := extractUSGSPlaceFromTitle(strings.TrimSpace(e.Title)); isPlausiblePlaceName(v) {
+		return v
 	}
 	for _, key := range []string{
 		"city", "region", "province", "state", "district", "location", "place", "area",
@@ -2725,10 +3071,10 @@ func inferZonePlaceName(e *horizonMonitorFeedEvent) string {
 			return v
 		}
 	}
-	if v := extractKnownPlaceFromText(strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary)}, " ")); isPlausiblePlaceName(v) {
+	if v := extractPlaceFromTitle(strings.TrimSpace(e.Title)); isPlausiblePlaceName(v) && !isGenericAffectedZonePlace(v) {
 		return v
 	}
-	if v := extractPlaceFromTitle(strings.TrimSpace(e.Title)); isPlausiblePlaceName(v) {
+	if v := extractKnownPlaceFromText(strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary)}, " ")); isPlausiblePlaceName(v) {
 		return v
 	}
 	return firstNonEmptyString(strings.TrimSpace(e.CountryName), countryNameFromCode(strings.TrimSpace(e.CountryCode)))
@@ -2743,11 +3089,33 @@ func isPlausiblePlaceName(v string) bool {
 	if norm == "" {
 		return false
 	}
+	if len(strings.Fields(norm)) > 4 {
+		return false
+	}
 	bad := map[string]struct{}{
 		"breaking": {}, "analysis": {}, "news": {}, "report": {}, "update": {},
 		"military": {}, "conflict": {}, "disaster": {}, "situation": {}, "region submenu": {},
 	}
 	if _, ok := bad[norm]; ok {
+		return false
+	}
+	badTokens := map[string]struct{}{
+		"is": {}, "are": {}, "was": {}, "were": {}, "be": {}, "being": {},
+		"wants": {}, "want": {}, "why": {}, "how": {}, "disrupting": {}, "deepen": {},
+		"delivers": {}, "validates": {}, "eliminating": {}, "lessons": {},
+		"decision": {}, "authorize": {}, "implementation": {}, "hours": {}, "warn": {}, "warning": {},
+		"analysis": {}, "report": {}, "roundup": {}, "glance": {}, "live": {}, "updates": {},
+	}
+	for _, token := range strings.Fields(norm) {
+		if _, ok := badTokens[token]; ok {
+			return false
+		}
+	}
+	if !hasAnyKeyword(norm,
+		"sea", "strait", "canal", "gulf", "region", "valley", "basin", "corridor",
+		"province", "state", "city", "county", "district", "prefecture", "governorate", "oblast",
+		"island", "islands", "coast", "coastal", "port", "terminal", "airport", "field", "complex",
+	) && hasAnyKeyword(norm, "decision", "authorize", "implementation", "report", "analysis", "warning", "hours") {
 		return false
 	}
 	return true
@@ -2764,7 +3132,7 @@ func extractPlaceFromTitle(title string) string {
 		return ""
 	}
 	preps := map[string]struct{}{
-		"in": {}, "near": {}, "around": {}, "outside": {}, "at": {}, "off": {}, "across": {}, "from": {},
+		"in": {}, "near": {}, "around": {}, "outside": {}, "at": {}, "off": {}, "across": {}, "from": {}, "of": {},
 	}
 	stop := map[string]struct{}{
 		"the": {}, "a": {}, "an": {}, "latest": {}, "breaking": {}, "report": {}, "reports": {},
@@ -2783,6 +3151,10 @@ func extractPlaceFromTitle(title string) string {
 				break
 			}
 			lower := strings.ToLower(token)
+			if lower == "of" && len(parts) > 0 && geographicHeadAllowsOf(parts[0]) {
+				parts = append(parts, token)
+				continue
+			}
 			if _, bad := stop[lower]; bad {
 				if len(parts) == 0 {
 					continue
@@ -2795,10 +3167,84 @@ func extractPlaceFromTitle(title string) string {
 			parts = append(parts, token)
 		}
 		if len(parts) > 0 {
-			return strings.Join(parts, " ")
+			candidate := strings.Join(parts, " ")
+			if isLikelyTitlePlaceCandidate(candidate) {
+				return candidate
+			}
 		}
 	}
 	return ""
+}
+
+func geographicHeadAllowsOf(head string) bool {
+	switch normalizePhrase(head) {
+	case "strait", "gulf", "sea", "canal", "port", "bay", "cape", "bank":
+		return true
+	default:
+		return false
+	}
+}
+
+func isGenericAffectedZonePlace(place string) bool {
+	switch normalizePhrase(place) {
+	case "strait", "gulf", "sea", "canal", "region", "middle east":
+		return true
+	default:
+		return false
+	}
+}
+
+var usgsMagnitudeTitlePlaceRE = regexp.MustCompile(`(?i)^m\s*\d+(?:\.\d+)?\s*-\s*(.+)$`)
+var usgsDistancePrefixRE = regexp.MustCompile(`(?i)^\d+\s*km\s+[a-z-]+\s+of\s+`)
+
+func extractUSGSPlaceFromTitle(title string) string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return ""
+	}
+	m := usgsMagnitudeTitlePlaceRE.FindStringSubmatch(title)
+	if len(m) != 2 {
+		return ""
+	}
+	candidate := strings.TrimSpace(m[1])
+	candidate = usgsDistancePrefixRE.ReplaceAllString(candidate, "")
+	candidate = strings.Trim(candidate, " -.,")
+	return candidate
+}
+
+func isLikelyTitlePlaceCandidate(candidate string) bool {
+	candidate = strings.TrimSpace(candidate)
+	if !isPlausiblePlaceName(candidate) {
+		return false
+	}
+	norm := normalizePhrase(candidate)
+	if norm == "" {
+		return false
+	}
+	if _, ok := zoneHotspotCoords[norm]; ok {
+		return true
+	}
+	if inferCountryCodeFromText(candidate) != "" {
+		return true
+	}
+	if hasAnyKeyword(norm,
+		"sea", "strait", "canal", "gulf", "region", "valley", "basin", "corridor",
+		"province", "state", "city", "county", "district", "prefecture", "governorate", "oblast",
+		"island", "islands", "coast", "coastal", "port", "terminal", "airport", "field", "complex",
+	) {
+		return true
+	}
+	upperTokens := 0
+	for _, part := range strings.Fields(candidate) {
+		if part == "" {
+			continue
+		}
+		r := []rune(part)
+		if len(r) > 0 && r[0] >= 'A' && r[0] <= 'Z' {
+			upperTokens++
+		}
+	}
+	return upperTokens >= 2
 }
 
 func extractKnownPlaceFromText(text string) string {
@@ -2815,16 +3261,6 @@ func extractKnownPlaceFromText(text string) string {
 		}
 		if strings.Contains(text, needle) && len(needle) > bestLen {
 			best = place
-			bestLen = len(needle)
-		}
-	}
-	for alias, cc := range countryNameToCode {
-		needle := normalizePhrase(alias)
-		if needle == "" || cc == "" {
-			continue
-		}
-		if strings.Contains(text, needle) && len(needle) > bestLen {
-			best = countryNameFromCode(cc)
 			bestLen = len(needle)
 		}
 	}
@@ -2852,6 +3288,858 @@ func inferAffectedZoneCoordinates(e *horizonMonitorFeedEvent, place, countryCode
 		return lat, lon, true, "approximate_country"
 	}
 	return 0, 0, false, "none"
+}
+
+func affectedZoneSourceHost(e *horizonMonitorFeedEvent) string {
+	if e == nil {
+		return ""
+	}
+	raw := strings.TrimSpace(e.URL)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	return strings.TrimPrefix(host, "www.")
+}
+
+func shouldSuppressAffectedZoneBySourceProfile(e *horizonMonitorFeedEvent) bool {
+	if e == nil {
+		return false
+	}
+	host := affectedZoneSourceHost(e)
+	if host == "" {
+		return false
+	}
+	text := normalizeKeywordText(strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary)}, " "))
+	eventScore := wmHeuristics().strongEventScore(text)
+	switch host {
+	case "realcleardefense.com", "warontherocks.com", "foreignpolicy.com":
+		if eventScore < 1.65 {
+			return true
+		}
+		if !strings.Contains(text, "attack") &&
+			!strings.Contains(text, "strike") &&
+			!strings.Contains(text, "missile") &&
+			!strings.Contains(text, "earthquake") &&
+			!strings.Contains(text, "outbreak") &&
+			!strings.Contains(text, "outage") &&
+			!strings.Contains(text, "blackout") &&
+			!strings.Contains(text, "flood") &&
+			!strings.Contains(text, "wildfire") {
+			return true
+		}
+	case "who.int":
+		if strings.Contains(text, "validates") ||
+			strings.Contains(text, "eliminating") ||
+			strings.Contains(text, "certified") ||
+			strings.Contains(text, "progress") {
+			return true
+		}
+	case "worldbank.org", "blogs.worldbank.org", "csis.org":
+		if wmHeuristics().ProfileArticle(text, host).AnalysisScore >= 1.35 && eventScore < 1.85 {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldSuppressAffectedZoneBySemanticDrift(text string, e *horizonMonitorFeedEvent, cls horizonMonitorNewsClassification) bool {
+	if text == "" {
+		return true
+	}
+	eventScore := wmHeuristics().strongEventScore(text)
+	if strings.Contains(text, "strait of hormuz") ||
+		strings.Contains(text, "suez canal") ||
+		strings.Contains(text, "red sea") ||
+		strings.Contains(text, "black sea") ||
+		strings.Contains(text, "taiwan strait") {
+		return false
+	}
+	if strings.Contains(text, "at a glance") ||
+		strings.Contains(text, "lessons from") ||
+		strings.Contains(text, "foreign policy speech") ||
+		strings.Contains(text, "public health failures") ||
+		strings.Contains(text, "legacy of") ||
+		strings.Contains(text, "paradox of") {
+		if eventScore < 1.8 {
+			return true
+		}
+	}
+	if (strings.Contains(text, "why ") || strings.Contains(text, "how ")) && eventScore < 1.35 {
+		return true
+	}
+	if strings.Contains(text, "validates") ||
+		strings.Contains(text, "eliminating mother to child transmission") {
+		return true
+	}
+	if looksLikeAdministrativeCommentaryText(text) && !looksLikeWarmConflictPosture(text, cls) {
+		return true
+	}
+	if looksLikeCivilIncidentWithoutMilitaryContext(text) {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(cls.Category), "health") &&
+		(strings.Contains(text, "validates") || strings.Contains(text, "eliminating")) {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(cls.Category), "infrastructure") &&
+		strings.Contains(text, "industrial base") &&
+		!strings.Contains(text, "outage") &&
+		!strings.Contains(text, "disrupt") &&
+		!strings.Contains(text, "closure") {
+		return true
+	}
+	return false
+}
+
+func looksLikeAdministrativeCommentaryText(text string) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	return hasAnyKeyword(text,
+		"pricing deal", "pricing deals", "drug pricing", "access to medicines",
+		"set to be announced", "new supreme leader", "tries to strike a balance", "strike a balance",
+		"securing stability and growth", "stability and growth", "finding freedom and healing",
+		"on the road with", "taunts", "order diplomats", "diplomats to leave",
+	)
+}
+
+func looksLikeCivilIncidentWithoutMilitaryContext(text string) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	if hasAnyKeyword(text,
+		"missile", "airstrike", "drone strike", "shelling", "troops", "warship",
+		"frigate", "destroyer", "fighter jet", "interceptor", "frontline", "hostilities",
+		"ground offensive", "counterstrike", "invasion", "ceasefire",
+	) {
+		return false
+	}
+	return hasAnyKeyword(text,
+		"police investigate", "nightclub", "outside the us embassy", "outside u s embassy",
+		"embassy", "injures", "including minors", "minors",
+	)
+}
+
+func shouldSuppressAffectedZoneByEventProfile(
+	text string,
+	e *horizonMonitorFeedEvent,
+	cls horizonMonitorNewsClassification,
+	conditionType string,
+	profile wmArticleProfile,
+) bool {
+	host := affectedZoneSourceHost(e)
+	eventScore := wmHeuristics().strongEventScore(text)
+	if profile.likelyAnalysisRoundup() && !looksLikeWarmConflictPosture(text, cls) {
+		return true
+	}
+	if (conditionType == "cyber_disruption" || conditionType == "infrastructure_disruption") && profile.likelyAdvisoryCampaignWithoutOutage() {
+		return true
+	}
+	if profile.likelyBroadRegionalRoundup() {
+		switch conditionType {
+		case "wildfire_zone", "humanitarian_crisis", "environmental_hazard", "political_tension":
+			return true
+		case "military_conflict":
+			if !looksLikeWarmConflictPosture(text, cls) && eventScore < 1.95 {
+				return true
+			}
+		}
+	}
+	if (host == "csis.org" || host == "worldbank.org" || host == "blogs.worldbank.org") && profile.AnalysisScore >= 1.35 && eventScore < 1.85 {
+		return true
+	}
+	if host == "reliefweb.int" && profile.BroadScopeScore >= 1.35 && eventScore < 1.9 {
+		return true
+	}
+	return false
+}
+
+func affectedZoneFreshnessLimit(conditionType string) time.Duration {
+	switch strings.TrimSpace(conditionType) {
+	case "earthquake_affected", "tsunami_affected", "volcanic_eruption", "flood_zone", "wildfire_zone", "environmental_hazard":
+		return 14 * 24 * time.Hour
+	case "cyber_disruption", "infrastructure_disruption":
+		return 21 * 24 * time.Hour
+	case "disease_outbreak", "humanitarian_crisis":
+		return 30 * 24 * time.Hour
+	case "military_conflict", "political_tension":
+		return 21 * 24 * time.Hour
+	default:
+		return 21 * 24 * time.Hour
+	}
+}
+
+func shouldSkipAffectedZoneAsStale(now, matchedAt time.Time, e *horizonMonitorFeedEvent, c *affectedZoneCandidate) bool {
+	if c == nil || matchedAt.IsZero() {
+		return false
+	}
+	limit := affectedZoneFreshnessLimit(c.ConditionType)
+	if limit <= 0 {
+		return false
+	}
+	if now.Sub(matchedAt) <= limit {
+		return false
+	}
+	host := affectedZoneSourceHost(e)
+	if host == "earthquake.usgs.gov" || host == "cisa.gov" || host == "thehackernews.com" || host == "news.google.com" || host == "bbc.com" || host == "nytimes.com" {
+		return now.Sub(matchedAt) > (limit * 2)
+	}
+	return true
+}
+
+func shouldSuppressGenericAffectedZone(geoToken, place, pathSlug, conditionType string) bool {
+	geoToken = strings.TrimSpace(strings.ToLower(geoToken))
+	pathSlug = strings.TrimSpace(strings.ToLower(pathSlug))
+	place = normalizePhrase(place)
+	if geoToken != "global" {
+		return strings.Contains(pathSlug, "domain-v1") ||
+			strings.Contains(pathSlug, "supply-chain") ||
+			strings.Contains(pathSlug, "last-24-hours") ||
+			strings.Contains(pathSlug, "but-warn")
+	}
+	if strings.TrimSpace(place) == "" || pathSlug == "" || pathSlug == "global" || pathSlug == "emerging-hotspot" {
+		return true
+	}
+	if !isLegitResidualGlobalAffectedZonePlace(place) {
+		return true
+	}
+	if strings.Contains(place, "global") ||
+		strings.Contains(pathSlug, "domain-v1") ||
+		strings.Contains(pathSlug, "supply-chain") ||
+		looksLikeBadGlobalAffectedZoneSlug("/zone/global/"+strings.TrimSpace(conditionType)+"/"+pathSlug) {
+		return true
+	}
+	return false
+}
+
+func shouldSuppressAffectedZoneByPlaceQuality(place, countryName, conditionType, text string, e *horizonMonitorFeedEvent) bool {
+	place = normalizePhrase(place)
+	countryName = normalizePhrase(countryName)
+	text = normalizeKeywordText(text)
+	if place == "" {
+		return true
+	}
+	if place == countryName {
+		return false
+	}
+	if looksLikeBadAffectedZonePlaceHint(place) {
+		return true
+	}
+	if first := firstToken(place); first != "" && (isNumericToken(first) || first == "ongoing" || first == "last") {
+		return true
+	}
+	switch strings.TrimSpace(conditionType) {
+	case "cyber_disruption", "infrastructure_disruption":
+		if hasAnyKeyword(place, "botnet", "campaign", "web shell", "countries", "country", "nations") {
+			return true
+		}
+	}
+	host := affectedZoneSourceHost(e)
+	if (host == "thehackernews.com" || host == "krebsonsecurity.com") &&
+		!hasAnyKeyword(text, "outage", "shutdown", "closure", "blackout", "disruption", "service down") &&
+		hasAnyKeyword(place, "botnet", "campaign", "web shell", "countries", "country", "nations") {
+		return true
+	}
+	return false
+}
+
+func looksLikeBadAffectedZonePlaceHint(place string) bool {
+	place = normalizePhrase(place)
+	if place == "" {
+		return true
+	}
+	return strings.Contains(place, "last 24 hours") ||
+		strings.Contains(place, "this week") ||
+		strings.Contains(place, "priority area") ||
+		strings.Contains(place, "and beyond") ||
+		strings.Contains(place, "across latin america") ||
+		place == "middle east" ||
+		strings.Contains(place, "military activity") ||
+		strings.Contains(place, "ongoing") ||
+		strings.Contains(place, "web shell") ||
+		strings.Contains(place, "botnet") ||
+		strings.Contains(place, "campaign") ||
+		strings.Contains(place, "officials say") ||
+		strings.Contains(place, "as presidents") ||
+		strings.Contains(place, "16 countries") ||
+		strings.Contains(place, "nations only") ||
+		strings.Contains(place, "only deepwater") ||
+		strings.Contains(place, "deepwater vlcc") ||
+		strings.Contains(place, "but warn")
+}
+
+func firstToken(value string) string {
+	parts := strings.Fields(strings.TrimSpace(value))
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(parts[0])
+}
+
+func isNumericToken(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func placeSpecificScopeLooksUnreliable(place, countryName, geoPrecision string, hasCoord bool) bool {
+	place = normalizePhrase(place)
+	countryName = normalizePhrase(countryName)
+	if place == "" || place == countryName {
+		return false
+	}
+	if geoPrecision != "approximate_country" || !hasCoord {
+		return false
+	}
+	if strings.Contains(place, " sea") || strings.Contains(place, "strait") || strings.Contains(place, "canal") || strings.Contains(place, "gulf") {
+		return false
+	}
+	return true
+}
+
+func shouldSuppressAffectedZoneByGeoCoherence(place, geoToken, countryCode, geoPrecision string, e *horizonMonitorFeedEvent) bool {
+	place = normalizePhrase(place)
+	geoToken = strings.TrimSpace(strings.ToLower(geoToken))
+	countryCode = strings.TrimSpace(strings.ToUpper(countryCode))
+	if place == "" {
+		return false
+	}
+	if cc := inferCountryCodeFromText(place); cc != "" && cc != countryCode && countryCode != "" {
+		return true
+	}
+	if geoPrecision == "approximate_country" && place != "" && countryCode == "" && geoToken != "sea" {
+		return true
+	}
+	if e != nil && strings.TrimSpace(e.LocationPath) != "" {
+		lpCC := strings.ToUpper(strings.TrimSpace(countryFromLocationPathString(e.LocationPath)))
+		if lpCC != "" && countryCode != "" && lpCC != countryCode && inferCountryCodeFromText(place) == countryCode {
+			return true
+		}
+	}
+	return false
+}
+
+func inferZoneGeoFromPlace(place string) (geoToken, countryCode, countryName string) {
+	p := normalizePhrase(place)
+	if p == "" {
+		return "", "", ""
+	}
+	if pt, ok := zoneHotspotCoords[p]; ok {
+		if cc := strings.ToUpper(strings.TrimSpace(pt.CountryCode)); cc != "" {
+			return strings.ToLower(cc), cc, countryNameFromCode(cc)
+		}
+		if strings.Contains(p, "strait") || strings.Contains(p, "sea") || strings.Contains(p, "canal") || strings.Contains(p, "shoal") || strings.Contains(p, "channel") || strings.Contains(p, "gulf") {
+			switch p {
+			case "taiwan strait":
+				return "tw-cn", "", "Taiwan Strait"
+			default:
+				return "sea", "", strings.TrimSpace(place)
+			}
+		}
+	}
+	if cc := inferCountryCodeFromText(place); cc != "" {
+		return strings.ToLower(cc), cc, countryNameFromCode(cc)
+	}
+	return "", "", ""
+}
+
+func normalizeAffectedZonePlace(place, countryName string) string {
+	place = strings.TrimSpace(place)
+	if place == "" {
+		return strings.TrimSpace(countryName)
+	}
+	normalized := normalizeKeywordText(place)
+	if strings.Contains(normalized, "domain v1") ||
+		strings.Contains(normalized, "supply chain") ||
+		strings.Contains(normalized, "affected zone") ||
+		strings.Contains(normalized, "canonical path") {
+		return strings.TrimSpace(countryName)
+	}
+	if cc := inferCountryCodeFromText(place); cc != "" {
+		return countryNameFromCode(cc)
+	}
+	for _, suffix := range []string{" this week", " this month", " today", " yesterday"} {
+		if strings.HasSuffix(strings.ToLower(place), suffix) {
+			trimmed := strings.TrimSpace(place[:len(place)-len(suffix)])
+			if trimmed != "" {
+				place = trimmed
+			}
+			break
+		}
+	}
+	return place
+}
+
+func shouldRelaxAffectedZoneAnchorCountryHint(place, countryName, countryCode string) bool {
+	if isWeakAffectedZonePlace(place, countryName) {
+		return true
+	}
+	placeNorm := normalizePhrase(place)
+	if placeNorm == "" {
+		return true
+	}
+	if looksLikeBadAffectedZonePlaceHint(placeNorm) {
+		return true
+	}
+	if strings.TrimSpace(countryCode) == "" {
+		return true
+	}
+	return false
+}
+
+func truncateString(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return strings.TrimSpace(s[:max])
+}
+
+type affectedZoneEntityAnchor struct {
+	Place          string
+	GeoToken       string
+	CountryCode    string
+	CountryName    string
+	Lat            float64
+	Lon            float64
+	HasCoordinates bool
+	GeoPrecision   string
+	FragmentPath   string
+}
+
+func resolveAffectedZoneEntityAnchor(
+	ctx context.Context,
+	p *HorizonMonitorPipeline,
+	e *horizonMonitorFeedEvent,
+	place string,
+	countryCode string,
+) *affectedZoneEntityAnchor {
+	if p == nil || p.vertexSearch == nil || !p.vertexSearch.IsConfigured() || p.fragmentsRepo == nil || e == nil {
+		return nil
+	}
+	anchors := extractAffectedZoneObjectAnchors(e, 4)
+	if len(anchors) == 0 {
+		return nil
+	}
+	wantCountry := strings.ToUpper(strings.TrimSpace(firstNonEmptyString(countryCode, e.CountryCode)))
+	type scoredAnchor struct {
+		anchor affectedZoneEntityAnchor
+		score  float64
+	}
+	best := scoredAnchor{}
+	for _, seed := range anchors {
+		resp, err := p.vertexSearch.Search(ctx, &ai.SearchRequest{Query: seed, PageSize: 4})
+		if err != nil || resp == nil || len(resp.Results) == 0 {
+			continue
+		}
+		for _, result := range resp.Results {
+			score := result.RelevanceScore
+			if score == 0 && result.RankSignals != nil {
+				score = result.RankSignals.SemanticSimilarityScore
+			}
+			if score < 0.70 {
+				continue
+			}
+			fragID := extractFragmentIDFromGCSURI(result.Document.URI)
+			if fragID == "" {
+				fragID = strings.TrimSuffix(strings.TrimSpace(result.Document.ID), ".json")
+			}
+			if fragID == "" {
+				continue
+			}
+			frag, ferr := p.fragmentsRepo.Get(ctx, fragID)
+			if ferr != nil || frag == nil {
+				continue
+			}
+			candidate, candScore := buildAffectedZoneAnchorFromFragment(ctx, seed, wantCountry, e, frag, score, p)
+			if candScore <= best.score {
+				continue
+			}
+			best = scoredAnchor{anchor: candidate, score: candScore}
+		}
+	}
+	if best.score < 0.92 || !best.anchor.HasCoordinates {
+		return nil
+	}
+	return &best.anchor
+}
+
+func buildAffectedZoneAnchorFromFragment(
+	ctx context.Context,
+	seed string,
+	wantCountry string,
+	e *horizonMonitorFeedEvent,
+	frag *horizonmodels.HorizonFragment,
+	baseScore float64,
+	p *HorizonMonitorPipeline,
+) (affectedZoneEntityAnchor, float64) {
+	if frag == nil {
+		return affectedZoneEntityAnchor{}, 0
+	}
+	if strings.HasPrefix(strings.TrimSpace(frag.CanonicalPath), "/fac/na/") {
+		return affectedZoneEntityAnchor{}, 0
+	}
+	lat, lon, hasCoord := horizonrepo.ResolveFragmentCoordinates(frag)
+	if !hasCoord {
+		return affectedZoneEntityAnchor{}, 0
+	}
+	cc := affectedZoneCountryFromFragment(frag)
+	if wantCountry != "" && cc != "" && !strings.EqualFold(cc, wantCountry) {
+		return affectedZoneEntityAnchor{}, 0
+	}
+	label := strings.TrimSpace(frag.Labels["en"])
+	if label == "" {
+		label = humanizePathTail(frag.CanonicalPath)
+	}
+	score := baseScore
+	switch frag.Type {
+	case horizonmodels.FragmentTypeFacility:
+		score += 0.30
+	case horizonmodels.FragmentTypeDeposit:
+		score += 0.28
+	case horizonmodels.FragmentTypeGeoRegion:
+		score += 0.24
+	case horizonmodels.FragmentTypeOrganization:
+		score += 0.08
+	default:
+		return affectedZoneEntityAnchor{}, 0
+	}
+	if hasAnyKeyword(normalizeKeywordText(strings.Join([]string{e.Title, e.Summary}, " ")), normalizeKeywordText(label)) {
+		score += 0.08
+	}
+	if strings.EqualFold(strings.TrimSpace(seed), label) {
+		score += 0.06
+	}
+	if cc != "" && wantCountry != "" && strings.EqualFold(cc, wantCountry) {
+		score += 0.08
+	}
+	if frag.Type == horizonmodels.FragmentTypeOrganization {
+		if fallback, fallbackScore := resolveAffectedZoneOperationalAnchorFromOrg(ctx, p, frag, e, wantCountry); fallbackScore > 0 {
+			return fallback, score + fallbackScore
+		}
+	}
+	geoToken := strings.ToLower(strings.TrimSpace(cc))
+	if geoToken == "" {
+		if strings.Contains(strings.ToLower(frag.CanonicalPath), "/strait/") ||
+			strings.Contains(strings.ToLower(frag.CanonicalPath), "strait") ||
+			strings.Contains(strings.ToLower(frag.CanonicalPath), "canal") ||
+			strings.Contains(strings.ToLower(frag.CanonicalPath), "sea") ||
+			strings.Contains(strings.ToLower(frag.CanonicalPath), "gulf") {
+			geoToken = "sea"
+		}
+	}
+	if geoToken == "" {
+		geoToken = "global"
+	}
+	return affectedZoneEntityAnchor{
+		Place:          label,
+		GeoToken:       geoToken,
+		CountryCode:    cc,
+		CountryName:    countryNameFromCode(cc),
+		Lat:            lat,
+		Lon:            lon,
+		HasCoordinates: true,
+		GeoPrecision:   "entity_anchor",
+		FragmentPath:   strings.TrimSpace(frag.CanonicalPath),
+	}, score
+}
+
+func resolveAffectedZoneOperationalAnchorFromOrg(
+	ctx context.Context,
+	p *HorizonMonitorPipeline,
+	org *horizonmodels.HorizonFragment,
+	e *horizonMonitorFeedEvent,
+	wantCountry string,
+) (affectedZoneEntityAnchor, float64) {
+	if p == nil || p.edgesRepo == nil || p.fragmentsRepo == nil || org == nil || strings.TrimSpace(org.ID) == "" {
+		return affectedZoneEntityAnchor{}, 0
+	}
+	edgeTypes := []horizonmodels.DependencyType{
+		horizonmodels.DependencyTypeOwns,
+		horizonmodels.DependencyTypeManages,
+		horizonmodels.DependencyTypeControls,
+	}
+	text := normalizeKeywordText(strings.Join([]string{e.Title, e.Summary}, " "))
+	best := affectedZoneEntityAnchor{}
+	bestScore := 0.0
+	for _, et := range edgeTypes {
+		edges, err := p.edgesRepo.ListBySource(ctx, "global", strings.TrimSpace(org.ID), &et, 64)
+		if err != nil {
+			continue
+		}
+		for _, edge := range edges {
+			if edge == nil || strings.TrimSpace(edge.TargetFragmentID) == "" {
+				continue
+			}
+			frag, ferr := p.fragmentsRepo.Get(ctx, strings.TrimSpace(edge.TargetFragmentID))
+			if ferr != nil || frag == nil {
+				continue
+			}
+			if frag.Type != horizonmodels.FragmentTypeFacility && frag.Type != horizonmodels.FragmentTypeDeposit && frag.Type != horizonmodels.FragmentTypeGeoRegion {
+				continue
+			}
+			cc := affectedZoneCountryFromFragment(frag)
+			if wantCountry != "" && cc != "" && !strings.EqualFold(cc, wantCountry) {
+				continue
+			}
+			lat, lon, hasCoord := horizonrepo.ResolveFragmentCoordinates(frag)
+			if !hasCoord {
+				continue
+			}
+			label := strings.TrimSpace(frag.Labels["en"])
+			if label == "" {
+				label = humanizePathTail(frag.CanonicalPath)
+			}
+			score := 0.22
+			if strings.Contains(text, normalizeKeywordText(label)) {
+				score += 0.22
+			}
+			if cc != "" && wantCountry != "" && strings.EqualFold(cc, wantCountry) {
+				score += 0.18
+			}
+			if looksLikeOperationalAnchorPath(frag.CanonicalPath) {
+				score += 0.12
+			}
+			if score <= bestScore {
+				continue
+			}
+			bestScore = score
+			best = affectedZoneEntityAnchor{
+				Place:          label,
+				GeoToken:       strings.ToLower(firstNonEmptyString(cc, "global")),
+				CountryCode:    cc,
+				CountryName:    countryNameFromCode(cc),
+				Lat:            lat,
+				Lon:            lon,
+				HasCoordinates: true,
+				GeoPrecision:   "entity_anchor",
+				FragmentPath:   strings.TrimSpace(frag.CanonicalPath),
+			}
+		}
+	}
+	return best, bestScore
+}
+
+func extractAffectedZoneObjectAnchors(e *horizonMonitorFeedEvent, maxCount int) []string {
+	if e == nil || maxCount <= 0 {
+		return nil
+	}
+	out := make([]string, 0, maxCount)
+	seen := map[string]struct{}{}
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v == "" || len(out) >= maxCount {
+			return
+		}
+		if len(strings.Fields(v)) > 5 || len(v) > 72 {
+			return
+		}
+		if !looksLikeAffectedZoneEntitySeed(v, e) {
+			return
+		}
+		key := strings.ToLower(v)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, v)
+	}
+	for _, key := range []string{
+		"company", "companyName", "organization", "organisation", "operator", "owner",
+		"facility", "plant", "refinery", "port", "terminal", "airport", "field", "deposit",
+		"asset", "site", "location",
+	} {
+		if e.Raw != nil {
+			if v := strings.TrimSpace(asString(e.Raw[key])); v != "" {
+				add(v)
+			}
+		}
+	}
+	countryName := normalizePhrase(firstNonEmptyString(strings.TrimSpace(e.CountryName), countryNameFromCode(strings.TrimSpace(e.CountryCode))))
+	for _, seed := range heuristicSignalSeedNames(e) {
+		seedNorm := normalizePhrase(seed)
+		if seedNorm == "" || seedNorm == countryName || seedNorm == countryName+" government" {
+			continue
+		}
+		add(seed)
+	}
+	return out
+}
+
+func shouldPreferAffectedZoneAnchor(anchor *affectedZoneEntityAnchor, place, countryName, geoPrecision string, hasCoord bool) bool {
+	if anchor == nil || !anchor.HasCoordinates {
+		return false
+	}
+	if !hasCoord || geoPrecision == "none" || geoPrecision == "approximate_country" {
+		return true
+	}
+	return isWeakAffectedZonePlace(place, countryName)
+}
+
+func isWeakAffectedZonePlace(place, countryName string) bool {
+	placeNorm := normalizePhrase(place)
+	countryNorm := normalizePhrase(countryName)
+	if placeNorm == "" || placeNorm == countryNorm {
+		return true
+	}
+	switch placeNorm {
+	case "global", "emerging hotspot", "emerging-hotspot":
+		return true
+	}
+	return false
+}
+
+func shouldAttemptAffectedZoneEntityAnchor(place, countryName, geoPrecision string, hasCoord bool, e *horizonMonitorFeedEvent) bool {
+	if e == nil {
+		return false
+	}
+	if !isWeakAffectedZonePlace(place, countryName) &&
+		!placeSpecificScopeLooksUnreliable(place, countryName, geoPrecision, hasCoord) &&
+		!looksLikeBadAffectedZonePlaceHint(place) {
+		return false
+	}
+	text := normalizeKeywordText(strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary)}, " "))
+	if !hasAnyKeyword(text,
+		"company", "operator", "owner", "facility", "plant", "refinery", "port", "terminal",
+		"airport", "factory", "fab", "field", "deposit", "pipeline", "mine", "industrial city",
+		"complex", "site",
+	) && len(extractAffectedZoneObjectAnchors(e, 3)) == 0 {
+		return false
+	}
+	return true
+}
+
+func looksLikeAffectedZoneEntitySeed(seed string, e *horizonMonitorFeedEvent) bool {
+	seed = strings.TrimSpace(seed)
+	if seed == "" {
+		return false
+	}
+	seedNorm := normalizePhrase(seed)
+	if seedNorm == "" {
+		return false
+	}
+	if inferCountryCodeFromText(seed) != "" {
+		return false
+	}
+	if hasAnyKeyword(seedNorm,
+		"government", "ministry", "official", "officials", "president", "prime minister", "army", "navy", "air force",
+		"speech", "glance", "analysis", "report", "roundup", "strategy", "update",
+		"research", "gender", "worker", "dead", "death", "arrest", "detention", "warning", "warnings",
+	) && !hasAnyKeyword(seedNorm,
+		"terminal", "port", "refinery", "plant", "pipeline", "airport", "factory", "fab", "field", "deposit", "complex", "site",
+	) {
+		return false
+	}
+	if len(strings.Fields(seedNorm)) == 1 && !hasAnyKeyword(seedNorm,
+		"ras", "hook", "zeebrugge", "rotterdam", "malacca", "hormuz", "south", "north",
+	) {
+		return false
+	}
+	titleSummary := normalizeKeywordText(strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary)}, " "))
+	if !looksLikeOperationalEntitySeed(seedNorm) && !looksLikeCorporateEntitySeed(seedNorm) {
+		return false
+	}
+	if titleSummary != "" && !hasAnyKeyword(seedNorm,
+		"terminal", "port", "refinery", "plant", "pipeline", "airport", "factory", "fab", "field", "deposit", "complex", "city", "site",
+	) && !strings.Contains(titleSummary, seedNorm) {
+		return false
+	}
+	return true
+}
+
+func looksLikeOperationalEntitySeed(seedNorm string) bool {
+	return hasAnyKeyword(seedNorm,
+		"terminal", "port", "refinery", "plant", "pipeline", "airport", "factory", "fab",
+		"field", "deposit", "complex", "industrial city", "site", "hub", "mine", "shipyard",
+		"strait", "canal", "sea", "gulf",
+	)
+}
+
+func looksLikeCorporateEntitySeed(seedNorm string) bool {
+	return hasAnyKeyword(seedNorm,
+		" plc", " ltd", " llc", " inc", " corp", " corporation", " company", " co ", " group",
+		" holdings", " energy", " petroleum", " gas", " lng", " shipping", " logistics", " terminals",
+	)
+}
+
+func affectedZoneCountryFromFragment(fragment *horizonmodels.HorizonFragment) string {
+	if fragment == nil {
+		return ""
+	}
+	if fragment.HomeLocation != nil && fragment.HomeLocation.ISO3166_1 != nil {
+		if cc := strings.ToUpper(strings.TrimSpace(*fragment.HomeLocation.ISO3166_1)); len(cc) == 2 {
+			return cc
+		}
+	}
+	cp := strings.Trim(strings.TrimSpace(fragment.CanonicalPath), "/")
+	parts := strings.Split(cp, "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	switch parts[0] {
+	case "fac", "org", "gov", "loc", "deposit", "market", "community":
+		if cc := strings.ToUpper(strings.TrimSpace(parts[1])); len(cc) == 2 {
+			return cc
+		}
+	}
+	return ""
+}
+
+func looksLikeOperationalAnchorPath(path string) bool {
+	p := normalizeKeywordText(path)
+	return strings.Contains(p, "port") ||
+		strings.Contains(p, "terminal") ||
+		strings.Contains(p, "refinery") ||
+		strings.Contains(p, "plant") ||
+		strings.Contains(p, "fab") ||
+		strings.Contains(p, "field") ||
+		strings.Contains(p, "complex") ||
+		strings.Contains(p, "pipeline")
+}
+
+func humanizePathTail(path string) string {
+	cp := strings.Trim(strings.TrimSpace(path), "/")
+	if cp == "" {
+		return ""
+	}
+	parts := strings.Split(cp, "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	tail := strings.TrimSpace(parts[len(parts)-1])
+	if tail == "" {
+		return ""
+	}
+	tail = strings.ReplaceAll(tail, "-", " ")
+	tail = strings.ReplaceAll(tail, "_", " ")
+	return strings.Title(tail)
+}
+
+func extractFragmentIDFromGCSURI(uri string) string {
+	uri = strings.TrimSpace(uri)
+	if uri == "" {
+		return ""
+	}
+	parts := strings.Split(uri, "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	last := strings.TrimSpace(parts[len(parts)-1])
+	return strings.TrimSuffix(last, ".json")
 }
 
 func inferZoneRadiusKm(conditionType, level, severity string) float64 {
@@ -2985,21 +4273,43 @@ type geoPoint struct {
 }
 
 var zoneHotspotCoords = map[string]geoPoint{
-	"donetsk":          {Lat: 48.0159, Lon: 37.8029, CountryCode: "UA"},
-	"kharkiv":          {Lat: 49.9935, Lon: 36.2304, CountryCode: "UA"},
-	"kyiv":             {Lat: 50.4501, Lon: 30.5234, CountryCode: "UA"},
-	"crimea":           {Lat: 45.3453, Lon: 34.4992, CountryCode: "UA"},
-	"gaza":             {Lat: 31.3547, Lon: 34.3088, CountryCode: "PS"},
-	"gaza strip":       {Lat: 31.4000, Lon: 34.3500, CountryCode: "PS"},
-	"southern lebanon": {Lat: 33.2500, Lon: 35.4000, CountryCode: "LB"},
-	"red sea":          {Lat: 21.0000, Lon: 39.0000, CountryCode: ""},
-	"black sea":        {Lat: 43.0000, Lon: 34.0000, CountryCode: ""},
-	"taiwan strait":    {Lat: 24.0000, Lon: 119.5000, CountryCode: ""},
-	"south china sea":  {Lat: 12.0000, Lon: 114.0000, CountryCode: ""},
-	"hormuz":           {Lat: 26.5667, Lon: 56.2500, CountryCode: ""},
-	"strait of hormuz": {Lat: 26.5667, Lon: 56.2500, CountryCode: ""},
-	"suez":             {Lat: 30.5852, Lon: 32.2654, CountryCode: "EG"},
-	"suez canal":       {Lat: 30.2000, Lon: 32.5500, CountryCode: "EG"},
+	"donetsk":                 {Lat: 48.0159, Lon: 37.8029, CountryCode: "UA"},
+	"kharkiv":                 {Lat: 49.9935, Lon: 36.2304, CountryCode: "UA"},
+	"kyiv":                    {Lat: 50.4501, Lon: 30.5234, CountryCode: "UA"},
+	"crimea":                  {Lat: 45.3453, Lon: 34.4992, CountryCode: "UA"},
+	"gaza":                    {Lat: 31.3547, Lon: 34.3088, CountryCode: "PS"},
+	"gaza strip":              {Lat: 31.4000, Lon: 34.3500, CountryCode: "PS"},
+	"west bank":               {Lat: 31.9500, Lon: 35.2500, CountryCode: "PS"},
+	"southern lebanon":        {Lat: 33.2500, Lon: 35.4000, CountryCode: "LB"},
+	"north kivu":              {Lat: -0.9000, Lon: 29.2000, CountryCode: "CD"},
+	"fergana valley":          {Lat: 40.4000, Lon: 71.8000, CountryCode: ""},
+	"kashmir region":          {Lat: 34.1000, Lon: 74.6000, CountryCode: ""},
+	"sir creek":               {Lat: 23.9167, Lon: 68.5833, CountryCode: ""},
+	"marib":                   {Lat: 15.4700, Lon: 45.3250, CountryCode: "YE"},
+	"marib energy zone":       {Lat: 15.4700, Lon: 45.3250, CountryCode: "YE"},
+	"khoy":                    {Lat: 38.5503, Lon: 44.9521, CountryCode: "IR"},
+	"khoy region":             {Lat: 38.5503, Lon: 44.9521, CountryCode: "IR"},
+	"cianjur":                 {Lat: -6.8173, Lon: 107.1423, CountryCode: "ID"},
+	"west java cianjur":       {Lat: -6.8173, Lon: 107.1423, CountryCode: "ID"},
+	"eastern iburi":           {Lat: 42.7000, Lon: 141.9000, CountryCode: "JP"},
+	"red sea":                 {Lat: 21.0000, Lon: 39.0000, CountryCode: ""},
+	"southern red sea":        {Lat: 14.5000, Lon: 42.7000, CountryCode: ""},
+	"red sea security crisis": {Lat: 17.5000, Lon: 41.5000, CountryCode: ""},
+	"bab el mandeb":           {Lat: 12.5850, Lon: 43.3330, CountryCode: ""},
+	"bab-el-mandeb":           {Lat: 12.5850, Lon: 43.3330, CountryCode: ""},
+	"bab al mandab":           {Lat: 12.5850, Lon: 43.3330, CountryCode: ""},
+	"black sea":               {Lat: 43.0000, Lon: 34.0000, CountryCode: ""},
+	"taiwan strait":           {Lat: 24.0000, Lon: 119.5000, CountryCode: ""},
+	"east china sea":          {Lat: 27.5000, Lon: 126.0000, CountryCode: ""},
+	"south china sea":         {Lat: 12.0000, Lon: 114.0000, CountryCode: ""},
+	"hormuz":                  {Lat: 26.5667, Lon: 56.2500, CountryCode: ""},
+	"strait of hormuz":        {Lat: 26.5667, Lon: 56.2500, CountryCode: ""},
+	"english channel":         {Lat: 50.3000, Lon: -1.5000, CountryCode: ""},
+	"strait of gibraltar":     {Lat: 35.9667, Lon: -5.6000, CountryCode: ""},
+	"malacca strait":          {Lat: 3.0000, Lon: 100.5000, CountryCode: ""},
+	"panama canal":            {Lat: 9.0800, Lon: -79.6800, CountryCode: "PA"},
+	"suez":                    {Lat: 30.5852, Lon: 32.2654, CountryCode: "EG"},
+	"suez canal":              {Lat: 30.2000, Lon: 32.5500, CountryCode: "EG"},
 }
 
 var zoneCountryCentroids = map[string]geoPoint{
@@ -3008,6 +4318,8 @@ var zoneCountryCentroids = map[string]geoPoint{
 	"AR": {Lat: -34.0000, Lon: -64.0000},
 	"AU": {Lat: -25.2744, Lon: 133.7751},
 	"BR": {Lat: -14.2350, Lon: -51.9253},
+	"BD": {Lat: 23.6850, Lon: 90.3563},
+	"BH": {Lat: 26.0667, Lon: 50.5577},
 	"CA": {Lat: 56.1304, Lon: -106.3468},
 	"CL": {Lat: -35.6751, Lon: -71.5430},
 	"CN": {Lat: 35.8617, Lon: 104.1954},
@@ -3016,7 +4328,9 @@ var zoneCountryCentroids = map[string]geoPoint{
 	"ES": {Lat: 40.4637, Lon: -3.7492},
 	"FR": {Lat: 46.2276, Lon: 2.2137},
 	"GB": {Lat: 55.3781, Lon: -3.4360},
+	"GR": {Lat: 39.0742, Lon: 21.8243},
 	"ID": {Lat: -0.7893, Lon: 113.9213},
+	"IE": {Lat: 53.1424, Lon: -7.6921},
 	"IL": {Lat: 31.0461, Lon: 34.8516},
 	"IN": {Lat: 20.5937, Lon: 78.9629},
 	"IQ": {Lat: 33.2232, Lon: 43.6793},
@@ -3024,6 +4338,7 @@ var zoneCountryCentroids = map[string]geoPoint{
 	"IT": {Lat: 41.8719, Lon: 12.5674},
 	"JP": {Lat: 36.2048, Lon: 138.2529},
 	"KR": {Lat: 35.9078, Lon: 127.7669},
+	"KP": {Lat: 40.3399, Lon: 127.5101},
 	"LB": {Lat: 33.8547, Lon: 35.8623},
 	"MX": {Lat: 23.6345, Lon: -102.5528},
 	"MY": {Lat: 4.2105, Lon: 101.9758},
@@ -3031,6 +4346,8 @@ var zoneCountryCentroids = map[string]geoPoint{
 	"NL": {Lat: 52.1326, Lon: 5.2913},
 	"PK": {Lat: 30.3753, Lon: 69.3451},
 	"PH": {Lat: 12.8797, Lon: 121.7740},
+	"PG": {Lat: -6.3150, Lon: 143.9555},
+	"PE": {Lat: -9.1900, Lon: -75.0152},
 	"PL": {Lat: 51.9194, Lon: 19.1451},
 	"PS": {Lat: 31.9522, Lon: 35.2332},
 	"RU": {Lat: 61.5240, Lon: 105.3188},
@@ -3047,6 +4364,7 @@ var zoneCountryCentroids = map[string]geoPoint{
 	"VN": {Lat: 14.0583, Lon: 108.2772},
 	"YE": {Lat: 15.5527, Lon: 48.5164},
 	"ZA": {Lat: -30.5595, Lon: 22.9375},
+	"NO": {Lat: 60.4720, Lon: 8.4689},
 }
 
 func isRealCoordinate(lat, lon float64, hasCoordinates bool) bool {
@@ -4597,9 +5915,51 @@ func normalizeClassificationWithSourceHint(cls horizonMonitorNewsClassification,
 	mappedCat := mapSourceCategoryToClassificationCategory(strings.TrimSpace(e.Category), strings.TrimSpace(e.FeedType), text)
 	eventScore := wmHeuristics().strongEventScore(text)
 	hasStrongEvent := eventScore >= 1.15
+	profile := wmHeuristics().ProfileArticle(text, affectedZoneSourceHost(e))
 
 	level := strings.ToLower(strings.TrimSpace(cls.Level))
 	category := strings.ToLower(strings.TrimSpace(cls.Category))
+
+	if profile.likelyAnalysisRoundup() && !looksLikeWarmConflictPosture(text, cls) {
+		cls.Level = "info"
+		cls.Category = "general"
+		cls.Confidence = 0.30
+		cls.Source = "keyword_ac+profile"
+		return cls
+	}
+	if profile.likelyAdvisoryCampaignWithoutOutage() && (category == "cyber" || category == "infrastructure" || category == "general") {
+		cls.Level = "low"
+		cls.Category = "cyber"
+		if cls.Confidence < 0.58 {
+			cls.Confidence = 0.58
+		}
+		cls.Source = "keyword_ac+profile"
+		level = "low"
+		category = "cyber"
+		hasStrongEvent = false
+	}
+	if (category == "military" || category == "conflict") && looksLikeAdministrativeCommentaryText(text) {
+		cls.Level = "info"
+		cls.Category = "diplomatic"
+		if cls.Confidence > 0.42 || cls.Confidence == 0 {
+			cls.Confidence = 0.42
+		}
+		cls.Source = "keyword_ac+profile"
+		level = "info"
+		category = "diplomatic"
+		hasStrongEvent = false
+	}
+	if (category == "military" || category == "conflict") && looksLikeCivilIncidentWithoutMilitaryContext(text) {
+		cls.Level = "medium"
+		cls.Category = "crime"
+		if cls.Confidence < 0.60 {
+			cls.Confidence = 0.60
+		}
+		cls.Source = "keyword_ac+profile"
+		level = "medium"
+		category = "crime"
+		hasStrongEvent = false
+	}
 
 	if category == "" || category == "general" {
 		if mappedCat != "" {
@@ -5055,6 +6415,7 @@ var countryCodeToName = map[string]string{
 	"NZ": "New Zealand",
 	"OM": "Oman",
 	"PE": "Peru",
+	"PG": "Papua New Guinea",
 	"PH": "Philippines",
 	"PL": "Poland",
 	"PS": "Palestine",

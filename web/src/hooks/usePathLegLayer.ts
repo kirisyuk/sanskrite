@@ -6,7 +6,8 @@ import { STATIC_TRANSPORT_FLOW_DATA, type TransportFlowFeature } from '../lib/st
 
 const SRC = 'path-legs-src';
 const GLOW_LAYER = 'path-legs-glow';
-const MAIN_LAYER = 'path-legs-main';
+const PINNED_LAYER = 'path-legs-pinned';
+const DISCOVERED_LAYER = 'path-legs-discovered';
 const BOTTLENECK_LAYER = 'path-legs-bottlenecks';
 
 type ThemeMode = 'dark' | 'light';
@@ -242,6 +243,10 @@ export function usePathLegLayer(
             affectedZoneRefs,
             spatialSemantics,
             dominantFactors,
+            discoverySource: String(artifact.discoverySource || '').trim(),
+            discoveryReason: String(artifact.discoveryReason || '').trim(),
+            traceRole: String(artifact.traceRole || '').trim(),
+            isPinned: Boolean(artifact.isPinned),
             stressScore,
             fragility: Number(leg.stress?.fragility) || 0,
             rerouteability: Number(leg.stress?.rerouteability) || 0,
@@ -326,12 +331,12 @@ export function usePathLegLayer(
       });
     }
 
-    if (!map.getLayer(MAIN_LAYER)) {
+    if (!map.getLayer(PINNED_LAYER)) {
       map.addLayer({
-        id: MAIN_LAYER,
+        id: PINNED_LAYER,
         type: 'line',
         source: SRC,
-        filter: ['==', ['geometry-type'], 'LineString'],
+        filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'isPinned'], true]],
         layout: {
           'line-cap': 'round',
           'line-join': 'round',
@@ -347,6 +352,32 @@ export function usePathLegLayer(
             ['<', ['get', 'bindingConfidence'], 0.62],
             ['literal', [2.6, 1.4]],
             ['literal', [1, 0]],
+          ],
+        },
+      });
+    }
+
+    if (!map.getLayer(DISCOVERED_LAYER)) {
+      map.addLayer({
+        id: DISCOVERED_LAYER,
+        type: 'line',
+        source: SRC,
+        filter: ['all', ['==', ['geometry-type'], 'LineString'], ['!=', ['get', 'isPinned'], true]],
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+        },
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': ['*', ['get', 'lineWidth'], 0.92],
+          'line-opacity': ['*', ['get', 'lineOpacity'], 0.88],
+          'line-dasharray': [
+            'case',
+            ['<', ['get', 'bindingConfidence'], 0.38],
+            ['literal', [0.9, 2.6]],
+            ['<', ['get', 'bindingConfidence'], 0.62],
+            ['literal', [1.6, 2.2]],
+            ['literal', [3.1, 1.8]],
           ],
         },
       });
@@ -372,7 +403,7 @@ export function usePathLegLayer(
     src?.setData(data.featureCollection as any);
 
     const visible = enabled && data.stats.legCount > 0;
-    for (const layer of [GLOW_LAYER, MAIN_LAYER, BOTTLENECK_LAYER]) {
+    for (const layer of [GLOW_LAYER, PINNED_LAYER, DISCOVERED_LAYER, BOTTLENECK_LAYER]) {
       if (map.getLayer(layer)) {
         map.setLayoutProperty(layer, 'visibility', visible ? 'visible' : 'none');
       }
@@ -414,16 +445,22 @@ export function usePathLegLayer(
       const zoneRefs = parseList(props.zoneRefs);
       const affectedZoneRefs = parseList(props.affectedZoneRefs);
       const spatialSemantics = parseList(props.spatialSemantics);
+      const discoveryReason = String(props.discoveryReason || '').trim();
+      const traceRole = String(props.traceRole || '').trim();
+      const discoverySource = String(props.discoverySource || '').trim();
 
       const html = `
         <div style="display:flex;flex-direction:column;gap:6px;min-width:240px;max-width:320px;">
           <div style="font-size:12px;font-weight:800;">${escapeHtml(String(props.displayName || 'Supply path'))}</div>
-          <div style="font-size:11px;opacity:0.78;">Leg ${escapeHtml(String(props.legIndex ?? ''))}${props.isBottleneck ? ' • bottleneck' : ''}</div>
+          <div style="font-size:11px;opacity:0.78;">${props.isPinned ? 'Pinned path' : 'Discovered path'} • Leg ${escapeHtml(String(props.legIndex ?? ''))}${props.isBottleneck ? ' • bottleneck' : ''}</div>
           <div style="font-size:11px;display:flex;flex-wrap:wrap;gap:6px;">
             <span>stress ${escapeHtml(toFixedSafe(Number(props.stressScore), 2))}</span>
             <span>bind ${escapeHtml(toFixedSafe(Number(props.bindingConfidence) * 100, 0))}%</span>
             <span>recovery ${escapeHtml(toFixedSafe(Number(props.recoveryLatencyHours), 0))}h</span>
           </div>
+          ${traceRole ? `<div style="font-size:11px;"><strong>Trace role:</strong> ${escapeHtml(traceRole.replace(/_/g, ' '))}</div>` : ''}
+          ${discoveryReason ? `<div style="font-size:11px;"><strong>Why shown:</strong> ${escapeHtml(discoveryReason)}</div>` : ''}
+          ${!discoveryReason && discoverySource ? `<div style="font-size:11px;"><strong>Source:</strong> ${escapeHtml(discoverySource)}</div>` : ''}
           ${typeof props.flowMode === 'string' && props.flowMode ? `<div style="font-size:11px;"><strong>Mode:</strong> ${escapeHtml(String(props.flowMode))}${props.flowGeometryId ? ` • ${escapeHtml(String(props.flowGeometryId))}` : ''}</div>` : ''}
           ${typeof props.geometrySource === 'string' && props.geometrySource ? `<div style="font-size:11px;"><strong>Geometry:</strong> ${escapeHtml(String(props.geometrySource))}${props.snappedToFlow ? ' • snapped' : ''}</div>` : ''}
           ${spatialSemantics.length > 0 ? `<div style="font-size:11px;"><strong>Spatial:</strong> ${escapeHtml(spatialSemantics.join(', '))}</div>` : ''}
@@ -443,13 +480,19 @@ export function usePathLegLayer(
         .addTo(map);
     };
 
-    map.on('mouseenter', MAIN_LAYER, onEnter);
-    map.on('mouseleave', MAIN_LAYER, onLeave);
-    map.on('click', MAIN_LAYER, onClick);
+    map.on('mouseenter', PINNED_LAYER, onEnter);
+    map.on('mouseleave', PINNED_LAYER, onLeave);
+    map.on('click', PINNED_LAYER, onClick);
+    map.on('mouseenter', DISCOVERED_LAYER, onEnter);
+    map.on('mouseleave', DISCOVERED_LAYER, onLeave);
+    map.on('click', DISCOVERED_LAYER, onClick);
     return () => {
-      map.off('mouseenter', MAIN_LAYER, onEnter);
-      map.off('mouseleave', MAIN_LAYER, onLeave);
-      map.off('click', MAIN_LAYER, onClick);
+      map.off('mouseenter', PINNED_LAYER, onEnter);
+      map.off('mouseleave', PINNED_LAYER, onLeave);
+      map.off('click', PINNED_LAYER, onClick);
+      map.off('mouseenter', DISCOVERED_LAYER, onEnter);
+      map.off('mouseleave', DISCOVERED_LAYER, onLeave);
+      map.off('click', DISCOVERED_LAYER, onClick);
       popupRef.current?.remove();
       popupRef.current = null;
     };

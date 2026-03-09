@@ -249,6 +249,7 @@ type wmHeuristicEngine struct {
 	strongEvent    *wmWeightedMatcher
 	classifier     *wmWeightedMatcher
 	zoneClassifier *wmWeightedMatcher
+	articleProfile *wmWeightedMatcher
 	classByLabel   map[string]wmLevelCategory
 	zoneByLabel    map[string]wmZoneClass
 }
@@ -283,6 +284,11 @@ func buildWMHeuristicEngine() *wmHeuristicEngine {
 				{"career", 1.3}, {"consultant", 1.6}, {"fellowship", 1.4}, {"conference", 1.2}, {"workday support", 2.0},
 				{"legal counsel", 1.6}, {"staff report", 1.3}, {"article iv mission", 1.4}, {"job opening", 1.8},
 				{"job vacancy", 1.8}, {"press office", 1.4}, {"opinion", 1.2}, {"newsletter", 1.2},
+				{"at a glance", 1.9}, {"lessons from", 1.7}, {"by the numbers", 1.7}, {"history of", 1.7},
+				{"legacy of", 1.8}, {"why ", 1.4}, {"how ", 1.2}, {"could ", 1.3}, {"what if", 1.7},
+				{"speech", 1.8}, {"foreign policy speech", 2.0}, {"validates", 1.8}, {"eliminating", 1.8},
+				{"public health failures", 1.6}, {"paradox of", 1.8}, {"interference in", 1.3}, {"under pressure", 1.2},
+				{"under pressure.", 1.2}, {"strategy", 1.2}, {"strategic", 1.2}, {"industrial base", 1.5},
 			},
 		},
 	})
@@ -591,6 +597,51 @@ func buildWMHeuristicEngine() *wmHeuristicEngine {
 	}
 	engine.zoneClassifier = newWMWeightedMatcher(zoneRules)
 
+	engine.articleProfile = newWMWeightedMatcher([]wmWeightedLabel{
+		{
+			Label: "analysis",
+			Keywords: []wmWeightedKeyword{
+				{"analysis", 1.2}, {"briefing", 1.2}, {"report", 1.0}, {"outlook", 1.0}, {"at a glance", 1.7},
+				{"what to know", 1.6}, {"this week", 1.8}, {"weekly update", 1.6}, {"roundup", 1.7},
+				{"lessons from", 1.8}, {"breaking the cycle", 2.0}, {"building wildfire resilience", 2.2},
+				{"confronting the", 2.1}, {"challenge", 1.0}, {"betting on america", 2.1}, {"blogs", 1.3},
+				{"opinion", 1.3}, {"strategy", 1.2}, {"strategic", 1.1}, {"overview", 1.0},
+				{"finding freedom and healing", 2.2}, {"on the road with", 2.0}, {"securing stability and growth", 2.1},
+				{"stability and growth", 1.7}, {"strike a balance", 1.8}, {"tries to strike a balance", 2.2},
+				{"pricing deal", 1.8}, {"pricing deals", 1.9}, {"access to medicines", 1.8},
+				{"set to be announced", 2.0}, {"new supreme leader", 1.8}, {"taunts", 1.5},
+			},
+		},
+		{
+			Label: "advisory",
+			Keywords: []wmWeightedKeyword{
+				{"cve-", 1.9}, {"vulnerability", 1.6}, {"advisory", 1.6}, {"exploited in the wild", 2.2},
+				{"exploit chain", 1.8}, {"patch", 1.3}, {"buffer over-read", 1.8}, {"buffer overread", 1.8},
+				{"web shell", 1.8}, {"botnet", 1.8}, {"campaign", 1.4}, {"phishing", 1.4},
+				{"scam", 1.4}, {"scams", 1.4}, {"deceptive advertisers", 1.9}, {"malware campaign", 1.8},
+				{"security flaw", 1.5}, {"security flaw impacting", 1.7}, {"warns", 1.2}, {"warning", 1.1},
+				{"backdoor", 1.5}, {"hackers target", 1.7}, {"target networks", 1.5},
+			},
+		},
+		{
+			Label: "broad_scope",
+			Keywords: []wmWeightedKeyword{
+				{"latin america", 1.7}, {"middle east and beyond", 2.0}, {"and beyond", 1.5}, {"across latin america", 1.9},
+				{"across europe", 1.7}, {"across the region", 1.6}, {"regional", 1.2}, {"multiple countries", 1.5},
+				{"16 countries", 1.8}, {"worldwide", 1.3}, {"global", 1.1},
+			},
+		},
+		{
+			Label: "concrete_outage",
+			Keywords: []wmWeightedKeyword{
+				{"outage", 1.7}, {"shutdown", 1.7}, {"closure", 1.7}, {"blackout", 1.8}, {"offline", 1.6},
+				{"service down", 1.8}, {"operations suspended", 1.9}, {"spill", 1.6}, {"oil spill", 1.9},
+				{"pipeline sabotage", 2.0}, {"port closure", 1.9}, {"explosion", 1.6}, {"killed", 1.5},
+				{"hostilities", 1.5}, {"displaced", 1.5},
+			},
+		},
+	})
+
 	return engine
 }
 
@@ -641,8 +692,15 @@ func (e *wmHeuristicEngine) Classify(text string) horizonMonitorNewsClassificati
 	if text == "" {
 		return horizonMonitorNewsClassification{Level: "info", Category: "general", Confidence: 0.35, Source: "keyword_ac"}
 	}
-	if e.IsLikelyNonEvent(text) {
+	profile := e.ProfileArticle(text, "")
+	if e.IsLikelyNonEvent(text) || (profile.likelyAnalysisRoundup() && !looksLikeWarmConflictPosture(text, horizonMonitorNewsClassification{})) {
 		return horizonMonitorNewsClassification{Level: "info", Category: "general", Confidence: 0.25, Source: "keyword_ac"}
+	}
+	if profile.likelyAdvisoryCampaignWithoutOutage() {
+		return horizonMonitorNewsClassification{Level: "low", Category: "cyber", Confidence: 0.58, Source: "keyword_ac+profile"}
+	}
+	if profile.likelyBroadRegionalRoundup() && profile.AnalysisScore >= 1.0 && e.strongEventScore(text) < 1.85 {
+		return horizonMonitorNewsClassification{Level: "info", Category: "general", Confidence: 0.30, Source: "keyword_ac+profile"}
 	}
 
 	scores := e.classifier.Score(text)

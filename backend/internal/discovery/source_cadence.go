@@ -15,6 +15,8 @@ type resolvedSourceCadencePolicy struct {
 	errorBackoff         float64
 	freshnessBoostWindow time.Duration
 	leaseDuration        time.Duration
+	autoPauseAfterErrors int
+	autoPauseDuration    time.Duration
 }
 
 type sourceRunOutcome struct {
@@ -89,6 +91,8 @@ func resolveSourceCadencePolicy(ds *models.DataSource) resolvedSourceCadencePoli
 	errorBackoff := 2.0
 	freshnessBoost := 2 * time.Hour
 	leaseDuration := 90 * time.Minute
+	autoPauseAfterErrors := 10
+	autoPauseDuration := 6 * time.Hour
 
 	if ds != nil && ds.Details.CadencePolicy != nil {
 		policy := ds.Details.CadencePolicy
@@ -113,6 +117,20 @@ func resolveSourceCadencePolicy(ds *models.DataSource) resolvedSourceCadencePoli
 		if policy.LeaseDurationMinutes != nil && *policy.LeaseDurationMinutes > 0 {
 			leaseDuration = time.Duration(*policy.LeaseDurationMinutes) * time.Minute
 		}
+		if policy.AutoPauseAfterErrors != nil {
+			if *policy.AutoPauseAfterErrors <= 0 {
+				autoPauseAfterErrors = 0
+			} else {
+				autoPauseAfterErrors = *policy.AutoPauseAfterErrors
+			}
+		}
+		if policy.AutoPauseDurationMinutes != nil {
+			if *policy.AutoPauseDurationMinutes <= 0 {
+				autoPauseDuration = 0
+			} else {
+				autoPauseDuration = time.Duration(*policy.AutoPauseDurationMinutes) * time.Minute
+			}
+		}
 	}
 
 	if floor := configuredPollFloor(ds); floor > 0 && min < floor {
@@ -133,7 +151,29 @@ func resolveSourceCadencePolicy(ds *models.DataSource) resolvedSourceCadencePoli
 		errorBackoff:         errorBackoff,
 		freshnessBoostWindow: freshnessBoost,
 		leaseDuration:        leaseDuration,
+		autoPauseAfterErrors: autoPauseAfterErrors,
+		autoPauseDuration:    autoPauseDuration,
 	}
+}
+
+func shouldAutoPauseSource(ds *models.DataSource, state *models.SourceRuntimeState) bool {
+	if state == nil {
+		return false
+	}
+	policy := resolveSourceCadencePolicy(ds)
+	if policy.autoPauseAfterErrors <= 0 || policy.autoPauseDuration <= 0 {
+		return false
+	}
+	return state.ConsecutiveErrors >= policy.autoPauseAfterErrors
+}
+
+func computeAutoPauseUntil(ds *models.DataSource, now time.Time) *time.Time {
+	policy := resolveSourceCadencePolicy(ds)
+	if policy.autoPauseDuration <= 0 {
+		return nil
+	}
+	until := now.Add(policy.autoPauseDuration)
+	return &until
 }
 
 func scaleDuration(base time.Duration, multiplier float64, steps int, max time.Duration) time.Duration {

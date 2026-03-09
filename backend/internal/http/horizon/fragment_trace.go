@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
@@ -27,23 +28,36 @@ type fragmentTraceGraphEdge struct {
 }
 
 type fragmentTraceGraph struct {
-	Edges       []fragmentTraceGraphEdge                `json:"edges"`
-	Total       int                                    `json:"total"`
-	Fragments   []interface{}                          `json:"fragments,omitempty"`
-	Counts      interface{}                            `json:"counts,omitempty"`
-	Coordinates map[string]*horizonmodels.Coordinates  `json:"coordinates,omitempty"`
+	Edges       []fragmentTraceGraphEdge              `json:"edges"`
+	Total       int                                   `json:"total"`
+	Fragments   []interface{}                         `json:"fragments,omitempty"`
+	Counts      interface{}                           `json:"counts,omitempty"`
+	Coordinates map[string]*horizonmodels.Coordinates `json:"coordinates,omitempty"`
 }
 
 type fragmentTraceSupplyChains struct {
-	Chains []interface{} `json:"chains"`
-	Total  int           `json:"total"`
+	Chains  []interface{}                 `json:"chains"`
+	Total   int                           `json:"total"`
+	Summary fragmentTraceSupplyChainStats `json:"summary,omitempty"`
+}
+
+type fragmentTraceSupplyChainStats struct {
+	PinnedCount      int `json:"pinnedCount"`
+	DiscoveredCount  int `json:"discoveredCount"`
+	DirectCount      int `json:"directCount"`
+	RouteCount       int `json:"routeCount"`
+	ZoneCount        int `json:"zoneCount"`
+	AffectedCount    int `json:"affectedCount"`
+	HighStressCount  int `json:"highStressCount"`
+	BottleneckCount  int `json:"bottleneckCount"`
+	StrongBindingCnt int `json:"strongBindingCount"`
 }
 
 type fragmentTraceResponse struct {
-	FragmentID    string                              `json:"fragmentId"`
-	Graph         fragmentTraceGraph                  `json:"graph"`
-	SupplyChains  fragmentTraceSupplyChains           `json:"supplyChains"`
-	Propagation   *propagation.PropagationTraceResult `json:"propagation,omitempty"`
+	FragmentID   string                              `json:"fragmentId"`
+	Graph        fragmentTraceGraph                  `json:"graph"`
+	SupplyChains fragmentTraceSupplyChains           `json:"supplyChains"`
+	Propagation  *propagation.PropagationTraceResult `json:"propagation,omitempty"`
 }
 
 func (h *HorizonHandlers) GetFragmentTrace(w http.ResponseWriter, r *http.Request) {
@@ -87,6 +101,7 @@ func (h *HorizonHandlers) GetFragmentTrace(w http.ResponseWriter, r *http.Reques
 			resp.SupplyChains.Chains = append(resp.SupplyChains.Chains, chain)
 		}
 		resp.SupplyChains.Total = len(relatedChains)
+		resp.SupplyChains.Summary = buildFragmentTraceSupplyChainStats(relatedChains)
 	}
 
 	if propagationEngine := h.service.Propagation(); propagationEngine != nil {
@@ -104,6 +119,40 @@ func (h *HorizonHandlers) GetFragmentTrace(w http.ResponseWriter, r *http.Reques
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func buildFragmentTraceSupplyChainStats(chains []*horizonmodels.MaterializedArtifact) fragmentTraceSupplyChainStats {
+	stats := fragmentTraceSupplyChainStats{}
+	for _, chain := range chains {
+		if chain == nil {
+			continue
+		}
+		if chain.IsPinned {
+			stats.PinnedCount++
+		} else {
+			stats.DiscoveredCount++
+		}
+		switch chain.TraceRole {
+		case "direct_anchor":
+			stats.DirectCount++
+		case "route_overlap", "route_context":
+			stats.RouteCount++
+		case "zone_overlap", "zone_context":
+			stats.ZoneCount++
+		case "affected_zone_overlap", "affected_context":
+			stats.AffectedCount++
+		}
+		if chain.PathStressScore >= 0.58 {
+			stats.HighStressCount++
+		}
+		if chain.BottleneckLeg >= 0 {
+			stats.BottleneckCount++
+		}
+		if chain.BindingScore >= 0.62 {
+			stats.StrongBindingCnt++
+		}
+	}
+	return stats
 }
 
 func fragmentIDFromFragmentSubroute(path string, suffix string) string {
@@ -227,28 +276,54 @@ func (h *HorizonHandlers) collectFragmentTraceSupplyChains(ctx context.Context, 
 	if tenantID == "" {
 		tenantID = "global"
 	}
-	selected := make(map[string]*horizonmodels.MaterializedArtifact)
-	appendArtifact := func(items []*horizonmodels.MaterializedArtifact) {
-		for _, artifact := range items {
-			if artifact == nil || artifact.Kind != horizonmodels.MaterializedKindSupplyChainPath {
-				continue
-			}
-			horizonmodels.PopulateSupplyChainPathIndexes(artifact)
-			if _, ok := selected[artifact.ID]; ok {
-				continue
-			}
-			copyArtifact := *artifact
-			selected[copyArtifact.ID] = &copyArtifact
-		}
-	}
 	cp := strings.TrimSpace(frag.CanonicalPath)
+	selected := make(map[string]*horizonmodels.MaterializedArtifact)
+	appendArtifact := func(artifact *horizonmodels.MaterializedArtifact, pinned bool, source string, matched []string, overlapScore float64) {
+		if artifact == nil || artifact.Kind != horizonmodels.MaterializedKindSupplyChainPath {
+			return
+		}
+		horizonmodels.PopulateSupplyChainPathIndexes(artifact)
+		if existing := selected[artifact.ID]; existing != nil {
+			if pinned && !existing.IsPinned {
+				existing.IsPinned = true
+				existing.DiscoverySource = "scoped"
+				existing.DiscoveryReason = "attached to lens scope"
+			}
+			if overlapScore > existing.OverlapScore {
+				existing.OverlapScore = overlapScore
+				existing.MatchedRefs = append([]string(nil), matched...)
+				if !existing.IsPinned {
+					existing.DiscoverySource = source
+					existing.DiscoveryReason = describeSupplyChainDiscovery(source, matched)
+				}
+			}
+			return
+		}
+		copyArtifact := *artifact
+		copyArtifact.IsPinned = pinned
+		copyArtifact.MatchedRefs = append([]string(nil), matched...)
+		copyArtifact.OverlapScore = overlapScore
+		if pinned {
+			copyArtifact.DiscoverySource = "scoped"
+			copyArtifact.DiscoveryReason = "attached to lens scope"
+		} else {
+			copyArtifact.DiscoverySource = source
+			copyArtifact.DiscoveryReason = describeSupplyChainDiscovery(source, matched)
+		}
+		annotateSupplyChainTraceArtifact(&copyArtifact, cp)
+		selected[copyArtifact.ID] = &copyArtifact
+	}
 	if cp != "" {
 		if items, err := h.materializedArtifactsRepo.FindByNodeRef(ctx, tenantID, cp, horizonmodels.MaterializedKindSupplyChainPath); err == nil {
-			appendArtifact(items)
+			for _, artifact := range items {
+				appendArtifact(artifact, false, "node_overlap", []string{cp}, 1.0)
+			}
 		}
 		if frag.Type == horizonmodels.FragmentTypeAffectedZone {
 			if items, err := h.materializedArtifactsRepo.FindByAffectedZoneRefsAny(ctx, tenantID, []string{cp}, horizonmodels.MaterializedKindSupplyChainPath, 50); err == nil {
-				appendArtifact(items)
+				for _, artifact := range items {
+					appendArtifact(artifact, false, "affected_zone_overlap", []string{cp}, 0.9)
+				}
 			}
 		}
 	}
@@ -263,8 +338,7 @@ func (h *HorizonHandlers) collectFragmentTraceSupplyChains(ctx context.Context, 
 					horizonmodels.PopulateSupplyChainPathIndexes(artifact)
 					if cp != "" {
 						if traceContainsString(artifact.NodeRefs, cp) || traceContainsString(artifact.AffectedZoneRefs, cp) || traceContainsString(artifact.ZoneRefs, cp) {
-							copyArtifact := *artifact
-							selected[copyArtifact.ID] = &copyArtifact
+							appendArtifact(artifact, artifact.IsPinned, artifact.DiscoverySource, artifact.MatchedRefs, artifact.OverlapScore)
 						}
 					}
 				}
@@ -275,6 +349,15 @@ func (h *HorizonHandlers) collectFragmentTraceSupplyChains(ctx context.Context, 
 	for _, artifact := range selected {
 		out = append(out, artifact)
 	}
+	sortSupplyChainArtifacts(out)
+	sort.SliceStable(out, func(i, j int) bool {
+		left := out[i]
+		right := out[j]
+		if left.TracePriority != right.TracePriority {
+			return left.TracePriority > right.TracePriority
+		}
+		return left.UpdatedAt.After(right.UpdatedAt)
+	})
 	return out, nil
 }
 

@@ -380,6 +380,7 @@ func (h *SourcesHandler) CreateSource(w http.ResponseWriter, r *http.Request) {
 		ErrorCount:                0,
 		TrustLevel:                0.5, // Default trust level
 	}
+	applyManualSourceStatus(ds, now)
 
 	id, err := h.ds.Create(r.Context(), ds)
 	if err != nil {
@@ -552,6 +553,7 @@ func (h *SourcesHandler) UpdateSourceStatus(w http.ResponseWriter, r *http.Reque
 	}
 
 	ds.Status = req.Status
+	applyManualSourceStatus(ds, time.Now().UTC())
 	if err := h.ds.Upsert(r.Context(), ds); err != nil {
 		h.logger.Printf("Failed to update source status: %v", err)
 		WriteInternalError(w, "Failed to update source status")
@@ -559,6 +561,31 @@ func (h *SourcesHandler) UpdateSourceStatus(w http.ResponseWriter, r *http.Reque
 	}
 
 	WriteJSON(w, http.StatusOK, map[string]any{"id": ds.ID, "status": ds.Status})
+}
+
+func applyManualSourceStatus(ds *models.DataSource, now time.Time) {
+	if ds == nil {
+		return
+	}
+	switch strings.TrimSpace(ds.Status) {
+	case "active":
+		ds.PauseReason = nil
+		ds.PausedAt = nil
+		ds.PausedUntil = nil
+		ds.ErrorCount = 0
+		zero := 0
+		ds.PollBackoffSec = &zero
+	case "completed":
+		ds.PauseReason = nil
+		ds.PausedAt = nil
+		ds.PausedUntil = nil
+	case "paused":
+		ds.PauseReason = nil
+		ds.PausedUntil = nil
+		if ds.PausedAt == nil {
+			ds.PausedAt = &now
+		}
+	}
 }
 
 // ListSources handles GET /api/v1/sources

@@ -184,6 +184,7 @@ func (h *HorizonHandlers) collectSupplyChainsForLens(r *http.Request, lens *hori
 			copyArtifact.DiscoverySource = source
 			copyArtifact.DiscoveryReason = describeSupplyChainDiscovery(source, matched)
 		}
+		annotateSupplyChainTraceArtifact(&copyArtifact, "")
 		selected[copyArtifact.ID] = &copyArtifact
 		if pinned {
 			scopedIDs[copyArtifact.ID] = struct{}{}
@@ -377,6 +378,9 @@ func sortSupplyChainArtifacts(artifacts []*horizonmodels.MaterializedArtifact) {
 	sort.SliceStable(artifacts, func(i, j int) bool {
 		left := artifacts[i]
 		right := artifacts[j]
+		if left.TracePriority != right.TracePriority {
+			return left.TracePriority > right.TracePriority
+		}
 		if left.IsPinned != right.IsPinned {
 			return left.IsPinned
 		}
@@ -390,6 +394,148 @@ func sortSupplyChainArtifacts(artifacts []*horizonmodels.MaterializedArtifact) {
 		}
 		return left.UpdatedAt.After(right.UpdatedAt)
 	})
+}
+
+func annotateSupplyChainTraceArtifact(artifact *horizonmodels.MaterializedArtifact, centerCanonicalPath string) {
+	if artifact == nil {
+		return
+	}
+	horizonmodels.PopulateSupplyChainPathIndexes(artifact)
+	artifact.LegCount = 0
+	artifact.BindingScore = 0
+	artifact.PathStressScore = 0
+	artifact.BottleneckLeg = -1
+	artifact.TraceRole = classifySupplyChainTraceRole(artifact, centerCanonicalPath)
+
+	parsed, err := horizonmodels.ParseSupplyChainPathPayload(artifact.Payload)
+	if err == nil && parsed != nil {
+		artifact.LegCount = len(parsed.Legs)
+		artifact.BindingScore = averageLegBindingConfidence(parsed.Legs)
+		if parsed.Stress != nil {
+			artifact.PathStressScore = parsed.Stress.PathScore
+			artifact.BottleneckLeg = parsed.Stress.BottleneckLegIndex
+		}
+	}
+
+	artifact.TracePriority = scoreSupplyChainTracePriority(artifact)
+	artifact.TraceReason = buildSupplyChainTraceReason(artifact, centerCanonicalPath)
+}
+
+func classifySupplyChainTraceRole(artifact *horizonmodels.MaterializedArtifact, centerCanonicalPath string) string {
+	centerCanonicalPath = strings.TrimSpace(centerCanonicalPath)
+	switch {
+	case centerCanonicalPath != "" && traceContainsString(artifact.NodeRefs, centerCanonicalPath):
+		return "direct_anchor"
+	case centerCanonicalPath != "" && traceContainsString(artifact.FlowRefs, centerCanonicalPath):
+		return "route_overlap"
+	case centerCanonicalPath != "" && traceContainsString(artifact.ZoneRefs, centerCanonicalPath):
+		return "zone_overlap"
+	case centerCanonicalPath != "" && traceContainsString(artifact.AffectedZoneRefs, centerCanonicalPath):
+		return "affected_zone_overlap"
+	case artifact.IsPinned:
+		return "pinned_context"
+	case artifact.DiscoverySource == "node_overlap":
+		return "graph_context"
+	case artifact.DiscoverySource == "flow_overlap":
+		return "route_context"
+	case artifact.DiscoverySource == "zone_overlap":
+		return "zone_context"
+	case artifact.DiscoverySource == "affected_zone_overlap":
+		return "affected_context"
+	default:
+		return "context_overlap"
+	}
+}
+
+func averageLegBindingConfidence(legs []horizonmodels.SupplyChainPathLeg) float64 {
+	if len(legs) == 0 {
+		return 0
+	}
+	total := 0.0
+	count := 0
+	for _, leg := range legs {
+		if leg.BindingConfidence <= 0 {
+			continue
+		}
+		total += leg.BindingConfidence
+		count++
+	}
+	if count == 0 {
+		return 0
+	}
+	return total / float64(count)
+}
+
+func scoreSupplyChainTracePriority(artifact *horizonmodels.MaterializedArtifact) int {
+	if artifact == nil {
+		return 0
+	}
+	score := 0
+	if artifact.IsPinned {
+		score += 180
+	}
+	score += int(artifact.OverlapScore * 100)
+	score += int(artifact.PathStressScore * 70)
+	score += int(artifact.BindingScore * 35)
+	if artifact.LegCount > 0 {
+		if artifact.LegCount > 9 {
+			score += 18
+		} else {
+			score += artifact.LegCount * 2
+		}
+	}
+	switch artifact.TraceRole {
+	case "direct_anchor":
+		score += 50
+	case "affected_zone_overlap":
+		score += 42
+	case "route_overlap", "route_context":
+		score += 38
+	case "zone_overlap", "zone_context":
+		score += 30
+	case "graph_context":
+		score += 22
+	}
+	return score
+}
+
+func buildSupplyChainTraceReason(artifact *horizonmodels.MaterializedArtifact, centerCanonicalPath string) string {
+	if artifact == nil {
+		return ""
+	}
+	bits := make([]string, 0, 4)
+	switch artifact.TraceRole {
+	case "direct_anchor":
+		bits = append(bits, "contains the selected object")
+	case "route_overlap", "route_context":
+		bits = append(bits, "shares route bindings with the current map context")
+	case "zone_overlap", "zone_context":
+		bits = append(bits, "intersects the same static zone context")
+	case "affected_zone_overlap", "affected_context":
+		bits = append(bits, "is exposed to the same affected zone")
+	case "graph_context":
+		bits = append(bits, "overlaps graph entities already in scope")
+	case "pinned_context":
+		bits = append(bits, "pinned to the current lens scope")
+	}
+	if artifact.PathStressScore >= 0.7 {
+		bits = append(bits, "path stress is high")
+	} else if artifact.PathStressScore >= 0.45 {
+		bits = append(bits, "path stress is elevated")
+	}
+	if artifact.BottleneckLeg >= 0 {
+		bits = append(bits, "has a mapped bottleneck leg")
+	}
+	if artifact.BindingScore >= 0.65 {
+		bits = append(bits, "route binding confidence is strong")
+	}
+	if len(bits) == 0 && strings.TrimSpace(artifact.DiscoveryReason) != "" {
+		bits = append(bits, strings.TrimSpace(artifact.DiscoveryReason))
+	}
+	if len(bits) == 0 && strings.TrimSpace(centerCanonicalPath) != "" {
+		bits = append(bits, "related to the selected fragment context")
+	}
+	return strings.Join(bits, ". ")
 }
 
 func artifactPathStressScore(artifact *horizonmodels.MaterializedArtifact) float64 {

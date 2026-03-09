@@ -75,7 +75,7 @@ func (c *CachedClient) Geocode(ctx context.Context, address string) (*ontology.G
 		for _, variant := range addressVariantsForCacheLookup(addr) {
 			cacheKey := "address=" + variant
 			docID := repo.MakeCacheDocID("google_geocoding", "geocoding.geocode", cacheKey)
-			if hit := c.getCached(ctx, docID); hit != nil {
+			if hit, ok := c.getCached(ctx, docID); ok {
 				return hit, nil
 			}
 		}
@@ -85,47 +85,54 @@ func (c *CachedClient) Geocode(ctx context.Context, address string) (*ontology.G
 	if err != nil {
 		return nil, err
 	}
-	if c.opts.Enabled && c.cache != nil && resp != nil {
+	if c.opts.Enabled && c.cache != nil {
 		cacheKey := "address=" + addr
 		_ = c.putCached(ctx, cacheKey, resp)
 	}
 	return resp, nil
 }
 
-func (c *CachedClient) getCached(ctx context.Context, docID string) *ontology.GeocodingResult {
+func (c *CachedClient) getCached(ctx context.Context, docID string) (*ontology.GeocodingResult, bool) {
 	e, err := c.cache.Get(ctx, docID)
 	if err != nil || e == nil {
-		return nil
+		return nil, false
 	}
 	if isExpired(e.ExpiresAt) {
-		return nil
+		return nil, false
 	}
 	var out struct {
+		Found            *bool   `json:"found,omitempty"`
 		Lat              float64 `json:"lat"`
 		Lon              float64 `json:"lon"`
 		FormattedAddress string  `json:"formattedAddress"`
 		PlaceID          string  `json:"placeId"`
 	}
 	if err := json.Unmarshal(e.Payload, &out); err != nil {
-		return nil
+		return nil, false
+	}
+	if out.Found != nil && !*out.Found {
+		return nil, true
 	}
 	return &ontology.GeocodingResult{
 		Lat:              out.Lat,
 		Lon:              out.Lon,
 		FormattedAddress: out.FormattedAddress,
 		PlaceID:          out.PlaceID,
-	}
+	}, true
 }
 
 func (c *CachedClient) putCached(ctx context.Context, key string, v *ontology.GeocodingResult) error {
-	if c == nil || c.cache == nil || !c.opts.Enabled || v == nil {
+	if c == nil || c.cache == nil || !c.opts.Enabled {
 		return nil
 	}
 	payload := map[string]interface{}{
-		"lat":              v.Lat,
-		"lon":              v.Lon,
-		"formattedAddress": v.FormattedAddress,
-		"placeId":          v.PlaceID,
+		"found": v != nil,
+	}
+	if v != nil {
+		payload["lat"] = v.Lat
+		payload["lon"] = v.Lon
+		payload["formattedAddress"] = v.FormattedAddress
+		payload["placeId"] = v.PlaceID
 	}
 	b, err := json.Marshal(payload)
 	if err != nil {
@@ -133,8 +140,12 @@ func (c *CachedClient) putCached(ctx context.Context, key string, v *ontology.Ge
 	}
 	now := time.Now().UTC()
 	var exp *time.Time
-	if c.opts.TTL > 0 {
-		t := now.Add(c.opts.TTL)
+	ttl := c.opts.TTL
+	if v == nil {
+		ttl = negativeCacheTTL(c.opts.TTL)
+	}
+	if ttl > 0 {
+		t := now.Add(ttl)
 		exp = &t
 	}
 	id := repo.MakeCacheDocID("google_geocoding", "geocoding.geocode", key)
@@ -157,6 +168,18 @@ func isExpired(t *time.Time) bool {
 		return false
 	}
 	return time.Now().UTC().After(*t)
+}
+
+func negativeCacheTTL(baseTTL time.Duration) time.Duration {
+	const maxNegativeTTL = 24 * time.Hour
+	switch {
+	case baseTTL <= 0:
+		return maxNegativeTTL
+	case baseTTL < maxNegativeTTL:
+		return baseTTL
+	default:
+		return maxNegativeTTL
+	}
 }
 
 // normalizeAddressForCache produces a stable cache key from an address.

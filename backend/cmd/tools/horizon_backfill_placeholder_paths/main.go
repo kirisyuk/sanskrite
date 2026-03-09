@@ -19,6 +19,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	httphandlers "github.com/igorkirisyuk/sanskrite/internal/http"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
+	coreRepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
 var (
@@ -59,6 +60,7 @@ func main() {
 	defer client.Close()
 
 	fragmentsRepo := hrepo.NewHorizonFragmentsRepository(client.Client())
+	externalCacheRepo := coreRepo.NewExternalDataCacheRepository(client.Client())
 	redirectsRepo := hrepo.NewCanonicalPathRedirectsRepository(client.Client())
 	materializedRepo := hrepo.NewMaterializedArtifactsRepository(client.Client())
 	lensesRepo := hrepo.NewLensesRepository(client.Client())
@@ -79,7 +81,7 @@ func main() {
 
 	var geoClient coreontology.GeocodingClientInterface
 	if gc := httphandlers.GetGoogleGeocodingClientFromEnv(); gc != nil {
-		geoClient = geocoding.NewAdapter(gc)
+		geoClient = geocoding.NewCachedClient(geocoding.NewAdapter(gc), externalCacheRepo, geocoding.CacheOptionsFromEnv())
 		log.Printf("google geocoding wired for placeholder-path backfill")
 	}
 

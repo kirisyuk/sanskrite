@@ -12,6 +12,8 @@ type SourceCadencePolicy struct {
 	ErrorBackoffMultiplier      *float64 `json:"errorBackoffMultiplier,omitempty" firestore:"errorBackoffMultiplier,omitempty"`
 	FreshnessBoostWindowMinutes *int     `json:"freshnessBoostWindowMinutes,omitempty" firestore:"freshnessBoostWindowMinutes,omitempty"`
 	LeaseDurationMinutes        *int     `json:"leaseDurationMinutes,omitempty" firestore:"leaseDurationMinutes,omitempty"`
+	AutoPauseAfterErrors        *int     `json:"autoPauseAfterErrors,omitempty" firestore:"autoPauseAfterErrors,omitempty"`
+	AutoPauseDurationMinutes    *int     `json:"autoPauseDurationMinutes,omitempty" firestore:"autoPauseDurationMinutes,omitempty"`
 }
 
 // SourceRuntimeState stores mutable scheduler/execution state separately from source policy.
@@ -24,6 +26,7 @@ type SourceRuntimeState struct {
 	Scope          string `json:"scope,omitempty" firestore:"scope,omitempty"`
 	ProcessingMode string `json:"processingMode,omitempty" firestore:"processingMode,omitempty"`
 	OutputMode     string `json:"outputMode,omitempty" firestore:"outputMode,omitempty"`
+	Status         string `json:"status,omitempty" firestore:"status,omitempty"`
 
 	LastPolledAt      *time.Time `json:"lastPolledAt,omitempty" firestore:"lastPolledAt,omitempty"`
 	LastFoundAt       *time.Time `json:"lastFoundAt,omitempty" firestore:"lastFoundAt,omitempty"`
@@ -33,8 +36,11 @@ type SourceRuntimeState struct {
 	LastEnqueuedAt    *time.Time `json:"lastEnqueuedAt,omitempty" firestore:"lastEnqueuedAt,omitempty"`
 	NextPollAt        *time.Time `json:"nextPollAt,omitempty" firestore:"nextPollAt,omitempty"`
 
-	LeaseOwner *string    `json:"leaseOwner,omitempty" firestore:"leaseOwner,omitempty"`
-	LeaseUntil *time.Time `json:"leaseUntil,omitempty" firestore:"leaseUntil,omitempty"`
+	LeaseOwner  *string    `json:"leaseOwner,omitempty" firestore:"leaseOwner,omitempty"`
+	LeaseUntil  *time.Time `json:"leaseUntil,omitempty" firestore:"leaseUntil,omitempty"`
+	PauseReason *string    `json:"pauseReason,omitempty" firestore:"pauseReason,omitempty"`
+	PausedAt    *time.Time `json:"pausedAt,omitempty" firestore:"pausedAt,omitempty"`
+	PausedUntil *time.Time `json:"pausedUntil,omitempty" firestore:"pausedUntil,omitempty"`
 
 	ConsecutiveEmptyPolls int `json:"consecutiveEmptyPolls" firestore:"consecutiveEmptyPolls"`
 	ConsecutiveErrors     int `json:"consecutiveErrors" firestore:"consecutiveErrors"`

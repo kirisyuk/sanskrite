@@ -91,7 +91,7 @@ func TestSourceDetailsNormalizeRoutingFields(t *testing.T) {
 	}
 }
 
-func TestSourceRouting_InferLegacyHeuristicSystemSource(t *testing.T) {
+func TestSourceRouting_SyncCompatPromotesDisableLLMToHeuristicMode(t *testing.T) {
 	ds := &DataSource{
 		Kind:     SourceKindRSS,
 		TenantID: "",
@@ -100,14 +100,22 @@ func TestSourceRouting_InferLegacyHeuristicSystemSource(t *testing.T) {
 		},
 	}
 
-	if got := SourceScopeValue(ds); got != SourceScopeGlobalSystem {
-		t.Fatalf("expected inferred sourceScope=%q, got %q", SourceScopeGlobalSystem, got)
+	ds.SyncCompatForWrite()
+
+	if ds.Details.SourceScope == nil || *ds.Details.SourceScope != SourceScopeGlobalSystem {
+		t.Fatalf("expected sourceScope=%q after sync, got %+v", SourceScopeGlobalSystem, ds.Details.SourceScope)
 	}
-	if got := SourceProcessingModeValue(ds); got != SourceProcessingModeHeuristic {
-		t.Fatalf("expected inferred processingMode=%q, got %q", SourceProcessingModeHeuristic, got)
+	if ds.Details.ProcessingMode == nil || *ds.Details.ProcessingMode != SourceProcessingModeHeuristic {
+		t.Fatalf("expected processingMode=%q after sync, got %+v", SourceProcessingModeHeuristic, ds.Details.ProcessingMode)
 	}
 	if !ShouldDisableLLMProcessing(ds) {
 		t.Fatalf("expected heuristic source to disable LLM processing")
+	}
+	if ds.Details.CadencePolicy == nil || ds.Details.CadencePolicy.AutoPauseAfterErrors == nil || *ds.Details.CadencePolicy.AutoPauseAfterErrors != 10 {
+		t.Fatalf("expected default autoPauseAfterErrors=10, got %+v", ds.Details.CadencePolicy)
+	}
+	if ds.Details.CadencePolicy.AutoPauseDurationMinutes == nil || *ds.Details.CadencePolicy.AutoPauseDurationMinutes != 360 {
+		t.Fatalf("expected default autoPauseDurationMinutes=360, got %+v", ds.Details.CadencePolicy)
 	}
 }
 
@@ -129,6 +137,21 @@ func TestSourceRouting_ExplicitCanvasModeWins(t *testing.T) {
 	}
 	if ShouldDisableLLMProcessing(ds) {
 		t.Fatalf("explicit canvas mode must not disable LLM processing")
+	}
+}
+
+func TestSourceOutputModeDefaultsToDocumentFeedForSystemSource(t *testing.T) {
+	ds := &DataSource{Kind: SourceKindRSS}
+	if got := SourceOutputModeValue(ds); got != SourceOutputModeDocumentFeed {
+		t.Fatalf("expected default outputMode=%q, got %q", SourceOutputModeDocumentFeed, got)
+	}
+}
+
+func TestIsAutoPaused(t *testing.T) {
+	reason := SourcePauseReasonAutoErrorThreshold
+	ds := &DataSource{Status: "paused", PauseReason: &reason}
+	if !IsAutoPaused(ds) {
+		t.Fatalf("expected paused source with auto pause reason to be auto paused")
 	}
 }
 

@@ -23,6 +23,13 @@ export interface MaterializedArtifact {
   matchedRefs?: string[];
   overlapScore?: number;
   isPinned?: boolean;
+  traceRole?: string;
+  traceReason?: string;
+  tracePriority?: number;
+  legCount?: number;
+  bindingScore?: number;
+  pathStressScore?: number;
+  bottleneckLegIndex?: number;
   payload?: {
     v?: number;
     nodes?: Array<{ type: string; ref: string }>;
@@ -302,6 +309,11 @@ export function SupplyChainOverlay({
                   {artifact.discoveryReason}
                 </span>
               )}
+              {artifact.traceReason && artifact.traceReason !== artifact.discoveryReason && (
+                <span style={{ color: 'var(--text-secondary-strong)', fontSize: 11 }}>
+                  {artifact.traceReason}
+                </span>
+              )}
               {!artifact.isPinned && overlapScore > 0 && (
                 <span style={{ color: 'var(--text-secondary-strong)', fontSize: 11 }}>
                   overlap {overlapScore.toFixed(1)}
@@ -313,6 +325,11 @@ export function SupplyChainOverlay({
                 </span>
               )}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {artifact.traceRole && (
+                  <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                    {artifact.traceRole.replace(/_/g, ' ')}
+                  </span>
+                )}
                 {legCount > 0 && (
                   <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
                     {legCount} legs
@@ -326,6 +343,11 @@ export function SupplyChainOverlay({
                 {pathStressScore > 0 && (
                   <span style={{ fontSize: 11, color: pathStressScore >= 0.55 ? 'var(--text-warning)' : 'var(--text-secondary-strong)' }}>
                     stress {pathStressScore.toFixed(2)}
+                  </span>
+                )}
+                {typeof artifact.bottleneckLegIndex === 'number' && artifact.bottleneckLegIndex >= 0 && (
+                  <span style={{ fontSize: 11, color: 'var(--text-warning)' }}>
+                    bottleneck leg {artifact.bottleneckLegIndex}
                   </span>
                 )}
               </div>

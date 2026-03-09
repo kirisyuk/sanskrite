@@ -11,6 +11,8 @@ const GLOW_LAYER = 'geo-edges-glow';
 const HOP_3_LAYER = 'geo-edges-hop-3';
 const HOP_2_LAYER = 'geo-edges-hop-2';
 const HOP_1_LAYER = 'geo-edges-hop-1';
+const PROP_GLOW_LAYER = 'geo-propagation-glow';
+const PROP_MAIN_LAYER = 'geo-propagation-main';
 const MAX_HOPS = 3;
 
 type ThemeMode = 'dark' | 'light';
@@ -23,6 +25,14 @@ export interface GeoEdgeTraceSummary {
   branchCount: number;
   pathArtifactCount: number;
   pathLegCount: number;
+  pinnedPathCount: number;
+  discoveredPathCount: number;
+  stressedPathCount: number;
+  bottleneckPathCount: number;
+  directPathCount: number;
+  routePathCount: number;
+  zonePathCount: number;
+  affectedPathCount: number;
   propagationNodeCount: number;
   propagationEdgeCount: number;
   topFamilies: Array<{ family: EdgeFamily; count: number }>;
@@ -638,6 +648,57 @@ function buildRenderableEdges(edges: SelectedTraceEdge[], theme: ThemeMode): Ren
   });
 }
 
+function buildPropagationFeatures(
+  centerId: string,
+  propagation: { edges?: Array<{ edgeId?: string; sourceFragmentId?: string; targetFragmentId?: string; hopsFromSource?: number }>; nodeIds?: string[] } | null | undefined,
+  idToCoords: Map<string, { lon: number; lat: number }>,
+  theme: ThemeMode,
+): GeoJSON.Feature<GeoJSON.LineString>[] {
+  const rawEdges = Array.isArray(propagation?.edges) ? propagation.edges : [];
+  const selected: GeoJSON.Feature<GeoJSON.LineString>[] = [];
+  const seenPairs = new Set<string>();
+
+  for (const edge of rawEdges) {
+    const sourceId = String(edge?.sourceFragmentId || '').trim();
+    const targetId = String(edge?.targetFragmentId || '').trim();
+    if (!sourceId || !targetId) continue;
+    const source = idToCoords.get(sourceId);
+    const target = idToCoords.get(targetId);
+    if (!source || !target) continue;
+    const pairKey = stablePairKey(sourceId, targetId);
+    if (seenPairs.has(pairKey)) continue;
+    seenPairs.add(pairKey);
+    const hop = Math.max(1, Math.min(4, Number(edge?.hopsFromSource) || 1));
+    const color = theme === 'dark'
+      ? (hop <= 1 ? '#f472b6' : hop === 2 ? '#c084fc' : '#a78bfa')
+      : (hop <= 1 ? '#be185d' : hop === 2 ? '#7c3aed' : '#6d28d9');
+    const opacity = clamp(hop <= 1 ? 0.62 : hop === 2 ? 0.48 : 0.34, 0.2, 0.7);
+    const width = clamp(hop <= 1 ? 1.8 : hop === 2 ? 1.45 : 1.15, 1.0, 2.0);
+    selected.push({
+      id: `prop:${edge?.edgeId || pairKey}`,
+      type: 'Feature',
+      geometry: {
+        type: 'LineString',
+        coordinates: [
+          [source.lon, source.lat],
+          [target.lon, target.lat],
+        ],
+      },
+      properties: {
+        kind: 'propagation',
+        hop,
+        color,
+        baseOpacity: opacity,
+        baseWidth: width,
+        glowOpacity: clamp(opacity * 0.35, 0.08, 0.26),
+        semanticDirection: sourceId === centerId ? 'downstream' : targetId === centerId ? 'upstream' : 'context',
+      },
+    });
+  }
+
+  return selected;
+}
+
 function buildTraceSummary(
   edges: SelectedTraceEdge[],
   objectById: Map<string, TraceObjectInfo>,
@@ -702,6 +763,18 @@ function buildTraceSummary(
       Object.assign(existingItem, nextItem);
     }
   }
+  const pinnedPathCount = pathArtifacts.filter((artifact) => artifact.isPinned).length;
+  const discoveredPathCount = Math.max(0, pathArtifacts.length - pinnedPathCount);
+  const stressedPathCount = pathArtifacts.filter((artifact) => (artifact.pathStressScore ?? artifact.payload?.stress?.pathScore ?? 0) >= 0.58).length;
+  const bottleneckPathCount = pathArtifacts.filter((artifact) => {
+    const value = artifact.bottleneckLegIndex ?? artifact.payload?.stress?.bottleneckLegIndex;
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  }).length;
+  const directPathCount = pathArtifacts.filter((artifact) => artifact.traceRole === 'direct_anchor').length;
+  const routePathCount = pathArtifacts.filter((artifact) => artifact.traceRole === 'route_overlap' || artifact.traceRole === 'route_context').length;
+  const zonePathCount = pathArtifacts.filter((artifact) => artifact.traceRole === 'zone_overlap' || artifact.traceRole === 'zone_context').length;
+  const affectedPathCount = pathArtifacts.filter((artifact) => artifact.traceRole === 'affected_zone_overlap' || artifact.traceRole === 'affected_context').length;
+
   return {
     totalEdges: edges.length,
     visibleEdges,
@@ -709,6 +782,14 @@ function buildTraceSummary(
     branchCount: branchIds.size,
     pathArtifactCount: pathArtifacts.length,
     pathLegCount: pathArtifacts.reduce((acc, artifact) => acc + (Array.isArray((artifact as any)?.payload?.legs) ? (artifact as any).payload.legs.length : 0), 0),
+    pinnedPathCount,
+    discoveredPathCount,
+    stressedPathCount,
+    bottleneckPathCount,
+    directPathCount,
+    routePathCount,
+    zonePathCount,
+    affectedPathCount,
     propagationNodeCount: Array.isArray(propagation?.nodeIds) ? propagation.nodeIds.length : 0,
     propagationEdgeCount: Array.isArray(propagation?.edges) ? propagation.edges.length : 0,
     topFamilies: Array.from(familyCounts.entries())
@@ -736,6 +817,7 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
     id: GLOW_LAYER,
     type: 'line',
     source: SRC,
+    filter: ['==', ['get', 'kind'], 'graph'],
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': ['get', 'color'],
@@ -759,7 +841,7 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
     id: HOP_3_LAYER,
     type: 'line',
     source: SRC,
-    filter: ['==', ['get', 'hop'], 3],
+    filter: ['all', ['==', ['get', 'kind'], 'graph'], ['==', ['get', 'hop'], 3]],
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': ['get', 'color'],
@@ -783,7 +865,7 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
     id: HOP_2_LAYER,
     type: 'line',
     source: SRC,
-    filter: ['==', ['get', 'hop'], 2],
+    filter: ['all', ['==', ['get', 'kind'], 'graph'], ['==', ['get', 'hop'], 2]],
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': ['get', 'color'],
@@ -807,7 +889,7 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
     id: HOP_1_LAYER,
     type: 'line',
     source: SRC,
-    filter: ['==', ['get', 'hop'], 1],
+    filter: ['all', ['==', ['get', 'kind'], 'graph'], ['==', ['get', 'hop'], 1]],
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': ['get', 'color'],
@@ -829,6 +911,34 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
   if (isDark) {
     map.setPaintProperty(HOP_3_LAYER, 'line-dasharray', [1.1, 3.1]);
   }
+
+  map.addLayer({
+    id: PROP_GLOW_LAYER,
+    type: 'line',
+    source: SRC,
+    filter: ['==', ['get', 'kind'], 'propagation'],
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': ['get', 'color'],
+      'line-width': ['+', ['get', 'baseWidth'], 2],
+      'line-opacity': ['get', 'glowOpacity'],
+      'line-blur': 1.1,
+    },
+  });
+
+  map.addLayer({
+    id: PROP_MAIN_LAYER,
+    type: 'line',
+    source: SRC,
+    filter: ['==', ['get', 'kind'], 'propagation'],
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': ['get', 'color'],
+      'line-width': ['get', 'baseWidth'],
+      'line-opacity': ['get', 'baseOpacity'],
+      'line-dasharray': ['literal', [0.8, 1.8]],
+    },
+  });
 }
 
 export function useGeoEdgeLayer(
@@ -885,6 +995,8 @@ export function useGeoEdgeLayer(
     const removeLayers = () => {
       clearHoveredEdge();
       try {
+        if (map.getLayer(PROP_MAIN_LAYER)) map.removeLayer(PROP_MAIN_LAYER);
+        if (map.getLayer(PROP_GLOW_LAYER)) map.removeLayer(PROP_GLOW_LAYER);
         if (map.getLayer(HOP_1_LAYER)) map.removeLayer(HOP_1_LAYER);
         if (map.getLayer(HOP_2_LAYER)) map.removeLayer(HOP_2_LAYER);
         if (map.getLayer(HOP_3_LAYER)) map.removeLayer(HOP_3_LAYER);
@@ -981,10 +1093,15 @@ export function useGeoEdgeLayer(
 
         const selectedEdges = buildSelectedTraceEdges(selectedObject.id, rawEdges, idToCoords);
         const renderableEdges = buildRenderableEdges(selectedEdges, theme);
+        const propagationFeatures = buildPropagationFeatures(selectedObject.id, res?.propagation || null, idToCoords, theme);
         const visibleNodeIds = new Set<string>([selectedObject.id]);
         for (const edge of renderableEdges) {
           visibleNodeIds.add(edge.sourceId);
           visibleNodeIds.add(edge.targetId);
+        }
+        for (const edge of Array.isArray(res?.propagation?.edges) ? res.propagation.edges : []) {
+          if (edge?.sourceFragmentId) visibleNodeIds.add(String(edge.sourceFragmentId));
+          if (edge?.targetFragmentId) visibleNodeIds.add(String(edge.targetFragmentId));
         }
 
         const newDiscovered: GeoObject[] = [];
@@ -1007,16 +1124,17 @@ export function useGeoEdgeLayer(
         setVisibleEdgesCount(renderableEdges.length);
         setTraceSummary(buildTraceSummary(selectedEdges, objectById, selectedObject.id, renderableEdges.length, pathArtifacts, res?.propagation || null));
 
-        if (renderableEdges.length === 0 || !canAccessMapStyle(map)) {
+        if ((renderableEdges.length === 0 && propagationFeatures.length === 0) || !canAccessMapStyle(map)) {
           setEdgesLoading(false);
           return;
         }
 
-        const features: GeoJSON.Feature<GeoJSON.LineString>[] = renderableEdges.map((edge) => ({
+        const graphFeatures: GeoJSON.Feature<GeoJSON.LineString>[] = renderableEdges.map((edge) => ({
           id: edge.edgeId,
           type: 'Feature',
           geometry: { type: 'LineString', coordinates: edge.coordinates },
           properties: {
+            kind: 'graph',
             hop: edge.hop,
             type: edge.type,
             family: edge.family,
@@ -1025,7 +1143,8 @@ export function useGeoEdgeLayer(
             baseWidth: edge.baseWidth,
             glowOpacity: edge.glowOpacity,
           },
-        }));
+        } as GeoJSON.Feature<GeoJSON.LineString>));
+        const features: GeoJSON.Feature<GeoJSON.LineString>[] = [...graphFeatures, ...propagationFeatures];
 
         map.addSource(SRC, { type: 'geojson', data: { type: 'FeatureCollection', features } });
         addEdgeLayers(map, theme);
@@ -1035,6 +1154,8 @@ export function useGeoEdgeLayer(
         map.on('mouseleave', HOP_1_LAYER, handleEdgeLeave);
         map.on('mouseleave', HOP_2_LAYER, handleEdgeLeave);
         map.on('mouseleave', HOP_3_LAYER, handleEdgeLeave);
+        map.on('mousemove', PROP_MAIN_LAYER, handleEdgeHover);
+        map.on('mouseleave', PROP_MAIN_LAYER, handleEdgeLeave);
         if (mountedRef.current) setEdgesLoading(false);
       })
       .catch(() => {
@@ -1058,6 +1179,8 @@ export function useGeoEdgeLayer(
         map.off('mouseleave', HOP_1_LAYER, handleEdgeLeave);
         map.off('mouseleave', HOP_2_LAYER, handleEdgeLeave);
         map.off('mouseleave', HOP_3_LAYER, handleEdgeLeave);
+        map.off('mousemove', PROP_MAIN_LAYER, handleEdgeHover);
+        map.off('mouseleave', PROP_MAIN_LAYER, handleEdgeLeave);
       } catch { /* handlers may not be attached */ }
       removeLayers();
     };

@@ -223,6 +223,9 @@ type DataSource struct {
 
 	LastPolledAt *time.Time `json:"lastPolledAt,omitempty" firestore:"lastPolledAt"`
 	LastFoundAt  *time.Time `json:"lastFoundAt,omitempty" firestore:"lastFoundAt"`
+	PauseReason  *string    `json:"pauseReason,omitempty" firestore:"pauseReason,omitempty"`
+	PausedAt     *time.Time `json:"pausedAt,omitempty" firestore:"pausedAt,omitempty"`
+	PausedUntil  *time.Time `json:"pausedUntil,omitempty" firestore:"pausedUntil,omitempty"`
 
 	// Adaptive polling
 	NextPollAt     *time.Time `json:"nextPollAt,omitempty" firestore:"nextPollAt"`

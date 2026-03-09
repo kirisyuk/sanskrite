@@ -1,53 +1,62 @@
 # Go build artifacts
 bin/
 build/
-server
-main
-verified-proxy
-etigram-ws
-test-agent-orchestrator
+dist/
+coverage/
+.cache/
+.tmp/
+.turbo/
+/server
+/main
+/verified-proxy
+/etigram-ws
+/test-agent-orchestrator
 *.exe
 *.dll
 *.dylib
 *.test
 *.out
+*.bin
+*.prof
+*.pprof
 **/*.test
 **/*.out
-# All Go binaries (catch-all)
-cmd/*/main
-cmd/*/server
-cmd/*/verified-proxy
-cmd/*/etigram-ws
+**/*.bin
+**/*.prof
+**/*.pprof
+internal/**/*.test
+# Temporary local command packages that should never be shipped
 cmd/tmp_*/
 cmd/tmp_*/**
 
 # Local tool binaries produced by `go build` / `go install` for cmd/tools (often 40-80MB each)
-horizon_*
-supply_chain_*
-unstuck_*
-add_*
-check_*
-check-*
-seed_*
-migrate_*
-inspect_*
-purge_*
-geonames_*
-loc_*
-watchdog_*
-test_*
-test-*
-sync-*
-reindex-*
-update-*
-clear_*
-run_*
-find_*
-gemini_*
-openai_*
+/horizon_*
+/supply_chain_*
+/unstuck_*
+/add_*
+/check_*
+/check-*
+/seed_*
+/migrate_*
+/inspect_*
+/purge_*
+/geonames_*
+/loc_*
+/watchdog_*
+/test_*
+/test-*
+/sync-*
+/reindex-*
+/update-*
+/clear_*
+/run_*
+/find_*
+/gemini_*
+/openai_*
 
 # Log files
 *.log
+firebase-debug.log
 
 # Local data dumps / experiments (can be huge; never needed for container builds)
 *.jsonl
@@ -69,14 +78,10 @@ Thumbs.db
 # Node leftovers
 node_modules/
 **/node_modules/
-backend/
 # Tests & cache
 coverage/
 **/*_test.go
-# Service account keys should not be uploaded by default
-*.json
-# Keep sources
-!go.mod
-!go.sum
-!cmd/**
-!internal/**
+# Root-level JSON dumps and service account keys should not be uploaded by default.
+# Runtime package data lives under internal/** and must remain available for go:embed.
+/*.json
+!internal/horizon/mapactivity/data/*.json

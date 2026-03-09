@@ -992,6 +992,504 @@ V1 должен уметь показывать как минимум:
 - из watch card можно собрать/открыть lens;
 - если slice достаточно широк, система может предложить `Create Lens from Watch`.
 
+## Interpretation Layer и междисциплинарное мышление
+
+`Horizon Watch` не должен ограничиваться:
+- сигналами;
+- сводками;
+- path overlays;
+- risk scores.
+
+Для сильного стратегического продукта нужен отдельный интерпретационный слой, который строит не только ответ на вопрос `что изменилось`, но и ответ на вопрос:
+
+`как именно это изменение переходит между слоями реальности и кого оно в итоге перестраивает`
+
+Именно этот слой превращает систему из сильного мониторинга в систему стратегического чтения мира.
+
+### Главный принцип
+
+Система не должна писать публицистическое эссе “из воздуха”.
+
+Она должна производить интерпретации как отдельные, проверяемые артефакты, опирающиеся на:
+- факты;
+- сигналы;
+- граф зависимостей;
+- baseline состояния;
+- capability constraints;
+- понятные causal bridges.
+
+Интерпретация в системе должна быть:
+- структурированной;
+- споримой;
+- проверяемой;
+- привязанной к объектам, путям и evidence;
+- готовой к уточнению и критике.
+
+### Почему этого нельзя добиться только summaries
+
+Обычная summary-логика хорошо отвечает на:
+- что произошло;
+- где произошло;
+- какие источники об этом говорят.
+
+Но она плохо отвечает на:
+- как событие считывается разными аудиториями;
+- как perception превращается в изменение доверия;
+- как trust shift превращается в procurement shift;
+- как political ambiguity превращается в industrial substitution;
+- кто выигрывает не прямо, а через вторичный или третичный эффект.
+
+Для этого нужен не summary layer, а `Interpretation Engine`.
+
+## Interpretation Engine
+
+`Interpretation Engine` — это слой Horizon, который собирает объяснимые стратегические гипотезы о перераспределении риска, доверия, зависимости, спроса, возможностей и силы.
+
+Его задача:
+- не пересказывать сигнал;
+- не просто ранжировать hotness;
+- а строить machine-readable интерпретации того, как событие или серия сигналов меняют поведение системных акторов.
+
+### Что именно он должен уметь
+
+1. Раскладывать событие на несколько дисциплинарных слоёв.
+2. Видеть переход эффекта между слоями.
+3. Строить actor-specific hypotheses.
+4. Оценивать beneficiaries, losers и hedge behaviors.
+5. Выделять не только прямые, но и second-order effects.
+6. Формулировать disconfirming conditions.
+7. Давать readable brief без потери структурной строгости.
+
+## Дисциплины мышления, которые система должна совмещать
+
+Интерпретационный слой должен мыслить не одной дисциплиной, а композиционно.
+
+Минимальный набор дисциплин:
+- военная и силовая динамика;
+- политическая и дипломатическая динамика;
+- медийное и narrative-восприятие;
+- социум и элитное считывание;
+- политическая экономия;
+- финансовая и инвестиционная логика;
+- промышленная и технологическая логика;
+- supply chain и инфраструктурная логика;
+- география, маршрутность, chokepoints;
+- регуляторная и санкционная логика;
+- институциональная устойчивость;
+- временные горизонты `immediate / medium / long`.
+
+Ключевая идея:
+
+система должна уметь переводить вывод из одной дисциплины в последствия для другой.
+
+Пример желаемого перехода:
+
+`military event -> media reading -> elite trust delta -> procurement hedging -> supplier substitution -> industrial beneficiary`
+
+## Типы интерпретационных артефактов
+
+Ниже перечислены основные артефакты, которые должен уметь производить `Interpretation Engine`.
+
+### 1. Interpretation Thesis
+
+Главный тезис о происходящем.
+
+Это не пересказ событий, а синтетическое утверждение уровня:
+- `Gulf actors are likely to increase strategic hedging against Western suppliers.`
+- `Maritime disruption is shifting from local logistics issue to downstream manufacturing pressure.`
+- `Political ambiguity is weakening long-horizon trust more than immediate military balance.`
+
+Свойства:
+- один тезис = одна основная мысль;
+- должен иметь scope, horizon и confidence;
+- должен иметь список supporting mechanisms;
+- должен иметь список disconfirming conditions.
+
+### 2. Mechanism Chain
+
+Формализованная цепочка трансляции эффекта.
+
+Пример:
+
+`policy ambiguity -> trust erosion -> hedge behavior -> supplier diversification -> local champion growth`
+
+Свойства:
+- ordered;
+- каждый шаг имеет evidence and confidence;
+- каждый мост должен быть объяснён;
+- chain может ссылаться на graph/artifacts/metrics.
+
+### 3. Perception Delta
+
+Артефакт о том, как разные аудитории считывают одно и то же событие.
+
+Аудитории могут быть:
+- элиты региона;
+- государственные закупщики;
+- рынки капитала;
+- оборонные planners;
+- регуляторы;
+- социальные группы;
+- союзники;
+- противники;
+- глобальные поставщики.
+
+Это особенно важно, потому что один и тот же факт может иметь разные operational consequences в зависимости от того, кем и как он считывается.
+
+### 4. Trust Shift
+
+Артефакт, описывающий изменение доверия между акторами по конкретной оси.
+
+Оси:
+- security guarantee credibility;
+- policy predictability;
+- supplier reliability;
+- technology sovereignty risk;
+- sanctions exposure risk;
+- diplomatic alignment stability.
+
+### 5. Strategic Shift Hypothesis
+
+Гипотеза о смене поведения:
+- закупки;
+- локализация;
+- диверсификация;
+- перенос партнёрств;
+- создание национального чемпиона;
+- замещение технологий;
+- изменение логистического маршрута;
+- изменение инвестиционного приоритета.
+
+### 6. Beneficiary / Loser Map
+
+Артефакт, который показывает:
+- кто выигрывает;
+- кто проигрывает;
+- по какой причине;
+- на каком горизонте;
+- через какой путь.
+
+Это не должен быть примитивный список “победителей и проигравших”.
+Он должен быть path-grounded.
+
+### 7. Disconfirming Signal Set
+
+Набор фактов и сигналов, которые могут ослабить или опровергнуть интерпретацию.
+
+Это обязательно.
+
+Без этого система будет красиво писать, но не будет мыслить строго.
+
+### 8. Interpretation Delta
+
+Артефакт о том, что именно изменилось в старой картине мира.
+
+Не просто “появился новый сигнал”, а:
+- какая гипотеза усилилась;
+- какая ослабла;
+- какая audience-reading изменилась;
+- какой beneficiary moved up or down.
+
+## Внутренние режимы мышления системы
+
+Чтобы создавать сильные интерпретации, системе нужны не просто prompt templates, а несколько стабильных reasoning modes.
+
+### 1. Cross-layer translation
+
+Система должна уметь переводить событие между слоями:
+- факт;
+- сигнал;
+- восприятие;
+- доверие;
+- поведение;
+- контрактный выбор;
+- цепочка поставки;
+- геополитическая позиция;
+- индустриальный результат.
+
+### 2. Actor-centered reasoning
+
+Система не должна мыслить “в среднем по миру”.
+
+Она должна уметь спрашивать:
+- что это означает для Саудовской Аравии;
+- что это означает для госзакупщика в ОАЭ;
+- что это означает для китайского поставщика;
+- что это означает для европейского defense vendor;
+- что это означает для местного industrial champion.
+
+### 3. Audience-differentiated reading
+
+Одно и то же событие может:
+- усиливать страх в одной аудитории;
+- усиливать оппортунизм в другой;
+- усиливать осторожность в третьей;
+- давать маркетинговый шанс в четвёртой.
+
+Система должна различать это явно.
+
+### 4. Baseline-vs-delta reasoning
+
+Интерпретация должна строиться не в вакууме, а относительно baseline:
+- какой был уровень доверия до события;
+- какая была степень зависимости;
+- был ли уже курс на локализацию;
+- существовали ли альтернативные поставщики;
+- была ли уже политическая усталость от партнёра.
+
+### 5. Capability-constrained reasoning
+
+Нельзя делать вывод “X выиграет”, если у X нет:
+- мощностей;
+- политического окна;
+- цепочки поставок;
+- компетенций;
+- экспортного доступа;
+- финансовой возможности масштабироваться.
+
+То есть гипотеза должна проходить через слой `can they actually capture this upside`.
+
+### 6. Counterfactual / disconfirmation reasoning
+
+Для каждой сильной интерпретации система должна уметь сказать:
+- что должно случиться, чтобы она ослабла;
+- какие сигналы будут означать, что мир пошёл по другой ветке;
+- где интерпретация уязвима.
+
+### 7. Time-layered reasoning
+
+Один и тот же эффект может быть:
+- негативным в ближайшие 48 часов;
+- нейтральным в среднесроке;
+- выгодным для другого набора игроков в долгосроке.
+
+Система должна уметь разносить эффекты по горизонтам, а не смешивать их.
+
+## Как система должна строить интерпретацию
+
+Ниже минимальный pipeline построения интерпретации.
+
+### Stage 1. Event and signal assembly
+
+Система собирает:
+- события;
+- сигналы;
+- связанные facts;
+- graph neighbors;
+- materialized artifacts;
+- relevant lenses;
+- baseline state.
+
+### Stage 2. Mechanism candidate generation
+
+Система генерирует не narrative, а несколько candidate mechanisms:
+- erosion of trust;
+- supplier substitution;
+- localization acceleration;
+- corridor stress;
+- alliance ambiguity;
+- reputational weakening;
+- demand reallocation.
+
+### Stage 3. Gating by constraints
+
+Каждый механизм проверяется на:
+- graph support;
+- evidence support;
+- baseline compatibility;
+- capability feasibility;
+- temporal plausibility.
+
+### Stage 4. Actor impact projection
+
+Система проецирует механизм на:
+- страны;
+- компании;
+- национальных чемпионов;
+- sectors / markets;
+- logistics corridors;
+- watched targets.
+
+### Stage 5. Critic and disconfirmation pass
+
+Отдельный critic обязан искать:
+- чрезмерно смелые причинные мосты;
+- отсутствующие промежуточные шаги;
+- смешение short-term и long-term эффектов;
+- claims without capacity proof;
+- narrative inflation.
+
+### Stage 6. Interpretation artifact publication
+
+Система публикует:
+- thesis;
+- mechanisms;
+- affected / beneficiary map;
+- disconfirmers;
+- human-readable brief.
+
+## Какими неявными мостами система должна уметь оперировать
+
+Многие сильные инсайты рождаются не из фактов как таковых, а из связующих мостов между ними.
+
+Примеры типовых мостов:
+- `narrative incoherence -> elite distrust`
+- `elite distrust -> shorter partnership horizon`
+- `shorter partnership horizon -> diversification of vendors`
+- `vendor diversification -> local champion opening`
+- `sanctions or instability -> route rerouting`
+- `combat visibility -> defense tech marketing uplift`
+- `alliance ambiguity -> sovereign capability buildout`
+- `industrial policy + threat perception -> accelerated localization`
+
+Эти мосты должны быть представлены в системе не как свободный текст, а как управляемые mechanism templates.
+
+## Что система не должна делать
+
+Система не должна:
+- генерировать “умное эссе” только по ленте новостей;
+- перепрыгивать через причинные шаги;
+- путать media visibility с реальным strategic effect;
+- объявлять beneficiary без проверки capacity;
+- смешивать normative judgement и operational interpretation;
+- скрывать uncertainty.
+
+## Как это проявляется в Horizon Watch
+
+Пользователь в `Horizon Watch` должен видеть не только risk brief, но и при необходимости раскрывать его интерпретационный каркас.
+
+Это может проявляться как:
+- `Main Thesis`
+- `Why the system thinks this`
+- `Mechanism chain`
+- `Who is affected`
+- `Who benefits`
+- `What would disprove this`
+- `What changed since last update`
+
+То есть brief должен быть narrative-friendly, но under the hood опираться на отдельные machine-readable interpretation artifacts.
+
+## Предлагаемые системные контракты
+
+Ниже не финальная schema, а направление модели.
+
+### InterpretationThesis
+
+```ts
+type InterpretationThesis = {
+  id: string;
+  scopeRef: string;
+  title: string;
+  statement: string;
+  horizon: 'immediate' | 'near' | 'medium' | 'long';
+  polarity: 'risk' | 'opportunity' | 'mixed';
+  confidence: number;
+  mechanismChainIds: string[];
+  affectedRefs: string[];
+  beneficiaryRefs: string[];
+  loserRefs: string[];
+  disconfirmerIds: string[];
+  evidenceFactIds: string[];
+  updatedAt: string;
+};
+```
+
+### MechanismChain
+
+```ts
+type MechanismChain = {
+  id: string;
+  scopeRef: string;
+  label: string;
+  steps: Array<{
+    kind: string;
+    statement: string;
+    confidence: number;
+    evidenceFactIds?: string[];
+    supportingRefs?: string[];
+  }>;
+  confidence: number;
+};
+```
+
+### TrustShift
+
+```ts
+type TrustShift = {
+  id: string;
+  sourceActorRef: string;
+  targetActorRef: string;
+  dimension:
+    | 'security_credibility'
+    | 'policy_predictability'
+    | 'supplier_reliability'
+    | 'technology_sovereignty'
+    | 'sanctions_exposure'
+    | 'alignment_stability';
+  direction: 'up' | 'down' | 'mixed';
+  magnitude: number;
+  confidence: number;
+  evidenceFactIds: string[];
+};
+```
+
+### StrategicShiftHypothesis
+
+```ts
+type StrategicShiftHypothesis = {
+  id: string;
+  actorRef: string;
+  shiftType:
+    | 'procurement_hedging'
+    | 'supplier_diversification'
+    | 'localization_push'
+    | 'alliance_rebalancing'
+    | 'industrial_expansion'
+    | 'route_rerouting'
+    | 'investment_reweighting';
+  direction: 'increasing' | 'decreasing' | 'mixed';
+  horizon: 'near' | 'medium' | 'long';
+  confidence: number;
+  requiredConditions: string[];
+  disconfirmers: string[];
+  supportingRefs: string[];
+};
+```
+
+## Связь интерпретационного слоя с прочими артефактами Horizon
+
+Интерпретация должна опираться на существующие артефакты, а не жить отдельно.
+
+Связи:
+- `OntologyFact` дают фактическую почву;
+- `SignalDescriptor` даёт normalized event pressure;
+- `Propagation` даёт graph-spread consequences;
+- `MaterializedArtifact` даёт path geometry;
+- `ExposurePath` даёт объяснение уязвимости;
+- `Lens` даёт scope и пользовательский контекст;
+- `WatchBrief` даёт UX-поверхность для подачи интерпретации.
+
+### Иерархия слоёв
+
+Рекомендуемый порядок:
+
+`facts -> signals -> graph effects -> interpretation artifacts -> watch brief`
+
+Это важно.
+
+Если система будет прыгать сразу из `facts` в `brief`, она начнёт терять строгость.
+
+## Acceptance criteria для Interpretation Layer
+
+Слой можно считать зрелым, если:
+- система умеет строить тезис, отличный от summary;
+- у тезиса есть явные mechanism chains;
+- у каждого сильного вывода есть хотя бы минимальный disconfirmation layer;
+- beneficiaries и losers выводятся через path/mechanism, а не интуитивным списком;
+- разные аудитории могут иметь разные readings одного события;
+- short / medium / long эффекты не смешиваются в один комок;
+- пользователь может раскрыть reasoning без чтения “романа”.
+
 ## Персонализация и сохранение в профиле
 
 Выбор пользователя должен сохраняться в профиле, а не только в local state.

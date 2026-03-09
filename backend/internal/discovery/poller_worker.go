@@ -88,14 +88,24 @@ func (w *SourcePoller) coordinateSource(ctx context.Context, ds *models.DataSour
 	if ds == nil {
 		return false, true, nil
 	}
+	if ds.Status == "paused" {
+		resumed, err := w.resumeAutoPausedSource(ctx, ds, now)
+		if err != nil {
+			return false, false, err
+		}
+		if !resumed {
+			status := "skipped_paused"
+			if models.IsAutoPaused(ds) {
+				status = "skipped_auto_paused"
+			}
+			return false, w.holdPausedSource(ctx, ds, status), nil
+		}
+	}
 	if models.IsGlobalSystemSource(ds) && models.UsesCanvasLLMProcessing(ds) {
 		return false, w.skipSource(ctx, ds, now, "skipped_canvas_lane", nil), nil
 	}
 	if ds.Status == "completed" {
 		return false, w.skipSource(ctx, ds, now, "skipped_completed", nil), nil
-	}
-	if ds.Status == "paused" && ds.ErrorCount >= 10 {
-		return false, w.skipSource(ctx, ds, now, "skipped_auto_paused", nil), nil
 	}
 
 	systemGlobalSource := w.isSystemGlobalHeuristicSource(ds)
@@ -135,6 +145,7 @@ func (w *SourcePoller) coordinateSource(ctx context.Context, ds *models.DataSour
 			state.LastEnqueuedAt = timePtr(now)
 			state.LastStatus = stringPtr("queued")
 			state.LastError = nil
+			state.Status = ds.Status
 			return nil
 		})
 	}
@@ -313,6 +324,17 @@ func (w *SourcePoller) finalizeRun(ctx context.Context, ds *models.DataSource, l
 				state.LastError = stringPtr(runErr.Error())
 				backoff := int(computeNextInterval(ds, state, outcome).Seconds())
 				state.PollBackoffSec = intPtr(backoff)
+				if shouldAutoPauseSource(ds, state) {
+					state.Status = "paused"
+					state.PauseReason = stringPtr(models.SourcePauseReasonAutoErrorThreshold)
+					state.PausedAt = timePtr(now)
+					state.PausedUntil = computeAutoPauseUntil(ds, now)
+					state.LastStatus = stringPtr("auto_paused")
+					if state.PausedUntil != nil {
+						state.NextPollAt = cloneTimePtr(state.PausedUntil)
+					}
+					return nil
+				}
 			} else {
 				state.ConsecutiveErrors = 0
 				state.LastSuccessAt = timePtr(now)
@@ -320,6 +342,12 @@ func (w *SourcePoller) finalizeRun(ctx context.Context, ds *models.DataSource, l
 				state.LastErrorAt = nil
 				zero := 0
 				state.PollBackoffSec = &zero
+				if state.Status == "paused" && state.PauseReason != nil && *state.PauseReason == models.SourcePauseReasonAutoErrorThreshold {
+					state.Status = "active"
+					state.PauseReason = nil
+					state.PausedAt = nil
+					state.PausedUntil = nil
+				}
 			}
 
 			if outcome.foundNew {
@@ -367,6 +395,35 @@ func (w *SourcePoller) finalizeRun(ctx context.Context, ds *models.DataSource, l
 	return w.orchestrator.sources.Upsert(ctx, ds)
 }
 
+func (w *SourcePoller) holdPausedSource(ctx context.Context, ds *models.DataSource, status string) bool {
+	if ds == nil {
+		return true
+	}
+	if w.runtime != nil {
+		state, stateErr := w.runtime.Mutate(ctx, ds.ID, func(state *models.SourceRuntimeState) error {
+			ensureRuntimeStateBase(state, ds)
+			state.LastStatus = stringPtr(status)
+			state.LastError = nil
+			state.LeaseOwner = nil
+			state.LeaseUntil = nil
+			state.Status = ds.Status
+			state.PauseReason = cloneStringPtr(ds.PauseReason)
+			state.PausedAt = cloneTimePtr(ds.PausedAt)
+			state.PausedUntil = cloneTimePtr(ds.PausedUntil)
+			if state.PausedUntil != nil {
+				state.NextPollAt = cloneTimePtr(state.PausedUntil)
+			}
+			return nil
+		})
+		if stateErr == nil && state != nil {
+			w.syncLegacySchedulingSnapshot(ctx, ds, state)
+		}
+		return true
+	}
+	_ = w.orchestrator.sources.Upsert(ctx, ds)
+	return true
+}
+
 func (w *SourcePoller) skipSource(ctx context.Context, ds *models.DataSource, now time.Time, status string, err error) bool {
 	if w.runtime != nil {
 		state, stateErr := w.runtime.Mutate(ctx, ds.ID, func(state *models.SourceRuntimeState) error {
@@ -379,6 +436,10 @@ func (w *SourcePoller) skipSource(ctx context.Context, ds *models.DataSource, no
 			}
 			state.LeaseOwner = nil
 			state.LeaseUntil = nil
+			state.Status = ds.Status
+			state.PauseReason = cloneStringPtr(ds.PauseReason)
+			state.PausedAt = cloneTimePtr(ds.PausedAt)
+			state.PausedUntil = cloneTimePtr(ds.PausedUntil)
 			next := now.Add(computeNextInterval(ds, state, sourceRunOutcome{}))
 			state.NextPollAt = &next
 			return nil
@@ -413,6 +474,7 @@ func (w *SourcePoller) claimSourceLease(ctx context.Context, ds *models.DataSour
 		state.LeaseUntil = &leaseUntil
 		state.LastCoordinatedAt = timePtr(now)
 		state.LastStatus = stringPtr("leased")
+		state.Status = ds.Status
 		*leaseOwnerOut = leaseOwner
 		claimed = true
 		return nil
@@ -432,6 +494,7 @@ func (w *SourcePoller) releaseSourceLease(ctx context.Context, ds *models.DataSo
 		state.LeaseOwner = nil
 		state.LeaseUntil = nil
 		state.LastStatus = stringPtr(status)
+		state.Status = ds.Status
 		if err != nil {
 			state.LastError = stringPtr(err.Error())
 		}
@@ -474,6 +537,12 @@ func (w *SourcePoller) syncLegacySchedulingSnapshot(ctx context.Context, ds *mod
 	ds.NextPollAt = state.NextPollAt
 	ds.PollBackoffSec = state.PollBackoffSec
 	ds.ErrorCount = state.ConsecutiveErrors
+	if trim(state.Status) != "" {
+		ds.Status = state.Status
+	}
+	ds.PauseReason = cloneStringPtr(state.PauseReason)
+	ds.PausedAt = cloneTimePtr(state.PausedAt)
+	ds.PausedUntil = cloneTimePtr(state.PausedUntil)
 	_ = w.orchestrator.sources.Upsert(ctx, ds)
 }
 
@@ -503,6 +572,9 @@ func ensureRuntimeStateBase(state *models.SourceRuntimeState, ds *models.DataSou
 	if state.OutputMode == "" {
 		state.OutputMode = models.SourceOutputModeValue(ds)
 	}
+	if state.Status == "" {
+		state.Status = ds.Status
+	}
 	if state.LastPolledAt == nil {
 		state.LastPolledAt = ds.LastPolledAt
 	}
@@ -515,12 +587,67 @@ func ensureRuntimeStateBase(state *models.SourceRuntimeState, ds *models.DataSou
 	if state.PollBackoffSec == nil {
 		state.PollBackoffSec = ds.PollBackoffSec
 	}
+	if state.PauseReason == nil {
+		state.PauseReason = cloneStringPtr(ds.PauseReason)
+	}
+	if state.PausedAt == nil {
+		state.PausedAt = cloneTimePtr(ds.PausedAt)
+	}
+	if state.PausedUntil == nil {
+		state.PausedUntil = cloneTimePtr(ds.PausedUntil)
+	}
 	if state.ConsecutiveErrors == 0 && ds.ErrorCount > 0 {
 		state.ConsecutiveErrors = ds.ErrorCount
 	}
 	if state.CreatedAt.IsZero() {
 		state.CreatedAt = now
 	}
+}
+
+func (w *SourcePoller) resumeAutoPausedSource(ctx context.Context, ds *models.DataSource, now time.Time) (bool, error) {
+	if ds == nil {
+		return false, nil
+	}
+	if ds.Status != "paused" {
+		return false, nil
+	}
+	if !models.IsAutoPaused(ds) {
+		return false, nil
+	}
+	if ds.PausedUntil != nil && now.Before(*ds.PausedUntil) {
+		return false, nil
+	}
+	if w.runtime != nil {
+		state, err := w.runtime.Mutate(ctx, ds.ID, func(state *models.SourceRuntimeState) error {
+			ensureRuntimeStateBase(state, ds)
+			state.Status = "active"
+			state.PauseReason = nil
+			state.PausedAt = nil
+			state.PausedUntil = nil
+			state.ConsecutiveErrors = 0
+			state.LastError = nil
+			zero := 0
+			state.PollBackoffSec = &zero
+			state.LastStatus = stringPtr("auto_resumed")
+			state.NextPollAt = timePtr(now)
+			return nil
+		})
+		if err != nil {
+			return false, err
+		}
+		if state != nil {
+			w.syncLegacySchedulingSnapshot(ctx, ds, state)
+		}
+	}
+	ds.Status = "active"
+	ds.PauseReason = nil
+	ds.PausedAt = nil
+	ds.PausedUntil = nil
+	ds.ErrorCount = 0
+	zero := 0
+	ds.PollBackoffSec = &zero
+	ds.NextPollAt = timePtr(now)
+	return true, nil
 }
 
 func lastFoundAdvanced(previous *time.Time, ds *models.DataSource) bool {
@@ -591,6 +718,25 @@ func stringPtr(v string) *string {
 func timePtr(v time.Time) *time.Time {
 	out := v.UTC()
 	return &out
+}
+
+func cloneTimePtr(v *time.Time) *time.Time {
+	if v == nil {
+		return nil
+	}
+	out := v.UTC()
+	return &out
+}
+
+func cloneStringPtr(v *string) *string {
+	if v == nil {
+		return nil
+	}
+	s := trim(*v)
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 func intPtr(v int) *int {

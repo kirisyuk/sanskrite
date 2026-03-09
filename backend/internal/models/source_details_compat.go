@@ -12,6 +12,8 @@ const (
 
 	SourceOutputModeDocumentFeed = "document_feed"
 	SourceOutputModeOntologyFact = "ontology_fact"
+
+	SourcePauseReasonAutoErrorThreshold = "auto_error_threshold"
 )
 
 func cloneStringPointer(in *string) *string {
@@ -81,6 +83,8 @@ func normalizeSourceOutputModeValue(raw string) string {
 		return SourceOutputModeDocumentFeed
 	case SourceOutputModeOntologyFact:
 		return SourceOutputModeOntologyFact
+	case "query_only":
+		return "query_only"
 	default:
 		return ""
 	}
@@ -211,13 +215,95 @@ func (ds *DataSource) SyncCompatForWrite() {
 		return
 	}
 	ds.Kind = NormalizeSourceKind(ds.Kind)
+	ds.applyCanonicalSourcePolicyDefaults()
 	ds.Details.SyncHorizonMonitorAliases()
 	ds.SourceCategoryPaths, ds.PrimarySourceCategoryPath = normalizeSourceCategoryCompat(ds.SourceCategoryPaths, ds.PrimarySourceCategoryPath)
 	ds.SourceGeoFacets = normalizeFacetListCompat(ds.SourceGeoFacets)
 	ds.SourceFormatFacets = normalizeFacetListCompat(ds.SourceFormatFacets)
 }
 
-// SourceScopeValue returns the effective routing scope, including legacy inference.
+func (ds *DataSource) applyCanonicalSourcePolicyDefaults() {
+	if ds == nil {
+		return
+	}
+	if ds.Details.SourceScope == nil {
+		scope := SourceScopePublic
+		if strings.TrimSpace(ds.TenantID) != "" {
+			scope = SourceScopeProject
+		} else if isSystemCapableSourceKind(ds.Kind) && ds.Details.DisableLLMProcessing != nil && *ds.Details.DisableLLMProcessing {
+			scope = SourceScopeGlobalSystem
+		}
+		ds.Details.SourceScope = &scope
+	}
+	if ds.Details.ProcessingMode == nil {
+		var mode string
+		switch {
+		case ds.Details.DisableLLMProcessing != nil && *ds.Details.DisableLLMProcessing:
+			mode = SourceProcessingModeHeuristic
+		case SourceScopeValue(ds) == SourceScopeGlobalSystem:
+			mode = SourceProcessingModeCanvasLLM
+		}
+		if mode != "" {
+			ds.Details.ProcessingMode = &mode
+		}
+	}
+	if ds.Details.OutputMode == nil {
+		var output string
+		if ds.Details.HorizonMonitorIngestMode != nil {
+			output = normalizeSourceOutputModeValue(*ds.Details.HorizonMonitorIngestMode)
+		}
+		if output == "" && isSystemCapableSourceKind(ds.Kind) {
+			output = SourceOutputModeDocumentFeed
+		}
+		if output != "" {
+			ds.Details.OutputMode = &output
+		}
+	}
+	if ds.Details.CadencePolicy == nil {
+		base := 30
+		if ds.Details.PollIntervalMinutes != nil && *ds.Details.PollIntervalMinutes > 0 {
+			base = *ds.Details.PollIntervalMinutes
+		} else if IsGlobalSystemSource(ds) && UsesHeuristicProcessing(ds) {
+			base = 60
+		}
+		max := 360
+		empty := 2.0
+		errMult := 2.0
+		boost := 120
+		lease := 90
+		autoPauseAfterErrors := 10
+		autoPauseDuration := 360
+		ds.Details.CadencePolicy = &SourceCadencePolicy{
+			BaseIntervalMinutes:         intPtrCompat(base),
+			MinIntervalMinutes:          intPtrCompat(base),
+			MaxIntervalMinutes:          intPtrCompat(max),
+			EmptyBackoffMultiplier:      floatPtrCompat(empty),
+			ErrorBackoffMultiplier:      floatPtrCompat(errMult),
+			FreshnessBoostWindowMinutes: intPtrCompat(boost),
+			LeaseDurationMinutes:        intPtrCompat(lease),
+			AutoPauseAfterErrors:        intPtrCompat(autoPauseAfterErrors),
+			AutoPauseDurationMinutes:    intPtrCompat(autoPauseDuration),
+		}
+	} else {
+		if ds.Details.CadencePolicy.AutoPauseAfterErrors == nil {
+			autoPauseAfterErrors := 10
+			ds.Details.CadencePolicy.AutoPauseAfterErrors = intPtrCompat(autoPauseAfterErrors)
+		}
+		if ds.Details.CadencePolicy.AutoPauseDurationMinutes == nil {
+			autoPauseDuration := 360
+			ds.Details.CadencePolicy.AutoPauseDurationMinutes = intPtrCompat(autoPauseDuration)
+		}
+	}
+	if mode := SourceProcessingModeValue(ds); mode != "" {
+		disable := mode == SourceProcessingModeHeuristic
+		ds.Details.DisableLLMProcessing = &disable
+	}
+	if output := SourceOutputModeValue(ds); output != "" {
+		ds.Details.HorizonMonitorIngestMode = &output
+	}
+}
+
+// SourceScopeValue returns the effective routing scope.
 func SourceScopeValue(ds *DataSource) string {
 	if ds == nil {
 		return ""
@@ -230,13 +316,10 @@ func SourceScopeValue(ds *DataSource) string {
 	if strings.TrimSpace(ds.TenantID) != "" {
 		return SourceScopeProject
 	}
-	if isSystemCapableSourceKind(ds.Kind) && ds.Details.DisableLLMProcessing != nil && *ds.Details.DisableLLMProcessing {
-		return SourceScopeGlobalSystem
-	}
 	return SourceScopePublic
 }
 
-// SourceProcessingModeValue returns the effective processing lane, including legacy inference.
+// SourceProcessingModeValue returns the effective processing lane.
 func SourceProcessingModeValue(ds *DataSource) string {
 	if ds == nil {
 		return ""
@@ -245,12 +328,6 @@ func SourceProcessingModeValue(ds *DataSource) string {
 		if v := normalizeSourceProcessingModeValue(*ds.Details.ProcessingMode); v != "" {
 			return v
 		}
-	}
-	if ds.Details.DisableLLMProcessing != nil && *ds.Details.DisableLLMProcessing {
-		return SourceProcessingModeHeuristic
-	}
-	if SourceScopeValue(ds) == SourceScopeGlobalSystem {
-		return SourceProcessingModeCanvasLLM
 	}
 	return ""
 }
@@ -264,10 +341,8 @@ func SourceOutputModeValue(ds *DataSource) string {
 			return v
 		}
 	}
-	if ds.Details.HorizonMonitorIngestMode != nil {
-		if v := normalizeSourceOutputModeValue(*ds.Details.HorizonMonitorIngestMode); v != "" {
-			return v
-		}
+	if isSystemCapableSourceKind(ds.Kind) {
+		return SourceOutputModeDocumentFeed
 	}
 	return ""
 }
@@ -286,4 +361,23 @@ func UsesCanvasLLMProcessing(ds *DataSource) bool {
 
 func ShouldDisableLLMProcessing(ds *DataSource) bool {
 	return UsesHeuristicProcessing(ds)
+}
+
+func PauseReasonValue(ds *DataSource) string {
+	if ds == nil || ds.PauseReason == nil {
+		return ""
+	}
+	return strings.TrimSpace(*ds.PauseReason)
+}
+
+func IsAutoPaused(ds *DataSource) bool {
+	return ds != nil && strings.TrimSpace(ds.Status) == "paused" && PauseReasonValue(ds) == SourcePauseReasonAutoErrorThreshold
+}
+
+func intPtrCompat(v int) *int {
+	return &v
+}
+
+func floatPtrCompat(v float64) *float64 {
+	return &v
 }

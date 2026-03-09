@@ -97,6 +97,13 @@ type MaterializedArtifact struct {
 	MatchedRefs     []string `json:"matchedRefs,omitempty" firestore:"-"`
 	OverlapScore    float64  `json:"overlapScore,omitempty" firestore:"-"`
 	IsPinned        bool     `json:"isPinned,omitempty" firestore:"-"`
+	TraceRole       string   `json:"traceRole,omitempty" firestore:"-"`
+	TraceReason     string   `json:"traceReason,omitempty" firestore:"-"`
+	TracePriority   int      `json:"tracePriority,omitempty" firestore:"-"`
+	LegCount        int      `json:"legCount,omitempty" firestore:"-"`
+	BindingScore    float64  `json:"bindingScore,omitempty" firestore:"-"`
+	PathStressScore float64  `json:"pathStressScore,omitempty" firestore:"-"`
+	BottleneckLeg   int      `json:"bottleneckLegIndex,omitempty" firestore:"-"`
 }
 
 // Validate checks if MaterializedArtifact is valid.
