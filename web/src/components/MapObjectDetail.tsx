@@ -22,19 +22,6 @@ function formatFacilityKind(value?: string): string {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function formatFamilyLabel(value: GeoEdgeTraceSummary['topFamilies'][number]['family']): string {
-  switch (value) {
-    case 'supply': return 'Supply';
-    case 'control': return 'Control';
-    case 'influence': return 'Influence';
-    case 'location': return 'Location';
-    case 'market': return 'Market';
-    case 'risk': return 'Risk';
-    case 'social': return 'Social';
-    default: return 'Other';
-  }
-}
-
 function extractCountryLabel(canonicalPath?: string): string {
   const path = String(canonicalPath || '').trim().toLowerCase();
   if (!path) return '';
@@ -52,6 +39,51 @@ function extractCountryLabel(canonicalPath?: string): string {
 
 function getObjectDisplayName(object: GeoObject): string {
   return String(object.label || '').trim() || humanizeCanonicalPath(object.canonicalPath) || object.canonicalPath;
+}
+
+function humanizeToken(value?: string): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function compactRole(value?: string): string {
+  return String(value || '')
+    .trim()
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function familyAccent(family: string, isDark: boolean): string {
+  switch (family) {
+    case 'supply':
+      return isDark ? '#fbbf24' : '#b45309';
+    case 'control':
+      return isDark ? '#93c5fd' : '#2563eb';
+    case 'risk':
+    case 'influence':
+      return isDark ? '#fb7185' : '#be123c';
+    case 'location':
+    case 'market':
+      return isDark ? '#2dd4bf' : '#0f766e';
+    case 'social':
+      return isDark ? '#c4b5fd' : '#7c3aed';
+    default:
+      return isDark ? '#cbd5e1' : '#64748b';
+  }
+}
+
+function sectionCardStyle(isDark: boolean): React.CSSProperties {
+  return {
+    padding: '10px 11px',
+    borderRadius: 12,
+    background: isDark ? 'rgba(148, 163, 184, 0.08)' : 'rgba(15, 23, 42, 0.035)',
+    border: isDark ? '1px solid rgba(148, 163, 184, 0.14)' : '1px solid rgba(15, 23, 42, 0.06)',
+  };
 }
 
 export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
@@ -73,9 +105,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
-    const handleResize = () => {
-      setViewport({ width: window.innerWidth, height: window.innerHeight });
-    };
+    const handleResize = () => setViewport({ width: window.innerWidth, height: window.innerHeight });
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
@@ -90,46 +120,19 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
   const typeLabel = object.type === 'FACILITY' && facilityKindLabel
     ? `Facility (${facilityKindLabel})`
     : formatHorizonFragmentType(object.type, object.canonicalPath, object.label);
-  const zoneTypeLabel = String(object.zoneType || '').trim().replace(/_/g, ' ');
-  const zoneSubTypeLabel = String(object.zoneSubType || '').trim().replace(/_/g, ' ');
-  const zoneStatus = String(object.activityStatus || '').trim();
-  const zoneHype = Number(object.hype);
-  const zoneLastMatchedAt = object.lastMatchedAt
-    ? new Date(object.lastMatchedAt).toLocaleString()
-    : '';
   const countryLabel = extractCountryLabel(object.canonicalPath);
 
   const chips = [
     { label: 'Status', value: object.status || 'ACTIVE' },
-    edgesLoading ? { label: 'Links', value: 'Loading...' } : (edgesCount > 0 ? { label: 'Links', value: String(edgesCount) } : null),
-    !edgesLoading && visibleEdgesCount > 0 && visibleEdgesCount < edgesCount ? { label: 'Mapped', value: String(visibleEdgesCount) } : null,
-    object.inScope === false ? { label: 'Scope', value: 'Neighbor' } : null,
-    zoneStatus ? { label: 'Activity', value: zoneStatus } : null,
-    Number.isFinite(zoneHype) ? { label: 'Hype', value: `${Math.round(zoneHype)}/100` } : null,
+    edgesLoading ? { label: 'Direct', value: 'Loading…' } : { label: 'Direct', value: String(traceSummary?.directCount ?? edgesCount) },
+    !edgesLoading ? { label: 'Context', value: String(traceSummary?.contextCount ?? 0) } : null,
+    !edgesLoading ? { label: 'Paths', value: String(traceSummary?.supplyPathCount ?? 0) } : null,
+    !edgesLoading && visibleEdgesCount > 0 ? { label: 'Map lines', value: String(traceSummary?.visibleLineCount ?? visibleEdgesCount) } : null,
+    traceSummary && traceSummary.stressedSupplyPathCount > 0 ? { label: 'Stress', value: String(traceSummary.stressedSupplyPathCount) } : null,
   ].filter(Boolean) as Array<{ label: string; value: string }>;
 
-  const detailLines = [
-    object.description || '',
-    object.type === 'AFFECTED_ZONE' && zoneTypeLabel ? `Zone type: ${zoneTypeLabel}` : '',
-    object.type === 'AFFECTED_ZONE' && zoneSubTypeLabel ? `Subtype: ${zoneSubTypeLabel}` : '',
-    object.type === 'AFFECTED_ZONE' && zoneLastMatchedAt ? `Last match: ${zoneLastMatchedAt}` : '',
-  ].filter(Boolean);
-
-  const overlayWidth = autoCompact ? 286 : 338;
-  const overlayMaxWidth = viewport.width < 980 ? 'calc(100% - 20px)' : 'calc(100% - 332px)';
-  const headerGap = autoCompact ? 8 : 10;
-  const traceChips = traceSummary
-    ? [
-        { label: 'Supply', value: String(traceSummary.supplyRouteCount) },
-        { label: '1 hop', value: String(traceSummary.hopCounts[1]) },
-        { label: '2 hops', value: String(traceSummary.hopCounts[2]) },
-        { label: '3 hops', value: String(traceSummary.hopCounts[3]) },
-        { label: 'Branches', value: String(traceSummary.branchCount) },
-        { label: 'Paths', value: String(traceSummary.pathArtifactCount) },
-        { label: 'Legs', value: String(traceSummary.pathLegCount) },
-        { label: 'Signals', value: String(traceSummary.propagationEdgeCount) },
-      ]
-    : [];
+  const overlayWidth = autoCompact ? 314 : 384;
+  const overlayMaxWidth = viewport.width < 980 ? 'calc(100% - 20px)' : 'calc(100% - 340px)';
 
   return (
     <div
@@ -139,26 +142,20 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
         top: 10,
         width: overlayWidth,
         maxWidth: overlayMaxWidth,
+        maxHeight: 'calc(100% - 20px)',
+        overflow: 'auto',
         zIndex: 20,
-        borderRadius: 16,
-        overflow: 'hidden',
+        borderRadius: 18,
         background: isDark
-          ? 'linear-gradient(180deg, rgba(6, 18, 31, 0.96) 0%, rgba(3, 12, 22, 0.95) 100%)'
-          : 'linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(245, 248, 252, 0.96) 100%)',
-        border: isDark ? '1px solid rgba(148, 163, 184, 0.22)' : '1px solid rgba(15, 23, 42, 0.14)',
-        boxShadow: isDark ? '0 18px 38px rgba(0, 0, 0, 0.42)' : '0 16px 36px rgba(15, 23, 42, 0.16)',
-        backdropFilter: 'blur(16px)',
+          ? 'linear-gradient(180deg, rgba(6,18,31,0.97) 0%, rgba(3,12,22,0.96) 100%)'
+          : 'linear-gradient(180deg, rgba(255,255,255,0.985) 0%, rgba(245,248,252,0.97) 100%)',
+        border: isDark ? '1px solid rgba(148,163,184,0.22)' : '1px solid rgba(15,23,42,0.14)',
+        boxShadow: isDark ? '0 18px 44px rgba(0,0,0,0.44)' : '0 16px 40px rgba(15,23,42,0.16)',
+        backdropFilter: 'blur(18px)',
         color: 'var(--text-heading)',
       }}
     >
-      <div
-        style={{
-          position: 'absolute',
-          inset: 0,
-          width: 3,
-          background: accent,
-        }}
-      />
+      <div style={{ position: 'absolute', inset: 0, width: 3, background: accent }} />
 
       <button
         type="button"
@@ -177,8 +174,8 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
           placeItems: 'center',
           fontSize: 15,
           lineHeight: 1,
-          color: isDark ? 'rgba(226, 232, 240, 0.88)' : 'rgba(15, 23, 42, 0.74)',
-          background: isDark ? 'rgba(148, 163, 184, 0.12)' : 'rgba(15, 23, 42, 0.06)',
+          color: isDark ? 'rgba(226,232,240,0.88)' : 'rgba(15,23,42,0.74)',
+          background: isDark ? 'rgba(148,163,184,0.12)' : 'rgba(15,23,42,0.06)',
         }}
       >
         {isCollapsed ? '+' : '−'}
@@ -201,250 +198,207 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
           placeItems: 'center',
           fontSize: 15,
           lineHeight: 1,
-          color: isDark ? 'rgba(226, 232, 240, 0.88)' : 'rgba(15, 23, 42, 0.74)',
-          background: isDark ? 'rgba(148, 163, 184, 0.12)' : 'rgba(15, 23, 42, 0.06)',
+          color: isDark ? 'rgba(226,232,240,0.88)' : 'rgba(15,23,42,0.74)',
+          background: isDark ? 'rgba(148,163,184,0.12)' : 'rgba(15,23,42,0.06)',
         }}
       >
         ×
       </button>
 
-      <div style={{ padding: autoCompact ? '12px 44px 12px 14px' : '14px 44px 14px 14px' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: headerGap, marginBottom: isCollapsed ? 0 : 8 }}>
+      <div style={{ padding: autoCompact ? '12px 44px 12px 14px' : '14px 44px 14px 14px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
           <div
             style={{
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
-              width: autoCompact ? 26 : 28,
-              height: autoCompact ? 26 : 28,
+              width: autoCompact ? 26 : 30,
+              height: autoCompact ? 26 : 30,
               borderRadius: 999,
               flexShrink: 0,
-              background: isDark ? 'rgba(148, 163, 184, 0.12)' : 'rgba(15, 23, 42, 0.05)',
-              border: isDark ? '1px solid rgba(148, 163, 184, 0.16)' : '1px solid rgba(15, 23, 42, 0.08)',
+              background: isDark ? 'rgba(148,163,184,0.12)' : 'rgba(15,23,42,0.05)',
+              border: isDark ? '1px solid rgba(148,163,184,0.16)' : '1px solid rgba(15,23,42,0.08)',
             }}
           >
             <HorizonNodeIcon type={visualType || object.type} color={accent} size={15} />
           </div>
-
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div
-              style={{
-                marginBottom: 3,
-                fontSize: 10,
-                fontWeight: 700,
-                letterSpacing: '0.11em',
-                textTransform: 'uppercase',
-                color: accent,
-              }}
-            >
+            <div style={{ marginBottom: 3, fontSize: 10, fontWeight: 700, letterSpacing: '0.11em', textTransform: 'uppercase', color: accent }}>
               {typeLabel}
             </div>
-            <div style={{ fontSize: autoCompact ? 15 : 17, lineHeight: 1.15, fontWeight: 700, letterSpacing: '-0.01em' }}>
+            <div style={{ fontSize: autoCompact ? 15 : 18, lineHeight: 1.15, fontWeight: 750, letterSpacing: '-0.015em' }}>
               {getObjectDisplayName(object)}
             </div>
-            {!isCollapsed && countryLabel && (
-              <div style={{ marginTop: 4, fontSize: 12, lineHeight: 1.35, opacity: 0.72, wordBreak: 'break-word' }}>
+            {countryLabel && (
+              <div style={{ marginTop: 4, fontSize: 12, lineHeight: 1.35, opacity: 0.74 }}>
                 {countryLabel}
               </div>
             )}
           </div>
         </div>
 
-        {isCollapsed ? (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
-            {chips.slice(0, autoCompact ? 2 : 3).map((chip) => (
-              <span
-                key={`${chip.label}:${chip.value}`}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  padding: '4px 8px',
-                  borderRadius: 999,
-                  fontSize: 10,
-                  lineHeight: 1,
-                  fontWeight: 600,
-                  letterSpacing: '0.01em',
-                  background: isDark ? 'rgba(148, 163, 184, 0.12)' : 'rgba(15, 23, 42, 0.05)',
-                  border: isDark ? '1px solid rgba(148, 163, 184, 0.16)' : '1px solid rgba(15, 23, 42, 0.08)',
-                }}
-              >
-                <strong style={{ fontSize: 10, fontWeight: 700 }}>{chip.label}</strong>
-                {chip.value}
-              </span>
-            ))}
-          </div>
-        ) : detailLines.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
-            {detailLines.map((line) => (
-              <div key={line} style={{ fontSize: 12, lineHeight: 1.5, opacity: 0.86 }}>
-                {line}
-              </div>
-            ))}
-          </div>
-        )}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {chips.map((chip) => (
+            <span
+              key={`${chip.label}:${chip.value}`}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                padding: '4px 8px',
+                borderRadius: 999,
+                fontSize: 10,
+                lineHeight: 1,
+                fontWeight: 700,
+                background: isDark ? 'rgba(148,163,184,0.12)' : 'rgba(15,23,42,0.05)',
+                border: isDark ? '1px solid rgba(148,163,184,0.16)' : '1px solid rgba(15,23,42,0.08)',
+              }}
+            >
+              <strong>{chip.label}</strong>
+              {chip.value}
+            </span>
+          ))}
+        </div>
 
-        {!isCollapsed && (
+        {isCollapsed ? null : (
           <>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {chips.map((chip) => (
-                <span
-                  key={`${chip.label}:${chip.value}`}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    padding: '4px 8px',
-                    borderRadius: 999,
-                    fontSize: 10,
-                    lineHeight: 1,
-                    fontWeight: 600,
-                    letterSpacing: '0.01em',
-                    background: isDark ? 'rgba(148, 163, 184, 0.12)' : 'rgba(15, 23, 42, 0.05)',
-                    border: isDark ? '1px solid rgba(148, 163, 184, 0.16)' : '1px solid rgba(15, 23, 42, 0.08)',
-                  }}
-                >
-                  <strong style={{ fontSize: 10, fontWeight: 700 }}>{chip.label}</strong>
-                  {chip.value}
-                </span>
-              ))}
+            <div style={sectionCardStyle(isDark)}>
+              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: accent }}>
+                Why It Matters
+              </div>
+              <div style={{ marginTop: 6, fontSize: 12, lineHeight: 1.5, fontWeight: 600 }}>
+                {edgesLoading ? 'Resolving relationship logic, supply paths, and propagation around this object…' : (traceSummary?.summary || 'No explainable relationship summary yet.')}
+              </div>
+              {traceSummary && traceSummary.whyItMatters.length > 0 && (
+                <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {traceSummary.whyItMatters.map((item) => (
+                    <div key={`${item.title}:${item.body}`} style={{ paddingLeft: 10, borderLeft: `2px solid ${accent}` }}>
+                      <div style={{ fontSize: 11, fontWeight: 750 }}>{item.title}</div>
+                      <div style={{ marginTop: 2, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                        {item.body}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
-            {(edgesLoading || traceSummary) && (
-              <div
-                style={{
-                  marginTop: 12,
-                  paddingTop: 12,
-                  borderTop: isDark ? '1px solid rgba(148, 163, 184, 0.14)' : '1px solid rgba(15, 23, 42, 0.08)',
-                }}
-              >
-                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
-                  Map routes
-                </div>
-                <div style={{ marginTop: 6, fontSize: 12, lineHeight: 1.45, opacity: 0.8 }}>
-                  {edgesLoading
-                    ? 'Resolving supply routes, contextual graph links, and signal propagation...'
-                    : traceSummary
-                      ? (
-                        traceSummary.supplyRouteCount > 0
-                          ? `Showing ${traceSummary.supplyRouteCount} supply route(s) first${traceSummary.visibleEdges > traceSummary.supplyRouteCount ? `, plus ${traceSummary.visibleEdges - traceSummary.supplyRouteCount} contextual link(s)` : ''} across ${traceSummary.branchCount} active branches.`
-                          : traceSummary.visibleEdges > 0 && traceSummary.visibleEdges < traceSummary.totalEdges
-                            ? `Showing ${traceSummary.visibleEdges} smooth routes from ${traceSummary.totalEdges} selected relations across ${traceSummary.branchCount} active branches.`
-                            : traceSummary.visibleEdges === 0
-                              ? `Resolved ${traceSummary.totalEdges} selected relations across ${traceSummary.branchCount} active branches, but none are mappable on the current map yet.`
-                              : `Showing ${traceSummary.visibleEdges} visible routes across ${traceSummary.branchCount} active branches.`
-                      )
-                      : 'No trace available yet.'}
-                </div>
-                {!!traceSummary && (
-                  <>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
-                      {traceChips.map((chip) => (
-                        <span
-                          key={`${chip.label}:${chip.value}`}
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 5,
-                            padding: '4px 8px',
-                            borderRadius: 999,
-                            fontSize: 10,
-                            lineHeight: 1,
-                            fontWeight: 600,
-                            letterSpacing: '0.01em',
-                            background: isDark ? 'rgba(37, 99, 235, 0.12)' : 'rgba(37, 99, 235, 0.08)',
-                            border: isDark ? '1px solid rgba(96, 165, 250, 0.16)' : '1px solid rgba(37, 99, 235, 0.12)',
-                          }}
-                        >
-                          <strong style={{ fontSize: 10, fontWeight: 700 }}>{chip.label}</strong>
-                          {chip.value}
-                        </span>
-                      ))}
+            <div style={sectionCardStyle(isDark)}>
+              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
+                Direct Relations
+              </div>
+              <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {traceSummary?.directRelations.length ? traceSummary.directRelations.map((relation) => (
+                  <div key={relation.edgeId || `${relation.relatedFragmentId}:${relation.type}`} style={{ display: 'flex', gap: 10 }}>
+                    <div style={{ width: 8, flexShrink: 0, borderRadius: 999, background: familyAccent(relation.family, isDark) }} />
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700 }}>
+                        {relation.relatedLabel}
+                      </div>
+                      <div style={{ marginTop: 1, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                        {humanizeToken(relation.type)}
+                        {relation.relatedType ? ` · ${humanizeToken(relation.relatedType)}` : ''}
+                      </div>
+                      {(relation.businessMeaning || relation.whyRelevant) && (
+                        <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                          {relation.businessMeaning ? `${relation.businessMeaning}. ` : ''}
+                          {relation.whyRelevant || ''}
+                        </div>
+                      )}
                     </div>
-                    {traceSummary.topFamilies.length > 0 && (
-                      <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
-                        Dominant semantics: {traceSummary.topFamilies.map((item) => `${formatFamilyLabel(item.family)} (${item.count})`).join(' . ')}
-                      </div>
-                    )}
-                    {(traceSummary.pathArtifactCount > 0 || traceSummary.propagationNodeCount > 0) && (
-                      <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.5, color: 'var(--text-secondary-strong)' }}>
-                        {traceSummary.supplyRouteCount > 0
-                          ? `Concrete supply routes on map ${traceSummary.supplyRouteCount}. `
-                          : ''}
-                        {traceSummary.pathArtifactCount > 0
-                          ? `Related paths ${traceSummary.pathArtifactCount}, mapped legs ${traceSummary.pathLegCount}. `
-                          : ''}
-                        {traceSummary.propagationNodeCount > 0
-                          ? `Signal propagation stays separate in gray across ${traceSummary.propagationEdgeCount} link(s).`
-                          : ''}
-                      </div>
-                    )}
-                    {traceSummary.pathArtifactCount > 0 && (
-                      <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                        <span style={{ fontSize: 10, padding: '4px 8px', borderRadius: 999, background: isDark ? 'rgba(14, 165, 233, 0.14)' : 'rgba(14, 165, 233, 0.08)', border: isDark ? '1px solid rgba(125, 211, 252, 0.18)' : '1px solid rgba(14, 165, 233, 0.14)' }}>
-                          Pinned {traceSummary.pinnedPathCount}
-                        </span>
-                        <span style={{ fontSize: 10, padding: '4px 8px', borderRadius: 999, background: isDark ? 'rgba(250, 204, 21, 0.12)' : 'rgba(250, 204, 21, 0.08)', border: isDark ? '1px solid rgba(250, 204, 21, 0.18)' : '1px solid rgba(202, 138, 4, 0.14)' }}>
-                          Discovered {traceSummary.discoveredPathCount}
-                        </span>
-                        {traceSummary.stressedPathCount > 0 && (
-                          <span style={{ fontSize: 10, padding: '4px 8px', borderRadius: 999, background: isDark ? 'rgba(248, 113, 113, 0.12)' : 'rgba(239, 68, 68, 0.08)', border: isDark ? '1px solid rgba(248, 113, 113, 0.18)' : '1px solid rgba(220, 38, 38, 0.14)' }}>
-                            High stress {traceSummary.stressedPathCount}
-                          </span>
-                        )}
-                        {traceSummary.bottleneckPathCount > 0 && (
-                          <span style={{ fontSize: 10, padding: '4px 8px', borderRadius: 999, background: isDark ? 'rgba(251, 146, 60, 0.12)' : 'rgba(249, 115, 22, 0.08)', border: isDark ? '1px solid rgba(251, 146, 60, 0.18)' : '1px solid rgba(234, 88, 12, 0.14)' }}>
-                            Bottlenecks {traceSummary.bottleneckPathCount}
-                          </span>
-                        )}
-                      </div>
-                    )}
-                    {traceSummary.pathArtifactCount > 0 && (
-                      <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.5, color: 'var(--text-secondary-strong)' }}>
-                        Path discovery mix:
-                        {traceSummary.directPathCount > 0 ? ` direct ${traceSummary.directPathCount}` : ''}
-                        {traceSummary.routePathCount > 0 ? ` • route ${traceSummary.routePathCount}` : ''}
-                        {traceSummary.zonePathCount > 0 ? ` • zone ${traceSummary.zonePathCount}` : ''}
-                        {traceSummary.affectedPathCount > 0 ? ` • affected ${traceSummary.affectedPathCount}` : ''}
-                      </div>
-                    )}
-                    {traceSummary.countryHighlights.length > 0 && (
-                      <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        {traceSummary.countryHighlights.map((country) => (
-                          <div
-                            key={country.countryIso2 || country.countryName}
-                            style={{
-                              padding: '8px 9px',
-                              borderRadius: 10,
-                              background: isDark ? 'rgba(148, 163, 184, 0.08)' : 'rgba(15, 23, 42, 0.035)',
-                              border: isDark ? '1px solid rgba(148, 163, 184, 0.12)' : '1px solid rgba(15, 23, 42, 0.06)',
-                            }}
-                          >
-                            <div style={{ fontSize: 11, fontWeight: 700 }}>
-                              {country.countryName}
-                              <span style={{ marginLeft: 6, color: 'var(--text-secondary-strong)', fontWeight: 600 }}>
-                                {country.itemCount}
-                              </span>
-                            </div>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
-                              {country.items.map((item) => (
-                                <div key={item.objectId} style={{ fontSize: 11, lineHeight: 1.4 }}>
-                                  <div style={{ fontWeight: 600 }}>{item.label}</div>
-                                  <div style={{ color: 'var(--text-secondary-strong)' }}>
-                                    {item.type} . {item.hop} hop . {item.relationLabel}
-                                  </div>
-                                  <div style={{ color: 'var(--text-secondary-strong)', opacity: 0.88 }}>
-                                    {item.businessMeaning}
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </>
+                  </div>
+                )) : (
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                    No mapped direct relations for this object yet.
+                  </div>
                 )}
+              </div>
+            </div>
+
+            <div style={sectionCardStyle(isDark)}>
+              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
+                Context
+              </div>
+              <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {traceSummary?.contextRelations.length ? traceSummary.contextRelations.map((relation) => (
+                  <div key={relation.edgeId || `${relation.relatedFragmentId}:${relation.type}`} style={{ display: 'flex', gap: 10 }}>
+                    <div style={{ width: 8, flexShrink: 0, borderRadius: 999, background: familyAccent(relation.family, isDark) }} />
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700 }}>
+                        {relation.relatedLabel}
+                      </div>
+                      <div style={{ marginTop: 1, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                        {humanizeToken(relation.type)}
+                        {relation.semanticDirection ? ` · ${humanizeToken(relation.semanticDirection)}` : ''}
+                      </div>
+                      {(relation.businessMeaning || relation.whyRelevant) && (
+                        <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                          {relation.businessMeaning ? `${relation.businessMeaning}. ` : ''}
+                          {relation.whyRelevant || ''}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )) : (
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                    No mapped context anchors for this object yet.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div style={sectionCardStyle(isDark)}>
+              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
+                Supply Chain Paths
+              </div>
+              <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {traceSummary?.supplyPaths.length ? traceSummary.supplyPaths.map((path) => (
+                  <div key={path.id} style={{ padding: '8px 9px', borderRadius: 10, background: isDark ? 'rgba(245, 158, 11, 0.1)' : 'rgba(245, 158, 11, 0.08)', border: isDark ? '1px solid rgba(245, 158, 11, 0.18)' : '1px solid rgba(180, 83, 9, 0.14)' }}>
+                    <div style={{ fontSize: 11, fontWeight: 700 }}>
+                      {path.title}
+                    </div>
+                    <div style={{ marginTop: 2, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                      {compactRole(path.role)}
+                      {path.productLabel ? ` · ${path.productLabel}` : ''}
+                      {path.legCount > 0 ? ` · ${path.legCount} leg${path.legCount > 1 ? 's' : ''}` : ''}
+                    </div>
+                    <div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                      {path.reason}
+                    </div>
+                    <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {path.isPinned && (
+                        <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(14,165,233,0.16)' : 'rgba(14,165,233,0.1)' }}>
+                          Pinned
+                        </span>
+                      )}
+                      {path.stressScore >= 0.58 && (
+                        <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(248,113,113,0.16)' : 'rgba(239,68,68,0.1)' }}>
+                          Stress {Math.round(path.stressScore * 100)}
+                        </span>
+                      )}
+                      {path.hasBottleneck && (
+                        <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(251,146,60,0.16)' : 'rgba(249,115,22,0.1)' }}>
+                          Bottleneck
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )) : (
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                    No concrete supply paths are linked to this object yet.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {(traceSummary?.propagationEdgeCount || 0) > 0 && (
+              <div style={sectionCardStyle(isDark)}>
+                <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
+                  Propagation
+                </div>
+                <div style={{ marginTop: 6, fontSize: 11, lineHeight: 1.5, color: 'var(--text-secondary-strong)' }}>
+                  Signal propagation is shown separately in gray across {traceSummary?.propagationEdgeCount || 0} link(s) touching {traceSummary?.propagationNodeCount || 0} node(s).
+                </div>
               </div>
             )}
           </>

@@ -1649,6 +1649,7 @@ func main() {
 
 			// Wire cascade cleanup repos for lens deletion (best-effort orphan cleanup)
 			horizonLensItemsRepo := horizonrepo.NewLensItemsRepository(fsClient.Client())
+			horizonLensItemsHandler := horizonhttp.NewLensItemsHandler(horizonLensItemsRepo, horizonLensesRepo, s.projs)
 			horizonExposurePathsRepo := horizonrepo.NewExposurePathsRepository(fsClient.Client())
 			horizonMaterializedArtifactsRepo := horizonrepo.NewMaterializedArtifactsRepository(fsClient.Client())
 			if gcsClient != nil && horizonFragmentsBucket != "" {
@@ -2359,6 +2360,7 @@ func main() {
 
 			// Create HTTP handlers
 			horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService).
+				WithLensItemsHandler(horizonLensItemsHandler).
 				WithMergeFragmentsRepo(horizonFragmentsMergeRepo).
 				WithMaterializedArtifactsRepo(horizonMaterializedArtifactsRepo).
 				WithDocumentsRepo(docsRepo).

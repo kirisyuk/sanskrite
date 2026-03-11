@@ -11,6 +11,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // DomainArtifactBuilder builds materialized artifacts for non-supply-chain domains
@@ -62,27 +63,47 @@ func (b *DomainArtifactBuilder) MaterializeRelationsGraph(
 	allowedEdgeTypes := domainEdgeTypes(domainMode)
 	profile := contractsemantics.ProfileForDomainMode(domainMode)
 
-	// Collect edges radiating from the root fragment (1 hop outbound + inbound).
-	outEdges, _ := b.edgesRepo.ListBySource(ctx, tenantID, rootFrag.ID, nil, 200)
-	inEdges, _ := b.edgesRepo.ListByTarget(ctx, tenantID, rootFrag.ID, nil, 200)
-
-	allEdges := append(outEdges, inEdges...)
-
-	// Collect neighbor fragment IDs for BFS hop-2.
-	neighborIDs := map[string]bool{}
-	for _, e := range allEdges {
-		if isAllowedEdge(e.Type, allowedEdgeTypes) {
-			neighborIDs[e.SourceFragmentID] = true
-			neighborIDs[e.TargetFragmentID] = true
+	// Collect a bounded undirected neighborhood around the root.
+	// This keeps ecosystem/influence artifacts useful for cross-border graphs
+	// without letting a high-degree root explode into an unbounded traversal.
+	const maxArtifactHops = 2
+	allEdges := make([]*models.DependencyEdge, 0, 256)
+	visitedNodes := map[string]struct{}{rootFrag.ID: struct{}{}}
+	frontier := []string{rootFrag.ID}
+	for hop := 0; hop <= maxArtifactHops && len(frontier) > 0; hop++ {
+		next := make([]string, 0, len(frontier)*2)
+		nextSeen := map[string]struct{}{}
+		for _, nodeID := range frontier {
+			outEdges, _ := b.edgesRepo.ListBySource(ctx, tenantID, nodeID, nil, 200)
+			inEdges, _ := b.edgesRepo.ListByTarget(ctx, tenantID, nodeID, nil, 200)
+			allEdges = append(allEdges, outEdges...)
+			allEdges = append(allEdges, inEdges...)
+			if hop == maxArtifactHops {
+				continue
+			}
+			for _, e := range append(outEdges, inEdges...) {
+				if !isAllowedEdge(e.Type, allowedEdgeTypes) {
+					continue
+				}
+				for _, neighborID := range []string{e.SourceFragmentID, e.TargetFragmentID} {
+					if neighborID == "" || neighborID == nodeID {
+						continue
+					}
+					if _, seen := visitedNodes[neighborID]; seen {
+						continue
+					}
+					if _, seen := nextSeen[neighborID]; seen {
+						continue
+					}
+					nextSeen[neighborID] = struct{}{}
+					next = append(next, neighborID)
+				}
+			}
 		}
-	}
-
-	for nID := range neighborIDs {
-		if nID == rootFrag.ID {
-			continue
+		for _, nodeID := range next {
+			visitedNodes[nodeID] = struct{}{}
 		}
-		hop2, _ := b.edgesRepo.ListBySource(ctx, tenantID, nID, nil, 100)
-		allEdges = append(allEdges, hop2...)
+		frontier = next
 	}
 
 	// Deduplicate edges and filter by allowlist.
@@ -204,6 +225,7 @@ func (b *DomainArtifactBuilder) MaterializeRelationsGraph(
 		Status:       "active",
 		DisplayName:  displayName,
 		NodeRefs:     nodeRefs,
+		GeoRefs:      collectArtifactGeoRefs(nodeRefs),
 		Labels: map[string]string{
 			"domainMode":   domainMode,
 			"rootEntity":   rootCanonicalPath,
@@ -287,6 +309,67 @@ func dependencyTypesToStrings(values []models.DependencyType) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func collectArtifactGeoRefs(nodeRefs []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(nodeRefs))
+	for _, ref := range nodeRefs {
+		geoRef := artifactGeoRef(ref)
+		if geoRef == "" {
+			continue
+		}
+		if _, ok := seen[geoRef]; ok {
+			continue
+		}
+		seen[geoRef] = struct{}{}
+		out = append(out, geoRef)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func artifactGeoRef(ref string) string {
+	parts, err := taxonomy.ParseCanonicalPathParts(strings.TrimSpace(ref))
+	if err != nil || parts == nil {
+		return ""
+	}
+	geo := ""
+	switch parts.Namespace {
+	case "loc":
+		if parts.Loc != nil {
+			geo = parts.Loc.Country
+		}
+	case "org":
+		if parts.Org != nil {
+			geo = parts.Org.Geo
+		}
+	case "gov":
+		if parts.Gov != nil {
+			geo = parts.Gov.Geo
+		}
+	case "fac":
+		if parts.Fac != nil {
+			geo = parts.Fac.Geo
+		}
+	case "market":
+		if parts.Market != nil {
+			geo = parts.Market.Geo
+		}
+	case "community":
+		if parts.Community != nil {
+			geo = parts.Community.Geo
+		}
+	case "program":
+		if parts.Program != nil {
+			geo = parts.Program.Jurisdiction
+		}
+	}
+	geo = strings.ToLower(strings.TrimSpace(geo))
+	if geo == "" || geo == "na" || geo == "int" {
+		return ""
+	}
+	return "/loc/" + geo
 }
 
 func buildRelationsGraphCanonicalKey(tenantID, domainMode, rootPath string, nodeRefs []string) string {

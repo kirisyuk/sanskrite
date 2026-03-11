@@ -53,10 +53,41 @@ type fragmentTraceSupplyChainStats struct {
 	StrongBindingCnt int `json:"strongBindingCount"`
 }
 
+type fragmentTraceWhyItMattersItem struct {
+	Title string `json:"title"`
+	Body  string `json:"body"`
+}
+
+type fragmentTraceRelation struct {
+	EdgeID             string                       `json:"edgeId,omitempty"`
+	SourceFragmentID   string                       `json:"sourceFragmentId"`
+	TargetFragmentID   string                       `json:"targetFragmentId"`
+	RelatedFragmentID  string                       `json:"relatedFragmentId"`
+	RelatedLabel       string                       `json:"relatedLabel"`
+	RelatedType        string                       `json:"relatedType,omitempty"`
+	RelatedCanonical   string                       `json:"relatedCanonicalPath,omitempty"`
+	RelatedCoordinates *horizonmodels.Coordinates   `json:"relatedCoordinates,omitempty"`
+	Type               string                       `json:"type"`
+	Family             string                       `json:"family,omitempty"`
+	SemanticDirection  string                       `json:"semanticDirection,omitempty"`
+	BusinessMeaning    string                       `json:"businessMeaning,omitempty"`
+	WhyRelevant        string                       `json:"whyRelevant,omitempty"`
+	Priority           int                          `json:"priority,omitempty"`
+	Criticality        float64                      `json:"criticality,omitempty"`
+}
+
+type fragmentTraceExplain struct {
+	Summary          string                           `json:"summary,omitempty"`
+	WhyItMatters     []fragmentTraceWhyItMattersItem  `json:"whyItMatters,omitempty"`
+	DirectRelations  []fragmentTraceRelation          `json:"directRelations,omitempty"`
+	ContextRelations []fragmentTraceRelation          `json:"contextRelations,omitempty"`
+}
+
 type fragmentTraceResponse struct {
 	FragmentID   string                              `json:"fragmentId"`
 	Graph        fragmentTraceGraph                  `json:"graph"`
 	SupplyChains fragmentTraceSupplyChains           `json:"supplyChains"`
+	Explain      fragmentTraceExplain                `json:"explain"`
 	Propagation  *propagation.PropagationTraceResult `json:"propagation,omitempty"`
 }
 
@@ -116,6 +147,12 @@ func (h *HorizonHandlers) GetFragmentTrace(w http.ResponseWriter, r *http.Reques
 			resp.Propagation = trace
 		}
 	}
+
+	fragmentMap := buildFragmentTraceFragmentMap(graphPayload)
+	if centerFrag != nil {
+		fragmentMap[strings.TrimSpace(centerFrag.ID)] = centerFrag
+	}
+	resp.Explain = buildFragmentTraceExplain(centerFrag, resp.Graph, fragmentMap, relatedChains, resp.Propagation)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
@@ -266,6 +303,324 @@ func buildFragmentTraceGraph(payload map[string]interface{}, centerFragmentID st
 		graph.Total = len(graph.Edges)
 	}
 	return graph
+}
+
+func buildFragmentTraceFragmentMap(payload map[string]interface{}) map[string]*horizonmodels.HorizonFragment {
+	out := map[string]*horizonmodels.HorizonFragment{}
+	if payload == nil {
+		return out
+	}
+	rawFragments, _ := payload["fragments"].([]interface{})
+	for _, raw := range rawFragments {
+		data, err := json.Marshal(raw)
+		if err != nil {
+			continue
+		}
+		var frag horizonmodels.HorizonFragment
+		if err := json.Unmarshal(data, &frag); err != nil {
+			continue
+		}
+		if id := strings.TrimSpace(frag.ID); id != "" {
+			out[id] = &frag
+		}
+	}
+	return out
+}
+
+func buildFragmentTraceExplain(
+	centerFrag *horizonmodels.HorizonFragment,
+	graph fragmentTraceGraph,
+	fragments map[string]*horizonmodels.HorizonFragment,
+	chains []*horizonmodels.MaterializedArtifact,
+	propagationTrace *propagation.PropagationTraceResult,
+) fragmentTraceExplain {
+	explain := fragmentTraceExplain{
+		WhyItMatters:     make([]fragmentTraceWhyItMattersItem, 0, 3),
+		DirectRelations:  make([]fragmentTraceRelation, 0, 8),
+		ContextRelations: make([]fragmentTraceRelation, 0, 6),
+	}
+	centerID := strings.TrimSpace("")
+	centerLabel := ""
+	if centerFrag != nil {
+		centerID = strings.TrimSpace(centerFrag.ID)
+		centerLabel = fragmentTraceDisplayName(centerFrag)
+	}
+
+	direct := make([]fragmentTraceRelation, 0, 12)
+	context := make([]fragmentTraceRelation, 0, 12)
+	for _, edge := range graph.Edges {
+		if centerID == "" {
+			break
+		}
+		if strings.TrimSpace(edge.SourceFragmentID) != centerID && strings.TrimSpace(edge.TargetFragmentID) != centerID {
+			continue
+		}
+		relatedID := strings.TrimSpace(edge.TargetFragmentID)
+		if relatedID == centerID {
+			relatedID = strings.TrimSpace(edge.SourceFragmentID)
+		}
+		relatedFrag := fragments[relatedID]
+		item := fragmentTraceRelation{
+			EdgeID:            strings.TrimSpace(edge.ID),
+			SourceFragmentID:  strings.TrimSpace(edge.SourceFragmentID),
+			TargetFragmentID:  strings.TrimSpace(edge.TargetFragmentID),
+			RelatedFragmentID: relatedID,
+			RelatedLabel:      fragmentTraceDisplayName(relatedFrag),
+			RelatedType:       strings.TrimSpace(string(relatedFragmentType(relatedFrag))),
+			RelatedCanonical:  strings.TrimSpace(relatedCanonicalPath(relatedFrag)),
+			Type:              strings.TrimSpace(edge.Type),
+			Family:            strings.TrimSpace(edge.Family),
+			SemanticDirection: strings.TrimSpace(edge.SemanticDirection),
+			BusinessMeaning:   strings.TrimSpace(edge.BusinessMeaning),
+			Priority:          edge.Priority,
+			Criticality:       edge.Criticality,
+		}
+		if relatedFrag != nil && relatedFrag.Coordinates != nil {
+			item.RelatedCoordinates = relatedFrag.Coordinates
+		}
+		item.WhyRelevant = describeFragmentTraceRelation(centerLabel, item)
+		if isFragmentTraceContextRelation(item) {
+			context = append(context, item)
+		} else {
+			direct = append(direct, item)
+		}
+	}
+
+	sort.SliceStable(direct, func(i, j int) bool {
+		if direct[i].Priority != direct[j].Priority {
+			return direct[i].Priority > direct[j].Priority
+		}
+		if direct[i].Criticality != direct[j].Criticality {
+			return direct[i].Criticality > direct[j].Criticality
+		}
+		return direct[i].RelatedLabel < direct[j].RelatedLabel
+	})
+	sort.SliceStable(context, func(i, j int) bool {
+		if context[i].Priority != context[j].Priority {
+			return context[i].Priority > context[j].Priority
+		}
+		if context[i].Criticality != context[j].Criticality {
+			return context[i].Criticality > context[j].Criticality
+		}
+		return context[i].RelatedLabel < context[j].RelatedLabel
+	})
+
+	if len(direct) > 8 {
+		direct = direct[:8]
+	}
+	if len(context) > 6 {
+		context = context[:6]
+	}
+	explain.DirectRelations = direct
+	explain.ContextRelations = context
+
+	supplyCount := len(chains)
+	stressedSupplyCount := 0
+	for _, chain := range chains {
+		if chain != nil && chain.PathStressScore >= 0.58 {
+			stressedSupplyCount++
+		}
+	}
+	propagationCount := 0
+	if propagationTrace != nil {
+		propagationCount = len(propagationTrace.Edges)
+	}
+
+	explain.Summary = buildFragmentTraceExplainSummary(centerLabel, len(direct), len(context), supplyCount, stressedSupplyCount, propagationCount)
+	explain.WhyItMatters = buildFragmentTraceWhyItMatters(centerLabel, direct, context, supplyCount, stressedSupplyCount, propagationCount)
+	return explain
+}
+
+func buildFragmentTraceExplainSummary(centerLabel string, directCount, contextCount, supplyCount, stressedSupplyCount, propagationCount int) string {
+	subject := strings.TrimSpace(centerLabel)
+	if subject == "" {
+		subject = "This object"
+	}
+	parts := make([]string, 0, 3)
+	if directCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d direct relation(s)", directCount))
+	}
+	if contextCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d context anchor(s)", contextCount))
+	}
+	if supplyCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d supply path(s)", supplyCount))
+	}
+	if len(parts) == 0 {
+		return subject + " currently has no mapped direct relations or supply paths on this surface."
+	}
+	summary := fmt.Sprintf("%s matters here through %s.", subject, joinWithCommasAnd(parts))
+	if stressedSupplyCount > 0 {
+		summary += fmt.Sprintf(" %d supply path(s) are currently stressed.", stressedSupplyCount)
+	}
+	if propagationCount > 0 {
+		summary += fmt.Sprintf(" Signal propagation continues across %d additional link(s).", propagationCount)
+	}
+	return summary
+}
+
+func buildFragmentTraceWhyItMatters(
+	centerLabel string,
+	direct []fragmentTraceRelation,
+	context []fragmentTraceRelation,
+	supplyCount int,
+	stressedSupplyCount int,
+	propagationCount int,
+) []fragmentTraceWhyItMattersItem {
+	items := make([]fragmentTraceWhyItMattersItem, 0, 3)
+	if len(direct) > 0 {
+		top := direct[0]
+		items = append(items, fragmentTraceWhyItMattersItem{
+			Title: "Direct role",
+			Body:  fmt.Sprintf("%s is directly connected through %s with %s.", fallbackFragmentTraceSubject(centerLabel), strings.ToLower(humanizeTraceToken(top.Type)), fallbackFragmentTraceSubject(top.RelatedLabel)),
+		})
+	}
+	if len(context) > 0 {
+		top := context[0]
+		items = append(items, fragmentTraceWhyItMattersItem{
+			Title: "Operating context",
+			Body:  fmt.Sprintf("%s sits inside %s shaped by %s.", fallbackFragmentTraceSubject(centerLabel), strings.ToLower(strings.TrimSpace(top.BusinessMeaning)), fallbackFragmentTraceSubject(top.RelatedLabel)),
+		})
+	}
+	if supplyCount > 0 {
+		body := fmt.Sprintf("%d supply path(s) are attached to this object.", supplyCount)
+		if stressedSupplyCount > 0 {
+			body = fmt.Sprintf("%s %d of them are already stressed.", body, stressedSupplyCount)
+		}
+		items = append(items, fragmentTraceWhyItMattersItem{
+			Title: "Supply exposure",
+			Body:  body,
+		})
+	} else if propagationCount > 0 {
+		items = append(items, fragmentTraceWhyItMattersItem{
+			Title: "Propagation surface",
+			Body:  fmt.Sprintf("Signals from %s can still propagate across %d additional link(s).", fallbackFragmentTraceSubject(centerLabel), propagationCount),
+		})
+	}
+	if len(items) > 3 {
+		items = items[:3]
+	}
+	return items
+}
+
+func fragmentTraceDisplayName(fragment *horizonmodels.HorizonFragment) string {
+	if fragment == nil {
+		return ""
+	}
+	if value := strings.TrimSpace(fragment.Labels["en"]); value != "" {
+		return value
+	}
+	for _, value := range fragment.Labels {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	if value := strings.TrimSpace(fragment.Identifiers["legalName"]); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(fragment.Identifiers["shortName"]); value != "" {
+		return value
+	}
+	cp := strings.Trim(strings.TrimSpace(fragment.CanonicalPath), "/")
+	if cp == "" {
+		return ""
+	}
+	parts := strings.Split(cp, "/")
+	return strings.TrimSpace(parts[len(parts)-1])
+}
+
+func relatedFragmentType(fragment *horizonmodels.HorizonFragment) horizonmodels.FragmentType {
+	if fragment == nil {
+		return ""
+	}
+	return fragment.Type
+}
+
+func relatedCanonicalPath(fragment *horizonmodels.HorizonFragment) string {
+	if fragment == nil {
+		return ""
+	}
+	return fragment.CanonicalPath
+}
+
+func isFragmentTraceContextRelation(item fragmentTraceRelation) bool {
+	switch item.Family {
+	case "location", "market":
+		return true
+	}
+	switch item.Type {
+	case "REGULATES", "ASSURES", "AUDITED_BY", "LOCATED_IN", "OPERATES_IN", "BASED_IN", "HEADQUARTERED_IN", "PARTICIPATES_IN", "TRADED_IN":
+		return true
+	default:
+		return false
+	}
+}
+
+func describeFragmentTraceRelation(centerLabel string, item fragmentTraceRelation) string {
+	other := fallbackFragmentTraceSubject(item.RelatedLabel)
+	switch item.Type {
+	case "SUPPLIES_TO":
+		return fmt.Sprintf("This object supplies into %s, so downstream availability depends on that link.", other)
+	case "DEPENDS_ON", "REQUIRES", "USES":
+		return fmt.Sprintf("This object depends on %s, making it an immediate operational dependency.", other)
+	case "CONTROLS", "MANAGES", "OWNS", "INVESTS_IN":
+		return fmt.Sprintf("%s sits in the control chain around this object.", other)
+	case "REGULATES", "ASSURES", "AUDITED_BY":
+		return fmt.Sprintf("%s shapes the operating conditions and oversight around this object.", other)
+	case "LOCATED_IN", "OPERATES_IN", "BASED_IN", "HEADQUARTERED_IN":
+		return fmt.Sprintf("This object is anchored in %s, which defines its geographic operating context.", other)
+	case "PARTICIPATES_IN", "TRADED_IN":
+		return fmt.Sprintf("%s places this object inside the market context where pressure is transmitted.", other)
+	case "COMPETES_WITH", "CONFLICTS_WITH", "OPPOSES":
+		return fmt.Sprintf("%s is part of the direct competitive or conflict pressure around this object.", other)
+	default:
+		if meaning := strings.TrimSpace(item.BusinessMeaning); meaning != "" {
+			return fmt.Sprintf("%s is relevant because it contributes %s around %s.", other, strings.ToLower(meaning), fallbackFragmentTraceSubject(centerLabel))
+		}
+		return fmt.Sprintf("%s is part of the immediate relationship logic around this object.", other)
+	}
+}
+
+func fallbackFragmentTraceSubject(value string) string {
+	if trimmed := strings.TrimSpace(value); trimmed != "" {
+		return trimmed
+	}
+	return "this object"
+}
+
+func humanizeTraceToken(value string) string {
+	parts := strings.FieldsFunc(strings.TrimSpace(value), func(r rune) bool {
+		return r == '_' || r == '-' || r == ' '
+	})
+	if len(parts) == 0 {
+		return ""
+	}
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		parts[i] = strings.ToLower(part)
+	}
+	return strings.Join(parts, " ")
+}
+
+func joinWithCommasAnd(items []string) string {
+	clean := make([]string, 0, len(items))
+	for _, item := range items {
+		if trimmed := strings.TrimSpace(item); trimmed != "" {
+			clean = append(clean, trimmed)
+		}
+	}
+	switch len(clean) {
+	case 0:
+		return ""
+	case 1:
+		return clean[0]
+	case 2:
+		return clean[0] + " and " + clean[1]
+	default:
+		return strings.Join(clean[:len(clean)-1], ", ") + ", and " + clean[len(clean)-1]
+	}
 }
 
 func (h *HorizonHandlers) collectFragmentTraceSupplyChains(ctx context.Context, frag *horizonmodels.HorizonFragment, lensID string) ([]*horizonmodels.MaterializedArtifact, error) {

@@ -661,8 +661,8 @@ DOMAIN RULES
 - ROUTE-SENSITIVE SUPPLY CHAIN: If the query mentions chokepoints, shipping routes, sea lanes, ports, terminals, pipelines, carriers, rerouting, "through/via", LNG/LPG shipping, or "from production to end-users", structure the intent for path execution. Include 3-8 anchors when evidence exists across these roles: producer org, upstream deposit/field, export facility, chokepoint/route geo, import terminal or market hub, downstream industrial consumer.
 - REGULATORY IMPACT PLAN: When contractType is policy-impact or regulatory-impact, you MUST include regulatoryImpactExecutionPlan with 1-5 queries. Each query: instrument (canonical path /mechanism/... or /program/...), jurisdiction (ISO2), parameters (rate_from, rate_to, effective_date when applicable), impactScope (economy-wide|sector-specific|entity-specific), depth (3-5), sectorFilter from facets, reason.
 - POLICY / REGULATORY TRANSMISSION: If the query asks what happens when a tax, tariff, VAT, CBAM-like cost, export control, sanctions measure, subsidy, capital rule, customs rule, licensing requirement, or compliance burden changes, include both the policy side and the exposed operational side. Do not return only the regulator/mechanism anchor.
-- GOVERNANCE PLAN: When contractType is ownership-structure or control-map, you MUST include governanceExecutionPlan with 1-5 queries. Each query: target (canonical path /org/... or /gov/...), targetType (org|gov|person), direction (upward|downward|both), depth (3-6), includeBoard (true/false), geoFilter, reason.
-- ECOSYSTEM PLAN: When contractType is ecosystem-mapping or influence-network, you MUST include ecosystemExecutionPlan with 1-5 queries. Each query: focus (canonical path or description), focusType (geo|sector|market|org), depth (3-5), actorTypes (subset of [ORGANIZATION, GOV, PERSON, FACILITY]), sectorFilter, geoFilter, reason.
+	- GOVERNANCE PLAN: When contractType is ownership-structure or control-map, you MUST include governanceExecutionPlan with 1-5 queries. Each query: target (canonical path /org/... or /gov/... or /community/... for dynasty/tribe/family ownership), targetType (org|gov|person|community), direction (upward|downward|both), depth (3-6), includeBoard (true/false), geoFilter, reason.
+	- ECOSYSTEM PLAN: When contractType is ecosystem-mapping or influence-network, you MUST include ecosystemExecutionPlan with 1-5 queries. Each query: focus (canonical path or description), focusType (geo|sector|market|org|community), depth (3-5), actorTypes (subset of [ORGANIZATION, GOV, PERSON, FACILITY, COMMUNITY]), sectorFilter, geoFilter, reason.
 - AFFECTED-ZONE / EXPOSURE: For conflict, disaster, earthquake, flood, tension, humanitarian, and security-zone queries, include anchors for zone geography plus exposed operators, facilities, markets, routes, or chokepoints when inferable. Do not reduce the intent to only /loc/... if the query implies operational exposure.
 - FINANCE / MARKET INFRASTRUCTURE: For banking, payments, insurance, exchanges, clearing, custody, portfolio exposure, or trade-finance questions, include anchors across the transmission chain when inferable: institutions, market infrastructure, regulators, sectors, and exposed corporate endpoints.
 - SECTOR / INDUSTRY STRUCTURE: For sector-overview, competitive-landscape, and industry-structure queries, include anchors across the chain when inferable: producers, facilities, markets, logistics hubs, major downstream consumers, and relevant regulators.
@@ -1094,9 +1094,9 @@ func applyGovernanceDomainQuality(
 		return
 	}
 	d.Projections = dedupStrings(append(d.Projections,
-		"ORGANIZATION", "GOV", "PERSON", "FACILITY", "PROGRAM"), 12)
+		"ORGANIZATION", "GOV", "PERSON", "FACILITY", "PROGRAM", "COMMUNITY"), 12)
 	d.FirstOrderEntities = normalizeCanonicalPathsList(append(d.FirstOrderEntities,
-		collectIntentAnchorPathsByPrefix(anchors, "/org/", "/gov/", "/person/", "/fac/")...), 16)
+		collectIntentAnchorPathsByPrefix(anchors, "/org/", "/gov/", "/person/", "/fac/", "/community/")...), 16)
 	if d.GovernanceExecutionPlan == nil || len(d.GovernanceExecutionPlan.Queries) == 0 {
 		if plan := synthesizeGovernanceExecutionPlan(query, d, anchors); plan != nil {
 			d.GovernanceExecutionPlan = plan
@@ -1120,9 +1120,9 @@ func applyEcosystemDomainQuality(
 		return
 	}
 	d.Projections = dedupStrings(append(d.Projections,
-		"ORGANIZATION", "GOV", "FACILITY", "MARKET", "PRODUCT", "GEO_REGION"), 12)
+		"ORGANIZATION", "GOV", "FACILITY", "MARKET", "PRODUCT", "GEO_REGION", "COMMUNITY"), 12)
 	d.FirstOrderEntities = normalizeCanonicalPathsList(append(d.FirstOrderEntities,
-		collectIntentAnchorPathsByPrefix(anchors, "/org/", "/gov/", "/fac/", "/market/", "/product/", "/loc/")...), 16)
+		collectIntentAnchorPathsByPrefix(anchors, "/org/", "/gov/", "/fac/", "/market/", "/product/", "/loc/", "/community/")...), 16)
 	if d.EcosystemExecutionPlan == nil || len(d.EcosystemExecutionPlan.Queries) == 0 {
 		if plan := synthesizeEcosystemExecutionPlan(query, d, anchors, profile); plan != nil {
 			d.EcosystemExecutionPlan = plan
@@ -1309,9 +1309,11 @@ func synthesizeGovernanceExecutionPlan(
 ) *GovernanceExecutionPlan {
 	target := ""
 	targetType := ""
-	for _, cp := range collectIntentAnchorPathsByPrefix(anchors, "/org/", "/gov/", "/person/") {
+	for _, cp := range collectIntentAnchorPathsByPrefix(anchors, "/community/", "/org/", "/gov/", "/person/") {
 		target = cp
 		switch {
+		case strings.HasPrefix(cp, "/community/"):
+			targetType = "community"
 		case strings.HasPrefix(cp, "/org/"):
 			targetType = "org"
 		case strings.HasPrefix(cp, "/gov/"):
@@ -1328,6 +1330,9 @@ func synthesizeGovernanceExecutionPlan(
 	text := strings.ToLower(strings.TrimSpace(query))
 	if containsAnyIntentToken(text, "who owns", "owned by", "shareholder", "beneficial owner", "ultimate owner") {
 		direction = "upward"
+	}
+	if strings.HasPrefix(target, "/community/") || containsAnyIntentToken(text, "family", "families", "dynasty", "dynasties", "tribe", "tribes", "house of", "royal family", "clan") {
+		direction = "downward"
 	}
 	return &GovernanceExecutionPlan{
 		Queries: []GovernanceQuery{{
@@ -1356,9 +1361,11 @@ func synthesizeEcosystemExecutionPlan(
 ) *EcosystemExecutionPlan {
 	focus := ""
 	focusType := "sector"
-	if cps := collectIntentAnchorPathsByPrefix(anchors, "/org/", "/market/", "/loc/", "/fac/"); len(cps) > 0 {
+	if cps := collectIntentAnchorPathsByPrefix(anchors, "/community/", "/org/", "/market/", "/loc/", "/fac/"); len(cps) > 0 {
 		focus = cps[0]
 		switch {
+		case strings.HasPrefix(focus, "/community/"):
+			focusType = "community"
 		case strings.HasPrefix(focus, "/org/"):
 			focusType = "org"
 		case strings.HasPrefix(focus, "/market/"):
@@ -1377,7 +1384,7 @@ func synthesizeEcosystemExecutionPlan(
 	if focus == "" {
 		return nil
 	}
-	actorTypes := []string{"ORGANIZATION", "GOV", "FACILITY"}
+	actorTypes := []string{"ORGANIZATION", "GOV", "FACILITY", "COMMUNITY"}
 	if profile.ecosystem || profile.investment {
 		actorTypes = append(actorTypes, "PERSON")
 	}

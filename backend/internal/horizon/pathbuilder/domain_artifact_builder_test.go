@@ -195,3 +195,23 @@ func TestInferNameFromPath(t *testing.T) {
 		}
 	}
 }
+
+func TestCollectArtifactGeoRefs(t *testing.T) {
+	got := collectArtifactGeoRefs([]string{
+		"/community/om/dynasty/al-said",
+		"/market/gcc/technology/space",
+		"/org/ru/roscosmos",
+		"/org/ru/roscosmos",
+		"/person/elon-musk",
+	})
+
+	want := []string{"/loc/gcc", "/loc/om", "/loc/ru"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d geo refs, got %d: %v", len(want), len(got), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("expected geo ref %q at index %d, got %q", want[i], i, got[i])
+		}
+	}
+}

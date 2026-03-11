@@ -230,6 +230,9 @@ func RepairSupplyChainPathLinkage(artifact *MaterializedArtifact, resolver func(
 	if tenantID == "" {
 		tenantID = "global"
 	}
+	if synthesizeLegacySupplyChainLegs(parsed, tenantID) {
+		summary.Changed = true
+	}
 
 	for idx := range parsed.Legs {
 		leg := &parsed.Legs[idx]
@@ -392,6 +395,171 @@ func inferMissingOperationalEdgeMetadata(parsed *SupplyChainPathPayload, edge *S
 		changed = true
 	}
 	return changed
+}
+
+func synthesizeLegacySupplyChainLegs(parsed *SupplyChainPathPayload, tenantID string) bool {
+	if parsed == nil || len(parsed.Edges) == 0 {
+		return false
+	}
+	existingByCanonical := make(map[string]struct{}, len(parsed.Legs))
+	maxLegIndex := -1
+	for _, leg := range parsed.Legs {
+		if leg.Index > maxLegIndex {
+			maxLegIndex = leg.Index
+		}
+		if canonicalPath := strings.TrimSpace(leg.SupplyLinkCanonicalPath); canonicalPath != "" {
+			existingByCanonical[canonicalPath] = struct{}{}
+		}
+	}
+
+	type legacyLegGroup struct {
+		CanonicalPath string
+		EdgeIndexes   []int
+	}
+	var groups []legacyLegGroup
+	groupIndexByCanonical := map[string]int{}
+	for edgeIdx := range parsed.Edges {
+		edge := parsed.Edges[edgeIdx]
+		if edge.Type != "SUPPLY_LINK" && edge.Type != "LOGISTICS" {
+			continue
+		}
+		canonicalPath := strings.TrimSpace(edge.SupplyLinkCanonicalPath)
+		if canonicalPath == "" {
+			supplierRef, customerRef, productRef := linkageRefsFromEdge(parsed, edge)
+			if supplierRef != "" && customerRef != "" && productRef != "" {
+				if inferredPath, err := BuildSupplyLinkCanonicalPath(tenantID, stringPtr(supplierRef), stringPtr(productRef), stringPtr(customerRef)); err == nil {
+					canonicalPath = strings.TrimSpace(inferredPath)
+				}
+			}
+		}
+		if canonicalPath == "" {
+			continue
+		}
+		if _, exists := existingByCanonical[canonicalPath]; exists {
+			continue
+		}
+		groupIdx, exists := groupIndexByCanonical[canonicalPath]
+		if !exists {
+			groupIdx = len(groups)
+			groupIndexByCanonical[canonicalPath] = groupIdx
+			groups = append(groups, legacyLegGroup{CanonicalPath: canonicalPath})
+		}
+		groups[groupIdx].EdgeIndexes = append(groups[groupIdx].EdgeIndexes, edgeIdx)
+	}
+
+	changed := false
+	for _, group := range groups {
+		if len(group.EdgeIndexes) == 0 {
+			continue
+		}
+		leg := buildLegacyLegFromOperationalEdges(parsed, group.CanonicalPath, group.EdgeIndexes, maxLegIndex+1, tenantID)
+		if leg == nil {
+			continue
+		}
+		parsed.Legs = append(parsed.Legs, *leg)
+		existingByCanonical[group.CanonicalPath] = struct{}{}
+		maxLegIndex = leg.Index
+		changed = true
+	}
+	return changed
+}
+
+func buildLegacyLegFromOperationalEdges(parsed *SupplyChainPathPayload, canonicalPath string, edgeIndexes []int, legIndex int, tenantID string) *SupplyChainPathLeg {
+	if parsed == nil || len(edgeIndexes) == 0 {
+		return nil
+	}
+	leg := &SupplyChainPathLeg{
+		Index:                   legIndex,
+		SupplyLinkCanonicalPath: strings.TrimSpace(canonicalPath),
+		SupplyLinkTenantID:      strings.TrimSpace(firstNonEmpty(tenantID, "global")),
+	}
+	productFlowFound := false
+	viaSeen := map[int]struct{}{}
+	for _, edgeIdx := range edgeIndexes {
+		if edgeIdx < 0 || edgeIdx >= len(parsed.Edges) {
+			continue
+		}
+		edge := parsed.Edges[edgeIdx]
+		productRef := strings.TrimSpace(edge.ProductRef)
+		if productRef == "" && edge.ProductNodeIndex != nil && *edge.ProductNodeIndex >= 0 && *edge.ProductNodeIndex < len(parsed.Nodes) {
+			productRef = strings.TrimSpace(parsed.Nodes[*edge.ProductNodeIndex].Ref)
+		}
+		if productRef == "" && edge.ViaProductIndex != nil && *edge.ViaProductIndex >= 0 && *edge.ViaProductIndex < len(parsed.Nodes) {
+			productRef = strings.TrimSpace(parsed.Nodes[*edge.ViaProductIndex].Ref)
+		}
+		if leg.ProductRef == "" && productRef != "" {
+			leg.ProductRef = productRef
+		}
+		if leg.ProductNodeIndex == nil {
+			if edge.ProductNodeIndex != nil && *edge.ProductNodeIndex >= 0 {
+				idx := *edge.ProductNodeIndex
+				leg.ProductNodeIndex = &idx
+			} else if edge.ViaProductIndex != nil && *edge.ViaProductIndex >= 0 {
+				idx := *edge.ViaProductIndex
+				leg.ProductNodeIndex = &idx
+			}
+		}
+
+		if edge.Type == "SUPPLY_LINK" {
+			productFlowFound = true
+			if edge.From >= 0 && edge.From < len(parsed.Nodes) {
+				leg.SupplierRef = strings.TrimSpace(parsed.Nodes[edge.From].Ref)
+				idx := edge.From
+				leg.SupplierNodeIndex = &idx
+			}
+			if edge.To >= 0 && edge.To < len(parsed.Nodes) {
+				leg.CustomerRef = strings.TrimSpace(parsed.Nodes[edge.To].Ref)
+				idx := edge.To
+				leg.CustomerNodeIndex = &idx
+			}
+			continue
+		}
+
+		if edge.Type == "LOGISTICS" {
+			if leg.SupplierNodeIndex == nil && edge.From >= 0 {
+				idx := edge.From
+				leg.SupplierNodeIndex = &idx
+				if edge.From < len(parsed.Nodes) {
+					leg.SupplierRef = strings.TrimSpace(parsed.Nodes[edge.From].Ref)
+				}
+			}
+			if edge.To >= 0 {
+				if _, seen := viaSeen[edge.To]; !seen {
+					viaSeen[edge.To] = struct{}{}
+					leg.TransportViaNodeIndices = append(leg.TransportViaNodeIndices, edge.To)
+					if edge.To < len(parsed.Nodes) {
+						leg.TransportViaRefs = append(leg.TransportViaRefs, strings.TrimSpace(parsed.Nodes[edge.To].Ref))
+					}
+				}
+			}
+		}
+	}
+	if len(leg.TransportViaNodeIndices) > 0 && leg.CustomerNodeIndex == nil {
+		lastVia := leg.TransportViaNodeIndices[len(leg.TransportViaNodeIndices)-1]
+		leg.TransportViaNodeIndices = leg.TransportViaNodeIndices[:len(leg.TransportViaNodeIndices)-1]
+		if len(leg.TransportViaRefs) > 0 {
+			leg.TransportViaRefs = leg.TransportViaRefs[:len(leg.TransportViaRefs)-1]
+		}
+		idx := lastVia
+		leg.CustomerNodeIndex = &idx
+		if lastVia >= 0 && lastVia < len(parsed.Nodes) {
+			leg.CustomerRef = strings.TrimSpace(parsed.Nodes[lastVia].Ref)
+		}
+	}
+	if !productFlowFound && (leg.SupplierRef == "" || leg.CustomerRef == "") {
+		firstEdge := parsed.Edges[edgeIndexes[0]]
+		supplierRef, customerRef, _ := linkageRefsFromEdge(parsed, firstEdge)
+		if leg.SupplierRef == "" {
+			leg.SupplierRef = supplierRef
+		}
+		if leg.CustomerRef == "" {
+			leg.CustomerRef = customerRef
+		}
+	}
+	if leg.SupplierRef == "" || leg.CustomerRef == "" || leg.ProductRef == "" {
+		return nil
+	}
+	return leg
 }
 
 func scoreOperationalEdgeAgainstLeg(parsed *SupplyChainPathPayload, edge *SupplyChainPathEdge, leg *SupplyChainPathLeg, edgeProductRef string) int {

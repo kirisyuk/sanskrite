@@ -46,104 +46,78 @@ export const GEO_EDGE_INTERACTIVE_LAYERS = [
 type ThemeMode = 'dark' | 'light';
 type EdgeFamily = 'supply' | 'control' | 'influence' | 'location' | 'market' | 'risk' | 'social' | 'other';
 type EdgeVisualKind = 'primary' | 'indirect' | 'cluster';
-type EdgeInteractionState = {
-  corridorId: string | null;
-  endpointKey: string | null;
-};
 type LocalPoint = { x: number; y: number };
 
 export interface GeoEdgeTraceSummary {
-  totalEdges: number;
-  visibleEdges: number;
-  supplyRouteCount: number;
-  hopCounts: Record<1 | 2 | 3, number>;
-  branchCount: number;
-  pathArtifactCount: number;
-  pathLegCount: number;
-  pinnedPathCount: number;
-  discoveredPathCount: number;
-  stressedPathCount: number;
-  bottleneckPathCount: number;
-  directPathCount: number;
-  routePathCount: number;
-  zonePathCount: number;
-  affectedPathCount: number;
+  summary: string;
+  whyItMatters: Array<{ title: string; body: string }>;
+  directRelations: Array<{
+    edgeId?: string;
+    relatedFragmentId: string;
+    relatedLabel: string;
+    relatedType?: string;
+    relatedCanonicalPath?: string;
+    type: string;
+    family: EdgeFamily;
+    semanticDirection?: string;
+    businessMeaning?: string;
+    whyRelevant?: string;
+  }>;
+  contextRelations: Array<{
+    edgeId?: string;
+    relatedFragmentId: string;
+    relatedLabel: string;
+    relatedType?: string;
+    relatedCanonicalPath?: string;
+    type: string;
+    family: EdgeFamily;
+    semanticDirection?: string;
+    businessMeaning?: string;
+    whyRelevant?: string;
+  }>;
+  supplyPaths: Array<{
+    id: string;
+    title: string;
+    role: string;
+    reason: string;
+    productRef?: string;
+    productLabel?: string;
+    stressScore: number;
+    legCount: number;
+    isPinned: boolean;
+    hasBottleneck: boolean;
+  }>;
   propagationNodeCount: number;
   propagationEdgeCount: number;
-  topFamilies: Array<{ family: EdgeFamily; count: number }>;
-  countryHighlights: Array<{
-    countryIso2: string | null;
-    countryName: string;
-    itemCount: number;
-    items: Array<{
-      objectId: string;
-      label: string;
-      type: string;
-      hop: 1 | 2 | 3;
-      relationLabel: string;
-      businessMeaning: string;
-    }>;
-  }>;
+  visibleLineCount: number;
+  directCount: number;
+  contextCount: number;
+  supplyPathCount: number;
+  stressedSupplyPathCount: number;
 }
 
-interface RawDependencyEdge {
+interface ExplainRelation {
+  edgeId?: string;
   sourceId: string;
   targetId: string;
+  relatedFragmentId: string;
+  relatedLabel: string;
+  relatedType?: string;
+  relatedCanonicalPath?: string;
+  relatedCoordinates?: { lat: number; lon: number };
   type: string;
-  family?: EdgeFamily;
-  priority?: number;
-  businessMeaning?: string;
+  family: EdgeFamily;
   semanticDirection?: string;
+  businessMeaning?: string;
+  whyRelevant?: string;
+  priority?: number;
+  criticality?: number;
 }
 
 type TraceObjectInfo = Pick<GeoObject, 'id' | 'canonicalPath' | 'type' | 'label' | 'facilityKind' | 'description' | 'status' | 'inScope'> & {
   coordinates?: { lat: number; lon: number };
 };
 
-interface SelectedTraceEdge extends RawDependencyEdge {
-  edgeId: string;
-  pairKey: string;
-  hop: 1 | 2 | 3;
-  minDepth: number;
-  family: EdgeFamily;
-  distanceKm: number;
-  branchRootId: string;
-  parentNodeId: string | null;
-  parentFamily: EdgeFamily | null;
-  rootFamily: EdgeFamily | null;
-  continuationScore: number;
-  sourceCoords: { lon: number; lat: number } | null;
-  targetCoords: { lon: number; lat: number } | null;
-}
-
-interface RenderDependencyEdge extends SelectedTraceEdge {
-  color: string;
-  coordinates: [number, number][];
-  baseOpacity: number;
-  baseWidth: number;
-  glowOpacity: number;
-}
-
-interface TraceRoute {
-  routeId: string;
-  targetNodeId: string;
-  branchRootId: string;
-  hop: 1 | 2 | 3;
-  type: string;
-  family: EdgeFamily;
-  continuationScore: number;
-  color: string;
-  rawCoordinates: [number, number][];
-  coordinates: [number, number][];
-  baseOpacity: number;
-  baseWidth: number;
-  glowOpacity: number;
-}
-
-const MAX_VISIBLE_CORRIDORS = 8;
-const MAX_PRIMARY_EDGES = 7;
-const MAX_INDIRECT_BRANCHES = 5;
-const MAX_CLUSTER_EDGES = 8;
 const SUPPLY_BUNDLE_MIN_DISTANCE_KM = 1400;
 const RADIAL_BUNDLE_MIN_DISTANCE_KM = 1400;
 const SUPPLY_BUNDLE_MIN_ROUTES = 3;
@@ -151,45 +125,13 @@ const SUPPLY_BUNDLE_AZIMUTH_DEG = 20;
 const SUPPLY_BUNDLE_LOCAL_CELL_DEG = 3.5;
 const SUPPLY_BUNDLE_MAX_LOCAL_SPREAD_KM = 680;
 const SUPPLY_BUNDLE_MAX_REMOTE_SPREAD_KM = 1800;
+const CORRIDOR_SPATIAL_CLUSTER_LINK_KM = 900;
 const ENDPOINT_MARKER_SIZE_PX = 28;
 const ENDPOINT_MARKER_PADDING_PX = 4;
 const ENDPOINT_LABEL_OFFSET_X_PX = 14;
 const ENDPOINT_LABEL_HEIGHT_PX = 15;
 const ENDPOINT_LABEL_CHAR_WIDTH_PX = 6.4;
 const ENDPOINT_LABEL_MAX_WIDTH_PX = 220;
-
-const EDGE_PRIORITY: Record<string, number> = {
-  SUPPLIES_TO: 100,
-  DEPENDS_ON: 99,
-  PRODUCES: 97,
-  EXTRACTS_FROM: 96,
-  REQUIRES: 95,
-  USES: 94,
-  CONTROLS: 92,
-  MANAGES: 90,
-  OWNS: 88,
-  INVESTS_IN: 86,
-  REGULATES: 84,
-  ASSURES: 82,
-  AUDITED_BY: 80,
-  OPERATES_IN: 76,
-  LOCATED_IN: 74,
-  PARTICIPATES_IN: 72,
-  TRADED_IN: 73,
-  SUPPORTS: 70,
-  PARTNERS_WITH: 68,
-};
-
-const FAMILY_VISUAL_WEIGHT: Record<EdgeFamily, number> = {
-  supply: 1.04,
-  control: 1.01,
-  influence: 0.95,
-  market: 0.88,
-  risk: 0.9,
-  social: 0.82,
-  location: 0.78,
-  other: 0.74,
-};
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -204,14 +146,6 @@ function toSoftHex(hex: string, blend: number): string {
     return value.toString(16).padStart(2, '0');
   });
   return `#${next.join('')}`;
-}
-
-function edgePriority(edgeOrType: RawDependencyEdge | string): number {
-  if (typeof edgeOrType !== 'string' && typeof edgeOrType?.priority === 'number' && Number.isFinite(edgeOrType.priority)) {
-    return edgeOrType.priority;
-  }
-  const type = typeof edgeOrType === 'string' ? edgeOrType : edgeOrType.type;
-  return EDGE_PRIORITY[type] ?? 40;
 }
 
 function normalizeEdgeType(value: unknown): string {
@@ -236,9 +170,191 @@ function hashString(value: string): number {
   return hash;
 }
 
-function edgeFamily(edgeOrType: RawDependencyEdge | string): EdgeFamily {
+function shouldSpatiallySplitCorridor(channel: string): boolean {
+  return channel === 'trace' || channel === 'propagation';
+}
+
+function featureRepresentativePoint(feature: GeoJSON.Feature): [number, number] | null {
+  if (feature.geometry?.type === 'Point') {
+    const coords = feature.geometry.coordinates;
+    if (Array.isArray(coords) && coords.length >= 2) return [Number(coords[0]), Number(coords[1])];
+    return null;
+  }
+  if (feature.geometry?.type === 'LineString') {
+    const coords = feature.geometry.coordinates as [number, number][];
+    if (coords.length === 0) return null;
+    return linePointAt(coords, 0.72);
+  }
+  return null;
+}
+
+function resolveEndpointObject(
+  endpointKey: string,
+  objectById: Map<string, TraceObjectInfo>,
+  objectByPath: Map<string, TraceObjectInfo>,
+): GeoObject | null {
+  if (endpointKey.startsWith('node:')) return traceObjectToGeoObject(objectById.get(endpointKey.slice(5)));
+  if (endpointKey.startsWith('path:')) return traceObjectToGeoObject(objectByPath.get(endpointKey.slice(5)));
+  return null;
+}
+
+function clusterEndpointKeysByDistance(
+  entries: Array<{ key: string; point: [number, number] }>,
+  maxLinkKm: number,
+): Array<Array<{ key: string; point: [number, number] }>> {
+  return clusterPointEntriesByDistance(entries, maxLinkKm);
+}
+
+function repartitionSpatialCorridors(
+  features: GeoJSON.Feature[],
+  objectById: Map<string, TraceObjectInfo>,
+  objectByPath: Map<string, TraceObjectInfo>,
+  centerPoint: [number, number] | null,
+): GeoJSON.Feature[] {
+  type CorridorBucket = {
+    corridorId: string;
+    channel: string;
+    features: GeoJSON.Feature[];
+    endpointEntries: Map<string, { key: string; point: [number, number] }>;
+  };
+
+  const buckets = new Map<string, CorridorBucket>();
+  for (const feature of features) {
+    const corridorId = String(feature.properties?.corridorId || '').trim();
+    if (!corridorId) continue;
+    if (!buckets.has(corridorId)) {
+      buckets.set(corridorId, {
+        corridorId,
+        channel: String(feature.properties?.channel || '').trim(),
+        features: [],
+        endpointEntries: new Map(),
+      });
+    }
+    const bucket = buckets.get(corridorId)!;
+    if (!bucket.channel) bucket.channel = String(feature.properties?.channel || '').trim();
+    bucket.features.push(feature);
+    for (const endpointKey of featureBadgeEndpointRefs(feature)) {
+      if (bucket.endpointEntries.has(endpointKey)) continue;
+      const object = resolveEndpointObject(endpointKey, objectById, objectByPath);
+      if (!object?.coordinates) continue;
+      bucket.endpointEntries.set(endpointKey, {
+        key: endpointKey,
+        point: [object.coordinates.lon, object.coordinates.lat],
+      });
+    }
+  }
+
+  const reassigned: GeoJSON.Feature[] = [];
+  const rewriteFeatureForCluster = (
+    feature: GeoJSON.Feature,
+    clusterCorridorId: string,
+    suffix: string,
+    clusterEndpointKeys?: Set<string>,
+  ): GeoJSON.Feature => {
+    const filteredBadgeRefs = clusterEndpointKeys
+      ? featureBadgeEndpointRefs(feature).filter((key) => clusterEndpointKeys.has(key))
+      : featureBadgeEndpointRefs(feature);
+    const badgeEndpointNodeIds = filteredBadgeRefs
+      .filter((key) => key.startsWith('node:'))
+      .map((key) => key.slice(5));
+    const badgeEndpointPathRefs = filteredBadgeRefs
+      .filter((key) => key.startsWith('path:'))
+      .map((key) => key.slice(5));
+    return {
+      ...feature,
+      id: feature.id == null ? `${clusterCorridorId}:${suffix}` : `${String(feature.id)}:${suffix}`,
+      properties: {
+        ...(feature.properties || {}),
+        corridorId: clusterCorridorId,
+        corridorBaseId: String(feature.properties?.corridorId || '').trim(),
+        ...(filteredBadgeRefs.length > 0
+          ? {
+              badgeEndpointNodeIds,
+              badgeEndpointPathRefs,
+            }
+          : {}),
+      },
+    };
+  };
+
+  for (const feature of features) {
+    const corridorId = String(feature.properties?.corridorId || '').trim();
+    if (!corridorId || !buckets.has(corridorId)) {
+      reassigned.push(feature);
+      continue;
+    }
+    const bucket = buckets.get(corridorId)!;
+    if (!shouldSpatiallySplitCorridor(bucket.channel) || bucket.endpointEntries.size < 2) {
+      reassigned.push(feature);
+      continue;
+    }
+
+    const clusters = clusterEndpointKeysByDistance(
+      Array.from(bucket.endpointEntries.values()),
+      CORRIDOR_SPATIAL_CLUSTER_LINK_KM,
+    );
+    if (clusters.length < 2) {
+      reassigned.push(feature);
+      continue;
+    }
+
+    const clusterInfo = clusters.map((cluster, index) => ({
+      corridorId: `${bucket.corridorId}:geo:${index}`,
+      endpointKeys: new Set(cluster.map((entry) => entry.key)),
+      centroid: averagePoint(cluster.map((entry) => entry.point)),
+    }));
+    const endpointRefs = featureBadgeEndpointRefs(feature).filter((key) => bucket.endpointEntries.has(key));
+
+    if (endpointRefs.length > 0) {
+      const touchedClusters = clusterInfo.filter((candidate) => endpointRefs.some((key) => candidate.endpointKeys.has(key)));
+      if (feature.geometry?.type === 'LineString' && touchedClusters.length > 1) {
+        touchedClusters.forEach((cluster, index) => {
+          reassigned.push(rewriteFeatureForCluster(feature, cluster.corridorId, `cluster-shared-${index}`, cluster.endpointKeys));
+        });
+        continue;
+      }
+      let targetKey = endpointRefs[0];
+      if (centerPoint && endpointRefs.length > 1) {
+        targetKey = [...endpointRefs].sort((left, right) => {
+          const leftPoint = bucket.endpointEntries.get(left)?.point || centerPoint;
+          const rightPoint = bucket.endpointEntries.get(right)?.point || centerPoint;
+          return (
+            approximateDistanceKm(rightPoint[0], rightPoint[1], centerPoint[0], centerPoint[1])
+            - approximateDistanceKm(leftPoint[0], leftPoint[1], centerPoint[0], centerPoint[1])
+          );
+        })[0];
+      }
+      const cluster = clusterInfo.find((candidate) => candidate.endpointKeys.has(targetKey))
+        || touchedClusters[0]
+        || clusterInfo[0];
+      reassigned.push(rewriteFeatureForCluster(feature, cluster.corridorId, `cluster-${hashString(targetKey)}`, cluster.endpointKeys));
+      continue;
+    }
+
+    const representativePoint = featureRepresentativePoint(feature);
+    if (feature.geometry?.type === 'LineString') {
+      clusterInfo.forEach((cluster, index) => {
+        reassigned.push(rewriteFeatureForCluster(feature, cluster.corridorId, `shared-${index}`, cluster.endpointKeys));
+      });
+      continue;
+    }
+    if (!representativePoint) {
+      reassigned.push(rewriteFeatureForCluster(feature, clusterInfo[0].corridorId, 'cluster-0', clusterInfo[0].endpointKeys));
+      continue;
+    }
+    const nearestCluster = [...clusterInfo].sort((left, right) => (
+      approximateDistanceKm(representativePoint[0], representativePoint[1], left.centroid[0], left.centroid[1])
+      - approximateDistanceKm(representativePoint[0], representativePoint[1], right.centroid[0], right.centroid[1])
+    ))[0];
+    reassigned.push(rewriteFeatureForCluster(feature, nearestCluster.corridorId, `cluster-${hashString(nearestCluster.corridorId)}`, nearestCluster.endpointKeys));
+  }
+
+  return reassigned;
+}
+
+function edgeFamily(edgeOrType: { type?: string; family?: EdgeFamily } | string): EdgeFamily {
   if (typeof edgeOrType !== 'string' && edgeOrType?.family) return edgeOrType.family;
-  const type = typeof edgeOrType === 'string' ? edgeOrType : edgeOrType.type;
+  const type = typeof edgeOrType === 'string' ? edgeOrType : (edgeOrType.type || '');
   if (['SUPPLIES_TO', 'DEPENDS_ON', 'PRODUCES', 'EXTRACTS_FROM', 'REQUIRES', 'USES', 'SUPPORTS'].includes(type)) {
     return 'supply';
   }
@@ -298,49 +414,45 @@ function humanizeEdgeType(edgeType: string): string {
     .join(' ');
 }
 
-function businessMeaningForEdgeType(edgeOrType: RawDependencyEdge | string): string {
-  if (typeof edgeOrType !== 'string' && edgeOrType?.businessMeaning) return edgeOrType.businessMeaning;
-  const edgeType = typeof edgeOrType === 'string' ? edgeOrType : edgeOrType.type;
-  switch (edgeType) {
-    case 'SUPPLIES_TO':
-    case 'PRODUCES':
-    case 'EXTRACTS_FROM':
-      return 'Operational supply path';
-    case 'DEPENDS_ON':
-    case 'REQUIRES':
-    case 'USES':
-      return 'Dependency exposure';
-    case 'CONTROLS':
-    case 'MANAGES':
-    case 'OWNS':
-    case 'INVESTS_IN':
-      return 'Control or ownership chain';
-    case 'LOCATED_IN':
-    case 'OPERATES_IN':
-    case 'BASED_IN':
-    case 'HEADQUARTERED_IN':
-      return 'Geographic operating context';
-    case 'PARTICIPATES_IN':
-      return 'Market participation context';
-    case 'TRADED_IN':
-      return 'Product trading and price-discovery context';
-    case 'HAS_MARKET_SEGMENT':
-    case 'HAS_SUBMARKET':
-      return 'Market positioning context';
-    case 'REGULATES':
-    case 'ASSURES':
-    case 'AUDITED_BY':
-    case 'INFLUENCES':
-    case 'AFFECTS':
-    case 'IMPACTS':
-      return 'External influence or oversight';
-    case 'COMPETES_WITH':
-    case 'CONFLICTS_WITH':
-    case 'OPPOSES':
-      return 'Competitive or risk pressure';
-    default:
-      return 'Context relationship';
-  }
+function relationStrokeColor(theme: ThemeMode, family: EdgeFamily, semanticDirection?: string, emphasize = false): string {
+  const semantic = String(semanticDirection || '').trim().toLowerCase();
+  if (family === 'supply') return theme === 'dark' ? (emphasize ? '#fbbf24' : '#f59e0b') : (emphasize ? '#d97706' : '#b45309');
+  if (family === 'control') return theme === 'dark' ? (emphasize ? '#93c5fd' : '#60a5fa') : (emphasize ? '#2563eb' : '#1d4ed8');
+  if (family === 'risk' || family === 'influence') return theme === 'dark' ? (emphasize ? '#fda4af' : '#fb7185') : (emphasize ? '#e11d48' : '#be123c');
+  if (family === 'location' || family === 'market') return theme === 'dark' ? (emphasize ? '#5eead4' : '#2dd4bf') : (emphasize ? '#0f766e' : '#0d9488');
+  if (family === 'social') return theme === 'dark' ? '#c4b5fd' : '#7c3aed';
+  if (semantic === 'upstream') return theme === 'dark' ? '#cbd5f5' : '#64748b';
+  if (semantic === 'downstream') return theme === 'dark' ? '#dbeafe' : '#475569';
+  return theme === 'dark' ? '#cbd5e1' : '#64748b';
+}
+
+function normalizeExplainRelation(value: any): ExplainRelation | null {
+  const sourceId = String(value?.sourceFragmentId || '').trim();
+  const targetId = String(value?.targetFragmentId || '').trim();
+  const relatedFragmentId = String(value?.relatedFragmentId || '').trim();
+  const type = normalizeEdgeType(value?.type);
+  if (!sourceId || !targetId || !relatedFragmentId || !type) return null;
+  const family = edgeFamily(typeof value?.family === 'string' ? value.family : type);
+  const coordinates = value?.relatedCoordinates && Number.isFinite(value.relatedCoordinates.lat) && Number.isFinite(value.relatedCoordinates.lon)
+    ? { lat: Number(value.relatedCoordinates.lat), lon: Number(value.relatedCoordinates.lon) }
+    : undefined;
+  return {
+    edgeId: String(value?.edgeId || '').trim() || undefined,
+    sourceId,
+    targetId,
+    relatedFragmentId,
+    relatedLabel: String(value?.relatedLabel || '').trim() || humanizeCanonicalPath(String(value?.relatedCanonicalPath || '').trim()) || relatedFragmentId,
+    relatedType: String(value?.relatedType || '').trim() || undefined,
+    relatedCanonicalPath: String(value?.relatedCanonicalPath || '').trim() || undefined,
+    relatedCoordinates: coordinates,
+    type,
+    family,
+    semanticDirection: String(value?.semanticDirection || '').trim() || undefined,
+    businessMeaning: String(value?.businessMeaning || '').trim() || undefined,
+    whyRelevant: String(value?.whyRelevant || '').trim() || undefined,
+    priority: typeof value?.priority === 'number' ? value.priority : undefined,
+    criticality: typeof value?.criticality === 'number' ? value.criticality : undefined,
+  };
 }
 
 function humanizeFragmentType(type: string): string {
@@ -538,17 +650,6 @@ function smoothRouteCoordinates(
   return smoothPolyline(clean, passes);
 }
 
-function routeStrokeColor(theme: ThemeMode, hop: 1 | 2 | 3, weight = 0): string {
-  if (theme === 'dark') {
-    if (hop === 1) return weight > 1 ? '#b9c4ff' : '#9fb0ff';
-    if (hop === 2) return weight > 1 ? '#c3ccef' : '#a9b7df';
-    return weight > 1 ? '#cfd5e8' : '#b8c0d8';
-  }
-  if (hop === 1) return weight > 1 ? '#5067a8' : '#5e74b4';
-  if (hop === 2) return weight > 1 ? '#66779f' : '#7182a9';
-  return weight > 1 ? '#7c879d' : '#8a95aa';
-}
-
 function lerpPoint(a: [number, number], b: [number, number], t: number): [number, number] {
   return [
     a[0] + (b[0] - a[0]) * t,
@@ -595,84 +696,6 @@ function concaveCurveToAxis(
   return quadraticCurvePoints(start, end, controlPoint);
 }
 
-function bundleRouteCoordinates(
-  rawPoints: [number, number][],
-  routeSeed: string,
-  hop: 1 | 2 | 3,
-  laneIndex: number,
-  laneCount: number,
-): [number, number][] {
-  const clean = dedupeSequentialPoints(rawPoints);
-  if (clean.length < 2) return clean;
-  if (clean.length === 2) {
-    const base = arcPoints(clean[0][0], clean[0][1], clean[1][0], clean[1][1], routeSeed, hop);
-    if (laneCount <= 1) return base;
-    const laneCenter = (laneCount - 1) / 2;
-    const laneOffset = (laneIndex - laneCenter) * (hop === 1 ? 0.55 : 0.42);
-    const start = clean[0];
-    const end = clean[1];
-    const startAnchor = offsetAlongNormal(start, end, lerpPoint(start, end, 0.18), laneOffset * 0.9);
-    const endAnchor = offsetAlongNormal(start, end, lerpPoint(start, end, 0.82), laneOffset * 0.45);
-    return smoothRouteCoordinates([start, startAnchor, endAnchor, end], routeSeed, hop);
-  }
-
-  const source = clean[0];
-  const firstLeg = clean[1];
-  const lastLegStart = clean[clean.length - 2];
-  const target = clean[clean.length - 1];
-  const interior = clean.slice(1, -1);
-  const laneCenter = (laneCount - 1) / 2;
-  const laneSigned = laneIndex - laneCenter;
-  const laneOffset = laneSigned * (hop === 1 ? 0.52 : hop === 2 ? 0.38 : 0.28);
-  const routePoints: [number, number][] = [source];
-
-  const sourceSpan = Math.min(Math.max(segmentLength(source, firstLeg), 1), 8);
-  const sourceAnchorA = offsetAlongNormal(
-    source,
-    firstLeg,
-    lerpPoint(source, firstLeg, hop === 1 ? 0.16 : 0.22),
-    laneOffset * 0.8,
-  );
-  const sourceAnchorB = offsetAlongNormal(
-    source,
-    firstLeg,
-    lerpPoint(source, firstLeg, hop === 1 ? 0.34 : 0.42),
-    laneOffset * (sourceSpan > 3 ? 1.05 : 0.75),
-  );
-  routePoints.push(sourceAnchorA, sourceAnchorB);
-
-  if (interior.length === 1) {
-    const via = interior[0];
-    routePoints.push(
-      offsetAlongNormal(source, target, lerpPoint(source, via, 0.58), laneOffset * 0.4),
-      offsetAlongNormal(source, target, lerpPoint(via, target, 0.42), laneOffset * 0.28),
-    );
-  } else if (interior.length > 1) {
-    const firstVia = interior[0];
-    const lastVia = interior[interior.length - 1];
-    const centroid: [number, number] = [
-      interior.reduce((sum, point) => sum + point[0], 0) / interior.length,
-      interior.reduce((sum, point) => sum + point[1], 0) / interior.length,
-    ];
-    routePoints.push(
-      offsetAlongNormal(source, target, lerpPoint(source, firstVia, 0.62), laneOffset * 0.36),
-      offsetAlongNormal(source, target, centroid, laneOffset * 0.18),
-      offsetAlongNormal(source, target, lerpPoint(lastVia, target, 0.38), laneOffset * 0.24),
-    );
-  }
-
-  const targetSpan = Math.min(Math.max(segmentLength(lastLegStart, target), 1), 8);
-  const targetAnchor = offsetAlongNormal(
-    lastLegStart,
-    target,
-    lerpPoint(lastLegStart, target, 0.72),
-    laneOffset * (targetSpan > 3 ? 0.55 : 0.35),
-  );
-  routePoints.push(targetAnchor, target);
-
-  return smoothRouteCoordinates(routePoints, routeSeed, hop);
-}
-
 function supplyStrokeColor(theme: ThemeMode, kind: EdgeVisualKind): string {
   if (theme === 'dark') {
     if (kind === 'primary') return '#f59e0b';
@@ -686,14 +709,6 @@ function supplyStrokeColor(theme: ThemeMode, kind: EdgeVisualKind): string {
 
 function primaryStrokeColor(theme: ThemeMode): string {
   return theme === 'dark' ? '#60a5fa' : '#2563eb';
-}
-
-function indirectStrokeColor(theme: ThemeMode): string {
-  return theme === 'dark' ? '#93c5fd' : '#3b82f6';
-}
-
-function clusterStrokeColor(theme: ThemeMode): string {
-  return theme === 'dark' ? '#cbd5e1' : '#94a3b8';
 }
 
 function propagationStrokeColor(theme: ThemeMode, kind: EdgeVisualKind): string {
@@ -743,43 +758,6 @@ function shouldSuppressConnection(
   return isGeoLocObject(objectById.get(sourceId)) || isGeoLocObject(objectById.get(targetId));
 }
 
-function shouldSuppressRawEdge(
-  edge: RawDependencyEdge,
-  objectById: Map<string, TraceObjectInfo>,
-): boolean {
-  if (shouldSuppressConnection(edge.sourceId, edge.targetId, objectById)) return true;
-  return edgeFamily(edge) === 'location';
-}
-
-function topologyKindForNodes(
-  centerId: string,
-  sourceId: string,
-  targetId: string,
-  depths: Map<string, number>,
-  fallbackHop = 1,
-): EdgeVisualKind {
-  const sourceDepth = depths.get(sourceId);
-  const targetDepth = depths.get(targetId);
-  const minDepth = Math.min(
-    Number.isFinite(sourceDepth) ? sourceDepth as number : fallbackHop,
-    Number.isFinite(targetDepth) ? targetDepth as number : fallbackHop,
-  );
-  const maxDepth = Math.max(
-    Number.isFinite(sourceDepth) ? sourceDepth as number : fallbackHop,
-    Number.isFinite(targetDepth) ? targetDepth as number : fallbackHop,
-  );
-
-  if (sourceId === centerId || targetId === centerId || maxDepth <= 1) return 'primary';
-  if (minDepth >= 2 && maxDepth >= 2) return 'cluster';
-  return 'indirect';
-}
-
-function colorForVisualKind(theme: ThemeMode, kind: EdgeVisualKind): string {
-  if (kind === 'primary') return primaryStrokeColor(theme);
-  if (kind === 'indirect') return indirectStrokeColor(theme);
-  return clusterStrokeColor(theme);
-}
-
 function linePointAt(coords: [number, number][], ratio: number): [number, number] {
   if (coords.length === 0) return [0, 0];
   if (coords.length === 1) return coords[0];
@@ -812,6 +790,109 @@ function averagePoint(points: [number, number][]): [number, number] {
     points.reduce((sum, point) => sum + point[0], 0) / points.length,
     points.reduce((sum, point) => sum + point[1], 0) / points.length,
   ];
+}
+
+function estimatePointClusterLinkKm(points: [number, number][]): number {
+  if (points.length <= 1) return 180;
+  const nearestDistances = points.map(() => Number.POSITIVE_INFINITY);
+  let maxSpanKm = 0;
+
+  for (let index = 0; index < points.length; index += 1) {
+    for (let inner = index + 1; inner < points.length; inner += 1) {
+      const distanceKm = approximateDistanceKm(
+        points[index][0],
+        points[index][1],
+        points[inner][0],
+        points[inner][1],
+      );
+      maxSpanKm = Math.max(maxSpanKm, distanceKm);
+      nearestDistances[index] = Math.min(nearestDistances[index], distanceKm);
+      nearestDistances[inner] = Math.min(nearestDistances[inner], distanceKm);
+    }
+  }
+
+  const finiteNearest = nearestDistances.filter((value) => Number.isFinite(value) && value > 0);
+  const avgNearestKm = finiteNearest.length > 0
+    ? finiteNearest.reduce((sum, value) => sum + value, 0) / finiteNearest.length
+    : Math.max(maxSpanKm * 0.45, 180);
+  return clamp(Math.max(avgNearestKm * 2.35, maxSpanKm * 0.2, 180), 180, CORRIDOR_SPATIAL_CLUSTER_LINK_KM);
+}
+
+function clusterPointEntriesByDistance<T extends { point: [number, number] }>(
+  entries: T[],
+  maxLinkKm: number,
+): T[][] {
+  if (entries.length <= 1) return entries.length === 0 ? [] : [entries];
+  const visited = new Set<number>();
+  const clusters: T[][] = [];
+
+  for (let index = 0; index < entries.length; index += 1) {
+    if (visited.has(index)) continue;
+    const queue = [index];
+    visited.add(index);
+    const cluster: T[] = [];
+    while (queue.length > 0) {
+      const currentIndex = queue.shift()!;
+      const current = entries[currentIndex]!;
+      cluster.push(current);
+      for (let probeIndex = 0; probeIndex < entries.length; probeIndex += 1) {
+        if (visited.has(probeIndex)) continue;
+        const probe = entries[probeIndex]!;
+        const distanceKm = approximateDistanceKm(
+          current.point[0],
+          current.point[1],
+          probe.point[0],
+          probe.point[1],
+        );
+        if (distanceKm > maxLinkKm) continue;
+        visited.add(probeIndex);
+        queue.push(probeIndex);
+      }
+    }
+    clusters.push(cluster);
+  }
+
+  return clusters;
+}
+
+function densestClusterAnchor(points: [number, number][]): [number, number] {
+  if (points.length === 0) return [0, 0];
+  if (points.length === 1) return points[0]!;
+
+  const radiusKm = clamp(estimatePointClusterLinkKm(points) * 0.72, 140, 640);
+  let bestIndex = 0;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (let index = 0; index < points.length; index += 1) {
+    const candidate = points[index]!;
+    let score = 0;
+    for (const point of points) {
+      const distanceKm = approximateDistanceKm(candidate[0], candidate[1], point[0], point[1]);
+      const normalized = distanceKm / Math.max(radiusKm, 1);
+      score += Math.exp(-(normalized * normalized) * 1.25);
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = index;
+    }
+  }
+
+  const anchor = points[bestIndex]!;
+  let totalWeight = 0;
+  let sumLon = 0;
+  let sumLat = 0;
+  for (const point of points) {
+    const distanceKm = approximateDistanceKm(anchor[0], anchor[1], point[0], point[1]);
+    if (distanceKm > radiusKm * 1.05) continue;
+    const normalized = distanceKm / Math.max(radiusKm, 1);
+    const weight = Math.exp(-(normalized * normalized) * 1.1);
+    totalWeight += weight;
+    sumLon += point[0] * weight;
+    sumLat += point[1] * weight;
+  }
+
+  if (totalWeight <= 0) return anchor;
+  return [sumLon / totalWeight, sumLat / totalWeight];
 }
 
 function azimuthDegrees(from: [number, number], to: [number, number]): number {
@@ -897,6 +978,8 @@ type RadialBundleRoute = {
   targetId: string;
   corridorId?: string;
   endPoint: [number, number];
+  gatewayNodeIds?: string[];
+  badgeEndpointNodeIds?: string[];
   kind: EdgeVisualKind;
   color: string;
   baseOpacity: number;
@@ -945,6 +1028,7 @@ function buildRadialBundleFeatures(
     const trunkColor = channel === 'propagation'
       ? propagationStrokeColor(theme, strongestKind)
       : primaryStrokeColor(theme);
+    const gatewayNodeIds = Array.from(new Set(group.flatMap((route) => route.gatewayNodeIds || []).filter(Boolean)));
     const corridorId = `${channel}:corridor:${groupKey}:${hashString(group.map((route) => route.routeId).join(':'))}`;
     group.forEach((route) => corridorAssignments.set(route.targetId, corridorId));
     const branchPlans = group.map((route) => ({
@@ -967,6 +1051,8 @@ function buildRadialBundleFeatures(
         color: trunkColor,
         channel,
         corridorId,
+        gatewayNodeIds,
+        badgeEndpointNodeIds: Array.from(new Set(group.flatMap((route) => route.badgeEndpointNodeIds || [route.targetId]).filter(Boolean))),
         featureRole: 'overview',
         renderPriority: Math.max(...group.map((route) => route.renderPriority)) + 2,
         baseOpacity: clamp(Math.max(...group.map((route) => route.baseOpacity)) + Math.min(0.16, group.length * 0.025), 0.34, 0.96),
@@ -1007,6 +1093,8 @@ function buildRadialBundleFeatures(
           color: trunkColor,
           channel,
           corridorId,
+          gatewayNodeIds: route.gatewayNodeIds || gatewayNodeIds,
+          badgeEndpointNodeIds: route.badgeEndpointNodeIds || [route.targetId],
           featureRole: 'detail',
           endpointNodeIds: [route.targetId],
           renderPriority: route.renderPriority,
@@ -1035,6 +1123,8 @@ function buildRadialBundleFeatures(
         color: route.color,
         channel,
         corridorId,
+        gatewayNodeIds: route.gatewayNodeIds || [],
+        badgeEndpointNodeIds: route.badgeEndpointNodeIds || [route.targetId],
         featureRole: 'overview',
         endpointNodeIds: [route.targetId],
         renderPriority: route.renderPriority,
@@ -1060,445 +1150,6 @@ function buildRadialBundleFeatures(
   }
 
   return { features, corridorAssignments };
-}
-
-function buildIndirectCorridorCoordinates(
-  pathPoints: [number, number][],
-  routeSeed: string,
-): [number, number][] {
-  const clean = dedupeSequentialPoints(pathPoints);
-  if (clean.length < 2) return clean;
-  if (clean.length === 2) {
-    return smoothRouteCoordinates(clean, routeSeed, 2);
-  }
-
-  const source = clean[0];
-  const target = clean[clean.length - 1];
-  const viaPoints = clean.slice(1, -1);
-  const directDistanceKm = approximateDistanceKm(source[0], source[1], target[0], target[1]);
-  if (directDistanceKm < 220) {
-    if (viaPoints.length === 0) return gentleArcPoints(source, target, routeSeed, directDistanceKm);
-    const viaCentroid: [number, number] = [
-      viaPoints.reduce((sum, point) => sum + point[0], 0) / viaPoints.length,
-      viaPoints.reduce((sum, point) => sum + point[1], 0) / viaPoints.length,
-    ];
-    const midpoint = lerpPoint(source, target, 0.5);
-    const control = lerpPoint(midpoint, viaCentroid, 0.28);
-    return smoothPolyline([source, control, target], 2);
-  }
-  const viaCentroid: [number, number] = [
-    viaPoints.reduce((sum, point) => sum + point[0], 0) / viaPoints.length,
-    viaPoints.reduce((sum, point) => sum + point[1], 0) / viaPoints.length,
-  ];
-  const cross = (target[0] - source[0]) * (viaCentroid[1] - source[1]) - (target[1] - source[1]) * (viaCentroid[0] - source[0]);
-  const direction = Math.abs(cross) > 1e-6 ? Math.sign(cross) : (hashString(routeSeed) % 2 === 0 ? 1 : -1);
-  const span = Math.min(Math.max(segmentLength(source, target), 1), 16);
-  const corridorOffset = clamp(
-    span * (directDistanceKm < 800 ? 0.02 : 0.026),
-    0.06,
-    directDistanceKm < 800 ? 0.2 : 0.42,
-  ) * direction;
-  const sourceAnchor = offsetAlongNormal(
-    source,
-    target,
-    lerpPoint(source, viaCentroid, 0.42),
-    corridorOffset * 0.55,
-  );
-  const midAnchor = offsetAlongNormal(
-    source,
-    target,
-    viaCentroid,
-    corridorOffset * 0.72,
-  );
-  const targetAnchor = offsetAlongNormal(
-    source,
-    target,
-    lerpPoint(viaCentroid, target, 0.58),
-    corridorOffset * 0.42,
-  );
-
-  return smoothPolyline([source, sourceAnchor, midAnchor, targetAnchor, target], 3);
-}
-
-function nodeDepthForEdge(centerId: string, edge: SelectedTraceEdge): string {
-  if (edge.hop === 1) {
-    return edge.sourceId === centerId ? edge.targetId : edge.sourceId;
-  }
-  return edge.parentNodeId === edge.sourceId ? edge.targetId : edge.sourceId;
-}
-
-function buildNodeLinkById(centerId: string, edges: SelectedTraceEdge[]): Map<string, SelectedTraceEdge> {
-  const byNode = new Map<string, SelectedTraceEdge>();
-  for (const edge of edges) {
-    if (edge.hop === 1 && edge.sourceId !== centerId && edge.targetId !== centerId) continue;
-    const nodeId = nodeDepthForEdge(centerId, edge);
-    const existing = byNode.get(nodeId);
-    if (!existing || edge.continuationScore > existing.continuationScore) {
-      byNode.set(nodeId, edge);
-    }
-  }
-  return byNode;
-}
-
-function reconstructPathPoints(
-  centerId: string,
-  targetNodeId: string,
-  nodeLinkById: Map<string, SelectedTraceEdge>,
-): { points: [number, number][]; deepestEdge: SelectedTraceEdge | null } {
-  const chain: SelectedTraceEdge[] = [];
-  let currentId = targetNodeId;
-  while (true) {
-    const edge = nodeLinkById.get(currentId);
-    if (!edge) break;
-    chain.push(edge);
-    if (edge.hop === 1) break;
-    currentId = String(edge.parentNodeId || '').trim();
-    if (!currentId) break;
-  }
-  if (chain.length === 0) return { points: [], deepestEdge: null };
-  const ordered = [...chain].reverse();
-  const points: [number, number][] = [];
-  for (const edge of ordered) {
-    if (edge.hop === 1) {
-      if (!edge.sourceCoords || !edge.targetCoords) return { points: [], deepestEdge: null };
-      const start = edge.sourceId === centerId ? edge.sourceCoords : edge.targetCoords;
-      const end = edge.sourceId === centerId ? edge.targetCoords : edge.sourceCoords;
-      if (points.length === 0) points.push([start.lon, start.lat]);
-      points.push([end.lon, end.lat]);
-      continue;
-    }
-    const parentId = String(edge.parentNodeId || '').trim();
-    const childId = parentId === edge.sourceId ? edge.targetId : edge.sourceId;
-    const childCoords = childId === edge.sourceId ? edge.sourceCoords : edge.targetCoords;
-    if (!childCoords) return { points: [], deepestEdge: null };
-    points.push([childCoords.lon, childCoords.lat]);
-  }
-  return { points: dedupeSequentialPoints(points), deepestEdge: ordered[ordered.length - 1] || null };
-}
-
-function reconstructPathNodeIds(
-  centerId: string,
-  targetNodeId: string,
-  nodeLinkById: Map<string, SelectedTraceEdge>,
-): string[] {
-  const ids: string[] = [centerId];
-  let currentId = targetNodeId;
-  const chain: string[] = [];
-  while (currentId) {
-    chain.push(currentId);
-    const edge = nodeLinkById.get(currentId);
-    if (!edge || edge.hop === 1) break;
-    currentId = String(edge.parentNodeId || '').trim();
-  }
-  chain.reverse().forEach((id) => {
-    if (!ids.includes(id)) ids.push(id);
-  });
-  return ids;
-}
-
-function buildTraceVisualFeatures(
-  centerId: string,
-  selectedEdges: SelectedTraceEdge[],
-  rawEdges: RawDependencyEdge[],
-  depths: Map<string, number>,
-  parents: Map<string, string>,
-  objectById: Map<string, TraceObjectInfo>,
-  idToCoords: Map<string, { lon: number; lat: number }>,
-  theme: ThemeMode,
-): {
-  graphFeatures: GeoJSON.Feature[];
-  visibleNodeIds: Set<string>;
-} {
-  const visibleNodeIds = new Set<string>([centerId]);
-  const graphFeatures: GeoJSON.Feature[] = [];
-  const nodeLinkById = buildNodeLinkById(centerId, selectedEdges);
-  const visiblePrimaryNodeIds = new Set<string>();
-  const centerCoords = idToCoords.get(centerId);
-
-  const primaryEdges = selectedEdges
-    .filter((edge) => edge.hop === 1 && (edge.sourceId === centerId || edge.targetId === centerId))
-    .sort((left, right) => right.continuationScore - left.continuationScore)
-    .slice(0, MAX_PRIMARY_EDGES);
-
-  const primaryRoutes: RadialBundleRoute[] = [];
-  for (const edge of primaryEdges) {
-    if (!edge.sourceCoords || !edge.targetCoords) continue;
-    const targetNodeId = edge.sourceId === centerId ? edge.targetId : edge.sourceId;
-    visibleNodeIds.add(targetNodeId);
-    visiblePrimaryNodeIds.add(targetNodeId);
-    const end = edge.sourceId === centerId ? edge.targetCoords : edge.sourceCoords;
-    primaryRoutes.push({
-      routeId: `primary:${targetNodeId}`,
-      targetId: targetNodeId,
-      corridorId: `trace-branch:${targetNodeId}`,
-      endPoint: [end.lon, end.lat],
-      kind: 'primary',
-      color: primaryStrokeColor(theme),
-      baseOpacity: theme === 'dark' ? 0.88 : 0.76,
-      baseWidth: 2.2,
-      glowOpacity: theme === 'dark' ? 0.14 : 0.1,
-      renderPriority: 18,
-      labelText: buildLabelText(targetNodeId, businessMeaningForEdgeType(edge), objectById),
-    });
-  }
-  const { features: primaryFeatures, corridorAssignments } = buildRadialBundleFeatures(
-    centerCoords ? [centerCoords.lon, centerCoords.lat] : null,
-    primaryRoutes,
-    theme,
-    'trace',
-    (group) => {
-      const sample = group[0];
-      const meaning = compactMeaning((sample?.labelText || '').split('\n')[1] || 'Shared context corridor');
-      return `Towards ${group.length} nearby nodes\n${meaning}`;
-    },
-    { labelSingles: true, labelBundles: true },
-  );
-  graphFeatures.push(...primaryFeatures);
-
-  const branchCandidates = new Map<string, { targetNodeId: string; edge: SelectedTraceEdge; score: number }>();
-  for (const [nodeId, edge] of nodeLinkById.entries()) {
-    if ((depths.get(nodeId) || 0) < 2) continue;
-    const branchKey = String(edge.branchRootId || nodeId).trim() || nodeId;
-    if (visiblePrimaryNodeIds.size > 0 && !visiblePrimaryNodeIds.has(branchKey)) continue;
-    const existing = branchCandidates.get(branchKey);
-    const score = edge.continuationScore + (depths.get(nodeId) || 0) * 12;
-    if (!existing || score > existing.score) {
-      branchCandidates.set(branchKey, { targetNodeId: nodeId, edge, score });
-    }
-  }
-
-  const indirectBranches = Array.from(branchCandidates.values())
-    .sort((left, right) => right.score - left.score)
-    .slice(0, MAX_INDIRECT_BRANCHES);
-  const selectedRemoteNodeIds = new Set<string>();
-  const selectedOriginNeighborIds = new Set<string>();
-
-  for (const branch of indirectBranches) {
-    const { points, deepestEdge } = reconstructPathPoints(centerId, branch.targetNodeId, nodeLinkById);
-    if (!deepestEdge || points.length < 2) continue;
-    const pathNodeIds = reconstructPathNodeIds(centerId, branch.targetNodeId, nodeLinkById);
-    const coords = buildIndirectCorridorCoordinates(points, `indirect:${branch.targetNodeId}`);
-    const lineId = `indirect:${branch.targetNodeId}`;
-    const corridorId = corridorAssignments.get(deepestEdge.branchRootId) || `trace-branch:${deepestEdge.branchRootId}`;
-    graphFeatures.push({
-      id: lineId,
-      type: 'Feature',
-      geometry: { type: 'LineString', coordinates: coords },
-      properties: {
-        kind: 'indirect',
-        hop: deepestEdge.hop,
-        color: indirectStrokeColor(theme),
-        channel: 'trace',
-        corridorId,
-        featureRole: 'detail',
-        endpointNodeIds: [branch.targetNodeId],
-        renderPriority: 14,
-        baseOpacity: theme === 'dark' ? 0.7 : 0.58,
-        baseWidth: 1.95,
-        glowOpacity: theme === 'dark' ? 0.1 : 0.07,
-      },
-    } as GeoJSON.Feature<GeoJSON.LineString>);
-    graphFeatures.push({
-      id: `${lineId}:label`,
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: linePointAt(coords, 0.18) },
-      properties: {
-        kind: 'label',
-        corridorId,
-        featureRole: 'detail',
-        labelText: buildLabelText(branch.targetNodeId, businessMeaningForEdgeType(deepestEdge), objectById),
-        labelColor: indirectStrokeColor(theme),
-      },
-    } as GeoJSON.Feature<GeoJSON.Point>);
-    for (const nodeId of pathNodeIds) {
-      visibleNodeIds.add(nodeId);
-      const depth = depths.get(nodeId) || 0;
-      if (depth === 1) selectedOriginNeighborIds.add(nodeId);
-      if (depth >= 2) selectedRemoteNodeIds.add(nodeId);
-    }
-    visibleNodeIds.add(branch.targetNodeId);
-    visibleNodeIds.add(deepestEdge.branchRootId);
-  }
-
-  const clusterCandidates = new Map<string, { sourceId: string; targetId: string; sourceBranch: string; edge: RawDependencyEdge; score: number }>();
-  for (const edge of rawEdges) {
-    const sourceDepth = depths.get(edge.sourceId) || 0;
-    const targetDepth = depths.get(edge.targetId) || 0;
-    if (sourceDepth < 2 || targetDepth < 2) continue;
-    if (!selectedRemoteNodeIds.has(edge.sourceId) || !selectedRemoteNodeIds.has(edge.targetId)) continue;
-    const sourceCoords = idToCoords.get(edge.sourceId);
-    const targetCoords = idToCoords.get(edge.targetId);
-    if (!sourceCoords || !targetCoords) continue;
-    const sourceBranch = deriveBranchRootId(centerId, edge.sourceId, parents);
-    const targetBranch = deriveBranchRootId(centerId, edge.targetId, parents);
-    if (!sourceBranch || !targetBranch || sourceBranch !== targetBranch) continue;
-    if (selectedOriginNeighborIds.size > 0 && !selectedOriginNeighborIds.has(sourceBranch)) continue;
-    const pairKey = stablePairKey(edge.sourceId, edge.targetId);
-    const score = edgePriority(edge) + Math.min(sourceDepth, targetDepth) * 8;
-    const existing = clusterCandidates.get(pairKey);
-    if (!existing || score > existing.score) {
-      clusterCandidates.set(pairKey, { sourceId: edge.sourceId, targetId: edge.targetId, sourceBranch, edge, score });
-    }
-  }
-
-  const clusterEdges = Array.from(clusterCandidates.values())
-    .sort((left, right) => right.score - left.score)
-    .slice(0, MAX_CLUSTER_EDGES);
-
-  for (const item of clusterEdges) {
-    const sourceCoords = idToCoords.get(item.sourceId);
-    const targetCoords = idToCoords.get(item.targetId);
-    if (!sourceCoords || !targetCoords) continue;
-    const coords = smoothRouteCoordinates(
-      [
-        [sourceCoords.lon, sourceCoords.lat],
-        [targetCoords.lon, targetCoords.lat],
-      ],
-      `cluster:${item.sourceId}:${item.targetId}`,
-      3,
-    );
-    graphFeatures.push({
-      id: `cluster:${item.sourceId}:${item.targetId}`,
-      type: 'Feature',
-      geometry: { type: 'LineString', coordinates: coords },
-      properties: {
-        kind: 'cluster',
-        hop: 3,
-        color: clusterStrokeColor(theme),
-        channel: 'trace',
-        corridorId: corridorAssignments.get(item.sourceBranch) || `trace-branch:${item.sourceBranch}`,
-        featureRole: 'detail',
-        endpointNodeIds: [item.sourceId, item.targetId],
-        renderPriority: 10,
-        baseOpacity: theme === 'dark' ? 0.42 : 0.34,
-        baseWidth: 1.2,
-        glowOpacity: theme === 'dark' ? 0.04 : 0.03,
-      },
-    } as GeoJSON.Feature<GeoJSON.LineString>);
-    visibleNodeIds.add(item.sourceId);
-    visibleNodeIds.add(item.targetId);
-  }
-
-  return { graphFeatures, visibleNodeIds };
-}
-
-function edgeAggregationCellSize(zoom: number): number {
-  if (zoom >= 11.5) return 0;
-  if (zoom >= 10) return 18;
-  if (zoom >= 8.5) return 28;
-  if (zoom >= 7) return 40;
-  return 56;
-}
-
-function aggregateGraphFeaturesForZoom(
-  map: maplibregl.Map,
-  features: GeoJSON.Feature[],
-): GeoJSON.Feature[] {
-  const cellSize = edgeAggregationCellSize(map.getZoom());
-  if (cellSize <= 0) return features;
-
-  const labelsByLineId = new Map<string, GeoJSON.Feature<GeoJSON.Point>>();
-  const passthrough: GeoJSON.Feature[] = [];
-  const graphLines: GeoJSON.Feature<GeoJSON.LineString>[] = [];
-
-  for (const feature of features) {
-    const kind = String(feature.properties?.kind || '').trim();
-    if (kind === 'label' && typeof feature.id === 'string' && feature.id.endsWith(':label')) {
-      labelsByLineId.set(feature.id.slice(0, -6), feature as GeoJSON.Feature<GeoJSON.Point>);
-      continue;
-    }
-    if (kind === 'primary' || kind === 'indirect' || kind === 'cluster') {
-      if (feature.geometry?.type === 'LineString') graphLines.push(feature as GeoJSON.Feature<GeoJSON.LineString>);
-      continue;
-    }
-    passthrough.push(feature);
-  }
-
-  const grouped = new Map<string, GeoJSON.Feature<GeoJSON.LineString>[]>();
-  const lineScore = (feature: GeoJSON.Feature<GeoJSON.LineString>): number => {
-    const width = Number(feature.properties?.baseWidth) || 0;
-    const opacity = Number(feature.properties?.baseOpacity) || 0;
-    const hop = Number(feature.properties?.hop) || 0;
-    const renderPriority = Number(feature.properties?.renderPriority) || 0;
-    return renderPriority * 10 + width * 10 + opacity * 6 + hop * 2;
-  };
-
-  for (const feature of graphLines) {
-    const coords = feature.geometry.coordinates as [number, number][];
-    if (coords.length < 2) {
-      passthrough.push(feature);
-      continue;
-    }
-    const kind = String(feature.properties?.kind || '').trim();
-    const channel = String(feature.properties?.channel || '').trim();
-    const start = map.project({ lng: coords[0][0], lat: coords[0][1] });
-    const end = map.project({ lng: coords[coords.length - 1][0], lat: coords[coords.length - 1][1] });
-    const sx = Math.round(start.x / cellSize);
-    const sy = Math.round(start.y / cellSize);
-    const ex = Math.round(end.x / cellSize);
-    const ey = Math.round(end.y / cellSize);
-    const key = `${channel}:${kind}:${sx}:${sy}:${ex}:${ey}`;
-    if (!grouped.has(key)) grouped.set(key, []);
-    grouped.get(key)!.push(feature);
-  }
-
-  const out: GeoJSON.Feature[] = [...passthrough];
-  for (const group of grouped.values()) {
-    const representative = [...group].sort((left, right) => lineScore(right) - lineScore(left))[0];
-    const label = representative.id != null ? labelsByLineId.get(String(representative.id)) : undefined;
-    if (group.length === 1) {
-      out.push(representative);
-      if (label) out.push(label);
-      continue;
-    }
-
-    const merged = {
-      ...representative,
-      properties: {
-        ...(representative.properties || {}),
-        baseWidth: clamp((Number(representative.properties?.baseWidth) || 1) + Math.min(1.6, Math.log2(group.length + 1) * 0.45), 1, 6),
-        baseOpacity: clamp((Number(representative.properties?.baseOpacity) || 0.5) + Math.min(0.14, group.length * 0.025), 0.2, 0.98),
-        glowOpacity: clamp((Number(representative.properties?.glowOpacity) || 0.08) + Math.min(0.04, group.length * 0.01), 0.04, 0.3),
-      },
-    } as GeoJSON.Feature<GeoJSON.LineString>;
-    const kind = String(representative.properties?.kind || '').trim();
-    if (kind === 'indirect') {
-      const starts = group.map((feature) => feature.geometry.coordinates[0] as [number, number]);
-      const ends = group.map((feature) => feature.geometry.coordinates[feature.geometry.coordinates.length - 1] as [number, number]);
-      const avg = (points: [number, number][]): [number, number] => [
-        points.reduce((sum, point) => sum + point[0], 0) / points.length,
-        points.reduce((sum, point) => sum + point[1], 0) / points.length,
-      ];
-      const start = avg(starts);
-      const end = avg(ends);
-      const distanceKm = approximateDistanceKm(start[0], start[1], end[0], end[1]);
-      merged.geometry = {
-        type: 'LineString',
-        coordinates: gentleArcPoints(start, end, `merged:${String(representative.id || 'indirect')}`, distanceKm),
-      };
-    }
-    out.push(merged);
-
-    if (label) {
-      const mergedLabel = {
-        ...label,
-        geometry: kind === 'indirect'
-          ? { type: 'Point', coordinates: linePointAt((merged.geometry as GeoJSON.LineString).coordinates as [number, number][], 0.18) }
-          : label.geometry,
-        properties: {
-          ...(label.properties || {}),
-          labelText: representative.properties?.channel === 'supply_path'
-            ? `Supply routes x${group.length}`
-            : kind === 'cluster'
-              ? `Cluster of ${group.length}`
-              : `Towards ${group.length} nearby nodes`,
-        },
-      } as GeoJSON.Feature<GeoJSON.Point>;
-      out.push(mergedLabel);
-    }
-  }
-
-  return out;
 }
 
 function fragmentToGeoObject(
@@ -1556,6 +1207,17 @@ function featureEndpointRefs(feature: GeoJSON.Feature): string[] {
     ? feature.properties.endpointPathRefs.map((value: unknown) => `path:${String(value || '').trim()}`).filter(Boolean)
     : [];
   return [...nodeIds, ...pathRefs];
+}
+
+function featureBadgeEndpointRefs(feature: GeoJSON.Feature): string[] {
+  const nodeIds = Array.isArray(feature.properties?.badgeEndpointNodeIds)
+    ? feature.properties.badgeEndpointNodeIds.map((value: unknown) => `node:${String(value || '').trim()}`).filter(Boolean)
+    : [];
+  const pathRefs = Array.isArray(feature.properties?.badgeEndpointPathRefs)
+    ? feature.properties.badgeEndpointPathRefs.map((value: unknown) => `path:${String(value || '').trim()}`).filter(Boolean)
+    : [];
+  const refs = [...nodeIds, ...pathRefs];
+  return refs.length > 0 ? refs : featureEndpointRefs(feature);
 }
 
 function buildEndpointFeatureCollection(
@@ -1723,7 +1385,7 @@ function buildCorridorOverviewFeatures(
     }
     if (feature.geometry?.type !== 'LineString') continue;
     bucket.lineFeatures.push(feature as GeoJSON.Feature<GeoJSON.LineString>);
-    featureEndpointRefs(feature).forEach((key) => bucket.endpointKeys.add(key));
+    featureBadgeEndpointRefs(feature).forEach((key) => bucket.endpointKeys.add(key));
   }
 
   const overview: GeoJSON.Feature[] = [];
@@ -1738,10 +1400,10 @@ function buildCorridorOverviewFeatures(
     if (bucket.lineFeatures.length === 0) continue;
 
     const anchorPoint = endpointObjects.length > 0
-      ? averagePoint(endpointObjects.map((object) => [object.coordinates!.lon, object.coordinates!.lat] as [number, number]))
+      ? densestClusterAnchor(endpointObjects.map((object) => [object.coordinates!.lon, object.coordinates!.lat] as [number, number]))
       : linePointAt(bucket.lineFeatures[0].geometry.coordinates as [number, number][], 0.76);
     const corridorType = inferCorridorType(bucket.channel, bucket.labelHints);
-    const count = Math.max(endpointObjects.length, bucket.lineFeatures.length);
+    const count = endpointObjects.length > 0 ? endpointObjects.length : bucket.lineFeatures.length;
     const destinationLabel = buildCorridorDestinationLabel(endpointObjects);
     const typeLabel = corridorTypeLabel(corridorType);
     if (centerPoint) {
@@ -1953,46 +1615,108 @@ function buildSelectedCorridorBushFeatures(
     } as GeoJSON.Feature<GeoJSON.LineString>];
   }
 
-  const centroid = averagePoint(endpointEntries.map((entry) => entry.displayPoint));
-  const splitPoint = pointOnSegment(centerPoint, centroid, 0.8);
-  const features: GeoJSON.Feature[] = [{
-    id: `${corridorId}:trunk`,
-    type: 'Feature',
-    geometry: { type: 'LineString', coordinates: [centerPoint, splitPoint] },
-    properties: {
-      kind: kind === 'cluster' ? 'indirect' : kind,
-      hop,
-      color,
-      channel,
-      corridorId,
-      renderPriority: renderPriority + 2,
-      baseOpacity: clamp(baseOpacity + 0.06, 0.32, 0.96),
-      baseWidth: clamp(baseWidth + 0.5, 1.4, 6.4),
-      glowOpacity: clamp(glowOpacity + 0.03, 0.03, 0.28),
-    },
-  } as GeoJSON.Feature<GeoJSON.LineString>];
+  const clusterLinkKm = estimatePointClusterLinkKm(endpointEntries.map((entry) => entry.anchorPoint));
+  const endpointClusters = clusterPointEntriesByDistance(
+    endpointEntries.map((entry) => ({ ...entry, point: entry.anchorPoint })),
+    clusterLinkKm,
+  )
+    .map((cluster) => cluster.map(({ point: _point, ...entry }) => entry))
+    .sort((left, right) => right.length - left.length);
+  const features: GeoJSON.Feature[] = [];
 
-  for (const endpoint of endpointEntries) {
-    const midpoint = lerpPoint(splitPoint, endpoint.displayPoint, 0.5);
-    const control = lerpPoint(midpoint, centroid, 0.58);
+  endpointClusters.forEach((cluster, clusterIndex) => {
+    if (cluster.length === 1) {
+      const endpoint = cluster[0]!;
+      const distanceKm = approximateDistanceKm(centerPoint[0], centerPoint[1], endpoint.displayPoint[0], endpoint.displayPoint[1]);
+      const directCoords = kind === 'primary' && channel !== 'propagation'
+        ? [centerPoint, endpoint.displayPoint]
+        : gentleArcPoints(centerPoint, endpoint.displayPoint, `${corridorId}:${endpoint.key}:cluster:${clusterIndex}`, distanceKm);
+      features.push({
+        id: `${corridorId}:direct:${clusterIndex}:${endpoint.key}`,
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: directCoords },
+        properties: {
+          kind,
+          hop,
+          color,
+          channel,
+          corridorId,
+          endpointNodeIds: endpoint.key.startsWith('node:') ? [endpoint.key.slice(5)] : [],
+          endpointPathRefs: endpoint.key.startsWith('path:') ? [endpoint.key.slice(5)] : [],
+          renderPriority,
+          baseOpacity,
+          baseWidth,
+          glowOpacity,
+        },
+      } as GeoJSON.Feature<GeoJSON.LineString>);
+      return;
+    }
+
+    const clusterAnchor = densestClusterAnchor(cluster.map((entry) => entry.displayPoint));
+    const splitPoint = pointOnSegment(centerPoint, clusterAnchor, 0.8);
     features.push({
-      id: `${corridorId}:branch:${endpoint.key}`,
+      id: `${corridorId}:trunk:${clusterIndex}`,
       type: 'Feature',
-      geometry: { type: 'LineString', coordinates: quadraticCurvePoints(splitPoint, endpoint.displayPoint, control) },
+      geometry: { type: 'LineString', coordinates: [centerPoint, splitPoint] },
       properties: {
-        kind: 'indirect',
+        kind: kind === 'cluster' ? 'indirect' : kind,
         hop,
         color,
         channel,
         corridorId,
-        endpointNodeIds: endpoint.key.startsWith('node:') ? [endpoint.key.slice(5)] : [],
-        endpointPathRefs: endpoint.key.startsWith('path:') ? [endpoint.key.slice(5)] : [],
-        renderPriority,
-        baseOpacity: clamp(baseOpacity - 0.08, 0.24, 0.88),
-        baseWidth: clamp(baseWidth * 0.78, 0.9, 4.4),
-        glowOpacity: clamp(glowOpacity * 0.7, 0.02, 0.16),
+        renderPriority: renderPriority + 2,
+        baseOpacity: clamp(baseOpacity + 0.06, 0.32, 0.96),
+        baseWidth: clamp(baseWidth + 0.5, 1.4, 6.4),
+        glowOpacity: clamp(glowOpacity + 0.03, 0.03, 0.28),
       },
     } as GeoJSON.Feature<GeoJSON.LineString>);
+
+    for (const endpoint of cluster) {
+      const midpoint = lerpPoint(splitPoint, endpoint.displayPoint, 0.5);
+      const control = lerpPoint(midpoint, clusterAnchor, 0.58);
+      features.push({
+        id: `${corridorId}:branch:${clusterIndex}:${endpoint.key}`,
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: quadraticCurvePoints(splitPoint, endpoint.displayPoint, control) },
+        properties: {
+          kind: 'indirect',
+          hop,
+          color,
+          channel,
+          corridorId,
+          endpointNodeIds: endpoint.key.startsWith('node:') ? [endpoint.key.slice(5)] : [],
+          endpointPathRefs: endpoint.key.startsWith('path:') ? [endpoint.key.slice(5)] : [],
+          renderPriority,
+          baseOpacity: clamp(baseOpacity - 0.08, 0.24, 0.88),
+          baseWidth: clamp(baseWidth * 0.78, 0.9, 4.4),
+          glowOpacity: clamp(glowOpacity * 0.7, 0.02, 0.16),
+        },
+      } as GeoJSON.Feature<GeoJSON.LineString>);
+    }
+  });
+
+  if (features.length === 0) {
+    for (const endpoint of endpointEntries) {
+      const distanceKm = approximateDistanceKm(centerPoint[0], centerPoint[1], endpoint.displayPoint[0], endpoint.displayPoint[1]);
+      features.push({
+        id: `${corridorId}:fallback:${endpoint.key}`,
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: gentleArcPoints(centerPoint, endpoint.displayPoint, `${corridorId}:${endpoint.key}:fallback`, distanceKm) },
+        properties: {
+          kind,
+          hop,
+          color,
+          channel,
+          corridorId,
+          endpointNodeIds: endpoint.key.startsWith('node:') ? [endpoint.key.slice(5)] : [],
+          endpointPathRefs: endpoint.key.startsWith('path:') ? [endpoint.key.slice(5)] : [],
+          renderPriority,
+          baseOpacity,
+          baseWidth,
+          glowOpacity,
+        },
+      } as GeoJSON.Feature<GeoJSON.LineString>);
+    }
   }
   return features;
 }
@@ -2076,15 +1800,15 @@ function buildSelectedCorridorFieldMetrics(
   const avgNearestKm = nearestSamples.length > 0
     ? nearestSamples.reduce((sum, value) => sum + value, 0) / nearestSamples.length
     : Math.max(maxSpanKm * 0.55, 24);
-  const baseRadiusKm = clamp(Math.max(avgNearestKm * 0.52, maxSpanKm * 0.18, 20), 16, 180);
-  const pairLimitKm = Math.max(baseRadiusKm * 2.4, avgNearestKm * 1.18, 90);
+  const baseRadiusKm = clamp(Math.max(avgNearestKm * 0.68, maxSpanKm * 0.24, 26), 22, 220);
+  const pairLimitKm = Math.max(baseRadiusKm * 2.9, avgNearestKm * 1.35, 120);
 
   const nodes = rawNodes.map((node, index) => {
     const nearestKm = Number.isFinite(nearestDistances[index]) ? nearestDistances[index] : avgNearestKm;
     return {
       ...node,
-      radiusKm: clamp(baseRadiusKm * 0.84 + nearestKm * 0.16, 18, baseRadiusKm * 1.12),
-      weight: clamp(0.8 + (nearestKm / Math.max(avgNearestKm, 1)) * 0.08, 0.8, 0.96),
+      radiusKm: clamp(baseRadiusKm * 0.96 + nearestKm * 0.22, 24, baseRadiusKm * 1.28),
+      weight: clamp(0.86 + (nearestKm / Math.max(avgNearestKm, 1)) * 0.1, 0.86, 1.04),
     };
   });
 
@@ -2096,8 +1820,8 @@ function buildSelectedCorridorFieldMetrics(
       bridges.push({
         x: (nodes[index].x + nodes[inner].x) / 2,
         y: (nodes[index].y + nodes[inner].y) / 2,
-        radiusKm: clamp(distanceKm * 0.52, 14, baseRadiusKm * 0.94),
-        weight: clamp(0.12 + (1 - distanceKm / pairLimitKm) * 0.16, 0.12, 0.28),
+        radiusKm: clamp(distanceKm * 0.62, 18, baseRadiusKm * 1.12),
+        weight: clamp(0.16 + (1 - distanceKm / pairLimitKm) * 0.2, 0.16, 0.34),
       });
     }
   }
@@ -2106,15 +1830,15 @@ function buildSelectedCorridorFieldMetrics(
     ...nodes.map((node) => ({ x: node.x, y: node.y, radiusKm: node.radiusKm })),
     ...bridges.map((bridge) => ({ x: bridge.x, y: bridge.y, radiusKm: bridge.radiusKm })),
   ];
-  const minX = Math.min(...allLobes.map((entry) => entry.x - entry.radiusKm * 1.12));
-  const maxX = Math.max(...allLobes.map((entry) => entry.x + entry.radiusKm * 1.12));
-  const minY = Math.min(...allLobes.map((entry) => entry.y - entry.radiusKm * 1.12));
-  const maxY = Math.max(...allLobes.map((entry) => entry.y + entry.radiusKm * 1.12));
+  const minX = Math.min(...allLobes.map((entry) => entry.x - entry.radiusKm * 1.34));
+  const maxX = Math.max(...allLobes.map((entry) => entry.x + entry.radiusKm * 1.34));
+  const minY = Math.min(...allLobes.map((entry) => entry.y - entry.radiusKm * 1.34));
+  const maxY = Math.max(...allLobes.map((entry) => entry.y + entry.radiusKm * 1.34));
 
   return {
     centerLat,
     centerLon,
-    threshold: nodes.length >= 6 ? 0.22 : nodes.length >= 4 ? 0.24 : 0.26,
+    threshold: nodes.length >= 6 ? 0.19 : nodes.length >= 4 ? 0.21 : 0.23,
     minX,
     maxX,
     minY,
@@ -2151,7 +1875,7 @@ function buildSelectedCorridorFieldFeatures(
   if (!metrics) return [];
 
   const spanKm = Math.max(metrics.maxX - metrics.minX, metrics.maxY - metrics.minY);
-  const cellKm = clamp(spanKm * 0.042, 5, 16);
+  const cellKm = clamp(spanKm * 0.045, 5, 18);
   const baseColor = theme === 'dark' ? '#4b5563' : '#475569';
   const accentColor = theme === 'dark' ? '#94a3b8' : '#64748b';
   const out: GeoJSON.Feature[] = [];
@@ -2190,9 +1914,9 @@ function buildSelectedCorridorFieldFeatures(
             kind: 'corridor-field',
             corridorId,
             color: baseColor,
-            fillOpacity: (theme === 'dark' ? 0.044 : 0.035) * (0.54 + edgeFactor * 1.22),
+            fillOpacity: (theme === 'dark' ? 0.052 : 0.04) * (0.62 + edgeFactor * 1.3),
             accentColor,
-            accentOpacity: (theme === 'dark' ? 0.024 : 0.018) * Math.pow(edgeFactor, 1.08) * 1.22,
+            accentOpacity: (theme === 'dark' ? 0.03 : 0.022) * Math.pow(edgeFactor, 1.04) * 1.3,
           },
         } as GeoJSON.Feature<GeoJSON.Polygon>);
       }
@@ -2222,42 +1946,62 @@ function buildSelectedCorridorMutedObjectIds(
     const lon = object.coordinates?.lon;
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
     const local = toLocalKm(metrics.centerLat, metrics.centerLon, lat!, lon!);
-    if (local.x < metrics.minX || local.x > metrics.maxX || local.y < metrics.minY || local.y > metrics.maxY) continue;
+    const boundsPadKm = Math.max(
+      20,
+      ...metrics.nodes.map((node) => node.radiusKm * 0.28),
+      ...metrics.bridges.map((bridge) => bridge.radiusKm * 0.22),
+    );
+    if (
+      local.x < metrics.minX - boundsPadKm
+      || local.x > metrics.maxX + boundsPadKm
+      || local.y < metrics.minY - boundsPadKm
+      || local.y > metrics.maxY + boundsPadKm
+    ) continue;
     const strength = evaluateSelectedCorridorFieldStrength(metrics, local);
-    if (strength >= metrics.threshold * 0.94) muted.add(object.id);
+    if (strength >= metrics.threshold * 0.82) muted.add(object.id);
   }
   return Array.from(muted);
 }
 
-function deriveNodeDepths(centerId: string, edges: RawDependencyEdge[]): {
-  depths: Map<string, number>;
-  parents: Map<string, string>;
-} {
-  const adjacency = new Map<string, Set<string>>();
-  const link = (from: string, to: string) => {
-    if (!adjacency.has(from)) adjacency.set(from, new Set());
-    adjacency.get(from)!.add(to);
-  };
-  for (const edge of edges) {
-    link(edge.sourceId, edge.targetId);
-    link(edge.targetId, edge.sourceId);
-  }
+function buildOverviewCorridorMutedObjectIds(
+  map: maplibregl.Map,
+  corridorFeatures: GeoJSON.Feature[],
+  objects: GeoObject[],
+  selectedObjectId: string | null,
+): string[] {
+  const badges = corridorFeatures
+    .filter((feature) => String(feature.properties?.kind || '').trim() === 'corridor' && feature.geometry?.type === 'Point')
+    .map((feature) => {
+      const geometry = feature.geometry;
+      const coordinates = geometry?.type === 'Point'
+        ? geometry.coordinates as [number, number]
+        : undefined;
+      if (!coordinates || coordinates.length < 2) return null;
+      const projected = map.project({ lng: coordinates[0], lat: coordinates[1] });
+      const corridorRadius = Number(feature.properties?.corridorRadius) || 12;
+      return {
+        x: projected.x,
+        y: projected.y,
+        radiusPx: corridorRadius * 5.2 + 54,
+      };
+    })
+    .filter((entry): entry is { x: number; y: number; radiusPx: number } => Boolean(entry));
+  if (badges.length === 0) return [];
 
-  const depths = new Map<string, number>([[centerId, 0]]);
-  const parents = new Map<string, string>();
-  const queue = [centerId];
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    const currentDepth = depths.get(current) ?? 0;
-    if (currentDepth >= MAX_HOPS) continue;
-    for (const next of adjacency.get(current) || []) {
-      if (depths.has(next)) continue;
-      depths.set(next, currentDepth + 1);
-      parents.set(next, current);
-      queue.push(next);
-    }
+  const muted = new Set<string>();
+  for (const object of objects) {
+    if (!object.id || object.id === selectedObjectId) continue;
+    const lat = object.coordinates?.lat;
+    const lon = object.coordinates?.lon;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    const projected = map.project({ lng: lon!, lat: lat! });
+    const insideBadgeZone = badges.some((badge) => {
+      const distancePx = Math.hypot(projected.x - badge.x, projected.y - badge.y);
+      return distancePx <= badge.radiusPx;
+    });
+    if (insideBadgeZone) muted.add(object.id);
   }
-  return { depths, parents };
+  return Array.from(muted);
 }
 
 function canAccessMapStyle(map: maplibregl.Map): boolean {
@@ -2266,500 +2010,6 @@ function canAccessMapStyle(map: maplibregl.Map): boolean {
   } catch {
     return false;
   }
-}
-
-function deriveBranchRootId(centerId: string, nodeId: string, parents: Map<string, string>): string {
-  let current = nodeId;
-  let parent = parents.get(current);
-  while (parent && parent !== centerId) {
-    current = parent;
-    parent = parents.get(current);
-  }
-  return current;
-}
-
-function buildParentLinkFamilies(centerId: string, rawEdges: RawDependencyEdge[], parents: Map<string, string>): Map<string, EdgeFamily> {
-  const byChild = new Map<string, { family: EdgeFamily; priority: number }>();
-  for (const edge of rawEdges) {
-    const sourceParent = parents.get(edge.sourceId);
-    const targetParent = parents.get(edge.targetId);
-    const family = edgeFamily(edge);
-    const priority = edgePriority(edge);
-    if (sourceParent === edge.targetId) {
-      const prev = byChild.get(edge.sourceId);
-      if (!prev || priority > prev.priority) {
-        byChild.set(edge.sourceId, { family, priority });
-      }
-    }
-    if (targetParent === edge.sourceId) {
-      const prev = byChild.get(edge.targetId);
-      if (!prev || priority > prev.priority) {
-        byChild.set(edge.targetId, { family, priority });
-      }
-    }
-  }
-  if (!byChild.has(centerId)) {
-    byChild.set(centerId, { family: 'other', priority: 0 });
-  }
-  return new Map(Array.from(byChild.entries()).map(([key, value]) => [key, value.family]));
-}
-
-function isSemanticBridge(parentFamily: EdgeFamily | null, nextFamily: EdgeFamily): boolean {
-  if (!parentFamily) return false;
-  if (parentFamily === nextFamily) return true;
-  if ((parentFamily === 'supply' || parentFamily === 'control' || parentFamily === 'risk') && (nextFamily === 'location' || nextFamily === 'market')) {
-    return true;
-  }
-  if ((parentFamily === 'location' || parentFamily === 'market') && (nextFamily === 'supply' || nextFamily === 'control' || nextFamily === 'risk')) {
-    return true;
-  }
-  if (nextFamily === 'influence' && (parentFamily === 'supply' || parentFamily === 'control' || parentFamily === 'risk')) {
-    return true;
-  }
-  return false;
-}
-
-function continuationScoreForCandidate(
-  type: string,
-  family: EdgeFamily,
-  hop: 1 | 2 | 3,
-  distanceKm: number,
-  parentFamily: EdgeFamily | null,
-  rootFamily: EdgeFamily | null,
-): number {
-  const priority = edgePriority(type);
-  let score = priority;
-  if (parentFamily && family === parentFamily) score += 28;
-  if (rootFamily && family === rootFamily) score += 16;
-  if (isSemanticBridge(parentFamily, family)) score += 18;
-  if (isSemanticBridge(rootFamily, family)) score += 10;
-  if (family === 'location') score += hop === 2 ? 8 : 3;
-  if (family === 'market') score += hop === 2 ? 7 : 3;
-  if (family === 'influence') score += 6;
-  score -= hop === 2 ? distanceKm / 95 : distanceKm / 70;
-  if (hop === 3 && family === 'location') score -= 8;
-  if (hop === 3 && family === 'social') score -= 6;
-  return score;
-}
-
-function dedupeBestByPair<T extends SelectedTraceEdge | RenderDependencyEdge>(edges: T[], scoreFor: (edge: T) => number): T[] {
-  const byPair = new Map<string, T>();
-  for (const edge of edges) {
-    const pairKey = edge.pairKey;
-    const existing = byPair.get(pairKey);
-    if (!existing || scoreFor(edge) > scoreFor(existing)) {
-      byPair.set(pairKey, edge);
-    }
-  }
-  return Array.from(byPair.values());
-}
-
-function buildSelectedTraceEdges(
-  centerId: string,
-  rawEdges: RawDependencyEdge[],
-  idToCoords: Map<string, { lon: number; lat: number }>,
-): SelectedTraceEdge[] {
-  const { depths, parents } = deriveNodeDepths(centerId, rawEdges);
-  const parentLinkFamilies = buildParentLinkFamilies(centerId, rawEdges, parents);
-  const hop1Candidates: SelectedTraceEdge[] = [];
-  const hop2Candidates: SelectedTraceEdge[] = [];
-  const hop3Candidates: SelectedTraceEdge[] = [];
-
-  for (const edge of rawEdges) {
-    const sourceDepth = depths.get(edge.sourceId);
-    const targetDepth = depths.get(edge.targetId);
-    if (sourceDepth == null || targetDepth == null) continue;
-
-    const minDepth = Math.min(sourceDepth, targetDepth);
-    const maxDepth = Math.max(sourceDepth, targetDepth);
-    if (maxDepth < 1 || maxDepth > MAX_HOPS) continue;
-
-    const sourceCoords = idToCoords.get(edge.sourceId) ?? null;
-    const targetCoords = idToCoords.get(edge.targetId) ?? null;
-
-    if (maxDepth - minDepth > 1) continue;
-    if (maxDepth > 1) {
-      const deeperId = sourceDepth > targetDepth ? edge.sourceId : edge.targetId;
-      const shallowerId = deeperId === edge.sourceId ? edge.targetId : edge.sourceId;
-      if (parents.get(deeperId) !== shallowerId) continue;
-    }
-
-    const hop = maxDepth as 1 | 2 | 3;
-    const family = edgeFamily(edge);
-    const shallowerId = sourceDepth <= targetDepth ? edge.sourceId : edge.targetId;
-    const deeperId = shallowerId === edge.sourceId ? edge.targetId : edge.sourceId;
-    const branchRootId = hop === 1
-      ? (sourceDepth === 1 ? edge.sourceId : edge.targetId)
-      : deriveBranchRootId(centerId, deeperId, parents);
-    const parentFamily = hop === 1 ? null : (parentLinkFamilies.get(shallowerId) ?? null);
-    const rootFamily = hop === 1
-      ? family
-      : (parentLinkFamilies.get(branchRootId) ?? parentFamily ?? null);
-    const distanceKm = sourceCoords && targetCoords
-      ? approximateDistanceKm(
-        sourceCoords.lon,
-        sourceCoords.lat,
-        targetCoords.lon,
-        targetCoords.lat,
-      )
-      : 0;
-    const continuationScore = continuationScoreForCandidate(edge.type, family, hop, distanceKm, parentFamily, rootFamily);
-    const pairKey = stablePairKey(edge.sourceId, edge.targetId);
-    const edgeId = `${pairKey}:${edge.type}`;
-    const candidate: SelectedTraceEdge = {
-      ...edge,
-      edgeId,
-      pairKey,
-      hop,
-      minDepth,
-      family,
-      distanceKm,
-      branchRootId,
-      parentNodeId: hop === 1 ? null : shallowerId,
-      parentFamily,
-      rootFamily,
-      continuationScore,
-      sourceCoords,
-      targetCoords,
-    };
-
-    if (hop === 1) hop1Candidates.push(candidate);
-    else if (hop === 2) hop2Candidates.push(candidate);
-    else hop3Candidates.push(candidate);
-  }
-
-  const directEdges = dedupeBestByPair(hop1Candidates, (edge) => edge.continuationScore + 1000);
-
-  const groupedHop2 = new Map<string, SelectedTraceEdge[]>();
-  for (const edge of dedupeBestByPair(hop2Candidates, (candidate) => candidate.continuationScore)) {
-    const key = edge.parentNodeId || edge.branchRootId;
-    if (!groupedHop2.has(key)) groupedHop2.set(key, []);
-    groupedHop2.get(key)!.push(edge);
-  }
-  const selectedHop2: SelectedTraceEdge[] = [];
-  for (const group of groupedHop2.values()) {
-    const ranked = group.sort((left, right) => right.continuationScore - left.continuationScore);
-    const threshold = (ranked[0]?.continuationScore ?? 0) - 14;
-    ranked
-      .filter((edge, index) => index < 4 || edge.continuationScore >= threshold)
-      .slice(0, 5)
-      .forEach((edge) => selectedHop2.push(edge));
-  }
-
-  const allowedHop2Nodes = new Set(selectedHop2.map((edge) => edge.sourceId).concat(selectedHop2.map((edge) => edge.targetId)));
-  const groupedHop3 = new Map<string, SelectedTraceEdge[]>();
-  for (const edge of dedupeBestByPair(hop3Candidates, (candidate) => candidate.continuationScore)) {
-    if (edge.parentNodeId && !allowedHop2Nodes.has(edge.parentNodeId)) continue;
-    const key = edge.parentNodeId || edge.branchRootId;
-    if (!groupedHop3.has(key)) groupedHop3.set(key, []);
-    groupedHop3.get(key)!.push(edge);
-  }
-  const selectedHop3: SelectedTraceEdge[] = [];
-  for (const group of groupedHop3.values()) {
-    const ranked = group.sort((left, right) => right.continuationScore - left.continuationScore);
-    const threshold = (ranked[0]?.continuationScore ?? 0) - 10;
-    ranked
-      .filter((edge, index) => index < 2 || edge.continuationScore >= threshold)
-      .slice(0, 3)
-      .forEach((edge) => selectedHop3.push(edge));
-  }
-
-  const selectedEdges = [...directEdges, ...selectedHop2, ...selectedHop3].sort((left, right) => {
-    if (left.hop !== right.hop) return left.hop - right.hop;
-    return right.continuationScore - left.continuationScore;
-  });
-
-  if (selectedEdges.length > 0) return selectedEdges;
-
-  const broadFallback = dedupeBestByPair(
-    [...hop1Candidates, ...hop2Candidates, ...hop3Candidates],
-    (edge) => edge.continuationScore - edge.hop * 10,
-  )
-    .sort((left, right) => {
-      if (left.hop !== right.hop) return left.hop - right.hop;
-      return right.continuationScore - left.continuationScore;
-    })
-    .slice(0, 16);
-
-  return broadFallback;
-}
-
-function buildRenderableEdges(centerId: string, edges: SelectedTraceEdge[], theme: ThemeMode): RenderDependencyEdge[] {
-  const nodeLinkById = new Map<string, SelectedTraceEdge>();
-  const childCounts = new Map<string, number>();
-
-  for (const edge of edges) {
-    if (edge.hop === 1 && edge.sourceId !== centerId && edge.targetId !== centerId) continue;
-    const deeperNodeId = edge.hop === 1
-      ? (edge.sourceId === centerId ? edge.targetId : edge.sourceId)
-      : (edge.parentNodeId === edge.sourceId ? edge.targetId : edge.sourceId);
-    const existing = nodeLinkById.get(deeperNodeId);
-    if (!existing || edge.continuationScore > existing.continuationScore) {
-      nodeLinkById.set(deeperNodeId, edge);
-    }
-    const parentId = edge.hop === 1 ? null : edge.parentNodeId;
-    if (parentId) {
-      childCounts.set(parentId, (childCounts.get(parentId) || 0) + 1);
-    }
-  }
-
-  const routes: TraceRoute[] = [];
-  for (const [nodeId, edge] of nodeLinkById.entries()) {
-    const hasChildren = (childCounts.get(nodeId) || 0) > 0;
-    if (hasChildren) continue;
-
-    const pathEdges: SelectedTraceEdge[] = [];
-    let currentId = nodeId;
-    while (true) {
-      const currentEdge = nodeLinkById.get(currentId);
-      if (!currentEdge) break;
-      pathEdges.push(currentEdge);
-      currentId = currentEdge.hop === 1 ? '' : String(currentEdge.parentNodeId || '').trim();
-      if (!currentId) break;
-    }
-
-    const orderedEdges = [...pathEdges].reverse();
-    const points: [number, number][] = [];
-    let invalid = false;
-    for (const pathEdge of orderedEdges) {
-      if (pathEdge.hop === 1) {
-        if (!pathEdge.sourceCoords || !pathEdge.targetCoords) {
-          invalid = true;
-          break;
-        }
-        if (pathEdge.sourceId !== centerId && pathEdge.targetId !== centerId) {
-          invalid = true;
-          break;
-        }
-        const start = pathEdge.sourceId === centerId ? pathEdge.sourceCoords : pathEdge.targetCoords;
-        const end = pathEdge.sourceId === centerId ? pathEdge.targetCoords : pathEdge.sourceCoords;
-        if (points.length === 0) points.push([start.lon, start.lat]);
-        points.push([end.lon, end.lat]);
-        continue;
-      }
-
-      const parentId = String(pathEdge.parentNodeId || '').trim();
-      const parentCoords = parentId === pathEdge.sourceId ? pathEdge.sourceCoords : pathEdge.targetCoords;
-      const childCoords = parentId === pathEdge.sourceId ? pathEdge.targetCoords : pathEdge.sourceCoords;
-      if (!parentCoords || !childCoords) {
-        invalid = true;
-        break;
-      }
-      if (points.length === 0) points.push([parentCoords.lon, parentCoords.lat]);
-      points.push([childCoords.lon, childCoords.lat]);
-    }
-    if (invalid || points.length < 2) continue;
-
-    const deepestEdge = orderedEdges[orderedEdges.length - 1];
-    const distanceFactor = deepestEdge.hop === 1
-      ? 1
-      : deepestEdge.hop === 2
-        ? clamp(1.1 - deepestEdge.distanceKm / 3600, 0.62, 1)
-        : clamp(1 - deepestEdge.distanceKm / 3000, 0.48, 0.84);
-    const familyWeight = FAMILY_VISUAL_WEIGHT[deepestEdge.family];
-    const baseOpacity = clamp(
-      (deepestEdge.hop === 1 ? 0.92 : deepestEdge.hop === 2 ? 0.68 : 0.48) * distanceFactor * familyWeight,
-      deepestEdge.hop === 1 ? 0.66 : deepestEdge.hop === 2 ? 0.38 : 0.24,
-      0.96,
-    );
-    const baseWidth = clamp(
-      (deepestEdge.hop === 1 ? 2.15 : deepestEdge.hop === 2 ? 1.85 : 1.48)
-        * (0.92 + distanceFactor * 0.18)
-        * Math.max(0.92, familyWeight),
-      deepestEdge.hop === 1 ? 1.85 : deepestEdge.hop === 2 ? 1.4 : 1.12,
-      deepestEdge.hop === 1 ? 2.55 : deepestEdge.hop === 2 ? 2.15 : 1.68,
-    );
-
-    routes.push({
-      routeId: `route:${nodeId}:${deepestEdge.type}`,
-      targetNodeId: nodeId,
-      branchRootId: deepestEdge.branchRootId,
-      hop: deepestEdge.hop,
-      type: deepestEdge.type,
-      family: deepestEdge.family,
-      continuationScore: deepestEdge.continuationScore,
-      color: routeStrokeColor(theme, deepestEdge.hop),
-      rawCoordinates: points,
-      coordinates: points,
-      baseOpacity,
-      baseWidth,
-      glowOpacity: clamp(baseOpacity * (deepestEdge.hop === 1 ? 0.22 : deepestEdge.hop === 2 ? 0.18 : 0.15), 0.06, 0.22),
-    });
-  }
-
-  const dedupedRoutes = new Map<string, TraceRoute>();
-  for (const route of routes) {
-    const routeKey = `${route.targetNodeId}:${route.hop}`;
-    const existing = dedupedRoutes.get(routeKey);
-    if (!existing || route.continuationScore > existing.continuationScore) {
-      dedupedRoutes.set(routeKey, route);
-    }
-  }
-
-  const groupedRoutes = new Map<string, TraceRoute[]>();
-  for (const route of dedupedRoutes.values()) {
-    const source = route.coordinates[0];
-    const next = route.coordinates[1] || route.coordinates[route.coordinates.length - 1];
-    const angle = Math.atan2(next[1] - source[1], next[0] - source[0]);
-    const angleBucket = Math.round(angle / (Math.PI / 6));
-    const groupKey = `corridor:${angleBucket}`;
-    if (!groupedRoutes.has(groupKey)) groupedRoutes.set(groupKey, []);
-    groupedRoutes.get(groupKey)!.push(route);
-  }
-
-  const reducedRoutes: TraceRoute[] = [];
-  for (const group of groupedRoutes.values()) {
-    group.sort((left, right) => {
-      if (left.hop !== right.hop) return left.hop - right.hop;
-      return left.targetNodeId.localeCompare(right.targetNodeId);
-    });
-    if (group.length === 1) {
-      const only = group[0];
-      only.coordinates = bundleRouteCoordinates(only.rawCoordinates, only.routeId, only.hop, 0, 1);
-      reducedRoutes.push(only);
-      continue;
-    }
-
-    const representative = [...group].sort((left, right) => {
-      if (left.hop !== right.hop) return right.hop - left.hop;
-      return right.continuationScore - left.continuationScore;
-    })[0];
-    representative.coordinates = bundleRouteCoordinates(representative.rawCoordinates, representative.routeId, representative.hop, 0, 1);
-    representative.baseWidth = clamp(representative.baseWidth + Math.log2(group.length + 1) * 0.55, representative.baseWidth, representative.baseWidth + 1.8);
-    representative.baseOpacity = clamp(representative.baseOpacity + Math.min(0.16, group.length * 0.035), representative.baseOpacity, 0.96);
-    representative.glowOpacity = clamp(representative.glowOpacity + Math.min(0.06, group.length * 0.015), representative.glowOpacity, 0.28);
-    representative.color = routeStrokeColor(theme, representative.hop, group.length);
-    reducedRoutes.push(representative);
-  }
-
-  const visibleRoutes = reducedRoutes
-    .sort((left, right) => {
-      const leftScore = left.continuationScore + left.hop * 18 + left.baseWidth * 6;
-      const rightScore = right.continuationScore + right.hop * 18 + right.baseWidth * 6;
-      return rightScore - leftScore;
-    })
-    .slice(0, MAX_VISIBLE_CORRIDORS);
-
-  return visibleRoutes.flatMap((route) => {
-    const seedEdge = nodeLinkById.get(route.targetNodeId);
-    if (!seedEdge) return [];
-    return [{
-      ...seedEdge,
-      edgeId: route.routeId,
-      pairKey: `${route.targetNodeId}:${route.hop}`,
-      color: route.color,
-      coordinates: route.coordinates,
-      baseOpacity: route.baseOpacity,
-      baseWidth: route.baseWidth,
-      glowOpacity: route.glowOpacity,
-    }];
-  });
-}
-
-function buildPropagationFeatures(
-  centerId: string,
-  propagation: { edges?: Array<{ edgeId?: string; sourceFragmentId?: string; targetFragmentId?: string; hopsFromSource?: number }>; nodeIds?: string[] } | null | undefined,
-  idToCoords: Map<string, { lon: number; lat: number }>,
-  objectById: Map<string, TraceObjectInfo>,
-  depths: Map<string, number>,
-  theme: ThemeMode,
-  suppressedPairs: Set<string>,
-): GeoJSON.Feature[] {
-  const rawEdges = Array.isArray(propagation?.edges) ? propagation.edges : [];
-  const selected: GeoJSON.Feature[] = [];
-  const seenPairs = new Set<string>();
-  const centerCoords = idToCoords.get(centerId);
-  const radialRoutes: RadialBundleRoute[] = [];
-
-  for (const edge of rawEdges) {
-    const sourceId = String(edge?.sourceFragmentId || '').trim();
-    const targetId = String(edge?.targetFragmentId || '').trim();
-    if (shouldSuppressConnection(sourceId, targetId, objectById)) continue;
-    const source = idToCoords.get(sourceId);
-    const target = idToCoords.get(targetId);
-    if (!source || !target) continue;
-    const sourceCanonicalPath = String(objectById.get(sourceId)?.canonicalPath || '').trim();
-    const targetCanonicalPath = String(objectById.get(targetId)?.canonicalPath || '').trim();
-    const pairKey = stablePairKey(sourceId, targetId);
-    const canonicalPairKey = sourceCanonicalPath && targetCanonicalPath
-      ? stablePairKey(sourceCanonicalPath, targetCanonicalPath)
-      : '';
-    if (suppressedPairs.has(pairKey) || (canonicalPairKey && suppressedPairs.has(canonicalPairKey))) continue;
-    if (seenPairs.has(pairKey)) continue;
-    seenPairs.add(pairKey);
-    const hop = Math.max(1, Math.min(4, Number(edge?.hopsFromSource) || 1));
-    const kind = topologyKindForNodes(centerId, sourceId, targetId, depths, hop);
-    const opacity = kind === 'primary'
-      ? clamp(theme === 'dark' ? 0.64 : 0.54, 0.2, 0.8)
-      : kind === 'indirect'
-        ? clamp(theme === 'dark' ? 0.56 : 0.46, 0.2, 0.7)
-        : clamp(theme === 'dark' ? 0.32 : 0.26, 0.16, 0.5);
-    const width = kind === 'primary'
-      ? 1.7
-      : kind === 'indirect'
-        ? 1.35
-        : 0.95;
-    const routeId = `prop:${edge?.edgeId || pairKey}`;
-    const sourceIsCenter = sourceId === centerId;
-    const targetIsCenter = targetId === centerId;
-    if (centerCoords && (sourceIsCenter || targetIsCenter)) {
-      const end = sourceIsCenter ? [target.lon, target.lat] as [number, number] : [source.lon, source.lat] as [number, number];
-      radialRoutes.push({
-        routeId,
-        targetId: sourceIsCenter ? targetId : sourceId,
-        corridorId: `prop-corridor:${sourceIsCenter ? targetId : sourceId}`,
-        endPoint: end,
-        kind,
-        color: propagationStrokeColor(theme, kind),
-        baseOpacity: opacity,
-        baseWidth: width,
-        glowOpacity: kind === 'cluster' ? 0 : clamp(opacity * 0.18, 0.03, 0.12),
-        renderPriority: kind === 'primary' ? 12 : kind === 'indirect' ? 9 : 6,
-      });
-      continue;
-    }
-    const coordinates: [number, number][] = kind === 'indirect'
-      ? arcPoints(source.lon, source.lat, target.lon, target.lat, `prop:${pairKey}`, 2, 18)
-      : [
-        [source.lon, source.lat],
-        [target.lon, target.lat],
-      ];
-    selected.push({
-      id: routeId,
-      type: 'Feature',
-      geometry: {
-        type: 'LineString',
-        coordinates,
-      },
-      properties: {
-        kind,
-        channel: 'propagation',
-        hop,
-        corridorId: `prop-corridor:${sourceIsCenter ? targetId : sourceId}`,
-        featureRole: 'overview',
-        endpointNodeIds: [sourceId, targetId],
-        sourceId,
-        targetId,
-        color: propagationStrokeColor(theme, kind),
-        baseOpacity: opacity,
-        baseWidth: width,
-        glowOpacity: kind === 'cluster' ? 0 : clamp(opacity * 0.18, 0.03, 0.12),
-        renderPriority: kind === 'primary' ? 12 : kind === 'indirect' ? 9 : 6,
-        semanticDirection: sourceId === centerId ? 'downstream' : targetId === centerId ? 'upstream' : 'context',
-      },
-    });
-  }
-
-  selected.push(...buildRadialBundleFeatures(
-    centerCoords ? [centerCoords.lon, centerCoords.lat] : null,
-    radialRoutes,
-    theme,
-    'propagation',
-    (group) => `Propagation corridor x${group.length}`,
-    { labelSingles: false, labelBundles: false },
-  ).features);
-
-  return selected;
 }
 
 function buildSupplyPathFeatures(
@@ -3078,117 +2328,211 @@ function buildSupplyPathFeatures(
   return { features, visiblePathRefs, coveredPairs, routeCount: ranked.length };
 }
 
-function buildTraceSummary(
-  edges: SelectedTraceEdge[],
-  objectById: Map<string, TraceObjectInfo>,
+function buildExplainRelationFeatures(
   centerId: string,
-  visibleEdges: number,
-  supplyRouteCount: number,
+  relations: ExplainRelation[],
+  idToCoords: Map<string, { lon: number; lat: number }>,
+  theme: ThemeMode,
+  section: 'direct' | 'context',
+): {
+  features: GeoJSON.Feature[];
+  visibleNodeIds: Set<string>;
+} {
+  const center = idToCoords.get(centerId);
+  const features: GeoJSON.Feature[] = [];
+  const visibleNodeIds = new Set<string>([centerId]);
+  if (!center) return { features, visibleNodeIds };
+
+  relations.forEach((relation, index) => {
+    const relatedCoords = idToCoords.get(relation.relatedFragmentId) || relation.relatedCoordinates || null;
+    if (!relatedCoords) return;
+    const start: [number, number] = [center.lon, center.lat];
+    const end: [number, number] = [relatedCoords.lon, relatedCoords.lat];
+    const distanceKm = approximateDistanceKm(start[0], start[1], end[0], end[1]);
+    const kind: EdgeVisualKind = section === 'direct' ? 'primary' : 'indirect';
+    const color = relationStrokeColor(theme, relation.family, relation.semanticDirection, section === 'direct');
+    const coordinates = section === 'direct' && distanceKm < 220
+      ? [start, end]
+      : gentleArcPoints(start, end, `${section}:${relation.relatedFragmentId}:${relation.type}`, distanceKm, section === 'direct' ? 14 : 18);
+    const corridorId = `${section}:${relation.relatedFragmentId}`;
+    const labelText = `${relation.relatedLabel}\n${compactMeaning(relation.businessMeaning || humanizeEdgeType(relation.type))}`;
+    features.push({
+      id: `${corridorId}:line:${index}`,
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates },
+      properties: {
+        kind,
+        hop: section === 'direct' ? 1 : 2,
+        channel: `relation_${section}`,
+        corridorId,
+        featureRole: 'overview',
+        endpointNodeIds: [relation.relatedFragmentId],
+        badgeEndpointNodeIds: [relation.relatedFragmentId],
+        sourceId: relation.sourceId,
+        targetId: relation.targetId,
+        relationType: relation.type,
+        semanticDirection: relation.semanticDirection || 'context',
+        color,
+        baseOpacity: section === 'direct' ? (theme === 'dark' ? 0.9 : 0.82) : (theme === 'dark' ? 0.68 : 0.58),
+        baseWidth: section === 'direct' ? 2.4 : 1.8,
+        glowOpacity: section === 'direct' ? 0.12 : 0.08,
+        renderPriority: section === 'direct' ? 26 : 18,
+      },
+    } as GeoJSON.Feature<GeoJSON.LineString>);
+    features.push({
+      id: `${corridorId}:label:${index}`,
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: linePointAt(coordinates, section === 'direct' ? 0.72 : 0.76) },
+      properties: {
+        kind: 'label',
+        corridorId,
+        featureRole: 'overview',
+        labelText,
+        labelColor: color,
+      },
+    } as GeoJSON.Feature<GeoJSON.Point>);
+    visibleNodeIds.add(relation.relatedFragmentId);
+  });
+
+  return { features, visibleNodeIds };
+}
+
+function buildSimplePropagationFeatures(
+  centerId: string,
+  propagation: { edges?: Array<{ edgeId?: string; sourceFragmentId?: string; targetFragmentId?: string; hopsFromSource?: number }>; nodeIds?: string[] } | null | undefined,
+  idToCoords: Map<string, { lon: number; lat: number }>,
+  objectById: Map<string, TraceObjectInfo>,
+  theme: ThemeMode,
+): GeoJSON.Feature[] {
+  const rawEdges = Array.isArray(propagation?.edges) ? propagation.edges : [];
+  const features: GeoJSON.Feature[] = [];
+  const seen = new Set<string>();
+  for (const edge of rawEdges) {
+    const sourceId = String(edge?.sourceFragmentId || '').trim();
+    const targetId = String(edge?.targetFragmentId || '').trim();
+    if (!sourceId || !targetId || shouldSuppressConnection(sourceId, targetId, objectById)) continue;
+    const pairKey = stablePairKey(sourceId, targetId);
+    if (seen.has(pairKey)) continue;
+    seen.add(pairKey);
+    const source = idToCoords.get(sourceId);
+    const target = idToCoords.get(targetId);
+    if (!source || !target) continue;
+    const hop = Math.max(1, Math.min(3, Number(edge?.hopsFromSource) || 1));
+    const kind: EdgeVisualKind = hop <= 1 ? 'primary' : hop === 2 ? 'indirect' : 'cluster';
+    const color = propagationStrokeColor(theme, kind);
+    const coords = gentleArcPoints([source.lon, source.lat], [target.lon, target.lat], `prop:${pairKey}`, approximateDistanceKm(source.lon, source.lat, target.lon, target.lat), 14);
+    features.push({
+      id: `prop:${edge?.edgeId || pairKey}`,
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: coords },
+      properties: {
+        kind,
+        hop,
+        channel: 'propagation',
+        corridorId: `prop:${pairKey}`,
+        featureRole: 'overview',
+        endpointNodeIds: [sourceId, targetId],
+        badgeEndpointNodeIds: [sourceId === centerId ? targetId : sourceId, targetId],
+        sourceId,
+        targetId,
+        semanticDirection: sourceId === centerId ? 'downstream' : targetId === centerId ? 'upstream' : 'context',
+        color,
+        baseOpacity: kind === 'primary' ? 0.5 : kind === 'indirect' ? 0.42 : 0.3,
+        baseWidth: kind === 'primary' ? 1.55 : kind === 'indirect' ? 1.25 : 0.95,
+        glowOpacity: kind === 'cluster' ? 0.02 : 0.06,
+        renderPriority: kind === 'primary' ? 12 : kind === 'indirect' ? 10 : 8,
+      },
+    } as GeoJSON.Feature<GeoJSON.LineString>);
+  }
+  return features;
+}
+
+function buildExplainSupplyPathItems(pathArtifacts: MaterializedArtifact[]): GeoEdgeTraceSummary['supplyPaths'] {
+  return [...pathArtifacts]
+    .sort((left, right) => {
+      const leftStress = left.pathStressScore ?? left.payload?.stress?.pathScore ?? 0;
+      const rightStress = right.pathStressScore ?? right.payload?.stress?.pathScore ?? 0;
+      if (leftStress !== rightStress) return rightStress - leftStress;
+      return Number(right.tracePriority || 0) - Number(left.tracePriority || 0);
+    })
+    .slice(0, 6)
+    .map((artifact) => {
+      const firstLeg = Array.isArray(artifact.payload?.legs) && artifact.payload?.legs.length > 0 ? artifact.payload.legs[0] : null;
+      const productRef = String(firstLeg?.productRef || artifact.productAxis || '').trim() || undefined;
+      const stressScore = Number(artifact.pathStressScore ?? artifact.payload?.stress?.pathScore ?? 0);
+      const title = String(artifact.displayName || '').trim()
+        || [artifact.anchorSupplier, productRef, artifact.anchorCustomer].filter(Boolean).join(' -> ')
+        || artifact.id;
+      return {
+        id: artifact.id,
+        title,
+        role: String(artifact.traceRole || '').trim() || 'path',
+        reason: String(artifact.discoveryReason || artifact.traceReason || '').trim() || 'Mapped supply path linked to this object.',
+        productRef,
+        productLabel: productRef ? humanizeCanonicalPath(productRef) : undefined,
+        stressScore,
+        legCount: Number(artifact.legCount || (Array.isArray(artifact.payload?.legs) ? artifact.payload!.legs!.length : 0) || 0),
+        isPinned: Boolean(artifact.isPinned),
+        hasBottleneck: typeof (artifact.bottleneckLegIndex ?? artifact.payload?.stress?.bottleneckLegIndex) === 'number'
+          && Number(artifact.bottleneckLegIndex ?? artifact.payload?.stress?.bottleneckLegIndex) >= 0,
+      };
+    });
+}
+
+function buildExplainTraceSummary(
+  explain: {
+    summary?: string;
+    whyItMatters?: Array<{ title: string; body: string }>;
+    directRelations?: any[];
+    contextRelations?: any[];
+  } | null | undefined,
+  directRelations: ExplainRelation[],
+  contextRelations: ExplainRelation[],
   pathArtifacts: MaterializedArtifact[],
+  visibleLineCount: number,
   propagation?: { nodeIds?: string[]; edges?: Array<unknown> } | null,
 ): GeoEdgeTraceSummary {
-  const hopCounts: Record<1 | 2 | 3, number> = { 1: 0, 2: 0, 3: 0 };
-  const familyCounts = new Map<EdgeFamily, number>();
-  const branchIds = new Set<string>();
-  const countryGroups = new Map<string, {
-    countryIso2: string | null;
-    countryName: string;
-    items: Array<{
-      objectId: string;
-      label: string;
-      type: string;
-      hop: 1 | 2 | 3;
-      relationLabel: string;
-      businessMeaning: string;
-      score: number;
-    }>;
-  }>();
-
-  for (const edge of edges) {
-    hopCounts[edge.hop] += 1;
-    familyCounts.set(edge.family, (familyCounts.get(edge.family) || 0) + 1);
-    branchIds.add(edge.branchRootId);
-
-    const targetObjectId = edge.sourceId === centerId ? edge.targetId : edge.targetId === centerId ? edge.sourceId : (
-      edge.hop === edge.minDepth ? edge.targetId : edge.sourceId
-    );
-    const targetObject = objectById.get(targetObjectId);
-    if (!targetObject || targetObject.id === centerId) continue;
-
-    const countryDisplay = getCountryDisplay(targetObject.canonicalPath);
-    const groupKey = countryDisplay.iso2 || 'unknown';
-    if (!countryGroups.has(groupKey)) {
-      countryGroups.set(groupKey, {
-        countryIso2: countryDisplay.iso2,
-        countryName: countryDisplay.name,
-        items: [],
-      });
-    }
-
-    const group = countryGroups.get(groupKey)!;
-    const score = 100 - edge.hop * 12 + edge.continuationScore;
-    const existingItem = group.items.find((item) => item.objectId === targetObject.id);
-    const nextItem = {
-      objectId: targetObject.id,
-      label: targetObject.label || humanizeCanonicalPath(targetObject.canonicalPath) || targetObject.canonicalPath,
-      type: humanizeFragmentType(targetObject.type),
-      hop: edge.hop,
-      relationLabel: humanizeEdgeType(edge.type),
-      businessMeaning: businessMeaningForEdgeType(edge),
-      score,
-    };
-    if (!existingItem) {
-      group.items.push(nextItem);
-    } else if (score > existingItem.score) {
-      Object.assign(existingItem, nextItem);
-    }
-  }
-  const pinnedPathCount = pathArtifacts.filter((artifact) => artifact.isPinned).length;
-  const discoveredPathCount = Math.max(0, pathArtifacts.length - pinnedPathCount);
-  const stressedPathCount = pathArtifacts.filter((artifact) => (artifact.pathStressScore ?? artifact.payload?.stress?.pathScore ?? 0) >= 0.58).length;
-  const bottleneckPathCount = pathArtifacts.filter((artifact) => {
-    const value = artifact.bottleneckLegIndex ?? artifact.payload?.stress?.bottleneckLegIndex;
-    return typeof value === 'number' && Number.isFinite(value) && value >= 0;
-  }).length;
-  const directPathCount = pathArtifacts.filter((artifact) => artifact.traceRole === 'direct_anchor').length;
-  const routePathCount = pathArtifacts.filter((artifact) => artifact.traceRole === 'route_overlap' || artifact.traceRole === 'route_context').length;
-  const zonePathCount = pathArtifacts.filter((artifact) => artifact.traceRole === 'zone_overlap' || artifact.traceRole === 'zone_context').length;
-  const affectedPathCount = pathArtifacts.filter((artifact) => artifact.traceRole === 'affected_zone_overlap' || artifact.traceRole === 'affected_context').length;
-
+  const supplyPaths = buildExplainSupplyPathItems(pathArtifacts);
+  const stressedSupplyPathCount = supplyPaths.filter((item) => item.stressScore >= 0.58).length;
   return {
-    totalEdges: edges.length,
-    visibleEdges,
-    supplyRouteCount,
-    hopCounts,
-    branchCount: branchIds.size,
-    pathArtifactCount: pathArtifacts.length,
-    pathLegCount: pathArtifacts.reduce((acc, artifact) => acc + (Array.isArray((artifact as any)?.payload?.legs) ? (artifact as any).payload.legs.length : 0), 0),
-    pinnedPathCount,
-    discoveredPathCount,
-    stressedPathCount,
-    bottleneckPathCount,
-    directPathCount,
-    routePathCount,
-    zonePathCount,
-    affectedPathCount,
+    summary: String(explain?.summary || '').trim() || 'No explanation available for this object yet.',
+    whyItMatters: Array.isArray(explain?.whyItMatters)
+      ? explain!.whyItMatters!
+        .map((item) => ({ title: String(item?.title || '').trim(), body: String(item?.body || '').trim() }))
+        .filter((item) => item.title && item.body)
+      : [],
+    directRelations: directRelations.map((relation) => ({
+      edgeId: relation.edgeId,
+      relatedFragmentId: relation.relatedFragmentId,
+      relatedLabel: relation.relatedLabel,
+      relatedType: relation.relatedType,
+      relatedCanonicalPath: relation.relatedCanonicalPath,
+      type: relation.type,
+      family: relation.family,
+      semanticDirection: relation.semanticDirection,
+      businessMeaning: relation.businessMeaning,
+      whyRelevant: relation.whyRelevant,
+    })),
+    contextRelations: contextRelations.map((relation) => ({
+      edgeId: relation.edgeId,
+      relatedFragmentId: relation.relatedFragmentId,
+      relatedLabel: relation.relatedLabel,
+      relatedType: relation.relatedType,
+      relatedCanonicalPath: relation.relatedCanonicalPath,
+      type: relation.type,
+      family: relation.family,
+      semanticDirection: relation.semanticDirection,
+      businessMeaning: relation.businessMeaning,
+      whyRelevant: relation.whyRelevant,
+    })),
+    supplyPaths,
     propagationNodeCount: Array.isArray(propagation?.nodeIds) ? propagation.nodeIds.length : 0,
     propagationEdgeCount: Array.isArray(propagation?.edges) ? propagation.edges.length : 0,
-    topFamilies: Array.from(familyCounts.entries())
-      .sort((left, right) => right[1] - left[1])
-      .slice(0, 3)
-      .map(([family, count]) => ({ family, count })),
-    countryHighlights: Array.from(countryGroups.values())
-      .map((group) => ({
-        countryIso2: group.countryIso2,
-        countryName: group.countryName,
-        itemCount: group.items.length,
-        items: group.items
-          .sort((left, right) => right.score - left.score)
-          .slice(0, 3)
-          .map(({ score: _score, ...item }) => item),
-      }))
-      .sort((left, right) => right.itemCount - left.itemCount)
-      .slice(0, 4),
+    visibleLineCount,
+    directCount: directRelations.length,
+    contextCount: contextRelations.length,
+    supplyPathCount: pathArtifacts.length,
+    stressedSupplyPathCount,
   };
 }
 
@@ -3237,14 +2581,19 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
       'circle-radius': [
         'case',
         ['boolean', ['get', 'corridorSelected'], false],
-        ['+', ['get', 'corridorRadius'], 8],
+        ['+', ['get', 'corridorRadius'], 6],
         ['+', ['get', 'corridorRadius'], 5],
       ],
-      'circle-color': '#f59e0b',
+      'circle-color': [
+        'case',
+        ['boolean', ['get', 'corridorSelected'], false],
+        theme === 'dark' ? '#334155' : '#cbd5e1',
+        '#f59e0b',
+      ],
       'circle-opacity': [
         'case',
         ['boolean', ['get', 'corridorSelected'], false],
-        0.22,
+        theme === 'dark' ? 0.14 : 0.1,
         ['boolean', ['get', 'corridorDimmed'], false],
         0.06,
         0.14,
@@ -3293,20 +2642,30 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
         ['+', ['get', 'corridorRadius'], 2],
         ['get', 'corridorRadius'],
       ],
-      'circle-color': theme === 'dark' ? 'rgba(44,22,2,0.92)' : 'rgba(120,53,15,0.92)',
+      'circle-color': [
+        'case',
+        ['boolean', ['get', 'corridorSelected'], false],
+        theme === 'dark' ? 'rgba(15,23,42,0.94)' : 'rgba(226,232,240,0.94)',
+        theme === 'dark' ? 'rgba(44,22,2,0.92)' : 'rgba(120,53,15,0.92)',
+      ],
       'circle-opacity': [
         'case',
         ['boolean', ['get', 'corridorSelected'], false],
-        0.98,
+        0.94,
         ['boolean', ['get', 'corridorDimmed'], false],
         0.42,
         0.88,
       ],
-      'circle-stroke-color': ['get', 'color'],
+      'circle-stroke-color': [
+        'case',
+        ['boolean', ['get', 'corridorSelected'], false],
+        theme === 'dark' ? 'rgba(251,191,36,0.92)' : 'rgba(180,83,9,0.94)',
+        ['get', 'color'],
+      ],
       'circle-stroke-opacity': [
         'case',
         ['boolean', ['get', 'corridorSelected'], false],
-        1,
+        0.92,
         ['boolean', ['get', 'corridorDimmed'], false],
         0.45,
         0.82,
@@ -3314,7 +2673,7 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
       'circle-stroke-width': [
         'case',
         ['boolean', ['get', 'corridorSelected'], false],
-        2.8,
+        2.2,
         ['boolean', ['feature-state', 'hover'], false],
         2.4,
         1.9,
@@ -3328,21 +2687,36 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
     source: SRC,
     filter: ['==', ['get', 'kind'], 'corridor'],
     layout: {
-      'text-field': '↔',
+      'text-field': [
+        'case',
+        ['boolean', ['get', 'corridorSelected'], false],
+        'o',
+        '↔',
+      ],
       'text-font': [...MAP_TEXT_FONT_STACK],
-      'text-size': 13,
+      'text-size': [
+        'case',
+        ['boolean', ['get', 'corridorSelected'], false],
+        11.5,
+        13,
+      ],
       'text-anchor': 'center',
       'text-allow-overlap': true,
       'text-ignore-placement': true,
     },
     paint: {
-      'text-color': '#fbbf24',
+      'text-color': [
+        'case',
+        ['boolean', ['get', 'corridorSelected'], false],
+        theme === 'dark' ? '#e2e8f0' : '#334155',
+        '#fbbf24',
+      ],
       'text-halo-color': theme === 'dark' ? 'rgba(2,6,23,0.9)' : 'rgba(120,53,15,0.88)',
       'text-halo-width': 0.8,
       'text-opacity': [
         'case',
         ['boolean', ['get', 'corridorSelected'], false],
-        1,
+        0.92,
         ['boolean', ['get', 'corridorDimmed'], false],
         0.46,
         0.92,
@@ -3358,7 +2732,12 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
     layout: {
       'text-field': ['get', 'labelText'],
       'text-font': [...MAP_TEXT_FONT_STACK],
-      'text-size': 11,
+      'text-size': [
+        'case',
+        ['boolean', ['get', 'corridorSelected'], false],
+        10.5,
+        11,
+      ],
       'text-offset': [0, 1.25],
       'text-anchor': 'top',
       'text-allow-overlap': true,
@@ -3366,13 +2745,23 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
       'text-max-width': 10,
     },
     paint: {
-      'text-color': theme === 'dark' ? 'rgba(241,245,249,0.96)' : 'rgba(15,23,42,0.92)',
+      'text-color': [
+        'case',
+        ['boolean', ['get', 'corridorSelected'], false],
+        theme === 'dark' ? 'rgba(251,191,36,0.9)' : 'rgba(146,64,14,0.9)',
+        theme === 'dark' ? 'rgba(241,245,249,0.96)' : 'rgba(15,23,42,0.92)',
+      ],
       'text-halo-color': theme === 'dark' ? 'rgba(2,6,23,0.94)' : 'rgba(255,255,255,0.94)',
-      'text-halo-width': 1.2,
+      'text-halo-width': [
+        'case',
+        ['boolean', ['get', 'corridorSelected'], false],
+        1,
+        1.2,
+      ],
       'text-opacity': [
         'case',
         ['boolean', ['get', 'corridorSelected'], false],
-        0.98,
+        0.82,
         ['boolean', ['get', 'corridorDimmed'], false],
         0.36,
         0.92,
@@ -3599,8 +2988,8 @@ export function useGeoEdgeLayer(
   const [traceSummary, setTraceSummary] = useState<GeoEdgeTraceSummary | null>(null);
   const [relatedPathArtifacts, setRelatedPathArtifacts] = useState<MaterializedArtifact[]>([]);
   const [mutedObjectIds, setMutedObjectIds] = useState<string[]>([]);
+  const [highlightedGatewayObjectIds, setHighlightedGatewayObjectIds] = useState<string[]>([]);
   const mountedRef = useRef(true);
-  const interactionRef = useRef<EdgeInteractionState>({ corridorId: null, endpointKey: null });
 
   useEffect(() => {
     mountedRef.current = true;
@@ -3610,9 +2999,6 @@ export function useGeoEdgeLayer(
   useEffect(() => {
     if (!map || !isReady) return;
     let hoveredEdgeId: string | number | null = null;
-    let baseFeatures: GeoJSON.Feature[] = [];
-    let baseCorridorFeatures: GeoJSON.Feature[] = [];
-    let baseEndpointEntries: Array<{ key: string; object: GeoObject; corridorIds: string[] }> = [];
 
     const clearHoveredEdge = () => {
       if (hoveredEdgeId == null) return;
@@ -3679,108 +3065,19 @@ export function useGeoEdgeLayer(
       } catch { /* style/layers may be mid-transition */ }
     };
 
-    const suppressMarkerClear = () => {
-      (map as unknown as { __suppressGeoMarkerClear?: boolean }).__suppressGeoMarkerClear = true;
-    };
-
-    const featureCorridorId = (feature: GeoJSON.Feature): string => String(feature.properties?.corridorId || '').trim();
-    const featureRole = (feature: GeoJSON.Feature): string => String(feature.properties?.featureRole || '').trim();
-    const featureHasEndpoint = (feature: GeoJSON.Feature, endpointKey: string): boolean =>
-      featureEndpointRefs(feature).includes(endpointKey);
-
-    const applyDisplayState = () => {
-      if (!canAccessMapStyle(map) || !map.getSource(SRC) || !map.getSource(ENDPOINT_SRC)) return;
-      const state = interactionRef.current;
-      const isOverview = !state.corridorId;
-      const selectedEndpointKey = state.endpointKey;
-      const corridorFeatures = baseFeatures.filter((feature) => {
-        const corridorId = featureCorridorId(feature);
-        if (isOverview) return false;
-        return corridorId === state.corridorId;
-      });
-      const corridorLineFeatures = corridorFeatures.filter((feature) => feature.geometry?.type === 'LineString');
-      const detailLineFeatures = corridorLineFeatures.filter((feature) => featureRole(feature) === 'detail');
-      const selectedLineFeatures = (selectedEndpointKey
-        ? (detailLineFeatures.length > 0 ? detailLineFeatures : corridorLineFeatures).filter((feature) => featureHasEndpoint(feature, selectedEndpointKey))
-        : (detailLineFeatures.length > 0 ? detailLineFeatures : corridorLineFeatures));
-      const selectedCorridorEntries = baseEndpointEntries.filter((entry) => {
-        if (!state.corridorId) return false;
-        if (!entry.corridorIds.includes(state.corridorId)) return false;
-        if (!state.endpointKey) return true;
-        return entry.key === state.endpointKey;
-      });
-      const spreadEntries = (!isOverview && selectedCorridorEntries.length > 0)
-        ? spreadEndpointEntries(map, selectedCorridorEntries.map(({ key, object }) => ({ key, object })))
-        : [];
-      const centerPoint = selectedObject?.coordinates
-        ? [selectedObject.coordinates.lon, selectedObject.coordinates.lat] as [number, number]
-        : null;
-      const fieldFeatures = (!isOverview && !state.endpointKey && state.corridorId)
-        ? buildSelectedCorridorFieldFeatures(spreadEntries, state.corridorId, theme)
-        : [];
-      const displayFeatures = isOverview
-        ? decorateCorridorFeatures(baseCorridorFeatures, null)
-        : [
-          ...decorateCorridorFeatures(
-            baseCorridorFeatures.filter((feature) =>
-              !(featureCorridorId(feature) === state.corridorId && String(feature.properties?.kind || '').trim() === 'corridor-guide'),
-            ),
-            state.corridorId,
-          ),
-          ...fieldFeatures,
-          ...(state.endpointKey
-            ? selectedLineFeatures
-            : buildSelectedCorridorBushFeatures(
-              centerPoint,
-              selectedLineFeatures,
-              spreadEntries,
-            )),
-        ];
-      (map.getSource(SRC) as maplibregl.GeoJSONSource).setData({
-        type: 'FeatureCollection',
-        features: displayFeatures,
-      });
-
-      (map.getSource(ENDPOINT_SRC) as maplibregl.GeoJSONSource).setData(
-        buildEndpointFeatureCollection(spreadEntries, theme),
-      );
-      setMutedObjectIds(
-        !isOverview && !state.endpointKey
-          ? buildSelectedCorridorMutedObjectIds(spreadEntries, objects, selectedObject?.id || null)
-          : [],
-      );
-      bringEndpointLayersToFront();
-      setVisibleEdgesCount(displayFeatures.filter((feature) => feature.geometry?.type === 'LineString').length);
-    };
-
-    const handleEdgeClick = (event: maplibregl.MapMouseEvent & { features?: maplibregl.MapGeoJSONFeature[] }) => {
-      const feature = event.features?.[0] as GeoJSON.Feature | undefined;
-      if (!feature) return;
-      const corridorId = featureCorridorId(feature);
-      if (!corridorId) return;
-      suppressMarkerClear();
-      if (interactionRef.current.corridorId !== corridorId) {
-        interactionRef.current = { corridorId, endpointKey: null };
-      } else if (interactionRef.current.endpointKey) {
-        interactionRef.current = { corridorId, endpointKey: null };
-      }
-      applyDisplayState();
-    };
-
-    const handleEndpointClick = (event: maplibregl.MapMouseEvent & { features?: maplibregl.MapGeoJSONFeature[] }) => {
-      const feature = event.features?.[0];
-      const endpointKey = String(feature?.properties?.endpointKey || '').trim();
-      if (!endpointKey || !interactionRef.current.corridorId) return;
-      suppressMarkerClear();
-      interactionRef.current = {
-        corridorId: interactionRef.current.corridorId,
-        endpointKey: interactionRef.current.endpointKey === endpointKey ? null : endpointKey,
-      };
-      applyDisplayState();
+    const bringCorridorLayersToFront = () => {
+      try {
+        if (map.getLayer(CORRIDOR_FIELD_LAYER)) map.moveLayer(CORRIDOR_FIELD_LAYER);
+        if (map.getLayer(CORRIDOR_FIELD_ACCENT_LAYER)) map.moveLayer(CORRIDOR_FIELD_ACCENT_LAYER);
+        if (map.getLayer(CORRIDOR_GUIDE_LAYER)) map.moveLayer(CORRIDOR_GUIDE_LAYER);
+        if (map.getLayer(CORRIDOR_GLOW_LAYER)) map.moveLayer(CORRIDOR_GLOW_LAYER);
+        if (map.getLayer(CORRIDOR_LAYER)) map.moveLayer(CORRIDOR_LAYER);
+        if (map.getLayer(CORRIDOR_ICON_LAYER)) map.moveLayer(CORRIDOR_ICON_LAYER);
+        if (map.getLayer(CORRIDOR_LABEL_LAYER)) map.moveLayer(CORRIDOR_LABEL_LAYER);
+      } catch { /* style/layers may be mid-transition */ }
     };
 
     if (!selectedObject) {
-      interactionRef.current = { corridorId: null, endpointKey: null };
       removeLayers();
       setDiscoveredObjects([]);
       setEdgesLoading(false);
@@ -3789,6 +3086,7 @@ export function useGeoEdgeLayer(
       setTraceSummary(null);
       setRelatedPathArtifacts([]);
       setMutedObjectIds([]);
+      setHighlightedGatewayObjectIds([]);
       return;
     }
 
@@ -3814,7 +3112,7 @@ export function useGeoEdgeLayer(
     setTraceSummary(null);
     setRelatedPathArtifacts([]);
     setMutedObjectIds([]);
-    interactionRef.current = { corridorId: null, endpointKey: null };
+    setHighlightedGatewayObjectIds([]);
 
     api
       .getFragmentTrace(selectedObject.id, {
@@ -3832,10 +3130,8 @@ export function useGeoEdgeLayer(
       .then(async (res) => {
         if (cancelled || !mountedRef.current) return;
 
-        const graph = res?.graph ?? {};
-        const edges = graph?.edges ?? [];
-        const serverCoords = graph?.coordinates ?? {};
-        const fragments = graph?.fragments ?? [];
+        const serverCoords = res?.graph?.coordinates ?? {};
+        const fragments = res?.graph?.fragments ?? [];
         const pathArtifacts = Array.isArray(res?.supplyChains?.chains) ? (res.supplyChains.chains as MaterializedArtifact[]) : [];
         const objectIds = new Set(objects.map((obj) => obj.id));
         const objectById = new Map<string, TraceObjectInfo>(objects.map((obj) => [obj.id, obj] as const));
@@ -3863,66 +3159,48 @@ export function useGeoEdgeLayer(
           }
         }
 
-        const rawEdges: RawDependencyEdge[] = [];
-        for (const edge of edges) {
-          const sourceId = String(edge?.sourceFragmentId ?? edge?.sourceFragmentID ?? '').trim();
-          const targetId = String(edge?.targetFragmentId ?? edge?.targetFragmentID ?? '').trim();
-          const type = normalizeEdgeType(edge?.type);
-          if (!sourceId || !targetId || !type) continue;
-          const candidate: RawDependencyEdge = {
-            sourceId,
-            targetId,
-            type,
-            family: typeof edge?.family === 'string' ? edge.family as EdgeFamily : undefined,
-            priority: typeof edge?.priority === 'number' ? edge.priority : undefined,
-            businessMeaning: typeof edge?.businessMeaning === 'string' ? edge.businessMeaning : undefined,
-            semanticDirection: typeof edge?.semanticDirection === 'string' ? edge.semanticDirection : undefined,
-          };
-          if (shouldSuppressRawEdge(candidate, objectById)) continue;
-          rawEdges.push(candidate);
-        }
-
-        const { depths, parents } = deriveNodeDepths(selectedObject.id, rawEdges);
-        const selectedEdges = buildSelectedTraceEdges(selectedObject.id, rawEdges, idToCoords);
-        const { graphFeatures, visibleNodeIds } = buildTraceVisualFeatures(
+        const directRelations = Array.isArray(res?.explain?.directRelations)
+          ? res.explain!.directRelations!.map((item) => normalizeExplainRelation(item)).filter((item): item is ExplainRelation => Boolean(item))
+          : [];
+        const contextRelations = Array.isArray(res?.explain?.contextRelations)
+          ? res.explain!.contextRelations!.map((item) => normalizeExplainRelation(item)).filter((item): item is ExplainRelation => Boolean(item))
+          : [];
+        const { features: directFeatures, visibleNodeIds: directNodeIds } = buildExplainRelationFeatures(
           selectedObject.id,
-          selectedEdges,
-          rawEdges,
-          depths,
-          parents,
-          objectById,
+          directRelations,
           idToCoords,
           theme,
+          'direct',
         );
+        const { features: contextFeatures, visibleNodeIds: contextNodeIds } = buildExplainRelationFeatures(
+          selectedObject.id,
+          contextRelations,
+          idToCoords,
+          theme,
+          'context',
+        );
+        const visibleNodeIds = new Set<string>([...Array.from(directNodeIds), ...Array.from(contextNodeIds)]);
         const {
           features: supplyPathFeatures,
           visiblePathRefs,
           coveredPairs: supplyCoveredPairs,
-          routeCount: supplyRouteCount,
         } = buildSupplyPathFeatures(pathArtifacts, coordsByPath, objectByPath, theme, selectedObject);
-        const propagationTopologyEdges: RawDependencyEdge[] = [];
-        for (const edge of Array.isArray(res?.propagation?.edges) ? res.propagation.edges : []) {
-          const sourceId = String(edge?.sourceFragmentId || '').trim();
-          const targetId = String(edge?.targetFragmentId || '').trim();
-          if (shouldSuppressConnection(sourceId, targetId, objectById)) continue;
-          propagationTopologyEdges.push({ sourceId, targetId, type: 'PROPAGATES', family: 'other' });
-        }
-        const propagationDepths = deriveNodeDepths(selectedObject.id, [...rawEdges, ...propagationTopologyEdges]).depths;
-        const propagationFeatures = buildPropagationFeatures(
-          selectedObject.id,
-          res?.propagation || null,
-          idToCoords,
-          objectById,
-          propagationDepths,
-          theme,
-          supplyCoveredPairs,
-        );
-        for (const edge of propagationFeatures) {
-          const sourceId = String(edge.properties?.sourceId || '').trim();
-          const targetId = String(edge.properties?.targetId || '').trim();
+        const propagationFeatures = buildSimplePropagationFeatures(selectedObject.id, res?.propagation || null, idToCoords, objectById, theme)
+          .filter((feature) => {
+            const sourceId = String(feature.properties?.sourceId || '').trim();
+            const targetId = String(feature.properties?.targetId || '').trim();
+            const pairKey = sourceId && targetId ? stablePairKey(sourceId, targetId) : '';
+            const sourcePath = String(objectById.get(sourceId)?.canonicalPath || '').trim();
+            const targetPath = String(objectById.get(targetId)?.canonicalPath || '').trim();
+            const canonicalPairKey = sourcePath && targetPath ? stablePairKey(sourcePath, targetPath) : '';
+            return !(pairKey && supplyCoveredPairs.has(pairKey)) && !(canonicalPairKey && supplyCoveredPairs.has(canonicalPairKey));
+          });
+        propagationFeatures.forEach((feature) => {
+          const sourceId = String(feature.properties?.sourceId || '').trim();
+          const targetId = String(feature.properties?.targetId || '').trim();
           if (sourceId) visibleNodeIds.add(sourceId);
           if (targetId) visibleNodeIds.add(targetId);
-        }
+        });
 
         const newDiscovered: GeoObject[] = [];
         for (const fragment of fragments) {
@@ -3932,7 +3210,6 @@ export function useGeoEdgeLayer(
           const object = traceObject.coordinates ? fragmentToGeoObject(fragment, serverCoords) : null;
           if (
             object
-            && !isGeoLocObject(traceObject)
             && (visibleNodeIds.has(object.id) || visiblePathRefs.has(object.canonicalPath))
             && !objectIds.has(object.id)
           ) {
@@ -3945,84 +3222,52 @@ export function useGeoEdgeLayer(
         setDiscoveredObjects(newDiscovered);
         setRelatedPathArtifacts(pathArtifacts);
         removeLayers();
-        setEdgesCount(selectedEdges.length);
-        const allFeatures = [...supplyPathFeatures, ...graphFeatures, ...propagationFeatures];
-        const centerPoint = selectedObject.coordinates
-          ? [selectedObject.coordinates.lon, selectedObject.coordinates.lat] as [number, number]
-          : null;
-        baseCorridorFeatures = buildCorridorOverviewFeatures(allFeatures, objectById, objectByPath, theme, centerPoint)
-          .slice(0, MAX_VISIBLE_CORRIDORS * 2);
-        const initialDisplayFeatures = decorateCorridorFeatures(baseCorridorFeatures, null);
-        const visibleGraphLineCount = initialDisplayFeatures.filter((feature) => feature.geometry?.type === 'LineString').length;
-        setTraceSummary(buildTraceSummary(selectedEdges, objectById, selectedObject.id, visibleGraphLineCount, supplyRouteCount, pathArtifacts, res?.propagation || null));
+        setEdgesCount(directRelations.length + contextRelations.length);
+        const allFeatures = [
+          ...directFeatures,
+          ...contextFeatures,
+          ...supplyPathFeatures,
+          ...propagationFeatures,
+        ];
+        const endpointEntries = Array.from(visibleNodeIds)
+          .map((nodeId) => traceObjectToGeoObject(objectById.get(nodeId)))
+          .filter((object): object is GeoObject => Boolean(object?.coordinates))
+          .map((object) => ({ key: `node:${object.id}`, object }));
+        const spreadEntries = endpointEntries.length > 0 ? spreadEndpointEntries(map, endpointEntries) : [];
+        const visibleLineCount = allFeatures.filter((feature) => feature.geometry?.type === 'LineString').length;
+        setVisibleEdgesCount(visibleLineCount);
+        setTraceSummary(buildExplainTraceSummary(res?.explain || null, directRelations, contextRelations, pathArtifacts, visibleLineCount, res?.propagation || null));
 
         if (allFeatures.length === 0 || !canAccessMapStyle(map)) {
           setEdgesLoading(false);
           return;
         }
 
-        const endpointEntryMap = new Map<string, { key: string; object: GeoObject; corridorIds: Set<string> }>();
-        const rememberEndpointEntry = (key: string, object: GeoObject | null, corridorId: string) => {
-          if (!object?.coordinates || !corridorId) return;
-          const existing = endpointEntryMap.get(key);
-          if (existing) {
-            existing.corridorIds.add(corridorId);
-            return;
-          }
-          endpointEntryMap.set(key, { key, object, corridorIds: new Set([corridorId]) });
-        };
-        for (const feature of allFeatures) {
-          if (feature.geometry?.type !== 'LineString') continue;
-          const corridorId = featureCorridorId(feature);
-          if (!corridorId) continue;
-          for (const endpointKey of featureEndpointRefs(feature)) {
-            if (endpointKey.startsWith('node:')) {
-              const clean = endpointKey.slice(5);
-              rememberEndpointEntry(`node:${clean}`, traceObjectToGeoObject(objectById.get(clean)), corridorId);
-              continue;
-            }
-            if (endpointKey.startsWith('path:')) {
-              const clean = endpointKey.slice(5);
-              rememberEndpointEntry(`path:${clean}`, traceObjectToGeoObject(objectByPath.get(clean)), corridorId);
-            }
-          }
-        }
-        baseEndpointEntries = Array.from(endpointEntryMap.values()).map((entry) => ({
-          key: entry.key,
-          object: entry.object,
-          corridorIds: Array.from(entry.corridorIds),
-        }));
-
-        await ensureMarkerImages(map, baseEndpointEntries.map((entry) => entry.object), theme);
-        baseFeatures = allFeatures;
-        map.addSource(SRC, { type: 'geojson', data: { type: 'FeatureCollection', features: initialDisplayFeatures } });
+        await ensureMarkerImages(map, spreadEntries.map((entry) => entry.object), theme);
+        map.addSource(SRC, { type: 'geojson', data: { type: 'FeatureCollection', features: allFeatures } });
         map.addSource(ENDPOINT_SRC, {
           type: 'geojson',
-          data: buildEndpointFeatureCollection([], theme),
+          data: buildEndpointFeatureCollection(spreadEntries, theme),
         });
         addEdgeLayers(map, theme);
+        bringCorridorLayersToFront();
         bringEndpointLayersToFront();
-        setTimeout(bringEndpointLayersToFront, 0);
-        if (typeof requestAnimationFrame === 'function') {
-          requestAnimationFrame(() => bringEndpointLayersToFront());
-        }
-        applyDisplayState();
         map.on('mousemove', CORRIDOR_GLOW_LAYER, handleEdgeHover);
         map.on('mousemove', CORRIDOR_GUIDE_LAYER, handleEdgeHover);
         map.on('mousemove', CORRIDOR_LAYER, handleEdgeHover);
         map.on('mousemove', CORRIDOR_ICON_LAYER, handleEdgeHover);
         map.on('mousemove', CORRIDOR_LABEL_LAYER, handleEdgeHover);
+        map.on('mousemove', HOP_1_LAYER, handleEdgeHover);
+        map.on('mousemove', HOP_2_LAYER, handleEdgeHover);
+        map.on('mousemove', HOP_3_LAYER, handleEdgeHover);
         map.on('mouseleave', CORRIDOR_GLOW_LAYER, handleEdgeLeave);
         map.on('mouseleave', CORRIDOR_GUIDE_LAYER, handleEdgeLeave);
         map.on('mouseleave', CORRIDOR_LAYER, handleEdgeLeave);
         map.on('mouseleave', CORRIDOR_ICON_LAYER, handleEdgeLeave);
         map.on('mouseleave', CORRIDOR_LABEL_LAYER, handleEdgeLeave);
-        map.on('click', CORRIDOR_GLOW_LAYER, handleEdgeClick);
-        map.on('click', CORRIDOR_GUIDE_LAYER, handleEdgeClick);
-        map.on('click', CORRIDOR_LAYER, handleEdgeClick);
-        map.on('click', CORRIDOR_ICON_LAYER, handleEdgeClick);
-        map.on('click', CORRIDOR_LABEL_LAYER, handleEdgeClick);
-        map.on('click', ENDPOINT_POINTS_LAYER, handleEndpointClick);
+        map.on('mouseleave', HOP_1_LAYER, handleEdgeLeave);
+        map.on('mouseleave', HOP_2_LAYER, handleEdgeLeave);
+        map.on('mouseleave', HOP_3_LAYER, handleEdgeLeave);
         if (mountedRef.current) setEdgesLoading(false);
       })
       .catch(() => {
@@ -4034,6 +3279,7 @@ export function useGeoEdgeLayer(
           setTraceSummary(null);
           setRelatedPathArtifacts([]);
           setMutedObjectIds([]);
+          setHighlightedGatewayObjectIds([]);
         }
       });
 
@@ -4046,21 +3292,30 @@ export function useGeoEdgeLayer(
         map.off('mousemove', CORRIDOR_LAYER, handleEdgeHover);
         map.off('mousemove', CORRIDOR_ICON_LAYER, handleEdgeHover);
         map.off('mousemove', CORRIDOR_LABEL_LAYER, handleEdgeHover);
+        map.off('mousemove', HOP_1_LAYER, handleEdgeHover);
+        map.off('mousemove', HOP_2_LAYER, handleEdgeHover);
+        map.off('mousemove', HOP_3_LAYER, handleEdgeHover);
         map.off('mouseleave', CORRIDOR_GLOW_LAYER, handleEdgeLeave);
         map.off('mouseleave', CORRIDOR_GUIDE_LAYER, handleEdgeLeave);
         map.off('mouseleave', CORRIDOR_LAYER, handleEdgeLeave);
         map.off('mouseleave', CORRIDOR_ICON_LAYER, handleEdgeLeave);
         map.off('mouseleave', CORRIDOR_LABEL_LAYER, handleEdgeLeave);
-        map.off('click', CORRIDOR_GLOW_LAYER, handleEdgeClick);
-        map.off('click', CORRIDOR_GUIDE_LAYER, handleEdgeClick);
-        map.off('click', CORRIDOR_LAYER, handleEdgeClick);
-        map.off('click', CORRIDOR_ICON_LAYER, handleEdgeClick);
-        map.off('click', CORRIDOR_LABEL_LAYER, handleEdgeClick);
-        map.off('click', ENDPOINT_POINTS_LAYER, handleEndpointClick);
+        map.off('mouseleave', HOP_1_LAYER, handleEdgeLeave);
+        map.off('mouseleave', HOP_2_LAYER, handleEdgeLeave);
+        map.off('mouseleave', HOP_3_LAYER, handleEdgeLeave);
       } catch { /* handlers may not be attached */ }
       removeLayers();
     };
   }, [selectedObject?.id, objects, hops, map, isReady, styleEpoch, theme, lensId]);
 
-  return { edgesLoading, edgesCount, visibleEdgesCount, discoveredObjects, traceSummary, relatedPathArtifacts, mutedObjectIds };
+  return {
+    edgesLoading,
+    edgesCount,
+    visibleEdgesCount,
+    discoveredObjects,
+    traceSummary,
+    relatedPathArtifacts,
+    mutedObjectIds,
+    highlightedGatewayObjectIds,
+  };
 }

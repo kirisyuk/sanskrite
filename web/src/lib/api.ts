@@ -3057,6 +3057,47 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
         strongBindingCount?: number;
       };
     };
+    explain?: {
+      summary?: string;
+      whyItMatters?: Array<{
+        title: string;
+        body: string;
+      }>;
+      directRelations?: Array<{
+        edgeId?: string;
+        sourceFragmentId: string;
+        targetFragmentId: string;
+        relatedFragmentId: string;
+        relatedLabel: string;
+        relatedType?: string;
+        relatedCanonicalPath?: string;
+        relatedCoordinates?: { lat: number; lon: number };
+        type: string;
+        family?: string;
+        semanticDirection?: string;
+        businessMeaning?: string;
+        whyRelevant?: string;
+        priority?: number;
+        criticality?: number;
+      }>;
+      contextRelations?: Array<{
+        edgeId?: string;
+        sourceFragmentId: string;
+        targetFragmentId: string;
+        relatedFragmentId: string;
+        relatedLabel: string;
+        relatedType?: string;
+        relatedCanonicalPath?: string;
+        relatedCoordinates?: { lat: number; lon: number };
+        type: string;
+        family?: string;
+        semanticDirection?: string;
+        businessMeaning?: string;
+        whyRelevant?: string;
+        priority?: number;
+        criticality?: number;
+      }>;
+    };
     propagation?: {
       sourceFragmentId: string;
       nodeIds: string[];

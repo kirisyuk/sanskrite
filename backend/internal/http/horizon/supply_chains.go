@@ -480,6 +480,19 @@ func (h *HorizonHandlers) searchSupplyChainCandidates(r *http.Request, tenantID 
 			}
 		}
 	}
+	if hasSupplyLinkAnchor(req.Anchors) {
+		artifacts, err := h.materializedArtifactsRepo.ListByTenantAndKind(r.Context(), tenantID, horizonmodels.MaterializedKindSupplyChainPath, 10000)
+		if err != nil {
+			return nil, err
+		}
+		if len(artifacts) == 0 && tenantID != "global" {
+			artifacts, err = h.materializedArtifactsRepo.ListByTenantAndKind(r.Context(), "global", horizonmodels.MaterializedKindSupplyChainPath, 10000)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return filterSupplyChainCandidates(artifacts, req.Anchors), nil
+	}
 	artifacts, err := h.materializedArtifactsRepo.FindByNodeRef(r.Context(), tenantID, req.Anchors[0], horizonmodels.MaterializedKindSupplyChainPath)
 	if err != nil {
 		return nil, err
@@ -521,8 +534,22 @@ func artifactContainsAllAnchors(artifact *horizonmodels.MaterializedArtifact, an
 	for _, ref := range artifact.NodeRefs {
 		have[strings.TrimSpace(ref)] = struct{}{}
 	}
+	parsed, _ := horizonmodels.ParseSupplyChainPathPayload(artifact.Payload)
 	for _, anchor := range anchors {
-		if _, ok := have[strings.TrimSpace(anchor)]; !ok {
+		anchor = strings.TrimSpace(anchor)
+		if anchor == "" {
+			continue
+		}
+		if isSupplyLinkAnchor(anchor) {
+			if !payloadContainsSupplyLinkAnchor(parsed, anchor) {
+				return false
+			}
+			continue
+		}
+		if _, ok := have[anchor]; ok {
+			continue
+		}
+		if !payloadContainsObjectAnchor(parsed, anchor) {
 			return false
 		}
 	}
@@ -565,7 +592,7 @@ func findMatchedLegIndexes(parsed *horizonmodels.SupplyChainPathPayload, anchors
 			if anchor == "" {
 				continue
 			}
-			if leg.SupplierRef == anchor || leg.CustomerRef == anchor || leg.ProductRef == anchor {
+			if legMatchesAnchor(leg, anchor) {
 				out = append(out, leg.Index)
 				break
 			}
@@ -581,10 +608,10 @@ func isDirectedAnchorMatch(parsed *horizonmodels.SupplyChainPathPayload, anchorA
 	firstA := -1
 	firstB := -1
 	for _, leg := range parsed.Legs {
-		if firstA == -1 && (leg.SupplierRef == anchorA || leg.CustomerRef == anchorA || leg.ProductRef == anchorA) {
+		if firstA == -1 && legMatchesAnchor(leg, anchorA) {
 			firstA = leg.Index
 		}
-		if firstB == -1 && (leg.SupplierRef == anchorB || leg.CustomerRef == anchorB || leg.ProductRef == anchorB) {
+		if firstB == -1 && legMatchesAnchor(leg, anchorB) {
 			firstB = leg.Index
 		}
 	}
@@ -708,6 +735,8 @@ func buildSupplyChainSearchAnchors(anchors []string) []supplyChainSearchAnchor {
 
 func inferCanonicalPathType(path string) string {
 	switch {
+	case strings.HasPrefix(path, "/supply-link/"):
+		return "SUPPLY_LINK"
 	case strings.HasPrefix(path, "/org/"):
 		return "ORGANIZATION"
 	case strings.HasPrefix(path, "/fac/"):
@@ -723,6 +752,56 @@ func inferCanonicalPathType(path string) string {
 	default:
 		return ""
 	}
+}
+
+func hasSupplyLinkAnchor(anchors []string) bool {
+	for _, anchor := range anchors {
+		if isSupplyLinkAnchor(anchor) {
+			return true
+		}
+	}
+	return false
+}
+
+func isSupplyLinkAnchor(anchor string) bool {
+	return strings.HasPrefix(strings.TrimSpace(anchor), "/supply-link/")
+}
+
+func legMatchesAnchor(leg horizonmodels.SupplyChainPathLeg, anchor string) bool {
+	anchor = strings.TrimSpace(anchor)
+	if anchor == "" {
+		return false
+	}
+	return leg.SupplierRef == anchor || leg.CustomerRef == anchor || leg.ProductRef == anchor || leg.SupplyLinkCanonicalPath == anchor
+}
+
+func payloadContainsObjectAnchor(parsed *horizonmodels.SupplyChainPathPayload, anchor string) bool {
+	if parsed == nil {
+		return false
+	}
+	for _, leg := range parsed.Legs {
+		if leg.SupplierRef == anchor || leg.CustomerRef == anchor || leg.ProductRef == anchor {
+			return true
+		}
+	}
+	return false
+}
+
+func payloadContainsSupplyLinkAnchor(parsed *horizonmodels.SupplyChainPathPayload, anchor string) bool {
+	if parsed == nil {
+		return false
+	}
+	for _, leg := range parsed.Legs {
+		if strings.TrimSpace(leg.SupplyLinkCanonicalPath) == anchor {
+			return true
+		}
+	}
+	for _, edge := range parsed.Edges {
+		if strings.TrimSpace(edge.SupplyLinkCanonicalPath) == anchor {
+			return true
+		}
+	}
+	return false
 }
 
 func displayNameFromCanonicalPath(path string) string {

@@ -26,6 +26,7 @@ var (
 	dryRun            = flag.Bool("dry-run", true, "report only, no writes")
 	repairWrite       = flag.Bool("repair-write", false, "persist repaired artifacts")
 	reportJSON        = flag.String("report-json", "", "optional report output path")
+	timeout           = flag.Duration("timeout", 2*time.Hour, "overall execution timeout")
 )
 
 type report struct {
@@ -44,7 +45,7 @@ type report struct {
 func main() {
 	flag.Parse()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
 	fsClient, err := gcp.NewFirestoreClient(ctx, strings.TrimSpace(*projectID))
@@ -67,6 +68,7 @@ func main() {
 		LensID:   strings.TrimSpace(*lensID),
 		Samples:  make([]string, 0, 20),
 	}
+	allowCreateLinks := *repairWrite
 
 	for _, artifact := range items {
 		if artifact == nil || artifact.Kind != models.MaterializedKindSupplyChainPath {
@@ -80,6 +82,9 @@ func main() {
 			if ferr == nil && frag != nil {
 				resolvedLinks++
 				return strings.TrimSpace(frag.ID), strings.TrimSpace(frag.TenantID), true
+			}
+			if !allowCreateLinks {
+				return "", "", false
 			}
 			created, cerr := ensureSupplyLink(ctx, fragmentsRepo, artifact, canonicalPath)
 			if cerr == nil && created != nil {

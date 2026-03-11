@@ -10,9 +10,10 @@ func registerBuiltinHandlers(r *Registry) {
 	if r == nil {
 		return
 	}
-	r.Register(NewOwnershipStructureHandler())
-	r.Register(NewCommonalityAnalysisHandler())
 	for _, ct := range taxonomy.DomainContractTypes() {
 		r.Register(NewDomainAnswerHandler(ct))
 	}
+	// Register specialized handlers after generic domain handlers so they win.
+	r.Register(NewOwnershipStructureHandler())
+	r.Register(NewCommonalityAnalysisHandler())
 }

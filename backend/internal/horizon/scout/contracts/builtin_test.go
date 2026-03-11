@@ -1,0 +1,12 @@
+package contracts
+
+import "testing"
+
+func TestRegisterBuiltinHandlers_SpecializedHandlersWin(t *testing.T) {
+	r := NewRegistry()
+	registerBuiltinHandlers(r)
+
+	if _, ok := r.Get("ownership-structure").(*OwnershipStructureHandler); !ok {
+		t.Fatalf("expected ownership-structure to resolve to OwnershipStructureHandler, got %T", r.Get("ownership-structure"))
+	}
+}

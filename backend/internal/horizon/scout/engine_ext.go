@@ -3040,6 +3040,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 			defaultDirection = "both"
 		}
 		downOrgs, downFacs, upOrgs, upFacs := collectAnchorOrgsFromQueriesByDirection(queries, defaultDirection)
+		downFilters, upFilters := collectSupplyChainFiltersByDirection(queries, defaultDirection)
 		scLog(ctx, e, job, "info", fmt.Sprintf("[SupplyChainPlan] anchors: down orgs=%d facs=%d, up orgs=%d facs=%d", len(downOrgs), len(downFacs), len(upOrgs), len(upFacs)))
 		unwindMaxDepth := 2
 		if strings.HasPrefix(strings.TrimSpace(domainCP), "/domain/v1/supply-chain/") {
@@ -3059,11 +3060,11 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		}
 		scLog(ctx, e, job, "info", fmt.Sprintf("[SupplyChainPlan] unwind maxDepth=%d", unwindMaxDepth))
 		if len(downOrgs) > 0 || len(downFacs) > 0 {
-			chains := e.runSupplyChainRecursiveUnwinding(ctx, job, downOrgs, downFacs, unwindMaxDepth)
+			chains := e.runSupplyChainRecursiveUnwinding(ctx, job, downOrgs, downFacs, unwindMaxDepth, downFilters.Product, downFilters.Geo)
 			domainResearchChains = append(domainResearchChains, chains...)
 		}
 		if len(upOrgs) > 0 || len(upFacs) > 0 {
-			upChains := e.runSupplyChainUpstreamUnwinding(ctx, job, upOrgs, upFacs, unwindMaxDepth)
+			upChains := e.runSupplyChainUpstreamUnwinding(ctx, job, upOrgs, upFacs, unwindMaxDepth, upFilters.Product, upFilters.Geo)
 			domainResearchChains = append(domainResearchChains, upChains...)
 		}
 		if job.State == nil {
@@ -9410,12 +9411,15 @@ func (e *ScoutEngine) shouldRunStrategicOverlay(contractType string, entityCount
 		"licensing-requirements":  true,
 		"esg-landscape":           true,
 		// Ecosystem mapping (general)
-		"ecosystem-mapping": true,
+		"ecosystem-mapping":     true,
+		"stakeholder-mapping":   true,
+		"partnership-landscape": true,
 		// Power dynamics (explicit)
-		"power-dynamics":   true,
-		"influence-map":    true,
-		"stakeholder-map":  true,
-		"decision-mapping": true,
+		"power-dynamics":    true,
+		"influence-network": true,
+		"influence-map":     true,
+		"stakeholder-map":   true,
+		"decision-mapping":  true,
 	}
 
 	ct := strings.ToLower(strings.TrimSpace(contractType))
@@ -9726,10 +9730,46 @@ func collectAnchorOrgsFromQueriesByDirection(queries []agents.SupplyChainQuery, 
 	return
 }
 
-func buildSupplyChainStepPromptContext(job *models.ScoutingJob, depth int, direction string) agents.SupplyChainStepPromptContext {
+type supplyChainFilterScope struct {
+	Product []string
+	Geo     []string
+}
+
+func collectSupplyChainFiltersByDirection(queries []agents.SupplyChainQuery, defaultDirection string) (down, up supplyChainFilterScope) {
+	addFilters := func(scope *supplyChainFilterScope, q agents.SupplyChainQuery) {
+		if scope == nil {
+			return
+		}
+		scope.Product = dedupStrings(append(scope.Product, q.ProductFilter...))
+		scope.Geo = dedupStrings(append(scope.Geo, q.GeoFilter...))
+	}
+	for _, q := range queries {
+		dir := strings.ToLower(strings.TrimSpace(q.Direction))
+		if dir == "" {
+			dir = strings.ToLower(strings.TrimSpace(defaultDirection))
+			if dir == "" {
+				dir = "down"
+			}
+		}
+		switch dir {
+		case "up", "upstream":
+			addFilters(&up, q)
+		case "both":
+			addFilters(&down, q)
+			addFilters(&up, q)
+		default:
+			addFilters(&down, q)
+		}
+	}
+	return down, up
+}
+
+func buildSupplyChainStepPromptContext(job *models.ScoutingJob, depth int, direction string, productFilters []string, geoFilters []string) agents.SupplyChainStepPromptContext {
 	out := agents.SupplyChainStepPromptContext{
-		Depth:     depth,
-		Direction: strings.TrimSpace(direction),
+		Depth:          depth,
+		Direction:      strings.TrimSpace(direction),
+		ProductFilters: dedupStrings(append([]string(nil), productFilters...)),
+		GeoFilters:     dedupStrings(append([]string(nil), geoFilters...)),
 	}
 	if job == nil {
 		return out
@@ -9757,12 +9797,168 @@ func buildSupplyChainStepPromptContext(job *models.ScoutingJob, depth int, direc
 			if g, ok := facets["geo"]; ok && len(g) > 0 {
 				out.Geo = strings.TrimSpace(g[0])
 			}
-			if p, ok := facets["product"]; ok && len(p) > 0 {
-				out.Product = strings.TrimSpace(p[0])
+			for _, key := range []string{"product", "material", "commodity", "goods", "item"} {
+				if p, ok := facets[key]; ok && len(p) > 0 {
+					out.Product = strings.TrimSpace(p[0])
+					break
+				}
+			}
+			for _, key := range []string{"sector", "industry", "market"} {
+				if s, ok := facets[key]; ok && len(s) > 0 {
+					out.Sector = strings.TrimSpace(s[0])
+					break
+				}
 			}
 		}
 	}
 	return out
+}
+
+func filterSupplyChainsByPlanFilters(chains []agents.SupplyChain, productFilters []string, geoFilters []string) []agents.SupplyChain {
+	if len(chains) == 0 {
+		return nil
+	}
+	if len(productFilters) == 0 && len(geoFilters) == 0 {
+		return chains
+	}
+	filtered := make([]agents.SupplyChain, 0, len(chains))
+	for _, chain := range chains {
+		if supplyChainMatchesPlanFilters(chain, productFilters, geoFilters) {
+			filtered = append(filtered, chain)
+		}
+	}
+	return filtered
+}
+
+func supplyChainMatchesPlanFilters(chain agents.SupplyChain, productFilters []string, geoFilters []string) bool {
+	productOK := len(productFilters) == 0
+	geoOK := len(geoFilters) == 0
+	for _, node := range chain.Nodes {
+		cp := strings.TrimSpace(node.CanonicalPath)
+		if cp == "" {
+			continue
+		}
+		if !productOK && supplyChainMatchesProductFilter(cp, productFilters) {
+			productOK = true
+		}
+		if !geoOK && supplyChainNodeMatchesGeoFilter(cp, geoFilters) {
+			geoOK = true
+		}
+		if productOK && geoOK {
+			return true
+		}
+	}
+	return productOK && geoOK
+}
+
+func supplyChainMatchesProductFilter(path string, productFilters []string) bool {
+	if len(productFilters) == 0 {
+		return true
+	}
+	path = strings.TrimSpace(strings.ToLower(path))
+	if !strings.HasPrefix(path, "/product/") {
+		return false
+	}
+	for _, raw := range productFilters {
+		filter := taxonomy.Slugify(strings.ToLower(strings.TrimSpace(raw)))
+		if filter == "" {
+			continue
+		}
+		if strings.Contains(path, filter) {
+			return true
+		}
+	}
+	return false
+}
+
+func supplyChainNodeMatchesGeoFilter(path string, geoFilters []string) bool {
+	if len(geoFilters) == 0 {
+		return true
+	}
+	for _, token := range canonicalGeoTokensForPath(path) {
+		for _, filter := range geoFilters {
+			if geoTokenMatchesFilter(token, filter) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func canonicalGeoTokensForPath(path string) []string {
+	parts, err := taxonomy.ParseCanonicalPathParts(strings.TrimSpace(path))
+	if err != nil || parts == nil {
+		return nil
+	}
+	switch parts.Namespace {
+	case "org":
+		if parts.Org != nil {
+			return []string{strings.ToLower(strings.TrimSpace(parts.Org.Geo))}
+		}
+	case "gov":
+		if parts.Gov != nil {
+			return []string{strings.ToLower(strings.TrimSpace(parts.Gov.Geo))}
+		}
+	case "fac":
+		if parts.Fac != nil {
+			return []string{strings.ToLower(strings.TrimSpace(parts.Fac.Geo))}
+		}
+	case "community":
+		if parts.Community != nil {
+			return []string{strings.ToLower(strings.TrimSpace(parts.Community.Geo))}
+		}
+	case "market":
+		if parts.Market != nil {
+			return []string{strings.ToLower(strings.TrimSpace(parts.Market.Geo))}
+		}
+	case "program":
+		if parts.Program != nil {
+			return []string{strings.ToLower(strings.TrimSpace(parts.Program.Jurisdiction))}
+		}
+	case "loc":
+		if parts.Loc != nil {
+			return []string{strings.ToLower(strings.TrimSpace(parts.Loc.Country))}
+		}
+	case "segment":
+		if parts.Segment != nil {
+			return []string{strings.ToLower(strings.TrimSpace(parts.Segment.Geo))}
+		}
+	}
+	return nil
+}
+
+func geoTokenMatchesFilter(candidate string, filter string) bool {
+	candidate = strings.ToLower(strings.TrimSpace(candidate))
+	filter = strings.ToLower(strings.TrimSpace(filter))
+	if candidate == "" || filter == "" {
+		return false
+	}
+	if filter == "global" || candidate == filter {
+		return true
+	}
+	if taxonomy.IsCompositeGeoToken(candidate) {
+		for _, part := range strings.Split(candidate, "-") {
+			if geoTokenMatchesFilter(part, filter) {
+				return true
+			}
+		}
+		return false
+	}
+	if taxonomy.IsCompositeGeoToken(filter) {
+		for _, part := range strings.Split(filter, "-") {
+			if geoTokenMatchesFilter(candidate, part) {
+				return true
+			}
+		}
+		return false
+	}
+	if taxonomy.IsRegionalGeoToken(filter) && len(candidate) == 2 {
+		return taxonomy.IsCountryInRegion(filter, candidate)
+	}
+	if taxonomy.IsRegionalGeoToken(candidate) && len(filter) == 2 {
+		return taxonomy.IsCountryInRegion(candidate, filter)
+	}
+	return false
 }
 
 // runSupplyChainRecursiveUnwinding implements step-by-step algorithmic unwinding:
@@ -9772,7 +9968,7 @@ func buildSupplyChainStepPromptContext(job *models.ScoutingJob, depth int, direc
 // anchorOrgs: initial /org/ paths to start from (Step 1).
 // seedFacs: /fac/ anchors that skip Step 1 and enter directly at Step 2.
 func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
-	ctx context.Context, job *models.ScoutingJob, anchorOrgs []string, seedFacs []string, maxDepth int,
+	ctx context.Context, job *models.ScoutingJob, anchorOrgs []string, seedFacs []string, maxDepth int, productFilters []string, geoFilters []string,
 ) []agents.SupplyChain {
 	if e.researchAgent == nil || (len(anchorOrgs) == 0 && len(seedFacs) == 0) {
 		return nil
@@ -9827,6 +10023,9 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 			})
 		}
 		return chains
+	}
+	nodeMatchesProductFilter := func(cp string) bool {
+		return supplyChainMatchesProductFilter(cp, productFilters)
 	}
 	buildStep1Chains := func(depthFacs []string) []agents.SupplyChain {
 		chains := make([]agents.SupplyChain, 0, len(depthFacs))
@@ -9924,6 +10123,7 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 		return chains
 	}
 	materializeStage := func(stage string, depth int, direction string, chains []agents.SupplyChain) {
+		chains = filterSupplyChainsByPlanFilters(chains, productFilters, geoFilters)
 		if len(chains) == 0 {
 			return
 		}
@@ -9974,7 +10174,7 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 	orgQueue := append([]string{}, anchorOrgs...)
 
 	for depth := 0; depth < maxDepth; depth++ {
-		stepCtx := agents.WithSupplyChainStepPromptContext(ctx, buildSupplyChainStepPromptContext(job, depth, "downstream"))
+		stepCtx := agents.WithSupplyChainStepPromptContext(ctx, buildSupplyChainStepPromptContext(job, depth, "downstream", productFilters, geoFilters))
 		// ---- Step 1: org → child orgs + facilities ----
 		var depthFacs []string
 		var childOrgs []string
@@ -10102,6 +10302,9 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 			for _, p := range r.Products {
 				pp := strings.TrimSpace(p.Path)
 				if pp == "" || !strings.HasPrefix(pp, "/product/") {
+					continue
+				}
+				if !nodeMatchesProductFilter(pp) {
 					continue
 				}
 				if _, ok := visited[pp]; !ok {
@@ -10253,14 +10456,14 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 
 	scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] complete: totalSegments=%d visited=%d", len(allSegments), len(visited)))
 
-	return buildChains(allSegments)
+	return filterSupplyChainsByPlanFilters(buildChains(allSegments), productFilters, geoFilters)
 }
 
 // runSupplyChainUpstreamUnwinding implements step-by-step UPSTREAM unwinding:
 // consumerOrg→consumerFac→product→supplierFac→supplierOrg, recursing from supplier orgs.
 // Flow: Step 1 (org→fac), U1 (fac→input products), U2 (product→supplier facs), Step 4 (fac→org).
 func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
-	ctx context.Context, job *models.ScoutingJob, anchorOrgs []string, seedFacs []string, maxDepth int,
+	ctx context.Context, job *models.ScoutingJob, anchorOrgs []string, seedFacs []string, maxDepth int, productFilters []string, geoFilters []string,
 ) []agents.SupplyChain {
 	if e.researchAgent == nil || (len(anchorOrgs) == 0 && len(seedFacs) == 0) {
 		return nil
@@ -10409,7 +10612,11 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 		}
 		return chains
 	}
+	nodeMatchesProductFilter := func(cp string) bool {
+		return supplyChainMatchesProductFilter(cp, productFilters)
+	}
 	materializeStage := func(stage string, depth int, direction string, chains []agents.SupplyChain) {
+		chains = filterSupplyChainsByPlanFilters(chains, productFilters, geoFilters)
 		if len(chains) == 0 {
 			return
 		}
@@ -10460,7 +10667,7 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 	orgQueue := append([]string{}, anchorOrgs...)
 
 	for depth := 0; depth < maxDepth; depth++ {
-		stepCtx := agents.WithSupplyChainStepPromptContext(ctx, buildSupplyChainStepPromptContext(job, depth, "upstream"))
+		stepCtx := agents.WithSupplyChainStepPromptContext(ctx, buildSupplyChainStepPromptContext(job, depth, "upstream", productFilters, geoFilters))
 		var depthFacs []string
 		var childOrgs []string
 
@@ -10585,6 +10792,9 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 			for _, p := range r.InputProducts {
 				pp := strings.TrimSpace(p.Path)
 				if pp == "" || !strings.HasPrefix(pp, "/product/") {
+					continue
+				}
+				if !nodeMatchesProductFilter(pp) {
 					continue
 				}
 				facProductLinks = append(facProductLinks, facProductLink{consumerFac: r.FacPath, productPath: pp})
@@ -10722,7 +10932,7 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 
 	scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] complete: totalSegments=%d visited=%d", len(allSegments), len(visited)))
 
-	return buildChains(allSegments)
+	return filterSupplyChainsByPlanFilters(buildChains(allSegments), productFilters, geoFilters)
 }
 
 // scLog logs to both realtime (frontend) and stderr (GCP).

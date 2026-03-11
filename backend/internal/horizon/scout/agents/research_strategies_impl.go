@@ -2370,12 +2370,15 @@ CANONICAL PATH RULES:
 
 BUILD THESE LAYERS:
 1. OWNERSHIP TREE (%s):
-   - UBO (Ultimate Beneficial Owner) --OWNS--> Holding --OWNS--> Subsidiary
+   - UBO (Ultimate Beneficial Owner: ORG, PERSON, or COMMUNITY dynasty/tribe) --OWNS--> Holding --OWNS--> Subsidiary
    - ORG --SUBSIDIARY_OF--> Parent
 2. CONTROL LAYER:
    - ORG/GOV --CONTROLS/MANAGES--> ORG
 3. INVESTMENT:
    - ORG --INVESTS_IN--> ORG
+4. COMMUNITY / LINEAGE LAYER:
+   - COMMUNITY (dynasty/tribe/family network) --HAS_SUBGROUP--> COMMUNITY
+   - PERSON --MEMBER_OF--> COMMUNITY when lineage materially affects ownership/control
 %s
 
 QUALIFIERS on OWNS edges: qualifiers.share (ownership percentage 0.0-1.0), qualifiers.share_type (direct|indirect|beneficial).
@@ -2421,7 +2424,7 @@ func (a *ResearchAgent) buildEcosystemFullPrompt(query EcosystemQuery) string {
 	}
 	actorTypes := strings.Join(query.ActorTypes, ", ")
 	if actorTypes == "" {
-		actorTypes = "ORGANIZATION, GOV, PERSON, FACILITY"
+		actorTypes = "ORGANIZATION, GOV, PERSON, FACILITY, COMMUNITY"
 	}
 	sectorFilter := strings.Join(query.SectorFilter, ", ")
 	geoFilter := strings.Join(query.GeoFilter, ", ")

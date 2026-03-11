@@ -52,6 +52,12 @@ func TestShouldRunStrategicOverlay_AlwaysForGovEntities(t *testing.T) {
 	if !e.shouldRunStrategicOverlay("ecosystem-mapping", 2, 1, nil) {
 		t.Fatalf("ecosystem-mapping should still trigger strategic overlay via contract type")
 	}
+	if !e.shouldRunStrategicOverlay("influence-network", 2, 1, nil) {
+		t.Fatalf("influence-network should auto-run strategic overlay")
+	}
+	if !e.shouldRunStrategicOverlay("stakeholder-mapping", 2, 1, nil) {
+		t.Fatalf("stakeholder-mapping should auto-run strategic overlay")
+	}
 
 	if e.shouldRunStrategicOverlay("supply-chain", 0, 0, []string{"/gov/sa/sama"}) {
 		t.Fatalf("zero entities and relations must not trigger strategic overlay even with gov paths")
@@ -68,10 +74,10 @@ func TestCollectAllEntityPaths_IncludesRelationTargets(t *testing.T) {
 	}
 	paths := collectAllEntityPaths(firstOrder, rels)
 	expected := map[string]bool{
-		"/org/ar/barrick-gold":                true,
-		"/fac/ar/veladero-mine": true,
-		"/gov/ar/secretaria-de-mineria":        true,
-		"/loc/ar/na/na":                        true,
+		"/org/ar/barrick-gold":          true,
+		"/fac/ar/veladero-mine":         true,
+		"/gov/ar/secretaria-de-mineria": true,
+		"/loc/ar/na/na":                 true,
 	}
 	if len(paths) != len(expected) {
 		t.Fatalf("expected %d paths, got %d: %v", len(expected), len(paths), paths)

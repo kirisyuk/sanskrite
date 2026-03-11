@@ -40,6 +40,27 @@ type SearchSuggestion = {
 };
 type SearchMode = 'objects' | 'supply-links';
 type HorizonSearchEntity = Awaited<ReturnType<typeof api.searchHorizonEntities>>['entities'][number];
+
+const isObjectLikeSupplyAnchor = (entity: HorizonSearchEntity | null | undefined): boolean => {
+  const canonicalPath = String(entity?.canonicalPath || '').trim();
+  if (!canonicalPath.startsWith('/')) return false;
+  return !canonicalPath.startsWith('/supply-link/')
+    && !canonicalPath.startsWith('/supply-chain/')
+    && !canonicalPath.startsWith('/artifact/');
+};
+
+const rankSupplyAnchorEntity = (entity: HorizonSearchEntity | null | undefined): number => {
+  if (!entity) return 99;
+  return isObjectLikeSupplyAnchor(entity) ? 0 : 1;
+};
+
+const normalizeSupplyAnchorEntities = (entities: HorizonSearchEntity[]): HorizonSearchEntity[] => {
+  return [...entities].sort((left, right) => {
+    const rankDiff = rankSupplyAnchorEntity(left) - rankSupplyAnchorEntity(right);
+    if (rankDiff !== 0) return rankDiff;
+    return String(left?.name || left?.canonicalPath || '').localeCompare(String(right?.name || right?.canonicalPath || ''));
+  });
+};
 type SupplyChainSearchResult = Awaited<ReturnType<typeof api.searchSupplyChains>>['results'][number];
 type ScopeTargetMode = 'new' | 'existing';
 
@@ -234,7 +255,16 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
 
   const { allObjects, filteredObjects, typeCounts, loading, error } = useGeoObjects(scope, filters);
 
-  const { edgesLoading, edgesCount, visibleEdgesCount, discoveredObjects, traceSummary, relatedPathArtifacts, mutedObjectIds } = useGeoEdgeLayer(
+  const {
+    edgesLoading,
+    edgesCount,
+    visibleEdgesCount,
+    discoveredObjects,
+    traceSummary,
+    relatedPathArtifacts,
+    mutedObjectIds,
+    highlightedGatewayObjectIds,
+  } = useGeoEdgeLayer(
     map,
     isReady,
     styleEpoch,
@@ -437,7 +467,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
       try {
         const response = await api.searchHorizonEntities(query, 6);
         if (cancelled) return;
-        setAnchorASuggestions(Array.isArray(response?.entities) ? response.entities : []);
+        setAnchorASuggestions(normalizeSupplyAnchorEntities(Array.isArray(response?.entities) ? response.entities : []));
       } catch {
         if (!cancelled) setAnchorASuggestions([]);
       } finally {
@@ -467,7 +497,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
       try {
         const response = await api.searchHorizonEntities(query, 6);
         if (cancelled) return;
-        setAnchorBSuggestions(Array.isArray(response?.entities) ? response.entities : []);
+        setAnchorBSuggestions(normalizeSupplyAnchorEntities(Array.isArray(response?.entities) ? response.entities : []));
       } catch {
         if (!cancelled) setAnchorBSuggestions([]);
       } finally {
@@ -564,7 +594,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     const trimmed = query.trim();
     if (!trimmed) return null;
     const response = await api.searchHorizonEntities(trimmed, 5);
-    const entities = Array.isArray(response?.entities) ? response.entities : [];
+    const entities = normalizeSupplyAnchorEntities(Array.isArray(response?.entities) ? response.entities : []);
     if (entities.length === 0) return null;
     const exact = entities.find((entity) => {
       const name = String(entity?.name || '').trim().toLowerCase();
@@ -572,7 +602,9 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
       const needle = trimmed.toLowerCase();
       return name === needle || canonicalPath === needle;
     });
-    return exact || entities[0] || null;
+    if (exact) return exact;
+    const preferred = entities.find((entity) => isObjectLikeSupplyAnchor(entity));
+    return preferred || entities[0] || null;
   }, []);
 
   const selectAnchorA = React.useCallback((entity: HorizonSearchEntity) => {
@@ -812,6 +844,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
         name: scopeDialogLensName.trim() || String(artifact?.displayName || 'Supply chain lens').trim() || 'Supply chain lens',
         scope: [scopeEntry],
         viewConfig: { layoutMode: 'supply-chain' },
+        status: 'ACTIVE',
       }, { skipScouting: true });
       setScopeDialogCreatedLensId(created.id);
     } catch (error: any) {
@@ -838,10 +871,14 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     () => ({
       extraInteractiveLayers: GEO_EDGE_INTERACTIVE_LAYERS,
       suppressClearOnClusterClick: Boolean(selectedObject),
-      highlightedObjectId: selectedObject?.id || searchHighlightedObjectId,
+      highlightedObjects: [
+        ...(selectedObject?.id ? [{ id: selectedObject.id, role: 'selected' as const }] : []),
+        ...highlightedGatewayObjectIds.map((id) => ({ id, role: 'gateway' as const })),
+        ...(searchHighlightedObjectId ? [{ id: searchHighlightedObjectId, role: 'search' as const }] : []),
+      ],
       mutedObjectIds,
     }),
-    [mutedObjectIds, searchHighlightedObjectId, selectedObject],
+    [highlightedGatewayObjectIds, mutedObjectIds, searchHighlightedObjectId, selectedObject],
   );
   useGeoMarkerLayer(map, isReady, styleEpoch, visibleMapObjects, theme, handleMarkerSelection, markerLayerOptions);
   useGeoZoneLayer(map, isReady, styleEpoch, visibleMapObjects, theme);
@@ -1073,7 +1110,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
                   border: mapSearchPaletteChrome.panelBorder,
                   borderRadius: 16,
                   boxShadow: mapSearchPaletteChrome.panelShadow,
-                  overflow: 'hidden',
+                  overflow: 'visible',
                   color: 'var(--text-heading)',
                   animation: 'horizon-map-search-rise 0.2s cubic-bezier(0.2, 0.9, 0.2, 1)',
                   transformOrigin: '50% 100%',
@@ -1178,12 +1215,14 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
                               top: 'calc(100% + 6px)',
                               left: 0,
                               right: 0,
-                              zIndex: 2,
+                              zIndex: 28,
                               borderRadius: 12,
                               border: '1px solid var(--border-subtle)',
                               background: 'var(--bg-elevated)',
                               boxShadow: mapSearchPaletteChrome.panelShadow,
-                              overflow: 'hidden',
+                              overflowX: 'hidden',
+                              overflowY: 'auto',
+                              maxHeight: 260,
                             }}
                           >
                             {anchorASuggestionsLoading && (
@@ -1259,17 +1298,19 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
                               <div
                                 style={{
                                   position: 'absolute',
-                                  top: 'calc(100% + 6px)',
-                                  left: 0,
-                                  right: 0,
-                                  zIndex: 2,
-                                  borderRadius: 12,
-                                  border: '1px solid var(--border-subtle)',
-                                  background: 'var(--bg-elevated)',
-                                  boxShadow: mapSearchPaletteChrome.panelShadow,
-                                  overflow: 'hidden',
-                                }}
-                              >
+                              top: 'calc(100% + 6px)',
+                              left: 0,
+                              right: 0,
+                              zIndex: 28,
+                              borderRadius: 12,
+                              border: '1px solid var(--border-subtle)',
+                              background: 'var(--bg-elevated)',
+                              boxShadow: mapSearchPaletteChrome.panelShadow,
+                              overflowX: 'hidden',
+                              overflowY: 'auto',
+                              maxHeight: 260,
+                            }}
+                          >
                                 {anchorBSuggestionsLoading && (
                                   <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--text-secondary-strong)' }}>
                                     Resolving object B...

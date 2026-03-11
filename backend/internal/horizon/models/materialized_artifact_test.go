@@ -407,6 +407,84 @@ func TestRepairSupplyChainPathLinkage_InferLegacySegmentIndex(t *testing.T) {
 	}
 }
 
+func TestRepairSupplyChainPathLinkage_SynthesizesLegacyLegs(t *testing.T) {
+	artifact := &MaterializedArtifact{
+		TenantID:     "global",
+		Kind:         MaterializedKindSupplyChainPath,
+		CanonicalKey: "/supply-chain/global/org-a/product-b/org-c",
+		Payload: map[string]interface{}{
+			"v": 1,
+			"nodes": []SupplyChainPathNode{
+				{Type: "org", Ref: "/org/a"},
+				{Type: "product", Ref: "/product/component/test/input"},
+				{Type: "org", Ref: "/org/b"},
+				{Type: "product", Ref: "/product/component/test/output"},
+				{Type: "org", Ref: "/org/c"},
+			},
+			"edges": []SupplyChainPathEdge{
+				{
+					Type:                    "SUPPLY_LINK",
+					From:                    0,
+					To:                      2,
+					ViaProductIndex:         intPtr(1),
+					ProductRef:              "/product/component/test/input",
+					SupplyLinkCanonicalPath: "/supply-link/global/org-a/product-component-test-input/org-b",
+				},
+				{
+					Type:             "ONTOLOGY",
+					From:             1,
+					To:               3,
+					FromProductIndex: intPtr(1),
+					ToProductIndex:   intPtr(3),
+					Relation:         "TRANSFORMS_INTO",
+					Mode:             "optional",
+				},
+				{
+					Type:                    "SUPPLY_LINK",
+					From:                    2,
+					To:                      4,
+					ViaProductIndex:         intPtr(3),
+					ProductRef:              "/product/component/test/output",
+					SupplyLinkCanonicalPath: "/supply-link/global/org-b/product-component-test-output/org-c",
+				},
+			},
+		},
+		Status:    "active",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	summary, err := RepairSupplyChainPathLinkage(artifact, nil)
+	if err != nil {
+		t.Fatalf("RepairSupplyChainPathLinkage() error = %v", err)
+	}
+	if !summary.Changed || !summary.FullyLinked {
+		t.Fatalf("expected changed fully linked summary, got %+v", summary)
+	}
+
+	parsed, err := ParseSupplyChainPathPayload(artifact.Payload)
+	if err != nil {
+		t.Fatalf("ParseSupplyChainPathPayload() error = %v", err)
+	}
+	if len(parsed.Legs) != 2 {
+		t.Fatalf("expected 2 synthesized legs, got %d", len(parsed.Legs))
+	}
+	for i, edge := range parsed.Edges {
+		if edge.Type != "SUPPLY_LINK" {
+			continue
+		}
+		if edge.SegmentIndex == nil {
+			t.Fatalf("edge[%d] missing segmentIndex after repair: %+v", i, edge)
+		}
+		if edge.Role != "product_flow" {
+			t.Fatalf("edge[%d] missing role after repair: %+v", i, edge)
+		}
+	}
+	if err := artifact.Validate(); err != nil {
+		t.Fatalf("artifact should validate after repair: %v", err)
+	}
+}
+
 func intPtr(i int) *int {
 	return &i
 }

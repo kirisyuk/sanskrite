@@ -125,6 +125,9 @@ func (h *HorizonHandlers) CreateLens(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lens.TenantID = authInfo.TenantID
+	if strings.TrimSpace(lens.Status) == "" {
+		lens.Status = string(models.LensStatusActive)
+	}
 	if strings.TrimSpace(lens.ProjectID) == "" {
 		http.Error(w, "projectId is required", http.StatusBadRequest)
 		return

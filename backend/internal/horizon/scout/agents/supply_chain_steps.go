@@ -124,12 +124,15 @@ type scStepPromptContextKey struct{}
 
 // SupplyChainStepPromptContext carries steering context for recursive step prompts.
 type SupplyChainStepPromptContext struct {
-	OriginalQuery string
-	DomainPath    string
-	Geo           string
-	Product       string
-	Direction     string
-	Depth         int
+	OriginalQuery  string
+	DomainPath     string
+	Geo            string
+	Product        string
+	Sector         string
+	GeoFilters     []string
+	ProductFilters []string
+	Direction      string
+	Depth          int
 }
 
 // WithSupplyChainStepPromptContext attaches step context to ctx.
@@ -156,6 +159,15 @@ func supplyChainPromptContextBlock(ctx context.Context) string {
 	if s := strings.TrimSpace(c.Product); s != "" {
 		lines = append(lines, "- product: "+s)
 	}
+	if s := strings.TrimSpace(c.Sector); s != "" {
+		lines = append(lines, "- sector: "+s)
+	}
+	if len(c.GeoFilters) > 0 {
+		lines = append(lines, "- geoFilters: "+strings.Join(c.GeoFilters, ", "))
+	}
+	if len(c.ProductFilters) > 0 {
+		lines = append(lines, "- productFilters: "+strings.Join(c.ProductFilters, ", "))
+	}
 	if s := strings.TrimSpace(c.Direction); s != "" {
 		lines = append(lines, "- direction: "+s)
 	}
@@ -165,7 +177,7 @@ func supplyChainPromptContextBlock(ctx context.Context) string {
 	if len(lines) == 0 {
 		return ""
 	}
-	return "INTENT CONTEXT (strict):\n" + strings.Join(lines, "\n") + "\n- Keep results tightly aligned with this context.\n- Prefer in-geo entities/facilities first; include cross-border actors only with direct, explicit evidence.\n- Do NOT emit placeholder orgs like /org/na/na.\n"
+	return "INTENT CONTEXT (strict):\n" + strings.Join(lines, "\n") + "\n- Keep results tightly aligned with this context.\n- Prefer in-geo entities/facilities first; include cross-border actors only with direct, explicit evidence.\n- If geoFilters are present, prioritize nodes in those countries/regions and only keep external actors that directly connect to filtered nodes.\n- If productFilters are present, prioritize only matching products/materials/spare parts and their direct transformations.\n- Do NOT emit placeholder orgs like /org/na/na.\n"
 }
 
 // ---------------------------------------------------------------------------

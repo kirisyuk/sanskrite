@@ -53,6 +53,9 @@ export function resolveVisualTypeAndColor(
   return { vt, color };
 }
 
+export type GeoMarkerHighlightRole = 'selected' | 'gateway' | 'search';
+export type GeoMarkerHighlight = { id: string; role: GeoMarkerHighlightRole };
+
 export function iconKey(vt: string, color: string): string {
   return `marker-${vt}-${color.replace('#', '')}`;
 }
@@ -176,25 +179,59 @@ function buildFeatureCollection(
 
 function buildHighlightFeatureCollection(
   objects: GeoObject[],
-  highlightedObjectId: string | null | undefined,
+  highlightedObjects: readonly GeoMarkerHighlight[] | null | undefined,
   theme: 'dark' | 'light',
 ): GeoJSON.FeatureCollection {
-  const highlighted = highlightedObjectId
-    ? objects.find((obj) => obj.id === highlightedObjectId)
-    : null;
-  if (!highlighted) return { type: 'FeatureCollection', features: [] };
-  const feature = buildPointFeature(highlighted, theme);
-  return {
-    type: 'FeatureCollection',
-    features: [
-      {
+  const highlightById = new Map<string, GeoMarkerHighlightRole>();
+  for (const item of highlightedObjects || []) {
+    const id = String(item?.id || '').trim();
+    if (!id) continue;
+    if (item.role === 'selected' || !highlightById.has(id)) {
+      highlightById.set(id, item.role);
+    }
+  }
+  if (highlightById.size === 0) return { type: 'FeatureCollection', features: [] };
+  const features = objects
+    .filter((obj) => highlightById.has(obj.id))
+    .map((highlighted) => {
+      const feature = buildPointFeature(highlighted, theme);
+      const role = highlightById.get(highlighted.id) || 'gateway';
+      const isSelected = role === 'selected';
+      const isSearch = role === 'search';
+      const baseColor = String((feature.properties as any)?.color || '#60a5fa');
+      const glowColor = isSelected
+        ? (theme === 'dark' ? '#7dd3fc' : '#2563eb')
+        : isSearch
+          ? (theme === 'dark' ? '#fde68a' : '#d97706')
+          : baseColor;
+      return {
         ...feature,
         properties: {
           ...(feature.properties || {}),
           opacity: 1,
+          highlightRole: role,
+          glowColor,
+          glowRadius: isSelected ? 30 : isSearch ? 24 : 18,
+          glowOpacity: isSelected ? (theme === 'dark' ? 0.26 : 0.18) : isSearch ? 0.16 : 0.1,
+          ringRadius: isSelected ? 22 : isSearch ? 18 : 15,
+          ringFillColor: isSelected
+            ? (theme === 'dark' ? 'rgba(8,20,32,0.22)' : 'rgba(255,255,255,0.55)')
+            : theme === 'dark' ? 'rgba(2,6,23,0.02)' : 'rgba(255,255,255,0.01)',
+          ringStrokeColor: isSelected
+            ? (theme === 'dark' ? 'rgba(186,230,253,0.98)' : 'rgba(29,78,216,0.94)')
+            : isSearch
+              ? (theme === 'dark' ? 'rgba(253,224,71,0.94)' : 'rgba(180,83,9,0.9)')
+              : baseColor,
+          ringStrokeWidth: isSelected ? 3.2 : isSearch ? 2.4 : 1.6,
+          ringStrokeOpacity: isSelected ? 0.98 : isSearch ? 0.9 : 0.7,
+          iconSize: isSelected ? 1.1 : isSearch ? 1.05 : 1,
         },
-      },
-    ],
+      };
+    });
+  if (features.length === 0) return { type: 'FeatureCollection', features: [] };
+  return {
+    type: 'FeatureCollection',
+    features,
   };
 }
 
@@ -213,7 +250,7 @@ export function buildPointFeature(
       id: obj.id,
       iconKey: iconKey(vt, color),
       color,
-      opacity: muted ? 0.18 : obj.inScope === false ? 0.5 : 1.0,
+      opacity: muted ? 0.11 : obj.inScope === false ? 0.5 : 1.0,
       type: obj.type,
       label: obj.label || obj.canonicalPath,
     },
@@ -293,8 +330,8 @@ export interface UseGeoMarkerLayerOptions {
   suppressClearOnClusterClick?: boolean;
   /** Object ids to visually mute while a corridor region is expanded. */
   mutedObjectIds?: readonly string[];
-  /** Temporarily elevate one searched object above overlapping markers. */
-  highlightedObjectId?: string | null;
+  /** Highlighted marker roles with different visual emphasis. */
+  highlightedObjects?: readonly GeoMarkerHighlight[];
 }
 
 function applyClusterMuteState(
@@ -344,8 +381,8 @@ export function useGeoMarkerLayer(
   suppressClearOnClusterClickRef.current = options?.suppressClearOnClusterClick ?? false;
   const mutedObjectIdsRef = useRef(options?.mutedObjectIds ?? []);
   mutedObjectIdsRef.current = options?.mutedObjectIds ?? [];
-  const highlightedObjectIdRef = useRef(options?.highlightedObjectId ?? null);
-  highlightedObjectIdRef.current = options?.highlightedObjectId ?? null;
+  const highlightedObjectsRef = useRef(options?.highlightedObjects ?? []);
+  highlightedObjectsRef.current = options?.highlightedObjects ?? [];
   const objectsRef = useRef(objects);
   objectsRef.current = objects;
   const spiderActiveRef = useRef(false);
@@ -406,9 +443,9 @@ export function useGeoMarkerLayer(
     };
 
     const sortObjectsForPresentation = (items: GeoObject[]): GeoObject[] => {
-      const highlightedId = highlightedObjectIdRef.current;
+      const highlightedIds = new Set((highlightedObjectsRef.current || []).map((item) => item.id));
       return [...items].sort((a, b) => {
-        const highlightedDelta = Number(b.id === highlightedId) - Number(a.id === highlightedId);
+        const highlightedDelta = Number(highlightedIds.has(b.id)) - Number(highlightedIds.has(a.id));
         if (highlightedDelta !== 0) return highlightedDelta;
         const scopeDelta = Number(b.inScope !== false) - Number(a.inScope !== false);
         if (scopeDelta !== 0) return scopeDelta;
@@ -515,9 +552,9 @@ export function useGeoMarkerLayer(
       type: 'circle',
       source: HIGHLIGHT_SRC,
       paint: {
-        'circle-radius': 24,
-        'circle-color': ['get', 'color'],
-        'circle-opacity': isDark ? 0.16 : 0.12,
+        'circle-radius': ['coalesce', ['get', 'glowRadius'], 24],
+        'circle-color': ['coalesce', ['get', 'glowColor'], ['get', 'color']],
+        'circle-opacity': ['coalesce', ['get', 'glowOpacity'], isDark ? 0.16 : 0.12],
         'circle-blur': 0.72,
       },
     });
@@ -527,11 +564,11 @@ export function useGeoMarkerLayer(
       type: 'circle',
       source: HIGHLIGHT_SRC,
       paint: {
-        'circle-radius': 18,
-        'circle-color': isDark ? 'rgba(2,6,23,0.02)' : 'rgba(255,255,255,0.01)',
-        'circle-stroke-color': ['get', 'color'],
-        'circle-stroke-width': 2.4,
-        'circle-stroke-opacity': 0.92,
+        'circle-radius': ['coalesce', ['get', 'ringRadius'], 18],
+        'circle-color': ['coalesce', ['get', 'ringFillColor'], isDark ? 'rgba(2,6,23,0.02)' : 'rgba(255,255,255,0.01)'],
+        'circle-stroke-color': ['coalesce', ['get', 'ringStrokeColor'], ['get', 'color']],
+        'circle-stroke-width': ['coalesce', ['get', 'ringStrokeWidth'], 2.4],
+        'circle-stroke-opacity': ['coalesce', ['get', 'ringStrokeOpacity'], 0.92],
       },
     });
 
@@ -541,7 +578,7 @@ export function useGeoMarkerLayer(
       source: HIGHLIGHT_SRC,
       layout: {
         'icon-image': ['get', 'iconKey'],
-        'icon-size': 1.04,
+        'icon-size': ['coalesce', ['get', 'iconSize'], 1.04],
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
       },
@@ -745,12 +782,12 @@ export function useGeoMarkerLayer(
         if (src) src.setData(buildFeatureCollection(objects, theme, new Set(mutedObjectIdsRef.current)));
         const highlightSrc = map.getSource(HIGHLIGHT_SRC) as maplibregl.GeoJSONSource | undefined;
         if (highlightSrc) {
-          highlightSrc.setData(buildHighlightFeatureCollection(objects, highlightedObjectIdRef.current, theme));
+          highlightSrc.setData(buildHighlightFeatureCollection(objects, highlightedObjectsRef.current, theme));
         }
         applyClusterMuteState(map, theme === 'dark', dimClusters);
       } catch { /* source might not exist during style transition */ }
     })();
 
     return () => { cancelled = true; };
-  }, [objects, theme, styleEpoch, options?.highlightedObjectId, options?.mutedObjectIds]);
+  }, [objects, theme, styleEpoch, options?.highlightedObjects, options?.mutedObjectIds]);
 }
