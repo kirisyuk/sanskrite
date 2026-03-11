@@ -2392,6 +2392,57 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
+  async searchSupplyChains(input: {
+    anchors: string[];
+    maxLegs?: number;
+    limit?: number;
+    lensId?: string;
+  }): Promise<{
+    mode: 'single_anchor' | 'between_anchors' | string;
+    anchors: Array<{
+      canonicalPath: string;
+      name: string;
+      type?: string;
+    }>;
+    results: Array<{
+      artifact: any;
+      previewPayload?: any;
+      match?: {
+        anchorIndexes?: number[];
+        directedMatch?: boolean;
+        legSpan?: number;
+        clipped?: boolean;
+      };
+      score?: number;
+      supplyLinkCoverage?: {
+        linked?: number;
+        resolvedIds?: number;
+        unresolved?: number;
+      };
+    }>;
+    summary?: {
+      total?: number;
+      pinned?: number;
+      direct?: number;
+      directional?: number;
+      clipped?: number;
+    };
+    linkageSummary?: {
+      fullyLinked?: number;
+      repairedAtReadTime?: number;
+      unresolved?: number;
+    };
+    cache?: { hit?: boolean; key?: string; ttlSec?: number };
+  }> {
+    try {
+      const response = await this.client.post('/api/horizon/supply-chains/search', input);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] searchSupplyChains error:`, error);
+      throw error;
+    }
+  }
+
   /**
    * GET /api/horizon/ontology-facts/by-canonical-path
    * Returns ontology facts (events, signals, etc.) linked to the given canonical path.
@@ -3060,6 +3111,9 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       id: string;
       name: string;
       scope: string[];
+      scopeRaw?: string[];
+      scopeExpanded?: string[];
+      scopeArtifacts?: Record<string, any>;
       metrics: Record<string, number>;
       viewConfig?: Record<string, any>;
     };

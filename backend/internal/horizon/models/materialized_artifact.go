@@ -271,8 +271,10 @@ type SupplyChainPathEdge struct {
 	ProductRef       string `json:"productRef,omitempty"`
 
 	// SupplyLinkID/SegmentIndex trace the edge back to the originating operational segment.
-	SupplyLinkID string `json:"supplyLinkId,omitempty"`
-	SegmentIndex *int   `json:"segmentIndex,omitempty"`
+	SupplyLinkID            string `json:"supplyLinkId,omitempty"`
+	SupplyLinkCanonicalPath string `json:"supplyLinkCanonicalPath,omitempty"`
+	SupplyLinkTenantID      string `json:"supplyLinkTenantId,omitempty"`
+	SegmentIndex            *int   `json:"segmentIndex,omitempty"`
 
 	// CarriesProduct marks edges that represent actual product flow/logistics, not just overlay semantics.
 	CarriesProduct bool `json:"carriesProduct,omitempty"`
@@ -303,6 +305,9 @@ type SupplyChainPathLeg struct {
 	SupplierRef             string                `json:"supplierRef,omitempty"`
 	CustomerRef             string                `json:"customerRef,omitempty"`
 	ProductRef              string                `json:"productRef,omitempty"`
+	SupplyLinkCanonicalPath string                `json:"supplyLinkCanonicalPath,omitempty"`
+	SupplyLinkID            string                `json:"supplyLinkId,omitempty"`
+	SupplyLinkTenantID      string                `json:"supplyLinkTenantId,omitempty"`
 	SupplierNodeIndex       *int                  `json:"supplierNodeIndex,omitempty"`
 	CustomerNodeIndex       *int                  `json:"customerNodeIndex,omitempty"`
 	ProductNodeIndex        *int                  `json:"productNodeIndex,omitempty"`
@@ -403,6 +408,14 @@ func validateSupplyChainPathPayload(payload map[string]interface{}) error {
 			if leg.Index < 0 {
 				return fmt.Errorf("payload leg[%d] has negative index", i)
 			}
+			if strings.TrimSpace(leg.SupplierRef) != "" || strings.TrimSpace(leg.CustomerRef) != "" || strings.TrimSpace(leg.ProductRef) != "" {
+				if strings.TrimSpace(leg.SupplyLinkCanonicalPath) == "" {
+					return fmt.Errorf("payload leg[%d] missing supplyLinkCanonicalPath", i)
+				}
+				if !strings.HasPrefix(strings.TrimSpace(leg.SupplyLinkCanonicalPath), "/supply-link/") {
+					return fmt.Errorf("payload leg[%d] supplyLinkCanonicalPath must be a canonical supply-link path", i)
+				}
+			}
 			for _, idx := range []*int{leg.SupplierNodeIndex, leg.CustomerNodeIndex, leg.ProductNodeIndex} {
 				if idx != nil && (*idx < 0 || *idx >= len(decodedNodes)) {
 					return fmt.Errorf("payload leg[%d] references out-of-range node index", i)
@@ -430,6 +443,26 @@ func validateSupplyChainPathPayload(payload map[string]interface{}) error {
 			}
 			if toIdx < 0 || toIdx >= len(decodedNodes) {
 				return fmt.Errorf("payload edge[%d] 'to' index %d out of range (nodes length: %d)", i, toIdx, len(decodedNodes))
+			}
+			edgeType := strings.TrimSpace(edge.Type)
+			switch edgeType {
+			case "SUPPLY_LINK", "LOGISTICS":
+				if strings.TrimSpace(edge.SupplyLinkCanonicalPath) == "" {
+					return fmt.Errorf("payload edge[%d] missing supplyLinkCanonicalPath", i)
+				}
+				if !strings.HasPrefix(strings.TrimSpace(edge.SupplyLinkCanonicalPath), "/supply-link/") {
+					return fmt.Errorf("payload edge[%d] supplyLinkCanonicalPath must be a canonical supply-link path", i)
+				}
+				if edge.SegmentIndex == nil || *edge.SegmentIndex < 0 {
+					return fmt.Errorf("payload edge[%d] missing segmentIndex", i)
+				}
+				expectedRole := "product_flow"
+				if edgeType == "LOGISTICS" {
+					expectedRole = "logistics_leg"
+				}
+				if strings.TrimSpace(edge.Role) != expectedRole {
+					return fmt.Errorf("payload edge[%d] role %q must be %q for %s", i, edge.Role, expectedRole, edgeType)
+				}
 			}
 		}
 	}

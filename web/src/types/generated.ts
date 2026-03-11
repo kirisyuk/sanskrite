@@ -258,11 +258,16 @@ export interface HttpsGithubComIgorkirisyukSanskriteInternalModelsDataSource {
       errorBackoffMultiplier?: number;
       freshnessBoostWindowMinutes?: number;
       leaseDurationMinutes?: number;
+      autoPauseAfterErrors?: number;
+      autoPauseDurationMinutes?: number;
     };
     disableLlmProcessing?: boolean;
   };
   lastPolledAt?: string;
   lastFoundAt?: string;
+  pauseReason?: string;
+  pausedAt?: string;
+  pausedUntil?: string;
   nextPollAt?: string;
   pollBackoffSec?: number;
   errorCount: number;

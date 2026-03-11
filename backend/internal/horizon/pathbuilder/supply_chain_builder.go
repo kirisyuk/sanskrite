@@ -130,6 +130,10 @@ func DefaultBuildPathOptions() BuildPathOptions {
 type PathSegment struct {
 	// SupplyLink fragment ID (if this is a SupplyLink segment)
 	SupplyLinkID string
+	// Stable canonical path of the originating SupplyLink fragment.
+	SupplyLinkCanonicalPath string
+	// TenantID of the originating SupplyLink fragment.
+	SupplyLinkTenantID string
 	// Supplier organization/facility/deposit canonical path
 	SupplierRef string
 	// Product canonical path
@@ -504,18 +508,20 @@ func (b *SupplyChainPathBuilder) findSupplyLinksByCustomerAndTenant(
 		}
 
 		segment := PathSegment{
-			SupplyLinkID:        link.ID,
-			SupplierRef:         supplierRef,
-			ProductRef:          productRefVal,
-			CustomerRef:         customerRefVal,
-			SupplierFacilityRef: supplierFacilityRef,
-			CustomerFacilityRef: customerFacilityRef,
-			TransportViaRefs:    link.TransportViaRefs,
-			SegmentClass:        segmentClass,
-			Confidence:          confidence,
-			TenantID:            link.TenantID,
-			IsTenantSpecific:    link.TenantID != "global",
-			Metrics:             metrics,
+			SupplyLinkID:            link.ID,
+			SupplyLinkCanonicalPath: strings.TrimSpace(link.CanonicalPath),
+			SupplyLinkTenantID:      strings.TrimSpace(link.TenantID),
+			SupplierRef:             supplierRef,
+			ProductRef:              productRefVal,
+			CustomerRef:             customerRefVal,
+			SupplierFacilityRef:     supplierFacilityRef,
+			CustomerFacilityRef:     customerFacilityRef,
+			TransportViaRefs:        link.TransportViaRefs,
+			SegmentClass:            segmentClass,
+			Confidence:              confidence,
+			TenantID:                link.TenantID,
+			IsTenantSpecific:        link.TenantID != "global",
+			Metrics:                 metrics,
 		}
 
 		segments = append(segments, segment)
@@ -1153,20 +1159,23 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 			SegmentConfidence: segment.Confidence,
 		})
 		leg := models.SupplyChainPathLeg{
-			Index:             i,
-			SupplierRef:       segment.SupplierRef,
-			CustomerRef:       segment.CustomerRef,
-			ProductRef:        segment.ProductRef,
-			TransportViaRefs:  append([]string(nil), segment.TransportViaRefs...),
-			Mode:              binding.Mode,
-			GeoRefs:           append([]string(nil), binding.GeoRefs...),
-			FlowRefs:          append([]string(nil), binding.FlowRefs...),
-			AlternateFlowRefs: append([]string(nil), binding.AlternateFlowRefs...),
-			ZoneRefs:          append([]string(nil), binding.ZoneRefs...),
-			AffectedZoneRefs:  append([]string(nil), binding.AffectedZoneRefs...),
-			SpatialSemantics:  append([]string(nil), binding.SpatialSemantics...),
-			BindingConfidence: binding.BindingConfidence,
-			SegmentConfidence: segment.Confidence,
+			Index:                   i,
+			SupplierRef:             segment.SupplierRef,
+			CustomerRef:             segment.CustomerRef,
+			ProductRef:              segment.ProductRef,
+			SupplyLinkCanonicalPath: strings.TrimSpace(segment.SupplyLinkCanonicalPath),
+			SupplyLinkID:            strings.TrimSpace(segment.SupplyLinkID),
+			SupplyLinkTenantID:      strings.TrimSpace(firstNonEmpty(segment.SupplyLinkTenantID, segment.TenantID)),
+			TransportViaRefs:        append([]string(nil), segment.TransportViaRefs...),
+			Mode:                    binding.Mode,
+			GeoRefs:                 append([]string(nil), binding.GeoRefs...),
+			FlowRefs:                append([]string(nil), binding.FlowRefs...),
+			AlternateFlowRefs:       append([]string(nil), binding.AlternateFlowRefs...),
+			ZoneRefs:                append([]string(nil), binding.ZoneRefs...),
+			AffectedZoneRefs:        append([]string(nil), binding.AffectedZoneRefs...),
+			SpatialSemantics:        append([]string(nil), binding.SpatialSemantics...),
+			BindingConfidence:       binding.BindingConfidence,
+			SegmentConfidence:       segment.Confidence,
 		}
 		if supplierIdx >= 0 {
 			idx := supplierIdx
@@ -1191,18 +1200,20 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 		if supplierIdx >= 0 && customerIdx >= 0 && productIdx >= 0 {
 			segmentIdx := i
 			edges = append(edges, models.SupplyChainPathEdge{
-				Type:             "SUPPLY_LINK",
-				From:             supplierIdx,
-				To:               customerIdx,
-				ViaProductIndex:  &productIdx,
-				ProductNodeIndex: &productIdx,
-				ProductRef:       segment.ProductRef,
-				SupplyLinkID:     segment.SupplyLinkID,
-				SegmentIndex:     &segmentIdx,
-				CarriesProduct:   true,
-				Role:             "product_flow",
-				Metrics:          cloneMetricValues(segment.Metrics),
-				Qualifiers:       buildPathEdgeQualifiers(segment, leg, "product_flow", 0),
+				Type:                    "SUPPLY_LINK",
+				From:                    supplierIdx,
+				To:                      customerIdx,
+				ViaProductIndex:         &productIdx,
+				ProductNodeIndex:        &productIdx,
+				ProductRef:              segment.ProductRef,
+				SupplyLinkID:            segment.SupplyLinkID,
+				SupplyLinkCanonicalPath: strings.TrimSpace(segment.SupplyLinkCanonicalPath),
+				SupplyLinkTenantID:      strings.TrimSpace(firstNonEmpty(segment.SupplyLinkTenantID, segment.TenantID)),
+				SegmentIndex:            &segmentIdx,
+				CarriesProduct:          true,
+				Role:                    "product_flow",
+				Metrics:                 cloneMetricValues(segment.Metrics),
+				Qualifiers:              buildPathEdgeQualifiers(segment, leg, "product_flow", 0),
 			})
 		}
 		if supplierIdx >= 0 && len(segment.TransportViaRefs) > 0 {
@@ -1218,36 +1229,40 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 				}
 				segmentIdx := i
 				edges = append(edges, models.SupplyChainPathEdge{
-					Type:             "LOGISTICS",
-					From:             previousIdx,
-					To:               viaIdx,
-					Mode:             "required",
-					ProductNodeIndex: &productIdx,
-					ProductRef:       segment.ProductRef,
-					SupplyLinkID:     segment.SupplyLinkID,
-					SegmentIndex:     &segmentIdx,
-					CarriesProduct:   true,
-					Role:             "logistics_leg",
-					Metrics:          cloneMetricValues(segment.Metrics),
-					Qualifiers:       buildPathEdgeQualifiers(segment, leg, "logistics_leg", viaOrder),
+					Type:                    "LOGISTICS",
+					From:                    previousIdx,
+					To:                      viaIdx,
+					Mode:                    "required",
+					ProductNodeIndex:        &productIdx,
+					ProductRef:              segment.ProductRef,
+					SupplyLinkID:            segment.SupplyLinkID,
+					SupplyLinkCanonicalPath: strings.TrimSpace(segment.SupplyLinkCanonicalPath),
+					SupplyLinkTenantID:      strings.TrimSpace(firstNonEmpty(segment.SupplyLinkTenantID, segment.TenantID)),
+					SegmentIndex:            &segmentIdx,
+					CarriesProduct:          true,
+					Role:                    "logistics_leg",
+					Metrics:                 cloneMetricValues(segment.Metrics),
+					Qualifiers:              buildPathEdgeQualifiers(segment, leg, "logistics_leg", viaOrder),
 				})
 				previousIdx = viaIdx
 			}
 			if customerIdx >= 0 && previousIdx != customerIdx {
 				segmentIdx := i
 				edges = append(edges, models.SupplyChainPathEdge{
-					Type:             "LOGISTICS",
-					From:             previousIdx,
-					To:               customerIdx,
-					Mode:             "required",
-					ProductNodeIndex: &productIdx,
-					ProductRef:       segment.ProductRef,
-					SupplyLinkID:     segment.SupplyLinkID,
-					SegmentIndex:     &segmentIdx,
-					CarriesProduct:   true,
-					Role:             "logistics_leg",
-					Metrics:          cloneMetricValues(segment.Metrics),
-					Qualifiers:       buildPathEdgeQualifiers(segment, leg, "logistics_leg", len(segment.TransportViaRefs)),
+					Type:                    "LOGISTICS",
+					From:                    previousIdx,
+					To:                      customerIdx,
+					Mode:                    "required",
+					ProductNodeIndex:        &productIdx,
+					ProductRef:              segment.ProductRef,
+					SupplyLinkID:            segment.SupplyLinkID,
+					SupplyLinkCanonicalPath: strings.TrimSpace(segment.SupplyLinkCanonicalPath),
+					SupplyLinkTenantID:      strings.TrimSpace(firstNonEmpty(segment.SupplyLinkTenantID, segment.TenantID)),
+					SegmentIndex:            &segmentIdx,
+					CarriesProduct:          true,
+					Role:                    "logistics_leg",
+					Metrics:                 cloneMetricValues(segment.Metrics),
+					Qualifiers:              buildPathEdgeQualifiers(segment, leg, "logistics_leg", len(segment.TransportViaRefs)),
 				})
 			}
 		}
@@ -1360,11 +1375,23 @@ func buildPathEdgeQualifiers(segment PathSegment, leg models.SupplyChainPathLeg,
 	if strings.TrimSpace(segment.SupplyLinkID) != "" {
 		qualifiers["supplyLinkId"] = strings.TrimSpace(segment.SupplyLinkID)
 	}
+	if strings.TrimSpace(segment.SupplyLinkCanonicalPath) != "" {
+		qualifiers["supplyLinkCanonicalPath"] = strings.TrimSpace(segment.SupplyLinkCanonicalPath)
+	}
 	return qualifiers
 }
 
 func intPtr(v int) *int {
 	return &v
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func buildSupplyChainArtifactNotes(path *SupplyChainPath, legs []models.SupplyChainPathLeg, stress *models.SupplyChainPathStress) map[string]interface{} {

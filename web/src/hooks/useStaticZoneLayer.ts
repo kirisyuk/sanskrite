@@ -51,6 +51,8 @@ type LonLat = [number, number];
 
 const POPUP_STYLE_ID = 'static-zones-popup-style';
 const KM_PER_DEG_LAT = 111.32;
+const STATIC_ZONE_FILL_OPACITY_SCALE = 0.82;
+const STATIC_ZONE_LINE_OPACITY_SCALE = 0.9;
 
 function canAccessMapStyle(map: maplibregl.Map): boolean {
   try {
@@ -423,53 +425,64 @@ function collectObjectsInGeometry(
 function zoneStyle(status: string, hype: number, objectCount: number) {
   const factor = clamp(hype / 100, 0, 1);
   const density = clamp(objectCount / 10, 0, 1);
-  switch (status) {
-    case 'hot':
-      return {
-        fillOpacity: 0.052 + factor * 0.039 + density * 0.021,
-        lineOpacity: 0.7 + factor * 0.14,
-        lineWidth: 1.55 + factor * 0.8,
-        cellBaseOpacity: 0.046 + density * 0.016,
-        cellBoostOpacity: 0.186 + factor * 0.104,
-        cellLineOpacity: 0.31 + factor * 0.15,
-      };
-    case 'active':
-      return {
-        fillOpacity: 0.039 + factor * 0.029 + density * 0.016,
-        lineOpacity: 0.6 + factor * 0.12,
-        lineWidth: 1.3 + factor * 0.55,
-        cellBaseOpacity: 0.04 + density * 0.013,
-        cellBoostOpacity: 0.138 + factor * 0.084,
-        cellLineOpacity: 0.272 + factor * 0.13,
-      };
-    case 'watch':
-      return {
-        fillOpacity: 0.027 + factor * 0.021 + density * 0.013,
-        lineOpacity: 0.48 + factor * 0.095,
-        lineWidth: 1.05 + factor * 0.4,
-        cellBaseOpacity: 0.031 + density * 0.01,
-        cellBoostOpacity: 0.102 + factor * 0.058,
-        cellLineOpacity: 0.22 + factor * 0.102,
-      };
-    case 'cooling':
-      return {
-        fillOpacity: 0.016 + factor * 0.013 + density * 0.008,
-        lineOpacity: 0.33 + factor * 0.072,
-        lineWidth: 0.9 + factor * 0.25,
-        cellBaseOpacity: 0.021 + density * 0.007,
-        cellBoostOpacity: 0.06 + factor * 0.033,
-        cellLineOpacity: 0.148 + factor * 0.058,
-      };
-    default:
-      return {
-        fillOpacity: 0.008 + density * 0.005,
-        lineOpacity: 0.19 + density * 0.09,
-        lineWidth: 0.8 + density * 0.18,
-        cellBaseOpacity: 0.016 + density * 0.004,
-        cellBoostOpacity: 0.027 + density * 0.02,
-        cellLineOpacity: 0.11 + density * 0.04,
-      };
-  }
+  const raw = (() => {
+    switch (status) {
+      case 'hot':
+        return {
+          fillOpacity: 0.052 + factor * 0.039 + density * 0.021,
+          lineOpacity: 0.7 + factor * 0.14,
+          lineWidth: 1.55 + factor * 0.8,
+          cellBaseOpacity: 0.046 + density * 0.016,
+          cellBoostOpacity: 0.186 + factor * 0.104,
+          cellLineOpacity: 0.31 + factor * 0.15,
+        };
+      case 'active':
+        return {
+          fillOpacity: 0.039 + factor * 0.029 + density * 0.016,
+          lineOpacity: 0.6 + factor * 0.12,
+          lineWidth: 1.3 + factor * 0.55,
+          cellBaseOpacity: 0.04 + density * 0.013,
+          cellBoostOpacity: 0.138 + factor * 0.084,
+          cellLineOpacity: 0.272 + factor * 0.13,
+        };
+      case 'watch':
+        return {
+          fillOpacity: 0.027 + factor * 0.021 + density * 0.013,
+          lineOpacity: 0.48 + factor * 0.095,
+          lineWidth: 1.05 + factor * 0.4,
+          cellBaseOpacity: 0.031 + density * 0.01,
+          cellBoostOpacity: 0.102 + factor * 0.058,
+          cellLineOpacity: 0.22 + factor * 0.102,
+        };
+      case 'cooling':
+        return {
+          fillOpacity: 0.016 + factor * 0.013 + density * 0.008,
+          lineOpacity: 0.33 + factor * 0.072,
+          lineWidth: 0.9 + factor * 0.25,
+          cellBaseOpacity: 0.021 + density * 0.007,
+          cellBoostOpacity: 0.06 + factor * 0.033,
+          cellLineOpacity: 0.148 + factor * 0.058,
+        };
+      default:
+        return {
+          fillOpacity: 0.008 + density * 0.005,
+          lineOpacity: 0.19 + density * 0.09,
+          lineWidth: 0.8 + density * 0.18,
+          cellBaseOpacity: 0.016 + density * 0.004,
+          cellBoostOpacity: 0.027 + density * 0.02,
+          cellLineOpacity: 0.11 + density * 0.04,
+        };
+    }
+  })();
+
+  return {
+    ...raw,
+    fillOpacity: raw.fillOpacity * STATIC_ZONE_FILL_OPACITY_SCALE,
+    lineOpacity: raw.lineOpacity * STATIC_ZONE_LINE_OPACITY_SCALE,
+    cellBaseOpacity: raw.cellBaseOpacity * STATIC_ZONE_FILL_OPACITY_SCALE,
+    cellBoostOpacity: raw.cellBoostOpacity * STATIC_ZONE_FILL_OPACITY_SCALE,
+    cellLineOpacity: raw.cellLineOpacity * STATIC_ZONE_LINE_OPACITY_SCALE,
+  };
 }
 
 function buildHexCellFeatures(

@@ -10,6 +10,7 @@ export interface MaterializedArtifact {
   id: string;
   lensId?: string;
   kind: string;
+  canonicalKey?: string;
   displayName?: string;
   nodeRefs?: string[];
   flowRefs?: string[];

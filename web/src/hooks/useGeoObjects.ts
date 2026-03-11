@@ -31,6 +31,8 @@ export interface GeoObjectFilters {
   activeTypes: Set<string> | null;
 }
 
+const GEO_OBJECT_LIMIT_CANDIDATES = [5000] as const;
+
 function deriveTypeCounts(objects: GeoObject[]): TypeCount[] {
   const counts = new Map<string, number>();
   for (const obj of objects) {
@@ -60,29 +62,42 @@ export function useGeoObjects(
       let cancelled = false;
       setLoading(true);
 
-      const opts: Parameters<typeof api.listHorizonGeoObjects>[0] = { limit: 5000 };
-      if (filters.dateFrom) opts!.createdAfter = filters.dateFrom;
-      if (filters.dateTo) opts!.createdBefore = filters.dateTo;
-      if (scope?.lensId) opts!.lensId = scope.lensId;
+      const load = async () => {
+        let lastError: unknown = null;
+        for (const limit of GEO_OBJECT_LIMIT_CANDIDATES) {
+          const opts: Parameters<typeof api.listHorizonGeoObjects>[0] = { limit };
+          if (filters.dateFrom) opts.createdAfter = filters.dateFrom;
+          if (filters.dateTo) opts.createdBefore = filters.dateTo;
+          if (scope?.lensId) opts.lensId = scope.lensId;
 
-      api
-        .listHorizonGeoObjects(opts)
-        .then((response) => {
-          if (cancelled) return;
-          const valid = (response.items || []).filter((item) => {
-            const lat = item.coordinates?.lat;
-            const lon = item.coordinates?.lon;
-            return Number.isFinite(lat) && Number.isFinite(lon);
-          });
-          setAllObjects(valid);
-          setError(null);
-        })
-        .catch((err) => {
-          if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load geo objects');
-        })
-        .finally(() => {
-          if (!cancelled) setLoading(false);
-        });
+          try {
+            const response = await api.listHorizonGeoObjects(opts);
+            if (cancelled) return;
+            const valid = (response.items || []).filter((item) => {
+              const lat = item.coordinates?.lat;
+              const lon = item.coordinates?.lon;
+              return Number.isFinite(lat) && Number.isFinite(lon);
+            });
+            setAllObjects(valid);
+            setError(null);
+            return;
+          } catch (err) {
+            lastError = err;
+            const status = Number((err as any)?.response?.status);
+            const code = String((err as any)?.code || '');
+            const shouldRetry = status === 503 || code === 'ERR_NETWORK';
+            if (!shouldRetry) break;
+          }
+        }
+
+        if (!cancelled) {
+          setError(lastError instanceof Error ? lastError.message : 'Failed to load geo objects');
+        }
+      };
+
+      void load().finally(() => {
+        if (!cancelled) setLoading(false);
+      });
 
       return () => { cancelled = true; };
     }, 300);

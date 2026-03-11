@@ -21,6 +21,8 @@ TARGET_SETUP_ETIGRAM_INFRA=0
 TARGET_ETIGRAM_WATCHDOG=0
 TARGET_ETIGRAM_WATCHDOG_ONLY=0
 TARGET_CLEANUP_REVISIONS=0
+TARGET_EVENT_GATE=0
+TARGET_ENTITY_EXTRACT=0
 
 REGION=${REGION:-us-central1}
 FIRESTORE_LOCATION=${FIRESTORE_LOCATION:-$REGION}
@@ -37,13 +39,15 @@ SA_BACKEND="backend@${PROJECT_ID}.iam.gserviceaccount.com"
 SECRET_ADMIN_JOB_TOKEN="admin_job_token"
 
 usage() {
-  echo "Usage: scripts/deploy [--web] [--api] [--py] [--etigram-ws] [--verified-proxy] [--check-infra] [--etigram-watchdog] [--etigram-watchdog-only] [--cleanup-revisions]"
+  echo "Usage: scripts/deploy [--web] [--api] [--py] [--event-gate] [--entity-extract] [--etigram-ws] [--verified-proxy] [--check-infra] [--etigram-watchdog] [--etigram-watchdog-only] [--cleanup-revisions]"
   echo "If none specified, deploy web+api. REGION env var supported (default: us-central1)."
   echo ""
   echo "Flags:"
   echo "  --web           Deploy frontend only"
   echo "  --api           Deploy backend API only (skips infra checks)"
   echo "  --py            Deploy Telegram service only (skips infra checks)"
+  echo "  --event-gate    Deploy event gate NLP service only (skips infra checks)"
+  echo "  --entity-extract Deploy entity extraction NLP service only (skips infra checks)"
   echo "  --etigram-ws    Deploy WS broker only (skips infra checks)"
   echo "  --verified-proxy Deploy verified-proxy only (skips infra checks)"
   echo "  --check-infra   Run infrastructure checks only (no deployments)"
@@ -58,6 +62,8 @@ while [[ $# -gt 0 ]]; do
     --web) TARGET_API=0 ;;
     --api) TARGET_WEB=0; TARGET_CHECK_INFRA=0 ;;
     --py) TARGET_WEB=0; TARGET_API=0; TARGET_PY=1; TARGET_CHECK_INFRA=0 ;;
+    --event-gate) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_EVENT_GATE=1; TARGET_CHECK_INFRA=0 ;;
+    --entity-extract) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ENTITY_EXTRACT=1; TARGET_CHECK_INFRA=0 ;;
     --etigram-ws) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ETIGRAM_WS=1; TARGET_CHECK_INFRA=0; TARGET_SETUP_ETIGRAM_INFRA=1 ;;
     --verified-proxy) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ETIGRAM_WS=0; TARGET_VERIFIED_PROXY=1; TARGET_CHECK_INFRA=0 ;;
     --check-infra) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ETIGRAM_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=1 ;;
@@ -1518,6 +1524,24 @@ deploy_api() {
       echo -e "${BLUE}[api] Found Telegram service:${NC} $telegram_url"
     fi
   fi
+
+  local event_gate_url="${EVENT_GATE_SERVICE_URL:-}"
+  local event_gate_service="etigram-event-gate"
+  if [[ -z "$event_gate_url" ]] && gcloud run services describe "$event_gate_service" --region="$REGION" >/dev/null 2>&1; then
+    event_gate_url=$(gcloud run services describe "$event_gate_service" --region="$REGION" --format='value(status.url)' 2>/dev/null || echo "")
+  fi
+  if [[ -n "$event_gate_url" ]]; then
+    echo -e "${BLUE}[api] Found Event Gate service:${NC} $event_gate_url"
+  fi
+
+  local entity_extract_url="${ENTITY_EXTRACT_SERVICE_URL:-}"
+  local entity_extract_service="etigram-entity-extract"
+  if [[ -z "$entity_extract_url" ]] && gcloud run services describe "$entity_extract_service" --region="$REGION" >/dev/null 2>&1; then
+    entity_extract_url=$(gcloud run services describe "$entity_extract_service" --region="$REGION" --format='value(status.url)' 2>/dev/null || echo "")
+  fi
+  if [[ -n "$entity_extract_url" ]]; then
+    echo -e "${BLUE}[api] Found Entity Extract service:${NC} $entity_extract_url"
+  fi
   
   # Build env vars string
   # Note: VERTEX_SEARCH_LOCATION must be "global" for Discovery Engine Data Stores
@@ -1525,9 +1549,21 @@ deploy_api() {
   local vertex_search_ds_id="${VERTEX_SEARCH_DATA_STORE_ID_VALUE:-rag-documents-store}"
   # Best-effort: resolve service URL (stable per service) to construct Cloud Tasks target URL.
   local existing_api_url=""
+  local existing_nlp_env_json=""
+  local existing_event_gate_mode=""
+  local existing_entity_extract_mode=""
   if gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
     existing_api_url=$(gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" --format='value(status.url)' 2>/dev/null || echo "")
+    existing_nlp_env_json=$(gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" --format='json(spec.template.spec.containers[0].env)' 2>/dev/null || echo "")
+    if [[ -n "$existing_nlp_env_json" ]]; then
+      existing_event_gate_mode=$(printf '%s' "$existing_nlp_env_json" | python3 -c 'import json,sys; env=json.load(sys.stdin); print(next((item.get("value","") for item in env if item.get("name")=="EVENT_GATE_MODE"), ""))' 2>/dev/null || echo "")
+      existing_entity_extract_mode=$(printf '%s' "$existing_nlp_env_json" | python3 -c 'import json,sys; env=json.load(sys.stdin); print(next((item.get("value","") for item in env if item.get("name")=="ENTITY_EXTRACT_MODE"), ""))' 2>/dev/null || echo "")
+    fi
   fi
+  local resolved_event_gate_mode="${EVENT_GATE_MODE:-$existing_event_gate_mode}"
+  local resolved_entity_extract_mode="${ENTITY_EXTRACT_MODE:-$existing_entity_extract_mode}"
+  [[ -z "$resolved_event_gate_mode" ]] && resolved_event_gate_mode="shadow"
+  [[ -z "$resolved_entity_extract_mode" ]] && resolved_entity_extract_mode="shadow"
 
   local enable_etigram_watchdog="${ENABLE_ETIGRAM_WATCHDOG:-0}"
   if [[ "${TARGET_ETIGRAM_WATCHDOG:-0}" -eq 1 ]]; then
@@ -1560,6 +1596,20 @@ deploy_api() {
   else
     echo -e "${YELLOW}[api] Telegram service not found - TELEGRAM_SERVICE_URL will not be set${NC}"
   fi
+  if [[ -n "$event_gate_url" ]]; then
+    env_vars="$env_vars,EVENT_GATE_SERVICE_URL=$event_gate_url,EVENT_GATE_MODE=${resolved_event_gate_mode}"
+  fi
+  if [[ -n "$entity_extract_url" ]]; then
+    env_vars="$env_vars,ENTITY_EXTRACT_SERVICE_URL=$entity_extract_url,ENTITY_EXTRACT_MODE=${resolved_entity_extract_mode}"
+  fi
+
+  local api_cpu="${API_CLOUD_RUN_CPU:-2}"
+  local api_memory="${API_CLOUD_RUN_MEMORY:-2Gi}"
+  local api_concurrency="${API_CLOUD_RUN_CONCURRENCY:-16}"
+  local api_min_instances="${API_CLOUD_RUN_MIN_INSTANCES:-1}"
+  local api_max_instances="${API_CLOUD_RUN_MAX_INSTANCES:-6}"
+
+  echo -e "${BLUE}[api] Runtime profile:${NC} cpu=${api_cpu} memory=${api_memory} concurrency=${api_concurrency} min=${api_min_instances} max=${api_max_instances}"
   
   echo -e "${BLUE}[api] Deploying to Cloud Run from image...${NC}"
   # Direct VPC egress for Redis Memorystore access (private IP).
@@ -1569,10 +1619,11 @@ deploy_api() {
     --region "$REGION" \
     --no-invoker-iam-check \
     --service-account "$SA_BACKEND" \
-    --min-instances=1 \
-    --max-instances=3 \
-    --cpu=1 \
-    --memory=512Mi \
+    --min-instances="${api_min_instances}" \
+    --max-instances="${api_max_instances}" \
+    --concurrency="${api_concurrency}" \
+    --cpu="${api_cpu}" \
+    --memory="${api_memory}" \
     --timeout=3600 \
     --set-env-vars "$env_vars" \
     --set-secrets "$paypal_secrets" \
@@ -1797,6 +1848,87 @@ deploy_py() {
       --update-env-vars "TELEGRAM_SERVICE_URL=$TG_URL" \
       --quiet || {
       echo -e "${YELLOW}[api] WARNING: Failed to update TELEGRAM_SERVICE_URL${NC}" >&2
+    }
+  fi
+}
+
+deploy_python_cloud_run_service() {
+  local service="$1"
+  local src_dir="$2"
+  local min_instances="${3:-0}"
+  local max_instances="${4:-2}"
+  local cpu="${5:-1}"
+  local memory="${6:-512Mi}"
+  local env_vars="${7:-}"
+  if [[ ! -d "$src_dir" ]]; then
+    echo -e "${RED}[${service}] Source directory not found:${NC} $src_dir" >&2
+    exit 1
+  fi
+  gcloud run deploy "$service" \
+    --source "$src_dir" \
+    --region "$REGION" \
+    --service-account "$SA_BACKEND" \
+    --no-invoker-iam-check \
+    --min-instances="$min_instances" \
+    --max-instances="$max_instances" \
+    --cpu="$cpu" \
+    --memory="$memory" \
+    ${env_vars:+--set-env-vars "$env_vars"} \
+    --project "$PROJECT_ID" \
+    --quiet
+  gcloud run services update-traffic "$service" --region "$REGION" --to-latest --quiet 2>/dev/null || true
+}
+
+deploy_event_gate() {
+  echo -e "${BLUE}[event-gate] Deploying Event Gate NLP service to Cloud Run...${NC}"
+  local service="etigram-event-gate"
+  local SRC_DIR="$ROOT_DIR/python/event_gate_service"
+  local local_model="$SRC_DIR/model/event_gate.joblib"
+  local model_backend="${EVENT_GATE_MODEL_BACKEND:-rules}"
+  local model_path="${EVENT_GATE_MODEL_PATH:-}"
+  local model_gcs_uri="${EVENT_GATE_MODEL_GCS_URI:-}"
+  if [[ -z "$model_path" && -f "$local_model" ]]; then
+    model_backend="${EVENT_GATE_MODEL_BACKEND:-sklearn}"
+    model_path="/app/model/event_gate.joblib"
+  fi
+  local env_vars="MODEL_BACKEND=${model_backend},MODEL_PATH=${model_path},MODEL_GCS_URI=${model_gcs_uri},LABEL_SCHEMA_VERSION=${EVENT_GATE_LABEL_SCHEMA_VERSION:-v1}"
+  deploy_python_cloud_run_service "$service" "$SRC_DIR" 0 3 1 512Mi "$env_vars"
+  EVENT_GATE_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
+  echo -e "${GREEN}[event-gate] Deployed successfully${NC}"
+  echo -e "${BLUE}[event-gate] URL:${NC} $EVENT_GATE_URL"
+  if [[ -n "$EVENT_GATE_URL" ]] && [[ "$TARGET_API" -eq 0 ]] && gcloud run services describe etigram-api --region "$REGION" >/dev/null 2>&1; then
+    local current_event_gate_mode=""
+    current_event_gate_mode=$(gcloud run services describe etigram-api --region "$REGION" --format='json(spec.template.spec.containers[0].env)' 2>/dev/null | python3 -c 'import json,sys; env=json.load(sys.stdin); print(next((item.get("value","") for item in env if item.get("name")=="EVENT_GATE_MODE"), ""))' 2>/dev/null || echo "")
+    [[ -z "$current_event_gate_mode" ]] && current_event_gate_mode="${EVENT_GATE_MODE:-shadow}"
+    echo -e "${BLUE}[api] Updating existing backend with EVENT_GATE_SERVICE_URL=${EVENT_GATE_URL}${NC}"
+    gcloud run services update etigram-api \
+      --region "$REGION" \
+      --update-env-vars "EVENT_GATE_SERVICE_URL=$EVENT_GATE_URL,EVENT_GATE_MODE=${EVENT_GATE_MODE:-$current_event_gate_mode}" \
+      --quiet || {
+      echo -e "${YELLOW}[api] WARNING: Failed to update EVENT_GATE_SERVICE_URL${NC}" >&2
+    }
+  fi
+}
+
+deploy_entity_extract() {
+  echo -e "${BLUE}[entity-extract] Deploying Entity Extract NLP service to Cloud Run...${NC}"
+  local service="etigram-entity-extract"
+  local SRC_DIR="$ROOT_DIR/python/entity_extract_service"
+  local env_vars="MODEL_BACKEND=${ENTITY_EXTRACT_MODEL_BACKEND:-rules},GLINER_MODEL_NAME=${ENTITY_EXTRACT_GLINER_MODEL_NAME:-},LABEL_SCHEMA_VERSION=${ENTITY_EXTRACT_LABEL_SCHEMA_VERSION:-v1}"
+  deploy_python_cloud_run_service "$service" "$SRC_DIR" 0 3 1 768Mi "$env_vars"
+  ENTITY_EXTRACT_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
+  echo -e "${GREEN}[entity-extract] Deployed successfully${NC}"
+  echo -e "${BLUE}[entity-extract] URL:${NC} $ENTITY_EXTRACT_URL"
+  if [[ -n "$ENTITY_EXTRACT_URL" ]] && [[ "$TARGET_API" -eq 0 ]] && gcloud run services describe etigram-api --region "$REGION" >/dev/null 2>&1; then
+    local current_entity_extract_mode=""
+    current_entity_extract_mode=$(gcloud run services describe etigram-api --region "$REGION" --format='json(spec.template.spec.containers[0].env)' 2>/dev/null | python3 -c 'import json,sys; env=json.load(sys.stdin); print(next((item.get("value","") for item in env if item.get("name")=="ENTITY_EXTRACT_MODE"), ""))' 2>/dev/null || echo "")
+    [[ -z "$current_entity_extract_mode" ]] && current_entity_extract_mode="${ENTITY_EXTRACT_MODE:-shadow}"
+    echo -e "${BLUE}[api] Updating existing backend with ENTITY_EXTRACT_SERVICE_URL=${ENTITY_EXTRACT_URL}${NC}"
+    gcloud run services update etigram-api \
+      --region "$REGION" \
+      --update-env-vars "ENTITY_EXTRACT_SERVICE_URL=$ENTITY_EXTRACT_URL,ENTITY_EXTRACT_MODE=${ENTITY_EXTRACT_MODE:-$current_entity_extract_mode}" \
+      --quiet || {
+      echo -e "${YELLOW}[api] WARNING: Failed to update ENTITY_EXTRACT_SERVICE_URL${NC}" >&2
     }
   fi
 }
@@ -2067,6 +2199,14 @@ if [[ "$TARGET_PY" -eq 1 ]]; then
   deploy_py
 fi
 
+if [[ "$TARGET_EVENT_GATE" -eq 1 ]]; then
+  deploy_event_gate
+fi
+
+if [[ "$TARGET_ENTITY_EXTRACT" -eq 1 ]]; then
+  deploy_entity_extract
+fi
+
 # Firestore indexes are only relevant for backend; skip for web-only
 # Create indexes only on full deploy (already handled in --check-infra path above)
 if [[ "$TARGET_WEB" -eq 1 && "$TARGET_API" -eq 1 && "$TARGET_PY" -eq 0 && "$TARGET_VERIFIED_PROXY" -eq 0 ]]; then
@@ -2083,7 +2223,7 @@ if [[ "$TARGET_CLEANUP_REVISIONS" -eq 1 ]]; then
   echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}"
   
   # Clean up revisions for all services (keep last 10 per service)
-  services=("etigram-api" "etigram-telegram" "etigram-ws" "verified-proxy")
+  services=("etigram-api" "etigram-telegram" "etigram-event-gate" "etigram-entity-extract" "etigram-ws" "verified-proxy")
   for service in "${services[@]}"; do
     if gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
       cleanup_old_revisions "$service" "$REGION" 10
@@ -2114,6 +2254,12 @@ fi
 if [[ "$TARGET_PY" -eq 1 ]] && [[ -n "${TG_URL:-}" ]]; then
   echo -e "${BLUE}Telegram Service:${NC} $TG_URL"
 fi
+if [[ "$TARGET_EVENT_GATE" -eq 1 ]] && [[ -n "${EVENT_GATE_URL:-}" ]]; then
+  echo -e "${BLUE}Event Gate Service:${NC} $EVENT_GATE_URL"
+fi
+if [[ "$TARGET_ENTITY_EXTRACT" -eq 1 ]] && [[ -n "${ENTITY_EXTRACT_URL:-}" ]]; then
+  echo -e "${BLUE}Entity Extract Service:${NC} $ENTITY_EXTRACT_URL"
+fi
 if [[ "$TARGET_WEB" -eq 1 ]]; then
   echo -e "${BLUE}Web Static:${NC} gs://${PROJECT_ID}-web-static"
 fi
@@ -2130,6 +2276,12 @@ if [[ "$TARGET_VERIFIED_PROXY" -eq 1 ]]; then
   fi
 fi
 echo -e "  ☐ Test API health: curl \$API_URL/api/v1/healthz"
+if [[ "$TARGET_EVENT_GATE" -eq 1 ]] && [[ -n "${EVENT_GATE_URL:-}" ]]; then
+  echo -e "  ☐ Test Event Gate health: curl ${EVENT_GATE_URL}/api/v1/healthz"
+fi
+if [[ "$TARGET_ENTITY_EXTRACT" -eq 1 ]] && [[ -n "${ENTITY_EXTRACT_URL:-}" ]]; then
+  echo -e "  ☐ Test Entity Extract health: curl ${ENTITY_EXTRACT_URL}/api/v1/healthz"
+fi
 echo -e "  ☐ Check Cloud Run logs for errors"
 echo -e "  ☐ Verify traffic is on latest revision"
 echo ""

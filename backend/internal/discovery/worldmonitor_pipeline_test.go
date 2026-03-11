@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	discoverynlp "github.com/igorkirisyuk/sanskrite/internal/discovery/nlp"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 )
@@ -289,6 +290,133 @@ func TestShouldSuppressHeuristicSignalPropagation(t *testing.T) {
 		Summary:    "Commentary and roundup episode without a concrete disruptive event.",
 	}) {
 		t.Fatal("expected roundup commentary to be suppressed even if misclassified")
+	}
+}
+
+func TestShouldSuppressAffectedZoneBySemanticDrift_LiveBlogExplainer(t *testing.T) {
+	text := normalizeKeywordText("Why did US and Israel attack Iran and how long could the war last?")
+	if !shouldSuppressAffectedZoneBySemanticDrift(text, &horizonMonitorFeedEvent{Title: "Why did US and Israel attack Iran and how long could the war last?"}, horizonMonitorNewsClassification{Category: "military"}) {
+		t.Fatalf("expected explainer/liveblog question to be suppressed")
+	}
+}
+
+func TestShouldSuppressAffectedZoneByEventProfile_ExerciseAndDrugInterdiction(t *testing.T) {
+	exerciseText := normalizeKeywordText("USS Gerald R. Ford now in the Red Sea, USS George H.W. Bush wraps pre-deployment exercises")
+	exerciseEvent := &horizonMonitorFeedEvent{
+		Title: "USS Gerald R. Ford now in the Red Sea, USS George H.W. Bush wraps pre-deployment exercises",
+		URL:   "https://www.defensenews.com/naval/2026/03/09/uss-gerald-r-ford-now-in-the-red-sea/",
+	}
+	exerciseCls := horizonMonitorNewsClassification{Category: "military", Level: "medium"}
+	if !shouldSuppressAffectedZoneByEventProfile(exerciseText, exerciseEvent, exerciseCls, "military_conflict", wmHeuristics().ProfileArticle(exerciseText, affectedZoneSourceHost(exerciseEvent))) {
+		t.Fatalf("expected exercise-only military movement to be suppressed")
+	}
+
+	drugText := normalizeKeywordText("SOUTHCOM Strike on Suspected Drug Boat Kills 6")
+	drugEvent := &horizonMonitorFeedEvent{
+		Title: "SOUTHCOM Strike on Suspected Drug Boat Kills 6",
+		URL:   "https://www.defense.gov/News/2026/03/09/southcom-strike-on-suspected-drug-boat-kills-6/",
+	}
+	drugCls := horizonMonitorNewsClassification{Category: "military", Level: "high"}
+	if !shouldSuppressAffectedZoneByEventProfile(drugText, drugEvent, drugCls, "military_conflict", wmHeuristics().ProfileArticle(drugText, affectedZoneSourceHost(drugEvent))) {
+		t.Fatalf("expected drug interdiction military headline to be suppressed as affected zone")
+	}
+}
+
+func TestRuleArticleAssessment_SuppressesAdministrativeAndExerciseCases(t *testing.T) {
+	p := &HorizonMonitorPipeline{}
+	exercise := p.ruleArticleAssessment(discoverynlp.DocumentInput{
+		SourceHost: "defensenews.com",
+		Title:      "U.S. Army Attack Helicopters Hold Maritime Attack Drills in the Pacific",
+		Summary:    "Exercise-focused article without a concrete battlefield incident.",
+	}, horizonMonitorNewsClassification{Category: "military", Level: "medium"})
+	if exercise.ShouldCreateZone || exercise.ShouldOnlySignal || exercise.IsEvent {
+		t.Fatalf("expected drills article to be suppressed, got %+v", exercise)
+	}
+
+	commentary := p.ruleArticleAssessment(discoverynlp.DocumentInput{
+		SourceHost: "apnews.com",
+		Title:      "South Africa’s president calls Trump’s policy to offer refuge to white Afrikaners racist",
+		Summary:    "Political commentary and reaction coverage.",
+	}, horizonMonitorNewsClassification{Category: "politics", Level: "medium"})
+	if commentary.ShouldCreateZone || commentary.ShouldOnlySignal || commentary.IsEvent {
+		t.Fatalf("expected political commentary to be suppressed, got %+v", commentary)
+	}
+
+	liveBlog := p.ruleArticleAssessment(discoverynlp.DocumentInput{
+		SourceHost: "theguardian.com",
+		Title:      "White House live updates: Trump and DHS latest politics updates",
+		Summary:    "Live blog of US politics with latest updates.",
+	}, horizonMonitorNewsClassification{Category: "diplomatic", Level: "medium"})
+	if liveBlog.ShouldCreateZone || liveBlog.ShouldOnlySignal || liveBlog.IsEvent {
+		t.Fatalf("expected live blog commentary to be suppressed, got %+v", liveBlog)
+	}
+
+	deployment := p.ruleArticleAssessment(discoverynlp.DocumentInput{
+		SourceHost: "defensenews.com",
+		Title:      "Turkey sends six F-16 fighters to Northern Cyprus amid Iran missile threats",
+		Summary:    "The aircraft were sent as part of a phased approach to enhancing security.",
+	}, horizonMonitorNewsClassification{Category: "military", Level: "high"})
+	if deployment.ShouldCreateZone || deployment.ShouldOnlySignal || deployment.IsEvent {
+		t.Fatalf("expected force posture deployment to be suppressed, got %+v", deployment)
+	}
+
+	cyberCampaign := p.ruleArticleAssessment(discoverynlp.DocumentInput{
+		SourceHost: "thehackernews.com",
+		Title:      "SloppyLemming Targets Pakistan and Bangladesh Governments Using Dual Malware Chains",
+		Summary:    "Targets government entities using dual malware chains.",
+	}, horizonMonitorNewsClassification{Category: "cyber", Level: "high"})
+	if cyberCampaign.ShouldCreateZone || cyberCampaign.ShouldOnlySignal || cyberCampaign.IsEvent {
+		t.Fatalf("expected cyber campaign without outage to be suppressed, got %+v", cyberCampaign)
+	}
+}
+
+func TestInferZonePlaceName_DoesNotFallbackToCountryForExerciseOrRoundup(t *testing.T) {
+	exerciseEvent := &horizonMonitorFeedEvent{
+		Title:       "U.S. Army Attack Helicopters Hold Maritime Attack Drills in the Pacific",
+		Summary:     "Exercise-focused article without a concrete battlefield incident.",
+		CountryCode: "PS",
+		CountryName: "Palestine",
+	}
+	if place := inferZonePlaceName(exerciseEvent, normalizeKeywordText(strings.Join([]string{exerciseEvent.Title, exerciseEvent.Summary}, " ")), "military_conflict"); place != "" {
+		t.Fatalf("expected no country fallback place for exercise, got %q", place)
+	}
+
+	roundupEvent := &horizonMonitorFeedEvent{
+		Title:       "Turkey sends six F-16 fighters to Northern Cyprus amid Iran missile threats",
+		Summary:     "Regional military deployments and threats across multiple countries.",
+		CountryCode: "FR",
+		CountryName: "France",
+	}
+	if place := inferZonePlaceName(roundupEvent, normalizeKeywordText(strings.Join([]string{roundupEvent.Title, roundupEvent.Summary}, " ")), "military_conflict"); !strings.EqualFold(place, "Northern Cyprus") {
+		t.Fatalf("expected extracted place Northern Cyprus, got %q", place)
+	}
+
+	prefixEvent := &horizonMonitorFeedEvent{
+		Title:       "Lebanon: 300,000 already displaced as Israel issues mass evacuation orders | NRC - ReliefWeb",
+		CountryCode: "IL",
+		CountryName: "Israel",
+	}
+	if place := inferZonePlaceName(prefixEvent, normalizeKeywordText(prefixEvent.Title), "humanitarian_crisis"); !strings.EqualFold(place, "Lebanon") {
+		t.Fatalf("expected title-prefix place Lebanon, got %q", place)
+	}
+}
+
+func TestApplyNLPResultToEvent_ShadowEntitiesDoNotAffectRuntimeAnchors(t *testing.T) {
+	p := &HorizonMonitorPipeline{entityExtractMode: discoverynlp.ModeShadow}
+	event := &horizonMonitorFeedEvent{Raw: map[string]interface{}{}}
+	entities := &discoverynlp.EntityExtractionResult{
+		Entities: []discoverynlp.ExtractedEntity{
+			{Surface: "Ras Laffan Industrial City", EntityType: "facility", Role: "facility", Confidence: 0.88},
+		},
+	}
+
+	p.applyNLPResultToEvent(event, nil, entities)
+
+	if _, ok := event.Raw["nlpEntities"]; ok {
+		t.Fatalf("shadow mode must not write nlpEntities into runtime event raw")
+	}
+	if _, ok := event.Raw["nlpEntitiesShadow"]; !ok {
+		t.Fatalf("shadow mode should keep extracted entities under nlpEntitiesShadow")
 	}
 }
 
@@ -688,7 +816,7 @@ func TestInferZoneGeo_DoesNotTrustPublisherCountryForMilitaryConflict(t *testing
 		URL:         "https://www.france24.com/en/us-israel-hit-oil-depot-in-tehran",
 	}
 	geo, cc, _ := inferZoneGeo(event, "", strings.Join([]string{event.Title, event.Summary}, " "), "military_conflict")
-	if geo != "global" || cc != "" {
+	if strings.EqualFold(geo, "fr") || strings.EqualFold(cc, "FR") {
 		t.Fatalf("expected publisher country fallback to be ignored for military conflict, got geo=%q cc=%q", geo, cc)
 	}
 }
@@ -749,6 +877,62 @@ func TestInferAffectedZoneCandidate_SuppressesAdministrativeConflictCommentary(t
 	cls := normalizeClassificationWithSourceHint(classifyHorizonMonitorNewsKeyword(strings.Join([]string{e.Title, e.Summary}, " ")), e)
 	if got := inferAffectedZoneCandidate(e, cls); got != nil {
 		t.Fatalf("expected no affected zone for administrative/political succession commentary, got %+v", got)
+	}
+}
+
+func TestInferAffectedZoneCandidate_SuppressesLegalCommercialDispute(t *testing.T) {
+	e := &horizonMonitorFeedEvent{
+		Title:       "Roman Abramovich ready to fight UK government over proceeds from £2.5bn Chelsea sale",
+		Summary:     "Legal and commercial dispute over sanctions-era sale proceeds.",
+		CountryCode: "GB",
+		CountryName: "United Kingdom",
+		URL:         "https://www.theguardian.com/football/example",
+	}
+	cls := normalizeClassificationWithSourceHint(classifyHorizonMonitorNewsKeyword(strings.Join([]string{e.Title, e.Summary}, " ")), e)
+	if got := inferAffectedZoneCandidate(e, cls); got != nil {
+		t.Fatalf("expected no affected zone for legal/commercial dispute, got %+v", got)
+	}
+}
+
+func TestInferAffectedZoneCandidate_SuppressesRetrospectiveConflictNarrative(t *testing.T) {
+	e := &horizonMonitorFeedEvent{
+		Title:       "The final voyage of the Iranian warship sunk by the US",
+		Summary:     "A retrospective look at a warship sunk near Sri Lanka, bringing conflict close to India.",
+		CountryCode: "IN",
+		CountryName: "India",
+		URL:         "https://www.bbc.com/news/example",
+	}
+	cls := normalizeClassificationWithSourceHint(classifyHorizonMonitorNewsKeyword(strings.Join([]string{e.Title, e.Summary}, " ")), e)
+	if got := inferAffectedZoneCandidate(e, cls); got != nil {
+		t.Fatalf("expected no affected zone for retrospective conflict narrative, got %+v", got)
+	}
+}
+
+func TestInferAffectedZoneCandidate_SuppressesForcePostureHormuzCommentary(t *testing.T) {
+	e := &horizonMonitorFeedEvent{
+		Title:       "Macron says France, allies preparing defensive mission to reopen Strait of Hormuz",
+		Summary:     "France and allies are preparing a defensive mission to help reopen the Strait of Hormuz after shipping disruptions.",
+		CountryCode: "FR",
+		CountryName: "France",
+		URL:         "https://www.france24.com/en/example",
+	}
+	cls := normalizeClassificationWithSourceHint(classifyHorizonMonitorNewsKeyword(strings.Join([]string{e.Title, e.Summary}, " ")), e)
+	if got := inferAffectedZoneCandidate(e, cls); got != nil {
+		t.Fatalf("expected no new affected zone for force-posture Hormuz commentary, got %+v", got)
+	}
+}
+
+func TestInferZoneGeo_PrefersTextCountryOverPublisherCountry(t *testing.T) {
+	event := &horizonMonitorFeedEvent{
+		Title:       "Tehran shrouded in toxic cloud after overnight explosion",
+		Summary:     "Witnesses in Iran reported a toxic cloud over Tehran after the blast.",
+		CountryCode: "FR",
+		CountryName: "France",
+		URL:         "https://www.france24.com/en/example",
+	}
+	geo, cc, country := inferZoneGeo(event, "", strings.Join([]string{event.Title, event.Summary}, " "), "military_conflict")
+	if geo != "ir" || cc != "IR" || country != "Iran" {
+		t.Fatalf("expected text country to beat publisher country, got geo=%q cc=%q country=%q", geo, cc, country)
 	}
 }
 
@@ -962,5 +1146,211 @@ func TestSelectDeterministicAffectedZoneMatch(t *testing.T) {
 	}
 	if best.CanonicalPath != "/zone/ir/military_conflict/tehran-armed-tension" {
 		t.Fatalf("unexpected match: %s", best.CanonicalPath)
+	}
+}
+
+func TestLooksLikeAdministrativeCommentaryText_Ceremony(t *testing.T) {
+	text := "U.S. Hostage and Wrongful Detainee Day Flag Ceremony - U.S. Department of State"
+	if !looksLikeAdministrativeCommentaryText(text) {
+		t.Fatal("expected ceremony text to be treated as administrative commentary")
+	}
+}
+
+func TestLooksLikeAdministrativeCommentaryText_DBriefAndRewild(t *testing.T) {
+	cases := []string{
+		"The D Brief: Iran war spreads across Mideast; And a bit more.",
+		"Countries can rewild borders to deter invasions, says EU environment chief",
+	}
+	for _, text := range cases {
+		if !looksLikeAdministrativeCommentaryText(text) {
+			t.Fatalf("expected %q to be treated as administrative/broad commentary", text)
+		}
+	}
+}
+
+func TestLooksLikeCivilIncidentWithoutMilitaryContext_SynagogueExplosion(t *testing.T) {
+	text := "Belgium to investigate targeted synagogue explosion in Liege after police secured the area"
+	if !looksLikeCivilIncidentWithoutMilitaryContext(text) {
+		t.Fatal("expected synagogue explosion to be treated as civil incident without military context")
+	}
+}
+
+func TestLooksLikeExerciseWithoutIncidentText(t *testing.T) {
+	text := "Navy fighters rehearse anti-ship missions off California during a large-scale exercise"
+	if !looksLikeExerciseWithoutIncidentText(text) {
+		t.Fatal("expected rehearsal text to be treated as exercise without incident")
+	}
+}
+
+func TestIsLikelyTitlePlaceCandidate_RejectsMilitaryAssetName(t *testing.T) {
+	if isLikelyTitlePlaceCandidate("USS George Washington") {
+		t.Fatal("expected military asset names to be rejected as place candidates")
+	}
+}
+
+func TestInferZoneGeoFromPlace_NorthSea(t *testing.T) {
+	geoToken, countryCode, countryName := inferZoneGeoFromPlace("North Sea")
+	if geoToken != "sea" || countryCode != "" || countryName != "North Sea" {
+		t.Fatalf("unexpected geo inference: token=%s cc=%s name=%s", geoToken, countryCode, countryName)
+	}
+}
+
+func TestShouldSuppressWeakAffectedZoneInference_RewildBorders(t *testing.T) {
+	event := &horizonMonitorFeedEvent{
+		Title:   "Countries can rewild borders to deter invasions, says EU environment chief",
+		Summary: "Jessika Roswall cites Poland and Finland, which have made border areas near Russia or its allies more hostile to cross.",
+		Raw: map[string]interface{}{
+			"sourceHost": "theguardian.com",
+		},
+	}
+	cls := horizonMonitorNewsClassification{Category: "conflict", Level: "critical"}
+	text := normalizeKeywordText(event.Title + " " + event.Summary)
+	if !shouldSuppressWeakAffectedZoneInference(text, event, cls, "military_conflict", 1.18) {
+		t.Fatal("expected rewild-borders commentary to be suppressed for affected-zone inference")
+	}
+}
+
+func TestLooksLikeCapabilityOrFeatureText(t *testing.T) {
+	cases := []string{
+		"Meet the startups trying to build military-specific AI",
+		"Brazil to develop air-launched anti-ship missile capability",
+		"Ukraine Unbroken review – five searing dramas about the history and horror of Russia’s invasion",
+	}
+	for _, text := range cases {
+		if !looksLikeCapabilityOrFeatureText(text) {
+			t.Fatalf("expected %q to be treated as capability/feature commentary", text)
+		}
+	}
+}
+
+func TestShouldSuppressWeakAffectedZoneInference_DiseaseTrendArticle(t *testing.T) {
+	event := &horizonMonitorFeedEvent{
+		Title: "Average UK office attendance settling at highest level since before Covid",
+	}
+	cls := horizonMonitorNewsClassification{Category: "health", Level: "medium"}
+	text := normalizeKeywordText(event.Title)
+	if !shouldSuppressWeakAffectedZoneInference(text, event, cls, "disease_outbreak", 1.22) {
+		t.Fatal("expected trend article mentioning covid to be suppressed for disease_outbreak zone inference")
+	}
+}
+
+func TestShouldPromoteAffectedZonePrimaryEvidence_RejectsWeakAnalysisOverwrite(t *testing.T) {
+	f := &horizonmodels.HorizonFragment{
+		Type: horizonmodels.FragmentTypeAffectedZone,
+		Qualifiers: map[string]interface{}{
+			"sourceTitle":        "Missile strike hits refinery near Bandar Abbas",
+			"sourceOccurredAt":   time.Date(2026, 3, 8, 8, 0, 0, 0, time.UTC).Format(time.RFC3339),
+			"primarySourceScore": 0.86,
+			"conditionType":      "military_conflict",
+		},
+	}
+	c := &affectedZoneCandidate{ConditionType: "military_conflict", InferenceScore: 1.12, GeoPrecision: "precise"}
+	e := &horizonMonitorFeedEvent{
+		Title:      "Iran and the Gulf: Why Hedging Is No Longer Enough",
+		Summary:    "Analysis of regional balancing and strategic posture.",
+		OccurredAt: time.Date(2026, 3, 9, 8, 0, 0, 0, time.UTC),
+		URL:        "https://warontherocks.com/example",
+	}
+	cls := horizonMonitorNewsClassification{Category: "conflict", Level: "medium"}
+	if shouldPromoteAffectedZonePrimaryEvidence(f, c, cls, e) {
+		t.Fatal("expected weak analysis article not to overwrite strong existing primary evidence")
+	}
+}
+
+func TestShouldUseAffectedZoneStoredSourceEvidence_RejectsWeakStoredSource(t *testing.T) {
+	f := &horizonmodels.HorizonFragment{
+		Type: horizonmodels.FragmentTypeAffectedZone,
+		Qualifiers: map[string]interface{}{
+			"sourceTitle":            "Using the 2026 Winter Olympics to Build Soft Power",
+			"sourceSummary":          "A commentary on soft-power strategy and national image.",
+			"sourceUrl":              "https://www.csis.org/example",
+			"sourceCountryCode":      "KP",
+			"primarySourceScore":     0.73,
+			"classificationCategory": "humanitarian",
+			"classificationLevel":    "medium",
+			"classificationSource":   "heuristic",
+			"conditionType":          "humanitarian_crisis",
+			"zoneInferenceScore":     0.81,
+		},
+	}
+	if shouldUseAffectedZoneStoredSourceEvidence(f) {
+		t.Fatal("expected weak stored commentary source not to be trusted as primary zone evidence")
+	}
+}
+
+func TestShouldUseAffectedZoneStoredSourceEvidence_RejectsCountryConflictWithExplicitPlace(t *testing.T) {
+	f := &horizonmodels.HorizonFragment{
+		Type: horizonmodels.FragmentTypeAffectedZone,
+		Qualifiers: map[string]interface{}{
+			"sourceTitle":            "Tehran shrouded in toxic cloud after US-Israeli strikes on oil deposits",
+			"sourceSummary":          "Huge fires broke out in Tehran after Israeli strikes targeted Iranian oil infrastructure.",
+			"sourceUrl":              "https://www.france24.com/example",
+			"sourceCountryCode":      "FR",
+			"primarySourceScore":     0.80,
+			"classificationCategory": "conflict",
+			"classificationLevel":    "high",
+			"classificationSource":   "heuristic",
+			"conditionType":          "military_conflict",
+			"zoneInferenceScore":     2.8,
+		},
+	}
+	if shouldUseAffectedZoneStoredSourceEvidence(f) {
+		t.Fatal("expected stored source evidence to be rejected when explicit place conflicts with stored country")
+	}
+}
+
+func TestShouldSuppressAffectedZoneBySemanticDrift_SuppressesLegalCommercialDispute(t *testing.T) {
+	text := normalizeKeywordText("Roman Abramovich ready to fight UK government over proceeds from £2.5bn Chelsea sale")
+	cls := horizonMonitorNewsClassification{Category: "military", Level: "critical"}
+	if !shouldSuppressAffectedZoneBySemanticDrift(text, nil, cls) {
+		t.Fatal("expected legal commercial dispute to be suppressed as semantic drift")
+	}
+}
+
+func TestShouldSuppressAffectedZoneBySemanticDrift_SuppressesRetrospectiveConflictNarrative(t *testing.T) {
+	text := normalizeKeywordText("The final voyage of the Iranian warship sunk by the US")
+	cls := horizonMonitorNewsClassification{Category: "military", Level: "high"}
+	if !shouldSuppressAffectedZoneBySemanticDrift(text, nil, cls) {
+		t.Fatal("expected retrospective conflict narrative to be suppressed as semantic drift")
+	}
+}
+
+func TestShouldSuppressAffectedZoneBySemanticDrift_SuppressesSportsPoliticalHumanInterest(t *testing.T) {
+	text := normalizeKeywordText("Five Iranian footballers in Australian safe house after Asian Cup protest")
+	cls := horizonMonitorNewsClassification{Category: "protest", Level: "medium"}
+	if !shouldSuppressAffectedZoneBySemanticDrift(text, nil, cls) {
+		t.Fatal("expected sports political human-interest text to be suppressed as semantic drift")
+	}
+}
+
+func TestShouldSuppressAffectedZoneBySemanticDrift_SuppressesChokepointSecurityMissionWithoutDisruption(t *testing.T) {
+	text := normalizeKeywordText("Macron says France allies preparing defensive mission to reopen Strait of Hormuz")
+	cls := horizonMonitorNewsClassification{Category: "infrastructure", Level: "high"}
+	if !shouldSuppressAffectedZoneBySemanticDrift(text, nil, cls) {
+		t.Fatal("expected chokepoint security mission without outage to be suppressed as semantic drift")
+	}
+}
+
+func TestShouldSuppressAffectedZoneBySemanticDrift_SuppressesCompanyScopedCyberBreach(t *testing.T) {
+	text := normalizeKeywordText("Ericsson US discloses data breach after service provider hack affecting employees and customers")
+	cls := horizonMonitorNewsClassification{Category: "cyber", Level: "high"}
+	if !shouldSuppressAffectedZoneBySemanticDrift(text, nil, cls) {
+		t.Fatal("expected company-scoped cyber breach without outage to be suppressed as semantic drift")
+	}
+}
+
+func TestShouldSuppressAffectedZoneBySemanticDrift_SuppressesInvestigatedSystemsBreach(t *testing.T) {
+	text := normalizeKeywordText("FBI investigates breach of surveillance and wiretap systems in the United States")
+	cls := horizonMonitorNewsClassification{Category: "cyber", Level: "medium"}
+	if !shouldSuppressAffectedZoneBySemanticDrift(text, nil, cls) {
+		t.Fatal("expected investigated systems breach without outage to be suppressed as semantic drift")
+	}
+}
+
+func TestShouldSuppressAffectedZoneBySemanticDrift_SuppressesOffshoreShippingIncidentAttributedElsewhere(t *testing.T) {
+	text := normalizeKeywordText("Putin accuses Ukraine of attacking gas tanker that exploded and sank off Libya")
+	cls := horizonMonitorNewsClassification{Category: "terrorism", Level: "high"}
+	if !shouldSuppressAffectedZoneBySemanticDrift(text, nil, cls) {
+		t.Fatal("expected offshore shipping incident attributed elsewhere to be suppressed as semantic drift")
 	}
 }

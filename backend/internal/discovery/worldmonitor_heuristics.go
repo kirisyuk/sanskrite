@@ -603,6 +603,15 @@ func buildWMHeuristicEngine() *wmHeuristicEngine {
 			Keywords: []wmWeightedKeyword{
 				{"analysis", 1.2}, {"briefing", 1.2}, {"report", 1.0}, {"outlook", 1.0}, {"at a glance", 1.7},
 				{"what to know", 1.6}, {"this week", 1.8}, {"weekly update", 1.6}, {"roundup", 1.7},
+				{"the d brief", 2.4}, {"d brief", 1.9}, {"and a bit more", 2.0},
+				{"in other news", 2.1}, {"what happens if", 2.2}, {"must not be a staging ground", 2.3},
+				{"draw congressional scrutiny", 2.2}, {"congressional scrutiny", 1.8},
+				{"meet the startups", 2.0}, {"military specific ai", 2.0}, {"military-specific ai", 2.0},
+				{"build soft power", 2.1}, {"strategic agreement", 1.8}, {"to discuss regional security", 2.0},
+				{"office attendance", 2.1}, {"workforce readiness", 1.9}, {"certification portfolio", 2.0},
+				{"blueprint", 1.8}, {"review", 1.6}, {"seeks order suppressing identities", 2.4},
+				{"anti ship missile capability", 2.1}, {"anti-ship missile capability", 2.1},
+				{"missile capability", 1.7}, {"why hedging is no longer enough", 2.5},
 				{"lessons from", 1.8}, {"breaking the cycle", 2.0}, {"building wildfire resilience", 2.2},
 				{"confronting the", 2.1}, {"challenge", 1.0}, {"betting on america", 2.1}, {"blogs", 1.3},
 				{"opinion", 1.3}, {"strategy", 1.2}, {"strategic", 1.1}, {"overview", 1.0},
@@ -610,6 +619,8 @@ func buildWMHeuristicEngine() *wmHeuristicEngine {
 				{"stability and growth", 1.7}, {"strike a balance", 1.8}, {"tries to strike a balance", 2.2},
 				{"pricing deal", 1.8}, {"pricing deals", 1.9}, {"access to medicines", 1.8},
 				{"set to be announced", 2.0}, {"new supreme leader", 1.8}, {"taunts", 1.5},
+				{"rewild borders", 2.4}, {"countries can rewild borders", 2.6}, {"natural border control", 2.3},
+				{"environment chief", 1.8}, {"deter invasions", 2.1},
 			},
 		},
 		{
@@ -628,7 +639,9 @@ func buildWMHeuristicEngine() *wmHeuristicEngine {
 			Keywords: []wmWeightedKeyword{
 				{"latin america", 1.7}, {"middle east and beyond", 2.0}, {"and beyond", 1.5}, {"across latin america", 1.9},
 				{"across europe", 1.7}, {"across the region", 1.6}, {"regional", 1.2}, {"multiple countries", 1.5},
-				{"16 countries", 1.8}, {"worldwide", 1.3}, {"global", 1.1},
+				{"16 countries", 1.8}, {"worldwide", 1.3}, {"global", 1.1}, {"across mideast", 1.8},
+				{"across middle east", 1.8}, {"throughout the middle east", 1.9}, {"more than a dozen countries", 2.1},
+				{"countries can rewild borders", 1.9}, {"natural border control", 1.8},
 			},
 		},
 		{

@@ -66,11 +66,15 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
   const scopeArtifacts: Record<string, {
     kind?: string;
     displayName?: string;
+    anchorSupplier?: string;
+    anchorCustomer?: string;
+    productAxis?: string;
     nodeRefs?: string[];
     status?: string;
     flowRefs?: string[];
     zoneRefs?: string[];
     affectedZoneRefs?: string[];
+    spatialSemantics?: string[];
     legCount?: number;
     bindingConfidence?: number;
     pathStressScore?: number;
@@ -779,17 +783,44 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
                     const kindLabel = artMeta?.kind
                       ? artMeta.kind.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())
                       : 'Supply Chain';
+                    const fullChain = String(artMeta?.kind || '').trim().toUpperCase() === 'SUPPLY_CHAIN_PATH';
+                    const anchorLine = [artMeta?.anchorSupplier, artMeta?.anchorCustomer].filter(Boolean).join(' → ');
+                    const metricsLine = [
+                      typeof artMeta?.legCount === 'number' && artMeta.legCount > 0 ? `${artMeta.legCount} legs` : '',
+                      typeof artMeta?.bindingConfidence === 'number' && artMeta.bindingConfidence > 0
+                        ? `bind ${Math.round(artMeta.bindingConfidence * 100)}%`
+                        : '',
+                      typeof artMeta?.pathStressScore === 'number' && artMeta.pathStressScore > 0
+                        ? `stress ${artMeta.pathStressScore.toFixed(2)}`
+                        : '',
+                    ].filter(Boolean).join(' • ');
+                    const footprintLine = [
+                      artMeta?.flowRefs && artMeta.flowRefs.length > 0 ? `${artMeta.flowRefs.length} flows` : '',
+                      artMeta?.zoneRefs && artMeta.zoneRefs.length > 0 ? `${artMeta.zoneRefs.length} zones` : '',
+                      artMeta?.affectedZoneRefs && artMeta.affectedZoneRefs.length > 0 ? `${artMeta.affectedZoneRefs.length} affected` : '',
+                    ].filter(Boolean).join(' • ');
                     return (
                       <div key={`scope-${path}-${index}`} style={{ padding: '10px 12px', background: 'transparent', borderBottom: '1px solid var(--border-subtle)' }}>
                         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
                           <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                               <Pill text={kindLabel} tone="amber" />
+                              {fullChain ? <Pill text="Full chain" tone="success" /> : null}
                               <div style={{ minWidth: 0, fontSize: 13, fontWeight: 750, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                 {artMeta?.displayName || humanizeCanonicalPath(path) || '—'}
                               </div>
                               {artMeta?.status && <Pill text={artMeta.status} tone={artMeta.status === 'validated' ? 'success' : 'neutral'} />}
                             </div>
+                            {anchorLine ? (
+                              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary-strong)' }}>
+                                {anchorLine}
+                                {artMeta?.productAxis ? ` • ${artMeta.productAxis}` : ''}
+                              </div>
+                            ) : artMeta?.productAxis ? (
+                              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary-strong)' }}>
+                                {artMeta.productAxis}
+                              </div>
+                            ) : null}
                             <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', ...mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={path}>
                               {path}
                             </div>
@@ -798,27 +829,19 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
                                 {artMeta.nodeRefs.length} entities in chain
                               </div>
                             )}
-                            {(typeof artMeta?.legCount === 'number' && artMeta.legCount > 0) && (
+                            {metricsLine && (
                               <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                                {artMeta.legCount} legs
-                                {typeof artMeta?.bindingConfidence === 'number' && artMeta.bindingConfidence > 0
-                                  ? ` • bind ${Math.round(artMeta.bindingConfidence * 100)}%`
-                                  : ''}
-                                {typeof artMeta?.pathStressScore === 'number' && artMeta.pathStressScore > 0
-                                  ? ` • stress ${artMeta.pathStressScore.toFixed(2)}`
-                                  : ''}
+                                {metricsLine}
                               </div>
                             )}
-                            {((artMeta?.flowRefs && artMeta.flowRefs.length > 0) ||
-                              (artMeta?.zoneRefs && artMeta.zoneRefs.length > 0) ||
-                              (artMeta?.affectedZoneRefs && artMeta.affectedZoneRefs.length > 0)) && (
+                            {footprintLine && (
                               <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                                {artMeta?.flowRefs && artMeta.flowRefs.length > 0 ? `${artMeta.flowRefs.length} flows` : ''}
-                                {artMeta?.flowRefs && artMeta.flowRefs.length > 0 && artMeta?.zoneRefs && artMeta.zoneRefs.length > 0 ? ' • ' : ''}
-                                {artMeta?.zoneRefs && artMeta.zoneRefs.length > 0 ? `${artMeta.zoneRefs.length} zones` : ''}
-                                {((artMeta?.flowRefs && artMeta.flowRefs.length > 0) || (artMeta?.zoneRefs && artMeta.zoneRefs.length > 0)) &&
-                                  artMeta?.affectedZoneRefs && artMeta.affectedZoneRefs.length > 0 ? ' • ' : ''}
-                                {artMeta?.affectedZoneRefs && artMeta.affectedZoneRefs.length > 0 ? `${artMeta.affectedZoneRefs.length} affected` : ''}
+                                {footprintLine}
+                              </div>
+                            )}
+                            {artMeta?.spatialSemantics && artMeta.spatialSemantics.length > 0 && (
+                              <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                                {artMeta.spatialSemantics.slice(0, 3).join(' • ')}
                               </div>
                             )}
                           </div>
@@ -999,4 +1022,3 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
     </div>
   );
 };
-

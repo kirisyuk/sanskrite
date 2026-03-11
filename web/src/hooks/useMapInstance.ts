@@ -41,13 +41,20 @@ function buildCartoStyle(theme: 'dark' | 'light'): maplibregl.StyleSpecification
  */
 export function useMapInstance(containerRef: React.RefObject<HTMLDivElement | null>) {
   const { theme } = useContext(ThemeContext);
+  const resolvedTheme = theme === 'dark' ? 'dark' as const : 'light' as const;
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const initialThemeRef = useRef<string | null>(theme);
+  const initialThemeRef = useRef<typeof resolvedTheme | null>(resolvedTheme);
+  const appliedThemeRef = useRef<typeof resolvedTheme>(resolvedTheme);
+  const pendingThemeRef = useRef<typeof resolvedTheme | null>(null);
   const [styleEpoch, setStyleEpoch] = useState(0);
   const [styleReady, setStyleReady] = useState(false);
-  const isReady = styleReady && styleEpoch > 0;
+  const isReady = styleReady && styleEpoch > 0 && appliedThemeRef.current === resolvedTheme && pendingThemeRef.current == null;
 
   const onStyleLoad = useCallback(() => {
+    if (pendingThemeRef.current) {
+      appliedThemeRef.current = pendingThemeRef.current;
+      pendingThemeRef.current = null;
+    }
     setStyleReady(true);
     setStyleEpoch((n) => n + 1);
   }, []);
@@ -58,7 +65,7 @@ export function useMapInstance(containerRef: React.RefObject<HTMLDivElement | nu
 
     const map = new maplibregl.Map({
       container: node,
-      style: buildCartoStyle(theme === 'dark' ? 'dark' : 'light'),
+      style: buildCartoStyle(resolvedTheme),
       center: [15, 20],
       zoom: 1.5,
       minZoom: 1,
@@ -79,6 +86,7 @@ export function useMapInstance(containerRef: React.RefObject<HTMLDivElement | nu
       map.off('style.load', onStyleLoad);
       map.remove();
       mapRef.current = null;
+      pendingThemeRef.current = null;
       setStyleReady(false);
       setStyleEpoch(0);
     };
@@ -88,20 +96,24 @@ export function useMapInstance(containerRef: React.RefObject<HTMLDivElement | nu
   // Skip the first run — the map was just created with this theme.
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !isReady) return;
-    if (initialThemeRef.current === theme) {
+    if (!map) return;
+    if (initialThemeRef.current === resolvedTheme) {
       initialThemeRef.current = null;
+      appliedThemeRef.current = resolvedTheme;
+      pendingThemeRef.current = null;
       return;
     }
+    if (appliedThemeRef.current === resolvedTheme && pendingThemeRef.current == null) return;
     initialThemeRef.current = null;
+    pendingThemeRef.current = resolvedTheme;
     setStyleReady(false);
-    map.setStyle(buildCartoStyle(theme === 'dark' ? 'dark' : 'light'), { diff: false });
-  }, [theme]);
+    map.setStyle(buildCartoStyle(resolvedTheme), { diff: false });
+  }, [resolvedTheme]);
 
   return {
     map: mapRef.current,
     isReady,
     styleEpoch,
-    theme: theme === 'dark' ? 'dark' as const : 'light' as const,
+    theme: resolvedTheme,
   };
 }

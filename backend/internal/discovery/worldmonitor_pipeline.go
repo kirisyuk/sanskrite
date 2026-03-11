@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	discoverynlp "github.com/igorkirisyuk/sanskrite/internal/discovery/nlp"
 	prov "github.com/igorkirisyuk/sanskrite/internal/discovery/providers"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/geoambiguity"
 	mapactivity "github.com/igorkirisyuk/sanskrite/internal/horizon/mapactivity"
@@ -518,6 +519,10 @@ type HorizonMonitorPipeline struct {
 	waveThrottleWindow time.Duration
 	enableAIClassify   bool
 	enableAIBriefs     bool
+	eventGateMode      discoverynlp.Mode
+	entityExtractMode  discoverynlp.Mode
+	eventGate          discoverynlp.EventGate
+	entityExtractor    discoverynlp.EntityExtractor
 
 	mu            sync.Mutex
 	observations  []horizonMonitorSignalObservation
@@ -557,6 +562,10 @@ func NewHorizonMonitorPipeline(
 		waveThrottleWindow: 30 * time.Minute,
 		enableAIClassify:   envBoolDefaultFalse("HORIZON_MONITOR_ENABLE_AI_CLASSIFICATION"),
 		enableAIBriefs:     envBoolDefaultFalse("HORIZON_MONITOR_ENABLE_AI_BRIEFS"),
+		eventGateMode:      discoverynlp.NormalizeMode(strings.ToLower(strings.TrimSpace(os.Getenv("EVENT_GATE_MODE"))), discoverynlp.ModeRules),
+		entityExtractMode:  discoverynlp.NormalizeMode(strings.ToLower(strings.TrimSpace(os.Getenv("ENTITY_EXTRACT_MODE"))), discoverynlp.ModeRules),
+		eventGate:          discoverynlp.NewHTTPEventGate(strings.TrimSpace(os.Getenv("EVENT_GATE_SERVICE_URL")), envDurationOrDefault("EVENT_GATE_TIMEOUT_MS", 1200*time.Millisecond)),
+		entityExtractor:    discoverynlp.NewHTTPEntityExtractor(strings.TrimSpace(os.Getenv("ENTITY_EXTRACT_SERVICE_URL")), envDurationOrDefault("ENTITY_EXTRACT_TIMEOUT_MS", 2*time.Second)),
 		recentWaves:        make(map[string]time.Time),
 		lastBriefByCC:      make(map[string]time.Time),
 	}
@@ -583,6 +592,24 @@ func (p *HorizonMonitorPipeline) WithVertexSearch(client *ai.VertexAISearchClien
 		return p
 	}
 	p.vertexSearch = client
+	return p
+}
+
+func (p *HorizonMonitorPipeline) WithEventGate(mode discoverynlp.Mode, gate discoverynlp.EventGate) *HorizonMonitorPipeline {
+	if p == nil {
+		return p
+	}
+	p.eventGateMode = mode
+	p.eventGate = gate
+	return p
+}
+
+func (p *HorizonMonitorPipeline) WithEntityExtractor(mode discoverynlp.Mode, extractor discoverynlp.EntityExtractor) *HorizonMonitorPipeline {
+	if p == nil {
+		return p
+	}
+	p.entityExtractMode = mode
+	p.entityExtractor = extractor
 	return p
 }
 
@@ -628,6 +655,18 @@ func (p *HorizonMonitorPipeline) ProcessDocuments(ctx context.Context, tenantID 
 		if event == nil {
 			continue
 		}
+		classification := classifyHorizonMonitorNewsKeyword(strings.Join([]string{event.Title, event.Summary}, " "))
+		classification = normalizeClassificationWithSourceHint(classification, event)
+		if p.exec != nil && p.enableAIClassify && mode == wmIngestModeOntologyFact && classification.Confidence < 0.65 && aiClassificationsUsed < 4 {
+			if refined, ok := p.classifyHorizonMonitorNewsWithAI(ctx, event.Title); ok {
+				classification = refined
+				aiClassificationsUsed++
+			}
+		}
+		nlpDoc := p.buildNLPDocumentInput(ds, event, doc.FullText, doc.Language)
+		articleAssessment := p.assessArticleWithNLP(nlpDoc, classification)
+		entityExtraction := p.extractEntitiesWithNLP(nlpDoc)
+		p.applyNLPResultToEvent(event, articleAssessment, entityExtraction)
 		if err := p.upsertTrackFragment(ctx, tenantID, event); err != nil {
 			p.logf("horizon monitor pipeline: track upsert failed source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
 		}
@@ -637,25 +676,16 @@ func (p *HorizonMonitorPipeline) ProcessDocuments(ctx context.Context, tenantID 
 			if err != nil {
 				p.logf("horizon monitor pipeline: failed to upsert event fact source=%s feedType=%s ext=%s: %v", ds.ID, event.FeedType, event.ExternalID, err)
 			} else {
-				if shouldSuppressHeuristicSignalPropagation(event) {
+				if shouldSuppressHeuristicSignalPropagation(event) || (articleAssessment != nil && !articleAssessment.IsEvent && !articleAssessment.ShouldOnlySignal && !articleAssessment.ShouldWarmExisting) {
 					qualityCounters.signalSuppressedTotal++
 				}
-				if signal := p.buildSignalDescriptor(eventFact, event); signal != nil {
+				if signal := p.buildSignalDescriptor(eventFact, event); signal != nil && (articleAssessment == nil || articleAssessment.IsEvent || articleAssessment.ShouldOnlySignal || articleAssessment.ShouldWarmExisting) {
 					audit, err := p.upsertAndPropagateSignal(ctx, tenantID, ds.ID, signal, eventFact)
 					signalCounters.observe(audit)
 					if err != nil {
 						p.logf("horizon monitor pipeline: signal propagation failed source=%s signal=%s: %v", ds.ID, signal.ID, err)
 					}
 				}
-			}
-		}
-
-		classification := classifyHorizonMonitorNewsKeyword(strings.Join([]string{event.Title, event.Summary}, " "))
-		classification = normalizeClassificationWithSourceHint(classification, event)
-		if p.exec != nil && p.enableAIClassify && mode == wmIngestModeOntologyFact && classification.Confidence < 0.65 && aiClassificationsUsed < 4 {
-			if refined, ok := p.classifyHorizonMonitorNewsWithAI(ctx, event.Title); ok {
-				classification = refined
-				aiClassificationsUsed++
 			}
 		}
 		techTopics := detectTechTopicsFromText(strings.Join([]string{event.Title, event.Summary}, " "))
@@ -685,7 +715,10 @@ func (p *HorizonMonitorPipeline) ProcessDocuments(ctx context.Context, tenantID 
 			strings.TrimSpace(classification.Level),
 		}, " "))
 		nonEventFiltered := zoneText != "" && isLikelyNonEventText(zoneText)
-		zoneCandidate := p.inferAffectedZoneCandidate(ctx, event, classification)
+		var zoneCandidate *affectedZoneCandidate
+		if articleAssessment == nil || articleAssessment.ShouldCreateZone || articleAssessment.ShouldWarmExisting {
+			zoneCandidate = p.inferAffectedZoneCandidate(ctx, event, classification)
+		}
 		qualityCounters.observe(classification, zoneCandidate, nonEventFiltered)
 		if err := p.upsertAffectedZoneFragmentCandidate(ctx, tenantID, ds.ID, event, classification, zoneCandidate); err != nil {
 			p.logf("horizon monitor pipeline: failed to upsert affected zone source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
@@ -781,6 +814,18 @@ func (p *HorizonMonitorPipeline) ProcessFeedEvents(ctx context.Context, tenantID
 		if event == nil {
 			continue
 		}
+		classification := classifyHorizonMonitorNewsKeyword(strings.Join([]string{event.Title, event.Summary}, " "))
+		classification = normalizeClassificationWithSourceHint(classification, event)
+		if p.exec != nil && p.enableAIClassify && mode == wmIngestModeOntologyFact && classification.Confidence < 0.65 && aiClassificationsUsed < 4 {
+			if refined, ok := p.classifyHorizonMonitorNewsWithAI(ctx, event.Title); ok {
+				classification = refined
+				aiClassificationsUsed++
+			}
+		}
+		nlpDoc := p.buildNLPDocumentInput(ds, event, event.Summary, "")
+		articleAssessment := p.assessArticleWithNLP(nlpDoc, classification)
+		entityExtraction := p.extractEntitiesWithNLP(nlpDoc)
+		p.applyNLPResultToEvent(event, articleAssessment, entityExtraction)
 		if err := p.upsertTrackFragment(ctx, tenantID, event); err != nil {
 			p.logf("horizon monitor pipeline: track upsert failed source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
 		}
@@ -789,24 +834,16 @@ func (p *HorizonMonitorPipeline) ProcessFeedEvents(ctx context.Context, tenantID
 			if err != nil {
 				p.logf("horizon monitor pipeline: failed to upsert event fact source=%s feedType=%s ext=%s: %v", ds.ID, event.FeedType, event.ExternalID, err)
 			} else {
-				if shouldSuppressHeuristicSignalPropagation(event) {
+				if shouldSuppressHeuristicSignalPropagation(event) || (articleAssessment != nil && !articleAssessment.IsEvent && !articleAssessment.ShouldOnlySignal && !articleAssessment.ShouldWarmExisting) {
 					qualityCounters.signalSuppressedTotal++
 				}
-				if signal := p.buildSignalDescriptor(eventFact, event); signal != nil {
+				if signal := p.buildSignalDescriptor(eventFact, event); signal != nil && (articleAssessment == nil || articleAssessment.IsEvent || articleAssessment.ShouldOnlySignal || articleAssessment.ShouldWarmExisting) {
 					audit, err := p.upsertAndPropagateSignal(ctx, tenantID, ds.ID, signal, eventFact)
 					signalCounters.observe(audit)
 					if err != nil {
 						p.logf("horizon monitor pipeline: signal propagation failed source=%s signal=%s: %v", ds.ID, signal.ID, err)
 					}
 				}
-			}
-		}
-		classification := classifyHorizonMonitorNewsKeyword(strings.Join([]string{event.Title, event.Summary}, " "))
-		classification = normalizeClassificationWithSourceHint(classification, event)
-		if p.exec != nil && p.enableAIClassify && mode == wmIngestModeOntologyFact && classification.Confidence < 0.65 && aiClassificationsUsed < 4 {
-			if refined, ok := p.classifyHorizonMonitorNewsWithAI(ctx, event.Title); ok {
-				classification = refined
-				aiClassificationsUsed++
 			}
 		}
 		techTopics := detectTechTopicsFromText(strings.Join([]string{event.Title, event.Summary}, " "))
@@ -836,7 +873,10 @@ func (p *HorizonMonitorPipeline) ProcessFeedEvents(ctx context.Context, tenantID
 			strings.TrimSpace(classification.Level),
 		}, " "))
 		nonEventFiltered := zoneText != "" && isLikelyNonEventText(zoneText)
-		zoneCandidate := p.inferAffectedZoneCandidate(ctx, event, classification)
+		var zoneCandidate *affectedZoneCandidate
+		if articleAssessment == nil || articleAssessment.ShouldCreateZone || articleAssessment.ShouldWarmExisting {
+			zoneCandidate = p.inferAffectedZoneCandidate(ctx, event, classification)
+		}
 		qualityCounters.observe(classification, zoneCandidate, nonEventFiltered)
 		if err := p.upsertAffectedZoneFragmentCandidate(ctx, tenantID, ds.ID, event, classification, zoneCandidate); err != nil {
 			p.logf("horizon monitor pipeline: failed to upsert affected zone source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
@@ -909,6 +949,20 @@ func envBoolDefaultFalse(name string) bool {
 	default:
 		return false
 	}
+}
+
+func envDurationOrDefault(name string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	if ms, err := strconv.Atoi(raw); err == nil && ms > 0 {
+		return time.Duration(ms) * time.Millisecond
+	}
+	if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+		return d
+	}
+	return fallback
 }
 
 func horizonMonitorLineage(
@@ -1178,6 +1232,448 @@ func (p *HorizonMonitorPipeline) buildEventFromDocument(sourceID, feedType, cate
 		e.Summary = e.Summary[:4000]
 	}
 	return e
+}
+
+func (p *HorizonMonitorPipeline) buildNLPDocumentInput(ds *coremodels.DataSource, event *horizonMonitorFeedEvent, body, language string) discoverynlp.DocumentInput {
+	host := affectedZoneSourceHost(event)
+	sourceType := ""
+	categoryHint := ""
+	if ds != nil {
+		sourceType = strings.TrimSpace(ds.Kind)
+		categoryHint = strings.TrimSpace(firstNonEmptyString(
+			stringPointerValue(ds.Details.HorizonMonitorCategory),
+			stringPointerValue(ds.Details.Category),
+			stringPointerValue(ds.PrimarySourceCategoryPath),
+		))
+	}
+	var publishedAt *time.Time
+	if event != nil && !event.OccurredAt.IsZero() {
+		ts := event.OccurredAt.UTC()
+		publishedAt = &ts
+	}
+	metadata := map[string]interface{}{}
+	if event != nil {
+		if event.CountryCode != "" {
+			metadata["countryCode"] = event.CountryCode
+		}
+		if event.CountryName != "" {
+			metadata["countryName"] = event.CountryName
+		}
+		if event.FeedType != "" {
+			metadata["feedType"] = event.FeedType
+		}
+		if event.Category != "" {
+			metadata["eventCategory"] = event.Category
+		}
+		if event.SignalType != "" {
+			metadata["signalType"] = event.SignalType
+		}
+	}
+	return discoverynlp.DocumentInput{
+		SourceID:     strings.TrimSpace(event.SourceID),
+		SourceHost:   host,
+		SourceURL:    strings.TrimSpace(event.URL),
+		Title:        strings.TrimSpace(event.Title),
+		Summary:      strings.TrimSpace(event.Summary),
+		Body:         strings.TrimSpace(body),
+		URL:          strings.TrimSpace(event.URL),
+		PublishedAt:  publishedAt,
+		Language:     strings.TrimSpace(language),
+		SourceType:   sourceType,
+		CategoryHint: categoryHint,
+		Metadata:     metadata,
+	}
+}
+
+func stringPointerValue(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return strings.TrimSpace(*v)
+}
+
+func asFloat64(v interface{}) (float64, bool) {
+	switch t := v.(type) {
+	case float64:
+		return t, true
+	case float32:
+		return float64(t), true
+	case int:
+		return float64(t), true
+	case int64:
+		return float64(t), true
+	case json.Number:
+		f, err := t.Float64()
+		return f, err == nil
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(t), 64)
+		return f, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func (p *HorizonMonitorPipeline) ruleArticleAssessment(doc discoverynlp.DocumentInput, cls horizonMonitorNewsClassification) *discoverynlp.ArticleAssessment {
+	text := normalizeKeywordText(strings.Join([]string{
+		strings.TrimSpace(doc.Title),
+		strings.TrimSpace(doc.Summary),
+		strings.TrimSpace(doc.Body),
+		strings.TrimSpace(cls.Category),
+		strings.TrimSpace(cls.Level),
+	}, " "))
+	host := strings.TrimSpace(doc.SourceHost)
+	profile := wmHeuristics().ProfileArticle(text, host)
+	isAnalysis := profile.likelyAnalysisRoundup()
+	isAdvisory := profile.likelyAdvisoryCampaignWithoutOutage()
+	isBroad := profile.likelyBroadRegionalRoundup()
+	isNoise := isLikelyNonEventText(text)
+	warmOnly := looksLikeWarmConflictPosture(text, cls)
+	semanticSuppressed := shouldSuppressAffectedZoneBySemanticDrift(text, nil, cls)
+	profileSuppressed := shouldSuppressAffectedZoneByEventProfile(text, nil, cls, "", profile)
+	exerciseLike := looksLikeExerciseWithoutIncidentText(text)
+	forcePostureLike := looksLikeForcePostureDeploymentText(text, cls)
+	drugInterdictionLike := looksLikeDrugInterdictionText(text)
+	administrativeCommentaryLike := looksLikeAdministrativeCommentaryText(text)
+	liveBlogLike := looksLikeLiveBlogPoliticalCommentaryText(text)
+	civilIncidentLike := looksLikeCivilIncidentWithoutMilitaryContext(text)
+	cyberCampaignLike := looksLikeCyberCampaignWithoutOperationalImpact(text)
+	multiCountryRoundup := looksLikeMultiCountryDeploymentRoundup(text, cls)
+	retrospectiveLike := looksLikeRetrospectiveConflictNarrativeText(text)
+	legalCommercialLike := looksLikeLegalCommercialDisputeText(text)
+	sportsPoliticalLike := looksLikeSportsPoliticalHumanInterestText(text)
+	if semanticSuppressed || profileSuppressed || exerciseLike || forcePostureLike || drugInterdictionLike || administrativeCommentaryLike || liveBlogLike || civilIncidentLike || cyberCampaignLike || multiCountryRoundup || retrospectiveLike || legalCommercialLike || sportsPoliticalLike {
+		isAnalysis = isAnalysis || semanticSuppressed || exerciseLike || forcePostureLike || administrativeCommentaryLike || liveBlogLike || multiCountryRoundup || retrospectiveLike || legalCommercialLike || sportsPoliticalLike
+		isAdvisory = isAdvisory || drugInterdictionLike || cyberCampaignLike
+		isBroad = isBroad || multiCountryRoundup
+		isNoise = isNoise || civilIncidentLike
+	}
+	shouldCreateZone := !isNoise && !isAnalysis && !isAdvisory && !isBroad
+	if warmOnly {
+		shouldCreateZone = true
+	}
+	isEvent := shouldCreateZone || warmOnly
+	eventClass := "real_event"
+	rejectionReason := ""
+	reasons := make([]string, 0, 4)
+	switch {
+	case isNoise:
+		eventClass = "noise"
+		rejectionReason = "non_event_text"
+		reasons = append(reasons, "non_event_text")
+	case isAnalysis:
+		eventClass = "analysis"
+		rejectionReason = "analysis_roundup"
+		reasons = append(reasons, "analysis_roundup")
+	case isAdvisory:
+		eventClass = "advisory"
+		rejectionReason = "advisory_without_outage"
+		reasons = append(reasons, "advisory_without_outage")
+	case isBroad:
+		eventClass = "broad_scope"
+		rejectionReason = "broad_scope_without_incident"
+		reasons = append(reasons, "broad_scope_without_incident")
+	}
+	if administrativeCommentaryLike {
+		reasons = append(reasons, "administrative_commentary")
+	}
+	if exerciseLike {
+		reasons = append(reasons, "exercise_without_incident")
+	}
+	if forcePostureLike {
+		reasons = append(reasons, "force_posture_without_incident")
+	}
+	if drugInterdictionLike {
+		reasons = append(reasons, "drug_interdiction")
+	}
+	if liveBlogLike {
+		reasons = append(reasons, "live_blog_commentary")
+	}
+	if civilIncidentLike {
+		reasons = append(reasons, "civil_incident_without_military_context")
+	}
+	if cyberCampaignLike {
+		reasons = append(reasons, "cyber_campaign_without_operational_impact")
+	}
+	if multiCountryRoundup {
+		reasons = append(reasons, "multi_country_roundup")
+	}
+	if retrospectiveLike {
+		reasons = append(reasons, "retrospective_or_feature_conflict")
+	}
+	if legalCommercialLike {
+		reasons = append(reasons, "legal_or_commercial_dispute")
+	}
+	if sportsPoliticalLike {
+		reasons = append(reasons, "sports_or_human_interest_politics")
+	}
+	if warmOnly {
+		reasons = append(reasons, "warm_conflict_posture")
+	}
+	confidence := 0.68 + cls.Confidence*0.22
+	if shouldCreateZone {
+		confidence = wmClamp01(math.Max(confidence, 0.76))
+	}
+	if rejectionReason != "" {
+		confidence = wmClamp01(math.Max(confidence, 0.72))
+	}
+	return &discoverynlp.ArticleAssessment{
+		IsEvent:             isEvent,
+		EventClass:          eventClass,
+		EventConfidence:     confidence,
+		AnalysisScore:       ternaryFloat64(isAnalysis, 0.86, 0.12),
+		AdvisoryScore:       ternaryFloat64(isAdvisory, 0.88, 0.10),
+		BroadScopeScore:     ternaryFloat64(isBroad, 0.84, 0.15),
+		ConcreteOutageScore: ternaryFloat64(profile.ConcreteOutageScore >= 1.15, 0.82, 0.18),
+		ShouldCreateZone:    shouldCreateZone,
+		ShouldWarmExisting:  warmOnly,
+		ShouldOnlySignal:    !shouldCreateZone && !warmOnly && !isNoise && rejectionReason == "" && !semanticSuppressed && !profileSuppressed && !administrativeCommentaryLike && !exerciseLike && !drugInterdictionLike && !civilIncidentLike && !multiCountryRoundup,
+		RejectionReason:     rejectionReason,
+		Reasons:             reasons,
+		Raw: map[string]interface{}{
+			"mode":             "rules",
+			"sourceHost":       host,
+			"classification":   strings.TrimSpace(cls.Category),
+			"classificationLv": strings.TrimSpace(cls.Level),
+		},
+	}
+}
+
+func (p *HorizonMonitorPipeline) assessArticleWithNLP(doc discoverynlp.DocumentInput, cls horizonMonitorNewsClassification) *discoverynlp.ArticleAssessment {
+	rule := p.ruleArticleAssessment(doc, cls)
+	if p == nil || p.eventGate == nil || p.eventGateMode == discoverynlp.ModeRules {
+		return rule
+	}
+	model, err := p.eventGate.Assess(doc)
+	if err != nil || model == nil {
+		p.logf("horizon monitor pipeline: event gate fallback host=%s title=%q err=%v", doc.SourceHost, trimForLog(doc.Title, 80), err)
+		return rule
+	}
+	switch p.eventGateMode {
+	case discoverynlp.ModeShadow:
+		if rule.EventClass != model.EventClass || rule.ShouldCreateZone != model.ShouldCreateZone {
+			p.logf("horizon monitor pipeline: event gate shadow divergence host=%s rule=%s model=%s title=%q", doc.SourceHost, rule.EventClass, model.EventClass, trimForLog(doc.Title, 80))
+		}
+		return rule
+	case discoverynlp.ModeModel:
+		return normalizeArticleAssessment(model, rule)
+	case discoverynlp.ModeHybrid:
+		merged := mergeArticleAssessments(doc, rule, model)
+		if merged != nil && (rule.EventClass != model.EventClass ||
+			rule.ShouldCreateZone != merged.ShouldCreateZone ||
+			rule.ShouldWarmExisting != merged.ShouldWarmExisting ||
+			rule.ShouldOnlySignal != merged.ShouldOnlySignal) {
+			p.logf(
+				"horizon monitor pipeline: event gate hybrid host=%s rule=%s model=%s final=%s create=%t warm=%t signal=%t title=%q",
+				doc.SourceHost,
+				rule.EventClass,
+				model.EventClass,
+				merged.EventClass,
+				merged.ShouldCreateZone,
+				merged.ShouldWarmExisting,
+				merged.ShouldOnlySignal,
+				trimForLog(doc.Title, 96),
+			)
+		}
+		return merged
+	default:
+		return rule
+	}
+}
+
+func (p *HorizonMonitorPipeline) extractEntitiesWithNLP(doc discoverynlp.DocumentInput) *discoverynlp.EntityExtractionResult {
+	if p == nil || p.entityExtractor == nil || p.entityExtractMode == discoverynlp.ModeRules {
+		return nil
+	}
+	res, err := p.entityExtractor.Extract(doc)
+	if err != nil || res == nil || len(res.Entities) == 0 {
+		if err != nil {
+			p.logf("horizon monitor pipeline: entity extract fallback host=%s title=%q err=%v", doc.SourceHost, trimForLog(doc.Title, 80), err)
+		}
+		return nil
+	}
+	return res
+}
+
+func (p *HorizonMonitorPipeline) applyNLPResultToEvent(event *horizonMonitorFeedEvent, assessment *discoverynlp.ArticleAssessment, entities *discoverynlp.EntityExtractionResult) {
+	if event == nil {
+		return
+	}
+	if event.Raw == nil {
+		event.Raw = map[string]interface{}{}
+	}
+	if assessment != nil {
+		event.Raw["nlpArticleAssessment"] = map[string]interface{}{
+			"isEvent":             assessment.IsEvent,
+			"eventClass":          assessment.EventClass,
+			"eventConfidence":     assessment.EventConfidence,
+			"analysisScore":       assessment.AnalysisScore,
+			"advisoryScore":       assessment.AdvisoryScore,
+			"broadScopeScore":     assessment.BroadScopeScore,
+			"concreteOutageScore": assessment.ConcreteOutageScore,
+			"shouldCreateZone":    assessment.ShouldCreateZone,
+			"shouldWarmExisting":  assessment.ShouldWarmExisting,
+			"shouldOnlySignal":    assessment.ShouldOnlySignal,
+			"rejectionReason":     assessment.RejectionReason,
+			"reasons":             assessment.Reasons,
+			"raw":                 assessment.Raw,
+		}
+	}
+	if entities != nil && len(entities.Entities) > 0 {
+		out := make([]map[string]interface{}, 0, len(entities.Entities))
+		for _, entity := range entities.Entities {
+			if strings.TrimSpace(entity.Surface) == "" || strings.TrimSpace(entity.EntityType) == "" {
+				continue
+			}
+			out = append(out, map[string]interface{}{
+				"surface":        entity.Surface,
+				"normalized":     entity.Normalized,
+				"entityType":     entity.EntityType,
+				"role":           entity.Role,
+				"confidence":     entity.Confidence,
+				"countryCode":    entity.CountryCode,
+				"geoHint":        entity.GeoHint,
+				"linkCandidates": entity.LinkCandidates,
+				"attributes":     entity.Attributes,
+			})
+		}
+		if len(out) > 0 {
+			key := "nlpEntities"
+			if p != nil && p.entityExtractMode == discoverynlp.ModeShadow {
+				key = "nlpEntitiesShadow"
+			}
+			event.Raw[key] = out
+			if key == "nlpEntitiesShadow" {
+				event.Raw["nlpEntitiesShadowCount"] = len(out)
+			}
+		}
+	}
+}
+
+func mergeArticleAssessments(doc discoverynlp.DocumentInput, rule, model *discoverynlp.ArticleAssessment) *discoverynlp.ArticleAssessment {
+	if rule == nil {
+		return normalizeArticleAssessment(model, nil)
+	}
+	if model == nil {
+		return rule
+	}
+	out := *rule
+	if !rule.IsEvent && model.IsEvent && model.EventConfidence < 0.65 {
+		out.EventConfidence = wmClamp01(math.Max(rule.EventConfidence, model.EventConfidence))
+		out.AnalysisScore = math.Max(rule.AnalysisScore, model.AnalysisScore)
+		out.AdvisoryScore = math.Max(rule.AdvisoryScore, model.AdvisoryScore)
+		out.BroadScopeScore = math.Max(rule.BroadScopeScore, model.BroadScopeScore)
+		out.ConcreteOutageScore = math.Max(rule.ConcreteOutageScore, model.ConcreteOutageScore)
+		out.Reasons = uniqueStrings(append(append([]string{}, rule.Reasons...), append(model.Reasons, "hybrid:rule_guard")...))
+		if out.Raw == nil {
+			out.Raw = map[string]interface{}{}
+		}
+		out.Raw["rule"] = rule.Raw
+		out.Raw["model"] = model.Raw
+		return &out
+	}
+	if !model.IsEvent && model.EventConfidence >= 0.72 {
+		out.IsEvent = false
+		out.ShouldCreateZone = false
+		if !rule.ShouldWarmExisting {
+			out.ShouldWarmExisting = false
+		}
+		out.ShouldOnlySignal = rule.ShouldOnlySignal && model.ShouldOnlySignal
+		out.RejectionReason = firstNonEmptyString(model.RejectionReason, rule.RejectionReason)
+		out.EventClass = firstNonEmptyString(model.EventClass, rule.EventClass)
+	}
+	if shouldModelVetoAnalysisHeavyHost(doc, rule, model) {
+		out.IsEvent = false
+		out.ShouldCreateZone = false
+		out.ShouldWarmExisting = false
+		out.ShouldOnlySignal = false
+		out.RejectionReason = firstNonEmptyString(model.RejectionReason, "analysis_heavy_host_model_veto")
+		out.EventClass = firstNonEmptyString(model.EventClass, rule.EventClass)
+		out.Reasons = uniqueStrings(append(out.Reasons, "hybrid:model_host_veto"))
+	}
+	if rule.ShouldWarmExisting && model.ShouldWarmExisting {
+		out.ShouldWarmExisting = true
+	}
+	out.EventConfidence = wmClamp01(math.Max(rule.EventConfidence, model.EventConfidence))
+	out.AnalysisScore = math.Max(rule.AnalysisScore, model.AnalysisScore)
+	out.AdvisoryScore = math.Max(rule.AdvisoryScore, model.AdvisoryScore)
+	out.BroadScopeScore = math.Max(rule.BroadScopeScore, model.BroadScopeScore)
+	out.ConcreteOutageScore = math.Max(rule.ConcreteOutageScore, model.ConcreteOutageScore)
+	out.Reasons = uniqueStrings(append(append([]string{}, rule.Reasons...), model.Reasons...))
+	if out.Raw == nil {
+		out.Raw = map[string]interface{}{}
+	}
+	out.Raw["rule"] = rule.Raw
+	out.Raw["model"] = model.Raw
+	return &out
+}
+
+func shouldModelVetoAnalysisHeavyHost(doc discoverynlp.DocumentInput, rule, model *discoverynlp.ArticleAssessment) bool {
+	host := strings.ToLower(strings.TrimSpace(doc.SourceHost))
+	if !isAnalysisHeavyHost(host) {
+		return false
+	}
+	if model == nil || rule == nil {
+		return false
+	}
+	if model.IsEvent {
+		return false
+	}
+	if model.EventConfidence < 0.72 {
+		return false
+	}
+	switch model.EventClass {
+	case "analysis", "noise", "broad_scope":
+	default:
+		return false
+	}
+	if rule.ShouldWarmExisting || model.ShouldWarmExisting {
+		return false
+	}
+	if rule.ConcreteOutageScore >= 0.72 || model.ConcreteOutageScore >= 0.72 {
+		return false
+	}
+	return true
+}
+
+func isAnalysisHeavyHost(host string) bool {
+	switch strings.ToLower(strings.TrimSpace(host)) {
+	case "warontherocks.com", "realcleardefense.com", "brookings.edu", "csis.org", "chathamhouse.org", "carnegieendowment.org", "ecfr.eu", "foreignpolicy.com", "worldbank.org", "blogs.worldbank.org", "imf.org":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeArticleAssessment(model, fallback *discoverynlp.ArticleAssessment) *discoverynlp.ArticleAssessment {
+	if model == nil {
+		return fallback
+	}
+	out := *model
+	if out.EventClass == "" && fallback != nil {
+		out.EventClass = fallback.EventClass
+	}
+	if out.EventConfidence == 0 && fallback != nil {
+		out.EventConfidence = fallback.EventConfidence
+	}
+	return &out
+}
+
+func ternaryFloat64(cond bool, yes, no float64) float64 {
+	if cond {
+		return yes
+	}
+	return no
+}
+
+func trimForLog(v string, max int) string {
+	v = strings.TrimSpace(v)
+	if max <= 0 || len(v) <= max {
+		return v
+	}
+	if max <= 3 {
+		return v[:max]
+	}
+	return v[:max-3] + "..."
 }
 
 func (p *HorizonMonitorPipeline) upsertEventFact(ctx context.Context, tenantID, sourceID string, e *horizonMonitorFeedEvent) (*coremodels.OntologyFact, error) {
@@ -2073,12 +2569,12 @@ func buildIncomingAffectedZoneFragment(
 		CanonicalPath: c.CanonicalPath,
 		Type:          horizonmodels.FragmentTypeAffectedZone,
 		Labels:        map[string]string{"en": c.Label},
-		Description:   strings.TrimSpace(e.Title),
+		Description:   affectedZoneNarrativeDescription(c),
 		Tags: affectedZoneTags(c, cls, e).
 			Merge(),
 		Status:      string(horizonmodels.FragmentStatusActive),
 		State:       map[string]horizonmodels.MetricValue{},
-		Qualifiers:  affectedZoneQualifiers(c, cls, state, e),
+		Qualifiers:  affectedZoneQualifiersWithSource(c, cls, state, e, false),
 		Identifiers: map[string]string{"sourceObjectId": strings.TrimSpace(e.ExternalID)},
 		RadiusKm:    c.RadiusKm,
 		Provenance: horizonmodels.Provenance{
@@ -2101,6 +2597,7 @@ func buildIncomingAffectedZoneFragment(
 		},
 	}
 	applyAffectedZoneState(incoming, state, now, matchedAt, sourceID, e)
+	applyAffectedZonePrimaryEvidence(incoming, c, cls, e)
 	applyAffectedZoneCoordinates(incoming, c)
 	return incoming
 }
@@ -2129,8 +2626,8 @@ func mergeAffectedZoneFragment(
 		dst.Labels["en"] = strings.TrimSpace(c.Label)
 		changed = true
 	}
-	if title := strings.TrimSpace(e.Title); title != "" && strings.TrimSpace(dst.Description) != title {
-		dst.Description = title
+	if desc := affectedZoneNarrativeDescription(c); desc != "" && shouldRefreshAffectedZoneDescription(dst, e) && strings.TrimSpace(dst.Description) != desc {
+		dst.Description = desc
 		changed = true
 	}
 
@@ -2172,7 +2669,7 @@ func mergeAffectedZoneFragment(
 	if dst.Qualifiers == nil {
 		dst.Qualifiers = map[string]interface{}{}
 	}
-	for k, v := range affectedZoneQualifiers(c, cls, st, e) {
+	for k, v := range affectedZoneQualifiersWithSource(c, cls, st, e, false) {
 		if k == "" {
 			continue
 		}
@@ -2180,6 +2677,9 @@ func mergeAffectedZoneFragment(
 			dst.Qualifiers[k] = v
 			changed = true
 		}
+	}
+	if applyAffectedZonePrimaryEvidence(dst, c, cls, e) {
+		changed = true
 	}
 
 	if dst.Provenance.SourceIDs == nil {
@@ -2593,6 +3093,16 @@ func affectedZoneQualifiers(
 	st affectedZoneState,
 	e *horizonMonitorFeedEvent,
 ) map[string]interface{} {
+	return affectedZoneQualifiersWithSource(c, cls, st, e, true)
+}
+
+func affectedZoneQualifiersWithSource(
+	c *affectedZoneCandidate,
+	cls horizonMonitorNewsClassification,
+	st affectedZoneState,
+	e *horizonMonitorFeedEvent,
+	includeSource bool,
+) map[string]interface{} {
 	out := map[string]interface{}{
 		"conditionType":          strings.TrimSpace(c.ConditionType),
 		"zoneType":               strings.TrimSpace(c.ZoneType),
@@ -2615,22 +3125,294 @@ func affectedZoneQualifiers(
 	if strings.TrimSpace(c.Reason) != "" {
 		out["reason"] = strings.TrimSpace(c.Reason)
 	}
-	if e != nil && strings.TrimSpace(e.URL) != "" {
-		out["sourceUrl"] = strings.TrimSpace(e.URL)
-	}
-	if e != nil && strings.TrimSpace(e.Title) != "" {
-		out["sourceTitle"] = strings.TrimSpace(e.Title)
-	}
-	if e != nil && strings.TrimSpace(e.Summary) != "" {
-		out["sourceSummary"] = truncateString(strings.TrimSpace(e.Summary), 1200)
-	}
-	if e != nil && !e.OccurredAt.IsZero() {
-		out["sourceOccurredAt"] = e.OccurredAt.UTC().Format(time.RFC3339)
-	}
-	if e != nil && strings.TrimSpace(e.CountryCode) != "" {
-		out["sourceCountryCode"] = strings.ToUpper(strings.TrimSpace(e.CountryCode))
+	if includeSource {
+		if e != nil && strings.TrimSpace(e.URL) != "" {
+			out["sourceUrl"] = strings.TrimSpace(e.URL)
+		}
+		if e != nil && strings.TrimSpace(e.Title) != "" {
+			out["sourceTitle"] = strings.TrimSpace(e.Title)
+		}
+		if e != nil && strings.TrimSpace(e.Summary) != "" {
+			out["sourceSummary"] = truncateString(strings.TrimSpace(e.Summary), 1200)
+		}
+		if e != nil && !e.OccurredAt.IsZero() {
+			out["sourceOccurredAt"] = e.OccurredAt.UTC().Format(time.RFC3339)
+		}
+		if e != nil && strings.TrimSpace(e.CountryCode) != "" {
+			out["sourceCountryCode"] = strings.ToUpper(strings.TrimSpace(e.CountryCode))
+		}
 	}
 	return out
+}
+
+func affectedZoneNarrativeDescription(c *affectedZoneCandidate) string {
+	if c == nil {
+		return ""
+	}
+	label := strings.TrimSpace(c.Label)
+	subtype := strings.TrimSpace(c.ZoneSubType)
+	cond := strings.ReplaceAll(strings.TrimSpace(c.ConditionType), "_", " ")
+	switch {
+	case label != "" && subtype != "":
+		return label + " — " + strings.ReplaceAll(subtype, "_", " ")
+	case label != "" && cond != "":
+		return label + " — " + cond
+	case label != "":
+		return label
+	default:
+		return strings.TrimSpace(c.CanonicalPath)
+	}
+}
+
+func shouldRefreshAffectedZoneDescription(dst *horizonmodels.HorizonFragment, e *horizonMonitorFeedEvent) bool {
+	if dst == nil {
+		return false
+	}
+	desc := strings.TrimSpace(dst.Description)
+	if desc == "" {
+		return true
+	}
+	if e == nil {
+		return false
+	}
+	title := strings.TrimSpace(e.Title)
+	if title == "" {
+		return false
+	}
+	if desc == title {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(qualifierStringValue(dst.Qualifiers, "sourceTitle")), title) {
+		return true
+	}
+	return false
+}
+
+func applyAffectedZonePrimaryEvidence(
+	f *horizonmodels.HorizonFragment,
+	c *affectedZoneCandidate,
+	cls horizonMonitorNewsClassification,
+	e *horizonMonitorFeedEvent,
+) bool {
+	if f == nil || e == nil {
+		return false
+	}
+	if f.Qualifiers == nil {
+		f.Qualifiers = map[string]interface{}{}
+	}
+	if !shouldPromoteAffectedZonePrimaryEvidence(f, c, cls, e) {
+		return false
+	}
+	changed := false
+	for k, v := range affectedZoneQualifiersWithSource(c, cls, parseAffectedZoneState(f), e, true) {
+		if !strings.HasPrefix(k, "source") {
+			continue
+		}
+		if fmt.Sprintf("%v", f.Qualifiers[k]) != fmt.Sprintf("%v", v) {
+			f.Qualifiers[k] = v
+			changed = true
+		}
+	}
+	score := affectedZonePrimaryEvidenceScore(c, cls, e)
+	if fmt.Sprintf("%v", f.Qualifiers["primarySourceScore"]) != fmt.Sprintf("%.3f", score) {
+		f.Qualifiers["primarySourceScore"] = score
+		changed = true
+	}
+	if fmt.Sprintf("%v", f.Qualifiers["primarySourceClassificationCategory"]) != strings.TrimSpace(cls.Category) {
+		f.Qualifiers["primarySourceClassificationCategory"] = strings.TrimSpace(cls.Category)
+		changed = true
+	}
+	if fmt.Sprintf("%v", f.Qualifiers["primarySourceClassificationLevel"]) != strings.TrimSpace(cls.Level) {
+		f.Qualifiers["primarySourceClassificationLevel"] = strings.TrimSpace(cls.Level)
+		changed = true
+	}
+	if desc := affectedZoneNarrativeDescription(c); desc != "" && strings.TrimSpace(f.Description) != desc {
+		f.Description = desc
+		changed = true
+	}
+	return changed
+}
+
+func shouldPromoteAffectedZonePrimaryEvidence(
+	f *horizonmodels.HorizonFragment,
+	c *affectedZoneCandidate,
+	cls horizonMonitorNewsClassification,
+	e *horizonMonitorFeedEvent,
+) bool {
+	if f == nil || e == nil {
+		return false
+	}
+	newScore := affectedZonePrimaryEvidenceScore(c, cls, e)
+	if newScore <= 0 {
+		return false
+	}
+	currentScore := toFloatDefault(qualifierStringValue(f.Qualifiers, "primarySourceScore"), 0)
+	currentTitle := strings.TrimSpace(qualifierStringValue(f.Qualifiers, "sourceTitle"))
+	if currentTitle == "" || currentScore <= 0 {
+		return true
+	}
+	currentOccurredAt := parseRFC3339Loose(qualifierStringValue(f.Qualifiers, "sourceOccurredAt"))
+	newOccurredAt := e.OccurredAt.UTC()
+	if currentScore < 0.40 && newScore >= currentScore {
+		return true
+	}
+	if newScore >= currentScore+0.18 {
+		return true
+	}
+	if currentOccurredAt.IsZero() {
+		return newScore >= currentScore
+	}
+	if !newOccurredAt.IsZero() && newOccurredAt.After(currentOccurredAt) && newScore >= currentScore+0.08 {
+		return true
+	}
+	return false
+}
+
+func affectedZonePrimaryEvidenceScore(c *affectedZoneCandidate, cls horizonMonitorNewsClassification, e *horizonMonitorFeedEvent) float64 {
+	if e == nil {
+		return 0
+	}
+	text := normalizeKeywordText(strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary)}, " "))
+	profile := wmHeuristics().ProfileArticle(text, affectedZoneSourceHost(e))
+	if shouldSuppressAffectedZoneBySourceProfile(e) || shouldSuppressAffectedZoneBySemanticDrift(text, e, cls) {
+		return 0
+	}
+	conditionType := ""
+	if c != nil {
+		conditionType = strings.TrimSpace(c.ConditionType)
+	}
+	if shouldSuppressAffectedZoneByEventProfile(text, e, cls, conditionType, profile) {
+		return 0
+	}
+	if c != nil && shouldSuppressWeakAffectedZoneInference(text, e, cls, strings.TrimSpace(c.ConditionType), c.InferenceScore) {
+		return 0
+	}
+	score := 0.35
+	if hasStrongEventSignal(text) {
+		score += 0.24
+	}
+	if hasDirectDisruptionTrigger(text) {
+		score += 0.18
+	}
+	if profile.ConcreteOutageScore >= 0.35 {
+		score += 0.15
+	}
+	if c != nil {
+		score += clamp(c.InferenceScore, 0, 1) * 0.20
+		if strings.EqualFold(c.GeoPrecision, "precise") {
+			score += 0.08
+		} else if strings.EqualFold(c.GeoPrecision, "approximate_country") {
+			score -= 0.05
+		}
+		if c.WarmOnly {
+			score -= 0.10
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(cls.Level), "critical") || strings.EqualFold(strings.TrimSpace(cls.Level), "high") {
+		score += 0.06
+	}
+	if profile.AnalysisScore >= 0.35 || profile.AdvisoryScore >= 0.35 || profile.BroadScopeScore >= 0.30 {
+		score -= 0.25
+	}
+	if looksLikeCapabilityOrFeatureText(text) {
+		score -= 0.28
+	}
+	return clamp(score, 0, 1)
+}
+
+func parseRFC3339Loose(raw string) time.Time {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t.UTC()
+	}
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return t.UTC()
+	}
+	return time.Time{}
+}
+
+func shouldUseAffectedZoneStoredSourceEvidence(f *horizonmodels.HorizonFragment) bool {
+	if f == nil {
+		return false
+	}
+	title := strings.TrimSpace(qualifierStringValue(f.Qualifiers, "sourceTitle"))
+	if title == "" {
+		return false
+	}
+	score := toFloatDefault(qualifierStringValue(f.Qualifiers, "primarySourceScore"), 0)
+	if score < 0.45 {
+		return false
+	}
+	text := normalizeKeywordText(strings.Join([]string{
+		title,
+		qualifierStringValue(f.Qualifiers, "sourceSummary"),
+		qualifierStringValue(f.Qualifiers, "classificationCategory"),
+		qualifierStringValue(f.Qualifiers, "classificationLevel"),
+	}, " "))
+	event := &horizonMonitorFeedEvent{
+		Title:       title,
+		Summary:     qualifierStringValue(f.Qualifiers, "sourceSummary"),
+		URL:         qualifierStringValue(f.Qualifiers, "sourceUrl"),
+		CountryCode: qualifierStringValue(f.Qualifiers, "sourceCountryCode"),
+	}
+	cls := horizonMonitorNewsClassification{
+		Category: qualifierStringValue(f.Qualifiers, "classificationCategory"),
+		Level:    qualifierStringValue(f.Qualifiers, "classificationLevel"),
+		Source:   qualifierStringValue(f.Qualifiers, "classificationSource"),
+	}
+	profile := wmHeuristics().ProfileArticle(text, affectedZoneSourceHost(event))
+	conditionType := qualifierStringValue(f.Qualifiers, "conditionType")
+	storedCC := strings.ToUpper(strings.TrimSpace(qualifierStringValue(f.Qualifiers, "sourceCountryCode")))
+	if storedCC != "" {
+		explicitTextCC := inferCountryCodeFromAffectedZoneText(strings.Join([]string{
+			title,
+			qualifierStringValue(f.Qualifiers, "sourceSummary"),
+		}, " "), storedCC)
+		if explicitTextCC != "" && !strings.EqualFold(explicitTextCC, storedCC) {
+			return false
+		}
+		if place := firstNonEmptyString(
+			extractKnownPlaceFromText(strings.Join([]string{title, qualifierStringValue(f.Qualifiers, "sourceSummary")}, " ")),
+			extractPlaceFromTitle(title),
+		); place != "" {
+			if _, placeCC, _ := inferZoneGeoFromPlace(place); placeCC != "" && !strings.EqualFold(placeCC, storedCC) {
+				return false
+			}
+		}
+	}
+	if shouldSuppressAffectedZoneBySourceProfile(event) ||
+		shouldSuppressAffectedZoneBySemanticDrift(text, event, cls) ||
+		shouldSuppressAffectedZoneByEventProfile(text, event, cls, conditionType, profile) ||
+		shouldSuppressWeakAffectedZoneInference(text, event, cls, conditionType, toFloatDefault(qualifierStringValue(f.Qualifiers, "zoneInferenceScore"), 0)) {
+		return false
+	}
+	return true
+}
+
+func clearAffectedZonePrimaryEvidence(f *horizonmodels.HorizonFragment) bool {
+	if f == nil || f.Qualifiers == nil {
+		return false
+	}
+	changed := false
+	for _, key := range []string{
+		"sourceTitle",
+		"sourceSummary",
+		"sourceUrl",
+		"sourceOccurredAt",
+		"sourceCountryCode",
+		"primarySourceScore",
+		"primarySourceClassificationCategory",
+		"primarySourceClassificationLevel",
+	} {
+		if _, ok := f.Qualifiers[key]; ok {
+			delete(f.Qualifiers, key)
+			changed = true
+		}
+	}
+	return changed
 }
 
 type tagSet struct {
@@ -2685,6 +3467,9 @@ func inferAffectedZoneCandidateWithContext(ctx context.Context, p *HorizonMonito
 	if e == nil {
 		return nil
 	}
+	if nlpAssessmentSuppressesZone(e) {
+		return nil
+	}
 	if shouldSuppressAffectedZoneBySourceProfile(e) {
 		return nil
 	}
@@ -2716,7 +3501,7 @@ func inferAffectedZoneCandidateWithContext(ctx context.Context, p *HorizonMonito
 	}
 	warmOnly := !shouldCreateAffectedZone(text, cls.Level, conditionType)
 
-	place := inferZonePlaceName(e)
+	place := inferZonePlaceName(e, text, conditionType)
 	geoToken, countryCode, countryName := inferZoneGeo(e, place, text, conditionType)
 	var anchor *affectedZoneEntityAnchor
 	if shouldAttemptAffectedZoneEntityAnchor(place, countryName, "none", false, e) {
@@ -2805,6 +3590,28 @@ func inferAffectedZoneCandidateWithContext(ctx context.Context, p *HorizonMonito
 	}
 }
 
+func nlpAssessmentSuppressesZone(e *horizonMonitorFeedEvent) bool {
+	if e == nil || e.Raw == nil {
+		return false
+	}
+	m, ok := e.Raw["nlpArticleAssessment"].(map[string]interface{})
+	if !ok || len(m) == 0 {
+		return false
+	}
+	shouldCreate, _ := m["shouldCreateZone"].(bool)
+	shouldWarm, _ := m["shouldWarmExisting"].(bool)
+	if shouldCreate || shouldWarm {
+		return false
+	}
+	if rejected, ok := m["rejectionReason"].(string); ok && strings.TrimSpace(rejected) != "" {
+		return true
+	}
+	if isEvent, ok := m["isEvent"].(bool); ok && !isEvent {
+		return true
+	}
+	return false
+}
+
 func shouldCreateAffectedZone(text, level, conditionType string) bool {
 	if text == "" || isLikelyNonEventText(text) {
 		return false
@@ -2867,6 +3674,9 @@ func inferZoneConditionAndSubtypeScored(text string, cls horizonMonitorNewsClass
 		if looksLikeAdministrativeCommentaryText(text) {
 			return "", "", "", 0
 		}
+		if looksLikeExerciseWithoutIncidentText(text) {
+			return "", "", "", 0
+		}
 		if looksLikeCivilIncidentWithoutMilitaryContext(text) {
 			return "political_tension", "political_tension", "public_security", 0.84
 		}
@@ -2878,6 +3688,9 @@ func inferZoneConditionAndSubtypeScored(text string, cls horizonMonitorNewsClass
 	case "environmental":
 		return "environmental_hazard", "natural_disaster", "toxic_pollution", 1.08
 	case "terrorism":
+		if looksLikeCivilIncidentWithoutMilitaryContext(text) {
+			return "political_tension", "political_tension", "public_security", 0.90
+		}
 		return "military_conflict", "military_conflict", "terror_threat", 1.04
 	case "crime":
 		return "political_tension", "political_tension", "public_security", 0.92
@@ -2953,12 +3766,38 @@ func shouldSuppressWeakAffectedZoneInference(
 			return true
 		}
 	case "military_conflict":
-		if looksLikeAdministrativeCommentaryText(text) || looksLikeCivilIncidentWithoutMilitaryContext(text) {
+		if looksLikeAdministrativeCommentaryText(text) || looksLikeCivilIncidentWithoutMilitaryContext(text) || looksLikeCapabilityOrFeatureText(text) {
+			return true
+		}
+		if looksLikeExerciseWithoutIncidentText(text) {
+			return true
+		}
+		if hasAnyKeyword(text, "rewild borders", "countries can rewild borders", "deter invasions", "environment chief", "natural border control") {
 			return true
 		}
 		if eventScore < 1.08 && !hasAnyKeyword(text,
 			"attack", "strike", "missile", "shelling", "drone strike", "airstrike", "clash", "troops", "warship", "hostage", "terror attack",
 			"air defence", "air defense", "fighter", "interceptor", "deployment", "deterrence", "reinforce", "reinforcement", "typhoon", "navies",
+		) {
+			return true
+		}
+	case "disease_outbreak":
+		if looksLikeAdministrativeCommentaryText(text) || looksLikeCapabilityOrFeatureText(text) {
+			return true
+		}
+		if !hasAnyKeyword(text,
+			"outbreak", "epidemic", "pandemic", "cases", "infected", "infection", "cholera", "measles", "mpox",
+			"dengue", "avian flu", "h5n1", "health emergency", "vaccination campaign", "vaccination resumes", "virus",
+		) {
+			return true
+		}
+	case "humanitarian_crisis":
+		if looksLikeAdministrativeCommentaryText(text) || looksLikeCapabilityOrFeatureText(text) {
+			return true
+		}
+		if !hasAnyKeyword(text,
+			"famine", "aid", "refugee", "displaced", "humanitarian", "malnutrition", "shelter", "relief", "hunger",
+			"cholera", "crisis", "evacuation", "civilians", "humanitarian corridor",
 		) {
 			return true
 		}
@@ -2996,6 +3835,15 @@ func inferZoneGeo(e *horizonMonitorFeedEvent, place, text, conditionType string)
 	if geoToken, countryCode, countryName = inferZoneGeoFromPlace(place); geoToken != "" {
 		return geoToken, countryCode, countryName
 	}
+	if cc, cn := inferZoneCountryFromNLPEntities(e); cc != "" {
+		return strings.ToLower(cc), cc, firstNonEmptyString(cn, countryNameFromCode(cc))
+	}
+	if textCountry := inferCountryCodeFromAffectedZoneText(text, countryCode); textCountry != "" &&
+		!looksLikeMultiCountryDeploymentRoundup(normalizeKeywordText(text), horizonMonitorNewsClassification{}) &&
+		!looksLikeForcePostureDeploymentText(normalizeKeywordText(text), horizonMonitorNewsClassification{}) &&
+		!looksLikeRetrospectiveConflictNarrativeText(normalizeKeywordText(text)) {
+		return strings.ToLower(textCountry), textCountry, countryNameFromCode(textCountry)
+	}
 	countryCode = ""
 	countryName = ""
 	if e != nil {
@@ -3012,10 +3860,7 @@ func inferZoneGeo(e *horizonMonitorFeedEvent, place, text, conditionType string)
 		parts := strings.Split(strings.Trim(lp, "/"), "/")
 		if len(parts) >= 2 && len(strings.TrimSpace(parts[1])) == 2 {
 			cc := strings.ToUpper(strings.TrimSpace(parts[1]))
-			if shouldTrustAffectedZoneCountryFallback(e, text, conditionType, cc) ||
-				(strings.TrimSpace(place) != "" &&
-					!isWeakAffectedZonePlace(place, firstNonEmptyString(countryName, countryNameFromCode(cc))) &&
-					!looksLikeBadAffectedZonePlaceHint(place)) {
+			if shouldTrustAffectedZoneCountryFallback(e, text, conditionType, cc) {
 				return strings.ToLower(cc), cc, firstNonEmptyString(countryName, countryNameFromCode(cc))
 			}
 		}
@@ -3027,6 +3872,46 @@ func inferZoneGeo(e *horizonMonitorFeedEvent, place, text, conditionType string)
 		countryName = "Global"
 	}
 	return "global", "", countryName
+}
+
+func inferZoneCountryFromNLPEntities(e *horizonMonitorFeedEvent) (countryCode, countryName string) {
+	if e == nil || e.Raw == nil {
+		return "", ""
+	}
+	bestScore := 0.0
+	bestCode := ""
+	bestName := ""
+	for _, entity := range extractNLPEntityMaps(e.Raw["nlpEntities"]) {
+		etype := normalizePhrase(asString(entity["entityType"]))
+		role := normalizePhrase(asString(entity["role"]))
+		cc := normalizeCountryCode(firstNonEmptyString(asString(entity["countryCode"]), asString(entity["geoHint"])))
+		name := strings.TrimSpace(firstNonEmptyString(asString(entity["normalized"]), asString(entity["surface"])))
+		if etype != "country" && etype != "city" && etype != "region" && role != "place" && role != "facility" && role != "target" {
+			continue
+		}
+		score := 0.25
+		if role == "place" || role == "facility" || role == "target" {
+			score += 0.25
+		}
+		if cc != "" {
+			score += 0.25
+		}
+		if conf, ok := asFloat64(entity["confidence"]); ok {
+			score += conf * 0.25
+		}
+		if score > bestScore {
+			bestScore = score
+			bestCode = cc
+			bestName = name
+		}
+	}
+	if bestCode == "" {
+		return "", ""
+	}
+	if bestName == "" {
+		bestName = countryNameFromCode(bestCode)
+	}
+	return strings.ToUpper(bestCode), bestName
 }
 
 func shouldTrustAffectedZoneCountryFallback(e *horizonMonitorFeedEvent, text, conditionType, countryCode string) bool {
@@ -3056,9 +3941,12 @@ func shouldTrustAffectedZoneCountryFallback(e *horizonMonitorFeedEvent, text, co
 	}
 }
 
-func inferZonePlaceName(e *horizonMonitorFeedEvent) string {
+func inferZonePlaceName(e *horizonMonitorFeedEvent, text, conditionType string) string {
 	if e == nil {
 		return ""
+	}
+	if v := inferZonePlaceFromNLPEntities(e); isPlausiblePlaceName(v) {
+		return v
 	}
 	if v := extractUSGSPlaceFromTitle(strings.TrimSpace(e.Title)); isPlausiblePlaceName(v) {
 		return v
@@ -3077,7 +3965,47 @@ func inferZonePlaceName(e *horizonMonitorFeedEvent) string {
 	if v := extractKnownPlaceFromText(strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary)}, " ")); isPlausiblePlaceName(v) {
 		return v
 	}
+	if !shouldUseCountryNameAsAffectedZonePlaceFallback(e, text, conditionType) {
+		return ""
+	}
 	return firstNonEmptyString(strings.TrimSpace(e.CountryName), countryNameFromCode(strings.TrimSpace(e.CountryCode)))
+}
+
+func inferZonePlaceFromNLPEntities(e *horizonMonitorFeedEvent) string {
+	if e == nil || e.Raw == nil {
+		return ""
+	}
+	entities := extractNLPEntityMaps(e.Raw["nlpEntities"])
+	bestScore := 0.0
+	best := ""
+	for _, entity := range entities {
+		etype := normalizePhrase(asString(entity["entityType"]))
+		role := normalizePhrase(asString(entity["role"]))
+		surface := strings.TrimSpace(firstNonEmptyString(asString(entity["normalized"]), asString(entity["surface"]), asString(entity["geoHint"])))
+		if surface == "" {
+			continue
+		}
+		score := 0.0
+		switch etype {
+		case "facility", "port", "terminal", "pipeline", "refinery", "fab", "chokepoint", "route", "city", "region", "country":
+			score += 0.4
+		}
+		switch role {
+		case "place", "facility", "route", "chokepoint", "target":
+			score += 0.35
+		}
+		if cc := strings.ToUpper(strings.TrimSpace(asString(entity["countryCode"]))); cc != "" && strings.EqualFold(cc, e.CountryCode) {
+			score += 0.12
+		}
+		if conf, ok := asFloat64(entity["confidence"]); ok {
+			score += conf * 0.3
+		}
+		if score > bestScore && isPlausiblePlaceName(surface) && !isGenericAffectedZonePlace(surface) {
+			bestScore = score
+			best = surface
+		}
+	}
+	return best
 }
 
 func isPlausiblePlaceName(v string) bool {
@@ -3126,13 +4054,16 @@ func extractPlaceFromTitle(title string) string {
 	if title == "" {
 		return ""
 	}
+	if prefix := extractPlacePrefixFromTitle(title); prefix != "" {
+		return prefix
+	}
 	clean := strings.NewReplacer(",", " ", ";", " ", ":", " ", "(", " ", ")", " ", "|", " ", "\"", " ", "'", " ").Replace(title)
 	words := strings.Fields(clean)
 	if len(words) == 0 {
 		return ""
 	}
 	preps := map[string]struct{}{
-		"in": {}, "near": {}, "around": {}, "outside": {}, "at": {}, "off": {}, "across": {}, "from": {}, "of": {},
+		"in": {}, "near": {}, "around": {}, "outside": {}, "at": {}, "off": {}, "across": {}, "from": {}, "of": {}, "to": {},
 	}
 	stop := map[string]struct{}{
 		"the": {}, "a": {}, "an": {}, "latest": {}, "breaking": {}, "report": {}, "reports": {},
@@ -3174,6 +4105,67 @@ func extractPlaceFromTitle(title string) string {
 		}
 	}
 	return ""
+}
+
+func extractPlacePrefixFromTitle(title string) string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return ""
+	}
+	for _, sep := range []string{":", " - ", " — "} {
+		if idx := strings.Index(title, sep); idx > 0 {
+			candidate := strings.TrimSpace(title[:idx])
+			if isLikelyTitlePlaceCandidate(candidate) {
+				return candidate
+			}
+		}
+	}
+	return ""
+}
+
+func shouldUseCountryNameAsAffectedZonePlaceFallback(e *horizonMonitorFeedEvent, text, conditionType string) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		text = normalizeKeywordText(strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary)}, " "))
+	}
+	if text == "" {
+		return false
+	}
+	if looksLikeExerciseWithoutIncidentText(text) ||
+		looksLikeForcePostureDeploymentText(text, horizonMonitorNewsClassification{}) ||
+		looksLikeDrugInterdictionText(text) ||
+		looksLikeAdministrativeCommentaryText(text) ||
+		looksLikeLiveBlogPoliticalCommentaryText(text) ||
+		looksLikeCivilIncidentWithoutMilitaryContext(text) ||
+		looksLikeCyberCampaignWithoutOperationalImpact(text) ||
+		looksLikeMultiCountryDeploymentRoundup(text, horizonMonitorNewsClassification{}) ||
+		looksLikeRetrospectiveConflictNarrativeText(text) ||
+		looksLikeLegalCommercialDisputeText(text) ||
+		looksLikeSportsPoliticalHumanInterestText(text) {
+		return false
+	}
+	switch strings.TrimSpace(conditionType) {
+	case "military_conflict", "political_tension", "humanitarian_crisis":
+		if len(extractCountryCodesFromText(text, 3)) > 1 {
+			return false
+		}
+	}
+	cc := ""
+	if e != nil {
+		cc = strings.ToUpper(strings.TrimSpace(e.CountryCode))
+		if lp := strings.TrimSpace(e.LocationPath); strings.HasPrefix(lp, "/loc/") {
+			if lpCC := strings.ToUpper(strings.TrimSpace(countryFromLocationPathString(lp))); lpCC != "" {
+				cc = lpCC
+			}
+		}
+	}
+	if cc == "" {
+		return false
+	}
+	if strings.Contains(text, normalizeKeywordText(countryNameFromCode(cc))) {
+		return true
+	}
+	return false
 }
 
 func geographicHeadAllowsOf(head string) bool {
@@ -3219,6 +4211,9 @@ func isLikelyTitlePlaceCandidate(candidate string) bool {
 	}
 	norm := normalizePhrase(candidate)
 	if norm == "" {
+		return false
+	}
+	if looksLikeMilitaryAssetName(norm) {
 		return false
 	}
 	if _, ok := zoneHotspotCoords[norm]; ok {
@@ -3352,11 +4347,12 @@ func shouldSuppressAffectedZoneBySemanticDrift(text string, e *horizonMonitorFee
 		return true
 	}
 	eventScore := wmHeuristics().strongEventScore(text)
-	if strings.Contains(text, "strait of hormuz") ||
+	if (strings.Contains(text, "strait of hormuz") ||
 		strings.Contains(text, "suez canal") ||
 		strings.Contains(text, "red sea") ||
 		strings.Contains(text, "black sea") ||
-		strings.Contains(text, "taiwan strait") {
+		strings.Contains(text, "taiwan strait")) &&
+		!looksLikeChokepointSecurityMissionWithoutOperationalDisruption(text) {
 		return false
 	}
 	if strings.Contains(text, "at a glance") ||
@@ -3372,14 +4368,57 @@ func shouldSuppressAffectedZoneBySemanticDrift(text string, e *horizonMonitorFee
 	if (strings.Contains(text, "why ") || strings.Contains(text, "how ")) && eventScore < 1.35 {
 		return true
 	}
+	if hasAnyKeyword(text,
+		"why did", "how long could", "what happens if", "what would have happened if",
+		"as it happened", "live blog", "live updates", "counterfactual",
+	) {
+		return true
+	}
 	if strings.Contains(text, "validates") ||
 		strings.Contains(text, "eliminating mother to child transmission") {
+		return true
+	}
+	if looksLikeCapabilityOrFeatureText(text) && !looksLikeWarmConflictPosture(text, cls) {
+		return true
+	}
+	if looksLikeRetrospectiveConflictNarrativeText(text) {
+		return true
+	}
+	if looksLikeLegalCommercialDisputeText(text) {
+		return true
+	}
+	if looksLikeSportsPoliticalHumanInterestText(text) {
 		return true
 	}
 	if looksLikeAdministrativeCommentaryText(text) && !looksLikeWarmConflictPosture(text, cls) {
 		return true
 	}
+	if looksLikeExerciseWithoutIncidentText(text) {
+		return true
+	}
+	if looksLikeForcePostureDeploymentText(text, cls) && !looksLikeWarmConflictPosture(text, cls) {
+		return true
+	}
+	if looksLikeDrugInterdictionText(text) {
+		return true
+	}
+	if looksLikeLiveBlogPoliticalCommentaryText(text) {
+		return true
+	}
 	if looksLikeCivilIncidentWithoutMilitaryContext(text) {
+		return true
+	}
+	if looksLikeCyberCampaignWithoutOperationalImpact(text) {
+		return true
+	}
+	if looksLikeCompanyScopedCyberDataBreachWithoutOutage(text) {
+		return true
+	}
+	if looksLikeOffshoreShippingIncidentAttributedElsewhere(text) {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(cls.Category), "infrastructure") &&
+		looksLikeChokepointSecurityMissionWithoutOperationalDisruption(text) {
 		return true
 	}
 	if strings.EqualFold(strings.TrimSpace(cls.Category), "health") &&
@@ -3406,6 +4445,113 @@ func looksLikeAdministrativeCommentaryText(text string) bool {
 		"set to be announced", "new supreme leader", "tries to strike a balance", "strike a balance",
 		"securing stability and growth", "stability and growth", "finding freedom and healing",
 		"on the road with", "taunts", "order diplomats", "diplomats to leave",
+		"offer refuge", "offers refuge", "policy to offer refuge", "calls trump s policy", "calls policy racist", "white afrikaners",
+		"soft power", "rare instance of direct criticism", "direct criticism", "what is the game plan", "factsheet", "policy paper",
+		"flag ceremony", "wrongful detainee day", "hostage and wrongful detainee day",
+		"remarks by", "remarks to", "statement by", "press release", "commemoration",
+		"anniversary event", "ceremony",
+		"the d brief", "and a bit more", "rewild borders", "countries can rewild borders",
+		"deter invasions", "environment chief", "natural border control",
+		"what happens if", "must not be a staging ground", "to discuss regional security",
+		"strategic agreement", "office attendance", "certification portfolio", "workforce readiness",
+		"draw congressional scrutiny", "congressional scrutiny", "in other news", "blueprint", "review",
+		"fuels debate", "debate in", "offensive strategy", "what would have happened if",
+		"how long could the war last", "what happens if", "as it happened",
+		"live updates", "latest updates", "live blog", "live politics", "politics latest updates",
+	)
+}
+
+func looksLikeLiveBlogPoliticalCommentaryText(text string) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	if hasAnyKeyword(text, "missile strike", "airstrike", "troops under fire", "port closure", "blackout", "earthquake", "flood", "wildfire") {
+		return false
+	}
+	return hasAnyKeyword(text,
+		"live updates", "latest updates", "live blog", "as it happened",
+		"white house", "us politics", "politics latest updates", "office attendance", "policy paper",
+	)
+}
+
+func looksLikeRetrospectiveConflictNarrativeText(text string) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	if hasAnyKeyword(text, "explosion", "airstrike", "missile strike", "drone strike", "blackout", "port closure", "operations suspended") {
+		return false
+	}
+	return hasAnyKeyword(text,
+		"final voyage", "legacy of", "what happened after", "the demise of", "the story of",
+		"the warship sunk by the us", "sunk by the us", "retrospective", "lessons from", "looking back",
+	)
+}
+
+func looksLikeLegalCommercialDisputeText(text string) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	if hasAnyKeyword(text, "explosion", "airstrike", "missile strike", "drone strike", "outage", "closure") {
+		return false
+	}
+	return hasAnyKeyword(text,
+		"ready to fight", "sale proceeds", "over proceeds", "sale dispute", "court battle", "lawsuit",
+		"sanctions imposed on", "ownership transfer", "asset freeze", "club sale", "commercial dispute",
+	)
+}
+
+func looksLikeSportsPoliticalHumanInterestText(text string) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	if hasAnyKeyword(text, "explosion", "airstrike", "missile strike", "drone strike", "outage", "closure") {
+		return false
+	}
+	return hasAnyKeyword(text,
+		"footballers", "safe house", "asian cup protest", "athletes", "sports protest", "players",
+	)
+}
+
+func looksLikeChokepointSecurityMissionWithoutOperationalDisruption(text string) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	if hasAnyKeyword(text,
+		"outage", "shutdown", "closure", "closed", "closed to shipping", "operations suspended",
+		"terminal closed", "port closed", "pipeline rupture", "pipeline closed", "service disruption",
+		"service outage", "blackout", "collision", "attack on tanker", "missile strike", "airstrike",
+		"explosion", "fire at", "sank", "sunk", "damaged", "damaging shipping",
+	) {
+		return false
+	}
+	return hasAnyKeyword(text,
+		"reopen strait", "reopen the strait", "defensive mission", "escort mission", "secure shipping route",
+		"protect shipping", "shipping protection", "allies preparing", "preparing mission", "maritime security mission",
+	)
+}
+
+func looksLikeCapabilityOrFeatureText(text string) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	if hasAnyKeyword(text,
+		"attack", "strike", "missile strike", "airstrike", "shelling", "clash", "troops under fire", "warship hit",
+		"killed", "injured", "hostage", "outage", "shutdown", "blackout", "closure", "explosion", "breach",
+	) {
+		return false
+	}
+	return hasAnyKeyword(text,
+		"meet the startups", "military specific ai", "military-specific ai", "soft power", "investment deals",
+		"strategic agreement", "draw congressional scrutiny", "congressional scrutiny", "missile capability",
+		"anti ship missile capability", "anti-ship missile capability", "to develop", "review", "blueprint",
+		"seeks order suppressing identities", "office attendance", "what happens if", "why hedging is no longer enough",
+		"must not be a staging ground", "to discuss regional security", "calls on europe", "unlikely to continue",
 	)
 }
 
@@ -3423,8 +4569,170 @@ func looksLikeCivilIncidentWithoutMilitaryContext(text string) bool {
 	}
 	return hasAnyKeyword(text,
 		"police investigate", "nightclub", "outside the us embassy", "outside u s embassy",
-		"embassy", "injures", "including minors", "minors",
+		"embassy", "injures", "including minors", "minors", "synagogue", "mosque", "church",
+		"community center", "festival", "market square", "restaurant", "school", "civilian",
+		"bombing", "blast", "explosion",
 	)
+}
+
+func looksLikeDrugInterdictionText(text string) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	if hasAnyKeyword(text,
+		"missile", "airstrike", "drone strike", "shelling", "warship", "fighter jet", "interceptor",
+		"ground offensive", "frontline", "invasion", "ceasefire", "troops under fire",
+	) {
+		return false
+	}
+	return hasAnyKeyword(text,
+		"drug boat", "drug ops", "counter narcotics", "counter-narcotics", "narcotics",
+		"cartel", "smuggling boat", "suspected drug boat", "drug interdiction",
+	)
+}
+
+func looksLikeExerciseWithoutIncidentText(text string) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	if !hasAnyKeyword(text, "exercise", "drill", "rehearsal", "rehearse", "war game", "training mission", "training exercise", "pre deployment exercises", "pre-deployment exercises") {
+		return false
+	}
+	if hasAnyKeyword(text, "hold maritime attack drills", "held maritime attack drills", "rehearse anti ship missions", "rehearse anti-ship missions", "wraps pre deployment exercises", "wraps pre-deployment exercises") {
+		return true
+	}
+	if hasAnyKeyword(text,
+		"strike", "missile", "airstrike", "shelling", "drone strike", "troops under fire",
+		"clash", "collision", "shot down", "intercepted", "interception", "hostage", "terror attack",
+	) {
+		return false
+	}
+	return true
+}
+
+func looksLikeForcePostureDeploymentText(text string, cls horizonMonitorNewsClassification) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	if hasAnyKeyword(text,
+		"missile strike", "airstrike", "shelling", "drone strike", "troops under fire",
+		"hit on residential", "killed", "injured", "hostage", "explosion", "port closure", "blackout",
+	) {
+		return false
+	}
+	if !(strings.EqualFold(strings.TrimSpace(cls.Category), "military") || strings.EqualFold(strings.TrimSpace(cls.Category), "conflict") || hasAnyKeyword(text, "fighter", "frigate", "carrier", "air defence", "air defense", "anti-drone", "anti missile", "anti-missile")) {
+		return false
+	}
+	return hasAnyKeyword(text,
+		"deploy", "deployed", "deployment", "sends", "sent", "dispatch", "dispatched",
+		"operate from", "enhancing security", "additional measures may be taken",
+		"bolster", "reinforcement", "air defense missions", "combat air patrol",
+	)
+}
+
+func looksLikeMultiCountryDeploymentRoundup(text string, cls horizonMonitorNewsClassification) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(cls.Category), "military") || strings.EqualFold(strings.TrimSpace(cls.Category), "conflict") {
+		if hasAnyKeyword(text, "attack", "airstrike", "missile strike", "shelling", "troops under fire", "drone strike", "hostage", "explosion", "outage", "closure") {
+			return false
+		}
+		if len(extractCountryCodesFromText(text, 4)) >= 2 &&
+			hasAnyKeyword(text,
+				"sends", "deploys", "increase deployments", "naval and air deployments",
+				"regional security", "amid", "threats", "war spreads", "increase middle east naval", "air deployments",
+			) {
+			return true
+		}
+	}
+	return false
+}
+
+func inferCountryCodeFromAffectedZoneText(text, existingCountry string) string {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return ""
+	}
+	codes := extractCountryCodesFromText(text, 4)
+	if len(codes) == 0 {
+		return ""
+	}
+	existingCountry = strings.ToUpper(strings.TrimSpace(existingCountry))
+	for _, code := range codes {
+		code = strings.ToUpper(strings.TrimSpace(code))
+		if code == "" {
+			continue
+		}
+		if existingCountry != "" && code == existingCountry {
+			return code
+		}
+	}
+	if len(codes) == 1 {
+		return strings.ToUpper(strings.TrimSpace(codes[0]))
+	}
+	return ""
+}
+
+func looksLikeCyberCampaignWithoutOperationalImpact(text string) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	if hasAnyKeyword(text, "outage", "shutdown", "offline", "blackout", "service disruption", "service outage", "operations suspended", "payment outage", "port closure") {
+		return false
+	}
+	return hasAnyKeyword(text,
+		"malware chains", "dual malware chains", "targets governments", "targets government entities",
+		"phishing campaign", "espionage campaign", "credential theft", "credential harvesting",
+		"uses malware", "backdoor", "rat", "remote access trojan", "campaign targets",
+	)
+}
+
+func looksLikeCompanyScopedCyberDataBreachWithoutOutage(text string) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	if hasAnyKeyword(text,
+		"outage", "service outage", "service disruption", "shutdown", "offline", "blackout",
+		"operations suspended", "payment outage", "port closure", "terminal closed", "pipeline closed",
+	) {
+		return false
+	}
+	if !hasAnyKeyword(text, "data breach", "breach", "service provider hack", "hacked service provider", "hack") {
+		return false
+	}
+	return hasAnyKeyword(text,
+		"employee data", "customer data", "employees and customers", "subsidiary",
+		"service provider", "discloses data breach", "stolen data",
+		"surveillance and wiretap systems", "wiretap systems", "surveillance systems",
+		"fbi investigates breach", "investigates breach",
+	)
+}
+
+func looksLikeOffshoreShippingIncidentAttributedElsewhere(text string) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	if !hasAnyKeyword(text, "tanker", "gas tanker", "lng carrier", "cargo ship", "bulk carrier", "vessel", "carrier") {
+		return false
+	}
+	if !hasAnyKeyword(text, "off ", "off the coast of", "mediterranean sea off", "near the coast of") {
+		return false
+	}
+	if !hasAnyKeyword(text, "accuses", "blames", "described as a terrorist attack", "terrorist attack") {
+		return false
+	}
+	if hasAnyKeyword(text, "libyan forces", "libya navy", "libyan navy", "libya militia", "libyan militia", "tripoli", "benghazi") {
+		return false
+	}
+	return true
 }
 
 func shouldSuppressAffectedZoneByEventProfile(
@@ -3439,7 +4747,34 @@ func shouldSuppressAffectedZoneByEventProfile(
 	if profile.likelyAnalysisRoundup() && !looksLikeWarmConflictPosture(text, cls) {
 		return true
 	}
+	if looksLikeCapabilityOrFeatureText(text) && !looksLikeWarmConflictPosture(text, cls) {
+		return true
+	}
+	if looksLikeExerciseWithoutIncidentText(text) {
+		return true
+	}
+	if looksLikeForcePostureDeploymentText(text, cls) && !looksLikeWarmConflictPosture(text, cls) {
+		return true
+	}
+	if looksLikeDrugInterdictionText(text) {
+		return true
+	}
+	if looksLikeLiveBlogPoliticalCommentaryText(text) {
+		return true
+	}
 	if (conditionType == "cyber_disruption" || conditionType == "infrastructure_disruption") && profile.likelyAdvisoryCampaignWithoutOutage() {
+		return true
+	}
+	if conditionType == "infrastructure_disruption" && looksLikeChokepointSecurityMissionWithoutOperationalDisruption(text) {
+		return true
+	}
+	if conditionType == "cyber_disruption" && looksLikeCyberCampaignWithoutOperationalImpact(text) {
+		return true
+	}
+	if (conditionType == "cyber_disruption" || conditionType == "infrastructure_disruption") && looksLikeCompanyScopedCyberDataBreachWithoutOutage(text) {
+		return true
+	}
+	if conditionType == "military_conflict" && looksLikeOffshoreShippingIncidentAttributedElsewhere(text) {
 		return true
 	}
 	if profile.likelyBroadRegionalRoundup() {
@@ -3977,7 +5312,37 @@ func extractAffectedZoneObjectAnchors(e *horizonMonitorFeedEvent, maxCount int) 
 		}
 		add(seed)
 	}
+	for _, entity := range extractNLPEntityMaps(e.Raw["nlpEntities"]) {
+		etype := normalizePhrase(asString(entity["entityType"]))
+		role := normalizePhrase(asString(entity["role"]))
+		if etype == "" {
+			continue
+		}
+		if etype != "company" && etype != "facility" && etype != "port" && etype != "terminal" && etype != "pipeline" &&
+			etype != "refinery" && etype != "fab" && etype != "chokepoint" && etype != "government body" && etype != "government_body" &&
+			role != "actor" && role != "facility" && role != "target" && role != "route" && role != "chokepoint" {
+			continue
+		}
+		add(firstNonEmptyString(asString(entity["normalized"]), asString(entity["surface"])))
+	}
 	return out
+}
+
+func extractNLPEntityMaps(raw interface{}) []map[string]interface{} {
+	switch v := raw.(type) {
+	case []map[string]interface{}:
+		return v
+	case []interface{}:
+		out := make([]map[string]interface{}, 0, len(v))
+		for _, item := range v {
+			if m, ok := item.(map[string]interface{}); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func shouldPreferAffectedZoneAnchor(anchor *affectedZoneEntityAnchor, place, countryName, geoPrecision string, hasCoord bool) bool {
@@ -4032,6 +5397,9 @@ func looksLikeAffectedZoneEntitySeed(seed string, e *horizonMonitorFeedEvent) bo
 	if seedNorm == "" {
 		return false
 	}
+	if looksLikeMilitaryAssetName(seedNorm) {
+		return false
+	}
 	if inferCountryCodeFromText(seed) != "" {
 		return false
 	}
@@ -4073,6 +5441,14 @@ func looksLikeCorporateEntitySeed(seedNorm string) bool {
 	return hasAnyKeyword(seedNorm,
 		" plc", " ltd", " llc", " inc", " corp", " corporation", " company", " co ", " group",
 		" holdings", " energy", " petroleum", " gas", " lng", " shipping", " logistics", " terminals",
+	)
+}
+
+func looksLikeMilitaryAssetName(seedNorm string) bool {
+	return hasAnyKeyword(seedNorm,
+		"uss ", "hms ", "fs ", "iaf ", "raf ",
+		"aircraft carrier", "carrier", "destroyer", "frigate", "cruiser", "warship",
+		"task force", "fleet", "squadron",
 	)
 }
 
@@ -4280,6 +5656,7 @@ var zoneHotspotCoords = map[string]geoPoint{
 	"gaza":                    {Lat: 31.3547, Lon: 34.3088, CountryCode: "PS"},
 	"gaza strip":              {Lat: 31.4000, Lon: 34.3500, CountryCode: "PS"},
 	"west bank":               {Lat: 31.9500, Lon: 35.2500, CountryCode: "PS"},
+	"northern cyprus":         {Lat: 35.2500, Lon: 33.2500, CountryCode: "CY"},
 	"southern lebanon":        {Lat: 33.2500, Lon: 35.4000, CountryCode: "LB"},
 	"north kivu":              {Lat: -0.9000, Lon: 29.2000, CountryCode: "CD"},
 	"fergana valley":          {Lat: 40.4000, Lon: 71.8000, CountryCode: ""},
@@ -4287,6 +5664,7 @@ var zoneHotspotCoords = map[string]geoPoint{
 	"sir creek":               {Lat: 23.9167, Lon: 68.5833, CountryCode: ""},
 	"marib":                   {Lat: 15.4700, Lon: 45.3250, CountryCode: "YE"},
 	"marib energy zone":       {Lat: 15.4700, Lon: 45.3250, CountryCode: "YE"},
+	"tehran":                  {Lat: 35.6892, Lon: 51.3890, CountryCode: "IR"},
 	"khoy":                    {Lat: 38.5503, Lon: 44.9521, CountryCode: "IR"},
 	"khoy region":             {Lat: 38.5503, Lon: 44.9521, CountryCode: "IR"},
 	"cianjur":                 {Lat: -6.8173, Lon: 107.1423, CountryCode: "ID"},
@@ -4295,6 +5673,7 @@ var zoneHotspotCoords = map[string]geoPoint{
 	"red sea":                 {Lat: 21.0000, Lon: 39.0000, CountryCode: ""},
 	"southern red sea":        {Lat: 14.5000, Lon: 42.7000, CountryCode: ""},
 	"red sea security crisis": {Lat: 17.5000, Lon: 41.5000, CountryCode: ""},
+	"north sea":               {Lat: 56.0000, Lon: 3.0000, CountryCode: ""},
 	"bab el mandeb":           {Lat: 12.5850, Lon: 43.3330, CountryCode: ""},
 	"bab-el-mandeb":           {Lat: 12.5850, Lon: 43.3330, CountryCode: ""},
 	"bab al mandab":           {Lat: 12.5850, Lon: 43.3330, CountryCode: ""},

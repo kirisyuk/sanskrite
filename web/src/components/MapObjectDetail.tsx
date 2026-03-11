@@ -120,6 +120,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
   const headerGap = autoCompact ? 8 : 10;
   const traceChips = traceSummary
     ? [
+        { label: 'Supply', value: String(traceSummary.supplyRouteCount) },
         { label: '1 hop', value: String(traceSummary.hopCounts[1]) },
         { label: '2 hops', value: String(traceSummary.hopCounts[2]) },
         { label: '3 hops', value: String(traceSummary.hopCounts[3]) },
@@ -318,18 +319,20 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
                 }}
               >
                 <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
-                  Trace propagation
+                  Map routes
                 </div>
                 <div style={{ marginTop: 6, fontSize: 12, lineHeight: 1.45, opacity: 0.8 }}>
                   {edgesLoading
-                    ? 'Resolving direct and downstream branches...'
+                    ? 'Resolving supply routes, contextual graph links, and signal propagation...'
                     : traceSummary
                       ? (
-                        traceSummary.visibleEdges > 0 && traceSummary.visibleEdges < traceSummary.totalEdges
-                          ? `Showing ${traceSummary.totalEdges} relations across ${traceSummary.branchCount} active branches. ${traceSummary.visibleEdges} are visible on map.`
-                          : traceSummary.visibleEdges === 0
-                            ? `Showing ${traceSummary.totalEdges} relations across ${traceSummary.branchCount} active branches. None are mappable on the current map yet.`
-                            : `Showing ${traceSummary.totalEdges} visible relations across ${traceSummary.branchCount} active branches.`
+                        traceSummary.supplyRouteCount > 0
+                          ? `Showing ${traceSummary.supplyRouteCount} supply route(s) first${traceSummary.visibleEdges > traceSummary.supplyRouteCount ? `, plus ${traceSummary.visibleEdges - traceSummary.supplyRouteCount} contextual link(s)` : ''} across ${traceSummary.branchCount} active branches.`
+                          : traceSummary.visibleEdges > 0 && traceSummary.visibleEdges < traceSummary.totalEdges
+                            ? `Showing ${traceSummary.visibleEdges} smooth routes from ${traceSummary.totalEdges} selected relations across ${traceSummary.branchCount} active branches.`
+                            : traceSummary.visibleEdges === 0
+                              ? `Resolved ${traceSummary.totalEdges} selected relations across ${traceSummary.branchCount} active branches, but none are mappable on the current map yet.`
+                              : `Showing ${traceSummary.visibleEdges} visible routes across ${traceSummary.branchCount} active branches.`
                       )
                       : 'No trace available yet.'}
                 </div>
@@ -365,11 +368,14 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
                     )}
                     {(traceSummary.pathArtifactCount > 0 || traceSummary.propagationNodeCount > 0) && (
                       <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.5, color: 'var(--text-secondary-strong)' }}>
+                        {traceSummary.supplyRouteCount > 0
+                          ? `Concrete supply routes on map ${traceSummary.supplyRouteCount}. `
+                          : ''}
                         {traceSummary.pathArtifactCount > 0
                           ? `Related paths ${traceSummary.pathArtifactCount}, mapped legs ${traceSummary.pathLegCount}. `
                           : ''}
                         {traceSummary.propagationNodeCount > 0
-                          ? `Propagation preview reaches ${traceSummary.propagationNodeCount} node(s) across ${traceSummary.propagationEdgeCount} link(s).`
+                          ? `Signal propagation stays separate in gray across ${traceSummary.propagationEdgeCount} link(s).`
                           : ''}
                       </div>
                     )}

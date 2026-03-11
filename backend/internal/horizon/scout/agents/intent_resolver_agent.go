@@ -335,6 +335,7 @@ func (a *IntentResolverAgent) ResolveWithContext(ctx context.Context, query stri
 				fmt.Printf("[IntentResolver] Domain rejected (non-domain path): original=%q, normalized=%q\n", orig, cp)
 				continue
 			}
+			cp = repairSupplyChainDomainNamespacePath(cp)
 			// Lenient: if LLM returns trailing facet key without value (odd segments), drop it.
 			cp = trimDomainPathTrailingIncompleteFacet(cp)
 			// Normalize using taxonomy validation (now includes /domain/v1).
@@ -656,7 +657,7 @@ DOMAIN RULES
   SCENARIOS: scenario-analysis, future-outlook (aliases: macro-trends, megatrends → scenario-analysis)
   SECTOR: sector-overview, industry-structure (aliases: vertical-deep-dive → sector-overview)
   FALLBACK: other (only if none above fit): /domain/v1/other/{custom-slug}/...
-- SUPPLY CHAIN PLAN: When contractType is supply-chain or value-chain, you MUST include supplyChainExecutionPlan with 1-10 queries. CRITICAL: The FIRST queries must go FROM ORGANIZATIONS (as producers/suppliers for downstream, or as consumers for upstream). Supply chains are actor-centric: org→product→org. direction: use "upstream" when the query asks about suppliers, raw materials, inputs, "who supplies X", "where does X get its materials", sourcing; use "downstream" when asking about customers, buyers, "who buys X", distribution; use "both" for full chain mapping. For upstream: anchors are the CONSUMER orgs (e.g. Coca-Cola for "who supplies Coca-Cola"). For downstream: anchors are PRODUCER orgs. For product+geo queries (e.g. "Thai rice supply chain"): contractType MUST be supply-chain, facets MUST include geo and product or material. anchorType MUST be org. Use anchors (or anchors array) with canonical /org/... paths. Each query: anchor (single) or anchors (array), anchorType (org|product|deposit), direction (upstream|downstream|both), depth (3-6), productFilter/geoFilter from facets, reason. overlayQueries (Stage 2) optional.
+- SUPPLY CHAIN PLAN: When contractType is supply-chain or value-chain, you MUST include supplyChainExecutionPlan with 1-10 queries. CRITICAL: The FIRST queries must go FROM ORGANIZATIONS (as producers/suppliers for downstream, or as consumers for upstream). Supply chains are actor-centric: org→product→org. direction: use "upstream" when the query asks about suppliers, raw materials, inputs, "who supplies X", "where does X get its materials", sourcing; use "downstream" when asking about customers, buyers, "who buys X", distribution; use "both" for full chain mapping. For upstream: anchors are the CONSUMER orgs (e.g. Coca-Cola for "who supplies Coca-Cola"). For downstream: anchors are PRODUCER orgs. Organization-focused supply-chain intents are valid: keep the organization in anchors / supplyChainExecutionPlan, and if canonicalPath must encode it, use facet form like /domain/v1/supply-chain/geo/us/subject/apple-inc. Do NOT emit /domain/v1/supply-chain/org/us/apple-inc/... . For product+geo queries (e.g. "Thai rice supply chain"): contractType MUST be supply-chain, facets MUST include geo and product or material. anchorType MUST be org. Use anchors (or anchors array) with canonical /org/... paths. Each query: anchor (single) or anchors (array), anchorType (org|product|deposit), direction (upstream|downstream|both), depth (3-6), productFilter/geoFilter from facets, reason. overlayQueries (Stage 2) optional.
 - ROUTE-SENSITIVE SUPPLY CHAIN: If the query mentions chokepoints, shipping routes, sea lanes, ports, terminals, pipelines, carriers, rerouting, "through/via", LNG/LPG shipping, or "from production to end-users", structure the intent for path execution. Include 3-8 anchors when evidence exists across these roles: producer org, upstream deposit/field, export facility, chokepoint/route geo, import terminal or market hub, downstream industrial consumer.
 - REGULATORY IMPACT PLAN: When contractType is policy-impact or regulatory-impact, you MUST include regulatoryImpactExecutionPlan with 1-5 queries. Each query: instrument (canonical path /mechanism/... or /program/...), jurisdiction (ISO2), parameters (rate_from, rate_to, effective_date when applicable), impactScope (economy-wide|sector-specific|entity-specific), depth (3-5), sectorFilter from facets, reason.
 - POLICY / REGULATORY TRANSMISSION: If the query asks what happens when a tax, tariff, VAT, CBAM-like cost, export control, sanctions measure, subsidy, capital rule, customs rule, licensing requirement, or compliance burden changes, include both the policy side and the exposed operational side. Do not return only the regulator/mechanism anchor.
@@ -2461,6 +2462,38 @@ func trimDomainPathTrailingIncompleteFacet(path string) string {
 	}
 	// Odd: drop last (incomplete key)
 	return "/" + strings.Join(parts[:len(parts)-1], "/")
+}
+
+// repairSupplyChainDomainNamespacePath converts malformed namespace-style org paths inside
+// supply-chain domains into valid facet pairs understood by the domain taxonomy.
+// Example:
+// /domain/v1/supply-chain/org/us/apple/product/macbook
+// -> /domain/v1/supply-chain/geo/us/subject/apple/product/macbook
+func repairSupplyChainDomainNamespacePath(path string) string {
+	p := strings.TrimSpace(path)
+	if p == "" || !strings.HasPrefix(p, "/domain/v1/") {
+		return p
+	}
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	if len(parts) < 6 {
+		return p
+	}
+	contractType := strings.ToLower(strings.TrimSpace(parts[2]))
+	if contractType != "supply-chain" && contractType != "value-chain" {
+		return p
+	}
+	rest := parts[3:]
+	if len(rest) < 3 || strings.ToLower(strings.TrimSpace(rest[0])) != "org" {
+		return p
+	}
+	geo := taxonomy.Slugify(rest[1])
+	subject := taxonomy.Slugify(rest[2])
+	if geo == "" || subject == "" {
+		return p
+	}
+	rebuilt := []string{"domain", "v1", contractType, "geo", geo, "subject", subject}
+	rebuilt = append(rebuilt, rest[3:]...)
+	return "/" + strings.Join(rebuilt, "/")
 }
 
 // normalizeCanonicalPathForTools fixes MSYS/Git-Bash path conversion for canonical paths.

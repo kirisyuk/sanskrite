@@ -102,9 +102,15 @@ func main() {
 		cancel()
 		if err != nil {
 			log.Printf("repair failed id=%s path=%s err=%v", frag.ID, frag.CanonicalPath, err)
+			if scanned%25 == 0 {
+				log.Printf("progress scanned=%d updated=%d cooled=%d archived=%d retargeted=%d merged=%d", scanned, updated, cooled, archived, retargeted, merged)
+			}
 			continue
 		}
 		if res == nil || res.Action == discovery.AffectedZoneRepairNoop {
+			if scanned%25 == 0 {
+				log.Printf("progress scanned=%d updated=%d cooled=%d archived=%d retargeted=%d merged=%d", scanned, updated, cooled, archived, retargeted, merged)
+			}
 			continue
 		}
 		reasons[res.Reason]++

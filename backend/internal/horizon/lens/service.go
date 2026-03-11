@@ -1108,10 +1108,13 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				continue
 			}
 			lens.ScopeArtifacts[artKey] = models.ScopeArtifactRef{
-				Kind:        string(artifact.Kind),
-				DisplayName: artifact.DisplayName,
-				NodeRefs:    artifact.NodeRefs,
-				Status:      artifact.PathStatus,
+				Kind:           string(artifact.Kind),
+				DisplayName:    artifact.DisplayName,
+				AnchorSupplier: artifact.AnchorSupplier,
+				AnchorCustomer: artifact.AnchorCustomer,
+				ProductAxis:    artifact.ProductAxis,
+				NodeRefs:       artifact.NodeRefs,
+				Status:         artifact.PathStatus,
 			}
 			if artifact.Kind == models.MaterializedKindSupplyChainPath {
 				models.PopulateSupplyChainPathIndexes(artifact)
@@ -1985,10 +1988,13 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 				continue
 			}
 			lens.ScopeArtifacts[artKey] = models.ScopeArtifactRef{
-				Kind:        string(artifact.Kind),
-				DisplayName: artifact.DisplayName,
-				NodeRefs:    artifact.NodeRefs,
-				Status:      artifact.PathStatus,
+				Kind:           string(artifact.Kind),
+				DisplayName:    artifact.DisplayName,
+				AnchorSupplier: artifact.AnchorSupplier,
+				AnchorCustomer: artifact.AnchorCustomer,
+				ProductAxis:    artifact.ProductAxis,
+				NodeRefs:       artifact.NodeRefs,
+				Status:         artifact.PathStatus,
 			}
 			if artifact.Kind == models.MaterializedKindSupplyChainPath {
 				models.PopulateSupplyChainPathIndexes(artifact)

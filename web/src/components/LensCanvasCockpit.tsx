@@ -2931,7 +2931,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   // Lens scope preview (empty state)
   const [lensName, setLensName] = React.useState<string | null>(null);
   const [lensScopePaths, setLensScopePaths] = React.useState<string[]>([]);
-  const [scopePreview, setScopePreview] = React.useState<Array<{ canonicalPath: string; name?: string; type?: string }>>([]);
+  const [scopePreview, setScopePreview] = React.useState<Array<{
+    canonicalPath: string;
+    name?: string;
+    type?: string;
+    subtitle?: string;
+    meta?: string;
+  }>>([]);
   const SCOPE_PREVIEW_SECTION_LIMIT = 5;
   const [scopePreviewLoading, setScopePreviewLoading] = React.useState(false);
   const [lensMetaLoading, setLensMetaLoading] = React.useState(false);
@@ -3259,8 +3265,23 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           // Artifact paths don't have fragments — use scopeArtifacts metadata.
           if (p.startsWith('/artifact/')) {
             const artKey = p.replace(/^\/artifact\//, '');
-            const name = artKey.split('/').filter(Boolean).slice(-1)[0] || p;
-            return { canonicalPath: p, name, type: 'ARTIFACT' };
+            const artMeta = lensMetaRef.current?.scopeArtifacts?.[artKey];
+            const name =
+              String(artMeta?.displayName || '').trim() ||
+              artKey.split('/').filter(Boolean).slice(-1)[0] ||
+              p;
+            const subtitle = [artMeta?.anchorSupplier, artMeta?.anchorCustomer].filter(Boolean).join(' → ');
+            const meta = [
+              artMeta?.productAxis ? String(artMeta.productAxis).trim() : '',
+              typeof artMeta?.legCount === 'number' && artMeta.legCount > 0 ? `${artMeta.legCount} legs` : '',
+            ].filter(Boolean).join(' • ');
+            return {
+              canonicalPath: p,
+              name,
+              type: String(artMeta?.kind || '').trim() || 'ARTIFACT',
+              subtitle: subtitle || undefined,
+              meta: meta || undefined,
+            };
           }
           try {
             const f = await api.getHorizonFragmentByPath(p);
@@ -17750,13 +17771,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                             </div>
                             {scopePreviewDomains.slice(0, SCOPE_PREVIEW_SECTION_LIMIT).map((it) => {
                               const regionLabel = getDomainRegionLabel(it.canonicalPath);
+                              const isArtifact = String(it.canonicalPath || '').startsWith('/artifact/');
                               return (
                                 <div
                                   key={it.canonicalPath}
                                   style={{
                                     padding: '8px 16px',
                                     display: 'flex',
-                                    alignItems: 'baseline',
+                                    alignItems: 'flex-start',
                                     gap: 10,
                                     borderBottom: '1px solid transparent',
                                   }}
@@ -17786,38 +17808,56 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                                       {regionLabel}
                                     </span>
                                   ) : null}
-                                  <div
-                                    style={{
-                                      flex: 1,
-                                      overflow: 'hidden',
-                                      textOverflow: 'ellipsis',
-                                      whiteSpace: 'nowrap',
-                                      fontSize: 13,
-                                      fontWeight: 700,
-                                      color: 'var(--text-heading)',
-                                    }}
-                                    title={it.name || it.canonicalPath}
-                                  >
-                                    {it.name || it.canonicalPath}
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div
+                                      style={{
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap',
+                                        fontSize: 13,
+                                        fontWeight: 700,
+                                        color: 'var(--text-heading)',
+                                      }}
+                                      title={it.name || it.canonicalPath}
+                                    >
+                                      {it.name || it.canonicalPath}
+                                    </div>
+                                    {(it.subtitle || it.meta) && (
+                                      <div
+                                        style={{
+                                          marginTop: 2,
+                                          fontSize: 11,
+                                          color: 'var(--text-secondary-strong)',
+                                          overflow: 'hidden',
+                                          textOverflow: 'ellipsis',
+                                          whiteSpace: 'nowrap',
+                                        }}
+                                        title={[it.subtitle, it.meta].filter(Boolean).join(' • ')}
+                                      >
+                                        {[it.subtitle, it.meta].filter(Boolean).join(' • ')}
+                                      </div>
+                                    )}
                                   </div>
                                   <div
                                     style={{
                                       fontSize: 10,
-                                      color: theme === 'dark' ? 'rgba(251,191,36,0.9)' : 'rgba(180,83,9,0.9)',
+                                      color: isArtifact ? 'var(--text-secondary-strong)' : (theme === 'dark' ? 'rgba(251,191,36,0.9)' : 'rgba(180,83,9,0.9)'),
                                       textTransform: 'uppercase',
                                       fontWeight: 700,
                                       flexShrink: 0,
                                       opacity: 0.9,
                                     }}
                                   >
-                                    {it.type || 'DOMAIN'}
+                                    {isArtifact
+                                      ? (String(it.type || 'ARTIFACT').replace(/_/g, ' '))
+                                      : (it.type || 'DOMAIN')}
                                   </div>
                                 </div>
                               );
                             })}
                             {scopePreviewDomains.length > SCOPE_PREVIEW_SECTION_LIMIT && (
                               <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--text-secondary)', fontStyle: 'italic' }}>
-                                ...and {scopePreviewDomains.length - SCOPE_PREVIEW_SECTION_LIMIT} more domains
+                                ...and {scopePreviewDomains.length - SCOPE_PREVIEW_SECTION_LIMIT} more entries
                               </div>
                             )}
                           </div>

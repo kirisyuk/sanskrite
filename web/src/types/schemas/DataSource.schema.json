@@ -155,6 +155,12 @@
             },
             "leaseDurationMinutes": {
               "type": "integer"
+            },
+            "autoPauseAfterErrors": {
+              "type": "integer"
+            },
+            "autoPauseDurationMinutes": {
+              "type": "integer"
             }
           },
           "additionalProperties": false,
@@ -172,6 +178,17 @@
       "format": "date-time"
     },
     "lastFoundAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "pauseReason": {
+      "type": "string"
+    },
+    "pausedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "pausedUntil": {
       "type": "string",
       "format": "date-time"
     },

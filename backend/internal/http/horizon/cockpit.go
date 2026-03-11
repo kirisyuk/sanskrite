@@ -2,6 +2,7 @@ package horizon
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -54,10 +55,56 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 	rawScope := append([]string(nil), lens.Scope...)
 	scopePaths := make([]string, 0, len(rawScope)+8)
 	seen := map[string]struct{}{}
+	scopeArtifacts := make(map[string]models.ScopeArtifactRef)
+	artifactPayloads := make([]*models.MaterializedArtifact, 0, 8)
 	for _, s := range rawScope {
 		s = strings.TrimSpace(s)
 		if s == "" {
 			continue
+		}
+		if strings.HasPrefix(s, "/artifact/") && h.materializedArtifactsRepo != nil {
+			artKey := strings.TrimPrefix(s, "/artifact/")
+			artifact, aerr := h.materializedArtifactsRepo.GetByCanonicalKeyAnyKind(r.Context(), lens.TenantID, artKey)
+			if aerr == nil && artifact != nil {
+				models.PopulateSupplyChainPathIndexes(artifact)
+				scopeArtifacts[artKey] = models.ScopeArtifactRef{
+					Kind:             string(artifact.Kind),
+					DisplayName:      artifact.DisplayName,
+					AnchorSupplier:   artifact.AnchorSupplier,
+					AnchorCustomer:   artifact.AnchorCustomer,
+					ProductAxis:      artifact.ProductAxis,
+					NodeRefs:         append([]string(nil), artifact.NodeRefs...),
+					Status:           artifact.PathStatus,
+					GeoRefs:          append([]string(nil), artifact.GeoRefs...),
+					FlowRefs:         append([]string(nil), artifact.FlowRefs...),
+					ZoneRefs:         append([]string(nil), artifact.ZoneRefs...),
+					AffectedZoneRefs: append([]string(nil), artifact.AffectedZoneRefs...),
+				}
+				if parsed, err := models.ParseSupplyChainPathPayload(artifact.Payload); err == nil && parsed != nil {
+					summary := models.SummarizeSupplyChainPathBindings(parsed)
+					ref := scopeArtifacts[artKey]
+					ref.LegCount = summary.LegCount
+					ref.BindingConfidence = summary.BindingConfidence
+					ref.PathStressScore = summary.PathStressScore
+					ref.BottleneckLegIndex = summary.BottleneckLegIndex
+					ref.RecoveryLatencyHrs = summary.RecoveryLatencyHrs
+					ref.SpatialSemantics = append([]string(nil), summary.SpatialSemantics...)
+					scopeArtifacts[artKey] = ref
+				}
+				artifactPayloads = append(artifactPayloads, artifact)
+				for _, ref := range artifact.NodeRefs {
+					ref = strings.TrimSpace(ref)
+					if ref == "" {
+						continue
+					}
+					if _, ok := seen[ref]; ok {
+						continue
+					}
+					seen[ref] = struct{}{}
+					scopePaths = append(scopePaths, ref)
+				}
+				continue
+			}
 		}
 		// Expand QueryAddress scope entries if cached.
 		if strings.HasPrefix(s, "/query/") && lens.ResolvedQueries != nil {
@@ -139,6 +186,7 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 	rootFragments := make([]*models.HorizonFragment, 0, len(fragments))
 	rootIDs := make(map[string]struct{}, len(fragments))
 	rootByID := make(map[string]*models.HorizonFragment, len(fragments))
+	rootByCanonicalPath := make(map[string]*models.HorizonFragment, len(fragments))
 	for _, fragment := range fragments {
 		if fragment == nil || isSphereFragment(fragment) {
 			continue
@@ -147,6 +195,9 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 		if fragment.ID != "" {
 			rootIDs[fragment.ID] = struct{}{}
 			rootByID[fragment.ID] = fragment
+		}
+		if cp := strings.TrimSpace(fragment.CanonicalPath); cp != "" {
+			rootByCanonicalPath[cp] = fragment
 		}
 	}
 
@@ -203,6 +254,7 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 			"count":    skippedIncomingDomainEdges,
 		})
 	}
+	allEdges = addSyntheticArtifactEdges(allEdges, seenEdges, artifactPayloads, rootByCanonicalPath)
 
 	// Вычисляем метрики Lens через MetricsCalculator
 	// Получаем все фрагменты и вычисляем метрики
@@ -253,8 +305,10 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 		// For Cockpit, scope is the resolved (canonical) scope.
 		"scope": outScope,
 		// Keep raw scope for debugging/traceability (optional; UI may ignore it).
-		"scopeRaw": rawScope,
-		"metrics":  metrics,
+		"scopeRaw":       rawScope,
+		"scopeExpanded":  outScope,
+		"scopeArtifacts": scopeArtifacts,
+		"metrics":        metrics,
 	}
 	if len(lens.ViewConfig) > 0 {
 		lensPayload["viewConfig"] = lens.ViewConfig
@@ -307,6 +361,77 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+func addSyntheticArtifactEdges(
+	allEdges []interface{},
+	seenEdges map[string]struct{},
+	artifacts []*models.MaterializedArtifact,
+	rootByCanonicalPath map[string]*models.HorizonFragment,
+) []interface{} {
+	for _, artifact := range artifacts {
+		if artifact == nil || artifact.Kind != models.MaterializedKindSupplyChainPath {
+			continue
+		}
+		parsed, err := models.ParseSupplyChainPathPayload(artifact.Payload)
+		if err != nil || parsed == nil {
+			continue
+		}
+		for _, edge := range parsed.Edges {
+			if edge.From < 0 || edge.From >= len(parsed.Nodes) || edge.To < 0 || edge.To >= len(parsed.Nodes) {
+				continue
+			}
+			sourceFrag := rootByCanonicalPath[strings.TrimSpace(parsed.Nodes[edge.From].Ref)]
+			targetFrag := rootByCanonicalPath[strings.TrimSpace(parsed.Nodes[edge.To].Ref)]
+			if sourceFrag == nil || targetFrag == nil || sourceFrag.ID == "" || targetFrag.ID == "" {
+				continue
+			}
+			key := sourceFrag.ID + "|" + targetFrag.ID + "|" + strings.TrimSpace(edge.Type) + "|artifact:" + strings.TrimSpace(artifact.CanonicalKey)
+			if _, ok := seenEdges[key]; ok {
+				continue
+			}
+			seenEdges[key] = struct{}{}
+			allEdges = append(allEdges, map[string]interface{}{
+				"id":                      fmt.Sprintf("artifact:%s:%d:%s", artifact.ID, derefInt(edge.SegmentIndex), strings.TrimSpace(edge.Type)),
+				"sourceFragmentId":        sourceFrag.ID,
+				"targetFragmentId":        targetFrag.ID,
+				"type":                    edge.Type,
+				"materialized":            true,
+				"artifactCanonicalKey":    strings.TrimSpace(artifact.CanonicalKey),
+				"artifactId":              strings.TrimSpace(artifact.ID),
+				"pathRole":                strings.TrimSpace(edge.Role),
+				"segmentIndex":            edge.SegmentIndex,
+				"supplyLinkCanonicalPath": strings.TrimSpace(edge.SupplyLinkCanonicalPath),
+				"supplyLinkId":            strings.TrimSpace(edge.SupplyLinkID),
+				"qualifiers":              edge.Qualifiers,
+				"properties": map[string]interface{}{
+					"criticality":   firstMetricValue(edge.Metrics, "confidence"),
+					"amplification": 1,
+				},
+			})
+		}
+	}
+	return allEdges
+}
+
+func derefInt(v *int) int {
+	if v == nil {
+		return -1
+	}
+	return *v
+}
+
+func firstMetricValue(metrics map[string]models.MetricValue, key string) float64 {
+	if len(metrics) == 0 {
+		return 0
+	}
+	if metric, ok := metrics[key]; ok {
+		return metric.Value
+	}
+	for _, metric := range metrics {
+		return metric.Value
+	}
+	return 0
 }
 
 func isSphereFragment(fragment *models.HorizonFragment) bool {

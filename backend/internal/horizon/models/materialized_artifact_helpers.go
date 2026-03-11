@@ -7,6 +7,16 @@ import (
 	"strings"
 )
 
+type SupplyChainLinkageSummary struct {
+	OperationalEdges int  `json:"operationalEdges"`
+	Legs             int  `json:"legs"`
+	Linked           int  `json:"linked"`
+	ResolvedIDs      int  `json:"resolvedIds"`
+	Unresolved       int  `json:"unresolved"`
+	Changed          bool `json:"changed"`
+	FullyLinked      bool `json:"fullyLinked"`
+}
+
 func decodeSupplyChainPathNodes(raw interface{}) ([]SupplyChainPathNode, error) {
 	switch nodes := raw.(type) {
 	case []SupplyChainPathNode:
@@ -202,6 +212,271 @@ func ParseSupplyChainPathPayload(payload map[string]interface{}) (*SupplyChainPa
 		Stress:  stress,
 		Notes:   notes,
 	}, nil
+}
+
+// RepairSupplyChainPathLinkage fills missing supply-link linkage metadata on path legs and operational edges.
+// resolver is optional; when provided it may resolve canonical path -> (id, tenantId, ok).
+func RepairSupplyChainPathLinkage(artifact *MaterializedArtifact, resolver func(string) (string, string, bool)) (SupplyChainLinkageSummary, error) {
+	summary := SupplyChainLinkageSummary{}
+	if artifact == nil || artifact.Kind != MaterializedKindSupplyChainPath {
+		return summary, fmt.Errorf("artifact kind is not SUPPLY_CHAIN_PATH")
+	}
+
+	parsed, err := ParseSupplyChainPathPayload(artifact.Payload)
+	if err != nil {
+		return summary, err
+	}
+	tenantID := strings.TrimSpace(artifact.TenantID)
+	if tenantID == "" {
+		tenantID = "global"
+	}
+
+	for idx := range parsed.Legs {
+		leg := &parsed.Legs[idx]
+		if strings.TrimSpace(leg.SupplierRef) == "" || strings.TrimSpace(leg.CustomerRef) == "" || strings.TrimSpace(leg.ProductRef) == "" {
+			continue
+		}
+		summary.Legs++
+		if strings.TrimSpace(leg.SupplyLinkCanonicalPath) == "" {
+			canonicalPath, cerr := BuildSupplyLinkCanonicalPath(
+				tenantID,
+				stringPtr(strings.TrimSpace(leg.SupplierRef)),
+				stringPtr(strings.TrimSpace(leg.ProductRef)),
+				stringPtr(strings.TrimSpace(leg.CustomerRef)),
+			)
+			if cerr == nil && strings.TrimSpace(canonicalPath) != "" {
+				leg.SupplyLinkCanonicalPath = canonicalPath
+				if strings.TrimSpace(leg.SupplyLinkTenantID) == "" {
+					leg.SupplyLinkTenantID = tenantID
+				}
+				summary.Changed = true
+			}
+		}
+		if strings.TrimSpace(leg.SupplyLinkCanonicalPath) != "" && resolver != nil {
+			if id, resolvedTenantID, ok := resolver(strings.TrimSpace(leg.SupplyLinkCanonicalPath)); ok {
+				if strings.TrimSpace(leg.SupplyLinkID) == "" && strings.TrimSpace(id) != "" {
+					leg.SupplyLinkID = strings.TrimSpace(id)
+					summary.Changed = true
+				}
+				if strings.TrimSpace(leg.SupplyLinkTenantID) == "" && strings.TrimSpace(resolvedTenantID) != "" {
+					leg.SupplyLinkTenantID = strings.TrimSpace(resolvedTenantID)
+					summary.Changed = true
+				}
+			}
+		}
+		if strings.TrimSpace(leg.SupplyLinkCanonicalPath) != "" {
+			summary.Linked++
+			if strings.TrimSpace(leg.SupplyLinkID) != "" {
+				summary.ResolvedIDs++
+			}
+		} else {
+			summary.Unresolved++
+		}
+	}
+
+	for idx := range parsed.Edges {
+		edge := &parsed.Edges[idx]
+		if edge.Type != "SUPPLY_LINK" && edge.Type != "LOGISTICS" {
+			continue
+		}
+		summary.OperationalEdges++
+		if inferMissingOperationalEdgeMetadata(parsed, edge) {
+			summary.Changed = true
+		}
+		if edge.SegmentIndex != nil && *edge.SegmentIndex >= 0 && *edge.SegmentIndex < len(parsed.Legs) {
+			leg := parsed.Legs[*edge.SegmentIndex]
+			if strings.TrimSpace(edge.SupplyLinkCanonicalPath) == "" && strings.TrimSpace(leg.SupplyLinkCanonicalPath) != "" {
+				edge.SupplyLinkCanonicalPath = strings.TrimSpace(leg.SupplyLinkCanonicalPath)
+				summary.Changed = true
+			}
+			if strings.TrimSpace(edge.SupplyLinkID) == "" && strings.TrimSpace(leg.SupplyLinkID) != "" {
+				edge.SupplyLinkID = strings.TrimSpace(leg.SupplyLinkID)
+				summary.Changed = true
+			}
+			if strings.TrimSpace(edge.SupplyLinkTenantID) == "" && strings.TrimSpace(leg.SupplyLinkTenantID) != "" {
+				edge.SupplyLinkTenantID = strings.TrimSpace(leg.SupplyLinkTenantID)
+				summary.Changed = true
+			}
+		}
+		if strings.TrimSpace(edge.SupplyLinkCanonicalPath) == "" {
+			supplierRef, customerRef, productRef := linkageRefsFromEdge(parsed, *edge)
+			if supplierRef != "" && customerRef != "" && productRef != "" {
+				canonicalPath, cerr := BuildSupplyLinkCanonicalPath(
+					tenantID,
+					stringPtr(supplierRef),
+					stringPtr(productRef),
+					stringPtr(customerRef),
+				)
+				if cerr == nil && strings.TrimSpace(canonicalPath) != "" {
+					edge.SupplyLinkCanonicalPath = canonicalPath
+					if strings.TrimSpace(edge.SupplyLinkTenantID) == "" {
+						edge.SupplyLinkTenantID = tenantID
+					}
+					summary.Changed = true
+				}
+			}
+		}
+		if strings.TrimSpace(edge.SupplyLinkCanonicalPath) != "" && resolver != nil {
+			if id, resolvedTenantID, ok := resolver(strings.TrimSpace(edge.SupplyLinkCanonicalPath)); ok {
+				if strings.TrimSpace(edge.SupplyLinkID) == "" && strings.TrimSpace(id) != "" {
+					edge.SupplyLinkID = strings.TrimSpace(id)
+					summary.Changed = true
+				}
+				if strings.TrimSpace(edge.SupplyLinkTenantID) == "" && strings.TrimSpace(resolvedTenantID) != "" {
+					edge.SupplyLinkTenantID = strings.TrimSpace(resolvedTenantID)
+					summary.Changed = true
+				}
+			}
+		}
+		if strings.TrimSpace(edge.SupplyLinkCanonicalPath) != "" {
+			summary.Linked++
+			if strings.TrimSpace(edge.SupplyLinkID) != "" {
+				summary.ResolvedIDs++
+			}
+		} else {
+			summary.Unresolved++
+		}
+	}
+
+	summary.FullyLinked = summary.Unresolved == 0 && (summary.Legs > 0 || summary.OperationalEdges > 0)
+	if summary.Changed {
+		artifact.Payload = BuildSupplyChainPathPayload(parsed.Nodes, parsed.Edges, parsed.Legs, parsed.Stress, parsed.Notes)
+		PopulateSupplyChainPathIndexes(artifact)
+	}
+	return summary, nil
+}
+
+func inferMissingOperationalEdgeMetadata(parsed *SupplyChainPathPayload, edge *SupplyChainPathEdge) bool {
+	if parsed == nil || edge == nil {
+		return false
+	}
+	changed := false
+	if strings.TrimSpace(edge.Role) == "" {
+		if edge.Type == "SUPPLY_LINK" {
+			edge.Role = "product_flow"
+			changed = true
+		} else if edge.Type == "LOGISTICS" {
+			edge.Role = "logistics_leg"
+			changed = true
+		}
+	}
+	if !edge.CarriesProduct {
+		edge.CarriesProduct = true
+		changed = true
+	}
+	if edge.SegmentIndex != nil && *edge.SegmentIndex >= 0 {
+		return changed
+	}
+
+	bestLegIdx := -1
+	bestScore := 0
+	edgeProductRef := strings.TrimSpace(edge.ProductRef)
+	if edgeProductRef == "" && edge.ProductNodeIndex != nil && *edge.ProductNodeIndex >= 0 && *edge.ProductNodeIndex < len(parsed.Nodes) {
+		edgeProductRef = strings.TrimSpace(parsed.Nodes[*edge.ProductNodeIndex].Ref)
+	}
+	if edgeProductRef == "" && edge.ViaProductIndex != nil && *edge.ViaProductIndex >= 0 && *edge.ViaProductIndex < len(parsed.Nodes) {
+		edgeProductRef = strings.TrimSpace(parsed.Nodes[*edge.ViaProductIndex].Ref)
+	}
+
+	for legIdx := range parsed.Legs {
+		leg := parsed.Legs[legIdx]
+		score := scoreOperationalEdgeAgainstLeg(parsed, edge, &leg, edgeProductRef)
+		if score > bestScore {
+			bestScore = score
+			bestLegIdx = legIdx
+		}
+	}
+	if bestLegIdx >= 0 && bestScore >= 6 {
+		idx := bestLegIdx
+		edge.SegmentIndex = &idx
+		changed = true
+	}
+	return changed
+}
+
+func scoreOperationalEdgeAgainstLeg(parsed *SupplyChainPathPayload, edge *SupplyChainPathEdge, leg *SupplyChainPathLeg, edgeProductRef string) int {
+	if parsed == nil || edge == nil || leg == nil {
+		return 0
+	}
+	score := 0
+	if edgeProductRef != "" && edgeProductRef == strings.TrimSpace(leg.ProductRef) {
+		score += 4
+	}
+	if edge.Type == "SUPPLY_LINK" {
+		if matchesNodeRef(parsed, edge.From, leg.SupplierNodeIndex, leg.SupplierRef) {
+			score += 4
+		}
+		if matchesNodeRef(parsed, edge.To, leg.CustomerNodeIndex, leg.CustomerRef) {
+			score += 4
+		}
+		return score
+	}
+
+	route := make([]int, 0, len(leg.TransportViaNodeIndices)+2)
+	if leg.SupplierNodeIndex != nil && *leg.SupplierNodeIndex >= 0 {
+		route = append(route, *leg.SupplierNodeIndex)
+	}
+	route = append(route, leg.TransportViaNodeIndices...)
+	if leg.CustomerNodeIndex != nil && *leg.CustomerNodeIndex >= 0 {
+		route = append(route, *leg.CustomerNodeIndex)
+	}
+	for i := 0; i+1 < len(route); i++ {
+		if route[i] == edge.From && route[i+1] == edge.To {
+			score += 8
+			break
+		}
+	}
+	if matchesNodeRef(parsed, edge.From, leg.SupplierNodeIndex, leg.SupplierRef) {
+		score += 2
+	}
+	if matchesNodeRef(parsed, edge.To, leg.CustomerNodeIndex, leg.CustomerRef) {
+		score += 2
+	}
+	for _, viaIdx := range leg.TransportViaNodeIndices {
+		if viaIdx == edge.From || viaIdx == edge.To {
+			score++
+		}
+	}
+	return score
+}
+
+func matchesNodeRef(parsed *SupplyChainPathPayload, edgeNodeIndex int, legNodeIndex *int, expectedRef string) bool {
+	if legNodeIndex != nil && *legNodeIndex == edgeNodeIndex {
+		return true
+	}
+	if parsed == nil || edgeNodeIndex < 0 || edgeNodeIndex >= len(parsed.Nodes) {
+		return false
+	}
+	return strings.TrimSpace(parsed.Nodes[edgeNodeIndex].Ref) != "" &&
+		strings.TrimSpace(parsed.Nodes[edgeNodeIndex].Ref) == strings.TrimSpace(expectedRef)
+}
+
+func linkageRefsFromEdge(parsed *SupplyChainPathPayload, edge SupplyChainPathEdge) (string, string, string) {
+	if parsed == nil {
+		return "", "", ""
+	}
+	productRef := strings.TrimSpace(edge.ProductRef)
+	if productRef == "" && edge.ProductNodeIndex != nil && *edge.ProductNodeIndex >= 0 && *edge.ProductNodeIndex < len(parsed.Nodes) {
+		productRef = strings.TrimSpace(parsed.Nodes[*edge.ProductNodeIndex].Ref)
+	}
+	supplierRef := ""
+	customerRef := ""
+	if edge.From >= 0 && edge.From < len(parsed.Nodes) {
+		supplierRef = strings.TrimSpace(parsed.Nodes[edge.From].Ref)
+	}
+	if edge.To >= 0 && edge.To < len(parsed.Nodes) {
+		customerRef = strings.TrimSpace(parsed.Nodes[edge.To].Ref)
+	}
+	return supplierRef, customerRef, productRef
+}
+
+func stringPtr(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	v := value
+	return &v
 }
 
 // GetSupplyChainPathNodes extracts nodes from a MaterializedArtifact payload.
@@ -592,7 +867,7 @@ func mergePathEdges(existing, incoming []SupplyChainPathEdge) []SupplyChainPathE
 		Role         string
 		SegmentIndex int
 	}
-	seen := map[edgeKey]bool{}
+	indexByKey := map[edgeKey]int{}
 	merged := make([]SupplyChainPathEdge, 0, len(existing)+len(incoming))
 	for _, e := range existing {
 		segmentIndex := -1
@@ -600,9 +875,9 @@ func mergePathEdges(existing, incoming []SupplyChainPathEdge) []SupplyChainPathE
 			segmentIndex = *e.SegmentIndex
 		}
 		k := edgeKey{From: e.From, To: e.To, Type: e.Type, ProductRef: strings.TrimSpace(e.ProductRef), Role: strings.TrimSpace(e.Role), SegmentIndex: segmentIndex}
-		if !seen[k] {
+		if _, exists := indexByKey[k]; !exists {
 			merged = append(merged, e)
-			seen[k] = true
+			indexByKey[k] = len(merged) - 1
 		}
 	}
 	for _, e := range incoming {
@@ -611,9 +886,13 @@ func mergePathEdges(existing, incoming []SupplyChainPathEdge) []SupplyChainPathE
 			segmentIndex = *e.SegmentIndex
 		}
 		k := edgeKey{From: e.From, To: e.To, Type: e.Type, ProductRef: strings.TrimSpace(e.ProductRef), Role: strings.TrimSpace(e.Role), SegmentIndex: segmentIndex}
-		if !seen[k] {
+		if idx, exists := indexByKey[k]; exists {
+			merged[idx] = mergeSupplyChainPathEdge(merged[idx], e)
+			continue
+		}
+		if _, exists := indexByKey[k]; !exists {
 			merged = append(merged, e)
-			seen[k] = true
+			indexByKey[k] = len(merged) - 1
 		}
 	}
 	return merged
@@ -625,7 +904,7 @@ func mergePathLegs(existing, incoming []SupplyChainPathLeg) []SupplyChainPathLeg
 		Customer string
 		Product  string
 	}
-	seen := map[legKey]bool{}
+	indexByKey := map[legKey]int{}
 	merged := make([]SupplyChainPathLeg, 0, len(existing)+len(incoming))
 	appendIfNew := func(legs []SupplyChainPathLeg) {
 		for _, leg := range legs {
@@ -634,11 +913,12 @@ func mergePathLegs(existing, incoming []SupplyChainPathLeg) []SupplyChainPathLeg
 				Customer: strings.TrimSpace(leg.CustomerRef),
 				Product:  strings.TrimSpace(leg.ProductRef),
 			}
-			if seen[k] {
+			if idx, exists := indexByKey[k]; exists {
+				merged[idx] = mergeSupplyChainPathLeg(merged[idx], leg)
 				continue
 			}
-			seen[k] = true
 			merged = append(merged, leg)
+			indexByKey[k] = len(merged) - 1
 		}
 	}
 	appendIfNew(existing)
@@ -656,6 +936,99 @@ func mergePathLegs(existing, incoming []SupplyChainPathLeg) []SupplyChainPathLeg
 		return merged[i].Index < merged[j].Index
 	})
 	return merged
+}
+
+func mergeSupplyChainPathEdge(existing, incoming SupplyChainPathEdge) SupplyChainPathEdge {
+	if strings.TrimSpace(existing.SupplyLinkID) == "" {
+		existing.SupplyLinkID = strings.TrimSpace(incoming.SupplyLinkID)
+	}
+	if strings.TrimSpace(existing.SupplyLinkCanonicalPath) == "" {
+		existing.SupplyLinkCanonicalPath = strings.TrimSpace(incoming.SupplyLinkCanonicalPath)
+	}
+	if strings.TrimSpace(existing.SupplyLinkTenantID) == "" {
+		existing.SupplyLinkTenantID = strings.TrimSpace(incoming.SupplyLinkTenantID)
+	}
+	if existing.ProductNodeIndex == nil && incoming.ProductNodeIndex != nil {
+		idx := *incoming.ProductNodeIndex
+		existing.ProductNodeIndex = &idx
+	}
+	if existing.ViaProductIndex == nil && incoming.ViaProductIndex != nil {
+		idx := *incoming.ViaProductIndex
+		existing.ViaProductIndex = &idx
+	}
+	if existing.FromProductIndex == nil && incoming.FromProductIndex != nil {
+		idx := *incoming.FromProductIndex
+		existing.FromProductIndex = &idx
+	}
+	if existing.ToProductIndex == nil && incoming.ToProductIndex != nil {
+		idx := *incoming.ToProductIndex
+		existing.ToProductIndex = &idx
+	}
+	if strings.TrimSpace(existing.Mode) == "" {
+		existing.Mode = strings.TrimSpace(incoming.Mode)
+	}
+	if strings.TrimSpace(existing.Relation) == "" {
+		existing.Relation = strings.TrimSpace(incoming.Relation)
+	}
+	if !existing.CarriesProduct && incoming.CarriesProduct {
+		existing.CarriesProduct = true
+	}
+	if len(existing.Metrics) == 0 && len(incoming.Metrics) > 0 {
+		existing.Metrics = incoming.Metrics
+	}
+	if len(existing.Qualifiers) == 0 && len(incoming.Qualifiers) > 0 {
+		existing.Qualifiers = incoming.Qualifiers
+	}
+	return existing
+}
+
+func mergeSupplyChainPathLeg(existing, incoming SupplyChainPathLeg) SupplyChainPathLeg {
+	if strings.TrimSpace(existing.SupplyLinkCanonicalPath) == "" {
+		existing.SupplyLinkCanonicalPath = strings.TrimSpace(incoming.SupplyLinkCanonicalPath)
+	}
+	if strings.TrimSpace(existing.SupplyLinkID) == "" {
+		existing.SupplyLinkID = strings.TrimSpace(incoming.SupplyLinkID)
+	}
+	if strings.TrimSpace(existing.SupplyLinkTenantID) == "" {
+		existing.SupplyLinkTenantID = strings.TrimSpace(incoming.SupplyLinkTenantID)
+	}
+	if existing.SupplierNodeIndex == nil && incoming.SupplierNodeIndex != nil {
+		idx := *incoming.SupplierNodeIndex
+		existing.SupplierNodeIndex = &idx
+	}
+	if existing.CustomerNodeIndex == nil && incoming.CustomerNodeIndex != nil {
+		idx := *incoming.CustomerNodeIndex
+		existing.CustomerNodeIndex = &idx
+	}
+	if existing.ProductNodeIndex == nil && incoming.ProductNodeIndex != nil {
+		idx := *incoming.ProductNodeIndex
+		existing.ProductNodeIndex = &idx
+	}
+	if len(existing.TransportViaNodeIndices) == 0 && len(incoming.TransportViaNodeIndices) > 0 {
+		existing.TransportViaNodeIndices = append([]int(nil), incoming.TransportViaNodeIndices...)
+	}
+	if len(existing.TransportViaRefs) == 0 && len(incoming.TransportViaRefs) > 0 {
+		existing.TransportViaRefs = append([]string(nil), incoming.TransportViaRefs...)
+	}
+	if strings.TrimSpace(existing.Mode) == "" {
+		existing.Mode = strings.TrimSpace(incoming.Mode)
+	}
+	existing.GeoRefs = mergeUniqueStrings(existing.GeoRefs, incoming.GeoRefs)
+	existing.FlowRefs = mergeUniqueStrings(existing.FlowRefs, incoming.FlowRefs)
+	existing.AlternateFlowRefs = mergeUniqueStrings(existing.AlternateFlowRefs, incoming.AlternateFlowRefs)
+	existing.ZoneRefs = mergeUniqueStrings(existing.ZoneRefs, incoming.ZoneRefs)
+	existing.AffectedZoneRefs = mergeUniqueStrings(existing.AffectedZoneRefs, incoming.AffectedZoneRefs)
+	existing.SpatialSemantics = mergeUniqueStrings(existing.SpatialSemantics, incoming.SpatialSemantics)
+	if existing.BindingConfidence <= 0 && incoming.BindingConfidence > 0 {
+		existing.BindingConfidence = incoming.BindingConfidence
+	}
+	if existing.SegmentConfidence <= 0 && incoming.SegmentConfidence > 0 {
+		existing.SegmentConfidence = incoming.SegmentConfidence
+	}
+	if existing.Stress == nil && incoming.Stress != nil {
+		existing.Stress = incoming.Stress
+	}
+	return existing
 }
 
 func mergePathStress(existing, incoming *SupplyChainPathStress) *SupplyChainPathStress {

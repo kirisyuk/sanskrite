@@ -552,15 +552,6 @@ function flowPropsFromFeature(
   const hype = Math.max(0, Math.min(100, Number(activity.hype || 0)));
   const status = String(activity.status || 'inactive');
   const baseColor = transportFlowModeColor(flowMode, theme);
-  const color = status === 'hot'
-    ? '#ef4444'
-    : status === 'active'
-      ? '#f97316'
-      : status === 'watch'
-        ? '#f59e0b'
-        : baseColor;
-  const width = transportFlowModeStrokeWidth(flowMode) * (1 + hype * 0.011);
-  const opacity = Math.min(0.98, transportFlowModeOpacity(flowMode) * (0.45 + hype / 100));
   return {
     id,
     name: String(feature.properties.name || 'Transport flow'),
@@ -569,9 +560,9 @@ function flowPropsFromFeature(
     tagsText: Array.isArray(feature.properties.tags)
       ? feature.properties.tags.map((x) => String(x)).slice(0, 4).join(', ')
       : '',
-    color,
-    width,
-    opacity,
+    color: baseColor,
+    width: transportFlowModeStrokeWidth(flowMode),
+    opacity: transportFlowModeOpacity(flowMode),
     hype,
     status,
   };

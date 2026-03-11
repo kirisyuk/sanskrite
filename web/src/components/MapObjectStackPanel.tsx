@@ -7,6 +7,7 @@ interface MapObjectStackPanelProps {
   objects: GeoObject[];
   isDark: boolean;
   paletteTheme: 'dark' | 'light';
+  priorityObjectId?: string | null;
   onClose: () => void;
   onSelectObject: (object: GeoObject) => void;
   onShowFan?: () => void;
@@ -35,6 +36,7 @@ export const MapObjectStackPanel: React.FC<MapObjectStackPanelProps> = ({
   objects,
   isDark,
   paletteTheme,
+  priorityObjectId,
   onClose,
   onSelectObject,
   onShowFan,
@@ -42,11 +44,13 @@ export const MapObjectStackPanel: React.FC<MapObjectStackPanelProps> = ({
   const sortedObjects = React.useMemo(
     () =>
       [...objects].sort((a, b) => {
+        const priorityDelta = Number(b.id === priorityObjectId) - Number(a.id === priorityObjectId);
+        if (priorityDelta !== 0) return priorityDelta;
         const scopeDelta = Number(b.inScope !== false) - Number(a.inScope !== false);
         if (scopeDelta !== 0) return scopeDelta;
         return getObjectDisplayName(a).localeCompare(getObjectDisplayName(b));
       }),
-    [objects],
+    [objects, priorityObjectId],
   );
 
   return (
@@ -192,6 +196,11 @@ export const MapObjectStackPanel: React.FC<MapObjectStackPanelProps> = ({
                 </div>
                 {(countryLabel || statusLabel || object.inScope === false) && (
                   <div style={{ marginTop: 5, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {object.id === priorityObjectId && (
+                      <span style={{ fontSize: 11, lineHeight: 1.2, opacity: 0.88, color: accent }}>
+                        Search match
+                      </span>
+                    )}
                     {countryLabel && (
                       <span style={{ fontSize: 11, lineHeight: 1.2, opacity: 0.72 }}>
                         {countryLabel}
@@ -207,6 +216,13 @@ export const MapObjectStackPanel: React.FC<MapObjectStackPanelProps> = ({
                         Neighbor
                       </span>
                     )}
+                  </div>
+                )}
+                {object.id === priorityObjectId && !(countryLabel || statusLabel || object.inScope === false) && (
+                  <div style={{ marginTop: 5 }}>
+                    <span style={{ fontSize: 11, lineHeight: 1.2, opacity: 0.88, color: accent }}>
+                      Search match
+                    </span>
                   </div>
                 )}
               </div>

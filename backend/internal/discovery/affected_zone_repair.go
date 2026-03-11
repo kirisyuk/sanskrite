@@ -91,20 +91,21 @@ func (r *AffectedZoneRepairer) RepairFragment(
 		GeoPrecision: strings.TrimSpace(qualifierStringValue(frag.Qualifiers, "geoPrecision")),
 	}
 
-	if candidate == nil {
-		if shouldArchiveAffectedZoneFragment(frag, event, classification, st, now) {
-			result.Action = AffectedZoneRepairArchived
-			result.Archived = true
-			result.Reason = affectedZoneArchiveReason(frag, event, classification, st, now)
-			if apply {
-				archiveAffectedZoneFragment(frag, result.Reason, st, now, sourceID, event)
-				if err := r.pipeline.fragmentsRepo.Update(ctx, frag); err != nil {
-					return result, err
-				}
-				result.Updated = true
+	if shouldArchiveAffectedZoneFragment(frag, event, classification, st, now) {
+		result.Action = AffectedZoneRepairArchived
+		result.Archived = true
+		result.Reason = affectedZoneArchiveReason(frag, event, classification, st, now)
+		if apply {
+			archiveAffectedZoneFragment(frag, result.Reason, st, now, sourceID, event)
+			if err := r.pipeline.fragmentsRepo.Update(ctx, frag); err != nil {
+				return result, err
 			}
-			return result, nil
+			result.Updated = true
 		}
+		return result, nil
+	}
+
+	if candidate == nil {
 		candidate = fallbackAffectedZoneCandidateFromFragment(frag)
 		if candidate != nil && reconcileAffectedZoneFragmentForRepair(frag, candidate, classification, st, now, sourceID, event) {
 			result.Action = AffectedZoneRepairUpdated
@@ -285,27 +286,55 @@ func synthesizeAffectedZoneEventFromFragment(f *horizonmodels.HorizonFragment) *
 	if f == nil {
 		return nil
 	}
+	preferStoredSource := shouldUseAffectedZoneStoredSourceEvidence(f)
+	sourceTitle := ""
+	sourceSummary := ""
+	sourceURL := ""
+	sourceCountryCode := ""
+	if preferStoredSource {
+		sourceTitle = qualifierStringValue(f.Qualifiers, "sourceTitle")
+		sourceSummary = qualifierStringValue(f.Qualifiers, "sourceSummary")
+		sourceURL = qualifierStringValue(f.Qualifiers, "sourceUrl")
+		sourceCountryCode = qualifierStringValue(f.Qualifiers, "sourceCountryCode")
+	}
 	event := &horizonMonitorFeedEvent{
 		SourceID:   "affected_zone_repair",
 		FeedType:   "affected_zone_repair",
 		Category:   qualifierStringValue(f.Qualifiers, "classificationCategory"),
 		ExternalID: strings.TrimSpace(f.Identifiers["sourceObjectId"]),
 		Title: firstNonEmptyString(
-			qualifierStringValue(f.Qualifiers, "sourceTitle"),
+			sourceTitle,
 			strings.TrimSpace(f.Description),
 			strings.TrimSpace(f.Labels["en"]),
 		),
 		Summary: firstNonEmptyString(
-			qualifierStringValue(f.Qualifiers, "sourceSummary"),
+			sourceSummary,
 			strings.TrimSpace(f.Description),
 		),
-		URL:         qualifierStringValue(f.Qualifiers, "sourceUrl"),
-		CountryCode: firstNonEmptyString(qualifierStringValue(f.Qualifiers, "sourceCountryCode"), currentAffectedZoneCountryCode(f)),
+		URL:         sourceURL,
+		CountryCode: firstNonEmptyString(sourceCountryCode, currentAffectedZoneCountryCode(f)),
 		CountryName: countryNameFromCode(firstNonEmptyString(qualifierStringValue(f.Qualifiers, "sourceCountryCode"), currentAffectedZoneCountryCode(f))),
 		Severity:    strings.ToLower(strings.TrimSpace(qualifierStringValue(f.Qualifiers, "classificationLevel"))),
 		Confidence:  0.70,
 	}
 	text := strings.Join([]string{strings.TrimSpace(event.Title), strings.TrimSpace(event.Summary), strings.TrimSpace(event.Category), strings.TrimSpace(event.Severity)}, " ")
+	textBody := strings.Join([]string{strings.TrimSpace(event.Title), strings.TrimSpace(event.Summary)}, " ")
+	if inferred := inferCountryCodeFromText(strings.Join([]string{strings.TrimSpace(event.Title), strings.TrimSpace(event.Summary)}, " ")); inferred != "" {
+		if (strings.TrimSpace(event.CountryCode) == "" || looksLikeAdministrativeCommentaryText(text) || looksLikeLiveBlogPoliticalCommentaryText(text) || strings.Contains(strings.ToLower(strings.TrimSpace(event.Title)), ":")) && !strings.EqualFold(inferred, event.CountryCode) {
+			event.CountryCode = inferred
+			event.CountryName = countryNameFromCode(inferred)
+		}
+	}
+	if place := extractKnownPlaceFromText(textBody); place != "" {
+		if _, placeCC, placeCountry := inferZoneGeoFromPlace(place); placeCC != "" && !strings.EqualFold(placeCC, event.CountryCode) {
+			event.CountryCode = placeCC
+			event.CountryName = firstNonEmptyString(strings.TrimSpace(placeCountry), countryNameFromCode(placeCC))
+		}
+	}
+	if explicitCC := inferCountryCodeFromAffectedZoneText(textBody, event.CountryCode); explicitCC != "" && !strings.EqualFold(explicitCC, event.CountryCode) {
+		event.CountryCode = explicitCC
+		event.CountryName = countryNameFromCode(explicitCC)
+	}
 	if event.CountryCode != "" && shouldTrustAffectedZoneCountryFallback(event, text, qualifierStringValue(f.Qualifiers, "conditionType"), event.CountryCode) {
 		event.LocationPath = locationPathFromCountryCode(event.CountryCode)
 	}
@@ -316,6 +345,11 @@ func synthesizeAffectedZoneEventFromFragment(f *horizonmodels.HorizonFragment) *
 	}
 	if observed := f.Provenance.ObservedAt; observed != nil && !observed.IsZero() {
 		event.OccurredAt = observed.UTC()
+	}
+	if event.OccurredAt.IsZero() {
+		if ts := parseRFC3339Loose(qualifierStringValue(f.Qualifiers, "sourceOccurredAt")); !ts.IsZero() {
+			event.OccurredAt = ts.UTC()
+		}
 	}
 	if event.OccurredAt.IsZero() {
 		if ts := metricValueFloat(f.State, zoneMetricLastMatchTS); ts > 0 {
@@ -379,6 +413,15 @@ func reconcileAffectedZoneFragmentForRepair(
 	if f.Qualifiers == nil {
 		f.Qualifiers = map[string]interface{}{}
 	}
+	if !shouldUseAffectedZoneStoredSourceEvidence(f) {
+		if clearAffectedZonePrimaryEvidence(f) {
+			changed = true
+		}
+		if desc := affectedZoneNarrativeDescription(candidate); desc != "" && strings.TrimSpace(f.Description) != desc {
+			f.Description = desc
+			changed = true
+		}
+	}
 	for k, v := range affectedZoneQualifiers(candidate, cls, st, e) {
 		if fmt.Sprintf("%v", f.Qualifiers[k]) != fmt.Sprintf("%v", v) {
 			f.Qualifiers[k] = v
@@ -438,6 +481,9 @@ func shouldArchiveAffectedZoneFragment(
 	if f == nil {
 		return false
 	}
+	if hasAffectedZoneIdentityDrift(f) {
+		return true
+	}
 	cp := strings.TrimSpace(f.CanonicalPath)
 	if genericGlobalAffectedZonePath(cp) {
 		return true
@@ -454,7 +500,16 @@ func shouldArchiveAffectedZoneFragment(
 			return true
 		}
 	}
+	if title := strings.TrimSpace(qualifierStringValue(f.Qualifiers, "sourceTitle")); title != "" {
+		summary := strings.TrimSpace(qualifierStringValue(f.Qualifiers, "sourceSummary"))
+		if isSyntheticAffectedZoneNarrative(title) && (summary == "" || strings.EqualFold(summary, title)) {
+			return true
+		}
+	}
 	if currentPlace := currentAffectedZonePlace(f); currentPlace != "" {
+		if looksLikeMilitaryAssetName(normalizeKeywordText(currentPlace)) {
+			return true
+		}
 		if cc := currentAffectedZoneCountryCode(f); cc != "" {
 			if placeCC := inferCountryCodeFromText(currentPlace); placeCC != "" && !strings.EqualFold(placeCC, cc) {
 				return true
@@ -477,6 +532,12 @@ func shouldArchiveAffectedZoneFragment(
 	) {
 		return true
 	}
+	if isStaleGenericCountryAffectedZone(f, st, now) {
+		return true
+	}
+	if isStaleSemanticallyInvalidAffectedZone(f, e, cls, st, now) {
+		return true
+	}
 	limit := affectedZoneFreshnessLimit(qualifierStringValue(f.Qualifiers, "conditionType"))
 	if limit <= 0 {
 		limit = 21 * 24 * time.Hour
@@ -494,6 +555,9 @@ func affectedZoneArchiveReason(
 	st affectedZoneState,
 	now time.Time,
 ) string {
+	if hasAffectedZoneIdentityDrift(f) {
+		return "identity drift / corrupted zone anchor"
+	}
 	cp := strings.TrimSpace(f.CanonicalPath)
 	if genericGlobalAffectedZonePath(cp) {
 		return "generic global affected zone"
@@ -510,7 +574,16 @@ func affectedZoneArchiveReason(
 			return "global affected zone without stable geospatial anchor"
 		}
 	}
+	if title := strings.TrimSpace(qualifierStringValue(f.Qualifiers, "sourceTitle")); title != "" {
+		summary := strings.TrimSpace(qualifierStringValue(f.Qualifiers, "sourceSummary"))
+		if isSyntheticAffectedZoneNarrative(title) && (summary == "" || strings.EqualFold(summary, title)) {
+			return "synthetic affected zone narrative"
+		}
+	}
 	if currentPlace := currentAffectedZonePlace(f); currentPlace != "" {
+		if looksLikeMilitaryAssetName(normalizeKeywordText(currentPlace)) {
+			return "military asset mistaken for place"
+		}
 		if cc := currentAffectedZoneCountryCode(f); cc != "" {
 			if placeCC := inferCountryCodeFromText(currentPlace); placeCC != "" && !strings.EqualFold(placeCC, cc) {
 				return "country/place mismatch"
@@ -536,7 +609,162 @@ func affectedZoneArchiveReason(
 	) {
 		return "weak affected zone inference"
 	}
+	if isStaleGenericCountryAffectedZone(f, st, now) {
+		return "stale generic country-level affected zone"
+	}
+	if isStaleSemanticallyInvalidAffectedZone(f, e, cls, st, now) {
+		return "stale semantically invalid affected zone"
+	}
 	return "stale low-confidence affected zone"
+}
+
+func hasAffectedZoneIdentityDrift(f *horizonmodels.HorizonFragment) bool {
+	if f == nil {
+		return false
+	}
+	geo, _, slug, ok := parseZoneCanonicalPath(strings.TrimSpace(f.CanonicalPath))
+	if !ok {
+		return false
+	}
+	canonicalGeo := strings.ToUpper(strings.TrimSpace(geo))
+	canonicalPlace := normalizePhrase(strings.ReplaceAll(strings.TrimSpace(slug), "-", " "))
+	if canonicalPlace == "" {
+		canonicalPlace = normalizePhrase(currentAffectedZonePlace(f))
+	}
+	zoneInference := toFloatDefault(qualifierStringValue(f.Qualifiers, "zoneInferenceScore"), 0)
+	if strings.EqualFold(strings.TrimSpace(qualifierStringValue(f.Qualifiers, "geoPrecision")), "precise") && canonicalPlace != "" {
+		if legal := normalizePhrase(strings.TrimSpace(f.Identifiers["legalName"])); legal != "" && strings.Contains(legal, canonicalPlace) {
+			if zoneInference > 1.5 {
+				return false
+			}
+		}
+	}
+	if isSyntheticAffectedZoneNarrative(strings.TrimSpace(qualifierStringValue(f.Qualifiers, "sourceTitle"))) &&
+		strings.EqualFold(strings.TrimSpace(qualifierStringValue(f.Qualifiers, "geoPrecision")), "approximate_country") {
+		return true
+	}
+	fields := []string{
+		strings.TrimSpace(f.Identifiers["legalName"]),
+		strings.TrimSpace(f.Identifiers["merged_paths"]),
+	}
+	if f.HomeLocation != nil {
+		fields = append(fields, strings.TrimSpace(f.HomeLocation.Name))
+	}
+	for _, field := range fields {
+		norm := normalizePhrase(field)
+		if norm == "" {
+			continue
+		}
+		if canonicalPlace != "" && strings.Contains(norm, canonicalPlace) {
+			continue
+		}
+		if candidatePlace := extractKnownPlaceFromText(field); candidatePlace != "" && canonicalPlace != "" && normalizePhrase(candidatePlace) != canonicalPlace {
+			return true
+		}
+		if len(canonicalGeo) == 2 {
+			if cc := inferCountryCodeFromText(field); cc != "" && !strings.EqualFold(cc, canonicalGeo) {
+				return true
+			}
+		}
+	}
+	sourceCC := strings.ToUpper(strings.TrimSpace(qualifierStringValue(f.Qualifiers, "sourceCountryCode")))
+	if len(canonicalGeo) == 2 && sourceCC != "" && !strings.EqualFold(sourceCC, canonicalGeo) {
+		sourceTitle := normalizeKeywordText(strings.Join([]string{
+			qualifierStringValue(f.Qualifiers, "sourceTitle"),
+			qualifierStringValue(f.Qualifiers, "sourceSummary"),
+		}, " "))
+		if looksLikeAdministrativeCommentaryText(sourceTitle) || strings.Contains(sourceTitle, "factsheet") || strings.Contains(sourceTitle, "policy paper") {
+			return true
+		}
+	}
+	if zoneInference <= 1.5 {
+		if mergedNorm := normalizePhrase(strings.TrimSpace(f.Identifiers["merged_paths"])); mergedNorm != "" && canonicalPlace != "" && !strings.Contains(mergedNorm, canonicalPlace) {
+			return true
+		}
+	}
+	return false
+}
+
+func isSyntheticAffectedZoneNarrative(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	norm := normalizePhrase(raw)
+	return strings.Contains(norm, "kinetic operations") ||
+		strings.Contains(norm, "mass displacement") ||
+		strings.Contains(norm, "civil unrest") ||
+		strings.Contains(norm, "cyber outage") ||
+		strings.Contains(norm, "cyber disruption") ||
+		strings.Contains(norm, "systems disruption") ||
+		strings.Contains(norm, "critical infra")
+}
+
+func isStaleGenericCountryAffectedZone(f *horizonmodels.HorizonFragment, st affectedZoneState, now time.Time) bool {
+	if f == nil || st.LastMatchedAt.IsZero() {
+		return false
+	}
+	geo, _, slug, ok := parseZoneCanonicalPath(strings.TrimSpace(f.CanonicalPath))
+	if !ok || len(strings.TrimSpace(geo)) != 2 {
+		return false
+	}
+	countryName := normalizeKeywordText(countryNameFromCode(geo))
+	if countryName == "" {
+		return false
+	}
+	place := normalizeKeywordText(currentAffectedZonePlace(f))
+	slugNorm := normalizeKeywordText(strings.ReplaceAll(strings.TrimSpace(slug), "-", " "))
+	if place != "" && place != countryName {
+		return false
+	}
+	if place == "" && slugNorm != countryName {
+		return false
+	}
+	if now.Sub(st.LastMatchedAt) <= 365*24*time.Hour {
+		return false
+	}
+	if st.Score >= 12 {
+		return false
+	}
+	return true
+}
+
+func isStaleSemanticallyInvalidAffectedZone(
+	f *horizonmodels.HorizonFragment,
+	e *horizonMonitorFeedEvent,
+	cls horizonMonitorNewsClassification,
+	st affectedZoneState,
+	now time.Time,
+) bool {
+	if f == nil || e == nil {
+		return false
+	}
+	age := now.Sub(st.LastMatchedAt)
+	if st.LastMatchedAt.IsZero() || age <= 365*24*time.Hour {
+		return false
+	}
+	text := normalizeKeywordText(strings.Join([]string{
+		strings.TrimSpace(e.Title),
+		strings.TrimSpace(e.Summary),
+		strings.TrimSpace(cls.Category),
+		strings.TrimSpace(cls.Level),
+	}, " "))
+	if text == "" {
+		return false
+	}
+	host := affectedZoneSourceHost(e)
+	conditionType := qualifierStringValue(f.Qualifiers, "conditionType")
+	profile := wmHeuristics().ProfileArticle(text, host)
+	if shouldSuppressAffectedZoneBySourceProfile(e) ||
+		shouldSuppressAffectedZoneBySemanticDrift(text, e, cls) ||
+		shouldSuppressAffectedZoneByEventProfile(text, e, cls, conditionType, profile) ||
+		shouldSuppressWeakAffectedZoneInference(text, e, cls, conditionType, toFloatDefault(qualifierStringValue(f.Qualifiers, "zoneInferenceScore"), 0)) {
+		return true
+	}
+	if !e.OccurredAt.IsZero() && now.Sub(e.OccurredAt) > 365*24*time.Hour && profile.AnalysisScore >= 0.85 {
+		return true
+	}
+	return false
 }
 
 func toFloatDefault(raw string, fallback float64) float64 {

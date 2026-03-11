@@ -62,3 +62,18 @@ func TestInferIntentScenarioProfile_ExpandsCapsForTransmissionScenarios(t *testi
 		t.Fatalf("expected expanded domain cap, got %d", p.domainCap())
 	}
 }
+
+func TestRepairSupplyChainDomainNamespacePath_RewritesOrgNamespaceIntoFacets(t *testing.T) {
+	got := repairSupplyChainDomainNamespacePath("/domain/v1/supply-chain/org/us/apple-inc/product/macbook")
+	want := "/domain/v1/supply-chain/geo/us/subject/apple-inc/product/macbook"
+	if got != want {
+		t.Fatalf("repairSupplyChainDomainNamespacePath() = %q, want %q", got, want)
+	}
+}
+
+func TestRepairSupplyChainDomainNamespacePath_LeavesNonSupplyChainDomainsUntouched(t *testing.T) {
+	in := "/domain/v1/policy-impact/org/us/apple-inc"
+	if got := repairSupplyChainDomainNamespacePath(in); got != in {
+		t.Fatalf("repairSupplyChainDomainNamespacePath() = %q, want %q", got, in)
+	}
+}

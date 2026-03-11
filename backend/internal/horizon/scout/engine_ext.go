@@ -32,6 +32,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
+	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -1407,8 +1408,76 @@ func (e *ScoutEngine) ensureOrgGeoFallbackLink(ctx context.Context, frag *models
 	_, _ = e.edgesRepo.Create(ctx, edge)
 }
 
+func (e *ScoutEngine) ensureFacilityGeoFallbackLink(ctx context.Context, frag *models.HorizonFragment, provenanceMethod, sourceID string) {
+	if e == nil || e.fragmentsRepo == nil || e.edgesRepo == nil || frag == nil {
+		return
+	}
+	if frag.Type != models.FragmentTypeFacility {
+		return
+	}
+	facilityID := strings.TrimSpace(frag.ID)
+	if facilityID == "" {
+		if loaded, err := e.fragmentsRepo.GetByCanonicalPath(ctx, strings.TrimSpace(frag.CanonicalPath)); err == nil && loaded != nil {
+			facilityID = strings.TrimSpace(loaded.ID)
+			frag = loaded
+		}
+	}
+	if facilityID == "" {
+		return
+	}
+	if e.fragmentHasAnyGeoLocationEdge(ctx, facilityID) {
+		return
+	}
+
+	geoToken := relationTargetCountryGeoToken(frag)
+	if geoToken == "" || geoToken == "na" {
+		return
+	}
+	targetPath := fmt.Sprintf("/loc/%s", geoToken)
+	if err := taxonomy.ValidateCanonicalPath(targetPath); err != nil {
+		return
+	}
+
+	geoFrag, err := e.getOrCreateFragmentByPath(ctx, targetPath, models.FragmentTypeGeoRegion, bestEffortGeoLabel(geoToken), "", "facility_geo_fallback", sourceID)
+	if err != nil || geoFrag == nil || strings.TrimSpace(geoFrag.ID) == "" {
+		return
+	}
+	geoID := strings.TrimSpace(geoFrag.ID)
+
+	if existing, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", facilityID, geoID, models.DependencyTypeLocatedIn); err == nil && existing != nil {
+		return
+	}
+	now := time.Now().UTC()
+	edge := &models.DependencyEdge{
+		TenantID:         "global",
+		SourceFragmentID: facilityID,
+		TargetFragmentID: geoID,
+		Type:             models.DependencyTypeLocatedIn,
+		Properties: models.EdgeProperties{
+			Criticality:   0.45,
+			Amplification: 1.0,
+		},
+		Qualifiers: map[string]interface{}{
+			"source": "facility_path_geo_fallback",
+		},
+		Provenance: models.Provenance{
+			Method:    firstNonEmpty(strings.TrimSpace(provenanceMethod), "facility_geo_fallback"),
+			SourceIDs: []string{strings.TrimSpace(sourceID)},
+		},
+		Metadata: models.EdgeMetadata{
+			CreatedAt:     now,
+			LastUpdatedAt: now,
+		},
+	}
+	_, _ = e.edgesRepo.Create(ctx, edge)
+}
+
 func (e *ScoutEngine) orgHasAnyGeoLocationEdge(ctx context.Context, orgID string) bool {
-	if e == nil || e.edgesRepo == nil || strings.TrimSpace(orgID) == "" {
+	return e.fragmentHasAnyGeoLocationEdge(ctx, orgID)
+}
+
+func (e *ScoutEngine) fragmentHasAnyGeoLocationEdge(ctx context.Context, fragmentID string) bool {
+	if e == nil || e.edgesRepo == nil || e.fragmentsRepo == nil || strings.TrimSpace(fragmentID) == "" {
 		return false
 	}
 	types := []models.DependencyType{
@@ -1417,7 +1486,7 @@ func (e *ScoutEngine) orgHasAnyGeoLocationEdge(ctx context.Context, orgID string
 	}
 	for _, t := range types {
 		tt := t
-		edges, err := e.edgesRepo.ListBySource(ctx, "global", orgID, &tt, 5)
+		edges, err := e.edgesRepo.ListBySource(ctx, "global", strings.TrimSpace(fragmentID), &tt, 5)
 		if err != nil || len(edges) == 0 {
 			continue
 		}
@@ -1435,6 +1504,162 @@ func (e *ScoutEngine) orgHasAnyGeoLocationEdge(ctx context.Context, orgID string
 		}
 	}
 	return false
+}
+
+func relationTargetCountryGeoToken(fragment *models.HorizonFragment) string {
+	if fragment == nil {
+		return ""
+	}
+	if fragment.HomeLocation != nil && fragment.HomeLocation.ISO3166_1 != nil {
+		if iso2 := normalizeISO2(*fragment.HomeLocation.ISO3166_1); iso2 != "" {
+			return iso2
+		}
+	}
+	cp := strings.ToLower(strings.TrimSpace(fragment.CanonicalPath))
+	parts := strings.Split(strings.Trim(cp, "/"), "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	switch parts[0] {
+	case "org", "gov", "fac", "community", "program", "market":
+		token := strings.TrimSpace(parts[1])
+		if token == "int" {
+			return "global"
+		}
+		if normalizeISO2(token) != "" || taxonomy.IsRegionalGeoToken(token) || taxonomy.IsCompositeGeoToken(token) {
+			return token
+		}
+	case "loc":
+		cc, _, _, ok := taxonomy.ParseLocCanonicalPath(cp)
+		if !ok {
+			return ""
+		}
+		if iso2 := normalizeISO2(cc); iso2 != "" {
+			return iso2
+		}
+	}
+	return ""
+}
+
+func bestEffortAttachCountryISOFromPath(fragment *models.HorizonFragment) bool {
+	if fragment == nil {
+		return false
+	}
+	iso2 := relationTargetCountryGeoToken(fragment)
+	if normalizeISO2(iso2) == "" {
+		return false
+	}
+	upper := strings.ToUpper(iso2)
+	if fragment.HomeLocation == nil {
+		fragment.HomeLocation = &models.Location{ISO3166_1: &upper}
+		return true
+	}
+	if fragment.HomeLocation.ISO3166_1 == nil || strings.TrimSpace(*fragment.HomeLocation.ISO3166_1) == "" {
+		fragment.HomeLocation.ISO3166_1 = &upper
+		return true
+	}
+	return false
+}
+
+func applyRelationTargetGeocodingResult(fragment *models.HorizonFragment, result *coreontology.GeocodingResult) bool {
+	if fragment == nil || result == nil {
+		return false
+	}
+	if !models.IsValidCoordinates(result.Lat, result.Lon) || !models.IsRealGeoCoordinate(result.Lat, result.Lon) {
+		return false
+	}
+	changed := false
+	if !models.HasRealGeoCoordinates(fragment.Coordinates) ||
+		fragment.Coordinates.Lat != result.Lat || fragment.Coordinates.Lon != result.Lon {
+		fragment.Coordinates = &models.Coordinates{Lat: result.Lat, Lon: result.Lon}
+		changed = true
+	}
+	if fragment.HomeLocation == nil {
+		fragment.HomeLocation = &models.Location{}
+		changed = true
+	}
+	iso6709 := fmt.Sprintf("%+.6f%+.6f/", result.Lat, result.Lon)
+	if fragment.HomeLocation.ISO6709 == nil || strings.TrimSpace(*fragment.HomeLocation.ISO6709) == "" {
+		fragment.HomeLocation.ISO6709 = &iso6709
+		changed = true
+	}
+	if fragment.HomeLocation.ISO3166_1 == nil || strings.TrimSpace(*fragment.HomeLocation.ISO3166_1) == "" {
+		if cc := strings.TrimSpace(inferCountryISO2FromFormattedAddress(result.FormattedAddress)); cc != "" {
+			fragment.HomeLocation.ISO3166_1 = &cc
+			changed = true
+		}
+	}
+	return changed
+}
+
+func (e *ScoutEngine) bestEffortGeocodeRelationTargetCandidates(ctx context.Context, fragment, parent *models.HorizonFragment) bool {
+	if e == nil || e.geocodingClient == nil || fragment == nil || models.HasRealGeoCoordinates(fragment.Coordinates) {
+		return false
+	}
+	candidates := make([]string, 0, 8)
+	seen := map[string]struct{}{}
+	add := func(values ...string) {
+		for _, raw := range values {
+			addr := strings.TrimSpace(raw)
+			if addr == "" {
+				continue
+			}
+			key := strings.ToLower(addr)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			candidates = append(candidates, addr)
+		}
+	}
+	add(henrich.BuildAddressFromFragment(fragment))
+	if fragment.Type == models.FragmentTypeFacility {
+		add(henrich.BuildFacilityAddressCandidates(fragment, parent)...)
+	}
+	add(henrich.BuildLastSegmentAddressCandidates(fragment)...)
+
+	for _, candidate := range candidates {
+		result, err := e.geocodingClient.Geocode(ctx, candidate)
+		if err != nil || result == nil {
+			continue
+		}
+		if applyRelationTargetGeocodingResult(fragment, result) {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *ScoutEngine) bestEffortEnrichRelationTargetGeo(ctx context.Context, fragment, parent *models.HorizonFragment, provenanceMethod, sourceID string) {
+	if e == nil || fragment == nil {
+		return
+	}
+	updated := false
+	if bestEffortAttachCountryISOFromPath(fragment) {
+		updated = true
+	}
+	if fragment.Type == models.FragmentTypeFacility && parent != nil && henrich.EnrichCoordinatesFromParent(fragment, parent) {
+		updated = true
+	}
+	if !models.HasRealGeoCoordinates(fragment.Coordinates) && e.geonamesClient != nil {
+		if changed, err := henrich.EnrichCoordinatesFromGeoNames(ctx, e.geonamesClient, fragment); err == nil && changed {
+			updated = true
+		}
+	}
+	if !models.HasRealGeoCoordinates(fragment.Coordinates) && e.bestEffortGeocodeRelationTargetCandidates(ctx, fragment, parent) {
+		updated = true
+	}
+	if updated && e.fragmentsRepo != nil && strings.TrimSpace(fragment.ID) != "" {
+		if err := e.fragmentsRepo.Update(ctx, fragment); err != nil {
+			log.Printf("[ScoutEngine] WARN relation target geo update failed path=%s id=%s err=%v",
+				strings.TrimSpace(fragment.CanonicalPath),
+				strings.TrimSpace(fragment.ID),
+				err,
+			)
+		}
+	}
+	e.ensureOrgGeoFallbackLink(ctx, fragment, provenanceMethod, sourceID)
+	e.ensureFacilityGeoFallbackLink(ctx, fragment, provenanceMethod, sourceID)
 }
 
 func bestEffortGeoLabel(token string) string {
@@ -4925,6 +5150,9 @@ func (e *ScoutEngine) processRelationsInternal(
 				}
 				relationsCreatedNew++
 			}
+			if targetFragment != nil {
+				e.bestEffortEnrichRelationTargetGeo(ctx, targetFragment, sourceFragment, provenanceMethod, job.ID)
+			}
 
 			// Create Recursive Scouting Job (Decomposition)
 			// Проверяем глубину рекурсии, чтобы не уйти в бесконечность.
@@ -6889,17 +7117,25 @@ func isSupplyChainPlanMode(state map[string]interface{}) bool {
 	return false
 }
 
+type supplyLinkMaterializationRef struct {
+	ID            string
+	CanonicalPath string
+	TenantID      string
+}
+
 // buildSegmentsFromParsed converts SupplyLinkSegments from a ParsedChainResult into pathbuilder.PathSegment slice,
-// applying pathRewrites for canonical path consistency.
-func buildSegmentsFromParsed(parsed *ParsedChainResult, pathRewrites map[string]string) []pathbuilder.PathSegment {
+// applying pathRewrites for canonical path consistency and attaching the materialized supply-link reference.
+func buildSegmentsFromParsed(parsed *ParsedChainResult, pathRewrites map[string]string, segmentRefs map[string]supplyLinkMaterializationRef) []pathbuilder.PathSegment {
 	if parsed == nil {
 		return nil
 	}
-	segments := make([]pathbuilder.PathSegment, 0, len(parsed.SupplyLinkSegments))
-	for _, seg := range parsed.SupplyLinkSegments {
-		if seg == nil || !supplysemantics.IsMaterializableSegmentClass(seg.SegmentClass) {
-			continue
-		}
+	segmentCandidates := parsed.SupplyLinkSegments
+	if len(segmentCandidates) == 0 {
+		segmentCandidates = deriveSupplyLinkSegmentsFromEdges(parsed.Edges)
+	}
+	dedupedSegments := normalizeAndDedupSupplyLinkSegments(segmentCandidates)
+	segments := make([]pathbuilder.PathSegment, 0, len(dedupedSegments))
+	for _, seg := range dedupedSegments {
 		supplier := strings.TrimSpace(seg.SupplierRef)
 		product := strings.TrimSpace(seg.ProductRef)
 		customer := strings.TrimSpace(seg.CustomerRef)
@@ -6915,6 +7151,7 @@ func buildSegmentsFromParsed(parsed *ParsedChainResult, pathRewrites map[string]
 		if supplier == "" || product == "" || customer == "" {
 			continue
 		}
+		linkRef := segmentRefs[buildSupplyLinkSegmentLookupKey(supplier, product, customer)]
 		viaRefs := make([]string, 0, len(seg.TransportViaRefs))
 		for _, via := range seg.TransportViaRefs {
 			via = strings.TrimSpace(via)
@@ -6945,20 +7182,31 @@ func buildSegmentsFromParsed(parsed *ParsedChainResult, pathRewrites map[string]
 			}
 		}
 		segments = append(segments, pathbuilder.PathSegment{
-			SupplierRef:         supplier,
-			ProductRef:          product,
-			CustomerRef:         customer,
-			SupplierFacilityRef: supFac,
-			CustomerFacilityRef: custFac,
-			TransportViaRefs:    viaRefs,
-			SegmentClass:        seg.SegmentClass,
-			Confidence:          seg.Confidence,
-			TenantID:            "global",
-			IsTenantSpecific:    false,
-			Metrics:             seg.State,
+			SupplyLinkID:            strings.TrimSpace(linkRef.ID),
+			SupplyLinkCanonicalPath: strings.TrimSpace(linkRef.CanonicalPath),
+			SupplyLinkTenantID:      strings.TrimSpace(linkRef.TenantID),
+			SupplierRef:             supplier,
+			ProductRef:              product,
+			CustomerRef:             customer,
+			SupplierFacilityRef:     supFac,
+			CustomerFacilityRef:     custFac,
+			TransportViaRefs:        viaRefs,
+			SegmentClass:            seg.SegmentClass,
+			Confidence:              seg.Confidence,
+			TenantID:                "global",
+			IsTenantSpecific:        false,
+			Metrics:                 seg.State,
 		})
 	}
 	return segments
+}
+
+func buildSupplyLinkSegmentLookupKey(supplier, product, customer string) string {
+	return strings.Join([]string{
+		strings.TrimSpace(supplier),
+		strings.TrimSpace(product),
+		strings.TrimSpace(customer),
+	}, "|")
 }
 
 // enqueueEdgeTriggeredPropagation checks if the endpoints of a newly created edge
@@ -7495,6 +7743,8 @@ func (e *ScoutEngine) processSupplyChains(
 		e.logLine(ctx, job, "warn", msg)
 		return fmt.Errorf("failed to parse supply chains: %w", err)
 	}
+	result.SupplyLinkSegments = normalizeAndDedupSupplyLinkSegments(result.SupplyLinkSegments)
+	result.Edges = dedupeChainEdges(append(result.Edges, buildOperationalEdgesFromSegments(result.SupplyLinkSegments)...))
 
 	lensID := strings.TrimSpace(job.LensID)
 	if lensID == "" && job.State != nil {
@@ -7655,7 +7905,7 @@ func (e *ScoutEngine) processSupplyChains(
 			}
 			frag.ID = id
 			pathToID[frag.CanonicalPath] = id
-			e.ensureOrgGeoFallbackLink(ctx, frag, "scout_supply_chain", job.ID)
+			e.bestEffortEnrichRelationTargetGeo(ctx, frag, sourceFragment, "scout_supply_chain", job.ID)
 			if lensID != "" && isScopeEligibleEntityType(frag.Type) {
 				e.bestEffortDeferredScopeAdd(ctx, lensID, frag.CanonicalPath)
 			}
@@ -7667,7 +7917,7 @@ func (e *ScoutEngine) processSupplyChains(
 		} else if err == nil && existing != nil {
 			// Fragment exists, store ID for edge creation
 			pathToID[frag.CanonicalPath] = existing.ID
-			e.ensureOrgGeoFallbackLink(ctx, existing, "scout_supply_chain", job.ID)
+			e.bestEffortEnrichRelationTargetGeo(ctx, existing, sourceFragment, "scout_supply_chain", job.ID)
 			if lensID != "" && isScopeEligibleEntityType(existing.Type) {
 				e.bestEffortDeferredScopeAdd(ctx, lensID, existing.CanonicalPath)
 			}
@@ -7725,7 +7975,7 @@ func (e *ScoutEngine) processSupplyChains(
 			if perr != nil || singleParsed == nil || len(singleParsed.SupplyLinkSegments) == 0 {
 				continue
 			}
-			segments := buildSegmentsFromParsed(singleParsed, pathRewrites)
+			segments := buildSegmentsFromParsed(singleParsed, pathRewrites, nil)
 			if len(segments) == 0 {
 				continue
 			}
@@ -7759,14 +8009,14 @@ func (e *ScoutEngine) processSupplyChains(
 		jobIDStr = strings.TrimSpace(job.ID)
 	}
 	for edgeIdx, chainEdge := range result.Edges {
+		origSrcPath := strings.TrimSpace(chainEdge.SourceCanonicalPath)
+		origDstPath := strings.TrimSpace(chainEdge.TargetCanonicalPath)
+		chainEdge = rewriteChainEdgeWithPathRewrites(chainEdge, pathRewrites)
+		if chainEdge == nil {
+			continue
+		}
 		srcPath := strings.TrimSpace(chainEdge.SourceCanonicalPath)
 		dstPath := strings.TrimSpace(chainEdge.TargetCanonicalPath)
-		if rp, ok := pathRewrites[srcPath]; ok && strings.TrimSpace(rp) != "" {
-			srcPath = strings.TrimSpace(rp)
-		}
-		if rp, ok := pathRewrites[dstPath]; ok && strings.TrimSpace(rp) != "" {
-			dstPath = strings.TrimSpace(rp)
-		}
 		// Strict validation: reject invalid supply chain edges (no transform, no persist)
 		edgeToValidate := &ChainEdge{
 			SourceCanonicalPath: srcPath,
@@ -8108,10 +8358,11 @@ func (e *ScoutEngine) processSupplyChains(
 			RelationType:        string(edgeType),
 			Confidence:          chainEdge.Confidence,
 			Reason:              chainEdge.Reason,
+			Qualifiers:          cloneQualifierMap(chainEdge.Qualifiers),
 		})
 
-		// Check for existing edge
-		if _, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", sourceID, targetID, edgeType); err == nil {
+		// Check for existing edge, accounting for product-qualified SUPPLIES_TO and facility-qualified TRANSFORMS_INTO.
+		if supplyChainEdgeExists(ctx, e.edgesRepo, "global", sourceID, targetID, edgeType, chainEdge.Qualifiers) {
 			// Edge already exists, skip
 			edgeDupes++
 			continue
@@ -8119,12 +8370,14 @@ func (e *ScoutEngine) processSupplyChains(
 
 		qualifiers := map[string]interface{}{
 			"reason":              chainEdge.Reason,
-			"sourceCanonicalPath": chainEdge.SourceCanonicalPath,
-			"targetCanonicalPath": chainEdge.TargetCanonicalPath,
+			"sourceCanonicalPath": srcPath,
+			"targetCanonicalPath": dstPath,
 			"rawConfidence":       chainEdge.Confidence,
 			"fromSupplyChain":     true,
 		}
-		if ak := edgeArtifactKeyMap[strings.TrimSpace(chainEdge.SourceCanonicalPath)+"|"+strings.TrimSpace(chainEdge.TargetCanonicalPath)]; ak != "" {
+		if ak := edgeArtifactKeyMap[srcPath+"|"+dstPath]; ak != "" {
+			qualifiers["artifactKey"] = ak
+		} else if ak := edgeArtifactKeyMap[origSrcPath+"|"+origDstPath]; ak != "" {
 			qualifiers["artifactKey"] = ak
 		}
 		if chainEdge.Qualifiers != nil {
@@ -8212,9 +8465,14 @@ func (e *ScoutEngine) processSupplyChains(
 	// Materialize SupplyLink fragments from parsed segments so PathBuilder can traverse
 	// SupplyLink provenance: Scout/Research supply chains → parser → SupplyLink fragments
 	// Full chain org→fac→product→fac→org. Keep org as-is; do not convert.
+	materializedSegments := normalizeAndDedupSupplyLinkSegments(append(
+		append([]*SupplyLinkSegment(nil), result.SupplyLinkSegments...),
+		deriveSupplyLinkSegmentsFromEdges(acceptedContextEdges)...,
+	))
 	supplyLinksCreated := 0
 	supplyLinksSkipped := 0
-	for _, seg := range result.SupplyLinkSegments {
+	materializedSegmentRefs := make(map[string]supplyLinkMaterializationRef, len(materializedSegments))
+	for _, seg := range materializedSegments {
 		if seg == nil || !supplysemantics.IsMaterializableSegmentClass(seg.SegmentClass) {
 			supplyLinksSkipped++
 			continue
@@ -8240,6 +8498,7 @@ func (e *ScoutEngine) processSupplyChains(
 		if rp, ok := pathRewrites[customer]; ok && rp != "" {
 			customer = strings.TrimSpace(rp)
 		}
+		segmentLookupKey := buildSupplyLinkSegmentLookupKey(supplier, product, customer)
 		supplierRef := supplier
 		customerRef := customer
 		productRef := product
@@ -8300,6 +8559,11 @@ func (e *ScoutEngine) processSupplyChains(
 		// Do not drop prior metrics just because a new observation has higher confidence on one field.
 		existing, _ := e.fragmentsRepo.GetByCanonicalPath(ctx, slFrag.CanonicalPath)
 		if existing != nil && strings.TrimSpace(existing.ID) != "" {
+			materializedSegmentRefs[segmentLookupKey] = supplyLinkMaterializationRef{
+				ID:            strings.TrimSpace(existing.ID),
+				CanonicalPath: strings.TrimSpace(existing.CanonicalPath),
+				TenantID:      strings.TrimSpace(existing.TenantID),
+			}
 			changed := false
 			if existing.State == nil {
 				existing.State = make(map[string]models.MetricValue)
@@ -8341,13 +8605,23 @@ func (e *ScoutEngine) processSupplyChains(
 				supplyLinksSkipped++
 			} else {
 				supplyLinksCreated++
+				materializedSegmentRefs[segmentLookupKey] = supplyLinkMaterializationRef{
+					ID:            strings.TrimSpace(existing.ID),
+					CanonicalPath: strings.TrimSpace(existing.CanonicalPath),
+					TenantID:      strings.TrimSpace(existing.TenantID),
+				}
 			}
 			continue
 		}
-		if _, createErr := e.fragmentsRepo.Create(ctx, slFrag); createErr != nil {
+		if createdID, createErr := e.fragmentsRepo.Create(ctx, slFrag); createErr != nil {
 			supplyLinksSkipped++
 		} else {
 			supplyLinksCreated++
+			materializedSegmentRefs[segmentLookupKey] = supplyLinkMaterializationRef{
+				ID:            strings.TrimSpace(createdID),
+				CanonicalPath: strings.TrimSpace(slFrag.CanonicalPath),
+				TenantID:      strings.TrimSpace(slFrag.TenantID),
+			}
 		}
 	}
 
@@ -8359,7 +8633,7 @@ func (e *ScoutEngine) processSupplyChains(
 	if supplyLinksCreated > 0 && e.supplyChainPathBuilder != nil {
 		rebuiltCount := 0
 		seen := map[string]bool{}
-		for _, seg := range result.SupplyLinkSegments {
+		for _, seg := range materializedSegments {
 			for _, ref := range []string{seg.SupplierRef, seg.CustomerRef} {
 				if ref == "" || seen[ref] {
 					continue
@@ -8426,7 +8700,7 @@ func (e *ScoutEngine) processSupplyChains(
 			if perr != nil || singleParsed == nil || len(singleParsed.SupplyLinkSegments) == 0 {
 				continue
 			}
-			segments := buildSegmentsFromParsed(singleParsed, pathRewrites)
+			segments := buildSegmentsFromParsed(singleParsed, pathRewrites, materializedSegmentRefs)
 			if len(segments) == 0 {
 				continue
 			}

@@ -5,17 +5,10 @@ import { extractZoneConditionType, getAffectedZoneMapAccent, getHorizonNodeVisua
 
 const SRC = 'geo-zones';
 const SHARED_SRC = 'geo-zones-shared';
-const FIELD_LAYER = 'geo-zones-field';
 const SHARED_CRITICAL_SRC = 'geo-zones-shared-critical';
-const FIELD_CRITICAL_LAYER = 'geo-zones-field-critical';
-const FIELD_OUTLINE_LAYER = 'geo-zones-field-outline';
-const LAYER = 'geo-zones-fill';
-const OUTLINE_LAYER = 'geo-zones-outline';
-const CENTER_SRC = 'geo-zones-centers';
-const CENTER_GLOW_LAYER = 'geo-zones-center-glow';
-const CENTER_OUTER_RING_LAYER = 'geo-zones-center-outer-ring';
-const CENTER_RING_LAYER = 'geo-zones-center-ring';
-const CENTER_CORE_LAYER = 'geo-zones-center-core';
+const SHARD_SRC = 'geo-zones-shards';
+const SHARD_LAYER = 'geo-zones-shards';
+const SHARD_ACCENT_LAYER = 'geo-zones-shards-accent';
 
 function canAccessMapStyle(map: maplibregl.Map): boolean {
   try {
@@ -85,7 +78,20 @@ function keywordScore(text: string, keywords: string[]): boolean {
   return keywords.some((keyword) => text.includes(keyword));
 }
 
-function fieldPolygon(obj: GeoObject, lat: number, lon: number, radiusKm: number, points = 56): GeoJSON.Polygon {
+type FieldBias = {
+  x: number;
+  y: number;
+  strength: number;
+};
+
+function fieldPolygon(
+  obj: GeoObject,
+  lat: number,
+  lon: number,
+  radiusKm: number,
+  bias: FieldBias | undefined,
+  points = 56,
+): GeoJSON.Polygon {
   const text = `${obj.canonicalPath || ''} ${obj.zoneType || ''} ${obj.zoneSubType || ''} ${obj.label || ''}`.toLowerCase();
   const hash = hashString(text || obj.id || `${lat}:${lon}:${radiusKm}`);
   const kmPerDegLat = 111.32;
@@ -95,39 +101,54 @@ function fieldPolygon(obj: GeoObject, lat: number, lon: number, radiusKm: number
   const isDisaster = keywordScore(text, ['earthquake', 'tsunami', 'flood', 'wildfire', 'eruption', 'storm', 'disaster']);
   const isHealth = keywordScore(text, ['health', 'outbreak', 'disease', 'epidemic', 'pandemic']);
 
-  const elongation = isConflict
-    ? 1.55 + unitFromHash(hash, 11) * 0.35
+  const majorScale = isConflict
+    ? 1.22 + unitFromHash(hash, 11) * 0.18
     : isHealth
-      ? 1.18 + unitFromHash(hash, 13) * 0.15
-      : 1.22 + unitFromHash(hash, 17) * 0.28;
-  const compression = isConflict
-    ? 0.76 + unitFromHash(hash, 19) * 0.12
+      ? 1.08 + unitFromHash(hash, 13) * 0.08
+      : 1.1 + unitFromHash(hash, 17) * 0.14;
+  const minorScale = isConflict
+    ? 0.84 + unitFromHash(hash, 19) * 0.12
     : isHealth
-      ? 0.92 + unitFromHash(hash, 23) * 0.08
-      : 0.86 + unitFromHash(hash, 29) * 0.12;
-  const lobeCount = isDisaster ? 5 : isConflict ? 4 : 3;
-  const wobblePrimary = isDisaster ? 0.24 : isConflict ? 0.18 : 0.12;
-  const wobbleSecondary = isHealth ? 0.06 : 0.1;
+      ? 0.96 + unitFromHash(hash, 23) * 0.06
+      : 0.9 + unitFromHash(hash, 29) * 0.08;
+  const lobeCount = isDisaster ? 3 : 2;
+  const wobblePrimary = isDisaster ? 0.06 : isConflict ? 0.045 : 0.032;
+  const wobbleSecondary = isHealth ? 0.01 : 0.018;
+  const forwardBias = isConflict ? 0.12 : isDisaster ? 0.08 : isHealth ? 0.04 : 0.055;
+  const lateralBias = isDisaster ? 0.07 : isHealth ? 0.025 : 0.04;
   const rotation = unitFromHash(hash, 31) * Math.PI * 2;
+  const biasStrength = clamp(bias?.strength ?? 0, 0, 1);
+  const biasDirX = bias && Number.isFinite(bias.x) ? bias.x : 0;
+  const biasDirY = bias && Number.isFinite(bias.y) ? bias.y : 0;
 
   const dLatBase = radiusKm / kmPerDegLat;
   const dLonBase = radiusKm / kmPerDegLon;
+  const centerOffsetKm = radiusKm * clamp(0.08 + biasStrength * 0.12, 0.08, 0.2);
+  const offsetLon = (biasDirX * centerOffsetKm) / kmPerDegLon;
+  const offsetLat = (biasDirY * centerOffsetKm) / kmPerDegLat;
   const ring: [number, number][] = [];
 
   for (let i = 0; i <= points; i++) {
     const angle = (2 * Math.PI * i) / points;
-    const wobble =
+    const axisAngle = angle - rotation;
+    const dirX = Math.cos(angle);
+    const dirY = Math.sin(angle);
+    const directionalDot = dirX * biasDirX + dirY * biasDirY;
+    const forward = Math.max(0, Math.cos(axisAngle));
+    const lateral = Math.sin(axisAngle);
+    const contour =
       1 +
+      Math.max(0, directionalDot) * biasStrength * 0.18 -
+      Math.max(0, -directionalDot) * biasStrength * 0.07 +
+      forward * forward * forwardBias +
+      lateral * lateral * lateralBias +
       Math.sin(angle * lobeCount + rotation) * wobblePrimary +
-      Math.cos(angle * (lobeCount + 2) - rotation * 0.6) * wobbleSecondary;
-    const localStretch = Math.cos(angle - rotation) >= 0 ? elongation : compression;
-    const rx = dLonBase * wobble * localStretch;
-    const ry = dLatBase * wobble * (2 - localStretch * 0.72);
-    const x = Math.cos(angle) * rx;
-    const y = Math.sin(angle) * ry;
+      Math.cos(angle * (lobeCount + 1) - rotation * 0.45) * wobbleSecondary;
+    const x = Math.cos(axisAngle) * dLonBase * majorScale * contour;
+    const y = Math.sin(axisAngle) * dLatBase * minorScale * contour;
     const xr = x * Math.cos(rotation) - y * Math.sin(rotation);
     const yr = x * Math.sin(rotation) + y * Math.cos(rotation);
-    ring.push([lon + xr, lat + yr]);
+    ring.push([lon + offsetLon + xr, lat + offsetLat + yr]);
   }
 
   return { type: 'Polygon', coordinates: [ring] };
@@ -248,9 +269,36 @@ type LocalZoneFieldMember = ZoneFieldMember & {
   influenceRadius: number;
 };
 
+type LocalPoint = {
+  x: number;
+  y: number;
+};
+
+type Bounds = {
+  minLon: number;
+  minLat: number;
+  maxLon: number;
+  maxLat: number;
+};
+
+type LonLat = [number, number];
+
 type SharedFieldCollections = {
   ambient: GeoJSON.FeatureCollection;
   critical: GeoJSON.FeatureCollection;
+};
+
+type ShardSeed = {
+  id: string;
+  geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon;
+  centroidLat: number;
+  centroidLon: number;
+  color: string;
+  hype: number;
+  status: 'hot' | 'active' | 'watch' | 'cooling' | 'inactive';
+  radiusKm: number;
+  detailBoost: number;
+  accentBoost: number;
 };
 
 function parseHexColor(input: string): [number, number, number] | null {
@@ -286,6 +334,63 @@ function mixHexColors(entries: Array<{ color: string; weight: number }>, fallbac
   }
   if (total <= 0) return fallback;
   return toHexColor([r / total, g / total, b / total]);
+}
+
+function convexHull(points: LocalPoint[]): LocalPoint[] {
+  if (points.length <= 1) return points.slice();
+  const sorted = points
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .sort((a, b) => (a.x === b.x ? a.y - b.y : a.x - b.x));
+  if (sorted.length <= 1) return sorted;
+
+  const unique: LocalPoint[] = [];
+  for (const point of sorted) {
+    const last = unique[unique.length - 1];
+    if (!last || last.x !== point.x || last.y !== point.y) unique.push(point);
+  }
+  if (unique.length <= 2) return unique;
+
+  const cross = (o: LocalPoint, a: LocalPoint, b: LocalPoint): number =>
+    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+
+  const lower: LocalPoint[] = [];
+  for (const point of unique) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], point) <= 0) lower.pop();
+    lower.push(point);
+  }
+
+  const upper: LocalPoint[] = [];
+  for (let i = unique.length - 1; i >= 0; i--) {
+    const point = unique[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], point) <= 0) upper.pop();
+    upper.push(point);
+  }
+
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
+}
+
+function smoothClosedRing(points: LocalPoint[], iterations = 2): LocalPoint[] {
+  let ring = points.slice();
+  for (let iter = 0; iter < iterations; iter++) {
+    if (ring.length < 3) return ring;
+    const next: LocalPoint[] = [];
+    for (let i = 0; i < ring.length; i++) {
+      const current = ring[i];
+      const after = ring[(i + 1) % ring.length];
+      next.push({
+        x: current.x * 0.75 + after.x * 0.25,
+        y: current.y * 0.75 + after.y * 0.25,
+      });
+      next.push({
+        x: current.x * 0.25 + after.x * 0.75,
+        y: current.y * 0.25 + after.y * 0.75,
+      });
+    }
+    ring = next;
+  }
+  return ring;
 }
 
 function blendHexColors(base: string, overlay: string, ratio: number): string {
@@ -362,7 +467,11 @@ function clusterZoneFieldMembers(members: ZoneFieldMember[]): ZoneFieldMember[][
       for (const candidate of members) {
         if (used.has(candidate.id)) continue;
         const distance = haversineKm(current.lat, current.lon, candidate.lat, candidate.lon);
-        const mergeDistance = clamp((current.radiusKm + candidate.radiusKm) * 0.42 + 120, 90, 900);
+        const mergeDistance = clamp(
+          (current.radiusKm + candidate.radiusKm) * 0.3 + Math.min(current.radiusKm, candidate.radiusKm) * 0.16 + 45,
+          40,
+          620,
+        );
         if (distance <= mergeDistance) {
           used.add(candidate.id);
           queue.push(candidate);
@@ -372,6 +481,47 @@ function clusterZoneFieldMembers(members: ZoneFieldMember[]): ZoneFieldMember[][
     clusters.push(cluster);
   }
   return clusters;
+}
+
+function deriveFieldBias(obj: GeoObject, objects: GeoObject[]): FieldBias | undefined {
+  const lat = obj.coordinates?.lat;
+  const lon = obj.coordinates?.lon;
+  const radiusKm = Number(obj.radiusKm);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(radiusKm) || radiusKm <= 0) return undefined;
+
+  const reachKm = clamp(radiusKm * 0.7 + 140, 120, 680);
+  let sumX = 0;
+  let sumY = 0;
+  let total = 0;
+
+  for (const candidate of objects) {
+    if (candidate.id === obj.id) continue;
+    const candidateLat = candidate.coordinates?.lat;
+    const candidateLon = candidate.coordinates?.lon;
+    if (!Number.isFinite(candidateLat) || !Number.isFinite(candidateLon)) continue;
+
+    const distance = haversineKm(lat!, lon!, candidateLat!, candidateLon!);
+    if (!Number.isFinite(distance) || distance <= 0 || distance > reachKm) continue;
+
+    const { x, y } = toLocalKm(lat!, lon!, candidateLat!, candidateLon!);
+    const baseWeight = clamp(1 - distance / reachKm, 0, 1);
+    if (baseWeight <= 0) continue;
+    const typeWeight = candidate.type === 'AFFECTED_ZONE' ? 0.7 : 1.05;
+    const weight = baseWeight * typeWeight;
+    sumX += x * weight;
+    sumY += y * weight;
+    total += weight;
+  }
+
+  if (total <= 0) return undefined;
+  const norm = Math.hypot(sumX, sumY);
+  if (!Number.isFinite(norm) || norm < 5) return undefined;
+
+  return {
+    x: sumX / norm,
+    y: sumY / norm,
+    strength: clamp(norm / (reachKm * Math.max(total, 1) * 0.42), 0.12, 1),
+  };
 }
 
 function buildSharedEnvelope(
@@ -404,50 +554,177 @@ function buildSharedEnvelope(
   const minReach = clamp((clusterSpread * 0.55 + maxInfluence * 0.24) * minReachScale, 24, 520);
   const maxReach = clamp((clusterSpread + maxInfluence * 1.15) * maxReachScale, 42, 1600);
   const densityBoost = clamp(((adjusted.length - 1) * 0.12 + 0.16) * densityScale, 0.12, 0.72);
-  const points = 72;
-  const rawReach: number[] = [];
+  const sampleCount = adjusted.length >= 5 ? 20 : 16;
+  const samplePoints: LocalPoint[] = [];
 
-  for (let i = 0; i < points; i++) {
-    const angle = (2 * Math.PI * i) / points;
-    const dirX = Math.cos(angle);
-    const dirY = Math.sin(angle);
-    const contributions: number[] = [];
-
-    for (const member of adjusted) {
-      const proj = member.x * dirX + member.y * dirY;
-      const perp = Math.abs(-member.x * dirY + member.y * dirX);
-      const width = member.influenceRadius * 1.28;
-      const cross = clamp(1 - perp / Math.max(1, width), 0, 1);
-      if (cross <= 0) continue;
-      const reach = proj + member.influenceRadius * (0.74 + cross * 0.68) * member.weight;
-      contributions.push(reach);
+  for (const member of adjusted) {
+    const effectiveRadius = clamp(member.influenceRadius * (0.9 + member.weight * 0.08), 12, maxReach);
+    for (let i = 0; i < sampleCount; i++) {
+      const angle = (2 * Math.PI * i) / sampleCount;
+      samplePoints.push({
+        x: member.x + Math.cos(angle) * effectiveRadius,
+        y: member.y + Math.sin(angle) * effectiveRadius,
+      });
     }
-
-    contributions.sort((a, b) => b - a);
-    let reach = Math.max(minReach, contributions[0] ?? 0);
-    if ((contributions[1] ?? 0) > 0) reach += contributions[1] * 0.24;
-    if ((contributions[2] ?? 0) > 0) reach += contributions[2] * 0.11;
-    reach += maxInfluence * densityBoost * 0.16;
-    rawReach.push(clamp(reach, minReach, maxReach));
   }
 
-  const smoothed = rawReach.map((_, i) => {
-    const prev2 = rawReach[(i - 2 + points) % points];
-    const prev = rawReach[(i - 1 + points) % points];
-    const curr = rawReach[i];
-    const next = rawReach[(i + 1) % points];
-    const next2 = rawReach[(i + 2) % points];
-    return prev2 * 0.08 + prev * 0.18 + curr * 0.48 + next * 0.18 + next2 * 0.08;
+  const hull = convexHull(samplePoints);
+  if (hull.length < 3) return null;
+
+  const paddingKm = clamp(maxInfluence * (0.06 + densityBoost * 0.08) + clusterSpread * 0.025, 10, 72);
+  const expanded = hull.map((point) => {
+    const dist = Math.hypot(point.x, point.y);
+    if (dist < 1e-6) return { x: paddingKm, y: 0 };
+    const extra = paddingKm * clamp(0.82 + dist / Math.max(clusterSpread + maxInfluence, 1) * 0.2, 0.82, 1.08);
+    return {
+      x: point.x + (point.x / dist) * extra,
+      y: point.y + (point.y / dist) * extra,
+    };
   });
-
-  const ring: [number, number][] = [];
-  for (let i = 0; i <= points; i++) {
-    const angle = (2 * Math.PI * (i % points)) / points;
-    const reach = smoothed[i % points];
-    ring.push(fromLocalKm(centroidLat, centroidLon, Math.cos(angle) * reach, Math.sin(angle) * reach));
-  }
+  const smoothed = smoothClosedRing(expanded, 2);
+  const ring: [number, number][] = smoothed.map((point) => fromLocalKm(centroidLat, centroidLon, point.x, point.y));
+  if (ring.length > 0) ring.push(ring[0]);
 
   return { type: 'Polygon', coordinates: [ring] };
+}
+
+function geometryBounds(geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon): Bounds {
+  let minLon = Infinity;
+  let minLat = Infinity;
+  let maxLon = -Infinity;
+  let maxLat = -Infinity;
+  const polygons = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates;
+  for (const polygon of polygons) {
+    for (const ring of polygon) {
+      for (const point of ring) {
+        minLon = Math.min(minLon, point[0]);
+        minLat = Math.min(minLat, point[1]);
+        maxLon = Math.max(maxLon, point[0]);
+        maxLat = Math.max(maxLat, point[1]);
+      }
+    }
+  }
+  return { minLon, minLat, maxLon, maxLat };
+}
+
+function pointInRing(point: LonLat, ring: number[][]): boolean {
+  let inside = false;
+  const [x, y] = point;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0];
+    const yi = ring[i][1];
+    const xj = ring[j][0];
+    const yj = ring[j][1];
+    const intersect = ((yi > y) !== (yj > y))
+      && (x < ((xj - xi) * (y - yi)) / ((yj - yi) || Number.EPSILON) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function pointInPolygonRings(point: LonLat, polygon: number[][][]): boolean {
+  if (!polygon.length) return false;
+  if (!pointInRing(point, polygon[0])) return false;
+  for (let i = 1; i < polygon.length; i++) {
+    if (pointInRing(point, polygon[i])) return false;
+  }
+  return true;
+}
+
+function geometryContainsPoint(geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon, point: LonLat): boolean {
+  if (geometry.type === 'Polygon') return pointInPolygonRings(point, geometry.coordinates);
+  return geometry.coordinates.some((polygon) => pointInPolygonRings(point, polygon));
+}
+
+function maxGeometryRadiusKm(geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon, lat: number, lon: number): number {
+  const polygons = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates;
+  let maxDistance = 0;
+  for (const polygon of polygons) {
+    for (const ring of polygon) {
+      for (const point of ring) {
+        maxDistance = Math.max(maxDistance, haversineKm(lat, lon, point[1], point[0]));
+      }
+    }
+  }
+  return Math.max(maxDistance, 1);
+}
+
+function buildTrianglePolygon(
+  lat0: number,
+  lon0: number,
+  vertices: [LocalPoint, LocalPoint, LocalPoint],
+): GeoJSON.Polygon {
+  const ring: [number, number][] = vertices.map((point) => fromLocalKm(lat0, lon0, point.x, point.y));
+  ring.push(ring[0]);
+  return { type: 'Polygon', coordinates: [ring] };
+}
+
+function buildTriangleShardFeatures(seed: ShardSeed, theme: 'dark' | 'light'): GeoJSON.Feature[] {
+  const bounds = geometryBounds(seed.geometry);
+  const cellKm = clamp(seed.radiusKm * 0.16 * seed.detailBoost, 10, 62);
+  const minX = toLocalKm(seed.centroidLat, seed.centroidLon, seed.centroidLat, bounds.minLon).x - cellKm;
+  const maxX = toLocalKm(seed.centroidLat, seed.centroidLon, seed.centroidLat, bounds.maxLon).x + cellKm;
+  const minY = toLocalKm(seed.centroidLat, seed.centroidLon, bounds.minLat, seed.centroidLon).y - cellKm;
+  const maxY = toLocalKm(seed.centroidLat, seed.centroidLon, bounds.maxLat, seed.centroidLon).y + cellKm;
+  const maxRadiusKm = Math.max(maxGeometryRadiusKm(seed.geometry, seed.centroidLat, seed.centroidLon), cellKm * 1.5);
+  const mutedColor = blendHexColors(seed.color, theme === 'dark' ? '#08111d' : '#f8fafc', theme === 'dark' ? 0.5 : 0.62);
+  const baseOpacity = clamp(0.038 + seed.hype / 920, 0.038, 0.17);
+  const accentOpacity = clamp(0.028 + seed.hype / 1200, 0.028, 0.13) * seed.accentBoost;
+  const features: GeoJSON.Feature[] = [];
+
+  let rowIndex = 0;
+  for (let y = minY; y <= maxY; y += cellKm) {
+    let colIndex = 0;
+    for (let x = minX; x <= maxX; x += cellKm) {
+      const tl: LocalPoint = { x, y };
+      const tr: LocalPoint = { x: x + cellKm, y };
+      const br: LocalPoint = { x: x + cellKm, y: y + cellKm };
+      const bl: LocalPoint = { x, y: y + cellKm };
+      const flip = ((rowIndex + colIndex) & 1) === 0;
+      const triangles: [LocalPoint, LocalPoint, LocalPoint][] = flip
+        ? [[tl, tr, bl], [tr, br, bl]]
+        : [[tl, tr, br], [tl, br, bl]];
+
+      for (let triangleIndex = 0; triangleIndex < triangles.length; triangleIndex++) {
+        const triangle = triangles[triangleIndex]!;
+        const center = {
+          x: (triangle[0].x + triangle[1].x + triangle[2].x) / 3,
+          y: (triangle[0].y + triangle[1].y + triangle[2].y) / 3,
+        };
+        const centroidLonLat = fromLocalKm(seed.centroidLat, seed.centroidLon, center.x, center.y);
+        if (!geometryContainsPoint(seed.geometry, centroidLonLat)) continue;
+        const vertexLonLat = triangle.map((point) => fromLocalKm(seed.centroidLat, seed.centroidLon, point.x, point.y)) as LonLat[];
+        if (!vertexLonLat.every((point) => geometryContainsPoint(seed.geometry, point))) continue;
+
+        const distance = Math.hypot(center.x, center.y);
+        const edgeFactor = 1 - clamp(distance / maxRadiusKm, 0, 1);
+        if (edgeFactor <= 0.02) continue;
+
+        const jitter = unitFromHash(hashString(`${seed.id}:${rowIndex}:${colIndex}:${triangleIndex}`), 97);
+        const keepThreshold = clamp(0.42 + edgeFactor * 0.72 + seed.hype / 360, 0.46, 1);
+        if (jitter > keepThreshold) continue;
+
+        const colorMix = clamp(Math.pow(edgeFactor, 0.9) * 0.9 + jitter * 0.08, 0, 1);
+        const triangleColor = blendHexColors(mutedColor, seed.color, colorMix);
+        const innerAccent = edgeFactor > 0.34 ? Math.pow((edgeFactor - 0.34) / 0.66, 1.08) : 0;
+
+        features.push({
+          type: 'Feature',
+          geometry: buildTrianglePolygon(seed.centroidLat, seed.centroidLon, triangle),
+          properties: {
+            color: triangleColor,
+            fillOpacity: baseOpacity * (0.22 + Math.pow(edgeFactor, 1.02) * 1.14) * (0.9 + jitter * 0.18),
+            accentColor: seed.color,
+            accentOpacity: accentOpacity * innerAccent * (0.82 + jitter * 0.22),
+          },
+        });
+      }
+      colIndex += 1;
+    }
+    rowIndex += 1;
+  }
+
+  return features;
 }
 
 function buildZoneCollection(objects: GeoObject[], theme: 'dark' | 'light'): GeoJSON.FeatureCollection {
@@ -468,18 +745,53 @@ function buildZoneCollection(objects: GeoObject[], theme: 'dark' | 'light'): Geo
     const status = zoneStatus(obj, hype);
     const style = zoneStyle(status, hype);
     const radiusAttenuation = clamp(110 / (radiusKm + 40), 0.18, 1);
+    const fieldBias = deriveFieldBias(obj, objects);
     features.push({
       type: 'Feature',
-      geometry: fieldPolygon(obj, lat!, lon!, Math.min(radiusKm, 2000)),
+      geometry: fieldPolygon(obj, lat!, lon!, Math.min(radiusKm, 2000), fieldBias),
       properties: {
         color: zoneColor(obj, theme),
-        fillOpacity: style.fillOpacity * radiusAttenuation,
+        fillOpacity: style.fillOpacity * radiusAttenuation * 0.62,
         lineOpacity: style.lineOpacity * clamp(0.7 + radiusAttenuation * 0.5, 0.4, 1),
         lineWidth: style.lineWidth * clamp(0.8 + radiusAttenuation * 0.45, 0.65, 1.1),
         dashA: style.dash[0],
         dashB: style.dash[1],
       },
     });
+  }
+  return { type: 'FeatureCollection', features };
+}
+
+function buildZoneShardCollection(objects: GeoObject[], theme: 'dark' | 'light'): GeoJSON.FeatureCollection {
+  const clusteredIds = new Set(
+    clusterZoneFieldMembers(collectZoneFieldMembers(objects, theme))
+      .filter((cluster) => cluster.length > 1)
+      .flatMap((cluster) => cluster.map((member) => member.id)),
+  );
+  const features: GeoJSON.Feature[] = [];
+  for (const obj of objects) {
+    const radiusKm = Number(obj.radiusKm);
+    if (obj.type !== 'AFFECTED_ZONE' || !Number.isFinite(radiusKm) || radiusKm <= 0) continue;
+    if (clusteredIds.has(obj.id)) continue;
+    const lat = obj.coordinates?.lat;
+    const lon = obj.coordinates?.lon;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    const hype = zoneHype(obj);
+    const status = zoneStatus(obj, hype);
+    const fieldBias = deriveFieldBias(obj, objects);
+    const geometry = fieldPolygon(obj, lat!, lon!, Math.min(radiusKm, 2000), fieldBias);
+    features.push(...buildTriangleShardFeatures({
+      id: obj.id,
+      geometry,
+      centroidLat: lat!,
+      centroidLon: lon!,
+      color: zoneColor(obj, theme),
+      hype,
+      status,
+      radiusKm: Math.min(radiusKm, 2000),
+      detailBoost: status === 'hot' || status === 'active' ? 1.08 : 0.96,
+      accentBoost: isCriticalZone(obj) ? 1.15 : 0.9,
+    }, theme));
   }
   return { type: 'FeatureCollection', features };
 }
@@ -587,7 +899,7 @@ function buildSharedFieldCollections(objects: GeoObject[], theme: 'dark' | 'ligh
         color: ambientTint,
         clusterSize: cluster.length,
         fillOpacity: clamp(
-          sharedStyle.fillOpacity * (0.88 + overlapFactor * 0.34) * (criticalMembers.length > 0 ? 0.82 : 1),
+          sharedStyle.fillOpacity * (0.88 + overlapFactor * 0.34) * (criticalMembers.length > 0 ? 0.82 : 1) * 0.58,
           0.08,
           0.24,
         ),
@@ -615,7 +927,7 @@ function buildSharedFieldCollections(objects: GeoObject[], theme: 'dark' | 'ligh
         color: criticalColor,
         clusterSize: criticalMembers.length,
         fillOpacity: clamp(
-          (sharedStyle.fillOpacity * 0.56 + criticalAvgHype / 480) * (0.42 + criticalShare * 1.1),
+          (sharedStyle.fillOpacity * 0.56 + criticalAvgHype / 480) * (0.42 + criticalShare * 1.1) * 0.56,
           0.08,
           0.3,
         ),
@@ -629,6 +941,72 @@ function buildSharedFieldCollections(objects: GeoObject[], theme: 'dark' | 'ligh
   };
 }
 
+function buildSharedShardCollection(objects: GeoObject[], theme: 'dark' | 'light'): GeoJSON.FeatureCollection {
+  const members = collectZoneFieldMembers(objects, theme);
+  const clusters = clusterZoneFieldMembers(members);
+  const features: GeoJSON.Feature[] = [];
+
+  for (const cluster of clusters) {
+    if (cluster.length < 2) continue;
+
+    const totalWeight = cluster.reduce((sum, member) => sum + clamp(0.7 + member.hype / 90, 0.7, 1.8), 0);
+    const centroidLat =
+      cluster.reduce((sum, member) => sum + member.lat * clamp(0.7 + member.hype / 90, 0.7, 1.8), 0) / totalWeight;
+    const centroidLon =
+      cluster.reduce((sum, member) => sum + member.lon * clamp(0.7 + member.hype / 90, 0.7, 1.8), 0) / totalWeight;
+
+    const localMembers: LocalZoneFieldMember[] = cluster.map((member) => {
+      const { x, y } = toLocalKm(centroidLat, centroidLon, member.lat, member.lon);
+      return {
+        ...member,
+        x,
+        y,
+        weight: clamp(0.75 + member.hype / 85, 0.75, 1.95),
+        influenceRadius: member.radiusKm * clamp(0.54 + member.hype / 180, 0.54, 1.1),
+      };
+    });
+
+    const avgHype = cluster.reduce((sum, member) => sum + member.hype, 0) / cluster.length;
+    const sharedEnvelope = buildSharedEnvelope(centroidLat, centroidLon, localMembers, {
+      densityScale: 1 + avgHype / 220,
+    });
+    if (!sharedEnvelope) continue;
+
+    const criticalMembers = localMembers.filter((member) => member.severityBand === 'critical');
+    const ambientMembers = localMembers.filter((member) => member.severityBand !== 'critical');
+    const criticalWeight = criticalMembers.reduce((sum, member) => sum + member.weight, 0);
+    const ambientWeight = ambientMembers.reduce((sum, member) => sum + member.weight, 0);
+    const criticalShare = criticalWeight / Math.max(criticalWeight + ambientWeight, 0.0001);
+    const fallbackAmbient = theme === 'dark' ? '#f59e0b' : '#d97706';
+    const fallbackCritical = theme === 'dark' ? '#ef4444' : '#dc2626';
+    const ambientColor = mixHexColors(
+      (ambientMembers.length > 0 ? ambientMembers : localMembers).map((member) => ({ color: member.color, weight: member.weight })),
+      fallbackAmbient,
+    );
+    const criticalColor = mixHexColors(
+      criticalMembers.map((member) => ({ color: member.color, weight: member.weight * 1.2 })),
+      fallbackCritical,
+    );
+
+    features.push(...buildTriangleShardFeatures({
+      id: `shared:${cluster.map((member) => member.id).sort().join('|')}`,
+      geometry: sharedEnvelope,
+      centroidLat,
+      centroidLon,
+      color: criticalMembers.length > 0
+        ? blendHexColors(ambientColor, criticalColor, 0.12 + criticalShare * 0.26)
+        : ambientColor,
+      hype: avgHype,
+      status: avgHype >= 70 ? 'hot' : avgHype >= 46 ? 'active' : avgHype >= 24 ? 'watch' : avgHype >= 10 ? 'cooling' : 'inactive',
+      radiusKm: Math.max(...localMembers.map((member) => Math.hypot(member.x, member.y) + member.influenceRadius), 80),
+      detailBoost: 1.02 + Math.min(cluster.length, 5) * 0.04,
+      accentBoost: 0.86 + criticalShare * 0.5,
+    }, theme));
+  }
+
+  return { type: 'FeatureCollection', features };
+}
+
 export function useGeoZoneLayer(
   map: maplibregl.Map | null,
   isReady: boolean,
@@ -640,253 +1018,54 @@ export function useGeoZoneLayer(
   useEffect(() => {
     if (!map || !isReady) return;
 
-    const fc = buildZoneCollection(objects, theme);
-    const shared = buildSharedFieldCollections(objects, theme);
-    const centers = buildZoneCenterCollection(objects, theme);
-
-    map.addSource(SHARED_SRC, { type: 'geojson', data: shared.ambient });
-    map.addSource(SHARED_CRITICAL_SRC, { type: 'geojson', data: shared.critical });
-    map.addSource(SRC, { type: 'geojson', data: fc });
-    map.addSource(CENTER_SRC, { type: 'geojson', data: centers });
+    const shards: GeoJSON.FeatureCollection = {
+      type: 'FeatureCollection',
+      features: [
+        ...buildSharedShardCollection(objects, theme).features,
+        ...buildZoneShardCollection(objects, theme).features,
+      ],
+    };
+    map.addSource(SHARD_SRC, { type: 'geojson', data: shards });
     map.addLayer({
-      id: FIELD_LAYER,
+      id: SHARD_LAYER,
       type: 'fill',
-      source: SHARED_SRC,
+      source: SHARD_SRC,
       paint: {
         'fill-color': ['get', 'color'],
         'fill-opacity': [
           'interpolate', ['linear'], ['zoom'],
           1, 0,
-          4, ['*', ['coalesce', ['get', 'fillOpacity'], 0.1], 0.288],
-          7, ['*', ['coalesce', ['get', 'fillOpacity'], 0.1], 0.744],
-          10, ['*', ['coalesce', ['get', 'fillOpacity'], 0.1], 1.296],
-          12, ['*', ['coalesce', ['get', 'fillOpacity'], 0.1], 1.608],
-          14, ['*', ['coalesce', ['get', 'fillOpacity'], 0.1], 1.896],
+          4, ['*', ['coalesce', ['get', 'fillOpacity'], 0.04], 0.5],
+          7, ['*', ['coalesce', ['get', 'fillOpacity'], 0.04], 0.82],
+          10, ['*', ['coalesce', ['get', 'fillOpacity'], 0.04], 1.04],
+          12, ['*', ['coalesce', ['get', 'fillOpacity'], 0.04], 1.16],
+          14, ['*', ['coalesce', ['get', 'fillOpacity'], 0.04], 1.24],
         ],
       },
     });
     map.addLayer({
-      id: FIELD_CRITICAL_LAYER,
+      id: SHARD_ACCENT_LAYER,
       type: 'fill',
-      source: SHARED_CRITICAL_SRC,
+      source: SHARD_SRC,
       paint: {
-        'fill-color': ['get', 'color'],
+        'fill-color': ['coalesce', ['get', 'accentColor'], ['get', 'color']],
         'fill-opacity': [
           'interpolate', ['linear'], ['zoom'],
           1, 0,
-          4, ['*', ['coalesce', ['get', 'fillOpacity'], 0.1], 0.24],
-          7, ['*', ['coalesce', ['get', 'fillOpacity'], 0.1], 0.62],
-          10, ['*', ['coalesce', ['get', 'fillOpacity'], 0.1], 1.06],
-          12, ['*', ['coalesce', ['get', 'fillOpacity'], 0.1], 1.24],
-          14, ['*', ['coalesce', ['get', 'fillOpacity'], 0.1], 1.38],
-        ],
-      },
-    });
-    map.addLayer({
-      id: FIELD_OUTLINE_LAYER,
-      type: 'line',
-      source: SHARED_SRC,
-      paint: {
-        'line-color': ['coalesce', ['get', 'outlineColor'], ['get', 'color']],
-        'line-width': [
-          'interpolate', ['linear'], ['zoom'],
-          3, ['*', ['coalesce', ['get', 'lineWidth'], 1], 0.45],
-          7, ['*', ['coalesce', ['get', 'lineWidth'], 1], 0.72],
-          10, ['coalesce', ['get', 'lineWidth'], 1],
-          12, ['*', ['coalesce', ['get', 'lineWidth'], 1], 1.14],
-          14, ['*', ['coalesce', ['get', 'lineWidth'], 1], 1.26],
-        ],
-        'line-opacity': [
-          'interpolate', ['linear'], ['zoom'],
-          3, ['*', ['coalesce', ['get', 'lineOpacity'], 0.2], 0.336],
-          7, ['*', ['coalesce', ['get', 'lineOpacity'], 0.2], 0.672],
-          10, ['*', ['coalesce', ['get', 'lineOpacity'], 0.2], 1.2],
-          12, ['*', ['coalesce', ['get', 'lineOpacity'], 0.2], 1.344],
-          14, ['*', ['coalesce', ['get', 'lineOpacity'], 0.2], 1.44],
-        ],
-      },
-    });
-    map.addLayer({
-      id: LAYER,
-      type: 'fill',
-      source: SRC,
-      paint: {
-        'fill-color': ['get', 'color'],
-        'fill-opacity': [
-          'interpolate', ['linear'], ['zoom'],
-          1, 0,
-          3, ['*', ['coalesce', ['get', 'fillOpacity'], 0.08], 0.12],
-          5, ['*', ['coalesce', ['get', 'fillOpacity'], 0.08], 0.336],
-          7, ['*', ['coalesce', ['get', 'fillOpacity'], 0.08], 0.54],
-          10, ['*', ['coalesce', ['get', 'fillOpacity'], 0.08], 0.936],
-          12, ['*', ['coalesce', ['get', 'fillOpacity'], 0.08], 1.14],
-          14, ['*', ['coalesce', ['get', 'fillOpacity'], 0.08], 1.32],
-        ],
-      },
-    });
-    map.addLayer({
-      id: OUTLINE_LAYER,
-      type: 'line',
-      source: SRC,
-      paint: {
-        'line-color': ['get', 'color'],
-        'line-width': [
-          'interpolate', ['linear'], ['zoom'],
-          2, ['*', ['coalesce', ['get', 'lineWidth'], 1], 0.6],
-          5, ['*', ['coalesce', ['get', 'lineWidth'], 1], 0.9],
-          8, ['coalesce', ['get', 'lineWidth'], 1],
-          10, ['*', ['coalesce', ['get', 'lineWidth'], 1], 1.2],
-          12, ['*', ['coalesce', ['get', 'lineWidth'], 1], 1.55],
-          14, ['*', ['coalesce', ['get', 'lineWidth'], 1], 1.8],
-        ],
-        'line-opacity': [
-          'interpolate', ['linear'], ['zoom'],
-          1, 0.04,
-          3, ['*', ['coalesce', ['get', 'lineOpacity'], 0.3], 0.192],
-          5, ['*', ['coalesce', ['get', 'lineOpacity'], 0.3], 0.408],
-          7, ['*', ['coalesce', ['get', 'lineOpacity'], 0.3], 0.624],
-          10, ['*', ['coalesce', ['get', 'lineOpacity'], 0.3], 0.912],
-          12, ['*', ['coalesce', ['get', 'lineOpacity'], 0.3], 1.08],
-          14, ['*', ['coalesce', ['get', 'lineOpacity'], 0.3], 1.224],
-        ],
-        'line-dasharray': [
-          'match',
-          ['get', 'dashA'],
-          2, ['literal', [2, 1.4]],
-          3, ['literal', [3, 2.2]],
-          4, ['literal', [4, 3]],
-          ['literal', [1, 0]],
-        ],
-      },
-    });
-    map.addLayer({
-      id: CENTER_GLOW_LAYER,
-      type: 'circle',
-      source: CENTER_SRC,
-      paint: {
-        'circle-color': ['get', 'color'],
-        'circle-radius': [
-          'interpolate', ['linear'], ['zoom'],
-          2, ['*', ['get', 'hotspotScale'], 7],
-          6, ['*', ['get', 'hotspotScale'], 12],
-          10, ['*', ['get', 'hotspotScale'], 22],
-          12, ['*', ['get', 'hotspotScale'], 25],
-          14, ['*', ['get', 'hotspotScale'], 29],
-        ],
-        'circle-opacity': [
-          'interpolate', ['linear'], ['zoom'],
-          1, 0,
-          5, ['*', ['coalesce', ['get', 'glowOpacity'], 0.08], 0.264],
-          9, ['*', ['coalesce', ['get', 'glowOpacity'], 0.08], 0.336],
-          12, ['*', ['coalesce', ['get', 'glowOpacity'], 0.08], 0.408],
-          14, ['*', ['coalesce', ['get', 'glowOpacity'], 0.08], 0.504],
-        ],
-        'circle-blur': 0.8,
-      },
-    });
-    map.addLayer({
-      id: CENTER_OUTER_RING_LAYER,
-      type: 'circle',
-      source: CENTER_SRC,
-      paint: {
-        'circle-color': 'rgba(0,0,0,0)',
-        'circle-radius': [
-          'interpolate', ['linear'], ['zoom'],
-          2, ['*', ['get', 'hotspotScale'], 7.5],
-          6, ['*', ['get', 'hotspotScale'], 11],
-          10, ['*', ['get', 'hotspotScale'], 19],
-          12, ['*', ['get', 'hotspotScale'], 21],
-          14, ['*', ['get', 'hotspotScale'], 23.5],
-        ],
-        'circle-stroke-color': ['get', 'color'],
-        'circle-stroke-width': [
-          'interpolate', ['linear'], ['zoom'],
-          2, 0.8,
-          8, 1.2,
-          10, 2,
-          12, 2.35,
-          14, 2.7,
-        ],
-        'circle-stroke-opacity': [
-          'interpolate', ['linear'], ['zoom'],
-          2, 0,
-          10, ['*', ['coalesce', ['get', 'outerRingOpacity'], 0.08], 0.264],
-          12, ['*', ['coalesce', ['get', 'outerRingOpacity'], 0.08], 0.336],
-          14, ['*', ['coalesce', ['get', 'outerRingOpacity'], 0.08], 0.408],
-        ],
-      },
-    });
-    map.addLayer({
-      id: CENTER_RING_LAYER,
-      type: 'circle',
-      source: CENTER_SRC,
-      paint: {
-        'circle-color': 'rgba(0,0,0,0)',
-        'circle-radius': [
-          'interpolate', ['linear'], ['zoom'],
-          2, ['*', ['get', 'hotspotScale'], 4.2],
-          6, ['*', ['get', 'hotspotScale'], 7.2],
-          10, ['*', ['get', 'hotspotScale'], 12.6],
-          12, ['*', ['get', 'hotspotScale'], 14.1],
-          14, ['*', ['get', 'hotspotScale'], 15.8],
-        ],
-        'circle-stroke-color': ['get', 'color'],
-        'circle-stroke-width': [
-          'interpolate', ['linear'], ['zoom'],
-          2, 0.9,
-          8, 1.7,
-          10, 2.8,
-          12, 3.2,
-          14, 3.6,
-        ],
-        'circle-stroke-opacity': [
-          'interpolate', ['linear'], ['zoom'],
-          2, 0,
-          10, ['*', ['coalesce', ['get', 'ringOpacity'], 0.4], 0.408],
-          12, ['*', ['coalesce', ['get', 'ringOpacity'], 0.4], 0.504],
-          14, ['*', ['coalesce', ['get', 'ringOpacity'], 0.4], 0.6],
-        ],
-      },
-    });
-    map.addLayer({
-      id: CENTER_CORE_LAYER,
-      type: 'circle',
-      source: CENTER_SRC,
-      paint: {
-        'circle-color': ['get', 'color'],
-        'circle-radius': [
-          'interpolate', ['linear'], ['zoom'],
-          2, ['*', ['get', 'hotspotScale'], 1.7],
-          6, ['*', ['get', 'hotspotScale'], 2.8],
-          10, ['*', ['get', 'hotspotScale'], 5.3],
-          12, ['*', ['get', 'hotspotScale'], 6],
-          14, ['*', ['get', 'hotspotScale'], 6.8],
-        ],
-        'circle-opacity': [
-          'interpolate', ['linear'], ['zoom'],
-          2, 0,
-          10, ['*', ['coalesce', ['get', 'coreOpacity'], 0.6], 0.408],
-          12, ['*', ['coalesce', ['get', 'coreOpacity'], 0.6], 0.504],
-          14, ['*', ['coalesce', ['get', 'coreOpacity'], 0.6], 0.6],
+          5, ['*', ['coalesce', ['get', 'accentOpacity'], 0.02], 0.34],
+          8, ['*', ['coalesce', ['get', 'accentOpacity'], 0.02], 0.76],
+          10, ['*', ['coalesce', ['get', 'accentOpacity'], 0.02], 1.08],
+          12, ['*', ['coalesce', ['get', 'accentOpacity'], 0.02], 1.18],
+          14, ['*', ['coalesce', ['get', 'accentOpacity'], 0.02], 1.24],
         ],
       },
     });
 
     return () => {
       try {
-        if (map.getLayer(CENTER_CORE_LAYER)) map.removeLayer(CENTER_CORE_LAYER);
-        if (map.getLayer(CENTER_RING_LAYER)) map.removeLayer(CENTER_RING_LAYER);
-        if (map.getLayer(CENTER_OUTER_RING_LAYER)) map.removeLayer(CENTER_OUTER_RING_LAYER);
-        if (map.getLayer(CENTER_GLOW_LAYER)) map.removeLayer(CENTER_GLOW_LAYER);
-        if (map.getLayer(OUTLINE_LAYER)) map.removeLayer(OUTLINE_LAYER);
-        if (map.getLayer(LAYER)) map.removeLayer(LAYER);
-        if (map.getLayer(FIELD_OUTLINE_LAYER)) map.removeLayer(FIELD_OUTLINE_LAYER);
-        if (map.getLayer(FIELD_CRITICAL_LAYER)) map.removeLayer(FIELD_CRITICAL_LAYER);
-        if (map.getLayer(FIELD_LAYER)) map.removeLayer(FIELD_LAYER);
-        if (map.getSource(CENTER_SRC)) map.removeSource(CENTER_SRC);
-        if (map.getSource(SRC)) map.removeSource(SRC);
-        if (map.getSource(SHARED_CRITICAL_SRC)) map.removeSource(SHARED_CRITICAL_SRC);
-        if (map.getSource(SHARED_SRC)) map.removeSource(SHARED_SRC);
+        if (map.getLayer(SHARD_ACCENT_LAYER)) map.removeLayer(SHARD_ACCENT_LAYER);
+        if (map.getLayer(SHARD_LAYER)) map.removeLayer(SHARD_LAYER);
+        if (map.getSource(SHARD_SRC)) map.removeSource(SHARD_SRC);
       } catch { /* disposed */ }
     };
   }, [styleEpoch]);
@@ -895,15 +1074,14 @@ export function useGeoZoneLayer(
   useEffect(() => {
     if (!map || !isReady) return;
     if (!canAccessMapStyle(map)) return;
-    const sharedSrc = map.getSource(SHARED_SRC) as maplibregl.GeoJSONSource | undefined;
-    const sharedCriticalSrc = map.getSource(SHARED_CRITICAL_SRC) as maplibregl.GeoJSONSource | undefined;
-    const src = map.getSource(SRC) as maplibregl.GeoJSONSource | undefined;
-    const centerSrc = map.getSource(CENTER_SRC) as maplibregl.GeoJSONSource | undefined;
-    if (!sharedSrc || !sharedCriticalSrc || !src || !centerSrc) return;
-    const shared = buildSharedFieldCollections(objects, theme);
-    sharedSrc.setData(shared.ambient);
-    sharedCriticalSrc.setData(shared.critical);
-    src.setData(buildZoneCollection(objects, theme));
-    centerSrc.setData(buildZoneCenterCollection(objects, theme));
+    const shardSrc = map.getSource(SHARD_SRC) as maplibregl.GeoJSONSource | undefined;
+    if (!shardSrc) return;
+    shardSrc.setData({
+      type: 'FeatureCollection',
+      features: [
+        ...buildSharedShardCollection(objects, theme).features,
+        ...buildZoneShardCollection(objects, theme).features,
+      ],
+    });
   }, [objects, theme]);
 }

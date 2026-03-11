@@ -67,6 +67,9 @@ type Lens struct {
 type ScopeArtifactRef struct {
 	Kind               string   `json:"kind" firestore:"kind"`
 	DisplayName        string   `json:"displayName,omitempty" firestore:"displayName,omitempty"`
+	AnchorSupplier     string   `json:"anchorSupplier,omitempty" firestore:"anchorSupplier,omitempty"`
+	AnchorCustomer     string   `json:"anchorCustomer,omitempty" firestore:"anchorCustomer,omitempty"`
+	ProductAxis        string   `json:"productAxis,omitempty" firestore:"productAxis,omitempty"`
 	NodeRefs           []string `json:"nodeRefs,omitempty" firestore:"nodeRefs,omitempty"`
 	Status             string   `json:"status,omitempty" firestore:"status,omitempty"`
 	GeoRefs            []string `json:"geoRefs,omitempty" firestore:"geoRefs,omitempty"`
