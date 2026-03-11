@@ -13,6 +13,7 @@ import (
 	appcache "github.com/igorkirisyuk/sanskrite/internal/cache"
 	horizonlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	redis "github.com/redis/go-redis/v9"
 )
@@ -989,6 +990,175 @@ func annotateSupplyChainTraceArtifact(artifact *horizonmodels.MaterializedArtifa
 
 	artifact.TracePriority = scoreSupplyChainTracePriority(artifact)
 	artifact.TraceReason = buildSupplyChainTraceReason(artifact, centerCanonicalPath)
+}
+
+func hydrateSupplyChainTraceEndpoints(
+	artifact *horizonmodels.MaterializedArtifact,
+	centerCanonicalPath string,
+	resolved map[string]*horizonmodels.HorizonFragment,
+) {
+	if artifact == nil {
+		return
+	}
+	artifact.TraceEndpoints = nil
+	parsed, err := horizonmodels.ParseSupplyChainPathPayload(artifact.Payload)
+	if err != nil || parsed == nil {
+		return
+	}
+	resolve := func(ref string) *horizonmodels.SupplyChainTraceEndpoint {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			return nil
+		}
+		endpoint := &horizonmodels.SupplyChainTraceEndpoint{CanonicalPath: ref}
+		if fragment := resolved[ref]; fragment != nil {
+			endpoint.Label = fragmentTraceFragmentLabel(fragment)
+			endpoint.Type = string(fragment.Type)
+			endpoint.Coordinates = fragment.Coordinates
+			endpoint.Resolved = endpoint.Label != ""
+		}
+		if !endpoint.Resolved {
+			if label := naming.BestEffortLabelFromCanonicalPath(ref); label != "" {
+				endpoint.Label = label
+			}
+		}
+		return endpoint
+	}
+
+	supplierRef := strings.TrimSpace(artifact.AnchorSupplier)
+	customerRef := strings.TrimSpace(artifact.AnchorCustomer)
+	if supplierRef == "" && len(parsed.Legs) > 0 {
+		supplierRef = strings.TrimSpace(parsed.Legs[0].SupplierRef)
+	}
+	if customerRef == "" && len(parsed.Legs) > 0 {
+		customerRef = strings.TrimSpace(parsed.Legs[len(parsed.Legs)-1].CustomerRef)
+	}
+
+	upstreamRef := ""
+	downstreamRef := ""
+	centerCanonicalPath = strings.TrimSpace(centerCanonicalPath)
+	if centerCanonicalPath != "" {
+		for _, leg := range parsed.Legs {
+			if strings.TrimSpace(leg.CustomerRef) == centerCanonicalPath {
+				candidate := strings.TrimSpace(leg.SupplierRef)
+				if candidate != "" && candidate != centerCanonicalPath {
+					upstreamRef = candidate
+					break
+				}
+			}
+		}
+		for _, leg := range parsed.Legs {
+			if strings.TrimSpace(leg.SupplierRef) == centerCanonicalPath {
+				candidate := strings.TrimSpace(leg.CustomerRef)
+				if candidate != "" && candidate != centerCanonicalPath {
+					downstreamRef = candidate
+					break
+				}
+			}
+		}
+		if upstreamRef == "" && supplierRef != "" && supplierRef != centerCanonicalPath {
+			upstreamRef = supplierRef
+		}
+		if downstreamRef == "" && customerRef != "" && customerRef != centerCanonicalPath {
+			downstreamRef = customerRef
+		}
+	}
+
+	artifact.TraceEndpoints = &horizonmodels.SupplyChainTraceContext{
+		Supplier:   resolve(supplierRef),
+		Customer:   resolve(customerRef),
+		Upstream:   resolve(upstreamRef),
+		Downstream: resolve(downstreamRef),
+	}
+}
+
+func supplyChainTraceEndpointRefs(artifact *horizonmodels.MaterializedArtifact) []string {
+	if artifact == nil {
+		return nil
+	}
+	refs := []string{}
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			refs = append(refs, value)
+		}
+	}
+	add(artifact.AnchorSupplier)
+	add(artifact.AnchorCustomer)
+	parsed, err := horizonmodels.ParseSupplyChainPathPayload(artifact.Payload)
+	if err != nil || parsed == nil {
+		return refs
+	}
+	for _, leg := range parsed.Legs {
+		add(leg.SupplierRef)
+		add(leg.CustomerRef)
+	}
+	return refs
+}
+
+func loadSupplyChainTraceFragments(
+	ctx context.Context,
+	fragmentsRepo interface {
+		ListByCanonicalPaths(context.Context, []string) ([]*horizonmodels.HorizonFragment, error)
+	},
+	artifacts []*horizonmodels.MaterializedArtifact,
+) map[string]*horizonmodels.HorizonFragment {
+	if fragmentsRepo == nil || len(artifacts) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	refs := make([]string, 0, len(artifacts)*4)
+	for _, artifact := range artifacts {
+		for _, ref := range supplyChainTraceEndpointRefs(artifact) {
+			if _, ok := seen[ref]; ok {
+				continue
+			}
+			seen[ref] = struct{}{}
+			refs = append(refs, ref)
+		}
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	fragments, err := fragmentsRepo.ListByCanonicalPaths(ctx, refs)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]*horizonmodels.HorizonFragment, len(fragments))
+	for _, fragment := range fragments {
+		if fragment == nil {
+			continue
+		}
+		cp := strings.TrimSpace(fragment.CanonicalPath)
+		if cp == "" {
+			continue
+		}
+		out[cp] = fragment
+	}
+	return out
+}
+
+func fragmentTraceFragmentLabel(fragment *horizonmodels.HorizonFragment) string {
+	if fragment == nil {
+		return ""
+	}
+	if name := strings.TrimSpace(fragment.Labels["en"]); name != "" {
+		return name
+	}
+	if fragment.Identifiers != nil {
+		if name := strings.TrimSpace(fragment.Identifiers["legalName"]); name != "" {
+			return name
+		}
+		if name := strings.TrimSpace(fragment.Identifiers["shortName"]); name != "" {
+			return name
+		}
+	}
+	for _, value := range fragment.Labels {
+		if name := strings.TrimSpace(value); name != "" {
+			return name
+		}
+	}
+	return naming.BestEffortLabelFromCanonicalPath(strings.TrimSpace(fragment.CanonicalPath))
 }
 
 func classifySupplyChainTraceRole(artifact *horizonmodels.MaterializedArtifact, centerCanonicalPath string) string {

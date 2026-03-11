@@ -12,6 +12,8 @@ interface MapObjectDetailProps {
   edgesCount: number;
   visibleEdgesCount: number;
   traceSummary: GeoEdgeTraceSummary | null;
+  activeNarrativeKey: string | null;
+  onNarrativeHover: (key: string | null) => void;
   onClose: () => void;
 }
 
@@ -86,6 +88,22 @@ function sectionCardStyle(isDark: boolean): React.CSSProperties {
   };
 }
 
+function narrativeBlockStyle(isDark: boolean, isActive: boolean, accent: string): React.CSSProperties {
+  return {
+    padding: '8px 9px',
+    borderRadius: 10,
+    background: isActive
+      ? (isDark ? 'rgba(15, 23, 42, 0.48)' : 'rgba(255, 255, 255, 0.94)')
+      : (isDark ? 'rgba(148, 163, 184, 0.05)' : 'rgba(15, 23, 42, 0.025)'),
+    border: isActive
+      ? `1px solid ${accent}`
+      : (isDark ? '1px solid rgba(148, 163, 184, 0.1)' : '1px solid rgba(15, 23, 42, 0.06)'),
+    boxShadow: isActive ? `0 0 0 1px ${accent}20 inset` : 'none',
+    transition: 'background 140ms ease, border-color 140ms ease, box-shadow 140ms ease',
+    cursor: 'pointer',
+  };
+}
+
 export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
   object,
   isDark,
@@ -94,6 +112,8 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
   edgesCount,
   visibleEdgesCount,
   traceSummary,
+  activeNarrativeKey,
+  onNarrativeHover,
   onClose,
 }) => {
   const [viewport, setViewport] = React.useState(() => ({
@@ -289,22 +309,29 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
               </div>
               <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {traceSummary?.directRelations.length ? traceSummary.directRelations.map((relation) => (
-                  <div key={relation.edgeId || `${relation.relatedFragmentId}:${relation.type}`} style={{ display: 'flex', gap: 10 }}>
-                    <div style={{ width: 8, flexShrink: 0, borderRadius: 999, background: familyAccent(relation.family, isDark) }} />
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: 11, fontWeight: 700 }}>
-                        {relation.relatedLabel}
-                      </div>
-                      <div style={{ marginTop: 1, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                        {humanizeToken(relation.type)}
-                        {relation.relatedType ? ` · ${humanizeToken(relation.relatedType)}` : ''}
-                      </div>
-                      {(relation.businessMeaning || relation.whyRelevant) && (
-                        <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
-                          {relation.businessMeaning ? `${relation.businessMeaning}. ` : ''}
-                          {relation.whyRelevant || ''}
+                  <div
+                    key={relation.edgeId || `${relation.relatedFragmentId}:${relation.type}`}
+                    onMouseEnter={() => onNarrativeHover(relation.narrativeKey)}
+                    onMouseLeave={() => onNarrativeHover(null)}
+                    style={narrativeBlockStyle(isDark, activeNarrativeKey === relation.narrativeKey, familyAccent(relation.family, isDark))}
+                  >
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <div style={{ width: 8, flexShrink: 0, borderRadius: 999, background: familyAccent(relation.family, isDark) }} />
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700 }}>
+                          {relation.relatedLabel}
                         </div>
-                      )}
+                        <div style={{ marginTop: 1, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                          {humanizeToken(relation.type)}
+                          {relation.relatedType ? ` · ${humanizeToken(relation.relatedType)}` : ''}
+                        </div>
+                        {(relation.businessMeaning || relation.whyRelevant) && (
+                          <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                            {relation.businessMeaning ? `${relation.businessMeaning}. ` : ''}
+                            {relation.whyRelevant || ''}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )) : (
@@ -321,22 +348,29 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
               </div>
               <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {traceSummary?.contextRelations.length ? traceSummary.contextRelations.map((relation) => (
-                  <div key={relation.edgeId || `${relation.relatedFragmentId}:${relation.type}`} style={{ display: 'flex', gap: 10 }}>
-                    <div style={{ width: 8, flexShrink: 0, borderRadius: 999, background: familyAccent(relation.family, isDark) }} />
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: 11, fontWeight: 700 }}>
-                        {relation.relatedLabel}
-                      </div>
-                      <div style={{ marginTop: 1, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                        {humanizeToken(relation.type)}
-                        {relation.semanticDirection ? ` · ${humanizeToken(relation.semanticDirection)}` : ''}
-                      </div>
-                      {(relation.businessMeaning || relation.whyRelevant) && (
-                        <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
-                          {relation.businessMeaning ? `${relation.businessMeaning}. ` : ''}
-                          {relation.whyRelevant || ''}
+                  <div
+                    key={relation.edgeId || `${relation.relatedFragmentId}:${relation.type}`}
+                    onMouseEnter={() => onNarrativeHover(relation.narrativeKey)}
+                    onMouseLeave={() => onNarrativeHover(null)}
+                    style={narrativeBlockStyle(isDark, activeNarrativeKey === relation.narrativeKey, familyAccent(relation.family, isDark))}
+                  >
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <div style={{ width: 8, flexShrink: 0, borderRadius: 999, background: familyAccent(relation.family, isDark) }} />
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700 }}>
+                          {relation.relatedLabel}
                         </div>
-                      )}
+                        <div style={{ marginTop: 1, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                          {humanizeToken(relation.type)}
+                          {relation.semanticDirection ? ` · ${humanizeToken(relation.semanticDirection)}` : ''}
+                        </div>
+                        {(relation.businessMeaning || relation.whyRelevant) && (
+                          <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                            {relation.businessMeaning ? `${relation.businessMeaning}. ` : ''}
+                            {relation.whyRelevant || ''}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )) : (
@@ -352,34 +386,61 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
                 Supply Chain Paths
               </div>
               <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {traceSummary?.supplyPaths.length ? traceSummary.supplyPaths.map((path) => (
-                  <div key={path.id} style={{ padding: '8px 9px', borderRadius: 10, background: isDark ? 'rgba(245, 158, 11, 0.1)' : 'rgba(245, 158, 11, 0.08)', border: isDark ? '1px solid rgba(245, 158, 11, 0.18)' : '1px solid rgba(180, 83, 9, 0.14)' }}>
-                    <div style={{ fontSize: 11, fontWeight: 700 }}>
-                      {path.title}
-                    </div>
-                    <div style={{ marginTop: 2, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                      {compactRole(path.role)}
-                      {path.productLabel ? ` · ${path.productLabel}` : ''}
-                      {path.legCount > 0 ? ` · ${path.legCount} leg${path.legCount > 1 ? 's' : ''}` : ''}
-                    </div>
-                    <div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
-                      {path.reason}
-                    </div>
-                    <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                      {path.isPinned && (
-                        <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(14,165,233,0.16)' : 'rgba(14,165,233,0.1)' }}>
-                          Pinned
+                {traceSummary?.supplyGroups.length ? traceSummary.supplyGroups.map((group) => (
+                  <div
+                    key={group.id}
+                    onMouseEnter={() => onNarrativeHover(group.narrativeKey)}
+                    onMouseLeave={() => onNarrativeHover(null)}
+                    style={narrativeBlockStyle(isDark, activeNarrativeKey === group.narrativeKey, isDark ? '#fbbf24' : '#b45309')}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 750, color: isDark ? '#fde68a' : '#92400e' }}>
+                          {group.productLabel}
+                        </div>
+                        <div style={{ marginTop: 2, fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: isDark ? 'rgba(253, 230, 138, 0.82)' : 'rgba(146, 64, 14, 0.76)' }}>
+                          {group.direction === 'inbound' ? 'Consumed here' : group.direction === 'outbound' ? 'Produced here' : 'Context route'}
+                        </div>
+                        <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                          {group.summary}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, justifyContent: 'flex-end' }}>
+                        <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(245, 158, 11, 0.14)' : 'rgba(245, 158, 11, 0.1)' }}>
+                          {group.routeCount} route{group.routeCount > 1 ? 's' : ''}
                         </span>
-                      )}
-                      {path.stressScore >= 0.58 && (
-                        <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(248,113,113,0.16)' : 'rgba(239,68,68,0.1)' }}>
-                          Stress {Math.round(path.stressScore * 100)}
-                        </span>
-                      )}
-                      {path.hasBottleneck && (
-                        <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(251,146,60,0.16)' : 'rgba(249,115,22,0.1)' }}>
-                          Bottleneck
-                        </span>
+                        {group.stressedRouteCount > 0 && (
+                          <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(248,113,113,0.16)' : 'rgba(239,68,68,0.1)' }}>
+                            {group.stressedRouteCount} stressed
+                          </span>
+                        )}
+                        {group.hasBottleneck && (
+                          <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(251,146,60,0.16)' : 'rgba(249,115,22,0.1)' }}>
+                            Bottleneck
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {group.paths.slice(0, 4).map((path) => (
+                        <div key={path.id} style={{ paddingLeft: 10, borderLeft: isDark ? '2px solid rgba(245, 158, 11, 0.4)' : '2px solid rgba(180, 83, 9, 0.28)' }}>
+                          <div style={{ fontSize: 11, fontWeight: 700 }}>
+                            {path.title}
+                          </div>
+                          <div style={{ marginTop: 1, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                            {path.direction === 'inbound' ? 'Input route' : path.direction === 'outbound' ? 'Output route' : compactRole(path.role)}
+                            {path.legCount > 0 ? ` · ${path.legCount} leg${path.legCount > 1 ? 's' : ''}` : ''}
+                            {path.stressScore >= 0.58 ? ` · Stress ${Math.round(path.stressScore * 100)}` : ''}
+                          </div>
+                          <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                            {path.reason}
+                          </div>
+                        </div>
+                      ))}
+                      {group.paths.length > 4 && (
+                        <div style={{ fontSize: 10, color: 'var(--text-secondary-strong)' }}>
+                          +{group.paths.length - 4} more mapped destination{group.paths.length - 4 > 1 ? 's' : ''}
+                        </div>
                       )}
                     </div>
                   </div>
@@ -396,8 +457,18 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
                 <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
                   Propagation
                 </div>
-                <div style={{ marginTop: 6, fontSize: 11, lineHeight: 1.5, color: 'var(--text-secondary-strong)' }}>
-                  Signal propagation is shown separately in gray across {traceSummary?.propagationEdgeCount || 0} link(s) touching {traceSummary?.propagationNodeCount || 0} node(s).
+                <div
+                  onMouseEnter={() => onNarrativeHover('propagation:overview')}
+                  onMouseLeave={() => onNarrativeHover(null)}
+                  style={{
+                    ...narrativeBlockStyle(isDark, activeNarrativeKey === 'propagation:overview', isDark ? '#94a3b8' : '#64748b'),
+                    marginTop: 6,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <div style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--text-secondary-strong)' }}>
+                    Signal propagation is shown separately in gray across {traceSummary?.propagationEdgeCount || 0} link(s) touching {traceSummary?.propagationNodeCount || 0} node(s).
+                  </div>
                 </div>
               </div>
             )}

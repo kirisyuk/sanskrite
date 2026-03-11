@@ -61,6 +61,57 @@ func TestAnnotateSupplyChainTraceArtifact_DirectAnchorAndStress(t *testing.T) {
 	}
 }
 
+func TestHydrateSupplyChainTraceEndpoints_ResolvesCounterpartNames(t *testing.T) {
+	artifact := &horizonmodels.MaterializedArtifact{
+		ID:             "chain-2",
+		TenantID:       "global",
+		Kind:           horizonmodels.MaterializedKindSupplyChainPath,
+		AnchorSupplier: "/fac/de/ludwigshafen-pharma-ingredients",
+		AnchorCustomer: "/org/de/basf-pharma-distribution",
+		Payload: horizonmodels.BuildSupplyChainPathPayload(
+			[]horizonmodels.SupplyChainPathNode{
+				{Type: "fac", Ref: "/fac/de/ludwigshafen-pharma-ingredients"},
+				{Type: "product", Ref: "/product/excipients"},
+				{Type: "org", Ref: "/org/de/basf-pharma-distribution"},
+			},
+			nil,
+			[]horizonmodels.SupplyChainPathLeg{
+				{
+					Index:       0,
+					SupplierRef: "/fac/de/ludwigshafen-pharma-ingredients",
+					CustomerRef: "/org/de/basf-pharma-distribution",
+					ProductRef:  "/product/excipients",
+				},
+			},
+			nil,
+			nil,
+		),
+	}
+
+	hydrateSupplyChainTraceEndpoints(artifact, "/fac/de/ludwigshafen-pharma-ingredients", map[string]*horizonmodels.HorizonFragment{
+		"/fac/de/ludwigshafen-pharma-ingredients": {
+			CanonicalPath: "/fac/de/ludwigshafen-pharma-ingredients",
+			Type:          horizonmodels.FragmentTypeFacility,
+			Labels:        map[string]string{"en": "Ludwigshafen Pharma Ingredients"},
+		},
+		"/org/de/basf-pharma-distribution": {
+			CanonicalPath: "/org/de/basf-pharma-distribution",
+			Type:          horizonmodels.FragmentTypeOrganization,
+			Labels:        map[string]string{"en": "BASF Pharma Distribution"},
+		},
+	})
+
+	if artifact.TraceEndpoints == nil {
+		t.Fatal("TraceEndpoints nil")
+	}
+	if artifact.TraceEndpoints.Downstream == nil || artifact.TraceEndpoints.Downstream.Label != "BASF Pharma Distribution" {
+		t.Fatalf("Downstream = %#v, want BASF Pharma Distribution", artifact.TraceEndpoints.Downstream)
+	}
+	if artifact.TraceEndpoints.Supplier == nil || artifact.TraceEndpoints.Supplier.Label != "Ludwigshafen Pharma Ingredients" {
+		t.Fatalf("Supplier = %#v, want Ludwigshafen Pharma Ingredients", artifact.TraceEndpoints.Supplier)
+	}
+}
+
 func TestBuildFragmentTraceSupplyChainStats_BucketsRoles(t *testing.T) {
 	chains := []*horizonmodels.MaterializedArtifact{
 		{IsPinned: true, TraceRole: "direct_anchor", PathStressScore: 0.6, BottleneckLeg: 0, BindingScore: 0.8},

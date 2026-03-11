@@ -31,6 +31,36 @@ export interface MaterializedArtifact {
   bindingScore?: number;
   pathStressScore?: number;
   bottleneckLegIndex?: number;
+  traceEndpoints?: {
+    supplier?: {
+      canonicalPath?: string;
+      label?: string;
+      type?: string;
+      coordinates?: { lat: number; lon: number };
+      resolved?: boolean;
+    };
+    customer?: {
+      canonicalPath?: string;
+      label?: string;
+      type?: string;
+      coordinates?: { lat: number; lon: number };
+      resolved?: boolean;
+    };
+    upstream?: {
+      canonicalPath?: string;
+      label?: string;
+      type?: string;
+      coordinates?: { lat: number; lon: number };
+      resolved?: boolean;
+    };
+    downstream?: {
+      canonicalPath?: string;
+      label?: string;
+      type?: string;
+      coordinates?: { lat: number; lon: number };
+      resolved?: boolean;
+    };
+  };
   payload?: {
     v?: number;
     nodes?: Array<{ type: string; ref: string }>;

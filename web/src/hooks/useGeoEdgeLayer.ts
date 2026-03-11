@@ -52,6 +52,7 @@ export interface GeoEdgeTraceSummary {
   summary: string;
   whyItMatters: Array<{ title: string; body: string }>;
   directRelations: Array<{
+    narrativeKey: string;
     edgeId?: string;
     relatedFragmentId: string;
     relatedLabel: string;
@@ -64,6 +65,7 @@ export interface GeoEdgeTraceSummary {
     whyRelevant?: string;
   }>;
   contextRelations: Array<{
+    narrativeKey: string;
     edgeId?: string;
     relatedFragmentId: string;
     relatedLabel: string;
@@ -75,17 +77,32 @@ export interface GeoEdgeTraceSummary {
     businessMeaning?: string;
     whyRelevant?: string;
   }>;
-  supplyPaths: Array<{
+  supplyGroups: Array<{
     id: string;
-    title: string;
-    role: string;
-    reason: string;
+    narrativeKey: string;
+    direction: 'inbound' | 'outbound' | 'context';
     productRef?: string;
-    productLabel?: string;
-    stressScore: number;
-    legCount: number;
-    isPinned: boolean;
+    productLabel: string;
+    summary: string;
+    routeCount: number;
+    stressedRouteCount: number;
+    pinnedRouteCount: number;
+    maxStressScore: number;
     hasBottleneck: boolean;
+    paths: Array<{
+      id: string;
+      narrativeKey: string;
+      title: string;
+      counterpartLabel: string;
+      direction: 'inbound' | 'outbound' | 'context';
+      destinationLabel: string;
+      role: string;
+      reason: string;
+      stressScore: number;
+      legCount: number;
+      isPinned: boolean;
+      hasBottleneck: boolean;
+    }>;
   }>;
   propagationNodeCount: number;
   propagationEdgeCount: number;
@@ -945,32 +962,143 @@ function compactLabel(value: string, maxLength = 30): string {
   return `${text.slice(0, maxLength - 3).trim()}...`;
 }
 
+function normalizeLabelForCompare(value: string): string {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function unresolvedSupplyCounterpartLabel(direction: 'inbound' | 'outbound' | 'context', focusLabel: string): string {
+  if (direction === 'inbound') return 'Unresolved upstream source';
+  if (direction === 'outbound') return 'Unresolved downstream endpoint';
+  return `Internal processing at ${focusLabel}`;
+}
+
+function isSupplyPlaceholderLabel(value: string): boolean {
+  const normalized = normalizeLabelForCompare(value);
+  return normalized === 'unresolved upstream source' || normalized === 'unresolved downstream endpoint';
+}
+
+function pickDistinctSupplyLabel(
+  refs: string[],
+  objectByPath: Map<string, TraceObjectInfo>,
+  focusPath?: string,
+  focusLabel?: string,
+): string {
+  const normalizedFocusLabel = normalizeLabelForCompare(String(focusLabel || '').trim());
+  const trimmedFocusPath = String(focusPath || '').trim();
+  for (const ref of refs) {
+    const trimmedRef = String(ref || '').trim();
+    if (!trimmedRef) continue;
+    if (trimmedFocusPath && trimmedRef === trimmedFocusPath) continue;
+    const label = labelFromPathRef(trimmedRef);
+    if (!label) continue;
+    if (normalizedFocusLabel && normalizeLabelForCompare(label) === normalizedFocusLabel) continue;
+    const fromObject = objectByPath.get(trimmedRef);
+    if (fromObject?.label && normalizedFocusLabel && normalizeLabelForCompare(fromObject.label) === normalizedFocusLabel) continue;
+    return label;
+  }
+  return '';
+}
+
+function traceEndpointLabel(
+  artifact: MaterializedArtifact,
+  endpoint: 'supplier' | 'customer' | 'upstream' | 'downstream',
+  focusLabel?: string,
+): string {
+  const candidate = artifact.traceEndpoints?.[endpoint];
+  const label = String(candidate?.label || '').trim();
+  if (!label) return '';
+  if (focusLabel && normalizeLabelForCompare(label) === normalizeLabelForCompare(focusLabel)) return '';
+  return label;
+}
+
+function describeSupplyReason(
+  role: string,
+  direction: 'inbound' | 'outbound' | 'context',
+  productLabel?: string,
+  unresolvedCounterpart = false,
+): string {
+  const normalized = String(role || '').trim().toLowerCase();
+  const label = String(productLabel || '').trim();
+  const productText = label ? ` ${label}` : '';
+  if (unresolvedCounterpart) {
+    if (direction === 'inbound') return `Mapped as an inbound${productText} route feeding the selected object, but the upstream source is not resolved on the map yet.`;
+    if (direction === 'outbound') return `Mapped as an outbound${productText} route leaving the selected object, but the downstream endpoint is not resolved on the map yet.`;
+  }
+  if (normalized === 'direct_anchor') {
+    if (direction === 'inbound') return `Mapped as an inbound${productText} route feeding the selected object.`;
+    if (direction === 'outbound') return `Mapped as an outbound${productText} route leaving the selected object.`;
+    return label
+      ? `Mapped as an internal or surrounding ${label} route anchored on the selected object.`
+      : 'Mapped as an internal or surrounding route anchored on the selected object.';
+  }
+  if (normalized === 'route_overlap') {
+    return label
+      ? `Shown because this ${label} route shares facilities, operators, or market anchors with the selected object.`
+      : 'Shown because this route shares facilities, operators, or market anchors with the selected object.';
+  }
+  if (normalized === 'route_context') {
+    return label
+      ? `Shown as surrounding context for the selected object's ${label} network.`
+      : 'Shown as surrounding context for the selected object.';
+  }
+  if (normalized === 'pinned') {
+    return 'Pinned visible around the selected object for comparison.';
+  }
+  if (direction === 'inbound') return 'Mapped as an upstream route feeding the selected object.';
+  if (direction === 'outbound') return 'Mapped as a downstream route leaving the selected object.';
+  return 'Mapped as surrounding supply context for the selected object.';
+}
+
 function buildSupplyLabelText(
+  artifact: MaterializedArtifact,
   productRef: string,
   supplierRef: string,
   customerRef: string,
   transportViaRefs: string[],
   objectByPath: Map<string, TraceObjectInfo>,
+  focusObject?: Pick<GeoObject, 'label' | 'canonicalPath'> | null,
 ): string {
   const productLabel = compactLabel(displayNameByPath(productRef, objectByPath), 28);
-  if (transportViaRefs.length > 0) {
-    const viaLabel = compactLabel(displayNameByPath(transportViaRefs[0], objectByPath), 24);
-    return viaLabel ? `${productLabel}\nvia ${viaLabel}` : productLabel;
+  const focusPath = String(focusObject?.canonicalPath || '').trim();
+  const focusLabel = String(focusObject?.label || '').trim();
+  const direction = classifySupplyDirection(focusPath, supplierRef, customerRef);
+  const resolvedUpstream = traceEndpointLabel(artifact, 'upstream', focusLabel) || traceEndpointLabel(artifact, 'supplier', focusLabel);
+  const resolvedDownstream = traceEndpointLabel(artifact, 'downstream', focusLabel) || traceEndpointLabel(artifact, 'customer', focusLabel);
+  const inboundLabel = pickDistinctSupplyLabel([supplierRef, ...transportViaRefs], objectByPath, focusPath, focusLabel);
+  const outboundLabel = pickDistinctSupplyLabel([...transportViaRefs].reverse().concat(customerRef), objectByPath, focusPath, focusLabel);
+  if (direction === 'inbound' && (resolvedUpstream || inboundLabel)) return `${productLabel}\nfrom ${compactLabel(resolvedUpstream || inboundLabel, 18)}`;
+  if (direction === 'outbound' && (resolvedDownstream || outboundLabel)) return `${productLabel}\nto ${compactLabel(resolvedDownstream || outboundLabel, 18)}`;
+  if (direction === 'context') {
+    const resolvedContext = resolvedDownstream || resolvedUpstream;
+    const contextLabel = pickDistinctSupplyLabel(
+      [supplierRef, ...transportViaRefs, customerRef],
+      objectByPath,
+      focusPath,
+      focusLabel,
+    );
+    return resolvedContext || contextLabel ? `${productLabel}\nvia ${compactLabel(resolvedContext || contextLabel, 18)}` : `${productLabel}\ninternal processing`;
   }
-  const supplierLabel = compactLabel(displayNameByPath(supplierRef, objectByPath), 16);
-  const customerLabel = compactLabel(displayNameByPath(customerRef, objectByPath), 16);
-  if (!supplierLabel || !customerLabel) return productLabel;
-  return `${productLabel}\n${supplierLabel} -> ${customerLabel}`;
+  if (transportViaRefs.length > 0) {
+    const viaLabel = pickDistinctSupplyLabel(transportViaRefs, objectByPath, focusPath, focusLabel);
+    return viaLabel ? `${productLabel}\nvia ${compactLabel(viaLabel, 18)}` : productLabel;
+  }
+  return productLabel;
 }
 
 function buildSupplyBundleLabelText(
   routesCount: number,
-  sampleRoute: { productRef: string; supplierRef: string; customerRef: string },
+  sampleRoute: { productRef: string; direction: 'inbound' | 'outbound' | 'context' },
   objectByPath: Map<string, TraceObjectInfo>,
 ): string {
   const productLabel = compactLabel(displayNameByPath(sampleRoute.productRef, objectByPath), 24);
   if (routesCount <= 1) return productLabel;
-  return `${productLabel}\nshared corridor x${routesCount}`;
+  const directionLabel =
+    sampleRoute.direction === 'inbound'
+      ? 'inbound routes'
+      : sampleRoute.direction === 'outbound'
+        ? 'outbound routes'
+        : 'context routes';
+  return `${productLabel}\n${directionLabel} x${routesCount}`;
 }
 
 type RadialBundleRoute = {
@@ -2028,6 +2156,8 @@ function buildSupplyPathFeatures(
     artifactId: string;
     legIndex: number;
     productRef: string;
+    narrativeKey: string;
+    direction: 'inbound' | 'outbound' | 'context';
     supplierRef: string;
     customerRef: string;
     transportViaRefs: string[];
@@ -2083,10 +2213,13 @@ function buildSupplyPathFeatures(
         + (multiLegPath ? 22 : 0)
         + ((artifact.traceRole === 'route_overlap' || artifact.traceRole === 'route_context') ? 12 : 0)
         + (artifact.isPinned ? 6 : 0);
+      const direction = classifySupplyDirection(String(focusObject?.canonicalPath || '').trim(), supplierRef, customerRef);
       const candidate: CandidateRoute = {
         artifactId: String(artifact.id || '').trim(),
         legIndex: typeof leg?.index === 'number' ? leg.index : 0,
         productRef,
+        narrativeKey: supplyNarrativeKey(direction, productRef, artifact.id),
+        direction,
         supplierRef,
         customerRef,
         transportViaRefs,
@@ -2097,7 +2230,7 @@ function buildSupplyPathFeatures(
         ),
         directDistanceKm,
         score,
-        labelText: buildSupplyLabelText(productRef, supplierRef, customerRef, transportViaRefs, objectByPath),
+        labelText: buildSupplyLabelText(artifact, productRef, supplierRef, customerRef, transportViaRefs, objectByPath, focusObject),
       };
       const existing = byRouteKey.get(routeKey);
       if (!existing || candidate.score > existing.score) {
@@ -2146,6 +2279,7 @@ function buildSupplyPathFeatures(
         corridorId: corridorId || `supply-route:${lineId}`,
         featureRole,
         endpointPathRefs: [route.supplierRef, route.customerRef],
+        narrativeKey: route.narrativeKey,
         renderPriority: kind === 'primary' ? 28 : kind === 'indirect' ? 24 : 20,
         baseOpacity: clamp(baseOpacity + opacityBoost, 0.28, 0.96),
         baseWidth: clamp(baseWidth * widthMultiplier, 1.2, 6.6),
@@ -2158,8 +2292,10 @@ function buildSupplyPathFeatures(
       geometry: { type: 'Point', coordinates: linePointAt(coordinates, labelRatio) },
       properties: {
         kind: 'label',
+        channel: 'supply_path',
         corridorId: corridorId || `supply-route:${lineId}`,
         featureRole,
+        narrativeKey: route.narrativeKey,
         labelText,
         labelColor: color,
       },
@@ -2223,7 +2359,7 @@ function buildSupplyPathFeatures(
     const distanceBucket = Math.round(route.directDistanceKm / 1200);
     const remoteCell = geoCellKey(route.remotePoint);
     const localCell = geoCellKey(route.localPoint);
-    const key = `${azimuthBucket}:${distanceBucket}:${remoteCell}:${localCell}`;
+    const key = `${route.narrativeKey}:${azimuthBucket}:${distanceBucket}:${remoteCell}:${localCell}`;
     if (!bundleGroups.has(key)) bundleGroups.set(key, []);
     bundleGroups.get(key)!.push(route);
   }
@@ -2269,6 +2405,7 @@ function buildSupplyPathFeatures(
         channel: 'supply_path',
         corridorId: trunkId,
         featureRole: 'overview',
+        narrativeKey: group[0]?.narrativeKey || trunkId,
         renderPriority: strongestKind === 'primary' ? 30 : strongestKind === 'indirect' ? 26 : 22,
         baseOpacity: clamp((theme === 'dark' ? 0.74 : 0.66) + Math.min(0.18, group.length * 0.03), 0.42, 0.94),
         baseWidth: clamp((strongestKind === 'primary' ? 3.2 : strongestKind === 'indirect' ? 2.8 : 2.2) + Math.log2(group.length + 1) * 1.15, 2.2, 7.8),
@@ -2281,8 +2418,10 @@ function buildSupplyPathFeatures(
       geometry: { type: 'Point', coordinates: linePointAt(trunkCoords, 0.58) },
       properties: {
         kind: 'label',
+        channel: 'supply_path',
         corridorId: trunkId,
         featureRole: 'overview',
+        narrativeKey: group[0]?.narrativeKey || trunkId,
         labelText: buildSupplyBundleLabelText(group.length, group[0], objectByPath),
         labelColor: trunkColor,
       },
@@ -2355,6 +2494,7 @@ function buildExplainRelationFeatures(
       ? [start, end]
       : gentleArcPoints(start, end, `${section}:${relation.relatedFragmentId}:${relation.type}`, distanceKm, section === 'direct' ? 14 : 18);
     const corridorId = `${section}:${relation.relatedFragmentId}`;
+    const narrativeKey = relation.edgeId || `${section}:${relation.relatedFragmentId}:${relation.type}`;
     const labelText = `${relation.relatedLabel}\n${compactMeaning(relation.businessMeaning || humanizeEdgeType(relation.type))}`;
     features.push({
       id: `${corridorId}:line:${index}`,
@@ -2370,6 +2510,7 @@ function buildExplainRelationFeatures(
         badgeEndpointNodeIds: [relation.relatedFragmentId],
         sourceId: relation.sourceId,
         targetId: relation.targetId,
+        narrativeKey,
         relationType: relation.type,
         semanticDirection: relation.semanticDirection || 'context',
         color,
@@ -2385,8 +2526,10 @@ function buildExplainRelationFeatures(
       geometry: { type: 'Point', coordinates: linePointAt(coordinates, section === 'direct' ? 0.72 : 0.76) },
       properties: {
         kind: 'label',
+        channel: `relation_${section}`,
         corridorId,
         featureRole: 'overview',
+        narrativeKey,
         labelText,
         labelColor: color,
       },
@@ -2435,6 +2578,7 @@ function buildSimplePropagationFeatures(
         badgeEndpointNodeIds: [sourceId === centerId ? targetId : sourceId, targetId],
         sourceId,
         targetId,
+        narrativeKey: 'propagation:overview',
         semanticDirection: sourceId === centerId ? 'downstream' : targetId === centerId ? 'upstream' : 'context',
         color,
         baseOpacity: kind === 'primary' ? 0.5 : kind === 'indirect' ? 0.42 : 0.3,
@@ -2447,29 +2591,186 @@ function buildSimplePropagationFeatures(
   return features;
 }
 
-function buildExplainSupplyPathItems(pathArtifacts: MaterializedArtifact[]): GeoEdgeTraceSummary['supplyPaths'] {
-  return [...pathArtifacts]
+function supplyNarrativeKey(direction: 'inbound' | 'outbound' | 'context', productRef?: string, fallbackId?: string): string {
+  const productKey = String(productRef || '').trim();
+  if (productKey) return `supply:${direction}:${productKey}`;
+  return `supply:${direction}:${String(fallbackId || 'unknown').trim() || 'unknown'}`;
+}
+
+function normalizeSupplyReasonText(value?: string): string {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const lowered = text.toLowerCase();
+  if (lowered.includes('overlapping graph entities')) {
+    return '';
+  }
+  return text.replace(/\.$/, '');
+}
+
+function describeSupplyTraceRole(role?: string, productLabel?: string): string {
+  const normalized = String(role || '').trim().toLowerCase();
+  const label = String(productLabel || '').trim().toLowerCase();
+  if (normalized === 'direct_anchor') {
+    return label ? `Direct anchor path for ${label} linked to the selected object` : 'Direct anchor path linked to the selected object';
+  }
+  if (normalized === 'route_overlap') {
+    return label
+      ? `Shares intermediate entities with nearby ${label} routes`
+      : 'Shares intermediate entities with nearby routes around the selected object';
+  }
+  if (normalized === 'route_context') {
+    return label
+      ? `Adds surrounding context for the ${label} network`
+      : 'Adds surrounding network context around the selected object';
+  }
+  if (normalized === 'pinned') {
+    return 'Pinned supply path kept visible for this object';
+  }
+  return '';
+}
+
+function labelFromPathRef(value?: string): string {
+  const ref = String(value || '').trim();
+  return ref ? (humanizeCanonicalPath(ref) || ref) : 'Unspecified destination';
+}
+
+function classifySupplyDirection(
+  focusPath: string,
+  supplierRef: string,
+  customerRef: string,
+): 'inbound' | 'outbound' | 'context' {
+  if (focusPath && focusPath === supplierRef && focusPath !== customerRef) return 'outbound';
+  if (focusPath && focusPath === customerRef && focusPath !== supplierRef) return 'inbound';
+  return 'context';
+}
+
+function analyzeSupplyArtifactPerspective(
+  artifact: MaterializedArtifact,
+  focusObject?: Pick<GeoObject, 'label' | 'canonicalPath'> | null,
+): {
+  direction: 'inbound' | 'outbound' | 'context';
+  counterpartLabel: string;
+  title: string;
+  reason: string;
+  productRef?: string;
+  productLabel: string;
+  supplierRef: string;
+  customerRef: string;
+} {
+  const focusPath = String(focusObject?.canonicalPath || '').trim();
+  const focusLabel = String(focusObject?.label || '').trim() || labelFromPathRef(focusPath);
+  const legs = Array.isArray(artifact.payload?.legs) ? artifact.payload.legs : [];
+  const firstLeg = legs.length > 0 ? legs[0] : null;
+  const productRef = String(firstLeg?.productRef || artifact.productAxis || '').trim() || undefined;
+  const productLabel = productRef ? (humanizeCanonicalPath(productRef) || productRef) : 'Unspecified product';
+  const inboundLeg = legs.find((leg) => String(leg?.customerRef || '').trim() === focusPath && String(leg?.supplierRef || '').trim() !== focusPath) || null;
+  const outboundLeg = legs.find((leg) => String(leg?.supplierRef || '').trim() === focusPath && String(leg?.customerRef || '').trim() !== focusPath) || null;
+
+  let direction: 'inbound' | 'outbound' | 'context' = 'context';
+  if (inboundLeg && !outboundLeg) direction = 'inbound';
+  else if (outboundLeg && !inboundLeg) direction = 'outbound';
+  else {
+    const supplierRef = String(firstLeg?.supplierRef || artifact.anchorSupplier || '').trim();
+    const customerRef = String(firstLeg?.customerRef || artifact.anchorCustomer || '').trim();
+    const fallbackDirection = classifySupplyDirection(focusPath, supplierRef, customerRef);
+    const isInternalLoop = Boolean(focusPath) && supplierRef === customerRef && supplierRef === focusPath;
+    direction = isInternalLoop ? 'context' : fallbackDirection;
+  }
+
+  const sourceLeg = direction === 'inbound' ? inboundLeg : direction === 'outbound' ? outboundLeg : firstLeg;
+  const supplierRef = String(sourceLeg?.supplierRef || artifact.anchorSupplier || '').trim();
+  const customerRef = String(sourceLeg?.customerRef || artifact.anchorCustomer || '').trim();
+  const routeRefs = legs.flatMap((leg) => [
+    String(leg?.supplierRef || '').trim(),
+    ...((leg?.transportViaRefs || []).map((ref) => String(ref || '').trim())),
+    String(leg?.customerRef || '').trim(),
+  ]).filter(Boolean);
+  const internalLoop = Boolean(focusPath) && supplierRef === customerRef && supplierRef === focusPath;
+  const resolvedUpstream = traceEndpointLabel(artifact, 'upstream', focusLabel) || traceEndpointLabel(artifact, 'supplier', focusLabel);
+  const resolvedDownstream = traceEndpointLabel(artifact, 'downstream', focusLabel) || traceEndpointLabel(artifact, 'customer', focusLabel);
+  const resolvedCounterpartLabel = internalLoop
+    ? ''
+    : direction === 'inbound'
+      ? resolvedUpstream
+      || pickDistinctSupplyLabel(
+          [String(sourceLeg?.supplierRef || '').trim(), ...((sourceLeg?.transportViaRefs || []).map((ref) => String(ref || '').trim()))],
+          new Map(),
+          focusPath,
+          focusLabel,
+        )
+      : direction === 'outbound'
+        ? resolvedDownstream
+        || pickDistinctSupplyLabel(
+            [...((sourceLeg?.transportViaRefs || []).map((ref) => String(ref || '').trim())).reverse(), String(sourceLeg?.customerRef || '').trim()],
+            new Map(),
+            focusPath,
+            focusLabel,
+          )
+        : resolvedDownstream
+          || resolvedUpstream
+          || pickDistinctSupplyLabel(routeRefs, new Map(), focusPath, focusLabel);
+  const counterpartLabel = internalLoop
+    ? `Internal processing at ${focusLabel}`
+    : resolvedCounterpartLabel || unresolvedSupplyCounterpartLabel(direction, focusLabel);
+  const title = direction === 'inbound'
+    ? `From ${counterpartLabel}`
+    : direction === 'outbound'
+      ? `To ${counterpartLabel}`
+      : counterpartLabel;
+  const role = String(artifact.traceRole || '').trim() || 'path';
+  const reason = normalizeSupplyReasonText(artifact.discoveryReason || artifact.traceReason)
+    || describeSupplyReason(role, direction, productLabel, !internalLoop && !resolvedCounterpartLabel);
+  return {
+    direction,
+    counterpartLabel,
+    title,
+    reason,
+    productRef,
+    productLabel,
+    supplierRef,
+    customerRef,
+  };
+}
+
+function buildSupplyDirectionSummary(
+  supplyGroups: GeoEdgeTraceSummary['supplyGroups'],
+): string {
+  if (supplyGroups.length === 0) return '';
+  const inboundCount = supplyGroups.reduce((sum, group) => sum + (group.direction === 'inbound' ? group.routeCount : 0), 0);
+  const outboundCount = supplyGroups.reduce((sum, group) => sum + (group.direction === 'outbound' ? group.routeCount : 0), 0);
+  const contextCount = supplyGroups.reduce((sum, group) => sum + (group.direction === 'context' ? group.routeCount : 0), 0);
+  const parts: string[] = [];
+  if (inboundCount > 0) parts.push(`${inboundCount} inbound supply route(s)`);
+  if (outboundCount > 0) parts.push(`${outboundCount} outbound supply route(s)`);
+  if (contextCount > 0) parts.push(`${contextCount} contextual route(s)`);
+  return parts.join(', ');
+}
+
+function buildExplainSupplyPathItems(
+  pathArtifacts: MaterializedArtifact[],
+  focusObject?: Pick<GeoObject, 'label' | 'canonicalPath'> | null,
+): GeoEdgeTraceSummary['supplyGroups'] {
+  const normalized = [...pathArtifacts]
     .sort((left, right) => {
       const leftStress = left.pathStressScore ?? left.payload?.stress?.pathScore ?? 0;
       const rightStress = right.pathStressScore ?? right.payload?.stress?.pathScore ?? 0;
       if (leftStress !== rightStress) return rightStress - leftStress;
       return Number(right.tracePriority || 0) - Number(left.tracePriority || 0);
     })
-    .slice(0, 6)
     .map((artifact) => {
-      const firstLeg = Array.isArray(artifact.payload?.legs) && artifact.payload?.legs.length > 0 ? artifact.payload.legs[0] : null;
-      const productRef = String(firstLeg?.productRef || artifact.productAxis || '').trim() || undefined;
+      const perspective = analyzeSupplyArtifactPerspective(artifact, focusObject);
       const stressScore = Number(artifact.pathStressScore ?? artifact.payload?.stress?.pathScore ?? 0);
-      const title = String(artifact.displayName || '').trim()
-        || [artifact.anchorSupplier, productRef, artifact.anchorCustomer].filter(Boolean).join(' -> ')
-        || artifact.id;
       return {
         id: artifact.id,
-        title,
+        narrativeKey: supplyNarrativeKey(perspective.direction, perspective.productRef, artifact.id),
+        title: perspective.title,
+        counterpartLabel: perspective.counterpartLabel,
+        direction: perspective.direction,
+        destinationLabel: labelFromPathRef(perspective.customerRef),
         role: String(artifact.traceRole || '').trim() || 'path',
-        reason: String(artifact.discoveryReason || artifact.traceReason || '').trim() || 'Mapped supply path linked to this object.',
-        productRef,
-        productLabel: productRef ? humanizeCanonicalPath(productRef) : undefined,
+        reason: perspective.reason || describeSupplyTraceRole(String(artifact.traceRole || '').trim(), perspective.productLabel) || 'Mapped supply route connected to this object',
+        productRef: perspective.productRef,
+        productLabel: perspective.productLabel,
         stressScore,
         legCount: Number(artifact.legCount || (Array.isArray(artifact.payload?.legs) ? artifact.payload!.legs!.length : 0) || 0),
         isPinned: Boolean(artifact.isPinned),
@@ -2477,6 +2778,83 @@ function buildExplainSupplyPathItems(pathArtifacts: MaterializedArtifact[]): Geo
           && Number(artifact.bottleneckLegIndex ?? artifact.payload?.stress?.bottleneckLegIndex) >= 0,
       };
     });
+
+  const groups = new Map<string, GeoEdgeTraceSummary['supplyGroups'][number]>();
+  for (const item of normalized) {
+    const key = item.narrativeKey;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        id: key,
+        narrativeKey: key,
+        direction: item.direction,
+        productRef: item.productRef,
+        productLabel: item.productLabel,
+        summary: '',
+        routeCount: 0,
+        stressedRouteCount: 0,
+        pinnedRouteCount: 0,
+        maxStressScore: 0,
+        hasBottleneck: false,
+        paths: [],
+      });
+    }
+    const group = groups.get(key)!;
+    group.routeCount += 1;
+    group.stressedRouteCount += item.stressScore >= 0.58 ? 1 : 0;
+    group.pinnedRouteCount += item.isPinned ? 1 : 0;
+    group.maxStressScore = Math.max(group.maxStressScore, item.stressScore);
+    group.hasBottleneck = group.hasBottleneck || item.hasBottleneck;
+    group.paths.push({
+      id: item.id,
+      narrativeKey: item.narrativeKey,
+      title: item.title,
+      counterpartLabel: item.counterpartLabel,
+      direction: item.direction,
+      destinationLabel: item.destinationLabel,
+      role: item.role,
+      reason: item.reason,
+      stressScore: item.stressScore,
+      legCount: item.legCount,
+      isPinned: item.isPinned,
+      hasBottleneck: item.hasBottleneck,
+    });
+  }
+
+  return Array.from(groups.values())
+    .map((group) => {
+      group.paths.sort((left, right) => {
+        if (left.stressScore !== right.stressScore) return right.stressScore - left.stressScore;
+        if (left.legCount !== right.legCount) return right.legCount - left.legCount;
+        return left.counterpartLabel.localeCompare(right.counterpartLabel);
+      });
+      const previewCounterparts = Array.from(
+        new Set(
+          group.paths
+            .map((path) => path.counterpartLabel)
+            .filter((value) => value && !isSupplyPlaceholderLabel(value)),
+        ),
+      ).slice(0, 3);
+      if (group.direction === 'inbound') {
+        group.summary = previewCounterparts.length > 0
+          ? `Consumed from ${previewCounterparts.join(', ')}${group.routeCount > previewCounterparts.length ? ` +${group.routeCount - previewCounterparts.length} more` : ''}`
+          : `Consumes through ${group.routeCount} mapped inbound route${group.routeCount > 1 ? 's' : ''}`;
+      } else if (group.direction === 'outbound') {
+        group.summary = previewCounterparts.length > 0
+          ? `Supplied into ${previewCounterparts.join(', ')}${group.routeCount > previewCounterparts.length ? ` +${group.routeCount - previewCounterparts.length} more` : ''}`
+          : `Supplied through ${group.routeCount} mapped outbound route${group.routeCount > 1 ? 's' : ''}`;
+      } else {
+        group.summary = previewCounterparts.length > 0
+          ? `Mapped around ${previewCounterparts.join(', ')}${group.routeCount > previewCounterparts.length ? ` +${group.routeCount - previewCounterparts.length} more` : ''}`
+          : 'Contextual supply routes linked to this object';
+      }
+      return group;
+    })
+    .sort((left, right) => {
+      if (left.maxStressScore !== right.maxStressScore) return right.maxStressScore - left.maxStressScore;
+      if (left.routeCount !== right.routeCount) return right.routeCount - left.routeCount;
+      return left.productLabel.localeCompare(right.productLabel);
+    })
+    .slice(0, 6);
 }
 
 function buildExplainTraceSummary(
@@ -2491,17 +2869,49 @@ function buildExplainTraceSummary(
   pathArtifacts: MaterializedArtifact[],
   visibleLineCount: number,
   propagation?: { nodeIds?: string[]; edges?: Array<unknown> } | null,
+  focusObject?: Pick<GeoObject, 'label' | 'canonicalPath'> | null,
 ): GeoEdgeTraceSummary {
-  const supplyPaths = buildExplainSupplyPathItems(pathArtifacts);
-  const stressedSupplyPathCount = supplyPaths.filter((item) => item.stressScore >= 0.58).length;
+  const supplyGroups = buildExplainSupplyPathItems(pathArtifacts, focusObject);
+  const stressedSupplyPathCount = supplyGroups.reduce((sum, group) => sum + group.stressedRouteCount, 0);
+  const focusLabel = String(focusObject?.label || '').trim()
+    || humanizeCanonicalPath(String(focusObject?.canonicalPath || '').trim())
+    || 'This object';
+  const fallbackSupplySummary = buildSupplyDirectionSummary(supplyGroups);
+  const summary = String(explain?.summary || '').trim()
+    || (fallbackSupplySummary ? `${focusLabel} matters here through ${fallbackSupplySummary}.` : '')
+    || 'No explanation available for this object yet.';
+  const whyItMatters = Array.isArray(explain?.whyItMatters)
+    ? explain!.whyItMatters!
+      .map((item) => ({ title: String(item?.title || '').trim(), body: String(item?.body || '').trim() }))
+      .filter((item) => item.title && item.body)
+    : [];
+  if (whyItMatters.length === 0 && supplyGroups.length > 0) {
+    const inboundGroups = supplyGroups.filter((group) => group.direction === 'inbound');
+    const outboundGroups = supplyGroups.filter((group) => group.direction === 'outbound');
+    if (inboundGroups.length > 0) {
+      whyItMatters.push({
+        title: 'Inputs',
+        body: `${focusLabel} depends on ${inboundGroups.map((group) => group.productLabel).join(', ')} as inbound supply.`,
+      });
+    }
+    if (outboundGroups.length > 0) {
+      whyItMatters.push({
+        title: 'Outputs',
+        body: `${focusLabel} sends ${outboundGroups.map((group) => group.productLabel).join(', ')} through mapped outbound routes.`,
+      });
+    }
+    if (whyItMatters.length === 0) {
+      whyItMatters.push({
+        title: 'Supply context',
+        body: `${focusLabel} is linked to ${supplyGroups.length} product route group(s) on this map.`,
+      });
+    }
+  }
   return {
-    summary: String(explain?.summary || '').trim() || 'No explanation available for this object yet.',
-    whyItMatters: Array.isArray(explain?.whyItMatters)
-      ? explain!.whyItMatters!
-        .map((item) => ({ title: String(item?.title || '').trim(), body: String(item?.body || '').trim() }))
-        .filter((item) => item.title && item.body)
-      : [],
+    summary,
+    whyItMatters,
     directRelations: directRelations.map((relation) => ({
+      narrativeKey: relation.edgeId || `direct:${relation.relatedFragmentId}:${relation.type}`,
       edgeId: relation.edgeId,
       relatedFragmentId: relation.relatedFragmentId,
       relatedLabel: relation.relatedLabel,
@@ -2514,6 +2924,7 @@ function buildExplainTraceSummary(
       whyRelevant: relation.whyRelevant,
     })),
     contextRelations: contextRelations.map((relation) => ({
+      narrativeKey: relation.edgeId || `context:${relation.relatedFragmentId}:${relation.type}`,
       edgeId: relation.edgeId,
       relatedFragmentId: relation.relatedFragmentId,
       relatedLabel: relation.relatedLabel,
@@ -2525,7 +2936,7 @@ function buildExplainTraceSummary(
       businessMeaning: relation.businessMeaning,
       whyRelevant: relation.whyRelevant,
     })),
-    supplyPaths,
+    supplyGroups,
     propagationNodeCount: Array.isArray(propagation?.nodeIds) ? propagation.nodeIds.length : 0,
     propagationEdgeCount: Array.isArray(propagation?.edges) ? propagation.edges.length : 0,
     visibleLineCount,
@@ -2779,16 +3190,24 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
       'line-color': ['get', 'color'],
       'line-width': [
         'case',
+        ['boolean', ['feature-state', 'active'], false],
+        ['+', ['get', 'baseWidth'], 2.8],
         ['boolean', ['feature-state', 'hover'], false],
         ['+', ['get', 'baseWidth'], 2.2],
+        ['==', ['get', 'channel'], 'supply_path'],
+        ['+', ['get', 'baseWidth'], 1.8],
         ['+', ['get', 'baseWidth'], 1.4],
       ],
       'line-opacity': [
         '*',
         [
           'case',
+          ['boolean', ['feature-state', 'active'], false],
+          ['min', 0.32, ['+', ['get', 'glowOpacity'], 0.12]],
           ['boolean', ['feature-state', 'hover'], false],
           ['min', 0.28, ['+', ['get', 'glowOpacity'], 0.08]],
+          ['==', ['get', 'channel'], 'relation_context'],
+          ['*', ['get', 'glowOpacity'], 0.72],
           ['get', 'glowOpacity'],
         ],
         opacityFactor,
@@ -2807,6 +3226,8 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
       'line-color': ['get', 'color'],
       'line-width': [
         'case',
+        ['boolean', ['feature-state', 'active'], false],
+        ['+', ['get', 'baseWidth'], 1.1],
         ['boolean', ['feature-state', 'hover'], false],
         ['+', ['get', 'baseWidth'], 0.65],
         ['get', 'baseWidth'],
@@ -2815,8 +3236,12 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
         '*',
         [
           'case',
+          ['boolean', ['feature-state', 'active'], false],
+          ['min', 0.68, ['+', ['get', 'baseOpacity'], 0.2]],
           ['boolean', ['feature-state', 'hover'], false],
           ['min', 0.58, ['+', ['get', 'baseOpacity'], 0.16]],
+          ['==', ['get', 'channel'], 'propagation'],
+          ['*', ['get', 'baseOpacity'], 0.9],
           ['get', 'baseOpacity'],
         ],
         opacityFactor,
@@ -2842,20 +3267,30 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
         'case',
         ['==', ['get', 'channel'], 'propagation'],
         ['literal', [0.8, 1.8]],
+        ['==', ['get', 'channel'], 'relation_context'],
+        ['literal', [0.9, 2.3]],
         ['literal', [1.4, 1.9]],
       ],
       'line-width': [
         'case',
+        ['boolean', ['feature-state', 'active'], false],
+        ['+', ['get', 'baseWidth'], 1.15],
         ['boolean', ['feature-state', 'hover'], false],
         ['+', ['get', 'baseWidth'], 0.8],
+        ['==', ['get', 'channel'], 'supply_path'],
+        ['+', ['get', 'baseWidth'], 0.45],
         ['get', 'baseWidth'],
       ],
       'line-opacity': [
         '*',
         [
           'case',
+          ['boolean', ['feature-state', 'active'], false],
+          ['min', 0.86, ['+', ['get', 'baseOpacity'], 0.24]],
           ['boolean', ['feature-state', 'hover'], false],
           ['min', 0.76, ['+', ['get', 'baseOpacity'], 0.18]],
+          ['==', ['get', 'channel'], 'relation_context'],
+          ['*', ['get', 'baseOpacity'], 0.82],
           ['get', 'baseOpacity'],
         ],
         opacityFactor,
@@ -2873,16 +3308,26 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
       'line-color': ['get', 'color'],
       'line-width': [
         'case',
+        ['boolean', ['feature-state', 'active'], false],
+        ['+', ['get', 'baseWidth'], 1.35],
         ['boolean', ['feature-state', 'hover'], false],
         ['+', ['get', 'baseWidth'], 0.95],
+        ['==', ['get', 'channel'], 'supply_path'],
+        ['+', ['get', 'baseWidth'], 0.55],
+        ['==', ['get', 'channel'], 'relation_direct'],
+        ['+', ['get', 'baseWidth'], 0.35],
         ['get', 'baseWidth'],
       ],
       'line-opacity': [
         '*',
         [
           'case',
+          ['boolean', ['feature-state', 'active'], false],
+          1,
           ['boolean', ['feature-state', 'hover'], false],
           1,
+          ['==', ['get', 'channel'], 'relation_direct'],
+          ['min', 0.96, ['+', ['get', 'baseOpacity'], 0.06]],
           ['get', 'baseOpacity'],
         ],
         opacityFactor,
@@ -2914,7 +3359,14 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
       'text-color': ['get', 'labelColor'],
       'text-halo-color': theme === 'dark' ? 'rgba(6,18,31,0.92)' : 'rgba(255,255,255,0.92)',
       'text-halo-width': 1.4,
-      'text-opacity': 0.95,
+      'text-opacity': [
+        'case',
+        ['boolean', ['feature-state', 'active'], false],
+        1,
+        ['==', ['get', 'channel'], 'relation_context'],
+        0.78,
+        0.95,
+      ],
     },
   });
 
@@ -2989,12 +3441,36 @@ export function useGeoEdgeLayer(
   const [relatedPathArtifacts, setRelatedPathArtifacts] = useState<MaterializedArtifact[]>([]);
   const [mutedObjectIds, setMutedObjectIds] = useState<string[]>([]);
   const [highlightedGatewayObjectIds, setHighlightedGatewayObjectIds] = useState<string[]>([]);
+  const [panelNarrativeKey, setPanelNarrativeKey] = useState<string | null>(null);
+  const [hoveredNarrativeKey, setHoveredNarrativeKey] = useState<string | null>(null);
+  const [featureNarrativeEpoch, setFeatureNarrativeEpoch] = useState(0);
   const mountedRef = useRef(true);
+  const featureIdsByNarrativeKeyRef = useRef<Map<string, Array<string | number>>>(new Map());
+  const activeNarrativeFeatureIdsRef = useRef<Array<string | number>>([]);
+  const activeNarrativeKey = panelNarrativeKey || hoveredNarrativeKey;
 
   useEffect(() => {
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
   }, []);
+
+  useEffect(() => {
+    if (!map || !selectedObject || !canAccessMapStyle(map) || !map.getSource(SRC)) return;
+    try {
+      for (const id of activeNarrativeFeatureIdsRef.current) {
+        map.setFeatureState({ source: SRC, id }, { active: false });
+      }
+      activeNarrativeFeatureIdsRef.current = [];
+      if (!activeNarrativeKey) return;
+      const featureIds = featureIdsByNarrativeKeyRef.current.get(activeNarrativeKey) || [];
+      for (const id of featureIds) {
+        map.setFeatureState({ source: SRC, id }, { active: true });
+      }
+      activeNarrativeFeatureIdsRef.current = featureIds;
+    } catch {
+      activeNarrativeFeatureIdsRef.current = [];
+    }
+  }, [activeNarrativeKey, featureNarrativeEpoch, map, selectedObject?.id, styleEpoch]);
 
   useEffect(() => {
     if (!map || !isReady) return;
@@ -3008,6 +3484,7 @@ export function useGeoEdgeLayer(
         }
       } catch { /* source removed during style transition */ }
       hoveredEdgeId = null;
+      setHoveredNarrativeKey(null);
       map.getCanvas().style.cursor = '';
     };
 
@@ -3051,6 +3528,8 @@ export function useGeoEdgeLayer(
       const feature = event.features?.[0];
       if (!feature || feature.id == null) return;
       setHoveredEdge(feature.id);
+      const nextNarrativeKey = String(feature.properties?.narrativeKey || '').trim();
+      setHoveredNarrativeKey(nextNarrativeKey || null);
     };
 
     const handleEdgeLeave = () => {
@@ -3087,6 +3566,10 @@ export function useGeoEdgeLayer(
       setRelatedPathArtifacts([]);
       setMutedObjectIds([]);
       setHighlightedGatewayObjectIds([]);
+      setPanelNarrativeKey(null);
+      setHoveredNarrativeKey(null);
+      featureIdsByNarrativeKeyRef.current = new Map();
+      activeNarrativeFeatureIdsRef.current = [];
       return;
     }
 
@@ -3113,6 +3596,10 @@ export function useGeoEdgeLayer(
     setRelatedPathArtifacts([]);
     setMutedObjectIds([]);
     setHighlightedGatewayObjectIds([]);
+    setPanelNarrativeKey(null);
+    setHoveredNarrativeKey(null);
+    featureIdsByNarrativeKeyRef.current = new Map();
+    activeNarrativeFeatureIdsRef.current = [];
 
     api
       .getFragmentTrace(selectedObject.id, {
@@ -3229,6 +3716,15 @@ export function useGeoEdgeLayer(
           ...supplyPathFeatures,
           ...propagationFeatures,
         ];
+        const featureIdsByNarrativeKey = new Map<string, Array<string | number>>();
+        for (const feature of allFeatures) {
+          const narrativeKey = String(feature.properties?.narrativeKey || '').trim();
+          if (!narrativeKey || feature.id == null) continue;
+          if (!featureIdsByNarrativeKey.has(narrativeKey)) featureIdsByNarrativeKey.set(narrativeKey, []);
+          featureIdsByNarrativeKey.get(narrativeKey)!.push(feature.id);
+        }
+        featureIdsByNarrativeKeyRef.current = featureIdsByNarrativeKey;
+        setFeatureNarrativeEpoch((value) => value + 1);
         const endpointEntries = Array.from(visibleNodeIds)
           .map((nodeId) => traceObjectToGeoObject(objectById.get(nodeId)))
           .filter((object): object is GeoObject => Boolean(object?.coordinates))
@@ -3236,7 +3732,15 @@ export function useGeoEdgeLayer(
         const spreadEntries = endpointEntries.length > 0 ? spreadEndpointEntries(map, endpointEntries) : [];
         const visibleLineCount = allFeatures.filter((feature) => feature.geometry?.type === 'LineString').length;
         setVisibleEdgesCount(visibleLineCount);
-        setTraceSummary(buildExplainTraceSummary(res?.explain || null, directRelations, contextRelations, pathArtifacts, visibleLineCount, res?.propagation || null));
+        setTraceSummary(buildExplainTraceSummary(
+          res?.explain || null,
+          directRelations,
+          contextRelations,
+          pathArtifacts,
+          visibleLineCount,
+          res?.propagation || null,
+          selectedObject,
+        ));
 
         if (allFeatures.length === 0 || !canAccessMapStyle(map)) {
           setEdgesLoading(false);
@@ -3280,6 +3784,10 @@ export function useGeoEdgeLayer(
           setRelatedPathArtifacts([]);
           setMutedObjectIds([]);
           setHighlightedGatewayObjectIds([]);
+          setPanelNarrativeKey(null);
+          setHoveredNarrativeKey(null);
+          featureIdsByNarrativeKeyRef.current = new Map();
+          activeNarrativeFeatureIdsRef.current = [];
         }
       });
 
@@ -3317,5 +3825,7 @@ export function useGeoEdgeLayer(
     relatedPathArtifacts,
     mutedObjectIds,
     highlightedGatewayObjectIds,
+    activeNarrativeKey,
+    setActiveNarrativeKey: setPanelNarrativeKey,
   };
 }

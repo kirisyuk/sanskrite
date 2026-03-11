@@ -665,7 +665,6 @@ func (h *HorizonHandlers) collectFragmentTraceSupplyChains(ctx context.Context, 
 			copyArtifact.DiscoverySource = source
 			copyArtifact.DiscoveryReason = describeSupplyChainDiscovery(source, matched)
 		}
-		annotateSupplyChainTraceArtifact(&copyArtifact, cp)
 		selected[copyArtifact.ID] = &copyArtifact
 	}
 	if cp != "" {
@@ -703,6 +702,11 @@ func (h *HorizonHandlers) collectFragmentTraceSupplyChains(ctx context.Context, 
 	out := make([]*horizonmodels.MaterializedArtifact, 0, len(selected))
 	for _, artifact := range selected {
 		out = append(out, artifact)
+	}
+	resolvedFragments := loadSupplyChainTraceFragments(ctx, h.service.Fragments(), out)
+	for _, artifact := range out {
+		annotateSupplyChainTraceArtifact(artifact, cp)
+		hydrateSupplyChainTraceEndpoints(artifact, cp, resolvedFragments)
 	}
 	sortSupplyChainArtifacts(out)
 	sort.SliceStable(out, func(i, j int) bool {

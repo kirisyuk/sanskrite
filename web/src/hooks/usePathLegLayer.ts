@@ -157,6 +157,7 @@ export function usePathLegLayer(
   objects: GeoObject[],
   theme: ThemeMode,
   enabled: boolean,
+  activeArtifactIds: string[] = [],
 ) {
   const [stats, setStats] = useState<PathLegLayerStats>({
     artifactCount: 0,
@@ -167,6 +168,8 @@ export function usePathLegLayer(
   const popupRef = useRef<maplibregl.Popup | null>(null);
 
   const data = useMemo(() => {
+    const activeArtifactSet = new Set((activeArtifactIds || []).map((value) => String(value || '').trim()).filter(Boolean));
+    const hasActiveArtifacts = activeArtifactSet.size > 0;
     const coordsByPath = new Map<string, { lon: number; lat: number }>();
     const flowById = new Map<string, TransportFlowFeature>();
     for (const obj of objects) {
@@ -187,6 +190,8 @@ export function usePathLegLayer(
 
     const features: GeoJSON.Feature[] = [];
     for (const artifact of artifacts || []) {
+      const artifactId = String(artifact.id || '').trim();
+      const isNarrativeActive = !hasActiveArtifacts || activeArtifactSet.has(artifactId);
       const displayName = String(artifact.displayName || artifact.id || 'Supply path').trim();
       const legs = Array.isArray(artifact.payload?.legs) ? artifact.payload.legs : [];
       const bottleneckIndex = artifact.payload?.stress?.bottleneckLegIndex;
@@ -217,17 +222,21 @@ export function usePathLegLayer(
         if (isBound) boundLegCount += 1;
         const isBottleneck = typeof bottleneckIndex === 'number' && bottleneckIndex === leg.index;
         if (isBottleneck) bottleneckCount += 1;
+        const emphasis = isNarrativeActive ? 1 : 0.24;
+        const lineWidth = (2 + stressScore * 3.4 + (isBottleneck ? 1.2 : 0)) * (isNarrativeActive ? 1.08 : 0.78);
+        const lineOpacity = clamp((0.24 + bindingConfidence * 0.42 + stressScore * 0.28) * emphasis, 0.08, 0.96);
+        const glowOpacity = clamp((0.06 + stressScore * 0.2) * (isNarrativeActive ? 1 : 0.22), 0.02, 0.28);
 
         features.push({
           type: 'Feature',
-          id: `${artifact.id}:leg:${leg.index}`,
+          id: `${artifactId}:leg:${leg.index}`,
           geometry: {
             type: 'LineString',
             coordinates: coords,
           },
           properties: {
             kind: 'leg',
-            artifactId: artifact.id,
+            artifactId,
             displayName,
             legIndex: leg.index,
             role: String((leg as any)?.role || '').trim(),
@@ -254,10 +263,11 @@ export function usePathLegLayer(
             affectedZonePressure: Number(leg.stress?.affectedZonePressure) || 0,
             recoveryLatencyHours: Number(leg.stress?.recoveryLatencyHours) || 0,
             bindingConfidence,
+            isNarrativeActive,
             color: pathLegColor(stressScore, theme),
-            lineWidth: 2 + stressScore * 3.4 + (isBottleneck ? 1.2 : 0),
-            lineOpacity: clamp(0.24 + bindingConfidence * 0.42 + stressScore * 0.28, 0.22, 0.96),
-            glowOpacity: clamp(0.06 + stressScore * 0.2, 0.06, 0.28),
+            lineWidth,
+            lineOpacity,
+            glowOpacity,
             isBottleneck,
           },
         } as GeoJSON.Feature);
@@ -274,13 +284,15 @@ export function usePathLegLayer(
               },
               properties: {
                 kind: 'bottleneck',
-                artifactId: artifact.id,
+                artifactId,
                 displayName,
                 legIndex: leg.index,
                 stressScore,
                 dominantFactors,
                 bindingConfidence,
+                isNarrativeActive,
                 color: pathLegColor(Math.max(stressScore, 0.6), theme),
+                circleOpacity: isNarrativeActive ? 0.9 : 0.26,
               },
             } as GeoJSON.Feature);
           }
@@ -300,7 +312,7 @@ export function usePathLegLayer(
         bottleneckCount,
       } satisfies PathLegLayerStats,
     };
-  }, [artifacts, objects, theme]);
+  }, [activeArtifactIds, artifacts, objects, theme]);
 
   useEffect(() => {
     setStats(data.stats);
@@ -394,7 +406,7 @@ export function usePathLegLayer(
           'circle-color': ['get', 'color'],
           'circle-stroke-color': theme === 'dark' ? '#f8fafc' : '#0f172a',
           'circle-stroke-width': 1.4,
-          'circle-opacity': 0.9,
+          'circle-opacity': ['coalesce', ['get', 'circleOpacity'], 0.9],
         },
       });
     }
@@ -402,13 +414,13 @@ export function usePathLegLayer(
     const src = map.getSource(SRC) as maplibregl.GeoJSONSource | undefined;
     src?.setData(data.featureCollection as any);
 
-    const visible = enabled && data.stats.legCount > 0;
+    const visible = (enabled || activeArtifactIds.length > 0) && data.stats.legCount > 0;
     for (const layer of [GLOW_LAYER, PINNED_LAYER, DISCOVERED_LAYER, BOTTLENECK_LAYER]) {
       if (map.getLayer(layer)) {
         map.setLayoutProperty(layer, 'visibility', visible ? 'visible' : 'none');
       }
     }
-  }, [map, isReady, styleEpoch, enabled, theme, data]);
+  }, [map, isReady, styleEpoch, enabled, theme, data, activeArtifactIds]);
 
   useEffect(() => {
     if (!map || !isReady || !canAccessMapStyle(map)) return;

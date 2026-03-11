@@ -264,6 +264,8 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     relatedPathArtifacts,
     mutedObjectIds,
     highlightedGatewayObjectIds,
+    activeNarrativeKey,
+    setActiveNarrativeKey,
   } = useGeoEdgeLayer(
     map,
     isReady,
@@ -314,20 +316,35 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
       .sort((a, b) => b.score - a.score || a.title.localeCompare(b.title))
       .slice(0, 8);
   }, [searchQuery, visibleMapObjects]);
+  const activeSupplyArtifactIds = React.useMemo(() => {
+    if (!activeNarrativeKey || !traceSummary?.supplyGroups?.length) return [] as string[];
+    const group = traceSummary.supplyGroups.find((item) => item.narrativeKey === activeNarrativeKey);
+    if (!group) return [] as string[];
+    return Array.from(new Set(group.paths.map((path) => String(path.id || '').trim()).filter(Boolean)));
+  }, [activeNarrativeKey, traceSummary]);
+  const supplyNarrativeLegsVisible = activeSupplyArtifactIds.length > 0;
   const activePathArtifacts = React.useMemo(() => {
-    if (!pathLegsEnabled) return [] as MaterializedArtifact[];
+    if (!pathLegsEnabled && !supplyNarrativeLegsVisible) return [] as MaterializedArtifact[];
     const merged = new Map<string, MaterializedArtifact>();
-    for (const artifact of pathArtifacts) {
-      if (artifact?.id) merged.set(artifact.id, artifact);
-    }
-    for (const artifact of relatedPathArtifacts) {
-      if (artifact?.id && !merged.has(artifact.id)) merged.set(artifact.id, artifact);
-    }
-    for (const artifact of manualPathArtifacts) {
-      if (artifact?.id) merged.set(artifact.id, artifact);
+    if (pathLegsEnabled) {
+      for (const artifact of pathArtifacts) {
+        if (artifact?.id) merged.set(artifact.id, artifact);
+      }
+      for (const artifact of relatedPathArtifacts) {
+        if (artifact?.id && !merged.has(artifact.id)) merged.set(artifact.id, artifact);
+      }
+      for (const artifact of manualPathArtifacts) {
+        if (artifact?.id) merged.set(artifact.id, artifact);
+      }
+    } else {
+      for (const artifact of relatedPathArtifacts) {
+        const artifactId = String(artifact?.id || '').trim();
+        if (!artifactId || !activeSupplyArtifactIds.includes(artifactId)) continue;
+        merged.set(artifactId, artifact);
+      }
     }
     return Array.from(merged.values());
-  }, [manualPathArtifacts, pathArtifacts, pathLegsEnabled, relatedPathArtifacts]);
+  }, [activeSupplyArtifactIds, manualPathArtifacts, pathArtifacts, pathLegsEnabled, relatedPathArtifacts, supplyNarrativeLegsVisible]);
   const allStaticZones = STATIC_ZONE_DATA.features;
   const zoneTypeCounts = React.useMemo(() => deriveZoneTypeCounts(allStaticZones), [allStaticZones]);
   const filteredStaticZones = React.useMemo(() => {
@@ -884,7 +901,16 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   useGeoZoneLayer(map, isReady, styleEpoch, visibleMapObjects, theme);
   useStaticZoneLayer(map, isReady, styleEpoch, filteredStaticZones, theme, zonesEnabled, zoneActivityById, visibleMapObjects);
   useTransportFlowLayer(map, isReady, styleEpoch, filteredTransportFlows, theme, flowsEnabled, flowActivityById);
-  const pathLegStats = usePathLegLayer(map, isReady, styleEpoch, activePathArtifacts, allObjects, theme, pathLegsEnabled);
+  const pathLegStats = usePathLegLayer(
+    map,
+    isReady,
+    styleEpoch,
+    activePathArtifacts,
+    allObjects,
+    theme,
+    pathLegsEnabled,
+    activeSupplyArtifactIds,
+  );
   useVesselLayer(map, isReady, styleEpoch, vesselsEnabled, theme);
 
   const handleToggleType = React.useCallback((type: string) => {
@@ -2108,11 +2134,54 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
             edgesCount={edgesCount}
             visibleEdgesCount={visibleEdgesCount}
             traceSummary={traceSummary}
+            activeNarrativeKey={activeNarrativeKey}
+            onNarrativeHover={setActiveNarrativeKey}
             onClose={() => {
+              setActiveNarrativeKey(null);
               setSearchHighlightedObjectId(null);
               setSelectedObject(null);
             }}
           />
+        )}
+
+        {selectedObject && !stackSelection && (
+          <div
+            style={{
+              position: 'absolute',
+              right: 12,
+              bottom: 12,
+              zIndex: 18,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+              padding: '10px 12px',
+              borderRadius: 14,
+              backdropFilter: 'blur(14px)',
+              background: isDark ? 'rgba(6,18,31,0.82)' : 'rgba(255,255,255,0.9)',
+              border: isDark ? '1px solid rgba(148,163,184,0.18)' : '1px solid rgba(15,23,42,0.08)',
+              boxShadow: isDark ? '0 12px 32px rgba(0,0,0,0.3)' : '0 12px 28px rgba(15,23,42,0.12)',
+              color: 'var(--text-heading)',
+              minWidth: 170,
+            }}
+          >
+            <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
+              Map Reading Guide
+            </div>
+            {[
+              { label: 'Direct', note: 'core object relations', color: isDark ? '#60a5fa' : '#2563eb' },
+              { label: 'Context', note: 'operating and market context', color: isDark ? '#2dd4bf' : '#0d9488' },
+              { label: 'Supply', note: 'product routes on the map', color: isDark ? '#f59e0b' : '#b45309' },
+              { label: 'Propagation', note: 'secondary spread in gray', color: isDark ? '#94a3b8' : '#64748b' },
+            ].map((item) => (
+              <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ width: 10, height: 10, borderRadius: 999, background: item.color, flexShrink: 0 }} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700 }}>{item.label}</div>
+                  <div style={{ fontSize: 10, color: 'var(--text-secondary-strong)' }}>{item.note}</div>
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </div>
     </div>

@@ -92,18 +92,34 @@ type MaterializedArtifact struct {
 	ProductAxis      string   `json:"productAxis,omitempty" firestore:"productAxis,omitempty"`
 
 	// Response-only selection metadata. Not persisted.
-	DiscoverySource string   `json:"discoverySource,omitempty" firestore:"-"`
-	DiscoveryReason string   `json:"discoveryReason,omitempty" firestore:"-"`
-	MatchedRefs     []string `json:"matchedRefs,omitempty" firestore:"-"`
-	OverlapScore    float64  `json:"overlapScore,omitempty" firestore:"-"`
-	IsPinned        bool     `json:"isPinned,omitempty" firestore:"-"`
-	TraceRole       string   `json:"traceRole,omitempty" firestore:"-"`
-	TraceReason     string   `json:"traceReason,omitempty" firestore:"-"`
-	TracePriority   int      `json:"tracePriority,omitempty" firestore:"-"`
-	LegCount        int      `json:"legCount,omitempty" firestore:"-"`
-	BindingScore    float64  `json:"bindingScore,omitempty" firestore:"-"`
-	PathStressScore float64  `json:"pathStressScore,omitempty" firestore:"-"`
-	BottleneckLeg   int      `json:"bottleneckLegIndex,omitempty" firestore:"-"`
+	DiscoverySource string                   `json:"discoverySource,omitempty" firestore:"-"`
+	DiscoveryReason string                   `json:"discoveryReason,omitempty" firestore:"-"`
+	MatchedRefs     []string                 `json:"matchedRefs,omitempty" firestore:"-"`
+	OverlapScore    float64                  `json:"overlapScore,omitempty" firestore:"-"`
+	IsPinned        bool                     `json:"isPinned,omitempty" firestore:"-"`
+	TraceRole       string                   `json:"traceRole,omitempty" firestore:"-"`
+	TraceReason     string                   `json:"traceReason,omitempty" firestore:"-"`
+	TracePriority   int                      `json:"tracePriority,omitempty" firestore:"-"`
+	LegCount        int                      `json:"legCount,omitempty" firestore:"-"`
+	BindingScore    float64                  `json:"bindingScore,omitempty" firestore:"-"`
+	PathStressScore float64                  `json:"pathStressScore,omitempty" firestore:"-"`
+	BottleneckLeg   int                      `json:"bottleneckLegIndex,omitempty" firestore:"-"`
+	TraceEndpoints  *SupplyChainTraceContext `json:"traceEndpoints,omitempty" firestore:"-"`
+}
+
+type SupplyChainTraceEndpoint struct {
+	CanonicalPath string       `json:"canonicalPath,omitempty"`
+	Label         string       `json:"label,omitempty"`
+	Type          string       `json:"type,omitempty"`
+	Coordinates   *Coordinates `json:"coordinates,omitempty"`
+	Resolved      bool         `json:"resolved"`
+}
+
+type SupplyChainTraceContext struct {
+	Supplier   *SupplyChainTraceEndpoint `json:"supplier,omitempty"`
+	Customer   *SupplyChainTraceEndpoint `json:"customer,omitempty"`
+	Upstream   *SupplyChainTraceEndpoint `json:"upstream,omitempty"`
+	Downstream *SupplyChainTraceEndpoint `json:"downstream,omitempty"`
 }
 
 // Validate checks if MaterializedArtifact is valid.
