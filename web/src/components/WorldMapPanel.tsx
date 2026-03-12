@@ -860,7 +860,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
         projectId: scopeDialogProjectId.trim(),
         name: scopeDialogLensName.trim() || String(artifact?.displayName || 'Supply chain lens').trim() || 'Supply chain lens',
         scope: [scopeEntry],
-        viewConfig: { layoutMode: 'supply-chain' },
+        viewConfig: { graphView: 'supply-flow', layoutMode: 'supply-chain' },
         status: 'ACTIVE',
       }, { skipScouting: true });
       setScopeDialogCreatedLensId(created.id);

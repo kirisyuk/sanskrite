@@ -821,6 +821,16 @@ func trackToStructData(tr *models.TrackFragmentData) map[string]interface{} {
 
 // Create создает новый HorizonFragment
 func (r *HorizonFragmentsRepository) Create(ctx context.Context, fragment *models.HorizonFragment) (string, error) {
+	return r.createWithOptions(ctx, fragment, false)
+}
+
+// CreateAssumeAbsent creates a fragment after caller-side batch dedup/preload.
+// It skips the initial GetByCanonicalPath read, but still falls back to collision reuse.
+func (r *HorizonFragmentsRepository) CreateAssumeAbsent(ctx context.Context, fragment *models.HorizonFragment) (string, error) {
+	return r.createWithOptions(ctx, fragment, true)
+}
+
+func (r *HorizonFragmentsRepository) createWithOptions(ctx context.Context, fragment *models.HorizonFragment, assumeAbsent bool) (string, error) {
 	if fragment == nil {
 		return "", ErrInvalidDocument
 	}
@@ -837,7 +847,7 @@ func (r *HorizonFragmentsRepository) Create(ctx context.Context, fragment *model
 			return "", fmt.Errorf("canonical path validation error: %w", err)
 		}
 	}
-	if cp != "" {
+	if cp != "" && !assumeAbsent {
 		// Best-effort de-dup at repository boundary:
 		// if canonicalPath already exists, reuse existing fragment ID instead of creating a duplicate.
 		if existing, err := r.GetByCanonicalPath(ctx, cp); err == nil && existing != nil && strings.TrimSpace(existing.ID) != "" {
@@ -923,6 +933,41 @@ func (r *HorizonFragmentsRepository) Create(ctx context.Context, fragment *model
 	return fragment.ID, nil
 }
 
+func selectPreferredFragmentFromDocs(docs []*firestore.DocumentSnapshot, canonicalPath string) (*models.HorizonFragment, error) {
+	preferredID := canonicalPathDocID("global", canonicalPath)
+	var best *models.HorizonFragment
+	bestRank := 3
+	bestID := ""
+	for _, doc := range docs {
+		if doc == nil || !doc.Exists() {
+			continue
+		}
+		var fragment models.HorizonFragment
+		if err := doc.DataTo(&fragment); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(fragment.ID) == "" {
+			fragment.ID = strings.TrimSpace(doc.Ref.ID)
+		}
+		rank := 2
+		if strings.TrimSpace(doc.Ref.ID) == preferredID {
+			rank = 0
+		} else if !fragment.CreatedAt.IsZero() {
+			rank = 1
+		}
+		if best == nil ||
+			rank < bestRank ||
+			(rank == bestRank && !fragment.CreatedAt.IsZero() && (best.CreatedAt.IsZero() || fragment.CreatedAt.Before(best.CreatedAt))) ||
+			(rank == bestRank && fragment.CreatedAt.Equal(best.CreatedAt) && strings.TrimSpace(doc.Ref.ID) < bestID) {
+			frag := fragment
+			best = &frag
+			bestRank = rank
+			bestID = strings.TrimSpace(doc.Ref.ID)
+		}
+	}
+	return best, nil
+}
+
 // Get получает HorizonFragment по ID
 func (r *HorizonFragmentsRepository) Get(ctx context.Context, id string) (*models.HorizonFragment, error) {
 	if id == "" {
@@ -959,36 +1004,9 @@ func (r *HorizonFragmentsRepository) GetByCanonicalPath(ctx context.Context, can
 	if len(docs) == 0 {
 		return nil, ErrFragmentNotFound
 	}
-	preferredID := canonicalPathDocID("global", cp)
-	var best *models.HorizonFragment
-	bestRank := 3
-	bestID := ""
-	for _, doc := range docs {
-		if doc == nil || !doc.Exists() {
-			continue
-		}
-		var fragment models.HorizonFragment
-		if err := doc.DataTo(&fragment); err != nil {
-			return nil, err
-		}
-		if strings.TrimSpace(fragment.ID) == "" {
-			fragment.ID = strings.TrimSpace(doc.Ref.ID)
-		}
-		rank := 2
-		if strings.TrimSpace(doc.Ref.ID) == preferredID {
-			rank = 0
-		} else if !fragment.CreatedAt.IsZero() {
-			rank = 1
-		}
-		if best == nil ||
-			rank < bestRank ||
-			(rank == bestRank && !fragment.CreatedAt.IsZero() && (best.CreatedAt.IsZero() || fragment.CreatedAt.Before(best.CreatedAt))) ||
-			(rank == bestRank && fragment.CreatedAt.Equal(best.CreatedAt) && strings.TrimSpace(doc.Ref.ID) < bestID) {
-			frag := fragment
-			best = &frag
-			bestRank = rank
-			bestID = strings.TrimSpace(doc.Ref.ID)
-		}
+	best, err := selectPreferredFragmentFromDocs(docs, cp)
+	if err != nil {
+		return nil, err
 	}
 	if best == nil {
 		return nil, ErrFragmentNotFound
@@ -998,6 +1016,103 @@ func (r *HorizonFragmentsRepository) GetByCanonicalPath(ctx context.Context, can
 	}
 	r.setFragmentInRedis(ctx, cp, best)
 	return best, nil
+}
+
+// BatchGetByCanonicalPaths fetches fragments for canonical paths with Redis-assisted chunked Firestore prefetch.
+// Missing paths are omitted from the result map.
+func (r *HorizonFragmentsRepository) BatchGetByCanonicalPaths(ctx context.Context, canonicalPaths []string) (map[string]*models.HorizonFragment, error) {
+	if r == nil || r.col == nil {
+		return nil, ErrInvalidDocument
+	}
+	if len(canonicalPaths) == 0 {
+		return map[string]*models.HorizonFragment{}, nil
+	}
+
+	seen := make(map[string]struct{}, len(canonicalPaths))
+	missing := make([]string, 0, len(canonicalPaths))
+	result := make(map[string]*models.HorizonFragment, len(canonicalPaths))
+	for _, raw := range canonicalPaths {
+		cp := strings.TrimSpace(raw)
+		if cp == "" {
+			continue
+		}
+		if _, ok := seen[cp]; ok {
+			continue
+		}
+		seen[cp] = struct{}{}
+		if frag := r.getFragmentFromRedis(ctx, cp); frag != nil {
+			result[cp] = frag
+			continue
+		}
+		missing = append(missing, cp)
+	}
+	if len(missing) == 0 {
+		return result, nil
+	}
+
+	const chunkSize = 30
+	for i := 0; i < len(missing); i += chunkSize {
+		end := i + chunkSize
+		if end > len(missing) {
+			end = len(missing)
+		}
+		chunk := missing[i:end]
+		docs, err := r.col.
+			Where("tenantId", "==", "global").
+			Where("canonicalPath", "in", chunk).
+			Limit(len(chunk) * 2).
+			Documents(ctx).
+			GetAll()
+		if err != nil {
+			return nil, err
+		}
+		grouped := make(map[string][]*firestore.DocumentSnapshot, len(chunk))
+		for _, doc := range docs {
+			if doc == nil || !doc.Exists() {
+				continue
+			}
+			cp, _ := doc.DataAt("canonicalPath")
+			canonicalPath, _ := cp.(string)
+			canonicalPath = strings.TrimSpace(canonicalPath)
+			if canonicalPath == "" {
+				continue
+			}
+			grouped[canonicalPath] = append(grouped[canonicalPath], doc)
+		}
+		for _, cp := range chunk {
+			docsForPath := grouped[cp]
+			if len(docsForPath) == 0 {
+				continue
+			}
+			best, err := selectPreferredFragmentFromDocs(docsForPath, cp)
+			if err != nil {
+				return nil, err
+			}
+			if best == nil {
+				continue
+			}
+			if len(docsForPath) > 1 {
+				log.Printf("[HorizonFragments] WARNING: duplicate canonicalPath detected canonicalPath=%q matches=%d selectedId=%s", cp, len(docsForPath), strings.TrimSpace(best.ID))
+			}
+			result[cp] = best
+			r.setFragmentInRedis(ctx, cp, best)
+		}
+	}
+	return result, nil
+}
+
+// BatchGetSupplyLinksByCanonicalPaths is a typed alias over BatchGetByCanonicalPaths.
+func (r *HorizonFragmentsRepository) BatchGetSupplyLinksByCanonicalPaths(ctx context.Context, canonicalPaths []string) (map[string]*models.HorizonFragment, error) {
+	fragments, err := r.BatchGetByCanonicalPaths(ctx, canonicalPaths)
+	if err != nil {
+		return nil, err
+	}
+	for cp, fragment := range fragments {
+		if fragment == nil || fragment.Type != models.FragmentTypeSupplyLink {
+			delete(fragments, cp)
+		}
+	}
+	return fragments, nil
 }
 
 // ListByCanonicalPath returns all fragments that currently share the exact canonicalPath.

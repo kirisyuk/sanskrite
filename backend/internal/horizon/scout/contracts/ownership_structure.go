@@ -40,6 +40,7 @@ func (h *OwnershipStructureHandler) Execute(ctx context.Context, eng pipeline.En
 		return &pipeline.ContractOutput{
 			ViewDirective: &models.ViewDirective{
 				ContractType: h.ContractType(),
+				GraphView:    models.GraphViewHierarchical,
 				ResearchPlan: &models.ResearchPlan{
 					Reason: "contract input missing job or repositories",
 				},
@@ -59,6 +60,7 @@ func (h *OwnershipStructureHandler) Execute(ctx context.Context, eng pipeline.En
 		return &pipeline.ContractOutput{
 			ViewDirective: &models.ViewDirective{
 				ContractType: h.ContractType(),
+				GraphView:    models.GraphViewHierarchical,
 				ResearchPlan: &models.ResearchPlan{
 					Reason: "ownership focus entity not found in contract",
 				},
@@ -85,6 +87,7 @@ func (h *OwnershipStructureHandler) Execute(ctx context.Context, eng pipeline.En
 		return &pipeline.ContractOutput{
 			ViewDirective: &models.ViewDirective{
 				ContractType:   h.ContractType(),
+				GraphView:      models.GraphViewHierarchical,
 				FocusNodePaths: focusPaths,
 				ResearchPlan: &models.ResearchPlan{
 					MissingNodes: focusPaths,
@@ -153,6 +156,7 @@ func (h *OwnershipStructureHandler) Execute(ctx context.Context, eng pipeline.En
 		return &pipeline.ContractOutput{
 			ViewDirective: &models.ViewDirective{
 				ContractType:   h.ContractType(),
+				GraphView:      models.GraphViewHierarchical,
 				FocusNodePaths: focusPaths,
 				ResearchPlan: &models.ResearchPlan{
 					MissingNodes: focusPaths,
@@ -225,6 +229,7 @@ func (h *OwnershipStructureHandler) Execute(ctx context.Context, eng pipeline.En
 	return &pipeline.ContractOutput{
 		ViewDirective: &models.ViewDirective{
 			ContractType:   h.ContractType(),
+			GraphView:      models.GraphViewHierarchical,
 			HierarchyAxis:  "ownership",
 			FilterRelTypes: []string{"OWNS", "SUBSIDIARY_OF", "CONTROLS", "INVESTS_IN"},
 			HighlightPaths: highlightPaths,

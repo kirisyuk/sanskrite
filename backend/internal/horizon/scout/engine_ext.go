@@ -7779,8 +7779,10 @@ func (e *ScoutEngine) processSupplyChains(
 
 	// Map canonical path -> fragment ID for edge creation
 	pathToID := make(map[string]string)
+	pathToFragment := make(map[string]*models.HorizonFragment)
 	if sourceFragment != nil && sourceFragment.ID != "" {
 		pathToID[sourceFragment.CanonicalPath] = sourceFragment.ID
+		pathToFragment[sourceFragment.CanonicalPath] = sourceFragment
 	}
 	// Track canonical-path rewrites within this supply-chain run so edge endpoints remain consistent
 	// even when we normalize (legacy geo -> /loc, /loc country aliases, product taxonomy upgrades, etc.).
@@ -7791,15 +7793,34 @@ func (e *ScoutEngine) processSupplyChains(
 	chainReuseMerged := 0
 	chainReuseScopeAdded := 0
 
+	parsedChains := make([]*ParsedChainResult, len(chains))
+	for idx, chain := range chains {
+		singleParsed, perr := parser.ParseSupplyChains([]agents.SupplyChain{chain}, sourceCanonicalPath)
+		if perr != nil || singleParsed == nil {
+			continue
+		}
+		singleParsed.SupplyLinkSegments = normalizeAndDedupSupplyLinkSegments(singleParsed.SupplyLinkSegments)
+		singleParsed.Edges = dedupeChainEdges(append(singleParsed.Edges, buildOperationalEdgesFromSegments(singleParsed.SupplyLinkSegments)...))
+		parsedChains[idx] = singleParsed
+	}
+
 	// Persist fragments discovered in supply chains
 	createdFrags := 0
 	updatedFrags := 0
 	createErrors := 0
 	previewLimit := 20
+	type preparedSupplyChainFragment struct {
+		fragment *models.HorizonFragment
+	}
+	preparedFragments := make([]preparedSupplyChainFragment, 0, len(result.Fragments))
+	fragmentCanonicalPaths := make([]string, 0, len(result.Fragments))
 	for canonicalPath, frag := range result.Fragments {
+		if frag == nil {
+			continue
+		}
 		origPath := strings.TrimSpace(canonicalPath)
 		effectivePath := origPath
-		if frag != nil && strings.TrimSpace(frag.CanonicalPath) != "" {
+		if strings.TrimSpace(frag.CanonicalPath) != "" {
 			effectivePath = strings.TrimSpace(frag.CanonicalPath)
 		}
 		if effectivePath == "" {
@@ -7833,6 +7854,10 @@ func (e *ScoutEngine) processSupplyChains(
 				}
 				if resolved.ExistingFragment != nil && strings.TrimSpace(resolved.ExistingFragment.ID) != "" {
 					pathToID[effectivePath] = strings.TrimSpace(resolved.ExistingFragment.ID)
+					pathToFragment[effectivePath] = resolved.ExistingFragment
+					if job != nil {
+						e.setSupplyChainJobFragmentRef(ctx, job.ID, resolved.ExistingFragment)
+					}
 					continue
 				}
 			}
@@ -7861,11 +7886,15 @@ func (e *ScoutEngine) processSupplyChains(
 					cp := strings.TrimSpace(pre.ReplacementFrag.CanonicalPath)
 					if cp != "" {
 						pathToID[cp] = strings.TrimSpace(pre.ReplacementFrag.ID)
+						pathToFragment[cp] = pre.ReplacementFrag
 						if origPath != "" {
 							pathRewrites[origPath] = cp
 						}
 						if effectivePath != "" {
 							pathRewrites[effectivePath] = cp
+						}
+						if job != nil {
+							e.setSupplyChainJobFragmentRef(ctx, job.ID, pre.ReplacementFrag)
 						}
 					}
 					continue
@@ -7888,16 +7917,38 @@ func (e *ScoutEngine) processSupplyChains(
 			}
 			effectivePath = postCreatePath
 		}
+		preparedFragments = append(preparedFragments, preparedSupplyChainFragment{fragment: frag})
+		fragmentCanonicalPaths = append(fragmentCanonicalPaths, frag.CanonicalPath)
+	}
 
-		// Check if fragment already exists
-		existing, err := e.fragmentsRepo.GetByCanonicalPath(ctx, frag.CanonicalPath)
-		if errors.Is(err, horizonrepo.ErrFragmentNotFound) {
-			// Create new fragment
+	existingFragmentsByPath, batchGetErr := e.fragmentsRepo.BatchGetByCanonicalPaths(ctx, fragmentCanonicalPaths)
+	if batchGetErr != nil {
+		createErrors++
+		msg := fmt.Sprintf("[SupplyChainFragmentLookup] FAILED batch err=%v", batchGetErr)
+		fmt.Printf("%s\n", msg)
+	}
+	for _, prepared := range preparedFragments {
+		frag := prepared.fragment
+		if frag == nil {
+			continue
+		}
+		existing := existingFragmentsByPath[strings.TrimSpace(frag.CanonicalPath)]
+		if existing == nil && job != nil {
+			if cached := e.getSupplyChainJobFragmentRef(ctx, job.ID, frag.CanonicalPath); cached != nil && strings.TrimSpace(cached.ID) != "" {
+				existing = &models.HorizonFragment{
+					ID:            strings.TrimSpace(cached.ID),
+					CanonicalPath: strings.TrimSpace(cached.CanonicalPath),
+					Type:          models.FragmentType(strings.TrimSpace(cached.Type)),
+					TenantID:      strings.TrimSpace(cached.TenantID),
+				}
+			}
+		}
+		if existing == nil {
 			frag.Metadata.CreatedAt = time.Now().UTC()
 			frag.Metadata.LastUpdatedAt = time.Now().UTC()
 			frag.Metadata.EpistemicStatus = models.EpistemicStatusLowConfidence
 
-			id, createErr := e.fragmentsRepo.Create(ctx, frag)
+			id, createErr := e.fragmentsRepo.CreateAssumeAbsent(ctx, frag)
 			if createErr != nil {
 				createErrors++
 				msg := fmt.Sprintf("[SupplyChainFragmentCreate] FAILED canonicalPath=%s err=%v", frag.CanonicalPath, createErr)
@@ -7906,6 +7957,10 @@ func (e *ScoutEngine) processSupplyChains(
 			}
 			frag.ID = id
 			pathToID[frag.CanonicalPath] = id
+			pathToFragment[frag.CanonicalPath] = frag
+			if job != nil {
+				e.setSupplyChainJobFragmentRef(ctx, job.ID, frag)
+			}
 			e.bestEffortEnrichRelationTargetGeo(ctx, frag, sourceFragment, "scout_supply_chain", job.ID)
 			if lensID != "" && isScopeEligibleEntityType(frag.Type) {
 				e.bestEffortDeferredScopeAdd(ctx, lensID, frag.CanonicalPath)
@@ -7915,51 +7970,49 @@ func (e *ScoutEngine) processSupplyChains(
 				msg := fmt.Sprintf("[SupplyChainFragmentCreate] OK canonicalPath=%s id=%s type=%s", frag.CanonicalPath, id, frag.Type)
 				fmt.Printf("%s\n", msg)
 			}
-		} else if err == nil && existing != nil {
-			// Fragment exists, store ID for edge creation
-			pathToID[frag.CanonicalPath] = existing.ID
-			e.bestEffortEnrichRelationTargetGeo(ctx, existing, sourceFragment, "scout_supply_chain", job.ID)
-			if lensID != "" && isScopeEligibleEntityType(existing.Type) {
-				e.bestEffortDeferredScopeAdd(ctx, lensID, existing.CanonicalPath)
-			}
+			continue
+		}
+		pathToID[frag.CanonicalPath] = existing.ID
+		pathToFragment[frag.CanonicalPath] = existing
+		if job != nil {
+			e.setSupplyChainJobFragmentRef(ctx, job.ID, existing)
+		}
+		e.bestEffortEnrichRelationTargetGeo(ctx, existing, sourceFragment, "scout_supply_chain", job.ID)
+		if lensID != "" && isScopeEligibleEntityType(existing.Type) {
+			e.bestEffortDeferredScopeAdd(ctx, lensID, existing.CanonicalPath)
+		}
 
-			// Optionally update labels/identifiers if new info
-			if existing.Labels == nil {
-				existing.Labels = make(map[string]string)
+		if existing.Labels == nil {
+			existing.Labels = make(map[string]string)
+		}
+		if existing.Identifiers == nil {
+			existing.Identifiers = make(map[string]string)
+		}
+		updated := false
+		for k, v := range frag.Labels {
+			if existing.Labels[k] == "" && v != "" {
+				existing.Labels[k] = v
+				updated = true
 			}
-			if existing.Identifiers == nil {
-				existing.Identifiers = make(map[string]string)
+		}
+		for k, v := range frag.Identifiers {
+			if existing.Identifiers[k] == "" && v != "" {
+				existing.Identifiers[k] = v
+				updated = true
 			}
-			updated := false
-			for k, v := range frag.Labels {
-				if existing.Labels[k] == "" && v != "" {
-					existing.Labels[k] = v
-					updated = true
-				}
-			}
-			for k, v := range frag.Identifiers {
-				if existing.Identifiers[k] == "" && v != "" {
-					existing.Identifiers[k] = v
-					updated = true
-				}
-			}
-			if updated {
-				existing.Metadata.LastUpdatedAt = time.Now().UTC()
-				if err := e.fragmentsRepo.Update(ctx, existing); err != nil {
-					msg := fmt.Sprintf("[SupplyChainFragmentUpdate] FAILED canonicalPath=%s id=%s err=%v", frag.CanonicalPath, existing.ID, err)
+		}
+		if updated {
+			existing.Metadata.LastUpdatedAt = time.Now().UTC()
+			if err := e.fragmentsRepo.UpdateFast(ctx, existing); err != nil {
+				msg := fmt.Sprintf("[SupplyChainFragmentUpdate] FAILED canonicalPath=%s id=%s err=%v", frag.CanonicalPath, existing.ID, err)
+				fmt.Printf("%s\n", msg)
+			} else {
+				updatedFrags++
+				if updatedFrags <= previewLimit {
+					msg := fmt.Sprintf("[SupplyChainFragmentUpdate] OK canonicalPath=%s id=%s", frag.CanonicalPath, existing.ID)
 					fmt.Printf("%s\n", msg)
-				} else {
-					updatedFrags++
-					if updatedFrags <= previewLimit {
-						msg := fmt.Sprintf("[SupplyChainFragmentUpdate] OK canonicalPath=%s id=%s", frag.CanonicalPath, existing.ID)
-						fmt.Printf("%s\n", msg)
-					}
 				}
 			}
-		} else if err != nil {
-			createErrors++
-			msg := fmt.Sprintf("[SupplyChainFragmentLookup] FAILED canonicalPath=%s err=%v", frag.CanonicalPath, err)
-			fmt.Printf("%s\n", msg)
 		}
 	}
 
@@ -7971,9 +8024,8 @@ func (e *ScoutEngine) processSupplyChains(
 		if sourceFragment != nil {
 			anchorPath = strings.TrimSpace(sourceFragment.CanonicalPath)
 		}
-		for idx, chain := range chains {
-			singleParsed, perr := parser.ParseSupplyChains([]agents.SupplyChain{chain}, sourceCanonicalPath)
-			if perr != nil || singleParsed == nil || len(singleParsed.SupplyLinkSegments) == 0 {
+		for idx, singleParsed := range parsedChains {
+			if singleParsed == nil || len(singleParsed.SupplyLinkSegments) == 0 {
 				continue
 			}
 			segments := buildSegmentsFromParsed(singleParsed, pathRewrites, nil)
@@ -8009,7 +8061,139 @@ func (e *ScoutEngine) processSupplyChains(
 	if job != nil {
 		jobIDStr = strings.TrimSpace(job.ID)
 	}
+	unresolvedEdgePaths := make([]string, 0, len(result.Edges)*2)
+	for _, edge := range result.Edges {
+		if edge == nil {
+			continue
+		}
+		rewritten := rewriteChainEdgeWithPathRewrites(edge, pathRewrites)
+		if rewritten == nil {
+			continue
+		}
+		for _, cp := range []string{strings.TrimSpace(rewritten.SourceCanonicalPath), strings.TrimSpace(rewritten.TargetCanonicalPath)} {
+			if cp == "" || pathToID[cp] != "" {
+				continue
+			}
+			if job != nil {
+				if cached := e.getSupplyChainJobFragmentRef(ctx, job.ID, cp); cached != nil && strings.TrimSpace(cached.ID) != "" {
+					pathToID[cp] = strings.TrimSpace(cached.ID)
+					pathToFragment[cp] = &models.HorizonFragment{
+						ID:            strings.TrimSpace(cached.ID),
+						CanonicalPath: strings.TrimSpace(cached.CanonicalPath),
+						Type:          models.FragmentType(strings.TrimSpace(cached.Type)),
+						TenantID:      strings.TrimSpace(cached.TenantID),
+					}
+					continue
+				}
+			}
+			unresolvedEdgePaths = append(unresolvedEdgePaths, cp)
+		}
+	}
+	if len(unresolvedEdgePaths) > 0 {
+		if resolvedFragments, err := e.fragmentsRepo.BatchGetByCanonicalPaths(ctx, unresolvedEdgePaths); err == nil {
+			for cp, fragment := range resolvedFragments {
+				if fragment == nil {
+					continue
+				}
+				pathToID[cp] = strings.TrimSpace(fragment.ID)
+				pathToFragment[cp] = fragment
+				if job != nil {
+					e.setSupplyChainJobFragmentRef(ctx, job.ID, fragment)
+				}
+			}
+		}
+	}
+	ensureFragment := func(path string) *models.HorizonFragment {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return nil
+		}
+		if fragment := pathToFragment[path]; fragment != nil && strings.TrimSpace(fragment.ID) != "" {
+			return fragment
+		}
+		if id := pathToID[path]; id != "" {
+			fragment := &models.HorizonFragment{ID: id, CanonicalPath: path, Type: InferFragmentTypeFromCanonicalPath(path), TenantID: "global"}
+			pathToFragment[path] = fragment
+			return fragment
+		}
+		ft := InferFragmentTypeFromCanonicalPath(path)
+		if ft == "" {
+			return nil
+		}
+		switch ft {
+		case models.FragmentTypeProgram, models.FragmentTypeMarket, models.FragmentTypeCommunity,
+			models.FragmentTypeOrganization, models.FragmentTypeFacility, models.FragmentTypeProduct,
+			models.FragmentTypeGeoRegion, models.FragmentTypeDeposit:
+		default:
+			return nil
+		}
+		label := ""
+		pathParts := strings.Split(strings.Trim(path, "/"), "/")
+		if len(pathParts) > 0 {
+			label = strings.ReplaceAll(strings.TrimSpace(pathParts[len(pathParts)-1]), "-", " ")
+		}
+		if label == "" {
+			label = string(ft)
+		}
+		fragment := &models.HorizonFragment{
+			TenantID:      "global",
+			CanonicalPath: path,
+			Type:          ft,
+			Labels:        map[string]string{"en": label},
+			Identifiers:   map[string]string{},
+			State:         make(map[string]models.MetricValue),
+			Governance:    models.Governance{Owner: "SYSTEM", Status: string(models.FragmentStatusActive)},
+			Metadata:      models.FragmentMetadata{CreatedAt: time.Now().UTC(), LastUpdatedAt: time.Now().UTC(), EpistemicStatus: models.EpistemicStatusLowConfidence},
+			Provenance:    models.Provenance{Method: "scout_supply_chain"},
+			Status:        "active",
+		}
+		if job != nil {
+			fragment.Provenance.SourceIDs = []string{job.ID}
+		}
+		id, err := e.fragmentsRepo.CreateAssumeAbsent(ctx, fragment)
+		if err != nil {
+			return nil
+		}
+		fragment.ID = id
+		pathToID[path] = id
+		pathToFragment[path] = fragment
+		if job != nil {
+			e.setSupplyChainJobFragmentRef(ctx, job.ID, fragment)
+		}
+		createdFrags++
+		if createdFrags <= previewLimit {
+			e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainFragmentPrecreate] OK path=%s id=%s type=%s", path, id, ft))
+		}
+		return fragment
+	}
+	resolveTypeByCanonical := func(cp string) models.FragmentType {
+		cp = strings.TrimSpace(cp)
+		if cp == "" {
+			return ""
+		}
+		resolveFromPath := func(path string, current models.FragmentType) models.FragmentType {
+			inferred := InferFragmentTypeFromCanonicalPath(path)
+			if inferred == "" {
+				return current
+			}
+			if current == "" || current != inferred {
+				return inferred
+			}
+			return current
+		}
+		if sourceFragment != nil && strings.TrimSpace(sourceFragment.CanonicalPath) == cp {
+			return resolveFromPath(cp, sourceFragment.Type)
+		}
+		if f := pathToFragment[cp]; f != nil {
+			return resolveFromPath(cp, f.Type)
+		}
+		return resolveFromPath(cp, "")
+	}
+	preparedEdgeCandidates := make([]*preparedSupplyChainEdgeCandidate, 0, len(result.Edges))
 	for edgeIdx, chainEdge := range result.Edges {
+		if chainEdge == nil {
+			continue
+		}
 		origSrcPath := strings.TrimSpace(chainEdge.SourceCanonicalPath)
 		origDstPath := strings.TrimSpace(chainEdge.TargetCanonicalPath)
 		chainEdge = rewriteChainEdgeWithPathRewrites(chainEdge, pathRewrites)
@@ -8033,9 +8217,7 @@ func (e *ScoutEngine) processSupplyChains(
 		targetID := pathToID[dstPath]
 
 		if sourceID == "" || targetID == "" {
-			// Try to look up missing IDs
 			if sourceID == "" {
-				// Best-effort: resolve canonical path for endpoints not seen in fragment map.
 				if e.canonicalPathResolver != nil && srcPath != "" {
 					if resolved, rerr := e.canonicalPathResolver.Resolve(ctx, srcPath, InferFragmentTypeFromCanonicalPath(srcPath)); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
 						if strings.TrimSpace(resolved.CanonicalPath) != srcPath {
@@ -8045,13 +8227,16 @@ func (e *ScoutEngine) processSupplyChains(
 						if resolved.ExistingFragment != nil && strings.TrimSpace(resolved.ExistingFragment.ID) != "" {
 							sourceID = strings.TrimSpace(resolved.ExistingFragment.ID)
 							pathToID[srcPath] = sourceID
+							pathToFragment[srcPath] = resolved.ExistingFragment
+							if job != nil {
+								e.setSupplyChainJobFragmentRef(ctx, job.ID, resolved.ExistingFragment)
+							}
 						}
 					}
 				}
 				if sourceID == "" {
-					if frag, err := e.fragmentsRepo.GetByCanonicalPath(ctx, srcPath); err == nil && frag != nil {
-						sourceID = frag.ID
-						pathToID[srcPath] = sourceID
+					if fragment := ensureFragment(srcPath); fragment != nil {
+						sourceID = strings.TrimSpace(fragment.ID)
 					}
 				}
 			}
@@ -8065,80 +8250,29 @@ func (e *ScoutEngine) processSupplyChains(
 						if resolved.ExistingFragment != nil && strings.TrimSpace(resolved.ExistingFragment.ID) != "" {
 							targetID = strings.TrimSpace(resolved.ExistingFragment.ID)
 							pathToID[dstPath] = targetID
+							pathToFragment[dstPath] = resolved.ExistingFragment
+							if job != nil {
+								e.setSupplyChainJobFragmentRef(ctx, job.ID, resolved.ExistingFragment)
+							}
 						}
 					}
 				}
 				if targetID == "" {
-					if frag, err := e.fragmentsRepo.GetByCanonicalPath(ctx, dstPath); err == nil && frag != nil {
-						targetID = frag.ID
-						pathToID[dstPath] = targetID
+					if fragment := ensureFragment(dstPath); fragment != nil {
+						targetID = strings.TrimSpace(fragment.ID)
 					}
 				}
 			}
 			if sourceID == "" || targetID == "" {
-				// Last resort: precreate minimal fragments for /program, /market, /community (and other supported paths)
-				// so supply chain edges are not lost when endpoints were not in result.Fragments
-				ensureFragment := func(path string) string {
-					path = strings.TrimSpace(path)
-					if path == "" {
-						return ""
-					}
-					if id := pathToID[path]; id != "" {
-						return id
-					}
-					ft := InferFragmentTypeFromCanonicalPath(path)
-					if ft == "" {
-						return ""
-					}
-					// Only precreate for supply-chain-relevant types (program, market, community often missing from parser output)
-					switch ft {
-					case models.FragmentTypeProgram, models.FragmentTypeMarket, models.FragmentTypeCommunity,
-						models.FragmentTypeOrganization, models.FragmentTypeFacility, models.FragmentTypeProduct,
-						models.FragmentTypeGeoRegion, models.FragmentTypeDeposit:
-						// ok
-					default:
-						return ""
-					}
-					// derive display name from last path segment
-					pathParts := strings.Split(strings.Trim(path, "/"), "/")
-					label := ""
-					if len(pathParts) > 0 {
-						label = strings.ReplaceAll(strings.TrimSpace(pathParts[len(pathParts)-1]), "-", " ")
-					}
-					if label == "" {
-						label = string(ft)
-					}
-					frag := &models.HorizonFragment{
-						TenantID:      "global",
-						CanonicalPath: path,
-						Type:          ft,
-						Labels:        map[string]string{"en": label},
-						Identifiers:   map[string]string{},
-						State:         make(map[string]models.MetricValue),
-						Governance:    models.Governance{Owner: "SYSTEM", Status: string(models.FragmentStatusActive)},
-						Metadata:      models.FragmentMetadata{CreatedAt: time.Now().UTC(), LastUpdatedAt: time.Now().UTC(), EpistemicStatus: models.EpistemicStatusLowConfidence},
-						Provenance:    models.Provenance{Method: "scout_supply_chain"},
-					}
-					if job != nil {
-						frag.Provenance.SourceIDs = []string{job.ID}
-					}
-					frag.Status = "active"
-					id, err := e.fragmentsRepo.Create(ctx, frag)
-					if err != nil {
-						return ""
-					}
-					pathToID[path] = id
-					createdFrags++
-					if createdFrags <= previewLimit {
-						e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainFragmentPrecreate] OK path=%s id=%s type=%s", path, id, ft))
-					}
-					return id
-				}
 				if sourceID == "" {
-					sourceID = ensureFragment(srcPath)
+					if fragment := ensureFragment(srcPath); fragment != nil {
+						sourceID = strings.TrimSpace(fragment.ID)
+					}
 				}
 				if targetID == "" {
-					targetID = ensureFragment(dstPath)
+					if fragment := ensureFragment(dstPath); fragment != nil {
+						targetID = strings.TrimSpace(fragment.ID)
+					}
 				}
 			}
 			if sourceID == "" || targetID == "" {
@@ -8157,32 +8291,6 @@ func (e *ScoutEngine) processSupplyChains(
 			continue
 		}
 
-		// Resolve endpoint types for policy validation (best-effort).
-		resolveTypeByCanonical := func(cp string) models.FragmentType {
-			cp = strings.TrimSpace(cp)
-			if cp == "" {
-				return ""
-			}
-			resolveFromPath := func(path string, current models.FragmentType) models.FragmentType {
-				inferred := InferFragmentTypeFromCanonicalPath(path)
-				if inferred == "" {
-					return current
-				}
-				if current == "" || current != inferred {
-					return inferred
-				}
-				return current
-			}
-			if sourceFragment != nil && strings.TrimSpace(sourceFragment.CanonicalPath) == cp {
-				return resolveFromPath(cp, sourceFragment.Type)
-			}
-			if e.fragmentsRepo != nil {
-				if f, ferr := e.fragmentsRepo.GetByCanonicalPath(ctx, cp); ferr == nil && f != nil {
-					return resolveFromPath(cp, f.Type)
-				}
-			}
-			return resolveFromPath(cp, "")
-		}
 		srcTypeActual := resolveTypeByCanonical(srcPath)
 		dstTypeActual := resolveTypeByCanonical(dstPath)
 
@@ -8362,13 +8470,6 @@ func (e *ScoutEngine) processSupplyChains(
 			Qualifiers:          cloneQualifierMap(chainEdge.Qualifiers),
 		})
 
-		// Check for existing edge, accounting for product-qualified SUPPLIES_TO and facility-qualified TRANSFORMS_INTO.
-		if supplyChainEdgeExists(ctx, e.edgesRepo, "global", sourceID, targetID, edgeType, chainEdge.Qualifiers) {
-			// Edge already exists, skip
-			edgeDupes++
-			continue
-		}
-
 		qualifiers := map[string]interface{}{
 			"reason":              chainEdge.Reason,
 			"sourceCanonicalPath": srcPath,
@@ -8428,38 +8529,113 @@ func (e *ScoutEngine) processSupplyChains(
 			continue
 		}
 
-		if id, createErr := e.edgesRepo.Create(ctx, edge); createErr != nil {
+		if err := edge.Validate(); err != nil {
 			edgeCreateErrors++
-			msg := fmt.Sprintf("[SupplyChainEdgeCreate] FAILED %s -[%s]-> %s err=%v",
-				chainEdge.SourceCanonicalPath, edgeType, chainEdge.TargetCanonicalPath, createErr)
-			fmt.Printf("%s\n", msg)
-		} else {
-			edge.ID = id
-			createdEdges++
-			if createdEdges <= edgePreviewLimit {
-				fmt.Printf("[SupplyChainEdgeCreate] OK %s -[%s]-> %s id=%s crit=%.3f raw=%.3f\n",
-					chainEdge.SourceCanonicalPath, edgeType, chainEdge.TargetCanonicalPath, id, edge.Properties.Criticality, chainEdge.Confidence)
+			e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainEdgeCreate] INVALID %s -[%s]-> %s err=%v",
+				chainEdge.SourceCanonicalPath, edgeType, chainEdge.TargetCanonicalPath, err))
+			continue
+		}
+		preparedEdgeCandidates = append(preparedEdgeCandidates, &preparedSupplyChainEdgeCandidate{
+			edge:            edge,
+			sourceID:        sourceID,
+			targetID:        targetID,
+			sourcePath:      srcPath,
+			targetPath:      dstPath,
+			artifactKey:     edgeArtifactKeyMap[srcPath+"|"+dstPath],
+			variantKey:      chainEdgeVariantKey(string(edgeType), edge.Qualifiers),
+			dedupKey:        buildSupplyChainEdgeDedupKey(sourceID, targetID, edgeType, edge.Qualifiers),
+			contextEdge:     acceptedContextEdges[len(acceptedContextEdges)-1],
+			rawConfidence:   chainEdge.Confidence,
+			originalSrcPath: origSrcPath,
+			originalDstPath: origDstPath,
+		})
+	}
+
+	existingEdgeDedupKeys := collectExistingSupplyChainEdgeDedupKeys(ctx, e.edgesRepo, "global", preparedEdgeCandidates)
+	localEdgeDedupKeys := make(map[string]struct{}, len(preparedEdgeCandidates))
+	edgesToCreate := make([]*models.DependencyEdge, 0, len(preparedEdgeCandidates))
+	createdCandidates := make([]*preparedSupplyChainEdgeCandidate, 0, len(preparedEdgeCandidates))
+	for _, candidate := range preparedEdgeCandidates {
+		if candidate == nil || candidate.edge == nil {
+			continue
+		}
+		if _, ok := existingEdgeDedupKeys[candidate.dedupKey]; ok || e.hasSupplyChainEdgeSeen(ctx, candidate.dedupKey) {
+			edgeDupes++
+			continue
+		}
+		if _, ok := localEdgeDedupKeys[candidate.dedupKey]; ok {
+			edgeDupes++
+			continue
+		}
+		localEdgeDedupKeys[candidate.dedupKey] = struct{}{}
+		edgesToCreate = append(edgesToCreate, candidate.edge)
+		createdCandidates = append(createdCandidates, candidate)
+	}
+	if len(edgesToCreate) > 0 {
+		ids, batchErr := e.edgesRepo.CreateMany(ctx, edgesToCreate)
+		if batchErr != nil {
+			e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainEdgeCreate] batch failed, fallback to single create: %v", batchErr))
+			for _, candidate := range createdCandidates {
+				id, createErr := e.edgesRepo.Create(ctx, candidate.edge)
+				if createErr != nil {
+					edgeCreateErrors++
+					msg := fmt.Sprintf("[SupplyChainEdgeCreate] FAILED %s -[%s]-> %s err=%v",
+						candidate.sourcePath, candidate.edge.Type, candidate.targetPath, createErr)
+					fmt.Printf("%s\n", msg)
+					continue
+				}
+				candidate.edge.ID = id
+				createdEdges++
+				e.markSupplyChainEdgeSeen(ctx, candidate.dedupKey)
+				if createdEdges <= edgePreviewLimit {
+					fmt.Printf("[SupplyChainEdgeCreate] OK %s -[%s]-> %s id=%s crit=%.3f raw=%.3f\n",
+						candidate.sourcePath, candidate.edge.Type, candidate.targetPath, id, candidate.edge.Properties.Criticality, candidate.rawConfidence)
+				}
+				e.publish(ctx, realtime.EventType("horizon.graph.edge.upserted"), map[string]interface{}{
+					"tenantId":            job.TenantID,
+					"projectId":           job.ProjectID,
+					"lensId":              lensID,
+					"edgeId":              candidate.edge.ID,
+					"sourceFragmentId":    candidate.edge.SourceFragmentID,
+					"targetFragmentId":    candidate.edge.TargetFragmentID,
+					"sourceCanonicalPath": candidate.sourcePath,
+					"targetCanonicalPath": candidate.targetPath,
+					"type":                string(candidate.edge.Type),
+					"properties":          candidate.edge.Properties,
+					"qualifiers":          candidate.edge.Qualifiers,
+					"fromSupplyChain":     true,
+				})
+				e.enqueueEdgeTriggeredPropagation(ctx, candidate.edge, job)
 			}
-
-			// Realtime event: include sourceCanonicalPath/targetCanonicalPath so UI shows readable names, not fragment IDs
-			e.publish(ctx, realtime.EventType("horizon.graph.edge.upserted"), map[string]interface{}{
-				"tenantId":            job.TenantID,
-				"projectId":           job.ProjectID,
-				"lensId":              lensID,
-				"edgeId":              edge.ID,
-				"sourceFragmentId":    edge.SourceFragmentID,
-				"targetFragmentId":    edge.TargetFragmentID,
-				"sourceCanonicalPath": srcPath,
-				"targetCanonicalPath": dstPath,
-				"type":                string(edge.Type),
-				"properties":          edge.Properties,
-				"qualifiers":          edge.Qualifiers,
-				"fromSupplyChain":     true,
-			})
-
-			// Edge-triggered re-propagation: if endpoints have accumulated signals,
-			// propagate them along the new edge asynchronously.
-			e.enqueueEdgeTriggeredPropagation(ctx, edge, job)
+		} else {
+			for idx, id := range ids {
+				if idx >= len(createdCandidates) {
+					break
+				}
+				candidate := createdCandidates[idx]
+				candidate.edge.ID = id
+				createdEdges++
+				e.markSupplyChainEdgeSeen(ctx, candidate.dedupKey)
+				if createdEdges <= edgePreviewLimit {
+					fmt.Printf("[SupplyChainEdgeCreate] OK %s -[%s]-> %s id=%s crit=%.3f raw=%.3f\n",
+						candidate.sourcePath, candidate.edge.Type, candidate.targetPath, id, candidate.edge.Properties.Criticality, candidate.rawConfidence)
+				}
+				e.publish(ctx, realtime.EventType("horizon.graph.edge.upserted"), map[string]interface{}{
+					"tenantId":            job.TenantID,
+					"projectId":           job.ProjectID,
+					"lensId":              lensID,
+					"edgeId":              candidate.edge.ID,
+					"sourceFragmentId":    candidate.edge.SourceFragmentID,
+					"targetFragmentId":    candidate.edge.TargetFragmentID,
+					"sourceCanonicalPath": candidate.sourcePath,
+					"targetCanonicalPath": candidate.targetPath,
+					"type":                string(candidate.edge.Type),
+					"properties":          candidate.edge.Properties,
+					"qualifiers":          candidate.edge.Qualifiers,
+					"fromSupplyChain":     true,
+				})
+				e.enqueueEdgeTriggeredPropagation(ctx, candidate.edge, job)
+			}
 		}
 	}
 
@@ -8473,6 +8649,13 @@ func (e *ScoutEngine) processSupplyChains(
 	supplyLinksCreated := 0
 	supplyLinksSkipped := 0
 	materializedSegmentRefs := make(map[string]supplyLinkMaterializationRef, len(materializedSegments))
+	type preparedSupplyLink struct {
+		segment          *SupplyLinkSegment
+		fragment         *models.HorizonFragment
+		segmentLookupKey string
+	}
+	preparedSupplyLinks := make([]preparedSupplyLink, 0, len(materializedSegments))
+	supplyLinkCanonicalPaths := make([]string, 0, len(materializedSegments))
 	for _, seg := range materializedSegments {
 		if seg == nil || !supplysemantics.IsMaterializableSegmentClass(seg.SegmentClass) {
 			supplyLinksSkipped++
@@ -8500,6 +8683,9 @@ func (e *ScoutEngine) processSupplyChains(
 			customer = strings.TrimSpace(rp)
 		}
 		segmentLookupKey := buildSupplyLinkSegmentLookupKey(supplier, product, customer)
+		if cached := e.getSupplyLinkRefCached(ctx, segmentLookupKey); cached != nil && strings.TrimSpace(cached.CanonicalPath) != "" {
+			materializedSegmentRefs[segmentLookupKey] = *cached
+		}
 		supplierRef := supplier
 		customerRef := customer
 		productRef := product
@@ -8552,19 +8738,35 @@ func (e *ScoutEngine) processSupplyChains(
 				slFrag.State[k] = v
 			}
 		}
+		horizonrepo.PrepareFragmentForValidation(slFrag)
 		if err := slFrag.Validate(); err != nil {
 			supplyLinksSkipped++
 			continue
 		}
-		// Merge policy: keep existing data and add richer fields from new segment.
-		// Do not drop prior metrics just because a new observation has higher confidence on one field.
-		existing, _ := e.fragmentsRepo.GetByCanonicalPath(ctx, slFrag.CanonicalPath)
+		preparedSupplyLinks = append(preparedSupplyLinks, preparedSupplyLink{
+			segment:          seg,
+			fragment:         slFrag,
+			segmentLookupKey: segmentLookupKey,
+		})
+		supplyLinkCanonicalPaths = append(supplyLinkCanonicalPaths, slFrag.CanonicalPath)
+	}
+
+	existingSupplyLinksByPath, supplyLinkBatchErr := e.fragmentsRepo.BatchGetSupplyLinksByCanonicalPaths(ctx, supplyLinkCanonicalPaths)
+	if supplyLinkBatchErr != nil {
+		e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyLinkMaterialize] preload failed: %v", supplyLinkBatchErr))
+	}
+	for _, prepared := range preparedSupplyLinks {
+		seg := prepared.segment
+		slFrag := prepared.fragment
+		segmentLookupKey := prepared.segmentLookupKey
+		existing := existingSupplyLinksByPath[strings.TrimSpace(slFrag.CanonicalPath)]
 		if existing != nil && strings.TrimSpace(existing.ID) != "" {
 			materializedSegmentRefs[segmentLookupKey] = supplyLinkMaterializationRef{
 				ID:            strings.TrimSpace(existing.ID),
 				CanonicalPath: strings.TrimSpace(existing.CanonicalPath),
 				TenantID:      strings.TrimSpace(existing.TenantID),
 			}
+			e.setSupplyLinkRefCached(ctx, segmentLookupKey, materializedSegmentRefs[segmentLookupKey])
 			changed := false
 			if existing.State == nil {
 				existing.State = make(map[string]models.MetricValue)
@@ -8602,7 +8804,7 @@ func (e *ScoutEngine) processSupplyChains(
 			}
 			existing.UpdatedAt = time.Now().UTC()
 			existing.Metadata.LastUpdatedAt = time.Now().UTC()
-			if err := e.fragmentsRepo.Update(ctx, existing); err != nil {
+			if err := e.fragmentsRepo.UpdateFast(ctx, existing); err != nil {
 				supplyLinksSkipped++
 			} else {
 				supplyLinksCreated++
@@ -8611,10 +8813,11 @@ func (e *ScoutEngine) processSupplyChains(
 					CanonicalPath: strings.TrimSpace(existing.CanonicalPath),
 					TenantID:      strings.TrimSpace(existing.TenantID),
 				}
+				e.setSupplyLinkRefCached(ctx, segmentLookupKey, materializedSegmentRefs[segmentLookupKey])
 			}
 			continue
 		}
-		if createdID, createErr := e.fragmentsRepo.Create(ctx, slFrag); createErr != nil {
+		if createdID, createErr := e.fragmentsRepo.CreateAssumeAbsent(ctx, slFrag); createErr != nil {
 			supplyLinksSkipped++
 		} else {
 			supplyLinksCreated++
@@ -8623,6 +8826,7 @@ func (e *ScoutEngine) processSupplyChains(
 				CanonicalPath: strings.TrimSpace(slFrag.CanonicalPath),
 				TenantID:      strings.TrimSpace(slFrag.TenantID),
 			}
+			e.setSupplyLinkRefCached(ctx, segmentLookupKey, materializedSegmentRefs[segmentLookupKey])
 		}
 	}
 
@@ -8630,40 +8834,25 @@ func (e *ScoutEngine) processSupplyChains(
 		e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyLinkMaterialize] created=%d skipped=%d", supplyLinksCreated, supplyLinksSkipped))
 	}
 
-	// Rebuild existing chains that might be extended by newly created SupplyLinks.
+	// Defer expensive rebuild work out of the hot materialization path.
 	if supplyLinksCreated > 0 && e.supplyChainPathBuilder != nil {
-		rebuiltCount := 0
-		seen := map[string]bool{}
-		for _, seg := range materializedSegments {
-			for _, ref := range []string{seg.SupplierRef, seg.CustomerRef} {
-				if ref == "" || seen[ref] {
-					continue
-				}
-				seen[ref] = true
-				affected, _ := e.supplyChainPathBuilder.FindChainsByNodeRef(ctx, "global", ref)
-				for _, art := range affected {
-					if art.Labels == nil {
-						continue
-					}
-					leafCustomer := strings.TrimSpace(art.Labels["anchorCustomer"])
-					if leafCustomer == "" {
-						continue
-					}
-					if err := e.supplyChainPathBuilder.RebuildFromSupplyLinks(ctx, art, leafCustomer); err == nil {
-						rebuiltCount++
-					}
-				}
-			}
+		if job.State == nil {
+			job.State = make(map[string]interface{})
 		}
-		if rebuiltCount > 0 {
-			e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainRebuild] rebuilt=%d existing chains from new SupplyLinks", rebuiltCount))
+		job.State["deferredSupplyChainRebuild"] = map[string]interface{}{
+			"scheduled":          true,
+			"newSupplyLinks":     float64(supplyLinksCreated),
+			"normalizedSegments": float64(len(materializedSegments)),
 		}
+		e.launchDeferredSupplyChainRebuild(job, materializedSegments)
+		e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainRebuildDeferred] scheduled from %d new SupplyLinks", supplyLinksCreated))
 	}
 
 	// Materialize supply chain paths as MaterializedArtifact for every chain discovery.
 	// Uses structural canonical key (rootSupplier/leafProduct/leafCustomer) for idempotent dedup & merge.
 	// Chain reuse: checks if a MaterializedArtifact already exists with sufficient quality to skip re-processing.
 	// Batches create/update for efficiency (BatchGetByCanonicalKeys + BatchUpsert).
+	materializedPathsCount := 0
 	if e.supplyChainPathBuilder != nil && len(chains) > 0 {
 		maxDepth := parseStateInt(job.State["maxRecursionDepth"], 2)
 		if maxDepth <= 0 {
@@ -8696,18 +8885,56 @@ func (e *ScoutEngine) processSupplyChains(
 		const chainReuseLogSampleLimit = 6
 		skipSamples := make([]string, 0, chainReuseLogSampleLimit)
 		mergeSamples := make([]string, 0, chainReuseLogSampleLimit)
-		for idx, chain := range chains {
-			singleParsed, perr := parser.ParseSupplyChains([]agents.SupplyChain{chain}, sourceCanonicalPath)
-			if perr != nil || singleParsed == nil || len(singleParsed.SupplyLinkSegments) == 0 {
+		type pendingPathMaterialization struct {
+			index        int
+			canonicalKey string
+			segments     []pathbuilder.PathSegment
+			path         *pathbuilder.SupplyChainPath
+		}
+		pendingPaths := make([]pendingPathMaterialization, 0, len(parsedChains))
+		canonicalKeysForReuse := make([]string, 0, len(parsedChains))
+		for idx, singleParsed := range parsedChains {
+			if singleParsed == nil || len(singleParsed.SupplyLinkSegments) == 0 {
 				continue
 			}
 			segments := buildSegmentsFromParsed(singleParsed, pathRewrites, materializedSegmentRefs)
 			if len(segments) == 0 {
 				continue
 			}
+			canonicalKey := pathbuilder.BuildStructuralCanonicalKey(tenantID, segments)
+			if canonicalKey == "" {
+				canonicalKey = buildSupplyChainArtifactCanonicalKey(job, anchorPath, idx, segments)
+			}
+			buildMode := "scout_parsed_auto"
+			if isSupplyChainPlanMode(job.State) {
+				buildMode = "scout_parsed_plan"
+			}
+			path := &pathbuilder.SupplyChainPath{
+				Segments:   segments,
+				Confidence: normalizeEdgeConfidence(chains[idx].Confidence),
+				BuildMode:  buildMode,
+				MaxDepth:   maxDepth,
+			}
+			pendingPaths = append(pendingPaths, pendingPathMaterialization{
+				index:        idx,
+				canonicalKey: canonicalKey,
+				segments:     segments,
+				path:         path,
+			})
+			if canonicalKey != "" {
+				canonicalKeysForReuse = append(canonicalKeysForReuse, canonicalKey)
+			}
+		}
 
-			reuseDecision := evaluateChainReuse(ctx, e.supplyChainPathBuilder, tenantID, segments)
-			logChainReuseDecision(ctx, job, reuseDecision, idx)
+		existingChainsByKey := map[string]*models.MaterializedArtifact{}
+		if len(canonicalKeysForReuse) > 0 {
+			if batchExisting, err := e.supplyChainPathBuilder.BatchGetChainsByCanonicalKeys(ctx, tenantID, canonicalKeysForReuse); err == nil {
+				existingChainsByKey = batchExisting
+			}
+		}
+		for _, pending := range pendingPaths {
+			reuseDecision := evaluateChainReuseFromExisting(pending.canonicalKey, existingChainsByKey[pending.canonicalKey])
+			logChainReuseDecision(ctx, job, reuseDecision, pending.index)
 			// Never full-skip on provisional staged materialization (step1/step2/step3/U1/U2):
 			// we want to preserve downstream enrichment at final step4 and avoid losing business links.
 			if !isFinalMaterializationStage && reuseDecision.Level == ChainReuseFullSkip {
@@ -8727,7 +8954,7 @@ func (e *ScoutEngine) processSupplyChains(
 					}
 				}
 				if len(skipSamples) < chainReuseLogSampleLimit {
-					skipSamples = append(skipSamples, fmt.Sprintf("chain=%d key=%s reason=%s", idx, reuseDecision.CanonicalKey, reuseDecision.Reason))
+					skipSamples = append(skipSamples, fmt.Sprintf("chain=%d key=%s reason=%s", pending.index, reuseDecision.CanonicalKey, reuseDecision.Reason))
 				}
 				continue
 			}
@@ -8735,26 +8962,11 @@ func (e *ScoutEngine) processSupplyChains(
 			if reuseDecision.Level == ChainReuseEnrichMerge {
 				chainReuseMerged++
 				if len(mergeSamples) < chainReuseLogSampleLimit {
-					mergeSamples = append(mergeSamples, fmt.Sprintf("chain=%d key=%s reason=%s", idx, reuseDecision.CanonicalKey, reuseDecision.Reason))
+					mergeSamples = append(mergeSamples, fmt.Sprintf("chain=%d key=%s reason=%s", pending.index, reuseDecision.CanonicalKey, reuseDecision.Reason))
 				}
 			}
-
-			canonicalKey := pathbuilder.BuildStructuralCanonicalKey(tenantID, segments)
-			if canonicalKey == "" {
-				canonicalKey = buildSupplyChainArtifactCanonicalKey(job, anchorPath, idx, segments)
-			}
-			buildMode := "scout_parsed_auto"
-			if isSupplyChainPlanMode(job.State) {
-				buildMode = "scout_parsed_plan"
-			}
-			path := &pathbuilder.SupplyChainPath{
-				Segments:   segments,
-				Confidence: normalizeEdgeConfidence(chain.Confidence),
-				BuildMode:  buildMode,
-				MaxDepth:   maxDepth,
-			}
-			pathsToMaterialize = append(pathsToMaterialize, path)
-			keysToMaterialize = append(keysToMaterialize, canonicalKey)
+			pathsToMaterialize = append(pathsToMaterialize, pending.path)
+			keysToMaterialize = append(keysToMaterialize, pending.canonicalKey)
 		}
 		if chainReuseSkipped > 0 {
 			e.logLine(ctx, job, "info", fmt.Sprintf("[ChainReuse] SKIP summary skipped=%d stage=%s samples=[%s]",
@@ -8770,6 +8982,7 @@ func (e *ScoutEngine) processSupplyChains(
 				e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainMaterialize] batch failed: %v", err))
 			} else {
 				materializedCount := len(ids)
+				materializedPathsCount = materializedCount
 				for i, id := range ids {
 					canonicalKey := keysToMaterialize[i]
 					segmentCount := len(pathsToMaterialize[i].Segments)
@@ -8832,6 +9045,10 @@ func (e *ScoutEngine) processSupplyChains(
 	// Identify gaps: nodes that have only incoming or only outgoing edges
 	gapHints := e.identifyChainGaps(result, existingContext)
 	existingContext.GapHints = gapHints
+	discoveredNodesCount := len(existingContext.DiscoveredNodes)
+	discoveredEdgesCount := len(existingContext.DiscoveredEdges)
+	normalizedSegmentsCount := len(materializedSegments)
+	materializedFragmentsCount := createdFrags + updatedFrags
 	dupeCreateRatio := 0.0
 	if createdEdges > 0 {
 		dupeCreateRatio = float64(edgeDupes) / float64(createdEdges)
@@ -8840,25 +9057,43 @@ func (e *ScoutEngine) processSupplyChains(
 	if createdEdges > 0 {
 		reverseRate = float64(edgeReversed) / float64(createdEdges)
 	}
+	job.State["supplyChainDiscovery"] = map[string]interface{}{
+		"discoveredNodes":    float64(discoveredNodesCount),
+		"discoveredEdges":    float64(discoveredEdgesCount),
+		"normalizedSegments": float64(normalizedSegmentsCount),
+	}
+	job.State["supplyChainMaterialization"] = map[string]interface{}{
+		"materializedFragments":   float64(materializedFragmentsCount),
+		"materializedEdges":       float64(createdEdges),
+		"materializedSupplyLinks": float64(supplyLinksCreated),
+		"materializedPaths":       float64(materializedPathsCount),
+	}
 	job.State["supplyChainSummary"] = map[string]interface{}{
-		"createdFragments":     float64(createdFrags),
-		"updatedFragments":     float64(updatedFrags),
-		"fragmentErrors":       float64(createErrors),
-		"createdEdges":         float64(createdEdges),
-		"edgeDupes":            float64(edgeDupes),
-		"edgeErrors":           float64(edgeCreateErrors),
-		"edgeReversed":         float64(edgeReversed),
-		"edgePenalized":        float64(edgePenalized),
-		"supplyLinksCreated":   float64(supplyLinksCreated),
-		"supplyLinksSkipped":   float64(supplyLinksSkipped),
-		"gapHints":             float64(len(gapHints)),
-		"dupeCreateRatio":      dupeCreateRatio,
-		"reverseRate":          reverseRate,
-		"kpiGuardrailDCR":      dupeCreateRatio > 0.2,
-		"kpiGuardrailRR":       reverseRate > 0.25,
-		"chainReuseSkipped":    float64(chainReuseSkipped),
-		"chainReuseMerged":     float64(chainReuseMerged),
-		"chainReuseScopeAdded": float64(chainReuseScopeAdded),
+		"discoveredNodes":         float64(discoveredNodesCount),
+		"discoveredEdges":         float64(discoveredEdgesCount),
+		"normalizedSegments":      float64(normalizedSegmentsCount),
+		"materializedFragments":   float64(materializedFragmentsCount),
+		"materializedEdges":       float64(createdEdges),
+		"materializedSupplyLinks": float64(supplyLinksCreated),
+		"materializedPaths":       float64(materializedPathsCount),
+		"createdFragments":        float64(createdFrags),
+		"updatedFragments":        float64(updatedFrags),
+		"fragmentErrors":          float64(createErrors),
+		"createdEdges":            float64(createdEdges),
+		"edgeDupes":               float64(edgeDupes),
+		"edgeErrors":              float64(edgeCreateErrors),
+		"edgeReversed":            float64(edgeReversed),
+		"edgePenalized":           float64(edgePenalized),
+		"supplyLinksCreated":      float64(supplyLinksCreated),
+		"supplyLinksSkipped":      float64(supplyLinksSkipped),
+		"gapHints":                float64(len(gapHints)),
+		"dupeCreateRatio":         dupeCreateRatio,
+		"reverseRate":             reverseRate,
+		"kpiGuardrailDCR":         dupeCreateRatio > 0.2,
+		"kpiGuardrailRR":          reverseRate > 0.25,
+		"chainReuseSkipped":       float64(chainReuseSkipped),
+		"chainReuseMerged":        float64(chainReuseMerged),
+		"chainReuseScopeAdded":    float64(chainReuseScopeAdded),
 	}
 
 	if contextJSON, err := existingContext.ToJSON(); err == nil {
@@ -8867,7 +9102,12 @@ func (e *ScoutEngine) processSupplyChains(
 		}
 		job.State["chainContext"] = contextJSON
 		if e.scoutingJobsRepo != nil {
-			if err := e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{"chainContext": contextJSON}); err != nil {
+			if err := e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{
+				"chainContext":               contextJSON,
+				"supplyChainDiscovery":       job.State["supplyChainDiscovery"],
+				"supplyChainMaterialization": job.State["supplyChainMaterialization"],
+				"supplyChainSummary":         job.State["supplyChainSummary"],
+			}); err != nil {
 				logGroundingErrorWithContext(job, "scout", "supply_chain.persist_chain_context", "job_state_update_failed", "repo_update_error", true, err)
 				e.emitGroundingErrorTelemetry(ctx, job, "scout", "supply_chain.persist_chain_context", "job_state_update_failed", "repo_update_error", true)
 			}
@@ -8891,47 +9131,33 @@ func (e *ScoutEngine) processSupplyChains(
 		"edgesCount":     len(result.Edges),
 		"gapHintsCount":  len(gapHints),
 		"supplyChainLogSummary": map[string]any{
-			"createdFragments":     createdFrags,
-			"updatedFragments":     updatedFrags,
-			"fragmentErrors":       createErrors,
-			"createdEdges":         createdEdges,
-			"edgeDupes":            edgeDupes,
-			"edgeErrors":           edgeCreateErrors,
-			"edgeReversed":         edgeReversed,
-			"edgePenalized":        edgePenalized,
-			"supplyLinksCreated":   supplyLinksCreated,
-			"supplyLinksSkipped":   supplyLinksSkipped,
-			"chainReuseSkipped":    chainReuseSkipped,
-			"chainReuseMerged":     chainReuseMerged,
-			"chainReuseScopeAdded": chainReuseScopeAdded,
+			"discoveredNodes":         discoveredNodesCount,
+			"discoveredEdges":         discoveredEdgesCount,
+			"normalizedSegments":      normalizedSegmentsCount,
+			"materializedFragments":   materializedFragmentsCount,
+			"materializedEdges":       createdEdges,
+			"materializedSupplyLinks": supplyLinksCreated,
+			"materializedPaths":       materializedPathsCount,
+			"createdFragments":        createdFrags,
+			"updatedFragments":        updatedFrags,
+			"fragmentErrors":          createErrors,
+			"createdEdges":            createdEdges,
+			"edgeDupes":               edgeDupes,
+			"edgeErrors":              edgeCreateErrors,
+			"edgeReversed":            edgeReversed,
+			"edgePenalized":           edgePenalized,
+			"supplyLinksCreated":      supplyLinksCreated,
+			"supplyLinksSkipped":      supplyLinksSkipped,
+			"chainReuseSkipped":       chainReuseSkipped,
+			"chainReuseMerged":        chainReuseMerged,
+			"chainReuseScopeAdded":    chainReuseScopeAdded,
 		},
 	})
 	{
-		msg := fmt.Sprintf("[SupplyChainSummary] fragments(created=%d updated=%d err=%d) edges(created=%d dupes=%d err=%d reversed=%d penalized=%d) supplyLinks(created=%d skipped=%d) gaps=%d chainReuse(skipped=%d merged=%d scopeAdded=%d)",
-			createdFrags, updatedFrags, createErrors, createdEdges, edgeDupes, edgeCreateErrors, edgeReversed, edgePenalized, supplyLinksCreated, supplyLinksSkipped, len(gapHints), chainReuseSkipped, chainReuseMerged, chainReuseScopeAdded)
+		msg := fmt.Sprintf("[SupplyChainSummary] discovered(nodes=%d edges=%d normalizedSegments=%d) materialized(fragments=%d edges=%d supplyLinks=%d paths=%d) fragments(created=%d updated=%d err=%d) edges(dupes=%d err=%d reversed=%d penalized=%d) supplyLinks(skipped=%d) gaps=%d chainReuse(skipped=%d merged=%d scopeAdded=%d)",
+			discoveredNodesCount, discoveredEdgesCount, normalizedSegmentsCount, materializedFragmentsCount, createdEdges, supplyLinksCreated, materializedPathsCount, createdFrags, updatedFrags, createErrors, edgeDupes, edgeCreateErrors, edgeReversed, edgePenalized, supplyLinksSkipped, len(gapHints), chainReuseSkipped, chainReuseMerged, chainReuseScopeAdded)
 		fmt.Printf("%s\n", msg)
-
-		var parts []string
-		if createdFrags > 0 {
-			parts = append(parts, fmt.Sprintf("+%d new", createdFrags))
-		}
-		if updatedFrags > 0 {
-			parts = append(parts, fmt.Sprintf("%d updated", updatedFrags))
-		}
-		if createdEdges > 0 {
-			parts = append(parts, fmt.Sprintf("+%d links", createdEdges))
-		}
-		if len(gapHints) > 0 {
-			noun := "gap"
-			if len(gapHints) != 1 {
-				noun = "gaps"
-			}
-			parts = append(parts, fmt.Sprintf("%d %s identified", len(gapHints), noun))
-		}
-		desc := "No changes"
-		if len(parts) > 0 {
-			desc = strings.Join(parts, " • ")
-		}
+		desc := supplyChainSummaryDescription(discoveredNodesCount, materializedFragmentsCount, createdEdges, supplyLinksCreated, materializedPathsCount, len(gapHints))
 
 		e.publish(ctx, realtime.EventType("horizon.scout.job.log"), map[string]interface{}{
 			"tenantId":            job.TenantID,
@@ -8945,6 +9171,8 @@ func (e *ScoutEngine) processSupplyChains(
 				"title":       "Supply chain saved",
 				"description": desc,
 			},
+			"supplyChainDiscovery":       job.State["supplyChainDiscovery"],
+			"supplyChainMaterialization": job.State["supplyChainMaterialization"],
 		})
 	}
 

@@ -40,6 +40,7 @@ func (h *CommonalityAnalysisHandler) Execute(ctx context.Context, eng pipeline.E
 		return &pipeline.ContractOutput{
 			ViewDirective: &models.ViewDirective{
 				ContractType: h.ContractType(),
+				GraphView:    models.GraphViewInfluenceNet,
 				ResearchPlan: &models.ResearchPlan{
 					Reason: "contract input missing job or repositories",
 				},
@@ -60,6 +61,7 @@ func (h *CommonalityAnalysisHandler) Execute(ctx context.Context, eng pipeline.E
 		return &pipeline.ContractOutput{
 			ViewDirective: &models.ViewDirective{
 				ContractType: h.ContractType(),
+				GraphView:    models.GraphViewInfluenceNet,
 				ResearchPlan: &models.ResearchPlan{
 					Reason: "need at least two focus entities for commonality",
 				},
@@ -86,6 +88,7 @@ func (h *CommonalityAnalysisHandler) Execute(ctx context.Context, eng pipeline.E
 		return &pipeline.ContractOutput{
 			ViewDirective: &models.ViewDirective{
 				ContractType:   h.ContractType(),
+				GraphView:      models.GraphViewInfluenceNet,
 				FocusNodePaths: focusPaths,
 				ResearchPlan: &models.ResearchPlan{
 					MissingNodes: focusPaths,
@@ -161,6 +164,7 @@ func (h *CommonalityAnalysisHandler) Execute(ctx context.Context, eng pipeline.E
 		return &pipeline.ContractOutput{
 			ViewDirective: &models.ViewDirective{
 				ContractType:   h.ContractType(),
+				GraphView:      models.GraphViewInfluenceNet,
 				FocusNodePaths: focusPaths,
 				ResearchPlan: &models.ResearchPlan{
 					Reason: "no shared neighbors found in graph",
@@ -215,6 +219,7 @@ func (h *CommonalityAnalysisHandler) Execute(ctx context.Context, eng pipeline.E
 		return &pipeline.ContractOutput{
 			ViewDirective: &models.ViewDirective{
 				ContractType:   h.ContractType(),
+				GraphView:      models.GraphViewInfluenceNet,
 				FocusNodePaths: focusPaths,
 				ResearchPlan: &models.ResearchPlan{
 					Reason: "shared neighbors are too generic to display",
@@ -255,6 +260,7 @@ func (h *CommonalityAnalysisHandler) Execute(ctx context.Context, eng pipeline.E
 	return &pipeline.ContractOutput{
 		ViewDirective: &models.ViewDirective{
 			ContractType:   h.ContractType(),
+			GraphView:      models.GraphViewInfluenceNet,
 			FocusNodePaths: focusNodePaths,
 			HighlightPaths: highlightPaths,
 			FilterRelTypes: filterRelTypes,

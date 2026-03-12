@@ -978,6 +978,14 @@ func (b *SupplyChainPathBuilder) GetChainByCanonicalKey(ctx context.Context, ten
 	return b.artifactsRepo.GetByCanonicalKey(ctx, tenantID, models.MaterializedKindSupplyChainPath, canonicalKey)
 }
 
+// BatchGetChainsByCanonicalKeys returns existing supply-chain artifacts by structural canonical key.
+func (b *SupplyChainPathBuilder) BatchGetChainsByCanonicalKeys(ctx context.Context, tenantID string, canonicalKeys []string) (map[string]*models.MaterializedArtifact, error) {
+	if b.artifactsRepo == nil || len(canonicalKeys) == 0 {
+		return map[string]*models.MaterializedArtifact{}, nil
+	}
+	return b.artifactsRepo.BatchGetByCanonicalKeys(ctx, tenantID, models.MaterializedKindSupplyChainPath, canonicalKeys)
+}
+
 // RebuildFromSupplyLinks rebuilds an existing MaterializedArtifact by re-traversing SupplyLinks
 // upstream from the chain's leaf customer. Merges any newly discovered nodes/edges into the artifact.
 func (b *SupplyChainPathBuilder) RebuildFromSupplyLinks(ctx context.Context, artifact *models.MaterializedArtifact, leafCustomerRef string) error {

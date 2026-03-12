@@ -657,6 +657,65 @@ func (r *DependencyEdgesRepository) ListBySource(ctx context.Context, tenantID, 
 	return edges, nil
 }
 
+// ListBySourceIDsAndType returns edges for multiple exact source IDs with a single chunked Firestore preload.
+// Missing sources are simply absent from the result. Intended for caller-side dedup/materialization batches.
+func (r *DependencyEdgesRepository) ListBySourceIDsAndType(ctx context.Context, tenantID string, sourceFragmentIDs []string, edgeType models.DependencyType) ([]*models.DependencyEdge, error) {
+	if r == nil || r.col == nil {
+		return nil, ErrInvalidDocument
+	}
+	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(string(edgeType)) == "" || len(sourceFragmentIDs) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]struct{}, len(sourceFragmentIDs))
+	unique := make([]string, 0, len(sourceFragmentIDs))
+	for _, raw := range sourceFragmentIDs {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	if len(unique) == 0 {
+		return nil, nil
+	}
+	const chunkSize = 30
+	out := make([]*models.DependencyEdge, 0, len(unique)*2)
+	for i := 0; i < len(unique); i += chunkSize {
+		end := i + chunkSize
+		if end > len(unique) {
+			end = len(unique)
+		}
+		chunk := unique[i:end]
+		docs, err := r.col.
+			Where("tenantId", "==", tenantID).
+			Where("type", "==", edgeType).
+			Where("sourceFragmentId", "in", chunk).
+			Documents(ctx).
+			GetAll()
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range docs {
+			if d == nil || !d.Exists() {
+				continue
+			}
+			var edge models.DependencyEdge
+			if err := d.DataTo(&edge); err != nil {
+				continue
+			}
+			if strings.TrimSpace(edge.ID) == "" {
+				edge.ID = strings.TrimSpace(d.Ref.ID)
+			}
+			out = append(out, &edge)
+		}
+	}
+	return out, nil
+}
+
 // ListByTarget получает список входящих DependencyEdge
 func (r *DependencyEdgesRepository) ListByTarget(ctx context.Context, tenantID, targetFragmentID string, edgeType *models.DependencyType, limit int) ([]*models.DependencyEdge, error) {
 	if limit <= 0 {

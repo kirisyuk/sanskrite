@@ -3,6 +3,13 @@ import { NodeTypes, Handle, Position, NodeProps, NodeToolbar, useReactFlow } fro
 import { useTranslation } from 'react-i18next';
 import { ThemeContext } from './ThemeProvider';
 import type { SemanticGroup, LinearSection } from '../lib/elkLayout';
+import type {
+  HierarchicalViewMeta,
+  InfluenceViewMeta,
+  SemanticGraphView,
+  SupplyFlowViewMeta,
+  ValueChainViewMeta,
+} from '../lib/graphViews/types';
 import { humanizeCanonicalPath, preferDisplayLabel } from '../lib/uiUtils';
 import * as CountryFlags from 'country-flag-icons/react/1x1';
 
@@ -51,6 +58,7 @@ const CountryFlag: React.FC<{ countryCode: string | null; size?: number }> = ({ 
 // Типы нод для Horizon графа (на основе LensItem)
 export interface HorizonNodeData {
   id: string;
+  graphView?: SemanticGraphView;
   lensItemId: string; // ID LensItem
   fragmentId?: string;
   parentFragmentId?: string;
@@ -188,6 +196,10 @@ export interface HorizonNodeData {
   // Levels two-pane metadata (view-only)
   levelsPane?: 'right' | 'left' | 'dock';
   hiddenByStack?: boolean;
+  hierarchicalMeta?: HierarchicalViewMeta;
+  supplyFlowMeta?: SupplyFlowViewMeta;
+  influenceMeta?: InfluenceViewMeta;
+  valueChainMeta?: ValueChainViewMeta;
   // Right-side contextual filters (Levels layout; view-only)
   rightFiltersOpen?: boolean;
   rightFilterHideLoneParents?: boolean;
@@ -3778,7 +3790,12 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const isPinnedToScope = Boolean((data as any)?.pinnedToScope);
   const canTogglePin = Boolean((data as any)?.onTogglePin && data.canonicalPath);
   const nodeId = String((data as any)?.id || id || '').trim();
-  const stackKey = String((data as any)?.stackGroupKey || '').trim();
+  const hierarchicalMeta = ((data as any)?.hierarchicalMeta || {}) as HierarchicalViewMeta;
+  const effectiveLevelsPane = String((data as any)?.levelsPane || hierarchicalMeta?.pane || '').trim();
+  const effectiveRightDockEnabled = Array.isArray((data as any)?.rightDockEnabled)
+    ? ((data as any)?.rightDockEnabled as any[])
+    : (Array.isArray(hierarchicalMeta?.rightDockEnabled) ? hierarchicalMeta.rightDockEnabled : []);
+  const stackKey = String((data as any)?.stackGroupKey || hierarchicalMeta?.stackGroupKey || '').trim();
   const stackCount = typeof (data as any)?.stackCount === 'number' ? (data as any).stackCount : undefined;
   const stackExpanded = Boolean((data as any)?.stackExpanded);
   const canToggleStack = Boolean(stackKey && stackCount && stackCount > 1 && typeof (data as any)?.onToggleStack === 'function');
@@ -3791,7 +3808,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   // Scout CTA: normally shown only when the node is expanded (or user already attempted loading related).
   // Exception: for RIGHT-PANE stacks, when the stack is expanded the controller node should still allow Scout,
   // even if the node itself isn't expanded yet (otherwise the first visible item in an expanded stack feels "broken").
-  const allowScoutViaExpandedStack = Boolean(isStackController && stackExpanded && String((data as any)?.levelsPane || '') === 'right');
+  const allowScoutViaExpandedStack = Boolean(isStackController && stackExpanded && effectiveLevelsPane === 'right');
   const canScopeScout = Boolean((isExpanded || data.loadRelatedAttempted || allowScoutViaExpandedStack) && data.onScopeScout && !data.scopeScoutDone);
   const isCollapsedStackController = Boolean(isStackController && !stackExpanded && (stackCount || 0) > 1);
   const isSubcategoryStackController = Boolean(isCollapsedStackController && (data as any)?.subcategoryStack);
@@ -3822,8 +3839,8 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
   const isFragmentProfileOpen = Boolean(data.fragmentProfileOpen);
 
   // Right Dock (Levels right pane): 4 filters
-  const isLevelsRightPane = String((data as any)?.levelsPane || '').trim() === 'right';
-  const rightDockEnabled = Array.isArray((data as any)?.rightDockEnabled) ? ((data as any)?.rightDockEnabled as any[]) : [];
+  const isLevelsRightPane = effectiveLevelsPane === 'right';
+  const rightDockEnabled = effectiveRightDockEnabled;
   const onToggleRightDock = (data as any)?.onToggleRightDock as
     | ((nodeId: string, key: 'governance' | 'supply' | 'dependencies' | 'structure', nextEnabled: boolean) => void)
     | undefined;
@@ -3898,8 +3915,8 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
     ? Math.min(3, Math.max(2, Math.ceil((stackCount || 0) / 8)))
     : 0;
 
-  const isLevelsRight = String((data as any)?.levelsPane || '') === 'right';
-  const isLevelsLeft = String((data as any)?.levelsPane || '') === 'left';
+  const isLevelsRight = effectiveLevelsPane === 'right';
+  const isLevelsLeft = effectiveLevelsPane === 'left';
   const rightFiltersOpen = Boolean((data as any)?.rightFiltersOpen);
   const canRightFilters = isLevelsRight && typeof (data as any)?.onOpenRightFilters === 'function' && typeof (data as any)?.onToggleRightFilter === 'function';
   const rfHideParents = Boolean((data as any)?.rightFilterHideLoneParents);

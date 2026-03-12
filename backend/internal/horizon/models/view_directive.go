@@ -4,6 +4,8 @@ package models
 // It is a view-only instruction set layered on top of existing graph data.
 type ViewDirective struct {
 	ContractType    string          `json:"contractType"`
+	GraphView       string          `json:"graphView,omitempty"`       // "hierarchical" | "supply-flow" | "influence-network" | "value-chain"
+	GraphViewConfig map[string]any  `json:"graphViewConfig,omitempty"` // controller-specific view config
 	HierarchyAxis   string          `json:"hierarchyAxis,omitempty"`   // "ownership" | "geo" | "market" | "org_parent" | ""
 	HighlightPaths  []HighlightPath `json:"highlightPaths,omitempty"`  // canonical paths forming highlighted paths
 	FilterRelTypes  []string        `json:"filterRelTypes,omitempty"`  // show only these relation types

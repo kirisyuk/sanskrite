@@ -79,7 +79,17 @@ func evaluateChainReuse(
 			Reason:       "artifact_not_found",
 		}
 	}
+	return evaluateChainReuseFromExisting(canonicalKey, existing)
+}
 
+func evaluateChainReuseFromExisting(canonicalKey string, existing *models.MaterializedArtifact) ChainReuseDecision {
+	if existing == nil {
+		return ChainReuseDecision{
+			Level:        ChainReuseNone,
+			CanonicalKey: canonicalKey,
+			Reason:       "artifact_not_found",
+		}
+	}
 	staleness := time.Since(existing.UpdatedAt)
 	isFresh := staleness < time.Duration(chainReuseFreshnessThresholdDays)*24*time.Hour
 	isValidated := existing.PathStatus == "validated"

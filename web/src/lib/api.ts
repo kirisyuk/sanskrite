@@ -1,4 +1,5 @@
 import axios, { AxiosInstance } from 'axios';
+import type { HorizonLensRecord, HorizonLensViewConfig } from '../types/horizonView';
 import { auth } from './firebase';
 import type { User, Project, DataSource } from '../types';
 import type { AnalyzeRequest, AnalyzeResponse } from '../types/stance';
@@ -1603,21 +1604,10 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     projectId: string;
     name: string;
     scope: string[];
-    viewConfig?: Record<string, any>;
+    viewConfig?: HorizonLensViewConfig;
     alertConfig?: Record<string, any>;
     status?: string;
-  }, options?: { correlationId?: string; sessionId?: string; skipScouting?: boolean }): Promise<{
-    id: string;
-    tenantId: string;
-    projectId: string;
-    name: string;
-    scope: string[];
-    viewConfig?: Record<string, any>;
-    alertConfig?: Record<string, any>;
-    status: string;
-    createdAt: string;
-    updatedAt: string;
-  }> {
+  }, options?: { correlationId?: string; sessionId?: string; skipScouting?: boolean }): Promise<HorizonLensRecord> {
     try {
       const headers: Record<string, string> = {};
       if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
@@ -1749,18 +1739,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       anchors: Array<{ canonicalPath: string; type?: string; name?: string; confidence?: number; reason?: string }>;
       decompositionHints?: string[];
     };
-    lens: {
-      id: string;
-      tenantId: string;
-      projectId: string;
-      name: string;
-      scope: string[];
-      viewConfig?: Record<string, any>;
-      alertConfig?: Record<string, any>;
-      status: string;
-      createdAt: string;
-      updatedAt: string;
-    };
+    lens: HorizonLensRecord;
   }> {
     try {
       const headers: Record<string, string> = {};
@@ -1775,18 +1754,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }
 
   async listHorizonLenses(projectId: string, options?: { status?: string; limit?: number }): Promise<{
-    lenses: Array<{
-      id: string;
-      tenantId: string;
-      projectId: string;
-      name: string;
-      scope: string[];
-      viewConfig?: Record<string, any>;
-      alertConfig?: Record<string, any>;
-      status: string;
-      createdAt: string;
-      updatedAt: string;
-    }>;
+    lenses: HorizonLensRecord[];
     total: number;
   }> {
     try {
@@ -1805,21 +1773,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
-  async getHorizonLens(lensId: string): Promise<{
-    id: string;
-    tenantId: string;
-    projectId: string;
-    name: string;
-    scope: string[];
-    viewConfig?: Record<string, any>;
-    alertConfig?: Record<string, any>;
-    status: string;
-    createdAt: string;
-    updatedAt: string;
-    scopeFragments?: Record<string, string>;
-    resolvedQueries?: Record<string, string[]>;
-    lastResolved?: string;
-  }> {
+  async getHorizonLens(lensId: string): Promise<HorizonLensRecord> {
     try {
       const response = await this.client.get(`/api/horizon/lenses/${lensId}`);
       return response.data;
@@ -1837,7 +1791,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       projectId: string;
       name: string;
       scope: string[];
-      viewConfig?: Record<string, any>;
+      viewConfig?: HorizonLensViewConfig;
       alertConfig?: Record<string, any>;
       status: string;
       scopeFragments?: Record<string, string>;
@@ -1845,21 +1799,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       lastResolved?: string;
     },
     options?: { skipScouting?: boolean; correlationId?: string; sessionId?: string }
-  ): Promise<{
-    id: string;
-    tenantId: string;
-    projectId: string;
-    name: string;
-    scope: string[];
-    viewConfig?: Record<string, any>;
-    alertConfig?: Record<string, any>;
-    status: string;
-    createdAt: string;
-    updatedAt: string;
-    scopeFragments?: Record<string, string>;
-    resolvedQueries?: Record<string, string[]>;
-    lastResolved?: string;
-  }> {
+  ): Promise<HorizonLensRecord> {
     try {
       const headers: Record<string, string> = {};
       if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
@@ -1921,21 +1861,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     jobId: string;
     scopeAdded: boolean;
     targetCanonicalPath: string;
-    lens?: {
-      id: string;
-      tenantId: string;
-      projectId: string;
-      name: string;
-      scope: string[];
-      viewConfig?: Record<string, any>;
-      alertConfig?: Record<string, any>;
-      status: string;
-      createdAt: string;
-      updatedAt: string;
-      scopeFragments?: Record<string, string>;
-      resolvedQueries?: Record<string, string[]>;
-      lastResolved?: string;
-    };
+    lens?: HorizonLensRecord;
   }> {
     try {
       const headers: Record<string, string> = {};
@@ -1961,21 +1887,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     jobId: string;
     scopeAdded: boolean;
     targetCanonicalPath: string;
-    lens?: {
-      id: string;
-      tenantId: string;
-      projectId: string;
-      name: string;
-      scope: string[];
-      viewConfig?: Record<string, any>;
-      alertConfig?: Record<string, any>;
-      status: string;
-      createdAt: string;
-      updatedAt: string;
-      scopeFragments?: Record<string, string>;
-      resolvedQueries?: Record<string, string[]>;
-      lastResolved?: string;
-    };
+    lens?: HorizonLensRecord;
   }> {
     try {
       const headers: Record<string, string> = {};

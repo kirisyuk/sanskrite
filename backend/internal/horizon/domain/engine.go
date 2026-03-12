@@ -3150,6 +3150,7 @@ func adaptSnapshotToViewDirective(snapshot *models.DomainAnswerSnapshot) *models
 		ContractType: strings.TrimSpace(snapshot.DomainContract.ContractType),
 		Summary:      strings.TrimSpace(snapshot.Thesis.Text),
 	}
+	d.GraphView = models.GraphViewForDirective(d.ContractType, d.HierarchyAxis)
 	for _, p := range snapshot.ImpactPaths {
 		if len(p.NodePaths) == 0 {
 			continue

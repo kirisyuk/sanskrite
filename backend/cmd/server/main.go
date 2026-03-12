@@ -64,6 +64,7 @@ import (
 	horizonqa "github.com/igorkirisyuk/sanskrite/internal/horizon/qa"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonrisk "github.com/igorkirisyuk/sanskrite/internal/horizon/risk"
+	horizonrtctx "github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	horizonagents "github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	horizonsignals "github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
@@ -2610,8 +2611,20 @@ func main() {
 			return
 		}
 
-		// Execute with generous timeout (Cloud Run request timeout is 3600s).
-		execCtx, cancel := context.WithTimeout(r.Context(), 45*time.Minute)
+		// Heavy supply-chain jobs must survive request-scoped cancellation long enough to finish materialization.
+		// Keep the execution budget configurable, but capped below the Cloud Run request timeout ceiling.
+		execBase := context.Background()
+		if rc, ok := horizonrtctx.Get(r.Context()); ok {
+			execBase = horizonrtctx.With(execBase, rc)
+		}
+		execTimeout := getEnvDuration("SCOUT_TASK_EXEC_TIMEOUT", 55*time.Minute)
+		if execTimeout <= 0 {
+			execTimeout = 55 * time.Minute
+		}
+		if execTimeout > 59*time.Minute {
+			execTimeout = 59 * time.Minute
+		}
+		execCtx, cancel := context.WithTimeout(execBase, execTimeout)
 		defer cancel()
 
 		if err := scoutEngine.ExecuteScoutingJob(execCtx, job); err != nil {
@@ -4390,6 +4403,18 @@ func getEnvInt(key string, def int) int {
 		return def
 	}
 	return n
+}
+
+func getEnvDuration(key string, def time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return def
+	}
+	return d
 }
 
 func parseEnvBool(raw string) bool {
