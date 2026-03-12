@@ -109,6 +109,10 @@ func decodeSupplyChainPathLegs(raw interface{}) ([]SupplyChainPathLeg, error) {
 
 // BuildSupplyChainPathPayload creates a v1 SUPPLY_CHAIN_PATH payload from nodes, edges, optional legs, and stress profile.
 func BuildSupplyChainPathPayload(nodes []SupplyChainPathNode, edges []SupplyChainPathEdge, legs []SupplyChainPathLeg, stress *SupplyChainPathStress, notes map[string]interface{}) map[string]interface{} {
+	return BuildSupplyChainPathPayloadWithSufficiency(nodes, edges, legs, stress, nil, notes)
+}
+
+func BuildSupplyChainPathPayloadWithSufficiency(nodes []SupplyChainPathNode, edges []SupplyChainPathEdge, legs []SupplyChainPathLeg, stress *SupplyChainPathStress, sufficiency *SupplyChainPathSufficiency, notes map[string]interface{}) map[string]interface{} {
 	payload := map[string]interface{}{
 		"v":     1,
 		"nodes": nodes,
@@ -121,6 +125,9 @@ func BuildSupplyChainPathPayload(nodes []SupplyChainPathNode, edges []SupplyChai
 	}
 	if stress != nil {
 		payload["stress"] = stress
+	}
+	if sufficiency != nil {
+		payload["sufficiency"] = sufficiency
 	}
 	if len(notes) > 0 {
 		payload["notes"] = notes
@@ -196,6 +203,11 @@ func ParseSupplyChainPathPayload(payload map[string]interface{}) (*SupplyChainPa
 		}
 	}
 
+	sufficiency, err := decodeSupplyChainPathSufficiency(payload["sufficiency"])
+	if err != nil {
+		return nil, err
+	}
+
 	notes := map[string]interface{}{}
 	if notesRaw, ok := payload["notes"]; ok {
 		notesMap, ok := notesRaw.(map[string]interface{})
@@ -210,6 +222,7 @@ func ParseSupplyChainPathPayload(payload map[string]interface{}) (*SupplyChainPa
 		Edges:   edges,
 		Legs:    legs,
 		Stress:  stress,
+		Sufficiency: sufficiency,
 		Notes:   notes,
 	}, nil
 }
@@ -343,7 +356,7 @@ func RepairSupplyChainPathLinkage(artifact *MaterializedArtifact, resolver func(
 
 	summary.FullyLinked = summary.Unresolved == 0 && (summary.Legs > 0 || summary.OperationalEdges > 0)
 	if summary.Changed {
-		artifact.Payload = BuildSupplyChainPathPayload(parsed.Nodes, parsed.Edges, parsed.Legs, parsed.Stress, parsed.Notes)
+		artifact.Payload = BuildSupplyChainPathPayloadWithSufficiency(parsed.Nodes, parsed.Edges, parsed.Legs, parsed.Stress, parsed.Sufficiency, parsed.Notes)
 		PopulateSupplyChainPathIndexes(artifact)
 	}
 	return summary, nil
@@ -755,6 +768,7 @@ func PopulateSupplyChainPathIndexes(artifact *MaterializedArtifact) {
 		artifact.ZoneRefs = mergeUniqueStrings(artifact.ZoneRefs, summary.ZoneRefs)
 		artifact.AffectedZoneRefs = mergeUniqueStrings(artifact.AffectedZoneRefs, summary.AffectedZoneRefs)
 	}
+	PopulateSupplyChainPathSufficiency(artifact)
 
 	if artifact.Labels != nil {
 		if artifact.AnchorSupplier == "" {
@@ -1006,7 +1020,14 @@ func MergePayloads(existing, incoming map[string]interface{}) map[string]interfa
 		mergedNotes[k] = v
 	}
 
-	return BuildSupplyChainPathPayload(mergedNodes, mergedEdges, mergedLegs, mergePathStress(existingParsed.Stress, incomingParsed.Stress), mergedNotes)
+	return BuildSupplyChainPathPayloadWithSufficiency(
+		mergedNodes,
+		mergedEdges,
+		mergedLegs,
+		mergePathStress(existingParsed.Stress, incomingParsed.Stress),
+		mergePathSufficiency(existingParsed.Sufficiency, incomingParsed.Sufficiency),
+		mergedNotes,
+	)
 }
 
 func mergePathNodes(existing, incoming []SupplyChainPathNode) []SupplyChainPathNode {
@@ -1197,6 +1218,47 @@ func mergeSupplyChainPathLeg(existing, incoming SupplyChainPathLeg) SupplyChainP
 		existing.Stress = incoming.Stress
 	}
 	return existing
+}
+
+func mergePathSufficiency(existing, incoming *SupplyChainPathSufficiency) *SupplyChainPathSufficiency {
+	if existing == nil {
+		return incoming
+	}
+	if incoming == nil {
+		return existing
+	}
+	statusRank := func(status string) int {
+		switch strings.TrimSpace(status) {
+		case SupplyChainSufficiencyForensicGap:
+			return 3
+		case SupplyChainSufficiencyHeuristic:
+			return 2
+		case SupplyChainSufficiencyValidated:
+			return 1
+		default:
+			return 0
+		}
+	}
+	merged := *existing
+	if incoming.Score > merged.Score {
+		merged.Score = incoming.Score
+	}
+	if statusRank(incoming.Status) > statusRank(merged.Status) {
+		merged.Status = incoming.Status
+	}
+	if strings.TrimSpace(incoming.Summary) != "" {
+		merged.Summary = incoming.Summary
+	}
+	merged.HardFailures = mergeUniqueStrings(merged.HardFailures, incoming.HardFailures)
+	merged.Warnings = mergeUniqueStrings(merged.Warnings, incoming.Warnings)
+	merged.OpenGaps = mergeUniqueStrings(merged.OpenGaps, incoming.OpenGaps)
+	if len(incoming.JoinAssessments) > 0 {
+		merged.JoinAssessments = append([]SupplyChainJoinAssessment(nil), incoming.JoinAssessments...)
+	}
+	if len(incoming.LegAssessments) > 0 {
+		merged.LegAssessments = append([]SupplyChainLegAssessment(nil), incoming.LegAssessments...)
+	}
+	return &merged
 }
 
 func mergePathStress(existing, incoming *SupplyChainPathStress) *SupplyChainPathStress {
@@ -1464,7 +1526,7 @@ func ReplaceCanonicalPathInArtifact(artifact *MaterializedArtifact, oldPath, new
 					changed = true
 				}
 			}
-			artifact.Payload = BuildSupplyChainPathPayload(parsed.Nodes, parsed.Edges, parsed.Legs, parsed.Stress, parsed.Notes)
+			artifact.Payload = BuildSupplyChainPathPayloadWithSufficiency(parsed.Nodes, parsed.Edges, parsed.Legs, parsed.Stress, parsed.Sufficiency, parsed.Notes)
 		}
 	case MaterializedKindRegulatoryImpactMap, MaterializedKindGovernanceChain, MaterializedKindEcosystemMap:
 		parsed, err := ParseRelationsGraphPayload(artifact.Payload)

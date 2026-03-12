@@ -3,9 +3,9 @@ import maplibregl from 'maplibre-gl';
 import { api } from '../lib/api';
 import type { GeoObject } from './useGeoObjects';
 import type { MaterializedArtifact } from '../components/SupplyChainOverlay';
-import { buildPointFeature, ensureMarkerImages } from './useGeoMarkerLayer';
+import { buildPointFeature, ensureMarkerImages, GEO_MARKER_LAYER_ANCHOR } from './useGeoMarkerLayer';
 import { MAP_TEXT_FONT_STACK } from './useMapInstance';
-import { geoCodeToShortName, humanizeCanonicalPath } from '../lib/uiUtils';
+import { humanizeCanonicalPath } from '../lib/uiUtils';
 
 const SRC = 'geo-edges';
 const ENDPOINT_SRC = 'geo-edge-endpoints';
@@ -13,32 +13,30 @@ const GLOW_LAYER = 'geo-edges-glow';
 const HOP_3_LAYER = 'geo-edges-hop-3';
 const HOP_2_LAYER = 'geo-edges-hop-2';
 const HOP_1_LAYER = 'geo-edges-hop-1';
+const SUPPLY_HOP_3_LAYER = 'geo-edges-supply-hop-3';
+const SUPPLY_HOP_2_LAYER = 'geo-edges-supply-hop-2';
+const SUPPLY_HOP_1_LAYER = 'geo-edges-supply-hop-1';
 const LABEL_LAYER = 'geo-edges-label';
 const CORRIDOR_FIELD_LAYER = 'geo-edges-corridor-field';
 const CORRIDOR_FIELD_ACCENT_LAYER = 'geo-edges-corridor-field-accent';
-const CORRIDOR_GUIDE_LAYER = 'geo-edges-corridor-guide';
-const CORRIDOR_GLOW_LAYER = 'geo-edges-corridor-glow';
-const CORRIDOR_LAYER = 'geo-edges-corridor';
-const CORRIDOR_ICON_LAYER = 'geo-edges-corridor-icon';
-const CORRIDOR_LABEL_LAYER = 'geo-edges-corridor-label';
-const ENDPOINT_CALLOUT_LAYER = 'geo-edge-endpoints-callout';
 const ENDPOINT_POINTS_LAYER = 'geo-edge-endpoints-points';
 const ENDPOINT_LABEL_LAYER = 'geo-edge-endpoints-label';
+const ENDPOINT_LABEL_CHIP_DARK = 'geo-edge-endpoint-chip-dark';
+const ENDPOINT_LABEL_CHIP_LIGHT = 'geo-edge-endpoint-chip-light';
 const MAX_HOPS = 3;
 
-/** Layer IDs that should prevent map click from clearing selection (corridor badges, edges, endpoints). */
+/** Layer IDs that should prevent map click from clearing selection (fog, edges, endpoints). */
 export const GEO_EDGE_INTERACTIVE_LAYERS = [
   CORRIDOR_FIELD_LAYER,
   CORRIDOR_FIELD_ACCENT_LAYER,
-  CORRIDOR_GLOW_LAYER,
-  CORRIDOR_GUIDE_LAYER,
-  CORRIDOR_LAYER,
-  CORRIDOR_ICON_LAYER,
-  CORRIDOR_LABEL_LAYER,
   ENDPOINT_POINTS_LAYER,
+  ENDPOINT_LABEL_LAYER,
   HOP_1_LAYER,
   HOP_2_LAYER,
   HOP_3_LAYER,
+  SUPPLY_HOP_1_LAYER,
+  SUPPLY_HOP_2_LAYER,
+  SUPPLY_HOP_3_LAYER,
   GLOW_LAYER,
   LABEL_LAYER,
 ] as const;
@@ -47,6 +45,45 @@ type ThemeMode = 'dark' | 'light';
 type EdgeFamily = 'supply' | 'control' | 'influence' | 'location' | 'market' | 'risk' | 'social' | 'other';
 type EdgeVisualKind = 'primary' | 'indirect' | 'cluster';
 type LocalPoint = { x: number; y: number };
+type EndpointLabelTier = 'selected' | 'direct' | 'path' | 'context' | 'propagation';
+type EndpointLabelMeta = {
+  labelText: string;
+  priority: number;
+  visible: boolean;
+  chip: boolean;
+  subdued: boolean;
+  strong: boolean;
+  tier: EndpointLabelTier;
+  narrativeKeys: string[];
+};
+type EndpointSourceEntry = {
+  key: string;
+  object: GeoObject;
+  displayPoint?: [number, number];
+  anchorPoint?: [number, number];
+};
+type EndpointPlacedEntry = {
+  key: string;
+  object: GeoObject;
+  displayPoint: [number, number];
+  anchorPoint: [number, number];
+};
+type EndpointRenderState = {
+  placedEntries: EndpointPlacedEntry[];
+  tierByKey: Map<string, EndpointLabelTier>;
+  narrativeKeysByEndpointKey: Map<string, string[]>;
+  forcedVisibleKeys: Set<string>;
+};
+type BushOrigin = {
+  key: string;
+  point: [number, number];
+};
+type BushGroup = {
+  id: string;
+  entries: EndpointPlacedEntry[];
+  origin: BushOrigin;
+};
+type FragmentTracePayload = Awaited<ReturnType<typeof api.getFragmentTrace>>;
 
 export interface GeoEdgeTraceSummary {
   summary: string;
@@ -113,6 +150,25 @@ export interface GeoEdgeTraceSummary {
   stressedSupplyPathCount: number;
 }
 
+export interface GeoEdgeSelectionExportData {
+  exportedAt: string;
+  selectedObject: GeoObject;
+  requestedHops: number;
+  lensId?: string;
+  trace: FragmentTracePayload;
+  traceSummary: GeoEdgeTraceSummary | null;
+  discoveredObjects: GeoObject[];
+  relatedPathArtifacts: MaterializedArtifact[];
+  directRelations: ExplainRelation[];
+  contextRelations: ExplainRelation[];
+  visibleNodeIds: string[];
+  visiblePathRefs: string[];
+  mutedObjectIds: string[];
+  highlightedGatewayObjectIds: string[];
+  renderedEdgeFeatureCollection: GeoJSON.FeatureCollection;
+  renderedEndpointFeatureCollection: GeoJSON.FeatureCollection;
+}
+
 interface ExplainRelation {
   edgeId?: string;
   sourceId: string;
@@ -145,13 +201,135 @@ const SUPPLY_BUNDLE_MAX_REMOTE_SPREAD_KM = 1800;
 const CORRIDOR_SPATIAL_CLUSTER_LINK_KM = 900;
 const ENDPOINT_MARKER_SIZE_PX = 28;
 const ENDPOINT_MARKER_PADDING_PX = 4;
-const ENDPOINT_LABEL_OFFSET_X_PX = 14;
+const ENDPOINT_LABEL_OFFSET_X_PX = 20;
 const ENDPOINT_LABEL_HEIGHT_PX = 15;
 const ENDPOINT_LABEL_CHAR_WIDTH_PX = 6.4;
 const ENDPOINT_LABEL_MAX_WIDTH_PX = 220;
+const DIRECT_LEGEND_COLOR = '#60a5fa';
+const CONTEXT_LEGEND_COLOR = '#2dd4bf';
+const SUPPLY_LEGEND_COLOR = '#f59e0b';
+const PROPAGATION_LEGEND_COLOR = '#94a3b8';
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function artifactLegField<T = unknown>(leg: any, ...keys: string[]): T | undefined {
+  for (const key of keys) {
+    if (leg && leg[key] != null) return leg[key] as T;
+  }
+  return undefined;
+}
+
+function artifactLegString(leg: any, ...keys: string[]): string {
+  return String(artifactLegField(leg, ...keys) || '').trim();
+}
+
+function artifactLegStringList(leg: any, ...keys: string[]): string[] {
+  const value = artifactLegField<unknown>(leg, ...keys);
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item || '').trim()).filter(Boolean);
+}
+
+function artifactLegNumber(leg: any, ...keys: string[]): number | null {
+  const value = artifactLegField<unknown>(leg, ...keys);
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return value;
+}
+
+function directStrokeColor(): string {
+  return DIRECT_LEGEND_COLOR;
+}
+
+function contextStrokeColor(): string {
+  return CONTEXT_LEGEND_COLOR;
+}
+
+function supplyLegendColor(): string {
+  return SUPPLY_LEGEND_COLOR;
+}
+
+function propagationLegendColor(): string {
+  return PROPAGATION_LEGEND_COLOR;
+}
+
+function endpointChipImageId(theme: ThemeMode): string {
+  return theme === 'dark' ? ENDPOINT_LABEL_CHIP_DARK : ENDPOINT_LABEL_CHIP_LIGHT;
+}
+
+function drawRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+): void {
+  const r = Math.max(0, Math.min(radius, width / 2, height / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function renderEndpointChipImage(theme: ThemeMode): {
+  width: number;
+  height: number;
+  data: Uint8ClampedArray;
+  pixelRatio: number;
+  stretchX: Array<[number, number]>;
+  stretchY: Array<[number, number]>;
+  content: [number, number, number, number];
+} {
+  const pixelRatio = 2;
+  const width = 96;
+  const height = 40;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d')!;
+  const fill = theme === 'dark' ? 'rgba(6, 10, 16, 0.94)' : 'rgba(255, 255, 255, 0.94)';
+  const stroke = theme === 'dark' ? 'rgba(148, 163, 184, 0.28)' : 'rgba(15, 23, 42, 0.16)';
+  const shadow = theme === 'dark' ? 'rgba(0, 0, 0, 0.44)' : 'rgba(15, 23, 42, 0.14)';
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.shadowColor = shadow;
+  ctx.shadowBlur = 8;
+  ctx.shadowOffsetY = 2;
+  drawRoundedRect(ctx, 2, 3, width - 4, height - 6, 12);
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = stroke;
+  ctx.stroke();
+
+  const imageData = ctx.getImageData(0, 0, width, height);
+  return {
+    width,
+    height,
+    data: imageData.data,
+    pixelRatio,
+    stretchX: [[20, width - 20]],
+    stretchY: [[14, height - 14]],
+    content: [18, 10, width - 18, height - 10],
+  };
+}
+
+function ensureEndpointChipImage(map: maplibregl.Map, theme: ThemeMode): void {
+  const id = endpointChipImageId(theme);
+  if (map.hasImage(id)) return;
+  const image = renderEndpointChipImage(theme);
+  map.addImage(id, image as any);
 }
 
 function toSoftHex(hex: string, blend: number): string {
@@ -396,32 +574,6 @@ function edgeFamily(edgeOrType: { type?: string; family?: EdgeFamily } | string)
   return 'other';
 }
 
-function extractCountryCodes(canonicalPath?: string): string[] {
-  if (!canonicalPath) return [];
-  const parts = canonicalPath.toLowerCase().split('/').filter(Boolean);
-  if (parts.length < 2) return [];
-  const namespace = parts[0];
-  if (['org', 'gov', 'market', 'loc', 'fac', 'deposit', 'community', 'zone'].includes(namespace)) {
-    const segment = parts[1] || '';
-    return segment
-      .split('-')
-      .map((value) => value.trim().toUpperCase())
-      .filter((value) => value.length === 2 && /^[A-Z]{2}$/.test(value) && value !== 'NA');
-  }
-  return [];
-}
-
-function getCountryDisplay(canonicalPath?: string): { iso2: string | null; name: string } {
-  const codes = extractCountryCodes(canonicalPath);
-  if (codes.length === 0) {
-    return { iso2: null, name: 'Cross-border / unknown' };
-  }
-  return {
-    iso2: codes.join('-'),
-    name: codes.map((code) => geoCodeToShortName(code)).join(' / '),
-  };
-}
-
 function humanizeEdgeType(edgeType: string): string {
   return edgeType
     .toLowerCase()
@@ -432,15 +584,86 @@ function humanizeEdgeType(edgeType: string): string {
 }
 
 function relationStrokeColor(theme: ThemeMode, family: EdgeFamily, semanticDirection?: string, emphasize = false): string {
-  const semantic = String(semanticDirection || '').trim().toLowerCase();
-  if (family === 'supply') return theme === 'dark' ? (emphasize ? '#fbbf24' : '#f59e0b') : (emphasize ? '#d97706' : '#b45309');
-  if (family === 'control') return theme === 'dark' ? (emphasize ? '#93c5fd' : '#60a5fa') : (emphasize ? '#2563eb' : '#1d4ed8');
-  if (family === 'risk' || family === 'influence') return theme === 'dark' ? (emphasize ? '#fda4af' : '#fb7185') : (emphasize ? '#e11d48' : '#be123c');
-  if (family === 'location' || family === 'market') return theme === 'dark' ? (emphasize ? '#5eead4' : '#2dd4bf') : (emphasize ? '#0f766e' : '#0d9488');
-  if (family === 'social') return theme === 'dark' ? '#c4b5fd' : '#7c3aed';
-  if (semantic === 'upstream') return theme === 'dark' ? '#cbd5f5' : '#64748b';
-  if (semantic === 'downstream') return theme === 'dark' ? '#dbeafe' : '#475569';
-  return theme === 'dark' ? '#cbd5e1' : '#64748b';
+  void theme;
+  void family;
+  void semanticDirection;
+  return emphasize ? directStrokeColor() : contextStrokeColor();
+}
+
+function directRelationLineColor(theme: ThemeMode): string {
+  return theme === 'dark' ? '#8faed8' : '#5d83b8';
+}
+
+function buildDirectRelationVisual(
+  theme: ThemeMode,
+  distanceKm: number,
+  fanoutCount: number,
+  bundleSize: number,
+): {
+  color: string;
+  baseOpacity: number;
+  baseWidth: number;
+  glowOpacity: number;
+  distanceFactor: number;
+  fanoutFactor: number;
+  bundleFactor: number;
+  longHaul: boolean;
+  denseFanout: boolean;
+} {
+  const distanceFactor = clamp(1 - Math.min(distanceKm, 4200) / 4200 * 0.24, 0.76, 1);
+  const fanoutFactor = clamp(1 - Math.log2(fanoutCount + 1) * 0.11, 0.56, 1);
+  const bundleFactor = clamp(1 - Math.log2(bundleSize + 1) * 0.08, 0.78, 1);
+  const widthDistanceFactor = distanceKm >= 2400 ? 0.84 : distanceKm >= 1200 ? 0.9 : distanceKm >= 500 ? 0.96 : 1;
+  const opacityFactor = distanceFactor * fanoutFactor * bundleFactor;
+  return {
+    color: directRelationLineColor(theme),
+    baseOpacity: clamp((theme === 'dark' ? 0.78 : 0.7) * opacityFactor, 0.3, 0.8),
+    baseWidth: clamp(2.28 * widthDistanceFactor * (0.94 + fanoutFactor * 0.12), 1.18, 2.4),
+    glowOpacity: clamp((theme === 'dark' ? 0.042 : 0.034) * opacityFactor, 0.01, 0.055),
+    distanceFactor,
+    fanoutFactor,
+    bundleFactor,
+    longHaul: distanceKm >= 1200,
+    denseFanout: fanoutCount >= 9,
+  };
+}
+
+function buildSupplyPathVisual(
+  theme: ThemeMode,
+  kind: EdgeVisualKind,
+  distanceKm: number,
+  fanoutCount: number,
+  bundleSize: number,
+): {
+  color: string;
+  baseOpacity: number;
+  baseWidth: number;
+  glowOpacity: number;
+  distanceFactor: number;
+  fanoutFactor: number;
+  bundleFactor: number;
+  longHaul: boolean;
+  denseFanout: boolean;
+} {
+  const distanceFactor = clamp(1 - Math.min(distanceKm, 5600) / 5600 * 0.22, 0.78, 1);
+  const fanoutFactor = clamp(1 - Math.log2(fanoutCount + 1) * 0.12, 0.5, 1);
+  const bundleFactor = clamp(1 - Math.log2(bundleSize + 1) * 0.09, 0.74, 1);
+  const widthDistanceFactor = distanceKm >= 3200 ? 0.82 : distanceKm >= 1600 ? 0.9 : distanceKm >= 600 ? 0.96 : 1;
+  const kindOpacityBase = kind === 'primary' ? (theme === 'dark' ? 0.66 : 0.58) : kind === 'indirect' ? (theme === 'dark' ? 0.54 : 0.48) : (theme === 'dark' ? 0.42 : 0.36);
+  const kindWidthBase = kind === 'primary' ? 2.05 : kind === 'indirect' ? 1.72 : 1.36;
+  const kindGlowBase = kind === 'primary' ? (theme === 'dark' ? 0.034 : 0.028) : kind === 'indirect' ? 0.024 : 0.014;
+  const opacityFactor = distanceFactor * fanoutFactor * bundleFactor;
+  return {
+    color: supplyStrokeColor(theme, kind),
+    baseOpacity: clamp(kindOpacityBase * opacityFactor, 0.18, 0.72),
+    baseWidth: clamp(kindWidthBase * widthDistanceFactor * (0.94 + fanoutFactor * 0.1), 1.0, 2.25),
+    glowOpacity: clamp(kindGlowBase * opacityFactor, 0.008, 0.042),
+    distanceFactor,
+    fanoutFactor,
+    bundleFactor,
+    longHaul: distanceKm >= 1600,
+    denseFanout: fanoutCount >= 9,
+  };
 }
 
 function normalizeExplainRelation(value: any): ExplainRelation | null {
@@ -714,37 +937,20 @@ function concaveCurveToAxis(
 }
 
 function supplyStrokeColor(theme: ThemeMode, kind: EdgeVisualKind): string {
-  if (theme === 'dark') {
-    if (kind === 'primary') return '#f59e0b';
-    if (kind === 'indirect') return '#fbbf24';
-    return '#fcd34d';
-  }
-  if (kind === 'primary') return '#b45309';
-  if (kind === 'indirect') return '#d97706';
-  return '#f59e0b';
+  void theme;
+  void kind;
+  return supplyLegendColor();
 }
 
 function primaryStrokeColor(theme: ThemeMode): string {
-  return theme === 'dark' ? '#60a5fa' : '#2563eb';
+  void theme;
+  return directStrokeColor();
 }
 
 function propagationStrokeColor(theme: ThemeMode, kind: EdgeVisualKind): string {
-  if (theme === 'dark') {
-    if (kind === 'primary') return '#cbd5e1';
-    if (kind === 'indirect') return '#94a3b8';
-    return '#64748b';
-  }
-  if (kind === 'primary') return '#64748b';
-  if (kind === 'indirect') return '#94a3b8';
-  return '#cbd5e1';
-}
-
-function corridorBadgeColor(
-  theme: ThemeMode,
-  corridorType: 'supply' | 'control' | 'dependency' | 'signal' | 'context',
-): string {
-  void corridorType;
-  return supplyStrokeColor(theme, 'primary');
+  void theme;
+  void kind;
+  return propagationLegendColor();
 }
 
 function isGeoLocCanonicalPath(value?: string): boolean {
@@ -956,10 +1162,23 @@ function displayNameByPath(path: string, objectByPath: Map<string, TraceObjectIn
 }
 
 function compactLabel(value: string, maxLength = 30): string {
-  const text = String(value || '').trim();
+  let text = String(value || '').trim();
   if (!text) return '';
+  text = text
+    .replace(/\b(company|co\.?)\b/gi, '')
+    .replace(/\b(limited|ltd\.?)\b/gi, '')
+    .replace(/\b(corporation|corp\.?)\b/gi, '')
+    .replace(/\b(incorporated|inc\.?)\b/gi, '')
+    .replace(/\b(llc|plc|gmbh|s\.a\.|ag|bv|nv|pte\.?)\b/gi, '')
+    .replace(/\s*,\s*/g, ', ')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/(?:,\s*)+$/g, '')
+    .replace(/^[\s,.-]+|[\s,.-]+$/g, '')
+    .trim();
   if (text.length <= maxLength) return text;
-  return `${text.slice(0, maxLength - 3).trim()}...`;
+  const commaCut = text.split(',')[0]?.trim() || text;
+  if (commaCut.length <= maxLength) return commaCut;
+  return `${commaCut.slice(0, maxLength - 3).trim()}...`;
 }
 
 function normalizeLabelForCompare(value: string): string {
@@ -1101,185 +1320,6 @@ function buildSupplyBundleLabelText(
   return `${productLabel}\n${directionLabel} x${routesCount}`;
 }
 
-type RadialBundleRoute = {
-  routeId: string;
-  targetId: string;
-  corridorId?: string;
-  endPoint: [number, number];
-  gatewayNodeIds?: string[];
-  badgeEndpointNodeIds?: string[];
-  kind: EdgeVisualKind;
-  color: string;
-  baseOpacity: number;
-  baseWidth: number;
-  glowOpacity: number;
-  renderPriority: number;
-  labelText?: string;
-};
-
-function buildRadialBundleFeatures(
-  sourcePoint: [number, number] | null,
-  routes: RadialBundleRoute[],
-  theme: ThemeMode,
-  channel: 'trace' | 'propagation',
-  bundleLabelText: (group: RadialBundleRoute[]) => string,
-  options?: { labelSingles?: boolean; labelBundles?: boolean },
-) : { features: GeoJSON.Feature[]; corridorAssignments: Map<string, string> } {
-  if (!sourcePoint || routes.length === 0) return { features: [], corridorAssignments: new Map() };
-  const features: GeoJSON.Feature[] = [];
-  const corridorAssignments = new Map<string, string>();
-  const groups = new Map<string, RadialBundleRoute[]>();
-  const bundledIds = new Set<string>();
-  const labelSingles = options?.labelSingles ?? true;
-  const labelBundles = options?.labelBundles ?? true;
-
-  for (const route of routes) {
-    const distanceKm = approximateDistanceKm(sourcePoint[0], sourcePoint[1], route.endPoint[0], route.endPoint[1]);
-    if (distanceKm < RADIAL_BUNDLE_MIN_DISTANCE_KM) continue;
-    const azimuthBucket = Math.round(azimuthDegrees(sourcePoint, route.endPoint) / SUPPLY_BUNDLE_AZIMUTH_DEG);
-    const distanceBucket = Math.round(distanceKm / 1200);
-    const remoteCell = geoCellKey(route.endPoint);
-    const key = `${azimuthBucket}:${distanceBucket}:${remoteCell}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(route);
-  }
-
-  for (const [groupKey, group] of groups.entries()) {
-    const centroid = averagePoint(group.map((route) => route.endPoint));
-    const spreadKm = Math.max(
-      0,
-      ...group.map((route) => approximateDistanceKm(route.endPoint[0], route.endPoint[1], centroid[0], centroid[1])),
-    );
-    if (spreadKm > SUPPLY_BUNDLE_MAX_REMOTE_SPREAD_KM) continue;
-
-    const strongestKind = group.reduce<EdgeVisualKind>((current, route) => strongerVisualKind(current, route.kind), 'cluster');
-    const trunkColor = channel === 'propagation'
-      ? propagationStrokeColor(theme, strongestKind)
-      : primaryStrokeColor(theme);
-    const gatewayNodeIds = Array.from(new Set(group.flatMap((route) => route.gatewayNodeIds || []).filter(Boolean)));
-    const corridorId = `${channel}:corridor:${groupKey}:${hashString(group.map((route) => route.routeId).join(':'))}`;
-    group.forEach((route) => corridorAssignments.set(route.targetId, corridorId));
-    const branchPlans = group.map((route) => ({
-      route,
-      split: branchSplitOnSharedAxis(sourcePoint, centroid, route.endPoint),
-    }));
-    const trunkEnd = branchPlans.reduce(
-      (best, candidate) => (candidate.split.t > best.t ? candidate.split : best),
-      { point: sourcePoint, t: 0 },
-    );
-    const trunkCoords: [number, number][] = [sourcePoint, trunkEnd.point];
-    const trunkId = `${channel}-bundle:${groupKey}:${hashString(group.map((route) => route.routeId).join(':'))}`;
-    features.push({
-      id: trunkId,
-      type: 'Feature',
-      geometry: { type: 'LineString', coordinates: trunkCoords },
-      properties: {
-        kind: strongestKind,
-        hop: strongestKind === 'primary' ? 1 : strongestKind === 'indirect' ? 2 : 3,
-        color: trunkColor,
-        channel,
-        corridorId,
-        gatewayNodeIds,
-        badgeEndpointNodeIds: Array.from(new Set(group.flatMap((route) => route.badgeEndpointNodeIds || [route.targetId]).filter(Boolean))),
-        featureRole: 'overview',
-        renderPriority: Math.max(...group.map((route) => route.renderPriority)) + 2,
-        baseOpacity: clamp(Math.max(...group.map((route) => route.baseOpacity)) + Math.min(0.16, group.length * 0.025), 0.34, 0.96),
-        baseWidth: clamp(Math.max(...group.map((route) => route.baseWidth)) + Math.log2(group.length + 1) * 0.95, 1.8, 8),
-        glowOpacity: clamp(Math.max(...group.map((route) => route.glowOpacity)) + 0.03, 0.04, 0.28),
-      },
-    } as GeoJSON.Feature<GeoJSON.LineString>);
-    if (labelBundles) {
-      features.push({
-        id: `${trunkId}:label`,
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: linePointAt(trunkCoords, 0.56) },
-        properties: {
-          kind: 'label',
-          corridorId,
-          featureRole: 'overview',
-          labelText: group.length === 1 ? (group[0].labelText || bundleLabelText(group)) : bundleLabelText(group),
-          labelColor: trunkColor,
-        },
-      } as GeoJSON.Feature<GeoJSON.Point>);
-    }
-
-    const sortedPlans = [...branchPlans].sort((left, right) => {
-      const leftAngle = azimuthDegrees(centroid, left.route.endPoint);
-      const rightAngle = azimuthDegrees(centroid, right.route.endPoint);
-      return leftAngle - rightAngle;
-    });
-    sortedPlans.forEach(({ route, split }) => {
-      bundledIds.add(route.routeId);
-      const branchCoords = concaveCurveToAxis(split.point, route.endPoint, sourcePoint, centroid);
-      features.push({
-        id: `${route.routeId}:branch`,
-        type: 'Feature',
-        geometry: { type: 'LineString', coordinates: branchCoords },
-        properties: {
-          kind: route.kind === 'cluster' ? 'indirect' : route.kind,
-          hop: route.kind === 'primary' ? 1 : route.kind === 'indirect' ? 2 : 3,
-          color: trunkColor,
-          channel,
-          corridorId,
-          gatewayNodeIds: route.gatewayNodeIds || gatewayNodeIds,
-          badgeEndpointNodeIds: route.badgeEndpointNodeIds || [route.targetId],
-          featureRole: 'detail',
-          endpointNodeIds: [route.targetId],
-          renderPriority: route.renderPriority,
-          baseOpacity: clamp(route.baseOpacity - 0.08, 0.22, 0.92),
-          baseWidth: clamp(route.baseWidth * 0.82, 0.9, 4.8),
-          glowOpacity: clamp(route.glowOpacity * 0.75, 0.02, 0.18),
-        },
-      } as GeoJSON.Feature<GeoJSON.LineString>);
-    });
-  }
-
-  for (const route of routes) {
-    if (bundledIds.has(route.routeId)) continue;
-    const corridorId = route.corridorId || `${channel}:corridor:${route.targetId}`;
-    corridorAssignments.set(route.targetId, corridorId);
-    const coords: [number, number][] = route.kind === 'primary'
-      ? [sourcePoint, route.endPoint]
-      : smoothRouteCoordinates([sourcePoint, route.endPoint], route.routeId, route.kind === 'indirect' ? 2 : 3);
-    features.push({
-      id: route.routeId,
-      type: 'Feature',
-      geometry: { type: 'LineString', coordinates: coords },
-      properties: {
-        kind: route.kind,
-        hop: route.kind === 'primary' ? 1 : route.kind === 'indirect' ? 2 : 3,
-        color: route.color,
-        channel,
-        corridorId,
-        gatewayNodeIds: route.gatewayNodeIds || [],
-        badgeEndpointNodeIds: route.badgeEndpointNodeIds || [route.targetId],
-        featureRole: 'overview',
-        endpointNodeIds: [route.targetId],
-        renderPriority: route.renderPriority,
-        baseOpacity: route.baseOpacity,
-        baseWidth: route.baseWidth,
-        glowOpacity: route.glowOpacity,
-      },
-    } as GeoJSON.Feature<GeoJSON.LineString>);
-    if (labelSingles && route.labelText) {
-      features.push({
-        id: `${route.routeId}:label`,
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: linePointAt(coords, 0.22) },
-        properties: {
-          kind: 'label',
-          corridorId,
-          featureRole: 'overview',
-          labelText: route.labelText,
-          labelColor: route.color,
-        },
-      } as GeoJSON.Feature<GeoJSON.Point>);
-    }
-  }
-
-  return { features, corridorAssignments };
-}
-
 function fragmentToGeoObject(
   fragment: { id?: string; canonicalPath?: string; type?: string; label?: string; [key: string]: unknown },
   coordsMap: Record<string, { lat: number; lon: number }>,
@@ -1348,41 +1388,53 @@ function featureBadgeEndpointRefs(feature: GeoJSON.Feature): string[] {
   return refs.length > 0 ? refs : featureEndpointRefs(feature);
 }
 
+function endpointMarkerFeatureId(key: string): string {
+  return `${key}:marker`;
+}
+
+function endpointLabelFeatureId(key: string): string {
+  return `${key}:label`;
+}
+
 function buildEndpointFeatureCollection(
-  endpointEntries: Array<{ key: string; object: GeoObject; displayPoint?: [number, number]; anchorPoint?: [number, number] }>,
+  endpointEntries: EndpointSourceEntry[],
   theme: ThemeMode,
+  labelMetaByKey?: Map<string, EndpointLabelMeta>,
 ): GeoJSON.FeatureCollection {
   return {
     type: 'FeatureCollection',
-    features: endpointEntries.flatMap(({ key, object, displayPoint, anchorPoint }) => {
+    features: endpointEntries.flatMap(({ key, object }) => {
       const actualPoint: [number, number] = [object.coordinates!.lon, object.coordinates!.lat];
-      const point = displayPoint || actualPoint;
+      const meta = labelMetaByKey?.get(key);
+      const endpointLabel = meta?.labelText || compactLabel(String(object.label || '').trim() || humanizeCanonicalPath(object.canonicalPath) || object.canonicalPath, 28);
       const output: GeoJSON.Feature[] = [];
-      if (
-        anchorPoint
-        && (Math.abs(anchorPoint[0] - point[0]) > 1e-6 || Math.abs(anchorPoint[1] - point[1]) > 1e-6)
-      ) {
-        output.push({
-          id: `${key}:callout`,
-          type: 'Feature',
-          geometry: { type: 'LineString', coordinates: [anchorPoint, point] },
-          properties: {
-            kind: 'endpoint-callout',
-            endpointKey: key,
-          },
-        } as GeoJSON.Feature<GeoJSON.LineString>);
-      }
       const feature = buildPointFeature({
         ...object,
-        coordinates: { lat: point[1], lon: point[0] },
+        coordinates: { lat: actualPoint[1], lon: actualPoint[0] },
       }, theme) as GeoJSON.Feature<GeoJSON.Point>;
+      feature.id = endpointMarkerFeatureId(key);
       feature.properties = {
         ...(feature.properties || {}),
         kind: 'endpoint-marker',
         endpointKey: key,
-        endpointLabel: String(object.label || '').trim() || humanizeCanonicalPath(object.canonicalPath) || object.canonicalPath,
       };
       output.push(feature);
+      output.push({
+        id: endpointLabelFeatureId(key),
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: actualPoint },
+        properties: {
+          kind: 'endpoint-label',
+          endpointKey: key,
+          endpointLabel,
+          labelPriority: meta?.priority ?? 0,
+          labelVisible: meta?.visible !== false ? 1 : 0,
+          labelChip: meta?.chip ? 1 : 0,
+          labelSubdued: meta?.subdued ? 1 : 0,
+          labelStrong: meta?.strong ? 1 : 0,
+          labelTier: meta?.tier || 'propagation',
+        },
+      } as GeoJSON.Feature<GeoJSON.Point>);
       return output;
     }),
   };
@@ -1405,7 +1457,7 @@ function rectsOverlap(a: ScreenRect, b: ScreenRect, padding = 0): boolean {
 }
 
 function endpointLabelText(object: GeoObject): string {
-  return String(object.label || '').trim() || humanizeCanonicalPath(object.canonicalPath) || object.canonicalPath;
+  return compactLabel(String(object.label || '').trim() || humanizeCanonicalPath(object.canonicalPath) || object.canonicalPath, 28);
 }
 
 function endpointMarkerRect(point: { x: number; y: number }): ScreenRect {
@@ -1418,8 +1470,9 @@ function endpointMarkerRect(point: { x: number; y: number }): ScreenRect {
   };
 }
 
-function endpointLabelRect(point: { x: number; y: number; entry: { object: GeoObject } }): ScreenRect {
-  const label = endpointLabelText(point.entry.object);
+function endpointLabelRect(point: { x: number; y: number; object?: GeoObject; entry?: { object: GeoObject } }): ScreenRect {
+  const object = point.object || point.entry?.object;
+  const label = object ? endpointLabelText(object) : '';
   const width = clamp(label.length * ENDPOINT_LABEL_CHAR_WIDTH_PX, 34, ENDPOINT_LABEL_MAX_WIDTH_PX);
   return {
     left: point.x + ENDPOINT_LABEL_OFFSET_X_PX,
@@ -1429,160 +1482,130 @@ function endpointLabelRect(point: { x: number; y: number; entry: { object: GeoOb
   };
 }
 
-function endpointsOverlap(
-  a: { x: number; y: number; entry: { object: GeoObject } },
-  b: { x: number; y: number; entry: { object: GeoObject } },
+function endpointMarkersOverlap(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  padding = ENDPOINT_MARKER_PADDING_PX,
 ): boolean {
   const markerA = endpointMarkerRect(a);
   const markerB = endpointMarkerRect(b);
-  const labelA = endpointLabelRect(a);
-  const labelB = endpointLabelRect(b);
-  return (
-    rectsOverlap(markerA, markerB, ENDPOINT_MARKER_PADDING_PX)
-    || rectsOverlap(labelA, labelB, 4)
-    || rectsOverlap(labelA, markerB, 4)
-    || rectsOverlap(labelB, markerA, 4)
-  );
+  return rectsOverlap(markerA, markerB, padding);
 }
 
-function inferCorridorType(channel: string, labelHints: string[]): 'supply' | 'control' | 'dependency' | 'signal' | 'context' {
-  if (channel === 'supply_path') return 'supply';
-  if (channel === 'propagation') return 'signal';
-  const combined = labelHints.join(' ').toLowerCase();
-  if (combined.includes('control') || combined.includes('ownership')) return 'control';
-  if (combined.includes('dependency') || combined.includes('supply')) return 'dependency';
-  return 'context';
+function endpointTierPriority(tier: EndpointLabelTier): number {
+  if (tier === 'selected') return 100;
+  if (tier === 'direct') return 82;
+  if (tier === 'path') return 68;
+  if (tier === 'context') return 52;
+  return 40;
 }
 
-function corridorTypeLabel(corridorType: 'supply' | 'control' | 'dependency' | 'signal' | 'context'): string {
-  if (corridorType === 'supply') return 'Supply';
-  if (corridorType === 'control') return 'Control';
-  if (corridorType === 'dependency') return 'Dependency';
-  if (corridorType === 'signal') return 'Signal';
-  return 'Context';
-}
-
-function buildCorridorDestinationLabel(objects: GeoObject[]): string {
-  if (objects.length === 0) return 'remote cluster';
-  const countryCounts = new Map<string, number>();
-  for (const object of objects) {
-    const display = getCountryDisplay(object.canonicalPath);
-    const key = display.name || 'Cross-border / unknown';
-    countryCounts.set(key, (countryCounts.get(key) || 0) + 1);
-  }
-  const sortedCountries = Array.from(countryCounts.entries()).sort((left, right) => right[1] - left[1]);
-  const top = sortedCountries[0]?.[0] || '';
-  if (sortedCountries.length === 1) return top;
-  return `${top} +${sortedCountries.length - 1}`;
-}
-
-function buildCorridorOverviewFeatures(
-  features: GeoJSON.Feature[],
-  objectById: Map<string, TraceObjectInfo>,
-  objectByPath: Map<string, TraceObjectInfo>,
-  theme: ThemeMode,
-  centerPoint: [number, number] | null,
-): GeoJSON.Feature[] {
-  type CorridorBucket = {
-    corridorId: string;
-    channel: string;
-    lineFeatures: GeoJSON.Feature<GeoJSON.LineString>[];
-    endpointKeys: Set<string>;
-    labelHints: string[];
-  };
-
-  const buckets = new Map<string, CorridorBucket>();
-  for (const feature of features) {
-    const corridorId = String(feature.properties?.corridorId || '').trim();
-    if (!corridorId) continue;
-    if (!buckets.has(corridorId)) {
-      buckets.set(corridorId, {
-        corridorId,
-        channel: String(feature.properties?.channel || '').trim(),
-        lineFeatures: [],
-        endpointKeys: new Set<string>(),
-        labelHints: [],
-      });
+function buildEndpointLabelMetaMap(
+  map: maplibregl.Map,
+  endpointEntries: EndpointPlacedEntry[],
+  tierByKey: Map<string, EndpointLabelTier>,
+  narrativeKeysByEndpointKey: Map<string, string[]>,
+  forcedVisibleKeys: ReadonlySet<string>,
+  activeNarrativeKey: string | null,
+  zoom: number,
+): Map<string, EndpointLabelMeta> {
+  const activeNarrative = String(activeNarrativeKey || '').trim();
+  const activeBoostKeys = new Set<string>();
+  if (activeNarrative) {
+    for (const entry of endpointEntries) {
+      const narrativeKeys = narrativeKeysByEndpointKey.get(entry.key) || [];
+      if (narrativeKeys.includes(activeNarrative)) activeBoostKeys.add(entry.key);
     }
-    const bucket = buckets.get(corridorId)!;
-    if (!bucket.channel) bucket.channel = String(feature.properties?.channel || '').trim();
-    const kind = String(feature.properties?.kind || '').trim();
-    if (kind === 'label') {
-      bucket.labelHints.push(String(feature.properties?.labelText || '').trim());
-      continue;
-    }
-    if (feature.geometry?.type !== 'LineString') continue;
-    bucket.lineFeatures.push(feature as GeoJSON.Feature<GeoJSON.LineString>);
-    featureBadgeEndpointRefs(feature).forEach((key) => bucket.endpointKeys.add(key));
   }
 
-  const overview: GeoJSON.Feature[] = [];
-  for (const bucket of buckets.values()) {
-    const endpointObjects = Array.from(bucket.endpointKeys)
-      .map((key) => {
-        if (key.startsWith('node:')) return traceObjectToGeoObject(objectById.get(key.slice(5)));
-        if (key.startsWith('path:')) return traceObjectToGeoObject(objectByPath.get(key.slice(5)));
-        return null;
-      })
-      .filter((object): object is GeoObject => Boolean(object?.coordinates));
-    if (bucket.lineFeatures.length === 0) continue;
-
-    const anchorPoint = endpointObjects.length > 0
-      ? densestClusterAnchor(endpointObjects.map((object) => [object.coordinates!.lon, object.coordinates!.lat] as [number, number]))
-      : linePointAt(bucket.lineFeatures[0].geometry.coordinates as [number, number][], 0.76);
-    const corridorType = inferCorridorType(bucket.channel, bucket.labelHints);
-    const count = endpointObjects.length > 0 ? endpointObjects.length : bucket.lineFeatures.length;
-    const destinationLabel = buildCorridorDestinationLabel(endpointObjects);
-    const typeLabel = corridorTypeLabel(corridorType);
-    if (centerPoint) {
-      const distanceKm = approximateDistanceKm(centerPoint[0], centerPoint[1], anchorPoint[0], anchorPoint[1]);
-      overview.push({
-        id: `corridor-guide:${bucket.corridorId}`,
-        type: 'Feature',
-        geometry: { type: 'LineString', coordinates: gentleArcPoints(centerPoint, anchorPoint, `corridor-guide:${bucket.corridorId}`, distanceKm) },
-        properties: {
-          kind: 'corridor-guide',
-          corridorId: bucket.corridorId,
-          channel: bucket.channel,
-          color: theme === 'dark' ? 'rgba(148,163,184,0.75)' : 'rgba(100,116,139,0.72)',
-        },
-      } as GeoJSON.Feature<GeoJSON.LineString>);
-    }
-    overview.push({
-      id: `corridor:${bucket.corridorId}`,
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: anchorPoint },
-      properties: {
-        kind: 'corridor',
-        corridorId: bucket.corridorId,
-        channel: bucket.channel,
-        color: corridorBadgeColor(theme, corridorType),
-        corridorRadius: clamp(9 + Math.log2(count + 1) * 3.6, 10, 18),
-        corridorCount: count,
-        labelText: `${typeLabel} x${count}\n${destinationLabel}`,
-      },
-    } as GeoJSON.Feature<GeoJSON.Point>);
-  }
-  return overview;
-}
-
-function decorateCorridorFeatures(
-  features: GeoJSON.Feature[],
-  selectedCorridorId: string | null,
-): GeoJSON.Feature[] {
-  return features.map((feature) => {
-    const corridorId = String(feature.properties?.corridorId || '').trim();
-    const selected = Boolean(selectedCorridorId) && corridorId === selectedCorridorId;
-    const dimmed = Boolean(selectedCorridorId) && corridorId !== selectedCorridorId;
-    return {
-      ...feature,
-      properties: {
-        ...(feature.properties || {}),
-        corridorSelected: selected,
-        corridorDimmed: dimmed,
-      },
-    };
+  const visibleCandidates = endpointEntries
+    .sort((left, right) => {
+      const leftTier = tierByKey.get(left.key) || 'propagation';
+      const rightTier = tierByKey.get(right.key) || 'propagation';
+      const leftScore = endpointTierPriority(leftTier) + (activeBoostKeys.has(left.key) ? 24 : 0);
+      const rightScore = endpointTierPriority(rightTier) + (activeBoostKeys.has(right.key) ? 24 : 0);
+      return rightScore - leftScore;
+    });
+  const globalBudget = zoom >= 9 ? 34 : zoom >= 8 ? 28 : zoom >= 7 ? 24 : zoom >= 6 ? 20 : zoom >= 5 ? 14 : 10;
+  const projectedEntries = endpointEntries.map((entry) => {
+    const projected = map.project({ lng: entry.anchorPoint[0], lat: entry.anchorPoint[1] });
+    return { ...entry, x: projected.x, y: projected.y };
   });
+  const projectedByKey = new Map(projectedEntries.map((entry) => [entry.key, entry] as const));
+  const markerRects = projectedEntries.map((entry) => ({
+    key: entry.key,
+    rect: endpointMarkerRect(entry),
+  }));
+  const occupiedLabelRects: ScreenRect[] = [];
+  const globallyVisible = new Set<string>();
+  let visibleOptionalCount = 0;
+
+  for (const entry of visibleCandidates) {
+    const tier = tierByKey.get(entry.key) || 'propagation';
+    const forcedVisible = forcedVisibleKeys.has(entry.key);
+    const alwaysVisible = tier === 'selected' || tier === 'direct' || tier === 'path' || tier === 'context';
+    const protectedLabel =
+      forcedVisible
+      || alwaysVisible
+      || activeBoostKeys.has(entry.key);
+    const projected = projectedByKey.get(entry.key);
+    if (!projected) continue;
+    const labelRect = endpointLabelRect(projected);
+    const collidesWithAcceptedLabel = occupiedLabelRects.some((rect) => rectsOverlap(rect, labelRect, protectedLabel ? 2 : 5));
+    const collidesWithMarker = markerRects.some((marker) => marker.key !== entry.key && rectsOverlap(marker.rect, labelRect, 2));
+
+    if (!protectedLabel) {
+      if (visibleOptionalCount >= globalBudget) continue;
+      if (collidesWithAcceptedLabel || collidesWithMarker) continue;
+      visibleOptionalCount += 1;
+    }
+
+    if (protectedLabel && !alwaysVisible && collidesWithAcceptedLabel && zoom < 5.5 && !forcedVisible) continue;
+    globallyVisible.add(entry.key);
+    occupiedLabelRects.push(labelRect);
+  }
+
+  const meta = new Map<string, EndpointLabelMeta>();
+  for (const entry of endpointEntries) {
+    const tier = tierByKey.get(entry.key) || 'propagation';
+    const active = activeBoostKeys.has(entry.key);
+    const strong = tier === 'selected' || tier === 'direct' || tier === 'path' || tier === 'context' || active;
+    const priority = endpointTierPriority(tier) + (active ? 32 : 0) + (strong ? 8 : 0);
+    const visible = globallyVisible.has(entry.key);
+    meta.set(entry.key, {
+      labelText: compactLabel(
+        String(entry.object.label || '').trim() || humanizeCanonicalPath(entry.object.canonicalPath) || entry.object.canonicalPath,
+        strong ? 32 : 24,
+      ),
+      priority,
+      visible,
+      chip: visible && strong,
+      subdued: !active && tier === 'propagation',
+      strong,
+      tier,
+      narrativeKeys: narrativeKeysByEndpointKey.get(entry.key) || [],
+    });
+  }
+  return meta;
+}
+
+function buildEndpointSourceData(
+  renderState: EndpointRenderState,
+  theme: ThemeMode,
+  activeNarrativeKey: string | null,
+  map: maplibregl.Map,
+  zoom: number,
+): GeoJSON.FeatureCollection {
+  const labelMetaByKey = buildEndpointLabelMetaMap(
+    map,
+    renderState.placedEntries,
+    renderState.tierByKey,
+    renderState.narrativeKeysByEndpointKey,
+    renderState.forcedVisibleKeys,
+    activeNarrativeKey,
+    zoom,
+  );
+  return buildEndpointFeatureCollection(renderState.placedEntries, theme, labelMetaByKey);
 }
 
 function spreadEndpointEntries(
@@ -1614,12 +1637,16 @@ function spreadEndpointEntries(
     };
   });
 
-  const minDistancePx = ENDPOINT_MARKER_SIZE_PX + ENDPOINT_MARKER_PADDING_PX;
-  const maxOffsetPx = 42;
+  const zoom = map.getZoom();
+  const zoomSpreadFactor = clamp((zoom - 3.8) / 4.4, 0, 1);
+  const minDistancePx = ENDPOINT_MARKER_SIZE_PX + ENDPOINT_MARKER_PADDING_PX + zoomSpreadFactor * 10;
+  const maxOffsetPx = 10 + zoomSpreadFactor * 26;
+  const collisionPadding = 2 + zoomSpreadFactor * 4;
+  const relaxationIterations = zoom >= 8 ? 14 : zoom >= 6 ? 10 : 7;
   const hasAnyOverlap = () => {
     for (let i = 0; i < points.length; i += 1) {
       for (let j = i + 1; j < points.length; j += 1) {
-        if (endpointsOverlap(points[i], points[j])) return true;
+        if (endpointMarkersOverlap(points[i], points[j], collisionPadding)) return true;
       }
     }
     return false;
@@ -1633,12 +1660,12 @@ function spreadEndpointEntries(
     }));
   }
 
-  for (let iteration = 0; iteration < 12; iteration += 1) {
+  for (let iteration = 0; iteration < relaxationIterations; iteration += 1) {
     for (let i = 0; i < points.length; i += 1) {
       for (let j = i + 1; j < points.length; j += 1) {
         const a = points[i];
         const b = points[j];
-        if (!endpointsOverlap(a, b)) continue;
+        if (!endpointMarkersOverlap(a, b, collisionPadding)) continue;
         let dx = b.x - a.x;
         let dy = b.y - a.y;
         let distance = Math.sqrt(dx * dx + dy * dy);
@@ -1649,7 +1676,7 @@ function spreadEndpointEntries(
         }
         const nx = dx / distance;
         const ny = dy / distance;
-        const push = clamp(Math.max(minDistancePx - distance, 8), 4, 18) * 0.52;
+        const push = clamp(Math.max(minDistancePx - distance, 4), 2.5, 11 + zoomSpreadFactor * 3.5) * 0.4;
         a.x -= nx * push;
         a.y -= ny * push;
         b.x += nx * push;
@@ -1700,163 +1727,169 @@ function strongestCorridorFeature(
   })[0];
 }
 
-function buildSelectedCorridorBushFeatures(
-  centerPoint: [number, number] | null,
+function strongestFeatureForKeys(
+  features: GeoJSON.Feature[],
+  keys: ReadonlySet<string>,
+): GeoJSON.Feature<GeoJSON.LineString> | null {
+  if (keys.size === 0) return null;
+  return strongestCorridorFeature(
+    features.filter((feature) => {
+      if (feature.geometry?.type !== 'LineString') return false;
+      return featureConnectionKeys(feature).some((key) => keys.has(key));
+    }),
+  );
+}
+
+function featureConnectionKeys(feature: GeoJSON.Feature): string[] {
+  const refs = new Set<string>([...featureEndpointRefs(feature), ...featureBadgeEndpointRefs(feature)]);
+  const sourceId = String(feature.properties?.sourceId || '').trim();
+  const targetId = String(feature.properties?.targetId || '').trim();
+  if (sourceId) refs.add(`node:${sourceId}`);
+  if (targetId) refs.add(`node:${targetId}`);
+  return Array.from(refs);
+}
+
+function resolveBushOriginKey(
+  key: string,
+  objectById: Map<string, TraceObjectInfo>,
+  objectByPath: Map<string, TraceObjectInfo>,
+): BushOrigin | null {
+  if (key.startsWith('node:')) {
+    const object = objectById.get(key.slice(5));
+    if (!object?.coordinates) return null;
+    return {
+      key,
+      point: [object.coordinates.lon, object.coordinates.lat],
+    };
+  }
+  if (key.startsWith('path:')) {
+    const object = objectByPath.get(key.slice(5));
+    if (!object?.coordinates) return null;
+    return {
+      key,
+      point: [object.coordinates.lon, object.coordinates.lat],
+    };
+  }
+  return null;
+}
+
+function resolveBushOriginForGroup(
+  cluster: EndpointPlacedEntry[],
   corridorFeatures: GeoJSON.Feature[],
-  endpointEntries: Array<{ key: string; object: GeoObject; displayPoint: [number, number]; anchorPoint: [number, number] }>,
+  objectById: Map<string, TraceObjectInfo>,
+  objectByPath: Map<string, TraceObjectInfo>,
+): BushOrigin | null {
+  const clusterKeys = new Set(cluster.map((entry) => entry.key));
+  if (clusterKeys.size === 0) return null;
+
+  const centroid = densestClusterAnchor(cluster.map((entry) => entry.anchorPoint));
+  const scores = new Map<string, number>();
+
+  for (const feature of corridorFeatures) {
+    if (feature.geometry?.type !== 'LineString') continue;
+    const connectionKeys = featureConnectionKeys(feature);
+    if (!connectionKeys.some((key) => clusterKeys.has(key))) continue;
+    const renderWeight = Math.max(1, Number(feature.properties?.renderPriority) || 1) / 18;
+    for (const candidateKey of connectionKeys) {
+      if (!candidateKey || clusterKeys.has(candidateKey)) continue;
+      const resolved = resolveBushOriginKey(candidateKey, objectById, objectByPath);
+      if (!resolved) continue;
+      const distancePenalty = approximateDistanceKm(
+        resolved.point[0],
+        resolved.point[1],
+        centroid[0],
+        centroid[1],
+      ) / 1000;
+      const current = scores.get(candidateKey) || 0;
+      scores.set(candidateKey, current + renderWeight - Math.min(distancePenalty, 0.75));
+    }
+  }
+
+  const best = Array.from(scores.entries()).sort((left, right) => right[1] - left[1])[0];
+  if (!best) return null;
+  return resolveBushOriginKey(best[0], objectById, objectByPath);
+}
+
+function buildSelectedBushGroups(
+  endpointEntries: EndpointPlacedEntry[],
+  corridorFeatures: GeoJSON.Feature[],
+  objectById: Map<string, TraceObjectInfo>,
+  objectByPath: Map<string, TraceObjectInfo>,
+  featureIdBase: string,
+): BushGroup[] {
+  if (endpointEntries.length <= 1) return [];
+  const bushLinkKm = clamp(estimatePointClusterLinkKm(endpointEntries.map((entry) => entry.anchorPoint)) * 0.58, 90, 320);
+  const minClusterSize = endpointEntries.length >= 5 ? 3 : 2;
+  const clusters = clusterPointEntriesByDistance(
+    endpointEntries.map((entry) => ({ ...entry, point: entry.anchorPoint })),
+    bushLinkKm,
+  )
+    .map((cluster) => cluster.map(({ point: _point, ...entry }) => entry))
+    .filter((cluster) => cluster.length >= minClusterSize)
+    .sort((left, right) => right.length - left.length);
+
+  return clusters.flatMap((entries, index) => {
+    const origin = resolveBushOriginForGroup(entries, corridorFeatures, objectById, objectByPath);
+    if (!origin) return [];
+    return [{
+      id: `${featureIdBase}:${index}`,
+      entries,
+      origin,
+    }];
+  });
+}
+
+function buildSelectedBushConnectorFeatures(
+  group: BushGroup,
+  corridorFeatures: GeoJSON.Feature[],
 ): GeoJSON.Feature[] {
-  if (!centerPoint || corridorFeatures.length === 0 || endpointEntries.length === 0) return corridorFeatures;
-  const sample = strongestCorridorFeature(corridorFeatures);
-  if (!sample) return corridorFeatures;
+  const sample = strongestFeatureForKeys(
+    corridorFeatures,
+    new Set(group.entries.map((entry) => entry.key)),
+  );
+  if (!sample || group.entries.length === 0) return [];
 
   const channel = String(sample.properties?.channel || '').trim();
-  const color = String(sample.properties?.color || '').trim() || '#f59e0b';
+  const color = String(sample.properties?.color || '').trim() || supplyLegendColor();
   const kind = String(sample.properties?.kind || 'primary').trim();
   const hop = Number(sample.properties?.hop) || 1;
-  const corridorId = String(sample.properties?.corridorId || '').trim();
   const renderPriority = Number(sample.properties?.renderPriority) || 20;
   const baseWidth = Number(sample.properties?.baseWidth) || 2.2;
   const baseOpacity = Number(sample.properties?.baseOpacity) || 0.88;
   const glowOpacity = Number(sample.properties?.glowOpacity) || 0.12;
+  const narrativeKey = String(sample.properties?.narrativeKey || '').trim();
+  const multiple = group.entries.length > 1;
 
-  if (endpointEntries.length === 1) {
-    const endpoint = endpointEntries[0];
-    const distanceKm = approximateDistanceKm(centerPoint[0], centerPoint[1], endpoint.displayPoint[0], endpoint.displayPoint[1]);
-    const directCoords = kind === 'primary' && channel !== 'propagation'
-      ? [centerPoint, endpoint.displayPoint]
-      : gentleArcPoints(centerPoint, endpoint.displayPoint, `${corridorId}:${endpoint.key}`, distanceKm);
-    return [{
-      id: `${corridorId}:direct`,
+  return group.entries.map((endpoint) => {
+    const distanceKm = approximateDistanceKm(
+      group.origin.point[0],
+      group.origin.point[1],
+      endpoint.anchorPoint[0],
+      endpoint.anchorPoint[1],
+    );
+    const coordinates = !multiple && kind === 'primary' && channel !== 'propagation'
+      ? [group.origin.point, endpoint.anchorPoint]
+      : gentleArcPoints(group.origin.point, endpoint.anchorPoint, `${group.id}:${endpoint.key}`, distanceKm);
+    return {
+      id: `${group.id}:branch:${endpoint.key}`,
       type: 'Feature',
-      geometry: { type: 'LineString', coordinates: directCoords },
+      geometry: { type: 'LineString', coordinates },
       properties: {
         kind,
         hop,
         color,
         channel,
-        corridorId,
+        corridorId: `${group.id}:${group.origin.key}`,
+        narrativeKey,
+        endpointNodeIds: endpoint.key.startsWith('node:') ? [endpoint.key.slice(5)] : [],
+        endpointPathRefs: endpoint.key.startsWith('path:') ? [endpoint.key.slice(5)] : [],
         renderPriority,
-        baseOpacity,
-        baseWidth,
-        glowOpacity,
+        baseOpacity: multiple ? clamp(baseOpacity - 0.08, 0.24, 0.88) : baseOpacity,
+        baseWidth: multiple ? clamp(baseWidth * 0.82, 0.9, 4.8) : baseWidth,
+        glowOpacity: multiple ? clamp(glowOpacity * 0.72, 0.02, 0.16) : glowOpacity,
       },
-    } as GeoJSON.Feature<GeoJSON.LineString>];
-  }
-
-  const clusterLinkKm = estimatePointClusterLinkKm(endpointEntries.map((entry) => entry.anchorPoint));
-  const endpointClusters = clusterPointEntriesByDistance(
-    endpointEntries.map((entry) => ({ ...entry, point: entry.anchorPoint })),
-    clusterLinkKm,
-  )
-    .map((cluster) => cluster.map(({ point: _point, ...entry }) => entry))
-    .sort((left, right) => right.length - left.length);
-  const features: GeoJSON.Feature[] = [];
-
-  endpointClusters.forEach((cluster, clusterIndex) => {
-    if (cluster.length === 1) {
-      const endpoint = cluster[0]!;
-      const distanceKm = approximateDistanceKm(centerPoint[0], centerPoint[1], endpoint.displayPoint[0], endpoint.displayPoint[1]);
-      const directCoords = kind === 'primary' && channel !== 'propagation'
-        ? [centerPoint, endpoint.displayPoint]
-        : gentleArcPoints(centerPoint, endpoint.displayPoint, `${corridorId}:${endpoint.key}:cluster:${clusterIndex}`, distanceKm);
-      features.push({
-        id: `${corridorId}:direct:${clusterIndex}:${endpoint.key}`,
-        type: 'Feature',
-        geometry: { type: 'LineString', coordinates: directCoords },
-        properties: {
-          kind,
-          hop,
-          color,
-          channel,
-          corridorId,
-          endpointNodeIds: endpoint.key.startsWith('node:') ? [endpoint.key.slice(5)] : [],
-          endpointPathRefs: endpoint.key.startsWith('path:') ? [endpoint.key.slice(5)] : [],
-          renderPriority,
-          baseOpacity,
-          baseWidth,
-          glowOpacity,
-        },
-      } as GeoJSON.Feature<GeoJSON.LineString>);
-      return;
-    }
-
-    const clusterAnchor = densestClusterAnchor(cluster.map((entry) => entry.displayPoint));
-    const splitPoint = pointOnSegment(centerPoint, clusterAnchor, 0.8);
-    features.push({
-      id: `${corridorId}:trunk:${clusterIndex}`,
-      type: 'Feature',
-      geometry: { type: 'LineString', coordinates: [centerPoint, splitPoint] },
-      properties: {
-        kind: kind === 'cluster' ? 'indirect' : kind,
-        hop,
-        color,
-        channel,
-        corridorId,
-        renderPriority: renderPriority + 2,
-        baseOpacity: clamp(baseOpacity + 0.06, 0.32, 0.96),
-        baseWidth: clamp(baseWidth + 0.5, 1.4, 6.4),
-        glowOpacity: clamp(glowOpacity + 0.03, 0.03, 0.28),
-      },
-    } as GeoJSON.Feature<GeoJSON.LineString>);
-
-    for (const endpoint of cluster) {
-      const midpoint = lerpPoint(splitPoint, endpoint.displayPoint, 0.5);
-      const control = lerpPoint(midpoint, clusterAnchor, 0.58);
-      features.push({
-        id: `${corridorId}:branch:${clusterIndex}:${endpoint.key}`,
-        type: 'Feature',
-        geometry: { type: 'LineString', coordinates: quadraticCurvePoints(splitPoint, endpoint.displayPoint, control) },
-        properties: {
-          kind: 'indirect',
-          hop,
-          color,
-          channel,
-          corridorId,
-          endpointNodeIds: endpoint.key.startsWith('node:') ? [endpoint.key.slice(5)] : [],
-          endpointPathRefs: endpoint.key.startsWith('path:') ? [endpoint.key.slice(5)] : [],
-          renderPriority,
-          baseOpacity: clamp(baseOpacity - 0.08, 0.24, 0.88),
-          baseWidth: clamp(baseWidth * 0.78, 0.9, 4.4),
-          glowOpacity: clamp(glowOpacity * 0.7, 0.02, 0.16),
-        },
-      } as GeoJSON.Feature<GeoJSON.LineString>);
-    }
+    } as GeoJSON.Feature<GeoJSON.LineString>;
   });
-
-  if (features.length === 0) {
-    for (const endpoint of endpointEntries) {
-      const distanceKm = approximateDistanceKm(centerPoint[0], centerPoint[1], endpoint.displayPoint[0], endpoint.displayPoint[1]);
-      features.push({
-        id: `${corridorId}:fallback:${endpoint.key}`,
-        type: 'Feature',
-        geometry: { type: 'LineString', coordinates: gentleArcPoints(centerPoint, endpoint.displayPoint, `${corridorId}:${endpoint.key}:fallback`, distanceKm) },
-        properties: {
-          kind,
-          hop,
-          color,
-          channel,
-          corridorId,
-          endpointNodeIds: endpoint.key.startsWith('node:') ? [endpoint.key.slice(5)] : [],
-          endpointPathRefs: endpoint.key.startsWith('path:') ? [endpoint.key.slice(5)] : [],
-          renderPriority,
-          baseOpacity,
-          baseWidth,
-          glowOpacity,
-        },
-      } as GeoJSON.Feature<GeoJSON.LineString>);
-    }
-  }
-  return features;
-}
-
-function buildTrianglePolygon(
-  lat0: number,
-  lon0: number,
-  vertices: [LocalPoint, LocalPoint, LocalPoint],
-): GeoJSON.Polygon {
-  const ring: [number, number][] = vertices.map((point) => fromLocalKm(lat0, lon0, point.x, point.y));
-  ring.push(ring[0]);
-  return { type: 'Polygon', coordinates: [ring] };
 }
 
 function rotateLocal(point: LocalPoint, angle: number): LocalPoint {
@@ -1870,6 +1903,31 @@ function rotateLocal(point: LocalPoint, angle: number): LocalPoint {
 
 function localDistanceKm(a: LocalPoint, b: LocalPoint): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function buildFogPolygon(
+  lat0: number,
+  lon0: number,
+  center: LocalPoint,
+  radiusXKm: number,
+  radiusYKm: number,
+  rotationRad: number,
+  seed: string,
+  wobble = 0.08,
+  segments = 32,
+): GeoJSON.Polygon {
+  const ring: [number, number][] = [];
+  for (let index = 0; index <= segments; index += 1) {
+    const angle = (Math.PI * 2 * index) / segments;
+    const noise = ((hashString(`${seed}:${index}`) % 1000) / 1000) - 0.5;
+    const radiusScale = 1 + noise * wobble * 2;
+    const local = rotateLocal({
+      x: Math.cos(angle) * radiusXKm * radiusScale,
+      y: Math.sin(angle) * radiusYKm * radiusScale,
+    }, rotationRad);
+    ring.push(fromLocalKm(lat0, lon0, center.x + local.x, center.y + local.y));
+  }
+  return { type: 'Polygon', coordinates: [ring] };
 }
 
 type SelectedCorridorFieldMetrics = {
@@ -1900,11 +1958,11 @@ function buildSelectedCorridorFieldMetrics(
   endpointEntries: Array<{ key: string; object: GeoObject; displayPoint: [number, number]; anchorPoint: [number, number] }>,
 ): SelectedCorridorFieldMetrics | null {
   if (endpointEntries.length < 2) return null;
-  const centroid = averagePoint(endpointEntries.map((entry) => entry.displayPoint));
+  const centroid = averagePoint(endpointEntries.map((entry) => entry.anchorPoint));
   const centerLon = centroid[0];
   const centerLat = centroid[1];
   const rawNodes = endpointEntries.map((entry) => {
-    const local = toLocalKm(centerLat, centerLon, entry.displayPoint[1], entry.displayPoint[0]);
+    const local = toLocalKm(centerLat, centerLon, entry.anchorPoint[1], entry.anchorPoint[0]);
     return {
       key: entry.key,
       object: entry.object,
@@ -2002,56 +2060,133 @@ function buildSelectedCorridorFieldFeatures(
   const metrics = buildSelectedCorridorFieldMetrics(endpointEntries);
   if (!metrics) return [];
 
-  const spanKm = Math.max(metrics.maxX - metrics.minX, metrics.maxY - metrics.minY);
-  const cellKm = clamp(spanKm * 0.045, 5, 18);
-  const baseColor = theme === 'dark' ? '#4b5563' : '#475569';
-  const accentColor = theme === 'dark' ? '#94a3b8' : '#64748b';
+  const nodeCount = metrics.nodes.length;
+  const bridgeCount = metrics.bridges.length;
+  const densityLoad = nodeCount + bridgeCount * 0.45;
+  const spanXKm = metrics.maxX - metrics.minX;
+  const spanYKm = metrics.maxY - metrics.minY;
+  const spanKm = Math.max(spanXKm, spanYKm);
+  const baseColor = theme === 'dark' ? '#4b5563' : '#64748b';
+  const accentColor = theme === 'dark' ? '#64748b' : '#94a3b8';
   const out: GeoJSON.Feature[] = [];
+  const opacityScale = clamp(1 / Math.pow(Math.max(densityLoad, 1), 0.46), 0.18, 0.84);
+  const radiusScale = clamp(1 / Math.pow(Math.max(nodeCount, 1), 0.08), 0.8, 1);
+  const fillOpacityBase = (theme === 'dark' ? 0.046 : 0.038) * opacityScale;
+  const canopyScale = nodeCount >= 18 ? 0.54 : nodeCount >= 12 ? 0.6 : nodeCount >= 8 ? 0.68 : 0.76;
 
-  let rowIndex = 0;
-  for (let y = metrics.minY; y <= metrics.maxY + cellKm; y += cellKm) {
-    let colIndex = 0;
-    for (let x = metrics.minX; x <= metrics.maxX + cellKm; x += cellKm) {
-      const tl: LocalPoint = { x, y };
-      const tr: LocalPoint = { x: x + cellKm, y };
-      const br: LocalPoint = { x: x + cellKm, y: y + cellKm };
-      const bl: LocalPoint = { x, y: y + cellKm };
-      const flip = ((rowIndex + colIndex) & 1) === 0;
-      const triangles: [LocalPoint, LocalPoint, LocalPoint][] = flip
-        ? [[tl, tr, bl], [tr, br, bl]]
-        : [[tl, tr, br], [tl, br, bl]];
+  const pushFogFeature = (
+    idSuffix: string,
+    center: LocalPoint,
+    radiusXKm: number,
+    radiusYKm: number,
+    opacity: number,
+    rotationRad: number,
+    wobble: number,
+  ) => {
+    out.push({
+      id: `${corridorId}:field:${idSuffix}`,
+      type: 'Feature',
+      geometry: buildFogPolygon(
+        metrics.centerLat,
+        metrics.centerLon,
+        center,
+        radiusXKm,
+        radiusYKm,
+        rotationRad,
+        `${corridorId}:${idSuffix}`,
+        wobble,
+      ),
+      properties: {
+        kind: 'corridor-field',
+        corridorId,
+        color: baseColor,
+        fillOpacity: opacity,
+        accentColor,
+        accentOpacity: 0,
+      },
+    } as GeoJSON.Feature<GeoJSON.Polygon>);
+  };
 
-      for (let triangleIndex = 0; triangleIndex < triangles.length; triangleIndex += 1) {
-        const triangle = triangles[triangleIndex]!;
-        const center = {
-          x: (triangle[0].x + triangle[1].x + triangle[2].x) / 3,
-          y: (triangle[0].y + triangle[1].y + triangle[2].y) / 3,
-        };
-        const strength = evaluateSelectedCorridorFieldStrength(metrics, center);
-        if (strength < metrics.threshold) continue;
-        const edgeFactor = clamp((strength - metrics.threshold) / Math.max(1 - metrics.threshold, 0.001), 0, 1);
-        const jitter = ((hashString(`${corridorId}:${rowIndex}:${colIndex}:${triangleIndex}`) % 1000) / 1000);
-        const keepThreshold = clamp(0.46 + edgeFactor * 0.5, 0.42, 0.96);
-        if (jitter > keepThreshold) continue;
-
-        out.push({
-          id: `${corridorId}:field:${rowIndex}:${colIndex}:${triangleIndex}`,
-          type: 'Feature',
-          geometry: buildTrianglePolygon(metrics.centerLat, metrics.centerLon, triangle),
-          properties: {
-            kind: 'corridor-field',
-            corridorId,
-            color: baseColor,
-            fillOpacity: (theme === 'dark' ? 0.052 : 0.04) * (0.62 + edgeFactor * 1.3),
-            accentColor,
-            accentOpacity: (theme === 'dark' ? 0.03 : 0.022) * Math.pow(edgeFactor, 1.04) * 1.3,
-          },
-        } as GeoJSON.Feature<GeoJSON.Polygon>);
-      }
-      colIndex += 1;
-    }
-    rowIndex += 1;
+  const canopyRotation = ((hashString(`${corridorId}:canopy`) % 360) * Math.PI) / 180;
+  pushFogFeature(
+    'canopy:inner',
+    { x: 0, y: 0 },
+    clamp(spanXKm * canopyScale, 22, 180),
+    clamp(spanYKm * canopyScale, 20, 160),
+    fillOpacityBase * 0.92,
+    canopyRotation * 0.7,
+    0.05,
+  );
+  if (nodeCount <= 9) {
+    pushFogFeature(
+      'canopy:outer',
+      { x: 0, y: 0 },
+      clamp(spanXKm * (canopyScale + 0.1), 28, 240),
+      clamp(spanYKm * (canopyScale + 0.08), 24, 210),
+      fillOpacityBase * 0.62,
+      canopyRotation,
+      0.06,
+    );
   }
+
+  const nodeEntries = metrics.nodes.length > 14
+    ? metrics.nodes.filter((_, index) => index % 2 === 0)
+    : metrics.nodes;
+  nodeEntries.forEach((node, index) => {
+    const normalizedWeight = clamp((node.weight - 0.86) / 0.18, 0, 1);
+    const rotationRad = ((hashString(`${corridorId}:node:${node.key}`) % 360) * Math.PI) / 180;
+    const coreRadiusX = clamp(node.radiusKm * (1.02 + normalizedWeight * 0.08) * radiusScale, 20, spanKm * 0.26);
+    const coreRadiusY = clamp(node.radiusKm * (0.84 + normalizedWeight * 0.06) * radiusScale, 18, spanKm * 0.22);
+    if (nodeCount <= 10 || index % 2 === 0) {
+      pushFogFeature(
+        `node:${index}:outer`,
+        { x: node.x, y: node.y },
+        coreRadiusX * 1.22,
+        coreRadiusY * 1.18,
+        fillOpacityBase * (0.42 + normalizedWeight * 0.08),
+        rotationRad,
+        0.08,
+      );
+    }
+    pushFogFeature(
+      `node:${index}:core`,
+      { x: node.x, y: node.y },
+      coreRadiusX,
+      coreRadiusY,
+      fillOpacityBase * (0.7 + normalizedWeight * 0.14),
+      rotationRad * 0.82,
+      0.07,
+    );
+  });
+
+  const bridgeEntries = [...metrics.bridges]
+    .sort((left, right) => right.weight - left.weight)
+    .slice(0, nodeCount >= 16 ? 4 : nodeCount >= 10 ? 5 : 7);
+  bridgeEntries.forEach((bridge, index) => {
+    const normalizedWeight = clamp((bridge.weight - 0.16) / 0.18, 0, 1);
+    const rotationRad = ((hashString(`${corridorId}:bridge:${index}`) % 360) * Math.PI) / 180;
+    pushFogFeature(
+      `bridge:${index}`,
+      { x: bridge.x, y: bridge.y },
+      clamp(bridge.radiusKm * 1.12 * radiusScale, 14, spanKm * 0.2),
+      clamp(bridge.radiusKm * 0.82 * radiusScale, 12, spanKm * 0.16),
+      fillOpacityBase * (0.34 + normalizedWeight * 0.1),
+      rotationRad,
+      0.08,
+    );
+    if (bridge.weight >= 0.24 && nodeCount <= 8) {
+      pushFogFeature(
+        `bridge:${index}:echo`,
+        { x: bridge.x, y: bridge.y },
+        clamp(bridge.radiusKm * 1.48 * radiusScale, 20, spanKm * 0.26),
+        clamp(bridge.radiusKm * 0.96 * radiusScale, 14, spanKm * 0.2),
+        fillOpacityBase * 0.28,
+        rotationRad * 0.72,
+        0.08,
+      );
+    }
+  });
+
   return out;
 }
 
@@ -2087,47 +2222,6 @@ function buildSelectedCorridorMutedObjectIds(
     ) continue;
     const strength = evaluateSelectedCorridorFieldStrength(metrics, local);
     if (strength >= metrics.threshold * 0.82) muted.add(object.id);
-  }
-  return Array.from(muted);
-}
-
-function buildOverviewCorridorMutedObjectIds(
-  map: maplibregl.Map,
-  corridorFeatures: GeoJSON.Feature[],
-  objects: GeoObject[],
-  selectedObjectId: string | null,
-): string[] {
-  const badges = corridorFeatures
-    .filter((feature) => String(feature.properties?.kind || '').trim() === 'corridor' && feature.geometry?.type === 'Point')
-    .map((feature) => {
-      const geometry = feature.geometry;
-      const coordinates = geometry?.type === 'Point'
-        ? geometry.coordinates as [number, number]
-        : undefined;
-      if (!coordinates || coordinates.length < 2) return null;
-      const projected = map.project({ lng: coordinates[0], lat: coordinates[1] });
-      const corridorRadius = Number(feature.properties?.corridorRadius) || 12;
-      return {
-        x: projected.x,
-        y: projected.y,
-        radiusPx: corridorRadius * 5.2 + 54,
-      };
-    })
-    .filter((entry): entry is { x: number; y: number; radiusPx: number } => Boolean(entry));
-  if (badges.length === 0) return [];
-
-  const muted = new Set<string>();
-  for (const object of objects) {
-    if (!object.id || object.id === selectedObjectId) continue;
-    const lat = object.coordinates?.lat;
-    const lon = object.coordinates?.lon;
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
-    const projected = map.project({ lng: lon!, lat: lat! });
-    const insideBadgeZone = badges.some((badge) => {
-      const distancePx = Math.hypot(projected.x - badge.x, projected.y - badge.y);
-      return distancePx <= badge.radiusPx;
-    });
-    if (insideBadgeZone) muted.add(object.id);
   }
   return Array.from(muted);
 }
@@ -2180,14 +2274,12 @@ function buildSupplyPathFeatures(
     const legs = Array.isArray(artifact.payload?.legs) ? artifact.payload.legs : [];
     const multiLegPath = legs.length > 1;
     for (const leg of legs) {
-      const supplierRef = String(leg?.supplierRef || '').trim();
-      const customerRef = String(leg?.customerRef || '').trim();
-      const productRef = String(leg?.productRef || artifact.productAxis || '').trim();
+      const supplierRef = artifactLegString(leg, 'supplierRef', 'SupplierRef');
+      const customerRef = artifactLegString(leg, 'customerRef', 'CustomerRef');
+      const productRef = artifactLegString(leg, 'productRef', 'ProductRef') || String(artifact.productAxis || '').trim();
       if (!supplierRef || !customerRef || !productRef) continue;
 
-      const transportViaRefs = (leg?.transportViaRefs || [])
-        .map((ref) => String(ref || '').trim())
-        .filter(Boolean);
+      const transportViaRefs = artifactLegStringList(leg, 'transportViaRefs', 'TransportViaRefs');
       const refs = [supplierRef, ...transportViaRefs, customerRef];
       const coordinates = dedupeSequentialPoints(
         refs
@@ -2207,16 +2299,16 @@ function buildSupplyPathFeatures(
       const score =
         Math.min(directDistanceKm, 5000) * 0.07
         + transportViaRefs.length * 24
-        + ((leg?.flowRefs?.length || 0) > 0 ? 18 : 0)
-        + ((leg?.zoneRefs?.length || 0) > 0 ? 10 : 0)
-        + ((leg?.affectedZoneRefs?.length || 0) > 0 ? 10 : 0)
+        + (artifactLegStringList(leg, 'flowRefs', 'FlowRefs').length > 0 ? 18 : 0)
+        + (artifactLegStringList(leg, 'zoneRefs', 'ZoneRefs').length > 0 ? 10 : 0)
+        + (artifactLegStringList(leg, 'affectedZoneRefs', 'AffectedZoneRefs').length > 0 ? 10 : 0)
         + (multiLegPath ? 22 : 0)
         + ((artifact.traceRole === 'route_overlap' || artifact.traceRole === 'route_context') ? 12 : 0)
         + (artifact.isPinned ? 6 : 0);
       const direction = classifySupplyDirection(String(focusObject?.canonicalPath || '').trim(), supplierRef, customerRef);
       const candidate: CandidateRoute = {
         artifactId: String(artifact.id || '').trim(),
-        legIndex: typeof leg?.index === 'number' ? leg.index : 0,
+        legIndex: artifactLegNumber(leg, 'index', 'Index') ?? 0,
         productRef,
         narrativeKey: supplyNarrativeKey(direction, productRef, artifact.id),
         direction,
@@ -2242,6 +2334,7 @@ function buildSupplyPathFeatures(
   const ranked = Array.from(byRouteKey.values())
     .sort((left, right) => right.score - left.score)
     .slice(0, 12);
+  const supplyFanoutCount = ranked.length;
   const visiblePathRefs = new Set<string>();
   const coveredPairs = new Set<string>();
   const features: GeoJSON.Feature[] = [];
@@ -2257,15 +2350,11 @@ function buildSupplyPathFeatures(
     colorOverride?: string,
     corridorId?: string,
     featureRole: 'overview' | 'detail' = 'overview',
+    bundleSize = 1,
   ) => {
     const lineId = `supply:${route.artifactId || route.productRef}:${route.legIndex}:${hashString(`${route.supplierRef}:${route.customerRef}:${labelText}`)}`;
-    const color = colorOverride || supplyStrokeColor(theme, kind);
-    const baseOpacity = kind === 'primary'
-      ? (theme === 'dark' ? 0.92 : 0.82)
-      : kind === 'indirect'
-        ? (theme === 'dark' ? 0.82 : 0.7)
-        : (theme === 'dark' ? 0.62 : 0.54);
-    const baseWidth = kind === 'primary' ? 2.7 : kind === 'indirect' ? 2.15 : 1.6;
+    const visual = buildSupplyPathVisual(theme, kind, route.directDistanceKm, supplyFanoutCount, bundleSize);
+    const color = colorOverride || visual.color;
 
     features.push({
       id: lineId,
@@ -2281,9 +2370,9 @@ function buildSupplyPathFeatures(
         endpointPathRefs: [route.supplierRef, route.customerRef],
         narrativeKey: route.narrativeKey,
         renderPriority: kind === 'primary' ? 28 : kind === 'indirect' ? 24 : 20,
-        baseOpacity: clamp(baseOpacity + opacityBoost, 0.28, 0.96),
-        baseWidth: clamp(baseWidth * widthMultiplier, 1.2, 6.6),
-        glowOpacity: kind === 'cluster' ? 0.05 : 0.16,
+        baseOpacity: clamp(visual.baseOpacity + opacityBoost, 0.16, 0.82),
+        baseWidth: clamp(visual.baseWidth * widthMultiplier, 0.96, 4.6),
+        glowOpacity: visual.glowOpacity,
       },
     } as GeoJSON.Feature<GeoJSON.LineString>);
     features.push({
@@ -2383,6 +2472,8 @@ function buildSupplyPathFeatures(
 
     const strongestKind = group.reduce<EdgeVisualKind>((current, route) => strongerVisualKind(current, route.kind), 'cluster');
     const trunkColor = supplyStrokeColor(theme, 'primary');
+    const averageDistanceKm = group.reduce((sum, route) => sum + route.directDistanceKm, 0) / Math.max(1, group.length);
+    const trunkVisual = buildSupplyPathVisual(theme, strongestKind, averageDistanceKm, supplyFanoutCount, group.length);
     const branchPlans = group.map((route) => ({
       route,
       split: branchSplitOnSharedAxis(remoteCentroid, localCentroid, route.localPoint),
@@ -2407,9 +2498,9 @@ function buildSupplyPathFeatures(
         featureRole: 'overview',
         narrativeKey: group[0]?.narrativeKey || trunkId,
         renderPriority: strongestKind === 'primary' ? 30 : strongestKind === 'indirect' ? 26 : 22,
-        baseOpacity: clamp((theme === 'dark' ? 0.74 : 0.66) + Math.min(0.18, group.length * 0.03), 0.42, 0.94),
-        baseWidth: clamp((strongestKind === 'primary' ? 3.2 : strongestKind === 'indirect' ? 2.8 : 2.2) + Math.log2(group.length + 1) * 1.15, 2.2, 7.8),
-        glowOpacity: 0.18,
+        baseOpacity: clamp(trunkVisual.baseOpacity + Math.min(0.08, group.length * 0.012), 0.24, 0.74),
+        baseWidth: clamp(trunkVisual.baseWidth + Math.log2(group.length + 1) * 0.4, 1.4, 3.9),
+        glowOpacity: clamp(trunkVisual.glowOpacity + 0.01, 0.014, 0.05),
       },
     } as GeoJSON.Feature<GeoJSON.LineString>);
     features.push({
@@ -2448,6 +2539,7 @@ function buildSupplyPathFeatures(
         trunkColor,
         trunkId,
         'detail',
+        group.length,
       );
     });
   }
@@ -2461,6 +2553,12 @@ function buildSupplyPathFeatures(
       route.coordinates,
       route.labelText,
       route.transportViaRefs.length > 0 ? 0.52 : 0.34,
+      1,
+      0,
+      undefined,
+      undefined,
+      'overview',
+      1,
     );
   });
 
@@ -2482,20 +2580,73 @@ function buildExplainRelationFeatures(
   const visibleNodeIds = new Set<string>([centerId]);
   if (!center) return { features, visibleNodeIds };
 
-  relations.forEach((relation, index) => {
+  const start: [number, number] = [center.lon, center.lat];
+  const prepared = relations.flatMap((relation, index) => {
     const relatedCoords = idToCoords.get(relation.relatedFragmentId) || relation.relatedCoordinates || null;
-    if (!relatedCoords) return;
-    const start: [number, number] = [center.lon, center.lat];
+    if (!relatedCoords) return [];
     const end: [number, number] = [relatedCoords.lon, relatedCoords.lat];
-    const distanceKm = approximateDistanceKm(start[0], start[1], end[0], end[1]);
+    return [{
+      relation,
+      index,
+      renderKey: `${section}:${relation.relatedFragmentId}:${relation.type}:${index}`,
+      end,
+      distanceKm: approximateDistanceKm(start[0], start[1], end[0], end[1]),
+      corridorId: `${section}:${relation.relatedFragmentId}`,
+      narrativeKey: relation.edgeId || `${section}:${relation.relatedFragmentId}:${relation.type}`,
+      labelText: `${relation.relatedLabel}\n${compactMeaning(relation.businessMeaning || humanizeEdgeType(relation.type))}`,
+      azimuthDeg: azimuthDegrees(start, end),
+    }];
+  });
+
+  const directFanoutCount = section === 'direct' ? prepared.length : 0;
+  const bundledCoordinateByRelationId = new Map<string, [number, number][]>();
+  const bundleSizeByRelationId = new Map<string, number>();
+
+  if (section === 'direct' && directFanoutCount >= 8) {
+    const groups = new Map<string, typeof prepared>();
+    const azimuthStep = directFanoutCount >= 18 ? 8 : directFanoutCount >= 12 ? 10 : 12;
+
+    for (const item of prepared) {
+      const azimuthBucket = Math.round(item.azimuthDeg / azimuthStep);
+      const distanceBucket = item.distanceKm >= 2200 ? 3 : item.distanceKm >= 1200 ? 2 : item.distanceKm >= 420 ? 1 : 0;
+      const key = `${azimuthBucket}:${distanceBucket}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(item);
+    }
+
+    for (const group of groups.values()) {
+      if (group.length < 3) continue;
+      const averageDistanceKm = group.reduce((sum, item) => sum + item.distanceKm, 0) / group.length;
+      if (averageDistanceKm < 240) continue;
+      const centroid = averagePoint(group.map((item) => item.end));
+      const bundleRatio = clamp(
+        0.14 + Math.log2(group.length + 1) * 0.026 + (averageDistanceKm >= 1500 ? 0.04 : averageDistanceKm >= 700 ? 0.02 : 0),
+        0.14,
+        0.26,
+      );
+      const splitPoint = pointOnSegment(start, centroid, bundleRatio);
+      const sortedGroup = [...group].sort((left, right) => left.azimuthDeg - right.azimuthDeg);
+      for (const item of sortedGroup) {
+        const branch = concaveCurveToAxis(splitPoint, item.end, start, centroid);
+        bundledCoordinateByRelationId.set(item.renderKey, dedupeSequentialPoints([start, ...branch]));
+        bundleSizeByRelationId.set(item.renderKey, group.length);
+      }
+    }
+  }
+
+  prepared.forEach((item) => {
+    const { relation, index, renderKey, end, distanceKm, corridorId, narrativeKey, labelText } = item;
     const kind: EdgeVisualKind = section === 'direct' ? 'primary' : 'indirect';
-    const color = relationStrokeColor(theme, relation.family, relation.semanticDirection, section === 'direct');
-    const coordinates = section === 'direct' && distanceKm < 220
-      ? [start, end]
-      : gentleArcPoints(start, end, `${section}:${relation.relatedFragmentId}:${relation.type}`, distanceKm, section === 'direct' ? 14 : 18);
-    const corridorId = `${section}:${relation.relatedFragmentId}`;
-    const narrativeKey = relation.edgeId || `${section}:${relation.relatedFragmentId}:${relation.type}`;
-    const labelText = `${relation.relatedLabel}\n${compactMeaning(relation.businessMeaning || humanizeEdgeType(relation.type))}`;
+    const bundleSize = section === 'direct' ? (bundleSizeByRelationId.get(renderKey) || 1) : 1;
+    const directVisual = section === 'direct'
+      ? buildDirectRelationVisual(theme, distanceKm, directFanoutCount, bundleSize)
+      : null;
+    const color = directVisual?.color || relationStrokeColor(theme, relation.family, relation.semanticDirection, false);
+    const coordinates = section === 'direct'
+      ? bundledCoordinateByRelationId.get(renderKey)
+        || (distanceKm < 220 ? [start, end] : gentleArcPoints(start, end, `${section}:${relation.relatedFragmentId}:${relation.type}`, distanceKm, 14))
+      : gentleArcPoints(start, end, `${section}:${relation.relatedFragmentId}:${relation.type}`, distanceKm, 18);
+
     features.push({
       id: `${corridorId}:line:${index}`,
       type: 'Feature',
@@ -2514,10 +2665,17 @@ function buildExplainRelationFeatures(
         relationType: relation.type,
         semanticDirection: relation.semanticDirection || 'context',
         color,
-        baseOpacity: section === 'direct' ? (theme === 'dark' ? 0.9 : 0.82) : (theme === 'dark' ? 0.68 : 0.58),
-        baseWidth: section === 'direct' ? 2.4 : 1.8,
-        glowOpacity: section === 'direct' ? 0.12 : 0.08,
+        baseOpacity: directVisual ? directVisual.baseOpacity : (theme === 'dark' ? 0.92 : 0.82),
+        baseWidth: directVisual ? directVisual.baseWidth : 2.24,
+        glowOpacity: directVisual ? directVisual.glowOpacity : 0.11,
         renderPriority: section === 'direct' ? 26 : 18,
+        directDistanceKm: section === 'direct' ? distanceKm : 0,
+        directFanoutCount: section === 'direct' ? directFanoutCount : 0,
+        directBundleSize: section === 'direct' ? bundleSize : 1,
+        directLongHaul: directVisual?.longHaul ? 1 : 0,
+        directDenseFanout: directVisual?.denseFanout ? 1 : 0,
+        directDistanceFactor: directVisual?.distanceFactor ?? 1,
+        directFanoutFactor: directVisual?.fanoutFactor ?? 1,
       },
     } as GeoJSON.Feature<GeoJSON.LineString>);
     features.push({
@@ -2554,39 +2712,41 @@ function buildSimplePropagationFeatures(
     const sourceId = String(edge?.sourceFragmentId || '').trim();
     const targetId = String(edge?.targetFragmentId || '').trim();
     if (!sourceId || !targetId || shouldSuppressConnection(sourceId, targetId, objectById)) continue;
-    const pairKey = stablePairKey(sourceId, targetId);
-    if (seen.has(pairKey)) continue;
-    seen.add(pairKey);
+    const hop = Math.max(1, Math.min(3, Number(edge?.hopsFromSource) || 1));
+    const edgeKey = String(edge?.edgeId || '').trim() || `${sourceId}->${targetId}:${hop}`;
+    if (seen.has(edgeKey)) continue;
+    seen.add(edgeKey);
     const source = idToCoords.get(sourceId);
     const target = idToCoords.get(targetId);
-    if (!source || !target) continue;
-    const hop = Math.max(1, Math.min(3, Number(edge?.hopsFromSource) || 1));
-    const kind: EdgeVisualKind = hop <= 1 ? 'primary' : hop === 2 ? 'indirect' : 'cluster';
-    const color = propagationStrokeColor(theme, kind);
-    const coords = gentleArcPoints([source.lon, source.lat], [target.lon, target.lat], `prop:${pairKey}`, approximateDistanceKm(source.lon, source.lat, target.lon, target.lat), 14);
-    features.push({
-      id: `prop:${edge?.edgeId || pairKey}`,
+	    if (!source || !target) continue;
+	    const kind: EdgeVisualKind = hop <= 1 ? 'primary' : hop === 2 ? 'indirect' : 'cluster';
+	    const color = propagationStrokeColor(theme, kind);
+	    const propagationOpacityBase = kind === 'primary' ? 0.806 : kind === 'indirect' ? 0.676 : 0.52;
+	    const propagationGlowBase = kind === 'cluster' ? 0.052 : 0.104;
+	    const coords = gentleArcPoints([source.lon, source.lat], [target.lon, target.lat], `prop:${edgeKey}`, approximateDistanceKm(source.lon, source.lat, target.lon, target.lat), 14);
+	    features.push({
+      id: `prop:${edgeKey}`,
       type: 'Feature',
       geometry: { type: 'LineString', coordinates: coords },
       properties: {
         kind,
         hop,
         channel: 'propagation',
-        corridorId: `prop:${pairKey}`,
+        corridorId: `prop:${edgeKey}`,
         featureRole: 'overview',
         endpointNodeIds: [sourceId, targetId],
         badgeEndpointNodeIds: [sourceId === centerId ? targetId : sourceId, targetId],
         sourceId,
-        targetId,
-        narrativeKey: 'propagation:overview',
-        semanticDirection: sourceId === centerId ? 'downstream' : targetId === centerId ? 'upstream' : 'context',
-        color,
-        baseOpacity: kind === 'primary' ? 0.5 : kind === 'indirect' ? 0.42 : 0.3,
-        baseWidth: kind === 'primary' ? 1.55 : kind === 'indirect' ? 1.25 : 0.95,
-        glowOpacity: kind === 'cluster' ? 0.02 : 0.06,
-        renderPriority: kind === 'primary' ? 12 : kind === 'indirect' ? 10 : 8,
-      },
-    } as GeoJSON.Feature<GeoJSON.LineString>);
+	        targetId,
+	        narrativeKey: 'propagation:overview',
+	        semanticDirection: sourceId === centerId ? 'downstream' : targetId === centerId ? 'upstream' : 'context',
+	        color,
+	        baseOpacity: propagationOpacityBase,
+	        baseWidth: kind === 'primary' ? 1.8 : kind === 'indirect' ? 1.5 : 1.15,
+	        glowOpacity: propagationGlowBase,
+	        renderPriority: kind === 'primary' ? 12 : kind === 'indirect' ? 10 : 8,
+	      },
+	    } as GeoJSON.Feature<GeoJSON.LineString>);
   }
   return features;
 }
@@ -2661,29 +2821,29 @@ function analyzeSupplyArtifactPerspective(
   const focusLabel = String(focusObject?.label || '').trim() || labelFromPathRef(focusPath);
   const legs = Array.isArray(artifact.payload?.legs) ? artifact.payload.legs : [];
   const firstLeg = legs.length > 0 ? legs[0] : null;
-  const productRef = String(firstLeg?.productRef || artifact.productAxis || '').trim() || undefined;
+  const productRef = artifactLegString(firstLeg, 'productRef', 'ProductRef') || String(artifact.productAxis || '').trim() || undefined;
   const productLabel = productRef ? (humanizeCanonicalPath(productRef) || productRef) : 'Unspecified product';
-  const inboundLeg = legs.find((leg) => String(leg?.customerRef || '').trim() === focusPath && String(leg?.supplierRef || '').trim() !== focusPath) || null;
-  const outboundLeg = legs.find((leg) => String(leg?.supplierRef || '').trim() === focusPath && String(leg?.customerRef || '').trim() !== focusPath) || null;
+  const inboundLeg = legs.find((leg) => artifactLegString(leg, 'customerRef', 'CustomerRef') === focusPath && artifactLegString(leg, 'supplierRef', 'SupplierRef') !== focusPath) || null;
+  const outboundLeg = legs.find((leg) => artifactLegString(leg, 'supplierRef', 'SupplierRef') === focusPath && artifactLegString(leg, 'customerRef', 'CustomerRef') !== focusPath) || null;
 
   let direction: 'inbound' | 'outbound' | 'context' = 'context';
   if (inboundLeg && !outboundLeg) direction = 'inbound';
   else if (outboundLeg && !inboundLeg) direction = 'outbound';
   else {
-    const supplierRef = String(firstLeg?.supplierRef || artifact.anchorSupplier || '').trim();
-    const customerRef = String(firstLeg?.customerRef || artifact.anchorCustomer || '').trim();
+    const supplierRef = artifactLegString(firstLeg, 'supplierRef', 'SupplierRef') || String(artifact.anchorSupplier || '').trim();
+    const customerRef = artifactLegString(firstLeg, 'customerRef', 'CustomerRef') || String(artifact.anchorCustomer || '').trim();
     const fallbackDirection = classifySupplyDirection(focusPath, supplierRef, customerRef);
     const isInternalLoop = Boolean(focusPath) && supplierRef === customerRef && supplierRef === focusPath;
     direction = isInternalLoop ? 'context' : fallbackDirection;
   }
 
   const sourceLeg = direction === 'inbound' ? inboundLeg : direction === 'outbound' ? outboundLeg : firstLeg;
-  const supplierRef = String(sourceLeg?.supplierRef || artifact.anchorSupplier || '').trim();
-  const customerRef = String(sourceLeg?.customerRef || artifact.anchorCustomer || '').trim();
+  const supplierRef = artifactLegString(sourceLeg, 'supplierRef', 'SupplierRef') || String(artifact.anchorSupplier || '').trim();
+  const customerRef = artifactLegString(sourceLeg, 'customerRef', 'CustomerRef') || String(artifact.anchorCustomer || '').trim();
   const routeRefs = legs.flatMap((leg) => [
-    String(leg?.supplierRef || '').trim(),
-    ...((leg?.transportViaRefs || []).map((ref) => String(ref || '').trim())),
-    String(leg?.customerRef || '').trim(),
+    artifactLegString(leg, 'supplierRef', 'SupplierRef'),
+    ...artifactLegStringList(leg, 'transportViaRefs', 'TransportViaRefs'),
+    artifactLegString(leg, 'customerRef', 'CustomerRef'),
   ]).filter(Boolean);
   const internalLoop = Boolean(focusPath) && supplierRef === customerRef && supplierRef === focusPath;
   const resolvedUpstream = traceEndpointLabel(artifact, 'upstream', focusLabel) || traceEndpointLabel(artifact, 'supplier', focusLabel);
@@ -2693,7 +2853,7 @@ function analyzeSupplyArtifactPerspective(
     : direction === 'inbound'
       ? resolvedUpstream
       || pickDistinctSupplyLabel(
-          [String(sourceLeg?.supplierRef || '').trim(), ...((sourceLeg?.transportViaRefs || []).map((ref) => String(ref || '').trim()))],
+          [artifactLegString(sourceLeg, 'supplierRef', 'SupplierRef'), ...artifactLegStringList(sourceLeg, 'transportViaRefs', 'TransportViaRefs')],
           new Map(),
           focusPath,
           focusLabel,
@@ -2701,7 +2861,7 @@ function analyzeSupplyArtifactPerspective(
       : direction === 'outbound'
         ? resolvedDownstream
         || pickDistinctSupplyLabel(
-            [...((sourceLeg?.transportViaRefs || []).map((ref) => String(ref || '').trim())).reverse(), String(sourceLeg?.customerRef || '').trim()],
+            [...artifactLegStringList(sourceLeg, 'transportViaRefs', 'TransportViaRefs').reverse(), artifactLegString(sourceLeg, 'customerRef', 'CustomerRef')],
             new Map(),
             focusPath,
             focusLabel,
@@ -2948,7 +3108,7 @@ function buildExplainTraceSummary(
 }
 
 function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
-  const opacityFactor = 0.85;
+  const opacityFactor = 0.94;
   map.addLayer({
     id: CORRIDOR_FIELD_LAYER,
     type: 'fill',
@@ -2964,7 +3124,7 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
         13, ['*', ['coalesce', ['get', 'fillOpacity'], 0.02], 1.18],
       ],
     },
-  });
+  }, map.getLayer(GEO_MARKER_LAYER_ANCHOR) ? GEO_MARKER_LAYER_ANCHOR : undefined);
 
   map.addLayer({
     id: CORRIDOR_FIELD_ACCENT_LAYER,
@@ -2981,204 +3141,7 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
         13, ['*', ['coalesce', ['get', 'accentOpacity'], 0.012], 1.18],
       ],
     },
-  });
-
-  map.addLayer({
-    id: CORRIDOR_GLOW_LAYER,
-    type: 'circle',
-    source: SRC,
-    filter: ['==', ['get', 'kind'], 'corridor'],
-    paint: {
-      'circle-radius': [
-        'case',
-        ['boolean', ['get', 'corridorSelected'], false],
-        ['+', ['get', 'corridorRadius'], 6],
-        ['+', ['get', 'corridorRadius'], 5],
-      ],
-      'circle-color': [
-        'case',
-        ['boolean', ['get', 'corridorSelected'], false],
-        theme === 'dark' ? '#334155' : '#cbd5e1',
-        '#f59e0b',
-      ],
-      'circle-opacity': [
-        'case',
-        ['boolean', ['get', 'corridorSelected'], false],
-        theme === 'dark' ? 0.14 : 0.1,
-        ['boolean', ['get', 'corridorDimmed'], false],
-        0.06,
-        0.14,
-      ],
-      'circle-blur': 0.8,
-    },
-  });
-
-  map.addLayer({
-    id: CORRIDOR_GUIDE_LAYER,
-    type: 'line',
-    source: SRC,
-    filter: ['==', ['get', 'kind'], 'corridor-guide'],
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: {
-      'line-color': ['get', 'color'],
-      'line-width': [
-        'case',
-        ['boolean', ['get', 'corridorSelected'], false],
-        1.6,
-        1.1,
-      ],
-      'line-opacity': [
-        'case',
-        ['boolean', ['get', 'corridorSelected'], false],
-        0.62,
-        ['boolean', ['get', 'corridorDimmed'], false],
-        0.16,
-        0.34,
-      ],
-      'line-dasharray': ['literal', [1.2, 2.2]],
-    },
-  });
-
-  map.addLayer({
-    id: CORRIDOR_LAYER,
-    type: 'circle',
-    source: SRC,
-    filter: ['==', ['get', 'kind'], 'corridor'],
-    paint: {
-      'circle-radius': [
-        'case',
-        ['boolean', ['get', 'corridorSelected'], false],
-        ['+', ['get', 'corridorRadius'], 1.5],
-        ['boolean', ['feature-state', 'hover'], false],
-        ['+', ['get', 'corridorRadius'], 2],
-        ['get', 'corridorRadius'],
-      ],
-      'circle-color': [
-        'case',
-        ['boolean', ['get', 'corridorSelected'], false],
-        theme === 'dark' ? 'rgba(15,23,42,0.94)' : 'rgba(226,232,240,0.94)',
-        theme === 'dark' ? 'rgba(44,22,2,0.92)' : 'rgba(120,53,15,0.92)',
-      ],
-      'circle-opacity': [
-        'case',
-        ['boolean', ['get', 'corridorSelected'], false],
-        0.94,
-        ['boolean', ['get', 'corridorDimmed'], false],
-        0.42,
-        0.88,
-      ],
-      'circle-stroke-color': [
-        'case',
-        ['boolean', ['get', 'corridorSelected'], false],
-        theme === 'dark' ? 'rgba(251,191,36,0.92)' : 'rgba(180,83,9,0.94)',
-        ['get', 'color'],
-      ],
-      'circle-stroke-opacity': [
-        'case',
-        ['boolean', ['get', 'corridorSelected'], false],
-        0.92,
-        ['boolean', ['get', 'corridorDimmed'], false],
-        0.45,
-        0.82,
-      ],
-      'circle-stroke-width': [
-        'case',
-        ['boolean', ['get', 'corridorSelected'], false],
-        2.2,
-        ['boolean', ['feature-state', 'hover'], false],
-        2.4,
-        1.9,
-      ],
-    },
-  });
-
-  map.addLayer({
-    id: CORRIDOR_ICON_LAYER,
-    type: 'symbol',
-    source: SRC,
-    filter: ['==', ['get', 'kind'], 'corridor'],
-    layout: {
-      'text-field': [
-        'case',
-        ['boolean', ['get', 'corridorSelected'], false],
-        'o',
-        '↔',
-      ],
-      'text-font': [...MAP_TEXT_FONT_STACK],
-      'text-size': [
-        'case',
-        ['boolean', ['get', 'corridorSelected'], false],
-        11.5,
-        13,
-      ],
-      'text-anchor': 'center',
-      'text-allow-overlap': true,
-      'text-ignore-placement': true,
-    },
-    paint: {
-      'text-color': [
-        'case',
-        ['boolean', ['get', 'corridorSelected'], false],
-        theme === 'dark' ? '#e2e8f0' : '#334155',
-        '#fbbf24',
-      ],
-      'text-halo-color': theme === 'dark' ? 'rgba(2,6,23,0.9)' : 'rgba(120,53,15,0.88)',
-      'text-halo-width': 0.8,
-      'text-opacity': [
-        'case',
-        ['boolean', ['get', 'corridorSelected'], false],
-        0.92,
-        ['boolean', ['get', 'corridorDimmed'], false],
-        0.46,
-        0.92,
-      ],
-    },
-  });
-
-  map.addLayer({
-    id: CORRIDOR_LABEL_LAYER,
-    type: 'symbol',
-    source: SRC,
-    filter: ['==', ['get', 'kind'], 'corridor'],
-    layout: {
-      'text-field': ['get', 'labelText'],
-      'text-font': [...MAP_TEXT_FONT_STACK],
-      'text-size': [
-        'case',
-        ['boolean', ['get', 'corridorSelected'], false],
-        10.5,
-        11,
-      ],
-      'text-offset': [0, 1.25],
-      'text-anchor': 'top',
-      'text-allow-overlap': true,
-      'text-ignore-placement': true,
-      'text-max-width': 10,
-    },
-    paint: {
-      'text-color': [
-        'case',
-        ['boolean', ['get', 'corridorSelected'], false],
-        theme === 'dark' ? 'rgba(251,191,36,0.9)' : 'rgba(146,64,14,0.9)',
-        theme === 'dark' ? 'rgba(241,245,249,0.96)' : 'rgba(15,23,42,0.92)',
-      ],
-      'text-halo-color': theme === 'dark' ? 'rgba(2,6,23,0.94)' : 'rgba(255,255,255,0.94)',
-      'text-halo-width': [
-        'case',
-        ['boolean', ['get', 'corridorSelected'], false],
-        1,
-        1.2,
-      ],
-      'text-opacity': [
-        'case',
-        ['boolean', ['get', 'corridorSelected'], false],
-        0.82,
-        ['boolean', ['get', 'corridorDimmed'], false],
-        0.36,
-        0.92,
-      ],
-    },
-  });
+  }, map.getLayer(GEO_MARKER_LAYER_ANCHOR) ? GEO_MARKER_LAYER_ANCHOR : undefined);
 
   map.addLayer({
     id: GLOW_LAYER,
@@ -3191,9 +3154,11 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
       'line-width': [
         'case',
         ['boolean', ['feature-state', 'active'], false],
-        ['+', ['get', 'baseWidth'], 2.8],
+        ['case', ['==', ['get', 'channel'], 'relation_direct'], ['+', ['get', 'baseWidth'], 1.15], ['+', ['get', 'baseWidth'], 2.8]],
         ['boolean', ['feature-state', 'hover'], false],
-        ['+', ['get', 'baseWidth'], 2.2],
+        ['case', ['==', ['get', 'channel'], 'relation_direct'], ['+', ['get', 'baseWidth'], 0.72], ['+', ['get', 'baseWidth'], 2.2]],
+        ['==', ['get', 'channel'], 'relation_direct'],
+        ['+', ['get', 'baseWidth'], 0.3],
         ['==', ['get', 'channel'], 'supply_path'],
         ['+', ['get', 'baseWidth'], 1.8],
         ['+', ['get', 'baseWidth'], 1.4],
@@ -3203,16 +3168,19 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
         [
           'case',
           ['boolean', ['feature-state', 'active'], false],
-          ['min', 0.32, ['+', ['get', 'glowOpacity'], 0.12]],
+          ['case', ['==', ['get', 'channel'], 'relation_direct'], ['min', 0.12, ['+', ['get', 'glowOpacity'], 0.045]], ['min', 0.32, ['+', ['get', 'glowOpacity'], 0.12]]],
           ['boolean', ['feature-state', 'hover'], false],
-          ['min', 0.28, ['+', ['get', 'glowOpacity'], 0.08]],
-          ['==', ['get', 'channel'], 'relation_context'],
-          ['*', ['get', 'glowOpacity'], 0.72],
+          ['case', ['==', ['get', 'channel'], 'relation_direct'], ['min', 0.09, ['+', ['get', 'glowOpacity'], 0.03]], ['min', 0.28, ['+', ['get', 'glowOpacity'], 0.08]]],
           ['get', 'glowOpacity'],
         ],
         opacityFactor,
       ],
-      'line-blur': 1.1,
+      'line-blur': [
+        'case',
+        ['==', ['get', 'channel'], 'relation_direct'],
+        0.7,
+        1.1,
+      ],
     },
   });
 
@@ -3220,15 +3188,20 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
     id: HOP_3_LAYER,
     type: 'line',
     source: SRC,
-    filter: ['==', ['get', 'kind'], 'cluster'],
+    filter: [
+      'all',
+      ['==', ['get', 'kind'], 'cluster'],
+      ['!=', ['get', 'channel'], 'supply_path'],
+    ],
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': ['get', 'color'],
       'line-width': [
         'case',
         ['boolean', ['feature-state', 'active'], false],
-        ['+', ['get', 'baseWidth'], 1.1],
+        ['+', ['get', 'baseWidth'], 2.8],
         ['boolean', ['feature-state', 'hover'], false],
+        ['+', ['get', 'baseWidth'], 2.2],
         ['+', ['get', 'baseWidth'], 0.65],
         ['get', 'baseWidth'],
       ],
@@ -3237,14 +3210,15 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
         [
           'case',
           ['boolean', ['feature-state', 'active'], false],
-          ['min', 0.68, ['+', ['get', 'baseOpacity'], 0.2]],
+          ['min', 0.78, ['+', ['get', 'baseOpacity'], 0.2]],
           ['boolean', ['feature-state', 'hover'], false],
-          ['min', 0.58, ['+', ['get', 'baseOpacity'], 0.16]],
+          ['min', 0.68, ['+', ['get', 'baseOpacity'], 0.16]],
           ['==', ['get', 'channel'], 'propagation'],
-          ['*', ['get', 'baseOpacity'], 0.9],
+          ['*', ['get', 'baseOpacity'], 0.92],
           ['get', 'baseOpacity'],
         ],
         opacityFactor,
+        ['interpolate', ['linear'], ['zoom'], 4, 1, 6, 0.96, 8, 0.9, 10, 0.84],
       ],
       'line-dasharray': [
         'case',
@@ -3256,10 +3230,52 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
   });
 
   map.addLayer({
+    id: SUPPLY_HOP_3_LAYER,
+    type: 'line',
+    source: SRC,
+    filter: [
+      'all',
+      ['==', ['get', 'kind'], 'cluster'],
+      ['==', ['get', 'channel'], 'supply_path'],
+    ],
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': ['get', 'color'],
+      'line-width': [
+        'case',
+        ['boolean', ['feature-state', 'active'], false],
+        ['+', ['get', 'baseWidth'], 1.1],
+        ['boolean', ['feature-state', 'hover'], false],
+        ['+', ['get', 'baseWidth'], 0.7],
+        ['+', ['get', 'baseWidth'], 0.22],
+        ['get', 'baseWidth'],
+      ],
+      'line-opacity': [
+        '*',
+        [
+          'case',
+          ['boolean', ['feature-state', 'active'], false],
+          ['min', 0.72, ['+', ['get', 'baseOpacity'], 0.12]],
+          ['boolean', ['feature-state', 'hover'], false],
+          ['min', 0.64, ['+', ['get', 'baseOpacity'], 0.08]],
+          ['get', 'baseOpacity'],
+        ],
+        opacityFactor,
+        ['interpolate', ['linear'], ['zoom'], 4, 1, 6, 0.96, 8, 0.9, 10, 0.84],
+      ],
+      'line-dasharray': ['literal', [1, 0]],
+    },
+  });
+
+  map.addLayer({
     id: HOP_2_LAYER,
     type: 'line',
     source: SRC,
-    filter: ['==', ['get', 'kind'], 'indirect'],
+    filter: [
+      'all',
+      ['==', ['get', 'kind'], 'indirect'],
+      ['!=', ['get', 'channel'], 'supply_path'],
+    ],
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': ['get', 'color'],
@@ -3268,7 +3284,7 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
         ['==', ['get', 'channel'], 'propagation'],
         ['literal', [0.8, 1.8]],
         ['==', ['get', 'channel'], 'relation_context'],
-        ['literal', [0.9, 2.3]],
+        ['literal', [3, 4]],
         ['literal', [1.4, 1.9]],
       ],
       'line-width': [
@@ -3286,14 +3302,52 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
         [
           'case',
           ['boolean', ['feature-state', 'active'], false],
-          ['min', 0.86, ['+', ['get', 'baseOpacity'], 0.24]],
+          ['min', 0.92, ['+', ['get', 'baseOpacity'], 0.24]],
           ['boolean', ['feature-state', 'hover'], false],
-          ['min', 0.76, ['+', ['get', 'baseOpacity'], 0.18]],
-          ['==', ['get', 'channel'], 'relation_context'],
-          ['*', ['get', 'baseOpacity'], 0.82],
+          ['min', 0.82, ['+', ['get', 'baseOpacity'], 0.18]],
           ['get', 'baseOpacity'],
         ],
         opacityFactor,
+        ['interpolate', ['linear'], ['zoom'], 4, 1, 6, 0.97, 8, 0.94, 10, 0.9],
+      ],
+    },
+  });
+
+  map.addLayer({
+    id: SUPPLY_HOP_2_LAYER,
+    type: 'line',
+    source: SRC,
+    filter: [
+      'all',
+      ['==', ['get', 'kind'], 'indirect'],
+      ['==', ['get', 'channel'], 'supply_path'],
+    ],
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': ['get', 'color'],
+      'line-dasharray': ['literal', [1.4, 1.9]],
+      'line-width': [
+        'case',
+        ['boolean', ['feature-state', 'active'], false],
+        ['+', ['get', 'baseWidth'], 0.72],
+        ['boolean', ['feature-state', 'hover'], false],
+        ['+', ['get', 'baseWidth'], 0.46],
+        ['==', ['get', 'channel'], 'supply_path'],
+        ['+', ['get', 'baseWidth'], 0.18],
+        ['get', 'baseWidth'],
+      ],
+      'line-opacity': [
+        '*',
+        [
+          'case',
+          ['boolean', ['feature-state', 'active'], false],
+          ['min', 0.74, ['+', ['get', 'baseOpacity'], 0.12]],
+          ['boolean', ['feature-state', 'hover'], false],
+          ['min', 0.66, ['+', ['get', 'baseOpacity'], 0.08]],
+          ['get', 'baseOpacity'],
+        ],
+        opacityFactor,
+        ['interpolate', ['linear'], ['zoom'], 4, 1, 6, 0.97, 8, 0.94, 10, 0.9],
       ],
     },
   });
@@ -3302,20 +3356,24 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
     id: HOP_1_LAYER,
     type: 'line',
     source: SRC,
-    filter: ['==', ['get', 'kind'], 'primary'],
+    filter: [
+      'all',
+      ['==', ['get', 'kind'], 'primary'],
+      ['!=', ['get', 'channel'], 'supply_path'],
+    ],
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': ['get', 'color'],
       'line-width': [
         'case',
         ['boolean', ['feature-state', 'active'], false],
-        ['+', ['get', 'baseWidth'], 1.35],
+        ['case', ['==', ['get', 'channel'], 'relation_direct'], ['+', ['get', 'baseWidth'], 0.65], ['+', ['get', 'baseWidth'], 1.35]],
         ['boolean', ['feature-state', 'hover'], false],
-        ['+', ['get', 'baseWidth'], 0.95],
+        ['case', ['==', ['get', 'channel'], 'relation_direct'], ['+', ['get', 'baseWidth'], 0.42], ['+', ['get', 'baseWidth'], 0.95]],
         ['==', ['get', 'channel'], 'supply_path'],
         ['+', ['get', 'baseWidth'], 0.55],
         ['==', ['get', 'channel'], 'relation_direct'],
-        ['+', ['get', 'baseWidth'], 0.35],
+        ['+', ['get', 'baseWidth'], 0.14],
         ['get', 'baseWidth'],
       ],
       'line-opacity': [
@@ -3323,11 +3381,54 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
         [
           'case',
           ['boolean', ['feature-state', 'active'], false],
-          1,
+          ['case', ['==', ['get', 'channel'], 'relation_direct'], ['min', 0.9, ['+', ['get', 'baseOpacity'], 0.08]], 1],
           ['boolean', ['feature-state', 'hover'], false],
-          1,
+          ['case', ['==', ['get', 'channel'], 'relation_direct'], ['min', 0.84, ['+', ['get', 'baseOpacity'], 0.05]], 1],
           ['==', ['get', 'channel'], 'relation_direct'],
-          ['min', 0.96, ['+', ['get', 'baseOpacity'], 0.06]],
+          ['get', 'baseOpacity'],
+          ['get', 'baseOpacity'],
+        ],
+        opacityFactor,
+      ],
+      'line-dasharray': [
+        'case',
+        ['==', ['get', 'channel'], 'propagation'],
+        ['literal', [1.2, 1.6]],
+        ['literal', [1, 0]],
+      ],
+    },
+  });
+
+  map.addLayer({
+    id: SUPPLY_HOP_1_LAYER,
+    type: 'line',
+    source: SRC,
+    filter: [
+      'all',
+      ['==', ['get', 'kind'], 'primary'],
+      ['==', ['get', 'channel'], 'supply_path'],
+    ],
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': ['get', 'color'],
+      'line-width': [
+        'case',
+        ['boolean', ['feature-state', 'active'], false],
+        ['+', ['get', 'baseWidth'], 0.78],
+        ['boolean', ['feature-state', 'hover'], false],
+        ['+', ['get', 'baseWidth'], 0.5],
+        ['==', ['get', 'channel'], 'supply_path'],
+        ['+', ['get', 'baseWidth'], 0.22],
+        ['get', 'baseWidth'],
+      ],
+      'line-opacity': [
+        '*',
+        [
+          'case',
+          ['boolean', ['feature-state', 'active'], false],
+          ['min', 0.78, ['+', ['get', 'baseOpacity'], 0.12]],
+          ['boolean', ['feature-state', 'hover'], false],
+          ['min', 0.7, ['+', ['get', 'baseOpacity'], 0.08]],
           ['get', 'baseOpacity'],
         ],
         opacityFactor,
@@ -3347,8 +3448,14 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
     source: SRC,
     filter: ['==', ['get', 'kind'], 'label'],
     layout: {
+      'symbol-sort-key': 0,
       'text-field': ['get', 'labelText'],
-      'text-size': 11,
+      'text-size': [
+        'interpolate', ['linear'], ['zoom'],
+        4, 10,
+        6, 10.5,
+        8, 11,
+      ],
       'text-max-width': 12,
       'text-offset': [0, -0.25],
       'text-anchor': 'bottom-left',
@@ -3358,29 +3465,19 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
     paint: {
       'text-color': ['get', 'labelColor'],
       'text-halo-color': theme === 'dark' ? 'rgba(6,18,31,0.92)' : 'rgba(255,255,255,0.92)',
-      'text-halo-width': 1.4,
+      'text-halo-width': 1.2,
       'text-opacity': [
         'case',
         ['boolean', ['feature-state', 'active'], false],
-        1,
+        0.96,
+        ['==', ['get', 'channel'], 'supply_path'],
+        0.5,
         ['==', ['get', 'channel'], 'relation_context'],
-        0.78,
-        0.95,
+        0.42,
+        ['==', ['get', 'channel'], 'propagation'],
+        0.3,
+        0.54,
       ],
-    },
-  });
-
-  map.addLayer({
-    id: ENDPOINT_CALLOUT_LAYER,
-    type: 'line',
-    source: ENDPOINT_SRC,
-    filter: ['==', ['get', 'kind'], 'endpoint-callout'],
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: {
-      'line-color': theme === 'dark' ? 'rgba(148,163,184,0.7)' : 'rgba(100,116,139,0.65)',
-      'line-width': 0.9,
-      'line-opacity': 0.72,
-      'line-dasharray': ['literal', [0.8, 1.6]],
     },
   });
 
@@ -3404,21 +3501,71 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
     id: ENDPOINT_LABEL_LAYER,
     type: 'symbol',
     source: ENDPOINT_SRC,
-    filter: ['==', ['get', 'kind'], 'endpoint-marker'],
+    filter: ['==', ['get', 'kind'], 'endpoint-label'],
     layout: {
+      'symbol-sort-key': ['get', 'labelPriority'],
+      'icon-image': endpointChipImageId(theme),
+      'icon-anchor': 'center',
+      'icon-allow-overlap': true,
+      'icon-ignore-placement': true,
+      'icon-text-fit': 'both',
+      'icon-text-fit-padding': [4, 8, 4, 8],
       'text-field': ['get', 'endpointLabel'],
       'text-font': [...MAP_TEXT_FONT_STACK],
-      'text-size': 11,
-      'text-offset': [0.9, 0.05],
-      'text-anchor': 'left',
+      'text-size': [
+        'case',
+        ['==', ['get', 'labelStrong'], 1],
+        ['interpolate', ['linear'], ['zoom'], 4, 11.5, 6, 12.25, 8, 13, 10, 13.5],
+        ['interpolate', ['linear'], ['zoom'], 4, 10.5, 6, 11, 8, 11.5, 10, 12],
+      ],
+      'text-variable-anchor': ['literal', ['right', 'left', 'top-right', 'bottom-right', 'top', 'bottom']],
+      'text-radial-offset': [
+        'case',
+        ['==', ['get', 'labelStrong'], 1],
+        1.45,
+        1.28,
+      ],
       'text-allow-overlap': true,
       'text-ignore-placement': true,
     },
     paint: {
-      'text-color': theme === 'dark' ? 'rgba(241,245,249,0.96)' : 'rgba(15,23,42,0.92)',
-      'text-halo-color': theme === 'dark' ? 'rgba(2,6,23,0.94)' : 'rgba(255,255,255,0.94)',
-      'text-halo-width': 1.2,
-      'text-opacity': 0.96,
+      'icon-opacity': [
+        'case',
+        ['boolean', ['feature-state', 'active'], false],
+        0.98,
+        ['==', ['get', 'labelChip'], 1],
+        ['case', ['==', ['get', 'labelStrong'], 1], ['interpolate', ['linear'], ['zoom'], 4, 0.9, 6.5, 0.96, 9, 0.99], ['interpolate', ['linear'], ['zoom'], 4, 0.74, 6.5, 0.84, 9, 0.92]],
+        0,
+      ],
+      'text-color': [
+        'case',
+        ['boolean', ['feature-state', 'active'], false],
+        theme === 'dark' ? '#ffffff' : 'rgba(2,6,23,0.98)',
+        ['==', ['get', 'labelStrong'], 1],
+        theme === 'dark' ? '#f8fafc' : 'rgba(2,6,23,0.96)',
+        ['==', ['get', 'labelSubdued'], 1],
+        theme === 'dark' ? 'rgba(241,245,249,0.88)' : 'rgba(15,23,42,0.82)',
+        theme === 'dark' ? '#f8fafc' : 'rgba(2,6,23,0.96)',
+      ],
+      'text-halo-color': theme === 'dark' ? 'rgba(2,6,23,0.98)' : 'rgba(255,255,255,0.98)',
+      'text-halo-width': [
+        'case',
+        ['boolean', ['feature-state', 'active'], false],
+        2,
+        ['==', ['get', 'labelStrong'], 1],
+        1.7,
+        ['==', ['get', 'labelChip'], 1],
+        1.4,
+        1.1,
+      ],
+      'text-opacity': [
+        'case',
+        ['boolean', ['feature-state', 'active'], false],
+        1,
+        ['==', ['get', 'labelVisible'], 1],
+        ['case', ['==', ['get', 'labelSubdued'], 1], 0.84, ['==', ['get', 'labelStrong'], 1], 1, 0.94],
+        0,
+      ],
     },
   });
 }
@@ -3439,6 +3586,7 @@ export function useGeoEdgeLayer(
   const [discoveredObjects, setDiscoveredObjects] = useState<GeoObject[]>([]);
   const [traceSummary, setTraceSummary] = useState<GeoEdgeTraceSummary | null>(null);
   const [relatedPathArtifacts, setRelatedPathArtifacts] = useState<MaterializedArtifact[]>([]);
+  const [selectionExportData, setSelectionExportData] = useState<GeoEdgeSelectionExportData | null>(null);
   const [mutedObjectIds, setMutedObjectIds] = useState<string[]>([]);
   const [highlightedGatewayObjectIds, setHighlightedGatewayObjectIds] = useState<string[]>([]);
   const [panelNarrativeKey, setPanelNarrativeKey] = useState<string | null>(null);
@@ -3446,7 +3594,10 @@ export function useGeoEdgeLayer(
   const [featureNarrativeEpoch, setFeatureNarrativeEpoch] = useState(0);
   const mountedRef = useRef(true);
   const featureIdsByNarrativeKeyRef = useRef<Map<string, Array<string | number>>>(new Map());
+  const endpointMarkerIdsByNarrativeKeyRef = useRef<Map<string, Array<string | number>>>(new Map());
+  const endpointRenderStateRef = useRef<EndpointRenderState | null>(null);
   const activeNarrativeFeatureIdsRef = useRef<Array<string | number>>([]);
+  const activeNarrativeEndpointIdsRef = useRef<Array<string | number>>([]);
   const activeNarrativeKey = panelNarrativeKey || hoveredNarrativeKey;
 
   useEffect(() => {
@@ -3460,17 +3611,55 @@ export function useGeoEdgeLayer(
       for (const id of activeNarrativeFeatureIdsRef.current) {
         map.setFeatureState({ source: SRC, id }, { active: false });
       }
+      for (const id of activeNarrativeEndpointIdsRef.current) {
+        if (map.getSource(ENDPOINT_SRC)) {
+          map.setFeatureState({ source: ENDPOINT_SRC, id }, { active: false });
+        }
+      }
       activeNarrativeFeatureIdsRef.current = [];
+      activeNarrativeEndpointIdsRef.current = [];
       if (!activeNarrativeKey) return;
       const featureIds = featureIdsByNarrativeKeyRef.current.get(activeNarrativeKey) || [];
       for (const id of featureIds) {
         map.setFeatureState({ source: SRC, id }, { active: true });
       }
       activeNarrativeFeatureIdsRef.current = featureIds;
+      const endpointIds = endpointMarkerIdsByNarrativeKeyRef.current.get(activeNarrativeKey) || [];
+      for (const id of endpointIds) {
+        if (map.getSource(ENDPOINT_SRC)) {
+          map.setFeatureState({ source: ENDPOINT_SRC, id }, { active: true });
+        }
+      }
+      activeNarrativeEndpointIdsRef.current = endpointIds;
     } catch {
       activeNarrativeFeatureIdsRef.current = [];
+      activeNarrativeEndpointIdsRef.current = [];
     }
   }, [activeNarrativeKey, featureNarrativeEpoch, map, selectedObject?.id, styleEpoch]);
+
+  useEffect(() => {
+    if (!map || !selectedObject || !canAccessMapStyle(map)) return;
+
+    const refreshEndpointLabels = () => {
+      const renderState = endpointRenderStateRef.current;
+      const endpointSrc = map.getSource(ENDPOINT_SRC) as maplibregl.GeoJSONSource | undefined;
+      if (!renderState || !endpointSrc) return;
+      endpointSrc.setData(buildEndpointSourceData(renderState, theme, activeNarrativeKey, map, map.getZoom()));
+      setFeatureNarrativeEpoch((value) => value + 1);
+    };
+
+    refreshEndpointLabels();
+    map.on('zoomend', refreshEndpointLabels);
+    map.on('moveend', refreshEndpointLabels);
+    return () => {
+      try {
+        map.off('zoomend', refreshEndpointLabels);
+        map.off('moveend', refreshEndpointLabels);
+      } catch {
+        /* handler may already be detached */
+      }
+    };
+  }, [activeNarrativeKey, map, selectedObject?.id, styleEpoch, theme]);
 
   useEffect(() => {
     if (!map || !isReady) return;
@@ -3506,15 +3695,12 @@ export function useGeoEdgeLayer(
       try {
         if (map.getLayer(ENDPOINT_LABEL_LAYER)) map.removeLayer(ENDPOINT_LABEL_LAYER);
         if (map.getLayer(ENDPOINT_POINTS_LAYER)) map.removeLayer(ENDPOINT_POINTS_LAYER);
-        if (map.getLayer(ENDPOINT_CALLOUT_LAYER)) map.removeLayer(ENDPOINT_CALLOUT_LAYER);
         if (map.getLayer(CORRIDOR_FIELD_ACCENT_LAYER)) map.removeLayer(CORRIDOR_FIELD_ACCENT_LAYER);
         if (map.getLayer(CORRIDOR_FIELD_LAYER)) map.removeLayer(CORRIDOR_FIELD_LAYER);
-        if (map.getLayer(CORRIDOR_LABEL_LAYER)) map.removeLayer(CORRIDOR_LABEL_LAYER);
-        if (map.getLayer(CORRIDOR_ICON_LAYER)) map.removeLayer(CORRIDOR_ICON_LAYER);
-        if (map.getLayer(CORRIDOR_LAYER)) map.removeLayer(CORRIDOR_LAYER);
-        if (map.getLayer(CORRIDOR_GLOW_LAYER)) map.removeLayer(CORRIDOR_GLOW_LAYER);
-        if (map.getLayer(CORRIDOR_GUIDE_LAYER)) map.removeLayer(CORRIDOR_GUIDE_LAYER);
         if (map.getLayer(LABEL_LAYER)) map.removeLayer(LABEL_LAYER);
+        if (map.getLayer(SUPPLY_HOP_1_LAYER)) map.removeLayer(SUPPLY_HOP_1_LAYER);
+        if (map.getLayer(SUPPLY_HOP_2_LAYER)) map.removeLayer(SUPPLY_HOP_2_LAYER);
+        if (map.getLayer(SUPPLY_HOP_3_LAYER)) map.removeLayer(SUPPLY_HOP_3_LAYER);
         if (map.getLayer(HOP_1_LAYER)) map.removeLayer(HOP_1_LAYER);
         if (map.getLayer(HOP_2_LAYER)) map.removeLayer(HOP_2_LAYER);
         if (map.getLayer(HOP_3_LAYER)) map.removeLayer(HOP_3_LAYER);
@@ -3538,21 +3724,8 @@ export function useGeoEdgeLayer(
 
     const bringEndpointLayersToFront = () => {
       try {
-        if (map.getLayer(ENDPOINT_CALLOUT_LAYER)) map.moveLayer(ENDPOINT_CALLOUT_LAYER);
         if (map.getLayer(ENDPOINT_POINTS_LAYER)) map.moveLayer(ENDPOINT_POINTS_LAYER);
         if (map.getLayer(ENDPOINT_LABEL_LAYER)) map.moveLayer(ENDPOINT_LABEL_LAYER);
-      } catch { /* style/layers may be mid-transition */ }
-    };
-
-    const bringCorridorLayersToFront = () => {
-      try {
-        if (map.getLayer(CORRIDOR_FIELD_LAYER)) map.moveLayer(CORRIDOR_FIELD_LAYER);
-        if (map.getLayer(CORRIDOR_FIELD_ACCENT_LAYER)) map.moveLayer(CORRIDOR_FIELD_ACCENT_LAYER);
-        if (map.getLayer(CORRIDOR_GUIDE_LAYER)) map.moveLayer(CORRIDOR_GUIDE_LAYER);
-        if (map.getLayer(CORRIDOR_GLOW_LAYER)) map.moveLayer(CORRIDOR_GLOW_LAYER);
-        if (map.getLayer(CORRIDOR_LAYER)) map.moveLayer(CORRIDOR_LAYER);
-        if (map.getLayer(CORRIDOR_ICON_LAYER)) map.moveLayer(CORRIDOR_ICON_LAYER);
-        if (map.getLayer(CORRIDOR_LABEL_LAYER)) map.moveLayer(CORRIDOR_LABEL_LAYER);
       } catch { /* style/layers may be mid-transition */ }
     };
 
@@ -3564,12 +3737,16 @@ export function useGeoEdgeLayer(
       setVisibleEdgesCount(0);
       setTraceSummary(null);
       setRelatedPathArtifacts([]);
+      setSelectionExportData(null);
       setMutedObjectIds([]);
       setHighlightedGatewayObjectIds([]);
       setPanelNarrativeKey(null);
       setHoveredNarrativeKey(null);
       featureIdsByNarrativeKeyRef.current = new Map();
+      endpointMarkerIdsByNarrativeKeyRef.current = new Map();
+      endpointRenderStateRef.current = null;
       activeNarrativeFeatureIdsRef.current = [];
+      activeNarrativeEndpointIdsRef.current = [];
       return;
     }
 
@@ -3594,12 +3771,16 @@ export function useGeoEdgeLayer(
     setDiscoveredObjects([]);
     setTraceSummary(null);
     setRelatedPathArtifacts([]);
+    setSelectionExportData(null);
     setMutedObjectIds([]);
     setHighlightedGatewayObjectIds([]);
     setPanelNarrativeKey(null);
     setHoveredNarrativeKey(null);
     featureIdsByNarrativeKeyRef.current = new Map();
+    endpointMarkerIdsByNarrativeKeyRef.current = new Map();
+    endpointRenderStateRef.current = null;
     activeNarrativeFeatureIdsRef.current = [];
+    activeNarrativeEndpointIdsRef.current = [];
 
     api
       .getFragmentTrace(selectedObject.id, {
@@ -3710,29 +3891,132 @@ export function useGeoEdgeLayer(
         setRelatedPathArtifacts(pathArtifacts);
         removeLayers();
         setEdgesCount(directRelations.length + contextRelations.length);
+        const visibleObjectById = new Map<string, GeoObject>();
+        for (const object of [...objects, ...newDiscovered]) {
+          if (!object?.id || visibleObjectById.has(object.id)) continue;
+          visibleObjectById.set(object.id, object);
+        }
+        const assignEndpointTier = (target: Map<string, EndpointLabelTier>, key: string, tier: EndpointLabelTier) => {
+          const trimmed = String(key || '').trim();
+          if (!trimmed) return;
+          const current = target.get(trimmed);
+          if (!current || endpointTierPriority(tier) > endpointTierPriority(current)) {
+            target.set(trimmed, tier);
+          }
+        };
+
+        const relatedObjectIds = new Set<string>([selectedObject.id]);
+        for (const nodeId of visibleNodeIds) relatedObjectIds.add(nodeId);
+        for (const object of visibleObjectById.values()) {
+          if (object.canonicalPath && visiblePathRefs.has(object.canonicalPath)) {
+            relatedObjectIds.add(object.id);
+          }
+        }
+        const endpointTierByKey = new Map<string, EndpointLabelTier>();
+        assignEndpointTier(endpointTierByKey, `node:${selectedObject.id}`, 'selected');
+        if (selectedObject.canonicalPath) assignEndpointTier(endpointTierByKey, `path:${selectedObject.canonicalPath}`, 'selected');
+        for (const nodeId of directNodeIds) assignEndpointTier(endpointTierByKey, `node:${nodeId}`, nodeId === selectedObject.id ? 'selected' : 'direct');
+        for (const nodeId of contextNodeIds) assignEndpointTier(endpointTierByKey, `node:${nodeId}`, nodeId === selectedObject.id ? 'selected' : 'context');
+        for (const pathRef of visiblePathRefs) assignEndpointTier(endpointTierByKey, `path:${pathRef}`, pathRef === selectedObject.canonicalPath ? 'selected' : 'path');
+        for (const feature of propagationFeatures) {
+          for (const ref of featureBadgeEndpointRefs(feature)) assignEndpointTier(endpointTierByKey, ref, 'propagation');
+        }
+
+        const endpointEntryByKey = new Map<string, { key: string; object: GeoObject }>();
+        for (const nodeId of visibleNodeIds) {
+          const object = traceObjectToGeoObject(objectById.get(nodeId));
+          if (!object?.coordinates) continue;
+          endpointEntryByKey.set(`node:${object.id}`, { key: `node:${object.id}`, object });
+        }
+        for (const pathRef of visiblePathRefs) {
+          const object = traceObjectToGeoObject(objectByPath.get(pathRef));
+          if (!object?.coordinates) continue;
+          endpointEntryByKey.set(`path:${pathRef}`, { key: `path:${pathRef}`, object });
+        }
+        const endpointEntries = Array.from(endpointEntryByKey.values());
+        const spreadEntries = endpointEntries.length > 0 ? spreadEndpointEntries(map, endpointEntries) : [];
+        const remoteEndpointEntries = spreadEntries.filter((entry) =>
+          entry.key !== `node:${selectedObject.id}`
+          && entry.key !== `path:${String(selectedObject.canonicalPath || '').trim()}`,
+        );
+        const bushConnectorSeedFeatures = [
+          ...directFeatures,
+          ...contextFeatures,
+          ...supplyPathFeatures,
+          ...propagationFeatures,
+        ];
+        const bushGroups = buildSelectedBushGroups(
+          remoteEndpointEntries,
+          bushConnectorSeedFeatures,
+          objectById,
+          objectByPath,
+          `focus-bush:${selectedObject.id}`,
+        );
+        const bushEndpointKeys = new Set<string>(
+          bushGroups.flatMap((group) => group.entries.map((entry) => entry.key)),
+        );
+        const corridorFieldFeatures = bushGroups.flatMap((group) =>
+          buildSelectedCorridorFieldFeatures(group.entries, group.id, theme),
+        );
+        const bushConnectorFeatures = bushGroups.flatMap((group) =>
+          buildSelectedBushConnectorFeatures(group, bushConnectorSeedFeatures),
+        );
+        const mutedObjectIds = new Set<string>();
+        for (const group of bushGroups) {
+          for (const mutedId of buildSelectedCorridorMutedObjectIds(group.entries, Array.from(visibleObjectById.values()), selectedObject.id)) {
+            if (!relatedObjectIds.has(mutedId)) mutedObjectIds.add(mutedId);
+          }
+        }
+
         const allFeatures = [
+          ...corridorFieldFeatures,
+          ...bushConnectorFeatures,
           ...directFeatures,
           ...contextFeatures,
           ...supplyPathFeatures,
           ...propagationFeatures,
         ];
         const featureIdsByNarrativeKey = new Map<string, Array<string | number>>();
+        const endpointMarkerIdsByNarrativeKey = new Map<string, Array<string | number>>();
+        const narrativeKeysByEndpointKey = new Map<string, string[]>();
         for (const feature of allFeatures) {
           const narrativeKey = String(feature.properties?.narrativeKey || '').trim();
-          if (!narrativeKey || feature.id == null) continue;
-          if (!featureIdsByNarrativeKey.has(narrativeKey)) featureIdsByNarrativeKey.set(narrativeKey, []);
-          featureIdsByNarrativeKey.get(narrativeKey)!.push(feature.id);
+          if (narrativeKey) {
+            if (feature.id != null) {
+              if (!featureIdsByNarrativeKey.has(narrativeKey)) featureIdsByNarrativeKey.set(narrativeKey, []);
+              featureIdsByNarrativeKey.get(narrativeKey)!.push(feature.id);
+            }
+            for (const endpointKey of featureBadgeEndpointRefs(feature)) {
+              if (!endpointKey) continue;
+              if (!narrativeKeysByEndpointKey.has(endpointKey)) narrativeKeysByEndpointKey.set(endpointKey, []);
+              narrativeKeysByEndpointKey.get(endpointKey)!.push(narrativeKey);
+            }
+          }
         }
         featureIdsByNarrativeKeyRef.current = featureIdsByNarrativeKey;
+        for (const [endpointKey, keys] of narrativeKeysByEndpointKey.entries()) {
+          const markerId = endpointMarkerFeatureId(endpointKey);
+          const labelId = endpointLabelFeatureId(endpointKey);
+          for (const narrativeKey of Array.from(new Set(keys))) {
+            if (!endpointMarkerIdsByNarrativeKey.has(narrativeKey)) endpointMarkerIdsByNarrativeKey.set(narrativeKey, []);
+            endpointMarkerIdsByNarrativeKey.get(narrativeKey)!.push(markerId);
+            endpointMarkerIdsByNarrativeKey.get(narrativeKey)!.push(labelId);
+          }
+        }
+        endpointMarkerIdsByNarrativeKeyRef.current = endpointMarkerIdsByNarrativeKey;
+        const endpointRenderState: EndpointRenderState = {
+          placedEntries: spreadEntries,
+          tierByKey: endpointTierByKey,
+          narrativeKeysByEndpointKey,
+          forcedVisibleKeys: bushEndpointKeys,
+        };
+        endpointRenderStateRef.current = endpointRenderState;
         setFeatureNarrativeEpoch((value) => value + 1);
-        const endpointEntries = Array.from(visibleNodeIds)
-          .map((nodeId) => traceObjectToGeoObject(objectById.get(nodeId)))
-          .filter((object): object is GeoObject => Boolean(object?.coordinates))
-          .map((object) => ({ key: `node:${object.id}`, object }));
-        const spreadEntries = endpointEntries.length > 0 ? spreadEndpointEntries(map, endpointEntries) : [];
+        setMutedObjectIds(Array.from(mutedObjectIds));
+        setHighlightedGatewayObjectIds(Array.from(relatedObjectIds).filter((id) => id !== selectedObject.id));
         const visibleLineCount = allFeatures.filter((feature) => feature.geometry?.type === 'LineString').length;
         setVisibleEdgesCount(visibleLineCount);
-        setTraceSummary(buildExplainTraceSummary(
+        const nextTraceSummary = buildExplainTraceSummary(
           res?.explain || null,
           directRelations,
           contextRelations,
@@ -3740,7 +4024,30 @@ export function useGeoEdgeLayer(
           visibleLineCount,
           res?.propagation || null,
           selectedObject,
-        ));
+        );
+        setTraceSummary(nextTraceSummary);
+        const nextEndpointFeatureCollection = buildEndpointSourceData(endpointRenderState, theme, activeNarrativeKey, map, map.getZoom());
+        setSelectionExportData({
+          exportedAt: new Date().toISOString(),
+          selectedObject,
+          requestedHops,
+          lensId,
+          trace: res as FragmentTracePayload,
+          traceSummary: nextTraceSummary,
+          discoveredObjects: newDiscovered,
+          relatedPathArtifacts: pathArtifacts,
+          directRelations,
+          contextRelations,
+          visibleNodeIds: Array.from(visibleNodeIds),
+          visiblePathRefs: Array.from(visiblePathRefs),
+          mutedObjectIds: Array.from(mutedObjectIds),
+          highlightedGatewayObjectIds: Array.from(relatedObjectIds).filter((id) => id !== selectedObject.id),
+          renderedEdgeFeatureCollection: {
+            type: 'FeatureCollection',
+            features: allFeatures,
+          },
+          renderedEndpointFeatureCollection: nextEndpointFeatureCollection,
+        });
 
         if (allFeatures.length === 0 || !canAccessMapStyle(map)) {
           setEdgesLoading(false);
@@ -3748,30 +4055,26 @@ export function useGeoEdgeLayer(
         }
 
         await ensureMarkerImages(map, spreadEntries.map((entry) => entry.object), theme);
+        ensureEndpointChipImage(map, theme);
         map.addSource(SRC, { type: 'geojson', data: { type: 'FeatureCollection', features: allFeatures } });
         map.addSource(ENDPOINT_SRC, {
           type: 'geojson',
-          data: buildEndpointFeatureCollection(spreadEntries, theme),
+          data: nextEndpointFeatureCollection,
         });
         addEdgeLayers(map, theme);
-        bringCorridorLayersToFront();
         bringEndpointLayersToFront();
-        map.on('mousemove', CORRIDOR_GLOW_LAYER, handleEdgeHover);
-        map.on('mousemove', CORRIDOR_GUIDE_LAYER, handleEdgeHover);
-        map.on('mousemove', CORRIDOR_LAYER, handleEdgeHover);
-        map.on('mousemove', CORRIDOR_ICON_LAYER, handleEdgeHover);
-        map.on('mousemove', CORRIDOR_LABEL_LAYER, handleEdgeHover);
         map.on('mousemove', HOP_1_LAYER, handleEdgeHover);
         map.on('mousemove', HOP_2_LAYER, handleEdgeHover);
         map.on('mousemove', HOP_3_LAYER, handleEdgeHover);
-        map.on('mouseleave', CORRIDOR_GLOW_LAYER, handleEdgeLeave);
-        map.on('mouseleave', CORRIDOR_GUIDE_LAYER, handleEdgeLeave);
-        map.on('mouseleave', CORRIDOR_LAYER, handleEdgeLeave);
-        map.on('mouseleave', CORRIDOR_ICON_LAYER, handleEdgeLeave);
-        map.on('mouseleave', CORRIDOR_LABEL_LAYER, handleEdgeLeave);
+        map.on('mousemove', SUPPLY_HOP_1_LAYER, handleEdgeHover);
+        map.on('mousemove', SUPPLY_HOP_2_LAYER, handleEdgeHover);
+        map.on('mousemove', SUPPLY_HOP_3_LAYER, handleEdgeHover);
         map.on('mouseleave', HOP_1_LAYER, handleEdgeLeave);
         map.on('mouseleave', HOP_2_LAYER, handleEdgeLeave);
         map.on('mouseleave', HOP_3_LAYER, handleEdgeLeave);
+        map.on('mouseleave', SUPPLY_HOP_1_LAYER, handleEdgeLeave);
+        map.on('mouseleave', SUPPLY_HOP_2_LAYER, handleEdgeLeave);
+        map.on('mouseleave', SUPPLY_HOP_3_LAYER, handleEdgeLeave);
         if (mountedRef.current) setEdgesLoading(false);
       })
       .catch(() => {
@@ -3782,12 +4085,16 @@ export function useGeoEdgeLayer(
           setVisibleEdgesCount(0);
           setTraceSummary(null);
           setRelatedPathArtifacts([]);
+          setSelectionExportData(null);
           setMutedObjectIds([]);
           setHighlightedGatewayObjectIds([]);
           setPanelNarrativeKey(null);
           setHoveredNarrativeKey(null);
           featureIdsByNarrativeKeyRef.current = new Map();
+          endpointMarkerIdsByNarrativeKeyRef.current = new Map();
+          endpointRenderStateRef.current = null;
           activeNarrativeFeatureIdsRef.current = [];
+          activeNarrativeEndpointIdsRef.current = [];
         }
       });
 
@@ -3795,22 +4102,18 @@ export function useGeoEdgeLayer(
       cancelled = true;
       clearHoveredEdge();
       try {
-        map.off('mousemove', CORRIDOR_GLOW_LAYER, handleEdgeHover);
-        map.off('mousemove', CORRIDOR_GUIDE_LAYER, handleEdgeHover);
-        map.off('mousemove', CORRIDOR_LAYER, handleEdgeHover);
-        map.off('mousemove', CORRIDOR_ICON_LAYER, handleEdgeHover);
-        map.off('mousemove', CORRIDOR_LABEL_LAYER, handleEdgeHover);
         map.off('mousemove', HOP_1_LAYER, handleEdgeHover);
         map.off('mousemove', HOP_2_LAYER, handleEdgeHover);
         map.off('mousemove', HOP_3_LAYER, handleEdgeHover);
-        map.off('mouseleave', CORRIDOR_GLOW_LAYER, handleEdgeLeave);
-        map.off('mouseleave', CORRIDOR_GUIDE_LAYER, handleEdgeLeave);
-        map.off('mouseleave', CORRIDOR_LAYER, handleEdgeLeave);
-        map.off('mouseleave', CORRIDOR_ICON_LAYER, handleEdgeLeave);
-        map.off('mouseleave', CORRIDOR_LABEL_LAYER, handleEdgeLeave);
+        map.off('mousemove', SUPPLY_HOP_1_LAYER, handleEdgeHover);
+        map.off('mousemove', SUPPLY_HOP_2_LAYER, handleEdgeHover);
+        map.off('mousemove', SUPPLY_HOP_3_LAYER, handleEdgeHover);
         map.off('mouseleave', HOP_1_LAYER, handleEdgeLeave);
         map.off('mouseleave', HOP_2_LAYER, handleEdgeLeave);
         map.off('mouseleave', HOP_3_LAYER, handleEdgeLeave);
+        map.off('mouseleave', SUPPLY_HOP_1_LAYER, handleEdgeLeave);
+        map.off('mouseleave', SUPPLY_HOP_2_LAYER, handleEdgeLeave);
+        map.off('mouseleave', SUPPLY_HOP_3_LAYER, handleEdgeLeave);
       } catch { /* handlers may not be attached */ }
       removeLayers();
     };
@@ -3823,6 +4126,7 @@ export function useGeoEdgeLayer(
     discoveredObjects,
     traceSummary,
     relatedPathArtifacts,
+    selectionExportData,
     mutedObjectIds,
     highlightedGatewayObjectIds,
     activeNarrativeKey,

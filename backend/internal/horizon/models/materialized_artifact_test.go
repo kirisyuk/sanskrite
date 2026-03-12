@@ -165,6 +165,31 @@ func TestBuildSupplyChainPathPayload(t *testing.T) {
 	}
 }
 
+func TestBuildSupplyChainPathPayloadWithSufficiency(t *testing.T) {
+	payload := BuildSupplyChainPathPayloadWithSufficiency(
+		[]SupplyChainPathNode{{Type: "org", Ref: "/org/catl"}},
+		nil,
+		nil,
+		nil,
+		&SupplyChainPathSufficiency{
+			Status:  SupplyChainSufficiencyHeuristic,
+			Score:   0.63,
+			Summary: "Heuristic continuity",
+		},
+		map[string]interface{}{"buildMode": "test"},
+	)
+	parsed, err := ParseSupplyChainPathPayload(payload)
+	if err != nil {
+		t.Fatalf("ParseSupplyChainPathPayload() error = %v", err)
+	}
+	if parsed.Sufficiency == nil {
+		t.Fatal("expected sufficiency in parsed payload")
+	}
+	if parsed.Sufficiency.Status != SupplyChainSufficiencyHeuristic {
+		t.Fatalf("status=%s, want %s", parsed.Sufficiency.Status, SupplyChainSufficiencyHeuristic)
+	}
+}
+
 func TestParseSupplyChainPathPayload(t *testing.T) {
 	payload := map[string]interface{}{
 		"v": float64(1), // JSON unmarshal uses float64

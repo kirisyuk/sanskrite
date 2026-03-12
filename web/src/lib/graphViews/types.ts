@@ -17,6 +17,7 @@ export const LEGACY_GRAPH_LAYOUTS = [
 export type SemanticGraphView = (typeof SEMANTIC_GRAPH_VIEWS)[number];
 export type LegacyGraphLayoutMode = (typeof LEGACY_GRAPH_LAYOUTS)[number];
 export type GraphViewId = SemanticGraphView | LegacyGraphLayoutMode;
+
 export type GraphViewHoverMode =
   | 'off'
   | 'control'
@@ -26,6 +27,21 @@ export type GraphViewHoverMode =
   | 'competition'
   | 'decision-chain'
   | 'signal-propagation';
+
+export type GeoAnchorKind =
+  | 'country'
+  | 'region'
+  | 'bloc'
+  | 'global'
+  | 'composite'
+  | 'unknown';
+
+export interface GeoAnchorMeta {
+  kind: GeoAnchorKind;
+  id: string;
+  label: string;
+  members?: string[];
+}
 
 export type SupplyFlowStage =
   | 'upstream'
@@ -38,19 +54,57 @@ export type SupplyFlowRole =
   | 'source'
   | 'transformer'
   | 'gateway'
+  | 'transit'
   | 'destination'
   | 'regulator'
   | 'context';
 
+export type SupplyFlowRouteFamily =
+  | 'primary'
+  | 'fallback'
+  | 'blocked'
+  | 'uncertain'
+  | 'context';
+
+export type SupplyFlowSupportRole =
+  | 'governance'
+  | 'ownership'
+  | 'support'
+  | 'none';
+
 export type InfluenceActorRole =
   | 'family'
+  | 'dynasty'
+  | 'tribe'
   | 'community'
   | 'organization'
   | 'government'
+  | 'regulator'
   | 'person'
   | 'country'
+  | 'region'
   | 'market'
   | 'intermediary'
+  | 'facility'
+  | 'other';
+
+export type InfluenceClusterKind =
+  | 'family'
+  | 'community'
+  | 'organization'
+  | 'institution'
+  | 'geography'
+  | 'market'
+  | 'other';
+
+export type InfluenceClass =
+  | 'ownership-control'
+  | 'board-executive'
+  | 'political-access'
+  | 'regulatory-leverage'
+  | 'commercial-dependence'
+  | 'family-community'
+  | 'influence-general'
   | 'other';
 
 export type ValueChainStage =
@@ -59,7 +113,8 @@ export type ValueChainStage =
   | 'subsystems'
   | 'integration'
   | 'operators'
-  | 'markets';
+  | 'markets'
+  | 'support';
 
 export type ValueChainRole =
   | 'company'
@@ -68,7 +123,17 @@ export type ValueChainRole =
   | 'technology'
   | 'facility'
   | 'market'
-  | 'regulator';
+  | 'operator'
+  | 'service'
+  | 'regulator'
+  | 'support';
+
+export type ValueChainValueClass =
+  | 'transforms-into'
+  | 'supplies-input'
+  | 'enables'
+  | 'sells-into'
+  | 'governance-context';
 
 export interface HierarchicalViewMeta {
   pane?: 'right' | 'left' | 'dock';
@@ -81,16 +146,22 @@ export interface SupplyFlowViewMeta {
   stage: SupplyFlowStage;
   role: SupplyFlowRole;
   lane: string;
+  geoAnchor?: GeoAnchorMeta;
   isChokepoint?: boolean;
   isGateway?: boolean;
+  routeFamily?: SupplyFlowRouteFamily;
   routeGroup?: string;
+  supportRole?: SupplyFlowSupportRole;
+  pathDepth?: number;
   confidence?: number;
 }
 
 export interface InfluenceViewMeta {
   clusterId: string;
-  clusterKind: 'family' | 'organization' | 'institution' | 'geography' | 'market' | 'other';
+  clusterKind: InfluenceClusterKind;
+  clusterLabel?: string;
   actorRole: InfluenceActorRole;
+  geoAnchor?: GeoAnchorMeta;
   countryAnchor?: string;
   centralityBucket?: 'low' | 'medium' | 'high';
 }
@@ -99,12 +170,15 @@ export interface ValueChainViewMeta {
   stage: ValueChainStage;
   role: ValueChainRole;
   swimlane?: string;
+  geoAnchor?: GeoAnchorMeta;
+  supportRail?: boolean;
   valuePoolBand?: 'low' | 'medium' | 'high';
   bottleneck?: boolean;
 }
 
 export interface SharedGraphNodeMeta {
   graphView?: SemanticGraphView;
+  geoAnchor?: GeoAnchorMeta;
   hierarchicalMeta?: HierarchicalViewMeta;
   supplyFlowMeta?: SupplyFlowViewMeta;
   influenceMeta?: InfluenceViewMeta;
@@ -113,28 +187,29 @@ export interface SharedGraphNodeMeta {
 
 export interface SharedGraphEdgeMeta {
   graphView?: SemanticGraphView;
+  routingHint?: {
+    preferredAxis?: 'horizontal' | 'vertical';
+    sameLane?: boolean;
+    sameCluster?: boolean;
+    reverseFlow?: boolean;
+    bundleId?: string;
+  };
   supplyFlowMeta?: {
     flowClass:
       | 'material-input'
       | 'product-transformation'
       | 'logistics-leg'
       | 'jurisdiction'
-      | 'corporate-context';
-    variant?: 'primary' | 'fallback' | 'blocked' | 'uncertain';
+      | 'corporate-context'
+      | 'route-support';
+    variant?: SupplyFlowRouteFamily;
     confidence?: number;
   };
   influenceMeta?: {
-    influenceClass:
-      | 'ownership-control'
-      | 'board-executive'
-      | 'political-access'
-      | 'regulatory-leverage'
-      | 'commercial-dependence'
-      | 'family-community'
-      | 'other';
+    influenceClass: InfluenceClass;
   };
   valueChainMeta?: {
-    valueClass: 'transforms-into' | 'supplies-input' | 'enables' | 'sells-into';
+    valueClass: ValueChainValueClass;
   };
 }
 
@@ -148,6 +223,35 @@ export interface GraphViewFilterPolicy {
   semanticGroupColors: boolean;
 }
 
+export interface SupplyFlowGraphViewState {
+  routeFamily: SupplyFlowRouteFamily | 'all';
+  localFlowFilter: 'all' | 'material-input' | 'product-transformation' | 'logistics-leg' | 'jurisdiction' | 'corporate-context' | 'route-support';
+  pinnedNodeIds: string[];
+  showContextRail: boolean;
+}
+
+export interface InfluenceGraphViewState {
+  actorClassFilter: InfluenceActorRole | 'all';
+  influenceClassFilter: InfluenceClass | 'all';
+  collapsedClusterIds: string[];
+  geoOverlay: boolean;
+  stableOrderHints: Record<string, number>;
+}
+
+export interface ValueChainGraphViewState {
+  supportRailVisible: boolean;
+  swimlaneMode: 'role' | 'geography' | 'product-family';
+  collapsedStages: ValueChainStage[];
+  activeOverlay: 'bottlenecks' | 'value-pools' | 'concentration' | 'margin-proxy';
+}
+
+export type PersistedGraphViewState = Partial<{
+  hierarchical: Record<string, any>;
+  'supply-flow': SupplyFlowGraphViewState;
+  'influence-network': InfluenceGraphViewState;
+  'value-chain': ValueChainGraphViewState;
+}>;
+
 export const GRAPH_VIEW_LABELS: Record<GraphViewId, string> = {
   freeform: 'Freeform',
   linear: 'Linear',
@@ -158,6 +262,54 @@ export const GRAPH_VIEW_LABELS: Record<GraphViewId, string> = {
   'influence-network': 'Influence Network',
   'value-chain': 'Value Chain',
 };
+
+export function defaultGraphViewState(view: SemanticGraphView): Record<string, any> {
+  switch (view) {
+    case 'supply-flow':
+      return {
+        routeFamily: 'all',
+        localFlowFilter: 'all',
+        pinnedNodeIds: [],
+        showContextRail: true,
+      } satisfies SupplyFlowGraphViewState;
+    case 'influence-network':
+      return {
+        actorClassFilter: 'all',
+        influenceClassFilter: 'all',
+        collapsedClusterIds: [],
+        geoOverlay: false,
+        stableOrderHints: {},
+      } satisfies InfluenceGraphViewState;
+    case 'value-chain':
+      return {
+        supportRailVisible: true,
+        swimlaneMode: 'role',
+        collapsedStages: [],
+        activeOverlay: 'bottlenecks',
+      } satisfies ValueChainGraphViewState;
+    default:
+      return {};
+  }
+}
+
+export function normalizeGraphViewState(raw: unknown): PersistedGraphViewState {
+  const viewState = (raw && typeof raw === 'object' ? raw : {}) as Record<string, any>;
+  return {
+    hierarchical: viewState.hierarchical && typeof viewState.hierarchical === 'object' ? viewState.hierarchical : undefined,
+    'supply-flow': {
+      ...defaultGraphViewState('supply-flow'),
+      ...(viewState['supply-flow'] && typeof viewState['supply-flow'] === 'object' ? viewState['supply-flow'] : {}),
+    } as SupplyFlowGraphViewState,
+    'influence-network': {
+      ...defaultGraphViewState('influence-network'),
+      ...(viewState['influence-network'] && typeof viewState['influence-network'] === 'object' ? viewState['influence-network'] : {}),
+    } as InfluenceGraphViewState,
+    'value-chain': {
+      ...defaultGraphViewState('value-chain'),
+      ...(viewState['value-chain'] && typeof viewState['value-chain'] === 'object' ? viewState['value-chain'] : {}),
+    } as ValueChainGraphViewState,
+  };
+}
 
 export function normalizeGraphView(raw: unknown, fallback: GraphViewId = 'hierarchical'): GraphViewId {
   const value = String(raw || '').trim().toLowerCase();

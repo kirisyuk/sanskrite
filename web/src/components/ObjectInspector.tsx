@@ -1439,11 +1439,16 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     const zoneRefs = readStringArray(src?.pathZoneRefs);
     const affectedZoneRefs = readStringArray(src?.pathAffectedZoneRefs);
     const spatialSemantics = readStringArray(src?.pathSpatialSemantics);
+    const hardFailures = readStringArray(src?.pathHardFailures);
+    const openGaps = readStringArray(src?.pathOpenGaps);
+    const warnings = readStringArray(src?.pathWarnings);
+    const joinAssessments = Array.isArray(src?.pathJoinAssessments) ? src.pathJoinAssessments : [];
     const hasMeta =
       !!pathArtifactId ||
       !!pathRole ||
       typeof src?.pathStressScore === 'number' ||
       typeof src?.pathSegmentIndex === 'number' ||
+      !!src?.pathSufficiencyStatus ||
       flowRefs.length > 0 ||
       zoneRefs.length > 0 ||
       affectedZoneRefs.length > 0 ||
@@ -1454,6 +1459,12 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       pathRole,
       pathProductRef,
       pathSupplyLinkId,
+      pathSufficiencyStatus: String(src?.pathSufficiencyStatus || '').trim() || undefined,
+      pathSufficiencyScore: typeof src?.pathSufficiencyScore === 'number' ? src.pathSufficiencyScore : undefined,
+      pathGapCount: typeof src?.pathGapCount === 'number' ? src.pathGapCount : undefined,
+      pathSufficiencySummary: String(src?.pathSufficiencySummary || '').trim() || undefined,
+      pathValidatedJoinCount: typeof src?.pathValidatedJoinCount === 'number' ? src.pathValidatedJoinCount : undefined,
+      pathUnresolvedJoinCount: typeof src?.pathUnresolvedJoinCount === 'number' ? src.pathUnresolvedJoinCount : undefined,
       pathSegmentIndex: typeof src?.pathSegmentIndex === 'number' ? src.pathSegmentIndex : undefined,
       pathCarriesProduct: Boolean(src?.pathCarriesProduct),
       pathStressScore: typeof src?.pathStressScore === 'number' ? src.pathStressScore : undefined,
@@ -1469,6 +1480,10 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       zoneRefs,
       affectedZoneRefs,
       spatialSemantics,
+      hardFailures,
+      openGaps,
+      warnings,
+      joinAssessments,
     };
   }, [edgeData, edge]);
 
@@ -1730,6 +1745,45 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
               {typeof edgePathLegMeta.pathSegmentIndex === 'number' && (
                 <KV k="Segment" v={<span style={mono}>{edgePathLegMeta.pathSegmentIndex}</span>} />
               )}
+              {edgePathLegMeta.pathSufficiencyStatus && (
+                <KV
+                  k="Continuity"
+                  v={
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <Chip
+                        tone={
+                          edgePathLegMeta.pathSufficiencyStatus === 'validated'
+                            ? 'info'
+                            : edgePathLegMeta.pathSufficiencyStatus === 'forensic_gap'
+                              ? 'danger'
+                              : 'info'
+                        }
+                      >
+                        {edgePathLegMeta.pathSufficiencyStatus === 'forensic_gap'
+                          ? 'gap'
+                          : edgePathLegMeta.pathSufficiencyStatus}
+                      </Chip>
+                      {typeof edgePathLegMeta.pathSufficiencyScore === 'number' && (
+                        <Chip>suff {Math.round(edgePathLegMeta.pathSufficiencyScore * 100)}%</Chip>
+                      )}
+                      {typeof edgePathLegMeta.pathValidatedJoinCount === 'number' && (
+                        <Chip>
+                          joins {edgePathLegMeta.pathValidatedJoinCount}
+                          {typeof edgePathLegMeta.pathUnresolvedJoinCount === 'number'
+                            ? ` • unresolved ${edgePathLegMeta.pathUnresolvedJoinCount}`
+                            : ''}
+                        </Chip>
+                      )}
+                      {typeof edgePathLegMeta.pathGapCount === 'number' && edgePathLegMeta.pathGapCount > 0 && (
+                        <Chip tone="info">gaps {edgePathLegMeta.pathGapCount}</Chip>
+                      )}
+                    </div>
+                  }
+                />
+              )}
+              {edgePathLegMeta.pathSufficiencySummary && (
+                <KV k="Summary" v={<span>{edgePathLegMeta.pathSufficiencySummary}</span>} />
+              )}
               {edgePathLegMeta.pathRole && <KV k="Role" v={<span>{edgePathLegMeta.pathRole}</span>} />}
               {edgePathLegMeta.pathArtifactId && (
                 <KV k="Path artifact" v={<span style={mono}>{edgePathLegMeta.pathArtifactId}</span>} copyText={edgePathLegMeta.pathArtifactId} />
@@ -1804,6 +1858,60 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                   v={
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                       {edgePathLegMeta.dominantFactors.map((item) => <Chip key={item} tone="info">{item}</Chip>)}
+                    </div>
+                  }
+                />
+              )}
+              {edgePathLegMeta.joinAssessments.length > 0 && (
+                <KV
+                  k="Join checks"
+                  v={
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {edgePathLegMeta.joinAssessments.slice(0, 4).map((item: any) => (
+                        <div key={`${item?.index}-${item?.leftLegIndex}-${item?.rightLegIndex}`} style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>
+                          <strong>{String(item?.status || 'unknown')}</strong>
+                          {` • ${String(item?.actorContinuity || 'n/a')}`}
+                          {` • ${String(item?.productContinuity || 'n/a')}`}
+                          {` • ${String(item?.temporalContinuity || 'n/a')}`}
+                          {Array.isArray(item?.reasons) && item.reasons.length > 0 ? ` • ${item.reasons.join('; ')}` : ''}
+                        </div>
+                      ))}
+                    </div>
+                  }
+                />
+              )}
+              {edgePathLegMeta.hardFailures.length > 0 && (
+                <KV
+                  k="Hard failures"
+                  v={
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {edgePathLegMeta.hardFailures.map((item: string) => (
+                        <div key={item} style={{ fontSize: 12, color: 'var(--text-error)' }}>{item}</div>
+                      ))}
+                    </div>
+                  }
+                />
+              )}
+              {edgePathLegMeta.openGaps.length > 0 && (
+                <KV
+                  k="Open gaps"
+                  v={
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {edgePathLegMeta.openGaps.map((item: string) => (
+                        <div key={item} style={{ fontSize: 12, color: 'var(--text-warning)' }}>{item}</div>
+                      ))}
+                    </div>
+                  }
+                />
+              )}
+              {edgePathLegMeta.warnings.length > 0 && (
+                <KV
+                  k="Warnings"
+                  v={
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {edgePathLegMeta.warnings.map((item: string) => (
+                        <div key={item} style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>{item}</div>
+                      ))}
                     </div>
                   }
                 />

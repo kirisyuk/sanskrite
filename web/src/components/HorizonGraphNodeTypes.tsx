@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { ThemeContext } from './ThemeProvider';
 import type { SemanticGroup, LinearSection } from '../lib/elkLayout';
 import type {
+  GeoAnchorMeta,
   HierarchicalViewMeta,
   InfluenceViewMeta,
   SemanticGraphView,
@@ -55,10 +56,108 @@ const CountryFlag: React.FC<{ countryCode: string | null; size?: number }> = ({ 
   );
 };
 
+const geoBadgeLabel = (geo?: GeoAnchorMeta | null): string => {
+  if (!geo) return '';
+  if (geo.kind === 'global') return 'Global';
+  return geo.label || geo.id || '';
+};
+
+const badgeStyle = (
+  theme: 'light' | 'dark',
+  accent: string,
+  muted = false,
+): React.CSSProperties => ({
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '4px 8px',
+  borderRadius: 999,
+  border: `1px solid ${hexToRgba(accent, theme === 'dark' ? 0.34 : 0.26)}`,
+  background: hexToRgba(accent, muted ? (theme === 'dark' ? 0.09 : 0.06) : (theme === 'dark' ? 0.14 : 0.10)),
+  color: theme === 'dark' ? 'rgba(255,255,255,0.84)' : 'rgba(15,23,42,0.78)',
+  fontSize: 10,
+  fontWeight: 800,
+  letterSpacing: '0.02em',
+  lineHeight: 1,
+  whiteSpace: 'nowrap',
+});
+
+const SpecializedNodeMetaChrome: React.FC<{
+  data: HorizonNodeData;
+  theme: 'light' | 'dark';
+  accentColor: string;
+  compact?: boolean;
+}> = ({ data, theme, accentColor, compact = false }) => {
+  const graphView = data.graphView;
+  if (graphView === 'hierarchical' || !graphView) return null;
+
+  const geo = (data.geoAnchor ||
+    data.supplyFlowMeta?.geoAnchor ||
+    data.influenceMeta?.geoAnchor ||
+    data.valueChainMeta?.geoAnchor) as GeoAnchorMeta | undefined;
+
+  const wrapStyle: React.CSSProperties = compact
+    ? {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        flexWrap: 'nowrap',
+        minWidth: 0,
+      }
+    : {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 6,
+        marginTop: 6,
+      };
+
+  if (graphView === 'supply-flow' && data.supplyFlowMeta) {
+    const meta = data.supplyFlowMeta;
+    return (
+      <div style={wrapStyle}>
+        <span style={badgeStyle(theme, accentColor)}>{meta.stage}</span>
+        <span style={badgeStyle(theme, accentColor, true)}>{meta.role}</span>
+        {meta.routeFamily && meta.routeFamily !== 'context' && (
+          <span style={badgeStyle(theme, accentColor, true)}>{meta.routeFamily}</span>
+        )}
+        {geoBadgeLabel(geo) && <span style={badgeStyle(theme, accentColor, true)}>{geoBadgeLabel(geo)}</span>}
+      </div>
+    );
+  }
+
+  if (graphView === 'influence-network' && data.influenceMeta) {
+    const meta = data.influenceMeta;
+    return (
+      <div style={wrapStyle}>
+        <span style={badgeStyle(theme, accentColor)}>{meta.actorRole}</span>
+        <span style={badgeStyle(theme, accentColor, true)}>{meta.clusterKind}</span>
+        {meta.centralityBucket && <span style={badgeStyle(theme, accentColor, true)}>{meta.centralityBucket}</span>}
+        {geoBadgeLabel(geo) && <span style={badgeStyle(theme, accentColor, true)}>{geoBadgeLabel(geo)}</span>}
+      </div>
+    );
+  }
+
+  if (graphView === 'value-chain' && data.valueChainMeta) {
+    const meta = data.valueChainMeta;
+    return (
+      <div style={wrapStyle}>
+        <span style={badgeStyle(theme, accentColor)}>{meta.stage}</span>
+        <span style={badgeStyle(theme, accentColor, true)}>{meta.role}</span>
+        {meta.supportRail && <span style={badgeStyle(theme, accentColor, true)}>support</span>}
+        {meta.valuePoolBand && <span style={badgeStyle(theme, accentColor, true)}>{meta.valuePoolBand} value</span>}
+        {geoBadgeLabel(geo) && <span style={badgeStyle(theme, accentColor, true)}>{geoBadgeLabel(geo)}</span>}
+      </div>
+    );
+  }
+
+  return null;
+};
+
 // Типы нод для Horizon графа (на основе LensItem)
 export interface HorizonNodeData {
   id: string;
   graphView?: SemanticGraphView;
+  geoAnchor?: GeoAnchorMeta;
   lensItemId: string; // ID LensItem
   fragmentId?: string;
   parentFragmentId?: string;
@@ -4065,6 +4164,10 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
         })());
   const titleLineClamp = isCollapsed ? 2 : (data.showMetrics ? 2 : 6);
   const displayType = getHorizonNodeDisplayType(data.type, data.canonicalPath, data.label);
+  const geoFlagCode =
+    data.geoAnchor?.kind === 'country'
+      ? data.geoAnchor.id
+      : extractCountryCode(data.canonicalPath);
   // Keep node size consistent with ELK layout defaults used in the canvas (see LensCanvasCockpit)
   const NODE_WIDTH_PX = 180;
   const NODE_CARD_HEIGHT_PX = 148;
@@ -4336,26 +4439,28 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
             <HorizonNodeIcon type={visualType || data.type} color={accentColor} size={12} />
           </div>
 
-          {/* Label (2 lines, clamp) */}
-          <span
-            style={{
-              flex: 1,
-              minWidth: 0,
-              fontSize: 11,
-              fontWeight: 650,
-              color: textColor,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'normal',
-              lineHeight: 1.18,
-              display: '-webkit-box',
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: 'vertical' as any,
-            }}
-            title={displayLabel}
-          >
-            {displayLabel}
-          </span>
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {/* Label (2 lines, clamp) */}
+            <span
+              style={{
+                minWidth: 0,
+                fontSize: 11,
+                fontWeight: 650,
+                color: textColor,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'normal',
+                lineHeight: 1.18,
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical' as any,
+              }}
+              title={displayLabel}
+            >
+              {displayLabel}
+            </span>
+            <SpecializedNodeMetaChrome data={data} theme={theme} accentColor={accentColor} compact />
+          </div>
 
           {/* Expand/Collapse button (same size/icon/color logic as full nodes) */}
           {(showExpand || canCollapse) && (
@@ -5081,7 +5186,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
                 />
               )}
             </div>
-            {!isSubcategoryStackController && extractCountryCode(data.canonicalPath) && (
+            {!isSubcategoryStackController && geoFlagCode && (
               <div
                 style={{
                   width: 30,
@@ -5096,7 +5201,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
                   flexShrink: 0,
                 }}
               >
-                <CountryFlag countryCode={extractCountryCode(data.canonicalPath)} size={18} />
+                <CountryFlag countryCode={geoFlagCode} size={18} />
               </div>
             )}
 
@@ -5305,7 +5410,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
             >
               <HorizonNodeIcon type={visualType || data.type} color={accentColor} size={14} />
             </div>
-            {extractCountryCode(data.canonicalPath) && (
+            {geoFlagCode && (
               <div
                 style={{
                   padding: '4px',
@@ -5317,7 +5422,7 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
                   border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.10)' : 'rgba(15,23,42,0.08)'}`,
                 }}
               >
-                <CountryFlag countryCode={extractCountryCode(data.canonicalPath)} size={14} />
+                <CountryFlag countryCode={geoFlagCode} size={14} />
               </div>
             )}
           </div>
@@ -5352,6 +5457,14 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               >
                 {formatType(displayType)}
               </div>
+            )}
+
+            {!isCollapsed && (
+              <SpecializedNodeMetaChrome
+                data={data}
+                theme={theme}
+                accentColor={accentColor}
+              />
             )}
 
           </div>

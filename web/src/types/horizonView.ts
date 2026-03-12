@@ -1,4 +1,4 @@
-import type { GraphViewId, SemanticGraphView } from '../lib/graphViews/types';
+import type { GraphViewId, PersistedGraphViewState } from '../lib/graphViews/types';
 
 export interface HorizonViewDirective {
   contractType?: string;
@@ -31,13 +31,9 @@ export interface HorizonViewDirective {
   };
 }
 
-export interface HorizonGraphViewState {
+export type HorizonGraphViewState = PersistedGraphViewState & {
   [viewId: string]: Record<string, any> | undefined;
-  hierarchical?: Record<string, any>;
-  'supply-flow'?: Record<string, any>;
-  'influence-network'?: Record<string, any>;
-  'value-chain'?: Record<string, any>;
-}
+};
 
 export interface HorizonLensViewConfig {
   graphView?: GraphViewId;
@@ -63,5 +59,3 @@ export interface HorizonLensRecord {
   resolvedQueries?: Record<string, string[]>;
   lastResolved?: string;
 }
-
-export type PersistedGraphViewState = Partial<Record<SemanticGraphView, Record<string, any>>>;

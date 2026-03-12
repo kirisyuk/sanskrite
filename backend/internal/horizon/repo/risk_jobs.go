@@ -113,3 +113,39 @@ func (r *RiskJobsRepository) findActiveByDedupKey(ctx context.Context, dedupKey 
 	}
 	return "", nil
 }
+
+func (r *RiskJobsRepository) ListRecentByTargetCanonicalPath(ctx context.Context, tenantID, canonicalPath string, limit int) ([]*horizonmodels.RiskJob, error) {
+	if r == nil || r.col == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(canonicalPath) == "" {
+		return nil, ErrInvalidDocument
+	}
+	if limit <= 0 {
+		limit = 25
+	}
+	tenants := []string{strings.TrimSpace(tenantID)}
+	if strings.TrimSpace(tenantID) != "global" {
+		tenants = append(tenants, "global")
+	}
+	docs, err := r.col.
+		Where("tenantId", "in", tenants).
+		Where("targetCanonicalPath", "==", strings.TrimSpace(canonicalPath)).
+		OrderBy("updatedAt", firestore.Desc).
+		Limit(limit).
+		Documents(ctx).
+		GetAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*horizonmodels.RiskJob, 0, len(docs))
+	for _, d := range docs {
+		var job horizonmodels.RiskJob
+		if err := d.DataTo(&job); err != nil {
+			continue
+		}
+		if strings.TrimSpace(job.ID) == "" {
+			job.ID = d.Ref.ID
+		}
+		job.NormalizeDefaults()
+		out = append(out, &job)
+	}
+	return out, nil
+}

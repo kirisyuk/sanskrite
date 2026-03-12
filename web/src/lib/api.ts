@@ -2452,6 +2452,49 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
+  async listHorizonGeoObjectsByPaths(options: {
+    canonicalPaths: string[];
+    types?: string[];
+    createdAfter?: string;
+    createdBefore?: string;
+  }): Promise<{
+    items: Array<{
+      id: string;
+      canonicalPath: string;
+      type: string;
+      facilityKind?: string;
+      label?: string;
+      description?: string;
+      status?: string;
+      coordinates?: { lat: number; lon: number };
+      radiusKm?: number;
+      zoneType?: string;
+      zoneSubType?: string;
+      hype?: number;
+      hypeIndicator?: number;
+      activityStatus?: 'hot' | 'active' | 'watch' | 'cooling' | 'inactive';
+      lastMatchedAt?: string;
+      inScope?: boolean;
+      createdAt?: string;
+      updatedAt?: string;
+    }>;
+    total: number;
+    requestedCount: number;
+  }> {
+    try {
+      const response = await this.client.post('/api/horizon/geo-objects/by-paths', {
+        canonicalPaths: options.canonicalPaths,
+        types: options.types,
+        createdAfter: options.createdAfter,
+        createdBefore: options.createdBefore,
+      });
+      return response.data;
+    } catch (error: any) {
+      console.error('[API] listHorizonGeoObjectsByPaths error:', error);
+      throw error;
+    }
+  }
+
   async getHorizonMapActivity(options?: {
     lensId?: string;
     minHype?: number;

@@ -44,6 +44,13 @@ type geoObjectResponseItem struct {
 	UpdatedAt       time.Time           `json:"updatedAt"`
 }
 
+type geoObjectsByPathsRequest struct {
+	CanonicalPaths []string `json:"canonicalPaths"`
+	Types          []string `json:"types,omitempty"`
+	CreatedAfter   string   `json:"createdAfter,omitempty"`
+	CreatedBefore  string   `json:"createdBefore,omitempty"`
+}
+
 func fragmentToGeoItem(f *models.HorizonFragment, inScope bool) (geoObjectResponseItem, bool) {
 	if f == nil || f.Coordinates == nil {
 		return geoObjectResponseItem{}, false
@@ -73,6 +80,20 @@ func fragmentToGeoItem(f *models.HorizonFragment, inScope bool) (geoObjectRespon
 	}
 	if label == "" {
 		label = strings.TrimSpace(f.Identifiers["shortName"])
+	}
+	if label == "" {
+		for _, v := range f.Labels {
+			if v = strings.TrimSpace(v); v != "" {
+				label = v
+				break
+			}
+		}
+	}
+	if label == "" && len(f.AlternativeNames) > 0 {
+		label = strings.TrimSpace(f.AlternativeNames[0])
+	}
+	if label == "" && len(f.NameHistory) > 0 {
+		label = strings.TrimSpace(f.NameHistory[0].Name)
 	}
 	zoneType := ""
 	zoneSubType := ""
@@ -114,6 +135,119 @@ func fragmentToGeoItem(f *models.HorizonFragment, inScope bool) (geoObjectRespon
 		CreatedAt:       f.CreatedAt,
 		UpdatedAt:       f.UpdatedAt,
 	}, true
+}
+
+func parseGeoObjectFilter(
+	typeValues []string,
+	createdAfter string,
+	createdBefore string,
+) horizonrepo.GeoListFilter {
+	var filter horizonrepo.GeoListFilter
+	for _, rawType := range typeValues {
+		for _, part := range strings.Split(strings.TrimSpace(rawType), ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			filter.Types = append(filter.Types, models.FragmentType(strings.ToUpper(part)))
+		}
+	}
+	if raw := strings.TrimSpace(createdAfter); raw != "" {
+		if t, err := time.Parse(time.RFC3339, raw); err == nil {
+			filter.CreatedAfter = &t
+		} else if t, err := time.Parse("2006-01-02", raw); err == nil {
+			filter.CreatedAfter = &t
+		}
+	}
+	if raw := strings.TrimSpace(createdBefore); raw != "" {
+		if t, err := time.Parse(time.RFC3339, raw); err == nil {
+			filter.CreatedBefore = &t
+		} else if t, err := time.Parse("2006-01-02", raw); err == nil {
+			end := t.Add(24*time.Hour - time.Nanosecond)
+			filter.CreatedBefore = &end
+		}
+	}
+	return filter
+}
+
+func (h *HorizonHandlers) geoObjectsForCanonicalPaths(
+	ctx context.Context,
+	canonicalPaths []string,
+	filter *horizonrepo.GeoListFilter,
+	inScope bool,
+) ([]geoObjectResponseItem, error) {
+	if len(canonicalPaths) == 0 {
+		return []geoObjectResponseItem{}, nil
+	}
+	seen := make(map[string]struct{}, len(canonicalPaths))
+	ordered := make([]string, 0, len(canonicalPaths))
+	for _, path := range canonicalPaths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		ordered = append(ordered, path)
+	}
+	if len(ordered) == 0 {
+		return []geoObjectResponseItem{}, nil
+	}
+
+	fragments, err := h.service.Fragments().ListByCanonicalPaths(ctx, ordered)
+	if err != nil {
+		return nil, err
+	}
+	byPath := make(map[string]*models.HorizonFragment, len(fragments))
+	for _, fragment := range fragments {
+		if fragment == nil {
+			continue
+		}
+		cp := strings.TrimSpace(fragment.CanonicalPath)
+		if cp == "" {
+			continue
+		}
+		byPath[cp] = fragment
+	}
+
+	items := make([]geoObjectResponseItem, 0, len(ordered))
+	for _, path := range ordered {
+		fragment := byPath[path]
+		if fragment == nil {
+			continue
+		}
+		if filter != nil {
+			if len(filter.Types) > 0 {
+				match := false
+				for _, ft := range filter.Types {
+					if ft == fragment.Type {
+						match = true
+						break
+					}
+				}
+				if !match {
+					continue
+				}
+			}
+			if filter.CreatedAfter != nil && fragment.CreatedAt.Before(*filter.CreatedAfter) {
+				continue
+			}
+			if filter.CreatedBefore != nil && fragment.CreatedAt.After(*filter.CreatedBefore) {
+				continue
+			}
+		}
+		if lat, lon, ok := horizonrepo.ResolveFragmentCoordinates(fragment); ok {
+			fragment.Coordinates = &models.Coordinates{Lat: lat, Lon: lon}
+		} else {
+			continue
+		}
+		if item, ok := fragmentToGeoItem(fragment, inScope); ok {
+			items = append(items, item)
+		}
+	}
+	return items, nil
 }
 
 func readZoneActivitySnapshot(f *models.HorizonFragment, now time.Time) (float64, int, string, *time.Time) {
@@ -223,6 +357,40 @@ func clamp(v, lo, hi float64) float64 {
 	return v
 }
 
+// ListGeoObjectsByPaths returns geo-bound fragments for an explicit set of canonical paths.
+// POST /api/horizon/geo-objects/by-paths
+func (h *HorizonHandlers) ListGeoObjectsByPaths(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if httputil.GetAuthInfo(r.Context()) == nil {
+		http.Error(w, "Authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	var req geoObjectsByPathsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	filter := parseGeoObjectFilter(req.Types, req.CreatedAfter, req.CreatedBefore)
+	items, err := h.geoObjectsForCanonicalPaths(r.Context(), req.CanonicalPaths, &filter, true)
+	if err != nil {
+		log.Printf("ListGeoObjectsByPaths error: paths=%d: %v", len(req.CanonicalPaths), err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Cache-Control", "private, max-age=60")
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"items":          items,
+		"total":          len(items),
+		"requestedCount": len(req.CanonicalPaths),
+	})
+}
+
 // ListFragments получает список HorizonFragment через Lens scope
 func (h *HorizonHandlers) ListFragments(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -301,30 +469,11 @@ func (h *HorizonHandlers) ListGeoObjects(w http.ResponseWriter, r *http.Request)
 		pathPrefix = "/loc/"
 	}
 
-	var filter horizonrepo.GeoListFilter
-	if raw := strings.TrimSpace(r.URL.Query().Get("types")); raw != "" {
-		for _, t := range strings.Split(raw, ",") {
-			t = strings.TrimSpace(t)
-			if t != "" {
-				filter.Types = append(filter.Types, models.FragmentType(strings.ToUpper(t)))
-			}
-		}
-	}
-	if raw := strings.TrimSpace(r.URL.Query().Get("createdAfter")); raw != "" {
-		if t, err := time.Parse(time.RFC3339, raw); err == nil {
-			filter.CreatedAfter = &t
-		} else if t, err := time.Parse("2006-01-02", raw); err == nil {
-			filter.CreatedAfter = &t
-		}
-	}
-	if raw := strings.TrimSpace(r.URL.Query().Get("createdBefore")); raw != "" {
-		if t, err := time.Parse(time.RFC3339, raw); err == nil {
-			filter.CreatedBefore = &t
-		} else if t, err := time.Parse("2006-01-02", raw); err == nil {
-			end := t.Add(24*time.Hour - time.Nanosecond)
-			filter.CreatedBefore = &end
-		}
-	}
+	filter := parseGeoObjectFilter(
+		[]string{strings.TrimSpace(r.URL.Query().Get("types"))},
+		strings.TrimSpace(r.URL.Query().Get("createdAfter")),
+		strings.TrimSpace(r.URL.Query().Get("createdBefore")),
+	)
 
 	lensID := strings.TrimSpace(r.URL.Query().Get("lensId"))
 

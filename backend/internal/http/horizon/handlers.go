@@ -10,6 +10,7 @@ import (
 	horizonqa "github.com/igorkirisyuk/sanskrite/internal/horizon/qa"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
+	horizonwatch "github.com/igorkirisyuk/sanskrite/internal/horizon/watch"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 )
@@ -45,6 +46,7 @@ type HorizonHandlers struct {
 
 	// Job-level telemetry (LLM cost tracking)
 	jobTelemetryRepo *horizonrepo.JobTelemetryRepository
+	watchService     *horizonwatch.Service
 }
 
 // NewHorizonHandlers создает новые handlers
@@ -182,6 +184,11 @@ func (h *HorizonHandlers) WithJobTelemetryRepo(r *horizonrepo.JobTelemetryReposi
 	return h
 }
 
+func (h *HorizonHandlers) WithWatchService(svc *horizonwatch.Service) *HorizonHandlers {
+	h.watchService = svc
+	return h
+}
+
 // RegisterRoutes регистрирует все routes для Horizon API
 func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.Handler) {
 	// Intent precheck (NL -> taxonomy-aligned intent)
@@ -205,6 +212,7 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 	mux.Handle("/api/horizon/supply-chains/by-lens", authMiddleware(http.HandlerFunc(h.GetSupplyChainsByLens)))
 	mux.Handle("/api/horizon/supply-chains/search", authMiddleware(http.HandlerFunc(h.SearchSupplyChains)))
 	mux.Handle("/api/horizon/geo-objects", authMiddleware(http.HandlerFunc(h.ListGeoObjects)))
+	mux.Handle("/api/horizon/geo-objects/by-paths", authMiddleware(http.HandlerFunc(h.ListGeoObjectsByPaths)))
 	mux.Handle("/api/horizon/map-activity", authMiddleware(http.HandlerFunc(h.ListMapActivity)))
 
 	// Fragment profiles (direct access by profile ID)
@@ -217,6 +225,12 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 	mux.Handle("/api/horizon/risk/concentration", authMiddleware(http.HandlerFunc(h.GetRiskConcentration)))
 	mux.Handle("/api/horizon/risk/jobs", authMiddleware(http.HandlerFunc(h.HandleRiskJobsRoot)))
 	mux.Handle("/api/horizon/risk/jobs/", authMiddleware(http.HandlerFunc(h.HandleRiskJobRoutes)))
+	mux.Handle("/api/horizon/watch", authMiddleware(http.HandlerFunc(h.HandleWatchRoot)))
+	mux.Handle("/api/horizon/watch/search", authMiddleware(http.HandlerFunc(h.SearchWatchTargets)))
+	mux.Handle("/api/horizon/watch/targets", authMiddleware(http.HandlerFunc(h.HandleWatchTargetsRoot)))
+	mux.Handle("/api/horizon/watch/targets/", authMiddleware(http.HandlerFunc(h.HandleWatchTargetRoutes)))
+	mux.Handle("/api/horizon/watch/preferences", authMiddleware(http.HandlerFunc(h.UpdateWatchPreferences)))
+	mux.Handle("/api/horizon/watch/briefs/", authMiddleware(http.HandlerFunc(h.HandleWatchBriefRoutes)))
 
 	// AI explanations (cached markdown explanations for nodes/edges)
 	mux.Handle("/api/horizon/ai-explanations/", authMiddleware(http.HandlerFunc(h.HandleAIExplanationsRoutes)))

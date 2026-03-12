@@ -59,13 +59,18 @@ import {
 } from '../lib/elkLayout';
 import {
   GRAPH_VIEW_LABELS,
+  defaultGraphViewState,
+  graphViewToSemantic,
   type GraphViewHoverMode,
   type GraphViewId,
+  type PersistedGraphViewState,
+  type SemanticGraphView,
   isHierarchicalGraphView,
   isInfluenceNetworkGraphView,
   isSupplyFlowGraphView,
   isValueChainGraphView,
   normalizeGraphView,
+  normalizeGraphViewState,
 } from '../lib/graphViews/types';
 import {
   arrangeGraphView,
@@ -76,6 +81,7 @@ import {
   getGraphViewToolbarPolicy,
 } from '../lib/graphViews/runtime';
 import { computeHoverHighlight } from '../lib/graphViews/hover';
+import { getGraphViewEdgeStyle } from '../lib/graphViews/rendering';
 import type { LensItem } from '../types/lensItem';
 import type { HorizonViewDirective } from '../types/horizonView';
 import type { HorizonNodeData } from './HorizonGraphNodeTypes';
@@ -1791,6 +1797,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [showMiniMap, setShowMiniMap] = React.useState(false);
   const [showBackgroundGrid, setShowBackgroundGrid] = React.useState(false);
   const [layoutMode, setLayoutMode] = React.useState<GraphViewId>('hierarchical');
+  const [graphViewState, setGraphViewState] = React.useState<PersistedGraphViewState>(() => normalizeGraphViewState({}));
   // Layout mode helpers - shared across callbacks/effects below.
   const isFreeformLayout = layoutMode === 'freeform';
   const isLinearLayout = layoutMode === 'linear';
@@ -1801,6 +1808,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const graphViewFilterPolicy = React.useMemo(() => getGraphViewFilterPolicy(layoutMode), [layoutMode]);
   const graphViewOverlayPolicy = React.useMemo(() => getGraphViewOverlayPolicy(layoutMode), [layoutMode]);
   const graphViewToolbarPolicy = React.useMemo(() => getGraphViewToolbarPolicy(layoutMode), [layoutMode]);
+  const currentSemanticGraphView = React.useMemo<SemanticGraphView | null>(() => graphViewToSemantic(layoutMode), [layoutMode]);
   const [showToolbarMenu, setShowToolbarMenu] = React.useState(false);
   const toolbarMenuRef = React.useRef<HTMLDivElement | null>(null);
   // Right-side pushable overlays: actions, view, info
@@ -1822,6 +1830,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [showSecondaryEdges, setShowSecondaryEdges] = React.useState(false);
   // Graph clarity: 4 colors by semantic group instead of per-edge-type palette
   const [useSemanticGroupColors, setUseSemanticGroupColors] = React.useState(true);
+  const graphViewStateLoadedRef = React.useRef(false);
 
   // Stack preview overlay (Levels): show up to 5 hidden stack members as chips on controller click.
   const stackPreviewControllerIdRef = React.useRef<string | null>(null);
@@ -3162,6 +3171,48 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     };
   }, [lensId]);
 
+  const persistGraphViewTimeoutRef = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    if (!lensId || !graphViewStateLoadedRef.current) return;
+    if (persistGraphViewTimeoutRef.current !== null) {
+      window.clearTimeout(persistGraphViewTimeoutRef.current);
+      persistGraphViewTimeoutRef.current = null;
+    }
+    persistGraphViewTimeoutRef.current = window.setTimeout(async () => {
+      const lens = lensMetaRef.current;
+      if (!lens) return;
+      const nextViewConfig = {
+        ...(lens.viewConfig || {}),
+        graphView: layoutMode,
+        layoutMode,
+        graphViewState,
+      };
+      try {
+        const updated = await api.updateHorizonLens(lensId, {
+          tenantId: lens.tenantId,
+          projectId: lens.projectId,
+          name: lens.name,
+          scope: Array.isArray(lens.scope) ? lens.scope : [],
+          viewConfig: nextViewConfig,
+          alertConfig: lens.alertConfig,
+          status: lens.status,
+          scopeFragments: lens.scopeFragments,
+          resolvedQueries: lens.resolvedQueries,
+          lastResolved: lens.lastResolved,
+        }, { skipScouting: true });
+        lensMetaRef.current = updated;
+      } catch (e) {
+        console.warn('[Cockpit] Failed to persist graph view state', e);
+      }
+    }, 500);
+    return () => {
+      if (persistGraphViewTimeoutRef.current !== null) {
+        window.clearTimeout(persistGraphViewTimeoutRef.current);
+        persistGraphViewTimeoutRef.current = null;
+      }
+    };
+  }, [lensId, layoutMode, graphViewState]);
+
   const toggleScopePin = React.useCallback(
     async (args: { fragmentId?: string; canonicalPath?: string; nextPinned: boolean }) => {
       const cp = String(args?.canonicalPath || '').trim();
@@ -3933,9 +3984,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
   // Helper function for edge styles based on type
   // When useSemanticGroupColors: 4 colors by semantic group. Else: full per-type palette.
-  const getEdgeStyle = (edgeType: string | undefined, criticality: number | undefined) => {
+  const getEdgeStyle = (edgeType: string | undefined, criticality: number | undefined, edgeData?: Record<string, any>) => {
     const type = (edgeType || '').toUpperCase();
     const baseWidth = criticality ? Math.max(1, criticality * 2) : 1.5;
+    const specialized = getGraphViewEdgeStyle(edgeType, criticality, edgeData, useSemanticGroupColors);
+    if (specialized) return specialized;
 
     if (useSemanticGroupColors) {
       // Market overlays: neutral participation/trading, not conflict — override market red
@@ -4095,7 +4148,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       (prev || []).map((e: any) => {
         const ed = e?.data || {};
         const et = ed.edgeType ?? ed.subkind ?? e?.label ?? e?.type;
-        const baseStyle = getEdgeStyle(et, ed.criticality);
+        const baseStyle = getEdgeStyle(et, ed.criticality, ed);
         return { ...e, data: { ...ed, baseStyle } };
       }),
     );
@@ -4470,7 +4523,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               break;
             }
 
-            const baseStyle = getEdgeStyle(et, (e as any)?.criticality);
+            const baseStyle = getEdgeStyle(et, (e as any)?.criticality, (e as any)?.data);
             const stroke = getEdgeStroke(baseStyle);
             layerNewEdges.push({
               id: edgeId,
@@ -4728,6 +4781,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const edgeType = resolvePathEdgeType(e);
         const segmentIndex = typeof e.segmentIndex === 'number' ? e.segmentIndex : undefined;
         const leg = typeof segmentIndex === 'number' ? legByIndex.get(segmentIndex) : undefined;
+        const pathSufficiency: any = artifact.payload?.sufficiency || {};
+        const joinAssessments = Array.isArray(pathSufficiency?.joinAssessments) ? pathSufficiency.joinAssessments : [];
         const pathEdgeMeta = {
           pathArtifactId: artifact.id,
           pathRole: String(e.role || '').trim() || undefined,
@@ -4756,6 +4811,34 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           pathAffectedZoneRefs: leg?.affectedZoneRefs || [],
           pathSpatialSemantics: leg?.spatialSemantics || [],
           pathDominantFactors: leg?.stress?.dominantFactors || pathStress?.dominantFactors || [],
+          pathSufficiencyStatus: String(artifact.sufficiencyStatus || pathSufficiency?.status || '').trim() || undefined,
+          pathSufficiencyScore:
+            typeof artifact.sufficiencyScore === 'number'
+              ? artifact.sufficiencyScore
+              : (typeof pathSufficiency?.score === 'number' ? pathSufficiency.score : undefined),
+          pathGapCount:
+            typeof artifact.gapCount === 'number'
+              ? artifact.gapCount
+              : ((pathSufficiency?.openGaps?.length || 0) + (pathSufficiency?.hardFailures?.length || 0)),
+          pathSufficiencySummary: String(pathSufficiency?.summary || '').trim() || undefined,
+          pathHardFailures: pathSufficiency?.hardFailures || [],
+          pathOpenGaps: pathSufficiency?.openGaps || [],
+          pathWarnings: pathSufficiency?.warnings || [],
+          pathJoinAssessments: joinAssessments,
+          pathValidatedJoinCount:
+            typeof artifact.validatedJoinCount === 'number'
+              ? artifact.validatedJoinCount
+              : joinAssessments.filter((item: any) => String(item?.status || '').trim() === 'validated').length,
+          pathUnresolvedJoinCount:
+            typeof artifact.unresolvedJoinCount === 'number'
+              ? artifact.unresolvedJoinCount
+              : joinAssessments.filter((item: any) => {
+                  const status = String(item?.status || '').trim();
+                  const product = String(item?.productContinuity || '').trim();
+                  const temporal = String(item?.temporalContinuity || '').trim();
+                  const reuse = String(item?.entityReuse || '').trim();
+                  return status !== 'validated' && (product === 'unknown' || temporal === 'unknown' || reuse === 'unresolved');
+                }).length,
           pathBottleneck:
             typeof pathStress?.bottleneckLegIndex === 'number' && typeof segmentIndex === 'number'
               ? pathStress.bottleneckLegIndex === segmentIndex
@@ -5558,7 +5641,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         if (!sCtrl && !tCtrl) continue;
 
         const edgeType = normalizedEdgeTypeOf(e);
-        const baseStyle = (ed as any)?.baseStyle || getEdgeStyle(edgeType, (ed as any)?.criticality);
+        const baseStyle = (ed as any)?.baseStyle || getEdgeStyle(edgeType, (ed as any)?.criticality, ed);
         const stroke = getEdgeStroke(baseStyle);
 
         // Source hidden -> proxy from controller to target
@@ -6578,6 +6661,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       rightDockStateByNodeId,
       expandedStackKeysOverride: expandedStackKeysRef.current,
       hierarchicalLeftPaneMode: levelsExpandMode === 'decision-chain' ? 'decision-chain' : 'default',
+      graphViewState,
       onToggleSubcategoryCollapse: toggleSubcategoryCollapse,
       onToggleRoleOverflow: toggleRoleOverflow,
       onToggleRightDock: toggleRightDock,
@@ -6588,9 +6672,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       recalculateFreeformHandles,
       recalculateLinearHandles,
       recalculateLevelsTwoPaneHandles,
-      recalculateSupplyChainHandles,
     });
   }, [
+    graphViewState,
     collapsedSubcategories,
     expandedRoleGroups,
     rightDockStateByNodeId,
@@ -6601,7 +6685,6 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     recalculateFreeformHandles,
     recalculateLinearHandles,
     recalculateLevelsTwoPaneHandles,
-    recalculateSupplyChainHandles,
   ]);
 
   // Focus/center viewport on a specific fragment node (used after expand/collapse to keep context).
@@ -6834,7 +6917,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           (dstPath ? (canonicalToNodeId.get(norm(dstPath)) || null) : null);
 
         if (sourceId && targetId) {
-          const baseStyle = getEdgeStyle(item.edgeType, item.criticality);
+          const baseStyle = getEdgeStyle(item.edgeType, item.criticality, item as any);
           const stroke = getEdgeStroke(baseStyle);
           // В linear режиме используем кривые edges (ReactFlow built-in "default" bezier), в freeform - default
           const edgeRenderType = 'default';
@@ -6925,6 +7008,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const cockpitData = await api.getHorizonLensCockpit(lensId);
       const viewDirectiveRaw = (cockpitData?.lens?.viewConfig?.viewDirective || null) as HorizonViewDirective | null;
       setViewDirective(viewDirectiveRaw);
+      setGraphViewState(normalizeGraphViewState(cockpitData?.lens?.viewConfig?.graphViewState || {}));
+      graphViewStateLoadedRef.current = true;
       const configuredGraphView = normalizeGraphView(
         cockpitData?.lens?.viewConfig?.graphView ||
         viewDirectiveRaw?.graphView ||
@@ -7063,7 +7148,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           }
           seenEdgeKeys.add(key);
 
-          const baseStyle = getEdgeStyle(edge.type || edge.edgeType, edge.properties?.criticality);
+          const baseStyle = getEdgeStyle(edge.type || edge.edgeType, edge.properties?.criticality, edge.properties as any);
           const stroke = getEdgeStroke(baseStyle);
           // В linear режиме используем кривые edges (ReactFlow built-in "default" bezier), в freeform - default
           const edgeTypeForDisplay = 'default';
@@ -8981,7 +9066,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           handles = { sourceHandle: 'source-bottom', targetHandle: 'target-top' };
         }
 
-        const baseStyle = getEdgeStyle(e?.type || e?.edgeType, e?.properties?.criticality);
+        const baseStyle = getEdgeStyle(e?.type || e?.edgeType, e?.properties?.criticality, e?.properties as any);
         const stroke = getEdgeStroke(baseStyle);
 
         // Corridor flow weight: thicker edges = more path bundles use this edge.
@@ -14207,6 +14292,37 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const fallback = graphViewToolbarPolicy.highlightModes[0]?.key || 'off';
     setHoverHighlightMode(fallback);
   }, [graphViewToolbarPolicy, hoverHighlightMode]);
+
+  React.useEffect(() => {
+    if (!graphViewStateLoadedRef.current || !currentSemanticGraphView) return;
+    const saved = (graphViewState[currentSemanticGraphView] || defaultGraphViewState(currentSemanticGraphView)) as Record<string, any>;
+    if (typeof saved.hoverMode === 'string') setHoverHighlightMode(saved.hoverMode as GraphViewHoverMode);
+    if (typeof saved.focusMode === 'boolean') setFocusMode(saved.focusMode);
+    if (typeof saved.showSecondaryEdges === 'boolean') setShowSecondaryEdges(saved.showSecondaryEdges);
+    if (saved.edgeViewFilter === 'all' || (Array.isArray(saved.edgeViewFilter) && saved.edgeViewFilter.length > 0)) {
+      setEdgeViewFilter(saved.edgeViewFilter as any);
+    } else if (!graphViewFilterPolicy.semanticGroupFilter) {
+      setEdgeViewFilter('all');
+    }
+  }, [currentSemanticGraphView, graphViewState, graphViewFilterPolicy.semanticGroupFilter]);
+
+  React.useEffect(() => {
+    if (!graphViewStateLoadedRef.current || !currentSemanticGraphView) return;
+    setGraphViewState((prev) => {
+      const base = normalizeGraphViewState(prev);
+      const current = {
+        ...(base[currentSemanticGraphView] || defaultGraphViewState(currentSemanticGraphView)),
+        hoverMode: hoverHighlightMode,
+        focusMode,
+        showSecondaryEdges,
+        edgeViewFilter,
+      };
+      return {
+        ...base,
+        [currentSemanticGraphView]: current,
+      };
+    });
+  }, [currentSemanticGraphView, hoverHighlightMode, focusMode, showSecondaryEdges, edgeViewFilter]);
 
   const graphEmpty = nodes.length === 0;
 

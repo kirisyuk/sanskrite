@@ -1,7 +1,9 @@
 import type { Edge, Node } from 'reactflow';
+import { recalculateInfluenceHandles, recalculateSupplyFlowHandles, recalculateValueChainHandles } from './handles';
 import { layoutInfluenceNetwork, layoutSupplyFlow, layoutValueChain } from './layouts';
 import {
   defaultGraphViewFilterPolicy,
+  defaultGraphViewState,
   graphViewToSemantic,
   isHierarchicalGraphView,
   isInfluenceNetworkGraphView,
@@ -12,6 +14,8 @@ import {
   type GraphViewHoverMode,
   type GraphViewId,
   type HierarchicalViewMeta,
+  type PersistedGraphViewState,
+  type SemanticGraphView,
 } from './types';
 import type { HorizonViewDirective } from '../../types/horizonView';
 import type { SemanticGroup } from '../elkLayout';
@@ -30,6 +34,7 @@ export interface GraphViewRuntimeContext<T = any> {
   rightDockStateByNodeId: Record<string, RightDockKey[]>;
   expandedStackKeysOverride?: Set<string>;
   hierarchicalLeftPaneMode?: 'default' | 'decision-chain';
+  graphViewState: PersistedGraphViewState;
   onToggleSubcategoryCollapse: (groupId: string, edgeType: string, nextCollapsed: boolean) => void;
   onToggleRoleOverflow: (groupKey: string, nextExpanded: boolean) => void;
   onToggleRightDock: (nodeId: string, key: RightDockKey, nextEnabled: boolean) => void;
@@ -40,7 +45,16 @@ export interface GraphViewRuntimeContext<T = any> {
   recalculateFreeformHandles: (edges: Edge[], nodes: Node<T>[]) => Edge[];
   recalculateLinearHandles: (edges: Edge[], nodes: Node<T>[]) => Edge[];
   recalculateLevelsTwoPaneHandles: (edges: Edge[], nodes: Node<T>[]) => Edge[];
-  recalculateSupplyChainHandles: (edges: Edge[], nodes: Node<T>[]) => Edge[];
+}
+
+export interface GraphViewHoverPolicy {
+  allowSignalPropagation: boolean;
+  allowedModes: GraphViewHoverMode[];
+}
+
+export interface GraphViewSelectionPolicy {
+  allowFocusMode: boolean;
+  allowSecondaryEdges: boolean;
 }
 
 export interface GraphViewController<T = any> {
@@ -48,6 +62,8 @@ export interface GraphViewController<T = any> {
   filterPolicy: GraphViewFilterPolicy;
   overlayPolicy: GraphViewOverlayPolicy;
   toolbarPolicy: GraphViewToolbarPolicy;
+  hoverPolicy: GraphViewHoverPolicy;
+  selectionPolicy: GraphViewSelectionPolicy;
   arrange(nodes: Node<T>[], edges: Edge[], context: GraphViewRuntimeContext<T>): Promise<GraphViewArrangeResult<T>>;
   getExpansionPolicy?(context: GraphViewExpansionContext): GraphViewExpansionPolicy;
   filterVisibleEdges?(edges: Edge[], context: GraphViewVisibleEdgeContext): Edge[];
@@ -127,9 +143,7 @@ const restoreExpandedNodes = <T,>(nodes: Node<T>[], expandedNodeIds: Set<string>
     if (isGroupNode(node) && !keepGroups) return node;
     if (isGroupNode(node)) return node;
     const fid = String((node.data as any)?.fragmentId || node.id || '').trim();
-    if (!fid || !expandedNodeIds.has(fid) || Boolean((node.data as any)?.expanded)) {
-      return node;
-    }
+    if (!fid || !expandedNodeIds.has(fid) || Boolean((node.data as any)?.expanded)) return node;
     return {
       ...node,
       data: {
@@ -170,20 +184,37 @@ const flattenNodesForLayout = <T,>(nodes: Node<T>[]): Node<T>[] => {
   }));
 };
 
+function fullHighlightModes(): Array<{ key: GraphViewHoverMode; label: string; hint: string }> {
+  return [
+    { key: 'off', label: 'Off', hint: 'No emphasis' },
+    { key: 'control', label: 'Control', hint: 'Equity ownership + control chains (dashed) + governance overlay' },
+    { key: 'expansion', label: 'Expansion', hint: 'Control chains + partners (1-hop)' },
+    { key: 'production', label: 'Produces', hint: 'Direct producers/outputs' },
+    { key: 'supplies', label: 'Supplies', hint: 'Direct suppliers/inputs' },
+    { key: 'competition', label: 'Competes', hint: 'Direct competition/conflict' },
+    { key: 'decision-chain', label: 'Decision Chain', hint: 'Directed corridor around hovered node (authority -> execution -> impact)' },
+    { key: 'signal-propagation', label: 'Signal propagation', hint: 'Backend propagation trace from selected node (12-axis rules).' },
+  ];
+}
+
+function semanticStateFor(view: GraphViewId, graphViewState: PersistedGraphViewState): Record<string, any> {
+  const semantic = graphViewToSemantic(view);
+  if (!semantic || semantic === 'hierarchical') return {};
+  return graphViewState[semantic] || defaultGraphViewState(semantic);
+}
+
 const freeformController: GraphViewController<any> = {
   id: 'freeform',
   filterPolicy: defaultGraphViewFilterPolicy('freeform'),
-  overlayPolicy: {
-    showSupplyChainOverlay: false,
-    allowLocalRelationFilters: false,
-    showExpansionModeMenu: false,
-  },
+  overlayPolicy: { showSupplyChainOverlay: false, allowLocalRelationFilters: false, showExpansionModeMenu: false },
   toolbarPolicy: {
     showFocusMode: true,
     showSecondaryEdgeToggle: true,
     relationFilterOptions: ['supply-chain', 'customers', 'market', 'context'],
     highlightModes: fullHighlightModes(),
   },
+  hoverPolicy: { allowSignalPropagation: true, allowedModes: fullHighlightModes().map((mode) => mode.key) },
+  selectionPolicy: { allowFocusMode: true, allowSecondaryEdges: true },
   async arrange(nodes, edges, context) {
     const arranged = await context.layoutFullGraph(restoreExpandedNodes(nodes, context.expandedNodeIds), edges, {
       direction: 'DOWN',
@@ -207,17 +238,15 @@ const freeformController: GraphViewController<any> = {
 const linearController: GraphViewController<any> = {
   id: 'linear',
   filterPolicy: defaultGraphViewFilterPolicy('linear'),
-  overlayPolicy: {
-    showSupplyChainOverlay: false,
-    allowLocalRelationFilters: false,
-    showExpansionModeMenu: false,
-  },
+  overlayPolicy: { showSupplyChainOverlay: false, allowLocalRelationFilters: false, showExpansionModeMenu: false },
   toolbarPolicy: {
     showFocusMode: true,
     showSecondaryEdgeToggle: true,
     relationFilterOptions: ['supply-chain', 'customers', 'market', 'context'],
     highlightModes: fullHighlightModes(),
   },
+  hoverPolicy: { allowSignalPropagation: true, allowedModes: fullHighlightModes().map((mode) => mode.key) },
+  selectionPolicy: { allowFocusMode: true, allowSecondaryEdges: true },
   async arrange(nodes, edges, context) {
     const arranged = await context.layoutLinearFullGraph(restoreExpandedNodes(nodes, context.expandedNodeIds), edges, {
       direction: 'DOWN',
@@ -237,21 +266,19 @@ const linearController: GraphViewController<any> = {
 const hierarchicalController: GraphViewController<any> = {
   id: 'hierarchical',
   filterPolicy: defaultGraphViewFilterPolicy('hierarchical'),
-  overlayPolicy: {
-    showSupplyChainOverlay: false,
-    allowLocalRelationFilters: true,
-    showExpansionModeMenu: true,
-  },
+  overlayPolicy: { showSupplyChainOverlay: false, allowLocalRelationFilters: true, showExpansionModeMenu: true },
   toolbarPolicy: {
     showFocusMode: true,
     showSecondaryEdgeToggle: true,
     relationFilterOptions: ['supply-chain', 'customers', 'market', 'context'],
     highlightModes: fullHighlightModes(),
   },
+  hoverPolicy: { allowSignalPropagation: true, allowedModes: fullHighlightModes().map((mode) => mode.key) },
+  selectionPolicy: { allowFocusMode: true, allowSecondaryEdges: true },
   async arrange(nodes, edges, context) {
-    const nodesNoRightStacks = (nodes as any[]).filter((n) => {
-      const id = String((n as any)?.id || '').trim();
-      const d: any = (n as any)?.data;
+    const nodesNoRightStacks = (nodes as any[]).filter((node) => {
+      const id = String((node as any)?.id || '').trim();
+      const d: any = (node as any)?.data;
       if (id.startsWith('stack:group:')) return false;
       if (Boolean(d?.isStackGroup)) return false;
       return true;
@@ -308,11 +335,7 @@ const hierarchicalController: GraphViewController<any> = {
 const supplyFlowController: GraphViewController<any> = {
   id: 'supply-flow',
   filterPolicy: defaultGraphViewFilterPolicy('supply-flow'),
-  overlayPolicy: {
-    showSupplyChainOverlay: true,
-    allowLocalRelationFilters: true,
-    showExpansionModeMenu: false,
-  },
+  overlayPolicy: { showSupplyChainOverlay: true, allowLocalRelationFilters: true, showExpansionModeMenu: false },
   toolbarPolicy: {
     showFocusMode: true,
     showSecondaryEdgeToggle: true,
@@ -325,15 +348,18 @@ const supplyFlowController: GraphViewController<any> = {
       { key: 'signal-propagation', label: 'Signal propagation', hint: 'Backend propagation trace from selected node (12-axis rules).' },
     ],
   },
+  hoverPolicy: { allowSignalPropagation: true, allowedModes: ['off', 'production', 'supplies', 'competition', 'signal-propagation'] },
+  selectionPolicy: { allowFocusMode: true, allowSecondaryEdges: true },
   async arrange(nodes, edges, context) {
     const baseNodes = flattenNodesForLayout(restoreExpandedNodes(stripDerivedNodes(nodes), context.expandedNodeIds));
     const laidOut = await layoutSupplyFlow(baseNodes, edges, {
       nodeWidth: context.nodeWidth,
       nodeHeight: context.nodeHeight,
+      viewState: semanticStateFor('supply-flow', context.graphViewState) as any,
     });
     return {
       nodes: addGraphViewMeta(laidOut.nodes, 'supply-flow'),
-      edges: context.recalculateSupplyChainHandles(laidOut.edges, laidOut.nodes),
+      edges: recalculateSupplyFlowHandles(laidOut.edges as any, laidOut.nodes as any),
     };
   },
   getExpansionPolicy(context) {
@@ -358,11 +384,7 @@ const supplyFlowController: GraphViewController<any> = {
 const influenceNetworkController: GraphViewController<any> = {
   id: 'influence-network',
   filterPolicy: defaultGraphViewFilterPolicy('influence-network'),
-  overlayPolicy: {
-    showSupplyChainOverlay: false,
-    allowLocalRelationFilters: true,
-    showExpansionModeMenu: false,
-  },
+  overlayPolicy: { showSupplyChainOverlay: false, allowLocalRelationFilters: true, showExpansionModeMenu: false },
   toolbarPolicy: {
     showFocusMode: true,
     showSecondaryEdgeToggle: true,
@@ -375,15 +397,18 @@ const influenceNetworkController: GraphViewController<any> = {
       { key: 'signal-propagation', label: 'Signal propagation', hint: 'Backend propagation trace from selected node (12-axis rules).' },
     ],
   },
+  hoverPolicy: { allowSignalPropagation: true, allowedModes: ['off', 'control', 'expansion', 'competition', 'signal-propagation'] },
+  selectionPolicy: { allowFocusMode: true, allowSecondaryEdges: true },
   async arrange(nodes, edges, context) {
     const baseNodes = flattenNodesForLayout(restoreExpandedNodes(stripDerivedNodes(nodes), context.expandedNodeIds));
     const laidOut = await layoutInfluenceNetwork(baseNodes, edges, {
       nodeWidth: context.nodeWidth,
       nodeHeight: context.nodeHeight,
+      viewState: semanticStateFor('influence-network', context.graphViewState) as any,
     });
     return {
       nodes: addGraphViewMeta(laidOut.nodes, 'influence-network'),
-      edges: context.recalculateSupplyChainHandles(laidOut.edges, laidOut.nodes),
+      edges: recalculateInfluenceHandles(laidOut.edges as any, laidOut.nodes as any),
     };
   },
   getExpansionPolicy() {
@@ -424,11 +449,7 @@ const influenceNetworkController: GraphViewController<any> = {
 const valueChainController: GraphViewController<any> = {
   id: 'value-chain',
   filterPolicy: defaultGraphViewFilterPolicy('value-chain'),
-  overlayPolicy: {
-    showSupplyChainOverlay: false,
-    allowLocalRelationFilters: true,
-    showExpansionModeMenu: false,
-  },
+  overlayPolicy: { showSupplyChainOverlay: false, allowLocalRelationFilters: true, showExpansionModeMenu: false },
   toolbarPolicy: {
     showFocusMode: true,
     showSecondaryEdgeToggle: true,
@@ -441,15 +462,18 @@ const valueChainController: GraphViewController<any> = {
       { key: 'signal-propagation', label: 'Signal propagation', hint: 'Backend propagation trace from selected node (12-axis rules).' },
     ],
   },
+  hoverPolicy: { allowSignalPropagation: true, allowedModes: ['off', 'production', 'supplies', 'competition', 'signal-propagation'] },
+  selectionPolicy: { allowFocusMode: true, allowSecondaryEdges: true },
   async arrange(nodes, edges, context) {
     const baseNodes = flattenNodesForLayout(restoreExpandedNodes(stripDerivedNodes(nodes), context.expandedNodeIds));
     const laidOut = await layoutValueChain(baseNodes, edges, {
       nodeWidth: context.nodeWidth,
       nodeHeight: context.nodeHeight,
+      viewState: semanticStateFor('value-chain', context.graphViewState) as any,
     });
     return {
       nodes: addGraphViewMeta(laidOut.nodes, 'value-chain'),
-      edges: context.recalculateSupplyChainHandles(laidOut.edges, laidOut.nodes),
+      edges: recalculateValueChainHandles(laidOut.edges as any, laidOut.nodes as any),
     };
   },
   getExpansionPolicy() {
@@ -543,9 +567,7 @@ function filterControlEdgeDuplicates(edges: Edge[], context: GraphViewVisibleEdg
       bestByPair.set(key, { id: String(edge.id || ''), rank });
     }
   }
-
   if (bestByPair.size === 0) return edges;
-
   return edges.filter((edge) => {
     const source = String((edge as any)?.source || '').trim();
     const target = String((edge as any)?.target || '').trim();
@@ -570,7 +592,7 @@ export async function arrangeGraphView<T = any>(
     const flattenedNodes = arranged.nodes.map((node) => {
       const pid = String((node as any)?.parentId ?? (node as any)?.parentNode ?? '').trim();
       if (!pid) return node;
-      if (pid.startsWith('levels:') || pid.startsWith('group:')) {
+      if (pid.startsWith('levels:') || pid.startsWith('group:') || pid.startsWith('stack:')) {
         return {
           ...node,
           parentId: undefined,
@@ -586,10 +608,7 @@ export async function arrangeGraphView<T = any>(
       }
       return node;
     });
-    return {
-      nodes: flattenedNodes,
-      edges: arranged.edges,
-    };
+    return { nodes: flattenedNodes, edges: arranged.edges };
   }
   return arranged;
 }
@@ -610,11 +629,17 @@ export function getGraphViewToolbarPolicy(view: GraphViewId): GraphViewToolbarPo
   return getGraphViewController(view).toolbarPolicy;
 }
 
+export function getGraphViewHoverPolicy(view: GraphViewId): GraphViewHoverPolicy {
+  return getGraphViewController(view).hoverPolicy;
+}
+
+export function getGraphViewSelectionPolicy(view: GraphViewId): GraphViewSelectionPolicy {
+  return getGraphViewController(view).selectionPolicy;
+}
+
 export function getGraphViewExpansionPolicy(view: GraphViewId, context: GraphViewExpansionContext = {}): GraphViewExpansionPolicy {
   const controller = getGraphViewController(view);
-  if (controller.getExpansionPolicy) {
-    return controller.getExpansionPolicy(context);
-  }
+  if (controller.getExpansionPolicy) return controller.getExpansionPolicy(context);
   return {
     edgeTypes: [],
     usesFilteredExpansion: false,
@@ -637,10 +662,10 @@ export function filterEdgesForGraphView(
   let filtered = controller.filterVisibleEdges ? controller.filterVisibleEdges(edges, context) : edges;
 
   const filterRelTypes = Array.isArray(context.viewDirective?.filterRelTypes)
-    ? new Set(context.viewDirective.filterRelTypes.map((t) => String(t || '').toUpperCase().trim()).filter(Boolean))
+    ? new Set(context.viewDirective.filterRelTypes.map((value) => String(value || '').toUpperCase().trim()).filter(Boolean))
     : null;
   const excludeRelTypes = Array.isArray(context.viewDirective?.excludeRelTypes)
-    ? new Set(context.viewDirective.excludeRelTypes.map((t) => String(t || '').toUpperCase().trim()).filter(Boolean))
+    ? new Set(context.viewDirective.excludeRelTypes.map((value) => String(value || '').toUpperCase().trim()).filter(Boolean))
     : null;
 
   if (filterRelTypes && filterRelTypes.size > 0) {
@@ -667,15 +692,9 @@ export function filterEdgesForGraphView(
   return filtered;
 }
 
-function fullHighlightModes(): Array<{ key: GraphViewHoverMode; label: string; hint: string }> {
-  return [
-    { key: 'off', label: 'Off', hint: 'No emphasis' },
-    { key: 'control', label: 'Control', hint: 'Equity ownership + control chains (dashed) + governance overlay' },
-    { key: 'expansion', label: 'Expansion', hint: 'Control chains + partners (1-hop)' },
-    { key: 'production', label: 'Produces', hint: 'Direct producers/outputs' },
-    { key: 'supplies', label: 'Supplies', hint: 'Direct suppliers/inputs' },
-    { key: 'competition', label: 'Competes', hint: 'Direct competition/conflict' },
-    { key: 'decision-chain', label: 'Decision Chain', hint: 'Directed corridor around hovered node (authority -> execution -> impact)' },
-    { key: 'signal-propagation', label: 'Signal propagation', hint: 'Backend propagation trace from selected node (12-axis rules).' },
-  ];
+export function viewStateFor<T extends Record<string, any> = Record<string, any>>(
+  view: SemanticGraphView,
+  graphViewState: PersistedGraphViewState,
+): T {
+  return (graphViewState[view] || defaultGraphViewState(view)) as T;
 }

@@ -16,7 +16,9 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonrisk "github.com/igorkirisyuk/sanskrite/internal/horizon/risk"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/scopeagent"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
+	horizonwatch "github.com/igorkirisyuk/sanskrite/internal/horizon/watch"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/watchdog"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
@@ -34,6 +36,8 @@ type HorizonService struct {
 	lensService       *lens.LensService
 	appetiteResolver  *horizonrisk.AppetiteResolver
 	concentration     *horizonrisk.ConcentrationAnalyzer
+	scopeAgentService *scopeagent.Service
+	watchService      *horizonwatch.Service
 
 	// Репозитории horizon
 	fragmentsRepo        *repo.HorizonFragmentsRepository
@@ -145,6 +149,14 @@ func (s *HorizonService) SetLensService(lensService *lens.LensService) {
 	s.lensService = lensService
 }
 
+func (s *HorizonService) SetScopeAgentService(scopeAgentService *scopeagent.Service) {
+	s.scopeAgentService = scopeAgentService
+}
+
+func (s *HorizonService) SetWatchService(watchService *horizonwatch.Service) {
+	s.watchService = watchService
+}
+
 // Scout возвращает Scout Engine
 func (s *HorizonService) Scout() *scout.ScoutEngine {
 	return s.scoutEngine
@@ -163,6 +175,14 @@ func (s *HorizonService) Watchdog() *watchdog.WatchdogService {
 // Lens возвращает Lens Service
 func (s *HorizonService) Lens() *lens.LensService {
 	return s.lensService
+}
+
+func (s *HorizonService) ScopeAgents() *scopeagent.Service {
+	return s.scopeAgentService
+}
+
+func (s *HorizonService) Watch() *horizonwatch.Service {
+	return s.watchService
 }
 
 // Fragments возвращает HorizonFragmentsRepository

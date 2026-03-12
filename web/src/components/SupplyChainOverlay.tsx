@@ -31,6 +31,12 @@ export interface MaterializedArtifact {
   bindingScore?: number;
   pathStressScore?: number;
   bottleneckLegIndex?: number;
+  sufficiencyStatus?: 'validated' | 'heuristic' | 'forensic_gap' | string;
+  sufficiencyScore?: number;
+  gapCount?: number;
+  unresolvedJoinCount?: number;
+  validatedJoinCount?: number;
+  isConfirmedPath?: boolean;
   traceEndpoints?: {
     supplier?: {
       canonicalPath?: string;
@@ -95,6 +101,35 @@ export interface MaterializedArtifact {
       recoveryLatencyHours?: number;
       bottleneckLegIndex?: number;
       dominantFactors?: string[];
+    };
+    sufficiency?: {
+      status?: 'validated' | 'heuristic' | 'forensic_gap' | string;
+      score?: number;
+      summary?: string;
+      hardFailures?: string[];
+      warnings?: string[];
+      openGaps?: string[];
+      joinAssessments?: Array<{
+        index: number;
+        leftLegIndex: number;
+        rightLegIndex: number;
+        actorContinuity?: string;
+        productContinuity?: string;
+        temporalContinuity?: string;
+        entityReuse?: string;
+        status?: string;
+        reasons?: string[];
+      }>;
+      legAssessments?: Array<{
+        legIndex: number;
+        routeSensitive?: boolean;
+        explicitTransportEvidence?: boolean;
+        bindingConfidence?: number;
+        timeKnown?: boolean;
+        routeStatus?: string;
+        status?: string;
+        reasons?: string[];
+      }>;
     };
     edges?: Array<{
       type: string;
@@ -197,6 +232,26 @@ export function SupplyChainOverlay({
       }
       const avgBindingConfidence =
         bindingConfidenceCount > 0 ? bindingConfidenceTotal / bindingConfidenceCount : 0;
+      const sufficiency = c.payload?.sufficiency;
+      const joinAssessments = Array.isArray(sufficiency?.joinAssessments) ? sufficiency!.joinAssessments! : [];
+      const sufficiencyStatus = String(c.sufficiencyStatus || sufficiency?.status || '').trim();
+      const gapCount = Number(c.gapCount ?? ((sufficiency?.openGaps?.length || 0) + (sufficiency?.hardFailures?.length || 0)) ?? 0);
+      const validatedJoinCount = Number(
+        c.validatedJoinCount ??
+          joinAssessments.filter((item) => String(item?.status || '').trim() === 'validated').length ??
+          0
+      );
+      const unresolvedJoinCount = Number(
+        c.unresolvedJoinCount ??
+          joinAssessments.filter((item) => {
+            const status = String(item?.status || '').trim();
+            const product = String(item?.productContinuity || '').trim();
+            const temporal = String(item?.temporalContinuity || '').trim();
+            const reuse = String(item?.entityReuse || '').trim();
+            return status !== 'validated' && (product === 'unknown' || temporal === 'unknown' || reuse === 'unresolved');
+          }).length ??
+          0
+      );
       return {
         artifact: c,
         onGraph,
@@ -209,6 +264,14 @@ export function SupplyChainOverlay({
         affectedZoneCount: Array.from(affectedZoneRefs).filter(Boolean).length,
         spatialSemantics: Array.from(semantics).filter(Boolean),
         overlapScore: typeof c.overlapScore === 'number' ? c.overlapScore : 0,
+        sufficiencyStatus,
+        sufficiencyScore:
+          typeof c.sufficiencyScore === 'number' ? c.sufficiencyScore : (typeof sufficiency?.score === 'number' ? sufficiency.score : 0),
+        sufficiencySummary: String(sufficiency?.summary || '').trim(),
+        gapCount,
+        validatedJoinCount,
+        unresolvedJoinCount,
+        joinCount: joinAssessments.length,
       };
     });
   }, [chains, canonicalPathsOnGraph]);
@@ -290,7 +353,7 @@ export function SupplyChainOverlay({
       )}
       {!loading && !error && chainStatus.length > 0 && (
         <div style={{ padding: '8px 0' }}>
-          {chainStatus.map(({ artifact, onGraph, legCount, pathStressScore, bindingConfidence, flowCount, zoneCount, affectedZoneCount, spatialSemantics, overlapScore }) => (
+          {chainStatus.map(({ artifact, onGraph, legCount, pathStressScore, bindingConfidence, flowCount, zoneCount, affectedZoneCount, spatialSemantics, overlapScore, sufficiencyStatus, sufficiencyScore, sufficiencySummary, gapCount, validatedJoinCount, unresolvedJoinCount, joinCount }) => (
             <button
               key={artifact.id}
               type="button"
@@ -319,6 +382,38 @@ export function SupplyChainOverlay({
                 <span style={{ fontWeight: 600 }}>
                   {artifact.displayName || artifact.id || 'Unnamed chain'}
                 </span>
+                {sufficiencyStatus && (
+                  <span
+                    style={{
+                      fontSize: 10,
+                      padding: '2px 6px',
+                      borderRadius: 999,
+                      border:
+                        sufficiencyStatus === 'validated'
+                          ? '1px solid rgba(34,197,94,0.25)'
+                          : sufficiencyStatus === 'forensic_gap'
+                            ? '1px solid rgba(239,68,68,0.28)'
+                            : '1px solid rgba(245,158,11,0.26)',
+                      background:
+                        sufficiencyStatus === 'validated'
+                          ? 'rgba(34,197,94,0.12)'
+                          : sufficiencyStatus === 'forensic_gap'
+                            ? 'rgba(239,68,68,0.12)'
+                            : 'rgba(245,158,11,0.12)',
+                      color:
+                        sufficiencyStatus === 'validated'
+                          ? 'var(--text-success)'
+                          : sufficiencyStatus === 'forensic_gap'
+                            ? 'var(--text-error)'
+                            : 'var(--text-warning)',
+                      fontWeight: 700,
+                      letterSpacing: '0.02em',
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    {sufficiencyStatus === 'forensic_gap' ? 'Gap' : sufficiencyStatus}
+                  </span>
+                )}
                 <span
                   style={{
                     fontSize: 10,
@@ -338,6 +433,11 @@ export function SupplyChainOverlay({
               {artifact.discoveryReason && (
                 <span style={{ color: 'var(--text-secondary-strong)', fontSize: 11 }}>
                   {artifact.discoveryReason}
+                </span>
+              )}
+              {sufficiencySummary && (
+                <span style={{ color: 'var(--text-secondary-strong)', fontSize: 11 }}>
+                  {sufficiencySummary}
                 </span>
               )}
               {artifact.traceReason && artifact.traceReason !== artifact.discoveryReason && (
@@ -371,6 +471,11 @@ export function SupplyChainOverlay({
                     bind {Math.round(bindingConfidence * 100)}%
                   </span>
                 )}
+                {sufficiencyScore > 0 && (
+                  <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                    suff {Math.round(sufficiencyScore * 100)}%
+                  </span>
+                )}
                 {pathStressScore > 0 && (
                   <span style={{ fontSize: 11, color: pathStressScore >= 0.55 ? 'var(--text-warning)' : 'var(--text-secondary-strong)' }}>
                     stress {pathStressScore.toFixed(2)}
@@ -397,6 +502,25 @@ export function SupplyChainOverlay({
                   {affectedZoneCount > 0 && (
                     <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
                       {affectedZoneCount} affected
+                    </span>
+                  )}
+                </div>
+              )}
+              {(joinCount > 0 || gapCount > 0 || unresolvedJoinCount > 0) && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {joinCount > 0 && (
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                      joins {validatedJoinCount}/{joinCount}
+                    </span>
+                  )}
+                  {gapCount > 0 && (
+                    <span style={{ fontSize: 11, color: 'var(--text-warning)' }}>
+                      gaps {gapCount}
+                    </span>
+                  )}
+                  {unresolvedJoinCount > 0 && (
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                      unresolved {unresolvedJoinCount}
                     </span>
                   )}
                 </div>

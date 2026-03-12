@@ -122,6 +122,27 @@ function buildSearchText(obj: GeoObject): string {
     .join(' ');
 }
 
+function slugifyDownloadPart(value: string, fallback: string): string {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return normalized || fallback;
+}
+
+function downloadJsonFile(filename: string, payload: unknown): void {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => window.URL.revokeObjectURL(url), 0);
+}
+
 function scoreSearchObject(obj: GeoObject, query: string): SearchSuggestion | null {
   const title = getSearchObjectTitle(obj);
   const subtitle = getSearchObjectSubtitle(obj);
@@ -159,6 +180,44 @@ function scoreSearchObject(obj: GeoObject, query: string): SearchSuggestion | nu
   }
 
   return { object: obj, title, subtitle, score };
+}
+
+function artifactLegField<T = unknown>(leg: any, ...keys: string[]): T | undefined {
+  for (const key of keys) {
+    if (leg && leg[key] != null) return leg[key] as T;
+  }
+  return undefined;
+}
+
+function artifactLegString(leg: any, ...keys: string[]): string {
+  return String(artifactLegField(leg, ...keys) || '').trim();
+}
+
+function artifactLegStringList(leg: any, ...keys: string[]): string[] {
+  const value = artifactLegField<unknown>(leg, ...keys);
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item || '').trim()).filter(Boolean);
+}
+
+function collectArtifactPathRefs(artifacts: MaterializedArtifact[]): string[] {
+  const seen = new Set<string>();
+  const refs: string[] = [];
+  for (const artifact of artifacts || []) {
+    const legs = Array.isArray(artifact?.payload?.legs) ? artifact.payload.legs : [];
+    for (const leg of legs) {
+      const candidates = [
+        artifactLegString(leg, 'supplierRef', 'SupplierRef'),
+        ...artifactLegStringList(leg, 'transportViaRefs', 'TransportViaRefs'),
+        artifactLegString(leg, 'customerRef', 'CustomerRef'),
+      ];
+      for (const ref of candidates) {
+        if (!ref || seen.has(ref)) continue;
+        seen.add(ref);
+        refs.push(ref);
+      }
+    }
+  }
+  return refs;
 }
 
 export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
@@ -219,6 +278,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [zoneActivityById, setZoneActivityById] = React.useState<Record<string, ZoneActivityItem>>({});
   const [flowActivityById, setFlowActivityById] = React.useState<Record<string, FlowActivityItem>>({});
   const [pathArtifacts, setPathArtifacts] = React.useState<MaterializedArtifact[]>([]);
+  const [pathArtifactsLoaded, setPathArtifactsLoaded] = React.useState(false);
   const stackSelectionRef = React.useRef<MapObjectStackSelection | null>(null);
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
   const scopeDialogBackdropRef = React.useRef<HTMLDivElement | null>(null);
@@ -253,7 +313,17 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     [isDark, searchOpen],
   );
 
-  const { allObjects, filteredObjects, typeCounts, loading, error } = useGeoObjects(scope, filters);
+  const lensPathRefs = React.useMemo(() => collectArtifactPathRefs(pathArtifacts), [pathArtifacts]);
+  const preferredGeoObjectPaths = React.useMemo(() => {
+    if (!scope?.lensId) return undefined;
+    return pathArtifactsLoaded ? lensPathRefs : null;
+  }, [lensPathRefs, pathArtifactsLoaded, scope?.lensId]);
+  const { allObjects, filteredObjects, typeCounts, loading, error } = useGeoObjects(
+    scope,
+    filters,
+    preferredGeoObjectPaths,
+    Boolean(scope?.lensId),
+  );
 
   const {
     edgesLoading,
@@ -262,6 +332,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     discoveredObjects,
     traceSummary,
     relatedPathArtifacts,
+    selectionExportData,
     mutedObjectIds,
     highlightedGatewayObjectIds,
     activeNarrativeKey,
@@ -280,6 +351,14 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     () => (discoveredObjects.length > 0 ? [...filteredObjects, ...discoveredObjects] : filteredObjects),
     [filteredObjects, discoveredObjects],
   );
+  const pathOverlayObjects = React.useMemo(() => {
+    const byId = new Map<string, GeoObject>();
+    for (const object of [...allObjects, ...discoveredObjects]) {
+      if (!object?.id || byId.has(object.id)) continue;
+      byId.set(object.id, object);
+    }
+    return Array.from(byId.values());
+  }, [allObjects, discoveredObjects]);
   const visibleMapObjects = React.useMemo(() => {
     const nowTs = Date.now();
     return mapObjects.filter((obj) =>
@@ -359,11 +438,103 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     if (!activeFlowModes) return allTransportFlows;
     return allTransportFlows.filter((f) => activeFlowModes.has(f.properties.flowMode));
   }, [flowsEnabled, activeFlowModes, allTransportFlows]);
+  const exportBaseName = React.useMemo(
+    () => slugifyDownloadPart(selectedObject ? getSearchObjectTitle(selectedObject) : 'world-map', 'world-map'),
+    [selectedObject],
+  );
+
+  const handleExportJson = React.useCallback(() => {
+    if (!selectedObject || !selectionExportData) return;
+    const exportedAt = new Date().toISOString();
+    const stamp = exportedAt.replace(/[:.]/g, '-');
+    const selectedSelectionPayload = {
+      kind: 'world-map-selection',
+      scope: scope || null,
+      theme,
+      ...selectionExportData,
+    };
+    const loadedGraphPayload = {
+      kind: 'world-map-loaded-graph',
+      exportedAt,
+      scope: scope || null,
+      theme,
+      selectedObjectId: selectedObject.id,
+      filters: {
+        dateFrom,
+        dateTo,
+        activeTypes: activeTypes ? Array.from(activeTypes) : null,
+        affectedZoneFreshnessDays,
+        showArchivedAffectedZones,
+        zonesEnabled,
+        activeZoneTypes: activeZoneTypes ? Array.from(activeZoneTypes) : null,
+        flowsEnabled,
+        activeFlowModes: activeFlowModes ? Array.from(activeFlowModes) : null,
+        pathLegsEnabled,
+        vesselsEnabled,
+        hops,
+      },
+      objects: {
+        all: allObjects,
+        filteredIds: filteredObjects.map((obj) => obj.id),
+        visibleIds: visibleMapObjects.map((obj) => obj.id),
+        discoveredIds: discoveredObjects.map((obj) => obj.id),
+      },
+      pathArtifacts: {
+        lens: pathArtifacts,
+        related: relatedPathArtifacts,
+        manual: manualPathArtifacts,
+        activeOverlay: activePathArtifacts,
+      },
+      selectionGraph: selectionExportData,
+      overlays: {
+        mutedObjectIds,
+        highlightedGatewayObjectIds,
+      },
+    };
+
+    downloadJsonFile(`${stamp}-${exportBaseName}-selection.json`, selectedSelectionPayload);
+    window.requestAnimationFrame(() => {
+      downloadJsonFile(`${stamp}-${exportBaseName}-loaded-graph.json`, loadedGraphPayload);
+    });
+  }, [
+    activeFlowModes,
+    activePathArtifacts,
+    activeTypes,
+    activeZoneTypes,
+    affectedZoneFreshnessDays,
+    allObjects,
+    dateFrom,
+    dateTo,
+    discoveredObjects,
+    exportBaseName,
+    filteredObjects,
+    flowsEnabled,
+    highlightedGatewayObjectIds,
+    hops,
+    manualPathArtifacts,
+    mutedObjectIds,
+    pathArtifacts,
+    pathLegsEnabled,
+    relatedPathArtifacts,
+    scope,
+    selectedObject,
+    selectionExportData,
+    showArchivedAffectedZones,
+    theme,
+    traceSummary,
+    vesselsEnabled,
+    visibleMapObjects,
+    zonesEnabled,
+  ]);
 
   React.useEffect(() => {
     setPathLegsEnabled(Boolean(scope?.lensId));
-    if (scope?.lensId) return;
+    if (scope?.lensId) {
+      setPathArtifactsLoaded(false);
+      return;
+    }
     setPathArtifacts([]);
+    setPathArtifactsLoaded(true);
   }, [scope?.lensId]);
 
   React.useEffect(() => {
@@ -374,9 +545,13 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
         const payload = await api.getSupplyChainsByLens(scope.lensId);
         if (!cancelled) {
           setPathArtifacts(Array.isArray(payload?.chains) ? (payload.chains as MaterializedArtifact[]) : []);
+          setPathArtifactsLoaded(true);
         }
       } catch {
-        if (!cancelled) setPathArtifacts([]);
+        if (!cancelled) {
+          setPathArtifacts([]);
+          setPathArtifactsLoaded(true);
+        }
       }
     };
     void load();
@@ -906,7 +1081,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     isReady,
     styleEpoch,
     activePathArtifacts,
-    allObjects,
+    pathOverlayObjects,
     theme,
     pathLegsEnabled,
     activeSupplyArtifactIds,
@@ -2124,6 +2299,46 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
             </div>
           </div>
         )}
+
+        <div
+          style={{
+            position: 'absolute',
+            right: 12,
+            top: 12,
+            zIndex: 19,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          <button
+            type="button"
+            onClick={handleExportJson}
+            disabled={!selectedObject || !selectionExportData || edgesLoading}
+            title={!selectedObject ? 'Select an object to export two JSON files' : 'Download selection and loaded-graph JSON files'}
+            style={{
+              borderRadius: 12,
+              border: (!selectedObject || !selectionExportData || edgesLoading)
+                ? '1px solid var(--border-subtle)'
+                : `1px solid ${mapSearchPaletteChrome.activeItemBorder}`,
+              background: (!selectedObject || !selectionExportData || edgesLoading)
+                ? (isDark ? 'rgba(15,23,42,0.74)' : 'rgba(255,255,255,0.86)')
+                : mapSearchPaletteChrome.activeItemBackground,
+              color: (!selectedObject || !selectionExportData || edgesLoading)
+                ? 'var(--text-secondary-strong)'
+                : 'var(--text-heading)',
+              padding: '10px 12px',
+              fontSize: 12,
+              fontWeight: 800,
+              letterSpacing: '0.02em',
+              cursor: (!selectedObject || !selectionExportData || edgesLoading) ? 'not-allowed' : 'pointer',
+              backdropFilter: 'blur(12px)',
+              boxShadow: isDark ? '0 10px 28px rgba(0,0,0,0.32)' : '0 10px 24px rgba(15,23,42,0.12)',
+            }}
+          >
+            {edgesLoading && selectedObject ? 'Preparing JSON...' : 'Save as JSON'}
+          </button>
+        </div>
 
         {selectedObject && !stackSelection && (
           <MapObjectDetail

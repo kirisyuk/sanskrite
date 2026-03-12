@@ -104,6 +104,12 @@ type MaterializedArtifact struct {
 	BindingScore    float64                  `json:"bindingScore,omitempty" firestore:"-"`
 	PathStressScore float64                  `json:"pathStressScore,omitempty" firestore:"-"`
 	BottleneckLeg   int                      `json:"bottleneckLegIndex,omitempty" firestore:"-"`
+	SufficiencyStatus string                 `json:"sufficiencyStatus,omitempty" firestore:"-"`
+	SufficiencyScore  float64                `json:"sufficiencyScore,omitempty" firestore:"-"`
+	GapCount          int                    `json:"gapCount,omitempty" firestore:"-"`
+	UnresolvedJoinCount int                  `json:"unresolvedJoinCount,omitempty" firestore:"-"`
+	ValidatedJoinCount int                   `json:"validatedJoinCount,omitempty" firestore:"-"`
+	IsConfirmedPath   bool                   `json:"isConfirmedPath,omitempty" firestore:"-"`
 	TraceEndpoints  *SupplyChainTraceContext `json:"traceEndpoints,omitempty" firestore:"-"`
 }
 
@@ -254,6 +260,9 @@ type SupplyChainPathPayload struct {
 	// Stress: optional aggregated structural stress profile over the path.
 	Stress *SupplyChainPathStress `json:"stress,omitempty"`
 
+	// Sufficiency: explainable continuity assessment for the materialized chain.
+	Sufficiency *SupplyChainPathSufficiency `json:"sufficiency,omitempty"`
+
 	// Notes: optional metadata about how the path was built.
 	Notes map[string]interface{} `json:"notes,omitempty"`
 }
@@ -362,6 +371,43 @@ type SupplyChainPathStress struct {
 	RecoveryLatencyHrs   float64  `json:"recoveryLatencyHours,omitempty"`
 	BottleneckLegIndex   int      `json:"bottleneckLegIndex,omitempty"`
 	DominantFactors      []string `json:"dominantFactors,omitempty"`
+}
+
+type SupplyChainPathSufficiency struct {
+	Status           string                      `json:"status,omitempty"`
+	Score            float64                     `json:"score,omitempty"`
+	Summary          string                      `json:"summary,omitempty"`
+	HardFailures     []string                    `json:"hardFailures,omitempty"`
+	Warnings         []string                    `json:"warnings,omitempty"`
+	OpenGaps         []string                    `json:"openGaps,omitempty"`
+	JoinAssessments  []SupplyChainJoinAssessment `json:"joinAssessments,omitempty"`
+	LegAssessments   []SupplyChainLegAssessment  `json:"legAssessments,omitempty"`
+}
+
+type SupplyChainJoinAssessment struct {
+	Index              int      `json:"index"`
+	LeftLegIndex       int      `json:"leftLegIndex"`
+	RightLegIndex      int      `json:"rightLegIndex"`
+	ExpectedHandoffRef string   `json:"expectedHandoffRef,omitempty"`
+	LeftCustomerRef    string   `json:"leftCustomerRef,omitempty"`
+	RightSupplierRef   string   `json:"rightSupplierRef,omitempty"`
+	ActorContinuity    string   `json:"actorContinuity,omitempty"`
+	ProductContinuity  string   `json:"productContinuity,omitempty"`
+	TemporalContinuity string   `json:"temporalContinuity,omitempty"`
+	EntityReuse        string   `json:"entityReuse,omitempty"`
+	Status             string   `json:"status,omitempty"`
+	Reasons            []string `json:"reasons,omitempty"`
+}
+
+type SupplyChainLegAssessment struct {
+	LegIndex                 int      `json:"legIndex"`
+	RouteSensitive           bool     `json:"routeSensitive"`
+	ExplicitTransportEvidence bool    `json:"explicitTransportEvidence"`
+	BindingConfidence        float64  `json:"bindingConfidence,omitempty"`
+	TimeKnown                bool     `json:"timeKnown"`
+	RouteStatus              string   `json:"routeStatus,omitempty"`
+	Status                   string   `json:"status,omitempty"`
+	Reasons                  []string `json:"reasons,omitempty"`
 }
 
 // validateSupplyChainPathPayload validates SUPPLY_CHAIN_PATH payload structure.
@@ -480,6 +526,15 @@ func validateSupplyChainPathPayload(payload map[string]interface{}) error {
 					return fmt.Errorf("payload edge[%d] role %q must be %q for %s", i, edge.Role, expectedRole, edgeType)
 				}
 			}
+		}
+	}
+	if sufficiencyRaw, ok := payload["sufficiency"]; ok && sufficiencyRaw != nil {
+		sufficiency, err := decodeSupplyChainPathSufficiency(sufficiencyRaw)
+		if err != nil {
+			return err
+		}
+		if sufficiency != nil && !IsValidSupplyChainSufficiencyStatus(sufficiency.Status) {
+			return fmt.Errorf("payload sufficiency has invalid status %q", sufficiency.Status)
 		}
 	}
 

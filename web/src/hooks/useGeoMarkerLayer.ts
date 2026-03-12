@@ -9,6 +9,7 @@ import {
   getNodeColors,
 } from '../components/HorizonGraphNodeTypes';
 import { MAP_TEXT_FONT_STACK } from './useMapInstance';
+import { humanizeCanonicalPath } from '../lib/uiUtils';
 
 const SRC = 'geo-markers';
 const CLUSTER_GLOW = 'geo-cluster-glow';
@@ -36,6 +37,7 @@ const CLUSTER_GLOW_RADIUS: maplibregl.ExpressionSpecification = ['step', ['get',
 const CLUSTER_CORE_RADIUS: maplibregl.ExpressionSpecification = ['step', ['get', 'point_count'], 2.25, 10, 2.75, 50, 3.25, 200, 4.25];
 const CLUSTER_RING_STROKE_WIDTH: maplibregl.ExpressionSpecification = ['step', ['get', 'point_count'], 1.15, 10, 1.35, 50, 1.65, 200, 1.95];
 const CLUSTER_TEXT_SIZE: maplibregl.ExpressionSpecification = ['step', ['get', 'point_count'], 10, 10, 11, 50, 12, 200, 13];
+export const GEO_MARKER_LAYER_ANCHOR = CLUSTER_GLOW;
 
 // ---------------------------------------------------------------------------
 // Icon key helpers
@@ -172,8 +174,15 @@ function buildFeatureCollection(
   objects: GeoObject[],
   theme: 'dark' | 'light',
   mutedObjectIds?: ReadonlySet<string>,
+  labelledObjectIds?: ReadonlySet<string>,
 ): GeoJSON.FeatureCollection {
-  const features: GeoJSON.Feature[] = objects.map((obj) => buildPointFeature(obj, theme, mutedObjectIds?.has(obj.id)));
+  const features: GeoJSON.Feature[] = objects.map((obj) => {
+    const feature = buildPointFeature(obj, theme, mutedObjectIds?.has(obj.id));
+    if (labelledObjectIds && labelledObjectIds.has(obj.id)) {
+      (feature.properties as any).showLabel = 1;
+    }
+    return feature;
+  });
   return { type: 'FeatureCollection', features };
 }
 
@@ -250,9 +259,10 @@ export function buildPointFeature(
       id: obj.id,
       iconKey: iconKey(vt, color),
       color,
-      opacity: muted ? 0.11 : obj.inScope === false ? 0.5 : 1.0,
+      opacity: muted ? 0.1 : obj.inScope === false ? 0.5 : 1.0,
+      focusState: muted ? 0 : 1,
       type: obj.type,
-      label: obj.label || obj.canonicalPath,
+      label: obj.label || humanizeCanonicalPath(obj.canonicalPath) || obj.canonicalPath,
     },
   };
 }
@@ -339,27 +349,48 @@ function applyClusterMuteState(
   isDark: boolean,
   dimmed: boolean,
 ): void {
-  const glowOpacity: maplibregl.ExpressionSpecification = [
+  const baseGlowOpacity: maplibregl.ExpressionSpecification = [
     'step', ['get', 'point_count'],
-    dimmed ? 0.025 : 0.08,
-    10, dimmed ? 0.032 : 0.1,
-    50, dimmed ? 0.042 : 0.13,
-    200, dimmed ? 0.05 : 0.16,
+    0.08,
+    10, 0.1,
+    50, 0.13,
+    200, 0.16,
   ];
+  const focusRatio: maplibregl.ExpressionSpecification = [
+    'case',
+    ['>', ['coalesce', ['get', 'point_count'], 0], 0],
+    ['/', ['coalesce', ['get', 'focusCount'], 0], ['get', 'point_count']],
+    1,
+  ];
+  const glowOpacity: any = dimmed
+    ? ['interpolate', ['linear'], focusRatio, 0, 0.1, 0.2, 0.14, 0.5, 0.16, 1, 0.16]
+    : baseGlowOpacity;
+  const clusterOpacity: any = dimmed
+    ? ['interpolate', ['linear'], focusRatio, 0, 0.1, 0.2, 0.16, 0.5, 0.42, 1, 1]
+    : 1;
+  const clusterStrokeOpacity: any = dimmed
+    ? ['interpolate', ['linear'], focusRatio, 0, 0.1, 0.2, 0.18, 0.5, 0.44, 1, 1]
+    : 1;
+  const coreOpacity: any = dimmed
+    ? ['interpolate', ['linear'], focusRatio, 0, 0.1, 0.2, 0.14, 0.5, 0.38, 1, 1]
+    : 1;
+  const textOpacity: any = dimmed
+    ? ['interpolate', ['linear'], focusRatio, 0, 0.1, 0.2, 0.2, 0.5, 0.46, 1, 1]
+    : 1;
 
   try {
     if (map.getLayer(CLUSTER_GLOW)) {
       map.setPaintProperty(CLUSTER_GLOW, 'circle-opacity', glowOpacity);
     }
     if (map.getLayer(CLUSTERS)) {
-      map.setPaintProperty(CLUSTERS, 'circle-opacity', dimmed ? 0.16 : 1);
-      map.setPaintProperty(CLUSTERS, 'circle-stroke-opacity', dimmed ? 0.18 : 1);
+      map.setPaintProperty(CLUSTERS, 'circle-opacity', clusterOpacity);
+      map.setPaintProperty(CLUSTERS, 'circle-stroke-opacity', clusterStrokeOpacity);
     }
     if (map.getLayer(CLUSTER_CORE)) {
-      map.setPaintProperty(CLUSTER_CORE, 'circle-opacity', dimmed ? 0.14 : 1);
+      map.setPaintProperty(CLUSTER_CORE, 'circle-opacity', coreOpacity);
     }
     if (map.getLayer(CLUSTER_COUNT)) {
-      map.setPaintProperty(CLUSTER_COUNT, 'text-opacity', dimmed ? 0.22 : 1);
+      map.setPaintProperty(CLUSTER_COUNT, 'text-opacity', textOpacity);
     }
   } catch {
     /* style may be reloading */
@@ -470,6 +501,9 @@ export function useGeoMarkerLayer(
       cluster: true,
       clusterMaxZoom: CLUSTER_MAX_ZOOM,
       clusterRadius: CLUSTER_RADIUS,
+      clusterProperties: {
+        focusCount: ['+', ['coalesce', ['get', 'focusState'], 0]],
+      },
     });
     map.addSource(HIGHLIGHT_SRC, {
       type: 'geojson',
@@ -541,9 +575,21 @@ export function useGeoMarkerLayer(
         'icon-size': 1,
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
+        'text-field': ['case', ['==', ['coalesce', ['get', 'showLabel'], 0], 1], ['get', 'label'], ''],
+        'text-font': [...MAP_TEXT_FONT_STACK],
+        'text-size': ['interpolate', ['linear'], ['zoom'], 4, 11, 7, 11.5, 10, 12.5],
+        'text-variable-anchor': ['literal', ['right', 'left', 'top-right', 'bottom-right', 'top', 'bottom']],
+        'text-radial-offset': 1.3,
+        'text-max-width': 10,
+        'text-allow-overlap': true,
+        'text-ignore-placement': true,
       },
       paint: {
         'icon-opacity': ['get', 'opacity'],
+        'text-color': isDark ? '#f8fafc' : 'rgba(2,6,23,0.96)',
+        'text-halo-color': isDark ? 'rgba(2,6,23,0.96)' : 'rgba(255,255,255,0.96)',
+        'text-halo-width': 1.4,
+        'text-opacity': ['case', ['==', ['coalesce', ['get', 'showLabel'], 0], 1], 1, 0],
       },
     });
 
@@ -581,9 +627,26 @@ export function useGeoMarkerLayer(
         'icon-size': ['coalesce', ['get', 'iconSize'], 1.04],
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
+        'text-field': [
+          'case',
+          ['==', ['get', 'highlightRole'], 'selected'],
+          ['get', 'label'],
+          '',
+        ],
+        'text-font': [...MAP_TEXT_FONT_STACK],
+        'text-size': 12.5,
+        'text-variable-anchor': ['literal', ['right', 'left', 'top-right', 'bottom-right', 'top', 'bottom']],
+        'text-radial-offset': 1.3,
+        'text-max-width': 10,
+        'text-allow-overlap': true,
+        'text-ignore-placement': true,
       },
       paint: {
         'icon-opacity': 1,
+        'text-color': isDark ? '#ffffff' : 'rgba(2,6,23,0.98)',
+        'text-halo-color': isDark ? 'rgba(2,6,23,0.98)' : 'rgba(255,255,255,0.98)',
+        'text-halo-width': 1.6,
+        'text-opacity': 1,
       },
     });
 
@@ -778,8 +841,13 @@ export function useGeoMarkerLayer(
       if (cancelled) return;
       try {
         if (!canAccessMapStyle(map)) return;
+        const labelledIds = new Set<string>();
+        for (const item of highlightedObjectsRef.current || []) {
+          const id = String(item?.id || '').trim();
+          if (id && item.role === 'gateway') labelledIds.add(id);
+        }
         const src = map.getSource(SRC) as maplibregl.GeoJSONSource | undefined;
-        if (src) src.setData(buildFeatureCollection(objects, theme, new Set(mutedObjectIdsRef.current)));
+        if (src) src.setData(buildFeatureCollection(objects, theme, new Set(mutedObjectIdsRef.current), labelledIds));
         const highlightSrc = map.getSource(HIGHLIGHT_SRC) as maplibregl.GeoJSONSource | undefined;
         if (highlightSrc) {
           highlightSrc.setData(buildHighlightFeatureCollection(objects, highlightedObjectsRef.current, theme));

@@ -7118,6 +7118,30 @@ func isSupplyChainPlanMode(state map[string]interface{}) bool {
 	return false
 }
 
+func supplyLinkValidityFromState(state map[string]models.MetricValue) (*time.Time, *time.Time) {
+	if len(state) == 0 {
+		return nil, nil
+	}
+	return parseSupplyLinkMetricTime(state["start"]), parseSupplyLinkMetricTime(state["end"])
+}
+
+func parseSupplyLinkMetricTime(metric models.MetricValue) *time.Time {
+	if metric.Unit == nil {
+		return nil
+	}
+	raw := strings.TrimSpace(*metric.Unit)
+	if raw == "" {
+		return nil
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02", "2006-01", time.RFC3339Nano} {
+		if parsed, err := time.Parse(layout, raw); err == nil {
+			utc := parsed.UTC()
+			return &utc
+		}
+	}
+	return nil
+}
+
 type supplyLinkMaterializationRef struct {
 	ID            string
 	CanonicalPath string
@@ -7333,6 +7357,154 @@ func hashSupplyChainSegments(segments []pathbuilder.PathSegment) string {
 	}
 	sum := sha1.Sum([]byte(b.String()))
 	return hex.EncodeToString(sum[:8])
+}
+
+func buildSupplyChainJoinValidationPairs(segments []pathbuilder.PathSegment) []agents.SupplyChainJoinValidationPair {
+	if len(segments) < 2 {
+		return nil
+	}
+	pairs := make([]agents.SupplyChainJoinValidationPair, 0, len(segments)-1)
+	for idx := 0; idx < len(segments)-1; idx++ {
+		left := segments[idx]
+		right := segments[idx+1]
+		pairs = append(pairs, agents.SupplyChainJoinValidationPair{
+			JoinIndex:         idx,
+			LeftLegIndex:      idx,
+			RightLegIndex:     idx + 1,
+			LeftSupplierRef:   strings.TrimSpace(left.SupplierRef),
+			LeftProductRef:    strings.TrimSpace(left.ProductRef),
+			LeftCustomerRef:   strings.TrimSpace(left.CustomerRef),
+			RightSupplierRef:  strings.TrimSpace(right.SupplierRef),
+			RightProductRef:   strings.TrimSpace(right.ProductRef),
+			RightCustomerRef:  strings.TrimSpace(right.CustomerRef),
+			LeftTransportVia:  append([]string(nil), left.TransportViaRefs...),
+			RightTransportVia: append([]string(nil), right.TransportViaRefs...),
+		})
+	}
+	return pairs
+}
+
+func buildSupplyChainJoinAllowedRefs(chain agents.SupplyChain, segments []pathbuilder.PathSegment, graphContext string) []string {
+	refs := make([]string, 0, len(chain.Nodes)+len(segments)*4)
+	for _, node := range chain.Nodes {
+		if ref := strings.TrimSpace(node.CanonicalPath); ref != "" {
+			refs = append(refs, ref)
+		}
+	}
+	for _, segment := range segments {
+		for _, ref := range []string{
+			segment.SupplierRef,
+			segment.ProductRef,
+			segment.CustomerRef,
+		} {
+			if ref = strings.TrimSpace(ref); ref != "" {
+				refs = append(refs, ref)
+			}
+		}
+		if segment.SupplierFacilityRef != nil && strings.TrimSpace(*segment.SupplierFacilityRef) != "" {
+			refs = append(refs, strings.TrimSpace(*segment.SupplierFacilityRef))
+		}
+		if segment.CustomerFacilityRef != nil && strings.TrimSpace(*segment.CustomerFacilityRef) != "" {
+			refs = append(refs, strings.TrimSpace(*segment.CustomerFacilityRef))
+		}
+		for _, via := range segment.TransportViaRefs {
+			if via = strings.TrimSpace(via); via != "" {
+				refs = append(refs, via)
+			}
+		}
+	}
+	for _, line := range strings.Split(graphContext, "\n") {
+		start := 0
+		for {
+			openIdx := strings.Index(line[start:], "(")
+			if openIdx < 0 {
+				break
+			}
+			openIdx += start
+			closeIdx := strings.Index(line[openIdx:], ")")
+			if closeIdx < 0 {
+				break
+			}
+			closeIdx += openIdx
+			candidate := strings.TrimSpace(line[openIdx+1 : closeIdx])
+			if strings.HasPrefix(candidate, "/") {
+				refs = append(refs, candidate)
+			}
+			start = closeIdx + 1
+		}
+	}
+	return uniqueSortedStrings(refs)
+}
+
+func mapJoinValidationAssessmentToModel(hint agents.SupplyChainJoinValidationAssessment) models.SupplyChainJoinAssessment {
+	status := models.SupplyChainSufficiencyHeuristic
+	switch strings.TrimSpace(hint.Status) {
+	case models.SupplyChainSufficiencyValidated:
+		status = models.SupplyChainSufficiencyValidated
+	case models.SupplyChainSufficiencyForensicGap:
+		status = models.SupplyChainSufficiencyForensicGap
+	}
+	entityReuse := models.SupplyChainJoinEntityReuseOnly
+	if strings.TrimSpace(hint.Status) == "unresolved" {
+		entityReuse = models.SupplyChainJoinEntityReuseUnknown
+	}
+	if len(hint.PolicyViolations) > 0 {
+		entityReuse = models.SupplyChainJoinEntityReuseBlocked
+		status = models.SupplyChainSufficiencyForensicGap
+	}
+	reasons := make([]string, 0, 1+len(hint.Gaps)+len(hint.PolicyViolations))
+	if reason := strings.TrimSpace(hint.Reason); reason != "" {
+		reasons = append(reasons, reason)
+	}
+	reasons = append(reasons, hint.Gaps...)
+	reasons = append(reasons, hint.PolicyViolations...)
+	productContinuity := strings.TrimSpace(hint.ProductRelation)
+	if productContinuity == "" {
+		productContinuity = "unknown"
+	}
+	return models.SupplyChainJoinAssessment{
+		Index:             hint.JoinIndex,
+		LeftLegIndex:      hint.LeftLegIndex,
+		RightLegIndex:     hint.RightLegIndex,
+		ProductContinuity: productContinuity,
+		EntityReuse:       entityReuse,
+		Status:            status,
+		Reasons:           uniqueSortedStrings(reasons),
+	}
+}
+
+func (e *ScoutEngine) buildSupplyChainJoinValidationHints(
+	ctx context.Context,
+	chain agents.SupplyChain,
+	segments []pathbuilder.PathSegment,
+	graphContext string,
+) ([]models.SupplyChainJoinAssessment, []string, error) {
+	if e == nil || e.criticAgent == nil || len(segments) < 2 {
+		return nil, nil, nil
+	}
+	input := agents.SupplyChainJoinValidationInput{
+		ChainRef:         strings.TrimSpace(chain.Reason),
+		ChainReason:      strings.TrimSpace(chain.Reason),
+		GraphContext:     strings.TrimSpace(graphContext),
+		AllowedReuseRefs: buildSupplyChainJoinAllowedRefs(chain, segments, graphContext),
+		Pairs:            buildSupplyChainJoinValidationPairs(segments),
+	}
+	if input.ChainRef == "" && len(input.Pairs) > 0 {
+		input.ChainRef = fmt.Sprintf("segments:%d", len(segments))
+	}
+	out, err := e.criticAgent.ValidateSupplyChainJoins(ctx, input)
+	if err != nil || out == nil {
+		return nil, nil, err
+	}
+	hints := make([]models.SupplyChainJoinAssessment, 0, len(out.Assessments))
+	gaps := make([]string, 0)
+	for _, assessment := range out.Assessments {
+		modelHint := mapJoinValidationAssessmentToModel(assessment)
+		hints = append(hints, modelHint)
+		gaps = append(gaps, assessment.Gaps...)
+		gaps = append(gaps, assessment.PolicyViolations...)
+	}
+	return hints, uniqueSortedStrings(gaps), nil
 }
 
 // buildBatchedSupplyChainExpandMissingInfo builds a single MissingInfo prompt for multiple nodes of the same type.
@@ -8737,6 +8909,10 @@ func (e *ScoutEngine) processSupplyChains(
 			for k, v := range seg.State {
 				slFrag.State[k] = v
 			}
+			if validFrom, validTo := supplyLinkValidityFromState(seg.State); validFrom != nil || validTo != nil {
+				slFrag.ValidFrom = validFrom
+				slFrag.ValidTo = validTo
+			}
 		}
 		horizonrepo.PrepareFragmentForValidation(slFrag)
 		if err := slFrag.Validate(); err != nil {
@@ -8772,6 +8948,14 @@ func (e *ScoutEngine) processSupplyChains(
 				existing.State = make(map[string]models.MetricValue)
 			}
 			if mergeSupplyLinkMetricState(existing.State, slFrag.State) {
+				changed = true
+			}
+			if slFrag.ValidFrom != nil && (existing.ValidFrom == nil || existing.ValidFrom.IsZero()) {
+				existing.ValidFrom = slFrag.ValidFrom
+				changed = true
+			}
+			if slFrag.ValidTo != nil && (existing.ValidTo == nil || existing.ValidTo.IsZero()) {
+				existing.ValidTo = slFrag.ValidTo
 				changed = true
 			}
 			// Explicitly keep max confidence regardless of unit/value replacement policy.
@@ -8893,6 +9077,11 @@ func (e *ScoutEngine) processSupplyChains(
 		}
 		pendingPaths := make([]pendingPathMaterialization, 0, len(parsedChains))
 		canonicalKeysForReuse := make([]string, 0, len(parsedChains))
+		chainContext, _ := ParseChainContext(job.State["chainContext"])
+		chainGraphContext := ""
+		if chainContext != nil {
+			chainGraphContext = chainContext.ToPromptContext()
+		}
 		for idx, singleParsed := range parsedChains {
 			if singleParsed == nil || len(singleParsed.SupplyLinkSegments) == 0 {
 				continue
@@ -8914,6 +9103,15 @@ func (e *ScoutEngine) processSupplyChains(
 				Confidence: normalizeEdgeConfidence(chains[idx].Confidence),
 				BuildMode:  buildMode,
 				MaxDepth:   maxDepth,
+			}
+			if e.criticAgent != nil {
+				joinHints, joinGaps, err := e.buildSupplyChainJoinValidationHints(ctx, chains[idx], segments, chainGraphContext)
+				if err != nil {
+					e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainJoinValidation] chain=%d err=%v", idx, err))
+				} else {
+					path.JoinAssessmentHints = joinHints
+					path.OpenGaps = uniqueSortedStrings(joinGaps)
+				}
 			}
 			pendingPaths = append(pendingPaths, pendingPathMaterialization{
 				index:        idx,

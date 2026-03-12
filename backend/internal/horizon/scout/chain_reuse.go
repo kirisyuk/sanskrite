@@ -93,6 +93,9 @@ func evaluateChainReuseFromExisting(canonicalKey string, existing *models.Materi
 	staleness := time.Since(existing.UpdatedAt)
 	isFresh := staleness < time.Duration(chainReuseFreshnessThresholdDays)*24*time.Hour
 	isValidated := existing.PathStatus == "validated"
+	if parsed, err := models.ParseSupplyChainPathPayload(existing.Payload); err == nil && parsed != nil && parsed.Sufficiency != nil {
+		isValidated = models.EffectivePathStatusFromSufficiency(parsed.Sufficiency) == "validated"
+	}
 	hasEnoughSegments := countPayloadNodes(existing.Payload) >= chainReuseMinSegments
 	confidence := extractPayloadConfidence(existing)
 	hasEnrichedBindings := artifactHasEnrichedPathBindings(existing)

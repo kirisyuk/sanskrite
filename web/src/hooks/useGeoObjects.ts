@@ -46,6 +46,8 @@ function deriveTypeCounts(objects: GeoObject[]): TypeCount[] {
 export function useGeoObjects(
   scope: { lensId: string } | undefined,
   filters: GeoObjectFilters,
+  canonicalPathsSource?: string[] | null,
+  preferCanonicalPaths: boolean = false,
 ) {
   const [allObjects, setAllObjects] = useState<GeoObject[]>([]);
   const [loading, setLoading] = useState(true);
@@ -60,10 +62,44 @@ export function useGeoObjects(
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       let cancelled = false;
+      const shouldAwaitCanonicalPaths = Boolean(scope?.lensId && preferCanonicalPaths && canonicalPathsSource == null);
+      if (shouldAwaitCanonicalPaths) {
+        setLoading(true);
+        setError(null);
+        setAllObjects([]);
+        return;
+      }
       setLoading(true);
 
       const load = async () => {
         let lastError: unknown = null;
+        if (scope?.lensId && preferCanonicalPaths) {
+          if (!canonicalPathsSource || canonicalPathsSource.length === 0) {
+            if (!cancelled) {
+              setAllObjects([]);
+              setError(null);
+            }
+            return;
+          }
+          try {
+            const response = await api.listHorizonGeoObjectsByPaths({
+              canonicalPaths: canonicalPathsSource,
+              createdAfter: filters.dateFrom || undefined,
+              createdBefore: filters.dateTo || undefined,
+            });
+            if (cancelled) return;
+            const valid = (response.items || []).filter((item) => {
+              const lat = item.coordinates?.lat;
+              const lon = item.coordinates?.lon;
+              return Number.isFinite(lat) && Number.isFinite(lon);
+            });
+            setAllObjects(valid);
+            setError(null);
+            return;
+          } catch (err) {
+            lastError = err;
+          }
+        }
         for (const limit of GEO_OBJECT_LIMIT_CANDIDATES) {
           const opts: Parameters<typeof api.listHorizonGeoObjects>[0] = { limit };
           if (filters.dateFrom) opts.createdAfter = filters.dateFrom;
@@ -103,7 +139,7 @@ export function useGeoObjects(
     }, 300);
 
     return () => clearTimeout(debounceRef.current);
-  }, [filters.dateFrom, filters.dateTo, scope?.lensId]);
+  }, [canonicalPathsSource, filters.dateFrom, filters.dateTo, preferCanonicalPaths, scope?.lensId]);
 
   useEffect(() => {
     if (!Array.isArray(horizonEvents) || horizonEvents.length === 0) return;

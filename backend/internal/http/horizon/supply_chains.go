@@ -139,6 +139,7 @@ func (h *HorizonHandlers) SearchSupplyChains(w http.ResponseWriter, r *http.Requ
 		} else {
 			linkageSummary["fullyLinked"]++
 		}
+		annotateSupplyChainTraceArtifact(&artifactCopy, firstAnchor(req.Anchors))
 		score, match, previewPayload := buildSupplyChainSearchProjection(&artifactCopy, req.Anchors, req.MaxLegs)
 		if artifactCopy.IsPinned {
 			pinnedCount++
@@ -259,6 +260,9 @@ func (h *HorizonHandlers) GetSupplyChainsByNode(w http.ResponseWriter, r *http.R
 			http.Error(w, "Failed to fetch supply chains", http.StatusInternalServerError)
 			return
 		}
+	}
+	for _, artifact := range artifacts {
+		annotateSupplyChainTraceArtifact(artifact, canonicalPath)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -621,7 +625,7 @@ func isDirectedAnchorMatch(parsed *horizonmodels.SupplyChainPathPayload, anchorA
 
 func clipSupplyChainPayload(parsed *horizonmodels.SupplyChainPathPayload, matchedLegs []int, maxLegs int) (map[string]interface{}, bool) {
 	if parsed == nil || len(parsed.Legs) == 0 || maxLegs <= 0 || len(parsed.Legs) <= maxLegs {
-		return horizonmodels.BuildSupplyChainPathPayload(parsed.Nodes, parsed.Edges, parsed.Legs, parsed.Stress, parsed.Notes), false
+		return horizonmodels.BuildSupplyChainPathPayloadWithSufficiency(parsed.Nodes, parsed.Edges, parsed.Legs, parsed.Stress, parsed.Sufficiency, parsed.Notes), false
 	}
 	start := matchedLegs[0]
 	end := matchedLegs[len(matchedLegs)-1]
@@ -691,7 +695,7 @@ func clipSupplyChainPayload(parsed *horizonmodels.SupplyChainPathPayload, matche
 		}
 		edges = append(edges, edge)
 	}
-	return horizonmodels.BuildSupplyChainPathPayload(nodes, edges, keepLegs, parsed.Stress, parsed.Notes), true
+	return horizonmodels.BuildSupplyChainPathPayloadWithSufficiency(nodes, edges, keepLegs, parsed.Stress, parsed.Sufficiency, parsed.Notes), true
 }
 
 func normalizeSupplyChainAnchors(anchors []string) []string {
@@ -716,6 +720,13 @@ func secondAnchor(anchors []string) string {
 		return "_"
 	}
 	return anchors[1]
+}
+
+func firstAnchor(anchors []string) string {
+	if len(anchors) == 0 {
+		return ""
+	}
+	return anchors[0]
 }
 
 func buildSupplyChainSearchAnchors(anchors []string) []supplyChainSearchAnchor {

@@ -65,11 +65,13 @@ import (
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonrisk "github.com/igorkirisyuk/sanskrite/internal/horizon/risk"
 	horizonrtctx "github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
+	horizonscopeagent "github.com/igorkirisyuk/sanskrite/internal/horizon/scopeagent"
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	horizonagents "github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	horizonsignals "github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
 	horizontasks "github.com/igorkirisyuk/sanskrite/internal/horizon/tasks"
 	horizontelemetry "github.com/igorkirisyuk/sanskrite/internal/horizon/telemetry"
+	horizonwatch "github.com/igorkirisyuk/sanskrite/internal/horizon/watch"
 	horizonwatchdog "github.com/igorkirisyuk/sanskrite/internal/horizon/watchdog"
 	horizonhttp "github.com/igorkirisyuk/sanskrite/internal/http/horizon"
 )
@@ -1307,6 +1309,16 @@ func main() {
 		horizonProfilePoliciesRepo := horizonrepo.NewFragmentProfileRefreshPoliciesRepository(fsClient.Client())
 		horizonLensArtifactsRepo := horizonrepo.NewLensArtifactsRepository(fsClient.Client())
 		horizonDomainAnswerSnapshotsRepo := horizonrepo.NewDomainAnswerSnapshotsRepository(fsClient.Client())
+		horizonWatchPacksRepo := horizonrepo.NewWatchPacksRepository(fsClient.Client())
+		horizonWatchTargetsRepo := horizonrepo.NewWatchTargetsRepository(fsClient.Client())
+		horizonWatchBriefsRepo := horizonrepo.NewWatchBriefsRepository(fsClient.Client())
+		horizonWatchFeedRepo := horizonrepo.NewWatchFeedEntriesRepository(fsClient.Client())
+		horizonWatchPreferencesRepo := horizonrepo.NewWatchPreferencesRepository(fsClient.Client())
+		horizonScopeAgentConfigsRepo := horizonrepo.NewScopeAgentConfigsRepository(fsClient.Client())
+		horizonScopeAgentStatesRepo := horizonrepo.NewScopeAgentStatesRepository(fsClient.Client())
+		horizonScopeAgentRunsRepo := horizonrepo.NewScopeAgentRunsRepository(fsClient.Client())
+		horizonAgentProposalsRepo := horizonrepo.NewAgentProposalsRepository(fsClient.Client())
+		horizonArbitrationDecisionsRepo := horizonrepo.NewArbitrationDecisionsRepository(fsClient.Client())
 
 		// Horizon spend ledger (actual GenAI $ attribution) for budget enforcement.
 		horizonSpendLedger := horizonrepo.NewHorizonSpendLedger(fsClient.Client())
@@ -1444,6 +1456,7 @@ func main() {
 		}
 
 		var sourceTasksDispatcher *discovery.SourceCloudTasksDispatcher
+		var scopeAgentTasksDispatcher *horizontasks.ScopeAgentCloudTasksDispatcher
 
 		// Cloud Tasks dispatcher for Profile refresh (managed queue + autoscaling + retries).
 		var profileTasksDispatcher *horizontasks.ProfileCloudTasksDispatcher
@@ -1494,6 +1507,30 @@ func main() {
 					} else {
 						logger.Printf("WARNING: Cloud Tasks (Source) not configured (need CLOUD_TASKS_TARGET_BASE_URL and CLOUD_TASKS_OIDC_SERVICE_ACCOUNT)")
 					}
+				}
+			}
+		}
+		{
+			enabled := strings.TrimSpace(getEnv("ENABLE_CLOUD_TASKS_SCOPE_AGENT", "1"))
+			if enabled == "1" || strings.EqualFold(enabled, "true") {
+				location := strings.TrimSpace(getEnv("CLOUD_TASKS_LOCATION", "us-central1"))
+				queue := strings.TrimSpace(getEnv("CLOUD_TASKS_SCOPE_AGENT_QUEUE", "etigram-scope-agents"))
+				baseURL := strings.TrimSpace(getEnv("CLOUD_TASKS_TARGET_BASE_URL", ""))
+				saEmail := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
+				aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))
+				if baseURL != "" && saEmail != "" {
+					targetURL := strings.TrimRight(baseURL, "/") + "/api/v1/internal/tasks/scope-agents/run"
+					if aud == "" {
+						aud = strings.TrimRight(baseURL, "/")
+					}
+					if d, err := horizontasks.NewScopeAgentCloudTasksDispatcher(ctx, projectID, location, queue, targetURL, saEmail, aud); err == nil {
+						scopeAgentTasksDispatcher = d
+						logger.Printf("Cloud Tasks (ScopeAgent) enabled: queue=%s location=%s target=%s", queue, location, targetURL)
+					} else {
+						logger.Printf("WARNING: Cloud Tasks (ScopeAgent) disabled due to init error: %v", err)
+					}
+				} else {
+					logger.Printf("WARNING: Cloud Tasks (ScopeAgent) not configured (need CLOUD_TASKS_TARGET_BASE_URL and CLOUD_TASKS_OIDC_SERVICE_ACCOUNT)")
 				}
 			}
 		}
@@ -1641,6 +1678,49 @@ func main() {
 			horizonService.SetScoutExecutionRuntime(scoutExecutionReady, scoutExecutionReason)
 			logger.Printf("Horizon scout execution runtime: ready=%t reason=%s", scoutExecutionReady, scoutExecutionReason)
 			horizonService.SetOntologyFactsRepository(ontologyFactsRepo)
+			_ = horizonWatchPacksRepo
+
+			scopeAgentService := horizonscopeagent.NewService(
+				horizonScopeAgentConfigsRepo,
+				horizonScopeAgentStatesRepo,
+				horizonScopeAgentRunsRepo,
+				horizonAgentProposalsRepo,
+				horizonArbitrationDecisionsRepo,
+				horizonWatchTargetsRepo,
+				horizonWatchBriefsRepo,
+				horizonWatchFeedRepo,
+				agentJobsRepo,
+				horizonWatchdogRepo,
+				horizonFragmentsRepo,
+				riskJobsRepo,
+				ontologyFactsRepo,
+				s.dsrcs,
+				exec,
+				nil,
+				nil,
+			)
+			if scopeAgentTasksDispatcher != nil {
+				scopeAgentService.WithBatchDispatcher(func(ctx context.Context, tenantID string) error {
+					return scopeAgentTasksDispatcher.EnqueueTenantBatch(ctx, tenantID, 8)
+				})
+			}
+			horizonService.SetScopeAgentService(scopeAgentService)
+
+			watchService := horizonwatch.NewService(
+				horizonWatchTargetsRepo,
+				horizonWatchBriefsRepo,
+				horizonWatchFeedRepo,
+				horizonWatchPreferencesRepo,
+				horizonFragmentsRepo,
+				riskJobsRepo,
+				horizonAgentProposalsRepo,
+				horizonArbitrationDecisionsRepo,
+				ontologyFactsRepo,
+			).WithRuntimeProvisioner(func(ctx context.Context, target *horizonmodels.WatchTarget) error {
+				_, err := scopeAgentService.EnsureRuntimeForTarget(ctx, target)
+				return err
+			})
+			horizonService.SetWatchService(watchService)
 
 			// Initialize Lens subsystem
 			lensLifecycle := horizonlens.NewLifecycleManager(horizonFragmentsRepo)
@@ -1949,6 +2029,7 @@ func main() {
 			propagationEngine.WithCriticalPathDetector(criticalPathDetector)
 
 			horizonService.SetPropagationEngine(propagationEngine)
+			scopeAgentService.SetScenarioRuntime(propagationEngine, propagationProfileLookup)
 			riskAppetiteRepo := horizonrepo.NewRiskAppetiteProfilesRepository(fsClient.Client())
 			appetiteResolver := horizonrisk.NewAppetiteResolver(riskAppetiteRepo, horizonFragmentsRepo, horizonEdgesRepo)
 			concentrationAnalyzer := horizonrisk.NewConcentrationAnalyzer(horizonFragmentsRepo).
@@ -2233,7 +2314,11 @@ func main() {
 			// Keep it disabled by default; enable explicitly via env.
 			if strings.TrimSpace(getEnvWithAlt("ENABLE_ETIGRAM_WATCHDOG", "ENABLE_HORIZON_WATCHDOG", "0")) == "1" {
 				watchdogMonitor := horizonwatchdog.NewMonitor(s.dsrcs, docsRepo, horizonFragmentsRepo, ontologyFactsRepo, horizonScoutingJobsRepo, scoutEngine, sourceExecutor, exec).
-					WithRiskJobsRepository(riskJobsRepo)
+					WithRiskJobsRepository(riskJobsRepo).
+					WithScopeAgentWakeHook(func(ctx context.Context, tenantID, canonicalPath, triggerType, triggerReason string, trace map[string]any) error {
+						_, err := scopeAgentService.WakeByCanonicalPath(ctx, tenantID, canonicalPath, triggerType, triggerReason, trace)
+						return err
+					})
 				watchdogScheduler := horizonwatchdog.NewScheduler()
 				watchdogService := horizonwatchdog.NewWatchdogService(
 					horizonWatchdogRepo,
@@ -2371,6 +2456,7 @@ func main() {
 				WithOntologyFactsRepo(ontologyFactsRepo).
 				WithExposurePathsRepo(horizonExposurePathsRepo).
 				WithRiskJobsRepo(riskJobsRepo).
+				WithWatchService(watchService).
 				WithProfilesHandler(profilesHandler).
 				WithPropagationProfileLookup(propagationProfileLookup)
 
@@ -2779,6 +2865,70 @@ func main() {
 			"status": "ok",
 			"jobId":  jobID,
 			"state":  state,
+		})
+	})
+
+	mux.HandleFunc("/api/v1/internal/tasks/scope-agents/run", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if horizonService == nil || horizonService.ScopeAgents() == nil {
+			http.Error(w, "scope agent service not initialized", http.StatusServiceUnavailable)
+			return
+		}
+
+		authz := strings.TrimSpace(r.Header.Get("Authorization"))
+		const bearer = "Bearer "
+		if !strings.HasPrefix(authz, bearer) || len(authz) <= len(bearer) {
+			http.Error(w, "missing Authorization bearer token", http.StatusUnauthorized)
+			return
+		}
+		rawTok := strings.TrimSpace(authz[len(bearer):])
+		aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))
+		if aud == "" {
+			aud = "https://" + r.Host
+		}
+		payload, err := idtoken.Validate(r.Context(), rawTok, aud)
+		if err != nil {
+			http.Error(w, "invalid cloud tasks token", http.StatusUnauthorized)
+			return
+		}
+		expectedSA := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
+		if expectedSA != "" {
+			if email, ok := payload.Claims["email"].(string); !ok || !strings.EqualFold(strings.TrimSpace(email), expectedSA) {
+				http.Error(w, "unexpected token identity", http.StatusForbidden)
+				return
+			}
+		}
+
+		var body struct {
+			TenantID string `json:"tenantId"`
+			Limit    int    `json:"limit"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		tenantID := strings.TrimSpace(body.TenantID)
+		if tenantID == "" {
+			tenantID = "global"
+		}
+		limit := body.Limit
+		if limit <= 0 {
+			limit = 8
+		}
+		reports, err := horizonService.ScopeAgents().RunDueBatches(r.Context(), tenantID, limit)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("scope agent batch execution failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":   "ok",
+			"tenantId": tenantID,
+			"reports":  reports,
 		})
 	})
 

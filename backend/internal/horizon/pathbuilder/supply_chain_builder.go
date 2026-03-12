@@ -121,7 +121,7 @@ func DefaultBuildPathOptions() BuildPathOptions {
 		MaxDepth:                     6,
 		MaxBranching:                 5,
 		MaxPaths:                     10,
-		RequireProductTransformation: false,
+		RequireProductTransformation: true,
 		MinConfidence:                0.0,
 	}
 }
@@ -163,6 +163,10 @@ type SupplyChainPath struct {
 	Segments []PathSegment
 	// Overall confidence (propagated through chain)
 	Confidence float64
+	// JoinAssessmentHints carries constrained join-validation results produced upstream in scout.
+	JoinAssessmentHints []models.SupplyChainJoinAssessment
+	// OpenGaps carries unresolved chain-level gaps discovered before materialization.
+	OpenGaps []string
 	// Build metadata
 	BuildMode string
 	MaxDepth  int
@@ -612,10 +616,10 @@ func (b *SupplyChainPathBuilder) areProductsCompatible(
 		return true
 	}
 
-	// Products might be compatible even without explicit TRANSFORMS_INTO
-	// (e.g., same product category, or inferred compatibility)
-	// For now, return true (soft validation)
-	return true
+	if strings.TrimSpace(upstreamProduct) != "" && strings.TrimSpace(upstreamProduct) == strings.TrimSpace(downstreamProduct) {
+		return true
+	}
+	return false
 }
 
 // buildChainDisplayName generates a human-readable name from path segments.
@@ -807,7 +811,8 @@ func (b *SupplyChainPathBuilder) MaterializePath(
 
 	nodes, edges, legs, stress := b.pathToMaterializedPayload(ctx, path)
 
-	payload := models.BuildSupplyChainPathPayload(nodes, edges, legs, stress, buildSupplyChainArtifactNotes(path, legs, stress))
+	sufficiency := b.evaluatePathSufficiency(ctx, path, legs)
+	payload := models.BuildSupplyChainPathPayloadWithSufficiency(nodes, edges, legs, stress, sufficiency, buildSupplyChainArtifactNotes(path, legs, stress))
 
 	displayName := buildChainDisplayName(path.Segments)
 	labels := buildChainLabels(path.Segments)
@@ -821,7 +826,7 @@ func (b *SupplyChainPathBuilder) MaterializePath(
 		Kind:             models.MaterializedKindSupplyChainPath,
 		CanonicalKey:     canonicalKey,
 		Payload:          payload,
-		PathStatus:       "hypothesis",
+		PathStatus:       models.EffectivePathStatusFromSufficiency(sufficiency),
 		DisplayName:      displayName,
 		Labels:           labels,
 		NodeRefs:         nodeRefs,
@@ -855,6 +860,9 @@ func (b *SupplyChainPathBuilder) MaterializePath(
 		// Regenerate display from merged data
 		artifact.DisplayName = displayName
 		artifact.Labels = labels
+		if parsedMerged, perr := models.ParseSupplyChainPathPayload(artifact.Payload); perr == nil && parsedMerged != nil && parsedMerged.Sufficiency != nil {
+			artifact.PathStatus = models.EffectivePathStatusFromSufficiency(parsedMerged.Sufficiency)
+		}
 
 		if err := artifact.Validate(); err != nil {
 			return "", fmt.Errorf("validation error after merge: %w", err)
@@ -907,7 +915,8 @@ func (b *SupplyChainPathBuilder) MaterializePathsBatch(
 			continue
 		}
 		nodes, edges, legs, stress := b.pathToMaterializedPayload(ctx, path)
-		payload := models.BuildSupplyChainPathPayload(nodes, edges, legs, stress, buildSupplyChainArtifactNotes(path, legs, stress))
+		sufficiency := b.evaluatePathSufficiency(ctx, path, legs)
+		payload := models.BuildSupplyChainPathPayloadWithSufficiency(nodes, edges, legs, stress, sufficiency, buildSupplyChainArtifactNotes(path, legs, stress))
 		displayName := buildChainDisplayName(path.Segments)
 		labels := buildChainLabels(path.Segments)
 		nodeRefs := collectNodeRefs(path.Segments)
@@ -919,7 +928,7 @@ func (b *SupplyChainPathBuilder) MaterializePathsBatch(
 			Kind:             models.MaterializedKindSupplyChainPath,
 			CanonicalKey:     key,
 			Payload:          payload,
-			PathStatus:       "hypothesis",
+			PathStatus:       models.EffectivePathStatusFromSufficiency(sufficiency),
 			DisplayName:      displayName,
 			Labels:           labels,
 			NodeRefs:         nodeRefs,
@@ -946,6 +955,9 @@ func (b *SupplyChainPathBuilder) MaterializePathsBatch(
 			}
 			artifact.DisplayName = displayName
 			artifact.Labels = labels
+			if parsedMerged, perr := models.ParseSupplyChainPathPayload(artifact.Payload); perr == nil && parsedMerged != nil && parsedMerged.Sufficiency != nil {
+				artifact.PathStatus = models.EffectivePathStatusFromSufficiency(parsedMerged.Sufficiency)
+			}
 		}
 		artifacts = append(artifacts, artifact)
 	}
@@ -1006,9 +1018,10 @@ func (b *SupplyChainPathBuilder) RebuildFromSupplyLinks(ctx context.Context, art
 	}
 
 	opts := BuildPathOptions{
-		MaxDepth:     maxDepth,
-		MaxBranching: 5,
-		MaxPaths:     1,
+		MaxDepth:                     maxDepth,
+		MaxBranching:                 5,
+		MaxPaths:                     1,
+		RequireProductTransformation: true,
 	}
 
 	paths, err := b.BuildUpstreamPaths(ctx, leafCustomerRef, opts)
@@ -1021,7 +1034,8 @@ func (b *SupplyChainPathBuilder) RebuildFromSupplyLinks(ctx context.Context, art
 	rebuildPath := *bestPath
 	rebuildPath.BuildMode = "rebuild_from_supply_links"
 	rebuildPath.MaxDepth = maxDepth
-	newPayload := models.BuildSupplyChainPathPayload(nodes, edges, legs, stress, buildSupplyChainArtifactNotes(&rebuildPath, legs, stress))
+	sufficiency := b.evaluatePathSufficiency(ctx, bestPath, legs)
+	newPayload := models.BuildSupplyChainPathPayloadWithSufficiency(nodes, edges, legs, stress, sufficiency, buildSupplyChainArtifactNotes(&rebuildPath, legs, stress))
 
 	merged := models.MergePayloads(artifact.Payload, newPayload)
 	newNodeRefs := collectNodeRefs(bestPath.Segments)
@@ -1033,6 +1047,9 @@ func (b *SupplyChainPathBuilder) RebuildFromSupplyLinks(ctx context.Context, art
 
 	if artifact.PathStatus == "validated" && models.PayloadNodesChanged(artifact.Payload, merged) {
 		artifact.PathStatus = "hypothesis"
+	}
+	if parsedMerged, err := models.ParseSupplyChainPathPayload(artifact.Payload); err == nil && parsedMerged != nil && parsedMerged.Sufficiency != nil {
+		artifact.PathStatus = models.EffectivePathStatusFromSufficiency(parsedMerged.Sufficiency)
 	}
 
 	return b.artifactsRepo.Update(ctx, artifact)
@@ -1052,7 +1069,15 @@ func (b *SupplyChainPathBuilder) UpdatePathStatus(
 	if err != nil || existing == nil {
 		return fmt.Errorf("artifact not found: %w", err)
 	}
-	existing.PathStatus = pathStatus
+	if parsed, err := models.ParseSupplyChainPathPayload(existing.Payload); err == nil && parsed != nil && parsed.Sufficiency != nil {
+		if pathStatus == "validated" {
+			existing.PathStatus = models.EffectivePathStatusFromSufficiency(parsed.Sufficiency)
+		} else {
+			existing.PathStatus = pathStatus
+		}
+	} else {
+		existing.PathStatus = pathStatus
+	}
 	existing.UpdatedAt = time.Now().UTC()
 	return b.artifactsRepo.Update(ctx, existing)
 }

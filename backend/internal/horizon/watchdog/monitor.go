@@ -20,17 +20,18 @@ import (
 
 // Monitor осуществляет мониторинг источников и обнаружение изменений
 type Monitor struct {
-	dataSourcesRepo  *repo.DataSourcesRepository
-	documentsRepo    *repo.DocumentsRepository
-	fragmentsRepo    *horizonrepo.HorizonFragmentsRepository
-	factsRepo        *repo.OntologyFactsRepository
-	scoutingJobsRepo *horizonrepo.ScoutingJobsRepository
-	riskJobsRepo     *horizonrepo.RiskJobsRepository
-	scoutEngine      *scout.ScoutEngine
-	executor         *scout.SourceExecutor
-	changeAssessor   *ChangeAssessor
-	embeddings       ai.EmbeddingProvider
-	tuning           changeTuning
+	dataSourcesRepo    *repo.DataSourcesRepository
+	documentsRepo      *repo.DocumentsRepository
+	fragmentsRepo      *horizonrepo.HorizonFragmentsRepository
+	factsRepo          *repo.OntologyFactsRepository
+	scoutingJobsRepo   *horizonrepo.ScoutingJobsRepository
+	riskJobsRepo       *horizonrepo.RiskJobsRepository
+	scoutEngine        *scout.ScoutEngine
+	executor           *scout.SourceExecutor
+	changeAssessor     *ChangeAssessor
+	embeddings         ai.EmbeddingProvider
+	tuning             changeTuning
+	scopeAgentWakeHook func(ctx context.Context, tenantID, canonicalPath, triggerType, triggerReason string, trace map[string]any) error
 }
 
 // NewMonitor создает новый мониторинг
@@ -65,6 +66,11 @@ func NewMonitor(
 
 func (m *Monitor) WithRiskJobsRepository(r *horizonrepo.RiskJobsRepository) *Monitor {
 	m.riskJobsRepo = r
+	return m
+}
+
+func (m *Monitor) WithScopeAgentWakeHook(hook func(ctx context.Context, tenantID, canonicalPath, triggerType, triggerReason string, trace map[string]any) error) *Monitor {
+	m.scopeAgentWakeHook = hook
 	return m
 }
 
@@ -296,6 +302,18 @@ func (m *Monitor) createRiskJobFromWatchdog(
 		return fmt.Errorf("failed to create risk job: %w", err)
 	}
 	logf("phase=risk_job_enqueued configId=%s fragmentId=%s canonicalPath=%s polarity=%s jobId=%s created=%v", config.ID, fragment.ID, fragment.CanonicalPath, polarity, id, created)
+	if m.scopeAgentWakeHook != nil {
+		_ = m.scopeAgentWakeHook(ctx, fragment.TenantID, fragment.CanonicalPath, "watchdog", fmt.Sprintf("watchdog:%s:%s", config.ID, polarity), map[string]any{
+			"watchdogConfigId":    strings.TrimSpace(config.ID),
+			"riskJobId":           id,
+			"created":             created,
+			"polarity":            polarity,
+			"maxSemanticScore":    maxSemanticScore,
+			"qualifyingSignals":   qualifyingSignals,
+			"targetFragmentId":    strings.TrimSpace(fragment.ID),
+			"targetCanonicalPath": strings.TrimSpace(fragment.CanonicalPath),
+		})
+	}
 	return nil
 }
 
