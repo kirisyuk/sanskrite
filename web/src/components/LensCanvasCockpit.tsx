@@ -4782,6 +4782,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const segmentIndex = typeof e.segmentIndex === 'number' ? e.segmentIndex : undefined;
         const leg = typeof segmentIndex === 'number' ? legByIndex.get(segmentIndex) : undefined;
         const pathSufficiency: any = artifact.payload?.sufficiency || {};
+        const pathFamily: any = artifact.payload?.family || {};
         const joinAssessments = Array.isArray(pathSufficiency?.joinAssessments) ? pathSufficiency.joinAssessments : [];
         const pathEdgeMeta = {
           pathArtifactId: artifact.id,
@@ -4825,6 +4826,19 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           pathOpenGaps: pathSufficiency?.openGaps || [],
           pathWarnings: pathSufficiency?.warnings || [],
           pathJoinAssessments: joinAssessments,
+          pathFamilyId: String(artifact.familyId || pathFamily?.id || '').trim() || undefined,
+          pathFamilyPathCount:
+            typeof artifact.familyPathCount === 'number'
+              ? artifact.familyPathCount
+              : (typeof pathFamily?.pathCount === 'number' ? pathFamily.pathCount : undefined),
+          pathFamilyValidatedCount:
+            typeof artifact.familyValidatedCount === 'number'
+              ? artifact.familyValidatedCount
+              : (typeof pathFamily?.validatedPathCount === 'number' ? pathFamily.validatedPathCount : undefined),
+          pathFamilyGapCount:
+            typeof artifact.familyGapCount === 'number'
+              ? artifact.familyGapCount
+              : (Array.isArray(pathFamily?.openGaps) ? pathFamily.openGaps.length : (typeof pathFamily?.gapPathCount === 'number' ? pathFamily.gapPathCount : undefined)),
           pathValidatedJoinCount:
             typeof artifact.validatedJoinCount === 'number'
               ? artifact.validatedJoinCount

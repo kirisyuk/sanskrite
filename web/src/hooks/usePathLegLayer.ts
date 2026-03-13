@@ -227,6 +227,32 @@ function normalizeMeaningText(value: string): string {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+function stylePathLegPopup(popup: maplibregl.Popup, theme: ThemeMode): void {
+  const root = popup.getElement();
+  const content = root.querySelector('.maplibregl-popup-content') as HTMLElement | null;
+  const tip = root.querySelector('.maplibregl-popup-tip') as HTMLElement | null;
+  const background = theme === 'dark' ? 'rgba(5, 12, 24, 0.96)' : 'rgba(255,255,255,0.98)';
+  const foreground = theme === 'dark' ? '#e2e8f0' : '#0f172a';
+  const border = theme === 'dark' ? '1px solid rgba(148,163,184,0.24)' : '1px solid rgba(15,23,42,0.12)';
+
+  if (content) {
+    content.style.background = background;
+    content.style.color = foreground;
+    content.style.border = border;
+    content.style.borderRadius = '16px';
+    content.style.boxShadow = theme === 'dark'
+      ? '0 20px 48px rgba(2,6,23,0.58)'
+      : '0 20px 48px rgba(15,23,42,0.16)';
+    content.style.padding = '14px 16px';
+  }
+  if (tip) {
+    tip.style.borderTopColor = background;
+    tip.style.borderBottomColor = background;
+    tip.style.borderLeftColor = background;
+    tip.style.borderRightColor = background;
+  }
+}
+
 function buildViewportPathLegFeatureCollection(
   featureCollection: GeoJSON.FeatureCollection,
   map: maplibregl.Map,
@@ -960,16 +986,27 @@ export function usePathLegLayer(
           'text-ignore-placement': true,
         },
         paint: {
-          'text-color': ['get', 'color'],
-          'text-halo-color': theme === 'dark' ? 'rgba(2,6,23,0.96)' : 'rgba(255,255,255,0.98)',
-          'text-halo-width': 1.2,
+          'text-color': [
+            'case',
+            ['==', ['get', 'pathActive'], 1],
+            theme === 'dark' ? '#ecfeff' : 'rgba(8,47,73,0.96)',
+            theme === 'dark' ? '#e2e8f0' : 'rgba(15,23,42,0.92)',
+          ],
+          'text-halo-color': theme === 'dark' ? 'rgba(2,6,23,0.985)' : 'rgba(255,255,255,0.985)',
+          'text-halo-width': [
+            'case',
+            ['==', ['get', 'pathActive'], 1],
+            2.8,
+            2.3,
+          ],
+          'text-halo-blur': 0.7,
           'text-opacity': [
             'case',
             ['!=', ['get', 'meaningVisible'], 1],
             0,
             ['==', ['get', 'pathActive'], 1],
-            0.78,
-            0.58,
+            0.9,
+            0.76,
           ],
         },
       });
@@ -1070,6 +1107,7 @@ export function usePathLegLayer(
         .setLngLat(event.lngLat)
         .setHTML(html)
         .addTo(map);
+      stylePathLegPopup(popupRef.current, theme);
     };
 
     map.on('mouseenter', PINNED_LAYER, onEnter);
@@ -1088,7 +1126,7 @@ export function usePathLegLayer(
       popupRef.current?.remove();
       popupRef.current = null;
     };
-  }, [map, isReady, styleEpoch]);
+  }, [map, isReady, styleEpoch, theme]);
 
   return stats;
 }

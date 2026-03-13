@@ -7964,6 +7964,7 @@ func (e *ScoutEngine) processSupplyChains(
 	chainReuseSkipped := 0
 	chainReuseMerged := 0
 	chainReuseScopeAdded := 0
+	var familyBatches map[string]*supplyChainFamilyBatch
 
 	parsedChains := make([]*ParsedChainResult, len(chains))
 	for idx, chain := range chains {
@@ -9174,6 +9175,26 @@ func (e *ScoutEngine) processSupplyChains(
 			e.logLine(ctx, job, "info", fmt.Sprintf("[ChainReuse] MERGE summary merged=%d stage=%s samples=[%s]",
 				chainReuseMerged, materializationStage, strings.Join(mergeSamples, " | ")))
 		}
+		if len(pathsToMaterialize) > 0 && e.supplyChainPathBuilder != nil {
+			familyCandidates := make([]supplyChainFamilyCandidate, 0, len(pathsToMaterialize))
+			currentRound := parseStateInt(job.State["supplyChainFamilyCoResearchRound"], 0)
+			for i, path := range pathsToMaterialize {
+				if path == nil {
+					continue
+				}
+				sufficiencyPreview, previewErr := e.supplyChainPathBuilder.PreviewSufficiency(ctx, path)
+				if previewErr != nil {
+					e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainFamily] preview failed key=%s err=%v", keysToMaterialize[i], previewErr))
+					continue
+				}
+				familyCandidates = append(familyCandidates, supplyChainFamilyCandidate{
+					canonicalKey: keysToMaterialize[i],
+					path:         path,
+					sufficiency:  sufficiencyPreview,
+				})
+			}
+			familyBatches = buildSupplyChainFamilyBatches(tenantID, currentRound, familyCandidates)
+		}
 		if len(pathsToMaterialize) > 0 {
 			ids, err := e.supplyChainPathBuilder.MaterializePathsBatch(ctx, pathsToMaterialize, tenantID, lensID, keysToMaterialize)
 			if err != nil {
@@ -9213,7 +9234,6 @@ func (e *ScoutEngine) processSupplyChains(
 				chainReuseSkipped, chainReuseMerged, chainReuseScopeAdded))
 		}
 	}
-
 	// Level 3 FAC→ORG resolution: traverse OWNS/CONTROLS to owning ORG, max depth 5, cycle-prohibited
 	resolver := NewSupplyChainOrgResolver(e.edgesRepo, e.fragmentsRepo)
 	resolveTenantID := strings.TrimSpace(job.TenantID)
@@ -9242,6 +9262,12 @@ func (e *ScoutEngine) processSupplyChains(
 
 	// Identify gaps: nodes that have only incoming or only outgoing edges
 	gapHints := e.identifyChainGaps(result, existingContext)
+	for _, batch := range familyBatches {
+		if batch == nil {
+			continue
+		}
+		gapHints = mergeUniqueStrings(gapHints, batch.OpenGaps)
+	}
 	existingContext.GapHints = gapHints
 	discoveredNodesCount := len(existingContext.DiscoveredNodes)
 	discoveredEdgesCount := len(existingContext.DiscoveredEdges)
@@ -9310,6 +9336,9 @@ func (e *ScoutEngine) processSupplyChains(
 				e.emitGroundingErrorTelemetry(ctx, job, "scout", "supply_chain.persist_chain_context", "job_state_update_failed", "repo_update_error", true)
 			}
 		}
+	}
+	if len(familyBatches) > 0 {
+		e.runSupplyChainFamilyCoResearch(ctx, job, sourceFragment, familyBatches)
 	}
 
 	// Cascade child scheduling: only if policy allows. Entity jobs with domain expansion

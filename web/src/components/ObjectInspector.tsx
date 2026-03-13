@@ -1434,6 +1434,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     const pathRole = String(src?.pathRole || '').trim();
     const pathProductRef = String(src?.pathProductRef || '').trim();
     const pathSupplyLinkId = String(src?.pathSupplyLinkId || '').trim();
+    const pathFamilyId = String(src?.pathFamilyId || '').trim();
     const dominantFactors = readStringArray(src?.pathDominantFactors);
     const flowRefs = readStringArray(src?.pathFlowRefs);
     const zoneRefs = readStringArray(src?.pathZoneRefs);
@@ -1445,6 +1446,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     const joinAssessments = Array.isArray(src?.pathJoinAssessments) ? src.pathJoinAssessments : [];
     const hasMeta =
       !!pathArtifactId ||
+      !!pathFamilyId ||
       !!pathRole ||
       typeof src?.pathStressScore === 'number' ||
       typeof src?.pathSegmentIndex === 'number' ||
@@ -1459,6 +1461,10 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       pathRole,
       pathProductRef,
       pathSupplyLinkId,
+      pathFamilyId,
+      pathFamilyPathCount: typeof src?.pathFamilyPathCount === 'number' ? src.pathFamilyPathCount : undefined,
+      pathFamilyValidatedCount: typeof src?.pathFamilyValidatedCount === 'number' ? src.pathFamilyValidatedCount : undefined,
+      pathFamilyGapCount: typeof src?.pathFamilyGapCount === 'number' ? src.pathFamilyGapCount : undefined,
       pathSufficiencyStatus: String(src?.pathSufficiencyStatus || '').trim() || undefined,
       pathSufficiencyScore: typeof src?.pathSufficiencyScore === 'number' ? src.pathSufficiencyScore : undefined,
       pathGapCount: typeof src?.pathGapCount === 'number' ? src.pathGapCount : undefined,
@@ -1787,6 +1793,27 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
               {edgePathLegMeta.pathRole && <KV k="Role" v={<span>{edgePathLegMeta.pathRole}</span>} />}
               {edgePathLegMeta.pathArtifactId && (
                 <KV k="Path artifact" v={<span style={mono}>{edgePathLegMeta.pathArtifactId}</span>} copyText={edgePathLegMeta.pathArtifactId} />
+              )}
+              {edgePathLegMeta.pathFamilyId && (
+                <KV
+                  k="Family"
+                  v={
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={mono}>{edgePathLegMeta.pathFamilyId}</span>
+                      {typeof edgePathLegMeta.pathFamilyPathCount === 'number' && (
+                        <Chip>
+                          {typeof edgePathLegMeta.pathFamilyValidatedCount === 'number'
+                            ? `${edgePathLegMeta.pathFamilyValidatedCount}/${edgePathLegMeta.pathFamilyPathCount}`
+                            : `${edgePathLegMeta.pathFamilyPathCount} paths`}
+                        </Chip>
+                      )}
+                      {typeof edgePathLegMeta.pathFamilyGapCount === 'number' && edgePathLegMeta.pathFamilyGapCount > 0 && (
+                        <Chip tone="info">family gaps {edgePathLegMeta.pathFamilyGapCount}</Chip>
+                      )}
+                    </div>
+                  }
+                  copyText={edgePathLegMeta.pathFamilyId}
+                />
               )}
               {edgePathLegMeta.pathSupplyLinkId && (
                 <KV k="Supply link" v={<span style={mono}>{edgePathLegMeta.pathSupplyLinkId}</span>} copyText={edgePathLegMeta.pathSupplyLinkId} />

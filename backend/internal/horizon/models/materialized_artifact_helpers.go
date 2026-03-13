@@ -113,6 +113,10 @@ func BuildSupplyChainPathPayload(nodes []SupplyChainPathNode, edges []SupplyChai
 }
 
 func BuildSupplyChainPathPayloadWithSufficiency(nodes []SupplyChainPathNode, edges []SupplyChainPathEdge, legs []SupplyChainPathLeg, stress *SupplyChainPathStress, sufficiency *SupplyChainPathSufficiency, notes map[string]interface{}) map[string]interface{} {
+	return BuildSupplyChainPathPayloadDetailed(nodes, edges, legs, stress, sufficiency, nil, notes)
+}
+
+func BuildSupplyChainPathPayloadDetailed(nodes []SupplyChainPathNode, edges []SupplyChainPathEdge, legs []SupplyChainPathLeg, stress *SupplyChainPathStress, sufficiency *SupplyChainPathSufficiency, family *SupplyChainPathFamily, notes map[string]interface{}) map[string]interface{} {
 	payload := map[string]interface{}{
 		"v":     1,
 		"nodes": nodes,
@@ -128,6 +132,9 @@ func BuildSupplyChainPathPayloadWithSufficiency(nodes []SupplyChainPathNode, edg
 	}
 	if sufficiency != nil {
 		payload["sufficiency"] = sufficiency
+	}
+	if family != nil {
+		payload["family"] = family
 	}
 	if len(notes) > 0 {
 		payload["notes"] = notes
@@ -207,6 +214,10 @@ func ParseSupplyChainPathPayload(payload map[string]interface{}) (*SupplyChainPa
 	if err != nil {
 		return nil, err
 	}
+	family, err := decodeSupplyChainPathFamily(payload["family"])
+	if err != nil {
+		return nil, err
+	}
 
 	notes := map[string]interface{}{}
 	if notesRaw, ok := payload["notes"]; ok {
@@ -217,13 +228,14 @@ func ParseSupplyChainPathPayload(payload map[string]interface{}) (*SupplyChainPa
 	}
 
 	return &SupplyChainPathPayload{
-		Version: int(version),
-		Nodes:   nodes,
-		Edges:   edges,
-		Legs:    legs,
-		Stress:  stress,
+		Version:     int(version),
+		Nodes:       nodes,
+		Edges:       edges,
+		Legs:        legs,
+		Stress:      stress,
 		Sufficiency: sufficiency,
-		Notes:   notes,
+		Family:      family,
+		Notes:       notes,
 	}, nil
 }
 
@@ -356,7 +368,7 @@ func RepairSupplyChainPathLinkage(artifact *MaterializedArtifact, resolver func(
 
 	summary.FullyLinked = summary.Unresolved == 0 && (summary.Legs > 0 || summary.OperationalEdges > 0)
 	if summary.Changed {
-		artifact.Payload = BuildSupplyChainPathPayloadWithSufficiency(parsed.Nodes, parsed.Edges, parsed.Legs, parsed.Stress, parsed.Sufficiency, parsed.Notes)
+		artifact.Payload = BuildSupplyChainPathPayloadDetailed(parsed.Nodes, parsed.Edges, parsed.Legs, parsed.Stress, parsed.Sufficiency, parsed.Family, parsed.Notes)
 		PopulateSupplyChainPathIndexes(artifact)
 	}
 	return summary, nil
@@ -769,6 +781,7 @@ func PopulateSupplyChainPathIndexes(artifact *MaterializedArtifact) {
 		artifact.AffectedZoneRefs = mergeUniqueStrings(artifact.AffectedZoneRefs, summary.AffectedZoneRefs)
 	}
 	PopulateSupplyChainPathSufficiency(artifact)
+	PopulateSupplyChainPathFamily(artifact)
 
 	if artifact.Labels != nil {
 		if artifact.AnchorSupplier == "" {
@@ -1020,12 +1033,13 @@ func MergePayloads(existing, incoming map[string]interface{}) map[string]interfa
 		mergedNotes[k] = v
 	}
 
-	return BuildSupplyChainPathPayloadWithSufficiency(
+	return BuildSupplyChainPathPayloadDetailed(
 		mergedNodes,
 		mergedEdges,
 		mergedLegs,
 		mergePathStress(existingParsed.Stress, incomingParsed.Stress),
 		mergePathSufficiency(existingParsed.Sufficiency, incomingParsed.Sufficiency),
+		mergePathFamily(existingParsed.Family, incomingParsed.Family),
 		mergedNotes,
 	)
 }
@@ -1526,7 +1540,7 @@ func ReplaceCanonicalPathInArtifact(artifact *MaterializedArtifact, oldPath, new
 					changed = true
 				}
 			}
-			artifact.Payload = BuildSupplyChainPathPayloadWithSufficiency(parsed.Nodes, parsed.Edges, parsed.Legs, parsed.Stress, parsed.Sufficiency, parsed.Notes)
+			artifact.Payload = BuildSupplyChainPathPayloadDetailed(parsed.Nodes, parsed.Edges, parsed.Legs, parsed.Stress, parsed.Sufficiency, parsed.Family, parsed.Notes)
 		}
 	case MaterializedKindRegulatoryImpactMap, MaterializedKindGovernanceChain, MaterializedKindEcosystemMap:
 		parsed, err := ParseRelationsGraphPayload(artifact.Payload)

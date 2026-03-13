@@ -171,6 +171,7 @@ func (h *HorizonHandlers) SearchSupplyChains(w http.ResponseWriter, r *http.Requ
 	if len(results) > req.Limit {
 		results = results[:req.Limit]
 	}
+	annotateSupplyChainFamilySearchResults(results)
 
 	response := map[string]interface{}{
 		"mode": func() string {
@@ -183,6 +184,7 @@ func (h *HorizonHandlers) SearchSupplyChains(w http.ResponseWriter, r *http.Requ
 		"results": results,
 		"summary": map[string]interface{}{
 			"total":       len(results),
+			"families":    countSupplyChainFamiliesFromResults(results),
 			"pinned":      pinnedCount,
 			"direct":      directedCount,
 			"directional": directedCount,
@@ -264,6 +266,7 @@ func (h *HorizonHandlers) GetSupplyChainsByNode(w http.ResponseWriter, r *http.R
 	for _, artifact := range artifacts {
 		annotateSupplyChainTraceArtifact(artifact, canonicalPath)
 	}
+	annotateSupplyChainFamilyArtifacts(artifacts)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -271,6 +274,7 @@ func (h *HorizonHandlers) GetSupplyChainsByNode(w http.ResponseWriter, r *http.R
 		"tenantId": tenantID,
 		"chains":   artifacts,
 		"total":    len(artifacts),
+		"families": countSupplyChainFamilies(artifacts),
 	})
 }
 
@@ -316,12 +320,14 @@ func (h *HorizonHandlers) GetSupplyChainsByLens(w http.ResponseWriter, r *http.R
 		return
 	}
 	chains := append(scopedChains, discoveredChains...)
+	annotateSupplyChainFamilyArtifacts(chains)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"lensId":          lensID,
 		"chains":          chains,
 		"total":           len(chains),
+		"families":        countSupplyChainFamilies(chains),
 		"scopedTotal":     len(scopedChains),
 		"discoveredTotal": len(discoveredChains),
 	})
@@ -625,7 +631,7 @@ func isDirectedAnchorMatch(parsed *horizonmodels.SupplyChainPathPayload, anchorA
 
 func clipSupplyChainPayload(parsed *horizonmodels.SupplyChainPathPayload, matchedLegs []int, maxLegs int) (map[string]interface{}, bool) {
 	if parsed == nil || len(parsed.Legs) == 0 || maxLegs <= 0 || len(parsed.Legs) <= maxLegs {
-		return horizonmodels.BuildSupplyChainPathPayloadWithSufficiency(parsed.Nodes, parsed.Edges, parsed.Legs, parsed.Stress, parsed.Sufficiency, parsed.Notes), false
+		return horizonmodels.BuildSupplyChainPathPayloadDetailed(parsed.Nodes, parsed.Edges, parsed.Legs, parsed.Stress, parsed.Sufficiency, parsed.Family, parsed.Notes), false
 	}
 	start := matchedLegs[0]
 	end := matchedLegs[len(matchedLegs)-1]
@@ -695,7 +701,7 @@ func clipSupplyChainPayload(parsed *horizonmodels.SupplyChainPathPayload, matche
 		}
 		edges = append(edges, edge)
 	}
-	return horizonmodels.BuildSupplyChainPathPayloadWithSufficiency(nodes, edges, keepLegs, parsed.Stress, parsed.Sufficiency, parsed.Notes), true
+	return horizonmodels.BuildSupplyChainPathPayloadDetailed(nodes, edges, keepLegs, parsed.Stress, parsed.Sufficiency, parsed.Family, parsed.Notes), true
 }
 
 func normalizeSupplyChainAnchors(anchors []string) []string {
@@ -1001,6 +1007,110 @@ func annotateSupplyChainTraceArtifact(artifact *horizonmodels.MaterializedArtifa
 
 	artifact.TracePriority = scoreSupplyChainTracePriority(artifact)
 	artifact.TraceReason = buildSupplyChainTraceReason(artifact, centerCanonicalPath)
+}
+
+func annotateSupplyChainFamilySearchResults(results []supplyChainSearchResult) {
+	if len(results) == 0 {
+		return
+	}
+	artifacts := make([]*horizonmodels.MaterializedArtifact, 0, len(results))
+	for i := range results {
+		if results[i].Artifact != nil {
+			artifacts = append(artifacts, results[i].Artifact)
+		}
+	}
+	annotateSupplyChainFamilyArtifacts(artifacts)
+}
+
+func countSupplyChainFamiliesFromResults(results []supplyChainSearchResult) int {
+	artifacts := make([]*horizonmodels.MaterializedArtifact, 0, len(results))
+	for i := range results {
+		if results[i].Artifact != nil {
+			artifacts = append(artifacts, results[i].Artifact)
+		}
+	}
+	return countSupplyChainFamilies(artifacts)
+}
+
+func countSupplyChainFamilies(artifacts []*horizonmodels.MaterializedArtifact) int {
+	families := make(map[string]struct{})
+	for _, artifact := range artifacts {
+		if artifact == nil {
+			continue
+		}
+		familyID := strings.TrimSpace(artifact.FamilyID)
+		if familyID == "" {
+			parsed, err := horizonmodels.ParseSupplyChainPathPayload(artifact.Payload)
+			if err == nil && parsed != nil && parsed.Family != nil {
+				familyID = strings.TrimSpace(parsed.Family.ID)
+			}
+		}
+		if familyID != "" {
+			families[familyID] = struct{}{}
+		}
+	}
+	return len(families)
+}
+
+func annotateSupplyChainFamilyArtifacts(artifacts []*horizonmodels.MaterializedArtifact) {
+	type familySummary struct {
+		pathCount      int
+		validatedCount int
+		openGaps       []string
+	}
+	if len(artifacts) == 0 {
+		return
+	}
+	summaryByFamily := make(map[string]*familySummary)
+	for _, artifact := range artifacts {
+		if artifact == nil {
+			continue
+		}
+		horizonmodels.PopulateSupplyChainPathIndexes(artifact)
+		parsed, err := horizonmodels.ParseSupplyChainPathPayload(artifact.Payload)
+		if err != nil || parsed == nil || parsed.Family == nil {
+			continue
+		}
+		familyID := strings.TrimSpace(parsed.Family.ID)
+		if familyID == "" {
+			continue
+		}
+		summary := summaryByFamily[familyID]
+		if summary == nil {
+			summary = &familySummary{}
+			summaryByFamily[familyID] = summary
+		}
+		summary.pathCount++
+		if strings.TrimSpace(artifact.PathStatus) == "validated" || strings.TrimSpace(artifact.SufficiencyStatus) == horizonmodels.SupplyChainSufficiencyValidated {
+			summary.validatedCount++
+		}
+		summary.openGaps = mergeUniqueStrings(summary.openGaps, parsed.Family.OpenGaps)
+		if parsed.Family.PathCount > summary.pathCount {
+			summary.pathCount = parsed.Family.PathCount
+		}
+		if parsed.Family.ValidatedPathCount > summary.validatedCount {
+			summary.validatedCount = parsed.Family.ValidatedPathCount
+		}
+	}
+	for _, artifact := range artifacts {
+		if artifact == nil {
+			continue
+		}
+		parsed, err := horizonmodels.ParseSupplyChainPathPayload(artifact.Payload)
+		if err != nil || parsed == nil || parsed.Family == nil {
+			continue
+		}
+		familyID := strings.TrimSpace(parsed.Family.ID)
+		if familyID == "" {
+			continue
+		}
+		if summary := summaryByFamily[familyID]; summary != nil {
+			artifact.FamilyID = familyID
+			artifact.FamilyPathCount = summary.pathCount
+			artifact.FamilyValidatedCount = summary.validatedCount
+			artifact.FamilyGapCount = len(summary.openGaps)
+		}
+	}
 }
 
 func hydrateSupplyChainTraceEndpoints(

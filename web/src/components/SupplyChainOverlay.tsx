@@ -37,6 +37,10 @@ export interface MaterializedArtifact {
   unresolvedJoinCount?: number;
   validatedJoinCount?: number;
   isConfirmedPath?: boolean;
+  familyId?: string;
+  familyPathCount?: number;
+  familyValidatedCount?: number;
+  familyGapCount?: number;
   traceEndpoints?: {
     supplier?: {
       canonicalPath?: string;
@@ -130,6 +134,13 @@ export interface MaterializedArtifact {
         status?: string;
         reasons?: string[];
       }>;
+    };
+    family?: {
+      id?: string;
+      pathCount?: number;
+      validatedPathCount?: number;
+      gapPathCount?: number;
+      openGaps?: string[];
     };
     edges?: Array<{
       type: string;
@@ -233,6 +244,7 @@ export function SupplyChainOverlay({
       const avgBindingConfidence =
         bindingConfidenceCount > 0 ? bindingConfidenceTotal / bindingConfidenceCount : 0;
       const sufficiency = c.payload?.sufficiency;
+      const family = c.payload?.family;
       const joinAssessments = Array.isArray(sufficiency?.joinAssessments) ? sufficiency!.joinAssessments! : [];
       const sufficiencyStatus = String(c.sufficiencyStatus || sufficiency?.status || '').trim();
       const gapCount = Number(c.gapCount ?? ((sufficiency?.openGaps?.length || 0) + (sufficiency?.hardFailures?.length || 0)) ?? 0);
@@ -272,6 +284,10 @@ export function SupplyChainOverlay({
         validatedJoinCount,
         unresolvedJoinCount,
         joinCount: joinAssessments.length,
+        familyId: String(c.familyId || family?.id || '').trim(),
+        familyPathCount: Number(c.familyPathCount ?? family?.pathCount ?? 0),
+        familyValidatedCount: Number(c.familyValidatedCount ?? family?.validatedPathCount ?? 0),
+        familyGapCount: Number(c.familyGapCount ?? ((family?.openGaps?.length || 0) || family?.gapPathCount || 0)),
       };
     });
   }, [chains, canonicalPathsOnGraph]);
@@ -353,7 +369,7 @@ export function SupplyChainOverlay({
       )}
       {!loading && !error && chainStatus.length > 0 && (
         <div style={{ padding: '8px 0' }}>
-          {chainStatus.map(({ artifact, onGraph, legCount, pathStressScore, bindingConfidence, flowCount, zoneCount, affectedZoneCount, spatialSemantics, overlapScore, sufficiencyStatus, sufficiencyScore, sufficiencySummary, gapCount, validatedJoinCount, unresolvedJoinCount, joinCount }) => (
+          {chainStatus.map(({ artifact, onGraph, legCount, pathStressScore, bindingConfidence, flowCount, zoneCount, affectedZoneCount, spatialSemantics, overlapScore, sufficiencyStatus, sufficiencyScore, sufficiencySummary, gapCount, validatedJoinCount, unresolvedJoinCount, joinCount, familyId, familyPathCount, familyValidatedCount, familyGapCount }) => (
             <button
               key={artifact.id}
               type="button"
@@ -429,6 +445,23 @@ export function SupplyChainOverlay({
                 >
                   {artifact.isPinned ? 'Pinned' : 'Discovered'}
                 </span>
+                {familyId && familyPathCount > 0 && (
+                  <span
+                    style={{
+                      fontSize: 10,
+                      padding: '2px 6px',
+                      borderRadius: 999,
+                      border: '1px solid rgba(59,130,246,0.2)',
+                      background: 'rgba(59,130,246,0.08)',
+                      color: 'var(--text-secondary-strong)',
+                      fontWeight: 700,
+                      letterSpacing: '0.02em',
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    family {familyValidatedCount}/{familyPathCount}
+                  </span>
+                )}
               </div>
               {artifact.discoveryReason && (
                 <span style={{ color: 'var(--text-secondary-strong)', fontSize: 11 }}>
@@ -521,6 +554,20 @@ export function SupplyChainOverlay({
                   {unresolvedJoinCount > 0 && (
                     <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
                       unresolved {unresolvedJoinCount}
+                    </span>
+                  )}
+                </div>
+              )}
+              {familyId && (familyPathCount > 0 || familyGapCount > 0) && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {familyPathCount > 0 && (
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                      family paths {familyPathCount}
+                    </span>
+                  )}
+                  {familyGapCount > 0 && (
+                    <span style={{ fontSize: 11, color: 'var(--text-warning)' }}>
+                      family gaps {familyGapCount}
                     </span>
                   )}
                 </div>

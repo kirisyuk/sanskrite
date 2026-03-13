@@ -13,6 +13,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonrisk "github.com/igorkirisyuk/sanskrite/internal/horizon/risk"
@@ -208,6 +209,14 @@ func (s *HorizonService) ScoutingJobs() *repo.ScoutingJobsRepository {
 // Edges возвращает DependencyEdgesRepository
 func (s *HorizonService) Edges() *repo.DependencyEdgesRepository {
 	return s.edgesRepo
+}
+
+// SupplyChainQueryEngine returns the deterministic supply-chain query layer built over canonical SupplyLinks.
+func (s *HorizonService) SupplyChainQueryEngine() *pathbuilder.SupplyChainQueryEngine {
+	if s == nil {
+		return nil
+	}
+	return pathbuilder.NewSupplyChainQueryEngine(s.fragmentsRepo, s.edgesRepo)
 }
 
 // FragmentVersions возвращает HorizonFragmentVersionsRepository

@@ -167,6 +167,8 @@ type SupplyChainPath struct {
 	JoinAssessmentHints []models.SupplyChainJoinAssessment
 	// OpenGaps carries unresolved chain-level gaps discovered before materialization.
 	OpenGaps []string
+	// Family carries chain-set metadata shared across related alternative paths.
+	Family *models.SupplyChainPathFamily
 	// Build metadata
 	BuildMode string
 	MaxDepth  int
@@ -812,7 +814,7 @@ func (b *SupplyChainPathBuilder) MaterializePath(
 	nodes, edges, legs, stress := b.pathToMaterializedPayload(ctx, path)
 
 	sufficiency := b.evaluatePathSufficiency(ctx, path, legs)
-	payload := models.BuildSupplyChainPathPayloadWithSufficiency(nodes, edges, legs, stress, sufficiency, buildSupplyChainArtifactNotes(path, legs, stress))
+	payload := models.BuildSupplyChainPathPayloadDetailed(nodes, edges, legs, stress, sufficiency, path.Family, buildSupplyChainArtifactNotes(path, legs, stress))
 
 	displayName := buildChainDisplayName(path.Segments)
 	labels := buildChainLabels(path.Segments)
@@ -916,7 +918,7 @@ func (b *SupplyChainPathBuilder) MaterializePathsBatch(
 		}
 		nodes, edges, legs, stress := b.pathToMaterializedPayload(ctx, path)
 		sufficiency := b.evaluatePathSufficiency(ctx, path, legs)
-		payload := models.BuildSupplyChainPathPayloadWithSufficiency(nodes, edges, legs, stress, sufficiency, buildSupplyChainArtifactNotes(path, legs, stress))
+		payload := models.BuildSupplyChainPathPayloadDetailed(nodes, edges, legs, stress, sufficiency, path.Family, buildSupplyChainArtifactNotes(path, legs, stress))
 		displayName := buildChainDisplayName(path.Segments)
 		labels := buildChainLabels(path.Segments)
 		nodeRefs := collectNodeRefs(path.Segments)
@@ -1035,7 +1037,7 @@ func (b *SupplyChainPathBuilder) RebuildFromSupplyLinks(ctx context.Context, art
 	rebuildPath.BuildMode = "rebuild_from_supply_links"
 	rebuildPath.MaxDepth = maxDepth
 	sufficiency := b.evaluatePathSufficiency(ctx, bestPath, legs)
-	newPayload := models.BuildSupplyChainPathPayloadWithSufficiency(nodes, edges, legs, stress, sufficiency, buildSupplyChainArtifactNotes(&rebuildPath, legs, stress))
+	newPayload := models.BuildSupplyChainPathPayloadDetailed(nodes, edges, legs, stress, sufficiency, rebuildPath.Family, buildSupplyChainArtifactNotes(&rebuildPath, legs, stress))
 
 	merged := models.MergePayloads(artifact.Payload, newPayload)
 	newNodeRefs := collectNodeRefs(bestPath.Segments)
@@ -1080,6 +1082,15 @@ func (b *SupplyChainPathBuilder) UpdatePathStatus(
 	}
 	existing.UpdatedAt = time.Now().UTC()
 	return b.artifactsRepo.Update(ctx, existing)
+}
+
+// PreviewSufficiency evaluates path continuity without persisting the artifact.
+func (b *SupplyChainPathBuilder) PreviewSufficiency(ctx context.Context, path *SupplyChainPath) (*models.SupplyChainPathSufficiency, error) {
+	if path == nil {
+		return nil, fmt.Errorf("path is required")
+	}
+	_, _, legs, _ := b.pathToMaterializedPayload(ctx, path)
+	return b.evaluatePathSufficiency(ctx, path, legs), nil
 }
 
 // pathToMaterializedPayload converts a SupplyChainPath to MaterializedArtifact payload format.

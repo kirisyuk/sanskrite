@@ -190,6 +190,34 @@ func TestBuildSupplyChainPathPayloadWithSufficiency(t *testing.T) {
 	}
 }
 
+func TestBuildSupplyChainPathPayloadDetailed_WithFamily(t *testing.T) {
+	payload := BuildSupplyChainPathPayloadDetailed(
+		[]SupplyChainPathNode{{Type: "org", Ref: "/org/catl"}},
+		nil,
+		nil,
+		nil,
+		&SupplyChainPathSufficiency{Status: SupplyChainSufficiencyValidated, Score: 1},
+		&SupplyChainPathFamily{
+			ID:                 "/supply-chain-family/global/customer_product/org-bmw/product-battery-cell",
+			PathCount:          3,
+			ValidatedPathCount: 1,
+			GapPathCount:       1,
+			OpenGaps:           []string{"Resolve transport evidence"},
+		},
+		map[string]interface{}{"buildMode": "test"},
+	)
+	parsed, err := ParseSupplyChainPathPayload(payload)
+	if err != nil {
+		t.Fatalf("ParseSupplyChainPathPayload() error = %v", err)
+	}
+	if parsed.Family == nil {
+		t.Fatal("expected family in parsed payload")
+	}
+	if parsed.Family.PathCount != 3 {
+		t.Fatalf("family pathCount=%d, want 3", parsed.Family.PathCount)
+	}
+}
+
 func TestParseSupplyChainPathPayload(t *testing.T) {
 	payload := map[string]interface{}{
 		"v": float64(1), // JSON unmarshal uses float64

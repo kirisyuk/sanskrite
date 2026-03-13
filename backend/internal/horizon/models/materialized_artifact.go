@@ -92,25 +92,29 @@ type MaterializedArtifact struct {
 	ProductAxis      string   `json:"productAxis,omitempty" firestore:"productAxis,omitempty"`
 
 	// Response-only selection metadata. Not persisted.
-	DiscoverySource string                   `json:"discoverySource,omitempty" firestore:"-"`
-	DiscoveryReason string                   `json:"discoveryReason,omitempty" firestore:"-"`
-	MatchedRefs     []string                 `json:"matchedRefs,omitempty" firestore:"-"`
-	OverlapScore    float64                  `json:"overlapScore,omitempty" firestore:"-"`
-	IsPinned        bool                     `json:"isPinned,omitempty" firestore:"-"`
-	TraceRole       string                   `json:"traceRole,omitempty" firestore:"-"`
-	TraceReason     string                   `json:"traceReason,omitempty" firestore:"-"`
-	TracePriority   int                      `json:"tracePriority,omitempty" firestore:"-"`
-	LegCount        int                      `json:"legCount,omitempty" firestore:"-"`
-	BindingScore    float64                  `json:"bindingScore,omitempty" firestore:"-"`
-	PathStressScore float64                  `json:"pathStressScore,omitempty" firestore:"-"`
-	BottleneckLeg   int                      `json:"bottleneckLegIndex,omitempty" firestore:"-"`
-	SufficiencyStatus string                 `json:"sufficiencyStatus,omitempty" firestore:"-"`
-	SufficiencyScore  float64                `json:"sufficiencyScore,omitempty" firestore:"-"`
-	GapCount          int                    `json:"gapCount,omitempty" firestore:"-"`
-	UnresolvedJoinCount int                  `json:"unresolvedJoinCount,omitempty" firestore:"-"`
-	ValidatedJoinCount int                   `json:"validatedJoinCount,omitempty" firestore:"-"`
-	IsConfirmedPath   bool                   `json:"isConfirmedPath,omitempty" firestore:"-"`
-	TraceEndpoints  *SupplyChainTraceContext `json:"traceEndpoints,omitempty" firestore:"-"`
+	DiscoverySource      string                   `json:"discoverySource,omitempty" firestore:"-"`
+	DiscoveryReason      string                   `json:"discoveryReason,omitempty" firestore:"-"`
+	MatchedRefs          []string                 `json:"matchedRefs,omitempty" firestore:"-"`
+	OverlapScore         float64                  `json:"overlapScore,omitempty" firestore:"-"`
+	IsPinned             bool                     `json:"isPinned,omitempty" firestore:"-"`
+	TraceRole            string                   `json:"traceRole,omitempty" firestore:"-"`
+	TraceReason          string                   `json:"traceReason,omitempty" firestore:"-"`
+	TracePriority        int                      `json:"tracePriority,omitempty" firestore:"-"`
+	LegCount             int                      `json:"legCount,omitempty" firestore:"-"`
+	BindingScore         float64                  `json:"bindingScore,omitempty" firestore:"-"`
+	PathStressScore      float64                  `json:"pathStressScore,omitempty" firestore:"-"`
+	BottleneckLeg        int                      `json:"bottleneckLegIndex,omitempty" firestore:"-"`
+	SufficiencyStatus    string                   `json:"sufficiencyStatus,omitempty" firestore:"-"`
+	SufficiencyScore     float64                  `json:"sufficiencyScore,omitempty" firestore:"-"`
+	GapCount             int                      `json:"gapCount,omitempty" firestore:"-"`
+	UnresolvedJoinCount  int                      `json:"unresolvedJoinCount,omitempty" firestore:"-"`
+	ValidatedJoinCount   int                      `json:"validatedJoinCount,omitempty" firestore:"-"`
+	IsConfirmedPath      bool                     `json:"isConfirmedPath,omitempty" firestore:"-"`
+	FamilyID             string                   `json:"familyId,omitempty" firestore:"-"`
+	FamilyPathCount      int                      `json:"familyPathCount,omitempty" firestore:"-"`
+	FamilyValidatedCount int                      `json:"familyValidatedCount,omitempty" firestore:"-"`
+	FamilyGapCount       int                      `json:"familyGapCount,omitempty" firestore:"-"`
+	TraceEndpoints       *SupplyChainTraceContext `json:"traceEndpoints,omitempty" firestore:"-"`
 }
 
 type SupplyChainTraceEndpoint struct {
@@ -263,6 +267,9 @@ type SupplyChainPathPayload struct {
 	// Sufficiency: explainable continuity assessment for the materialized chain.
 	Sufficiency *SupplyChainPathSufficiency `json:"sufficiency,omitempty"`
 
+	// Family: grouped chain-set metadata for related alternative/competing paths.
+	Family *SupplyChainPathFamily `json:"family,omitempty"`
+
 	// Notes: optional metadata about how the path was built.
 	Notes map[string]interface{} `json:"notes,omitempty"`
 }
@@ -374,14 +381,14 @@ type SupplyChainPathStress struct {
 }
 
 type SupplyChainPathSufficiency struct {
-	Status           string                      `json:"status,omitempty"`
-	Score            float64                     `json:"score,omitempty"`
-	Summary          string                      `json:"summary,omitempty"`
-	HardFailures     []string                    `json:"hardFailures,omitempty"`
-	Warnings         []string                    `json:"warnings,omitempty"`
-	OpenGaps         []string                    `json:"openGaps,omitempty"`
-	JoinAssessments  []SupplyChainJoinAssessment `json:"joinAssessments,omitempty"`
-	LegAssessments   []SupplyChainLegAssessment  `json:"legAssessments,omitempty"`
+	Status          string                      `json:"status,omitempty"`
+	Score           float64                     `json:"score,omitempty"`
+	Summary         string                      `json:"summary,omitempty"`
+	HardFailures    []string                    `json:"hardFailures,omitempty"`
+	Warnings        []string                    `json:"warnings,omitempty"`
+	OpenGaps        []string                    `json:"openGaps,omitempty"`
+	JoinAssessments []SupplyChainJoinAssessment `json:"joinAssessments,omitempty"`
+	LegAssessments  []SupplyChainLegAssessment  `json:"legAssessments,omitempty"`
 }
 
 type SupplyChainJoinAssessment struct {
@@ -400,14 +407,27 @@ type SupplyChainJoinAssessment struct {
 }
 
 type SupplyChainLegAssessment struct {
-	LegIndex                 int      `json:"legIndex"`
-	RouteSensitive           bool     `json:"routeSensitive"`
-	ExplicitTransportEvidence bool    `json:"explicitTransportEvidence"`
-	BindingConfidence        float64  `json:"bindingConfidence,omitempty"`
-	TimeKnown                bool     `json:"timeKnown"`
-	RouteStatus              string   `json:"routeStatus,omitempty"`
-	Status                   string   `json:"status,omitempty"`
-	Reasons                  []string `json:"reasons,omitempty"`
+	LegIndex                  int      `json:"legIndex"`
+	RouteSensitive            bool     `json:"routeSensitive"`
+	ExplicitTransportEvidence bool     `json:"explicitTransportEvidence"`
+	BindingConfidence         float64  `json:"bindingConfidence,omitempty"`
+	TimeKnown                 bool     `json:"timeKnown"`
+	RouteStatus               string   `json:"routeStatus,omitempty"`
+	Status                    string   `json:"status,omitempty"`
+	Reasons                   []string `json:"reasons,omitempty"`
+}
+
+type SupplyChainPathFamily struct {
+	ID                 string   `json:"id,omitempty"`
+	AnchorSupplier     string   `json:"anchorSupplier,omitempty"`
+	AnchorCustomer     string   `json:"anchorCustomer,omitempty"`
+	ProductAxis        string   `json:"productAxis,omitempty"`
+	PathCount          int      `json:"pathCount,omitempty"`
+	ValidatedPathCount int      `json:"validatedPathCount,omitempty"`
+	HeuristicPathCount int      `json:"heuristicPathCount,omitempty"`
+	GapPathCount       int      `json:"gapPathCount,omitempty"`
+	OpenGaps           []string `json:"openGaps,omitempty"`
+	CoResearchRound    int      `json:"coResearchRound,omitempty"`
 }
 
 // validateSupplyChainPathPayload validates SUPPLY_CHAIN_PATH payload structure.
