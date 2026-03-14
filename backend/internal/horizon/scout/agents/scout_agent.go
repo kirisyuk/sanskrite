@@ -291,6 +291,7 @@ func (a *ScoutAgent) ExtractFragmentDataWithGrounding(ctx context.Context, conte
 		scoutResult.Fragment.Labels,
 		scoutResult.Fragment.Identifiers,
 	)
+	applyInferredHomeLocationHint(&scoutResult.Fragment)
 	normalizeDiscoveredRelationsNames(scoutResult.Relations)
 
 	// Ensure Type is set
@@ -735,6 +736,7 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 - state: map of MetricValue entries
 - description: short factual summary
 - homeLocation: when geo is relevant, object with { name: string (city/place), iso3166_1: string (ISO3166-1 alpha2, e.g. "AE", "US") }. Required for org/facility/gov to enable geocoding.
+  - If the entity/facility name, slug, or source text contains a clear place clue (e.g. Wuxi, Huizhou, Eilat, Binh Duong, Riyadh), set homeLocation.name to that city/site instead of leaving it empty.
   - Set iso3166_1 ONLY when explicit or strongly corroborated by the source/location clue.
   - If city/site clue and iso3166_1 conflict, fix the ISO2 or omit it; never keep a contradictory guess.
   - For org/gov, /org/na or /gov/na is last-resort only after checking official name, HQ/site/place clue, and source text for jurisdiction.

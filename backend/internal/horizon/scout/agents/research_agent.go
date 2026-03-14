@@ -116,6 +116,7 @@ func (a *ResearchAgent) EnrichFragmentWithGroundingWithDomainModes(
 				enriched.Labels,
 				enriched.Identifiers,
 			)
+			applyInferredHomeLocationHint(enriched)
 			return enriched, relations, chains, groundingEvidence, rawContent, nil
 		}
 	}
@@ -163,6 +164,7 @@ func (a *ResearchAgent) EnrichFragmentWithGrounding(
 				enriched.Labels,
 				enriched.Identifiers,
 			)
+			applyInferredHomeLocationHint(enriched)
 			return enriched, relations, chains, groundingEvidence, rawContent, nil
 		}
 	}
@@ -248,6 +250,7 @@ func (a *ResearchAgent) enrichFragmentWithGroundingMonolith(
 		fragment.Labels,
 		fragment.Identifiers,
 	)
+	applyInferredHomeLocationHint(fragment)
 	normalizeDiscoveredRelationsNames(res.Relations)
 
 	return fragment, res.Relations, res.SupplyChains, groundingEvidence, rawContent, nil
@@ -638,6 +641,7 @@ TASK: Use your search tools to find answers to the missing information questions
 Return a JSON object with fields:
 1. "fragment": A JSON object containing ONLY the new or updated fields for the fragment that you found (e.g., "state", "homeLocation").
    - Geo contract: if you update "homeLocation", use { "name": "city/place", "iso3166_1": "US|AE|..." }.
+   - For ORG/FACILITY/GOV: if the official name, slug, source text, or site label contains a clear place clue (e.g. Wuxi, Huizhou, Eilat, Binh Duong, Riyadh), set homeLocation.name to that city/site instead of leaving it empty.
    - Set iso3166_1 ONLY when the country is explicit or strongly corroborated by the source and the place clue.
    - If the place clue and iso3166_1 conflict, correct the ISO2 or omit it; never preserve a contradictory guess in a partial update.
    - If this update would keep /org/na or /gov/na even though jurisdiction is inferable from official name/place clue/source, resolve the jurisdiction instead of preserving na.

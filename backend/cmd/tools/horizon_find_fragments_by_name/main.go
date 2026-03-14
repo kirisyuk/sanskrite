@@ -7,93 +7,142 @@ import (
 	"log"
 	"strings"
 
-	"cloud.google.com/go/firestore"
-	"google.golang.org/api/iterator"
-
+	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 )
 
 var (
 	projectID = flag.String("project", "", "GCP project ID (required)")
-	query     = flag.String("query", "", "Search query (fragment name or canonical path)")
+	query     = flag.String("query", "", "Exact fragment name, identifier, or canonical path")
 	tenantID  = flag.String("tenant", "global", "Tenant ID (default: global)")
+	fragType  = flag.String("type", "", "Optional fragment type filter (e.g. ORGANIZATION, FACILITY)")
 )
 
 func main() {
 	flag.Parse()
 
-	if *projectID == "" {
+	if strings.TrimSpace(*projectID) == "" {
 		log.Fatal("--project is required")
 	}
-	if *query == "" {
+	if strings.TrimSpace(*query) == "" {
 		log.Fatal("--query is required")
 	}
 
 	ctx := context.Background()
-
-	fsClient, err := firestore.NewClient(ctx, *projectID)
+	fsClient, err := gcp.NewFirestoreClient(ctx, strings.TrimSpace(*projectID))
 	if err != nil {
 		log.Fatalf("Failed to create Firestore client: %v", err)
 	}
 	defer fsClient.Close()
 
+	fragmentsRepo := repo.NewHorizonFragmentsRepository(fsClient.Client())
 	q := strings.TrimSpace(*query)
-	log.Printf("Searching for fragments matching: %q", q)
+	t := models.FragmentType(strings.ToUpper(strings.TrimSpace(*fragType)))
 
-	// Search by labels.en (name)
-	searchCol := fsClient.Collection("horizon_fragments")
-	iter := searchCol.Where("tenantId", "==", *tenantID).Documents(ctx)
-	defer iter.Stop()
-
-	var matches []*models.HorizonFragment
-	for {
-		doc, err := iter.Next()
-		if err == iterator.Done {
-			break
-		}
-		if err != nil {
-			log.Fatalf("Failed to iterate: %v", err)
-		}
-
-		var fragment models.HorizonFragment
-		if err := doc.DataTo(&fragment); err != nil {
-			continue
-		}
-
-		// Check if matches query
-		matchesQuery := false
-		if strings.Contains(strings.ToLower(fragment.CanonicalPath), strings.ToLower(q)) {
-			matchesQuery = true
-		}
-		if name, ok := fragment.Labels["en"]; ok && strings.Contains(strings.ToLower(name), strings.ToLower(q)) {
-			matchesQuery = true
-		}
-
-		if matchesQuery {
-			matches = append(matches, &fragment)
-		}
+	matches, err := findMatches(ctx, fragmentsRepo, q, t)
+	if err != nil {
+		log.Fatalf("Find fragments: %v", err)
 	}
-
 	if len(matches) == 0 {
-		log.Printf("No fragments found matching: %q", q)
+		log.Printf("No fragments found for exact query: %q", q)
 		return
 	}
 
-	log.Printf("\nFound %d fragments:\n", len(matches))
+	log.Printf("Found %d exact matches for %q\n", len(matches), q)
 	for _, f := range matches {
-		name := "N/A"
-		if n, ok := f.Labels["en"]; ok {
-			name = n
+		if f == nil {
+			continue
 		}
-		fmt.Printf("  ID: %s\n", f.ID)
-		fmt.Printf("  Name: %s\n", name)
-		fmt.Printf("  CanonicalPath: %s\n", f.CanonicalPath)
-		fmt.Printf("  Type: %s\n", f.Type)
-		fmt.Printf("  EntityPath: %s\n", f.EntityPath)
-		fmt.Printf("  SectorPath: %s\n", f.SectorPath)
-		fmt.Printf("  Status: %s\n", f.Governance.Status)
-		fmt.Printf("  EpistemicStatus: %s\n", f.Metadata.EpistemicStatus)
-		fmt.Printf("  ---\n")
+		if strings.TrimSpace(*tenantID) != "" && strings.TrimSpace(f.TenantID) != "" && strings.TrimSpace(f.TenantID) != strings.TrimSpace(*tenantID) {
+			continue
+		}
+		name := bestLabel(f)
+		fmt.Printf("ID: %s\n", f.ID)
+		fmt.Printf("Name: %s\n", name)
+		fmt.Printf("CanonicalPath: %s\n", f.CanonicalPath)
+		fmt.Printf("Type: %s\n", f.Type)
+		fmt.Printf("HomeLocation: %s\n", homeLocationSummary(f))
+		fmt.Printf("Coordinates: %s\n", coordinatesSummary(f))
+		fmt.Printf("GeoProvider: %s\n", strings.TrimSpace(f.Identifiers["geoCoordinatesProvider"]))
+		fmt.Printf("GeoQuery: %s\n", strings.TrimSpace(f.Identifiers["geoCoordinatesQuery"]))
+		fmt.Printf("GeoFormattedAddress: %s\n", strings.TrimSpace(f.Identifiers["geoCoordinatesFormattedAddress"]))
+		fmt.Printf("---\n")
 	}
 }
 
+func findMatches(ctx context.Context, fragmentsRepo *repo.HorizonFragmentsRepository, query string, fragType models.FragmentType) ([]*models.HorizonFragment, error) {
+	out := make([]*models.HorizonFragment, 0, 8)
+	seen := map[string]struct{}{}
+	add := func(items []*models.HorizonFragment) {
+		for _, item := range items {
+			if item == nil || strings.TrimSpace(item.ID) == "" {
+				continue
+			}
+			if _, ok := seen[item.ID]; ok {
+				continue
+			}
+			seen[item.ID] = struct{}{}
+			out = append(out, item)
+		}
+	}
+
+	if strings.HasPrefix(query, "/") {
+		if f, err := fragmentsRepo.GetByCanonicalPath(ctx, query); err == nil && f != nil {
+			add([]*models.HorizonFragment{f})
+		}
+	}
+	if items, err := fragmentsRepo.FindByLabel(ctx, "en", query, fragType); err == nil {
+		add(items)
+	}
+	for _, key := range []string{"legalName", "shortName"} {
+		if items, err := fragmentsRepo.FindByIdentifierAndType(ctx, key, query, fragType); err == nil {
+			add(items)
+		}
+	}
+	return out, nil
+}
+
+func bestLabel(f *models.HorizonFragment) string {
+	if f == nil {
+		return ""
+	}
+	for _, value := range []string{
+		strings.TrimSpace(f.Labels["en"]),
+		strings.TrimSpace(f.Identifiers["legalName"]),
+		strings.TrimSpace(f.Identifiers["shortName"]),
+	} {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func homeLocationSummary(f *models.HorizonFragment) string {
+	if f == nil || f.HomeLocation == nil {
+		return ""
+	}
+	parts := []string{strings.TrimSpace(f.HomeLocation.Name)}
+	if f.HomeLocation.ISO3166_1 != nil {
+		parts = append(parts, strings.TrimSpace(*f.HomeLocation.ISO3166_1))
+	}
+	return strings.Join(compact(parts), ", ")
+}
+
+func coordinatesSummary(f *models.HorizonFragment) string {
+	if f == nil || f.Coordinates == nil {
+		return ""
+	}
+	return fmt.Sprintf("%.6f, %.6f", f.Coordinates.Lat, f.Coordinates.Lon)
+}
+
+func compact(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if s := strings.TrimSpace(value); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}

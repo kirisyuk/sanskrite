@@ -46,14 +46,24 @@ func CacheOptionsFromEnv() CacheOptions {
 // CachedClient wraps a GeocodingClientInterface and adds Firestore-backed cache.
 // Uses external_data_cache collection with service="google_geocoding".
 type CachedClient struct {
-	base  ontology.GeocodingClientInterface
-	cache *repo.ExternalDataCacheRepository
-	opts  CacheOptions
+	base    ontology.GeocodingClientInterface
+	cache   *repo.ExternalDataCacheRepository
+	opts    CacheOptions
+	service string
 }
 
 // NewCachedClient creates a cached geocoding client.
 func NewCachedClient(base ontology.GeocodingClientInterface, cache *repo.ExternalDataCacheRepository, opts CacheOptions) *CachedClient {
-	return &CachedClient{base: base, cache: cache, opts: opts}
+	return NewCachedClientWithService(base, cache, opts, ontology.GeocodingProviderGoogle)
+}
+
+// NewCachedClientWithService creates a cached geocoding client with explicit provider identity.
+func NewCachedClientWithService(base ontology.GeocodingClientInterface, cache *repo.ExternalDataCacheRepository, opts CacheOptions, service string) *CachedClient {
+	svc := strings.TrimSpace(service)
+	if svc == "" {
+		svc = ontology.GeocodingProviderGoogle
+	}
+	return &CachedClient{base: base, cache: cache, opts: opts, service: svc}
 }
 
 // Geocode implements ontology.GeocodingClientInterface with cache-first behavior.
@@ -74,7 +84,7 @@ func (c *CachedClient) Geocode(ctx context.Context, address string) (*ontology.G
 	if c.opts.Enabled && c.cache != nil {
 		for _, variant := range addressVariantsForCacheLookup(addr) {
 			cacheKey := "address=" + variant
-			docID := repo.MakeCacheDocID("google_geocoding", "geocoding.geocode", cacheKey)
+			docID := repo.MakeCacheDocID(c.service, "geocoding.geocode", cacheKey)
 			if hit, ok := c.getCached(ctx, docID); ok {
 				return hit, nil
 			}
@@ -106,6 +116,7 @@ func (c *CachedClient) getCached(ctx context.Context, docID string) (*ontology.G
 		Lon              float64 `json:"lon"`
 		FormattedAddress string  `json:"formattedAddress"`
 		PlaceID          string  `json:"placeId"`
+		Provider         string  `json:"provider,omitempty"`
 	}
 	if err := json.Unmarshal(e.Payload, &out); err != nil {
 		return nil, false
@@ -118,6 +129,7 @@ func (c *CachedClient) getCached(ctx context.Context, docID string) (*ontology.G
 		Lon:              out.Lon,
 		FormattedAddress: out.FormattedAddress,
 		PlaceID:          out.PlaceID,
+		Provider:         firstNonEmptyProvider(out.Provider, c.service),
 	}, true
 }
 
@@ -133,6 +145,7 @@ func (c *CachedClient) putCached(ctx context.Context, key string, v *ontology.Ge
 		payload["lon"] = v.Lon
 		payload["formattedAddress"] = v.FormattedAddress
 		payload["placeId"] = v.PlaceID
+		payload["provider"] = firstNonEmptyProvider(v.Provider, c.service)
 	}
 	b, err := json.Marshal(payload)
 	if err != nil {
@@ -148,12 +161,12 @@ func (c *CachedClient) putCached(ctx context.Context, key string, v *ontology.Ge
 		t := now.Add(ttl)
 		exp = &t
 	}
-	id := repo.MakeCacheDocID("google_geocoding", "geocoding.geocode", key)
+	id := repo.MakeCacheDocID(c.service, "geocoding.geocode", key)
 	return c.cache.Upsert(ctx, &repo.ExternalDataCacheEntry{
 		ID:          id,
-		Service:     "google_geocoding",
+		Service:     c.service,
 		Type:        "geocoding.geocode",
-		Types:       []string{"google_geocoding", "geocoding.geocode"},
+		Types:       []string{c.service, "geocoding.geocode"},
 		Key:         key,
 		ContentType: "application/json",
 		Payload:     b,
@@ -180,6 +193,15 @@ func negativeCacheTTL(baseTTL time.Duration) time.Duration {
 	default:
 		return maxNegativeTTL
 	}
+}
+
+func firstNonEmptyProvider(values ...string) string {
+	for _, value := range values {
+		if s := strings.TrimSpace(value); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // normalizeAddressForCache produces a stable cache key from an address.

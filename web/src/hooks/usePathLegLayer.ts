@@ -11,12 +11,24 @@ const SRC = 'path-legs-src';
 const GLOW_LAYER = 'path-legs-glow';
 const PINNED_LAYER = 'path-legs-pinned';
 const DISCOVERED_LAYER = 'path-legs-discovered';
+const HIT_LAYER = 'path-legs-hit';
+const HOVER_GLOW_LAYER = 'path-legs-hover-glow';
+const HOVER_PINNED_LAYER = 'path-legs-hover-pinned';
+const HOVER_DISCOVERED_LAYER = 'path-legs-hover-discovered';
+const HOVER_BOTTLENECK_LAYER = 'path-legs-hover-bottlenecks';
+const HOVER_OBJECT_ANCHOR_LAYER = 'path-legs-hover-object-anchors';
+const HOVER_DIRECTION_LAYER = 'path-legs-hover-direction';
+const HOVER_OBJECT_LAYER = 'path-legs-hover-objects';
+const HOVER_OBJECT_LABEL_LAYER = 'path-legs-hover-object-labels';
+const HOVER_MEANING_LABEL_LAYER = 'path-legs-hover-meaning-labels';
 const BOTTLENECK_LAYER = 'path-legs-bottlenecks';
 const LEG_OBJECT_ANCHOR_LAYER = 'path-legs-object-anchors';
 const LEG_DIRECTION_LAYER = 'path-legs-direction';
 const LEG_OBJECT_LAYER = 'path-legs-objects';
 const LEG_OBJECT_LABEL_LAYER = 'path-legs-object-labels';
 const LEG_MEANING_LABEL_LAYER = 'path-legs-meaning-labels';
+const HOVER_ACTIVATE_DELAY_MS = 90;
+const HOVER_CLEAR_DELAY_MS = 140;
 
 type ThemeMode = 'dark' | 'light';
 
@@ -25,6 +37,15 @@ export interface PathLegLayerStats {
   legCount: number;
   boundLegCount: number;
   bottleneckCount: number;
+}
+
+export interface PathLegVisibilityPolicy {
+  suppressedLegIds?: string[];
+  revealedLegIds?: string[];
+  rawVisibilityWeight?: number;
+  visibleObjectIds?: string[];
+  visibleObjectPaths?: string[];
+  clusterAnchorByPath?: Record<string, [number, number]>;
 }
 
 function canAccessMapStyle(map: maplibregl.Map): boolean {
@@ -37,6 +58,115 @@ function canAccessMapStyle(map: maplibregl.Map): boolean {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function artifactKeyForIds(ids: string[]): string {
+  const normalized = Array.from(new Set(ids.map((value) => String(value || '').trim()).filter(Boolean))).sort();
+  return normalized.length > 0 ? `|${normalized.join('|')}|` : '';
+}
+
+function artifactMatchExpression(artifactId: string): any {
+  return ['>=', ['index-of', `|${artifactId}|`, ['coalesce', ['get', 'artifactKey'], '']], 0];
+}
+
+function glowOpacityExpression(dimmed = false): any {
+  const base = ['case', ['boolean', ['get', 'isBottleneck'], false], ['*', ['get', 'glowOpacity'], 1.15], ['get', 'glowOpacity']];
+  return dimmed ? ['*', base, 0.14] : base;
+}
+
+function pinnedLineOpacityExpression(dimmed = false): any {
+  const base = ['get', 'lineOpacity'];
+  return dimmed ? ['*', base, 0.18] : base;
+}
+
+function discoveredLineOpacityExpression(dimmed = false): any {
+  const base = ['*', ['get', 'lineOpacity'], 0.82];
+  return dimmed ? ['*', base, 0.18] : base;
+}
+
+function anchorOpacityExpression(dimmed = false): any {
+  const base = ['*', ['coalesce', ['get', 'anchorOpacity'], 0.24], ['coalesce', ['get', 'visibilityWeight'], 1]];
+  return dimmed ? ['*', base, 0.26] : base;
+}
+
+function bottleneckOpacityExpression(dimmed = false): any {
+  const base = ['*', ['coalesce', ['get', 'circleOpacity'], 0.9], ['coalesce', ['get', 'visibilityWeight'], 1]];
+  return dimmed ? ['*', base, 0.24] : base;
+}
+
+function directionOpacityExpression(dimmed = false): any {
+  const base = [
+    '*',
+    ['case',
+      ['==', ['get', 'isNarrativeActive'], true],
+      0.88,
+      0.7,
+    ],
+    ['coalesce', ['get', 'visibilityWeight'], 1],
+  ];
+  return dimmed ? ['*', base, 0.28] : base;
+}
+
+function objectIconOpacityExpression(dimmed = false): any {
+  const base = [
+    '*',
+    ['case',
+      ['==', ['get', 'pathActive'], 1],
+      0.98,
+      0.9,
+    ],
+    ['coalesce', ['get', 'visibilityWeight'], 1],
+  ];
+  return dimmed ? ['*', base, 0.34] : base;
+}
+
+function objectLabelOpacityExpression(dimmed = false): any {
+  const base = [
+    '*',
+    ['case',
+      ['==', ['get', 'pathActive'], 1],
+      1,
+      0.9,
+    ],
+    ['coalesce', ['get', 'visibilityWeight'], 1],
+  ];
+  return dimmed ? ['*', base, 0.3] : base;
+}
+
+function meaningLabelOpacityExpression(dimmed = false): any {
+  const base = [
+    '*',
+    ['case',
+      ['!=', ['get', 'meaningVisible'], 1],
+      0,
+      ['==', ['get', 'pathActive'], 1],
+      0.9,
+      0.76,
+    ],
+    ['coalesce', ['get', 'visibilityWeight'], 1],
+  ];
+  return dimmed ? ['*', base, 0.22] : base;
+}
+
+function legFilter(isPinned?: boolean): any {
+  const filter: any[] = ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'kind'], 'leg']];
+  if (typeof isPinned === 'boolean') {
+    filter.push([isPinned ? '==' : '!=', ['get', 'isPinned'], true]);
+  }
+  return filter;
+}
+
+function pointKindFilter(kind: string): any {
+  return ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'kind'], kind]];
+}
+
+function anchorFilter(): any {
+  return ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'kind'], 'leg-object-anchor']];
+}
+
+function hoverFilter(baseFilter: any, hoveredArtifactId: string | null): any {
+  if (!hoveredArtifactId) return ['==', ['get', 'artifactKey'], '__none__'];
+  return ['all', baseFilter, artifactMatchExpression(hoveredArtifactId)];
 }
 
 function artifactLegField<T = unknown>(leg: any, ...keys: string[]): T | undefined {
@@ -267,6 +397,7 @@ function buildViewportPathLegFeatureCollection(
   const anchorFeatures: GeoJSON.Feature[] = [];
   const legObjects = features
     .filter((feature) => feature.geometry?.type === 'Point' && String((feature.properties || {}).kind || '').trim() === 'leg-object')
+    .filter((feature) => Number((feature.properties || {}).visibilityWeight ?? 1) > 0.01)
     .map((feature) => {
       const coordinates = (feature.geometry as GeoJSON.Point).coordinates as [number, number];
       const props = (feature.properties || {}) as Record<string, any>;
@@ -345,6 +476,8 @@ function buildViewportPathLegFeatureCollection(
           anchorColor: String(props.color || (props.pathActive ? '#cbd5e1' : '#94a3b8')),
           anchorOpacity: props.pathActive === 1 ? 0.34 : 0.2,
           anchorWidth: sortedGroup.length >= 4 ? 1.05 : 0.95,
+          visibilityWeight: Number(props.visibilityWeight || 0),
+          artifactKey: String(props.artifactKey || ''),
         },
       } as GeoJSON.Feature);
     }
@@ -474,6 +607,21 @@ function maybeConnectEndpoints(line: [number, number][], fallback: [number, numb
   return dedupeCoords(out);
 }
 
+function applyClusterAnchorsToCoords(
+  coords: [number, number][],
+  sourceRef: string,
+  targetRef: string,
+  clusterAnchorByPath: Record<string, [number, number]>,
+): [number, number][] {
+  if (coords.length < 2) return coords;
+  const out = [...coords];
+  const sourceAnchor = clusterAnchorByPath[sourceRef];
+  const targetAnchor = clusterAnchorByPath[targetRef];
+  if (sourceAnchor) out[0] = sourceAnchor;
+  if (targetAnchor) out[out.length - 1] = targetAnchor;
+  return dedupeCoords(out);
+}
+
 function selectFlowGeometry(
   flowRefs: string[],
   fallbackCoords: [number, number][],
@@ -524,6 +672,7 @@ export function usePathLegLayer(
   theme: ThemeMode,
   enabled: boolean,
   activeArtifactIds: string[] = [],
+  visibilityPolicy?: PathLegVisibilityPolicy,
 ) {
   const [stats, setStats] = useState<PathLegLayerStats>({
     artifactCount: 0,
@@ -531,11 +680,21 @@ export function usePathLegLayer(
     boundLegCount: 0,
     bottleneckCount: 0,
   });
+  const [hoveredArtifactId, setHoveredArtifactId] = useState<string | null>(null);
   const popupRef = useRef<maplibregl.Popup | null>(null);
+  const hoveredArtifactIdRef = useRef<string | null>(null);
+  const hoverIntentTimerRef = useRef<number | null>(null);
+  const hoverClearTimerRef = useRef<number | null>(null);
 
   const data = useMemo(() => {
     const activeArtifactSet = new Set((activeArtifactIds || []).map((value) => String(value || '').trim()).filter(Boolean));
     const hasActiveArtifacts = activeArtifactSet.size > 0;
+    const suppressedLegIds = new Set((visibilityPolicy?.suppressedLegIds || []).map((value) => String(value || '').trim()).filter(Boolean));
+    const revealedLegIds = new Set((visibilityPolicy?.revealedLegIds || []).map((value) => String(value || '').trim()).filter(Boolean));
+    const visibleObjectIds = new Set((visibilityPolicy?.visibleObjectIds || []).map((value) => String(value || '').trim()).filter(Boolean));
+    const visibleObjectPaths = new Set((visibilityPolicy?.visibleObjectPaths || []).map((value) => String(value || '').trim()).filter(Boolean));
+    const clusterAnchorByPath = visibilityPolicy?.clusterAnchorByPath || {};
+    const rawVisibilityWeight = clamp(Number(visibilityPolicy?.rawVisibilityWeight ?? 1), 0, 1);
     const coordsByPath = new Map<string, { lon: number; lat: number }>();
     const objectByPath = new Map<string, GeoObject>();
     const flowById = new Map<string, TransportFlowFeature>();
@@ -559,6 +718,8 @@ export function usePathLegLayer(
     const features: GeoJSON.Feature[] = [];
     const legObjectFeatures = new Map<string, GeoJSON.Feature>();
     const legObjectEntries = new Map<string, GeoObject>();
+    const legObjectVisibility = new Map<string, number>();
+    const legObjectArtifactIds = new Map<string, Set<string>>();
     for (const artifact of artifacts || []) {
       const artifactId = String(artifact.id || '').trim();
       const isNarrativeActive = !hasActiveArtifacts || activeArtifactSet.has(artifactId);
@@ -568,10 +729,13 @@ export function usePathLegLayer(
       for (const leg of legs) {
         const legIndex = artifactLegNumber(leg, 'index', 'Index');
         if (legIndex == null) continue;
+        const legId = `${artifactId}:leg:${legIndex}`;
+        const supplierRef = artifactLegString(leg, 'supplierRef', 'SupplierRef');
+        const customerRef = artifactLegString(leg, 'customerRef', 'CustomerRef');
         const refs = [
-          artifactLegString(leg, 'supplierRef', 'SupplierRef'),
+          supplierRef,
           ...artifactLegStringList(leg, 'transportViaRefs', 'TransportViaRefs'),
-          artifactLegString(leg, 'customerRef', 'CustomerRef'),
+          customerRef,
         ].filter(Boolean);
         const fallbackCoords = dedupeCoords(
           refs
@@ -581,15 +745,26 @@ export function usePathLegLayer(
         );
         const flowRefs = artifactLegStringList(leg, 'flowRefs', 'FlowRefs');
         const { coords, flowId, flowMode, geometrySource, snapped } = selectFlowGeometry(flowRefs, fallbackCoords, flowById);
-        if (coords.length < 2) continue;
+        const anchoredCoords = applyClusterAnchorsToCoords(coords, supplierRef, customerRef, clusterAnchorByPath);
+        if (anchoredCoords.length < 2) continue;
         legCount += 1;
+        const explicitlyRevealed = revealedLegIds.has(legId);
+        const suppressed = suppressedLegIds.has(legId) && !explicitlyRevealed;
+        const localVisibilityWeight = suppressed
+          ? 0
+          : clamp(explicitlyRevealed ? Math.max(rawVisibilityWeight, 0.92) : rawVisibilityWeight, 0, 1);
         for (const [refIndex, ref] of refs.entries()) {
           const object = objectByPath.get(ref);
           if (!object?.coordinates) continue;
           const featureKey = object.id || ref;
           const role = refIndex === 0 ? 'supplier' : refIndex === refs.length - 1 ? 'customer' : 'via';
-          const nextPriority = role === 'supplier' || role === 'customer' ? 96 : 88;
+          const forcedEndpointVisible = hasActiveArtifacts && isNarrativeActive && (role === 'supplier' || role === 'customer');
+          const nextPriority = forcedEndpointVisible ? 108 : role === 'supplier' || role === 'customer' ? 96 : 88;
+          const objectNaturallyVisible = visibleObjectIds.has(object.id) || visibleObjectPaths.has(object.canonicalPath);
+          const objectVisibilityWeight = objectNaturallyVisible || forcedEndpointVisible ? localVisibilityWeight : 0;
           const existing = legObjectFeatures.get(featureKey);
+          if (!legObjectArtifactIds.has(featureKey)) legObjectArtifactIds.set(featureKey, new Set<string>());
+          legObjectArtifactIds.get(featureKey)!.add(artifactId);
           if (!existing) {
             const pointFeature = buildPointFeature(object, theme, false) as GeoJSON.Feature<GeoJSON.Point>;
             pointFeature.id = `leg-object:${featureKey}`;
@@ -602,14 +777,19 @@ export function usePathLegLayer(
               labelPriority: nextPriority,
               objectRole: role,
               pathActive: isNarrativeActive ? 1 : 0,
+              visibilityWeight: objectVisibilityWeight,
+              artifactKey: artifactKeyForIds([artifactId]),
             };
             legObjectFeatures.set(featureKey, pointFeature);
             legObjectEntries.set(featureKey, object);
+            legObjectVisibility.set(featureKey, objectVisibilityWeight);
           } else {
             const props = (existing.properties || {}) as Record<string, any>;
             props.labelPriority = Math.max(Number(props.labelPriority || 0), nextPriority);
             props.pathActive = Number(props.pathActive || 0) || (isNarrativeActive ? 1 : 0);
             if (role === 'supplier' || role === 'customer') props.objectRole = role;
+            props.visibilityWeight = Math.max(Number(props.visibilityWeight || 0), objectVisibilityWeight);
+            legObjectVisibility.set(featureKey, Math.max(legObjectVisibility.get(featureKey) || 0, objectVisibilityWeight));
           }
         }
         const zoneRefs = artifactLegStringList(leg, 'zoneRefs', 'ZoneRefs');
@@ -625,17 +805,17 @@ export function usePathLegLayer(
         if (isBound) boundLegCount += 1;
         const isBottleneck = typeof bottleneckIndex === 'number' && bottleneckIndex === legIndex;
         if (isBottleneck) bottleneckCount += 1;
-        const emphasis = isNarrativeActive ? 1 : 0.24;
-        const lineWidth = (1.35 + stressScore * 2.25 + (isBottleneck ? 0.7 : 0)) * (isNarrativeActive ? 1 : 0.74);
-        const lineOpacity = clamp((0.17 + bindingConfidence * 0.26 + stressScore * 0.18) * emphasis, 0.05, 0.62);
-        const glowOpacity = clamp((0.028 + stressScore * 0.08) * (isNarrativeActive ? 1 : 0.2), 0.008, 0.11);
+        const emphasis = isNarrativeActive ? 1 : hasActiveArtifacts ? 0.08 : 0.24;
+        const baseLineWidth = (1.35 + stressScore * 2.25 + (isBottleneck ? 0.7 : 0)) * (isNarrativeActive ? 1 : hasActiveArtifacts ? 0.52 : 0.74);
+        const baseLineOpacity = clamp((0.17 + bindingConfidence * 0.26 + stressScore * 0.18) * emphasis * localVisibilityWeight, 0, 0.62);
+        const baseGlowOpacity = clamp((0.028 + stressScore * 0.08) * (isNarrativeActive ? 1 : hasActiveArtifacts ? 0.08 : 0.2) * localVisibilityWeight, 0, 0.11);
 
         features.push({
           type: 'Feature',
-          id: `${artifactId}:leg:${legIndex}`,
+          id: legId,
           geometry: {
             type: 'LineString',
-            coordinates: coords,
+            coordinates: anchoredCoords,
           },
           properties: {
             kind: 'leg',
@@ -643,8 +823,8 @@ export function usePathLegLayer(
             displayName,
             legIndex,
             role: String((leg as any)?.role || '').trim(),
-            supplierRef: artifactLegString(leg, 'supplierRef', 'SupplierRef'),
-            customerRef: artifactLegString(leg, 'customerRef', 'CustomerRef'),
+            supplierRef,
+            customerRef,
             productRef: artifactLegString(leg, 'productRef', 'ProductRef'),
             flowRefs,
             flowGeometryId: flowId || '',
@@ -668,14 +848,16 @@ export function usePathLegLayer(
             bindingConfidence,
             isNarrativeActive,
             color: pathLegColor(stressScore, theme),
-            lineWidth,
-            lineOpacity,
-            glowOpacity,
+            lineWidth: baseLineWidth,
+            lineOpacity: baseLineOpacity,
+            glowOpacity: baseGlowOpacity,
             isBottleneck,
+            visibilityWeight: localVisibilityWeight,
+            artifactKey: artifactKeyForIds([artifactId]),
           },
         } as GeoJSON.Feature);
 
-        const meaningPoint = midpoint(coords);
+        const meaningPoint = midpoint(anchoredCoords);
         const meaningLabel = legMeaningLabel(
           artifactLegString(leg, 'productRef', 'ProductRef'),
           String(flowMode || '').trim(),
@@ -697,12 +879,14 @@ export function usePathLegLayer(
               color: pathLegColor(stressScore, theme),
               pathActive: isNarrativeActive ? 1 : 0,
               stressScore,
+              visibilityWeight: localVisibilityWeight,
+              artifactKey: artifactKeyForIds([artifactId]),
             },
           } as GeoJSON.Feature);
         }
 
         if (isBottleneck) {
-          const focusPoint = midpoint(coords);
+          const focusPoint = midpoint(anchoredCoords);
           if (focusPoint) {
             features.push({
               type: 'Feature',
@@ -721,12 +905,22 @@ export function usePathLegLayer(
                 bindingConfidence,
                 isNarrativeActive,
                 color: pathLegColor(Math.max(stressScore, 0.6), theme),
-                circleOpacity: isNarrativeActive ? 0.74 : 0.22,
+                circleOpacity: (isNarrativeActive ? 0.74 : hasActiveArtifacts ? 0.08 : 0.22) * localVisibilityWeight,
+                visibilityWeight: localVisibilityWeight,
+                artifactKey: artifactKeyForIds([artifactId]),
               },
             } as GeoJSON.Feature);
           }
         }
       }
+    }
+
+    for (const [featureKey, feature] of legObjectFeatures.entries()) {
+      const props = (feature.properties || {}) as Record<string, any>;
+      props.visibilityWeight = Math.max(Number(props.visibilityWeight || 0), legObjectVisibility.get(featureKey) || 0);
+      const artifactIds = Array.from(legObjectArtifactIds.get(featureKey) || []);
+      props.artifactIds = artifactIds;
+      props.artifactKey = artifactKeyForIds(artifactIds);
     }
 
     features.push(...Array.from(legObjectFeatures.values()));
@@ -744,11 +938,15 @@ export function usePathLegLayer(
         bottleneckCount,
       } satisfies PathLegLayerStats,
     };
-  }, [activeArtifactIds, artifacts, objects, theme]);
+  }, [activeArtifactIds, artifacts, objects, theme, visibilityPolicy]);
 
   useEffect(() => {
     setStats(data.stats);
   }, [data]);
+
+  useEffect(() => {
+    hoveredArtifactIdRef.current = hoveredArtifactId;
+  }, [hoveredArtifactId]);
 
   useEffect(() => {
     if (!map || !isReady || !canAccessMapStyle(map)) return;
@@ -767,11 +965,11 @@ export function usePathLegLayer(
         id: GLOW_LAYER,
         type: 'line',
         source: SRC,
-        filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'kind'], 'leg']],
+        filter: legFilter(),
         paint: {
           'line-color': ['get', 'color'],
           'line-width': ['+', ['get', 'lineWidth'], 2.4],
-          'line-opacity': ['case', ['boolean', ['get', 'isBottleneck'], false], ['*', ['get', 'glowOpacity'], 1.15], ['get', 'glowOpacity']],
+          'line-opacity': glowOpacityExpression(),
           'line-blur': 0.95,
         },
       });
@@ -782,7 +980,7 @@ export function usePathLegLayer(
         id: PINNED_LAYER,
         type: 'line',
         source: SRC,
-        filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'kind'], 'leg'], ['==', ['get', 'isPinned'], true]],
+        filter: legFilter(true),
         layout: {
           'line-cap': 'round',
           'line-join': 'round',
@@ -790,7 +988,7 @@ export function usePathLegLayer(
         paint: {
           'line-color': ['get', 'color'],
           'line-width': ['get', 'lineWidth'],
-          'line-opacity': ['get', 'lineOpacity'],
+          'line-opacity': pinnedLineOpacityExpression(),
           'line-dasharray': [
             'case',
             ['<', ['get', 'bindingConfidence'], 0.38],
@@ -808,7 +1006,7 @@ export function usePathLegLayer(
         id: DISCOVERED_LAYER,
         type: 'line',
         source: SRC,
-        filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'kind'], 'leg'], ['!=', ['get', 'isPinned'], true]],
+        filter: legFilter(false),
         layout: {
           'line-cap': 'round',
           'line-join': 'round',
@@ -816,7 +1014,97 @@ export function usePathLegLayer(
         paint: {
           'line-color': ['get', 'color'],
           'line-width': ['*', ['get', 'lineWidth'], 0.92],
-          'line-opacity': ['*', ['get', 'lineOpacity'], 0.82],
+          'line-opacity': discoveredLineOpacityExpression(),
+          'line-dasharray': [
+            'case',
+            ['<', ['get', 'bindingConfidence'], 0.38],
+            ['literal', [0.9, 2.6]],
+            ['<', ['get', 'bindingConfidence'], 0.62],
+            ['literal', [1.6, 2.2]],
+            ['literal', [3.1, 1.8]],
+          ],
+        },
+      });
+    }
+
+    if (!map.getLayer(HIT_LAYER)) {
+      map.addLayer({
+        id: HIT_LAYER,
+        type: 'line',
+        source: SRC,
+        filter: legFilter(),
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+        },
+        paint: {
+          'line-color': '#000000',
+          'line-width': ['+', ['get', 'lineWidth'], 14],
+          'line-opacity': 0.001,
+        },
+      });
+    }
+
+    if (!map.getLayer(HOVER_GLOW_LAYER)) {
+      map.addLayer({
+        id: HOVER_GLOW_LAYER,
+        type: 'line',
+        source: SRC,
+        filter: hoverFilter(legFilter(), null),
+        layout: {
+          visibility: 'none',
+        },
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': ['+', ['*', ['get', 'lineWidth'], 1.3], 3.2],
+          'line-opacity': ['case', ['boolean', ['get', 'isBottleneck'], false], ['*', ['get', 'glowOpacity'], 2.8], ['*', ['get', 'glowOpacity'], 2.05]],
+          'line-blur': 1.08,
+        },
+      });
+    }
+
+    if (!map.getLayer(HOVER_PINNED_LAYER)) {
+      map.addLayer({
+        id: HOVER_PINNED_LAYER,
+        type: 'line',
+        source: SRC,
+        filter: hoverFilter(legFilter(true), null),
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+          visibility: 'none',
+        },
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': ['*', ['get', 'lineWidth'], 1.26],
+          'line-opacity': ['*', ['get', 'lineOpacity'], 1.26],
+          'line-dasharray': [
+            'case',
+            ['<', ['get', 'bindingConfidence'], 0.38],
+            ['literal', [1.6, 1.6]],
+            ['<', ['get', 'bindingConfidence'], 0.62],
+            ['literal', [2.6, 1.4]],
+            ['literal', [1, 0]],
+          ],
+        },
+      });
+    }
+
+    if (!map.getLayer(HOVER_DISCOVERED_LAYER)) {
+      map.addLayer({
+        id: HOVER_DISCOVERED_LAYER,
+        type: 'line',
+        source: SRC,
+        filter: hoverFilter(legFilter(false), null),
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+          visibility: 'none',
+        },
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': ['*', ['get', 'lineWidth'], 1.18],
+          'line-opacity': ['*', discoveredLineOpacityExpression(), 1.28],
           'line-dasharray': [
             'case',
             ['<', ['get', 'bindingConfidence'], 0.38],
@@ -834,7 +1122,7 @@ export function usePathLegLayer(
         id: LEG_OBJECT_ANCHOR_LAYER,
         type: 'line',
         source: SRC,
-        filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'kind'], 'leg-object-anchor']],
+        filter: anchorFilter(),
         layout: {
           'line-cap': 'round',
           'line-join': 'round',
@@ -842,7 +1130,26 @@ export function usePathLegLayer(
         paint: {
           'line-color': ['coalesce', ['get', 'anchorColor'], theme === 'dark' ? '#94a3b8' : '#64748b'],
           'line-width': ['coalesce', ['get', 'anchorWidth'], 1],
-          'line-opacity': ['coalesce', ['get', 'anchorOpacity'], 0.24],
+          'line-opacity': anchorOpacityExpression(),
+        },
+      });
+    }
+
+    if (!map.getLayer(HOVER_OBJECT_ANCHOR_LAYER)) {
+      map.addLayer({
+        id: HOVER_OBJECT_ANCHOR_LAYER,
+        type: 'line',
+        source: SRC,
+        filter: hoverFilter(anchorFilter(), null),
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+          visibility: 'none',
+        },
+        paint: {
+          'line-color': ['coalesce', ['get', 'anchorColor'], theme === 'dark' ? '#cbd5e1' : '#334155'],
+          'line-width': ['*', ['coalesce', ['get', 'anchorWidth'], 1], 1.16],
+          'line-opacity': ['*', anchorOpacityExpression(), 1.15],
         },
       });
     }
@@ -852,13 +1159,32 @@ export function usePathLegLayer(
         id: BOTTLENECK_LAYER,
         type: 'circle',
         source: SRC,
-        filter: ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'kind'], 'bottleneck']],
+        filter: pointKindFilter('bottleneck'),
         paint: {
           'circle-radius': ['+', 5, ['*', ['get', 'stressScore'], 7]],
           'circle-color': ['get', 'color'],
           'circle-stroke-color': theme === 'dark' ? '#f8fafc' : '#0f172a',
           'circle-stroke-width': 1.4,
-          'circle-opacity': ['coalesce', ['get', 'circleOpacity'], 0.9],
+          'circle-opacity': bottleneckOpacityExpression(),
+        },
+      });
+    }
+
+    if (!map.getLayer(HOVER_BOTTLENECK_LAYER)) {
+      map.addLayer({
+        id: HOVER_BOTTLENECK_LAYER,
+        type: 'circle',
+        source: SRC,
+        filter: hoverFilter(pointKindFilter('bottleneck'), null),
+        layout: {
+          visibility: 'none',
+        },
+        paint: {
+          'circle-radius': ['+', 6.5, ['*', ['get', 'stressScore'], 8]],
+          'circle-color': ['get', 'color'],
+          'circle-stroke-color': theme === 'dark' ? '#f8fafc' : '#0f172a',
+          'circle-stroke-width': 1.7,
+          'circle-opacity': ['*', bottleneckOpacityExpression(), 1.24],
         },
       });
     }
@@ -868,7 +1194,7 @@ export function usePathLegLayer(
         id: LEG_DIRECTION_LAYER,
         type: 'symbol',
         source: SRC,
-        filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'kind'], 'leg']],
+        filter: legFilter(),
         layout: {
           'symbol-placement': 'line',
           'symbol-spacing': [
@@ -895,12 +1221,45 @@ export function usePathLegLayer(
           'text-color': ['get', 'color'],
           'text-halo-color': theme === 'dark' ? 'rgba(2,6,23,0.98)' : 'rgba(255,255,255,0.98)',
           'text-halo-width': 0.9,
-          'text-opacity': [
-            'case',
-            ['==', ['get', 'isNarrativeActive'], true],
-            0.88,
-            0.7,
+          'text-opacity': directionOpacityExpression(),
+        },
+      });
+    }
+
+    if (!map.getLayer(HOVER_DIRECTION_LAYER)) {
+      map.addLayer({
+        id: HOVER_DIRECTION_LAYER,
+        type: 'symbol',
+        source: SRC,
+        filter: hoverFilter(legFilter(), null),
+        layout: {
+          'symbol-placement': 'line',
+          'symbol-spacing': [
+            'interpolate', ['linear'], ['zoom'],
+            3, 170,
+            5, 140,
+            7, 116,
+            9, 92,
           ],
+          'text-field': '»',
+          'text-font': [...MAP_TEXT_FONT_STACK],
+          'text-size': [
+            'interpolate', ['linear'], ['zoom'],
+            3, 13,
+            5, 15,
+            7, 17,
+            9, 19,
+          ],
+          'text-keep-upright': false,
+          'text-allow-overlap': true,
+          'text-ignore-placement': true,
+          visibility: 'none',
+        },
+        paint: {
+          'text-color': ['get', 'color'],
+          'text-halo-color': theme === 'dark' ? 'rgba(2,6,23,0.98)' : 'rgba(255,255,255,0.98)',
+          'text-halo-width': 1.05,
+          'text-opacity': ['*', directionOpacityExpression(), 1.08],
         },
       });
     }
@@ -910,7 +1269,7 @@ export function usePathLegLayer(
         id: LEG_OBJECT_LAYER,
         type: 'symbol',
         source: SRC,
-        filter: ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'kind'], 'leg-object']],
+        filter: pointKindFilter('leg-object'),
         layout: {
           'icon-image': ['get', 'iconKey'],
           'icon-size': 1,
@@ -918,12 +1277,26 @@ export function usePathLegLayer(
           'icon-ignore-placement': true,
         },
         paint: {
-          'icon-opacity': [
-            'case',
-            ['==', ['get', 'pathActive'], 1],
-            0.98,
-            0.9,
-          ],
+          'icon-opacity': objectIconOpacityExpression(),
+        },
+      });
+    }
+
+    if (!map.getLayer(HOVER_OBJECT_LAYER)) {
+      map.addLayer({
+        id: HOVER_OBJECT_LAYER,
+        type: 'symbol',
+        source: SRC,
+        filter: hoverFilter(pointKindFilter('leg-object'), null),
+        layout: {
+          'icon-image': ['get', 'iconKey'],
+          'icon-size': 1.08,
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true,
+          visibility: 'none',
+        },
+        paint: {
+          'icon-opacity': ['*', objectIconOpacityExpression(), 1.05],
         },
       });
     }
@@ -933,7 +1306,7 @@ export function usePathLegLayer(
         id: LEG_OBJECT_LABEL_LAYER,
         type: 'symbol',
         source: SRC,
-        filter: ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'kind'], 'leg-object']],
+        filter: pointKindFilter('leg-object'),
         layout: {
           'symbol-sort-key': ['get', 'labelPriority'],
           'text-field': ['get', 'labelText'],
@@ -954,12 +1327,39 @@ export function usePathLegLayer(
           'text-color': theme === 'dark' ? '#f8fafc' : 'rgba(2,6,23,0.96)',
           'text-halo-color': theme === 'dark' ? 'rgba(2,6,23,0.98)' : 'rgba(255,255,255,0.98)',
           'text-halo-width': 1.7,
-          'text-opacity': [
-            'case',
-            ['==', ['get', 'pathActive'], 1],
-            1,
-            0.9,
+          'text-opacity': objectLabelOpacityExpression(),
+        },
+      });
+    }
+
+    if (!map.getLayer(HOVER_OBJECT_LABEL_LAYER)) {
+      map.addLayer({
+        id: HOVER_OBJECT_LABEL_LAYER,
+        type: 'symbol',
+        source: SRC,
+        filter: hoverFilter(pointKindFilter('leg-object'), null),
+        layout: {
+          'symbol-sort-key': ['get', 'labelPriority'],
+          'text-field': ['get', 'labelText'],
+          'text-font': [...MAP_TEXT_FONT_STACK],
+          'text-size': [
+            'interpolate', ['linear'], ['zoom'],
+            4, 11,
+            6, 11.5,
+            8, 12,
+            10, 12.5,
           ],
+          'text-variable-anchor': ['literal', ['right', 'left', 'top-right', 'bottom-right', 'top', 'bottom']],
+          'text-radial-offset': 1.35,
+          'text-allow-overlap': true,
+          'text-ignore-placement': true,
+          visibility: 'none',
+        },
+        paint: {
+          'text-color': theme === 'dark' ? '#f8fafc' : 'rgba(2,6,23,0.96)',
+          'text-halo-color': theme === 'dark' ? 'rgba(2,6,23,0.98)' : 'rgba(255,255,255,0.98)',
+          'text-halo-width': 1.85,
+          'text-opacity': ['*', objectLabelOpacityExpression(), 1.06],
         },
       });
     }
@@ -969,7 +1369,7 @@ export function usePathLegLayer(
         id: LEG_MEANING_LABEL_LAYER,
         type: 'symbol',
         source: SRC,
-        filter: ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'kind'], 'leg-meaning']],
+        filter: pointKindFilter('leg-meaning'),
         layout: {
           'text-field': ['get', 'meaningText'],
           'text-font': [...MAP_TEXT_FONT_STACK],
@@ -1000,14 +1400,49 @@ export function usePathLegLayer(
             2.3,
           ],
           'text-halo-blur': 0.7,
-          'text-opacity': [
-            'case',
-            ['!=', ['get', 'meaningVisible'], 1],
-            0,
-            ['==', ['get', 'pathActive'], 1],
-            0.9,
-            0.76,
+          'text-opacity': meaningLabelOpacityExpression(),
+        },
+      });
+    }
+
+    if (!map.getLayer(HOVER_MEANING_LABEL_LAYER)) {
+      map.addLayer({
+        id: HOVER_MEANING_LABEL_LAYER,
+        type: 'symbol',
+        source: SRC,
+        filter: hoverFilter(pointKindFilter('leg-meaning'), null),
+        layout: {
+          'text-field': ['get', 'meaningText'],
+          'text-font': [...MAP_TEXT_FONT_STACK],
+          'text-size': [
+            'interpolate', ['linear'], ['zoom'],
+            4, 10,
+            6, 10.5,
+            8, 11,
           ],
+          'text-max-width': 12,
+          'text-offset': [0, -0.2],
+          'text-anchor': 'bottom',
+          'text-allow-overlap': true,
+          'text-ignore-placement': true,
+          visibility: 'none',
+        },
+        paint: {
+          'text-color': [
+            'case',
+            ['==', ['get', 'pathActive'], 1],
+            theme === 'dark' ? '#ecfeff' : 'rgba(8,47,73,0.96)',
+            theme === 'dark' ? '#e2e8f0' : 'rgba(15,23,42,0.92)',
+          ],
+          'text-halo-color': theme === 'dark' ? 'rgba(2,6,23,0.985)' : 'rgba(255,255,255,0.985)',
+          'text-halo-width': [
+            'case',
+            ['==', ['get', 'pathActive'], 1],
+            3,
+            2.45,
+          ],
+          'text-halo-blur': 0.7,
+          'text-opacity': ['*', meaningLabelOpacityExpression(), 1.1],
         },
       });
     }
@@ -1016,12 +1451,48 @@ export function usePathLegLayer(
     src?.setData(viewportFeatureCollection as any);
 
     const visible = (enabled || activeArtifactIds.length > 0) && data.stats.legCount > 0;
-    for (const layer of [GLOW_LAYER, PINNED_LAYER, DISCOVERED_LAYER, LEG_OBJECT_ANCHOR_LAYER, BOTTLENECK_LAYER, LEG_DIRECTION_LAYER, LEG_OBJECT_LAYER, LEG_OBJECT_LABEL_LAYER, LEG_MEANING_LABEL_LAYER]) {
+    for (const layer of [GLOW_LAYER, PINNED_LAYER, DISCOVERED_LAYER, HIT_LAYER, LEG_OBJECT_ANCHOR_LAYER, BOTTLENECK_LAYER, LEG_DIRECTION_LAYER, LEG_OBJECT_LAYER, LEG_OBJECT_LABEL_LAYER, LEG_MEANING_LABEL_LAYER]) {
       if (map.getLayer(layer)) {
         map.setLayoutProperty(layer, 'visibility', visible ? 'visible' : 'none');
       }
     }
   }, [map, isReady, styleEpoch, enabled, theme, data, activeArtifactIds]);
+
+  useEffect(() => {
+    if (!map || !isReady || !canAccessMapStyle(map)) return;
+    const sceneVisible = (enabled || activeArtifactIds.length > 0) && data.stats.legCount > 0;
+    const activeHoverId = sceneVisible ? String(hoveredArtifactId || '').trim() : '';
+    const hasHover = Boolean(activeHoverId);
+
+    const lineOpacityMode = hasHover;
+    if (map.getLayer(GLOW_LAYER)) map.setPaintProperty(GLOW_LAYER, 'line-opacity', glowOpacityExpression(lineOpacityMode));
+    if (map.getLayer(PINNED_LAYER)) map.setPaintProperty(PINNED_LAYER, 'line-opacity', pinnedLineOpacityExpression(lineOpacityMode));
+    if (map.getLayer(DISCOVERED_LAYER)) map.setPaintProperty(DISCOVERED_LAYER, 'line-opacity', discoveredLineOpacityExpression(lineOpacityMode));
+    if (map.getLayer(LEG_OBJECT_ANCHOR_LAYER)) map.setPaintProperty(LEG_OBJECT_ANCHOR_LAYER, 'line-opacity', anchorOpacityExpression(lineOpacityMode));
+    if (map.getLayer(BOTTLENECK_LAYER)) map.setPaintProperty(BOTTLENECK_LAYER, 'circle-opacity', bottleneckOpacityExpression(lineOpacityMode));
+    if (map.getLayer(LEG_DIRECTION_LAYER)) map.setPaintProperty(LEG_DIRECTION_LAYER, 'text-opacity', directionOpacityExpression(lineOpacityMode));
+    if (map.getLayer(LEG_OBJECT_LAYER)) map.setPaintProperty(LEG_OBJECT_LAYER, 'icon-opacity', objectIconOpacityExpression(lineOpacityMode));
+    if (map.getLayer(LEG_OBJECT_LABEL_LAYER)) map.setPaintProperty(LEG_OBJECT_LABEL_LAYER, 'text-opacity', objectLabelOpacityExpression(lineOpacityMode));
+    if (map.getLayer(LEG_MEANING_LABEL_LAYER)) map.setPaintProperty(LEG_MEANING_LABEL_LAYER, 'text-opacity', meaningLabelOpacityExpression(lineOpacityMode));
+
+    const hoverLayers: Array<{ id: string; filter: any }> = [
+      { id: HOVER_GLOW_LAYER, filter: hoverFilter(legFilter(), activeHoverId || null) },
+      { id: HOVER_PINNED_LAYER, filter: hoverFilter(legFilter(true), activeHoverId || null) },
+      { id: HOVER_DISCOVERED_LAYER, filter: hoverFilter(legFilter(false), activeHoverId || null) },
+      { id: HOVER_OBJECT_ANCHOR_LAYER, filter: hoverFilter(anchorFilter(), activeHoverId || null) },
+      { id: HOVER_BOTTLENECK_LAYER, filter: hoverFilter(pointKindFilter('bottleneck'), activeHoverId || null) },
+      { id: HOVER_DIRECTION_LAYER, filter: hoverFilter(legFilter(), activeHoverId || null) },
+      { id: HOVER_OBJECT_LAYER, filter: hoverFilter(pointKindFilter('leg-object'), activeHoverId || null) },
+      { id: HOVER_OBJECT_LABEL_LAYER, filter: hoverFilter(pointKindFilter('leg-object'), activeHoverId || null) },
+      { id: HOVER_MEANING_LABEL_LAYER, filter: hoverFilter(pointKindFilter('leg-meaning'), activeHoverId || null) },
+    ];
+
+    for (const layer of hoverLayers) {
+      if (!map.getLayer(layer.id)) continue;
+      map.setFilter(layer.id, layer.filter);
+      map.setLayoutProperty(layer.id, 'visibility', hasHover ? 'visible' : 'none');
+    }
+  }, [map, isReady, styleEpoch, enabled, activeArtifactIds, data.stats.legCount, hoveredArtifactId]);
 
   useEffect(() => {
     if (!map || !isReady || !canAccessMapStyle(map)) return;
@@ -1041,18 +1512,65 @@ export function usePathLegLayer(
 
   useEffect(() => {
     if (!map || !isReady || !canAccessMapStyle(map)) return;
+    const clearHoverIntentTimer = () => {
+      if (hoverIntentTimerRef.current != null) {
+        window.clearTimeout(hoverIntentTimerRef.current);
+        hoverIntentTimerRef.current = null;
+      }
+    };
+    const clearHoverClearTimer = () => {
+      if (hoverClearTimerRef.current != null) {
+        window.clearTimeout(hoverClearTimerRef.current);
+        hoverClearTimerRef.current = null;
+      }
+    };
+    const commitHover = (artifactId: string | null) => {
+      setHoveredArtifactId((current) => (current === artifactId ? current : artifactId));
+    };
+    const scheduleHover = (artifactId: string | null) => {
+      clearHoverClearTimer();
+      if (!artifactId) {
+        clearHoverIntentTimer();
+        commitHover(null);
+        return;
+      }
+      if (hoveredArtifactIdRef.current === artifactId) return;
+      clearHoverIntentTimer();
+      hoverIntentTimerRef.current = window.setTimeout(() => {
+        commitHover(artifactId);
+        hoverIntentTimerRef.current = null;
+      }, HOVER_ACTIVATE_DELAY_MS);
+    };
+    const scheduleHoverClear = () => {
+      clearHoverIntentTimer();
+      clearHoverClearTimer();
+      hoverClearTimerRef.current = window.setTimeout(() => {
+        commitHover(null);
+        hoverClearTimerRef.current = null;
+      }, HOVER_CLEAR_DELAY_MS);
+    };
     const onEnter = () => {
+      clearHoverClearTimer();
       map.getCanvas().style.cursor = 'pointer';
     };
     const onLeave = () => {
       map.getCanvas().style.cursor = '';
+      scheduleHoverClear();
       popupRef.current?.remove();
       popupRef.current = null;
+    };
+    const onHover = (event: maplibregl.MapLayerMouseEvent) => {
+      const feature = event.features?.[0];
+      const artifactId = String(feature?.properties?.artifactId || '').trim();
+      scheduleHover(artifactId || null);
     };
     const onClick = (event: maplibregl.MapLayerMouseEvent) => {
       const feature = event.features?.[0];
       const props = (feature?.properties || {}) as Record<string, any>;
       if (!feature || props.kind !== 'leg') return;
+      clearHoverIntentTimer();
+      clearHoverClearTimer();
+      commitHover(String(props.artifactId || '').trim() || null);
       popupRef.current?.remove();
       const parseList = (value: unknown): string[] => {
         if (Array.isArray(value)) return value.map((item) => String(item || '').trim()).filter(Boolean);
@@ -1110,19 +1628,17 @@ export function usePathLegLayer(
       stylePathLegPopup(popupRef.current, theme);
     };
 
-    map.on('mouseenter', PINNED_LAYER, onEnter);
-    map.on('mouseleave', PINNED_LAYER, onLeave);
-    map.on('click', PINNED_LAYER, onClick);
-    map.on('mouseenter', DISCOVERED_LAYER, onEnter);
-    map.on('mouseleave', DISCOVERED_LAYER, onLeave);
-    map.on('click', DISCOVERED_LAYER, onClick);
+    map.on('mouseenter', HIT_LAYER, onEnter);
+    map.on('mousemove', HIT_LAYER, onHover);
+    map.on('mouseleave', HIT_LAYER, onLeave);
+    map.on('click', HIT_LAYER, onClick);
     return () => {
-      map.off('mouseenter', PINNED_LAYER, onEnter);
-      map.off('mouseleave', PINNED_LAYER, onLeave);
-      map.off('click', PINNED_LAYER, onClick);
-      map.off('mouseenter', DISCOVERED_LAYER, onEnter);
-      map.off('mouseleave', DISCOVERED_LAYER, onLeave);
-      map.off('click', DISCOVERED_LAYER, onClick);
+      clearHoverIntentTimer();
+      clearHoverClearTimer();
+      map.off('mouseenter', HIT_LAYER, onEnter);
+      map.off('mousemove', HIT_LAYER, onHover);
+      map.off('mouseleave', HIT_LAYER, onLeave);
+      map.off('click', HIT_LAYER, onClick);
       popupRef.current?.remove();
       popupRef.current = null;
     };

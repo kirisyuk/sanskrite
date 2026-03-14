@@ -3,6 +3,7 @@ package enrich
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -11,6 +12,25 @@ import (
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
+
+const (
+	geoAddressSourceExplicitAddress    = "explicit_address"
+	geoAddressSourcePlaceCountry       = "place_country"
+	geoAddressSourceZoneSlugCountry    = "zone_slug_country"
+	geoAddressSourceLocPath            = "loc_path"
+	geoAddressSourceDepositNameCountry = "deposit_name_country"
+	geoAddressSourceEntityNameCountry  = "entity_name_country"
+)
+
+// GeoCoordinatesAttribution stores explainable metadata about how fragment coordinates were resolved.
+type GeoCoordinatesAttribution struct {
+	Method           string
+	Provider         string
+	Query            string
+	FormattedAddress string
+	PlaceID          string
+	CountryAlpha2    string
+}
 
 // GeoRelevantTypes are fragment types where coordinates are useful for map rendering.
 // Gov bodies use ORGANIZATION type with /gov/ canonical path.
@@ -22,8 +42,8 @@ var GeoRelevantTypes = map[hmodels.FragmentType]struct{}{
 	hmodels.FragmentTypeProgram:      {},
 	hmodels.FragmentTypeGeoRegion:    {},
 	hmodels.FragmentTypeDeposit:      {},
-	hmodels.FragmentTypeEvent:       {},
-	hmodels.FragmentTypeMarket:      {},
+	hmodels.FragmentTypeEvent:        {},
+	hmodels.FragmentTypeMarket:       {},
 	hmodels.FragmentTypeAffectedZone: {},
 }
 
@@ -252,15 +272,15 @@ func applyGeoNamesCoordinates(fragment *hmodels.HorizonFragment, place *coreonto
 	if errLat != nil || errLon != nil || !hmodels.IsValidCoordinates(lat, lon) || !hmodels.IsRealGeoCoordinate(lat, lon) {
 		return false
 	}
-	fragment.Coordinates = &hmodels.Coordinates{Lat: lat, Lon: lon}
-	if fragment.HomeLocation == nil {
-		fragment.HomeLocation = &hmodels.Location{}
-	}
-	iso := fmt.Sprintf("%+.6f%+.6f/", lat, lon)
-	if fragment.HomeLocation.ISO6709 == nil || strings.TrimSpace(*fragment.HomeLocation.ISO6709) == "" {
-		fragment.HomeLocation.ISO6709 = &iso
-	}
-	return true
+	changed := ApplyResolvedCoordinates(fragment, lat, lon)
+	RecordGeoCoordinatesAttribution(fragment, GeoCoordinatesAttribution{
+		Method:           "geonames",
+		Provider:         "geonames",
+		PlaceID:          strconv.Itoa(place.GeoNameID),
+		FormattedAddress: strings.TrimSpace(firstNonEmpty(place.Name, place.ToponymName)),
+		CountryAlpha2:    strings.TrimSpace(place.CountryCode),
+	})
+	return changed
 }
 
 func extractGeoNamesID(fragment *hmodels.HorizonFragment) int {
@@ -327,6 +347,12 @@ func EnrichCoordinatesFromParent(fragment *hmodels.HorizonFragment, parent *hmod
 		cc := parentCC
 		fragment.HomeLocation.ISO3166_1 = &cc
 	}
+	RecordGeoCoordinatesAttribution(fragment, GeoCoordinatesAttribution{
+		Method:           "parent_propagation",
+		Provider:         "parent_fragment",
+		FormattedAddress: strings.TrimSpace(parent.CanonicalPath),
+		CountryAlpha2:    parentCC,
+	})
 	return true
 }
 
@@ -352,8 +378,13 @@ func EnrichCoordinatesFromGeocoding(
 		return false, nil
 	}
 
-	addr := BuildAddressFromFragment(fragment)
+	addr, source := BuildAddressFromFragmentWithSource(fragment)
 	if addr == "" || !addressvalidate.IsPlausibleAddress(addr) {
+		return false, nil
+	}
+	if source == geoAddressSourceEntityNameCountry {
+		// This is the weakest candidate and is the main source of random same-country placements.
+		// Keep it available for explicit diagnostics, but do not auto-attach coordinates from it.
 		return false, nil
 	}
 
@@ -371,16 +402,15 @@ func EnrichCoordinatesFromGeocoding(
 		return false, nil
 	}
 
-	// Apply coordinates
-	fragment.Coordinates = &hmodels.Coordinates{Lat: result.Lat, Lon: result.Lon}
-	if fragment.HomeLocation == nil {
-		fragment.HomeLocation = &hmodels.Location{}
-	}
-	iso := fmt.Sprintf("%+.6f%+.6f/", result.Lat, result.Lon)
-	if fragment.HomeLocation.ISO6709 == nil || strings.TrimSpace(*fragment.HomeLocation.ISO6709) == "" {
-		fragment.HomeLocation.ISO6709 = &iso
-	}
-	return true, nil
+	changed = ApplyResolvedCoordinates(fragment, result.Lat, result.Lon)
+	RecordGeoCoordinatesAttribution(fragment, GeoCoordinatesAttribution{
+		Method:           "geocoding",
+		Provider:         strings.TrimSpace(result.Provider),
+		Query:            addr,
+		FormattedAddress: strings.TrimSpace(result.FormattedAddress),
+		PlaceID:          strings.TrimSpace(result.PlaceID),
+	})
+	return changed, nil
 }
 
 // BuildAddressFromFragment constructs an address string from fragment fields.
@@ -390,8 +420,14 @@ func EnrichCoordinatesFromGeocoding(
 //
 // Priority: explicit address identifiers > homeLocation (place name + country).
 func BuildAddressFromFragment(f *hmodels.HorizonFragment) string {
+	addr, _ := BuildAddressFromFragmentWithSource(f)
+	return addr
+}
+
+// BuildAddressFromFragmentWithSource returns the best geocoding candidate and its derivation source.
+func BuildAddressFromFragmentWithSource(f *hmodels.HorizonFragment) (string, string) {
 	if f == nil {
-		return ""
+		return "", ""
 	}
 
 	// 1. Explicit address fields (from OpenCorporates, Wikidata P969, etc.)
@@ -406,7 +442,7 @@ func BuildAddressFromFragment(f *hmodels.HorizonFragment) string {
 					addr = v + ", " + cc
 				}
 				if addressvalidate.IsPlausibleAddress(addr) {
-					return addr
+					return addr, geoAddressSourceExplicitAddress
 				}
 			}
 		}
@@ -419,7 +455,7 @@ func BuildAddressFromFragment(f *hmodels.HorizonFragment) string {
 				if cc := extractCountryFromFragment(f); cc != "" {
 					addr := v + ", " + cc
 					if addressvalidate.IsPlausibleAddress(addr) {
-						return addr
+						return addr, geoAddressSourcePlaceCountry
 					}
 				}
 			}
@@ -440,13 +476,13 @@ func BuildAddressFromFragment(f *hmodels.HorizonFragment) string {
 		if name != "" && cc != "" {
 			addr := name + ", " + cc
 			if addressvalidate.IsPlausibleAddress(addr) {
-				return addr
+				return addr, geoAddressSourcePlaceCountry
 			}
 		}
 		// For geo-centric fragment kinds, a plain place name can still be geocoded.
 		if name != "" && (f.Type == hmodels.FragmentTypeGeoRegion || f.Type == hmodels.FragmentTypeEvent || f.Type == hmodels.FragmentTypeAffectedZone) {
 			if addressvalidate.IsPlausibleAddress(name) {
-				return name
+				return name, geoAddressSourcePlaceCountry
 			}
 		}
 	}
@@ -462,14 +498,14 @@ func BuildAddressFromFragment(f *hmodels.HorizonFragment) string {
 				if cc != "" {
 					addr := slug + ", " + cc
 					if addressvalidate.IsPlausibleAddress(addr) {
-						return addr
+						return addr, geoAddressSourceZoneSlugCountry
 					}
 				}
 				// Fallback: slug + geo as-is (for composite tr-sy use first part for geocoding)
 				if len(geo) == 2 && geo != "na" {
 					addr := slug + ", " + strings.ToUpper(geo)
 					if addressvalidate.IsPlausibleAddress(addr) {
-						return addr
+						return addr, geoAddressSourceZoneSlugCountry
 					}
 				}
 				if idx := strings.Index(geo, "-"); idx > 0 {
@@ -477,7 +513,7 @@ func BuildAddressFromFragment(f *hmodels.HorizonFragment) string {
 					if len(firstCC) == 2 {
 						addr := slug + ", " + firstCC
 						if addressvalidate.IsPlausibleAddress(addr) {
-							return addr
+							return addr, geoAddressSourceZoneSlugCountry
 						}
 					}
 				}
@@ -498,7 +534,7 @@ func BuildAddressFromFragment(f *hmodels.HorizonFragment) string {
 			if len(cc) == 2 && cc != "NA" && city != "" && !strings.EqualFold(city, "na") {
 				addr := city + ", " + cc
 				if addressvalidate.IsPlausibleAddress(addr) {
-					return addr
+					return addr, geoAddressSourceLocPath
 				}
 			}
 		}
@@ -518,7 +554,7 @@ func BuildAddressFromFragment(f *hmodels.HorizonFragment) string {
 			if cc != "" {
 				addr := name + ", " + cc
 				if addressvalidate.IsPlausibleAddress(addr) {
-					return addr
+					return addr, geoAddressSourceDepositNameCountry
 				}
 			}
 		}
@@ -556,12 +592,12 @@ func BuildAddressFromFragment(f *hmodels.HorizonFragment) string {
 				seen[key] = struct{}{}
 				addr := n + ", " + cc
 				if addressvalidate.IsPlausibleAddress(addr) {
-					return addr
+					return addr, geoAddressSourceEntityNameCountry
 				}
 			}
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // BuildLastSegmentAddressCandidates builds geocoding candidates from the last segment of the canonical path.
@@ -614,13 +650,41 @@ func BuildLastSegmentAddressCandidates(f *hmodels.HorizonFragment) []string {
 		out = append(out, addr)
 	}
 
+	for _, hint := range InferPlaceHintCandidates(f) {
+		if cc != "" {
+			add(hint + ", " + cc)
+		}
+		add(hint)
+	}
+
 	if cc != "" {
 		add(humanized + ", " + cc)
 	}
 	add(humanized)
 
-	// Shorter variants: "north-sinai-insurgency-zone" → try "North Sinai" (first 2 parts)
+	// Tail variants help facility/org slugs that end with a real place name:
+	// eco-resource-kz-almaty -> Almaty, KZ
 	slugParts := strings.Split(slug, "-")
+	if len(slugParts) >= 2 {
+		tail := strings.Title(strings.ToLower(strings.Join(slugParts[len(slugParts)-2:], " ")))
+		if tail != "" {
+			if cc != "" {
+				add(tail + ", " + cc)
+			}
+			add(tail)
+		}
+	}
+	if len(slugParts) >= 1 {
+		last := strings.Title(strings.ToLower(slugParts[len(slugParts)-1]))
+		if last != "" && len(last) >= 3 {
+			if cc != "" {
+				add(last + ", " + cc)
+			}
+			add(last)
+		}
+	}
+	// Prefix variants remain useful for geo-first names like north-sinai-insurgency-zone,
+	// but they should be lower priority than suffix place guesses.
 	if len(slugParts) >= 2 {
 		short := strings.Title(strings.ToLower(strings.Join(slugParts[:2], " ")))
 		if short != "" {
@@ -630,13 +694,165 @@ func BuildLastSegmentAddressCandidates(f *hmodels.HorizonFragment) []string {
 			add(short)
 		}
 	}
-	if len(slugParts) >= 1 && cc != "" {
-		single := strings.Title(strings.ToLower(slugParts[0]))
-		if single != "" && len(single) >= 2 {
-			add(single + ", " + cc)
+	return out
+}
+
+// InferPlaceHintCandidates extracts conservative city/site hints from fragment names and slugs.
+// It is intentionally biased toward trailing geographic clues like "... Wuxi", "... Huizhou Factory",
+// "... Eilat", "... Binh Duong Factory". Generic company/facility suffixes are stripped first.
+func InferPlaceHintCandidates(f *hmodels.HorizonFragment) []string {
+	if f == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 6)
+	add := func(raw string) {
+		v := strings.TrimSpace(raw)
+		if v == "" {
+			return
+		}
+		key := strings.ToLower(v)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, v)
+	}
+	if f.HomeLocation != nil {
+		add(strings.TrimSpace(f.HomeLocation.Name))
+	}
+	for _, raw := range geoHintSourceCandidates(f) {
+		for _, hint := range inferPlaceHintsFromText(raw) {
+			add(hint)
 		}
 	}
 	return out
+}
+
+func geoHintSourceCandidates(f *hmodels.HorizonFragment) []string {
+	if f == nil {
+		return nil
+	}
+	out := make([]string, 0, 4)
+	if f.Labels != nil {
+		if v := strings.TrimSpace(f.Labels["en"]); v != "" {
+			out = append(out, v)
+		}
+	}
+	if f.Identifiers != nil {
+		for _, key := range []string{"legalName", "shortName"} {
+			if v := strings.TrimSpace(f.Identifiers[key]); v != "" {
+				out = append(out, v)
+			}
+		}
+	}
+	cp := strings.TrimSpace(f.CanonicalPath)
+	if cp != "" {
+		parts := strings.Split(strings.Trim(cp, "/"), "/")
+		if len(parts) > 0 {
+			if slug := strings.TrimSpace(parts[len(parts)-1]); slug != "" {
+				out = append(out, strings.ReplaceAll(strings.ReplaceAll(slug, "-", " "), "_", " "))
+			}
+		}
+	}
+	return out
+}
+
+func inferPlaceHintsFromText(raw string) []string {
+	tokens := strings.Fields(normalizeGeoHintText(raw))
+	if len(tokens) == 0 {
+		return nil
+	}
+	out := make([]string, 0, 3)
+	seen := map[string]struct{}{}
+	add := func(parts ...string) {
+		val := strings.TrimSpace(strings.Join(parts, " "))
+		if val == "" {
+			return
+		}
+		val = titleGeoHint(val)
+		key := strings.ToLower(val)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, val)
+	}
+
+	if len(tokens) >= 2 && taxonomy.IsISO2CountryCode(tokens[len(tokens)-2]) && len(tokens[len(tokens)-1]) >= 4 {
+		add(tokens[len(tokens)-1])
+	}
+
+	trimmed := trimTrailingGeoNoise(tokens)
+	if len(trimmed) == 0 {
+		return out
+	}
+	if len(trimmed) == 2 && len(trimmed[0]) >= 3 && len(trimmed[1]) >= 3 &&
+		!isGenericGeoNoiseToken(trimmed[0]) && !isGenericGeoNoiseToken(trimmed[1]) {
+		add(trimmed[0], trimmed[1])
+	}
+	last := trimmed[len(trimmed)-1]
+	if len(trimmed) >= 2 && len(last) >= 4 && !isGenericGeoNoiseToken(last) {
+		add(last)
+	}
+	if len(trimmed) >= 2 && isDirectionalGeoToken(trimmed[len(trimmed)-2]) && len(trimmed[len(trimmed)-1]) >= 3 {
+		add(trimmed[len(trimmed)-2], trimmed[len(trimmed)-1])
+	}
+	return out
+}
+
+func normalizeGeoHintText(raw string) string {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	if s == "" {
+		return ""
+	}
+	repl := strings.NewReplacer(",", " ", ".", " ", "-", " ", "_", " ", "(", " ", ")", " ", "/", " ", "'", " ", "\"", " ", "&", " ")
+	s = repl.Replace(s)
+	return strings.Join(strings.Fields(s), " ")
+}
+
+func trimTrailingGeoNoise(tokens []string) []string {
+	trimmed := append([]string(nil), tokens...)
+	for len(trimmed) > 0 && isGenericGeoNoiseToken(trimmed[len(trimmed)-1]) {
+		trimmed = trimmed[:len(trimmed)-1]
+	}
+	return trimmed
+}
+
+func isDirectionalGeoToken(token string) bool {
+	switch strings.TrimSpace(strings.ToLower(token)) {
+	case "north", "south", "east", "west", "upper", "lower", "new":
+		return true
+	default:
+		return false
+	}
+}
+
+func isGenericGeoNoiseToken(token string) bool {
+	switch strings.TrimSpace(strings.ToLower(token)) {
+	case "plant", "factory", "facility", "facilities", "terminal", "terminals", "site", "station", "stations",
+		"center", "centre", "centers", "centres", "network", "networks", "hub", "hubs", "bank", "company", "co",
+		"corp", "corporation", "group", "holding", "holdings", "limited", "ltd", "llc", "plc", "pjsc", "sa", "as",
+		"spa", "ag", "gmbh", "bv", "nv", "inc", "industries", "industry", "electronic", "electronics", "circuit",
+		"fulfillment", "distribution", "logistics", "general", "production", "processing":
+		return true
+	default:
+		return false
+	}
+}
+
+func titleGeoHint(raw string) string {
+	parts := strings.Fields(strings.TrimSpace(raw))
+	if len(parts) == 0 {
+		return ""
+	}
+	for i, part := range parts {
+		if len(part) == 0 {
+			continue
+		}
+		parts[i] = strings.ToUpper(part[:1]) + part[1:]
+	}
+	return strings.Join(parts, " ")
 }
 
 // BuildFacilityAddressCandidates builds additional facility geocoding candidates using parent-org context.
@@ -663,7 +879,9 @@ func BuildFacilityAddressCandidates(fragment *hmodels.HorizonFragment, parent *h
 		out = append(out, addr)
 	}
 
-	add(BuildAddressFromFragment(fragment))
+	if addr, source := BuildAddressFromFragmentWithSource(fragment); addr != "" && source != geoAddressSourceEntityNameCountry {
+		add(addr)
+	}
 
 	cc := extractCountryFromFragment(fragment)
 	if cc == "" && parent != nil {
@@ -764,6 +982,56 @@ func isEntityNameGeoFallbackType(t hmodels.FragmentType) bool {
 	}
 }
 
+// ApplyResolvedCoordinates updates fragment coordinates and ISO6709 from a trusted result.
+// Returns true when coordinates changed materially.
+func ApplyResolvedCoordinates(fragment *hmodels.HorizonFragment, lat, lon float64) bool {
+	if fragment == nil || !hmodels.IsRealGeoCoordinate(lat, lon) {
+		return false
+	}
+	changed := fragment.Coordinates == nil ||
+		math.Abs(fragment.Coordinates.Lat-lat) > 0.000001 ||
+		math.Abs(fragment.Coordinates.Lon-lon) > 0.000001
+	fragment.Coordinates = &hmodels.Coordinates{Lat: lat, Lon: lon}
+	if fragment.HomeLocation == nil {
+		fragment.HomeLocation = &hmodels.Location{}
+	}
+	iso := fmt.Sprintf("%+.6f%+.6f/", lat, lon)
+	if fragment.HomeLocation.ISO6709 == nil || strings.TrimSpace(*fragment.HomeLocation.ISO6709) != iso {
+		fragment.HomeLocation.ISO6709 = &iso
+	}
+	return changed
+}
+
+// RecordGeoCoordinatesAttribution writes stable, queryable provenance for coordinate resolution.
+func RecordGeoCoordinatesAttribution(fragment *hmodels.HorizonFragment, attr GeoCoordinatesAttribution) {
+	if fragment == nil {
+		return
+	}
+	if fragment.Identifiers == nil {
+		fragment.Identifiers = map[string]string{}
+	}
+	set := func(key, value string) {
+		if s := strings.TrimSpace(value); s != "" {
+			fragment.Identifiers[key] = s
+		}
+	}
+	set("geoCoordinatesMethod", attr.Method)
+	set("geoCoordinatesProvider", attr.Provider)
+	set("geoCoordinatesQuery", attr.Query)
+	set("geoCoordinatesFormattedAddress", attr.FormattedAddress)
+	set("geoCoordinatesPlaceId", attr.PlaceID)
+	set("geoCoordinatesCountryAlpha2", strings.ToUpper(attr.CountryAlpha2))
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if s := strings.TrimSpace(value); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
 func isParentGeoPropagationType(t hmodels.FragmentType) bool {
 	switch t {
 	case hmodels.FragmentTypeFacility, hmodels.FragmentTypeCommunity, hmodels.FragmentTypeProgram:
@@ -820,7 +1088,7 @@ func extractCountryFromCanonicalPath(rawPath string) string {
 		return ""
 	}
 	switch parts[0] {
-	case "org", "gov", "loc", "market", "community":
+	case "org", "gov", "loc", "market", "community", "fac":
 		return normalizeISO2(parts[1])
 	case "zone":
 		// /zone/{geo}/{condition_type}/{slug}: geo can be ISO2 (tr, sy) or composite (tr-sy)

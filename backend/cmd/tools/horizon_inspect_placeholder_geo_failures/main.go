@@ -38,7 +38,7 @@ func main() {
 	cacheRepo := coreRepo.NewExternalDataCacheRepository(fs.Client())
 	var geo coreontology.GeocodingClientInterface
 	if gc := httphandlers.GetGoogleGeocodingClientFromEnv(); gc != nil {
-		geo = geocoding.NewCachedClient(geocoding.NewAdapter(gc), cacheRepo, geocoding.CacheOptionsFromEnv())
+		geo = geocoding.NewCachedClientWithService(geocoding.NewAdapter(gc), cacheRepo, geocoding.CacheOptionsFromEnv(), coreontology.GeocodingProviderGoogle)
 	}
 	iter := fs.Client().Collection("horizon_fragments").Where("tenantId", "==", "global").Documents(ctx)
 	rows := make([]row, 0, *limit)

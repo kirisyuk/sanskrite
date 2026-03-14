@@ -1628,14 +1628,14 @@ func main() {
 					if horizonTelemetryRepo != nil {
 						gcBase = horizontelemetry.NewGeocodingTelemetryWrapper(gcAdapter, horizonTelemetryRepo)
 					}
-					googleFacts = geocoding.NewCachedClient(gcBase, externalCacheRepo, geocoding.CacheOptionsFromEnv())
+					googleFacts = geocoding.NewCachedClientWithService(gcBase, externalCacheRepo, geocoding.CacheOptionsFromEnv(), coreontology.GeocodingProviderGoogle)
 				}
 				nomRaw := geocoding.NominatimOptionsFromEnv()
 				var nomBase ontology.GeocodingClientInterface = nomRaw
 				if horizonTelemetryRepo != nil {
 					nomBase = horizontelemetry.NewNominatimTelemetryWrapper(nomRaw, horizonTelemetryRepo)
 				}
-				nomCached := geocoding.NewCachedClient(nomBase, externalCacheRepo, geocoding.CacheOptionsFromEnv())
+				nomCached := geocoding.NewCachedClientWithService(nomBase, externalCacheRepo, geocoding.CacheOptionsFromEnv(), coreontology.GeocodingProviderNominatim)
 				gcForFacts = geocoding.NewFallbackClient(nomCached, googleFacts, logger)
 			}
 			if gcForFacts != nil {
@@ -2176,7 +2176,7 @@ func main() {
 					if horizonTelemetryRepo != nil {
 						gcBase = horizontelemetry.NewGeocodingTelemetryWrapper(gcAdapter, horizonTelemetryRepo)
 					}
-					googleClient = geocoding.NewCachedClient(gcBase, externalCacheRepo, geocoding.CacheOptionsFromEnv())
+					googleClient = geocoding.NewCachedClientWithService(gcBase, externalCacheRepo, geocoding.CacheOptionsFromEnv(), coreontology.GeocodingProviderGoogle)
 					logger.Printf("Google Geocoding client wired (fallback)")
 				}
 
@@ -2185,7 +2185,7 @@ func main() {
 				if horizonTelemetryRepo != nil {
 					nomBase = horizontelemetry.NewNominatimTelemetryWrapper(nomRaw, horizonTelemetryRepo)
 				}
-				nominatimClient := geocoding.NewCachedClient(nomBase, externalCacheRepo, geocoding.CacheOptionsFromEnv())
+				nominatimClient := geocoding.NewCachedClientWithService(nomBase, externalCacheRepo, geocoding.CacheOptionsFromEnv(), coreontology.GeocodingProviderNominatim)
 				logger.Printf("Nominatim geocoding client wired (primary)")
 
 				combined := geocoding.NewFallbackClient(nominatimClient, googleClient, logger)

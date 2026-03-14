@@ -198,6 +198,7 @@ const SUPPLY_BUNDLE_AZIMUTH_DEG = 20;
 const SUPPLY_BUNDLE_LOCAL_CELL_DEG = 3.5;
 const SUPPLY_BUNDLE_MAX_LOCAL_SPREAD_KM = 680;
 const SUPPLY_BUNDLE_MAX_REMOTE_SPREAD_KM = 1800;
+const SUPPLY_BUNDLE_MAX_PRESERVE_ENDPOINT_DISTANCE_KM = 2600;
 const CORRIDOR_SPATIAL_CLUSTER_LINK_KM = 900;
 const ENDPOINT_MARKER_SIZE_PX = 28;
 const ENDPOINT_MARKER_PADDING_PX = 4;
@@ -2268,6 +2269,16 @@ function buildSupplyPathFeatures(
     azimuthDeg: number;
   };
 
+  const shouldBundleRoute = (route: OrientedCandidateRoute): boolean => {
+    if (route.directDistanceKm < SUPPLY_BUNDLE_MIN_DISTANCE_KM) return false;
+    // Preserve explicit terminal objects for complex and very long routes.
+    // Otherwise bundling collapses the far endpoint into a centroid and the
+    // line appears to end in empty space instead of on the last mapped object.
+    if (route.transportViaRefs.length > 0) return false;
+    if (route.directDistanceKm >= SUPPLY_BUNDLE_MAX_PRESERVE_ENDPOINT_DISTANCE_KM) return false;
+    return true;
+  };
+
   const byRouteKey = new Map<string, CandidateRoute>();
 
   for (const artifact of pathArtifacts) {
@@ -2441,7 +2452,7 @@ function buildSupplyPathFeatures(
     visiblePathRefs.add(route.customerRef);
     route.transportViaRefs.forEach((ref) => visiblePathRefs.add(ref));
 
-    if (route.directDistanceKm < SUPPLY_BUNDLE_MIN_DISTANCE_KM) {
+    if (!shouldBundleRoute(route)) {
       continue;
     }
     const azimuthBucket = Math.round(route.azimuthDeg / SUPPLY_BUNDLE_AZIMUTH_DEG);

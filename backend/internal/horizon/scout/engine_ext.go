@@ -5682,10 +5682,7 @@ func (e *ScoutEngine) processRelationsInternal(
 			if explicitSrc := strings.TrimSpace(rel.SourceCanonicalPath); explicitSrc != "" {
 				srcPath = explicitSrc
 			}
-			allowed := IsSupplyChainEdgeType(normalizedRelationType)
-			if !allowed && (strings.EqualFold(normalizedRelationType, "OWNS") || strings.EqualFold(normalizedRelationType, "CONTROLS")) {
-				allowed = allowSupplyChainOwnershipOrControlByPath(srcPath, targetPath)
-			}
+			allowed := IsAllowedSupplyChainRuntimeRelation(srcPath, targetPath, models.DependencyType(normalizedRelationType))
 			if !allowed {
 				e.logLine(ctx, job, "info", fmt.Sprintf("> pre_materialization_supply_chain_guard: dropped type=%q source=%q target=%q reason=out_of_contract",
 					normalizedRelationType, srcPath, targetPath))
@@ -8457,6 +8454,11 @@ func (e *ScoutEngine) processSupplyChains(
 			}
 		}
 
+		if err := scValidator.ValidateEdgeAgainstFragments(chainEdge, pathToFragment[srcPath], pathToFragment[dstPath], jobIDStr, edgeIdx); err != nil {
+			e.logLine(ctx, job, "warn", err.Error())
+			continue
+		}
+
 		edgeType := models.DependencyType(chainEdge.RelationType)
 
 		// Policy: self-loop prevention
@@ -8692,10 +8694,7 @@ func (e *ScoutEngine) processSupplyChains(
 		applyBestEffortEdgeEnrichment(edge, srcPath, dstPath)
 
 		// Final allowlist gate: never persist out-of-contract types for supply-chain edges.
-		allowed := IsSupplyChainEdgeType(string(edgeType))
-		if !allowed && (strings.EqualFold(string(edgeType), "OWNS") || strings.EqualFold(string(edgeType), "CONTROLS")) {
-			allowed = allowSupplyChainOwnershipOrControlByPath(srcPath, dstPath)
-		}
+		allowed := IsAllowedSupplyChainRuntimeRelation(srcPath, dstPath, edgeType)
 		if !allowed {
 			e.logLine(ctx, job, "info", fmt.Sprintf("> persist_final_gate_supply_chain: skipped type=%q source=%q target=%q reason=out_of_contract",
 				edgeType, srcPath, dstPath))

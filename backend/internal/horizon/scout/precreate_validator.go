@@ -390,6 +390,9 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 			if strings.TrimSpace(revalidated.Query) != "" {
 				msg += fmt.Sprintf(" via %q", revalidated.Query)
 			}
+			if strings.TrimSpace(revalidated.Provider) != "" {
+				msg += fmt.Sprintf(" [%s]", revalidated.Provider)
+			}
 			result.Warnings = append(result.Warnings, msg)
 		}
 	}
@@ -406,7 +409,11 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 		if enriched, err := henrich.EnrichCoordinatesFromGeocoding(ctx, v.geocodingClient, fragment); err != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("geocoding skipped: %v", err))
 		} else if enriched {
-			result.Warnings = append(result.Warnings, "coordinates resolved via geocoding")
+			msg := "coordinates resolved via geocoding"
+			if provider := strings.TrimSpace(fragment.Identifiers["geoCoordinatesProvider"]); provider != "" {
+				msg += fmt.Sprintf(" [%s]", provider)
+			}
+			result.Warnings = append(result.Warnings, msg)
 		}
 	}
 	if upgraded := maybeUpgradeFacilityPathFromHomeLocation(fragment); upgraded != "" {

@@ -59,45 +59,37 @@ export function useGeoObjects(
   const realtimeInitializedRef = useRef(false);
 
   useEffect(() => {
+    let cancelled = false;
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      let cancelled = false;
-      const shouldAwaitCanonicalPaths = Boolean(scope?.lensId && preferCanonicalPaths && canonicalPathsSource == null);
-      if (shouldAwaitCanonicalPaths) {
-        setLoading(true);
-        setError(null);
-        setAllObjects([]);
-        return;
-      }
       setLoading(true);
 
       const load = async () => {
         let lastError: unknown = null;
-        if (scope?.lensId && preferCanonicalPaths) {
-          if (!canonicalPathsSource || canonicalPathsSource.length === 0) {
-            if (!cancelled) {
-              setAllObjects([]);
+        const canonicalPaths = Array.isArray(canonicalPathsSource)
+          ? Array.from(new Set(canonicalPathsSource.map((value) => String(value || '').trim()).filter(Boolean)))
+          : [];
+
+        // Keep the lens world map populated while supply-path artifacts are still loading.
+        // Only switch to the by-path endpoint when we have an actual non-empty path set.
+        if (scope?.lensId && preferCanonicalPaths && canonicalPaths.length > 0) {
+            try {
+              const response = await api.listHorizonGeoObjectsByPaths({
+                canonicalPaths,
+                createdAfter: filters.dateFrom || undefined,
+                createdBefore: filters.dateTo || undefined,
+              });
+              if (cancelled) return;
+              const valid = (response.items || []).filter((item) => {
+                const lat = item.coordinates?.lat;
+                const lon = item.coordinates?.lon;
+                return Number.isFinite(lat) && Number.isFinite(lon);
+              });
+              setAllObjects(valid);
               setError(null);
-            }
-            return;
-          }
-          try {
-            const response = await api.listHorizonGeoObjectsByPaths({
-              canonicalPaths: canonicalPathsSource,
-              createdAfter: filters.dateFrom || undefined,
-              createdBefore: filters.dateTo || undefined,
-            });
-            if (cancelled) return;
-            const valid = (response.items || []).filter((item) => {
-              const lat = item.coordinates?.lat;
-              const lon = item.coordinates?.lon;
-              return Number.isFinite(lat) && Number.isFinite(lon);
-            });
-            setAllObjects(valid);
-            setError(null);
-            return;
-          } catch (err) {
-            lastError = err;
+              return;
+            } catch (err) {
+              lastError = err;
           }
         }
         for (const limit of GEO_OBJECT_LIMIT_CANDIDATES) {
@@ -134,11 +126,12 @@ export function useGeoObjects(
       void load().finally(() => {
         if (!cancelled) setLoading(false);
       });
-
-      return () => { cancelled = true; };
     }, 300);
 
-    return () => clearTimeout(debounceRef.current);
+    return () => {
+      cancelled = true;
+      clearTimeout(debounceRef.current);
+    };
   }, [canonicalPathsSource, filters.dateFrom, filters.dateTo, preferCanonicalPaths, scope?.lensId]);
 
   useEffect(() => {

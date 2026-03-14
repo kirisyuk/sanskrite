@@ -12,6 +12,7 @@ import {
 interface MapFilterPanelProps {
   isDark: boolean;
   paletteTheme: 'dark' | 'light';
+  floating?: boolean;
   typeCounts: TypeCount[];
   zoneTypeCounts: ZoneTypeCount[];
   flowModeCounts: TransportFlowModeCount[];
@@ -21,6 +22,7 @@ interface MapFilterPanelProps {
   zonesEnabled: boolean;
   flowsEnabled: boolean;
   pathLegsEnabled: boolean;
+  pathLegClusteringEnabled: boolean;
   pathLegCount: number;
   vesselsEnabled: boolean;
   vesselsApiAvailable: boolean;
@@ -37,6 +39,7 @@ interface MapFilterPanelProps {
   onToggleZonesEnabled: () => void;
   onToggleFlowsEnabled: () => void;
   onTogglePathLegsEnabled: () => void;
+  onTogglePathLegClusteringEnabled: () => void;
   onToggleVesselsEnabled: () => void;
   onSelectAll: () => void;
   onSelectNone: () => void;
@@ -84,13 +87,13 @@ function detectDatePreset(dateFrom: string, dateTo: string, today: Date): DatePr
   return 'custom';
 }
 
-function panelSurface(isDark: boolean): React.CSSProperties {
+function panelSurface(isDark: boolean, floating = false): React.CSSProperties {
   return {
-    position: 'absolute',
-    right: 10,
-    top: 10,
+    position: floating ? 'relative' : 'absolute',
+    right: floating ? undefined : 10,
+    top: floating ? undefined : 10,
     width: 286,
-    maxHeight: 'calc(100% - 20px)',
+    maxHeight: floating ? 'min(calc(100vh - 48px), 760px)' : 'calc(100% - 20px)',
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
@@ -386,6 +389,7 @@ const LayerRow: React.FC<{
 export const MapFilterPanel: React.FC<MapFilterPanelProps> = ({
   isDark,
   paletteTheme,
+  floating = false,
   typeCounts,
   zoneTypeCounts,
   flowModeCounts,
@@ -395,6 +399,7 @@ export const MapFilterPanel: React.FC<MapFilterPanelProps> = ({
   zonesEnabled,
   flowsEnabled,
   pathLegsEnabled,
+  pathLegClusteringEnabled,
   pathLegCount,
   vesselsEnabled,
   vesselsApiAvailable,
@@ -411,6 +416,7 @@ export const MapFilterPanel: React.FC<MapFilterPanelProps> = ({
   onToggleZonesEnabled,
   onToggleFlowsEnabled,
   onTogglePathLegsEnabled,
+  onTogglePathLegClusteringEnabled,
   onToggleVesselsEnabled,
   onSelectAll,
   onSelectNone,
@@ -454,6 +460,7 @@ export const MapFilterPanel: React.FC<MapFilterPanelProps> = ({
     zonesEnabled ||
     flowsEnabled ||
     pathLegsEnabled ||
+    !pathLegClusteringEnabled ||
     vesselsEnabled;
 
   React.useEffect(() => {
@@ -486,6 +493,7 @@ export const MapFilterPanel: React.FC<MapFilterPanelProps> = ({
     if (zonesEnabled) onToggleZonesEnabled();
     if (flowsEnabled) onToggleFlowsEnabled();
     if (pathLegsEnabled) onTogglePathLegsEnabled();
+    if (!pathLegClusteringEnabled) onTogglePathLegClusteringEnabled();
     if (vesselsEnabled) onToggleVesselsEnabled();
     setObjectSearch('');
   }, [
@@ -503,8 +511,10 @@ export const MapFilterPanel: React.FC<MapFilterPanelProps> = ({
     onSetDateTo,
     onSetHops,
     onToggleFlowsEnabled,
+    onTogglePathLegClusteringEnabled,
     onTogglePathLegsEnabled,
     onToggleVesselsEnabled,
+    pathLegClusteringEnabled,
     pathLegsEnabled,
     onToggleZonesEnabled,
     vesselsEnabled,
@@ -526,7 +536,7 @@ export const MapFilterPanel: React.FC<MapFilterPanelProps> = ({
   }
 
   return (
-    <div style={panelSurface(isDark)}>
+    <div style={panelSurface(isDark, floating)}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
         <div>
           <div style={{ fontWeight: 700, fontSize: 14, letterSpacing: '-0.01em' }}>Filters</div>
@@ -668,6 +678,7 @@ export const MapFilterPanel: React.FC<MapFilterPanelProps> = ({
               zonesEnabled ? 'Zones on' : 'Zones off',
               flowsEnabled ? 'Flows on' : 'Flows off',
               pathLegsEnabled ? 'Paths on' : 'Paths off',
+              pathLegsEnabled ? (pathLegClusteringEnabled ? 'Clustering on' : 'Clustering off') : null,
               vesselsApiAvailable ? (vesselsEnabled ? 'AIS on' : 'AIS off') : null,
             ].filter(Boolean).join(' . ')}
             isDark={isDark}
@@ -749,6 +760,15 @@ export const MapFilterPanel: React.FC<MapFilterPanelProps> = ({
                 isDark={isDark}
                 activeTint={isDark ? 'rgba(251, 191, 36, 0.34)' : 'rgba(217, 119, 6, 0.2)'}
                 onToggleEnabled={onTogglePathLegsEnabled}
+              />
+
+              <LayerRow
+                title="Cluster path legs"
+                subtitle="Anchor path legs to visible map clusters"
+                enabled={pathLegClusteringEnabled}
+                isDark={isDark}
+                activeTint={isDark ? 'rgba(56, 189, 248, 0.34)' : 'rgba(14, 165, 233, 0.2)'}
+                onToggleEnabled={onTogglePathLegClusteringEnabled}
               />
 
               {flowsEnabled && flowDetailsOpen && flowModeCounts.length > 0 && (

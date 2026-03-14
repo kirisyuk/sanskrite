@@ -81,7 +81,7 @@ func main() {
 		WithFramesRepo(framesRepo)
 	var geocodingClient coreontology.GeocodingClientInterface
 	if gc := httphandlers.GetGoogleGeocodingClientFromEnv(); gc != nil {
-		geocodingClient = geocoding.NewCachedClient(geocoding.NewAdapter(gc), externalCacheRepo, geocoding.CacheOptionsFromEnv())
+		geocodingClient = geocoding.NewCachedClientWithService(geocoding.NewAdapter(gc), externalCacheRepo, geocoding.CacheOptionsFromEnv(), coreontology.GeocodingProviderGoogle)
 		log.Printf("google geocoding wired for facility geo-path backfill")
 	}
 

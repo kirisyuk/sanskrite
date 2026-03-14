@@ -68,10 +68,10 @@ func main() {
 	}
 	var geocodingClient coreontology.GeocodingClientInterface
 	nomOpts := geocoding.NominatimOptionsFromEnv()
-	nomCached := geocoding.NewCachedClient(nomOpts, externalCache, geocoding.CacheOptionsFromEnv())
+	nomCached := geocoding.NewCachedClientWithService(nomOpts, externalCache, geocoding.CacheOptionsFromEnv(), coreontology.GeocodingProviderNominatim)
 	if gcBase := httphandlers.GetGoogleGeocodingClientFromEnv(); gcBase != nil {
 		gcAdapter := geocoding.NewAdapter(gcBase)
-		gcCached := geocoding.NewCachedClient(gcAdapter, externalCache, geocoding.CacheOptionsFromEnv())
+		gcCached := geocoding.NewCachedClientWithService(gcAdapter, externalCache, geocoding.CacheOptionsFromEnv(), coreontology.GeocodingProviderGoogle)
 		geocodingClient = geocoding.NewFallbackClient(nomCached, gcCached, log.Default())
 		log.Printf("Geocoding: Nominatim (primary) + Google (fallback)")
 	} else {
@@ -198,7 +198,7 @@ func main() {
 					if fixedThis {
 						break
 					}
-						addr := label + ", " + cc
+					addr := label + ", " + cc
 					reCtx2, cancel2 := context.WithTimeout(ctx, 15*time.Second)
 					res, err := geocodingClient.Geocode(reCtx2, addr)
 					cancel2()

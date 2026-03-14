@@ -737,9 +737,6 @@ const HorizonPage: React.FC = () => {
           gap: 0,
         }}
       >
-        {/* 2% left margin for breathing room (hidden on smartphones) */}
-        {!isSmartphone && <div style={{ width: '2%', minWidth: '2%', flexShrink: 0 }} />}
-
         {/* Content area - flexible width */}
         <div
           className="flex-1 min-h-0"

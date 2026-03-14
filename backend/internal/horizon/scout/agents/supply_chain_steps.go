@@ -195,7 +195,8 @@ func (a *ResearchAgent) findFacilitiesForOrgsBatch(ctx context.Context, orgPaths
 
 1. CHILD ORGANIZATIONS (priority): If the org produces goods not only through its own facilities but also through subsidiaries, controlled entities, or partners that manufacture on its behalf — return those child orgs FIRST. We will drill into them in the next iteration. For government bodies (/gov/...): include subordinate agencies, state-owned enterprises they control.
 
-2. PRODUCTION FACILITIES: Factories, plants, refineries, warehouses, distribution centers that the org owns or operates directly. For orgs with known production (e.g. Coca-Cola, large manufacturers) — search for and return SPECIFIC facilities that produce standalone products. For government bodies: include procurement, storage, or distribution facilities they operate. Do NOT invent synthetic facilities; if no concrete facility is known, return an empty facilities list (org-level production will be represented later as org -> PRODUCES -> product).
+2. PRODUCTION FACILITIES: Factories, plants, refineries, assembly sites, and other facilities that DIRECTLY transform materials into products. Exclude pure warehouses, distribution centers, fulfillment hubs, retail sites, and logistics nodes unless the facility's own primary output is a service. For government bodies: include production, processing, or depot facilities only when they directly manufacture, refine, or store strategic goods as operational stock. Do NOT invent synthetic facilities; if no concrete production facility is known, return an empty facilities list (org-level production will be represented later as org -> PRODUCES -> product).
+   Preserve place-bearing names exactly when they are part of the official site/facility name (e.g. Wuxi, Huizhou, Eilat, Binh Duong, Riyadh). Do NOT drop the place token and do NOT collapse such facilities into generic "... general production" labels when a concrete site clue exists.
 
 Organizations (use /org/... or /gov/... paths):
 %s
@@ -240,6 +241,7 @@ func (a *ResearchAgent) findProductsForFacsBatch(ctx context.Context, facPaths [
 	contextBlock := supplyChainPromptContextBlock(ctx)
 	prompt := fmt.Sprintf(`You are a supply chain research agent. For each facility below, find ALL products or services it produces directly.
 Do NOT list products of parent, sibling, or related companies — only what THIS facility makes.
+If the facility is a warehouse, distribution center, fulfillment hub, depot, terminal, or logistics node, return an empty products list unless the facility's own primary output is a service under /product/service/...
 
 Product granularity: Prefer product family over specific SKU; prefer concrete commodity over vague category (e.g. carbonated-soft-drinks, not "Coca-Cola 330ml can"). Focus on main outputs; by-products are optional.
 

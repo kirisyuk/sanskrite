@@ -111,6 +111,36 @@ func TestFilterDiscoveredRelationsByDomainModes_DomainAnchorKeepsScaffold(t *tes
 	}
 }
 
+func TestIsAllowedSupplyChainRuntimeRelation_DomainAnchorKeepsScaffold(t *testing.T) {
+	if !IsAllowedSupplyChainRuntimeRelation(
+		"/domain/v1/supply-chain/geo/kz/subject/samsung-electronics",
+		"/org/kr/samsung-electronics",
+		models.DependencyTypeFocusesOn,
+	) {
+		t.Fatal("domain supply-chain anchor must allow FOCUSES_ON at runtime")
+	}
+}
+
+func TestIsAllowedSupplyChainRuntimeRelation_MarketAnchorKeepsMarketRelation(t *testing.T) {
+	if !IsAllowedSupplyChainRuntimeRelation(
+		"/market/kz/consumer-electronics/retail",
+		"/market/kz/consumer-electronics/wholesale",
+		models.DependencyType("HAS_MARKET_SEGMENT"),
+	) {
+		t.Fatal("market supply-chain anchor must allow market relations at runtime")
+	}
+}
+
+func TestIsAllowedSupplyChainRuntimeRelation_OrgSourceStillRejectsFocusesOn(t *testing.T) {
+	if IsAllowedSupplyChainRuntimeRelation(
+		"/org/kr/samsung-electronics",
+		"/market/kz/consumer-electronics/retail",
+		models.DependencyTypeFocusesOn,
+	) {
+		t.Fatal("non-domain/non-market source must not allow FOCUSES_ON in supply-chain runtime gate")
+	}
+}
+
 func TestFilterDiscoveredRelationsByDomainModes_MarketAnchorKeepsMarketTypes(t *testing.T) {
 	marketFrag := &models.HorizonFragment{CanonicalPath: "/market/za/fmcg/soft-drinks"}
 	in := []agents.DiscoveredRelation{

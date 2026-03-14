@@ -33,6 +33,7 @@
 ### UX и пользовательские сценарии
 
 - **[Типовой UX-сценарий](ux/user-journey.md)** — описание пользовательского пути от входа до работы в Cockpit UI
+- **[Принципы интерфейса](ux/interface-principles.md)** — системные принципы организации Horizon-интерфейса, визуального языка, layout-логики и технического слоя под UI
 - **[Horizon Watch](ux/horizon-watch.md)** — продуктовая спецификация обзорной и персонализированной monitoring-страницы поверх графа, сигналов и артефактов
 - **[Workflow Propagation](workflows/propagation-workflow.md)** — алгоритм распространения изменений в графе зависимостей
 - **[Жизненный цикл](workflows/lifecycle.md)** — жизненный цикл HorizonFragment (Active → Dormant → Archived)

@@ -38,6 +38,10 @@ const CLUSTER_CORE_RADIUS: maplibregl.ExpressionSpecification = ['step', ['get',
 const CLUSTER_RING_STROKE_WIDTH: maplibregl.ExpressionSpecification = ['step', ['get', 'point_count'], 1.15, 10, 1.35, 50, 1.65, 200, 1.95];
 const CLUSTER_TEXT_SIZE: maplibregl.ExpressionSpecification = ['step', ['get', 'point_count'], 10, 10, 11, 50, 12, 200, 13];
 export const GEO_MARKER_LAYER_ANCHOR = CLUSTER_GLOW;
+export const GEO_MARKER_SOURCE_ID = SRC;
+export const GEO_MARKER_CLUSTER_LAYER_ID = CLUSTERS;
+export const GEO_MARKER_POINT_LAYER_ID = POINTS;
+export const GEO_MARKER_CLUSTER_MAX_ZOOM = CLUSTER_MAX_ZOOM;
 
 // ---------------------------------------------------------------------------
 // Icon key helpers
@@ -257,9 +261,10 @@ export function buildPointFeature(
     geometry: { type: 'Point', coordinates: [lon, lat] },
     properties: {
       id: obj.id,
+      canonicalPath: obj.canonicalPath,
       iconKey: iconKey(vt, color),
       color,
-      opacity: muted ? 0.1 : obj.inScope === false ? 0.5 : 1.0,
+      opacity: muted ? 0.04 : obj.inScope === false ? 0.5 : 1.0,
       focusState: muted ? 0 : 1,
       type: obj.type,
       label: obj.label || humanizeCanonicalPath(obj.canonicalPath) || obj.canonicalPath,
@@ -363,19 +368,19 @@ function applyClusterMuteState(
     1,
   ];
   const glowOpacity: any = dimmed
-    ? ['interpolate', ['linear'], focusRatio, 0, 0.1, 0.2, 0.14, 0.5, 0.16, 1, 0.16]
+    ? ['interpolate', ['linear'], focusRatio, 0, 0.03, 0.2, 0.05, 0.5, 0.08, 1, 0.16]
     : baseGlowOpacity;
   const clusterOpacity: any = dimmed
-    ? ['interpolate', ['linear'], focusRatio, 0, 0.1, 0.2, 0.16, 0.5, 0.42, 1, 1]
+    ? ['interpolate', ['linear'], focusRatio, 0, 0.025, 0.2, 0.05, 0.5, 0.18, 1, 1]
     : 1;
   const clusterStrokeOpacity: any = dimmed
-    ? ['interpolate', ['linear'], focusRatio, 0, 0.1, 0.2, 0.18, 0.5, 0.44, 1, 1]
+    ? ['interpolate', ['linear'], focusRatio, 0, 0.04, 0.2, 0.07, 0.5, 0.22, 1, 1]
     : 1;
   const coreOpacity: any = dimmed
-    ? ['interpolate', ['linear'], focusRatio, 0, 0.1, 0.2, 0.14, 0.5, 0.38, 1, 1]
+    ? ['interpolate', ['linear'], focusRatio, 0, 0.03, 0.2, 0.06, 0.5, 0.16, 1, 1]
     : 1;
   const textOpacity: any = dimmed
-    ? ['interpolate', ['linear'], focusRatio, 0, 0.1, 0.2, 0.2, 0.5, 0.46, 1, 1]
+    ? ['interpolate', ['linear'], focusRatio, 0, 0.04, 0.2, 0.1, 0.5, 0.24, 1, 1]
     : 1;
 
   try {

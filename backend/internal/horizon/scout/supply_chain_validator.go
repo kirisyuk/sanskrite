@@ -102,6 +102,42 @@ func (v *SupplyChainStrictValidator) ValidateEdge(edge *ChainEdge, jobID string,
 	return nil
 }
 
+// ValidateEdgeAgainstFragments applies fragment-aware supply-chain checks that
+// cannot be enforced from canonical path prefixes alone.
+func (v *SupplyChainStrictValidator) ValidateEdgeAgainstFragments(edge *ChainEdge, sourceFragment, targetFragment *models.HorizonFragment, jobID string, chainIdx int) error {
+	if err := v.ValidateEdge(edge, jobID, chainIdx); err != nil {
+		return err
+	}
+	if edge == nil {
+		return &SupplyChainValidationError{Reason: "nil_edge", JobID: jobID, ChainIdx: chainIdx}
+	}
+	if !strings.EqualFold(strings.TrimSpace(edge.RelationType), "PRODUCES") {
+		return nil
+	}
+	if sourceFragment == nil || sourceFragment.Type != models.FragmentTypeFacility {
+		return nil
+	}
+	if targetFragment == nil {
+		return nil
+	}
+	targetPath := strings.TrimSpace(targetFragment.CanonicalPath)
+	if targetPath == "" {
+		targetPath = strings.TrimSpace(edge.TargetCanonicalPath)
+	}
+	if strings.HasPrefix(targetPath, "/product/service/") {
+		return nil
+	}
+	if !facilityMayProducePhysicalGoods(sourceFragment) {
+		return &SupplyChainValidationError{
+			Reason:   "produces_source_facility_non_producing_role",
+			Path:     strings.TrimSpace(sourceFragment.CanonicalPath),
+			JobID:    jobID,
+			ChainIdx: chainIdx,
+		}
+	}
+	return nil
+}
+
 // ValidateEdges filters out invalid edges. Returns the subset that pass validation.
 // Rejected edges are logged via the optional logFn.
 func (v *SupplyChainStrictValidator) ValidateEdges(edges []*ChainEdge, jobID string, logFn func(msg string)) []*ChainEdge {
@@ -159,4 +195,58 @@ func init() {
 			operationalEdgeTypes[t] = true
 		}
 	}
+}
+
+func facilityMayProducePhysicalGoods(fragment *models.HorizonFragment) bool {
+	if fragment == nil || fragment.Type != models.FragmentTypeFacility {
+		return true
+	}
+	role := taxonomy.NormalizeFacilityRole(firstNonEmptyFacilityValue(
+		fragmentIdentifier(fragment, "facilityType"),
+		fragmentIdentifier(fragment, "supplyChainRole"),
+	))
+	switch role {
+	case taxonomy.FacilityRoleDistribution, taxonomy.FacilityRoleStorage, taxonomy.FacilityRoleLogistics:
+		return false
+	}
+	kind := taxonomy.NormalizeFacilityKind(fragmentIdentifier(fragment, "facilityKind"))
+	if kind == taxonomy.FacilityKindUnknown {
+		kind = taxonomy.InferFacilityKind(
+			strings.TrimSpace(fragment.CanonicalPath),
+			fragmentLabel(fragment, "en"),
+			fragmentIdentifier(fragment, "shortName"),
+			fragmentIdentifier(fragment, "legalName"),
+			fragmentIdentifier(fragment, "facilityType"),
+			fragmentIdentifier(fragment, "supplyChainRole"),
+		)
+	}
+	switch kind {
+	case taxonomy.FacilityKindWarehouse, taxonomy.FacilityKindTerminal, taxonomy.FacilityKindSeaport, taxonomy.FacilityKindAirport:
+		return false
+	default:
+		return true
+	}
+}
+
+func fragmentIdentifier(fragment *models.HorizonFragment, key string) string {
+	if fragment == nil || fragment.Identifiers == nil {
+		return ""
+	}
+	return strings.TrimSpace(fragment.Identifiers[key])
+}
+
+func fragmentLabel(fragment *models.HorizonFragment, key string) string {
+	if fragment == nil || fragment.Labels == nil {
+		return ""
+	}
+	return strings.TrimSpace(fragment.Labels[key])
+}
+
+func firstNonEmptyFacilityValue(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }

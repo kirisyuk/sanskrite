@@ -2,6 +2,11 @@ package ontology
 
 import "context"
 
+const (
+	GeocodingProviderGoogle    = "google_geocoding"
+	GeocodingProviderNominatim = "nominatim"
+)
+
 // GeocodingClientInterface is an interface for address-to-coordinates geocoding.
 // Placed in ontology package to avoid cyclic imports.
 type GeocodingClientInterface interface {
@@ -15,4 +20,5 @@ type GeocodingResult struct {
 	Lon              float64
 	FormattedAddress string
 	PlaceID          string
+	Provider         string
 }

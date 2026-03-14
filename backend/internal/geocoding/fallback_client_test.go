@@ -31,6 +31,9 @@ func TestFallbackClient_PrimaryHit(t *testing.T) {
 	if r.FormattedAddress != "Moscow" {
 		t.Errorf("expected primary result, got %q", r.FormattedAddress)
 	}
+	if r.Provider != ontology.GeocodingProviderNominatim {
+		t.Errorf("expected primary provider=%q, got %q", ontology.GeocodingProviderNominatim, r.Provider)
+	}
 	if primary.calls != 1 {
 		t.Errorf("expected 1 primary call, got %d", primary.calls)
 	}
@@ -50,6 +53,9 @@ func TestFallbackClient_PrimaryMiss(t *testing.T) {
 	}
 	if r.FormattedAddress != "Moscow Google" {
 		t.Errorf("expected fallback result, got %q", r.FormattedAddress)
+	}
+	if r.Provider != ontology.GeocodingProviderGoogle {
+		t.Errorf("expected fallback provider=%q, got %q", ontology.GeocodingProviderGoogle, r.Provider)
 	}
 	if primary.calls != 1 || fallback.calls != 1 {
 		t.Errorf("expected 1+1 calls, got %d+%d", primary.calls, fallback.calls)

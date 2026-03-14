@@ -14,14 +14,17 @@ import (
 
 // FacilityGeoRevalidationResult captures deterministic geo corrections applied to a facility.
 type FacilityGeoRevalidationResult struct {
-	Applied          bool
-	ChangedISO2      bool
-	ChangedPath      bool
-	PreviousISO2     string
-	ResolvedISO2     string
-	Query            string
-	FormattedAddress string
-	Reason           string
+	Applied             bool
+	ChangedISO2         bool
+	ChangedPath         bool
+	ChangedLocationName bool
+	ChangedCoordinates  bool
+	PreviousISO2        string
+	ResolvedISO2        string
+	Query               string
+	FormattedAddress    string
+	Provider            string
+	Reason              string
 }
 
 // RevalidateFacilityGeo uses geocoding to verify facility geography before persistence.
@@ -74,17 +77,36 @@ func RevalidateFacilityGeo(
 			fragment.HomeLocation.ISO3166_1 = &v
 			result.ChangedISO2 = true
 		}
-		if fragment.Coordinates == nil && models.IsRealGeoCoordinate(geo.Lat, geo.Lon) {
-			fragment.Coordinates = &models.Coordinates{Lat: geo.Lat, Lon: geo.Lon}
+		if place := facilityPlaceNameHint(fragment); place != "" && shouldUpgradePlaceName(fragment.HomeLocation.Name, place) {
+			fragment.HomeLocation.Name = place
+			result.ChangedLocationName = true
+		}
+		if models.IsRealGeoCoordinate(geo.Lat, geo.Lon) {
+			result.ChangedCoordinates = henrich.ApplyResolvedCoordinates(fragment, geo.Lat, geo.Lon)
 		}
 		if fragment.Identifiers == nil {
 			fragment.Identifiers = map[string]string{}
 		}
+		henrich.RecordGeoCoordinatesAttribution(fragment, henrich.GeoCoordinatesAttribution{
+			Method:           "geocoding_revalidate",
+			Provider:         strings.TrimSpace(geo.Provider),
+			Query:            query,
+			FormattedAddress: strings.TrimSpace(geo.FormattedAddress),
+			PlaceID:          strings.TrimSpace(geo.PlaceID),
+			CountryAlpha2:    resolvedISO2,
+		})
 		fragment.Identifiers["geoVerifiedCountryAlpha2"] = strings.ToUpper(resolvedISO2)
 		if strings.TrimSpace(geo.PlaceID) != "" {
 			fragment.Identifiers["geoVerifiedPlaceId"] = strings.TrimSpace(geo.PlaceID)
 		}
 		fragment.Identifiers["geoVerifiedMethod"] = "geocoding"
+		if provider := strings.TrimSpace(geo.Provider); provider != "" {
+			fragment.Identifiers["geoVerifiedProvider"] = provider
+		}
+		if formatted := strings.TrimSpace(geo.FormattedAddress); formatted != "" {
+			fragment.Identifiers["geoVerifiedFormattedAddress"] = formatted
+		}
+		fragment.Identifiers["geoVerifiedQuery"] = query
 
 		if upgradedPath, ok := canonical.InferFacilityCanonicalPathFromGeo(fragment); ok {
 			fragment.CanonicalPath = upgradedPath
@@ -94,15 +116,28 @@ func RevalidateFacilityGeo(
 			result.ChangedPath = true
 		}
 
-		result.Applied = result.ChangedISO2 || result.ChangedPath
+		result.Applied = result.ChangedISO2 || result.ChangedPath || result.ChangedCoordinates || result.ChangedLocationName
 		result.ResolvedISO2 = strings.ToUpper(resolvedISO2)
 		result.Query = query
 		result.FormattedAddress = strings.TrimSpace(geo.FormattedAddress)
+		result.Provider = strings.TrimSpace(geo.Provider)
 		switch {
+		case result.ChangedISO2 && result.ChangedPath && result.ChangedCoordinates:
+			result.Reason = "facility country, coordinates, and canonical path revalidated via geocoding"
+		case result.ChangedCoordinates && result.ChangedLocationName:
+			result.Reason = "facility coordinates and place name revalidated via geocoding"
+		case result.ChangedLocationName:
+			result.Reason = "facility place name revalidated via geocoding"
 		case result.ChangedISO2 && result.ChangedPath:
 			result.Reason = "facility country and canonical path revalidated via geocoding"
+		case result.ChangedCoordinates && result.ChangedISO2:
+			result.Reason = "facility country and coordinates revalidated via geocoding"
+		case result.ChangedCoordinates && result.ChangedPath:
+			result.Reason = "facility coordinates and canonical path revalidated via geocoding"
 		case result.ChangedISO2:
 			result.Reason = "facility country revalidated via geocoding"
+		case result.ChangedCoordinates:
+			result.Reason = "facility coordinates revalidated via geocoding"
 		case result.ChangedPath:
 			result.Reason = "facility canonical path upgraded after geocoding verification"
 		default:
@@ -215,7 +250,7 @@ func shouldAcceptFacilityGeoResult(
 
 	// If a non-NA canonical path already agrees with the result, accept it as verification.
 	if pathISO2 != "" && pathISO2 != "na" && pathISO2 == resolvedISO2 {
-		return true
+		return place != "" && queryHasPlace
 	}
 
 	// For /fac/na, matching the current country alone is not evidence: current ISO may itself be wrong.
@@ -242,7 +277,12 @@ func facilityPlaceHint(fragment *models.HorizonFragment) string {
 	}
 	if fragment.HomeLocation != nil {
 		if place := strings.TrimSpace(fragment.HomeLocation.Name); place != "" {
-			return place
+			return normalizeGeoPhrase(place)
+		}
+	}
+	for _, hint := range henrich.InferPlaceHintCandidates(fragment) {
+		if normalized := normalizeGeoPhrase(hint); normalized != "" {
+			return normalized
 		}
 	}
 	for _, candidate := range collectFacilityNameCandidates(fragment) {
@@ -251,6 +291,34 @@ func facilityPlaceHint(fragment *models.HorizonFragment) string {
 		}
 	}
 	return ""
+}
+
+func facilityPlaceNameHint(fragment *models.HorizonFragment) string {
+	best := ""
+	for _, hint := range henrich.InferPlaceHintCandidates(fragment) {
+		hint = strings.TrimSpace(hint)
+		if hint == "" {
+			continue
+		}
+		if best == "" || len(strings.Fields(hint)) > len(strings.Fields(best)) || len(hint) > len(best) {
+			best = hint
+		}
+	}
+	return best
+}
+
+func shouldUpgradePlaceName(current string, candidate string) bool {
+	cur := normalizeGeoPhrase(current)
+	next := normalizeGeoPhrase(candidate)
+	if next == "" || cur == next {
+		return false
+	}
+	if cur == "" {
+		return true
+	}
+	curWords := len(strings.Fields(cur))
+	nextWords := len(strings.Fields(next))
+	return nextWords > curWords && strings.HasSuffix(next, " "+cur)
 }
 
 func inferPlaceHintFromFacilityLabel(label string) string {
@@ -281,7 +349,36 @@ func inferPlaceHintFromFacilityLabel(label string) string {
 		}
 		return strings.Join(normalized[:idx], " ")
 	}
+	if len(normalized) >= 2 {
+		last := normalized[len(normalized)-1]
+		prev := normalized[len(normalized)-2]
+		if len(last) >= 4 && taxonomy.IsISO2CountryCode(strings.ToLower(prev)) {
+			return last
+		}
+	}
+	trimmed := trimTrailingFacilityGeoNoise(normalized)
+	if len(trimmed) == 2 && len(trimmed[0]) >= 3 && len(trimmed[1]) >= 3 {
+		return strings.Join(trimmed, " ")
+	}
+	if len(trimmed) >= 2 && len(trimmed[len(trimmed)-1]) >= 4 {
+		return trimmed[len(trimmed)-1]
+	}
 	return ""
+}
+
+func trimTrailingFacilityGeoNoise(tokens []string) []string {
+	trimmed := append([]string(nil), tokens...)
+	for len(trimmed) > 0 {
+		switch trimmed[len(trimmed)-1] {
+		case "plant", "factory", "facility", "facilities", "terminal", "terminals", "site", "station", "stations",
+			"center", "centre", "centers", "centres", "network", "networks", "hub", "hubs", "electronic", "electronics", "circuit",
+			"fulfillment", "distribution", "logistics", "general", "production", "processing":
+			trimmed = trimmed[:len(trimmed)-1]
+		default:
+			return trimmed
+		}
+	}
+	return trimmed
 }
 
 func facilityAllowsPlainNameGeocode(fragment *models.HorizonFragment) bool {
@@ -385,6 +482,8 @@ func lookupCountryISO2(raw string) string {
 		return "GB"
 	case "uae", "u.a.e.", "united arab emirates":
 		return "AE"
+	case "kazakhstan", "kazakstan", "казахстан", "қазақстан", "republic of kazakhstan", "republic kazakhstan", "республика казахстан", "қазақстан республикасы":
+		return "KZ"
 	}
 	return ""
 }

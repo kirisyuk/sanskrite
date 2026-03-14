@@ -184,6 +184,7 @@ func TestPreCreateValidator_RevalidatesOrgGeoMismatchViaGeocoding(t *testing.T) 
 				Lon:              71.4491,
 				FormattedAddress: "Astana, Kazakhstan",
 				PlaceID:          "google-place-astana",
+				Provider:         coreontology.GeocodingProviderGoogle,
 			},
 		},
 	})
@@ -211,6 +212,49 @@ func TestPreCreateValidator_RevalidatesOrgGeoMismatchViaGeocoding(t *testing.T) 
 	}
 	if frag.CanonicalPath != "/org/kz/kazatomprom" {
 		t.Fatalf("expected upgraded org path, got %q", frag.CanonicalPath)
+	}
+	if frag.Identifiers["geoCoordinatesProvider"] != coreontology.GeocodingProviderGoogle {
+		t.Fatalf("expected geoCoordinatesProvider=%q, got %q", coreontology.GeocodingProviderGoogle, frag.Identifiers["geoCoordinatesProvider"])
+	}
+}
+
+func TestPreCreateValidator_RevalidationOverwritesExistingWrongCoordinates(t *testing.T) {
+	v := NewPreCreateValidator(nil, nil, nil).WithGeocodingClient(&fakeGeocodingClient{
+		results: map[string]*coreontology.GeocodingResult{
+			"Kazatomprom, Astana": {
+				Lat:              51.1694,
+				Lon:              71.4491,
+				FormattedAddress: "Astana, Kazakhstan",
+				PlaceID:          "google-place-astana",
+				Provider:         coreontology.GeocodingProviderGoogle,
+			},
+		},
+	})
+
+	cc := "KZ"
+	frag := &models.HorizonFragment{
+		Type:          models.FragmentTypeOrganization,
+		CanonicalPath: "/org/kz/kazatomprom",
+		Labels:        map[string]string{"en": "Kazatomprom"},
+		Coordinates:   &models.Coordinates{Lat: 0.1, Lon: 0.2},
+		HomeLocation: &models.Location{
+			Name:      "Astana",
+			ISO3166_1: &cc,
+		},
+	}
+
+	res, err := v.ValidateAndProcess(context.Background(), frag)
+	if err != nil {
+		t.Fatalf("ValidateAndProcess() error = %v", err)
+	}
+	if res == nil || !res.IsValid {
+		t.Fatalf("expected valid result, got %+v", res)
+	}
+	if frag.Coordinates == nil || frag.Coordinates.Lat != 51.1694 || frag.Coordinates.Lon != 71.4491 {
+		t.Fatalf("expected revalidated coordinates, got %+v", frag.Coordinates)
+	}
+	if frag.Identifiers["geoVerifiedProvider"] != coreontology.GeocodingProviderGoogle {
+		t.Fatalf("expected geoVerifiedProvider=%q, got %q", coreontology.GeocodingProviderGoogle, frag.Identifiers["geoVerifiedProvider"])
 	}
 }
 

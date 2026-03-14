@@ -34,5 +34,6 @@ func (a *Adapter) Geocode(ctx context.Context, address string) (*ontology.Geocod
 		Lon:              resp.Lon,
 		FormattedAddress: resp.FormattedAddress,
 		PlaceID:          resp.PlaceID,
+		Provider:         ontology.GeocodingProviderGoogle,
 	}, nil
 }

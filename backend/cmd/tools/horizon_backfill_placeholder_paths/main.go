@@ -81,7 +81,7 @@ func main() {
 
 	var geoClient coreontology.GeocodingClientInterface
 	if gc := httphandlers.GetGoogleGeocodingClientFromEnv(); gc != nil {
-		geoClient = geocoding.NewCachedClient(geocoding.NewAdapter(gc), externalCacheRepo, geocoding.CacheOptionsFromEnv())
+		geoClient = geocoding.NewCachedClientWithService(geocoding.NewAdapter(gc), externalCacheRepo, geocoding.CacheOptionsFromEnv(), coreontology.GeocodingProviderGoogle)
 		log.Printf("google geocoding wired for placeholder-path backfill")
 	}
 

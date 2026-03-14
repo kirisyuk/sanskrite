@@ -88,23 +88,23 @@ func (c *countingGeoNames) GetCountryCode(ctx context.Context, lat, lon float64)
 }
 
 type stats struct {
-	Scanned        int64
-	Processed      int64
-	FromGeonames   int64
-	FromGeocoding  int64
-	FromWikidata   int64
+	Scanned         int64
+	Processed       int64
+	FromGeonames    int64
+	FromGeocoding   int64
+	FromWikidata    int64
 	FromParent      int64
 	FromFacility    int64
 	FromLastSegment int64
 	WikidataQIDNew  int64
-	SkippedHas     int64
-	SkippedNoAddr  int64
-	Errors         int64
-	Applied        int64
-	GeocodingCalls int64 // total Geocode() invocations (with address)
-	GeocodingAPI   int64 // actual API calls (cache misses)
-	GeonamesCalls  int64
-	GeonamesAPI    int64
+	SkippedHas      int64
+	SkippedNoAddr   int64
+	Errors          int64
+	Applied         int64
+	GeocodingCalls  int64 // total Geocode() invocations (with address)
+	GeocodingAPI    int64 // actual API calls (cache misses)
+	GeonamesCalls   int64
+	GeonamesAPI     int64
 }
 
 type orgGeoIndex struct {
@@ -167,7 +167,7 @@ func main() {
 	var geocodingCounter *countingGeocoding
 	if !*skipGeocoding {
 		nomRaw := geocoding.NominatimOptionsFromEnv()
-		nomCached := geocoding.NewCachedClient(nomRaw, externalCacheRepo, geocoding.CacheOptionsFromEnv())
+		nomCached := geocoding.NewCachedClientWithService(nomRaw, externalCacheRepo, geocoding.CacheOptionsFromEnv(), coreontology.GeocodingProviderNominatim)
 		log.Printf("Nominatim geocoding client enabled (primary, free OSM-based)")
 
 		var googleClient coreontology.GeocodingClientInterface
@@ -175,7 +175,7 @@ func main() {
 		if gcBase != nil {
 			gcAdapter := geocoding.NewAdapter(gcBase)
 			geocodingCounter = &countingGeocoding{base: gcAdapter}
-			googleClient = geocoding.NewCachedClient(geocodingCounter, externalCacheRepo, geocoding.CacheOptionsFromEnv())
+			googleClient = geocoding.NewCachedClientWithService(geocodingCounter, externalCacheRepo, geocoding.CacheOptionsFromEnv(), coreontology.GeocodingProviderGoogle)
 			log.Printf("Google Geocoding client enabled (fallback for Nominatim misses)")
 		} else {
 			log.Printf("Google Geocoding disabled: GOOGLE_MAPS_API_KEY not set (Nominatim-only mode)")
@@ -684,24 +684,17 @@ func geocodeWithCandidates(
 		if !hmodels.IsRealGeoCoordinate(result.Lat, result.Lon) {
 			continue
 		}
-		applyGeocodedCoordinates(frag, result.Lat, result.Lon)
+		henrich.ApplyResolvedCoordinates(frag, result.Lat, result.Lon)
+		henrich.RecordGeoCoordinatesAttribution(frag, henrich.GeoCoordinatesAttribution{
+			Method:           "geocoding_candidate",
+			Provider:         strings.TrimSpace(result.Provider),
+			Query:            addr,
+			FormattedAddress: strings.TrimSpace(result.FormattedAddress),
+			PlaceID:          strings.TrimSpace(result.PlaceID),
+		})
 		return true, true, nil
 	}
 	return false, attempted, nil
-}
-
-func applyGeocodedCoordinates(f *hmodels.HorizonFragment, lat, lon float64) {
-	if f == nil || !hmodels.IsRealGeoCoordinate(lat, lon) {
-		return
-	}
-	f.Coordinates = &hmodels.Coordinates{Lat: lat, Lon: lon}
-	if f.HomeLocation == nil {
-		f.HomeLocation = &hmodels.Location{}
-	}
-	iso := fmt.Sprintf("%+.6f%+.6f/", lat, lon)
-	if f.HomeLocation.ISO6709 == nil || strings.TrimSpace(*f.HomeLocation.ISO6709) == "" {
-		f.HomeLocation.ISO6709 = &iso
-	}
 }
 
 func buildOrgGeoIndex(ctx context.Context, db *firestore.Client, tenant string) (*orgGeoIndex, error) {

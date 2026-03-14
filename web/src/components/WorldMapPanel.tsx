@@ -1,4 +1,5 @@
 import React from 'react';
+import maplibregl from 'maplibre-gl';
 import { useMapInstance } from '../hooks/useMapInstance';
 import { useGeoObjects, type GeoObject } from '../hooks/useGeoObjects';
 import { useGeoMarkerLayer } from '../hooks/useGeoMarkerLayer';
@@ -7,6 +8,7 @@ import { useGeoEdgeLayer, GEO_EDGE_INTERACTIVE_LAYERS } from '../hooks/useGeoEdg
 import { useStaticZoneLayer } from '../hooks/useStaticZoneLayer';
 import { useTransportFlowLayer } from '../hooks/useTransportFlowLayer';
 import { usePathLegLayer } from '../hooks/usePathLegLayer';
+import { usePathLegClusterLayer } from '../hooks/usePathLegClusterLayer';
 import { useVesselLayer, vesselsApiAvailable as isVesselsApiAvailable } from '../hooks/useVesselLayer';
 import { MapFilterPanel } from './MapFilterPanel';
 import { MapObjectDetail } from './MapObjectDetail';
@@ -122,6 +124,88 @@ function buildSearchText(obj: GeoObject): string {
     .join(' ');
 }
 
+function artifactRouteTitle(artifact: MaterializedArtifact | null | undefined): string {
+  return String(
+    artifact?.displayName
+    || artifact?.productAxis
+    || humanizeCanonicalPath(String(artifact?.canonicalKey || ''))
+    || artifact?.id
+    || 'Supply route',
+  ).trim();
+}
+
+function artifactRouteSubtitle(artifact: MaterializedArtifact | null | undefined): string {
+  const supplier = String(artifact?.anchorSupplier || artifact?.traceEndpoints?.supplier?.label || 'upstream').trim();
+  const customer = String(artifact?.anchorCustomer || artifact?.traceEndpoints?.customer?.label || 'downstream').trim();
+  return `${supplier} → ${customer}`;
+}
+
+function artifactRouteProducts(artifact: MaterializedArtifact | null | undefined): string[] {
+  const direct = String(artifact?.productAxis || '').trim();
+  if (direct) return [direct];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const legs = Array.isArray(artifact?.payload?.legs) ? artifact!.payload!.legs! : [];
+  for (const leg of legs) {
+    const productRef = String(leg?.productRef || '').trim();
+    if (!productRef || seen.has(productRef)) continue;
+    seen.add(productRef);
+    out.push(humanizeCanonicalPath(productRef) || productRef);
+    if (out.length >= 3) break;
+  }
+  return out;
+}
+
+function artifactRouteSearchText(artifact: MaterializedArtifact | null | undefined): string {
+  return [
+    artifactRouteTitle(artifact),
+    artifactRouteSubtitle(artifact),
+    String(artifact?.canonicalKey || '').trim(),
+    String(artifact?.discoveryReason || '').trim(),
+    ...artifactRouteProducts(artifact),
+  ]
+    .join(' ')
+    .toLowerCase();
+}
+
+function mapDockButtonStyle(isDark: boolean, active: boolean, accent: string): React.CSSProperties {
+  return {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    border: active
+      ? `1px solid ${accent}`
+      : (isDark ? '1px solid rgba(255,255,255,0.12)' : '1px solid rgba(15,23,42,0.12)'),
+    background: active
+      ? (isDark ? 'rgba(8,15,26,0.96)' : 'rgba(255,255,255,0.98)')
+      : (isDark ? 'rgba(5,11,17,0.86)' : 'rgba(248,250,252,0.94)'),
+    color: active ? accent : 'var(--text-heading)',
+    boxShadow: active
+      ? (isDark ? 'inset 0 1px 0 rgba(255,255,255,0.05), 0 14px 30px rgba(0,0,0,0.34)' : 'inset 0 1px 0 rgba(255,255,255,0.8), 0 14px 30px rgba(15,23,42,0.16)')
+      : (isDark ? '0 10px 24px rgba(0,0,0,0.28)' : '0 10px 24px rgba(15,23,42,0.08)'),
+    backdropFilter: 'blur(12px)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    transform: active ? 'translateY(1px)' : 'translateY(0)',
+    transition: 'transform 160ms ease, border-color 160ms ease, background-color 160ms ease, color 160ms ease',
+  };
+}
+
+function mapDockOverlayCardStyle(isDark: boolean, width: number): React.CSSProperties {
+  return {
+    width,
+    maxWidth: 'min(calc(100vw - 72px), 360px)',
+    borderRadius: 18,
+    border: isDark ? '1px solid rgba(255,255,255,0.12)' : '1px solid rgba(15,23,42,0.10)',
+    background: isDark ? 'rgba(6, 18, 31, 0.94)' : 'rgba(255,255,255,0.96)',
+    boxShadow: isDark ? '0 22px 60px rgba(0,0,0,0.42)' : '0 22px 60px rgba(15,23,42,0.14)',
+    backdropFilter: 'blur(18px)',
+    overflow: 'hidden',
+  };
+}
+
 function slugifyDownloadPart(value: string, fallback: string): string {
   const normalized = String(value || '')
     .trim()
@@ -220,6 +304,26 @@ function collectArtifactPathRefs(artifacts: MaterializedArtifact[]): string[] {
   return refs;
 }
 
+function collectArtifactTerminalPathRefs(artifacts: MaterializedArtifact[]): string[] {
+  const seen = new Set<string>();
+  const refs: string[] = [];
+  for (const artifact of artifacts || []) {
+    const legs = Array.isArray(artifact?.payload?.legs) ? artifact.payload.legs : [];
+    for (const leg of legs) {
+      const candidates = [
+        artifactLegString(leg, 'supplierRef', 'SupplierRef'),
+        artifactLegString(leg, 'customerRef', 'CustomerRef'),
+      ];
+      for (const ref of candidates) {
+        if (!ref || seen.has(ref)) continue;
+        seen.add(ref);
+        refs.push(ref);
+      }
+    }
+  }
+  return refs;
+}
+
 export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const { map, isReady, styleEpoch, theme } = useMapInstance(containerRef);
@@ -266,6 +370,12 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [activeZoneTypes, setActiveZoneTypes] = React.useState<Set<StaticZoneType> | null>(null);
   const [flowsEnabled, setFlowsEnabled] = React.useState(false);
   const [pathLegsEnabled, setPathLegsEnabled] = React.useState(Boolean(scope?.lensId));
+  const [pathLegClusteringEnabled, setPathLegClusteringEnabled] = React.useState(Boolean(scope?.lensId));
+  const [filtersOverlayOpen, setFiltersOverlayOpen] = React.useState(false);
+  const [routesOverlayOpen, setRoutesOverlayOpen] = React.useState(false);
+  const [zoneControlsOverlayOpen, setZoneControlsOverlayOpen] = React.useState(false);
+  const [routeSearchQuery, setRouteSearchQuery] = React.useState('');
+  const [selectedRouteArtifactIds, setSelectedRouteArtifactIds] = React.useState<string[]>([]);
   const [activeFlowModes, setActiveFlowModes] = React.useState<Set<TransportFlowMode> | null>(null);
   const [affectedZoneFreshnessDays, setAffectedZoneFreshnessDays] = React.useState<AffectedZoneFreshnessWindow>(30);
   const [showArchivedAffectedZones, setShowArchivedAffectedZones] = React.useState(false);
@@ -280,6 +390,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [pathArtifacts, setPathArtifacts] = React.useState<MaterializedArtifact[]>([]);
   const [pathArtifactsLoaded, setPathArtifactsLoaded] = React.useState(false);
   const stackSelectionRef = React.useRef<MapObjectStackSelection | null>(null);
+  const routeSelectionVisibleRef = React.useRef(false);
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
   const scopeDialogBackdropRef = React.useRef<HTMLDivElement | null>(null);
 
@@ -296,11 +407,14 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     () => ({
       triggerBorder: searchOpen
         ? (isDark ? '1px solid rgba(96,165,250,0.55)' : '1px solid rgba(37,99,235,0.50)')
-        : '1px solid var(--border-subtle)',
+        : (isDark ? '1px solid rgba(255,255,255,0.16)' : '1px solid rgba(15,23,42,0.12)'),
       triggerBackground: searchOpen
         ? (isDark ? 'rgba(59,130,246,0.22)' : 'rgba(59,130,246,0.14)')
-        : (isDark ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.80)'),
+        : (isDark ? 'rgba(6,10,18,0.72)' : 'rgba(255,255,255,0.86)'),
       triggerShadow: isDark ? 'drop-shadow(0 16px 40px rgba(0,0,0,0.55))' : 'drop-shadow(0 16px 40px rgba(0,0,0,0.18))',
+      triggerOutline: searchOpen
+        ? (isDark ? 'inset 0 0 0 1px rgba(125,211,252,0.18)' : 'inset 0 0 0 1px rgba(59,130,246,0.10)')
+        : (isDark ? 'inset 0 0 0 1px rgba(255,255,255,0.05)' : 'inset 0 0 0 1px rgba(255,255,255,0.55)'),
       overlayBackground: isDark ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.4)',
       panelBackground: 'var(--bg-elevated)',
       panelBorder: '1px solid var(--border-subtle)',
@@ -351,14 +465,6 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     () => (discoveredObjects.length > 0 ? [...filteredObjects, ...discoveredObjects] : filteredObjects),
     [filteredObjects, discoveredObjects],
   );
-  const pathOverlayObjects = React.useMemo(() => {
-    const byId = new Map<string, GeoObject>();
-    for (const object of [...allObjects, ...discoveredObjects]) {
-      if (!object?.id || byId.has(object.id)) continue;
-      byId.set(object.id, object);
-    }
-    return Array.from(byId.values());
-  }, [allObjects, discoveredObjects]);
   const visibleMapObjects = React.useMemo(() => {
     const nowTs = Date.now();
     return mapObjects.filter((obj) =>
@@ -402,28 +508,146 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     return Array.from(new Set(group.paths.map((path) => String(path.id || '').trim()).filter(Boolean)));
   }, [activeNarrativeKey, traceSummary]);
   const supplyNarrativeLegsVisible = activeSupplyArtifactIds.length > 0;
+  const routeCatalog = React.useMemo(() => {
+    const byId = new Map<string, MaterializedArtifact>();
+    const register = (artifact: MaterializedArtifact | null | undefined) => {
+      const id = String(artifact?.id || '').trim();
+      if (!id || byId.has(id)) return;
+      byId.set(id, artifact!);
+    };
+    for (const artifact of pathArtifacts) register(artifact);
+    for (const artifact of relatedPathArtifacts) register(artifact);
+    for (const artifact of manualPathArtifacts) register(artifact);
+    register(activeManualChain?.artifact as MaterializedArtifact | undefined);
+    return Array.from(byId.values());
+  }, [activeManualChain, manualPathArtifacts, pathArtifacts, relatedPathArtifacts]);
+  const selectedRouteArtifactIdSet = React.useMemo(
+    () => new Set(selectedRouteArtifactIds.map((value) => String(value || '').trim()).filter(Boolean)),
+    [selectedRouteArtifactIds],
+  );
+  const selectedRouteArtifacts = React.useMemo(
+    () => routeCatalog.filter((artifact) => selectedRouteArtifactIdSet.has(String(artifact?.id || '').trim())),
+    [routeCatalog, selectedRouteArtifactIdSet],
+  );
+  const selectedRouteTerminalPathSet = React.useMemo(
+    () => new Set(collectArtifactTerminalPathRefs(selectedRouteArtifacts)),
+    [selectedRouteArtifacts],
+  );
+  const routeSelectionVisible = selectedRouteArtifactIdSet.size > 0;
+  const focusedSupplyArtifactIds = React.useMemo(() => {
+    if (selectedRouteArtifactIdSet.size > 0) return Array.from(selectedRouteArtifactIdSet);
+    const out = new Set<string>();
+    for (const artifactId of activeSupplyArtifactIds) {
+      const trimmed = String(artifactId || '').trim();
+      if (trimmed) out.add(trimmed);
+    }
+    const manualArtifactId = String((activeManualChain?.artifact as MaterializedArtifact | undefined)?.id || '').trim();
+    if (manualArtifactId) out.add(manualArtifactId);
+    return Array.from(out);
+  }, [activeManualChain, activeSupplyArtifactIds, selectedRouteArtifactIdSet]);
   const activePathArtifacts = React.useMemo(() => {
-    if (!pathLegsEnabled && !supplyNarrativeLegsVisible) return [] as MaterializedArtifact[];
+    if (!pathLegsEnabled && !supplyNarrativeLegsVisible && !routeSelectionVisible) return [] as MaterializedArtifact[];
     const merged = new Map<string, MaterializedArtifact>();
+    const register = (artifact: MaterializedArtifact | null | undefined) => {
+      const id = String(artifact?.id || '').trim();
+      if (!id) return;
+      merged.set(id, artifact!);
+    };
     if (pathLegsEnabled) {
-      for (const artifact of pathArtifacts) {
-        if (artifact?.id) merged.set(artifact.id, artifact);
-      }
-      for (const artifact of relatedPathArtifacts) {
-        if (artifact?.id && !merged.has(artifact.id)) merged.set(artifact.id, artifact);
-      }
-      for (const artifact of manualPathArtifacts) {
-        if (artifact?.id) merged.set(artifact.id, artifact);
-      }
+      for (const artifact of pathArtifacts) register(artifact);
+      for (const artifact of relatedPathArtifacts) register(artifact);
+      for (const artifact of manualPathArtifacts) register(artifact);
     } else {
       for (const artifact of relatedPathArtifacts) {
         const artifactId = String(artifact?.id || '').trim();
         if (!artifactId || !activeSupplyArtifactIds.includes(artifactId)) continue;
-        merged.set(artifactId, artifact);
+        register(artifact);
+      }
+    }
+    if (routeSelectionVisible) {
+      for (const artifact of routeCatalog) {
+        const artifactId = String(artifact?.id || '').trim();
+        if (!artifactId || !selectedRouteArtifactIdSet.has(artifactId)) continue;
+        register(artifact);
       }
     }
     return Array.from(merged.values());
-  }, [activeSupplyArtifactIds, manualPathArtifacts, pathArtifacts, pathLegsEnabled, relatedPathArtifacts, supplyNarrativeLegsVisible]);
+  }, [activeSupplyArtifactIds, manualPathArtifacts, pathArtifacts, pathLegsEnabled, relatedPathArtifacts, routeCatalog, routeSelectionVisible, selectedRouteArtifactIdSet, supplyNarrativeLegsVisible]);
+  const clusterProjectionEnabled = pathLegClusteringEnabled && (pathLegsEnabled || supplyNarrativeLegsVisible || routeSelectionVisible);
+  const activePathRefs = React.useMemo(() => collectArtifactPathRefs(activePathArtifacts), [activePathArtifacts]);
+  const preferredOverlayObjectPaths = React.useMemo(() => {
+    if (!clusterProjectionEnabled) return undefined;
+    return activePathRefs.length > 0 ? activePathRefs : null;
+  }, [activePathRefs, clusterProjectionEnabled]);
+  const { allObjects: overlayPathObjects } = useGeoObjects(
+    scope,
+    filters,
+    preferredOverlayObjectPaths,
+    true,
+  );
+  const overlayPathObjectIds = React.useMemo(
+    () => new Set(overlayPathObjects.map((object) => String(object?.id || '').trim()).filter(Boolean)),
+    [overlayPathObjects],
+  );
+  const activePathRefSet = React.useMemo(
+    () => new Set(activePathRefs.map((ref) => String(ref || '').trim()).filter(Boolean)),
+    [activePathRefs],
+  );
+  const pathOverlayObjects = React.useMemo(() => {
+    const byId = new Map<string, GeoObject>();
+    for (const object of [...allObjects, ...overlayPathObjects, ...discoveredObjects]) {
+      if (!object?.id || byId.has(object.id)) continue;
+      byId.set(object.id, object);
+    }
+    return Array.from(byId.values());
+  }, [allObjects, discoveredObjects, overlayPathObjects]);
+  const forcedRouteEndpointObjects = React.useMemo(() => {
+    if (!routeSelectionVisible || selectedRouteTerminalPathSet.size === 0) return [] as GeoObject[];
+    const byId = new Map<string, GeoObject>();
+    for (const object of pathOverlayObjects) {
+      const canonicalPath = String(object?.canonicalPath || '').trim();
+      if (!canonicalPath || !selectedRouteTerminalPathSet.has(canonicalPath)) continue;
+      const key = String(object?.id || canonicalPath).trim();
+      if (!key || byId.has(key)) continue;
+      byId.set(key, object);
+    }
+    return Array.from(byId.values());
+  }, [pathOverlayObjects, routeSelectionVisible, selectedRouteTerminalPathSet]);
+  const forcedRouteEndpointObjectIds = React.useMemo(
+    () => new Set(forcedRouteEndpointObjects.map((object) => String(object?.id || '').trim()).filter(Boolean)),
+    [forcedRouteEndpointObjects],
+  );
+  const effectiveMutedObjectIds = React.useMemo(() => {
+    if (!routeSelectionVisible) return mutedObjectIds;
+    const protectedIds = new Set<string>([
+      ...highlightedGatewayObjectIds,
+      ...Array.from(forcedRouteEndpointObjectIds),
+      ...(selectedObject?.id ? [selectedObject.id] : []),
+      ...(searchHighlightedObjectId ? [searchHighlightedObjectId] : []),
+    ]);
+    const next = new Set<string>(mutedObjectIds);
+    for (const object of visibleMapObjects) {
+      const objectId = String(object?.id || '').trim();
+      if (!objectId || protectedIds.has(objectId)) continue;
+      next.add(objectId);
+    }
+    return Array.from(next);
+  }, [
+    forcedRouteEndpointObjectIds,
+    highlightedGatewayObjectIds,
+    mutedObjectIds,
+    routeSelectionVisible,
+    searchHighlightedObjectId,
+    selectedObject,
+    visibleMapObjects,
+  ]);
+  const routeSearchQueryTrim = routeSearchQuery.trim().toLowerCase();
+  const filteredRouteCatalog = React.useMemo(() => {
+    const items = routeSearchQueryTrim
+      ? routeCatalog.filter((artifact) => artifactRouteSearchText(artifact).includes(routeSearchQueryTrim))
+      : routeCatalog;
+    return [...items].sort((left, right) => artifactRouteTitle(left).localeCompare(artifactRouteTitle(right)));
+  }, [routeCatalog, routeSearchQueryTrim]);
   const allStaticZones = STATIC_ZONE_DATA.features;
   const zoneTypeCounts = React.useMemo(() => deriveZoneTypeCounts(allStaticZones), [allStaticZones]);
   const filteredStaticZones = React.useMemo(() => {
@@ -470,6 +694,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
         flowsEnabled,
         activeFlowModes: activeFlowModes ? Array.from(activeFlowModes) : null,
         pathLegsEnabled,
+        pathLegClusteringEnabled,
         vesselsEnabled,
         hops,
       },
@@ -487,7 +712,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
       },
       selectionGraph: selectionExportData,
       overlays: {
-        mutedObjectIds,
+        mutedObjectIds: effectiveMutedObjectIds,
         highlightedGatewayObjectIds,
       },
     };
@@ -512,8 +737,9 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     highlightedGatewayObjectIds,
     hops,
     manualPathArtifacts,
-    mutedObjectIds,
+    effectiveMutedObjectIds,
     pathArtifacts,
+    pathLegClusteringEnabled,
     pathLegsEnabled,
     relatedPathArtifacts,
     scope,
@@ -529,6 +755,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
 
   React.useEffect(() => {
     setPathLegsEnabled(Boolean(scope?.lensId));
+    setPathLegClusteringEnabled(Boolean(scope?.lensId));
     if (scope?.lensId) {
       setPathArtifactsLoaded(false);
       return;
@@ -561,6 +788,21 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
       window.clearInterval(timer);
     };
   }, [scope?.lensId]);
+
+  React.useEffect(() => {
+    const availableIds = new Set(routeCatalog.map((artifact) => String(artifact.id || '').trim()).filter(Boolean));
+    setSelectedRouteArtifactIds((current) => {
+      const next = current.filter((id) => availableIds.has(String(id || '').trim()));
+      return next.length === current.length ? current : next;
+    });
+  }, [routeCatalog]);
+
+  React.useEffect(() => {
+    if (routeSelectionVisible && !routeSelectionVisibleRef.current) {
+      setPathLegClusteringEnabled(false);
+    }
+    routeSelectionVisibleRef.current = routeSelectionVisible;
+  }, [routeSelectionVisible]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -825,6 +1067,12 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     setShowAnchorBSuggestions(false);
   }, []);
 
+  const closeMapDockOverlays = React.useCallback(() => {
+    setFiltersOverlayOpen(false);
+    setRoutesOverlayOpen(false);
+    setZoneControlsOverlayOpen(false);
+  }, []);
+
   const handleSearchKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -869,6 +1117,11 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
         closeSearchPalette();
         return;
       }
+      if (filtersOverlayOpen || routesOverlayOpen || zoneControlsOverlayOpen) {
+        event.preventDefault();
+        closeMapDockOverlays();
+        return;
+      }
       if (manualChainOverlayOpen) {
         event.preventDefault();
         closeManualChainOverlay();
@@ -876,7 +1129,19 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [closeManualChainOverlay, closeScopeDialog, closeSearchPalette, manualChainOverlayOpen, scopeDialogOpen, scopeDialogSubmitting, searchOpen]);
+  }, [
+    closeMapDockOverlays,
+    closeManualChainOverlay,
+    closeScopeDialog,
+    closeSearchPalette,
+    filtersOverlayOpen,
+    routesOverlayOpen,
+    manualChainOverlayOpen,
+    scopeDialogOpen,
+    scopeDialogSubmitting,
+    searchOpen,
+    zoneControlsOverlayOpen,
+  ]);
 
   const openScopeDialog = React.useCallback((result: SupplyChainSearchResult | null) => {
     const artifact = result?.artifact as MaterializedArtifact | undefined;
@@ -1061,18 +1326,42 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
 
   const markerLayerOptions = React.useMemo(
     () => ({
-      extraInteractiveLayers: GEO_EDGE_INTERACTIVE_LAYERS,
+      extraInteractiveLayers: [...GEO_EDGE_INTERACTIVE_LAYERS],
       suppressClearOnClusterClick: Boolean(selectedObject),
       highlightedObjects: [
         ...(selectedObject?.id ? [{ id: selectedObject.id, role: 'selected' as const }] : []),
+        ...Array.from(forcedRouteEndpointObjectIds).map((id) => ({ id, role: 'gateway' as const })),
         ...highlightedGatewayObjectIds.map((id) => ({ id, role: 'gateway' as const })),
         ...(searchHighlightedObjectId ? [{ id: searchHighlightedObjectId, role: 'search' as const }] : []),
       ],
-      mutedObjectIds,
+      mutedObjectIds: effectiveMutedObjectIds,
     }),
-    [highlightedGatewayObjectIds, mutedObjectIds, searchHighlightedObjectId, selectedObject],
+    [effectiveMutedObjectIds, forcedRouteEndpointObjectIds, highlightedGatewayObjectIds, searchHighlightedObjectId, selectedObject],
   );
-  useGeoMarkerLayer(map, isReady, styleEpoch, visibleMapObjects, theme, handleMarkerSelection, markerLayerOptions);
+  const pathLegClusterState = usePathLegClusterLayer(
+    map,
+    isReady,
+    styleEpoch,
+    activePathArtifacts,
+    pathOverlayObjects,
+    theme,
+    clusterProjectionEnabled,
+    focusedSupplyArtifactIds,
+    { selectedObject },
+  );
+  const baseMarkerObjects = React.useMemo(() => {
+    const candidatesById = new Map<string, GeoObject>();
+    for (const object of [...visibleMapObjects, ...forcedRouteEndpointObjects]) {
+      const key = String(object?.id || object?.canonicalPath || '').trim();
+      if (!key || candidatesById.has(key)) continue;
+      candidatesById.set(key, object);
+    }
+    return Array.from(candidatesById.values());
+  }, [
+    forcedRouteEndpointObjects,
+    visibleMapObjects,
+  ]);
+  useGeoMarkerLayer(map, isReady, styleEpoch, baseMarkerObjects, theme, handleMarkerSelection, markerLayerOptions);
   useGeoZoneLayer(map, isReady, styleEpoch, visibleMapObjects, theme);
   useStaticZoneLayer(map, isReady, styleEpoch, filteredStaticZones, theme, zonesEnabled, zoneActivityById, visibleMapObjects);
   useTransportFlowLayer(map, isReady, styleEpoch, filteredTransportFlows, theme, flowsEnabled, flowActivityById);
@@ -1083,8 +1372,9 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     activePathArtifacts,
     pathOverlayObjects,
     theme,
-    pathLegsEnabled,
-    activeSupplyArtifactIds,
+    pathLegsEnabled || (!pathLegClusteringEnabled && (supplyNarrativeLegsVisible || routeSelectionVisible)),
+    focusedSupplyArtifactIds,
+    pathLegClusterState.visibilityPolicy,
   );
   useVesselLayer(map, isReady, styleEpoch, vesselsEnabled, theme);
 
@@ -1204,42 +1494,378 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
           </div>
         )}
 
-        <MapFilterPanel
-          isDark={isDark}
-          paletteTheme={theme}
-          typeCounts={typeCounts}
-          zoneTypeCounts={zoneTypeCounts}
-          flowModeCounts={flowModeCounts}
-          activeTypes={activeTypes}
-          activeZoneTypes={activeZoneTypes}
-          activeFlowModes={activeFlowModes}
-          zonesEnabled={zonesEnabled}
-          flowsEnabled={flowsEnabled}
-          pathLegsEnabled={pathLegsEnabled}
-          pathLegCount={pathLegStats.legCount}
-          vesselsEnabled={vesselsEnabled}
-          vesselsApiAvailable={vesselsApiAvailable}
-          dateFrom={dateFrom}
-          dateTo={dateTo}
-          hops={hops}
-          loadingData={loading}
-          onSetDateFrom={setDateFrom}
-          onSetDateTo={setDateTo}
-          onSetHops={setHops}
-          onToggleType={handleToggleType}
-          onToggleZoneType={handleToggleZoneType}
-          onToggleFlowMode={handleToggleFlowMode}
-          onToggleZonesEnabled={() => setZonesEnabled((v) => !v)}
-          onToggleFlowsEnabled={() => setFlowsEnabled((v) => !v)}
-          onTogglePathLegsEnabled={() => setPathLegsEnabled((v) => !v)}
-          onToggleVesselsEnabled={() => setVesselsEnabled((v) => !v)}
-          onSelectAll={() => setActiveTypes(null)}
-          onSelectNone={() => setActiveTypes(new Set())}
-          onSelectAllZoneTypes={() => setActiveZoneTypes(null)}
-          onSelectNoneZoneTypes={() => setActiveZoneTypes(new Set())}
-          onSelectAllFlowModes={() => setActiveFlowModes(null)}
-          onSelectNoneFlowModes={() => setActiveFlowModes(new Set())}
-        />
+        <div
+          style={{
+            position: 'absolute',
+            top: 12,
+            right: 12,
+            zIndex: 24,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'flex-end',
+            gap: 8,
+            pointerEvents: 'none',
+            userSelect: 'none',
+          }}
+        >
+          <div style={{ position: 'relative', pointerEvents: 'auto' }}>
+            <button
+              type="button"
+              title={filtersOverlayOpen ? 'Hide filters' : 'Show filters'}
+              aria-label={filtersOverlayOpen ? 'Hide filters' : 'Show filters'}
+              onClick={() => {
+                setRoutesOverlayOpen(false);
+                setZoneControlsOverlayOpen(false);
+                setFiltersOverlayOpen((value) => !value);
+              }}
+              style={mapDockButtonStyle(isDark, filtersOverlayOpen, isDark ? '#7dd3fc' : '#0284c7')}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <line x1="4" y1="6" x2="20" y2="6" />
+                <line x1="7" y1="12" x2="17" y2="12" />
+                <line x1="10" y1="18" x2="14" y2="18" />
+              </svg>
+            </button>
+            {filtersOverlayOpen && (
+              <div style={{ position: 'absolute', top: 0, right: 'calc(100% + 10px)' }}>
+                <div style={mapDockOverlayCardStyle(isDark, 286)}>
+                  <MapFilterPanel
+                    floating
+                    isDark={isDark}
+                    paletteTheme={theme}
+                    typeCounts={typeCounts}
+                    zoneTypeCounts={zoneTypeCounts}
+                    flowModeCounts={flowModeCounts}
+                    activeTypes={activeTypes}
+                    activeZoneTypes={activeZoneTypes}
+                    activeFlowModes={activeFlowModes}
+                    zonesEnabled={zonesEnabled}
+                    flowsEnabled={flowsEnabled}
+                    pathLegsEnabled={pathLegsEnabled}
+                    pathLegClusteringEnabled={pathLegClusteringEnabled}
+                    pathLegCount={pathLegStats.legCount}
+                    vesselsEnabled={vesselsEnabled}
+                    vesselsApiAvailable={vesselsApiAvailable}
+                    dateFrom={dateFrom}
+                    dateTo={dateTo}
+                    hops={hops}
+                    loadingData={loading}
+                    onSetDateFrom={setDateFrom}
+                    onSetDateTo={setDateTo}
+                    onSetHops={setHops}
+                    onToggleType={handleToggleType}
+                    onToggleZoneType={handleToggleZoneType}
+                    onToggleFlowMode={handleToggleFlowMode}
+                    onToggleZonesEnabled={() => setZonesEnabled((v) => !v)}
+                    onToggleFlowsEnabled={() => setFlowsEnabled((v) => !v)}
+                    onTogglePathLegsEnabled={() => setPathLegsEnabled((v) => !v)}
+                    onTogglePathLegClusteringEnabled={() => setPathLegClusteringEnabled((v) => !v)}
+                    onToggleVesselsEnabled={() => setVesselsEnabled((v) => !v)}
+                    onSelectAll={() => setActiveTypes(null)}
+                    onSelectNone={() => setActiveTypes(new Set())}
+                    onSelectAllZoneTypes={() => setActiveZoneTypes(null)}
+                    onSelectNoneZoneTypes={() => setActiveZoneTypes(new Set())}
+                    onSelectAllFlowModes={() => setActiveFlowModes(null)}
+                    onSelectNoneFlowModes={() => setActiveFlowModes(new Set())}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div style={{ position: 'relative', pointerEvents: 'auto' }}>
+            <button
+              type="button"
+              title={routesOverlayOpen ? 'Hide supply routes' : 'Supply routes'}
+              aria-label={routesOverlayOpen ? 'Hide supply routes' : 'Supply routes'}
+              onClick={() => {
+                setFiltersOverlayOpen(false);
+                setZoneControlsOverlayOpen(false);
+                setRoutesOverlayOpen((value) => !value);
+              }}
+              style={mapDockButtonStyle(isDark, routesOverlayOpen, isDark ? '#f59e0b' : '#b45309')}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M4 7h11" />
+                <path d="M4 12h16" />
+                <path d="M4 17h9" />
+                <circle cx="18" cy="7" r="2" />
+                <circle cx="18" cy="17" r="2" />
+              </svg>
+            </button>
+            {routesOverlayOpen && (
+              <div style={{ position: 'absolute', top: 0, right: 'calc(100% + 10px)' }}>
+                <div style={{ ...mapDockOverlayCardStyle(isDark, 340), padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-heading)' }}>Supply Routes</div>
+                      <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                        Search loaded routes and highlight selected paths.
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
+                      {selectedRouteArtifactIdSet.size > 0 ? `${selectedRouteArtifactIdSet.size} selected` : `${routeCatalog.length} loaded`}
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input
+                      type="search"
+                      value={routeSearchQuery}
+                      onChange={(event) => setRouteSearchQuery(event.target.value)}
+                      placeholder="Search routes, anchors, products"
+                      style={{
+                        flex: 1,
+                        borderRadius: 10,
+                        border: '1px solid var(--border-subtle)',
+                        background: mapSearchPaletteChrome.subtleSurface,
+                        color: 'var(--text-heading)',
+                        padding: '9px 11px',
+                        fontSize: 12,
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setSelectedRouteArtifactIds([])}
+                      disabled={selectedRouteArtifactIdSet.size === 0}
+                      style={{
+                        borderRadius: 10,
+                        border: '1px solid var(--border-subtle)',
+                        background: 'transparent',
+                        color: selectedRouteArtifactIdSet.size > 0 ? 'var(--text-secondary-strong)' : 'var(--text-secondary)',
+                        padding: '9px 10px',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        cursor: selectedRouteArtifactIdSet.size > 0 ? 'pointer' : 'not-allowed',
+                        opacity: selectedRouteArtifactIdSet.size > 0 ? 1 : 0.55,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      Clear selected
+                    </button>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                    <span>{filteredRouteCatalog.length} shown</span>
+                    <span>•</span>
+                    <span>{routeSelectionVisible ? 'Only selected routes are emphasized' : 'All loaded routes are active'}</span>
+                  </div>
+
+                  <div
+                    style={{
+                      borderRadius: 12,
+                      border: '1px solid var(--border-subtle)',
+                      background: mapSearchPaletteChrome.subtleSurface,
+                      padding: '10px 12px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 12,
+                    }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-heading)' }}>Cluster path legs</div>
+                      <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                        {routeSelectionVisible
+                          ? 'Auto-disabled when route selection appeared. You can still switch it back here.'
+                          : 'Use the same clustering mode as in Filters.'}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setPathLegClusteringEnabled((value) => !value)}
+                      style={{
+                        borderRadius: 999,
+                        border: pathLegClusteringEnabled ? '1px solid rgba(14,165,233,0.32)' : '1px solid var(--border-subtle)',
+                        background: pathLegClusteringEnabled
+                          ? (isDark ? 'rgba(14,165,233,0.16)' : 'rgba(14,165,233,0.10)')
+                          : 'transparent',
+                        color: pathLegClusteringEnabled ? (isDark ? '#bae6fd' : '#075985') : 'var(--text-secondary-strong)',
+                        padding: '6px 10px',
+                        fontSize: 11,
+                        fontWeight: 800,
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {pathLegClusteringEnabled ? 'On' : 'Off'}
+                    </button>
+                  </div>
+
+                  <div style={{ maxHeight: 420, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, paddingRight: 2 }}>
+                    {filteredRouteCatalog.length === 0 && (
+                      <div style={{ borderRadius: 12, border: '1px solid var(--border-subtle)', background: mapSearchPaletteChrome.subtleSurface, padding: '12px 14px', fontSize: 12, color: 'var(--text-secondary-strong)' }}>
+                        No loaded routes match this search.
+                      </div>
+                    )}
+                    {filteredRouteCatalog.map((artifact) => {
+                      const artifactId = String(artifact.id || '').trim();
+                      const selected = selectedRouteArtifactIdSet.has(artifactId);
+                      const products = artifactRouteProducts(artifact);
+                      return (
+                        <button
+                          key={artifactId}
+                          type="button"
+                          onClick={() => {
+                            setSelectedRouteArtifactIds((current) => {
+                              const currentSet = new Set(current.map((value) => String(value || '').trim()).filter(Boolean));
+                              if (currentSet.has(artifactId)) currentSet.delete(artifactId);
+                              else currentSet.add(artifactId);
+                              return Array.from(currentSet);
+                            });
+                          }}
+                          style={{
+                            width: '100%',
+                            textAlign: 'left',
+                            borderRadius: 12,
+                            border: selected ? `1px solid ${mapSearchPaletteChrome.activeItemBorder}` : '1px solid var(--border-subtle)',
+                            background: selected ? mapSearchPaletteChrome.activeItemBackground : mapSearchPaletteChrome.subtleSurface,
+                            color: 'var(--text-heading)',
+                            padding: '11px 12px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 6,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)' }}>
+                                {artifactRouteTitle(artifact)}
+                              </div>
+                              <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                                {artifactRouteSubtitle(artifact)}
+                              </div>
+                            </div>
+                            <div
+                              style={{
+                                minWidth: 18,
+                                height: 18,
+                                borderRadius: 999,
+                                border: selected ? `1px solid ${mapSearchPaletteChrome.activeItemBorder}` : '1px solid var(--border-subtle)',
+                                background: selected ? mapSearchPaletteChrome.activeItemBackground : 'transparent',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: 10,
+                                fontWeight: 900,
+                                color: selected ? 'var(--text-heading)' : 'transparent',
+                              }}
+                            >
+                              ✓
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                            <span>{artifact.legCount || (Array.isArray(artifact.payload?.legs) ? artifact.payload!.legs!.length : 0)} legs</span>
+                            {typeof artifact.pathStressScore === 'number' && artifact.pathStressScore > 0 && (
+                              <span>stress {artifact.pathStressScore.toFixed(2)}</span>
+                            )}
+                            {artifact.isPinned && <span>Pinned</span>}
+                          </div>
+                          {products.length > 0 && (
+                            <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                              {products.join(', ')}
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div style={{ position: 'relative', pointerEvents: 'auto' }}>
+            <button
+              type="button"
+              title={zoneControlsOverlayOpen ? 'Hide affected zone window' : 'Affected zone window'}
+              aria-label={zoneControlsOverlayOpen ? 'Hide affected zone window' : 'Affected zone window'}
+              onClick={() => {
+                setFiltersOverlayOpen(false);
+                setRoutesOverlayOpen(false);
+                setZoneControlsOverlayOpen((value) => !value);
+              }}
+              style={mapDockButtonStyle(isDark, zoneControlsOverlayOpen, isDark ? '#fbbf24' : '#d97706')}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 3 4 7v6c0 5 3.4 7.7 8 8 4.6-.3 8-3 8-8V7l-8-4Z" />
+                <path d="M12 8v5" />
+                <path d="M12 16h.01" />
+              </svg>
+            </button>
+            {zoneControlsOverlayOpen && (
+              <div style={{ position: 'absolute', top: 0, right: 'calc(100% + 10px)' }}>
+                <div style={{ ...mapDockOverlayCardStyle(isDark, 332), padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-heading)' }}>Affected Zones Window</div>
+                      <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                        Control freshness and archived visibility.
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
+                      {affectedZoneVisibility.visible}/{affectedZoneVisibility.total}
+                    </div>
+                  </div>
+
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                    {showArchivedAffectedZones ? 'Showing all affected zones' : `Showing zones since ${affectedZoneCutoffLabel}`}
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {AFFECTED_ZONE_FRESHNESS_WINDOWS.map((days) => {
+                      const active = affectedZoneFreshnessDays === days;
+                      return (
+                        <button
+                          key={days}
+                          type="button"
+                          onClick={() => setAffectedZoneFreshnessDays(days)}
+                          disabled={showArchivedAffectedZones}
+                          style={{
+                            border: active ? '1px solid rgba(245,158,11,0.45)' : '1px solid var(--border-subtle)',
+                            background: active
+                              ? (isDark ? 'rgba(245,158,11,0.14)' : 'rgba(245,158,11,0.12)')
+                              : 'transparent',
+                            color: active ? (isDark ? '#fde68a' : '#92400e') : 'var(--text-secondary-strong)',
+                            padding: '5px 9px',
+                            borderRadius: 999,
+                            fontSize: 11,
+                            fontWeight: 700,
+                            cursor: showArchivedAffectedZones ? 'default' : 'pointer',
+                            opacity: showArchivedAffectedZones ? 0.42 : 1,
+                          }}
+                        >
+                          {days}d
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowArchivedAffectedZones((value) => !value)}
+                    style={{
+                      alignSelf: 'flex-start',
+                      border: showArchivedAffectedZones ? '1px solid rgba(148,163,184,0.32)' : '1px solid rgba(239,68,68,0.28)',
+                      background: showArchivedAffectedZones
+                        ? (isDark ? 'rgba(148,163,184,0.14)' : 'rgba(148,163,184,0.1)')
+                        : (isDark ? 'rgba(239,68,68,0.12)' : 'rgba(239,68,68,0.08)'),
+                      color: showArchivedAffectedZones ? 'var(--text-secondary-strong)' : (isDark ? '#fca5a5' : '#991b1b'),
+                      padding: '7px 10px',
+                      borderRadius: 10,
+                      fontSize: 11,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {showArchivedAffectedZones ? 'Hide archived zones' : `Show archived zones${affectedZoneVisibility.hidden > 0 ? ` (${affectedZoneVisibility.hidden})` : ''}`}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
 
         <button
           type="button"
@@ -1268,8 +1894,9 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
             justifyContent: 'center',
             cursor: 'pointer',
             filter: mapSearchPaletteChrome.triggerShadow,
+            boxShadow: mapSearchPaletteChrome.triggerOutline,
             backdropFilter: 'blur(8px)',
-            transition: 'background-color 0.18s ease, border-color 0.18s ease',
+            transition: 'background-color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease',
             zIndex: 4,
           }}
         >
@@ -1740,76 +2367,6 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
           {flowsEnabled ? ` | Flows: ${visibleTransportFlowsCount}` : ''}
           {pathLegsEnabled ? ` | Path legs: ${pathLegStats.legCount}` : ''}
           {vesselsEnabled ? ' | Vessels (AIS)' : ''}
-        </div>
-
-        <div style={{
-          position: 'absolute',
-          right: 10,
-          bottom: 10,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '6px 8px',
-          borderRadius: 999,
-          backgroundColor: isDark ? 'rgba(5, 11, 17, 0.84)' : 'rgba(248, 250, 252, 0.94)',
-          border: isDark ? '1px solid rgba(255,255,255,0.12)' : '1px solid rgba(15,23,42,0.12)',
-          color: 'var(--text-secondary-strong)',
-          fontSize: 11,
-          backdropFilter: 'blur(10px)',
-          boxShadow: isDark ? '0 10px 24px rgba(0,0,0,0.28)' : '0 10px 24px rgba(15,23,42,0.08)',
-          zIndex: 3,
-        }}>
-          <span style={{ opacity: 0.82, whiteSpace: 'nowrap' }}>
-            Zones {showArchivedAffectedZones ? 'all' : `since ${affectedZoneCutoffLabel}`}
-          </span>
-          <div style={{ display: 'flex', gap: 4 }}>
-            {AFFECTED_ZONE_FRESHNESS_WINDOWS.map((days) => {
-              const active = affectedZoneFreshnessDays === days;
-              return (
-                <button
-                  key={days}
-                  type="button"
-                  onClick={() => setAffectedZoneFreshnessDays(days)}
-                  disabled={showArchivedAffectedZones}
-                  style={{
-                    border: active ? '1px solid rgba(245,158,11,0.45)' : '1px solid transparent',
-                    background: active
-                      ? (isDark ? 'rgba(245,158,11,0.14)' : 'rgba(245,158,11,0.12)')
-                      : 'transparent',
-                    color: active ? (isDark ? '#fde68a' : '#92400e') : 'inherit',
-                    padding: '3px 7px',
-                    borderRadius: 999,
-                    fontSize: 11,
-                    cursor: showArchivedAffectedZones ? 'default' : 'pointer',
-                    opacity: showArchivedAffectedZones ? 0.42 : 1,
-                  }}
-                >
-                  {days}d
-                </button>
-              );
-            })}
-          </div>
-          <button
-            type="button"
-            onClick={() => setShowArchivedAffectedZones((value) => !value)}
-            style={{
-              border: showArchivedAffectedZones ? '1px solid rgba(148,163,184,0.32)' : '1px solid rgba(239,68,68,0.28)',
-              background: showArchivedAffectedZones
-                ? (isDark ? 'rgba(148,163,184,0.14)' : 'rgba(148,163,184,0.1)')
-                : (isDark ? 'rgba(239,68,68,0.12)' : 'rgba(239,68,68,0.08)'),
-              color: showArchivedAffectedZones ? 'var(--text-secondary-strong)' : (isDark ? '#fca5a5' : '#991b1b'),
-              padding: '3px 8px',
-              borderRadius: 999,
-              fontSize: 11,
-              cursor: 'pointer',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {showArchivedAffectedZones ? 'Hide archived' : `Show archived${affectedZoneVisibility.hidden > 0 ? ` (${affectedZoneVisibility.hidden})` : ''}`}
-          </button>
-          <span style={{ opacity: 0.72, whiteSpace: 'nowrap' }}>
-            {affectedZoneVisibility.visible}/{affectedZoneVisibility.total}
-          </span>
         </div>
 
         {stackSelection && (
@@ -2304,7 +2861,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
           style={{
             position: 'absolute',
             right: 12,
-            top: 12,
+            bottom: 12,
             zIndex: 19,
             display: 'flex',
             alignItems: 'center',

@@ -166,6 +166,7 @@ func parseNominatimBody(r io.Reader) (*ontology.GeocodingResult, error) {
 		Lon:              lon,
 		FormattedAddress: r0.DisplayName,
 		PlaceID:          fmt.Sprintf("osm:%s:%d", r0.OSMType, r0.OSMID),
+		Provider:         ontology.GeocodingProviderNominatim,
 	}, nil
 }
 

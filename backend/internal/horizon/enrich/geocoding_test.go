@@ -236,3 +236,59 @@ func TestBuildAddressFromFragment_EntityNameCountryFallback(t *testing.T) {
 		t.Fatalf("BuildAddressFromFragment() = %q, want %q", addr, "Acme Corp, US")
 	}
 }
+
+func TestBuildLastSegmentAddressCandidates_AddsTailGeoVariants(t *testing.T) {
+	frag := &hmodels.HorizonFragment{
+		Type:          hmodels.FragmentTypeFacility,
+		CanonicalPath: "/fac/kz/eco-resource-kz-almaty",
+	}
+
+	candidates := BuildLastSegmentAddressCandidates(frag)
+	found := map[string]bool{}
+	for _, candidate := range candidates {
+		found[candidate] = true
+	}
+	if !found["Almaty, KZ"] {
+		t.Fatalf("expected tail candidate %q in %#v", "Almaty, KZ", candidates)
+	}
+}
+
+func TestInferPlaceHintCandidates_ExtractsTrailingGeoClues(t *testing.T) {
+	frag := &hmodels.HorizonFragment{
+		Type:          hmodels.FragmentTypeFacility,
+		CanonicalPath: "/fac/cn/byd-electronic-huizhou-factory",
+		Labels:        map[string]string{"en": "Byd Electronic Huizhou Factory"},
+	}
+
+	hints := InferPlaceHintCandidates(frag)
+	found := false
+	for _, hint := range hints {
+		if hint == "Huizhou" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected Huizhou in %#v", hints)
+	}
+}
+
+func TestInferPlaceHintCandidates_PrefersTwoTokenPlaceAfterSuffixTrim(t *testing.T) {
+	frag := &hmodels.HorizonFragment{
+		Type:          hmodels.FragmentTypeFacility,
+		CanonicalPath: "/fac/vn/binh-duong-factory",
+		Labels:        map[string]string{"en": "Binh Duong Factory"},
+	}
+
+	hints := InferPlaceHintCandidates(frag)
+	found := false
+	for _, hint := range hints {
+		if hint == "Binh Duong" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected Binh Duong in %#v", hints)
+	}
+}

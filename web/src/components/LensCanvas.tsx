@@ -65,6 +65,16 @@ export interface LensCanvasProps {
   onClose: () => void;
 }
 
+type LensCanvasSnapshot = {
+  lens: any;
+  assemblyStatus: any;
+  scoutingJobs: any[];
+};
+
+// Keep the last fetched lens payload in memory so incidental remounts or refreshes
+// do not blank the entire canvas with a blocking loader.
+const lensSnapshotCache = new Map<string, LensCanvasSnapshot>();
+
 export const LensCanvas: React.FC<LensCanvasProps> = ({
   isOpen,
   lensId,
@@ -199,7 +209,13 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
     }
 
     const loadLens = async () => {
-      setLoading(true);
+      const cached = lensSnapshotCache.get(lensId);
+      if (cached) {
+        setLens(cached.lens);
+        setAssemblyStatus(cached.assemblyStatus);
+        setScoutingJobs(cached.scoutingJobs || []);
+      }
+      setLoading(!cached);
       setError(null);
       try {
         const [lensData, assemblyData, jobsData] = await Promise.all([
@@ -210,10 +226,14 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
         setLens(lensData);
         setAssemblyStatus(assemblyData);
         setScoutingJobs(jobsData.jobs || []);
+        lensSnapshotCache.set(lensId, {
+          lens: lensData,
+          assemblyStatus: assemblyData,
+          scoutingJobs: jobsData.jobs || [],
+        });
       } catch (err: any) {
         console.error('[LensCanvas] Failed to load lens', err);
         setError(err.response?.data?.error || err.message || 'Failed to load lens');
-        setLens(null);
       } finally {
         setLoading(false);
       }
@@ -252,6 +272,11 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
         lastResolved: lens.lastResolved,
       });
       setLens(updated);
+      lensSnapshotCache.set(lensId, {
+        lens: updated,
+        assemblyStatus,
+        scoutingJobs,
+      });
       // Refresh related UI panels best-effort.
       try {
         const [assemblyData, jobsData] = await Promise.all([
@@ -260,6 +285,11 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
         ]);
         setAssemblyStatus(assemblyData);
         setScoutingJobs(jobsData.jobs || []);
+        lensSnapshotCache.set(lensId, {
+          lens: updated,
+          assemblyStatus: assemblyData,
+          scoutingJobs: jobsData.jobs || [],
+        });
       } catch {
         // ignore
       }
@@ -290,11 +320,21 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
       // Keep local lens snapshot in sync so Details/Scope reflects the change immediately.
       if (res?.lens) {
         setLens(res.lens);
+        lensSnapshotCache.set(lensId, {
+          lens: res.lens,
+          assemblyStatus,
+          scoutingJobs,
+        });
       } else {
         // Fallback: refetch lens best-effort
         try {
           const next = await api.getHorizonLens(lensId);
           setLens(next);
+          lensSnapshotCache.set(lensId, {
+            lens: next,
+            assemblyStatus,
+            scoutingJobs,
+          });
         } catch {
           // ignore
         }
@@ -308,6 +348,14 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
         ]);
         setAssemblyStatus(assemblyData);
         setScoutingJobs(jobsData.jobs || []);
+        const latestLens = res?.lens || lensSnapshotCache.get(lensId)?.lens;
+        if (latestLens) {
+          lensSnapshotCache.set(lensId, {
+            lens: latestLens,
+            assemblyStatus: assemblyData,
+            scoutingJobs: jobsData.jobs || [],
+          });
+        }
       } catch {
         // ignore
       }
@@ -506,7 +554,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
             overflow: (viewMode === 'cockpit' || viewMode === 'progress' || viewMode === 'details') ? 'hidden' : 'visible',
           }}
         >
-          {loading ? (
+          {loading && !lens ? (
             <div
               style={{
                 flex: 1,
@@ -557,7 +605,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                 </div>
               </div>
             </div>
-          ) : error ? (
+          ) : error && !lens ? (
           <div className="flex items-center justify-center py-8">
             <div className="text-xs text-center" style={{ color: '#f87171' }}>
               {error}

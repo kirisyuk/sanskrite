@@ -1,6 +1,8 @@
 package scout
 
 import (
+	"strings"
+
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
@@ -65,4 +67,28 @@ func SupplyChainEdgeTypesForPrompt() string {
 // Use for runtime guards before materialization.
 func IsSupplyChainEdgeType(t string) bool {
 	return taxonomy.IsSupplyChainEdgeType(t)
+}
+
+// IsAllowedSupplyChainRuntimeRelation applies the runtime supply-chain gate with
+// the same domain/market scaffold exceptions used by relation pre-filtering.
+func IsAllowedSupplyChainRuntimeRelation(sourcePath, targetPath string, relationType models.DependencyType) bool {
+	sourcePath = strings.TrimSpace(sourcePath)
+	targetPath = strings.TrimSpace(targetPath)
+	relationType = models.DependencyType(strings.TrimSpace(taxonomy.NormalizeRelationType(string(relationType))))
+	if relationType == "" {
+		return false
+	}
+	if IsSupplyChainEdgeType(string(relationType)) {
+		return true
+	}
+	if relationType == models.DependencyTypeOwns || relationType == models.DependencyTypeControls {
+		return allowSupplyChainOwnershipOrControlByPath(sourcePath, targetPath)
+	}
+	if strings.HasPrefix(sourcePath, "/domain/") && IsDomainScaffoldRelationType(relationType) {
+		return true
+	}
+	if strings.HasPrefix(sourcePath, "/market/") && (IsDomainScaffoldRelationType(relationType) || IsMarketRelationType(relationType)) {
+		return true
+	}
+	return false
 }

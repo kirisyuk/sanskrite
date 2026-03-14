@@ -1721,7 +1721,7 @@ Return a JSON object:
   "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "sourceCanonicalPath?", "sourceType?", "sourceName?", "qualifiers": { "integration_type"?: "vertical|partnership|arm's-length", "transport_via"?: ["/fac/us/port-long-beach", "/fac/ae/jebel-ali-port"], "source_role"?: "supplier|dependent", "target_role"?: "customer|dependency" } } ],
   "supplyChains": [ { "nodes": [ { "canonicalPath", "name", "type", "role"? } ], "confidence", "reason", "transportVia"?: ["/fac/us/port-long-beach", "/fac/ae/jebel-ali-port"] } ]
 }
-If you update fragment.homeLocation, set iso3166_1 only when the country is explicit or strongly corroborated by the place clue/source. If the place clue and ISO2 conflict, correct the ISO2 or omit it; never keep contradictory geo.
+If you update fragment.homeLocation, set homeLocation.name to a concrete city/site whenever the entity name, slug, or source contains a clear place clue (e.g. Wuxi, Huizhou, Eilat, Binh Duong, Riyadh). Set iso3166_1 only when the country is explicit or strongly corroborated by the place clue/source. If the place clue and ISO2 conflict, correct the ISO2 or omit it; never keep contradictory geo.
 Nodes MUST alternate actor→product. Include FACILITY where transformation happens (product→facility→product). Keep ORGANIZATION endpoints when the chain meaningfully starts or ends at org level.
 For SUPPLIES_TO: add qualifiers.transport_via when transport route is known or reasonably inferable for route-sensitive legs. transportVia in chains = facilities/chokepoints the product passes through.
 

@@ -11,6 +11,10 @@ func TestInferPlaceHintFromFacilityLabel(t *testing.T) {
 		{"Aliaga LNG Terminal", "aliaga lng"},
 		{"Cebu IT Park Facility", "cebu it"},
 		{"Kasawari Gas Field", "kasawari gas"},
+		{"Eco Resource Kz Almaty", "almaty"},
+		{"Salt Of The Earth Eilat", "eilat"},
+		{"Byd Electronic Huizhou Factory", "huizhou"},
+		{"Kaspi Fulfillment Network", ""},
 		{"Terminal", ""},
 	}
 	for _, tc := range cases {
