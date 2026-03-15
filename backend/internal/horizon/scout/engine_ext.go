@@ -3009,15 +3009,18 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	var domainResearchChains []agents.SupplyChain
 	var domainGroundingEvidence *ai.GroundingEvidence
 	researchStageActive := false
+	supplyChainRefineContinuation := agents.IsSupplyChainContractType(contractType) && isSupplyChainRefineContinuationJob(job)
 	if domainFastPathApplied {
 		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageResearch, true, "domain_base_research_skip_fast_path")
+	} else if supplyChainRefineContinuation {
+		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageResearch, true, "domain_base_research_skip_supply_chain_refine_continuation")
 	} else {
 		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageResearch, true, "domain_base_research")
 		researchStageActive = true
 	}
 	supplyChainPlan := getSupplyChainExecutionPlanFromJobState(job, domainCP)
 	usePlanMode := agents.IsSupplyChainContractType(contractType) && supplyChainPlan != nil && len(supplyChainPlan.Queries) > 0
-	if usePlanMode && e.researchAgent != nil && !domainFastPathApplied {
+	if usePlanMode && e.researchAgent != nil && !domainFastPathApplied && !supplyChainRefineContinuation {
 		if job.State == nil {
 			job.State = map[string]interface{}{}
 		}
@@ -3773,6 +3776,18 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	} else {
 		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageDomainRelationMaterialize, false, "domain_relation_materialization_skip_no_relations")
 	}
+	fastFirstSupplyChain := usePlanMode && isFastFirstSupplyChainJob(job)
+	refineContinuation := isSupplyChainRefineContinuationJob(job)
+	if job.State == nil {
+		job.State = map[string]interface{}{}
+	}
+	if fastFirstSupplyChain && !refineContinuation {
+		job.State["supplyChainSkipFamilyCoResearch"] = true
+		job.State["supplyChainSkipChildScheduling"] = true
+	} else {
+		delete(job.State, "supplyChainSkipFamilyCoResearch")
+		delete(job.State, "supplyChainSkipChildScheduling")
+	}
 	if len(domainResearchChains) > 0 {
 		e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageDomainSupplyChains, false, "domain_supply_chain_materialization")
 		if parseStateBool(job.State["supplyChainIncrementalMaterialized"], false) {
@@ -3788,15 +3803,30 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 			}
 		}
 		// Expand phase (optional): 1-hop for low-confidence nodes, alternatives check. Config: job.State["supplyChainExpandEnabled"], ["supplyChainExpandMaxNodes"].
-		if usePlanMode {
+		if usePlanMode && (!fastFirstSupplyChain || refineContinuation) {
 			e.runSupplyChainExpandPhase(ctx, job, frag, domainResearchChains, supplyChainPlan)
 		}
 		// Stage 2 Overlay queries: skipped for supply chain fast-path (pure org→fac→product→fac→org).
-		if usePlanMode && !isSupplyChainFastPath && supplyChainPlan != nil && len(supplyChainPlan.OverlayQueries) > 0 {
+		if usePlanMode && (!fastFirstSupplyChain || refineContinuation) && !isSupplyChainFastPath && supplyChainPlan != nil && len(supplyChainPlan.OverlayQueries) > 0 {
 			e.runSupplyChainStage2Overlays(ctx, job, frag, domainResearchChains, supplyChainPlan.OverlayQueries)
 		}
 	} else {
 		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageDomainSupplyChains, false, "domain_supply_chain_materialization_skip_no_chains")
+	}
+
+	if agents.IsSupplyChainContractType(contractType) {
+		switch {
+		case fastFirstSupplyChain && !refineContinuation:
+			if err := e.runSupplyChainFastAssembly(ctx, job, frag, domainCP, supplyChainPlan); err != nil {
+				recordPipelineIssue(job, "supply_chain_fast_assembly", err.Error())
+				return err
+			}
+		default:
+			if err := e.runSupplyChainAssemblyRefine(ctx, job, frag, domainCP, supplyChainPlan); err != nil {
+				recordPipelineIssue(job, "supply_chain_refine", err.Error())
+				return err
+			}
+		}
 	}
 
 	// Domain artifact materialization: build relations graph for governance/regulatory/ecosystem. Skipped for supply chain fast-path.
@@ -9336,14 +9366,14 @@ func (e *ScoutEngine) processSupplyChains(
 			}
 		}
 	}
-	if len(familyBatches) > 0 {
+	if len(familyBatches) > 0 && !parseStateBool(job.State["supplyChainSkipFamilyCoResearch"], false) {
 		e.runSupplyChainFamilyCoResearch(ctx, job, sourceFragment, familyBatches)
 	}
 
 	// Cascade child scheduling: only if policy allows. Entity jobs with domain expansion
 	// peer only materialize chains, they don't schedule children (domain expansion owns cascade).
 	scPolicy := NewPostProcessingPolicy(job)
-	if scPolicy.ShouldRun(StepCascadeChildScheduling) {
+	if scPolicy.ShouldRun(StepCascadeChildScheduling) && !parseStateBool(job.State["supplyChainSkipChildScheduling"], false) {
 		_ = e.scheduleSupplyChainChildJobs(ctx, job, sourceFragment, result, existingContext)
 	}
 

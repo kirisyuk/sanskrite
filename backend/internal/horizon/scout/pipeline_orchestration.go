@@ -49,15 +49,16 @@ const (
 )
 
 const (
-	stageEntitySourcePlanning         = "source_planning"
-	stageEntitySourceExecution        = "source_execution"
-	stageEntityExtraction             = "entity_extraction"
-	stageEntityResearch               = "entity_research"
-	stageEntityRevalidation           = "entity_revalidation"
-	stageEntityPersistence            = "entity_persistence"
-	stageEntityRelationMaterialize    = "relation_materialization"
-	stageEntitySupplyChainMaterialize = "supply_chain_materialization"
-	stageEntitySupplyChainRefine      = "supply_chain_refine"
+	stageEntitySourcePlanning          = "source_planning"
+	stageEntitySourceExecution         = "source_execution"
+	stageEntityExtraction              = "entity_extraction"
+	stageEntityResearch                = "entity_research"
+	stageEntityRevalidation            = "entity_revalidation"
+	stageEntityPersistence             = "entity_persistence"
+	stageEntityRelationMaterialize     = "relation_materialization"
+	stageEntitySupplyChainMaterialize  = "supply_chain_materialization"
+	stageEntitySupplyChainFastAssembly = "supply_chain_fast_assembly"
+	stageEntitySupplyChainRefine       = "supply_chain_refine"
 
 	stageDomainFragmentUpsert      = "domain_fragment_upsert"
 	stageDomainRelationMaterialize = "domain_relation_materialization"
@@ -136,7 +137,6 @@ func pipelineStageOrder(pipelineName string) []string {
 			stageEntityExtraction,
 			stageCritic,
 			stageEntityResearch,
-			stageEntitySupplyChainRefine,
 			stageRevalidation,
 			stageEntityPersistence,
 			stageEntityRelationMaterialize,
@@ -169,6 +169,8 @@ func normalizePipelineStage(stage string) string {
 		return stageCritic
 	case stageResearch, stageEntityResearch:
 		return stageResearch
+	case stageEntitySupplyChainFastAssembly:
+		return stageEntitySupplyChainFastAssembly
 	case stageEntitySupplyChainRefine:
 		return stageEntitySupplyChainRefine
 	case stageRevalidation, stageEntityRevalidation:
@@ -870,6 +872,14 @@ func requiredStagesForPipelinePass(passName pipeline.PassName) (string, []string
 	}
 }
 
+func requiredStagesForPipelinePassJob(job *models.ScoutingJob, passName pipeline.PassName) (string, []string) {
+	pipelineName, requiredStages := requiredStagesForPipelinePass(passName)
+	if pipelineName == pipelineRuntimeDomainBase && isFastFirstSupplyChainJob(job) {
+		requiredStages = append(append([]string(nil), requiredStages...), stageEntitySupplyChainFastAssembly)
+	}
+	return pipelineName, normalizeRequiredStages(requiredStages)
+}
+
 func (e *ScoutEngine) finalizePipelineRun(ctx context.Context, job *models.ScoutingJob, in pipelineFinalizeInput) error {
 	if e == nil || job == nil {
 		return nil
@@ -888,10 +898,26 @@ func (e *ScoutEngine) finalizePipelineRun(ctx context.Context, job *models.Scout
 	if len(requiredStages) == 0 {
 		requiredStages = requiredStagesForPipeline(pipelineName)
 	}
+	if pipelineName == pipelineRuntimeDomainBase && isFastFirstSupplyChainJob(job) {
+		requiredStages = append(append([]string(nil), requiredStages...), stageEntitySupplyChainFastAssembly)
+	}
 	requiredStages = normalizeRequiredStages(requiredStages)
 
 	e.pipelineStageBegin(ctx, job, pipelineName, stageFinalize, true, "finalize")
 	barrier := evaluatePipelineStageBarrier(job, pipelineName, requiredStages)
+	if pipelineName == pipelineRuntimeDomainBase && isFastFirstSupplyChainJob(job) && !hasSupplyChainAssemblySummary(job) {
+		found := false
+		for _, missing := range barrier.Missing {
+			if missing == stageEntitySupplyChainFastAssembly {
+				found = true
+				break
+			}
+		}
+		if !found {
+			barrier.Missing = append(barrier.Missing, stageEntitySupplyChainFastAssembly)
+		}
+		barrier.Ready = false
+	}
 	degraded, degradeDetails := collectPipelineDegradation(job)
 
 	outcome := TerminalOutcomeCompleted

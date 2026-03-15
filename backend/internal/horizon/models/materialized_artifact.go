@@ -10,16 +10,17 @@ import (
 type MaterializedKind string
 
 const (
-	MaterializedKindSupplyChainPath     MaterializedKind = "SUPPLY_CHAIN_PATH"
-	MaterializedKindRegulatoryImpactMap MaterializedKind = "REGULATORY_IMPACT_MAP"
-	MaterializedKindGovernanceChain     MaterializedKind = "GOVERNANCE_CHAIN"
-	MaterializedKindEcosystemMap        MaterializedKind = "ECOSYSTEM_MAP"
+	MaterializedKindSupplyChainPath          MaterializedKind = "SUPPLY_CHAIN_PATH"
+	MaterializedKindSupplyChainAssemblyGraph MaterializedKind = "SUPPLY_CHAIN_ASSEMBLY_GRAPH"
+	MaterializedKindRegulatoryImpactMap      MaterializedKind = "REGULATORY_IMPACT_MAP"
+	MaterializedKindGovernanceChain          MaterializedKind = "GOVERNANCE_CHAIN"
+	MaterializedKindEcosystemMap             MaterializedKind = "ECOSYSTEM_MAP"
 )
 
 // Valid checks if the MaterializedKind is valid.
 func (k MaterializedKind) Valid() bool {
 	switch k {
-	case MaterializedKindSupplyChainPath, MaterializedKindRegulatoryImpactMap, MaterializedKindGovernanceChain, MaterializedKindEcosystemMap:
+	case MaterializedKindSupplyChainPath, MaterializedKindSupplyChainAssemblyGraph, MaterializedKindRegulatoryImpactMap, MaterializedKindGovernanceChain, MaterializedKindEcosystemMap:
 		return true
 	default:
 		return false
@@ -156,6 +157,10 @@ func (a *MaterializedArtifact) Validate() error {
 		if err := validateSupplyChainPathPayload(a.Payload); err != nil {
 			return fmt.Errorf("invalid SUPPLY_CHAIN_PATH payload: %w", err)
 		}
+	case MaterializedKindSupplyChainAssemblyGraph:
+		if err := validateSupplyChainAssemblyGraphPayload(a.Payload); err != nil {
+			return fmt.Errorf("invalid SUPPLY_CHAIN_ASSEMBLY_GRAPH payload: %w", err)
+		}
 	case MaterializedKindRegulatoryImpactMap, MaterializedKindGovernanceChain, MaterializedKindEcosystemMap:
 		if err := validateRelationsGraphPayload(a.Payload); err != nil {
 			return fmt.Errorf("invalid %s payload: %w", string(a.Kind), err)
@@ -272,6 +277,80 @@ type SupplyChainPathPayload struct {
 
 	// Notes: optional metadata about how the path was built.
 	Notes map[string]interface{} `json:"notes,omitempty"`
+}
+
+type SupplyChainAssemblyGraphPayload struct {
+	Version                         int                                  `json:"v"`
+	AnchorSet                       []string                             `json:"anchorSet,omitempty"`
+	SourceAnchors                   []string                             `json:"sourceAnchors,omitempty"`
+	ResolvedAnchors                 []string                             `json:"resolvedAnchors,omitempty"`
+	UnresolvedAnchors               []string                             `json:"unresolvedAnchors,omitempty"`
+	AnchorProducts                  []string                             `json:"anchorProducts,omitempty"`
+	AnchorComponents                []SupplyChainAssemblyAnchorComponent `json:"anchorComponents,omitempty"`
+	ProductNodes                    []SupplyChainAssemblyNode            `json:"productNodes,omitempty"`
+	ActorNodes                      []SupplyChainAssemblyNode            `json:"actorNodes,omitempty"`
+	SupplyEdges                     []SupplyChainAssemblySupplyEdge      `json:"supplyEdges,omitempty"`
+	TransformEdges                  []SupplyChainAssemblyTransformEdge   `json:"transformEdges,omitempty"`
+	AssemblyEdges                   []SupplyChainAssemblyTransformEdge   `json:"assemblyEdges,omitempty"`
+	RouteBindings                   []SupplyChainAssemblyRouteBinding    `json:"routeBindings,omitempty"`
+	Coverage                        *SupplyChainAssemblyCoverage         `json:"coverage,omitempty"`
+	OpenGaps                        []string                             `json:"openGaps,omitempty"`
+	DerivedPathKeys                 []string                             `json:"derivedPathKeys,omitempty"`
+	Stage                           string                               `json:"stage,omitempty"`
+	Provisional                     bool                                 `json:"provisional,omitempty"`
+	SourceMode                      string                               `json:"sourceMode,omitempty"`
+	BackgroundContinuationScheduled bool                                 `json:"backgroundContinuationScheduled,omitempty"`
+	BackgroundContinuationJobIDs    []string                             `json:"backgroundContinuationJobIds,omitempty"`
+	Notes                           map[string]interface{}               `json:"notes,omitempty"`
+}
+
+type SupplyChainAssemblyAnchorComponent struct {
+	Anchors     []string `json:"anchors,omitempty"`
+	ProductRefs []string `json:"productRefs,omitempty"`
+	ActorRefs   []string `json:"actorRefs,omitempty"`
+	Status      string   `json:"status,omitempty"`
+}
+
+type SupplyChainAssemblyNode struct {
+	Type string `json:"type"`
+	Ref  string `json:"ref"`
+	Name string `json:"name,omitempty"`
+	Role string `json:"role,omitempty"`
+}
+
+type SupplyChainAssemblySupplyEdge struct {
+	SupplierRef             string                 `json:"supplierRef,omitempty"`
+	ProductRef              string                 `json:"productRef,omitempty"`
+	CustomerRef             string                 `json:"customerRef,omitempty"`
+	SupplyLinkCanonicalPath string                 `json:"supplyLinkCanonicalPath,omitempty"`
+	SupplyLinkID            string                 `json:"supplyLinkId,omitempty"`
+	TransportViaRefs        []string               `json:"transportViaRefs,omitempty"`
+	Confidence              float64                `json:"confidence,omitempty"`
+	Status                  string                 `json:"status,omitempty"`
+	Metrics                 map[string]MetricValue `json:"metrics,omitempty"`
+}
+
+type SupplyChainAssemblyTransformEdge struct {
+	FromProductRef string `json:"fromProductRef,omitempty"`
+	ToProductRef   string `json:"toProductRef,omitempty"`
+	Relation       string `json:"relation,omitempty"`
+	Status         string `json:"status,omitempty"`
+}
+
+type SupplyChainAssemblyRouteBinding struct {
+	ProductRef              string   `json:"productRef,omitempty"`
+	SupplyLinkCanonicalPath string   `json:"supplyLinkCanonicalPath,omitempty"`
+	ViaRefs                 []string `json:"viaRefs,omitempty"`
+}
+
+type SupplyChainAssemblyCoverage struct {
+	ProductsN        int  `json:"productsN,omitempty"`
+	ActorsN          int  `json:"actorsN,omitempty"`
+	SuppliersN       int  `json:"suppliersN,omitempty"`
+	TransformationsN int  `json:"transformationsN,omitempty"`
+	DerivedPathsN    int  `json:"derivedPathsN,omitempty"`
+	UnresolvedLeaves int  `json:"unresolvedLeaves,omitempty"`
+	Truncated        bool `json:"truncated,omitempty"`
 }
 
 // SupplyChainPathNode represents a node in a supply chain path.
@@ -558,6 +637,139 @@ func validateSupplyChainPathPayload(payload map[string]interface{}) error {
 		}
 	}
 
+	return nil
+}
+
+func validateSupplyChainAssemblyGraphPayload(payload map[string]interface{}) error {
+	if payload == nil {
+		return fmt.Errorf("payload is nil")
+	}
+	v, ok := payload["v"]
+	if !ok {
+		return fmt.Errorf("payload missing version field 'v'")
+	}
+	version, ok := toFloat64(v)
+	if !ok {
+		return fmt.Errorf("payload version 'v' must be a number")
+	}
+	if int(version) != 1 {
+		return fmt.Errorf("unsupported payload version: %d (expected 1)", int(version))
+	}
+	anchorSet, err := decodeStringSlice(payload["anchorSet"])
+	if err != nil {
+		return err
+	}
+	sourceAnchors, err := decodeStringSlice(payload["sourceAnchors"])
+	if err != nil {
+		return err
+	}
+	resolvedAnchors, err := decodeStringSlice(payload["resolvedAnchors"])
+	if err != nil {
+		return err
+	}
+	if _, err := decodeStringSlice(payload["unresolvedAnchors"]); err != nil {
+		return err
+	}
+	anchorProducts, err := decodeStringSlice(payload["anchorProducts"])
+	if err != nil {
+		return err
+	}
+	if len(anchorSet) == 0 && len(sourceAnchors) == 0 && len(resolvedAnchors) == 0 && len(anchorProducts) == 0 {
+		return fmt.Errorf("payload must include anchorSet, sourceAnchors, resolvedAnchors, or anchorProducts")
+	}
+	if _, err := decodeSupplyChainAssemblyAnchorComponents(payload["anchorComponents"]); err != nil {
+		return err
+	}
+	productNodes, err := decodeSupplyChainAssemblyNodes(payload["productNodes"])
+	if err != nil {
+		return err
+	}
+	for i, node := range productNodes {
+		if strings.TrimSpace(node.Ref) == "" || !strings.HasPrefix(strings.TrimSpace(node.Ref), "/product/") {
+			return fmt.Errorf("payload productNode[%d] must reference /product/...", i)
+		}
+	}
+	actorNodes, err := decodeSupplyChainAssemblyNodes(payload["actorNodes"])
+	if err != nil {
+		return err
+	}
+	for i, node := range actorNodes {
+		ref := strings.TrimSpace(node.Ref)
+		if ref == "" || !strings.HasPrefix(ref, "/") {
+			return fmt.Errorf("payload actorNode[%d] must reference canonical path", i)
+		}
+	}
+	if len(productNodes) == 0 && len(actorNodes) == 0 {
+		return fmt.Errorf("payload requires productNodes or actorNodes")
+	}
+	supplyEdges, err := decodeSupplyChainAssemblySupplyEdges(payload["supplyEdges"])
+	if err != nil {
+		return err
+	}
+	for i, edge := range supplyEdges {
+		if strings.TrimSpace(edge.ProductRef) == "" || !strings.HasPrefix(strings.TrimSpace(edge.ProductRef), "/product/") {
+			return fmt.Errorf("payload supplyEdge[%d] must reference productRef", i)
+		}
+	}
+	transformEdges, err := decodeSupplyChainAssemblyTransformEdges(payload["transformEdges"])
+	if err != nil {
+		return err
+	}
+	for i, edge := range transformEdges {
+		if strings.TrimSpace(edge.FromProductRef) == "" || strings.TrimSpace(edge.ToProductRef) == "" {
+			return fmt.Errorf("payload transformEdge[%d] missing product refs", i)
+		}
+	}
+	if _, err := decodeSupplyChainAssemblyTransformEdges(payload["assemblyEdges"]); err != nil {
+		return err
+	}
+	if _, err := decodeSupplyChainAssemblyRouteBindings(payload["routeBindings"]); err != nil {
+		return err
+	}
+	if _, err := decodeSupplyChainAssemblyCoverage(payload["coverage"]); err != nil {
+		return err
+	}
+	if _, err := decodeStringSlice(payload["openGaps"]); err != nil {
+		return err
+	}
+	if _, err := decodeStringSlice(payload["derivedPathKeys"]); err != nil {
+		return err
+	}
+	stage := ""
+	if raw, ok := payload["stage"].(string); ok {
+		stage = strings.TrimSpace(raw)
+	}
+	if stage != "" {
+		switch stage {
+		case "fast", "refined":
+		default:
+			return fmt.Errorf("payload stage must be 'fast' or 'refined'")
+		}
+	}
+	sourceMode := ""
+	if raw, ok := payload["sourceMode"].(string); ok {
+		sourceMode = strings.TrimSpace(raw)
+	}
+	if sourceMode != "" {
+		switch sourceMode {
+		case "chain_context", "supply_links", "mixed":
+		default:
+			return fmt.Errorf("payload sourceMode must be chain_context, supply_links, or mixed")
+		}
+	}
+	if _, ok := payload["provisional"]; ok {
+		if _, ok := payload["provisional"].(bool); !ok {
+			return fmt.Errorf("payload 'provisional' must be a bool")
+		}
+	}
+	if _, ok := payload["backgroundContinuationScheduled"]; ok {
+		if _, ok := payload["backgroundContinuationScheduled"].(bool); !ok {
+			return fmt.Errorf("payload 'backgroundContinuationScheduled' must be a bool")
+		}
+	}
+	if _, err := decodeStringSlice(payload["backgroundContinuationJobIds"]); err != nil {
+		return err
+	}
 	return nil
 }
 

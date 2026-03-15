@@ -840,7 +840,7 @@ func (b *SupplyChainPathBuilder) MaterializePath(
 		AnchorCustomer:   strings.TrimSpace(labels["anchorCustomer"]),
 		ProductAxis:      strings.TrimSpace(labels["productAxis"]),
 	}
-	models.PopulateSupplyChainPathIndexes(artifact)
+	models.PopulateMaterializedArtifactIndexes(artifact)
 
 	// Check if artifact already exists — merge instead of overwrite
 	existing, err := b.artifactsRepo.GetByCanonicalKey(ctx, tenantID, models.MaterializedKindSupplyChainPath, canonicalKey)
@@ -942,7 +942,7 @@ func (b *SupplyChainPathBuilder) MaterializePathsBatch(
 			AnchorCustomer:   strings.TrimSpace(labels["anchorCustomer"]),
 			ProductAxis:      strings.TrimSpace(labels["productAxis"]),
 		}
-		models.PopulateSupplyChainPathIndexes(artifact)
+		models.PopulateMaterializedArtifactIndexes(artifact)
 		if existing := existingMap[key]; existing != nil {
 			merged := models.MergePayloads(existing.Payload, artifact.Payload)
 			artifact.Payload = merged
@@ -1044,7 +1044,7 @@ func (b *SupplyChainPathBuilder) RebuildFromSupplyLinks(ctx context.Context, art
 
 	artifact.Payload = merged
 	artifact.NodeRefs = mergeStringSlices(artifact.NodeRefs, newNodeRefs)
-	models.PopulateSupplyChainPathIndexes(artifact)
+	models.PopulateMaterializedArtifactIndexes(artifact)
 	artifact.UpdatedAt = time.Now().UTC()
 
 	if artifact.PathStatus == "validated" && models.PayloadNodesChanged(artifact.Payload, merged) {

@@ -123,7 +123,7 @@ func (r *MaterializedArtifactsRepository) Create(ctx context.Context, artifact *
 	if artifact == nil {
 		return "", fmt.Errorf("artifact is nil")
 	}
-	horizonmodels.PopulateSupplyChainPathIndexes(artifact)
+	horizonmodels.PopulateMaterializedArtifactIndexes(artifact)
 
 	if err := artifact.Validate(); err != nil {
 		return "", fmt.Errorf("validation failed: %w", err)
@@ -259,7 +259,7 @@ func (r *MaterializedArtifactsRepository) Update(ctx context.Context, artifact *
 	if artifact.ID == "" {
 		return fmt.Errorf("id is required")
 	}
-	horizonmodels.PopulateSupplyChainPathIndexes(artifact)
+	horizonmodels.PopulateMaterializedArtifactIndexes(artifact)
 
 	if err := artifact.Validate(); err != nil {
 		return fmt.Errorf("validation failed: %w", err)
@@ -340,7 +340,7 @@ func (r *MaterializedArtifactsRepository) BatchUpsert(ctx context.Context, artif
 			if a == nil {
 				continue
 			}
-			horizonmodels.PopulateSupplyChainPathIndexes(a)
+			horizonmodels.PopulateMaterializedArtifactIndexes(a)
 			if err := a.Validate(); err != nil {
 				return ids, fmt.Errorf("artifact validation failed: %w", err)
 			}
@@ -390,7 +390,7 @@ func (r *MaterializedArtifactsRepository) Upsert(ctx context.Context, artifact *
 	if artifact.CanonicalKey == "" {
 		return fmt.Errorf("canonicalKey is required for upsert")
 	}
-	horizonmodels.PopulateSupplyChainPathIndexes(artifact)
+	horizonmodels.PopulateMaterializedArtifactIndexes(artifact)
 	if artifact.TenantID == "" {
 		return fmt.Errorf("tenantID is required")
 	}
@@ -561,7 +561,7 @@ func (r *MaterializedArtifactsRepository) findByArrayFieldAny(ctx context.Contex
 			if err := doc.DataTo(&artifact); err != nil {
 				continue
 			}
-			horizonmodels.PopulateSupplyChainPathIndexes(&artifact)
+			horizonmodels.PopulateMaterializedArtifactIndexes(&artifact)
 			if _, ok := seen[artifact.ID]; ok {
 				continue
 			}

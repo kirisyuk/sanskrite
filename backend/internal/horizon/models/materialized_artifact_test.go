@@ -538,6 +538,123 @@ func TestRepairSupplyChainPathLinkage_SynthesizesLegacyLegs(t *testing.T) {
 	}
 }
 
+func TestBuildSupplyChainAssemblyGraphPayload_ParseAndValidate(t *testing.T) {
+	payload := BuildSupplyChainAssemblyGraphPayload(
+		[]string{"/product/device/electronics/smartphone"},
+		[]SupplyChainAssemblyNode{
+			{Type: "product", Ref: "/product/material/lithium"},
+			{Type: "product", Ref: "/product/device/electronics/smartphone"},
+		},
+		[]SupplyChainAssemblyNode{
+			{Type: "org", Ref: "/org/global/battery-maker", Role: "supplier"},
+			{Type: "fac", Ref: "/fac/cn/shenzhen/port-yantian", Role: "route"},
+		},
+		[]SupplyChainAssemblySupplyEdge{
+			{
+				SupplierRef:             "/org/global/battery-maker",
+				ProductRef:              "/product/material/lithium",
+				CustomerRef:             "/org/global/phone-assembler",
+				SupplyLinkCanonicalPath: "/supply-link/global/battery",
+				TransportViaRefs:        []string{"/fac/cn/shenzhen/port-yantian"},
+				Confidence:              0.91,
+			},
+		},
+		[]SupplyChainAssemblyTransformEdge{
+			{FromProductRef: "/product/material/lithium", ToProductRef: "/product/device/electronics/smartphone", Relation: "TRANSFORMS_INTO", Status: "validated"},
+		},
+		[]SupplyChainAssemblyTransformEdge{
+			{FromProductRef: "/product/component/battery-pack", ToProductRef: "/product/device/electronics/smartphone", Relation: "ASSEMBLES_INTO", Status: "inferred"},
+		},
+		[]SupplyChainAssemblyRouteBinding{
+			{ProductRef: "/product/material/lithium", SupplyLinkCanonicalPath: "/supply-link/global/battery", ViaRefs: []string{"/fac/cn/shenzhen/port-yantian"}},
+		},
+		&SupplyChainAssemblyCoverage{ProductsN: 2, ActorsN: 2, SuppliersN: 1, TransformationsN: 1, DerivedPathsN: 3},
+		[]string{"camera_branch_missing"},
+		[]string{"/supply-chain/global/path-1"},
+		map[string]interface{}{"graphLayer": "assembly_graph"},
+	)
+
+	artifact := &MaterializedArtifact{
+		TenantID:     "global",
+		Kind:         MaterializedKindSupplyChainAssemblyGraph,
+		CanonicalKey: "/supply-chain-assembly/global/test-smartphone",
+		Payload:      payload,
+		Status:       "active",
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	}
+	if err := artifact.Validate(); err != nil {
+		t.Fatalf("assembly artifact should validate: %v", err)
+	}
+
+	parsed, err := ParseSupplyChainAssemblyGraphPayload(payload)
+	if err != nil {
+		t.Fatalf("ParseSupplyChainAssemblyGraphPayload() error = %v", err)
+	}
+	if len(parsed.AnchorProducts) != 1 || parsed.AnchorProducts[0] != "/product/device/electronics/smartphone" {
+		t.Fatalf("anchorProducts=%v", parsed.AnchorProducts)
+	}
+	if parsed.Coverage == nil || parsed.Coverage.DerivedPathsN != 3 {
+		t.Fatalf("coverage=%+v, want DerivedPathsN=3", parsed.Coverage)
+	}
+	if len(parsed.RouteBindings) != 1 {
+		t.Fatalf("routeBindings=%d, want 1", len(parsed.RouteBindings))
+	}
+}
+
+func TestReplaceCanonicalPathInArtifact_AssemblyGraph(t *testing.T) {
+	artifact := &MaterializedArtifact{
+		TenantID:     "global",
+		Kind:         MaterializedKindSupplyChainAssemblyGraph,
+		CanonicalKey: "/supply-chain-assembly/global/test-smartphone",
+		Payload: BuildSupplyChainAssemblyGraphPayload(
+			[]string{"/product/device/electronics/smartphone"},
+			[]SupplyChainAssemblyNode{
+				{Type: "product", Ref: "/product/component/battery-pack"},
+				{Type: "product", Ref: "/product/device/electronics/smartphone"},
+			},
+			[]SupplyChainAssemblyNode{
+				{Type: "org", Ref: "/org/global/battery-maker"},
+			},
+			[]SupplyChainAssemblySupplyEdge{
+				{
+					SupplierRef:             "/org/global/battery-maker",
+					ProductRef:              "/product/component/battery-pack",
+					CustomerRef:             "/org/global/phone-assembler",
+					SupplyLinkCanonicalPath: "/supply-link/global/battery",
+				},
+			},
+			[]SupplyChainAssemblyTransformEdge{
+				{FromProductRef: "/product/component/battery-pack", ToProductRef: "/product/device/electronics/smartphone", Relation: "TRANSFORMS_INTO"},
+			},
+			nil,
+			nil,
+			&SupplyChainAssemblyCoverage{ProductsN: 2},
+			nil,
+			nil,
+			nil,
+		),
+	}
+
+	changed := ReplaceCanonicalPathInArtifact(artifact, "/product/component/battery-pack", "/product/component/battery-module")
+	if !changed {
+		t.Fatal("expected replacement to report changed=true")
+	}
+	parsed, err := ParseSupplyChainAssemblyGraphPayload(artifact.Payload)
+	if err != nil {
+		t.Fatalf("ParseSupplyChainAssemblyGraphPayload() error = %v", err)
+	}
+	if parsed.ProductNodes[0].Ref != "/product/component/battery-module" {
+		t.Fatalf("product node ref=%q, want replacement", parsed.ProductNodes[0].Ref)
+	}
+	if parsed.SupplyEdges[0].ProductRef != "/product/component/battery-module" {
+		t.Fatalf("supply edge product=%q, want replacement", parsed.SupplyEdges[0].ProductRef)
+	}
+	if parsed.TransformEdges[0].FromProductRef != "/product/component/battery-module" {
+		t.Fatalf("transform from=%q, want replacement", parsed.TransformEdges[0].FromProductRef)
+	}
+}
+
 func intPtr(i int) *int {
 	return &i
 }

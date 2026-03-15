@@ -3202,7 +3202,7 @@ func (e *ScoutEngine) finalizePipelinePassIfNeeded(
 	if strings.TrimSpace(string(passName)) == "" {
 		hint = "pipeline_pass"
 	}
-	pipelineName, requiredStages := requiredStagesForPipelinePass(passName)
+	pipelineName, requiredStages := requiredStagesForPipelinePassJob(job, passName)
 	return e.finalizePipelineRun(ctx, job, pipelineFinalizeInput{
 		Pipeline:       pipelineName,
 		RequiredStages: requiredStages,
@@ -3240,7 +3240,7 @@ func (e *ScoutEngine) runPipelinePass(
 		EffectiveCanonicalPath: effectiveCanonicalPath,
 		ExistingFragment:       existingFragment,
 	}); err != nil {
-		pipelineName, requiredStages := requiredStagesForPipelinePass(passName)
+		pipelineName, requiredStages := requiredStagesForPipelinePassJob(job, passName)
 		e.pipelineStageFail(ctx, job, pipelineName, stageMaterialize, true, "pipeline_pass_failed", true, err)
 		if finalizeErr := e.finalizePipelineRun(ctx, job, pipelineFinalizeInput{
 			Pipeline:       pipelineName,

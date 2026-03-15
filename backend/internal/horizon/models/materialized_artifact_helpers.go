@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 type SupplyChainLinkageSummary struct {
@@ -107,6 +109,215 @@ func decodeSupplyChainPathLegs(raw interface{}) ([]SupplyChainPathLeg, error) {
 	}
 }
 
+func decodeStringSlice(raw interface{}) ([]string, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	switch values := raw.(type) {
+	case []string:
+		return append([]string(nil), values...), nil
+	case []interface{}:
+		out := make([]string, 0, len(values))
+		for i, value := range values {
+			text := strings.TrimSpace(fmt.Sprint(value))
+			if text == "<nil>" {
+				return nil, fmt.Errorf("payload string[%d] must not be nil", i)
+			}
+			if text != "" {
+				out = append(out, text)
+			}
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("payload value must be a string array")
+	}
+}
+
+func decodeSupplyChainAssemblyNodes(raw interface{}) ([]SupplyChainAssemblyNode, error) {
+	switch nodes := raw.(type) {
+	case nil:
+		return nil, nil
+	case []SupplyChainAssemblyNode:
+		return nodes, nil
+	case []interface{}:
+		out := make([]SupplyChainAssemblyNode, 0, len(nodes))
+		for i, n := range nodes {
+			switch node := n.(type) {
+			case SupplyChainAssemblyNode:
+				out = append(out, node)
+			case map[string]interface{}:
+				nodeJSON, err := json.Marshal(node)
+				if err != nil {
+					return nil, fmt.Errorf("payload assembly node[%d] marshal failed: %w", i, err)
+				}
+				var parsed SupplyChainAssemblyNode
+				if err := json.Unmarshal(nodeJSON, &parsed); err != nil {
+					return nil, fmt.Errorf("payload assembly node[%d] unmarshal failed: %w", i, err)
+				}
+				out = append(out, parsed)
+			default:
+				return nil, fmt.Errorf("payload assembly node[%d] must be an object", i)
+			}
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("payload assembly nodes must be an array")
+	}
+}
+
+func decodeSupplyChainAssemblyAnchorComponents(raw interface{}) ([]SupplyChainAssemblyAnchorComponent, error) {
+	switch components := raw.(type) {
+	case nil:
+		return nil, nil
+	case []SupplyChainAssemblyAnchorComponent:
+		return components, nil
+	case []interface{}:
+		out := make([]SupplyChainAssemblyAnchorComponent, 0, len(components))
+		for i, value := range components {
+			switch component := value.(type) {
+			case SupplyChainAssemblyAnchorComponent:
+				out = append(out, component)
+			case map[string]interface{}:
+				componentJSON, err := json.Marshal(component)
+				if err != nil {
+					return nil, fmt.Errorf("payload assembly anchorComponent[%d] marshal failed: %w", i, err)
+				}
+				var parsed SupplyChainAssemblyAnchorComponent
+				if err := json.Unmarshal(componentJSON, &parsed); err != nil {
+					return nil, fmt.Errorf("payload assembly anchorComponent[%d] unmarshal failed: %w", i, err)
+				}
+				out = append(out, parsed)
+			default:
+				return nil, fmt.Errorf("payload assembly anchorComponent[%d] must be an object", i)
+			}
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("payload assembly anchorComponents must be an array")
+	}
+}
+
+func decodeSupplyChainAssemblySupplyEdges(raw interface{}) ([]SupplyChainAssemblySupplyEdge, error) {
+	switch edges := raw.(type) {
+	case nil:
+		return nil, nil
+	case []SupplyChainAssemblySupplyEdge:
+		return edges, nil
+	case []interface{}:
+		out := make([]SupplyChainAssemblySupplyEdge, 0, len(edges))
+		for i, value := range edges {
+			switch edge := value.(type) {
+			case SupplyChainAssemblySupplyEdge:
+				out = append(out, edge)
+			case map[string]interface{}:
+				edgeJSON, err := json.Marshal(edge)
+				if err != nil {
+					return nil, fmt.Errorf("payload assembly supplyEdge[%d] marshal failed: %w", i, err)
+				}
+				var parsed SupplyChainAssemblySupplyEdge
+				if err := json.Unmarshal(edgeJSON, &parsed); err != nil {
+					return nil, fmt.Errorf("payload assembly supplyEdge[%d] unmarshal failed: %w", i, err)
+				}
+				out = append(out, parsed)
+			default:
+				return nil, fmt.Errorf("payload assembly supplyEdge[%d] must be an object", i)
+			}
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("payload assembly supplyEdges must be an array")
+	}
+}
+
+func decodeSupplyChainAssemblyTransformEdges(raw interface{}) ([]SupplyChainAssemblyTransformEdge, error) {
+	switch edges := raw.(type) {
+	case nil:
+		return nil, nil
+	case []SupplyChainAssemblyTransformEdge:
+		return edges, nil
+	case []interface{}:
+		out := make([]SupplyChainAssemblyTransformEdge, 0, len(edges))
+		for i, value := range edges {
+			switch edge := value.(type) {
+			case SupplyChainAssemblyTransformEdge:
+				out = append(out, edge)
+			case map[string]interface{}:
+				edgeJSON, err := json.Marshal(edge)
+				if err != nil {
+					return nil, fmt.Errorf("payload assembly transformEdge[%d] marshal failed: %w", i, err)
+				}
+				var parsed SupplyChainAssemblyTransformEdge
+				if err := json.Unmarshal(edgeJSON, &parsed); err != nil {
+					return nil, fmt.Errorf("payload assembly transformEdge[%d] unmarshal failed: %w", i, err)
+				}
+				out = append(out, parsed)
+			default:
+				return nil, fmt.Errorf("payload assembly transformEdge[%d] must be an object", i)
+			}
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("payload assembly transformEdges must be an array")
+	}
+}
+
+func decodeSupplyChainAssemblyRouteBindings(raw interface{}) ([]SupplyChainAssemblyRouteBinding, error) {
+	switch bindings := raw.(type) {
+	case nil:
+		return nil, nil
+	case []SupplyChainAssemblyRouteBinding:
+		return bindings, nil
+	case []interface{}:
+		out := make([]SupplyChainAssemblyRouteBinding, 0, len(bindings))
+		for i, value := range bindings {
+			switch binding := value.(type) {
+			case SupplyChainAssemblyRouteBinding:
+				out = append(out, binding)
+			case map[string]interface{}:
+				bindingJSON, err := json.Marshal(binding)
+				if err != nil {
+					return nil, fmt.Errorf("payload assembly routeBinding[%d] marshal failed: %w", i, err)
+				}
+				var parsed SupplyChainAssemblyRouteBinding
+				if err := json.Unmarshal(bindingJSON, &parsed); err != nil {
+					return nil, fmt.Errorf("payload assembly routeBinding[%d] unmarshal failed: %w", i, err)
+				}
+				out = append(out, parsed)
+			default:
+				return nil, fmt.Errorf("payload assembly routeBinding[%d] must be an object", i)
+			}
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("payload assembly routeBindings must be an array")
+	}
+}
+
+func decodeSupplyChainAssemblyCoverage(raw interface{}) (*SupplyChainAssemblyCoverage, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	switch typed := raw.(type) {
+	case *SupplyChainAssemblyCoverage:
+		return typed, nil
+	case SupplyChainAssemblyCoverage:
+		copy := typed
+		return &copy, nil
+	case map[string]interface{}:
+		coverageJSON, err := json.Marshal(typed)
+		if err != nil {
+			return nil, fmt.Errorf("payload assembly coverage marshal failed: %w", err)
+		}
+		var parsed SupplyChainAssemblyCoverage
+		if err := json.Unmarshal(coverageJSON, &parsed); err != nil {
+			return nil, fmt.Errorf("payload assembly coverage unmarshal failed: %w", err)
+		}
+		return &parsed, nil
+	default:
+		return nil, fmt.Errorf("payload assembly coverage must be an object")
+	}
+}
+
 // BuildSupplyChainPathPayload creates a v1 SUPPLY_CHAIN_PATH payload from nodes, edges, optional legs, and stress profile.
 func BuildSupplyChainPathPayload(nodes []SupplyChainPathNode, edges []SupplyChainPathEdge, legs []SupplyChainPathLeg, stress *SupplyChainPathStress, notes map[string]interface{}) map[string]interface{} {
 	return BuildSupplyChainPathPayloadWithSufficiency(nodes, edges, legs, stress, nil, notes)
@@ -138,6 +349,133 @@ func BuildSupplyChainPathPayloadDetailed(nodes []SupplyChainPathNode, edges []Su
 	}
 	if len(notes) > 0 {
 		payload["notes"] = notes
+	}
+	return payload
+}
+
+type SupplyChainAssemblyGraphPayloadOptions struct {
+	AnchorSet                       []string
+	SourceAnchors                   []string
+	ResolvedAnchors                 []string
+	UnresolvedAnchors               []string
+	AnchorProducts                  []string
+	AnchorComponents                []SupplyChainAssemblyAnchorComponent
+	ProductNodes                    []SupplyChainAssemblyNode
+	ActorNodes                      []SupplyChainAssemblyNode
+	SupplyEdges                     []SupplyChainAssemblySupplyEdge
+	TransformEdges                  []SupplyChainAssemblyTransformEdge
+	AssemblyEdges                   []SupplyChainAssemblyTransformEdge
+	RouteBindings                   []SupplyChainAssemblyRouteBinding
+	Coverage                        *SupplyChainAssemblyCoverage
+	OpenGaps                        []string
+	DerivedPathKeys                 []string
+	Stage                           string
+	Provisional                     bool
+	SourceMode                      string
+	BackgroundContinuationScheduled bool
+	BackgroundContinuationJobIDs    []string
+	Notes                           map[string]interface{}
+}
+
+func BuildSupplyChainAssemblyGraphPayload(
+	anchorProducts []string,
+	productNodes []SupplyChainAssemblyNode,
+	actorNodes []SupplyChainAssemblyNode,
+	supplyEdges []SupplyChainAssemblySupplyEdge,
+	transformEdges []SupplyChainAssemblyTransformEdge,
+	assemblyEdges []SupplyChainAssemblyTransformEdge,
+	routeBindings []SupplyChainAssemblyRouteBinding,
+	coverage *SupplyChainAssemblyCoverage,
+	openGaps []string,
+	derivedPathKeys []string,
+	notes map[string]interface{},
+) map[string]interface{} {
+	return BuildSupplyChainAssemblyGraphPayloadDetailed(SupplyChainAssemblyGraphPayloadOptions{
+		AnchorSet:       anchorProducts,
+		SourceAnchors:   anchorProducts,
+		ResolvedAnchors: anchorProducts,
+		AnchorProducts:  anchorProducts,
+		ProductNodes:    productNodes,
+		ActorNodes:      actorNodes,
+		SupplyEdges:     supplyEdges,
+		TransformEdges:  transformEdges,
+		AssemblyEdges:   assemblyEdges,
+		RouteBindings:   routeBindings,
+		Coverage:        coverage,
+		OpenGaps:        openGaps,
+		DerivedPathKeys: derivedPathKeys,
+		Stage:           "refined",
+		SourceMode:      "supply_links",
+		Notes:           notes,
+	})
+}
+
+func BuildSupplyChainAssemblyGraphPayloadDetailed(opts SupplyChainAssemblyGraphPayloadOptions) map[string]interface{} {
+	payload := map[string]interface{}{
+		"v": 1,
+	}
+	if len(opts.AnchorSet) > 0 {
+		payload["anchorSet"] = opts.AnchorSet
+	}
+	if len(opts.SourceAnchors) > 0 {
+		payload["sourceAnchors"] = opts.SourceAnchors
+	}
+	if len(opts.ResolvedAnchors) > 0 {
+		payload["resolvedAnchors"] = opts.ResolvedAnchors
+	}
+	if len(opts.UnresolvedAnchors) > 0 {
+		payload["unresolvedAnchors"] = opts.UnresolvedAnchors
+	}
+	if len(opts.AnchorProducts) > 0 {
+		payload["anchorProducts"] = opts.AnchorProducts
+	}
+	if len(opts.AnchorComponents) > 0 {
+		payload["anchorComponents"] = opts.AnchorComponents
+	}
+	if len(opts.ProductNodes) > 0 {
+		payload["productNodes"] = opts.ProductNodes
+	}
+	if len(opts.ActorNodes) > 0 {
+		payload["actorNodes"] = opts.ActorNodes
+	}
+	if len(opts.SupplyEdges) > 0 {
+		payload["supplyEdges"] = opts.SupplyEdges
+	}
+	if len(opts.TransformEdges) > 0 {
+		payload["transformEdges"] = opts.TransformEdges
+	}
+	if len(opts.AssemblyEdges) > 0 {
+		payload["assemblyEdges"] = opts.AssemblyEdges
+	}
+	if len(opts.RouteBindings) > 0 {
+		payload["routeBindings"] = opts.RouteBindings
+	}
+	if opts.Coverage != nil {
+		payload["coverage"] = opts.Coverage
+	}
+	if len(opts.OpenGaps) > 0 {
+		payload["openGaps"] = opts.OpenGaps
+	}
+	if len(opts.DerivedPathKeys) > 0 {
+		payload["derivedPathKeys"] = opts.DerivedPathKeys
+	}
+	if strings.TrimSpace(opts.Stage) != "" {
+		payload["stage"] = strings.TrimSpace(opts.Stage)
+	}
+	if opts.Provisional {
+		payload["provisional"] = true
+	}
+	if strings.TrimSpace(opts.SourceMode) != "" {
+		payload["sourceMode"] = strings.TrimSpace(opts.SourceMode)
+	}
+	if opts.BackgroundContinuationScheduled {
+		payload["backgroundContinuationScheduled"] = true
+	}
+	if len(opts.BackgroundContinuationJobIDs) > 0 {
+		payload["backgroundContinuationJobIds"] = opts.BackgroundContinuationJobIDs
+	}
+	if len(opts.Notes) > 0 {
+		payload["notes"] = opts.Notes
 	}
 	return payload
 }
@@ -236,6 +574,116 @@ func ParseSupplyChainPathPayload(payload map[string]interface{}) (*SupplyChainPa
 		Sufficiency: sufficiency,
 		Family:      family,
 		Notes:       notes,
+	}, nil
+}
+
+func ParseSupplyChainAssemblyGraphPayload(payload map[string]interface{}) (*SupplyChainAssemblyGraphPayload, error) {
+	if err := validateSupplyChainAssemblyGraphPayload(payload); err != nil {
+		return nil, err
+	}
+	anchorSet, err := decodeStringSlice(payload["anchorSet"])
+	if err != nil {
+		return nil, err
+	}
+	sourceAnchors, err := decodeStringSlice(payload["sourceAnchors"])
+	if err != nil {
+		return nil, err
+	}
+	resolvedAnchors, err := decodeStringSlice(payload["resolvedAnchors"])
+	if err != nil {
+		return nil, err
+	}
+	unresolvedAnchors, err := decodeStringSlice(payload["unresolvedAnchors"])
+	if err != nil {
+		return nil, err
+	}
+	anchors, err := decodeStringSlice(payload["anchorProducts"])
+	if err != nil {
+		return nil, err
+	}
+	anchorComponents, err := decodeSupplyChainAssemblyAnchorComponents(payload["anchorComponents"])
+	if err != nil {
+		return nil, err
+	}
+	productNodes, err := decodeSupplyChainAssemblyNodes(payload["productNodes"])
+	if err != nil {
+		return nil, err
+	}
+	actorNodes, err := decodeSupplyChainAssemblyNodes(payload["actorNodes"])
+	if err != nil {
+		return nil, err
+	}
+	supplyEdges, err := decodeSupplyChainAssemblySupplyEdges(payload["supplyEdges"])
+	if err != nil {
+		return nil, err
+	}
+	transformEdges, err := decodeSupplyChainAssemblyTransformEdges(payload["transformEdges"])
+	if err != nil {
+		return nil, err
+	}
+	assemblyEdges, err := decodeSupplyChainAssemblyTransformEdges(payload["assemblyEdges"])
+	if err != nil {
+		return nil, err
+	}
+	routeBindings, err := decodeSupplyChainAssemblyRouteBindings(payload["routeBindings"])
+	if err != nil {
+		return nil, err
+	}
+	coverage, err := decodeSupplyChainAssemblyCoverage(payload["coverage"])
+	if err != nil {
+		return nil, err
+	}
+	openGaps, err := decodeStringSlice(payload["openGaps"])
+	if err != nil {
+		return nil, err
+	}
+	derivedPathKeys, err := decodeStringSlice(payload["derivedPathKeys"])
+	if err != nil {
+		return nil, err
+	}
+	notes := map[string]interface{}{}
+	if notesRaw, ok := payload["notes"]; ok {
+		if notesMap, ok := notesRaw.(map[string]interface{}); ok {
+			notes = notesMap
+		}
+	}
+	stage := ""
+	if raw, ok := payload["stage"].(string); ok {
+		stage = strings.TrimSpace(raw)
+	}
+	sourceMode := ""
+	if raw, ok := payload["sourceMode"].(string); ok {
+		sourceMode = strings.TrimSpace(raw)
+	}
+	provisional, _ := payload["provisional"].(bool)
+	backgroundContinuationScheduled, _ := payload["backgroundContinuationScheduled"].(bool)
+	backgroundContinuationJobIDs, err := decodeStringSlice(payload["backgroundContinuationJobIds"])
+	if err != nil {
+		return nil, err
+	}
+	return &SupplyChainAssemblyGraphPayload{
+		Version:                         1,
+		AnchorSet:                       anchorSet,
+		SourceAnchors:                   sourceAnchors,
+		ResolvedAnchors:                 resolvedAnchors,
+		UnresolvedAnchors:               unresolvedAnchors,
+		AnchorProducts:                  anchors,
+		AnchorComponents:                anchorComponents,
+		ProductNodes:                    productNodes,
+		ActorNodes:                      actorNodes,
+		SupplyEdges:                     supplyEdges,
+		TransformEdges:                  transformEdges,
+		AssemblyEdges:                   assemblyEdges,
+		RouteBindings:                   routeBindings,
+		Coverage:                        coverage,
+		OpenGaps:                        openGaps,
+		DerivedPathKeys:                 derivedPathKeys,
+		Stage:                           stage,
+		Provisional:                     provisional,
+		SourceMode:                      sourceMode,
+		BackgroundContinuationScheduled: backgroundContinuationScheduled,
+		BackgroundContinuationJobIDs:    backgroundContinuationJobIDs,
+		Notes:                           notes,
 	}, nil
 }
 
@@ -760,10 +1208,10 @@ func SummarizeSupplyChainPathBindings(parsed *SupplyChainPathPayload) SupplyChai
 	return out
 }
 
-// PopulateSupplyChainPathIndexes fills top-level overlap indexes from payload and labels.
+// PopulateMaterializedArtifactIndexes fills top-level overlap indexes from payload and labels.
 // It is safe for both new and legacy artifacts and does not require persistence.
-func PopulateSupplyChainPathIndexes(artifact *MaterializedArtifact) {
-	if artifact == nil || artifact.Kind != MaterializedKindSupplyChainPath {
+func PopulateMaterializedArtifactIndexes(artifact *MaterializedArtifact) {
+	if artifact == nil {
 		return
 	}
 	artifact.NodeRefs = uniqueTrimmedStrings(artifact.NodeRefs)
@@ -771,18 +1219,25 @@ func PopulateSupplyChainPathIndexes(artifact *MaterializedArtifact) {
 	artifact.FlowRefs = uniqueTrimmedStrings(artifact.FlowRefs)
 	artifact.ZoneRefs = uniqueTrimmedStrings(artifact.ZoneRefs)
 	artifact.AffectedZoneRefs = uniqueTrimmedStrings(artifact.AffectedZoneRefs)
-
-	if parsed, err := ParseSupplyChainPathPayload(artifact.Payload); err == nil && parsed != nil {
-		summary := SummarizeSupplyChainPathBindings(parsed)
-		artifact.NodeRefs = mergeUniqueStrings(artifact.NodeRefs, collectParsedNodeRefs(parsed))
-		artifact.GeoRefs = mergeUniqueStrings(artifact.GeoRefs, summary.GeoRefs)
-		artifact.FlowRefs = mergeUniqueStrings(artifact.FlowRefs, summary.FlowRefs)
-		artifact.ZoneRefs = mergeUniqueStrings(artifact.ZoneRefs, summary.ZoneRefs)
-		artifact.AffectedZoneRefs = mergeUniqueStrings(artifact.AffectedZoneRefs, summary.AffectedZoneRefs)
+	switch artifact.Kind {
+	case MaterializedKindSupplyChainPath:
+		if parsed, err := ParseSupplyChainPathPayload(artifact.Payload); err == nil && parsed != nil {
+			summary := SummarizeSupplyChainPathBindings(parsed)
+			artifact.NodeRefs = mergeUniqueStrings(artifact.NodeRefs, collectParsedNodeRefs(parsed))
+			artifact.GeoRefs = mergeUniqueStrings(artifact.GeoRefs, summary.GeoRefs)
+			artifact.FlowRefs = mergeUniqueStrings(artifact.FlowRefs, summary.FlowRefs)
+			artifact.ZoneRefs = mergeUniqueStrings(artifact.ZoneRefs, summary.ZoneRefs)
+			artifact.AffectedZoneRefs = mergeUniqueStrings(artifact.AffectedZoneRefs, summary.AffectedZoneRefs)
+		}
+		PopulateSupplyChainPathSufficiency(artifact)
+		PopulateSupplyChainPathFamily(artifact)
+	case MaterializedKindSupplyChainAssemblyGraph:
+		if parsed, err := ParseSupplyChainAssemblyGraphPayload(artifact.Payload); err == nil && parsed != nil {
+			artifact.NodeRefs = mergeUniqueStrings(artifact.NodeRefs, collectAssemblyNodeRefs(parsed))
+			artifact.GeoRefs = mergeUniqueStrings(artifact.GeoRefs, collectArtifactGeoRefs(artifact.NodeRefs))
+			artifact.FlowRefs = mergeUniqueStrings(artifact.FlowRefs, collectAssemblyFlowRefs(parsed))
+		}
 	}
-	PopulateSupplyChainPathSufficiency(artifact)
-	PopulateSupplyChainPathFamily(artifact)
-
 	if artifact.Labels != nil {
 		if artifact.AnchorSupplier == "" {
 			artifact.AnchorSupplier = strings.TrimSpace(artifact.Labels["anchorSupplier"])
@@ -791,9 +1246,14 @@ func PopulateSupplyChainPathIndexes(artifact *MaterializedArtifact) {
 			artifact.AnchorCustomer = strings.TrimSpace(artifact.Labels["anchorCustomer"])
 		}
 		if artifact.ProductAxis == "" {
-			artifact.ProductAxis = strings.TrimSpace(artifact.Labels["productAxis"])
+			artifact.ProductAxis = strings.TrimSpace(firstNonEmpty(artifact.Labels["productAxis"], artifact.Labels["anchorProduct"]))
 		}
 	}
+}
+
+// PopulateSupplyChainPathIndexes keeps legacy call sites working.
+func PopulateSupplyChainPathIndexes(artifact *MaterializedArtifact) {
+	PopulateMaterializedArtifactIndexes(artifact)
 }
 
 func collectParsedNodeRefs(parsed *SupplyChainPathPayload) []string {
@@ -808,6 +1268,105 @@ func collectParsedNodeRefs(parsed *SupplyChainPathPayload) []string {
 		}
 	}
 	return uniqueTrimmedStrings(out)
+}
+
+func collectAssemblyNodeRefs(parsed *SupplyChainAssemblyGraphPayload) []string {
+	if parsed == nil {
+		return nil
+	}
+	out := make([]string, 0, len(parsed.ProductNodes)+len(parsed.ActorNodes))
+	for _, node := range parsed.ProductNodes {
+		if ref := strings.TrimSpace(node.Ref); ref != "" {
+			out = append(out, ref)
+		}
+	}
+	for _, node := range parsed.ActorNodes {
+		if ref := strings.TrimSpace(node.Ref); ref != "" {
+			out = append(out, ref)
+		}
+	}
+	for _, binding := range parsed.RouteBindings {
+		for _, ref := range binding.ViaRefs {
+			if strings.TrimSpace(ref) != "" {
+				out = append(out, strings.TrimSpace(ref))
+			}
+		}
+	}
+	return uniqueTrimmedStrings(out)
+}
+
+func collectAssemblyFlowRefs(parsed *SupplyChainAssemblyGraphPayload) []string {
+	if parsed == nil || len(parsed.RouteBindings) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(parsed.RouteBindings))
+	for _, binding := range parsed.RouteBindings {
+		if ref := strings.TrimSpace(binding.SupplyLinkCanonicalPath); ref != "" {
+			out = append(out, ref)
+		}
+	}
+	return uniqueTrimmedStrings(out)
+}
+
+func collectArtifactGeoRefs(nodeRefs []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(nodeRefs))
+	for _, ref := range nodeRefs {
+		geoRef := artifactGeoRef(ref)
+		if geoRef == "" {
+			continue
+		}
+		if _, ok := seen[geoRef]; ok {
+			continue
+		}
+		seen[geoRef] = struct{}{}
+		out = append(out, geoRef)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func artifactGeoRef(ref string) string {
+	parts, err := taxonomy.ParseCanonicalPathParts(strings.TrimSpace(ref))
+	if err != nil || parts == nil {
+		return ""
+	}
+	geo := ""
+	switch parts.Namespace {
+	case "loc":
+		if parts.Loc != nil {
+			geo = parts.Loc.Country
+		}
+	case "org":
+		if parts.Org != nil {
+			geo = parts.Org.Geo
+		}
+	case "gov":
+		if parts.Gov != nil {
+			geo = parts.Gov.Geo
+		}
+	case "fac":
+		if parts.Fac != nil {
+			geo = parts.Fac.Geo
+		}
+	case "market":
+		if parts.Market != nil {
+			geo = parts.Market.Geo
+		}
+	case "community":
+		if parts.Community != nil {
+			geo = parts.Community.Geo
+		}
+	case "program":
+		if parts.Program != nil {
+			geo = parts.Program.Jurisdiction
+		}
+	}
+	geo = strings.ToLower(strings.TrimSpace(geo))
+	if geo == "" || geo == "na" || geo == "int" {
+		return ""
+	}
+	return "/loc/" + geo
 }
 
 func uniqueTrimmedStrings(values []string) []string {
@@ -948,6 +1507,56 @@ func (a *MaterializedArtifact) GenerateVectorText() string {
 				if parsed.Stress != nil && parsed.Stress.PathScore > 0 {
 					b.WriteString("Path Stress: ")
 					b.WriteString(fmt.Sprintf("%.2f", parsed.Stress.PathScore))
+					b.WriteString("\n")
+				}
+			}
+		}
+	case MaterializedKindSupplyChainAssemblyGraph:
+		if a.Payload != nil {
+			parsed, err := ParseSupplyChainAssemblyGraphPayload(a.Payload)
+			if err == nil && parsed != nil {
+				displayAnchors := parsed.ResolvedAnchors
+				if len(displayAnchors) == 0 {
+					displayAnchors = parsed.AnchorSet
+				}
+				if len(displayAnchors) == 0 {
+					displayAnchors = parsed.AnchorProducts
+				}
+				if len(displayAnchors) > 0 {
+					b.WriteString("Anchors: ")
+					b.WriteString(strings.Join(displayAnchors, ", "))
+					b.WriteString("\n")
+				}
+				if len(parsed.ProductNodes) > 0 {
+					b.WriteString("Product Nodes: ")
+					refs := make([]string, 0, len(parsed.ProductNodes))
+					for _, node := range parsed.ProductNodes {
+						refs = append(refs, node.Ref)
+					}
+					b.WriteString(strings.Join(refs, ", "))
+					b.WriteString("\n")
+				}
+				if len(parsed.ActorNodes) > 0 {
+					b.WriteString("Actor Nodes: ")
+					refs := make([]string, 0, len(parsed.ActorNodes))
+					for _, node := range parsed.ActorNodes {
+						refs = append(refs, node.Ref)
+					}
+					b.WriteString(strings.Join(refs, ", "))
+					b.WriteString("\n")
+				}
+				for _, edge := range parsed.TransformEdges {
+					b.WriteString("Transformation: ")
+					b.WriteString(edge.FromProductRef)
+					b.WriteString(" -> ")
+					b.WriteString(edge.ToProductRef)
+					b.WriteString("\n")
+				}
+				for _, edge := range parsed.AssemblyEdges {
+					b.WriteString("Assembly: ")
+					b.WriteString(edge.FromProductRef)
+					b.WriteString(" => ")
+					b.WriteString(edge.ToProductRef)
 					b.WriteString("\n")
 				}
 			}
@@ -1541,6 +2150,117 @@ func ReplaceCanonicalPathInArtifact(artifact *MaterializedArtifact, oldPath, new
 				}
 			}
 			artifact.Payload = BuildSupplyChainPathPayloadDetailed(parsed.Nodes, parsed.Edges, parsed.Legs, parsed.Stress, parsed.Sufficiency, parsed.Family, parsed.Notes)
+		}
+	case MaterializedKindSupplyChainAssemblyGraph:
+		parsed, err := ParseSupplyChainAssemblyGraphPayload(artifact.Payload)
+		if err == nil && parsed != nil {
+			for i := range parsed.ProductNodes {
+				if strings.TrimSpace(parsed.ProductNodes[i].Ref) == oldPath {
+					parsed.ProductNodes[i].Ref = newPath
+					changed = true
+				}
+			}
+			for i := range parsed.ActorNodes {
+				if strings.TrimSpace(parsed.ActorNodes[i].Ref) == oldPath {
+					parsed.ActorNodes[i].Ref = newPath
+					changed = true
+				}
+			}
+			for i := range parsed.SupplyEdges {
+				if strings.TrimSpace(parsed.SupplyEdges[i].SupplierRef) == oldPath {
+					parsed.SupplyEdges[i].SupplierRef = newPath
+					changed = true
+				}
+				if strings.TrimSpace(parsed.SupplyEdges[i].ProductRef) == oldPath {
+					parsed.SupplyEdges[i].ProductRef = newPath
+					changed = true
+				}
+				if strings.TrimSpace(parsed.SupplyEdges[i].CustomerRef) == oldPath {
+					parsed.SupplyEdges[i].CustomerRef = newPath
+					changed = true
+				}
+				if replacePathInStringSlice(parsed.SupplyEdges[i].TransportViaRefs, oldPath, newPath) {
+					changed = true
+				}
+			}
+			for i := range parsed.TransformEdges {
+				if strings.TrimSpace(parsed.TransformEdges[i].FromProductRef) == oldPath {
+					parsed.TransformEdges[i].FromProductRef = newPath
+					changed = true
+				}
+				if strings.TrimSpace(parsed.TransformEdges[i].ToProductRef) == oldPath {
+					parsed.TransformEdges[i].ToProductRef = newPath
+					changed = true
+				}
+			}
+			for i := range parsed.AssemblyEdges {
+				if strings.TrimSpace(parsed.AssemblyEdges[i].FromProductRef) == oldPath {
+					parsed.AssemblyEdges[i].FromProductRef = newPath
+					changed = true
+				}
+				if strings.TrimSpace(parsed.AssemblyEdges[i].ToProductRef) == oldPath {
+					parsed.AssemblyEdges[i].ToProductRef = newPath
+					changed = true
+				}
+			}
+			for i := range parsed.RouteBindings {
+				if strings.TrimSpace(parsed.RouteBindings[i].ProductRef) == oldPath {
+					parsed.RouteBindings[i].ProductRef = newPath
+					changed = true
+				}
+				if replacePathInStringSlice(parsed.RouteBindings[i].ViaRefs, oldPath, newPath) {
+					changed = true
+				}
+			}
+			if replacePathInStringSlice(parsed.AnchorProducts, oldPath, newPath) {
+				changed = true
+			}
+			if replacePathInStringSlice(parsed.AnchorSet, oldPath, newPath) {
+				changed = true
+			}
+			if replacePathInStringSlice(parsed.SourceAnchors, oldPath, newPath) {
+				changed = true
+			}
+			if replacePathInStringSlice(parsed.ResolvedAnchors, oldPath, newPath) {
+				changed = true
+			}
+			if replacePathInStringSlice(parsed.UnresolvedAnchors, oldPath, newPath) {
+				changed = true
+			}
+			for i := range parsed.AnchorComponents {
+				if replacePathInStringSlice(parsed.AnchorComponents[i].Anchors, oldPath, newPath) {
+					changed = true
+				}
+				if replacePathInStringSlice(parsed.AnchorComponents[i].ProductRefs, oldPath, newPath) {
+					changed = true
+				}
+				if replacePathInStringSlice(parsed.AnchorComponents[i].ActorRefs, oldPath, newPath) {
+					changed = true
+				}
+			}
+			artifact.Payload = BuildSupplyChainAssemblyGraphPayloadDetailed(SupplyChainAssemblyGraphPayloadOptions{
+				AnchorSet:                       parsed.AnchorSet,
+				SourceAnchors:                   parsed.SourceAnchors,
+				ResolvedAnchors:                 parsed.ResolvedAnchors,
+				UnresolvedAnchors:               parsed.UnresolvedAnchors,
+				AnchorProducts:                  parsed.AnchorProducts,
+				AnchorComponents:                parsed.AnchorComponents,
+				ProductNodes:                    parsed.ProductNodes,
+				ActorNodes:                      parsed.ActorNodes,
+				SupplyEdges:                     parsed.SupplyEdges,
+				TransformEdges:                  parsed.TransformEdges,
+				AssemblyEdges:                   parsed.AssemblyEdges,
+				RouteBindings:                   parsed.RouteBindings,
+				Coverage:                        parsed.Coverage,
+				OpenGaps:                        parsed.OpenGaps,
+				DerivedPathKeys:                 parsed.DerivedPathKeys,
+				Stage:                           parsed.Stage,
+				Provisional:                     parsed.Provisional,
+				SourceMode:                      parsed.SourceMode,
+				BackgroundContinuationScheduled: parsed.BackgroundContinuationScheduled,
+				BackgroundContinuationJobIDs:    parsed.BackgroundContinuationJobIDs,
+				Notes:                           parsed.Notes,
+			})
 		}
 	case MaterializedKindRegulatoryImpactMap, MaterializedKindGovernanceChain, MaterializedKindEcosystemMap:
 		parsed, err := ParseRelationsGraphPayload(artifact.Payload)

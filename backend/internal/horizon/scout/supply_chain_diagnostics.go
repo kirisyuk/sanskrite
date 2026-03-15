@@ -1,0 +1,321 @@
+package scout
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+)
+
+type SupplyChainAssemblyDiagnosticOptions struct {
+	RequireDerivedPaths       bool
+	FailOnMissingDerivedPaths bool
+	RequireAssemblyEdges      bool
+	MinAnchorFanin            int
+}
+
+func DefaultSupplyChainAssemblyDiagnosticOptions() SupplyChainAssemblyDiagnosticOptions {
+	return SupplyChainAssemblyDiagnosticOptions{
+		RequireDerivedPaths:       true,
+		FailOnMissingDerivedPaths: true,
+		RequireAssemblyEdges:      false,
+		MinAnchorFanin:            1,
+	}
+}
+
+type SupplyChainAssemblyDiagnosticReport struct {
+	Pass                   bool           `json:"pass"`
+	ArtifactID             string         `json:"artifactId,omitempty"`
+	ArtifactKey            string         `json:"artifactKey,omitempty"`
+	TenantID               string         `json:"tenantId,omitempty"`
+	PathStatus             string         `json:"pathStatus,omitempty"`
+	SummaryStatus          string         `json:"summaryStatus,omitempty"`
+	Stage                  string         `json:"stage,omitempty"`
+	Provisional            bool           `json:"provisional,omitempty"`
+	SourceMode             string         `json:"sourceMode,omitempty"`
+	AnchorSet              []string       `json:"anchorSet,omitempty"`
+	ResolvedAnchors        []string       `json:"resolvedAnchors,omitempty"`
+	AnchorProducts         []string       `json:"anchorProducts,omitempty"`
+	ProductNodesN          int            `json:"productNodesN"`
+	ActorNodesN            int            `json:"actorNodesN"`
+	SupplyEdgesN           int            `json:"supplyEdgesN"`
+	TransformEdgesN        int            `json:"transformEdgesN"`
+	AssemblyEdgesN         int            `json:"assemblyEdgesN"`
+	RouteBindingsN         int            `json:"routeBindingsN"`
+	DerivedPathKeysN       int            `json:"derivedPathKeysN"`
+	DerivedPathArtifactsN  int            `json:"derivedPathArtifactsN"`
+	OpenGaps               []string       `json:"openGaps,omitempty"`
+	MissingAnchors         []string       `json:"missingAnchors,omitempty"`
+	MissingDerivedPathKeys []string       `json:"missingDerivedPathKeys,omitempty"`
+	SummaryMismatches      []string       `json:"summaryMismatches,omitempty"`
+	Warnings               []string       `json:"warnings,omitempty"`
+	Errors                 []string       `json:"errors,omitempty"`
+	AnchorFanin            map[string]int `json:"anchorFanin,omitempty"`
+}
+
+func DiagnoseSupplyChainAssembly(
+	artifact *models.MaterializedArtifact,
+	pathArtifacts []*models.MaterializedArtifact,
+	summary map[string]interface{},
+	opts SupplyChainAssemblyDiagnosticOptions,
+) (*SupplyChainAssemblyDiagnosticReport, error) {
+	report := &SupplyChainAssemblyDiagnosticReport{
+		Pass:                   true,
+		AnchorFanin:            map[string]int{},
+		SummaryMismatches:      []string{},
+		Warnings:               []string{},
+		Errors:                 []string{},
+		MissingAnchors:         []string{},
+		MissingDerivedPathKeys: []string{},
+	}
+	if artifact == nil {
+		report.Errors = append(report.Errors, "assembly artifact is nil")
+		report.Pass = false
+		return report, nil
+	}
+	report.ArtifactID = strings.TrimSpace(artifact.ID)
+	report.ArtifactKey = strings.TrimSpace(artifact.CanonicalKey)
+	report.TenantID = strings.TrimSpace(artifact.TenantID)
+	report.PathStatus = strings.TrimSpace(artifact.PathStatus)
+
+	if artifact.Kind != models.MaterializedKindSupplyChainAssemblyGraph {
+		report.Errors = append(report.Errors, fmt.Sprintf("artifact kind=%q, want %q", artifact.Kind, models.MaterializedKindSupplyChainAssemblyGraph))
+		report.Pass = false
+		return report, nil
+	}
+	if err := artifact.Validate(); err != nil {
+		report.Errors = append(report.Errors, fmt.Sprintf("artifact validation failed: %v", err))
+		report.Pass = false
+		return report, nil
+	}
+	parsed, err := models.ParseSupplyChainAssemblyGraphPayload(artifact.Payload)
+	if err != nil {
+		report.Errors = append(report.Errors, fmt.Sprintf("artifact payload parse failed: %v", err))
+		report.Pass = false
+		return report, nil
+	}
+	report.Stage = strings.TrimSpace(parsed.Stage)
+	report.Provisional = parsed.Provisional
+	report.SourceMode = strings.TrimSpace(parsed.SourceMode)
+	report.AnchorSet = append([]string(nil), parsed.AnchorSet...)
+	report.ResolvedAnchors = append([]string(nil), firstNonEmptyDiagnosticAnchors(parsed.ResolvedAnchors, parsed.AnchorSet, parsed.AnchorProducts)...)
+	report.AnchorProducts = append([]string(nil), parsed.AnchorProducts...)
+	report.ProductNodesN = len(parsed.ProductNodes)
+	report.ActorNodesN = len(parsed.ActorNodes)
+	report.SupplyEdgesN = len(parsed.SupplyEdges)
+	report.TransformEdgesN = len(parsed.TransformEdges)
+	report.AssemblyEdgesN = len(parsed.AssemblyEdges)
+	report.RouteBindingsN = len(parsed.RouteBindings)
+	report.DerivedPathKeysN = len(parsed.DerivedPathKeys)
+	report.OpenGaps = append([]string(nil), parsed.OpenGaps...)
+
+	productRefs := make(map[string]struct{}, len(parsed.ProductNodes))
+	for _, node := range parsed.ProductNodes {
+		ref := strings.TrimSpace(node.Ref)
+		if ref != "" {
+			productRefs[ref] = struct{}{}
+		}
+	}
+	anchorsToCheck := firstNonEmptyDiagnosticAnchors(parsed.ResolvedAnchors, parsed.AnchorSet, parsed.AnchorProducts)
+	if len(anchorsToCheck) == 0 {
+		report.Errors = append(report.Errors, "resolved anchors are empty")
+	}
+	if len(parsed.ProductNodes) == 0 && len(parsed.ActorNodes) == 0 {
+		report.Errors = append(report.Errors, "productNodes and actorNodes are empty")
+	}
+	if len(parsed.SupplyEdges) == 0 && len(parsed.TransformEdges) == 0 && len(parsed.AssemblyEdges) == 0 {
+		report.Errors = append(report.Errors, "assembly graph has no supply, transform, or assembly edges")
+	}
+	actorRefs := make(map[string]struct{}, len(parsed.ActorNodes))
+	for _, node := range parsed.ActorNodes {
+		ref := strings.TrimSpace(node.Ref)
+		if ref != "" {
+			actorRefs[ref] = struct{}{}
+		}
+	}
+	for _, anchor := range anchorsToCheck {
+		anchor = strings.TrimSpace(anchor)
+		if anchor == "" {
+			continue
+		}
+		if _, ok := productRefs[anchor]; ok {
+			continue
+		}
+		if _, ok := actorRefs[anchor]; ok {
+			continue
+		}
+		if len(parsed.UnresolvedAnchors) > 0 && containsDiagnosticString(parsed.UnresolvedAnchors, anchor) {
+			continue
+		}
+		report.MissingAnchors = append(report.MissingAnchors, anchor)
+	}
+	if len(report.MissingAnchors) > 0 {
+		report.Errors = append(report.Errors, "resolved anchors are missing from assembly nodes")
+	}
+
+	incoming := map[string]map[string]struct{}{}
+	addIncoming := func(toRef, fromRef string) {
+		toRef = strings.TrimSpace(toRef)
+		fromRef = strings.TrimSpace(fromRef)
+		if toRef == "" || fromRef == "" {
+			return
+		}
+		if incoming[toRef] == nil {
+			incoming[toRef] = map[string]struct{}{}
+		}
+		incoming[toRef][fromRef] = struct{}{}
+	}
+	for _, edge := range parsed.TransformEdges {
+		addIncoming(edge.ToProductRef, edge.FromProductRef)
+	}
+	for _, edge := range parsed.AssemblyEdges {
+		addIncoming(edge.ToProductRef, edge.FromProductRef)
+	}
+	for _, edge := range parsed.SupplyEdges {
+		addIncoming(edge.CustomerRef, edge.SupplierRef)
+		addIncoming(edge.ProductRef, edge.SupplierRef)
+		addIncoming(edge.CustomerRef, edge.ProductRef)
+	}
+	for _, anchor := range anchorsToCheck {
+		anchor = strings.TrimSpace(anchor)
+		report.AnchorFanin[anchor] = len(incoming[anchor])
+		if opts.MinAnchorFanin > 0 && len(incoming[anchor]) < opts.MinAnchorFanin {
+			report.Errors = append(report.Errors, fmt.Sprintf("anchor %s fan-in=%d, want >= %d", anchor, len(incoming[anchor]), opts.MinAnchorFanin))
+		}
+	}
+
+	if opts.RequireAssemblyEdges && len(parsed.AssemblyEdges) == 0 {
+		report.Errors = append(report.Errors, "assemblyEdges is empty")
+	}
+	if opts.RequireDerivedPaths && len(parsed.DerivedPathKeys) == 0 {
+		report.Errors = append(report.Errors, "derivedPathKeys is empty")
+	}
+
+	pathByKey := map[string]*models.MaterializedArtifact{}
+	for _, pathArtifact := range pathArtifacts {
+		if pathArtifact == nil {
+			continue
+		}
+		key := strings.TrimSpace(pathArtifact.CanonicalKey)
+		if key == "" {
+			continue
+		}
+		pathByKey[key] = pathArtifact
+	}
+	report.DerivedPathArtifactsN = len(pathByKey)
+	for _, key := range parsed.DerivedPathKeys {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		pathArtifact, ok := pathByKey[key]
+		if !ok {
+			report.MissingDerivedPathKeys = append(report.MissingDerivedPathKeys, key)
+			continue
+		}
+		if pathArtifact.Kind != models.MaterializedKindSupplyChainPath {
+			report.Warnings = append(report.Warnings, fmt.Sprintf("derived artifact %s has kind=%q", key, pathArtifact.Kind))
+		}
+	}
+	sort.Strings(report.MissingDerivedPathKeys)
+	if opts.FailOnMissingDerivedPaths && len(report.MissingDerivedPathKeys) > 0 {
+		report.Errors = append(report.Errors, "some derived path artifacts are missing")
+	}
+
+	if summary != nil {
+		report.SummaryStatus = strings.TrimSpace(parseStateString(summary["status"]))
+		if report.SummaryStatus != "" && report.PathStatus != "" && report.SummaryStatus != report.PathStatus {
+			report.SummaryMismatches = append(report.SummaryMismatches, fmt.Sprintf("status summary=%s artifact=%s", report.SummaryStatus, report.PathStatus))
+		}
+		if status := report.SummaryStatus; status == "" {
+			report.SummaryMismatches = append(report.SummaryMismatches, "summary.status is empty")
+		}
+		compareSummaryCount(&report.SummaryMismatches, "productsN", parseStateInt(summary["productsN"], -1), report.ProductNodesN)
+		compareSummaryCount(&report.SummaryMismatches, "actorsN", parseStateInt(summary["actorsN"], -1), report.ActorNodesN)
+		compareSummaryCount(&report.SummaryMismatches, "transformsN", parseStateInt(summary["transformsN"], -1), report.TransformEdgesN)
+		compareSummaryCount(&report.SummaryMismatches, "derivedPathsN", parseStateInt(summary["derivedPathsN"], -1), report.DerivedPathKeysN)
+		compareSummaryCount(&report.SummaryMismatches, "openGapsN", parseStateInt(summary["openGapsN"], -1), len(report.OpenGaps))
+		if artifactKey := strings.TrimSpace(parseStateString(summary["artifactKey"])); artifactKey != "" && artifactKey != report.ArtifactKey {
+			report.SummaryMismatches = append(report.SummaryMismatches, fmt.Sprintf("artifactKey summary=%s artifact=%s", artifactKey, report.ArtifactKey))
+		}
+		summaryAnchors := uniqueSortedDiagnosticStrings(firstNonEmptyDiagnosticAnchors(
+			parseStateStringSlice(summary["resolvedAnchors"]),
+			parseStateStringSlice(summary["anchorSet"]),
+			parseStateStringSlice(summary["anchorProducts"]),
+		))
+		artifactAnchors := uniqueSortedDiagnosticStrings(anchorsToCheck)
+		if !equalStringSlices(summaryAnchors, artifactAnchors) {
+			report.SummaryMismatches = append(report.SummaryMismatches, fmt.Sprintf("anchors summary=%v artifact=%v", summaryAnchors, artifactAnchors))
+		}
+	}
+
+	if len(report.SummaryMismatches) > 0 {
+		report.Warnings = append(report.Warnings, report.SummaryMismatches...)
+	}
+	if len(report.Errors) > 0 {
+		report.Pass = false
+	}
+	return report, nil
+}
+
+func compareSummaryCount(dst *[]string, field string, summaryValue int, actualValue int) {
+	if summaryValue < 0 {
+		return
+	}
+	if summaryValue != actualValue {
+		*dst = append(*dst, fmt.Sprintf("%s summary=%d artifact=%d", field, summaryValue, actualValue))
+	}
+}
+
+func uniqueSortedDiagnosticStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func equalStringSlices(left []string, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for idx := range left {
+		if left[idx] != right[idx] {
+			return false
+		}
+	}
+	return true
+}
+
+func firstNonEmptyDiagnosticAnchors(values ...[]string) []string {
+	for _, value := range values {
+		if len(value) > 0 {
+			return append([]string(nil), value...)
+		}
+	}
+	return nil
+}
+
+func containsDiagnosticString(values []string, target string) bool {
+	target = strings.TrimSpace(target)
+	for _, value := range values {
+		if strings.TrimSpace(value) == target {
+			return true
+		}
+	}
+	return false
+}

@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/pipeline"
 	coreModels "github.com/igorkirisyuk/sanskrite/internal/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 func newPipelineContractTestJob(id string) *models.ScoutingJob {
@@ -21,6 +23,13 @@ func newPipelineContractTestJob(id string) *models.ScoutingJob {
 		LensID:              "lens-test",
 		TargetCanonicalPath: "/org/us/acme",
 	}
+}
+
+func newSupplyChainDomainPipelineContractTestJob(id string) *models.ScoutingJob {
+	job := newPipelineContractTestJob(id)
+	job.TargetCanonicalPath = "/domain/supply-chain/test-smartphone"
+	job.State["domainModes"] = []interface{}{taxonomy.DomainModeSupplyChain}
+	return job
 }
 
 func TestPipelineStageIdempotencyAndStickyFailure(t *testing.T) {
@@ -106,4 +115,94 @@ func TestFinalizePipelineRunOutcomeFromBarrier(t *testing.T) {
 			t.Fatalf("expected terminalOutcome=%q, got %q", TerminalOutcomeFailed, got)
 		}
 	})
+}
+
+func TestRequiredStagesForPipelinePassJob_SupplyChainDomainIncludesFastAssembly(t *testing.T) {
+	job := newSupplyChainDomainPipelineContractTestJob("job-required-stages-supply-chain")
+
+	pipelineName, requiredStages := requiredStagesForPipelinePassJob(job, pipeline.PassBaseEnrichment)
+	if pipelineName != pipelineRuntimeDomainBase {
+		t.Fatalf("pipelineName=%q, want %q", pipelineName, pipelineRuntimeDomainBase)
+	}
+	found := false
+	for _, stage := range requiredStages {
+		if stage == stageEntitySupplyChainFastAssembly {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("required stages %v must include %q", requiredStages, stageEntitySupplyChainFastAssembly)
+	}
+}
+
+func TestPipelineStageOrder_EntityPipelineDoesNotRequireRefine(t *testing.T) {
+	for _, stage := range requiredStagesForPipeline(pipelineRuntimeEntity) {
+		if stage == stageEntitySupplyChainRefine {
+			t.Fatalf("entity pipeline stages must not include %q", stageEntitySupplyChainRefine)
+		}
+	}
+}
+
+func TestFinalizePipelineRun_SupplyChainDomainRequiresAssemblySummary(t *testing.T) {
+	ctx := context.Background()
+	engine := &ScoutEngine{}
+	setupJob := func(id string) *models.ScoutingJob {
+		job := newSupplyChainDomainPipelineContractTestJob(id)
+		for _, stage := range []string{
+			stagePlanning,
+			stageExtraction,
+			stageCritic,
+			stageResearch,
+			stageRevalidation,
+			stageMaterialize,
+			stagePolicyAudit,
+			stageEntitySupplyChainFastAssembly,
+		} {
+			engine.pipelineStageComplete(ctx, job, pipelineRuntimeDomainBase, stage, true, stage+"_done")
+		}
+		return job
+	}
+
+	t.Run("missing summary yields partial outcome", func(t *testing.T) {
+		job := setupJob("job-finalize-supply-chain-summary-missing")
+		if err := engine.finalizePipelineRun(ctx, job, pipelineFinalizeInput{
+			Pipeline: pipelineRuntimeDomainBase,
+			Hint:     "finalize_supply_chain_missing_summary",
+		}); err != nil {
+			t.Fatalf("finalize should not error: %v", err)
+		}
+		if got := parseStateString(job.State["terminalOutcome"]); got != TerminalOutcomePartialCompleted {
+			t.Fatalf("terminalOutcome=%q, want %q when summary missing", got, TerminalOutcomePartialCompleted)
+		}
+	})
+
+	t.Run("summary allows completed outcome", func(t *testing.T) {
+		job := setupJob("job-finalize-supply-chain-summary-present")
+		job.State["supplyChainAssembly"] = map[string]interface{}{"status": "partial"}
+		if err := engine.finalizePipelineRun(ctx, job, pipelineFinalizeInput{
+			Pipeline: pipelineRuntimeDomainBase,
+			Hint:     "finalize_supply_chain_with_summary",
+		}); err != nil {
+			t.Fatalf("finalize with summary should not error: %v", err)
+		}
+		if got := parseStateString(job.State["terminalOutcome"]); got != TerminalOutcomeCompleted {
+			t.Fatalf("terminalOutcome=%q, want %q when summary exists", got, TerminalOutcomeCompleted)
+		}
+	})
+}
+
+func TestRequiredStagesForPipelinePassJob_MixedDomainJobSkipsFastAssemblyBarrier(t *testing.T) {
+	job := newSupplyChainDomainPipelineContractTestJob("job-required-stages-mixed-domain")
+	job.State["domains"] = []map[string]interface{}{
+		{"contractType": "supply-chain"},
+		{"contractType": "ownership-structure"},
+	}
+
+	_, requiredStages := requiredStagesForPipelinePassJob(job, pipeline.PassBaseEnrichment)
+	for _, stage := range requiredStages {
+		if stage == stageEntitySupplyChainFastAssembly {
+			t.Fatalf("mixed-domain job must not require %q", stageEntitySupplyChainFastAssembly)
+		}
+	}
 }
