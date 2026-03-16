@@ -121,20 +121,47 @@ const (
 	WatchTriggerManual                 WatchTriggerType = "manual"
 )
 
+type WatchTriggerDecision string
+
+const (
+	WatchTriggerDecisionNoop                          WatchTriggerDecision = "noop"
+	WatchTriggerDecisionWarmOnly                      WatchTriggerDecision = "warm_only"
+	WatchTriggerDecisionWakeScopeAgent                WatchTriggerDecision = "wake_scope_agent"
+	WatchTriggerDecisionEnqueueRisk                   WatchTriggerDecision = "enqueue_risk"
+	WatchTriggerDecisionEnqueueScout                  WatchTriggerDecision = "enqueue_scout"
+	WatchTriggerDecisionCreateOrRefreshRecommendation WatchTriggerDecision = "create_or_refresh_recommendation"
+)
+
+type WatchTriggerMatchMode string
+
+const (
+	WatchTriggerMatchAnchor   WatchTriggerMatchMode = "anchor"
+	WatchTriggerMatchUniverse WatchTriggerMatchMode = "universe"
+	WatchTriggerMatchDerived  WatchTriggerMatchMode = "derived"
+)
+
 type WatchTrigger struct {
-	ID             string           `json:"id" firestore:"id"`
-	SubjectID      string           `json:"subjectId" firestore:"subjectId"`
-	TriggerType    WatchTriggerType `json:"triggerType" firestore:"triggerType"`
-	TriggerReason  string           `json:"triggerReason,omitempty" firestore:"triggerReason,omitempty"`
-	CanonicalPaths []string         `json:"canonicalPaths,omitempty" firestore:"canonicalPaths,omitempty"`
-	SourceIDs      []string         `json:"sourceIds,omitempty" firestore:"sourceIds,omitempty"`
-	Polarity       string           `json:"polarity,omitempty" firestore:"polarity,omitempty"`
-	SignalStrength float64          `json:"signalStrength" firestore:"signalStrength"`
-	Confidence     float64          `json:"confidence" firestore:"confidence"`
-	DedupeKey      string           `json:"dedupeKey" firestore:"dedupeKey"`
-	Metadata       map[string]any   `json:"metadata,omitempty" firestore:"metadata,omitempty"`
-	CreatedAt      time.Time        `json:"createdAt" firestore:"createdAt"`
-	UpdatedAt      time.Time        `json:"updatedAt" firestore:"updatedAt"`
+	ID                string                `json:"id" firestore:"id"`
+	SubjectID         string                `json:"subjectId" firestore:"subjectId"`
+	TriggerType       WatchTriggerType      `json:"triggerType" firestore:"triggerType"`
+	TriggerReason     string                `json:"triggerReason,omitempty" firestore:"triggerReason,omitempty"`
+	CanonicalPaths    []string              `json:"canonicalPaths,omitempty" firestore:"canonicalPaths,omitempty"`
+	SourceIDs         []string              `json:"sourceIds,omitempty" firestore:"sourceIds,omitempty"`
+	Polarity          string                `json:"polarity,omitempty" firestore:"polarity,omitempty"`
+	SignalStrength    float64               `json:"signalStrength" firestore:"signalStrength"`
+	Confidence        float64               `json:"confidence" firestore:"confidence"`
+	DedupeKey         string                `json:"dedupeKey" firestore:"dedupeKey"`
+	SemanticWatermark string                `json:"semanticWatermark,omitempty" firestore:"semanticWatermark,omitempty"`
+	MatchMode         WatchTriggerMatchMode `json:"matchMode,omitempty" firestore:"matchMode,omitempty"`
+	Metadata          map[string]any        `json:"metadata,omitempty" firestore:"metadata,omitempty"`
+	ProcessedAt       *time.Time            `json:"processedAt,omitempty" firestore:"processedAt,omitempty"`
+	Decision          WatchTriggerDecision  `json:"decision,omitempty" firestore:"decision,omitempty"`
+	DecisionReason    string                `json:"decisionReason,omitempty" firestore:"decisionReason,omitempty"`
+	RunRefs           []string              `json:"runRefs,omitempty" firestore:"runRefs,omitempty"`
+	JobRefs           []string              `json:"jobRefs,omitempty" firestore:"jobRefs,omitempty"`
+	ProcessingError   string                `json:"processingError,omitempty" firestore:"processingError,omitempty"`
+	CreatedAt         time.Time             `json:"createdAt" firestore:"createdAt"`
+	UpdatedAt         time.Time             `json:"updatedAt" firestore:"updatedAt"`
 }
 
 func (t *WatchTrigger) Validate() error {
@@ -152,6 +179,22 @@ func (t *WatchTrigger) Validate() error {
 		WatchTriggerAffectedZoneChanged, WatchTriggerPropagationGap, WatchTriggerRecommendationApproved, WatchTriggerManual:
 	default:
 		return fmt.Errorf("invalid triggerType")
+	}
+	switch t.MatchMode {
+	case "", WatchTriggerMatchAnchor, WatchTriggerMatchUniverse, WatchTriggerMatchDerived:
+	default:
+		return fmt.Errorf("invalid matchMode")
+	}
+	switch t.Decision {
+	case "",
+		WatchTriggerDecisionNoop,
+		WatchTriggerDecisionWarmOnly,
+		WatchTriggerDecisionWakeScopeAgent,
+		WatchTriggerDecisionEnqueueRisk,
+		WatchTriggerDecisionEnqueueScout,
+		WatchTriggerDecisionCreateOrRefreshRecommendation:
+	default:
+		return fmt.Errorf("invalid decision")
 	}
 	if t.Confidence < 0 || t.Confidence > 1 {
 		return fmt.Errorf("confidence must be between 0 and 1")

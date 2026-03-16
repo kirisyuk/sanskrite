@@ -370,8 +370,30 @@ func (s *Service) Dismiss(ctx context.Context, tenantID, id string) (*horizonmod
 	return rec, nil
 }
 
+func (s *Service) MarkExecuting(ctx context.Context, id, jobID, stage, summary string) (*horizonmodels.StrategicRecommendation, error) {
+	if s == nil || s.repo == nil {
+		return nil, horizonrepo.ErrInvalidDocument
+	}
+	now := time.Now().UTC()
+	updated, err := s.repo.UpdateStatus(ctx, id, func(rec *horizonmodels.StrategicRecommendation) error {
+		rec.Status = horizonmodels.StrategicRecommendationStatusExecuting
+		rec.Execution.JobID = strings.TrimSpace(jobID)
+		rec.Execution.JobKind = strategicEnrichmentJobKind
+		rec.Execution.JobStage = strings.TrimSpace(stage)
+		rec.Execution.LastEvaluatedAt = &now
+		rec.Execution.GapStillOpen = true
+		rec.Execution.ResultSummary = strings.TrimSpace(summary)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.publish(ctx, updated.TenantID, "horizon.recommendation.executing", updated)
+	return updated, nil
+}
+
 func (s *Service) Approve(ctx context.Context, tenantID, userID, id string) (*horizonmodels.StrategicRecommendation, error) {
-	if s == nil || s.repo == nil || s.scoutingJobsRepo == nil {
+	if s == nil || s.repo == nil {
 		return nil, horizonrepo.ErrInvalidDocument
 	}
 	rec, err := s.repo.Get(ctx, id)
@@ -389,33 +411,61 @@ func (s *Service) Approve(ctx context.Context, tenantID, userID, id string) (*ho
 			return rec, nil
 		}
 	}
-	job, err := s.createStrategicEnrichmentJob(ctx, rec, userID, strategicEnrichmentStageTarget, horizonmodels.ScoutingStrategySnapshot)
-	if err != nil {
-		return nil, err
-	}
+	now := time.Now().UTC()
 	updated, err := s.repo.UpdateStatus(ctx, id, func(rec *horizonmodels.StrategicRecommendation) error {
-		rec.Status = horizonmodels.StrategicRecommendationStatusExecuting
-		now := time.Now().UTC()
-		rec.Execution.JobID = strings.TrimSpace(job.ID)
-		rec.Execution.JobKind = strategicEnrichmentJobKind
-		rec.Execution.JobStage = strategicEnrichmentStageTarget
+		rec.Status = horizonmodels.StrategicRecommendationStatusApproved
 		rec.Execution.LastEvaluatedAt = &now
 		rec.Execution.GapStillOpen = true
+		rec.Execution.ResultSummary = "Recommendation approved and handed to unified watch runtime."
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	s.publish(ctx, tenantID, "horizon.recommendation.executing", updated)
+	s.publish(ctx, tenantID, "horizon.recommendation.updated", updated)
 	if s.watchTriggerHook != nil {
-		_ = s.watchTriggerHook(ctx, strings.TrimSpace(updated.TenantID), strings.TrimSpace(updated.SubjectCanonicalPath), "recommendation_approved", map[string]any{
-			"recommendationId": strings.TrimSpace(updated.ID),
-			"jobId":            strings.TrimSpace(updated.Execution.JobID),
-			"domainHint":       strings.TrimSpace(updated.DomainContractHint),
-			"subjectType":      string(updated.SubjectType),
-		})
+		if err := s.watchTriggerHook(ctx, strings.TrimSpace(updated.TenantID), strings.TrimSpace(updated.SubjectCanonicalPath), "recommendation_approved", map[string]any{
+			"recommendationId":       strings.TrimSpace(updated.ID),
+			"domainHint":             strings.TrimSpace(updated.DomainContractHint),
+			"subjectType":            string(updated.SubjectType),
+			"expectedMissingTargets": append([]string(nil), updated.ExpectedMissingTargets...),
+			"headline":               strings.TrimSpace(updated.Headline),
+			"reason":                 strings.TrimSpace(updated.Reason),
+			"lensId":                 strings.TrimSpace(updated.LensID),
+			"projectId":              strings.TrimSpace(updated.ProjectID),
+			"jobStage":               strategicEnrichmentStageTarget,
+			"userId":                 strings.TrimSpace(userID),
+		}); err != nil {
+			return nil, err
+		}
 	}
-	return updated, nil
+	return s.repo.Get(ctx, updated.ID)
+}
+
+func (s *Service) ReconcileBySubjectCanonicalPath(ctx context.Context, tenantID, canonicalPath string, limit int) (int, int, error) {
+	if s == nil || s.repo == nil {
+		return 0, 0, horizonrepo.ErrInvalidDocument
+	}
+	items, err := s.repo.ListBySubjectCanonicalPath(ctx, strings.TrimSpace(tenantID), strings.TrimSpace(canonicalPath), limit)
+	if err != nil {
+		return 0, 0, err
+	}
+	reconciled := 0
+	stale := 0
+	for _, item := range items {
+		if item == nil || strings.TrimSpace(item.ID) == "" {
+			continue
+		}
+		updated, _, reconcileErr := s.Reconcile(ctx, item.ID)
+		if reconcileErr != nil {
+			return reconciled, stale, reconcileErr
+		}
+		reconciled++
+		if updated != nil && updated.Status == horizonmodels.StrategicRecommendationStatusStale {
+			stale++
+		}
+	}
+	return reconciled, stale, nil
 }
 
 func (s *Service) reconcileExecutionStatuses(ctx context.Context, items []*horizonmodels.StrategicRecommendation) ([]*horizonmodels.StrategicRecommendation, error) {

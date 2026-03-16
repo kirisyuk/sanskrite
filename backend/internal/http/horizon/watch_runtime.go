@@ -14,6 +14,11 @@ type syncWatchRuntimeRequest struct {
 	Limit         int    `json:"limit,omitempty"`
 	LensID        string `json:"lensId,omitempty"`
 	FragmentID    string `json:"fragmentId,omitempty"`
+	DryRun        bool   `json:"dryRun,omitempty"`
+}
+
+type replayWatchTriggerRequest struct {
+	TriggerID string `json:"triggerId,omitempty"`
 }
 
 func (h *HorizonHandlers) HandleWatchSubjectsRoot(w http.ResponseWriter, r *http.Request) {
@@ -50,6 +55,38 @@ func (h *HorizonHandlers) HandleWatchSubjectsRoot(w http.ResponseWriter, r *http
 	writeJSON(w, http.StatusOK, map[string]any{"subjects": subjects})
 }
 
+func (h *HorizonHandlers) HandleWatchSubjectDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h == nil || h.watchRuntime == nil {
+		http.Error(w, "watch runtime not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if _, err := requireAuth(r); err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	subjectID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/api/horizon/watch/subjects/"))
+	if subjectID == "" {
+		http.Error(w, "subject id is required", http.StatusBadRequest)
+		return
+	}
+	limit := 25
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if parsed, convErr := strconv.Atoi(raw); convErr == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	detail, err := h.watchRuntime.SubjectDetail(r.Context(), subjectID, limit)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to load subject detail: %v", err), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
 func (h *HorizonHandlers) ListWatchTriggers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -80,6 +117,62 @@ func (h *HorizonHandlers) ListWatchTriggers(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"triggers": triggers})
+}
+
+func (h *HorizonHandlers) ReplayWatchTrigger(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h == nil || h.watchRuntime == nil {
+		http.Error(w, "watch runtime not configured", http.StatusServiceUnavailable)
+		return
+	}
+	authInfo, err := requireAuth(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	if !h.isAdminRequest(r, authInfo) {
+		http.Error(w, "admin access required", http.StatusForbidden)
+		return
+	}
+	var req replayWatchTriggerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.TriggerID) == "" {
+		http.Error(w, "triggerId is required", http.StatusBadRequest)
+		return
+	}
+	trigger, err := h.watchRuntime.ReplayTrigger(r.Context(), req.TriggerID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to replay watch trigger: %v", err), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"trigger": trigger})
+}
+
+func (h *HorizonHandlers) WatchRuntimeMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h == nil || h.watchRuntime == nil {
+		http.Error(w, "watch runtime not configured", http.StatusServiceUnavailable)
+		return
+	}
+	authInfo, err := requireAuth(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	if !h.isAdminRequest(r, authInfo) {
+		http.Error(w, "admin access required", http.StatusForbidden)
+		return
+	}
+	writeJSON(w, http.StatusOK, h.watchRuntime.MetricsSnapshot())
 }
 
 func (h *HorizonHandlers) SyncWatchRuntime(w http.ResponseWriter, r *http.Request) {
@@ -121,7 +214,12 @@ func (h *HorizonHandlers) SyncWatchRuntime(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusOK, map[string]any{"synced": true, "fragmentId": strings.TrimSpace(req.FragmentID)})
 		return
 	}
-	report, err := h.watchRuntime.SyncTenant(r.Context(), tenantID, req.IncludeGlobal && h.isAdminRequest(r, authInfo), req.Limit)
+	var report any
+	if req.DryRun {
+		report, err = h.watchRuntime.PreviewSyncTenant(r.Context(), tenantID, req.IncludeGlobal && h.isAdminRequest(r, authInfo), req.Limit)
+	} else {
+		report, err = h.watchRuntime.SyncTenant(r.Context(), tenantID, req.IncludeGlobal && h.isAdminRequest(r, authInfo), req.Limit)
+	}
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to sync watch runtime: %v", err), http.StatusInternalServerError)
 		return

@@ -7,40 +7,108 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 )
 
-type SubjectWakeHook func(ctx context.Context, tenantID, subjectID, triggerType, triggerReason string, trace map[string]any) error
+const (
+	defaultWatchRuntimeProjectID   = "horizon-watch-bootstrap-global"
+	strategicEnrichmentJobKind     = "strategic_enrichment"
+	strategicEnrichmentStageTarget = "targeted"
+)
+
+type SubjectWakeHook func(ctx context.Context, tenantID, subjectID, triggerType, triggerReason string, trace map[string]any) ([]string, error)
+
+type RecommendationActionInput struct {
+	TenantID             string
+	ProjectID            string
+	LensID               string
+	SubjectCanonicalPath string
+	SubjectType          horizonmodels.StrategicRecommendationSubjectType
+	TriggerType          horizonmodels.WatchTriggerType
+	TriggerReason        string
+	EventTitle           string
+	EventSummary         string
+	SignalAxis           string
+	BusinessEndpoints    int
+	RemoteEndpoints      int
+	PathFamilies         int
+	OccurredAt           time.Time
+}
+
+type RecommendationActionHook func(ctx context.Context, input RecommendationActionInput) error
+type RecommendationExecutionHook func(ctx context.Context, recommendationID, jobID, stage, summary string) error
+
+type MetricsSnapshot struct {
+	Counters         map[string]int64 `json:"counters"`
+	LatencyCount     int64            `json:"latencyCount"`
+	LatencyTotalMs   float64          `json:"latencyTotalMs"`
+	LatencyAverageMs float64          `json:"latencyAverageMs"`
+	LastUpdatedAt    time.Time        `json:"lastUpdatedAt"`
+}
+
+type runtimeMetrics struct {
+	mu             sync.Mutex
+	counters       map[string]int64
+	latencyCount   int64
+	latencyTotalMs float64
+	lastUpdatedAt  time.Time
+}
 
 type Service struct {
-	subjectsRepo          *horizonrepo.WatchSubjectsRepository
-	triggersRepo          *horizonrepo.WatchTriggersRepository
-	targetsRepo           *horizonrepo.WatchTargetsRepository
-	watchdogRepo          *horizonrepo.WatchdogConfigsRepository
-	scopeAgentConfigsRepo *horizonrepo.ScopeAgentConfigsRepository
-	lensesRepo            *horizonrepo.LensesRepository
-	lensArtifactsRepo     *horizonrepo.LensArtifactsRepository
-	fragmentsRepo         *horizonrepo.HorizonFragmentsRepository
-	edgesRepo             *horizonrepo.DependencyEdgesRepository
-	wakeHook              SubjectWakeHook
+	subjectsRepo                *horizonrepo.WatchSubjectsRepository
+	triggersRepo                *horizonrepo.WatchTriggersRepository
+	targetsRepo                 *horizonrepo.WatchTargetsRepository
+	watchdogRepo                *horizonrepo.WatchdogConfigsRepository
+	scopeAgentConfigsRepo       *horizonrepo.ScopeAgentConfigsRepository
+	scopeAgentRunsRepo          *horizonrepo.ScopeAgentRunsRepository
+	watchBriefsRepo             *horizonrepo.WatchBriefsRepository
+	watchFeedEntriesRepo        *horizonrepo.WatchFeedEntriesRepository
+	lensesRepo                  *horizonrepo.LensesRepository
+	lensArtifactsRepo           *horizonrepo.LensArtifactsRepository
+	fragmentsRepo               *horizonrepo.HorizonFragmentsRepository
+	edgesRepo                   *horizonrepo.DependencyEdgesRepository
+	riskJobsRepo                *horizonrepo.RiskJobsRepository
+	scoutingJobsRepo            *horizonrepo.ScoutingJobsRepository
+	wakeHook                    SubjectWakeHook
+	recommendationActionHook    RecommendationActionHook
+	recommendationExecutionHook RecommendationExecutionHook
+	metrics                     *runtimeMetrics
 }
 
 type SyncReport struct {
-	TenantID        string   `json:"tenantId"`
-	LensesSynced    int      `json:"lensesSynced"`
-	TargetsSynced   int      `json:"targetsSynced"`
-	WatchdogsSynced int      `json:"watchdogsSynced"`
-	FragmentsSynced int      `json:"fragmentsSynced"`
-	SubjectIDs      []string `json:"subjectIds,omitempty"`
+	TenantID                 string   `json:"tenantId"`
+	DryRun                   bool     `json:"dryRun"`
+	LensesSynced             int      `json:"lensesSynced"`
+	TargetsSynced            int      `json:"targetsSynced"`
+	WatchdogsSynced          int      `json:"watchdogsSynced"`
+	FragmentsSynced          int      `json:"fragmentsSynced"`
+	SubjectsCreated          int      `json:"subjectsCreated"`
+	SubjectsRefreshed        int      `json:"subjectsRefreshed"`
+	ConfigsLinked            int      `json:"configsLinked"`
+	ScopeAgentConfigsEnsured int      `json:"scopeAgentConfigsEnsured"`
+	LegacyConfigsPaused      int      `json:"legacyConfigsPaused"`
+	Conflicts                int      `json:"conflicts"`
+	SubjectIDs               []string `json:"subjectIds,omitempty"`
+}
+
+type SubjectDetail struct {
+	Subject      *horizonmodels.WatchSubject       `json:"subject"`
+	Configs      []*horizonmodels.ScopeAgentConfig `json:"configs,omitempty"`
+	Runs         []*horizonmodels.ScopeAgentRun    `json:"runs,omitempty"`
+	Triggers     []*horizonmodels.WatchTrigger     `json:"triggers,omitempty"`
+	RiskJobs     []*horizonmodels.RiskJob          `json:"riskJobs,omitempty"`
+	ScoutingJobs []*horizonmodels.ScoutingJob      `json:"scoutingJobs,omitempty"`
 }
 
 type TriggerDecision struct {
-	WakeScopeAgent bool
-	WarmOnly       bool
-	Noop           bool
-	Reason         string
+	Decision    horizonmodels.WatchTriggerDecision
+	Reason      string
+	DirectMatch bool
 }
 
 func NewService(
@@ -64,6 +132,9 @@ func NewService(
 		lensArtifactsRepo:     lensArtifactsRepo,
 		fragmentsRepo:         fragmentsRepo,
 		edgesRepo:             edgesRepo,
+		metrics: &runtimeMetrics{
+			counters: make(map[string]int64),
+		},
 	}
 }
 
@@ -72,6 +143,62 @@ func (s *Service) WithWakeHook(fn SubjectWakeHook) *Service {
 		return s
 	}
 	s.wakeHook = fn
+	return s
+}
+
+func (s *Service) WithScopeAgentRunsRepository(repo *horizonrepo.ScopeAgentRunsRepository) *Service {
+	if s == nil {
+		return s
+	}
+	s.scopeAgentRunsRepo = repo
+	return s
+}
+
+func (s *Service) WithWatchBriefsRepository(repo *horizonrepo.WatchBriefsRepository) *Service {
+	if s == nil {
+		return s
+	}
+	s.watchBriefsRepo = repo
+	return s
+}
+
+func (s *Service) WithWatchFeedEntriesRepository(repo *horizonrepo.WatchFeedEntriesRepository) *Service {
+	if s == nil {
+		return s
+	}
+	s.watchFeedEntriesRepo = repo
+	return s
+}
+
+func (s *Service) WithRiskJobsRepository(repo *horizonrepo.RiskJobsRepository) *Service {
+	if s == nil {
+		return s
+	}
+	s.riskJobsRepo = repo
+	return s
+}
+
+func (s *Service) WithScoutingJobsRepository(repo *horizonrepo.ScoutingJobsRepository) *Service {
+	if s == nil {
+		return s
+	}
+	s.scoutingJobsRepo = repo
+	return s
+}
+
+func (s *Service) WithRecommendationActionHook(fn RecommendationActionHook) *Service {
+	if s == nil {
+		return s
+	}
+	s.recommendationActionHook = fn
+	return s
+}
+
+func (s *Service) WithRecommendationExecutionHook(fn RecommendationExecutionHook) *Service {
+	if s == nil {
+		return s
+	}
+	s.recommendationExecutionHook = fn
 	return s
 }
 
@@ -243,10 +370,21 @@ func (s *Service) EmitTrigger(ctx context.Context, trigger *horizonmodels.WatchT
 	if s == nil || s.triggersRepo == nil || trigger == nil {
 		return nil, false, horizonrepo.ErrInvalidDocument
 	}
+	trigger.SemanticWatermark = firstNonEmpty(strings.TrimSpace(trigger.SemanticWatermark), semanticWatermarkFromTrigger(trigger))
 	if strings.TrimSpace(trigger.DedupeKey) == "" {
 		trigger.DedupeKey = buildWatchTriggerDedupeKey(trigger)
 	}
-	return s.triggersRepo.CreateOrRefresh(ctx, trigger)
+	stored, created, err := s.triggersRepo.CreateOrRefresh(ctx, trigger)
+	if err == nil && stored != nil {
+		s.bumpMetric("watch_triggers_total")
+		s.bumpMetric("watch_triggers_total:type=" + string(stored.TriggerType))
+		if created {
+			s.bumpMetric("watch_triggers_total:created")
+		} else {
+			s.bumpMetric("watch_trigger_dedup_hits_total")
+		}
+	}
+	return stored, created, err
 }
 
 func (s *Service) EmitAndProcessTrigger(ctx context.Context, trigger *horizonmodels.WatchTrigger) (*horizonmodels.WatchTrigger, bool, error) {
@@ -256,6 +394,9 @@ func (s *Service) EmitAndProcessTrigger(ctx context.Context, trigger *horizonmod
 	stored, created, err := s.EmitTrigger(ctx, trigger)
 	if err != nil || stored == nil {
 		return stored, created, err
+	}
+	if !created && stored.ProcessedAt != nil && stored.Decision != "" {
+		return stored, created, nil
 	}
 	return stored, created, s.ProcessTrigger(ctx, stored)
 }
@@ -316,6 +457,115 @@ func (s *Service) ListTriggers(ctx context.Context, subjectID string, limit int)
 	return s.triggersRepo.ListBySubject(ctx, strings.TrimSpace(subjectID), limit)
 }
 
+func (s *Service) GetTrigger(ctx context.Context, id string) (*horizonmodels.WatchTrigger, error) {
+	if s == nil || s.triggersRepo == nil {
+		return nil, horizonrepo.ErrInvalidDocument
+	}
+	return s.triggersRepo.Get(ctx, strings.TrimSpace(id))
+}
+
+func (s *Service) SubjectDetail(ctx context.Context, subjectID string, limit int) (*SubjectDetail, error) {
+	if s == nil || s.subjectsRepo == nil {
+		return nil, horizonrepo.ErrInvalidDocument
+	}
+	subject, err := s.subjectsRepo.Get(ctx, strings.TrimSpace(subjectID))
+	if err != nil {
+		return nil, err
+	}
+	detail := &SubjectDetail{Subject: subject}
+	if s.scopeAgentConfigsRepo != nil {
+		detail.Configs, _ = s.scopeAgentConfigsRepo.ListActiveBySubjectID(ctx, subject.TenantID, subject.ID)
+	}
+	if s.scopeAgentRunsRepo != nil {
+		for _, cfg := range detail.Configs {
+			if cfg == nil || strings.TrimSpace(cfg.ID) == "" {
+				continue
+			}
+			runs, _ := s.scopeAgentRunsRepo.ListByConfigID(ctx, cfg.ID, limit)
+			detail.Runs = append(detail.Runs, runs...)
+		}
+	}
+	detail.Triggers, _ = s.ListTriggers(ctx, subject.ID, limit)
+	scoutIDs := map[string]struct{}{}
+	riskIDs := map[string]struct{}{}
+	for _, trg := range detail.Triggers {
+		if trg == nil {
+			continue
+		}
+		for _, ref := range trg.JobRefs {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			switch {
+			case strings.HasPrefix(ref, "risk:"):
+				riskIDs[strings.TrimPrefix(ref, "risk:")] = struct{}{}
+			case strings.HasPrefix(ref, "scout:"):
+				scoutIDs[strings.TrimPrefix(ref, "scout:")] = struct{}{}
+			}
+		}
+	}
+	if s.riskJobsRepo != nil {
+		for _, id := range sortedKeys(riskIDs) {
+			if job, err := s.riskJobsRepo.Get(ctx, id); err == nil && job != nil {
+				detail.RiskJobs = append(detail.RiskJobs, job)
+			}
+		}
+	}
+	if s.scoutingJobsRepo != nil {
+		for _, id := range sortedKeys(scoutIDs) {
+			if job, err := s.scoutingJobsRepo.Get(ctx, id); err == nil && job != nil {
+				detail.ScoutingJobs = append(detail.ScoutingJobs, job)
+			}
+		}
+	}
+	return detail, nil
+}
+
+func (s *Service) ReplayTrigger(ctx context.Context, triggerID string) (*horizonmodels.WatchTrigger, error) {
+	if s == nil || s.triggersRepo == nil {
+		return nil, horizonrepo.ErrInvalidDocument
+	}
+	trigger, err := s.triggersRepo.Get(ctx, strings.TrimSpace(triggerID))
+	if err != nil {
+		return nil, err
+	}
+	if trigger == nil {
+		return nil, nil
+	}
+	trigger.ProcessedAt = nil
+	trigger.Decision = ""
+	trigger.DecisionReason = ""
+	trigger.ProcessingError = ""
+	if err := s.ProcessTrigger(ctx, trigger); err != nil {
+		return nil, err
+	}
+	return s.triggersRepo.Get(ctx, trigger.ID)
+}
+
+func (s *Service) MetricsSnapshot() MetricsSnapshot {
+	if s == nil || s.metrics == nil {
+		return MetricsSnapshot{Counters: map[string]int64{}}
+	}
+	s.metrics.mu.Lock()
+	defer s.metrics.mu.Unlock()
+	out := make(map[string]int64, len(s.metrics.counters))
+	for k, v := range s.metrics.counters {
+		out[k] = v
+	}
+	avg := 0.0
+	if s.metrics.latencyCount > 0 {
+		avg = s.metrics.latencyTotalMs / float64(s.metrics.latencyCount)
+	}
+	return MetricsSnapshot{
+		Counters:         out,
+		LatencyCount:     s.metrics.latencyCount,
+		LatencyTotalMs:   s.metrics.latencyTotalMs,
+		LatencyAverageMs: avg,
+		LastUpdatedAt:    s.metrics.lastUpdatedAt,
+	}
+}
+
 func (s *Service) EmitTriggerByAnchor(ctx context.Context, tenantID, anchorCanonicalPath string, triggerType horizonmodels.WatchTriggerType, reason string, signalStrength, confidence float64, metadata map[string]any) (int, error) {
 	if s == nil || s.subjectsRepo == nil {
 		return 0, horizonrepo.ErrInvalidDocument
@@ -335,6 +585,10 @@ func (s *Service) EmitTriggerByAnchor(ctx context.Context, tenantID, anchorCanon
 		if subject == nil || strings.TrimSpace(subject.ID) == "" {
 			continue
 		}
+		matchMode := horizonmodels.WatchTriggerMatchUniverse
+		if strings.TrimSpace(subject.AnchorCanonicalPath) == strings.TrimSpace(anchorCanonicalPath) {
+			matchMode = horizonmodels.WatchTriggerMatchAnchor
+		}
 		_, _, err := s.EmitAndProcessTrigger(ctx, &horizonmodels.WatchTrigger{
 			SubjectID:      strings.TrimSpace(subject.ID),
 			TriggerType:    triggerType,
@@ -342,6 +596,7 @@ func (s *Service) EmitTriggerByAnchor(ctx context.Context, tenantID, anchorCanon
 			CanonicalPaths: []string{strings.TrimSpace(anchorCanonicalPath)},
 			SignalStrength: signalStrength,
 			Confidence:     confidence,
+			MatchMode:      matchMode,
 			Metadata:       metadata,
 		})
 		if err != nil {
@@ -352,14 +607,22 @@ func (s *Service) EmitTriggerByAnchor(ctx context.Context, tenantID, anchorCanon
 	return count, nil
 }
 
+func (s *Service) PreviewSyncTenant(ctx context.Context, tenantID string, includeGlobal bool, limit int) (*SyncReport, error) {
+	return s.syncTenant(ctx, tenantID, includeGlobal, limit, true)
+}
+
 func (s *Service) SyncTenant(ctx context.Context, tenantID string, includeGlobal bool, limit int) (*SyncReport, error) {
+	return s.syncTenant(ctx, tenantID, includeGlobal, limit, false)
+}
+
+func (s *Service) syncTenant(ctx context.Context, tenantID string, includeGlobal bool, limit int, dryRun bool) (*SyncReport, error) {
 	if s == nil {
 		return nil, horizonrepo.ErrInvalidDocument
 	}
 	if limit <= 0 {
 		limit = 200
 	}
-	report := &SyncReport{TenantID: strings.TrimSpace(firstNonEmpty(tenantID, "global"))}
+	report := &SyncReport{TenantID: strings.TrimSpace(firstNonEmpty(tenantID, "global")), DryRun: dryRun}
 	subjectSet := map[string]struct{}{}
 	syncOneTenant := func(tid string) error {
 		if s.lensesRepo != nil {
@@ -371,8 +634,24 @@ func (s *Service) SyncTenant(ctx context.Context, tenantID string, includeGlobal
 				if lens == nil {
 					continue
 				}
-				if err := s.SyncWatchSubjectsForLens(ctx, lens.ID); err != nil {
-					return err
+				existing, _ := s.subjectsRepo.GetByIdentity(ctx, tid, lens.ProjectID, lens.ID, "", "", horizonmodels.WatchSubjectKindLensUniverse, lensCanonicalPath(lens.ID))
+				if dryRun {
+					if existing == nil {
+						report.SubjectsCreated++
+						report.ScopeAgentConfigsEnsured++
+					} else {
+						report.SubjectsRefreshed++
+					}
+				} else {
+					if err := s.SyncWatchSubjectsForLens(ctx, lens.ID); err != nil {
+						return err
+					}
+					if existing == nil {
+						report.SubjectsCreated++
+						report.ScopeAgentConfigsEnsured++
+					} else {
+						report.SubjectsRefreshed++
+					}
 				}
 				report.LensesSynced++
 				subjectSet[horizonrepo.BuildWatchSubjectID(tid, lens.ProjectID, lens.ID, "", "", horizonmodels.WatchSubjectKindLensUniverse, lensCanonicalPath(lens.ID))] = struct{}{}
@@ -387,13 +666,42 @@ func (s *Service) SyncTenant(ctx context.Context, tenantID string, includeGlobal
 				if target == nil {
 					continue
 				}
-				subject, err := s.EnsureSubjectForTarget(ctx, target)
-				if err != nil {
-					return err
+				subjectID := strings.TrimSpace(target.SubjectID)
+				var subject *horizonmodels.WatchSubject
+				if dryRun {
+					kind := horizonmodels.WatchSubjectKindExplicitTarget
+					if strings.TrimSpace(target.FragmentID) != "" || strings.EqualFold(strings.TrimSpace(target.Kind), "fragment") {
+						kind = horizonmodels.WatchSubjectKindFragment
+					}
+					subject, _ = s.subjectsRepo.GetByIdentity(ctx, strings.TrimSpace(firstNonEmpty(target.TenantID, "global")), "", "", strings.TrimSpace(target.PackID), strings.TrimSpace(target.UserID), kind, strings.TrimSpace(target.CanonicalPath))
+				} else {
+					var ensureErr error
+					subject, ensureErr = s.EnsureSubjectForTarget(ctx, target)
+					if ensureErr != nil {
+						return ensureErr
+					}
 				}
 				report.TargetsSynced++
 				if subject != nil {
 					subjectSet[subject.ID] = struct{}{}
+					if subjectID == "" || subjectID != subject.ID {
+						report.ConfigsLinked++
+					}
+					if !dryRun {
+						if linked, linkErr := s.backfillTargetArtifacts(ctx, target, subject); linkErr != nil {
+							report.Conflicts++
+							return linkErr
+						} else {
+							report.ConfigsLinked += linked
+						}
+					}
+					if dryRun {
+						if strings.TrimSpace(subjectID) == "" {
+							report.SubjectsCreated++
+						} else {
+							report.SubjectsRefreshed++
+						}
+					}
 				}
 			}
 		}
@@ -406,14 +714,78 @@ func (s *Service) SyncTenant(ctx context.Context, tenantID string, includeGlobal
 				if cfg == nil {
 					continue
 				}
-				subject, err := s.EnsureSubjectForWatchdogConfig(ctx, cfg)
-				if err != nil {
-					return err
+				subjectID := strings.TrimSpace(cfg.SubjectID)
+				var subject *horizonmodels.WatchSubject
+				if dryRun {
+					if fragment, ferr := s.fragmentsRepo.Get(ctx, cfg.TargetFragmentID); ferr == nil && fragment != nil {
+						subject, _ = s.subjectsRepo.GetByIdentity(ctx, strings.TrimSpace(firstNonEmpty(cfg.TenantID, "global")), "", "", "", "", horizonmodels.WatchSubjectKindFragment, strings.TrimSpace(fragment.CanonicalPath))
+					}
+				} else {
+					var ensureErr error
+					subject, ensureErr = s.EnsureSubjectForWatchdogConfig(ctx, cfg)
+					if ensureErr != nil {
+						return ensureErr
+					}
 				}
 				report.WatchdogsSynced++
 				if subject != nil {
 					subjectSet[subject.ID] = struct{}{}
+					if subjectID == "" || subjectID != subject.ID {
+						report.ConfigsLinked++
+					}
+					if dryRun {
+						if strings.TrimSpace(subjectID) == "" {
+							report.SubjectsCreated++
+						} else {
+							report.SubjectsRefreshed++
+						}
+					}
 				}
+			}
+		}
+		if s.scopeAgentConfigsRepo != nil {
+			configs, err := s.scopeAgentConfigsRepo.ListByTenant(ctx, tid, limit)
+			if err != nil {
+				return err
+			}
+			for _, cfg := range configs {
+				if cfg == nil || strings.TrimSpace(cfg.ScopeCanonicalPath) == "" {
+					continue
+				}
+				subjects, lookupErr := s.subjectsRepo.ListByAnchorCanonicalPath(ctx, tid, cfg.ScopeCanonicalPath, 8)
+				if lookupErr != nil || len(subjects) == 0 {
+					continue
+				}
+				chosen := subjects[0]
+				if chosen == nil || strings.TrimSpace(chosen.ID) == "" {
+					continue
+				}
+				if strings.TrimSpace(cfg.SubjectID) != strings.TrimSpace(chosen.ID) {
+					report.ConfigsLinked++
+					if !dryRun {
+						cfg.SubjectID = chosen.ID
+						if err := s.scopeAgentConfigsRepo.Upsert(ctx, cfg); err != nil {
+							report.Conflicts++
+							return err
+						}
+					}
+				}
+				if !dryRun {
+					linked, linkErr := s.backfillScopeRunsForConfig(ctx, cfg, chosen.ID, limit)
+					if linkErr != nil {
+						report.Conflicts++
+						return linkErr
+					}
+					report.ConfigsLinked += linked
+				}
+			}
+			if !dryRun {
+				paused, pauseErr := s.pauseLegacyScopeConfigs(ctx, configs)
+				if pauseErr != nil {
+					report.Conflicts++
+					return pauseErr
+				}
+				report.LegacyConfigsPaused += paused
 			}
 		}
 		return nil
@@ -432,40 +804,318 @@ func (s *Service) SyncTenant(ctx context.Context, tenantID string, includeGlobal
 
 func (s *Service) AssessTrigger(subject *horizonmodels.WatchSubject, trigger *horizonmodels.WatchTrigger) TriggerDecision {
 	if subject == nil || trigger == nil {
-		return TriggerDecision{Noop: true, Reason: "missing_subject_or_trigger"}
-	}
-	if trigger.Confidence < 0.20 {
-		return TriggerDecision{Noop: true, Reason: "low_confidence"}
+		return TriggerDecision{Decision: horizonmodels.WatchTriggerDecisionNoop, Reason: "missing_subject_or_trigger"}
 	}
 	if subject.Status != horizonmodels.WatchSubjectStatusActive {
-		return TriggerDecision{Noop: true, Reason: "subject_not_active"}
+		return TriggerDecision{Decision: horizonmodels.WatchTriggerDecisionNoop, Reason: "subject_not_active"}
+	}
+	directMatch := trigger.MatchMode == horizonmodels.WatchTriggerMatchAnchor || pathSliceContains(trigger.CanonicalPaths, subject.AnchorCanonicalPath)
+	if trigger.Confidence < 0.15 {
+		return TriggerDecision{Decision: horizonmodels.WatchTriggerDecisionNoop, Reason: "low_confidence", DirectMatch: directMatch}
+	}
+	if parseBool(trigger.Metadata["scoutCompletion"]) {
+		return TriggerDecision{Decision: horizonmodels.WatchTriggerDecisionWarmOnly, Reason: "scout_completion_observed", DirectMatch: directMatch}
 	}
 	if trigger.SignalStrength < 0.20 {
-		return TriggerDecision{WarmOnly: true, Reason: "weak_signal"}
+		return TriggerDecision{Decision: horizonmodels.WatchTriggerDecisionWarmOnly, Reason: "weak_signal", DirectMatch: directMatch}
 	}
-	return TriggerDecision{WakeScopeAgent: true, Reason: "wake_scope_agent"}
+	switch trigger.TriggerType {
+	case horizonmodels.WatchTriggerRecommendationApproved:
+		if strings.TrimSpace(asString(trigger.Metadata["jobId"])) != "" {
+			return TriggerDecision{Decision: horizonmodels.WatchTriggerDecisionWarmOnly, Reason: "recommendation_job_already_started", DirectMatch: true}
+		}
+		return TriggerDecision{Decision: horizonmodels.WatchTriggerDecisionEnqueueScout, Reason: "approved_recommendation_requires_enrichment", DirectMatch: true}
+	case horizonmodels.WatchTriggerPropagationGap:
+		if trigger.Confidence < 0.35 || trigger.SignalStrength < 0.30 {
+			return TriggerDecision{Decision: horizonmodels.WatchTriggerDecisionWarmOnly, Reason: "weak_gap_signal", DirectMatch: directMatch}
+		}
+		return TriggerDecision{Decision: horizonmodels.WatchTriggerDecisionCreateOrRefreshRecommendation, Reason: "propagation_gap_requires_followup", DirectMatch: directMatch}
+	case horizonmodels.WatchTriggerFactDelta, horizonmodels.WatchTriggerSourceDelta:
+		if subject.SubjectKind == horizonmodels.WatchSubjectKindFragment && directMatch {
+			return TriggerDecision{Decision: horizonmodels.WatchTriggerDecisionEnqueueRisk, Reason: "fragment_delta_requires_risk_runtime", DirectMatch: true}
+		}
+		return TriggerDecision{Decision: horizonmodels.WatchTriggerDecisionWakeScopeAgent, Reason: "delta_wakes_scope_agent", DirectMatch: directMatch}
+	case horizonmodels.WatchTriggerAffectedZoneChanged:
+		if directMatch && subject.SubjectKind == horizonmodels.WatchSubjectKindAffectedZone {
+			return TriggerDecision{Decision: horizonmodels.WatchTriggerDecisionEnqueueRisk, Reason: "zone_anchor_requires_risk_runtime", DirectMatch: true}
+		}
+		return TriggerDecision{Decision: horizonmodels.WatchTriggerDecisionWakeScopeAgent, Reason: "zone_change_wakes_scope_agent", DirectMatch: directMatch}
+	case horizonmodels.WatchTriggerSignalDetected:
+		if subject.RuntimeMode == horizonmodels.WatchSubjectRuntimeScoutOnly && directMatch {
+			return TriggerDecision{Decision: horizonmodels.WatchTriggerDecisionEnqueueScout, Reason: "direct_signal_requires_scout_runtime", DirectMatch: true}
+		}
+		return TriggerDecision{Decision: horizonmodels.WatchTriggerDecisionWakeScopeAgent, Reason: "signal_detected_wakes_scope_agent", DirectMatch: directMatch}
+	case horizonmodels.WatchTriggerManual:
+		if subject.RuntimeMode == horizonmodels.WatchSubjectRuntimeRiskOnly {
+			return TriggerDecision{Decision: horizonmodels.WatchTriggerDecisionEnqueueRisk, Reason: "manual_risk_runtime", DirectMatch: directMatch}
+		}
+		if subject.RuntimeMode == horizonmodels.WatchSubjectRuntimeScoutOnly || subject.RuntimeMode == horizonmodels.WatchSubjectRuntimeCombined || subject.RuntimeMode == horizonmodels.WatchSubjectRuntimeGeneralized {
+			return TriggerDecision{Decision: horizonmodels.WatchTriggerDecisionEnqueueScout, Reason: "manual_scout_runtime", DirectMatch: directMatch}
+		}
+		return TriggerDecision{Decision: horizonmodels.WatchTriggerDecisionWakeScopeAgent, Reason: "manual_scope_wake", DirectMatch: directMatch}
+	default:
+		return TriggerDecision{Decision: horizonmodels.WatchTriggerDecisionWakeScopeAgent, Reason: "default_scope_wake", DirectMatch: directMatch}
+	}
 }
 
 func (s *Service) ProcessTrigger(ctx context.Context, trigger *horizonmodels.WatchTrigger) error {
 	if s == nil || s.subjectsRepo == nil || trigger == nil {
 		return nil
 	}
+	startedAt := time.Now().UTC()
 	subject, err := s.subjectsRepo.Get(ctx, trigger.SubjectID)
 	if err != nil || subject == nil {
 		return err
 	}
 	decision := s.AssessTrigger(subject, trigger)
-	if !decision.WakeScopeAgent || s.wakeHook == nil {
-		return nil
+	now := time.Now().UTC()
+	trigger.ProcessedAt = &now
+	trigger.Decision = decision.Decision
+	trigger.DecisionReason = decision.Reason
+	trigger.ProcessingError = ""
+	if trigger.MatchMode == "" {
+		if decision.DirectMatch {
+			trigger.MatchMode = horizonmodels.WatchTriggerMatchAnchor
+		} else if len(trigger.CanonicalPaths) > 0 {
+			trigger.MatchMode = horizonmodels.WatchTriggerMatchUniverse
+		}
+	}
+	var runRefs []string
+	var jobRefs []string
+	var processErr error
+	switch decision.Decision {
+	case horizonmodels.WatchTriggerDecisionNoop, horizonmodels.WatchTriggerDecisionWarmOnly:
+		if s.recommendationActionHook != nil && parseBool(trigger.Metadata["scoutCompletion"]) {
+			processErr = s.recommendationActionHook(ctx, s.recommendationInputFor(subject, trigger))
+		}
+	case horizonmodels.WatchTriggerDecisionWakeScopeAgent:
+		runRefs, processErr = s.wakeScopeAgent(ctx, subject, trigger, decision)
+	case horizonmodels.WatchTriggerDecisionEnqueueRisk:
+		jobRefs, processErr = s.enqueueRisk(ctx, subject, trigger, decision)
+	case horizonmodels.WatchTriggerDecisionEnqueueScout:
+		jobRefs, processErr = s.enqueueScout(ctx, subject, trigger, decision)
+	case horizonmodels.WatchTriggerDecisionCreateOrRefreshRecommendation:
+		if s.recommendationActionHook != nil {
+			processErr = s.recommendationActionHook(ctx, s.recommendationInputFor(subject, trigger))
+		}
+	}
+	trigger.RunRefs = compactUnique(append(trigger.RunRefs, runRefs...))
+	trigger.JobRefs = compactUnique(append(trigger.JobRefs, jobRefs...))
+	if processErr != nil {
+		trigger.ProcessingError = strings.TrimSpace(processErr.Error())
+	} else {
+		s.bumpMetric("watch_trigger_decisions_total")
+		s.bumpMetric("watch_trigger_decisions_total:decision=" + string(decision.Decision))
+		s.bumpMetric("watch_trigger_decisions_total:reason=" + decision.Reason)
+	}
+	s.observeLatency(time.Since(startedAt))
+	if updateErr := s.triggersRepo.UpdateProcessing(ctx, trigger); updateErr != nil && processErr == nil {
+		processErr = updateErr
+	}
+	return processErr
+}
+
+func (s *Service) wakeScopeAgent(ctx context.Context, subject *horizonmodels.WatchSubject, trigger *horizonmodels.WatchTrigger, decision TriggerDecision) ([]string, error) {
+	if s == nil || s.wakeHook == nil || subject == nil || trigger == nil {
+		return nil, nil
 	}
 	trace := map[string]any{
 		"watchSubjectId": strings.TrimSpace(subject.ID),
 		"watchTriggerId": strings.TrimSpace(trigger.ID),
 		"decision":       decision.Reason,
+		"decisionKind":   string(decision.Decision),
 		"triggerType":    string(trigger.TriggerType),
 		"canonicalPaths": compactUnique(append([]string{subject.AnchorCanonicalPath}, trigger.CanonicalPaths...)),
 	}
-	return s.wakeHook(ctx, subject.TenantID, subject.ID, string(trigger.TriggerType), firstNonEmpty(trigger.TriggerReason, decision.Reason), trace)
+	runRefs, err := s.wakeHook(ctx, subject.TenantID, subject.ID, string(trigger.TriggerType), firstNonEmpty(trigger.TriggerReason, decision.Reason), trace)
+	if err == nil && len(runRefs) > 0 {
+		s.bumpMetric("watch_scope_wakes_total")
+	}
+	return compactUnique(runRefs), err
+}
+
+func (s *Service) enqueueRisk(ctx context.Context, subject *horizonmodels.WatchSubject, trigger *horizonmodels.WatchTrigger, decision TriggerDecision) ([]string, error) {
+	if s == nil || s.riskJobsRepo == nil || subject == nil || trigger == nil {
+		return nil, nil
+	}
+	projectID := s.resolveProjectIDForSubject(ctx, subject)
+	polarity := strings.ToLower(strings.TrimSpace(firstNonEmpty(trigger.Polarity, asString(trigger.Metadata["polarity"]))))
+	if polarity != "opportunity" {
+		polarity = "risk"
+	}
+	job := &horizonmodels.RiskJob{
+		TenantID:            strings.TrimSpace(firstNonEmpty(subject.TenantID, "global")),
+		ProjectID:           projectID,
+		TriggerType:         "watchruntime",
+		TriggerRef:          "watchtrigger:" + strings.TrimSpace(trigger.ID),
+		DedupKey:            buildRiskJobDedupKey(subject, trigger, projectID, polarity),
+		TargetCanonicalPath: strings.TrimSpace(subject.AnchorCanonicalPath),
+		Polarity:            polarity,
+		CurrentStage:        horizonmodels.RiskStageIdentify,
+		CurrentState:        horizonmodels.RiskJobStatePending,
+		State: map[string]any{
+			"watchSubjectId":      strings.TrimSpace(subject.ID),
+			"watchTriggerId":      strings.TrimSpace(trigger.ID),
+			"watchDecision":       string(decision.Decision),
+			"watchDecisionReason": decision.Reason,
+			"matchMode":           string(trigger.MatchMode),
+			"triggerType":         string(trigger.TriggerType),
+			"signalStrength":      trigger.SignalStrength,
+			"confidence":          trigger.Confidence,
+			"canonicalPaths":      compactUnique(trigger.CanonicalPaths),
+			"sourceIds":           compactUnique(trigger.SourceIDs),
+			"semanticWatermark":   strings.TrimSpace(trigger.SemanticWatermark),
+		},
+	}
+	id, _, err := s.riskJobsRepo.Create(ctx, job)
+	if err != nil {
+		return nil, err
+	}
+	s.bumpMetric("watch_runtime_jobs_total")
+	s.bumpMetric("watch_runtime_jobs_total:kind=risk")
+	return []string{"risk:" + strings.TrimSpace(id)}, nil
+}
+
+func (s *Service) enqueueScout(ctx context.Context, subject *horizonmodels.WatchSubject, trigger *horizonmodels.WatchTrigger, decision TriggerDecision) ([]string, error) {
+	if s == nil || s.scoutingJobsRepo == nil || subject == nil || trigger == nil {
+		return nil, nil
+	}
+	projectID := s.resolveProjectIDForSubject(ctx, subject)
+	lensID := strings.TrimSpace(firstNonEmpty(subject.LensID, asString(trigger.Metadata["lensId"])))
+	title := strings.TrimSpace(firstNonEmpty(asString(trigger.Metadata["headline"]), trigger.TriggerReason, subject.DisplayLabel))
+	state := map[string]any{
+		"watchSubjectId":      strings.TrimSpace(subject.ID),
+		"watchTriggerId":      strings.TrimSpace(trigger.ID),
+		"watchDecision":       string(decision.Decision),
+		"watchDecisionReason": decision.Reason,
+		"targetCanonicalPath": strings.TrimSpace(subject.AnchorCanonicalPath),
+		"currentState":        string(horizonmodels.ScoutingJobStatePending),
+		"sourceIds":           compactUnique(trigger.SourceIDs),
+		"canonicalPaths":      compactUnique(trigger.CanonicalPaths),
+		"matchMode":           string(trigger.MatchMode),
+		"signalStrength":      trigger.SignalStrength,
+		"confidence":          trigger.Confidence,
+		"semanticWatermark":   strings.TrimSpace(trigger.SemanticWatermark),
+		"lensId":              lensID,
+		"triggerType":         string(trigger.TriggerType),
+	}
+	strategy := horizonmodels.ScoutingStrategySnapshot
+	if strings.TrimSpace(asString(trigger.Metadata["recommendationId"])) != "" {
+		state["jobKind"] = strategicEnrichmentJobKind
+		state["strategicRecommendationId"] = strings.TrimSpace(asString(trigger.Metadata["recommendationId"]))
+		state["strategicStage"] = strings.TrimSpace(firstNonEmpty(asString(trigger.Metadata["jobStage"]), strategicEnrichmentStageTarget))
+		state["strategicGapReason"] = strings.TrimSpace(asString(trigger.Metadata["reason"]))
+		state["strategicDomainContractHint"] = strings.TrimSpace(asString(trigger.Metadata["domainHint"]))
+		state["strategicSubjectType"] = strings.TrimSpace(asString(trigger.Metadata["subjectType"]))
+		state["keywords"] = compactUnique(append([]string{strings.TrimSpace(subject.AnchorCanonicalPath)}, normalizeAnySlice(trigger.Metadata["expectedMissingTargets"])...))
+		state["focus"] = "strategic_gap_enrichment"
+		strategy = horizonmodels.ScoutingStrategySnapshot
+	}
+	job := &horizonmodels.ScoutingJob{
+		AgentJob: coremodels.AgentJob{
+			TenantID:  strings.TrimSpace(firstNonEmpty(subject.TenantID, "global")),
+			ProjectID: projectID,
+			UserID:    "system",
+			AgentID:   "scout",
+			Title:     title,
+			Status:    coremodels.AgentJobStatusPending,
+			Progress:  0,
+			UserQuery: title,
+			AutoMode:  true,
+			PlanMode:  coremodels.PlanModeAuto,
+			Task: map[string]any{
+				"targetCanonicalPath": strings.TrimSpace(subject.AnchorCanonicalPath),
+				"sourceIds":           compactUnique(trigger.SourceIDs),
+				"scoutingStrategy":    string(strategy),
+			},
+			State: state,
+		},
+		LensID:              lensID,
+		TargetCanonicalPath: strings.TrimSpace(subject.AnchorCanonicalPath),
+		SourceIDs:           compactUnique(trigger.SourceIDs),
+		ScoutingStrategy:    string(strategy),
+		BillingContext: horizonmodels.BillingContext{
+			ChargeModel: string(horizonmodels.ChargeModelAccess),
+			ProjectID:   projectID,
+		},
+		CurrentState: horizonmodels.ScoutingJobStatePending,
+	}
+	if _, err := s.scoutingJobsRepo.Create(ctx, job); err != nil {
+		return nil, err
+	}
+	if recID := strings.TrimSpace(asString(trigger.Metadata["recommendationId"])); recID != "" && s.recommendationExecutionHook != nil {
+		stage := strings.TrimSpace(firstNonEmpty(asString(trigger.Metadata["jobStage"]), strategicEnrichmentStageTarget))
+		if err := s.recommendationExecutionHook(ctx, recID, strings.TrimSpace(job.ID), stage, "Execution started from unified watch runtime."); err != nil {
+			return nil, err
+		}
+	}
+	s.bumpMetric("watch_runtime_jobs_total")
+	s.bumpMetric("watch_runtime_jobs_total:kind=scout")
+	return []string{"scout:" + strings.TrimSpace(job.ID)}, nil
+}
+
+func (s *Service) HandleScoutingJobComplete(ctx context.Context, job *horizonmodels.ScoutingJob) error {
+	if s == nil || job == nil {
+		return nil
+	}
+	subjectID := strings.TrimSpace(asString(job.State["watchSubjectId"]))
+	tenantID := strings.TrimSpace(firstNonEmpty(job.TenantID, "global"))
+	targetCanonicalPath := strings.TrimSpace(firstNonEmpty(job.TargetCanonicalPath, asString(job.State["targetCanonicalPath"])))
+	if subjectID != "" {
+		_, _, err := s.EmitAndProcessTrigger(ctx, &horizonmodels.WatchTrigger{
+			SubjectID:         subjectID,
+			TriggerType:       horizonmodels.WatchTriggerManual,
+			TriggerReason:     "scouting job completed",
+			CanonicalPaths:    compactUnique([]string{targetCanonicalPath}),
+			SignalStrength:    0.65,
+			Confidence:        0.90,
+			SemanticWatermark: firstNonEmpty(strings.TrimSpace(job.ID), strings.TrimSpace(asString(job.State["watchTriggerId"]))),
+			Metadata: map[string]any{
+				"scoutCompletion":     true,
+				"jobId":               strings.TrimSpace(job.ID),
+				"currentState":        strings.TrimSpace(string(job.CurrentState)),
+				"targetCanonicalPath": targetCanonicalPath,
+			},
+		})
+		return err
+	}
+	if targetCanonicalPath == "" {
+		return nil
+	}
+	_, err := s.EmitTriggerByAnchor(ctx, tenantID, targetCanonicalPath, horizonmodels.WatchTriggerManual, "scouting job completed", 0.65, 0.90, map[string]any{
+		"scoutCompletion":     true,
+		"jobId":               strings.TrimSpace(job.ID),
+		"currentState":        strings.TrimSpace(string(job.CurrentState)),
+		"targetCanonicalPath": targetCanonicalPath,
+	})
+	return err
+}
+
+func (s *Service) recommendationInputFor(subject *horizonmodels.WatchSubject, trigger *horizonmodels.WatchTrigger) RecommendationActionInput {
+	input := RecommendationActionInput{
+		TenantID:             strings.TrimSpace(firstNonEmpty(subject.TenantID, "global")),
+		ProjectID:            strings.TrimSpace(firstNonEmpty(subject.ProjectID, asString(trigger.Metadata["projectId"]))),
+		LensID:               strings.TrimSpace(firstNonEmpty(subject.LensID, asString(trigger.Metadata["lensId"]))),
+		SubjectCanonicalPath: strings.TrimSpace(firstNonEmpty(subject.AnchorCanonicalPath, firstCanonicalPath(trigger.CanonicalPaths))),
+		TriggerType:          trigger.TriggerType,
+		TriggerReason:        strings.TrimSpace(trigger.TriggerReason),
+		EventTitle:           strings.TrimSpace(firstNonEmpty(asString(trigger.Metadata["headline"]), asString(trigger.Metadata["eventTitle"]))),
+		EventSummary:         strings.TrimSpace(firstNonEmpty(asString(trigger.Metadata["summary"]), asString(trigger.Metadata["eventSummary"]), asString(trigger.Metadata["reason"]))),
+		SignalAxis:           strings.TrimSpace(asString(trigger.Metadata["signalAxis"])),
+		BusinessEndpoints:    asInt(trigger.Metadata["businessEndpoints"]),
+		RemoteEndpoints:      asInt(trigger.Metadata["remoteEndpoints"]),
+		PathFamilies:         asInt(trigger.Metadata["pathFamilies"]),
+		OccurredAt:           time.Now().UTC(),
+	}
+	switch subject.SubjectKind {
+	case horizonmodels.WatchSubjectKindAffectedZone:
+		input.SubjectType = horizonmodels.StrategicRecommendationSubjectAffectedZone
+	case horizonmodels.WatchSubjectKindLensUniverse:
+		input.SubjectType = horizonmodels.StrategicRecommendationSubjectSignalBundle
+	default:
+		input.SubjectType = horizonmodels.StrategicRecommendationSubjectFragment
+	}
+	return input
 }
 
 func (s *Service) buildWatchUniverse(ctx context.Context, lens *horizonmodels.Lens) []string {
@@ -582,6 +1232,7 @@ func (s *Service) ensureDerivedScopeAgentConfig(ctx context.Context, subject *ho
 	if s == nil || s.scopeAgentConfigsRepo == nil || subject == nil {
 		return nil
 	}
+	existing, _ := s.scopeAgentConfigsRepo.ListActiveBySubjectID(ctx, strings.TrimSpace(subject.TenantID), strings.TrimSpace(subject.ID))
 	cfg := &horizonmodels.ScopeAgentConfig{
 		TenantID:           strings.TrimSpace(subject.TenantID),
 		SubjectID:          strings.TrimSpace(subject.ID),
@@ -615,7 +1266,151 @@ func (s *Service) ensureDerivedScopeAgentConfig(ctx context.Context, subject *ho
 			"subjectKind":    string(subject.SubjectKind),
 		},
 	}
-	return s.scopeAgentConfigsRepo.Upsert(ctx, cfg)
+	if err := s.scopeAgentConfigsRepo.Upsert(ctx, cfg); err != nil {
+		return err
+	}
+	if len(existing) == 0 {
+		s.bumpMetric("watch_scope_configs_ensured_total")
+	}
+	return nil
+}
+
+func (s *Service) backfillTargetArtifacts(ctx context.Context, target *horizonmodels.WatchTarget, subject *horizonmodels.WatchSubject) (int, error) {
+	if s == nil || target == nil || subject == nil {
+		return 0, nil
+	}
+	linked := 0
+	if s.watchBriefsRepo != nil && strings.TrimSpace(target.LastBriefID) != "" {
+		brief, err := s.watchBriefsRepo.Get(ctx, strings.TrimSpace(target.LastBriefID))
+		if err == nil && brief != nil && strings.TrimSpace(brief.SubjectID) != strings.TrimSpace(subject.ID) {
+			brief.SubjectID = strings.TrimSpace(subject.ID)
+			if err := s.watchBriefsRepo.Upsert(ctx, brief); err != nil {
+				return linked, err
+			}
+			linked++
+		}
+	}
+	if s.watchFeedEntriesRepo != nil && strings.TrimSpace(target.ID) != "" {
+		entries, err := s.watchFeedEntriesRepo.ListByTarget(ctx, strings.TrimSpace(target.TenantID), strings.TrimSpace(target.ID), 50)
+		if err != nil {
+			return linked, err
+		}
+		for _, entry := range entries {
+			if entry == nil || strings.TrimSpace(entry.ID) == "" || strings.TrimSpace(entry.SubjectID) == strings.TrimSpace(subject.ID) {
+				continue
+			}
+			entry.SubjectID = strings.TrimSpace(subject.ID)
+			if err := s.watchFeedEntriesRepo.Update(ctx, entry); err != nil {
+				return linked, err
+			}
+			linked++
+		}
+	}
+	return linked, nil
+}
+
+func (s *Service) backfillScopeRunsForConfig(ctx context.Context, cfg *horizonmodels.ScopeAgentConfig, subjectID string, limit int) (int, error) {
+	if s == nil || s.scopeAgentRunsRepo == nil || cfg == nil || strings.TrimSpace(cfg.ID) == "" || strings.TrimSpace(subjectID) == "" {
+		return 0, nil
+	}
+	runs, err := s.scopeAgentRunsRepo.ListByConfigID(ctx, strings.TrimSpace(cfg.ID), limit)
+	if err != nil {
+		return 0, err
+	}
+	linked := 0
+	for _, run := range runs {
+		if run == nil || strings.TrimSpace(run.ID) == "" || strings.TrimSpace(run.SubjectID) == strings.TrimSpace(subjectID) {
+			continue
+		}
+		run.SubjectID = strings.TrimSpace(subjectID)
+		if err := s.scopeAgentRunsRepo.Update(ctx, run); err != nil {
+			return linked, err
+		}
+		linked++
+	}
+	return linked, nil
+}
+
+func (s *Service) pauseLegacyScopeConfigs(ctx context.Context, configs []*horizonmodels.ScopeAgentConfig) (int, error) {
+	if s == nil || s.scopeAgentConfigsRepo == nil || len(configs) == 0 {
+		return 0, nil
+	}
+	byScope := make(map[string][]*horizonmodels.ScopeAgentConfig)
+	for _, cfg := range configs {
+		if cfg == nil || strings.TrimSpace(cfg.ID) == "" || !strings.EqualFold(strings.TrimSpace(cfg.Status), string(horizonmodels.ScopeAgentStatusRunning)) {
+			continue
+		}
+		scope := strings.TrimSpace(cfg.ScopeCanonicalPath)
+		if scope == "" {
+			continue
+		}
+		byScope[scope] = append(byScope[scope], cfg)
+	}
+	paused := 0
+	for _, group := range byScope {
+		if len(group) < 2 {
+			continue
+		}
+		sort.SliceStable(group, func(i, j int) bool {
+			left := strings.TrimSpace(group[i].SubjectID) != ""
+			right := strings.TrimSpace(group[j].SubjectID) != ""
+			if left != right {
+				return left
+			}
+			return group[i].UpdatedAt.After(group[j].UpdatedAt)
+		})
+		keeper := group[0]
+		for _, cfg := range group[1:] {
+			if cfg == nil || strings.TrimSpace(cfg.ID) == strings.TrimSpace(keeper.ID) {
+				continue
+			}
+			cfg.Status = string(horizonmodels.ScopeAgentStatusPaused)
+			if cfg.Metadata == nil {
+				cfg.Metadata = map[string]any{}
+			}
+			cfg.Metadata["legacyPausedByWatchRuntime"] = true
+			cfg.Metadata["legacyPausedForSubjectId"] = strings.TrimSpace(keeper.SubjectID)
+			if err := s.scopeAgentConfigsRepo.Upsert(ctx, cfg); err != nil {
+				return paused, err
+			}
+			paused++
+		}
+	}
+	return paused, nil
+}
+
+func (s *Service) resolveProjectIDForSubject(ctx context.Context, subject *horizonmodels.WatchSubject) string {
+	if subject == nil {
+		return defaultWatchRuntimeProjectID
+	}
+	if v := strings.TrimSpace(subject.ProjectID); v != "" {
+		return v
+	}
+	if s.fragmentsRepo != nil {
+		if strings.TrimSpace(subject.AnchorFragmentID) != "" {
+			if fragment, err := s.fragmentsRepo.Get(ctx, strings.TrimSpace(subject.AnchorFragmentID)); err == nil && fragment != nil && fragment.Governance.CreatedByProjectID != nil && strings.TrimSpace(*fragment.Governance.CreatedByProjectID) != "" {
+				return strings.TrimSpace(*fragment.Governance.CreatedByProjectID)
+			}
+		}
+		if strings.TrimSpace(subject.AnchorCanonicalPath) != "" {
+			if fragment, err := s.fragmentsRepo.GetByCanonicalPath(ctx, strings.TrimSpace(subject.AnchorCanonicalPath)); err == nil && fragment != nil && fragment.Governance.CreatedByProjectID != nil && strings.TrimSpace(*fragment.Governance.CreatedByProjectID) != "" {
+				return strings.TrimSpace(*fragment.Governance.CreatedByProjectID)
+			}
+		}
+	}
+	return defaultWatchRuntimeProjectID
+}
+
+func buildRiskJobDedupKey(subject *horizonmodels.WatchSubject, trigger *horizonmodels.WatchTrigger, projectID, polarity string) string {
+	return strings.Join([]string{
+		"risk_job_dedup",
+		strings.TrimSpace(subject.TenantID),
+		strings.TrimSpace(projectID),
+		strings.TrimSpace(subject.LensID),
+		strings.TrimSpace(subject.AnchorCanonicalPath),
+		"watchtrigger:" + strings.TrimSpace(trigger.ID),
+		strings.TrimSpace(polarity),
+	}, "|")
 }
 
 func sourceModeFromWatchdog(cfg *horizonmodels.WatchdogConfig) horizonmodels.WatchSubjectSourceMode {
@@ -640,15 +1435,15 @@ func buildWatchTriggerDedupeKey(trigger *horizonmodels.WatchTrigger) string {
 	}
 	paths := compactUnique(trigger.CanonicalPaths)
 	sourceIDs := compactUnique(trigger.SourceIDs)
+	watermark := firstNonEmpty(strings.TrimSpace(trigger.SemanticWatermark), semanticWatermarkFromTrigger(trigger))
 	raw := strings.Join([]string{
 		strings.TrimSpace(trigger.SubjectID),
 		string(trigger.TriggerType),
-		strings.TrimSpace(trigger.TriggerReason),
+		strings.TrimSpace(watermark),
 		strings.Join(paths, ","),
 		strings.Join(sourceIDs, ","),
 		strings.TrimSpace(trigger.Polarity),
-		fmt.Sprintf("%.4f", trigger.SignalStrength),
-		fmt.Sprintf("%.4f", trigger.Confidence),
+		string(trigger.MatchMode),
 	}, "|")
 	sum := sha1.Sum([]byte(raw))
 	return "watch_trigger:" + hex.EncodeToString(sum[:])
@@ -746,6 +1541,144 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func pathSliceContains(paths []string, canonicalPath string) bool {
+	canonicalPath = strings.TrimSpace(canonicalPath)
+	if canonicalPath == "" {
+		return false
+	}
+	for _, path := range paths {
+		if strings.TrimSpace(path) == canonicalPath {
+			return true
+		}
+	}
+	return false
+}
+
+func firstCanonicalPath(paths []string) string {
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path != "" {
+			return path
+		}
+	}
+	return ""
+}
+
+func asString(v any) string {
+	if v == nil {
+		return ""
+	}
+	switch t := v.(type) {
+	case string:
+		return strings.TrimSpace(t)
+	case fmt.Stringer:
+		return strings.TrimSpace(t.String())
+	default:
+		return strings.TrimSpace(fmt.Sprintf("%v", v))
+	}
+}
+
+func asInt(v any) int {
+	switch t := v.(type) {
+	case int:
+		return t
+	case int32:
+		return int(t)
+	case int64:
+		return int(t)
+	case float32:
+		return int(t)
+	case float64:
+		return int(t)
+	case string:
+		t = strings.TrimSpace(t)
+		if t == "" {
+			return 0
+		}
+		var out int
+		fmt.Sscanf(t, "%d", &out)
+		return out
+	default:
+		return 0
+	}
+}
+
+func parseBool(v any) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		switch strings.ToLower(strings.TrimSpace(t)) {
+		case "1", "true", "yes":
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeAnySlice(v any) []string {
+	switch t := v.(type) {
+	case []string:
+		return compactUnique(t)
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, item := range t {
+			if s := asString(item); s != "" {
+				out = append(out, s)
+			}
+		}
+		return compactUnique(out)
+	default:
+		if s := asString(v); s != "" && s != "<nil>" {
+			return []string{s}
+		}
+		return nil
+	}
+}
+
+func semanticWatermarkFromTrigger(trigger *horizonmodels.WatchTrigger) string {
+	if trigger == nil {
+		return ""
+	}
+	candidates := []string{
+		asString(trigger.Metadata["semanticWatermark"]),
+		asString(trigger.Metadata["watermark"]),
+		asString(trigger.Metadata["factWatermark"]),
+		asString(trigger.Metadata["sourceDocumentId"]),
+		asString(trigger.Metadata["documentId"]),
+		asString(trigger.Metadata["zoneUpdatedAt"]),
+		asString(trigger.Metadata["jobId"]),
+		asString(trigger.Metadata["recommendationId"]),
+	}
+	for _, candidate := range candidates {
+		if strings.TrimSpace(candidate) != "" && strings.TrimSpace(candidate) != "<nil>" {
+			return strings.TrimSpace(candidate)
+		}
+	}
+	return ""
+}
+
+func (s *Service) bumpMetric(key string) {
+	if s == nil || s.metrics == nil || strings.TrimSpace(key) == "" {
+		return
+	}
+	s.metrics.mu.Lock()
+	defer s.metrics.mu.Unlock()
+	s.metrics.counters[strings.TrimSpace(key)]++
+	s.metrics.lastUpdatedAt = time.Now().UTC()
+}
+
+func (s *Service) observeLatency(d time.Duration) {
+	if s == nil || s.metrics == nil {
+		return
+	}
+	s.metrics.mu.Lock()
+	defer s.metrics.mu.Unlock()
+	s.metrics.latencyCount++
+	s.metrics.latencyTotalMs += float64(d.Milliseconds())
+	s.metrics.lastUpdatedAt = time.Now().UTC()
 }
 
 func compactUnique(in []string) []string {

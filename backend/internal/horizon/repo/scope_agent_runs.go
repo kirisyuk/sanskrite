@@ -115,3 +115,28 @@ func (r *ScopeAgentRunsRepository) ListByConfigID(ctx context.Context, configID 
 	}
 	return out, nil
 }
+
+func (r *ScopeAgentRunsRepository) ListByTenant(ctx context.Context, tenantID string, limit int) ([]*models.ScopeAgentRun, error) {
+	if r == nil || r.col == nil || strings.TrimSpace(tenantID) == "" {
+		return nil, ErrInvalidDocument
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	docs, err := r.col.Where("tenantId", "==", strings.TrimSpace(tenantID)).OrderBy("createdAt", firestore.Desc).Limit(limit).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*models.ScopeAgentRun, 0, len(docs))
+	for _, doc := range docs {
+		var run models.ScopeAgentRun
+		if err := doc.DataTo(&run); err != nil {
+			continue
+		}
+		if run.ID == "" {
+			run.ID = doc.Ref.ID
+		}
+		out = append(out, &run)
+	}
+	return out, nil
+}

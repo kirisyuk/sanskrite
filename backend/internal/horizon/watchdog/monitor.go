@@ -223,19 +223,12 @@ func (m *Monitor) scanFacts(ctx context.Context, config *horizonmodels.WatchdogC
 		sourceIDs = append(sourceIDs, config.SourceIDs...)
 		logf("phase=facts_decision fallback=config_sources fragmentId=%s sourceIds=%d", config.TargetFragmentID, len(sourceIDs))
 	}
-	// If still empty, we still create a job (planning mode) to avoid silent watchdog no-op.
+	// If still empty, we still emit a trigger. Unified watch runtime decides what to do next.
 	if len(sourceIDs) == 0 {
-		logf("phase=facts_decision warning=no_sources fragmentId=%s canonicalPath=%s creating_planning_job=true", config.TargetFragmentID, targetCanonicalPath)
+		logf("phase=facts_decision warning=no_sources fragmentId=%s canonicalPath=%s emitting_trigger_without_sources=true", config.TargetFragmentID, targetCanonicalPath)
 	}
 
-	// Risk runtime is the only valid watchdog execution target for risk semantics.
-	if m.riskJobsRepo == nil {
-		return fmt.Errorf("risk jobs repo not configured for watchdog risk runtime")
-	}
 	polarity := dominantPolarityFromFacts(signalFacts)
-	if err := m.createRiskJobFromWatchdog(ctx, config, fragment, sourceIDs, polarity, maxSemanticScore, qualifyingSignals); err != nil {
-		return err
-	}
 	m.emitUnifiedTrigger(ctx, config, fragment, &horizonmodels.WatchTrigger{
 		SubjectID:      strings.TrimSpace(config.SubjectID),
 		TriggerType:    horizonmodels.WatchTriggerFactDelta,
@@ -248,92 +241,10 @@ func (m *Monitor) scanFacts(ctx context.Context, config *horizonmodels.WatchdogC
 		Metadata: map[string]any{
 			"watchdogConfigId":  strings.TrimSpace(config.ID),
 			"qualifyingSignals": qualifyingSignals,
+			"factWatermark":     latestFactWatermark(signalFacts),
+			"polarity":          polarity,
 		},
 	})
-	return nil
-}
-
-func (m *Monitor) createRiskJobFromWatchdog(
-	ctx context.Context,
-	config *horizonmodels.WatchdogConfig,
-	fragment *horizonmodels.HorizonFragment,
-	sourceIDs []string,
-	polarity string,
-	maxSemanticScore float64,
-	qualifyingSignals int,
-) error {
-	if m.riskJobsRepo == nil {
-		return fmt.Errorf("risk jobs repo not configured")
-	}
-	if fragment == nil || strings.TrimSpace(fragment.CanonicalPath) == "" {
-		return fmt.Errorf("fragment canonical path is required for risk trigger")
-	}
-	polarity = strings.ToLower(strings.TrimSpace(polarity))
-	if polarity != "risk" && polarity != "opportunity" {
-		polarity = "risk"
-	}
-
-	projectID := ""
-	if m.dataSourcesRepo != nil && len(sourceIDs) > 0 {
-		if pid, err := m.dataSourcesRepo.ResolveProjectIDForSource(ctx, fragment.TenantID, strings.TrimSpace(sourceIDs[0])); err == nil {
-			projectID = strings.TrimSpace(pid)
-		}
-	}
-	if projectID == "" && fragment.Governance.CreatedByProjectID != nil {
-		projectID = strings.TrimSpace(*fragment.Governance.CreatedByProjectID)
-	}
-	if projectID == "" {
-		return fmt.Errorf("cannot resolve projectId for risk job")
-	}
-
-	triggerRef := "watchdog:" + strings.TrimSpace(config.ID)
-	dedupKey := strings.Join([]string{
-		"risk_job_dedup",
-		strings.TrimSpace(fragment.TenantID),
-		projectID,
-		"",
-		strings.TrimSpace(fragment.CanonicalPath),
-		triggerRef,
-		polarity,
-	}, "|")
-
-	job := &horizonmodels.RiskJob{
-		TenantID:            strings.TrimSpace(fragment.TenantID),
-		ProjectID:           projectID,
-		TriggerType:         "watchdog",
-		TriggerRef:          triggerRef,
-		DedupKey:            dedupKey,
-		TargetCanonicalPath: strings.TrimSpace(fragment.CanonicalPath),
-		Polarity:            polarity,
-		CurrentStage:        horizonmodels.RiskStageIdentify,
-		CurrentState:        horizonmodels.RiskJobStatePending,
-		State: map[string]any{
-			"watchdogConfigId":    strings.TrimSpace(config.ID),
-			"sourceIds":           sourceIDs,
-			"triggerThreshold":    config.TriggerThreshold,
-			"maxSemanticScore":    maxSemanticScore,
-			"qualifyingSignals":   qualifyingSignals,
-			"targetFragmentId":    strings.TrimSpace(fragment.ID),
-			"targetCanonicalPath": strings.TrimSpace(fragment.CanonicalPath),
-		},
-	}
-	id, created, err := m.riskJobsRepo.Create(ctx, job)
-	if err != nil {
-		return fmt.Errorf("failed to create risk job: %w", err)
-	}
-	logf("phase=risk_job_enqueued configId=%s fragmentId=%s canonicalPath=%s polarity=%s jobId=%s created=%v", config.ID, fragment.ID, fragment.CanonicalPath, polarity, id, created)
-	if m.scopeAgentWakeHook != nil {
-		_ = m.scopeAgentWakeHook(ctx, fragment.TenantID, fragment.CanonicalPath, "watchdog", fmt.Sprintf("watchdog:%s:%s", config.ID, polarity), map[string]any{
-			"watchdogConfigId":    strings.TrimSpace(config.ID),
-			"riskJobId":           id,
-			"created":             created,
-			"polarity":            polarity,
-			"maxSemanticScore":    maxSemanticScore,
-			"qualifyingSignals":   qualifyingSignals,
-			"targetFragmentId":    strings.TrimSpace(fragment.ID),
-			"targetCanonicalPath": strings.TrimSpace(fragment.CanonicalPath),
-		})
-	}
 	return nil
 }
 
@@ -638,32 +549,6 @@ func (m *Monitor) scanSource(ctx context.Context, source *models.DataSource, con
 		return nil
 	}
 
-	// Risk runtime is preferred when configured, even for source-hash based watchdog mode.
-	if m.riskJobsRepo != nil {
-		if m.fragmentsRepo == nil {
-			return fmt.Errorf("fragments repo not configured")
-		}
-		fragment, err := m.fragmentsRepo.Get(ctx, config.TargetFragmentID)
-		if err != nil {
-			return fmt.Errorf("failed to get fragment for risk trigger: %w", err)
-		}
-		if err := m.createRiskJobFromWatchdog(
-			ctx,
-			config,
-			fragment,
-			[]string{source.ID},
-			"risk",
-			clamp01(changeAmount),
-			1,
-		); err != nil {
-			return fmt.Errorf("failed to create risk job: %w", err)
-		}
-	} else {
-		// Legacy fallback for pure scout-only deployments.
-		if err := m.createScoutRequest(ctx, config, source); err != nil {
-			return fmt.Errorf("failed to create scout request: %w", err)
-		}
-	}
 	if fragment, err := m.fragmentsRepo.Get(ctx, config.TargetFragmentID); err == nil && fragment != nil {
 		m.emitUnifiedTrigger(ctx, config, fragment, &horizonmodels.WatchTrigger{
 			SubjectID:      strings.TrimSpace(config.SubjectID),
@@ -676,6 +561,8 @@ func (m *Monitor) scanSource(ctx context.Context, source *models.DataSource, con
 			Metadata: map[string]any{
 				"watchdogConfigId": strings.TrimSpace(config.ID),
 				"changeAmount":     changeAmount,
+				"contentHash":      contentHash,
+				"sourceDocumentId": strings.TrimSpace(result.DocumentID),
 			},
 		})
 	}
@@ -847,62 +734,6 @@ func (m *Monitor) logDecision(sourceID string, fragmentID string, d ChangeDecisi
 	logf(strings.Join(parts, " "))
 }
 
-// createScoutRequest создает запрос на разведку через Scout Engine
-func (m *Monitor) createScoutRequest(ctx context.Context, config *horizonmodels.WatchdogConfig, source *models.DataSource) error {
-	if m.scoutingJobsRepo == nil {
-		return fmt.Errorf("scouting jobs repo not configured")
-	}
-	if m.fragmentsRepo == nil {
-		return fmt.Errorf("fragments repo not configured")
-	}
-
-	// Получаем fragment для определения targetCanonicalPath
-	fragment, err := m.fragmentsRepo.Get(ctx, config.TargetFragmentID)
-	if err != nil {
-		return fmt.Errorf("failed to get fragment: %w", err)
-	}
-	if fragment.Governance.CreatedByProjectID == nil || *fragment.Governance.CreatedByProjectID == "" {
-		return fmt.Errorf("fragment has no createdByProjectId; cannot create scouting job")
-	}
-
-	// Создаем ScoutingJob для обновления fragment
-	scoutingJob := &horizonmodels.ScoutingJob{
-		AgentJob: models.AgentJob{
-			TenantID:  fragment.TenantID,
-			ProjectID: *fragment.Governance.CreatedByProjectID,
-			Status:    "pending",
-			AgentID:   "scout",
-			Task: map[string]interface{}{
-				"targetCanonicalPath": fragment.CanonicalPath,
-				"sourceIds":           []string{source.ID},
-				"scoutingStrategy":    "Snapshot",
-			},
-			State: map[string]interface{}{
-				"targetCanonicalPath": fragment.CanonicalPath,
-				"lensId":              "",
-				"currentState":        string(horizonmodels.ScoutingJobStatePending),
-				"sourceIds":           []string{source.ID},
-				"watchdogTriggered":   true,
-			},
-		},
-		TargetCanonicalPath: fragment.CanonicalPath,
-		SourceIDs:           []string{source.ID},
-		ScoutingStrategy:    string(horizonmodels.ScoutingStrategySnapshot),
-		BillingContext: horizonmodels.BillingContext{
-			ChargeModel: string(horizonmodels.ChargeModelAccess),
-			ProjectID:   *fragment.Governance.CreatedByProjectID,
-		},
-		CurrentState: horizonmodels.ScoutingJobStatePending,
-	}
-
-	// Запускаем ScoutingJob через Scout Engine
-	_, err = m.scoutingJobsRepo.Create(ctx, scoutingJob)
-	if err == nil {
-		logf("phase=scout_enqueued fragmentId=%s jobId=%s sources=1", config.TargetFragmentID, scoutingJob.ID)
-	}
-	return err
-}
-
 // getSourcesByIDs получает источники по ID
 func (m *Monitor) getSourcesByIDs(ctx context.Context, sourceIDs []string) ([]*models.DataSource, error) {
 	var sources []*models.DataSource
@@ -924,4 +755,20 @@ func (m *Monitor) emitUnifiedTrigger(ctx context.Context, config *horizonmodels.
 		trigger.SubjectID = strings.TrimSpace(config.SubjectID)
 	}
 	_ = m.triggerHook(ctx, config, fragment, trigger)
+}
+
+func latestFactWatermark(facts []*models.OntologyFact) string {
+	var latest time.Time
+	for _, fact := range facts {
+		if fact == nil {
+			continue
+		}
+		if fact.UpdatedAt.After(latest) {
+			latest = fact.UpdatedAt
+		}
+	}
+	if latest.IsZero() {
+		return ""
+	}
+	return latest.UTC().Format(time.RFC3339Nano)
 }

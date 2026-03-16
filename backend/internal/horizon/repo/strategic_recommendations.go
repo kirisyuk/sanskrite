@@ -151,6 +151,37 @@ func (r *StrategicRecommendationsRepository) CountPendingByTenant(ctx context.Co
 	return total, nil
 }
 
+func (r *StrategicRecommendationsRepository) ListBySubjectCanonicalPath(ctx context.Context, tenantID, canonicalPath string, limit int) ([]*models.StrategicRecommendation, error) {
+	if r == nil || r.col == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(canonicalPath) == "" {
+		return nil, ErrInvalidDocument
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	docs, err := r.col.Where("tenantId", "==", strings.TrimSpace(tenantID)).
+		Where("subjectCanonicalPath", "==", strings.TrimSpace(canonicalPath)).
+		OrderBy("updatedAt", firestore.Desc).
+		Limit(limit).
+		Documents(ctx).
+		GetAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*models.StrategicRecommendation, 0, len(docs))
+	for _, doc := range docs {
+		var rec models.StrategicRecommendation
+		if err := doc.DataTo(&rec); err != nil {
+			continue
+		}
+		rec.ID = doc.Ref.ID
+		out = append(out, &rec)
+	}
+	return out, nil
+}
+
 func (r *StrategicRecommendationsRepository) Update(ctx context.Context, rec *models.StrategicRecommendation) error {
 	if r == nil || r.col == nil || rec == nil {
 		return ErrInvalidDocument

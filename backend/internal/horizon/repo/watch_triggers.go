@@ -53,6 +53,10 @@ func (r *WatchTriggersRepository) CreateOrRefresh(ctx context.Context, trigger *
 			existing.Polarity = strings.TrimSpace(trigger.Polarity)
 			existing.SignalStrength = trigger.SignalStrength
 			existing.Confidence = trigger.Confidence
+			existing.SemanticWatermark = strings.TrimSpace(trigger.SemanticWatermark)
+			if trigger.MatchMode != "" {
+				existing.MatchMode = trigger.MatchMode
+			}
 			existing.Metadata = trigger.Metadata
 			existing.UpdatedAt = now
 			return tx.Set(ref, &existing)
@@ -63,6 +67,8 @@ func (r *WatchTriggersRepository) CreateOrRefresh(ctx context.Context, trigger *
 		trigger.UpdatedAt = now
 		trigger.CanonicalPaths = normalizeStrings(trigger.CanonicalPaths)
 		trigger.SourceIDs = normalizeStrings(trigger.SourceIDs)
+		trigger.RunRefs = normalizeStrings(trigger.RunRefs)
+		trigger.JobRefs = normalizeStrings(trigger.JobRefs)
 		created = true
 		return tx.Set(ref, trigger)
 	})
@@ -114,4 +120,20 @@ func (r *WatchTriggersRepository) ListBySubject(ctx context.Context, subjectID s
 		out = append(out, &trigger)
 	}
 	return out, nil
+}
+
+func (r *WatchTriggersRepository) UpdateProcessing(ctx context.Context, trigger *models.WatchTrigger) error {
+	if r == nil || r.col == nil || trigger == nil || strings.TrimSpace(trigger.ID) == "" {
+		return ErrInvalidDocument
+	}
+	trigger.CanonicalPaths = normalizeStrings(trigger.CanonicalPaths)
+	trigger.SourceIDs = normalizeStrings(trigger.SourceIDs)
+	trigger.RunRefs = normalizeStrings(trigger.RunRefs)
+	trigger.JobRefs = normalizeStrings(trigger.JobRefs)
+	if err := trigger.Validate(); err != nil {
+		return err
+	}
+	trigger.UpdatedAt = time.Now().UTC()
+	_, err := r.col.Doc(strings.TrimSpace(trigger.ID)).Set(ctx, trigger)
+	return err
 }

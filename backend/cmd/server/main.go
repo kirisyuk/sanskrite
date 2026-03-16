@@ -1792,10 +1792,24 @@ func main() {
 				horizonLensArtifactsRepo,
 				horizonFragmentsRepo,
 				horizonEdgesRepo,
-			).WithWakeHook(func(ctx context.Context, tenantID, subjectID, triggerType, triggerReason string, trace map[string]any) error {
-				_, err := scopeAgentService.WakeBySubjectID(ctx, tenantID, subjectID, triggerType, triggerReason, trace)
-				return err
-			})
+			).WithScopeAgentRunsRepository(horizonScopeAgentRunsRepo).
+				WithWatchBriefsRepository(horizonWatchBriefsRepo).
+				WithWatchFeedEntriesRepository(horizonWatchFeedRepo).
+				WithRiskJobsRepository(riskJobsRepo).
+				WithScoutingJobsRepository(horizonScoutingJobsRepo).
+				WithWakeHook(func(ctx context.Context, tenantID, subjectID, triggerType, triggerReason string, trace map[string]any) ([]string, error) {
+					runs, err := scopeAgentService.WakeBySubjectID(ctx, tenantID, subjectID, triggerType, triggerReason, trace)
+					if err != nil {
+						return nil, err
+					}
+					ids := make([]string, 0, len(runs))
+					for _, run := range runs {
+						if run != nil && strings.TrimSpace(run.ID) != "" {
+							ids = append(ids, strings.TrimSpace(run.ID))
+						}
+					}
+					return ids, nil
+				})
 			horizonService.SetWatchRuntimeService(watchRuntimeService)
 
 			watchService := horizonwatch.NewService(
@@ -1827,9 +1841,38 @@ func main() {
 			).WithWatchTriggerHook(func(ctx context.Context, tenantID, canonicalPath, reason string, metadata map[string]any) error {
 				return watchRuntimeService.EmitRecommendationApprovedByCanonicalPath(ctx, tenantID, canonicalPath, reason, metadata)
 			})
+			watchRuntimeService.WithRecommendationActionHook(func(ctx context.Context, input horizonwatchruntime.RecommendationActionInput) error {
+				switch input.TriggerType {
+				case horizonmodels.WatchTriggerPropagationGap:
+					_, _, err := strategicRecommendationsService.Detect(ctx, horizonrecommendations.DetectionInput{
+						TenantID:             input.TenantID,
+						ProjectID:            input.ProjectID,
+						LensID:               input.LensID,
+						EventTitle:           input.EventTitle,
+						EventSummary:         input.EventSummary,
+						SubjectCanonicalPath: input.SubjectCanonicalPath,
+						SubjectType:          input.SubjectType,
+						SignalAxis:           input.SignalAxis,
+						BusinessEndpoints:    input.BusinessEndpoints,
+						RemoteEndpoints:      input.RemoteEndpoints,
+						PathFamilies:         input.PathFamilies,
+						OccurredAt:           input.OccurredAt,
+					})
+					return err
+				default:
+					_, _, err := strategicRecommendationsService.ReconcileBySubjectCanonicalPath(ctx, input.TenantID, input.SubjectCanonicalPath, 20)
+					return err
+				}
+			}).WithRecommendationExecutionHook(func(ctx context.Context, recommendationID, jobID, stage, summary string) error {
+				_, err := strategicRecommendationsService.MarkExecuting(ctx, recommendationID, jobID, stage, summary)
+				return err
+			})
 			horizonService.SetStrategicRecommendationsService(strategicRecommendationsService)
 			horizonScoutingJobsRepo.WithOnComplete(func(ctx context.Context, job *horizonmodels.ScoutingJob) error {
-				return strategicRecommendationsService.HandleScoutingJobComplete(ctx, job)
+				if err := strategicRecommendationsService.HandleScoutingJobComplete(ctx, job); err != nil {
+					return err
+				}
+				return watchRuntimeService.HandleScoutingJobComplete(ctx, job)
 			})
 
 			// Initialize Lens subsystem
@@ -2011,50 +2054,23 @@ func main() {
 					}
 				}(fragmentID)
 			}
-			enqueueRiskJobForFragment := func(ctx context.Context, frag *horizonmodels.HorizonFragment, eventType, polarity, reason string) {
-				if riskJobsRepo == nil || frag == nil {
+			emitFeedbackWatchTrigger := func(ctx context.Context, frag *horizonmodels.HorizonFragment, eventType, polarity, reason string) {
+				if frag == nil {
 					return
 				}
-				projectID := ""
-				if frag.Governance.CreatedByProjectID != nil {
-					projectID = strings.TrimSpace(*frag.Governance.CreatedByProjectID)
-				}
-				if projectID == "" {
-					return
-				}
-				polarity = normalizeFeedbackPolarity(polarity)
-				triggerRef := strings.Join([]string{
-					"feedback",
-					strings.TrimSpace(eventType),
-					strings.TrimSpace(reason),
-					strings.TrimSpace(frag.ID),
-				}, ":")
-				dedupKey := strings.Join([]string{
-					"risk_job_dedup",
-					strings.TrimSpace(frag.TenantID),
-					projectID,
-					"",
-					strings.TrimSpace(frag.CanonicalPath),
-					triggerRef,
-					polarity,
-				}, "|")
-				_, _, err := riskJobsRepo.Create(ctx, &horizonmodels.RiskJob{
-					TenantID:            strings.TrimSpace(frag.TenantID),
-					ProjectID:           projectID,
-					TriggerType:         "feedback",
-					TriggerRef:          triggerRef,
-					DedupKey:            dedupKey,
-					TargetCanonicalPath: strings.TrimSpace(frag.CanonicalPath),
-					Polarity:            polarity,
-					CurrentStage:        horizonmodels.RiskStageIdentify,
-					CurrentState:        horizonmodels.RiskJobStatePending,
-					State: map[string]any{
-						"feedbackType":   strings.TrimSpace(eventType),
-						"feedbackReason": strings.TrimSpace(reason),
-					},
-				})
-				if err != nil {
-					logger.Printf("[horizon.feedback] risk_job_enqueue_failed fragmentId=%s polarity=%s err=%v", strings.TrimSpace(frag.ID), polarity, err)
+				_ = watchRuntimeService.SyncSubjectsForFragment(ctx, frag.ID)
+				if _, err := watchRuntimeService.EmitTriggerByAnchor(ctx, frag.TenantID, frag.CanonicalPath, horizonmodels.WatchTriggerManual, "feedback:"+strings.TrimSpace(eventType), 0.95, 0.95, map[string]any{
+					"feedbackType":   strings.TrimSpace(eventType),
+					"feedbackReason": strings.TrimSpace(reason),
+					"polarity":       normalizeFeedbackPolarity(polarity),
+					"semanticWatermark": strings.Join([]string{
+						"feedback",
+						strings.TrimSpace(eventType),
+						strings.TrimSpace(reason),
+						strings.TrimSpace(frag.ID),
+					}, ":"),
+				}); err != nil {
+					logger.Printf("[horizon.feedback] watch_trigger_emit_failed fragmentId=%s eventType=%s err=%v", strings.TrimSpace(frag.ID), strings.TrimSpace(eventType), err)
 				}
 			}
 			feedbackEmitter := horizonfeedback.FuncEmitter(func(ctx context.Context, event horizonfeedback.Event) error {
@@ -2089,13 +2105,13 @@ func main() {
 					if frag != nil {
 						enqueueForcedInterpretation(ctx, frag, event.Polarity, horizoninterp.TriggerPriorityHigh, horizoninterp.TriggerTypeRapidChange, 1.0)
 						triggerPropagationRefresh(frag.ID)
-						enqueueRiskJobForFragment(ctx, frag, eventType, event.Polarity, event.Reason)
+						emitFeedbackWatchTrigger(ctx, frag, eventType, event.Polarity, event.Reason)
 					}
 				case "attention_escalation":
 					if frag != nil {
 						enqueueForcedInterpretation(ctx, frag, event.Polarity, horizoninterp.TriggerPriorityAlways, horizoninterp.TriggerTypeVIP, 1.0)
 						triggerPropagationRefresh(frag.ID)
-						enqueueRiskJobForFragment(ctx, frag, eventType, event.Polarity, event.Reason)
+						emitFeedbackWatchTrigger(ctx, frag, eventType, event.Polarity, event.Reason)
 					}
 				}
 				return nil

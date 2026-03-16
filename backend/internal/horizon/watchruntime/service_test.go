@@ -25,7 +25,7 @@ func TestAssessTriggerDecision(t *testing.T) {
 		DedupeKey:      "t1",
 		SignalStrength: 0.05,
 		Confidence:     0.95,
-	}); !decision.WarmOnly || decision.WakeScopeAgent {
+	}); decision.Decision != horizonmodels.WatchTriggerDecisionWarmOnly {
 		t.Fatalf("expected weak signal to warm only, got %+v", decision)
 	}
 
@@ -35,8 +35,59 @@ func TestAssessTriggerDecision(t *testing.T) {
 		DedupeKey:      "t2",
 		SignalStrength: 0.85,
 		Confidence:     0.90,
-	}); !decision.WakeScopeAgent || decision.Noop {
-		t.Fatalf("expected strong signal to wake scope agent, got %+v", decision)
+		MatchMode:      horizonmodels.WatchTriggerMatchAnchor,
+	}); decision.Decision != horizonmodels.WatchTriggerDecisionEnqueueRisk {
+		t.Fatalf("expected strong direct fragment delta to enqueue risk, got %+v", decision)
+	}
+}
+
+func TestAssessTriggerRecommendationApprovedEnqueuesScout(t *testing.T) {
+	svc := &Service{}
+	subject := &horizonmodels.WatchSubject{
+		ID:                  "subj-2",
+		TenantID:            "global",
+		SubjectKind:         horizonmodels.WatchSubjectKindLensUniverse,
+		AnchorCanonicalPath: "/lens/runtime/lens-1",
+		DisplayLabel:        "Energy lens",
+		Status:              horizonmodels.WatchSubjectStatusActive,
+		SourceMode:          horizonmodels.WatchSubjectSourceHybrid,
+		RuntimeMode:         horizonmodels.WatchSubjectRuntimeCombined,
+	}
+	decision := svc.AssessTrigger(subject, &horizonmodels.WatchTrigger{
+		SubjectID:      subject.ID,
+		TriggerType:    horizonmodels.WatchTriggerRecommendationApproved,
+		DedupeKey:      "t3",
+		SignalStrength: 0.95,
+		Confidence:     0.99,
+		MatchMode:      horizonmodels.WatchTriggerMatchAnchor,
+	})
+	if decision.Decision != horizonmodels.WatchTriggerDecisionEnqueueScout {
+		t.Fatalf("expected approved recommendation to enqueue scout, got %+v", decision)
+	}
+}
+
+func TestAssessTriggerPropagationGapCreatesRecommendation(t *testing.T) {
+	svc := &Service{}
+	subject := &horizonmodels.WatchSubject{
+		ID:                  "subj-3",
+		TenantID:            "global",
+		SubjectKind:         horizonmodels.WatchSubjectKindLensUniverse,
+		AnchorCanonicalPath: "/lens/runtime/lens-2",
+		DisplayLabel:        "Helium lens",
+		Status:              horizonmodels.WatchSubjectStatusActive,
+		SourceMode:          horizonmodels.WatchSubjectSourceHybrid,
+		RuntimeMode:         horizonmodels.WatchSubjectRuntimeGeneralized,
+	}
+	decision := svc.AssessTrigger(subject, &horizonmodels.WatchTrigger{
+		SubjectID:      subject.ID,
+		TriggerType:    horizonmodels.WatchTriggerPropagationGap,
+		DedupeKey:      "t4",
+		SignalStrength: 0.80,
+		Confidence:     0.92,
+		MatchMode:      horizonmodels.WatchTriggerMatchUniverse,
+	})
+	if decision.Decision != horizonmodels.WatchTriggerDecisionCreateOrRefreshRecommendation {
+		t.Fatalf("expected propagation gap to create or refresh recommendation, got %+v", decision)
 	}
 }
 

@@ -35,6 +35,17 @@ func (r *WatchFeedEntriesRepository) Create(ctx context.Context, entry *models.W
 	return entry.ID, err
 }
 
+func (r *WatchFeedEntriesRepository) Update(ctx context.Context, entry *models.WatchFeedEntry) error {
+	if r == nil || r.col == nil || entry == nil || strings.TrimSpace(entry.ID) == "" {
+		return ErrInvalidDocument
+	}
+	if err := entry.Validate(); err != nil {
+		return err
+	}
+	_, err := r.col.Doc(strings.TrimSpace(entry.ID)).Set(ctx, entry)
+	return err
+}
+
 func (r *WatchFeedEntriesRepository) ListByTarget(ctx context.Context, tenantID, targetID string, limit int) ([]*models.WatchFeedEntry, error) {
 	if r == nil || r.col == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(targetID) == "" {
 		return nil, ErrInvalidDocument

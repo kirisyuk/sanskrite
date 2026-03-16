@@ -152,3 +152,28 @@ func (r *ScopeAgentConfigsRepository) ListByPack(ctx context.Context, tenantID, 
 	}
 	return out, nil
 }
+
+func (r *ScopeAgentConfigsRepository) ListByTenant(ctx context.Context, tenantID string, limit int) ([]*models.ScopeAgentConfig, error) {
+	if r == nil || r.col == nil || strings.TrimSpace(tenantID) == "" {
+		return nil, ErrInvalidDocument
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	docs, err := r.col.Where("tenantId", "==", strings.TrimSpace(tenantID)).Limit(limit).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*models.ScopeAgentConfig, 0, len(docs))
+	for _, doc := range docs {
+		var cfg models.ScopeAgentConfig
+		if err := doc.DataTo(&cfg); err != nil {
+			continue
+		}
+		if cfg.ID == "" {
+			cfg.ID = doc.Ref.ID
+		}
+		out = append(out, &cfg)
+	}
+	return out, nil
+}
