@@ -117,6 +117,7 @@ type ScopeAgentConfig struct {
 	TenantID           string         `json:"tenantId" firestore:"tenantId"`
 	PackID             string         `json:"packId,omitempty" firestore:"packId,omitempty"`
 	WatchTargetID      string         `json:"watchTargetId,omitempty" firestore:"watchTargetId,omitempty"`
+	SubjectID          string         `json:"subjectId,omitempty" firestore:"subjectId,omitempty"`
 	TargetFragmentID   string         `json:"targetFragmentId,omitempty" firestore:"targetFragmentId,omitempty"`
 	Name               string         `json:"name" firestore:"name"`
 	ScopeCanonicalPath string         `json:"scopeCanonicalPath" firestore:"scopeCanonicalPath"`
@@ -159,6 +160,7 @@ type ScopeAgentState struct {
 	ID                   string         `json:"id" firestore:"id"`
 	TenantID             string         `json:"tenantId" firestore:"tenantId"`
 	ConfigID             string         `json:"configId" firestore:"configId"`
+	SubjectID            string         `json:"subjectId,omitempty" firestore:"subjectId,omitempty"`
 	WatchTargetID        string         `json:"watchTargetId,omitempty" firestore:"watchTargetId,omitempty"`
 	Baseline             map[string]any `json:"baseline,omitempty" firestore:"baseline,omitempty"`
 	LastAcceptedForecast map[string]any `json:"lastAcceptedForecast,omitempty" firestore:"lastAcceptedForecast,omitempty"`
@@ -186,6 +188,7 @@ type ScopeAgentRun struct {
 	ID                  string         `json:"id" firestore:"id"`
 	TenantID            string         `json:"tenantId" firestore:"tenantId"`
 	ConfigID            string         `json:"configId" firestore:"configId"`
+	SubjectID           string         `json:"subjectId,omitempty" firestore:"subjectId,omitempty"`
 	WatchTargetID       string         `json:"watchTargetId,omitempty" firestore:"watchTargetId,omitempty"`
 	Status              string         `json:"status" firestore:"status"`
 	TriggerType         string         `json:"triggerType" firestore:"triggerType"`
@@ -291,6 +294,7 @@ type WatchTarget struct {
 	TenantID      string         `json:"tenantId" firestore:"tenantId"`
 	UserID        string         `json:"userId,omitempty" firestore:"userId,omitempty"`
 	PackID        string         `json:"packId,omitempty" firestore:"packId,omitempty"`
+	SubjectID     string         `json:"subjectId,omitempty" firestore:"subjectId,omitempty"`
 	Kind          string         `json:"kind" firestore:"kind"`
 	Label         string         `json:"label" firestore:"label"`
 	CanonicalPath string         `json:"canonicalPath" firestore:"canonicalPath"`
@@ -333,6 +337,7 @@ type WatchBrief struct {
 	ID                 string         `json:"id" firestore:"id"`
 	TenantID           string         `json:"tenantId" firestore:"tenantId"`
 	TargetID           string         `json:"targetId" firestore:"targetId"`
+	SubjectID          string         `json:"subjectId,omitempty" firestore:"subjectId,omitempty"`
 	CanonicalPath      string         `json:"canonicalPath" firestore:"canonicalPath"`
 	Label              string         `json:"label" firestore:"label"`
 	ScopeType          string         `json:"scopeType" firestore:"scopeType"`
@@ -372,6 +377,7 @@ type WatchFeedEntry struct {
 	ID             string         `json:"id" firestore:"id"`
 	TenantID       string         `json:"tenantId" firestore:"tenantId"`
 	TargetID       string         `json:"targetId" firestore:"targetId"`
+	SubjectID      string         `json:"subjectId,omitempty" firestore:"subjectId,omitempty"`
 	BriefID        string         `json:"briefId,omitempty" firestore:"briefId,omitempty"`
 	EntryType      string         `json:"entryType" firestore:"entryType"`
 	Title          string         `json:"title" firestore:"title"`

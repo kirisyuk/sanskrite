@@ -801,6 +801,7 @@ type LensService struct {
 	lifecycle             *LifecycleManager
 	calculator            *MetricsCalculator
 	watchdogHook          func(ctx context.Context, fragmentID string)
+	watchSubjectHook      func(ctx context.Context, lensID string)
 	queryResolver         *QueryResolver
 	realtime              *realtime.Publisher
 	criticalPathDetector  *critical_path.Detector         // Optional: for critical path detection
@@ -922,6 +923,10 @@ func (s *LensService) publish(ctx context.Context, et realtime.EventType, data m
 // после изменений жизненного цикла фрагментов (ACTIVE/DORMANT/ARCHIVED).
 func (s *LensService) SetWatchdogLifecycleHook(hook func(ctx context.Context, fragmentID string)) {
 	s.watchdogHook = hook
+}
+
+func (s *LensService) SetWatchSubjectSyncHook(hook func(ctx context.Context, lensID string)) {
+	s.watchSubjectHook = hook
 }
 
 // CreateLens создает новый Lens и управляет подписками
@@ -1917,6 +1922,9 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			"reasonMap":       reasonMap,
 		})
 	}
+	if s.watchSubjectHook != nil {
+		s.watchSubjectHook(ctx, lensID)
+	}
 
 	return lensID, nil
 }
@@ -2480,6 +2488,9 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 			"maxRootJobsApplied": executionPlan.MaxRootJobs,
 			"op":                 "update_lens",
 		})
+	}
+	if s.watchSubjectHook != nil {
+		s.watchSubjectHook(ctx, lens.ID)
 	}
 
 	return nil

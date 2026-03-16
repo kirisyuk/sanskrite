@@ -69,6 +69,7 @@ type Service struct {
 	exec             *ai.AITaskExecutor
 	realtime         *realtime.Publisher
 	logger           Logger
+	watchTriggerHook func(context.Context, string, string, string, map[string]any) error
 }
 
 func NewService(
@@ -89,6 +90,14 @@ func NewService(
 		realtime:         realtimePub,
 		logger:           logger,
 	}
+}
+
+func (s *Service) WithWatchTriggerHook(fn func(context.Context, string, string, string, map[string]any) error) *Service {
+	if s == nil {
+		return s
+	}
+	s.watchTriggerHook = fn
+	return s
 }
 
 func (s *Service) List(ctx context.Context, tenantID string, filter horizonrepo.StrategicRecommendationsListFilter) ([]*horizonmodels.StrategicRecommendation, error) {
@@ -398,6 +407,14 @@ func (s *Service) Approve(ctx context.Context, tenantID, userID, id string) (*ho
 		return nil, err
 	}
 	s.publish(ctx, tenantID, "horizon.recommendation.executing", updated)
+	if s.watchTriggerHook != nil {
+		_ = s.watchTriggerHook(ctx, strings.TrimSpace(updated.TenantID), strings.TrimSpace(updated.SubjectCanonicalPath), "recommendation_approved", map[string]any{
+			"recommendationId": strings.TrimSpace(updated.ID),
+			"jobId":            strings.TrimSpace(updated.Execution.JobID),
+			"domainHint":       strings.TrimSpace(updated.DomainContractHint),
+			"subjectType":      string(updated.SubjectType),
+		})
+	}
 	return updated, nil
 }
 

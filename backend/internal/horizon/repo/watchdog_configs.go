@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -25,6 +26,15 @@ func NewWatchdogConfigsRepository(db *firestore.Client) *WatchdogConfigsReposito
 	}
 }
 
+func watchdogConfigDocID(tenantID, targetFragmentID string) string {
+	tenantID = strings.TrimSpace(tenantID)
+	targetFragmentID = strings.TrimSpace(targetFragmentID)
+	if tenantID == "" || targetFragmentID == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s_%s", tenantID, targetFragmentID)
+}
+
 // Create создает новый WatchdogConfig
 func (r *WatchdogConfigsRepository) Create(ctx context.Context, config *models.WatchdogConfig) (string, error) {
 	if config == nil {
@@ -35,11 +45,15 @@ func (r *WatchdogConfigsRepository) Create(ctx context.Context, config *models.W
 	}
 
 	now := time.Now().UTC()
-	config.CreatedAt = now
+	if config.CreatedAt.IsZero() {
+		config.CreatedAt = now
+	}
 	config.UpdatedAt = now
 
-	doc := r.col.NewDoc()
-	config.ID = doc.ID
+	if strings.TrimSpace(config.ID) == "" {
+		config.ID = watchdogConfigDocID(config.TenantID, config.TargetFragmentID)
+	}
+	doc := r.col.Doc(strings.TrimSpace(config.ID))
 
 	if _, err := doc.Set(ctx, config); err != nil {
 		return "", err
@@ -80,6 +94,31 @@ func (r *WatchdogConfigsRepository) GetByTargetFragmentID(ctx context.Context, t
 	if err := docs[0].DataTo(&config); err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(config.ID) == "" {
+		config.ID = docs[0].Ref.ID
+	}
+	return &config, nil
+}
+
+func (r *WatchdogConfigsRepository) GetBySubjectID(ctx context.Context, tenantID, subjectID string) (*models.WatchdogConfig, error) {
+	if r == nil || r.col == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(subjectID) == "" {
+		return nil, ErrInvalidDocument
+	}
+	q := r.col.Where("tenantId", "==", strings.TrimSpace(tenantID)).Where("subjectId", "==", strings.TrimSpace(subjectID)).Limit(1)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(docs) == 0 {
+		return nil, ErrWatchdogConfigNotFound
+	}
+	var config models.WatchdogConfig
+	if err := docs[0].DataTo(&config); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(config.ID) == "" {
+		config.ID = docs[0].Ref.ID
+	}
 	return &config, nil
 }
 
@@ -99,6 +138,9 @@ func (r *WatchdogConfigsRepository) ListScheduled(ctx context.Context, tenantID 
 		var config models.WatchdogConfig
 		if err := d.DataTo(&config); err != nil {
 			continue
+		}
+		if strings.TrimSpace(config.ID) == "" {
+			config.ID = d.Ref.ID
 		}
 		configs = append(configs, &config)
 	}
@@ -143,4 +185,3 @@ func (r *WatchdogConfigsRepository) Delete(ctx context.Context, id string) error
 	_, err := r.col.Doc(id).Delete(ctx)
 	return err
 }
-

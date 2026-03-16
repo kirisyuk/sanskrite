@@ -32,6 +32,7 @@ type Monitor struct {
 	embeddings         ai.EmbeddingProvider
 	tuning             changeTuning
 	scopeAgentWakeHook func(ctx context.Context, tenantID, canonicalPath, triggerType, triggerReason string, trace map[string]any) error
+	triggerHook        func(ctx context.Context, config *horizonmodels.WatchdogConfig, fragment *horizonmodels.HorizonFragment, trigger *horizonmodels.WatchTrigger) error
 }
 
 // NewMonitor создает новый мониторинг
@@ -71,6 +72,11 @@ func (m *Monitor) WithRiskJobsRepository(r *horizonrepo.RiskJobsRepository) *Mon
 
 func (m *Monitor) WithScopeAgentWakeHook(hook func(ctx context.Context, tenantID, canonicalPath, triggerType, triggerReason string, trace map[string]any) error) *Monitor {
 	m.scopeAgentWakeHook = hook
+	return m
+}
+
+func (m *Monitor) WithTriggerHook(hook func(ctx context.Context, config *horizonmodels.WatchdogConfig, fragment *horizonmodels.HorizonFragment, trigger *horizonmodels.WatchTrigger) error) *Monitor {
+	m.triggerHook = hook
 	return m
 }
 
@@ -230,6 +236,20 @@ func (m *Monitor) scanFacts(ctx context.Context, config *horizonmodels.WatchdogC
 	if err := m.createRiskJobFromWatchdog(ctx, config, fragment, sourceIDs, polarity, maxSemanticScore, qualifyingSignals); err != nil {
 		return err
 	}
+	m.emitUnifiedTrigger(ctx, config, fragment, &horizonmodels.WatchTrigger{
+		SubjectID:      strings.TrimSpace(config.SubjectID),
+		TriggerType:    horizonmodels.WatchTriggerFactDelta,
+		TriggerReason:  fmt.Sprintf("watchdog facts crossed threshold for %s", targetCanonicalPath),
+		CanonicalPaths: []string{targetCanonicalPath},
+		SourceIDs:      append([]string(nil), sourceIDs...),
+		Polarity:       polarity,
+		SignalStrength: clamp01(maxSemanticScore),
+		Confidence:     clamp01(maxSemanticScore),
+		Metadata: map[string]any{
+			"watchdogConfigId":  strings.TrimSpace(config.ID),
+			"qualifyingSignals": qualifyingSignals,
+		},
+	})
 	return nil
 }
 
@@ -644,6 +664,21 @@ func (m *Monitor) scanSource(ctx context.Context, source *models.DataSource, con
 			return fmt.Errorf("failed to create scout request: %w", err)
 		}
 	}
+	if fragment, err := m.fragmentsRepo.Get(ctx, config.TargetFragmentID); err == nil && fragment != nil {
+		m.emitUnifiedTrigger(ctx, config, fragment, &horizonmodels.WatchTrigger{
+			SubjectID:      strings.TrimSpace(config.SubjectID),
+			TriggerType:    horizonmodels.WatchTriggerSourceDelta,
+			TriggerReason:  fmt.Sprintf("watchdog source delta on %s", strings.TrimSpace(source.ID)),
+			CanonicalPaths: []string{strings.TrimSpace(fragment.CanonicalPath)},
+			SourceIDs:      []string{strings.TrimSpace(source.ID)},
+			SignalStrength: clamp01(changeAmount),
+			Confidence:     clamp01(changeAmount),
+			Metadata: map[string]any{
+				"watchdogConfigId": strings.TrimSpace(config.ID),
+				"changeAmount":     changeAmount,
+			},
+		})
+	}
 
 	// Сохраняем новый хеш
 	m.saveHash(ctx, source.ID, contentHash, result.DocumentID)
@@ -879,4 +914,14 @@ func (m *Monitor) getSourcesByIDs(ctx context.Context, sourceIDs []string) ([]*m
 		sources = append(sources, source)
 	}
 	return sources, nil
+}
+
+func (m *Monitor) emitUnifiedTrigger(ctx context.Context, config *horizonmodels.WatchdogConfig, fragment *horizonmodels.HorizonFragment, trigger *horizonmodels.WatchTrigger) {
+	if m == nil || m.triggerHook == nil || config == nil || fragment == nil || trigger == nil {
+		return
+	}
+	if strings.TrimSpace(trigger.SubjectID) == "" {
+		trigger.SubjectID = strings.TrimSpace(config.SubjectID)
+	}
+	_ = m.triggerHook(ctx, config, fragment, trigger)
 }

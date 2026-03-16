@@ -475,6 +475,7 @@ func (s *Service) refreshBrief(ctx context.Context, target *horizonmodels.WatchT
 		ID:                 target.ID,
 		TenantID:           target.TenantID,
 		TargetID:           target.ID,
+		SubjectID:          target.SubjectID,
 		CanonicalPath:      target.CanonicalPath,
 		Label:              target.Label,
 		ScopeType:          target.Kind,

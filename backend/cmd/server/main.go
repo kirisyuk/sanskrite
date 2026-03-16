@@ -74,6 +74,7 @@ import (
 	horizontelemetry "github.com/igorkirisyuk/sanskrite/internal/horizon/telemetry"
 	horizonwatch "github.com/igorkirisyuk/sanskrite/internal/horizon/watch"
 	horizonwatchdog "github.com/igorkirisyuk/sanskrite/internal/horizon/watchdog"
+	horizonwatchruntime "github.com/igorkirisyuk/sanskrite/internal/horizon/watchruntime"
 	horizonhttp "github.com/igorkirisyuk/sanskrite/internal/http/horizon"
 )
 
@@ -1322,6 +1323,8 @@ func main() {
 		horizonScopeAgentRunsRepo := horizonrepo.NewScopeAgentRunsRepository(fsClient.Client())
 		horizonAgentProposalsRepo := horizonrepo.NewAgentProposalsRepository(fsClient.Client())
 		horizonArbitrationDecisionsRepo := horizonrepo.NewArbitrationDecisionsRepository(fsClient.Client())
+		horizonWatchSubjectsRepo := horizonrepo.NewWatchSubjectsRepository(fsClient.Client())
+		horizonWatchTriggersRepo := horizonrepo.NewWatchTriggersRepository(fsClient.Client())
 
 		// Horizon spend ledger (actual GenAI $ attribution) for budget enforcement.
 		horizonSpendLedger := horizonrepo.NewHorizonSpendLedger(fsClient.Client())
@@ -1779,6 +1782,21 @@ func main() {
 			}
 			horizonService.SetScopeAgentService(scopeAgentService)
 
+			watchRuntimeService := horizonwatchruntime.NewService(
+				horizonWatchSubjectsRepo,
+				horizonWatchTriggersRepo,
+				horizonWatchTargetsRepo,
+				horizonWatchdogRepo,
+				horizonScopeAgentConfigsRepo,
+				horizonLensesRepo,
+				horizonLensArtifactsRepo,
+				horizonFragmentsRepo,
+				horizonEdgesRepo,
+			).WithWakeHook(func(ctx context.Context, tenantID, subjectID, triggerType, triggerReason string, trace map[string]any) error {
+				_, err := scopeAgentService.WakeBySubjectID(ctx, tenantID, subjectID, triggerType, triggerReason, trace)
+				return err
+			})
+
 			watchService := horizonwatch.NewService(
 				horizonWatchTargetsRepo,
 				horizonWatchBriefsRepo,
@@ -1790,6 +1808,9 @@ func main() {
 				horizonArbitrationDecisionsRepo,
 				ontologyFactsRepo,
 			).WithRuntimeProvisioner(func(ctx context.Context, target *horizonmodels.WatchTarget) error {
+				if _, err := watchRuntimeService.EnsureSubjectForTarget(ctx, target); err != nil {
+					return err
+				}
 				_, err := scopeAgentService.EnsureRuntimeForTarget(ctx, target)
 				return err
 			})
@@ -1802,7 +1823,9 @@ func main() {
 				exec,
 				pub,
 				logger,
-			)
+			).WithWatchTriggerHook(func(ctx context.Context, tenantID, canonicalPath, reason string, metadata map[string]any) error {
+				return watchRuntimeService.EmitRecommendationApprovedByCanonicalPath(ctx, tenantID, canonicalPath, reason, metadata)
+			})
 			horizonService.SetStrategicRecommendationsService(strategicRecommendationsService)
 			horizonScoutingJobsRepo.WithOnComplete(func(ctx context.Context, job *horizonmodels.ScoutingJob) error {
 				return strategicRecommendationsService.HandleScoutingJobComplete(ctx, job)
@@ -1813,6 +1836,9 @@ func main() {
 			lensCalculator := horizonlens.NewMetricsCalculator(horizonFragmentsRepo)
 			lensService := horizonlens.NewLensService(horizonLensesRepo, horizonFragmentsRepo, horizonScoutingJobsRepo, ontologyFactsRepo, lensLifecycle, lensCalculator, pub).
 				WithLensArtifactsRepo(horizonLensArtifactsRepo)
+			lensService.SetWatchSubjectSyncHook(func(ctx context.Context, lensID string) {
+				_ = watchRuntimeService.SyncWatchSubjectsForLens(ctx, lensID)
+			})
 
 			// Wire cascade cleanup repos for lens deletion (best-effort orphan cleanup)
 			horizonLensItemsRepo := horizonrepo.NewLensItemsRepository(fsClient.Client())
@@ -2399,15 +2425,27 @@ func main() {
 			// Initialize Watchdog subsystem (requires ScoutEngine + SourceExecutor)
 			// Watchdog (background monitoring) can generate large volumes of Scout jobs.
 			// Keep it disabled by default; enable explicitly via env.
+			var watchdogService *horizonwatchdog.WatchdogService
 			if strings.TrimSpace(getEnvWithAlt("ENABLE_ETIGRAM_WATCHDOG", "ENABLE_HORIZON_WATCHDOG", "0")) == "1" {
 				watchdogMonitor := horizonwatchdog.NewMonitor(s.dsrcs, docsRepo, horizonFragmentsRepo, ontologyFactsRepo, horizonScoutingJobsRepo, scoutEngine, sourceExecutor, exec).
 					WithRiskJobsRepository(riskJobsRepo).
 					WithScopeAgentWakeHook(func(ctx context.Context, tenantID, canonicalPath, triggerType, triggerReason string, trace map[string]any) error {
 						_, err := scopeAgentService.WakeByCanonicalPath(ctx, tenantID, canonicalPath, triggerType, triggerReason, trace)
 						return err
+					}).
+					WithTriggerHook(func(ctx context.Context, config *horizonmodels.WatchdogConfig, fragment *horizonmodels.HorizonFragment, trigger *horizonmodels.WatchTrigger) error {
+						if _, err := watchRuntimeService.EnsureSubjectForWatchdogConfig(ctx, config); err != nil {
+							return err
+						}
+						trigger.SubjectID = strings.TrimSpace(config.SubjectID)
+						if len(trigger.CanonicalPaths) == 0 && fragment != nil && strings.TrimSpace(fragment.CanonicalPath) != "" {
+							trigger.CanonicalPaths = []string{strings.TrimSpace(fragment.CanonicalPath)}
+						}
+						_, _, err := watchRuntimeService.EmitAndProcessTrigger(ctx, trigger)
+						return err
 					})
 				watchdogScheduler := horizonwatchdog.NewScheduler()
-				watchdogService := horizonwatchdog.NewWatchdogService(
+				watchdogService = horizonwatchdog.NewWatchdogService(
 					horizonWatchdogRepo,
 					horizonFragmentsRepo,
 					watchdogMonitor,
@@ -2415,14 +2453,17 @@ func main() {
 					scoutEngine,
 				)
 				horizonService.SetWatchdogService(watchdogService)
-
-				// Wire Lens lifecycle -> Watchdog lifecycle (create/pause configs on ACTIVE/DORMANT)
-				lensService.SetWatchdogLifecycleHook(func(ctx context.Context, fragmentID string) {
-					_ = watchdogService.UpdateConfigLifecycle(ctx, fragmentID)
-				})
 				logger.Printf("Horizon Watchdog enabled")
 			} else {
 				logger.Printf("Etigram Watchdog disabled (set ENABLE_ETIGRAM_WATCHDOG=1 to enable)")
+			}
+			if lensService != nil {
+				lensService.SetWatchdogLifecycleHook(func(ctx context.Context, fragmentID string) {
+					_ = watchRuntimeService.SyncSubjectsForFragment(ctx, fragmentID)
+					if watchdogService != nil {
+						_ = watchdogService.UpdateConfigLifecycle(ctx, fragmentID)
+					}
+				})
 			}
 
 			// Legacy Firestore poller (disabled by default in prod).

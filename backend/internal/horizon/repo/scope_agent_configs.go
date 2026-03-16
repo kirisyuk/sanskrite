@@ -100,6 +100,37 @@ func (r *ScopeAgentConfigsRepository) ListActiveByCanonicalPath(ctx context.Cont
 	return out, nil
 }
 
+func (r *ScopeAgentConfigsRepository) ListActiveBySubjectID(ctx context.Context, tenantID, subjectID string) ([]*models.ScopeAgentConfig, error) {
+	if r == nil || r.col == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(subjectID) == "" {
+		return nil, ErrInvalidDocument
+	}
+	tenants := []string{strings.TrimSpace(tenantID)}
+	if strings.TrimSpace(tenantID) != "global" {
+		tenants = append(tenants, "global")
+	}
+	docs, err := r.col.
+		Where("tenantId", "in", tenants).
+		Where("subjectId", "==", strings.TrimSpace(subjectID)).
+		Where("status", "==", string(models.ScopeAgentStatusRunning)).
+		Documents(ctx).
+		GetAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*models.ScopeAgentConfig, 0, len(docs))
+	for _, doc := range docs {
+		var cfg models.ScopeAgentConfig
+		if err := doc.DataTo(&cfg); err != nil {
+			continue
+		}
+		if cfg.ID == "" {
+			cfg.ID = doc.Ref.ID
+		}
+		out = append(out, &cfg)
+	}
+	return out, nil
+}
+
 func (r *ScopeAgentConfigsRepository) ListByPack(ctx context.Context, tenantID, packID string) ([]*models.ScopeAgentConfig, error) {
 	if r == nil || r.col == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(packID) == "" {
 		return nil, ErrInvalidDocument

@@ -158,6 +158,7 @@ func (s *Service) EnsureRuntimeForTarget(ctx context.Context, target *horizonmod
 		TenantID:           strings.TrimSpace(firstNonEmpty(target.TenantID, "global")),
 		PackID:             strings.TrimSpace(target.PackID),
 		WatchTargetID:      strings.TrimSpace(target.ID),
+		SubjectID:          strings.TrimSpace(target.SubjectID),
 		TargetFragmentID:   strings.TrimSpace(target.FragmentID),
 		Name:               fmt.Sprintf("%s focused scope agent", strings.TrimSpace(target.Label)),
 		ScopeCanonicalPath: strings.TrimSpace(target.CanonicalPath),
@@ -195,6 +196,7 @@ func (s *Service) EnsureRuntimeForTarget(ctx context.Context, target *horizonmod
 		state.CoverageGaps = []string{"historical_baseline", "scenario_envelope"}
 	}
 	state.WatchTargetID = target.ID
+	state.SubjectID = cfg.SubjectID
 	if err := s.statesRepo.Upsert(ctx, state); err != nil {
 		return nil, err
 	}
@@ -203,7 +205,7 @@ func (s *Service) EnsureRuntimeForTarget(ctx context.Context, target *horizonmod
 		_ = s.targetsRepo.Upsert(ctx, target)
 	}
 	if s.watchdogRepo != nil && strings.TrimSpace(target.FragmentID) != "" {
-		if err := s.ensureWatchdogConfig(ctx, cfg.TenantID, target.FragmentID); err != nil {
+		if err := s.ensureWatchdogConfig(ctx, cfg.TenantID, target.FragmentID, target.SubjectID); err != nil {
 			return nil, err
 		}
 	}
@@ -223,6 +225,26 @@ func (s *Service) WakeByCanonicalPath(ctx context.Context, tenantID, canonicalPa
 	if err != nil {
 		return nil, err
 	}
+	return s.wakeConfigs(ctx, configs, triggerType, triggerReason, trace)
+}
+
+func (s *Service) WakeBySubjectID(ctx context.Context, tenantID, subjectID, triggerType, triggerReason string, trace map[string]any) ([]*horizonmodels.ScopeAgentRun, error) {
+	if s == nil || s.configsRepo == nil || s.runsRepo == nil {
+		return nil, nil
+	}
+	tenantID = strings.TrimSpace(firstNonEmpty(tenantID, "global"))
+	subjectID = strings.TrimSpace(subjectID)
+	if subjectID == "" {
+		return nil, nil
+	}
+	configs, err := s.configsRepo.ListActiveBySubjectID(ctx, tenantID, subjectID)
+	if err != nil {
+		return nil, err
+	}
+	return s.wakeConfigs(ctx, configs, triggerType, triggerReason, trace)
+}
+
+func (s *Service) wakeConfigs(ctx context.Context, configs []*horizonmodels.ScopeAgentConfig, triggerType, triggerReason string, trace map[string]any) ([]*horizonmodels.ScopeAgentRun, error) {
 	now := time.Now().UTC()
 	out := make([]*horizonmodels.ScopeAgentRun, 0, len(configs))
 	for _, cfg := range configs {
@@ -240,6 +262,7 @@ func (s *Service) WakeByCanonicalPath(ctx context.Context, tenantID, canonicalPa
 		run := &horizonmodels.ScopeAgentRun{
 			TenantID:        cfg.TenantID,
 			ConfigID:        cfg.ID,
+			SubjectID:       cfg.SubjectID,
 			WatchTargetID:   cfg.WatchTargetID,
 			Status:          string(horizonmodels.ScopeAgentRunStatusPending),
 			TriggerType:     firstNonEmpty(triggerType, "watchdog"),
@@ -261,7 +284,7 @@ func (s *Service) WakeByCanonicalPath(ctx context.Context, tenantID, canonicalPa
 		out = append(out, run)
 	}
 	if len(out) > 0 && s.batchDispatcher != nil {
-		if err := s.batchDispatcher(ctx, tenantID); err != nil {
+		if err := s.batchDispatcher(ctx, configs[0].TenantID); err != nil {
 			return out, err
 		}
 	}
@@ -822,6 +845,7 @@ func (s *Service) applyAcceptedProposal(ctx context.Context, proposal *horizonmo
 		if _, err := s.feedRepo.Create(ctx, &horizonmodels.WatchFeedEntry{
 			TenantID:       proposal.TenantID,
 			TargetID:       proposal.WatchTargetID,
+			SubjectID:      subjectIDForProposal(ctx, s.targetsRepo, proposal),
 			EntryType:      "proposal_accepted",
 			Title:          title,
 			Summary:        summary,
@@ -842,6 +866,7 @@ func (s *Service) applyAcceptedProposal(ctx context.Context, proposal *horizonmo
 				ID:             target.ID,
 				TenantID:       target.TenantID,
 				TargetID:       target.ID,
+				SubjectID:      target.SubjectID,
 				CanonicalPath:  target.CanonicalPath,
 				Label:          target.Label,
 				ScopeType:      target.Kind,
@@ -873,7 +898,7 @@ func (s *Service) applyAcceptedProposal(ctx context.Context, proposal *horizonmo
 	return compactUnique(applied), nil
 }
 
-func (s *Service) ensureWatchdogConfig(ctx context.Context, tenantID, fragmentID string) error {
+func (s *Service) ensureWatchdogConfig(ctx context.Context, tenantID, fragmentID, subjectID string) error {
 	now := time.Now().UTC()
 	nextScanAt := now.Add(-1 * time.Minute)
 	lastScanAt := now.Add(-2 * time.Hour)
@@ -882,6 +907,7 @@ func (s *Service) ensureWatchdogConfig(ctx context.Context, tenantID, fragmentID
 	if err != nil || cfg == nil {
 		cfg = &horizonmodels.WatchdogConfig{
 			TenantID:         tenantID,
+			SubjectID:        strings.TrimSpace(subjectID),
 			TargetFragmentID: fragmentID,
 			ScanInterval:     "PT1H",
 			TriggerThreshold: 0.10,
@@ -893,6 +919,9 @@ func (s *Service) ensureWatchdogConfig(ctx context.Context, tenantID, fragmentID
 		return err
 	}
 	cfg.Status = string(horizonmodels.WatchdogStatusRunning)
+	if strings.TrimSpace(subjectID) != "" {
+		cfg.SubjectID = strings.TrimSpace(subjectID)
+	}
 	cfg.ScanInterval = "PT1H"
 	cfg.TriggerThreshold = 0.10
 	cfg.LastScanAt = &lastScanAt
@@ -950,6 +979,7 @@ func (s *Service) getExistingState(ctx context.Context, cfg *horizonmodels.Scope
 		ID:            cfg.ID,
 		TenantID:      cfg.TenantID,
 		ConfigID:      cfg.ID,
+		SubjectID:     cfg.SubjectID,
 		WatchTargetID: cfg.WatchTargetID,
 	}
 	if s == nil || s.statesRepo == nil || cfg == nil {
@@ -990,6 +1020,7 @@ func (s *Service) emitNoopFeedEntries(ctx context.Context, contexts []*runContex
 		_, _ = s.feedRepo.Create(ctx, &horizonmodels.WatchFeedEntry{
 			TenantID:       ctxItem.Target.TenantID,
 			TargetID:       ctxItem.Target.ID,
+			SubjectID:      ctxItem.Target.SubjectID,
 			EntryType:      "no_op",
 			Title:          fmt.Sprintf("%s checked with no material change", ctxItem.Target.Label),
 			Summary:        "Grounded scope-agent run completed without generating accepted proposals.",
@@ -1024,6 +1055,17 @@ func pickRunContext(contexts []*runContext, watchTargetID string, targetPaths []
 		return contexts[0]
 	}
 	return nil
+}
+
+func subjectIDForProposal(ctx context.Context, targetsRepo *horizonrepo.WatchTargetsRepository, proposal *horizonmodels.AgentProposal) string {
+	if proposal == nil || targetsRepo == nil || strings.TrimSpace(proposal.WatchTargetID) == "" {
+		return ""
+	}
+	target, err := targetsRepo.Get(ctx, proposal.WatchTargetID)
+	if err != nil || target == nil {
+		return ""
+	}
+	return strings.TrimSpace(target.SubjectID)
 }
 
 func batchKey(cfg *horizonmodels.ScopeAgentConfig) string {
