@@ -38,6 +38,8 @@ type geoObjectResponseItem struct {
 	Hype            float64             `json:"hype,omitempty"`
 	HypeIndicator   int                 `json:"hypeIndicator,omitempty"`
 	ActivityStatus  string              `json:"activityStatus,omitempty"`
+	ConflictLinked  bool                `json:"conflictLinked,omitempty"`
+	ThreatClass     string              `json:"threatClass,omitempty"`
 	LastMatchedAt   *time.Time          `json:"lastMatchedAt,omitempty"`
 	InScope         bool                `json:"inScope"`
 	CreatedAt       time.Time           `json:"createdAt"`
@@ -103,6 +105,8 @@ func fragmentToGeoItem(f *models.HorizonFragment, inScope bool) (geoObjectRespon
 	hype := 0.0
 	hypeIndicator := 0
 	activityStatus := ""
+	conflictLinked := false
+	threatClass := ""
 	var lastMatchedAt *time.Time
 	if f.Type == models.FragmentTypeAffectedZone {
 		zoneType = strings.TrimSpace(asString(f.Qualifiers["zoneType"]))
@@ -111,6 +115,7 @@ func fragmentToGeoItem(f *models.HorizonFragment, inScope bool) (geoObjectRespon
 		sourceLayer = strings.TrimSpace(asString(f.Qualifiers["sourceLayer"]))
 		processingLayer = strings.TrimSpace(asString(f.Qualifiers["processingLayer"]))
 		hype, hypeIndicator, activityStatus, lastMatchedAt = readZoneActivitySnapshot(f, time.Now().UTC())
+		conflictLinked, threatClass = deriveAffectedZoneThreatEnvelope(f)
 	}
 	return geoObjectResponseItem{
 		ID:              f.ID,
@@ -130,11 +135,56 @@ func fragmentToGeoItem(f *models.HorizonFragment, inScope bool) (geoObjectRespon
 		Hype:            hype,
 		HypeIndicator:   hypeIndicator,
 		ActivityStatus:  activityStatus,
+		ConflictLinked:  conflictLinked,
+		ThreatClass:     threatClass,
 		LastMatchedAt:   lastMatchedAt,
 		InScope:         inScope,
 		CreatedAt:       f.CreatedAt,
 		UpdatedAt:       f.UpdatedAt,
 	}, true
+}
+
+func deriveAffectedZoneThreatEnvelope(f *models.HorizonFragment) (bool, string) {
+	if f == nil {
+		return false, ""
+	}
+	conditionType := strings.ToLower(strings.TrimSpace(asString(f.Qualifiers["conditionType"])))
+	zoneSubType := strings.ToLower(strings.TrimSpace(asString(f.Qualifiers["zoneSubType"])))
+	text := strings.ToLower(strings.TrimSpace(strings.Join([]string{
+		asString(f.Qualifiers["sourceTitle"]),
+		asString(f.Qualifiers["sourceSummary"]),
+		f.Description,
+		f.Labels["en"],
+		asString(f.Qualifiers["reason"]),
+	}, " ")))
+	if conditionType == "military_conflict" || conditionType == "security_conflict" {
+		return true, "kinetic"
+	}
+	if strings.Contains(zoneSubType, "kinetic") || strings.Contains(zoneSubType, "armed_tension") || strings.Contains(zoneSubType, "terror") {
+		return true, "kinetic"
+	}
+	if hasAnyKeyword(text,
+		"drone attack", "drones strike", "drone strike", "missile strike", "projectile", "airstrike", "rocket attack",
+		"ships were hit", "embassy hit", "under attack", "attacks and gps jamming", "gps jamming", "shelling", "bombard",
+		"port after drones strike", "operations after drone attack", "explosion after strike", "strike killed",
+	) {
+		return true, "conflict-linked"
+	}
+	return false, ""
+}
+
+func hasAnyKeyword(text string, keywords ...string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return false
+	}
+	for _, keyword := range keywords {
+		keyword = strings.ToLower(strings.TrimSpace(keyword))
+		if keyword != "" && strings.Contains(text, keyword) {
+			return true
+		}
+	}
+	return false
 }
 
 func parseGeoObjectFilter(

@@ -493,13 +493,13 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 			result.Warnings = append(result.Warnings, fmt.Sprintf("%s: %q", reason, repairedPath))
 			fragment.CanonicalPath = repairedPath
 		}
-		if cp := strings.TrimSpace(fragment.CanonicalPath); strings.HasPrefix(cp, "/org/na/") {
+		if cp := strings.TrimSpace(fragment.CanonicalPath); strings.HasPrefix(cp, "/org/") {
 			if slug := lastPathSlug(cp); canonical.OrgSlugForbiddenPlaceholder(slug) {
 				result.IsValid = false
 				result.BlockReason = fmt.Sprintf("forbidden synthetic /org/ placeholder slug %q; provide a concrete organization identity or move the meaning into contract/path context", slug)
 			}
 		}
-		if cp := strings.TrimSpace(fragment.CanonicalPath); strings.HasPrefix(cp, "/gov/na/") {
+		if cp := strings.TrimSpace(fragment.CanonicalPath); strings.HasPrefix(cp, "/gov/") {
 			if slug := lastPathSlug(cp); canonical.GovSlugForbiddenPlaceholder(slug) {
 				result.IsValid = false
 				result.BlockReason = fmt.Sprintf("forbidden synthetic /gov/ placeholder slug %q; provide a concrete jurisdictional authority or keep it as policy/context metadata", slug)

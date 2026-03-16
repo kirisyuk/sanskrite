@@ -4,9 +4,13 @@ import (
 	"context"
 	"log"
 	"math/rand"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 // VertexSyncBatcher batches Vertex AI Search sync requests to avoid quota exhaustion.
@@ -63,6 +67,27 @@ func DefaultVertexSyncBatcherConfig() VertexSyncBatcherConfig {
 
 // Discovery Engine hard limit for gcsSource.inputUris (dataSchema=document).
 const discoveryEngineMaxInputUris = 100
+
+var (
+	vertexImportLimiterOnce sync.Once
+	vertexImportLimiter     *rate.Limiter
+)
+
+func globalVertexImportLimiter() *rate.Limiter {
+	vertexImportLimiterOnce.Do(func() {
+		maxPerMinute := 8
+		if raw := strings.TrimSpace(os.Getenv("VERTEX_SYNC_MAX_IMPORTS_PER_MINUTE")); raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+				maxPerMinute = n
+			}
+		}
+		if maxPerMinute < 1 {
+			maxPerMinute = 1
+		}
+		vertexImportLimiter = rate.NewLimiter(rate.Every(time.Minute/time.Duration(maxPerMinute)), 1)
+	})
+	return vertexImportLimiter
+}
 
 // NewVertexSyncBatcher creates a new batcher.
 func NewVertexSyncBatcher(
@@ -245,6 +270,28 @@ func (b *VertexSyncBatcher) flush(force bool) {
 			end = len(uris)
 		}
 		batch := uris[i:end]
+
+		if limiter := globalVertexImportLimiter(); limiter != nil {
+			waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			waitErr := limiter.Wait(waitCtx)
+			waitCancel()
+			if waitErr != nil {
+				b.mu.Lock()
+				b.totalErrors++
+				b.mu.Unlock()
+				log.Printf("[VertexSyncBatcher] Global import limiter wait failed (count=%d): %v", len(batch), waitErr)
+				b.mu.Lock()
+				b.pendingURIs = append(batch, b.pendingURIs...)
+				for _, uri := range batch {
+					if strings.TrimSpace(uri) != "" {
+						b.pendingSet[strings.TrimSpace(uri)] = struct{}{}
+					}
+				}
+				b.mu.Unlock()
+				b.scheduleFlushAfter(15*time.Second, true)
+				return
+			}
+		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		opName, err := b.importFn(ctx, batch)

@@ -59,10 +59,7 @@ func main() {
 		if cp == "" {
 			continue
 		}
-		id := strings.TrimSpace(frag.ID)
-		if id == "" {
-			id = strings.TrimSpace(doc.Ref.ID)
-		}
+		id := strings.TrimSpace(doc.Ref.ID)
 		paths[cp] = append(paths[cp], id)
 	}
 

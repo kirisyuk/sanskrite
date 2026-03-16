@@ -44,6 +44,7 @@ export const GEO_EDGE_INTERACTIVE_LAYERS = [
 type ThemeMode = 'dark' | 'light';
 type EdgeFamily = 'supply' | 'control' | 'influence' | 'location' | 'market' | 'risk' | 'social' | 'other';
 type EdgeVisualKind = 'primary' | 'indirect' | 'cluster';
+type LonLat = [number, number];
 type LocalPoint = { x: number; y: number };
 type EndpointLabelTier = 'selected' | 'direct' | 'path' | 'context' | 'propagation';
 type EndpointLabelMeta = {
@@ -853,6 +854,77 @@ function dedupeSequentialPoints(points: [number, number][]): [number, number][] 
   return out;
 }
 
+function roundCoord(value: number, digits = 6): number {
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
+}
+
+function unwrapLine(line: LonLat[]): LonLat[] {
+  if (line.length === 0) return [];
+  const out: LonLat[] = [[line[0][0], line[0][1]]];
+  for (let index = 1; index < line.length; index += 1) {
+    let lon = line[index][0];
+    const lat = line[index][1];
+    const prevLon = out[out.length - 1][0];
+    while (lon - prevLon > 180) lon -= 360;
+    while (lon - prevLon < -180) lon += 360;
+    out.push([lon, lat]);
+  }
+  return out;
+}
+
+function wrapLonTo180(lon: number): number {
+  const wrapped = ((lon + 180) % 360 + 360) % 360 - 180;
+  if (wrapped === -180 && lon > 0) return 180;
+  return wrapped;
+}
+
+function lonZone(lon: number): number {
+  return Math.floor((lon + 180 - 1e-9) / 360);
+}
+
+function splitAtDateline(unwrapped: LonLat[]): LonLat[][] {
+  if (unwrapped.length === 0) return [];
+  const segments: LonLat[][] = [];
+  let prev: LonLat = unwrapped[0];
+  let current: LonLat[] = [[roundCoord(wrapLonTo180(prev[0])), roundCoord(prev[1])]];
+
+  for (let index = 1; index < unwrapped.length; index += 1) {
+    const next = unwrapped[index];
+    const prevZone = lonZone(prev[0]);
+    const nextZone = lonZone(next[0]);
+
+    if (prevZone === nextZone) {
+      current.push([roundCoord(wrapLonTo180(next[0])), roundCoord(next[1])]);
+      prev = next;
+      continue;
+    }
+
+    const movingEast = nextZone > prevZone;
+    const boundaryUnwrapped = movingEast ? 180 + prevZone * 360 : -180 + prevZone * 360;
+    const denom = next[0] - prev[0];
+    if (Math.abs(denom) < 1e-9) {
+      current.push([roundCoord(wrapLonTo180(next[0])), roundCoord(next[1])]);
+      prev = next;
+      continue;
+    }
+
+    const t = (boundaryUnwrapped - prev[0]) / denom;
+    const latCross = prev[1] + t * (next[1] - prev[1]);
+    const endLon = movingEast ? 180 : -180;
+    const startLon = movingEast ? -180 : 180;
+
+    current.push([endLon, roundCoord(latCross)]);
+    if (current.length > 1) segments.push(dedupeSequentialPoints(current));
+
+    current = [[startLon, roundCoord(latCross)], [roundCoord(wrapLonTo180(next[0])), roundCoord(next[1])]];
+    prev = next;
+  }
+
+  if (current.length > 1) segments.push(dedupeSequentialPoints(current));
+  return segments;
+}
+
 function smoothPolyline(points: [number, number][], passes = 2): [number, number][] {
   let current = dedupeSequentialPoints(points);
   if (current.length < 3) return current;
@@ -889,6 +961,62 @@ function smoothRouteCoordinates(
   }
   const passes = hop >= 3 ? 3 : 2;
   return smoothPolyline(clean, passes);
+}
+
+function appendAlignedSegment(
+  stitched: LonLat[],
+  segment: LonLat[],
+): LonLat[] {
+  if (segment.length === 0) return stitched;
+  if (stitched.length === 0) return [...segment];
+
+  const anchorLon = stitched[stitched.length - 1][0];
+  let offset = 0;
+  while (segment[0][0] + offset - anchorLon > 180) offset -= 360;
+  while (segment[0][0] + offset - anchorLon < -180) offset += 360;
+
+  for (let index = 0; index < segment.length; index += 1) {
+    const point: LonLat = [segment[index][0] + offset, segment[index][1]];
+    const prev = stitched[stitched.length - 1];
+    if (prev && Math.abs(prev[0] - point[0]) < 1e-7 && Math.abs(prev[1] - point[1]) < 1e-7) continue;
+    stitched.push(point);
+  }
+  return stitched;
+}
+
+function stitchSupplyRouteCoordinates(
+  points: LonLat[],
+  routeSeed: string,
+  hop: 1 | 2 | 3,
+): LonLat[] {
+  const clean = dedupeSequentialPoints(points);
+  if (clean.length < 2) return clean;
+  if (clean.length === 2) {
+    const [start, end] = clean;
+    const distanceKm = approximateDistanceKm(start[0], start[1], end[0], end[1]);
+    const raw = distanceKm >= 1800
+      ? gentleArcPoints(start, end, routeSeed, distanceKm, hop === 1 ? 20 : 16)
+      : arcPoints(start[0], start[1], end[0], end[1], routeSeed, hop);
+    return unwrapLine(raw);
+  }
+
+  let stitched: LonLat[] = [];
+  for (let index = 0; index < clean.length - 1; index += 1) {
+    const start = clean[index];
+    const end = clean[index + 1];
+    const distanceKm = approximateDistanceKm(start[0], start[1], end[0], end[1]);
+    const raw = distanceKm < 35
+      ? [start, end]
+      : gentleArcPoints(
+          start,
+          end,
+          `${routeSeed}:${index}`,
+          distanceKm,
+          distanceKm >= 1800 ? 18 : distanceKm >= 600 ? 14 : 10,
+        );
+    stitched = appendAlignedSegment(stitched, unwrapLine(raw));
+  }
+  return stitched;
 }
 
 function lerpPoint(a: [number, number], b: [number, number], t: number): [number, number] {
@@ -1006,6 +1134,36 @@ function linePointAt(coords: [number, number][], ratio: number): [number, number
     target -= length;
   }
   return coords[coords.length - 1];
+}
+
+function lineLength(coords: [number, number][]): number {
+  let total = 0;
+  for (let index = 0; index < coords.length - 1; index += 1) {
+    total += segmentLength(coords[index], coords[index + 1]);
+  }
+  return total;
+}
+
+function buildSplitLineGeometry(
+  coords: [number, number][],
+  labelRatio: number,
+): {
+  geometry: GeoJSON.LineString | GeoJSON.MultiLineString;
+  labelPoint: [number, number];
+} | null {
+  const clean = dedupeSequentialPoints(coords);
+  if (clean.length < 2) return null;
+  const segments = splitAtDateline(unwrapLine(clean)).filter((segment) => segment.length >= 2);
+  if (segments.length === 0) return null;
+  const longestSegment = segments.reduce((best, segment) => (
+    lineLength(segment) > lineLength(best) ? segment : best
+  ), segments[0]);
+  return {
+    geometry: segments.length === 1
+      ? { type: 'LineString', coordinates: segments[0] }
+      : { type: 'MultiLineString', coordinates: segments },
+    labelPoint: linePointAt(longestSegment, labelRatio),
+  };
 }
 
 function averagePoint(points: [number, number][]): [number, number] {
@@ -2263,19 +2421,23 @@ function buildSupplyPathFeatures(
   };
 
   type OrientedCandidateRoute = CandidateRoute & {
+    rank: number;
     kind: EdgeVisualKind;
     localPoint: [number, number];
     remotePoint: [number, number];
     azimuthDeg: number;
   };
 
-  const shouldBundleRoute = (route: OrientedCandidateRoute): boolean => {
-    if (route.directDistanceKm < SUPPLY_BUNDLE_MIN_DISTANCE_KM) return false;
-    // Preserve explicit terminal objects for complex and very long routes.
-    // Otherwise bundling collapses the far endpoint into a centroid and the
-    // line appears to end in empty space instead of on the last mapped object.
-    if (route.transportViaRefs.length > 0) return false;
-    if (route.directDistanceKm >= SUPPLY_BUNDLE_MAX_PRESERVE_ENDPOINT_DISTANCE_KM) return false;
+  const shouldBundleRoute = (_route: OrientedCandidateRoute): boolean => {
+    return false;
+  };
+
+  const shouldRenderRouteLabel = (route: OrientedCandidateRoute, featureRole: 'overview' | 'detail'): boolean => {
+    if (featureRole === 'detail') return false;
+    if (route.kind === 'cluster') return false;
+    if (supplyFanoutCount >= 10 && route.rank >= 4) return false;
+    if (supplyFanoutCount >= 7 && route.transportViaRefs.length > 0 && route.rank >= 2) return false;
+    if (route.directDistanceKm >= 5000 && route.rank >= 2) return false;
     return true;
   };
 
@@ -2326,8 +2488,8 @@ function buildSupplyPathFeatures(
         supplierRef,
         customerRef,
         transportViaRefs,
-        coordinates: smoothRouteCoordinates(
-          coordinates,
+        coordinates: stitchSupplyRouteCoordinates(
+          [coordinates[0], coordinates[coordinates.length - 1]],
           `supply:${routeKey}`,
           directDistanceKm >= 1200 ? 3 : directDistanceKm >= 250 ? 2 : 1,
         ),
@@ -2351,7 +2513,7 @@ function buildSupplyPathFeatures(
   const features: GeoJSON.Feature[] = [];
 
   const pushRouteFeature = (
-    route: CandidateRoute,
+    route: OrientedCandidateRoute,
     kind: EdgeVisualKind,
     coordinates: [number, number][],
     labelText: string,
@@ -2366,11 +2528,13 @@ function buildSupplyPathFeatures(
     const lineId = `supply:${route.artifactId || route.productRef}:${route.legIndex}:${hashString(`${route.supplierRef}:${route.customerRef}:${labelText}`)}`;
     const visual = buildSupplyPathVisual(theme, kind, route.directDistanceKm, supplyFanoutCount, bundleSize);
     const color = colorOverride || visual.color;
+    const geometry = buildSplitLineGeometry(coordinates, labelRatio);
+    if (!geometry) return;
 
     features.push({
       id: lineId,
       type: 'Feature',
-      geometry: { type: 'LineString', coordinates },
+      geometry: geometry.geometry,
       properties: {
         kind,
         hop: kind === 'primary' ? 1 : kind === 'indirect' ? 2 : 3,
@@ -2385,21 +2549,23 @@ function buildSupplyPathFeatures(
         baseWidth: clamp(visual.baseWidth * widthMultiplier, 0.96, 4.6),
         glowOpacity: visual.glowOpacity,
       },
-    } as GeoJSON.Feature<GeoJSON.LineString>);
-    features.push({
-      id: `${lineId}:label`,
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: linePointAt(coordinates, labelRatio) },
-      properties: {
-        kind: 'label',
-        channel: 'supply_path',
-        corridorId: corridorId || `supply-route:${lineId}`,
-        featureRole,
-        narrativeKey: route.narrativeKey,
-        labelText,
-        labelColor: color,
-      },
-    } as GeoJSON.Feature<GeoJSON.Point>);
+    } as GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>);
+    if (shouldRenderRouteLabel(route, featureRole)) {
+      features.push({
+        id: `${lineId}:label`,
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: geometry.labelPoint },
+        properties: {
+          kind: 'label',
+          channel: 'supply_path',
+          corridorId: corridorId || `supply-route:${lineId}`,
+          featureRole,
+          narrativeKey: route.narrativeKey,
+          labelText,
+          labelColor: color,
+        },
+      } as GeoJSON.Feature<GeoJSON.Point>);
+    }
   };
 
   const focusCoords = focusObject?.coordinates
@@ -2437,6 +2603,7 @@ function buildSupplyPathFeatures(
 
     return {
       ...route,
+      rank: index,
       kind,
       localPoint,
       remotePoint,
@@ -2563,7 +2730,7 @@ function buildSupplyPathFeatures(
       route.kind,
       route.coordinates,
       route.labelText,
-      route.transportViaRefs.length > 0 ? 0.52 : 0.34,
+      route.transportViaRefs.length > 0 ? 0.58 : 0.52,
       1,
       0,
       undefined,

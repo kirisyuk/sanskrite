@@ -364,11 +364,18 @@ setup_infrastructure() {
   # 3.2 Ensure Cloud Tasks queue for Scout exists and is configured (managed retries).
   # NOTE: Queue name "etigram-scout" may be temporarily unavailable after deletion.
   local scout_queue="${CLOUD_TASKS_SCOUT_QUEUE:-etigram-scout}"
+  local scout_background_queue="${CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE:-etigram-scout-bg}"
   if gcloud tasks queues describe "$scout_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${GREEN}[infra] Cloud Tasks queue exists:${NC} $scout_queue"
   else
     gcloud tasks queues create "$scout_queue" --location="$REGION" --project="$PROJECT_ID" --quiet || true
     echo -e "${GREEN}[infra] Created Cloud Tasks queue:${NC} $scout_queue"
+  fi
+  if gcloud tasks queues describe "$scout_background_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    echo -e "${GREEN}[infra] Cloud Tasks background queue exists:${NC} $scout_background_queue"
+  else
+    gcloud tasks queues create "$scout_background_queue" --location="$REGION" --project="$PROJECT_ID" --quiet || true
+    echo -e "${GREEN}[infra] Created Cloud Tasks background queue:${NC} $scout_background_queue"
   fi
   # Configure poison semantics via max-attempts (5), and reasonable backoff.
   gcloud tasks queues update "$scout_queue" \
@@ -378,10 +385,21 @@ setup_infrastructure() {
     --min-backoff=10s \
     --max-backoff=600s \
     --max-retry-duration=3600s \
-    --max-dispatches-per-second=10 \
-    --max-concurrent-dispatches=50 \
+    --max-dispatches-per-second="${CLOUD_TASKS_SCOUT_MAX_DISPATCHES_PER_SECOND:-6}" \
+    --max-concurrent-dispatches="${CLOUD_TASKS_SCOUT_MAX_CONCURRENT_DISPATCHES:-12}" \
     --quiet >/dev/null 2>&1 || true
   echo -e "${GREEN}[infra] ✓${NC} Configured Cloud Tasks queue $scout_queue (maxAttempts=5)"
+  gcloud tasks queues update "$scout_background_queue" \
+    --location="$REGION" \
+    --project="$PROJECT_ID" \
+    --max-attempts=5 \
+    --min-backoff=20s \
+    --max-backoff=900s \
+    --max-retry-duration=3600s \
+    --max-dispatches-per-second="${CLOUD_TASKS_SCOUT_BACKGROUND_MAX_DISPATCHES_PER_SECOND:-3}" \
+    --max-concurrent-dispatches="${CLOUD_TASKS_SCOUT_BACKGROUND_MAX_CONCURRENT_DISPATCHES:-8}" \
+    --quiet >/dev/null 2>&1 || true
+  echo -e "${GREEN}[infra] ✓${NC} Configured Cloud Tasks background queue $scout_background_queue"
 
   # 3.3 Ensure Cloud Tasks queue for per-source polling exists and is configured.
   local source_queue="${CLOUD_TASKS_SOURCE_QUEUE:-etigram-source-poll}"
@@ -1383,9 +1401,14 @@ deploy_api() {
   # Ensure Cloud Tasks queue exists even for --api-only deploys (managed Scout execution).
   # NOTE: default queue is v2 to avoid the "recently deleted queue" lockout.
   local scout_queue="${CLOUD_TASKS_SCOUT_QUEUE:-etigram-scout}"
+  local scout_background_queue="${CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE:-etigram-scout-bg}"
   if ! gcloud tasks queues describe "$scout_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${BLUE}[api] Creating Cloud Tasks queue:${NC} $scout_queue"
     gcloud tasks queues create "$scout_queue" --location="$REGION" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
+  fi
+  if ! gcloud tasks queues describe "$scout_background_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    echo -e "${BLUE}[api] Creating Cloud Tasks background queue:${NC} $scout_background_queue"
+    gcloud tasks queues create "$scout_background_queue" --location="$REGION" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
   fi
   gcloud tasks queues update "$scout_queue" \
     --location="$REGION" \
@@ -1394,8 +1417,18 @@ deploy_api() {
     --min-backoff=10s \
     --max-backoff=600s \
     --max-retry-duration=3600s \
-    --max-dispatches-per-second=10 \
-    --max-concurrent-dispatches=50 \
+    --max-dispatches-per-second="${CLOUD_TASKS_SCOUT_MAX_DISPATCHES_PER_SECOND:-6}" \
+    --max-concurrent-dispatches="${CLOUD_TASKS_SCOUT_MAX_CONCURRENT_DISPATCHES:-12}" \
+    --quiet >/dev/null 2>&1 || true
+  gcloud tasks queues update "$scout_background_queue" \
+    --location="$REGION" \
+    --project="$PROJECT_ID" \
+    --max-attempts=5 \
+    --min-backoff=20s \
+    --max-backoff=900s \
+    --max-retry-duration=3600s \
+    --max-dispatches-per-second="${CLOUD_TASKS_SCOUT_BACKGROUND_MAX_DISPATCHES_PER_SECOND:-3}" \
+    --max-concurrent-dispatches="${CLOUD_TASKS_SCOUT_BACKGROUND_MAX_CONCURRENT_DISPATCHES:-8}" \
     --quiet >/dev/null 2>&1 || true
 
   # Ensure Cloud Tasks queue exists for per-source polling execution.
@@ -1569,7 +1602,7 @@ deploy_api() {
   if [[ "${TARGET_ETIGRAM_WATCHDOG:-0}" -eq 1 ]]; then
     enable_etigram_watchdog="1"
   fi
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://etigram.one|https://www.etigram.one|https://*.etigram.one|https://etigram.web.app|https://etigram.firebaseapp.com|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,ENABLE_CLOUD_TASKS_RISK=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_RISK_QUEUE=${risk_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_ETIGRAM_WATCHDOG=${enable_etigram_watchdog},PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://etigram.one/subscription/success,PAYPAL_CANCEL_URL=https://etigram.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h,GEONAMES_USERNAME=${GEONAMES_USERNAME:-kirisyuk}"
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://etigram.one|https://www.etigram.one|https://*.etigram.one|https://etigram.web.app|https://etigram.firebaseapp.com|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,ENABLE_CLOUD_TASKS_RISK=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE=${scout_background_queue},CLOUD_TASKS_SCOUT_BACKGROUND_DELAY=${CLOUD_TASKS_SCOUT_BACKGROUND_DELAY:-15s},CLOUD_TASKS_RISK_QUEUE=${risk_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_ETIGRAM_WATCHDOG=${enable_etigram_watchdog},PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://etigram.one/subscription/success,PAYPAL_CANCEL_URL=https://etigram.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h,GEONAMES_USERNAME=${GEONAMES_USERNAME:-kirisyuk}"
   # Etigram Fragments: dedicated bucket + dedicated Vertex AI Search Data Store
   # Store isolation is used instead of filters (filters on structData.* are not supported in our current schema).
   local etigram_fragments_bucket="${ETIGRAM_FRAGMENTS_BUCKET:-${PROJECT_ID}-etigram-fragments}"
@@ -2026,6 +2059,60 @@ create_indexes() {
     --field-config field-path=tier,order=ASCENDING \
     --field-config field-path=isActive,order=ASCENDING \
     --field-config field-path=createdAt,order=DESCENDING \
+    --quiet || true
+
+  # Horizon strategic recommendations inbox/filtering
+  gcloud firestore indexes composite create --async \
+    --collection-group=horizon_strategic_recommendations \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=updatedAt,order=DESCENDING \
+    --quiet || true
+  gcloud firestore indexes composite create --async \
+    --collection-group=horizon_strategic_recommendations \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=status,order=ASCENDING \
+    --field-config field-path=updatedAt,order=DESCENDING \
+    --quiet || true
+  gcloud firestore indexes composite create --async \
+    --collection-group=horizon_strategic_recommendations \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=projectId,order=ASCENDING \
+    --field-config field-path=updatedAt,order=DESCENDING \
+    --quiet || true
+  gcloud firestore indexes composite create --async \
+    --collection-group=horizon_strategic_recommendations \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=lensId,order=ASCENDING \
+    --field-config field-path=updatedAt,order=DESCENDING \
+    --quiet || true
+  gcloud firestore indexes composite create --async \
+    --collection-group=horizon_strategic_recommendations \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=projectId,order=ASCENDING \
+    --field-config field-path=lensId,order=ASCENDING \
+    --field-config field-path=updatedAt,order=DESCENDING \
+    --quiet || true
+  gcloud firestore indexes composite create --async \
+    --collection-group=horizon_strategic_recommendations \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=status,order=ASCENDING \
+    --field-config field-path=projectId,order=ASCENDING \
+    --field-config field-path=updatedAt,order=DESCENDING \
+    --quiet || true
+  gcloud firestore indexes composite create --async \
+    --collection-group=horizon_strategic_recommendations \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=status,order=ASCENDING \
+    --field-config field-path=lensId,order=ASCENDING \
+    --field-config field-path=updatedAt,order=DESCENDING \
+    --quiet || true
+  gcloud firestore indexes composite create --async \
+    --collection-group=horizon_strategic_recommendations \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=status,order=ASCENDING \
+    --field-config field-path=projectId,order=ASCENDING \
+    --field-config field-path=lensId,order=ASCENDING \
+    --field-config field-path=updatedAt,order=DESCENDING \
     --quiet || true
 
   # Vector index for rag_chunks.embedding (dimension=1536)

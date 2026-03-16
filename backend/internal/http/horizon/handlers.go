@@ -231,6 +231,9 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 	mux.Handle("/api/horizon/watch/targets/", authMiddleware(http.HandlerFunc(h.HandleWatchTargetRoutes)))
 	mux.Handle("/api/horizon/watch/preferences", authMiddleware(http.HandlerFunc(h.UpdateWatchPreferences)))
 	mux.Handle("/api/horizon/watch/briefs/", authMiddleware(http.HandlerFunc(h.HandleWatchBriefRoutes)))
+	mux.Handle("/api/horizon/recommendations", authMiddleware(http.HandlerFunc(h.HandleRecommendationsRoot)))
+	mux.Handle("/api/horizon/recommendations/count", authMiddleware(http.HandlerFunc(h.GetRecommendationsCount)))
+	mux.Handle("/api/horizon/recommendations/", authMiddleware(http.HandlerFunc(h.HandleRecommendationRoutes)))
 
 	// AI explanations (cached markdown explanations for nodes/edges)
 	mux.Handle("/api/horizon/ai-explanations/", authMiddleware(http.HandlerFunc(h.HandleAIExplanationsRoutes)))

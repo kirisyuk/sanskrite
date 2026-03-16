@@ -97,6 +97,13 @@ type Stats struct {
 	MarketDomainNormalized   int
 }
 
+func assignActualEdgeID(edge *models.DependencyEdge, doc *firestore.DocumentSnapshot) {
+	if edge == nil || doc == nil || doc.Ref == nil {
+		return
+	}
+	edge.ID = strings.TrimSpace(doc.Ref.ID)
+}
+
 // =============================================================================
 // ORGANIZATION dedup safety helpers (name-based signals are high risk)
 // =============================================================================
@@ -4484,9 +4491,7 @@ func deleteEdgesForFragment(ctx context.Context, db *firestore.Client, edgesRepo
 		if err := d.DataTo(&edge); err != nil {
 			continue
 		}
-		if strings.TrimSpace(edge.ID) == "" {
-			edge.ID = d.Ref.ID
-		}
+		assignActualEdgeID(&edge, d)
 		if strings.TrimSpace(edge.ID) == "" {
 			continue
 		}
@@ -4505,9 +4510,7 @@ func deleteEdgesForFragment(ctx context.Context, db *firestore.Client, edgesRepo
 		if err := d.DataTo(&edge); err != nil {
 			continue
 		}
-		if strings.TrimSpace(edge.ID) == "" {
-			edge.ID = d.Ref.ID
-		}
+		assignActualEdgeID(&edge, d)
 		if strings.TrimSpace(edge.ID) == "" {
 			continue
 		}
@@ -4534,9 +4537,7 @@ func reassignEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo.De
 		if err := d.DataTo(&edge); err != nil {
 			continue
 		}
-		if strings.TrimSpace(edge.ID) == "" {
-			edge.ID = d.Ref.ID
-		}
+		assignActualEdgeID(&edge, d)
 
 		// Normalize symmetric edges so A->B and B->A are treated as the same key.
 		ns, nt, _, _ := scout.NormalizeSymmetricEdge(newID, edge.TargetFragmentID, edge.Type)
@@ -4624,9 +4625,7 @@ func reassignEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo.De
 		if err := d.DataTo(&edge); err != nil {
 			continue
 		}
-		if strings.TrimSpace(edge.ID) == "" {
-			edge.ID = d.Ref.ID
-		}
+		assignActualEdgeID(&edge, d)
 
 		// Normalize symmetric edges so A->B and B->A are treated as the same key.
 		ns, nt, _, _ := scout.NormalizeSymmetricEdge(edge.SourceFragmentID, newID, edge.Type)
@@ -4898,9 +4897,7 @@ func cleanupBidirectionalTransformsInto(
 		if err := doc.DataTo(&edge); err != nil {
 			continue
 		}
-		if strings.TrimSpace(edge.ID) == "" {
-			edge.ID = doc.Ref.ID
-		}
+		assignActualEdgeID(&edge, doc)
 		src := strings.TrimSpace(edge.SourceFragmentID)
 		tgt := strings.TrimSpace(edge.TargetFragmentID)
 		if src == "" || tgt == "" || src == tgt {
@@ -5061,9 +5058,7 @@ func deduplicateEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo
 			if err := doc.DataTo(&edge); err != nil {
 				continue
 			}
-			if strings.TrimSpace(edge.ID) == "" {
-				edge.ID = doc.Ref.ID
-			}
+			assignActualEdgeID(&edge, doc)
 			if strings.TrimSpace(edge.ID) == "" {
 				continue
 			}
@@ -5163,9 +5158,7 @@ func normalizeSymmetricEdges(ctx context.Context, db *firestore.Client, edgesRep
 			if err := doc.DataTo(&edge); err != nil {
 				continue
 			}
-			if strings.TrimSpace(edge.ID) == "" {
-				edge.ID = doc.Ref.ID
-			}
+			assignActualEdgeID(&edge, doc)
 			ns, nt, _, swapped := scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
 			if !swapped {
 				continue
@@ -5793,9 +5786,7 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 			if err := doc.DataTo(&edge); err != nil {
 				continue
 			}
-			if strings.TrimSpace(edge.ID) == "" {
-				edge.ID = doc.Ref.ID
-			}
+			assignActualEdgeID(&edge, doc)
 
 			sourceType, sourcePath := resolveEndpoint(edge.SourceFragmentID)
 			targetType, targetPath := resolveEndpoint(edge.TargetFragmentID)

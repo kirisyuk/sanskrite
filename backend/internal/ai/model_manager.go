@@ -405,6 +405,31 @@ func (mm *AIModelManager) initializeModels() {
 		ToolUseProtocol:               ToolUseProtocolGemini,
 	}
 
+	// Gemini 3.1 Flash-Lite Preview is listed in the official Gemini API supported models catalog.
+	// Pricing is not yet split out separately on the public pricing page, so we mirror the current Flash-Lite envelope
+	// until Google publishes dedicated preview pricing.
+	mm.models["gemini-3.1-flash-lite-preview"] = AIModelCapabilities{
+		Name:                "gemini-3.1-flash-lite-preview",
+		ContextWindow:       1000000,
+		OutputTokens:        65536,
+		PricePerInputToken:  0.00000010,
+		PricePerOutputToken: 0.00000041,
+		Provider:            AIProviderGemini,
+		MaxTokensPerMinute:  6000000,
+		MaxTokensPerDay:     12000000,
+		NearlyRealTime:      true,
+		CapabilityScore:     8,
+		ImageGenerationCapability:     false,
+		EmbeddingGenerationCapability: false,
+		TextGenerationCapability:      true,
+		ImageAnalysisCapability:       true,
+		BuiltInSearchCapability:       false,
+		SearchGroundingCapability:     false,
+		SupportsToolCalling:           true,
+		SupportsMcp:                   true,
+		ToolUseProtocol:               ToolUseProtocolGemini,
+	}
+
 	mm.models["gemini-2.5-pro"] = AIModelCapabilities{
 		Name:                          "gemini-2.5-pro",
 		ContextWindow:                 2000000,
@@ -765,6 +790,12 @@ func (mm *AIModelManager) SelectModel(requirements AIRequirements, inputTokens i
 
 	// Отдаём приоритет более дешёвым моделям
 	sort.Slice(capableModels, func(i, j int) bool {
+		if capableModels[i].model.PricePerOutputToken == capableModels[j].model.PricePerOutputToken {
+			if capableModels[i].model.CapabilityScore == capableModels[j].model.CapabilityScore {
+				return capableModels[i].name < capableModels[j].name
+			}
+			return capableModels[i].model.CapabilityScore > capableModels[j].model.CapabilityScore
+		}
 		return capableModels[i].model.PricePerOutputToken < capableModels[j].model.PricePerOutputToken
 	})
 
@@ -882,6 +913,12 @@ func (mm *AIModelManager) SelectModelForProviders(requirements AIRequirements, i
 		return ""
 	}
 	sort.Slice(capableModels, func(i, j int) bool {
+		if capableModels[i].model.PricePerOutputToken == capableModels[j].model.PricePerOutputToken {
+			if capableModels[i].model.CapabilityScore == capableModels[j].model.CapabilityScore {
+				return capableModels[i].name < capableModels[j].name
+			}
+			return capableModels[i].model.CapabilityScore > capableModels[j].model.CapabilityScore
+		}
 		return capableModels[i].model.PricePerOutputToken < capableModels[j].model.PricePerOutputToken
 	})
 	return capableModels[0].name

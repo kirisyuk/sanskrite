@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
@@ -112,15 +113,15 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 				Correct: []string{
 					"/loc/ae/01/dubai",   // Dubai emirate = admin1 code "01"
 					"/loc/sa/01/riyadh",  // Riyadh province = "01"
-					"/loc/ae",      // Country-level UAE
+					"/loc/ae",            // Country-level UAE
 					"/loc/us/tx/austin",  // Texas, Austin
 					"/loc/ru/mow/moscow", // Moscow city
 				},
 				Incorrect: []string{
-					"/loc/ae/du/dubai",        // "du" is not GeoNames admin code
-					"/loc/ae/dubai/dubai",     // city name in admin1 slot
-					"/loc/uae",          // "uae" is not valid ISO2
-					"/loc/saudi-arabia", // country name instead of ISO2
+					"/loc/ae/du/dubai",    // "du" is not GeoNames admin code
+					"/loc/ae/dubai/dubai", // city name in admin1 slot
+					"/loc/uae",            // "uae" is not valid ISO2
+					"/loc/saudi-arabia",   // country name instead of ISO2
 				},
 			},
 			Resolution: "Use GeoNames API to resolve deeper geo levels when available. Country-level locations use /loc/{cc}.",
@@ -138,9 +139,9 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 					"/org/eu/european-commission", // regional token for EU-level orgs
 				},
 				Incorrect: []string{
-					"/org/saudi-aramco",        // missing iso2
-					"/org/aramco",              // missing iso2
-					"/org/na/unknown-company",  // "na" only when jurisdiction unknown
+					"/org/saudi-aramco",       // missing iso2
+					"/org/aramco",             // missing iso2
+					"/org/na/unknown-company", // "na" only when jurisdiction unknown
 				},
 			},
 		},
@@ -450,6 +451,9 @@ func (r *TaxonomyRules) ValidateOrgPath(path string) (bool, string) {
 	if len(parts) < 3 {
 		return false, "ORGANIZATION path must have at least 3 segments (/org/{iso2}/{slug})"
 	}
+	if canonical.OrgSlugForbiddenPlaceholder(strings.ToLower(strings.TrimSpace(parts[len(parts)-1]))) {
+		return false, "ORGANIZATION path slug must not be a synthetic placeholder like 'na'"
+	}
 
 	return true, ""
 }
@@ -472,6 +476,9 @@ func (r *TaxonomyRules) ValidateGovPath(path string) (bool, string) {
 	// Allow: na, ISO2 (2 chars), composite (tr-sy, ae-sa-om), or regional token (eu, asean, brics, gcc, etc.)
 	if !taxonomy.IsValidGeoForOrgGovFac(geo) {
 		return false, fmt.Sprintf("Invalid jurisdiction (expected %s): %s", taxonomy.ISO2GeoDescriptionForPrompts(), parts[1])
+	}
+	if canonical.GovSlugForbiddenPlaceholder(strings.ToLower(strings.TrimSpace(parts[2]))) {
+		return false, "GOVERNMENT path slug must not be a synthetic placeholder like 'na'"
 	}
 
 	return true, ""

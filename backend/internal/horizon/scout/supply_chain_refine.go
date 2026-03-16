@@ -66,7 +66,7 @@ func (e *ScoutEngine) runSupplyChainAssemblyStage(
 	e.pipelineStageBegin(ctx, job, pipelineName, stage, true, stage)
 
 	if e.supplyChainPathBuilder == nil || e.fragmentsRepo == nil || e.edgesRepo == nil {
-		summary := buildSupplyChainAssemblyState(nil, "empty", "no_materialized_supply_links", stage)
+		summary := buildSupplyChainAssemblyState(job, nil, "empty", "no_materialized_supply_links", stage)
 		job.State["supplyChainAssembly"] = summary
 		e.pipelineStageSkip(ctx, job, pipelineName, stage, true, "no_materialized_supply_links")
 		e.persistSupplyChainAssemblyState(ctx, job, summary)
@@ -75,7 +75,7 @@ func (e *ScoutEngine) runSupplyChainAssemblyStage(
 
 	inputs := collectSupplyChainAssemblyInputs(job, domainCP, supplyChainPlan)
 	if len(inputs.AnchorSet) == 0 {
-		summary := buildSupplyChainAssemblyState(nil, "empty", supplyChainRefineSkipNoAnchor, stage)
+		summary := buildSupplyChainAssemblyState(job, nil, "empty", supplyChainRefineSkipNoAnchor, stage)
 		job.State["supplyChainAssembly"] = summary
 		e.pipelineStageSkip(ctx, job, pipelineName, stage, true, supplyChainRefineSkipNoAnchor)
 		e.persistSupplyChainAssemblyState(ctx, job, summary)
@@ -101,7 +101,7 @@ func (e *ScoutEngine) runSupplyChainAssemblyStage(
 	}
 
 	if result == nil {
-		summary := buildSupplyChainAssemblyState(nil, "empty", "assembly_no_reachable_graph", stage)
+		summary := buildSupplyChainAssemblyState(job, nil, "empty", "assembly_no_reachable_graph", stage)
 		job.State["supplyChainAssembly"] = summary
 		e.pipelineStageSkip(ctx, job, pipelineName, stage, true, "assembly_no_reachable_graph")
 		e.persistSupplyChainAssemblyState(ctx, job, summary)
@@ -109,7 +109,7 @@ func (e *ScoutEngine) runSupplyChainAssemblyStage(
 	}
 
 	if strings.TrimSpace(result.SkipReason) != "" {
-		summary := buildSupplyChainAssemblyState(result, "empty", result.SkipReason, stage)
+		summary := buildSupplyChainAssemblyState(job, result, "empty", result.SkipReason, stage)
 		job.State["supplyChainAssembly"] = summary
 		e.pipelineStageSkip(ctx, job, pipelineName, stage, true, result.SkipReason)
 		e.persistSupplyChainAssemblyState(ctx, job, summary)
@@ -130,30 +130,78 @@ func (e *ScoutEngine) runSupplyChainAssemblyStage(
 		e.runSupplyChainContinuationEnrichment(ctx, job, sourceFragment)
 	}
 
-	summary := buildSupplyChainAssemblyState(result, result.Status, "", stage)
+	summary := buildSupplyChainAssemblyState(job, result, result.Status, "", stage)
 	job.State["supplyChainAssembly"] = summary
 	e.persistSupplyChainAssemblyState(ctx, job, summary)
 
 	if result.Artifact != nil {
+		fmt.Printf("[%s] job=%s target=%s artifact=%s status=%s anchors=%d products=%d actors=%d derivedPaths=%d provisional=%t continuationScheduled=%t\n",
+			supplyChainAssemblyLogLabel(stage),
+			strings.TrimSpace(job.ID),
+			strings.TrimSpace(job.TargetCanonicalPath),
+			strings.TrimSpace(result.Artifact.CanonicalKey),
+			strings.TrimSpace(result.Status),
+			len(result.ResolvedAnchors),
+			result.Coverage.ProductsN,
+			result.Coverage.ActorsN,
+			len(result.DerivedPathKeys),
+			result.Provisional,
+			result.BackgroundContinuationScheduled,
+		)
+		if result.Coverage != nil {
+			fmt.Printf("[%s] job=%s primaryBranches=%d secondaryBranches=%d supportBranches=%d primaryProducts=%d routeBoundPrimaryEdges=%d\n",
+				supplyChainAssemblyLogLabel(stage),
+				strings.TrimSpace(job.ID),
+				result.Coverage.PrimaryBranchesN,
+				result.Coverage.SecondaryBranchesN,
+				result.Coverage.SupportBranchesN,
+				result.Coverage.PrimaryProductsCoveredN,
+				result.Coverage.RouteBoundPrimaryEdgesN,
+			)
+		}
 		if lensID := strings.TrimSpace(job.LensID); lensID != "" && e.lensesRepo != nil {
 			_ = addArtifactToLensScope(ctx, e.lensesRepo, lensID, result.Artifact)
 		}
-		e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainAssembly] stage=%s assembly=%s anchors=%d products=%d actors=%d derivedPaths=%d provisional=%t",
+		e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainAssembly] stage=%s assembly=%s anchors=%d products=%d actors=%d derivedPaths=%d primaryBranches=%d secondaryBranches=%d supportBranches=%d provisional=%t",
 			strings.TrimSpace(stage),
 			result.Artifact.CanonicalKey,
 			len(result.ResolvedAnchors),
 			result.Coverage.ProductsN,
 			result.Coverage.ActorsN,
 			len(result.DerivedPathKeys),
+			result.Coverage.PrimaryBranchesN,
+			result.Coverage.SecondaryBranchesN,
+			result.Coverage.SupportBranchesN,
 			result.Provisional,
 		))
 	} else {
+		fmt.Printf("[%s] job=%s target=%s status=%s anchors=%d derivedPaths=%d provisional=%t continuationScheduled=%t\n",
+			supplyChainAssemblyLogLabel(stage),
+			strings.TrimSpace(job.ID),
+			strings.TrimSpace(job.TargetCanonicalPath),
+			strings.TrimSpace(result.Status),
+			len(result.ResolvedAnchors),
+			len(result.DerivedPathKeys),
+			result.Provisional,
+			result.BackgroundContinuationScheduled,
+		)
 		e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainAssembly] stage=%s anchors=%d derivedPaths=%d status=%s",
 			strings.TrimSpace(stage), len(result.ResolvedAnchors), len(result.DerivedPathKeys), result.Status))
 	}
 
 	e.pipelineStageComplete(ctx, job, pipelineName, stage, true, stage+"_done")
 	return nil
+}
+
+func supplyChainAssemblyLogLabel(stage string) string {
+	switch strings.TrimSpace(stage) {
+	case stageEntitySupplyChainFastAssembly:
+		return "FastAssemblySummary"
+	case stageEntitySupplyChainRefine:
+		return "RefinedAssemblySummary"
+	default:
+		return "SupplyChainAssemblySummary"
+	}
 }
 
 func (e *ScoutEngine) runSupplyChainContinuationEnrichment(ctx context.Context, job *models.ScoutingJob, sourceFragment *models.HorizonFragment) {
@@ -229,15 +277,17 @@ func collectSupplyChainAssemblyInputs(
 		addGeo(facets["geo"]...)
 	}
 	if job != nil && job.State != nil {
-		if cc, _ := ParseChainContext(job.State["chainContext"]); cc != nil {
-			for _, ref := range cc.DiscoveredNodes {
-				ref = strings.TrimSpace(ref)
-				switch {
-				case strings.HasPrefix(ref, "/product/"),
-					strings.HasPrefix(ref, "/org/"),
-					strings.HasPrefix(ref, "/fac/"),
-					strings.HasPrefix(ref, "/deposit/"):
-					anchors = append(anchors, ref)
+		if len(anchors) == 0 {
+			if cc, _ := ParseChainContext(job.State["chainContext"]); cc != nil {
+				for _, ref := range cc.DiscoveredNodes {
+					ref = strings.TrimSpace(ref)
+					switch {
+					case strings.HasPrefix(ref, "/product/"),
+						strings.HasPrefix(ref, "/org/"),
+						strings.HasPrefix(ref, "/fac/"),
+						strings.HasPrefix(ref, "/deposit/"):
+						anchors = append(anchors, ref)
+					}
 				}
 			}
 		}
@@ -268,7 +318,7 @@ func collectSupplyChainAssemblyRawGraph(job *models.ScoutingJob) ([]string, map[
 	return dedupStrings(cc.DiscoveredNodes), cloneStringMap(cc.NodeLabels), rawEdges, buildSupplyChainFrontiers(cc)
 }
 
-func buildSupplyChainAssemblyState(result *pathbuilder.SupplyChainAssemblyResult, status string, skipReason string, stage string) map[string]interface{} {
+func buildSupplyChainAssemblyState(job *models.ScoutingJob, result *pathbuilder.SupplyChainAssemblyResult, status string, skipReason string, stage string) map[string]interface{} {
 	summary := map[string]interface{}{
 		"status":     strings.TrimSpace(firstNonEmpty(status, "empty")),
 		"skipReason": strings.TrimSpace(skipReason),
@@ -305,13 +355,55 @@ func buildSupplyChainAssemblyState(result *pathbuilder.SupplyChainAssemblyResult
 		summary["transformsN"] = float64(result.Coverage.TransformationsN)
 		summary["suppliersN"] = float64(result.Coverage.SuppliersN)
 		summary["unresolvedLeavesN"] = float64(result.Coverage.UnresolvedLeaves)
+		summary["primaryBranchesN"] = float64(result.Coverage.PrimaryBranchesN)
+		summary["secondaryBranchesN"] = float64(result.Coverage.SecondaryBranchesN)
+		summary["supportBranchesN"] = float64(result.Coverage.SupportBranchesN)
+		summary["primaryProductsCoveredN"] = float64(result.Coverage.PrimaryProductsCoveredN)
+		summary["routeBoundPrimaryEdgesN"] = float64(result.Coverage.RouteBoundPrimaryEdgesN)
+		totalEdges := result.Coverage.RouteBoundPrimaryEdgesN + result.Coverage.NoiseEdgesN
+		if result.Artifact != nil {
+			if parsed, err := models.ParseSupplyChainAssemblyGraphPayload(result.Artifact.Payload); err == nil && parsed != nil {
+				totalEdges = len(parsed.SupplyEdges) + len(parsed.TransformEdges) + len(parsed.AssemblyEdges)
+				summary["primaryBranches"] = parsed.PrimaryBranches
+				summary["secondaryBranches"] = parsed.SecondaryBranches
+				summary["topRoutes"] = parsed.TopRoutes
+				summary["topDistributionNodes"] = parsed.TopDistributionNodes
+				summary["topSuppliers"] = parsed.TopSuppliers
+				summary["topProductFamilies"] = parsed.TopProductFamilies
+			}
+		}
+		if totalEdges > 0 {
+			summary["noiseRatio"] = float64(result.Coverage.NoiseEdgesN) / float64(totalEdges)
+		} else {
+			summary["noiseRatio"] = float64(0)
+		}
 		summary["truncated"] = result.Coverage.Truncated
 	}
 	if result.Artifact != nil {
 		summary["artifactKey"] = strings.TrimSpace(result.Artifact.CanonicalKey)
 		summary["artifactId"] = strings.TrimSpace(result.Artifact.ID)
 	}
+	if job != nil {
+		if createdAt := job.CreatedAt; !createdAt.IsZero() {
+			elapsedMs := float64(time.Since(createdAt).Milliseconds())
+			if parseStateInt(summary["primaryBranchesN"], 0) > 0 {
+				summary["timeToFirstPrimaryMaterializationMs"] = firstExistingOrElapsed(job, "timeToFirstPrimaryMaterializationMs", elapsedMs)
+			}
+			summary["timeToFirstFastAssemblyMs"] = firstExistingOrElapsed(job, "timeToFirstFastAssemblyMs", elapsedMs)
+		}
+	}
 	return summary
+}
+
+func firstExistingOrElapsed(job *models.ScoutingJob, key string, elapsedMs float64) float64 {
+	if job != nil && job.State != nil {
+		if current, ok := job.State["supplyChainAssembly"].(map[string]interface{}); ok && current != nil {
+			if existing := parseStateFloatLoose(current[key], -1); existing >= 0 {
+				return existing
+			}
+		}
+	}
+	return elapsedMs
 }
 
 func (e *ScoutEngine) updateAssemblyArtifactContinuationMetadata(ctx context.Context, result *pathbuilder.SupplyChainAssemblyResult) error {
@@ -340,6 +432,13 @@ func (e *ScoutEngine) updateAssemblyArtifactContinuationMetadata(ctx context.Con
 		Coverage:                        parsed.Coverage,
 		OpenGaps:                        parsed.OpenGaps,
 		DerivedPathKeys:                 parsed.DerivedPathKeys,
+		PrimaryBranches:                 parsed.PrimaryBranches,
+		SecondaryBranches:               parsed.SecondaryBranches,
+		TopRoutes:                       parsed.TopRoutes,
+		TopDistributionNodes:            parsed.TopDistributionNodes,
+		TopSuppliers:                    parsed.TopSuppliers,
+		TopProductFamilies:              parsed.TopProductFamilies,
+		SuppressedSupportBranches:       parsed.SuppressedSupportBranches,
 		Stage:                           parsed.Stage,
 		Provisional:                     parsed.Provisional,
 		SourceMode:                      parsed.SourceMode,

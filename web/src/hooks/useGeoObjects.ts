@@ -17,6 +17,8 @@ export type GeoObject = {
   hype?: number;
   hypeIndicator?: number;
   activityStatus?: 'hot' | 'active' | 'watch' | 'cooling' | 'inactive';
+  conflictLinked?: boolean;
+  threatClass?: string;
   lastMatchedAt?: string;
   inScope?: boolean;
   createdAt?: string;
@@ -189,6 +191,8 @@ export function useGeoObjects(
           hype: Number.isFinite(Number(data?.hype)) ? Number(data?.hype) : undefined,
           hypeIndicator: Number.isFinite(Number(data?.hypeIndicator)) ? Number(data?.hypeIndicator) : undefined,
           activityStatus,
+          conflictLinked: Boolean(data?.conflictLinked),
+          threatClass: typeof data?.threatClass === 'string' ? data.threatClass.trim() : undefined,
           lastMatchedAt: typeof data?.lastMatchedAt === 'string' ? data.lastMatchedAt : undefined,
           updatedAt: typeof data?.updatedAt === 'string' ? data.updatedAt : new Date().toISOString(),
         };

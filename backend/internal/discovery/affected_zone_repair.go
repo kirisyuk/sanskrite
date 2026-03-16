@@ -78,7 +78,11 @@ func (r *AffectedZoneRepairer) RepairFragment(
 
 	event := synthesizeAffectedZoneEventFromFragment(frag)
 	classification := synthesizeAffectedZoneClassificationFromFragment(frag)
-	candidate := inferAffectedZoneCandidate(event, classification)
+	candidate := r.pipeline.inferAffectedZoneCandidate(ctx, event, classification)
+	if refreshed, changed := refreshAffectedZoneStateForRepair(st, now, event, classification, candidate); changed {
+		st = refreshed
+		scoreAfter = st.Score
+	}
 
 	result := &AffectedZoneRepairResult{
 		FragmentID:   strings.TrimSpace(frag.ID),
@@ -119,6 +123,15 @@ func (r *AffectedZoneRepairer) RepairFragment(
 			result.ScoreAfter = parseAffectedZoneState(frag).Score
 			result.GeoPrecision = strings.TrimSpace(qualifierStringValue(frag.Qualifiers, "geoPrecision"))
 			return result, nil
+		}
+		if candidate != nil && apply {
+			if err := r.pipeline.upsertAffectedZoneGraphLinks(ctx, frag, candidate, sourceID, event); err != nil {
+				return result, err
+			}
+			if result.Action == AffectedZoneRepairNoop {
+				result.Action = AffectedZoneRepairUpdated
+				result.Reason = "affected zone graph links refreshed"
+			}
 		}
 		if applyZoneStateRepair(frag, st, now, sourceID, event) {
 			result.Action = AffectedZoneRepairCooled
@@ -163,9 +176,77 @@ func (r *AffectedZoneRepairer) RepairFragment(
 			result.Updated = true
 		}
 	}
+	if apply {
+		if err := r.pipeline.upsertAffectedZoneGraphLinks(ctx, frag, candidate, sourceID, event); err != nil {
+			return result, err
+		}
+		if result.Action == AffectedZoneRepairNoop {
+			result.Action = AffectedZoneRepairUpdated
+			result.Reason = "affected zone graph links refreshed"
+		}
+	}
 	result.ScoreAfter = parseAffectedZoneState(frag).Score
 	result.GeoPrecision = strings.TrimSpace(qualifierStringValue(frag.Qualifiers, "geoPrecision"))
 	return result, nil
+}
+
+func (r *AffectedZoneRepairer) RelinkFragment(
+	ctx context.Context,
+	tenantID string,
+	frag *horizonmodels.HorizonFragment,
+	sourceID string,
+) (bool, error) {
+	if r == nil || r.pipeline == nil || r.pipeline.fragmentsRepo == nil {
+		return false, fmt.Errorf("affected zone repairer is not configured")
+	}
+	if frag == nil || frag.Type != horizonmodels.FragmentTypeAffectedZone {
+		return false, nil
+	}
+	event := synthesizeAffectedZoneEventFromFragment(frag)
+	classification := synthesizeAffectedZoneClassificationFromFragment(frag)
+	candidate := r.pipeline.inferAffectedZoneCandidate(ctx, event, classification)
+	if candidate == nil {
+		candidate = fallbackAffectedZoneCandidateFromFragment(frag)
+	}
+	if candidate == nil {
+		return false, nil
+	}
+	if strings.TrimSpace(tenantID) == "" {
+		tenantID = "global"
+	}
+	if err := r.pipeline.upsertAffectedZoneGraphLinks(ctx, frag, candidate, sourceID, event); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func refreshAffectedZoneStateForRepair(
+	st affectedZoneState,
+	now time.Time,
+	e *horizonMonitorFeedEvent,
+	cls horizonMonitorNewsClassification,
+	candidate *affectedZoneCandidate,
+) (affectedZoneState, bool) {
+	if e == nil || e.OccurredAt.IsZero() {
+		return st, false
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	matchedAt := e.OccurredAt.UTC()
+	if matchedAt.After(now) {
+		matchedAt = now
+	}
+	if !st.LastMatchedAt.IsZero() && !matchedAt.After(st.LastMatchedAt.Add(15*time.Minute)) {
+		return st, false
+	}
+	boost := affectedZoneBoost(e, cls, candidate)
+	if boost <= 0 {
+		return st, false
+	}
+	refreshed := st
+	refreshed.applyObservation(now.UTC(), matchedAt, boost)
+	return refreshed, true
 }
 
 func fallbackAffectedZoneCandidateFromFragment(f *horizonmodels.HorizonFragment) *affectedZoneCandidate {
@@ -404,6 +485,9 @@ func reconcileAffectedZoneFragmentForRepair(
 		f.RadiusKm = candidate.RadiusKm
 		changed = true
 	}
+	if applyAffectedZoneIdentity(f, candidate) {
+		changed = true
+	}
 	if applyAffectedZoneCoordinates(f, candidate) {
 		changed = true
 	}
@@ -517,10 +601,17 @@ func shouldArchiveAffectedZoneFragment(
 		}
 	}
 	text := normalizeKeywordText(strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary), strings.TrimSpace(cls.Category), strings.TrimSpace(cls.Level)}, " "))
+	preserveHotConflict := shouldPreserveHotConflictAffectedZone(f, e, cls, st, now)
 	if shouldSuppressAffectedZoneBySourceProfile(e) || shouldSuppressAffectedZoneBySemanticDrift(text, e, cls) {
+		if preserveHotConflict {
+			return false
+		}
 		return true
 	}
 	if shouldSuppressAffectedZoneByEventProfile(text, e, cls, qualifierStringValue(f.Qualifiers, "conditionType"), wmHeuristics().ProfileArticle(text, affectedZoneSourceHost(e))) {
+		if preserveHotConflict {
+			return false
+		}
 		return true
 	}
 	if shouldSuppressWeakAffectedZoneInference(
@@ -530,6 +621,9 @@ func shouldArchiveAffectedZoneFragment(
 		qualifierStringValue(f.Qualifiers, "conditionType"),
 		toFloatDefault(qualifierStringValue(f.Qualifiers, "zoneInferenceScore"), 0),
 	) {
+		if preserveHotConflict {
+			return false
+		}
 		return true
 	}
 	if isStaleGenericCountryAffectedZone(f, st, now) {
@@ -591,13 +685,23 @@ func affectedZoneArchiveReason(
 		}
 	}
 	text := normalizeKeywordText(strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary), strings.TrimSpace(cls.Category), strings.TrimSpace(cls.Level)}, " "))
+	preserveHotConflict := shouldPreserveHotConflictAffectedZone(f, e, cls, st, now)
 	if shouldSuppressAffectedZoneBySourceProfile(e) {
+		if preserveHotConflict {
+			return ""
+		}
 		return "suppressed by source profile"
 	}
 	if shouldSuppressAffectedZoneBySemanticDrift(text, e, cls) {
+		if preserveHotConflict {
+			return ""
+		}
 		return "semantic drift / non-event article"
 	}
 	if shouldSuppressAffectedZoneByEventProfile(text, e, cls, qualifierStringValue(f.Qualifiers, "conditionType"), wmHeuristics().ProfileArticle(text, affectedZoneSourceHost(e))) {
+		if preserveHotConflict {
+			return ""
+		}
 		return "suppressed by event profile"
 	}
 	if shouldSuppressWeakAffectedZoneInference(
@@ -607,6 +711,9 @@ func affectedZoneArchiveReason(
 		qualifierStringValue(f.Qualifiers, "conditionType"),
 		toFloatDefault(qualifierStringValue(f.Qualifiers, "zoneInferenceScore"), 0),
 	) {
+		if preserveHotConflict {
+			return ""
+		}
 		return "weak affected zone inference"
 	}
 	if isStaleGenericCountryAffectedZone(f, st, now) {
@@ -616,6 +723,51 @@ func affectedZoneArchiveReason(
 		return "stale semantically invalid affected zone"
 	}
 	return "stale low-confidence affected zone"
+}
+
+func shouldPreserveHotConflictAffectedZone(
+	f *horizonmodels.HorizonFragment,
+	e *horizonMonitorFeedEvent,
+	cls horizonMonitorNewsClassification,
+	st affectedZoneState,
+	now time.Time,
+) bool {
+	if f == nil {
+		return false
+	}
+	conditionType := strings.TrimSpace(qualifierStringValue(f.Qualifiers, "conditionType"))
+	if conditionType != "military_conflict" && conditionType != "security_conflict" {
+		return false
+	}
+	if st.Score < 55 {
+		return false
+	}
+	if st.LastMatchedAt.IsZero() || now.Sub(st.LastMatchedAt) > 7*24*time.Hour {
+		return false
+	}
+	sourceCount := len(f.Provenance.SourceRefs)
+	if sourceCount < 4 && len(f.Provenance.SourceIDs) < 4 {
+		return false
+	}
+	text := normalizeKeywordText(strings.Join([]string{
+		qualifierStringValue(f.Qualifiers, "sourceTitle"),
+		qualifierStringValue(f.Qualifiers, "sourceSummary"),
+		strings.TrimSpace(cls.Category),
+		strings.TrimSpace(cls.Level),
+	}, " "))
+	if text == "" && e != nil {
+		text = normalizeKeywordText(strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary)}, " "))
+	}
+	if text == "" {
+		return false
+	}
+	if looksLikeConcreteOperationalIncident(text, cls) {
+		return true
+	}
+	return hasAnyKeyword(text,
+		"israeli strikes", "airstrike", "bombed", "bombing", "clash", "hezbollah", "missile", "rocket", "drone strike",
+		"hostilities", "civilian toll", "war toll", "southern lebanon", "beirut", "evacuation orders",
+	)
 }
 
 func hasAffectedZoneIdentityDrift(f *horizonmodels.HorizonFragment) bool {
@@ -642,6 +794,20 @@ func hasAffectedZoneIdentityDrift(f *horizonmodels.HorizonFragment) bool {
 	if isSyntheticAffectedZoneNarrative(strings.TrimSpace(qualifierStringValue(f.Qualifiers, "sourceTitle"))) &&
 		strings.EqualFold(strings.TrimSpace(qualifierStringValue(f.Qualifiers, "geoPrecision")), "approximate_country") {
 		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(qualifierStringValue(f.Qualifiers, "geoPrecision")), "precise") &&
+		canonicalPlace != "" && len(canonicalGeo) == 2 {
+		sourceText := strings.Join([]string{
+			qualifierStringValue(f.Qualifiers, "sourceTitle"),
+			qualifierStringValue(f.Qualifiers, "sourceSummary"),
+		}, " ")
+		sourceNorm := normalizePhrase(sourceText)
+		sourceCC := strings.ToUpper(strings.TrimSpace(qualifierStringValue(f.Qualifiers, "sourceCountryCode")))
+		if sourceCC == canonicalGeo &&
+			(strings.Contains(sourceNorm, canonicalPlace) || normalizePhrase(extractKnownPlaceFromText(sourceText)) == canonicalPlace) &&
+			looksLikeConcreteOperationalIncident(normalizeKeywordText(sourceText), synthesizeAffectedZoneClassificationFromFragment(f)) {
+			return false
+		}
 	}
 	fields := []string{
 		strings.TrimSpace(f.Identifiers["legalName"]),

@@ -1,25 +1,28 @@
 package scout
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
+var genericGovernmentLabelRE = regexp.MustCompile(`(?i)^government of [a-z][a-z .'-]+$`)
+
 var orgRegionalGeoHints = map[string]string{
-	"asean":           "asean",
-	"african union":   "african-union",
-	"european union":  "eu",
-	"european commission": "eu",
+	"asean":                    "asean",
+	"african union":            "african-union",
+	"european union":           "eu",
+	"european commission":      "eu",
 	"gulf cooperation council": "gcc",
-	"gcc":             "gcc",
-	"united nations":  "int",
-	"opec":            "opec",
-	"oecd":            "oecd",
-	"g20":             "g20",
-	"g7":              "g7",
-	"arab league":     "arab-league",
+	"gcc":                      "gcc",
+	"united nations":           "int",
+	"opec":                     "opec",
+	"oecd":                     "oecd",
+	"g20":                      "g20",
+	"g7":                       "g7",
+	"arab league":              "arab-league",
 }
 
 var orgJurisdictionHints = map[string]string{
@@ -76,6 +79,9 @@ func inferOrgCanonicalPathFromHints(fragment *models.HorizonFragment) string {
 		geo = "na"
 	}
 	if looksLikeGovLabel(label) {
+		if genericGovernmentLabelRE.MatchString(strings.TrimSpace(label)) {
+			return taxonomy.GovCanonicalPath(geo, "government")
+		}
 		return taxonomy.GovCanonicalPath(geo, label)
 	}
 	return taxonomy.OrgCanonicalPath(geo, label)

@@ -3234,6 +3234,9 @@ func (e *ScoutEngine) runPipelinePass(
 		"canonicalPath": strings.TrimSpace(effectiveCanonicalPath),
 		"pass":          strings.TrimSpace(string(passName)),
 	})
+	if err := e.transition(ctx, job, models.ScoutingJobStateExecution, 0.25, "pipeline_pass_"+strings.TrimSpace(string(passName))); err != nil {
+		return fmt.Errorf("failed to transition pipeline pass %q to execution: %w", strings.TrimSpace(string(passName)), err)
+	}
 	runner := pipeline.DefaultRunner()
 	if err := runner.Run(ctx, e, passName, pipeline.PassInput{
 		Job:                    job,
@@ -3269,11 +3272,13 @@ func (e *ScoutEngine) runPipelinePass(
 }
 
 func (e *ScoutEngine) transition(ctx context.Context, job *models.ScoutingJob, newState models.ScoutingJobState, progress float64, hint string) error {
-	if e == nil || e.workflow == nil || job == nil {
+	if e == nil || job == nil {
 		return nil
 	}
-	if err := e.workflow.TransitionState(ctx, job.ID, newState); err != nil {
-		return err
+	if e.workflow != nil {
+		if err := e.workflow.TransitionState(ctx, job.ID, newState); err != nil {
+			return err
+		}
 	}
 	// Update local job snapshot (best-effort)
 	job.CurrentState = newState

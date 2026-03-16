@@ -26,6 +26,7 @@ var (
 	limit     = flag.Int("limit", 0, "Limit number of canonical paths to process (0 = all)")
 	prefix    = flag.String("prefix", "", "Canonical path prefix filter (optional)")
 	verbose   = flag.Bool("verbose", false, "Verbose logging")
+	skipGCS   = flag.Bool("skip-gcs", false, "Skip GCS/Vertex export+delete side effects during dedup (faster, Firestore-only merge)")
 )
 
 func main() {
@@ -50,24 +51,27 @@ func main() {
 	}
 	defer fsClient.Close()
 
-	// Initialize GCS client (required for deletion from GCS)
-	gcsClient, err := gcp.NewGCSClient(ctx, *projectID)
-	if err != nil {
-		log.Fatalf("Failed to create GCS client: %v", err)
+	var gcsClient *gcp.GCSClient
+	bucketName := ""
+	fragmentsRepo := repo.NewHorizonFragmentsRepository(fsClient)
+	if !*skipGCS {
+		var err error
+		gcsClient, err = gcp.NewGCSClient(ctx, *projectID)
+		if err != nil {
+			log.Fatalf("Failed to create GCS client: %v", err)
+		}
+		bucketName = *bucket
+		if bucketName == "" {
+			bucketName = firstNonEmpty(os.Getenv("ETIGRAM_FRAGMENTS_BUCKET"), os.Getenv("HORIZON_FRAGMENTS_BUCKET"))
+		}
+		if bucketName == "" {
+			bucketName = defaultHorizonFragmentsBucket(*projectID)
+			log.Printf("INFO: Using default bucket: %s", bucketName)
+		}
+		fragmentsRepo = fragmentsRepo.WithStorage(gcsClient, bucketName)
 	}
 
-	// Determine bucket (use provided or default)
-	bucketName := *bucket
-	if bucketName == "" {
-		bucketName = firstNonEmpty(os.Getenv("ETIGRAM_FRAGMENTS_BUCKET"), os.Getenv("HORIZON_FRAGMENTS_BUCKET"))
-	}
-	if bucketName == "" {
-		bucketName = defaultHorizonFragmentsBucket(*projectID)
-		log.Printf("INFO: Using default bucket: %s", bucketName)
-	}
-
-	// Initialize repositories with GCS storage (required for deletion)
-	fragmentsRepo := repo.NewHorizonFragmentsRepository(fsClient).WithStorage(gcsClient, bucketName)
+	// Initialize repositories
 	edgesRepo := repo.NewDependencyEdgesRepository(fsClient)
 	watchdogRepo := repo.NewWatchdogConfigsRepository(fsClient)
 	lensesRepo := repo.NewLensesRepository(fsClient)
@@ -508,7 +512,7 @@ func findDuplicates(ctx context.Context, fragmentsRepo *repo.HorizonFragmentsRep
 			continue
 		}
 
-		pathToIDs[canonicalPath] = append(pathToIDs[canonicalPath], fragment.ID)
+		pathToIDs[canonicalPath] = append(pathToIDs[canonicalPath], strings.TrimSpace(doc.Ref.ID))
 	}
 
 	// Filter to only paths with duplicates

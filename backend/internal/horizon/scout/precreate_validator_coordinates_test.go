@@ -396,6 +396,30 @@ func TestPreCreateValidator_BlocksSyntheticGovPlaceholder(t *testing.T) {
 	}
 }
 
+func TestPreCreateValidator_RepairsSyntheticGovPlaceholderWithKnownGeo(t *testing.T) {
+	v := NewPreCreateValidator(nil, nil, nil)
+
+	frag := &models.HorizonFragment{
+		Type:          models.FragmentTypeOrganization,
+		CanonicalPath: "/gov/qa/na",
+		Labels:        map[string]string{"en": "Government of Qatar"},
+	}
+
+	res, err := v.ValidateAndProcess(context.Background(), frag)
+	if err != nil {
+		t.Fatalf("ValidateAndProcess() error = %v", err)
+	}
+	if res == nil {
+		t.Fatalf("expected validation result")
+	}
+	if !res.IsValid {
+		t.Fatalf("expected synthetic gov placeholder with known geo to be repaired")
+	}
+	if frag.CanonicalPath != "/gov/qa/government" {
+		t.Fatalf("expected repaired gov path, got %q", frag.CanonicalPath)
+	}
+}
+
 func TestPreCreateValidator_DoesNotOverrideGovPathOnAmbiguousCityOnly(t *testing.T) {
 	v := NewPreCreateValidator(nil, nil, nil).WithGeocodingClient(&fakeGeocodingClient{
 		results: map[string]*coreontology.GeocodingResult{

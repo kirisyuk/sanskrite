@@ -308,6 +308,218 @@ func TestLiveRSSGraphTailAudit(t *testing.T) {
 	)
 }
 
+// RUN_LIVE_HISTORICAL_ZONE_AUDIT=1 go test ./internal/discovery -run TestLiveHistoricalConcreteIncidentPropagationAudit -v
+func TestLiveHistoricalConcreteIncidentPropagationAudit(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("RUN_LIVE_HISTORICAL_ZONE_AUDIT")) != "1" {
+		t.Skip("set RUN_LIVE_HISTORICAL_ZONE_AUDIT=1 to run live historical propagation audit")
+	}
+
+	projectID := firstNonEmptyString(
+		strings.TrimSpace(os.Getenv("GCP_PROJECT_ID")),
+		strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_PROJECT")),
+		"etigram",
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+
+	fsClient, err := gcp.NewFirestoreClient(ctx, projectID)
+	if err != nil {
+		t.Fatalf("firestore init: %v", err)
+	}
+	defer fsClient.Close()
+
+	fragmentsRepo := horizonrepo.NewHorizonFragmentsRepository(fsClient.Client())
+	edgesRepo := horizonrepo.NewDependencyEdgesRepository(fsClient.Client())
+	versionsRepo := horizonrepo.NewHorizonFragmentVersionsRepository(fsClient.Client())
+	lensesRepo := horizonrepo.NewLensesRepository(fsClient.Client())
+	profilesRepo := horizonrepo.NewPropagationProfilesRepository(fsClient.Client())
+	profileLookup := horizonpropagation.NewProfileLookup(profilesRepo)
+	if err := profileLookup.Initialize(ctx); err != nil {
+		t.Fatalf("profile lookup init: %v", err)
+	}
+
+	engine := horizonpropagation.NewPropagationEngine(
+		fragmentsRepo,
+		versionsRepo,
+		edgesRepo,
+		lensesRepo,
+		nil,
+	).WithProfileLookup(profileLookup)
+
+	logger := log.New(io.Discard, "", 0)
+	pipeline := NewHorizonMonitorPipeline(nil, nil, fragmentsRepo, edgesRepo, engine, profileLookup, logger)
+	if pipeline.seedInjector != nil {
+		applicability := horizonsignals.NewExternalApplicabilityEvaluator().
+			WithFragmentsRepo(fragmentsRepo).
+			WithEdgesRepo(edgesRepo)
+		pipeline.seedInjector = pipeline.seedInjector.
+			WithApplicabilityEvaluator(applicability).
+			WithMaterializedRepo(horizonrepo.NewMaterializedArtifactsRepository(fsClient.Client()))
+		if vertexClient := newAuditVertexClient(projectID); vertexClient != nil {
+			pipeline.seedInjector = pipeline.seedInjector.WithVertexSearch(vertexClient)
+		}
+	}
+
+	cases := []struct {
+		name  string
+		event horizonMonitorFeedEvent
+	}{
+		{
+			name: "Fujairah drone attack",
+			event: horizonMonitorFeedEvent{
+				SourceID:    "historical-audit",
+				FeedType:    "intel_rss",
+				ExternalID:  "historical-fujairah-drone-attack",
+				Title:       "UAE's Fujairah stops some oil loading operations after drone attack",
+				Summary:     "Operations were halted at Fujairah after the reported drone attack.",
+				URL:         "https://www.reuters.com/world/middle-east/example-fujairah",
+				CountryCode: "AE",
+				CountryName: "United Arab Emirates",
+				Severity:    "high",
+				Confidence:  0.84,
+				OccurredAt:  time.Date(2026, 3, 15, 8, 2, 0, 0, time.UTC),
+			},
+		},
+		{
+			name: "Hormuz GPS jamming",
+			event: horizonMonitorFeedEvent{
+				SourceID:   "historical-audit",
+				FeedType:   "intel_rss",
+				ExternalID: "historical-hormuz-gps-jamming",
+				Title:      "Critical Threat Persists in Hormuz as Attacks and GPS Jamming Shake Shipping",
+				Summary:    "Shipping disruptions and navigation interference continue in the Strait of Hormuz.",
+				URL:        "https://www.reuters.com/world/middle-east/example-hormuz",
+				Severity:   "high",
+				Confidence: 0.84,
+				OccurredAt: time.Date(2026, 3, 15, 8, 3, 0, 0, time.UTC),
+			},
+		},
+		{
+			name: "Salalah port drone strike",
+			event: horizonMonitorFeedEvent{
+				SourceID:    "historical-audit",
+				FeedType:    "intel_rss",
+				ExternalID:  "historical-salalah-port-drone-strike",
+				Title:       "Oman works to contain fire at Salalah port after drones strike",
+				Summary:     "Emergency crews responded after drones struck Salalah port.",
+				URL:         "https://www.reuters.com/world/middle-east/example-salalah",
+				CountryCode: "OM",
+				CountryName: "Oman",
+				Severity:    "high",
+				Confidence:  0.84,
+				OccurredAt:  time.Date(2026, 3, 15, 7, 19, 0, 0, time.UTC),
+			},
+		},
+		{
+			name: "Kharg Island strike",
+			event: horizonMonitorFeedEvent{
+				SourceID:    "historical-audit",
+				FeedType:    "intel_rss",
+				ExternalID:  "historical-kharg-island-strike",
+				Title:       "The US hit Iran's Kharg Island, key to its economy and security",
+				Summary:     "Kharg Island was hit in a strike on a strategic Iranian oil export site.",
+				URL:         "https://www.apnews.com/example-kharg",
+				CountryCode: "IR",
+				CountryName: "Iran",
+				Severity:    "high",
+				Confidence:  0.84,
+				OccurredAt:  time.Date(2026, 3, 15, 7, 58, 0, 0, time.UTC),
+			},
+		},
+		{
+			name: "Bab el-Mandeb blockade threat",
+			event: horizonMonitorFeedEvent{
+				SourceID:    "historical-audit",
+				FeedType:    "intel_rss",
+				ExternalID:  "historical-bab-el-mandeb-blockade-threat",
+				Title:       "Houthis warn they will block shipping through Bab el-Mandeb",
+				Summary:     "Red Sea maritime traffic faces closure threats as militants target vessels near the chokepoint.",
+				URL:         "https://www.reuters.com/world/middle-east/example-bab-el-mandeb",
+				CountryCode: "YE",
+				CountryName: "Yemen",
+				Severity:    "high",
+				Confidence:  0.81,
+				OccurredAt:  time.Date(2026, 3, 15, 8, 5, 0, 0, time.UTC),
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			event := tc.event
+			cls := normalizeClassificationWithSourceHint(classifyHorizonMonitorNewsKeyword(strings.Join([]string{event.Title, event.Summary}, " ")), &event)
+			candidate := inferAffectedZoneCandidate(&event, cls)
+			if candidate == nil || !candidate.HasCoordinates {
+				t.Fatalf("expected map-ready affected zone candidate, got %+v", candidate)
+			}
+			if event.LocationPath == "" {
+				switch {
+				case candidate.CountryCode != "":
+					event.LocationPath = locationPathFromCountryCode(candidate.CountryCode)
+				case candidate.GeoToken != "":
+					event.LocationPath = "/loc/" + candidate.GeoToken
+				}
+			}
+			event.SignalType = inferHorizonMonitorSignalType("", &event, cls)
+			if bp, ok := horizonMonitorBlueprintFromSignal(event.SignalType); ok {
+				event.EventType = eventTypeFromSignalType(bp.SignalType)
+				event.SpherePaths = append([]string{}, bp.Sphere...)
+			}
+
+			eventFact := syntheticAuditEventFact(&event, tc.name)
+			if eventFact.LocationPath == nil && strings.TrimSpace(event.LocationPath) != "" {
+				loc := strings.TrimSpace(event.LocationPath)
+				eventFact.LocationPath = &loc
+			}
+			signal := pipeline.buildSignalDescriptor(eventFact, &event)
+			if signal == nil {
+				t.Fatal("expected signal descriptor")
+			}
+
+			seedIDs, err := pipeline.seedInjector.ResolveSeedFragmentIDs(ctx, signal)
+			if err != nil {
+				t.Fatalf("seed resolution failed: %v", err)
+			}
+			if len(seedIDs) == 0 {
+				t.Fatal("expected non-empty seed set")
+			}
+
+			traceCtx := horizonpropagation.WithSignalTraceConfig(ctx, horizonpropagation.SignalTraceConfig{
+				Enabled:  true,
+				MaxSteps: envInt("RSS_GRAPH_AUDIT_TRACE_STEPS", 900),
+			})
+			traceCtx = horizonpropagation.WithSignalKernelConfig(traceCtx, horizonpropagation.DefaultHeuristicSignalKernelConfig(signal))
+			result, err := engine.SimulateSignalFromSeeds(traceCtx, signal, profileLookup, seedIDs)
+			if err != nil {
+				t.Fatalf("propagation failed: %v", err)
+			}
+			if len(result.AffectedFragments) == 0 && len(result.PropagationPaths) == 0 {
+				t.Fatalf("expected propagation effect, got affected=%d paths=%d", len(result.AffectedFragments), len(result.PropagationPaths))
+			}
+			endpointSummary, scoreErr := horizonpropagation.ScoreInterestingEndpoints(ctx, fragmentsRepo, signal, result.PropagationPaths, result.Trace, 5)
+			if scoreErr != nil {
+				t.Fatalf("endpoint scoring failed: %v", scoreErr)
+			}
+			longPaths, remoteTails, longestPathHops, topRemote := summarizePropagationPaths(result.PropagationPaths, strings.ToLower(strings.TrimSpace(candidate.CountryCode)))
+			pathFamilySummary := horizonpropagation.ScorePathFamilies(signal, result.Trace, 4)
+			t.Logf(
+				"candidate=%s seeds=%d affected=%d paths=%d remoteTails=%d longPaths=%d longestHops=%d interesting=%d nonObvious=%d businessFamilies=%d topRemote=%v",
+				candidate.CanonicalPath,
+				len(seedIDs),
+				len(result.AffectedFragments),
+				len(result.PropagationPaths),
+				remoteTails,
+				longPaths,
+				longestPathHops,
+				endpointSummary.BusinessEndpoints,
+				endpointSummary.NonObviousEndpoints,
+				pathFamilySummary.BusinessPathFamilies,
+				topRemote,
+			)
+		})
+	}
+}
+
 func syntheticAuditEventFact(event *horizonMonitorFeedEvent, sourceLabel string) *coremodels.OntologyFact {
 	now := event.OccurredAt.UTC()
 	if now.IsZero() {

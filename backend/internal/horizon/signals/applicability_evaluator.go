@@ -90,7 +90,7 @@ func (e *ExternalApplicabilityEvaluator) Evaluate(ctx context.Context, signal *h
 	score := 0.0
 	reasons := make([]string, 0, 6)
 
-	tScore, tReason := axisTypeFit(signal.Axis, fragment.Type)
+	tScore, tReason := axisTypeFit(signal.Axis, fragment)
 	score += tScore * 0.6
 	if tReason != "" {
 		reasons = append(reasons, tReason)
@@ -158,8 +158,11 @@ func (e *ExternalApplicabilityEvaluator) hasQualifyingExposurePath(ctx context.C
 	}
 
 	fragmentPath := strings.TrimSpace(fragment.CanonicalPath)
+	if equivalentLocationPaths(strings.TrimSpace(signal.LocationPath), fragmentPath) {
+		return true
+	}
 	for _, sp := range signal.SeedPaths {
-		if strings.TrimSpace(sp) == fragmentPath {
+		if equivalentLocationPaths(strings.TrimSpace(sp), fragmentPath) || strings.TrimSpace(sp) == fragmentPath {
 			return true
 		}
 	}
@@ -211,7 +214,7 @@ func (e *ExternalApplicabilityEvaluator) resolveSeedIDs(ctx context.Context, sig
 
 	if e.fragmentsRepo != nil {
 		for _, p := range signal.SeedPaths {
-			frag, err := e.fragmentsRepo.GetByCanonicalPath(ctx, strings.TrimSpace(p))
+			frag, err := fragmentByLocationAwarePath(ctx, e.fragmentsRepo, strings.TrimSpace(p))
 			if err != nil || frag == nil {
 				continue
 			}
@@ -221,7 +224,7 @@ func (e *ExternalApplicabilityEvaluator) resolveSeedIDs(ctx context.Context, sig
 			appendID(frag.ID)
 		}
 		if strings.TrimSpace(signal.LocationPath) != "" {
-			if loc, err := e.fragmentsRepo.GetByCanonicalPath(ctx, strings.TrimSpace(signal.LocationPath)); err == nil && loc != nil {
+			if loc, err := fragmentByLocationAwarePath(ctx, e.fragmentsRepo, strings.TrimSpace(signal.LocationPath)); err == nil && loc != nil {
 				if strings.TrimSpace(loc.TenantID) != "" {
 					tenantID = strings.TrimSpace(loc.TenantID)
 				}
@@ -474,8 +477,12 @@ func newRedisApplicabilityClient() *redis.Client {
 	})
 }
 
-func axisTypeFit(axis string, ft horizonmodels.FragmentType) (float64, string) {
+func axisTypeFit(axis string, fragment *horizonmodels.HorizonFragment) (float64, string) {
 	axis = strings.TrimSpace(axis)
+	ft := horizonmodels.FragmentType("")
+	if fragment != nil {
+		ft = fragment.Type
+	}
 	switch axis {
 	case horizonmodels.AxisGeoConflict:
 		if ft == horizonmodels.FragmentTypeGeoRegion || ft == horizonmodels.FragmentTypeOrganization || ft == horizonmodels.FragmentTypeFacility || ft == horizonmodels.FragmentTypeMarket {
@@ -484,6 +491,9 @@ func axisTypeFit(axis string, ft horizonmodels.FragmentType) (float64, string) {
 	case horizonmodels.AxisLogisticsCapacity, horizonmodels.AxisLogisticsLatency, horizonmodels.AxisPhysicalFlowSupply, horizonmodels.AxisPhysicalFlowDemand:
 		if ft == horizonmodels.FragmentTypeOrganization || ft == horizonmodels.FragmentTypeFacility || ft == horizonmodels.FragmentTypeProduct || ft == horizonmodels.FragmentTypeMarket || ft == horizonmodels.FragmentTypeDeposit {
 			return 1, "flow_logistics_type_fit"
+		}
+		if ft == horizonmodels.FragmentTypeGeoRegion && fragmentActsAsTransitChokepoint(fragment) {
+			return 0.95, "flow_logistics_chokepoint_geo_fit"
 		}
 	case horizonmodels.AxisLegalAccess, horizonmodels.AxisLegalCompliance:
 		if ft == horizonmodels.FragmentTypeOrganization || ft == horizonmodels.FragmentTypeFacility || ft == horizonmodels.FragmentTypeMarket || ft == horizonmodels.FragmentTypeProgram {
@@ -505,6 +515,9 @@ func locationFit(signalLoc string, fragment *horizonmodels.HorizonFragment) (flo
 	signalLoc = strings.TrimSpace(signalLoc)
 	if signalLoc == "" {
 		return 0.5, "no_signal_location"
+	}
+	if equivalentLocationPaths(signalLoc, strings.TrimSpace(fragment.CanonicalPath)) {
+		return 1.0, "location_exact_match"
 	}
 	fragCountry := countryFromFragment(fragment)
 	sigCountry := countryFromPath(signalLoc)
@@ -548,6 +561,133 @@ func countryFromFragment(fragment *horizonmodels.HorizonFragment) string {
 		return strings.ToLower(strings.TrimSpace(*fragment.HomeLocation.ISO3166_1))
 	}
 	return countryFromPath(strings.TrimSpace(fragment.CanonicalPath))
+}
+
+func fragmentActsAsTransitChokepoint(fragment *horizonmodels.HorizonFragment) bool {
+	if fragment == nil {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(strings.Join([]string{
+		strings.TrimSpace(fragment.CanonicalPath),
+		strings.TrimSpace(fragment.Labels["en"]),
+		strings.TrimSpace(fragment.Description),
+		strings.TrimSpace(fragment.Identifiers["geoKind"]),
+		strings.TrimSpace(fragment.Identifiers["geoFeatureType"]),
+		strings.Join(fragment.Tags, " "),
+		strings.Join(fragment.IndexPaths, " "),
+	}, " ")))
+	if text == "" {
+		return false
+	}
+	for _, keyword := range []string{
+		"chokepoint",
+		"strait",
+		"canal",
+		"red-sea",
+		"red sea",
+		"bab-el-mandeb",
+		"mandeb",
+		"hormuz",
+		"suez",
+		"malacca",
+		"bosporus",
+		"dardanelles",
+		"gulf-of-aden",
+		"shipping lane",
+		"maritime route",
+		"pipeline-corridor",
+	} {
+		if strings.Contains(text, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func fragmentByLocationAwarePath(ctx context.Context, repo *repo.HorizonFragmentsRepository, path string) (*horizonmodels.HorizonFragment, error) {
+	if repo == nil {
+		return nil, nil
+	}
+	var lastErr error
+	for _, candidate := range locationApplicabilityPathCandidates(path) {
+		frag, err := repo.GetByCanonicalPath(ctx, candidate)
+		if err == nil && frag != nil {
+			return frag, nil
+		}
+		if err != nil {
+			lastErr = err
+		}
+	}
+	return nil, lastErr
+}
+
+func equivalentLocationPaths(a, b string) bool {
+	if normalizeLocationApplicabilityPath(a) == "" || normalizeLocationApplicabilityPath(b) == "" {
+		return false
+	}
+	aSet := make(map[string]struct{}, 4)
+	for _, candidate := range locationApplicabilityPathCandidates(a) {
+		aSet[normalizeLocationApplicabilityPath(candidate)] = struct{}{}
+	}
+	for _, candidate := range locationApplicabilityPathCandidates(b) {
+		if _, ok := aSet[normalizeLocationApplicabilityPath(candidate)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func locationApplicabilityPathCandidates(path string) []string {
+	path = normalizeLocationApplicabilityPath(path)
+	if path == "" {
+		return nil
+	}
+	candidates := []string{path}
+	if strings.HasPrefix(path, "/loc/int/na/") {
+		candidates = append(candidates, strings.Replace(path, "/loc/int/na/", "/loc/int/", 1))
+	}
+	if strings.HasPrefix(path, "/loc/int/") && !strings.HasPrefix(path, "/loc/int/na/") {
+		candidates = append(candidates, strings.Replace(path, "/loc/int/", "/loc/int/na/", 1))
+	}
+	return uniqueApplicabilityPaths(candidates)
+}
+
+func normalizeLocationApplicabilityPath(path string) string {
+	path = strings.ToLower(strings.TrimSpace(path))
+	if path == "" {
+		return ""
+	}
+	for strings.Contains(path, "//") {
+		path = strings.ReplaceAll(path, "//", "/")
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	for i, part := range parts {
+		part = strings.TrimSpace(part)
+		part = strings.ReplaceAll(part, "_", "-")
+		part = strings.ReplaceAll(part, " ", "-")
+		for strings.Contains(part, "--") {
+			part = strings.ReplaceAll(part, "--", "-")
+		}
+		parts[i] = part
+	}
+	return "/" + strings.Join(parts, "/")
+}
+
+func uniqueApplicabilityPaths(paths []string) []string {
+	seen := make(map[string]struct{}, len(paths))
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		path = normalizeLocationApplicabilityPath(path)
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	return out
 }
 
 func countryFromPath(path string) string {

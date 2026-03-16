@@ -2,14 +2,23 @@ package repo
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
 	"cloud.google.com/go/firestore"
+	"golang.org/x/time/rate"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
+	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/graphenrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
@@ -58,6 +67,12 @@ type DependencyEdgesRepository struct {
 	fragmentsRepo    *HorizonFragmentsRepository // Optional: for fragment type lookup
 	telemetryRepo    *HorizonTelemetryRepository // Optional: aggregated edge policy KPIs
 	onUpsert         func(ctx context.Context, edge *models.DependencyEdge)
+	storage          *gcp.GCSClient
+	bucket           string
+	useGCS           bool
+	uploadLimiter    *rate.Limiter
+	vertexSyncBatcher *VertexSyncBatcher
+	vertexSearchDelete func(ctx context.Context, edgeID string) error
 }
 
 type EdgeUpdateOptions struct {
@@ -107,6 +122,26 @@ func (r *DependencyEdgesRepository) WithOnUpsert(fn func(ctx context.Context, ed
 	return r
 }
 
+func (r *DependencyEdgesRepository) WithStorage(storage *gcp.GCSClient, bucket string) *DependencyEdgesRepository {
+	r.storage = storage
+	r.bucket = bucket
+	r.useGCS = storage != nil && strings.TrimSpace(bucket) != ""
+	if r.useGCS {
+		r.uploadLimiter = rate.NewLimiter(rate.Limit(10), 10)
+	}
+	return r
+}
+
+func (r *DependencyEdgesRepository) WithVertexSyncBatcher(batcher *VertexSyncBatcher) *DependencyEdgesRepository {
+	r.vertexSyncBatcher = batcher
+	return r
+}
+
+func (r *DependencyEdgesRepository) WithVertexSearchDelete(fn func(ctx context.Context, edgeID string) error) *DependencyEdgesRepository {
+	r.vertexSearchDelete = fn
+	return r
+}
+
 func (r *DependencyEdgesRepository) resolveEndpointTypesAndPaths(ctx context.Context, edge *models.DependencyEdge) (sourceType, targetType, sourcePath, targetPath string) {
 	if r == nil || r.fragmentsRepo == nil || edge == nil {
 		return "", "", "", ""
@@ -122,6 +157,349 @@ func (r *DependencyEdgesRepository) resolveEndpointTypesAndPaths(ctx context.Con
 	srcTypeActual, _ := edgesemantics.ReconcileTypeWithCanonicalPath(models.FragmentType(sourceType), sourcePath)
 	dstTypeActual, _ := edgesemantics.ReconcileTypeWithCanonicalPath(models.FragmentType(targetType), targetPath)
 	return string(srcTypeActual), string(dstTypeActual), sourcePath, targetPath
+}
+
+func (r *DependencyEdgesRepository) uploadToGCS(ctx context.Context, edge *models.DependencyEdge) error {
+	if !r.useGCS || edge == nil {
+		return nil
+	}
+	if r.uploadLimiter != nil {
+		if err := r.uploadLimiter.Wait(ctx); err != nil {
+			return fmt.Errorf("rate limiter wait failed: %w", err)
+		}
+	}
+
+	sourceType, targetType, sourcePath, targetPath := r.resolveEndpointTypesAndPaths(ctx, edge)
+	sourceLabel, targetLabel := r.edgeEndpointLabels(ctx, edge)
+	content := edgeVectorText(edge, sourceType, targetType, sourcePath, targetPath, sourceLabel, targetLabel)
+
+	objectPath := fmt.Sprintf("%s/horizon_edges/%s.json", strings.TrimSpace(edge.TenantID), strings.TrimSpace(edge.ID))
+	gcsURI := fmt.Sprintf("gs://%s/%s", r.bucket, objectPath)
+
+	doc := map[string]interface{}{
+		"id": edge.ID,
+		"content": map[string]interface{}{
+			"mimeType": "text/plain",
+			"rawBytes": base64.StdEncoding.EncodeToString([]byte(content)),
+		},
+		"structData": map[string]interface{}{
+			"tenantId":         edge.TenantID,
+			"type":             "horizon_edge",
+			"edgeType":         string(edge.Type),
+			"sourceFragmentId": edge.SourceFragmentID,
+			"targetFragmentId": edge.TargetFragmentID,
+			"sourceType":       sourceType,
+			"targetType":       targetType,
+			"sourcePath":       sourcePath,
+			"targetPath":       targetPath,
+			"sourceLabel":      sourceLabel,
+			"targetLabel":      targetLabel,
+			"edgeModality":     strings.TrimSpace(fmt.Sprint(edge.Qualifiers["edgeModality"])),
+			"facet":            strings.TrimSpace(fmt.Sprint(edge.Qualifiers["facet"])),
+			"policyStatus":     edge.GetPolicyStatus(),
+			"criticality":      edge.Properties.Criticality,
+			"amplification":    edge.Properties.Amplification,
+			"qualifiers":       edge.Qualifiers,
+			"metrics":          edgeMetricsToStructData(edge.Metrics),
+			"updatedAt":        edge.Metadata.LastUpdatedAt.UTC().Format(time.RFC3339),
+			"createdAt":        edge.Metadata.CreatedAt.UTC().Format(time.RFC3339),
+			"validFrom":        edgeTimeString(edge.ValidFrom),
+			"validTo":          edgeTimeString(edge.ValidTo),
+			"uri":              gcsURI,
+		},
+	}
+
+	jsonData, err := json.Marshal(doc)
+	if err != nil {
+		return fmt.Errorf("failed to marshal edge to json: %w", err)
+	}
+
+	metadata := map[string]string{
+		"type":     "horizon_edge",
+		"tenantId": edge.TenantID,
+		"edgeType": string(edge.Type),
+	}
+
+	log.Printf("[DependencyEdgesRepository] Exporting edge %s (%s -> %s, %s) to GCS for Vertex Indexing...", edge.ID, sourcePath, targetPath, edge.Type)
+	if err := r.storage.UploadBytes(ctx, r.bucket, objectPath, jsonData, "application/json", metadata); err != nil {
+		return fmt.Errorf("failed to upload edge to GCS: %w", err)
+	}
+	if r.vertexSyncBatcher != nil {
+		r.vertexSyncBatcher.Add(gcsURI)
+	}
+	return nil
+}
+
+func (r *DependencyEdgesRepository) edgeEndpointLabels(ctx context.Context, edge *models.DependencyEdge) (string, string) {
+	if r == nil || r.fragmentsRepo == nil || edge == nil {
+		return "", ""
+	}
+	sourceLabel := ""
+	targetLabel := ""
+	if sourceFrag, err := r.fragmentsRepo.Get(ctx, strings.TrimSpace(edge.SourceFragmentID)); err == nil && sourceFrag != nil {
+		sourceLabel = fragmentDisplayName(sourceFrag)
+	}
+	if targetFrag, err := r.fragmentsRepo.Get(ctx, strings.TrimSpace(edge.TargetFragmentID)); err == nil && targetFrag != nil {
+		targetLabel = fragmentDisplayName(targetFrag)
+	}
+	return sourceLabel, targetLabel
+}
+
+func edgeVectorText(edge *models.DependencyEdge, sourceType, targetType, sourcePath, targetPath, sourceLabel, targetLabel string) string {
+	if edge == nil {
+		return ""
+	}
+	parts := make([]string, 0, 16)
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			parts = append(parts, v)
+		}
+	}
+	add(strings.TrimSpace(sourceLabel))
+	add(strings.TrimSpace(targetLabel))
+	add(fmt.Sprintf("Dependency edge: %s", strings.TrimSpace(string(edge.Type))))
+	if sourceLabel != "" || targetLabel != "" {
+		add(fmt.Sprintf("Relation: %s -> %s", firstNonEmptyString(sourceLabel, sourcePath, edge.SourceFragmentID), firstNonEmptyString(targetLabel, targetPath, edge.TargetFragmentID)))
+	}
+	add(fmt.Sprintf("Source: %s", firstNonEmptyString(sourcePath, edge.SourceFragmentID)))
+	add(fmt.Sprintf("Target: %s", firstNonEmptyString(targetPath, edge.TargetFragmentID)))
+	if sourceType != "" || targetType != "" {
+		add(fmt.Sprintf("Endpoint types: %s -> %s", firstNonEmptyString(sourceType, "unknown"), firstNonEmptyString(targetType, "unknown")))
+	}
+	if edge.Properties.Criticality > 0 || edge.Properties.Amplification > 0 {
+		add(fmt.Sprintf("Edge properties: criticality %.3f, amplification %.3f", edge.Properties.Criticality, edge.Properties.Amplification))
+	}
+	if len(edge.Qualifiers) > 0 {
+		add("Qualifiers: " + compactEdgeQualifierText(edge.Qualifiers, 16))
+	}
+	if len(edge.Metrics) > 0 {
+		add("Metrics: " + compactEdgeMetricsText(edge.Metrics, 12))
+	}
+	if status := strings.TrimSpace(edge.GetPolicyStatus()); status != "" {
+		add("Policy status: " + status)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func compactEdgeQualifierText(values map[string]interface{}, limit int) string {
+	if len(values) == 0 {
+		return ""
+	}
+	if limit <= 0 {
+		limit = 16
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		key = strings.TrimSpace(key)
+		if key != "" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	if len(keys) > limit {
+		keys = keys[:limit]
+	}
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%v", key, values[key]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func compactEdgeMetricsText(values map[string]models.MetricValue, limit int) string {
+	if len(values) == 0 {
+		return ""
+	}
+	if limit <= 0 {
+		limit = 12
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		key = strings.TrimSpace(key)
+		if key != "" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	if len(keys) > limit {
+		keys = keys[:limit]
+	}
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		mv := values[key]
+		if mv.Unit != nil && strings.TrimSpace(*mv.Unit) != "" {
+			parts = append(parts, fmt.Sprintf("%s=%.4f %s", key, mv.Value, strings.TrimSpace(*mv.Unit)))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%.4f", key, mv.Value))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func edgeMetricsToStructData(values map[string]models.MetricValue) map[string]interface{} {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]interface{}, len(values))
+	for key, mv := range values {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		unit := ""
+		if mv.Unit != nil {
+			unit = strings.TrimSpace(*mv.Unit)
+		}
+		out[key] = map[string]interface{}{
+			"value":      mv.Value,
+			"unit":       unit,
+			"confidence": mv.Confidence,
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func edgeTimeString(ts *time.Time) string {
+	if ts == nil || ts.IsZero() {
+		return ""
+	}
+	return ts.UTC().Format(time.RFC3339)
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func edgeIdentityVariant(edge *models.DependencyEdge) string {
+	if edge == nil {
+		return ""
+	}
+	parts := make([]string, 0, 6)
+	if assuranceType := strings.ToLower(strings.TrimSpace(fmt.Sprint(edge.Qualifiers["assurance_type"]))); assuranceType != "" {
+		parts = append(parts, "assurance_type="+assuranceType)
+	}
+	if facet := strings.ToLower(strings.TrimSpace(fmt.Sprint(edge.Qualifiers["facet"]))); facet != "" {
+		parts = append(parts, "facet="+facet)
+	}
+	if modality := strings.ToLower(strings.TrimSpace(fmt.Sprint(edge.Qualifiers["edgeModality"]))); modality != "" {
+		parts = append(parts, "edge_modality="+modality)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "|")
+}
+
+func normalizedEdgeIdentity(tenantID, sourceID, targetID string, edgeType models.DependencyType, variant string) (string, string, models.DependencyType, string, string) {
+	ns, nt, ntp, _ := models.NormalizeSymmetricEdge(strings.TrimSpace(sourceID), strings.TrimSpace(targetID), edgeType)
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		tenantID = "global"
+	}
+	variant = strings.TrimSpace(variant)
+	raw := tenantID + "|" + ns + "|" + nt + "|" + string(ntp) + "|" + variant
+	sum := sha1.Sum([]byte(raw))
+	return ns, nt, ntp, variant, "edge_" + hex.EncodeToString(sum[:10])
+}
+
+func mergeEdgeForIdempotentUpsert(dst, src *models.DependencyEdge) bool {
+	if dst == nil || src == nil {
+		return false
+	}
+	changed := false
+	if dst.Qualifiers == nil && len(src.Qualifiers) > 0 {
+		dst.Qualifiers = map[string]interface{}{}
+	}
+	for k, v := range src.Qualifiers {
+		key := strings.TrimSpace(k)
+		if key == "" {
+			continue
+		}
+		if _, exists := dst.Qualifiers[key]; !exists && v != nil && strings.TrimSpace(fmt.Sprint(v)) != "" {
+			dst.Qualifiers[key] = v
+			changed = true
+		}
+	}
+	if dst.Metrics == nil && len(src.Metrics) > 0 {
+		dst.Metrics = map[string]models.MetricValue{}
+	}
+	for key, mv := range src.Metrics {
+		cur, ok := dst.Metrics[key]
+		if !ok || mv.Confidence > cur.Confidence || (mv.Confidence == cur.Confidence && mv.Value != 0 && cur.Value == 0) {
+			dst.Metrics[key] = mv
+			changed = true
+		}
+	}
+	if src.Properties.Criticality > dst.Properties.Criticality {
+		dst.Properties.Criticality = src.Properties.Criticality
+		changed = true
+	}
+	if src.Properties.Amplification > dst.Properties.Amplification {
+		dst.Properties.Amplification = src.Properties.Amplification
+		changed = true
+	}
+	if src.Properties.LatencyHours > 0 && (dst.Properties.LatencyHours == 0 || src.Properties.LatencyHours < dst.Properties.LatencyHours) {
+		dst.Properties.LatencyHours = src.Properties.LatencyHours
+		changed = true
+	}
+	if dst.Provenance.Method == "" && src.Provenance.Method != "" {
+		dst.Provenance.Method = src.Provenance.Method
+		changed = true
+	}
+	if len(src.Provenance.SourceIDs) > 0 {
+		seen := make(map[string]struct{}, len(dst.Provenance.SourceIDs))
+		for _, id := range dst.Provenance.SourceIDs {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				seen[id] = struct{}{}
+			}
+		}
+		for _, id := range src.Provenance.SourceIDs {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			dst.Provenance.SourceIDs = append(dst.Provenance.SourceIDs, id)
+			seen[id] = struct{}{}
+			changed = true
+		}
+	}
+	if dst.ValidFrom == nil && src.ValidFrom != nil {
+		dst.ValidFrom = src.ValidFrom
+		changed = true
+	}
+	if dst.ValidTo == nil && src.ValidTo != nil {
+		dst.ValidTo = src.ValidTo
+		changed = true
+	}
+	if changed {
+		dst.Metadata.LastUpdatedAt = time.Now().UTC()
+	}
+	return changed
+}
+
+func assignLoadedEdgeID(edge *models.DependencyEdge, doc *firestore.DocumentSnapshot) {
+	if edge == nil || doc == nil || doc.Ref == nil {
+		return
+	}
+	if stored := strings.TrimSpace(edge.ID); stored != "" && stored != strings.TrimSpace(doc.Ref.ID) {
+		log.Printf("[DependencyEdgesRepository] WARNING: correcting stale edge id field stored=%s actual=%s type=%s", stored, strings.TrimSpace(doc.Ref.ID), strings.TrimSpace(string(edge.Type)))
+	}
+	edge.ID = strings.TrimSpace(doc.Ref.ID)
 }
 
 // Create создает новый DependencyEdge
@@ -365,15 +743,37 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 	edge.Metadata.CreatedAt = now
 	edge.Metadata.LastUpdatedAt = now
 
-	doc := r.col.NewDoc()
+	variant := edgeIdentityVariant(edge)
+	sourceID, targetID, edgeType, _, docID := normalizedEdgeIdentity(edge.TenantID, edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, variant)
+	edge.SourceFragmentID = sourceID
+	edge.TargetFragmentID = targetID
+	edge.Type = edgeType
+	doc := r.col.Doc(docID)
 	edge.ID = doc.ID
 
 	log.Printf("%s Saving edge to Firestore: id=%s", logPrefix, edge.ID)
-	if _, err := doc.Set(ctx, edge); err != nil {
+	if _, err := doc.Create(ctx, edge); err != nil {
+		if status.Code(err) == codes.AlreadyExists {
+			existing, gerr := r.Get(ctx, doc.ID)
+			if gerr == nil && existing != nil {
+				if mergeEdgeForIdempotentUpsert(existing, edge) {
+					if uerr := r.Update(ctx, existing); uerr != nil {
+						log.Printf("%s ERROR: failed to merge existing edge %s: %v", logPrefix, existing.ID, uerr)
+						return "", uerr
+					}
+				}
+				return strings.TrimSpace(existing.ID), nil
+			}
+		}
 		log.Printf("%s ERROR: failed to save edge: %v", logPrefix, err)
 		return "", err
 	}
 	tracking.RecordEdgeCreated(ctx, edge.ID)
+	if r.useGCS {
+		if err := r.uploadToGCS(ctx, edge); err != nil {
+			log.Printf("%s WARNING: GCS upload failed for edge=%s: %v", logPrefix, edge.ID, err)
+		}
+	}
 
 	// Best-effort: report affected endpoints to caller (if collector attached to ctx).
 	if fn := getEdgeAffectCollector(ctx); fn != nil {
@@ -462,6 +862,7 @@ func (r *DependencyEdgesRepository) CreateMany(ctx context.Context, edges []*mod
 		chunk := edges[i:end]
 
 		batch := r.db.Batch()
+		chunkByID := make(map[string]*models.DependencyEdge, len(chunk))
 		for _, edge := range chunk {
 			if edge == nil {
 				continue
@@ -469,17 +870,71 @@ func (r *DependencyEdgesRepository) CreateMany(ctx context.Context, edges []*mod
 			graphenrich.ApplyEdgeHeuristics(edge, "", "")
 			edge.Metadata.CreatedAt = now
 			edge.Metadata.LastUpdatedAt = now
-			ref := r.col.NewDoc()
-			edge.ID = ref.ID
-			ids = append(ids, ref.ID)
-			batch.Set(ref, edge)
+			sourceID, targetID, edgeType, _, docID := normalizedEdgeIdentity(edge.TenantID, edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, edgeIdentityVariant(edge))
+			edge.SourceFragmentID = sourceID
+			edge.TargetFragmentID = targetID
+			edge.Type = edgeType
+			edge.ID = docID
+			if existing := chunkByID[docID]; existing != nil {
+				mergeEdgeForIdempotentUpsert(existing, edge)
+				continue
+			}
+			cpy := *edge
+			chunkByID[docID] = &cpy
+		}
+		refs := make([]*firestore.DocumentRef, 0, len(chunkByID))
+		keys := make([]string, 0, len(chunkByID))
+		for docID := range chunkByID {
+			keys = append(keys, docID)
+			refs = append(refs, r.col.Doc(docID))
+		}
+		existingByID := map[string]*models.DependencyEdge{}
+		if len(refs) > 0 {
+			snaps, err := r.db.GetAll(ctx, refs)
+			if err != nil {
+				return ids, fmt.Errorf("batch get existing edges failed at offset %d: %w", i, err)
+			}
+			for _, snap := range snaps {
+				if snap == nil || !snap.Exists() {
+					continue
+				}
+				var existing models.DependencyEdge
+				if err := snap.DataTo(&existing); err != nil {
+					continue
+				}
+				if strings.TrimSpace(existing.ID) == "" {
+					existing.ID = strings.TrimSpace(snap.Ref.ID)
+				}
+				existingByID[existing.ID] = &existing
+			}
+		}
+		for _, docID := range keys {
+			edge := chunkByID[docID]
+			if edge == nil {
+				continue
+			}
+			if existing := existingByID[docID]; existing != nil {
+				mergeEdgeForIdempotentUpsert(existing, edge)
+				edge = existing
+			}
+			ids = append(ids, docID)
+			batch.Set(r.col.Doc(docID), edge)
 		}
 		if _, err := batch.Commit(ctx); err != nil {
 			return ids, fmt.Errorf("batch commit failed at offset %d: %w", i, err)
 		}
-		for _, edge := range chunk {
+		for _, edge := range chunkByID {
 			if edge != nil {
-				tracking.RecordEdgeCreated(ctx, edge.ID)
+				if _, ok := existingByID[edge.ID]; ok {
+					tracking.RecordEdgeUpdated(ctx, edge.ID)
+				} else {
+					tracking.RecordEdgeCreated(ctx, edge.ID)
+				}
+				if r.useGCS {
+					if err := r.uploadToGCS(ctx, edge); err != nil {
+						log.Printf("[DependencyEdgesRepository:CreateMany] WARNING: GCS upload failed for edge=%s: %v", edge.ID, err)
+					}
+				}
 				if fn != nil {
 					fn(edge.SourceFragmentID, edge.TargetFragmentID)
 				}
@@ -540,9 +995,7 @@ func (r *DependencyEdgesRepository) GetMany(ctx context.Context, ids []string) (
 		if err := snap.DataTo(&edge); err != nil {
 			continue
 		}
-		if edge.ID == "" {
-			edge.ID = snap.Ref.ID
-		}
+		assignLoadedEdgeID(&edge, snap)
 		out[edge.ID] = &edge
 	}
 	return out, nil
@@ -564,6 +1017,7 @@ func (r *DependencyEdgesRepository) Get(ctx context.Context, id string) (*models
 	if err := snap.DataTo(&edge); err != nil {
 		return nil, err
 	}
+	assignLoadedEdgeID(&edge, snap)
 	return &edge, nil
 }
 
@@ -581,6 +1035,7 @@ func (r *DependencyEdgesRepository) GetBySourceAndTarget(ctx context.Context, te
 	if err := docs[0].DataTo(&edge); err != nil {
 		return nil, err
 	}
+	assignLoadedEdgeID(&edge, docs[0])
 	return &edge, nil
 }
 
@@ -603,6 +1058,7 @@ func (r *DependencyEdgesRepository) GetBySourceTargetAndType(ctx context.Context
 	if err := docs[0].DataTo(&edge); err != nil {
 		return nil, err
 	}
+	assignLoadedEdgeID(&edge, docs[0])
 	return &edge, nil
 }
 
@@ -627,6 +1083,7 @@ func (r *DependencyEdgesRepository) ListBySourceTargetAndType(ctx context.Contex
 		if err := d.DataTo(&edge); err != nil {
 			continue
 		}
+		assignLoadedEdgeID(&edge, d)
 		out = append(out, &edge)
 	}
 	return out, nil
@@ -652,6 +1109,7 @@ func (r *DependencyEdgesRepository) ListBySource(ctx context.Context, tenantID, 
 		if err := d.DataTo(&edge); err != nil {
 			continue
 		}
+		assignLoadedEdgeID(&edge, d)
 		edges = append(edges, &edge)
 	}
 	return edges, nil
@@ -707,9 +1165,7 @@ func (r *DependencyEdgesRepository) ListBySourceIDsAndType(ctx context.Context, 
 			if err := d.DataTo(&edge); err != nil {
 				continue
 			}
-			if strings.TrimSpace(edge.ID) == "" {
-				edge.ID = strings.TrimSpace(d.Ref.ID)
-			}
+			assignLoadedEdgeID(&edge, d)
 			out = append(out, &edge)
 		}
 	}
@@ -766,9 +1222,7 @@ func (r *DependencyEdgesRepository) ListByTargetIDsAndType(ctx context.Context, 
 			if err := d.DataTo(&edge); err != nil {
 				continue
 			}
-			if strings.TrimSpace(edge.ID) == "" {
-				edge.ID = strings.TrimSpace(d.Ref.ID)
-			}
+			assignLoadedEdgeID(&edge, d)
 			out = append(out, &edge)
 		}
 	}
@@ -795,6 +1249,7 @@ func (r *DependencyEdgesRepository) ListByTarget(ctx context.Context, tenantID, 
 		if err := d.DataTo(&edge); err != nil {
 			continue
 		}
+		assignLoadedEdgeID(&edge, d)
 		edges = append(edges, &edge)
 	}
 	return edges, nil
@@ -837,6 +1292,7 @@ func (r *DependencyEdgesRepository) CountDegreesForFragmentIDs(ctx context.Conte
 			if err := doc.DataTo(&edge); err != nil {
 				continue
 			}
+			assignLoadedEdgeID(&edge, doc)
 			if _, ok := fragmentIDs[edge.SourceFragmentID]; ok {
 				counts[edge.SourceFragmentID]++
 			}
@@ -936,6 +1392,11 @@ func (r *DependencyEdgesRepository) updateWithOptions(ctx context.Context, edge 
 		return err
 	}
 	tracking.RecordEdgeUpdated(ctx, edge.ID)
+	if r.useGCS {
+		if err := r.uploadToGCS(ctx, edge); err != nil {
+			log.Printf("[DependencyEdgesRepository:Update] WARNING: GCS upload failed for edge=%s: %v", edge.ID, err)
+		}
+	}
 	if !opts.SkipOnUpsert {
 		r.runOnUpsertAsync(edge)
 	}
@@ -965,5 +1426,13 @@ func (r *DependencyEdgesRepository) Delete(ctx context.Context, id string) error
 		return ErrInvalidDocument
 	}
 	_, err := r.col.Doc(id).Delete(ctx)
-	return err
+	if err != nil {
+		return err
+	}
+	if r.vertexSearchDelete != nil {
+		if derr := r.vertexSearchDelete(ctx, strings.TrimSpace(id)); derr != nil {
+			log.Printf("[DependencyEdgesRepository:Delete] WARNING: vertex delete failed for edge=%s: %v", strings.TrimSpace(id), derr)
+		}
+	}
+	return nil
 }

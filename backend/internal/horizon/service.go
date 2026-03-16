@@ -15,6 +15,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/recommendations"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonrisk "github.com/igorkirisyuk/sanskrite/internal/horizon/risk"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scopeagent"
@@ -39,6 +40,7 @@ type HorizonService struct {
 	concentration     *horizonrisk.ConcentrationAnalyzer
 	scopeAgentService *scopeagent.Service
 	watchService      *horizonwatch.Service
+	recommendations   *recommendations.Service
 
 	// Репозитории horizon
 	fragmentsRepo        *repo.HorizonFragmentsRepository
@@ -53,6 +55,11 @@ type HorizonService struct {
 	ontologyFactsRepo    *corerepo.OntologyFactsRepository
 	scoutExecutionReady  bool
 	scoutExecutionReason string
+}
+
+type vertexFragmentHit struct {
+	fragment *models.HorizonFragment
+	score    float64
 }
 
 // NewHorizonService создает новый экземпляр HorizonService с валидацией зависимостей
@@ -158,6 +165,10 @@ func (s *HorizonService) SetWatchService(watchService *horizonwatch.Service) {
 	s.watchService = watchService
 }
 
+func (s *HorizonService) SetStrategicRecommendationsService(recommendationsService *recommendations.Service) {
+	s.recommendations = recommendationsService
+}
+
 // Scout возвращает Scout Engine
 func (s *HorizonService) Scout() *scout.ScoutEngine {
 	return s.scoutEngine
@@ -184,6 +195,10 @@ func (s *HorizonService) ScopeAgents() *scopeagent.Service {
 
 func (s *HorizonService) Watch() *horizonwatch.Service {
 	return s.watchService
+}
+
+func (s *HorizonService) StrategicRecommendations() *recommendations.Service {
+	return s.recommendations
 }
 
 // Fragments возвращает HorizonFragmentsRepository
@@ -309,7 +324,7 @@ func (s *HorizonService) SearchFragments(ctx context.Context, query string, limi
 	}
 
 	// 1) Vertex AI Search (semantic). Best-effort: if it fails, we fall back to Firestore prefix search.
-	var vertexFragments []*models.HorizonFragment
+	var vertexFragments []vertexFragmentHit
 	var vertexErr error
 
 	// Horizon fragments are searched in a dedicated Vertex AI Search Data Store.
@@ -331,22 +346,23 @@ func (s *HorizonService) SearchFragments(ctx context.Context, query string, limi
 			vertexErr = fmt.Errorf("vertex search failed: %w", err)
 		} else {
 			log.Printf("[SearchFragments] Vertex search returned %d results", len(resp.Results))
+			vertexFragments = append(vertexFragments, s.loadVertexNodeHits(ctx, resp.Results)...)
+			log.Printf("[SearchFragments] Loaded %d fragment hits from node datastore", len(vertexFragments))
+		}
 
-			for i, res := range resp.Results {
-				// Extract fragment ID
-				id := res.Document.ID
-				id = strings.TrimSuffix(id, ".json")
-				log.Printf("[SearchFragments] Result %d: ID=%s, URI=%s", i, id, res.Document.URI)
-
-				fragment, err := s.fragmentsRepo.Get(ctx, id)
-				if err != nil {
-					log.Printf("[SearchFragments] Failed to get fragment %s: %v", id, err)
-					continue
-				}
-				vertexFragments = append(vertexFragments, fragment)
+		edgeDS := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_ETIGRAM_EDGE_DATA_STORE_ID"))
+		if edgeDS == "" {
+			edgeDS = strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_EDGES_DATA_STORE_ID"))
+		}
+		if edgeDS != "" {
+			edgeResp, edgeErr := vertexClient.WithDataStore(edgeDS).Search(ctx, req)
+			if edgeErr != nil {
+				log.Printf("[SearchFragments] Edge vertex search failed: %v", edgeErr)
+			} else {
+				edgeHits := s.loadVertexEdgeHits(ctx, edgeResp.Results)
+				vertexFragments = append(vertexFragments, edgeHits...)
+				log.Printf("[SearchFragments] Loaded %d fragment hits from edge datastore", len(edgeHits))
 			}
-
-			log.Printf("[SearchFragments] Successfully loaded %d fragments from %d search results", len(vertexFragments), len(resp.Results))
 		}
 	}
 
@@ -404,8 +420,16 @@ func (s *HorizonService) SearchFragments(ctx context.Context, query string, limi
 		seen[key] = struct{}{}
 		out = append(out, f)
 	}
-	for _, f := range vertexFragments {
-		add(f)
+	if len(vertexFragments) > 0 {
+		sort.SliceStable(vertexFragments, func(i, j int) bool {
+			if vertexFragments[i].score == vertexFragments[j].score {
+				return strings.TrimSpace(vertexFragments[i].fragment.ID) < strings.TrimSpace(vertexFragments[j].fragment.ID)
+			}
+			return vertexFragments[i].score > vertexFragments[j].score
+		})
+	}
+	for _, scored := range vertexFragments {
+		add(scored.fragment)
 		if len(out) >= limit {
 			return out, nil
 		}
@@ -417,6 +441,131 @@ func (s *HorizonService) SearchFragments(ctx context.Context, query string, limi
 		}
 	}
 	return out, nil
+}
+
+func (s *HorizonService) loadVertexNodeHits(ctx context.Context, results []ai.SearchResult) []vertexFragmentHit {
+	out := make([]vertexFragmentHit, 0, len(results))
+	if s == nil || s.fragmentsRepo == nil {
+		return out
+	}
+	for i, res := range results {
+		id := vertexFragmentIDFromResult(res)
+		if id == "" {
+			continue
+		}
+		log.Printf("[SearchFragments] Node result %d: ID=%s, URI=%s", i, id, res.Document.URI)
+		fragment, err := s.fragmentsRepo.Get(ctx, id)
+		if err != nil || fragment == nil {
+			log.Printf("[SearchFragments] Failed to get fragment %s: %v", id, err)
+			continue
+		}
+		out = append(out, vertexFragmentHit{fragment: fragment, score: vertexResultScore(res)})
+	}
+	return out
+}
+
+func (s *HorizonService) loadVertexEdgeHits(ctx context.Context, results []ai.SearchResult) []vertexFragmentHit {
+	out := make([]vertexFragmentHit, 0, len(results)*2)
+	if s == nil || s.fragmentsRepo == nil {
+		return out
+	}
+	seen := map[string]float64{}
+	for _, res := range results {
+		score := vertexResultScore(res) * 0.92
+		if score <= 0 {
+			continue
+		}
+		for _, fragmentID := range vertexEdgeFragmentIDs(res) {
+			if fragmentID == "" {
+				continue
+			}
+			if prev, ok := seen[fragmentID]; ok && prev >= score {
+				continue
+			}
+			seen[fragmentID] = score
+		}
+	}
+	for fragmentID, score := range seen {
+		fragment, err := s.fragmentsRepo.Get(ctx, fragmentID)
+		if err != nil || fragment == nil {
+			continue
+		}
+		out = append(out, vertexFragmentHit{fragment: fragment, score: score})
+	}
+	return out
+}
+
+func vertexFragmentIDFromResult(res ai.SearchResult) string {
+	if u := strings.TrimSpace(res.Document.URI); u != "" {
+		if id := extractVertexDocumentIDFromURI(u); id != "" {
+			return id
+		}
+	}
+	if id := strings.TrimSuffix(strings.TrimSpace(res.Document.ID), ".json"); id != "" {
+		return id
+	}
+	if res.Document.StructData != nil {
+		if u, ok := res.Document.StructData["uri"].(string); ok && strings.TrimSpace(u) != "" {
+			return extractVertexDocumentIDFromURI(u)
+		}
+	}
+	return ""
+}
+
+func vertexEdgeFragmentIDs(res ai.SearchResult) []string {
+	if res.Document.StructData == nil {
+		return nil
+	}
+	out := make([]string, 0, 2)
+	if sourceID, ok := res.Document.StructData["sourceFragmentId"].(string); ok {
+		out = append(out, sourceID)
+	}
+	if targetID, ok := res.Document.StructData["targetFragmentId"].(string); ok {
+		out = append(out, targetID)
+	}
+	return uniqueVertexStringValues(out)
+}
+
+func vertexResultScore(res ai.SearchResult) float64 {
+	if res.RelevanceScore > 0 {
+		return res.RelevanceScore
+	}
+	if res.RankSignals != nil && res.RankSignals.SemanticSimilarityScore > 0 {
+		return res.RankSignals.SemanticSimilarityScore
+	}
+	return 0
+}
+
+func extractVertexDocumentIDFromURI(uri string) string {
+	uri = strings.TrimSpace(uri)
+	if uri == "" {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(uri, "/"), "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.TrimSuffix(strings.TrimSpace(parts[len(parts)-1]), ".json")
+}
+
+func uniqueVertexStringValues(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 // SearchDomainFragments performs best-effort search for DOMAIN fragments.

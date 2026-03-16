@@ -517,7 +517,8 @@ const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends 
    - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT.
    - If THIS FRAGMENT is DEPOSIT and evidence says "X extracts from this deposit" or "X depends on this deposit":
      use explicit sourceCanonicalPath/sourceType/sourceName for X and keep targetCanonicalPath = THIS FRAGMENT.
-     Never emit DEPOSIT -> ORGANIZATION|FACILITY via SUPPLIES_TO.
+   - Rare exception: if evidence clearly names an upstream resource source and the extracting/processing facility is unknown, DEPOSIT -> ORGANIZATION|FACILITY via SUPPLIES_TO is allowed as a temporary shortcut.
+     Use this sparingly, prefer EXTRACTS_FROM/PRODUCES/SUPPLIES_TO through facility stages whenever known, and mark such shortcuts as lower-confidence.
    - ASSURES: source (ORGANIZATION) provides independent assurance to target (ORGANIZATION/FACILITY/PROGRAM). Add qualifiers.assurance_type: audit | certification | regulatory | inspection.
      If THIS FRAGMENT is audited/certified/inspected by X, keep relationType=ASSURES and set explicit sourceCanonicalPath/sourceType/sourceName = X, with targetCanonicalPath = THIS FRAGMENT.
    - AUDITED_BY is legacy input only. Do NOT emit it; convert to ASSURES and preserve semantics (auditor -> audited entity).
@@ -739,7 +740,7 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
   - If the entity/facility name, slug, or source text contains a clear place clue (e.g. Wuxi, Huizhou, Eilat, Binh Duong, Riyadh), set homeLocation.name to that city/site instead of leaving it empty.
   - Set iso3166_1 ONLY when explicit or strongly corroborated by the source/location clue.
   - If city/site clue and iso3166_1 conflict, fix the ISO2 or omit it; never keep a contradictory guess.
-  - For org/gov, /org/na or /gov/na is last-resort only after checking official name, HQ/site/place clue, and source text for jurisdiction.
+  - For org/gov, prefer the best evidence-backed jurisdiction from official name, HQ/site/place clue, and source text; do not relax into /org/na or /gov/na.
 - lifecycleStage: concept|planning|permitting|financing|construction|commissioning|operational|expansion|suspended|decommissioning|closed
 - expectedStartDate, actualStartDate, expectedEndDate, actualEndDate: ISO8601 when known
 - identifiers: ISIN/LEI/Ticker/etc when available

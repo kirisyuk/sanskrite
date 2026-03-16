@@ -75,6 +75,17 @@ func (d *ScoutCloudTasksDispatcher) Close() error {
 }
 
 func (d *ScoutCloudTasksDispatcher) EnqueueScoutJob(ctx context.Context, jobID string) error {
+	return d.EnqueueScoutJobWithDelay(ctx, jobID, 0)
+}
+
+func (d *ScoutCloudTasksDispatcher) QueueName() string {
+	if d == nil {
+		return ""
+	}
+	return strings.TrimSpace(d.queue)
+}
+
+func (d *ScoutCloudTasksDispatcher) EnqueueScoutJobWithDelay(ctx context.Context, jobID string, delay time.Duration) error {
 	if d == nil || d.client == nil {
 		return fmt.Errorf("cloud tasks dispatcher not initialized")
 	}
@@ -114,8 +125,8 @@ func (d *ScoutCloudTasksDispatcher) EnqueueScoutJob(ctx context.Context, jobID s
 					},
 				},
 			},
-			// Start immediately.
-			ScheduleTime: timestamppb.New(time.Now().UTC()),
+			// Start immediately unless the caller wants to smooth background bursts.
+			ScheduleTime: timestamppb.New(taskScheduleTime(delay)),
 		},
 	}
 
@@ -127,6 +138,13 @@ func (d *ScoutCloudTasksDispatcher) EnqueueScoutJob(ctx context.Context, jobID s
 		return err
 	}
 	return nil
+}
+
+func taskScheduleTime(delay time.Duration) time.Time {
+	if delay < 0 {
+		delay = 0
+	}
+	return time.Now().UTC().Add(delay)
 }
 
 func targetAudienceFromURL(u string) string {

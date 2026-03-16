@@ -410,6 +410,15 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 			} else {
 				baseReason := fmt.Sprintf("edge direction invalid and not reversible: %s -> %s (%s). Rule: %s",
 					sourceType, targetType, relationType, rule.Description)
+				if decision, ok := allowExceptionalSupplyShortcut(
+					edgeType,
+					horizonmodels.FragmentType(sourceType),
+					horizonmodels.FragmentType(targetType),
+					baseReason,
+				); ok {
+					log.Printf("%s ALLOW_WITH_PENALTY: %s (penalty=%.2f)", logPrefix, decision.Params["reason"], decision.Params["penalty"])
+					return decision, nil
+				}
 				penalty, reason := quarantinePenaltyForTriple(
 					edgeType,
 					horizonmodels.FragmentType(sourceType),
@@ -705,6 +714,32 @@ func quarantinePenaltyForTriple(edgeType horizonmodels.DependencyType, sourceTyp
 	default:
 		return 0.20, ""
 	}
+}
+
+func allowExceptionalSupplyShortcut(
+	edgeType horizonmodels.DependencyType,
+	sourceType, targetType horizonmodels.FragmentType,
+	baseReason string,
+) (PolicyDecision, bool) {
+	if edgeType == horizonmodels.DependencyTypeSuppliesTo &&
+		sourceType == horizonmodels.FragmentTypeDeposit &&
+		(targetType == horizonmodels.FragmentTypeOrganization || targetType == horizonmodels.FragmentTypeFacility) {
+		reason := "exceptional supply shortcut preserved with penalty: deposit can stand in for an upstream resource source when the extracting/processing facility is not yet known"
+		if strings.TrimSpace(baseReason) != "" {
+			reason += "; " + baseReason
+		}
+		return PolicyDecision{
+			Action: ActionAllowWithPenalty,
+			Params: map[string]interface{}{
+				"penalty":      0.30,
+				"reason":       reason,
+				"edgeModality": "potential",
+			},
+			DecisionPath: "rule:hardcoded:deposit_supply_shortcut_penalty",
+			Confidence:   0.70,
+		}, true
+	}
+	return PolicyDecision{}, false
 }
 
 func requiresDirectionalRoleEvidence(

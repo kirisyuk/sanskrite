@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -539,18 +540,21 @@ func (s *SeedInjector) ensureLocationSeedFragment(ctx context.Context, path stri
 	if len(parts) < 2 {
 		return ""
 	}
-	if country := strings.TrimSpace(parts[1]); len(country) != 2 || country == "na" || country == "xx" || country == "zz" {
+	if len(parts) == 2 {
+		return ""
+	}
+	country := strings.TrimSpace(parts[1])
+	isCountryAnchor := len(country) == 2 && country != "na" && country != "xx" && country != "zz"
+	isInternationalAnchor := len(parts) >= 4 && strings.EqualFold(country, "int") && strings.EqualFold(strings.TrimSpace(parts[2]), "na")
+	if !isCountryAnchor && !isInternationalAnchor {
 		return ""
 	}
 	if frag, err := s.fragmentsRepo.GetByCanonicalPath(ctx, path); err == nil && frag != nil && strings.TrimSpace(frag.ID) != "" {
 		return strings.TrimSpace(frag.ID)
 	}
-	label := strings.ToUpper(strings.TrimSpace(parts[len(parts)-1]))
-	if len(parts) > 2 {
-		label = strings.ReplaceAll(strings.TrimSpace(parts[len(parts)-1]), "-", " ")
-		if label == "" {
-			label = strings.ToUpper(strings.TrimSpace(parts[1]))
-		}
+	label := strings.ReplaceAll(strings.TrimSpace(parts[len(parts)-1]), "-", " ")
+	if label == "" {
+		label = strings.ToUpper(strings.TrimSpace(parts[1]))
 	}
 	frag := &horizonmodels.HorizonFragment{
 		TenantID:      "global",
@@ -574,6 +578,9 @@ func (s *SeedInjector) ensureLocationSeedFragment(ctx context.Context, path stri
 			Method: "signal_location_anchor",
 		},
 		Status: "active",
+	}
+	if isInternationalAnchor {
+		frag.Identifiers["geoKind"] = "chokepoint_anchor"
 	}
 	id, err := s.fragmentsRepo.Create(ctx, frag)
 	if err != nil {
@@ -1367,6 +1374,9 @@ func semanticSeedGenericLocPath(path string) bool {
 	if parts[1] == "" || parts[1] == "na" {
 		return true
 	}
+	if len(parts) >= 4 && parts[1] == "int" && parts[2] == "na" && parts[3] != "" && parts[3] != "na" {
+		return false
+	}
 	if len(parts) >= 3 && (parts[2] == "" || parts[2] == "na" || parts[2] == "global") {
 		return true
 	}
@@ -1525,6 +1535,9 @@ func (s *SeedInjector) resolveByVertexSearch(ctx context.Context, path string, q
 	}
 	resp, err := s.vertexSearch.Search(ctx, req)
 	if err != nil || resp == nil || len(resp.Results) == 0 {
+		if edgeID := s.resolveByVertexEdgeSearch(ctx, path, req); edgeID != "" {
+			return edgeID
+		}
 		return ""
 	}
 
@@ -1576,5 +1589,81 @@ func (s *SeedInjector) resolveByVertexSearch(ctx context.Context, path string, q
 			return fragID
 		}
 	}
+	return s.resolveByVertexEdgeSearch(ctx, path, req)
+}
+
+func (s *SeedInjector) resolveByVertexEdgeSearch(ctx context.Context, path string, req *ai.SearchRequest) string {
+	if s == nil || s.vertexSearch == nil || req == nil {
+		return ""
+	}
+	edgeDS := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_ETIGRAM_EDGE_DATA_STORE_ID"))
+	if edgeDS == "" {
+		edgeDS = strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_EDGES_DATA_STORE_ID"))
+	}
+	if edgeDS == "" {
+		return ""
+	}
+	resp, err := s.vertexSearch.WithDataStore(edgeDS).Search(ctx, req)
+	if err != nil || resp == nil || len(resp.Results) == 0 {
+		return ""
+	}
+
+	const (
+		minScoreHigh = 0.81
+		minScoreLow  = 0.60
+	)
+
+	for _, r := range resp.Results {
+		score := r.RelevanceScore
+		if score == 0 && r.RankSignals != nil {
+			score = r.RankSignals.SemanticSimilarityScore
+		}
+		if score == 0 {
+			score = 0.5
+		}
+		if score < minScoreLow {
+			continue
+		}
+		for _, candidate := range vertexEdgeCandidates(r) {
+			if candidate.fragmentID == "" {
+				continue
+			}
+			if score < minScoreHigh && !pathTypesCompatible(path, candidate.canonicalPath) {
+				continue
+			}
+			frag, ferr := s.fragmentsRepo.Get(ctx, candidate.fragmentID)
+			if ferr == nil && frag != nil {
+				log.Printf("%s vertex_edge_resolved path=%q -> fragment=%s edgePath=%s (score=%.2f)", signalsys.LogSeed, path, candidate.fragmentID, candidate.canonicalPath, score)
+				return candidate.fragmentID
+			}
+		}
+	}
 	return ""
+}
+
+type vertexEdgeCandidate struct {
+	fragmentID    string
+	canonicalPath string
+}
+
+func vertexEdgeCandidates(res ai.SearchResult) []vertexEdgeCandidate {
+	if res.Document.StructData == nil {
+		return nil
+	}
+	out := make([]vertexEdgeCandidate, 0, 2)
+	if sourceID, ok := res.Document.StructData["sourceFragmentId"].(string); ok {
+		sourcePath, _ := res.Document.StructData["sourcePath"].(string)
+		out = append(out, vertexEdgeCandidate{
+			fragmentID:    strings.TrimSpace(sourceID),
+			canonicalPath: strings.TrimSpace(sourcePath),
+		})
+	}
+	if targetID, ok := res.Document.StructData["targetFragmentId"].(string); ok {
+		targetPath, _ := res.Document.StructData["targetPath"].(string)
+		out = append(out, vertexEdgeCandidate{
+			fragmentID:    strings.TrimSpace(targetID),
+			canonicalPath: strings.TrimSpace(targetPath),
+		})
+	}
+	return out
 }

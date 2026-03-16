@@ -534,6 +534,9 @@ func buildAssemblyPayloadFromInputs(
 		if ref == "" {
 			return false
 		}
+		if !strings.HasPrefix(ref, "/product/") {
+			return false
+		}
 		if _, ok := productNodes[ref]; ok {
 			return true
 		}
@@ -542,7 +545,7 @@ func buildAssemblyPayloadFromInputs(
 			openGapSet["graph_truncated:product_nodes"] = struct{}{}
 			return false
 		}
-		productNodes[ref] = models.SupplyChainAssemblyNode{Type: "product", Ref: ref, Name: inferAssemblyNodeName(ref)}
+		productNodes[ref] = models.SupplyChainAssemblyNode{Type: "product", Ref: ref, Name: assemblyNodeLabel(ref, opts.RawNodeLabels)}
 		return true
 	}
 	addActorNode := func(ref string, role string) bool {
@@ -558,7 +561,7 @@ func buildAssemblyPayloadFromInputs(
 			openGapSet["graph_truncated:actor_nodes"] = struct{}{}
 			return false
 		}
-		actorNodes[ref] = models.SupplyChainAssemblyNode{Type: inferAssemblyActorType(ref), Ref: ref, Name: inferAssemblyNodeName(ref), Role: role}
+		actorNodes[ref] = models.SupplyChainAssemblyNode{Type: inferAssemblyActorType(ref), Ref: ref, Name: assemblyNodeLabel(ref, opts.RawNodeLabels), Role: role}
 		return true
 	}
 	addTransform := func(fromProduct, toProduct, relation, status string) {
@@ -701,7 +704,9 @@ func buildAssemblyPayloadFromInputs(
 			ref := canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(node.Ref))
 			switch strings.ToLower(strings.TrimSpace(node.Type)) {
 			case "product":
-				addProductNode(ref)
+				if !addProductNode(ref) {
+					addActorNode(ref, "")
+				}
 			default:
 				addActorNode(ref, "")
 			}
@@ -873,29 +878,40 @@ func buildAssemblyPayloadFromInputs(
 		UnresolvedLeaves: len(openGaps),
 		Truncated:        truncated,
 	}
+	quality := buildSupplyChainQualityOverlay(anchors, productNodeList, actorNodeList, supplyEdgeList, transformEdgeList, assemblyEdgeList, routeBindingList, connectivity, coverage)
 	notes := map[string]interface{}{
-		"graphLayer":        "assembly_graph",
-		"artifactKind":      string(models.MaterializedKindSupplyChainAssemblyGraph),
-		"contributionCount": len(contributions),
-		"anchorSet":         anchors,
-		"truncated":         truncated,
-		"openGapsCount":     len(openGaps),
+		"graphLayer":         "assembly_graph",
+		"artifactKind":       string(models.MaterializedKindSupplyChainAssemblyGraph),
+		"contributionCount":  len(contributions),
+		"anchorSet":          anchors,
+		"truncated":          truncated,
+		"openGapsCount":      len(openGaps),
+		"primaryBranchesN":   quality.Coverage.PrimaryBranchesN,
+		"secondaryBranchesN": quality.Coverage.SecondaryBranchesN,
+		"supportBranchesN":   quality.Coverage.SupportBranchesN,
 	}
 	payload := models.BuildSupplyChainAssemblyGraphPayloadDetailed(models.SupplyChainAssemblyGraphPayloadOptions{
-		AnchorSet:        anchors,
-		SourceAnchors:    firstNonEmptyAnchors(opts.SourceAnchors, anchors),
-		ResolvedAnchors:  anchors,
-		AnchorProducts:   filterAssemblyProductRefs(anchors),
-		AnchorComponents: anchorComponents,
-		ProductNodes:     productNodeList,
-		ActorNodes:       actorNodeList,
-		SupplyEdges:      supplyEdgeList,
-		TransformEdges:   transformEdgeList,
-		AssemblyEdges:    assemblyEdgeList,
-		RouteBindings:    routeBindingList,
-		Coverage:         coverage,
-		OpenGaps:         openGaps,
-		Notes:            notes,
+		AnchorSet:                 anchors,
+		SourceAnchors:             firstNonEmptyAnchors(opts.SourceAnchors, anchors),
+		ResolvedAnchors:           anchors,
+		AnchorProducts:            filterAssemblyProductRefs(anchors),
+		AnchorComponents:          anchorComponents,
+		ProductNodes:              quality.ProductNodes,
+		ActorNodes:                quality.ActorNodes,
+		SupplyEdges:               quality.SupplyEdges,
+		TransformEdges:            quality.TransformEdges,
+		AssemblyEdges:             quality.AssemblyEdges,
+		RouteBindings:             routeBindingList,
+		Coverage:                  quality.Coverage,
+		OpenGaps:                  openGaps,
+		PrimaryBranches:           quality.PrimaryBranches,
+		SecondaryBranches:         quality.SecondaryBranches,
+		TopRoutes:                 quality.TopRoutes,
+		TopDistributionNodes:      quality.TopDistributionNodes,
+		TopSuppliers:              quality.TopSuppliers,
+		TopProductFamilies:        quality.TopProductFamilies,
+		SuppressedSupportBranches: quality.SuppressedSupportBranches,
+		Notes:                     notes,
 	})
 	labels := map[string]string{
 		"anchorRef":          firstStringOrEmpty(anchors),
@@ -903,12 +919,14 @@ func buildAssemblyPayloadFromInputs(
 		"productAxis":        firstStringOrEmpty(filterAssemblyProductRefs(anchors)),
 		"finalProductFamily": firstStringOrEmpty(filterAssemblyProductRefs(anchors)),
 		"artifactKind":       string(models.MaterializedKindSupplyChainAssemblyGraph),
-		"productsN":          fmt.Sprintf("%d", coverage.ProductsN),
-		"actorsN":            fmt.Sprintf("%d", coverage.ActorsN),
-		"transformsN":        fmt.Sprintf("%d", coverage.TransformationsN),
+		"productsN":          fmt.Sprintf("%d", quality.Coverage.ProductsN),
+		"actorsN":            fmt.Sprintf("%d", quality.Coverage.ActorsN),
+		"transformsN":        fmt.Sprintf("%d", quality.Coverage.TransformationsN),
+		"primaryBranchesN":   fmt.Sprintf("%d", quality.Coverage.PrimaryBranchesN),
+		"secondaryBranchesN": fmt.Sprintf("%d", quality.Coverage.SecondaryBranchesN),
 	}
-	nodeRefs := mergeAssemblyStrings(collectAssemblyPayloadNodeRefs(productNodeList, actorNodeList), collectAssemblyRouteRefs(routeBindingList))
-	return payload, labels, nodeRefs, coverage, openGaps
+	nodeRefs := mergeAssemblyStrings(collectAssemblyPayloadNodeRefs(quality.ProductNodes, quality.ActorNodes), collectAssemblyRouteRefs(routeBindingList))
+	return payload, labels, nodeRefs, quality.Coverage, openGaps
 }
 
 func determineAssemblySourceMode(hasContributions bool, hasRawGraph bool) string {
@@ -1044,6 +1062,17 @@ func inferAssemblyNodeName(ref string) string {
 		return ref
 	}
 	return strings.ReplaceAll(parts[len(parts)-1], "-", " ")
+}
+
+func assemblyNodeLabel(ref string, labels map[string]string) string {
+	ref = canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(ref))
+	if ref == "" {
+		return ""
+	}
+	if label := strings.TrimSpace(labels[ref]); label != "" {
+		return label
+	}
+	return inferAssemblyNodeName(ref)
 }
 
 func collectAssemblyPayloadNodeRefs(productNodes []models.SupplyChainAssemblyNode, actorNodes []models.SupplyChainAssemblyNode) []string {

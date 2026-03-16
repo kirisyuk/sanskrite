@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	discoverynlp "github.com/igorkirisyuk/sanskrite/internal/discovery/nlp"
+	prov "github.com/igorkirisyuk/sanskrite/internal/discovery/providers"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 )
@@ -101,6 +103,15 @@ func TestInferHorizonMonitorSignalType_GenericNews(t *testing.T) {
 				Title:    "3,000 strikes, 43 ships hit: US operations against Iran by the numbers",
 			},
 			want: "risk:conflict_event",
+		},
+		{
+			name: "dockworkers strike is maritime disruption not protest",
+			event: horizonMonitorFeedEvent{
+				Category: "infrastructure",
+				Title:    "Dockworkers strike shuts down Canada's Port of Vancouver",
+				Summary:  "A dockworkers strike shut down Port of Vancouver operations, disrupting container flows and rail-linked cargo movements.",
+			},
+			want: "risk:maritime_hazard",
 		},
 		{
 			name: "typhoons aircraft are not climate anomaly",
@@ -201,6 +212,20 @@ func TestHeuristicSignalSeedPaths_MultiCountry(t *testing.T) {
 	}
 	if strings.Contains(joined, "/loc/gb") {
 		t.Fatalf("did not expect primary location path duplicated in seed paths: %v", paths)
+	}
+}
+
+func TestHeuristicSignalSeedPaths_IncludeInternationalChokepoints(t *testing.T) {
+	e := &horizonMonitorFeedEvent{
+		Title:   "Houthis warn they will block shipping through Bab el-Mandeb",
+		Summary: "Red Sea traffic faces new closure threats from Yemen-based militants.",
+	}
+	paths := heuristicSignalSeedPaths(e, "/loc/ye")
+	joined := strings.Join(paths, "|")
+	for _, want := range []string{"/loc/int/bab-el-mandeb", "/loc/int/red-sea"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected chokepoint seed path %q in %v", want, paths)
+		}
 	}
 }
 
@@ -370,6 +395,21 @@ func TestRuleArticleAssessment_SuppressesAdministrativeAndExerciseCases(t *testi
 	}
 }
 
+func TestRuleArticleAssessment_ConcreteOperationalIncidentOverridesAnalysisLikeFraming(t *testing.T) {
+	p := &HorizonMonitorPipeline{}
+	assessment := p.ruleArticleAssessment(discoverynlp.DocumentInput{
+		SourceHost: "reuters.com",
+		Title:      "UAE's Fujairah stops some oil loading operations after drone attack",
+		Summary:    "Operational disruption at the export hub followed a reported drone attack.",
+	}, horizonMonitorNewsClassification{Category: "infrastructure", Level: "high"})
+	if !assessment.IsEvent || !assessment.ShouldCreateZone {
+		t.Fatalf("expected concrete operational incident to stay eventful, got %+v", assessment)
+	}
+	if assessment.RejectionReason != "" || assessment.EventClass != "real_event" {
+		t.Fatalf("expected concrete incident override to clear rejection, got %+v", assessment)
+	}
+}
+
 func TestInferZonePlaceName_DoesNotFallbackToCountryForExerciseOrRoundup(t *testing.T) {
 	exerciseEvent := &horizonMonitorFeedEvent{
 		Title:       "U.S. Army Attack Helicopters Hold Maritime Attack Drills in the Pacific",
@@ -401,6 +441,47 @@ func TestInferZonePlaceName_DoesNotFallbackToCountryForExerciseOrRoundup(t *test
 	}
 }
 
+func TestInferZonePlaceName_PrefersTrustedLLMGeoHint(t *testing.T) {
+	event := &horizonMonitorFeedEvent{
+		Title:   "Cyberattack forces major Australian port operator offline in Sydney",
+		Summary: "Port operations remain suspended after ransomware attack disrupted container handling.",
+		Raw: map[string]interface{}{
+			"llmArticleAdjudication": map[string]interface{}{
+				"isEvent":         true,
+				"eventConfidence": 0.96,
+				"place":           "Sydney",
+				"countryCode":     "AU",
+				"geoConfidence":   0.95,
+			},
+		},
+	}
+	if place := inferZonePlaceName(event, normalizeKeywordText(strings.Join([]string{event.Title, event.Summary}, " ")), "cyber_disruption"); place != "Sydney" {
+		t.Fatalf("expected trusted llm place hint, got %q", place)
+	}
+}
+
+func TestLLMAffectedZoneConditionOverride(t *testing.T) {
+	event := &horizonMonitorFeedEvent{
+		Raw: map[string]interface{}{
+			"llmArticleAdjudication": map[string]interface{}{
+				"isEvent":         true,
+				"eventConfidence": 0.94,
+				"conditionType":   "disease_outbreak",
+			},
+		},
+	}
+	conditionType, zoneType, zoneSubType, score, ok := llmAffectedZoneConditionOverride(event)
+	if !ok {
+		t.Fatal("expected llm condition override")
+	}
+	if conditionType != "disease_outbreak" || zoneType != "humanitarian_crisis" || zoneSubType != "epidemic" {
+		t.Fatalf("unexpected llm override: %s %s %s", conditionType, zoneType, zoneSubType)
+	}
+	if score < 0.94 {
+		t.Fatalf("expected score to track llm confidence, got %.2f", score)
+	}
+}
+
 func TestApplyNLPResultToEvent_ShadowEntitiesDoNotAffectRuntimeAnchors(t *testing.T) {
 	p := &HorizonMonitorPipeline{entityExtractMode: discoverynlp.ModeShadow}
 	event := &horizonMonitorFeedEvent{Raw: map[string]interface{}{}}
@@ -410,7 +491,7 @@ func TestApplyNLPResultToEvent_ShadowEntitiesDoNotAffectRuntimeAnchors(t *testin
 		},
 	}
 
-	p.applyNLPResultToEvent(event, nil, entities)
+	p.applyNLPResultToEvent(event, nil, entities, nil)
 
 	if _, ok := event.Raw["nlpEntities"]; ok {
 		t.Fatalf("shadow mode must not write nlpEntities into runtime event raw")
@@ -613,6 +694,20 @@ func TestExtractKnownPlaceFromText_DoesNotFallbackToCountryMention(t *testing.T)
 	}
 }
 
+func TestLooksLikeConflictDrivenOperationalDisruption_ExcludesLaborStrike(t *testing.T) {
+	text := "Dockworkers strike shuts down Canada's Port of Vancouver, disrupting container cargo operations"
+	if looksLikeConflictDrivenOperationalDisruption(text) {
+		t.Fatal("expected labor strike outage to not be treated as conflict-driven operational disruption")
+	}
+}
+
+func TestLooksLikeLaborStrikeOperationalDisruption(t *testing.T) {
+	text := "Dockworkers strike shuts down Canada's Port of Vancouver, disrupting container cargo operations"
+	if !looksLikeLaborStrikeOperationalDisruption(text) {
+		t.Fatal("expected dockworker port shutdown to be recognized as labor-driven operational disruption")
+	}
+}
+
 func TestShouldSkipAffectedZoneAsStale(t *testing.T) {
 	now := time.Date(2026, 3, 8, 22, 0, 0, 0, time.UTC)
 	c := &affectedZoneCandidate{ConditionType: "military_conflict"}
@@ -652,8 +747,80 @@ func TestShouldAttemptAffectedZoneEntityAnchor(t *testing.T) {
 		Title:   "Explosion reported near Bandar Abbas refinery",
 		Summary: "Local emergency services responded at the refinery site.",
 	}
-	if shouldAttemptAffectedZoneEntityAnchor("Bandar Abbas refinery", "Iran", "precise", true, strong) {
-		t.Fatal("did not expect precise operational place to trigger entity-anchor lookup")
+	if !shouldAttemptAffectedZoneEntityAnchor("Bandar Abbas refinery", "Iran", "precise", true, strong) {
+		t.Fatal("expected precise operational place to still trigger entity-anchor lookup")
+	}
+}
+
+func TestShouldAttemptAffectedZoneEntityAnchor_ForOperationalPlaceEvenWhenGeoRecognized(t *testing.T) {
+	e := &horizonMonitorFeedEvent{
+		Title:       "Qatar remains offline due to overnight US attack on Ras Laffan",
+		Summary:     "Qatar's LNG and helium infrastructure remains offline after an overnight attack on Ras Laffan.",
+		CountryCode: "QA",
+		CountryName: "Qatar",
+	}
+	if !shouldAttemptAffectedZoneEntityAnchor("Ras Laffan", "Qatar", "precise", true, e) {
+		t.Fatal("expected operational site label to keep entity-anchor lookup enabled")
+	}
+}
+
+func TestBuildAffectedZoneAnchorFromFragment_AllowsPlaceholderFacilityWithCoordinatesAndStrongMatch(t *testing.T) {
+	e := &horizonMonitorFeedEvent{
+		Title:       "Qatar remains offline due to overnight US attack on Ras Laffan",
+		Summary:     "Qatar's LNG and helium infrastructure remains offline after an overnight attack on Ras Laffan.",
+		CountryCode: "QA",
+		CountryName: "Qatar",
+	}
+	frag := &horizonmodels.HorizonFragment{
+		ID:            "fac-ras-laffan",
+		Type:          horizonmodels.FragmentTypeFacility,
+		CanonicalPath: "/fac/na/ras-laffan",
+		Labels:        map[string]string{"en": "Ras Laffan"},
+		Coordinates:   &horizonmodels.Coordinates{Lat: 25.8976567, Lon: 51.5331527},
+	}
+	anchor, score := buildAffectedZoneAnchorFromFragment(t.Context(), "Ras Laffan", "QA", e, frag, 0.96, nil)
+	if score <= 0 {
+		t.Fatalf("expected positive score, got %f", score)
+	}
+	if !anchor.HasCoordinates {
+		t.Fatal("expected placeholder facility with real coordinates to be accepted")
+	}
+	if anchor.FragmentPath != "/fac/na/ras-laffan" {
+		t.Fatalf("unexpected fragment path: %s", anchor.FragmentPath)
+	}
+	if anchor.CountryCode != "QA" {
+		t.Fatalf("expected inferred country code QA, got %q", anchor.CountryCode)
+	}
+}
+
+func TestAffectedZoneExactAnchorFragmentScore_PrefersOperationalFacilityVariant(t *testing.T) {
+	plain := &horizonmodels.HorizonFragment{
+		ID:            "fac-ras-laffan",
+		Type:          horizonmodels.FragmentTypeFacility,
+		CanonicalPath: "/fac/na/ras-laffan",
+		Labels:        map[string]string{"en": "Ras Laffan"},
+		Coordinates:   &horizonmodels.Coordinates{Lat: 25.8976567, Lon: 51.5331527},
+	}
+	richer := &horizonmodels.HorizonFragment{
+		ID:            "fac-ras-laffan-industrial-city",
+		Type:          horizonmodels.FragmentTypeFacility,
+		CanonicalPath: "/fac/na/ras-laffan-industrial-city",
+		Labels:        map[string]string{"en": "Ras Laffan Industrial City"},
+		Coordinates:   &horizonmodels.Coordinates{Lat: 25.8976567, Lon: 51.5331527},
+	}
+	if got, want := affectedZoneExactAnchorFragmentScore("Ras Laffan", richer), affectedZoneExactAnchorFragmentScore("Ras Laffan", plain); got <= want {
+		t.Fatalf("expected operational facility variant to score higher: richer=%f plain=%f", got, want)
+	}
+}
+
+func TestAffectedZoneCountryFromFragment_IgnoresPlaceholderNAForFacility(t *testing.T) {
+	frag := &horizonmodels.HorizonFragment{
+		ID:            "fac-ras-laffan",
+		Type:          horizonmodels.FragmentTypeFacility,
+		CanonicalPath: "/fac/na/ras-laffan",
+	}
+	if got := affectedZoneCountryFromFragment(frag); got != "" {
+		t.Fatalf("expected empty country for placeholder facility path, got %q", got)
 	}
 }
 
@@ -682,6 +849,13 @@ func TestExtractPlaceFromTitle_RejectsNonPlaceHeadlineTail(t *testing.T) {
 	title := "Conflict decision in authorize seismic code implementation triggers debate"
 	if got := extractPlaceFromTitle(title); got != "" {
 		t.Fatalf("expected no place from non-place title tail, got %q", got)
+	}
+}
+
+func TestExtractPlaceFromTitle_PreservesPortOfLocation(t *testing.T) {
+	title := "Dockworkers strike shuts down Canada's Port of Vancouver"
+	if got := extractPlaceFromTitle(title); got != "Port of Vancouver" {
+		t.Fatalf("expected Port of Vancouver, got %q", got)
 	}
 }
 
@@ -919,6 +1093,561 @@ func TestInferAffectedZoneCandidate_SuppressesForcePostureHormuzCommentary(t *te
 	cls := normalizeClassificationWithSourceHint(classifyHorizonMonitorNewsKeyword(strings.Join([]string{e.Title, e.Summary}, " ")), e)
 	if got := inferAffectedZoneCandidate(e, cls); got != nil {
 		t.Fatalf("expected no new affected zone for force-posture Hormuz commentary, got %+v", got)
+	}
+}
+
+func TestInferAffectedZoneCandidate_CreatesBabElMandebThreatZone(t *testing.T) {
+	e := &horizonMonitorFeedEvent{
+		Title:       "Houthis warn they will block shipping through Bab el-Mandeb",
+		Summary:     "Red Sea maritime traffic faces closure threats as militants target vessels near the chokepoint.",
+		CountryCode: "YE",
+		CountryName: "Yemen",
+		URL:         "https://www.reuters.com/world/middle-east/example-bab-el-mandeb",
+	}
+	cls := normalizeClassificationWithSourceHint(classifyHorizonMonitorNewsKeyword(strings.Join([]string{e.Title, e.Summary}, " ")), e)
+	got := inferAffectedZoneCandidate(e, cls)
+	if got == nil {
+		t.Fatal("expected affected zone candidate")
+	}
+	if got.CanonicalPath != "/zone/sea/military_conflict/bab-el-mandeb" {
+		t.Fatalf("unexpected canonical path: %s", got.CanonicalPath)
+	}
+	if !got.HasCoordinates || got.GeoToken != "sea" {
+		t.Fatalf("expected map-ready sea chokepoint candidate, got %+v", got)
+	}
+	if got.WarmOnly {
+		t.Fatalf("credible chokepoint threat should create zone, got warmOnly candidate %+v", got)
+	}
+}
+
+func TestInferAffectedZoneCandidate_PrefersChokepointOverCountryFallback(t *testing.T) {
+	e := &horizonMonitorFeedEvent{
+		Title:       "Middle East crisis live: Mojtaba Khamanei says strait of Hormuz will remain closed in first statement as supreme leader",
+		Summary:     "Iran escalates attacks on infrastructure and transport across the Gulf as tanker traffic faces closure risk.",
+		CountryCode: "IN",
+		CountryName: "India",
+		URL:         "https://www.theguardian.com/world/example-hormuz-live",
+	}
+	cls := normalizeClassificationWithSourceHint(classifyHorizonMonitorNewsKeyword(strings.Join([]string{e.Title, e.Summary}, " ")), e)
+	got := inferAffectedZoneCandidate(e, cls)
+	if got == nil {
+		t.Fatal("expected affected zone candidate")
+	}
+	if got.GeoToken != "sea" {
+		t.Fatalf("expected sea geo token, got %+v", got)
+	}
+	if got.CanonicalPath != "/zone/sea/military_conflict/strait-of-hormuz" {
+		t.Fatalf("unexpected canonical path: %s", got.CanonicalPath)
+	}
+}
+
+func TestCollectAffectedZoneLinkedFragmentPaths_UsesLocationAnchorAndChokepointSeeds(t *testing.T) {
+	e := &horizonMonitorFeedEvent{
+		Title:        "Houthis warn they will block shipping through Bab el-Mandeb",
+		Summary:      "Red Sea maritime traffic faces closure threats near the chokepoint.",
+		LocationPath: "/loc/int/bab-el-mandeb",
+	}
+	anchor := &affectedZoneEntityAnchor{FragmentPath: "/fac/ye/port/hodeidah-port"}
+	got := collectAffectedZoneLinkedFragmentPaths(e, anchor)
+	for _, want := range []string{"/loc/int/bab-el-mandeb", "/loc/int/red-sea", "/fac/ye/port/hodeidah-port"} {
+		if !containsString(got, want) {
+			t.Fatalf("expected linked paths to contain %q, got %v", want, got)
+		}
+	}
+}
+
+func TestCollectAffectedZoneLinkedFragmentPaths_KeepsProductAnchor(t *testing.T) {
+	e := &horizonMonitorFeedEvent{
+		Title:        "Explainer on energy markets",
+		LocationPath: "/domain/v1/supply-chain/geo/ae",
+	}
+	anchor := &affectedZoneEntityAnchor{FragmentPath: "/product/global/crude-oil"}
+	got := collectAffectedZoneLinkedFragmentPaths(e, anchor)
+	if len(got) != 1 || got[0] != "/product/global/crude-oil" {
+		t.Fatalf("expected product anchor to be retained, got %v", got)
+	}
+}
+
+func TestCollectAffectedZoneLinkedFragmentPaths_DropsBroadCountryGeoWhenSpecificGeoPresent(t *testing.T) {
+	e := &horizonMonitorFeedEvent{
+		Title:        "UAE's Fujairah stops some oil loading operations after drone attack",
+		LocationPath: "/loc/ae",
+	}
+	anchor := &affectedZoneEntityAnchor{FragmentPath: "/loc/ae/na/fujairah"}
+	got := collectAffectedZoneLinkedFragmentPaths(e, anchor)
+	if containsString(got, "/loc/ae") {
+		t.Fatalf("expected broad country path to be pruned, got %v", got)
+	}
+	if !containsString(got, "/loc/ae/na/fujairah") {
+		t.Fatalf("expected precise geo path to be retained, got %v", got)
+	}
+}
+
+func TestLooksLikeAffectedZoneLinkPath_AllowsProduct(t *testing.T) {
+	if !looksLikeAffectedZoneLinkPath("/product/finished/mechanical/assembly/helium") {
+		t.Fatal("expected product path to be bindable")
+	}
+}
+
+func TestInferAffectedZoneCandidate_SuppressesExplainerQuestion(t *testing.T) {
+	e := &horizonMonitorFeedEvent{
+		Title:       "Why Does The Port Of Fujairah Matter To The Oil Market?",
+		Summary:     "An explainer on the port's role in regional oil flows and pricing.",
+		CountryCode: "AE",
+		CountryName: "United Arab Emirates",
+		URL:         "https://www.example.com/explainer-fujairah",
+	}
+	cls := normalizeClassificationWithSourceHint(classifyHorizonMonitorNewsKeyword(strings.Join([]string{e.Title, e.Summary}, " ")), e)
+	if candidate := inferAffectedZoneCandidate(e, cls); candidate != nil {
+		t.Fatalf("expected explainer question to be suppressed, got %+v", candidate)
+	}
+}
+
+func TestShouldAttemptAffectedZoneEntityAnchor_ForSpecificIndustrialSiteOnCountryFallback(t *testing.T) {
+	e := &horizonMonitorFeedEvent{
+		Title:        "Qatar remains offline due to overnight US attack on Ras Laffan",
+		Summary:      "Qatar's LNG and helium infrastructure remains offline after an overnight attack on Ras Laffan.",
+		CountryCode:  "QA",
+		LocationPath: "/loc/qa",
+	}
+	if !shouldAttemptAffectedZoneEntityAnchor("Ras Laffan", "Qatar", "none", false, e) {
+		t.Fatal("expected entity anchor lookup for specific industrial site on country fallback")
+	}
+}
+
+func TestFilterRedundantAffectedZoneTargets_DropsBroaderGeoAncestor(t *testing.T) {
+	targets := []*horizonmodels.HorizonFragment{
+		{ID: "country", Type: horizonmodels.FragmentTypeGeoRegion, CanonicalPath: "/loc/ae"},
+		{ID: "city", Type: horizonmodels.FragmentTypeGeoRegion, CanonicalPath: "/loc/ae/na/fujairah"},
+		{ID: "org", Type: horizonmodels.FragmentTypeOrganization, CanonicalPath: "/org/bm/frontline"},
+	}
+	got := filterRedundantAffectedZoneTargets(targets, &horizonmodels.HorizonFragment{ID: "city", Type: horizonmodels.FragmentTypeGeoRegion, CanonicalPath: "/loc/ae/na/fujairah"})
+	if len(got) != 2 {
+		t.Fatalf("expected 2 targets after pruning, got %d: %#v", len(got), got)
+	}
+	for _, frag := range got {
+		if frag != nil && frag.CanonicalPath == "/loc/ae" {
+			t.Fatalf("expected broader country geo target to be pruned, got %#v", got)
+		}
+	}
+}
+
+func TestShouldEscalateArticleToLLM_AmbiguousViolentIncident(t *testing.T) {
+	doc := discoverynlp.DocumentInput{
+		SourceHost: "apnews.com",
+		Title:      "At least six people killed and five injured in bus fire in Switzerland",
+		Summary:    "Authorities are investigating the overnight blaze after a deadly highway incident.",
+	}
+	cls := horizonMonitorNewsClassification{Category: "military", Level: "high", Confidence: 0.92}
+	base := &discoverynlp.ArticleAssessment{
+		IsEvent:             true,
+		EventClass:          "real_event",
+		EventConfidence:     0.91,
+		ShouldCreateZone:    true,
+		ShouldWarmExisting:  false,
+		ShouldOnlySignal:    false,
+		ConcreteOutageScore: 0.80,
+	}
+	if !shouldEscalateArticleToLLM(doc, cls, base) {
+		t.Fatal("expected ambiguous violent incident to escalate to LLM adjudication")
+	}
+}
+
+func TestMaintainStickyAffectedZoneActivity_HoldsOperationalOutage(t *testing.T) {
+	now := time.Now().UTC()
+	frag := &horizonmodels.HorizonFragment{
+		CanonicalPath: "/zone/qa/infrastructure_disruption/ras-laffan",
+		Type:          horizonmodels.FragmentTypeAffectedZone,
+		Qualifiers: map[string]interface{}{
+			"requiresExplicitRecovery": true,
+			"recoveryStatus":           affectedZoneRecoveryStatusActive,
+		},
+	}
+	st := affectedZoneState{
+		Score:         9,
+		Hits24h:       0,
+		LastMatchedAt: now.Add(-2 * time.Hour),
+		LastUpdatedAt: now.Add(-2 * time.Hour),
+	}
+	if !maintainStickyAffectedZoneActivity(frag, &st, now) {
+		t.Fatal("expected sticky outage to be maintained")
+	}
+	if st.Score < 42 {
+		t.Fatalf("expected sticky outage floor, got %.2f", st.Score)
+	}
+}
+
+func TestApplyStickyRecoveryObservation_ClearsStickyOutage(t *testing.T) {
+	now := time.Now().UTC()
+	frag := &horizonmodels.HorizonFragment{
+		CanonicalPath: "/zone/qa/infrastructure_disruption/ras-laffan",
+		Type:          horizonmodels.FragmentTypeAffectedZone,
+		Qualifiers: map[string]interface{}{
+			"requiresExplicitRecovery": true,
+			"recoveryStatus":           affectedZoneRecoveryStatusActive,
+		},
+		State: map[string]horizonmodels.MetricValue{
+			zoneMetricHypeScore:   {Value: 78},
+			zoneMetricHits24h:     {Value: 12},
+			zoneMetricLastMatchTS: {Value: float64(now.Add(-1 * time.Hour).Unix())},
+		},
+		Metadata: horizonmodels.FragmentMetadata{LastUpdatedAt: now.Add(-1 * time.Hour)},
+	}
+	event := &horizonMonitorFeedEvent{
+		Title:      "Qatar LNG loading operations resumed after disruption at Ras Laffan",
+		Summary:    "Loading operations resumed and exports restarted after the outage.",
+		OccurredAt: now,
+	}
+	if !applyStickyRecoveryObservation(frag, event, now) {
+		t.Fatal("expected recovery observation to apply")
+	}
+	if got := affectedZoneRecoveryStatus(frag); got != affectedZoneRecoveryStatusRestored {
+		t.Fatalf("expected restored status, got %q", got)
+	}
+	st := parseAffectedZoneState(frag)
+	if st.Score > 18.1 {
+		t.Fatalf("expected recovered zone score to cool, got %.2f", st.Score)
+	}
+}
+
+func TestHistoricalConcreteIncidentSignalAndZoneInference(t *testing.T) {
+	cases := []struct {
+		name          string
+		event         *horizonMonitorFeedEvent
+		wantPathPart  string
+		wantGeo       string
+		wantPrecision string
+		wantCondition string
+		wantAxis      string
+	}{
+		{
+			name: "fujairah drone attack",
+			event: &horizonMonitorFeedEvent{
+				Title:       "UAE's Fujairah stops some oil loading operations after drone attack",
+				Summary:     "Operations were halted at Fujairah after the reported drone attack.",
+				CountryCode: "AE",
+				CountryName: "United Arab Emirates",
+				URL:         "https://www.reuters.com/world/middle-east/example-fujairah",
+				Severity:    "high",
+			},
+			wantPathPart:  "/fujairah",
+			wantGeo:       "ae",
+			wantPrecision: "precise",
+			wantCondition: "military_conflict",
+			wantAxis:      horizonmodels.AxisPhysicalFlowSupply,
+		},
+		{
+			name: "ras laffan outage",
+			event: &horizonMonitorFeedEvent{
+				Title:          "Qatar remains offline due to overnight US attack on Ras Laffan",
+				Summary:        "Qatar's LNG and helium infrastructure remains offline after an overnight attack on Ras Laffan, extending disruption to energy and industrial gas supply chains.",
+				CountryCode:    "QA",
+				CountryName:    "Qatar",
+				URL:            "https://www.gasworld.com/story/qatar-remains-offline-due-to-overnight-us-attack-on-ras-laffan/",
+				Severity:       "high",
+				Lat:            25.897657,
+				Lon:            51.533153,
+				HasCoordinates: true,
+			},
+			wantPathPart:  "/ras-laffan",
+			wantGeo:       "qa",
+			wantPrecision: "precise",
+			wantAxis:      horizonmodels.AxisPhysicalFlowSupply,
+		},
+		{
+			name: "hormuz gps jamming",
+			event: &horizonMonitorFeedEvent{
+				Title:    "Critical Threat Persists in Hormuz as Attacks and GPS Jamming Shake Shipping",
+				Summary:  "Shipping disruptions and navigation interference continue in the Strait of Hormuz.",
+				URL:      "https://www.reuters.com/world/middle-east/example-hormuz",
+				Severity: "high",
+			},
+			wantPathPart:  "/strait-of-hormuz",
+			wantGeo:       "sea",
+			wantPrecision: "precise",
+			wantCondition: "military_conflict",
+			wantAxis:      horizonmodels.AxisPhysicalFlowSupply,
+		},
+		{
+			name: "salalah port drone strike",
+			event: &horizonMonitorFeedEvent{
+				Title:       "Oman works to contain fire at Salalah port after drones strike",
+				Summary:     "Emergency crews responded after drones struck Salalah port.",
+				CountryCode: "OM",
+				CountryName: "Oman",
+				URL:         "https://www.reuters.com/world/middle-east/example-salalah",
+				Severity:    "high",
+			},
+			wantPathPart:  "/salalah-port",
+			wantGeo:       "om",
+			wantPrecision: "precise",
+			wantCondition: "military_conflict",
+		},
+		{
+			name: "kharg island strike",
+			event: &horizonMonitorFeedEvent{
+				Title:       "The US hit Iran's Kharg Island, key to its economy and security",
+				Summary:     "Kharg Island was hit in a strike on a strategic Iranian oil export site.",
+				CountryCode: "IR",
+				CountryName: "Iran",
+				URL:         "https://www.apnews.com/example-kharg",
+				Severity:    "high",
+			},
+			wantPathPart:  "/kharg-island",
+			wantGeo:       "ir",
+			wantPrecision: "precise",
+			wantCondition: "military_conflict",
+			wantAxis:      horizonmodels.AxisPhysicalFlowSupply,
+		},
+	}
+
+	p := &HorizonMonitorPipeline{}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cls := normalizeClassificationWithSourceHint(classifyHorizonMonitorNewsKeyword(strings.Join([]string{tc.event.Title, tc.event.Summary}, " ")), tc.event)
+			doc := discoverynlp.DocumentInput{
+				SourceHost: affectedZoneSourceHost(tc.event),
+				Title:      tc.event.Title,
+				Summary:    tc.event.Summary,
+			}
+			assessment := p.ruleArticleAssessment(doc, cls)
+			if !assessment.IsEvent || !assessment.ShouldCreateZone {
+				t.Fatalf("expected event gate to allow concrete incident, got %+v", assessment)
+			}
+
+			candidate := inferAffectedZoneCandidate(tc.event, cls)
+			if candidate == nil {
+				text := normalizeKeywordText(strings.Join([]string{tc.event.Title, tc.event.Summary, cls.Category, cls.Level}, " "))
+				place := inferZonePlaceName(tc.event, text, "")
+				geoToken, countryCode, countryName := inferZoneGeo(tc.event, place, text, "")
+				cond, zoneType, sub, score := inferZoneConditionAndSubtypeScored(text, cls)
+				t.Fatalf("expected affected zone candidate; cls=%+v place=%q geo=%q country=%q/%q concrete=%t cond=%q zoneType=%q sub=%q score=%.2f text=%q", cls, place, geoToken, countryCode, countryName, looksLikeConcreteOperationalIncident(text, cls), cond, zoneType, sub, score, text)
+			}
+			if candidate.WarmOnly {
+				t.Fatalf("expected concrete incident to materialize, got warm-only candidate %+v", candidate)
+			}
+			if !strings.Contains(candidate.CanonicalPath, tc.wantPathPart) {
+				t.Fatalf("expected canonical path to contain %q, got %q", tc.wantPathPart, candidate.CanonicalPath)
+			}
+			if candidate.GeoToken != tc.wantGeo {
+				t.Fatalf("expected geo token %q, got %q", tc.wantGeo, candidate.GeoToken)
+			}
+			if tc.wantCondition != "" && candidate.ConditionType != tc.wantCondition {
+				t.Fatalf("expected condition type %q, got %q", tc.wantCondition, candidate.ConditionType)
+			}
+			if !candidate.HasCoordinates || candidate.GeoPrecision != tc.wantPrecision {
+				t.Fatalf("expected map-ready precise geometry, got hasCoordinates=%v precision=%q", candidate.HasCoordinates, candidate.GeoPrecision)
+			}
+
+			tc.event.SignalType = inferHorizonMonitorSignalType("", tc.event, cls)
+			locationPath := "/loc/" + candidate.GeoToken
+			eventFact := &coremodels.OntologyFact{
+				BaseOntologyFields: coremodels.BaseOntologyFields{
+					ID:           "fact-" + strings.ReplaceAll(tc.name, " ", "-"),
+					LocationPath: &locationPath,
+				},
+				Confidence: 0.84,
+				SourceIDs:  []string{"src-1"},
+			}
+			if signal := p.buildSignalDescriptor(eventFact, tc.event); signal == nil {
+				t.Fatal("expected signal descriptor")
+			} else if signal.ID == "" || signal.FactID == "" || tc.event.SignalType == "risk:temporal_anomaly" {
+				t.Fatalf("unexpected signal state: signal=%+v inferred=%q", signal, tc.event.SignalType)
+			} else if tc.wantAxis != "" && signal.Axis != tc.wantAxis {
+				t.Fatalf("expected signal axis %q, got %q", tc.wantAxis, signal.Axis)
+			}
+		})
+	}
+}
+
+func TestSelectSemanticAffectedZoneCanonicalPath_DoesNotMergeDifferentChokepoints(t *testing.T) {
+	candidate := &affectedZoneCandidate{
+		CanonicalPath: "/zone/sea/military_conflict/bab-el-mandeb",
+		Label:         "Bab el-Mandeb (armed tension)",
+		ConditionType: "military_conflict",
+		GeoToken:      "sea",
+	}
+	results := []ai.SearchResult{
+		{
+			RelevanceScore: 0.99,
+			Document: ai.SearchDocument{
+				StructData: map[string]interface{}{"canonicalPath": "/zone/sea/military_conflict/strait-of-hormuz"},
+			},
+		},
+		{
+			RelevanceScore: 0.91,
+			Document: ai.SearchDocument{
+				StructData: map[string]interface{}{"canonicalPath": "/zone/sea/military_conflict/bab-el-mandeb"},
+			},
+		},
+	}
+	gotPath, _ := selectSemanticAffectedZoneCanonicalPath(candidate, results)
+	if gotPath != "/zone/sea/military_conflict/bab-el-mandeb" {
+		t.Fatalf("expected Bab el-Mandeb path, got %q", gotPath)
+	}
+}
+
+func TestInferZoneConditionAndSubtypeScored_LaborStrikePortMapsToInfrastructure(t *testing.T) {
+	cond, zoneType, sub, _ := inferZoneConditionAndSubtypeScored(
+		normalizeKeywordText("Dockworkers strike shuts down Canada's Port of Vancouver, disrupting container cargo operations"),
+		horizonMonitorNewsClassification{Category: "infrastructure", Level: "high"},
+	)
+	if cond != "infrastructure_disruption" || zoneType != "infrastructure_disruption" || sub != "systems_disruption" {
+		t.Fatalf("expected infrastructure disruption, got cond=%s zoneType=%s sub=%s", cond, zoneType, sub)
+	}
+}
+
+func TestShouldPreferSpecificAffectedZoneCreation_ReplacesGenericOperationalSlug(t *testing.T) {
+	candidate := &affectedZoneCandidate{
+		CanonicalPath:   "/zone/ca/infrastructure_disruption/port-of-vancouver",
+		Label:           "Port of Vancouver",
+		GeoPrecision:    "entity_anchor",
+		CountryCode:     "CA",
+		CountryName:     "Canada",
+		GeoConfidence:   0.82,
+		ResolutionConfidence: 0.84,
+	}
+	existing := &horizonmodels.HorizonFragment{
+		ID:            "zone-port",
+		Type:          horizonmodels.FragmentTypeAffectedZone,
+		CanonicalPath: "/zone/ca/infrastructure_disruption/port",
+		Qualifiers:    map[string]interface{}{"geoPrecision": "precise"},
+	}
+	if !shouldPreferSpecificAffectedZoneCreation(candidate, existing) {
+		t.Fatal("expected specific port-of-vancouver zone to replace generic /port zone")
+	}
+}
+
+func TestExtractPossessiveOperationalPlaceFromTitle(t *testing.T) {
+	cases := map[string]string{
+		"UAE's Fujairah stops some oil loading operations after drone attack": "Fujairah",
+		"The US hit Iran's Kharg Island, key to its economy and security":     "Kharg Island",
+		"Oman works to contain fire at Salalah port after drones strike":      "",
+		"Britain's policy on Iran draws criticism":                            "",
+	}
+	for title, want := range cases {
+		if got := extractPossessiveOperationalPlaceFromTitle(title); got != want {
+			t.Fatalf("title=%q: want %q got %q", title, want, got)
+		}
+	}
+}
+
+func TestShouldPreferSpecificAffectedZoneCreation(t *testing.T) {
+	candidate := &affectedZoneCandidate{
+		CanonicalPath:        "/zone/ae/infrastructure_disruption/fujairah",
+		Label:                "Fujairah (systems disruption)",
+		ConditionType:        "infrastructure_disruption",
+		CountryCode:          "AE",
+		CountryName:          "United Arab Emirates",
+		GeoPrecision:         "precise",
+		GeoConfidence:        0.84,
+		ResolutionConfidence: 0.88,
+	}
+	existing := &horizonmodels.HorizonFragment{
+		CanonicalPath: "/zone/ae/infrastructure_disruption/united-arab-emirates",
+		Type:          horizonmodels.FragmentTypeAffectedZone,
+		Status:        string(horizonmodels.FragmentStatusActive),
+		Qualifiers: map[string]interface{}{
+			"geoPrecision": "approximate_country",
+		},
+		State: map[string]horizonmodels.MetricValue{
+			zoneMetricLastMatchTS: {Value: float64(time.Now().Add(-72 * time.Hour).Unix())},
+		},
+	}
+	if !shouldPreferSpecificAffectedZoneCreation(candidate, existing) {
+		t.Fatal("expected precise operational candidate to bypass coarse country-level zone")
+	}
+}
+
+func TestAffectedZoneBoost_ConcreteMilitaryIncidentGetsHotStart(t *testing.T) {
+	event := &horizonMonitorFeedEvent{
+		Title:      "Two killed, 12 injured after projectile fell on residential location in Saudi Arabia",
+		Summary:    "Projectile strike hit a residential location in Saudi Arabia.",
+		Severity:   "high",
+		OccurredAt: time.Now().UTC(),
+	}
+	cls := horizonMonitorNewsClassification{Category: "conflict", Level: "high", Confidence: 0.9}
+	candidate := &affectedZoneCandidate{
+		ConditionType:        "military_conflict",
+		Label:                "Saudi Arabia (kinetic operations)",
+		EventConfidence:      0.92,
+		GeoConfidence:        0.44,
+		ResolutionConfidence: 0.71,
+	}
+	if got := affectedZoneBoost(event, cls, candidate); got < 34 {
+		t.Fatalf("expected concrete military incident to get strong initial boost, got %.2f", got)
+	}
+}
+
+func TestBuildEventFromDocument_SanitizesInvalidUTF8(t *testing.T) {
+	p := &HorizonMonitorPipeline{}
+	doc := prov.NormalizedDocument{
+		ExternalID: "evt-\xff",
+		Title:      "Kharg \xffIsland hit",
+		FullText:   "Fire at port \xff after strike",
+		URL:        "https://example.com/\xff",
+	}
+	event := p.buildEventFromDocument("src-\xff", "intel_rss", "military", "", "https://feed.example/\xff", doc)
+	if event == nil {
+		t.Fatal("expected event")
+	}
+	for _, v := range []string{event.SourceID, event.ExternalID, event.Title, event.Summary, event.URL} {
+		if strings.ContainsRune(v, '\xff') {
+			t.Fatalf("expected invalid UTF-8 bytes to be removed, got %q", v)
+		}
+	}
+}
+
+func TestBuildIncomingAffectedZoneFragment_MapReadyCoordinates(t *testing.T) {
+	now := time.Date(2026, 3, 15, 8, 3, 0, 0, time.UTC)
+	candidate := &affectedZoneCandidate{
+		CanonicalPath:  "/zone/sea/infrastructure_disruption/strait-of-hormuz",
+		Label:          "Strait of Hormuz (critical infra)",
+		ConditionType:  "infrastructure_disruption",
+		ZoneType:       "infrastructure_disruption",
+		ZoneSubType:    "systems_disruption",
+		GeoToken:       "sea",
+		RadiusKm:       180,
+		Lat:            26.5667,
+		Lon:            56.2500,
+		HasCoordinates: true,
+		GeoPrecision:   "precise",
+	}
+	event := &horizonMonitorFeedEvent{
+		ExternalID:  "evt-hormuz",
+		Title:       "Critical Threat Persists in Hormuz as Attacks and GPS Jamming Shake Shipping",
+		Summary:     "Shipping disruptions continue in the Strait of Hormuz.",
+		URL:         "https://www.reuters.com/world/middle-east/example-hormuz",
+		OccurredAt:  now,
+		Severity:    "high",
+		CountryName: "Strait of Hormuz",
+	}
+	fragment := buildIncomingAffectedZoneFragment(
+		candidate,
+		"src-1",
+		event,
+		horizonMonitorNewsClassification{Category: "infrastructure", Level: "high"},
+		now,
+		now,
+		9.5,
+	)
+	if fragment == nil {
+		t.Fatal("expected fragment")
+	}
+	if fragment.Type != horizonmodels.FragmentTypeAffectedZone {
+		t.Fatalf("expected affected zone fragment, got %q", fragment.Type)
+	}
+	if !fragment.HasCoordinates || fragment.Coordinates == nil {
+		t.Fatalf("expected map-ready coordinates, got %+v", fragment.Coordinates)
+	}
+	if fragment.Coordinates.Lat != candidate.Lat || fragment.Coordinates.Lon != candidate.Lon {
+		t.Fatalf("unexpected coordinates %+v", fragment.Coordinates)
+	}
+	if fragment.RadiusKm != candidate.RadiusKm {
+		t.Fatalf("expected radius %.1f, got %.1f", candidate.RadiusKm, fragment.RadiusKm)
+	}
+	if got := strings.TrimSpace(asString(fragment.Qualifiers["geoPrecision"])); got != "precise" {
+		t.Fatalf("expected geoPrecision=precise, got %q", got)
 	}
 }
 

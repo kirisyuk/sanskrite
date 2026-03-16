@@ -282,10 +282,10 @@ RULES:
 - Prefer supply-chain/logistics structure when the intent suggests it (suppliers, battery materials/components, logistics providers, ports/regions, manufacturing facilities, key dependencies).
 - confidence MUST be <= 0.65 (hypothesis), use ~0.25..0.55 typically.
 - Use stable canonical paths:
-  - Organizations: /org/{iso2|na}/{slug}
-    - iso2: country of origin / primary jurisdiction (%s). /org/na is last-resort only after checking official name, HQ/site/place clue, and source text for jurisdiction.
-  - Government bodies: /gov/{iso2|na}/{slug}
-    - Use for ministries, regulators, agencies, state bodies. /gov/na is last-resort only after checking the source for jurisdiction/country clues.
+  - Organizations: /org/{iso2|regional}/{slug}
+    - iso2: country of origin / primary jurisdiction (%s). Use your best evidence-backed jurisdiction instead of falling back to /org/na.
+  - Government bodies: /gov/{iso2|regional}/{slug}
+    - Use for ministries, regulators, agencies, state bodies. Resolve the best jurisdiction from the source, official name, and place clues instead of falling back to /gov/na.
   - Media channels (last-mile endpoints): /media/{platform}/{slug}
     - Example: Telegram channel "В казани поймут" -> /media/telegram/v-kazani-poymut
   - Communities (informal social groups): /community/{geo}/{type}/{slug}
@@ -306,7 +306,7 @@ RULES:
       - dynasties: broader family → branch (house-of-saud → sudairi-seven)
       - tribes: parent tribe → sub-tribe/clan (pashtun → durrani → popalzai)
       - Direction: broader → narrower
-  - Facilities: /fac/{geo}/{slug} — geo: %s. /fac/na is last-resort only after checking facility/site/place clues in the name and source.
+  - Facilities: /fac/{geo}/{slug} — geo: %s. Infer the best concrete geo from facility/site/place clues in the name and source instead of falling back to /fac/na.
   - People: /person/{slug}
   - Products: MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}
     - category: "raw" | "component" | "finished" | "service"

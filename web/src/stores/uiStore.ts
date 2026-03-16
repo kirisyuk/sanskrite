@@ -11,6 +11,9 @@ interface UIState {
   showAdminModal: boolean;
   setShowAdminModal: (v: boolean) => void;
   openAdminModal: () => void;
+  showStrategicInbox: boolean;
+  setShowStrategicInbox: (v: boolean) => void;
+  openStrategicInbox: () => void;
 }
 
 export const useUIStore = create<UIState>((set) => ({
@@ -21,6 +24,8 @@ export const useUIStore = create<UIState>((set) => ({
   showAdminModal: false,
   setShowAdminModal: (v) => set({ showAdminModal: v }),
   openAdminModal: () => set({ showAdminModal: true }),
+  showStrategicInbox: false,
+  setShowStrategicInbox: (v) => set({ showStrategicInbox: v }),
+  openStrategicInbox: () => set({ showStrategicInbox: true }),
 }));
-
 

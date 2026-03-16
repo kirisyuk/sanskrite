@@ -1783,6 +1783,37 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
+  async listStrategicRecommendations(params?: {
+    status?: string;
+    projectId?: string;
+    lensId?: string;
+    limit?: number;
+    scope?: 'tenant' | 'global' | 'all';
+  }): Promise<{ items: any[]; scope?: string }> {
+    const response = await this.client.get('/api/horizon/recommendations', { params });
+    return response.data;
+  }
+
+  async getStrategicRecommendation(id: string): Promise<any> {
+    const response = await this.client.get(`/api/horizon/recommendations/${encodeURIComponent(id)}`);
+    return response.data;
+  }
+
+  async getStrategicRecommendationsCount(params?: { scope?: 'tenant' | 'global' | 'all' }): Promise<{ count: number; tenantCount?: number; globalCount?: number; scope?: string }> {
+    const response = await this.client.get('/api/horizon/recommendations/count', { params });
+    return response.data;
+  }
+
+  async approveStrategicRecommendation(id: string): Promise<any> {
+    const response = await this.client.post(`/api/horizon/recommendations/${encodeURIComponent(id)}/approve`, {});
+    return response.data;
+  }
+
+  async dismissStrategicRecommendation(id: string): Promise<any> {
+    const response = await this.client.post(`/api/horizon/recommendations/${encodeURIComponent(id)}/dismiss`, {});
+    return response.data;
+  }
+
   async updateHorizonLens(
     lensId: string,
     data: {
@@ -2425,6 +2456,8 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       hype?: number;
       hypeIndicator?: number;
       activityStatus?: 'hot' | 'active' | 'watch' | 'cooling' | 'inactive';
+      conflictLinked?: boolean;
+      threatClass?: string;
       lastMatchedAt?: string;
       inScope?: boolean;
       createdAt?: string;
@@ -2473,6 +2506,8 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       hype?: number;
       hypeIndicator?: number;
       activityStatus?: 'hot' | 'active' | 'watch' | 'cooling' | 'inactive';
+      conflictLinked?: boolean;
+      threatClass?: string;
       lastMatchedAt?: string;
       inScope?: boolean;
       createdAt?: string;

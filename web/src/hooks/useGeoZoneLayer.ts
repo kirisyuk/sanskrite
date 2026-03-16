@@ -155,13 +155,28 @@ function fieldPolygon(
 }
 
 function zoneColor(obj: GeoObject, theme: 'dark' | 'light'): string {
-  if (obj.type === 'AFFECTED_ZONE') return getAffectedZoneMapAccent(obj.canonicalPath, theme);
+  if (obj.type === 'AFFECTED_ZONE') {
+    const base = getAffectedZoneMapAccent(obj.canonicalPath, theme);
+    if (isCriticalZone(obj)) {
+      const critical = theme === 'dark' ? '#ef4444' : '#dc2626';
+      const threatClass = String(obj.threatClass || '').trim().toLowerCase();
+      const conditionType = extractZoneConditionType(obj.canonicalPath);
+      if (conditionType === 'military_conflict' || conditionType === 'security_conflict') {
+        return critical;
+      }
+      if (threatClass === 'kinetic') {
+        return blendHexColors(base, critical, 0.88);
+      }
+      return blendHexColors(base, critical, 0.82);
+    }
+    return base;
+  }
   const vt = getHorizonNodeVisualType(obj.type, obj.canonicalPath, obj.label, (obj as any)?.facilityKind);
   return getNodeColors(vt || obj.type, theme).accent;
 }
 
 function zoneText(obj: GeoObject): string {
-  return `${obj.canonicalPath || ''} ${obj.zoneType || ''} ${obj.zoneSubType || ''} ${obj.label || ''}`.toLowerCase();
+  return `${obj.canonicalPath || ''} ${obj.zoneType || ''} ${obj.zoneSubType || ''} ${obj.label || ''} ${obj.description || ''} ${obj.threatClass || ''}`.toLowerCase();
 }
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -179,7 +194,18 @@ function zoneHype(obj: GeoObject): number {
 function zoneStatus(obj: GeoObject, hype: number): 'hot' | 'active' | 'watch' | 'cooling' | 'inactive' {
   const fromObj = String(obj.activityStatus || '').trim().toLowerCase();
   if (fromObj === 'hot' || fromObj === 'active' || fromObj === 'watch' || fromObj === 'cooling' || fromObj === 'inactive') {
+    if (obj.type === 'AFFECTED_ZONE' && isCriticalZone(obj)) {
+      if (fromObj === 'watch' && hype >= 40) return 'active';
+      if (fromObj === 'cooling' && hype >= 18) return 'watch';
+    }
     return fromObj;
+  }
+  if (obj.type === 'AFFECTED_ZONE' && isCriticalZone(obj)) {
+    if (hype >= 58) return 'hot';
+    if (hype >= 36) return 'active';
+    if (hype >= 14) return 'watch';
+    if (hype >= 6) return 'cooling';
+    return 'inactive';
   }
   if (hype >= 72) return 'hot';
   if (hype >= 48) return 'active';
@@ -407,6 +433,9 @@ function blendHexColors(base: string, overlay: string, ratio: number): string {
 }
 
 function isCriticalZone(obj: GeoObject): boolean {
+  if (obj.conflictLinked) return true;
+  const threatClass = String(obj.threatClass || '').trim().toLowerCase();
+  if (threatClass === 'kinetic' || threatClass === 'conflict-linked') return true;
   const conditionType = extractZoneConditionType(obj.canonicalPath);
   if (conditionType === 'military_conflict' || conditionType === 'security_conflict') return true;
   const text = zoneText(obj);
@@ -889,7 +918,11 @@ function buildSharedFieldCollections(objects: GeoObject[], theme: 'dark' | 'ligh
     const sharedStyle = zoneStyle(sharedStatus, avgHype);
     const overlapFactor = clamp(cluster.length / 6, 0.35, 1.45);
     const ambientTint = criticalMembers.length > 0
-      ? blendHexColors(ambientColor, criticalColor, 0.1 + criticalShare * 0.18)
+      ? blendHexColors(
+          ambientColor,
+          criticalColor,
+          clamp(0.22 + criticalShare * 0.42 + criticalAvgHype / 320, 0.22, 0.78),
+        )
       : ambientColor;
 
     ambientFeatures.push({
@@ -899,13 +932,13 @@ function buildSharedFieldCollections(objects: GeoObject[], theme: 'dark' | 'ligh
         color: ambientTint,
         clusterSize: cluster.length,
         fillOpacity: clamp(
-          sharedStyle.fillOpacity * (0.88 + overlapFactor * 0.34) * (criticalMembers.length > 0 ? 0.82 : 1) * 0.58,
+          sharedStyle.fillOpacity * (0.88 + overlapFactor * 0.34) * (criticalMembers.length > 0 ? 0.94 : 1) * 0.68,
           0.08,
-          0.24,
+          0.34,
         ),
-        lineOpacity: clamp(sharedStyle.lineOpacity * (0.55 + overlapFactor * 0.16) + criticalShare * 0.12, 0.18, 0.56),
-        lineWidth: clamp(1 + overlapFactor * 0.7 + criticalShare * 0.25, 1, 2.35),
-        outlineColor: criticalMembers.length > 0 && criticalShare >= 0.18 ? criticalColor : ambientTint,
+        lineOpacity: clamp(sharedStyle.lineOpacity * (0.58 + overlapFactor * 0.18) + criticalShare * 0.18, 0.22, 0.7),
+        lineWidth: clamp(1 + overlapFactor * 0.78 + criticalShare * 0.38, 1, 2.75),
+        outlineColor: criticalMembers.length > 0 && criticalShare >= 0.12 ? criticalColor : ambientTint,
       },
     });
 
@@ -927,9 +960,9 @@ function buildSharedFieldCollections(objects: GeoObject[], theme: 'dark' | 'ligh
         color: criticalColor,
         clusterSize: criticalMembers.length,
         fillOpacity: clamp(
-          (sharedStyle.fillOpacity * 0.56 + criticalAvgHype / 480) * (0.42 + criticalShare * 1.1) * 0.56,
-          0.08,
-          0.3,
+          (sharedStyle.fillOpacity * 0.78 + criticalAvgHype / 260) * (0.62 + criticalShare * 1.35) * 0.78,
+          0.16,
+          0.48,
         ),
       },
     });
@@ -994,7 +1027,11 @@ function buildSharedShardCollection(objects: GeoObject[], theme: 'dark' | 'light
       centroidLat,
       centroidLon,
       color: criticalMembers.length > 0
-        ? blendHexColors(ambientColor, criticalColor, 0.12 + criticalShare * 0.26)
+        ? blendHexColors(
+            ambientColor,
+            criticalColor,
+            clamp(0.24 + criticalShare * 0.42 + avgHype / 360, 0.24, 0.82),
+          )
         : ambientColor,
       hype: avgHype,
       status: avgHype >= 70 ? 'hot' : avgHype >= 46 ? 'active' : avgHype >= 24 ? 'watch' : avgHype >= 10 ? 'cooling' : 'inactive',

@@ -318,6 +318,38 @@ func decodeSupplyChainAssemblyCoverage(raw interface{}) (*SupplyChainAssemblyCov
 	}
 }
 
+func decodeSupplyChainAssemblyBranchSummaries(raw interface{}) ([]SupplyChainAssemblyBranchSummary, error) {
+	switch branches := raw.(type) {
+	case nil:
+		return nil, nil
+	case []SupplyChainAssemblyBranchSummary:
+		return branches, nil
+	case []interface{}:
+		out := make([]SupplyChainAssemblyBranchSummary, 0, len(branches))
+		for i, value := range branches {
+			switch branch := value.(type) {
+			case SupplyChainAssemblyBranchSummary:
+				out = append(out, branch)
+			case map[string]interface{}:
+				branchJSON, err := json.Marshal(branch)
+				if err != nil {
+					return nil, fmt.Errorf("payload assembly branch[%d] marshal failed: %w", i, err)
+				}
+				var parsed SupplyChainAssemblyBranchSummary
+				if err := json.Unmarshal(branchJSON, &parsed); err != nil {
+					return nil, fmt.Errorf("payload assembly branch[%d] unmarshal failed: %w", i, err)
+				}
+				out = append(out, parsed)
+			default:
+				return nil, fmt.Errorf("payload assembly branch[%d] must be an object", i)
+			}
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("payload assembly branches must be an array")
+	}
+}
+
 // BuildSupplyChainPathPayload creates a v1 SUPPLY_CHAIN_PATH payload from nodes, edges, optional legs, and stress profile.
 func BuildSupplyChainPathPayload(nodes []SupplyChainPathNode, edges []SupplyChainPathEdge, legs []SupplyChainPathLeg, stress *SupplyChainPathStress, notes map[string]interface{}) map[string]interface{} {
 	return BuildSupplyChainPathPayloadWithSufficiency(nodes, edges, legs, stress, nil, notes)
@@ -369,6 +401,13 @@ type SupplyChainAssemblyGraphPayloadOptions struct {
 	Coverage                        *SupplyChainAssemblyCoverage
 	OpenGaps                        []string
 	DerivedPathKeys                 []string
+	PrimaryBranches                 []SupplyChainAssemblyBranchSummary
+	SecondaryBranches               []SupplyChainAssemblyBranchSummary
+	TopRoutes                       []string
+	TopDistributionNodes            []string
+	TopSuppliers                    []string
+	TopProductFamilies              []string
+	SuppressedSupportBranches       []SupplyChainAssemblyBranchSummary
 	Stage                           string
 	Provisional                     bool
 	SourceMode                      string
@@ -458,6 +497,27 @@ func BuildSupplyChainAssemblyGraphPayloadDetailed(opts SupplyChainAssemblyGraphP
 	}
 	if len(opts.DerivedPathKeys) > 0 {
 		payload["derivedPathKeys"] = opts.DerivedPathKeys
+	}
+	if len(opts.PrimaryBranches) > 0 {
+		payload["primaryBranches"] = opts.PrimaryBranches
+	}
+	if len(opts.SecondaryBranches) > 0 {
+		payload["secondaryBranches"] = opts.SecondaryBranches
+	}
+	if len(opts.TopRoutes) > 0 {
+		payload["topRoutes"] = opts.TopRoutes
+	}
+	if len(opts.TopDistributionNodes) > 0 {
+		payload["topDistributionNodes"] = opts.TopDistributionNodes
+	}
+	if len(opts.TopSuppliers) > 0 {
+		payload["topSuppliers"] = opts.TopSuppliers
+	}
+	if len(opts.TopProductFamilies) > 0 {
+		payload["topProductFamilies"] = opts.TopProductFamilies
+	}
+	if len(opts.SuppressedSupportBranches) > 0 {
+		payload["suppressedSupportBranches"] = opts.SuppressedSupportBranches
 	}
 	if strings.TrimSpace(opts.Stage) != "" {
 		payload["stage"] = strings.TrimSpace(opts.Stage)
@@ -641,6 +701,34 @@ func ParseSupplyChainAssemblyGraphPayload(payload map[string]interface{}) (*Supp
 	if err != nil {
 		return nil, err
 	}
+	primaryBranches, err := decodeSupplyChainAssemblyBranchSummaries(payload["primaryBranches"])
+	if err != nil {
+		return nil, err
+	}
+	secondaryBranches, err := decodeSupplyChainAssemblyBranchSummaries(payload["secondaryBranches"])
+	if err != nil {
+		return nil, err
+	}
+	topRoutes, err := decodeStringSlice(payload["topRoutes"])
+	if err != nil {
+		return nil, err
+	}
+	topDistributionNodes, err := decodeStringSlice(payload["topDistributionNodes"])
+	if err != nil {
+		return nil, err
+	}
+	topSuppliers, err := decodeStringSlice(payload["topSuppliers"])
+	if err != nil {
+		return nil, err
+	}
+	topProductFamilies, err := decodeStringSlice(payload["topProductFamilies"])
+	if err != nil {
+		return nil, err
+	}
+	suppressedSupportBranches, err := decodeSupplyChainAssemblyBranchSummaries(payload["suppressedSupportBranches"])
+	if err != nil {
+		return nil, err
+	}
 	notes := map[string]interface{}{}
 	if notesRaw, ok := payload["notes"]; ok {
 		if notesMap, ok := notesRaw.(map[string]interface{}); ok {
@@ -678,6 +766,13 @@ func ParseSupplyChainAssemblyGraphPayload(payload map[string]interface{}) (*Supp
 		Coverage:                        coverage,
 		OpenGaps:                        openGaps,
 		DerivedPathKeys:                 derivedPathKeys,
+		PrimaryBranches:                 primaryBranches,
+		SecondaryBranches:               secondaryBranches,
+		TopRoutes:                       topRoutes,
+		TopDistributionNodes:            topDistributionNodes,
+		TopSuppliers:                    topSuppliers,
+		TopProductFamilies:              topProductFamilies,
+		SuppressedSupportBranches:       suppressedSupportBranches,
 		Stage:                           stage,
 		Provisional:                     provisional,
 		SourceMode:                      sourceMode,
@@ -2238,6 +2333,33 @@ func ReplaceCanonicalPathInArtifact(artifact *MaterializedArtifact, oldPath, new
 					changed = true
 				}
 			}
+			for i := range parsed.PrimaryBranches {
+				if replacePathInAssemblyBranchSummary(&parsed.PrimaryBranches[i], oldPath, newPath) {
+					changed = true
+				}
+			}
+			for i := range parsed.SecondaryBranches {
+				if replacePathInAssemblyBranchSummary(&parsed.SecondaryBranches[i], oldPath, newPath) {
+					changed = true
+				}
+			}
+			for i := range parsed.SuppressedSupportBranches {
+				if replacePathInAssemblyBranchSummary(&parsed.SuppressedSupportBranches[i], oldPath, newPath) {
+					changed = true
+				}
+			}
+			if replacePathInStringSlice(parsed.TopRoutes, oldPath, newPath) {
+				changed = true
+			}
+			if replacePathInStringSlice(parsed.TopDistributionNodes, oldPath, newPath) {
+				changed = true
+			}
+			if replacePathInStringSlice(parsed.TopSuppliers, oldPath, newPath) {
+				changed = true
+			}
+			if replacePathInStringSlice(parsed.TopProductFamilies, oldPath, newPath) {
+				changed = true
+			}
 			artifact.Payload = BuildSupplyChainAssemblyGraphPayloadDetailed(SupplyChainAssemblyGraphPayloadOptions{
 				AnchorSet:                       parsed.AnchorSet,
 				SourceAnchors:                   parsed.SourceAnchors,
@@ -2254,6 +2376,13 @@ func ReplaceCanonicalPathInArtifact(artifact *MaterializedArtifact, oldPath, new
 				Coverage:                        parsed.Coverage,
 				OpenGaps:                        parsed.OpenGaps,
 				DerivedPathKeys:                 parsed.DerivedPathKeys,
+				PrimaryBranches:                 parsed.PrimaryBranches,
+				SecondaryBranches:               parsed.SecondaryBranches,
+				TopRoutes:                       parsed.TopRoutes,
+				TopDistributionNodes:            parsed.TopDistributionNodes,
+				TopSuppliers:                    parsed.TopSuppliers,
+				TopProductFamilies:              parsed.TopProductFamilies,
+				SuppressedSupportBranches:       parsed.SuppressedSupportBranches,
 				Stage:                           parsed.Stage,
 				Provisional:                     parsed.Provisional,
 				SourceMode:                      parsed.SourceMode,
@@ -2277,6 +2406,35 @@ func ReplaceCanonicalPathInArtifact(artifact *MaterializedArtifact, oldPath, new
 			}
 			artifact.Payload = BuildRelationsGraphPayload(parsed.Nodes, parsed.Edges, parsed.DomainMode, parsed.RootEntity, parsed.Notes)
 		}
+	}
+	return changed
+}
+
+func replacePathInAssemblyBranchSummary(branch *SupplyChainAssemblyBranchSummary, oldPath string, newPath string) bool {
+	if branch == nil {
+		return false
+	}
+	changed := false
+	if replacePathInStringSlice(branch.AnchorRefs, oldPath, newPath) {
+		changed = true
+	}
+	if replacePathInStringSlice(branch.ProductRefs, oldPath, newPath) {
+		changed = true
+	}
+	if replacePathInStringSlice(branch.ActorRefs, oldPath, newPath) {
+		changed = true
+	}
+	if replacePathInStringSlice(branch.RouteRefs, oldPath, newPath) {
+		changed = true
+	}
+	if replacePathInStringSlice(branch.EntryNodes, oldPath, newPath) {
+		changed = true
+	}
+	if replacePathInStringSlice(branch.ExitNodes, oldPath, newPath) {
+		changed = true
+	}
+	if replacePathInStringSlice(branch.CollapsedSupportingBranchIDs, oldPath, newPath) {
+		changed = true
 	}
 	return changed
 }

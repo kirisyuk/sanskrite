@@ -25,6 +25,7 @@ import (
 	mapactivity "github.com/igorkirisyuk/sanskrite/internal/horizon/mapactivity"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonpropagation "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
+	horizonrecommendations "github.com/igorkirisyuk/sanskrite/internal/horizon/recommendations"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
@@ -169,23 +170,43 @@ type horizonMonitorNewsClassification struct {
 	Source     string
 }
 
+type horizonMonitorLLMArticleAdjudication struct {
+	SchemaVersion      string  `json:"schemaVersion"`
+	IsEvent            bool    `json:"isEvent"`
+	EventClass         string  `json:"eventClass"`
+	EventConfidence    float64 `json:"eventConfidence"`
+	ShouldCreateZone   bool    `json:"shouldCreateZone"`
+	ShouldWarmExisting bool    `json:"shouldWarmExisting"`
+	ShouldOnlySignal   bool    `json:"shouldOnlySignal"`
+	ConditionType      string  `json:"conditionType"`
+	Place              string  `json:"place"`
+	CountryCode        string  `json:"countryCode"`
+	GeoConfidence      float64 `json:"geoConfidence"`
+	Reason             string  `json:"reason"`
+}
+
 type affectedZoneCandidate struct {
-	CanonicalPath  string
-	Label          string
-	ConditionType  string
-	ZoneType       string
-	ZoneSubType    string
-	InferenceScore float64
-	GeoToken       string
-	CountryCode    string
-	CountryName    string
-	RadiusKm       float64
-	Lat            float64
-	Lon            float64
-	HasCoordinates bool
-	GeoPrecision   string
-	WarmOnly       bool
-	Reason         string
+	CanonicalPath        string
+	Label                string
+	ConditionType        string
+	ZoneType             string
+	ZoneSubType          string
+	InferenceScore       float64
+	EventConfidence      float64
+	GeoConfidence        float64
+	ResolutionConfidence float64
+	GeoToken             string
+	CountryCode          string
+	CountryName          string
+	RadiusKm             float64
+	Lat                  float64
+	Lon                  float64
+	HasCoordinates       bool
+	GeoPrecision         string
+	GeoResolutionMethod  string
+	LinkedFragmentPaths  []string
+	WarmOnly             bool
+	Reason               string
 }
 
 type affectedZoneState struct {
@@ -209,6 +230,10 @@ const (
 	zoneHalfLifeScoreH = 8.0
 	zoneHalfLife1hH    = 1.0
 	zoneHalfLife24hH   = 24.0
+
+	affectedZoneRecoveryStatusActive     = "active_outage"
+	affectedZoneRecoveryStatusRecovering = "recovering"
+	affectedZoneRecoveryStatusRestored   = "restored"
 
 	rssHeuristicsTelemetryComponent = "rss_heuristics"
 	rssHeuristicsTelemetryMetric    = "wm_quality"
@@ -500,29 +525,40 @@ type horizonMonitorCountryBriefOutput struct {
 	Confidence       float64  `json:"confidence"`
 }
 
+type affectedZoneGeoAssistOutput struct {
+	Place       string  `json:"place"`
+	CountryCode string  `json:"countryCode"`
+	GeoKind     string  `json:"geoKind"`
+	Confidence  float64 `json:"confidence"`
+}
+
 // HorizonMonitorPipeline transforms Horizon Monitor feeds to our ontology/signal model.
 // It is deterministic-first and uses AI only for compact country briefs (strict JSON).
 type HorizonMonitorPipeline struct {
-	factsRepo          *corerepo.OntologyFactsRepository
-	fragmentsRepo      *horizonrepo.HorizonFragmentsRepository
-	edgesRepo          *horizonrepo.DependencyEdgesRepository
-	telemetryRepo      *horizonrepo.HorizonTelemetryRepository
-	realtimePublisher  *realtime.Publisher
-	vertexSearch       *ai.VertexAISearchClient
-	exec               *ai.AITaskExecutor
-	mapActivityEngine  *mapactivity.Engine
-	seedInjector       *signals.SeedInjector
-	propagationEngine  *horizonpropagation.PropagationEngine
-	profileLookup      *horizonpropagation.ProfileLookup
-	logger             *log.Logger
-	window             time.Duration
-	waveThrottleWindow time.Duration
-	enableAIClassify   bool
-	enableAIBriefs     bool
-	eventGateMode      discoverynlp.Mode
-	entityExtractMode  discoverynlp.Mode
-	eventGate          discoverynlp.EventGate
-	entityExtractor    discoverynlp.EntityExtractor
+	factsRepo                *corerepo.OntologyFactsRepository
+	fragmentsRepo            *horizonrepo.HorizonFragmentsRepository
+	edgesRepo                *horizonrepo.DependencyEdgesRepository
+	telemetryRepo            *horizonrepo.HorizonTelemetryRepository
+	realtimePublisher        *realtime.Publisher
+	vertexSearch             *ai.VertexAISearchClient
+	strategicRecommendations *horizonrecommendations.Service
+	exec                     *ai.AITaskExecutor
+	mapActivityEngine        *mapactivity.Engine
+	seedInjector             *signals.SeedInjector
+	propagationEngine        *horizonpropagation.PropagationEngine
+	profileLookup            *horizonpropagation.ProfileLookup
+	logger                   *log.Logger
+	window                   time.Duration
+	waveThrottleWindow       time.Duration
+	enableAIClassify         bool
+	enableAIBriefs           bool
+	enableLLMEventGate       bool
+	llmEventGateModel        string
+	llmEventGateMaxPerBatch  int
+	eventGateMode            discoverynlp.Mode
+	entityExtractMode        discoverynlp.Mode
+	eventGate                discoverynlp.EventGate
+	entityExtractor          discoverynlp.EntityExtractor
 
 	mu            sync.Mutex
 	observations  []horizonMonitorSignalObservation
@@ -549,25 +585,28 @@ func NewHorizonMonitorPipeline(
 			WithApplicabilityEvaluator(applicability)
 	}
 	return &HorizonMonitorPipeline{
-		factsRepo:          factsRepo,
-		fragmentsRepo:      fragmentsRepo,
-		edgesRepo:          edgesRepo,
-		exec:               exec,
-		mapActivityEngine:  mapactivity.NewEngine(factsRepo, logger),
-		seedInjector:       seedInjector,
-		propagationEngine:  propagationEngine,
-		profileLookup:      profileLookup,
-		logger:             logger,
-		window:             24 * time.Hour,
-		waveThrottleWindow: 30 * time.Minute,
-		enableAIClassify:   envBoolDefaultFalse("HORIZON_MONITOR_ENABLE_AI_CLASSIFICATION"),
-		enableAIBriefs:     envBoolDefaultFalse("HORIZON_MONITOR_ENABLE_AI_BRIEFS"),
-		eventGateMode:      discoverynlp.NormalizeMode(strings.ToLower(strings.TrimSpace(os.Getenv("EVENT_GATE_MODE"))), discoverynlp.ModeRules),
-		entityExtractMode:  discoverynlp.NormalizeMode(strings.ToLower(strings.TrimSpace(os.Getenv("ENTITY_EXTRACT_MODE"))), discoverynlp.ModeRules),
-		eventGate:          discoverynlp.NewHTTPEventGate(strings.TrimSpace(os.Getenv("EVENT_GATE_SERVICE_URL")), envDurationOrDefault("EVENT_GATE_TIMEOUT_MS", 1200*time.Millisecond)),
-		entityExtractor:    discoverynlp.NewHTTPEntityExtractor(strings.TrimSpace(os.Getenv("ENTITY_EXTRACT_SERVICE_URL")), envDurationOrDefault("ENTITY_EXTRACT_TIMEOUT_MS", 2*time.Second)),
-		recentWaves:        make(map[string]time.Time),
-		lastBriefByCC:      make(map[string]time.Time),
+		factsRepo:               factsRepo,
+		fragmentsRepo:           fragmentsRepo,
+		edgesRepo:               edgesRepo,
+		exec:                    exec,
+		mapActivityEngine:       mapactivity.NewEngine(factsRepo, logger),
+		seedInjector:            seedInjector,
+		propagationEngine:       propagationEngine,
+		profileLookup:           profileLookup,
+		logger:                  logger,
+		window:                  24 * time.Hour,
+		waveThrottleWindow:      30 * time.Minute,
+		enableAIClassify:        envBoolDefaultFalse("HORIZON_MONITOR_ENABLE_AI_CLASSIFICATION"),
+		enableAIBriefs:          envBoolDefaultFalse("HORIZON_MONITOR_ENABLE_AI_BRIEFS"),
+		enableLLMEventGate:      envBoolDefaultFalse("HORIZON_MONITOR_ENABLE_LLM_EVENT_ADJUDICATION"),
+		llmEventGateModel:       firstNonEmptyString(strings.TrimSpace(os.Getenv("HORIZON_MONITOR_LLM_EVENT_MODEL")), "gemini-3.1-flash-lite-preview"),
+		llmEventGateMaxPerBatch: envIntOrDefault("HORIZON_MONITOR_LLM_EVENT_ADJUDICATION_MAX_PER_BATCH", 6),
+		eventGateMode:           discoverynlp.NormalizeMode(strings.ToLower(strings.TrimSpace(os.Getenv("EVENT_GATE_MODE"))), discoverynlp.ModeRules),
+		entityExtractMode:       discoverynlp.NormalizeMode(strings.ToLower(strings.TrimSpace(os.Getenv("ENTITY_EXTRACT_MODE"))), discoverynlp.ModeRules),
+		eventGate:               discoverynlp.NewHTTPEventGate(strings.TrimSpace(os.Getenv("EVENT_GATE_SERVICE_URL")), envDurationOrDefault("EVENT_GATE_TIMEOUT_MS", 1200*time.Millisecond)),
+		entityExtractor:         discoverynlp.NewHTTPEntityExtractor(strings.TrimSpace(os.Getenv("ENTITY_EXTRACT_SERVICE_URL")), envDurationOrDefault("ENTITY_EXTRACT_TIMEOUT_MS", 2*time.Second)),
+		recentWaves:             make(map[string]time.Time),
+		lastBriefByCC:           make(map[string]time.Time),
 	}
 }
 
@@ -592,6 +631,14 @@ func (p *HorizonMonitorPipeline) WithVertexSearch(client *ai.VertexAISearchClien
 		return p
 	}
 	p.vertexSearch = client
+	return p
+}
+
+func (p *HorizonMonitorPipeline) WithStrategicRecommendations(service *horizonrecommendations.Service) *HorizonMonitorPipeline {
+	if p == nil {
+		return p
+	}
+	p.strategicRecommendations = service
 	return p
 }
 
@@ -647,6 +694,7 @@ func (p *HorizonMonitorPipeline) ProcessDocuments(ctx context.Context, tenantID 
 	topicObservations := make([]horizonMonitorTopicGeoObservation, 0, len(docs))
 	mapEvents := make([]mapactivity.ObservedEvent, 0, len(docs))
 	aiClassificationsUsed := 0
+	llmAdjudicationsUsed := p.llmEventGateMaxPerBatch
 	qualityCounters := rssHeuristicsQualityCounters{}
 	signalCounters := rssSignalFlowCounters{}
 
@@ -664,23 +712,26 @@ func (p *HorizonMonitorPipeline) ProcessDocuments(ctx context.Context, tenantID 
 			}
 		}
 		nlpDoc := p.buildNLPDocumentInput(ds, event, doc.FullText, doc.Language)
-		articleAssessment := p.assessArticleWithNLP(nlpDoc, classification)
+		articleAssessment, llmAdj := p.assessArticleWithNLP(ctx, nlpDoc, classification, &llmAdjudicationsUsed)
 		entityExtraction := p.extractEntitiesWithNLP(nlpDoc)
-		p.applyNLPResultToEvent(event, articleAssessment, entityExtraction)
+		p.applyNLPResultToEvent(event, articleAssessment, entityExtraction, llmAdj)
 		if err := p.upsertTrackFragment(ctx, tenantID, event); err != nil {
 			p.logf("horizon monitor pipeline: track upsert failed source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
 		}
+		var signalAudit *horizonMonitorSignalFlowAudit
 
 		if mode == wmIngestModeOntologyFact {
 			eventFact, err := p.upsertEventFact(ctx, tenantID, ds.ID, event)
 			if err != nil {
 				p.logf("horizon monitor pipeline: failed to upsert event fact source=%s feedType=%s ext=%s: %v", ds.ID, event.FeedType, event.ExternalID, err)
 			} else {
-				if shouldSuppressHeuristicSignalPropagation(event) || (articleAssessment != nil && !articleAssessment.IsEvent && !articleAssessment.ShouldOnlySignal && !articleAssessment.ShouldWarmExisting) {
+				forceConcrete := shouldForceConcreteIncidentHandling(event, classification, articleAssessment)
+				if shouldSuppressHeuristicSignalPropagation(event) || (!forceConcrete && articleAssessment != nil && !articleAssessment.IsEvent && !articleAssessment.ShouldOnlySignal && !articleAssessment.ShouldWarmExisting) {
 					qualityCounters.signalSuppressedTotal++
 				}
-				if signal := p.buildSignalDescriptor(eventFact, event); signal != nil && (articleAssessment == nil || articleAssessment.IsEvent || articleAssessment.ShouldOnlySignal || articleAssessment.ShouldWarmExisting) {
+				if signal := p.buildSignalDescriptor(eventFact, event); signal != nil && (forceConcrete || articleAssessment == nil || articleAssessment.IsEvent || articleAssessment.ShouldOnlySignal || articleAssessment.ShouldWarmExisting) {
 					audit, err := p.upsertAndPropagateSignal(ctx, tenantID, ds.ID, signal, eventFact)
+					signalAudit = audit
 					signalCounters.observe(audit)
 					if err != nil {
 						p.logf("horizon monitor pipeline: signal propagation failed source=%s signal=%s: %v", ds.ID, signal.ID, err)
@@ -691,6 +742,9 @@ func (p *HorizonMonitorPipeline) ProcessDocuments(ctx context.Context, tenantID 
 		techTopics := detectTechTopicsFromText(strings.Join([]string{event.Title, event.Summary}, " "))
 		if err := p.upsertNewsClassificationFact(ctx, tenantID, ds.ID, event, classification, techTopics); err != nil {
 			p.logf("horizon monitor pipeline: failed to upsert news classification source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
+		}
+		if err := p.applyAffectedZoneRecoveryObservation(ctx, ds.ID, event); err != nil {
+			p.logf("horizon monitor pipeline: failed to apply affected zone recovery source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
 		}
 		for _, topic := range techTopics {
 			topic = strings.TrimSpace(topic)
@@ -716,13 +770,15 @@ func (p *HorizonMonitorPipeline) ProcessDocuments(ctx context.Context, tenantID 
 		}, " "))
 		nonEventFiltered := zoneText != "" && isLikelyNonEventText(zoneText)
 		var zoneCandidate *affectedZoneCandidate
-		if articleAssessment == nil || articleAssessment.ShouldCreateZone || articleAssessment.ShouldWarmExisting {
+		if shouldForceConcreteIncidentHandling(event, classification, articleAssessment) || articleAssessment == nil || articleAssessment.ShouldCreateZone || articleAssessment.ShouldWarmExisting {
 			zoneCandidate = p.inferAffectedZoneCandidate(ctx, event, classification)
 		}
 		qualityCounters.observe(classification, zoneCandidate, nonEventFiltered)
-		if err := p.upsertAffectedZoneFragmentCandidate(ctx, tenantID, ds.ID, event, classification, zoneCandidate); err != nil {
+		zoneFragment, err := p.upsertAffectedZoneFragmentCandidate(ctx, tenantID, ds.ID, event, classification, zoneCandidate)
+		if err != nil {
 			p.logf("horizon monitor pipeline: failed to upsert affected zone source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
 		}
+		p.maybeCreateStrategicGapRecommendation(ctx, tenantID, "", "", zoneFragment, event, signalAudit)
 
 		newObservations = append(newObservations, horizonMonitorSignalObservation{
 			CountryCode:      event.CountryCode,
@@ -808,6 +864,7 @@ func (p *HorizonMonitorPipeline) ProcessFeedEvents(ctx context.Context, tenantID
 	topicObservations := make([]horizonMonitorTopicGeoObservation, 0, len(events))
 	mapEvents := make([]mapactivity.ObservedEvent, 0, len(events))
 	aiClassificationsUsed := 0
+	llmAdjudicationsUsed := p.llmEventGateMaxPerBatch
 	qualityCounters := rssHeuristicsQualityCounters{}
 	signalCounters := rssSignalFlowCounters{}
 	for _, event := range events {
@@ -823,22 +880,25 @@ func (p *HorizonMonitorPipeline) ProcessFeedEvents(ctx context.Context, tenantID
 			}
 		}
 		nlpDoc := p.buildNLPDocumentInput(ds, event, event.Summary, "")
-		articleAssessment := p.assessArticleWithNLP(nlpDoc, classification)
+		articleAssessment, llmAdj := p.assessArticleWithNLP(ctx, nlpDoc, classification, &llmAdjudicationsUsed)
 		entityExtraction := p.extractEntitiesWithNLP(nlpDoc)
-		p.applyNLPResultToEvent(event, articleAssessment, entityExtraction)
+		p.applyNLPResultToEvent(event, articleAssessment, entityExtraction, llmAdj)
 		if err := p.upsertTrackFragment(ctx, tenantID, event); err != nil {
 			p.logf("horizon monitor pipeline: track upsert failed source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
 		}
+		var signalAudit *horizonMonitorSignalFlowAudit
 		if mode == wmIngestModeOntologyFact {
 			eventFact, err := p.upsertEventFact(ctx, tenantID, ds.ID, event)
 			if err != nil {
 				p.logf("horizon monitor pipeline: failed to upsert event fact source=%s feedType=%s ext=%s: %v", ds.ID, event.FeedType, event.ExternalID, err)
 			} else {
-				if shouldSuppressHeuristicSignalPropagation(event) || (articleAssessment != nil && !articleAssessment.IsEvent && !articleAssessment.ShouldOnlySignal && !articleAssessment.ShouldWarmExisting) {
+				forceConcrete := shouldForceConcreteIncidentHandling(event, classification, articleAssessment)
+				if shouldSuppressHeuristicSignalPropagation(event) || (!forceConcrete && articleAssessment != nil && !articleAssessment.IsEvent && !articleAssessment.ShouldOnlySignal && !articleAssessment.ShouldWarmExisting) {
 					qualityCounters.signalSuppressedTotal++
 				}
-				if signal := p.buildSignalDescriptor(eventFact, event); signal != nil && (articleAssessment == nil || articleAssessment.IsEvent || articleAssessment.ShouldOnlySignal || articleAssessment.ShouldWarmExisting) {
+				if signal := p.buildSignalDescriptor(eventFact, event); signal != nil && (forceConcrete || articleAssessment == nil || articleAssessment.IsEvent || articleAssessment.ShouldOnlySignal || articleAssessment.ShouldWarmExisting) {
 					audit, err := p.upsertAndPropagateSignal(ctx, tenantID, ds.ID, signal, eventFact)
+					signalAudit = audit
 					signalCounters.observe(audit)
 					if err != nil {
 						p.logf("horizon monitor pipeline: signal propagation failed source=%s signal=%s: %v", ds.ID, signal.ID, err)
@@ -849,6 +909,9 @@ func (p *HorizonMonitorPipeline) ProcessFeedEvents(ctx context.Context, tenantID
 		techTopics := detectTechTopicsFromText(strings.Join([]string{event.Title, event.Summary}, " "))
 		if err := p.upsertNewsClassificationFact(ctx, tenantID, ds.ID, event, classification, techTopics); err != nil {
 			p.logf("horizon monitor pipeline: failed to upsert news classification source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
+		}
+		if err := p.applyAffectedZoneRecoveryObservation(ctx, ds.ID, event); err != nil {
+			p.logf("horizon monitor pipeline: failed to apply affected zone recovery source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
 		}
 		for _, topic := range techTopics {
 			topic = strings.TrimSpace(topic)
@@ -874,13 +937,15 @@ func (p *HorizonMonitorPipeline) ProcessFeedEvents(ctx context.Context, tenantID
 		}, " "))
 		nonEventFiltered := zoneText != "" && isLikelyNonEventText(zoneText)
 		var zoneCandidate *affectedZoneCandidate
-		if articleAssessment == nil || articleAssessment.ShouldCreateZone || articleAssessment.ShouldWarmExisting {
+		if shouldForceConcreteIncidentHandling(event, classification, articleAssessment) || articleAssessment == nil || articleAssessment.ShouldCreateZone || articleAssessment.ShouldWarmExisting {
 			zoneCandidate = p.inferAffectedZoneCandidate(ctx, event, classification)
 		}
 		qualityCounters.observe(classification, zoneCandidate, nonEventFiltered)
-		if err := p.upsertAffectedZoneFragmentCandidate(ctx, tenantID, ds.ID, event, classification, zoneCandidate); err != nil {
+		zoneFragment, err := p.upsertAffectedZoneFragmentCandidate(ctx, tenantID, ds.ID, event, classification, zoneCandidate)
+		if err != nil {
 			p.logf("horizon monitor pipeline: failed to upsert affected zone source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
 		}
+		p.maybeCreateStrategicGapRecommendation(ctx, tenantID, "", "", zoneFragment, event, signalAudit)
 		newObservations = append(newObservations, horizonMonitorSignalObservation{
 			CountryCode:      event.CountryCode,
 			CountryName:      event.CountryName,
@@ -963,6 +1028,18 @@ func envDurationOrDefault(name string, fallback time.Duration) time.Duration {
 		return d
 	}
 	return fallback
+}
+
+func envIntOrDefault(name string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v <= 0 {
+		return fallback
+	}
+	return v
 }
 
 func horizonMonitorLineage(
@@ -1123,13 +1200,13 @@ func horizonMonitorEscalationLevelFromSeverity(severity string) string {
 func (p *HorizonMonitorPipeline) buildEventFromDocument(sourceID, feedType, category, signalHint, feedURL string, doc prov.NormalizedDocument) *horizonMonitorFeedEvent {
 	now := time.Now().UTC()
 	e := &horizonMonitorFeedEvent{
-		SourceID:   strings.TrimSpace(sourceID),
-		FeedType:   strings.TrimSpace(feedType),
-		Category:   strings.TrimSpace(category),
-		ExternalID: firstNonEmptyString(strings.TrimSpace(doc.ExternalID), shortHash(feedURL+"|"+doc.Title+"|"+doc.FullText)),
-		Title:      firstNonEmptyString(strings.TrimSpace(doc.Title), "Horizon Monitor event"),
-		Summary:    strings.TrimSpace(doc.FullText),
-		URL:        firstNonEmptyString(strings.TrimSpace(doc.URL), strings.TrimSpace(feedURL)),
+		SourceID:   sanitizeHorizonMonitorText(sourceID),
+		FeedType:   sanitizeHorizonMonitorText(feedType),
+		Category:   sanitizeHorizonMonitorText(category),
+		ExternalID: sanitizeHorizonMonitorText(firstNonEmptyString(strings.TrimSpace(doc.ExternalID), shortHash(feedURL+"|"+doc.Title+"|"+doc.FullText))),
+		Title:      sanitizeHorizonMonitorText(firstNonEmptyString(strings.TrimSpace(doc.Title), "Horizon Monitor event")),
+		Summary:    sanitizeHorizonMonitorText(doc.FullText),
+		URL:        sanitizeHorizonMonitorText(firstNonEmptyString(strings.TrimSpace(doc.URL), strings.TrimSpace(feedURL))),
 		OccurredAt: now,
 		Severity:   "medium",
 		Confidence: 0.70,
@@ -1147,17 +1224,17 @@ func (p *HorizonMonitorPipeline) buildEventFromDocument(sourceID, feedType, cate
 		asString(raw["headline"]),
 		asString(raw["summary"]),
 	); title != "" {
-		e.Title = title
+		e.Title = sanitizeHorizonMonitorText(title)
 	}
 	if summary := firstNonEmptyString(
 		asString(raw["description"]),
 		asString(raw["summary"]),
 		asString(raw["text"]),
 	); summary != "" {
-		e.Summary = summary
+		e.Summary = sanitizeHorizonMonitorText(summary)
 	}
 	if url := firstNonEmptyString(asString(raw["url"]), asString(raw["link"]), asString(raw["sourceUrl"])); url != "" {
-		e.URL = url
+		e.URL = sanitizeHorizonMonitorText(url)
 	}
 	if t := parseAnyTime(
 		raw["publishedAt"],
@@ -1192,7 +1269,7 @@ func (p *HorizonMonitorPipeline) buildEventFromDocument(sourceID, feedType, cate
 	}
 	e.CountryCode = countryCode
 	if countryCode != "" {
-		e.CountryName = firstNonEmptyString(asString(raw["country"]), countryNameFromCode(countryCode), countryCode)
+		e.CountryName = sanitizeHorizonMonitorText(firstNonEmptyString(asString(raw["country"]), countryNameFromCode(countryCode), countryCode))
 		e.LocationPath = locationPathFromCountryCode(countryCode)
 	}
 
@@ -1341,14 +1418,24 @@ func (p *HorizonMonitorPipeline) ruleArticleAssessment(doc discoverynlp.Document
 	retrospectiveLike := looksLikeRetrospectiveConflictNarrativeText(text)
 	legalCommercialLike := looksLikeLegalCommercialDisputeText(text)
 	sportsPoliticalLike := looksLikeSportsPoliticalHumanInterestText(text)
-	if semanticSuppressed || profileSuppressed || exerciseLike || forcePostureLike || drugInterdictionLike || administrativeCommentaryLike || liveBlogLike || civilIncidentLike || cyberCampaignLike || multiCountryRoundup || retrospectiveLike || legalCommercialLike || sportsPoliticalLike {
-		isAnalysis = isAnalysis || semanticSuppressed || exerciseLike || forcePostureLike || administrativeCommentaryLike || liveBlogLike || multiCountryRoundup || retrospectiveLike || legalCommercialLike || sportsPoliticalLike
+	explainerQuestionLike := looksLikeExplainerQuestionText(text)
+	concreteIncident := looksLikeConcreteOperationalIncident(text, cls)
+	if semanticSuppressed || profileSuppressed || exerciseLike || forcePostureLike || drugInterdictionLike || administrativeCommentaryLike || liveBlogLike || civilIncidentLike || cyberCampaignLike || multiCountryRoundup || retrospectiveLike || legalCommercialLike || sportsPoliticalLike || explainerQuestionLike {
+		isAnalysis = isAnalysis || semanticSuppressed || exerciseLike || forcePostureLike || administrativeCommentaryLike || liveBlogLike || multiCountryRoundup || retrospectiveLike || legalCommercialLike || sportsPoliticalLike || explainerQuestionLike
 		isAdvisory = isAdvisory || drugInterdictionLike || cyberCampaignLike
 		isBroad = isBroad || multiCountryRoundup
 		isNoise = isNoise || civilIncidentLike
 	}
+	if concreteIncident {
+		isAnalysis = false
+		isAdvisory = false
+		isBroad = false
+		isNoise = false
+	}
 	shouldCreateZone := !isNoise && !isAnalysis && !isAdvisory && !isBroad
-	if warmOnly {
+	if concreteIncident {
+		shouldCreateZone = true
+	} else if warmOnly {
 		shouldCreateZone = true
 	}
 	isEvent := shouldCreateZone || warmOnly
@@ -1372,6 +1459,11 @@ func (p *HorizonMonitorPipeline) ruleArticleAssessment(doc discoverynlp.Document
 		eventClass = "broad_scope"
 		rejectionReason = "broad_scope_without_incident"
 		reasons = append(reasons, "broad_scope_without_incident")
+	}
+	if concreteIncident {
+		eventClass = "real_event"
+		rejectionReason = ""
+		reasons = append(reasons, "concrete_incident_override")
 	}
 	if administrativeCommentaryLike {
 		reasons = append(reasons, "administrative_commentary")
@@ -1406,6 +1498,9 @@ func (p *HorizonMonitorPipeline) ruleArticleAssessment(doc discoverynlp.Document
 	if sportsPoliticalLike {
 		reasons = append(reasons, "sports_or_human_interest_politics")
 	}
+	if explainerQuestionLike {
+		reasons = append(reasons, "explainer_question")
+	}
 	if warmOnly {
 		reasons = append(reasons, "warm_conflict_posture")
 	}
@@ -1438,46 +1533,60 @@ func (p *HorizonMonitorPipeline) ruleArticleAssessment(doc discoverynlp.Document
 	}
 }
 
-func (p *HorizonMonitorPipeline) assessArticleWithNLP(doc discoverynlp.DocumentInput, cls horizonMonitorNewsClassification) *discoverynlp.ArticleAssessment {
+func (p *HorizonMonitorPipeline) assessArticleWithNLP(ctx context.Context, doc discoverynlp.DocumentInput, cls horizonMonitorNewsClassification, llmBudget *int) (*discoverynlp.ArticleAssessment, *horizonMonitorLLMArticleAdjudication) {
 	rule := p.ruleArticleAssessment(doc, cls)
+	var llmAdj *horizonMonitorLLMArticleAdjudication
+	base := rule
 	if p == nil || p.eventGate == nil || p.eventGateMode == discoverynlp.ModeRules {
-		return rule
-	}
-	model, err := p.eventGate.Assess(doc)
-	if err != nil || model == nil {
-		p.logf("horizon monitor pipeline: event gate fallback host=%s title=%q err=%v", doc.SourceHost, trimForLog(doc.Title, 80), err)
-		return rule
-	}
-	switch p.eventGateMode {
-	case discoverynlp.ModeShadow:
-		if rule.EventClass != model.EventClass || rule.ShouldCreateZone != model.ShouldCreateZone {
-			p.logf("horizon monitor pipeline: event gate shadow divergence host=%s rule=%s model=%s title=%q", doc.SourceHost, rule.EventClass, model.EventClass, trimForLog(doc.Title, 80))
+		base = rule
+	} else {
+		model, err := p.eventGate.Assess(doc)
+		if err != nil || model == nil {
+			p.logf("horizon monitor pipeline: event gate fallback host=%s title=%q err=%v", doc.SourceHost, trimForLog(doc.Title, 80), err)
+			base = rule
+		} else {
+			switch p.eventGateMode {
+			case discoverynlp.ModeShadow:
+				if rule.EventClass != model.EventClass || rule.ShouldCreateZone != model.ShouldCreateZone {
+					p.logf("horizon monitor pipeline: event gate shadow divergence host=%s rule=%s model=%s title=%q", doc.SourceHost, rule.EventClass, model.EventClass, trimForLog(doc.Title, 80))
+				}
+				base = rule
+			case discoverynlp.ModeModel:
+				base = normalizeArticleAssessment(model, rule)
+			case discoverynlp.ModeHybrid:
+				merged := mergeArticleAssessments(doc, rule, model)
+				if merged != nil && (rule.EventClass != model.EventClass ||
+					rule.ShouldCreateZone != merged.ShouldCreateZone ||
+					rule.ShouldWarmExisting != merged.ShouldWarmExisting ||
+					rule.ShouldOnlySignal != merged.ShouldOnlySignal) {
+					p.logf(
+						"horizon monitor pipeline: event gate hybrid host=%s rule=%s model=%s final=%s create=%t warm=%t signal=%t title=%q",
+						doc.SourceHost,
+						rule.EventClass,
+						model.EventClass,
+						merged.EventClass,
+						merged.ShouldCreateZone,
+						merged.ShouldWarmExisting,
+						merged.ShouldOnlySignal,
+						trimForLog(doc.Title, 96),
+					)
+				}
+				base = merged
+			default:
+				base = rule
+			}
 		}
-		return rule
-	case discoverynlp.ModeModel:
-		return normalizeArticleAssessment(model, rule)
-	case discoverynlp.ModeHybrid:
-		merged := mergeArticleAssessments(doc, rule, model)
-		if merged != nil && (rule.EventClass != model.EventClass ||
-			rule.ShouldCreateZone != merged.ShouldCreateZone ||
-			rule.ShouldWarmExisting != merged.ShouldWarmExisting ||
-			rule.ShouldOnlySignal != merged.ShouldOnlySignal) {
-			p.logf(
-				"horizon monitor pipeline: event gate hybrid host=%s rule=%s model=%s final=%s create=%t warm=%t signal=%t title=%q",
-				doc.SourceHost,
-				rule.EventClass,
-				model.EventClass,
-				merged.EventClass,
-				merged.ShouldCreateZone,
-				merged.ShouldWarmExisting,
-				merged.ShouldOnlySignal,
-				trimForLog(doc.Title, 96),
-			)
-		}
-		return merged
-	default:
-		return rule
 	}
+	if llmRemaining(llmBudget) > 0 {
+		if adjudication, ok := p.assessArticleWithLLM(ctx, doc, cls, base); ok && adjudication != nil {
+			llmAdj = adjudication
+			if merged := mergeArticleAssessmentWithLLM(doc, base, adjudication); merged != nil {
+				base = merged
+			}
+			decrementLLMBudget(llmBudget)
+		}
+	}
+	return base, llmAdj
 }
 
 func (p *HorizonMonitorPipeline) extractEntitiesWithNLP(doc discoverynlp.DocumentInput) *discoverynlp.EntityExtractionResult {
@@ -1494,7 +1603,304 @@ func (p *HorizonMonitorPipeline) extractEntitiesWithNLP(doc discoverynlp.Documen
 	return res
 }
 
-func (p *HorizonMonitorPipeline) applyNLPResultToEvent(event *horizonMonitorFeedEvent, assessment *discoverynlp.ArticleAssessment, entities *discoverynlp.EntityExtractionResult) {
+func llmRemaining(budget *int) int {
+	if budget == nil {
+		return 0
+	}
+	return *budget
+}
+
+func decrementLLMBudget(budget *int) {
+	if budget == nil {
+		return
+	}
+	if *budget > 0 {
+		*budget--
+	}
+}
+
+func (p *HorizonMonitorPipeline) assessArticleWithLLM(ctx context.Context, doc discoverynlp.DocumentInput, cls horizonMonitorNewsClassification, base *discoverynlp.ArticleAssessment) (*horizonMonitorLLMArticleAdjudication, bool) {
+	if p == nil || p.exec == nil || !p.enableLLMEventGate {
+		return nil, false
+	}
+	if !shouldEscalateArticleToLLM(doc, cls, base) {
+		return nil, false
+	}
+	prompt := strings.Builder{}
+	prompt.WriteString("You classify one news document for a geopolitical affected-zone pipeline.\n")
+	prompt.WriteString("Goal: distinguish real operational events from analysis/advisory/broad_scope/noise.\n")
+	prompt.WriteString("Concrete blackouts, cyber outages, transport shutdowns, strikes with operational stoppage, outbreaks, toxic spills, evacuations, port closures, rail closures, and direct physical disruptions are real events.\n")
+	prompt.WriteString("Pure explainers, live blogs, weekly roundups, forward-looking policy commentary, and abstract risk analysis are not real events.\n")
+	prompt.WriteString("Return strict JSON only.\n")
+	prompt.WriteString("\nDocument:\n")
+	prompt.WriteString("sourceHost: " + strings.TrimSpace(doc.SourceHost) + "\n")
+	prompt.WriteString("title: " + strings.TrimSpace(doc.Title) + "\n")
+	prompt.WriteString("summary: " + truncateString(strings.TrimSpace(doc.Summary), 800) + "\n")
+	prompt.WriteString("categoryHint: " + strings.TrimSpace(cls.Category) + "\n")
+	prompt.WriteString("levelHint: " + strings.TrimSpace(cls.Level) + "\n")
+	if base != nil {
+		prompt.WriteString("\nWeak label:\n")
+		prompt.WriteString(fmt.Sprintf("isEvent=%t eventClass=%s eventConfidence=%.2f shouldCreateZone=%t shouldWarmExisting=%t shouldOnlySignal=%t rejectionReason=%s\n",
+			base.IsEvent,
+			strings.TrimSpace(base.EventClass),
+			base.EventConfidence,
+			base.ShouldCreateZone,
+			base.ShouldWarmExisting,
+			base.ShouldOnlySignal,
+			strings.TrimSpace(base.RejectionReason),
+		))
+	}
+	prompt.WriteString("\nAllowed eventClass: real_event, analysis, advisory, broad_scope, noise\n")
+	prompt.WriteString("Allowed conditionType: military_conflict, infrastructure_disruption, cyber_disruption, political_tension, humanitarian_crisis, disease_outbreak, environmental_hazard, natural_disaster, earthquake_affected, flood_zone, wildfire_zone, none\n")
+	prompt.WriteString("Schema: {\"schemaVersion\": string, \"isEvent\": bool, \"eventClass\": string, \"eventConfidence\": number, \"shouldCreateZone\": bool, \"shouldWarmExisting\": bool, \"shouldOnlySignal\": bool, \"conditionType\": string, \"place\": string, \"countryCode\": string, \"geoConfidence\": number, \"reason\": string}\n")
+
+	verifier := ai.NewGenericVerifier(func(out horizonMonitorLLMArticleAdjudication) error {
+		switch strings.TrimSpace(out.EventClass) {
+		case "real_event", "analysis", "advisory", "broad_scope", "noise":
+		default:
+			return fmt.Errorf("invalid eventClass")
+		}
+		if out.EventConfidence < 0 || out.EventConfidence > 1 {
+			return fmt.Errorf("eventConfidence out of range")
+		}
+		if out.GeoConfidence < 0 || out.GeoConfidence > 1 {
+			return fmt.Errorf("geoConfidence out of range")
+		}
+		switch strings.TrimSpace(out.ConditionType) {
+		case "", "none", "military_conflict", "infrastructure_disruption", "cyber_disruption", "political_tension", "humanitarian_crisis", "disease_outbreak", "environmental_hazard", "natural_disaster", "earthquake_affected", "flood_zone", "wildfire_zone":
+		default:
+			return fmt.Errorf("invalid conditionType")
+		}
+		if cc := normalizeCountryCode(out.CountryCode); cc != "" && len(cc) != 2 {
+			return fmt.Errorf("invalid countryCode")
+		}
+		if strings.TrimSpace(out.SchemaVersion) == "" {
+			return fmt.Errorf("schemaVersion is required")
+		}
+		return nil
+	})
+	task := &ai.AITask{
+		TaskType:     ai.TaskTypeContextAnalysis,
+		InputContent: prompt.String(),
+		AIRequirements: ai.AIRequirements{
+			PreferredModel:           strings.TrimSpace(p.llmEventGateModel),
+			TextGenerationCapability: true,
+			MinCapabilityScore:       7,
+			MinContextWindow:         2500,
+			MaxOutputSize:            260,
+		},
+		Verifier: verifier,
+	}
+	parsed, usedModel, err := p.exec.ExecuteStructuredTaskWithModel(ctx, task)
+	if err != nil {
+		p.logf("horizon monitor pipeline: llm adjudication failed host=%s title=%q err=%v", doc.SourceHost, trimForLog(doc.Title, 90), err)
+		return nil, false
+	}
+	out, ok := parsed.(horizonMonitorLLMArticleAdjudication)
+	if !ok {
+		return nil, false
+	}
+	out.SchemaVersion = strings.TrimSpace(out.SchemaVersion)
+	out.EventClass = strings.TrimSpace(out.EventClass)
+	out.ConditionType = strings.TrimSpace(out.ConditionType)
+	out.CountryCode = normalizeCountryCode(out.CountryCode)
+	out.Place = strings.TrimSpace(out.Place)
+	out.Reason = strings.TrimSpace(out.Reason)
+	out.EventConfidence = wmClamp01(out.EventConfidence)
+	out.GeoConfidence = wmClamp01(out.GeoConfidence)
+	if usedModel != "" {
+		p.logf("horizon monitor pipeline: llm adjudication host=%s class=%s create=%t conf=%.2f model=%s title=%q", doc.SourceHost, out.EventClass, out.ShouldCreateZone, out.EventConfidence, usedModel, trimForLog(doc.Title, 96))
+	}
+	return &out, true
+}
+
+func shouldEscalateArticleToLLM(doc discoverynlp.DocumentInput, cls horizonMonitorNewsClassification, base *discoverynlp.ArticleAssessment) bool {
+	if base == nil {
+		return true
+	}
+	text := normalizeKeywordText(strings.Join([]string{
+		strings.TrimSpace(doc.Title),
+		strings.TrimSpace(doc.Summary),
+		strings.TrimSpace(cls.Category),
+		strings.TrimSpace(cls.Level),
+	}, " "))
+	docText := normalizeKeywordText(strings.Join([]string{
+		strings.TrimSpace(doc.Title),
+		strings.TrimSpace(doc.Summary),
+	}, " "))
+	if text == "" {
+		return false
+	}
+	if !base.IsEvent && base.AnalysisScore >= 0.90 && base.EventConfidence >= 0.85 {
+		return false
+	}
+	if hasAnyKeyword(text,
+		"blackout", "power outage", "grid outage", "telecom outage", "internet outage", "network outage",
+		"cyber attack", "cyberattack", "ransomware", "data center outage", "offline",
+		"chemical spill", "toxic spill", "toxic leak", "gas leak", "oil spill", "water shutdown", "contamination",
+		"dock strike", "dockworkers strike", "dock workers strike", "workers strike", "general strike", "walkout",
+		"cargo handling halted", "cargo handling suspended", "rail service suspended", "train service suspended",
+		"outbreak", "epidemic", "pandemic", "cholera", "measles", "mpox", "dengue", "health emergency",
+		"evacuation ordered", "evacuations ordered",
+	) {
+		return true
+	}
+	if looksLikeAmbiguousViolentIncidentText(docText) {
+		return true
+	}
+	if base.ShouldWarmExisting || base.ShouldOnlySignal {
+		return true
+	}
+	if base.EventConfidence < 0.82 {
+		return true
+	}
+	if base.ConcreteOutageScore >= 0.38 && !base.ShouldCreateZone {
+		return true
+	}
+	if strings.TrimSpace(base.EventClass) == "analysis" && hasAnyKeyword(text,
+		"port", "terminal", "grid", "telecom", "internet", "pipeline", "airport", "rail", "metro", "river", "spill",
+	) {
+		return true
+	}
+	return false
+}
+
+func looksLikeAmbiguousViolentIncidentText(text string) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	if !hasAnyKeyword(text,
+		"killed", "kill", "dead", "deaths", "injured", "wounded",
+		"fire", "blaze", "burned", "burnt", "explosion", "blast", "crash",
+		"bus", "airport", "school", "building", "train", "station",
+	) {
+		return false
+	}
+	if hasAnyKeyword(text,
+		"missile", "rocket", "drone", "airstrike", "strike", "shelling", "bombardment",
+		"military", "army", "navy", "air force", "airbase", "base", "troops", "embassy",
+		"warship", "fighter jet", "fighter", "hezbollah", "houthi", "houthis", "rebels", "militants",
+		"israel", "iran", "gaza", "baghdad", "hormuz", "bab el mandeb",
+	) {
+		return false
+	}
+	return true
+}
+
+func articleAssessmentFromLLM(adjudication *horizonMonitorLLMArticleAdjudication, fallback *discoverynlp.ArticleAssessment) *discoverynlp.ArticleAssessment {
+	if adjudication == nil {
+		return fallback
+	}
+	eventClass := strings.TrimSpace(adjudication.EventClass)
+	if eventClass == "" {
+		eventClass = "analysis"
+	}
+	out := &discoverynlp.ArticleAssessment{
+		IsEvent:            adjudication.IsEvent,
+		EventClass:         firstNonEmptyString(eventClass, "analysis"),
+		EventConfidence:    wmClamp01(adjudication.EventConfidence),
+		ShouldCreateZone:   adjudication.ShouldCreateZone,
+		ShouldWarmExisting: adjudication.ShouldWarmExisting,
+		ShouldOnlySignal:   adjudication.ShouldOnlySignal,
+		RejectionReason:    firstNonEmptyString(boolToRejectionReason(adjudication.IsEvent, adjudication.EventClass), ""),
+		Reasons:            []string{"llm:event_adjudication"},
+		Raw:                map[string]interface{}{"backend": "llm_event_adjudication", "schemaVersion": adjudication.SchemaVersion},
+	}
+	switch out.EventClass {
+	case "analysis":
+		out.AnalysisScore = math.Max(out.AnalysisScore, out.EventConfidence)
+	case "advisory":
+		out.AdvisoryScore = math.Max(out.AdvisoryScore, out.EventConfidence)
+	case "broad_scope":
+		out.BroadScopeScore = math.Max(out.BroadScopeScore, out.EventConfidence)
+	case "real_event":
+		out.ConcreteOutageScore = math.Max(out.ConcreteOutageScore, out.EventConfidence)
+	}
+	if fallback != nil {
+		out.AnalysisScore = math.Max(out.AnalysisScore, fallback.AnalysisScore)
+		out.AdvisoryScore = math.Max(out.AdvisoryScore, fallback.AdvisoryScore)
+		out.BroadScopeScore = math.Max(out.BroadScopeScore, fallback.BroadScopeScore)
+		out.ConcreteOutageScore = math.Max(out.ConcreteOutageScore, fallback.ConcreteOutageScore)
+	}
+	return out
+}
+
+func mergeArticleAssessmentWithLLM(doc discoverynlp.DocumentInput, base *discoverynlp.ArticleAssessment, adjudication *horizonMonitorLLMArticleAdjudication) *discoverynlp.ArticleAssessment {
+	if adjudication == nil {
+		return base
+	}
+	llm := articleAssessmentFromLLM(adjudication, base)
+	if base == nil {
+		return llm
+	}
+	out := *base
+	if !llm.IsEvent && llm.EventConfidence >= 0.84 {
+		out.IsEvent = false
+		out.ShouldCreateZone = false
+		out.ShouldWarmExisting = false
+		out.ShouldOnlySignal = false
+		out.EventClass = firstNonEmptyString(llm.EventClass, out.EventClass)
+		out.RejectionReason = firstNonEmptyString(llm.RejectionReason, out.RejectionReason)
+	}
+	if llm.IsEvent && llm.EventConfidence >= 0.88 && (base.EventConfidence < 0.90 || !base.ShouldCreateZone) {
+		out.IsEvent = true
+		out.EventClass = firstNonEmptyString(llm.EventClass, out.EventClass)
+		out.ShouldCreateZone = llm.ShouldCreateZone || out.ShouldCreateZone
+		out.ShouldWarmExisting = llm.ShouldWarmExisting || out.ShouldWarmExisting
+		out.ShouldOnlySignal = llm.ShouldOnlySignal || out.ShouldOnlySignal
+		out.RejectionReason = ""
+	}
+	out.EventConfidence = wmClamp01(math.Max(out.EventConfidence, llm.EventConfidence))
+	out.AnalysisScore = math.Max(out.AnalysisScore, llm.AnalysisScore)
+	out.AdvisoryScore = math.Max(out.AdvisoryScore, llm.AdvisoryScore)
+	out.BroadScopeScore = math.Max(out.BroadScopeScore, llm.BroadScopeScore)
+	out.ConcreteOutageScore = math.Max(out.ConcreteOutageScore, llm.ConcreteOutageScore)
+	out.Reasons = uniqueStrings(append(append([]string{}, out.Reasons...), llm.Reasons...))
+	if out.Raw == nil {
+		out.Raw = map[string]interface{}{}
+	}
+	out.Raw["llm"] = llm.Raw
+	out.Raw["llmReason"] = adjudication.Reason
+	out.Raw["llmGeoConfidence"] = adjudication.GeoConfidence
+	if base.Raw != nil {
+		out.Raw["base"] = base.Raw
+	}
+	if shouldLLMGeoHintsApply(adjudication) {
+		out.Raw["llmPlace"] = adjudication.Place
+		out.Raw["llmCountryCode"] = adjudication.CountryCode
+		out.Raw["llmConditionType"] = adjudication.ConditionType
+	}
+	return &out
+}
+
+func shouldLLMGeoHintsApply(adjudication *horizonMonitorLLMArticleAdjudication) bool {
+	return adjudication != nil &&
+		adjudication.IsEvent &&
+		adjudication.EventConfidence >= 0.86 &&
+		adjudication.GeoConfidence >= 0.82 &&
+		strings.TrimSpace(adjudication.Place) != ""
+}
+
+func boolToRejectionReason(isEvent bool, eventClass string) string {
+	if isEvent {
+		return ""
+	}
+	switch strings.TrimSpace(eventClass) {
+	case "analysis":
+		return "llm_analysis"
+	case "advisory":
+		return "llm_advisory"
+	case "broad_scope":
+		return "llm_broad_scope"
+	case "noise":
+		return "llm_noise"
+	default:
+		return "llm_non_event"
+	}
+}
+
+func (p *HorizonMonitorPipeline) applyNLPResultToEvent(event *horizonMonitorFeedEvent, assessment *discoverynlp.ArticleAssessment, entities *discoverynlp.EntityExtractionResult, llmAdj *horizonMonitorLLMArticleAdjudication) {
 	if event == nil {
 		return
 	}
@@ -1516,6 +1922,22 @@ func (p *HorizonMonitorPipeline) applyNLPResultToEvent(event *horizonMonitorFeed
 			"rejectionReason":     assessment.RejectionReason,
 			"reasons":             assessment.Reasons,
 			"raw":                 assessment.Raw,
+		}
+	}
+	if llmAdj != nil {
+		event.Raw["llmArticleAdjudication"] = map[string]interface{}{
+			"schemaVersion":      llmAdj.SchemaVersion,
+			"isEvent":            llmAdj.IsEvent,
+			"eventClass":         llmAdj.EventClass,
+			"eventConfidence":    llmAdj.EventConfidence,
+			"shouldCreateZone":   llmAdj.ShouldCreateZone,
+			"shouldWarmExisting": llmAdj.ShouldWarmExisting,
+			"shouldOnlySignal":   llmAdj.ShouldOnlySignal,
+			"conditionType":      llmAdj.ConditionType,
+			"place":              llmAdj.Place,
+			"countryCode":        llmAdj.CountryCode,
+			"geoConfidence":      llmAdj.GeoConfidence,
+			"reason":             llmAdj.Reason,
 		}
 	}
 	if entities != nil && len(entities.Entities) > 0 {
@@ -1752,6 +2174,7 @@ func (p *HorizonMonitorPipeline) buildSignalDescriptor(eventFact *coremodels.Ont
 	if !ok {
 		return nil
 	}
+	blueprint = refineSignalBlueprintForEvent(blueprint, e)
 	amplitude := amplitudeFromSeverity(e.Severity)
 	locationPath := ""
 	if eventFact.LocationPath != nil {
@@ -1790,6 +2213,233 @@ func (p *HorizonMonitorPipeline) buildSignalDescriptor(eventFact *coremodels.Ont
 	return s
 }
 
+func sanitizeHorizonMonitorText(s string) string {
+	return strings.ToValidUTF8(strings.TrimSpace(s), "")
+}
+
+func refineSignalBlueprintForEvent(blueprint horizonMonitorSignalBlueprint, e *horizonMonitorFeedEvent) horizonMonitorSignalBlueprint {
+	if e == nil {
+		return blueprint
+	}
+	text := normalizeKeywordText(strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary), strings.TrimSpace(e.Category)}, " "))
+	if looksLikeEnergySupplyShock(text) {
+		blueprint.Axis = horizonmodels.AxisPhysicalFlowSupply
+		blueprint.Mechanism = "energy_supply_disruption"
+		blueprint.Sphere = uniqueStrings(append(append([]string{}, blueprint.Sphere...), "/sphere/logistics", "/sphere/energy"))
+		return blueprint
+	}
+	if strings.TrimSpace(blueprint.SignalType) == "risk:maritime_hazard" &&
+		hasAnyKeyword(text,
+			"gps jamming", "jammed navigation", "shipping disruption", "closed to shipping", "port closure", "canal blockage",
+			"strait of hormuz", "suez canal", "red sea", "bab el mandeb", "bab al mandab",
+		) {
+		blueprint.Axis = horizonmodels.AxisLogisticsLatency
+		blueprint.Mechanism = "route_disruption"
+		blueprint.Sphere = uniqueStrings(append(append([]string{}, blueprint.Sphere...), "/sphere/logistics"))
+	}
+	return blueprint
+}
+
+func looksLikeEnergySupplyShock(text string) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	if !hasDirectDisruptionTrigger(text) && !hasAnyKeyword(text, "supply disruption", "supply shock", "export halt", "loading operations", "oil export", "terminal fire") {
+		return false
+	}
+	return hasAnyKeyword(text,
+		"oil", "crude", "lng", "natural gas", "petrochem", "refinery", "oil export", "energy",
+		"kharg island", "fujairah", "hormuz", "strait of hormuz", "tanker", "loading operations", "terminal",
+	)
+}
+
+func extractKnownMaritimeChokepointFromText(text string) string {
+	text = normalizePhrase(text)
+	if text == "" {
+		return ""
+	}
+	for _, candidate := range []string{
+		"bab el mandeb",
+		"bab-el-mandeb",
+		"bab al mandab",
+		"strait of hormuz",
+		"hormuz",
+		"suez canal",
+		"taiwan strait",
+		"malacca strait",
+		"panama canal",
+		"strait of gibraltar",
+		"english channel",
+		"red sea",
+		"southern red sea",
+	} {
+		if strings.Contains(text, normalizePhrase(candidate)) {
+			switch normalizePhrase(candidate) {
+			case "bab el mandeb", "bab-el-mandeb", "bab al mandab":
+				return "Bab el-Mandeb"
+			case "hormuz", "strait of hormuz":
+				return "Strait of Hormuz"
+			case "red sea", "southern red sea":
+				return "Red Sea"
+			default:
+				return strings.TrimSpace(candidate)
+			}
+		}
+	}
+	return ""
+}
+
+func looksLikeCredibleChokepointThreat(text string, cls horizonMonitorNewsClassification) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	if extractKnownMaritimeChokepointFromText(text) == "" {
+		return false
+	}
+	if hasAnyKeyword(text,
+		"why ", "how ", "at a glance", "by the numbers", "what happens if", "what comes next",
+		"as it happened", "live blog", "live updates", "opinion", "analysis", "explainer",
+	) && !hasAnyKeyword(text, "will remain closed", "block shipping", "closed to shipping", "threaten shipping", "maritime attacks") {
+		return false
+	}
+	if looksLikeExerciseWithoutIncidentText(text) ||
+		looksLikeAdministrativeCommentaryText(text) ||
+		looksLikeForcePostureDeploymentText(text, cls) ||
+		looksLikeChokepointSecurityMissionWithoutOperationalDisruption(text) ||
+		looksLikeLiveBlogPoliticalCommentaryText(text) ||
+		looksLikeRetrospectiveConflictNarrativeText(text) {
+		return false
+	}
+	if hasAnyKeyword(text,
+		"block shipping", "threaten shipping", "threat to shipping", "warned shipping", "warning to shipping",
+		"closed to shipping", "will remain closed", "close the strait", "close the gulf", "closure threat",
+		"blockade", "maritime attacks", "attack vessels", "attack ships", "target vessels", "target shipping",
+		"anti ship", "anti-ship", "sea lane threat", "shipping lane threat", "escalates attacks on infrastructure and transport",
+	) {
+		return true
+	}
+	if hasAnyKeyword(text, "houthi", "houthis", "rebels", "militants", "iran", "irgc", "hezbollah") &&
+		hasAnyKeyword(text, "shipping", "tanker", "vessel", "maritime", "strait", "sea lane", "chokepoint") &&
+		hasAnyKeyword(text, "threat", "warn", "closure", "closed", "block", "attack") {
+		return true
+	}
+	return false
+}
+
+func looksLikeConcreteOperationalIncident(text string, cls horizonMonitorNewsClassification) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	if !hasDirectDisruptionTrigger(text) && !hasAnyKeyword(text,
+		"rocket fire", "drone attack", "under fire", "projectile hit", "projectile fell",
+		"operations halted", "operations stopped", "operations suspended", "loading operations",
+		"gps jamming", "jammed navigation", "warship hit", "tanker hit", "terminal fire",
+		"strike", "strikes", "was hit", "were hit", "fire at",
+	) {
+		return false
+	}
+	if hasAnyKeyword(text,
+		"why did", "why has", "why have", "how long could", "what happens if", "what comes next",
+		"what happened in", "at a glance", "by the numbers", "lessons from", "legacy of",
+		"as it happened", "live blog", "live updates", "latest updates", "counterfactual",
+	) {
+		return false
+	}
+	if looksLikeExerciseWithoutIncidentText(text) ||
+		looksLikeForcePostureDeploymentText(text, cls) ||
+		looksLikeChokepointSecurityMissionWithoutOperationalDisruption(text) ||
+		looksLikeAdministrativeCommentaryText(text) ||
+		looksLikeLegalCommercialDisputeText(text) ||
+		looksLikeSportsPoliticalHumanInterestText(text) ||
+		looksLikeCivilIncidentWithoutMilitaryContext(text) ||
+		looksLikeDrugInterdictionText(text) ||
+		looksLikeLiveBlogPoliticalCommentaryText(text) ||
+		looksLikeRetrospectiveConflictNarrativeText(text) ||
+		looksLikeOffshoreShippingIncidentAttributedElsewhere(text) {
+		return false
+	}
+	category := strings.ToLower(strings.TrimSpace(cls.Category))
+	if category == "military" || category == "conflict" || category == "infrastructure" || category == "terrorism" {
+		return true
+	}
+	return hasAnyKeyword(text,
+		"port", "terminal", "shipping", "tanker", "strait", "canal", "refinery", "depot",
+		"airport", "airbase", "embassy", "power plant", "substation", "pipeline", "grid",
+		"loading operations", "navigation", "oil export", "oil facility", "island",
+		"facility", "infrastructure", "energy infrastructure", "industrial city", "industrial complex",
+		"plant", "complex", "lng", "natural gas", "gas", "helium", "processing complex",
+	)
+}
+
+func looksLikeConflictDrivenOperationalDisruption(text string) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	if hasAnyKeyword(text,
+		"labor strike", "workers strike", "dock strike", "dockworkers strike", "dock workers strike",
+		"walkout", "union action", "industrial action",
+	) && !hasAnyKeyword(text,
+		"missile strike", "drone strike", "airstrike", "rocket strike", "naval strike",
+	) {
+		return false
+	}
+	if !hasAnyKeyword(text,
+		"drone attack", "drone strike", "missile strike", "missile attack", "rocket attack", "rocket fire",
+		"projectile hit", "projectile fell", "airstrike", "under fire", "was hit", "were hit",
+		"attack", "attacked", "embassy hit", "warship hit", "tanker hit", "drones strike",
+	) {
+		return false
+	}
+	return hasAnyKeyword(text,
+		"port", "terminal", "shipping", "tanker", "strait", "canal", "loading operations",
+		"gps jamming", "refinery", "depot", "pipeline", "airport", "airbase", "oil export",
+		"oil facility", "embassy", "grid", "power plant", "substation", "island",
+	)
+}
+
+func looksLikeLaborStrikeOperationalDisruption(text string) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	if !hasAnyKeyword(text,
+		"labor strike", "workers strike", "dock strike", "dockworkers strike", "dock workers strike",
+		"walkout", "union action", "industrial action",
+	) {
+		return false
+	}
+	return hasAnyKeyword(text,
+		"port", "terminal", "shipping", "container", "cargo", "operations", "shutdown", "shuts down",
+		"closure", "closed", "freight", "rail-linked", "maritime",
+	)
+}
+
+func shouldForceConcreteIncidentHandling(e *horizonMonitorFeedEvent, cls horizonMonitorNewsClassification, assessment *discoverynlp.ArticleAssessment) bool {
+	if e == nil {
+		return false
+	}
+	text := normalizeKeywordText(strings.Join([]string{
+		strings.TrimSpace(e.Title),
+		strings.TrimSpace(e.Summary),
+		strings.TrimSpace(cls.Category),
+		strings.TrimSpace(cls.Level),
+	}, " "))
+	if !looksLikeConcreteOperationalIncident(text, cls) {
+		return false
+	}
+	if assessment == nil {
+		return true
+	}
+	if assessment.ShouldCreateZone || assessment.ShouldWarmExisting || assessment.ShouldOnlySignal {
+		return true
+	}
+	return assessment.ConcreteOutageScore >= 0.72 || !assessment.IsEvent
+}
+
 func shouldSuppressHeuristicSignalPropagation(e *horizonMonitorFeedEvent) bool {
 	if e == nil {
 		return false
@@ -1798,6 +2448,9 @@ func shouldSuppressHeuristicSignalPropagation(e *horizonMonitorFeedEvent) bool {
 		return false
 	}
 	text := normalizeKeywordText(strings.Join([]string{e.Title, e.Summary}, " "))
+	if looksLikeConcreteOperationalIncident(text, horizonMonitorNewsClassification{}) {
+		return false
+	}
 	if (isLikelyStrategicPlanningText(text) || isLikelyRoundupCommentaryText(text)) && !hasDirectDisruptionTrigger(text) {
 		return true
 	}
@@ -1832,9 +2485,63 @@ func isLikelyStrategicPlanningText(text string) bool {
 func hasDirectDisruptionTrigger(text string) bool {
 	return hasAnyKeyword(text,
 		"attack", "attacked", "outage", "explosion", "earthquake", "flood", "wildfire",
-		"missile strike", "drone strike", "airstrike", "rocket attack", "shelling",
+		"missile strike", "drone strike", "drone attack", "airstrike", "rocket attack", "rocket fire", "shelling",
 		"closed airport", "airport closure", "shipping disruption", "port closure", "shutdown",
+		"offline", "remains offline", "still offline",
+		"operations halted", "operations stopped", "operations suspended", "loading operations",
+		"gps jamming", "projectile hit", "projectile fell", "under fire", "damaged", "warship hit", "tanker hit",
+		"strike", "strikes", "was hit", "were hit", "fire at",
 	)
+}
+
+func looksLikeAffectedZoneRecoveryText(text string) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	if !hasAnyKeyword(text,
+		"operations resumed", "operations resume", "loading resumed", "loadings resumed", "exports resumed",
+		"production resumed", "shipments resumed", "reopened", "reopen", "restored", "back online",
+		"restart", "restarted", "resumes service", "service restored", "terminal reopens", "port reopens",
+		"throughput restored", "supply resumed",
+	) {
+		return false
+	}
+	if hasAnyKeyword(text,
+		"preparing to reopen", "plan to reopen", "mission to reopen", "could reopen", "may reopen",
+		"hopes to reopen", "aims to reopen", "talks to reopen", "security mission", "defensive mission",
+	) {
+		return false
+	}
+	return hasAnyKeyword(text,
+		"port", "terminal", "shipping", "tanker", "strait", "canal", "loading operations", "exports",
+		"lng", "gas", "oil", "refinery", "pipeline", "plant", "grid", "airport", "airbase", "service",
+	)
+}
+
+func looksLikeStickyOperationalOutage(text, conditionType string) bool {
+	text = normalizeKeywordText(text)
+	conditionType = strings.TrimSpace(conditionType)
+	if text == "" || conditionType == "" {
+		return false
+	}
+	if looksLikeAffectedZoneRecoveryText(text) {
+		return false
+	}
+	if looksLikeCredibleChokepointThreat(text, horizonMonitorNewsClassification{}) {
+		return true
+	}
+	if conditionType != "infrastructure_disruption" && conditionType != "military_conflict" {
+		return false
+	}
+	if hasDirectDisruptionTrigger(text) || looksLikeConflictDrivenOperationalDisruption(text) {
+		return hasAnyKeyword(text,
+			"port", "terminal", "shipping", "tanker", "strait", "canal", "loading operations",
+			"lng", "gas", "oil", "exports", "refinery", "pipeline", "plant", "grid", "airport", "airbase",
+			"operations halted", "operations stopped", "operations suspended", "closure", "closed to shipping",
+		)
+	}
+	return false
 }
 
 func hasCivilProtestSignal(text string) bool {
@@ -2260,12 +2967,12 @@ func (p *HorizonMonitorPipeline) upsertAffectedZoneFragmentCandidate(
 	e *horizonMonitorFeedEvent,
 	cls horizonMonitorNewsClassification,
 	candidate *affectedZoneCandidate,
-) error {
+) (*horizonmodels.HorizonFragment, error) {
 	if p == nil || p.fragmentsRepo == nil || e == nil {
-		return nil
+		return nil, nil
 	}
 	if candidate == nil {
-		return nil
+		return nil, nil
 	}
 	now := time.Now().UTC()
 	matchedAt := e.OccurredAt.UTC()
@@ -2275,7 +2982,7 @@ func (p *HorizonMonitorPipeline) upsertAffectedZoneFragmentCandidate(
 
 	existing, err := p.fragmentsRepo.GetByCanonicalPath(ctx, candidate.CanonicalPath)
 	if err != nil && !errors.Is(err, horizonrepo.ErrFragmentNotFound) {
-		return err
+		return nil, err
 	}
 	if existing == nil {
 		if matched := p.findDeterministicAffectedZoneMatch(ctx, candidate); matched != nil {
@@ -2287,9 +2994,12 @@ func (p *HorizonMonitorPipeline) upsertAffectedZoneFragmentCandidate(
 			existing = matched
 		}
 	}
+	if existing != nil && existing.CanonicalPath != candidate.CanonicalPath && shouldPreferSpecificAffectedZoneCreation(candidate, existing) {
+		existing = nil
+	}
 	if shouldSkipAffectedZoneAsStale(now, matchedAt, e, candidate) {
 		if existing == nil {
-			return nil
+			return nil, nil
 		}
 		st := parseAffectedZoneState(existing)
 		prevScore := st.Score
@@ -2298,7 +3008,7 @@ func (p *HorizonMonitorPipeline) upsertAffectedZoneFragmentCandidate(
 		prevMentions := st.TotalMentions
 		st.applyDecay(now)
 		if st.Score == prevScore && st.Hits1h == prevHits1h && st.Hits24h == prevHits24h && st.TotalMentions == prevMentions {
-			return nil
+			return existing, nil
 		}
 		applyAffectedZoneState(existing, st, now, st.LastMatchedAt, sourceID, e)
 		if existing.Qualifiers == nil {
@@ -2306,12 +3016,17 @@ func (p *HorizonMonitorPipeline) upsertAffectedZoneFragmentCandidate(
 		}
 		existing.Qualifiers["staleObservationIgnored"] = true
 		existing.Qualifiers["staleObservationAgeHours"] = math.Round(now.Sub(matchedAt).Hours())
-		return p.fragmentsRepo.Update(ctx, existing)
+		return existing, p.fragmentsRepo.Update(ctx, existing)
 	}
 	boost := affectedZoneBoost(e, cls, candidate)
 	if existing == nil {
-		if candidate.WarmOnly {
-			return nil
+		if candidate.WarmOnly && !looksLikeConcreteOperationalIncident(normalizeKeywordText(strings.Join([]string{
+			strings.TrimSpace(e.Title),
+			strings.TrimSpace(e.Summary),
+			strings.TrimSpace(cls.Category),
+			strings.TrimSpace(cls.Level),
+		}, " ")), cls) {
+			return nil, nil
 		}
 		incoming := buildIncomingAffectedZoneFragment(candidate, sourceID, e, cls, now, matchedAt, boost)
 		createdID, createErr := p.fragmentsRepo.Create(ctx, incoming)
@@ -2319,17 +3034,845 @@ func (p *HorizonMonitorPipeline) upsertAffectedZoneFragmentCandidate(
 			incoming.ID = createdID
 		}
 		if createErr == nil {
+			if linkErr := p.upsertAffectedZoneGraphLinks(ctx, incoming, candidate, sourceID, e); linkErr != nil {
+				return nil, linkErr
+			}
 			p.publishAffectedZoneUpsert(ctx, tenantID, incoming, sourceID, "created")
 		}
-		return createErr
+		return incoming, createErr
 	}
 	if !mergeAffectedZoneFragment(existing, candidate, sourceID, e, cls, now, matchedAt, boost) {
-		return nil
+		return existing, p.upsertAffectedZoneGraphLinks(ctx, existing, candidate, sourceID, e)
 	}
 	if err := p.fragmentsRepo.Update(ctx, existing); err != nil {
-		return err
+		return nil, err
+	}
+	if err := p.upsertAffectedZoneGraphLinks(ctx, existing, candidate, sourceID, e); err != nil {
+		return nil, err
 	}
 	p.publishAffectedZoneUpsert(ctx, tenantID, existing, sourceID, "updated")
+	return existing, nil
+}
+
+func (p *HorizonMonitorPipeline) upsertAffectedZoneGraphLinks(
+	ctx context.Context,
+	zone *horizonmodels.HorizonFragment,
+	candidate *affectedZoneCandidate,
+	sourceID string,
+	e *horizonMonitorFeedEvent,
+) error {
+	if p == nil || p.edgesRepo == nil || p.fragmentsRepo == nil || zone == nil || candidate == nil {
+		return nil
+	}
+	zoneID := strings.TrimSpace(zone.ID)
+	if zoneID == "" || zone.Type != horizonmodels.FragmentTypeAffectedZone {
+		return nil
+	}
+	affectsTargets, locatedInTarget := p.resolveAffectedZoneGraphTargets(ctx, candidate)
+	if coordTarget := bestAffectedZoneCoordinateTarget(locatedInTarget, affectsTargets); p.refreshAffectedZoneCoordinatesFromLinkedTarget(zone, candidate, coordTarget) {
+		if err := p.fragmentsRepo.Update(ctx, zone); err != nil {
+			return err
+		}
+	}
+	for _, target := range affectsTargets {
+		if err := p.upsertAffectedZoneEdge(ctx, zone, target, horizonmodels.DependencyTypeAffects, sourceID, e, candidate); err != nil {
+			return err
+		}
+	}
+	if locatedInTarget != nil {
+		if err := p.upsertAffectedZoneEdge(ctx, zone, locatedInTarget, horizonmodels.DependencyTypeLocatedIn, sourceID, e, candidate); err != nil {
+			return err
+		}
+	}
+	return p.reconcileAffectedZoneGraphEdges(ctx, zone, affectsTargets, locatedInTarget)
+}
+
+func (p *HorizonMonitorPipeline) reconcileAffectedZoneGraphEdges(
+	ctx context.Context,
+	zone *horizonmodels.HorizonFragment,
+	affectsTargets []*horizonmodels.HorizonFragment,
+	locatedInTarget *horizonmodels.HorizonFragment,
+) error {
+	if p == nil || p.edgesRepo == nil || zone == nil || strings.TrimSpace(zone.ID) == "" {
+		return nil
+	}
+	wantAffects := make(map[string]struct{}, len(affectsTargets))
+	for _, target := range affectsTargets {
+		if target == nil || strings.TrimSpace(target.ID) == "" {
+			continue
+		}
+		wantAffects[strings.TrimSpace(target.ID)] = struct{}{}
+	}
+	wantLocatedIn := make(map[string]struct{}, 1)
+	if locatedInTarget != nil && strings.TrimSpace(locatedInTarget.ID) != "" {
+		wantLocatedIn[strings.TrimSpace(locatedInTarget.ID)] = struct{}{}
+	}
+	edges, err := p.edgesRepo.ListBySource(ctx, "global", strings.TrimSpace(zone.ID), nil, 128)
+	if err != nil {
+		return err
+	}
+	for _, edge := range edges {
+		if edge == nil || strings.TrimSpace(edge.ID) == "" {
+			continue
+		}
+		switch edge.Type {
+		case horizonmodels.DependencyTypeAffects:
+			if !isManagedAffectedZoneGraphEdge(edge, zone) {
+				continue
+			}
+			if _, ok := wantAffects[strings.TrimSpace(edge.TargetFragmentID)]; ok {
+				continue
+			}
+			if err := p.edgesRepo.Delete(ctx, strings.TrimSpace(edge.ID)); err != nil {
+				return err
+			}
+		case horizonmodels.DependencyTypeLocatedIn:
+			if !isManagedAffectedZoneGraphEdge(edge, zone) {
+				continue
+			}
+			if _, ok := wantLocatedIn[strings.TrimSpace(edge.TargetFragmentID)]; ok {
+				continue
+			}
+			if err := p.edgesRepo.Delete(ctx, strings.TrimSpace(edge.ID)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func isManagedAffectedZoneGraphEdge(edge *horizonmodels.DependencyEdge, zone *horizonmodels.HorizonFragment) bool {
+	if edge == nil || zone == nil {
+		return false
+	}
+	if strings.TrimSpace(edge.SourceFragmentID) != strings.TrimSpace(zone.ID) {
+		return false
+	}
+	if strings.TrimSpace(edge.Provenance.Method) == "horizon_monitor_affected_zone" {
+		return true
+	}
+	return strings.TrimSpace(asString(edge.Qualifiers["source"])) == "horizon_monitor_affected_zone"
+}
+
+func bestAffectedZoneCoordinateTarget(locatedInTarget *horizonmodels.HorizonFragment, affectsTargets []*horizonmodels.HorizonFragment) *horizonmodels.HorizonFragment {
+	if locatedInTarget != nil {
+		if _, _, hasCoord := horizonrepo.ResolveFragmentCoordinates(locatedInTarget); hasCoord {
+			return locatedInTarget
+		}
+	}
+	for _, target := range affectsTargets {
+		if target == nil {
+			continue
+		}
+		if _, _, hasCoord := horizonrepo.ResolveFragmentCoordinates(target); hasCoord {
+			return target
+		}
+	}
+	return locatedInTarget
+}
+
+func (p *HorizonMonitorPipeline) refreshAffectedZoneCoordinatesFromLinkedTarget(
+	zone *horizonmodels.HorizonFragment,
+	candidate *affectedZoneCandidate,
+	target *horizonmodels.HorizonFragment,
+) bool {
+	if zone == nil || candidate == nil || target == nil {
+		return false
+	}
+	lat, lon, hasCoord := horizonrepo.ResolveFragmentCoordinates(target)
+	if !hasCoord || !horizonmodels.IsRealGeoCoordinate(lat, lon) {
+		return p.refreshAffectedZoneHomeLocation(zone, candidate)
+	}
+	currentLat, currentLon, hasCurrent := horizonrepo.ResolveFragmentCoordinates(zone)
+	replace := !hasCurrent
+	if !replace {
+		distanceKm := greatCircleDistanceKm(currentLat, currentLon, lat, lon)
+		if distanceKm > 250 &&
+			(strings.TrimSpace(candidate.GeoPrecision) == "precise" || strings.EqualFold(strings.TrimSpace(candidate.GeoToken), "sea")) {
+			replace = true
+		}
+	}
+	if !replace && strings.TrimSpace(qualifierStringValue(zone.Qualifiers, "geoPrecision")) == "approximate_country" {
+		replace = true
+	}
+	if !replace {
+		return p.refreshAffectedZoneHomeLocation(zone, candidate)
+	}
+	zone.Coordinates = &horizonmodels.Coordinates{Lat: lat, Lon: lon}
+	if zone.Qualifiers == nil {
+		zone.Qualifiers = map[string]interface{}{}
+	}
+	zone.Qualifiers["geoLinkedTargetPath"] = strings.TrimSpace(target.CanonicalPath)
+	zone.Qualifiers["geoResolutionMethod"] = "linked_target"
+	zone.Qualifiers["geoPrecision"] = firstNonEmptyString(strings.TrimSpace(candidate.GeoPrecision), "precise")
+	changed := p.refreshAffectedZoneHomeLocation(zone, candidate)
+	if zone.Metadata.LastUpdatedAt.Before(time.Now().UTC()) {
+		zone.Metadata.LastUpdatedAt = time.Now().UTC()
+	}
+	return true || changed
+}
+
+func (p *HorizonMonitorPipeline) refreshAffectedZoneHomeLocation(zone *horizonmodels.HorizonFragment, candidate *affectedZoneCandidate) bool {
+	if zone == nil || candidate == nil {
+		return false
+	}
+	if zone.HomeLocation == nil {
+		zone.HomeLocation = &horizonmodels.Location{}
+	}
+	changed := false
+	if strings.TrimSpace(zone.HomeLocation.Name) != strings.TrimSpace(candidate.Label) && strings.TrimSpace(candidate.Label) != "" {
+		zone.HomeLocation.Name = strings.TrimSpace(candidate.Label)
+		changed = true
+	}
+	if cc := strings.ToUpper(strings.TrimSpace(candidate.CountryCode)); len(cc) == 2 {
+		if zone.HomeLocation.ISO3166_1 == nil || strings.TrimSpace(*zone.HomeLocation.ISO3166_1) != cc {
+			zone.HomeLocation.ISO3166_1 = &cc
+			changed = true
+		}
+	}
+	if zone.Coordinates != nil && horizonmodels.IsRealGeoCoordinate(zone.Coordinates.Lat, zone.Coordinates.Lon) {
+		iso := formatISO6709(zone.Coordinates.Lat, zone.Coordinates.Lon)
+		if zone.HomeLocation.ISO6709 == nil || strings.TrimSpace(*zone.HomeLocation.ISO6709) != iso {
+			zone.HomeLocation.ISO6709 = &iso
+			changed = true
+		}
+	}
+	return changed
+}
+
+func (p *HorizonMonitorPipeline) resolveAffectedZoneGraphTargets(
+	ctx context.Context,
+	candidate *affectedZoneCandidate,
+) ([]*horizonmodels.HorizonFragment, *horizonmodels.HorizonFragment) {
+	if p == nil || p.fragmentsRepo == nil || candidate == nil {
+		return nil, nil
+	}
+	targets := make([]*horizonmodels.HorizonFragment, 0, 6)
+	seen := make(map[string]struct{}, 8)
+	var locatedIn *horizonmodels.HorizonFragment
+	addTarget := func(f *horizonmodels.HorizonFragment) {
+		if f == nil || strings.TrimSpace(f.ID) == "" {
+			return
+		}
+		if !isAffectedZoneBindableFragmentType(f.Type) {
+			return
+		}
+		key := strings.TrimSpace(f.ID)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		targets = append(targets, f)
+	}
+	setLocatedIn := func(f *horizonmodels.HorizonFragment) {
+		if f == nil || strings.TrimSpace(f.ID) == "" {
+			return
+		}
+		if !isGeoRegionLikeFragment(f) {
+			return
+		}
+		if locatedIn == nil || shouldPreferAffectedZoneGeoTarget(f, locatedIn) {
+			locatedIn = f
+		}
+	}
+	for _, path := range uniqueStrings(candidate.LinkedFragmentPaths) {
+		frag, err := p.fragmentsRepo.GetByCanonicalPath(ctx, strings.TrimSpace(path))
+		if err != nil || frag == nil {
+			continue
+		}
+		addTarget(frag)
+		if isGeoRegionLikeFragment(frag) {
+			setLocatedIn(frag)
+			continue
+		}
+		if geo := p.primaryGeoRelationTarget(ctx, frag); geo != nil {
+			setLocatedIn(geo)
+		}
+		for _, related := range p.relatedAffectedZoneFragments(ctx, frag) {
+			addTarget(related)
+		}
+	}
+	for _, frag := range p.directAffectedZoneLocationTargets(ctx, candidate) {
+		addTarget(frag)
+		if isGeoRegionLikeFragment(frag) {
+			setLocatedIn(frag)
+		} else if geo := p.primaryGeoRelationTarget(ctx, frag); geo != nil {
+			setLocatedIn(geo)
+		}
+		for _, related := range p.relatedAffectedZoneFragments(ctx, frag) {
+			addTarget(related)
+		}
+	}
+	if len(targets) == 0 {
+		for _, frag := range p.fallbackAffectedZoneLinkTargets(ctx, candidate) {
+			addTarget(frag)
+			if locatedIn == nil {
+				if isGeoRegionLikeFragment(frag) {
+					setLocatedIn(frag)
+				} else if geo := p.primaryGeoRelationTarget(ctx, frag); geo != nil {
+					setLocatedIn(geo)
+				}
+			}
+			for _, related := range p.relatedAffectedZoneFragments(ctx, frag) {
+				addTarget(related)
+			}
+		}
+	}
+	targets = filterRedundantAffectedZoneTargets(targets, locatedIn)
+	return targets, locatedIn
+}
+
+func filterRedundantAffectedZoneTargets(targets []*horizonmodels.HorizonFragment, locatedIn *horizonmodels.HorizonFragment) []*horizonmodels.HorizonFragment {
+	if len(targets) <= 1 {
+		return targets
+	}
+	out := make([]*horizonmodels.HorizonFragment, 0, len(targets))
+	for i, target := range targets {
+		if target == nil || strings.TrimSpace(target.ID) == "" {
+			continue
+		}
+		if isGeoRegionLikeFragment(target) {
+			targetPath := strings.TrimSpace(target.CanonicalPath)
+			if locatedIn != nil && isMoreSpecificAffectedZoneGeoPath(strings.TrimSpace(locatedIn.CanonicalPath), targetPath) {
+				continue
+			}
+			redundant := false
+			for j, other := range targets {
+				if i == j || other == nil || strings.TrimSpace(other.ID) == "" || !isGeoRegionLikeFragment(other) {
+					continue
+				}
+				if isMoreSpecificAffectedZoneGeoPath(strings.TrimSpace(other.CanonicalPath), targetPath) {
+					redundant = true
+					break
+				}
+			}
+			if redundant {
+				continue
+			}
+		}
+		out = append(out, target)
+	}
+	return out
+}
+
+func shouldPreferAffectedZoneGeoTarget(candidate, current *horizonmodels.HorizonFragment) bool {
+	if candidate == nil {
+		return false
+	}
+	if current == nil {
+		return true
+	}
+	candidatePath := strings.TrimSpace(candidate.CanonicalPath)
+	currentPath := strings.TrimSpace(current.CanonicalPath)
+	if isMoreSpecificAffectedZoneGeoPath(candidatePath, currentPath) {
+		return true
+	}
+	if isMoreSpecificAffectedZoneGeoPath(currentPath, candidatePath) {
+		return false
+	}
+	_, _, candidateHasCoord := horizonrepo.ResolveFragmentCoordinates(candidate)
+	_, _, currentHasCoord := horizonrepo.ResolveFragmentCoordinates(current)
+	return candidateHasCoord && !currentHasCoord
+}
+
+func isMoreSpecificAffectedZoneGeoPath(specific, broad string) bool {
+	specific = strings.TrimSpace(specific)
+	broad = strings.TrimSpace(broad)
+	if specific == "" || broad == "" || specific == broad {
+		return false
+	}
+	if !isGeoRegionLikeCanonicalPath(specific) || !isGeoRegionLikeCanonicalPath(broad) {
+		return false
+	}
+	return strings.HasPrefix(specific, broad+"/")
+}
+
+func isGeoRegionLikeCanonicalPath(path string) bool {
+	path = strings.TrimSpace(path)
+	return strings.HasPrefix(path, "/loc/") || strings.HasPrefix(path, "/geo/") || strings.HasPrefix(path, "/region/")
+}
+
+func (p *HorizonMonitorPipeline) fallbackAffectedZoneLinkTargets(
+	ctx context.Context,
+	candidate *affectedZoneCandidate,
+) []*horizonmodels.HorizonFragment {
+	if p == nil || p.fragmentsRepo == nil || candidate == nil {
+		return nil
+	}
+	out := make([]*horizonmodels.HorizonFragment, 0, 4)
+	seen := make(map[string]struct{}, 4)
+	add := func(f *horizonmodels.HorizonFragment) {
+		if f == nil || strings.TrimSpace(f.ID) == "" || !isAffectedZoneBindableFragmentType(f.Type) {
+			return
+		}
+		key := strings.TrimSpace(f.ID)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, f)
+	}
+	for _, direct := range p.directAffectedZoneLocationTargets(ctx, candidate) {
+		add(direct)
+	}
+	if p.vertexSearch == nil || !p.vertexSearch.IsConfigured() {
+		return out
+	}
+	query := strings.TrimSpace(strings.Join([]string{
+		strings.TrimSpace(candidate.Label),
+		strings.TrimSpace(candidate.CountryName),
+		strings.TrimSpace(candidate.ConditionType),
+	}, " "))
+	if query == "" {
+		return out
+	}
+	resp, err := p.vertexSearch.Search(ctx, &ai.SearchRequest{Query: query, PageSize: 8})
+	if err != nil || resp == nil {
+		return out
+	}
+	type scored struct {
+		frag  *horizonmodels.HorizonFragment
+		score float64
+	}
+	scoredResults := make([]scored, 0, len(resp.Results))
+	for _, result := range resp.Results {
+		score := result.RelevanceScore
+		if score == 0 && result.RankSignals != nil {
+			score = result.RankSignals.SemanticSimilarityScore
+		}
+		if score < 0.60 {
+			continue
+		}
+		fragID := extractFragmentIDFromGCSURI(result.Document.URI)
+		if fragID == "" {
+			fragID = strings.TrimSuffix(strings.TrimSpace(result.Document.ID), ".json")
+		}
+		if fragID == "" {
+			continue
+		}
+		frag, ferr := p.fragmentsRepo.Get(ctx, fragID)
+		if ferr != nil || frag == nil || !isAffectedZoneBindableFragmentType(frag.Type) {
+			continue
+		}
+		scoredResults = append(scoredResults, scored{frag: frag, score: affectedZoneFallbackTargetScore(candidate, frag, score)})
+	}
+	sort.Slice(scoredResults, func(i, j int) bool {
+		if scoredResults[i].score == scoredResults[j].score {
+			return strings.TrimSpace(scoredResults[i].frag.CanonicalPath) < strings.TrimSpace(scoredResults[j].frag.CanonicalPath)
+		}
+		return scoredResults[i].score > scoredResults[j].score
+	})
+	for _, item := range scoredResults {
+		if item.score < 0.82 {
+			continue
+		}
+		add(item.frag)
+		if len(out) >= 3 {
+			break
+		}
+	}
+	return out
+}
+
+func (p *HorizonMonitorPipeline) directAffectedZoneLocationTargets(
+	ctx context.Context,
+	candidate *affectedZoneCandidate,
+) []*horizonmodels.HorizonFragment {
+	if p == nil || p.fragmentsRepo == nil || candidate == nil {
+		return nil
+	}
+	_, _, slugPath, ok := parseZoneCanonicalPath(strings.TrimSpace(candidate.CanonicalPath))
+	if !ok || slugPath == "" {
+		return nil
+	}
+	directCandidates := []string{}
+	if strings.EqualFold(strings.TrimSpace(candidate.GeoToken), "sea") {
+		directCandidates = append(directCandidates,
+			"/loc/int/na/"+strings.TrimSpace(slugPath),
+			"/loc/int/"+strings.TrimSpace(slugPath),
+			"/fac/na/"+strings.TrimSpace(slugPath),
+		)
+	} else if cc := strings.ToLower(strings.TrimSpace(candidate.CountryCode)); len(cc) == 2 {
+		directCandidates = append(directCandidates,
+			"/loc/"+cc+"/na/"+strings.TrimSpace(slugPath),
+			"/geo/"+strings.TrimSpace(slugPath),
+		)
+	}
+	out := make([]*horizonmodels.HorizonFragment, 0, len(directCandidates))
+	seen := make(map[string]struct{}, len(directCandidates))
+	for _, path := range uniqueStrings(directCandidates) {
+		frag, err := p.fragmentsRepo.GetByCanonicalPath(ctx, path)
+		if err == nil && frag != nil && isAffectedZoneBindableFragmentType(frag.Type) {
+			if _, ok := seen[strings.TrimSpace(frag.ID)]; ok {
+				continue
+			}
+			seen[strings.TrimSpace(frag.ID)] = struct{}{}
+			out = append(out, frag)
+		}
+	}
+	return out
+}
+
+func affectedZoneFallbackTargetScore(candidate *affectedZoneCandidate, frag *horizonmodels.HorizonFragment, base float64) float64 {
+	if candidate == nil || frag == nil {
+		return 0
+	}
+	score := base
+	switch frag.Type {
+	case horizonmodels.FragmentTypeFacility:
+		score += 0.22
+	case horizonmodels.FragmentTypeDeposit:
+		score += 0.18
+	case horizonmodels.FragmentTypeGeoRegion:
+		score += 0.20
+	case horizonmodels.FragmentTypeOrganization:
+		score += 0.10
+	case horizonmodels.FragmentTypeProduct:
+		score += 0.14
+	case horizonmodels.FragmentTypeProgram:
+		score += 0.06
+	}
+	wantCountry := strings.ToUpper(strings.TrimSpace(candidate.CountryCode))
+	if cc := affectedZoneCountryFromFragment(frag); wantCountry != "" && cc != "" && strings.EqualFold(cc, wantCountry) {
+		score += 0.12
+	}
+	if strings.Contains(strings.TrimSpace(frag.CanonicalPath), "/na/") {
+		score -= 0.08
+	} else if frag.Type == horizonmodels.FragmentTypeFacility || frag.Type == horizonmodels.FragmentTypeOrganization {
+		score += 0.06
+	}
+	label := normalizePhrase(strings.TrimSpace(frag.Labels["en"]))
+	wantLabel := normalizePhrase(strings.TrimSpace(candidate.Label))
+	if wantLabel != "" && label != "" {
+		switch {
+		case label == wantLabel:
+			score += 0.12
+		case strings.Contains(label, wantLabel), strings.Contains(wantLabel, label):
+			score += 0.08
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(candidate.GeoToken), "sea") && strings.HasPrefix(strings.TrimSpace(frag.CanonicalPath), "/loc/int/") {
+		score += 0.16
+	}
+	return score
+}
+
+func greatCircleDistanceKm(lat1, lon1, lat2, lon2 float64) float64 {
+	const earthRadiusKm = 6371.0
+	toRadians := func(v float64) float64 { return v * math.Pi / 180.0 }
+	dLat := toRadians(lat2 - lat1)
+	dLon := toRadians(lon2 - lon1)
+	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
+		math.Cos(toRadians(lat1))*math.Cos(toRadians(lat2))*math.Sin(dLon/2)*math.Sin(dLon/2)
+	return 2 * earthRadiusKm * math.Asin(math.Sqrt(a))
+}
+
+func (p *HorizonMonitorPipeline) primaryGeoRelationTarget(
+	ctx context.Context,
+	frag *horizonmodels.HorizonFragment,
+) *horizonmodels.HorizonFragment {
+	if p == nil || p.edgesRepo == nil || p.fragmentsRepo == nil || frag == nil || strings.TrimSpace(frag.ID) == "" {
+		return nil
+	}
+	edgeTypes := []horizonmodels.DependencyType{
+		horizonmodels.DependencyTypeLocatedIn,
+		horizonmodels.DependencyTypeOperatesIn,
+	}
+	for _, edgeType := range edgeTypes {
+		edges, err := p.edgesRepo.ListBySource(ctx, "global", strings.TrimSpace(frag.ID), &edgeType, 16)
+		if err != nil {
+			continue
+		}
+		for _, edge := range edges {
+			if edge == nil || strings.TrimSpace(edge.TargetFragmentID) == "" {
+				continue
+			}
+			target, ferr := p.fragmentsRepo.Get(ctx, strings.TrimSpace(edge.TargetFragmentID))
+			if ferr == nil && isGeoRegionLikeFragment(target) {
+				return target
+			}
+		}
+	}
+	return nil
+}
+
+func (p *HorizonMonitorPipeline) relatedAffectedZoneFragments(
+	ctx context.Context,
+	frag *horizonmodels.HorizonFragment,
+) []*horizonmodels.HorizonFragment {
+	if p == nil || p.edgesRepo == nil || p.fragmentsRepo == nil || frag == nil || strings.TrimSpace(frag.ID) == "" {
+		return nil
+	}
+	out := make([]*horizonmodels.HorizonFragment, 0, 4)
+	seen := make(map[string]struct{}, 4)
+	add := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		target, err := p.fragmentsRepo.Get(ctx, id)
+		if err != nil || target == nil || strings.TrimSpace(target.ID) == "" {
+			return
+		}
+		if target.Type != horizonmodels.FragmentTypeFacility &&
+			target.Type != horizonmodels.FragmentTypeOrganization &&
+			target.Type != horizonmodels.FragmentTypeDeposit &&
+			target.Type != horizonmodels.FragmentTypeProduct &&
+			!isGeoRegionLikeFragment(target) {
+			return
+		}
+		out = append(out, target)
+	}
+	switch frag.Type {
+	case horizonmodels.FragmentTypeFacility, horizonmodels.FragmentTypeDeposit:
+		for _, edgeType := range []horizonmodels.DependencyType{
+			horizonmodels.DependencyTypeOwns,
+			horizonmodels.DependencyTypeManages,
+			horizonmodels.DependencyTypeControls,
+		} {
+			edges, err := p.edgesRepo.ListByTarget(ctx, "global", strings.TrimSpace(frag.ID), &edgeType, 16)
+			if err != nil {
+				continue
+			}
+			for _, edge := range edges {
+				if edge != nil {
+					add(edge.SourceFragmentID)
+				}
+			}
+		}
+		for _, edgeType := range []horizonmodels.DependencyType{horizonmodels.DependencyTypeProduces} {
+			edges, err := p.edgesRepo.ListBySource(ctx, "global", strings.TrimSpace(frag.ID), &edgeType, 24)
+			if err != nil {
+				continue
+			}
+			for _, edge := range edges {
+				if edge != nil {
+					add(edge.TargetFragmentID)
+				}
+			}
+		}
+	case horizonmodels.FragmentTypeOrganization:
+		for _, edgeType := range []horizonmodels.DependencyType{
+			horizonmodels.DependencyTypeOwns,
+			horizonmodels.DependencyTypeManages,
+			horizonmodels.DependencyTypeControls,
+			horizonmodels.DependencyTypeProduces,
+		} {
+			edges, err := p.edgesRepo.ListBySource(ctx, "global", strings.TrimSpace(frag.ID), &edgeType, 16)
+			if err != nil {
+				continue
+			}
+			for _, edge := range edges {
+				if edge != nil {
+					add(edge.TargetFragmentID)
+				}
+			}
+		}
+	case horizonmodels.FragmentTypeProduct:
+		for _, edgeType := range []horizonmodels.DependencyType{
+			horizonmodels.DependencyTypeProduces,
+			horizonmodels.DependencyTypeSuppliesTo,
+		} {
+			edges, err := p.edgesRepo.ListByTarget(ctx, "global", strings.TrimSpace(frag.ID), &edgeType, 24)
+			if err != nil {
+				continue
+			}
+			for _, edge := range edges {
+				if edge != nil {
+					add(edge.SourceFragmentID)
+				}
+			}
+		}
+	case horizonmodels.FragmentTypeGeoRegion:
+		for _, edgeType := range []horizonmodels.DependencyType{
+			horizonmodels.DependencyTypeLocatedIn,
+			horizonmodels.DependencyTypeOperatesIn,
+		} {
+			edges, err := p.edgesRepo.ListByTarget(ctx, "global", strings.TrimSpace(frag.ID), &edgeType, 24)
+			if err != nil {
+				continue
+			}
+			for _, edge := range edges {
+				if edge != nil {
+					add(edge.SourceFragmentID)
+				}
+			}
+		}
+	}
+	return out
+}
+
+func isGeoRegionLikeFragment(f *horizonmodels.HorizonFragment) bool {
+	if f == nil {
+		return false
+	}
+	if f.Type == horizonmodels.FragmentTypeGeoRegion {
+		return true
+	}
+	cp := strings.TrimSpace(f.CanonicalPath)
+	return strings.HasPrefix(cp, "/loc/") || strings.HasPrefix(cp, "/geo/") || strings.HasPrefix(cp, "/region/")
+}
+
+func isAffectedZoneBindableFragmentType(fragmentType horizonmodels.FragmentType) bool {
+	switch fragmentType {
+	case horizonmodels.FragmentTypeFacility,
+		horizonmodels.FragmentTypeOrganization,
+		horizonmodels.FragmentTypeDeposit,
+		horizonmodels.FragmentTypeGeoRegion,
+		horizonmodels.FragmentTypeProduct,
+		horizonmodels.FragmentTypeProgram:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *HorizonMonitorPipeline) upsertAffectedZoneEdge(
+	ctx context.Context,
+	zone *horizonmodels.HorizonFragment,
+	target *horizonmodels.HorizonFragment,
+	edgeType horizonmodels.DependencyType,
+	sourceID string,
+	e *horizonMonitorFeedEvent,
+	candidate *affectedZoneCandidate,
+) error {
+	if p == nil || p.edgesRepo == nil || zone == nil || target == nil || candidate == nil {
+		return nil
+	}
+	sourceFragmentID := strings.TrimSpace(zone.ID)
+	targetFragmentID := strings.TrimSpace(target.ID)
+	if sourceFragmentID == "" || targetFragmentID == "" || sourceFragmentID == targetFragmentID {
+		return nil
+	}
+	now := time.Now().UTC()
+	qualifiers := map[string]interface{}{
+		"source":            "horizon_monitor_affected_zone",
+		"zoneCanonicalPath": strings.TrimSpace(zone.CanonicalPath),
+		"conditionType":     strings.TrimSpace(candidate.ConditionType),
+		"geoPrecision":      strings.TrimSpace(candidate.GeoPrecision),
+	}
+	if e != nil {
+		if title := strings.TrimSpace(e.Title); title != "" {
+			qualifiers["sourceTitle"] = title
+		}
+		if url := strings.TrimSpace(e.URL); url != "" {
+			qualifiers["sourceUrl"] = url
+		}
+	}
+	properties := horizonmodels.EdgeProperties{
+		Criticality:   wmClamp01(math.Max(candidate.EventConfidence, candidate.GeoConfidence)),
+		Amplification: 1.0,
+	}
+	if edgeType == horizonmodels.DependencyTypeAffects && strings.TrimSpace(candidate.ConditionType) == "military_conflict" {
+		properties.Criticality = wmClamp01(math.Max(properties.Criticality, 0.82))
+	}
+	if edgeType == horizonmodels.DependencyTypeLocatedIn {
+		properties.Criticality = wmClamp01(math.Max(properties.Criticality, 0.58))
+	}
+	existing, err := p.edgesRepo.GetBySourceTargetAndType(ctx, "global", sourceFragmentID, targetFragmentID, edgeType)
+	if err == nil && existing != nil {
+		changed := false
+		if existing.Qualifiers == nil {
+			existing.Qualifiers = map[string]interface{}{}
+		}
+		for key, value := range qualifiers {
+			if fmt.Sprintf("%v", existing.Qualifiers[key]) != fmt.Sprintf("%v", value) {
+				existing.Qualifiers[key] = value
+				changed = true
+			}
+		}
+		if existing.Properties.Criticality < properties.Criticality {
+			existing.Properties.Criticality = properties.Criticality
+			changed = true
+		}
+		if existing.Properties.Amplification == 0 {
+			existing.Properties.Amplification = 1.0
+			changed = true
+		}
+		if existing.Metadata.LastUpdatedAt.Before(now) {
+			existing.Metadata.LastUpdatedAt = now
+			changed = true
+		}
+		if existing.Provenance.Method == "" {
+			existing.Provenance.Method = "horizon_monitor_affected_zone"
+			changed = true
+		}
+		mergedSourceIDs := uniqueStrings(append(existing.Provenance.SourceIDs, strings.TrimSpace(sourceID)))
+		if strings.Join(existing.Provenance.SourceIDs, "|") != strings.Join(mergedSourceIDs, "|") {
+			existing.Provenance.SourceIDs = mergedSourceIDs
+			changed = true
+		}
+		if changed {
+			return p.edgesRepo.Update(ctx, existing)
+		}
+		return nil
+	}
+	edge := &horizonmodels.DependencyEdge{
+		TenantID:         "global",
+		SourceFragmentID: sourceFragmentID,
+		TargetFragmentID: targetFragmentID,
+		Type:             edgeType,
+		Properties:       properties,
+		Qualifiers:       qualifiers,
+		Provenance: horizonmodels.Provenance{
+			Method:    "horizon_monitor_affected_zone",
+			SourceIDs: uniqueStrings([]string{strings.TrimSpace(sourceID)}),
+		},
+		Metadata: horizonmodels.EdgeMetadata{
+			CreatedAt:     now,
+			LastUpdatedAt: now,
+		},
+	}
+	_, createErr := p.edgesRepo.Create(ctx, edge)
+	return createErr
+}
+
+func (p *HorizonMonitorPipeline) applyAffectedZoneRecoveryObservation(
+	ctx context.Context,
+	sourceID string,
+	e *horizonMonitorFeedEvent,
+) error {
+	if p == nil || p.fragmentsRepo == nil || e == nil {
+		return nil
+	}
+	text := normalizeKeywordText(strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary)}, " "))
+	if !looksLikeAffectedZoneRecoveryText(text) {
+		return nil
+	}
+	place := inferZonePlaceName(e, text, "infrastructure_disruption")
+	geoToken, _, countryName := inferZoneGeo(e, place, text, "infrastructure_disruption")
+	place = normalizeAffectedZonePlace(place, countryName)
+	slug := canonicalPathSlug(place)
+	if slug == "" || slug == "na" {
+		return nil
+	}
+	candidates := []string{
+		"/zone/" + strings.TrimSpace(geoToken) + "/infrastructure_disruption/" + slug,
+		"/zone/" + strings.TrimSpace(geoToken) + "/military_conflict/" + slug,
+	}
+	now := time.Now().UTC()
+	for _, path := range uniqueStrings(candidates) {
+		frag, err := p.fragmentsRepo.GetByCanonicalPath(ctx, path)
+		if err != nil || frag == nil || frag.Type != horizonmodels.FragmentTypeAffectedZone {
+			continue
+		}
+		if !applyStickyRecoveryObservation(frag, e, now) {
+			continue
+		}
+		if frag.Metadata.LastUpdatedAt.Before(now) {
+			frag.Metadata.LastUpdatedAt = now
+		}
+		if frag.Metadata.LastVerifiedAt.Before(now) {
+			frag.Metadata.LastVerifiedAt = now
+		}
+		if err := p.fragmentsRepo.Update(ctx, frag); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -2401,6 +3944,7 @@ func selectSemanticAffectedZoneCanonicalPath(candidate *affectedZoneCandidate, r
 	wantCountry := strings.ToLower(strings.TrimSpace(candidate.CountryCode))
 	wantCondition := strings.ToLower(strings.TrimSpace(candidate.ConditionType))
 	wantLabel := normalizePhrase(strings.TrimSpace(candidate.Label))
+	wantChokepoint := affectedZoneMaritimeIdentityKey(candidate.Label, candidate.CanonicalPath)
 	bestPath := ""
 	bestScore := 0.0
 	for _, r := range results {
@@ -2430,6 +3974,9 @@ func selectSemanticAffectedZoneCanonicalPath(candidate *affectedZoneCandidate, r
 			}
 			score += 0.10
 		}
+		if wantChokepoint != "" && !affectedZoneSemanticMatchAllowsDifferentMaritimeIdentity(wantChokepoint, slug, cp) {
+			continue
+		}
 		if wantLabel != "" && slug != "" {
 			slugNorm := normalizePhrase(strings.ReplaceAll(slug, "-", " "))
 			if slugNorm == wantLabel {
@@ -2452,14 +3999,21 @@ func selectDeterministicAffectedZoneMatch(candidate *affectedZoneCandidate, frag
 	}
 	wantLabel := normalizePhrase(strings.TrimSpace(candidate.Label))
 	wantSubtype := normalizePhrase(strings.TrimSpace(candidate.ZoneSubType))
+	wantChokepoint := affectedZoneMaritimeIdentityKey(candidate.Label, candidate.CanonicalPath)
 	bestScore := 0.0
 	var best *horizonmodels.HorizonFragment
 	for _, frag := range fragments {
 		if frag == nil || frag.Type != horizonmodels.FragmentTypeAffectedZone {
 			continue
 		}
+		if strings.EqualFold(strings.TrimSpace(frag.Status), string(horizonmodels.FragmentStatusArchived)) {
+			continue
+		}
 		geo, condition, slugPath, ok := parseZoneCanonicalPath(strings.TrimSpace(frag.CanonicalPath))
 		if !ok || condition != strings.ToLower(strings.TrimSpace(candidate.ConditionType)) {
+			continue
+		}
+		if wantChokepoint != "" && !affectedZoneSemanticMatchAllowsDifferentMaritimeIdentity(wantChokepoint, slugPath, frag.CanonicalPath) {
 			continue
 		}
 		score := 0.25
@@ -2498,6 +4052,47 @@ func selectDeterministicAffectedZoneMatch(candidate *affectedZoneCandidate, frag
 		return nil
 	}
 	return best
+}
+
+func shouldPreferSpecificAffectedZoneCreation(candidate *affectedZoneCandidate, existing *horizonmodels.HorizonFragment) bool {
+	if candidate == nil || existing == nil {
+		return false
+	}
+	if strings.TrimSpace(existing.CanonicalPath) == strings.TrimSpace(candidate.CanonicalPath) {
+		return false
+	}
+	_, _, existingSlug, ok := parseZoneCanonicalPath(existing.CanonicalPath)
+	if !ok {
+		return false
+	}
+	existingPrecision := strings.TrimSpace(qualifierStringValue(existing.Qualifiers, "geoPrecision"))
+	candidatePrecise := candidate.GeoPrecision == "precise" || candidate.GeoPrecision == "entity_anchor"
+	existingCountrySlug := normalizePhrase(existingSlug) == normalizePhrase(candidate.CountryName) ||
+		normalizePhrase(existingSlug) == normalizePhrase(countryNameFromCode(candidate.CountryCode))
+	existingGenericOperationalSlug := isGenericOperationalZoneSlug(existingSlug)
+	if candidatePrecise && (existingPrecision == "approximate_country" || existingCountrySlug || existingGenericOperationalSlug) {
+		return true
+	}
+	st := parseAffectedZoneState(existing)
+	if !st.LastMatchedAt.IsZero() {
+		lastMatchedAt := st.LastMatchedAt.UTC()
+		if time.Since(lastMatchedAt) > 36*time.Hour &&
+			candidate.ResolutionConfidence >= 0.74 &&
+			candidate.GeoConfidence >= 0.66 &&
+			(existingPrecision == "approximate_country" || existingCountrySlug || existingGenericOperationalSlug) {
+			return true
+		}
+	}
+	return false
+}
+
+func isGenericOperationalZoneSlug(slug string) bool {
+	switch normalizePhrase(strings.ReplaceAll(strings.TrimSpace(slug), "-", " ")) {
+	case "port", "terminal", "airport", "airbase", "refinery", "plant", "field", "facility", "complex", "industrial city":
+		return true
+	default:
+		return false
+	}
 }
 
 func semanticZoneGeoScore(wantGeoToken, wantCountry, zoneGeo string) (bool, float64) {
@@ -2598,7 +4193,9 @@ func buildIncomingAffectedZoneFragment(
 	}
 	applyAffectedZoneState(incoming, state, now, matchedAt, sourceID, e)
 	applyAffectedZonePrimaryEvidence(incoming, c, cls, e)
+	applyAffectedZoneIdentity(incoming, c)
 	applyAffectedZoneCoordinates(incoming, c)
+	applyStickyOperationalOutageQualifiers(incoming, c, e)
 	return incoming
 }
 
@@ -2643,7 +4240,13 @@ func mergeAffectedZoneFragment(
 			changed = true
 		}
 	}
+	if applyAffectedZoneIdentity(dst, c) {
+		changed = true
+	}
 	if applyAffectedZoneCoordinates(dst, c) {
+		changed = true
+	}
+	if applyStickyOperationalOutageQualifiers(dst, c, e) {
 		changed = true
 	}
 
@@ -2829,6 +4432,41 @@ func (p *HorizonMonitorPipeline) publishAffectedZoneUpsert(
 	_ = p.realtimePublisher.PublishJSON(ctx, realtime.EventType("horizon.graph.node.upserted"), tenantID, payload)
 }
 
+func (p *HorizonMonitorPipeline) maybeCreateStrategicGapRecommendation(
+	ctx context.Context,
+	tenantID, projectID, lensID string,
+	zone *horizonmodels.HorizonFragment,
+	event *horizonMonitorFeedEvent,
+	audit *horizonMonitorSignalFlowAudit,
+) {
+	if p == nil || p.strategicRecommendations == nil || zone == nil || zone.Type != horizonmodels.FragmentTypeAffectedZone {
+		return
+	}
+	input := horizonrecommendations.DetectionInput{
+		TenantID:             strings.TrimSpace(tenantID),
+		ProjectID:            strings.TrimSpace(projectID),
+		LensID:               strings.TrimSpace(lensID),
+		SourceID:             firstNonEmptyString(event.SourceID),
+		EventTitle:           strings.TrimSpace(firstNonEmptyString(event.Title)),
+		EventSummary:         strings.TrimSpace(firstNonEmptyString(event.Summary)),
+		SubjectCanonicalPath: strings.TrimSpace(zone.CanonicalPath),
+		SubjectType:          horizonmodels.StrategicRecommendationSubjectAffectedZone,
+		OccurredAt:           time.Now().UTC(),
+	}
+	if event != nil && !event.OccurredAt.IsZero() {
+		input.OccurredAt = event.OccurredAt.UTC()
+	}
+	if audit != nil {
+		input.SignalAxis = strings.TrimSpace(audit.Axis)
+		input.BusinessEndpoints = audit.BusinessEndpoints
+		input.RemoteEndpoints = audit.RemoteEndpoints
+		input.PathFamilies = audit.PathFamilies
+	}
+	if _, _, err := p.strategicRecommendations.Detect(ctx, input); err != nil {
+		p.logf("horizon monitor pipeline: strategic recommendation detect failed zone=%s: %v", zone.CanonicalPath, err)
+	}
+}
+
 func (p *HorizonMonitorPipeline) coolAffectedZones(ctx context.Context, tenantID, sourceID string, limit int) error {
 	if p == nil || p.fragmentsRepo == nil {
 		return nil
@@ -2853,7 +4491,8 @@ func (p *HorizonMonitorPipeline) coolAffectedZones(ctx context.Context, tenantID
 		prevHits1h := st.Hits1h
 		prevHits24h := st.Hits24h
 		st.applyDecay(now)
-		if math.Abs(st.Score-prevScore) < 0.05 && math.Abs(st.Hits1h-prevHits1h) < 0.05 && math.Abs(st.Hits24h-prevHits24h) < 0.05 {
+		stickyHeld := maintainStickyAffectedZoneActivity(frag, &st, now)
+		if !stickyHeld && math.Abs(st.Score-prevScore) < 0.05 && math.Abs(st.Hits1h-prevHits1h) < 0.05 && math.Abs(st.Hits24h-prevHits24h) < 0.05 {
 			continue
 		}
 		applyAffectedZoneState(frag, st, now, st.LastMatchedAt, sourceID, nil)
@@ -2906,6 +4545,57 @@ func applyAffectedZoneCoordinates(f *horizonmodels.HorizonFragment, c *affectedZ
 	if !f.HasCoordinates {
 		f.HasCoordinates = true
 		changed = true
+	}
+	return changed
+}
+
+func applyAffectedZoneIdentity(f *horizonmodels.HorizonFragment, c *affectedZoneCandidate) bool {
+	if f == nil || c == nil {
+		return false
+	}
+	changed := false
+	label := strings.TrimSpace(c.Label)
+	if label == "" {
+		label = affectedZoneNarrativeDescription(c)
+	}
+	if f.Identifiers == nil {
+		f.Identifiers = map[string]string{}
+	}
+	if label != "" && strings.TrimSpace(f.Identifiers["legalName"]) != label {
+		f.Identifiers["legalName"] = label
+		changed = true
+	}
+	if label != "" && strings.TrimSpace(f.Identifiers["shortName"]) != label {
+		f.Identifiers["shortName"] = label
+		changed = true
+	}
+	if cp := strings.TrimSpace(f.CanonicalPath); cp != "" {
+		mergedParts := make([]string, 0, 4)
+		for _, raw := range strings.Split(strings.TrimSpace(f.Identifiers["merged_paths"]), ",") {
+			if s := strings.TrimSpace(raw); s != "" {
+				mergedParts = append(mergedParts, s)
+			}
+		}
+		mergedParts = uniqueStrings(append(mergedParts, cp))
+		merged := strings.Join(mergedParts, ",")
+		if strings.TrimSpace(f.Identifiers["merged_paths"]) != merged {
+			f.Identifiers["merged_paths"] = merged
+			changed = true
+		}
+	}
+	if f.HomeLocation == nil {
+		f.HomeLocation = &horizonmodels.Location{}
+	}
+	if label != "" && strings.TrimSpace(f.HomeLocation.Name) != label {
+		f.HomeLocation.Name = label
+		changed = true
+	}
+	if cc := strings.ToUpper(strings.TrimSpace(c.CountryCode)); len(cc) == 2 {
+		if f.HomeLocation.ISO3166_1 == nil || strings.TrimSpace(*f.HomeLocation.ISO3166_1) != cc {
+			ccCopy := cc
+			f.HomeLocation.ISO3166_1 = &ccCopy
+			changed = true
+		}
 	}
 	return changed
 }
@@ -3039,31 +4729,210 @@ func applyAffectedZoneStatusQualifiers(f *horizonmodels.HorizonFragment, st affe
 	}
 }
 
+func qualifierBoolValue(qualifiers map[string]interface{}, key string) bool {
+	if len(qualifiers) == 0 || strings.TrimSpace(key) == "" {
+		return false
+	}
+	switch v := qualifiers[key].(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), "true")
+	default:
+		return false
+	}
+}
+
+func affectedZoneRecoveryStatus(f *horizonmodels.HorizonFragment) string {
+	if f == nil || len(f.Qualifiers) == 0 {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(asString(f.Qualifiers["recoveryStatus"])))
+}
+
+func applyStickyOperationalOutageQualifiers(
+	f *horizonmodels.HorizonFragment,
+	c *affectedZoneCandidate,
+	e *horizonMonitorFeedEvent,
+) bool {
+	if f == nil {
+		return false
+	}
+	text := ""
+	conditionType := ""
+	if c != nil {
+		conditionType = strings.TrimSpace(c.ConditionType)
+	}
+	if f.Qualifiers != nil && conditionType == "" {
+		conditionType = strings.TrimSpace(qualifierStringValue(f.Qualifiers, "conditionType"))
+	}
+	if e != nil {
+		text = normalizeKeywordText(strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary)}, " "))
+	}
+	if text == "" {
+		text = normalizeKeywordText(strings.Join([]string{
+			qualifierStringValue(f.Qualifiers, "sourceTitle"),
+			qualifierStringValue(f.Qualifiers, "sourceSummary"),
+			f.Description,
+			f.Labels["en"],
+		}, " "))
+	}
+	sticky := looksLikeStickyOperationalOutage(text, conditionType)
+	if !sticky && !qualifierBoolValue(f.Qualifiers, "requiresExplicitRecovery") {
+		return false
+	}
+	if f.Qualifiers == nil {
+		f.Qualifiers = map[string]interface{}{}
+	}
+	changed := false
+	if qualifierBoolValue(f.Qualifiers, "requiresExplicitRecovery") != sticky {
+		f.Qualifiers["requiresExplicitRecovery"] = sticky
+		changed = true
+	}
+	if sticky {
+		status := affectedZoneRecoveryStatusActive
+		current := affectedZoneRecoveryStatus(f)
+		if current == "" || current == affectedZoneRecoveryStatusRecovering {
+			if current != status {
+				f.Qualifiers["recoveryStatus"] = status
+				changed = true
+			}
+		}
+		if e != nil && !e.OccurredAt.IsZero() {
+			ts := e.OccurredAt.UTC().Format(time.RFC3339)
+			if qualifierStringValue(f.Qualifiers, "outageObservedAt") != ts {
+				f.Qualifiers["outageObservedAt"] = ts
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+func applyStickyRecoveryObservation(
+	f *horizonmodels.HorizonFragment,
+	e *horizonMonitorFeedEvent,
+	now time.Time,
+) bool {
+	if f == nil || e == nil {
+		return false
+	}
+	text := normalizeKeywordText(strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary)}, " "))
+	if !looksLikeAffectedZoneRecoveryText(text) || !qualifierBoolValue(f.Qualifiers, "requiresExplicitRecovery") {
+		return false
+	}
+	if f.Qualifiers == nil {
+		f.Qualifiers = map[string]interface{}{}
+	}
+	if affectedZoneRecoveryStatus(f) != affectedZoneRecoveryStatusRestored {
+		f.Qualifiers["recoveryStatus"] = affectedZoneRecoveryStatusRestored
+	}
+	recoveryAt := now.UTC()
+	if !e.OccurredAt.IsZero() {
+		recoveryAt = e.OccurredAt.UTC()
+	}
+	if qualifierStringValue(f.Qualifiers, "recoveryObservedAt") != recoveryAt.Format(time.RFC3339) {
+		f.Qualifiers["recoveryObservedAt"] = recoveryAt.Format(time.RFC3339)
+	}
+	st := parseAffectedZoneState(f)
+	st.applyDecay(now)
+	st.Score = math.Min(st.Score, 18)
+	st.Hits1h = 0
+	st.Hits24h = math.Min(st.Hits24h, 2)
+	st.LastBoost = 0
+	applyAffectedZoneState(f, st, now, st.LastMatchedAt, "", e)
+	return true
+}
+
+func maintainStickyAffectedZoneActivity(f *horizonmodels.HorizonFragment, st *affectedZoneState, now time.Time) bool {
+	if f == nil || st == nil || !qualifierBoolValue(f.Qualifiers, "requiresExplicitRecovery") {
+		return false
+	}
+	if affectedZoneRecoveryStatus(f) == affectedZoneRecoveryStatusRestored {
+		return false
+	}
+	age := now.Sub(st.LastMatchedAt)
+	if age < 0 {
+		age = 0
+	}
+	floor := 26.0
+	if age <= 72*time.Hour {
+		floor = 42.0
+	}
+	changed := false
+	if st.Score < floor {
+		st.Score = floor
+		changed = true
+	}
+	if st.Hits24h < 1 {
+		st.Hits24h = 1
+		changed = true
+	}
+	if f.Qualifiers == nil {
+		f.Qualifiers = map[string]interface{}{}
+	}
+	if affectedZoneRecoveryStatus(f) != affectedZoneRecoveryStatusActive {
+		f.Qualifiers["recoveryStatus"] = affectedZoneRecoveryStatusActive
+		changed = true
+	}
+	return changed
+}
+
 func affectedZoneBoost(e *horizonMonitorFeedEvent, cls horizonMonitorNewsClassification, c *affectedZoneCandidate) float64 {
 	levelW := map[string]float64{
-		"critical": 1.45,
-		"high":     1.20,
+		"critical": 1.55,
+		"high":     1.30,
 		"medium":   1.0,
 		"low":      0.75,
 		"info":     0.55,
 	}
 	severityW := map[string]float64{
-		"critical": 1.3,
-		"high":     1.1,
+		"critical": 1.4,
+		"high":     1.18,
 		"medium":   1.0,
 		"low":      0.8,
 	}
-	base := 8.0 * firstPositive(levelW[strings.ToLower(strings.TrimSpace(cls.Level))], 0.6)
+	base := 14.0 * firstPositive(levelW[strings.ToLower(strings.TrimSpace(cls.Level))], 0.6)
 	base *= firstPositive(severityW[strings.ToLower(strings.TrimSpace(e.Severity))], 1.0)
-	switch strings.TrimSpace(c.ConditionType) {
+	if c != nil {
+		base *= 0.9 + wmClamp01(c.EventConfidence)*0.45
+		base *= 0.95 + wmClamp01(c.GeoConfidence)*0.35
+	}
+	conditionType := ""
+	if c != nil {
+		conditionType = strings.TrimSpace(c.ConditionType)
+	}
+	switch conditionType {
 	case "military_conflict":
-		base *= 1.15
+		base *= 2.25
 	case "earthquake_affected", "flood_zone", "wildfire_zone":
-		base *= 1.08
+		base *= 1.18
 	case "humanitarian_crisis":
-		base *= 1.04
+		base *= 1.10
 	case "cyber_disruption", "infrastructure_disruption":
-		base *= 0.96
+		base *= 1.35
+	}
+	if c != nil && c.GeoPrecision == "entity_anchor" {
+		base *= 1.12
+	}
+	if c != nil && looksLikeOperationalPlaceLabel(c.Label) {
+		base *= 1.10
+	}
+	text := normalizeKeywordText(strings.Join([]string{
+		strings.TrimSpace(firstNonEmptyString(e.Title, "")),
+		strings.TrimSpace(firstNonEmptyString(e.Summary, "")),
+		strings.TrimSpace(cls.Category),
+	}, " "))
+	if looksLikeConcreteOperationalIncident(text, cls) {
+		switch conditionType {
+		case "military_conflict":
+			base = math.Max(base, 34)
+		case "infrastructure_disruption":
+			base = math.Max(base, 28)
+		}
+	}
+	if hasAnyKeyword(text, "port", "terminal", "strait", "canal", "shipping", "loading operations", "drone attack", "missile strike", "projectile", "embassy hit") {
+		base *= 1.12
 	}
 	if e.HasCoordinates && horizonmodels.IsRealGeoCoordinate(e.Lat, e.Lon) {
 		base *= 1.05
@@ -3084,7 +4953,7 @@ func affectedZoneBoost(e *horizonMonitorFeedEvent, cls horizonMonitorNewsClassif
 			base *= 0.82
 		}
 	}
-	return clamp(base, 2.0, 22.0)
+	return clamp(base, 4.0, 72.0)
 }
 
 func affectedZoneQualifiers(
@@ -3104,23 +4973,27 @@ func affectedZoneQualifiersWithSource(
 	includeSource bool,
 ) map[string]interface{} {
 	out := map[string]interface{}{
-		"conditionType":          strings.TrimSpace(c.ConditionType),
-		"zoneType":               strings.TrimSpace(c.ZoneType),
-		"zoneSubType":            strings.TrimSpace(c.ZoneSubType),
-		"zoneInferenceScore":     c.InferenceScore,
-		"classificationCategory": strings.TrimSpace(cls.Category),
-		"classificationLevel":    strings.TrimSpace(cls.Level),
-		"classificationSource":   strings.TrimSpace(cls.Source),
-		"processingMode":         "heuristic",
-		"llm":                    false,
-		"sourceLayer":            "rss",
-		"processingLayer":        "heuristic",
-		"geoPrecision":           strings.TrimSpace(c.GeoPrecision),
-		"warmOnly":               c.WarmOnly,
-		"hypeStatus":             activityStatus(st.Score),
-		"hypeIndicator":          hypeIndicator(st.Score),
-		"lastMatchedAt":          st.LastMatchedAt.UTC().Format(time.RFC3339),
-		"extraction":             horizonMonitorFragmentExtraction("heuristic", false),
+		"conditionType":            strings.TrimSpace(c.ConditionType),
+		"zoneType":                 strings.TrimSpace(c.ZoneType),
+		"zoneSubType":              strings.TrimSpace(c.ZoneSubType),
+		"zoneInferenceScore":       c.InferenceScore,
+		"zoneEventConfidence":      c.EventConfidence,
+		"zoneGeoConfidence":        c.GeoConfidence,
+		"zoneResolutionConfidence": c.ResolutionConfidence,
+		"classificationCategory":   strings.TrimSpace(cls.Category),
+		"classificationLevel":      strings.TrimSpace(cls.Level),
+		"classificationSource":     strings.TrimSpace(cls.Source),
+		"processingMode":           "heuristic",
+		"llm":                      false,
+		"sourceLayer":              "rss",
+		"processingLayer":          "heuristic",
+		"geoPrecision":             strings.TrimSpace(c.GeoPrecision),
+		"geoResolutionMethod":      strings.TrimSpace(c.GeoResolutionMethod),
+		"warmOnly":                 c.WarmOnly,
+		"hypeStatus":               activityStatus(st.Score),
+		"hypeIndicator":            hypeIndicator(st.Score),
+		"lastMatchedAt":            st.LastMatchedAt.UTC().Format(time.RFC3339),
+		"extraction":               horizonMonitorFragmentExtraction("heuristic", false),
 	}
 	if strings.TrimSpace(c.Reason) != "" {
 		out["reason"] = strings.TrimSpace(c.Reason)
@@ -3463,11 +5336,225 @@ func inferAffectedZoneCandidate(e *horizonMonitorFeedEvent, cls horizonMonitorNe
 	return inferAffectedZoneCandidateWithContext(context.Background(), nil, e, cls)
 }
 
+func affectedZoneEventConfidence(e *horizonMonitorFeedEvent, cls horizonMonitorNewsClassification) float64 {
+	eventSeverityConfidence := 0.0
+	if e != nil {
+		eventSeverityConfidence = e.Confidence
+	}
+	conf := wmClamp01(firstPositive(cls.Confidence, eventSeverityConfidence))
+	if e != nil && e.Raw != nil {
+		if assessment, ok := e.Raw["nlpArticleAssessment"].(map[string]interface{}); ok {
+			if v, ok := asFloat64(assessment["eventConfidence"]); ok {
+				conf = wmClamp01(math.Max(conf, v))
+			}
+		}
+	}
+	title := ""
+	summary := ""
+	if e != nil {
+		title = e.Title
+		summary = e.Summary
+	}
+	text := normalizeKeywordText(strings.Join([]string{
+		strings.TrimSpace(title),
+		strings.TrimSpace(summary),
+		strings.TrimSpace(cls.Category),
+		strings.TrimSpace(cls.Level),
+	}, " "))
+	if looksLikeConcreteOperationalIncident(text, cls) {
+		conf = wmClamp01(math.Max(conf, 0.86))
+	}
+	return conf
+}
+
+func affectedZoneGeoConfidence(place, countryCode, countryName, geoPrecision string, hasCoord bool, anchor *affectedZoneEntityAnchor) float64 {
+	place = strings.TrimSpace(place)
+	countryCode = strings.TrimSpace(countryCode)
+	countryName = strings.TrimSpace(countryName)
+	geoPrecision = strings.TrimSpace(strings.ToLower(geoPrecision))
+	score := 0.18
+	if isPlausiblePlaceName(place) && !isWeakAffectedZonePlace(place, countryName) && !looksLikeBadAffectedZonePlaceHint(place) {
+		score += 0.24
+	}
+	switch geoPrecision {
+	case "entity_anchor":
+		score += 0.34
+	case "precise":
+		score += 0.30
+	case "approximate_country":
+		score += 0.10
+	}
+	if hasCoord {
+		score += 0.12
+	}
+	if anchor != nil && anchor.HasCoordinates {
+		score += 0.12
+	}
+	if countryCode != "" {
+		score += 0.08
+	}
+	placeNorm := normalizePhrase(place)
+	if _, ok := zoneHotspotCoords[placeNorm]; ok {
+		score += 0.12
+	}
+	if hasAnyKeyword(placeNorm, "port", "terminal", "refinery", "airport", "airbase", "island", "strait", "canal", "field", "complex") {
+		score += 0.08
+	}
+	if placeNorm == normalizePhrase(countryName) && geoPrecision == "approximate_country" {
+		score -= 0.16
+	}
+	return wmClamp01(score)
+}
+
+func affectedZoneResolutionConfidence(
+	e *horizonMonitorFeedEvent,
+	cls horizonMonitorNewsClassification,
+	place, countryCode, countryName, geoPrecision, conditionType string,
+	hasCoord bool,
+	anchor *affectedZoneEntityAnchor,
+) float64 {
+	eventConf := affectedZoneEventConfidence(e, cls)
+	geoConf := affectedZoneGeoConfidence(place, countryCode, countryName, geoPrecision, hasCoord, anchor)
+	text := normalizeKeywordText(strings.Join([]string{
+		strings.TrimSpace(firstNonEmptyString(e.Title, "")),
+		strings.TrimSpace(firstNonEmptyString(e.Summary, "")),
+		strings.TrimSpace(cls.Category),
+		strings.TrimSpace(cls.Level),
+	}, " "))
+	penalty := 0.0
+	if looksLikeLiveBlogPoliticalCommentaryText(text) || looksLikeRetrospectiveConflictNarrativeText(text) {
+		penalty += 0.12
+	}
+	if looksLikeMultiCountryDeploymentRoundup(text, cls) {
+		penalty += 0.10
+	}
+	if strings.TrimSpace(conditionType) == "military_conflict" && looksLikeConcreteOperationalIncident(text, cls) {
+		eventConf = wmClamp01(math.Max(eventConf, 0.90))
+	}
+	return wmClamp01(eventConf*0.58 + geoConf*0.42 - penalty)
+}
+
+func shouldAttemptAffectedZoneGeoAIRefinement(
+	p *HorizonMonitorPipeline,
+	e *horizonMonitorFeedEvent,
+	cls horizonMonitorNewsClassification,
+	place, countryName, geoPrecision string,
+	hasCoord bool,
+	resolutionConfidence float64,
+) bool {
+	if p == nil || p.exec == nil || e == nil {
+		return false
+	}
+	text := normalizeKeywordText(strings.Join([]string{
+		strings.TrimSpace(e.Title),
+		strings.TrimSpace(e.Summary),
+		strings.TrimSpace(cls.Category),
+		strings.TrimSpace(cls.Level),
+	}, " "))
+	if !looksLikeConcreteOperationalIncident(text, cls) {
+		return false
+	}
+	if resolutionConfidence >= 0.72 {
+		return false
+	}
+	if affectedZoneEventConfidence(e, cls) < 0.78 {
+		return false
+	}
+	if hasCoord && (geoPrecision == "precise" || geoPrecision == "entity_anchor") && !isWeakAffectedZonePlace(place, countryName) {
+		return false
+	}
+	return isWeakAffectedZonePlace(place, countryName) || geoPrecision == "none" || geoPrecision == "approximate_country"
+}
+
+func (p *HorizonMonitorPipeline) refineAffectedZoneGeoWithAI(
+	ctx context.Context,
+	e *horizonMonitorFeedEvent,
+	cls horizonMonitorNewsClassification,
+	place, countryCode, countryName string,
+) (affectedZoneGeoAssistOutput, bool) {
+	if p == nil || p.exec == nil || e == nil {
+		return affectedZoneGeoAssistOutput{}, false
+	}
+	entityBits := make([]string, 0, 6)
+	for _, entity := range extractNLPEntityMaps(e.Raw["nlpEntities"]) {
+		surface := strings.TrimSpace(firstNonEmptyString(asString(entity["normalized"]), asString(entity["surface"])))
+		if surface == "" {
+			continue
+		}
+		entityBits = append(entityBits, fmt.Sprintf("%s[%s/%s]", surface, normalizePhrase(asString(entity["entityType"])), normalizePhrase(asString(entity["role"]))))
+		if len(entityBits) >= 6 {
+			break
+		}
+	}
+	prompt := strings.Builder{}
+	prompt.WriteString("Identify the single most specific operational location impacted by the incident. Return strict JSON only.\n")
+	prompt.WriteString("Do not return a country unless the article gives no more specific location.\n")
+	prompt.WriteString("If the article is too vague, return an empty place and confidence below 0.5.\n")
+	prompt.WriteString("Headline: ")
+	prompt.WriteString(strings.TrimSpace(e.Title))
+	prompt.WriteString("\nSummary: ")
+	prompt.WriteString(truncateString(strings.TrimSpace(e.Summary), 500))
+	prompt.WriteString("\nCategory: ")
+	prompt.WriteString(strings.TrimSpace(cls.Category))
+	prompt.WriteString("\nLevel: ")
+	prompt.WriteString(strings.TrimSpace(cls.Level))
+	prompt.WriteString("\nCurrentPlaceHint: ")
+	prompt.WriteString(strings.TrimSpace(place))
+	prompt.WriteString("\nCurrentCountryHint: ")
+	prompt.WriteString(strings.TrimSpace(firstNonEmptyString(countryCode, countryName)))
+	if len(entityBits) > 0 {
+		prompt.WriteString("\nNlpEntities: ")
+		prompt.WriteString(strings.Join(entityBits, ", "))
+	}
+	prompt.WriteString("\nSchema: {\"place\": string, \"countryCode\": string, \"geoKind\": string, \"confidence\": number}\n")
+
+	verifier := ai.NewGenericVerifier(func(out affectedZoneGeoAssistOutput) error {
+		if out.Confidence < 0 || out.Confidence > 1 {
+			return fmt.Errorf("confidence must be in [0,1]")
+		}
+		if cc := strings.TrimSpace(out.CountryCode); cc != "" && len(normalizeCountryCode(cc)) != 2 {
+			return fmt.Errorf("invalid countryCode")
+		}
+		switch strings.TrimSpace(strings.ToLower(out.GeoKind)) {
+		case "", "facility", "port", "city", "region", "country", "chokepoint", "island", "airport", "terminal", "refinery":
+		default:
+			return fmt.Errorf("invalid geoKind")
+		}
+		return nil
+	})
+	task := &ai.AITask{
+		TaskType:     ai.TaskTypeContextAnalysis,
+		InputContent: prompt.String(),
+		AIRequirements: ai.AIRequirements{
+			TextGenerationCapability: true,
+			MinCapabilityScore:       6,
+			MaxOutputSize:            160,
+		},
+		Verifier: verifier,
+	}
+	parsed, err := p.exec.ExecuteStructuredTask(ctx, task)
+	if err != nil {
+		return affectedZoneGeoAssistOutput{}, false
+	}
+	out, ok := parsed.(affectedZoneGeoAssistOutput)
+	if !ok {
+		return affectedZoneGeoAssistOutput{}, false
+	}
+	out.Place = strings.TrimSpace(out.Place)
+	out.CountryCode = normalizeCountryCode(out.CountryCode)
+	out.GeoKind = strings.TrimSpace(strings.ToLower(out.GeoKind))
+	out.Confidence = wmClamp01(out.Confidence)
+	if out.Place == "" || out.Confidence < 0.76 || !isPlausiblePlaceName(out.Place) || looksLikeBadAffectedZonePlaceHint(out.Place) {
+		return affectedZoneGeoAssistOutput{}, false
+	}
+	return out, true
+}
+
 func inferAffectedZoneCandidateWithContext(ctx context.Context, p *HorizonMonitorPipeline, e *horizonMonitorFeedEvent, cls horizonMonitorNewsClassification) *affectedZoneCandidate {
 	if e == nil {
 		return nil
 	}
-	if nlpAssessmentSuppressesZone(e) {
+	if nlpAssessmentSuppressesZone(e, cls) {
 		return nil
 	}
 	if shouldSuppressAffectedZoneBySourceProfile(e) {
@@ -3482,18 +5569,29 @@ func inferAffectedZoneCandidateWithContext(ctx context.Context, p *HorizonMonito
 	if text == "" {
 		return nil
 	}
+	concreteIncident := looksLikeConcreteOperationalIncident(text, cls)
+	credibleChokepointThreat := looksLikeCredibleChokepointThreat(text, cls)
 	profile := wmHeuristics().ProfileArticle(text, affectedZoneSourceHost(e))
-	if isLikelyNonEventText(text) && !looksLikeWarmConflictPosture(text, cls) {
+	if looksLikeExplainerQuestionText(text) && !concreteIncident && !credibleChokepointThreat {
 		return nil
 	}
-	if shouldSuppressAffectedZoneBySemanticDrift(text, e, cls) {
+	if isLikelyNonEventText(text) && !concreteIncident && !looksLikeWarmConflictPosture(text, cls) && !credibleChokepointThreat {
+		return nil
+	}
+	if shouldSuppressAffectedZoneBySemanticDrift(text, e, cls) && !concreteIncident && !credibleChokepointThreat {
 		return nil
 	}
 	conditionType, zoneType, zoneSubType, inferenceScore := inferZoneConditionAndSubtypeScored(text, cls)
+	if llmCond, llmZoneType, llmZoneSubType, llmScore, ok := llmAffectedZoneConditionOverride(e); ok {
+		conditionType = llmCond
+		zoneType = llmZoneType
+		zoneSubType = llmZoneSubType
+		inferenceScore = math.Max(inferenceScore, llmScore)
+	}
 	if conditionType == "" {
 		return nil
 	}
-	if shouldSuppressAffectedZoneByEventProfile(text, e, cls, conditionType, profile) {
+	if shouldSuppressAffectedZoneByEventProfile(text, e, cls, conditionType, profile) && !concreteIncident && !credibleChokepointThreat {
 		return nil
 	}
 	if shouldSuppressWeakAffectedZoneInference(text, e, cls, conditionType, inferenceScore) {
@@ -3503,6 +5601,13 @@ func inferAffectedZoneCandidateWithContext(ctx context.Context, p *HorizonMonito
 
 	place := inferZonePlaceName(e, text, conditionType)
 	geoToken, countryCode, countryName := inferZoneGeo(e, place, text, conditionType)
+	if warmOnly && geoToken == "global" && e != nil {
+		if cc := normalizeCountryCode(e.CountryCode); cc != "" {
+			geoToken = strings.ToLower(cc)
+			countryCode = cc
+			countryName = firstNonEmptyString(strings.TrimSpace(e.CountryName), countryNameFromCode(cc))
+		}
+	}
 	var anchor *affectedZoneEntityAnchor
 	if shouldAttemptAffectedZoneEntityAnchor(place, countryName, "none", false, e) {
 		anchorCountryCode := countryCode
@@ -3529,6 +5634,7 @@ func inferAffectedZoneCandidateWithContext(ctx context.Context, p *HorizonMonito
 		place = firstNonEmptyString(countryName, countryCode, "emerging hotspot")
 	}
 	place = normalizeAffectedZonePlace(place, countryName)
+	eventConfidence := affectedZoneEventConfidence(e, cls)
 	if shouldSuppressAffectedZoneByPlaceQuality(place, countryName, conditionType, text, e) {
 		return nil
 	}
@@ -3545,6 +5651,7 @@ func inferAffectedZoneCandidateWithContext(ctx context.Context, p *HorizonMonito
 		label = firstNonEmptyString(countryName, strings.ToUpper(countryCode), "Affected Zone")
 	}
 	lat, lon, hasCoord, geoPrecision := inferAffectedZoneCoordinates(e, place, countryCode)
+	resolutionConfidence := affectedZoneResolutionConfidence(e, cls, place, countryCode, countryName, geoPrecision, conditionType, hasCoord, anchor)
 	if shouldPreferAffectedZoneAnchor(anchor, place, countryName, geoPrecision, hasCoord) {
 		place = firstNonEmptyString(anchor.Place, place)
 		geoToken = firstNonEmptyString(anchor.GeoToken, geoToken)
@@ -3554,6 +5661,25 @@ func inferAffectedZoneCandidateWithContext(ctx context.Context, p *HorizonMonito
 		lon = anchor.Lon
 		hasCoord = anchor.HasCoordinates
 		geoPrecision = strings.TrimSpace(anchor.GeoPrecision)
+	}
+	if shouldAttemptAffectedZoneGeoAIRefinement(p, e, cls, place, countryName, geoPrecision, hasCoord, resolutionConfidence) {
+		if refined, ok := p.refineAffectedZoneGeoWithAI(ctx, e, cls, place, countryCode, countryName); ok {
+			place = normalizeAffectedZonePlace(refined.Place, countryName)
+			if refined.CountryCode != "" {
+				countryCode = refined.CountryCode
+				countryName = firstNonEmptyString(countryNameFromCode(refined.CountryCode), countryName)
+			}
+			if g, cc, cn := inferZoneGeoFromPlace(place); g != "" {
+				geoToken = g
+				countryCode = firstNonEmptyString(cc, countryCode)
+				countryName = firstNonEmptyString(cn, countryName)
+			}
+			lat, lon, hasCoord, geoPrecision = inferAffectedZoneCoordinates(e, place, countryCode)
+			if hasCoord && geoPrecision == "precise" {
+				anchor = nil
+			}
+			resolutionConfidence = affectedZoneResolutionConfidence(e, cls, place, countryCode, countryName, geoPrecision, conditionType, hasCoord, anchor)
+		}
 	}
 	if placeSpecificScopeLooksUnreliable(place, countryName, geoPrecision, hasCoord) {
 		place = firstNonEmptyString(countryName, countryNameFromCode(countryCode), place)
@@ -3571,27 +5697,319 @@ func inferAffectedZoneCandidateWithContext(ctx context.Context, p *HorizonMonito
 	}
 
 	return &affectedZoneCandidate{
-		CanonicalPath:  "/zone/" + geoToken + "/" + conditionType + "/" + pathSlug,
-		Label:          label,
-		ConditionType:  conditionType,
-		ZoneType:       zoneType,
-		ZoneSubType:    zoneSubType,
-		InferenceScore: inferenceScore,
-		GeoToken:       geoToken,
-		CountryCode:    strings.ToUpper(strings.TrimSpace(countryCode)),
-		CountryName:    strings.TrimSpace(countryName),
-		RadiusKm:       inferZoneRadiusKm(conditionType, cls.Level, e.Severity),
-		Lat:            lat,
-		Lon:            lon,
-		HasCoordinates: hasCoord,
-		GeoPrecision:   geoPrecision,
-		WarmOnly:       warmOnly,
-		Reason:         "keyword_heuristic",
+		CanonicalPath:        "/zone/" + geoToken + "/" + conditionType + "/" + pathSlug,
+		Label:                label,
+		ConditionType:        conditionType,
+		ZoneType:             zoneType,
+		ZoneSubType:          zoneSubType,
+		InferenceScore:       inferenceScore,
+		EventConfidence:      eventConfidence,
+		GeoConfidence:        affectedZoneGeoConfidence(place, countryCode, countryName, geoPrecision, hasCoord, anchor),
+		ResolutionConfidence: resolutionConfidence,
+		GeoToken:             geoToken,
+		CountryCode:          strings.ToUpper(strings.TrimSpace(countryCode)),
+		CountryName:          strings.TrimSpace(countryName),
+		RadiusKm:             inferZoneRadiusKm(conditionType, cls.Level, e.Severity),
+		Lat:                  lat,
+		Lon:                  lon,
+		HasCoordinates:       hasCoord,
+		GeoPrecision:         geoPrecision,
+		GeoResolutionMethod:  firstNonEmptyString(strings.TrimSpace(geoPrecision), "heuristic"),
+		LinkedFragmentPaths:  collectAffectedZoneLinkedFragmentPathsWithContext(ctx, p, e, anchor),
+		WarmOnly:             warmOnly,
+		Reason:               "keyword_heuristic",
 	}
 }
 
-func nlpAssessmentSuppressesZone(e *horizonMonitorFeedEvent) bool {
+func llmAffectedZoneConditionOverride(e *horizonMonitorFeedEvent) (conditionType, zoneType, zoneSubType string, score float64, ok bool) {
 	if e == nil || e.Raw == nil {
+		return "", "", "", 0, false
+	}
+	raw, has := e.Raw["llmArticleAdjudication"]
+	if !has {
+		return "", "", "", 0, false
+	}
+	m, okMap := raw.(map[string]interface{})
+	if !okMap || len(m) == 0 {
+		return "", "", "", 0, false
+	}
+	isEvent, _ := m["isEvent"].(bool)
+	if !isEvent {
+		return "", "", "", 0, false
+	}
+	eventConfidence, _ := asFloat64(m["eventConfidence"])
+	if eventConfidence < 0.88 {
+		return "", "", "", 0, false
+	}
+	switch strings.TrimSpace(asString(m["conditionType"])) {
+	case "military_conflict":
+		return "military_conflict", "military_conflict", "armed_tension", eventConfidence, true
+	case "infrastructure_disruption":
+		return "infrastructure_disruption", "infrastructure_disruption", "systems_disruption", eventConfidence, true
+	case "cyber_disruption":
+		return "cyber_disruption", "infrastructure_disruption", "systems_disruption", eventConfidence, true
+	case "political_tension":
+		return "political_tension", "political_tension", "civil_tension", eventConfidence, true
+	case "humanitarian_crisis":
+		return "humanitarian_crisis", "humanitarian_crisis", "humanitarian_emergency", eventConfidence, true
+	case "disease_outbreak":
+		return "disease_outbreak", "humanitarian_crisis", "epidemic", eventConfidence, true
+	case "environmental_hazard":
+		return "environmental_hazard", "natural_disaster", "toxic_pollution", eventConfidence, true
+	case "natural_disaster":
+		return "natural_disaster", "natural_disaster", "multi_hazard", eventConfidence, true
+	case "earthquake_affected":
+		return "earthquake_affected", "natural_disaster", "seismic_impact", eventConfidence, true
+	case "flood_zone":
+		return "flood_zone", "natural_disaster", "flooding", eventConfidence, true
+	case "wildfire_zone":
+		return "wildfire_zone", "natural_disaster", "wildfire", eventConfidence, true
+	default:
+		return "", "", "", 0, false
+	}
+}
+
+func collectAffectedZoneLinkedFragmentPaths(e *horizonMonitorFeedEvent, anchor *affectedZoneEntityAnchor) []string {
+	if e == nil {
+		return nil
+	}
+	paths := make([]string, 0, 6)
+	seen := make(map[string]struct{}, 6)
+	add := func(path string) {
+		path = strings.TrimSpace(path)
+		if !looksLikeAffectedZoneLinkPath(path) {
+			return
+		}
+		if _, ok := seen[path]; ok {
+			return
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	add(strings.TrimSpace(e.LocationPath))
+	if anchor != nil {
+		add(strings.TrimSpace(anchor.FragmentPath))
+	}
+	for _, path := range heuristicSignalSeedPaths(e, strings.TrimSpace(e.LocationPath)) {
+		if strings.HasPrefix(strings.TrimSpace(path), "/loc/int/") {
+			add(path)
+		}
+	}
+	return pruneAffectedZoneLinkedFragmentPaths(paths)
+}
+
+func collectAffectedZoneLinkedFragmentPathsWithContext(
+	ctx context.Context,
+	p *HorizonMonitorPipeline,
+	e *horizonMonitorFeedEvent,
+	anchor *affectedZoneEntityAnchor,
+) []string {
+	paths := collectAffectedZoneLinkedFragmentPaths(e, anchor)
+	if e == nil || p == nil || p.fragmentsRepo == nil {
+		return paths
+	}
+	seen := make(map[string]struct{}, len(paths)+8)
+	for _, path := range paths {
+		if path = strings.TrimSpace(path); path != "" {
+			seen[path] = struct{}{}
+		}
+	}
+	add := func(path string) {
+		path = strings.TrimSpace(path)
+		if !looksLikeAffectedZoneLinkPath(path) {
+			return
+		}
+		if _, ok := seen[path]; ok {
+			return
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+
+	seeds := extractAffectedZoneObjectAnchors(e, 6)
+	if anchor != nil && strings.TrimSpace(anchor.Place) != "" {
+		seeds = uniqueStrings(append([]string{strings.TrimSpace(anchor.Place)}, seeds...))
+	}
+	if place := strings.TrimSpace(extractPlaceFromTitle(strings.TrimSpace(e.Title))); place != "" && isPlausiblePlaceName(place) {
+		seeds = uniqueStrings(append([]string{place}, seeds...))
+	}
+	wantCountry := strings.ToUpper(strings.TrimSpace(firstNonEmptyString(e.CountryCode)))
+	for _, path := range resolveAffectedZoneLinkedFragments(ctx, p, e, wantCountry, seeds, 4) {
+		add(path)
+	}
+	return pruneAffectedZoneLinkedFragmentPaths(paths)
+}
+
+func resolveAffectedZoneLinkedFragments(
+	ctx context.Context,
+	p *HorizonMonitorPipeline,
+	e *horizonMonitorFeedEvent,
+	wantCountry string,
+	seeds []string,
+	maxCount int,
+) []string {
+	if p == nil || p.fragmentsRepo == nil || e == nil || maxCount <= 0 {
+		return nil
+	}
+	type scoredPath struct {
+		path  string
+		score float64
+	}
+	bestByPath := map[string]scoredPath{}
+	record := func(path string, score float64) {
+		path = strings.TrimSpace(path)
+		if !looksLikeAffectedZoneLinkPath(path) || score <= 0 {
+			return
+		}
+		prev, ok := bestByPath[path]
+		if ok && prev.score >= score {
+			return
+		}
+		bestByPath[path] = scoredPath{path: path, score: score}
+	}
+
+	for _, seed := range seeds {
+		seed = strings.TrimSpace(seed)
+		if seed == "" {
+			continue
+		}
+		for _, frag := range exactAffectedZoneAnchorFragments(ctx, p, seed) {
+			score := affectedZoneLinkedFragmentScore(ctx, seed, wantCountry, e, frag, 0.96, p)
+			if score < 0.82 {
+				continue
+			}
+			record(strings.TrimSpace(frag.CanonicalPath), score)
+			if frag.Type == horizonmodels.FragmentTypeOrganization {
+				if fallback, fallbackScore := resolveAffectedZoneOperationalAnchorFromOrg(ctx, p, frag, e, wantCountry); fallbackScore > 0 && strings.TrimSpace(fallback.FragmentPath) != "" {
+					record(strings.TrimSpace(fallback.FragmentPath), score+fallbackScore)
+				}
+			}
+		}
+		if p.vertexSearch == nil || !p.vertexSearch.IsConfigured() {
+			continue
+		}
+		resp, err := p.vertexSearch.Search(ctx, &ai.SearchRequest{Query: seed, PageSize: 6})
+		if err != nil || resp == nil {
+			continue
+		}
+		for _, result := range resp.Results {
+			score := result.RelevanceScore
+			if score == 0 && result.RankSignals != nil {
+				score = result.RankSignals.SemanticSimilarityScore
+			}
+			if score < 0.72 {
+				continue
+			}
+			fragID := extractFragmentIDFromGCSURI(result.Document.URI)
+			if fragID == "" {
+				fragID = strings.TrimSuffix(strings.TrimSpace(result.Document.ID), ".json")
+			}
+			if fragID == "" {
+				continue
+			}
+			frag, ferr := p.fragmentsRepo.Get(ctx, fragID)
+			if ferr != nil || frag == nil {
+				continue
+			}
+			linkScore := affectedZoneLinkedFragmentScore(ctx, seed, wantCountry, e, frag, score, p)
+			if linkScore < 0.82 {
+				continue
+			}
+			record(strings.TrimSpace(frag.CanonicalPath), linkScore)
+			if frag.Type == horizonmodels.FragmentTypeOrganization {
+				if fallback, fallbackScore := resolveAffectedZoneOperationalAnchorFromOrg(ctx, p, frag, e, wantCountry); fallbackScore > 0 && strings.TrimSpace(fallback.FragmentPath) != "" {
+					record(strings.TrimSpace(fallback.FragmentPath), linkScore+fallbackScore)
+				}
+			}
+		}
+	}
+
+	scored := make([]scoredPath, 0, len(bestByPath))
+	for _, item := range bestByPath {
+		scored = append(scored, item)
+	}
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].score == scored[j].score {
+			return scored[i].path < scored[j].path
+		}
+		return scored[i].score > scored[j].score
+	})
+	limit := maxCount
+	if len(scored) < limit {
+		limit = len(scored)
+	}
+	out := make([]string, 0, limit)
+	for _, item := range scored {
+		out = append(out, item.path)
+		if len(out) >= maxCount {
+			break
+		}
+	}
+	return out
+}
+
+func pruneAffectedZoneLinkedFragmentPaths(paths []string) []string {
+	if len(paths) <= 1 {
+		return paths
+	}
+	out := make([]string, 0, len(paths))
+	for i, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		if isGeoRegionLikeCanonicalPath(path) {
+			redundant := false
+			for j, other := range paths {
+				if i == j {
+					continue
+				}
+				other = strings.TrimSpace(other)
+				if isMoreSpecificAffectedZoneGeoPath(other, path) {
+					redundant = true
+					break
+				}
+			}
+			if redundant {
+				continue
+			}
+		}
+		out = append(out, path)
+	}
+	return out
+}
+
+func looksLikeAffectedZoneLinkPath(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" || !strings.HasPrefix(path, "/") {
+		return false
+	}
+	switch {
+	case strings.HasPrefix(path, "/loc/"),
+		strings.HasPrefix(path, "/geo/"),
+		strings.HasPrefix(path, "/region/"),
+		strings.HasPrefix(path, "/fac/"),
+		strings.HasPrefix(path, "/org/"),
+		strings.HasPrefix(path, "/deposit/"),
+		strings.HasPrefix(path, "/product/"),
+		strings.HasPrefix(path, "/program/"):
+		return true
+	default:
+		return false
+	}
+}
+
+func nlpAssessmentSuppressesZone(e *horizonMonitorFeedEvent, cls horizonMonitorNewsClassification) bool {
+	if e == nil || e.Raw == nil {
+		return false
+	}
+	text := normalizeKeywordText(strings.Join([]string{
+		strings.TrimSpace(e.Title),
+		strings.TrimSpace(e.Summary),
+		strings.TrimSpace(cls.Category),
+		strings.TrimSpace(cls.Level),
+	}, " "))
+	if looksLikeConcreteOperationalIncident(text, cls) {
 		return false
 	}
 	m, ok := e.Raw["nlpArticleAssessment"].(map[string]interface{})
@@ -3600,7 +6018,8 @@ func nlpAssessmentSuppressesZone(e *horizonMonitorFeedEvent) bool {
 	}
 	shouldCreate, _ := m["shouldCreateZone"].(bool)
 	shouldWarm, _ := m["shouldWarmExisting"].(bool)
-	if shouldCreate || shouldWarm {
+	shouldOnlySignal, _ := m["shouldOnlySignal"].(bool)
+	if shouldCreate || shouldWarm || shouldOnlySignal {
 		return false
 	}
 	if rejected, ok := m["rejectionReason"].(string); ok && strings.TrimSpace(rejected) != "" {
@@ -3615,6 +6034,15 @@ func nlpAssessmentSuppressesZone(e *horizonMonitorFeedEvent) bool {
 func shouldCreateAffectedZone(text, level, conditionType string) bool {
 	if text == "" || isLikelyNonEventText(text) {
 		return false
+	}
+	if looksLikeCredibleChokepointThreat(text, horizonMonitorNewsClassification{}) {
+		return conditionType == "military_conflict" || conditionType == "infrastructure_disruption"
+	}
+	if looksLikeConcreteOperationalIncident(text, horizonMonitorNewsClassification{}) {
+		switch conditionType {
+		case "military_conflict", "infrastructure_disruption", "earthquake_affected", "tsunami_affected", "volcanic_eruption", "flood_zone", "wildfire_zone", "humanitarian_crisis", "environmental_hazard":
+			return true
+		}
 	}
 	eventScore := wmHeuristics().strongEventScore(text)
 	hasEventSignal := eventScore >= 1.15
@@ -3665,9 +6093,30 @@ func inferZoneConditionAndSubtype(text string, cls horizonMonitorNewsClassificat
 }
 
 func inferZoneConditionAndSubtypeScored(text string, cls horizonMonitorNewsClassification) (conditionType, zoneType, zoneSubType string, score float64) {
+	if looksLikeCredibleChokepointThreat(text, cls) {
+		return "military_conflict", "military_conflict", "armed_tension", 1.16
+	}
+	if looksLikeLaborStrikeOperationalDisruption(text) {
+		return "infrastructure_disruption", "infrastructure_disruption", "systems_disruption", 1.18
+	}
 	if cond, ztyp, sub, zoneScore := wmHeuristics().InferZoneCondition(text); cond != "" {
+		if cond == "infrastructure_disruption" && looksLikeConflictDrivenOperationalDisruption(text) {
+			return "military_conflict", "military_conflict", "armed_tension", math.Max(zoneScore, 1.24)
+		}
 		score = zoneScore
 		return cond, ztyp, sub, score
+	}
+	if looksLikeConcreteOperationalIncident(text, cls) {
+		if looksLikeConflictDrivenOperationalDisruption(text) {
+			return "military_conflict", "military_conflict", "armed_tension", 1.24
+		}
+		if hasAnyKeyword(text,
+			"port", "terminal", "shipping", "tanker", "strait", "canal", "loading operations",
+			"gps jamming", "refinery", "depot", "pipeline", "airport", "airbase", "oil export", "oil facility",
+		) {
+			return "infrastructure_disruption", "infrastructure_disruption", "systems_disruption", 1.22
+		}
+		return "military_conflict", "military_conflict", "armed_tension", 1.22
 	}
 	switch strings.ToLower(strings.TrimSpace(cls.Category)) {
 	case "military", "conflict":
@@ -3717,6 +6166,12 @@ func shouldSuppressWeakAffectedZoneInference(
 ) bool {
 	if strings.TrimSpace(conditionType) == "" {
 		return true
+	}
+	if looksLikeConcreteOperationalIncident(text, cls) {
+		return false
+	}
+	if looksLikeCredibleChokepointThreat(text, cls) {
+		return false
 	}
 	if inferenceScore >= 1.55 {
 		return false
@@ -3832,6 +6287,14 @@ func looksLikeWarmConflictPosture(text string, cls horizonMonitorNewsClassificat
 }
 
 func inferZoneGeo(e *horizonMonitorFeedEvent, place, text, conditionType string) (geoToken, countryCode, countryName string) {
+	if llmPlace, llmCountry, ok := llmAffectedZoneGeoHints(e); ok {
+		if geoToken, countryCode, countryName = inferZoneGeoFromPlace(llmPlace); geoToken != "" {
+			return geoToken, countryCode, countryName
+		}
+		if llmCountry != "" {
+			return strings.ToLower(llmCountry), llmCountry, countryNameFromCode(llmCountry)
+		}
+	}
 	if geoToken, countryCode, countryName = inferZoneGeoFromPlace(place); geoToken != "" {
 		return geoToken, countryCode, countryName
 	}
@@ -3945,6 +6408,15 @@ func inferZonePlaceName(e *horizonMonitorFeedEvent, text, conditionType string) 
 	if e == nil {
 		return ""
 	}
+	if place, _, ok := llmAffectedZoneGeoHints(e); ok && isPlausiblePlaceName(place) {
+		return place
+	}
+	if v := extractPossessiveOperationalPlaceFromTitle(strings.TrimSpace(e.Title)); isPlausiblePlaceName(v) {
+		return v
+	}
+	if v := extractKnownMaritimeChokepointFromText(strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary)}, " ")); isPlausiblePlaceName(v) {
+		return v
+	}
 	if v := inferZonePlaceFromNLPEntities(e); isPlausiblePlaceName(v) {
 		return v
 	}
@@ -3969,6 +6441,35 @@ func inferZonePlaceName(e *horizonMonitorFeedEvent, text, conditionType string) 
 		return ""
 	}
 	return firstNonEmptyString(strings.TrimSpace(e.CountryName), countryNameFromCode(strings.TrimSpace(e.CountryCode)))
+}
+
+func llmAffectedZoneGeoHints(e *horizonMonitorFeedEvent) (place string, countryCode string, ok bool) {
+	if e == nil || e.Raw == nil {
+		return "", "", false
+	}
+	raw, has := e.Raw["llmArticleAdjudication"]
+	if !has {
+		return "", "", false
+	}
+	m, okMap := raw.(map[string]interface{})
+	if !okMap || len(m) == 0 {
+		return "", "", false
+	}
+	isEvent, _ := m["isEvent"].(bool)
+	if !isEvent {
+		return "", "", false
+	}
+	eventConfidence, _ := asFloat64(m["eventConfidence"])
+	geoConfidence, _ := asFloat64(m["geoConfidence"])
+	if eventConfidence < 0.86 || geoConfidence < 0.82 {
+		return "", "", false
+	}
+	place = strings.TrimSpace(asString(m["place"]))
+	countryCode = normalizeCountryCode(asString(m["countryCode"]))
+	if place == "" {
+		return "", "", false
+	}
+	return place, countryCode, true
 }
 
 func inferZonePlaceFromNLPEntities(e *horizonMonitorFeedEvent) string {
@@ -4054,6 +6555,9 @@ func extractPlaceFromTitle(title string) string {
 	if title == "" {
 		return ""
 	}
+	if possessive := extractPossessiveOperationalPlaceFromTitle(title); possessive != "" {
+		return possessive
+	}
 	if prefix := extractPlacePrefixFromTitle(title); prefix != "" {
 		return prefix
 	}
@@ -4063,7 +6567,7 @@ func extractPlaceFromTitle(title string) string {
 		return ""
 	}
 	preps := map[string]struct{}{
-		"in": {}, "near": {}, "around": {}, "outside": {}, "at": {}, "off": {}, "across": {}, "from": {}, "of": {}, "to": {},
+		"in": {}, "near": {}, "around": {}, "outside": {}, "at": {}, "on": {}, "off": {}, "across": {}, "from": {}, "of": {}, "to": {},
 	}
 	stop := map[string]struct{}{
 		"the": {}, "a": {}, "an": {}, "latest": {}, "breaking": {}, "report": {}, "reports": {},
@@ -4107,6 +6611,90 @@ func extractPlaceFromTitle(title string) string {
 	return ""
 }
 
+func extractPossessiveOperationalPlaceFromTitle(title string) string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return ""
+	}
+	clean := strings.NewReplacer(",", " ", ";", " ", ":", " ", "(", " ", ")", " ", "|", " ", "\"", " ").Replace(title)
+	words := strings.Fields(clean)
+	if len(words) < 2 {
+		return ""
+	}
+	stop := map[string]struct{}{
+		"stops": {}, "stop": {}, "works": {}, "work": {}, "hit": {}, "hits": {}, "under": {}, "after": {},
+		"before": {}, "amid": {}, "as": {}, "says": {}, "say": {}, "vows": {}, "to": {}, "will": {},
+		"could": {}, "should": {}, "did": {}, "does": {}, "warns": {}, "warn": {}, "why": {}, "what": {},
+		"where": {}, "how": {}, "when": {}, "remains": {}, "remain": {}, "orders": {}, "order": {},
+		"policy": {}, "plan": {}, "stance": {}, "position": {}, "response": {},
+	}
+	for i, raw := range words[:len(words)-1] {
+		token := strings.TrimSpace(raw)
+		if !strings.Contains(token, "'s") && !strings.Contains(token, "’s") {
+			continue
+		}
+		owner := strings.TrimSuffix(strings.TrimSuffix(token, "'s"), "’s")
+		if owner == "" {
+			continue
+		}
+		if normalizeCountryCode(owner) == "" && !strings.EqualFold(strings.TrimSpace(owner), "UAE") && inferCountryCodeFromText(owner) == "" {
+			continue
+		}
+		parts := make([]string, 0, 4)
+		for j := i + 1; j < len(words) && len(parts) < 4; j++ {
+			part := strings.Trim(words[j], " .-_/")
+			if part == "" {
+				break
+			}
+			lower := strings.ToLower(part)
+			if _, blocked := stop[lower]; blocked {
+				break
+			}
+			if lower == "of" && len(parts) > 0 && geographicHeadAllowsOf(parts[0]) {
+				parts = append(parts, part)
+				continue
+			}
+			runes := []rune(part)
+			if len(parts) > 0 && (len(runes) == 0 || !(runes[0] >= 'A' && runes[0] <= 'Z')) &&
+				!hasAnyKeyword(lower, "port", "terminal", "island", "strait", "canal", "airport", "airbase", "refinery", "field") {
+				break
+			}
+			parts = append(parts, part)
+			if hasAnyKeyword(lower, "port", "terminal", "island", "strait", "canal", "airport", "airbase", "refinery", "field") {
+				if j+1 < len(words) && strings.EqualFold(strings.Trim(words[j+1], " .-_/"), "of") && geographicHeadAllowsOf(part) {
+					continue
+				}
+				break
+			}
+		}
+		candidate := strings.TrimSpace(strings.Join(parts, " "))
+		if candidate == "" {
+			continue
+		}
+		if isLikelyTitlePlaceCandidate(candidate) || isPlausiblePlaceName(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func affectedZoneMaritimeIdentityKey(parts ...string) string {
+	text := normalizePhrase(strings.Join(parts, " "))
+	if text == "" {
+		return ""
+	}
+	return normalizePhrase(extractKnownMaritimeChokepointFromText(text))
+}
+
+func affectedZoneSemanticMatchAllowsDifferentMaritimeIdentity(wantIdentity, slug, canonicalPath string) bool {
+	wantIdentity = normalizePhrase(wantIdentity)
+	if wantIdentity == "" {
+		return true
+	}
+	gotIdentity := affectedZoneMaritimeIdentityKey(strings.ReplaceAll(strings.TrimSpace(slug), "-", " "), canonicalPath)
+	return gotIdentity == "" || gotIdentity == wantIdentity
+}
+
 func extractPlacePrefixFromTitle(title string) string {
 	title = strings.TrimSpace(title)
 	if title == "" {
@@ -4129,6 +6717,9 @@ func shouldUseCountryNameAsAffectedZonePlaceFallback(e *horizonMonitorFeedEvent,
 		text = normalizeKeywordText(strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary)}, " "))
 	}
 	if text == "" {
+		return false
+	}
+	if extractKnownMaritimeChokepointFromText(text) != "" {
 		return false
 	}
 	if looksLikeExerciseWithoutIncidentText(text) ||
@@ -4346,6 +6937,9 @@ func shouldSuppressAffectedZoneBySemanticDrift(text string, e *horizonMonitorFee
 	if text == "" {
 		return true
 	}
+	if looksLikeConcreteOperationalIncident(text, cls) {
+		return false
+	}
 	eventScore := wmHeuristics().strongEventScore(text)
 	if (strings.Contains(text, "strait of hormuz") ||
 		strings.Contains(text, "suez canal") ||
@@ -4370,6 +6964,7 @@ func shouldSuppressAffectedZoneBySemanticDrift(text string, e *horizonMonitorFee
 	}
 	if hasAnyKeyword(text,
 		"why did", "how long could", "what happens if", "what would have happened if",
+		"what comes next", "what happened in", "by the numbers",
 		"as it happened", "live blog", "live updates", "counterfactual",
 	) {
 		return true
@@ -4459,6 +7054,24 @@ func looksLikeAdministrativeCommentaryText(text string) bool {
 		"how long could the war last", "what happens if", "as it happened",
 		"live updates", "latest updates", "live blog", "live politics", "politics latest updates",
 	)
+}
+
+func looksLikeExplainerQuestionText(text string) bool {
+	text = normalizeKeywordText(text)
+	if text == "" {
+		return false
+	}
+	if hasDirectDisruptionTrigger(text) {
+		return false
+	}
+	if hasAnyKeyword(text,
+		"why does", "why do", "why did", "why is", "why are", "what is", "what are",
+		"how does", "how do", "how did", "what it is and why it matters", "why it matters",
+		"matter to the", "what to know", "at a glance", "explainer",
+	) {
+		return true
+	}
+	return false
 }
 
 func looksLikeLiveBlogPoliticalCommentaryText(text string) bool {
@@ -4742,6 +7355,9 @@ func shouldSuppressAffectedZoneByEventProfile(
 	conditionType string,
 	profile wmArticleProfile,
 ) bool {
+	if looksLikeConcreteOperationalIncident(text, cls) {
+		return false
+	}
 	host := affectedZoneSourceHost(e)
 	eventScore := wmHeuristics().strongEventScore(text)
 	if profile.likelyAnalysisRoundup() && !looksLikeWarmConflictPosture(text, cls) {
@@ -4953,6 +7569,18 @@ func shouldSuppressAffectedZoneByGeoCoherence(place, geoToken, countryCode, geoP
 	if place == "" {
 		return false
 	}
+	eventText := ""
+	if e != nil {
+		eventText = strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary)}, " ")
+	}
+	if chokepoint := normalizePhrase(extractKnownMaritimeChokepointFromText(eventText)); chokepoint != "" {
+		if place != chokepoint {
+			return true
+		}
+		if geoToken != "sea" {
+			return true
+		}
+	}
 	if cc := inferCountryCodeFromText(place); cc != "" && cc != countryCode && countryCode != "" {
 		return true
 	}
@@ -4977,7 +7605,7 @@ func inferZoneGeoFromPlace(place string) (geoToken, countryCode, countryName str
 		if cc := strings.ToUpper(strings.TrimSpace(pt.CountryCode)); cc != "" {
 			return strings.ToLower(cc), cc, countryNameFromCode(cc)
 		}
-		if strings.Contains(p, "strait") || strings.Contains(p, "sea") || strings.Contains(p, "canal") || strings.Contains(p, "shoal") || strings.Contains(p, "channel") || strings.Contains(p, "gulf") {
+		if strings.Contains(p, "strait") || strings.Contains(p, "sea") || strings.Contains(p, "canal") || strings.Contains(p, "shoal") || strings.Contains(p, "channel") || strings.Contains(p, "gulf") || strings.Contains(p, "mandeb") {
 			switch p {
 			case "taiwan strait":
 				return "tw-cn", "", "Taiwan Strait"
@@ -5063,10 +7691,13 @@ func resolveAffectedZoneEntityAnchor(
 	place string,
 	countryCode string,
 ) *affectedZoneEntityAnchor {
-	if p == nil || p.vertexSearch == nil || !p.vertexSearch.IsConfigured() || p.fragmentsRepo == nil || e == nil {
+	if p == nil || p.fragmentsRepo == nil || e == nil {
 		return nil
 	}
 	anchors := extractAffectedZoneObjectAnchors(e, 4)
+	if place = strings.TrimSpace(place); place != "" && isPlausiblePlaceName(place) {
+		anchors = uniqueStrings(append([]string{place}, anchors...))
+	}
 	if len(anchors) == 0 {
 		return nil
 	}
@@ -5077,6 +7708,16 @@ func resolveAffectedZoneEntityAnchor(
 	}
 	best := scoredAnchor{}
 	for _, seed := range anchors {
+		for _, frag := range exactAffectedZoneAnchorFragments(ctx, p, seed) {
+			candidate, candScore := buildAffectedZoneAnchorFromFragment(ctx, seed, wantCountry, e, frag, 0.96, p)
+			if candScore <= best.score {
+				continue
+			}
+			best = scoredAnchor{anchor: candidate, score: candScore}
+		}
+		if p.vertexSearch == nil || !p.vertexSearch.IsConfigured() {
+			continue
+		}
 		resp, err := p.vertexSearch.Search(ctx, &ai.SearchRequest{Query: seed, PageSize: 4})
 		if err != nil || resp == nil || len(resp.Results) == 0 {
 			continue
@@ -5113,6 +7754,193 @@ func resolveAffectedZoneEntityAnchor(
 	return &best.anchor
 }
 
+func exactAffectedZoneAnchorFragments(
+	ctx context.Context,
+	p *HorizonMonitorPipeline,
+	seed string,
+) []*horizonmodels.HorizonFragment {
+	if p == nil || p.fragmentsRepo == nil {
+		return nil
+	}
+	seed = strings.TrimSpace(seed)
+	if seed == "" {
+		return nil
+	}
+	out := make([]*horizonmodels.HorizonFragment, 0, 6)
+	seen := make(map[string]struct{}, 6)
+	for _, fragmentType := range []horizonmodels.FragmentType{
+		horizonmodels.FragmentTypeFacility,
+		horizonmodels.FragmentTypeDeposit,
+		horizonmodels.FragmentTypeGeoRegion,
+		horizonmodels.FragmentTypeOrganization,
+		horizonmodels.FragmentTypeProduct,
+	} {
+		queries := make([][]*horizonmodels.HorizonFragment, 0, 3)
+		if fragments, err := p.fragmentsRepo.FindByLabel(ctx, "en", seed, fragmentType); err == nil {
+			queries = append(queries, fragments)
+		}
+		switch fragmentType {
+		case horizonmodels.FragmentTypeFacility, horizonmodels.FragmentTypeDeposit, horizonmodels.FragmentTypeOrganization:
+			if fragments, err := p.fragmentsRepo.FindByIdentifierAndType(ctx, "shortName", seed, fragmentType); err == nil {
+				queries = append(queries, fragments)
+			}
+			if fragments, err := p.fragmentsRepo.FindByIdentifierAndType(ctx, "legalName", seed, fragmentType); err == nil {
+				queries = append(queries, fragments)
+			}
+		}
+		for _, fragments := range queries {
+			for _, frag := range fragments {
+				if frag == nil || strings.TrimSpace(frag.ID) == "" {
+					continue
+				}
+				if _, ok := seen[strings.TrimSpace(frag.ID)]; ok {
+					continue
+				}
+				seen[strings.TrimSpace(frag.ID)] = struct{}{}
+				out = append(out, frag)
+			}
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		leftScore := affectedZoneExactAnchorFragmentScore(seed, out[i])
+		rightScore := affectedZoneExactAnchorFragmentScore(seed, out[j])
+		if leftScore == rightScore {
+			return strings.TrimSpace(out[i].CanonicalPath) < strings.TrimSpace(out[j].CanonicalPath)
+		}
+		return leftScore > rightScore
+	})
+	return out
+}
+
+func affectedZoneExactAnchorFragmentScore(seed string, frag *horizonmodels.HorizonFragment) float64 {
+	if frag == nil {
+		return 0
+	}
+	score := 0.0
+	switch frag.Type {
+	case horizonmodels.FragmentTypeFacility:
+		score += 0.36
+	case horizonmodels.FragmentTypeDeposit:
+		score += 0.32
+	case horizonmodels.FragmentTypeGeoRegion:
+		score += 0.24
+	case horizonmodels.FragmentTypeOrganization:
+		score += 0.12
+	case horizonmodels.FragmentTypeProduct:
+		score += 0.14
+	default:
+		return 0
+	}
+	label := strings.TrimSpace(frag.Labels["en"])
+	if label == "" {
+		label = humanizePathTail(frag.CanonicalPath)
+	}
+	seedNorm := normalizePhrase(seed)
+	labelNorm := normalizePhrase(label)
+	switch {
+	case seedNorm != "" && labelNorm == seedNorm:
+		score += 0.10
+	case seedNorm != "" && strings.Contains(labelNorm, seedNorm):
+		score += 0.18
+	case seedNorm != "" && strings.Contains(seedNorm, labelNorm):
+		score += 0.04
+	}
+	if looksLikeOperationalAnchorPath(strings.Join([]string{label, strings.TrimSpace(frag.CanonicalPath)}, " ")) {
+		score += 0.22
+	}
+	if _, _, hasCoord := horizonrepo.ResolveFragmentCoordinates(frag); hasCoord {
+		score += 0.08
+	}
+	if strings.HasPrefix(strings.TrimSpace(frag.CanonicalPath), "/fac/na/") {
+		score -= 0.02
+	}
+	return score
+}
+
+func affectedZoneLinkedFragmentScore(
+	ctx context.Context,
+	seed string,
+	wantCountry string,
+	e *horizonMonitorFeedEvent,
+	frag *horizonmodels.HorizonFragment,
+	baseScore float64,
+	p *HorizonMonitorPipeline,
+) float64 {
+	if frag == nil {
+		return 0
+	}
+	score := baseScore
+	switch frag.Type {
+	case horizonmodels.FragmentTypeFacility:
+		score += 0.28
+	case horizonmodels.FragmentTypeDeposit:
+		score += 0.26
+	case horizonmodels.FragmentTypeOrganization:
+		score += 0.24
+	case horizonmodels.FragmentTypeProduct:
+		score += 0.22
+	case horizonmodels.FragmentTypeGeoRegion:
+		score += 0.16
+	default:
+		return 0
+	}
+	score += affectedZoneExactAnchorFragmentScore(seed, frag) * 0.22
+
+	label := strings.TrimSpace(frag.Labels["en"])
+	if label == "" {
+		label = humanizePathTail(frag.CanonicalPath)
+	}
+	text := normalizeKeywordText(strings.Join([]string{
+		seed,
+		label,
+		strings.TrimSpace(frag.CanonicalPath),
+		func() string {
+			if e == nil {
+				return ""
+			}
+			return strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary)}, " ")
+		}(),
+	}, " "))
+	seedNorm := normalizePhrase(seed)
+	labelNorm := normalizePhrase(label)
+	if seedNorm != "" && labelNorm == seedNorm {
+		score += 0.10
+	} else if seedNorm != "" && (strings.Contains(labelNorm, seedNorm) || strings.Contains(seedNorm, labelNorm)) {
+		score += 0.06
+	}
+	if looksLikeOperationalAnchorPath(text) {
+		score += 0.08
+	}
+	energyContext := hasAnyKeyword(text, "lng", "helium", "natural gas", "gas", "industrial city", "energy infrastructure", "processing complex", "industrial gas")
+	maritimeContext := hasAnyKeyword(text, "shipping", "maritime", "container", "cargo", "dockworker", "dockworkers", "port", "terminal")
+	pathText := normalizeKeywordText(strings.Join([]string{strings.TrimSpace(frag.CanonicalPath), label}, " "))
+	if energyContext {
+		if hasAnyKeyword(pathText, "qatarenergy", "industrial city", "industrial-city", "lng", "gas", "helium", "processing", "complex") {
+			score += 0.18
+		}
+		if hasAnyKeyword(pathText, "/fac/port/", " port") && !maritimeContext {
+			score -= 0.12
+		}
+	}
+	if maritimeContext {
+		if hasAnyKeyword(pathText, "/fac/port/", " port", "terminal", "maritime", "shipping") {
+			score += 0.12
+		}
+	}
+	if cc := affectedZoneCountryFromFragment(frag); wantCountry != "" && cc != "" && strings.EqualFold(cc, wantCountry) {
+		score += 0.08
+	}
+	if frag.Type == horizonmodels.FragmentTypeProduct && hasAnyKeyword(text, "lng", "helium", "natural gas", "gas", "oil", "crude", "shipping", "freight", "container") {
+		score += 0.08
+	}
+	if frag.Type == horizonmodels.FragmentTypeOrganization && p != nil {
+		if fallback, fallbackScore := resolveAffectedZoneOperationalAnchorFromOrg(ctx, p, frag, e, wantCountry); fallbackScore > 0 && strings.TrimSpace(fallback.FragmentPath) != "" {
+			score += 0.04
+		}
+	}
+	return score
+}
+
 func buildAffectedZoneAnchorFromFragment(
 	ctx context.Context,
 	seed string,
@@ -5125,7 +7953,8 @@ func buildAffectedZoneAnchorFromFragment(
 	if frag == nil {
 		return affectedZoneEntityAnchor{}, 0
 	}
-	if strings.HasPrefix(strings.TrimSpace(frag.CanonicalPath), "/fac/na/") {
+	placeholderFacility := strings.HasPrefix(strings.TrimSpace(frag.CanonicalPath), "/fac/na/")
+	if placeholderFacility && shouldRejectAffectedZonePlaceholderFacilityAnchor(seed, e, frag) {
 		return affectedZoneEntityAnchor{}, 0
 	}
 	lat, lon, hasCoord := horizonrepo.ResolveFragmentCoordinates(frag)
@@ -5133,6 +7962,9 @@ func buildAffectedZoneAnchorFromFragment(
 		return affectedZoneEntityAnchor{}, 0
 	}
 	cc := affectedZoneCountryFromFragment(frag)
+	if cc == "" && placeholderFacility && wantCountry != "" {
+		cc = strings.ToUpper(strings.TrimSpace(wantCountry))
+	}
 	if wantCountry != "" && cc != "" && !strings.EqualFold(cc, wantCountry) {
 		return affectedZoneEntityAnchor{}, 0
 	}
@@ -5159,9 +7991,16 @@ func buildAffectedZoneAnchorFromFragment(
 	if strings.EqualFold(strings.TrimSpace(seed), label) {
 		score += 0.06
 	}
+	if looksLikeOperationalAnchorPath(strings.Join([]string{label, strings.TrimSpace(frag.CanonicalPath)}, " ")) {
+		score += 0.08
+	}
+	if placeholderFacility {
+		score -= 0.02
+	}
 	if cc != "" && wantCountry != "" && strings.EqualFold(cc, wantCountry) {
 		score += 0.08
 	}
+	score += affectedZoneExactAnchorFragmentScore(seed, frag) * 0.30
 	if frag.Type == horizonmodels.FragmentTypeOrganization {
 		if fallback, fallbackScore := resolveAffectedZoneOperationalAnchorFromOrg(ctx, p, frag, e, wantCountry); fallbackScore > 0 {
 			return fallback, score + fallbackScore
@@ -5191,6 +8030,40 @@ func buildAffectedZoneAnchorFromFragment(
 		GeoPrecision:   "entity_anchor",
 		FragmentPath:   strings.TrimSpace(frag.CanonicalPath),
 	}, score
+}
+
+func shouldRejectAffectedZonePlaceholderFacilityAnchor(seed string, e *horizonMonitorFeedEvent, frag *horizonmodels.HorizonFragment) bool {
+	if frag == nil || !strings.HasPrefix(strings.TrimSpace(frag.CanonicalPath), "/fac/na/") {
+		return false
+	}
+	if _, _, hasCoord := horizonrepo.ResolveFragmentCoordinates(frag); !hasCoord {
+		return true
+	}
+	label := strings.TrimSpace(frag.Labels["en"])
+	if label == "" {
+		label = humanizePathTail(frag.CanonicalPath)
+	}
+	seedNorm := normalizePhrase(seed)
+	labelNorm := normalizePhrase(label)
+	textNorm := normalizeKeywordText(strings.Join([]string{
+		strings.TrimSpace(seed),
+		strings.TrimSpace(label),
+		strings.TrimSpace(frag.CanonicalPath),
+	}, " "))
+	if e != nil {
+		textNorm = normalizeKeywordText(strings.Join([]string{
+			textNorm,
+			strings.TrimSpace(e.Title),
+			strings.TrimSpace(e.Summary),
+		}, " "))
+	}
+	if seedNorm != "" && (labelNorm == seedNorm || strings.Contains(labelNorm, seedNorm) || strings.Contains(seedNorm, labelNorm)) {
+		return false
+	}
+	if looksLikeOperationalAnchorPath(textNorm) {
+		return false
+	}
+	return true
 }
 
 func resolveAffectedZoneOperationalAnchorFromOrg(
@@ -5275,7 +8148,7 @@ func extractAffectedZoneObjectAnchors(e *horizonMonitorFeedEvent, maxCount int) 
 	}
 	out := make([]string, 0, maxCount)
 	seen := map[string]struct{}{}
-	add := func(v string) {
+	addRaw := func(v string) {
 		v = strings.TrimSpace(v)
 		if v == "" || len(out) >= maxCount {
 			return
@@ -5293,6 +8166,12 @@ func extractAffectedZoneObjectAnchors(e *horizonMonitorFeedEvent, maxCount int) 
 		seen[key] = struct{}{}
 		out = append(out, v)
 	}
+	add := func(v string) {
+		if !looksLikeAffectedZoneEntitySeed(v, e) {
+			return
+		}
+		addRaw(v)
+	}
 	for _, key := range []string{
 		"company", "companyName", "organization", "organisation", "operator", "owner",
 		"facility", "plant", "refinery", "port", "terminal", "airport", "field", "deposit",
@@ -5305,6 +8184,13 @@ func extractAffectedZoneObjectAnchors(e *horizonMonitorFeedEvent, maxCount int) 
 		}
 	}
 	countryName := normalizePhrase(firstNonEmptyString(strings.TrimSpace(e.CountryName), countryNameFromCode(strings.TrimSpace(e.CountryCode))))
+	text := strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary)}, " ")
+	if place := inferZonePlaceName(e, normalizeKeywordText(text), ""); place != "" {
+		placeNorm := normalizePhrase(place)
+		if placeNorm != "" && placeNorm != countryName && isPlausiblePlaceName(place) {
+			addRaw(place)
+		}
+	}
 	for _, seed := range heuristicSignalSeedNames(e) {
 		seedNorm := normalizePhrase(seed)
 		if seedNorm == "" || seedNorm == countryName || seedNorm == countryName+" government" {
@@ -5368,20 +8254,47 @@ func isWeakAffectedZonePlace(place, countryName string) bool {
 	return false
 }
 
+func looksLikeOperationalPlaceLabel(label string) bool {
+	label = normalizePhrase(label)
+	if label == "" {
+		return false
+	}
+	return hasAnyKeyword(label, "port", "terminal", "refinery", "airport", "airbase", "island", "strait", "canal", "field", "complex", "embassy")
+}
+
 func shouldAttemptAffectedZoneEntityAnchor(place, countryName, geoPrecision string, hasCoord bool, e *horizonMonitorFeedEvent) bool {
 	if e == nil {
 		return false
 	}
-	if !isWeakAffectedZonePlace(place, countryName) &&
-		!placeSpecificScopeLooksUnreliable(place, countryName, geoPrecision, hasCoord) &&
-		!looksLikeBadAffectedZonePlaceHint(place) {
-		return false
-	}
 	text := normalizeKeywordText(strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary)}, " "))
+	operationalContext := looksLikeOperationalPlaceLabel(place) || hasAnyKeyword(text,
+		"facility", "plant", "refinery", "port", "terminal",
+		"airport", "factory", "fab", "field", "deposit", "pipeline", "industrial city",
+		"complex", "site", "infrastructure", "energy infrastructure", "lng", "natural gas", "gas", "helium",
+	)
+	placeSpecific := !isWeakAffectedZonePlace(place, countryName) &&
+		!placeSpecificScopeLooksUnreliable(place, countryName, geoPrecision, hasCoord) &&
+		!looksLikeBadAffectedZonePlaceHint(place)
+	if placeSpecific {
+		geoToken, placeCountryCode, _ := inferZoneGeoFromPlace(place)
+		if geoToken != "" && !operationalContext {
+			return false
+		}
+		lpCountry := ""
+		if e != nil {
+			lpCountry = strings.TrimSpace(countryFromLocationPathString(e.LocationPath))
+		}
+		if lpCountry == "" &&
+			normalizeCountryCode(e.CountryCode) == "" &&
+			normalizeCountryCode(placeCountryCode) == "" &&
+			!(operationalContext && hasCoord) {
+			return false
+		}
+	}
 	if !hasAnyKeyword(text,
 		"company", "operator", "owner", "facility", "plant", "refinery", "port", "terminal",
 		"airport", "factory", "fab", "field", "deposit", "pipeline", "mine", "industrial city",
-		"complex", "site",
+		"complex", "site", "infrastructure", "energy infrastructure", "lng", "natural gas", "gas", "helium",
 	) && len(extractAffectedZoneObjectAnchors(e, 3)) == 0 {
 		return false
 	}
@@ -5469,6 +8382,9 @@ func affectedZoneCountryFromFragment(fragment *horizonmodels.HorizonFragment) st
 	switch parts[0] {
 	case "fac", "org", "gov", "loc", "deposit", "market", "community":
 		if cc := strings.ToUpper(strings.TrimSpace(parts[1])); len(cc) == 2 {
+			if cc == "NA" && (parts[0] == "fac" || parts[0] == "deposit" || parts[0] == "org") {
+				return ""
+			}
 			return cc
 		}
 	}
@@ -5484,7 +8400,11 @@ func looksLikeOperationalAnchorPath(path string) bool {
 		strings.Contains(p, "fab") ||
 		strings.Contains(p, "field") ||
 		strings.Contains(p, "complex") ||
-		strings.Contains(p, "pipeline")
+		strings.Contains(p, "pipeline") ||
+		strings.Contains(p, "industrial city") ||
+		strings.Contains(p, "industrial complex") ||
+		strings.Contains(p, "gas processing") ||
+		strings.Contains(p, "lng")
 }
 
 func humanizePathTail(path string) string {
@@ -5649,46 +8569,56 @@ type geoPoint struct {
 }
 
 var zoneHotspotCoords = map[string]geoPoint{
-	"donetsk":                 {Lat: 48.0159, Lon: 37.8029, CountryCode: "UA"},
-	"kharkiv":                 {Lat: 49.9935, Lon: 36.2304, CountryCode: "UA"},
-	"kyiv":                    {Lat: 50.4501, Lon: 30.5234, CountryCode: "UA"},
-	"crimea":                  {Lat: 45.3453, Lon: 34.4992, CountryCode: "UA"},
-	"gaza":                    {Lat: 31.3547, Lon: 34.3088, CountryCode: "PS"},
-	"gaza strip":              {Lat: 31.4000, Lon: 34.3500, CountryCode: "PS"},
-	"west bank":               {Lat: 31.9500, Lon: 35.2500, CountryCode: "PS"},
-	"northern cyprus":         {Lat: 35.2500, Lon: 33.2500, CountryCode: "CY"},
-	"southern lebanon":        {Lat: 33.2500, Lon: 35.4000, CountryCode: "LB"},
-	"north kivu":              {Lat: -0.9000, Lon: 29.2000, CountryCode: "CD"},
-	"fergana valley":          {Lat: 40.4000, Lon: 71.8000, CountryCode: ""},
-	"kashmir region":          {Lat: 34.1000, Lon: 74.6000, CountryCode: ""},
-	"sir creek":               {Lat: 23.9167, Lon: 68.5833, CountryCode: ""},
-	"marib":                   {Lat: 15.4700, Lon: 45.3250, CountryCode: "YE"},
-	"marib energy zone":       {Lat: 15.4700, Lon: 45.3250, CountryCode: "YE"},
-	"tehran":                  {Lat: 35.6892, Lon: 51.3890, CountryCode: "IR"},
-	"khoy":                    {Lat: 38.5503, Lon: 44.9521, CountryCode: "IR"},
-	"khoy region":             {Lat: 38.5503, Lon: 44.9521, CountryCode: "IR"},
-	"cianjur":                 {Lat: -6.8173, Lon: 107.1423, CountryCode: "ID"},
-	"west java cianjur":       {Lat: -6.8173, Lon: 107.1423, CountryCode: "ID"},
-	"eastern iburi":           {Lat: 42.7000, Lon: 141.9000, CountryCode: "JP"},
-	"red sea":                 {Lat: 21.0000, Lon: 39.0000, CountryCode: ""},
-	"southern red sea":        {Lat: 14.5000, Lon: 42.7000, CountryCode: ""},
-	"red sea security crisis": {Lat: 17.5000, Lon: 41.5000, CountryCode: ""},
-	"north sea":               {Lat: 56.0000, Lon: 3.0000, CountryCode: ""},
-	"bab el mandeb":           {Lat: 12.5850, Lon: 43.3330, CountryCode: ""},
-	"bab-el-mandeb":           {Lat: 12.5850, Lon: 43.3330, CountryCode: ""},
-	"bab al mandab":           {Lat: 12.5850, Lon: 43.3330, CountryCode: ""},
-	"black sea":               {Lat: 43.0000, Lon: 34.0000, CountryCode: ""},
-	"taiwan strait":           {Lat: 24.0000, Lon: 119.5000, CountryCode: ""},
-	"east china sea":          {Lat: 27.5000, Lon: 126.0000, CountryCode: ""},
-	"south china sea":         {Lat: 12.0000, Lon: 114.0000, CountryCode: ""},
-	"hormuz":                  {Lat: 26.5667, Lon: 56.2500, CountryCode: ""},
-	"strait of hormuz":        {Lat: 26.5667, Lon: 56.2500, CountryCode: ""},
-	"english channel":         {Lat: 50.3000, Lon: -1.5000, CountryCode: ""},
-	"strait of gibraltar":     {Lat: 35.9667, Lon: -5.6000, CountryCode: ""},
-	"malacca strait":          {Lat: 3.0000, Lon: 100.5000, CountryCode: ""},
-	"panama canal":            {Lat: 9.0800, Lon: -79.6800, CountryCode: "PA"},
-	"suez":                    {Lat: 30.5852, Lon: 32.2654, CountryCode: "EG"},
-	"suez canal":              {Lat: 30.2000, Lon: 32.5500, CountryCode: "EG"},
+	"donetsk":                     {Lat: 48.0159, Lon: 37.8029, CountryCode: "UA"},
+	"kharkiv":                     {Lat: 49.9935, Lon: 36.2304, CountryCode: "UA"},
+	"kyiv":                        {Lat: 50.4501, Lon: 30.5234, CountryCode: "UA"},
+	"crimea":                      {Lat: 45.3453, Lon: 34.4992, CountryCode: "UA"},
+	"gaza":                        {Lat: 31.3547, Lon: 34.3088, CountryCode: "PS"},
+	"gaza strip":                  {Lat: 31.4000, Lon: 34.3500, CountryCode: "PS"},
+	"west bank":                   {Lat: 31.9500, Lon: 35.2500, CountryCode: "PS"},
+	"northern cyprus":             {Lat: 35.2500, Lon: 33.2500, CountryCode: "CY"},
+	"southern lebanon":            {Lat: 33.2500, Lon: 35.4000, CountryCode: "LB"},
+	"north kivu":                  {Lat: -0.9000, Lon: 29.2000, CountryCode: "CD"},
+	"fergana valley":              {Lat: 40.4000, Lon: 71.8000, CountryCode: ""},
+	"kashmir region":              {Lat: 34.1000, Lon: 74.6000, CountryCode: ""},
+	"sir creek":                   {Lat: 23.9167, Lon: 68.5833, CountryCode: ""},
+	"marib":                       {Lat: 15.4700, Lon: 45.3250, CountryCode: "YE"},
+	"marib energy zone":           {Lat: 15.4700, Lon: 45.3250, CountryCode: "YE"},
+	"baghdad":                     {Lat: 33.3152, Lon: 44.3661, CountryCode: "IQ"},
+	"erbil":                       {Lat: 36.1911, Lon: 44.0092, CountryCode: "IQ"},
+	"tehran":                      {Lat: 35.6892, Lon: 51.3890, CountryCode: "IR"},
+	"isfahan":                     {Lat: 32.6546, Lon: 51.6680, CountryCode: "IR"},
+	"bandar abbas":                {Lat: 27.1832, Lon: 56.2666, CountryCode: "IR"},
+	"kharg island":                {Lat: 29.2600, Lon: 50.3300, CountryCode: "IR"},
+	"kharg island oil export hub": {Lat: 29.2600, Lon: 50.3300, CountryCode: "IR"},
+	"khoy":                        {Lat: 38.5503, Lon: 44.9521, CountryCode: "IR"},
+	"khoy region":                 {Lat: 38.5503, Lon: 44.9521, CountryCode: "IR"},
+	"fujairah":                    {Lat: 25.1288, Lon: 56.3265, CountryCode: "AE"},
+	"port of fujairah":            {Lat: 25.1122, Lon: 56.3575, CountryCode: "AE"},
+	"cianjur":                     {Lat: -6.8173, Lon: 107.1423, CountryCode: "ID"},
+	"west java cianjur":           {Lat: -6.8173, Lon: 107.1423, CountryCode: "ID"},
+	"eastern iburi":               {Lat: 42.7000, Lon: 141.9000, CountryCode: "JP"},
+	"red sea":                     {Lat: 21.0000, Lon: 39.0000, CountryCode: ""},
+	"southern red sea":            {Lat: 14.5000, Lon: 42.7000, CountryCode: ""},
+	"red sea security crisis":     {Lat: 17.5000, Lon: 41.5000, CountryCode: ""},
+	"north sea":                   {Lat: 56.0000, Lon: 3.0000, CountryCode: ""},
+	"bab el mandeb":               {Lat: 12.5850, Lon: 43.3330, CountryCode: ""},
+	"bab-el-mandeb":               {Lat: 12.5850, Lon: 43.3330, CountryCode: ""},
+	"bab al mandab":               {Lat: 12.5850, Lon: 43.3330, CountryCode: ""},
+	"black sea":                   {Lat: 43.0000, Lon: 34.0000, CountryCode: ""},
+	"taiwan strait":               {Lat: 24.0000, Lon: 119.5000, CountryCode: ""},
+	"east china sea":              {Lat: 27.5000, Lon: 126.0000, CountryCode: ""},
+	"south china sea":             {Lat: 12.0000, Lon: 114.0000, CountryCode: ""},
+	"hormuz":                      {Lat: 26.5667, Lon: 56.2500, CountryCode: ""},
+	"strait of hormuz":            {Lat: 26.5667, Lon: 56.2500, CountryCode: ""},
+	"english channel":             {Lat: 50.3000, Lon: -1.5000, CountryCode: ""},
+	"strait of gibraltar":         {Lat: 35.9667, Lon: -5.6000, CountryCode: ""},
+	"malacca strait":              {Lat: 3.0000, Lon: 100.5000, CountryCode: ""},
+	"panama canal":                {Lat: 9.0800, Lon: -79.6800, CountryCode: "PA"},
+	"suez":                        {Lat: 30.5852, Lon: 32.2654, CountryCode: "EG"},
+	"suez canal":                  {Lat: 30.2000, Lon: 32.5500, CountryCode: "EG"},
+	"salalah":                     {Lat: 17.0197, Lon: 54.0897, CountryCode: "OM"},
+	"salalah port":                {Lat: 16.9437, Lon: 54.0053, CountryCode: "OM"},
 }
 
 var zoneCountryCentroids = map[string]geoPoint{
@@ -6560,6 +9490,12 @@ func inferHorizonMonitorSignalType(signalHint string, e *horizonMonitorFeedEvent
 
 	switch {
 	case hasCivilProtestSignal(text):
+		if hasAnyKeyword(text, "port", "terminal", "shipping", "container", "cargo", "operations", "shutdown", "shuts down", "closed", "closure") {
+			if hasAnyKeyword(text, "shipping", "port", "terminal", "container", "cargo", "maritime") {
+				return "risk:maritime_hazard"
+			}
+			return "risk:service_outage"
+		}
 		return "risk:protest"
 	case militaryContext && hasAnyKeyword(text, "f-16", "jdam", "precision bomb", "anti-drone system", "air base", "surface to air", "munition", "fighter bomber"):
 		return "risk:conflict_event"
@@ -6717,6 +9653,12 @@ func heuristicSignalSeedNames(e *horizonMonitorFeedEvent) []string {
 			add(pair.seed)
 		}
 	}
+	if place := strings.TrimSpace(extractKnownPlaceFromText(text)); place != "" {
+		add(humanizeHeuristicSeedName(place))
+		for _, alias := range heuristicSignalPlaceSeedAliases(place, e) {
+			add(alias)
+		}
+	}
 
 	for _, anchor := range extractGeoAnchorSeedNames(e, 5) {
 		add(anchor)
@@ -6744,12 +9686,33 @@ func heuristicSignalSeedPaths(e *horizonMonitorFeedEvent, locationPath string) [
 	}
 	text := strings.Join([]string{strings.TrimSpace(e.Title), strings.TrimSpace(e.Summary)}, " ")
 	countries := extractCountryCodesFromText(text, 3)
-	if len(countries) <= 1 {
-		return nil
-	}
 	primary := strings.ToUpper(strings.TrimSpace(countryFromLocationPathString(locationPath)))
 	paths := make([]string, 0, len(countries))
 	seen := make(map[string]bool)
+	addPath := func(path string) {
+		path = strings.TrimSpace(path)
+		if path == "" || seen[path] {
+			return
+		}
+		seen[path] = true
+		paths = append(paths, path)
+	}
+	if place := normalizePhrase(extractKnownPlaceFromText(text)); place == "strait of hormuz" {
+		addPath("/loc/int/strait-of-hormuz")
+	}
+	if place := normalizePhrase(extractKnownMaritimeChokepointFromText(text)); place != "" {
+		switch place {
+		case "red sea":
+			addPath("/loc/int/red-sea")
+		case "bab el mandeb":
+			addPath("/loc/int/bab-el-mandeb")
+		case "strait of hormuz":
+			addPath("/loc/int/strait-of-hormuz")
+		}
+	}
+	if strings.Contains(normalizePhrase(text), "red sea") {
+		addPath("/loc/int/red-sea")
+	}
 	for _, cc := range countries {
 		cc = strings.ToUpper(strings.TrimSpace(cc))
 		if cc == "" {
@@ -6758,14 +9721,65 @@ func heuristicSignalSeedPaths(e *horizonMonitorFeedEvent, locationPath string) [
 		if cc == primary && primary != "" {
 			continue
 		}
-		path := locationPathFromCountryCode(cc)
-		if path == "" || seen[path] {
-			continue
+		addPath(locationPathFromCountryCode(cc))
+	}
+	if hasDirectDisruptionTrigger(normalizeKeywordText(text)) {
+		if cc := strings.ToUpper(strings.TrimSpace(e.CountryCode)); cc != "" {
+			addPath(locationPathFromCountryCode(cc))
 		}
-		seen[path] = true
-		paths = append(paths, path)
 	}
 	return paths
+}
+
+func humanizeHeuristicSeedName(seed string) string {
+	parts := strings.Fields(strings.TrimSpace(strings.ReplaceAll(seed, "-", " ")))
+	if len(parts) == 0 {
+		return ""
+	}
+	for i, part := range parts {
+		switch strings.ToLower(part) {
+		case "of", "el", "al", "and":
+			parts[i] = strings.ToLower(part)
+		default:
+			runes := []rune(strings.ToLower(part))
+			if len(runes) == 0 {
+				continue
+			}
+			runes[0] = []rune(strings.ToUpper(string(runes[0])))[0]
+			parts[i] = string(runes)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func heuristicSignalPlaceSeedAliases(place string, e *horizonMonitorFeedEvent) []string {
+	place = normalizePhrase(place)
+	if place == "" {
+		return nil
+	}
+	out := make([]string, 0, 3)
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	humanized := humanizeHeuristicSeedName(place)
+	switch place {
+	case "fujairah":
+		add("Port of Fujairah")
+		add("Fujairah oil terminal")
+	case "salalah port":
+		add("Port of Salalah")
+	case "kharg island":
+		add("Kharg Island Iran")
+		add("Kharg Island oil export hub")
+		add("Iranian oil export hub")
+	}
+	if humanized != "" && strings.TrimSpace(e.CountryName) != "" && !strings.Contains(strings.ToLower(humanized), strings.ToLower(strings.TrimSpace(e.CountryName))) {
+		add(humanized + " " + strings.TrimSpace(e.CountryName))
+	}
+	return uniqueStrings(out)
 }
 
 func extractHeuristicSeedPhrases(text string, maxCount int) []string {

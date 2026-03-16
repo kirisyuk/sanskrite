@@ -30,6 +30,8 @@ var (
 	pageSize   = flag.Int("page-size", 200, "Firestore scan page size")
 	startAfter = flag.String("start-after", "", "Resume scan after this canonical path")
 	samples    = flag.Int("samples", 20, "How many sample migrations to print")
+	fromPath    = flag.String("from-path", "", "Optional exact canonicalPath to migrate")
+	toPath      = flag.String("to-path", "", "Optional exact target canonicalPath for --from-path")
 )
 
 type counters struct {
@@ -88,29 +90,25 @@ func main() {
 	log.Printf("placeholder-path backfill: project=%s apply=%v mode=%s pageSize=%d limit=%d", strings.TrimSpace(*projectID), *apply, strings.TrimSpace(*mode), *pageSize, *limit)
 	var st counters
 	var sampleLines []string
+	if strings.TrimSpace(*fromPath) != "" {
+		runExplicitMove(ctx, fragmentsRepo, migrator, &st, &sampleLines)
+		finish(st, sampleLines)
+		return
+	}
 	switch strings.TrimSpace(*mode) {
 	case "all", "loc":
 		runPrefix(ctx, client.Client(), "/loc/", fragmentsRepo, migrator, locCandidate, &st, &sampleLines)
 	}
 	switch strings.TrimSpace(*mode) {
 	case "all", "orggov":
-		runPrefix(ctx, client.Client(), "/org/na/", fragmentsRepo, migrator, func(ctx context.Context, frag *models.HorizonFragment) (string, bool) {
+		runPrefix(ctx, client.Client(), "/org/", fragmentsRepo, migrator, func(ctx context.Context, frag *models.HorizonFragment) (string, bool) {
 			return orgGovCandidate(ctx, frag, geoClient)
 		}, &st, &sampleLines)
-		runPrefix(ctx, client.Client(), "/gov/na/", fragmentsRepo, migrator, func(ctx context.Context, frag *models.HorizonFragment) (string, bool) {
+		runPrefix(ctx, client.Client(), "/gov/", fragmentsRepo, migrator, func(ctx context.Context, frag *models.HorizonFragment) (string, bool) {
 			return orgGovCandidate(ctx, frag, geoClient)
 		}, &st, &sampleLines)
 	}
-
-	sort.Strings(sampleLines)
-	for _, line := range sampleLines {
-		log.Printf("sample migration: %s", line)
-	}
-	log.Printf("summary scanned=%d candidates=%d applied=%d merged=%d materialized=%d lenses=%d lens_artifacts=%d frames=%d agent_jobs=%d",
-		st.scanned, st.candidates, st.applied, st.merged, st.artifacts, st.lenses, st.lensArtifacts, st.frames, st.agentJobs)
-	if *apply {
-		log.Printf("completed at %s", time.Now().UTC().Format(time.RFC3339))
-	}
+	finish(st, sampleLines)
 }
 
 func runPrefix(
@@ -200,7 +198,18 @@ func locCandidate(_ context.Context, frag *models.HorizonFragment) (string, bool
 }
 
 func orgGovCandidate(ctx context.Context, frag *models.HorizonFragment, geoClient coreontology.GeocodingClientInterface) (string, bool) {
-	if frag == nil || geoClient == nil || frag.Type != models.FragmentTypeOrganization {
+	if frag == nil || frag.Type != models.FragmentTypeOrganization {
+		return "", false
+	}
+	switch canonical.ClassifyPlaceholderCanonicalPath(strings.TrimSpace(frag.CanonicalPath)) {
+	case canonical.PlaceholderPathOrgSynthetic, canonical.PlaceholderPathGovSynthetic:
+	default:
+		return "", false
+	}
+	if repairedPath, _, ok := scout.RepairSyntheticOrgCanonicalPath(frag); ok {
+		return strings.TrimSpace(repairedPath), true
+	}
+	if geoClient == nil {
 		return "", false
 	}
 	candidate := cloneFragment(frag)
@@ -213,6 +222,66 @@ func orgGovCandidate(ctx context.Context, frag *models.HorizonFragment, geoClien
 		return "", false
 	}
 	return newPath, true
+}
+
+func runExplicitMove(
+	ctx context.Context,
+	fragmentsRepo *hrepo.HorizonFragmentsRepository,
+	migrator *hrepo.FragmentPathMigrator,
+	st *counters,
+	sampleLines *[]string,
+) {
+	if fragmentsRepo == nil || migrator == nil {
+		return
+	}
+	oldPath := strings.TrimSpace(*fromPath)
+	newPath := strings.TrimSpace(*toPath)
+	if oldPath == "" {
+		log.Fatal("--from-path is required for explicit move")
+	}
+	frag, err := fragmentsRepo.GetByCanonicalPath(ctx, oldPath)
+	if err != nil || frag == nil {
+		log.Fatalf("fragment not found for --from-path=%s: %v", oldPath, err)
+	}
+	if newPath == "" {
+		if autoPath, _, ok := scout.RepairSyntheticOrgCanonicalPath(frag); ok {
+			newPath = strings.TrimSpace(autoPath)
+		}
+	}
+	if newPath == "" {
+		log.Fatalf("could not infer target path for %s; pass --to-path explicitly", oldPath)
+	}
+	st.scanned++
+	st.candidates++
+	*sampleLines = append(*sampleLines, oldPath+" -> "+newPath)
+	if !*apply {
+		return
+	}
+	res, err := migrator.MoveCanonicalPath(ctx, frag.ID, newPath, "placeholder_path_backfill_explicit")
+	if err != nil {
+		log.Fatalf("move failed fragmentId=%s from=%s to=%s err=%v", frag.ID, oldPath, newPath, err)
+	}
+	st.applied++
+	if res.MergedIntoExisting {
+		st.merged++
+	}
+	st.artifacts += res.MaterializedUpdated
+	st.lenses += res.LensesUpdated
+	st.lensArtifacts += res.LensArtifactsUpdated
+	st.frames += res.FramesUpdated
+	st.agentJobs += res.AgentJobsUpdated
+}
+
+func finish(st counters, sampleLines []string) {
+	sort.Strings(sampleLines)
+	for _, line := range sampleLines {
+		log.Printf("sample migration: %s", line)
+	}
+	log.Printf("summary scanned=%d candidates=%d applied=%d merged=%d materialized=%d lenses=%d lens_artifacts=%d frames=%d agent_jobs=%d",
+		st.scanned, st.candidates, st.applied, st.merged, st.artifacts, st.lenses, st.lensArtifacts, st.frames, st.agentJobs)
+	if *apply {
+		log.Printf("completed at %s", time.Now().UTC().Format(time.RFC3339))
+	}
 }
 
 func cloneFragment(in *models.HorizonFragment) *models.HorizonFragment {

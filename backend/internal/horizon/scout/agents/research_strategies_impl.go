@@ -21,6 +21,13 @@ const (
 	maxResearchRawContentChars   = 7000
 )
 
+type researchPromptOptions struct {
+	PreferredModel   string
+	MinContextWindow int
+	MaxOutputSize    int
+	MinCapability    int
+}
+
 // geoAndSectorContext extracts geo and sector from fragment for prompt adaptation.
 // Used to instruct LLM to adapt extraction to regional/industry-specific supply chain and governance patterns.
 func geoAndSectorContext(frag *models.HorizonFragment) string {
@@ -427,20 +434,37 @@ func (s *GeneralResearchStrategy) Enrich(ctx context.Context, input ResearchStra
 // Returns grounding evidence from Vertex AI Search when available.
 // inputFragment is used as fallback when LLM omits fragment or returns invalid structure.
 func (a *ResearchAgent) runResearchPrompt(ctx context.Context, prompt string, inputFragment *models.HorizonFragment) (*ResearchStrategyOutput, error) {
+	return a.runResearchPromptWithOptions(ctx, prompt, inputFragment, researchPromptOptions{})
+}
+
+func (a *ResearchAgent) runResearchPromptWithOptions(ctx context.Context, prompt string, inputFragment *models.HorizonFragment, opts researchPromptOptions) (*ResearchStrategyOutput, error) {
 	if a == nil || a.executor == nil {
 		return nil, fmt.Errorf("research agent executor is not configured")
+	}
+	minContextWindow := opts.MinContextWindow
+	if minContextWindow <= 0 {
+		minContextWindow = 16000
+	}
+	maxOutputSize := opts.MaxOutputSize
+	if maxOutputSize <= 0 {
+		maxOutputSize = 16000
+	}
+	minCapability := opts.MinCapability
+	if minCapability <= 0 {
+		minCapability = 7
 	}
 	verifier := ai.NewSimpleJSONVerifier()
 	task := &ai.AITask{
 		TaskType:     ai.TaskTypeKnowledgeSynthesis,
 		InputContent: prompt,
 		AIRequirements: ai.AIRequirements{
+			PreferredModel:                  strings.TrimSpace(opts.PreferredModel),
 			TextGenerationCapability:        true,
 			SearchGroundingCapability:       true,
 			InternalDataGroundingCapability: true,
-			MinCapabilityScore:              7,
-			MinContextWindow:                16000,
-			MaxOutputSize:                   16000,
+			MinCapabilityScore:              minCapability,
+			MinContextWindow:                minContextWindow,
+			MaxOutputSize:                   maxOutputSize,
 		},
 		Verifier: verifier,
 	}
@@ -1703,6 +1727,7 @@ WHAT TO FIND (org→fac→product→fac→org trees, 1-to-many at each level):
 4. Chains: one chain per leaf path. Preferred pattern: org→fac→product→fac→org. Nodes alternate actor→product→actor; actor nodes use their real types (/org/, /fac/, /deposit/), not forced /fac/.
    transportVia is expected for cross-border, maritime, pipeline, chokepoint, rail, or otherwise route-sensitive legs when a plausible route is inferable.
 5. Extractive: EXTRACTS_FROM (FACILITY→DEPOSIT). If CURRENT FRAGMENT is DEPOSIT: incoming edges with sourceCanonicalPath.
+   Rare exception: if the extracting/processing facility is unknown but the downstream recipient is clear, a DEPOSIT→ORG/FAC SUPPLIES_TO shortcut is acceptable as lower-confidence placeholder evidence. Prefer explicit facility stages whenever known.
 
 INTEGRATION_TYPE qualifier (for SUPPLIES_TO): When the relationship nature is clear, add qualifiers.integration_type:
 - "vertical": supplier is owned/controlled by the same parent (e.g., BYD subsidiaries supplying BYD)
@@ -1743,6 +1768,26 @@ func (a *ResearchAgent) EnrichSupplyChainFull(ctx context.Context, query SupplyC
 	}
 	prompt := a.buildSupplyChainFullQueryPrompt(query)
 	out, err := a.runResearchPrompt(ctx, prompt, nil)
+	if err != nil || out == nil {
+		return nil, err
+	}
+	filteredChains, _ := FilterDomainChains(ctx, taxonomy.DomainModeSupplyChain, out.SupplyChains)
+	return filteredChains, nil
+}
+
+// EnrichSupplyChainHotPath runs a denser first-pass supply chain query for fast-first runtime.
+// It prefers a stronger grounded model and asks for multiple concrete branches in one response.
+func (a *ResearchAgent) EnrichSupplyChainHotPath(ctx context.Context, query SupplyChainQuery) ([]SupplyChain, error) {
+	if a == nil || a.executor == nil {
+		return nil, fmt.Errorf("research agent executor not configured")
+	}
+	prompt := a.buildSupplyChainHotPathPrompt(query)
+	out, err := a.runResearchPromptWithOptions(ctx, prompt, nil, researchPromptOptions{
+		PreferredModel:   "vertex-gemini-2.5-pro",
+		MinContextWindow: 16000,
+		MaxOutputSize:    24000,
+		MinCapability:    8,
+	})
 	if err != nil || out == nil {
 		return nil, err
 	}
@@ -1821,6 +1866,24 @@ OUTPUT: JSON with "supplyChains" array. Each chain:
 
 Return ONLY valid JSON: { "supplyChains": [ { "nodes": [...], "segmentMetrics": [...], "confidence", "reason" } ] }
 No markdown.`, supplyChainMandatoryBlock, supplyChainOperationalModelBlock, supplyChainSpecialScenariosBlock, supplyChainProductGranularityBlock, taskBlock, taxonomy.SupplyChainEdgeTypesString(), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), strategySupplyChainMetricsVocabularyBlock(), strategySupplyChainsJSONContractBlock())
+}
+
+func (a *ResearchAgent) buildSupplyChainHotPathPrompt(query SupplyChainQuery) string {
+	base := a.buildSupplyChainFullQueryPrompt(query)
+	hotPathBlock := `HOT PATH OBJECTIVE:
+- Produce the first high-value supply-chain graph quickly.
+- Prefer a dense first pass over exhaustive recursion.
+- Return multiple concrete branches in ONE response. Target 6-20 chains when evidence supports it; do not stop after a single obvious chain.
+- Mixed anchors are valid. Anchors may be organizations, facilities, deposits, products, or a mix.
+- Prefer concrete operational nodes: factories, plants, mines, depots, bonded warehouses, customs terminals, ports, inland terminals, distribution centers, fulfillment hubs, and stores when they are operationally relevant.
+- For each main branch, try to return a full operational slice: supplier/factory -> product family -> import/customs/port/DC -> recipient facility/store/e-commerce node.
+- For retail / distribution anchors, include the main inbound product families, import/distribution branches, owned subsidiaries, publishing/import arms, local distribution centers, and major downstream store / e-commerce fulfillment branches when they are directly relevant.
+- Explicitly separate main goods flow from component/material inputs and from support/logistics/infrastructure branches. Support branches are useful, but must not crowd out the main goods flows.
+- Include transportVia when a route/chokepoint is known. Include alternatives when a customer/product pair has plausible substitute suppliers.
+- Prefer branches that maximize first-pass decision value: main products, main suppliers, main import/distribution nodes, main transformations, main customer/distribution branches.
+- Do not stop at org -> product -> org if a more operational chain is available. Actor-only skeletons are incomplete unless the anchor itself is inherently actor-only.
+- Keep taxonomy strict. Never invent invalid canonical path families or placeholder nodes.`
+	return base + "\n\n" + hotPathBlock
 }
 
 // ---------------------------------------------------------------------------

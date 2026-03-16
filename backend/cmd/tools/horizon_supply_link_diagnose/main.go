@@ -457,7 +457,8 @@ func deref(v *string) string {
 func printSamples(title string, samples []sampleLink) {
 	fmt.Printf("%s:\n", title)
 	if len(samples) == 0 {
-		fmt.Println("  (none)\n")
+		fmt.Println("  (none)")
+		fmt.Println()
 		return
 	}
 	for _, s := range samples {
@@ -530,7 +531,8 @@ func topCounts(m map[string]int, limit int) []kv {
 func printTop(title string, rows []kv) {
 	fmt.Printf("%s:\n", title)
 	if len(rows) == 0 {
-		fmt.Println("  (none)\n")
+		fmt.Println("  (none)")
+		fmt.Println()
 		return
 	}
 	for _, row := range rows {

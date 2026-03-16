@@ -62,6 +62,7 @@ import (
 	horizonprofile "github.com/igorkirisyuk/sanskrite/internal/horizon/profile"
 	horizonpropagation "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonqa "github.com/igorkirisyuk/sanskrite/internal/horizon/qa"
+	horizonrecommendations "github.com/igorkirisyuk/sanskrite/internal/horizon/recommendations"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonrisk "github.com/igorkirisyuk/sanskrite/internal/horizon/risk"
 	horizonrtctx "github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
@@ -1219,6 +1220,7 @@ func main() {
 		horizonFramesRepo := horizonrepo.NewFramesRepository(fsClient.Client())
 		horizonLensesRepo := horizonrepo.NewLensesRepository(fsClient.Client())
 		horizonEdgesRepo := horizonrepo.NewDependencyEdgesRepository(fsClient.Client())
+		horizonEdgesRepo.WithFragmentsRepo(horizonFragmentsRepo)
 		if parseEnvBool(getEnv("HORIZON_IMPORTANCE_RUNTIME_ENABLED", "true")) {
 			importanceScorer := horizonimportance.NewScorer(horizonFragmentsRepo, horizonEdgesRepo)
 			importanceUpdater := horizonimportance.NewRuntimeUpdater("global", importanceScorer, horizonFragmentsRepo, 2048)
@@ -1314,6 +1316,7 @@ func main() {
 		horizonWatchBriefsRepo := horizonrepo.NewWatchBriefsRepository(fsClient.Client())
 		horizonWatchFeedRepo := horizonrepo.NewWatchFeedEntriesRepository(fsClient.Client())
 		horizonWatchPreferencesRepo := horizonrepo.NewWatchPreferencesRepository(fsClient.Client())
+		horizonStrategicRecommendationsRepo := horizonrepo.NewStrategicRecommendationsRepository(fsClient.Client())
 		horizonScopeAgentConfigsRepo := horizonrepo.NewScopeAgentConfigsRepository(fsClient.Client())
 		horizonScopeAgentStatesRepo := horizonrepo.NewScopeAgentStatesRepository(fsClient.Client())
 		horizonScopeAgentRunsRepo := horizonrepo.NewScopeAgentRunsRepository(fsClient.Client())
@@ -1332,7 +1335,10 @@ func main() {
 		scoutExecutionReason := "scout_dispatch_unavailable"
 
 		// Cloud Tasks dispatcher for Scout jobs (managed queue + autoscaling + retries).
+		// Root hot-path jobs and background continuation/cascade jobs use separate queues so
+		// background retry storms do not starve first-answer delivery.
 		var scoutTasksDispatcher *horizontasks.ScoutCloudTasksDispatcher
+		var scoutBackgroundTasksDispatcher *horizontasks.ScoutCloudTasksDispatcher
 		{
 			enabled := strings.TrimSpace(getEnv("ENABLE_CLOUD_TASKS_SCOUT", "1"))
 			if enabled == "1" || strings.EqualFold(enabled, "true") {
@@ -1340,6 +1346,7 @@ func main() {
 				// NOTE: The original queue name "etigram-scout" may be temporarily unavailable after deletion.
 				// Use env override in prod; default to a safe v2 name.
 				queue := strings.TrimSpace(getEnv("CLOUD_TASKS_SCOUT_QUEUE", "etigram-scout"))
+				backgroundQueue := strings.TrimSpace(getEnv("CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE", "etigram-scout-bg"))
 				baseURL := strings.TrimSpace(getEnv("CLOUD_TASKS_TARGET_BASE_URL", ""))
 				saEmail := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_SERVICE_ACCOUNT", ""))
 				aud := strings.TrimSpace(getEnv("CLOUD_TASKS_OIDC_AUDIENCE", ""))
@@ -1350,9 +1357,22 @@ func main() {
 					}
 					if d, err := horizontasks.NewScoutCloudTasksDispatcher(ctx, projectID, location, queue, targetURL, saEmail, aud); err == nil {
 						scoutTasksDispatcher = d
+						scoutBackgroundTasksDispatcher = d
+						if backgroundQueue != "" && !strings.EqualFold(backgroundQueue, queue) {
+							if bgd, bgErr := horizontasks.NewScoutCloudTasksDispatcher(ctx, projectID, location, backgroundQueue, targetURL, saEmail, aud); bgErr == nil {
+								scoutBackgroundTasksDispatcher = bgd
+							} else {
+								logger.Printf("WARNING: Cloud Tasks (Scout background) disabled due to init error: %v", bgErr)
+							}
+						}
 						scoutExecutionReady = true
 						scoutExecutionReason = "scout_cloud_tasks_enabled"
-						logger.Printf("Cloud Tasks (Scout) enabled: queue=%s location=%s target=%s", queue, location, targetURL)
+						logger.Printf("Cloud Tasks (Scout) enabled: queue=%s backgroundQueue=%s location=%s target=%s",
+							queue,
+							strings.TrimSpace(scoutBackgroundTasksDispatcher.QueueName()),
+							location,
+							targetURL,
+						)
 						horizonScoutingJobsRepo.WithOnCreate(func(c context.Context, job *horizonmodels.ScoutingJob) error {
 							// Best-effort realtime: job created (for Hook->Assemble "Sled" UI).
 							// IMPORTANT: publish with tenantId from the job (security namespace), even though fragments are global.
@@ -1385,11 +1405,38 @@ func main() {
 								_ = pub.PublishJSON(c, realtime.EventType("horizon.scout.job.created"), strings.TrimSpace(job.TenantID), payload)
 							}
 
+							isBackground := false
+							if job != nil && job.State != nil {
+								if v, ok := job.State["parentJobId"].(string); ok && strings.TrimSpace(v) != "" {
+									isBackground = true
+								}
+								if v, ok := job.State["mode"].(string); ok && strings.TrimSpace(v) == "refine_existing_assembly" {
+									isBackground = true
+								}
+							}
+							dispatcher := scoutTasksDispatcher
+							delay := time.Duration(0)
+							queueClass := "foreground"
+							if isBackground && scoutBackgroundTasksDispatcher != nil {
+								dispatcher = scoutBackgroundTasksDispatcher
+								delay = getEnvDuration("CLOUD_TASKS_SCOUT_BACKGROUND_DELAY", 15*time.Second)
+								if delay < 0 {
+									delay = 0
+								}
+								queueClass = "background"
+							}
+
 							// Enqueue by job ID; execution will load full state from Firestore.
-							if err := scoutTasksDispatcher.EnqueueScoutJob(c, job.ID); err != nil {
+							if err := dispatcher.EnqueueScoutJobWithDelay(c, job.ID, delay); err != nil {
 								return err
 							}
-							logger.Printf("Cloud Tasks (Scout) enqueued: jobId=%s target=%s", job.ID, job.TargetCanonicalPath)
+							logger.Printf("Cloud Tasks (Scout) enqueued: class=%s queue=%s delay=%s jobId=%s target=%s",
+								queueClass,
+								dispatcher.QueueName(),
+								delay.String(),
+								job.ID,
+								job.TargetCanonicalPath,
+							)
 							return nil
 						})
 					} else {
@@ -1547,6 +1594,7 @@ func main() {
 		var horizonVertexSyncBatcher *horizonrepo.VertexSyncBatcher
 		if gcsClient != nil && horizonFragmentsBucket != "" {
 			horizonFragmentsRepo.WithStorage(gcsClient, horizonFragmentsBucket)
+			horizonEdgesRepo.WithStorage(gcsClient, horizonFragmentsBucket)
 			if vertexSearchClient != nil {
 				// Use batched sync to avoid quota exhaustion (quota is per-request, not per-document).
 				// Defaults are intentionally conservative to avoid spamming ImportDocuments under high write rates.
@@ -1599,6 +1647,31 @@ func main() {
 				})
 				logger.Printf("Horizon Fragments: Vertex AI Search batched sync enabled (maxBatch=%d minBatch=%d interval=%v)",
 					batchConfig.MaxBatchSize, batchConfig.MinBatchSize, batchConfig.FlushInterval)
+
+				edgeDataStoreID := strings.TrimSpace(getEnvWithAlt("VERTEX_SEARCH_ETIGRAM_EDGE_DATA_STORE_ID", "VERTEX_SEARCH_HORIZON_EDGES_DATA_STORE_ID", ""))
+				if edgeDataStoreID == "" && parseEnvBool(getEnv("VERTEX_SEARCH_ENABLE_EDGE_DOCS_IN_HORIZON_STORE", "false")) {
+					edgeDataStoreID = strings.TrimSpace(getEnvWithAlt("VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID", "VERTEX_SEARCH_HORIZON_DATA_STORE_ID", ""))
+				}
+				if edgeDataStoreID != "" {
+					edgeVertexSyncBatcher := horizonrepo.NewVertexSyncBatcher(
+						func(ctx context.Context, uris []string) (string, error) {
+							return vertexSearchClient.WithDataStore(edgeDataStoreID).ImportDocumentsFromURIs(ctx, uris, "INCREMENTAL", "document")
+						},
+						batchConfig,
+					)
+					horizonEdgesRepo.WithVertexSyncBatcher(edgeVertexSyncBatcher)
+					horizonEdgesRepo.WithVertexSearchDelete(func(ctx context.Context, edgeID string) error {
+						edgeID = strings.TrimSpace(edgeID)
+						if edgeID == "" {
+							return nil
+						}
+						return vertexSearchClient.WithDataStore(edgeDataStoreID).DeleteDocument(ctx, edgeID)
+					})
+					logger.Printf("Horizon Edges: Vertex AI Search batched sync enabled datastore=%s (maxBatch=%d minBatch=%d interval=%v)",
+						edgeDataStoreID, batchConfig.MaxBatchSize, batchConfig.MinBatchSize, batchConfig.FlushInterval)
+				} else {
+					logger.Printf("Horizon Edges: Vertex AI Search sync disabled (set VERTEX_SEARCH_HORIZON_EDGES_DATA_STORE_ID or VERTEX_SEARCH_ETIGRAM_EDGE_DATA_STORE_ID)")
+				}
 			}
 		}
 
@@ -1721,6 +1794,19 @@ func main() {
 				return err
 			})
 			horizonService.SetWatchService(watchService)
+			strategicRecommendationsService := horizonrecommendations.NewService(
+				horizonStrategicRecommendationsRepo,
+				horizonFragmentsRepo,
+				horizonEdgesRepo,
+				horizonScoutingJobsRepo,
+				exec,
+				pub,
+				logger,
+			)
+			horizonService.SetStrategicRecommendationsService(strategicRecommendationsService)
+			horizonScoutingJobsRepo.WithOnComplete(func(ctx context.Context, job *horizonmodels.ScoutingJob) error {
+				return strategicRecommendationsService.HandleScoutingJobComplete(ctx, job)
+			})
 
 			// Initialize Lens subsystem
 			lensLifecycle := horizonlens.NewLifecycleManager(horizonFragmentsRepo)
@@ -1790,6 +1876,7 @@ func main() {
 					logger,
 				).WithTelemetryRepo(horizonTelemetryRepo).
 					WithRealtimePublisher(pub).
+					WithStrategicRecommendations(strategicRecommendationsService).
 					WithVertexSearch(wmVertexSearch),
 			)
 			interpretationQueue := horizoninterp.NewInterpretationQueue(fsClient.Client())
@@ -2591,15 +2678,28 @@ func main() {
 	// AIS vessel positions (AISStream proxy). Key from env AISSTREAM_API_KEY or GCP secret aisstream_api_key; no auth.
 	aisstreamVesselsHandler := httphandlers.NewAISStreamVesselsHandler(logger, projectID)
 	mux.Handle("/api/v1/vessels/bbox", aisstreamVesselsHandler)
-	// Default 2: domain expansion spawns cascade jobs (CCBSA, Pioneer, market, etc.); with 1,
-	// second task gets 429 "saturated" while first runs. Cloud Tasks retries, but throughput suffers.
-	scoutMaxInflightPerInstance := getEnvInt("SCOUT_MAX_INFLIGHT_PER_INSTANCE", 2)
-	if scoutMaxInflightPerInstance < 1 {
-		scoutMaxInflightPerInstance = 1
+	// Foreground root jobs and background child/refine jobs should not compete for the same tiny slot pool.
+	// Otherwise a continuation storm can starve a new hot-path root job and destroy time-to-first-answer.
+	scoutDefaultInflightPerInstance := getEnvInt("SCOUT_MAX_INFLIGHT_PER_INSTANCE", 2)
+	if scoutDefaultInflightPerInstance < 1 {
+		scoutDefaultInflightPerInstance = 1
 	}
-	scoutInflightLimiter := make(chan struct{}, scoutMaxInflightPerInstance)
+	scoutForegroundInflightPerInstance := getEnvInt("SCOUT_MAX_FOREGROUND_INFLIGHT_PER_INSTANCE", scoutDefaultInflightPerInstance)
+	if scoutForegroundInflightPerInstance < 1 {
+		scoutForegroundInflightPerInstance = 1
+	}
+	scoutBackgroundInflightPerInstance := getEnvInt("SCOUT_MAX_BACKGROUND_INFLIGHT_PER_INSTANCE", scoutDefaultInflightPerInstance*2)
+	if scoutBackgroundInflightPerInstance < 1 {
+		scoutBackgroundInflightPerInstance = 1
+	}
+	scoutForegroundLimiter := make(chan struct{}, scoutForegroundInflightPerInstance)
+	scoutBackgroundLimiter := make(chan struct{}, scoutBackgroundInflightPerInstance)
 	var scoutInFlightByJob sync.Map
-	logger.Printf("Scout task limiter enabled: max_inflight_per_instance=%d", scoutMaxInflightPerInstance)
+	logger.Printf("Scout task limiter enabled: foreground=%d background=%d default=%d",
+		scoutForegroundInflightPerInstance,
+		scoutBackgroundInflightPerInstance,
+		scoutDefaultInflightPerInstance,
+	)
 
 	// Cloud Tasks -> Scout job execution (managed queue + retries + autoscaling).
 	// Secured via OIDC token issued for the configured service account.
@@ -2688,11 +2788,29 @@ func main() {
 			return
 		}
 		defer scoutInFlightByJob.Delete(jobID)
+		stateString := func(key string) string {
+			if job.State == nil {
+				return ""
+			}
+			if value, ok := job.State[key].(string); ok {
+				return strings.TrimSpace(value)
+			}
+			if value, ok := job.State[key]; ok && value != nil {
+				return strings.TrimSpace(fmt.Sprintf("%v", value))
+			}
+			return ""
+		}
+		jobClass := "foreground"
+		limiter := scoutForegroundLimiter
+		if stateString("parentJobId") != "" || stateString("mode") == "refine_existing_assembly" {
+			jobClass = "background"
+			limiter = scoutBackgroundLimiter
+		}
 		select {
-		case scoutInflightLimiter <- struct{}{}:
-			defer func() { <-scoutInflightLimiter }()
+		case limiter <- struct{}{}:
+			defer func() { <-limiter }()
 		default:
-			logger.Printf("Scout executor saturated: jobId=%s target=%s", jobID, job.TargetCanonicalPath)
+			logger.Printf("Scout executor saturated: class=%s jobId=%s target=%s", jobClass, jobID, job.TargetCanonicalPath)
 			http.Error(w, "scout executor saturated (retry later)", http.StatusTooManyRequests)
 			return
 		}

@@ -21,6 +21,7 @@ import TermsOfUsage from './pages/TermsOfUsage';
 import PrivacyNotice from './pages/PrivacyNotice';
 import LegalModal from './components/LegalModal';
 import StartupError from './components/StartupError';
+import { StrategicRecommendationsInbox } from './components/StrategicRecommendationsInbox';
 import { getFirebaseInitError } from './lib/firebase';
 import HorizonMarketProfilePrintPage from './pages/HorizonMarketProfilePrintPage';
 import HorizonOrgProfilePrintPage from './pages/HorizonOrgProfilePrintPage';
@@ -124,6 +125,7 @@ function AppContent() {
         {showAdminModal && isAdmin && (
           <AdminModal isOpen={showAdminModal} onClose={() => setShowAdminModal(false)} />
         )}
+        <StrategicRecommendationsInbox />
       </div>
     </div>
   );

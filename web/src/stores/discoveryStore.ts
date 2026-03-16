@@ -1020,6 +1020,11 @@ export const useDiscoveryStore = create<DiscoveryState>((set, get) => ({
                   try { useHorizonRealtimeStore.getState().handleWsEvent(msg.type, msg.data); } catch {}
                 })
                 .catch(() => {});
+              import('./strategicRecommendationsStore')
+                .then(({ useStrategicRecommendationsStore }) => {
+                  try { useStrategicRecommendationsStore.getState().applyRealtimeEvent(msg.type, msg.data); } catch {}
+                })
+                .catch(() => {});
             }
             
             // Notify verified.stream listeners

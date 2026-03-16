@@ -72,3 +72,70 @@ func TestBindSegment_DoesNotBindRandomRegionalFlowFromGenericRoadEvidence(t *tes
 		t.Fatalf("expected no flow binding from generic road evidence, got %v", binding.FlowRefs)
 	}
 }
+
+func TestAffectedZoneLookupRefs_IncludesProductRef(t *testing.T) {
+	got := affectedZoneLookupRefs(
+		"/fac/qa/qatarenergy-lng-south-complex",
+		"/org/jp/jera",
+		"/product/finished/mechanical/assembly/helium",
+		[]string{"/fac/na/strait-of-hormuz"},
+	)
+	for _, want := range []string{
+		"/fac/qa/qatarenergy-lng-south-complex",
+		"/loc/qa",
+		"/org/jp/jera",
+		"/loc/jp",
+		"/product/finished/mechanical/assembly/helium",
+		"/fac/na/strait-of-hormuz",
+		"/loc/int/strait-of-hormuz",
+	} {
+		found := false
+		for _, ref := range got {
+			if ref == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected lookup refs to contain %q, got %v", want, got)
+		}
+	}
+}
+
+func TestExpandAffectedZoneLookupRef_AddsCountryAndChokepointAliases(t *testing.T) {
+	got := expandAffectedZoneLookupRef("/loc/ye/taizz/bab-el-mandeb")
+	for _, want := range []string{
+		"/loc/ye/taizz/bab-el-mandeb",
+		"/loc/ye",
+		"/loc/int/bab-el-mandeb",
+	} {
+		found := false
+		for _, ref := range got {
+			if ref == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected expanded refs to contain %q, got %v", want, got)
+		}
+	}
+}
+
+func TestExpandAffectedZoneLookupRef_NormalizesLegacyOrgPath(t *testing.T) {
+	got := expandAffectedZoneLookupRef("/org/tesla-inc")
+	for _, want := range []string{
+		"/org/na/tesla",
+	} {
+		found := false
+		for _, ref := range got {
+			if ref == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected expanded refs to contain %q, got %v", want, got)
+		}
+	}
+}

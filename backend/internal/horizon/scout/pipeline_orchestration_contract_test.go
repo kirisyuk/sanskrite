@@ -206,3 +206,24 @@ func TestRequiredStagesForPipelinePassJob_MixedDomainJobSkipsFastAssemblyBarrier
 		}
 	}
 }
+
+func TestTransitionWithoutWorkflowUpdatesLocalJobSnapshot(t *testing.T) {
+	ctx := context.Background()
+	engine := &ScoutEngine{}
+	job := newPipelineContractTestJob("job-transition-local")
+	job.Status = coreModels.AgentJobStatusPending
+	job.CurrentState = models.ScoutingJobStatePending
+
+	if err := engine.transition(ctx, job, models.ScoutingJobStateExecution, 0.25, "pipeline_pass_base_enrichment"); err != nil {
+		t.Fatalf("transition returned error: %v", err)
+	}
+	if job.CurrentState != models.ScoutingJobStateExecution {
+		t.Fatalf("currentState=%q, want %q", job.CurrentState, models.ScoutingJobStateExecution)
+	}
+	if job.Status != coreModels.AgentJobStatusRunning {
+		t.Fatalf("status=%q, want %q", job.Status, coreModels.AgentJobStatusRunning)
+	}
+	if got := parseStateString(job.State["currentState"]); got != string(models.ScoutingJobStateExecution) {
+		t.Fatalf("state.currentState=%q, want %q", got, models.ScoutingJobStateExecution)
+	}
+}

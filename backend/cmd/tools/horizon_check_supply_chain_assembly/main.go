@@ -30,6 +30,8 @@ func main() {
 	failOnMissingDerivedPaths := flag.Bool("fail-on-missing-derived-paths", true, "fail when declared derived path artifacts are missing")
 	requireAssemblyEdges := flag.Bool("require-assembly-edges", false, "fail when assemblyEdges is empty")
 	minAnchorFanin := flag.Int("min-anchor-fanin", 1, "minimum unique incoming upstream products per anchor")
+	minPrimaryBranches := flag.Int("min-primary-branches", 1, "minimum promoted primary branches")
+	maxNoiseRatio := flag.Float64("max-noise-ratio", 0.75, "maximum allowed support/background noise ratio")
 	flag.Parse()
 
 	if strings.TrimSpace(*jobID) == "" && strings.TrimSpace(*artifactKey) == "" {
@@ -101,6 +103,8 @@ func main() {
 			FailOnMissingDerivedPaths: *failOnMissingDerivedPaths,
 			RequireAssemblyEdges:      *requireAssemblyEdges,
 			MinAnchorFanin:            *minAnchorFanin,
+			MinPrimaryBranches:        *minPrimaryBranches,
+			MaxNoiseRatio:             *maxNoiseRatio,
 		},
 	)
 	if err != nil {
@@ -204,6 +208,8 @@ func printTextReport(jobID string, report *horizonscout.SupplyChainAssemblyDiagn
 	fmt.Printf("anchors=%v resolved=%v\n", report.AnchorSet, report.ResolvedAnchors)
 	fmt.Printf("counts products=%d actors=%d supply_edges=%d transforms=%d assembly_edges=%d routes=%d derived_declared=%d derived_found=%d\n",
 		report.ProductNodesN, report.ActorNodesN, report.SupplyEdgesN, report.TransformEdgesN, report.AssemblyEdgesN, report.RouteBindingsN, report.DerivedPathKeysN, report.DerivedPathArtifactsN)
+	fmt.Printf("quality primary=%d secondary=%d support=%d noise_ratio=%.2f primary_route_coverage=%.2f named_facility_coverage=%.2f named_product_coverage=%.2f\n",
+		report.PrimaryBranchesN, report.SecondaryBranchesN, report.SupportBranchesN, report.NoiseRatio, report.PrimaryRouteCoverage, report.NamedFacilityCoverage, report.NamedProductCoverage)
 	if len(report.AnchorFanin) > 0 {
 		keys := make([]string, 0, len(report.AnchorFanin))
 		for key := range report.AnchorFanin {
@@ -216,6 +222,18 @@ func printTextReport(jobID string, report *horizonscout.SupplyChainAssemblyDiagn
 	}
 	if len(report.OpenGaps) > 0 {
 		fmt.Printf("open_gaps=%v\n", report.OpenGaps)
+	}
+	if len(report.TopRoutes) > 0 {
+		fmt.Printf("top_routes=%v\n", report.TopRoutes)
+	}
+	if len(report.TopDistributionNodes) > 0 {
+		fmt.Printf("top_distribution_nodes=%v\n", report.TopDistributionNodes)
+	}
+	if len(report.TopSuppliers) > 0 {
+		fmt.Printf("top_suppliers=%v\n", report.TopSuppliers)
+	}
+	if len(report.TopProductFamilies) > 0 {
+		fmt.Printf("top_product_families=%v\n", report.TopProductFamilies)
 	}
 	if showPaths && len(derivedPathKeys) > 0 {
 		fmt.Printf("derived_paths=%v\n", derivedPathKeys)

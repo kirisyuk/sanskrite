@@ -28,6 +28,33 @@ func TestSupplyChainEnrichmentPrompt_OnlyCanonicalTypes(t *testing.T) {
 	}
 }
 
+func TestSupplyChainHotPathPrompt_PrefersConcreteOperationalNodes(t *testing.T) {
+	a := NewResearchAgent(nil)
+	prompt := a.buildSupplyChainHotPathPrompt(SupplyChainQuery{
+		Anchor:        "/org/kz/meloman-marwin",
+		AnchorType:    "org",
+		Direction:     "both",
+		Depth:         3,
+		ProductFilter: []string{"books", "electronics"},
+		GeoFilter:     []string{"kz", "cn"},
+	})
+	for _, want := range []string{
+		"Target 6-20 chains",
+		"Prefer concrete operational nodes: factories, plants, mines, depots, bonded warehouses, customs terminals, ports, inland terminals, distribution centers, fulfillment hubs, and stores",
+		"supplier/factory -> product family -> import/customs/port/DC -> recipient facility/store/e-commerce node",
+		"local distribution centers, and major downstream store / e-commerce fulfillment branches",
+		"Support branches are useful, but must not crowd out the main goods flows",
+		"Do not stop at org -> product -> org if a more operational chain is available",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("hot path prompt missing %q", want)
+		}
+	}
+	if strings.Contains(prompt, "/org/... -> /product/... -> /org/...") {
+		t.Fatalf("hot path prompt must not allow actor-level fallback skeletons")
+	}
+}
+
 func TestGovernanceEnrichmentPrompt_OnlyCanonicalTypes(t *testing.T) {
 	a := NewResearchAgent(nil)
 	input := ResearchStrategyInput{

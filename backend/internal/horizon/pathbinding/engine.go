@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	mapactivity "github.com/igorkirisyuk/sanskrite/internal/horizon/mapactivity"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
@@ -37,16 +38,20 @@ type Engine struct {
 
 	mu                  sync.RWMutex
 	fragmentByPathCache map[string]*horizonmodels.HorizonFragment
+	fragmentsByPathCache map[string][]*horizonmodels.HorizonFragment
 	zoneRefsByPathCache map[string][]string
+	lookupRefsByPath    map[string][]string
 }
 
 func NewEngine(fragmentsRepo *repo.HorizonFragmentsRepository, edgesRepo *repo.DependencyEdgesRepository) *Engine {
 	return &Engine{
-		fragmentsRepo:       fragmentsRepo,
-		edgesRepo:           edgesRepo,
-		catalog:             mapactivity.LoadCatalog(),
-		fragmentByPathCache: make(map[string]*horizonmodels.HorizonFragment),
-		zoneRefsByPathCache: make(map[string][]string),
+		fragmentsRepo:        fragmentsRepo,
+		edgesRepo:            edgesRepo,
+		catalog:              mapactivity.LoadCatalog(),
+		fragmentByPathCache:  make(map[string]*horizonmodels.HorizonFragment),
+		fragmentsByPathCache: make(map[string][]*horizonmodels.HorizonFragment),
+		zoneRefsByPathCache:  make(map[string][]string),
+		lookupRefsByPath:     make(map[string][]string),
 	}
 }
 
@@ -56,7 +61,7 @@ func (e *Engine) BindSegment(ctx context.Context, in SegmentInput) SegmentBindin
 	binding.GeoRefs = uniqStrings(collectGeoRefs(in.SupplierRef, in.CustomerRef, in.TransportViaRefs))
 	binding.FlowRefs, binding.AlternateFlowRefs = e.matchFlows(in, binding.Mode, binding.GeoRefs)
 	binding.ZoneRefs = e.matchZones(in, binding.GeoRefs)
-	binding.AffectedZoneRefs = e.lookupAffectedZones(ctx, in.SupplierRef, in.CustomerRef, in.TransportViaRefs)
+	binding.AffectedZoneRefs = e.lookupAffectedZones(ctx, in.SupplierRef, in.CustomerRef, in.ProductRef, in.TransportViaRefs)
 	binding.SpatialSemantics = inferSpatialSemantics(in, binding)
 	binding.BindingConfidence = inferBindingConfidence(in, binding)
 	return binding
@@ -249,16 +254,218 @@ func (e *Engine) matchZones(in SegmentInput, geoRefs []string) []string {
 	return out
 }
 
-func (e *Engine) lookupAffectedZones(ctx context.Context, supplierRef, customerRef string, viaRefs []string) []string {
-	refs := make([]string, 0, 2+len(viaRefs))
-	refs = append(refs, strings.TrimSpace(supplierRef), strings.TrimSpace(customerRef))
-	refs = append(refs, viaRefs...)
+func affectedZoneLookupRefs(supplierRef, customerRef, productRef string, viaRefs []string) []string {
+	refs := make([]string, 0, 3+len(viaRefs))
+	for _, ref := range append([]string{supplierRef, customerRef, productRef}, viaRefs...) {
+		refs = append(refs, expandAffectedZoneLookupRef(ref)...)
+	}
+	return uniqStrings(refs)
+}
+
+func expandAffectedZoneLookupRef(ref string) []string {
+	ref = canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(ref))
+	if ref == "" {
+		return nil
+	}
+	out := []string{ref}
+	if country := affectedZoneCountryOverlayRef(ref); country != "" {
+		out = append(out, country)
+	}
+	if parent := affectedZoneLocationCountryParent(ref); parent != "" {
+		out = append(out, parent)
+	}
+	out = append(out, affectedZoneStrategicAliasRefs(ref)...)
+	return uniqStrings(out)
+}
+
+func affectedZoneCountryOverlayRef(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" || strings.HasPrefix(ref, "/product/") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(ref, "/"), "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	if parts[0] == "loc" {
+		if len(parts) >= 2 && len(parts[1]) == 2 && !isPlaceholderCountryCode(parts[1]) {
+			return "/loc/" + strings.ToLower(strings.TrimSpace(parts[1]))
+		}
+		return ""
+	}
+	if len(parts) < 3 || len(parts[1]) != 2 || isPlaceholderCountryCode(parts[1]) {
+		return ""
+	}
+	switch parts[0] {
+	case "fac", "org", "gov", "deposit":
+		return "/loc/" + strings.ToLower(strings.TrimSpace(parts[1]))
+	default:
+		return ""
+	}
+}
+
+func affectedZoneLocationCountryParent(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if !strings.HasPrefix(ref, "/loc/") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(ref, "/"), "/")
+	if len(parts) < 2 || len(parts[1]) != 2 || isPlaceholderCountryCode(parts[1]) {
+		return ""
+	}
+	return "/loc/" + strings.ToLower(strings.TrimSpace(parts[1]))
+}
+
+func affectedZoneStrategicAliasRefs(ref string) []string {
+	ref = normalizeAffectedZoneLookupRef(ref)
+	if ref == "" {
+		return nil
+	}
+	out := make([]string, 0, 4)
+	add := func(paths ...string) {
+		for _, path := range paths {
+			path = canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(path))
+			if path != "" {
+				out = append(out, path)
+			}
+		}
+	}
+	switch {
+	case strings.Contains(ref, "bab_el_mandeb"):
+		add("/loc/int/bab-el-mandeb", "/loc/ye/bab-el-mandeb")
+	case strings.Contains(ref, "strait_of_hormuz") || strings.Contains(ref, "hormuz"):
+		add("/loc/int/strait-of-hormuz", "/loc/ir/hormuz", "/loc/ir/hormozgan/strait-of-hormuz")
+	case strings.Contains(ref, "red_sea"):
+		add("/loc/int/red-sea")
+	case strings.Contains(ref, "suez_canal") || strings.Contains(ref, "/loc/eg/suez") || strings.Contains(ref, "/fac/eg/suez"):
+		add("/loc/int/suez-canal", "/loc/eg/suez")
+	case strings.Contains(ref, "strait_of_malacca") || strings.Contains(ref, "malacca_strait"):
+		add("/loc/int/strait-of-malacca", "/loc/my/malacca")
+	case strings.Contains(ref, "panama_canal"):
+		add("/loc/int/panama-canal", "/loc/pa/panama")
+	}
+	return uniqStrings(out)
+}
+
+func normalizeAffectedZoneLookupRef(ref string) string {
+	ref = strings.ToLower(strings.TrimSpace(ref))
+	ref = strings.ReplaceAll(ref, " ", "_")
+	ref = strings.ReplaceAll(ref, "-", "_")
+	for strings.Contains(ref, "//") {
+		ref = strings.ReplaceAll(ref, "//", "/")
+	}
+	return strings.TrimSuffix(ref, "/")
+}
+
+func isPlaceholderCountryCode(code string) bool {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "", "na", "xx", "zz":
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *Engine) lookupAffectedZones(ctx context.Context, supplierRef, customerRef, productRef string, viaRefs []string) []string {
 	out := make([]string, 0, 8)
-	for _, ref := range uniqStrings(refs) {
-		if ref == "" || strings.HasPrefix(ref, "/product/") {
+	for _, ref := range affectedZoneLookupRefs(supplierRef, customerRef, productRef, viaRefs) {
+		if ref == "" {
 			continue
 		}
-		out = append(out, e.zoneRefsForPath(ctx, ref)...)
+		for _, lookupRef := range e.lookupRefsForPath(ctx, ref) {
+			out = append(out, e.zoneRefsForPath(ctx, lookupRef)...)
+		}
+	}
+	return uniqStrings(out)
+}
+
+func (e *Engine) lookupRefsForPath(ctx context.Context, canonicalPath string) []string {
+	canonicalPath = canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(canonicalPath))
+	if canonicalPath == "" {
+		return nil
+	}
+	if e == nil {
+		return []string{canonicalPath}
+	}
+	e.mu.RLock()
+	if cached, ok := e.lookupRefsByPath[canonicalPath]; ok {
+		e.mu.RUnlock()
+		return append([]string(nil), cached...)
+	}
+	e.mu.RUnlock()
+
+	refs := expandAffectedZoneLookupRef(canonicalPath)
+	if e.fragmentsRepo != nil && e.edgesRepo != nil {
+		refs = append(refs, e.relatedActorLookupRefs(ctx, canonicalPath)...)
+	}
+	refs = uniqStrings(refs)
+
+	e.mu.Lock()
+	e.lookupRefsByPath[canonicalPath] = append([]string(nil), refs...)
+	e.mu.Unlock()
+	return refs
+}
+
+func (e *Engine) relatedActorLookupRefs(ctx context.Context, canonicalPath string) []string {
+	if e == nil || e.fragmentsRepo == nil || e.edgesRepo == nil {
+		return nil
+	}
+	frag := e.fragmentByPath(ctx, canonicalPath)
+	if frag == nil || strings.TrimSpace(frag.ID) == "" {
+		return nil
+	}
+	isOrg := strings.HasPrefix(canonicalPath, "/org/") || strings.HasPrefix(canonicalPath, "/gov/")
+	isAsset := strings.HasPrefix(canonicalPath, "/fac/") || strings.HasPrefix(canonicalPath, "/deposit/")
+	if !isOrg && !isAsset {
+		return nil
+	}
+
+	relatedIDs := make(map[string]struct{}, 8)
+	for _, edgeType := range []horizonmodels.DependencyType{
+		horizonmodels.DependencyTypeOwns,
+		horizonmodels.DependencyTypeControls,
+		horizonmodels.DependencyTypeOperatesIn,
+	} {
+		et := edgeType
+		if isOrg {
+			edges, err := e.edgesRepo.ListBySource(ctx, "global", strings.TrimSpace(frag.ID), &et, 64)
+			if err != nil {
+				continue
+			}
+			for _, edge := range edges {
+				if edge == nil {
+					continue
+				}
+				if targetID := strings.TrimSpace(edge.TargetFragmentID); targetID != "" {
+					relatedIDs[targetID] = struct{}{}
+				}
+			}
+			continue
+		}
+		edges, err := e.edgesRepo.ListByTarget(ctx, "global", strings.TrimSpace(frag.ID), &et, 64)
+		if err != nil {
+			continue
+		}
+		for _, edge := range edges {
+			if edge == nil {
+				continue
+			}
+			if sourceID := strings.TrimSpace(edge.SourceFragmentID); sourceID != "" {
+				relatedIDs[sourceID] = struct{}{}
+			}
+		}
+	}
+	if len(relatedIDs) == 0 {
+		return nil
+	}
+
+	out := make([]string, 0, len(relatedIDs)*2)
+	for id := range relatedIDs {
+		rel, err := e.fragmentsRepo.Get(ctx, id)
+		if err != nil || rel == nil {
+			continue
+		}
+		out = append(out, expandAffectedZoneLookupRef(rel.CanonicalPath)...)
 	}
 	return uniqStrings(out)
 }
@@ -274,26 +481,31 @@ func (e *Engine) zoneRefsForPath(ctx context.Context, canonicalPath string) []st
 		return append([]string(nil), cached...)
 	}
 	e.mu.RUnlock()
-	frag := e.fragmentByPath(ctx, canonicalPath)
-	if frag == nil || strings.TrimSpace(frag.ID) == "" {
+	frags := e.fragmentsByPath(ctx, canonicalPath)
+	if len(frags) == 0 {
 		return nil
 	}
 	typ := horizonmodels.DependencyTypeAffects
-	edges, err := e.edgesRepo.ListByTarget(ctx, "global", strings.TrimSpace(frag.ID), &typ, 64)
-	if err != nil {
-		return nil
-	}
 	refs := make([]string, 0, 8)
-	for _, edge := range edges {
-		if edge == nil || strings.TrimSpace(edge.SourceFragmentID) == "" {
+	for _, frag := range frags {
+		if frag == nil || strings.TrimSpace(frag.ID) == "" {
 			continue
 		}
-		sourceFrag, err := e.fragmentsRepo.Get(ctx, strings.TrimSpace(edge.SourceFragmentID))
-		if err != nil || sourceFrag == nil {
+		edges, err := e.edgesRepo.ListByTarget(ctx, "global", strings.TrimSpace(frag.ID), &typ, 64)
+		if err != nil {
 			continue
 		}
-		if sourceFrag.Type == horizonmodels.FragmentTypeAffectedZone || strings.HasPrefix(strings.TrimSpace(sourceFrag.CanonicalPath), "/zone/") {
-			refs = append(refs, strings.TrimSpace(sourceFrag.CanonicalPath))
+		for _, edge := range edges {
+			if edge == nil || strings.TrimSpace(edge.SourceFragmentID) == "" {
+				continue
+			}
+			sourceFrag, err := e.fragmentsRepo.Get(ctx, strings.TrimSpace(edge.SourceFragmentID))
+			if err != nil || sourceFrag == nil {
+				continue
+			}
+			if sourceFrag.Type == horizonmodels.FragmentTypeAffectedZone || strings.HasPrefix(strings.TrimSpace(sourceFrag.CanonicalPath), "/zone/") {
+				refs = append(refs, strings.TrimSpace(sourceFrag.CanonicalPath))
+			}
 		}
 	}
 	refs = uniqStrings(refs)
@@ -322,6 +534,37 @@ func (e *Engine) fragmentByPath(ctx context.Context, canonicalPath string) *hori
 	e.fragmentByPathCache[canonicalPath] = frag
 	e.mu.Unlock()
 	return frag
+}
+
+func (e *Engine) fragmentsByPath(ctx context.Context, canonicalPath string) []*horizonmodels.HorizonFragment {
+	canonicalPath = strings.TrimSpace(canonicalPath)
+	if canonicalPath == "" || e == nil || e.fragmentsRepo == nil {
+		return nil
+	}
+	e.mu.RLock()
+	if cached, ok := e.fragmentsByPathCache[canonicalPath]; ok {
+		e.mu.RUnlock()
+		return append([]*horizonmodels.HorizonFragment(nil), cached...)
+	}
+	e.mu.RUnlock()
+
+	frags, err := e.fragmentsRepo.ListByCanonicalPath(ctx, canonicalPath)
+	if err != nil || len(frags) == 0 {
+		if frag := e.fragmentByPath(ctx, canonicalPath); frag != nil {
+			frags = []*horizonmodels.HorizonFragment{frag}
+		}
+	}
+	out := make([]*horizonmodels.HorizonFragment, 0, len(frags))
+	for _, frag := range frags {
+		if frag == nil || strings.TrimSpace(frag.ID) == "" {
+			continue
+		}
+		out = append(out, frag)
+	}
+	e.mu.Lock()
+	e.fragmentsByPathCache[canonicalPath] = append([]*horizonmodels.HorizonFragment(nil), out...)
+	e.mu.Unlock()
+	return append([]*horizonmodels.HorizonFragment(nil), out...)
 }
 
 func inferZoneTypes(in SegmentInput) map[string]struct{} {

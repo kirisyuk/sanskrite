@@ -8,6 +8,7 @@ import { useUIStore } from '../stores/uiStore';
 import { useIsAdmin } from '../hooks/useIsAdmin';
 import { useGenaiChatStore } from '../stores/genaiChatStore';
 import { useProjectsStore } from '../stores/projectsStore';
+import { useStrategicRecommendationsStore } from '../stores/strategicRecommendationsStore';
 import { api } from '../lib/api';
 
 export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) => {
@@ -19,6 +20,11 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
   const uiLanguage = useUIStore((s) => s.uiLanguage);
   const setUiLanguage = useUIStore((s) => s.setUiLanguage);
   const isAdmin = useIsAdmin();
+  const openStrategicInbox = useUIStore((s) => s.openStrategicInbox);
+  const pendingRecommendations = useStrategicRecommendationsStore((s) => s.pendingCount);
+  const tenantPendingRecommendations = useStrategicRecommendationsStore((s) => s.tenantPendingCount);
+  const globalPendingRecommendations = useStrategicRecommendationsStore((s) => s.globalPendingCount);
+  const fetchRecommendationsCount = useStrategicRecommendationsStore((s) => s.fetchCount);
   // PERFORMANCE FIX: Subscribe only to specific values, not entire store
   const genaiChatProjectId = useGenaiChatStore((s) => s.projectId);
   const genaiChatInteractionsLength = useGenaiChatStore((s) => s.interactions.length);
@@ -172,6 +178,10 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
   React.useEffect(() => {
     setModeOpen(false);
   }, [location.pathname, location.search]);
+
+  React.useEffect(() => {
+    void fetchRecommendationsCount({ scope: isAdmin ? 'all' : 'tenant' });
+  }, [fetchRecommendationsCount, isAdmin]);
 
   // Export chat to markdown
   const exportToMarkdown = React.useCallback(() => {
@@ -627,6 +637,55 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
           <option value="kz">KZ</option>
         </select>
         {/* Admin (only when admin) */}
+        {currentUser && (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="p-2 rounded"
+              aria-label="Strategic inbox"
+              title="Strategic inbox"
+              onClick={() => openStrategicInbox()}
+              style={{ backgroundColor: 'transparent', transition: 'background-color 150ms ease', position: 'relative' }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+              }}
+            >
+              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} style={{ color: 'var(--text-heading)' }}>
+                <path d="M15 17h5l-1.4-1.4A2 2 0 0118 14.2V11a6 6 0 10-12 0v3.2a2 2 0 01-.6 1.4L4 17h5" />
+                <path d="M10 17a2 2 0 004 0" />
+              </svg>
+              {pendingRecommendations > 0 && (
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    right: 0,
+                    minWidth: 16,
+                    height: 16,
+                    borderRadius: 999,
+                    background: '#d14b3f',
+                    color: '#fff',
+                    fontSize: 10,
+                    lineHeight: '16px',
+                    textAlign: 'center',
+                    padding: '0 4px',
+                  }}
+                >
+                  {pendingRecommendations > 99 ? '99+' : pendingRecommendations}
+                </span>
+              )}
+            </button>
+            {isAdmin && (
+              <div className="flex items-center gap-1 text-[10px]" style={{ color: 'var(--text-tertiary-weak)' }}>
+                <span>T {tenantPendingRecommendations}</span>
+                <span>G {globalPendingRecommendations}</span>
+              </div>
+            )}
+          </div>
+        )}
         {currentUser && isAdmin && (
           <button
             type="button"

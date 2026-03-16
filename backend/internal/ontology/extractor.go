@@ -314,7 +314,7 @@ type ExtractedEventParticipant struct {
 // ExtractedLocation is a minimal location payload extracted by LLM.
 // Place (name) and Address are returned by LLM; Coordinates are resolved via Google Geocoding.
 type ExtractedLocation struct {
-	Name          *string `json:"name,omitempty"`   // place name (e.g. "Dubai airport", "Port of Houston")
+	Name          *string `json:"name,omitempty"`    // place name (e.g. "Dubai airport", "Port of Houston")
 	Address       *string `json:"address,omitempty"` // full address for geocoding (e.g. "123 Main St, Houston, TX, USA")
 	ISO6709       *string `json:"iso6709,omitempty"`
 	CountryAlpha2 *string `json:"countryAlpha2,omitempty"` // ISO3166-1 alpha2 lowercase
@@ -448,14 +448,14 @@ func (e *OntologyExtractor) extractEntities(
 
 			entity := &models.Entity{
 				BaseOntologyFields: models.BaseOntologyFields{
-					TenantID:  tenantID,
-					Version:   1,
-					CreatedAt: now,
-					UpdatedAt: now,
-					CreatedBy: "system",
-					UpdatedBy: "system",
-					Labels:    map[string]string{"en": canonicalName},
-					Status:    "active",
+					TenantID:       tenantID,
+					Version:        1,
+					CreatedAt:      now,
+					UpdatedAt:      now,
+					CreatedBy:      "system",
+					UpdatedBy:      "system",
+					Labels:         map[string]string{"en": canonicalName},
+					Status:         "active",
 					CanonicalPaths: []string{cPath},
 				},
 				CanonicalName: canonicalName,
@@ -611,14 +611,14 @@ func (e *OntologyExtractor) extractEntities(
 
 		entity := &models.Entity{
 			BaseOntologyFields: models.BaseOntologyFields{
-				TenantID:  tenantID,
-				Version:   1,
-				CreatedAt: now,
-				UpdatedAt: now,
-				CreatedBy: "system",
-				UpdatedBy: "system",
-				Labels:    map[string]string{"en": canonicalName},
-				Status:    "active",
+				TenantID:       tenantID,
+				Version:        1,
+				CreatedAt:      now,
+				UpdatedAt:      now,
+				CreatedBy:      "system",
+				UpdatedBy:      "system",
+				Labels:         map[string]string{"en": canonicalName},
+				Status:         "active",
 				CanonicalPaths: []string{cPath},
 			},
 			CanonicalName: canonicalName,
@@ -905,6 +905,10 @@ func (e *OntologyExtractor) extractEvents(
 					if locPath != "" && locPath != "/" {
 						f.LocationPath = &locPath
 					}
+				} else if placeName := strings.TrimSpace(event.Location.Name); placeName != "" {
+					if locPath := fallbackInternationalLocationPath(placeName); locPath != "" {
+						f.LocationPath = &locPath
+					}
 				}
 				// EventPlace, EventAddress, EventISO6709 for geocoding (Google Geo resolves Address/Place to Coordinates)
 				if event.Location.Name != "" {
@@ -951,6 +955,25 @@ func (e *OntologyExtractor) extractEvents(
 	}
 
 	return eventIDs, nil
+}
+
+func fallbackInternationalLocationPath(placeName string) string {
+	switch normalizePlaceToken(placeName) {
+	case "bab el mandeb", "bab al mandab":
+		return "/loc/int/na/bab-el-mandeb"
+	case "strait of hormuz", "hormuz":
+		return "/loc/int/na/strait-of-hormuz"
+	case "red sea":
+		return "/loc/int/na/red-sea"
+	default:
+		return ""
+	}
+}
+
+func normalizePlaceToken(value string) string {
+	replacer := strings.NewReplacer(",", " ", ";", " ", ":", " ", "(", " ", ")", " ", "-", " ", "_", " ", "/", " ")
+	value = strings.ToLower(strings.TrimSpace(replacer.Replace(value)))
+	return strings.Join(strings.Fields(value), " ")
 }
 
 // extractClaims создает Claim объекты из извлеченных данных
@@ -1402,20 +1425,20 @@ func (e *OntologyExtractor) mapExtractedTypeToEntityType(extractedType string) m
 	extractedType = strings.ToLower(strings.TrimSpace(extractedType))
 
 	typeMap := map[string]models.EntityType{
-		"person":             models.EntityTypePerson,
-		"organization":       models.EntityTypeOrganization,
-		"location":           models.EntityTypeLocation,
-		"product":            models.EntityTypeProduct,
-		"program":            models.EntityTypeProgram,
-		"market":             models.EntityTypeMarket,
-		"event":              models.EntityTypeEventEntity,
-		"document":           models.EntityTypeDocument,
-		"facility":           models.EntityTypeFacility,
-		"supplychain":        models.EntityTypeSupplyChainNode,
-		"supplychainnode":    models.EntityTypeSupplyChainNode,
-		"government":         models.EntityTypeGovernmentProject,
-		"governmentproject":  models.EntityTypeGovernmentProject,
-		"index":              models.EntityTypeIndexMetric,
+		"person":            models.EntityTypePerson,
+		"organization":      models.EntityTypeOrganization,
+		"location":          models.EntityTypeLocation,
+		"product":           models.EntityTypeProduct,
+		"program":           models.EntityTypeProgram,
+		"market":            models.EntityTypeMarket,
+		"event":             models.EntityTypeEventEntity,
+		"document":          models.EntityTypeDocument,
+		"facility":          models.EntityTypeFacility,
+		"supplychain":       models.EntityTypeSupplyChainNode,
+		"supplychainnode":   models.EntityTypeSupplyChainNode,
+		"government":        models.EntityTypeGovernmentProject,
+		"governmentproject": models.EntityTypeGovernmentProject,
+		"index":             models.EntityTypeIndexMetric,
 	}
 
 	if entityType, ok := typeMap[extractedType]; ok {

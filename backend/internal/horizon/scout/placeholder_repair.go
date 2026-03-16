@@ -63,7 +63,7 @@ func RepairSyntheticOrgCanonicalPath(fragment *models.HorizonFragment) (string, 
 		return "", "", false
 	}
 	cp := strings.TrimSpace(fragment.CanonicalPath)
-	if !strings.HasPrefix(cp, "/org/na/") && !strings.HasPrefix(cp, "/gov/na/") {
+	if !strings.HasPrefix(cp, "/org/") && !strings.HasPrefix(cp, "/gov/") {
 		return "", "", false
 	}
 	slug := lastPathSlug(cp)

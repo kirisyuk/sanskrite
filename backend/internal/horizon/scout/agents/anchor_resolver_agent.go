@@ -185,18 +185,18 @@ PRODUCT (CRITICAL):
   - Example: /product/raw/chemical/refining/lithium-carbonate
 
 FACILITY:
-- use /fac/{geo}/{facilitySlug}; use /fac/na/{facilitySlug} ONLY as a last resort after checking facility/site/place clues in the name and source
+- use /fac/{geo}/{facilitySlug}; infer the best concrete geo from facility/site/place clues in the name and source instead of falling back to /fac/na
 - Example: /fac/sa/ras-tanura-refinery, /fac/us/gigafactory-texas
 
 ORGANIZATION:
-- Organizations: /org/{iso2|na}/{slug}
-  - iso2: country of origin / primary jurisdiction (`+taxonomy.ISO2GeoDescriptionForPrompts()+`). /org/na is last-resort only after checking official name, HQ/site/place clue, and source text for jurisdiction.
-  - Regional tokens go in the geo slot (2nd segment): /org/gcc/{slug} (NOT /org/na/gcc/{slug}).
+- Organizations: /org/{iso2|regional}/{slug}
+  - iso2: country of origin / primary jurisdiction (`+taxonomy.ISO2GeoDescriptionForPrompts()+`). Use your best evidence-backed jurisdiction instead of falling back to /org/na.
+  - Regional tokens go in the geo slot (2nd segment): /org/gcc/{slug}.
   - slug: lowercase slug derived from the base name (avoid legal suffixes like Inc/LLC in the path if possible)
-- Government bodies: /gov/{iso2|na}/{slug}
+- Government bodies: /gov/{iso2|regional}/{slug}
   - Use for ministries, regulators, agencies, state bodies (prevents collisions like "Ministry of Defence" across countries).
-  - /gov/na/{slug} is last-resort only after checking the source for jurisdiction/country clues.
-  - Regional tokens go in the geo slot (2nd segment): /gov/gcc/{slug} (NOT /gov/na/gcc/{slug}).
+  - Resolve the best jurisdiction from the source, official name, and place clues instead of falling back to /gov/na.
+  - Regional tokens go in the geo slot (2nd segment): /gov/gcc/{slug}.
 
 GOV HIERARCHY (best-effort):
 - Government bodies form administrative hierarchies: government → ministry → department → agency/authority

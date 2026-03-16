@@ -228,6 +228,33 @@ const HorizonPage: React.FC = () => {
   // Initialize WebSocket connection (same flow as Discovery).
   useWebSocketConnection();
 
+  React.useEffect(() => {
+    const openContext = async (evt: Event) => {
+      const detail = (evt as CustomEvent<any>)?.detail || {};
+      const projectId = String(detail?.projectId || '').trim();
+      const lensId = String(detail?.lensId || '').trim();
+      if (projectId) {
+        const existing = projects.find((project) => project.id === projectId && project.projectType === 'horizon');
+        if (existing) {
+          setCurrentProject(existing);
+        } else {
+          try {
+            const project = await api.getProject(projectId);
+            setCurrentProject(project as any);
+          } catch {
+            // ignore hydration failures
+          }
+        }
+      }
+      if (lensId) {
+        setShowWorldMap(false);
+        setSelectedLensId(lensId);
+      }
+    };
+    window.addEventListener('horizon:open-context', openContext as EventListener);
+    return () => window.removeEventListener('horizon:open-context', openContext as EventListener);
+  }, [projects, setCurrentProject, setSelectedLensId]);
+
   // Memory safety: drop accumulated realtime state when switching project/lens (store is global).
   React.useEffect(() => {
     resetRealtime();

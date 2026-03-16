@@ -482,9 +482,9 @@ TASK: Compare the extracted data with the source content and identify any confli
 	      /biz/function/{slug}, /biz/economic-role/{slug}, /biz/risk-exposure/{slug}, /biz/value-pool/{slug}, /biz/replaceability/{low|medium|high|variable}."
 	  
 	  - If this looks like a government body (ministry/agency/regulator) but canonicalPath is not /gov/{iso2}/{slug}, add a question:
-	    - "Which country/jurisdiction does this government body belong to? Use canonicalPath /gov/{iso2|regional}/{slug} where regional tokens (gcc, eu, asean) go in the geo slot (2nd segment). If unknown, /gov/na/{slug}."
+	    - "Which country/jurisdiction does this government body belong to? Use canonicalPath /gov/{iso2|regional}/{slug} where regional tokens (gcc, eu, asean) go in the geo slot (2nd segment). Use the best evidence-backed jurisdiction instead of defaulting to /gov/na."
 	  - If canonicalPath uses /org/na/{slug}, add a question:
-	    - "What is the country of origin / primary jurisdiction (ISO2 or regional token) for <org>? Use the entity's legalName/shortName/label to disambiguate and update canonicalPath to /org/{iso2|regional}/{slug} (base name only, do NOT include legal form). If truly unknown, keep /org/na/... but state uncertainty."
+	    - "What is the country of origin / primary jurisdiction (ISO2 or regional token) for <org>? Use the entity's legalName/shortName/label to disambiguate and update canonicalPath to /org/{iso2|regional}/{slug} (base name only, do NOT include legal form). Use the best evidence-backed jurisdiction instead of defaulting to /org/na."
 	  - If this is a facility and canonicalPath uses /fac/na/{slug} while the facility name, homeLocation.name, or source text contains a clear place clue, add a question:
 	    - "What is the correct country/jurisdiction (ISO2) for <facility>? Resolve the facility/site location from the place clue and update canonicalPath to /fac/{iso2}/{slug}. Do NOT keep /fac/na/... when the place is inferable."
 	  - If homeLocation.name implies one country but homeLocation.iso3166_1 implies another, add a question:

@@ -103,3 +103,86 @@ func TestMergeArticleAssessments_ModelVetoWinsOnAnalysisHeavyHost(t *testing.T) 
 		t.Fatalf("expected analysis class after model veto, got %+v", out)
 	}
 }
+
+func TestShouldEscalateArticleToLLM_ConcreteCyberOutage(t *testing.T) {
+	doc := discoverynlp.DocumentInput{
+		SourceHost: "reuters.com",
+		Title:      "Cyberattack forces major Australian port operator offline in Sydney",
+		Summary:    "Port operations remain suspended after ransomware attack disrupted container handling.",
+	}
+	base := &discoverynlp.ArticleAssessment{
+		IsEvent:             true,
+		EventClass:          "real_event",
+		EventConfidence:     0.86,
+		ConcreteOutageScore: 0.86,
+		ShouldCreateZone:    true,
+	}
+	if !shouldEscalateArticleToLLM(doc, horizonMonitorNewsClassification{Category: "cyber", Level: "high"}, base) {
+		t.Fatalf("expected concrete cyber outage to escalate to LLM adjudication")
+	}
+}
+
+func TestMergeArticleAssessmentWithLLM_PromotesHighConfidenceConcreteEvent(t *testing.T) {
+	base := &discoverynlp.ArticleAssessment{
+		IsEvent:             false,
+		EventClass:          "analysis",
+		EventConfidence:     0.62,
+		AnalysisScore:       0.72,
+		ConcreteOutageScore: 0.44,
+		ShouldCreateZone:    false,
+		RejectionReason:     "analysis_roundup",
+	}
+	llm := &horizonMonitorLLMArticleAdjudication{
+		SchemaVersion:      "v1",
+		IsEvent:            true,
+		EventClass:         "real_event",
+		EventConfidence:    0.96,
+		ShouldCreateZone:   true,
+		ConditionType:      "cyber_disruption",
+		Place:              "Sydney",
+		CountryCode:        "AU",
+		GeoConfidence:      0.95,
+		Reason:             "direct cyber outage",
+	}
+	out := mergeArticleAssessmentWithLLM(discoverynlp.DocumentInput{SourceHost: "reuters.com"}, base, llm)
+	if out == nil {
+		t.Fatal("expected merged assessment")
+	}
+	if !out.IsEvent || !out.ShouldCreateZone {
+		t.Fatalf("expected llm to promote concrete event, got %+v", out)
+	}
+	if got := out.Raw["llmPlace"]; got != "Sydney" {
+		t.Fatalf("expected llm geo hint to be carried, got %#v", got)
+	}
+}
+
+func TestMergeArticleAssessmentWithLLM_RejectsAnalysisAndDropsGeoHints(t *testing.T) {
+	base := &discoverynlp.ArticleAssessment{
+		IsEvent:          false,
+		EventClass:       "noise",
+		EventConfidence:  0.74,
+		ShouldCreateZone: false,
+		RejectionReason:  "non_event_text",
+	}
+	llm := &horizonMonitorLLMArticleAdjudication{
+		SchemaVersion:      "v1",
+		IsEvent:            false,
+		EventClass:         "analysis",
+		EventConfidence:    0.95,
+		ShouldCreateZone:   false,
+		Place:              "Red Sea",
+		CountryCode:        "SA",
+		GeoConfidence:      0.80,
+		Reason:             "analysis only",
+	}
+	out := mergeArticleAssessmentWithLLM(discoverynlp.DocumentInput{SourceHost: "foreignpolicy.com"}, base, llm)
+	if out == nil {
+		t.Fatal("expected merged assessment")
+	}
+	if out.IsEvent || out.ShouldCreateZone {
+		t.Fatalf("expected analysis veto to hold, got %+v", out)
+	}
+	if _, ok := out.Raw["llmPlace"]; ok {
+		t.Fatalf("non-event llm geo hint must not be trusted, got %+v", out.Raw)
+	}
+}

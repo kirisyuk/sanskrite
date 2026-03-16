@@ -438,6 +438,28 @@ func TestValidationPolicy_OrgMarketNonParticipatesQuarantine(t *testing.T) {
 	}
 }
 
+func TestValidationPolicy_DepositToOrgSuppliesToGetsPenaltyInsteadOfQuarantine(t *testing.T) {
+	p := &ValidationPolicy{rulesRepo: testValidationRulesRepo{}}
+	decision, err := p.Decide(context.Background(), PolicyInput{
+		Kind: "edge",
+		Context: map[string]interface{}{
+			"validationKind": "edge",
+			"sourceType":     string(horizonmodels.FragmentTypeDeposit),
+			"targetType":     string(horizonmodels.FragmentTypeOrganization),
+			"relationType":   string(horizonmodels.DependencyTypeSuppliesTo),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if decision.Action != ActionAllowWithPenalty {
+		t.Fatalf("expected %s for DEPOSIT->ORG SUPPLIES_TO shortcut, got %s", ActionAllowWithPenalty, decision.Action)
+	}
+	if got, _ := decision.Params["edgeModality"].(string); got != "potential" {
+		t.Fatalf("expected edgeModality=potential, got %q", got)
+	}
+}
+
 func TestValidationPolicy_GovRegulatesMarketAllowed(t *testing.T) {
 	p := &ValidationPolicy{rulesRepo: testValidationRulesRepo{}}
 	decision, err := p.Decide(context.Background(), PolicyInput{

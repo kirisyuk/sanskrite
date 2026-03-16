@@ -1935,9 +1935,17 @@ func (e *ScoutEngine) expandSupplyChainQueriesWithOrgs(ctx context.Context, job 
 	if maxHops < 1 || maxHops > 5 {
 		maxHops = 5
 	}
+	if job.State != nil {
+		if n := parseStateInt(job.State["supplyChainFastFirstMaxAnchorHops"], 0); n > 0 && n <= 5 {
+			maxHops = n
+		}
+	}
 	maxAnchors := 12
 	if job.State != nil {
 		if n := parseStateInt(job.State["maxSupplyChainAnchors"], 0); n > 0 && n <= 24 {
+			maxAnchors = n
+		}
+		if n := parseStateInt(job.State["supplyChainFastFirstMaxAnchors"], 0); n > 0 && n <= 24 {
 			maxAnchors = n
 		}
 	}
@@ -3020,11 +3028,20 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	}
 	supplyChainPlan := getSupplyChainExecutionPlanFromJobState(job, domainCP)
 	usePlanMode := agents.IsSupplyChainContractType(contractType) && supplyChainPlan != nil && len(supplyChainPlan.Queries) > 0
+	fastFirstSupplyChain := usePlanMode && isFastFirstSupplyChainJob(job) && !supplyChainRefineContinuation
 	if usePlanMode && e.researchAgent != nil && !domainFastPathApplied && !supplyChainRefineContinuation {
 		if job.State == nil {
 			job.State = map[string]interface{}{}
 		}
 		job.State["supplyChainIncrementalMaterialized"] = false
+		if fastFirstSupplyChain {
+			job.State["supplyChainFastFirstMaxAnchors"] = 6
+			job.State["supplyChainFastFirstMaxAnchorHops"] = 1
+			job.State["supplyChainSkipRecursiveStep4"] = true
+			job.State["supplyChainStopAfterFirstIncremental"] = true
+			job.State["supplyChainFastFirstMaxOrgsPerDepth"] = 8
+			job.State["supplyChainFastFirstMaxFacsPerDepth"] = 18
+		}
 		queries := supplyChainPlan.Queries
 		if job != nil && HasExecutionPlanContractState(job.State) {
 			planContract := ExecutionPlanContractFromState(job.State)
@@ -3036,40 +3053,77 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		// Expand product/market anchors to org/fac list: first query should go FROM organizations or facilities.
 		queriesBefore := len(queries)
 		queries = e.expandSupplyChainQueriesWithOrgs(ctx, job, queries)
-		e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainPlan] queries before=%d after_expansion=%d", queriesBefore, len(queries)))
-		// Collect anchors by direction: downstream (producer→consumer) and upstream (consumer→supplier).
-		defaultDirection := "down"
-		if strings.TrimSpace(job.LensID) != "" {
-			defaultDirection = "both"
+		if fastFirstSupplyChain {
+			queries = limitSupplyChainQueriesForFastFirst(queries, 3)
 		}
-		downOrgs, downFacs, upOrgs, upFacs := collectAnchorOrgsFromQueriesByDirection(queries, defaultDirection)
-		downFilters, upFilters := collectSupplyChainFiltersByDirection(queries, defaultDirection)
-		scLog(ctx, e, job, "info", fmt.Sprintf("[SupplyChainPlan] anchors: down orgs=%d facs=%d, up orgs=%d facs=%d", len(downOrgs), len(downFacs), len(upOrgs), len(upFacs)))
-		unwindMaxDepth := 2
-		if strings.HasPrefix(strings.TrimSpace(domainCP), "/domain/v1/supply-chain/") {
-			if _, facets := parseDomainPathFacets(domainCP); facets != nil {
-				hasGeo := len(facets["geo"]) > 0 && strings.TrimSpace(facets["geo"][0]) != ""
-				hasProduct := len(facets["product"]) > 0 && strings.TrimSpace(facets["product"][0]) != ""
-				if hasGeo && hasProduct {
-					// Tight contract (geo + product) should stay focused and avoid global fanout.
-					unwindMaxDepth = 1
+		e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainPlan] queries before=%d after_expansion=%d", queriesBefore, len(queries)))
+		hotPathSatisfied := false
+		if fastFirstSupplyChain {
+			hotPathChains := e.runSupplyChainFastFirstHotPath(ctx, job, queries)
+			if len(hotPathChains) > 0 {
+				domainResearchChains = append(domainResearchChains, hotPathChains...)
+				if e.materializeSupplyChainHotPathChains(ctx, job, hotPathChains) {
+					scLog(ctx, e, job, "info", fmt.Sprintf("[SupplyChainHotPath] materialized chains=%d", len(hotPathChains)))
+				}
+				if hasUsefulSupplyChainHotPathMaterialization(job, hotPathChains) {
+					scLog(ctx, e, job, "info", fmt.Sprintf("[SupplyChainHotPath] early stop after useful hot-path materialization chains=%d", len(hotPathChains)))
+					hotPathSatisfied = true
 				}
 			}
 		}
-		if job != nil && job.State != nil {
-			if v := parseStateInt(job.State["supplyChainUnwindMaxDepth"], 0); v > 0 && v < 6 {
-				unwindMaxDepth = v
+		if !hotPathSatisfied {
+			// Collect anchors by direction: downstream (producer→consumer) and upstream (consumer→supplier).
+			defaultDirection := "down"
+			if strings.TrimSpace(job.LensID) != "" {
+				defaultDirection = "both"
+			}
+			downOrgs, downFacs, upOrgs, upFacs := collectAnchorOrgsFromQueriesByDirection(queries, defaultDirection)
+			if fastFirstSupplyChain {
+				downOrgs = capSupplyChainFastFirstAnchors(downOrgs, 4)
+				downFacs = capSupplyChainFastFirstAnchors(downFacs, 3)
+				upOrgs = capSupplyChainFastFirstAnchors(upOrgs, 4)
+				upFacs = capSupplyChainFastFirstAnchors(upFacs, 3)
+			}
+			downFilters, upFilters := collectSupplyChainFiltersByDirection(queries, defaultDirection)
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SupplyChainPlan] anchors: down orgs=%d facs=%d, up orgs=%d facs=%d", len(downOrgs), len(downFacs), len(upOrgs), len(upFacs)))
+			unwindMaxDepth := 2
+			if strings.HasPrefix(strings.TrimSpace(domainCP), "/domain/v1/supply-chain/") {
+				if _, facets := parseDomainPathFacets(domainCP); facets != nil {
+					hasGeo := len(facets["geo"]) > 0 && strings.TrimSpace(facets["geo"][0]) != ""
+					hasProduct := len(facets["product"]) > 0 && strings.TrimSpace(facets["product"][0]) != ""
+					if hasGeo && hasProduct {
+						// Tight contract (geo + product) should stay focused and avoid global fanout.
+						unwindMaxDepth = 1
+					}
+				}
+			}
+			if job != nil && job.State != nil {
+				if v := parseStateInt(job.State["supplyChainUnwindMaxDepth"], 0); v > 0 && v < 6 {
+					unwindMaxDepth = v
+				}
+			}
+			if fastFirstSupplyChain {
+				unwindMaxDepth = 1
+				scLog(ctx, e, job, "info", fmt.Sprintf("[SupplyChainPlan] fast-first caps enabled: queries=%d down(org=%d fac=%d) up(org=%d fac=%d)", len(queries), len(downOrgs), len(downFacs), len(upOrgs), len(upFacs)))
+			} else if job != nil && job.State != nil {
+				delete(job.State, "supplyChainFastFirstMaxAnchors")
+				delete(job.State, "supplyChainFastFirstMaxAnchorHops")
+				delete(job.State, "supplyChainSkipRecursiveStep4")
+				delete(job.State, "supplyChainStopAfterFirstIncremental")
+				delete(job.State, "supplyChainFastFirstMaxOrgsPerDepth")
+				delete(job.State, "supplyChainFastFirstMaxFacsPerDepth")
+			}
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SupplyChainPlan] unwind maxDepth=%d", unwindMaxDepth))
+			if len(downOrgs) > 0 || len(downFacs) > 0 {
+				chains := e.runSupplyChainRecursiveUnwinding(ctx, job, downOrgs, downFacs, unwindMaxDepth, downFilters.Product, downFilters.Geo)
+				domainResearchChains = append(domainResearchChains, chains...)
+			}
+			if len(upOrgs) > 0 || len(upFacs) > 0 {
+				upChains := e.runSupplyChainUpstreamUnwinding(ctx, job, upOrgs, upFacs, unwindMaxDepth, upFilters.Product, upFilters.Geo)
+				domainResearchChains = append(domainResearchChains, upChains...)
 			}
 		}
-		scLog(ctx, e, job, "info", fmt.Sprintf("[SupplyChainPlan] unwind maxDepth=%d", unwindMaxDepth))
-		if len(downOrgs) > 0 || len(downFacs) > 0 {
-			chains := e.runSupplyChainRecursiveUnwinding(ctx, job, downOrgs, downFacs, unwindMaxDepth, downFilters.Product, downFilters.Geo)
-			domainResearchChains = append(domainResearchChains, chains...)
-		}
-		if len(upOrgs) > 0 || len(upFacs) > 0 {
-			upChains := e.runSupplyChainUpstreamUnwinding(ctx, job, upOrgs, upFacs, unwindMaxDepth, upFilters.Product, upFilters.Geo)
-			domainResearchChains = append(domainResearchChains, upChains...)
-		}
+		domainResearchChains = dedupSupplyChainChains(domainResearchChains)
 		if job.State == nil {
 			job.State = map[string]interface{}{}
 		}
@@ -3776,7 +3830,6 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	} else {
 		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageDomainRelationMaterialize, false, "domain_relation_materialization_skip_no_relations")
 	}
-	fastFirstSupplyChain := usePlanMode && isFastFirstSupplyChainJob(job)
 	refineContinuation := isSupplyChainRefineContinuationJob(job)
 	if job.State == nil {
 		job.State = map[string]interface{}{}
@@ -7732,6 +7785,362 @@ func (e *ScoutEngine) runSupplyChainExpandPhase(ctx context.Context, job *models
 	job.State["supplyChainExpandPhase"] = "completed"
 }
 
+func limitSupplyChainQueriesForFastFirst(queries []agents.SupplyChainQuery, limit int) []agents.SupplyChainQuery {
+	if limit <= 0 || len(queries) <= limit {
+		return queries
+	}
+	out := make([]agents.SupplyChainQuery, 0, limit)
+	for _, query := range queries {
+		if len(out) >= limit {
+			break
+		}
+		out = append(out, query)
+	}
+	return out
+}
+
+func capSupplyChainFastFirstAnchors(values []string, limit int) []string {
+	if limit <= 0 || len(values) == 0 {
+		return values
+	}
+	out := make([]string, 0, min(limit, len(values)))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func supplyChainFastFirstIntLimit(job *models.ScoutingJob, key string, fallback int) int {
+	if fallback <= 0 || job == nil || job.State == nil {
+		return fallback
+	}
+	if v := parseStateInt(job.State[key], 0); v > 0 && v < fallback {
+		return v
+	}
+	return fallback
+}
+
+func shouldStopSupplyChainAfterFirstIncremental(job *models.ScoutingJob) bool {
+	if job == nil || job.State == nil {
+		return false
+	}
+	if !parseStateBool(job.State["supplyChainStopAfterFirstIncremental"], false) {
+		return false
+	}
+	return parseStateBool(job.State["supplyChainIncrementalMaterialized"], false)
+}
+
+func supplyChainFastFirstHotPathQueries(queries []agents.SupplyChainQuery, limit int) []agents.SupplyChainQuery {
+	if len(queries) == 0 {
+		return nil
+	}
+	if limit <= 0 {
+		limit = 2
+	}
+	capN := len(queries)
+	if capN > limit {
+		capN = limit
+	}
+	out := make([]agents.SupplyChainQuery, 0, capN)
+	for _, query := range queries {
+		q := query
+		if q.Depth < 3 {
+			q.Depth = 3
+		}
+		if q.Depth > 4 {
+			q.Depth = 4
+		}
+		out = append(out, q)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func dedupSupplyChainChains(chains []agents.SupplyChain) []agents.SupplyChain {
+	if len(chains) == 0 {
+		return nil
+	}
+	out := make([]agents.SupplyChain, 0, len(chains))
+	seen := make(map[string]struct{}, len(chains))
+	for _, chain := range chains {
+		if len(chain.Nodes) == 0 {
+			continue
+		}
+		parts := make([]string, 0, len(chain.Nodes))
+		for _, node := range chain.Nodes {
+			cp := strings.TrimSpace(node.CanonicalPath)
+			if cp == "" {
+				continue
+			}
+			parts = append(parts, cp)
+		}
+		if len(parts) == 0 {
+			continue
+		}
+		key := strings.Join(parts, "|")
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, chain)
+	}
+	return out
+}
+
+func parseSupplyChainCounter(raw interface{}, key string) int {
+	m, ok := raw.(map[string]interface{})
+	if !ok || m == nil {
+		return 0
+	}
+	return parseStateInt(m[key], 0)
+}
+
+func hasUsefulSupplyChainHotPathMaterialization(job *models.ScoutingJob, chains []agents.SupplyChain) bool {
+	if job == nil || job.State == nil {
+		return len(chains) >= 4
+	}
+	materializationLinks := parseSupplyChainCounter(job.State["supplyChainMaterialization"], "materializedSupplyLinks")
+	materializationPaths := parseSupplyChainCounter(job.State["supplyChainMaterialization"], "materializedPaths")
+	discoveredNodes := parseSupplyChainCounter(job.State["supplyChainSummary"], "discoveredNodes")
+	discoveredEdges := parseSupplyChainCounter(job.State["supplyChainSummary"], "discoveredEdges")
+	return materializationLinks >= 2 ||
+		materializationPaths >= 2 ||
+		len(chains) >= 4 ||
+		(discoveredNodes >= 8 && discoveredEdges >= 8)
+}
+
+func (e *ScoutEngine) materializeSupplyChainHotPathChains(ctx context.Context, job *models.ScoutingJob, chains []agents.SupplyChain) bool {
+	if e == nil || job == nil || len(chains) == 0 {
+		return false
+	}
+	chains = dedupSupplyChainChains(chains)
+	if len(chains) == 0 {
+		return false
+	}
+	if job.State == nil {
+		job.State = map[string]interface{}{}
+	}
+	prevStage := parseStateString(job.State["supplyChainMaterializationStage"])
+	job.State["supplyChainMaterializationStage"] = "hot_path_full_query"
+	if err := e.processSupplyChains(ctx, job, nil, chains); err != nil {
+		if strings.TrimSpace(prevStage) == "" {
+			delete(job.State, "supplyChainMaterializationStage")
+		} else {
+			job.State["supplyChainMaterializationStage"] = prevStage
+		}
+		scLog(ctx, e, job, "warn", fmt.Sprintf("[SupplyChainHotPath] incremental materialization failed chains=%d: %v", len(chains), err))
+		return false
+	}
+	job.State["supplyChainIncrementalMaterialized"] = true
+	job.State["supplyChainHotPathChainsN"] = len(chains)
+	if strings.TrimSpace(prevStage) == "" {
+		delete(job.State, "supplyChainMaterializationStage")
+	} else {
+		job.State["supplyChainMaterializationStage"] = prevStage
+	}
+	e.publish(ctx, realtime.EventType("horizon.supply_chain.hot_path.materialized"), map[string]interface{}{
+		"tenantId":      job.TenantID,
+		"projectId":     job.ProjectID,
+		"lensId":        strings.TrimSpace(job.LensID),
+		"jobId":         job.ID,
+		"canonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+		"chainsN":       len(chains),
+		"stage":         "hot_path_full_query",
+	})
+	return true
+}
+
+func (e *ScoutEngine) runSupplyChainFastFirstHotPath(ctx context.Context, job *models.ScoutingJob, queries []agents.SupplyChainQuery) []agents.SupplyChain {
+	if e == nil || e.researchAgent == nil || len(queries) == 0 {
+		return nil
+	}
+	maxQueries := 2
+	if job != nil {
+		maxQueries = supplyChainFastFirstIntLimit(job, "supplyChainFastFirstMaxHotQueries", maxQueries)
+	}
+	hotQueries := supplyChainFastFirstHotPathQueries(queries, maxQueries)
+	if len(hotQueries) == 0 {
+		return nil
+	}
+	chains := make([]agents.SupplyChain, 0, 32)
+	for idx, query := range hotQueries {
+		queryChains, err := e.researchAgent.EnrichSupplyChainHotPath(ctx, query)
+		if err != nil {
+			scLog(ctx, e, job, "warn", fmt.Sprintf("[SupplyChainHotPath] query[%d] failed: %v", idx, err))
+			continue
+		}
+		queryChains = filterSupplyChainsByPlanFilters(queryChains, query.ProductFilter, query.GeoFilter)
+		scLog(ctx, e, job, "info", fmt.Sprintf("[SupplyChainHotPath] query[%d] chains=%d anchor=%s anchors=%d", idx, len(queryChains), strings.TrimSpace(query.Anchor), len(query.Anchors)))
+		chains = append(chains, queryChains...)
+		if len(chains) >= 20 {
+			break
+		}
+	}
+	chains = dedupSupplyChainChains(chains)
+	if len(chains) > 20 {
+		chains = chains[:20]
+	}
+	return chains
+}
+
+func persistSupplyChainFallbackContext(
+	ctx context.Context,
+	e *ScoutEngine,
+	job *models.ScoutingJob,
+	anchorOrgs []string,
+	childOrgs []string,
+	facilities []string,
+	gapHints []string,
+) bool {
+	if job == nil {
+		return false
+	}
+	if job.State == nil {
+		job.State = map[string]interface{}{}
+	}
+	cc, _ := ParseChainContext(job.State["chainContext"])
+	if cc == nil {
+		cc = NewChainContext()
+	}
+	if cc.NodeLabels == nil {
+		cc.NodeLabels = make(map[string]string)
+	}
+	changed := false
+	nodeSet := make(map[string]struct{}, len(cc.DiscoveredNodes))
+	for _, ref := range cc.DiscoveredNodes {
+		nodeSet[ref] = struct{}{}
+	}
+	addNode := func(ref string) {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			return
+		}
+		if _, ok := nodeSet[ref]; ok {
+			return
+		}
+		nodeSet[ref] = struct{}{}
+		cc.DiscoveredNodes = append(cc.DiscoveredNodes, ref)
+		if _, ok := cc.NodeLabels[ref]; !ok {
+			if label := slugToReadableName(ref); label != "" {
+				cc.NodeLabels[ref] = label
+			}
+		}
+		changed = true
+	}
+	for _, ref := range anchorOrgs {
+		addNode(ref)
+	}
+	for _, ref := range childOrgs {
+		addNode(ref)
+	}
+	for _, ref := range facilities {
+		addNode(ref)
+	}
+
+	edgeSet := make(map[string]struct{}, len(cc.DiscoveredEdges))
+	for _, edge := range cc.DiscoveredEdges {
+		key := strings.TrimSpace(edge.Source) + "|" + strings.TrimSpace(edge.Target) + "|" + strings.TrimSpace(edge.EdgeType)
+		edgeSet[key] = struct{}{}
+	}
+	addEdge := func(source, target, edgeType string) {
+		source = strings.TrimSpace(source)
+		target = strings.TrimSpace(target)
+		edgeType = strings.TrimSpace(edgeType)
+		if source == "" || target == "" || edgeType == "" || source == target {
+			return
+		}
+		key := source + "|" + target + "|" + edgeType
+		if _, ok := edgeSet[key]; ok {
+			return
+		}
+		edgeSet[key] = struct{}{}
+		cc.DiscoveredEdges = append(cc.DiscoveredEdges, ChainContextEdge{Source: source, Target: target, EdgeType: edgeType})
+		changed = true
+	}
+	for _, parent := range anchorOrgs {
+		for _, child := range childOrgs {
+			addEdge(parent, child, "CONTROLS")
+		}
+		for _, fac := range facilities {
+			addEdge(parent, fac, "OWNS")
+		}
+	}
+
+	cc.GapHints = mergeUniqueStrings(cc.GapHints, gapHints)
+	if len(facilities) == 0 {
+		for _, ref := range anchorOrgs {
+			ref = strings.TrimSpace(ref)
+			if ref != "" {
+				cc.GapHints = mergeUniqueStrings(cc.GapHints, []string{"find facilities or distribution nodes for " + ref})
+			}
+		}
+	}
+
+	contextJSON, err := cc.ToJSON()
+	if err != nil {
+		return changed
+	}
+	job.State["chainContext"] = contextJSON
+	job.State["supplyChainFallbackContextPersisted"] = true
+	discoveredNodesCount := len(cc.DiscoveredNodes)
+	discoveredEdgesCount := len(cc.DiscoveredEdges)
+	materializedFragments := parseStateFloatLoose(nil, 0)
+	materializedEdges := parseStateFloatLoose(nil, 0)
+	materializedSupplyLinks := parseStateFloatLoose(nil, 0)
+	materializedPaths := parseStateFloatLoose(nil, 0)
+	if existing, ok := job.State["supplyChainMaterialization"].(map[string]interface{}); ok {
+		materializedFragments = parseStateFloatLoose(existing["materializedFragments"], 0)
+		materializedEdges = parseStateFloatLoose(existing["materializedEdges"], 0)
+		materializedSupplyLinks = parseStateFloatLoose(existing["materializedSupplyLinks"], 0)
+		materializedPaths = parseStateFloatLoose(existing["materializedPaths"], 0)
+	}
+	job.State["supplyChainDiscovery"] = map[string]interface{}{
+		"discoveredNodes":    float64(discoveredNodesCount),
+		"discoveredEdges":    float64(discoveredEdgesCount),
+		"normalizedSegments": float64(0),
+	}
+	job.State["supplyChainMaterialization"] = map[string]interface{}{
+		"materializedFragments":   materializedFragments,
+		"materializedEdges":       materializedEdges,
+		"materializedSupplyLinks": materializedSupplyLinks,
+		"materializedPaths":       materializedPaths,
+	}
+	job.State["supplyChainSummary"] = map[string]interface{}{
+		"discoveredNodes":         float64(discoveredNodesCount),
+		"discoveredEdges":         float64(discoveredEdgesCount),
+		"normalizedSegments":      float64(0),
+		"materializedFragments":   materializedFragments,
+		"materializedEdges":       materializedEdges,
+		"materializedSupplyLinks": materializedSupplyLinks,
+		"materializedPaths":       materializedPaths,
+		"gapHints":                float64(len(cc.GapHints)),
+	}
+	if e != nil && e.scoutingJobsRepo != nil {
+		_ = e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{
+			"chainContext":                        contextJSON,
+			"supplyChainDiscovery":                job.State["supplyChainDiscovery"],
+			"supplyChainMaterialization":          job.State["supplyChainMaterialization"],
+			"supplyChainSummary":                  job.State["supplyChainSummary"],
+			"supplyChainFallbackContextPersisted": true,
+		})
+	}
+	return true
+}
+
 // runSupplyChainStage2Overlays runs overlay queries (regulatory, market, decision_points) over parsed chains.
 // Anchors are extracted from chain nodes (org, market paths). Results: DependencyEdges (REGULATES, INFLUENCES).
 func (e *ScoutEngine) runSupplyChainStage2Overlays(
@@ -9363,6 +9772,15 @@ func (e *ScoutEngine) processSupplyChains(
 			}); err != nil {
 				logGroundingErrorWithContext(job, "scout", "supply_chain.persist_chain_context", "job_state_update_failed", "repo_update_error", true, err)
 				e.emitGroundingErrorTelemetry(ctx, job, "scout", "supply_chain.persist_chain_context", "job_state_update_failed", "repo_update_error", true)
+			} else {
+				fmt.Printf("[SupplyChainPersisted] job=%s target=%s discovered(nodes=%d edges=%d) materialized(supplyLinks=%d paths=%d)\n",
+					strings.TrimSpace(job.ID),
+					strings.TrimSpace(job.TargetCanonicalPath),
+					discoveredNodesCount,
+					discoveredEdgesCount,
+					supplyLinksCreated,
+					materializedPathsCount,
+				)
 			}
 		}
 	}
@@ -9410,8 +9828,8 @@ func (e *ScoutEngine) processSupplyChains(
 		},
 	})
 	{
-		msg := fmt.Sprintf("[SupplyChainSummary] discovered(nodes=%d edges=%d normalizedSegments=%d) materialized(fragments=%d edges=%d supplyLinks=%d paths=%d) fragments(created=%d updated=%d err=%d) edges(dupes=%d err=%d reversed=%d penalized=%d) supplyLinks(skipped=%d) gaps=%d chainReuse(skipped=%d merged=%d scopeAdded=%d)",
-			discoveredNodesCount, discoveredEdgesCount, normalizedSegmentsCount, materializedFragmentsCount, createdEdges, supplyLinksCreated, materializedPathsCount, createdFrags, updatedFrags, createErrors, edgeDupes, edgeCreateErrors, edgeReversed, edgePenalized, supplyLinksSkipped, len(gapHints), chainReuseSkipped, chainReuseMerged, chainReuseScopeAdded)
+		msg := fmt.Sprintf("[SupplyChainSummary] job=%s target=%s discovered(nodes=%d edges=%d normalizedSegments=%d) materialized(fragments=%d edges=%d supplyLinks=%d paths=%d) fragments(created=%d updated=%d err=%d) edges(dupes=%d err=%d reversed=%d penalized=%d) supplyLinks(skipped=%d) gaps=%d chainReuse(skipped=%d merged=%d scopeAdded=%d)",
+			strings.TrimSpace(job.ID), strings.TrimSpace(job.TargetCanonicalPath), discoveredNodesCount, discoveredEdgesCount, normalizedSegmentsCount, materializedFragmentsCount, createdEdges, supplyLinksCreated, materializedPathsCount, createdFrags, updatedFrags, createErrors, edgeDupes, edgeCreateErrors, edgeReversed, edgePenalized, supplyLinksSkipped, len(gapHints), chainReuseSkipped, chainReuseMerged, chainReuseScopeAdded)
 		fmt.Printf("%s\n", msg)
 		desc := supplyChainSummaryDescription(discoveredNodesCount, materializedFragmentsCount, createdEdges, supplyLinksCreated, materializedPathsCount, len(gapHints))
 
@@ -10659,14 +11077,17 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 
 	for depth := 0; depth < maxDepth; depth++ {
 		stepCtx := agents.WithSupplyChainStepPromptContext(ctx, buildSupplyChainStepPromptContext(job, depth, "downstream", productFilters, geoFilters))
+		maxOrgsPerDepth := supplyChainFastFirstIntLimit(job, "supplyChainFastFirstMaxOrgsPerDepth", agents.ScUnwindMaxOrgsPerDepth)
+		maxFacsPerDepth := supplyChainFastFirstIntLimit(job, "supplyChainFastFirstMaxFacsPerDepth", agents.ScUnwindMaxFacsPerDepth)
+		skipRecursiveStep4 := parseStateBool(job.State["supplyChainSkipRecursiveStep4"], false)
 		// ---- Step 1: org → child orgs + facilities ----
 		var depthFacs []string
 		var childOrgs []string
+		orgsForStep1 := append([]string{}, orgQueue...)
 
 		if len(orgQueue) > 0 {
-			orgsForStep1 := orgQueue
-			if len(orgsForStep1) > agents.ScUnwindMaxOrgsPerDepth {
-				orgsForStep1 = orgsForStep1[:agents.ScUnwindMaxOrgsPerDepth]
+			if len(orgsForStep1) > maxOrgsPerDepth {
+				orgsForStep1 = orgsForStep1[:maxOrgsPerDepth]
 				scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] depth=%d step1 orgQueue capped %d→%d", depth, len(orgQueue), len(orgsForStep1)))
 			}
 			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] depth=%d step1 orgQueue=%d orgs=%v", depth, len(orgsForStep1), truncateSlice(orgsForStep1, 5)))
@@ -10723,8 +11144,8 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 		// If child orgs were found, recurse Step 1 for them (capped levels and batch size).
 		for recurseLevel := 0; recurseLevel < agents.ScUnwindMaxChildOrgRecurseLevels && len(childOrgs) > 0; recurseLevel++ {
 			childOrgsBatch := childOrgs
-			if len(childOrgsBatch) > agents.ScUnwindMaxChildOrgsRecurse {
-				childOrgsBatch = childOrgsBatch[:agents.ScUnwindMaxChildOrgsRecurse]
+			if len(childOrgsBatch) > maxOrgsPerDepth {
+				childOrgsBatch = childOrgsBatch[:maxOrgsPerDepth]
 				scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] depth=%d step1-recurse level=%d childOrgs capped %d→%d", depth, recurseLevel, len(childOrgs), len(childOrgsBatch)))
 			}
 			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] depth=%d step1-recurse level=%d childOrgs=%d", depth, recurseLevel, len(childOrgsBatch)))
@@ -10767,11 +11188,15 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 			break
 		}
 		materializeStage("step1", depth, "downstream", buildStep1Chains(depthFacs))
+		if shouldStopSupplyChainAfterFirstIncremental(job) {
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] depth=%d fast-first stop after step1 incremental materialization", depth))
+			break
+		}
 
 		// ---- Step 2: fac → products ----
 		facsForStep2 := depthFacs
-		if len(facsForStep2) > agents.ScUnwindMaxFacsPerDepth {
-			facsForStep2 = facsForStep2[:agents.ScUnwindMaxFacsPerDepth]
+		if len(facsForStep2) > maxFacsPerDepth {
+			facsForStep2 = facsForStep2[:maxFacsPerDepth]
 			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] depth=%d step2 depthFacs capped %d→%d", depth, len(depthFacs), len(facsForStep2)))
 		}
 		facProdResults, err := e.researchAgent.FindProductsForFacs(stepCtx, facsForStep2)
@@ -10809,6 +11234,10 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 
 		scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] step2 done depth=%d products=%d (from %d facs)", depth, len(productList), len(depthFacs)))
 		materializeStage("step2", depth, "downstream", buildStep2Chains(productSources))
+		if shouldStopSupplyChainAfterFirstIncremental(job) {
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] depth=%d fast-first stop after step2 incremental materialization", depth))
+			break
+		}
 
 		if len(productList) == 0 {
 			break
@@ -10857,8 +11286,16 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 			productToSourceFacs[ps.productPath] = append(productToSourceFacs[ps.productPath], ps.facPath)
 		}
 		materializeStage("step3", depth, "downstream", buildStep3Chains(productToSourceFacs, recipientLinks))
+		if shouldStopSupplyChainAfterFirstIncremental(job) {
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] depth=%d fast-first stop after step3 incremental materialization", depth))
+			break
+		}
 
 		// ---- Step 4: recipient fac → owning org ----
+		if skipRecursiveStep4 {
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] depth=%d step4 skipped by fast-first cap", depth))
+			break
+		}
 		recipFacsForStep4 := recipientFacList
 		if len(recipFacsForStep4) > agents.ScUnwindMaxRecipientFacsPerDepth {
 			recipFacsForStep4 = recipFacsForStep4[:agents.ScUnwindMaxRecipientFacsPerDepth]
@@ -10880,8 +11317,6 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 			}
 		}
 
-		// Build segments from the full linkage: for each recipientLink, trace back
-		// through productSources to build org→fac→product→recipientFac→recipientOrg.
 		segmentsBeforeDepth := len(allSegments)
 		nextOrgQueue := map[string]struct{}{}
 		for _, rl := range recipientLinks {
@@ -10889,7 +11324,6 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 			sourceFacs := productToSourceFacs[rl.productPath]
 			for _, sf := range sourceFacs {
 				srcOrg := facOwner[sf]
-				// Skip segments with empty orgs — parser can't materialize valid edges.
 				if srcOrg == "" || recipOrg == "" {
 					continue
 				}
@@ -10922,15 +11356,19 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 		for o := range nextOrgQueue {
 			orgQueue = append(orgQueue, o)
 		}
-		if len(orgQueue) > agents.ScUnwindMaxOrgsPerDepth {
-			orgQueue = orgQueue[:agents.ScUnwindMaxOrgsPerDepth]
-			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] depth=%d nextOrgQueue capped to %d", depth, agents.ScUnwindMaxOrgsPerDepth))
+		if len(orgQueue) > maxOrgsPerDepth {
+			orgQueue = orgQueue[:maxOrgsPerDepth]
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] depth=%d nextOrgQueue capped to %d", depth, maxOrgsPerDepth))
 		}
 
 		scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] step4 done depth=%d totalSegments=%d nextOrgs=%d", depth, len(allSegments), len(orgQueue)))
 		if len(allSegments) > segmentsBeforeDepth {
 			newChains := buildChains(allSegments[segmentsBeforeDepth:])
 			materializeStage("step4", depth, "downstream", newChains)
+			if shouldStopSupplyChainAfterFirstIncremental(job) {
+				scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] depth=%d fast-first stop after step4 incremental materialization", depth))
+				break
+			}
 		}
 
 		if len(orgQueue) == 0 {
@@ -11152,13 +11590,16 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 
 	for depth := 0; depth < maxDepth; depth++ {
 		stepCtx := agents.WithSupplyChainStepPromptContext(ctx, buildSupplyChainStepPromptContext(job, depth, "upstream", productFilters, geoFilters))
+		maxOrgsPerDepth := supplyChainFastFirstIntLimit(job, "supplyChainFastFirstMaxOrgsPerDepth", agents.ScUnwindMaxOrgsPerDepth)
+		maxFacsPerDepth := supplyChainFastFirstIntLimit(job, "supplyChainFastFirstMaxFacsPerDepth", agents.ScUnwindMaxFacsPerDepth)
+		skipRecursiveStep4 := parseStateBool(job.State["supplyChainSkipRecursiveStep4"], false)
 		var depthFacs []string
 		var childOrgs []string
+		orgsForStep1 := append([]string{}, orgQueue...)
 
 		if len(orgQueue) > 0 {
-			orgsForStep1 := orgQueue
-			if len(orgsForStep1) > agents.ScUnwindMaxOrgsPerDepth {
-				orgsForStep1 = orgsForStep1[:agents.ScUnwindMaxOrgsPerDepth]
+			if len(orgsForStep1) > maxOrgsPerDepth {
+				orgsForStep1 = orgsForStep1[:maxOrgsPerDepth]
 				scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] depth=%d step1 orgQueue capped %d→%d", depth, len(orgQueue), len(orgsForStep1)))
 			}
 			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] depth=%d step1 orgQueue=%d orgs=%v", depth, len(orgsForStep1), truncateSlice(orgsForStep1, 5)))
@@ -11212,8 +11653,8 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 
 		for recurseLevel := 0; recurseLevel < agents.ScUnwindMaxChildOrgRecurseLevels && len(childOrgs) > 0; recurseLevel++ {
 			childOrgsBatch := childOrgs
-			if len(childOrgsBatch) > agents.ScUnwindMaxChildOrgsRecurse {
-				childOrgsBatch = childOrgsBatch[:agents.ScUnwindMaxChildOrgsRecurse]
+			if len(childOrgsBatch) > maxOrgsPerDepth {
+				childOrgsBatch = childOrgsBatch[:maxOrgsPerDepth]
 				scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] depth=%d step1-recurse level=%d childOrgs capped %d→%d", depth, recurseLevel, len(childOrgs), len(childOrgsBatch)))
 			}
 			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] depth=%d step1-recurse level=%d childOrgs=%d", depth, recurseLevel, len(childOrgsBatch)))
@@ -11256,11 +11697,15 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 			break
 		}
 		materializeStage("step1", depth, "upstream", buildStep1Chains(depthFacs))
+		if shouldStopSupplyChainAfterFirstIncremental(job) {
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] depth=%d fast-first stop after step1 incremental materialization", depth))
+			break
+		}
 
 		// ---- Step U1: fac → input products ----
 		facsForU1 := depthFacs
-		if len(facsForU1) > agents.ScUnwindMaxFacsPerDepth {
-			facsForU1 = facsForU1[:agents.ScUnwindMaxFacsPerDepth]
+		if len(facsForU1) > maxFacsPerDepth {
+			facsForU1 = facsForU1[:maxFacsPerDepth]
 			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] depth=%d U1 depthFacs capped %d→%d", depth, len(depthFacs), len(facsForU1)))
 		}
 		facInputResults, err := e.researchAgent.FindInputProductsForFacs(stepCtx, facsForU1)
@@ -11291,6 +11736,10 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 
 		scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] U1 done depth=%d products=%d (from %d facs)", depth, len(productList), len(depthFacs)))
 		materializeStage("U1", depth, "upstream", buildU1Chains(facProductLinks))
+		if shouldStopSupplyChainAfterFirstIncremental(job) {
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] depth=%d fast-first stop after U1 incremental materialization", depth))
+			break
+		}
 
 		if len(productList) == 0 {
 			break
@@ -11331,8 +11780,16 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 			break
 		}
 		materializeStage("U2", depth, "upstream", buildU2Chains(facProductLinks, productToSupplierFacs))
+		if shouldStopSupplyChainAfterFirstIncremental(job) {
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] depth=%d fast-first stop after U2 incremental materialization", depth))
+			break
+		}
 
 		// ---- Step 4: supplier fac → owning org ----
+		if skipRecursiveStep4 {
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] depth=%d step4 skipped by fast-first cap", depth))
+			break
+		}
 		supplierFacsForStep4 := supplierFacList
 		if len(supplierFacsForStep4) > agents.ScUnwindMaxRecipientFacsPerDepth {
 			supplierFacsForStep4 = supplierFacsForStep4[:agents.ScUnwindMaxRecipientFacsPerDepth]
@@ -11398,15 +11855,19 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 		for o := range nextOrgQueue {
 			orgQueue = append(orgQueue, o)
 		}
-		if len(orgQueue) > agents.ScUnwindMaxOrgsPerDepth {
-			orgQueue = orgQueue[:agents.ScUnwindMaxOrgsPerDepth]
-			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] depth=%d nextOrgQueue capped to %d", depth, agents.ScUnwindMaxOrgsPerDepth))
+		if len(orgQueue) > maxOrgsPerDepth {
+			orgQueue = orgQueue[:maxOrgsPerDepth]
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] depth=%d nextOrgQueue capped to %d", depth, maxOrgsPerDepth))
 		}
 
 		scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] step4 done depth=%d totalSegments=%d nextOrgs=%d", depth, len(allSegments), len(orgQueue)))
 		if len(allSegments) > segmentsBeforeDepth {
 			newChains := buildChains(allSegments[segmentsBeforeDepth:])
 			materializeStage("step4", depth, "upstream", newChains)
+			if shouldStopSupplyChainAfterFirstIncremental(job) {
+				scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwindUp] depth=%d fast-first stop after step4 incremental materialization", depth))
+				break
+			}
 		}
 
 		if len(orgQueue) == 0 {

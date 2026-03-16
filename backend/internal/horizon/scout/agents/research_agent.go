@@ -644,7 +644,7 @@ Return a JSON object with fields:
    - For ORG/FACILITY/GOV: if the official name, slug, source text, or site label contains a clear place clue (e.g. Wuxi, Huizhou, Eilat, Binh Duong, Riyadh), set homeLocation.name to that city/site instead of leaving it empty.
    - Set iso3166_1 ONLY when the country is explicit or strongly corroborated by the source and the place clue.
    - If the place clue and iso3166_1 conflict, correct the ISO2 or omit it; never preserve a contradictory guess in a partial update.
-   - If this update would keep /org/na or /gov/na even though jurisdiction is inferable from official name/place clue/source, resolve the jurisdiction instead of preserving na.
+   - If jurisdiction is inferable from official name/place clue/source, resolve it explicitly instead of preserving or introducing /org/na or /gov/na.
 2. "relations": An array of DiscoveredRelation objects if you found new dependencies (suppliers, competitors, etc.).
 3. "supplyChains": Array of supply chain objects, each with:
    - "nodes": ordered array of {canonicalPath, name, type, role?}
@@ -943,7 +943,7 @@ WHEN TO USE sourceCanonicalPath (MANDATORY):
      - Set targetCanonicalPath = Y's path (subordinate gov/org/program/facility/deposit)
 
 8. DEPOSIT in supply-chain edges (critical direction handling):
-   - DEPOSIT is a resource/location node, not a supplier actor for SUPPLIES_TO.
+   - DEPOSIT is usually a resource/location node, not a supplier actor for SUPPLIES_TO.
    - If THIS FRAGMENT is DEPOSIT and evidence says "facility X extracts from this deposit":
      - Set sourceCanonicalPath = X facility path
      - Set sourceType = FACILITY
@@ -953,7 +953,8 @@ WHEN TO USE sourceCanonicalPath (MANDATORY):
      - Set sourceCanonicalPath = X path
      - Set targetCanonicalPath = THIS FRAGMENT's canonicalPath
      - Set relationType = DEPENDS_ON
-   - Never emit DEPOSIT -> ORGANIZATION|FACILITY with relationType SUPPLIES_TO.
+   - Rare exception: if the evidence identifies an upstream resource source but the extracting/processing facility is unknown, you MAY emit DEPOSIT -> ORGANIZATION|FACILITY with relationType SUPPLIES_TO as a temporary shortcut.
+     Use this rarely, keep confidence conservative, and prefer explicit FACILITY -> PRODUCT -> ORG/FAC chains whenever available.
 
 WHEN NOT TO USE sourceCanonicalPath:
 - For most Phase 1 relations (DEPENDS_ON, SUPPLIES_TO, LOCATED_IN, etc.) the default "FROM THIS FRAGMENT" is correct.

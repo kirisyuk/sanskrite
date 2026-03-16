@@ -296,6 +296,13 @@ type SupplyChainAssemblyGraphPayload struct {
 	Coverage                        *SupplyChainAssemblyCoverage         `json:"coverage,omitempty"`
 	OpenGaps                        []string                             `json:"openGaps,omitempty"`
 	DerivedPathKeys                 []string                             `json:"derivedPathKeys,omitempty"`
+	PrimaryBranches                 []SupplyChainAssemblyBranchSummary   `json:"primaryBranches,omitempty"`
+	SecondaryBranches               []SupplyChainAssemblyBranchSummary   `json:"secondaryBranches,omitempty"`
+	TopRoutes                       []string                             `json:"topRoutes,omitempty"`
+	TopDistributionNodes            []string                             `json:"topDistributionNodes,omitempty"`
+	TopSuppliers                    []string                             `json:"topSuppliers,omitempty"`
+	TopProductFamilies              []string                             `json:"topProductFamilies,omitempty"`
+	SuppressedSupportBranches       []SupplyChainAssemblyBranchSummary   `json:"suppressedSupportBranches,omitempty"`
 	Stage                           string                               `json:"stage,omitempty"`
 	Provisional                     bool                                 `json:"provisional,omitempty"`
 	SourceMode                      string                               `json:"sourceMode,omitempty"`
@@ -312,10 +319,19 @@ type SupplyChainAssemblyAnchorComponent struct {
 }
 
 type SupplyChainAssemblyNode struct {
-	Type string `json:"type"`
-	Ref  string `json:"ref"`
-	Name string `json:"name,omitempty"`
-	Role string `json:"role,omitempty"`
+	Type                       string  `json:"type"`
+	Ref                        string  `json:"ref"`
+	Name                       string  `json:"name,omitempty"`
+	Role                       string  `json:"role,omitempty"`
+	BranchClass                string  `json:"branchClass,omitempty"`
+	PriorityTier               string  `json:"priorityTier,omitempty"`
+	PrimaryBranchID            string  `json:"primaryBranchId,omitempty"`
+	DecisionValueScore         float64 `json:"decisionValueScore,omitempty"`
+	AnchorDistance             int     `json:"anchorDistance,omitempty"`
+	EvidenceStrengthScore      float64 `json:"evidenceStrengthScore,omitempty"`
+	IsPrimaryFocus             bool    `json:"isPrimaryFocus,omitempty"`
+	IsTerminalDistributionNode bool    `json:"isTerminalDistributionNode,omitempty"`
+	IsSupportNode              bool    `json:"isSupportNode,omitempty"`
 }
 
 type SupplyChainAssemblySupplyEdge struct {
@@ -328,13 +344,25 @@ type SupplyChainAssemblySupplyEdge struct {
 	Confidence              float64                `json:"confidence,omitempty"`
 	Status                  string                 `json:"status,omitempty"`
 	Metrics                 map[string]MetricValue `json:"metrics,omitempty"`
+	BranchClass             string                 `json:"branchClass,omitempty"`
+	PriorityTier            string                 `json:"priorityTier,omitempty"`
+	DecisionValueScore      float64                `json:"decisionValueScore,omitempty"`
+	RouteCriticality        float64                `json:"routeCriticality,omitempty"`
+	SupportsPrimaryBranch   bool                   `json:"supportsPrimaryBranch,omitempty"`
+	PrimaryBranchID         string                 `json:"primaryBranchId,omitempty"`
+	EvidenceStrengthScore   float64                `json:"evidenceStrengthScore,omitempty"`
+	NoisePenaltyScore       float64                `json:"noisePenaltyScore,omitempty"`
 }
 
 type SupplyChainAssemblyTransformEdge struct {
-	FromProductRef string `json:"fromProductRef,omitempty"`
-	ToProductRef   string `json:"toProductRef,omitempty"`
-	Relation       string `json:"relation,omitempty"`
-	Status         string `json:"status,omitempty"`
+	FromProductRef     string  `json:"fromProductRef,omitempty"`
+	ToProductRef       string  `json:"toProductRef,omitempty"`
+	Relation           string  `json:"relation,omitempty"`
+	Status             string  `json:"status,omitempty"`
+	BranchClass        string  `json:"branchClass,omitempty"`
+	PriorityTier       string  `json:"priorityTier,omitempty"`
+	DecisionValueScore float64 `json:"decisionValueScore,omitempty"`
+	PrimaryBranchID    string  `json:"primaryBranchId,omitempty"`
 }
 
 type SupplyChainAssemblyRouteBinding struct {
@@ -344,13 +372,40 @@ type SupplyChainAssemblyRouteBinding struct {
 }
 
 type SupplyChainAssemblyCoverage struct {
-	ProductsN        int  `json:"productsN,omitempty"`
-	ActorsN          int  `json:"actorsN,omitempty"`
-	SuppliersN       int  `json:"suppliersN,omitempty"`
-	TransformationsN int  `json:"transformationsN,omitempty"`
-	DerivedPathsN    int  `json:"derivedPathsN,omitempty"`
-	UnresolvedLeaves int  `json:"unresolvedLeaves,omitempty"`
-	Truncated        bool `json:"truncated,omitempty"`
+	ProductsN               int  `json:"productsN,omitempty"`
+	ActorsN                 int  `json:"actorsN,omitempty"`
+	SuppliersN              int  `json:"suppliersN,omitempty"`
+	TransformationsN        int  `json:"transformationsN,omitempty"`
+	DerivedPathsN           int  `json:"derivedPathsN,omitempty"`
+	UnresolvedLeaves        int  `json:"unresolvedLeaves,omitempty"`
+	PrimaryBranchesN        int  `json:"primaryBranchesN,omitempty"`
+	SecondaryBranchesN      int  `json:"secondaryBranchesN,omitempty"`
+	SupportBranchesN        int  `json:"supportBranchesN,omitempty"`
+	PrimaryProductsCoveredN int  `json:"primaryProductsCoveredN,omitempty"`
+	RouteBoundPrimaryEdgesN int  `json:"routeBoundPrimaryEdgesN,omitempty"`
+	NoiseEdgesN             int  `json:"noiseEdgesN,omitempty"`
+	Truncated               bool `json:"truncated,omitempty"`
+}
+
+type SupplyChainAssemblyBranchSummary struct {
+	ID                           string   `json:"id,omitempty"`
+	BranchClass                  string   `json:"branchClass,omitempty"`
+	PriorityTier                 string   `json:"priorityTier,omitempty"`
+	Title                        string   `json:"title,omitempty"`
+	AnchorRefs                   []string `json:"anchorRefs,omitempty"`
+	ProductRefs                  []string `json:"productRefs,omitempty"`
+	ActorRefs                    []string `json:"actorRefs,omitempty"`
+	RouteRefs                    []string `json:"routeRefs,omitempty"`
+	EntryNodes                   []string `json:"entryNodes,omitempty"`
+	ExitNodes                    []string `json:"exitNodes,omitempty"`
+	DecisionValueScore           float64  `json:"decisionValueScore,omitempty"`
+	BusinessRelevanceScore       float64  `json:"businessRelevanceScore,omitempty"`
+	AnchorProximityScore         float64  `json:"anchorProximityScore,omitempty"`
+	RouteEvidenceScore           float64  `json:"routeEvidenceScore,omitempty"`
+	EvidenceStrengthScore        float64  `json:"evidenceStrengthScore,omitempty"`
+	NoisePenaltyScore            float64  `json:"noisePenaltyScore,omitempty"`
+	Reason                       string   `json:"reason,omitempty"`
+	CollapsedSupportingBranchIDs []string `json:"collapsedSupportingBranchIds,omitempty"`
 }
 
 // SupplyChainPathNode represents a node in a supply chain path.
@@ -733,6 +788,27 @@ func validateSupplyChainAssemblyGraphPayload(payload map[string]interface{}) err
 		return err
 	}
 	if _, err := decodeStringSlice(payload["derivedPathKeys"]); err != nil {
+		return err
+	}
+	if _, err := decodeSupplyChainAssemblyBranchSummaries(payload["primaryBranches"]); err != nil {
+		return err
+	}
+	if _, err := decodeSupplyChainAssemblyBranchSummaries(payload["secondaryBranches"]); err != nil {
+		return err
+	}
+	if _, err := decodeStringSlice(payload["topRoutes"]); err != nil {
+		return err
+	}
+	if _, err := decodeStringSlice(payload["topDistributionNodes"]); err != nil {
+		return err
+	}
+	if _, err := decodeStringSlice(payload["topSuppliers"]); err != nil {
+		return err
+	}
+	if _, err := decodeStringSlice(payload["topProductFamilies"]); err != nil {
+		return err
+	}
+	if _, err := decodeSupplyChainAssemblyBranchSummaries(payload["suppressedSupportBranches"]); err != nil {
 		return err
 	}
 	stage := ""

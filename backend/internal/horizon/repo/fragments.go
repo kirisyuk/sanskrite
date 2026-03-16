@@ -32,6 +32,7 @@ import (
 )
 
 var ErrFragmentNotFound = errors.New("horizon fragment not found")
+var ErrFragmentCanonicalPathConflict = errors.New("horizon fragment canonical path conflict")
 
 // bestEffortAssembleCanonicalPathFromParts rebuilds fragment.CanonicalPath from CanonicalParts, if present.
 // It is intentionally fail-open:
@@ -287,9 +288,31 @@ func canonicalPathDocID(tenantID, canonicalPath string) string {
 	return "cp_" + hex.EncodeToString(sum[:10])
 }
 
+type horizonFragmentPathClaim struct {
+	TenantID      string    `firestore:"tenantId"`
+	CanonicalPath string    `firestore:"canonicalPath"`
+	FragmentID    string    `firestore:"fragmentId"`
+	UpdatedAt     time.Time `firestore:"updatedAt"`
+}
+
+func fragmentPathClaimDocID(tenantID, canonicalPath string) string {
+	return canonicalPathDocID(tenantID, canonicalPath)
+}
+
+func assignLoadedFragmentID(fragment *models.HorizonFragment, doc *firestore.DocumentSnapshot) {
+	if fragment == nil || doc == nil || doc.Ref == nil {
+		return
+	}
+	if stored := strings.TrimSpace(fragment.ID); stored != "" && stored != strings.TrimSpace(doc.Ref.ID) {
+		log.Printf("[HorizonFragments] WARNING: correcting stale fragment id field stored=%s actual=%s canonicalPath=%s", stored, strings.TrimSpace(doc.Ref.ID), strings.TrimSpace(fragment.CanonicalPath))
+	}
+	fragment.ID = strings.TrimSpace(doc.Ref.ID)
+}
+
 // HorizonFragmentsRepository репозиторий для работы с HorizonFragment
 type HorizonFragmentsRepository struct {
 	col           *firestore.CollectionRef
+	pathClaimsCol *firestore.CollectionRef
 	db            *firestore.Client
 	versionsRepo  *HorizonFragmentVersionsRepository // Репозиторий для версий
 	edgesRepo     *DependencyEdgesRepository
@@ -315,6 +338,7 @@ type HorizonFragmentsRepository struct {
 func NewHorizonFragmentsRepository(db *firestore.Client) *HorizonFragmentsRepository {
 	return &HorizonFragmentsRepository{
 		col:          db.Collection("horizon_fragments"),
+		pathClaimsCol: db.Collection("horizon_fragment_path_claims"),
 		db:           db,
 		versionsRepo: NewHorizonFragmentVersionsRepository(db),
 	}
@@ -335,6 +359,85 @@ func (r *HorizonFragmentsRepository) WithStorage(storage *gcp.GCSClient, bucket 
 func (r *HorizonFragmentsRepository) WithEdgesRepo(edgesRepo *DependencyEdgesRepository) *HorizonFragmentsRepository {
 	r.edgesRepo = edgesRepo
 	return r
+}
+
+func (r *HorizonFragmentsRepository) getPathClaim(ctx context.Context, tenantID, canonicalPath string) (*horizonFragmentPathClaim, error) {
+	if r == nil || r.pathClaimsCol == nil {
+		return nil, nil
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	canonicalPath = strings.TrimSpace(canonicalPath)
+	if tenantID == "" || canonicalPath == "" {
+		return nil, nil
+	}
+	snap, err := r.pathClaimsCol.Doc(fragmentPathClaimDocID(tenantID, canonicalPath)).Get(ctx)
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if snap == nil || !snap.Exists() {
+		return nil, nil
+	}
+	var claim horizonFragmentPathClaim
+	if err := snap.DataTo(&claim); err != nil {
+		return nil, err
+	}
+	return &claim, nil
+}
+
+func (r *HorizonFragmentsRepository) upsertPathClaim(ctx context.Context, tenantID, canonicalPath, fragmentID string) error {
+	if r == nil || r.pathClaimsCol == nil {
+		return nil
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	canonicalPath = strings.TrimSpace(canonicalPath)
+	fragmentID = strings.TrimSpace(fragmentID)
+	if tenantID == "" || canonicalPath == "" || fragmentID == "" {
+		return nil
+	}
+	claim := horizonFragmentPathClaim{
+		TenantID:      tenantID,
+		CanonicalPath: canonicalPath,
+		FragmentID:    fragmentID,
+		UpdatedAt:     time.Now().UTC(),
+	}
+	_, err := r.pathClaimsCol.Doc(fragmentPathClaimDocID(tenantID, canonicalPath)).Set(ctx, claim)
+	return err
+}
+
+func (r *HorizonFragmentsRepository) deletePathClaimIfOwned(ctx context.Context, tenantID, canonicalPath, fragmentID string) error {
+	if r == nil || r.pathClaimsCol == nil {
+		return nil
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	canonicalPath = strings.TrimSpace(canonicalPath)
+	fragmentID = strings.TrimSpace(fragmentID)
+	if tenantID == "" || canonicalPath == "" || fragmentID == "" {
+		return nil
+	}
+	docRef := r.pathClaimsCol.Doc(fragmentPathClaimDocID(tenantID, canonicalPath))
+	return r.db.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		snap, err := tx.Get(docRef)
+		if err != nil {
+			if status.Code(err) == codes.NotFound {
+				return nil
+			}
+			return err
+		}
+		if snap == nil || !snap.Exists() {
+			return nil
+		}
+		var claim horizonFragmentPathClaim
+		if err := snap.DataTo(&claim); err != nil {
+			return err
+		}
+		if strings.TrimSpace(claim.FragmentID) == fragmentID {
+			tx.Delete(docRef)
+		}
+		return nil
+	})
 }
 
 // WithRedis sets a shared Redis client for L1 fragment caching (GetByCanonicalPath).
@@ -851,6 +954,7 @@ func (r *HorizonFragmentsRepository) createWithOptions(ctx context.Context, frag
 		// Best-effort de-dup at repository boundary:
 		// if canonicalPath already exists, reuse existing fragment ID instead of creating a duplicate.
 		if existing, err := r.GetByCanonicalPath(ctx, cp); err == nil && existing != nil && strings.TrimSpace(existing.ID) != "" {
+			_ = r.upsertPathClaim(ctx, "global", cp, strings.TrimSpace(existing.ID))
 			log.Printf("[HorizonFragments] Reusing existing fragment for canonicalPath=%q id=%s", cp, strings.TrimSpace(existing.ID))
 			return strings.TrimSpace(existing.ID), nil
 		}
@@ -900,18 +1004,66 @@ func (r *HorizonFragmentsRepository) createWithOptions(ctx context.Context, frag
 	fragment.IndexPaths = models.BuildIndexPaths(fragment, nil)
 
 	if cp != "" {
-		if _, err := doc.Create(ctx, fragment); err != nil {
+		claimDoc := r.pathClaimsCol.Doc(fragmentPathClaimDocID("global", cp))
+		existingID := ""
+		created := false
+		err := r.db.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+			claimSnap, err := tx.Get(claimDoc)
+			if err == nil && claimSnap != nil && claimSnap.Exists() {
+				var claim horizonFragmentPathClaim
+				if derr := claimSnap.DataTo(&claim); derr == nil {
+					existingID = strings.TrimSpace(claim.FragmentID)
+					if existingID != "" {
+						return nil
+					}
+				}
+			} else if err != nil && status.Code(err) != codes.NotFound {
+				return err
+			}
+
+			fragSnap, err := tx.Get(doc)
+			if err == nil && fragSnap != nil && fragSnap.Exists() {
+				existingID = strings.TrimSpace(doc.ID)
+				tx.Set(claimDoc, horizonFragmentPathClaim{
+					TenantID:      "global",
+					CanonicalPath: cp,
+					FragmentID:    existingID,
+					UpdatedAt:     now,
+				})
+				return nil
+			}
+			if err != nil && status.Code(err) != codes.NotFound {
+				return err
+			}
+
+			if cerr := tx.Create(doc, fragment); cerr != nil {
+				return cerr
+			}
+			tx.Set(claimDoc, horizonFragmentPathClaim{
+				TenantID:      "global",
+				CanonicalPath: cp,
+				FragmentID:    fragment.ID,
+				UpdatedAt:     now,
+			})
+			created = true
+			return nil
+		})
+		if err != nil {
 			if status.Code(err) == codes.AlreadyExists {
 				if existing, gerr := r.GetByCanonicalPath(ctx, cp); gerr == nil && existing != nil && strings.TrimSpace(existing.ID) != "" {
+					_ = r.upsertPathClaim(ctx, "global", cp, strings.TrimSpace(existing.ID))
 					log.Printf("[HorizonFragments] Reusing existing fragment after collision for canonicalPath=%q id=%s", cp, strings.TrimSpace(existing.ID))
-					return strings.TrimSpace(existing.ID), nil
-				}
-				if existing, gerr := r.Get(ctx, doc.ID); gerr == nil && existing != nil && strings.TrimSpace(existing.ID) != "" {
-					log.Printf("[HorizonFragments] Reusing deterministic fragment after collision for canonicalPath=%q id=%s", cp, strings.TrimSpace(existing.ID))
 					return strings.TrimSpace(existing.ID), nil
 				}
 			}
 			return "", err
+		}
+		if strings.TrimSpace(existingID) != "" {
+			log.Printf("[HorizonFragments] Reusing claimed fragment for canonicalPath=%q id=%s", cp, existingID)
+			return existingID, nil
+		}
+		if !created {
+			return "", fmt.Errorf("fragment create for canonicalPath=%q completed without create or reuse", cp)
 		}
 	} else {
 		if _, err := doc.Set(ctx, fragment); err != nil {
@@ -946,9 +1098,7 @@ func selectPreferredFragmentFromDocs(docs []*firestore.DocumentSnapshot, canonic
 		if err := doc.DataTo(&fragment); err != nil {
 			return nil, err
 		}
-		if strings.TrimSpace(fragment.ID) == "" {
-			fragment.ID = strings.TrimSpace(doc.Ref.ID)
-		}
+		assignLoadedFragmentID(&fragment, doc)
 		rank := 2
 		if strings.TrimSpace(doc.Ref.ID) == preferredID {
 			rank = 0
@@ -984,6 +1134,7 @@ func (r *HorizonFragmentsRepository) Get(ctx context.Context, id string) (*model
 	if err := snap.DataTo(&fragment); err != nil {
 		return nil, err
 	}
+	assignLoadedFragmentID(&fragment, snap)
 	return &fragment, nil
 }
 
@@ -995,6 +1146,14 @@ func (r *HorizonFragmentsRepository) GetByCanonicalPath(ctx context.Context, can
 	cp := strings.TrimSpace(canonicalPath)
 	if frag := r.getFragmentFromRedis(ctx, cp); frag != nil {
 		return frag, nil
+	}
+	if claim, err := r.getPathClaim(ctx, "global", cp); err == nil && claim != nil && strings.TrimSpace(claim.FragmentID) != "" {
+		if frag, gerr := r.Get(ctx, strings.TrimSpace(claim.FragmentID)); gerr == nil && frag != nil {
+			if strings.TrimSpace(frag.CanonicalPath) == cp {
+				r.setFragmentInRedis(ctx, cp, frag)
+				return frag, nil
+			}
+		}
 	}
 	q := r.col.Where("tenantId", "==", "global").Where("canonicalPath", "==", cp)
 	docs, err := q.Documents(ctx).GetAll()
@@ -1014,6 +1173,7 @@ func (r *HorizonFragmentsRepository) GetByCanonicalPath(ctx context.Context, can
 	if len(docs) > 1 {
 		log.Printf("[HorizonFragments] WARNING: duplicate canonicalPath detected canonicalPath=%q matches=%d selectedId=%s", cp, len(docs), strings.TrimSpace(best.ID))
 	}
+	_ = r.upsertPathClaim(ctx, "global", cp, strings.TrimSpace(best.ID))
 	r.setFragmentInRedis(ctx, cp, best)
 	return best, nil
 }
@@ -1095,6 +1255,7 @@ func (r *HorizonFragmentsRepository) BatchGetByCanonicalPaths(ctx context.Contex
 				log.Printf("[HorizonFragments] WARNING: duplicate canonicalPath detected canonicalPath=%q matches=%d selectedId=%s", cp, len(docsForPath), strings.TrimSpace(best.ID))
 			}
 			result[cp] = best
+			_ = r.upsertPathClaim(ctx, "global", cp, strings.TrimSpace(best.ID))
 			r.setFragmentInRedis(ctx, cp, best)
 		}
 	}
@@ -1139,9 +1300,7 @@ func (r *HorizonFragmentsRepository) ListByCanonicalPath(ctx context.Context, ca
 		if err := doc.DataTo(&fragment); err != nil {
 			return nil, err
 		}
-		if strings.TrimSpace(fragment.ID) == "" {
-			fragment.ID = strings.TrimSpace(doc.Ref.ID)
-		}
+		assignLoadedFragmentID(&fragment, doc)
 		out = append(out, &fragment)
 	}
 	return out, nil
@@ -1317,6 +1476,7 @@ func (r *HorizonFragmentsRepository) FindByIdentifier(ctx context.Context, key, 
 		if err := doc.DataTo(&fragment); err != nil {
 			continue
 		}
+		assignLoadedFragmentID(&fragment, doc)
 		fragments = append(fragments, &fragment)
 	}
 
@@ -1346,6 +1506,7 @@ func (r *HorizonFragmentsRepository) FindByIdentifierAndType(ctx context.Context
 		if err := doc.DataTo(&fragment); err != nil {
 			continue
 		}
+		assignLoadedFragmentID(&fragment, doc)
 		fragments = append(fragments, &fragment)
 	}
 	return fragments, nil
@@ -1376,6 +1537,7 @@ func (r *HorizonFragmentsRepository) FindByLabel(ctx context.Context, lang, valu
 		if err := doc.DataTo(&fragment); err != nil {
 			continue
 		}
+		assignLoadedFragmentID(&fragment, doc)
 		fragments = append(fragments, &fragment)
 	}
 
@@ -1412,6 +1574,7 @@ func (r *HorizonFragmentsRepository) FindByNormalizedLegalName(ctx context.Conte
 		if err := doc.DataTo(&fragment); err != nil {
 			continue
 		}
+		assignLoadedFragmentID(&fragment, doc)
 		legalName := strings.TrimSpace(fragment.Identifiers["legalName"])
 		if legalName == "" {
 			continue
@@ -1474,6 +1637,15 @@ func (r *HorizonFragmentsRepository) updateWithOptions(ctx context.Context, frag
 		return fmt.Errorf("validation error: %w", err)
 	}
 
+	currentFragment, currentErr := r.Get(ctx, fragment.ID)
+	if currentErr != nil {
+		return fmt.Errorf("failed to get current fragment: %w", currentErr)
+	}
+	oldCanonicalPath := ""
+	if currentFragment != nil {
+		oldCanonicalPath = strings.TrimSpace(currentFragment.CanonicalPath)
+	}
+
 	now := time.Now().UTC()
 	fragment.UpdatedAt = now
 	if fragment.Version < 0 {
@@ -1483,12 +1655,6 @@ func (r *HorizonFragmentsRepository) updateWithOptions(ctx context.Context, frag
 	fragment.Metadata.LastUpdatedAt = now
 
 	if !opts.SkipVersionSnapshot {
-		// Получаем текущую версию фрагмента для сохранения
-		currentFragment, err := r.Get(ctx, fragment.ID)
-		if err != nil {
-			return fmt.Errorf("failed to get current fragment: %w", err)
-		}
-
 		// Сохраняем версию перед обновлением
 		version := &HorizonFragmentVersion{
 			FragmentID:    currentFragment.ID,
@@ -1507,12 +1673,63 @@ func (r *HorizonFragmentsRepository) updateWithOptions(ctx context.Context, frag
 	// Rebuild index paths to reflect any changes
 	fragment.IndexPaths = models.BuildIndexPaths(fragment, nil)
 
-	_, err := r.col.Doc(fragment.ID).Set(ctx, fragment)
+	cp := strings.TrimSpace(fragment.CanonicalPath)
+	docRef := r.col.Doc(fragment.ID)
+	var err error
+	if cp != "" {
+		claimDoc := r.pathClaimsCol.Doc(fragmentPathClaimDocID("global", cp))
+		oldClaimDoc := (*firestore.DocumentRef)(nil)
+		if oldCanonicalPath != "" && oldCanonicalPath != cp {
+			oldClaimDoc = r.pathClaimsCol.Doc(fragmentPathClaimDocID("global", oldCanonicalPath))
+		}
+		err = r.db.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+			claimSnap, cerr := tx.Get(claimDoc)
+			if cerr == nil && claimSnap != nil && claimSnap.Exists() {
+				var claim horizonFragmentPathClaim
+				if derr := claimSnap.DataTo(&claim); derr != nil {
+					return derr
+				}
+				if owner := strings.TrimSpace(claim.FragmentID); owner != "" && owner != strings.TrimSpace(fragment.ID) {
+					return fmt.Errorf("%w: canonicalPath=%s owner=%s current=%s", ErrFragmentCanonicalPathConflict, cp, owner, strings.TrimSpace(fragment.ID))
+				}
+			} else if cerr != nil && status.Code(cerr) != codes.NotFound {
+				return cerr
+			}
+
+			tx.Set(docRef, fragment)
+			tx.Set(claimDoc, horizonFragmentPathClaim{
+				TenantID:      "global",
+				CanonicalPath: cp,
+				FragmentID:    strings.TrimSpace(fragment.ID),
+				UpdatedAt:     now,
+			})
+			if oldClaimDoc != nil {
+				oldSnap, oerr := tx.Get(oldClaimDoc)
+				if oerr == nil && oldSnap != nil && oldSnap.Exists() {
+					var oldClaim horizonFragmentPathClaim
+					if derr := oldSnap.DataTo(&oldClaim); derr == nil && strings.TrimSpace(oldClaim.FragmentID) == strings.TrimSpace(fragment.ID) {
+						tx.Delete(oldClaimDoc)
+					}
+				} else if oerr != nil && status.Code(oerr) != codes.NotFound {
+					return oerr
+				}
+			}
+			return nil
+		})
+	} else {
+		_, err = docRef.Set(ctx, fragment)
+	}
 	if err != nil {
 		return err
 	}
 	tracking.RecordFragmentUpdated(ctx, fragment.ID)
-	r.invalidateFragmentRedis(ctx, strings.TrimSpace(fragment.CanonicalPath))
+	if cp == "" && oldCanonicalPath != "" {
+		_ = r.deletePathClaimIfOwned(ctx, "global", oldCanonicalPath, strings.TrimSpace(fragment.ID))
+	}
+	if oldCanonicalPath != "" && oldCanonicalPath != cp {
+		r.invalidateFragmentRedis(ctx, oldCanonicalPath)
+	}
+	r.invalidateFragmentRedis(ctx, cp)
 
 	// Экспорт в GCS для поиска (с синхронизацией)
 	if !opts.SkipIndexExport {
@@ -1546,6 +1763,7 @@ func (r *HorizonFragmentsRepository) UpdateGovernance(ctx context.Context, id st
 		if err := doc.DataTo(&fragment); err != nil {
 			return err
 		}
+		assignLoadedFragmentID(&fragment, doc)
 		fragment.Governance = governance
 		fragment.UpdatedAt = now
 		fragment.Metadata.LastUpdatedAt = now
@@ -1578,6 +1796,7 @@ func (r *HorizonFragmentsRepository) IncrementActiveSubscribers(ctx context.Cont
 		if err := doc.DataTo(&fragment); err != nil {
 			return err
 		}
+		assignLoadedFragmentID(&fragment, doc)
 		fragment.Governance.ActiveSubscribers++
 		if fragment.Governance.ActiveSubscribers > 0 && fragment.Governance.Status == string(models.FragmentStatusDormant) {
 			fragment.Governance.Status = string(models.FragmentStatusActive)
@@ -1613,6 +1832,7 @@ func (r *HorizonFragmentsRepository) DecrementActiveSubscribers(ctx context.Cont
 		if err := doc.DataTo(&fragment); err != nil {
 			return err
 		}
+		assignLoadedFragmentID(&fragment, doc)
 		if fragment.Governance.ActiveSubscribers > 0 {
 			fragment.Governance.ActiveSubscribers--
 		}
@@ -1650,6 +1870,7 @@ func (r *HorizonFragmentsRepository) ListByStatus(ctx context.Context, status st
 		if err := d.DataTo(&fragment); err != nil {
 			continue
 		}
+		assignLoadedFragmentID(&fragment, d)
 		fragments = append(fragments, &fragment)
 	}
 	return fragments, nil
@@ -1779,9 +2000,7 @@ func (r *HorizonFragmentsRepository) ListGeoBound(
 		if err := d.DataTo(&fragment); err != nil {
 			continue
 		}
-		if fragment.ID == "" {
-			continue
-		}
+		assignLoadedFragmentID(&fragment, d)
 		if _, exists := seen[fragment.ID]; exists {
 			continue
 		}
@@ -1876,6 +2095,7 @@ func (r *HorizonFragmentsRepository) SearchPrefix(ctx context.Context, query str
 			if err := d.DataTo(&f); err != nil {
 				continue
 			}
+			assignLoadedFragmentID(&f, d)
 			out = append(out, &f)
 		}
 		return out, nil
@@ -1898,6 +2118,7 @@ func (r *HorizonFragmentsRepository) SearchPrefix(ctx context.Context, query str
 		if err := d.DataTo(&f); err != nil {
 			continue
 		}
+		assignLoadedFragmentID(&f, d)
 		out = append(out, &f)
 	}
 	return out, nil
@@ -1927,6 +2148,7 @@ func (r *HorizonFragmentsRepository) ListByCanonicalPaths(ctx context.Context, c
 			if err := d.DataTo(&fragment); err != nil {
 				continue
 			}
+			assignLoadedFragmentID(&fragment, d)
 			fragments = append(fragments, &fragment)
 		}
 	}
@@ -1970,6 +2192,7 @@ func (r *HorizonFragmentsRepository) ListByTypeAndTenant(
 		if err := doc.DataTo(&fragment); err != nil {
 			continue
 		}
+		assignLoadedFragmentID(&fragment, doc)
 		fragments = append(fragments, &fragment)
 	}
 
@@ -2218,6 +2441,7 @@ func (r *HorizonFragmentsRepository) Delete(ctx context.Context, id string) erro
 	// Удаляем из Firestore
 	_, err = r.col.Doc(id).Delete(ctx)
 	if err == nil && fragment != nil {
+		_ = r.deletePathClaimIfOwned(ctx, "global", strings.TrimSpace(fragment.CanonicalPath), strings.TrimSpace(fragment.ID))
 		r.invalidateFragmentRedis(ctx, strings.TrimSpace(fragment.CanonicalPath))
 	}
 	return err

@@ -39,11 +39,15 @@ func ClassifyPlaceholderCanonicalPath(path string) PlaceholderPathKind {
 			return PlaceholderPathOrgSynthetic
 		}
 		return PlaceholderPathOrgUnknownJurisdiction
+	case strings.HasPrefix(cp, "/org/") && OrgSlugForbiddenPlaceholder(pathSlug(cp)):
+		return PlaceholderPathOrgSynthetic
 	case strings.HasPrefix(cp, "/gov/na/"):
 		if GovSlugForbiddenPlaceholder(pathSlug(cp)) {
 			return PlaceholderPathGovSynthetic
 		}
 		return PlaceholderPathGovUnknownJurisdiction
+	case strings.HasPrefix(cp, "/gov/") && GovSlugForbiddenPlaceholder(pathSlug(cp)):
+		return PlaceholderPathGovSynthetic
 	case strings.HasPrefix(cp, "/loc/"):
 		cc, level1, level2, ok := taxonomy.ParseLocCanonicalPath(cp)
 		if !ok || cc == "" || cc == "na" {
