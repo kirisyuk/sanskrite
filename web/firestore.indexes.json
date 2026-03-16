@@ -1029,6 +1029,14 @@
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "subjectId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_watchdog_configs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
         { "fieldPath": "status", "order": "ASCENDING" },
         { "fieldPath": "lastScanAt", "order": "DESCENDING" }
       ]
@@ -1464,6 +1472,48 @@
         { "fieldPath": "tenantId", "order": "ASCENDING" },
         { "fieldPath": "scopeCanonicalPath", "order": "ASCENDING" },
         { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_scope_agent_configs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "subjectId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_watch_subjects",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_watch_subjects",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "anchorCanonicalPath", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_watch_subjects",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "lensBindings", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_watch_triggers",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "subjectId", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
       ]
     },
     {
