@@ -127,6 +127,9 @@ func main() {
 	if targetID == "" {
 		return
 	}
+	if !*enqueueLive {
+		log.Fatal("approve flow requires --enqueue-live; otherwise the tool creates pending scouting jobs without Cloud Tasks dispatch")
+	}
 
 	approved, err := service.Approve(ctx, strings.TrimSpace(*tenantID), strings.TrimSpace(*userID), targetID)
 	if err != nil {

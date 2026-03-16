@@ -19,6 +19,7 @@ const (
 	strategicEnrichmentJobKind     = "strategic_enrichment"
 	strategicEnrichmentStageTarget = "targeted"
 	strategicEnrichmentStageDeep   = "deep_research"
+	strategicExecutionStallAfter   = 5 * time.Minute
 )
 
 type Logger interface {
@@ -94,12 +95,19 @@ func (s *Service) List(ctx context.Context, tenantID string, filter horizonrepo.
 	if s == nil || s.repo == nil {
 		return nil, nil
 	}
-	return s.repo.ListByTenant(ctx, tenantID, filter)
+	items, err := s.repo.ListByTenant(ctx, tenantID, filter)
+	if err != nil {
+		return nil, err
+	}
+	return s.reconcileExecutionStatuses(ctx, items)
 }
 
 func (s *Service) CountPending(ctx context.Context, tenantID string) (int, error) {
 	if s == nil || s.repo == nil {
 		return 0, nil
+	}
+	if _, _, err := s.ReconcileTenant(ctx, tenantID, 50); err != nil {
+		return 0, err
 	}
 	return s.repo.CountPendingByTenant(ctx, tenantID)
 }
@@ -108,7 +116,11 @@ func (s *Service) Get(ctx context.Context, id string) (*horizonmodels.StrategicR
 	if s == nil || s.repo == nil {
 		return nil, horizonrepo.ErrInvalidDocument
 	}
-	return s.repo.Get(ctx, id)
+	rec, err := s.repo.Get(ctx, id)
+	if err != nil || rec == nil {
+		return rec, err
+	}
+	return s.reconcileExecutionStatus(ctx, rec)
 }
 
 func (s *Service) Detect(ctx context.Context, input DetectionInput) (*horizonmodels.StrategicRecommendation, bool, error) {
@@ -357,6 +369,17 @@ func (s *Service) Approve(ctx context.Context, tenantID, userID, id string) (*ho
 	if err != nil {
 		return nil, err
 	}
+	rec, err = s.reconcileExecutionStatus(ctx, rec)
+	if err != nil {
+		return nil, err
+	}
+	if rec != nil {
+		switch rec.Status {
+		case horizonmodels.StrategicRecommendationStatusExecuting,
+			horizonmodels.StrategicRecommendationStatusApproved:
+			return rec, nil
+		}
+	}
 	job, err := s.createStrategicEnrichmentJob(ctx, rec, userID, strategicEnrichmentStageTarget, horizonmodels.ScoutingStrategySnapshot)
 	if err != nil {
 		return nil, err
@@ -376,6 +399,188 @@ func (s *Service) Approve(ctx context.Context, tenantID, userID, id string) (*ho
 	}
 	s.publish(ctx, tenantID, "horizon.recommendation.executing", updated)
 	return updated, nil
+}
+
+func (s *Service) reconcileExecutionStatuses(ctx context.Context, items []*horizonmodels.StrategicRecommendation) ([]*horizonmodels.StrategicRecommendation, error) {
+	if len(items) == 0 {
+		return items, nil
+	}
+	out := make([]*horizonmodels.StrategicRecommendation, 0, len(items))
+	for _, item := range items {
+		updated, err := s.reconcileExecutionStatus(ctx, item)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, updated)
+	}
+	return out, nil
+}
+
+func (s *Service) reconcileExecutionStatus(ctx context.Context, rec *horizonmodels.StrategicRecommendation) (*horizonmodels.StrategicRecommendation, error) {
+	if s == nil || s.repo == nil || rec == nil || s.scoutingJobsRepo == nil {
+		return rec, nil
+	}
+	status := rec.Status
+	if status != horizonmodels.StrategicRecommendationStatusExecuting && status != horizonmodels.StrategicRecommendationStatusApproved {
+		return rec, nil
+	}
+	jobID := strings.TrimSpace(rec.Execution.JobID)
+	if jobID == "" {
+		if status != horizonmodels.StrategicRecommendationStatusExecuting {
+			return rec, nil
+		}
+		return s.failRecommendationExecution(ctx, rec, "Recommendation execution has no linked job.")
+	}
+	job, err := s.scoutingJobsRepo.Get(ctx, jobID)
+	if err != nil {
+		if status == horizonmodels.StrategicRecommendationStatusExecuting && isNotFoundLikeError(err) {
+			return s.failRecommendationExecution(ctx, rec, "Linked enrichment job no longer exists.")
+		}
+		return nil, err
+	}
+	if job == nil {
+		if status == horizonmodels.StrategicRecommendationStatusExecuting {
+			return s.failRecommendationExecution(ctx, rec, "Linked enrichment job no longer exists.")
+		}
+		return rec, nil
+	}
+	if scoutingJobEndedSuccessfully(job) {
+		if err := s.HandleScoutingJobComplete(ctx, job); err != nil {
+			return nil, err
+		}
+		return s.repo.Get(ctx, rec.ID)
+	}
+	if scoutingJobEndedWithFailure(job) {
+		return s.failRecommendationExecution(ctx, rec, summarizeFailedJob(job))
+	}
+	if status == horizonmodels.StrategicRecommendationStatusExecuting && strategicExecutionLooksStalled(rec, job) {
+		if strategicExecutionProducedArtifacts(job) {
+			if err := s.HandleScoutingJobComplete(ctx, job); err != nil {
+				return nil, err
+			}
+			return s.repo.Get(ctx, rec.ID)
+		}
+		return s.failRecommendationExecution(ctx, rec, "Enrichment job stalled before completion.")
+	}
+	return rec, nil
+}
+
+func (s *Service) failRecommendationExecution(ctx context.Context, rec *horizonmodels.StrategicRecommendation, summary string) (*horizonmodels.StrategicRecommendation, error) {
+	if s == nil || s.repo == nil || rec == nil {
+		return rec, nil
+	}
+	now := time.Now().UTC()
+	updated, err := s.repo.UpdateStatus(ctx, rec.ID, func(existing *horizonmodels.StrategicRecommendation) error {
+		existing.Status = horizonmodels.StrategicRecommendationStatusFailed
+		existing.Execution.LastCompletedAt = &now
+		existing.Execution.LastEvaluatedAt = &now
+		existing.Execution.ResultSummary = strings.TrimSpace(summary)
+		existing.Execution.GapStillOpen = true
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.publish(ctx, rec.TenantID, "horizon.recommendation.updated", updated)
+	return updated, nil
+}
+
+func scoutingJobEndedSuccessfully(job *horizonmodels.ScoutingJob) bool {
+	if job == nil {
+		return false
+	}
+	if job.Status == coremodels.AgentJobStatusCompleted || job.Status == coremodels.AgentJobStatusPartial {
+		return true
+	}
+	switch job.CurrentState {
+	case horizonmodels.ScoutingJobStateVerified:
+		return true
+	}
+	return false
+}
+
+func scoutingJobEndedWithFailure(job *horizonmodels.ScoutingJob) bool {
+	if job == nil {
+		return false
+	}
+	if job.Status == coremodels.AgentJobStatusFailed {
+		return true
+	}
+	switch job.CurrentState {
+	case horizonmodels.ScoutingJobStateFailed, horizonmodels.ScoutingJobStateRejected:
+		return true
+	}
+	return false
+}
+
+func strategicExecutionLooksStalled(rec *horizonmodels.StrategicRecommendation, job *horizonmodels.ScoutingJob) bool {
+	if rec == nil || job == nil {
+		return false
+	}
+	lastTouch := job.UpdatedAt
+	if lastTouch.IsZero() {
+		lastTouch = rec.UpdatedAt
+	}
+	if lastTouch.IsZero() {
+		return false
+	}
+	return time.Since(lastTouch.UTC()) >= strategicExecutionStallAfter
+}
+
+func strategicExecutionProducedArtifacts(job *horizonmodels.ScoutingJob) bool {
+	if job == nil || job.State == nil {
+		return false
+	}
+	if parseBool(job.State["extractionCompleted"]) {
+		return true
+	}
+	if _, ok := job.State["supplyChainSummary"]; ok {
+		return true
+	}
+	if _, ok := job.State["policySummary"]; ok {
+		return true
+	}
+	if strings.TrimSpace(asString(job.State["terminalOutcome"])) != "" {
+		return true
+	}
+	return false
+}
+
+func summarizeFailedJob(job *horizonmodels.ScoutingJob) string {
+	if job == nil {
+		return "Enrichment job failed."
+	}
+	if msg := strings.TrimSpace(asString(job.State["policyPersistLastError"])); msg != "" {
+		return msg
+	}
+	if msg := strings.TrimSpace(asString(job.State["lastError"])); msg != "" {
+		return msg
+	}
+	if current := strings.TrimSpace(string(job.CurrentState)); current != "" {
+		return fmt.Sprintf("Enrichment job ended in state %s.", current)
+	}
+	return "Enrichment job failed."
+}
+
+func parseBool(v interface{}) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		switch strings.ToLower(strings.TrimSpace(t)) {
+		case "1", "true", "yes":
+			return true
+		}
+	}
+	return false
+}
+
+func isNotFoundLikeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(msg, "not found")
 }
 
 func (s *Service) HandleScoutingJobComplete(ctx context.Context, job *horizonmodels.ScoutingJob) error {
