@@ -180,8 +180,9 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
   }, [location.pathname, location.search]);
 
   React.useEffect(() => {
+    if (!currentUser) return;
     void fetchRecommendationsCount({ scope: isAdmin ? 'all' : 'tenant' });
-  }, [fetchRecommendationsCount, isAdmin]);
+  }, [currentUser, fetchRecommendationsCount, isAdmin]);
 
   // Export chat to markdown
   const exportToMarkdown = React.useCallback(() => {

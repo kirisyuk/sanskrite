@@ -17,8 +17,6 @@ import ShareViewPage from './pages/ShareViewPage';
 import VerifiedPage from './pages/VerifiedPage';
 import VerifiedViewPage from './pages/VerifiedViewPage';
 import Homepage from './pages/homepage';
-import TermsOfUsage from './pages/TermsOfUsage';
-import PrivacyNotice from './pages/PrivacyNotice';
 import LegalModal from './components/LegalModal';
 import StartupError from './components/StartupError';
 import { StrategicRecommendationsInbox } from './components/StrategicRecommendationsInbox';
@@ -33,14 +31,17 @@ import HorizonProgramProfilePrintPage from './pages/HorizonProgramProfilePrintPa
 function AppContent() {
   const location = useLocation();
   const navigate = useNavigate();
-  const [showModal, setShowModal] = useState<'terms' | 'privacy' | null>(null);
+  const [showModal, setShowModal] = useState<'terms' | 'privacy' | 'technical-disclosure' | null>(null);
   const { user, loading } = useAuth();
   const showAdminModal = useUIStore((s) => s.showAdminModal);
   const setShowAdminModal = useUIStore((s) => s.setShowAdminModal);
   const isAdmin = useIsAdmin();
 
   // Check if we're on a legal page route
-  const isLegalPage = location.pathname === '/terms' || location.pathname === '/privacy';
+  const isLegalPage =
+    location.pathname === '/terms' ||
+    location.pathname === '/privacy' ||
+    location.pathname === '/technical-disclosure';
   
   // Determine which page to show
   const isUnfold = new URLSearchParams(location.search).get('app') === 'unfold';
@@ -57,7 +58,7 @@ function AppContent() {
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const modal = params.get('modal');
-    if (modal === 'terms' || modal === 'privacy') {
+    if (modal === 'terms' || modal === 'privacy' || modal === 'technical-disclosure') {
       setShowModal(modal);
     } else {
       setShowModal(null);
@@ -70,6 +71,8 @@ function AppContent() {
       setShowModal('terms');
     } else if (location.pathname === '/privacy') {
       setShowModal('privacy');
+    } else if (location.pathname === '/technical-disclosure') {
+      setShowModal('technical-disclosure');
     }
   }, [location.pathname]);
 
@@ -113,8 +116,10 @@ function AppContent() {
             <Route path="/horizon/print/program/:fragmentId" element={<AuthGuard><HorizonProgramProfilePrintPage /></AuthGuard>} />
             <Route path="/horizon" element={<AuthGuard><HorizonPage /></AuthGuard>} />
             <Route path="/" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (user ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />))} />
+            <Route path="/platform" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (user ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />))} />
             <Route path="/terms" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />)} />
             <Route path="/privacy" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />)} />
+            <Route path="/technical-disclosure" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />)} />
           </Routes>
         </div>
         {!isPrintRoute && <BottomBar />}
