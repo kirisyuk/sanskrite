@@ -1866,12 +1866,11 @@ func main() {
 			}).WithRecommendationExecutionHook(func(ctx context.Context, recommendationID, jobID, stage, summary string) error {
 				_, err := strategicRecommendationsService.MarkExecuting(ctx, recommendationID, jobID, stage, summary)
 				return err
+			}).WithRecommendationCompletionHook(func(ctx context.Context, job *horizonmodels.ScoutingJob) error {
+				return strategicRecommendationsService.HandleScoutingJobComplete(ctx, job)
 			})
 			horizonService.SetStrategicRecommendationsService(strategicRecommendationsService)
 			horizonScoutingJobsRepo.WithOnComplete(func(ctx context.Context, job *horizonmodels.ScoutingJob) error {
-				if err := strategicRecommendationsService.HandleScoutingJobComplete(ctx, job); err != nil {
-					return err
-				}
 				return watchRuntimeService.HandleScoutingJobComplete(ctx, job)
 			})
 

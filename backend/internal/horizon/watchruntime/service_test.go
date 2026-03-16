@@ -125,3 +125,51 @@ func TestBuildWatchUniverseIncludesLensSurfaces(t *testing.T) {
 		t.Fatalf("missing expected universe paths: %+v", expected)
 	}
 }
+
+func TestBuildRiskJobDedupKeyIgnoresTriggerTypeWhenSemanticMatches(t *testing.T) {
+	subject := &horizonmodels.WatchSubject{
+		ID:                  "subj-4",
+		TenantID:            "global",
+		LensID:              "lens-1",
+		AnchorCanonicalPath: "/zone/qa/military_conflict/ras-laffan",
+	}
+	left := &horizonmodels.WatchTrigger{
+		ID:                "trigger-a",
+		SubjectID:         subject.ID,
+		TriggerType:       horizonmodels.WatchTriggerAffectedZoneChanged,
+		SemanticWatermark: "event-123",
+	}
+	right := &horizonmodels.WatchTrigger{
+		ID:                "trigger-b",
+		SubjectID:         subject.ID,
+		TriggerType:       horizonmodels.WatchTriggerSignalDetected,
+		SemanticWatermark: "event-123",
+	}
+	leftKey := buildRiskJobDedupKey(subject, left, "proj-1", "risk")
+	rightKey := buildRiskJobDedupKey(subject, right, "proj-1", "risk")
+	if leftKey != rightKey {
+		t.Fatalf("expected semantic-equivalent triggers to dedupe to same risk key, got %q vs %q", leftKey, rightKey)
+	}
+}
+
+func TestBuildWatchScoutActionDedupKeyUsesRecommendationStage(t *testing.T) {
+	subject := &horizonmodels.WatchSubject{
+		ID:                  "subj-5",
+		TenantID:            "global",
+		LensID:              "lens-1",
+		AnchorCanonicalPath: "/zone/qa/military_conflict/ras-laffan",
+	}
+	trigger := &horizonmodels.WatchTrigger{
+		ID:          "trigger-c",
+		SubjectID:   subject.ID,
+		TriggerType: horizonmodels.WatchTriggerRecommendationApproved,
+		Metadata: map[string]any{
+			"recommendationId": "rec-1",
+			"jobStage":         "targeted",
+		},
+	}
+	key := buildWatchScoutActionDedupKey(subject, trigger, "proj-1", "lens-1")
+	if key == "" || key != buildWatchScoutActionDedupKey(subject, trigger, "proj-1", "lens-1") {
+		t.Fatalf("expected stable non-empty scout dedupe key, got %q", key)
+	}
+}

@@ -42,6 +42,7 @@ type RecommendationActionInput struct {
 
 type RecommendationActionHook func(ctx context.Context, input RecommendationActionInput) error
 type RecommendationExecutionHook func(ctx context.Context, recommendationID, jobID, stage, summary string) error
+type RecommendationCompletionHook func(ctx context.Context, job *horizonmodels.ScoutingJob) error
 
 type MetricsSnapshot struct {
 	Counters         map[string]int64 `json:"counters"`
@@ -60,24 +61,25 @@ type runtimeMetrics struct {
 }
 
 type Service struct {
-	subjectsRepo                *horizonrepo.WatchSubjectsRepository
-	triggersRepo                *horizonrepo.WatchTriggersRepository
-	targetsRepo                 *horizonrepo.WatchTargetsRepository
-	watchdogRepo                *horizonrepo.WatchdogConfigsRepository
-	scopeAgentConfigsRepo       *horizonrepo.ScopeAgentConfigsRepository
-	scopeAgentRunsRepo          *horizonrepo.ScopeAgentRunsRepository
-	watchBriefsRepo             *horizonrepo.WatchBriefsRepository
-	watchFeedEntriesRepo        *horizonrepo.WatchFeedEntriesRepository
-	lensesRepo                  *horizonrepo.LensesRepository
-	lensArtifactsRepo           *horizonrepo.LensArtifactsRepository
-	fragmentsRepo               *horizonrepo.HorizonFragmentsRepository
-	edgesRepo                   *horizonrepo.DependencyEdgesRepository
-	riskJobsRepo                *horizonrepo.RiskJobsRepository
-	scoutingJobsRepo            *horizonrepo.ScoutingJobsRepository
-	wakeHook                    SubjectWakeHook
-	recommendationActionHook    RecommendationActionHook
-	recommendationExecutionHook RecommendationExecutionHook
-	metrics                     *runtimeMetrics
+	subjectsRepo                 *horizonrepo.WatchSubjectsRepository
+	triggersRepo                 *horizonrepo.WatchTriggersRepository
+	targetsRepo                  *horizonrepo.WatchTargetsRepository
+	watchdogRepo                 *horizonrepo.WatchdogConfigsRepository
+	scopeAgentConfigsRepo        *horizonrepo.ScopeAgentConfigsRepository
+	scopeAgentRunsRepo           *horizonrepo.ScopeAgentRunsRepository
+	watchBriefsRepo              *horizonrepo.WatchBriefsRepository
+	watchFeedEntriesRepo         *horizonrepo.WatchFeedEntriesRepository
+	lensesRepo                   *horizonrepo.LensesRepository
+	lensArtifactsRepo            *horizonrepo.LensArtifactsRepository
+	fragmentsRepo                *horizonrepo.HorizonFragmentsRepository
+	edgesRepo                    *horizonrepo.DependencyEdgesRepository
+	riskJobsRepo                 *horizonrepo.RiskJobsRepository
+	scoutingJobsRepo             *horizonrepo.ScoutingJobsRepository
+	wakeHook                     SubjectWakeHook
+	recommendationActionHook     RecommendationActionHook
+	recommendationExecutionHook  RecommendationExecutionHook
+	recommendationCompletionHook RecommendationCompletionHook
+	metrics                      *runtimeMetrics
 }
 
 type SyncReport struct {
@@ -199,6 +201,14 @@ func (s *Service) WithRecommendationExecutionHook(fn RecommendationExecutionHook
 		return s
 	}
 	s.recommendationExecutionHook = fn
+	return s
+}
+
+func (s *Service) WithRecommendationCompletionHook(fn RecommendationCompletionHook) *Service {
+	if s == nil {
+		return s
+	}
+	s.recommendationCompletionHook = fn
 	return s
 }
 
@@ -998,6 +1008,7 @@ func (s *Service) enqueueScout(ctx context.Context, subject *horizonmodels.Watch
 		"semanticWatermark":   strings.TrimSpace(trigger.SemanticWatermark),
 		"lensId":              lensID,
 		"triggerType":         string(trigger.TriggerType),
+		"watchActionDedupKey": buildWatchScoutActionDedupKey(subject, trigger, projectID, lensID),
 	}
 	strategy := horizonmodels.ScoutingStrategySnapshot
 	if strings.TrimSpace(asString(trigger.Metadata["recommendationId"])) != "" {
@@ -1056,6 +1067,12 @@ func (s *Service) enqueueScout(ctx context.Context, subject *horizonmodels.Watch
 
 func (s *Service) HandleScoutingJobComplete(ctx context.Context, job *horizonmodels.ScoutingJob) error {
 	if s == nil || job == nil {
+		return nil
+	}
+	if strings.TrimSpace(asString(job.State["strategicRecommendationId"])) != "" {
+		if s.recommendationCompletionHook != nil {
+			return s.recommendationCompletionHook(ctx, job)
+		}
 		return nil
 	}
 	subjectID := strings.TrimSpace(asString(job.State["watchSubjectId"]))
@@ -1408,9 +1425,46 @@ func buildRiskJobDedupKey(subject *horizonmodels.WatchSubject, trigger *horizonm
 		strings.TrimSpace(projectID),
 		strings.TrimSpace(subject.LensID),
 		strings.TrimSpace(subject.AnchorCanonicalPath),
-		"watchtrigger:" + strings.TrimSpace(trigger.ID),
+		"semantic:" + buildWatchActionSemanticKey(trigger),
 		strings.TrimSpace(polarity),
 	}, "|")
+}
+
+func buildWatchScoutActionDedupKey(subject *horizonmodels.WatchSubject, trigger *horizonmodels.WatchTrigger, projectID, lensID string) string {
+	if subject == nil {
+		return ""
+	}
+	if recID := strings.TrimSpace(asString(trigger.Metadata["recommendationId"])); recID != "" {
+		stage := strings.TrimSpace(firstNonEmpty(asString(trigger.Metadata["jobStage"]), strategicEnrichmentStageTarget))
+		return strings.Join([]string{
+			"watch_scout_dedup",
+			strings.TrimSpace(subject.TenantID),
+			strings.TrimSpace(projectID),
+			strings.TrimSpace(lensID),
+			strings.TrimSpace(subject.ID),
+			"recommendation:" + recID,
+			"stage:" + stage,
+		}, "|")
+	}
+	return strings.Join([]string{
+		"watch_scout_dedup",
+		strings.TrimSpace(subject.TenantID),
+		strings.TrimSpace(projectID),
+		strings.TrimSpace(lensID),
+		strings.TrimSpace(subject.ID),
+		"semantic:" + buildWatchActionSemanticKey(trigger),
+	}, "|")
+}
+
+func buildWatchActionSemanticKey(trigger *horizonmodels.WatchTrigger) string {
+	if trigger == nil {
+		return "unknown"
+	}
+	base := firstNonEmpty(strings.TrimSpace(trigger.SemanticWatermark), semanticWatermarkFromTrigger(trigger))
+	if strings.TrimSpace(base) == "" {
+		base = "trigger:" + strings.TrimSpace(trigger.ID)
+	}
+	return strings.TrimSpace(base)
 }
 
 func sourceModeFromWatchdog(cfg *horizonmodels.WatchdogConfig) horizonmodels.WatchSubjectSourceMode {

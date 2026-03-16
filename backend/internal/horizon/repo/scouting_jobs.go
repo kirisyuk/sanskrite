@@ -281,6 +281,9 @@ func buildScoutJobDedupKey(job *models.ScoutingJob) string {
 	}
 	identityKey := ""
 	if job.State != nil {
+		if v, ok := job.State["watchActionDedupKey"].(string); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
 		if v, ok := job.State["targetIdentityKey"].(string); ok {
 			identityKey = strings.TrimSpace(v)
 		}
