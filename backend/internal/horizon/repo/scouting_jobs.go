@@ -158,8 +158,61 @@ func (r *ScoutingJobsRepository) Create(ctx context.Context, job *models.Scoutin
 				"error":               err.Error(),
 			})
 		}
+		if r.onCreate != nil {
+			existingJob, getErr := r.Get(ctx, id)
+			if getErr != nil {
+				trace.Log(ctx, "root_jobs", "scout_job.create.dedup.reenqueue.get.error", map[string]any{
+					"tenantId":            strings.TrimSpace(job.TenantID),
+					"projectId":           strings.TrimSpace(job.ProjectID),
+					"lensId":              strings.TrimSpace(job.LensID),
+					"targetCanonicalPath": strings.TrimSpace(job.TargetCanonicalPath),
+					"jobId":               id,
+					"error":               getErr.Error(),
+				})
+			} else if shouldReenqueueReusedScoutingJob(existingJob) {
+				trace.Log(ctx, "root_jobs", "scout_job.create.dedup.reenqueue.start", map[string]any{
+					"tenantId":            strings.TrimSpace(existingJob.TenantID),
+					"projectId":           strings.TrimSpace(existingJob.ProjectID),
+					"lensId":              strings.TrimSpace(existingJob.LensID),
+					"targetCanonicalPath": strings.TrimSpace(existingJob.TargetCanonicalPath),
+					"jobId":               id,
+					"status":              strings.TrimSpace(string(existingJob.Status)),
+					"currentState":        strings.TrimSpace(string(existingJob.CurrentState)),
+				})
+				if err := r.onCreate(ctx, existingJob); err != nil {
+					trace.Log(ctx, "root_jobs", "scout_job.create.dedup.reenqueue.error", map[string]any{
+						"tenantId":            strings.TrimSpace(existingJob.TenantID),
+						"projectId":           strings.TrimSpace(existingJob.ProjectID),
+						"lensId":              strings.TrimSpace(existingJob.LensID),
+						"targetCanonicalPath": strings.TrimSpace(existingJob.TargetCanonicalPath),
+						"jobId":               id,
+						"error":               err.Error(),
+					})
+				} else {
+					trace.Log(ctx, "root_jobs", "scout_job.create.dedup.reenqueue.ok", map[string]any{
+						"tenantId":            strings.TrimSpace(existingJob.TenantID),
+						"projectId":           strings.TrimSpace(existingJob.ProjectID),
+						"lensId":              strings.TrimSpace(existingJob.LensID),
+						"targetCanonicalPath": strings.TrimSpace(existingJob.TargetCanonicalPath),
+						"jobId":               id,
+					})
+				}
+			}
+		}
 	}
 	return id, nil
+}
+
+func shouldReenqueueReusedScoutingJob(job *models.ScoutingJob) bool {
+	if job == nil {
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(string(job.Status)))
+	currentState := strings.ToLower(strings.TrimSpace(string(job.CurrentState)))
+	if status == strings.ToLower(string(coremodels.AgentJobStatusPending)) {
+		return currentState == "" || currentState == string(models.ScoutingJobStatePending)
+	}
+	return false
 }
 
 func (r *ScoutingJobsRepository) syncReusedJobIntentState(ctx context.Context, jobID string, incoming *models.ScoutingJob) error {

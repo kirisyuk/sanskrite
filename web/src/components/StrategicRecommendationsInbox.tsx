@@ -182,6 +182,10 @@ export const StrategicRecommendationsInbox: React.FC = () => {
           {items.map((item) => {
             const currentCoverage = item.currentCoverageStats || {};
             const pending = busyId === item.id;
+            const executing = String(item.status || '').trim().toLowerCase() === 'executing';
+            const completed = String(item.status || '').trim().toLowerCase() === 'completed';
+            const dismissed = String(item.status || '').trim().toLowerCase() === 'dismissed';
+            const actionLocked = pending || executing || completed || dismissed;
             return (
               <div
                 key={item.id}
@@ -219,6 +223,11 @@ export const StrategicRecommendationsInbox: React.FC = () => {
                 <div className="mt-2 text-[12px]" style={{ color: 'var(--text-tertiary-weak)' }}>
                   Coverage: {currentCoverage.matchedFamilies || 0}/{currentCoverage.expectedFamilies || 0} families • remote {currentCoverage.remoteMatches || 0}
                 </div>
+                {executing && (
+                  <div className="mt-2 text-[12px]" style={{ color: 'var(--text-secondary-strong)' }}>
+                    Executing{item.execution?.jobStage ? ` • stage ${item.execution.jobStage}` : ''}{item.execution?.jobId ? ` • job ${item.execution.jobId}` : ''}
+                  </div>
+                )}
                 {!!item.domainContractHint && (
                   <div className="mt-1 text-[12px]" style={{ color: 'var(--text-tertiary-weak)' }}>
                     Domain hint: {item.domainContractHint}
@@ -241,10 +250,10 @@ export const StrategicRecommendationsInbox: React.FC = () => {
                 )}
 
                 <div className="mt-4 flex items-center gap-2">
-                  {item.status !== 'dismissed' && item.status !== 'completed' && (
+                  {!dismissed && !completed && !executing && (
                     <button
                       type="button"
-                      disabled={pending}
+                      disabled={actionLocked}
                       onClick={() => void onApprove(item.id)}
                       className="rounded px-3 py-1.5 text-12"
                       style={{ border: '1px solid var(--overlay-line-90)', color: 'var(--text-heading)', background: 'var(--white-10)' }}
@@ -252,10 +261,20 @@ export const StrategicRecommendationsInbox: React.FC = () => {
                       {pending ? 'Running…' : 'Approve'}
                     </button>
                   )}
-                  {item.status !== 'dismissed' && (
+                  {executing && (
                     <button
                       type="button"
-                      disabled={pending}
+                      disabled
+                      className="rounded px-3 py-1.5 text-12"
+                      style={{ border: '1px solid var(--overlay-line-90)', color: 'var(--text-secondary-strong)', background: 'var(--white-10)', opacity: 0.8 }}
+                    >
+                      Executing…
+                    </button>
+                  )}
+                  {!dismissed && !executing && (
+                    <button
+                      type="button"
+                      disabled={actionLocked}
                       onClick={() => void onDismiss(item.id)}
                       className="rounded px-3 py-1.5 text-12"
                       style={{ border: '1px solid var(--overlay-line-90)', color: 'var(--text-secondary-strong)' }}
