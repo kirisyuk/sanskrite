@@ -11,6 +11,7 @@ import (
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	horizonwatch "github.com/igorkirisyuk/sanskrite/internal/horizon/watch"
+	horizonwatchruntime "github.com/igorkirisyuk/sanskrite/internal/horizon/watchruntime"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 )
@@ -47,6 +48,7 @@ type HorizonHandlers struct {
 	// Job-level telemetry (LLM cost tracking)
 	jobTelemetryRepo *horizonrepo.JobTelemetryRepository
 	watchService     *horizonwatch.Service
+	watchRuntime     *horizonwatchruntime.Service
 }
 
 // NewHorizonHandlers создает новые handlers
@@ -189,6 +191,11 @@ func (h *HorizonHandlers) WithWatchService(svc *horizonwatch.Service) *HorizonHa
 	return h
 }
 
+func (h *HorizonHandlers) WithWatchRuntime(svc *horizonwatchruntime.Service) *HorizonHandlers {
+	h.watchRuntime = svc
+	return h
+}
+
 // RegisterRoutes регистрирует все routes для Horizon API
 func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.Handler) {
 	// Intent precheck (NL -> taxonomy-aligned intent)
@@ -231,6 +238,9 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 	mux.Handle("/api/horizon/watch/targets/", authMiddleware(http.HandlerFunc(h.HandleWatchTargetRoutes)))
 	mux.Handle("/api/horizon/watch/preferences", authMiddleware(http.HandlerFunc(h.UpdateWatchPreferences)))
 	mux.Handle("/api/horizon/watch/briefs/", authMiddleware(http.HandlerFunc(h.HandleWatchBriefRoutes)))
+	mux.Handle("/api/horizon/watch/subjects", authMiddleware(http.HandlerFunc(h.HandleWatchSubjectsRoot)))
+	mux.Handle("/api/horizon/watch/triggers", authMiddleware(http.HandlerFunc(h.ListWatchTriggers)))
+	mux.Handle("/api/horizon/watch/sync", authMiddleware(http.HandlerFunc(h.SyncWatchRuntime)))
 	mux.Handle("/api/horizon/recommendations", authMiddleware(http.HandlerFunc(h.HandleRecommendationsRoot)))
 	mux.Handle("/api/horizon/recommendations/count", authMiddleware(http.HandlerFunc(h.GetRecommendationsCount)))
 	mux.Handle("/api/horizon/recommendations/", authMiddleware(http.HandlerFunc(h.HandleRecommendationRoutes)))

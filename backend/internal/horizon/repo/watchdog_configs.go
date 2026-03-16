@@ -147,6 +147,31 @@ func (r *WatchdogConfigsRepository) ListScheduled(ctx context.Context, tenantID 
 	return configs, nil
 }
 
+func (r *WatchdogConfigsRepository) ListByTenant(ctx context.Context, tenantID string, limit int) ([]*models.WatchdogConfig, error) {
+	if r == nil || r.col == nil || strings.TrimSpace(tenantID) == "" {
+		return nil, ErrInvalidDocument
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	docs, err := r.col.Where("tenantId", "==", strings.TrimSpace(tenantID)).Limit(limit).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	configs := make([]*models.WatchdogConfig, 0, len(docs))
+	for _, d := range docs {
+		var config models.WatchdogConfig
+		if err := d.DataTo(&config); err != nil {
+			continue
+		}
+		if strings.TrimSpace(config.ID) == "" {
+			config.ID = d.Ref.ID
+		}
+		configs = append(configs, &config)
+	}
+	return configs, nil
+}
+
 // Update обновляет WatchdogConfig
 func (r *WatchdogConfigsRepository) Update(ctx context.Context, config *models.WatchdogConfig) error {
 	if config == nil || config.ID == "" {

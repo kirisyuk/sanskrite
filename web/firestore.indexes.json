@@ -1509,6 +1509,14 @@
       ]
     },
     {
+      "collectionGroup": "horizon_watch_subjects",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "universePaths", "arrayConfig": "CONTAINS" }
+      ]
+    },
+    {
       "collectionGroup": "horizon_watch_triggers",
       "queryScope": "COLLECTION",
       "fields": [

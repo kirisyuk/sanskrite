@@ -197,6 +197,38 @@ func (r *WatchSubjectsRepository) ListByAnchorCanonicalPath(ctx context.Context,
 	return out, nil
 }
 
+func (r *WatchSubjectsRepository) ListByUniversePath(ctx context.Context, tenantID, canonicalPath string, limit int) ([]*models.WatchSubject, error) {
+	if r == nil || r.col == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(canonicalPath) == "" {
+		return nil, ErrInvalidDocument
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	tenants := []string{strings.TrimSpace(tenantID)}
+	if strings.TrimSpace(tenantID) != "global" {
+		tenants = append(tenants, "global")
+	}
+	docs, err := r.col.Where("tenantId", "in", tenants).
+		Where("universePaths", "array-contains", strings.TrimSpace(canonicalPath)).
+		Limit(limit).
+		Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*models.WatchSubject, 0, len(docs))
+	for _, doc := range docs {
+		var subject models.WatchSubject
+		if err := doc.DataTo(&subject); err != nil {
+			continue
+		}
+		if strings.TrimSpace(subject.ID) == "" {
+			subject.ID = doc.Ref.ID
+		}
+		out = append(out, &subject)
+	}
+	return out, nil
+}
+
 func (r *WatchSubjectsRepository) UpdateStatus(ctx context.Context, id string, status models.WatchSubjectStatus) error {
 	if r == nil || r.col == nil || strings.TrimSpace(id) == "" {
 		return ErrInvalidDocument

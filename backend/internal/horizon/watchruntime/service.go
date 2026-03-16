@@ -27,6 +27,15 @@ type Service struct {
 	wakeHook              SubjectWakeHook
 }
 
+type SyncReport struct {
+	TenantID        string   `json:"tenantId"`
+	LensesSynced    int      `json:"lensesSynced"`
+	TargetsSynced   int      `json:"targetsSynced"`
+	WatchdogsSynced int      `json:"watchdogsSynced"`
+	FragmentsSynced int      `json:"fragmentsSynced"`
+	SubjectIDs      []string `json:"subjectIds,omitempty"`
+}
+
 type TriggerDecision struct {
 	WakeScopeAgent bool
 	WarmOnly       bool
@@ -277,6 +286,148 @@ func (s *Service) EmitRecommendationApprovedByCanonicalPath(ctx context.Context,
 		}
 	}
 	return nil
+}
+
+func (s *Service) ListSubjects(ctx context.Context, tenantID, lensID, anchorCanonicalPath string, limit int) ([]*horizonmodels.WatchSubject, error) {
+	if s == nil || s.subjectsRepo == nil {
+		return nil, horizonrepo.ErrInvalidDocument
+	}
+	switch {
+	case strings.TrimSpace(lensID) != "":
+		return s.subjectsRepo.ListByLens(ctx, strings.TrimSpace(tenantID), strings.TrimSpace(lensID), limit)
+	case strings.TrimSpace(anchorCanonicalPath) != "":
+		return s.subjectsRepo.ListByAnchorCanonicalPath(ctx, strings.TrimSpace(tenantID), strings.TrimSpace(anchorCanonicalPath), limit)
+	default:
+		return s.subjectsRepo.ListByTenant(ctx, strings.TrimSpace(tenantID), limit)
+	}
+}
+
+func (s *Service) GetSubject(ctx context.Context, id string) (*horizonmodels.WatchSubject, error) {
+	if s == nil || s.subjectsRepo == nil {
+		return nil, horizonrepo.ErrInvalidDocument
+	}
+	return s.subjectsRepo.Get(ctx, strings.TrimSpace(id))
+}
+
+func (s *Service) ListTriggers(ctx context.Context, subjectID string, limit int) ([]*horizonmodels.WatchTrigger, error) {
+	if s == nil || s.triggersRepo == nil {
+		return nil, horizonrepo.ErrInvalidDocument
+	}
+	return s.triggersRepo.ListBySubject(ctx, strings.TrimSpace(subjectID), limit)
+}
+
+func (s *Service) EmitTriggerByAnchor(ctx context.Context, tenantID, anchorCanonicalPath string, triggerType horizonmodels.WatchTriggerType, reason string, signalStrength, confidence float64, metadata map[string]any) (int, error) {
+	if s == nil || s.subjectsRepo == nil {
+		return 0, horizonrepo.ErrInvalidDocument
+	}
+	tenantID = strings.TrimSpace(firstNonEmpty(tenantID, "global"))
+	direct, err := s.subjectsRepo.ListByAnchorCanonicalPath(ctx, tenantID, strings.TrimSpace(anchorCanonicalPath), 50)
+	if err != nil {
+		return 0, err
+	}
+	expanded, err := s.subjectsRepo.ListByUniversePath(ctx, tenantID, strings.TrimSpace(anchorCanonicalPath), 100)
+	if err != nil {
+		return 0, err
+	}
+	subjects := mergeSubjectsByID(direct, expanded)
+	count := 0
+	for _, subject := range subjects {
+		if subject == nil || strings.TrimSpace(subject.ID) == "" {
+			continue
+		}
+		_, _, err := s.EmitAndProcessTrigger(ctx, &horizonmodels.WatchTrigger{
+			SubjectID:      strings.TrimSpace(subject.ID),
+			TriggerType:    triggerType,
+			TriggerReason:  strings.TrimSpace(reason),
+			CanonicalPaths: []string{strings.TrimSpace(anchorCanonicalPath)},
+			SignalStrength: signalStrength,
+			Confidence:     confidence,
+			Metadata:       metadata,
+		})
+		if err != nil {
+			return count, err
+		}
+		count++
+	}
+	return count, nil
+}
+
+func (s *Service) SyncTenant(ctx context.Context, tenantID string, includeGlobal bool, limit int) (*SyncReport, error) {
+	if s == nil {
+		return nil, horizonrepo.ErrInvalidDocument
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	report := &SyncReport{TenantID: strings.TrimSpace(firstNonEmpty(tenantID, "global"))}
+	subjectSet := map[string]struct{}{}
+	syncOneTenant := func(tid string) error {
+		if s.lensesRepo != nil {
+			lenses, err := s.lensesRepo.ListActive(ctx, tid, limit)
+			if err != nil {
+				return err
+			}
+			for _, lens := range lenses {
+				if lens == nil {
+					continue
+				}
+				if err := s.SyncWatchSubjectsForLens(ctx, lens.ID); err != nil {
+					return err
+				}
+				report.LensesSynced++
+				subjectSet[horizonrepo.BuildWatchSubjectID(tid, lens.ProjectID, lens.ID, "", "", horizonmodels.WatchSubjectKindLensUniverse, lensCanonicalPath(lens.ID))] = struct{}{}
+			}
+		}
+		if s.targetsRepo != nil {
+			targets, err := s.targetsRepo.ListByTenant(ctx, tid, false, limit)
+			if err != nil {
+				return err
+			}
+			for _, target := range targets {
+				if target == nil {
+					continue
+				}
+				subject, err := s.EnsureSubjectForTarget(ctx, target)
+				if err != nil {
+					return err
+				}
+				report.TargetsSynced++
+				if subject != nil {
+					subjectSet[subject.ID] = struct{}{}
+				}
+			}
+		}
+		if s.watchdogRepo != nil {
+			configs, err := s.watchdogRepo.ListByTenant(ctx, tid, limit)
+			if err != nil {
+				return err
+			}
+			for _, cfg := range configs {
+				if cfg == nil {
+					continue
+				}
+				subject, err := s.EnsureSubjectForWatchdogConfig(ctx, cfg)
+				if err != nil {
+					return err
+				}
+				report.WatchdogsSynced++
+				if subject != nil {
+					subjectSet[subject.ID] = struct{}{}
+				}
+			}
+		}
+		return nil
+	}
+	if err := syncOneTenant(report.TenantID); err != nil {
+		return nil, err
+	}
+	if includeGlobal && report.TenantID != "global" {
+		if err := syncOneTenant("global"); err != nil {
+			return nil, err
+		}
+	}
+	report.SubjectIDs = sortedKeys(subjectSet)
+	return report, nil
 }
 
 func (s *Service) AssessTrigger(subject *horizonmodels.WatchSubject, trigger *horizonmodels.WatchTrigger) TriggerDecision {
@@ -628,5 +779,25 @@ func sortedKeys[T any](in map[string]T) []string {
 		out = append(out, key)
 	}
 	sort.Strings(out)
+	return out
+}
+
+func mergeSubjectsByID(groups ...[]*horizonmodels.WatchSubject) []*horizonmodels.WatchSubject {
+	byID := make(map[string]*horizonmodels.WatchSubject)
+	for _, group := range groups {
+		for _, subject := range group {
+			if subject == nil || strings.TrimSpace(subject.ID) == "" {
+				continue
+			}
+			byID[strings.TrimSpace(subject.ID)] = subject
+		}
+	}
+	out := make([]*horizonmodels.WatchSubject, 0, len(byID))
+	for _, subject := range byID {
+		out = append(out, subject)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return strings.TrimSpace(out[i].ID) < strings.TrimSpace(out[j].ID)
+	})
 	return out
 }

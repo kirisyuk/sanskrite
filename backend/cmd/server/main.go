@@ -1796,6 +1796,7 @@ func main() {
 				_, err := scopeAgentService.WakeBySubjectID(ctx, tenantID, subjectID, triggerType, triggerReason, trace)
 				return err
 			})
+			horizonService.SetWatchRuntimeService(watchRuntimeService)
 
 			watchService := horizonwatch.NewService(
 				horizonWatchTargetsRepo,
@@ -1903,6 +1904,10 @@ func main() {
 				).WithTelemetryRepo(horizonTelemetryRepo).
 					WithRealtimePublisher(pub).
 					WithStrategicRecommendations(strategicRecommendationsService).
+					WithWatchTriggerHook(func(ctx context.Context, tenantID, canonicalPath string, triggerType horizonmodels.WatchTriggerType, reason string, signalStrength, confidence float64, metadata map[string]any) error {
+						_, err := watchRuntimeService.EmitTriggerByAnchor(ctx, tenantID, canonicalPath, triggerType, reason, signalStrength, confidence, metadata)
+						return err
+					}).
 					WithVertexSearch(wmVertexSearch),
 			)
 			interpretationQueue := horizoninterp.NewInterpretationQueue(fsClient.Client())
@@ -2585,6 +2590,7 @@ func main() {
 				WithExposurePathsRepo(horizonExposurePathsRepo).
 				WithRiskJobsRepo(riskJobsRepo).
 				WithWatchService(watchService).
+				WithWatchRuntime(watchRuntimeService).
 				WithProfilesHandler(profilesHandler).
 				WithPropagationProfileLookup(propagationProfileLookup)
 

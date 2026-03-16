@@ -542,6 +542,7 @@ type HorizonMonitorPipeline struct {
 	realtimePublisher        *realtime.Publisher
 	vertexSearch             *ai.VertexAISearchClient
 	strategicRecommendations *horizonrecommendations.Service
+	watchTriggerHook         func(context.Context, string, string, horizonmodels.WatchTriggerType, string, float64, float64, map[string]any) error
 	exec                     *ai.AITaskExecutor
 	mapActivityEngine        *mapactivity.Engine
 	seedInjector             *signals.SeedInjector
@@ -639,6 +640,14 @@ func (p *HorizonMonitorPipeline) WithStrategicRecommendations(service *horizonre
 		return p
 	}
 	p.strategicRecommendations = service
+	return p
+}
+
+func (p *HorizonMonitorPipeline) WithWatchTriggerHook(hook func(context.Context, string, string, horizonmodels.WatchTriggerType, string, float64, float64, map[string]any) error) *HorizonMonitorPipeline {
+	if p == nil {
+		return p
+	}
+	p.watchTriggerHook = hook
 	return p
 }
 
@@ -779,6 +788,7 @@ func (p *HorizonMonitorPipeline) ProcessDocuments(ctx context.Context, tenantID 
 			p.logf("horizon monitor pipeline: failed to upsert affected zone source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
 		}
 		p.maybeCreateStrategicGapRecommendation(ctx, tenantID, "", "", zoneFragment, event, signalAudit)
+		p.emitWatchRuntimeSignals(ctx, tenantID, zoneFragment, event, signalAudit)
 
 		newObservations = append(newObservations, horizonMonitorSignalObservation{
 			CountryCode:      event.CountryCode,
@@ -946,6 +956,7 @@ func (p *HorizonMonitorPipeline) ProcessFeedEvents(ctx context.Context, tenantID
 			p.logf("horizon monitor pipeline: failed to upsert affected zone source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
 		}
 		p.maybeCreateStrategicGapRecommendation(ctx, tenantID, "", "", zoneFragment, event, signalAudit)
+		p.emitWatchRuntimeSignals(ctx, tenantID, zoneFragment, event, signalAudit)
 		newObservations = append(newObservations, horizonMonitorSignalObservation{
 			CountryCode:      event.CountryCode,
 			CountryName:      event.CountryName,
@@ -1040,6 +1051,20 @@ func envIntOrDefault(name string, fallback int) int {
 		return fallback
 	}
 	return v
+}
+
+func mergeStringAnyMaps(parts ...map[string]any) map[string]any {
+	out := make(map[string]any)
+	for _, part := range parts {
+		for key, value := range part {
+			key = strings.TrimSpace(key)
+			if key == "" || value == nil {
+				continue
+			}
+			out[key] = value
+		}
+	}
+	return out
 }
 
 func horizonMonitorLineage(
@@ -4464,6 +4489,52 @@ func (p *HorizonMonitorPipeline) maybeCreateStrategicGapRecommendation(
 	}
 	if _, _, err := p.strategicRecommendations.Detect(ctx, input); err != nil {
 		p.logf("horizon monitor pipeline: strategic recommendation detect failed zone=%s: %v", zone.CanonicalPath, err)
+	}
+}
+
+func (p *HorizonMonitorPipeline) emitWatchRuntimeSignals(
+	ctx context.Context,
+	tenantID string,
+	zone *horizonmodels.HorizonFragment,
+	event *horizonMonitorFeedEvent,
+	audit *horizonMonitorSignalFlowAudit,
+) {
+	if p == nil || p.watchTriggerHook == nil || zone == nil || zone.Type != horizonmodels.FragmentTypeAffectedZone {
+		return
+	}
+	tenantID = strings.TrimSpace(firstNonEmptyString(tenantID, "global"))
+	anchor := strings.TrimSpace(zone.CanonicalPath)
+	if anchor == "" {
+		return
+	}
+	baseMeta := map[string]any{
+		"zoneFragmentId": strings.TrimSpace(zone.ID),
+		"zoneType":       string(zone.Type),
+	}
+	if event != nil {
+		baseMeta["eventTitle"] = strings.TrimSpace(event.Title)
+		baseMeta["eventSourceId"] = strings.TrimSpace(event.SourceID)
+		baseMeta["severity"] = strings.TrimSpace(event.Severity)
+	}
+	_ = p.watchTriggerHook(ctx, tenantID, anchor, horizonmodels.WatchTriggerAffectedZoneChanged, "affected zone updated by monitor pipeline", 0.85, 0.90, baseMeta)
+	if audit == nil {
+		return
+	}
+	signalMeta := mergeStringAnyMaps(baseMeta, map[string]any{
+		"axis":                 strings.TrimSpace(audit.Axis),
+		"seedCount":            audit.SeedCount,
+		"affectedFragments":    audit.AffectedFragments,
+		"businessEndpoints":    audit.BusinessEndpoints,
+		"remoteEndpoints":      audit.RemoteEndpoints,
+		"pathFamilies":         audit.PathFamilies,
+		"businessPathFamilies": audit.BusinessPathFamilies,
+		"crossBorderFamilies":  audit.CrossBorderFamilies,
+		"nonObviousEndpoints":  audit.NonObviousEndpoints,
+		"escalationLevel":      strings.TrimSpace(audit.EscalationLevel),
+	})
+	_ = p.watchTriggerHook(ctx, tenantID, anchor, horizonmodels.WatchTriggerSignalDetected, "signal propagated from horizon monitor pipeline", 0.90, 0.85, signalMeta)
+	if audit.PropagationTried && audit.SeedCount > 0 && audit.RemoteEndpoints == 0 && audit.BusinessPathFamilies == 0 {
+		_ = p.watchTriggerHook(ctx, tenantID, anchor, horizonmodels.WatchTriggerPropagationGap, "propagation gap after signal propagation", 0.70, 0.80, signalMeta)
 	}
 }
 
