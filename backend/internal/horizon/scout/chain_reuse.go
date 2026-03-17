@@ -163,7 +163,7 @@ func artifactHasEnrichedPathBindings(artifact *models.MaterializedArtifact) bool
 }
 
 // addArtifactToLensScope adds a MaterializedArtifact as a single /artifact/ scope entry
-// to the lens (best-effort, up to MaxAutoScopeAddsPerLens). Returns true if the entry was added.
+// to the lens under the artifact auto-add budget. Returns true if the entry was added.
 func addArtifactToLensScope(
 	ctx context.Context,
 	lensesRepo *repo.LensesRepository,
@@ -174,7 +174,7 @@ func addArtifactToLensScope(
 		return false
 	}
 	artifactRef := "/artifact/" + strings.TrimPrefix(strings.TrimSpace(artifact.CanonicalKey), "/")
-	res, err := lensesRepo.AddScopeCanonicalPathAutoLimited(ctx, lensID, artifactRef, models.MaxAutoScopeAddsPerLens)
+	res, err := lensesRepo.AddScopeCanonicalPathAutoManaged(ctx, lensID, artifactRef, models.MaxAutoArtifactScopeAddsPerLens)
 	if err != nil || !res.Added {
 		if res.Added {
 			return true

@@ -16,6 +16,7 @@ import (
 
 type scopeScoutLensQueryRequest struct {
 	Query string `json:"query"`
+	Mode  string `json:"mode,omitempty"`
 	// Optional: enables specialized scout/research modules (e.g., ["management","products_and_services"])
 	Specialties []string `json:"specialties,omitempty"`
 }
@@ -136,7 +137,10 @@ func (h *HorizonHandlers) ScopeScoutLensQuery(w http.ResponseWriter, r *http.Req
 	jobID := ""
 	if h.service.ScoutingJobs() != nil {
 		now := time.Now().UTC()
-		specialties := taxonomy.NormalizeSpecialties(body.Specialties)
+		scoutingMode := normalizeScopeScoutMode(body.Mode)
+		mergedSpecialties := append([]string(nil), body.Specialties...)
+		mergedSpecialties = append(mergedSpecialties, specialtiesForScopeScoutMode(scoutingMode)...)
+		specialties := taxonomy.NormalizeSpecialties(mergedSpecialties)
 		state := map[string]interface{}{
 			"query":               q,
 			"targetCanonicalPath": targetCanonicalPath,
@@ -146,8 +150,12 @@ func (h *HorizonHandlers) ScopeScoutLensQuery(w http.ResponseWriter, r *http.Req
 			"recursionDepth":      0.0,
 			"maxRecursionDepth":   0.0,
 			"trigger":             "ui.graph.scope_scout_query",
+			"uiScoutingMode":      scoutingMode,
 			"correlationId":       correlationID,
 			"deferredScopeAdd":    true,
+		}
+		if scoutingMode == taxonomy.DomainModeSupplyChain || scoutingMode == taxonomy.DomainModeGovernance {
+			state["domainModes"] = []string{scoutingMode}
 		}
 		if len(specialties) > 0 {
 			state["specialties"] = specialties

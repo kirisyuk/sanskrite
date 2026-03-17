@@ -16,6 +16,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
 var (
@@ -75,10 +76,20 @@ func main() {
 	edgesRepo := repo.NewDependencyEdgesRepository(fsClient)
 	watchdogRepo := repo.NewWatchdogConfigsRepository(fsClient)
 	lensesRepo := repo.NewLensesRepository(fsClient)
+	materializedRepo := repo.NewMaterializedArtifactsRepository(fsClient)
+	watchSubjectsRepo := repo.NewWatchSubjectsRepository(fsClient)
 	versionsRepo := repo.NewHorizonFragmentVersionsRepository(fsClient)
 	mergeAuditRepo := repo.NewFragmentMergeAuditRepository(fsClient)
 	redirectsRepo := repo.NewCanonicalPathRedirectsRepository(fsClient)
-	mergeRepo := repo.NewFragmentsMergeRepository(fragmentsRepo, edgesRepo, mergeAuditRepo).WithRedirectsRepo(redirectsRepo)
+	ontologyFactsRepo := corerepo.NewOntologyFactsRepository(fsClient)
+	entitiesRepo := corerepo.NewEntityRepository(fsClient)
+	mergeRepo := repo.NewFragmentsMergeRepository(fragmentsRepo, edgesRepo, mergeAuditRepo).
+		WithRedirectsRepo(redirectsRepo).
+		WithMaterializedRepo(materializedRepo).
+		WithLensesRepo(lensesRepo).
+		WithWatchSubjectsRepo(watchSubjectsRepo).
+		WithOntologyFactsRepo(ontologyFactsRepo).
+		WithEntitiesRepo(entitiesRepo)
 
 	log.Printf("Starting deduplication scan (dry-run=%v, tenant=%s)...", *dryRun, *tenantID)
 

@@ -92,3 +92,9 @@ func IsAllowedSupplyChainRuntimeRelation(sourcePath, targetPath string, relation
 	}
 	return false
 }
+
+// IsAllowedSupplyChainPersistRelation keeps final persist gates aligned with the
+// runtime relation contract, including scaffold exceptions from domain/market anchors.
+func IsAllowedSupplyChainPersistRelation(sourcePath, targetPath string, relationType models.DependencyType) bool {
+	return IsAllowedSupplyChainRuntimeRelation(sourcePath, targetPath, relationType)
+}

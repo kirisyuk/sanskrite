@@ -1435,6 +1435,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     const pathProductRef = String(src?.pathProductRef || '').trim();
     const pathSupplyLinkId = String(src?.pathSupplyLinkId || '').trim();
     const pathFamilyId = String(src?.pathFamilyId || '').trim();
+    const pathVesselType = String(src?.pathVesselType || src?.pathQualifiers?.vesselType || '').trim();
     const dominantFactors = readStringArray(src?.pathDominantFactors);
     const flowRefs = readStringArray(src?.pathFlowRefs);
     const zoneRefs = readStringArray(src?.pathZoneRefs);
@@ -1450,6 +1451,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       !!pathRole ||
       typeof src?.pathStressScore === 'number' ||
       typeof src?.pathSegmentIndex === 'number' ||
+      !!pathVesselType ||
       !!src?.pathSufficiencyStatus ||
       flowRefs.length > 0 ||
       zoneRefs.length > 0 ||
@@ -1461,6 +1463,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       pathRole,
       pathProductRef,
       pathSupplyLinkId,
+      pathVesselType,
       pathFamilyId,
       pathFamilyPathCount: typeof src?.pathFamilyPathCount === 'number' ? src.pathFamilyPathCount : undefined,
       pathFamilyValidatedCount: typeof src?.pathFamilyValidatedCount === 'number' ? src.pathFamilyValidatedCount : undefined,
@@ -1745,6 +1748,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                   {typeof edgePathLegMeta.pathBindingConfidence === 'number' && (
                     <Chip>bind {Math.round(edgePathLegMeta.pathBindingConfidence * 100)}%</Chip>
                   )}
+                  {edgePathLegMeta.pathVesselType && <Chip>{edgePathLegMeta.pathVesselType}</Chip>}
                 </div>
               }
             >
@@ -1791,6 +1795,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                 <KV k="Summary" v={<span>{edgePathLegMeta.pathSufficiencySummary}</span>} />
               )}
               {edgePathLegMeta.pathRole && <KV k="Role" v={<span>{edgePathLegMeta.pathRole}</span>} />}
+              {edgePathLegMeta.pathVesselType && <KV k="Vessel type" v={<span>{edgePathLegMeta.pathVesselType}</span>} />}
               {edgePathLegMeta.pathArtifactId && (
                 <KV k="Path artifact" v={<span style={mono}>{edgePathLegMeta.pathArtifactId}</span>} copyText={edgePathLegMeta.pathArtifactId} />
               )}

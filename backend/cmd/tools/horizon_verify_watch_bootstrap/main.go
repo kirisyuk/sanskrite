@@ -53,6 +53,8 @@ func main() {
 	scopeConfigsRepo := horizonrepo.NewScopeAgentConfigsRepository(db)
 	scopeStatesRepo := horizonrepo.NewScopeAgentStatesRepository(db)
 	watchdogRepo := horizonrepo.NewWatchdogConfigsRepository(db)
+	watchSubjectsRepo := horizonrepo.NewWatchSubjectsRepository(db)
+	macroPoliciesRepo := horizonrepo.NewMacroAgentPoliciesRepository(db)
 	factsRepo := corerepo.NewOntologyFactsRepository(db)
 
 	pack, err := watchPacksRepo.Get(ctx, bootstrapPackID)
@@ -90,6 +92,23 @@ func main() {
 		if err != nil {
 			log.Fatalf("scope agent config missing for %s: %v", target.Label, err)
 		}
+		policies, err := macroPoliciesRepo.ListByTenant(ctx, target.TenantID, 200)
+		if err != nil {
+			log.Fatalf("macro policies list failed for %s: %v", target.Label, err)
+		}
+		var macroPolicyID string
+		for _, policy := range policies {
+			if policy == nil {
+				continue
+			}
+			if strings.TrimSpace(policy.AnchorCanonicalPath) == strings.TrimSpace(target.CanonicalPath) {
+				macroPolicyID = strings.TrimSpace(policy.ID)
+				break
+			}
+		}
+		if macroPolicyID == "" {
+			log.Fatalf("macro policy missing for %s canonicalPath=%s", target.Label, target.CanonicalPath)
+		}
 		state, err := scopeStatesRepo.GetByConfigID(ctx, cfg.ID)
 		if err != nil {
 			log.Fatalf("scope agent state missing for %s: %v", target.Label, err)
@@ -108,14 +127,32 @@ func main() {
 		if _, err := watchdogRepo.GetByTargetFragmentID(ctx, target.TenantID, target.FragmentID); err != nil {
 			log.Fatalf("watchdog config missing for %s: %v", target.Label, err)
 		}
+		subjects, err := watchSubjectsRepo.ListByAnchorCanonicalPath(ctx, target.TenantID, target.CanonicalPath, 20)
+		if err != nil {
+			log.Fatalf("watch subjects lookup failed for %s: %v", target.Label, err)
+		}
+		foundMacroSubject := false
+		for _, subject := range subjects {
+			if subject == nil {
+				continue
+			}
+			if strings.TrimSpace(fmt.Sprint(subject.Metadata["macroAgentPolicyId"])) == macroPolicyID {
+				foundMacroSubject = true
+				break
+			}
+		}
+		if !foundMacroSubject {
+			log.Fatalf("compiled macro watch subject missing for %s policy=%s", target.Label, macroPolicyID)
+		}
 
 		proposals, _ := proposalsRepo.ListByWatchTarget(ctx, target.TenantID, target.ID, 5)
 		log.Printf(
-			"TARGET ok label=%q canonicalPath=%s fragmentId=%s agentConfigId=%s briefId=%s proposals=%d feedEntries=%d watchpoints=%d coverageGaps=%d",
+			"TARGET ok label=%q canonicalPath=%s fragmentId=%s agentConfigId=%s macroPolicyId=%s briefId=%s proposals=%d feedEntries=%d watchpoints=%d coverageGaps=%d",
 			target.Label,
 			target.CanonicalPath,
 			target.FragmentID,
 			cfg.ID,
+			macroPolicyID,
 			brief.ID,
 			len(proposals),
 			len(feed),

@@ -731,6 +731,11 @@ func main() {
 
 	mergeAuditRepo := repo.NewFragmentMergeAuditRepository(db)
 	redirectsRepo := repo.NewCanonicalPathRedirectsRepository(db)
+	materializedRepo := repo.NewMaterializedArtifactsRepository(db)
+	lensesRepo := repo.NewLensesRepository(db)
+	watchSubjectsRepo := repo.NewWatchSubjectsRepository(db)
+	ontologyFactsRepo := coreRepo.NewOntologyFactsRepository(db)
+	entitiesRepo := coreRepo.NewEntityRepository(db)
 
 	// GeoNames client (cached) for /loc normalization
 	var geoNamesClient coreontology.GeoNamesClientInterface
@@ -2636,7 +2641,13 @@ func main() {
 
 		// Merge via single entry point (data, edges, delete, audit)
 		if mergeAuditRepo != nil {
-			mergeRepo := repo.NewFragmentsMergeRepository(fragmentsRepo, edgesRepo, mergeAuditRepo).WithRedirectsRepo(redirectsRepo)
+			mergeRepo := repo.NewFragmentsMergeRepository(fragmentsRepo, edgesRepo, mergeAuditRepo).
+				WithRedirectsRepo(redirectsRepo).
+				WithMaterializedRepo(materializedRepo).
+				WithLensesRepo(lensesRepo).
+				WithWatchSubjectsRepo(watchSubjectsRepo).
+				WithOntologyFactsRepo(ontologyFactsRepo).
+				WithEntitiesRepo(entitiesRepo)
 			for _, dup := range duplicates {
 				res, err := mergeRepo.MergeFragment(ctx, canonical.ID, dup.ID, strings.TrimSpace(canonical.TenantID), "tool_dedup", "horizon_smart_dedup", "", "")
 				if err != nil {

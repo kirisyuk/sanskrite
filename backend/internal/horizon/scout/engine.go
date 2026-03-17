@@ -2096,55 +2096,61 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 
 // ScoutEngine основной движок Scout для сбора и верификации данных
 type ScoutEngine struct {
-	planner                 *ScoutPlanner
-	executor                *SourceExecutor
-	scoutAgent              *agents.ScoutAgent
-	criticAgent             *agents.CriticAgent
-	resolverAgent           *agents.ResolverAgent
-	researchAgent           *agents.ResearchAgent // New
-	frameBuilder            *FrameBuilder
-	workflow                *ScoutWorkflow
-	fragmentsRepo           *repo.HorizonFragmentsRepository
-	framesRepo              *repo.FramesRepository
-	edgesRepo               *repo.DependencyEdgesRepository
-	scoutingJobsRepo        *repo.ScoutingJobsRepository
-	cascadeVisitedRepo      *repo.CascadeVisitedRepository
-	cascadeEntityRegistry   *repo.CascadeEntityRegistryRepository
-	lensesRepo              *repo.LensesRepository // Optional: for updating lens ViewConfig on assembly completion
-	exposurePathsRepo       *repo.ExposurePathsRepository
-	realtime                *realtime.Publisher
-	taxonomyClassifier      *TaxonomyClassifier
-	aiExecutor              *ai.AITaskExecutor
-	wikidataClient          coreontology.WikidataClientInterface  // Optional: shared for enrichment/dedup (no search by default)
-	geonamesClient          coreontology.GeoNamesClientInterface  // Optional: deterministic geo normalization/enrichment
-	geocodingClient         coreontology.GeocodingClientInterface // Optional: address-to-coordinates for org/facility/gov
-	openCorporatesClient    henrich.OpenCorporatesClientInterface // Optional: org enrichment with registry IDs
-	spendLedger             *repo.HorizonSpendLedger
-	budgetPolicy            BudgetPolicy
-	propagationTrigger      func(ctx context.Context, fragmentID string) error
-	signalPropagationEngine *propagation.PropagationEngine
-	signalProfileLookup     *propagation.ProfileLookup
-	signalSynthesizer       *signals.Synthesizer              // Optional: for signal synthesis from facts
-	factsRepo               *corerepo.OntologyFactsRepository // Optional: for saving synthesized signals
-	factEmitter             *coreontology.FactEmitter         // Optional: unified fact emission (write + feed)
-	geoHierarchyBuilder     *GeoHierarchyBuilder              // Auto-creates geo hierarchy when cities are created
-	orgDeduplicator         *OrgDeduplicator                  // Deduplicates organizations by Wikidata/shortName
-	personDeduplicator      *PersonDeduplicator               // Deduplicates persons by name/phonetic match
-	preCreateValidator      *PreCreateValidator               // Validates fragments before creation
-	contractNormalizer      *ContractNormalizer               // Applies persist contract before materialization
-	orgHierarchyBuilder     *OrgHierarchyBuilder              // Auto-creates org parent hierarchy
-	marketHierarchyBuilder  *MarketHierarchyBuilder           // Auto-creates market hierarchy (segment-first when possible)
-	marketGeoHierarchy      *MarketGeoHierarchyBuilder        // Auto-creates market geo parent (regional -> global)
-	govHierarchyBuilder     *GovHierarchyBuilder              // Best-effort gov type inference + admin hierarchy helpers
-	productDeduplicator     *ProductDeduplicator              // Deduplicates products by Wikidata/CAS/formula
-	productHierarchyBuilder *ProductHierarchyBuilder          // Auto-creates product value chain hierarchy
-	validationPolicy        *policy.PolicyExecutor            // Optional: unified validation policy for edges
-	canonizationPolicy      *policy.PolicyExecutor            // Optional: unified canonization policy for paths/types
-	canonicalPathResolver   *CanonicalPathResolver            // Unified canonicalization and deduplication service
-	missingInfoStatusRepo   *repo.MissingInfoStatusRepository // Tracks missingInfo attempts to prevent infinite loops
-	groundingResolver       *GroundingEvidenceResolver        // Resolves Vertex AI grounding evidence → real fragments from DB
-	telemetryRepo           *repo.HorizonTelemetryRepository  // Optional: grounding/risk counters
-	jobTelemetryRepo        *repo.JobTelemetryRepository      // Optional: per-job telemetry persistence
+	planner                  *ScoutPlanner
+	executor                 *SourceExecutor
+	scoutAgent               *agents.ScoutAgent
+	criticAgent              *agents.CriticAgent
+	resolverAgent            *agents.ResolverAgent
+	researchAgent            *agents.ResearchAgent // New
+	frameBuilder             *FrameBuilder
+	workflow                 *ScoutWorkflow
+	fragmentsRepo            *repo.HorizonFragmentsRepository
+	framesRepo               *repo.FramesRepository
+	edgesRepo                *repo.DependencyEdgesRepository
+	scoutingJobsRepo         *repo.ScoutingJobsRepository
+	workingProductScopesRepo *repo.WorkingProductScopesRepository
+	capabilityProfilesRepo   *repo.CapabilityProfilesRepository
+	capabilityObsRepo        *repo.CapabilityObservationsRepository
+	supplyLinkObsRepo        *repo.SupplyLinkObservationsRepository
+	routeObsRepo             *repo.RouteObservationsRepository
+	derivedRiskProfilesRepo  *repo.DerivedRiskProfilesRepository
+	cascadeVisitedRepo       *repo.CascadeVisitedRepository
+	cascadeEntityRegistry    *repo.CascadeEntityRegistryRepository
+	lensesRepo               *repo.LensesRepository // Optional: for updating lens ViewConfig on assembly completion
+	exposurePathsRepo        *repo.ExposurePathsRepository
+	realtime                 *realtime.Publisher
+	taxonomyClassifier       *TaxonomyClassifier
+	aiExecutor               *ai.AITaskExecutor
+	wikidataClient           coreontology.WikidataClientInterface  // Optional: shared for enrichment/dedup (no search by default)
+	geonamesClient           coreontology.GeoNamesClientInterface  // Optional: deterministic geo normalization/enrichment
+	geocodingClient          coreontology.GeocodingClientInterface // Optional: address-to-coordinates for org/facility/gov
+	openCorporatesClient     henrich.OpenCorporatesClientInterface // Optional: org enrichment with registry IDs
+	spendLedger              *repo.HorizonSpendLedger
+	budgetPolicy             BudgetPolicy
+	propagationTrigger       func(ctx context.Context, fragmentID string) error
+	signalPropagationEngine  *propagation.PropagationEngine
+	signalProfileLookup      *propagation.ProfileLookup
+	signalSynthesizer        *signals.Synthesizer              // Optional: for signal synthesis from facts
+	factsRepo                *corerepo.OntologyFactsRepository // Optional: for saving synthesized signals
+	factEmitter              *coreontology.FactEmitter         // Optional: unified fact emission (write + feed)
+	geoHierarchyBuilder      *GeoHierarchyBuilder              // Auto-creates geo hierarchy when cities are created
+	orgDeduplicator          *OrgDeduplicator                  // Deduplicates organizations by Wikidata/shortName
+	personDeduplicator       *PersonDeduplicator               // Deduplicates persons by name/phonetic match
+	preCreateValidator       *PreCreateValidator               // Validates fragments before creation
+	contractNormalizer       *ContractNormalizer               // Applies persist contract before materialization
+	orgHierarchyBuilder      *OrgHierarchyBuilder              // Auto-creates org parent hierarchy
+	marketHierarchyBuilder   *MarketHierarchyBuilder           // Auto-creates market hierarchy (segment-first when possible)
+	marketGeoHierarchy       *MarketGeoHierarchyBuilder        // Auto-creates market geo parent (regional -> global)
+	govHierarchyBuilder      *GovHierarchyBuilder              // Best-effort gov type inference + admin hierarchy helpers
+	productDeduplicator      *ProductDeduplicator              // Deduplicates products by Wikidata/CAS/formula
+	productHierarchyBuilder  *ProductHierarchyBuilder          // Auto-creates product value chain hierarchy
+	validationPolicy         *policy.PolicyExecutor            // Optional: unified validation policy for edges
+	canonizationPolicy       *policy.PolicyExecutor            // Optional: unified canonization policy for paths/types
+	canonicalPathResolver    *CanonicalPathResolver            // Unified canonicalization and deduplication service
+	missingInfoStatusRepo    *repo.MissingInfoStatusRepository // Tracks missingInfo attempts to prevent infinite loops
+	groundingResolver        *GroundingEvidenceResolver        // Resolves Vertex AI grounding evidence → real fragments from DB
+	telemetryRepo            *repo.HorizonTelemetryRepository  // Optional: grounding/risk counters
+	jobTelemetryRepo         *repo.JobTelemetryRepository      // Optional: per-job telemetry persistence
 
 	// Policy enforcement (final validation step)
 	policyChecker          *policy.PolicyChecker              // Optional: validates job output before completion
@@ -2181,15 +2187,19 @@ type ScoutEngine struct {
 	scoutOutboxInFlight map[string]struct{}
 }
 
-// bestEffortDeferredScopeAdd adds canonicalPath to lens.Scope if under limit (max 5 per lens).
-// Used when Scout creates/updates a fragment for any lens job (not just deferred-scope).
-// Path changes during pipeline (org upgrade, dedup, etc.) are handled by bestEffortRewriteLensScope.
+// bestEffortDeferredScopeAdd adds a scope entry using the managed scope policy.
+// Domains are always allowed in scope, artifacts use their own budget, and
+// fragment-backed entries use the entity auto-add budget.
 func (e *ScoutEngine) bestEffortDeferredScopeAdd(ctx context.Context, lensID, canonicalPath string) {
 	if e == nil || e.lensesRepo == nil || lensID == "" || strings.TrimSpace(canonicalPath) == "" {
 		return
 	}
 	canonicalPath = strings.TrimSpace(canonicalPath)
-	res, err := e.lensesRepo.AddScopeCanonicalPathAutoLimited(ctx, lensID, canonicalPath, models.MaxAutoScopeAddsPerLens)
+	maxCount := models.MaxAutoScopeAddsPerLens
+	if models.IsArtifactScopeEntry(canonicalPath) {
+		maxCount = models.MaxAutoArtifactScopeAddsPerLens
+	}
+	res, err := e.lensesRepo.AddScopeCanonicalPathAutoManaged(ctx, lensID, canonicalPath, maxCount)
 	if err != nil {
 		trace.Log(ctx, "scope", "scope.deferred_add.failed", map[string]any{
 			"lensId": lensID,
@@ -2263,7 +2273,9 @@ func (e *ScoutEngine) runDomainHolisticResearch(ctx context.Context, input agent
 	}
 }
 
-// bestEffortRemoveOrphanScopePaths removes scope paths that have no corresponding fragment.
+// bestEffortRemoveOrphanScopePaths removes fragment-backed scope paths that have
+// no corresponding fragment. Non-fragment scope entries (/query, /domain, /artifact)
+// are valid lens members and must not be removed here.
 func (e *ScoutEngine) bestEffortRemoveOrphanScopePaths(ctx context.Context, lensID string) {
 	if e == nil || e.lensesRepo == nil || e.fragmentsRepo == nil || lensID == "" {
 		return
@@ -2275,7 +2287,7 @@ func (e *ScoutEngine) bestEffortRemoveOrphanScopePaths(ctx context.Context, lens
 	var toRemove []string
 	for _, p := range lens.Scope {
 		p = strings.TrimSpace(p)
-		if p == "" || strings.HasPrefix(p, "/query/") || strings.HasPrefix(p, "/domain/") {
+		if p == "" || models.IsNonFragmentScopeEntry(p) {
 			continue
 		}
 		resolvedCP := p
@@ -2914,6 +2926,36 @@ func (e *ScoutEngine) WithDomainAnswerSnapshotsRepo(repo *repo.DomainAnswerSnaps
 // WithSupplyChainPathBuilder sets the path builder for materializing supply chain paths from parsed chains.
 func (e *ScoutEngine) WithSupplyChainPathBuilder(b *pathbuilder.SupplyChainPathBuilder) *ScoutEngine {
 	e.supplyChainPathBuilder = b
+	return e
+}
+
+func (e *ScoutEngine) WithWorkingProductScopesRepository(r *repo.WorkingProductScopesRepository) *ScoutEngine {
+	e.workingProductScopesRepo = r
+	return e
+}
+
+func (e *ScoutEngine) WithCapabilityProfilesRepository(r *repo.CapabilityProfilesRepository) *ScoutEngine {
+	e.capabilityProfilesRepo = r
+	return e
+}
+
+func (e *ScoutEngine) WithCapabilityObservationsRepository(r *repo.CapabilityObservationsRepository) *ScoutEngine {
+	e.capabilityObsRepo = r
+	return e
+}
+
+func (e *ScoutEngine) WithSupplyLinkObservationsRepository(r *repo.SupplyLinkObservationsRepository) *ScoutEngine {
+	e.supplyLinkObsRepo = r
+	return e
+}
+
+func (e *ScoutEngine) WithRouteObservationsRepository(r *repo.RouteObservationsRepository) *ScoutEngine {
+	e.routeObsRepo = r
+	return e
+}
+
+func (e *ScoutEngine) WithDerivedRiskProfilesRepository(r *repo.DerivedRiskProfilesRepository) *ScoutEngine {
+	e.derivedRiskProfilesRepo = r
 	return e
 }
 
@@ -5829,8 +5871,8 @@ SKIP_METRICS:
 		fmt.Printf("[ScoutEngine] Intent decomposition failed for %s: %v\n", job.TargetCanonicalPath, err)
 	}
 
-	// Add to scope when Scout creates/updates fragment (max 5 per lens).
-	// Trigger: object creation by pipeline, not just deferredScopeAdd or cache hit.
+	// Add to scope when Scout creates/updates fragment under the managed auto-add policy.
+	// Trigger: object creation by pipeline, not just deferred scope or cache hit.
 	// Path changes during pipeline (org upgrade, dedup, etc.) are handled by bestEffortRewriteLensScope.
 	if lensID != "" && e.lensesRepo != nil && e.fragmentsRepo != nil {
 		effectiveCP := strings.TrimSpace(existingFragment.CanonicalPath)

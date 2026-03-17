@@ -258,6 +258,75 @@ func (r *EntityRepository) FindDuplicatesByCanonicalPath(ctx context.Context, te
 	return out, nil
 }
 
+// ReplaceCanonicalPathReferences rewrites oldPath -> newPath in ontology entity canonical path arrays.
+// When tenantID is empty, all tenants are scanned.
+func (r *EntityRepository) ReplaceCanonicalPathReferences(ctx context.Context, tenantID, oldPath, newPath string, limit int) (int, error) {
+	oldPath = strings.TrimSpace(oldPath)
+	newPath = strings.TrimSpace(newPath)
+	if r == nil || r.col == nil || oldPath == "" || newPath == "" || oldPath == newPath {
+		return 0, nil
+	}
+	if limit <= 0 {
+		limit = 500
+	}
+
+	q := r.col.Where("canonicalPaths", "array-contains", oldPath).Limit(limit)
+	if strings.TrimSpace(tenantID) != "" {
+		q = q.Where("tenantId", "==", strings.TrimSpace(tenantID))
+	}
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return 0, err
+	}
+
+	updated := 0
+	for _, doc := range docs {
+		var entity models.Entity
+		if err := doc.DataTo(&entity); err != nil {
+			continue
+		}
+		if strings.TrimSpace(entity.ID) == "" {
+			entity.ID = doc.Ref.ID
+		}
+		if !replaceEntityCanonicalPathRefs(&entity, oldPath, newPath) {
+			continue
+		}
+		if err := r.Upsert(ctx, &entity); err != nil {
+			return updated, err
+		}
+		updated++
+	}
+	return updated, nil
+}
+
+func replaceEntityCanonicalPathRefs(e *models.Entity, oldPath, newPath string) bool {
+	if e == nil || len(e.CanonicalPaths) == 0 {
+		return false
+	}
+	changed := false
+	seen := make(map[string]struct{}, len(e.CanonicalPaths))
+	out := make([]string, 0, len(e.CanonicalPaths))
+	for _, raw := range e.CanonicalPaths {
+		v := strings.TrimSpace(raw)
+		if v == "" {
+			continue
+		}
+		if v == oldPath {
+			v = newPath
+			changed = true
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	if changed {
+		e.CanonicalPaths = out
+	}
+	return changed
+}
+
 // MergeDuplicatesByCanonicalPath merges duplicate entities that share the same canonical path.
 // The oldest entity (by CreatedAt) is kept as the primary, and others are marked as deprecated.
 // Aliases from duplicate entities are merged into the primary entity.

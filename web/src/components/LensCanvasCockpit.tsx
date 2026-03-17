@@ -101,6 +101,12 @@ import { ProgramProfileModal } from './ProgramProfileModal';
 import { GraphIntentResultCard } from './GraphIntentResultCard';
 import { ScoutIntentModal, type ScoutIntentResolution } from './ScoutIntentModal';
 import { SupplyChainOverlay, type MaterializedArtifact } from './SupplyChainOverlay';
+import {
+  defaultScoutingModeForCanonicalPath,
+  defaultScoutingModeForIntent,
+  specialtiesForScoutingMode,
+  type ScoutingMode,
+} from '../features/horizon/lib/scoutingMode';
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 const readFacilityKindFromAny = (obj: any): string | undefined => {
@@ -626,7 +632,13 @@ export interface LensCanvasCockpitProps {
   projectId?: string | null;
   onNodeSelect?: (nodeId: string | null, nodeData: HorizonNodeData | null) => void;
   onEdgeSelect?: (edgeId: string | null, edgeData: any | null) => void;
-  onScopeScout?: (input: { fragmentId: string; canonicalPath?: string; maxRecursionDepth?: number }) => Promise<void>;
+  onScopeScout?: (input: {
+    fragmentId: string;
+    canonicalPath?: string;
+    maxRecursionDepth?: number;
+    mode?: ScoutingMode;
+    specialties?: string[];
+  }) => Promise<void>;
   inspectorActive?: boolean;
   onToggleInspector?: () => void;
   /** QA answer highlight — nodes in impact chain (plan §10.6 X-Ray). */
@@ -781,6 +793,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     label?: string;
   } | null>(null);
   const [scopeScoutDepth, setScopeScoutDepth] = React.useState<1 | 2>(1);
+  const [scopeScoutMode, setScopeScoutMode] = React.useState<ScoutingMode>('general');
   const [scopeScoutInFlightId, setScopeScoutInFlightId] = React.useState<string | null>(null);
   const scopeScoutCancelBtnRef = React.useRef<HTMLButtonElement | null>(null);
   const scopeScoutPrevActiveElRef = React.useRef<HTMLElement | null>(null);
@@ -2228,6 +2241,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [scoutIntentError, setScoutIntentError] = React.useState<string | null>(null);
   const [scoutProgressLog, setScoutProgressLog] = React.useState<string[]>([]);
   const [scoutRunLoading, setScoutRunLoading] = React.useState(false);
+  const [scoutIntentMode, setScoutIntentMode] = React.useState<ScoutingMode>('general');
+  const [scoutIntentModeTouched, setScoutIntentModeTouched] = React.useState(false);
 
   const graphIntentNodeIdToLabel = React.useMemo(() => {
     const m: Record<string, string> = {};
@@ -3105,7 +3120,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       try {
         const res = await api.resolveHorizonIntent({ query: scoutIntentQuery.trim() });
         if (!alive) return;
-        setScoutIntentIntent(res?.intent as ScoutIntentResolution);
+        const nextIntent = res?.intent as ScoutIntentResolution;
+        setScoutIntentIntent(nextIntent);
+        if (!scoutIntentModeTouched) {
+          setScoutIntentMode(defaultScoutingModeForIntent(nextIntent));
+        }
         setScoutIntentError(null);
       } catch (e: any) {
         if (!alive) return;
@@ -3119,7 +3138,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     return () => {
       alive = false;
     };
-  }, [scoutIntentModalOpen, scoutIntentQuery]);
+  }, [scoutIntentModalOpen, scoutIntentModeTouched, scoutIntentQuery]);
 
   // (Old domain overlay focus effect removed — replaced by DomainOverlayPanel)
 
@@ -4669,6 +4688,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
   const openScopeScoutModal = React.useCallback((fragmentId: string, canonicalPath?: string) => {
     const fid = String(fragmentId || '').trim();
+    const nextCanonicalPath = String(canonicalPath || '').trim();
     let label: string | undefined;
     try {
       const currentNodes: Node<HorizonNodeData>[] = nodesStateRef.current || [];
@@ -4678,7 +4698,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     } catch {
       // ignore
     }
-    setScopeScoutModal({ fragmentId: fid, canonicalPath, label });
+    const defaultMode = defaultScoutingModeForCanonicalPath(nextCanonicalPath);
+    setScopeScoutMode(defaultMode);
+    setScopeScoutDepth(defaultMode === 'supply_chain' ? 2 : 1);
+    setScopeScoutModal({ fragmentId: fid, canonicalPath: nextCanonicalPath || canonicalPath, label });
   }, []);
 
   const handleLoadSupplyChain = React.useCallback(
@@ -4812,6 +4835,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           pathAffectedZoneRefs: leg?.affectedZoneRefs || [],
           pathSpatialSemantics: leg?.spatialSemantics || [],
           pathDominantFactors: leg?.stress?.dominantFactors || pathStress?.dominantFactors || [],
+          pathVesselType: String(leg?.vesselType || e?.qualifiers?.vesselType || '').trim() || undefined,
           pathSufficiencyStatus: String(artifact.sufficiencyStatus || pathSufficiency?.status || '').trim() || undefined,
           pathSufficiencyScore:
             typeof artifact.sufficiencyScore === 'number'
@@ -11948,6 +11972,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setScoutIntentError(null);
     setScoutProgressLog([]);
     setScoutRunLoading(false);
+    setScoutIntentMode('general');
+    setScoutIntentModeTouched(false);
     setScoutIntentModalOpen(true);
   }, [closeAddNode]);
 
@@ -11958,6 +11984,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setScoutIntentError(null);
     setScoutProgressLog([]);
     setScoutRunLoading(false);
+    setScoutIntentMode('general');
+    setScoutIntentModeTouched(false);
   }, []);
 
   const openCommandPalette = React.useCallback(() => {
@@ -12872,11 +12900,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   }, [lensId, rtGraphNodes, findFragmentIdByCanonicalPath, materializeScoutedNode, materializeScoutedNodeWithoutPlaceholder]);
 
   const scoutFullForQuery = React.useCallback(
-    async (query: string, options?: { onProgress?: (msg: string) => void }) => {
+    async (query: string, options?: { onProgress?: (msg: string) => void; mode?: ScoutingMode }) => {
       const q = String(query || '').trim();
       if (!lensId || q.length < 2) return;
 
       const onProgress = options?.onProgress;
+      const scoutingMode = options?.mode || 'general';
       if (!onProgress) {
         closeAddNode();
       }
@@ -12887,8 +12916,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const restPaths: string[] = [];
 
       try {
-        onProgress?.('Calling scope-scout-full…');
-        const res = await api.scopeScoutHorizonLensFull(lensId, { query: q }, { correlationId });
+        onProgress?.(`Calling scope-scout-full (${scoutingMode})…`);
+        const res = await api.scopeScoutHorizonLensFull(
+          lensId,
+          {
+            query: q,
+            mode: scoutingMode,
+            specialties: specialtiesForScoutingMode(scoutingMode),
+          },
+          { correlationId },
+        );
         const firstFive = res?.firstFiveForGraph || [];
         const allPaths = res?.canonicalPaths || [];
         const jobIds = res?.jobIds || [];
@@ -12996,15 +13033,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const q = scoutIntentQuery.trim();
     if (!q || !lensId) return;
     setScoutRunLoading(true);
-    setScoutProgressLog((prev) => [...prev, 'Starting scout…']);
+    setScoutProgressLog((prev) => [...prev, `Starting ${scoutIntentMode} scout…`]);
     try {
       await scoutFullForQuery(q, {
+        mode: scoutIntentMode,
         onProgress: (msg) => setScoutProgressLog((prev) => [...prev, msg]),
       });
     } finally {
       setScoutRunLoading(false);
     }
-  }, [lensId, scoutIntentQuery, scoutFullForQuery]);
+  }, [lensId, scoutIntentMode, scoutIntentQuery, scoutFullForQuery]);
 
   const addNodeToLens = React.useCallback(
     async (entity: HorizonSearchEntity) => {
@@ -13828,7 +13866,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         ok = false;
       } else {
         if (!onScopeScout) return;
-        await onScopeScout({ fragmentId, canonicalPath: scopeScoutModal.canonicalPath, maxRecursionDepth: scopeScoutDepth });
+        await onScopeScout({
+          fragmentId,
+          canonicalPath: scopeScoutModal.canonicalPath,
+          maxRecursionDepth: scopeScoutDepth,
+          mode: scopeScoutMode,
+          specialties: specialtiesForScoutingMode(scopeScoutMode),
+        });
         ok = true;
       }
     } catch (e) {
@@ -13844,7 +13888,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       setScopeScoutInFlightId(null);
       setScopeScoutModal(null);
     }
-  }, [lensId, onScopeScout, scopeScoutModal, scopeScoutDepth, setNodes, genCorrelationId]);
+  }, [lensId, onScopeScout, scopeScoutModal, scopeScoutDepth, scopeScoutMode, setNodes, genCorrelationId]);
 
   // Scope-scout modal: Esc to close + basic focus management.
   React.useEffect(() => {
@@ -18465,6 +18509,48 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               </div>
             </div>
 
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', marginBottom: 6 }}>
+                Scouting mode
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
+                {([
+                  { value: 'general' as const, label: 'General', desc: 'Broad relations and context' },
+                  { value: 'supply_chain' as const, label: 'Supply chain', desc: 'Operational and product flows' },
+                  { value: 'governance' as const, label: 'Governance', desc: 'Ownership, control, leadership' },
+                ]).map((opt) => {
+                  const active = scopeScoutMode === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => {
+                        setScopeScoutMode(opt.value);
+                        setScopeScoutDepth(opt.value === 'supply_chain' ? 2 : 1);
+                      }}
+                      disabled={Boolean(scopeScoutInFlightId)}
+                      aria-pressed={active}
+                      style={{
+                        textAlign: 'left',
+                        padding: '10px 10px 9px',
+                        borderRadius: 10,
+                        border: '1px solid var(--border-subtle)',
+                        background: active ? 'var(--white-10)' : 'transparent',
+                        color: 'var(--text-heading)',
+                        cursor: scopeScoutInFlightId ? 'not-allowed' : 'pointer',
+                        opacity: scopeScoutInFlightId ? 0.5 : 1,
+                      }}
+                    >
+                      <div style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.2 }}>{opt.label}</div>
+                      <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-secondary-strong)', lineHeight: 1.35 }}>
+                        {opt.desc}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <div style={{ marginTop: 12, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
                 <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>
@@ -18656,6 +18742,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         intentError={scoutIntentError}
         runLoading={scoutRunLoading}
         progressLog={scoutProgressLog}
+        mode={scoutIntentMode}
+        onModeChange={(mode) => {
+          setScoutIntentMode(mode);
+          setScoutIntentModeTouched(true);
+        }}
         onClose={closeScoutIntentModal}
         onRunScout={() => void runScoutFromModal()}
         theme={theme as 'light' | 'dark'}

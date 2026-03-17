@@ -122,13 +122,13 @@ func (e *Engine) RunModeDiagnostic(ctx context.Context, in RunInput) (*models.Do
 		}
 	}
 	snapshot.Gate = models.DomainGateSummary{
-		OverallStatus:   l1.OverallStatus,
-		TotalChecks:     l1.TotalChecks,
-		Passed:          l1.Passed,
-		Failed:          l1.Failed,
-		Partial:         l1.Partial,
-		Checks:          l1.Checks,
-		FailedCheckIDs:  failedIDs,
+		OverallStatus:    l1.OverallStatus,
+		TotalChecks:      l1.TotalChecks,
+		Passed:           l1.Passed,
+		Failed:           l1.Failed,
+		Partial:          l1.Partial,
+		Checks:           l1.Checks,
+		FailedCheckIDs:   failedIDs,
 		EvidenceCoverage: l1.Score,
 	}
 	snapshot.EnrichmentCycles = 0
@@ -766,12 +766,12 @@ func (e *Engine) awaitGraphDelta(
 			if allTerminal {
 				snapshot = e.collectGraph(ctx, job, contract)
 				logDomainContract(ctx, "enrich.await_graph_delta.jobs_terminal", job, &contract, map[string]any{
-					"cycle":    cycle,
-					"waitMs":   int64(time.Since(startedAt) / time.Millisecond),
-					"nodes":    len(snapshot.NodesByID),
-					"edges":    len(snapshot.Edges),
-					"beforeN":  beforeNodes,
-					"beforeE":  beforeEdges,
+					"cycle":     cycle,
+					"waitMs":    int64(time.Since(startedAt) / time.Millisecond),
+					"nodes":     len(snapshot.NodesByID),
+					"edges":     len(snapshot.Edges),
+					"beforeN":   beforeNodes,
+					"beforeE":   beforeEdges,
 					"childJobs": len(childJobIDs),
 				})
 				return snapshot
@@ -956,7 +956,7 @@ func (e *Engine) collectGraph(ctx context.Context, job *models.ScoutingJob, cont
 			})
 		}
 	}
-	
+
 	if droppedEntities > 0 || droppedEdges > 0 {
 		logDomainContract(ctx, "collect.artifacts.filtered", job, &contract, map[string]any{
 			"droppedEntities": droppedEntities,
@@ -1105,6 +1105,8 @@ func expectedRelationsForContractType(contractType string) []string {
 		return []string{"PARTICIPATES_IN", "HAS_MARKET_SEGMENT", "REGULATES", "COMPETES_WITH", "SUPPLIES_TO", "PRODUCES"}
 	case SteeringProfileGeographicConcentration:
 		return []string{"LOCATED_IN", "OPERATES_IN", "EXTRACTS_FROM"}
+	case SteeringProfileInvestmentFinance:
+		return taxonomy.GovernanceEdgeTypes
 	default:
 		return []string{"DEPENDS_ON", "AFFECTS", "RELATED_DOMAIN"}
 	}
@@ -3233,6 +3235,8 @@ func defaultFilterRelTypes(contractType string) []string {
 		return []string{"PARTICIPATES_IN", "HAS_MARKET_SEGMENT", "REGULATES", "COMPETES_WITH", "SUPPLIES_TO", "PRODUCES"}
 	case SteeringProfileGeographicConcentration:
 		return []string{"LOCATED_IN", "OPERATES_IN", "EXTRACTS_FROM"}
+	case SteeringProfileInvestmentFinance:
+		return taxonomy.GovernanceEdgeTypes
 	default:
 		return []string{}
 	}
@@ -3426,7 +3430,7 @@ func checkSupplyChainEdgesOperational(g graphSnapshot, facetNodes map[string][]*
 		models.DependencyTypeSuppliesTo:     {},
 		models.DependencyTypeProduces:       {},
 		models.DependencyTypeTransformsInto: {},
-		models.DependencyTypeExtractsFrom:  {},
+		models.DependencyTypeExtractsFrom:   {},
 	}
 	perFacet := map[string]bool{}
 	for facet := range facetNodes {
@@ -3519,7 +3523,6 @@ func checkSupplyChainBidirectional(g graphSnapshot, facetNodes map[string][]*mod
 	}
 }
 
-
 func checkConcentrationEvidence(snapshot *models.DomainAnswerSnapshot, g graphSnapshot) models.DomainGateCheck {
 	if snapshot == nil {
 		return models.DomainGateCheck{CheckID: "SC4_concentration_evidence", Status: "fail", Priority: "P1"}
@@ -3549,8 +3552,6 @@ func checkConcentrationEvidence(snapshot *models.DomainAnswerSnapshot, g graphSn
 		EnrichmentHint: "Collect concentration metrics or proxy via market participation counts",
 	}
 }
-
-
 
 func checkRegulatoryEdges(g graphSnapshot) models.DomainGateCheck {
 	n := 0

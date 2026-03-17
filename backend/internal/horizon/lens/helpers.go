@@ -6,14 +6,16 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
 // ArtifactScopePrefix is the canonical prefix for MaterializedArtifact scope entries.
-const ArtifactScopePrefix = "/artifact/"
+const ArtifactScopePrefix = models.ArtifactScopePrefix
 
 // IsArtifactScopeEntry returns true if the scope entry references a MaterializedArtifact.
 func IsArtifactScopeEntry(entry string) bool {
-	return strings.HasPrefix(strings.TrimSpace(entry), ArtifactScopePrefix)
+	return models.IsArtifactScopeEntry(entry)
 }
 
 // ArtifactKeyFromScopeEntry extracts the artifact canonical key from a scope entry.
@@ -69,30 +71,29 @@ func resolveQueryAddresses(
 ) (resolvedQueries map[string][]string, errors []error) {
 	resolvedQueries = make(map[string][]string)
 	errors = make([]error, 0)
-	
+
 	for _, queryAddr := range queryAddresses {
 		startTime := time.Now()
-		
+
 		qa, err := ParseQueryAddress(queryAddr)
 		if err != nil {
 			log.Printf("[QueryAddress] Failed to parse query address %q: %v", queryAddr, err)
 			errors = append(errors, fmt.Errorf("parse query address %q: %w", queryAddr, err))
 			continue
 		}
-		
+
 		resolvedPaths, err := queryResolver.Resolve(ctx, tenantID, qa)
 		resolveDuration := time.Since(startTime)
-		
+
 		if err != nil {
 			log.Printf("[QueryAddress] Failed to resolve query address %q: %v (took %v)", queryAddr, err, resolveDuration)
 			errors = append(errors, fmt.Errorf("resolve query address %q: %w", queryAddr, err))
 			continue
 		}
-		
+
 		resolvedQueries[queryAddr] = resolvedPaths
 		log.Printf("[QueryAddress] Resolved %q to %d paths in %v", queryAddr, len(resolvedPaths), resolveDuration)
 	}
-	
+
 	return resolvedQueries, errors
 }
-

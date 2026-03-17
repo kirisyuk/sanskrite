@@ -106,3 +106,41 @@ func TestBuildSupplyChainArtifactNotes_IncludeContractAndStressMetadata(t *testi
 		t.Fatalf("pathStressScore=%v, want 0.61", notes["pathStressScore"])
 	}
 }
+
+func TestPathToMaterializedPayload_PreservesOptionalVesselType(t *testing.T) {
+	builder := NewSupplyChainPathBuilder(nil, nil, nil)
+	path := &SupplyChainPath{
+		Segments: []PathSegment{{
+			SupplierRef:      "/fac/sa/ras-tanura-terminal",
+			ProductRef:       "/product/raw/hydrocarbon/crude-oil",
+			CustomerRef:      "/fac/in/jamnagar-refinery",
+			TransportViaRefs: []string{"/fac/eg/suez-terminal"},
+			VesselType:       "tanker",
+			Confidence:       0.81,
+		}},
+		Confidence: 0.81,
+		BuildMode:  "test",
+		MaxDepth:   3,
+	}
+
+	_, edges, legs, _ := builder.pathToMaterializedPayload(context.Background(), path)
+	if len(legs) != 1 {
+		t.Fatalf("legs=%d, want 1", len(legs))
+	}
+	if legs[0].VesselType != "tanker" {
+		t.Fatalf("leg vesselType=%q, want tanker", legs[0].VesselType)
+	}
+	found := false
+	for _, edge := range edges {
+		if edge.Type != "LOGISTICS" || edge.Qualifiers == nil {
+			continue
+		}
+		if edge.Qualifiers["vesselType"] == "tanker" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected vesselType qualifier on logistics edge")
+	}
+}

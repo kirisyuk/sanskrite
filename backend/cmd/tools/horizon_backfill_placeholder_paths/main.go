@@ -30,8 +30,8 @@ var (
 	pageSize   = flag.Int("page-size", 200, "Firestore scan page size")
 	startAfter = flag.String("start-after", "", "Resume scan after this canonical path")
 	samples    = flag.Int("samples", 20, "How many sample migrations to print")
-	fromPath    = flag.String("from-path", "", "Optional exact canonicalPath to migrate")
-	toPath      = flag.String("to-path", "", "Optional exact target canonicalPath for --from-path")
+	fromPath   = flag.String("from-path", "", "Optional exact canonicalPath to migrate")
+	toPath     = flag.String("to-path", "", "Optional exact target canonicalPath for --from-path")
 )
 
 type counters struct {
@@ -66,14 +66,20 @@ func main() {
 	redirectsRepo := hrepo.NewCanonicalPathRedirectsRepository(client.Client())
 	materializedRepo := hrepo.NewMaterializedArtifactsRepository(client.Client())
 	lensesRepo := hrepo.NewLensesRepository(client.Client())
+	watchSubjectsRepo := hrepo.NewWatchSubjectsRepository(client.Client())
 	lensArtifactsRepo := hrepo.NewLensArtifactsRepository(client.Client())
 	framesRepo := hrepo.NewFramesRepository(client.Client())
 	edgesRepo := hrepo.NewDependencyEdgesRepository(client.Client())
 	mergeAuditRepo := hrepo.NewFragmentMergeAuditRepository(client.Client())
+	ontologyFactsRepo := coreRepo.NewOntologyFactsRepository(client.Client())
+	entitiesRepo := coreRepo.NewEntityRepository(client.Client())
 	mergeRepo := hrepo.NewFragmentsMergeRepository(fragmentsRepo, edgesRepo, mergeAuditRepo).
 		WithRedirectsRepo(redirectsRepo).
 		WithMaterializedRepo(materializedRepo).
-		WithLensesRepo(lensesRepo)
+		WithLensesRepo(lensesRepo).
+		WithWatchSubjectsRepo(watchSubjectsRepo).
+		WithOntologyFactsRepo(ontologyFactsRepo).
+		WithEntitiesRepo(entitiesRepo)
 	migrator := hrepo.NewFragmentPathMigrator(client.Client(), fragmentsRepo, redirectsRepo).
 		WithMergeRepo(mergeRepo).
 		WithMaterializedRepo(materializedRepo).

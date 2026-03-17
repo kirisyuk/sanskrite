@@ -15,6 +15,11 @@ func TestGraphViewForDirective(t *testing.T) {
 			want:         GraphViewHierarchical,
 		},
 		{
+			name:         "control map contract maps to influence network",
+			contractType: "control-map",
+			want:         GraphViewInfluenceNet,
+		},
+		{
 			name:         "commonality contract maps to influence network",
 			contractType: "commonality-analysis",
 			want:         GraphViewInfluenceNet,

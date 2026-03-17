@@ -19,22 +19,23 @@ import (
 type lensPreflightRequest struct {
 	ProjectID string `json:"projectId"`
 	Query     string `json:"query"`
+	Mode      string `json:"mode,omitempty"`
 	// Optional: enables specialized scout/research modules (e.g., ["management","products_and_services"])
 	Specialties []string `json:"specialties,omitempty"`
 }
 
 type lensPreflightResponse struct {
-	Intent *agents.IntentResolution `json:"intent"`
+	Intent         *agents.IntentResolution `json:"intent"`
 	Recommendation struct {
 		Mode   string `json:"mode"`   // just_open|research_first
 		Reason string `json:"reason"` // human-readable
 		Stats  struct {
-			AnchorsTotal  int `json:"anchorsTotal"`
-			AnchorsKnown  int `json:"anchorsKnown"`
-			AnchorsFresh  int `json:"anchorsFresh"`
-			DomainsTotal  int `json:"domainsTotal"`
-			DomainsKnown  int `json:"domainsKnown"`
-			HasDomains    bool `json:"hasDomains"`
+			AnchorsTotal int  `json:"anchorsTotal"`
+			AnchorsKnown int  `json:"anchorsKnown"`
+			AnchorsFresh int  `json:"anchorsFresh"`
+			DomainsTotal int  `json:"domainsTotal"`
+			DomainsKnown int  `json:"domainsKnown"`
+			HasDomains   bool `json:"hasDomains"`
 		} `json:"stats"`
 	} `json:"recommendation"`
 }
@@ -232,8 +233,8 @@ func (h *HorizonHandlers) LensPreflight(w http.ResponseWriter, r *http.Request) 
 					return strings.Join(parts, " • ")
 				}(),
 			},
-			"intent":          intent,
-			"recommendation":  resp.Recommendation,
+			"intent":         intent,
+			"recommendation": resp.Recommendation,
 		})
 	}
 
@@ -257,4 +258,3 @@ func isFragmentFreshForJustOpen(frag *models.HorizonFragment) bool {
 	const ttl = 45 * 24 * time.Hour
 	return time.Since(frag.Metadata.LastVerifiedAt.UTC()) <= ttl
 }
-

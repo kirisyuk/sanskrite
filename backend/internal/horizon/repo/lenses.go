@@ -146,6 +146,26 @@ func (r *LensesRepository) FindByScope(ctx context.Context, tenantID, canonicalP
 	return lenses, nil
 }
 
+func (r *LensesRepository) FindByScopeAnyTenant(ctx context.Context, canonicalPath string, limit int) ([]*models.Lens, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	q := r.col.Where("scope", "array-contains", canonicalPath).Limit(limit)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	var lenses []*models.Lens
+	for _, d := range docs {
+		var lens models.Lens
+		if err := d.DataTo(&lens); err != nil {
+			continue
+		}
+		lenses = append(lenses, &lens)
+	}
+	return lenses, nil
+}
+
 // Update обновляет Lens
 func (r *LensesRepository) Update(ctx context.Context, lens *models.Lens) error {
 	if lens == nil || lens.ID == "" {
@@ -237,15 +257,38 @@ func (r *LensesRepository) AddScopeCanonicalPaths(ctx context.Context, lensID st
 	return err
 }
 
-// AddScopeCanonicalPathAutoLimited appends one canonical path to lens.scope when below maxCount.
-// The check + add + deferredScopeAddCount increment are performed in one transaction.
+// AddScopeCanonicalPathAutoLimited appends one fragment-backed canonical path to lens.scope
+// when below maxCount. Use AddScopeCanonicalPathAutoManaged when the caller may pass
+// /domain/ or /artifact/ scope entries.
 func (r *LensesRepository) AddScopeCanonicalPathAutoLimited(
 	ctx context.Context,
 	lensID, canonicalPath string,
 	maxCount int,
 ) (AutoScopeAddResult, error) {
+	return r.addScopeCanonicalPathAutoLimitedWithCounter(ctx, lensID, canonicalPath, maxCount, models.ScopeAutoAddEntityCounterKey)
+}
+
+// AddScopeCanonicalPathAutoManaged appends one scope entry using the correct auto-add policy:
+// domain entries are always allowed, artifact refs use their own budget, and fragment-backed
+// entities use the legacy deferredScopeAddCount budget.
+func (r *LensesRepository) AddScopeCanonicalPathAutoManaged(
+	ctx context.Context,
+	lensID, canonicalPath string,
+	maxCount int,
+) (AutoScopeAddResult, error) {
+	counterKey := models.ScopeAutoAddCounterKey(canonicalPath)
+	if counterKey == "" {
+		return r.addScopeCanonicalPathUnbounded(ctx, lensID, canonicalPath)
+	}
+	return r.addScopeCanonicalPathAutoLimitedWithCounter(ctx, lensID, canonicalPath, maxCount, counterKey)
+}
+
+func (r *LensesRepository) addScopeCanonicalPathUnbounded(
+	ctx context.Context,
+	lensID, canonicalPath string,
+) (AutoScopeAddResult, error) {
 	out := AutoScopeAddResult{}
-	if lensID == "" || strings.TrimSpace(canonicalPath) == "" || maxCount <= 0 {
+	if lensID == "" || strings.TrimSpace(canonicalPath) == "" {
 		return out, ErrInvalidDocument
 	}
 	if r == nil || r.db == nil {
@@ -268,7 +311,57 @@ func (r *LensesRepository) AddScopeCanonicalPathAutoLimited(
 			return err
 		}
 
-		currentCount := deferredScopeAddCount(lens.ViewConfig)
+		for _, s := range lens.Scope {
+			if strings.TrimSpace(s) == canonicalPath {
+				out.AlreadyInScope = true
+				return nil
+			}
+		}
+
+		if err := tx.Set(docRef, map[string]interface{}{
+			"scope":     firestore.ArrayUnion(canonicalPath),
+			"updatedAt": time.Now().UTC(),
+		}, firestore.MergeAll); err != nil {
+			return err
+		}
+		out.Added = true
+		return nil
+	})
+	return out, err
+}
+
+func (r *LensesRepository) addScopeCanonicalPathAutoLimitedWithCounter(
+	ctx context.Context,
+	lensID, canonicalPath string,
+	maxCount int,
+	counterKey string,
+) (AutoScopeAddResult, error) {
+	out := AutoScopeAddResult{}
+	if lensID == "" || strings.TrimSpace(canonicalPath) == "" || maxCount <= 0 || strings.TrimSpace(counterKey) == "" {
+		return out, ErrInvalidDocument
+	}
+	if r == nil || r.db == nil {
+		return out, ErrInvalidDocument
+	}
+	canonicalPath = strings.TrimSpace(canonicalPath)
+	counterKey = strings.TrimSpace(counterKey)
+	docRef := r.col.Doc(lensID)
+
+	err := r.db.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		snap, err := tx.Get(docRef)
+		if err != nil {
+			return err
+		}
+		if !snap.Exists() {
+			return ErrLensNotFound
+		}
+
+		var lens models.Lens
+		if err := snap.DataTo(&lens); err != nil {
+			return err
+		}
+
+		currentCount := scopeAutoAddCount(lens.ViewConfig, counterKey)
 		out.DeferredScopeAddCount = currentCount
 		for _, s := range lens.Scope {
 			if strings.TrimSpace(s) == canonicalPath {
@@ -284,7 +377,7 @@ func (r *LensesRepository) AddScopeCanonicalPathAutoLimited(
 		if lens.ViewConfig == nil {
 			lens.ViewConfig = map[string]interface{}{}
 		}
-		lens.ViewConfig["deferredScopeAddCount"] = currentCount + 1
+		lens.ViewConfig[counterKey] = currentCount + 1
 		if err := tx.Set(docRef, map[string]interface{}{
 			"scope":      firestore.ArrayUnion(canonicalPath),
 			"viewConfig": lens.ViewConfig,
@@ -316,10 +409,18 @@ func (r *LensesRepository) IncrementDeferredScopeAddCount(ctx context.Context, l
 }
 
 func deferredScopeAddCount(viewConfig map[string]interface{}) int {
+	return scopeAutoAddCount(viewConfig, models.ScopeAutoAddEntityCounterKey)
+}
+
+func scopeAutoAddCount(viewConfig map[string]interface{}, key string) int {
 	if viewConfig == nil {
 		return 0
 	}
-	raw, ok := viewConfig["deferredScopeAddCount"]
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return 0
+	}
+	raw, ok := viewConfig[key]
 	if !ok {
 		return 0
 	}

@@ -124,15 +124,16 @@ type scStepPromptContextKey struct{}
 
 // SupplyChainStepPromptContext carries steering context for recursive step prompts.
 type SupplyChainStepPromptContext struct {
-	OriginalQuery  string
-	DomainPath     string
-	Geo            string
-	Product        string
-	Sector         string
-	GeoFilters     []string
-	ProductFilters []string
-	Direction      string
-	Depth          int
+	OriginalQuery       string
+	DomainPath          string
+	Geo                 string
+	Product             string
+	Sector              string
+	GeoFilters          []string
+	ProductFilters      []string
+	WorkingProductScope []string
+	Direction           string
+	Depth               int
 }
 
 // WithSupplyChainStepPromptContext attaches step context to ctx.
@@ -168,6 +169,9 @@ func supplyChainPromptContextBlock(ctx context.Context) string {
 	if len(c.ProductFilters) > 0 {
 		lines = append(lines, "- productFilters: "+strings.Join(c.ProductFilters, ", "))
 	}
+	if len(c.WorkingProductScope) > 0 {
+		lines = append(lines, "- workingProductScope: "+strings.Join(c.WorkingProductScope, ", "))
+	}
 	if s := strings.TrimSpace(c.Direction); s != "" {
 		lines = append(lines, "- direction: "+s)
 	}
@@ -177,7 +181,7 @@ func supplyChainPromptContextBlock(ctx context.Context) string {
 	if len(lines) == 0 {
 		return ""
 	}
-	return "INTENT CONTEXT (strict):\n" + strings.Join(lines, "\n") + "\n- Keep results tightly aligned with this context.\n- Prefer in-geo entities/facilities first; include cross-border actors only with direct, explicit evidence.\n- If geoFilters are present, prioritize nodes in those countries/regions and only keep external actors that directly connect to filtered nodes.\n- If productFilters are present, prioritize only matching products/materials/spare parts and their direct transformations.\n- Do NOT emit placeholder orgs like /org/na/na.\n"
+	return "INTENT CONTEXT (strict):\n" + strings.Join(lines, "\n") + "\n- Keep results tightly aligned with this context.\n- Prefer in-geo entities/facilities first; include cross-border actors only with direct, explicit evidence.\n- If geoFilters are present, prioritize nodes in those countries/regions and only keep external actors that directly connect to filtered nodes.\n- If productFilters are present, prioritize only matching products/materials/spare parts and their direct transformations.\n- If workingProductScope is present, treat it as the canonical product set already in scope: extend it only when evidence is strong, and do not duplicate aliases or equivalent product entries.\n- Do NOT emit placeholder orgs like /org/na/na.\n"
 }
 
 // ---------------------------------------------------------------------------

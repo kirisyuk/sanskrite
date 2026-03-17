@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Etigram Platform</title>
+    <meta
+      id="meta-description"
+      name="description"
+      content="Etigram Platform turns signals, dependencies, graphs, and scenario paths into decision-ready working context."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Sora:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body data-page="platform">
+    <div class="site-shell">
+      <header class="subpage-hero subpage-hero--platform" id="top">
+        <nav class="topbar" aria-label="Primary" data-i18n-aria-label="nav.aria.primary">
+          <a class="brand" href="./index.html">Etigram</a>
+          <div class="topbar-controls">
+            <div
+              class="language-switcher"
+              aria-label="Language selector"
+              data-i18n-aria-label="nav.aria.languageSelector"
+            >
+              <button
+                class="language-button is-active"
+                type="button"
+                data-lang="en"
+                aria-label="Switch to English"
+                data-i18n-aria-label="nav.aria.switchEnglish"
+              >
+                EN
+              </button>
+              <button
+                class="language-button"
+                type="button"
+                data-lang="ru"
+                aria-label="Переключить на русский"
+                data-i18n-aria-label="nav.aria.switchRussian"
+              >
+                RU
+              </button>
+              <button
+                class="language-button"
+                type="button"
+                data-lang="kz"
+                aria-label="Қазақ тіліне ауыстыру"
+                data-i18n-aria-label="nav.aria.switchKazakh"
+              >
+                KZ
+              </button>
+            </div>
+            <button
+              class="nav-toggle"
+              type="button"
+              aria-expanded="false"
+              aria-controls="site-nav"
+              data-i18n="nav.menu"
+            >
+              Menu
+            </button>
+            <div class="nav-links" id="site-nav">
+              <a href="./index.html#about" data-i18n="nav.about">About</a>
+              <a href="./index.html#services" data-i18n="nav.services">Services</a>
+              <a href="./platform.html" data-i18n="nav.platform">Platform</a>
+              <a href="./index.html#contact" data-i18n="nav.contact">Contact</a>
+            </div>
+          </div>
+        </nav>
+
+        <div class="subpage-hero__inner">
+          <div class="subpage-hero__copy">
+            <p class="eyebrow" data-i18n="platformPage.eyebrow">
+              Working platform
+            </p>
+            <h1 data-i18n="platformPage.title">
+              Signals, relations, and scenarios in one working surface.
+            </h1>
+            <p class="hero-text" data-i18n="platformPage.text">
+              The Etigram Platform is designed for teams that need mapped exposure,
+              relational context, and scenario-ready structures rather than
+              fragmented updates.
+            </p>
+            <div class="subpage-hero__actions">
+              <a
+                class="hero-link"
+                href="https://etigram.pro"
+                data-i18n="platformPage.ctaPrimary"
+              >
+                Open Platform
+              </a>
+              <a
+                class="hero-link hero-link--secondary"
+                href="./index.html#services"
+                data-i18n="platformPage.ctaSecondary"
+              >
+                Back to Services
+              </a>
+            </div>
+          </div>
+
+          <div class="subpage-hero__visual platform-visual platform-visual--map">
+            <img
+              src="./images/platform.png"
+              alt="Platform surface overview"
+              data-i18n-alt="platformPage.hero.alt"
+              class="platform-visual-image"
+            />
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <section class="platform-story section reveal">
+          <div class="services-heading">
+            <div class="section-label" data-i18n="platformPage.story.label">Platform Cases</div>
+            <h2 data-i18n="platformPage.story.title">Four working views of operational exposure.</h2>
+          </div>
+
+          <div class="platform-story__list">
+            <article class="platform-case reveal-card">
+              <div class="platform-case__copy">
+                <p class="service-index">01</p>
+                <h3 data-i18n="platformPage.caseMap.title">Connected Maps</h3>
+                <p class="service-subtitle" data-i18n="platformPage.caseMap.subtitle">
+                  Routes, nodes, concentration
+                </p>
+                <p data-i18n="platformPage.caseMap.text">
+                  Map facilities, transit routes, suppliers, and operational
+                  concentration in one connected geographic layer.
+                </p>
+              </div>
+              <div class="platform-case__visual">
+                <img
+                  src="./images/map-connected.png"
+                  alt="Connected map case"
+                  data-i18n-alt="platformPage.caseMap.alt"
+                  class="platform-case__image"
+                  loading="lazy"
+                />
+              </div>
+            </article>
+
+            <article class="platform-case reveal-card">
+              <div class="platform-case__copy">
+                <p class="service-index">02</p>
+                <h3 data-i18n="platformPage.caseGraph.title">Relational Graphs</h3>
+                <p class="service-subtitle" data-i18n="platformPage.caseGraph.subtitle">
+                  Entities, control, ownership, linkage
+                </p>
+                <p data-i18n="platformPage.caseGraph.text">
+                  Move from isolated entities to relationship structures:
+                  ownership, influence, dependency, and hidden operational
+                  adjacency.
+                </p>
+              </div>
+              <div class="platform-case__visual">
+                <img
+                  src="./images/graph.png"
+                  alt="Relationship graph case"
+                  data-i18n-alt="platformPage.caseGraph.alt"
+                  class="platform-case__image"
+                  loading="lazy"
+                />
+              </div>
+            </article>
+
+            <article class="platform-case reveal-card">
+              <div class="platform-case__copy">
+                <p class="service-index">03</p>
+                <h3 data-i18n="platformPage.caseScenario.title">Affected Areas</h3>
+                <p class="service-subtitle" data-i18n="platformPage.caseScenario.subtitle">
+                  Impact zones, spillovers, proximity
+                </p>
+                <p data-i18n="platformPage.caseScenario.text">
+                  Overlay disruption zones with assets, routes, and dependencies
+                  to see where exposure becomes operational.
+                </p>
+              </div>
+              <div class="platform-case__visual">
+                <img
+                  src="./images/affected-areas.png"
+                  alt="Affected areas case"
+                  data-i18n-alt="platformPage.caseScenario.alt"
+                  class="platform-case__image"
+                  loading="lazy"
+                />
+              </div>
+            </article>
+
+            <article class="platform-case reveal-card">
+              <div class="platform-case__copy">
+                <p class="service-index">04</p>
+                <h3 data-i18n="platformPage.caseDetailed.title">Industrial Detail</h3>
+                <p class="service-subtitle" data-i18n="platformPage.caseDetailed.subtitle">
+                  Industrial zones, adjacency, operating density
+                </p>
+                <p data-i18n="platformPage.caseDetailed.text">
+                  Inspect industrial clusters in more detail to understand plant
+                  adjacency, corridor dependence, and where localized disruption
+                  can propagate across nearby assets.
+                </p>
+              </div>
+              <div class="platform-case__visual">
+                <img
+                  src="./images/true-detailed.png"
+                  alt="Industrial detail case"
+                  data-i18n-alt="platformPage.caseDetailed.alt"
+                  class="platform-case__image"
+                  loading="lazy"
+                />
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="platform-summary section reveal">
+          <div class="platform-summary__panel">
+            <div class="platform-summary__copy">
+              <div class="section-label" data-i18n="platformPage.summary.label">Why it matters</div>
+              <h2 data-i18n="platformPage.summary.title">
+                The platform is not a dashboard. It is an analytical working surface.
+              </h2>
+              <p data-i18n="platformPage.summary.text">
+                It connects geography, relation structure, and scenario logic so
+                teams can move from observation to planning without context loss
+                between tools.
+              </p>
+            </div>
+            <a
+              class="platform-link"
+              href="https://etigram.pro"
+              data-i18n="platformPage.summary.cta"
+            >
+              Go to Platform
+            </a>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer section reveal" id="contact">
+        <div class="footer-brand">
+          <div class="section-label" data-i18n="footer.label">Etigram</div>
+          <p class="footer-title" data-i18n="footer.title">Decision Factory</p>
+          <p class="footer-note" data-i18n="footer.note">
+            Strategic intelligence, monitoring, and scenario services.
+          </p>
+        </div>
+
+        <div class="footer-columns">
+          <div>
+            <h4 data-i18n="footer.location.title">Location</h4>
+            <p data-i18n="footer.location.line1">Dostyk, 16</p>
+            <p data-i18n="footer.location.line2">Astana, Kazakhstan</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.contact.title">Contact</h4>
+            <p data-i18n="footer.contact.line1">hi@etigram.pro</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.availability.title">Availability</h4>
+            <p data-i18n="footer.availability.line1">Meetings by request</p>
+            <p data-i18n="footer.availability.line2">Additional details coming soon</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.legal.title">Legal</h4>
+            <div class="footer-links">
+              <a href="https://etigram.pro/privacy" data-i18n="footer.legal.privacy">Privacy Notice</a>
+              <a href="https://etigram.pro/terms" data-i18n="footer.legal.terms">Terms of Usage</a>
+              <a href="https://etigram.pro/technical-disclosure" data-i18n="footer.legal.technical">Technical Disclosure</a>
+            </div>
+          </div>
+        </div>
+      </footer>
+    </div>
+
+    <script src="./script.js"></script>
+  </body>
+</html>

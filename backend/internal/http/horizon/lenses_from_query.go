@@ -310,7 +310,8 @@ type createLensFromQueryRequest struct {
 	// Mode controls whether to immediately start scouting/researching after lens creation.
 	// - just_open: create lens + scope, but suppress initial scouting job creation (best-effort)
 	// - research_first: create lens and start jobs (domains first, then anchors)
-	Mode              string                   `json:"mode,omitempty"`   // just_open|research_first
+	Mode              string                   `json:"mode,omitempty"` // just_open|research_first
+	ScoutingMode      string                   `json:"scoutingMode,omitempty"`
 	IntentOverride    *agents.IntentResolution `json:"intent,omitempty"` // Optional: edited intent from preflight UI
 	MaxRecursionDepth *int                     `json:"maxRecursionDepth,omitempty"`
 	RequestedMetrics  []string                 `json:"requestedMetrics,omitempty"`
@@ -689,8 +690,13 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 	if len(req.RequestedMetrics) > 0 {
 		viewConfig["requestedMetrics"] = req.RequestedMetrics
 	}
-	if specs := taxonomy.NormalizeSpecialties(req.Specialties); len(specs) > 0 {
+	mergedSpecialties := append([]string(nil), req.Specialties...)
+	mergedSpecialties = append(mergedSpecialties, specialtiesForScopeScoutMode(req.ScoutingMode)...)
+	if specs := taxonomy.NormalizeSpecialties(mergedSpecialties); len(specs) > 0 {
 		viewConfig["specialties"] = specs
+	}
+	if scoutingMode := normalizeScopeScoutMode(req.ScoutingMode); scoutingMode != "" {
+		viewConfig["uiScoutingMode"] = scoutingMode
 	}
 
 	lens := &models.Lens{

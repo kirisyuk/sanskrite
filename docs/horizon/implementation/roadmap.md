@@ -1913,18 +1913,37 @@ Acceptance:
         - TRANSFORMS_INTO relations для продуктов
         - CONSUMES relations (inputs/materials)
         - Capacity/volume metrics на edges
-    - **Связь с equity specialty**:
-      - Если запрошена specialty=equity → усиленные требования к ownership structure
-      - Требовать полную цепочку: ultimate parent → intermediate holdings → operating companies
-    - **Чеклист**:
-      - [ ] `backend/internal/horizon/scout/agents/critic_agent.go` → **УБРАТЬ** условие `if specialty == products_and_services` для базового PRODUCES check
-      - [ ] `critic_agent.go` → добавить логику holding vs operating (всегда, не только при specialty)
-      - [ ] `critic_agent.go` → для `products_and_services` specialty добавить **дополнительные** требования (TRANSFORMS_INTO, CONSUMES, metrics)
-      - [ ] Определить эвристику `isHoldingCompany()` (по OWNS edges, sectorPath, entityPath keywords)
-      - [ ] Для холдингов: сначала subsidiaries, потом products на subsidiaries
-      - [ ] Для операционных: сразу products/services
-      - [ ] Unit tests: проверить что IT/Manufacturing/Retail компании без products → missingInfo
-  - **MissingInfo → Research Plan (и защита от бесконечных циклов)**
+	    - **Связь с equity specialty**:
+	      - Если запрошена specialty=equity → усиленные требования к ownership structure
+	      - Требовать полную цепочку: ultimate parent → intermediate holdings → operating companies
+	    - **Next step: first-class `governance` specialty в backend**:
+	      - Текущее UI/runtime поведение уже может явно выбирать governance scouting через `domainModes` и `uiScoutingMode`, но backend specialty всё ещё выражается legacy-комбинацией `management + equity`.
+	      - Это переходное решение. Целевая модель: отдельная first-class specialty `governance`, которая используется в prompt selection, critic requirements, runtime routing и analytics без маппинга в legacy specialties.
+	      - Scope изменения шире, чем просто UI-mode:
+	        - taxonomy / specialty registry
+	        - scout / critic / research prompt semantics
+	        - runtime routing и derived specialties
+	        - preflight / job state / telemetry / analytics
+	        - backward compatibility для старых jobs и API-клиентов
+	      - Переход должен быть staged:
+	        1. Ввести `governance` в backend taxonomy/registry как first-class specialty.
+	        2. Перенести governance-specific prompt/runtime semantics с `management + equity` на `governance`.
+	        3. Оставить compatibility mapping `management + equity -> governance` на переходный период.
+	        4. Удалить legacy-derived mapping после миграции runtime, API и аналитики.
+	    - **Чеклист**:
+	      - [ ] `backend/internal/horizon/scout/agents/critic_agent.go` → **УБРАТЬ** условие `if specialty == products_and_services` для базового PRODUCES check
+	      - [ ] `critic_agent.go` → добавить логику holding vs operating (всегда, не только при specialty)
+	      - [ ] `critic_agent.go` → для `products_and_services` specialty добавить **дополнительные** требования (TRANSFORMS_INTO, CONSUMES, metrics)
+	      - [ ] Определить эвристику `isHoldingCompany()` (по OWNS edges, sectorPath, entityPath keywords)
+	      - [ ] Для холдингов: сначала subsidiaries, потом products на subsidiaries
+	      - [ ] Для операционных: сразу products/services
+	      - [ ] Unit tests: проверить что IT/Manufacturing/Retail компании без products → missingInfo
+	      - [ ] `backend/internal/horizon/scout/taxonomy.go` / specialty registry → ввести first-class specialty `governance`
+	      - [ ] `backend/internal/horizon/scout/agents/*` → переключить governance prompts/requirements с `management + equity` на `governance`
+	      - [ ] `backend/internal/http/horizon/*` → использовать `governance` как canonical backend specialty, сохранив временный compatibility mapping
+	      - [ ] Runtime/telemetry → перестать считать governance через derived pair `management + equity`
+	      - [ ] Migration/regression tests: старые jobs с `management + equity` продолжают отрабатываться как governance
+	  - **MissingInfo → Research Plan (и защита от бесконечных циклов)**
     - **Идея**: `missingInfo[]` — это не просто список вопросов, а **план дозапроса/доскаутинга** (grounded research) для конкретной сущности.
     - **Как работает сейчас (код)**:
       - Critic возвращает `missingInfo[]` (вопросы/поисковые запросы).

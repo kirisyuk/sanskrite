@@ -337,10 +337,10 @@ type HorizonFragmentsRepository struct {
 // NewHorizonFragmentsRepository создает новый репозиторий
 func NewHorizonFragmentsRepository(db *firestore.Client) *HorizonFragmentsRepository {
 	return &HorizonFragmentsRepository{
-		col:          db.Collection("horizon_fragments"),
+		col:           db.Collection("horizon_fragments"),
 		pathClaimsCol: db.Collection("horizon_fragment_path_claims"),
-		db:           db,
-		versionsRepo: NewHorizonFragmentVersionsRepository(db),
+		db:            db,
+		versionsRepo:  NewHorizonFragmentVersionsRepository(db),
 	}
 }
 
@@ -2199,6 +2199,40 @@ func (r *HorizonFragmentsRepository) ListByTypeAndTenant(
 	return fragments, nil
 }
 
+// ListByType lists fragments by type across all tenants.
+// Used sparingly by merge-retarget passes when a global fragment merge must update
+// tenant-scoped overlays such as SUPPLY_LINK fragments.
+func (r *HorizonFragmentsRepository) ListByType(
+	ctx context.Context,
+	fragType models.FragmentType,
+	limit int,
+) ([]*models.HorizonFragment, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 5000 {
+		limit = 5000
+	}
+
+	q := r.col.Where("type", "==", string(fragType)).Limit(limit)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+
+	fragments := make([]*models.HorizonFragment, 0, len(docs))
+	for _, doc := range docs {
+		var fragment models.HorizonFragment
+		if err := doc.DataTo(&fragment); err != nil {
+			continue
+		}
+		assignLoadedFragmentID(&fragment, doc)
+		fragments = append(fragments, &fragment)
+	}
+
+	return fragments, nil
+}
+
 // FindSupplyLinksByCustomer finds SupplyLink fragments where customerRef matches.
 // This is a client-side filter because Firestore doesn't efficiently support queries on optional fields.
 func (r *HorizonFragmentsRepository) FindSupplyLinksByCustomer(
@@ -2218,41 +2252,148 @@ func (r *HorizonFragmentsRepository) FindSupplyLinksByCustomer(
 	if queryTenant == "" {
 		queryTenant = "global"
 	}
-
-	// Get all SupplyLinks for the tenant
-	// Use a wider fetch window because customer matching can include alias refs (org↔fac/deposit).
-	allSupplyLinks, err := r.ListByTypeAndTenant(ctx, queryTenant, models.FragmentTypeSupplyLink, limit*4)
-	if err != nil {
-		return nil, err
-	}
-	customerCandidates := r.buildSupplyLinkCustomerRefAliases(ctx, customerRef, queryTenant)
+	customerCandidates := r.buildSupplyLinkActorRefAliases(ctx, customerRef, queryTenant)
 	if len(customerCandidates) == 0 {
 		customerCandidates = map[string]struct{}{customerRef: {}}
 	}
+	return r.findSupplyLinksByRefFields(ctx, queryTenant, []string{"customerRef", "customerFacilityRef"}, customerCandidates, limit)
+}
 
-	// Filter client-side where CustomerRef matches
-	var matches []*models.HorizonFragment
-	for _, link := range allSupplyLinks {
-		matched := false
-		if link.CustomerRef != nil {
-			if _, ok := customerCandidates[normalizeSupplyLinkRef(*link.CustomerRef)]; ok {
-				matched = true
-			}
+// FindSupplyLinksBySupplier finds SupplyLink fragments where supplierRef matches.
+func (r *HorizonFragmentsRepository) FindSupplyLinksBySupplier(
+	ctx context.Context,
+	supplierRef string,
+	tenantID string,
+	limit int,
+) ([]*models.HorizonFragment, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	supplierRef = normalizeSupplyLinkRef(supplierRef)
+	if supplierRef == "" {
+		return nil, nil
+	}
+	queryTenant := strings.TrimSpace(tenantID)
+	if queryTenant == "" {
+		queryTenant = "global"
+	}
+	supplierCandidates := r.buildSupplyLinkActorRefAliases(ctx, supplierRef, queryTenant)
+	if len(supplierCandidates) == 0 {
+		supplierCandidates = map[string]struct{}{supplierRef: {}}
+	}
+	return r.findSupplyLinksByRefFields(ctx, queryTenant, []string{"supplierRef", "supplierFacilityRef"}, supplierCandidates, limit)
+}
+
+// FindSupplyLinksByTransportVia finds SupplyLink fragments where transportViaRefs contains path.
+func (r *HorizonFragmentsRepository) FindSupplyLinksByTransportVia(
+	ctx context.Context,
+	transportRef string,
+	tenantID string,
+	limit int,
+) ([]*models.HorizonFragment, error) {
+	if r == nil {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	transportRef = normalizeSupplyLinkRef(transportRef)
+	if transportRef == "" {
+		return nil, nil
+	}
+	queryTenant := strings.TrimSpace(tenantID)
+	if queryTenant == "" {
+		queryTenant = "global"
+	}
+	docs, err := r.col.
+		Where("tenantId", "==", queryTenant).
+		Where("type", "==", string(models.FragmentTypeSupplyLink)).
+		Where("transportViaRefs", "array-contains", transportRef).
+		Limit(limit).
+		Documents(ctx).
+		GetAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*models.HorizonFragment, 0, len(docs))
+	for _, doc := range docs {
+		var fragment models.HorizonFragment
+		if err := doc.DataTo(&fragment); err != nil {
+			continue
 		}
-		if !matched && link.CustomerFacilityRef != nil {
-			if _, ok := customerCandidates[normalizeSupplyLinkRef(*link.CustomerFacilityRef)]; ok {
-				matched = true
-			}
+		if strings.TrimSpace(fragment.ID) == "" {
+			fragment.ID = doc.Ref.ID
 		}
-		if matched {
-			matches = append(matches, link)
-			if len(matches) >= limit {
-				break
+		out = append(out, &fragment)
+	}
+	return out, nil
+}
+
+func (r *HorizonFragmentsRepository) findSupplyLinksByRefFields(
+	ctx context.Context,
+	tenantID string,
+	fields []string,
+	candidates map[string]struct{},
+	limit int,
+) ([]*models.HorizonFragment, error) {
+	if r == nil {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	if tenantID == "" || len(fields) == 0 || len(candidates) == 0 {
+		return nil, nil
+	}
+	refs := make([]string, 0, len(candidates))
+	for ref := range candidates {
+		if ref = normalizeSupplyLinkRef(ref); ref != "" {
+			refs = append(refs, ref)
+		}
+	}
+	sort.Strings(refs)
+	seen := make(map[string]struct{}, limit)
+	capHint := len(refs) * len(fields)
+	if capHint > limit {
+		capHint = limit
+	}
+	out := make([]*models.HorizonFragment, 0, capHint)
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		for _, ref := range refs {
+			docs, err := r.col.
+				Where("tenantId", "==", tenantID).
+				Where("type", "==", string(models.FragmentTypeSupplyLink)).
+				Where(field, "==", ref).
+				Limit(limit).
+				Documents(ctx).
+				GetAll()
+			if err != nil {
+				return nil, err
+			}
+			for _, doc := range docs {
+				if len(out) >= limit {
+					return out, nil
+				}
+				var fragment models.HorizonFragment
+				if err := doc.DataTo(&fragment); err != nil {
+					continue
+				}
+				if strings.TrimSpace(fragment.ID) == "" {
+					fragment.ID = doc.Ref.ID
+				}
+				if _, ok := seen[fragment.ID]; ok {
+					continue
+				}
+				seen[fragment.ID] = struct{}{}
+				out = append(out, &fragment)
 			}
 		}
 	}
-
-	return matches, nil
+	return out, nil
 }
 
 func normalizeSupplyLinkRef(path string) string {
@@ -2264,6 +2405,14 @@ func (r *HorizonFragmentsRepository) buildSupplyLinkCustomerRefAliases(
 	customerRef string,
 	tenantID string,
 ) map[string]struct{} {
+	return r.buildSupplyLinkActorRefAliases(ctx, customerRef, tenantID)
+}
+
+func (r *HorizonFragmentsRepository) buildSupplyLinkActorRefAliases(
+	ctx context.Context,
+	actorRef string,
+	tenantID string,
+) map[string]struct{} {
 	aliases := make(map[string]struct{}, 8)
 	add := func(path string) {
 		cp := normalizeSupplyLinkRef(path)
@@ -2271,12 +2420,12 @@ func (r *HorizonFragmentsRepository) buildSupplyLinkCustomerRefAliases(
 			aliases[cp] = struct{}{}
 		}
 	}
-	add(customerRef)
+	add(actorRef)
 	if r == nil || r.edgesRepo == nil {
 		return aliases
 	}
 
-	cp := normalizeSupplyLinkRef(customerRef)
+	cp := normalizeSupplyLinkRef(actorRef)
 	if cp == "" {
 		return aliases
 	}

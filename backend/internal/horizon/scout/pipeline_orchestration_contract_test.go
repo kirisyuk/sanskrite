@@ -32,6 +32,16 @@ func newSupplyChainDomainPipelineContractTestJob(id string) *models.ScoutingJob 
 	return job
 }
 
+func newGovernanceDomainPipelineContractTestJob(id string) *models.ScoutingJob {
+	job := newPipelineContractTestJob(id)
+	job.TargetCanonicalPath = "/domain/v1/control-map/subject/aramco"
+	job.State["domainModes"] = []interface{}{taxonomy.DomainModeGovernance}
+	job.State["domains"] = []map[string]interface{}{
+		{"contractType": "control-map"},
+	}
+	return job
+}
+
 func TestPipelineStageIdempotencyAndStickyFailure(t *testing.T) {
 	ctx := context.Background()
 	engine := &ScoutEngine{}
@@ -205,6 +215,58 @@ func TestRequiredStagesForPipelinePassJob_MixedDomainJobSkipsFastAssemblyBarrier
 			t.Fatalf("mixed-domain job must not require %q", stageEntitySupplyChainFastAssembly)
 		}
 	}
+}
+
+func TestFinalizePipelineRun_GovernanceDomainRequiresUsableOutput(t *testing.T) {
+	ctx := context.Background()
+	engine := &ScoutEngine{}
+	setupJob := func(id string) *models.ScoutingJob {
+		job := newGovernanceDomainPipelineContractTestJob(id)
+		for _, stage := range []string{
+			stagePlanning,
+			stageExtraction,
+			stageCritic,
+			stageResearch,
+			stageRevalidation,
+			stageMaterialize,
+			stagePolicyAudit,
+		} {
+			engine.pipelineStageComplete(ctx, job, pipelineRuntimeDomainBase, stage, true, stage+"_done")
+		}
+		return job
+	}
+
+	t.Run("missing artifact and directive yields partial outcome", func(t *testing.T) {
+		job := setupJob("job-finalize-governance-missing-output")
+		if err := engine.finalizePipelineRun(ctx, job, pipelineFinalizeInput{
+			Pipeline: pipelineRuntimeDomainBase,
+			Hint:     "finalize_governance_missing_output",
+		}); err != nil {
+			t.Fatalf("finalize should not error: %v", err)
+		}
+		if got := parseStateString(job.State["terminalOutcome"]); got != TerminalOutcomePartialCompleted {
+			t.Fatalf("terminalOutcome=%q, want %q when governance output missing", got, TerminalOutcomePartialCompleted)
+		}
+	})
+
+	t.Run("usable directive allows completed outcome", func(t *testing.T) {
+		job := setupJob("job-finalize-governance-with-directive")
+		job.State["governanceViewDirective"] = map[string]interface{}{
+			"contractType":    "control-map",
+			"focusNodePathsN": 2,
+			"filterRelTypesN": 5,
+			"usable":          true,
+		}
+		if err := engine.finalizePipelineRun(ctx, job, pipelineFinalizeInput{
+			Pipeline: pipelineRuntimeDomainBase,
+			Hint:     "finalize_governance_with_output",
+		}); err != nil {
+			t.Fatalf("finalize should not error: %v", err)
+		}
+		if got := parseStateString(job.State["terminalOutcome"]); got != TerminalOutcomeCompleted {
+			t.Fatalf("terminalOutcome=%q, want %q when governance directive exists", got, TerminalOutcomeCompleted)
+		}
+	})
 }
 
 func TestTransitionWithoutWorkflowUpdatesLocalJobSnapshot(t *testing.T) {

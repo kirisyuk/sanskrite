@@ -325,6 +325,7 @@ function collectArtifactTerminalPathRefs(artifacts: MaterializedArtifact[]): str
 }
 
 export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
+  const overlayTopOffset = scope?.lensId ? 58 : 10;
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const { map, isReady, styleEpoch, theme } = useMapInstance(containerRef);
   const isDark = theme === 'dark';
@@ -2374,6 +2375,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
             objects={stackSelection.objects}
             isDark={isDark}
             paletteTheme={theme}
+            topOffset={overlayTopOffset}
             priorityObjectId={searchHighlightedObjectId}
             onClose={clearStackSelection}
             onShowFan={stackSelection.canSpiderfy ? stackSelection.spiderfy : undefined}
@@ -2902,6 +2904,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
             object={selectedObject}
             isDark={isDark}
             paletteTheme={theme}
+            topOffset={overlayTopOffset}
             edgesLoading={edgesLoading}
             edgesCount={edgesCount}
             visibleEdgesCount={visibleEdgesCount}

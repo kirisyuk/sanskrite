@@ -1918,7 +1918,7 @@ CANONICAL PATH RULES (targetCanonicalPath MUST follow):
 %s
 
 Use ONLY these relation types (canonical): %s.
-Do NOT use RELATED_TO, AFFILIATED_WITH, KEY_PERSON, HAS_KEY_PERSON, or other non-governance types.
+Do NOT use RELATED_TO, KEY_PERSON, HAS_KEY_PERSON, or other non-governance types. Community-specific canonical types are allowed when they materially explain control, lineage, mobilization, or informal governance.
 
 DIRECTION RULES (CRITICAL):
 - Use ROLE-FIRST direction for OWNS/SUBSIDIARY_OF/INVESTS_IN/ASSURES/CONTROLS (ORG<->ORG): source is semantic owner/investor/assurer/controller, not automatically CURRENT FRAGMENT.
@@ -1939,9 +1939,10 @@ WHAT TO FIND (prioritize completeness):
 3. Full board: BOARD_MEMBER_OF (PERSON→ORG). All board members for significant organizations.
 4. Management: MANAGES (manager→managed). CEO, director, operator — formal authority over org/subsidiary. Full C-suite: EMPLOYED_BY (PERSON→ORG) for employment. FOUNDED (PERSON→ORG) for founders.
 5. Investment: INVESTS_IN (investor→target). Include metrics (investment_amount, round, valuation) when known.
-6. Government hierarchy: ADMINISTERS (GOV/ORG with /gov/ path → subordinate GOV or PROGRAM). Full hierarchy to leaf agencies.
-7. External assurance in governance: ASSURES for auditors and certifiers linked to this org/facility/program (do not emit AUDITED_BY legacy inverse).
-8. Return entities (parents, subsidiaries, board members, investors, gov bodies, auditors/certifiers, programs) that should be explored further (child jobs will recurse).
+6. Community influence layer: HAS_SUBGROUP for dynasty/tribe/family branches, MEMBER_OF for people whose lineage materially affects authority, AFFILIATED_WITH for community/person → formal organization ties, OPERATES_VIA for community/org → media channel when the channel is used for mobilization, coordination, or control signaling.
+7. Government hierarchy: ADMINISTERS (GOV/ORG with /gov/ path → subordinate GOV or PROGRAM). Full hierarchy to leaf agencies.
+8. External assurance in governance: ASSURES for auditors and certifiers linked to this org/facility/program (do not emit AUDITED_BY legacy inverse).
+9. Return entities (parents, subsidiaries, board members, investors, gov bodies, auditors/certifiers, communities, media channels, programs) that should be explored further (child jobs will recurse).
 
 INTEGRATION_TYPE qualifier (for OWNS): When the ownership fits a known pattern, add qualifiers.integration_type:
 - "vertical": subsidiary is part of vertically integrated supply chain (e.g., BYD owning battery/cell producers)
@@ -2073,6 +2074,7 @@ STRICT DIRECTION/TYPING RULES (MANDATORY):
 WHAT TO FIND (prioritize completeness):
 1. Market participation: PARTICIPATES_IN (entity→market). Source: ORGANIZATION, FACILITY, COMMUNITY, PROGRAM, or PERSON. metrics.market_share (0..1 or percent). marketRole: participant, leader, dominant.
 1b. Traded products: TRADED_IN (product→market). Use when the market explicitly trades, benchmarks, or price-discovers the product.
+1c. Community influence and mobilization: use HAS_SUBGROUP, MEMBER_OF, AFFILIATED_WITH, and OPERATES_VIA when community structure, affiliation networks, or communication channels materially shape market access, informal distribution, boycotts, demand coordination, or dominant-player behavior.
 2. Full market hierarchy: HAS_MARKET_SEGMENT (MARKET→MARKET, parent→segment). Child path = parent path + one segment. Build 3 levels when possible (e.g. market→sub-market→segment).
 3. Top 10 players: For MARKET entities, find top 10 player entities (orgs, facilities, communities, programs) by market share and emit PARTICIPATES_IN as player -> market using explicit sourceCanonicalPath.
 4. Full sizing: fragment.state: /metric/market/tam_usd, /metric/market/cagr_percent, /metric/market/hhi, /metric/market/cr4_percent. Only if you find reliable data; do NOT fabricate.
@@ -2129,6 +2131,7 @@ WHAT TO FIND (downstream impact is required):
 2. Mechanisms: MECHANISM /mechanism/{category}/{slug} — instruments (Entity List, Banking License, Export Control). MUST have APPLIES_TO to concrete entities (what/who it affects). USES_MECHANISM (who uses it). Do NOT create mechanisms without a clear affected target.
 3. Control/access: CONTROLS_ACCESS — decision/org blocks/enables access to WHAT (target = org/facility/product/market). IMPOSES_CONDITION — who imposes rules/costs on WHOM.
 4. Gatekeepers: GATEKEEPS_DECISION — who has authority over the decision.
+5. Community gatekeeping and mobilization: use HAS_SUBGROUP, MEMBER_OF, AFFILIATED_WITH, and OPERATES_VIA when tribe/dynasty/family/community structure or its media channels materially shape access decisions, sanctions evasion, distribution of permissions, or pressure campaigns.
 
 CURRENT FRAGMENT:
 %s
@@ -2193,6 +2196,7 @@ WHAT TO FIND:
 2. Regulator/program authority chains (who sets/administers policy; what is in scope).
 3. Exposure links to affected segments (markets, organizations, communities, geographies).
 4. Influence channels suitable for propagation modeling (formal and indirect channels).
+4a. Community-mediated transmission: use HAS_SUBGROUP, MEMBER_OF, AFFILIATED_WITH, and OPERATES_VIA when informal networks, clan/dynasty structures, or controlled channels materially change policy adoption, compliance, lobbying, evasion, or pass-through.
 5. QUANTITATIVE QUALIFIERS (CRITICAL for scenario modeling — provide best estimates even when uncertain):
    - For REGULATES/CONTROLS_ACCESS/IMPOSES_CONDITION edges: qualifiers.rate_from, qualifiers.rate_to, qualifiers.effective_date when the instrument has numeric parameters.
    - For exposure edges (to markets/orgs/communities): qualifiers.pass_through_estimate (0.0-1.0: share of cost passed downstream),
@@ -2264,6 +2268,7 @@ WHAT TO FIND:
 1. All significant actors in this ecosystem: organizations, government bodies, communities, persons, facilities.
 2. Their roles and positions: producers, regulators, investors, competitors, partners, gatekeepers.
 3. Mutual relationships: supply links, ownership/control, partnerships, competition, regulatory oversight.
+3a. Community structure and mobilization: capture HAS_SUBGROUP, MEMBER_OF, AFFILIATED_WITH, and OPERATES_VIA when they explain how informal groups coordinate, influence, or connect to formal actors and channels.
 4. Power dynamics: who influences whom, dependencies, bottlenecks, critical nodes.
 5. Competitive positions: market shares, dominance, niche roles.
 6. Geographic scope: where actors operate and interact.
@@ -2376,10 +2381,14 @@ Return ONLY valid JSON. No markdown.`, intent, strings.TrimSpace(query.Reason), 
 // EnrichGovernanceFull performs holistic governance/ownership research in a single LLM call.
 // Builds ownership trees, control layers, and board/people structures.
 func (a *ResearchAgent) EnrichGovernanceFull(ctx context.Context, query GovernanceQuery) ([]DiscoveredRelation, error) {
+	return a.EnrichGovernanceFullForContract(ctx, query, "")
+}
+
+func (a *ResearchAgent) EnrichGovernanceFullForContract(ctx context.Context, query GovernanceQuery, contractType string) ([]DiscoveredRelation, error) {
 	if a == nil || a.executor == nil {
 		return nil, fmt.Errorf("research agent executor not configured")
 	}
-	prompt := a.buildGovernanceFullPrompt(query)
+	prompt := a.buildGovernanceFullPromptForContract(query, contractType)
 	out, err := a.runResearchPrompt(ctx, prompt, nil)
 	if err != nil || out == nil {
 		return nil, err
@@ -2389,6 +2398,10 @@ func (a *ResearchAgent) EnrichGovernanceFull(ctx context.Context, query Governan
 }
 
 func (a *ResearchAgent) buildGovernanceFullPrompt(query GovernanceQuery) string {
+	return a.buildGovernanceFullPromptForContract(query, "")
+}
+
+func (a *ResearchAgent) buildGovernanceFullPromptForContract(query GovernanceQuery, contractType string) string {
 	target := strings.TrimSpace(query.Target)
 	targetType := strings.TrimSpace(query.TargetType)
 	if targetType == "" {
@@ -2408,6 +2421,11 @@ func (a *ResearchAgent) buildGovernanceFullPrompt(query GovernanceQuery) string 
 	if geoFilter != "" {
 		intent += ", geoFilter=[" + geoFilter + "]"
 	}
+	contractType = strings.TrimSpace(strings.ToLower(contractType))
+	governanceMode := "ownership"
+	if contractType == "control-map" {
+		governanceMode = "control"
+	}
 
 	boardBlock := ""
 	if query.IncludeBoard {
@@ -2416,6 +2434,17 @@ BOARD/PEOPLE LAYER:
 - PERSON --BOARD_MEMBER_OF--> ORGANIZATION
 - PERSON --EMPLOYED_BY--> ORGANIZATION (for C-suite / key executives)
 - Include key persons: CEO, CFO, board chairman, major shareholders (individuals).`
+	}
+	subtypeBlock := `
+OWNERSHIP MODE (default):
+- Prioritize UBO, holding chains, direct vs indirect beneficial stakes, intermediate holding vehicles.
+- When ownership and control diverge, preserve both: OWNS for equity stake, CONTROLS for non-equity or governance control.`
+	if governanceMode == "control" {
+		subtypeBlock = `
+CONTROL MODE (control-map):
+- Prioritize operational, strategic, and administrative control structures over pure cap table mapping.
+- Capture control mechanisms explicitly: board majority, golden share, veto rights, ministerial appointment, operating mandate, state administration.
+- Use CONTROLS / MANAGES / ADMINISTERS as primary edges; keep OWNS / INVESTS_IN only as explanatory context when they clarify why control exists.`
 	}
 
 	return fmt.Sprintf(`You are a research agent. Build a FULL governance/ownership structure as a HOLISTIC graph.
@@ -2442,6 +2471,9 @@ BUILD THESE LAYERS:
 4. COMMUNITY / LINEAGE LAYER:
    - COMMUNITY (dynasty/tribe/family network) --HAS_SUBGROUP--> COMMUNITY
    - PERSON --MEMBER_OF--> COMMUNITY when lineage materially affects ownership/control
+   - COMMUNITY or PERSON --AFFILIATED_WITH--> ORGANIZATION when the tie explains beneficial ownership, patronage, or command structure
+   - COMMUNITY or ORGANIZATION --OPERATES_VIA--> MEDIA_CHANNEL when the channel is a control, mobilization, or signaling instrument
+%s
 %s
 
 QUALIFIERS on OWNS edges: qualifiers.share (ownership percentage 0.0-1.0), qualifiers.share_type (direct|indirect|beneficial).
@@ -2457,7 +2489,7 @@ Return a JSON object:
 For each relation, set sourceCanonicalPath/sourceType/sourceName explicitly.
 Chain depth target: %d levels from target entity.
 
-Return ONLY valid JSON. No markdown.`, intent, strings.TrimSpace(query.Reason), relationTypesPromptForDomainMode(taxonomy.DomainModeGovernance), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeGovernance), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), direction, boardBlock, depth)
+Return ONLY valid JSON. No markdown.`, intent, strings.TrimSpace(query.Reason), relationTypesPromptForDomainMode(taxonomy.DomainModeGovernance), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeGovernance), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), direction, boardBlock, subtypeBlock, depth)
 }
 
 // EnrichEcosystemFull performs holistic ecosystem mapping in a single LLM call.

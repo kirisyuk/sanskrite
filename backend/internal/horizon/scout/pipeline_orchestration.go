@@ -987,6 +987,11 @@ func (e *ScoutEngine) finalizePipelineRun(ctx context.Context, job *models.Scout
 		}
 		recoverable = true
 	}
+	if pipelineName == pipelineRuntimeDomainBase && governanceCompletionRequired(job) && !hasUsableGovernanceOutput(job) && outcome == TerminalOutcomeCompleted {
+		outcome = TerminalOutcomePartialCompleted
+		recoverable = true
+		reasonMap["governance_completion"] = "missing_usable_artifact_or_directive"
+	}
 	reasonMap["reason_code"] = reasonCode
 	reasonMap["stop_kind"] = stopKind
 	reasonMap["recoverable"] = recoverable
@@ -1080,4 +1085,105 @@ func (e *ScoutEngine) finalizePipelineRun(ctx context.Context, job *models.Scout
 	}
 
 	return nil
+}
+
+func governanceCompletionRequired(job *models.ScoutingJob) bool {
+	if job == nil {
+		return false
+	}
+	for _, contractType := range governanceContractTypesFromJob(job) {
+		switch contractType {
+		case "ownership-structure", "control-map":
+			return true
+		}
+	}
+	return false
+}
+
+func hasUsableGovernanceOutput(job *models.ScoutingJob) bool {
+	return hasUsableGovernanceArtifact(job) || hasUsableGovernanceViewDirective(job)
+}
+
+func hasUsableGovernanceArtifact(job *models.ScoutingJob) bool {
+	if job == nil || job.State == nil {
+		return false
+	}
+	raw, ok := job.State["governanceArtifact"].(map[string]interface{})
+	if !ok || raw == nil {
+		return false
+	}
+	return strings.TrimSpace(parseStateString(raw["canonicalKey"])) != ""
+}
+
+func hasUsableGovernanceViewDirective(job *models.ScoutingJob) bool {
+	if job == nil || job.State == nil {
+		return false
+	}
+	raw, ok := job.State["governanceViewDirective"].(map[string]interface{})
+	if !ok || raw == nil {
+		return false
+	}
+	if parseStateBool(raw["usable"], false) {
+		return true
+	}
+	return parseStateInt(raw["focusNodePathsN"], 0) > 0 && parseStateInt(raw["filterRelTypesN"], 0) > 0
+}
+
+func governanceContractTypesFromJob(job *models.ScoutingJob) []string {
+	if job == nil {
+		return nil
+	}
+	out := make([]string, 0, 4)
+	appendContractType := func(raw interface{}) {
+		ct := strings.TrimSpace(strings.ToLower(parseStateString(raw)))
+		if ct != "" {
+			out = append(out, ct)
+		}
+	}
+	if job.State == nil {
+		return dedupeGovernanceContractTypes(out)
+	}
+	if domains, ok := job.State["domains"].([]map[string]interface{}); ok {
+		for _, domain := range domains {
+			appendContractType(domain["contractType"])
+		}
+	}
+	if domains, ok := job.State["domains"].([]interface{}); ok {
+		for _, raw := range domains {
+			if domain, ok := raw.(map[string]interface{}); ok {
+				appendContractType(domain["contractType"])
+			}
+		}
+	}
+	if contract, ok := job.State["domainContract"].(map[string]interface{}); ok {
+		appendContractType(contract["contractType"])
+	}
+	appendContractType(job.State["contractType"])
+	if target := strings.TrimSpace(job.TargetCanonicalPath); strings.HasPrefix(target, "/domain/v1/") {
+		parts := strings.Split(strings.Trim(target, "/"), "/")
+		if len(parts) >= 3 {
+			out = append(out, strings.TrimSpace(strings.ToLower(parts[2])))
+		}
+	}
+	return dedupeGovernanceContractTypes(out)
+}
+
+func dedupeGovernanceContractTypes(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(strings.ToLower(value))
+		switch value {
+		case "ownership-structure", "control-map":
+			if _, ok := seen[value]; ok {
+				continue
+			}
+			seen[value] = struct{}{}
+			out = append(out, value)
+		}
+	}
+	return out
 }

@@ -67,10 +67,14 @@ type Service struct {
 	watchdogRepo                 *horizonrepo.WatchdogConfigsRepository
 	scopeAgentConfigsRepo        *horizonrepo.ScopeAgentConfigsRepository
 	scopeAgentRunsRepo           *horizonrepo.ScopeAgentRunsRepository
+	proposalsRepo                *horizonrepo.AgentProposalsRepository
+	decisionsRepo                *horizonrepo.ArbitrationDecisionsRepository
 	watchBriefsRepo              *horizonrepo.WatchBriefsRepository
 	watchFeedEntriesRepo         *horizonrepo.WatchFeedEntriesRepository
 	lensesRepo                   *horizonrepo.LensesRepository
 	lensArtifactsRepo            *horizonrepo.LensArtifactsRepository
+	materializedArtifactsRepo    *horizonrepo.MaterializedArtifactsRepository
+	macroAgentPoliciesRepo       *horizonrepo.MacroAgentPoliciesRepository
 	fragmentsRepo                *horizonrepo.HorizonFragmentsRepository
 	edgesRepo                    *horizonrepo.DependencyEdgesRepository
 	riskJobsRepo                 *horizonrepo.RiskJobsRepository
@@ -156,11 +160,43 @@ func (s *Service) WithScopeAgentRunsRepository(repo *horizonrepo.ScopeAgentRunsR
 	return s
 }
 
+func (s *Service) WithMaterializedArtifactsRepository(repo *horizonrepo.MaterializedArtifactsRepository) *Service {
+	if s == nil {
+		return s
+	}
+	s.materializedArtifactsRepo = repo
+	return s
+}
+
+func (s *Service) WithMacroAgentPoliciesRepository(repo *horizonrepo.MacroAgentPoliciesRepository) *Service {
+	if s == nil {
+		return s
+	}
+	s.macroAgentPoliciesRepo = repo
+	return s
+}
+
 func (s *Service) WithWatchBriefsRepository(repo *horizonrepo.WatchBriefsRepository) *Service {
 	if s == nil {
 		return s
 	}
 	s.watchBriefsRepo = repo
+	return s
+}
+
+func (s *Service) WithAgentProposalsRepository(repo *horizonrepo.AgentProposalsRepository) *Service {
+	if s == nil {
+		return s
+	}
+	s.proposalsRepo = repo
+	return s
+}
+
+func (s *Service) WithArbitrationDecisionsRepository(repo *horizonrepo.ArbitrationDecisionsRepository) *Service {
+	if s == nil {
+		return s
+	}
+	s.decisionsRepo = repo
 	return s
 }
 
@@ -304,6 +340,7 @@ func (s *Service) SyncWatchSubjectsForLens(ctx context.Context, lensID string) e
 	if err != nil {
 		return err
 	}
+	lensPolicy := s.activeLensUniversePolicy(ctx, strings.TrimSpace(firstNonEmpty(lens.TenantID, "global")), strings.TrimSpace(lens.ID))
 	subject := &horizonmodels.WatchSubject{
 		TenantID:            strings.TrimSpace(firstNonEmpty(lens.TenantID, "global")),
 		ProjectID:           strings.TrimSpace(lens.ProjectID),
@@ -324,10 +361,14 @@ func (s *Service) SyncWatchSubjectsForLens(ctx context.Context, lensID string) e
 			"lensName":  strings.TrimSpace(lens.Name),
 		},
 	}
+	applyLensUniversePolicyToSubject(subject, lensPolicy)
 	if err := s.subjectsRepo.Upsert(ctx, subject); err != nil {
 		return err
 	}
-	return s.ensureDerivedScopeAgentConfig(ctx, subject)
+	if err := s.ensureDerivedScopeAgentConfig(ctx, subject); err != nil {
+		return err
+	}
+	return s.syncDerivedPathOverlaySubjects(ctx, lens, subject, lensPolicy)
 }
 
 func (s *Service) SyncSubjectsForFragment(ctx context.Context, fragmentID string) error {
@@ -409,6 +450,43 @@ func (s *Service) EmitAndProcessTrigger(ctx context.Context, trigger *horizonmod
 		return stored, created, nil
 	}
 	return stored, created, s.ProcessTrigger(ctx, stored)
+}
+
+func (s *Service) EmitAndProcessTriggerForSubject(
+	ctx context.Context,
+	tenantID, subjectID string,
+	triggerType horizonmodels.WatchTriggerType,
+	reason string,
+	signalStrength, confidence float64,
+	metadata map[string]any,
+) (*horizonmodels.WatchTrigger, bool, error) {
+	if s == nil || s.subjectsRepo == nil || strings.TrimSpace(subjectID) == "" {
+		return nil, false, horizonrepo.ErrInvalidDocument
+	}
+	subject, err := s.subjectsRepo.Get(ctx, strings.TrimSpace(subjectID))
+	if err != nil {
+		return nil, false, err
+	}
+	if subject == nil {
+		return nil, false, horizonrepo.ErrInvalidDocument
+	}
+	if tid := strings.TrimSpace(firstNonEmpty(tenantID, "global")); tid != "" && strings.TrimSpace(firstNonEmpty(subject.TenantID, "global")) != tid {
+		return nil, false, horizonrepo.ErrInvalidDocument
+	}
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	trigger := &horizonmodels.WatchTrigger{
+		SubjectID:      strings.TrimSpace(subject.ID),
+		TriggerType:    triggerType,
+		TriggerReason:  strings.TrimSpace(reason),
+		CanonicalPaths: compactUnique(append([]string{strings.TrimSpace(subject.AnchorCanonicalPath)}, parseStringSlice(metadata["canonicalPaths"])...)),
+		SignalStrength: signalStrength,
+		Confidence:     confidence,
+		MatchMode:      horizonmodels.WatchTriggerMatchDerived,
+		Metadata:       metadata,
+	}
+	return s.EmitAndProcessTrigger(ctx, trigger)
 }
 
 func (s *Service) EmitRecommendationApprovedByCanonicalPath(ctx context.Context, tenantID, canonicalPath, reason string, metadata map[string]any) error {
@@ -665,6 +743,36 @@ func (s *Service) syncTenant(ctx context.Context, tenantID string, includeGlobal
 				}
 				report.LensesSynced++
 				subjectSet[horizonrepo.BuildWatchSubjectID(tid, lens.ProjectID, lens.ID, "", "", horizonmodels.WatchSubjectKindLensUniverse, lensCanonicalPath(lens.ID))] = struct{}{}
+			}
+		}
+		if s.macroAgentPoliciesRepo != nil {
+			policies, err := s.macroAgentPoliciesRepo.ListActiveByTenant(ctx, tid, limit)
+			if err != nil {
+				return err
+			}
+			for _, policy := range policies {
+				if policy == nil {
+					continue
+				}
+				if dryRun {
+					report.SubjectsCreated++
+					report.ScopeAgentConfigsEnsured++
+					continue
+				}
+				subjects, compileErr := s.CompileMacroAgentPolicy(ctx, policy)
+				if compileErr != nil {
+					report.Conflicts++
+					return compileErr
+				}
+				if len(subjects) > 0 {
+					report.ScopeAgentConfigsEnsured += len(subjects)
+					report.SubjectsRefreshed += len(subjects)
+					for _, subject := range subjects {
+						if subject != nil && strings.TrimSpace(subject.ID) != "" {
+							subjectSet[subject.ID] = struct{}{}
+						}
+					}
+				}
 			}
 		}
 		if s.targetsRepo != nil {
@@ -1250,6 +1358,14 @@ func (s *Service) ensureDerivedScopeAgentConfig(ctx context.Context, subject *ho
 		return nil
 	}
 	existing, _ := s.scopeAgentConfigsRepo.ListActiveBySubjectID(ctx, strings.TrimSpace(subject.TenantID), strings.TrimSpace(subject.ID))
+	focusMode := focusModeForSubject(subject)
+	metadata := map[string]any{
+		"watchSubjectId":       strings.TrimSpace(subject.ID),
+		"subjectKind":          string(subject.SubjectKind),
+		"macroAgentClass":      asString(subject.Metadata["macroAgentClass"]),
+		"lensId":               strings.TrimSpace(firstNonEmpty(subject.LensID, asString(subject.Metadata["lensId"]))),
+		"artifactCanonicalKey": strings.TrimSpace(asString(subject.Metadata["artifactCanonicalKey"])),
+	}
 	cfg := &horizonmodels.ScopeAgentConfig{
 		TenantID:           strings.TrimSpace(subject.TenantID),
 		SubjectID:          strings.TrimSpace(subject.ID),
@@ -1262,7 +1378,7 @@ func (s *Service) ensureDerivedScopeAgentConfig(ctx context.Context, subject *ho
 		Priority:           normalizedPriority(subject.Priority),
 		Status:             string(horizonmodels.ScopeAgentStatusRunning),
 		ExpansionPolicy: map[string]any{
-			"focusMode":        "watch_subject",
+			"focusMode":        focusMode,
 			"watchUniverse":    true,
 			"universeSizeHint": len(subject.UniversePaths),
 		},
@@ -1271,17 +1387,15 @@ func (s *Service) ensureDerivedScopeAgentConfig(ctx context.Context, subject *ho
 			"batchWindowSeconds": 180,
 		},
 		LLMPolicy: horizonmodels.LLMPolicy{
-			PrimaryModel:         "gemini-3.1-flash-lite-preview",
+			PrimaryModel:         "gemini-3-flash-preview",
 			EscalationModel:      "gemini-3-pro-preview",
-			PreferredVertexModel: "gemini-3.1-flash-lite-preview",
+			PreferredVertexModel: "vertex-gemini-3-flash-preview",
+			FallbackModels:       []string{"gemini-3.1-flash-lite-preview", "gemini-2.5-flash", "gemini-2.5-pro"},
 			UseSearchGrounding:   true,
 			MaxBatchSize:         8,
 			BatchWindowSeconds:   180,
 		},
-		Metadata: map[string]any{
-			"watchSubjectId": strings.TrimSpace(subject.ID),
-			"subjectKind":    string(subject.SubjectKind),
-		},
+		Metadata: metadata,
 	}
 	if err := s.scopeAgentConfigsRepo.Upsert(ctx, cfg); err != nil {
 		return err
@@ -1507,6 +1621,8 @@ func scopeTypeForSubject(kind horizonmodels.WatchSubjectKind) string {
 	switch kind {
 	case horizonmodels.WatchSubjectKindLensUniverse:
 		return "lens_universe"
+	case horizonmodels.WatchSubjectKindPathOverlay:
+		return "path_overlay"
 	case horizonmodels.WatchSubjectKindFragment:
 		return "fragment"
 	case horizonmodels.WatchSubjectKindAffectedZone:
@@ -1515,6 +1631,29 @@ func scopeTypeForSubject(kind horizonmodels.WatchSubjectKind) string {
 		return "market"
 	case horizonmodels.WatchSubjectKindGeography:
 		return "geography"
+	default:
+		return "watch_subject"
+	}
+}
+
+func focusModeForSubject(subject *horizonmodels.WatchSubject) string {
+	if subject == nil {
+		return "watch_subject"
+	}
+	switch subject.SubjectKind {
+	case horizonmodels.WatchSubjectKindLensUniverse:
+		return "lens_universe"
+	case horizonmodels.WatchSubjectKindPathOverlay:
+		return "artifact_overlay"
+	case horizonmodels.WatchSubjectKindMarket:
+		return "macro_market"
+	case horizonmodels.WatchSubjectKindGeography:
+		return "macro_country"
+	case horizonmodels.WatchSubjectKindExplicitTarget:
+		if strings.EqualFold(asString(subject.Metadata["macroAgentClass"]), string(horizonmodels.MacroAgentClassEntity)) {
+			return "macro_entity"
+		}
+		return "watch_subject"
 	default:
 		return "watch_subject"
 	}
@@ -1690,6 +1829,10 @@ func normalizeAnySlice(v any) []string {
 		}
 		return nil
 	}
+}
+
+func parseStringSlice(v any) []string {
+	return normalizeAnySlice(v)
 }
 
 func semanticWatermarkFromTrigger(trigger *horizonmodels.WatchTrigger) string {

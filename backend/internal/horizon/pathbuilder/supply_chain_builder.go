@@ -145,6 +145,8 @@ type PathSegment struct {
 	CustomerFacilityRef *string
 	// TransportViaRefs: ordered facility paths product passes through (ports, terminals, pipelines, warehouses)
 	TransportViaRefs []string
+	// VesselType is optional maritime transport evidence carried with the segment.
+	VesselType string
 	// SegmentClass distinguishes real external product flow from internal support/self-loop junk.
 	SegmentClass string
 	// Confidence for this segment (0..1)
@@ -523,6 +525,7 @@ func (b *SupplyChainPathBuilder) findSupplyLinksByCustomerAndTenant(
 			SupplierFacilityRef:     supplierFacilityRef,
 			CustomerFacilityRef:     customerFacilityRef,
 			TransportViaRefs:        link.TransportViaRefs,
+			VesselType:              extractVesselTypeQualifier(link.Qualifiers),
 			SegmentClass:            segmentClass,
 			Confidence:              confidence,
 			TenantID:                link.TenantID,
@@ -1211,6 +1214,7 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 			SupplyLinkID:            strings.TrimSpace(segment.SupplyLinkID),
 			SupplyLinkTenantID:      strings.TrimSpace(firstNonEmpty(segment.SupplyLinkTenantID, segment.TenantID)),
 			TransportViaRefs:        append([]string(nil), segment.TransportViaRefs...),
+			VesselType:              strings.TrimSpace(segment.VesselType),
 			Mode:                    binding.Mode,
 			GeoRefs:                 append([]string(nil), binding.GeoRefs...),
 			FlowRefs:                append([]string(nil), binding.FlowRefs...),
@@ -1413,6 +1417,9 @@ func buildPathEdgeQualifiers(segment PathSegment, leg models.SupplyChainPathLeg,
 		qualifiers["transportViaCount"] = len(segment.TransportViaRefs)
 		qualifiers[models.QualifierTransportVia] = append([]string(nil), segment.TransportViaRefs...)
 	}
+	if strings.TrimSpace(leg.VesselType) != "" {
+		qualifiers["vesselType"] = strings.TrimSpace(leg.VesselType)
+	}
 	if strings.TrimSpace(segment.ProductRef) != "" {
 		qualifiers["productRef"] = strings.TrimSpace(segment.ProductRef)
 	}
@@ -1427,6 +1434,20 @@ func buildPathEdgeQualifiers(segment PathSegment, leg models.SupplyChainPathLeg,
 
 func intPtr(v int) *int {
 	return &v
+}
+
+func extractVesselTypeQualifier(qualifiers map[string]interface{}) string {
+	if len(qualifiers) == 0 {
+		return ""
+	}
+	for _, key := range []string{"vesselType", "vessel_type"} {
+		if raw, ok := qualifiers[key].(string); ok {
+			if value := strings.TrimSpace(raw); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
 }
 
 func firstNonEmpty(values ...string) string {

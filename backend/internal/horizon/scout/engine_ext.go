@@ -923,12 +923,13 @@ func (e *ScoutEngine) buildLensGraphContext(ctx context.Context, lens *models.Le
 		maxEdges = 120
 	}
 
-	// 1) Direct scope nodes (exclude /domain/ — domain is config, not a graph node).
+	// 1) Direct fragment-backed scope nodes.
+	// Non-fragment scope entries (/query, /domain, /artifact) are handled elsewhere.
 	directPaths := make([]string, 0, len(lens.Scope))
 	seenPath := map[string]struct{}{}
 	for _, p := range lens.Scope {
 		p = strings.TrimSpace(p)
-		if p == "" || strings.HasPrefix(p, "/domain/") {
+		if p == "" || models.IsNonFragmentScopeEntry(p) {
 			continue
 		}
 		if err := taxonomy.ValidateCanonicalPath(p); err != nil {
@@ -3050,6 +3051,14 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 				e.logLine(ctx, job, "info", fmt.Sprintf("> supply chain plan capped (%s): %d", RuntimeContractExecutionPlan, len(queries)))
 			}
 		}
+		if job != nil {
+			seedProducts := make([]string, 0, 8)
+			for _, query := range queries {
+				seedProducts = append(seedProducts, query.ProductFilter...)
+			}
+			scope := ensureWorkingProductScopeSeeded(job, dedupStrings(seedProducts), "query_seed", domainCP)
+			persistWorkingProductScope(ctx, e, job, scope)
+		}
 		// Expand product/market anchors to org/fac list: first query should go FROM organizations or facilities.
 		queriesBefore := len(queries)
 		queries = e.expandSupplyChainQueriesWithOrgs(ctx, job, queries)
@@ -3166,7 +3175,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	useGovPlanMode := !usePlanMode && !useRegPlanMode && agents.IsGovernanceContractType(contractType) && govPlan != nil && len(govPlan.Queries) > 0
 	if useGovPlanMode && e.researchAgent != nil && !domainFastPathApplied {
 		for _, q := range govPlan.Queries {
-			rels, err := e.researchAgent.EnrichGovernanceFull(ctx, q)
+			rels, err := e.researchAgent.EnrichGovernanceFullForContract(ctx, q, contractType)
 			if err != nil {
 				e.logLine(ctx, job, "warn", fmt.Sprintf("> governance plan query failed (target=%s): %v", strings.TrimSpace(q.Target), err))
 				continue
@@ -3905,7 +3914,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 						strings.TrimSpace(job.TenantID),
 						strings.TrimSpace(job.ProjectID),
 						strings.TrimSpace(job.LensID),
-						rootPath, dm, title,
+						rootPath, dm, contractType, title,
 					)
 					if matErr != nil {
 						fmt.Printf("[DomainArtifact] materialization failed: jobId=%s mode=%s root=%s err=%v\n",
@@ -3916,6 +3925,9 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 						if lensID := strings.TrimSpace(job.LensID); lensID != "" && artifact.CanonicalKey != "" {
 							scopePath := fmt.Sprintf("/artifact/%s", artifact.CanonicalKey)
 							e.bestEffortDeferredScopeAdd(ctx, lensID, scopePath)
+						}
+						if dm == taxonomy.DomainModeGovernance {
+							recordGovernanceArtifactState(job, artifact, contractType)
 						}
 					}
 				}
@@ -5748,12 +5760,7 @@ func (e *ScoutEngine) processRelationsInternal(
 			}
 		}
 
-		// Best-effort: add key entities to lens scope so they appear in frontend list.
-		if targetFragment != nil && lensIDForCascade != "" && strings.TrimSpace(targetPath) != "" {
-			if isScopeEligibleEntityType(targetType) {
-				e.bestEffortDeferredScopeAdd(ctx, lensIDForCascade, strings.TrimSpace(targetPath))
-			}
-		}
+		relationAllowedForScopeAdd := true
 
 		// Pre-materialization supply-chain type guard: reject out-of-contract types before persistence.
 		// Catches any relation type that slipped through phase-A filter (e.g. from canonicalization, strategic overlay).
@@ -5767,10 +5774,18 @@ func (e *ScoutEngine) processRelationsInternal(
 			}
 			allowed := IsAllowedSupplyChainRuntimeRelation(srcPath, targetPath, models.DependencyType(normalizedRelationType))
 			if !allowed {
+				relationAllowedForScopeAdd = false
 				e.logLine(ctx, job, "info", fmt.Sprintf("> pre_materialization_supply_chain_guard: dropped type=%q source=%q target=%q reason=out_of_contract",
 					normalizedRelationType, srcPath, targetPath))
 				continue
 			}
+		}
+
+		// Best-effort: add key entities to lens scope so they appear in frontend list.
+		// This must happen after contract gates, otherwise out-of-contract relations can leak nodes into scope.
+		if targetFragment != nil && lensIDForCascade != "" &&
+			shouldAutoAddRelationTargetToScope(targetPath, targetType, relationAllowedForScopeAdd) {
+			e.bestEffortDeferredScopeAdd(ctx, lensIDForCascade, strings.TrimSpace(targetPath))
 		}
 
 		// 3. Materialize edge (centralized path).
@@ -8339,6 +8354,10 @@ func (e *ScoutEngine) processSupplyChains(
 			"contract": RuntimeContractContextScope,
 		}
 	}
+	if job != nil {
+		scope := mergeWorkingProductScopeFromChains(job, chains, "chain_discovery")
+		persistWorkingProductScope(ctx, e, job, scope)
+	}
 
 	parser := NewSupplyChainParser()
 	sourceCanonicalPath := ""
@@ -9133,7 +9152,7 @@ func (e *ScoutEngine) processSupplyChains(
 		applyBestEffortEdgeEnrichment(edge, srcPath, dstPath)
 
 		// Final allowlist gate: never persist out-of-contract types for supply-chain edges.
-		allowed := IsAllowedSupplyChainRuntimeRelation(srcPath, dstPath, edgeType)
+		allowed := IsAllowedSupplyChainPersistRelation(srcPath, dstPath, edgeType)
 		if !allowed {
 			e.logLine(ctx, job, "info", fmt.Sprintf("> persist_final_gate_supply_chain: skipped type=%q source=%q target=%q reason=out_of_contract",
 				edgeType, srcPath, dstPath))
@@ -9431,6 +9450,7 @@ func (e *ScoutEngine) processSupplyChains(
 				supplyLinksSkipped++
 			} else {
 				supplyLinksCreated++
+				persistSupplyChainScopeArtifacts(ctx, e, job, existing, seg)
 				materializedSegmentRefs[segmentLookupKey] = supplyLinkMaterializationRef{
 					ID:            strings.TrimSpace(existing.ID),
 					CanonicalPath: strings.TrimSpace(existing.CanonicalPath),
@@ -9444,6 +9464,8 @@ func (e *ScoutEngine) processSupplyChains(
 			supplyLinksSkipped++
 		} else {
 			supplyLinksCreated++
+			slFrag.ID = strings.TrimSpace(createdID)
+			persistSupplyChainScopeArtifacts(ctx, e, job, slFrag, seg)
 			materializedSegmentRefs[segmentLookupKey] = supplyLinkMaterializationRef{
 				ID:            strings.TrimSpace(createdID),
 				CanonicalPath: strings.TrimSpace(slFrag.CanonicalPath),
@@ -10667,11 +10689,20 @@ func collectSupplyChainFiltersByDirection(queries []agents.SupplyChainQuery, def
 }
 
 func buildSupplyChainStepPromptContext(job *models.ScoutingJob, depth int, direction string, productFilters []string, geoFilters []string) agents.SupplyChainStepPromptContext {
+	domainPath := ""
+	if job != nil {
+		domainPath = strings.TrimSpace(job.TargetCanonicalPath)
+	}
+	scope := ensureWorkingProductScopeSeeded(job, productFilters, "query_seed", domainPath)
 	out := agents.SupplyChainStepPromptContext{
-		Depth:          depth,
-		Direction:      strings.TrimSpace(direction),
-		ProductFilters: dedupStrings(append([]string(nil), productFilters...)),
-		GeoFilters:     dedupStrings(append([]string(nil), geoFilters...)),
+		Depth:               depth,
+		Direction:           strings.TrimSpace(direction),
+		ProductFilters:      dedupStrings(append([]string(nil), productFilters...)),
+		GeoFilters:          dedupStrings(append([]string(nil), geoFilters...)),
+		WorkingProductScope: nil,
+	}
+	if scope != nil {
+		out.WorkingProductScope = dedupStrings(scope.CanonicalProductRefs())
 	}
 	if job == nil {
 		return out

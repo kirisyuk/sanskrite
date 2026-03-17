@@ -10,5 +10,16 @@ Checking for npm/bin/npm-cli install at /Users/kirisyuk/.cache/firebase/tools/li
 Checking for npm/bin/npm-cli install at /Users/kirisyuk/.cache/firebase/tools/node_modules/npm/bin/npm-cli
 Checking for npm/bin/npm-cli install at /snapshot/firepit/node_modules/npm/bin/npm-cli
 Found npm/bin/npm-cli install.
-ShellJSInternalError: EPERM: operation not permitted, chmod '/Users/kirisyuk/.cache/firebase/runtime/shell'
-Error: EPERM: operation not permitted, open '/Users/kirisyuk/.cache/firebase/runtime/shell'
+Runtime binaries created.
+/usr/local/bin/firebase
+/usr/local/bin/firebase,/snapshot/firepit/firepit.js,hosting:channel:list,--site,etigram,--project,etigram
+Checking for npm/bin/npm-cli install at /Users/kirisyuk/.cache/firebase/tools/lib/node_modules/npm/bin/npm-cli
+Checking for npm/bin/npm-cli install at /Users/kirisyuk/.cache/firebase/tools/node_modules/npm/bin/npm-cli
+Checking for npm/bin/npm-cli install at /snapshot/firepit/node_modules/npm/bin/npm-cli
+Found npm/bin/npm-cli install.
+Checking for npm/bin/npm-cli install at /Users/kirisyuk/.cache/firebase/tools/lib/node_modules/npm/bin/npm-cli
+Checking for npm/bin/npm-cli install at /Users/kirisyuk/.cache/firebase/tools/node_modules/npm/bin/npm-cli
+Checking for npm/bin/npm-cli install at /snapshot/firepit/node_modules/npm/bin/npm-cli
+Found npm/bin/npm-cli install.
+ShellJSInternalError: ENOENT: no such file or directory, unlink '/Users/kirisyuk/.cache/firebase/runtime/npm'
+ShellJSInternalError: ENOENT: no such file or directory, chmod '/Users/kirisyuk/.cache/firebase/runtime/shell.js'

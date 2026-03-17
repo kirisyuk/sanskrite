@@ -126,20 +126,24 @@ func parseStringSlice(v interface{}) []string {
 	}
 }
 
-// addDeferredScopePathIfUnderLimit adds canonicalPath to lens scope if under maxCount (for deferred/cache-hit paths).
+// addDeferredScopePathIfUnderLimit adds a deferred or cache-hit scope entry using the
+// managed scope policy: domains are always allowed, artifacts have their own budget,
+// and fragment-backed entries use the entity auto-add budget.
 func addDeferredScopePathIfUnderLimit(ctx context.Context, lensesRepo *repo.LensesRepository, lens *models.Lens, lensID, canonicalPath string, maxCount int) {
 	if lensesRepo == nil || lens == nil || lensID == "" || strings.TrimSpace(canonicalPath) == "" || maxCount <= 0 {
 		return
 	}
 	canonicalPath = strings.TrimSpace(canonicalPath)
-	res, err := lensesRepo.AddScopeCanonicalPathAutoLimited(ctx, lensID, canonicalPath, maxCount)
+	res, err := lensesRepo.AddScopeCanonicalPathAutoManaged(ctx, lensID, canonicalPath, maxCount)
 	if err != nil {
 		return
 	}
 	if lens.ViewConfig == nil {
 		lens.ViewConfig = map[string]interface{}{}
 	}
-	lens.ViewConfig["deferredScopeAddCount"] = res.DeferredScopeAddCount
+	if counterKey := models.ScopeAutoAddCounterKey(canonicalPath); counterKey != "" {
+		lens.ViewConfig[counterKey] = res.DeferredScopeAddCount
+	}
 	if (res.Added || res.AlreadyInScope) && !scopeContainsPath(lens.Scope, canonicalPath) {
 		lens.Scope = append(lens.Scope, canonicalPath)
 	}
@@ -154,29 +158,42 @@ func scopeContainsPath(scope []string, canonicalPath string) bool {
 	return false
 }
 
-func preserveDeferredScopeAddCount(lens, oldLens *models.Lens) {
+func preserveScopeAutoAddCounter(lens, oldLens *models.Lens, key string) {
 	if lens == nil || oldLens == nil {
 		return
 	}
-	oldCount, oldOK := deferredScopeAddCountFromViewConfig(oldLens.ViewConfig)
+	oldCount, oldOK := scopeAutoAddCountFromViewConfig(oldLens.ViewConfig, key)
 	if !oldOK {
 		return
 	}
-	newCount, newOK := deferredScopeAddCountFromViewConfig(lens.ViewConfig)
+	newCount, newOK := scopeAutoAddCountFromViewConfig(lens.ViewConfig, key)
 	if newOK && newCount >= oldCount {
 		return
 	}
 	if lens.ViewConfig == nil {
 		lens.ViewConfig = map[string]interface{}{}
 	}
-	lens.ViewConfig["deferredScopeAddCount"] = oldCount
+	lens.ViewConfig[key] = oldCount
+}
+
+func preserveScopeAutoAddCounters(lens, oldLens *models.Lens) {
+	preserveScopeAutoAddCounter(lens, oldLens, models.ScopeAutoAddEntityCounterKey)
+	preserveScopeAutoAddCounter(lens, oldLens, models.ScopeAutoAddArtifactCounterKey)
 }
 
 func deferredScopeAddCountFromViewConfig(viewConfig map[string]interface{}) (int, bool) {
+	return scopeAutoAddCountFromViewConfig(viewConfig, models.ScopeAutoAddEntityCounterKey)
+}
+
+func scopeAutoAddCountFromViewConfig(viewConfig map[string]interface{}, key string) (int, bool) {
 	if viewConfig == nil {
 		return 0, false
 	}
-	raw, ok := viewConfig["deferredScopeAddCount"]
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return 0, false
+	}
+	raw, ok := viewConfig[key]
 	if !ok {
 		return 0, false
 	}
@@ -1174,7 +1191,8 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 	// Avoid duplicate work (e.g. repeated anchors / resolved queries).
 	staticPaths = dedupeCanonicalPaths(staticPaths)
 
-	// Deferred scope paths: anchors from intent, added to scope only when Scout creates fragment (max 5 per lens).
+	// Deferred scope paths: anchors from intent, added to scope when they become available.
+	// Domain paths are always allowed in scope; fragment-backed entries use the auto-add budget.
 	deferredScopePaths := []string(nil)
 	if lens.ViewConfig != nil {
 		if v, ok := lens.ViewConfig["deferredScopePaths"]; ok {
@@ -1591,7 +1609,8 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 		}
 	}
 
-	// Process deferred scope paths (anchors + domain paths): create scout jobs. Scope added when Scout creates fragment (max 5 per lens).
+	// Process deferred scope paths (anchors + domain paths): create scout jobs.
+	// Domain paths are always allowed in scope; fragment-backed entries are still budgeted.
 	// Domain paths (/domain/v1/...) create jobs so pipeline/Domain Engine can execute domain contracts.
 	for _, inputPath := range deferredScopePaths {
 		var canonicalPath string
@@ -1627,7 +1646,7 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			// Domain paths are always added to scope (they don't have fragments but must be visible).
 			addDeferredScopePathIfUnderLimit(ctx, s.lensesRepo, lens, lensID, strings.TrimSpace(canonicalPath), models.MaxAutoScopeAddsPerLens)
 		}
-		// Cache hit for deferred path: add to scope so node shows (max 5 per lens).
+		// Cache hit for deferred path: add to scope so it becomes visible under the managed policy.
 		if isCacheHit && fragment != nil {
 			addDeferredScopePathIfUnderLimit(ctx, s.lensesRepo, lens, lensID, strings.TrimSpace(canonicalPath), models.MaxAutoScopeAddsPerLens)
 			cacheHits++
@@ -1940,7 +1959,7 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 	if err != nil {
 		return fmt.Errorf("failed to get old lens: %w", err)
 	}
-	preserveDeferredScopeAddCount(lens, oldLens)
+	preserveScopeAutoAddCounters(lens, oldLens)
 
 	// Инициализируем кэш если отсутствует (нужно для канонизации).
 	if lens.ScopeFragments == nil {
@@ -2660,7 +2679,7 @@ func (s *LensService) GetLens(ctx context.Context, lensID string) (*models.Lens,
 	return s.lensesRepo.Get(ctx, lensID)
 }
 
-// AddScopePathsAutoLimited adds canonical paths to lens scope one by one, respecting maxCount (MaxAutoScopeAddsPerLens).
+// AddScopePathsAutoLimited adds scope entries one by one using the managed auto-add policy.
 // Returns the paths that were successfully added or already in scope. Stops when limit is reached.
 func (s *LensService) AddScopePathsAutoLimited(ctx context.Context, lensID string, canonicalPaths []string, maxCount int) ([]string, error) {
 	if s == nil || s.lensesRepo == nil || lensID == "" || maxCount <= 0 {
@@ -2672,7 +2691,7 @@ func (s *LensService) AddScopePathsAutoLimited(ctx context.Context, lensID strin
 		if cp == "" {
 			continue
 		}
-		res, err := s.lensesRepo.AddScopeCanonicalPathAutoLimited(ctx, lensID, cp, maxCount)
+		res, err := s.lensesRepo.AddScopeCanonicalPathAutoManaged(ctx, lensID, cp, maxCount)
 		if err != nil {
 			return added, err
 		}

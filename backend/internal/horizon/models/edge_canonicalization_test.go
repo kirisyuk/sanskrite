@@ -320,3 +320,43 @@ func TestCanonicalizeEdge_DomainToOrganizationAboutPreserved(t *testing.T) {
 		t.Fatalf("expected shouldSwap=false")
 	}
 }
+
+func TestCanonicalizeEdge_PersonAffiliatedWithCommunity_BecomesMemberOf(t *testing.T) {
+	newType, shouldSwap, changed, reason := CanonicalizeEdge(
+		DependencyTypeAffiliatedWith,
+		FragmentTypePerson,
+		FragmentTypeCommunity,
+	)
+	if !changed {
+		t.Fatalf("expected canonicalization change")
+	}
+	if newType != DependencyTypeMemberOf {
+		t.Fatalf("expected MEMBER_OF, got %s", newType)
+	}
+	if shouldSwap {
+		t.Fatalf("expected shouldSwap=false")
+	}
+	if reason == "" {
+		t.Fatalf("expected non-empty canonicalization reason")
+	}
+}
+
+func TestCanonicalizeEdge_CommunityAffiliatedWithOrganization_IsPreserved(t *testing.T) {
+	newType, shouldSwap, changed, reason := CanonicalizeEdge(
+		DependencyTypeAffiliatedWith,
+		FragmentTypeCommunity,
+		FragmentTypeOrganization,
+	)
+	if changed {
+		t.Fatalf("expected canonical AFFILIATED_WITH to be preserved")
+	}
+	if newType != DependencyTypeAffiliatedWith {
+		t.Fatalf("expected AFFILIATED_WITH, got %s", newType)
+	}
+	if shouldSwap {
+		t.Fatalf("expected shouldSwap=false")
+	}
+	if reason != "" {
+		t.Fatalf("expected empty reason for preserved canonical edge, got %q", reason)
+	}
+}

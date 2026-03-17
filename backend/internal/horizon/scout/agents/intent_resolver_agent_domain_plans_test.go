@@ -4,6 +4,7 @@ import "testing"
 
 func TestSynthesizeGovernanceExecutionPlan_CommunityDynastyAnchor(t *testing.T) {
 	d := &DomainResolution{
+		ContractType: "ownership-structure",
 		Facets: map[string][]string{
 			"geo": {"om"},
 		},
@@ -37,6 +38,42 @@ func TestSynthesizeGovernanceExecutionPlan_CommunityDynastyAnchor(t *testing.T) 
 	}
 	if got.Direction != "downward" {
 		t.Fatalf("expected downward direction for dynasty ownership map, got %q", got.Direction)
+	}
+}
+
+func TestSynthesizeGovernanceExecutionPlan_ControlMapDefaultsToBothWithBoard(t *testing.T) {
+	d := &DomainResolution{
+		ContractType: "control-map",
+		Facets: map[string][]string{
+			"geo": {"sa"},
+		},
+	}
+	anchors := []struct {
+		CanonicalPath string  `json:"canonicalPath"`
+		Type          string  `json:"type"`
+		Name          string  `json:"name,omitempty"`
+		Confidence    float64 `json:"confidence"`
+		Reason        string  `json:"reason"`
+	}{
+		{
+			CanonicalPath: "/org/sa/aramco",
+			Type:          "ORGANIZATION",
+			Name:          "Aramco",
+			Confidence:    0.95,
+			Reason:        "organization anchor",
+		},
+	}
+
+	plan := synthesizeGovernanceExecutionPlan("Saudi Aramco control map", d, anchors)
+	if plan == nil || len(plan.Queries) != 1 {
+		t.Fatalf("expected 1 governance query, got %#v", plan)
+	}
+	got := plan.Queries[0]
+	if got.Direction != "both" {
+		t.Fatalf("expected both direction for control map, got %q", got.Direction)
+	}
+	if !got.IncludeBoard {
+		t.Fatal("expected control-map query to include board layer by default")
 	}
 }
 

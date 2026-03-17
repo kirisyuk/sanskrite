@@ -592,10 +592,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 	// Final allowlist gate (supply-chain): never persist out-of-contract types.
 	// Defense-in-depth: catches any edge that slipped through pre-materialization guard or canonicalization.
 	if isSupplyChainMode {
-		allowed := IsSupplyChainEdgeType(string(edgeType))
-		if !allowed && (strings.EqualFold(string(edgeType), "OWNS") || strings.EqualFold(string(edgeType), "CONTROLS")) {
-			allowed = allowSupplyChainOwnershipOrControlByPath(resolvedSourcePath, resolvedTargetPath)
-		}
+		allowed := IsAllowedSupplyChainPersistRelation(resolvedSourcePath, resolvedTargetPath, edgeType)
 		if !allowed {
 			e.logLine(ctx, job, "info", fmt.Sprintf("> persist_final_gate: skipped type=%q source=%q target=%q reason=out_of_contract",
 				edgeType, resolvedSourcePath, resolvedTargetPath))

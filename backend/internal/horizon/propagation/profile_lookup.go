@@ -166,6 +166,13 @@ func IsChokepointFragment(fragment *horizonmodels.HorizonFragment) bool {
 	if fragment == nil {
 		return false
 	}
+	path := strings.TrimSpace(fragment.CanonicalPath)
+	switch fragment.Type {
+	case horizonmodels.FragmentTypeOrganization, horizonmodels.FragmentTypeProgram:
+		// Organizations and institutions may be strategically important, but they are not
+		// geographic chokepoints just because noisy enrichment attached port/strait-style tags.
+		return isStrategicChokepointPath(path)
+	}
 	gt := strings.ToLower(strings.TrimSpace(fragment.GeoFeatureType))
 	switch gt {
 	case "strait", "canal", "pass", "pipeline-corridor":
@@ -177,7 +184,7 @@ func IsChokepointFragment(fragment *horizonmodels.HorizonFragment) bool {
 		}
 	}
 	// Fallback: path-based detection (for fragments without geoFeatureType)
-	return isStrategicChokepointPath(fragment.CanonicalPath)
+	return isStrategicChokepointPath(path)
 }
 
 // TransitAmplify applies chokepoint transit amplification. Signal passing through a chokepoint

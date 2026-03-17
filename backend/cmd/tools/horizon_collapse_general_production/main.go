@@ -13,6 +13,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	hrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
+	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
@@ -58,10 +59,14 @@ func main() {
 	redirectsRepo := hrepo.NewCanonicalPathRedirectsRepository(client.Client())
 	materializedRepo := hrepo.NewMaterializedArtifactsRepository(client.Client())
 	lensesRepo := hrepo.NewLensesRepository(client.Client())
+	watchSubjectsRepo := hrepo.NewWatchSubjectsRepository(client.Client())
 	mergeRepo := hrepo.NewFragmentsMergeRepository(fragmentsRepo, edgesRepo, mergeAuditRepo).
 		WithRedirectsRepo(redirectsRepo).
 		WithMaterializedRepo(materializedRepo).
-		WithLensesRepo(lensesRepo)
+		WithLensesRepo(lensesRepo).
+		WithWatchSubjectsRepo(watchSubjectsRepo).
+		WithOntologyFactsRepo(corerepo.NewOntologyFactsRepository(client.Client())).
+		WithEntitiesRepo(corerepo.NewEntityRepository(client.Client()))
 
 	frags, err := fragmentsRepo.ListByCanonicalPath(ctx, strings.TrimSpace(*path))
 	if err != nil {
@@ -289,9 +294,15 @@ func ensureCollapseTargetOrg(ctx context.Context, fragmentsRepo *hrepo.HorizonFr
 		return existing, false, nil
 	}
 	for _, lookup := range []func(context.Context, string, models.FragmentType) ([]*models.HorizonFragment, error){
-		func(ctx context.Context, value string, fragType models.FragmentType) ([]*models.HorizonFragment, error) { return fragmentsRepo.FindByLabel(ctx, "en", value, fragType) },
-		func(ctx context.Context, value string, fragType models.FragmentType) ([]*models.HorizonFragment, error) { return fragmentsRepo.FindByIdentifierAndType(ctx, "legalName", value, fragType) },
-		func(ctx context.Context, value string, fragType models.FragmentType) ([]*models.HorizonFragment, error) { return fragmentsRepo.FindByIdentifierAndType(ctx, "shortName", value, fragType) },
+		func(ctx context.Context, value string, fragType models.FragmentType) ([]*models.HorizonFragment, error) {
+			return fragmentsRepo.FindByLabel(ctx, "en", value, fragType)
+		},
+		func(ctx context.Context, value string, fragType models.FragmentType) ([]*models.HorizonFragment, error) {
+			return fragmentsRepo.FindByIdentifierAndType(ctx, "legalName", value, fragType)
+		},
+		func(ctx context.Context, value string, fragType models.FragmentType) ([]*models.HorizonFragment, error) {
+			return fragmentsRepo.FindByIdentifierAndType(ctx, "shortName", value, fragType)
+		},
 	} {
 		if found, err := lookup(ctx, orgLabel, models.FragmentTypeOrganization); err == nil {
 			for _, item := range found {

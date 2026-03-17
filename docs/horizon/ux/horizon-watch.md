@@ -66,6 +66,1852 @@ Product / UX / Read-model specification (draft v1)
 - `что это затронет`;
 - `почему система так считает`.
 
+## Синхронизация с публичными service lines
+
+Публичный сайт обещает три основные сервисные линии:
+- `Geopolitical Risks Overview`
+- `Deep Monitoring`
+- `Scenario Planning`
+
+`Horizon Watch` должен быть внутренней продуктовой поверхностью, которая аккуратно сшивает эти три линии в один работающий monitoring surface.
+
+Важно:
+- это не три разных продукта;
+- это три разных режима чтения одной и той же horizon-системы;
+- данные, граф, сигналы, paths, interpretations и map layers должны переиспользоваться между ними.
+
+### Общий принцип сшивки
+
+Один и тот же underlying stack обслуживает все три линии:
+- `sources / feeds / facts`;
+- `SignalDescriptor` и риск-сигналы;
+- `Propagation`;
+- `Lens`;
+- `MaterializedArtifact`;
+- `ExposurePath`;
+- `Interpretation artifacts`;
+- карты, объекты, зоны, flows, path legs;
+- user watch targets и persistent profile preferences.
+
+Меняется не ядро системы, а:
+- framing;
+- уровень абстракции;
+- горизонт анализа;
+- тип brief;
+- тип dashboards;
+- тип drill-down.
+
+## High-grade стандарт для service lines
+
+Под `high-grade` здесь понимается не просто красивый интерфейс.
+
+Это комбинация из четырёх вещей:
+- знакомая пользователю профессиональная форма;
+- гораздо более сильная внутренняя семантика;
+- жёсткая связность с graph/path/evidence слоями;
+- ощущение, что система умеет не только показывать, но и мыслить.
+
+### Что пользователь уже узнаёт
+
+Пользователь привык к нескольким классам профессиональных поверхностей:
+- executive risk briefing;
+- monitoring terminal;
+- scenario workspace;
+- map-driven threat picture;
+- dashboard wall;
+- analyst drill-down panel.
+
+`Horizon Watch` должен брать эти знакомые формы, но собирать их не поверх рыхлых таблиц и ручных комментариев, а поверх:
+- `OntologyFact`;
+- `SignalDescriptor`;
+- `Propagation`;
+- `MaterializedArtifact`;
+- `ExposurePath`;
+- `Interpretation artifacts`;
+- `Lens` и user watch scopes.
+
+### В чём наша особенность
+
+Классические системы часто распадаются на:
+- отдельный news room;
+- отдельный dashboard tool;
+- отдельный scenario spreadsheet;
+- отдельный analyst memo.
+
+`Horizon Watch` должен делать обратное:
+- одна семантика;
+- один graph-aware evidence layer;
+- один interpretation layer;
+- три service-line режима над тем же ядром.
+
+Именно это делает продукт high-grade: пользователь видит знакомую профессиональную форму, но ощущает существенно большую связность, объяснимость и глубину.
+
+## Service Line 01: Geopolitical Risks Overview
+
+Публичная формулировка:
+- `Geopolitical Risks Overview`
+- `Executive risk framing`
+
+Продуктовый смысл внутри `Horizon Watch`:
+- давать руководителю или аналитическому лидеру быстрый стратегический обзор регионов, коридоров, policy moves и системных зависимостей;
+- не тонуть в потоке слабых сигналов;
+- показывать готовые risk briefs и interpretation-first surfaces.
+
+### Знакомая пользователю форма
+
+Этот режим должен ощущаться как сочетание:
+- executive briefing;
+- global risk terminal;
+- geopolitics dashboard;
+- region/corridor intelligence panel.
+
+Но ключевое отличие:
+- это не статичная презентация;
+- не набор headline cards;
+- а graph-aware strategic picture с path-grounded reasoning.
+
+### Как это создаётся системой
+
+1. Система выбирает macro scopes:
+- регионы;
+- страны;
+- chokepoints;
+- коридоры;
+- policy surfaces;
+- стратегические рынки.
+
+2. По каждому scope собираются:
+- signals;
+- propagation outcomes;
+- policy / sanctions facts;
+- materialized paths;
+- exposure paths;
+- interpretation artifacts.
+
+3. `Interpretation Engine` строит:
+- `InterpretationThesis`;
+- `MechanismChain`;
+- `TrustShift`, если применимо;
+- `Beneficiary / Loser Map`;
+- executive summary с горизонтом и confidence.
+
+4. Read-model ранжирует slices не по объёму новостей, а по:
+- strategic pressure;
+- consequence depth;
+- graph centrality;
+- path richness;
+- interpretation strength.
+
+5. UI публикует executive-level `WatchBrief`.
+
+### Основные UX-формы
+
+- `Situation Bar`
+- `Global Hot Slices`
+- `Global Pressure Map`
+- macro / region / corridor cards
+- beneficiary / loser interpretation blocks
+- executive-level path explanations
+- context map fragments по chokepoints и route geometry
+
+### Dashboard grammar
+
+Дашборды для этой линии должны быть обзорными, а не операционными.
+
+Подходящий набор:
+- `Global Pressure Map`
+- `Regional Pressure Table`
+- `Corridor Stress Board`
+- `Policy / Sanctions Shift Board`
+- `Strategic Dependency Heatmap`
+- `Beneficiary / Loser Surface`
+
+Каждый виджет должен отвечать на один из вопросов:
+- где накапливается давление;
+- какие policy shifts уже material;
+- какие corridors становятся ключевыми;
+- где downstream consequences выше headline noise;
+- кто выигрывает или проигрывает структурно.
+
+### Типы кейсов
+
+1. Региональная risk picture
+- `Persian Gulf`
+- `South China Sea`
+- `Eastern Mediterranean`
+- `Black Sea`
+- `Horn of Africa`
+
+2. Коридорный и chokepoint обзор
+- `Red Sea shipping pressure`
+- `Suez and Bab el-Mandeb corridor risk`
+- `Hormuz exposure`
+- `Black Sea grain corridor`
+- `Trans-Caspian / Middle Corridor pressure`
+
+3. Policy and alignment overview
+- санкционные сдвиги;
+- экспортные ограничения;
+- дипломатические рассинхронизации;
+- оборонные и технологические перестройки;
+- институциональные разрывы между союзниками.
+
+4. Strategic dependency overview
+- критические цепочки поставок;
+- технологические зависимости;
+- энергологистика;
+- downstream exposure to upstream stress;
+- geography-bound industrial concentration.
+
+### Артефакты системы, на которые это ложится
+
+- `WatchBrief` по региону, стране, рынку, corridor;
+- `InterpretationThesis`;
+- `MechanismChain`;
+- `Beneficiary / Loser Map`;
+- `TrustShift`;
+- `Risk Map Fragments`;
+- `MaterializedArtifact` и `ExposurePath`;
+- aggregate dashboards по географии, рынкам, pressure.
+
+### Drill-down model
+
+Пользователь должен иметь три уровня провала:
+
+1. Executive brief expand
+- раскрыть тезис;
+- увидеть main mechanisms;
+- увидеть top affected and top beneficiaries.
+
+2. Analytical detail
+- policy moves;
+- signals and interpretation deltas;
+- path-level explanations;
+- map fragment detail;
+- evidence buckets.
+
+3. Core horizon drill-down
+- graph;
+- map;
+- region / corridor lens;
+- materialized path;
+- exposure path;
+- source/evidence viewer.
+
+### Типовой выход для пользователя
+
+Пользователь получает:
+- сильный executive brief;
+- краткий список главных рисковых зон;
+- объяснение, что меняется и почему;
+- path-grounded view of consequences;
+- переход в подробный graph/map/evidence context при необходимости.
+
+## Service Line 02: Deep Monitoring
+
+Публичная формулировка:
+- `Deep Monitoring`
+- `Persistent intelligence watch`
+
+Продуктовый смысл внутри `Horizon Watch`:
+- не просто дать обзор, а держать дисциплинированное постоянное наблюдение по выбранным темам, юрисдикциям, сущностям, weak signals и emerging patterns;
+- превращать пользовательский интерес в долговременный watch surface;
+- держать историю deltas, reframes и усилений.
+
+### Знакомая пользователю форма
+
+Этот режим должен ощущаться как сочетание:
+- monitoring terminal;
+- persistent watchboard;
+- analyst cockpit;
+- live interpreted tracking surface.
+
+Но отличаться он должен тем, что:
+- в центре не event stream;
+- а evolving meaning of the watched scope.
+
+### Как это создаётся системой
+
+1. Пользователь или система создаёт `WatchTarget`:
+- страна;
+- рынок;
+- corridor;
+- entity;
+- topic;
+- lens;
+- query-address scope.
+
+2. Watchdog и signal pipeline непрерывно обновляют:
+- due facts;
+- signal descriptors;
+- propagation state;
+- exposure/materialized overlays;
+- baseline deltas.
+
+3. `Interpretation Engine` строит:
+- `InterpretationDelta`;
+- `TrustShift`;
+- `StrategicShiftHypothesis`;
+- escalation / cooling narrative;
+- `what changed since last visit`.
+
+4. Read-model объединяет:
+- raw change;
+- meaning of change;
+- affected targets;
+- confidence;
+- evidence strength;
+- realtime priority.
+
+5. UI собирает persistent watch cards и live operational rails.
+
+### Основные UX-формы
+
+- `My Watch`
+- persistent watch targets
+- watch-specific filters
+- live deltas and interpretation deltas
+- entity / country / market / corridor-specific cards
+- update since last visit
+- compact map fragments по объектам и маршрутам
+
+### Dashboard grammar
+
+Дашборды для этой линии должны быть monitoring-first.
+
+Подходящий набор:
+- `Watched Targets Status`
+- `Escalating Targets Board`
+- `Signal Maturation Board`
+- `Propagation Activity Rail`
+- `Evidence Strength Mix`
+- `New Since Last Visit`
+- `Weak Signal Accumulation`
+
+Каждый виджет должен помогать оператору понять:
+- где ускорение;
+- где накопление;
+- где weak signal становится material;
+- где требуется review;
+- где interpretation changed.
+
+### Типы кейсов
+
+1. Country / jurisdiction watch
+- `Saudi Arabia`
+- `Iran`
+- `Turkey`
+- `Kazakhstan`
+- `Egypt`
+
+2. Entity watch
+- порты;
+- fabs;
+- госпрограммы;
+- энергетические узлы;
+- нацчемпионы;
+- поставщики оборудования;
+- конкретные госструктуры или корпорации.
+
+3. Topic / sector watch
+- semiconductors;
+- drone and defense tech;
+- oil and gas;
+- ports and rail;
+- sanctions exposure;
+- critical minerals;
+- telecom / 5G / AI infrastructure.
+
+4. Weak signal monitoring
+- ранние признаки vendor substitution;
+- локализационные сдвиги;
+- изменение tone of official messaging;
+- рост альтернативных маршрутов;
+- накопление инфраструктурной активности;
+- повторяющиеся soft indicators без headline-value, но с высокой стратегической ценностью.
+
+### Артефакты системы, на которые это ложится
+
+- `WatchTarget`
+- `WatchFeedEntry`
+- `InterpretationDelta`
+- `TrustShift`
+- `StrategicShiftHypothesis`
+- watch-specific `Risk Map Fragments`
+- entity-linked `MaterializedArtifact` and `ExposurePath`
+- profile persistence and user preferences
+
+### Drill-down model
+
+1. Monitoring brief expand
+- delta since last visit;
+- interpretation shift;
+- affected targets;
+- why it moved up.
+
+2. Operational detail
+- signal timeline;
+- propagation chain;
+- new evidence;
+- map object / route fragment;
+- source cluster by confidence.
+
+3. Core horizon drill-down
+- entity profile;
+- graph;
+- map;
+- artifact detail;
+- lens;
+- source/evidence viewer.
+
+### Типовой выход для пользователя
+
+Пользователь получает:
+- не одноразовый обзор, а живую tracked surface;
+- понимание, что именно изменилось с прошлого визита;
+- сигнал о переходе weak signal в material development;
+- объяснение, почему какой-то объект стал важнее;
+- возможность быстро ужесточить или сузить watch.
+
+## Service Line 03: Scenario Planning
+
+Публичная формулировка:
+- `Scenario Planning`
+- `Contingency modeling`
+
+Продуктовый смысл внутри `Horizon Watch`:
+- строить не только picture of now, но и ветвления развития;
+- моделировать escalation, disruption и second-order effects;
+- связывать текущие сигналы с возможными траекториями, trigger conditions и planning consequences.
+
+### Знакомая пользователю форма
+
+Этот режим должен ощущаться как сочетание:
+- scenario workspace;
+- board-grade contingency surface;
+- decision support studio;
+- professional what-if environment.
+
+Но его основа должна быть не в слайдах и spreadsheet thinking, а в тех же horizon-артефактах, что уже питают Watch.
+
+### Как это создаётся системой
+
+1. Сценарий стартует от текущего observed scope:
+- страна;
+- corridor;
+- market;
+- entity;
+- supply chain path;
+- lens.
+
+2. Система использует ту же семантику доменных контрактов, которая уже есть в `Scout+` и соседних pipeline:
+- `supply_chain`
+- `governance`
+- `regulatory impact`
+- и связанные contract overlays / path semantics.
+
+3. Поверх текущего состояния строятся scenario branches:
+- escalation;
+- disruption;
+- closure;
+- sanction tightening;
+- rerouting;
+- localization response;
+- supplier substitution.
+
+4. Для каждой ветки система строит:
+- trigger conditions;
+- affected paths;
+- control points;
+- beneficiaries / losers;
+- second-order effects;
+- disconfirmers;
+- planning implications.
+
+5. Read-model собирает scenario panels, comparison cards и projected impact surfaces.
+
+### Основные UX-формы
+
+- scenario panels поверх watch briefs
+- branch cards
+- trigger and disconfirmation blocks
+- expected impact paths
+- contingency dashboards
+- what-changes-if mode
+- projected map fragments и route overlays
+
+### Dashboard grammar
+
+Дашборды для этой линии должны быть planning-first.
+
+Подходящий набор:
+- `Scenario Comparison Board`
+- `Trigger Conditions Panel`
+- `Impact Cone`
+- `Regulatory Impact Surface`
+- `Governance Stress View`
+- `Supply Chain Breakpoint Map`
+- `Projected Beneficiary / Loser Matrix`
+
+Каждый виджет должен помогать ответить на вопросы:
+- какие ветки реалистичнее;
+- что запускает переход в другую ветку;
+- какие control points самые чувствительные;
+- где second-order effects сильнее прямого шока;
+- какие planning decisions зависят от сценария.
+
+### Типы кейсов
+
+1. Escalation scenarios
+- ограниченная эскалация;
+- расширение театра;
+- удар по chokepoint;
+- дипломатическое окно деэскалации;
+- asymmetric retaliation pattern.
+
+2. Disruption scenarios
+- перекрытие маршрута;
+- остановка ключевого узла;
+- экспортное ограничение;
+- санкционное ужесточение;
+- supplier failure / asset denial.
+
+3. Second-order effects
+- рост локализации у клиентов;
+- vendor diversification;
+- рост местных чемпионов;
+- price / logistics pressure beyond immediate region;
+- reallocation of long-horizon capex and partnerships.
+
+4. Board / planning cases
+- что произойдёт с цепочкой поставок при закрытии X;
+- где у нас наибольшая зависимость при сценарии Y;
+- кто из альтернативных поставщиков выигрывает;
+- какой рынок окажется under pressure вторым или третьим;
+- какие сигналы будут ранним подтверждением сценария.
+
+### Артефакты системы, на которые это ложится
+
+- `Scenario`-артефакты и scenario branches;
+- `StrategicShiftHypothesis`;
+- `MechanismChain`;
+- `Disconfirming Signal Set`;
+- projected `ExposurePath` / `MaterializedArtifact`;
+- contract-driven supply chain / governance / regulatory overlays;
+- scenario-linked dashboards and map fragments.
+
+### Drill-down model
+
+1. Scenario brief expand
+- selected branch;
+- main assumptions;
+- trigger conditions;
+- top impacted paths.
+
+2. Planning detail
+- contract mode overlays;
+- projected exposure;
+- governance / regulatory impacts;
+- beneficiary / loser shifts;
+- disconfirmation layer.
+
+3. Core horizon drill-down
+- scenario graph;
+- projected path artifact;
+- route / map overlay;
+- lens-based scope;
+- evidence and assumptions.
+
+### Типовой выход для пользователя
+
+Пользователь получает:
+- не только interpretation текущего момента;
+- но и structured view of plausible futures;
+- набор условий, которые усилят или ослабят сценарий;
+- понимание second-order effects;
+- материал для planning cycles и board-level discussion.
+
+## Как три линии сходятся в одном Watch surface
+
+Эти три линии должны восприниматься не как разрозненные разделы, а как единый стек глубины.
+
+Логика перехода:
+
+1. `Geopolitical Risks Overview`
+- даёт общую strategic picture.
+
+2. `Deep Monitoring`
+- закрепляет постоянное наблюдение по выбранным slices.
+
+3. `Scenario Planning`
+- переводит текущие наблюдения в возможные траектории и contingency discussion.
+
+То есть внутри `Horizon Watch` одна и та же тема может проходить три стадии:
+- `overview`
+- `persistent watch`
+- `scenario branch`
+
+### Пример сквозного кейса
+
+Для одного и того же объекта или региона система может показать:
+- global overview card: `Hormuz pressure rising`
+- personal monitoring card: `Iran / Gulf / shipping / insurers added to My Watch`
+- scenario panel: `If chokepoint closure probability rises above threshold, downstream exposure expands to X, Y, Z`
+
+Именно это и есть аккуратная сшивка логик, которые уже есть в системе.
+
+## Визуальная реализация по service lines
+
+Ниже фиксируется не просто набор блоков, а целевой visual grammar для каждого режима.
+
+### Visual mode: Geopolitical Risks Overview
+
+Этот режим должен быть:
+- panoramic;
+- editorial;
+- executive;
+- calm but forceful.
+
+#### Главный экран
+
+Композиция:
+- крупный `Situation Bar`;
+- 1 hero regional brief;
+- 3-6 macro cards;
+- справа или ниже обзорные dashboards;
+- impact rail с короткими mechanism chains;
+- context map fragments по chokepoints, corridors и hotspot-кластерам.
+
+#### Основные визуальные артефакты
+
+- `Executive Brief Card`
+- `Region / Corridor Card`
+- `Policy Shift Card`
+- `Beneficiary / Loser Block`
+- `Pressure Map`
+- `Mechanism Rail`
+- `Strategic Dependency Heatmap`
+
+#### Как пользователь этим управляет
+
+Пользователь может:
+- переключать `Global / Sector / Region`;
+- менять горизонт `24h / 7d / 30d / strategic`;
+- включать только policy / only chokepoints / only dependencies;
+- pin region or corridor into `My Watch`;
+- раскрывать interpretation and path explanation.
+
+#### Куда он проваливается
+
+- в regional detail brief;
+- в corridor lens;
+- в map fragment -> full map;
+- в path detail;
+- в evidence and policy source cluster;
+- в beneficiary / loser rationale.
+
+### Visual mode: Deep Monitoring
+
+Этот режим должен быть:
+- denser;
+- more operational;
+- alive but controlled;
+- built around deltas.
+
+#### Главный экран
+
+Композиция:
+- compact `Situation Bar`;
+- `My Watch` в приоритете;
+- stacked monitoring cards;
+- live status rail;
+- compact dashboards;
+- compact map fragments around watched objects and routes.
+
+#### Основные визуальные артефакты
+
+- `Monitoring Card`
+- `Delta Card`
+- `Interpretation Shift Badge`
+- `Escalation Marker`
+- `Signal Maturation Panel`
+- `Propagation Rail`
+- `New Since Last Visit`
+- `Watched Target Status Matrix`
+
+#### Как пользователь этим управляет
+
+Пользователь может:
+- добавлять и удалять watch targets;
+- pin/unpin priorities;
+- задавать filters by geography / sector / target type / evidence quality;
+- включать `Only Escalating`, `Only Material`, `Only With Paths`;
+- замораживать realtime;
+- менять density интерфейса;
+- открывать target-specific monitoring surfaces.
+
+#### Куда он проваливается
+
+- в target detail panel;
+- в signal timeline;
+- в propagation chain;
+- в map object detail;
+- в full artifact / path detail;
+- в underlying lens or graph.
+
+### Visual mode: Scenario Planning
+
+Этот режим должен быть:
+- deliberate;
+- high-control;
+- comparison-friendly;
+- board-grade.
+
+#### Главный экран
+
+Композиция:
+- сверху current-state brief;
+- рядом branch selector;
+- ниже scenario comparison surface;
+- projected impact paths;
+- trigger / disconfirmation panel;
+- scenario-specific maps and dashboards.
+
+#### Основные визуальные артефакты
+
+- `Scenario Branch Card`
+- `Trigger Conditions Panel`
+- `Disconfirmation Panel`
+- `Projected Impact Path`
+- `Impact Cone`
+- `Governance / Regulatory Overlay Card`
+- `Scenario Comparison Matrix`
+- `Planning Decision Panel`
+
+#### Как пользователь этим управляет
+
+Пользователь может:
+- выбирать baseline;
+- переключать branches;
+- смотреть optimistic / base / stress modes;
+- включать supply-chain / governance / regulatory overlays;
+- pin assumptions;
+- сравнивать branch-to-branch deltas;
+- переходить из watch brief в scenario workspace.
+
+#### Куда он проваливается
+
+- в branch assumptions;
+- в projected exposure detail;
+- в governance / regulatory overlays;
+- в projected map routes;
+- в scenario graph;
+- в evidence and disconfirmation logic.
+
+## Каталог пользовательских артефактов
+
+Пользователь не должен взаимодействовать с “сырыми сущностями системы”.
+Он должен получать устойчивый набор UI-артефактов, каждый из которых имеет ясный смысл.
+
+### Артефакты первого уровня
+
+Это то, что видно сразу на странице:
+- `Watch Brief`
+- `Executive Brief Card`
+- `Monitoring Card`
+- `Scenario Branch Card`
+- `Risk Map Fragment`
+- `Dashboard Widget`
+- `Impact Rail Item`
+
+### Артефакты второго уровня
+
+Это то, что раскрывается по клику:
+- `Interpretation Detail`
+- `Mechanism Chain View`
+- `Evidence Cluster`
+- `Signal Timeline`
+- `Propagation Detail`
+- `Beneficiary / Loser Rationale`
+- `Trigger / Disconfirmation Detail`
+
+### Артефакты глубинного уровня
+
+Это уже core Horizon surfaces:
+- graph;
+- map;
+- lens;
+- fragment profile;
+- materialized artifact detail;
+- exposure path detail;
+- source / evidence viewer.
+
+## Модель управления пользователем
+
+High-grade интерфейс должен давать пользователю чувство контроля, но не перегружать его формами.
+
+### Управление scope
+
+Пользователь должен уметь:
+- выбрать `Global`, `My Watch`, `Combined`;
+- переключать service-line emphasis;
+- выбирать target type;
+- фиксировать регионы, рынки, corridors, entities, lenses;
+- открывать curated watch packs.
+
+### Управление плотностью и режимом чтения
+
+Пользователь должен уметь:
+- выбрать compact / comfortable density;
+- включить focus mode;
+- переключить emphasis на dashboards / briefs / map / scenarios;
+- заморозить realtime;
+- включить `since last visit`.
+
+### Управление доверием и строгостью
+
+Пользователь должен уметь:
+- поднять minimum confidence;
+- включить `Trusted Evidence Only`;
+- скрыть speculative interpretations;
+- включить `show disconfirmers`;
+- переключить short / medium / long horizons.
+
+### Управление провалом вглубь
+
+Пользователь должен уметь:
+- быстро раскрыть brief inline;
+- открыть side detail;
+- уйти в full graph/map/lens surface;
+- возвращаться назад без потери контекста.
+
+## Minimum-click и latency-first принципы
+
+Для `Horizon Watch` недостаточно быть сильным по смыслу.
+Он обязан быть быстрым по ощущению.
+
+Пользователь должен доходить до meaningful result за минимальное число действий и без ощущения, что система “думает слишком долго”.
+
+### Product rule: minimum clicks to value
+
+Целевой принцип:
+- первый meaningful insight должен быть доступен без дополнительных действий;
+- второй уровень понимания должен открываться максимум за 1 клик;
+- core proof layer должен быть доступен максимум за 2 клика;
+- уход в graph / map / lens допустим как глубокий drill-down, но не должен быть обязательным для базового понимания.
+
+Практически это означает:
+- `Situation Bar` уже даёт тезис;
+- `Watch Brief` уже даёт смысл и последствия;
+- inline expand даёт mechanism/evidence preview;
+- только потом пользователь уходит в полноразмерные surfaces.
+
+### Interaction budget
+
+Желаемая модель:
+- `0 clicks`: увидеть, что важно сейчас;
+- `1 click`: понять, почему это важно;
+- `2 clicks`: увидеть path / evidence / assumptions;
+- `3+ clicks`: уйти в экспертную глубину graph/map/scenario.
+
+Если для базового ответа на вопрос `что происходит и почему это важно` нужно больше, интерфейс спроектирован плохо.
+
+## Latency strategy
+
+`Horizon Watch` должен работать в режиме `latency-first`.
+
+Это означает:
+- deterministic and cached answers first;
+- async refinement second;
+- LLM only when it действительно добавляет ценность;
+- stale-but-good answer лучше, чем пустой loading state.
+
+### Целевой порядок ответа
+
+1. Отдать готовый read-model немедленно, если он уже есть.
+2. Если read-model слегка устарел, отдать stale snapshot + пометить refresh.
+3. Параллельно запустить revalidation / refinement.
+4. Только если нужен новый interpretation pass, запускать async/controlled LLM path.
+
+### UX-правило
+
+Пользователь не должен ждать LLM ради:
+- открытия страницы;
+- смены фильтра;
+- перехода между service-line режимами;
+- просмотра уже известных briefs;
+- открытия detail panel по готовому артефакту.
+
+LLM допустим только для:
+- новой сложной интерпретации;
+- сложного scenario synthesis;
+- refinement там, где deterministic layer явно недостаточен;
+- background reframing после появления новых данных.
+
+## Latency budget
+
+Ниже не SLA, а целевой продуктовый budget.
+
+### P0 interactions
+
+Это то, что должно быть почти мгновенным:
+- открытие `/horizon/watch`;
+- переключение `Global / My / Combined`;
+- открытие already-materialized brief;
+- раскрытие inline details;
+- переключение quick filters;
+- opening map fragment from cached context.
+
+Цель:
+- perceived response: `~100-300ms`
+- hard upper bound для большинства таких действий: `< 500ms`
+
+### P1 interactions
+
+Это то, что может требовать чуть больше времени, но всё ещё должно ощущаться быстрым:
+- opening detail drawer with evidence cluster;
+- loading target-specific monitoring panel;
+- loading branch comparison from precomputed scenario workspace;
+- opening artifact detail with supporting overlays.
+
+Цель:
+- perceived response: `~300-800ms`
+- upper bound: `< 1.5s`
+
+### P2 interactions
+
+Это уже тяжёлые операции:
+- сборка нового scenario branch;
+- новая interpretation synthesis;
+- сложный graph drill-down, который требует пересчёта;
+- first-time scope assembly without warm cache.
+
+Цель:
+- synchronous phase: отдать shell + partial result сразу;
+- background computation: async;
+- UI должен показывать progressive readiness, а не блокирующий спиннер.
+
+## Sync / async execution model
+
+Нужно разделить все действия на три класса.
+
+### 1. Fully synchronous
+
+Без LLM и без тяжёлых пересчётов:
+- чтение готовых briefs;
+- чтение dashboards;
+- фильтрация read-model;
+- открытие detail drawers;
+- map fragment rendering из готового data slice.
+
+### 2. Synchronous with background refresh
+
+Используется для:
+- slightly stale read-models;
+- recently changed watch targets;
+- refresh after new propagation wave;
+- refresh after new evidence arrived.
+
+Поведение:
+- сразу отдать последнюю хорошую версию;
+- в фоне пересчитать;
+- мягко обновить через realtime.
+
+### 3. Async with progressive UI
+
+Используется для:
+- новой LLM-backed интерпретации;
+- first-time scenario generation;
+- complex what-if synthesis;
+- expensive artifact materialization.
+
+Поведение:
+- отдать промежуточный deterministic skeleton;
+- показать, что refined interpretation is in progress;
+- после готовности обновить конкретные блоки, а не весь экран.
+
+## Redis и кеширование
+
+Если в инфраструктуре уже есть Redis, `Horizon Watch` должен использовать его активно как operational cache layer.
+
+### Что нужно кешировать
+
+1. Page-level read-models
+- `Global Watch` snapshot
+- `My Watch` snapshot
+- combined mode snapshot
+
+2. Brief-level artifacts
+- `WatchBrief`
+- `InterpretationThesis`
+- `MechanismChain` summaries
+- `Beneficiary / Loser` summaries
+
+3. Dashboard read-models
+- geographic pressure aggregates
+- monitoring counters
+- scenario comparison aggregates
+
+4. Map fragment read-models
+- prepared object subsets
+- route overlays
+- viewport/caption bundles
+
+5. Detail surfaces
+- evidence clusters
+- propagation summaries
+- scenario branch summaries
+
+### Что не надо кешировать бездумно
+
+- бесконечно сырые source documents;
+- всё подряд на уровне низкоуровневых graph responses без access pattern;
+- highly user-specific heavy payloads без нормальных keys and invalidation rules.
+
+### Cache strategy
+
+Предпочтительная стратегия:
+- `cache-aside` для read-models;
+- `stale-while-revalidate` для UI-critical surfaces;
+- short-lived hot cache для dashboards;
+- medium-lived cache для interpretation summaries;
+- event-driven invalidation after new signals / propagation / artifact updates.
+
+### Cache keys
+
+Ключи должны учитывать:
+- tenant;
+- project;
+- user or global mode;
+- service-line mode;
+- scope hash;
+- filters hash;
+- horizon window;
+- version of interpretation/read-model schema.
+
+## LLM gating и cost/latency discipline
+
+LLM не должен быть default path для пользовательского действия.
+
+### LLM вызывается только если
+
+- deterministic synthesis не даёт приемлемого explanation;
+- нужен новый strategic interpretation;
+- нужен сложный scenario branch;
+- есть конфликтующие сигналы, требующие critic/refiner pass;
+- пользователь явно запросил более глубокий generated reasoning.
+
+### LLM не вызывается для
+
+- простого открытия страницы;
+- смены режимов и фильтров;
+- уже собранных brief surfaces;
+- большинства dashboard interactions;
+- обычных map / graph drill-downs;
+- простого открытия cached scenario branch.
+
+### Правило качества
+
+Сначала:
+- rules;
+- graph math;
+- propagation;
+- cached interpretations;
+- existing materialized paths.
+
+Потом, если нужно:
+- LLM refinement.
+
+Это полностью соответствует общей логике Horizon: `rule-first, deterministic-by-default, LLM as controlled fallback`.
+
+## Progressive rendering
+
+Даже когда система вынуждена считать дольше, интерфейс не должен выглядеть пустым.
+
+### Что отдаём сразу
+
+- текущий brief shell;
+- headline и status;
+- last known confidence;
+- last updated timestamp;
+- quick explanation bullets;
+- cached dashboards;
+- map fragment placeholder with caption if geometry is known.
+
+### Что может доезжать позже
+
+- refined interpretation;
+- updated mechanism chain;
+- beneficiary / loser reshuffle;
+- new evidence cluster;
+- scenario branch enrichment;
+- richer map overlay details.
+
+### UI behavior
+
+- обновляются только изменившиеся блоки;
+- не пересобираем всю страницу;
+- не теряем scroll / local focus;
+- показываем `updated` or `refined` markers.
+
+## Realtime + cache coherence
+
+Realtime в `Horizon Watch` должен работать в связке с cache invalidation.
+
+Новая волна сигналов или propagation не должна требовать полного hard refresh.
+
+Правильное поведение:
+- событие приходит;
+- invalidates or patches related Redis read-model;
+- UI получает WS event;
+- перезагружает только нужный slice or block;
+- старый usable state остаётся на месте до прихода нового.
+
+## Acceptance criteria для скорости и UX-эффективности
+
+Слой можно считать удачным, если:
+- пользователь получает первый meaningful insight без кликов;
+- path to explanation укладывается в 1 клик;
+- path to proof укладывается в 2 клика;
+- большая часть page opens и filter changes не требует LLM;
+- cached read-model покрывает основной пользовательский трафик;
+- stale-but-usable surfaces показываются вместо пустого loading;
+- realtime refresh не ломает чтение и не сбрасывает контекст;
+- тяжёлые LLM-backed операции почти всегда идут в async refinement mode.
+
+## Как эти принципы реализуются в системе
+
+Ниже фиксируется уже не только желаемое поведение, а практический способ реализации поверх текущего Horizon.
+
+Главный принцип:
+
+`Horizon Watch` не строится как “ещё один UI к графу”.
+Он строится как отдельный snapshot/read-model слой над уже существующими модулями Horizon.
+
+### Что уже можно переиспользовать
+
+В текущей системе уже есть сильные опоры:
+- interpretation cache и interpreter;
+- propagation engine;
+- scenario runner;
+- map activity engine;
+- realtime broker через Pub/Sub + WebSocket;
+- lens and artifact infrastructure.
+
+Это означает:
+- не нужно строить второе аналитическое ядро;
+- нужно собрать watch-oriented read-model layer над уже работающими частями.
+
+## Implementation shape
+
+### 1. Watch Read-Model Builder
+
+Нужен отдельный backend-компонент:
+- `WatchReadModelBuilder`
+
+Его задача:
+- читать core Horizon artifacts;
+- собирать user-facing snapshots;
+- не делать тяжёлую аналитику в момент запроса, если её можно подготовить заранее;
+- быть главным producer для `/api/horizon/watch`.
+
+Он должен строить как минимум:
+- `GlobalWatchSnapshot`
+- `UserWatchSnapshot`
+- `CombinedWatchSnapshot`
+- `BriefDetailSnapshot`
+- `DashboardSnapshot`
+- `ScenarioWorkspaceSnapshot`
+
+### 2. Источники данных для Builder
+
+Builder читает:
+- `OntologyFact`
+- `SignalDescriptor`
+- `Propagation` state / traces / overlays
+- `MaterializedArtifact`
+- `ExposurePath`
+- `Interpretation*`
+- `Lens`
+- map activity / map object slices
+- user watch preferences
+
+То есть Builder ничего не “выдумывает”.
+Он агрегирует и упаковывает уже существующие артефакты в формы, удобные для UI.
+
+### 3. Read-model first, not query fan-out from UI
+
+UI не должен по открытию страницы ходить:
+- отдельно за сигналами;
+- отдельно за paths;
+- отдельно за interpretations;
+- отдельно за map objects;
+- отдельно за scenario metadata.
+
+Вместо этого:
+- сервер отдаёт already-shaped snapshot;
+- UI лишь раскрывает и фильтрует его;
+- глубокие drill-down вызывают отдельные targeted endpoints.
+
+Это ключевой механизм и для speed, и для minimum-click UX.
+
+## Redis как hot cache над durable state
+
+На практике я бы делал двухслойную схему:
+
+### Durable layer
+
+Для устойчивого хранения и совместимости с уже существующей системой:
+- Firestore / текущие horizon collections;
+- существующие persisted caches и interpretation artifacts.
+
+### Hot layer
+
+Для быстрых UI-ответов:
+- Redis.
+
+Роль Redis:
+- хранить самые частые page snapshots;
+- хранить brief-level summaries;
+- хранить dashboard aggregates;
+- хранить map fragment payloads;
+- хранить scenario workspace summaries.
+
+Это позволит:
+- не пересобирать страницу каждый раз из десятков коллекций;
+- быстро отдавать `stale-but-good`;
+- держать filter switches и page opens в пределах P0/P1 latency.
+
+## Схема обновления данных
+
+### 1. Event arrives
+
+Новый input приходит в систему:
+- fact;
+- signal;
+- propagation result;
+- artifact update;
+- scenario recomputation;
+- user watch change.
+
+### 2. Affected watch scopes are resolved
+
+Watch layer определяет:
+- какие global slices затронуты;
+- какие user watch targets затронуты;
+- какие dashboards стали stale;
+- какие map fragments или scenario branches надо обновить.
+
+### 3. Redis invalidation or patch
+
+Далее:
+- либо инвалидируется соответствующий snapshot;
+- либо в Redis вносится patch/update;
+- либо ставится флаг `needs_refinement`.
+
+### 4. Realtime event is published
+
+После этого публикуется watch-oriented realtime event.
+
+Например:
+- `horizon.watch.snapshot.updated`
+- `horizon.watch.brief.upserted`
+- `horizon.watch.dashboard.updated`
+- `horizon.watch.scenario.updated`
+
+### 5. UI patches only local blocks
+
+UI не делает hard refresh страницы.
+
+Он:
+- обновляет только нужный block;
+- сохраняет scroll и local focus;
+- показывает `updated` / `refined`;
+- при необходимости подтягивает новый snapshot для конкретного slice.
+
+## Как реализуется minimum-click UX
+
+Это достигается не только дизайном, а формой backend-ответа.
+
+### Что отдаётся на page open
+
+`GET /api/horizon/watch` должен уже содержать:
+- headline;
+- top global briefs;
+- top my-watch briefs;
+- top dashboards;
+- impact rail preview;
+- compact map fragment refs;
+- `updated since last visit` summary;
+- top scenario pointers, если есть.
+
+То есть базовый ответ already contains product value.
+
+### Что раскрывается за 1 клик
+
+Открытие brief должно давать:
+- interpretation summary;
+- main mechanism chain;
+- top affected targets;
+- top evidence preview;
+- main map/path context.
+
+### Что раскрывается за 2 клика
+
+Дальше идут:
+- full evidence cluster;
+- path detail;
+- propagation detail;
+- scenario assumptions;
+- beneficiary / loser rationale.
+
+Если пользователю для базового понимания приходится идти глубже, значит read-model слишком тонкий.
+
+## Как реализуется latency-first
+
+### Rule 1. Cached snapshot first
+
+Первый ответ почти всегда должен идти из:
+- Redis hot cache;
+- либо из persisted ready snapshot.
+
+### Rule 2. Deterministic computation second
+
+Если snapshot отсутствует, но всё можно собрать без LLM:
+- собрать сервером синхронно;
+- закешировать;
+- вернуть.
+
+### Rule 3. LLM refinement third
+
+Если нужен LLM:
+- вернуть deterministic shell;
+- поставить async refinement task;
+- после готовности обновить только соответствующий блок.
+
+Это особенно важно для:
+- interpretation reframes;
+- complex scenario synthesis;
+- beneficiary / loser explanations;
+- multi-step strategic hypotheses.
+
+## Как реализуется LLM gating
+
+Практический принцип:
+
+`LLM should refine surfaces, not block surfaces`
+
+### Что делаем без LLM
+
+- ranking;
+- aggregation;
+- watch filtering;
+- snapshot assembly;
+- map fragment packaging;
+- path previews;
+- propagation summaries;
+- most dashboards;
+- already-known scenario branch reads.
+
+### Где LLM действительно нужен
+
+- новый сложный interpretation pass;
+- synthesis для strategic thesis;
+- difficult scenario branch generation;
+- conflict resolution when deterministic logic is insufficient;
+- optional higher-grade narrative refinement.
+
+### Как это сочетается с текущим Horizon
+
+Это уже соответствует текущим архитектурным направлениям в системе:
+- rule-first;
+- deterministic-by-default;
+- async LLM для сложных решений;
+- cached interpretation where possible.
+
+То есть `Horizon Watch` не требует философского разворота системы, только правильной orchestration layer поверх уже существующих практик.
+
+## Как реализуется каждая service line
+
+### Geopolitical Risks Overview
+
+Реализация:
+- precomputed macro scopes;
+- aggregate regional/corridor snapshots;
+- interpretation layer поверх macro signals and paths;
+- executive dashboards из hot cache;
+- map fragments из existing map stack.
+
+Основной объект:
+- `ExecutiveBriefSnapshot`
+
+### Deep Monitoring
+
+Реализация:
+- user watch targets хранятся в профиле;
+- для каждого target собирается `MonitoringTargetSnapshot`;
+- updates идут от watchdog + signal pipeline + propagation;
+- interpretation deltas собираются отдельно;
+- UI получает tracked operational surface.
+
+Основной объект:
+- `MonitoringDeltaSnapshot`
+
+### Scenario Planning
+
+Реализация:
+- baseline scope -> domain contract semantics -> scenario runner;
+- precomputed common branches;
+- async custom branch synthesis;
+- projected paths and overlays materialize into scenario read-model;
+- branch comparison и trigger logic отдаются как отдельный workspace snapshot.
+
+Основной объект:
+- `ScenarioWorkspaceSnapshot`
+
+## Как это ложится на существующие модули
+
+Ниже практическое отображение на уже существующую кодовую базу.
+
+### Interpretation
+
+Переиспользуем:
+- текущий interpreter;
+- текущий interpretation cache;
+- current interpretation processing pipeline.
+
+Что добавляем:
+- watch-oriented summary packaging;
+- separation between durable interpretation storage and hot UI cache.
+
+### Propagation
+
+Переиспользуем:
+- propagation engine;
+- signal traces;
+- path scoring and endpoint scoring;
+- policy impact semantics.
+
+Что добавляем:
+- read-model packaging for impact rails and brief consequences;
+- patch-triggering updates for affected watch scopes.
+
+### Scenario
+
+Переиспользуем:
+- scenario runner;
+- contract semantics;
+- scenario propagation.
+
+Что добавляем:
+- scenario workspace snapshots;
+- branch comparison packaging;
+- trigger/disconfirmation panels;
+- projected path and map-fragment read-models.
+
+### Map
+
+Переиспользуем:
+- existing map stack;
+- geo objects;
+- zones;
+- transport flows;
+- path legs;
+- map activity engine.
+
+Что добавляем:
+- `MapFragmentReadModel`;
+- compact viewports with captions;
+- watch-aware map drill-down routing.
+
+### Realtime
+
+Переиспользуем:
+- existing Pub/Sub + WS broker.
+
+Что добавляем:
+- watch-specific event types;
+- block-level UI patch flow;
+- cache invalidation / refresh coordination.
+
+## Практический rollout
+
+Лучше делать это поэтапно.
+
+### Phase 1
+
+- `WatchReadModelBuilder`
+- page snapshots
+- global + my watch
+- Redis hot cache
+- block-level realtime refresh
+
+### Phase 2
+
+- interpretation refinement layer
+- beneficiary / loser surfaces
+- richer dashboards
+- map fragments
+- detail drawers
+
+### Phase 3
+
+- scenario workspace
+- branch comparison
+- projected overlays
+- triggers / disconfirmers
+- advanced watch packs
+
+## Критический architectural rule
+
+Если коротко, то реализация должна следовать одному правилу:
+
+`Do not let the UI assemble meaning from raw Horizon parts at request time`
+
+Нужно наоборот:
+- система собирает meaning заранее или почти заранее;
+- Redis и read-model layer делают это быстрым;
+- realtime делает это живым;
+- LLM делает это глубже, но не тормозит базовый ответ.
+
+## Placement inside Horizon
+
+`Horizon Watch` должен жить внутри `Horizon`, но не в одном-единственном режиме навигации.
+
+Правильная модель здесь двухуровневая.
+
+### 1. Tenant / global-wide Watch
+
+Это отдельная верхнеуровневая поверхность Horizon.
+
+Смысл:
+- смотреть мир широко;
+- видеть global or tenant-wide picture;
+- работать с macro slices, regions, corridors, markets, policy surfaces;
+- использовать watch как соседний по уровню режим к `World Map`.
+
+Навигационно это должно быть доступно прямо из sidebar Horizon, на том же уровне, где пользователь воспринимает global modes.
+
+Принцип:
+- `Watch` не должен быть спрятан глубоко внутрь lens-only UX;
+- для обзорного и monitoring-first использования он должен быть top-level destination.
+
+### 2. Lens-wide Watch
+
+Одновременно `Watch` должен быть встроен и в lens-scoped контекст.
+
+Смысл:
+- смотреть not the whole world, а “what matters inside this lens”;
+- видеть interpretation, deltas, paths и scenarios в рамках конкретного Lens scope;
+- работать с тем же watch language, но на более узком, операторском или аналитическом контексте.
+
+Это значит, что из Lens пользователь должен иметь прямой переход в:
+- `Lens Watch`
+- `Lens Scenarios`
+- `Lens Monitoring`
+
+без ощущения, что он покинул Horizon и попал в другой продукт.
+
+### Правило информационной архитектуры
+
+`Watch` не является просто “одним из способов показать карту”.
+
+И в то же время он не должен быть только top-level screen.
+
+Правильнее так:
+- как global mode он соседствует с `World Map`;
+- как lens mode он встраивается в конкретный `Lens`;
+- визуальный и смысловой язык остаётся единым;
+- меняется только scope.
+
+### Как это может выглядеть в навигации
+
+На уровне Horizon sidebar:
+- `Watch`
+- `World Map`
+- `Lenses`
+
+При этом внутри выбранного Lens:
+- `Cockpit`
+- `Watch`
+- `Scenarios`
+- `Map`
+
+То есть:
+- top-level `Watch` отвечает за tenant/global-wide monitoring;
+- lens-level `Watch` отвечает за scoped interpreted monitoring;
+- обе поверхности используют одни и те же read-model principles и artifacts.
+
+### Routing model
+
+Рекомендуемая модель маршрутов:
+- `/horizon/watch` — global / tenant-wide watch
+- `/horizon/watch?lensId=...` или аналогичный scoped mode — lens-aware watch
+
+Важно не столько имя route, сколько то, чтобы обе формы существования были first-class.
+
+### Почему это важно
+
+Если оставить `Watch` только как global screen:
+- он будет слишком общий для operational work inside a lens.
+
+Если оставить `Watch` только внутри Lens:
+- потеряется стратегическая обзорная ценность и публично обещанная service-line логика.
+
+Поэтому `Horizon Watch` должен жить:
+- и на уровне wide situational awareness;
+- и на уровне scoped analytical work.
+
+## Лучшие практики для такого класса систем
+
+Ниже фиксируются не vendor-specific референсы, а практики, которые характерны для сильных intelligence / operations / decision-support systems.
+
+### 1. Summary first, proof immediately available
+
+Сильная система всегда начинает с:
+- тезиса;
+- статуса;
+- последствий.
+
+Но рядом должна быть короткая дорога к:
+- evidence;
+- paths;
+- assumptions;
+- disconfirmers.
+
+### 2. Surface hierarchy instead of flat dashboards
+
+Слабая система показывает двадцать одинаково важных виджетов.
+Сильная система строит иерархию:
+- what matters now;
+- why it matters;
+- what changed;
+- where to go deeper.
+
+### 3. One semantic core, many professional surfaces
+
+Если geopolitics, monitoring и scenario живут на разных схемах, система распадётся.
+High-grade практика здесь:
+- одно ядро данных;
+- несколько read-model surfaces;
+- единая drill-down логика.
+
+### 4. Delta is often more valuable than state
+
+В таких системах критично показывать не только состояние, но и:
+- что изменилось;
+- что усилилось;
+- что ослабло;
+- что впервые стало material.
+
+### 5. Paths beat isolated facts
+
+Пользователь лучше понимает риск, когда видит:
+- маршрут;
+- цепочку зависимости;
+- propagation;
+- governance or regulatory path;
+
+а не просто отдельную карточку факта.
+
+### 6. Map only when geography is explanatory
+
+Карта должна объяснять, а не украшать.
+
+### 7. Scenario needs triggers and disconfirmers
+
+Любой planning mode без:
+- trigger conditions;
+- branch comparison;
+- disconfirmation logic;
+
+деградирует в красивую фантазию.
+
+### 8. Realtime must feel controlled
+
+Профессиональный интерфейс не должен дёргаться.
+Обновления должны быть:
+- мягкими;
+- локальными;
+- агрегированными;
+- pauseable.
+
+## Как данные берутся из системы и превращаются в surfaces
+
+Ниже фиксируется canonical flow для `Horizon Watch`.
+
+### Layer 1. Core inputs
+
+Базовые входы:
+- `OntologyFact`
+- `SignalDescriptor`
+- `Propagation` outputs
+- `MaterializedArtifact`
+- `ExposurePath`
+- `Lens`
+- map objects / zones / flows / path legs
+- user watch preferences
+
+Это raw system layer.
+
+### Layer 2. Interpretation and synthesis
+
+Поверх core inputs строятся:
+- `InterpretationThesis`
+- `MechanismChain`
+- `TrustShift`
+- `StrategicShiftHypothesis`
+- `InterpretationDelta`
+- `Beneficiary / Loser Map`
+- `Disconfirming Signal Set`
+
+Это synthesis layer.
+
+### Layer 3. Read-models for UI
+
+Поверх synthesis layer строятся UI-ориентированные read-models:
+- `WatchBrief`
+- `DashboardReadModel`
+- `MapFragmentReadModel`
+- `MonitoringDeltaReadModel`
+- `ScenarioBranchReadModel`
+- `ImpactRailReadModel`
+
+Это presentation layer.
+
+### Layer 4. UI surfaces
+
+Из read-model рождаются:
+- executive surfaces;
+- monitoring surfaces;
+- scenario surfaces;
+- detail drawers;
+- graph/map drill-downs.
+
+Это user-facing layer.
+
+## Правила интерпретации данных
+
+Система не должна напрямую рендерить сырые данные в интерфейс как будто они уже “понятны”.
+
+### Raw fact не равен insight
+
+`OntologyFact` или incoming signal сам по себе не является продуктовым объектом.
+
+Система обязана спросить:
+- к какому scope это относится;
+- что это меняет относительно baseline;
+- как это распространяется;
+- кого это задевает;
+- какой у этого вероятный смысл;
+- что это может опровергнуть.
+
+### Signal не равен conclusion
+
+Сигнал нужен для:
+- обнаружения;
+- ранжирования;
+- запуска propagation;
+- сборки interpretation.
+
+Но не для прямой публикации “вывода”.
+
+### Path + interpretation = high-grade insight
+
+Сильный пользовательский инсайт рождается, когда система соединяет:
+- signal pressure;
+- graph/path geometry;
+- interpretation layer;
+- visible consequences;
+- confidence and disconfirmation.
+
+### Contract-driven semantics for scenarios
+
+Для `Scenario Planning` интерпретация должна идти не свободным нарративом, а через те семантики, которые уже есть в системе:
+- `supply_chain`
+- `governance`
+- `regulatory impact`
+
+Это критично для связности продукта.
+
+## Какие read-models нужны дополнительно
+
+Чтобы всё это работало аккуратно, кроме уже описанных сущностей потребуется набор специализированных read-models.
+
+### ExecutiveReadModel
+
+Для `Geopolitical Risks Overview`:
+- top regional briefs;
+- strategic pressure counters;
+- macro dashboards;
+- beneficiary / loser summaries;
+- top map fragments.
+
+### MonitoringReadModel
+
+Для `Deep Monitoring`:
+- watched targets;
+- deltas since last visit;
+- interpretation changes;
+- escalation markers;
+- signal maturity states;
+- target-specific mini maps.
+
+### ScenarioWorkspaceReadModel
+
+Для `Scenario Planning`:
+- baseline state;
+- branches;
+- triggers;
+- disconfirmers;
+- projected paths;
+- contract overlays;
+- branch comparison metrics.
+
+## Кейсовый каталог для Horizon Watch
+
+Ниже зафиксирован стартовый каталог case families, которые уже хорошо ложатся на существующие данные и логику.
+
+### Геополитика и безопасность
+
+- Gulf escalation and perception shifts
+- Red Sea / Suez / Bab el-Mandeb monitoring
+- Eastern Mediterranean power projection
+- Black Sea grain and logistics stress
+- sanctions and export-control pressure mapping
+
+### Индустрия и технологии
+
+- semiconductor exposure and fab concentration
+- AI infrastructure dependencies
+- telecom / 5G vendor substitution
+- drone / defense technology diffusion
+- critical equipment and industrial localization
+
+### Энергия и сырьё
+
+- oil and gas corridor exposure
+- LNG and maritime dependency
+- pipeline and terminal risk
+- critical minerals supply pressure
+- energy-linked industrial downstream exposure
+
+### Логистика и инфраструктура
+
+- ports, rail, and route disruption
+- chokepoint dependency
+- downstream manufacturing exposure
+- route rerouting and substitute corridor viability
+- infrastructure cluster vulnerability
+
+### Политическая экономия и доверие
+
+- trust erosion and hedge behavior
+- alliance ambiguity and sovereign buildout
+- local champion acceleration
+- procurement diversification
+- investment and capex reweighting
+
 ## Основные сущности Horizon Watch
 
 ### 1. Watch Slice

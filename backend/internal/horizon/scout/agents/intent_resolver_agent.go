@@ -1326,13 +1326,21 @@ func synthesizeGovernanceExecutionPlan(
 	if target == "" || targetType == "" {
 		return nil
 	}
+	contractType := normalizeContractTypeAlias(d.ContractType)
 	direction := "both"
 	text := strings.ToLower(strings.TrimSpace(query))
-	if containsAnyIntentToken(text, "who owns", "owned by", "shareholder", "beneficial owner", "ultimate owner") {
+	if contractType == "control-map" {
+		direction = "both"
+	} else if containsAnyIntentToken(text, "who owns", "owned by", "shareholder", "beneficial owner", "ultimate owner") {
 		direction = "upward"
 	}
 	if strings.HasPrefix(target, "/community/") || containsAnyIntentToken(text, "family", "families", "dynasty", "dynasties", "tribe", "tribes", "house of", "royal family", "clan") {
 		direction = "downward"
+	}
+	includeBoard := containsAnyIntentToken(text, "board", "director", "executive")
+	if contractType == "control-map" && (strings.HasPrefix(target, "/org/") || strings.HasPrefix(target, "/gov/")) &&
+		!containsAnyIntentToken(text, "ownership only", "shareholding only", "shareholder only", "owner only") {
+		includeBoard = true
 	}
 	return &GovernanceExecutionPlan{
 		Queries: []GovernanceQuery{{
@@ -1340,7 +1348,7 @@ func synthesizeGovernanceExecutionPlan(
 			TargetType:   targetType,
 			Direction:    direction,
 			Depth:        4,
-			IncludeBoard: containsAnyIntentToken(text, "board", "director", "executive"),
+			IncludeBoard: includeBoard,
 			GeoFilter:    domainFacetValues(d, "geo"),
 			Reason:       "deterministic fallback from governance query and anchors",
 		}},

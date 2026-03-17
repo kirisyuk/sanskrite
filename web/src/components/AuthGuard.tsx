@@ -5,6 +5,7 @@ import { AuthLoading } from './AuthLoading';
 import lightLogo from '../assets/etigram-light-theme.png';
 import darkLogo from '../assets/etigram-dark-theme.png';
 import { ThemeContext } from './ThemeProvider';
+import { getAuthErrorMessage } from '../lib/authErrorMessage';
 
 interface AuthGuardProps {
   children: React.ReactNode;
@@ -30,6 +31,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
   const [accountType, setAccountType] = useState<'personal' | 'corporate'>('personal');
   const [formLoading, setFormLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [messageKind, setMessageKind] = useState<'error' | 'success' | null>(null);
 
   const validateEmail = (email: string): { isValid: boolean; error?: string } => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -55,6 +57,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
     if (formLoading) return;
 
     setError(null);
+    setMessageKind(null);
     setFormLoading(true);
 
     try {
@@ -79,11 +82,13 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
         }
         await resetPassword(email);
         setError(t('unfold.auth.passwordResetSent'));
+        setMessageKind('success');
         setTimeout(() => setCurrentView('login'), 2000);
         return;
       }
     } catch (err: any) {
-      setError(err.message || t('unfold.auth.anErrorOccurred'));
+      setError(getAuthErrorMessage(err, t));
+      setMessageKind('error');
     } finally {
       setFormLoading(false);
     }
@@ -133,14 +138,22 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
               <button
                 type="button"
                 className={`auth-tab ${currentView === 'login' ? 'active' : ''}`}
-                onClick={() => setCurrentView('login')}
+                onClick={() => {
+                  setCurrentView('login');
+                  setError(null);
+                  setMessageKind(null);
+                }}
               >
                 {t('unfold.auth.signIn')}
               </button>
               <button
                 type="button"
                 className={`auth-tab ${currentView === 'signup' ? 'active' : ''}`}
-                onClick={() => setCurrentView('signup')}
+                onClick={() => {
+                  setCurrentView('signup');
+                  setError(null);
+                  setMessageKind(null);
+                }}
               >
                 {t('unfold.auth.createAccount')}
               </button>
@@ -148,7 +161,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
           )}
 
           {error && (
-            <div className={`auth-error ${error.includes('sent') ? 'success' : ''}`}>
+            <div className={`auth-error ${messageKind === 'success' ? 'success' : ''}`}>
               {error}
             </div>
           )}
@@ -289,11 +302,13 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
                   type="button"
                   onClick={async () => {
                     setError(null);
+                    setMessageKind(null);
                     setFormLoading(true);
                     try {
                       await signInWithGoogle();
                     } catch (err: any) {
-                      setError(err.message || t('unfold.auth.failedToSignInWithGoogle'));
+                      setError(getAuthErrorMessage(err, t));
+                      setMessageKind('error');
                     } finally {
                       setFormLoading(false);
                     }
@@ -328,20 +343,28 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
               {currentView === 'login' ? (
                 <button
                   type="button"
-                  onClick={() => setCurrentView('reset')}
+                  onClick={() => {
+                    setCurrentView('reset');
+                    setError(null);
+                    setMessageKind(null);
+                  }}
                   className="auth-link"
                   disabled={formLoading}
                 >
-                  Forgot your password?
+                  {t('unfold.auth.forgotPassword')}
                 </button>
               ) : currentView === 'reset' ? (
                 <button
                   type="button"
-                  onClick={() => setCurrentView('login')}
+                  onClick={() => {
+                    setCurrentView('login');
+                    setError(null);
+                    setMessageKind(null);
+                  }}
                   className="auth-link"
                   disabled={formLoading}
                 >
-                  Back to Sign In
+                  {t('unfold.auth.backToSignIn')}
                 </button>
               ) : null}
             </div>

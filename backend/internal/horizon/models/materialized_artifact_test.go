@@ -655,6 +655,111 @@ func TestReplaceCanonicalPathInArtifact_AssemblyGraph(t *testing.T) {
 	}
 }
 
+func TestReplaceCanonicalPathInArtifact_SupplyChainPath(t *testing.T) {
+	oldPath := "/fac/us/old-terminal"
+	newPath := "/fac/us/new-terminal"
+	artifact := &MaterializedArtifact{
+		TenantID:         "tenant-a",
+		Kind:             MaterializedKindSupplyChainPath,
+		CanonicalKey:     "/supply-chain/tenant-a/test",
+		NodeRefs:         []string{"/org/us/supplier", oldPath, "/org/us/customer"},
+		GeoRefs:          []string{"/loc/us/texas", oldPath},
+		FlowRefs:         []string{oldPath},
+		ZoneRefs:         []string{oldPath},
+		AffectedZoneRefs: []string{oldPath},
+		AnchorSupplier:   oldPath,
+		AnchorCustomer:   oldPath,
+		ProductAxis:      oldPath,
+		Labels: map[string]string{
+			"anchorSupplier": oldPath,
+			"anchorCustomer": oldPath,
+			"productAxis":    oldPath,
+		},
+		Payload: BuildSupplyChainPathPayload(
+			[]SupplyChainPathNode{
+				{Type: "org", Ref: "/org/us/supplier"},
+				{Type: "facility", Ref: oldPath},
+				{Type: "org", Ref: "/org/us/customer"},
+			},
+			[]SupplyChainPathEdge{
+				{
+					Type:                    "SUPPLY_LINK",
+					From:                    0,
+					To:                      2,
+					SupplyLinkCanonicalPath: oldPath,
+					ProductRef:              "/product/component/x",
+				},
+			},
+			[]SupplyChainPathLeg{
+				{
+					Index:                   0,
+					SupplierRef:             "/org/us/supplier",
+					CustomerRef:             "/org/us/customer",
+					ProductRef:              "/product/component/x",
+					SupplyLinkCanonicalPath: oldPath,
+					TransportViaRefs:        []string{oldPath},
+					GeoRefs:                 []string{"/loc/us/texas"},
+					FlowRefs:                []string{oldPath},
+					AlternateFlowRefs:       []string{oldPath},
+					ZoneRefs:                []string{oldPath},
+					AffectedZoneRefs:        []string{oldPath},
+				},
+			},
+			nil,
+			nil,
+		),
+	}
+
+	changed := ReplaceCanonicalPathInArtifact(artifact, oldPath, newPath)
+	if !changed {
+		t.Fatal("expected replacement to report changed=true")
+	}
+	if artifact.AnchorSupplier != newPath || artifact.AnchorCustomer != newPath || artifact.ProductAxis != newPath {
+		t.Fatalf("top-level anchors not rewritten: supplier=%q customer=%q product=%q", artifact.AnchorSupplier, artifact.AnchorCustomer, artifact.ProductAxis)
+	}
+	if len(artifact.GeoRefs) != 1 || artifact.GeoRefs[0] != "/loc/us/texas" {
+		t.Fatalf("geoRefs=%v, want payload-derived rebuild without stale path", artifact.GeoRefs)
+	}
+	if len(artifact.FlowRefs) != 1 || artifact.FlowRefs[0] != newPath {
+		t.Fatalf("flowRefs=%v, want %q", artifact.FlowRefs, newPath)
+	}
+	if len(artifact.ZoneRefs) != 1 || artifact.ZoneRefs[0] != newPath {
+		t.Fatalf("zoneRefs=%v, want %q", artifact.ZoneRefs, newPath)
+	}
+	if len(artifact.AffectedZoneRefs) != 1 || artifact.AffectedZoneRefs[0] != newPath {
+		t.Fatalf("affectedZoneRefs=%v, want %q", artifact.AffectedZoneRefs, newPath)
+	}
+
+	parsed, err := ParseSupplyChainPathPayload(artifact.Payload)
+	if err != nil {
+		t.Fatalf("ParseSupplyChainPathPayload() error = %v", err)
+	}
+	if parsed.Nodes[1].Ref != newPath {
+		t.Fatalf("node ref=%q, want replacement", parsed.Nodes[1].Ref)
+	}
+	if parsed.Edges[0].SupplyLinkCanonicalPath != newPath {
+		t.Fatalf("edge supplyLinkCanonicalPath=%q, want replacement", parsed.Edges[0].SupplyLinkCanonicalPath)
+	}
+	if parsed.Legs[0].SupplyLinkCanonicalPath != newPath {
+		t.Fatalf("leg supplyLinkCanonicalPath=%q, want replacement", parsed.Legs[0].SupplyLinkCanonicalPath)
+	}
+	if len(parsed.Legs[0].TransportViaRefs) != 1 || parsed.Legs[0].TransportViaRefs[0] != newPath {
+		t.Fatalf("leg transportViaRefs=%v, want %q", parsed.Legs[0].TransportViaRefs, newPath)
+	}
+	if len(parsed.Legs[0].FlowRefs) != 1 || parsed.Legs[0].FlowRefs[0] != newPath {
+		t.Fatalf("leg flowRefs=%v, want %q", parsed.Legs[0].FlowRefs, newPath)
+	}
+	if len(parsed.Legs[0].AlternateFlowRefs) != 1 || parsed.Legs[0].AlternateFlowRefs[0] != newPath {
+		t.Fatalf("leg alternateFlowRefs=%v, want %q", parsed.Legs[0].AlternateFlowRefs, newPath)
+	}
+	if len(parsed.Legs[0].ZoneRefs) != 1 || parsed.Legs[0].ZoneRefs[0] != newPath {
+		t.Fatalf("leg zoneRefs=%v, want %q", parsed.Legs[0].ZoneRefs, newPath)
+	}
+	if len(parsed.Legs[0].AffectedZoneRefs) != 1 || parsed.Legs[0].AffectedZoneRefs[0] != newPath {
+		t.Fatalf("leg affectedZoneRefs=%v, want %q", parsed.Legs[0].AffectedZoneRefs, newPath)
+	}
+}
+
 func intPtr(i int) *int {
 	return &i
 }

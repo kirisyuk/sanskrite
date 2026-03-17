@@ -207,6 +207,12 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		(targetType == FragmentTypeCommunity || targetType == FragmentTypePerson) {
 		return DependencyTypeAffiliatedWith, true, true, "canonicalize: ORGANIZATION AFFILIATED_WITH COMMUNITY/PERSON -> COMMUNITY/PERSON AFFILIATED_WITH ORGANIZATION"
 	}
+	// AFFILIATED_WITH(COMMUNITY/PERSON → ORGANIZATION) is canonical and must be preserved.
+	if edgeType == DependencyTypeAffiliatedWith &&
+		(sourceType == FragmentTypeCommunity || sourceType == FragmentTypePerson) &&
+		targetType == FragmentTypeOrganization {
+		return DependencyTypeAffiliatedWith, false, false, ""
+	}
 	// RELATED_TO(ENTITY ↔ MARKET) → PARTICIPATES_IN (must run before generic RELATED_TO→ASSOCIATED_WITH).
 	if edgeType == DependencyTypeRelatedTo &&
 		(sourceType == FragmentTypeOrganization || sourceType == FragmentTypeFacility || sourceType == FragmentTypeCommunity || sourceType == FragmentTypeProgram) &&

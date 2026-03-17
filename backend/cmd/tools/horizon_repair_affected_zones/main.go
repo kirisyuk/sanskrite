@@ -43,13 +43,17 @@ func main() {
 	redirectsRepo := horizonrepo.NewCanonicalPathRedirectsRepository(client.Client())
 	materializedRepo := horizonrepo.NewMaterializedArtifactsRepository(client.Client())
 	lensesRepo := horizonrepo.NewLensesRepository(client.Client())
+	watchSubjectsRepo := horizonrepo.NewWatchSubjectsRepository(client.Client())
 	lensArtifactsRepo := horizonrepo.NewLensArtifactsRepository(client.Client())
 	framesRepo := horizonrepo.NewFramesRepository(client.Client())
 	mergeAuditRepo := horizonrepo.NewFragmentMergeAuditRepository(client.Client())
 	mergeRepo := horizonrepo.NewFragmentsMergeRepository(fragmentsRepo, edgesRepo, mergeAuditRepo).
 		WithRedirectsRepo(redirectsRepo).
 		WithMaterializedRepo(materializedRepo).
-		WithLensesRepo(lensesRepo)
+		WithLensesRepo(lensesRepo).
+		WithWatchSubjectsRepo(watchSubjectsRepo).
+		WithOntologyFactsRepo(corerepo.NewOntologyFactsRepository(client.Client())).
+		WithEntitiesRepo(corerepo.NewEntityRepository(client.Client()))
 	migrator := horizonrepo.NewFragmentPathMigrator(client.Client(), fragmentsRepo, redirectsRepo).
 		WithMergeRepo(mergeRepo).
 		WithMaterializedRepo(materializedRepo).

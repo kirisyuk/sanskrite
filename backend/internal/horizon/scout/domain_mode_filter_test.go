@@ -121,6 +121,16 @@ func TestIsAllowedSupplyChainRuntimeRelation_DomainAnchorKeepsScaffold(t *testin
 	}
 }
 
+func TestIsAllowedSupplyChainPersistRelation_DomainAnchorKeepsScaffold(t *testing.T) {
+	if !IsAllowedSupplyChainPersistRelation(
+		"/domain/v1/supply-chain/geo/kz/subject/samsung-electronics",
+		"/org/kr/samsung-electronics",
+		models.DependencyTypeFocusesOn,
+	) {
+		t.Fatal("domain supply-chain anchor must allow FOCUSES_ON at final persist gate")
+	}
+}
+
 func TestIsAllowedSupplyChainRuntimeRelation_MarketAnchorKeepsMarketRelation(t *testing.T) {
 	if !IsAllowedSupplyChainRuntimeRelation(
 		"/market/kz/consumer-electronics/retail",
@@ -138,6 +148,16 @@ func TestIsAllowedSupplyChainRuntimeRelation_OrgSourceStillRejectsFocusesOn(t *t
 		models.DependencyTypeFocusesOn,
 	) {
 		t.Fatal("non-domain/non-market source must not allow FOCUSES_ON in supply-chain runtime gate")
+	}
+}
+
+func TestIsAllowedSupplyChainPersistRelation_OrgSourceStillRejectsFocusesOn(t *testing.T) {
+	if IsAllowedSupplyChainPersistRelation(
+		"/org/kr/samsung-electronics",
+		"/market/kz/consumer-electronics/retail",
+		models.DependencyTypeFocusesOn,
+	) {
+		t.Fatal("non-domain/non-market source must not allow FOCUSES_ON at final persist gate")
 	}
 }
 
@@ -275,6 +295,51 @@ func TestFilterDomainRelations_PolicyImpactAllowsFacilityAndProductTargets(t *te
 	out, dropped := agents.FilterDomainRelations(context.Background(), taxonomy.DomainModePolicyImpact, in)
 	if dropped != 0 || len(out) != 2 {
 		t.Fatalf("policy_impact should keep facility/product targets, dropped=%d out=%d", dropped, len(out))
+	}
+}
+
+func TestFilterDomainRelations_CommunitySpecificEdgesAllowedInInfluenceModes(t *testing.T) {
+	tests := []struct {
+		mode string
+	}{
+		{mode: taxonomy.DomainModeGovernance},
+		{mode: taxonomy.DomainModeMarket},
+		{mode: taxonomy.DomainModeStrategic},
+		{mode: taxonomy.DomainModePolicyImpact},
+		{mode: taxonomy.DomainModeEcosystem},
+	}
+
+	in := []agents.DiscoveredRelation{
+		{
+			RelationType:        "HAS_SUBGROUP",
+			SourceCanonicalPath: "/community/sa/dynasty/house-of-saud",
+			TargetCanonicalPath: "/community/sa/dynasty/sudairi-seven",
+		},
+		{
+			RelationType:        "MEMBER_OF",
+			SourceCanonicalPath: "/person/sa/mohammed-bin-salman",
+			TargetCanonicalPath: "/community/sa/dynasty/house-of-saud",
+		},
+		{
+			RelationType:        "AFFILIATED_WITH",
+			SourceCanonicalPath: "/community/ae/trade/hawala-network",
+			TargetCanonicalPath: "/org/ae/exchange-house",
+		},
+		{
+			RelationType:        "OPERATES_VIA",
+			SourceCanonicalPath: "/community/ru/criminal/kazan-dealers",
+			TargetCanonicalPath: "/media/telegram/kazan-zakaz",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.mode, func(t *testing.T) {
+			out, dropped := agents.FilterDomainRelations(context.Background(), tc.mode, in)
+			if dropped != 0 || len(out) != len(in) {
+				t.Fatalf("%s should keep all community-specific contract edges, dropped=%d out=%d", tc.mode, dropped, len(out))
+			}
+		})
 	}
 }
 

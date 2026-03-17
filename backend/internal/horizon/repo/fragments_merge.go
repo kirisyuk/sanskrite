@@ -3,11 +3,13 @@ package repo
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
+	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
 const mergeRedirectStableTTL = 7 * 24 * time.Hour
@@ -43,12 +45,15 @@ type MergeResult struct {
 // materialized artifacts path rewrite, lens scope rewrite.
 // When redirectsRepo is set, records canonical path redirects so Resolve() returns the final path after merges.
 type FragmentsMergeRepository struct {
-	fragmentsRepo      *HorizonFragmentsRepository
-	edgesRepo          *DependencyEdgesRepository
-	mergeAuditRepo     *FragmentMergeAuditRepository
-	redirectsRepo      *CanonicalPathRedirectsRepository
-	materializedRepo   *MaterializedArtifactsRepository
-	lensesRepo         *LensesRepository
+	fragmentsRepo     *HorizonFragmentsRepository
+	edgesRepo         *DependencyEdgesRepository
+	mergeAuditRepo    *FragmentMergeAuditRepository
+	redirectsRepo     *CanonicalPathRedirectsRepository
+	materializedRepo  *MaterializedArtifactsRepository
+	lensesRepo        *LensesRepository
+	watchSubjectsRepo *WatchSubjectsRepository
+	ontologyFactsRepo *corerepo.OntologyFactsRepository
+	entitiesRepo      *corerepo.EntityRepository
 }
 
 // NewFragmentsMergeRepository creates a new merge repository.
@@ -59,7 +64,7 @@ func NewFragmentsMergeRepository(
 ) *FragmentsMergeRepository {
 	return &FragmentsMergeRepository{
 		fragmentsRepo:  fragmentsRepo,
-		edgesRepo:     edgesRepo,
+		edgesRepo:      edgesRepo,
 		mergeAuditRepo: mergeAuditRepo,
 	}
 }
@@ -93,6 +98,35 @@ func (r *FragmentsMergeRepository) WithLensesRepo(repo *LensesRepository) *Fragm
 		return r
 	}
 	r.lensesRepo = repo
+	return r
+}
+
+// WithWatchSubjectsRepo wires the watch subjects repository. When set, merge retargets
+// anchorCanonicalPath/universePaths and recomputes subject IDs when the anchor path changes.
+func (r *FragmentsMergeRepository) WithWatchSubjectsRepo(repo *WatchSubjectsRepository) *FragmentsMergeRepository {
+	if r == nil {
+		return r
+	}
+	r.watchSubjectsRepo = repo
+	return r
+}
+
+// WithOntologyFactsRepo wires ontology facts so canonicalPaths/actorPaths/locationPath are
+// rewritten after path merges.
+func (r *FragmentsMergeRepository) WithOntologyFactsRepo(repo *corerepo.OntologyFactsRepository) *FragmentsMergeRepository {
+	if r == nil {
+		return r
+	}
+	r.ontologyFactsRepo = repo
+	return r
+}
+
+// WithEntitiesRepo wires ontology entities so canonicalPaths remain aligned after merges.
+func (r *FragmentsMergeRepository) WithEntitiesRepo(repo *corerepo.EntityRepository) *FragmentsMergeRepository {
+	if r == nil {
+		return r
+	}
+	r.entitiesRepo = repo
 	return r
 }
 
@@ -182,6 +216,14 @@ func (r *FragmentsMergeRepository) mergeFragment(ctx context.Context, req MergeR
 	// 4.7. Rewrite lens scope entries (fromPath -> toPath) so UI/graph stay consistent.
 	r.rewriteLensScopePaths(ctx, tenantID, dup, primary)
 
+	// 4.8. Rewrite supply-link refs that embed merged node paths into their identity.
+	r.rewriteSupplyLinksPaths(ctx, tenantID, dup, primary)
+
+	// 4.9. Rewrite watch/runtime and ontology stores indexed by canonicalPath.
+	r.rewriteWatchSubjectsPaths(ctx, tenantID, dup, primary)
+	r.rewriteOntologyFactsPaths(ctx, tenantID, dup, primary)
+	r.rewriteOntologyEntitiesPaths(ctx, tenantID, dup, primary)
+
 	// 5. Delete duplicate
 	if err := r.fragmentsRepo.Delete(ctx, dupID); err != nil {
 		return nil, fmt.Errorf("failed to delete duplicate: %w", err)
@@ -206,20 +248,21 @@ func (r *FragmentsMergeRepository) recordMergeRedirects(ctx context.Context, dup
 	if fragType == "" {
 		fragType = string(dup.Type)
 	}
+	r.recordPathRedirects(ctx, fragType, collectFragmentMergePaths(dup, target), target)
+}
 
-	sources := make(map[string]struct{})
-	if p := strings.TrimSpace(dup.CanonicalPath); p != "" && p != target {
-		sources[p] = struct{}{}
+func (r *FragmentsMergeRepository) recordPathRedirects(ctx context.Context, fragType string, sources []string, target string) {
+	if r == nil || r.redirectsRepo == nil {
+		return
 	}
-	if merged := strings.TrimSpace(dup.Identifiers["merged_paths"]); merged != "" {
-		for _, p := range strings.Split(merged, ",") {
-			if p = strings.TrimSpace(p); p != "" && p != target {
-				sources[p] = struct{}{}
-			}
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return
+	}
+	for _, src := range normalizeAndSortStrings(sources) {
+		if src == target {
+			continue
 		}
-	}
-
-	for src := range sources {
 		_, _, _, _ = r.redirectsRepo.RecordObservation(ctx,
 			"global", src, target, "merge", fragType, 1, mergeRedirectStableTTL)
 	}
@@ -228,60 +271,110 @@ func (r *FragmentsMergeRepository) recordMergeRedirects(ctx context.Context, dup
 // rewriteMaterializedArtifactsPaths replaces old canonical paths with the primary path in all
 // MaterializedArtifacts (supply chains, domain artifacts) that reference the duplicate.
 func (r *FragmentsMergeRepository) rewriteMaterializedArtifactsPaths(ctx context.Context, tenantID string, dup, primary *models.HorizonFragment) {
-	if r.materializedRepo == nil || dup == nil || primary == nil {
+	if dup == nil || primary == nil {
 		return
 	}
 	target := strings.TrimSpace(primary.CanonicalPath)
 	if target == "" {
 		return
 	}
-	// Collect all paths that map to target: duplicate path + merged_paths
-	pathsToReplace := make(map[string]struct{})
-	if p := strings.TrimSpace(dup.CanonicalPath); p != "" && p != target {
-		pathsToReplace[p] = struct{}{}
-	}
-	if merged := strings.TrimSpace(dup.Identifiers["merged_paths"]); merged != "" {
-		for _, p := range strings.Split(merged, ",") {
-			if p = strings.TrimSpace(p); p != "" && p != target {
-				pathsToReplace[p] = struct{}{}
-			}
-		}
-	}
-	if len(pathsToReplace) == 0 {
+	r.rewriteMaterializedArtifactsPathsForPaths(ctx, tenantID, dup.Type, collectFragmentMergePaths(dup, target), target)
+}
+
+func (r *FragmentsMergeRepository) rewriteMaterializedArtifactsPathsForPaths(ctx context.Context, tenantID string, fragType models.FragmentType, pathsToReplace []string, target string) {
+	if r.materializedRepo == nil {
 		return
 	}
-
+	target = strings.TrimSpace(target)
+	pathsToReplace = normalizeAndSortStrings(pathsToReplace)
+	if target == "" || len(pathsToReplace) == 0 {
+		return
+	}
 	kinds := []models.MaterializedKind{
 		models.MaterializedKindSupplyChainPath,
+		models.MaterializedKindSupplyChainAssemblyGraph,
 		models.MaterializedKindRegulatoryImpactMap,
 		models.MaterializedKindGovernanceChain,
 		models.MaterializedKindEcosystemMap,
 	}
-	// Collect all artifacts that reference any old path
+
 	toUpdate := make(map[string]*models.MaterializedArtifact)
-	findAndCollect := func(tid, oldPath string) {
-		for _, kind := range kinds {
-			artifacts, err := r.materializedRepo.FindByNodeRef(ctx, tid, oldPath, kind)
-			if err != nil || len(artifacts) == 0 {
+	collectArtifacts := func(artifacts []*models.MaterializedArtifact) {
+		for _, art := range artifacts {
+			if art == nil || strings.TrimSpace(art.ID) == "" {
 				continue
 			}
-			for _, art := range artifacts {
-				if art != nil && art.ID != "" {
-					toUpdate[art.ID] = art
+			toUpdate[art.ID] = art
+		}
+	}
+	collectIndexed := func(oldPath string, kind models.MaterializedKind) {
+		if tenantID == "global" {
+			if artifacts, err := r.materializedRepo.FindByNodeRefAnyTenant(ctx, oldPath, kind, 500); err == nil {
+				collectArtifacts(artifacts)
+			}
+			switch fragType {
+			case models.FragmentTypeGeoRegion:
+				if artifacts, err := r.materializedRepo.FindByGeoRefsAnyTenant(ctx, []string{oldPath}, kind, 500); err == nil {
+					collectArtifacts(artifacts)
 				}
+			case models.FragmentTypeSupplyLink:
+				if artifacts, err := r.materializedRepo.FindByFlowRefsAnyTenant(ctx, []string{oldPath}, kind, 500); err == nil {
+					collectArtifacts(artifacts)
+				}
+			case models.FragmentTypeAffectedZone:
+				if artifacts, err := r.materializedRepo.FindByZoneRefsAnyTenant(ctx, []string{oldPath}, kind, 500); err == nil {
+					collectArtifacts(artifacts)
+				}
+				if artifacts, err := r.materializedRepo.FindByAffectedZoneRefsAnyTenant(ctx, []string{oldPath}, kind, 500); err == nil {
+					collectArtifacts(artifacts)
+				}
+			}
+			return
+		}
+		if artifacts, err := r.materializedRepo.FindByNodeRef(ctx, tenantID, oldPath, kind); err == nil {
+			collectArtifacts(artifacts)
+		}
+		if artifacts, err := r.materializedRepo.FindByNodeRef(ctx, "global", oldPath, kind); err == nil {
+			collectArtifacts(artifacts)
+		}
+		switch fragType {
+		case models.FragmentTypeGeoRegion:
+			if artifacts, err := r.materializedRepo.FindByGeoRefsAny(ctx, tenantID, []string{oldPath}, kind, 500); err == nil {
+				collectArtifacts(artifacts)
+			}
+			if artifacts, err := r.materializedRepo.FindByGeoRefsAny(ctx, "global", []string{oldPath}, kind, 500); err == nil {
+				collectArtifacts(artifacts)
+			}
+		case models.FragmentTypeSupplyLink:
+			if artifacts, err := r.materializedRepo.FindByFlowRefsAny(ctx, tenantID, []string{oldPath}, kind, 500); err == nil {
+				collectArtifacts(artifacts)
+			}
+			if artifacts, err := r.materializedRepo.FindByFlowRefsAny(ctx, "global", []string{oldPath}, kind, 500); err == nil {
+				collectArtifacts(artifacts)
+			}
+		case models.FragmentTypeAffectedZone:
+			if artifacts, err := r.materializedRepo.FindByZoneRefsAny(ctx, tenantID, []string{oldPath}, kind, 500); err == nil {
+				collectArtifacts(artifacts)
+			}
+			if artifacts, err := r.materializedRepo.FindByZoneRefsAny(ctx, "global", []string{oldPath}, kind, 500); err == nil {
+				collectArtifacts(artifacts)
+			}
+			if artifacts, err := r.materializedRepo.FindByAffectedZoneRefsAny(ctx, tenantID, []string{oldPath}, kind, 500); err == nil {
+				collectArtifacts(artifacts)
+			}
+			if artifacts, err := r.materializedRepo.FindByAffectedZoneRefsAny(ctx, "global", []string{oldPath}, kind, 500); err == nil {
+				collectArtifacts(artifacts)
 			}
 		}
 	}
-	for oldPath := range pathsToReplace {
-		findAndCollect(tenantID, oldPath)
-		if tenantID != "global" {
-			findAndCollect("global", oldPath)
+	for _, oldPath := range pathsToReplace {
+		for _, kind := range kinds {
+			collectIndexed(oldPath, kind)
 		}
 	}
-	// Replace all old paths with target in each artifact, then update once
 	for _, art := range toUpdate {
 		changed := false
-		for oldPath := range pathsToReplace {
+		for _, oldPath := range pathsToReplace {
 			if models.ReplaceCanonicalPathInArtifact(art, oldPath, target) {
 				changed = true
 			}
@@ -295,43 +388,54 @@ func (r *FragmentsMergeRepository) rewriteMaterializedArtifactsPaths(ctx context
 // rewriteLensScopePaths replaces old canonical paths with the primary path in lens.Scope,
 // ScopeFragments, and ResolvedQueries for all lenses that reference the duplicate.
 func (r *FragmentsMergeRepository) rewriteLensScopePaths(ctx context.Context, tenantID string, dup, primary *models.HorizonFragment) {
-	if r.lensesRepo == nil || dup == nil || primary == nil {
+	if dup == nil || primary == nil {
 		return
 	}
 	target := strings.TrimSpace(primary.CanonicalPath)
 	if target == "" {
 		return
 	}
-	pathsToReplace := make([]string, 0, 8)
-	if p := strings.TrimSpace(dup.CanonicalPath); p != "" && p != target {
-		pathsToReplace = append(pathsToReplace, p)
-	}
-	if merged := strings.TrimSpace(dup.Identifiers["merged_paths"]); merged != "" {
-		for _, p := range strings.Split(merged, ",") {
-			if p = strings.TrimSpace(p); p != "" && p != target {
-				pathsToReplace = append(pathsToReplace, p)
-			}
-		}
-	}
-	if len(pathsToReplace) == 0 {
+	r.rewriteLensScopePathsForPaths(ctx, tenantID, collectFragmentMergePaths(dup, target), target)
+}
+
+func (r *FragmentsMergeRepository) rewriteLensScopePathsForPaths(ctx context.Context, tenantID string, pathsToReplace []string, target string) {
+	if r.lensesRepo == nil {
 		return
 	}
-
+	target = strings.TrimSpace(target)
+	pathsToReplace = normalizeAndSortStrings(pathsToReplace)
+	if target == "" || len(pathsToReplace) == 0 {
+		return
+	}
+	toUpdate := make(map[string]*models.Lens)
 	for _, fromPath := range pathsToReplace {
-		lenses, err := r.lensesRepo.FindByScope(ctx, tenantID, fromPath, 200)
-		if err != nil || len(lenses) == 0 {
+		var lenses []*models.Lens
+		var err error
+		if tenantID == "global" {
+			lenses, err = r.lensesRepo.FindByScopeAnyTenant(ctx, fromPath, 500)
+		} else {
+			lenses, err = r.lensesRepo.FindByScope(ctx, tenantID, fromPath, 250)
+			if err == nil {
+				if globalLenses, globalErr := r.lensesRepo.FindByScope(ctx, "global", fromPath, 250); globalErr == nil {
+					lenses = append(lenses, globalLenses...)
+				}
+			}
+		}
+		if err != nil {
 			continue
 		}
 		for _, lens := range lenses {
-			if lens == nil {
+			if lens == nil || strings.TrimSpace(lens.ID) == "" {
 				continue
 			}
-			changed := false
-			for i, s := range lens.Scope {
-				if strings.TrimSpace(s) == fromPath {
-					lens.Scope[i] = target
-					changed = true
-				}
+			toUpdate[lens.ID] = lens
+		}
+	}
+	for _, lens := range toUpdate {
+		changed := false
+		for _, fromPath := range pathsToReplace {
+			if replaceCanonicalPathInStringSlice(lens.Scope, fromPath, target) {
+				changed = true
 			}
 			if lens.ScopeFragments != nil {
 				if fid, ok := lens.ScopeFragments[fromPath]; ok {
@@ -344,51 +448,244 @@ func (r *FragmentsMergeRepository) rewriteLensScopePaths(ctx context.Context, te
 			}
 			if lens.ResolvedQueries != nil {
 				for queryAddr, resolvedPaths := range lens.ResolvedQueries {
-					updated := false
-					for i, p := range resolvedPaths {
-						if strings.TrimSpace(p) == fromPath {
-							resolvedPaths[i] = target
-							updated = true
-						}
-					}
-					if updated {
-						seen := map[string]struct{}{}
-						out := make([]string, 0, len(resolvedPaths))
-						for _, p := range resolvedPaths {
-							p = strings.TrimSpace(p)
-							if p == "" {
-								continue
-							}
-							if _, ok := seen[p]; ok {
-								continue
-							}
-							seen[p] = struct{}{}
-							out = append(out, p)
-						}
-						lens.ResolvedQueries[queryAddr] = out
+					if replaceCanonicalPathInStringSlice(resolvedPaths, fromPath, target) {
+						lens.ResolvedQueries[queryAddr] = normalizeAndSortStrings(resolvedPaths)
 						changed = true
 					}
 				}
 			}
-			if changed {
-				// De-dupe scope after rewrite
-				seen := map[string]struct{}{}
-				out := make([]string, 0, len(lens.Scope))
-				for _, s := range lens.Scope {
-					s = strings.TrimSpace(s)
-					if s == "" {
-						continue
-					}
-					if _, ok := seen[s]; ok {
-						continue
-					}
-					seen[s] = struct{}{}
-					out = append(out, s)
-				}
-				lens.Scope = out
-				_ = r.lensesRepo.Update(ctx, lens)
+		}
+		if changed {
+			lens.Scope = normalizeAndSortStrings(lens.Scope)
+			_ = r.lensesRepo.Update(ctx, lens)
+		}
+	}
+}
+
+func (r *FragmentsMergeRepository) rewriteSupplyLinksPaths(ctx context.Context, tenantID string, dup, primary *models.HorizonFragment) {
+	if dup == nil || primary == nil || r.fragmentsRepo == nil {
+		return
+	}
+	target := strings.TrimSpace(primary.CanonicalPath)
+	if target == "" {
+		return
+	}
+	pathsToReplace := collectFragmentMergePaths(dup, target)
+	if len(pathsToReplace) == 0 {
+		return
+	}
+
+	supplyLinks := make(map[string]*models.HorizonFragment)
+	collectLinks := func(items []*models.HorizonFragment) {
+		for _, item := range items {
+			if item == nil || item.Type != models.FragmentTypeSupplyLink || strings.TrimSpace(item.ID) == "" {
+				continue
+			}
+			supplyLinks[item.ID] = item
+		}
+	}
+	if tenantID == "global" {
+		if items, err := r.fragmentsRepo.ListByType(ctx, models.FragmentTypeSupplyLink, 5000); err == nil {
+			collectLinks(items)
+		}
+	} else {
+		if items, err := r.fragmentsRepo.ListByTypeAndTenant(ctx, tenantID, models.FragmentTypeSupplyLink, 2500); err == nil {
+			collectLinks(items)
+		}
+		if items, err := r.fragmentsRepo.ListByTypeAndTenant(ctx, "global", models.FragmentTypeSupplyLink, 2500); err == nil {
+			collectLinks(items)
+		}
+	}
+
+	for _, link := range supplyLinks {
+		changed := false
+		for _, oldPath := range pathsToReplace {
+			if replaceCanonicalPathInOptionalString(link.SupplierRef, oldPath, target) {
+				changed = true
+			}
+			if replaceCanonicalPathInOptionalString(link.CustomerRef, oldPath, target) {
+				changed = true
+			}
+			if replaceCanonicalPathInOptionalString(link.ProductRef, oldPath, target) {
+				changed = true
+			}
+			if replaceCanonicalPathInOptionalString(link.SupplierFacilityRef, oldPath, target) {
+				changed = true
+			}
+			if replaceCanonicalPathInOptionalString(link.CustomerFacilityRef, oldPath, target) {
+				changed = true
+			}
+			if replaceCanonicalPathInStringSlice(link.TransportViaRefs, oldPath, target) {
+				changed = true
 			}
 		}
+		if !changed {
+			continue
+		}
+		oldLinkPath := strings.TrimSpace(link.CanonicalPath)
+		newLinkPath, err := models.BuildSupplyLinkCanonicalPath(link.TenantID, link.SupplierRef, link.ProductRef, link.CustomerRef)
+		if err == nil && strings.TrimSpace(newLinkPath) != "" {
+			link.CanonicalPath = strings.TrimSpace(newLinkPath)
+			if link.CanonicalPath != oldLinkPath {
+				link.AlternativePaths = normalizeAndSortStrings(append(link.AlternativePaths, oldLinkPath))
+			}
+		}
+		if err := r.fragmentsRepo.Update(ctx, link); err != nil {
+			continue
+		}
+		if oldLinkPath != "" && link.CanonicalPath != "" && oldLinkPath != link.CanonicalPath {
+			r.recordPathRedirects(ctx, string(models.FragmentTypeSupplyLink), []string{oldLinkPath}, link.CanonicalPath)
+			r.rewriteMaterializedArtifactsPathsForPaths(ctx, link.TenantID, models.FragmentTypeSupplyLink, []string{oldLinkPath}, link.CanonicalPath)
+			r.rewriteLensScopePathsForPaths(ctx, link.TenantID, []string{oldLinkPath}, link.CanonicalPath)
+			r.rewriteWatchSubjectsPathsForPaths(ctx, link.TenantID, []string{oldLinkPath}, link.CanonicalPath, "", "")
+			r.rewriteOntologyFactsPathsForPaths(ctx, link.TenantID, []string{oldLinkPath}, link.CanonicalPath)
+			r.rewriteOntologyEntitiesPathsForPaths(ctx, link.TenantID, []string{oldLinkPath}, link.CanonicalPath)
+		}
+	}
+}
+
+func (r *FragmentsMergeRepository) rewriteWatchSubjectsPaths(ctx context.Context, tenantID string, dup, primary *models.HorizonFragment) {
+	if dup == nil || primary == nil {
+		return
+	}
+	target := strings.TrimSpace(primary.CanonicalPath)
+	if target == "" {
+		return
+	}
+	r.rewriteWatchSubjectsPathsForPaths(ctx, tenantID, collectFragmentMergePaths(dup, target), target, strings.TrimSpace(dup.ID), strings.TrimSpace(primary.ID))
+}
+
+func (r *FragmentsMergeRepository) rewriteWatchSubjectsPathsForPaths(ctx context.Context, tenantID string, pathsToReplace []string, target, oldFragmentID, newFragmentID string) {
+	if r.watchSubjectsRepo == nil {
+		return
+	}
+	target = strings.TrimSpace(target)
+	pathsToReplace = normalizeAndSortStrings(pathsToReplace)
+	oldFragmentID = strings.TrimSpace(oldFragmentID)
+	newFragmentID = strings.TrimSpace(newFragmentID)
+	if target == "" || len(pathsToReplace) == 0 {
+		return
+	}
+	toUpdate := make(map[string]*models.WatchSubject)
+	collectSubjects := func(items []*models.WatchSubject) {
+		for _, item := range items {
+			if item == nil || strings.TrimSpace(item.ID) == "" {
+				continue
+			}
+			toUpdate[item.ID] = item
+		}
+	}
+	for _, oldPath := range pathsToReplace {
+		if tenantID == "global" {
+			if items, err := r.watchSubjectsRepo.ListByAnchorCanonicalPathAnyTenant(ctx, oldPath, 250); err == nil {
+				collectSubjects(items)
+			}
+			if items, err := r.watchSubjectsRepo.ListByUniversePathAnyTenant(ctx, oldPath, 500); err == nil {
+				collectSubjects(items)
+			}
+			continue
+		}
+		if items, err := r.watchSubjectsRepo.ListByAnchorCanonicalPath(ctx, tenantID, oldPath, 200); err == nil {
+			collectSubjects(items)
+		}
+		if items, err := r.watchSubjectsRepo.ListByUniversePath(ctx, tenantID, oldPath, 400); err == nil {
+			collectSubjects(items)
+		}
+	}
+	for _, subject := range toUpdate {
+		oldID := strings.TrimSpace(subject.ID)
+		changed := false
+		for _, oldPath := range pathsToReplace {
+			if strings.TrimSpace(subject.AnchorCanonicalPath) == oldPath {
+				subject.AnchorCanonicalPath = target
+				changed = true
+			}
+			if replaceCanonicalPathInStringSlice(subject.UniversePaths, oldPath, target) {
+				changed = true
+			}
+			if replaceCanonicalPathInMetadata(subject.Metadata, oldPath, target) {
+				changed = true
+			}
+		}
+		if oldFragmentID != "" && strings.TrimSpace(subject.AnchorFragmentID) == oldFragmentID && newFragmentID != "" {
+			subject.AnchorFragmentID = newFragmentID
+			changed = true
+		}
+		if !changed {
+			continue
+		}
+		subject.UniversePaths = normalizeAndSortStrings(subject.UniversePaths)
+		subject.ID = BuildWatchSubjectID(subject.TenantID, subject.ProjectID, subject.LensID, subject.PackID, subject.UserID, subject.SubjectKind, subject.AnchorCanonicalPath)
+		if existing, err := r.watchSubjectsRepo.Get(ctx, subject.ID); err == nil && existing != nil && existing.ID != oldID {
+			mergeWatchSubject(existing, subject)
+			subject = existing
+		}
+		if err := r.watchSubjectsRepo.Upsert(ctx, subject); err != nil {
+			continue
+		}
+		if oldID != "" && oldID != subject.ID {
+			_ = r.watchSubjectsRepo.Delete(ctx, oldID)
+		}
+	}
+}
+
+func (r *FragmentsMergeRepository) rewriteOntologyFactsPaths(ctx context.Context, tenantID string, dup, primary *models.HorizonFragment) {
+	if dup == nil || primary == nil {
+		return
+	}
+	target := strings.TrimSpace(primary.CanonicalPath)
+	if target == "" {
+		return
+	}
+	r.rewriteOntologyFactsPathsForPaths(ctx, tenantID, collectFragmentMergePaths(dup, target), target)
+}
+
+func (r *FragmentsMergeRepository) rewriteOntologyFactsPathsForPaths(ctx context.Context, tenantID string, pathsToReplace []string, target string) {
+	if r.ontologyFactsRepo == nil {
+		return
+	}
+	target = strings.TrimSpace(target)
+	pathsToReplace = normalizeAndSortStrings(pathsToReplace)
+	if target == "" || len(pathsToReplace) == 0 {
+		return
+	}
+	for _, oldPath := range pathsToReplace {
+		if tenantID == "global" {
+			_, _ = r.ontologyFactsRepo.ReplaceCanonicalPathReferences(ctx, "", oldPath, target, 2000)
+			continue
+		}
+		_, _ = r.ontologyFactsRepo.ReplaceCanonicalPathReferences(ctx, tenantID, oldPath, target, 1500)
+		_, _ = r.ontologyFactsRepo.ReplaceCanonicalPathReferences(ctx, "global", oldPath, target, 1500)
+	}
+}
+
+func (r *FragmentsMergeRepository) rewriteOntologyEntitiesPaths(ctx context.Context, tenantID string, dup, primary *models.HorizonFragment) {
+	if dup == nil || primary == nil {
+		return
+	}
+	target := strings.TrimSpace(primary.CanonicalPath)
+	if target == "" {
+		return
+	}
+	r.rewriteOntologyEntitiesPathsForPaths(ctx, tenantID, collectFragmentMergePaths(dup, target), target)
+}
+
+func (r *FragmentsMergeRepository) rewriteOntologyEntitiesPathsForPaths(ctx context.Context, tenantID string, pathsToReplace []string, target string) {
+	if r.entitiesRepo == nil {
+		return
+	}
+	target = strings.TrimSpace(target)
+	pathsToReplace = normalizeAndSortStrings(pathsToReplace)
+	if target == "" || len(pathsToReplace) == 0 {
+		return
+	}
+	for _, oldPath := range pathsToReplace {
+		if tenantID == "global" {
+			_, _ = r.entitiesRepo.ReplaceCanonicalPathReferences(ctx, "", oldPath, target, 2000)
+			continue
+		}
+		_, _ = r.entitiesRepo.ReplaceCanonicalPathReferences(ctx, tenantID, oldPath, target, 1500)
+		_, _ = r.entitiesRepo.ReplaceCanonicalPathReferences(ctx, "global", oldPath, target, 1500)
 	}
 }
 
@@ -528,6 +825,231 @@ func betterMetricValue(a, b models.MetricValue) bool {
 	return false
 }
 
+func collectFragmentMergePaths(fragment *models.HorizonFragment, exclude string) []string {
+	if fragment == nil {
+		return nil
+	}
+	paths := make([]string, 0, 1+len(fragment.AlternativePaths))
+	if p := strings.TrimSpace(fragment.CanonicalPath); p != "" && p != exclude {
+		paths = append(paths, p)
+	}
+	if merged := strings.TrimSpace(fragment.Identifiers["merged_paths"]); merged != "" {
+		paths = append(paths, splitCommaTrimmed(merged)...)
+	}
+	paths = append(paths, fragment.AlternativePaths...)
+	return filterExcludedPaths(paths, exclude)
+}
+
+func collectFragmentAlternativeNames(fragment *models.HorizonFragment) []string {
+	if fragment == nil {
+		return nil
+	}
+	out := make([]string, 0, len(fragment.AlternativeNames)+3)
+	out = append(out, fragment.AlternativeNames...)
+	if v := strings.TrimSpace(fragment.Identifiers["legalName"]); v != "" {
+		out = append(out, v)
+	}
+	if v := strings.TrimSpace(fragment.Identifiers["shortName"]); v != "" {
+		out = append(out, v)
+	}
+	if v := strings.TrimSpace(fragment.Labels["en"]); v != "" {
+		out = append(out, v)
+	}
+	return normalizeAndSortStrings(out)
+}
+
+func normalizeAndSortStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func splitCommaTrimmed(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	out := make([]string, 0, 4)
+	for _, item := range strings.Split(raw, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func filterExcludedPaths(values []string, exclude string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	exclude = strings.TrimSpace(exclude)
+	out := make([]string, 0, len(values))
+	for _, value := range normalizeAndSortStrings(values) {
+		if value == exclude {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
+}
+
+func replaceCanonicalPathInStringSlice(values []string, oldPath, newPath string) bool {
+	oldPath = strings.TrimSpace(oldPath)
+	newPath = strings.TrimSpace(newPath)
+	if oldPath == "" || newPath == "" || oldPath == newPath {
+		return false
+	}
+	changed := false
+	for i, raw := range values {
+		if strings.TrimSpace(raw) != oldPath {
+			continue
+		}
+		values[i] = newPath
+		changed = true
+	}
+	return changed
+}
+
+func replaceCanonicalPathInOptionalString(value *string, oldPath, newPath string) bool {
+	if value == nil {
+		return false
+	}
+	oldPath = strings.TrimSpace(oldPath)
+	newPath = strings.TrimSpace(newPath)
+	if oldPath == "" || newPath == "" || oldPath == newPath {
+		return false
+	}
+	if strings.TrimSpace(*value) != oldPath {
+		return false
+	}
+	*value = newPath
+	return true
+}
+
+func replaceCanonicalPathInMetadata(metadata map[string]any, oldPath, newPath string) bool {
+	if len(metadata) == 0 {
+		return false
+	}
+	changed := false
+	for key, value := range metadata {
+		replaced, ok := replaceCanonicalPathInAny(value, oldPath, newPath)
+		if !ok {
+			continue
+		}
+		metadata[key] = replaced
+		changed = true
+	}
+	return changed
+}
+
+func replaceCanonicalPathInAny(value any, oldPath, newPath string) (any, bool) {
+	switch typed := value.(type) {
+	case string:
+		if strings.TrimSpace(typed) == strings.TrimSpace(oldPath) {
+			return newPath, true
+		}
+		return value, false
+	case []string:
+		if !replaceCanonicalPathInStringSlice(typed, oldPath, newPath) {
+			return value, false
+		}
+		return normalizeAndSortStrings(typed), true
+	case []interface{}:
+		changed := false
+		for i := range typed {
+			replaced, ok := replaceCanonicalPathInAny(typed[i], oldPath, newPath)
+			if !ok {
+				continue
+			}
+			typed[i] = replaced
+			changed = true
+		}
+		return typed, changed
+	case map[string]any:
+		changed := false
+		for key, nested := range typed {
+			replaced, ok := replaceCanonicalPathInAny(nested, oldPath, newPath)
+			if !ok {
+				continue
+			}
+			typed[key] = replaced
+			changed = true
+		}
+		return typed, changed
+	default:
+		return value, false
+	}
+}
+
+func mergeWatchSubject(dst, src *models.WatchSubject) {
+	if dst == nil || src == nil {
+		return
+	}
+	if strings.TrimSpace(dst.DisplayLabel) == "" {
+		dst.DisplayLabel = src.DisplayLabel
+	}
+	if strings.TrimSpace(dst.AnchorFragmentID) == "" {
+		dst.AnchorFragmentID = src.AnchorFragmentID
+	}
+	if strings.TrimSpace(dst.ProjectID) == "" {
+		dst.ProjectID = src.ProjectID
+	}
+	if strings.TrimSpace(dst.LensID) == "" {
+		dst.LensID = src.LensID
+	}
+	if strings.TrimSpace(dst.PackID) == "" {
+		dst.PackID = src.PackID
+	}
+	if strings.TrimSpace(dst.UserID) == "" {
+		dst.UserID = src.UserID
+	}
+	if dst.SourceMode == "" {
+		dst.SourceMode = src.SourceMode
+	}
+	if dst.RuntimeMode == "" {
+		dst.RuntimeMode = src.RuntimeMode
+	}
+	if dst.Status == models.WatchSubjectStatusDeleted && src.Status != "" && src.Status != models.WatchSubjectStatusDeleted {
+		dst.Status = src.Status
+	}
+	if src.Priority > 0 && (dst.Priority == 0 || src.Priority < dst.Priority) {
+		dst.Priority = src.Priority
+	}
+	dst.DomainModes = normalizeAndSortStrings(append(dst.DomainModes, src.DomainModes...))
+	dst.Roles = normalizeAndSortStrings(append(dst.Roles, src.Roles...))
+	dst.LensBindings = normalizeAndSortStrings(append(dst.LensBindings, src.LensBindings...))
+	dst.UniversePaths = normalizeAndSortStrings(append(dst.UniversePaths, src.UniversePaths...))
+	if dst.Metadata == nil && src.Metadata != nil {
+		dst.Metadata = map[string]any{}
+	}
+	for key, value := range src.Metadata {
+		if _, exists := dst.Metadata[key]; exists {
+			continue
+		}
+		dst.Metadata[key] = value
+	}
+	if dst.CreatedAt.IsZero() || (!src.CreatedAt.IsZero() && src.CreatedAt.Before(dst.CreatedAt)) {
+		dst.CreatedAt = src.CreatedAt
+	}
+	if src.UpdatedAt.After(dst.UpdatedAt) {
+		dst.UpdatedAt = src.UpdatedAt
+	}
+}
+
 func mergeFragmentDataFillFirst(target, source *models.HorizonFragment) bool {
 	if target == nil || source == nil {
 		return false
@@ -569,14 +1091,21 @@ func mergeFragmentDataFillFirst(target, source *models.HorizonFragment) bool {
 	if mergeStatePreferMetrics(target, source.State) {
 		changed = true
 	}
-	if strings.TrimSpace(source.CanonicalPath) != "" {
-		if target.Identifiers["merged_paths"] == "" {
-			target.Identifiers["merged_paths"] = source.CanonicalPath
-			changed = true
-		} else if !strings.Contains(target.Identifiers["merged_paths"], source.CanonicalPath) {
-			target.Identifiers["merged_paths"] += "," + source.CanonicalPath
-			changed = true
-		}
+	mergedPaths := normalizeAndSortStrings(append(splitCommaTrimmed(target.Identifiers["merged_paths"]), collectFragmentMergePaths(source, strings.TrimSpace(target.CanonicalPath))...))
+	mergedPathsJoined := strings.Join(mergedPaths, ",")
+	if strings.TrimSpace(target.Identifiers["merged_paths"]) != mergedPathsJoined {
+		target.Identifiers["merged_paths"] = mergedPathsJoined
+		changed = true
+	}
+	targetAltPaths := normalizeAndSortStrings(append(target.AlternativePaths, collectFragmentMergePaths(source, strings.TrimSpace(target.CanonicalPath))...))
+	if strings.Join(target.AlternativePaths, "\n") != strings.Join(targetAltPaths, "\n") {
+		target.AlternativePaths = targetAltPaths
+		changed = true
+	}
+	targetAltNames := normalizeAndSortStrings(append(target.AlternativeNames, collectFragmentAlternativeNames(source)...))
+	if strings.Join(target.AlternativeNames, "\n") != strings.Join(targetAltNames, "\n") {
+		target.AlternativeNames = targetAltNames
+		changed = true
 	}
 	return changed
 }

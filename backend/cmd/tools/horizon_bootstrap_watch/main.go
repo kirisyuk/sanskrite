@@ -12,6 +12,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	horizonwatchruntime "github.com/igorkirisyuk/sanskrite/internal/horizon/watchruntime"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 )
@@ -64,6 +65,26 @@ func main() {
 	watchdogRepo := horizonrepo.NewWatchdogConfigsRepository(db)
 	scopeAgentConfigsRepo := horizonrepo.NewScopeAgentConfigsRepository(db)
 	scopeAgentStatesRepo := horizonrepo.NewScopeAgentStatesRepository(db)
+	macroPoliciesRepo := horizonrepo.NewMacroAgentPoliciesRepository(db)
+	watchSubjectsRepo := horizonrepo.NewWatchSubjectsRepository(db)
+	watchTriggersRepo := horizonrepo.NewWatchTriggersRepository(db)
+	lensesRepo := horizonrepo.NewLensesRepository(db)
+	lensArtifactsRepo := horizonrepo.NewLensArtifactsRepository(db)
+	edgesRepo := horizonrepo.NewDependencyEdgesRepository(db)
+	materializedArtifactsRepo := horizonrepo.NewMaterializedArtifactsRepository(db)
+
+	watchRuntimeService := horizonwatchruntime.NewService(
+		watchSubjectsRepo,
+		watchTriggersRepo,
+		watchTargetsRepo,
+		watchdogRepo,
+		scopeAgentConfigsRepo,
+		lensesRepo,
+		lensArtifactsRepo,
+		fragmentsRepo,
+		edgesRepo,
+	).WithMaterializedArtifactsRepository(materializedArtifactsRepo).
+		WithMacroAgentPoliciesRepository(macroPoliciesRepo)
 
 	if err := ensureBootstrapProject(ctx, usersRepo, projectsRepo); err != nil {
 		log.Fatalf("bootstrap project failed: %v", err)
@@ -187,7 +208,7 @@ func main() {
 				Provider:              "gemini",
 				PrimaryModel:          "gemini-3-flash-preview",
 				EscalationModel:       "gemini-3-pro-preview",
-				FallbackModels:        []string{"gemini-2.5-flash", "gemini-2.5-pro"},
+				FallbackModels:        []string{"gemini-3.1-flash-lite-preview", "gemini-2.5-flash", "gemini-2.5-pro"},
 				PreferredVertexModel:  "vertex-gemini-3-flash-preview",
 				UseSearchGrounding:    true,
 				UseDatastoreGrounding: true,
@@ -201,6 +222,35 @@ func main() {
 		}
 		if err := scopeAgentConfigsRepo.Upsert(ctx, cfg); err != nil {
 			log.Fatalf("scope agent config upsert failed for %s: %v", seed.key, err)
+		}
+
+		policy := &horizonmodels.MacroAgentPolicy{
+			TenantID:            "global",
+			ProjectID:           projectID,
+			Name:                fmt.Sprintf("%s macro agent", seed.label),
+			Status:              string(horizonmodels.MacroAgentStatusActive),
+			AgentClass:          macroAgentClassForSeed(seed),
+			AnchorCanonicalPath: resolvedPath,
+			DomainModes:         seed.domainModes,
+			Roles:               seed.roles,
+			Priority:            seed.priority,
+			SourceMixPolicy: map[string]any{
+				"lookbackDays": bootstrapLookbackDays(seed.domainModes),
+				"bootstrap":    true,
+			},
+			TimeWindowPolicy: map[string]any{
+				"lookbackDays": bootstrapLookbackDays(seed.domainModes),
+			},
+			Metadata: map[string]any{
+				"bootstrapKey": seed.key,
+				"resolvedPath": resolvedPath,
+			},
+		}
+		if err := macroPoliciesRepo.Upsert(ctx, policy); err != nil {
+			log.Fatalf("macro policy upsert failed for %s: %v", seed.key, err)
+		}
+		if _, err := watchRuntimeService.CompileMacroAgentPolicy(ctx, policy); err != nil {
+			log.Fatalf("macro policy compile failed for %s: %v", seed.key, err)
 		}
 
 		state := &horizonmodels.ScopeAgentState{
@@ -288,6 +338,27 @@ func ensureBootstrapProject(ctx context.Context, usersRepo *corerepo.UsersReposi
 		OwnerUserID: bootstrapUser,
 		ProjectType: &projectType,
 	})
+}
+
+func macroAgentClassForSeed(seed targetSeed) string {
+	switch strings.TrimSpace(seed.scopeType) {
+	case "country":
+		return string(horizonmodels.MacroAgentClassCountry)
+	case "market":
+		return string(horizonmodels.MacroAgentClassMarket)
+	default:
+		return string(horizonmodels.MacroAgentClassEntity)
+	}
+}
+
+func bootstrapLookbackDays(domainModes []string) int {
+	for _, mode := range domainModes {
+		switch strings.TrimSpace(mode) {
+		case "conflict", "regulatory", "governance":
+			return 7
+		}
+	}
+	return 14
 }
 
 func ensureFragment(

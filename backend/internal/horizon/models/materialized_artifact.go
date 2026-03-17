@@ -479,6 +479,7 @@ type SupplyChainPathLeg struct {
 	ProductNodeIndex        *int                  `json:"productNodeIndex,omitempty"`
 	TransportViaRefs        []string              `json:"transportViaRefs,omitempty"`
 	TransportViaNodeIndices []int                 `json:"transportViaNodeIndices,omitempty"`
+	VesselType              string                `json:"vesselType,omitempty"`
 	Mode                    string                `json:"mode,omitempty"`
 	GeoRefs                 []string              `json:"geoRefs,omitempty"`
 	FlowRefs                []string              `json:"flowRefs,omitempty"`

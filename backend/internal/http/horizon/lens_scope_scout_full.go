@@ -24,17 +24,18 @@ const (
 )
 
 type scopeScoutFullRequest struct {
-	Query               string   `json:"query"`
-	MaxAnchors          *int     `json:"maxAnchors,omitempty"`
-	MaxRecursionDepth   *int     `json:"maxRecursionDepth,omitempty"`
-	Specialties         []string `json:"specialties,omitempty"`
+	Query             string   `json:"query"`
+	MaxAnchors        *int     `json:"maxAnchors,omitempty"`
+	MaxRecursionDepth *int     `json:"maxRecursionDepth,omitempty"`
+	Mode              string   `json:"mode,omitempty"`
+	Specialties       []string `json:"specialties,omitempty"`
 }
 
 type scopeScoutFullResponse struct {
-	JobIDs           []string                `json:"jobIds"`
-	CanonicalPaths   []string                `json:"canonicalPaths"`
-	FirstFiveForGraph []string               `json:"firstFiveForGraph"`
-	Intent           *agents.IntentResolution `json:"intent,omitempty"`
+	JobIDs            []string                 `json:"jobIds"`
+	CanonicalPaths    []string                 `json:"canonicalPaths"`
+	FirstFiveForGraph []string                 `json:"firstFiveForGraph"`
+	Intent            *agents.IntentResolution `json:"intent,omitempty"`
 }
 
 // ScopeScoutLensFull runs the full lens-assembly pipeline inside an existing lens:
@@ -149,11 +150,17 @@ func (h *HorizonHandlers) ScopeScoutLensFull(w http.ResponseWriter, r *http.Requ
 		deferredScopePaths = deferredScopePaths[:maxAnchors]
 	}
 
-	specialties := taxonomy.NormalizeSpecialties(body.Specialties)
+	scoutingMode := normalizeScopeScoutMode(body.Mode)
+	mergedSpecialties := append([]string(nil), body.Specialties...)
+	mergedSpecialties = append(mergedSpecialties, specialtiesForScopeScoutMode(scoutingMode)...)
+	specialties := taxonomy.NormalizeSpecialties(mergedSpecialties)
 	focus := strings.TrimSpace(intent.Focus)
 	spherePaths := intent.SpherePaths
 	keywords := intent.Keywords
 	domainModes := taxonomy.NormalizeDomainModes(effectiveDomainModesForScopeScoutFull(lens, intent))
+	if scoutingMode == taxonomy.DomainModeSupplyChain || scoutingMode == taxonomy.DomainModeGovernance {
+		domainModes = taxonomy.NormalizeDomainModes(append([]string{scoutingMode}, domainModes...))
+	}
 	supplyChainMode := taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) ||
 		taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain)
 
@@ -204,11 +211,12 @@ func (h *HorizonHandlers) ScopeScoutLensFull(w http.ResponseWriter, r *http.Requ
 			"lensId":              lensID,
 			"currentState":        string(models.ScoutingJobStatePending),
 			"scoutingStrategy":    string(models.ScoutingStrategySnapshot),
-			"plannerPriorityTier":  plannerPriorityTier,
+			"plannerPriorityTier": plannerPriorityTier,
 			"recursionDepth":      0.0,
 			"maxRecursionDepth":   float64(maxRecursionDepth),
 			"deferredScopeAdd":    true,
 			"trigger":             "ui.graph.scope_scout_full",
+			"uiScoutingMode":      scoutingMode,
 			"correlationId":       correlationID,
 			"sessionId":           sessionID,
 			"query":               q,
@@ -276,11 +284,11 @@ func (h *HorizonHandlers) ScopeScoutLensFull(w http.ResponseWriter, r *http.Requ
 			if pub := h.service.RealtimePublisher(); pub != nil {
 				_ = pub.PublishJSON(ctx, realtime.EventType("horizon.graph.node.upserted"), authInfo.TenantID, map[string]interface{}{
 					"tenantId":      lens.TenantID,
-					"projectId":    lens.ProjectID,
-					"lensId":       lensID,
+					"projectId":     lens.ProjectID,
+					"lensId":        lensID,
 					"canonicalPath": canonicalPath,
-					"status":       "scouting",
-					"jobId":        strings.TrimSpace(jobID),
+					"status":        "scouting",
+					"jobId":         strings.TrimSpace(jobID),
 				})
 			}
 		}

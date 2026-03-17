@@ -3,7 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { api } from '../lib/api';
 
 type ModalType = 'settings' | 'account' | 'admin' | 'workspace' | null;
-type StaticPageType = 'privacy' | 'terms' | null;
+type StaticPageType = 'privacy' | 'terms' | 'technical-disclosure' | null;
 
 export interface SettingsModalParams {
   initialTab?: 'personal' | 'corporate' | 'guardians';
@@ -100,4 +100,3 @@ export function useModals() {
     closeWorkspace,
   };
 }
-

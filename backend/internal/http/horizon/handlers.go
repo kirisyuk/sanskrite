@@ -238,6 +238,9 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 	mux.Handle("/api/horizon/watch/targets/", authMiddleware(http.HandlerFunc(h.HandleWatchTargetRoutes)))
 	mux.Handle("/api/horizon/watch/preferences", authMiddleware(http.HandlerFunc(h.UpdateWatchPreferences)))
 	mux.Handle("/api/horizon/watch/briefs/", authMiddleware(http.HandlerFunc(h.HandleWatchBriefRoutes)))
+	mux.Handle("/api/horizon/watch/scenarios/workspace", authMiddleware(http.HandlerFunc(h.GetWatchScenarioWorkspace)))
+	mux.Handle("/api/horizon/watch/scenarios/compare", authMiddleware(http.HandlerFunc(h.CompareWatchScenarios)))
+	mux.Handle("/api/horizon/watch/scenarios/contracts/", authMiddleware(http.HandlerFunc(h.GetWatchScenarioDetail)))
 	mux.Handle("/api/horizon/watch/subjects", authMiddleware(http.HandlerFunc(h.HandleWatchSubjectsRoot)))
 	mux.Handle("/api/horizon/watch/subjects/", authMiddleware(http.HandlerFunc(h.HandleWatchSubjectDetail)))
 	mux.Handle("/api/horizon/watch/triggers", authMiddleware(http.HandlerFunc(h.ListWatchTriggers)))
@@ -463,6 +466,9 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 			default:
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			}
+			return
+		case "attention":
+			h.GetLensAttention(w, r)
 			return
 		default:
 			http.Error(w, "Unknown subpath", http.StatusNotFound)

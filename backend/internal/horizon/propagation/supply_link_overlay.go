@@ -2,7 +2,6 @@ package propagation
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 
@@ -13,10 +12,7 @@ import (
 
 type supplyLinkOverlayIndex struct {
 	mu      sync.RWMutex
-	loaded  bool
 	byPath  map[string][]supplyLinkOverlayRecord
-	total   int
-	records int
 }
 
 type supplyLinkOverlayRecord struct {
@@ -56,46 +52,26 @@ type supplyLinkVirtualTraversal struct {
 }
 
 func (e *PropagationEngine) ensureSupplyLinkOverlay(ctx context.Context) (*supplyLinkOverlayIndex, error) {
-	if e == nil || e.fragmentsRepo == nil {
+	_ = ctx
+	if e == nil {
 		return nil, nil
 	}
 	e.mu.RLock()
 	if e.supplyLinkOverlay != nil {
-		e.supplyLinkOverlay.mu.RLock()
-		loaded := e.supplyLinkOverlay.loaded
-		e.supplyLinkOverlay.mu.RUnlock()
-		if loaded {
-			idx := e.supplyLinkOverlay
-			e.mu.RUnlock()
-			return idx, nil
-		}
+		idx := e.supplyLinkOverlay
+		e.mu.RUnlock()
+		return idx, nil
 	}
 	e.mu.RUnlock()
 
 	e.mu.Lock()
 	if e.supplyLinkOverlay == nil {
-		e.supplyLinkOverlay = &supplyLinkOverlayIndex{}
+		e.supplyLinkOverlay = &supplyLinkOverlayIndex{
+			byPath: make(map[string][]supplyLinkOverlayRecord),
+		}
 	}
 	idx := e.supplyLinkOverlay
 	e.mu.Unlock()
-
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
-	if idx.loaded {
-		return idx, nil
-	}
-	links, err := e.fragmentsRepo.ListByTypeAndTenant(ctx, "global", horizonmodels.FragmentTypeSupplyLink, 10000)
-	if err != nil {
-		return nil, fmt.Errorf("list supply links: %w", err)
-	}
-	binder := pathbinding.NewEngine(e.fragmentsRepo, e.edgesRepo)
-	idx.byPath = buildSupplyLinkOverlayRecords(ctx, links, binder)
-	idx.total = len(links)
-	idx.records = 0
-	for _, recs := range idx.byPath {
-		idx.records += len(recs)
-	}
-	idx.loaded = true
 	return idx, nil
 }
 
@@ -227,6 +203,21 @@ func (e *PropagationEngine) getSupplyLinkVirtualNeighbors(
 	recs := append([]supplyLinkOverlayRecord(nil), idx.byPath[currentPath]...)
 	idx.mu.RUnlock()
 	if len(recs) == 0 {
+		loaded, lerr := e.loadSupplyLinkOverlayRecordsForPath(ctx, currentPath)
+		if lerr != nil {
+			return nil, lerr
+		}
+		idx.mu.Lock()
+		if idx.byPath == nil {
+			idx.byPath = make(map[string][]supplyLinkOverlayRecord)
+		}
+		if _, exists := idx.byPath[currentPath]; !exists {
+			idx.byPath[currentPath] = append([]supplyLinkOverlayRecord(nil), loaded...)
+		}
+		recs = append([]supplyLinkOverlayRecord(nil), idx.byPath[currentPath]...)
+		idx.mu.Unlock()
+	}
+	if len(recs) == 0 {
 		return nil, nil
 	}
 
@@ -267,6 +258,54 @@ func (e *PropagationEngine) getSupplyLinkVirtualNeighbors(
 		}
 	}
 	return neighbors, nil
+}
+
+func (e *PropagationEngine) loadSupplyLinkOverlayRecordsForPath(ctx context.Context, currentPath string) ([]supplyLinkOverlayRecord, error) {
+	if e == nil || e.fragmentsRepo == nil {
+		return nil, nil
+	}
+	currentPath = strings.TrimSpace(currentPath)
+	if currentPath == "" {
+		return nil, nil
+	}
+	linksByID := make(map[string]*horizonmodels.HorizonFragment)
+	addLinks := func(items []*horizonmodels.HorizonFragment) {
+		for _, item := range items {
+			if item == nil || strings.TrimSpace(item.ID) == "" {
+				continue
+			}
+			linksByID[item.ID] = item
+		}
+	}
+	if strings.HasPrefix(currentPath, "/org/") || strings.HasPrefix(currentPath, "/gov/") || strings.HasPrefix(currentPath, "/fac/") || strings.HasPrefix(currentPath, "/deposit/") {
+		if items, err := e.fragmentsRepo.FindSupplyLinksByCustomer(ctx, currentPath, "global", 256); err != nil {
+			return nil, err
+		} else {
+			addLinks(items)
+		}
+		if items, err := e.fragmentsRepo.FindSupplyLinksBySupplier(ctx, currentPath, "global", 256); err != nil {
+			return nil, err
+		} else {
+			addLinks(items)
+		}
+	}
+	if strings.HasPrefix(currentPath, "/fac/") {
+		if items, err := e.fragmentsRepo.FindSupplyLinksByTransportVia(ctx, currentPath, "global", 256); err != nil {
+			return nil, err
+		} else {
+			addLinks(items)
+		}
+	}
+	if len(linksByID) == 0 {
+		return nil, nil
+	}
+	links := make([]*horizonmodels.HorizonFragment, 0, len(linksByID))
+	for _, link := range linksByID {
+		links = append(links, link)
+	}
+	binder := pathbinding.NewEngine(e.fragmentsRepo, e.edgesRepo)
+	byPath := buildSupplyLinkOverlayRecords(ctx, links, binder)
+	return append([]supplyLinkOverlayRecord(nil), byPath[currentPath]...), nil
 }
 
 func buildSupplyLinkVirtualTraversals(currentPath string, rec supplyLinkOverlayRecord) []supplyLinkVirtualTraversal {

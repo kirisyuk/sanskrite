@@ -7,6 +7,7 @@ interface MapObjectStackPanelProps {
   objects: GeoObject[];
   isDark: boolean;
   paletteTheme: 'dark' | 'light';
+  topOffset?: number;
   priorityObjectId?: string | null;
   onClose: () => void;
   onSelectObject: (object: GeoObject) => void;
@@ -36,6 +37,7 @@ export const MapObjectStackPanel: React.FC<MapObjectStackPanelProps> = ({
   objects,
   isDark,
   paletteTheme,
+  topOffset = 10,
   priorityObjectId,
   onClose,
   onSelectObject,
@@ -58,7 +60,7 @@ export const MapObjectStackPanel: React.FC<MapObjectStackPanelProps> = ({
       style={{
         position: 'absolute',
         left: 10,
-        top: 10,
+        top: topOffset,
         width: 360,
         maxWidth: 'calc(100% - 20px)',
         maxHeight: 'min(70vh, 620px)',

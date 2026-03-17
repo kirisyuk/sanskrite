@@ -3,6 +3,12 @@ import { createPortal } from 'react-dom';
 import { ThemeContext } from '../../../../components/ThemeProvider';
 import { api } from '../../../../lib/api';
 import { useProjectsStore } from '../../../../stores/projectsStore';
+import {
+  defaultScoutingModeForCanonicalPath,
+  recommendedDepthForScoutingMode,
+  specialtiesForScoutingMode,
+  type ScoutingMode,
+} from '../../lib/scoutingMode';
 
 interface AssembleLensRequestProps {
   projectId: string;
@@ -12,7 +18,7 @@ interface AssembleLensRequestProps {
 }
 
 /** Lens mode determines the focus of scouting and research agents */
-export type LensMode = 'general' | 'supply_chain' | 'equity';
+export type LensMode = ScoutingMode;
 
 export interface AssembleLensRequest {
   projectId: string;
@@ -24,7 +30,7 @@ export interface AssembleLensRequest {
   prefetchScope?: string[];
   filters: {
     maxRecursionDepth: number;
-    /** Lens mode: general (default), supply_chain, or equity */
+    /** Lens mode: general (default), supply_chain, or governance */
     mode: LensMode;
     /** Optional specialties derived from mode */
     specialties?: string[];
@@ -74,6 +80,7 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
     maxRecursionDepth: 1,
     mode: 'general',
   });
+  const [modeTouched, setModeTouched] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -157,6 +164,37 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
       window.setTimeout(() => lastActiveElRef.current?.focus?.(), 0);
     };
   }, [showSettings]);
+
+  useEffect(() => {
+    if (modeTouched) return;
+
+    const selectedPaths = selectedEntities
+      .map((entity) => String(entity.canonicalPath || '').trim())
+      .filter(Boolean);
+
+    const suggestedMode =
+      selectedPaths.length > 0 && selectedPaths.every((path) => defaultScoutingModeForCanonicalPath(path) === 'governance')
+        ? 'governance'
+        : 'general';
+
+    setFilters((prev) => {
+      const nextDepth = recommendedDepthForScoutingMode(suggestedMode);
+      const nextSpecialties = specialtiesForScoutingMode(suggestedMode);
+      const prevSpecialties = prev.specialties || [];
+      const sameSpecialties =
+        prevSpecialties.length === nextSpecialties.length &&
+        prevSpecialties.every((value, index) => value === nextSpecialties[index]);
+      if (prev.mode === suggestedMode && prev.maxRecursionDepth === nextDepth && sameSpecialties) {
+        return prev;
+      }
+      return {
+        ...prev,
+        mode: suggestedMode,
+        specialties: nextSpecialties,
+        maxRecursionDepth: nextDepth,
+      };
+    });
+  }, [modeTouched, selectedEntities]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setInputValue(e.target.value);
@@ -295,26 +333,17 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
   };
 
   const setMode = (mode: LensMode) => {
-    const recommendedDepthByMode: Record<LensMode, number> = {
-      general: 1,
-      supply_chain: 2,
-      equity: 1,
-    };
-    const specialties =
-      mode === 'supply_chain'
-        ? ['supply_chain', 'products_and_services']
-        : mode === 'equity'
-          ? ['management']
-          : [];
+    const specialties = specialtiesForScoutingMode(mode);
     setFilters((prev) => {
       if (prev.mode === mode) return prev;
       return {
         ...prev,
         mode,
         specialties,
-        maxRecursionDepth: clampInt(recommendedDepthByMode[mode] ?? prev.maxRecursionDepth, 0, 5),
+        maxRecursionDepth: clampInt(recommendedDepthForScoutingMode(mode), 0, 5),
       };
     });
+    setModeTouched(true);
   };
 
   const setMaxDepth = (v: number) => {
@@ -740,7 +769,7 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
                   {([
                     { value: 'general' as const, label: 'General', desc: 'Broad exploration' },
                     { value: 'supply_chain' as const, label: 'Supply chain', desc: 'Material & product flows' },
-                    { value: 'equity' as const, label: 'Equity', desc: 'Ownership & control' },
+                    { value: 'governance' as const, label: 'Governance', desc: 'Ownership, control, leadership' },
                   ]).map((opt) => {
                     const active = filters.mode === opt.value;
                     return (

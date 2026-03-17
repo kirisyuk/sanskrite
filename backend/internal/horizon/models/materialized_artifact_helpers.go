@@ -23,6 +23,20 @@ func decodeSupplyChainPathNodes(raw interface{}) ([]SupplyChainPathNode, error) 
 	switch nodes := raw.(type) {
 	case []SupplyChainPathNode:
 		return nodes, nil
+	case []map[string]interface{}:
+		out := make([]SupplyChainPathNode, 0, len(nodes))
+		for i, node := range nodes {
+			nodeJSON, err := json.Marshal(node)
+			if err != nil {
+				return nil, fmt.Errorf("payload node[%d] marshal failed: %w", i, err)
+			}
+			var parsed SupplyChainPathNode
+			if err := json.Unmarshal(nodeJSON, &parsed); err != nil {
+				return nil, fmt.Errorf("payload node[%d] unmarshal failed: %w", i, err)
+			}
+			out = append(out, parsed)
+		}
+		return out, nil
 	case []interface{}:
 		out := make([]SupplyChainPathNode, 0, len(nodes))
 		for i, n := range nodes {
@@ -53,6 +67,20 @@ func decodeSupplyChainPathEdges(raw interface{}) ([]SupplyChainPathEdge, error) 
 	switch edges := raw.(type) {
 	case []SupplyChainPathEdge:
 		return edges, nil
+	case []map[string]interface{}:
+		out := make([]SupplyChainPathEdge, 0, len(edges))
+		for i, edge := range edges {
+			edgeJSON, err := json.Marshal(edge)
+			if err != nil {
+				return nil, fmt.Errorf("payload edge[%d] marshal failed: %w", i, err)
+			}
+			var parsed SupplyChainPathEdge
+			if err := json.Unmarshal(edgeJSON, &parsed); err != nil {
+				return nil, fmt.Errorf("payload edge[%d] unmarshal failed: %w", i, err)
+			}
+			out = append(out, parsed)
+		}
+		return out, nil
 	case []interface{}:
 		out := make([]SupplyChainPathEdge, 0, len(edges))
 		for i, e := range edges {
@@ -83,6 +111,20 @@ func decodeSupplyChainPathLegs(raw interface{}) ([]SupplyChainPathLeg, error) {
 	switch legs := raw.(type) {
 	case []SupplyChainPathLeg:
 		return legs, nil
+	case []map[string]interface{}:
+		out := make([]SupplyChainPathLeg, 0, len(legs))
+		for i, leg := range legs {
+			legJSON, err := json.Marshal(leg)
+			if err != nil {
+				return nil, fmt.Errorf("payload leg[%d] marshal failed: %w", i, err)
+			}
+			var parsed SupplyChainPathLeg
+			if err := json.Unmarshal(legJSON, &parsed); err != nil {
+				return nil, fmt.Errorf("payload leg[%d] unmarshal failed: %w", i, err)
+			}
+			out = append(out, parsed)
+		}
+		return out, nil
 	case []interface{}:
 		out := make([]SupplyChainPathLeg, 0, len(legs))
 		for i, rawLeg := range legs {
@@ -1309,30 +1351,35 @@ func PopulateMaterializedArtifactIndexes(artifact *MaterializedArtifact) {
 	if artifact == nil {
 		return
 	}
-	artifact.NodeRefs = uniqueTrimmedStrings(artifact.NodeRefs)
-	artifact.GeoRefs = uniqueTrimmedStrings(artifact.GeoRefs)
-	artifact.FlowRefs = uniqueTrimmedStrings(artifact.FlowRefs)
-	artifact.ZoneRefs = uniqueTrimmedStrings(artifact.ZoneRefs)
-	artifact.AffectedZoneRefs = uniqueTrimmedStrings(artifact.AffectedZoneRefs)
+	nodeRefs := uniqueTrimmedStrings(artifact.NodeRefs)
+	geoRefs := uniqueTrimmedStrings(artifact.GeoRefs)
+	flowRefs := uniqueTrimmedStrings(artifact.FlowRefs)
+	zoneRefs := uniqueTrimmedStrings(artifact.ZoneRefs)
+	affectedZoneRefs := uniqueTrimmedStrings(artifact.AffectedZoneRefs)
 	switch artifact.Kind {
 	case MaterializedKindSupplyChainPath:
 		if parsed, err := ParseSupplyChainPathPayload(artifact.Payload); err == nil && parsed != nil {
 			summary := SummarizeSupplyChainPathBindings(parsed)
-			artifact.NodeRefs = mergeUniqueStrings(artifact.NodeRefs, collectParsedNodeRefs(parsed))
-			artifact.GeoRefs = mergeUniqueStrings(artifact.GeoRefs, summary.GeoRefs)
-			artifact.FlowRefs = mergeUniqueStrings(artifact.FlowRefs, summary.FlowRefs)
-			artifact.ZoneRefs = mergeUniqueStrings(artifact.ZoneRefs, summary.ZoneRefs)
-			artifact.AffectedZoneRefs = mergeUniqueStrings(artifact.AffectedZoneRefs, summary.AffectedZoneRefs)
+			nodeRefs = collectParsedNodeRefs(parsed)
+			geoRefs = uniqueTrimmedStrings(summary.GeoRefs)
+			flowRefs = uniqueTrimmedStrings(summary.FlowRefs)
+			zoneRefs = uniqueTrimmedStrings(summary.ZoneRefs)
+			affectedZoneRefs = uniqueTrimmedStrings(summary.AffectedZoneRefs)
 		}
 		PopulateSupplyChainPathSufficiency(artifact)
 		PopulateSupplyChainPathFamily(artifact)
 	case MaterializedKindSupplyChainAssemblyGraph:
 		if parsed, err := ParseSupplyChainAssemblyGraphPayload(artifact.Payload); err == nil && parsed != nil {
-			artifact.NodeRefs = mergeUniqueStrings(artifact.NodeRefs, collectAssemblyNodeRefs(parsed))
-			artifact.GeoRefs = mergeUniqueStrings(artifact.GeoRefs, collectArtifactGeoRefs(artifact.NodeRefs))
-			artifact.FlowRefs = mergeUniqueStrings(artifact.FlowRefs, collectAssemblyFlowRefs(parsed))
+			nodeRefs = collectAssemblyNodeRefs(parsed)
+			geoRefs = collectArtifactGeoRefs(nodeRefs)
+			flowRefs = collectAssemblyFlowRefs(parsed)
 		}
 	}
+	artifact.NodeRefs = nodeRefs
+	artifact.GeoRefs = geoRefs
+	artifact.FlowRefs = flowRefs
+	artifact.ZoneRefs = zoneRefs
+	artifact.AffectedZoneRefs = affectedZoneRefs
 	if artifact.Labels != nil {
 		if artifact.AnchorSupplier == "" {
 			artifact.AnchorSupplier = strings.TrimSpace(artifact.Labels["anchorSupplier"])
@@ -1917,6 +1964,9 @@ func mergeSupplyChainPathLeg(existing, incoming SupplyChainPathLeg) SupplyChainP
 	if len(existing.TransportViaRefs) == 0 && len(incoming.TransportViaRefs) > 0 {
 		existing.TransportViaRefs = append([]string(nil), incoming.TransportViaRefs...)
 	}
+	if strings.TrimSpace(existing.VesselType) == "" {
+		existing.VesselType = strings.TrimSpace(incoming.VesselType)
+	}
 	if strings.TrimSpace(existing.Mode) == "" {
 		existing.Mode = strings.TrimSpace(incoming.Mode)
 	}
@@ -2189,6 +2239,30 @@ func ReplaceCanonicalPathInArtifact(artifact *MaterializedArtifact, oldPath, new
 			changed = true
 		}
 	}
+	if replacePathInStringSlice(artifact.GeoRefs, oldPath, newPath) {
+		changed = true
+	}
+	if replacePathInStringSlice(artifact.FlowRefs, oldPath, newPath) {
+		changed = true
+	}
+	if replacePathInStringSlice(artifact.ZoneRefs, oldPath, newPath) {
+		changed = true
+	}
+	if replacePathInStringSlice(artifact.AffectedZoneRefs, oldPath, newPath) {
+		changed = true
+	}
+	if strings.TrimSpace(artifact.AnchorSupplier) == oldPath {
+		artifact.AnchorSupplier = newPath
+		changed = true
+	}
+	if strings.TrimSpace(artifact.AnchorCustomer) == oldPath {
+		artifact.AnchorCustomer = newPath
+		changed = true
+	}
+	if strings.TrimSpace(artifact.ProductAxis) == oldPath {
+		artifact.ProductAxis = newPath
+		changed = true
+	}
 
 	// Labels (anchorSupplier, anchorCustomer, productAxis, geoFrom, geoTo may contain paths)
 	labelPathKeys := []string{"anchorSupplier", "anchorCustomer", "productAxis", "geoFrom", "geoTo", "rootEntity"}
@@ -2220,12 +2294,25 @@ func ReplaceCanonicalPathInArtifact(artifact *MaterializedArtifact, oldPath, new
 					parsed.Edges[i].ProductRef = newPath
 					changed = true
 				}
+				if strings.TrimSpace(parsed.Edges[i].SupplyLinkCanonicalPath) == oldPath {
+					parsed.Edges[i].SupplyLinkCanonicalPath = newPath
+					changed = true
+				}
 			}
 			for i := range parsed.Legs {
 				if replacePathInStringSlice(parsed.Legs[i].TransportViaRefs, oldPath, newPath) {
 					changed = true
 				}
 				if replacePathInStringSlice(parsed.Legs[i].GeoRefs, oldPath, newPath) {
+					changed = true
+				}
+				if replacePathInStringSlice(parsed.Legs[i].FlowRefs, oldPath, newPath) {
+					changed = true
+				}
+				if replacePathInStringSlice(parsed.Legs[i].AlternateFlowRefs, oldPath, newPath) {
+					changed = true
+				}
+				if replacePathInStringSlice(parsed.Legs[i].ZoneRefs, oldPath, newPath) {
 					changed = true
 				}
 				if replacePathInStringSlice(parsed.Legs[i].AffectedZoneRefs, oldPath, newPath) {
@@ -2241,6 +2328,10 @@ func ReplaceCanonicalPathInArtifact(artifact *MaterializedArtifact, oldPath, new
 				}
 				if strings.TrimSpace(parsed.Legs[i].ProductRef) == oldPath {
 					parsed.Legs[i].ProductRef = newPath
+					changed = true
+				}
+				if strings.TrimSpace(parsed.Legs[i].SupplyLinkCanonicalPath) == oldPath {
+					parsed.Legs[i].SupplyLinkCanonicalPath = newPath
 					changed = true
 				}
 			}
@@ -2406,6 +2497,9 @@ func ReplaceCanonicalPathInArtifact(artifact *MaterializedArtifact, oldPath, new
 			}
 			artifact.Payload = BuildRelationsGraphPayload(parsed.Nodes, parsed.Edges, parsed.DomainMode, parsed.RootEntity, parsed.Notes)
 		}
+	}
+	if changed {
+		PopulateMaterializedArtifactIndexes(artifact)
 	}
 	return changed
 }

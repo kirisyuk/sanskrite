@@ -63,11 +63,16 @@ func TestGovernanceEnrichmentPrompt_OnlyCanonicalTypes(t *testing.T) {
 	}
 	prompt := a.buildGovernanceEnrichmentPrompt(input)
 	if !strings.Contains(prompt, "OWNS") || !strings.Contains(prompt, "BOARD_MEMBER_OF") ||
-		!strings.Contains(prompt, "SUBSIDIARY_OF") || !strings.Contains(prompt, "ASSURES") {
-		t.Error("Governance prompt should list canonical types: OWNS, BOARD_MEMBER_OF, SUBSIDIARY_OF, ASSURES")
+		!strings.Contains(prompt, "SUBSIDIARY_OF") || !strings.Contains(prompt, "ASSURES") ||
+		!strings.Contains(prompt, "HAS_SUBGROUP") || !strings.Contains(prompt, "MEMBER_OF") ||
+		!strings.Contains(prompt, "AFFILIATED_WITH") || !strings.Contains(prompt, "OPERATES_VIA") {
+		t.Error("Governance prompt should list governance and community-specific canonical types")
 	}
 	if !strings.Contains(strings.ToUpper(prompt), "USE ONLY") {
 		t.Error("Governance prompt should restrict to canonical types only (Use ONLY ...)")
+	}
+	if strings.Contains(prompt, "Do NOT use RELATED_TO, AFFILIATED_WITH") {
+		t.Error("Governance prompt must not ban canonical AFFILIATED_WITH after community-contract expansion")
 	}
 }
 
@@ -88,6 +93,29 @@ func TestGovernanceEnrichmentPrompt_OwnsDirectionGuardrails(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("governance prompt missing OWNS direction guardrail %q", want)
 		}
+	}
+}
+
+func TestGovernanceFullPrompt_ControlMapEmphasizesControlMechanisms(t *testing.T) {
+	a := NewResearchAgent(nil)
+	prompt := a.buildGovernanceFullPromptForContract(GovernanceQuery{
+		Target:       "/org/sa/aramco",
+		TargetType:   "organization",
+		Direction:    "both",
+		Depth:        3,
+		IncludeBoard: true,
+	}, "control-map")
+	for _, want := range []string{
+		"CONTROL MODE (control-map):",
+		"board majority, golden share, veto rights, ministerial appointment",
+		"Use CONTROLS / MANAGES / ADMINISTERS as primary edges",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("control-map governance prompt missing %q", want)
+		}
+	}
+	if strings.Contains(prompt, "OWNERSHIP MODE (default):") {
+		t.Fatalf("control-map prompt must not render ownership-only subtype block")
 	}
 }
 
@@ -153,6 +181,9 @@ func TestMarketEnrichmentPrompt_DirectionGuardrails(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "sourceCanonicalPath/sourceType/sourceName = player") {
 		t.Fatalf("expected explicit-source instruction for market player relations")
+	}
+	if !strings.Contains(prompt, "Community influence and mobilization") {
+		t.Fatalf("expected market prompt to call out community-specific influence layer")
 	}
 }
 

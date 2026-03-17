@@ -40,6 +40,8 @@ interface SidebarPanelProps {
   selectedLensId?: string | null;
   onNewLens?: () => void; // Optional: callback for creating new lens
   onProjectSelected?: () => void;
+  onOpenWatch?: () => void;
+  isWatchActive?: boolean;
   onOpenWorldMap?: () => void;
   isWorldMapActive?: boolean;
 }
@@ -411,13 +413,15 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   selectedLensId,
   onNewLens,
   onProjectSelected,
+  onOpenWatch,
+  isWatchActive,
   onOpenWorldMap,
   isWorldMapActive,
 }) => {
   const { t } = useTranslation();
   const location = useLocation();
 
-  const isHorizonPage = location.pathname === '/horizon';
+  const isHorizonPage = location.pathname.startsWith('/horizon');
   const isHorizonMode = currentMode === 'horizon' || isHorizonPage;
   const isPagesMode = currentMode === 'pages';
   const isScenariosMode = currentMode === 'scenarios';
@@ -2995,6 +2999,40 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                     >
                       {isProjectsView ? (
                         <>
+                          {isHorizonMode && onOpenWatch && (
+                            <>
+                              <button
+                                type="button"
+                                className="w-full flex items-center justify-between gap-2 px-2 py-2 rounded-lg transition-colors mb-2"
+                                aria-pressed={Boolean(isWatchActive)}
+                                style={{
+                                  backgroundColor: 'transparent',
+                                  border: 'none',
+                                  color: 'var(--text-secondary-strong)',
+                                }}
+                                onMouseEnter={(e) => {
+                                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                                }}
+                                onMouseLeave={(e) => {
+                                  (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                                }}
+                                onClick={() => {
+                                  onCloseAllModals?.();
+                                  onOpenWatch();
+                                  if (isMobile) onClose();
+                                }}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ color: 'var(--text-tertiary-weak)' }}>
+                                    <path d="M3 12h18" />
+                                    <path d="M12 3l4 4-4 4-4-4 4-4Z" />
+                                    <path d="M12 13l3 3-3 5-3-5 3-3Z" />
+                                  </svg>
+                                  <span style={{ fontSize: 12, fontWeight: 650, color: 'var(--text-secondary-strong)' }}>Watch</span>
+                                </div>
+                              </button>
+                            </>
+                          )}
                           {isHorizonMode && onOpenWorldMap && (
                             <>
                               <button
@@ -3107,6 +3145,60 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                               )}
                             </div>
                           </div>
+
+                          {isHorizonMode && (onOpenWatch || onOpenWorldMap) ? (
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, marginBottom: 14 }}>
+                              {onOpenWatch ? (
+                                <button
+                                  type="button"
+                                  className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg transition-colors"
+                                  aria-pressed={Boolean(isWatchActive)}
+                                  style={{
+                                    border: '1px solid var(--white-10)',
+                                    backgroundColor: isWatchActive ? 'var(--white-10)' : 'transparent',
+                                    color: 'var(--text-secondary-strong)',
+                                  }}
+                                  onClick={() => {
+                                    onCloseAllModals?.();
+                                    onOpenWatch();
+                                    if (isMobile) onClose();
+                                  }}
+                                >
+                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <path d="M3 12h18" />
+                                    <path d="M12 3l4 4-4 4-4-4 4-4Z" />
+                                    <path d="M12 13l3 3-3 5-3-5 3-3Z" />
+                                  </svg>
+                                  Watch
+                                </button>
+                              ) : null}
+                              {onOpenWorldMap ? (
+                                <button
+                                  type="button"
+                                  className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg transition-colors"
+                                  aria-pressed={Boolean(isWorldMapActive)}
+                                  style={{
+                                    border: '1px solid var(--white-10)',
+                                    backgroundColor: isWorldMapActive ? 'var(--white-10)' : 'transparent',
+                                    color: 'var(--text-secondary-strong)',
+                                  }}
+                                  onClick={() => {
+                                    onCloseAllModals?.();
+                                    onOpenWorldMap();
+                                    if (isMobile) onClose();
+                                  }}
+                                >
+                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <circle cx="12" cy="12" r="9" />
+                                    <path d="M3 12h18" />
+                                    <path d="M12 3a12 12 0 0 1 0 18" />
+                                    <path d="M12 3a12 12 0 0 0 0 18" />
+                                  </svg>
+                                  World map
+                                </button>
+                              ) : null}
+                            </div>
+                          ) : null}
 
                           {isHorizonMode ? (
                             <>
@@ -3258,6 +3350,47 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                   </div>
                 ) : (
                   <>
+                    {isHorizonMode && onOpenWatch && (
+                      <>
+                        <button
+                          type="button"
+                          className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg transition-colors mb-2"
+                          aria-pressed={Boolean(isWatchActive)}
+                          style={{
+                            backgroundColor: 'transparent',
+                            color: 'var(--text-secondary-strong)',
+                            border: 'none',
+                          }}
+                          onMouseEnter={(e) => {
+                            (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--white-10)';
+                          }}
+                          onMouseLeave={(e) => {
+                            (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'transparent';
+                          }}
+                          onClick={() => {
+                            onCloseAllModals?.();
+                            onOpenWatch();
+                            if (isMobile) onClose();
+                          }}
+                        >
+                          <span className="flex items-center gap-2 text-13 font-medium" style={{ color: 'var(--text-secondary-strong)' }}>
+                            <svg
+                              className="w-4 h-4"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth={2}
+                              style={{ color: 'var(--text-tertiary-weak)' }}
+                            >
+                              <path d="M3 12h18" />
+                              <path d="M12 3l4 4-4 4-4-4 4-4Z" />
+                              <path d="M12 13l3 3-3 5-3-5 3-3Z" />
+                            </svg>
+                            Watch
+                          </span>
+                        </button>
+                      </>
+                    )}
                     {isHorizonMode && onOpenWorldMap && (
                       <>
                         <button

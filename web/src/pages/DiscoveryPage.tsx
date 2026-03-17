@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import TermsOfUsage from './TermsOfUsage';
 import PrivacyNotice from './PrivacyNotice';
+import TechnicalDisclosure from './TechnicalDisclosure';
 import { useProjectsStore } from '../stores/projectsStore';
 import { useDiscoveryStore } from '../stores/discoveryStore';
 import { useAuth } from '../contexts/AuthContext';
@@ -1402,8 +1403,8 @@ const DiscoveryPage: React.FC = () => {
 
   React.useEffect(() => {
     const handler = (e: any) => {
-      const kind = e?.detail?.kind as 'privacy' | 'terms';
-      if (kind === 'privacy' || kind === 'terms') {
+      const kind = e?.detail?.kind as 'privacy' | 'terms' | 'technical-disclosure';
+      if (kind === 'privacy' || kind === 'terms' || kind === 'technical-disclosure') {
         closeAllModals();
         setStaticPage(kind);
       }
@@ -1599,6 +1600,8 @@ const DiscoveryPage: React.FC = () => {
             <div className="flex-1 overflow-y-auto">
                   {staticPage === 'privacy' ? (
                     <PrivacyNotice />
+                  ) : staticPage === 'technical-disclosure' ? (
+                    <TechnicalDisclosure />
                   ) : (
                     <TermsOfUsage />
                   )}

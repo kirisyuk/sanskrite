@@ -40,6 +40,9 @@ func TestEdgeLayerClassification(t *testing.T) {
 	if got := EdgeLayer(models.DependencyTypeRegulates); got != GraphLayerContractOverlay {
 		t.Fatalf("expected contract overlay, got %s", got)
 	}
+	if got := EdgeLayer(models.DependencyTypeAffiliatedWith); got != GraphLayerContractOverlay {
+		t.Fatalf("expected community affiliation to be contract overlay, got %s", got)
+	}
 	if got := EdgeLayer(models.DependencyTypeInfluences); got != GraphLayerInterpretive {
 		t.Fatalf("expected interpretive, got %s", got)
 	}

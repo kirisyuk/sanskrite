@@ -18,6 +18,8 @@ type scopeScoutLensNodeRequest struct {
 	FragmentID        string `json:"fragmentId"`
 	CanonicalPath     string `json:"canonicalPath"`
 	MaxRecursionDepth *int   `json:"maxRecursionDepth"`
+	// Optional UI scouting mode: general | supply_chain | governance.
+	Mode string `json:"mode,omitempty"`
 	// Optional: enables specialized scout/research modules (e.g., ["management","products_and_services"])
 	Specialties []string `json:"specialties,omitempty"`
 }
@@ -27,6 +29,28 @@ type scopeScoutLensNodeResponse struct {
 	ScopeAdded bool         `json:"scopeAdded"`
 	Target     string       `json:"targetCanonicalPath"`
 	Lens       *models.Lens `json:"lens,omitempty"`
+}
+
+func normalizeScopeScoutMode(raw string) string {
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case taxonomy.DomainModeSupplyChain:
+		return taxonomy.DomainModeSupplyChain
+	case taxonomy.DomainModeGovernance:
+		return taxonomy.DomainModeGovernance
+	default:
+		return taxonomy.DomainModeGeneral
+	}
+}
+
+func specialtiesForScopeScoutMode(mode string) []string {
+	switch normalizeScopeScoutMode(mode) {
+	case taxonomy.DomainModeSupplyChain:
+		return []string{taxonomy.SpecialtySupplyChain, taxonomy.SpecialtyProductsAndServices}
+	case taxonomy.DomainModeGovernance:
+		return []string{taxonomy.SpecialtyManagement, taxonomy.SpecialtyEquity}
+	default:
+		return nil
+	}
 }
 
 // ScopeScoutLensNode:
@@ -151,18 +175,24 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 	jobID := ""
 	if h.service.ScoutingJobs() != nil {
 		now := time.Now().UTC()
-		// Normalize specialties (ignore unknown values).
-		specialties := taxonomy.NormalizeSpecialties(body.Specialties)
+		scoutingMode := normalizeScopeScoutMode(body.Mode)
+		mergedSpecialties := append([]string(nil), body.Specialties...)
+		mergedSpecialties = append(mergedSpecialties, specialtiesForScopeScoutMode(scoutingMode)...)
+		specialties := taxonomy.NormalizeSpecialties(mergedSpecialties)
 		state := map[string]interface{}{
-			"targetCanonicalPath":           targetCanonicalPath,
-			"lensId":                        lens.ID,
-			"currentState":                  string(models.ScoutingJobStatePending),
-			"scoutingStrategy":              string(models.ScoutingStrategySnapshot),
-			"recursionDepth":                0.0,
-			"maxRecursionDepth":             float64(maxDepth),
-			"trigger":                       "ui.graph.scope_scout",
-			"correlationId":                 correlationID,
-			"relationChildSchedulingOptIn":  true, // User explicitly requested hop depth — allow relation children regardless of domain expansion
+			"targetCanonicalPath":          targetCanonicalPath,
+			"lensId":                       lens.ID,
+			"currentState":                 string(models.ScoutingJobStatePending),
+			"scoutingStrategy":             string(models.ScoutingStrategySnapshot),
+			"recursionDepth":               0.0,
+			"maxRecursionDepth":            float64(maxDepth),
+			"trigger":                      "ui.graph.scope_scout",
+			"uiScoutingMode":               scoutingMode,
+			"correlationId":                correlationID,
+			"relationChildSchedulingOptIn": true, // User explicitly requested hop depth — allow relation children regardless of domain expansion
+		}
+		if scoutingMode == taxonomy.DomainModeSupplyChain || scoutingMode == taxonomy.DomainModeGovernance {
+			state["domainModes"] = []string{scoutingMode}
 		}
 		if len(specialties) > 0 {
 			state["specialties"] = specialties

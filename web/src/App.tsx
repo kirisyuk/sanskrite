@@ -50,7 +50,7 @@ function AppContent() {
   // On mobile this avoids "double scroll" where the whole app page becomes taller than the viewport.
   const lockContentAreaScroll =
     (location.pathname === '/' && (isUnfold || !!user)) ||
-    location.pathname === '/horizon';
+    location.pathname.startsWith('/horizon');
 
   const isPrintRoute = location.pathname.startsWith('/horizon/print/');
   
@@ -115,6 +115,7 @@ function AppContent() {
             <Route path="/horizon/print/tribe/:fragmentId" element={<AuthGuard><HorizonTribeProfilePrintPage /></AuthGuard>} />
             <Route path="/horizon/print/program/:fragmentId" element={<AuthGuard><HorizonProgramProfilePrintPage /></AuthGuard>} />
             <Route path="/horizon" element={<AuthGuard><HorizonPage /></AuthGuard>} />
+            <Route path="/horizon/watch" element={<AuthGuard><HorizonPage /></AuthGuard>} />
             <Route path="/" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (user ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />))} />
             <Route path="/platform" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (user ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />))} />
             <Route path="/terms" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />)} />

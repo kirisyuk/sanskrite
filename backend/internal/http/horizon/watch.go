@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
+	watch "github.com/igorkirisyuk/sanskrite/internal/horizon/watch"
 )
 
 type createWatchTargetRequest struct {
@@ -31,6 +33,13 @@ type updateWatchPreferencesRequest struct {
 	OnlyWithImpactPaths bool           `json:"onlyWithImpactPaths,omitempty"`
 	OnlyTrustedSources  bool           `json:"onlyTrustedSources,omitempty"`
 	Filters             map[string]any `json:"filters,omitempty"`
+}
+
+type compareWatchScenariosRequest struct {
+	Mode        string   `json:"mode,omitempty"`
+	LensID      string   `json:"lensId,omitempty"`
+	TimeHorizon string   `json:"timeHorizon,omitempty"`
+	ContractIDs []string `json:"contractIds,omitempty"`
 }
 
 func (h *HorizonHandlers) HandleWatchRoot(w http.ResponseWriter, r *http.Request) {
@@ -71,12 +80,169 @@ func (h *HorizonHandlers) GetWatchDashboard(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	mode := strings.TrimSpace(r.URL.Query().Get("mode"))
-	dashboard, err := h.watchService.GetDashboard(r.Context(), authInfo.TenantID, authInfo.UID, mode)
+	dashboard, err := h.watchService.GetDashboardSnapshot(r.Context(), watch.DashboardRequest{
+		TenantID:     authInfo.TenantID,
+		UserID:       authInfo.UID,
+		Mode:         mode,
+		LensID:       strings.TrimSpace(r.URL.Query().Get("lensId")),
+		ServiceLine:  strings.TrimSpace(r.URL.Query().Get("serviceLine")),
+		TimeHorizon:  strings.TrimSpace(r.URL.Query().Get("timeHorizon")),
+		QuickFilters: splitCSV(r.URL.Query().Get("filters")),
+	})
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to build dashboard: %v", err), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, dashboard)
+}
+
+func (h *HorizonHandlers) GetWatchScenarioWorkspace(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h == nil || h.watchService == nil {
+		http.Error(w, "watch service not configured", http.StatusServiceUnavailable)
+		return
+	}
+	authInfo, err := requireAuth(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	workspace, err := h.watchService.GetScenarioWorkspace(r.Context(), watch.DashboardRequest{
+		TenantID:    authInfo.TenantID,
+		UserID:      authInfo.UID,
+		Mode:        strings.TrimSpace(r.URL.Query().Get("mode")),
+		LensID:      strings.TrimSpace(r.URL.Query().Get("lensId")),
+		ServiceLine: watch.ServiceLineScenario,
+		TimeHorizon: strings.TrimSpace(r.URL.Query().Get("timeHorizon")),
+	})
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to build scenario workspace: %v", err), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, workspace)
+}
+
+func (h *HorizonHandlers) GetWatchScenarioDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h == nil || h.watchService == nil {
+		http.Error(w, "watch service not configured", http.StatusServiceUnavailable)
+		return
+	}
+	authInfo, err := requireAuth(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	presetID := extractIDFromPath(r, "/api/horizon/watch/scenarios/contracts/")
+	if presetID == "" {
+		http.Error(w, "scenario contract id required", http.StatusBadRequest)
+		return
+	}
+	workspace, err := h.watchService.GetScenarioWorkspace(r.Context(), watch.DashboardRequest{
+		TenantID:    authInfo.TenantID,
+		UserID:      authInfo.UID,
+		Mode:        strings.TrimSpace(r.URL.Query().Get("mode")),
+		LensID:      strings.TrimSpace(r.URL.Query().Get("lensId")),
+		ServiceLine: watch.ServiceLineScenario,
+		TimeHorizon: strings.TrimSpace(r.URL.Query().Get("timeHorizon")),
+	})
+	if err != nil || workspace == nil {
+		http.Error(w, fmt.Sprintf("failed to load scenario detail: %v", err), http.StatusInternalServerError)
+		return
+	}
+	for _, preset := range workspace.Contracts {
+		if strings.EqualFold(strings.TrimSpace(preset.ID), strings.TrimSpace(presetID)) {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"workspace": workspace,
+				"contract":  preset,
+			})
+			return
+		}
+	}
+	http.Error(w, "scenario contract not found", http.StatusNotFound)
+}
+
+func (h *HorizonHandlers) CompareWatchScenarios(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h == nil || h.watchService == nil || h.service == nil || h.service.Propagation() == nil || h.service.Fragments() == nil || h.propagationProfileLookup == nil {
+		http.Error(w, "watch scenario dependencies not configured", http.StatusServiceUnavailable)
+		return
+	}
+	authInfo, err := requireAuth(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	var req compareWatchScenariosRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+	workspace, err := h.watchService.GetScenarioWorkspace(r.Context(), watch.DashboardRequest{
+		TenantID:    authInfo.TenantID,
+		UserID:      authInfo.UID,
+		Mode:        strings.TrimSpace(req.Mode),
+		LensID:      strings.TrimSpace(req.LensID),
+		ServiceLine: watch.ServiceLineScenario,
+		TimeHorizon: strings.TrimSpace(req.TimeHorizon),
+	})
+	if err != nil || workspace == nil {
+		http.Error(w, fmt.Sprintf("failed to build scenario workspace: %v", err), http.StatusInternalServerError)
+		return
+	}
+	selected := map[string]struct{}{}
+	for _, id := range req.ContractIDs {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			selected[id] = struct{}{}
+		}
+	}
+	branches := make([]map[string]any, 0, len(workspace.Contracts))
+	for _, preset := range workspace.Contracts {
+		if len(selected) > 0 {
+			if _, ok := selected[strings.TrimSpace(preset.ID)]; !ok {
+				continue
+			}
+		}
+		result, runErr := propagation.RunScenario(
+			r.Context(),
+			h.service.Propagation(),
+			h.propagationProfileLookup,
+			h.service.Fragments(),
+			propagation.ScenarioInput{
+				ScenarioID:      strings.TrimSpace(preset.ID),
+				ContractType:    strings.TrimSpace(preset.ContractType),
+				DomainModes:     append([]string(nil), preset.DomainModes...),
+				Mode:            propagation.ScenarioModePreview,
+				Parameters:      preset.Parameters,
+				SeedFragmentIDs: append([]string(nil), preset.SeedFragmentIDs...),
+				TargetPaths:     append([]string(nil), preset.TargetPaths...),
+				MaxTraceSteps:   60,
+			},
+		)
+		branch := map[string]any{
+			"contract": preset,
+		}
+		if runErr != nil {
+			branch["error"] = runErr.Error()
+		} else {
+			branch["result"] = result
+		}
+		branches = append(branches, branch)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"workspace": workspace,
+		"branches":  branches,
+	})
 }
 
 func (h *HorizonHandlers) SearchWatchTargets(w http.ResponseWriter, r *http.Request) {
@@ -291,4 +457,19 @@ func inferWatchKind(canonicalPath string) string {
 	default:
 		return "fragment"
 	}
+}
+
+func splitCSV(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }

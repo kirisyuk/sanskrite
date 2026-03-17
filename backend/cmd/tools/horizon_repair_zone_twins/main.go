@@ -15,6 +15,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
+	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
 type repairRow struct {
@@ -53,7 +54,16 @@ func main() {
 	edgesRepo := horizonrepo.NewDependencyEdgesRepository(fsClient.Client())
 	mergeAuditRepo := horizonrepo.NewFragmentMergeAuditRepository(fsClient.Client())
 	redirectsRepo := horizonrepo.NewCanonicalPathRedirectsRepository(fsClient.Client())
-	mergeRepo := horizonrepo.NewFragmentsMergeRepository(fragmentsRepo, edgesRepo, mergeAuditRepo).WithRedirectsRepo(redirectsRepo)
+	materializedRepo := horizonrepo.NewMaterializedArtifactsRepository(fsClient.Client())
+	lensesRepo := horizonrepo.NewLensesRepository(fsClient.Client())
+	watchSubjectsRepo := horizonrepo.NewWatchSubjectsRepository(fsClient.Client())
+	mergeRepo := horizonrepo.NewFragmentsMergeRepository(fragmentsRepo, edgesRepo, mergeAuditRepo).
+		WithRedirectsRepo(redirectsRepo).
+		WithMaterializedRepo(materializedRepo).
+		WithLensesRepo(lensesRepo).
+		WithWatchSubjectsRepo(watchSubjectsRepo).
+		WithOntologyFactsRepo(corerepo.NewOntologyFactsRepository(fsClient.Client())).
+		WithEntitiesRepo(corerepo.NewEntityRepository(fsClient.Client()))
 	scorer := importance.NewScorer(fragmentsRepo, edgesRepo)
 
 	items, err := fragmentsRepo.ListByTypeAndTenant(ctx, strings.TrimSpace(*tenantID), models.FragmentTypeAffectedZone, *limit)

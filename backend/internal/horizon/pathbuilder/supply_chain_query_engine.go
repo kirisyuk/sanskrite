@@ -127,6 +127,7 @@ type supplyChainQueryLink struct {
 	SupplierFacilityRef     *string
 	CustomerFacilityRef     *string
 	TransportViaRefs        []string
+	VesselType              string
 	SegmentClass            string
 	Confidence              float64
 	TenantID                string
@@ -341,6 +342,7 @@ func normalizeSupplyChainQueryLink(raw *models.HorizonFragment) *supplyChainQuer
 		SupplierFacilityRef:     supplierFacilityRef,
 		CustomerFacilityRef:     customerFacilityRef,
 		TransportViaRefs:        transportViaRefs,
+		VesselType:              extractVesselTypeQualifier(raw.Qualifiers),
 		SegmentClass:            segmentClass,
 		Confidence:              confidence,
 		TenantID:                strings.TrimSpace(raw.TenantID),
@@ -852,6 +854,7 @@ func queryLinkToPathSegment(link *supplyChainQueryLink) PathSegment {
 		SupplierFacilityRef:     copyStringPtr(link.SupplierFacilityRef),
 		CustomerFacilityRef:     copyStringPtr(link.CustomerFacilityRef),
 		TransportViaRefs:        append([]string(nil), link.TransportViaRefs...),
+		VesselType:              strings.TrimSpace(link.VesselType),
 		SegmentClass:            link.SegmentClass,
 		Confidence:              link.Confidence,
 		TenantID:                link.TenantID,

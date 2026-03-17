@@ -125,6 +125,39 @@ func TestDomainModeToKind(t *testing.T) {
 	}
 }
 
+func TestGovernanceArtifactConfigForContractType(t *testing.T) {
+	ownership := governanceArtifactConfigForContractType("ownership-structure")
+	if ownership.GovernanceView != "ownership" {
+		t.Fatalf("ownership GovernanceView=%q, want ownership", ownership.GovernanceView)
+	}
+	if _, ok := ownership.PrimaryEdges[models.DependencyTypeOwns]; !ok {
+		t.Fatal("ownership config must prioritize OWNS")
+	}
+	if _, ok := ownership.PrimaryEdges[models.DependencyTypeSubsidiaryOf]; !ok {
+		t.Fatal("ownership config must prioritize SUBSIDIARY_OF")
+	}
+	if _, ok := ownership.PrimaryEdges[models.DependencyTypeManages]; ok {
+		t.Fatal("ownership config must not prioritize MANAGES")
+	}
+
+	control := governanceArtifactConfigForContractType("control-map")
+	if control.GovernanceView != "control" {
+		t.Fatalf("control GovernanceView=%q, want control", control.GovernanceView)
+	}
+	for _, edgeType := range []models.DependencyType{
+		models.DependencyTypeControls,
+		models.DependencyTypeManages,
+		models.DependencyTypeAdministers,
+	} {
+		if _, ok := control.PrimaryEdges[edgeType]; !ok {
+			t.Fatalf("control-map config must prioritize %s", edgeType)
+		}
+	}
+	if _, ok := control.PrimaryEdges[models.DependencyTypeOwns]; ok {
+		t.Fatal("control-map config must not make OWNS a primary traversal edge")
+	}
+}
+
 func TestIsAllowedEdge(t *testing.T) {
 	allowed := []string{"OWNS", "CONTROLS", "MANAGES"}
 	if !isAllowedEdge("OWNS", allowed) {

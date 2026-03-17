@@ -3,6 +3,14 @@ import type { HorizonLensRecord, HorizonLensViewConfig } from '../types/horizonV
 import { auth } from './firebase';
 import type { User, Project, DataSource } from '../types';
 import type { AnalyzeRequest, AnalyzeResponse } from '../types/stance';
+import type { ScoutingMode } from '../features/horizon/lib/scoutingMode';
+import type {
+  HorizonWatchBrief,
+  HorizonWatchPreferences,
+  HorizonWatchSearchResult,
+  HorizonWatchSnapshot,
+  HorizonWatchScenarioWorkspace,
+} from '../types/horizonWatch';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
 
@@ -1654,6 +1662,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     input: {
       projectId: string;
       query: string;
+      mode?: ScoutingMode;
       specialties?: string[];
     },
     options?: { correlationId?: string; sessionId?: string }
@@ -1710,6 +1719,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       query: string;
       name?: string;
       mode?: 'just_open' | 'research_first' | string;
+      scoutingMode?: ScoutingMode;
       intent?: any; // Optional: edited intent override from preflight UI
       maxRecursionDepth?: number;
       requestedMetrics?: string[];
@@ -1886,7 +1896,13 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
    */
   async scopeScoutHorizonLensNode(
     lensId: string,
-    input: { fragmentId?: string; canonicalPath?: string; maxRecursionDepth?: number },
+    input: {
+      fragmentId?: string;
+      canonicalPath?: string;
+      maxRecursionDepth?: number;
+      mode?: ScoutingMode;
+      specialties?: string[];
+    },
     options?: { correlationId?: string; sessionId?: string }
   ): Promise<{
     jobId: string;
@@ -1912,7 +1928,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
    */
   async scopeScoutHorizonLensQuery(
     lensId: string,
-    input: { query: string; specialties?: string[] },
+    input: { query: string; mode?: ScoutingMode; specialties?: string[] },
     options?: { correlationId?: string; sessionId?: string }
   ): Promise<{
     jobId: string;
@@ -1939,7 +1955,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
    */
   async scopeScoutHorizonLensFull(
     lensId: string,
-    input: { query: string; maxAnchors?: number; maxRecursionDepth?: number; specialties?: string[] },
+    input: { query: string; maxAnchors?: number; maxRecursionDepth?: number; mode?: ScoutingMode; specialties?: string[] },
     options?: { correlationId?: string; sessionId?: string }
   ): Promise<{
     jobIds: string[];
@@ -3181,6 +3197,144 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       console.error(`[API] recalculateHorizonLensMetrics error:`, error);
       throw error;
     }
+  }
+
+  async getHorizonWatchSnapshot(params?: {
+    mode?: 'global' | 'my_watch' | 'combined';
+    lensId?: string | null;
+    serviceLine?: 'geo' | 'monitoring' | 'scenario';
+    timeHorizon?: string;
+    filters?: string[];
+  }): Promise<HorizonWatchSnapshot> {
+    const response = await this.client.get('/api/horizon/watch', {
+      params: {
+        mode: params?.mode,
+        lensId: params?.lensId || undefined,
+        serviceLine: params?.serviceLine,
+        timeHorizon: params?.timeHorizon,
+        filters: params?.filters?.join(','),
+      },
+    });
+    return response.data;
+  }
+
+  async searchHorizonWatchTargets(query: string, limit = 8): Promise<HorizonWatchSearchResult[]> {
+    const response = await this.client.post<{ results: HorizonWatchSearchResult[] }>('/api/horizon/watch/search', {
+      query,
+      limit,
+    });
+    return Array.isArray(response.data?.results) ? response.data.results : [];
+  }
+
+  async createHorizonWatchTarget(data: {
+    kind?: string;
+    label: string;
+    canonicalPath: string;
+    fragmentId?: string;
+    domainModes?: string[];
+    roles?: string[];
+    priority?: number;
+  }): Promise<any> {
+    const response = await this.client.post('/api/horizon/watch/targets', data);
+    return response.data;
+  }
+
+  async deleteHorizonWatchTarget(targetId: string): Promise<{ deleted: boolean; id: string }> {
+    const response = await this.client.delete(`/api/horizon/watch/targets/${targetId}`);
+    return response.data;
+  }
+
+  async updateHorizonWatchPreferences(data: {
+    mode?: string;
+    timeHorizon?: string;
+    confidenceFloor?: number;
+    onlyWithImpactPaths?: boolean;
+    onlyTrustedSources?: boolean;
+    filters?: Record<string, any>;
+  }): Promise<HorizonWatchPreferences> {
+    const response = await this.client.put('/api/horizon/watch/preferences', data);
+    return response.data;
+  }
+
+  async getHorizonWatchBrief(briefId: string): Promise<HorizonWatchBrief> {
+    const response = await this.client.get(`/api/horizon/watch/briefs/${briefId}`);
+    return response.data;
+  }
+
+  async getHorizonWatchBriefEvidence(briefId: string): Promise<{
+    briefId: string;
+    targetId: string;
+    evidence: any[];
+    generatedAt: string;
+  }> {
+    const response = await this.client.get(`/api/horizon/watch/briefs/${briefId}/evidence`);
+    return response.data;
+  }
+
+  async getHorizonWatchBriefPaths(briefId: string): Promise<{
+    briefId: string;
+    targetId: string;
+    canonicalPaths: string[];
+    topAffectedTargets: string[];
+  }> {
+    const response = await this.client.get(`/api/horizon/watch/briefs/${briefId}/paths`);
+    return response.data;
+  }
+
+  async getHorizonWatchBriefSources(briefId: string): Promise<{
+    briefId: string;
+    targetId: string;
+    sources: string[];
+  }> {
+    const response = await this.client.get(`/api/horizon/watch/briefs/${briefId}/sources`);
+    return response.data;
+  }
+
+  async getHorizonWatchScenarioWorkspace(params?: {
+    mode?: 'global' | 'my_watch' | 'combined';
+    lensId?: string | null;
+    timeHorizon?: string;
+  }): Promise<HorizonWatchScenarioWorkspace> {
+    const response = await this.client.get('/api/horizon/watch/scenarios/workspace', {
+      params: {
+        mode: params?.mode,
+        lensId: params?.lensId || undefined,
+        timeHorizon: params?.timeHorizon,
+      },
+    });
+    return response.data;
+  }
+
+  async getHorizonWatchScenarioContractDetail(
+    contractId: string,
+    params?: { mode?: 'global' | 'my_watch' | 'combined'; lensId?: string | null; timeHorizon?: string }
+  ): Promise<{ workspace: HorizonWatchScenarioWorkspace; contract: import('../types/horizonWatch').HorizonWatchScenarioPreset }> {
+    const response = await this.client.get(`/api/horizon/watch/scenarios/contracts/${encodeURIComponent(contractId)}`, {
+      params: {
+        mode: params?.mode,
+        lensId: params?.lensId || undefined,
+        timeHorizon: params?.timeHorizon,
+      },
+    });
+    return response.data;
+  }
+
+  async compareHorizonWatchScenarios(input?: {
+    mode?: 'global' | 'my_watch' | 'combined';
+    lensId?: string | null;
+    timeHorizon?: string;
+    contractIds?: string[];
+  }): Promise<{
+    workspace: HorizonWatchScenarioWorkspace;
+    branches: Array<{ contract: import('../types/horizonWatch').HorizonWatchScenarioPreset; result?: any; error?: string }>;
+  }> {
+    const response = await this.client.post('/api/horizon/watch/scenarios/compare', input || {});
+    return response.data;
+  }
+
+  async getHorizonLensAttention(lensId: string): Promise<import('../types/horizonWatch').HorizonWatchLensAttention> {
+    const response = await this.client.get(`/api/horizon/lenses/${lensId}/attention`);
+    return response.data;
   }
 
   async runHorizonScenario(input: {

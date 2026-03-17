@@ -213,6 +213,46 @@ func TestParseSupplyChains_SuppliesToEdgeWithoutTransportStillHasDirectionalQual
 	}
 }
 
+func TestParseSupplyChains_MultipleProductsBecomeMultipleSupplyLinks(t *testing.T) {
+	parser := NewSupplyChainParser()
+	chains := []agents.SupplyChain{
+		{
+			Confidence: 0.88,
+			Nodes: []agents.SupplyChainNode{
+				{CanonicalPath: "/org/cn/catl", Type: "ORGANIZATION"},
+				{CanonicalPath: "/product/finished/battery-cells", Type: "PRODUCT"},
+				{CanonicalPath: "/org/de/bmw", Type: "ORGANIZATION"},
+			},
+		},
+		{
+			Confidence: 0.79,
+			Nodes: []agents.SupplyChainNode{
+				{CanonicalPath: "/org/cn/catl", Type: "ORGANIZATION"},
+				{CanonicalPath: "/product/raw/lithium-carbonate", Type: "PRODUCT"},
+				{CanonicalPath: "/org/de/bmw", Type: "ORGANIZATION"},
+			},
+		},
+	}
+
+	result, err := parser.ParseSupplyChains(chains, "/org/cn/catl")
+	if err != nil {
+		t.Fatalf("ParseSupplyChains() error = %v", err)
+	}
+	if len(result.SupplyLinkSegments) != 2 {
+		t.Fatalf("segments=%d, want 2 product-specific supply links", len(result.SupplyLinkSegments))
+	}
+	products := map[string]struct{}{}
+	for _, seg := range result.SupplyLinkSegments {
+		if seg == nil {
+			continue
+		}
+		products[seg.ProductRef] = struct{}{}
+	}
+	if len(products) != 2 {
+		t.Fatalf("unique product refs=%v, want 2", products)
+	}
+}
+
 func TestParseSupplyChains_OrgToFacilityUsesOwns(t *testing.T) {
 	parser := NewSupplyChainParser()
 	chains := []agents.SupplyChain{

@@ -1,5 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { ThemeContext } from '../components/ThemeProvider';
 import { SidebarPanel } from '../components/SidebarPanel';
@@ -16,6 +17,7 @@ import { useWebSocketConnection } from '../hooks/useWebSocketConnection';
 import { useIsAdmin } from '../hooks/useIsAdmin';
 import { HorizonLoading } from '../components/HorizonLoading';
 import { HorizonEmptyState } from '../components/HorizonEmptyState';
+import { HorizonWatchSurface } from '../components/HorizonWatchSurface';
 
 type HorizonFatalPipelineError = {
   title: string;
@@ -27,6 +29,8 @@ type HorizonFatalPipelineError = {
 
 const HorizonPage: React.FC = () => {
   const { t } = useTranslation();
+  const location = useLocation();
+  const navigate = useNavigate();
   const { currentUser } = useAuth();
   const { theme } = React.useContext(ThemeContext);
   const projects = useProjectsStore((s) => s.projects);
@@ -41,6 +45,7 @@ const HorizonPage: React.FC = () => {
   const [showSettings, setShowSettings] = React.useState(false);
   const [showAccount, setShowAccount] = React.useState(false);
   const [showWorldMap, setShowWorldMap] = React.useState(false);
+  const isWatchRoute = location.pathname === '/horizon/watch';
   
   // Load saved Horizon state from localStorage
   const getSavedHorizonState = React.useCallback(() => {
@@ -498,6 +503,7 @@ const HorizonPage: React.FC = () => {
         {
           projectId: request.projectId,
           query: q,
+          mode: request.filters?.mode,
           specialties: request.filters?.specialties,
         },
         { correlationId, sessionId },
@@ -610,6 +616,7 @@ const HorizonPage: React.FC = () => {
           projectId: pending.request.projectId,
           query: pending.query,
           mode: modeOverride || preflightMode,
+          scoutingMode: pending.request.filters?.mode,
           intent: intentOverride,
           maxRecursionDepth: pending.request.filters?.maxRecursionDepth ?? 1,
           prefetchScope: pending.prefetchScope.length > 0 ? pending.prefetchScope : undefined,
@@ -732,7 +739,13 @@ const HorizonPage: React.FC = () => {
           setCreateFatalError(null);
         }}
         selectedLensId={selectedLensId}
+        onOpenWatch={() => {
+          setShowWorldMap(false);
+          navigate('/horizon/watch');
+        }}
+        isWatchActive={isWatchRoute}
         onOpenWorldMap={() => {
+          navigate('/horizon');
           setShowWorldMap(true);
           setLensStarted(false);
           setActiveCreateCorrelationId(null);
@@ -775,7 +788,16 @@ const HorizonPage: React.FC = () => {
             position: 'relative',
           }}
         >
-          {showWorldMap ? (
+          {isWatchRoute ? (
+            <HorizonWatchSurface
+              lensId={currentProject ? selectedLensId : null}
+              projectName={currentProject?.displayName || null}
+              onOpenWorldMap={() => {
+                navigate('/horizon');
+                setShowWorldMap(true);
+              }}
+            />
+          ) : showWorldMap ? (
             <WorldMapPanel />
           ) : currentProject ? (
             /* Lens Canvas overlay - show Progress view for both project and lens selection */

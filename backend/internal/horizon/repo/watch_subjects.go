@@ -229,6 +229,70 @@ func (r *WatchSubjectsRepository) ListByUniversePath(ctx context.Context, tenant
 	return out, nil
 }
 
+func (r *WatchSubjectsRepository) ListByAnchorCanonicalPathAnyTenant(ctx context.Context, canonicalPath string, limit int) ([]*models.WatchSubject, error) {
+	if r == nil || r.col == nil || strings.TrimSpace(canonicalPath) == "" {
+		return nil, ErrInvalidDocument
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	docs, err := r.col.Where("anchorCanonicalPath", "==", strings.TrimSpace(canonicalPath)).
+		Limit(limit).
+		Documents(ctx).
+		GetAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*models.WatchSubject, 0, len(docs))
+	for _, doc := range docs {
+		var subject models.WatchSubject
+		if err := doc.DataTo(&subject); err != nil {
+			continue
+		}
+		if strings.TrimSpace(subject.ID) == "" {
+			subject.ID = doc.Ref.ID
+		}
+		out = append(out, &subject)
+	}
+	return out, nil
+}
+
+func (r *WatchSubjectsRepository) ListByUniversePathAnyTenant(ctx context.Context, canonicalPath string, limit int) ([]*models.WatchSubject, error) {
+	if r == nil || r.col == nil || strings.TrimSpace(canonicalPath) == "" {
+		return nil, ErrInvalidDocument
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	docs, err := r.col.Where("universePaths", "array-contains", strings.TrimSpace(canonicalPath)).
+		Limit(limit).
+		Documents(ctx).
+		GetAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*models.WatchSubject, 0, len(docs))
+	for _, doc := range docs {
+		var subject models.WatchSubject
+		if err := doc.DataTo(&subject); err != nil {
+			continue
+		}
+		if strings.TrimSpace(subject.ID) == "" {
+			subject.ID = doc.Ref.ID
+		}
+		out = append(out, &subject)
+	}
+	return out, nil
+}
+
+func (r *WatchSubjectsRepository) Delete(ctx context.Context, id string) error {
+	if r == nil || r.col == nil || strings.TrimSpace(id) == "" {
+		return ErrInvalidDocument
+	}
+	_, err := r.col.Doc(strings.TrimSpace(id)).Delete(ctx)
+	return err
+}
+
 func (r *WatchSubjectsRepository) UpdateStatus(ctx context.Context, id string, status models.WatchSubjectStatus) error {
 	if r == nil || r.col == nil || strings.TrimSpace(id) == "" {
 		return ErrInvalidDocument

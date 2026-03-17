@@ -12,11 +12,13 @@ type Lens struct {
 	ProjectID string `json:"projectId" firestore:"projectId"`
 	Name      string `json:"name" firestore:"name"`
 
-	// Scope: Mixed array of canonical paths AND query addresses.
-	// Does NOT include /domain/ paths (domain is config, not a graph node).
+	// Scope: mixed array of fragment-backed canonical paths and non-fragment scope entries.
+	// Allowed non-fragment entries include /query/, /domain/, and /artifact/ references.
 	// Examples:
 	//   - Static: "/org/tsmc", "/fac/tw/fab-21"
 	//   - Dynamic (QueryAddress): "/query/sector:/Technology/Semiconductors/**"
+	//   - Domain contract: "/domain/v1/supply-chain/geo/kz/subject/samsung-electronics"
+	//   - Materialized artifact: "/artifact/supply-chain/global/..."
 	Scope []string `json:"scope" firestore:"scope"`
 
 	// DomainModes: execution contracts (supply_chain, governance, market, etc.).

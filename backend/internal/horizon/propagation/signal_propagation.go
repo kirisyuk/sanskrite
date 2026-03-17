@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
@@ -22,6 +24,8 @@ const (
 	MaxHopsForWeakAmplitude = 4
 	// WeakAmplitudeThreshold is the amplitude below which distant signals (hops >= MaxHopsForWeakAmplitude) are dropped.
 	WeakAmplitudeThreshold = 0.25
+	// propagationPrefetchWindow controls how many pending frontier nodes are best-effort prefetched in one batch.
+	propagationPrefetchWindow = 64
 )
 
 // SignalPropagationResult represents the result of signal propagation.
@@ -141,8 +145,13 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 		axis        string // Current axis (may transform)
 		artifactKey string // Chain waveguide context (empty = free space)
 	}
+	type frontierState struct {
+		amplitude float64
+		hops      int
+	}
 
 	queue := make([]queueItem, 0, len(seedFragmentIDs))
+	frontier := make(map[string]frontierState, len(seedFragmentIDs)*2)
 	for _, fragID := range seedFragmentIDs {
 		traceCollector.add(SignalPropagationTraceEvent{
 			SignalID:     signal.ID,
@@ -160,6 +169,7 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 			pathCanon:  []string{""}, // fill lazily when fragment is loaded
 			axis:       signal.Axis,
 		})
+		frontier[fragID+"|"+signal.Axis] = frontierState{amplitude: signal.Amplitude, hops: 0}
 	}
 	var adapter DomainModelAdapter
 	if len(seedFragmentIDs) > 0 {
@@ -177,6 +187,22 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 	for len(queue) > 0 {
 		item := queue[0]
 		queue = queue[1:]
+		frontierKey := item.fragmentID + "|" + item.axis
+		if best, ok := frontier[frontierKey]; ok {
+			if best.amplitude > item.amplitude || (best.amplitude == item.amplitude && best.hops < item.hops) {
+				traceCollector.add(SignalPropagationTraceEvent{
+					SignalID:     signal.ID,
+					ToFragment:   item.fragmentID,
+					AxisOut:      item.axis,
+					AmplitudeOut: item.amplitude,
+					Hops:         item.hops,
+					Outcome:      "dropped",
+					Reason:       "stale_frontier",
+				})
+				continue
+			}
+			delete(frontier, frontierKey)
+		}
 
 		// Threshold stop
 		if item.amplitude < MinAmplitudeThreshold {
@@ -224,6 +250,18 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 
 		// Get fragment (cache-first)
 		frag := fragmentCache[item.fragmentID]
+		if frag == nil {
+			prefetchIDs := make([]string, 0, propagationPrefetchWindow)
+			prefetchIDs = append(prefetchIDs, item.fragmentID)
+			for i := 0; i < len(queue) && len(prefetchIDs) < propagationPrefetchWindow; i++ {
+				nextID := strings.TrimSpace(queue[i].fragmentID)
+				if nextID != "" {
+					prefetchIDs = append(prefetchIDs, nextID)
+				}
+			}
+			e.prefetchFragmentsByID(ctx, fragmentCache, prefetchIDs)
+			frag = fragmentCache[item.fragmentID]
+		}
 		if frag == nil {
 			loadedFrag, err := e.fragmentsRepo.Get(ctx, item.fragmentID)
 			if err != nil {
@@ -453,6 +491,36 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 			})
 
 			// Add to queue — propagate artifact key for chain-direction coherence
+			nextKey := neighbor.fragmentID + "|" + nextAxis
+			if best, ok := frontier[nextKey]; ok {
+				if best.amplitude > nextAmplitude || (best.amplitude == nextAmplitude && best.hops <= item.hops+1) {
+					traceCollector.add(SignalPropagationTraceEvent{
+						SignalID:     signal.ID,
+						FromFragment: item.fragmentID,
+						ToFragment:   neighbor.fragmentID,
+						FromPath:     meta.FromPath,
+						ToPath:       meta.ToPath,
+						FromGeo:      meta.FromGeo,
+						ToGeo:        meta.ToGeo,
+						EdgeID:       neighbor.edge.ID,
+						EdgeType:     string(neighbor.edge.Type),
+						Direction:    neighbor.traversalDirection,
+						Channel:      meta.Channel,
+						Scope:        meta.Scope,
+						Spillover:    meta.Spillover,
+						AxisIn:       item.axis,
+						AxisOut:      nextAxis,
+						AmplitudeIn:  item.amplitude,
+						AmplitudeOut: nextAmplitude,
+						Hops:         item.hops + 1,
+						Outcome:      "dropped",
+						Reason:       "frontier_weaker_duplicate",
+						Factors:      traceFactors,
+					})
+					continue
+				}
+			}
+			frontier[nextKey] = frontierState{amplitude: nextAmplitude, hops: item.hops + 1}
 			queue = append(queue, queueItem{
 				fragmentID:  neighbor.fragmentID,
 				amplitude:   nextAmplitude,
@@ -563,6 +631,16 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 		signal.Amplitude,
 		len(seedFragmentIDs),
 	)
+	debugSignalID := strings.TrimSpace(os.Getenv("HORIZON_PROPAGATION_DEBUG_SIGNAL_ID"))
+	debugEnabled := debugSignalID != "" && debugSignalID == strings.TrimSpace(signal.ID)
+	debugLog := func(format string, args ...any) {
+		if debugEnabled {
+			log.Printf("[horizon.signal.debug] "+format, args...)
+		}
+	}
+	if debugEnabled {
+		debugLog("preview-seeds seedIds=%s", strings.Join(seedFragmentIDs, ","))
+	}
 
 	type queueItem struct {
 		fragmentID  string
@@ -573,6 +651,10 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 		axis        string
 		artifactKey string
 	}
+	type frontierState struct {
+		amplitude float64
+		hops      int
+	}
 
 	visited := make(map[string]float64) // key(nodeID|axis) -> max amplitude seen
 	affectedFragments := make(map[string]bool)
@@ -581,6 +663,7 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 	acc := make(map[string]map[string]AccumulatedSignal) // fragmentID -> (axis|polarity -> signal)
 
 	queue := make([]queueItem, 0, len(seedFragmentIDs))
+	frontier := make(map[string]frontierState, len(seedFragmentIDs)*2)
 	for _, fragID := range seedFragmentIDs {
 		traceCollector.add(SignalPropagationTraceEvent{
 			SignalID:     signal.ID,
@@ -598,6 +681,7 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 			pathCanon:  []string{""},
 			axis:       signal.Axis,
 		})
+		frontier[fragID+"|"+signal.Axis] = frontierState{amplitude: signal.Amplitude, hops: 0}
 	}
 
 	var adapter DomainModelAdapter
@@ -642,8 +726,26 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 	for len(queue) > 0 {
 		item := queue[0]
 		queue = queue[1:]
+		frontierKey := item.fragmentID + "|" + item.axis
+		if best, ok := frontier[frontierKey]; ok {
+			if best.amplitude > item.amplitude || (best.amplitude == item.amplitude && best.hops < item.hops) {
+				debugLog("drop reason=stale_frontier fragmentId=%s axis=%s amp=%.3f best=%.3f hops=%d bestHops=%d", item.fragmentID, item.axis, item.amplitude, best.amplitude, item.hops, best.hops)
+				traceCollector.add(SignalPropagationTraceEvent{
+					SignalID:     signal.ID,
+					ToFragment:   item.fragmentID,
+					AxisOut:      item.axis,
+					AmplitudeOut: item.amplitude,
+					Hops:         item.hops,
+					Outcome:      "dropped",
+					Reason:       "stale_frontier",
+				})
+				continue
+			}
+			delete(frontier, frontierKey)
+		}
 
 		if item.amplitude < MinAmplitudeThreshold {
+			debugLog("drop reason=below_threshold fragmentId=%s axis=%s amp=%.3f hops=%d", item.fragmentID, item.axis, item.amplitude, item.hops)
 			traceCollector.add(SignalPropagationTraceEvent{
 				SignalID:     signal.ID,
 				ToFragment:   item.fragmentID,
@@ -658,6 +760,7 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 
 		visitKey := item.fragmentID + "|" + item.axis
 		if maxAmp, ok := visited[visitKey]; ok && maxAmp >= item.amplitude {
+			debugLog("drop reason=visited_stronger fragmentId=%s axis=%s amp=%.3f prev=%.3f hops=%d", item.fragmentID, item.axis, item.amplitude, maxAmp, item.hops)
 			traceCollector.add(SignalPropagationTraceEvent{
 				SignalID:     signal.ID,
 				ToFragment:   item.fragmentID,
@@ -673,6 +776,7 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 
 		// Skip distant weak signals (tail noise)
 		if item.hops >= MaxHopsForWeakAmplitude && item.amplitude < WeakAmplitudeThreshold {
+			debugLog("drop reason=distant_weak fragmentId=%s axis=%s amp=%.3f hops=%d", item.fragmentID, item.axis, item.amplitude, item.hops)
 			traceCollector.add(SignalPropagationTraceEvent{
 				SignalID:     signal.ID,
 				ToFragment:   item.fragmentID,
@@ -685,8 +789,25 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 			continue
 		}
 
-		frag, err := e.fragmentsRepo.Get(ctx, item.fragmentID)
+		frag := fragmentCache[item.fragmentID]
+		var err error
+		if frag == nil {
+			prefetchIDs := make([]string, 0, propagationPrefetchWindow)
+			prefetchIDs = append(prefetchIDs, item.fragmentID)
+			for i := 0; i < len(queue) && len(prefetchIDs) < propagationPrefetchWindow; i++ {
+				nextID := strings.TrimSpace(queue[i].fragmentID)
+				if nextID != "" {
+					prefetchIDs = append(prefetchIDs, nextID)
+				}
+			}
+			e.prefetchFragmentsByID(ctx, fragmentCache, prefetchIDs)
+			frag = fragmentCache[item.fragmentID]
+		}
+		if frag == nil {
+			frag, err = e.fragmentsRepo.Get(ctx, item.fragmentID)
+		}
 		if err != nil || frag == nil {
+			debugLog("drop reason=fragment_load_failed fragmentId=%s axis=%s hops=%d err=%v", item.fragmentID, item.axis, item.hops, err)
 			traceCollector.add(SignalPropagationTraceEvent{
 				SignalID:     signal.ID,
 				ToFragment:   item.fragmentID,
@@ -699,6 +820,7 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 			continue
 		}
 		fragmentCache[item.fragmentID] = frag
+		debugLog("visit fragmentId=%s path=%s axis=%s amp=%.3f hops=%d", item.fragmentID, strings.TrimSpace(frag.CanonicalPath), item.axis, item.amplitude, item.hops)
 
 		if len(item.pathCanon) == len(item.pathIDs) && len(item.pathCanon) > 0 && strings.TrimSpace(item.pathCanon[len(item.pathCanon)-1]) == "" {
 			item.pathCanon[len(item.pathCanon)-1] = strings.TrimSpace(frag.CanonicalPath)
@@ -718,6 +840,7 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 		})
 
 		if item.hops >= profile.DefaultMaxHops {
+			debugLog("drop reason=hop_limit fragmentId=%s path=%s axis=%s amp=%.3f hops=%d", item.fragmentID, strings.TrimSpace(frag.CanonicalPath), item.axis, item.amplitude, item.hops)
 			traceCollector.add(SignalPropagationTraceEvent{
 				SignalID:     signal.ID,
 				ToFragment:   item.fragmentID,
@@ -739,6 +862,7 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 		if !ok {
 			loadedNeighbors, err := e.getNeighborsViaStrongEdges(ctx, frag, profile)
 			if err != nil {
+				debugLog("drop reason=neighbor_lookup_failed fragmentId=%s path=%s axis=%s hops=%d err=%v", item.fragmentID, strings.TrimSpace(frag.CanonicalPath), item.axis, item.hops, err)
 				traceCollector.add(SignalPropagationTraceEvent{
 					SignalID:     signal.ID,
 					ToFragment:   item.fragmentID,
@@ -753,6 +877,7 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 			neighbors = loadedNeighbors
 			neighborsCache[item.fragmentID] = loadedNeighbors
 		}
+		debugLog("neighbors fragmentId=%s path=%s axis=%s count=%d", item.fragmentID, strings.TrimSpace(frag.CanonicalPath), item.axis, len(neighbors))
 
 		for _, neighbor := range neighbors {
 			breakdown := e.calculateDampedAmplitudeWithBreakdown(outgoingAmplitude, item.axis, frag, neighbor.edge, profile)
@@ -786,6 +911,7 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 				if hook, err := adapter.TransferHook(ctx, hookSignal, neighbor.edge, frag); err == nil && hook != nil {
 					traceFactors = mergeFactorMaps(traceFactors, hook.DebugFactors, "adapter.")
 					if hook.Skip {
+						debugLog("edge-drop reason=transfer_skip from=%s toFragment=%s edgeType=%s axisIn=%s axisOut=%s ampIn=%.3f ampOut=%.3f", strings.TrimSpace(frag.CanonicalPath), neighbor.fragmentID, neighbor.edge.Type, item.axis, nextAxis, item.amplitude, nextAmplitude)
 						meta := e.computeTransferTraceMeta(ctx, traceCollector.isEnabled(), frag, neighbor.fragmentID, neighbor.edge.Type, nextAxis, fragmentCache)
 						traceCollector.add(SignalPropagationTraceEvent{
 							SignalID:     signal.ID,
@@ -841,6 +967,7 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 
 			meta := e.computeTransferTraceMeta(ctx, traceCollector.isEnabled(), frag, neighbor.fragmentID, neighbor.edge.Type, nextAxis, fragmentCache)
 			if nextAmplitude < MinAmplitudeThreshold {
+				debugLog("edge-drop reason=damped_below_threshold from=%s toFragment=%s edgeType=%s axisIn=%s axisOut=%s ampIn=%.3f ampOut=%.3f", strings.TrimSpace(frag.CanonicalPath), neighbor.fragmentID, neighbor.edge.Type, item.axis, nextAxis, item.amplitude, nextAmplitude)
 				traceCollector.add(SignalPropagationTraceEvent{
 					SignalID:     signal.ID,
 					FromFragment: item.fragmentID,
@@ -888,6 +1015,38 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 				Outcome:      "propagated",
 				Factors:      traceFactors,
 			})
+			debugLog("enqueue from=%s toFragment=%s edgeType=%s axisIn=%s axisOut=%s ampIn=%.3f ampOut=%.3f nextHop=%d", strings.TrimSpace(frag.CanonicalPath), neighbor.fragmentID, neighbor.edge.Type, item.axis, nextAxis, item.amplitude, nextAmplitude, item.hops+1)
+			nextKey := neighbor.fragmentID + "|" + nextAxis
+			if best, ok := frontier[nextKey]; ok {
+				if best.amplitude > nextAmplitude || (best.amplitude == nextAmplitude && best.hops <= item.hops+1) {
+					debugLog("edge-drop reason=frontier_weaker_duplicate from=%s toFragment=%s edgeType=%s axisIn=%s axisOut=%s ampIn=%.3f ampOut=%.3f", strings.TrimSpace(frag.CanonicalPath), neighbor.fragmentID, neighbor.edge.Type, item.axis, nextAxis, item.amplitude, nextAmplitude)
+					traceCollector.add(SignalPropagationTraceEvent{
+						SignalID:     signal.ID,
+						FromFragment: item.fragmentID,
+						ToFragment:   neighbor.fragmentID,
+						FromPath:     meta.FromPath,
+						ToPath:       meta.ToPath,
+						FromGeo:      meta.FromGeo,
+						ToGeo:        meta.ToGeo,
+						EdgeID:       neighbor.edge.ID,
+						EdgeType:     string(neighbor.edge.Type),
+						Direction:    neighbor.traversalDirection,
+						Channel:      meta.Channel,
+						Scope:        meta.Scope,
+						Spillover:    meta.Spillover,
+						AxisIn:       item.axis,
+						AxisOut:      nextAxis,
+						AmplitudeIn:  item.amplitude,
+						AmplitudeOut: nextAmplitude,
+						Hops:         item.hops + 1,
+						Outcome:      "dropped",
+						Reason:       "frontier_weaker_duplicate",
+						Factors:      traceFactors,
+					})
+					continue
+				}
+			}
+			frontier[nextKey] = frontierState{amplitude: nextAmplitude, hops: item.hops + 1}
 			queue = append(queue, queueItem{
 				fragmentID:  neighbor.fragmentID,
 				amplitude:   nextAmplitude,
@@ -1018,17 +1177,40 @@ func (e *PropagationEngine) getNeighborsViaStrongEdges(
 		strongSpecs[horizonmodels.DependencyType(spec.Type)] = &s
 	}
 
-	// Get all outgoing edges
-	outgoingEdges, err := e.edgesRepo.ListBySource(ctx, frag.TenantID, frag.ID, nil, 1000)
-	if err != nil {
-		return nil, err
+	debugSignalID := strings.TrimSpace(os.Getenv("HORIZON_PROPAGATION_DEBUG_SIGNAL_ID"))
+	debugEnabled := debugSignalID != ""
+	debugLog := func(format string, args ...any) {
+		if debugEnabled {
+			log.Printf("[horizon.signal.debug] "+format, args...)
+		}
 	}
+	debugLog("neighbors-start path=%s fragmentId=%s", strings.TrimSpace(frag.CanonicalPath), strings.TrimSpace(frag.ID))
 
-	// Get all incoming edges
-	incomingEdges, err := e.edgesRepo.ListByTarget(ctx, frag.TenantID, frag.ID, nil, 1000)
-	if err != nil {
-		return nil, err
+	var outgoingEdges []*horizonmodels.DependencyEdge
+	var incomingEdges []*horizonmodels.DependencyEdge
+	var outgoingErr error
+	var incomingErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		outgoingEdges, outgoingErr = e.edgesRepo.ListBySource(ctx, frag.TenantID, frag.ID, nil, 1000)
+	}()
+	go func() {
+		defer wg.Done()
+		incomingEdges, incomingErr = e.edgesRepo.ListByTarget(ctx, frag.TenantID, frag.ID, nil, 1000)
+	}()
+	wg.Wait()
+	if outgoingErr != nil {
+		debugLog("neighbors-outgoing-error path=%s fragmentId=%s err=%v", strings.TrimSpace(frag.CanonicalPath), strings.TrimSpace(frag.ID), outgoingErr)
+		return nil, outgoingErr
 	}
+	if incomingErr != nil {
+		debugLog("neighbors-incoming-error path=%s fragmentId=%s err=%v", strings.TrimSpace(frag.CanonicalPath), strings.TrimSpace(frag.ID), incomingErr)
+		return nil, incomingErr
+	}
+	debugLog("neighbors-outgoing-ok path=%s fragmentId=%s count=%d", strings.TrimSpace(frag.CanonicalPath), strings.TrimSpace(frag.ID), len(outgoingEdges))
+	debugLog("neighbors-incoming-ok path=%s fragmentId=%s count=%d", strings.TrimSpace(frag.CanonicalPath), strings.TrimSpace(frag.ID), len(incomingEdges))
 
 	neighbors := make([]neighborInfo, 0)
 	seen := make(map[string]struct{}, len(outgoingEdges)+len(incomingEdges))
@@ -1098,13 +1280,24 @@ func (e *PropagationEngine) getNeighborsViaStrongEdges(
 		}
 	}
 
+	if len(neighbors) > 0 {
+		// Prefer explicit strong edges whenever they already exist.
+		// Virtual supply-link overlay stays as a fallback only for sparse nodes.
+		debugLog("neighbors-virtual-skipped path=%s fragmentId=%s type=%s direct=%d", strings.TrimSpace(frag.CanonicalPath), strings.TrimSpace(frag.ID), frag.Type, len(neighbors))
+		debugLog("neighbors-done path=%s fragmentId=%s total=%d", strings.TrimSpace(frag.CanonicalPath), strings.TrimSpace(frag.ID), len(neighbors))
+		return neighbors, nil
+	}
+
 	virtualNeighbors, err := e.getSupplyLinkVirtualNeighbors(ctx, frag, strongSpecs, allowSourceToTarget, allowTargetToSource)
 	if err != nil {
+		debugLog("neighbors-virtual-error path=%s fragmentId=%s err=%v", strings.TrimSpace(frag.CanonicalPath), strings.TrimSpace(frag.ID), err)
 		return nil, err
 	}
+	debugLog("neighbors-virtual-ok path=%s fragmentId=%s count=%d", strings.TrimSpace(frag.CanonicalPath), strings.TrimSpace(frag.ID), len(virtualNeighbors))
 	for _, neighbor := range virtualNeighbors {
 		addNeighbor(neighbor)
 	}
+	debugLog("neighbors-done path=%s fragmentId=%s total=%d", strings.TrimSpace(frag.CanonicalPath), strings.TrimSpace(frag.ID), len(neighbors))
 
 	return neighbors, nil
 }
@@ -1138,6 +1331,47 @@ func propagationModeAllowsTraversal(mode, traversalDirection string) bool {
 		return mode == "upstream" || mode == "both"
 	default:
 		return false
+	}
+}
+
+func (e *PropagationEngine) prefetchFragmentsByID(
+	ctx context.Context,
+	cache map[string]*horizonmodels.HorizonFragment,
+	ids []string,
+) {
+	if e == nil || e.fragmentsRepo == nil || len(ids) == 0 {
+		return
+	}
+	missing := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		if cache != nil {
+			if frag := cache[id]; frag != nil {
+				continue
+			}
+		}
+		missing = append(missing, id)
+	}
+	if len(missing) == 0 {
+		return
+	}
+	frags, err := e.fragmentsRepo.GetMany(ctx, missing)
+	if err != nil {
+		return
+	}
+	for id, frag := range frags {
+		if strings.TrimSpace(id) == "" || frag == nil {
+			continue
+		}
+		cache[id] = frag
 	}
 }
 

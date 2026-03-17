@@ -162,6 +162,10 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 				models.DependencyTypeTradedIn,
 				models.DependencyTypeLocatedIn,
 				models.DependencyTypeOperatesIn,
+				models.DependencyTypeHasSubgroup,
+				models.DependencyTypeMemberOf,
+				models.DependencyTypeAffiliatedWith,
+				models.DependencyTypeOperatesVia,
 			},
 			InterpretiveEdges: []models.DependencyType{
 				models.DependencyTypeInfluences,
@@ -208,6 +212,10 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 				models.DependencyTypePartnersWith,
 				models.DependencyTypeLocatedIn,
 				models.DependencyTypeOperatesIn,
+				models.DependencyTypeHasSubgroup,
+				models.DependencyTypeMemberOf,
+				models.DependencyTypeAffiliatedWith,
+				models.DependencyTypeOperatesVia,
 			},
 			InterpretiveEdges: []models.DependencyType{
 				models.DependencyTypeDependsOn,
@@ -320,7 +328,9 @@ func EdgeLayer(edgeType models.DependencyType) GraphLayer {
 		models.DependencyTypeAssures, models.DependencyTypeRegulates, models.DependencyTypeControlsAccess,
 		models.DependencyTypeImposesCondition, models.DependencyTypeGatekeepsDecision, models.DependencyTypeUsesMechanism,
 		models.DependencyTypeAppliesTo, models.DependencyTypeParticipatesIn, models.DependencyTypeLocatedIn,
-		models.DependencyTypeOperatesIn, models.DependencyTypeHasMarketSegment, models.DependencyTypePartnersWith:
+		models.DependencyTypeOperatesIn, models.DependencyTypeHasMarketSegment, models.DependencyTypePartnersWith,
+		models.DependencyTypeHasSubgroup, models.DependencyTypeMemberOf, models.DependencyTypeAffiliatedWith,
+		models.DependencyTypeOperatesVia:
 		return GraphLayerContractOverlay
 	default:
 		return GraphLayerInterpretive

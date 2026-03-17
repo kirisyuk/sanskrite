@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,24 +24,28 @@ const (
 )
 
 type Service struct {
-	configsRepo       *horizonrepo.ScopeAgentConfigsRepository
-	statesRepo        *horizonrepo.ScopeAgentStatesRepository
-	runsRepo          *horizonrepo.ScopeAgentRunsRepository
-	proposalsRepo     *horizonrepo.AgentProposalsRepository
-	decisionsRepo     *horizonrepo.ArbitrationDecisionsRepository
-	targetsRepo       *horizonrepo.WatchTargetsRepository
-	briefsRepo        *horizonrepo.WatchBriefsRepository
-	feedRepo          *horizonrepo.WatchFeedEntriesRepository
-	agentJobsRepo     *corerepo.AgentJobsRepository
-	watchdogRepo      *horizonrepo.WatchdogConfigsRepository
-	fragmentsRepo     *horizonrepo.HorizonFragmentsRepository
-	riskJobsRepo      *horizonrepo.RiskJobsRepository
-	factsRepo         *corerepo.OntologyFactsRepository
-	dataSourcesRepo   *corerepo.DataSourcesRepository
-	aiExecutor        *ai.AITaskExecutor
-	propagationEngine *horizonprop.PropagationEngine
-	profileLookup     *horizonprop.ProfileLookup
-	batchDispatcher   func(context.Context, string) error
+	configsRepo          *horizonrepo.ScopeAgentConfigsRepository
+	statesRepo           *horizonrepo.ScopeAgentStatesRepository
+	runsRepo             *horizonrepo.ScopeAgentRunsRepository
+	proposalsRepo        *horizonrepo.AgentProposalsRepository
+	decisionsRepo        *horizonrepo.ArbitrationDecisionsRepository
+	targetsRepo          *horizonrepo.WatchTargetsRepository
+	subjectsRepo         *horizonrepo.WatchSubjectsRepository
+	triggersRepo         *horizonrepo.WatchTriggersRepository
+	briefsRepo           *horizonrepo.WatchBriefsRepository
+	feedRepo             *horizonrepo.WatchFeedEntriesRepository
+	agentJobsRepo        *corerepo.AgentJobsRepository
+	watchdogRepo         *horizonrepo.WatchdogConfigsRepository
+	fragmentsRepo        *horizonrepo.HorizonFragmentsRepository
+	materializedRepo     *horizonrepo.MaterializedArtifactsRepository
+	riskJobsRepo         *horizonrepo.RiskJobsRepository
+	factsRepo            *corerepo.OntologyFactsRepository
+	dataSourcesRepo      *corerepo.DataSourcesRepository
+	aiExecutor           *ai.AITaskExecutor
+	propagationEngine    *horizonprop.PropagationEngine
+	profileLookup        *horizonprop.ProfileLookup
+	batchDispatcher      func(context.Context, string) error
+	acceptedProposalHook func(context.Context, *horizonmodels.AgentProposal) ([]string, error)
 }
 
 type Batch struct {
@@ -92,11 +97,14 @@ func NewService(
 	proposalsRepo *horizonrepo.AgentProposalsRepository,
 	decisionsRepo *horizonrepo.ArbitrationDecisionsRepository,
 	targetsRepo *horizonrepo.WatchTargetsRepository,
+	subjectsRepo *horizonrepo.WatchSubjectsRepository,
+	triggersRepo *horizonrepo.WatchTriggersRepository,
 	briefsRepo *horizonrepo.WatchBriefsRepository,
 	feedRepo *horizonrepo.WatchFeedEntriesRepository,
 	agentJobsRepo *corerepo.AgentJobsRepository,
 	watchdogRepo *horizonrepo.WatchdogConfigsRepository,
 	fragmentsRepo *horizonrepo.HorizonFragmentsRepository,
+	materializedRepo *horizonrepo.MaterializedArtifactsRepository,
 	riskJobsRepo *horizonrepo.RiskJobsRepository,
 	factsRepo *corerepo.OntologyFactsRepository,
 	dataSourcesRepo *corerepo.DataSourcesRepository,
@@ -111,11 +119,14 @@ func NewService(
 		proposalsRepo:     proposalsRepo,
 		decisionsRepo:     decisionsRepo,
 		targetsRepo:       targetsRepo,
+		subjectsRepo:      subjectsRepo,
+		triggersRepo:      triggersRepo,
 		briefsRepo:        briefsRepo,
 		feedRepo:          feedRepo,
 		agentJobsRepo:     agentJobsRepo,
 		watchdogRepo:      watchdogRepo,
 		fragmentsRepo:     fragmentsRepo,
+		materializedRepo:  materializedRepo,
 		riskJobsRepo:      riskJobsRepo,
 		factsRepo:         factsRepo,
 		dataSourcesRepo:   dataSourcesRepo,
@@ -138,6 +149,14 @@ func (s *Service) WithBatchDispatcher(fn func(context.Context, string) error) *S
 		return s
 	}
 	s.batchDispatcher = fn
+	return s
+}
+
+func (s *Service) WithAcceptedProposalHook(fn func(context.Context, *horizonmodels.AgentProposal) ([]string, error)) *Service {
+	if s == nil {
+		return s
+	}
+	s.acceptedProposalHook = fn
 	return s
 }
 
@@ -406,7 +425,17 @@ func (s *Service) ArbitrateProposal(ctx context.Context, proposal *horizonmodels
 		ProposalID:       proposal.ID,
 		Decision:         string(horizonmodels.ArbitrationDecisionAccept),
 		ReasonCodes:      []string{"validated_against_central_keyspace"},
-		AppliedArtifacts: appliedArtifacts,
+		AppliedArtifacts: compactUnique(appliedArtifacts),
+	}
+	if s.acceptedProposalHook != nil {
+		followupRefs, hookErr := s.acceptedProposalHook(ctx, proposal)
+		if len(followupRefs) > 0 {
+			decision.AppliedArtifacts = compactUnique(append(decision.AppliedArtifacts, followupRefs...))
+			decision.ReasonCodes = compactUnique(append(decision.ReasonCodes, "followup_hook_applied"))
+		}
+		if hookErr != nil {
+			decision.ReasonCodes = compactUnique(append(decision.ReasonCodes, "followup_hook_failed"))
+		}
 	}
 	if _, err := s.decisionsRepo.Create(ctx, decision); err != nil {
 		return nil, err
@@ -473,6 +502,7 @@ func (s *Service) runBatch(ctx context.Context, batch Batch) (batchExecutionRepo
 			return report, fmt.Errorf("unexpected grounded batch response type %T", parsed)
 		}
 	}
+	response = normalizeGroundedBatchResponse(response)
 
 	groundingRefs, groundingMeta := buildGroundingRefs(result)
 	produced := []string{}
@@ -497,14 +527,18 @@ func (s *Service) runBatch(ctx context.Context, batch Batch) (batchExecutionRepo
 			"triggerConditions": compactUnique(gp.TriggerConditions),
 			"generatedAt":       now.Format(time.RFC3339),
 			"grounding":         groundingMeta,
+			"watchSubjectId":    runContextSubjectID(runCtx),
+			"macroAgentClass":   asString(runCtx.Config.Metadata["macroAgentClass"]),
+			"originType":        firstNonEmpty(asString(runCtx.Config.Metadata["subjectKind"]), asString(runCtx.Config.ExpansionPolicy["focusMode"])),
+			"sourceBundle":      runCtx.SourceBundle,
 		}
 		proposal := &horizonmodels.AgentProposal{
 			TenantID:             runCtx.Config.TenantID,
 			ConfigID:             runCtx.Config.ID,
 			RunID:                runCtx.Run.ID,
-			WatchTargetID:        runCtx.Target.ID,
+			WatchTargetID:        runContextWatchTargetID(runCtx),
 			ProposalType:         strings.TrimSpace(firstNonEmpty(gp.ProposalType, string(horizonmodels.AgentProposalTypeSignalCandidate))),
-			TargetCanonicalPaths: fallbackCanonicalPaths(gp.TargetCanonicalPaths, runCtx.Target.CanonicalPath),
+			TargetCanonicalPaths: derivedProposalTargetPaths(runCtx, gp.TargetCanonicalPaths),
 			SignalKey:            normalizeSignalType(gp.SignalType, gp.Polarity),
 			Payload:              payload,
 			SourceRefs:           append([]horizonmodels.SourceRef(nil), groundingRefs...),
@@ -535,12 +569,17 @@ func (s *Service) runBatch(ctx context.Context, batch Batch) (batchExecutionRepo
 }
 
 type runContext struct {
-	Run      *horizonmodels.ScopeAgentRun
-	Config   *horizonmodels.ScopeAgentConfig
-	Target   *horizonmodels.WatchTarget
-	Fragment *horizonmodels.HorizonFragment
-	RiskJobs []*horizonmodels.RiskJob
-	Facts    []*coremodels.OntologyFact
+	Run                *horizonmodels.ScopeAgentRun
+	Config             *horizonmodels.ScopeAgentConfig
+	Target             *horizonmodels.WatchTarget
+	Subject            *horizonmodels.WatchSubject
+	Fragment           *horizonmodels.HorizonFragment
+	Artifact           *horizonmodels.MaterializedArtifact
+	RiskJobs           []*horizonmodels.RiskJob
+	Facts              []*coremodels.OntologyFact
+	RecentTriggers     []*horizonmodels.WatchTrigger
+	SourceBundle       map[string]any
+	ExpandedQueryHints []string
 }
 
 func (s *Service) loadRunContexts(ctx context.Context, runIDs []string) ([]*runContext, string, error) {
@@ -555,9 +594,13 @@ func (s *Service) loadRunContexts(ctx context.Context, runIDs []string) ([]*runC
 		if err != nil || cfg == nil {
 			continue
 		}
-		target, err := s.targetsRepo.Get(ctx, cfg.WatchTargetID)
-		if err != nil || target == nil {
-			continue
+		var target *horizonmodels.WatchTarget
+		if s.targetsRepo != nil && strings.TrimSpace(cfg.WatchTargetID) != "" {
+			target, _ = s.targetsRepo.Get(ctx, cfg.WatchTargetID)
+		}
+		var subject *horizonmodels.WatchSubject
+		if s.subjectsRepo != nil && strings.TrimSpace(cfg.SubjectID) != "" {
+			subject, _ = s.subjectsRepo.Get(ctx, cfg.SubjectID)
 		}
 		var fragment *horizonmodels.HorizonFragment
 		if s.fragmentsRepo != nil {
@@ -568,24 +611,48 @@ func (s *Service) loadRunContexts(ctx context.Context, runIDs []string) ([]*runC
 				fragment, _ = s.fragmentsRepo.GetByCanonicalPath(ctx, cfg.ScopeCanonicalPath)
 			}
 		}
+		var artifact *horizonmodels.MaterializedArtifact
+		if s.materializedRepo != nil && subject != nil {
+			if artifactKey := strings.TrimSpace(asString(subject.Metadata["artifactCanonicalKey"])); artifactKey != "" {
+				artifact, _ = s.materializedRepo.GetByCanonicalKeyAnyKind(ctx, cfg.TenantID, artifactKey)
+			}
+		}
 		if projectID == "" && fragment != nil && fragment.Governance.CreatedByProjectID != nil {
 			projectID = strings.TrimSpace(*fragment.Governance.CreatedByProjectID)
 		}
 		riskJobs := []*horizonmodels.RiskJob{}
 		if s.riskJobsRepo != nil {
-			riskJobs, _ = s.riskJobsRepo.ListRecentByTargetCanonicalPath(ctx, cfg.TenantID, cfg.ScopeCanonicalPath, 4)
+			for _, path := range contextCanonicalPaths(cfg.ScopeCanonicalPath, subject, artifact) {
+				items, _ := s.riskJobsRepo.ListRecentByTargetCanonicalPath(ctx, cfg.TenantID, path, 4)
+				riskJobs = append(riskJobs, items...)
+			}
+			riskJobs = dedupeRiskJobs(riskJobs)
 		}
 		facts := []*coremodels.OntologyFact{}
 		if s.factsRepo != nil {
-			facts, _ = s.factsRepo.ListByCanonicalPath(ctx, "global", cfg.ScopeCanonicalPath, "", 6)
+			for _, path := range contextCanonicalPaths(cfg.ScopeCanonicalPath, subject, artifact) {
+				items, _ := s.factsRepo.ListByCanonicalPath(ctx, "global", path, "", 6)
+				facts = append(facts, items...)
+			}
+			facts = dedupeFacts(facts)
 		}
+		triggers := []*horizonmodels.WatchTrigger{}
+		if s.triggersRepo != nil && subject != nil && strings.TrimSpace(subject.ID) != "" {
+			triggers, _ = s.triggersRepo.ListBySubject(ctx, subject.ID, 8)
+		}
+		sourceBundle, queryHints := buildMacroSourceBundle(cfg, subject, artifact, triggers, facts)
 		out = append(out, &runContext{
-			Run:      run,
-			Config:   cfg,
-			Target:   target,
-			Fragment: fragment,
-			RiskJobs: riskJobs,
-			Facts:    facts,
+			Run:                run,
+			Config:             cfg,
+			Target:             target,
+			Subject:            subject,
+			Fragment:           fragment,
+			Artifact:           artifact,
+			RiskJobs:           riskJobs,
+			Facts:              facts,
+			RecentTriggers:     triggers,
+			SourceBundle:       sourceBundle,
+			ExpandedQueryHints: queryHints,
 		})
 	}
 	return out, projectID, nil
@@ -630,18 +697,25 @@ func (s *Service) buildBatchTask(batch Batch, contexts []*runContext) (*ai.AITas
 			})
 		}
 		payloads = append(payloads, map[string]any{
-			"runId":          ctxItem.Run.ID,
-			"watchTargetId":  ctxItem.Target.ID,
-			"label":          ctxItem.Target.Label,
-			"canonicalPath":  ctxItem.Target.CanonicalPath,
-			"scopeType":      ctxItem.Config.ScopeType,
-			"domainModes":    ctxItem.Config.DomainModes,
-			"roles":          ctxItem.Config.Roles,
-			"fragmentId":     ctxItem.Target.FragmentID,
-			"riskJobs":       riskItems,
-			"facts":          factItems,
-			"queries":        queriesForRunContext(ctxItem),
-			"pendingTrigger": ctxItem.Run.TriggerReason,
+			"runId":                 ctxItem.Run.ID,
+			"watchTargetId":         runContextWatchTargetID(ctxItem),
+			"watchSubjectId":        runContextSubjectID(ctxItem),
+			"label":                 runContextLabel(ctxItem),
+			"canonicalPath":         runContextCanonicalPath(ctxItem),
+			"scopeType":             ctxItem.Config.ScopeType,
+			"domainModes":           ctxItem.Config.DomainModes,
+			"roles":                 ctxItem.Config.Roles,
+			"fragmentId":            runContextFragmentID(ctxItem),
+			"subjectKind":           runContextSubjectKind(ctxItem),
+			"universePaths":         runContextUniversePaths(ctxItem),
+			"backingCanonicalPaths": contextCanonicalPaths(runContextCanonicalPath(ctxItem), ctxItem.Subject, ctxItem.Artifact),
+			"riskJobs":              riskItems,
+			"facts":                 factItems,
+			"queries":               queriesForRunContext(ctxItem),
+			"pendingTrigger":        ctxItem.Run.TriggerReason,
+			"recentTriggers":        serializeWatchTriggers(ctxItem.RecentTriggers),
+			"sourceBundle":          ctxItem.SourceBundle,
+			"artifact":              serializeArtifactSummary(ctxItem.Artifact),
 		})
 	}
 	inputJSON, err := json.Marshal(map[string]any{
@@ -656,6 +730,8 @@ func (s *Service) buildBatchTask(batch Batch, contexts []*runContext) (*ai.AITas
 Return strict JSON with shape {"proposals":[...]}.
 Each proposal must refer to one concrete watched target and only include material, actionable outputs.
 Do not emit empty boilerplate proposals.
+Use the provided sourceBundle, recentTriggers, artifact, universePaths, and recency windows to focus search-grounded reasoning.
+Prefer developments within the provided recent search window and avoid duplicate evidence.
 For each proposal:
 - proposalType must be one of signal_candidate, signal_boost, forecast_candidate, evidence_bundle, coverage_gap
 - targetCanonicalPaths must include the watched canonical path
@@ -674,7 +750,7 @@ If nothing material is found, return {"proposals":[]}.`
 		InputContent: instructions + "\n\nBATCH_CONTEXT_JSON:\n" + string(inputJSON),
 		AIRequirements: ai.AIRequirements{
 			PreferredModel:                  model,
-			FallbackModels:                  compactUnique(append([]string{batch.EscalationModel, "gemini-3-flash-preview", "gemini-2.5-flash", "gemini-2.5-pro"}, fallbacks...)),
+			FallbackModels:                  compactUnique(append([]string{batch.EscalationModel, "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview", "gemini-2.5-flash", "gemini-2.5-pro"}, fallbacks...)),
 			MinContextWindow:                24000,
 			MaxOutputSize:                   4000,
 			MinCapabilityScore:              7,
@@ -702,14 +778,68 @@ func validateGroundedBatchResponse(resp groundedBatchResponse) error {
 		if len(proposal.TargetCanonicalPaths) == 0 {
 			return fmt.Errorf("targetCanonicalPaths are required")
 		}
-		if strings.TrimSpace(proposal.Title) == "" {
-			return fmt.Errorf("title is required")
-		}
 		if proposal.Confidence < 0 || proposal.Confidence > 1 {
 			return fmt.Errorf("confidence out of range")
 		}
 	}
 	return nil
+}
+
+func normalizeGroundedBatchResponse(resp groundedBatchResponse) groundedBatchResponse {
+	for i := range resp.Proposals {
+		resp.Proposals[i] = normalizeGroundedProposal(resp.Proposals[i])
+	}
+	return resp
+}
+
+func normalizeGroundedProposal(proposal groundedProposal) groundedProposal {
+	proposal.TargetCanonicalPaths = compactUnique(proposal.TargetCanonicalPaths)
+	proposal.Watchpoints = compactUnique(proposal.Watchpoints)
+	proposal.TriggerConditions = compactUnique(proposal.TriggerConditions)
+	proposal.Title = strings.TrimSpace(firstNonEmpty(
+		proposal.Title,
+		proposal.Summary,
+		proposal.Explanation,
+		defaultProposalTitle(proposal),
+	))
+	proposal.Summary = strings.TrimSpace(firstNonEmpty(
+		proposal.Summary,
+		proposal.Explanation,
+		proposal.Title,
+	))
+	proposal.Explanation = strings.TrimSpace(firstNonEmpty(
+		proposal.Explanation,
+		proposal.Summary,
+		proposal.Title,
+	))
+	if proposal.Confidence < 0 {
+		proposal.Confidence = 0
+	}
+	if proposal.Confidence > 1 {
+		proposal.Confidence = 1
+	}
+	return proposal
+}
+
+func defaultProposalTitle(proposal groundedProposal) string {
+	switch strings.TrimSpace(proposal.ProposalType) {
+	case string(horizonmodels.AgentProposalTypeCoverageGap):
+		return "Coverage gap"
+	case string(horizonmodels.AgentProposalTypeForecastCandidate):
+		return "Forecast candidate"
+	case string(horizonmodels.AgentProposalTypeEvidenceBundle):
+		return "Evidence bundle"
+	case string(horizonmodels.AgentProposalTypeSignalBoost):
+		return "Signal boost"
+	case string(horizonmodels.AgentProposalTypeSignalCandidate):
+		fallthrough
+	default:
+		signalType := strings.TrimSpace(proposal.SignalType)
+		if signalType != "" {
+			return signalType
+		}
+		return "Signal candidate"
+	}
 }
 
 func buildGroundingRefs(result *ai.AITaskResult) ([]horizonmodels.SourceRef, map[string]any) {
@@ -756,6 +886,9 @@ func (s *Service) applyAcceptedProposal(ctx context.Context, proposal *horizonmo
 	for _, canonicalPath := range proposal.TargetCanonicalPaths {
 		canonicalPath = strings.TrimSpace(canonicalPath)
 		if canonicalPath == "" {
+			continue
+		}
+		if strings.HasPrefix(canonicalPath, "/artifact/") {
 			continue
 		}
 		if s.fragmentsRepo != nil {
@@ -993,19 +1126,159 @@ func (s *Service) getExistingState(ctx context.Context, cfg *horizonmodels.Scope
 }
 
 func queriesForRunContext(ctxItem *runContext) []string {
-	if ctxItem == nil || ctxItem.Target == nil || ctxItem.Config == nil {
+	if ctxItem == nil || ctxItem.Config == nil {
 		return nil
 	}
-	label := strings.TrimSpace(firstNonEmpty(ctxItem.Target.Label, ctxItem.Target.CanonicalPath))
+	label := strings.TrimSpace(runContextLabel(ctxItem))
+	canonicalPath := strings.TrimSpace(runContextCanonicalPath(ctxItem))
 	queries := []string{
 		label,
 		label + " " + strings.Join(compactUnique(ctxItem.Config.DomainModes), " "),
 		label + " latest risk signals",
 	}
+	if canonicalPath != "" && canonicalPath != label {
+		queries = append(queries, canonicalPath)
+	}
+	queries = append(queries, ctxItem.ExpandedQueryHints...)
 	if reason := strings.TrimSpace(ctxItem.Run.TriggerReason); reason != "" {
 		queries = append(queries, label+" "+reason)
 	}
+	if ctxItem.Subject != nil && ctxItem.Subject.Metadata != nil {
+		queries = append(queries, parseAnyStringSlice(ctxItem.Subject.Metadata["queryOverrides"])...)
+	}
+	if ctxItem.Config != nil && ctxItem.Config.Metadata != nil {
+		queries = append(queries, parseAnyStringSlice(ctxItem.Config.Metadata["queryOverrides"])...)
+	}
 	return compactUnique(queries)
+}
+
+func runContextWatchTargetID(ctxItem *runContext) string {
+	if ctxItem == nil || ctxItem.Target == nil {
+		return ""
+	}
+	return strings.TrimSpace(ctxItem.Target.ID)
+}
+
+func runContextSubjectID(ctxItem *runContext) string {
+	if ctxItem == nil {
+		return ""
+	}
+	if ctxItem.Subject != nil && strings.TrimSpace(ctxItem.Subject.ID) != "" {
+		return strings.TrimSpace(ctxItem.Subject.ID)
+	}
+	if ctxItem.Target != nil {
+		return strings.TrimSpace(ctxItem.Target.SubjectID)
+	}
+	return strings.TrimSpace(ctxItem.Config.SubjectID)
+}
+
+func runContextCanonicalPath(ctxItem *runContext) string {
+	if ctxItem == nil {
+		return ""
+	}
+	if ctxItem.Target != nil && strings.TrimSpace(ctxItem.Target.CanonicalPath) != "" {
+		return strings.TrimSpace(ctxItem.Target.CanonicalPath)
+	}
+	if ctxItem.Subject != nil && strings.TrimSpace(ctxItem.Subject.AnchorCanonicalPath) != "" {
+		return strings.TrimSpace(ctxItem.Subject.AnchorCanonicalPath)
+	}
+	if ctxItem.Config != nil {
+		return strings.TrimSpace(ctxItem.Config.ScopeCanonicalPath)
+	}
+	return ""
+}
+
+func runContextLabel(ctxItem *runContext) string {
+	if ctxItem == nil {
+		return ""
+	}
+	if ctxItem.Target != nil && strings.TrimSpace(ctxItem.Target.Label) != "" {
+		return strings.TrimSpace(ctxItem.Target.Label)
+	}
+	if ctxItem.Subject != nil && strings.TrimSpace(ctxItem.Subject.DisplayLabel) != "" {
+		return strings.TrimSpace(ctxItem.Subject.DisplayLabel)
+	}
+	if ctxItem.Artifact != nil && strings.TrimSpace(ctxItem.Artifact.DisplayName) != "" {
+		return strings.TrimSpace(ctxItem.Artifact.DisplayName)
+	}
+	return labelFromCanonicalPath(runContextCanonicalPath(ctxItem))
+}
+
+func runContextFragmentID(ctxItem *runContext) string {
+	if ctxItem == nil {
+		return ""
+	}
+	if ctxItem.Target != nil && strings.TrimSpace(ctxItem.Target.FragmentID) != "" {
+		return strings.TrimSpace(ctxItem.Target.FragmentID)
+	}
+	if ctxItem.Subject != nil && strings.TrimSpace(ctxItem.Subject.AnchorFragmentID) != "" {
+		return strings.TrimSpace(ctxItem.Subject.AnchorFragmentID)
+	}
+	if ctxItem.Fragment != nil {
+		return strings.TrimSpace(ctxItem.Fragment.ID)
+	}
+	return ""
+}
+
+func runContextSubjectKind(ctxItem *runContext) string {
+	if ctxItem == nil || ctxItem.Subject == nil {
+		return ""
+	}
+	return string(ctxItem.Subject.SubjectKind)
+}
+
+func runContextUniversePaths(ctxItem *runContext) []string {
+	if ctxItem == nil || ctxItem.Subject == nil {
+		return nil
+	}
+	return compactUnique(ctxItem.Subject.UniversePaths)
+}
+
+func contextCanonicalPaths(anchor string, subject *horizonmodels.WatchSubject, artifact *horizonmodels.MaterializedArtifact) []string {
+	paths := []string{strings.TrimSpace(anchor)}
+	if subject != nil {
+		paths = append(paths, strings.TrimSpace(subject.AnchorCanonicalPath))
+		paths = append(paths, subject.UniversePaths...)
+		if raw := subject.Metadata["backingCanonicalPaths"]; raw != nil {
+			paths = append(paths, parseAnyStringSlice(raw)...)
+		}
+	}
+	if artifact != nil {
+		paths = append(paths, artifact.NodeRefs...)
+	}
+	return compactUnique(paths)
+}
+
+func dedupeRiskJobs(in []*horizonmodels.RiskJob) []*horizonmodels.RiskJob {
+	seen := map[string]struct{}{}
+	out := make([]*horizonmodels.RiskJob, 0, len(in))
+	for _, job := range in {
+		if job == nil || strings.TrimSpace(job.ID) == "" {
+			continue
+		}
+		if _, ok := seen[job.ID]; ok {
+			continue
+		}
+		seen[job.ID] = struct{}{}
+		out = append(out, job)
+	}
+	return out
+}
+
+func dedupeFacts(in []*coremodels.OntologyFact) []*coremodels.OntologyFact {
+	seen := map[string]struct{}{}
+	out := make([]*coremodels.OntologyFact, 0, len(in))
+	for _, fact := range in {
+		if fact == nil || strings.TrimSpace(fact.ID) == "" {
+			continue
+		}
+		if _, ok := seen[fact.ID]; ok {
+			continue
+		}
+		seen[fact.ID] = struct{}{}
+		out = append(out, fact)
+	}
+	return out
 }
 
 func (s *Service) emitNoopFeedEntries(ctx context.Context, contexts []*runContext, groundingMeta map[string]any) {
@@ -1046,7 +1319,7 @@ func pickRunContext(contexts []*runContext, watchTargetID string, targetPaths []
 			continue
 		}
 		for _, item := range contexts {
-			if item != nil && item.Target != nil && strings.TrimSpace(item.Target.CanonicalPath) == path {
+			if item != nil && strings.TrimSpace(runContextCanonicalPath(item)) == path {
 				return item
 			}
 		}
@@ -1059,10 +1332,16 @@ func pickRunContext(contexts []*runContext, watchTargetID string, targetPaths []
 
 func subjectIDForProposal(ctx context.Context, targetsRepo *horizonrepo.WatchTargetsRepository, proposal *horizonmodels.AgentProposal) string {
 	if proposal == nil || targetsRepo == nil || strings.TrimSpace(proposal.WatchTargetID) == "" {
+		if proposal != nil && proposal.RunID != "" {
+			return strings.TrimSpace(asString(proposal.Payload["watchSubjectId"]))
+		}
 		return ""
 	}
 	target, err := targetsRepo.Get(ctx, proposal.WatchTargetID)
 	if err != nil || target == nil {
+		if proposal != nil {
+			return strings.TrimSpace(asString(proposal.Payload["watchSubjectId"]))
+		}
 		return ""
 	}
 	return strings.TrimSpace(target.SubjectID)
@@ -1107,7 +1386,7 @@ func defaultLLMPolicy() horizonmodels.LLMPolicy {
 		Provider:              "gemini",
 		PrimaryModel:          "gemini-3-flash-preview",
 		EscalationModel:       "gemini-3-pro-preview",
-		FallbackModels:        []string{"gemini-2.5-flash", "gemini-2.5-pro"},
+		FallbackModels:        []string{"gemini-3.1-flash-lite-preview", "gemini-2.5-flash", "gemini-2.5-pro"},
 		PreferredVertexModel:  "vertex-gemini-3-flash-preview",
 		UseSearchGrounding:    true,
 		UseDatastoreGrounding: true,
@@ -1134,6 +1413,52 @@ func normalizeScopeType(kind string) string {
 	}
 }
 
+func asString(raw any) string {
+	switch typed := raw.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	default:
+		return strings.TrimSpace(fmt.Sprint(raw))
+	}
+}
+
+func parseAnyStringSlice(raw any) []string {
+	switch typed := raw.(type) {
+	case []string:
+		return compactUnique(typed)
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if value := asString(item); value != "" {
+				out = append(out, value)
+			}
+		}
+		return compactUnique(out)
+	default:
+		return nil
+	}
+}
+
+func toInt(raw any) (int, bool) {
+	switch typed := raw.(type) {
+	case int:
+		return typed, true
+	case int64:
+		return int(typed), true
+	case float64:
+		return int(typed), true
+	case float32:
+		return int(typed), true
+	case string:
+		if typed = strings.TrimSpace(typed); typed != "" {
+			if parsed, err := strconv.Atoi(typed); err == nil {
+				return parsed, true
+			}
+		}
+	}
+	return 0, false
+}
+
 func normalizePolarity(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "opportunity":
@@ -1145,17 +1470,69 @@ func normalizePolarity(raw string) string {
 
 func normalizeSignalType(signalType, polarity string) string {
 	signalType = strings.TrimSpace(signalType)
+	polarity = normalizePolarity(polarity)
 	if signalType != "" && (strings.HasPrefix(signalType, "risk:") || strings.HasPrefix(signalType, "opportunity:")) {
+		parts := strings.Split(signalType, ":")
+		if len(parts) >= 2 {
+			polarity = normalizePolarity(parts[0])
+			axis, mechanism := canonicalSignalAxisAndMechanism(parts[1], strings.Join(parts[2:], ":"))
+			if mechanism != "" {
+				return polarity + ":" + axis + ":" + mechanism
+			}
+			return polarity + ":" + axis
+		}
 		return signalType
 	}
-	polarity = normalizePolarity(polarity)
 	if signalType == "" {
-		return polarity + ":watch_pressure"
+		return polarity + ":" + horizonmodels.AxisInfoUncertainty + ":watch_pressure"
 	}
 	if strings.Contains(signalType, ":") {
 		return signalType
 	}
-	return polarity + ":" + signalType
+	axis, mechanism := canonicalSignalAxisAndMechanism(signalType, "")
+	if mechanism != "" {
+		return polarity + ":" + axis + ":" + mechanism
+	}
+	return polarity + ":" + axis
+}
+
+func canonicalSignalAxisAndMechanism(rawAxis, rawMechanism string) (string, string) {
+	axis := strings.TrimSpace(rawAxis)
+	mechanism := strings.TrimSpace(rawMechanism)
+	if axis == "" {
+		return horizonmodels.AxisInfoUncertainty, firstNonEmpty(mechanism, "watch_pressure")
+	}
+	if strings.Contains(axis, "/") {
+		return axis, mechanism
+	}
+	switch axis {
+	case "supply_chain_disruption", "supply_shortage", "input_shortage", "production_shortfall":
+		return horizonmodels.AxisPhysicalFlowSupply, firstNonEmpty(mechanism, axis)
+	case "demand_shock", "demand_drop", "demand_surge":
+		return horizonmodels.AxisPhysicalFlowDemand, firstNonEmpty(mechanism, axis)
+	case "logistics_disruption", "route_disruption", "shipping_constraint", "capacity_constraint", "port_disruption":
+		return horizonmodels.AxisLogisticsCapacity, firstNonEmpty(mechanism, axis)
+	case "logistics_delay", "shipping_delay", "delivery_delay", "lead_time_increase":
+		return horizonmodels.AxisLogisticsLatency, firstNonEmpty(mechanism, axis)
+	case "regulatory_pressure", "compliance_risk", "sanction_exposure", "policy_restriction":
+		return horizonmodels.AxisLegalCompliance, firstNonEmpty(mechanism, axis)
+	case "regulatory_uncertainty", "policy_uncertainty", "uncertainty", "watch_pressure":
+		return horizonmodels.AxisInfoUncertainty, firstNonEmpty(mechanism, axis)
+	case "geopolitical_risk", "conflict_risk", "conflict_escalation":
+		return horizonmodels.AxisGeoConflict, firstNonEmpty(mechanism, axis)
+	case "operational_disruption", "operational_outage", "continuity_risk":
+		return horizonmodels.AxisOperationalContinuity, firstNonEmpty(mechanism, axis)
+	case "settlement_risk", "payment_disruption", "payment_delay":
+		return horizonmodels.AxisFinancialSettlement, firstNonEmpty(mechanism, axis)
+	case "credit_risk", "counterparty_risk":
+		return horizonmodels.AxisFinancialCredit, firstNonEmpty(mechanism, axis)
+	case "reputational_pressure", "brand_risk":
+		return horizonmodels.AxisInfoReputation, firstNonEmpty(mechanism, axis)
+	case "market_access_restriction", "access_restriction":
+		return horizonmodels.AxisLegalAccess, firstNonEmpty(mechanism, axis)
+	default:
+		return horizonmodels.AxisInfoUncertainty, firstNonEmpty(mechanism, axis)
+	}
 }
 
 func metricValueForProposal(p groundedProposal) float64 {
@@ -1245,6 +1622,33 @@ func fallbackCanonicalPaths(paths []string, fallback string) []string {
 	return compactUnique([]string{fallback})
 }
 
+func derivedProposalTargetPaths(ctxItem *runContext, paths []string) []string {
+	resolved := compactUnique(paths)
+	if ctxItem != nil && ctxItem.Subject != nil && ctxItem.Subject.SubjectKind == horizonmodels.WatchSubjectKindPathOverlay {
+		backing := parseAnyStringSlice(ctxItem.Subject.Metadata["backingCanonicalPaths"])
+		if len(backing) == 0 && ctxItem.Artifact != nil {
+			backing = compactUnique(ctxItem.Artifact.NodeRefs)
+		}
+		filtered := make([]string, 0, len(resolved))
+		for _, path := range resolved {
+			path = strings.TrimSpace(path)
+			if path == "" || strings.HasPrefix(path, "/artifact/") {
+				continue
+			}
+			filtered = append(filtered, path)
+		}
+		filtered = compactUnique(filtered)
+		if len(resolved) == 0 {
+			return compactUnique(backing)
+		}
+		if len(filtered) == 0 {
+			return compactUnique(backing)
+		}
+		return compactUnique(append(filtered, backing...))
+	}
+	return fallbackCanonicalPaths(resolved, runContextCanonicalPath(ctxItem))
+}
+
 func sourceIDsFromRefs(refs []horizonmodels.SourceRef) []string {
 	out := make([]string, 0, len(refs))
 	for _, ref := range refs {
@@ -1328,6 +1732,19 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func labelFromCanonicalPath(canonicalPath string) string {
+	canonicalPath = strings.TrimSpace(canonicalPath)
+	if canonicalPath == "" {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(canonicalPath, "/"), "/")
+	if len(parts) == 0 {
+		return canonicalPath
+	}
+	last := strings.ReplaceAll(parts[len(parts)-1], "-", " ")
+	return strings.Title(last)
 }
 
 func mergeMaps(base map[string]any, add map[string]any) map[string]any {

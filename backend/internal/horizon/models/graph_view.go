@@ -3,10 +3,10 @@ package models
 import "strings"
 
 const (
-	GraphViewHierarchical    = "hierarchical"
-	GraphViewSupplyFlow      = "supply-flow"
-	GraphViewInfluenceNet    = "influence-network"
-	GraphViewValueChain      = "value-chain"
+	GraphViewHierarchical = "hierarchical"
+	GraphViewSupplyFlow   = "supply-flow"
+	GraphViewInfluenceNet = "influence-network"
+	GraphViewValueChain   = "value-chain"
 )
 
 // GraphViewForDirective derives the preferred graph projection for a directive.
@@ -19,6 +19,8 @@ func GraphViewForDirective(contractType, hierarchyAxis string) string {
 	switch contractType {
 	case "ownership-structure":
 		return GraphViewHierarchical
+	case "control-map":
+		return GraphViewInfluenceNet
 	case "commonality-analysis":
 		return GraphViewInfluenceNet
 	}

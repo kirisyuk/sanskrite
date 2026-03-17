@@ -228,6 +228,94 @@ func (r *OntologyFactsRepository) ListByCanonicalPath(ctx context.Context, tenan
 	return out, nil
 }
 
+// ReplaceCanonicalPathReferences rewrites oldPath -> newPath in fact path references.
+// When tenantID is empty, all tenants are scanned.
+func (r *OntologyFactsRepository) ReplaceCanonicalPathReferences(ctx context.Context, tenantID, oldPath, newPath string, limit int) (int, error) {
+	oldPath = strings.TrimSpace(oldPath)
+	newPath = strings.TrimSpace(newPath)
+	if r == nil || r.col == nil || oldPath == "" || newPath == "" || oldPath == newPath {
+		return 0, nil
+	}
+	if limit <= 0 {
+		limit = 1000
+	}
+
+	q := r.col.Where("canonicalPaths", "array-contains", oldPath).Limit(limit)
+	if strings.TrimSpace(tenantID) != "" {
+		q = q.Where("tenantId", "==", strings.TrimSpace(tenantID))
+	}
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return 0, err
+	}
+
+	updated := 0
+	for _, doc := range docs {
+		var fact models.OntologyFact
+		if err := doc.DataTo(&fact); err != nil {
+			continue
+		}
+		if strings.TrimSpace(fact.ID) == "" {
+			fact.ID = doc.Ref.ID
+		}
+		if !replaceCanonicalPathRefsInFact(&fact, oldPath, newPath) {
+			continue
+		}
+		fact.VectorText = fact.GenerateVectorText()
+		if err := r.Upsert(ctx, &fact); err != nil {
+			return updated, err
+		}
+		updated++
+	}
+	return updated, nil
+}
+
+func replaceCanonicalPathRefsInFact(f *models.OntologyFact, oldPath, newPath string) bool {
+	if f == nil {
+		return false
+	}
+	changed := false
+	if replaceCanonicalPathInSlice(&f.CanonicalPaths, oldPath, newPath) {
+		changed = true
+	}
+	if replaceCanonicalPathInSlice(&f.ActorPaths, oldPath, newPath) {
+		changed = true
+	}
+	if f.LocationPath != nil && strings.TrimSpace(*f.LocationPath) == oldPath {
+		*f.LocationPath = newPath
+		changed = true
+	}
+	return changed
+}
+
+func replaceCanonicalPathInSlice(values *[]string, oldPath, newPath string) bool {
+	if values == nil || len(*values) == 0 {
+		return false
+	}
+	changed := false
+	seen := make(map[string]struct{}, len(*values))
+	out := make([]string, 0, len(*values))
+	for _, raw := range *values {
+		v := strings.TrimSpace(raw)
+		if v == "" {
+			continue
+		}
+		if v == oldPath {
+			v = newPath
+			changed = true
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	if changed {
+		*values = out
+	}
+	return changed
+}
+
 // ListByCanonicalPathAndKind returns facts linked to the given canonicalPath with specific kind.
 // This is optimized for signal queries (kind="signal").
 func (r *OntologyFactsRepository) ListByCanonicalPathAndKind(ctx context.Context, tenantID string, canonicalPath string, kind string, limit int) ([]*models.OntologyFact, error) {

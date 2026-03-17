@@ -15,5 +15,6 @@ func registerBuiltinHandlers(r *Registry) {
 	}
 	// Register specialized handlers after generic domain handlers so they win.
 	r.Register(NewOwnershipStructureHandler())
+	r.Register(NewControlMapHandler())
 	r.Register(NewCommonalityAnalysisHandler())
 }

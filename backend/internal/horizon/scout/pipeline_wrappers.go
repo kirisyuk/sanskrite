@@ -62,6 +62,7 @@ func (e *ScoutEngine) PersistViewDirective(ctx context.Context, job *models.Scou
 		logViewDirectiveSkip(ctx, job, "missing_engine_or_job_or_directive", nil)
 		return nil
 	}
+	recordGovernanceViewDirectiveState(job, directive)
 	lensID := strings.TrimSpace(job.LensID)
 	if lensID == "" {
 		logViewDirectiveSkip(ctx, job, "missing_lens_id", nil)
@@ -114,6 +115,50 @@ func (e *ScoutEngine) PersistViewDirective(ctx context.Context, job *models.Scou
 		"viewDirectiveHash": strings.TrimSpace(viewDirectiveQueryHash(viewDirectiveQuery(job))),
 	})
 	return nil
+}
+
+func recordGovernanceViewDirectiveState(job *models.ScoutingJob, directive *models.ViewDirective) {
+	if job == nil || directive == nil {
+		return
+	}
+	contractType := strings.TrimSpace(strings.ToLower(directive.ContractType))
+	if contractType != "ownership-structure" && contractType != "control-map" {
+		return
+	}
+	if job.State == nil {
+		job.State = map[string]interface{}{}
+	}
+	job.State["governanceViewDirective"] = map[string]interface{}{
+		"contractType":    contractType,
+		"graphView":       strings.TrimSpace(directive.GraphView),
+		"focusNodePathsN": len(directive.FocusNodePaths),
+		"filterRelTypesN": len(directive.FilterRelTypes),
+		"usable":          len(directive.FocusNodePaths) > 0 && len(directive.FilterRelTypes) > 0,
+	}
+}
+
+func recordGovernanceArtifactState(job *models.ScoutingJob, artifact *models.MaterializedArtifact, contractType string) {
+	if job == nil || artifact == nil {
+		return
+	}
+	ct := strings.TrimSpace(strings.ToLower(contractType))
+	if ct != "ownership-structure" && ct != "control-map" {
+		return
+	}
+	governanceView := "ownership"
+	if ct == "control-map" {
+		governanceView = "control"
+	}
+	if job.State == nil {
+		job.State = map[string]interface{}{}
+	}
+	job.State["governanceArtifact"] = map[string]interface{}{
+		"contractType":   ct,
+		"governanceView": governanceView,
+		"kind":           string(artifact.Kind),
+		"canonicalKey":   strings.TrimSpace(artifact.CanonicalKey),
+		"nodeRefsN":      len(artifact.NodeRefs),
+	}
 }
 
 func viewDirectiveQuery(job *models.ScoutingJob) string {

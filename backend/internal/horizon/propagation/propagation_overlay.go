@@ -96,6 +96,7 @@ func BuildPropagationNodeOverlay(fragment *horizonmodels.HorizonFragment) Propag
 		overlay.OperationalScore = 0.92
 		overlay.BridgeScore = 0.95
 		overlay.CriticalityScore = 0.94
+	case overlayApplyOrganizationSemantics(fragment, &overlay, addRole, addExposure, setPrimary, setBusiness, forceBusiness, applyDomainSemantic):
 	case overlayApplyMarketDomainSemantics(fragment, &overlay, addRole, addExposure, setPrimary, setBusiness, forceBusiness, applyDomainSemantic):
 	case overlayHasAny(text, "naval base", "air base", "air-defense", "air defense", "air-defence", "arsenal", "missile", "fighter", "air force", "navy", "defense", "defence", "military"):
 		setPrimary("defense_operator")
@@ -186,6 +187,60 @@ func BuildPropagationNodeOverlay(fragment *horizonmodels.HorizonFragment) Propag
 		addRole("source")
 	}
 	return overlay
+}
+
+func overlayApplyOrganizationSemantics(
+	fragment *horizonmodels.HorizonFragment,
+	overlay *PropagationNodeOverlay,
+	addRole func(string),
+	addExposure func(string),
+	setPrimary func(string),
+	setBusiness func(string),
+	forceBusiness func(string),
+	applyDomainSemantic func(string, string, float64, float64, float64, ...string),
+) bool {
+	if fragment == nil || overlay == nil || fragment.Type != horizonmodels.FragmentTypeOrganization {
+		return false
+	}
+	text := overlayFragmentText(fragment)
+	path := strings.TrimSpace(fragment.CanonicalPath)
+
+	if overlayHasAny(text,
+		"/biz/value-pool/manufacturing-output",
+		"/biz/risk-exposure/industrial-capacity",
+		"gigafactory",
+		"battery",
+		"vehicle",
+		"automotive",
+		"manufacturing",
+		"assembly",
+		"factory",
+		"plant",
+	) {
+		applyDomainSemantic("manufacturing_operator", "assembler", 0.82, 0.30, 0.76, "component_input", "energy_input")
+		addRole("sink")
+		addRole("source")
+		if strings.Contains(path, "/org/") {
+			addRole("operator")
+		}
+		return true
+	}
+
+	if overlayHasAny(text,
+		"/biz/economic-role/corporate-entity",
+		"company",
+		"inc.",
+		"corp",
+		"corporation",
+		"ltd",
+		"plc",
+	) {
+		// Do not let noisy geo/logistics annotations turn an organization into a port/chokepoint by default.
+		applyDomainSemantic("organizational_operator", "operator", 0.56, 0.22, 0.54, "component_input")
+		return true
+	}
+
+	return false
 }
 
 func overlayApplyMarketDomainSemantics(

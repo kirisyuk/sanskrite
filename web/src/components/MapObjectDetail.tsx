@@ -8,6 +8,7 @@ interface MapObjectDetailProps {
   object: GeoObject;
   isDark: boolean;
   paletteTheme: 'dark' | 'light';
+  topOffset?: number;
   edgesLoading: boolean;
   edgesCount: number;
   visibleEdgesCount: number;
@@ -108,6 +109,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
   object,
   isDark,
   paletteTheme,
+  topOffset = 10,
   edgesLoading,
   edgesCount,
   visibleEdgesCount,
@@ -159,10 +161,10 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
       style={{
         position: 'absolute',
         left: 10,
-        top: 10,
+        top: topOffset,
         width: overlayWidth,
         maxWidth: overlayMaxWidth,
-        maxHeight: 'calc(100% - 20px)',
+        maxHeight: `calc(100% - ${topOffset + 10}px)`,
         overflow: 'auto',
         zIndex: 20,
         borderRadius: 18,

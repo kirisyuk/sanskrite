@@ -1,0 +1,14 @@
+{
+  "projects": {
+    "default": "etigram"
+  },
+  "targets": {
+    "etigram": {
+      "hosting": {
+        "marketing": [
+          "etigram-site"
+        ]
+      }
+    }
+  }
+}

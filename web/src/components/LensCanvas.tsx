@@ -17,6 +17,7 @@ import { HorizonRealtimeCallouts } from './HorizonRealtimeCallouts';
 import { HorizonDrawers, HorizonPanelType } from './HorizonDrawers';
 import type { HorizonNodeData } from './HorizonGraphNodeTypes';
 import type { AssembleLensRequest } from '../features/horizon/components/hook/AssembleLensRequest';
+import type { ScoutingMode } from '../features/horizon/lib/scoutingMode';
 
 /** Lens view modes: Graph | Map | Analysis (plan §1). Graph persists when switching. */
 export type LensViewMode = 'graph' | 'map' | 'analysis';
@@ -298,7 +299,13 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   );
 
   const handleScopeScout = React.useCallback(
-    async (input: { fragmentId: string; canonicalPath?: string; maxRecursionDepth?: number }) => {
+    async (input: {
+      fragmentId: string;
+      canonicalPath?: string;
+      maxRecursionDepth?: number;
+      mode?: ScoutingMode;
+      specialties?: string[];
+    }) => {
       if (!lensId) return;
 
       const correlationId = (globalThis.crypto && 'randomUUID' in globalThis.crypto)
@@ -313,6 +320,8 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
           fragmentId: input.fragmentId,
           canonicalPath: input.canonicalPath,
           maxRecursionDepth: typeof input.maxRecursionDepth === 'number' ? input.maxRecursionDepth : 1,
+          mode: input.mode,
+          specialties: input.specialties,
         },
         { correlationId, sessionId }
       );

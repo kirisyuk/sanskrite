@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Etigram</title>
+    <meta
+      id="meta-description"
+      name="description"
+      content="Etigram is a strategic intelligence company focused on geopolitical risk visibility, deep monitoring, and scenario planning."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Sora:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="site-shell">
+      <header class="hero" id="top">
+        <nav class="topbar" aria-label="Primary" data-i18n-aria-label="nav.aria.primary">
+          <a class="brand" href="#top">Etigram</a>
+          <div class="topbar-controls">
+            <div
+              class="language-switcher"
+              aria-label="Language selector"
+              data-i18n-aria-label="nav.aria.languageSelector"
+            >
+              <button
+                class="language-button is-active"
+                type="button"
+                data-lang="en"
+                aria-label="Switch to English"
+                data-i18n-aria-label="nav.aria.switchEnglish"
+              >
+                EN
+              </button>
+              <button
+                class="language-button"
+                type="button"
+                data-lang="ru"
+                aria-label="Переключить на русский"
+                data-i18n-aria-label="nav.aria.switchRussian"
+              >
+                RU
+              </button>
+              <button
+                class="language-button"
+                type="button"
+                data-lang="kz"
+                aria-label="Қазақ тіліне ауыстыру"
+                data-i18n-aria-label="nav.aria.switchKazakh"
+              >
+                KZ
+              </button>
+            </div>
+            <button
+              class="nav-toggle"
+              type="button"
+              aria-expanded="false"
+              aria-controls="site-nav"
+              data-i18n="nav.menu"
+            >
+              Menu
+            </button>
+            <div class="nav-links" id="site-nav">
+              <a href="#about" data-i18n="nav.about">About</a>
+              <a href="#services" data-i18n="nav.services">Services</a>
+              <a href="./platform.html" data-i18n="nav.platform">Platform</a>
+              <a href="#contact" data-i18n="nav.contact">Contact</a>
+            </div>
+          </div>
+        </nav>
+
+        <div class="hero-media" aria-hidden="true"></div>
+
+        <div class="hero-copy">
+          <p class="eyebrow" data-i18n="hero.eyebrow">
+            Strategic intelligence for uncertain environments
+          </p>
+          <h1 data-i18n="hero.title">Cold analysis for complex geopolitical realities.</h1>
+          <p class="hero-text" data-i18n="hero.text">
+            Etigram presents executive-grade monitoring, scenario framing, and
+            risk visibility for organizations operating across unstable
+            geographies and sensitive supply chains.
+          </p>
+          <a class="hero-link" href="#services" data-i18n="hero.cta">View Services</a>
+        </div>
+      </header>
+
+      <main>
+        <section class="intro section reveal" id="about">
+          <div class="section-label" data-i18n="intro.label">Company</div>
+          <div class="intro-grid">
+            <h2 data-i18n="intro.title">
+              Etigram turns geopolitical complexity into decision-grade context.
+            </h2>
+            <div class="intro-copy">
+              <p data-i18n="intro.paragraph1">
+                We build quiet, disciplined intelligence surfaces for teams that
+                need clarity before exposure becomes loss.
+              </p>
+              <p data-i18n="intro.paragraph2">
+                The site is intentionally restrained: company, services, and
+                contact points only. No platform mechanics, no product sprawl,
+                no noise.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section class="services section reveal" id="services">
+          <div class="services-heading">
+            <div class="section-label" data-i18n="services.label">Services</div>
+            <h2 data-i18n="services.title">Selected service lines.</h2>
+          </div>
+
+          <div class="services-list">
+            <article class="service-card reveal-card">
+              <div class="service-copy">
+                <p class="service-index">01</p>
+                <h3 data-i18n="services.geo.title">Geopolitical Risks Overview</h3>
+                <p class="service-subtitle" data-i18n="services.geo.subtitle">
+                  Geopolitical risk assessment
+                </p>
+                <p data-i18n="services.geo.text">
+                  High-level risk framing for regions, corridors, policy shifts,
+                  and strategic dependencies that require executive visibility.
+                </p>
+              </div>
+              <img
+                src="./images/geo.png"
+                alt="Geopolitical risk service illustration"
+                data-i18n-alt="services.geo.alt"
+                class="service-image"
+              />
+            </article>
+
+            <article class="service-card reveal-card">
+              <div class="service-copy">
+                <p class="service-index">02</p>
+                <h3 data-i18n="services.monitoring.title">Deep Monitoring</h3>
+                <p class="service-subtitle" data-i18n="services.monitoring.subtitle">
+                  Focused intelligence watch
+                </p>
+                <p data-i18n="services.monitoring.text">
+                  Continuous tracking across selected topics, jurisdictions,
+                  entities, and weak signals that require disciplined attention
+                  over time.
+                </p>
+              </div>
+              <img
+                src="./images/focus.png"
+                alt="Deep monitoring service illustration"
+                data-i18n-alt="services.monitoring.alt"
+                class="service-image"
+              />
+            </article>
+
+            <article class="service-card reveal-card">
+              <div class="service-copy">
+                <p class="service-index">03</p>
+                <h3 data-i18n="services.scenario.title">Scenario Planning</h3>
+                <p class="service-subtitle" data-i18n="services.scenario.subtitle">
+                  Forward-looking contingency design
+                </p>
+                <p data-i18n="services.scenario.text">
+                  Structured scenario models for escalation, disruption, and
+                  secondary-order effects, built for planning cycles and board
+                  conversations.
+                </p>
+              </div>
+              <img
+                src="./images/forecast.png"
+                alt="Scenario planning service illustration"
+                data-i18n-alt="services.scenario.alt"
+                class="service-image"
+              />
+            </article>
+          </div>
+        </section>
+
+        <section class="platform section reveal" id="platform">
+          <div class="platform-panel">
+            <div class="platform-copy">
+              <h2 data-i18n="platform.title">Access to the working platform.</h2>
+              <p data-i18n="platform.text">
+                Platform access is provided separately for approved workflows and
+                client mandates. Public site materials remain intentionally
+                limited.
+              </p>
+              <a
+                class="platform-link"
+                href="https://etigram.pro"
+                data-i18n="platform.cta"
+              >
+                Open Platform
+              </a>
+              <a
+                class="platform-link platform-link--text"
+                href="./platform.html"
+                data-i18n="platform.detailLink"
+              >
+                Platform cases
+              </a>
+            </div>
+            <img
+              src="./images/platform.png"
+              alt="Abstract image for platform access"
+              data-i18n-alt="platform.alt"
+              class="platform-image"
+            />
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer section reveal" id="contact">
+        <div class="footer-brand">
+          <div class="section-label" data-i18n="footer.label">Etigram</div>
+          <p class="footer-title" data-i18n="footer.title">Decision Factory</p>
+          <p class="footer-note" data-i18n="footer.note">
+            Strategic intelligence, monitoring, and scenario services.
+          </p>
+        </div>
+
+        <div class="footer-columns">
+          <div>
+            <h4 data-i18n="footer.location.title">Location</h4>
+            <p data-i18n="footer.location.line1">Dostyk, 16</p>
+            <p data-i18n="footer.location.line2">Astana, Kazakhstan</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.contact.title">Contact</h4>
+            <p data-i18n="footer.contact.line1">hi@etigram.pro</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.availability.title">Availability</h4>
+            <p data-i18n="footer.availability.line1">Meetings by request</p>
+            <p data-i18n="footer.availability.line2">Additional details coming soon</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.legal.title">Legal</h4>
+            <div class="footer-links">
+              <a href="https://etigram.pro/privacy" data-i18n="footer.legal.privacy">Privacy Notice</a>
+              <a href="https://etigram.pro/terms" data-i18n="footer.legal.terms">Terms of Usage</a>
+              <a href="https://etigram.pro/technical-disclosure" data-i18n="footer.legal.technical">Technical Disclosure</a>
+            </div>
+          </div>
+        </div>
+      </footer>
+    </div>
+
+    <script src="./script.js"></script>
+  </body>
+</html>

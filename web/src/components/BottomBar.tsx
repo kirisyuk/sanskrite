@@ -6,7 +6,10 @@ export const BottomBar: React.FC = () => {
   const { health } = useWsStore();
   const navigate = useNavigate();
 
-  const handleLegalClick = (e: React.MouseEvent<HTMLAnchorElement>, type: 'terms' | 'privacy') => {
+  const handleLegalClick = (
+    e: React.MouseEvent<HTMLAnchorElement>,
+    type: 'terms' | 'privacy' | 'technical-disclosure'
+  ) => {
     e.preventDefault();
     navigate(`/${type}`);
   };
@@ -62,8 +65,15 @@ export const BottomBar: React.FC = () => {
         >
           Terms of Usage
         </a>
+        <a
+          href="/technical-disclosure"
+          className="underline"
+          style={{ color: 'var(--text-secondary-strong)', fontSize: '11px', lineHeight: '1' }}
+          onClick={(e) => handleLegalClick(e, 'technical-disclosure')}
+        >
+          Technical Disclosure
+        </a>
       </div>
     </div>
   );
 };
-

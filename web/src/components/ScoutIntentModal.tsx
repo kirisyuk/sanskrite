@@ -1,4 +1,5 @@
 import React from 'react';
+import type { ScoutingMode } from '../features/horizon/lib/scoutingMode';
 
 export interface ScoutIntentResolution {
   focus?: string;
@@ -31,6 +32,8 @@ export interface ScoutIntentModalProps {
   intentError: string | null;
   runLoading: boolean;
   progressLog: string[];
+  mode: ScoutingMode;
+  onModeChange: (mode: ScoutingMode) => void;
   onClose: () => void;
   onRunScout: () => void;
   theme?: 'light' | 'dark';
@@ -49,6 +52,8 @@ export function ScoutIntentModal({
   intentError,
   runLoading,
   progressLog,
+  mode,
+  onModeChange,
   onClose,
   onRunScout,
   theme = 'dark',
@@ -183,6 +188,45 @@ export function ScoutIntentModal({
           {/* Intent result */}
           {!intentLoading && intent && (
             <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary-strong)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                  Scouting Mode
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
+                  {([
+                    { value: 'general' as const, label: 'General', desc: 'Broad exploration' },
+                    { value: 'supply_chain' as const, label: 'Supply chain', desc: 'Operational and product flows' },
+                    { value: 'governance' as const, label: 'Governance', desc: 'Ownership, control, leadership' },
+                  ]).map((opt) => {
+                    const active = mode === opt.value;
+                    return (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => onModeChange(opt.value)}
+                        disabled={runLoading}
+                        aria-pressed={active}
+                        style={{
+                          textAlign: 'left',
+                          padding: '10px 10px 9px',
+                          borderRadius: 10,
+                          border: '1px solid var(--border-subtle)',
+                          background: active ? 'var(--white-10)' : 'transparent',
+                          color: 'var(--text-heading)',
+                          cursor: runLoading ? 'not-allowed' : 'pointer',
+                          opacity: runLoading ? 0.5 : 1,
+                        }}
+                      >
+                        <div style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.2 }}>{opt.label}</div>
+                        <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-secondary-strong)', lineHeight: 1.35 }}>
+                          {opt.desc}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary-strong)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.4 }}>
                 Resolved Intent
               </div>

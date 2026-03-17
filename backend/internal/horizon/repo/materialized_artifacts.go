@@ -509,6 +509,42 @@ func (r *MaterializedArtifactsRepository) FindByNodeRef(ctx context.Context, ten
 	return artifacts, nil
 }
 
+// FindByNodeRefAnyTenant returns all MaterializedArtifacts where nodeRefs contains the given
+// canonical path, regardless of tenant. Used when global graph merges must retarget overlays
+// that may live in tenant-specific spaces.
+func (r *MaterializedArtifactsRepository) FindByNodeRefAnyTenant(ctx context.Context, nodeCanonicalPath string, kind horizonmodels.MaterializedKind, limit int) ([]*horizonmodels.MaterializedArtifact, error) {
+	if nodeCanonicalPath == "" || !kind.Valid() {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+
+	q := r.col.
+		Where("kind", "==", string(kind)).
+		Where("nodeRefs", "array-contains", nodeCanonicalPath).
+		Limit(limit)
+
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, fmt.Errorf("firestore query failed: %w", err)
+	}
+
+	artifacts := make([]*horizonmodels.MaterializedArtifact, 0, len(docs))
+	for _, doc := range docs {
+		var artifact horizonmodels.MaterializedArtifact
+		if err := doc.DataTo(&artifact); err != nil {
+			continue
+		}
+		if strings.TrimSpace(artifact.ID) == "" {
+			artifact.ID = doc.Ref.ID
+		}
+		artifacts = append(artifacts, &artifact)
+	}
+
+	return artifacts, nil
+}
+
 func (r *MaterializedArtifactsRepository) FindByNodeRefsAny(ctx context.Context, tenantID string, nodeCanonicalPaths []string, kind horizonmodels.MaterializedKind, limit int) ([]*horizonmodels.MaterializedArtifact, error) {
 	return r.findByArrayFieldAny(ctx, tenantID, "nodeRefs", nodeCanonicalPaths, kind, limit)
 }
@@ -517,12 +553,32 @@ func (r *MaterializedArtifactsRepository) FindByFlowRefsAny(ctx context.Context,
 	return r.findByArrayFieldAny(ctx, tenantID, "flowRefs", flowRefs, kind, limit)
 }
 
+func (r *MaterializedArtifactsRepository) FindByGeoRefsAnyTenant(ctx context.Context, geoRefs []string, kind horizonmodels.MaterializedKind, limit int) ([]*horizonmodels.MaterializedArtifact, error) {
+	return r.findByArrayFieldAnyTenant(ctx, "geoRefs", geoRefs, kind, limit)
+}
+
+func (r *MaterializedArtifactsRepository) FindByGeoRefsAny(ctx context.Context, tenantID string, geoRefs []string, kind horizonmodels.MaterializedKind, limit int) ([]*horizonmodels.MaterializedArtifact, error) {
+	return r.findByArrayFieldAny(ctx, tenantID, "geoRefs", geoRefs, kind, limit)
+}
+
+func (r *MaterializedArtifactsRepository) FindByFlowRefsAnyTenant(ctx context.Context, flowRefs []string, kind horizonmodels.MaterializedKind, limit int) ([]*horizonmodels.MaterializedArtifact, error) {
+	return r.findByArrayFieldAnyTenant(ctx, "flowRefs", flowRefs, kind, limit)
+}
+
 func (r *MaterializedArtifactsRepository) FindByZoneRefsAny(ctx context.Context, tenantID string, zoneRefs []string, kind horizonmodels.MaterializedKind, limit int) ([]*horizonmodels.MaterializedArtifact, error) {
 	return r.findByArrayFieldAny(ctx, tenantID, "zoneRefs", zoneRefs, kind, limit)
 }
 
+func (r *MaterializedArtifactsRepository) FindByZoneRefsAnyTenant(ctx context.Context, zoneRefs []string, kind horizonmodels.MaterializedKind, limit int) ([]*horizonmodels.MaterializedArtifact, error) {
+	return r.findByArrayFieldAnyTenant(ctx, "zoneRefs", zoneRefs, kind, limit)
+}
+
 func (r *MaterializedArtifactsRepository) FindByAffectedZoneRefsAny(ctx context.Context, tenantID string, refs []string, kind horizonmodels.MaterializedKind, limit int) ([]*horizonmodels.MaterializedArtifact, error) {
 	return r.findByArrayFieldAny(ctx, tenantID, "affectedZoneRefs", refs, kind, limit)
+}
+
+func (r *MaterializedArtifactsRepository) FindByAffectedZoneRefsAnyTenant(ctx context.Context, refs []string, kind horizonmodels.MaterializedKind, limit int) ([]*horizonmodels.MaterializedArtifact, error) {
+	return r.findByArrayFieldAnyTenant(ctx, "affectedZoneRefs", refs, kind, limit)
 }
 
 func (r *MaterializedArtifactsRepository) findByArrayFieldAny(ctx context.Context, tenantID, field string, values []string, kind horizonmodels.MaterializedKind, limit int) ([]*horizonmodels.MaterializedArtifact, error) {
@@ -546,6 +602,52 @@ func (r *MaterializedArtifactsRepository) findByArrayFieldAny(ctx context.Contex
 		}
 		q := r.col.
 			Where("tenantId", "==", tenantID).
+			Where("kind", "==", string(kind)).
+			Where(field, "array-contains-any", values[i:end]).
+			Limit(limit)
+		docs, err := q.Documents(ctx).GetAll()
+		if err != nil {
+			return nil, fmt.Errorf("firestore query failed for %s: %w", field, err)
+		}
+		for _, doc := range docs {
+			if len(result) >= limit {
+				break
+			}
+			var artifact horizonmodels.MaterializedArtifact
+			if err := doc.DataTo(&artifact); err != nil {
+				continue
+			}
+			horizonmodels.PopulateMaterializedArtifactIndexes(&artifact)
+			if _, ok := seen[artifact.ID]; ok {
+				continue
+			}
+			seen[artifact.ID] = struct{}{}
+			result = append(result, &artifact)
+		}
+	}
+	return result, nil
+}
+
+func (r *MaterializedArtifactsRepository) findByArrayFieldAnyTenant(ctx context.Context, field string, values []string, kind horizonmodels.MaterializedKind, limit int) ([]*horizonmodels.MaterializedArtifact, error) {
+	if field == "" {
+		return nil, nil
+	}
+	values = uniqueQueryValues(values)
+	if len(values) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	const chunkSize = 30
+	result := make([]*horizonmodels.MaterializedArtifact, 0, min(limit, len(values)))
+	seen := make(map[string]struct{}, limit)
+	for i := 0; i < len(values) && len(result) < limit; i += chunkSize {
+		end := i + chunkSize
+		if end > len(values) {
+			end = len(values)
+		}
+		q := r.col.
 			Where("kind", "==", string(kind)).
 			Where(field, "array-contains-any", values[i:end]).
 			Limit(limit)

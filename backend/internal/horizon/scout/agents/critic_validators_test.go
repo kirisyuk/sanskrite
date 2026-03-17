@@ -11,7 +11,7 @@ import (
 
 // deprecatedRelationTypes must not appear in composable validator prompts (TZ 6.3.1).
 var deprecatedRelationTypes = []string{
-	"RELATED_TO", "AFFILIATED_WITH", "PARTNERS_WITH", "DOMINATES",
+	"RELATED_TO", "PARTNERS_WITH", "DOMINATES",
 	"WORKS_FOR", "HAS_KEY_PERSON", "RENAMED_TO", "KEY_PERSON",
 	"ABOUT", "AFFECTS", "SURFACES", "INVOLVES_ACTOR", "IN_GEO_SCOPE",
 	"RELATED_DOMAIN", "BROADENS_TO", "NARROWS_TO",

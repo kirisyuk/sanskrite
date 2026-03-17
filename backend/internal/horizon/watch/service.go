@@ -3,24 +3,19 @@ package watch
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	horizonwatchruntime "github.com/igorkirisyuk/sanskrite/internal/horizon/watchruntime"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	redis "github.com/redis/go-redis/v9"
 )
 
-type Dashboard struct {
-	Mode            string                          `json:"mode"`
-	GlobalHotSlices []*horizonmodels.WatchBrief     `json:"globalHotSlices"`
-	MyWatch         []*horizonmodels.WatchBrief     `json:"myWatch"`
-	Feed            []*horizonmodels.WatchFeedEntry `json:"feed"`
-	Preferences     *horizonmodels.WatchPreferences `json:"preferences,omitempty"`
-}
+type Dashboard = DashboardSnapshot
 
 type SearchResult struct {
 	Kind          string `json:"kind"`
@@ -30,16 +25,20 @@ type SearchResult struct {
 }
 
 type Service struct {
-	targetsRepo        *horizonrepo.WatchTargetsRepository
-	briefsRepo         *horizonrepo.WatchBriefsRepository
-	feedRepo           *horizonrepo.WatchFeedEntriesRepository
-	prefsRepo          *horizonrepo.WatchPreferencesRepository
-	fragmentsRepo      *horizonrepo.HorizonFragmentsRepository
-	riskJobsRepo       *horizonrepo.RiskJobsRepository
-	proposalsRepo      *horizonrepo.AgentProposalsRepository
-	decisionsRepo      *horizonrepo.ArbitrationDecisionsRepository
-	factsRepo          *corerepo.OntologyFactsRepository
-	runtimeProvisioner func(context.Context, *horizonmodels.WatchTarget) error
+	targetsRepo               *horizonrepo.WatchTargetsRepository
+	briefsRepo                *horizonrepo.WatchBriefsRepository
+	feedRepo                  *horizonrepo.WatchFeedEntriesRepository
+	prefsRepo                 *horizonrepo.WatchPreferencesRepository
+	lensesRepo                *horizonrepo.LensesRepository
+	materializedArtifactsRepo *horizonrepo.MaterializedArtifactsRepository
+	fragmentsRepo             *horizonrepo.HorizonFragmentsRepository
+	riskJobsRepo              *horizonrepo.RiskJobsRepository
+	proposalsRepo             *horizonrepo.AgentProposalsRepository
+	decisionsRepo             *horizonrepo.ArbitrationDecisionsRepository
+	factsRepo                 *corerepo.OntologyFactsRepository
+	runtimeProvisioner        func(context.Context, *horizonmodels.WatchTarget) error
+	redisClient               *redis.Client
+	lensAttentionProvider     func(context.Context, string, string, int) (*horizonwatchruntime.LensAttentionView, error)
 }
 
 func NewService(
@@ -74,83 +73,28 @@ func (s *Service) WithRuntimeProvisioner(fn func(context.Context, *horizonmodels
 	return s
 }
 
+func (s *Service) WithLensesRepository(repo *horizonrepo.LensesRepository) *Service {
+	if s == nil {
+		return s
+	}
+	s.lensesRepo = repo
+	return s
+}
+
+func (s *Service) WithMaterializedArtifactsRepository(repo *horizonrepo.MaterializedArtifactsRepository) *Service {
+	if s == nil {
+		return s
+	}
+	s.materializedArtifactsRepo = repo
+	return s
+}
+
 func (s *Service) GetDashboard(ctx context.Context, tenantID, userID, mode string) (*Dashboard, error) {
-	if s == nil || s.targetsRepo == nil || s.briefsRepo == nil {
-		return nil, nil
-	}
-	tenantID = strings.TrimSpace(firstNonEmpty(tenantID, "global"))
-	mode = strings.TrimSpace(firstNonEmpty(mode, string(horizonmodels.WatchModeCombined)))
-
-	globalTargets, err := s.targetsRepo.ListByTenant(ctx, "global", false, 100)
-	if err != nil {
-		return nil, err
-	}
-	tenantTargets := []*horizonmodels.WatchTarget{}
-	if tenantID != "global" {
-		tenantTargets, err = s.targetsRepo.ListByTenant(ctx, tenantID, false, 100)
-		if err != nil {
-			return nil, err
-		}
-	}
-	globalBriefs, err := s.refreshBriefs(ctx, globalTargets)
-	if err != nil {
-		return nil, err
-	}
-	myBriefs, err := s.refreshBriefs(ctx, tenantTargets)
-	if err != nil {
-		return nil, err
-	}
-	sort.Slice(globalBriefs, func(i, j int) bool { return globalBriefs[i].Hotness > globalBriefs[j].Hotness })
-	sort.Slice(myBriefs, func(i, j int) bool { return myBriefs[i].Hotness > myBriefs[j].Hotness })
-
-	feed := []*horizonmodels.WatchFeedEntry{}
-	briefSource := globalBriefs
-	switch mode {
-	case string(horizonmodels.WatchModeMy):
-		briefSource = myBriefs
-	case string(horizonmodels.WatchModeCombined):
-		briefSource = append(append([]*horizonmodels.WatchBrief{}, globalBriefs...), myBriefs...)
-	}
-	feedSeen := map[string]struct{}{}
-	for _, brief := range briefSource {
-		if brief == nil {
-			continue
-		}
-		entries, err := s.feedRepo.ListByTarget(ctx, brief.TenantID, brief.TargetID, 3)
-		if err != nil {
-			continue
-		}
-		for _, entry := range entries {
-			if entry == nil {
-				continue
-			}
-			key := strings.TrimSpace(entry.ID)
-			if key == "" {
-				key = strings.Join([]string{entry.TargetID, entry.EntryType, entry.CreatedAt.Format(time.RFC3339Nano)}, "|")
-			}
-			if _, ok := feedSeen[key]; ok {
-				continue
-			}
-			feedSeen[key] = struct{}{}
-			feed = append(feed, entry)
-		}
-	}
-	sort.Slice(feed, func(i, j int) bool { return feed[i].CreatedAt.After(feed[j].CreatedAt) })
-	if len(feed) > 12 {
-		feed = feed[:12]
-	}
-
-	var prefs *horizonmodels.WatchPreferences
-	if s.prefsRepo != nil && strings.TrimSpace(userID) != "" {
-		prefs, _ = s.prefsRepo.GetByUser(ctx, tenantID, userID)
-	}
-	return &Dashboard{
-		Mode:            mode,
-		GlobalHotSlices: truncateBriefs(globalBriefs, 12),
-		MyWatch:         truncateBriefs(myBriefs, 24),
-		Feed:            feed,
-		Preferences:     prefs,
-	}, nil
+	return s.GetDashboardSnapshot(ctx, DashboardRequest{
+		TenantID: tenantID,
+		UserID:   userID,
+		Mode:     mode,
+	})
 }
 
 func (s *Service) CreateTarget(ctx context.Context, target *horizonmodels.WatchTarget) (*horizonmodels.WatchTarget, error) {
@@ -163,6 +107,7 @@ func (s *Service) CreateTarget(ctx context.Context, target *horizonmodels.WatchT
 	if err := s.targetsRepo.Upsert(ctx, target); err != nil {
 		return nil, err
 	}
+	s.invalidateSnapshotCache(ctx, target.TenantID, target.UserID)
 	if s.runtimeProvisioner != nil {
 		if err := s.runtimeProvisioner(ctx, target); err != nil {
 			return nil, err
@@ -187,14 +132,22 @@ func (s *Service) DeleteTarget(ctx context.Context, tenantID, targetID string) e
 	if strings.TrimSpace(target.TenantID) != strings.TrimSpace(tenantID) {
 		return fmt.Errorf("target belongs to another tenant")
 	}
-	return s.targetsRepo.Delete(ctx, targetID)
+	if err := s.targetsRepo.Delete(ctx, targetID); err != nil {
+		return err
+	}
+	s.invalidateSnapshotCache(ctx, target.TenantID, target.UserID)
+	return nil
 }
 
 func (s *Service) UpdatePreferences(ctx context.Context, prefs *horizonmodels.WatchPreferences) error {
 	if s == nil || s.prefsRepo == nil || prefs == nil {
 		return nil
 	}
-	return s.prefsRepo.Upsert(ctx, prefs)
+	if err := s.prefsRepo.Upsert(ctx, prefs); err != nil {
+		return err
+	}
+	s.invalidateSnapshotCache(ctx, prefs.TenantID, prefs.UserID)
+	return nil
 }
 
 func (s *Service) GetBrief(ctx context.Context, briefID string) (*horizonmodels.WatchBrief, error) {

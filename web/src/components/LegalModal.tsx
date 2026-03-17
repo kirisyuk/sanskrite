@@ -1,10 +1,10 @@
 import React, { useEffect } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
 import TermsOfUsage from '../pages/TermsOfUsage';
 import PrivacyNotice from '../pages/PrivacyNotice';
+import TechnicalDisclosure from '../pages/TechnicalDisclosure';
 
 interface LegalModalProps {
-  type: 'terms' | 'privacy';
+  type: 'terms' | 'privacy' | 'technical-disclosure';
   onClose: () => void;
 }
 
@@ -27,6 +27,13 @@ export default function LegalModal({ type, onClose }: LegalModalProps) {
       document.body.style.overflow = '';
     };
   }, []);
+
+  const title =
+    type === 'privacy'
+      ? 'Privacy Notice'
+      : type === 'technical-disclosure'
+        ? 'Technical Disclosure'
+        : 'Terms of Usage';
 
   return (
     <div
@@ -55,7 +62,7 @@ export default function LegalModal({ type, onClose }: LegalModalProps) {
           }}
         >
           <h2 className="text-18 font-semibold" style={{ color: 'var(--text-heading)' }}>
-            {type === 'privacy' ? 'Privacy Notice' : 'Terms of Usage'}
+            {title}
           </h2>
           <button
             onClick={onClose}
@@ -82,10 +89,15 @@ export default function LegalModal({ type, onClose }: LegalModalProps) {
             height: 'calc(85vh - 64px)',
           }}
         >
-          {type === 'privacy' ? <PrivacyNotice /> : <TermsOfUsage />}
+          {type === 'privacy' ? (
+            <PrivacyNotice />
+          ) : type === 'technical-disclosure' ? (
+            <TechnicalDisclosure />
+          ) : (
+            <TermsOfUsage />
+          )}
         </div>
       </div>
     </div>
   );
 }
-

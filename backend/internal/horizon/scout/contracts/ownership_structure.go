@@ -102,6 +102,9 @@ func (h *OwnershipStructureHandler) Execute(ctx context.Context, eng pipeline.En
 		models.DependencyTypeSubsidiaryOf,
 		models.DependencyTypeControls,
 		models.DependencyTypeInvestsIn,
+		models.DependencyTypeHasSubgroup,
+		models.DependencyTypeMemberOf,
+		models.DependencyTypeAffiliatedWith,
 	}
 
 	parentMap := map[string][]ownershipEdgeRef{} // childID -> parent edge refs
@@ -231,7 +234,7 @@ func (h *OwnershipStructureHandler) Execute(ctx context.Context, eng pipeline.En
 			ContractType:   h.ContractType(),
 			GraphView:      models.GraphViewHierarchical,
 			HierarchyAxis:  "ownership",
-			FilterRelTypes: []string{"OWNS", "SUBSIDIARY_OF", "CONTROLS", "INVESTS_IN"},
+			FilterRelTypes: []string{"OWNS", "SUBSIDIARY_OF", "CONTROLS", "INVESTS_IN", "HAS_SUBGROUP", "MEMBER_OF", "AFFILIATED_WITH"},
 			HighlightPaths: highlightPaths,
 			FocusNodePaths: focusNodePaths,
 			Annotations:    annotations,

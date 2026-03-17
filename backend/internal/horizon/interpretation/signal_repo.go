@@ -69,6 +69,7 @@ func descriptorFromSignalFact(f *coremodels.OntologyFact) *horizonmodels.SignalD
 	if len(parts) > 2 {
 		s.Mechanism = strings.TrimSpace(parts[2])
 	}
+	s.Axis, s.Mechanism = normalizeSignalAxisAlias(s.Axis, s.Mechanism)
 	if s.Polarity == "" {
 		s.Polarity = "risk"
 	}
@@ -89,6 +90,54 @@ func descriptorFromSignalFact(f *coremodels.OntologyFact) *horizonmodels.SignalD
 		s.Constraints.Timeframe = horizonmodels.SignalTimeHorizonShortTerm
 	}
 	return s
+}
+
+func normalizeSignalAxisAlias(axis, mechanism string) (string, string) {
+	axis = strings.TrimSpace(axis)
+	mechanism = strings.TrimSpace(mechanism)
+	if axis == "" {
+		return horizonmodels.AxisInfoUncertainty, firstNonEmpty(mechanism, "watch_pressure")
+	}
+	if strings.Contains(axis, "/") {
+		return axis, mechanism
+	}
+	switch axis {
+	case "supply_chain_disruption", "supply_shortage", "input_shortage", "production_shortfall":
+		return horizonmodels.AxisPhysicalFlowSupply, firstNonEmpty(mechanism, axis)
+	case "demand_shock", "demand_drop", "demand_surge":
+		return horizonmodels.AxisPhysicalFlowDemand, firstNonEmpty(mechanism, axis)
+	case "logistics_disruption", "route_disruption", "shipping_constraint", "capacity_constraint", "port_disruption":
+		return horizonmodels.AxisLogisticsCapacity, firstNonEmpty(mechanism, axis)
+	case "logistics_delay", "shipping_delay", "delivery_delay", "lead_time_increase":
+		return horizonmodels.AxisLogisticsLatency, firstNonEmpty(mechanism, axis)
+	case "regulatory_pressure", "compliance_risk", "sanction_exposure", "policy_restriction":
+		return horizonmodels.AxisLegalCompliance, firstNonEmpty(mechanism, axis)
+	case "regulatory_uncertainty", "policy_uncertainty", "uncertainty", "watch_pressure":
+		return horizonmodels.AxisInfoUncertainty, firstNonEmpty(mechanism, axis)
+	case "geopolitical_risk", "conflict_risk", "conflict_escalation":
+		return horizonmodels.AxisGeoConflict, firstNonEmpty(mechanism, axis)
+	case "operational_disruption", "operational_outage", "continuity_risk":
+		return horizonmodels.AxisOperationalContinuity, firstNonEmpty(mechanism, axis)
+	case "settlement_risk", "payment_disruption", "payment_delay":
+		return horizonmodels.AxisFinancialSettlement, firstNonEmpty(mechanism, axis)
+	case "credit_risk", "counterparty_risk":
+		return horizonmodels.AxisFinancialCredit, firstNonEmpty(mechanism, axis)
+	case "reputational_pressure", "brand_risk":
+		return horizonmodels.AxisInfoReputation, firstNonEmpty(mechanism, axis)
+	case "market_access_restriction", "access_restriction":
+		return horizonmodels.AxisLegalAccess, firstNonEmpty(mechanism, axis)
+	default:
+		return horizonmodels.AxisInfoUncertainty, firstNonEmpty(mechanism, axis)
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func parseSignalTagFloat(tags []string, prefix string, fallback float64) float64 {

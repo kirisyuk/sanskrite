@@ -80,6 +80,7 @@ export interface MaterializedArtifact {
       customerRef?: string;
       productRef?: string;
       transportViaRefs?: string[];
+      vesselType?: string;
       flowRefs?: string[];
       alternateFlowRefs?: string[];
       zoneRefs?: string[];

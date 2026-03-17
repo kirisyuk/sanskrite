@@ -1305,12 +1305,19 @@ func main() {
 		horizonEdgesRepo.WithTelemetryRepo(horizonTelemetryRepo)
 		horizonWatchdogRepo := horizonrepo.NewWatchdogConfigsRepository(fsClient.Client())
 		horizonScoutingJobsRepo := horizonrepo.NewScoutingJobsRepository(agentJobsRepo)
+		horizonWorkingProductScopesRepo := horizonrepo.NewWorkingProductScopesRepository(fsClient.Client())
+		horizonCapabilityProfilesRepo := horizonrepo.NewCapabilityProfilesRepository(fsClient.Client())
+		horizonCapabilityObsRepo := horizonrepo.NewCapabilityObservationsRepository(fsClient.Client())
+		horizonSupplyLinkObsRepo := horizonrepo.NewSupplyLinkObservationsRepository(fsClient.Client())
+		horizonRouteObsRepo := horizonrepo.NewRouteObservationsRepository(fsClient.Client())
+		horizonDerivedRiskProfilesRepo := horizonrepo.NewDerivedRiskProfilesRepository(fsClient.Client())
 		horizonJobTelemetryRepo := horizonrepo.NewJobTelemetryRepository(fsClient.Client())
 		riskJobsRepo = horizonrepo.NewRiskJobsRepository(fsClient.Client())
 		horizonFragmentVersionsRepo := horizonrepo.NewHorizonFragmentVersionsRepository(fsClient.Client())
 		horizonProfilesRepo := horizonrepo.NewFragmentProfilesRepository(fsClient.Client())
 		horizonProfilePoliciesRepo := horizonrepo.NewFragmentProfileRefreshPoliciesRepository(fsClient.Client())
 		horizonLensArtifactsRepo := horizonrepo.NewLensArtifactsRepository(fsClient.Client())
+		horizonMaterializedArtifactsRepo := horizonrepo.NewMaterializedArtifactsRepository(fsClient.Client())
 		horizonDomainAnswerSnapshotsRepo := horizonrepo.NewDomainAnswerSnapshotsRepository(fsClient.Client())
 		horizonWatchPacksRepo := horizonrepo.NewWatchPacksRepository(fsClient.Client())
 		horizonWatchTargetsRepo := horizonrepo.NewWatchTargetsRepository(fsClient.Client())
@@ -1325,6 +1332,7 @@ func main() {
 		horizonArbitrationDecisionsRepo := horizonrepo.NewArbitrationDecisionsRepository(fsClient.Client())
 		horizonWatchSubjectsRepo := horizonrepo.NewWatchSubjectsRepository(fsClient.Client())
 		horizonWatchTriggersRepo := horizonrepo.NewWatchTriggersRepository(fsClient.Client())
+		horizonMacroAgentPoliciesRepo := horizonrepo.NewMacroAgentPoliciesRepository(fsClient.Client())
 
 		// Horizon spend ledger (actual GenAI $ attribution) for budget enforcement.
 		horizonSpendLedger := horizonrepo.NewHorizonSpendLedger(fsClient.Client())
@@ -1763,11 +1771,14 @@ func main() {
 				horizonAgentProposalsRepo,
 				horizonArbitrationDecisionsRepo,
 				horizonWatchTargetsRepo,
+				horizonWatchSubjectsRepo,
+				horizonWatchTriggersRepo,
 				horizonWatchBriefsRepo,
 				horizonWatchFeedRepo,
 				agentJobsRepo,
 				horizonWatchdogRepo,
 				horizonFragmentsRepo,
+				horizonMaterializedArtifactsRepo,
 				riskJobsRepo,
 				ontologyFactsRepo,
 				s.dsrcs,
@@ -1793,6 +1804,10 @@ func main() {
 				horizonFragmentsRepo,
 				horizonEdgesRepo,
 			).WithScopeAgentRunsRepository(horizonScopeAgentRunsRepo).
+				WithMaterializedArtifactsRepository(horizonMaterializedArtifactsRepo).
+				WithMacroAgentPoliciesRepository(horizonMacroAgentPoliciesRepo).
+				WithAgentProposalsRepository(horizonAgentProposalsRepo).
+				WithArbitrationDecisionsRepository(horizonArbitrationDecisionsRepo).
 				WithWatchBriefsRepository(horizonWatchBriefsRepo).
 				WithWatchFeedEntriesRepository(horizonWatchFeedRepo).
 				WithRiskJobsRepository(riskJobsRepo).
@@ -1811,6 +1826,65 @@ func main() {
 					return ids, nil
 				})
 			horizonService.SetWatchRuntimeService(watchRuntimeService)
+			scopeAgentService.WithAcceptedProposalHook(func(ctx context.Context, proposal *horizonmodels.AgentProposal) ([]string, error) {
+				if proposal == nil || strings.TrimSpace(proposal.ProposalType) != string(horizonmodels.AgentProposalTypeCoverageGap) {
+					return nil, nil
+				}
+				subjectID := strings.TrimSpace(fmt.Sprint(proposal.Payload["watchSubjectId"]))
+				if subjectID == "" && strings.TrimSpace(proposal.WatchTargetID) != "" {
+					if target, err := horizonWatchTargetsRepo.Get(ctx, strings.TrimSpace(proposal.WatchTargetID)); err == nil && target != nil {
+						subjectID = strings.TrimSpace(target.SubjectID)
+					}
+				}
+				if subjectID == "" {
+					return nil, nil
+				}
+				title := strings.TrimSpace(fmt.Sprint(proposal.Payload["title"]))
+				summary := strings.TrimSpace(fmt.Sprint(proposal.Payload["summary"]))
+				tenantID := strings.TrimSpace(proposal.TenantID)
+				if tenantID == "" {
+					tenantID = "global"
+				}
+				reason := strings.TrimSpace(proposal.Explanation)
+				if reason == "" {
+					reason = summary
+				}
+				if reason == "" {
+					reason = title
+				}
+				if reason == "" {
+					reason = "scope agent coverage gap"
+				}
+				confidence := proposal.Confidence
+				if confidence < 0 {
+					confidence = 0
+				}
+				if confidence > 1 {
+					confidence = 1
+				}
+				trigger, _, err := watchRuntimeService.EmitAndProcessTriggerForSubject(
+					ctx,
+					tenantID,
+					subjectID,
+					horizonmodels.WatchTriggerPropagationGap,
+					reason,
+					confidence,
+					confidence,
+					map[string]any{
+						"proposalId":      strings.TrimSpace(proposal.ID),
+						"watchTargetId":   strings.TrimSpace(proposal.WatchTargetID),
+						"headline":        strings.TrimSpace(title),
+						"summary":         summary,
+						"reason":          strings.TrimSpace(proposal.Explanation),
+						"canonicalPaths":  append([]string(nil), proposal.TargetCanonicalPaths...),
+						"macroAgentClass": fmt.Sprint(proposal.Payload["macroAgentClass"]),
+					},
+				)
+				if err != nil || trigger == nil {
+					return nil, err
+				}
+				return []string{"watch_trigger:" + strings.TrimSpace(trigger.ID)}, nil
+			})
 
 			watchService := horizonwatch.NewService(
 				horizonWatchTargetsRepo,
@@ -1822,13 +1896,16 @@ func main() {
 				horizonAgentProposalsRepo,
 				horizonArbitrationDecisionsRepo,
 				ontologyFactsRepo,
-			).WithRuntimeProvisioner(func(ctx context.Context, target *horizonmodels.WatchTarget) error {
+			).WithLensesRepository(horizonLensesRepo).WithMaterializedArtifactsRepository(horizonMaterializedArtifactsRepo).WithRuntimeProvisioner(func(ctx context.Context, target *horizonmodels.WatchTarget) error {
 				if _, err := watchRuntimeService.EnsureSubjectForTarget(ctx, target); err != nil {
 					return err
 				}
 				_, err := scopeAgentService.EnsureRuntimeForTarget(ctx, target)
 				return err
-			})
+			}).WithRedis(redisClient).
+				WithLensAttentionProvider(func(ctx context.Context, tenantID, lensID string, limit int) (*horizonwatchruntime.LensAttentionView, error) {
+					return watchRuntimeService.LensAttention(ctx, tenantID, lensID, limit)
+				})
 			horizonService.SetWatchService(watchService)
 			strategicRecommendationsService := horizonrecommendations.NewService(
 				horizonStrategicRecommendationsRepo,
@@ -1887,14 +1964,17 @@ func main() {
 			horizonLensItemsRepo := horizonrepo.NewLensItemsRepository(fsClient.Client())
 			horizonLensItemsHandler := horizonhttp.NewLensItemsHandler(horizonLensItemsRepo, horizonLensesRepo, s.projs)
 			horizonExposurePathsRepo := horizonrepo.NewExposurePathsRepository(fsClient.Client())
-			horizonMaterializedArtifactsRepo := horizonrepo.NewMaterializedArtifactsRepository(fsClient.Client())
 			if gcsClient != nil && horizonFragmentsBucket != "" {
 				horizonMaterializedArtifactsRepo.WithStorage(gcsClient, horizonFragmentsBucket)
 				if horizonVertexSyncBatcher != nil {
 					horizonMaterializedArtifactsRepo.WithVertexSyncBatcher(horizonVertexSyncBatcher)
 				}
 			}
-			horizonFragmentsMergeRepo = horizonFragmentsMergeRepo.WithMaterializedRepo(horizonMaterializedArtifactsRepo)
+			horizonFragmentsMergeRepo = horizonFragmentsMergeRepo.
+				WithMaterializedRepo(horizonMaterializedArtifactsRepo).
+				WithWatchSubjectsRepo(horizonWatchSubjectsRepo).
+				WithOntologyFactsRepo(ontologyFactsRepo).
+				WithEntitiesRepo(entitiesRepo)
 			lensService.WithCleanupRepos(
 				horizonLensItemsRepo,
 				horizonExposurePathsRepo,
@@ -2258,6 +2338,13 @@ func main() {
 				pub,
 				exec,
 			)
+			scoutEngine.
+				WithWorkingProductScopesRepository(horizonWorkingProductScopesRepo).
+				WithCapabilityProfilesRepository(horizonCapabilityProfilesRepo).
+				WithCapabilityObservationsRepository(horizonCapabilityObsRepo).
+				WithSupplyLinkObservationsRepository(horizonSupplyLinkObsRepo).
+				WithRouteObservationsRepository(horizonRouteObsRepo).
+				WithDerivedRiskProfilesRepository(horizonDerivedRiskProfilesRepo)
 			// Build GeoNames client with telemetry (adapter -> telemetry -> cache). Only when horizon block runs.
 			if geonamesClient != nil && horizonTelemetryRepo != nil {
 				gnBase := geonames.NewAdapter(geonamesClient)
