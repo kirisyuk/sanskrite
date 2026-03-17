@@ -35,6 +35,8 @@ backend/check_*
 # Binaries built in repo root (e.g. go build -o horizon_qa_e2e ./backend/cmd/tools/horizon_qa_e2e)
 /horizon_qa_e2e
 /horizon_*
+/server
+unstuck_scout_jobs
 *.exe
 *.exe~
 *.dll
