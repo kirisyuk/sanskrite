@@ -349,6 +349,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [supplySearchResults, setSupplySearchResults] = React.useState<SupplyChainSearchResult[]>([]);
   const [manualPathArtifacts, setManualPathArtifacts] = React.useState<MaterializedArtifact[]>([]);
   const [manualChainOverlayOpen, setManualChainOverlayOpen] = React.useState(false);
+  const [manualChainOverlayCollapsed, setManualChainOverlayCollapsed] = React.useState(false);
   const [activeManualChain, setActiveManualChain] = React.useState<SupplyChainSearchResult | null>(null);
   const [anchorASuggestions, setAnchorASuggestions] = React.useState<HorizonSearchEntity[]>([]);
   const [anchorBSuggestions, setAnchorBSuggestions] = React.useState<HorizonSearchEntity[]>([]);
@@ -1061,6 +1062,11 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   }, []);
 
   const closeManualChainOverlay = React.useCallback(() => {
+    setManualChainOverlayCollapsed(true);
+  }, []);
+
+  const dismissManualChainOverlay = React.useCallback(() => {
+    setManualChainOverlayCollapsed(false);
     setManualChainOverlayOpen(false);
     setActiveManualChain(null);
     setManualPathArtifacts([]);
@@ -1226,6 +1232,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
       }
       return [previewArtifact];
     });
+    setManualChainOverlayCollapsed(false);
     setManualChainOverlayOpen(true);
     setPathLegsEnabled(true);
     setSearchOpen(false);
@@ -2395,6 +2402,32 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
         )}
 
         {manualChainOverlayOpen && activeManualChain?.artifact && (
+          manualChainOverlayCollapsed ? (
+            <div
+              style={{
+                position: 'absolute',
+                right: 12,
+                top: 70,
+                zIndex: 22,
+                pointerEvents: 'auto',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setManualChainOverlayCollapsed(false)}
+                title={`Show ${String(activeManualChain.artifact.displayName || 'Supply chain').trim()}`}
+                aria-label={`Show ${String(activeManualChain.artifact.displayName || 'Supply chain').trim()}`}
+                style={mapDockButtonStyle(isDark, true, isDark ? '#f59e0b' : '#b45309')}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M4 7h11" />
+                  <path d="M4 12h16" />
+                  <path d="M4 17h9" />
+                  <path d="m16 4 4 8-4 8" />
+                </svg>
+              </button>
+            </div>
+          ) : (
           <div
             style={{
               position: 'absolute',
@@ -2425,6 +2458,8 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
               <button
                 type="button"
                 onClick={closeManualChainOverlay}
+                title="Collapse supply chain preview"
+                aria-label="Collapse supply chain preview"
                 style={{
                   borderRadius: 999,
                   border: '1px solid var(--border-subtle)',
@@ -2554,6 +2589,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
               </div>
             )}
           </div>
+          )
         )}
 
         {scopeDialogOpen && (
