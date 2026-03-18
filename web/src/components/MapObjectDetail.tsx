@@ -96,8 +96,9 @@ function formatPercentScore(value?: number): string {
 }
 
 function compactOverlayLabel(value?: string): string {
-  return String(value || '')
-    .trim()
+  const normalized = String(value || '').trim();
+  if (!normalized || ['<nil>', '<Nil>', 'nil', 'null', 'undefined'].includes(normalized)) return '';
+  return normalized
     .replace(/[_-]+/g, ' ')
     .replace(/\s+/g, ' ')
     .replace(/\b\w/g, (char) => char.toUpperCase());

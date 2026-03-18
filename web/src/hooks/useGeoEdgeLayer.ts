@@ -221,8 +221,15 @@ const CONTEXT_LEGEND_COLOR = '#2dd4bf';
 const SUPPLY_LEGEND_COLOR = '#f59e0b';
 const PROPAGATION_LEGEND_COLOR = '#94a3b8';
 
-function mechanismLabel(value?: string): string {
+function sanitizeOverlayToken(value?: string): string {
   const normalized = String(value || '').trim();
+  if (!normalized) return '';
+  if (['<nil>', '<Nil>', 'nil', 'null', 'undefined'].includes(normalized)) return '';
+  return normalized;
+}
+
+function mechanismLabel(value?: string): string {
+  const normalized = sanitizeOverlayToken(value);
   if (!normalized) return '';
   return normalized
     .replace(/[_-]+/g, ' ')
@@ -232,7 +239,7 @@ function mechanismLabel(value?: string): string {
 }
 
 function mechanismShortTag(value?: string): string {
-  const normalized = String(value || '').trim().toLowerCase();
+  const normalized = sanitizeOverlayToken(value).toLowerCase();
   if (!normalized) return '';
   if (normalized.includes('inventory')) return 'Inventory';
   if (normalized.includes('lead_time') || normalized.includes('lead time')) return 'Lead time';
@@ -248,20 +255,20 @@ function mechanismShortTag(value?: string): string {
 }
 
 function primaryMetricLabel(metrics?: SupplyChainOverlayMetric[] | null): string {
-  const first = Array.isArray(metrics) ? metrics.find((item) => String(item?.label || item?.key || '').trim()) : null;
+  const first = Array.isArray(metrics) ? metrics.find((item) => sanitizeOverlayToken(String(item?.label || item?.key || ''))) : null;
   if (!first) return '';
-  return String(first.label || mechanismLabel(first.key) || first.key || '').trim();
+  return sanitizeOverlayToken(String(first.label || mechanismLabel(first.key) || first.key || ''));
 }
 
 function primaryRiskTag(pathOverlay?: SupplyChainPathRiskOverlay | null, legOverlay?: SupplyChainLegRiskOverlay | null): string {
-  const mechanism = String(legOverlay?.primaryMechanism || pathOverlay?.primaryMechanism || '').trim();
+  const mechanism = sanitizeOverlayToken(String(legOverlay?.primaryMechanism || pathOverlay?.primaryMechanism || ''));
   if (mechanism) return mechanismShortTag(mechanism);
   const metric = primaryMetricLabel(legOverlay?.metrics || pathOverlay?.topMetrics || []);
   return metric ? compactLabel(metric, 16) : '';
 }
 
 function supplyMechanismColor(theme: ThemeMode, kind: EdgeVisualKind, mechanism?: string): string {
-  const normalized = String(mechanism || '').trim().toLowerCase();
+  const normalized = sanitizeOverlayToken(mechanism).toLowerCase();
   if (normalized.includes('route') || normalized.includes('bottleneck') || normalized.includes('reroute')) {
     return theme === 'dark' ? '#fb923c' : '#c2410c';
   }
@@ -292,13 +299,13 @@ function artifactLegField<T = unknown>(leg: any, ...keys: string[]): T | undefin
 }
 
 function artifactLegString(leg: any, ...keys: string[]): string {
-  return String(artifactLegField(leg, ...keys) || '').trim();
+  return sanitizeOverlayToken(String(artifactLegField(leg, ...keys) || ''));
 }
 
 function artifactLegStringList(leg: any, ...keys: string[]): string[] {
   const value = artifactLegField<unknown>(leg, ...keys);
   if (!Array.isArray(value)) return [];
-  return value.map((item) => String(item || '').trim()).filter(Boolean);
+  return value.map((item) => sanitizeOverlayToken(String(item || ''))).filter(Boolean);
 }
 
 function artifactLegNumber(leg: any, ...keys: string[]): number | null {

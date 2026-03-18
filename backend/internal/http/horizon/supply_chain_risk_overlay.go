@@ -48,9 +48,11 @@ func annotateSupplyChainArtifactRiskOverlay(artifact *horizonmodels.Materialized
 		return
 	}
 	if artifact.RiskOverlay != nil {
+		normalizeSupplyChainPathRiskOverlay(artifact.RiskOverlay)
 		return
 	}
 	artifact.RiskOverlay = buildSupplyChainPathRiskOverlay(artifact)
+	normalizeSupplyChainPathRiskOverlay(artifact.RiskOverlay)
 }
 
 func buildSupplyChainPathRiskOverlay(artifact *horizonmodels.MaterializedArtifact) *horizonmodels.SupplyChainPathRiskOverlay {
@@ -946,7 +948,7 @@ func flagToMechanismWeight(flag string) float64 {
 }
 
 func overlayMechanismLabel(key string) string {
-	switch strings.TrimSpace(key) {
+	switch sanitizeOverlayString(key) {
 	case "inventory_vulnerability":
 		return "inventory vulnerability"
 	case "low_substitutability":
@@ -972,7 +974,7 @@ func overlayMechanismLabel(key string) string {
 	case "dual_use_flag":
 		return "dual-use control exposure"
 	default:
-		return strings.ReplaceAll(strings.TrimSpace(key), "_", " ")
+		return strings.ReplaceAll(sanitizeOverlayString(key), "_", " ")
 	}
 }
 
@@ -1012,7 +1014,7 @@ func overlayMetricLabel(key string) string {
 }
 
 func overlayLabelForRef(ref string) string {
-	ref = strings.TrimSpace(ref)
+	ref = sanitizeOverlayString(ref)
 	if ref == "" {
 		return ""
 	}
@@ -1054,7 +1056,7 @@ func stringQualifier(qualifiers map[string]interface{}, key string) string {
 	if qualifiers == nil {
 		return ""
 	}
-	return strings.TrimSpace(fmt.Sprint(qualifiers[key]))
+	return sanitizeOverlayString(fmt.Sprint(qualifiers[key]))
 }
 
 func interfaceSliceQualifier(qualifiers map[string]interface{}, key string) []string {
@@ -1064,14 +1066,15 @@ func interfaceSliceQualifier(qualifiers map[string]interface{}, key string) []st
 	raw := qualifiers[key]
 	items, ok := raw.([]interface{})
 	if !ok {
-		if strings.TrimSpace(fmt.Sprint(raw)) == "" || raw == nil {
+		s := sanitizeOverlayString(fmt.Sprint(raw))
+		if s == "" || raw == nil {
 			return nil
 		}
-		return []string{strings.TrimSpace(fmt.Sprint(raw))}
+		return []string{s}
 	}
 	out := make([]string, 0, len(items))
 	for _, item := range items {
-		s := strings.TrimSpace(fmt.Sprint(item))
+		s := sanitizeOverlayString(fmt.Sprint(item))
 		if s != "" {
 			out = append(out, s)
 		}
@@ -1091,11 +1094,93 @@ func qualifierTruthy(qualifiers map[string]interface{}, key string) bool {
 	case bool:
 		return value
 	case string:
-		v := strings.ToLower(strings.TrimSpace(value))
+		v := strings.ToLower(sanitizeOverlayString(value))
 		return v == "true" || v == "yes" || v == "1"
 	default:
-		return strings.TrimSpace(fmt.Sprint(raw)) != "" && fmt.Sprint(raw) != "0"
+		v := sanitizeOverlayString(fmt.Sprint(raw))
+		return v != "" && v != "0"
 	}
+}
+
+func sanitizeOverlayString(value string) string {
+	value = strings.TrimSpace(value)
+	switch strings.ToLower(value) {
+	case "", "<nil>", "nil", "<null>", "null", "undefined":
+		return ""
+	default:
+		return value
+	}
+}
+
+func normalizeSupplyChainPathRiskOverlay(overlay *horizonmodels.SupplyChainPathRiskOverlay) {
+	if overlay == nil {
+		return
+	}
+	overlay.Scope = sanitizeOverlayString(overlay.Scope)
+	overlay.Summary = sanitizeOverlaySummary(overlay.Summary)
+	overlay.PrimaryMechanism = sanitizeOverlayString(overlay.PrimaryMechanism)
+	overlay.Flags = sanitizeOverlayStrings(overlay.Flags)
+	for i := range overlay.Mechanisms {
+		overlay.Mechanisms[i].Key = sanitizeOverlayString(overlay.Mechanisms[i].Key)
+		overlay.Mechanisms[i].Label = sanitizeOverlayString(overlay.Mechanisms[i].Label)
+	}
+	for i := range overlay.Products {
+		overlay.Products[i].Ref = sanitizeOverlayString(overlay.Products[i].Ref)
+		overlay.Products[i].Label = sanitizeOverlayString(overlay.Products[i].Label)
+	}
+	for i := range overlay.Bottlenecks {
+		overlay.Bottlenecks[i].Ref = sanitizeOverlayString(overlay.Bottlenecks[i].Ref)
+		overlay.Bottlenecks[i].Label = sanitizeOverlayString(overlay.Bottlenecks[i].Label)
+		overlay.Bottlenecks[i].Role = sanitizeOverlayString(overlay.Bottlenecks[i].Role)
+	}
+	for i := range overlay.DriverMetrics {
+		overlay.DriverMetrics[i].Key = sanitizeOverlayString(overlay.DriverMetrics[i].Key)
+		overlay.DriverMetrics[i].Label = sanitizeOverlayString(overlay.DriverMetrics[i].Label)
+		overlay.DriverMetrics[i].Unit = sanitizeOverlayString(overlay.DriverMetrics[i].Unit)
+		overlay.DriverMetrics[i].Scope = sanitizeOverlayString(overlay.DriverMetrics[i].Scope)
+	}
+	for i := range overlay.Legs {
+		overlay.Legs[i].Summary = sanitizeOverlaySummary(overlay.Legs[i].Summary)
+		overlay.Legs[i].PrimaryMechanism = sanitizeOverlayString(overlay.Legs[i].PrimaryMechanism)
+		overlay.Legs[i].ProductRef = sanitizeOverlayString(overlay.Legs[i].ProductRef)
+		overlay.Legs[i].ProductLabel = sanitizeOverlayString(overlay.Legs[i].ProductLabel)
+		overlay.Legs[i].SupplierRef = sanitizeOverlayString(overlay.Legs[i].SupplierRef)
+		overlay.Legs[i].SupplierLabel = sanitizeOverlayString(overlay.Legs[i].SupplierLabel)
+		overlay.Legs[i].CustomerRef = sanitizeOverlayString(overlay.Legs[i].CustomerRef)
+		overlay.Legs[i].CustomerLabel = sanitizeOverlayString(overlay.Legs[i].CustomerLabel)
+		overlay.Legs[i].TransportViaRefs = sanitizeOverlayStrings(overlay.Legs[i].TransportViaRefs)
+		overlay.Legs[i].Flags = sanitizeOverlayStrings(overlay.Legs[i].Flags)
+		for j := range overlay.Legs[i].Mechanisms {
+			overlay.Legs[i].Mechanisms[j].Key = sanitizeOverlayString(overlay.Legs[i].Mechanisms[j].Key)
+			overlay.Legs[i].Mechanisms[j].Label = sanitizeOverlayString(overlay.Legs[i].Mechanisms[j].Label)
+		}
+		for j := range overlay.Legs[i].DriverMetrics {
+			overlay.Legs[i].DriverMetrics[j].Key = sanitizeOverlayString(overlay.Legs[i].DriverMetrics[j].Key)
+			overlay.Legs[i].DriverMetrics[j].Label = sanitizeOverlayString(overlay.Legs[i].DriverMetrics[j].Label)
+			overlay.Legs[i].DriverMetrics[j].Unit = sanitizeOverlayString(overlay.Legs[i].DriverMetrics[j].Unit)
+			overlay.Legs[i].DriverMetrics[j].Scope = sanitizeOverlayString(overlay.Legs[i].DriverMetrics[j].Scope)
+		}
+	}
+}
+
+func sanitizeOverlayStrings(values []string) []string {
+	if len(values) == 0 {
+		return values
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if sanitized := sanitizeOverlayString(value); sanitized != "" {
+			out = append(out, sanitized)
+		}
+	}
+	return out
+}
+
+func sanitizeOverlaySummary(value string) string {
+	value = sanitizeOverlayString(strings.ReplaceAll(value, "<nil>", ""))
+	value = strings.ReplaceAll(value, "  ", " ")
+	value = strings.ReplaceAll(value, " .", ".")
+	return strings.TrimSpace(value)
 }
 
 func firstNonEmptyPathProductRef(edges []horizonmodels.SupplyChainPathEdge) string {

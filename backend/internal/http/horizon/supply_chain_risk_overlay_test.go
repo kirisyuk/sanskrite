@@ -222,4 +222,50 @@ func TestBuildSupplyChainObjectAndLensRiskOverlay_AggregateTopProducts(t *testin
 	}
 }
 
+func TestAnnotateSupplyChainArtifactRiskOverlay_NormalizesNilLikeMechanisms(t *testing.T) {
+	artifact := &horizonmodels.MaterializedArtifact{
+		ID:         "path-nil",
+		TenantID:   "global",
+		Kind:       horizonmodels.MaterializedKindSupplyChainPath,
+		Status:     "active",
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+		RiskOverlay: &horizonmodels.SupplyChainPathRiskOverlay{
+			Scope:            "path",
+			Summary:          "Oilfield drilling equipment carries moderate route exposure led by <nil>.",
+			PrimaryMechanism: "<nil>",
+			Products: []horizonmodels.SupplyChainOverlayProduct{
+				{Ref: "/product/component/mechanical/manufacturing/oilfield-drilling-equipment", Label: "Oilfield drilling equipment", Score: 0.7},
+			},
+			Legs: []horizonmodels.SupplyChainLegRiskOverlay{
+				{
+					SegmentIndex:     0,
+					Summary:          "Oilfield drilling equipment is highly exposed because <nil> is elevated on this leg.",
+					PrimaryMechanism: "<nil>",
+					ProductRef:       "/product/component/mechanical/manufacturing/oilfield-drilling-equipment",
+					ProductLabel:     "Oilfield drilling equipment",
+				},
+			},
+		},
+	}
+
+	annotateSupplyChainArtifactRiskOverlay(artifact)
+
+	if artifact.RiskOverlay == nil {
+		t.Fatal("risk overlay is nil")
+	}
+	if artifact.RiskOverlay.PrimaryMechanism != "" {
+		t.Fatalf("primary mechanism=%q want empty", artifact.RiskOverlay.PrimaryMechanism)
+	}
+	if len(artifact.RiskOverlay.Legs) == 0 || artifact.RiskOverlay.Legs[0].PrimaryMechanism != "" {
+		t.Fatalf("leg primary mechanism=%q want empty", artifact.RiskOverlay.Legs[0].PrimaryMechanism)
+	}
+	if strings.Contains(strings.ToLower(artifact.RiskOverlay.Summary), "<nil>") {
+		t.Fatalf("summary still contains nil token: %q", artifact.RiskOverlay.Summary)
+	}
+	if strings.Contains(strings.ToLower(artifact.RiskOverlay.Legs[0].Summary), "<nil>") {
+		t.Fatalf("leg summary still contains nil token: %q", artifact.RiskOverlay.Legs[0].Summary)
+	}
+}
+
 func overlayIntPtr(v int) *int { return &v }
