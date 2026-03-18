@@ -1196,6 +1196,25 @@ body.homepage-route .bottombar {
   gap: 0.9rem;
 }
 
+.homepage-landing__external-link {
+  width: fit-content;
+  color: rgba(245, 247, 250, 0.74);
+  font-size: 0.92rem;
+  line-height: 1.5;
+  text-decoration: underline;
+  text-decoration-color: rgba(245, 247, 250, 0.28);
+  text-underline-offset: 0.2rem;
+  transition:
+    color 180ms ease,
+    text-decoration-color 180ms ease;
+}
+
+.homepage-landing__external-link:hover,
+.homepage-landing__external-link:focus-visible {
+  color: rgba(245, 247, 250, 0.96);
+  text-decoration-color: rgba(245, 247, 250, 0.54);
+}
+
 .homepage-landing__action {
   appearance: none;
   border: 1px solid rgba(255, 255, 255, 0.18);

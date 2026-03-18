@@ -313,6 +313,7 @@ a {
 
 .intro,
 .services,
+.platform-principles,
 .platform-story,
 .platform-summary,
 .platform,
@@ -557,6 +558,12 @@ a {
   gap: 1.75rem;
 }
 
+.platform-principles__grid {
+  margin-top: 2rem;
+  display: grid;
+  gap: 1.75rem;
+}
+
 .platform-case {
   padding: 1.75rem;
   border: 1px solid var(--line);
@@ -668,6 +675,11 @@ a {
 .platform-case:focus-within .platform-case__image {
   transform: translateY(-3px);
   box-shadow: 0 30px 88px rgba(15, 19, 25, 0.18);
+}
+
+.platform-case__image--square {
+  max-width: 20rem;
+  aspect-ratio: 1 / 1;
 }
 
 .platform-map__node,

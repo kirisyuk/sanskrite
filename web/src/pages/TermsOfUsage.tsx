@@ -423,7 +423,7 @@ export default function TermsOfUsage() {
             Astana, Dostyk, 16<br />
             Talan Towers<br />
             Republic of Kazakhstan<br />
-            Email: info@ideoma.io
+            Email: hi@etigram.pro
           </p>
         </section>
 
@@ -439,4 +439,3 @@ export default function TermsOfUsage() {
     </div>
   );
 }
-

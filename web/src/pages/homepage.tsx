@@ -86,6 +86,15 @@ export default function Homepage() {
               {t('homepage.signIn')}
             </button>
           </div>
+
+          <a
+            className="homepage-landing__external-link"
+            href="https://etigram.com/platform.html"
+            target="_blank"
+            rel="noreferrer"
+          >
+            {t('homepage.moreInfoLink')}
+          </a>
         </section>
       </div>
 

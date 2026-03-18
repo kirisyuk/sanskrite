@@ -111,7 +111,7 @@ Click "Terms of Usage" or "Privacy Notice" links in the bottom bar to view docum
 Astana, Dostyk, 16  
 Talan Towers  
 Republic of Kazakhstan  
-Email: info@ideoma.io
+Email: hi@etigram.pro
 
 ## Children's Safety Features
 
@@ -151,4 +151,3 @@ Email: info@ideoma.io
 
 ## Last Updated
 October 23, 2025 (Updated with children's access policy)
-

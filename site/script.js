@@ -32,11 +32,11 @@ const translations = {
   en: {
     locale: "en",
     pageTitle: "Etigram",
-    "pageTitle.platform": "Etigram Platform Cases",
+    "pageTitle.platform": "Etigram Discover Platform",
     metaDescription:
       "Etigram is a strategic intelligence firm focused on geopolitical risk review, deep monitoring, and scenario planning.",
     "metaDescription.platform":
-      "Etigram Platform case views covering connected maps, entity graphs, affected areas, and industrial detail for exposed operations.",
+      "Etigram Platform: structured object topology, AI-supported signal workflows, operational use cases, and analytical views for exposed environments.",
     "nav.aria.primary": "Primary",
     "nav.aria.languageSelector": "Language selector",
     "nav.aria.switchEnglish": "Switch to English",
@@ -79,20 +79,66 @@ const translations = {
     "platform.title": "Access to the working platform.",
     "platform.text":
       "Platform access is provided separately for approved workflows and client mandates, with working views configured around the client's operating footprint.",
-    "platform.cta": "Open Platform",
-    "platform.detailLink": "Explore platform cases",
+    "platform.cta": "Discover Platform",
+    "platform.detailLink": "Discover Platform",
     "platform.alt": "Abstract image for platform access",
-    "platformPage.eyebrow": "Platform cases",
+    "platformPage.eyebrow": "Discover Platform",
     "platformPage.title":
-      "Working views for mapped exposure and decision context.",
+      "A structured working surface for exposed operations.",
     "platformPage.text":
-      "The Etigram Platform combines mapped dependencies, relational structures, affected-area analysis, and industrial detail in one analytical surface for teams operating across exposed regions and supply chains.",
+      "The Etigram Platform is built for teams that need disciplined object structure, connected signals, and decision-ready context across sensitive operating environments.",
     "platformPage.ctaPrimary": "Open Platform",
-    "platformPage.ctaSecondary": "Back to Services",
+    "platformPage.ctaSecondary": "View Platform Cases",
     "platformPage.hero.alt": "Platform surface overview",
-    "platformPage.story.label": "Platform cases",
+    "platformPage.foundation.label": "Platform Design",
+    "platformPage.foundation.title":
+      "A strict analytical structure, not a loose data collage.",
+    "platformPage.foundation.taxonomy.title": "Object Taxonomy and Topology",
+    "platformPage.foundation.taxonomy.subtitle":
+      "Structured entities, controlled relationships, spatial logic",
+    "platformPage.foundation.taxonomy.text":
+      "Every object sits inside a strict taxonomy with explicit relation types, topology, hierarchy, and operational context. The platform is designed to preserve structure as complexity increases.",
+    "platformPage.foundation.taxonomy.alt":
+      "Object topology and relationship structure",
+    "platformPage.foundation.signals.title": "Signals Processing and Distribution",
+    "platformPage.foundation.signals.subtitle":
+      "Ingestion, routing, propagation, operational relevance",
+    "platformPage.foundation.signals.text":
+      "Signals are not stored as disconnected updates. They are processed, attached to objects, distributed through dependencies, and surfaced where they alter current exposure or planning assumptions.",
+    "platformPage.foundation.signals.alt":
+      "Connected signal propagation across mapped dependencies",
+    "platformPage.foundation.ai.title": "AI and Analytical Workflows",
+    "platformPage.foundation.ai.subtitle":
+      "Assisted structuring, pattern support, analytical acceleration",
+    "platformPage.foundation.ai.text":
+      "AI and ML support object structuring, signal interpretation, pattern detection, and analytical draft work, while the platform remains grounded in explicit models, governed workflows, and human review.",
+    "platformPage.foundation.ai.alt":
+      "Platform analytical surface with AI-supported workflows",
+    "platformPage.cases.label": "Use Cases",
+    "platformPage.cases.title":
+      "Representative operating problems the platform is designed to frame.",
+    "platformPage.cases.supply.title": "Supply Chain and Disruption",
+    "platformPage.cases.supply.subtitle":
+      "Exposure mapping across assets, routes, suppliers, bottlenecks",
+    "platformPage.cases.supply.text":
+      "Trace how disruptions move through suppliers, logistics corridors, industrial clusters, and strategic nodes to identify operational concentration before it becomes a supply event.",
+    "platformPage.cases.supply.alt":
+      "Supply chain and disruption case",
+    "platformPage.cases.governance.title": "Complex Governance",
+    "platformPage.cases.governance.subtitle":
+      "Ownership chains, affiliated entities, control surfaces",
+    "platformPage.cases.governance.text":
+      "Clarify who controls what, through which entities, under which layers of ownership, influence, or delegated authority, when governance structure is itself part of the operating risk.",
+    "platformPage.cases.governance.alt": "Complex governance case",
+    "platformPage.cases.regulatory.title": "Regulatory Impact",
+    "platformPage.cases.regulatory.subtitle":
+      "Policy shifts, sanctions logic, downstream consequences",
+    "platformPage.cases.regulatory.text":
+      "Connect regulatory decisions to jurisdictions, entities, corridors, and production footprints so teams can see where legal or policy shifts become operational constraints.",
+    "platformPage.cases.regulatory.alt": "Regulatory impact case",
+    "platformPage.story.label": "Analytical Views",
     "platformPage.story.title":
-      "Four working views of operational exposure.",
+      "Working views already in use across the platform surface.",
     "platformPage.caseMap.title": "Connected Maps",
     "platformPage.caseMap.subtitle": "Routes, nodes, concentration",
     "platformPage.caseMap.text":
@@ -144,11 +190,11 @@ const translations = {
   ru: {
     locale: "ru",
     pageTitle: "Etigram",
-    "pageTitle.platform": "Платформа Etigram",
+    "pageTitle.platform": "Etigram Платформа",
     metaDescription:
       "Etigram — компания стратегической аналитики, которая помогает видеть геополитические риски, отслеживать изменения и готовить рабочие сценарии.",
     "metaDescription.platform":
-      "Платформа Etigram: карты связей, графы зависимостей, зоны воздействия и детальная картина промышленных контуров.",
+      "Платформа Etigram: строгая топология объектов, ИИ-поддержка сигналов, операционные кейсы и аналитические представления для уязвимой среды.",
     "nav.aria.primary": "Основная навигация",
     "nav.aria.languageSelector": "Выбор языка",
     "nav.aria.switchEnglish": "Переключить на английский",
@@ -191,20 +237,66 @@ const translations = {
     "platform.title": "Доступ к платформе.",
     "platform.text":
       "Доступ к платформе открывается отдельно для согласованных рабочих процессов и клиентских задач, а рабочие представления настраиваются вокруг реального операционного контура клиента.",
-    "platform.cta": "Открыть платформу",
-    "platform.detailLink": "Смотреть кейсы платформы",
+    "platform.cta": "Изучить платформу",
+    "platform.detailLink": "Изучить платформу",
     "platform.alt": "Абстрактное изображение для доступа к платформе",
-    "platformPage.eyebrow": "Кейсы платформы",
+    "platformPage.eyebrow": "Изучить платформу",
     "platformPage.title":
-      "Рабочие представления, которые помогают увидеть уязвимости и принять решение.",
+      "Структурированная рабочая поверхность для уязвимых операционных контуров.",
     "platformPage.text":
-      "Платформа Etigram собирает зависимости, графы связей, зоны воздействия и промышленную детализацию в одном рабочем пространстве для команд, которые работают с чувствительными регионами и цепочками поставок.",
+      "Платформа Etigram создана для команд, которым нужен строгий объектный контур, связанные сигналы и рабочий контекст для решений в чувствительной операционной среде.",
     "platformPage.ctaPrimary": "Открыть платформу",
-    "platformPage.ctaSecondary": "Назад к сервисам",
+    "platformPage.ctaSecondary": "Смотреть кейсы платформы",
     "platformPage.hero.alt": "Общий вид рабочей поверхности платформы",
-    "platformPage.story.label": "Кейсы платформы",
+    "platformPage.foundation.label": "Архитектура платформы",
+    "platformPage.foundation.title":
+      "Строгая аналитическая структура, а не рыхлая витрина из данных.",
+    "platformPage.foundation.taxonomy.title": "Таксономия и топология объектов",
+    "platformPage.foundation.taxonomy.subtitle":
+      "Структурированные сущности, типы связей, пространственная логика",
+    "platformPage.foundation.taxonomy.text":
+      "Каждый объект находится внутри строгой таксономии с явными типами связей, топологией, иерархией и операционным контекстом. Платформа сохраняет структуру даже при росте сложности.",
+    "platformPage.foundation.taxonomy.alt":
+      "Топология объектов и структура связей",
+    "platformPage.foundation.signals.title": "Обработка и распространение сигналов",
+    "platformPage.foundation.signals.subtitle":
+      "Приём, маршрутизация, распространение, операционная значимость",
+    "platformPage.foundation.signals.text":
+      "Сигналы не хранятся как разрозненные обновления. Они обрабатываются, привязываются к объектам, распространяются по зависимостям и поднимаются там, где меняют текущую уязвимость или планирование.",
+    "platformPage.foundation.signals.alt":
+      "Распространение сигналов по связанным операционным зависимостям",
+    "platformPage.foundation.ai.title": "AI и аналитические процессы",
+    "platformPage.foundation.ai.subtitle":
+      "Поддержка структурирования, поиск паттернов, ускорение анализа",
+    "platformPage.foundation.ai.text":
+      "AI и ML помогают в структурировании объектов, интерпретации сигналов, поиске паттернов и подготовке аналитических черновиков, но платформа остаётся опёртой на явные модели, управляемые процессы и human review.",
+    "platformPage.foundation.ai.alt":
+      "Аналитическая поверхность платформы с AI-поддержкой",
+    "platformPage.cases.label": "Кейсы",
+    "platformPage.cases.title":
+      "Типовые операционные задачи, под которые спроектирована платформа.",
+    "platformPage.cases.supply.title": "Supply Chain and Disruption",
+    "platformPage.cases.supply.subtitle":
+      "Карта уязвимостей по активам, маршрутам, поставщикам и узким местам",
+    "platformPage.cases.supply.text":
+      "Прослеживайте, как перебои проходят через поставщиков, логистические коридоры, промышленные кластеры и стратегические узлы, чтобы увидеть концентрацию риска до того, как она станет сбоем поставок.",
+    "platformPage.cases.supply.alt":
+      "Кейс по цепочке поставок и сбоям",
+    "platformPage.cases.governance.title": "Complex Governance",
+    "platformPage.cases.governance.subtitle":
+      "Контуры владения, аффилированные структуры, поверхности контроля",
+    "platformPage.cases.governance.text":
+      "Понимайте, кто чем управляет, через какие сущности, на каких слоях владения, влияния или делегированной ответственности, когда именно структура управления становится частью операционного риска.",
+    "platformPage.cases.governance.alt": "Кейс по сложной структуре управления",
+    "platformPage.cases.regulatory.title": "Regulatory Impact",
+    "platformPage.cases.regulatory.subtitle":
+      "Политические сдвиги, санкционная логика, downstream-последствия",
+    "platformPage.cases.regulatory.text":
+      "Связывайте регуляторные решения с юрисдикциями, сущностями, коридорами и производственным контуром, чтобы видеть, где правовые и политические изменения превращаются в операционные ограничения.",
+    "platformPage.cases.regulatory.alt": "Кейс по регуляторному воздействию",
+    "platformPage.story.label": "Аналитические представления",
     "platformPage.story.title":
-      "Четыре рабочих представления операционного риска.",
+      "Рабочие представления, уже используемые внутри платформенной поверхности.",
     "platformPage.caseMap.title": "Связанные карты",
     "platformPage.caseMap.subtitle": "Маршруты, узлы, концентрация",
     "platformPage.caseMap.text":
@@ -256,11 +348,11 @@ const translations = {
   kz: {
     locale: "kk",
     pageTitle: "Etigram",
-    "pageTitle.platform": "Etigram платформасы",
+    "pageTitle.platform": "Etigram платформасын шолу",
     metaDescription:
       "Etigram геосаяси тәуекелдерді көруге, өзгерістерді бақылауға және жұмыс сценарийлерін дайындауға көмектесетін стратегиялық талдау компаниясы.",
     "metaDescription.platform":
-      "Etigram платформасы: байланысқан карталар, тәуелділік графтары, әсер ету аймақтары және өндірістік көріністер.",
+      "Etigram платформасы: объектілердің қатаң топологиясы, AI-қолдаулы сигнал ағындары, операциялық кейстер және осал ортаға арналған аналитикалық көріністер.",
     "nav.aria.primary": "Негізгі навигация",
     "nav.aria.languageSelector": "Тілді таңдау",
     "nav.aria.switchEnglish": "Ағылшын тіліне ауыстыру",
@@ -303,20 +395,67 @@ const translations = {
     "platform.title": "Платформаға қолжетімділік.",
     "platform.text":
       "Платформаға қолжетімділік келісілген жұмыс процесі мен клиенттік міндеттер бойынша бөлек беріледі, ал жұмыс көріністері клиенттің нақты операциялық контурының айналасында бапталады.",
-    "platform.cta": "Платформаға өту",
-    "platform.detailLink": "Платформа кейстерін көру",
+    "platform.cta": "Платформаны шолу",
+    "platform.detailLink": "Платформаны шолу",
     "platform.alt": "Платформаға қолжетімділікке арналған абстрактілі сурет",
-    "platformPage.eyebrow": "Платформа кейстері",
+    "platformPage.eyebrow": "Платформаны шолу",
     "platformPage.title":
-      "Тәуекелді көріп, шешім қабылдауға көмектесетін жұмыс көріністері.",
+      "Осал операциялық ортаға арналған құрылымдалған жұмыс беті.",
     "platformPage.text":
-      "Etigram платформасы тәуелділіктерді, байланыс графтарын, әсер ету аймақтарын және өндірістік детальды сезімтал өңірлер мен жеткізу тізбектерімен жұмыс істейтін командалар үшін бір жұмыс кеңістігіне жинайды.",
+      "Etigram платформасы қатаң объектілік құрылым, байланысқан сигналдар және сезімтал операциялық ортаға арналған шешім қабылдау контексі керек командалар үшін жасалған.",
     "platformPage.ctaPrimary": "Платформаға өту",
-    "platformPage.ctaSecondary": "Қызметтерге оралу",
+    "platformPage.ctaSecondary": "Платформа кейстерін көру",
     "platformPage.hero.alt": "Платформаның жұмыс бетінің жалпы көрінісі",
-    "platformPage.story.label": "Платформа кейстері",
+    "platformPage.foundation.label": "Платформа архитектурасы",
+    "platformPage.foundation.title":
+      "Бос деректер коллажы емес, қатаң аналитикалық құрылым.",
+    "platformPage.foundation.taxonomy.title": "Объект таксономиясы мен топологиясы",
+    "platformPage.foundation.taxonomy.subtitle":
+      "Құрылымдалған нысандар, бақыланатын байланыстар, кеңістік логикасы",
+    "platformPage.foundation.taxonomy.text":
+      "Әр объект қатаң таксономия ішінде, айқын байланыс типтерімен, топологиямен, иерархиямен және операциялық контекспен орналасады. Күрделілік артқан сайын платформа құрылымды сақтап қалады.",
+    "platformPage.foundation.taxonomy.alt":
+      "Объект топологиясы мен байланыстар құрылымы",
+    "platformPage.foundation.signals.title": "Сигналдарды өңдеу және тарату",
+    "platformPage.foundation.signals.subtitle":
+      "Қабылдау, маршруттау, тарату, операциялық мән",
+    "platformPage.foundation.signals.text":
+      "Сигналдар бөлек жаңартулар ретінде сақталмайды. Олар өңделеді, объектілерге бекітіледі, тәуелділіктер арқылы таралады және ағымдағы осалдықты не жоспарлау болжамдарын өзгертетін жерде көрінеді.",
+    "platformPage.foundation.signals.alt":
+      "Байланысқан операциялық тәуелділіктер арқылы сигналдардың таралуы",
+    "platformPage.foundation.ai.title": "AI және аналитикалық жұмыс ағындары",
+    "platformPage.foundation.ai.subtitle":
+      "Құрылымдауға көмек, үлгі табу, талдауды жеделдету",
+    "platformPage.foundation.ai.text":
+      "AI мен ML объектілерді құрылымдауға, сигналдарды түсіндіруге, үлгілерді табуға және аналитикалық нобай дайындауға көмектеседі, бірақ платформаның негізі айқын модельдерге, басқарылатын жұмыс ағындарына және адам тексеруіне сүйенеді.",
+    "platformPage.foundation.ai.alt":
+      "AI қолдауы бар платформаның аналитикалық беті",
+    "platformPage.cases.label": "Кейстер",
+    "platformPage.cases.title":
+      "Платформа жобаланған типтік операциялық міндеттер.",
+    "platformPage.cases.supply.title": "Supply Chain and Disruption",
+    "platformPage.cases.supply.subtitle":
+      "Активтер, маршруттар, жеткізушілер және тар орындар бойынша осалдық картасы",
+    "platformPage.cases.supply.text":
+      "Іркілістердің жеткізушілер, логистикалық дәліздер, өндірістік кластерлер және стратегиялық тораптар арқылы қалай өтетінін бақылап, тәуекел шоғырлануын жеткізу оқиғасына айналмай тұрып анықтаңыз.",
+    "platformPage.cases.supply.alt":
+      "Жеткізу тізбегі мен іркіліс кейсі",
+    "platformPage.cases.governance.title": "Complex Governance",
+    "platformPage.cases.governance.subtitle":
+      "Меншік тізбектері, аффилирленген құрылымдар, бақылау контурлары",
+    "platformPage.cases.governance.text":
+      "Басқару құрылымының өзі операциялық тәуекелге айналғанда, кім нені, қай құрылым арқылы, меншік, ықпал немесе делегирленген өкілеттіктің қай қабатында басқаратынын анық көріңіз.",
+    "platformPage.cases.governance.alt":
+      "Күрделі басқару құрылымы кейсі",
+    "platformPage.cases.regulatory.title": "Regulatory Impact",
+    "platformPage.cases.regulatory.subtitle":
+      "Саяси өзгерістер, санкциялық логика, төмен қарай әсерлер",
+    "platformPage.cases.regulatory.text":
+      "Құқықтық немесе саяси өзгерістердің операциялық шектеуге қай жерде айналатынын көру үшін реттеуші шешімдерді юрисдикциялармен, субъектілермен, дәліздермен және өндірістік контурмен байланыстырыңыз.",
+    "platformPage.cases.regulatory.alt": "Реттеуші әсер кейсі",
+    "platformPage.story.label": "Аналитикалық көріністер",
     "platformPage.story.title":
-      "Операциялық тәуекелді көрсететін төрт жұмыс көрінісі.",
+      "Платформалық жұмыс бетінде қолданылып жатқан көріністер.",
     "platformPage.caseMap.title": "Байланысқан карталар",
     "platformPage.caseMap.subtitle": "Маршруттар, түйіндер, шоғырлану",
     "platformPage.caseMap.text":
