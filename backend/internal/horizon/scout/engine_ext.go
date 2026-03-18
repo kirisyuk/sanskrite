@@ -8370,6 +8370,7 @@ func (e *ScoutEngine) materializeSupplyChainHotPathChains(ctx context.Context, j
 		"chainsN":       len(chains),
 		"stage":         "hot_path_full_query",
 	})
+	e.publishDirectedExplorationMaterialized(ctx, job, "hot_path_full_query", directedExplorationDirection(job), chains)
 	return true
 }
 
@@ -8398,6 +8399,7 @@ func (e *ScoutEngine) runSupplyChainFastFirstHotPath(ctx context.Context, job *m
 	}
 	chains := make([]agents.SupplyChain, 0, 32)
 	for idx, query := range hotQueries {
+		query = applyDirectedExplorationQueryAugment(query, job)
 		prePlan, preErr := e.researchAgent.EnrichSupplyChainPreHotPath(ctx, query)
 		if preErr != nil {
 			scLog(ctx, e, job, "warn", fmt.Sprintf("[SupplyChainPreHotPath] query[%d] failed: %v", idx, preErr))
@@ -8408,6 +8410,7 @@ func (e *ScoutEngine) runSupplyChainFastFirstHotPath(ctx context.Context, job *m
 		queryVariants := deriveSupplyChainHotPathVariants(query, prePlan)
 		var accumulatedForQuery []agents.SupplyChain
 		for variantIdx, variant := range queryVariants {
+			variant = applyDirectedExplorationQueryAugment(variant, job)
 			queryChains, err := e.researchAgent.EnrichSupplyChainHotPath(ctx, variant, prePlan)
 			if err != nil {
 				scLog(ctx, e, job, "warn", fmt.Sprintf("[SupplyChainHotPath] query[%d] variant[%d] failed: %v", idx, variantIdx, err))
@@ -8415,7 +8418,7 @@ func (e *ScoutEngine) runSupplyChainFastFirstHotPath(ctx context.Context, job *m
 			}
 			queryChains = filterSupplyChainsByPlanFilters(queryChains, variant.ProductFilter, variant.GeoFilter)
 			queryChains = filterSupplyChainsByAnchorScope(queryChains, variant, prePlan, targetGeoFilters)
-			if len(queryChains) > 0 {
+			if len(queryChains) > 0 && directedExplorationWantsCapabilityPass(job) {
 				if capabilityBundle, capErr := e.researchAgent.EnrichSupplyChainHotPathCapabilities(ctx, variant, queryChains, prePlan); capErr != nil {
 					scLog(ctx, e, job, "warn", fmt.Sprintf("[SupplyChainHotPathCapability] query[%d] variant[%d] failed: %v", idx, variantIdx, capErr))
 				} else if capabilityBundle != nil {
@@ -11439,7 +11442,9 @@ func filterSupplyChainsByAnchorScope(chains []agents.SupplyChain, query agents.S
 	}
 	switch {
 	case strongN >= 3:
-		appendChains(func(item scoredChain) bool { return item.anchorHit && (len(targetGeoFilters) == 0 || item.targetGeoHit) })
+		appendChains(func(item scoredChain) bool {
+			return item.anchorHit && (len(targetGeoFilters) == 0 || item.targetGeoHit)
+		})
 	case anchorN >= 3:
 		appendChains(func(item scoredChain) bool { return item.anchorHit })
 	case targetGeoN >= 3:
@@ -11900,6 +11905,7 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 				"direction":     direction,
 				"stage":         stage,
 			})
+			e.publishDirectedExplorationMaterialized(ctx, job, stage, direction, chains)
 			if strings.TrimSpace(prevStage) == "" {
 				delete(job.State, "supplyChainMaterializationStage")
 			} else {
@@ -12413,6 +12419,7 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 				"direction":     direction,
 				"stage":         stage,
 			})
+			e.publishDirectedExplorationMaterialized(ctx, job, stage, direction, chains)
 			if strings.TrimSpace(prevStage) == "" {
 				delete(job.State, "supplyChainMaterializationStage")
 			} else {

@@ -7,7 +7,7 @@ import React from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ModalWithHeader } from './ModalWithHeader';
 import { ThemeContext } from './ThemeProvider';
-import { api } from '../lib/api';
+import { api, type DirectedSupplyChainExplorationRequest } from '../lib/api';
 import { LensCanvasDetails } from './LensCanvasDetails';
 import { LensCanvasCockpit } from './LensCanvasCockpit';
 import { LensCanvasProgress } from './LensCanvasProgress';
@@ -305,6 +305,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
       maxRecursionDepth?: number;
       mode?: ScoutingMode;
       specialties?: string[];
+      exploration?: DirectedSupplyChainExplorationRequest;
     }) => {
       if (!lensId) return;
 
@@ -322,6 +323,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
           maxRecursionDepth: typeof input.maxRecursionDepth === 'number' ? input.maxRecursionDepth : 1,
           mode: input.mode,
           specialties: input.specialties,
+          exploration: input.exploration,
         },
         { correlationId, sessionId }
       );

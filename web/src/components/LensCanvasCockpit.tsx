@@ -26,7 +26,7 @@ import {
   getNodeColors,
   getHorizonNodeVisualType,
 } from './HorizonGraphNodeTypes';
-import { api } from '../lib/api';
+import { api, type DirectedSupplyChainExplorationRequest } from '../lib/api';
 import { useIsAdmin } from '../hooks/useIsAdmin';
 import { useUIStore } from '../stores/uiStore';
 import ReactMarkdown from 'react-markdown';
@@ -638,6 +638,7 @@ export interface LensCanvasCockpitProps {
     maxRecursionDepth?: number;
     mode?: ScoutingMode;
     specialties?: string[];
+    exploration?: DirectedSupplyChainExplorationRequest;
   }) => Promise<void>;
   inspectorActive?: boolean;
   onToggleInspector?: () => void;
@@ -794,6 +795,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   } | null>(null);
   const [scopeScoutDepth, setScopeScoutDepth] = React.useState<1 | 2>(1);
   const [scopeScoutMode, setScopeScoutMode] = React.useState<ScoutingMode>('general');
+  const [scopeScoutDirection, setScopeScoutDirection] = React.useState<'upstream' | 'downstream'>('downstream');
+  const [scopeScoutHotPathOnly, setScopeScoutHotPathOnly] = React.useState(false);
+  const [scopeScoutIncludeCapabilities, setScopeScoutIncludeCapabilities] = React.useState(false);
+  const [scopeScoutIncludeEdgeMetrics, setScopeScoutIncludeEdgeMetrics] = React.useState(false);
+  const [scopeScoutCustomQuery, setScopeScoutCustomQuery] = React.useState('');
   const [scopeScoutInFlightId, setScopeScoutInFlightId] = React.useState<string | null>(null);
   const scopeScoutCancelBtnRef = React.useRef<HTMLButtonElement | null>(null);
   const scopeScoutPrevActiveElRef = React.useRef<HTMLElement | null>(null);
@@ -4727,6 +4733,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const defaultMode = defaultScoutingModeForCanonicalPath(nextCanonicalPath);
     setScopeScoutMode(defaultMode);
     setScopeScoutDepth(defaultMode === 'supply_chain' ? 2 : 1);
+    setScopeScoutDirection('downstream');
+    setScopeScoutHotPathOnly(false);
+    setScopeScoutIncludeCapabilities(false);
+    setScopeScoutIncludeEdgeMetrics(false);
+    setScopeScoutCustomQuery('');
     setScopeScoutModal({ fragmentId: fid, canonicalPath: nextCanonicalPath || canonicalPath, label });
   }, []);
 
@@ -12663,6 +12674,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
   // --- Scout from query (full pipeline: scope-scout-full) ---
   const rtGraphNodes = useHorizonRealtimeStore((s) => s.nodes);
+  const rtGraphEdges = useHorizonRealtimeStore((s) => s.edges);
   const pendingScoutRef = React.useRef<
     Map<
       string,
@@ -12672,6 +12684,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       }
     >
   >(new Map());
+  const realtimeEdgeLensItemIdRef = React.useRef<Map<string, string>>(new Map());
+  const realtimeEdgePersistingRef = React.useRef<Set<string>>(new Set());
 
   const genCorrelationId = React.useCallback((): string => {
     try {
@@ -13031,6 +13045,167 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     ],
   );
 
+  const materializeRealtimeEdge = React.useCallback(
+    async (raw: {
+      edgeId?: string;
+      sourceFragmentId?: string;
+      targetFragmentId?: string;
+      sourceCanonicalPath?: string;
+      targetCanonicalPath?: string;
+      type?: string;
+      qualifiers?: any;
+    }) => {
+      const edgeId = String(raw?.edgeId || '').trim();
+      if (!lensId || !edgeId) return;
+
+      const currentNodes = (nodesStateRef.current || nodes) as Node<HorizonNodeData>[];
+      const nodeIdByFragmentId = new Map<string, string>();
+      const nodeIdByCanonicalPath = new Map<string, string>();
+      const nodeById = new Map<string, Node<HorizonNodeData>>();
+      for (const node of currentNodes) {
+        const data: any = node?.data;
+        if (data?.isGroup) continue;
+        const nodeId = String(node?.id || '').trim();
+        if (!nodeId) continue;
+        nodeById.set(nodeId, node);
+        const fragmentId = String(data?.fragmentId || '').trim();
+        if (fragmentId && !nodeIdByFragmentId.has(fragmentId)) nodeIdByFragmentId.set(fragmentId, nodeId);
+        const canonicalPath = String(data?.canonicalPath || '').trim();
+        if (canonicalPath && !nodeIdByCanonicalPath.has(canonicalPath)) nodeIdByCanonicalPath.set(canonicalPath, nodeId);
+      }
+
+      const resolveNodeId = (fragmentId?: string, canonicalPath?: string): string => {
+        const fid = String(fragmentId || '').trim();
+        const cp = String(canonicalPath || '').trim();
+        if (fid) {
+          const byFragment = nodeIdByFragmentId.get(fid);
+          if (byFragment) return byFragment;
+        }
+        if (cp) {
+          const byPath = nodeIdByCanonicalPath.get(cp);
+          if (byPath) return byPath;
+        }
+        return '';
+      };
+
+      const sourceNodeId = resolveNodeId(raw?.sourceFragmentId, raw?.sourceCanonicalPath);
+      const targetNodeId = resolveNodeId(raw?.targetFragmentId, raw?.targetCanonicalPath);
+      if (!sourceNodeId || !targetNodeId || sourceNodeId === targetNodeId) return;
+
+      const sourceNode = nodeById.get(sourceNodeId);
+      const targetNode = nodeById.get(targetNodeId);
+      const sourceFragmentId = String(raw?.sourceFragmentId || (sourceNode?.data as any)?.fragmentId || sourceNodeId).trim();
+      const targetFragmentId = String(raw?.targetFragmentId || (targetNode?.data as any)?.fragmentId || targetNodeId).trim();
+      const edgeType = String(raw?.type || '').trim() || 'SUPPLIES_TO';
+      const baseStyle = getEdgeStyle(edgeType, undefined, raw?.qualifiers);
+      const stroke = getEdgeStroke(baseStyle);
+      let existingLensItemId = '';
+      for (const edge of edgesStateRef.current || []) {
+        if (String((edge as any)?.id || '').trim() !== edgeId) continue;
+        existingLensItemId = String(((edge as any)?.data || {}).lensItemId || '').trim();
+        if (existingLensItemId) break;
+      }
+      const cachedLensItemId = realtimeEdgeLensItemIdRef.current.get(edgeId) || existingLensItemId;
+      if (cachedLensItemId && !realtimeEdgeLensItemIdRef.current.has(edgeId)) {
+        realtimeEdgeLensItemIdRef.current.set(edgeId, cachedLensItemId);
+      }
+
+      setEdges((prev) => {
+        const current = Array.isArray(prev) ? prev : [];
+        const nextEdge: Edge = {
+          id: edgeId,
+          source: sourceNodeId,
+          target: targetNodeId,
+          type: 'default',
+          interactionWidth: 18,
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            color: stroke,
+          },
+          style: baseStyle,
+          data: {
+            edgeType,
+            edgeCaption: getEdgeCaptionShort(edgeType),
+            sourceFragmentId,
+            targetFragmentId,
+            sourceCanonicalPath: String(raw?.sourceCanonicalPath || '').trim() || undefined,
+            targetCanonicalPath: String(raw?.targetCanonicalPath || '').trim() || undefined,
+            qualifiers: raw?.qualifiers,
+            baseStyle,
+            lensItemId: cachedLensItemId,
+            isDirectedExplorationSynthetic: true,
+          },
+        } as any;
+
+        const existingIndex = current.findIndex((edge: any) => String(edge?.id || '').trim() === edgeId);
+        if (existingIndex >= 0) {
+          const existing = current[existingIndex] as any;
+          const merged = {
+            ...existing,
+            ...nextEdge,
+            data: {
+              ...(existing?.data || {}),
+              ...(nextEdge.data || {}),
+            },
+          } as Edge;
+          const next = current.slice();
+          next[existingIndex] = merged;
+          return next as any;
+        }
+
+        const duplicate = current.some((edge: any) => {
+          const data = edge?.data || {};
+          return (
+            String(edge?.source || '').trim() === sourceNodeId &&
+            String(edge?.target || '').trim() === targetNodeId &&
+            String(data?.edgeType || edge?.label || '').trim().toUpperCase() === edgeType.toUpperCase() &&
+            String(data?.sourceCanonicalPath || '').trim() === String(raw?.sourceCanonicalPath || '').trim() &&
+            String(data?.targetCanonicalPath || '').trim() === String(raw?.targetCanonicalPath || '').trim()
+          );
+        });
+        if (duplicate) return prev;
+        return [...current, nextEdge as any];
+      });
+
+      if (!sourceFragmentId || !targetFragmentId) return;
+      if (cachedLensItemId || realtimeEdgePersistingRef.current.has(edgeId)) return;
+
+      realtimeEdgePersistingRef.current.add(edgeId);
+      try {
+        const created = await api.createLensItem(lensId, {
+          kind: 'edge',
+          subkind: edgeType,
+          sourceFragmentId,
+          targetFragmentId,
+          edgeType: edgeType as any,
+          direction: 'forward',
+        } as any);
+        const lensItemId = String(created?.id || '').trim();
+        if (lensItemId) {
+          realtimeEdgeLensItemIdRef.current.set(edgeId, lensItemId);
+          setEdges((prev) =>
+            (prev || []).map((edge: any) =>
+              String(edge?.id || '').trim() === edgeId
+                ? {
+                    ...edge,
+                    data: {
+                      ...(edge?.data || {}),
+                      lensItemId,
+                    },
+                  }
+                : edge,
+            ),
+          );
+        }
+      } catch (error) {
+        console.warn('[Cockpit] Failed to persist realtime directed edge', edgeId, error);
+      } finally {
+        realtimeEdgePersistingRef.current.delete(edgeId);
+      }
+    },
+    [lensId, nodes, setEdges, getEdgeStyle, getEdgeStroke, getEdgeCaptionShort],
+  );
+
   // WS-driven reconciliation: placeholders -> materializeScoutedNode; restPaths -> materializeScoutedNodeWithoutPlaceholder.
   React.useEffect(() => {
     if (!lensId) return;
@@ -13066,6 +13241,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       }
     }
   }, [lensId, rtGraphNodes, findFragmentIdByCanonicalPath, materializeScoutedNode, materializeScoutedNodeWithoutPlaceholder]);
+
+  React.useEffect(() => {
+    if (!lensId) return;
+    const items = Object.values(rtGraphEdges || {});
+    if (items.length === 0) return;
+    for (const raw of items as any[]) {
+      void materializeRealtimeEdge(raw);
+    }
+  }, [lensId, rtGraphEdges, nodes, materializeRealtimeEdge]);
 
   const scoutFullForQuery = React.useCallback(
     async (query: string, options?: { onProgress?: (msg: string) => void; mode?: ScoutingMode }) => {
@@ -14034,12 +14218,27 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         ok = false;
       } else {
         if (!onScopeScout) return;
+        const exploration =
+          scopeScoutMode === 'supply_chain'
+            ? ({
+                domainMode: 'supply_chain',
+                direction: scopeScoutDirection,
+                hotPathOnly: scopeScoutHotPathOnly,
+                hotPathNodeIds: [fragmentId],
+                includeCapabilities: scopeScoutIncludeCapabilities,
+                includeEdgeMetrics: scopeScoutIncludeEdgeMetrics,
+                customQuery: String(scopeScoutCustomQuery || '').trim() || undefined,
+                renderTarget: 'graph',
+                ignoreFreshness: true,
+              } satisfies DirectedSupplyChainExplorationRequest)
+            : undefined;
         await onScopeScout({
           fragmentId,
           canonicalPath: scopeScoutModal.canonicalPath,
           maxRecursionDepth: scopeScoutDepth,
           mode: scopeScoutMode,
           specialties: specialtiesForScoutingMode(scopeScoutMode),
+          exploration,
         });
         ok = true;
       }
@@ -14056,7 +14255,20 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       setScopeScoutInFlightId(null);
       setScopeScoutModal(null);
     }
-  }, [lensId, onScopeScout, scopeScoutModal, scopeScoutDepth, scopeScoutMode, setNodes, genCorrelationId]);
+  }, [
+    lensId,
+    onScopeScout,
+    scopeScoutModal,
+    scopeScoutDepth,
+    scopeScoutMode,
+    scopeScoutDirection,
+    scopeScoutHotPathOnly,
+    scopeScoutIncludeCapabilities,
+    scopeScoutIncludeEdgeMetrics,
+    scopeScoutCustomQuery,
+    setNodes,
+    genCorrelationId,
+  ]);
 
   // Scope-scout modal: Esc to close + basic focus management.
   React.useEffect(() => {
@@ -18771,6 +18983,139 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 </button>
               </div>
             </div>
+
+            {scopeScoutMode === 'supply_chain' && (
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: 12,
+                  borderRadius: 12,
+                  border: '1px solid var(--border-subtle)',
+                  background: 'var(--white-04)',
+                  display: 'grid',
+                  gap: 12,
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', marginBottom: 6 }}>
+                    Direction
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+                    {([
+                      { value: 'downstream' as const, label: 'Downstream', desc: 'Follow dependencies, customers, and exposed flows.' },
+                      { value: 'upstream' as const, label: 'Upstream', desc: 'Trace suppliers, source dependencies, and origin points.' },
+                    ]).map((opt) => {
+                      const active = scopeScoutDirection === opt.value;
+                      return (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          onClick={() => setScopeScoutDirection(opt.value)}
+                          disabled={Boolean(scopeScoutInFlightId)}
+                          aria-pressed={active}
+                          style={{
+                            textAlign: 'left',
+                            padding: '10px 10px 9px',
+                            borderRadius: 10,
+                            border: '1px solid var(--border-subtle)',
+                            background: active ? 'var(--white-10)' : 'transparent',
+                            color: 'var(--text-heading)',
+                            cursor: scopeScoutInFlightId ? 'not-allowed' : 'pointer',
+                            opacity: scopeScoutInFlightId ? 0.5 : 1,
+                          }}
+                        >
+                          <div style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.2 }}>{opt.label}</div>
+                          <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-secondary-strong)', lineHeight: 1.35 }}>
+                            {opt.desc}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gap: 8 }}>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>
+                    Directed enrichments
+                  </div>
+                  {([
+                    {
+                      key: 'hot-path',
+                      checked: scopeScoutHotPathOnly,
+                      onChange: (next: boolean) => setScopeScoutHotPathOnly(next),
+                      label: 'Only hot path',
+                      desc: 'Return the first operational chain quickly and stop after the fast path.',
+                    },
+                    {
+                      key: 'capabilities',
+                      checked: scopeScoutIncludeCapabilities,
+                      onChange: (next: boolean) => setScopeScoutIncludeCapabilities(next),
+                      label: 'Capabilities',
+                      desc: 'Request capability-level enrichment for newly materialized entities.',
+                    },
+                    {
+                      key: 'edge-metrics',
+                      checked: scopeScoutIncludeEdgeMetrics,
+                      onChange: (next: boolean) => setScopeScoutIncludeEdgeMetrics(next),
+                      label: 'Edge metrics',
+                      desc: 'Add transport and dependency metrics when the supply-chain pass can resolve them.',
+                    },
+                  ]).map((opt) => (
+                    <label
+                      key={opt.key}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '16px minmax(0, 1fr)',
+                        gap: 10,
+                        alignItems: 'flex-start',
+                        cursor: scopeScoutInFlightId ? 'not-allowed' : 'pointer',
+                        opacity: scopeScoutInFlightId ? 0.5 : 1,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={opt.checked}
+                        onChange={(e) => opt.onChange(e.target.checked)}
+                        disabled={Boolean(scopeScoutInFlightId)}
+                        style={{ marginTop: 2 }}
+                      />
+                      <span style={{ display: 'grid', gap: 2 }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-heading)' }}>{opt.label}</span>
+                        <span style={{ fontSize: 11, lineHeight: 1.35, color: 'var(--text-secondary-strong)' }}>{opt.desc}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+
+                <div style={{ display: 'grid', gap: 6 }}>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>
+                    Supplemental request
+                  </div>
+                  <textarea
+                    value={scopeScoutCustomQuery}
+                    onChange={(e) => setScopeScoutCustomQuery(e.target.value)}
+                    disabled={Boolean(scopeScoutInFlightId)}
+                    placeholder="Optional: focus on export controls, choke points, sanctions exposure, logistics paths…"
+                    rows={3}
+                    style={{
+                      width: '100%',
+                      resize: 'vertical',
+                      minHeight: 74,
+                      borderRadius: 10,
+                      border: '1px solid var(--border-subtle)',
+                      background: 'rgba(255,255,255,0.02)',
+                      color: 'var(--text-heading)',
+                      padding: '10px 12px',
+                      fontSize: 12,
+                      lineHeight: 1.45,
+                    }}
+                  />
+                  <div style={{ fontSize: 11, lineHeight: 1.35, color: 'var(--text-secondary-strong)' }}>
+                    This supplements the supply-chain pass. It does not replace the selected direction or hot-path logic.
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
               <button

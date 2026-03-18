@@ -24,6 +24,7 @@ import { api } from '../lib/api';
 import type { MaterializedArtifact } from './SupplyChainOverlay';
 import type { GeoMarkerSelection } from '../hooks/useGeoMarkerLayer';
 import { humanizeCanonicalPath } from '../lib/uiUtils';
+import { useHorizonRealtimeStore } from '../stores/horizonRealtimeStore';
 
 export interface WorldMapPanelProps {
   scope?: { lensId: string };
@@ -65,8 +66,18 @@ const normalizeSupplyAnchorEntities = (entities: HorizonSearchEntity[]): Horizon
 };
 type SupplyChainSearchResult = Awaited<ReturnType<typeof api.searchSupplyChains>>['results'][number];
 type ScopeTargetMode = 'new' | 'existing';
+type DirectedExploreDirection = 'upstream' | 'downstream';
 
 const AFFECTED_ZONE_FRESHNESS_WINDOWS: AffectedZoneFreshnessWindow[] = [14, 30, 90, 180];
+
+function isDirectedExplorationCanonicalPath(canonicalPath?: string): boolean {
+  const cp = String(canonicalPath || '').trim().toLowerCase();
+  return cp.startsWith('/org/')
+    || cp.startsWith('/gov/')
+    || cp.startsWith('/fac/')
+    || cp.startsWith('/product/')
+    || cp.startsWith('/deposit/');
+}
 
 function affectedZoneTimestamp(obj: GeoObject): number | null {
   const value = obj.lastMatchedAt || obj.updatedAt || obj.createdAt;
@@ -378,6 +389,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [zoneControlsOverlayOpen, setZoneControlsOverlayOpen] = React.useState(false);
   const [routeSearchQuery, setRouteSearchQuery] = React.useState('');
   const [selectedRouteArtifactIds, setSelectedRouteArtifactIds] = React.useState<string[]>([]);
+  const [hoveredRouteArtifactIds, setHoveredRouteArtifactIds] = React.useState<string[]>([]);
   const [activeFlowModes, setActiveFlowModes] = React.useState<Set<TransportFlowMode> | null>(null);
   const [affectedZoneFreshnessDays, setAffectedZoneFreshnessDays] = React.useState<AffectedZoneFreshnessWindow>(30);
   const [showArchivedAffectedZones, setShowArchivedAffectedZones] = React.useState(false);
@@ -386,12 +398,15 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const vesselsApiAvailable = isVesselsApiAvailable();
   const [selectedObject, setSelectedObject] = React.useState<GeoObject | null>(null);
   const [selectedObjectOverlayCollapsed, setSelectedObjectOverlayCollapsed] = React.useState(false);
+  const [directedExploreSubmitting, setDirectedExploreSubmitting] = React.useState<DirectedExploreDirection | null>(null);
+  const [directedExploreError, setDirectedExploreError] = React.useState<string | null>(null);
   const [searchHighlightedObjectId, setSearchHighlightedObjectId] = React.useState<string | null>(null);
   const [stackSelection, setStackSelection] = React.useState<MapObjectStackSelection | null>(null);
   const [zoneActivityById, setZoneActivityById] = React.useState<Record<string, ZoneActivityItem>>({});
   const [flowActivityById, setFlowActivityById] = React.useState<Record<string, FlowActivityItem>>({});
   const [pathArtifacts, setPathArtifacts] = React.useState<MaterializedArtifact[]>([]);
   const [pathArtifactsLoaded, setPathArtifactsLoaded] = React.useState(false);
+  const realtimeArtifacts = useHorizonRealtimeStore((s) => s.artifacts);
   const stackSelectionRef = React.useRef<MapObjectStackSelection | null>(null);
   const routeSelectionVisibleRef = React.useRef(false);
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -528,17 +543,31 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     () => new Set(selectedRouteArtifactIds.map((value) => String(value || '').trim()).filter(Boolean)),
     [selectedRouteArtifactIds],
   );
+  const hoveredRouteArtifactIdSet = React.useMemo(
+    () => new Set(hoveredRouteArtifactIds.map((value) => String(value || '').trim()).filter(Boolean)),
+    [hoveredRouteArtifactIds],
+  );
+  const focusedRouteArtifactIdSet = React.useMemo(() => {
+    const next = new Set<string>(selectedRouteArtifactIdSet);
+    for (const artifactId of hoveredRouteArtifactIdSet) next.add(artifactId);
+    return next;
+  }, [hoveredRouteArtifactIdSet, selectedRouteArtifactIdSet]);
   const selectedRouteArtifacts = React.useMemo(
     () => routeCatalog.filter((artifact) => selectedRouteArtifactIdSet.has(String(artifact?.id || '').trim())),
     [routeCatalog, selectedRouteArtifactIdSet],
   );
-  const selectedRouteTerminalPathSet = React.useMemo(
-    () => new Set(collectArtifactTerminalPathRefs(selectedRouteArtifacts)),
-    [selectedRouteArtifacts],
+  const focusedRouteArtifacts = React.useMemo(
+    () => routeCatalog.filter((artifact) => focusedRouteArtifactIdSet.has(String(artifact?.id || '').trim())),
+    [focusedRouteArtifactIdSet, routeCatalog],
+  );
+  const focusedRouteTerminalPathSet = React.useMemo(
+    () => new Set(collectArtifactTerminalPathRefs(focusedRouteArtifacts)),
+    [focusedRouteArtifacts],
   );
   const routeSelectionVisible = selectedRouteArtifactIdSet.size > 0;
+  const routeEmphasisVisible = focusedRouteArtifactIdSet.size > 0;
   const focusedSupplyArtifactIds = React.useMemo(() => {
-    if (selectedRouteArtifactIdSet.size > 0) return Array.from(selectedRouteArtifactIdSet);
+    if (focusedRouteArtifactIdSet.size > 0) return Array.from(focusedRouteArtifactIdSet);
     const out = new Set<string>();
     for (const artifactId of activeSupplyArtifactIds) {
       const trimmed = String(artifactId || '').trim();
@@ -547,9 +576,9 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     const manualArtifactId = String((activeManualChain?.artifact as MaterializedArtifact | undefined)?.id || '').trim();
     if (manualArtifactId) out.add(manualArtifactId);
     return Array.from(out);
-  }, [activeManualChain, activeSupplyArtifactIds, selectedRouteArtifactIdSet]);
+  }, [activeManualChain, activeSupplyArtifactIds, focusedRouteArtifactIdSet]);
   const activePathArtifacts = React.useMemo(() => {
-    if (!pathLegsEnabled && !supplyNarrativeLegsVisible && !routeSelectionVisible) return [] as MaterializedArtifact[];
+    if (!pathLegsEnabled && !supplyNarrativeLegsVisible && !routeEmphasisVisible) return [] as MaterializedArtifact[];
     const merged = new Map<string, MaterializedArtifact>();
     const register = (artifact: MaterializedArtifact | null | undefined) => {
       const id = String(artifact?.id || '').trim();
@@ -567,16 +596,16 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
         register(artifact);
       }
     }
-    if (routeSelectionVisible) {
+    if (routeEmphasisVisible) {
       for (const artifact of routeCatalog) {
         const artifactId = String(artifact?.id || '').trim();
-        if (!artifactId || !selectedRouteArtifactIdSet.has(artifactId)) continue;
+        if (!artifactId || !focusedRouteArtifactIdSet.has(artifactId)) continue;
         register(artifact);
       }
     }
     return Array.from(merged.values());
-  }, [activeSupplyArtifactIds, manualPathArtifacts, pathArtifacts, pathLegsEnabled, relatedPathArtifacts, routeCatalog, routeSelectionVisible, selectedRouteArtifactIdSet, supplyNarrativeLegsVisible]);
-  const clusterProjectionEnabled = pathLegClusteringEnabled && (pathLegsEnabled || supplyNarrativeLegsVisible || routeSelectionVisible);
+  }, [activeSupplyArtifactIds, manualPathArtifacts, pathArtifacts, pathLegsEnabled, relatedPathArtifacts, routeCatalog, routeEmphasisVisible, focusedRouteArtifactIdSet, supplyNarrativeLegsVisible]);
+  const clusterProjectionEnabled = pathLegClusteringEnabled && (pathLegsEnabled || supplyNarrativeLegsVisible || routeEmphasisVisible);
   const activePathRefs = React.useMemo(() => collectArtifactPathRefs(activePathArtifacts), [activePathArtifacts]);
   const preferredOverlayObjectPaths = React.useMemo(() => {
     if (!clusterProjectionEnabled) return undefined;
@@ -605,23 +634,23 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     return Array.from(byId.values());
   }, [allObjects, discoveredObjects, overlayPathObjects]);
   const forcedRouteEndpointObjects = React.useMemo(() => {
-    if (!routeSelectionVisible || selectedRouteTerminalPathSet.size === 0) return [] as GeoObject[];
+    if (!routeEmphasisVisible || focusedRouteTerminalPathSet.size === 0) return [] as GeoObject[];
     const byId = new Map<string, GeoObject>();
     for (const object of pathOverlayObjects) {
       const canonicalPath = String(object?.canonicalPath || '').trim();
-      if (!canonicalPath || !selectedRouteTerminalPathSet.has(canonicalPath)) continue;
+      if (!canonicalPath || !focusedRouteTerminalPathSet.has(canonicalPath)) continue;
       const key = String(object?.id || canonicalPath).trim();
       if (!key || byId.has(key)) continue;
       byId.set(key, object);
     }
     return Array.from(byId.values());
-  }, [pathOverlayObjects, routeSelectionVisible, selectedRouteTerminalPathSet]);
+  }, [focusedRouteTerminalPathSet, pathOverlayObjects, routeEmphasisVisible]);
   const forcedRouteEndpointObjectIds = React.useMemo(
     () => new Set(forcedRouteEndpointObjects.map((object) => String(object?.id || '').trim()).filter(Boolean)),
     [forcedRouteEndpointObjects],
   );
   const effectiveMutedObjectIds = React.useMemo(() => {
-    if (!routeSelectionVisible) return mutedObjectIds;
+    if (!routeEmphasisVisible) return mutedObjectIds;
     const protectedIds = new Set<string>([
       ...highlightedGatewayObjectIds,
       ...Array.from(forcedRouteEndpointObjectIds),
@@ -639,7 +668,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     forcedRouteEndpointObjectIds,
     highlightedGatewayObjectIds,
     mutedObjectIds,
-    routeSelectionVisible,
+    routeEmphasisVisible,
     searchHighlightedObjectId,
     selectedObject,
     visibleMapObjects,
@@ -793,6 +822,36 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   }, [scope?.lensId]);
 
   React.useEffect(() => {
+    if (!scope?.lensId) return;
+    const items = Object.values(realtimeArtifacts || {});
+    if (items.length === 0) return;
+    setPathArtifacts((prev) => {
+      const next = new Map<string, MaterializedArtifact>();
+      for (const artifact of prev) {
+        const key = String(artifact?.id || artifact?.canonicalKey || '').trim();
+        if (!key) continue;
+        next.set(key, artifact);
+      }
+      for (const raw of items) {
+        const key = String(raw?.id || raw?.canonicalKey || '').trim();
+        if (!key) continue;
+        const current = next.get(key);
+        const candidate: MaterializedArtifact = {
+          ...(current || { id: key, kind: 'SUPPLY_CHAIN_PATH' }),
+          id: key,
+          canonicalKey: raw?.canonicalKey || current?.canonicalKey,
+          displayName: raw?.displayName || current?.displayName,
+          anchorSupplier: raw?.anchorSupplier || current?.anchorSupplier,
+          anchorCustomer: raw?.anchorCustomer || current?.anchorCustomer,
+          payload: raw?.payload || current?.payload,
+        };
+        next.set(key, candidate);
+      }
+      return Array.from(next.values());
+    });
+  }, [realtimeArtifacts, scope?.lensId]);
+
+  React.useEffect(() => {
     const availableIds = new Set(routeCatalog.map((artifact) => String(artifact.id || '').trim()).filter(Boolean));
     setSelectedRouteArtifactIds((current) => {
       const next = current.filter((id) => availableIds.has(String(id || '').trim()));
@@ -879,6 +938,12 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     setSelectedObjectOverlayCollapsed(false);
     setSelectedObject(null);
   }, [selectedObject, visibleMapObjects]);
+
+  React.useEffect(() => {
+    setDirectedExploreSubmitting(null);
+    setDirectedExploreError(null);
+    setHoveredRouteArtifactIds([]);
+  }, [selectedObject?.id]);
 
   React.useEffect(() => {
     if (!searchOpen) return;
@@ -1031,6 +1096,56 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     setSearchOpen(false);
     setSearchQuery('');
   }, [clearStackSelection, map]);
+
+  const handleDirectedExplore = React.useCallback(
+    async (direction: DirectedExploreDirection) => {
+      if (!scope?.lensId || !selectedObject) return;
+      const canonicalPath = String(selectedObject.canonicalPath || '').trim();
+      if (!isDirectedExplorationCanonicalPath(canonicalPath)) {
+        setDirectedExploreError('Directed exploration is available only for organizations, facilities, products, deposits, and government entities.');
+        return;
+      }
+
+      const correlationId = (globalThis.crypto && 'randomUUID' in globalThis.crypto)
+        ? (globalThis.crypto as any).randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const sessionId = (window as any).__horizonSessionId || correlationId;
+      (window as any).__horizonSessionId = sessionId;
+      const fragmentId = String(selectedObject.id || '').trim();
+
+      try {
+        setDirectedExploreSubmitting(direction);
+        setDirectedExploreError(null);
+        await api.scopeScoutHorizonLensNode(
+          scope.lensId,
+          {
+            canonicalPath,
+            fragmentId: fragmentId || undefined,
+            maxRecursionDepth: 1,
+            mode: 'supply_chain',
+            specialties: ['supply_chain', 'products_and_services'],
+            exploration: {
+              domainMode: 'supply_chain',
+              direction,
+              hotPathNodeIds: fragmentId ? [fragmentId] : undefined,
+              renderTarget: 'map',
+              ignoreFreshness: true,
+            },
+          },
+          { correlationId, sessionId },
+        );
+      } catch (error: any) {
+        const detail =
+          String(error?.response?.data?.error || '').trim()
+          || String(error?.response?.data?.detail || '').trim()
+          || String(error?.message || '').trim();
+        setDirectedExploreError(detail || 'Failed to start directed exploration.');
+      } finally {
+        setDirectedExploreSubmitting(null);
+      }
+    },
+    [scope?.lensId, selectedObject],
+  );
 
   const resolveSupplyAnchor = React.useCallback(async (query: string): Promise<HorizonSearchEntity | null> => {
     const trimmed = query.trim();
@@ -1386,7 +1501,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     activePathArtifacts,
     pathOverlayObjects,
     theme,
-    pathLegsEnabled || (!pathLegClusteringEnabled && (supplyNarrativeLegsVisible || routeSelectionVisible)),
+    pathLegsEnabled || (!pathLegClusteringEnabled && (supplyNarrativeLegsVisible || routeEmphasisVisible)),
     focusedSupplyArtifactIds,
     pathLegClusterState.visibilityPolicy,
   );
@@ -2980,6 +3095,21 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
             traceSummary={traceSummary}
             activeNarrativeKey={activeNarrativeKey}
             onNarrativeHover={setActiveNarrativeKey}
+            activeSupplyRouteIds={hoveredRouteArtifactIds}
+            onSupplyRouteHover={setHoveredRouteArtifactIds}
+            directedExploreSupported={Boolean(scope?.lensId) && isDirectedExplorationCanonicalPath(selectedObject?.canonicalPath)}
+            directedExploreBusy={directedExploreSubmitting}
+            directedExploreError={directedExploreError}
+            directedExploreDisabledReason={
+              !scope?.lensId
+                ? 'Open the map inside a lens to run directed exploration.'
+                : !isDirectedExplorationCanonicalPath(selectedObject?.canonicalPath)
+                  ? 'This object type is not supported for directed supply-chain exploration.'
+                  : undefined
+            }
+            onDirectedExplore={(direction) => {
+              void handleDirectedExplore(direction);
+            }}
             onClose={() => {
               setActiveNarrativeKey(null);
               setSelectedObjectOverlayCollapsed(true);

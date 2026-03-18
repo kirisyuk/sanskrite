@@ -45,6 +45,18 @@ export interface SupplyChainOverlayPathRef {
   productName?: string;
 }
 
+export interface DirectedSupplyChainExplorationRequest {
+  domainMode: 'supply_chain';
+  direction: 'upstream' | 'downstream';
+  hotPathOnly?: boolean;
+  hotPathNodeIds?: string[];
+  includeCapabilities?: boolean;
+  includeEdgeMetrics?: boolean;
+  customQuery?: string;
+  renderTarget: 'graph' | 'map';
+  ignoreFreshness?: boolean;
+}
+
 export interface SupplyChainOverlayNode {
   fragmentId?: string;
   canonicalPath?: string;
@@ -2002,6 +2014,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       maxRecursionDepth?: number;
       mode?: ScoutingMode;
       specialties?: string[];
+      exploration?: DirectedSupplyChainExplorationRequest;
     },
     options?: { correlationId?: string; sessionId?: string }
   ): Promise<{
@@ -2028,7 +2041,12 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
    */
   async scopeScoutHorizonLensQuery(
     lensId: string,
-    input: { query: string; mode?: ScoutingMode; specialties?: string[] },
+    input: {
+      query: string;
+      mode?: ScoutingMode;
+      specialties?: string[];
+      exploration?: DirectedSupplyChainExplorationRequest;
+    },
     options?: { correlationId?: string; sessionId?: string }
   ): Promise<{
     jobId: string;

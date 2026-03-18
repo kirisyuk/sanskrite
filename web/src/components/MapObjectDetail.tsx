@@ -16,6 +16,13 @@ interface MapObjectDetailProps {
   traceSummary: GeoEdgeTraceSummary | null;
   activeNarrativeKey: string | null;
   onNarrativeHover: (key: string | null) => void;
+  activeSupplyRouteIds?: string[];
+  onSupplyRouteHover?: (artifactIds: string[]) => void;
+  directedExploreSupported?: boolean;
+  directedExploreBusy?: 'upstream' | 'downstream' | null;
+  directedExploreError?: string | null;
+  directedExploreDisabledReason?: string;
+  onDirectedExplore?: (direction: 'upstream' | 'downstream') => void;
   onClose: () => void;
 }
 
@@ -131,6 +138,13 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
   traceSummary,
   activeNarrativeKey,
   onNarrativeHover,
+  activeSupplyRouteIds = [],
+  onSupplyRouteHover,
+  directedExploreSupported = false,
+  directedExploreBusy = null,
+  directedExploreError = null,
+  directedExploreDisabledReason,
+  onDirectedExplore,
   onClose,
 }) => {
   const [viewport, setViewport] = React.useState(() => ({
@@ -306,6 +320,83 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
 
         {isCollapsed ? null : (
           <>
+            <div style={sectionCardStyle(isDark)}>
+              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
+                Directed Exploration
+              </div>
+              <div style={{ marginTop: 6, fontSize: 12, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                Expand the current lens from this object and stream materialized paths directly back into the map.
+              </div>
+              <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+                {([
+                  {
+                    direction: 'downstream' as const,
+                    label: 'Explore downstream',
+                    desc: 'Follow exposed dependencies, customers, and affected flows.',
+                  },
+                  {
+                    direction: 'upstream' as const,
+                    label: 'Explore upstream',
+                    desc: 'Trace suppliers, origin dependencies, and source infrastructure.',
+                  },
+                ]).map((action) => {
+                  const active = directedExploreBusy === action.direction;
+                  const disabled = !directedExploreSupported || !onDirectedExplore || Boolean(directedExploreBusy);
+                  return (
+                    <button
+                      key={action.direction}
+                      type="button"
+                      onClick={() => {
+                        if (disabled) return;
+                        onDirectedExplore?.(action.direction);
+                      }}
+                      disabled={disabled}
+                      style={{
+                        textAlign: 'left',
+                        padding: '10px 10px 9px',
+                        borderRadius: 10,
+                        border: '1px solid rgba(96,165,250,0.18)',
+                        background: active
+                          ? (isDark ? 'rgba(59,130,246,0.18)' : 'rgba(59,130,246,0.10)')
+                          : (isDark ? 'rgba(148,163,184,0.06)' : 'rgba(15,23,42,0.025)'),
+                        color: 'var(--text-heading)',
+                        cursor: disabled ? 'not-allowed' : 'pointer',
+                        opacity: disabled ? 0.55 : 1,
+                      }}
+                    >
+                      <div style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.2 }}>
+                        {active ? 'Starting…' : action.label}
+                      </div>
+                      <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-secondary-strong)', lineHeight: 1.35 }}>
+                        {action.desc}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+              {!directedExploreSupported && directedExploreDisabledReason && (
+                <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.4, color: 'var(--text-secondary-strong)' }}>
+                  {directedExploreDisabledReason}
+                </div>
+              )}
+              {directedExploreError && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    padding: '8px 9px',
+                    borderRadius: 10,
+                    background: isDark ? 'rgba(239,68,68,0.12)' : 'rgba(239,68,68,0.08)',
+                    border: isDark ? '1px solid rgba(248,113,113,0.18)' : '1px solid rgba(239,68,68,0.16)',
+                    fontSize: 11,
+                    lineHeight: 1.4,
+                    color: isDark ? '#fca5a5' : '#b91c1c',
+                  }}
+                >
+                  {directedExploreError}
+                </div>
+              )}
+            </div>
+
             <div style={sectionCardStyle(isDark)}>
               <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: accent }}>
                 Risk Overview
@@ -485,7 +576,10 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
                   <div
                     key={group.id}
                     onMouseEnter={() => onNarrativeHover(group.narrativeKey)}
-                    onMouseLeave={() => onNarrativeHover(null)}
+                    onMouseLeave={() => {
+                      onNarrativeHover(null);
+                      onSupplyRouteHover?.([]);
+                    }}
                     style={narrativeBlockStyle(isDark, activeNarrativeKey === group.narrativeKey, isDark ? '#fbbf24' : '#b45309')}
                   >
                     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
@@ -522,8 +616,30 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
                       </div>
                     </div>
                     <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      {group.paths.slice(0, 4).map((path) => (
-                        <div key={path.id} style={{ paddingLeft: 10, borderLeft: isDark ? '2px solid rgba(245, 158, 11, 0.4)' : '2px solid rgba(180, 83, 9, 0.28)' }}>
+                      {group.paths.slice(0, 4).map((path) => {
+                        const routeActive = activeSupplyRouteIds.includes(String(path.id || '').trim());
+                        return (
+                        <div
+                          key={path.id}
+                          onMouseEnter={() => {
+                            onNarrativeHover(null);
+                            onSupplyRouteHover?.([String(path.id || '').trim()]);
+                          }}
+                          onMouseLeave={() => {
+                            onSupplyRouteHover?.([]);
+                          }}
+                          style={{
+                            paddingLeft: 10,
+                            borderLeft: routeActive
+                              ? (isDark ? '2px solid rgba(251, 191, 36, 0.95)' : '2px solid rgba(180, 83, 9, 0.9)')
+                              : (isDark ? '2px solid rgba(245, 158, 11, 0.4)' : '2px solid rgba(180, 83, 9, 0.28)'),
+                            borderRadius: 8,
+                            background: routeActive
+                              ? (isDark ? 'rgba(251, 191, 36, 0.10)' : 'rgba(245, 158, 11, 0.09)')
+                              : 'transparent',
+                            transition: 'background 140ms ease, border-color 140ms ease',
+                          }}
+                        >
                           <div style={{ fontSize: 11, fontWeight: 700 }}>
                             {path.title}
                           </div>
@@ -537,7 +653,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
                             {path.reason}
                           </div>
                         </div>
-                      ))}
+                      )})}
                       {group.paths.length > 4 && (
                         <div style={{ fontSize: 10, color: 'var(--text-secondary-strong)' }}>
                           +{group.paths.length - 4} more mapped destination{group.paths.length - 4 > 1 ? 's' : ''}

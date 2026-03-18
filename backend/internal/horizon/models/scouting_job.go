@@ -53,7 +53,7 @@ type ScoutingStrategy string
 
 const (
 	ScoutingStrategySnapshot ScoutingStrategy = "Snapshot" // Быстрый снимок (≤ 1 минуты)
-	ScoutingStrategyDeepDive ScoutingStrategy = "DeepDive"  // Глубокое исследование (≤ 30 минут)
+	ScoutingStrategyDeepDive ScoutingStrategy = "DeepDive" // Глубокое исследование (≤ 30 минут)
 )
 
 // ChargeModel модель оплаты
@@ -61,8 +61,21 @@ type ChargeModel string
 
 const (
 	ChargeModelBounty ChargeModel = "Bounty" // Первый проект оплачивает создание
-	ChargeModelAccess ChargeModel = "Access"  // Последующие проекты получают доступ
+	ChargeModelAccess ChargeModel = "Access" // Последующие проекты получают доступ
 )
+
+// DirectedExplorationConfig configures a user-driven directed supply-chain expansion run.
+type DirectedExplorationConfig struct {
+	DomainMode          string   `json:"domainMode,omitempty" firestore:"domainMode,omitempty"`
+	Direction           string   `json:"direction,omitempty" firestore:"direction,omitempty"`
+	HotPathOnly         bool     `json:"hotPathOnly,omitempty" firestore:"hotPathOnly,omitempty"`
+	HotPathNodeIDs      []string `json:"hotPathNodeIds,omitempty" firestore:"hotPathNodeIds,omitempty"`
+	IncludeCapabilities bool     `json:"includeCapabilities,omitempty" firestore:"includeCapabilities,omitempty"`
+	IncludeEdgeMetrics  bool     `json:"includeEdgeMetrics,omitempty" firestore:"includeEdgeMetrics,omitempty"`
+	CustomQuery         string   `json:"customQuery,omitempty" firestore:"customQuery,omitempty"`
+	RenderTarget        string   `json:"renderTarget,omitempty" firestore:"renderTarget,omitempty"`
+	IgnoreFreshness     bool     `json:"ignoreFreshness,omitempty" firestore:"ignoreFreshness,omitempty"`
+}
 
 // ScoutingJobParams carries the parameters needed to create a new ScoutingJob.
 // Used by QAScoutRequestBuilder to bridge QA sufficiency gaps into scouting work.
@@ -75,4 +88,3 @@ type ScoutingJobParams struct {
 	RecommendedFacets   []string `json:"recommendedFacets,omitempty"`
 	Strategy            string   `json:"strategy"`
 }
-

@@ -3907,6 +3907,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		e.logLine(ctx, job, "info", fmt.Sprintf("> tier2 fast path bypassed for high-risk target: %s", strings.TrimSpace(effectiveCanonicalPath)))
 	}
 
+	directedExplorationActive := isDirectedSupplyChainExplorationJob(job)
+
 	if existingFragment != nil {
 		freshnessThreshold := 1 * time.Hour // Для теста. В проде может быть конфигурируемо.
 		freshnessEligible := isFreshSkipEligible(existingFragment)
@@ -4018,14 +4020,16 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 						"epistemicStatus": string(existingFragment.Metadata.EpistemicStatus),
 						"version":         existingFragment.Version,
 					})
-					return nil
+					if !directedExplorationActive {
+						return nil
+					}
 				}
 			}
 		}
 
 		// If fragment is fresh AND there are no new facts since watermark, skip expensive scouting.
 		// IMPORTANT: do NOT skip Watchdog-driven jobs (they carry explicit SourceIDs and are triggered by content changes).
-		if isFresh && len(facts) == 0 && len(job.SourceIDs) == 0 {
+		if isFresh && len(facts) == 0 && len(job.SourceIDs) == 0 && !directedExplorationShouldIgnoreFreshness(job) {
 			fmt.Printf("[ScoutEngine] Data for %s is fresh (verified %v ago) and no new facts. Skipping active scouting.\n",
 				job.TargetCanonicalPath, time.Since(existingFragment.Metadata.LastVerifiedAt))
 			e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stagePlanning, true, "fresh_data_skip_planning")
@@ -5974,6 +5978,7 @@ SKIP_METRICS:
 	} else {
 		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageEntitySupplyChainMaterialize, false, "supply_chain_materialization_skip_no_chains")
 	}
+	e.runDirectedSupplyChainExploration(ctx, job)
 
 	// POLICY ENFORCEMENT: Run final validation on all created/modified entities
 	if job.State == nil {
@@ -7722,6 +7727,7 @@ func (e *ScoutEngine) tryResumeEntityPersistence(ctx context.Context, job *model
 	} else {
 		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageEntitySupplyChainMaterialize, false, "supply_chain_materialization_skip_no_chains")
 	}
+	e.runDirectedSupplyChainExploration(ctx, job)
 
 	// Finalize
 	if err := e.finalizePipelineRun(ctx, job, pipelineFinalizeInput{

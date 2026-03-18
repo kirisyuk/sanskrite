@@ -56,9 +56,21 @@ export interface HorizonEdgeState {
   edgeId: string;
   sourceFragmentId?: string;
   targetFragmentId?: string;
+  sourceCanonicalPath?: string;
+  targetCanonicalPath?: string;
   type?: string;
   properties?: any;
   qualifiers?: any;
+  updatedAt?: number;
+}
+
+export interface HorizonArtifactState {
+  id: string;
+  canonicalKey?: string;
+  displayName?: string;
+  anchorSupplier?: string;
+  anchorCustomer?: string;
+  payload?: any;
   updatedAt?: number;
 }
 
@@ -91,6 +103,7 @@ interface HorizonRealtimeStore {
   jobs: Record<string, HorizonScoutJobState>;
   nodes: Record<string, HorizonNodeState>; // key: fragmentId || canonicalPath
   edges: Record<string, HorizonEdgeState>; // key: edgeId
+  artifacts: Record<string, HorizonArtifactState>; // key: artifact id || canonicalKey
   events: HorizonRealtimeEvent[];
 
   handleWsEvent: (type: string, data: any) => void;
@@ -133,9 +146,10 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
     jobs: {},
     nodes: {},
     edges: {},
+    artifacts: {},
     events: [],
 
-    reset: () => set({ assembly: {}, jobs: {}, nodes: {}, edges: {} }),
+    reset: () => set({ assembly: {}, jobs: {}, nodes: {}, edges: {}, artifacts: {} }),
     resetEvents: () => set({ events: [] }),
 
     handleWsEvent: (type, dataIn) => {
@@ -546,6 +560,25 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
           text = parts.length > 0 ? `${title} — ${parts.join(' • ')}` : title;
           humanReadable = {
             title,
+            description: parts.length > 0 ? parts.join(' • ') : undefined,
+          };
+        } else if (type === 'horizon.supply_chain.exploration.materialized') {
+          icon = 'success';
+          const direction = typeof data?.direction === 'string' ? data.direction.trim() : '';
+          const renderTarget = typeof data?.renderTarget === 'string' ? data.renderTarget.trim() : '';
+          const nodesN = Array.isArray(data?.nodes) ? data.nodes.length : 0;
+          const edgesN = Array.isArray(data?.edges) ? data.edges.length : 0;
+          const artifactsN = Array.isArray(data?.artifacts) ? data.artifacts.length : 0;
+          const parts = [
+            direction ? `direction=${direction}` : '',
+            renderTarget ? `target=${renderTarget}` : '',
+            nodesN > 0 ? `nodes=${nodesN}` : '',
+            edgesN > 0 ? `edges=${edgesN}` : '',
+            artifactsN > 0 ? `artifacts=${artifactsN}` : '',
+          ].filter(Boolean);
+          text = parts.length > 0 ? `Directed exploration materialized — ${parts.join(' • ')}` : 'Directed exploration materialized';
+          humanReadable = {
+            title: 'Directed Exploration Materialized',
             description: parts.length > 0 ? parts.join(' • ') : undefined,
           };
         } else if (type === 'horizon.scout.job.log') {
@@ -1174,6 +1207,10 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
                 data?.sourceFragmentId ?? s.edges[edgeId]?.sourceFragmentId,
               targetFragmentId:
                 data?.targetFragmentId ?? s.edges[edgeId]?.targetFragmentId,
+              sourceCanonicalPath:
+                data?.sourceCanonicalPath ?? s.edges[edgeId]?.sourceCanonicalPath,
+              targetCanonicalPath:
+                data?.targetCanonicalPath ?? s.edges[edgeId]?.targetCanonicalPath,
               type: data?.type ?? s.edges[edgeId]?.type,
               properties: data?.properties ?? s.edges[edgeId]?.properties,
               qualifiers: data?.qualifiers ?? s.edges[edgeId]?.qualifiers,
@@ -1229,6 +1266,62 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
       }
       if (type === 'horizon.lens.updated') {
         // no-op for now; LensCanvas can refetch via HTTP
+        return;
+      }
+      if (type === 'horizon.supply_chain.exploration.materialized') {
+        set((s) => {
+          const nextNodes = { ...s.nodes };
+          const nextEdges = { ...s.edges };
+          const nextArtifacts = { ...s.artifacts };
+          for (const raw of Array.isArray(data?.nodes) ? data.nodes : []) {
+            const key = keyForNode(raw);
+            if (!key) continue;
+            nextNodes[key] = {
+              ...nextNodes[key],
+              canonicalPath: raw?.canonicalPath ?? nextNodes[key]?.canonicalPath,
+              label: raw?.label ?? nextNodes[key]?.label,
+              type: raw?.type ?? nextNodes[key]?.type,
+              updatedAt: now,
+            };
+          }
+          for (const raw of Array.isArray(data?.edges) ? data.edges : []) {
+            const edgeId = typeof raw?.edgeId === 'string' ? raw.edgeId : '';
+            if (!edgeId) continue;
+            nextEdges[edgeId] = {
+              ...(nextEdges[edgeId] || { edgeId }),
+              edgeId,
+              sourceCanonicalPath: raw?.sourceCanonicalPath ?? nextEdges[edgeId]?.sourceCanonicalPath,
+              targetCanonicalPath: raw?.targetCanonicalPath ?? nextEdges[edgeId]?.targetCanonicalPath,
+              type: raw?.type ?? nextEdges[edgeId]?.type,
+              qualifiers: raw?.qualifiers ?? nextEdges[edgeId]?.qualifiers,
+              updatedAt: now,
+            };
+          }
+          for (const raw of Array.isArray(data?.artifacts) ? data.artifacts : []) {
+            const artifactId =
+              typeof raw?.id === 'string' && raw.id.trim()
+                ? raw.id.trim()
+                : typeof raw?.canonicalKey === 'string'
+                  ? raw.canonicalKey.trim()
+                  : '';
+            if (!artifactId) continue;
+            nextArtifacts[artifactId] = {
+              ...(nextArtifacts[artifactId] || { id: artifactId }),
+              id: artifactId,
+              canonicalKey: raw?.canonicalKey ?? nextArtifacts[artifactId]?.canonicalKey,
+              displayName: raw?.displayName ?? nextArtifacts[artifactId]?.displayName,
+              anchorSupplier: raw?.anchorSupplier ?? nextArtifacts[artifactId]?.anchorSupplier,
+              anchorCustomer: raw?.anchorCustomer ?? nextArtifacts[artifactId]?.anchorCustomer,
+              payload: raw?.payload ?? nextArtifacts[artifactId]?.payload,
+              updatedAt: now,
+            };
+          }
+          return {
+            nodes: pruneNodes(nextNodes),
+            edges: pruneEdges(nextEdges),
+            artifacts: nextArtifacts,
+          };
+        });
         return;
       }
     },

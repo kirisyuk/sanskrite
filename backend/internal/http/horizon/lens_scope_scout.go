@@ -21,7 +21,8 @@ type scopeScoutLensNodeRequest struct {
 	// Optional UI scouting mode: general | supply_chain | governance.
 	Mode string `json:"mode,omitempty"`
 	// Optional: enables specialized scout/research modules (e.g., ["management","products_and_services"])
-	Specialties []string `json:"specialties,omitempty"`
+	Specialties []string                              `json:"specialties,omitempty"`
+	Exploration *scopeScoutDirectedExplorationRequest `json:"exploration,omitempty"`
 }
 
 type scopeScoutLensNodeResponse struct {
@@ -125,6 +126,15 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "canonicalPath or fragmentId required", http.StatusBadRequest)
 		return
 	}
+	directedExploration, derr := normalizeDirectedExploration(body.Exploration)
+	if derr != nil {
+		http.Error(w, derr.Error(), http.StatusBadRequest)
+		return
+	}
+	if directedExploration != nil && !isAllowedSupplyChainAnchorPath(targetCanonicalPath) {
+		http.Error(w, "directed exploration anchor must be org/gov/fac/product/deposit", http.StatusBadRequest)
+		return
+	}
 
 	// Attach realtime ctx (best-effort)
 	ctx := rtctx.With(r.Context(), rtctx.Context{
@@ -179,6 +189,30 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 		mergedSpecialties := append([]string(nil), body.Specialties...)
 		mergedSpecialties = append(mergedSpecialties, specialtiesForScopeScoutMode(scoutingMode)...)
 		specialties := taxonomy.NormalizeSpecialties(mergedSpecialties)
+		trigger := "ui.graph.scope_scout"
+		hotPathCanonicalPaths := []string(nil)
+		if directedExploration != nil {
+			hotPathCanonicalPaths = make([]string, 0, len(directedExploration.HotPathNodeIDs))
+			for _, fragmentID := range directedExploration.HotPathNodeIDs {
+				if h.service.Fragments() == nil {
+					break
+				}
+				frag, ferr := h.service.Fragments().Get(r.Context(), fragmentID)
+				if ferr != nil || frag == nil {
+					continue
+				}
+				cp := strings.TrimSpace(frag.CanonicalPath)
+				if cp == "" {
+					continue
+				}
+				hotPathCanonicalPaths = append(hotPathCanonicalPaths, cp)
+			}
+			if directedExploration.RenderTarget == "map" {
+				trigger = "ui.map.directed_explore"
+			} else {
+				trigger = "ui.graph.directed_explore"
+			}
+		}
 		state := map[string]interface{}{
 			"targetCanonicalPath":          targetCanonicalPath,
 			"lensId":                       lens.ID,
@@ -186,13 +220,20 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 			"scoutingStrategy":             string(models.ScoutingStrategySnapshot),
 			"recursionDepth":               0.0,
 			"maxRecursionDepth":            float64(maxDepth),
-			"trigger":                      "ui.graph.scope_scout",
+			"trigger":                      trigger,
 			"uiScoutingMode":               scoutingMode,
 			"correlationId":                correlationID,
 			"relationChildSchedulingOptIn": true, // User explicitly requested hop depth — allow relation children regardless of domain expansion
 		}
 		if scoutingMode == taxonomy.DomainModeSupplyChain || scoutingMode == taxonomy.DomainModeGovernance {
 			state["domainModes"] = []string{scoutingMode}
+		}
+		if directedExploration != nil {
+			state["directedExploration"] = directedExploration
+			if len(hotPathCanonicalPaths) > 0 {
+				state["hotPathCanonicalPaths"] = hotPathCanonicalPaths
+			}
+			state["ignoreFreshnessForUserRequest"] = directedExploration.IgnoreFreshness
 		}
 		if len(specialties) > 0 {
 			state["specialties"] = specialties
