@@ -119,6 +119,31 @@ func TestBuildFocusedSupplyChainHotPathQuery_UsesDerivedProducts(t *testing.T) {
 	}
 }
 
+func TestBuildFocusedSupplyChainHotPathQuery_FallsBackToCandidateProductFamilies(t *testing.T) {
+	query := agents.SupplyChainQuery{
+		Anchor:        "/product/raw/gas/helium",
+		AnchorType:    "product",
+		Direction:     "both",
+		Depth:         4,
+		ProductFilter: []string{"helium"},
+	}
+	prePlan := &agents.SupplyChainPreHotPathPlan{
+		Strategy:                 "industrial_components",
+		CandidateProductFamilies: []string{"liquid helium", "industrial helium supply"},
+	}
+
+	focused := buildFocusedSupplyChainHotPathQuery(query, prePlan)
+	if focused == nil {
+		t.Fatalf("expected focused query variant from candidate product families")
+	}
+	if len(focused.ProductFilter) != 2 {
+		t.Fatalf("expected candidate families to become focused filters, got %#v", focused.ProductFilter)
+	}
+	if focused.ProductFilter[0] != "liquid helium" {
+		t.Fatalf("expected first candidate family to be preserved, got %#v", focused.ProductFilter)
+	}
+}
+
 func TestDeriveSupplyChainHotPathVariants_DedupsOriginalWhenNoNovelDerivedFilters(t *testing.T) {
 	query := agents.SupplyChainQuery{
 		Anchor:        "/org/qa/qatarenergy",

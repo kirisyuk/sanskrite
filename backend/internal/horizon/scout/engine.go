@@ -3557,7 +3557,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	{
 		cp := strings.TrimSpace(job.TargetCanonicalPath)
 		if strings.HasPrefix(strings.ToLower(cp), "/domain/v1/") {
-			if norm, nerr := taxonomy.NormalizeDomainCanonicalPath(cp); nerr == nil && strings.TrimSpace(norm) != "" &&
+			if norm := NormalizeRuntimeDomainCanonicalPath(cp); strings.TrimSpace(norm) != "" &&
 				!canonicalPathsEquivalentForRetarget(cp, norm) {
 				old := cp
 				job.TargetCanonicalPath = strings.TrimSpace(norm)

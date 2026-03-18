@@ -1744,9 +1744,7 @@ func normalizeDomainPathForMatch(cp string) string {
 		return ""
 	}
 	if strings.HasPrefix(cp, "/domain/") {
-		if norm, err := taxonomy.NormalizeDomainCanonicalPath(cp); err == nil && strings.TrimSpace(norm) != "" {
-			return strings.TrimSpace(norm)
-		}
+		return NormalizeRuntimeDomainCanonicalPath(cp)
 	}
 	return cp
 }
@@ -2833,6 +2831,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	if domainCP == "" {
 		domainCP = strings.TrimSpace(job.TargetCanonicalPath)
 	}
+	domainCP = NormalizeRuntimeDomainCanonicalPath(domainCP)
 	if domainCP == "" || !strings.HasPrefix(domainCP, "/domain/") {
 		return nil
 	}
@@ -4075,6 +4074,7 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 	if domainCP == "" {
 		domainCP = strings.TrimSpace(job.TargetCanonicalPath)
 	}
+	domainCP = NormalizeRuntimeDomainCanonicalPath(domainCP)
 	if domainCP == "" || !strings.HasPrefix(domainCP, "/domain/") {
 		return nil
 	}
@@ -8449,7 +8449,7 @@ func deriveSupplyChainHotPathVariants(query agents.SupplyChainQuery, prePlan *ag
 }
 
 func buildFocusedSupplyChainHotPathQuery(query agents.SupplyChainQuery, prePlan *agents.SupplyChainPreHotPathPlan) *agents.SupplyChainQuery {
-	if prePlan == nil || len(prePlan.DerivedProductFilters) == 0 {
+	if prePlan == nil {
 		return nil
 	}
 	existing := make(map[string]struct{}, len(query.ProductFilter))
@@ -8458,9 +8458,13 @@ func buildFocusedSupplyChainHotPathQuery(query agents.SupplyChainQuery, prePlan 
 			existing[key] = struct{}{}
 		}
 	}
-	filters := make([]string, 0, len(prePlan.DerivedProductFilters))
+	candidates := append([]string(nil), prePlan.DerivedProductFilters...)
+	if len(candidates) == 0 {
+		candidates = append(candidates, prePlan.CandidateProductFamilies...)
+	}
+	filters := make([]string, 0, len(candidates))
 	novel := false
-	for _, raw := range prePlan.DerivedProductFilters {
+	for _, raw := range candidates {
 		trimmed := strings.TrimSpace(raw)
 		if trimmed == "" {
 			continue

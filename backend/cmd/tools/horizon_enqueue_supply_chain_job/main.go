@@ -64,7 +64,7 @@ func main() {
 	defer dispatcher.Close()
 
 	now := time.Now().UTC()
-	target := strings.TrimSpace(*targetDomain)
+	target := horizonscout.NormalizeRuntimeDomainCanonicalPath(strings.TrimSpace(*targetDomain))
 	anchorValue := strings.TrimSpace(*anchor)
 	mode := strings.TrimSpace(*graphBuildMode)
 	if mode == "" {
