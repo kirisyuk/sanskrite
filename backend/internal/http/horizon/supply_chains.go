@@ -140,6 +140,7 @@ func (h *HorizonHandlers) SearchSupplyChains(w http.ResponseWriter, r *http.Requ
 			linkageSummary["fullyLinked"]++
 		}
 		annotateSupplyChainTraceArtifact(&artifactCopy, firstAnchor(req.Anchors))
+		annotateSupplyChainArtifactRiskOverlay(&artifactCopy)
 		score, match, previewPayload := buildSupplyChainSearchProjection(&artifactCopy, req.Anchors, req.MaxLegs)
 		if artifactCopy.IsPinned {
 			pinnedCount++
@@ -190,6 +191,7 @@ func (h *HorizonHandlers) SearchSupplyChains(w http.ResponseWriter, r *http.Requ
 			"directional": directedCount,
 			"clipped":     clippedCount,
 		},
+		"riskOverlay": buildSupplyChainLensRiskOverlay(artifactsFromSearchResults(results)),
 		"linkageSummary": linkageSummary,
 		"cache": map[string]interface{}{
 			"hit":    false,
@@ -266,6 +268,7 @@ func (h *HorizonHandlers) GetSupplyChainsByNode(w http.ResponseWriter, r *http.R
 	for _, artifact := range artifacts {
 		annotateSupplyChainTraceArtifact(artifact, canonicalPath)
 	}
+	annotateSupplyChainArtifactRiskOverlays(artifacts)
 	annotateSupplyChainFamilyArtifacts(artifacts)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -275,6 +278,7 @@ func (h *HorizonHandlers) GetSupplyChainsByNode(w http.ResponseWriter, r *http.R
 		"chains":   artifacts,
 		"total":    len(artifacts),
 		"families": countSupplyChainFamilies(artifacts),
+		"riskOverlay": buildSupplyChainLensRiskOverlay(artifacts),
 	})
 }
 
@@ -320,6 +324,7 @@ func (h *HorizonHandlers) GetSupplyChainsByLens(w http.ResponseWriter, r *http.R
 		return
 	}
 	chains := append(scopedChains, discoveredChains...)
+	annotateSupplyChainArtifactRiskOverlays(chains)
 	annotateSupplyChainFamilyArtifacts(chains)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -330,6 +335,7 @@ func (h *HorizonHandlers) GetSupplyChainsByLens(w http.ResponseWriter, r *http.R
 		"families":        countSupplyChainFamilies(chains),
 		"scopedTotal":     len(scopedChains),
 		"discoveredTotal": len(discoveredChains),
+		"riskOverlay":     buildSupplyChainLensRiskOverlay(chains),
 	})
 }
 
@@ -566,6 +572,16 @@ func filterSupplyChainCandidates(artifacts []*horizonmodels.MaterializedArtifact
 		}
 		seen[artifact.ID] = struct{}{}
 		out = append(out, artifact)
+	}
+	return out
+}
+
+func artifactsFromSearchResults(results []supplyChainSearchResult) []*horizonmodels.MaterializedArtifact {
+	out := make([]*horizonmodels.MaterializedArtifact, 0, len(results))
+	for _, result := range results {
+		if result.Artifact != nil {
+			out = append(out, result.Artifact)
+		}
 	}
 	return out
 }

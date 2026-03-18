@@ -116,6 +116,7 @@ type MaterializedArtifact struct {
 	FamilyValidatedCount int                      `json:"familyValidatedCount,omitempty" firestore:"-"`
 	FamilyGapCount       int                      `json:"familyGapCount,omitempty" firestore:"-"`
 	TraceEndpoints       *SupplyChainTraceContext `json:"traceEndpoints,omitempty" firestore:"-"`
+	RiskOverlay          *SupplyChainPathRiskOverlay `json:"riskOverlay,omitempty" firestore:"-"`
 }
 
 type SupplyChainTraceEndpoint struct {

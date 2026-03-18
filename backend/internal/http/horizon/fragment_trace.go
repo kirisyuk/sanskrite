@@ -36,9 +36,10 @@ type fragmentTraceGraph struct {
 }
 
 type fragmentTraceSupplyChains struct {
-	Chains  []interface{}                 `json:"chains"`
-	Total   int                           `json:"total"`
-	Summary fragmentTraceSupplyChainStats `json:"summary,omitempty"`
+	Chains      []interface{}                            `json:"chains"`
+	Total       int                                      `json:"total"`
+	Summary     fragmentTraceSupplyChainStats            `json:"summary,omitempty"`
+	RiskOverlay *horizonmodels.SupplyChainObjectRiskOverlay `json:"riskOverlay,omitempty"`
 }
 
 type fragmentTraceSupplyChainStats struct {
@@ -127,6 +128,7 @@ func (h *HorizonHandlers) GetFragmentTrace(w http.ResponseWriter, r *http.Reques
 	centerFrag, _ := h.service.Fragments().Get(r.Context(), fragmentID)
 	relatedChains, err := h.collectFragmentTraceSupplyChains(r.Context(), centerFrag, strings.TrimSpace(r.URL.Query().Get("lensId")))
 	if err == nil && len(relatedChains) > 0 {
+		annotateSupplyChainArtifactRiskOverlays(relatedChains)
 		resp.SupplyChains.Chains = make([]interface{}, 0, len(relatedChains))
 		for _, chain := range relatedChains {
 			resp.SupplyChains.Chains = append(resp.SupplyChains.Chains, chain)
@@ -153,6 +155,7 @@ func (h *HorizonHandlers) GetFragmentTrace(w http.ResponseWriter, r *http.Reques
 		fragmentMap[strings.TrimSpace(centerFrag.ID)] = centerFrag
 	}
 	resp.Explain = buildFragmentTraceExplain(centerFrag, resp.Graph, fragmentMap, relatedChains, resp.Propagation)
+	resp.SupplyChains.RiskOverlay = buildSupplyChainObjectRiskOverlay(centerFrag, relatedChains, fragmentMap)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
