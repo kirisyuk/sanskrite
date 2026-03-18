@@ -145,6 +145,44 @@ Choose unit by product type: batteries/energy → gwh; ores/chemicals → metric
 `
 }
 
+func strategyCapabilityMetricWhitelistBlock() string {
+	return `REUSABLE CAPABILITY METRICS (carrier × product baseline):
+- When evidence exists, carrierProductObservations are EXPECTED, not optional.
+- Use carrierProductObservations for reusable actor×product baseline facts that can apply across many customer links.
+- Prefer these reusable metric keys when supported by evidence:
+  - annual_capacity
+  - annual_output
+  - lead_time_days_baseline
+  - lead_time_volatility_days
+  - inventory_days_baseline
+  - on_time_delivery_baseline
+  - technical_substitutability
+  - regulatory_substitutability
+  - service_criticality
+  - quality_score
+  - purity_percent
+  - utilization_rate
+  - available_export_share
+- Example:
+  {
+    "carrierRef": "/fac/qa/ras-laffan-lng-complex",
+    "productRef": "/product/raw/hydrocarbon/liquefaction/lng",
+    "metrics": {
+      "annual_capacity": { "value": 77, "unit": "metric_tons_per_year", "confidence": 0.82 },
+      "lead_time_days_baseline": { "value": 18, "unit": "days", "confidence": 0.63 },
+      "on_time_delivery_baseline": { "value": 0.92, "unit": "ratio", "confidence": 0.58 }
+    },
+    "qualifiers": {
+      "evidenceClass": "reported_capacity",
+      "carrierProductRole": "export_supplier"
+    },
+    "confidence": 0.73
+  }
+- Do NOT place reusable baseline metrics in linkObservations unless they are explicitly customer-, destination-, or contract-specific.
+- If evidence is only link-specific, put it in linkObservations. If evidence is only route-specific, put it in routeObservations.
+`
+}
+
 func strategyMetricValueFormatBlock() string {
 	return `METRIC VALUE FORMAT (STRICT):
 - For fragment.state and relations[].metrics, each metric entry MUST be either:
@@ -230,6 +268,10 @@ func strategySupplyChainsJSONContractBlock() string {
   - "reason": REQUIRED short evidence string
   - "transportVia": OPTIONAL array of facility canonical paths (/fac/...)
   - "segmentMetrics": OPTIONAL array of { fromNodeIndex, toNodeIndex, productIndex, volume: { value, unit, confidence }, share, period, confidence }
+  - "productCandidates": OPTIONAL array of { canonicalPath?, name, reason, confidence } for genuinely new job-scope products only
+  - "carrierProductObservations": EXPECTED when evidence supports reusable actor×product facts; array of { carrierRef, productRef, metrics?, qualifiers?, confidence, observedAt? }
+  - "linkObservations": OPTIONAL array of { supplierRef?, customerRef?, productRef, metrics?, qualifiers?, confidence, observedAt? }
+  - "routeObservations": OPTIONAL array of { supplierRef?, customerRef?, productRef?, transportVia?, vesselType?, qualifiers?, confidence, observedAt? }
   - (no "alternatives" field — model is org→fac→product→fac→org trees, not alternative suppliers)
 - Node object schema (each nodes[i]):
   - "canonicalPath": REQUIRED string
@@ -241,6 +283,8 @@ func strategySupplyChainsJSONContractBlock() string {
   - "role": OPTIONAL string
 - Use /org/ for organizations, /fac/ for facilities, /product/ for products, /deposit/ for deposits. Do NOT invent synthetic /fac/*-general-production placeholders. If production is only known at org level, use org→product.
 - transportVia is operationally important. When the leg is cross-border or route-sensitive and a plausible business route is known, do not leave transportVia empty.
+- productCandidates are scope additions, not duplicates of nodes[]. Use them only when the current working product set needs extension.
+- carrierProductObservations must be reusable actor×product facts and should be present when evidence supports reusable baseline metrics; linkObservations must be customer/destination specific; routeObservations must be transport/path specific.
 - Good transportVia examples: /fac/sea/strait-of-hormuz-terminal, /fac/eg/suez-terminal, /fac/nl/port-of-rotterdam, /fac/ae/jebel-ali-terminal.
 - Bad transportVia examples: generic words, regions, countries, products, or non-facility placeholders.
 - INVALID shape example: "nodes": "A -> B -> C"
@@ -540,6 +584,181 @@ func (a *ResearchAgent) runResearchPromptWithOptions(ctx context.Context, prompt
 	return out, nil
 }
 
+func (a *ResearchAgent) runSupplyChainScopedObservationPrompt(ctx context.Context, prompt string, opts researchPromptOptions) (*SupplyChainScopedObservations, error) {
+	if a == nil || a.executor == nil {
+		return nil, fmt.Errorf("research agent executor is not configured")
+	}
+	minContextWindow := opts.MinContextWindow
+	if minContextWindow <= 0 {
+		minContextWindow = 12000
+	}
+	maxOutputSize := opts.MaxOutputSize
+	if maxOutputSize <= 0 {
+		maxOutputSize = 12000
+	}
+	minCapability := opts.MinCapability
+	if minCapability <= 0 {
+		minCapability = 7
+	}
+	verifier := ai.NewSimpleJSONVerifier()
+	task := &ai.AITask{
+		TaskType:     ai.TaskTypeKnowledgeSynthesis,
+		InputContent: prompt,
+		AIRequirements: ai.AIRequirements{
+			PreferredModel:                  strings.TrimSpace(opts.PreferredModel),
+			TextGenerationCapability:        true,
+			SearchGroundingCapability:       true,
+			InternalDataGroundingCapability: true,
+			MinCapabilityScore:              minCapability,
+			MinContextWindow:                minContextWindow,
+			MaxOutputSize:                   maxOutputSize,
+		},
+		Verifier: verifier,
+	}
+	result, _, err := a.executor.ExecuteStructuredTaskFull(ctx, task)
+	if err != nil {
+		return nil, fmt.Errorf("supply-chain scoped observation prompt: %w", err)
+	}
+	jsonData, err := json.Marshal(result)
+	if err != nil {
+		return nil, err
+	}
+	sanitized, sanitizeErr := sanitizeSupplyChainScopedObservationBundle(jsonData)
+	unmarshalInput := sanitized
+	if sanitizeErr != nil {
+		unmarshalInput = jsonData
+	}
+	var bundle SupplyChainScopedObservations
+	if err := json.Unmarshal(unmarshalInput, &bundle); err != nil {
+		return nil, err
+	}
+	if len(bundle.ProductCandidates) == 0 &&
+		len(bundle.CarrierProductObservations) == 0 &&
+		len(bundle.LinkObservations) == 0 &&
+		len(bundle.RouteObservations) == 0 {
+		return nil, nil
+	}
+	return &bundle, nil
+}
+
+func (a *ResearchAgent) runSupplyChainPreHotPathPrompt(ctx context.Context, prompt string, opts researchPromptOptions) (*SupplyChainPreHotPathPlan, error) {
+	if a == nil || a.executor == nil {
+		return nil, fmt.Errorf("research agent executor is not configured")
+	}
+	minContextWindow := opts.MinContextWindow
+	if minContextWindow <= 0 {
+		minContextWindow = 8000
+	}
+	maxOutputSize := opts.MaxOutputSize
+	if maxOutputSize <= 0 {
+		maxOutputSize = 4000
+	}
+	minCapability := opts.MinCapability
+	if minCapability <= 0 {
+		minCapability = 7
+	}
+	verifier := ai.NewSimpleJSONVerifier()
+	task := &ai.AITask{
+		TaskType:     ai.TaskTypeKnowledgeSynthesis,
+		InputContent: prompt,
+		AIRequirements: ai.AIRequirements{
+			PreferredModel:                  strings.TrimSpace(opts.PreferredModel),
+			TextGenerationCapability:        true,
+			SearchGroundingCapability:       true,
+			InternalDataGroundingCapability: true,
+			MinCapabilityScore:              minCapability,
+			MinContextWindow:                minContextWindow,
+			MaxOutputSize:                   maxOutputSize,
+		},
+		Verifier: verifier,
+	}
+	result, _, err := a.executor.ExecuteStructuredTaskFull(ctx, task)
+	if err != nil {
+		return nil, fmt.Errorf("supply-chain pre-hot-path prompt: %w", err)
+	}
+	jsonData, err := json.Marshal(result)
+	if err != nil {
+		return nil, err
+	}
+	sanitized, sanitizeErr := sanitizeSupplyChainPreHotPathPlan(jsonData)
+	unmarshalInput := sanitized
+	if sanitizeErr != nil {
+		unmarshalInput = jsonData
+	}
+	var plan SupplyChainPreHotPathPlan
+	if err := json.Unmarshal(unmarshalInput, &plan); err != nil {
+		return nil, err
+	}
+	plan.Strategy = strings.TrimSpace(plan.Strategy)
+	plan.StrategyReason = strings.TrimSpace(plan.StrategyReason)
+	plan.CandidateProductFamilies = dedupStrings(plan.CandidateProductFamilies, 6)
+	plan.CandidateOperationalAnchorClasses = dedupStrings(plan.CandidateOperationalAnchorClasses, 8)
+	plan.CandidateFlowArchetypes = dedupStrings(plan.CandidateFlowArchetypes, 8)
+	plan.SearchFocus = dedupStrings(plan.SearchFocus, 8)
+	plan.PreferredEvidence = dedupStrings(plan.PreferredEvidence, 8)
+	plan.DerivedProductFilters = dedupStrings(plan.DerivedProductFilters, 4)
+	if plan.Confidence < 0 {
+		plan.Confidence = 0
+	}
+	if plan.Confidence > 1 {
+		plan.Confidence = 1
+	}
+	if plan.Strategy == "" &&
+		len(plan.CandidateProductFamilies) == 0 &&
+		len(plan.CandidateOperationalAnchorClasses) == 0 &&
+		len(plan.CandidateFlowArchetypes) == 0 &&
+		len(plan.SearchFocus) == 0 &&
+		len(plan.DerivedProductFilters) == 0 {
+		return nil, nil
+	}
+	return &plan, nil
+}
+
+func sanitizeSupplyChainPreHotPathPlan(data []byte) ([]byte, error) {
+	var root map[string]interface{}
+	if err := json.Unmarshal(data, &root); err != nil {
+		return nil, err
+	}
+	ensureStringField(root, "strategy")
+	ensureStringField(root, "strategyReason")
+	coerceFloatField(root, "confidence", 0.5)
+	sanitizeStringSliceField(root, "candidateProductFamilies")
+	sanitizeStringSliceField(root, "candidateOperationalAnchorClasses")
+	sanitizeStringSliceField(root, "candidateFlowArchetypes")
+	sanitizeStringSliceField(root, "searchFocus")
+	sanitizeStringSliceField(root, "preferredEvidence")
+	sanitizeStringSliceField(root, "derivedProductFilters")
+	return json.Marshal(root)
+}
+
+func sanitizeSupplyChainScopedObservationBundle(data []byte) ([]byte, error) {
+	var root map[string]interface{}
+	if err := json.Unmarshal(data, &root); err != nil {
+		return nil, err
+	}
+	if cands := sanitizeSupplyChainProductCandidatesField(root["productCandidates"]); len(cands) > 0 {
+		root["productCandidates"] = cands
+	} else {
+		delete(root, "productCandidates")
+	}
+	if obs := sanitizeCarrierProductObservationsField(root["carrierProductObservations"]); len(obs) > 0 {
+		root["carrierProductObservations"] = obs
+	} else {
+		delete(root, "carrierProductObservations")
+	}
+	if obs := sanitizeSupplyLinkObservationsField(root["linkObservations"]); len(obs) > 0 {
+		root["linkObservations"] = obs
+	} else {
+		delete(root, "linkObservations")
+	}
+	if obs := sanitizeRouteObservationsField(root["routeObservations"]); len(obs) > 0 {
+		root["routeObservations"] = obs
+	} else {
+		delete(root, "routeObservations")
+	}
+	return json.Marshal(root)
+}
+
 // sanitizeResearchResultForUnmarshal repairs common shape/type drifts in LLM output so
 // a single malformed field does not drop the whole research response.
 func sanitizeResearchResultForUnmarshal(data []byte) ([]byte, error) {
@@ -596,6 +815,62 @@ func sanitizeResearchRelations(root map[string]interface{}) {
 	root["relations"] = clean
 }
 
+func sanitizeStringSliceField(root map[string]interface{}, field string) {
+	vals := sanitizeStringSlice(root[field])
+	if len(vals) == 0 {
+		delete(root, field)
+		return
+	}
+	out := make([]interface{}, 0, len(vals))
+	for _, v := range vals {
+		out = append(out, v)
+	}
+	root[field] = out
+}
+
+func sanitizeStringSlice(raw interface{}) []string {
+	items := toInterfaceSlice(raw)
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		switch t := item.(type) {
+		case string:
+			if s := strings.TrimSpace(t); s != "" {
+				out = append(out, s)
+			}
+		case map[string]interface{}:
+			for _, key := range []string{"name", "value", "label", "canonicalPath"} {
+				if s := strings.TrimSpace(anyToString(t[key])); s != "" {
+					out = append(out, s)
+					break
+				}
+			}
+		default:
+			if s := strings.TrimSpace(anyToString(t)); s != "" {
+				out = append(out, s)
+			}
+		}
+	}
+	return dedupStrings(out, 16)
+}
+
+func anyToString(raw interface{}) string {
+	switch t := raw.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case fmt.Stringer:
+		return t.String()
+	case json.Number:
+		return t.String()
+	default:
+		return fmt.Sprintf("%v", raw)
+	}
+}
+
 func sanitizeResearchSupplyChains(root map[string]interface{}) {
 	chainsRaw, exists := root["supplyChains"]
 	if !exists {
@@ -635,6 +910,26 @@ func sanitizeResearchSupplyChains(root map[string]interface{}) {
 			chainMap["alternatives"] = alts
 		} else {
 			delete(chainMap, "alternatives")
+		}
+		if cands := sanitizeSupplyChainProductCandidatesField(chainMap["productCandidates"]); len(cands) > 0 {
+			chainMap["productCandidates"] = cands
+		} else {
+			delete(chainMap, "productCandidates")
+		}
+		if obs := sanitizeCarrierProductObservationsField(chainMap["carrierProductObservations"]); len(obs) > 0 {
+			chainMap["carrierProductObservations"] = obs
+		} else {
+			delete(chainMap, "carrierProductObservations")
+		}
+		if obs := sanitizeSupplyLinkObservationsField(chainMap["linkObservations"]); len(obs) > 0 {
+			chainMap["linkObservations"] = obs
+		} else {
+			delete(chainMap, "linkObservations")
+		}
+		if obs := sanitizeRouteObservationsField(chainMap["routeObservations"]); len(obs) > 0 {
+			chainMap["routeObservations"] = obs
+		} else {
+			delete(chainMap, "routeObservations")
 		}
 		cleanChains = append(cleanChains, chainMap)
 	}
@@ -760,6 +1055,160 @@ func sanitizeMetricWithConfidenceField(raw interface{}) map[string]interface{} {
 	}
 	coerceFloatField(m, "confidence", 0.5)
 	out["confidence"] = m["confidence"]
+	return out
+}
+
+func sanitizeSupplyChainProductCandidatesField(raw interface{}) []interface{} {
+	items := toInterfaceSlice(raw)
+	if items == nil {
+		return nil
+	}
+	out := make([]interface{}, 0, len(items))
+	for _, item := range items {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name := strings.TrimSpace(firstStringValue(m, "name", "label", "rawName"))
+		cp := strings.TrimSpace(firstStringValue(m, "canonicalPath", "path", "productRef"))
+		if cp == "" && name == "" {
+			continue
+		}
+		entry := map[string]interface{}{}
+		if cp != "" {
+			entry["canonicalPath"] = cp
+		}
+		if name != "" {
+			entry["name"] = name
+		}
+		if reason := strings.TrimSpace(firstStringValue(m, "reason", "evidence", "summary")); reason != "" {
+			entry["reason"] = reason
+		}
+		coerceFloatFieldMultiKey(m, 0.5, "confidence", "score")
+		entry["confidence"] = m["confidence"]
+		out = append(out, entry)
+	}
+	return out
+}
+
+func sanitizeCarrierProductObservationsField(raw interface{}) []interface{} {
+	items := toInterfaceSlice(raw)
+	if items == nil {
+		return nil
+	}
+	out := make([]interface{}, 0, len(items))
+	for _, item := range items {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		carrierRef := strings.TrimSpace(firstStringValue(m, "carrierRef", "carrier", "supplierRef"))
+		productRef := strings.TrimSpace(firstStringValue(m, "productRef", "product", "canonicalPath"))
+		if carrierRef == "" || productRef == "" {
+			continue
+		}
+		entry := map[string]interface{}{
+			"carrierRef": carrierRef,
+			"productRef": productRef,
+		}
+		if metrics, ok := firstValue(m, "metrics").(map[string]interface{}); ok && len(metrics) > 0 {
+			entry["metrics"] = metrics
+		}
+		if qualifiers, ok := firstValue(m, "qualifiers").(map[string]interface{}); ok && len(qualifiers) > 0 {
+			entry["qualifiers"] = qualifiers
+		}
+		if observedAt := strings.TrimSpace(firstStringValue(m, "observedAt", "observed_at")); observedAt != "" {
+			entry["observedAt"] = observedAt
+		}
+		coerceFloatFieldMultiKey(m, 0.5, "confidence", "score")
+		entry["confidence"] = m["confidence"]
+		out = append(out, entry)
+	}
+	return out
+}
+
+func sanitizeSupplyLinkObservationsField(raw interface{}) []interface{} {
+	items := toInterfaceSlice(raw)
+	if items == nil {
+		return nil
+	}
+	out := make([]interface{}, 0, len(items))
+	for _, item := range items {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		productRef := strings.TrimSpace(firstStringValue(m, "productRef", "product", "canonicalPath"))
+		if productRef == "" {
+			continue
+		}
+		entry := map[string]interface{}{
+			"productRef": productRef,
+		}
+		if supplierRef := strings.TrimSpace(firstStringValue(m, "supplierRef", "supplier")); supplierRef != "" {
+			entry["supplierRef"] = supplierRef
+		}
+		if customerRef := strings.TrimSpace(firstStringValue(m, "customerRef", "customer")); customerRef != "" {
+			entry["customerRef"] = customerRef
+		}
+		if metrics, ok := firstValue(m, "metrics").(map[string]interface{}); ok && len(metrics) > 0 {
+			entry["metrics"] = metrics
+		}
+		if qualifiers, ok := firstValue(m, "qualifiers").(map[string]interface{}); ok && len(qualifiers) > 0 {
+			entry["qualifiers"] = qualifiers
+		}
+		if observedAt := strings.TrimSpace(firstStringValue(m, "observedAt", "observed_at")); observedAt != "" {
+			entry["observedAt"] = observedAt
+		}
+		coerceFloatFieldMultiKey(m, 0.5, "confidence", "score")
+		entry["confidence"] = m["confidence"]
+		out = append(out, entry)
+	}
+	return out
+}
+
+func sanitizeRouteObservationsField(raw interface{}) []interface{} {
+	items := toInterfaceSlice(raw)
+	if items == nil {
+		return nil
+	}
+	out := make([]interface{}, 0, len(items))
+	for _, item := range items {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		productRef := strings.TrimSpace(firstStringValue(m, "productRef", "product", "canonicalPath"))
+		transportVia := sanitizeStringArrayField(firstValue(m, "transportVia", "transport_via"))
+		if productRef == "" && len(transportVia) == 0 {
+			continue
+		}
+		entry := map[string]interface{}{}
+		if productRef != "" {
+			entry["productRef"] = productRef
+		}
+		if supplierRef := strings.TrimSpace(firstStringValue(m, "supplierRef", "supplier")); supplierRef != "" {
+			entry["supplierRef"] = supplierRef
+		}
+		if customerRef := strings.TrimSpace(firstStringValue(m, "customerRef", "customer")); customerRef != "" {
+			entry["customerRef"] = customerRef
+		}
+		if len(transportVia) > 0 {
+			entry["transportVia"] = transportVia
+		}
+		if vesselType := strings.TrimSpace(firstStringValue(m, "vesselType", "vessel_type")); vesselType != "" {
+			entry["vesselType"] = vesselType
+		}
+		if qualifiers, ok := firstValue(m, "qualifiers").(map[string]interface{}); ok && len(qualifiers) > 0 {
+			entry["qualifiers"] = qualifiers
+		}
+		if observedAt := strings.TrimSpace(firstStringValue(m, "observedAt", "observed_at")); observedAt != "" {
+			entry["observedAt"] = observedAt
+		}
+		coerceFloatFieldMultiKey(m, 0.5, "confidence", "score")
+		entry["confidence"] = m["confidence"]
+		out = append(out, entry)
+	}
 	return out
 }
 
@@ -1756,7 +2205,9 @@ For SUPPLIES_TO: add qualifiers.transport_via when transport route is known or r
 
 %s
 
-Return ONLY valid JSON. No markdown.`, supplyChainMandatoryBlock, supplyChainOperationalModelBlock, supplyChainSpecialScenariosBlock, supplyChainProductGranularityBlock, taxonomy.SupplyChainEdgeTypesString(), GovEntityRelationRulesBlock(), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), chainBlock, geoContext, existingEntitiesBlock, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, string(fragmentJSON), questions, strategySupplyChainMetricsVocabularyBlock(), strategyMetricValueFormatBlock(), strategySupplyChainsJSONContractBlock())
+%s
+
+Return ONLY valid JSON. No markdown.`, supplyChainMandatoryBlock, supplyChainOperationalModelBlock, supplyChainSpecialScenariosBlock, supplyChainProductGranularityBlock, taxonomy.SupplyChainEdgeTypesString(), GovEntityRelationRulesBlock(), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), chainBlock, geoContext, existingEntitiesBlock, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, string(fragmentJSON), questions, strategySupplyChainMetricsVocabularyBlock(), strategyCapabilityMetricWhitelistBlock(), strategyMetricValueFormatBlock(), strategySupplyChainsJSONContractBlock())
 }
 
 // EnrichSupplyChainFull runs anchor-centric full supply chain query (Plan mode).
@@ -1775,13 +2226,33 @@ func (a *ResearchAgent) EnrichSupplyChainFull(ctx context.Context, query SupplyC
 	return filteredChains, nil
 }
 
-// EnrichSupplyChainHotPath runs a denser first-pass supply chain query for fast-first runtime.
-// It prefers a stronger grounded model and asks for multiple concrete branches in one response.
-func (a *ResearchAgent) EnrichSupplyChainHotPath(ctx context.Context, query SupplyChainQuery) ([]SupplyChain, error) {
+// EnrichSupplyChainPreHotPath returns a lightweight always-on steering plan that
+// helps the hot-path query focus on the right operational branches without
+// acting as a hard filter.
+func (a *ResearchAgent) EnrichSupplyChainPreHotPath(ctx context.Context, query SupplyChainQuery) (*SupplyChainPreHotPathPlan, error) {
 	if a == nil || a.executor == nil {
 		return nil, fmt.Errorf("research agent executor not configured")
 	}
-	prompt := a.buildSupplyChainHotPathPrompt(query)
+	prompt := a.buildSupplyChainPreHotPathPrompt(query)
+	out, err := a.runSupplyChainPreHotPathPrompt(ctx, prompt, researchPromptOptions{
+		PreferredModel:   "vertex-gemini-3-flash-preview",
+		MinContextWindow: 8000,
+		MaxOutputSize:    4000,
+		MinCapability:    7,
+	})
+	if err != nil || out == nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// EnrichSupplyChainHotPath runs a denser first-pass supply chain query for fast-first runtime.
+// It prefers a stronger grounded model and asks for multiple concrete branches in one response.
+func (a *ResearchAgent) EnrichSupplyChainHotPath(ctx context.Context, query SupplyChainQuery, prePlan *SupplyChainPreHotPathPlan) ([]SupplyChain, error) {
+	if a == nil || a.executor == nil {
+		return nil, fmt.Errorf("research agent executor not configured")
+	}
+	prompt := a.buildSupplyChainHotPathPrompt(query, prePlan)
 	out, err := a.runResearchPromptWithOptions(ctx, prompt, nil, researchPromptOptions{
 		PreferredModel:   "vertex-gemini-2.5-pro",
 		MinContextWindow: 16000,
@@ -1793,6 +2264,75 @@ func (a *ResearchAgent) EnrichSupplyChainHotPath(ctx context.Context, query Supp
 	}
 	filteredChains, _ := FilterDomainChains(ctx, taxonomy.DomainModeSupplyChain, out.SupplyChains)
 	return filteredChains, nil
+}
+
+// EnrichSupplyChainHotPathCapabilities enriches already-discovered hot-path chains with reusable actor×product observations.
+// It must not expand topology; it should only add scoped observations and candidates when evidence supports them.
+func (a *ResearchAgent) EnrichSupplyChainHotPathCapabilities(ctx context.Context, query SupplyChainQuery, chains []SupplyChain, prePlan *SupplyChainPreHotPathPlan) (*SupplyChainScopedObservations, error) {
+	if a == nil || a.executor == nil {
+		return nil, fmt.Errorf("research agent executor not configured")
+	}
+	if len(chains) == 0 {
+		return nil, nil
+	}
+	prompt := a.buildSupplyChainHotPathCapabilityPrompt(query, chains, prePlan)
+	out, err := a.runSupplyChainScopedObservationPrompt(ctx, prompt, researchPromptOptions{
+		PreferredModel:   "vertex-gemini-3-flash-preview",
+		MinContextWindow: 8000,
+		MaxOutputSize:    6000,
+		MinCapability:    7,
+	})
+	if err != nil || out == nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (a *ResearchAgent) buildSupplyChainPreHotPathPrompt(query SupplyChainQuery) string {
+	queryJSON, _ := json.MarshalIndent(query, "", "  ")
+	return fmt.Sprintf(`You are a supply-chain pre-hot-path decomposition agent.
+
+TASK:
+- This stage runs BEFORE hot-path graph construction for every supply-chain job.
+- Do NOT build supply chains here.
+- Do NOT hard-constrain the next search.
+- Return ONLY a lightweight steering plan that helps the hot path ask better questions.
+- If the query is already concrete and dense, keep the plan short and minimal.
+- If the query is broad, OEM-like, spare-parts/service heavy, or otherwise ambiguous, decompose it into likely operational branches without forcing them.
+
+WHAT TO RETURN:
+- candidateProductFamilies: more concrete product families or operational sub-families worth prioritizing
+- candidateOperationalAnchorClasses: likely node classes to look for first
+- candidateFlowArchetypes: likely topology shapes for this domain
+- searchFocus: concise retrieval foci for the next hot-path prompt
+- preferredEvidence: source/evidence classes to trust first
+- derivedProductFilters: up to 3 concrete product filter strings that MAY be used for a focused retry if the first hot-path pass is too broad
+
+SOFT-STEERING RULES:
+- This plan is guidance only. It must NEVER act as a hard filter.
+- Do not suppress the original query intent.
+- Prefer concrete operational decomposition over abstract business prose.
+- For OEM/service/spare-parts cases, think in terms of parts manufacturing, authorized suppliers, repair centers, service depots, installed-base support, customer plants, outage/maintenance support.
+- For commodity corridor cases, think in terms of mines/wells/plants, terminals, ports, refineries, processors, chokepoints, and destination facilities.
+
+OUTPUT:
+Return ONLY valid JSON:
+{
+  "strategy": "commodity_corridor|oem_aftermarket|industrial_components|retail_distribution|generic_supply_chain",
+  "strategyReason": "short explanation",
+  "candidateProductFamilies": ["..."],
+  "candidateOperationalAnchorClasses": ["..."],
+  "candidateFlowArchetypes": ["..."],
+  "searchFocus": ["..."],
+  "preferredEvidence": ["..."],
+  "derivedProductFilters": ["..."],
+  "confidence": 0.0
+}
+
+QUERY:
+%s
+
+No markdown.`, string(queryJSON))
 }
 
 // buildSupplyChainFullQueryPrompt builds anchor-centric prompt. Model: trees from org → fac → product → fac → org (recursion).
@@ -1857,6 +2397,8 @@ CANONICAL PATH RULES:
 
 %s
 
+%s
+
 OUTPUT: JSON with "supplyChains" array. Each chain:
 - nodes: org→fac→product→fac→org chain. Actors: /org/, /fac/, or /deposit/.
 - use node.role when it clarifies flow semantics (supplier, processor, distributor, customer); use owner/operator/manager/controller only for non-product-carrying adjacency that should become OWNS / MANAGES / CONTROLS outside the chain.
@@ -1865,10 +2407,10 @@ OUTPUT: JSON with "supplyChains" array. Each chain:
 - confidence, reason.
 
 Return ONLY valid JSON: { "supplyChains": [ { "nodes": [...], "segmentMetrics": [...], "confidence", "reason" } ] }
-No markdown.`, supplyChainMandatoryBlock, supplyChainOperationalModelBlock, supplyChainSpecialScenariosBlock, supplyChainProductGranularityBlock, taskBlock, taxonomy.SupplyChainEdgeTypesString(), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), strategySupplyChainMetricsVocabularyBlock(), strategySupplyChainsJSONContractBlock())
+No markdown.`, supplyChainMandatoryBlock, supplyChainOperationalModelBlock, supplyChainSpecialScenariosBlock, supplyChainProductGranularityBlock, taskBlock, taxonomy.SupplyChainEdgeTypesString(), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), strategySupplyChainMetricsVocabularyBlock(), strategyCapabilityMetricWhitelistBlock(), strategySupplyChainsJSONContractBlock())
 }
 
-func (a *ResearchAgent) buildSupplyChainHotPathPrompt(query SupplyChainQuery) string {
+func (a *ResearchAgent) buildSupplyChainHotPathPrompt(query SupplyChainQuery, prePlan *SupplyChainPreHotPathPlan) string {
 	base := a.buildSupplyChainFullQueryPrompt(query)
 	hotPathBlock := `HOT PATH OBJECTIVE:
 - Produce the first high-value supply-chain graph quickly.
@@ -1880,10 +2422,178 @@ func (a *ResearchAgent) buildSupplyChainHotPathPrompt(query SupplyChainQuery) st
 - For retail / distribution anchors, include the main inbound product families, import/distribution branches, owned subsidiaries, publishing/import arms, local distribution centers, and major downstream store / e-commerce fulfillment branches when they are directly relevant.
 - Explicitly separate main goods flow from component/material inputs and from support/logistics/infrastructure branches. Support branches are useful, but must not crowd out the main goods flows.
 - Include transportVia when a route/chokepoint is known. Include alternatives when a customer/product pair has plausible substitute suppliers.
+- When evidence supports reusable actor×product baseline facts, include carrierProductObservations in the same response. Do not leave reusable baseline metrics implicit.
 - Prefer branches that maximize first-pass decision value: main products, main suppliers, main import/distribution nodes, main transformations, main customer/distribution branches.
 - Do not stop at org -> product -> org if a more operational chain is available. Actor-only skeletons are incomplete unless the anchor itself is inherently actor-only.
 - Keep taxonomy strict. Never invent invalid canonical path families or placeholder nodes.`
-	return base + "\n\n" + hotPathBlock
+	steeringBlock := ""
+	if prePlan != nil {
+		if b, err := json.MarshalIndent(prePlan, "", "  "); err == nil {
+			steeringBlock = "\n\nPRE-HOT-PATH STEERING (soft guidance, not hard filters):\n" +
+				"- Use this to decide which operational branches to prioritize first.\n" +
+				"- Do NOT ignore relevant branches just because they are not named here.\n" +
+				"- If strategy suggests OEM/service topology, explicitly seek service depots, repair centers, authorized suppliers, installed-base support nodes, and customer plant/site recipients.\n" +
+				"- If strategy suggests commodity corridor topology, explicitly seek production facilities, terminals, ports, chokepoints, processors, and destination facilities.\n" +
+				string(b)
+		}
+	}
+	return base + "\n\n" + hotPathBlock + steeringBlock + "\n\n" + strategyCapabilityMetricWhitelistBlock()
+}
+
+func (a *ResearchAgent) buildSupplyChainHotPathCapabilityPrompt(query SupplyChainQuery, chains []SupplyChain, prePlan *SupplyChainPreHotPathPlan) string {
+	type capabilityPair struct {
+		CarrierRef         string   `json:"carrierRef"`
+		CarrierName        string   `json:"carrierName,omitempty"`
+		ProductRef         string   `json:"productRef"`
+		ProductName        string   `json:"productName,omitempty"`
+		SampleCustomerRefs []string `json:"sampleCustomerRefs,omitempty"`
+		SampleTransportVia []string `json:"sampleTransportVia,omitempty"`
+	}
+	trimmedChains := chains
+	if len(trimmedChains) > 10 {
+		trimmedChains = trimmedChains[:10]
+	}
+	workingProducts := dedupStrings(append(append([]string{}, query.ProductFilter...), collectProductRefsFromSupplyChains(trimmedChains)...), 32)
+	pairView := make([]capabilityPair, 0, 8)
+	for _, pair := range extractCapabilityHotPathPairs(trimmedChains) {
+		pairView = append(pairView, capabilityPair{
+			CarrierRef:         pair.CarrierRef,
+			CarrierName:        pair.CarrierName,
+			ProductRef:         pair.ProductRef,
+			ProductName:        pair.ProductName,
+			SampleCustomerRefs: append([]string(nil), pair.SampleCustomerRefs...),
+			SampleTransportVia: append([]string(nil), pair.SampleTransportVia...),
+		})
+		if len(pairView) >= 8 {
+			break
+		}
+	}
+	pairsJSON, _ := json.MarshalIndent(pairView, "", "  ")
+	workingProductsJSON, _ := json.MarshalIndent(workingProducts, "", "  ")
+	prePlanJSON := "{}"
+	if prePlan != nil {
+		if b, err := json.MarshalIndent(prePlan, "", "  "); err == nil && len(b) > 0 {
+			prePlanJSON = string(b)
+		}
+	}
+	return fmt.Sprintf(`You are a supply chain capability enrichment agent.
+
+TASK:
+- The graph skeleton below is already accepted as the current hot-path supply chain result.
+- Do NOT create new topology. Do NOT add or remove graph entities.
+- Your job is ONLY to add scoped supply-chain evidence, with emphasis on reusable carrier×product capability baseline facts.
+- Return ONLY scoped observation arrays:
+  - carrierProductObservations
+  - linkObservations when a fact is clearly customer/destination specific
+  - routeObservations when a fact is clearly transport/path specific
+  - productCandidates only if the existing working product scope is genuinely missing a material product/component
+- If no reusable baseline evidence exists for a given carrier×product pair, omit the observation instead of guessing.
+
+WORKING PRODUCT SCOPE:
+%s
+
+CURRENT HOT-PATH CARRIER×PRODUCT PAIRS:
+%s
+
+PRE-HOT-PATH STEERING:
+%s
+
+STRICT RULES:
+- carrierProductObservations are practically required when evidence exists for reusable actor×product facts in the current chains.
+- Keep one product per link/leg. Do NOT smear multi-product truth across a single link.
+- Do NOT restate route-specific or customer-specific facts as reusable capability baseline.
+- Prefer concrete reusable metric keys only from this whitelist:
+%s
+- Use ONLY valid canonical paths already present in the provided chains for carrierRef/productRef, unless you are returning a genuinely new productCandidate.
+
+OUTPUT:
+- Return ONLY valid JSON:
+  {
+    "productCandidates": [...],
+    "carrierProductObservations": [...],
+    "linkObservations": [...],
+    "routeObservations": [...]
+  }
+- Do NOT return supplyChains or nodes in this pass.
+- No markdown.`,
+		string(workingProductsJSON),
+		string(pairsJSON),
+		prePlanJSON,
+		strings.TrimSpace(strategyCapabilityMetricWhitelistBlock()))
+}
+
+func collectProductRefsFromSupplyChains(chains []SupplyChain) []string {
+	if len(chains) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(chains)*2)
+	for _, chain := range chains {
+		for _, node := range chain.Nodes {
+			cp := strings.TrimSpace(node.CanonicalPath)
+			if strings.HasPrefix(cp, "/product/") {
+				out = append(out, cp)
+			}
+		}
+		for _, obs := range chain.CarrierProductObservations {
+			if cp := strings.TrimSpace(obs.ProductRef); strings.HasPrefix(cp, "/product/") {
+				out = append(out, cp)
+			}
+		}
+	}
+	return out
+}
+
+type capabilityHotPathPair struct {
+	CarrierRef         string
+	CarrierName        string
+	ProductRef         string
+	ProductName        string
+	SampleCustomerRefs []string
+	SampleTransportVia []string
+}
+
+func extractCapabilityHotPathPairs(chains []SupplyChain) []capabilityHotPathPair {
+	if len(chains) == 0 {
+		return nil
+	}
+	seen := make(map[string]int)
+	out := make([]capabilityHotPathPair, 0, len(chains))
+	for _, chain := range chains {
+		for i := 1; i < len(chain.Nodes)-1; i++ {
+			productNode := chain.Nodes[i]
+			if !strings.HasPrefix(strings.TrimSpace(productNode.CanonicalPath), "/product/") {
+				continue
+			}
+			carrierNode := chain.Nodes[i-1]
+			carrierRef := strings.TrimSpace(carrierNode.CanonicalPath)
+			productRef := strings.TrimSpace(productNode.CanonicalPath)
+			if carrierRef == "" || productRef == "" {
+				continue
+			}
+			customerRefs := []string{}
+			if i+1 < len(chain.Nodes) {
+				if customerRef := strings.TrimSpace(chain.Nodes[i+1].CanonicalPath); customerRef != "" {
+					customerRefs = append(customerRefs, customerRef)
+				}
+			}
+			key := strings.ToLower(carrierRef + "|" + productRef)
+			if idx, ok := seen[key]; ok {
+				out[idx].SampleCustomerRefs = dedupStrings(append(out[idx].SampleCustomerRefs, customerRefs...), 4)
+				out[idx].SampleTransportVia = dedupStrings(append(out[idx].SampleTransportVia, chain.TransportVia...), 6)
+				continue
+			}
+			seen[key] = len(out)
+			out = append(out, capabilityHotPathPair{
+				CarrierRef:         carrierRef,
+				CarrierName:        strings.TrimSpace(carrierNode.Name),
+				ProductRef:         productRef,
+				ProductName:        strings.TrimSpace(productNode.Name),
+				SampleCustomerRefs: dedupStrings(customerRefs, 4),
+				SampleTransportVia: dedupStrings(chain.TransportVia, 6),
+			})
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------

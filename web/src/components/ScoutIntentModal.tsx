@@ -17,6 +17,9 @@ export interface ScoutIntentResolution {
     contractType?: string;
     title?: string;
     description?: string;
+    supplyChainExecutionPlan?: {
+      graphBuildMode?: string;
+    };
     firstOrderEntities?: string[];
     confidence?: number;
     reason?: string;
@@ -42,6 +45,17 @@ export interface ScoutIntentModalProps {
 function humanizePath(cp: string): string {
   const parts = String(cp || '').trim().split('/').filter(Boolean);
   return parts.length > 0 ? parts[parts.length - 1] : cp || '?';
+}
+
+function isSupplyChainContractType(value?: string): boolean {
+  return /^(supply-chain|value-chain)$/i.test(String(value || '').trim());
+}
+
+function getSupplyChainGraphBuildModeLabel(value?: string): string {
+  const mode = String(value || '').trim().toLowerCase();
+  if (mode === 'hot_path_only') return 'Execution mode: Hot path only';
+  if (mode === 'hot_path_plus_graph') return 'Execution mode: Hot path + graph';
+  return '';
 }
 
 export function ScoutIntentModal({
@@ -266,30 +280,36 @@ export function ScoutIntentModal({
                 <div style={{ marginBottom: 10 }}>
                   <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 6 }}>Domains ({intent.domains.length})</div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    {intent.domains.map((d, i) => (
-                      <div
-                        key={i}
-                        style={{
-                          fontSize: 12,
-                          padding: 8,
-                          borderRadius: 8,
-                          background: theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
-                          border: '1px solid var(--border-subtle)',
-                        }}
-                      >
-                        <div style={{ fontWeight: 600, color: 'var(--text-heading)', marginBottom: 2 }}>
-                          {d.title || d.contractType || humanizePath(d.canonicalPath)}
-                        </div>
-                        {d.description && (
-                          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>{d.description}</div>
-                        )}
-                        {d.firstOrderEntities && d.firstOrderEntities.length > 0 && (
-                          <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginTop: 4 }}>
-                            +{d.firstOrderEntities.length} first-order entities
+                    {intent.domains.map((d, i) => {
+                      const graphBuildModeLabel = isSupplyChainContractType(d.contractType) ? getSupplyChainGraphBuildModeLabel(d.supplyChainExecutionPlan?.graphBuildMode) : '';
+                      return (
+                        <div
+                          key={i}
+                          style={{
+                            fontSize: 12,
+                            padding: 8,
+                            borderRadius: 8,
+                            background: theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
+                            border: '1px solid var(--border-subtle)',
+                          }}
+                        >
+                          <div style={{ fontWeight: 600, color: 'var(--text-heading)', marginBottom: 2 }}>
+                            {d.title || d.contractType || humanizePath(d.canonicalPath)}
                           </div>
-                        )}
-                      </div>
-                    ))}
+                          {d.description && (
+                            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>{d.description}</div>
+                          )}
+                          {graphBuildModeLabel && (
+                            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>{graphBuildModeLabel}</div>
+                          )}
+                          {d.firstOrderEntities && d.firstOrderEntities.length > 0 && (
+                            <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginTop: 4 }}>
+                              +{d.firstOrderEntities.length} first-order entities
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}

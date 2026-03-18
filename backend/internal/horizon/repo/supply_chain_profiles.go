@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
@@ -63,6 +65,29 @@ type CapabilityProfilesRepository struct {
 
 func NewCapabilityProfilesRepository(db *firestore.Client) *CapabilityProfilesRepository {
 	return &CapabilityProfilesRepository{col: db.Collection("horizon_capability_profiles")}
+}
+
+func (r *CapabilityProfilesRepository) Get(ctx context.Context, carrierRef, productRef string) (*models.CapabilityProfile, error) {
+	if r == nil || r.col == nil {
+		return nil, fmt.Errorf("capability profiles repo not configured")
+	}
+	carrierRef = strings.TrimSpace(carrierRef)
+	productRef = strings.TrimSpace(productRef)
+	if carrierRef == "" || productRef == "" {
+		return nil, ErrInvalidDocument
+	}
+	doc, err := r.col.Doc(capabilityProfileDocID(carrierRef, productRef)).Get(ctx)
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var profile models.CapabilityProfile
+	if err := doc.DataTo(&profile); err != nil {
+		return nil, err
+	}
+	return &profile, nil
 }
 
 func (r *CapabilityProfilesRepository) Upsert(ctx context.Context, profile *models.CapabilityProfile) error {

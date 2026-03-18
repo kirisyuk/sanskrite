@@ -116,7 +116,8 @@ func (e *ScoutEngine) runSupplyChainAssemblyStage(
 		return nil
 	}
 
-	if !refineMode && !isSupplyChainRefineContinuationJob(job) && result.Artifact != nil {
+	graphBuildMode := resolveSupplyChainGraphBuildMode(job, supplyChainPlan)
+	if !refineMode && !isSupplyChainRefineContinuationJob(job) && result.Artifact != nil && graphBuildMode != agents.SupplyChainGraphBuildModeHotPathOnly {
 		continuationJobIDs, scheduled := e.scheduleSupplyChainAssemblyContinuation(ctx, job, result, frontiers)
 		result.BackgroundContinuationScheduled = scheduled
 		result.BackgroundContinuationJobIDs = continuationJobIDs
@@ -587,6 +588,24 @@ func isFastFirstSupplyChainJob(job *models.ScoutingJob) bool {
 		return false
 	}
 	return hasSupplyChain
+}
+
+func resolveSupplyChainGraphBuildMode(job *models.ScoutingJob, plan *agents.SupplyChainExecutionPlan) string {
+	if plan != nil {
+		switch strings.TrimSpace(strings.ToLower(plan.GraphBuildMode)) {
+		case agents.SupplyChainGraphBuildModeHotPathOnly:
+			return agents.SupplyChainGraphBuildModeHotPathOnly
+		case agents.SupplyChainGraphBuildModeHotPathPlusGraph:
+			return agents.SupplyChainGraphBuildModeHotPathPlusGraph
+		}
+	}
+	if job != nil && job.State != nil {
+		switch strings.TrimSpace(strings.ToLower(parseStateString(job.State["supplyChainGraphBuildMode"]))) {
+		case agents.SupplyChainGraphBuildModeHotPathOnly:
+			return agents.SupplyChainGraphBuildModeHotPathOnly
+		}
+	}
+	return agents.SupplyChainGraphBuildModeHotPathPlusGraph
 }
 
 func buildSupplyChainFrontiers(cc *ChainContext) []string {

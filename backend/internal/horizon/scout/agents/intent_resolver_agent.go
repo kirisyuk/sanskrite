@@ -63,9 +63,15 @@ type DomainResolution struct {
 // SupplyChainExecutionPlan is a plan of executable supply chain queries.
 // Generated when contractType is in supply-chain group (supply-chain, value-chain, logistics-flow, etc.).
 type SupplyChainExecutionPlan struct {
+	GraphBuildMode string                    `json:"graphBuildMode,omitempty" firestore:"graphBuildMode,omitempty"` // "hot_path_only" | "hot_path_plus_graph"
 	Queries        []SupplyChainQuery        `json:"queries" firestore:"queries"`
 	OverlayQueries []SupplyChainOverlayQuery `json:"overlayQueries,omitempty" firestore:"overlayQueries,omitempty"` // Stage 2, after physical chains
 }
+
+const (
+	SupplyChainGraphBuildModeHotPathOnly      = "hot_path_only"
+	SupplyChainGraphBuildModeHotPathPlusGraph = "hot_path_plus_graph"
+)
 
 // SupplyChainQuery defines one holistic supply chain request (anchor + direction + filters).
 // Optional Level: 1 = top ORGs only (depth 1), 2 = ORG+FACs+products expansion (depth 2-3).
@@ -592,6 +598,7 @@ USER QUERY:
       "confidence": 0.0,
       "reason": "short reason",
       "supplyChainExecutionPlan": {
+        "graphBuildMode": "hot_path_plus_graph",
         "queries": [
           { "anchor": "/org/de/bmw", "anchorType": "org", "direction": "upstream", "depth": 4, "productFilter": ["ev-batteries"], "geoFilter": ["de", "cn"], "reason": "..." },
           { "anchors": ["/org/th/cp-group", "/org/th/riceland"], "anchorType": "org", "direction": "both", "depth": 4, "productFilter": ["rice"], "geoFilter": ["th"], "reason": "Thai rice producers" }
@@ -657,7 +664,7 @@ DOMAIN RULES
   SCENARIOS: scenario-analysis, future-outlook (aliases: macro-trends, megatrends → scenario-analysis)
   SECTOR: sector-overview, industry-structure (aliases: vertical-deep-dive → sector-overview)
   FALLBACK: other (only if none above fit): /domain/v1/other/{custom-slug}/...
-- SUPPLY CHAIN PLAN: When contractType is supply-chain or value-chain, you MUST include supplyChainExecutionPlan with 1-10 queries. CRITICAL: The FIRST queries must go FROM ORGANIZATIONS (as producers/suppliers for downstream, or as consumers for upstream). Supply chains are actor-centric: org→product→org. direction: use "upstream" when the query asks about suppliers, raw materials, inputs, "who supplies X", "where does X get its materials", sourcing; use "downstream" when asking about customers, buyers, "who buys X", distribution; use "both" for full chain mapping. For upstream: anchors are the CONSUMER orgs (e.g. Coca-Cola for "who supplies Coca-Cola"). For downstream: anchors are PRODUCER orgs. Organization-focused supply-chain intents are valid: keep the organization in anchors / supplyChainExecutionPlan, and if canonicalPath must encode it, use facet form like /domain/v1/supply-chain/geo/us/subject/apple-inc. Do NOT emit /domain/v1/supply-chain/org/us/apple-inc/... . For product+geo queries (e.g. "Thai rice supply chain"): contractType MUST be supply-chain, facets MUST include geo and product or material. anchorType MUST be org. Use anchors (or anchors array) with canonical /org/... paths. Each query: anchor (single) or anchors (array), anchorType (org|product|deposit), direction (upstream|downstream|both), depth (3-6), productFilter/geoFilter from facets, reason. overlayQueries (Stage 2) optional.
+- SUPPLY CHAIN PLAN: When contractType is supply-chain or value-chain, you MUST include supplyChainExecutionPlan with 1-10 queries. CRITICAL: The FIRST queries must go FROM ORGANIZATIONS (as producers/suppliers for downstream, or as consumers for upstream). Supply chains are actor-centric: org→product→org. direction: use "upstream" when the query asks about suppliers, raw materials, inputs, "who supplies X", "where does X get its materials", sourcing; use "downstream" when asking about customers, buyers, "who buys X", distribution; use "both" for full chain mapping. For upstream: anchors are the CONSUMER orgs (e.g. Coca-Cola for "who supplies Coca-Cola"). For downstream: anchors are PRODUCER orgs. Organization-focused supply-chain intents are valid: keep the organization in anchors / supplyChainExecutionPlan, and if canonicalPath must encode it, use facet form like /domain/v1/supply-chain/geo/us/subject/apple-inc. Do NOT emit /domain/v1/supply-chain/org/us/apple-inc/... . For product+geo queries (e.g. "Thai rice supply chain"): contractType MUST be supply-chain, facets MUST include geo and product or material. anchorType MUST be org. Use anchors (or anchors array) with canonical /org/... paths. Each query: anchor (single) or anchors (array), anchorType (org|product|deposit), direction (upstream|downstream|both), depth (3-6), productFilter/geoFilter from facets, reason. overlayQueries (Stage 2) optional. graphBuildMode MUST be "hot_path_only" for fast, hot-path-first answers when only the primary chain is needed, and "hot_path_plus_graph" when the system should continue with broader graph completion; default to "hot_path_plus_graph" when unsure.
 - ROUTE-SENSITIVE SUPPLY CHAIN: If the query mentions chokepoints, shipping routes, sea lanes, ports, terminals, pipelines, carriers, rerouting, "through/via", LNG/LPG shipping, or "from production to end-users", structure the intent for path execution. Include 3-8 anchors when evidence exists across these roles: producer org, upstream deposit/field, export facility, chokepoint/route geo, import terminal or market hub, downstream industrial consumer.
 - REGULATORY IMPACT PLAN: When contractType is policy-impact or regulatory-impact, you MUST include regulatoryImpactExecutionPlan with 1-5 queries. Each query: instrument (canonical path /mechanism/... or /program/...), jurisdiction (ISO2), parameters (rate_from, rate_to, effective_date when applicable), impactScope (economy-wide|sector-specific|entity-specific), depth (3-5), sectorFilter from facets, reason.
 - POLICY / REGULATORY TRANSMISSION: If the query asks what happens when a tax, tariff, VAT, CBAM-like cost, export control, sanctions measure, subsidy, capital rule, customs rule, licensing requirement, or compliance burden changes, include both the policy side and the exposed operational side. Do not return only the regulator/mechanism anchor.
@@ -1032,6 +1039,7 @@ func applySupplyChainDomainQuality(
 			d.SupplyChainExecutionPlan = plan
 		}
 	} else {
+		d.SupplyChainExecutionPlan.GraphBuildMode = normalizeSupplyChainGraphBuildMode(d.SupplyChainExecutionPlan.GraphBuildMode)
 		for i := range d.SupplyChainExecutionPlan.Queries {
 			if d.SupplyChainExecutionPlan.Queries[i].Depth <= 0 {
 				d.SupplyChainExecutionPlan.Queries[i].Depth = 4
@@ -1050,6 +1058,9 @@ func applySupplyChainDomainQuality(
 				}}
 			}
 		}
+	}
+	if d.SupplyChainExecutionPlan != nil {
+		d.SupplyChainExecutionPlan.GraphBuildMode = normalizeSupplyChainGraphBuildMode(d.SupplyChainExecutionPlan.GraphBuildMode)
 	}
 }
 
@@ -1241,7 +1252,10 @@ func synthesizeSupplyChainExecutionPlan(
 	if len(queries) == 0 {
 		return nil
 	}
-	plan := &SupplyChainExecutionPlan{Queries: queries}
+	plan := &SupplyChainExecutionPlan{
+		GraphBuildMode: SupplyChainGraphBuildModeHotPathPlusGraph,
+		Queries:        queries,
+	}
 	if profile.routeSensitive {
 		overlayAnchors := collectIntentAnchorPathsByPrefix(anchors, "/org/", "/fac/", "/market/")
 		if len(overlayAnchors) > 0 {
@@ -1253,6 +1267,17 @@ func synthesizeSupplyChainExecutionPlan(
 		}
 	}
 	return plan
+}
+
+func normalizeSupplyChainGraphBuildMode(raw string) string {
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case SupplyChainGraphBuildModeHotPathOnly:
+		return SupplyChainGraphBuildModeHotPathOnly
+	case "", SupplyChainGraphBuildModeHotPathPlusGraph:
+		return SupplyChainGraphBuildModeHotPathPlusGraph
+	default:
+		return SupplyChainGraphBuildModeHotPathPlusGraph
+	}
 }
 
 func synthesizeRegulatoryImpactExecutionPlan(
@@ -2126,7 +2151,14 @@ OUTPUT JSON SCHEMA:
       "affectedDomains": ["string (/domain/v1/... optional)"],
       "firstOrderEntities": ["string (canonical paths to add to the Lens scope)"],
       "confidence": 0.0,
-      "reason": "short reason"
+      "reason": "short reason",
+      "supplyChainExecutionPlan": {
+        "graphBuildMode": "hot_path_plus_graph",
+        "queries": [
+          { "anchor": "/org/de/bmw", "anchorType": "org", "direction": "upstream", "depth": 4, "productFilter": ["ev-batteries"], "geoFilter": ["de", "cn"], "reason": "..." }
+        ],
+        "overlayQueries": [{ "type": "regulatory", "anchors": [], "scope": "orgs" }]
+      }
     }
   ],
   "anchors": [
@@ -2153,6 +2185,7 @@ RULES:
 - focus MUST be in English (translate from the user query when needed). Keep it short and reusable.
 - keywords SHOULD be in English when possible (translate), but can include raw tokens like handles.
 - spherePaths MUST be canonical under /sphere/... (if unsure, use /sphere/other).
+- For supply-chain domains, include supplyChainExecutionPlan. graphBuildMode MUST be "hot_path_only" for hot-path-only execution and "hot_path_plus_graph" for broader graph completion. Default to "hot_path_plus_graph" when unsure.
 
 - DOMAINS (CRITICAL):
   - A DOMAIN is an executable knowledge contract: “what the user wants to know about the world” and how to structure exploration.

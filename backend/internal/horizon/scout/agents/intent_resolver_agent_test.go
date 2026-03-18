@@ -24,6 +24,9 @@ func TestApplyIntentResolutionQualityRules_SynthesizesSupplyPlan(t *testing.T) {
 	if out.Domains[0].SupplyChainExecutionPlan == nil || len(out.Domains[0].SupplyChainExecutionPlan.Queries) == 0 {
 		t.Fatalf("expected synthesized supply chain plan")
 	}
+	if got := out.Domains[0].SupplyChainExecutionPlan.GraphBuildMode; got != SupplyChainGraphBuildModeHotPathPlusGraph {
+		t.Fatalf("expected default graphBuildMode %q, got %q", SupplyChainGraphBuildModeHotPathPlusGraph, got)
+	}
 	if got := out.Domains[0].SupplyChainExecutionPlan.Queries[0].Direction; got != "both" {
 		t.Fatalf("expected direction both, got %q", got)
 	}
@@ -75,5 +78,25 @@ func TestRepairSupplyChainDomainNamespacePath_LeavesNonSupplyChainDomainsUntouch
 	in := "/domain/v1/policy-impact/org/us/apple-inc"
 	if got := repairSupplyChainDomainNamespacePath(in); got != in {
 		t.Fatalf("repairSupplyChainDomainNamespacePath() = %q, want %q", got, in)
+	}
+}
+
+func TestNormalizeSupplyChainGraphBuildMode(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "empty defaults", in: "", want: SupplyChainGraphBuildModeHotPathPlusGraph},
+		{name: "hot path only", in: "hot_path_only", want: SupplyChainGraphBuildModeHotPathOnly},
+		{name: "upper case normalizes", in: "HOT_PATH_PLUS_GRAPH", want: SupplyChainGraphBuildModeHotPathPlusGraph},
+		{name: "unknown defaults", in: "graph_only", want: SupplyChainGraphBuildModeHotPathPlusGraph},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeSupplyChainGraphBuildMode(tt.in); got != tt.want {
+				t.Fatalf("normalizeSupplyChainGraphBuildMode(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
 	}
 }

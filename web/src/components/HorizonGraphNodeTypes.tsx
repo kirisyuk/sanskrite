@@ -189,6 +189,14 @@ export interface HorizonNodeData {
   state?: Record<string, number>; // Метрики
   /** UI: whether to render metrics inside the node (disabled by default for performance). */
   showMetrics?: boolean;
+  /** Compact canvas criticality surface, derived from best incident supply/path edge. */
+  criticalProductRef?: string;
+  criticalProductLabel?: string;
+  criticalSummary?: string;
+  primaryCriticalMetricKey?: string;
+  primaryCriticalMetricLabel?: string;
+  primaryCriticalMetricValue?: number;
+  primaryCriticalMetricUnit?: string;
   status?: string;
   expanded?: boolean;
   collapsed?: boolean;
@@ -4262,6 +4270,45 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
     return type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   };
 
+  const criticalSurface = React.useMemo(() => {
+    const productLabel =
+      String(data.criticalProductLabel || '').trim() ||
+      (data.criticalProductRef ? humanizeCanonicalPath(data.criticalProductRef) : '');
+    const metricLabel = String(data.primaryCriticalMetricLabel || '').trim();
+    const rawValue = typeof data.primaryCriticalMetricValue === 'number' ? data.primaryCriticalMetricValue : null;
+    const unit = String(data.primaryCriticalMetricUnit || '').trim().toLowerCase();
+    let metricValue = '';
+    if (rawValue != null && Number.isFinite(rawValue)) {
+      if (unit === 'percent') {
+        metricValue = `${rawValue.toFixed(rawValue >= 10 ? 0 : 1).replace(/\.0$/, '')}%`;
+      } else if (unit === 'ratio') {
+        const pct = rawValue > 0 && rawValue <= 1 ? rawValue * 100 : rawValue;
+        metricValue = `${pct.toFixed(pct >= 10 ? 0 : 1).replace(/\.0$/, '')}%`;
+      } else if (unit === 'days') {
+        metricValue = `${rawValue.toFixed(rawValue >= 10 ? 0 : 1).replace(/\.0$/, '')}d`;
+      } else if (unit === 'hours') {
+        metricValue = `${rawValue.toFixed(rawValue >= 10 ? 0 : 1).replace(/\.0$/, '')}h`;
+      } else if (unit) {
+        metricValue = `${rawValue.toFixed(rawValue >= 10 ? 0 : 2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1')} ${unit}`;
+      } else {
+        metricValue = rawValue.toFixed(rawValue >= 10 ? 0 : 2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
+      }
+    }
+    const metricText = metricLabel && metricValue ? `${metricLabel} ${metricValue}` : '';
+    if (!productLabel && !metricText) return null;
+    return {
+      productLabel,
+      metricText,
+      title: [productLabel, metricText].filter(Boolean).join(' · '),
+    };
+  }, [
+    data.criticalProductLabel,
+    data.criticalProductRef,
+    data.primaryCriticalMetricLabel,
+    data.primaryCriticalMetricUnit,
+    data.primaryCriticalMetricValue,
+  ]);
+
   // Compact node rendering (for left pane groups in Levels layout)
   const isCompact = data.nodeSize === 'compact';
   
@@ -4459,6 +4506,55 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
             >
               {displayLabel}
             </span>
+            {criticalSurface && (
+              <div
+                title={criticalSurface.title}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  minWidth: 0,
+                  flexWrap: 'wrap',
+                }}
+              >
+                {criticalSurface.productLabel && (
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      padding: '2px 6px',
+                      borderRadius: 999,
+                      background: theme === 'dark' ? hexToRgba(accentColor, 0.18) : hexToRgba(accentColor, 0.10),
+                      color: theme === 'dark' ? 'rgba(255,255,255,0.82)' : 'rgba(15,23,42,0.78)',
+                      fontSize: 9,
+                      fontWeight: 800,
+                      lineHeight: 1.1,
+                      maxWidth: '100%',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {criticalSurface.productLabel}
+                  </span>
+                )}
+                {criticalSurface.metricText && (
+                  <span
+                    style={{
+                      minWidth: 0,
+                      fontSize: 9,
+                      fontWeight: 700,
+                      color: mutedTextColor,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {criticalSurface.metricText}
+                  </span>
+                )}
+              </div>
+            )}
             <SpecializedNodeMetaChrome data={data} theme={theme} accentColor={accentColor} compact />
           </div>
 
@@ -5457,6 +5553,58 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
               >
                 {formatType(displayType)}
               </div>
+            )}
+
+            {!isCollapsed && (
+              criticalSurface && (
+                <div
+                  title={criticalSurface.title}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    flexWrap: 'wrap',
+                    marginTop: 6,
+                  }}
+                >
+                  {criticalSurface.productLabel && (
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        padding: '3px 8px',
+                        borderRadius: 999,
+                        background: theme === 'dark' ? hexToRgba(accentColor, 0.18) : hexToRgba(accentColor, 0.10),
+                        color: theme === 'dark' ? 'rgba(255,255,255,0.84)' : 'rgba(15,23,42,0.80)',
+                        fontSize: 10,
+                        fontWeight: 800,
+                        lineHeight: 1.1,
+                        maxWidth: '100%',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {criticalSurface.productLabel}
+                    </span>
+                  )}
+                  {criticalSurface.metricText && (
+                    <span
+                      style={{
+                        minWidth: 0,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        color: textColor,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {criticalSurface.metricText}
+                    </span>
+                  )}
+                </div>
+              )
             )}
 
             {!isCollapsed && (

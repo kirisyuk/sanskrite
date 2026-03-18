@@ -4000,6 +4000,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     'market': '#EF4444',       // red
     'context': '#A855F7',      // purple
   };
+  const DOMAIN_SCAFFOLD_EDGE_TYPES = new Set([
+    'FOCUSES_ON',
+    'INVOLVES_ACTOR',
+    'IN_GEO_SCOPE',
+    'ABOUT',
+    'RELATED_DOMAIN',
+    'BROADENS_TO',
+    'NARROWS_TO',
+    'DOMAIN_RELATION',
+  ]);
 
   // Helper function for edge styles based on type
   // When useSemanticGroupColors: 4 colors by semantic group. Else: full per-type palette.
@@ -4010,6 +4020,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     if (specialized) return specialized;
 
     if (useSemanticGroupColors) {
+      if (DOMAIN_SCAFFOLD_EDGE_TYPES.has(type)) {
+        return {
+          stroke: '#9CA3AF',
+          strokeWidth: Math.max(1.1, baseWidth * 0.9),
+          strokeDasharray: '5 4',
+        };
+      }
       // Market overlays: neutral participation/trading, not conflict — override market red
       if (type === 'PARTICIPATES_IN') {
         return { stroke: '#0D9488', strokeWidth: baseWidth }; // teal-600
@@ -4064,6 +4081,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       return {
         stroke: '#9CA3AF', // gray-400
         strokeWidth: Math.max(1.2, baseWidth * 0.95),
+        strokeDasharray: '5 4',
+      };
+    }
+
+    // Domain scaffold/context edges — neutral gray dashed to avoid false conflict emphasis
+    if (DOMAIN_SCAFFOLD_EDGE_TYPES.has(type)) {
+      return {
+        stroke: '#9CA3AF', // gray-400
+        strokeWidth: Math.max(1.1, baseWidth * 0.9),
         strokeDasharray: '5 4',
       };
     }
@@ -4881,6 +4907,29 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             typeof pathStress?.bottleneckLegIndex === 'number' && typeof segmentIndex === 'number'
               ? pathStress.bottleneckLegIndex === segmentIndex
               : false,
+          criticalSummary:
+            typeof leg?.stress?.stressScore === 'number' || typeof pathStress?.pathScore === 'number'
+              ? `${
+                  (typeof pathStress?.bottleneckLegIndex === 'number' && typeof segmentIndex === 'number' && pathStress.bottleneckLegIndex === segmentIndex)
+                    ? 'Bottleneck leg'
+                    : 'Route leg'
+                } stress ${(typeof leg?.stress?.stressScore === 'number' ? leg.stress.stressScore : (pathStress?.pathScore ?? 0)).toFixed(2)}`
+              : undefined,
+          primaryRiskMechanism:
+            (typeof pathStress?.bottleneckLegIndex === 'number' && typeof segmentIndex === 'number' && pathStress.bottleneckLegIndex === segmentIndex)
+              ? 'route_fragility'
+              : (typeof leg?.stress?.stressScore === 'number' || typeof pathStress?.pathScore === 'number' ? 'path_stress' : undefined),
+          primaryCriticalMetricKey:
+            typeof leg?.stress?.stressScore === 'number' || typeof pathStress?.pathScore === 'number' ? 'pathStressScore' : undefined,
+          primaryCriticalMetricLabel:
+            typeof leg?.stress?.stressScore === 'number' || typeof pathStress?.pathScore === 'number' ? 'Path stress' : undefined,
+          primaryCriticalMetricValue:
+            typeof leg?.stress?.stressScore === 'number' ? leg.stress.stressScore : pathStress?.pathScore,
+          riskFlags:
+            (typeof pathStress?.bottleneckLegIndex === 'number' && typeof segmentIndex === 'number' && pathStress.bottleneckLegIndex === segmentIndex)
+              ? ['route_fragility']
+              : [],
+          riskCoverageStatus: String(artifact.sufficiencyStatus || pathSufficiency?.status || '').trim() || undefined,
         } as Record<string, any>;
 
         const productIdx = e.productNodeIndex ?? e.viaProductIndex ?? (e as any).productNodeIndex ?? (e as any).viaProductIndex;
@@ -11328,6 +11377,67 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const hoverActive = !!hoverHighlight && !!hovered;
     const profileActiveId = String(fragmentProfileActiveNodeId || '').trim();
     const profileActive = !!profileActiveId;
+    const nodeCriticalSurface = new Map<string, {
+      score: number;
+      productRef?: string;
+      productLabel?: string;
+      summary?: string;
+      metricKey?: string;
+      metricLabel?: string;
+      metricValue?: number;
+      metricUnit?: string;
+    }>();
+    const assignNodeCriticalSurface = (nodeId: string, meta: {
+      score: number;
+      productRef?: string;
+      productLabel?: string;
+      summary?: string;
+      metricKey?: string;
+      metricLabel?: string;
+      metricValue?: number;
+      metricUnit?: string;
+    }) => {
+      nodeId = String(nodeId || '').trim();
+      if (!nodeId) return;
+      const prev = nodeCriticalSurface.get(nodeId);
+      if (!prev || meta.score > prev.score) {
+        nodeCriticalSurface.set(nodeId, meta);
+      }
+    };
+    for (const edge of edges) {
+      const ed: any = (edge as any)?.data || {};
+      const criticality =
+        typeof ed?.criticality === 'number'
+          ? ed.criticality
+          : (typeof (edge as any)?.criticality === 'number' ? (edge as any).criticality : undefined);
+      const primaryMetricValue =
+        typeof ed?.primaryCriticalMetricValue === 'number'
+          ? ed.primaryCriticalMetricValue
+          : (typeof ed?.pathStressScore === 'number' ? ed.pathStressScore : undefined);
+      const score = typeof criticality === 'number'
+        ? criticality
+        : (typeof primaryMetricValue === 'number' ? Math.max(0, Math.min(1, primaryMetricValue)) : 0);
+      if (!(score > 0)) continue;
+      const productRef = String(ed?.pathProductRef || ed?.productRef || '').trim();
+      const productLabel = productRef ? (humanizeCanonicalPath(productRef) || productRef) : '';
+      const summary = String(ed?.criticalSummary || '').trim() || undefined;
+      const metricKey = String(ed?.primaryCriticalMetricKey || '').trim() || undefined;
+      const metricLabel = String(ed?.primaryCriticalMetricLabel || '').trim() || undefined;
+      const metricUnit = String(ed?.primaryCriticalMetricUnit || '').trim() || undefined;
+      const metricValue = typeof ed?.primaryCriticalMetricValue === 'number' ? ed.primaryCriticalMetricValue : undefined;
+      const meta = {
+        score,
+        productRef: productRef || undefined,
+        productLabel: productLabel || undefined,
+        summary,
+        metricKey,
+        metricLabel,
+        metricValue,
+        metricUnit,
+      };
+      assignNodeCriticalSurface(edge.source, meta);
+      assignNodeCriticalSurface(edge.target, meta);
+    }
 
     return nodes.map((n) => {
       const id = String(n.id || '').trim();
@@ -11577,6 +11687,63 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         changed = true;
       }
 
+      if (!isGroup) {
+        const criticalMeta = nodeCriticalSurface.get(id);
+        const nextProductRef = criticalMeta?.productRef;
+        const nextProductLabel = criticalMeta?.productLabel;
+        const nextSummary = criticalMeta?.summary;
+        const nextMetricKey = criticalMeta?.metricKey;
+        const nextMetricLabel = criticalMeta?.metricLabel;
+        const nextMetricValue = criticalMeta?.metricValue;
+        const nextMetricUnit = criticalMeta?.metricUnit;
+        const prevChanged =
+          String((nextData as any)?.criticalProductRef || '').trim() !== String(nextProductRef || '').trim() ||
+          String((nextData as any)?.criticalProductLabel || '').trim() !== String(nextProductLabel || '').trim() ||
+          String((nextData as any)?.criticalSummary || '').trim() !== String(nextSummary || '').trim() ||
+          String((nextData as any)?.primaryCriticalMetricKey || '').trim() !== String(nextMetricKey || '').trim() ||
+          String((nextData as any)?.primaryCriticalMetricLabel || '').trim() !== String(nextMetricLabel || '').trim() ||
+          String((nextData as any)?.primaryCriticalMetricUnit || '').trim() !== String(nextMetricUnit || '').trim() ||
+          (typeof (nextData as any)?.primaryCriticalMetricValue === 'number' ? (nextData as any).primaryCriticalMetricValue : undefined) !== nextMetricValue;
+        if (prevChanged) {
+          if (nextData === d0) {
+            nextData = { ...d0 };
+          }
+          changed = true;
+          if (nextProductRef) (nextData as any).criticalProductRef = nextProductRef;
+          else delete (nextData as any).criticalProductRef;
+          if (nextProductLabel) (nextData as any).criticalProductLabel = nextProductLabel;
+          else delete (nextData as any).criticalProductLabel;
+          if (nextSummary) (nextData as any).criticalSummary = nextSummary;
+          else delete (nextData as any).criticalSummary;
+          if (nextMetricKey) (nextData as any).primaryCriticalMetricKey = nextMetricKey;
+          else delete (nextData as any).primaryCriticalMetricKey;
+          if (nextMetricLabel) (nextData as any).primaryCriticalMetricLabel = nextMetricLabel;
+          else delete (nextData as any).primaryCriticalMetricLabel;
+          if (typeof nextMetricValue === 'number') (nextData as any).primaryCriticalMetricValue = nextMetricValue;
+          else delete (nextData as any).primaryCriticalMetricValue;
+          if (nextMetricUnit) (nextData as any).primaryCriticalMetricUnit = nextMetricUnit;
+          else delete (nextData as any).primaryCriticalMetricUnit;
+        }
+      } else if (
+        typeof (nextData as any)?.criticalProductRef !== 'undefined' ||
+        typeof (nextData as any)?.criticalProductLabel !== 'undefined' ||
+        typeof (nextData as any)?.criticalSummary !== 'undefined' ||
+        typeof (nextData as any)?.primaryCriticalMetricKey !== 'undefined' ||
+        typeof (nextData as any)?.primaryCriticalMetricLabel !== 'undefined' ||
+        typeof (nextData as any)?.primaryCriticalMetricValue !== 'undefined' ||
+        typeof (nextData as any)?.primaryCriticalMetricUnit !== 'undefined'
+      ) {
+        if (nextData === d0) nextData = { ...d0 };
+        delete (nextData as any).criticalProductRef;
+        delete (nextData as any).criticalProductLabel;
+        delete (nextData as any).criticalSummary;
+        delete (nextData as any).primaryCriticalMetricKey;
+        delete (nextData as any).primaryCriticalMetricLabel;
+        delete (nextData as any).primaryCriticalMetricValue;
+        delete (nextData as any).primaryCriticalMetricUnit;
+        changed = true;
+      }
+
       if (isLevelsRight) {
         if (nextData === d0) {
           nextData = { ...d0 };
@@ -11669,6 +11836,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   }, [
     perfMode,
     nodes,
+    edges,
     hoverHighlight,
     hoverHighlightMode,
     hoveredNodeId,

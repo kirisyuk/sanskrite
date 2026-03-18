@@ -43,7 +43,7 @@ func (v *SupplyChainValidator) Validate(ctx context.Context, input CriticValidat
 		return result, err
 	}
 	// Deterministic invariant checks: time overlap, unit norm, flow conservation, allocation
-	invariantGaps := checkSupplyChainInvariants(input.SupplyChains)
+	invariantGaps := checkSupplyChainInvariants(input.SupplyChains, input.WorkingProductScope)
 	if len(invariantGaps) > 0 {
 		if result.MissingInfo == nil {
 			result.MissingInfo = []string{}
@@ -59,8 +59,14 @@ func (v *SupplyChainValidator) Validate(ctx context.Context, input CriticValidat
 
 // checkSupplyChainInvariants runs deterministic checks: time overlap, unit normalization, flow conservation, allocation consistency (plan 8.1).
 // Returns missingInfo items for failed invariants.
-func checkSupplyChainInvariants(chains []SupplyChain) []string {
+func checkSupplyChainInvariants(chains []SupplyChain, workingProductScope []string) []string {
 	var gaps []string
+	scopeSet := make(map[string]struct{}, len(workingProductScope))
+	for _, productRef := range workingProductScope {
+		if productRef = strings.TrimSpace(productRef); productRef != "" {
+			scopeSet[productRef] = struct{}{}
+		}
+	}
 	for _, ch := range chains {
 		// Time overlap: adjacent segment metrics should have overlapping periods (plan 8.1)
 		for i := 0; i < len(ch.SegmentMetrics)-1; i++ {
@@ -89,7 +95,76 @@ func checkSupplyChainInvariants(chains []SupplyChain) []string {
 		if allocGap := checkAllocationConsistency(ch); allocGap != "" {
 			gaps = append(gaps, allocGap)
 		}
+		gaps = append(gaps, checkScopedSupplyChainSemantics(ch, scopeSet)...)
 	}
+	return gaps
+}
+
+func checkScopedSupplyChainSemantics(ch SupplyChain, scopeSet map[string]struct{}) []string {
+	var gaps []string
+	chainProducts := make(map[string]struct{})
+	for _, node := range ch.Nodes {
+		cp := strings.TrimSpace(node.CanonicalPath)
+		if strings.HasPrefix(cp, "/product/") {
+			chainProducts[cp] = struct{}{}
+		}
+	}
+
+	candidateSeen := make(map[string]struct{})
+	for _, candidate := range ch.ProductCandidates {
+		ref := strings.TrimSpace(candidate.CanonicalPath)
+		if ref == "" {
+			continue
+		}
+		if _, ok := candidateSeen[ref]; ok {
+			gaps = append(gaps, "supply_chain_invariant: duplicate productCandidate canonicalPath in same chain")
+			continue
+		}
+		candidateSeen[ref] = struct{}{}
+		if _, ok := chainProducts[ref]; ok {
+			gaps = append(gaps, "supply_chain_invariant: productCandidate duplicates an already materialized chain product")
+		}
+		if _, ok := scopeSet[ref]; ok {
+			gaps = append(gaps, "supply_chain_invariant: productCandidate duplicates an existing working product scope product")
+		}
+	}
+
+	for _, obs := range ch.CarrierProductObservations {
+		if strings.TrimSpace(obs.CarrierRef) == "" || strings.TrimSpace(obs.ProductRef) == "" {
+			gaps = append(gaps, "supply_chain_invariant: carrierProductObservation requires carrierRef and productRef")
+			continue
+		}
+		if _, ok := chainProducts[strings.TrimSpace(obs.ProductRef)]; !ok {
+			if _, ok := scopeSet[strings.TrimSpace(obs.ProductRef)]; !ok {
+				gaps = append(gaps, "supply_chain_invariant: carrierProductObservation productRef must be present in chain or working product scope")
+			}
+		}
+	}
+	for _, obs := range ch.LinkObservations {
+		if strings.TrimSpace(obs.ProductRef) == "" {
+			gaps = append(gaps, "supply_chain_invariant: linkObservation requires productRef")
+			continue
+		}
+		if _, ok := chainProducts[strings.TrimSpace(obs.ProductRef)]; !ok {
+			if _, ok := scopeSet[strings.TrimSpace(obs.ProductRef)]; !ok {
+				gaps = append(gaps, "supply_chain_invariant: linkObservation productRef must be present in chain or working product scope")
+			}
+		}
+	}
+	for _, obs := range ch.RouteObservations {
+		if strings.TrimSpace(obs.ProductRef) == "" && len(obs.TransportVia) == 0 {
+			gaps = append(gaps, "supply_chain_invariant: routeObservation requires productRef or transportVia")
+			continue
+		}
+		if productRef := strings.TrimSpace(obs.ProductRef); productRef != "" {
+			if _, ok := chainProducts[productRef]; !ok {
+				if _, ok := scopeSet[productRef]; !ok {
+					gaps = append(gaps, "supply_chain_invariant: routeObservation productRef must be present in chain or working product scope")
+				}
+			}
+		}
+	}
+
 	return gaps
 }
 

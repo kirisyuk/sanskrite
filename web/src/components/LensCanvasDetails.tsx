@@ -36,6 +36,13 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
   onRefreshJobs,
   onUpdateScope,
 }) => {
+  const isSupplyChainContractType = (value?: string) => /^(supply-chain|value-chain)$/i.test(String(value || '').trim());
+  const getSupplyChainGraphBuildModeLabel = (value?: string) => {
+    const mode = String(value || '').trim().toLowerCase();
+    if (mode === 'hot_path_only') return 'HOT PATH ONLY';
+    if (mode === 'hot_path_plus_graph') return 'HOT PATH + GRAPH';
+    return '';
+  };
   type SearchEntity = {
     id: string;
     canonicalPath: string;
@@ -697,16 +704,18 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
                     </div>
                   );
                 })}
-                {domains.map((d: { canonicalPath?: string; contractType?: string; title?: string; description?: string }, idx: number) => {
+                {domains.map((d: { canonicalPath?: string; contractType?: string; title?: string; description?: string; supplyChainExecutionPlan?: { graphBuildMode?: string } }, idx: number) => {
                   const path = (d?.canonicalPath || '').trim();
                   const ct = (d?.contractType || '').trim();
                   const title = (d?.title || d?.description || '').trim();
                   const regionLabel = getDomainRegionLabel(path);
+                  const graphBuildModeLabel = isSupplyChainContractType(ct) ? getSupplyChainGraphBuildModeLabel(d?.supplyChainExecutionPlan?.graphBuildMode) : '';
                   return (
                     <div key={`domain-${path || idx}`} style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-subtle)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                         <Pill text={ct || 'DOMAIN'} tone="amber" />
                         {regionLabel ? <Pill text={regionLabel} tone="amber" /> : null}
+                        {graphBuildModeLabel ? <Pill text={graphBuildModeLabel} tone="success" /> : null}
                         <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 750, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {title || humanizeCanonicalPath(path) || '—'}
                         </div>
@@ -756,6 +765,7 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
                     const matchedDomain = domains.find((d: any) => (d?.canonicalPath || '').trim() === path);
                     const displayTitle = matchedDomain?.title || matchedDomain?.description || domainName;
                     const regionLabel = getDomainRegionLabel(path);
+                    const graphBuildModeLabel = isSupplyChainContractType(contractType) ? getSupplyChainGraphBuildModeLabel(matchedDomain?.supplyChainExecutionPlan?.graphBuildMode) : '';
                     return (
                       <div key={`scope-${path}-${index}`} style={{ padding: '10px 12px', background: 'transparent', borderBottom: '1px solid var(--border-subtle)' }}>
                         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
@@ -763,6 +773,7 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                               <Pill text={contractType} tone="amber" />
                               {regionLabel ? <Pill text={regionLabel} tone="amber" /> : null}
+                              {graphBuildModeLabel ? <Pill text={graphBuildModeLabel} tone="success" /> : null}
                               <div style={{ minWidth: 0, fontSize: 13, fontWeight: 750, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                 {displayTitle}
                               </div>

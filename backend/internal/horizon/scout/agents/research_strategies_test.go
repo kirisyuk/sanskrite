@@ -37,7 +37,7 @@ func TestSupplyChainHotPathPrompt_PrefersConcreteOperationalNodes(t *testing.T) 
 		Depth:         3,
 		ProductFilter: []string{"books", "electronics"},
 		GeoFilter:     []string{"kz", "cn"},
-	})
+	}, nil)
 	for _, want := range []string{
 		"Target 6-20 chains",
 		"Prefer concrete operational nodes: factories, plants, mines, depots, bonded warehouses, customs terminals, ports, inland terminals, distribution centers, fulfillment hubs, and stores",
@@ -52,6 +52,78 @@ func TestSupplyChainHotPathPrompt_PrefersConcreteOperationalNodes(t *testing.T) 
 	}
 	if strings.Contains(prompt, "/org/... -> /product/... -> /org/...") {
 		t.Fatalf("hot path prompt must not allow actor-level fallback skeletons")
+	}
+	for _, want := range []string{
+		"When evidence supports reusable actor×product baseline facts, include carrierProductObservations in the same response",
+		"REUSABLE CAPABILITY METRICS (carrier × product baseline):",
+		"lead_time_days_baseline",
+		"technical_substitutability",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("hot path prompt missing capability guidance %q", want)
+		}
+	}
+}
+
+func TestSupplyChainPreHotPathPrompt_AlwaysSoftSteering(t *testing.T) {
+	a := NewResearchAgent(nil)
+	prompt := a.buildSupplyChainPreHotPathPrompt(SupplyChainQuery{
+		Anchor:        "/org/de/siemens-energy",
+		AnchorType:    "org",
+		Direction:     "upstream",
+		Depth:         4,
+		ProductFilter: []string{"gas turbine spare parts", "maintenance parts"},
+	})
+	for _, want := range []string{
+		"runs BEFORE hot-path graph construction for every supply-chain job",
+		"Do NOT build supply chains here",
+		"It must NEVER act as a hard filter",
+		"For OEM/service/spare-parts cases, think in terms of parts manufacturing, authorized suppliers, repair centers, service depots",
+		"derivedProductFilters",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("pre-hot-path prompt missing %q", want)
+		}
+	}
+}
+
+func TestSupplyChainHotPathCapabilityPrompt_StaysTopologyStable(t *testing.T) {
+	a := NewResearchAgent(nil)
+	prompt := a.buildSupplyChainHotPathCapabilityPrompt(
+		SupplyChainQuery{
+			Anchor:        "/org/qa/qatarenergy",
+			AnchorType:    "org",
+			Direction:     "down",
+			Depth:         4,
+			ProductFilter: []string{"lng", "liquefied-natural-gas"},
+		},
+		[]SupplyChain{
+			{
+				Nodes: []SupplyChainNode{
+					{CanonicalPath: "/org/qa/qatarenergy", Name: "QatarEnergy", Type: "ORGANIZATION"},
+					{CanonicalPath: "/fac/qa/ras-laffan-lng-complex", Name: "Ras Laffan LNG Complex", Type: "FACILITY"},
+					{CanonicalPath: "/product/raw/hydrocarbon/liquefaction/lng", Name: "LNG", Type: "PRODUCT"},
+					{CanonicalPath: "/fac/gb/south-hook-terminal", Name: "South Hook LNG Terminal", Type: "FACILITY"},
+				},
+				Confidence: 0.81,
+				Reason:     "reported LNG export chain",
+			},
+		},
+		&SupplyChainPreHotPathPlan{
+			Strategy:              "commodity_corridor",
+			DerivedProductFilters: []string{"lng"},
+		},
+	)
+	for _, want := range []string{
+		"Do NOT create new topology. Do NOT add or remove graph entities.",
+		"carrierProductObservations are practically required when evidence exists",
+		"Do NOT return supplyChains or nodes in this pass.",
+		"\"carrierProductObservations\": [",
+		"PRE-HOT-PATH STEERING:",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("capability prompt missing %q", want)
+		}
 	}
 }
 

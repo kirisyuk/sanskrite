@@ -23,8 +23,9 @@ func TestComposableValidationPrompts_DoNotContainDeprecatedTypes(t *testing.T) {
 		CanonicalPath: "/org/us/example-inc",
 	}
 	input := CriticValidatorInput{
-		Fragment:  frag,
-		Relations: nil,
+		Fragment:            frag,
+		Relations:           nil,
+		WorkingProductScope: []string{"/product/material/lithium-chloride"},
 	}
 	agent := NewCriticAgent(nil)
 
@@ -57,8 +58,9 @@ func TestComposableValidationPrompts_ContainStrictOutputSchema(t *testing.T) {
 		CanonicalPath: "/org/us/example-inc",
 	}
 	input := CriticValidatorInput{
-		Fragment:  frag,
-		Relations: nil,
+		Fragment:            frag,
+		Relations:           nil,
+		WorkingProductScope: []string{"/product/material/lithium-chloride"},
 	}
 	agent := NewCriticAgent(nil)
 
@@ -102,6 +104,59 @@ func TestCriticPipeline_Validate_supplyChainMode(t *testing.T) {
 	}
 	if result.Confidence != 1.0 {
 		t.Errorf("expected confidence=1.0, got %f", result.Confidence)
+	}
+}
+
+func TestSupplyChainValidationPrompt_IncludesWorkingProductScopeRules(t *testing.T) {
+	agent := NewCriticAgent(nil)
+	prompt := agent.buildSupplyChainValidationPrompt(CriticValidatorInput{
+		Fragment:            &models.HorizonFragment{CanonicalPath: "/org/us/example", Type: models.FragmentTypeOrganization},
+		WorkingProductScope: []string{"/product/material/lithium-chloride"},
+		SupplyChains: []SupplyChain{
+			{
+				ProductCandidates: []ProductCandidate{{CanonicalPath: "/product/material/lithium-hydroxide", Name: "Lithium Hydroxide", Confidence: 0.81}},
+			},
+		},
+	})
+	if !strings.Contains(prompt, "WORKING PRODUCT SCOPE") {
+		t.Fatalf("prompt must include working product scope block")
+	}
+	if !strings.Contains(prompt, "productCandidates must be genuinely new scope additions") {
+		t.Fatalf("prompt must include candidate scope rule")
+	}
+}
+
+func TestCheckSupplyChainInvariants_ValidatesScopedCandidatesAndObservations(t *testing.T) {
+	gaps := checkSupplyChainInvariants([]SupplyChain{
+		{
+			Nodes: []SupplyChainNode{
+				{CanonicalPath: "/org/kz/example", Type: "ORGANIZATION"},
+				{CanonicalPath: "/product/material/lithium-chloride", Type: "PRODUCT"},
+				{CanonicalPath: "/org/ru/example", Type: "ORGANIZATION"},
+			},
+			ProductCandidates: []ProductCandidate{
+				{CanonicalPath: "/product/material/lithium-chloride", Name: "Lithium Chloride", Confidence: 0.81},
+			},
+			CarrierProductObservations: []CarrierProductObservation{
+				{CarrierRef: "/org/kz/example", ProductRef: "/product/material/unknown-feedstock", Confidence: 0.74},
+			},
+			LinkObservations: []SupplyLinkObservation{
+				{SupplierRef: "/org/kz/example", CustomerRef: "/org/ru/example", ProductRef: "/product/material/unknown-feedstock", Confidence: 0.74},
+			},
+		},
+	}, []string{"/product/material/lithium-chloride"})
+	if len(gaps) == 0 {
+		t.Fatal("expected invariant gaps")
+	}
+	joined := strings.Join(gaps, "\n")
+	if !strings.Contains(joined, "productCandidate duplicates") {
+		t.Fatalf("gaps must mention duplicate productCandidate, got %v", gaps)
+	}
+	if !strings.Contains(joined, "carrierProductObservation productRef") {
+		t.Fatalf("gaps must mention carrierProductObservation scope mismatch, got %v", gaps)
+	}
+	if !strings.Contains(joined, "linkObservation productRef") {
+		t.Fatalf("gaps must mention linkObservation scope mismatch, got %v", gaps)
 	}
 }
 

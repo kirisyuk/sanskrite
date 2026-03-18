@@ -67,11 +67,12 @@ func (a *CriticAgent) ValidateWithGraphContext(
 	domainModes = contractsemantics.SortDomainModesForExecution(domainModes)
 	if len(domainModes) > 0 {
 		input := CriticValidatorInput{
-			Fragment:      extractedData,
-			Relations:     relations,
-			SupplyChains:  supplyChains,
-			SourceContent: sourceContent,
-			GraphContext:  graphContext,
+			Fragment:            extractedData,
+			Relations:           relations,
+			SupplyChains:        supplyChains,
+			WorkingProductScope: collectWorkingProductScopeFromChains(supplyChains),
+			SourceContent:       sourceContent,
+			GraphContext:        graphContext,
 		}
 		out, err := a.CriticPipeline().Validate(ctx, input, domainModes)
 		if err != nil {
@@ -130,7 +131,7 @@ func RuleBasedQuickValidation(
 
 	// Supply chain invariants (deterministic checks)
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) {
-		invariantGaps := checkSupplyChainInvariants(supplyChains)
+		invariantGaps := checkSupplyChainInvariants(supplyChains, collectWorkingProductScopeFromChains(supplyChains))
 		missing = append(missing, invariantGaps...)
 	}
 
@@ -140,6 +141,43 @@ func RuleBasedQuickValidation(
 		MissingInfo: missing,
 		Conflicts:   []ValidationConflict{},
 	}
+}
+
+func collectWorkingProductScopeFromChains(chains []SupplyChain) []string {
+	out := make([]string, 0, len(chains))
+	for _, chain := range chains {
+		for _, node := range chain.Nodes {
+			if cp := strings.TrimSpace(node.CanonicalPath); strings.HasPrefix(cp, "/product/") {
+				out = append(out, cp)
+			}
+		}
+		for _, candidate := range chain.ProductCandidates {
+			if cp := strings.TrimSpace(candidate.CanonicalPath); strings.HasPrefix(cp, "/product/") {
+				out = append(out, cp)
+			}
+		}
+	}
+	return dedupWorkingProductScopeRefs(out)
+}
+
+func dedupWorkingProductScopeRefs(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, value := range in {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func fragmentTypeOrEmpty(f *models.HorizonFragment) models.FragmentType {

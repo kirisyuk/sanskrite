@@ -740,7 +740,7 @@ func copyDomainModeStateToChild(parentState map[string]interface{}, childState m
 		ExecutionPlanStateKey,
 		"maxRootJobs", "maxRecursionDepth", "maxChildrenPerJob", "maxCascadeJobs", "maxSupplyChainQueries",
 		"budgetCeilingUSD", "budgetCeilingOutputTokens", "stopOnBudgetExhaustion",
-		"supplyChainMode", "supplyChainPhase", "supplyChainPhases", "supplyChainExpandEnabled", "supplyChainExpandMaxNodes",
+		"supplyChainMode", "supplyChainPhase", "supplyChainPhases", "supplyChainExpandEnabled", "supplyChainExpandMaxNodes", "supplyChainGraphBuildMode",
 		"planModeResearchDone", "supplyChainPlanMode",
 	} {
 		if v, ok := parentState[key]; ok && v != nil {
@@ -2172,6 +2172,7 @@ func decodeSupplyChainExecutionPlan(raw interface{}) *agents.SupplyChainExecutio
 	switch t := raw.(type) {
 	case *agents.SupplyChainExecutionPlan:
 		if t != nil && len(t.Queries) > 0 {
+			t.GraphBuildMode = normalizeSupplyChainGraphBuildModeState(t.GraphBuildMode)
 			return t
 		}
 		return nil
@@ -2180,6 +2181,7 @@ func decodeSupplyChainExecutionPlan(raw interface{}) *agents.SupplyChainExecutio
 			return nil
 		}
 		cp := t
+		cp.GraphBuildMode = normalizeSupplyChainGraphBuildModeState(cp.GraphBuildMode)
 		return &cp
 	}
 	b, err := json.Marshal(raw)
@@ -2193,7 +2195,33 @@ func decodeSupplyChainExecutionPlan(raw interface{}) *agents.SupplyChainExecutio
 	if len(plan.Queries) == 0 {
 		return nil
 	}
+	plan.GraphBuildMode = normalizeSupplyChainGraphBuildModeState(plan.GraphBuildMode)
 	return &plan
+}
+
+func normalizeSupplyChainGraphBuildModeState(raw string) string {
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case agents.SupplyChainGraphBuildModeHotPathOnly:
+		return agents.SupplyChainGraphBuildModeHotPathOnly
+	case "", agents.SupplyChainGraphBuildModeHotPathPlusGraph:
+		return agents.SupplyChainGraphBuildModeHotPathPlusGraph
+	default:
+		return agents.SupplyChainGraphBuildModeHotPathPlusGraph
+	}
+}
+
+func supplyChainGraphBuildMode(plan *agents.SupplyChainExecutionPlan, job *models.ScoutingJob) string {
+	if plan != nil {
+		if mode := normalizeSupplyChainGraphBuildModeState(plan.GraphBuildMode); mode != "" {
+			return mode
+		}
+	}
+	if job != nil && job.State != nil {
+		if mode := normalizeSupplyChainGraphBuildModeState(parseStateString(job.State["supplyChainGraphBuildMode"])); mode != "" {
+			return mode
+		}
+	}
+	return agents.SupplyChainGraphBuildModeHotPathPlusGraph
 }
 
 // getRegulatoryImpactPlanFromJobState extracts RegulatoryImpactExecutionPlan for the matching domain.
@@ -3029,11 +3057,17 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	}
 	supplyChainPlan := getSupplyChainExecutionPlanFromJobState(job, domainCP)
 	usePlanMode := agents.IsSupplyChainContractType(contractType) && supplyChainPlan != nil && len(supplyChainPlan.Queries) > 0
-	fastFirstSupplyChain := usePlanMode && isFastFirstSupplyChainJob(job) && !supplyChainRefineContinuation
+	graphBuildMode := supplyChainGraphBuildMode(supplyChainPlan, job)
+	hotPathOnlySupplyChain := usePlanMode && graphBuildMode == agents.SupplyChainGraphBuildModeHotPathOnly
+	fastFirstSupplyChain := usePlanMode && (hotPathOnlySupplyChain || isFastFirstSupplyChainJob(job)) && !supplyChainRefineContinuation
 	if usePlanMode && e.researchAgent != nil && !domainFastPathApplied && !supplyChainRefineContinuation {
 		if job.State == nil {
 			job.State = map[string]interface{}{}
 		}
+		if supplyChainPlan != nil {
+			supplyChainPlan.GraphBuildMode = graphBuildMode
+		}
+		job.State["supplyChainGraphBuildMode"] = graphBuildMode
 		job.State["supplyChainIncrementalMaterialized"] = false
 		if fastFirstSupplyChain {
 			job.State["supplyChainFastFirstMaxAnchors"] = 6
@@ -3056,8 +3090,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 			for _, query := range queries {
 				seedProducts = append(seedProducts, query.ProductFilter...)
 			}
-			scope := ensureWorkingProductScopeSeeded(job, dedupStrings(seedProducts), "query_seed", domainCP)
-			persistWorkingProductScope(ctx, e, job, scope)
+			ensureWorkingProductScopeLoaded(ctx, e, job, dedupStrings(seedProducts), "query_seed", domainCP)
 		}
 		// Expand product/market anchors to org/fac list: first query should go FROM organizations or facilities.
 		queriesBefore := len(queries)
@@ -3067,6 +3100,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		}
 		e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainPlan] queries before=%d after_expansion=%d", queriesBefore, len(queries)))
 		hotPathSatisfied := false
+		allowGraphCompletion := !hotPathOnlySupplyChain
 		if fastFirstSupplyChain {
 			hotPathChains := e.runSupplyChainFastFirstHotPath(ctx, job, queries)
 			if len(hotPathChains) > 0 {
@@ -3080,7 +3114,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 				}
 			}
 		}
-		if !hotPathSatisfied {
+		if allowGraphCompletion && !hotPathSatisfied {
 			// Collect anchors by direction: downstream (producer→consumer) and upstream (consumer→supplier).
 			defaultDirection := "down"
 			if strings.TrimSpace(job.LensID) != "" {
@@ -3137,12 +3171,17 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 			job.State = map[string]interface{}{}
 		}
 		domainResearch := map[string]interface{}{
-			"planMode":      true,
-			"queriesN":      len(queries),
-			"supplyChainsN": len(domainResearchChains),
+			"planMode":               true,
+			"queriesN":               len(queries),
+			"supplyChainsN":          len(domainResearchChains),
+			"graphBuildMode":         graphBuildMode,
+			"graphCompletionSkipped": hotPathOnlySupplyChain,
 		}
 		job.State["domainResearch"] = domainResearch
-		_ = e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{"domainResearch": domainResearch})
+		_ = e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{
+			"domainResearch":            domainResearch,
+			"supplyChainGraphBuildMode": graphBuildMode,
+		})
 	}
 
 	// Regulatory Impact plan-mode: holistic impact graph queries.
@@ -3865,11 +3904,11 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 			}
 		}
 		// Expand phase (optional): 1-hop for low-confidence nodes, alternatives check. Config: job.State["supplyChainExpandEnabled"], ["supplyChainExpandMaxNodes"].
-		if usePlanMode && (!fastFirstSupplyChain || refineContinuation) {
+		if usePlanMode && !hotPathOnlySupplyChain && (!fastFirstSupplyChain || refineContinuation) {
 			e.runSupplyChainExpandPhase(ctx, job, frag, domainResearchChains, supplyChainPlan)
 		}
 		// Stage 2 Overlay queries: skipped for supply chain fast-path (pure org→fac→product→fac→org).
-		if usePlanMode && (!fastFirstSupplyChain || refineContinuation) && !isSupplyChainFastPath && supplyChainPlan != nil && len(supplyChainPlan.OverlayQueries) > 0 {
+		if usePlanMode && !hotPathOnlySupplyChain && (!fastFirstSupplyChain || refineContinuation) && !isSupplyChainFastPath && supplyChainPlan != nil && len(supplyChainPlan.OverlayQueries) > 0 {
 			e.runSupplyChainStage2Overlays(ctx, job, frag, domainResearchChains, supplyChainPlan.OverlayQueries)
 		}
 	} else {
@@ -3883,6 +3922,8 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 				recordPipelineIssue(job, "supply_chain_fast_assembly", err.Error())
 				return err
 			}
+		case hotPathOnlySupplyChain:
+			e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageEntitySupplyChainRefine, true, "supply_chain_refine_skip_hot_path_only")
 		default:
 			if err := e.runSupplyChainAssemblyRefine(ctx, job, frag, domainCP, supplyChainPlan); err != nil {
 				recordPipelineIssue(job, "supply_chain_refine", err.Error())
@@ -7645,6 +7686,9 @@ func (e *ScoutEngine) runSupplyChainExpandPhase(ctx context.Context, job *models
 	if !parseStateBool(job.State["supplyChainExpandEnabled"], false) {
 		return
 	}
+	if normalizeSupplyChainGraphBuildModeState(parseStateString(job.State["supplyChainGraphBuildMode"])) == agents.SupplyChainGraphBuildModeHotPathOnly {
+		return
+	}
 	// Research depth (maxRecursionDepth) is set at job start; expand only if we have room for 1 more hop.
 	currentDepth := parseStateInt(job.State["recursionDepth"], 0)
 	maxDepth := parseStateInt(job.State["maxRecursionDepth"], 2)
@@ -7890,7 +7934,7 @@ func dedupSupplyChainChains(chains []agents.SupplyChain) []agents.SupplyChain {
 		return nil
 	}
 	out := make([]agents.SupplyChain, 0, len(chains))
-	seen := make(map[string]struct{}, len(chains))
+	indexByKey := make(map[string]int, len(chains))
 	for _, chain := range chains {
 		if len(chain.Nodes) == 0 {
 			continue
@@ -7907,11 +7951,361 @@ func dedupSupplyChainChains(chains []agents.SupplyChain) []agents.SupplyChain {
 			continue
 		}
 		key := strings.Join(parts, "|")
+		if idx, ok := indexByKey[key]; ok {
+			out[idx] = mergeSupplyChainChain(out[idx], chain)
+			continue
+		}
+		indexByKey[key] = len(out)
+		out = append(out, chain)
+	}
+	return out
+}
+
+func mergeSupplyChainObservationOverlays(base []agents.SupplyChain, overlays []agents.SupplyChain) []agents.SupplyChain {
+	if len(base) == 0 {
+		return dedupSupplyChainChains(overlays)
+	}
+	if len(overlays) == 0 {
+		return dedupSupplyChainChains(base)
+	}
+	merged := append([]agents.SupplyChain{}, base...)
+	merged = append(merged, overlays...)
+	return dedupSupplyChainChains(merged)
+}
+
+func applyScopedObservationBundleToSupplyChains(chains []agents.SupplyChain, bundle *agents.SupplyChainScopedObservations) []agents.SupplyChain {
+	if len(chains) == 0 || bundle == nil {
+		return chains
+	}
+	out := append([]agents.SupplyChain{}, chains...)
+	for _, candidate := range bundle.ProductCandidates {
+		idx := 0
+		out[idx].ProductCandidates = mergeProductCandidates(out[idx].ProductCandidates, []agents.ProductCandidate{candidate})
+	}
+	for _, obs := range bundle.CarrierProductObservations {
+		idx := findSupplyChainForCarrierProductObservation(out, obs)
+		out[idx].CarrierProductObservations = mergeCarrierProductObservations(out[idx].CarrierProductObservations, []agents.CarrierProductObservation{obs})
+	}
+	for _, obs := range bundle.LinkObservations {
+		idx := findSupplyChainForLinkObservation(out, obs)
+		out[idx].LinkObservations = mergeLinkObservations(out[idx].LinkObservations, []agents.SupplyLinkObservation{obs})
+	}
+	for _, obs := range bundle.RouteObservations {
+		idx := findSupplyChainForRouteObservation(out, obs)
+		out[idx].RouteObservations = mergeRouteObservations(out[idx].RouteObservations, []agents.RouteObservation{obs})
+	}
+	return out
+}
+
+func findSupplyChainForCarrierProductObservation(chains []agents.SupplyChain, obs agents.CarrierProductObservation) int {
+	productRef := strings.TrimSpace(obs.ProductRef)
+	carrierRef := strings.TrimSpace(obs.CarrierRef)
+	for idx, chain := range chains {
+		if supplyChainContainsProduct(chain, productRef) && supplyChainContainsActor(chain, carrierRef) {
+			return idx
+		}
+	}
+	for idx, chain := range chains {
+		if supplyChainContainsProduct(chain, productRef) {
+			return idx
+		}
+	}
+	return 0
+}
+
+func findSupplyChainForLinkObservation(chains []agents.SupplyChain, obs agents.SupplyLinkObservation) int {
+	productRef := strings.TrimSpace(obs.ProductRef)
+	supplierRef := strings.TrimSpace(obs.SupplierRef)
+	customerRef := strings.TrimSpace(obs.CustomerRef)
+	for idx, chain := range chains {
+		if supplyChainContainsProduct(chain, productRef) && supplyChainContainsActor(chain, supplierRef) && supplyChainContainsActor(chain, customerRef) {
+			return idx
+		}
+	}
+	for idx, chain := range chains {
+		if supplyChainContainsProduct(chain, productRef) {
+			return idx
+		}
+	}
+	return 0
+}
+
+func findSupplyChainForRouteObservation(chains []agents.SupplyChain, obs agents.RouteObservation) int {
+	productRef := strings.TrimSpace(obs.ProductRef)
+	for idx, chain := range chains {
+		if productRef != "" && supplyChainContainsProduct(chain, productRef) {
+			if len(obs.TransportVia) == 0 || supplyChainSharesTransportVia(chain, obs.TransportVia) {
+				return idx
+			}
+		}
+	}
+	for idx, chain := range chains {
+		if supplyChainSharesTransportVia(chain, obs.TransportVia) {
+			return idx
+		}
+	}
+	return 0
+}
+
+func supplyChainContainsProduct(chain agents.SupplyChain, productRef string) bool {
+	productRef = strings.TrimSpace(productRef)
+	if productRef == "" {
+		return false
+	}
+	for _, node := range chain.Nodes {
+		if strings.TrimSpace(node.CanonicalPath) == productRef {
+			return true
+		}
+	}
+	return false
+}
+
+func supplyChainContainsActor(chain agents.SupplyChain, actorRef string) bool {
+	actorRef = strings.TrimSpace(actorRef)
+	if actorRef == "" {
+		return false
+	}
+	for _, node := range chain.Nodes {
+		if strings.TrimSpace(node.CanonicalPath) == actorRef {
+			return true
+		}
+	}
+	return false
+}
+
+func supplyChainSharesTransportVia(chain agents.SupplyChain, via []string) bool {
+	if len(via) == 0 || len(chain.TransportVia) == 0 {
+		return false
+	}
+	chainVia := make(map[string]struct{}, len(chain.TransportVia))
+	for _, ref := range chain.TransportVia {
+		value := strings.TrimSpace(ref)
+		if value != "" {
+			chainVia[strings.ToLower(value)] = struct{}{}
+		}
+	}
+	for _, ref := range via {
+		if _, ok := chainVia[strings.ToLower(strings.TrimSpace(ref))]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func mergeSupplyChainChain(base, overlay agents.SupplyChain) agents.SupplyChain {
+	if len(base.Nodes) == 0 {
+		base.Nodes = overlay.Nodes
+	}
+	if strings.TrimSpace(base.Reason) == "" {
+		base.Reason = overlay.Reason
+	}
+	if overlay.Confidence > base.Confidence {
+		base.Confidence = overlay.Confidence
+	}
+	base.TransportVia = mergeStringSlices(base.TransportVia, overlay.TransportVia)
+	base.ProductCandidates = mergeProductCandidates(base.ProductCandidates, overlay.ProductCandidates)
+	base.CarrierProductObservations = mergeCarrierProductObservations(base.CarrierProductObservations, overlay.CarrierProductObservations)
+	base.LinkObservations = mergeLinkObservations(base.LinkObservations, overlay.LinkObservations)
+	base.RouteObservations = mergeRouteObservations(base.RouteObservations, overlay.RouteObservations)
+	return base
+}
+
+func mergeStringSlices(left, right []string) []string {
+	if len(left) == 0 && len(right) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(left)+len(right))
+	out := make([]string, 0, len(left)+len(right))
+	for _, raw := range append(append([]string{}, left...), right...) {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
 		if _, ok := seen[key]; ok {
 			continue
 		}
 		seen[key] = struct{}{}
-		out = append(out, chain)
+		out = append(out, value)
+	}
+	return out
+}
+
+func mergeProductCandidates(left, right []agents.ProductCandidate) []agents.ProductCandidate {
+	if len(left) == 0 {
+		return append([]agents.ProductCandidate(nil), right...)
+	}
+	out := append([]agents.ProductCandidate{}, left...)
+	seen := make(map[string]int, len(out))
+	for idx, candidate := range out {
+		key := strings.ToLower(strings.TrimSpace(candidate.CanonicalPath))
+		if key == "" {
+			key = strings.ToLower(strings.TrimSpace(candidate.Name))
+		}
+		if key != "" {
+			seen[key] = idx
+		}
+	}
+	for _, candidate := range right {
+		key := strings.ToLower(strings.TrimSpace(candidate.CanonicalPath))
+		if key == "" {
+			key = strings.ToLower(strings.TrimSpace(candidate.Name))
+		}
+		if key == "" {
+			continue
+		}
+		if idx, ok := seen[key]; ok {
+			if candidate.Confidence > out[idx].Confidence {
+				out[idx] = candidate
+			}
+			continue
+		}
+		seen[key] = len(out)
+		out = append(out, candidate)
+	}
+	return out
+}
+
+func mergeCarrierProductObservations(left, right []agents.CarrierProductObservation) []agents.CarrierProductObservation {
+	if len(left) == 0 {
+		return append([]agents.CarrierProductObservation(nil), right...)
+	}
+	out := append([]agents.CarrierProductObservation{}, left...)
+	seen := make(map[string]int, len(out))
+	for idx, obs := range out {
+		seen[strings.ToLower(strings.TrimSpace(obs.CarrierRef)+"|"+strings.TrimSpace(obs.ProductRef))] = idx
+	}
+	for _, obs := range right {
+		key := strings.ToLower(strings.TrimSpace(obs.CarrierRef) + "|" + strings.TrimSpace(obs.ProductRef))
+		if strings.TrimSpace(key) == "|" {
+			continue
+		}
+		if idx, ok := seen[key]; ok {
+			out[idx] = mergeCarrierProductObservation(out[idx], obs)
+			continue
+		}
+		seen[key] = len(out)
+		out = append(out, obs)
+	}
+	return out
+}
+
+func mergeCarrierProductObservation(base, overlay agents.CarrierProductObservation) agents.CarrierProductObservation {
+	if overlay.Confidence > base.Confidence {
+		base.Confidence = overlay.Confidence
+	}
+	if strings.TrimSpace(base.ObservedAt) == "" {
+		base.ObservedAt = overlay.ObservedAt
+	}
+	base.Metrics = mergeLooseObservationMaps(base.Metrics, overlay.Metrics)
+	base.Qualifiers = mergeLooseObservationMaps(base.Qualifiers, overlay.Qualifiers)
+	return base
+}
+
+func mergeLinkObservations(left, right []agents.SupplyLinkObservation) []agents.SupplyLinkObservation {
+	if len(left) == 0 {
+		return append([]agents.SupplyLinkObservation(nil), right...)
+	}
+	out := append([]agents.SupplyLinkObservation{}, left...)
+	seen := make(map[string]int, len(out))
+	for idx, obs := range out {
+		seen[strings.ToLower(strings.TrimSpace(obs.SupplierRef)+"|"+strings.TrimSpace(obs.ProductRef)+"|"+strings.TrimSpace(obs.CustomerRef))] = idx
+	}
+	for _, obs := range right {
+		key := strings.ToLower(strings.TrimSpace(obs.SupplierRef) + "|" + strings.TrimSpace(obs.ProductRef) + "|" + strings.TrimSpace(obs.CustomerRef))
+		if strings.TrimSpace(key) == "||" {
+			continue
+		}
+		if idx, ok := seen[key]; ok {
+			out[idx] = mergeLinkObservation(out[idx], obs)
+			continue
+		}
+		seen[key] = len(out)
+		out = append(out, obs)
+	}
+	return out
+}
+
+func mergeLinkObservation(base, overlay agents.SupplyLinkObservation) agents.SupplyLinkObservation {
+	if overlay.Confidence > base.Confidence {
+		base.Confidence = overlay.Confidence
+	}
+	if strings.TrimSpace(base.ObservedAt) == "" {
+		base.ObservedAt = overlay.ObservedAt
+	}
+	base.Metrics = mergeLooseObservationMaps(base.Metrics, overlay.Metrics)
+	base.Qualifiers = mergeLooseObservationMaps(base.Qualifiers, overlay.Qualifiers)
+	return base
+}
+
+func mergeRouteObservations(left, right []agents.RouteObservation) []agents.RouteObservation {
+	if len(left) == 0 {
+		return append([]agents.RouteObservation(nil), right...)
+	}
+	out := append([]agents.RouteObservation{}, left...)
+	seen := make(map[string]int, len(out))
+	for idx, obs := range out {
+		seen[routeObservationMergeKey(obs)] = idx
+	}
+	for _, obs := range right {
+		key := routeObservationMergeKey(obs)
+		if strings.TrimSpace(key) == "" {
+			continue
+		}
+		if idx, ok := seen[key]; ok {
+			out[idx] = mergeRouteObservation(out[idx], obs)
+			continue
+		}
+		seen[key] = len(out)
+		out = append(out, obs)
+	}
+	return out
+}
+
+func mergeRouteObservation(base, overlay agents.RouteObservation) agents.RouteObservation {
+	if overlay.Confidence > base.Confidence {
+		base.Confidence = overlay.Confidence
+	}
+	if strings.TrimSpace(base.ObservedAt) == "" {
+		base.ObservedAt = overlay.ObservedAt
+	}
+	if strings.TrimSpace(base.VesselType) == "" {
+		base.VesselType = overlay.VesselType
+	}
+	base.TransportVia = mergeStringSlices(base.TransportVia, overlay.TransportVia)
+	base.Qualifiers = mergeLooseObservationMaps(base.Qualifiers, overlay.Qualifiers)
+	return base
+}
+
+func routeObservationMergeKey(obs agents.RouteObservation) string {
+	via := mergeStringSlices(nil, obs.TransportVia)
+	return strings.ToLower(
+		strings.TrimSpace(obs.SupplierRef) + "|" +
+			strings.TrimSpace(obs.ProductRef) + "|" +
+			strings.TrimSpace(obs.CustomerRef) + "|" +
+			strings.Join(via, ",") + "|" +
+			strings.TrimSpace(obs.VesselType),
+	)
+}
+
+func mergeLooseObservationMaps(left, right map[string]interface{}) map[string]interface{} {
+	if len(left) == 0 && len(right) == 0 {
+		return nil
+	}
+	out := make(map[string]interface{}, len(left)+len(right))
+	for key, value := range left {
+		out[key] = value
+	}
+	for key, value := range right {
+		if existing, ok := out[key]; ok && existing != nil {
+			existingMap, existingIsMap := existing.(map[string]interface{})
+			valueMap, valueIsMap := value.(map[string]interface{})
+			if existingIsMap && valueIsMap {
+				out[key] = mergeLooseObservationMaps(existingMap, valueMap)
+			}
+			continue
+		}
+		out[key] = value
 	}
 	return out
 }
@@ -7993,14 +8387,46 @@ func (e *ScoutEngine) runSupplyChainFastFirstHotPath(ctx context.Context, job *m
 	}
 	chains := make([]agents.SupplyChain, 0, 32)
 	for idx, query := range hotQueries {
-		queryChains, err := e.researchAgent.EnrichSupplyChainHotPath(ctx, query)
-		if err != nil {
-			scLog(ctx, e, job, "warn", fmt.Sprintf("[SupplyChainHotPath] query[%d] failed: %v", idx, err))
-			continue
+		prePlan, preErr := e.researchAgent.EnrichSupplyChainPreHotPath(ctx, query)
+		if preErr != nil {
+			scLog(ctx, e, job, "warn", fmt.Sprintf("[SupplyChainPreHotPath] query[%d] failed: %v", idx, preErr))
+		} else if prePlan != nil {
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SupplyChainPreHotPath] query[%d] strategy=%s confidence=%.2f derivedProducts=%d focus=%d",
+				idx, strings.TrimSpace(prePlan.Strategy), prePlan.Confidence, len(prePlan.DerivedProductFilters), len(prePlan.SearchFocus)))
 		}
-		queryChains = filterSupplyChainsByPlanFilters(queryChains, query.ProductFilter, query.GeoFilter)
-		scLog(ctx, e, job, "info", fmt.Sprintf("[SupplyChainHotPath] query[%d] chains=%d anchor=%s anchors=%d", idx, len(queryChains), strings.TrimSpace(query.Anchor), len(query.Anchors)))
-		chains = append(chains, queryChains...)
+		queryVariants := deriveSupplyChainHotPathVariants(query, prePlan)
+		var accumulatedForQuery []agents.SupplyChain
+		for variantIdx, variant := range queryVariants {
+			queryChains, err := e.researchAgent.EnrichSupplyChainHotPath(ctx, variant, prePlan)
+			if err != nil {
+				scLog(ctx, e, job, "warn", fmt.Sprintf("[SupplyChainHotPath] query[%d] variant[%d] failed: %v", idx, variantIdx, err))
+				continue
+			}
+			queryChains = filterSupplyChainsByPlanFilters(queryChains, variant.ProductFilter, variant.GeoFilter)
+			if len(queryChains) > 0 {
+				if capabilityBundle, capErr := e.researchAgent.EnrichSupplyChainHotPathCapabilities(ctx, variant, queryChains, prePlan); capErr != nil {
+					scLog(ctx, e, job, "warn", fmt.Sprintf("[SupplyChainHotPathCapability] query[%d] variant[%d] failed: %v", idx, variantIdx, capErr))
+				} else if capabilityBundle != nil {
+					queryChains = applyScopedObservationBundleToSupplyChains(queryChains, capabilityBundle)
+					scLog(ctx, e, job, "info", fmt.Sprintf("[SupplyChainHotPathCapability] query[%d] variant[%d] carrierObs=%d linkObs=%d routeObs=%d candidates=%d",
+						idx,
+						variantIdx,
+						len(capabilityBundle.CarrierProductObservations),
+						len(capabilityBundle.LinkObservations),
+						len(capabilityBundle.RouteObservations),
+						len(capabilityBundle.ProductCandidates),
+					))
+				}
+			}
+			scLog(ctx, e, job, "info", fmt.Sprintf("[SupplyChainHotPath] query[%d] variant[%d] chains=%d anchor=%s anchors=%d products=%d",
+				idx, variantIdx, len(queryChains), strings.TrimSpace(variant.Anchor), len(variant.Anchors), len(variant.ProductFilter)))
+			accumulatedForQuery = append(accumulatedForQuery, queryChains...)
+			accumulatedForQuery = dedupSupplyChainChains(accumulatedForQuery)
+			if len(accumulatedForQuery) >= 10 || len(chains)+len(accumulatedForQuery) >= 20 {
+				break
+			}
+		}
+		chains = append(chains, accumulatedForQuery...)
 		if len(chains) >= 20 {
 			break
 		}
@@ -8010,6 +8436,76 @@ func (e *ScoutEngine) runSupplyChainFastFirstHotPath(ctx context.Context, job *m
 		chains = chains[:20]
 	}
 	return chains
+}
+
+func deriveSupplyChainHotPathVariants(query agents.SupplyChainQuery, prePlan *agents.SupplyChainPreHotPathPlan) []agents.SupplyChainQuery {
+	var out []agents.SupplyChainQuery
+	focused := buildFocusedSupplyChainHotPathQuery(query, prePlan)
+	if focused != nil {
+		out = append(out, *focused)
+	}
+	out = append(out, query)
+	return dedupSupplyChainHotPathVariants(out)
+}
+
+func buildFocusedSupplyChainHotPathQuery(query agents.SupplyChainQuery, prePlan *agents.SupplyChainPreHotPathPlan) *agents.SupplyChainQuery {
+	if prePlan == nil || len(prePlan.DerivedProductFilters) == 0 {
+		return nil
+	}
+	existing := make(map[string]struct{}, len(query.ProductFilter))
+	for _, raw := range query.ProductFilter {
+		if key := strings.TrimSpace(strings.ToLower(raw)); key != "" {
+			existing[key] = struct{}{}
+		}
+	}
+	filters := make([]string, 0, len(prePlan.DerivedProductFilters))
+	novel := false
+	for _, raw := range prePlan.DerivedProductFilters {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := existing[strings.ToLower(trimmed)]; !ok {
+			novel = true
+		}
+		filters = append(filters, trimmed)
+		if len(filters) >= 3 {
+			break
+		}
+	}
+	if len(filters) == 0 || !novel {
+		return nil
+	}
+	focused := query
+	focused.ProductFilter = filters
+	reason := strings.TrimSpace(focused.Reason)
+	if reason == "" {
+		reason = "pre_hot_path_focus"
+	} else {
+		reason += "; pre_hot_path_focus"
+	}
+	if strategy := strings.TrimSpace(prePlan.Strategy); strategy != "" {
+		reason += ":" + strategy
+	}
+	focused.Reason = reason
+	return &focused
+}
+
+func dedupSupplyChainHotPathVariants(in []agents.SupplyChainQuery) []agents.SupplyChainQuery {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]agents.SupplyChainQuery, 0, len(in))
+	seen := make(map[string]struct{}, len(in))
+	for _, q := range in {
+		key := strings.ToLower(strings.TrimSpace(q.Anchor) + "|" + strings.Join(dedupStrings(q.ProductFilter), "|") + "|" + strings.Join(dedupStrings(q.GeoFilter), "|") + "|" + strings.TrimSpace(q.Direction))
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, q)
+	}
+	return out
 }
 
 func persistSupplyChainFallbackContext(
@@ -8358,6 +8854,7 @@ func (e *ScoutEngine) processSupplyChains(
 		scope := mergeWorkingProductScopeFromChains(job, chains, "chain_discovery")
 		persistWorkingProductScope(ctx, e, job, scope)
 	}
+	persistScopedObservationsFromChains(ctx, e, job, chains)
 
 	parser := NewSupplyChainParser()
 	sourceCanonicalPath := ""
@@ -9279,6 +9776,7 @@ func (e *ScoutEngine) processSupplyChains(
 	supplyLinksCreated := 0
 	supplyLinksSkipped := 0
 	materializedSegmentRefs := make(map[string]supplyLinkMaterializationRef, len(materializedSegments))
+	capabilityProfileCache := make(map[string]*models.CapabilityProfile)
 	type preparedSupplyLink struct {
 		segment          *SupplyLinkSegment
 		fragment         *models.HorizonFragment
@@ -9372,6 +9870,7 @@ func (e *ScoutEngine) processSupplyChains(
 				slFrag.ValidTo = validTo
 			}
 		}
+		enrichSupplyLinkFragmentWithOperationalRisk(ctx, e, slFrag, seg, capabilityProfileCache)
 		horizonrepo.PrepareFragmentForValidation(slFrag)
 		if err := slFrag.Validate(); err != nil {
 			supplyLinksSkipped++
@@ -9498,6 +9997,7 @@ func (e *ScoutEngine) processSupplyChains(
 	// Chain reuse: checks if a MaterializedArtifact already exists with sufficient quality to skip re-processing.
 	// Batches create/update for efficiency (BatchGetByCanonicalKeys + BatchUpsert).
 	materializedPathsCount := 0
+	directPathArtifactKeys := make([]string, 0, len(chains))
 	if e.supplyChainPathBuilder != nil && len(chains) > 0 {
 		maxDepth := parseStateInt(job.State["maxRecursionDepth"], 2)
 		if maxDepth <= 0 {
@@ -9517,9 +10017,14 @@ func (e *ScoutEngine) processSupplyChains(
 		}
 		isFinalMaterializationStage := materializationStage == "step4"
 		if e.criticAgent != nil {
+			scope := ensureWorkingProductScopeLoaded(ctx, e, job, nil, "query_seed", anchorPath)
 			input := agents.CriticValidatorInput{
-				Fragment:     sourceFragment,
-				SupplyChains: chains,
+				Fragment:            sourceFragment,
+				SupplyChains:        chains,
+				WorkingProductScope: nil,
+			}
+			if scope != nil {
+				input.WorkingProductScope = dedupStrings(scope.CanonicalProductRefs())
 			}
 			if vr, err := e.criticAgent.CriticPipeline().Validate(ctx, input, []string{taxonomy.DomainModeSupplyChain}); err == nil && vr != nil && vr.IsValid && len(vr.MissingInfo) == 0 {
 				criticPassed = true
@@ -9607,6 +10112,9 @@ func (e *ScoutEngine) processSupplyChains(
 
 			if reuseDecision.Level == ChainReuseFullSkip {
 				chainReuseSkipped++
+				if strings.TrimSpace(reuseDecision.CanonicalKey) != "" {
+					directPathArtifactKeys = append(directPathArtifactKeys, strings.TrimSpace(reuseDecision.CanonicalKey))
+				}
 				if reuseDecision.Artifact != nil && strings.TrimSpace(lensID) != "" && e.lensesRepo != nil {
 					if addArtifactToLensScope(ctx, e.lensesRepo, lensID, reuseDecision.Artifact) {
 						chainReuseScopeAdded++
@@ -9620,6 +10128,9 @@ func (e *ScoutEngine) processSupplyChains(
 
 			if reuseDecision.Level == ChainReuseEnrichMerge {
 				chainReuseMerged++
+				if strings.TrimSpace(reuseDecision.CanonicalKey) != "" {
+					directPathArtifactKeys = append(directPathArtifactKeys, strings.TrimSpace(reuseDecision.CanonicalKey))
+				}
 				if len(mergeSamples) < chainReuseLogSampleLimit {
 					mergeSamples = append(mergeSamples, fmt.Sprintf("chain=%d key=%s reason=%s", pending.index, reuseDecision.CanonicalKey, reuseDecision.Reason))
 				}
@@ -9662,6 +10173,7 @@ func (e *ScoutEngine) processSupplyChains(
 			} else {
 				materializedCount := len(ids)
 				materializedPathsCount = materializedCount
+				directPathArtifactKeys = append(directPathArtifactKeys, keysToMaterialize...)
 				for i, id := range ids {
 					canonicalKey := keysToMaterialize[i]
 					segmentCount := len(pathsToMaterialize[i].Segments)
@@ -9692,6 +10204,9 @@ func (e *ScoutEngine) processSupplyChains(
 		} else if chainReuseSkipped > 0 || chainReuseMerged > 0 {
 			e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainMaterialize] Completed: 0 new paths, %d reused, %d merged, %d added to lens",
 				chainReuseSkipped, chainReuseMerged, chainReuseScopeAdded))
+		}
+		if len(dedupStrings(directPathArtifactKeys)) > 0 {
+			persistDirectPathArtifactTruth(ctx, e, job, tenantID, dedupStrings(directPathArtifactKeys))
 		}
 	}
 	// Level 3 FAC→ORG resolution: traverse OWNS/CONTROLS to owning ORG, max depth 5, cycle-prohibited
@@ -9751,6 +10266,7 @@ func (e *ScoutEngine) processSupplyChains(
 		"materializedEdges":       float64(createdEdges),
 		"materializedSupplyLinks": float64(supplyLinksCreated),
 		"materializedPaths":       float64(materializedPathsCount),
+		"pathArtifactKeys":        dedupStrings(directPathArtifactKeys),
 	}
 	job.State["supplyChainSummary"] = map[string]interface{}{
 		"discoveredNodes":         float64(discoveredNodesCount),
@@ -9770,6 +10286,7 @@ func (e *ScoutEngine) processSupplyChains(
 		"edgePenalized":           float64(edgePenalized),
 		"supplyLinksCreated":      float64(supplyLinksCreated),
 		"supplyLinksSkipped":      float64(supplyLinksSkipped),
+		"pathArtifactKeys":        dedupStrings(directPathArtifactKeys),
 		"gapHints":                float64(len(gapHints)),
 		"dupeCreateRatio":         dupeCreateRatio,
 		"reverseRate":             reverseRate,
@@ -10688,12 +11205,12 @@ func collectSupplyChainFiltersByDirection(queries []agents.SupplyChainQuery, def
 	return down, up
 }
 
-func buildSupplyChainStepPromptContext(job *models.ScoutingJob, depth int, direction string, productFilters []string, geoFilters []string) agents.SupplyChainStepPromptContext {
+func (e *ScoutEngine) buildSupplyChainStepPromptContext(ctx context.Context, job *models.ScoutingJob, depth int, direction string, productFilters []string, geoFilters []string) agents.SupplyChainStepPromptContext {
 	domainPath := ""
 	if job != nil {
 		domainPath = strings.TrimSpace(job.TargetCanonicalPath)
 	}
-	scope := ensureWorkingProductScopeSeeded(job, productFilters, "query_seed", domainPath)
+	scope := ensureWorkingProductScopeLoaded(ctx, e, job, productFilters, "query_seed", domainPath)
 	out := agents.SupplyChainStepPromptContext{
 		Depth:               depth,
 		Direction:           strings.TrimSpace(direction),
@@ -11107,7 +11624,7 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 	orgQueue := append([]string{}, anchorOrgs...)
 
 	for depth := 0; depth < maxDepth; depth++ {
-		stepCtx := agents.WithSupplyChainStepPromptContext(ctx, buildSupplyChainStepPromptContext(job, depth, "downstream", productFilters, geoFilters))
+		stepCtx := agents.WithSupplyChainStepPromptContext(ctx, e.buildSupplyChainStepPromptContext(ctx, job, depth, "downstream", productFilters, geoFilters))
 		maxOrgsPerDepth := supplyChainFastFirstIntLimit(job, "supplyChainFastFirstMaxOrgsPerDepth", agents.ScUnwindMaxOrgsPerDepth)
 		maxFacsPerDepth := supplyChainFastFirstIntLimit(job, "supplyChainFastFirstMaxFacsPerDepth", agents.ScUnwindMaxFacsPerDepth)
 		skipRecursiveStep4 := parseStateBool(job.State["supplyChainSkipRecursiveStep4"], false)
@@ -11620,7 +12137,7 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 	orgQueue := append([]string{}, anchorOrgs...)
 
 	for depth := 0; depth < maxDepth; depth++ {
-		stepCtx := agents.WithSupplyChainStepPromptContext(ctx, buildSupplyChainStepPromptContext(job, depth, "upstream", productFilters, geoFilters))
+		stepCtx := agents.WithSupplyChainStepPromptContext(ctx, e.buildSupplyChainStepPromptContext(ctx, job, depth, "upstream", productFilters, geoFilters))
 		maxOrgsPerDepth := supplyChainFastFirstIntLimit(job, "supplyChainFastFirstMaxOrgsPerDepth", agents.ScUnwindMaxOrgsPerDepth)
 		maxFacsPerDepth := supplyChainFastFirstIntLimit(job, "supplyChainFastFirstMaxFacsPerDepth", agents.ScUnwindMaxFacsPerDepth)
 		skipRecursiveStep4 := parseStateBool(job.State["supplyChainSkipRecursiveStep4"], false)

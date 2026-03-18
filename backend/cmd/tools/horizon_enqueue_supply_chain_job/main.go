@@ -31,6 +31,7 @@ func main() {
 	anchorType := flag.String("anchor-type", "product", "anchor type: org|product|deposit")
 	direction := flag.String("direction", "both", "query direction")
 	depth := flag.Int("depth", 4, "query depth")
+	graphBuildMode := flag.String("graph-build-mode", horizonagents.SupplyChainGraphBuildModeHotPathPlusGraph, "supply-chain graph build mode: hot_path_only|hot_path_plus_graph")
 	productFilter := flag.String("product-filter", "smartphone,battery-pack,application-processor,display-module", "comma-separated product filters")
 	geoFilter := flag.String("geo-filter", "cn,tw,kr,jp", "comma-separated geo filters")
 	queueLocation := flag.String("queue-location", "us-central1", "Cloud Tasks location")
@@ -65,6 +66,10 @@ func main() {
 	now := time.Now().UTC()
 	target := strings.TrimSpace(*targetDomain)
 	anchorValue := strings.TrimSpace(*anchor)
+	mode := strings.TrimSpace(*graphBuildMode)
+	if mode == "" {
+		mode = horizonagents.SupplyChainGraphBuildModeHotPathPlusGraph
+	}
 	products := splitCSV(*productFilter)
 	geos := splitCSV(*geoFilter)
 	executionPlan := horizonscout.BuildExecutionPlanContract(nil, []string{"supply_chain"}, nil)
@@ -78,11 +83,12 @@ func main() {
 			CreatedAt: now,
 			UpdatedAt: now,
 			State: map[string]interface{}{
-				"targetCanonicalPath": target,
-				"currentState":        string(horizonmodels.ScoutingJobStatePending),
-				"scoutingStrategy":    string(horizonmodels.ScoutingStrategySnapshot),
-				"domainModes":         []string{"supply_chain"},
-				"supplyChainPlanMode": true,
+				"targetCanonicalPath":         target,
+				"currentState":                string(horizonmodels.ScoutingJobStatePending),
+				"scoutingStrategy":            string(horizonmodels.ScoutingStrategySnapshot),
+				"domainModes":                 []string{"supply_chain"},
+				"supplyChainPlanMode":         true,
+				"supplyChainGraphBuildMode":   mode,
 				pipeline.StateKeyPipelinePass: string(pipeline.PassBaseEnrichment),
 				"domains": []horizonagents.DomainResolution{
 					{
@@ -97,6 +103,7 @@ func main() {
 						Confidence: 1,
 						Reason:     "manual verification of supply chain final assembly pass",
 						SupplyChainExecutionPlan: &horizonagents.SupplyChainExecutionPlan{
+							GraphBuildMode: mode,
 							Queries: []horizonagents.SupplyChainQuery{
 								{
 									Anchor:        anchorValue,
@@ -133,6 +140,7 @@ func main() {
 	fmt.Printf("job_id=%s\n", jobID)
 	fmt.Printf("target=%s\n", target)
 	fmt.Printf("anchor=%s\n", anchorValue)
+	fmt.Printf("graph_build_mode=%s\n", mode)
 	fmt.Printf("products=%v\n", products)
 	fmt.Printf("geos=%v\n", geos)
 }

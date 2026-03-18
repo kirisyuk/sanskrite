@@ -80,6 +80,67 @@ type ScoutResult struct {
 	SupplyChains []SupplyChain `json:"supplyChains,omitempty"`
 }
 
+type ProductCandidate struct {
+	CanonicalPath string  `json:"canonicalPath,omitempty"`
+	Name          string  `json:"name,omitempty"`
+	Reason        string  `json:"reason,omitempty"`
+	Confidence    float64 `json:"confidence,omitempty"`
+}
+
+type CarrierProductObservation struct {
+	CarrierRef string                 `json:"carrierRef"`
+	ProductRef string                 `json:"productRef,omitempty"`
+	Metrics    map[string]interface{} `json:"metrics,omitempty"`
+	Qualifiers map[string]interface{} `json:"qualifiers,omitempty"`
+	Confidence float64                `json:"confidence,omitempty"`
+	ObservedAt string                 `json:"observedAt,omitempty"`
+}
+
+type SupplyLinkObservation struct {
+	SupplierRef string                 `json:"supplierRef,omitempty"`
+	CustomerRef string                 `json:"customerRef,omitempty"`
+	ProductRef  string                 `json:"productRef,omitempty"`
+	Metrics     map[string]interface{} `json:"metrics,omitempty"`
+	Qualifiers  map[string]interface{} `json:"qualifiers,omitempty"`
+	Confidence  float64                `json:"confidence,omitempty"`
+	ObservedAt  string                 `json:"observedAt,omitempty"`
+}
+
+type RouteObservation struct {
+	SupplierRef  string                 `json:"supplierRef,omitempty"`
+	CustomerRef  string                 `json:"customerRef,omitempty"`
+	ProductRef   string                 `json:"productRef,omitempty"`
+	TransportVia []string               `json:"transportVia,omitempty"`
+	VesselType   string                 `json:"vesselType,omitempty"`
+	Qualifiers   map[string]interface{} `json:"qualifiers,omitempty"`
+	Confidence   float64                `json:"confidence,omitempty"`
+	ObservedAt   string                 `json:"observedAt,omitempty"`
+}
+
+// SupplyChainPreHotPathPlan is a lightweight decomposition/steering layer that
+// runs before hot-path graph building. It must guide the next prompt without
+// hard-constraining topology or acting as a path artifact.
+type SupplyChainPreHotPathPlan struct {
+	Strategy                          string   `json:"strategy,omitempty"`
+	StrategyReason                    string   `json:"strategyReason,omitempty"`
+	CandidateProductFamilies          []string `json:"candidateProductFamilies,omitempty"`
+	CandidateOperationalAnchorClasses []string `json:"candidateOperationalAnchorClasses,omitempty"`
+	CandidateFlowArchetypes           []string `json:"candidateFlowArchetypes,omitempty"`
+	SearchFocus                       []string `json:"searchFocus,omitempty"`
+	PreferredEvidence                 []string `json:"preferredEvidence,omitempty"`
+	DerivedProductFilters             []string `json:"derivedProductFilters,omitempty"`
+	Confidence                        float64  `json:"confidence,omitempty"`
+}
+
+// SupplyChainScopedObservations is a top-level scoped observation bundle used for capability/link/route enrichment
+// after the graph skeleton is already known.
+type SupplyChainScopedObservations struct {
+	ProductCandidates          []ProductCandidate          `json:"productCandidates,omitempty"`
+	CarrierProductObservations []CarrierProductObservation `json:"carrierProductObservations,omitempty"`
+	LinkObservations           []SupplyLinkObservation     `json:"linkObservations,omitempty"`
+	RouteObservations          []RouteObservation          `json:"routeObservations,omitempty"`
+}
+
 // SupplyChain represents an ordered sequence of supply chain nodes.
 // Nodes alternate between actors (org/fac) and products, forming a chain:
 // supplier → product → processor → product → customer
@@ -98,6 +159,14 @@ type SupplyChain struct {
 	SegmentMetrics []SegmentMetrics `json:"segmentMetrics,omitempty"`
 	// Alternatives: alternative suppliers at each (customer, product) step.
 	Alternatives []AlternativeSuppliers `json:"alternatives,omitempty"`
+	// ProductCandidates are scoped additions proposed by the model for the current job.
+	ProductCandidates []ProductCandidate `json:"productCandidates,omitempty"`
+	// CarrierProductObservations are reusable actor×product observations for capability building.
+	CarrierProductObservations []CarrierProductObservation `json:"carrierProductObservations,omitempty"`
+	// LinkObservations are link-specific observations for the current chain.
+	LinkObservations []SupplyLinkObservation `json:"linkObservations,omitempty"`
+	// RouteObservations are route/path scoped observations for the current chain.
+	RouteObservations []RouteObservation `json:"routeObservations,omitempty"`
 }
 
 // SegmentMetrics holds metrics for a single segment (fromNodeIndex → toNodeIndex, productIndex).
@@ -773,6 +842,20 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 - For maritime, pipeline, rail, corridor, chokepoint, or sanctions-sensitive flows, leaving transportVia empty requires genuine evidence gap, not convenience.
 - Product granularity: use model line/product family (iPhone, MacBook, Claude Code), NOT specific SKU (iPhone 17, MacBook Pro M4, Claude Opus). Natural resources: keep taxonomy granularity, avoid over-generalization.`
 
+	scopedObservationsBlock := `5. Scoped supply-chain additions (OPTIONAL but preferred when evidence exists):
+- "productCandidates": array of { canonicalPath?, name, reason, confidence }.
+  Use this ONLY for genuinely new product/material/component candidates that should extend the current job product scope.
+  Do NOT repeat products already present in nodes[] or obvious aliases of the same product.
+- "carrierProductObservations": array of { carrierRef, productRef, metrics?, qualifiers?, confidence, observedAt? }.
+  Use for reusable actor×product facts that should apply across many links. When evidence clearly supports reusable baseline metrics for a carrier×product in the current chains, these observations are expected.
+  Preferred reusable metric keys: annual_capacity, annual_output, lead_time_days_baseline, lead_time_volatility_days, inventory_days_baseline, on_time_delivery_baseline, technical_substitutability, regulatory_substitutability, service_criticality, quality_score, purity_percent, utilization_rate, available_export_share.
+- "linkObservations": array of { supplierRef?, customerRef?, productRef, metrics?, qualifiers?, confidence, observedAt? }.
+  Use for link-specific overrides or customer/destination-specific facts.
+- "routeObservations": array of { supplierRef?, customerRef?, productRef?, transportVia?, vesselType?, qualifiers?, confidence, observedAt? }.
+  Use for route/path scoped transport facts only.
+- Do NOT move reusable capability baseline metrics into linkObservations just because they were seen on one chain.
+- Never create capability entities or graph nodes for these observations. They are scoped evidence only.`
+
 	return joinPromptBlocks(
 		`You are a data extraction agent (Scout) for a risk analysis system. Extract structured information about an entity and its dependencies from the provided content.`,
 		fmt.Sprintf(`TARGET ENTITY:
@@ -795,6 +878,7 @@ Use [] for unknown arrays.`,
 		fragmentContractBlock,
 		relationsContractBlock,
 		supplyChainsContractBlock,
+		scopedObservationsBlock,
 		"Return ONLY valid JSON. Do not include markdown code fences.",
 	)
 }

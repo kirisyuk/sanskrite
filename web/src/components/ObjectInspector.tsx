@@ -1496,6 +1496,60 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     };
   }, [edgeData, edge]);
 
+  const edgeCriticalityMeta = React.useMemo(() => {
+    const src: any = edgeData || edge || {};
+    const qualifiers: Record<string, any> = {
+      ...((edge as any)?.qualifiers || {}),
+      ...((edge as any)?.properties?.qualifiers || {}),
+      ...((src?.qualifiers && typeof src.qualifiers === 'object') ? src.qualifiers : {}),
+    };
+    const readStringArray = (value: any): string[] => {
+      if (Array.isArray(value)) return value.map((item) => String(item || '').trim()).filter(Boolean);
+      return [];
+    };
+    const summary =
+      String(src?.criticalSummary || qualifiers?.criticalSummary || '').trim() ||
+      (
+        edgePathLegMeta && typeof edgePathLegMeta.pathStressScore === 'number'
+          ? `${edgePathLegMeta.pathBottleneck ? 'Bottleneck leg' : 'Route leg'} stress ${edgePathLegMeta.pathStressScore.toFixed(2)}`
+          : ''
+      );
+    const primaryMechanism = String(src?.primaryRiskMechanism || qualifiers?.primaryRiskMechanism || '').trim();
+    const primaryMetricKey = String(src?.primaryCriticalMetricKey || qualifiers?.primaryCriticalMetricKey || '').trim();
+    const primaryMetricLabel = String(src?.primaryCriticalMetricLabel || qualifiers?.primaryCriticalMetricLabel || '').trim();
+    const primaryMetricUnit = String(src?.primaryCriticalMetricUnit || qualifiers?.primaryCriticalMetricUnit || '').trim();
+    const primaryMetricValueRaw =
+      src?.primaryCriticalMetricValue ??
+      qualifiers?.primaryCriticalMetricValue ??
+      (edgePathLegMeta && typeof edgePathLegMeta.pathStressScore === 'number' ? edgePathLegMeta.pathStressScore : undefined);
+    const riskFlags = readStringArray(src?.riskFlags || qualifiers?.riskFlags);
+    const gateStatus = String(src?.riskGateStatus || qualifiers?.riskGateStatus || '').trim();
+    const coverageStatus = String(src?.riskCoverageStatus || qualifiers?.riskCoverageStatus || '').trim();
+    const explicitCriticality =
+      typeof edgeData?.criticality === 'number'
+        ? edgeData.criticality
+        : (typeof edge?.properties?.criticality === 'number' ? edge.properties.criticality : undefined);
+    const criticalityScore =
+      typeof explicitCriticality === 'number'
+        ? explicitCriticality
+        : (edgePathLegMeta && typeof edgePathLegMeta.pathStressScore === 'number' ? edgePathLegMeta.pathStressScore : undefined);
+    if (!summary && !primaryMechanism && !primaryMetricKey && riskFlags.length === 0 && typeof criticalityScore !== 'number') {
+      return null;
+    }
+    return {
+      summary,
+      primaryMechanism,
+      primaryMetricKey,
+      primaryMetricLabel,
+      primaryMetricUnit,
+      primaryMetricValue: typeof primaryMetricValueRaw === 'number' ? primaryMetricValueRaw : undefined,
+      riskFlags,
+      gateStatus,
+      coverageStatus,
+      criticalityScore,
+    };
+  }, [edgeData, edge, edgePathLegMeta]);
+
   const nodeAccent = React.useMemo(() => {
     return getNodeColors(nodeVisualType || nodeType || fragment?.type, theme === 'dark' ? 'dark' : 'light').accent;
   }, [nodeVisualType, nodeType, fragment, theme]);
@@ -1948,6 +2002,41 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                   }
                 />
               )}
+            </SectionCard>
+          )}
+
+          {edgeCriticalityMeta && (
+            <SectionCard title="Criticality">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {edgeCriticalityMeta.summary && (
+                  <div style={{ fontSize: 12, lineHeight: 1.5, color: 'var(--text-heading)' }}>{edgeCriticalityMeta.summary}</div>
+                )}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {typeof edgeCriticalityMeta.criticalityScore === 'number' && (
+                    <Chip tone={edgeCriticalityMeta.criticalityScore >= 0.58 ? 'danger' : 'info'}>
+                      criticality {edgeCriticalityMeta.criticalityScore.toFixed(2)}
+                    </Chip>
+                  )}
+                  {edgeCriticalityMeta.primaryMechanism && <Chip>{edgeCriticalityMeta.primaryMechanism}</Chip>}
+                  {edgeCriticalityMeta.gateStatus && <Chip>{edgeCriticalityMeta.gateStatus}</Chip>}
+                  {edgeCriticalityMeta.coverageStatus && <Chip>{edgeCriticalityMeta.coverageStatus}</Chip>}
+                  {edgeCriticalityMeta.riskFlags.map((flag: string) => (
+                    <Chip key={flag} tone="danger">{flag}</Chip>
+                  ))}
+                </div>
+                {(edgeCriticalityMeta.primaryMetricKey || edgeCriticalityMeta.primaryMetricLabel) && (
+                  <KV
+                    k={edgeCriticalityMeta.primaryMetricLabel || edgeCriticalityMeta.primaryMetricKey}
+                    v={
+                      <span style={mono}>
+                        {typeof edgeCriticalityMeta.primaryMetricValue === 'number'
+                          ? `${edgeCriticalityMeta.primaryMetricValue}${edgeCriticalityMeta.primaryMetricUnit ? ` ${edgeCriticalityMeta.primaryMetricUnit}` : ''}`
+                          : 'n/a'}
+                      </span>
+                    }
+                  />
+                )}
+              </div>
             </SectionCard>
           )}
 

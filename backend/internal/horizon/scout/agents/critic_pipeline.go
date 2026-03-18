@@ -65,7 +65,7 @@ func (p *CriticPipelineRunner) Validate(ctx context.Context, input CriticValidat
 
 	// Deterministic invariant checks (no LLM).
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) {
-		invariantGaps := checkSupplyChainInvariants(input.SupplyChains)
+		invariantGaps := checkSupplyChainInvariants(input.SupplyChains, input.WorkingProductScope)
 		if len(invariantGaps) > 0 {
 			if result == nil {
 				result = &ValidationResult{IsValid: true, Confidence: 1.0, MissingInfo: []string{}, Conflicts: []ValidationConflict{}}
