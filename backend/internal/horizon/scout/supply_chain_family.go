@@ -166,6 +166,9 @@ func shouldRunSupplyChainFamilyCoResearch(job *models.ScoutingJob) bool {
 	if job == nil {
 		return false
 	}
+	if isDirectedSupplyChainExplorationJob(job) {
+		return false
+	}
 	if job.State == nil {
 		return true
 	}

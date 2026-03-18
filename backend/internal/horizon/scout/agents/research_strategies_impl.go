@@ -2276,7 +2276,7 @@ func (a *ResearchAgent) EnrichSupplyChainHotPath(ctx context.Context, query Supp
 	out, err := a.runResearchPromptWithOptions(ctx, prompt, nil, researchPromptOptions{
 		PreferredModel:   "vertex-gemini-2.5-pro",
 		MinContextWindow: 16000,
-		MaxOutputSize:    24000,
+		MaxOutputSize:    32000,
 		MinCapability:    8,
 	})
 	if err != nil || out == nil {
@@ -2435,10 +2435,14 @@ No markdown.`, supplyChainMandatoryBlock, supplyChainOperationalModelBlock, supp
 
 func (a *ResearchAgent) buildSupplyChainHotPathPrompt(query SupplyChainQuery, prePlan *SupplyChainPreHotPathPlan) string {
 	base := a.buildSupplyChainFullQueryPrompt(query)
-	hotPathBlock := `HOT PATH OBJECTIVE:
+	chainTarget := "6-20"
+	if strings.EqualFold(strings.TrimSpace(query.AnchorType), "product") {
+		chainTarget = "3-8"
+	}
+	hotPathBlock := fmt.Sprintf(`HOT PATH OBJECTIVE:
 - Produce the first high-value supply-chain graph quickly.
 - Prefer a dense first pass over exhaustive recursion.
-- Return multiple concrete branches in ONE response. Target 6-20 chains when evidence supports it; do not stop after a single obvious chain.
+- Return multiple concrete branches in ONE response. Target %s chains when evidence supports it; do not stop after a single obvious chain.
 - Mixed anchors are valid. Anchors may be organizations, facilities, deposits, products, or a mix.
 - Prefer concrete operational nodes: factories, plants, mines, depots, bonded warehouses, customs terminals, ports, inland terminals, distribution centers, fulfillment hubs, and stores when they are operationally relevant.
 - For each main branch, try to return a full operational slice: supplier/factory -> product family -> import/customs/port/DC -> recipient facility/store/e-commerce node.
@@ -2451,7 +2455,11 @@ func (a *ResearchAgent) buildSupplyChainHotPathPrompt(query SupplyChainQuery, pr
 - When the query is subject-scoped around a named company, asset, or operator, keep the graph centered on that subject. Do NOT return parallel industry chains unless they are direct upstream dependencies, substitute branches, or clearly route-supporting branches for the anchored subject path.
 - When evidence points to a target geography or inbound destination, prioritize chains that enter, terminate in, or materially support that geography. De-prioritize branches that stay entirely outside the subject path and target geography.
 - Do not stop at org -> product -> org if a more operational chain is available. Actor-only skeletons are incomplete unless the anchor itself is inherently actor-only.
-- Keep taxonomy strict. Never invent invalid canonical path families or placeholder nodes.`
+- Keep taxonomy strict. Never invent invalid canonical path families or placeholder nodes.`, chainTarget)
+	if strings.EqualFold(strings.TrimSpace(query.AnchorType), "product") {
+		hotPathBlock += `
+- Product-anchored hot path must stay selective. Prioritize the highest-confidence upstream manufacturers, specialized suppliers, and operational facilities first instead of broad industry sweeps.`
+	}
 	steeringBlock := ""
 	if prePlan != nil {
 		if b, err := json.MarshalIndent(prePlan, "", "  "); err == nil {

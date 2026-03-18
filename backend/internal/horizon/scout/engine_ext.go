@@ -8393,6 +8393,9 @@ func (e *ScoutEngine) runSupplyChainFastFirstHotPath(ctx context.Context, job *m
 	if job != nil {
 		maxQueries = supplyChainFastFirstIntLimit(job, "supplyChainFastFirstMaxHotQueries", maxQueries)
 	}
+	if directedExplorationHotPathOnly(job) && maxQueries > 1 {
+		maxQueries = 1
+	}
 	hotQueries := supplyChainFastFirstHotPathQueries(queries, maxQueries)
 	if len(hotQueries) == 0 {
 		return nil
@@ -8408,8 +8411,17 @@ func (e *ScoutEngine) runSupplyChainFastFirstHotPath(ctx context.Context, job *m
 				idx, strings.TrimSpace(prePlan.Strategy), prePlan.Confidence, len(prePlan.DerivedProductFilters), len(prePlan.SearchFocus)))
 		}
 		queryVariants := deriveSupplyChainHotPathVariants(query, prePlan)
+		directedHotPathOnly := directedExplorationHotPathOnly(job)
 		var accumulatedForQuery []agents.SupplyChain
 		for variantIdx, variant := range queryVariants {
+			if directedHotPathOnly {
+				if len(accumulatedForQuery) > 0 && variantIdx > 0 {
+					break
+				}
+				if variantIdx > 1 {
+					break
+				}
+			}
 			variant = applyDirectedExplorationQueryAugment(variant, job)
 			queryChains, err := e.researchAgent.EnrichSupplyChainHotPath(ctx, variant, prePlan)
 			if err != nil {
@@ -10043,8 +10055,10 @@ func (e *ScoutEngine) processSupplyChains(
 		e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyLinkMaterialize] created=%d skipped=%d", supplyLinksCreated, supplyLinksSkipped))
 	}
 
-	// Defer expensive rebuild work out of the hot materialization path.
-	if supplyLinksCreated > 0 && e.supplyChainPathBuilder != nil {
+	// Directed exploration should favor fast first materialization for live graph/map updates.
+	// Deferred rebuild is useful for background quality improvement, but it is too expensive for
+	// interactive hot-path runs and can trigger unrelated AI fallbacks.
+	if supplyLinksCreated > 0 && e.supplyChainPathBuilder != nil && !isDirectedSupplyChainExplorationJob(job) {
 		if job.State == nil {
 			job.State = make(map[string]interface{})
 		}
@@ -10135,7 +10149,7 @@ func (e *ScoutEngine) processSupplyChains(
 				BuildMode:  buildMode,
 				MaxDepth:   maxDepth,
 			}
-			if e.criticAgent != nil {
+			if e.criticAgent != nil && !isDirectedSupplyChainExplorationJob(job) {
 				joinHints, joinGaps, err := e.buildSupplyChainJoinValidationHints(ctx, chains[idx], segments, chainGraphContext)
 				if err != nil {
 					e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainJoinValidation] chain=%d err=%v", idx, err))

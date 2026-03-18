@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
@@ -202,30 +203,18 @@ func (e *ScoutEngine) runDirectedSupplyChainExploration(ctx context.Context, job
 	if parseStateBool(job.State["directedExplorationCompleted"], false) {
 		return
 	}
-	queries := buildDirectedSupplyChainQueries(job)
-	if len(queries) == 0 {
+	rt := newDirectedSupplyChainExplorationRuntime(job)
+	if !rt.ensureQueries(ctx, e, job) {
 		return
 	}
-	queries = e.expandSupplyChainQueriesWithOrgs(ctx, job, queries)
-	hotPathChains := e.runSupplyChainFastFirstHotPath(ctx, job, queries)
-	if len(hotPathChains) > 0 {
-		_ = e.materializeSupplyChainHotPathChains(ctx, job, hotPathChains)
-	}
-	if directedExplorationHotPathOnly(job) {
-		job.State["directedExplorationCompleted"] = true
-		return
-	}
-	downOrgs, downFacs, upOrgs, upFacs := collectAnchorOrgsFromQueriesByDirection(queries, directedExplorationDirection(job))
-	productFilters, geoFilters := collectSupplyChainFiltersByDirection(queries, directedExplorationDirection(job))
-	unwindDepth := 1
-	if v := parseStateInt(job.State["maxRecursionDepth"], 0); v > 0 && v < 4 {
-		unwindDepth = v
-	}
-	if len(downOrgs) > 0 || len(downFacs) > 0 {
-		_ = e.runSupplyChainRecursiveUnwinding(ctx, job, downOrgs, downFacs, unwindDepth, productFilters.Product, productFilters.Geo)
-	}
-	if len(upOrgs) > 0 || len(upFacs) > 0 {
-		_ = e.runSupplyChainUpstreamUnwinding(ctx, job, upOrgs, upFacs, unwindDepth, geoFilters.Product, geoFilters.Geo)
+	for _, tool := range directedSupplyChainExplorationTools(job) {
+		startedAt := time.Now().UTC()
+		run := tool.Run(ctx, e, job, rt)
+		finishedAt := time.Now().UTC()
+		appendDirectedExplorationToolRun(job, tool.Name(), run, startedAt, finishedAt)
+		if run.Error != nil {
+			recordPipelineIssue(job, "directed_exploration."+tool.Name(), run.Error.Error())
+		}
 	}
 	job.State["directedExplorationCompleted"] = true
 }

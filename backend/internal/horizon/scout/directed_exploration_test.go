@@ -3,6 +3,7 @@ package scout
 import (
 	"strings"
 	"testing"
+	"time"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
@@ -92,5 +93,72 @@ func TestDirectedExplorationAnchorPathHelpers(t *testing.T) {
 	}
 	if supplyChainAnchorTypeForPath("/gov/customs-ministry") != "org" {
 		t.Fatalf("expected gov anchors to collapse to org execution type, got %q", supplyChainAnchorTypeForPath("/gov/customs-ministry"))
+	}
+}
+
+func TestDirectedSupplyChainExplorationToolsSelection(t *testing.T) {
+	upstream := &horizonmodels.ScoutingJob{
+		AgentJob: coremodels.AgentJob{
+			State: map[string]interface{}{
+				"directedExploration": horizonmodels.DirectedExplorationConfig{
+					DomainMode: "supply_chain",
+					Direction:  "upstream",
+				},
+			},
+		},
+	}
+	tools := directedSupplyChainExplorationTools(upstream)
+	if len(tools) != 2 {
+		t.Fatalf("expected 2 tools for upstream run, got %d", len(tools))
+	}
+	if tools[0].Name() != "supply_chain.hot_path" || tools[1].Name() != "supply_chain.upstream_unwind" {
+		t.Fatalf("unexpected upstream tool chain: %s -> %s", tools[0].Name(), tools[1].Name())
+	}
+
+	hotPathOnly := &horizonmodels.ScoutingJob{
+		AgentJob: coremodels.AgentJob{
+			State: map[string]interface{}{
+				"directedExploration": horizonmodels.DirectedExplorationConfig{
+					DomainMode:  "supply_chain",
+					Direction:   "downstream",
+					HotPathOnly: true,
+				},
+			},
+		},
+	}
+	tools = directedSupplyChainExplorationTools(hotPathOnly)
+	if len(tools) != 1 || tools[0].Name() != "supply_chain.hot_path" {
+		t.Fatalf("expected hot-path-only chain, got %#v", tools)
+	}
+}
+
+func TestAppendDirectedExplorationToolRun(t *testing.T) {
+	job := &horizonmodels.ScoutingJob{
+		AgentJob: coremodels.AgentJob{
+			State: map[string]interface{}{},
+		},
+	}
+	startedAt := time.Date(2026, 3, 18, 12, 0, 0, 0, time.UTC)
+	finishedAt := startedAt.Add(2 * time.Second)
+	appendDirectedExplorationToolRun(job, "supply_chain.hot_path", directedSupplyChainToolRun{
+		Status: "completed",
+		Metrics: map[string]any{
+			"hotPathChainsN": 3,
+		},
+	}, startedAt, finishedAt)
+
+	raw := parseStateSliceMap(job.State["directedExplorationToolRuns"])
+	if len(raw) != 1 {
+		t.Fatalf("expected one tool run, got %d", len(raw))
+	}
+	if parseStateString(raw[0]["name"]) != "supply_chain.hot_path" {
+		t.Fatalf("unexpected tool name: %#v", raw[0]["name"])
+	}
+	metrics, ok := raw[0]["metrics"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected metrics map, got %#v", raw[0]["metrics"])
+	}
+	if parseStateInt(metrics["hotPathChainsN"], 0) != 3 {
+		t.Fatalf("unexpected hotPathChainsN: %#v", metrics["hotPathChainsN"])
 	}
 }
