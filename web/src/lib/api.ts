@@ -14,6 +14,106 @@ import type {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
 
+export interface SupplyChainOverlayMechanism {
+  key: string;
+  label?: string;
+  score?: number;
+  explanation?: string;
+}
+
+export interface SupplyChainOverlayMetric {
+  key: string;
+  label?: string;
+  value?: number;
+  unit?: string;
+  formatted?: string;
+  direction?: 'higher_is_riskier' | 'lower_is_riskier' | string;
+}
+
+export interface SupplyChainOverlayProduct {
+  ref: string;
+  name?: string;
+  score?: number;
+  primaryMechanism?: string;
+}
+
+export interface SupplyChainOverlayPathRef {
+  key: string;
+  score?: number;
+  primaryMechanism?: string;
+  productRef?: string;
+  productName?: string;
+}
+
+export interface SupplyChainOverlayNode {
+  fragmentId?: string;
+  canonicalPath?: string;
+  name?: string;
+  type?: string;
+  score?: number;
+  primaryMechanism?: string;
+}
+
+export interface SupplyChainLegRiskOverlay {
+  legIndex: number;
+  fromRef?: string;
+  toRef?: string;
+  productRef?: string;
+  productName?: string;
+  summary?: string;
+  primaryMechanism?: string;
+  criticality?: number;
+  bottleneck?: boolean;
+  metrics?: SupplyChainOverlayMetric[];
+  mechanisms?: SupplyChainOverlayMechanism[];
+  transportViaRefs?: string[];
+  vesselType?: string;
+}
+
+export interface SupplyChainPathRiskOverlay {
+  summary?: string;
+  criticality?: number;
+  primaryMechanism?: string;
+  productRef?: string;
+  productName?: string;
+  bottleneckLegIndex?: number;
+  topMetrics?: SupplyChainOverlayMetric[];
+  mechanisms?: SupplyChainOverlayMechanism[];
+  bottleneckNodes?: SupplyChainOverlayNode[];
+  legs?: SupplyChainLegRiskOverlay[];
+}
+
+export interface SupplyChainObjectRiskOverlay {
+  fragmentId?: string;
+  canonicalPath?: string;
+  summary?: string;
+  criticality?: number;
+  primaryMechanism?: string;
+  topProducts?: SupplyChainOverlayProduct[];
+  topMechanisms?: SupplyChainOverlayMechanism[];
+  topMetrics?: SupplyChainOverlayMetric[];
+  bottleneckNodes?: SupplyChainOverlayNode[];
+  topPaths?: SupplyChainOverlayPathRef[];
+}
+
+export interface SupplyChainLensRiskOverlay {
+  summary?: string;
+  criticality?: number;
+  primaryMechanism?: string;
+  topProducts?: SupplyChainOverlayProduct[];
+  topMechanisms?: SupplyChainOverlayMechanism[];
+  topMetrics?: SupplyChainOverlayMetric[];
+  bottleneckNodes?: SupplyChainOverlayNode[];
+  topPaths?: SupplyChainOverlayPathRef[];
+}
+
+export interface SupplyChainArtifactResponse {
+  id: string;
+  kind: string;
+  riskOverlay?: SupplyChainPathRiskOverlay;
+  [key: string]: any;
+}
+
 class ApiClient {
   private client: AxiosInstance;
 
@@ -2339,7 +2439,14 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
    * GET /api/horizon/supply-chains/by-lens?lensId=...
    * Returns materialized supply chain artifacts for a lens.
    */
-  async getSupplyChainsByLens(lensId: string): Promise<{ chains: any[]; total: number; lensId: string; scopedTotal?: number; discoveredTotal?: number; riskOverlay?: any }> {
+  async getSupplyChainsByLens(lensId: string): Promise<{
+    chains: SupplyChainArtifactResponse[];
+    total: number;
+    lensId: string;
+    scopedTotal?: number;
+    discoveredTotal?: number;
+    riskOverlay?: SupplyChainLensRiskOverlay;
+  }> {
     try {
       const response = await this.client.get('/api/horizon/supply-chains/by-lens', {
         params: { lensId },
@@ -2364,7 +2471,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       type?: string;
     }>;
     results: Array<{
-      artifact: any;
+      artifact: SupplyChainArtifactResponse;
       previewPayload?: any;
       match?: {
         anchorIndexes?: number[];
@@ -2386,7 +2493,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       directional?: number;
       clipped?: number;
     };
-    riskOverlay?: any;
+    riskOverlay?: SupplyChainLensRiskOverlay;
     linkageSummary?: {
       fullyLinked?: number;
       repairedAtReadTime?: number;
@@ -3063,7 +3170,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
         bottleneckCount?: number;
         strongBindingCount?: number;
       };
-      riskOverlay?: any;
+      riskOverlay?: SupplyChainObjectRiskOverlay;
     };
     explain?: {
       summary?: string;
