@@ -227,7 +227,8 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
       <button
         type="button"
         onClick={onClose}
-        aria-label="Close fragment details"
+        aria-label="Collapse fragment details"
+        title="Collapse fragment details"
         style={{
           position: 'absolute',
           top: 10,

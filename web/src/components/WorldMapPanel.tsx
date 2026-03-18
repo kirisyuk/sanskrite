@@ -384,6 +384,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [hops, setHops] = React.useState(3);
   const vesselsApiAvailable = isVesselsApiAvailable();
   const [selectedObject, setSelectedObject] = React.useState<GeoObject | null>(null);
+  const [selectedObjectOverlayCollapsed, setSelectedObjectOverlayCollapsed] = React.useState(false);
   const [searchHighlightedObjectId, setSearchHighlightedObjectId] = React.useState<string | null>(null);
   const [stackSelection, setStackSelection] = React.useState<MapObjectStackSelection | null>(null);
   const [zoneActivityById, setZoneActivityById] = React.useState<Record<string, ZoneActivityItem>>({});
@@ -850,6 +851,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     if (selection.kind === 'clear') {
       clearStackSelection();
       setSearchHighlightedObjectId(null);
+      setSelectedObjectOverlayCollapsed(false);
       setSelectedObject(null);
       return;
     }
@@ -857,12 +859,14 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     if (selection.kind === 'object') {
       clearStackSelection();
       setSearchHighlightedObjectId(null);
+      setSelectedObjectOverlayCollapsed(false);
       setSelectedObject(selection.object);
       return;
     }
 
     clearStackSelection();
     setSearchHighlightedObjectId(null);
+    setSelectedObjectOverlayCollapsed(false);
     setSelectedObject(null);
     setStackSelection(selection);
   }, [clearStackSelection]);
@@ -871,6 +875,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     if (!selectedObject) return;
     if (visibleMapObjects.some((obj) => obj.id === selectedObject.id)) return;
     setSearchHighlightedObjectId((current) => (current === selectedObject.id ? null : current));
+    setSelectedObjectOverlayCollapsed(false);
     setSelectedObject(null);
   }, [selectedObject, visibleMapObjects]);
 
@@ -1020,6 +1025,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
 
     clearStackSelection();
     setSearchHighlightedObjectId(object.id);
+    setSelectedObjectOverlayCollapsed(false);
     setSelectedObject(object);
     setSearchOpen(false);
     setSearchQuery('');
@@ -2382,6 +2388,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
             onSelectObject={(object) => {
               clearStackSelection();
               setSearchHighlightedObjectId(null);
+              setSelectedObjectOverlayCollapsed(false);
               setSelectedObject(object);
             }}
           />
@@ -2900,6 +2907,32 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
         </div>
 
         {selectedObject && !stackSelection && (
+          selectedObjectOverlayCollapsed ? (
+            <div
+              style={{
+                position: 'absolute',
+                left: 10,
+                top: overlayTopOffset,
+                zIndex: 20,
+                pointerEvents: 'auto',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setSelectedObjectOverlayCollapsed(false)}
+                title={`Show ${getSearchObjectTitle(selectedObject)}`}
+                aria-label={`Show ${getSearchObjectTitle(selectedObject)}`}
+                style={mapDockButtonStyle(isDark, true, isDark ? '#60a5fa' : '#2563eb')}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M8 6h8" />
+                  <path d="M8 12h8" />
+                  <path d="M8 18h8" />
+                  <path d="m13 4 5 8-5 8" />
+                </svg>
+              </button>
+            </div>
+          ) : (
           <MapObjectDetail
             object={selectedObject}
             isDark={isDark}
@@ -2913,10 +2946,10 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
             onNarrativeHover={setActiveNarrativeKey}
             onClose={() => {
               setActiveNarrativeKey(null);
-              setSearchHighlightedObjectId(null);
-              setSelectedObject(null);
+              setSelectedObjectOverlayCollapsed(true);
             }}
           />
+          )
         )}
 
         {selectedObject && !stackSelection && (
