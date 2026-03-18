@@ -44,6 +44,9 @@ func TestSupplyChainHotPathPrompt_PrefersConcreteOperationalNodes(t *testing.T) 
 		"supplier/factory -> product family -> import/customs/port/DC -> recipient facility/store/e-commerce node",
 		"local distribution centers, and major downstream store / e-commerce fulfillment branches",
 		"Support branches are useful, but must not crowd out the main goods flows",
+		"For sanctions-sensitive, cross-border inbound, import-constrained, or export-control-sensitive flows, explicitly seek customs terminals, rerouted corridors, alternative import nodes, export-license gates, and sanctioned/control-sensitive touchpoints.",
+		"When the query is subject-scoped around a named company, asset, or operator, keep the graph centered on that subject.",
+		"When evidence points to a target geography or inbound destination, prioritize chains that enter, terminate in, or materially support that geography.",
 		"Do not stop at org -> product -> org if a more operational chain is available",
 	} {
 		if !strings.Contains(prompt, want) {
@@ -78,6 +81,7 @@ func TestSupplyChainPreHotPathPrompt_AlwaysSoftSteering(t *testing.T) {
 		"runs BEFORE hot-path graph construction for every supply-chain job",
 		"Do NOT build supply chains here",
 		"It must NEVER act as a hard filter",
+		"candidateAnchorTerms",
 		"For OEM/service/spare-parts cases, think in terms of parts manufacturing, authorized suppliers, repair centers, service depots",
 		"derivedProductFilters",
 	} {
@@ -117,6 +121,7 @@ func TestSupplyChainHotPathCapabilityPrompt_StaysTopologyStable(t *testing.T) {
 	for _, want := range []string{
 		"Do NOT create new topology. Do NOT add or remove graph entities.",
 		"carrierProductObservations are practically required when evidence exists",
+		"When the current chains are cross-border, sanctions-sensitive, import-constrained, export-control-sensitive, or customs-sensitive, prefer adding linkObservations / routeObservations",
 		"Do NOT return supplyChains or nodes in this pass.",
 		"\"carrierProductObservations\": [",
 		"PRE-HOT-PATH STEERING:",

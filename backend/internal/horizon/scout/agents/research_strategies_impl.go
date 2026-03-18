@@ -139,9 +139,23 @@ share: percent (0-100) | ratio (0-1)
 contract_value: usd | eur | rub
 lead_time_days: days
 on_time_delivery: ratio (0-1)
+inventory_cover_days_at_destination: days
+customs_clearance_days: days
+switch_time_days: days
+technical_fit: ratio (0-1)
+regulatory_fit: ratio (0-1)
+fill_rate: ratio (0-1)
+rejection_rate: ratio (0-1)
 
 Format per segment: { "volume": { "value": 15, "unit": "gwh_per_year", "confidence": 0.8 }, "share": { "value": 40, "unit": "percent", "confidence": 0.7 } }
 Choose unit by product type: batteries/energy → gwh; ores/chemicals → metric_tons; oil/gas → bbl/bcf; discrete → units/cells.
+- When the flow is cross-border, sanctions-sensitive, export-control-sensitive, import-constrained, or customs-sensitive, prefer including customs_clearance_days, regulatory_fit, inventory_cover_days_at_destination, and switch_time_days when evidence exists.
+- For linkObservations and routeObservations, also use qualifiers for control/access gates when evidence exists:
+  - export_license_required
+  - sanctions_touchpoint
+  - approved_vendor_only
+  - service_contract_required
+  - dual_use_flag
 `
 }
 
@@ -285,6 +299,9 @@ func strategySupplyChainsJSONContractBlock() string {
 - transportVia is operationally important. When the leg is cross-border or route-sensitive and a plausible business route is known, do not leave transportVia empty.
 - productCandidates are scope additions, not duplicates of nodes[]. Use them only when the current working product set needs extension.
 - carrierProductObservations must be reusable actor×product facts and should be present when evidence supports reusable baseline metrics; linkObservations must be customer/destination specific; routeObservations must be transport/path specific.
+- For sanctions-/export-control-/customs-sensitive cross-border flows, prefer linkObservations or routeObservations with:
+  - metrics like customs_clearance_days, lead_time_days, inventory_cover_days_at_destination, regulatory_fit, switch_time_days
+  - qualifiers like export_license_required, sanctions_touchpoint, approved_vendor_only, service_contract_required, dual_use_flag
 - Good transportVia examples: /fac/sea/strait-of-hormuz-terminal, /fac/eg/suez-terminal, /fac/nl/port-of-rotterdam, /fac/ae/jebel-ali-terminal.
 - Bad transportVia examples: generic words, regions, countries, products, or non-facility placeholders.
 - INVALID shape example: "nodes": "A -> B -> C"
@@ -691,6 +708,7 @@ func (a *ResearchAgent) runSupplyChainPreHotPathPrompt(ctx context.Context, prom
 	}
 	plan.Strategy = strings.TrimSpace(plan.Strategy)
 	plan.StrategyReason = strings.TrimSpace(plan.StrategyReason)
+	plan.CandidateAnchorTerms = dedupStrings(plan.CandidateAnchorTerms, 6)
 	plan.CandidateProductFamilies = dedupStrings(plan.CandidateProductFamilies, 6)
 	plan.CandidateOperationalAnchorClasses = dedupStrings(plan.CandidateOperationalAnchorClasses, 8)
 	plan.CandidateFlowArchetypes = dedupStrings(plan.CandidateFlowArchetypes, 8)
@@ -704,6 +722,7 @@ func (a *ResearchAgent) runSupplyChainPreHotPathPrompt(ctx context.Context, prom
 		plan.Confidence = 1
 	}
 	if plan.Strategy == "" &&
+		len(plan.CandidateAnchorTerms) == 0 &&
 		len(plan.CandidateProductFamilies) == 0 &&
 		len(plan.CandidateOperationalAnchorClasses) == 0 &&
 		len(plan.CandidateFlowArchetypes) == 0 &&
@@ -722,6 +741,7 @@ func sanitizeSupplyChainPreHotPathPlan(data []byte) ([]byte, error) {
 	ensureStringField(root, "strategy")
 	ensureStringField(root, "strategyReason")
 	coerceFloatField(root, "confidence", 0.5)
+	sanitizeStringSliceField(root, "candidateAnchorTerms")
 	sanitizeStringSliceField(root, "candidateProductFamilies")
 	sanitizeStringSliceField(root, "candidateOperationalAnchorClasses")
 	sanitizeStringSliceField(root, "candidateFlowArchetypes")
@@ -2301,6 +2321,7 @@ TASK:
 - If the query is broad, OEM-like, spare-parts/service heavy, or otherwise ambiguous, decompose it into likely operational branches without forcing them.
 
 WHAT TO RETURN:
+- candidateAnchorTerms: concrete org/facility/brand/subsidiary aliases or operational anchor names worth retrying if the original anchor is too broad
 - candidateProductFamilies: more concrete product families or operational sub-families worth prioritizing
 - candidateOperationalAnchorClasses: likely node classes to look for first
 - candidateFlowArchetypes: likely topology shapes for this domain
@@ -2312,6 +2333,7 @@ SOFT-STEERING RULES:
 - This plan is guidance only. It must NEVER act as a hard filter.
 - Do not suppress the original query intent.
 - Prefer concrete operational decomposition over abstract business prose.
+- For broad company anchors, include high-signal operational aliases, business units, country subsidiaries, depot/operator names, or common abbreviations when they materially improve retrieval.
 - For OEM/service/spare-parts cases, think in terms of parts manufacturing, authorized suppliers, repair centers, service depots, installed-base support, customer plants, outage/maintenance support.
 - For commodity corridor cases, think in terms of mines/wells/plants, terminals, ports, refineries, processors, chokepoints, and destination facilities.
 
@@ -2320,6 +2342,7 @@ Return ONLY valid JSON:
 {
   "strategy": "commodity_corridor|oem_aftermarket|industrial_components|retail_distribution|generic_supply_chain",
   "strategyReason": "short explanation",
+  "candidateAnchorTerms": ["..."],
   "candidateProductFamilies": ["..."],
   "candidateOperationalAnchorClasses": ["..."],
   "candidateFlowArchetypes": ["..."],
@@ -2424,6 +2447,9 @@ func (a *ResearchAgent) buildSupplyChainHotPathPrompt(query SupplyChainQuery, pr
 - Include transportVia when a route/chokepoint is known. Include alternatives when a customer/product pair has plausible substitute suppliers.
 - When evidence supports reusable actor×product baseline facts, include carrierProductObservations in the same response. Do not leave reusable baseline metrics implicit.
 - Prefer branches that maximize first-pass decision value: main products, main suppliers, main import/distribution nodes, main transformations, main customer/distribution branches.
+- For sanctions-sensitive, cross-border inbound, import-constrained, or export-control-sensitive flows, explicitly seek customs terminals, rerouted corridors, alternative import nodes, export-license gates, and sanctioned/control-sensitive touchpoints.
+- When the query is subject-scoped around a named company, asset, or operator, keep the graph centered on that subject. Do NOT return parallel industry chains unless they are direct upstream dependencies, substitute branches, or clearly route-supporting branches for the anchored subject path.
+- When evidence points to a target geography or inbound destination, prioritize chains that enter, terminate in, or materially support that geography. De-prioritize branches that stay entirely outside the subject path and target geography.
 - Do not stop at org -> product -> org if a more operational chain is available. Actor-only skeletons are incomplete unless the anchor itself is inherently actor-only.
 - Keep taxonomy strict. Never invent invalid canonical path families or placeholder nodes.`
 	steeringBlock := ""
@@ -2502,6 +2528,7 @@ STRICT RULES:
 - carrierProductObservations are practically required when evidence exists for reusable actor×product facts in the current chains.
 - Keep one product per link/leg. Do NOT smear multi-product truth across a single link.
 - Do NOT restate route-specific or customer-specific facts as reusable capability baseline.
+- When the current chains are cross-border, sanctions-sensitive, import-constrained, export-control-sensitive, or customs-sensitive, prefer adding linkObservations / routeObservations for customs_clearance_days, inventory_cover_days_at_destination, regulatory_fit, switch_time_days, export_license_required, sanctions_touchpoint, approved_vendor_only, service_contract_required, and dual_use_flag whenever evidence exists.
 - Prefer concrete reusable metric keys only from this whitelist:
 %s
 - Use ONLY valid canonical paths already present in the provided chains for carrierRef/productRef, unless you are returning a genuinely new productCandidate.

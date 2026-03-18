@@ -144,6 +144,30 @@ func TestBuildFocusedSupplyChainHotPathQuery_FallsBackToCandidateProductFamilies
 	}
 }
 
+func TestBuildAnchorFocusedSupplyChainHotPathQueries_UsesCandidateAliases(t *testing.T) {
+	query := agents.SupplyChainQuery{
+		Anchor:        "Schlumberger",
+		AnchorType:    "org",
+		Direction:     "both",
+		Depth:         4,
+		ProductFilter: []string{"spare-parts"},
+	}
+	prePlan := &agents.SupplyChainPreHotPathPlan{
+		CandidateAnchorTerms: []string{"SLB", "M-I SWACO", "Schlumberger"},
+	}
+
+	variants := buildAnchorFocusedSupplyChainHotPathQueries(query, prePlan)
+	if len(variants) != 2 {
+		t.Fatalf("expected 2 novel anchor variants, got %d", len(variants))
+	}
+	if variants[0].Anchor != "SLB" {
+		t.Fatalf("expected first alias variant to preserve SLB, got %#v", variants[0].Anchor)
+	}
+	if variants[1].Anchor != "M-I SWACO" {
+		t.Fatalf("expected second alias variant to preserve M-I SWACO, got %#v", variants[1].Anchor)
+	}
+}
+
 func TestDeriveSupplyChainHotPathVariants_DedupsOriginalWhenNoNovelDerivedFilters(t *testing.T) {
 	query := agents.SupplyChainQuery{
 		Anchor:        "/org/qa/qatarenergy",
@@ -160,5 +184,96 @@ func TestDeriveSupplyChainHotPathVariants_DedupsOriginalWhenNoNovelDerivedFilter
 	variants := deriveSupplyChainHotPathVariants(query, prePlan)
 	if len(variants) != 1 {
 		t.Fatalf("expected only original query when derived filters are not novel, got %d", len(variants))
+	}
+}
+
+func TestFilterSupplyChainsByAnchorScope_PrefersSubjectAndTargetGeo(t *testing.T) {
+	chains := []agents.SupplyChain{
+		{
+			Nodes: []agents.SupplyChainNode{
+				{CanonicalPath: "/fac/us/cameron-houston-plant", Type: "FACILITY", Name: "Cameron Houston Plant"},
+				{CanonicalPath: "/product/component/mechanical/manufacturing/oilfield-spare-parts", Type: "PRODUCT", Name: "Oilfield Spare Parts"},
+				{CanonicalPath: "/fac/ru/slb-tyumen-factory", Type: "FACILITY", Name: "SLB Tyumen Factory"},
+			},
+			Confidence: 0.82,
+		},
+		{
+			Nodes: []agents.SupplyChainNode{
+				{CanonicalPath: "/fac/de/siemens-energy-muelheim-factory", Type: "FACILITY", Name: "Siemens Energy Muelheim Factory"},
+				{CanonicalPath: "/product/component/mechanical/manufacturing/gas-turbine-spare-parts", Type: "PRODUCT", Name: "Gas Turbine Spare Parts"},
+				{CanonicalPath: "/fac/sa/qassim-2-power-plant", Type: "FACILITY", Name: "Qassim 2 Power Plant"},
+			},
+			Confidence: 0.88,
+		},
+		{
+			Nodes: []agents.SupplyChainNode{
+				{CanonicalPath: "/org/us/slb", Type: "ORGANIZATION", Name: "SLB"},
+				{CanonicalPath: "/product/component/mechanical/manufacturing/oilfield-spare-parts", Type: "PRODUCT", Name: "Oilfield Spare Parts"},
+				{CanonicalPath: "/org/ae/schlumberger-middle-east", Type: "ORGANIZATION", Name: "Schlumberger Middle East"},
+			},
+			Confidence: 0.71,
+		},
+	}
+	query := agents.SupplyChainQuery{
+		Anchor:     "Schlumberger",
+		AnchorType: "org",
+	}
+	prePlan := &agents.SupplyChainPreHotPathPlan{
+		CandidateAnchorTerms: []string{"SLB", "Schlumberger Middle East"},
+	}
+
+	filtered := filterSupplyChainsByAnchorScope(chains, query, prePlan, []string{"ru"})
+	if len(filtered) != 1 {
+		t.Fatalf("expected only subject+target-geo chain to survive, got %d", len(filtered))
+	}
+	if got := filtered[0].Nodes[len(filtered[0].Nodes)-1].CanonicalPath; got != "/fac/ru/slb-tyumen-factory" {
+		t.Fatalf("unexpected surviving chain target: %s", got)
+	}
+}
+
+func TestFilterSupplyChainsByAnchorScope_FallsBackToAnchorOnlyWhenTargetGeoTooSparse(t *testing.T) {
+	chains := []agents.SupplyChain{
+		{
+			Nodes: []agents.SupplyChainNode{
+				{CanonicalPath: "/org/us/slb", Type: "ORGANIZATION", Name: "SLB"},
+				{CanonicalPath: "/product/component/mechanical/manufacturing/oilfield-spare-parts", Type: "PRODUCT", Name: "Oilfield Spare Parts"},
+				{CanonicalPath: "/org/ae/schlumberger-middle-east", Type: "ORGANIZATION", Name: "Schlumberger Middle East"},
+			},
+			Confidence: 0.76,
+		},
+		{
+			Nodes: []agents.SupplyChainNode{
+				{CanonicalPath: "/fac/us/cameron-houston-plant", Type: "FACILITY", Name: "Cameron Houston Plant"},
+				{CanonicalPath: "/product/component/mechanical/manufacturing/oilfield-spare-parts", Type: "PRODUCT", Name: "Oilfield Spare Parts"},
+				{CanonicalPath: "/fac/sa/dhahran-oilfield-hub", Type: "FACILITY", Name: "Dhahran Oilfield Hub"},
+			},
+			Confidence: 0.7,
+		},
+		{
+			Nodes: []agents.SupplyChainNode{
+				{CanonicalPath: "/fac/de/siemens-energy-muelheim-factory", Type: "FACILITY", Name: "Siemens Energy Muelheim Factory"},
+				{CanonicalPath: "/product/component/mechanical/manufacturing/gas-turbine-spare-parts", Type: "PRODUCT", Name: "Gas Turbine Spare Parts"},
+				{CanonicalPath: "/fac/sa/qassim-2-power-plant", Type: "FACILITY", Name: "Qassim 2 Power Plant"},
+			},
+			Confidence: 0.88,
+		},
+	}
+	query := agents.SupplyChainQuery{
+		Anchor:     "Schlumberger",
+		AnchorType: "org",
+	}
+	prePlan := &agents.SupplyChainPreHotPathPlan{
+		CandidateAnchorTerms: []string{"SLB", "Schlumberger Middle East"},
+	}
+
+	filtered := filterSupplyChainsByAnchorScope(chains, query, prePlan, []string{"ru"})
+	if len(filtered) != 1 {
+		t.Fatalf("expected only anchor-related chain to survive when target geo is sparse, got %d", len(filtered))
+	}
+	for _, chain := range filtered {
+		last := chain.Nodes[len(chain.Nodes)-1].CanonicalPath
+		if last == "/fac/sa/qassim-2-power-plant" {
+			t.Fatalf("unexpected unrelated chain survived anchor filtering")
+		}
 	}
 }

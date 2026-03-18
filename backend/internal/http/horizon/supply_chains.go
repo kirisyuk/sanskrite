@@ -400,6 +400,16 @@ func (h *HorizonHandlers) collectSupplyChainsForLens(r *http.Request, lens *hori
 	for _, artKey := range contextRefs.ArtifactKeys {
 		artifact, err := h.materializedArtifactsRepo.GetByCanonicalKeyAnyKind(ctx, tenantID, artKey)
 		if err == nil && artifact != nil {
+			if artifact.Kind == horizonmodels.MaterializedKindSupplyChainAssemblyGraph {
+				pinnedPathKeys := extractPreferredAssemblyPathKeys(artifact)
+				for _, pathKey := range pinnedPathKeys {
+					pathArtifact, err := h.materializedArtifactsRepo.GetByCanonicalKeyAnyKind(ctx, tenantID, pathKey)
+					if err == nil && pathArtifact != nil {
+						appendArtifact(pathArtifact, true, "scoped", nil, 1)
+					}
+				}
+				continue
+			}
 			appendArtifact(artifact, true, "scoped", nil, 1)
 		}
 	}
@@ -440,20 +450,22 @@ func (h *HorizonHandlers) collectSupplyChainsForLens(r *http.Request, lens *hori
 		},
 	}
 
-	for _, query := range discoveredQueries {
-		if len(query.refs) == 0 {
-			continue
-		}
-		artifacts, err := query.find(query.refs)
-		if err != nil {
-			return nil, nil, err
-		}
-		for _, artifact := range artifacts {
-			score, matched := scoreSupplyChainOverlap(artifact, contextRefs)
-			if score <= 0 {
+	if len(scopedIDs) == 0 {
+		for _, query := range discoveredQueries {
+			if len(query.refs) == 0 {
 				continue
 			}
-			appendArtifact(artifact, false, query.source, matched, score)
+			artifacts, err := query.find(query.refs)
+			if err != nil {
+				return nil, nil, err
+			}
+			for _, artifact := range artifacts {
+				score, matched := scoreSupplyChainOverlap(artifact, contextRefs)
+				if score <= 0 {
+					continue
+				}
+				appendArtifact(artifact, false, query.source, matched, score)
+			}
 		}
 	}
 
@@ -465,6 +477,13 @@ func (h *HorizonHandlers) collectSupplyChainsForLens(r *http.Request, lens *hori
 			continue
 		}
 		discovered = append(discovered, artifact)
+	}
+	if len(scoped) > 0 {
+		sortSupplyChainArtifacts(scoped)
+		if len(scoped) > limit {
+			scoped = scoped[:limit]
+		}
+		return scoped, nil, nil
 	}
 	sortSupplyChainArtifacts(scoped)
 	sortSupplyChainArtifacts(discovered)
@@ -479,6 +498,21 @@ func (h *HorizonHandlers) collectSupplyChainsForLens(r *http.Request, lens *hori
 		discovered = discovered[:remaining]
 	}
 	return scoped, discovered, nil
+}
+
+func extractPreferredAssemblyPathKeys(artifact *horizonmodels.MaterializedArtifact) []string {
+	if artifact == nil || artifact.Kind != horizonmodels.MaterializedKindSupplyChainAssemblyGraph {
+		return nil
+	}
+	parsed, err := horizonmodels.ParseSupplyChainAssemblyGraphPayload(artifact.Payload)
+	if err != nil || parsed == nil {
+		return nil
+	}
+	keys := append([]string(nil), parsed.DirectPathKeys...)
+	if len(keys) == 0 {
+		keys = append(keys, parsed.DerivedPathKeys...)
+	}
+	return mergeUniqueStrings(nil, keys)
 }
 
 func (h *HorizonHandlers) searchSupplyChainCandidates(r *http.Request, tenantID string, req supplyChainSearchRequest) ([]*horizonmodels.MaterializedArtifact, error) {

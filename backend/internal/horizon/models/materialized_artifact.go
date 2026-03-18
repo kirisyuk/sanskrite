@@ -295,6 +295,7 @@ type SupplyChainAssemblyGraphPayload struct {
 	RouteBindings                   []SupplyChainAssemblyRouteBinding    `json:"routeBindings,omitempty"`
 	Coverage                        *SupplyChainAssemblyCoverage         `json:"coverage,omitempty"`
 	OpenGaps                        []string                             `json:"openGaps,omitempty"`
+	DirectPathKeys                  []string                             `json:"directPathKeys,omitempty"`
 	DerivedPathKeys                 []string                             `json:"derivedPathKeys,omitempty"`
 	PrimaryBranches                 []SupplyChainAssemblyBranchSummary   `json:"primaryBranches,omitempty"`
 	SecondaryBranches               []SupplyChainAssemblyBranchSummary   `json:"secondaryBranches,omitempty"`

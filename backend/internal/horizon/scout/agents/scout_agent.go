@@ -123,6 +123,7 @@ type RouteObservation struct {
 type SupplyChainPreHotPathPlan struct {
 	Strategy                          string   `json:"strategy,omitempty"`
 	StrategyReason                    string   `json:"strategyReason,omitempty"`
+	CandidateAnchorTerms              []string `json:"candidateAnchorTerms,omitempty"`
 	CandidateProductFamilies          []string `json:"candidateProductFamilies,omitempty"`
 	CandidateOperationalAnchorClasses []string `json:"candidateOperationalAnchorClasses,omitempty"`
 	CandidateFlowArchetypes           []string `json:"candidateFlowArchetypes,omitempty"`

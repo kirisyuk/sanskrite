@@ -8377,6 +8377,17 @@ func (e *ScoutEngine) runSupplyChainFastFirstHotPath(ctx context.Context, job *m
 	if e == nil || e.researchAgent == nil || len(queries) == 0 {
 		return nil
 	}
+	_, domainFacets := parseDomainPathFacets(strings.TrimSpace(firstNonEmpty(
+		strings.TrimSpace(job.TargetCanonicalPath),
+		strings.TrimSpace(parseStateString(job.State["targetCanonicalPath"])),
+	)))
+	targetGeoFilters := []string(nil)
+	if domainFacets != nil {
+		targetGeoFilters = dedupStrings(domainFacets["geo"])
+		if len(targetGeoFilters) > 8 {
+			targetGeoFilters = targetGeoFilters[:8]
+		}
+	}
 	maxQueries := 2
 	if job != nil {
 		maxQueries = supplyChainFastFirstIntLimit(job, "supplyChainFastFirstMaxHotQueries", maxQueries)
@@ -8403,6 +8414,7 @@ func (e *ScoutEngine) runSupplyChainFastFirstHotPath(ctx context.Context, job *m
 				continue
 			}
 			queryChains = filterSupplyChainsByPlanFilters(queryChains, variant.ProductFilter, variant.GeoFilter)
+			queryChains = filterSupplyChainsByAnchorScope(queryChains, variant, prePlan, targetGeoFilters)
 			if len(queryChains) > 0 {
 				if capabilityBundle, capErr := e.researchAgent.EnrichSupplyChainHotPathCapabilities(ctx, variant, queryChains, prePlan); capErr != nil {
 					scLog(ctx, e, job, "warn", fmt.Sprintf("[SupplyChainHotPathCapability] query[%d] variant[%d] failed: %v", idx, variantIdx, capErr))
@@ -8440,12 +8452,58 @@ func (e *ScoutEngine) runSupplyChainFastFirstHotPath(ctx context.Context, job *m
 
 func deriveSupplyChainHotPathVariants(query agents.SupplyChainQuery, prePlan *agents.SupplyChainPreHotPathPlan) []agents.SupplyChainQuery {
 	var out []agents.SupplyChainQuery
+	out = append(out, buildAnchorFocusedSupplyChainHotPathQueries(query, prePlan)...)
 	focused := buildFocusedSupplyChainHotPathQuery(query, prePlan)
 	if focused != nil {
 		out = append(out, *focused)
 	}
 	out = append(out, query)
 	return dedupSupplyChainHotPathVariants(out)
+}
+
+func buildAnchorFocusedSupplyChainHotPathQueries(query agents.SupplyChainQuery, prePlan *agents.SupplyChainPreHotPathPlan) []agents.SupplyChainQuery {
+	if prePlan == nil || len(prePlan.CandidateAnchorTerms) == 0 {
+		return nil
+	}
+	anchorType := strings.ToLower(strings.TrimSpace(query.AnchorType))
+	if anchorType != "" && anchorType != "org" && anchorType != "facility" && anchorType != "fac" {
+		return nil
+	}
+	original := strings.TrimSpace(query.Anchor)
+	seen := map[string]struct{}{}
+	if original != "" {
+		seen[strings.ToLower(original)] = struct{}{}
+	}
+	out := make([]agents.SupplyChainQuery, 0, 3)
+	for _, raw := range prePlan.CandidateAnchorTerms {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		variant := query
+		variant.Anchor = trimmed
+		variant.Anchors = nil
+		reason := strings.TrimSpace(variant.Reason)
+		if reason == "" {
+			reason = "pre_hot_path_anchor_focus"
+		} else {
+			reason += "; pre_hot_path_anchor_focus"
+		}
+		if strategy := strings.TrimSpace(prePlan.Strategy); strategy != "" {
+			reason += ":" + strategy
+		}
+		variant.Reason = reason
+		out = append(out, variant)
+		if len(out) >= 3 {
+			break
+		}
+	}
+	return out
 }
 
 func buildFocusedSupplyChainHotPathQuery(query agents.SupplyChainQuery, prePlan *agents.SupplyChainPreHotPathPlan) *agents.SupplyChainQuery {
@@ -11303,6 +11361,232 @@ func supplyChainMatchesPlanFilters(chain agents.SupplyChain, productFilters []st
 		}
 	}
 	return productOK && geoOK
+}
+
+func filterSupplyChainsByAnchorScope(chains []agents.SupplyChain, query agents.SupplyChainQuery, prePlan *agents.SupplyChainPreHotPathPlan, targetGeoFilters []string) []agents.SupplyChain {
+	if len(chains) == 0 {
+		return nil
+	}
+	anchorTerms := buildSupplyChainAnchorScopeTerms(query, prePlan)
+	targetGeoFilters = dedupStrings(targetGeoFilters)
+	if len(targetGeoFilters) > 8 {
+		targetGeoFilters = targetGeoFilters[:8]
+	}
+	if len(anchorTerms) == 0 && len(targetGeoFilters) == 0 {
+		return chains
+	}
+	type scoredChain struct {
+		chain         agents.SupplyChain
+		score         float64
+		anchorHit     bool
+		targetGeoHit  bool
+		anchorMatches int
+	}
+	scored := make([]scoredChain, 0, len(chains))
+	strongN := 0
+	anchorN := 0
+	targetGeoN := 0
+	for _, chain := range chains {
+		score, anchorHit, targetGeoHit, anchorMatches := scoreSupplyChainAnchorScope(chain, anchorTerms, targetGeoFilters)
+		if anchorHit {
+			anchorN++
+		}
+		if targetGeoHit {
+			targetGeoN++
+		}
+		if anchorHit && (len(targetGeoFilters) == 0 || targetGeoHit) {
+			strongN++
+		}
+		scored = append(scored, scoredChain{
+			chain:         chain,
+			score:         score,
+			anchorHit:     anchorHit,
+			targetGeoHit:  targetGeoHit,
+			anchorMatches: anchorMatches,
+		})
+	}
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].score == scored[j].score {
+			return scored[i].anchorMatches > scored[j].anchorMatches
+		}
+		return scored[i].score > scored[j].score
+	})
+	keep := make([]agents.SupplyChain, 0, len(scored))
+	appendChains := func(predicate func(scoredChain) bool) {
+		for _, item := range scored {
+			if predicate(item) {
+				keep = append(keep, item.chain)
+			}
+		}
+	}
+	if len(targetGeoFilters) > 0 && strongN > 0 {
+		topScore := scored[0].score
+		for _, item := range scored {
+			if !(item.anchorHit && item.targetGeoHit) {
+				continue
+			}
+			if item.score+0.15 < topScore {
+				continue
+			}
+			keep = append(keep, item.chain)
+		}
+		if len(keep) > 0 {
+			if len(keep) > 12 {
+				keep = keep[:12]
+			}
+			return keep
+		}
+	}
+	switch {
+	case strongN >= 3:
+		appendChains(func(item scoredChain) bool { return item.anchorHit && (len(targetGeoFilters) == 0 || item.targetGeoHit) })
+	case anchorN >= 3:
+		appendChains(func(item scoredChain) bool { return item.anchorHit })
+	case targetGeoN >= 3:
+		appendChains(func(item scoredChain) bool { return item.targetGeoHit })
+	default:
+		topScore := 0.0
+		if len(scored) > 0 {
+			topScore = scored[0].score
+		}
+		for _, item := range scored {
+			if item.score <= 0 {
+				continue
+			}
+			if item.score+0.20 < topScore {
+				continue
+			}
+			keep = append(keep, item.chain)
+		}
+	}
+	if len(keep) == 0 {
+		return chains
+	}
+	if len(keep) > 12 {
+		keep = keep[:12]
+	}
+	return keep
+}
+
+func buildSupplyChainAnchorScopeTerms(query agents.SupplyChainQuery, prePlan *agents.SupplyChainPreHotPathPlan) []string {
+	raw := make([]string, 0, 8)
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			raw = append(raw, v)
+		}
+	}
+	add(query.Anchor)
+	for _, v := range query.Anchors {
+		add(v)
+	}
+	if prePlan != nil {
+		for _, v := range prePlan.CandidateAnchorTerms {
+			add(v)
+		}
+	}
+	out := make([]string, 0, len(raw)*2)
+	seen := map[string]struct{}{}
+	for _, candidate := range raw {
+		for _, norm := range candidateAnchorScopeTerms(candidate) {
+			if norm == "" {
+				continue
+			}
+			if _, ok := seen[norm]; ok {
+				continue
+			}
+			seen[norm] = struct{}{}
+			out = append(out, norm)
+		}
+	}
+	return out
+}
+
+func candidateAnchorScopeTerms(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := []string{raw}
+	if strings.HasPrefix(raw, "/") {
+		pathParts := strings.Split(strings.Trim(raw, "/"), "/")
+		if len(pathParts) > 0 {
+			parts = append(parts, pathParts[len(pathParts)-1])
+		}
+	}
+	out := make([]string, 0, len(parts)*2)
+	for _, part := range parts {
+		part = normalizeAnchorScopeText(part)
+		if part == "" {
+			continue
+		}
+		out = append(out, part)
+		if fields := strings.Fields(part); len(fields) > 1 {
+			out = append(out, strings.Join(fields[:1], " "))
+		}
+	}
+	out = dedupStrings(out)
+	if len(out) > 16 {
+		out = out[:16]
+	}
+	return out
+}
+
+func normalizeAnchorScopeText(raw string) string {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	if raw == "" {
+		return ""
+	}
+	raw = strings.NewReplacer("/", " ", "-", " ", "_", " ", ".", " ", ",", " ", "(", " ", ")", " ").Replace(raw)
+	raw = strings.Join(strings.Fields(raw), " ")
+	return raw
+}
+
+func scoreSupplyChainAnchorScope(chain agents.SupplyChain, anchorTerms []string, targetGeoFilters []string) (score float64, anchorHit bool, targetGeoHit bool, anchorMatches int) {
+	if len(chain.Nodes) == 0 {
+		return 0, false, false, 0
+	}
+	targetGeoFilters = dedupStrings(targetGeoFilters)
+	if len(targetGeoFilters) > 8 {
+		targetGeoFilters = targetGeoFilters[:8]
+	}
+	for _, node := range chain.Nodes {
+		cp := strings.TrimSpace(node.CanonicalPath)
+		if cp == "" {
+			continue
+		}
+		if strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/fac/") || strings.HasPrefix(cp, "/deposit/") {
+			text := normalizeAnchorScopeText(cp + " " + strings.TrimSpace(node.Name))
+			for _, term := range anchorTerms {
+				if term == "" {
+					continue
+				}
+				if strings.Contains(text, term) {
+					anchorHit = true
+					anchorMatches++
+				}
+			}
+		}
+		if !targetGeoHit && len(targetGeoFilters) > 0 && supplyChainNodeMatchesGeoFilter(cp, targetGeoFilters) {
+			targetGeoHit = true
+		}
+	}
+	if anchorHit {
+		score += 0.65
+	}
+	if targetGeoHit {
+		score += 0.35
+	}
+	if anchorMatches > 0 {
+		score += clamp01(float64(anchorMatches) * 0.05)
+	}
+	if len(chain.TransportVia) > 0 {
+		score += 0.05
+	}
+	if chain.Confidence > 0 {
+		score += clamp01(chain.Confidence * 0.1)
+	}
+	return clamp01(score), anchorHit, targetGeoHit, anchorMatches
 }
 
 func supplyChainMatchesProductFilter(path string, productFilters []string) bool {

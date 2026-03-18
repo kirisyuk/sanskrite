@@ -442,6 +442,7 @@ type SupplyChainAssemblyGraphPayloadOptions struct {
 	RouteBindings                   []SupplyChainAssemblyRouteBinding
 	Coverage                        *SupplyChainAssemblyCoverage
 	OpenGaps                        []string
+	DirectPathKeys                  []string
 	DerivedPathKeys                 []string
 	PrimaryBranches                 []SupplyChainAssemblyBranchSummary
 	SecondaryBranches               []SupplyChainAssemblyBranchSummary
@@ -536,6 +537,9 @@ func BuildSupplyChainAssemblyGraphPayloadDetailed(opts SupplyChainAssemblyGraphP
 	}
 	if len(opts.OpenGaps) > 0 {
 		payload["openGaps"] = opts.OpenGaps
+	}
+	if len(opts.DirectPathKeys) > 0 {
+		payload["directPathKeys"] = opts.DirectPathKeys
 	}
 	if len(opts.DerivedPathKeys) > 0 {
 		payload["derivedPathKeys"] = opts.DerivedPathKeys
@@ -739,6 +743,10 @@ func ParseSupplyChainAssemblyGraphPayload(payload map[string]interface{}) (*Supp
 	if err != nil {
 		return nil, err
 	}
+	directPathKeys, err := decodeStringSlice(payload["directPathKeys"])
+	if err != nil {
+		return nil, err
+	}
 	derivedPathKeys, err := decodeStringSlice(payload["derivedPathKeys"])
 	if err != nil {
 		return nil, err
@@ -807,6 +815,7 @@ func ParseSupplyChainAssemblyGraphPayload(payload map[string]interface{}) (*Supp
 		RouteBindings:                   routeBindings,
 		Coverage:                        coverage,
 		OpenGaps:                        openGaps,
+		DirectPathKeys:                  directPathKeys,
 		DerivedPathKeys:                 derivedPathKeys,
 		PrimaryBranches:                 primaryBranches,
 		SecondaryBranches:               secondaryBranches,

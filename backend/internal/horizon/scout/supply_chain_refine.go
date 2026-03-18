@@ -116,6 +116,8 @@ func (e *ScoutEngine) runSupplyChainAssemblyStage(
 		return nil
 	}
 
+	applyPreferredDirectPathKeysToAssembly(job, result)
+
 	graphBuildMode := resolveSupplyChainGraphBuildMode(job, supplyChainPlan)
 	if !refineMode && !isSupplyChainRefineContinuationJob(job) && result.Artifact != nil && graphBuildMode != agents.SupplyChainGraphBuildModeHotPathOnly {
 		continuationJobIDs, scheduled := e.scheduleSupplyChainAssemblyContinuation(ctx, job, result, frontiers)
@@ -346,6 +348,10 @@ func buildSupplyChainAssemblyState(job *models.ScoutingJob, result *pathbuilder.
 		summary["backgroundContinuationJobIds"] = append([]string(nil), result.BackgroundContinuationJobIDs...)
 	}
 	summary["openGaps"] = append([]string(nil), result.OpenGaps...)
+	directPathKeys := preferredDirectPathKeysFromJob(job)
+	if len(directPathKeys) > 0 {
+		summary["directPathKeys"] = append([]string(nil), directPathKeys...)
+	}
 	summary["derivedPathKeys"] = append([]string(nil), result.DerivedPathKeys...)
 	summary["openGapsN"] = float64(len(result.OpenGaps))
 	summary["derivedPathsN"] = float64(len(result.DerivedPathKeys))
@@ -432,6 +438,7 @@ func (e *ScoutEngine) updateAssemblyArtifactContinuationMetadata(ctx context.Con
 		RouteBindings:                   parsed.RouteBindings,
 		Coverage:                        parsed.Coverage,
 		OpenGaps:                        parsed.OpenGaps,
+		DirectPathKeys:                  parsed.DirectPathKeys,
 		DerivedPathKeys:                 parsed.DerivedPathKeys,
 		PrimaryBranches:                 parsed.PrimaryBranches,
 		SecondaryBranches:               parsed.SecondaryBranches,
@@ -449,6 +456,73 @@ func (e *ScoutEngine) updateAssemblyArtifactContinuationMetadata(ctx context.Con
 	})
 	result.Artifact.UpdatedAt = time.Now().UTC()
 	return e.planner.materializedRepo.Upsert(ctx, result.Artifact)
+}
+
+func preferredDirectPathKeysFromJob(job *models.ScoutingJob) []string {
+	if job == nil || job.State == nil {
+		return nil
+	}
+	if summary, ok := job.State["supplyChainSummary"].(map[string]interface{}); ok && summary != nil {
+		keys := parseStateStringSlice(summary["pathArtifactKeys"])
+		keys = dedupStrings(keys)
+		if len(keys) > 0 {
+			return keys
+		}
+	}
+	if summary, ok := job.State["supplyChainMaterialization"].(map[string]interface{}); ok && summary != nil {
+		keys := parseStateStringSlice(summary["pathArtifactKeys"])
+		keys = dedupStrings(keys)
+		if len(keys) > 0 {
+			return keys
+		}
+	}
+	return nil
+}
+
+func applyPreferredDirectPathKeysToAssembly(job *models.ScoutingJob, result *pathbuilder.SupplyChainAssemblyResult) {
+	if result == nil || result.Artifact == nil {
+		return
+	}
+	directPathKeys := preferredDirectPathKeysFromJob(job)
+	if len(directPathKeys) == 0 {
+		return
+	}
+	parsed, err := models.ParseSupplyChainAssemblyGraphPayload(result.Artifact.Payload)
+	if err != nil || parsed == nil {
+		return
+	}
+	parsed.DirectPathKeys = append([]string(nil), directPathKeys...)
+	result.Artifact.Payload = models.BuildSupplyChainAssemblyGraphPayloadDetailed(models.SupplyChainAssemblyGraphPayloadOptions{
+		AnchorSet:                       parsed.AnchorSet,
+		SourceAnchors:                   parsed.SourceAnchors,
+		ResolvedAnchors:                 parsed.ResolvedAnchors,
+		UnresolvedAnchors:               parsed.UnresolvedAnchors,
+		AnchorProducts:                  parsed.AnchorProducts,
+		AnchorComponents:                parsed.AnchorComponents,
+		ProductNodes:                    parsed.ProductNodes,
+		ActorNodes:                      parsed.ActorNodes,
+		SupplyEdges:                     parsed.SupplyEdges,
+		TransformEdges:                  parsed.TransformEdges,
+		AssemblyEdges:                   parsed.AssemblyEdges,
+		RouteBindings:                   parsed.RouteBindings,
+		Coverage:                        parsed.Coverage,
+		OpenGaps:                        parsed.OpenGaps,
+		DirectPathKeys:                  parsed.DirectPathKeys,
+		DerivedPathKeys:                 parsed.DerivedPathKeys,
+		PrimaryBranches:                 parsed.PrimaryBranches,
+		SecondaryBranches:               parsed.SecondaryBranches,
+		TopRoutes:                       parsed.TopRoutes,
+		TopDistributionNodes:            parsed.TopDistributionNodes,
+		TopSuppliers:                    parsed.TopSuppliers,
+		TopProductFamilies:              parsed.TopProductFamilies,
+		SuppressedSupportBranches:       parsed.SuppressedSupportBranches,
+		Stage:                           parsed.Stage,
+		Provisional:                     parsed.Provisional,
+		SourceMode:                      parsed.SourceMode,
+		BackgroundContinuationScheduled: parsed.BackgroundContinuationScheduled,
+		BackgroundContinuationJobIDs:    parsed.BackgroundContinuationJobIDs,
+		Notes:                           parsed.Notes,
+	})
 }
 
 func (e *ScoutEngine) scheduleSupplyChainAssemblyContinuation(
