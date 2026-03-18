@@ -4,12 +4,14 @@
 
 import React from 'react';
 import { api } from '../lib/api';
+import type { SupplyChainPathRiskOverlay } from '../lib/api';
 import type { Node } from 'reactflow';
 
 export interface MaterializedArtifact {
   id: string;
   lensId?: string;
   kind: string;
+  riskOverlay?: SupplyChainPathRiskOverlay;
   canonicalKey?: string;
   displayName?: string;
   nodeRefs?: string[];

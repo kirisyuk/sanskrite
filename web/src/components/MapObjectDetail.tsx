@@ -2,6 +2,7 @@ import React from 'react';
 import { HorizonNodeIcon, formatHorizonFragmentType, getHorizonNodeVisualType, getNodeColors } from './HorizonGraphNodeTypes';
 import type { GeoObject } from '../hooks/useGeoObjects';
 import type { GeoEdgeTraceSummary } from '../hooks/useGeoEdgeLayer';
+import type { SupplyChainObjectRiskOverlay } from '../lib/api';
 import { geoCodeToShortName, humanizeCanonicalPath } from '../lib/uiUtils';
 
 interface MapObjectDetailProps {
@@ -89,6 +90,19 @@ function sectionCardStyle(isDark: boolean): React.CSSProperties {
   };
 }
 
+function formatPercentScore(value?: number): string {
+  if (!Number.isFinite(Number(value))) return '';
+  return `${Math.round(Math.max(0, Math.min(1, Number(value))) * 100)}`;
+}
+
+function compactOverlayLabel(value?: string): string {
+  return String(value || '')
+    .trim()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 function narrativeBlockStyle(isDark: boolean, isActive: boolean, accent: string): React.CSSProperties {
   return {
     padding: '8px 9px',
@@ -155,6 +169,12 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
 
   const overlayWidth = autoCompact ? 314 : 384;
   const overlayMaxWidth = viewport.width < 980 ? 'calc(100% - 20px)' : 'calc(100% - 340px)';
+  const objectRiskOverlay = (traceSummary?.objectRiskOverlay || null) as SupplyChainObjectRiskOverlay | null;
+  const topProducts = Array.isArray(objectRiskOverlay?.topProducts) ? objectRiskOverlay!.topProducts!.slice(0, 3) : [];
+  const topMechanisms = Array.isArray(objectRiskOverlay?.topMechanisms) ? objectRiskOverlay!.topMechanisms!.slice(0, 3) : [];
+  const topMetrics = Array.isArray(objectRiskOverlay?.topMetrics) ? objectRiskOverlay!.topMetrics!.slice(0, 3) : [];
+  const bottleneckNodes = Array.isArray(objectRiskOverlay?.bottleneckNodes) ? objectRiskOverlay!.bottleneckNodes!.slice(0, 3) : [];
+  const topPaths = Array.isArray(objectRiskOverlay?.topPaths) ? objectRiskOverlay!.topPaths!.slice(0, 3) : [];
 
   return (
     <div
@@ -286,12 +306,83 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
           <>
             <div style={sectionCardStyle(isDark)}>
               <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: accent }}>
-                Why It Matters
+                Risk Overview
               </div>
               <div style={{ marginTop: 6, fontSize: 12, lineHeight: 1.5, fontWeight: 600 }}>
-                {edgesLoading ? 'Resolving relationship logic, supply paths, and propagation around this object…' : (traceSummary?.summary || 'No explainable relationship summary yet.')}
+                {edgesLoading
+                  ? 'Resolving supply-chain risk, supply paths, and surrounding graph context around this object…'
+                  : (objectRiskOverlay?.summary || traceSummary?.summary || 'No explainable supply-chain risk summary yet.')}
               </div>
-              {traceSummary && traceSummary.whyItMatters.length > 0 && (
+              {objectRiskOverlay && (
+                <>
+                  <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {objectRiskOverlay.primaryMechanism && (
+                      <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(251,191,36,0.16)' : 'rgba(245,158,11,0.12)' }}>
+                        {compactOverlayLabel(objectRiskOverlay.primaryMechanism)}
+                      </span>
+                    )}
+                    {typeof objectRiskOverlay.criticality === 'number' && Number.isFinite(objectRiskOverlay.criticality) && (
+                      <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(248,113,113,0.16)' : 'rgba(239,68,68,0.10)' }}>
+                        Criticality {formatPercentScore(objectRiskOverlay.criticality)}
+                      </span>
+                    )}
+                    {topProducts[0]?.name && (
+                      <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(96,165,250,0.16)' : 'rgba(37,99,235,0.10)' }}>
+                        {topProducts[0].name}
+                      </span>
+                    )}
+                  </div>
+                  {(topProducts.length > 0 || topMechanisms.length > 0 || topMetrics.length > 0 || bottleneckNodes.length > 0 || topPaths.length > 0) && (
+                    <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {topProducts.length > 0 && (
+                        <div style={{ paddingLeft: 10, borderLeft: `2px solid ${accent}` }}>
+                          <div style={{ fontSize: 11, fontWeight: 750 }}>Top Products</div>
+                          <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                            {topProducts.map((item) => item.name || humanizeCanonicalPath(item.ref) || item.ref).join(', ')}
+                          </div>
+                        </div>
+                      )}
+                      {topMechanisms.length > 0 && (
+                        <div style={{ paddingLeft: 10, borderLeft: `2px solid ${accent}` }}>
+                          <div style={{ fontSize: 11, fontWeight: 750 }}>Primary Mechanisms</div>
+                          <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                            {topMechanisms.map((item) => compactOverlayLabel(item.label || item.key)).join(', ')}
+                          </div>
+                        </div>
+                      )}
+                      {topMetrics.length > 0 && (
+                        <div style={{ paddingLeft: 10, borderLeft: `2px solid ${accent}` }}>
+                          <div style={{ fontSize: 11, fontWeight: 750 }}>Key Metrics</div>
+                          <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                            {topMetrics.map((item) => compactOverlayLabel(item.label || item.key)).join(', ')}
+                          </div>
+                        </div>
+                      )}
+                      {bottleneckNodes.length > 0 && (
+                        <div style={{ paddingLeft: 10, borderLeft: `2px solid ${accent}` }}>
+                          <div style={{ fontSize: 11, fontWeight: 750 }}>Bottlenecks</div>
+                          <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                            {bottleneckNodes.map((item) => item.name || humanizeCanonicalPath(item.canonicalPath || '') || item.fragmentId).filter(Boolean).join(', ')}
+                          </div>
+                        </div>
+                      )}
+                      {topPaths.length > 0 && (
+                        <div style={{ paddingLeft: 10, borderLeft: `2px solid ${accent}` }}>
+                          <div style={{ fontSize: 11, fontWeight: 750 }}>Main Risk Paths</div>
+                          <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                            {topPaths.map((item) => {
+                              const product = item.productName || humanizeCanonicalPath(item.productRef || '') || '';
+                              const mechanism = compactOverlayLabel(item.primaryMechanism || '');
+                              return [product, mechanism].filter(Boolean).join(' · ') || item.key;
+                            }).join('; ')}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+              {!objectRiskOverlay && traceSummary && traceSummary.whyItMatters.length > 0 && (
                 <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {traceSummary.whyItMatters.map((item) => (
                     <div key={`${item.title}:${item.body}`} style={{ paddingLeft: 10, borderLeft: `2px solid ${accent}` }}>
@@ -408,6 +499,11 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
                         </div>
                       </div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, justifyContent: 'flex-end' }}>
+                        {group.paths[0]?.riskTag && (
+                          <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(96,165,250,0.16)' : 'rgba(37,99,235,0.10)' }}>
+                            {group.paths[0].riskTag}
+                          </span>
+                        )}
                         <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(245, 158, 11, 0.14)' : 'rgba(245, 158, 11, 0.1)' }}>
                           {group.routeCount} route{group.routeCount > 1 ? 's' : ''}
                         </span>
@@ -433,6 +529,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
                             {path.direction === 'inbound' ? 'Input route' : path.direction === 'outbound' ? 'Output route' : compactRole(path.role)}
                             {path.legCount > 0 ? ` · ${path.legCount} leg${path.legCount > 1 ? 's' : ''}` : ''}
                             {path.stressScore >= 0.58 ? ` · Stress ${Math.round(path.stressScore * 100)}` : ''}
+                            {path.riskTag ? ` · ${path.riskTag}` : ''}
                           </div>
                           <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
                             {path.reason}
