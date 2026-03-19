@@ -65,16 +65,23 @@ const (
 )
 
 // Material represents a critical material (whitepaper 3.3).
+type RiskPoint struct {
+	Timestamp time.Time `firestore:"timestamp" json:"timestamp"`
+	Value     float64   `firestore:"value" json:"value"`
+}
+
 type Material struct {
-	ID               string   `json:"id" firestore:"id"`
-	Name             string   `json:"name" firestore:"name"`
-	Aliases          []string `json:"aliases,omitempty" firestore:"aliases,omitempty"`
-	Category         string   `json:"category" firestore:"category"`
-	CriticalityScore float64  `json:"criticalityScore" firestore:"criticalityScore"`
-	RiskScore        float64  `json:"riskScore" firestore:"riskScore"`
-	HSCodes          []string `json:"hsCodes,omitempty" firestore:"hsCodes,omitempty"`
-	CASNumber        string   `json:"casNumber,omitempty" firestore:"casNumber,omitempty"`
-	UpdatedAt        time.Time `json:"updatedAt" firestore:"updatedAt"`
+	ID               string      `json:"id" firestore:"id"`
+	Name             string      `json:"name" firestore:"name"`
+	Aliases          []string    `json:"aliases,omitempty" firestore:"aliases,omitempty"`
+	Category         string      `json:"category" firestore:"category"`
+	CriticalityScore float64     `json:"criticalityScore" firestore:"criticalityScore"`
+	RiskScore        float64     `json:"riskScore" firestore:"riskScore"`
+	RiskHistory      []RiskPoint `json:"riskHistory,omitempty" firestore:"riskHistory,omitempty"`
+	RiskDelta7d      float64     `json:"riskDelta7d" firestore:"-"`
+	HSCodes          []string    `json:"hsCodes,omitempty" firestore:"hsCodes,omitempty"`
+	CASNumber        string      `json:"casNumber,omitempty" firestore:"casNumber,omitempty"`
+	UpdatedAt        time.Time   `json:"updatedAt" firestore:"updatedAt"`
 }
 
 // Facility represents a physical facility (mine, refinery, etc.) (whitepaper 3.3).

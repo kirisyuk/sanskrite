@@ -14,6 +14,8 @@ export interface CriticalChainMaterial {
   category: string;
   criticalityScore: number;
   riskScore: number;
+  riskHistory?: Array<{ timestamp: string; value: number }>;
+  riskDelta7d?: number;
   hsCodes?: string[];
   casNumber?: string;
   updatedAt?: string;

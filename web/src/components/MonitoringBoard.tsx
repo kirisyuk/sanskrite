@@ -46,19 +46,6 @@ export const MonitoringBoard: React.FC<MonitoringBoardProps> = ({ materials, sel
   const displayedMaterials = materials.filter(m => watchlist.includes(m.id));
   const availableToAdd = materials.filter(m => !watchlist.includes(m.id));
 
-  // Helper to generate consistent mock data based on id
-  const getMockData = (id: string, baseRisk: number) => {
-    const seed = id.charCodeAt(0) + id.charCodeAt(id.length - 1);
-    const incidents = seed % 5;
-    const isUp = (seed % 2) === 0;
-    const delta = ((seed % 10) / 10).toFixed(1);
-    const sparkline = Array.from({ length: 7 }, (_, i) => {
-      const val = baseRisk + Math.sin(seed + i) * 0.5;
-      return Math.max(0, Math.min(5, val));
-    });
-    return { incidents, delta: isUp ? `↑${delta}` : `↓${delta}`, isUp, sparkline };
-  };
-
   const getStatus = (score: number) => {
     if (score >= 4) return { label: 'CRITICAL', color: 'bg-red-500/20 text-red-400 border-red-500/30' };
     if (score >= 3) return { label: 'ALERT', color: 'bg-orange-500/20 text-orange-400 border-orange-500/30' };
@@ -69,15 +56,27 @@ export const MonitoringBoard: React.FC<MonitoringBoardProps> = ({ materials, sel
   return (
     <div className="flex items-center gap-3 p-3 overflow-x-auto border-b border-[#21262D] bg-[#0D1117] hide-scrollbar" style={{ minHeight: '120px' }}>
       {displayedMaterials.map(m => {
-        const mock = getMockData(m.id, m.riskScore);
         const status = getStatus(m.riskScore);
         const isSelected = selectedMaterial === m.id;
 
-        // Simple SVG Sparkline
+        const historyPoints = m.riskHistory && m.riskHistory.length > 0
+          ? m.riskHistory.slice(-7).map(pt => pt.value)
+          : [];
+        const hasHistory = historyPoints.length > 0;
+        
+        const delta = m.riskDelta7d || 0;
+        const isUp = delta > 0;
+        const deltaStr = delta !== 0 ? `${delta > 0 ? '↑' : '↓'}${Math.abs(delta).toFixed(1)}` : null;
+
         const maxScore = 5;
         const width = 60;
         const height = 24;
-        const points = mock.sparkline.map((val, i) => `${(i / 6) * width},${height - (val / maxScore) * height}`).join(' ');
+        
+        let points = '';
+        if (hasHistory) {
+          const step = historyPoints.length > 1 ? width / (historyPoints.length - 1) : width;
+          points = historyPoints.map((val, i) => `${i * step},${height - (val / maxScore) * height}`).join(' ');
+        }
 
         return (
           <div
@@ -95,11 +94,6 @@ export const MonitoringBoard: React.FC<MonitoringBoardProps> = ({ materials, sel
             </button>
             <div className="flex justify-between items-start mb-2">
               <div className="font-semibold text-[13px] truncate pr-4">{m.name}</div>
-              {mock.incidents > 0 && (
-                <div className="bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none mt-0.5">
-                  {mock.incidents}
-                </div>
-              )}
             </div>
             
             <div className={`inline-block px-1.5 py-0.5 text-[10px] font-bold rounded border ${status.color} mb-2`}>
@@ -109,20 +103,26 @@ export const MonitoringBoard: React.FC<MonitoringBoardProps> = ({ materials, sel
             <div className="flex items-end justify-between">
               <div>
                 <div className="text-xl font-mono leading-none">{m.riskScore.toFixed(1)}<span className="text-xs text-[#8B949E]">/5.0</span></div>
-                <div className={`text-[11px] font-mono mt-1 ${mock.isUp ? 'text-red-400' : 'text-green-400'}`}>
-                  {mock.delta}
-                </div>
+                {deltaStr && (
+                  <div className={`text-[11px] font-mono mt-1 ${isUp ? 'text-red-400' : 'text-green-400'}`}>
+                    {deltaStr}
+                  </div>
+                )}
               </div>
-              <svg width={width} height={height} className="overflow-visible">
-                <polyline
-                  points={points}
-                  fill="none"
-                  stroke={mock.isUp ? '#f87171' : '#4ade80'}
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
+              {hasHistory ? (
+                <svg width={width} height={height} className="overflow-visible">
+                  <polyline
+                    points={points}
+                    fill="none"
+                    stroke={isUp ? '#f87171' : '#4ade80'}
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              ) : (
+                <div className="text-[10px] text-[#8B949E] flex items-center h-[24px]">no history yet</div>
+              )}
             </div>
           </div>
         );

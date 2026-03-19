@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"log"
+	"time"
 
 	"cloud.google.com/go/firestore"
 	"github.com/igorkirisyuk/sanskrite/internal/criticalchain/models"
@@ -146,4 +147,37 @@ func (r *NodesRepository) SetFacility(ctx context.Context, f *models.Facility) e
 	}
 	_, err := r.col.Doc(f.ID).Set(ctx, node)
 	return err
+}
+
+// UpdateMaterialRisk updates a material's risk score and appends to risk history.
+func (r *NodesRepository) UpdateMaterialRisk(ctx context.Context, id string, score float64) error {
+	return r.col.Firestore.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		docRef := r.col.Doc(id)
+		doc, err := tx.Get(docRef)
+		if err != nil {
+			return err
+		}
+		var node models.NodeDocument
+		if err := doc.DataTo(&node); err != nil {
+			return err
+		}
+		if node.Kind != models.NodeKindMaterial || node.Material == nil {
+			return errNotFound
+		}
+
+		m := node.Material
+		m.RiskScore = score
+		m.RiskHistory = append(m.RiskHistory, models.RiskPoint{
+			Timestamp: time.Now(),
+			Value:     score,
+		})
+		
+		if len(m.RiskHistory) > 30 {
+			m.RiskHistory = m.RiskHistory[len(m.RiskHistory)-30:]
+		}
+		m.UpdatedAt = time.Now()
+
+		node.UpdatedAt = m.UpdatedAt
+		return tx.Set(docRef, node)
+	})
 }

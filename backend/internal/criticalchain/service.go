@@ -2,6 +2,8 @@ package criticalchain
 
 import (
 	"context"
+	"math"
+	"time"
 
 	"cloud.google.com/go/firestore"
 	"github.com/igorkirisyuk/sanskrite/internal/criticalchain/config"
@@ -50,6 +52,8 @@ func (s *Service) GetMaterial(ctx context.Context, id string) (*models.Material,
 		m.Aliases = stored.Aliases
 		m.HSCodes = stored.HSCodes
 		m.CASNumber = stored.CASNumber
+		m.RiskHistory = stored.RiskHistory
+		m.RiskDelta7d = calculateRiskDelta7d(m.RiskScore, m.RiskHistory)
 	}
 	return m, nil
 }
@@ -85,6 +89,8 @@ func (s *Service) ListMaterials(ctx context.Context) ([]*models.Material, error)
 			m.Aliases = stored.Aliases
 			m.HSCodes = stored.HSCodes
 			m.CASNumber = stored.CASNumber
+			m.RiskHistory = stored.RiskHistory
+			m.RiskDelta7d = calculateRiskDelta7d(m.RiskScore, m.RiskHistory)
 		}
 		out = append(out, m)
 	}
@@ -238,4 +244,27 @@ type GraphResult struct {
 	Materials       []*models.Material       `json:"materials,omitempty"`
 	Facilities      []*models.Facility       `json:"facilities"`
 	ProcessingSteps []*models.ProcessingStep `json:"processingSteps"`
+}
+
+func calculateRiskDelta7d(current float64, history []models.RiskPoint) float64 {
+	if len(history) == 0 {
+		return 0
+	}
+	target := time.Now().Add(-7 * 24 * time.Hour)
+	bestDiff := math.MaxFloat64
+	var historicVal float64 = current
+	found := false
+
+	for _, pt := range history {
+		diff := math.Abs(float64(pt.Timestamp.Sub(target)))
+		if diff < bestDiff {
+			bestDiff = diff
+			historicVal = pt.Value
+			found = true
+		}
+	}
+	if !found {
+		return 0
+	}
+	return current - historicVal
 }
