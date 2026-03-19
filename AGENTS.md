@@ -256,7 +256,7 @@ Required behavior:
 | E | `main → [parallel subagent]` | Изолируемая фоновая задача |
 | F | `main → [research ‖ engineering] → reviewer` | Research и code независимы, нужны оба (редко) |
 
-**Rework limit:** максимум 1 итерация reviewer → specialist без явного запроса пользователя.
+**Rework limit:** максимум 3 итерации reviewer → specialist. После 3 — стоп, отчёт пользователю: что не сходится и почему.
 
 ### Модели для специалистов
 
