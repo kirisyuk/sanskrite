@@ -129,6 +129,7 @@ export interface CriticalChainMapProps {
   layerFacilities?: boolean;
   layerRoutes?: boolean;
   layerConflictZones?: boolean;
+  onFeatureClick?: (feature: any) => void;
 }
 
 const COUNTRIES_TOPO =
@@ -147,6 +148,7 @@ export function CriticalChainMap({
   layerFacilities = true,
   layerRoutes = true,
   layerConflictZones = true,
+  onFeatureClick,
 }: CriticalChainMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -300,6 +302,9 @@ export function CriticalChainMap({
   const addFacilitiesLayer = (map: maplibregl.Map) => {
     try {
       // Supercluster for >500 objects (whitepaper 4.4). Always enable cluster; works with any count.
+      map.on('click', 'facilities-circles', (e) => {
+        if (onFeatureClick && e.features?.[0]) onFeatureClick(e.features[0].properties);
+      });
       map.addSource('facilities', {
         type: 'geojson',
         data: { type: 'FeatureCollection' as const, features: [] },
@@ -552,5 +557,23 @@ export function CriticalChainMap({
     setVisibility('conflict-zones-fill', layerConflictZones);
   }, [viewMode, layerChoropleth, layerChokepoints, layerFacilities, layerRoutes, layerConflictZones]);
 
-  return <div ref={containerRef} className="w-full h-full min-h-[400px]" />;
+  
+return (
+    <>
+      <style>{`
+        @keyframes pulse {
+          0% { transform: scale(1); opacity: 1; }
+          100% { transform: scale(3); opacity: 0; }
+        }
+        .pulse-marker::after {
+          content: '';
+          position: absolute;
+          top: 0; left: 0; right: 0; bottom: 0;
+          border-radius: 50%;
+          border: 2px solid #EF4444;
+          animation: pulse 1.5s infinite ease-out;
+        }
+      `}</style>
+      <div ref={containerRef} className="w-full h-full min-h-[400px]" /></>
+  );;
 }

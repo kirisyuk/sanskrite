@@ -19,6 +19,7 @@ type FusedSignal struct {
 // Rule: if ≥2 independent sources confirm threat → risk_level elevated; one source → unconfirmed.
 func Fuse(regions []RegionSignals) []FusedSignal {
 	var out []FusedSignal
+	decayHalflifeHours := 24.0
 	for _, r := range regions {
 		level := 1.0
 		confidence := "unconfirmed"
@@ -28,13 +29,17 @@ func Fuse(regions []RegionSignals) []FusedSignal {
 				confidence = "high"
 			}
 			for _, s := range r.Sources {
-				if s.RiskLevel > level {
-					level = s.RiskLevel
+				weight := math.Exp(-math.Ln2 * s.AgeHours / decayHalflifeHours)
+				decayedRisk := s.RiskLevel * weight
+				if decayedRisk > level {
+					level = decayedRisk
 				}
 			}
 			level = math.Min(5, level+0.5)
 		} else if len(r.Sources) == 1 {
-			level = r.Sources[0].RiskLevel
+			s := r.Sources[0]
+			weight := math.Exp(-math.Ln2 * s.AgeHours / decayHalflifeHours)
+			level = s.RiskLevel * weight
 		}
 		signals := make([]string, 0, len(r.Sources))
 		for _, s := range r.Sources {
@@ -63,4 +68,5 @@ type SourceSignal struct {
 	Name      string
 	Detail    string
 	RiskLevel float64
+	AgeHours  float64
 }
