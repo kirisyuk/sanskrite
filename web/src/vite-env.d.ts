@@ -5,3 +5,7 @@ declare module '*.png' {
   export default src;
 }
 
+declare module 'topojson-client' {
+  export function feature(topology: object, object: object): GeoJSON.FeatureCollection;
+}
+

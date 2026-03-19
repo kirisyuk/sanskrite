@@ -1,0 +1,57 @@
+material_id: lithium
+display_name:
+  en: "Lithium"
+  ru: "Литий"
+chemical_symbol: Li
+category: critical_mineral
+subcategory: battery_metal
+
+units:
+  primary: metric_ton
+  aliases: [t, MT, tonne]
+
+production_stages:
+  - id: 0
+    name: mining
+    type: extraction
+    facilityKind: mine
+    typical_forms: [spodumene, brine]
+  - id: 1
+    name: refining
+    type: refining
+    facilityKind: refinery
+    conversion_ratio: 0.65
+  - id: 2
+    name: cathode_material
+    type: processing
+    facilityKind: factory
+    typical_forms: [LFP, NMC, NCA]
+    conversion_ratio: 0.85
+  - id: 3
+    name: battery_cells
+    type: manufacturing
+    facilityKind: factory
+    conversion_ratio: 0.90
+  - id: 4
+    name: battery_pack
+    type: manufacturing
+    facilityKind: factory
+    conversion_ratio: 0.95
+
+data_sources:
+  - source_id: usgs_mrds
+    type: facilities
+    fields: [mines, refineries]
+  - source_id: usgs_mcs
+    type: annual_statistics
+    fields: [production_by_country, reserves, price]
+
+key_chokepoints:
+  - path: /loc/cn
+    share_of_global_supply: 0.60
+    risk_multiplier: 2.0
+  - path: /loc/cl
+    share_of_global_supply: 0.25
+    risk_multiplier: 1.5
+
+concentration_hhi: 4200

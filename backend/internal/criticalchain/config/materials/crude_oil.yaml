@@ -1,0 +1,57 @@
+material_id: crude_oil
+display_name:
+  en: "Crude Oil"
+  ru: "Нефть"
+chemical_symbol: ""
+category: energy_commodity
+subcategory: hydrocarbon
+
+units:
+  primary: barrel
+  aliases: [bbl, bpd, mbpd]
+
+production_stages:
+  - id: 0
+    name: upstream
+    type: extraction
+    facilityKind: mine
+    typical_forms: [crude]
+  - id: 1
+    name: separation
+    type: processing
+    facilityKind: refinery
+    conversion_ratio: 0.99
+  - id: 2
+    name: transport
+    type: logistics
+    facilityKind: terminal
+  - id: 3
+    name: refining
+    type: refining
+    facilityKind: refinery
+    conversion_ratio: 0.90
+  - id: 4
+    name: products
+    type: distribution
+    facilityKind: terminal
+
+data_sources:
+  - source_id: eia
+    type: statistics
+    fields: [production, consumption, trade]
+  - source_id: jodi
+    type: statistics
+    fields: [production, stocks]
+
+key_chokepoints:
+  - path: /loc/strait_hormuz
+    share_of_global_supply: 0.20
+    risk_multiplier: 3.0
+  - path: /loc/bab_el_mandeb
+    share_of_global_supply: 0.09
+    risk_multiplier: 2.5
+  - path: /loc/turkish_straits
+    share_of_global_supply: 0.03
+    risk_multiplier: 2.0
+
+concentration_hhi: 1200

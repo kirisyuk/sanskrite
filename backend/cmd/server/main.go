@@ -76,6 +76,9 @@ import (
 	horizonwatchdog "github.com/igorkirisyuk/sanskrite/internal/horizon/watchdog"
 	horizonwatchruntime "github.com/igorkirisyuk/sanskrite/internal/horizon/watchruntime"
 	horizonhttp "github.com/igorkirisyuk/sanskrite/internal/http/horizon"
+	criticalchain "github.com/igorkirisyuk/sanskrite/internal/criticalchain"
+	criticalchainhttp "github.com/igorkirisyuk/sanskrite/internal/http/criticalchain"
+	criticalchainpipeline "github.com/igorkirisyuk/sanskrite/internal/criticalchain/pipeline"
 )
 
 // tavilyClientAdapterForAgents адаптирует httphandlers.TavilyClient к agents.TavilySearchClient интерфейсу
@@ -4723,6 +4726,13 @@ func main() {
 	}
 	mux.Handle("/api/v1/admin/etigram/watchdog/run", jobAuth(http.HandlerFunc(watchdogCronHandler)))
 	mux.Handle("/api/v1/admin/horizon/watchdog/run", jobAuth(http.HandlerFunc(watchdogCronHandler))) // legacy alias
+
+	// CriticalChain routes (demo endpoints public, admin pipeline jobAuth)
+	criticalchainSvc := criticalchain.NewService(fsClient.Client())
+	criticalchainRunner := criticalchainpipeline.NewRunner(fsClient.Client())
+	criticalchainHandlers := criticalchainhttp.NewHandlers(criticalchainSvc, criticalchainRunner)
+	criticalchainHandlers.RegisterRoutes(mux, authMiddleware, jobAuth)
+	logger.Printf("CriticalChain routes registered")
 
 	handler := withCORS(allowedOrigins)(mux)
 

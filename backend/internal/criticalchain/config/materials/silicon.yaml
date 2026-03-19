@@ -1,0 +1,48 @@
+material_id: silicon
+display_name:
+  en: "Silicon"
+  ru: "Кремний"
+chemical_symbol: Si
+category: critical_mineral
+subcategory: semiconductor
+
+units:
+  primary: metric_ton
+  aliases: [t, MT, tonne]
+
+production_stages:
+  - id: 0
+    name: metallurgical_grade
+    type: extraction
+    facilityKind: mine
+    typical_forms: [quartz, metallurgical_silicon]
+  - id: 1
+    name: polysilicon
+    type: refining
+    facilityKind: refinery
+    conversion_ratio: 0.70
+  - id: 2
+    name: wafer
+    type: processing
+    facilityKind: factory
+    conversion_ratio: 0.80
+  - id: 3
+    name: chip
+    type: manufacturing
+    facilityKind: factory
+    conversion_ratio: 0.85
+
+data_sources:
+  - source_id: usgs_mcs
+    type: annual_statistics
+    fields: [production_by_country, price]
+
+key_chokepoints:
+  - path: /loc/cn
+    share_of_global_supply: 0.70
+    risk_multiplier: 2.0
+  - path: /loc/tw
+    share_of_global_supply: 0.55
+    risk_multiplier: 2.0
+
+concentration_hhi: 5200

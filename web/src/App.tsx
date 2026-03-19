@@ -27,6 +27,7 @@ import HorizonGovProfilePrintPage from './pages/HorizonGovProfilePrintPage';
 import HorizonDynastyProfilePrintPage from './pages/HorizonDynastyProfilePrintPage';
 import HorizonTribeProfilePrintPage from './pages/HorizonTribeProfilePrintPage';
 import HorizonProgramProfilePrintPage from './pages/HorizonProgramProfilePrintPage';
+import CriticalChainPage from './pages/CriticalChainPage';
 
 function AppContent() {
   const location = useLocation();
@@ -50,7 +51,8 @@ function AppContent() {
   // On mobile this avoids "double scroll" where the whole app page becomes taller than the viewport.
   const lockContentAreaScroll =
     (location.pathname === '/' && (isUnfold || !!user)) ||
-    location.pathname.startsWith('/horizon');
+    location.pathname.startsWith('/horizon') ||
+    location.pathname.startsWith('/criticalchain');
 
   const isPrintRoute = location.pathname.startsWith('/horizon/print/');
   
@@ -114,6 +116,7 @@ function AppContent() {
             <Route path="/horizon/print/dynasty/:fragmentId" element={<AuthGuard><HorizonDynastyProfilePrintPage /></AuthGuard>} />
             <Route path="/horizon/print/tribe/:fragmentId" element={<AuthGuard><HorizonTribeProfilePrintPage /></AuthGuard>} />
             <Route path="/horizon/print/program/:fragmentId" element={<AuthGuard><HorizonProgramProfilePrintPage /></AuthGuard>} />
+            <Route path="/criticalchain" element={<CriticalChainPage />} />
             <Route path="/horizon" element={<AuthGuard><HorizonPage /></AuthGuard>} />
             <Route path="/horizon/watch" element={<AuthGuard><HorizonPage /></AuthGuard>} />
             <Route path="/" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (user ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />))} />

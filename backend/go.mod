@@ -4,6 +4,7 @@ go 1.25.1
 
 require (
 	baliance.com/gooxml v1.0.1
+	gopkg.in/yaml.v3 v3.0.1
 	cloud.google.com/go/bigquery v1.72.0
 	cloud.google.com/go/cloudtasks v1.13.7
 	cloud.google.com/go/firestore v1.20.0

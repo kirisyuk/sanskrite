@@ -1,0 +1,41 @@
+material_id: helium
+display_name:
+  en: "Helium"
+  ru: "Гелий"
+chemical_symbol: He
+category: critical_mineral
+subcategory: special_gases
+
+units:
+  primary: cubic_meter
+  aliases: [m3, cubic_meter]
+
+production_stages:
+  - id: 0
+    name: extraction
+    type: extraction
+    facilityKind: mine
+    typical_forms: [natural_gas_byproduct]
+  - id: 1
+    name: purification
+    type: refining
+    facilityKind: refinery
+    conversion_ratio: 0.95
+
+data_sources:
+  - source_id: usgs_mcs
+    type: annual_statistics
+    fields: [production_by_country, reserves]
+
+key_chokepoints:
+  - path: /loc/us
+    share_of_global_supply: 0.40
+    risk_multiplier: 1.5
+  - path: /loc/qa
+    share_of_global_supply: 0.30
+    risk_multiplier: 1.5
+  - path: /loc/ru
+    share_of_global_supply: 0.15
+    risk_multiplier: 2.0
+
+concentration_hhi: 2800

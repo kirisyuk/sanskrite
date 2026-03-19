@@ -1,0 +1,55 @@
+material_id: natural_gas
+display_name:
+  en: "Natural Gas"
+  ru: "Природный газ"
+chemical_symbol: ""
+category: energy_commodity
+subcategory: hydrocarbon
+
+units:
+  primary: cubic_meter
+  aliases: [m3, bcm, tcm]
+
+production_stages:
+  - id: 0
+    name: upstream
+    type: extraction
+    facilityKind: mine
+    typical_forms: [natural_gas]
+  - id: 1
+    name: preparation
+    type: processing
+    facilityKind: refinery
+    conversion_ratio: 0.99
+  - id: 2
+    name: lng_liquefaction
+    type: processing
+    facilityKind: terminal
+    conversion_ratio: 0.95
+  - id: 3
+    name: regasification
+    type: processing
+    facilityKind: terminal
+    conversion_ratio: 0.98
+  - id: 4
+    name: distribution
+    type: distribution
+    facilityKind: pipeline
+
+data_sources:
+  - source_id: eia
+    type: statistics
+    fields: [production, consumption, trade]
+  - source_id: entsog
+    type: flows
+    fields: [european_flows]
+  - source_id: jodi
+    type: statistics
+    fields: [production, stocks]
+
+key_chokepoints:
+  - path: /loc/eu_pipelines
+    share_of_global_supply: 0.15
+    risk_multiplier: 2.0
+
+concentration_hhi: 900

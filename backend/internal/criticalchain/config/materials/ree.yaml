@@ -1,0 +1,43 @@
+material_id: ree
+display_name:
+  en: "Rare Earth Elements"
+  ru: "Редкоземельные элементы"
+chemical_symbol: REE
+category: critical_mineral
+subcategory: special_metals
+
+units:
+  primary: metric_ton
+  aliases: [t, MT, tonne, REO]
+
+production_stages:
+  - id: 0
+    name: mining
+    type: extraction
+    facilityKind: mine
+    typical_forms: [bastnasite, monazite, xenotime]
+  - id: 1
+    name: separation
+    type: refining
+    facilityKind: refinery
+    conversion_ratio: 0.60
+  - id: 2
+    name: processing
+    type: processing
+    facilityKind: factory
+    conversion_ratio: 0.80
+
+data_sources:
+  - source_id: usgs_mrds
+    type: facilities
+    fields: [mines, refineries]
+  - source_id: usgs_mcs
+    type: annual_statistics
+    fields: [production_by_country, reserves, price]
+
+key_chokepoints:
+  - path: /loc/cn
+    share_of_global_supply: 0.90
+    risk_multiplier: 2.5
+
+concentration_hhi: 8100

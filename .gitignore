@@ -102,3 +102,4 @@ paypal-credentials.md
 
 # Secrets file for deploy (apply-secrets.sh) — never commit!
 scripts/secrets.env
+scripts/create-secrets.sh

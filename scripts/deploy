@@ -24,6 +24,7 @@ TARGET_CLEANUP_REVISIONS=0
 TARGET_EVENT_GATE=0
 TARGET_ENTITY_EXTRACT=0
 TARGET_AGENTMESH=0
+TARGET_CRITICALCHAIN_INFRA=0
 
 REGION=${REGION:-us-central1}
 FIRESTORE_LOCATION=${FIRESTORE_LOCATION:-$REGION}
@@ -59,6 +60,7 @@ usage() {
   echo "  --check-infra   Run infrastructure checks only (no deployments)"
   echo "  --etigram-watchdog Ensure Cloud Scheduler job for Etigram Watchdog (calls API cron endpoint)"
   echo "  --etigram-watchdog-only Only ensure Etigram Watchdog infra/job/env (no API build/deploy)"
+  echo "  --api-criticalchain Ensure CriticalChain infra (Pub/Sub topic, Scheduler job for 6h pipeline)"
   echo "  --cleanup-revisions Clean up old Cloud Run revisions (keeps last 10 per service, manual operation)"
 }
 
@@ -76,6 +78,7 @@ while [[ $# -gt 0 ]]; do
     --check-infra) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ETIGRAM_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=1 ;;
     --etigram-watchdog) TARGET_ETIGRAM_WATCHDOG=1 ;;
     --etigram-watchdog-only) TARGET_ETIGRAM_WATCHDOG=1; TARGET_ETIGRAM_WATCHDOG_ONLY=1; TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ETIGRAM_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=0 ;;
+    --api-criticalchain) TARGET_CRITICALCHAIN_INFRA=1; TARGET_CHECK_INFRA=1 ;;
     --cleanup-revisions) TARGET_CLEANUP_REVISIONS=1; TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ETIGRAM_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=0 ;;
     -h|--help) usage; exit 0 ;;
     *) echo -e "${YELLOW}Unknown arg: $1${NC}"; usage; exit 1 ;;
@@ -1067,7 +1070,8 @@ setup_infrastructure() {
     analysis.status \
     agent.update \
     interaction.created interaction.updated \
-    verified.stream; do
+    verified.stream \
+    criticalchain-pipeline; do
     if ! gcloud pubsub topics describe "$topic" >/dev/null 2>&1; then
       gcloud pubsub topics create "$topic" --quiet
       echo -e "${GREEN}  ✓${NC} Created topic: $topic"
@@ -1148,8 +1152,8 @@ setup_infrastructure() {
     fi
   done
 
-  # 5. Ensure Cloud Scheduler jobs when deploying API OR when explicitly asked (e.g. --etigram-watchdog-only)
-  if [[ "$TARGET_API" -eq 1 || "${TARGET_ETIGRAM_WATCHDOG:-0}" -eq 1 ]]; then
+  # 5. Ensure Cloud Scheduler jobs when deploying API OR when explicitly asked (e.g. --etigram-watchdog-only, --api-criticalchain)
+  if [[ "$TARGET_API" -eq 1 || "${TARGET_ETIGRAM_WATCHDOG:-0}" -eq 1 || "${TARGET_CRITICALCHAIN_INFRA:-0}" -eq 1 ]]; then
     echo -e "${BLUE}[infra] Ensuring Cloud Scheduler jobs (optional)...${NC}"
     if gcloud services list --enabled --filter="config.name: cloudscheduler.googleapis.com" --format="value(config.name)" | grep -q cloudscheduler.googleapis.com; then
       SVC_URL=$(gcloud run services describe etigram-api --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
@@ -1281,6 +1285,34 @@ setup_infrastructure() {
           fi
           echo -e "${GREEN}[infra] ✓${NC} Etigram Watchdog scheduler job ensured ($WATCHDOG_SCHEDULE)"
         fi
+
+        # 5e. CriticalChain pipeline job (every 6 hours)
+        JOB_NAME="criticalchain-pipeline"
+        CC_PIPELINE_URI="$SVC_URL/api/v1/criticalchain/admin/pipeline/run"
+        if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
+          gcloud scheduler jobs update http "$JOB_NAME" \
+            --location="$REGION" \
+            --schedule="0 */6 * * *" \
+            --uri="$CC_PIPELINE_URI" \
+            --http-method=POST \
+            --oidc-service-account-email="$SA_BACKEND" \
+            --oidc-token-audience="$SVC_URL" \
+            --update-headers="X-Job-Token=$ADMIN_TOKEN" \
+            --attempt-deadline=600s \
+            --quiet || true
+        else
+          gcloud scheduler jobs create http "$JOB_NAME" \
+            --location="$REGION" \
+            --schedule="0 */6 * * *" \
+            --uri="$CC_PIPELINE_URI" \
+            --http-method=POST \
+            --oidc-service-account-email="$SA_BACKEND" \
+            --oidc-token-audience="$SVC_URL" \
+            --headers="X-Job-Token=$ADMIN_TOKEN" \
+            --attempt-deadline=600s \
+            --quiet || true
+        fi
+        echo -e "${GREEN}[infra] ✓${NC} CriticalChain pipeline scheduler job ensured (every 6 hours)"
       else
         echo -e "${YELLOW}[infra] Skipping scheduler jobs (api url not resolved).${NC}"
       fi

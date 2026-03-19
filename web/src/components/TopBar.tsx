@@ -39,8 +39,10 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
   const [modeOpen, setModeOpen] = React.useState(false);
   const shareRef = React.useRef<HTMLDivElement | null>(null);
   const modeRef = React.useRef<HTMLDivElement | null>(null);
-  const currentMode = React.useMemo<'Structure' | 'Discuss'>(() => {
-    return location.pathname.startsWith('/horizon') ? 'Structure' : 'Discuss';
+  const currentMode = React.useMemo<'Structure' | 'Discuss' | 'CriticalChain'>(() => {
+    if (location.pathname.startsWith('/criticalchain')) return 'CriticalChain';
+    if (location.pathname.startsWith('/horizon')) return 'Structure';
+    return 'Discuss';
   }, [location.pathname]);
   const toggleTheme = React.useCallback(() => {
     const next = theme === 'dark' ? 'light' : 'dark';
@@ -537,6 +539,15 @@ export const TopBar: React.FC<{ showUser?: boolean }> = ({ showUser = true }) =>
                 onClick={() => { setModeOpen(false); navigate('/'); }}
               >
                 Discuss
+              </button>
+              <span className="hzn-brand-divider" aria-hidden="true">|</span>
+              <button
+                type="button"
+                role="menuitem"
+                className="hzn-brand-inline-choice"
+                onClick={() => { setModeOpen(false); navigate('/criticalchain'); }}
+              >
+                CriticalChain
               </button>
             </div>
           ) : (

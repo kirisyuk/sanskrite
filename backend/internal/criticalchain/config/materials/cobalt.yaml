@@ -1,0 +1,46 @@
+material_id: cobalt
+display_name:
+  en: "Cobalt"
+  ru: "Кобальт"
+chemical_symbol: Co
+category: critical_mineral
+subcategory: battery_metal
+
+units:
+  primary: metric_ton
+  aliases: [t, MT, tonne]
+
+production_stages:
+  - id: 0
+    name: mining
+    type: extraction
+    facilityKind: mine
+    typical_forms: [cobalt_ore, byproduct]
+  - id: 1
+    name: refining
+    type: refining
+    facilityKind: refinery
+    conversion_ratio: 0.70
+  - id: 2
+    name: cathode_material
+    type: processing
+    facilityKind: factory
+    conversion_ratio: 0.85
+
+data_sources:
+  - source_id: usgs_mrds
+    type: facilities
+    fields: [mines, refineries]
+  - source_id: usgs_mcs
+    type: annual_statistics
+    fields: [production_by_country, reserves, price]
+
+key_chokepoints:
+  - path: /loc/cd
+    share_of_global_supply: 0.70
+    risk_multiplier: 2.5
+  - path: /loc/cn
+    share_of_global_supply: 0.80
+    risk_multiplier: 2.0
+
+concentration_hhi: 6500
