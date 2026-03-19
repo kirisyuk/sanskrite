@@ -56,6 +56,17 @@ func main() {
 			logger.Printf("WARNING: horizon taxonomy refresh failed: %v", err)
 		}
 	})
+	taxonomy.InitIndustryRegistryCacheFromFirestore(fsClient.Client(), "v1", 20*time.Minute)
+	if err := taxonomy.RefreshIndustryRegistry(ctx); err != nil {
+		logger := log.New(os.Stdout, "[worker] ", log.LstdFlags|log.Lshortfile)
+		logger.Printf("WARNING: failed to load industry registry: %v", err)
+	}
+	taxonomy.StartIndustryRegistryAutoRefresh(ctx, 10*time.Minute, func(err error) {
+		if err != nil {
+			logger := log.New(os.Stdout, "[worker] ", log.LstdFlags|log.Lshortfile)
+			logger.Printf("WARNING: industry registry refresh failed: %v", err)
+		}
+	})
 
 	// Load market segment normalization dictionary from Firestore.
 	taxonomy.InitMarketSegmentDictionaryCacheFromFirestore(fsClient.Client(), "v1", 20*time.Minute)

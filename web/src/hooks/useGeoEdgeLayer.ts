@@ -23,12 +23,15 @@ const SUPPLY_HOP_3_LAYER = 'geo-edges-supply-hop-3';
 const SUPPLY_HOP_2_LAYER = 'geo-edges-supply-hop-2';
 const SUPPLY_HOP_1_LAYER = 'geo-edges-supply-hop-1';
 const LABEL_LAYER = 'geo-edges-label';
+const SUPPLY_LABEL_LAYER = 'geo-edges-supply-label';
 const CORRIDOR_FIELD_LAYER = 'geo-edges-corridor-field';
 const CORRIDOR_FIELD_ACCENT_LAYER = 'geo-edges-corridor-field-accent';
 const ENDPOINT_POINTS_LAYER = 'geo-edge-endpoints-points';
 const ENDPOINT_LABEL_LAYER = 'geo-edge-endpoints-label';
 const ENDPOINT_LABEL_CHIP_DARK = 'geo-edge-endpoint-chip-dark';
 const ENDPOINT_LABEL_CHIP_LIGHT = 'geo-edge-endpoint-chip-light';
+const SUPPLY_LABEL_CHIP_DARK = 'geo-edge-supply-chip-dark';
+const SUPPLY_LABEL_CHIP_LIGHT = 'geo-edge-supply-chip-light';
 const MAX_HOPS = 3;
 
 /** Layer IDs that should prevent map click from clearing selection (fog, edges, endpoints). */
@@ -44,6 +47,7 @@ export const GEO_EDGE_INTERACTIVE_LAYERS = [
   SUPPLY_HOP_2_LAYER,
   SUPPLY_HOP_3_LAYER,
   GLOW_LAYER,
+  SUPPLY_LABEL_LAYER,
   LABEL_LAYER,
 ] as const;
 
@@ -334,6 +338,10 @@ function endpointChipImageId(theme: ThemeMode): string {
   return theme === 'dark' ? ENDPOINT_LABEL_CHIP_DARK : ENDPOINT_LABEL_CHIP_LIGHT;
 }
 
+function supplyLabelChipImageId(theme: ThemeMode): string {
+  return theme === 'dark' ? SUPPLY_LABEL_CHIP_DARK : SUPPLY_LABEL_CHIP_LIGHT;
+}
+
 function drawRoundedRect(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -402,10 +410,63 @@ function renderEndpointChipImage(theme: ThemeMode): {
   };
 }
 
+function renderSupplyLabelChipImage(theme: ThemeMode): {
+  width: number;
+  height: number;
+  data: Uint8ClampedArray;
+  pixelRatio: number;
+  stretchX: Array<[number, number]>;
+  stretchY: Array<[number, number]>;
+  content: [number, number, number, number];
+} {
+  const pixelRatio = 2;
+  const width = 112;
+  const height = 44;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d')!;
+  const fill = theme === 'dark' ? 'rgba(9, 14, 22, 0.84)' : 'rgba(255, 252, 247, 0.94)';
+  const stroke = theme === 'dark' ? 'rgba(251, 146, 60, 0.24)' : 'rgba(194, 65, 12, 0.18)';
+  const shadow = theme === 'dark' ? 'rgba(0, 0, 0, 0.22)' : 'rgba(120, 53, 15, 0.08)';
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.shadowColor = shadow;
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetY = 2;
+  drawRoundedRect(ctx, 2, 4, width - 4, height - 8, 14);
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.lineWidth = 1.2;
+  ctx.strokeStyle = stroke;
+  ctx.stroke();
+
+  const imageData = ctx.getImageData(0, 0, width, height);
+  return {
+    width,
+    height,
+    data: imageData.data,
+    pixelRatio,
+    stretchX: [[24, width - 24]],
+    stretchY: [[16, height - 16]],
+    content: [20, 11, width - 20, height - 11],
+  };
+}
+
 function ensureEndpointChipImage(map: maplibregl.Map, theme: ThemeMode): void {
   const id = endpointChipImageId(theme);
   if (map.hasImage(id)) return;
   const image = renderEndpointChipImage(theme);
+  map.addImage(id, image as any);
+}
+
+function ensureSupplyLabelChipImage(map: maplibregl.Map, theme: ThemeMode): void {
+  const id = supplyLabelChipImageId(theme);
+  if (map.hasImage(id)) return;
+  const image = renderSupplyLabelChipImage(theme);
   map.addImage(id, image as any);
 }
 
@@ -2644,6 +2705,7 @@ function buildSupplyPathFeatures(
     const visual = buildSupplyPathVisual(theme, kind, route.directDistanceKm, supplyFanoutCount, bundleSize, route.criticality);
     const color = colorOverride || supplyMechanismColor(theme, kind, route.primaryMechanism) || visual.color;
     const geometry = buildSplitLineGeometry(coordinates, labelRatio);
+    const normalizedLabelText = String(labelText || '').trim();
     if (!geometry) return;
 
     features.push({
@@ -2668,7 +2730,7 @@ function buildSupplyPathFeatures(
         glowOpacity: visual.glowOpacity,
       },
     } as GeoJSON.Feature<GeoJSON.LineString | GeoJSON.MultiLineString>);
-    if (shouldRenderRouteLabel(route, featureRole)) {
+    if (normalizedLabelText && shouldRenderRouteLabel(route, featureRole)) {
       features.push({
         id: `${lineId}:label`,
         type: 'Feature',
@@ -2679,7 +2741,7 @@ function buildSupplyPathFeatures(
           corridorId: corridorId || `supply-route:${lineId}`,
           featureRole,
           narrativeKey: route.narrativeKey,
-          labelText,
+          labelText: normalizedLabelText,
           labelColor: color,
           labelPriority: Math.round((route.criticality || 0) * 1000) + (kind === 'primary' ? 300 : kind === 'indirect' ? 180 : 80),
         },
@@ -2808,7 +2870,7 @@ function buildSupplyPathFeatures(
     features.push({
       id: `${trunkId}:label`,
       type: 'Feature',
-      geometry: { type: 'Point', coordinates: linePointAt(trunkCoords, 0.58) },
+      geometry: { type: 'Point', coordinates: linePointAt(trunkCoords, 0.5) },
       properties: {
         kind: 'label',
         channel: 'supply_path',
@@ -2855,7 +2917,7 @@ function buildSupplyPathFeatures(
       route.kind,
       route.coordinates,
       route.labelText,
-      route.transportViaRefs.length > 0 ? 0.58 : 0.52,
+      0.5,
       1,
       0,
       undefined,
@@ -2984,7 +3046,7 @@ function buildExplainRelationFeatures(
     features.push({
       id: `${corridorId}:label:${index}`,
       type: 'Feature',
-      geometry: { type: 'Point', coordinates: linePointAt(coordinates, section === 'direct' ? 0.72 : 0.76) },
+      geometry: { type: 'Point', coordinates: linePointAt(coordinates, 0.5) },
       properties: {
         kind: 'label',
         channel: `relation_${section}`,
@@ -3512,23 +3574,76 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
         ['+', ['get', 'baseWidth'], 2.8],
         ['boolean', ['feature-state', 'hover'], false],
         ['+', ['get', 'baseWidth'], 2.2],
+        ['==', ['get', 'channel'], 'supply_path'],
         ['+', ['get', 'baseWidth'], 0.65],
         ['get', 'baseWidth'],
       ],
       'line-opacity': [
-        '*',
+        'interpolate', ['linear'], ['zoom'],
+        4,
         [
-          'case',
-          ['boolean', ['feature-state', 'active'], false],
-          ['min', 0.78, ['+', ['get', 'baseOpacity'], 0.2]],
-          ['boolean', ['feature-state', 'hover'], false],
-          ['min', 0.68, ['+', ['get', 'baseOpacity'], 0.16]],
-          ['==', ['get', 'channel'], 'propagation'],
-          ['*', ['get', 'baseOpacity'], 0.92],
-          ['get', 'baseOpacity'],
+          '*',
+          [
+            'case',
+            ['boolean', ['feature-state', 'active'], false],
+            ['min', 0.78, ['+', ['get', 'baseOpacity'], 0.2]],
+            ['boolean', ['feature-state', 'hover'], false],
+            ['min', 0.68, ['+', ['get', 'baseOpacity'], 0.16]],
+            ['==', ['get', 'channel'], 'propagation'],
+            ['*', ['get', 'baseOpacity'], 0.92],
+            ['get', 'baseOpacity'],
+          ],
+          opacityFactor,
+          1,
         ],
-        opacityFactor,
-        ['interpolate', ['linear'], ['zoom'], 4, 1, 6, 0.96, 8, 0.9, 10, 0.84],
+        6,
+        [
+          '*',
+          [
+            'case',
+            ['boolean', ['feature-state', 'active'], false],
+            ['min', 0.78, ['+', ['get', 'baseOpacity'], 0.2]],
+            ['boolean', ['feature-state', 'hover'], false],
+            ['min', 0.68, ['+', ['get', 'baseOpacity'], 0.16]],
+            ['==', ['get', 'channel'], 'propagation'],
+            ['*', ['get', 'baseOpacity'], 0.92],
+            ['get', 'baseOpacity'],
+          ],
+          opacityFactor,
+          0.96,
+        ],
+        8,
+        [
+          '*',
+          [
+            'case',
+            ['boolean', ['feature-state', 'active'], false],
+            ['min', 0.78, ['+', ['get', 'baseOpacity'], 0.2]],
+            ['boolean', ['feature-state', 'hover'], false],
+            ['min', 0.68, ['+', ['get', 'baseOpacity'], 0.16]],
+            ['==', ['get', 'channel'], 'propagation'],
+            ['*', ['get', 'baseOpacity'], 0.92],
+            ['get', 'baseOpacity'],
+          ],
+          opacityFactor,
+          0.9,
+        ],
+        10,
+        [
+          '*',
+          [
+            'case',
+            ['boolean', ['feature-state', 'active'], false],
+            ['min', 0.78, ['+', ['get', 'baseOpacity'], 0.2]],
+            ['boolean', ['feature-state', 'hover'], false],
+            ['min', 0.68, ['+', ['get', 'baseOpacity'], 0.16]],
+            ['==', ['get', 'channel'], 'propagation'],
+            ['*', ['get', 'baseOpacity'], 0.92],
+            ['get', 'baseOpacity'],
+          ],
+          opacityFactor,
+          0.84,
+        ],
       ],
       'line-dasharray': [
         'case',
@@ -3557,21 +3672,68 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
         ['+', ['get', 'baseWidth'], 1.1],
         ['boolean', ['feature-state', 'hover'], false],
         ['+', ['get', 'baseWidth'], 0.7],
+        ['==', ['get', 'channel'], 'supply_path'],
         ['+', ['get', 'baseWidth'], 0.22],
         ['get', 'baseWidth'],
       ],
       'line-opacity': [
-        '*',
+        'interpolate', ['linear'], ['zoom'],
+        4,
         [
-          'case',
-          ['boolean', ['feature-state', 'active'], false],
-          ['min', 0.72, ['+', ['get', 'baseOpacity'], 0.12]],
-          ['boolean', ['feature-state', 'hover'], false],
-          ['min', 0.64, ['+', ['get', 'baseOpacity'], 0.08]],
-          ['get', 'baseOpacity'],
+          '*',
+          [
+            'case',
+            ['boolean', ['feature-state', 'active'], false],
+            ['min', 0.72, ['+', ['get', 'baseOpacity'], 0.12]],
+            ['boolean', ['feature-state', 'hover'], false],
+            ['min', 0.64, ['+', ['get', 'baseOpacity'], 0.08]],
+            ['get', 'baseOpacity'],
+          ],
+          opacityFactor,
+          1,
         ],
-        opacityFactor,
-        ['interpolate', ['linear'], ['zoom'], 4, 1, 6, 0.96, 8, 0.9, 10, 0.84],
+        6,
+        [
+          '*',
+          [
+            'case',
+            ['boolean', ['feature-state', 'active'], false],
+            ['min', 0.72, ['+', ['get', 'baseOpacity'], 0.12]],
+            ['boolean', ['feature-state', 'hover'], false],
+            ['min', 0.64, ['+', ['get', 'baseOpacity'], 0.08]],
+            ['get', 'baseOpacity'],
+          ],
+          opacityFactor,
+          0.96,
+        ],
+        8,
+        [
+          '*',
+          [
+            'case',
+            ['boolean', ['feature-state', 'active'], false],
+            ['min', 0.72, ['+', ['get', 'baseOpacity'], 0.12]],
+            ['boolean', ['feature-state', 'hover'], false],
+            ['min', 0.64, ['+', ['get', 'baseOpacity'], 0.08]],
+            ['get', 'baseOpacity'],
+          ],
+          opacityFactor,
+          0.9,
+        ],
+        10,
+        [
+          '*',
+          [
+            'case',
+            ['boolean', ['feature-state', 'active'], false],
+            ['min', 0.72, ['+', ['get', 'baseOpacity'], 0.12]],
+            ['boolean', ['feature-state', 'hover'], false],
+            ['min', 0.64, ['+', ['get', 'baseOpacity'], 0.08]],
+            ['get', 'baseOpacity'],
+          ],
+          opacityFactor,
+          0.84,
+        ],
       ],
       'line-dasharray': ['literal', [1, 0]],
     },
@@ -3608,17 +3770,63 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
         ['get', 'baseWidth'],
       ],
       'line-opacity': [
-        '*',
+        'interpolate', ['linear'], ['zoom'],
+        4,
         [
-          'case',
-          ['boolean', ['feature-state', 'active'], false],
-          ['min', 0.92, ['+', ['get', 'baseOpacity'], 0.24]],
-          ['boolean', ['feature-state', 'hover'], false],
-          ['min', 0.82, ['+', ['get', 'baseOpacity'], 0.18]],
-          ['get', 'baseOpacity'],
+          '*',
+          [
+            'case',
+            ['boolean', ['feature-state', 'active'], false],
+            ['min', 0.92, ['+', ['get', 'baseOpacity'], 0.24]],
+            ['boolean', ['feature-state', 'hover'], false],
+            ['min', 0.82, ['+', ['get', 'baseOpacity'], 0.18]],
+            ['get', 'baseOpacity'],
+          ],
+          opacityFactor,
+          1,
         ],
-        opacityFactor,
-        ['interpolate', ['linear'], ['zoom'], 4, 1, 6, 0.97, 8, 0.94, 10, 0.9],
+        6,
+        [
+          '*',
+          [
+            'case',
+            ['boolean', ['feature-state', 'active'], false],
+            ['min', 0.92, ['+', ['get', 'baseOpacity'], 0.24]],
+            ['boolean', ['feature-state', 'hover'], false],
+            ['min', 0.82, ['+', ['get', 'baseOpacity'], 0.18]],
+            ['get', 'baseOpacity'],
+          ],
+          opacityFactor,
+          0.97,
+        ],
+        8,
+        [
+          '*',
+          [
+            'case',
+            ['boolean', ['feature-state', 'active'], false],
+            ['min', 0.92, ['+', ['get', 'baseOpacity'], 0.24]],
+            ['boolean', ['feature-state', 'hover'], false],
+            ['min', 0.82, ['+', ['get', 'baseOpacity'], 0.18]],
+            ['get', 'baseOpacity'],
+          ],
+          opacityFactor,
+          0.94,
+        ],
+        10,
+        [
+          '*',
+          [
+            'case',
+            ['boolean', ['feature-state', 'active'], false],
+            ['min', 0.92, ['+', ['get', 'baseOpacity'], 0.24]],
+            ['boolean', ['feature-state', 'hover'], false],
+            ['min', 0.82, ['+', ['get', 'baseOpacity'], 0.18]],
+            ['get', 'baseOpacity'],
+          ],
+          opacityFactor,
+          0.9,
+        ],
       ],
     },
   });
@@ -3647,17 +3855,63 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
         ['get', 'baseWidth'],
       ],
       'line-opacity': [
-        '*',
+        'interpolate', ['linear'], ['zoom'],
+        4,
         [
-          'case',
-          ['boolean', ['feature-state', 'active'], false],
-          ['min', 0.74, ['+', ['get', 'baseOpacity'], 0.12]],
-          ['boolean', ['feature-state', 'hover'], false],
-          ['min', 0.66, ['+', ['get', 'baseOpacity'], 0.08]],
-          ['get', 'baseOpacity'],
+          '*',
+          [
+            'case',
+            ['boolean', ['feature-state', 'active'], false],
+            ['min', 0.74, ['+', ['get', 'baseOpacity'], 0.12]],
+            ['boolean', ['feature-state', 'hover'], false],
+            ['min', 0.66, ['+', ['get', 'baseOpacity'], 0.08]],
+            ['get', 'baseOpacity'],
+          ],
+          opacityFactor,
+          1,
         ],
-        opacityFactor,
-        ['interpolate', ['linear'], ['zoom'], 4, 1, 6, 0.97, 8, 0.94, 10, 0.9],
+        6,
+        [
+          '*',
+          [
+            'case',
+            ['boolean', ['feature-state', 'active'], false],
+            ['min', 0.74, ['+', ['get', 'baseOpacity'], 0.12]],
+            ['boolean', ['feature-state', 'hover'], false],
+            ['min', 0.66, ['+', ['get', 'baseOpacity'], 0.08]],
+            ['get', 'baseOpacity'],
+          ],
+          opacityFactor,
+          0.97,
+        ],
+        8,
+        [
+          '*',
+          [
+            'case',
+            ['boolean', ['feature-state', 'active'], false],
+            ['min', 0.74, ['+', ['get', 'baseOpacity'], 0.12]],
+            ['boolean', ['feature-state', 'hover'], false],
+            ['min', 0.66, ['+', ['get', 'baseOpacity'], 0.08]],
+            ['get', 'baseOpacity'],
+          ],
+          opacityFactor,
+          0.94,
+        ],
+        10,
+        [
+          '*',
+          [
+            'case',
+            ['boolean', ['feature-state', 'active'], false],
+            ['min', 0.74, ['+', ['get', 'baseOpacity'], 0.12]],
+            ['boolean', ['feature-state', 'hover'], false],
+            ['min', 0.66, ['+', ['get', 'baseOpacity'], 0.08]],
+            ['get', 'baseOpacity'],
+          ],
+          opacityFactor,
+          0.9,
+        ],
       ],
     },
   });
@@ -3756,10 +4010,15 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
     id: LABEL_LAYER,
     type: 'symbol',
     source: SRC,
-    filter: ['==', ['get', 'kind'], 'label'],
+    filter: [
+      'all',
+      ['==', ['get', 'kind'], 'label'],
+      ['!=', ['get', 'channel'], 'supply_path'],
+    ],
     layout: {
       'symbol-sort-key': ['coalesce', ['get', 'labelPriority'], 0],
       'text-field': ['get', 'labelText'],
+      'text-font': [...MAP_TEXT_FONT_STACK],
       'text-size': [
         'interpolate', ['linear'], ['zoom'],
         4, 9.8,
@@ -3787,6 +4046,54 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
         ['==', ['get', 'channel'], 'propagation'],
         0.3,
         0.54,
+      ],
+    },
+  });
+
+  map.addLayer({
+    id: SUPPLY_LABEL_LAYER,
+    type: 'symbol',
+    source: SRC,
+    filter: [
+      'all',
+      ['==', ['get', 'kind'], 'label'],
+      ['==', ['get', 'channel'], 'supply_path'],
+    ],
+    layout: {
+      'symbol-sort-key': ['coalesce', ['get', 'labelPriority'], 0],
+      'icon-image': supplyLabelChipImageId(theme),
+      'icon-anchor': 'center',
+      'icon-text-fit': 'both',
+      'icon-text-fit-padding': [4, 7, 4, 7],
+      'text-field': ['get', 'labelText'],
+      'text-font': [...MAP_TEXT_FONT_STACK],
+      'text-size': [
+        'interpolate', ['linear'], ['zoom'],
+        4, 10,
+        6, 10.8,
+        8, 11.4,
+      ],
+      'text-max-width': 13,
+      'text-anchor': 'center',
+      'text-offset': [0, 0],
+      'text-allow-overlap': false,
+      'text-ignore-placement': false,
+    },
+    paint: {
+      'icon-opacity': [
+        'case',
+        ['boolean', ['feature-state', 'active'], false],
+        0.88,
+        0.74,
+      ],
+      'text-color': theme === 'dark' ? 'rgba(241,245,249,0.92)' : 'rgba(15,23,42,0.84)',
+      'text-halo-color': theme === 'dark' ? 'rgba(8,12,18,0.86)' : 'rgba(255,252,247,0.92)',
+      'text-halo-width': 0.52,
+      'text-opacity': [
+        'case',
+        ['boolean', ['feature-state', 'active'], false],
+        0.94,
+        0.8,
       ],
     },
   });
@@ -3823,10 +4130,11 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
       'text-field': ['get', 'endpointLabel'],
       'text-font': [...MAP_TEXT_FONT_STACK],
       'text-size': [
-        'case',
-        ['==', ['get', 'labelStrong'], 1],
-        ['interpolate', ['linear'], ['zoom'], 4, 11.5, 6, 12.25, 8, 13, 10, 13.5],
-        ['interpolate', ['linear'], ['zoom'], 4, 10.5, 6, 11, 8, 11.5, 10, 12],
+        'interpolate', ['linear'], ['zoom'],
+        4, ['case', ['==', ['get', 'labelStrong'], 1], 11.5, 10.5],
+        6, ['case', ['==', ['get', 'labelStrong'], 1], 12.25, 11],
+        8, ['case', ['==', ['get', 'labelStrong'], 1], 13, 11.5],
+        10, ['case', ['==', ['get', 'labelStrong'], 1], 13.5, 12],
       ],
       'text-variable-anchor': ['literal', ['right', 'left', 'top-right', 'bottom-right', 'top', 'bottom']],
       'text-radial-offset': [
@@ -3840,12 +4148,34 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
     },
     paint: {
       'icon-opacity': [
-        'case',
-        ['boolean', ['feature-state', 'active'], false],
-        0.98,
-        ['==', ['get', 'labelChip'], 1],
-        ['case', ['==', ['get', 'labelStrong'], 1], ['interpolate', ['linear'], ['zoom'], 4, 0.9, 6.5, 0.96, 9, 0.99], ['interpolate', ['linear'], ['zoom'], 4, 0.74, 6.5, 0.84, 9, 0.92]],
-        0,
+        'interpolate', ['linear'], ['zoom'],
+        4,
+        [
+          'case',
+          ['boolean', ['feature-state', 'active'], false],
+          0.98,
+          ['==', ['get', 'labelChip'], 1],
+          ['case', ['==', ['get', 'labelStrong'], 1], 0.9, 0.74],
+          0,
+        ],
+        6.5,
+        [
+          'case',
+          ['boolean', ['feature-state', 'active'], false],
+          0.98,
+          ['==', ['get', 'labelChip'], 1],
+          ['case', ['==', ['get', 'labelStrong'], 1], 0.96, 0.84],
+          0,
+        ],
+        9,
+        [
+          'case',
+          ['boolean', ['feature-state', 'active'], false],
+          0.98,
+          ['==', ['get', 'labelChip'], 1],
+          ['case', ['==', ['get', 'labelStrong'], 1], 0.99, 0.92],
+          0,
+        ],
       ],
       'text-color': [
         'case',
@@ -4005,6 +4335,7 @@ export function useGeoEdgeLayer(
       try {
         if (map.getLayer(ENDPOINT_LABEL_LAYER)) map.removeLayer(ENDPOINT_LABEL_LAYER);
         if (map.getLayer(ENDPOINT_POINTS_LAYER)) map.removeLayer(ENDPOINT_POINTS_LAYER);
+        if (map.getLayer(SUPPLY_LABEL_LAYER)) map.removeLayer(SUPPLY_LABEL_LAYER);
         if (map.getLayer(CORRIDOR_FIELD_ACCENT_LAYER)) map.removeLayer(CORRIDOR_FIELD_ACCENT_LAYER);
         if (map.getLayer(CORRIDOR_FIELD_LAYER)) map.removeLayer(CORRIDOR_FIELD_LAYER);
         if (map.getLayer(LABEL_LAYER)) map.removeLayer(LABEL_LAYER);
@@ -4367,6 +4698,7 @@ export function useGeoEdgeLayer(
 
         await ensureMarkerImages(map, spreadEntries.map((entry) => entry.object), theme);
         ensureEndpointChipImage(map, theme);
+        ensureSupplyLabelChipImage(map, theme);
         map.addSource(SRC, { type: 'geojson', data: { type: 'FeatureCollection', features: allFeatures } });
         map.addSource(ENDPOINT_SRC, {
           type: 'geojson',

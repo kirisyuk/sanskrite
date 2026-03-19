@@ -29,9 +29,12 @@ type Service struct {
 	briefsRepo                *horizonrepo.WatchBriefsRepository
 	feedRepo                  *horizonrepo.WatchFeedEntriesRepository
 	prefsRepo                 *horizonrepo.WatchPreferencesRepository
+	pageSnapshotsRepo         *horizonrepo.WatchPageSnapshotsRepository
+	pageHistoryRepo           *horizonrepo.WatchPageHistoryRepository
 	lensesRepo                *horizonrepo.LensesRepository
 	materializedArtifactsRepo *horizonrepo.MaterializedArtifactsRepository
 	fragmentsRepo             *horizonrepo.HorizonFragmentsRepository
+	edgesRepo                 *horizonrepo.DependencyEdgesRepository
 	riskJobsRepo              *horizonrepo.RiskJobsRepository
 	proposalsRepo             *horizonrepo.AgentProposalsRepository
 	decisionsRepo             *horizonrepo.ArbitrationDecisionsRepository
@@ -39,6 +42,7 @@ type Service struct {
 	runtimeProvisioner        func(context.Context, *horizonmodels.WatchTarget) error
 	redisClient               *redis.Client
 	lensAttentionProvider     func(context.Context, string, string, int) (*horizonwatchruntime.LensAttentionView, error)
+	pageEnricher              PageSectionEnricher
 }
 
 func NewService(
@@ -81,11 +85,39 @@ func (s *Service) WithLensesRepository(repo *horizonrepo.LensesRepository) *Serv
 	return s
 }
 
+func (s *Service) WithPagePersistence(
+	snapshotsRepo *horizonrepo.WatchPageSnapshotsRepository,
+	historyRepo *horizonrepo.WatchPageHistoryRepository,
+) *Service {
+	if s == nil {
+		return s
+	}
+	s.pageSnapshotsRepo = snapshotsRepo
+	s.pageHistoryRepo = historyRepo
+	return s
+}
+
+func (s *Service) WithPageEnricher(fn PageSectionEnricher) *Service {
+	if s == nil {
+		return s
+	}
+	s.pageEnricher = fn
+	return s
+}
+
 func (s *Service) WithMaterializedArtifactsRepository(repo *horizonrepo.MaterializedArtifactsRepository) *Service {
 	if s == nil {
 		return s
 	}
 	s.materializedArtifactsRepo = repo
+	return s
+}
+
+func (s *Service) WithEdgesRepository(repo *horizonrepo.DependencyEdgesRepository) *Service {
+	if s == nil {
+		return s
+	}
+	s.edgesRepo = repo
 	return s
 }
 
@@ -104,6 +136,13 @@ func (s *Service) CreateTarget(ctx context.Context, target *horizonmodels.WatchT
 	if strings.TrimSpace(target.Label) == "" {
 		target.Label = labelFromCanonicalPath(target.CanonicalPath)
 	}
+	target.InterestTitle, target.InterestQuery, target.QueryOverrides = normalizedWatchInterest(
+		target.Label,
+		target.CanonicalPath,
+		target.InterestTitle,
+		target.InterestQuery,
+		target.QueryOverrides,
+	)
 	if err := s.targetsRepo.Upsert(ctx, target); err != nil {
 		return nil, err
 	}
@@ -388,9 +427,16 @@ func (s *Service) refreshBrief(ctx context.Context, target *horizonmodels.WatchT
 	if confidence > 1 {
 		confidence = 1
 	}
-	headline := fmt.Sprintf("%s under active watch", target.Label)
-	summary := buildSummary(target, riskJobs, accepted, factsCount)
-	explanation := buildExplanation(target, riskJobs, accepted, factsCount)
+	interestTitle, interestQuery, queryOverrides := normalizedWatchInterest(
+		target.Label,
+		target.CanonicalPath,
+		target.InterestTitle,
+		target.InterestQuery,
+		target.QueryOverrides,
+	)
+	headline := firstNonEmpty(interestTitle, fmt.Sprintf("%s under active watch", target.Label))
+	summary := buildSummary(target, interestTitle, interestQuery, riskJobs, accepted, factsCount)
+	explanation := buildExplanation(target, interestTitle, interestQuery, riskJobs, accepted, factsCount)
 	forecast := map[string]any{
 		"watchpoints":       target.DomainModes,
 		"acceptedProposals": accepted,
@@ -432,6 +478,10 @@ func (s *Service) refreshBrief(ctx context.Context, target *horizonmodels.WatchT
 		CanonicalPath:      target.CanonicalPath,
 		Label:              target.Label,
 		ScopeType:          target.Kind,
+		InterestTitle:      interestTitle,
+		InterestQuery:      interestQuery,
+		QueryOverrides:     append([]string(nil), queryOverrides...),
+		PageFraming:        cloneAnyMap(target.PageFraming),
 		Headline:           headline,
 		Summary:            summary,
 		Hotness:            hotness,
@@ -449,6 +499,9 @@ func (s *Service) refreshBrief(ctx context.Context, target *horizonmodels.WatchT
 			"acceptedProposals": accepted,
 			"targetStatus":      target.Status,
 			"generatedAt":       time.Now().UTC().Format(time.RFC3339),
+			"interestTitle":     interestTitle,
+			"interestQuery":     interestQuery,
+			"queryOverrides":    append([]string(nil), queryOverrides...),
 		},
 	}
 	if err := s.briefsRepo.Upsert(ctx, brief); err != nil {
@@ -477,18 +530,23 @@ func (s *Service) loadBriefInputs(ctx context.Context, brief *horizonmodels.Watc
 	return proposals, facts, nil
 }
 
-func buildSummary(target *horizonmodels.WatchTarget, riskJobs []*horizonmodels.RiskJob, accepted, factsCount int) string {
+func buildSummary(target *horizonmodels.WatchTarget, interestTitle, interestQuery string, riskJobs []*horizonmodels.RiskJob, accepted, factsCount int) string {
+	if strings.TrimSpace(interestQuery) != "" {
+		return fmt.Sprintf("%s tracks %d recent risk runs, %d accepted agent proposals and %d fresh facts for %s.",
+			firstNonEmpty(interestTitle, target.Label), len(riskJobs), accepted, factsCount, strings.TrimSpace(interestQuery))
+	}
 	return fmt.Sprintf("%s tracks %d recent risk runs, %d accepted agent proposals and %d fresh facts around %s.",
-		target.Label, len(riskJobs), accepted, factsCount, target.CanonicalPath)
+		firstNonEmpty(interestTitle, target.Label), len(riskJobs), accepted, factsCount, target.CanonicalPath)
 }
 
-func buildExplanation(target *horizonmodels.WatchTarget, riskJobs []*horizonmodels.RiskJob, accepted, factsCount int) string {
+func buildExplanation(target *horizonmodels.WatchTarget, interestTitle, interestQuery string, riskJobs []*horizonmodels.RiskJob, accepted, factsCount int) string {
 	themes := compactUnique(target.DomainModes)
 	if len(themes) == 0 {
 		themes = []string{"general"}
 	}
-	return fmt.Sprintf("Brief is synthesized from watchdog/risk activity, arbitrated agent proposals and fact freshness for %s. Active themes: %s. Recent jobs: %d. Accepted proposals: %d. Facts: %d.",
-		target.CanonicalPath, strings.Join(themes, ", "), len(riskJobs), accepted, factsCount)
+	focus := firstNonEmpty(strings.TrimSpace(interestQuery), strings.TrimSpace(target.CanonicalPath))
+	return fmt.Sprintf("Brief is synthesized for %s from watchdog/risk activity, arbitrated agent proposals and fact freshness. Active themes: %s. Recent jobs: %d. Accepted proposals: %d. Facts: %d.",
+		firstNonEmpty(strings.TrimSpace(interestTitle), focus), strings.Join(themes, ", "), len(riskJobs), accepted, factsCount)
 }
 
 func deriveRiskPosture(riskJobs []*horizonmodels.RiskJob, accepted int) string {

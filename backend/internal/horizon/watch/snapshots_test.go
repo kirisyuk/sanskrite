@@ -344,6 +344,48 @@ func TestBriefTouchesLensScope(t *testing.T) {
 	}
 }
 
+func TestBuildLensNarrativeBriefsFiltersOutUnrelatedGlobalWatch(t *testing.T) {
+	lens := &horizonmodels.Lens{
+		ID:    "lens-1",
+		Scope: []string{"/org/ye/hayel-saeed-anam-group"},
+	}
+	substrate := []supplyChainSubstrate{
+		{
+			CanonicalKey:     "/supply-chain/global/yemen-grocery-1",
+			DisplayName:      "Jeddah sugar to Hodeidah refinery",
+			AnchorSupplier:   "/org/sa/jeddah-united-sugar-refinery",
+			AnchorCustomer:   "/org/ye/hodeidah-sugar-refinery",
+			NodeRefs:         []string{"/org/ye/hayel-saeed-anam-group", "/product/raw-cane-sugar"},
+			AffectedZoneRefs: []string{"/zone/ye/port-pressure"},
+		},
+	}
+	globalBriefs := []*horizonmodels.WatchBrief{
+		{
+			ID:            "tesla-brief",
+			CanonicalPath: "/org/us/tesla-inc",
+			Headline:      "Tesla risk picture",
+			Hotness:       0.95,
+			Confidence:    0.9,
+		},
+		{
+			ID:                 "yemen-brief",
+			CanonicalPath:      "/org/ye/hodeidah-sugar-refinery",
+			Headline:           "Hodeidah refinery under pressure",
+			TopAffectedTargets: []string{"/zone/ye/port-pressure"},
+			Hotness:            0.72,
+			Confidence:         0.81,
+		},
+	}
+
+	got := buildLensNarrativeBriefs(lens, nil, substrate, globalBriefs, nil)
+	if len(got) != 1 {
+		t.Fatalf("expected only the lens-relevant brief, got %#v", got)
+	}
+	if got[0].ID != "yemen-brief" {
+		t.Fatalf("expected yemen brief to survive filtering, got %#v", got[0])
+	}
+}
+
 func TestBuildScenarioWorkspaceUsesSupplyChainSubstrateBaseline(t *testing.T) {
 	svc := &Service{}
 	lens := &horizonmodels.Lens{
@@ -440,17 +482,14 @@ func TestBuildMonitoringSnapshotsUseSupplyChainSubstrateWhenRuntimeMissing(t *te
 			PathStressScore:   0.61,
 		},
 	})
-	if len(out) < 2 {
-		t.Fatalf("expected bootstrap + substrate monitoring snapshots, got %d", len(out))
+	if len(out) != 1 {
+		t.Fatalf("expected substrate-only monitoring snapshot when substrate exists, got %d", len(out))
 	}
-	if out[0].RiskPosture != "bootstrap_required" {
-		t.Fatalf("expected bootstrap snapshot first, got %+v", out[0])
+	if out[0].Status != "PATH_SUBSTRATE" {
+		t.Fatalf("expected path substrate snapshot, got %+v", out[0])
 	}
-	if out[1].Status != "PATH_SUBSTRATE" {
-		t.Fatalf("expected path substrate snapshot second, got %+v", out[1])
-	}
-	if out[1].CanonicalPath != "/artifact/supply-chain/global/samsung-kz" {
-		t.Fatalf("expected artifact canonical path, got %q", out[1].CanonicalPath)
+	if out[0].CanonicalPath != "/artifact/supply-chain/global/samsung-kz" {
+		t.Fatalf("expected artifact canonical path, got %q", out[0].CanonicalPath)
 	}
 }
 

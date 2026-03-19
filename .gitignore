@@ -25,6 +25,7 @@ Thumbs.db
 desktop.ini
 
 # Go
+.gocache/
 backend/bin/
 backend/build/
 backend/server

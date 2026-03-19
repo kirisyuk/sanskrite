@@ -29,7 +29,7 @@ import (
 // 3. For each related product (up to 3 levels up, 3 levels down):
 //    - Deduplicate and create if new
 //    - Create TRANSFORMS_INTO edge
-// 4. Fill entityPath/sectorPath from Wikidata (P31, P279, P452)
+// 4. Fill entityPath from Wikidata (P31, P279)
 //
 // TODO: Make hierarchy building asynchronous via job queue
 
@@ -130,18 +130,16 @@ func (b *ProductHierarchyBuilder) EnsureProductHierarchy(
 		return nil // Best effort
 	}
 
-	// Fill entityPath/sectorPath from Wikidata
+	// Fill entityPath from Wikidata
 	beforeWid := strings.TrimSpace(fragment.Identifiers["wikidataId"])
 	beforeEntity := strings.TrimSpace(fragment.EntityPath)
-	beforeSector := strings.TrimSpace(fragment.SectorPath)
 	b.fillTaxonomyFromWikidata(ctx, fragment, productData)
 	afterWid := strings.TrimSpace(fragment.Identifiers["wikidataId"])
 	afterEntity := strings.TrimSpace(fragment.EntityPath)
-	afterSector := strings.TrimSpace(fragment.SectorPath)
 
-	// Persist any best-effort enrichment on the root fragment (wikidataId, entityPath, sectorPath).
+	// Persist any best-effort enrichment on the root fragment (wikidataId, entityPath).
 	// This is important because this hook runs after Create().
-	if b.fragmentsRepo != nil && (beforeWid != afterWid || beforeEntity != afterEntity || beforeSector != afterSector) {
+	if b.fragmentsRepo != nil && (beforeWid != afterWid || beforeEntity != afterEntity) {
 		_ = b.fragmentsRepo.Update(ctx, fragment)
 	}
 
@@ -168,7 +166,7 @@ func (b *ProductHierarchyBuilder) EnsureProductHierarchy(
 	return nil
 }
 
-// fillTaxonomyFromWikidata fills entityPath and sectorPath from Wikidata properties.
+// fillTaxonomyFromWikidata fills entityPath from Wikidata properties.
 func (b *ProductHierarchyBuilder) fillTaxonomyFromWikidata(_ context.Context, fragment *models.HorizonFragment, data *ProductWikidataData) {
 	// Map P31 (instance of) to entityPath
 	// Common mappings:
@@ -188,24 +186,9 @@ func (b *ProductHierarchyBuilder) fillTaxonomyFromWikidata(_ context.Context, fr
 		}
 	}
 
-	// Map P452 (industry) to sectorPath
-	sectorPath := ""
-	if len(data.Industry) > 0 {
-		// Map first industry to sectorPath
-		for _, industry := range data.Industry {
-			sectorPath = b.mapWikidataIndustryToSectorPath(industry)
-			if sectorPath != "" {
-				break
-			}
-		}
-	}
-
 	// Update fragment if we found mappings
 	if entityPath != "" && fragment.EntityPath == "" {
 		fragment.EntityPath = entityPath
-	}
-	if sectorPath != "" && fragment.SectorPath == "" {
-		fragment.SectorPath = sectorPath
 	}
 }
 
@@ -223,19 +206,6 @@ func (b *ProductHierarchyBuilder) mapWikidataTypeToEntityPath(qID string) string
 		"Q11468": "/Resource/Energy/Electricity",       // electricity
 	}
 	return typeMap[qID]
-}
-
-// mapWikidataIndustryToSectorPath maps Wikidata industry Q-ID to sectorPath.
-func (b *ProductHierarchyBuilder) mapWikidataIndustryToSectorPath(qID string) string {
-	// Common Wikidata industries
-	industryMap := map[string]string{
-		"Q190117": "/Materials/Chemicals",       // chemical industry
-		"Q190119": "/Materials/Mining",          // mining
-		"Q190120": "/Energy/Fossil_Fuels",       // fossil fuel industry
-		"Q190121": "/Technology/Semiconductors", // semiconductor industry
-		"Q190122": "/Automotive/Components",     // automotive industry
-	}
-	return industryMap[qID]
 }
 
 // buildUpstreamHierarchy builds upstream products (materials that produce this product).

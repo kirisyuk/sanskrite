@@ -2,7 +2,6 @@ package lens
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"math"
@@ -33,6 +32,9 @@ func effectiveDomainModesForLens(lens *models.Lens) []string {
 	if len(lens.DomainModes) > 0 {
 		return lens.DomainModes
 	}
+	if queries := effectiveDomainQueriesForLens(lens); len(queries) > 0 {
+		return horizondomain.DomainModesForContractTypes(contractTypesFromLensDomainQueries(queries))
+	}
 	if lens.ViewConfig == nil {
 		return nil
 	}
@@ -45,6 +47,61 @@ func effectiveDomainModesForLens(lens *models.Lens) []string {
 		return nil
 	}
 	return horizondomain.DomainModesForContractTypes(contractTypes)
+}
+
+func effectiveOriginalQueryForLens(lens *models.Lens) string {
+	if lens == nil {
+		return ""
+	}
+	if q := strings.TrimSpace(lens.OriginalQuery); q != "" {
+		return q
+	}
+	if lens.ViewConfig == nil {
+		return ""
+	}
+	if q, ok := lens.ViewConfig["originalQuery"].(string); ok {
+		return strings.TrimSpace(q)
+	}
+	return ""
+}
+
+func effectiveDomainQueriesForLens(lens *models.Lens) []models.LensDomainQuery {
+	if lens == nil {
+		return nil
+	}
+	if len(lens.DomainQueries) > 0 {
+		return models.NormalizeLensDomainQueries(lens.DomainQueries)
+	}
+	if lens.ViewConfig == nil {
+		return nil
+	}
+	return models.ParseLensDomainQueries(lens.ViewConfig["domains"])
+}
+
+func effectiveDomainContractsForState(lens *models.Lens) []map[string]interface{} {
+	if lens == nil {
+		return nil
+	}
+	if out := models.LensDomainQueriesToMaps(effectiveDomainQueriesForLens(lens)); len(out) > 0 {
+		return out
+	}
+	if lens.ViewConfig == nil {
+		return nil
+	}
+	if raw, ok := lens.ViewConfig["domains"]; ok && raw != nil {
+		return normalizeDomainContractsForState(raw)
+	}
+	return nil
+}
+
+func contractTypesFromLensDomainQueries(in []models.LensDomainQuery) []string {
+	out := make([]string, 0, len(in))
+	for _, item := range in {
+		if ct := strings.TrimSpace(strings.ToLower(item.ContractType)); ct != "" {
+			out = append(out, ct)
+		}
+	}
+	return out
 }
 
 func contractTypesFromDomainsRaw(raw interface{}) []string {
@@ -60,6 +117,10 @@ func contractTypesFromDomainsRaw(raw interface{}) []string {
 	}
 	switch t := raw.(type) {
 	case []agents.DomainResolution:
+		for _, d := range t {
+			add(d.ContractType)
+		}
+	case []models.LensDomainQuery:
 		for _, d := range t {
 			add(d.ContractType)
 		}
@@ -711,10 +772,19 @@ func normalizeDomainContractMap(m map[string]interface{}) map[string]interface{}
 	if v, ok := get("supplyChainExecutionPlan", "SupplyChainExecutionPlan"); ok && v != nil {
 		out["supplyChainExecutionPlan"] = v
 	}
+	if v, ok := get("regulatoryImpactExecutionPlan", "RegulatoryImpactExecutionPlan"); ok && v != nil {
+		out["regulatoryImpactExecutionPlan"] = v
+	}
+	if v, ok := get("governanceExecutionPlan", "GovernanceExecutionPlan"); ok && v != nil {
+		out["governanceExecutionPlan"] = v
+	}
+	if v, ok := get("ecosystemExecutionPlan", "EcosystemExecutionPlan"); ok && v != nil {
+		out["ecosystemExecutionPlan"] = v
+	}
 	known := map[string]struct{}{
 		"canonicalpath": {}, "contracttype": {}, "title": {}, "description": {}, "facets": {}, "projections": {},
 		"relateddomains": {}, "affecteddomains": {}, "firstorderentities": {}, "confidence": {}, "reason": {},
-		"supplychainexecutionplan": {},
+		"supplychainexecutionplan": {}, "regulatoryimpactexecutionplan": {}, "governanceexecutionplan": {}, "ecosystemexecutionplan": {},
 	}
 	for k, v := range m {
 		lk := strings.ToLower(strings.TrimSpace(k))
@@ -729,43 +799,9 @@ func normalizeDomainContractMap(m map[string]interface{}) map[string]interface{}
 func normalizeDomainContractsForState(raw interface{}) []map[string]interface{} {
 	switch t := raw.(type) {
 	case []agents.DomainResolution:
-		out := make([]map[string]interface{}, 0, len(t))
-		for _, d := range t {
-			m := map[string]interface{}{
-				"canonicalPath": strings.TrimSpace(d.CanonicalPath),
-				"contractType":  strings.TrimSpace(d.ContractType),
-				"title":         strings.TrimSpace(d.Title),
-				"description":   strings.TrimSpace(d.Description),
-				"confidence":    d.Confidence,
-				"reason":        strings.TrimSpace(d.Reason),
-			}
-			if len(d.Facets) > 0 {
-				m["facets"] = d.Facets
-			}
-			if len(d.Projections) > 0 {
-				m["projections"] = d.Projections
-			}
-			if len(d.RelatedDomains) > 0 {
-				m["relatedDomains"] = d.RelatedDomains
-			}
-			if len(d.AffectedDomains) > 0 {
-				m["affectedDomains"] = d.AffectedDomains
-			}
-			if len(d.FirstOrderEntities) > 0 {
-				m["firstOrderEntities"] = d.FirstOrderEntities
-			}
-			if d.SupplyChainExecutionPlan != nil {
-				// Persist as JSON-like map so job.State survives Firestore/JSON roundtrips.
-				if b, err := json.Marshal(d.SupplyChainExecutionPlan); err == nil {
-					var pm map[string]interface{}
-					if err := json.Unmarshal(b, &pm); err == nil && len(pm) > 0 {
-						m["supplyChainExecutionPlan"] = pm
-					}
-				}
-			}
-			out = append(out, m)
-		}
-		return out
+		return models.LensDomainQueriesToMaps(models.ParseLensDomainQueries(t))
+	case []models.LensDomainQuery:
+		return models.LensDomainQueriesToMaps(t)
 	case []map[string]interface{}:
 		out := make([]map[string]interface{}, 0, len(t))
 		for _, m := range t {
@@ -1497,16 +1533,16 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				state["supplyChainExpandEnabled"] = true
 				state["supplyChainExpandMaxNodes"] = 5.0
 			}
-			// Pass through originalQuery and decompositionHints for MARKET-aware research.
-			if oq, ok := lens.ViewConfig["originalQuery"].(string); ok && strings.TrimSpace(oq) != "" {
-				state["originalQuery"] = strings.TrimSpace(oq)
+			// Pass through originalQuery and domain contracts from the first-class lens model.
+			if oq := effectiveOriginalQueryForLens(lens); oq != "" {
+				state["originalQuery"] = oq
 			}
 			if dh, ok := lens.ViewConfig["decompositionHints"]; ok && dh != nil {
 				state["decompositionHints"] = dh
 			}
 			// Pass through resolved domains (knowledge contracts) so domain jobs can expand deterministically.
-			if ds, ok := lens.ViewConfig["domains"]; ok && ds != nil {
-				state["domains"] = normalizeDomainContractsForState(ds)
+			if ds := effectiveDomainContractsForState(lens); len(ds) > 0 {
+				state["domains"] = ds
 			}
 			// DomainModes from lens (execution contracts) — preferred when set.
 			// Fallback: compute from ViewConfig["domains"] for legacy lenses.
@@ -1762,14 +1798,14 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				state["supplyChainExpandEnabled"] = true
 				state["supplyChainExpandMaxNodes"] = 5.0
 			}
-			if oq, ok := lens.ViewConfig["originalQuery"].(string); ok && strings.TrimSpace(oq) != "" {
-				state["originalQuery"] = strings.TrimSpace(oq)
+			if oq := effectiveOriginalQueryForLens(lens); oq != "" {
+				state["originalQuery"] = oq
 			}
 			if dh, ok := lens.ViewConfig["decompositionHints"]; ok && dh != nil {
 				state["decompositionHints"] = dh
 			}
-			if ds, ok := lens.ViewConfig["domains"]; ok && ds != nil {
-				state["domains"] = normalizeDomainContractsForState(ds)
+			if ds := effectiveDomainContractsForState(lens); len(ds) > 0 {
+				state["domains"] = ds
 			}
 			if len(domainModes) > 0 {
 				state["domainModes"] = domainModes
@@ -2436,14 +2472,14 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 				}
 				// Pass through originalQuery + decompositionHints + domains for consistency with CreateLens jobs.
 				if lens.ViewConfig != nil {
-					if oq, ok := lens.ViewConfig["originalQuery"].(string); ok && strings.TrimSpace(oq) != "" {
-						state["originalQuery"] = strings.TrimSpace(oq)
+					if oq := effectiveOriginalQueryForLens(lens); oq != "" {
+						state["originalQuery"] = oq
 					}
 					if dh, ok := lens.ViewConfig["decompositionHints"]; ok && dh != nil {
 						state["decompositionHints"] = dh
 					}
-					if ds, ok := lens.ViewConfig["domains"]; ok && ds != nil {
-						state["domains"] = normalizeDomainContractsForState(ds)
+					if ds := effectiveDomainContractsForState(lens); len(ds) > 0 {
+						state["domains"] = ds
 					}
 					if len(domainModes) > 0 {
 						state["domainModes"] = domainModes

@@ -668,13 +668,9 @@ func buildDomainTitle(contractType string, canonicalPath string, facets map[stri
 		case "future-outlook":
 			base = "Future outlook"
 
-		// Sector / industry
-		case "sector-overview":
-			base = "Sector overview"
-		case "industry-structure":
-			base = "Industry structure"
-		case "vertical-deep-dive":
-			base = "Vertical deep-dive"
+		// Industry analysis
+		case "industry-analysis":
+			base = "Industry analysis"
 
 		default:
 			base = bestEffortTitleCase(strings.ReplaceAll(ct, "-", " "))
@@ -1751,6 +1747,64 @@ func normalizeDomainPathForMatch(cp string) string {
 
 func domainFacetSignature(contractType string, facets map[string][]string) string {
 	ct := strings.ToLower(strings.TrimSpace(contractType))
+	if ct == "industry-analysis" {
+		parts := []string{"ct=" + ct}
+		if geos, ok := facets["geo"]; ok && len(geos) > 0 {
+			geoSeen := map[string]struct{}{}
+			geoVals := make([]string, 0, len(geos))
+			for _, geo := range geos {
+				geo = strings.ToLower(strings.TrimSpace(geo))
+				if geo == "" {
+					continue
+				}
+				if _, ok := geoSeen[geo]; ok {
+					continue
+				}
+				geoSeen[geo] = struct{}{}
+				geoVals = append(geoVals, geo)
+			}
+			sort.Strings(geoVals)
+			for _, geo := range geoVals {
+				parts = append(parts, "geo="+geo)
+			}
+		}
+		if chain, ok := facets["industry"]; ok && len(chain) > 0 {
+			for _, item := range chain {
+				item = strings.ToLower(strings.TrimSpace(item))
+				if item == "" {
+					continue
+				}
+				parts = append(parts, "industry="+item)
+			}
+		}
+		keys := make([]string, 0, len(facets))
+		for k := range facets {
+			kk := strings.ToLower(strings.TrimSpace(k))
+			if kk == "" || kk == "geo" || kk == "industry" {
+				continue
+			}
+			keys = append(keys, kk)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			seen := map[string]struct{}{}
+			vals := make([]string, 0, len(facets[k]))
+			for _, v := range facets[k] {
+				vv := strings.ToLower(strings.TrimSpace(v))
+				if vv == "" {
+					continue
+				}
+				if _, ok := seen[vv]; ok {
+					continue
+				}
+				seen[vv] = struct{}{}
+				vals = append(vals, vv)
+			}
+			sort.Strings(vals)
+			parts = append(parts, k+"="+strings.Join(vals, ","))
+		}
+		return strings.Join(parts, "|")
+	}
 	keys := make([]string, 0, len(facets))
 	for k := range facets {
 		kk := strings.ToLower(strings.TrimSpace(k))
@@ -2635,6 +2689,10 @@ func contractTypesFromDomainsRaw(raw interface{}) []string {
 		for _, d := range t {
 			add(d.ContractType)
 		}
+	case []models.LensDomainQuery:
+		for _, d := range t {
+			add(d.ContractType)
+		}
 	case []map[string]interface{}:
 		for _, m := range t {
 			add(getStringField(m, "contractType", "ContractType"))
@@ -2756,6 +2814,8 @@ func (e *ScoutEngine) ensureJobDomainMode(ctx context.Context, job *models.Scout
 				if strings.TrimSpace(lens.TenantID) == strings.TrimSpace(job.TenantID) {
 					if len(lens.DomainModes) > 0 {
 						lensModes = taxonomy.NormalizeDomainModes(lens.DomainModes)
+					} else if len(lens.DomainQueries) > 0 {
+						contractTypes = append(contractTypes, contractTypesFromDomainsRaw(lens.DomainQueries)...)
 					} else if lens.ViewConfig != nil {
 						if raw, ok := lens.ViewConfig["domains"]; ok {
 							contractTypes = append(contractTypes, contractTypesFromDomainsRaw(raw)...)
@@ -3002,34 +3062,13 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 			}
 		}
 		switch strings.TrimSpace(strings.ToLower(contractType)) {
-		case "supply-chain", "market-opportunity", "sector-overview":
-			// Minimal deterministic anchors (universal sector; market is one facet):
-			// sector-overview: top-level domain branch; market-opportunity: market-focused sub-contract.
+		case "supply-chain", "market-opportunity":
+			// Minimal deterministic anchors for supply/market-oriented contracts.
 			// - If material present: /market/{geo}/materials/{material}
 			if mats := getFacet("material"); len(mats) > 0 {
 				mat := taxonomy.Slugify(mats[0])
 				if mat != "" {
 					mp := "/market/" + geoToken + "/materials/" + mat
-					if err := taxonomy.ValidateCanonicalPath(mp); err == nil {
-						firstOrder = append(firstOrder, mp)
-					}
-				}
-			}
-			// - If industry present: /market/{geo}/technology/{industry}
-			if inds := getFacet("industry"); len(inds) > 0 {
-				ind := taxonomy.Slugify(inds[0])
-				if ind != "" {
-					mp := "/market/" + geoToken + "/technology/" + ind
-					if err := taxonomy.ValidateCanonicalPath(mp); err == nil {
-						firstOrder = append(firstOrder, mp)
-					}
-				}
-			}
-			// - If sector present: /market/{geo}/technology/{sector}
-			if secs := getFacet("sector"); len(secs) > 0 {
-				sec := taxonomy.Slugify(secs[0])
-				if sec != "" {
-					mp := "/market/" + geoToken + "/technology/" + sec
 					if err := taxonomy.ValidateCanonicalPath(mp); err == nil {
 						firstOrder = append(firstOrder, mp)
 					}

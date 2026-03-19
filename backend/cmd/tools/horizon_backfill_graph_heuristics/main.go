@@ -278,7 +278,8 @@ func buildFragmentContext(ctx context.Context, frRepo *hrepo.HorizonFragmentsRep
 	neighborIDs := map[string]struct{}{}
 	routeHints := make([]string, 0, 8)
 	zoneHints := make([]string, 0, 8)
-	pathHints := []string{frag.CanonicalPath, frag.ParentPath, frag.ParentGovPath, frag.ParentMarketPath, frag.EntityPath, frag.SectorPath}
+	pathHints := []string{frag.CanonicalPath, frag.ParentPath, frag.ParentGovPath, frag.ParentMarketPath, frag.EntityPath}
+	pathHints = append(pathHints, frag.IndustryPaths...)
 	collectFromEdge := func(edge *hmodels.DependencyEdge) {
 		if edge == nil {
 			return
@@ -317,7 +318,8 @@ func buildFragmentContext(ctx context.Context, frRepo *hrepo.HorizonFragmentsRep
 			for _, id := range ids {
 				if n := m[id]; n != nil {
 					nearby = append(nearby, n)
-					pathHints = append(pathHints, n.CanonicalPath, n.EntityPath, n.SectorPath)
+					pathHints = append(pathHints, n.CanonicalPath, n.EntityPath)
+					pathHints = append(pathHints, n.IndustryPaths...)
 				}
 			}
 		}

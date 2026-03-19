@@ -128,7 +128,6 @@ type FragmentLite struct {
 	ShortName      string   `json:"shortName,omitempty"`
 	Description    string   `json:"description,omitempty"`
 	EntityPath     string   `json:"entityPath,omitempty"`
-	SectorPath     string   `json:"sectorPath,omitempty"`
 	IndustryPaths  []string `json:"industryPaths,omitempty"`
 	OrgSize        string   `json:"orgSize,omitempty"`
 	MarketSegments []string `json:"marketSegments,omitempty"`
@@ -901,7 +900,6 @@ func makeLLMInput(f *hmodels.HorizonFragment) ItemInput {
 			ShortName:      short,
 			Description:    strings.TrimSpace(f.Description),
 			EntityPath:     strings.TrimSpace(f.EntityPath),
-			SectorPath:     strings.TrimSpace(f.SectorPath),
 			IndustryPaths:  append([]string{}, f.IndustryPaths...),
 			OrgSize:        strings.TrimSpace(f.OrgSize),
 			MarketSegments: append([]string{}, f.MarketSegments...),

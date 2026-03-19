@@ -67,6 +67,7 @@ const normalizeSupplyAnchorEntities = (entities: HorizonSearchEntity[]): Horizon
 type SupplyChainSearchResult = Awaited<ReturnType<typeof api.searchSupplyChains>>['results'][number];
 type ScopeTargetMode = 'new' | 'existing';
 type DirectedExploreDirection = 'upstream' | 'downstream';
+type DockPanel = 'view' | 'routes' | 'export' | null;
 
 const AFFECTED_ZONE_FRESHNESS_WINDOWS: AffectedZoneFreshnessWindow[] = [14, 30, 90, 180];
 
@@ -201,6 +202,36 @@ function mapDockButtonStyle(isDark: boolean, active: boolean, accent: string): R
     cursor: 'pointer',
     transform: active ? 'translateY(1px)' : 'translateY(0)',
     transition: 'transform 160ms ease, border-color 160ms ease, background-color 160ms ease, color 160ms ease',
+  };
+}
+
+function mapDockControlButtonStyle(isDark: boolean, active: boolean, accent: string): React.CSSProperties {
+  return {
+    minWidth: 112,
+    height: 42,
+    padding: '0 12px',
+    borderRadius: 14,
+    border: active
+      ? `1px solid ${accent}`
+      : (isDark ? '1px solid rgba(255,255,255,0.12)' : '1px solid rgba(15,23,42,0.12)'),
+    background: active
+      ? (isDark ? 'rgba(8,15,26,0.96)' : 'rgba(255,255,255,0.98)')
+      : (isDark ? 'rgba(5,11,17,0.86)' : 'rgba(248,250,252,0.94)'),
+    color: active ? accent : 'var(--text-heading)',
+    boxShadow: active
+      ? (isDark ? 'inset 0 1px 0 rgba(255,255,255,0.05), 0 14px 30px rgba(0,0,0,0.34)' : 'inset 0 1px 0 rgba(255,255,255,0.8), 0 14px 30px rgba(15,23,42,0.16)')
+      : (isDark ? '0 10px 24px rgba(0,0,0,0.28)' : '0 10px 24px rgba(15,23,42,0.08)'),
+    backdropFilter: 'blur(12px)',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    cursor: 'pointer',
+    fontSize: 12,
+    fontWeight: 800,
+    letterSpacing: '0.01em',
+    transition: 'transform 160ms ease, border-color 160ms ease, background-color 160ms ease, color 160ms ease',
+    transform: active ? 'translateY(1px)' : 'translateY(0)',
   };
 }
 
@@ -384,9 +415,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [flowsEnabled, setFlowsEnabled] = React.useState(false);
   const [pathLegsEnabled, setPathLegsEnabled] = React.useState(Boolean(scope?.lensId));
   const [pathLegClusteringEnabled, setPathLegClusteringEnabled] = React.useState(Boolean(scope?.lensId));
-  const [filtersOverlayOpen, setFiltersOverlayOpen] = React.useState(false);
-  const [routesOverlayOpen, setRoutesOverlayOpen] = React.useState(false);
-  const [zoneControlsOverlayOpen, setZoneControlsOverlayOpen] = React.useState(false);
+  const [activeDockPanel, setActiveDockPanel] = React.useState<DockPanel>(null);
   const [routeSearchQuery, setRouteSearchQuery] = React.useState('');
   const [selectedRouteArtifactIds, setSelectedRouteArtifactIds] = React.useState<string[]>([]);
   const [hoveredRouteArtifactIds, setHoveredRouteArtifactIds] = React.useState<string[]>([]);
@@ -680,6 +709,9 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
       : routeCatalog;
     return [...items].sort((left, right) => artifactRouteTitle(left).localeCompare(artifactRouteTitle(right)));
   }, [routeCatalog, routeSearchQueryTrim]);
+  const viewOverlayOpen = activeDockPanel === 'view';
+  const routesOverlayOpen = activeDockPanel === 'routes';
+  const exportOverlayOpen = activeDockPanel === 'export';
   const allStaticZones = STATIC_ZONE_DATA.features;
   const zoneTypeCounts = React.useMemo(() => deriveZoneTypeCounts(allStaticZones), [allStaticZones]);
   const filteredStaticZones = React.useMemo(() => {
@@ -1196,9 +1228,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   }, []);
 
   const closeMapDockOverlays = React.useCallback(() => {
-    setFiltersOverlayOpen(false);
-    setRoutesOverlayOpen(false);
-    setZoneControlsOverlayOpen(false);
+    setActiveDockPanel(null);
   }, []);
 
   const handleSearchKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -1245,7 +1275,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
         closeSearchPalette();
         return;
       }
-      if (filtersOverlayOpen || routesOverlayOpen || zoneControlsOverlayOpen) {
+      if (activeDockPanel) {
         event.preventDefault();
         closeMapDockOverlays();
         return;
@@ -1262,13 +1292,11 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     closeManualChainOverlay,
     closeScopeDialog,
     closeSearchPalette,
-    filtersOverlayOpen,
-    routesOverlayOpen,
+    activeDockPanel,
     manualChainOverlayOpen,
     scopeDialogOpen,
     scopeDialogSubmitting,
     searchOpen,
-    zoneControlsOverlayOpen,
   ]);
 
   const openScopeDialog = React.useCallback((result: SupplyChainSearchResult | null) => {
@@ -1640,24 +1668,70 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
           <div style={{ position: 'relative', pointerEvents: 'auto' }}>
             <button
               type="button"
-              title={filtersOverlayOpen ? 'Hide filters' : 'Show filters'}
-              aria-label={filtersOverlayOpen ? 'Hide filters' : 'Show filters'}
+              title={viewOverlayOpen ? 'Hide view controls' : 'Show view controls'}
+              aria-label={viewOverlayOpen ? 'Hide view controls' : 'Show view controls'}
               onClick={() => {
-                setRoutesOverlayOpen(false);
-                setZoneControlsOverlayOpen(false);
-                setFiltersOverlayOpen((value) => !value);
+                setActiveDockPanel((current) => (current === 'view' ? null : 'view'));
               }}
-              style={mapDockButtonStyle(isDark, filtersOverlayOpen, isDark ? '#7dd3fc' : '#0284c7')}
+              style={mapDockControlButtonStyle(isDark, viewOverlayOpen, isDark ? '#7dd3fc' : '#0284c7')}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <line x1="4" y1="6" x2="20" y2="6" />
                 <line x1="7" y1="12" x2="17" y2="12" />
                 <line x1="10" y1="18" x2="14" y2="18" />
               </svg>
+              <span>View</span>
             </button>
-            {filtersOverlayOpen && (
+            {viewOverlayOpen && (
               <div style={{ position: 'absolute', top: 0, right: 'calc(100% + 10px)' }}>
-                <div style={mapDockOverlayCardStyle(isDark, 286)}>
+                <div style={{ ...mapDockOverlayCardStyle(isDark, 336), padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-heading)' }}>View controls</div>
+                      <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                        Manage visibility, network depth and operational windows.
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
+                      {visibleMapObjects.length} visible
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      borderRadius: 12,
+                      border: '1px solid var(--border-subtle)',
+                      background: mapSearchPaletteChrome.subtleSurface,
+                      padding: '10px 12px',
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                      gap: 8,
+                    }}
+                  >
+                    {[
+                      { label: 'Objects', value: `${visibleMapObjects.length}`, note: filterActive ? `${filteredObjects.length}/${allObjects.length} in scope` : 'Current view' },
+                      { label: 'Route lines', value: pathLegsEnabled ? `${pathLegStats.legCount}` : 'Off', note: pathLegsEnabled ? (pathLegClusteringEnabled ? 'clustered when possible' : 'expanded') : 'Hidden' },
+                      { label: 'Zones', value: zonesEnabled ? `${affectedZoneVisibility.visible}` : 'Off', note: zonesEnabled ? `${affectedZoneVisibility.total} tracked` : 'Not shown' },
+                      { label: 'Flows', value: flowsEnabled ? `${visibleTransportFlowsCount}` : 'Off', note: flowsEnabled ? 'Transport corridors visible' : 'Not shown' },
+                    ].map((item) => (
+                      <div
+                        key={item.label}
+                        style={{
+                          padding: '8px 9px',
+                          borderRadius: 10,
+                          background: isDark ? 'rgba(15,23,42,0.34)' : 'rgba(255,255,255,0.72)',
+                          border: isDark ? '1px solid rgba(148,163,184,0.12)' : '1px solid rgba(15,23,42,0.06)',
+                        }}
+                      >
+                        <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
+                          {item.label}
+                        </div>
+                        <div style={{ marginTop: 5, fontSize: 15, fontWeight: 800, color: 'var(--text-heading)' }}>{item.value}</div>
+                        <div style={{ marginTop: 4, fontSize: 10, lineHeight: 1.4, color: 'var(--text-secondary-strong)' }}>{item.note}</div>
+                      </div>
+                    ))}
+                  </div>
+
                   <MapFilterPanel
                     floating
                     isDark={isDark}
@@ -1697,6 +1771,79 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
                     onSelectAllFlowModes={() => setActiveFlowModes(null)}
                     onSelectNoneFlowModes={() => setActiveFlowModes(new Set())}
                   />
+
+                  <div
+                    style={{
+                      borderRadius: 12,
+                      border: '1px solid var(--border-subtle)',
+                      background: mapSearchPaletteChrome.subtleSurface,
+                      padding: '10px 12px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 10,
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }}>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)' }}>Affected zones window</div>
+                        <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                          {showArchivedAffectedZones ? 'Showing the full affected-zone set' : `Showing zones since ${affectedZoneCutoffLabel}`}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
+                        {affectedZoneVisibility.visible}/{affectedZoneVisibility.total}
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {AFFECTED_ZONE_FRESHNESS_WINDOWS.map((days) => {
+                        const active = affectedZoneFreshnessDays === days;
+                        return (
+                          <button
+                            key={days}
+                            type="button"
+                            onClick={() => setAffectedZoneFreshnessDays(days)}
+                            disabled={showArchivedAffectedZones}
+                            style={{
+                              border: active ? '1px solid rgba(245,158,11,0.45)' : '1px solid var(--border-subtle)',
+                              background: active
+                                ? (isDark ? 'rgba(245,158,11,0.14)' : 'rgba(245,158,11,0.12)')
+                                : 'transparent',
+                              color: active ? (isDark ? '#fde68a' : '#92400e') : 'var(--text-secondary-strong)',
+                              padding: '5px 9px',
+                              borderRadius: 999,
+                              fontSize: 11,
+                              fontWeight: 700,
+                              cursor: showArchivedAffectedZones ? 'default' : 'pointer',
+                              opacity: showArchivedAffectedZones ? 0.42 : 1,
+                            }}
+                          >
+                            {days}d
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowArchivedAffectedZones((value) => !value)}
+                      style={{
+                        alignSelf: 'flex-start',
+                        border: showArchivedAffectedZones ? '1px solid rgba(148,163,184,0.32)' : '1px solid rgba(239,68,68,0.28)',
+                        background: showArchivedAffectedZones
+                          ? (isDark ? 'rgba(148,163,184,0.14)' : 'rgba(148,163,184,0.1)')
+                          : (isDark ? 'rgba(239,68,68,0.12)' : 'rgba(239,68,68,0.08)'),
+                        color: showArchivedAffectedZones ? 'var(--text-secondary-strong)' : (isDark ? '#fca5a5' : '#991b1b'),
+                        padding: '7px 10px',
+                        borderRadius: 10,
+                        fontSize: 11,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {showArchivedAffectedZones ? 'Use freshness window' : 'Show archived too'}
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -1708,19 +1855,18 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
               title={routesOverlayOpen ? 'Hide supply routes' : 'Supply routes'}
               aria-label={routesOverlayOpen ? 'Hide supply routes' : 'Supply routes'}
               onClick={() => {
-                setFiltersOverlayOpen(false);
-                setZoneControlsOverlayOpen(false);
-                setRoutesOverlayOpen((value) => !value);
+                setActiveDockPanel((current) => (current === 'routes' ? null : 'routes'));
               }}
-              style={mapDockButtonStyle(isDark, routesOverlayOpen, isDark ? '#f59e0b' : '#b45309')}
+              style={mapDockControlButtonStyle(isDark, routesOverlayOpen, isDark ? '#f59e0b' : '#b45309')}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M4 7h11" />
                 <path d="M4 12h16" />
                 <path d="M4 17h9" />
                 <circle cx="18" cy="7" r="2" />
                 <circle cx="18" cy="17" r="2" />
               </svg>
+              <span>Routes</span>
             </button>
             {routesOverlayOpen && (
               <div style={{ position: 'absolute', top: 0, right: 'calc(100% + 10px)' }}>
@@ -1793,7 +1939,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
                     }}
                   >
                     <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-heading)' }}>Cluster path legs</div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-heading)' }}>Cluster route lines</div>
                       <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
                         {routeSelectionVisible
                           ? 'Auto-disabled when route selection appeared. You can still switch it back here.'
@@ -1908,87 +2054,81 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
           <div style={{ position: 'relative', pointerEvents: 'auto' }}>
             <button
               type="button"
-              title={zoneControlsOverlayOpen ? 'Hide affected zone window' : 'Affected zone window'}
-              aria-label={zoneControlsOverlayOpen ? 'Hide affected zone window' : 'Affected zone window'}
+              title={exportOverlayOpen ? 'Hide export options' : 'Export current view'}
+              aria-label={exportOverlayOpen ? 'Hide export options' : 'Export current view'}
               onClick={() => {
-                setFiltersOverlayOpen(false);
-                setRoutesOverlayOpen(false);
-                setZoneControlsOverlayOpen((value) => !value);
+                setActiveDockPanel((current) => (current === 'export' ? null : 'export'));
               }}
-              style={mapDockButtonStyle(isDark, zoneControlsOverlayOpen, isDark ? '#fbbf24' : '#d97706')}
+              style={mapDockControlButtonStyle(isDark, exportOverlayOpen, isDark ? '#fbbf24' : '#d97706')}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M12 3 4 7v6c0 5 3.4 7.7 8 8 4.6-.3 8-3 8-8V7l-8-4Z" />
-                <path d="M12 8v5" />
-                <path d="M12 16h.01" />
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 3v12" />
+                <path d="m7 10 5 5 5-5" />
+                <path d="M5 21h14" />
               </svg>
+              <span>Export</span>
             </button>
-            {zoneControlsOverlayOpen && (
+            {exportOverlayOpen && (
               <div style={{ position: 'absolute', top: 0, right: 'calc(100% + 10px)' }}>
                 <div style={{ ...mapDockOverlayCardStyle(isDark, 332), padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
                     <div>
-                      <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-heading)' }}>Affected Zones Window</div>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-heading)' }}>Export</div>
                       <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                        Control freshness and archived visibility.
+                        Download the current selected asset and loaded graph as JSON snapshots.
                       </div>
                     </div>
                     <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
-                      {affectedZoneVisibility.visible}/{affectedZoneVisibility.total}
+                      {selectedObject ? 'Selection ready' : 'Select an asset'}
                     </div>
                   </div>
 
-                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                    {showArchivedAffectedZones ? 'Showing all affected zones' : `Showing zones since ${affectedZoneCutoffLabel}`}
-                  </div>
-
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {AFFECTED_ZONE_FRESHNESS_WINDOWS.map((days) => {
-                      const active = affectedZoneFreshnessDays === days;
-                      return (
-                        <button
-                          key={days}
-                          type="button"
-                          onClick={() => setAffectedZoneFreshnessDays(days)}
-                          disabled={showArchivedAffectedZones}
-                          style={{
-                            border: active ? '1px solid rgba(245,158,11,0.45)' : '1px solid var(--border-subtle)',
-                            background: active
-                              ? (isDark ? 'rgba(245,158,11,0.14)' : 'rgba(245,158,11,0.12)')
-                              : 'transparent',
-                            color: active ? (isDark ? '#fde68a' : '#92400e') : 'var(--text-secondary-strong)',
-                            padding: '5px 9px',
-                            borderRadius: 999,
-                            fontSize: 11,
-                            fontWeight: 700,
-                            cursor: showArchivedAffectedZones ? 'default' : 'pointer',
-                            opacity: showArchivedAffectedZones ? 0.42 : 1,
-                          }}
-                        >
-                          {days}d
-                        </button>
-                      );
-                    })}
+                  <div
+                    style={{
+                      borderRadius: 12,
+                      border: '1px solid var(--border-subtle)',
+                      background: mapSearchPaletteChrome.subtleSurface,
+                      padding: '10px 12px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 6,
+                    }}
+                  >
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-heading)' }}>
+                      {selectedObject ? getSearchObjectTitle(selectedObject) : 'No asset selected'}
+                    </div>
+                    <div style={{ fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                      {selectedObject
+                        ? 'Exports two files: the selected asset trace and the loaded map graph with active filters and overlays.'
+                        : 'Pick an asset on the map to unlock export.'}
+                    </div>
                   </div>
 
                   <button
                     type="button"
-                    onClick={() => setShowArchivedAffectedZones((value) => !value)}
+                    onClick={handleExportJson}
+                    disabled={!selectedObject || !selectionExportData || edgesLoading}
+                    title={!selectedObject ? 'Select an asset to export JSON files' : 'Download selection and loaded-graph JSON files'}
                     style={{
-                      alignSelf: 'flex-start',
-                      border: showArchivedAffectedZones ? '1px solid rgba(148,163,184,0.32)' : '1px solid rgba(239,68,68,0.28)',
-                      background: showArchivedAffectedZones
-                        ? (isDark ? 'rgba(148,163,184,0.14)' : 'rgba(148,163,184,0.1)')
-                        : (isDark ? 'rgba(239,68,68,0.12)' : 'rgba(239,68,68,0.08)'),
-                      color: showArchivedAffectedZones ? 'var(--text-secondary-strong)' : (isDark ? '#fca5a5' : '#991b1b'),
-                      padding: '7px 10px',
-                      borderRadius: 10,
-                      fontSize: 11,
-                      fontWeight: 700,
-                      cursor: 'pointer',
+                      borderRadius: 12,
+                      border: (!selectedObject || !selectionExportData || edgesLoading)
+                        ? '1px solid var(--border-subtle)'
+                        : `1px solid ${mapSearchPaletteChrome.activeItemBorder}`,
+                      background: (!selectedObject || !selectionExportData || edgesLoading)
+                        ? (isDark ? 'rgba(15,23,42,0.74)' : 'rgba(255,255,255,0.86)')
+                        : mapSearchPaletteChrome.activeItemBackground,
+                      color: (!selectedObject || !selectionExportData || edgesLoading)
+                        ? 'var(--text-secondary-strong)'
+                        : 'var(--text-heading)',
+                      padding: '10px 12px',
+                      fontSize: 12,
+                      fontWeight: 800,
+                      letterSpacing: '0.02em',
+                      cursor: (!selectedObject || !selectionExportData || edgesLoading) ? 'not-allowed' : 'pointer',
+                      backdropFilter: 'blur(12px)',
                     }}
                   >
-                    {showArchivedAffectedZones ? 'Hide archived zones' : `Show archived zones${affectedZoneVisibility.hidden > 0 ? ` (${affectedZoneVisibility.hidden})` : ''}`}
+                    {edgesLoading && selectedObject ? 'Preparing JSON...' : 'Download JSON snapshot'}
                   </button>
                 </div>
               </div>
@@ -3017,46 +3157,6 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
           </div>
         )}
 
-        <div
-          style={{
-            position: 'absolute',
-            right: 12,
-            bottom: 12,
-            zIndex: 19,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-          }}
-        >
-          <button
-            type="button"
-            onClick={handleExportJson}
-            disabled={!selectedObject || !selectionExportData || edgesLoading}
-            title={!selectedObject ? 'Select an object to export two JSON files' : 'Download selection and loaded-graph JSON files'}
-            style={{
-              borderRadius: 12,
-              border: (!selectedObject || !selectionExportData || edgesLoading)
-                ? '1px solid var(--border-subtle)'
-                : `1px solid ${mapSearchPaletteChrome.activeItemBorder}`,
-              background: (!selectedObject || !selectionExportData || edgesLoading)
-                ? (isDark ? 'rgba(15,23,42,0.74)' : 'rgba(255,255,255,0.86)')
-                : mapSearchPaletteChrome.activeItemBackground,
-              color: (!selectedObject || !selectionExportData || edgesLoading)
-                ? 'var(--text-secondary-strong)'
-                : 'var(--text-heading)',
-              padding: '10px 12px',
-              fontSize: 12,
-              fontWeight: 800,
-              letterSpacing: '0.02em',
-              cursor: (!selectedObject || !selectionExportData || edgesLoading) ? 'not-allowed' : 'pointer',
-              backdropFilter: 'blur(12px)',
-              boxShadow: isDark ? '0 10px 28px rgba(0,0,0,0.32)' : '0 10px 24px rgba(15,23,42,0.12)',
-            }}
-          >
-            {edgesLoading && selectedObject ? 'Preparing JSON...' : 'Save as JSON'}
-          </button>
-        </div>
-
         {selectedObject && !stackSelection && (
           selectedObjectOverlayCollapsed ? (
             <div
@@ -3135,17 +3235,18 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
               border: isDark ? '1px solid rgba(148,163,184,0.18)' : '1px solid rgba(15,23,42,0.08)',
               boxShadow: isDark ? '0 12px 32px rgba(0,0,0,0.3)' : '0 12px 28px rgba(15,23,42,0.12)',
               color: 'var(--text-heading)',
-              minWidth: 170,
+              minWidth: 206,
             }}
           >
             <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
-              Map Reading Guide
+              Active map layers
             </div>
             {[
-              { label: 'Direct', note: 'core object relations', color: isDark ? '#60a5fa' : '#2563eb' },
-              { label: 'Context', note: 'operating and market context', color: isDark ? '#2dd4bf' : '#0d9488' },
-              { label: 'Supply', note: 'product routes on the map', color: isDark ? '#f59e0b' : '#b45309' },
-              { label: 'Propagation', note: 'secondary spread in gray', color: isDark ? '#94a3b8' : '#64748b' },
+              { label: 'Direct links', note: `${traceSummary?.directCount ?? edgesCount} core relations`, color: isDark ? '#60a5fa' : '#2563eb' },
+              { label: 'Business context', note: `${traceSummary?.contextCount ?? 0} surrounding links`, color: isDark ? '#2dd4bf' : '#0d9488' },
+              { label: 'Supply routes', note: `${traceSummary?.supplyPathCount ?? 0} mapped routes`, color: isDark ? '#f59e0b' : '#b45309' },
+              { label: 'Propagation', note: `${traceSummary?.propagationEdgeCount ?? 0} secondary links`, color: isDark ? '#94a3b8' : '#64748b' },
+              { label: 'Route lines', note: pathLegsEnabled ? `${pathLegStats.legCount} visible` : 'Hidden', color: isDark ? '#fb923c' : '#c2410c' },
             ].map((item) => (
               <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ width: 10, height: 10, borderRadius: 999, background: item.color, flexShrink: 0 }} />

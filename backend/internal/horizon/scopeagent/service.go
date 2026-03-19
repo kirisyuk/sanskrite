@@ -199,7 +199,13 @@ func (s *Service) EnsureRuntimeForTarget(ctx context.Context, target *horizonmod
 		Metadata: map[string]any{
 			"provisionedBy": "watch_service",
 			"watchTargetId": target.ID,
+			"interestTitle": strings.TrimSpace(target.InterestTitle),
+			"interestQuery": strings.TrimSpace(target.InterestQuery),
+			"queryOverrides": compactUnique(append([]string{}, target.QueryOverrides...)),
 		},
+	}
+	if len(target.PageFraming) > 0 {
+		cfg.Metadata["pageFraming"] = cloneAnyMap(target.PageFraming)
 	}
 	if err := s.configsRepo.Upsert(ctx, cfg); err != nil {
 		return nil, err
@@ -224,7 +230,7 @@ func (s *Service) EnsureRuntimeForTarget(ctx context.Context, target *horizonmod
 		_ = s.targetsRepo.Upsert(ctx, target)
 	}
 	if s.watchdogRepo != nil && strings.TrimSpace(target.FragmentID) != "" {
-		if err := s.ensureWatchdogConfig(ctx, cfg.TenantID, target.FragmentID, target.SubjectID); err != nil {
+		if err := s.ensureWatchdogConfig(ctx, cfg.TenantID, target.FragmentID, target.SubjectID, target); err != nil {
 			return nil, err
 		}
 	}
@@ -1031,7 +1037,7 @@ func (s *Service) applyAcceptedProposal(ctx context.Context, proposal *horizonmo
 	return compactUnique(applied), nil
 }
 
-func (s *Service) ensureWatchdogConfig(ctx context.Context, tenantID, fragmentID, subjectID string) error {
+func (s *Service) ensureWatchdogConfig(ctx context.Context, tenantID, fragmentID, subjectID string, target *horizonmodels.WatchTarget) error {
 	now := time.Now().UTC()
 	nextScanAt := now.Add(-1 * time.Minute)
 	lastScanAt := now.Add(-2 * time.Hour)
@@ -1042,6 +1048,10 @@ func (s *Service) ensureWatchdogConfig(ctx context.Context, tenantID, fragmentID
 			TenantID:         tenantID,
 			SubjectID:        strings.TrimSpace(subjectID),
 			TargetFragmentID: fragmentID,
+			InterestTitle:    strings.TrimSpace(target.InterestTitle),
+			InterestQuery:    strings.TrimSpace(target.InterestQuery),
+			QueryOverrides:   compactUnique(append([]string{}, target.QueryOverrides...)),
+			PageFraming:      cloneAnyMap(target.PageFraming),
 			ScanInterval:     "PT1H",
 			TriggerThreshold: 0.10,
 			Status:           string(horizonmodels.WatchdogStatusRunning),
@@ -1054,6 +1064,12 @@ func (s *Service) ensureWatchdogConfig(ctx context.Context, tenantID, fragmentID
 	cfg.Status = string(horizonmodels.WatchdogStatusRunning)
 	if strings.TrimSpace(subjectID) != "" {
 		cfg.SubjectID = strings.TrimSpace(subjectID)
+	}
+	if target != nil {
+		cfg.InterestTitle = strings.TrimSpace(target.InterestTitle)
+		cfg.InterestQuery = strings.TrimSpace(target.InterestQuery)
+		cfg.QueryOverrides = compactUnique(append([]string{}, target.QueryOverrides...))
+		cfg.PageFraming = cloneAnyMap(target.PageFraming)
 	}
 	cfg.ScanInterval = "PT1H"
 	cfg.TriggerThreshold = 0.10
@@ -1756,6 +1772,17 @@ func mergeMaps(base map[string]any, add map[string]any) map[string]any {
 		out[k] = v
 	}
 	for k, v := range add {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneAnyMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
 		out[k] = v
 	}
 	return out

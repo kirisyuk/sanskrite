@@ -190,7 +190,8 @@ func buildGraphEnrichFragmentContext(ctx context.Context, tenantID string, frag 
 	neighborIDs := map[string]struct{}{}
 	routeHints := make([]string, 0, 8)
 	zoneHints := make([]string, 0, 8)
-	pathHints := []string{frag.CanonicalPath, frag.ParentPath, frag.ParentGovPath, frag.ParentMarketPath, frag.EntityPath, frag.SectorPath}
+	pathHints := []string{frag.CanonicalPath, frag.ParentPath, frag.ParentGovPath, frag.ParentMarketPath, frag.EntityPath}
+	pathHints = append(pathHints, frag.IndustryPaths...)
 	collectEdge := func(edge *horizonmodels.DependencyEdge) {
 		if edge == nil {
 			return
@@ -229,7 +230,8 @@ func buildGraphEnrichFragmentContext(ctx context.Context, tenantID string, frag 
 			for _, id := range ids {
 				if n := neighbors[id]; n != nil {
 					nearby = append(nearby, n)
-					pathHints = append(pathHints, n.CanonicalPath, n.EntityPath, n.SectorPath)
+					pathHints = append(pathHints, n.CanonicalPath, n.EntityPath)
+					pathHints = append(pathHints, n.IndustryPaths...)
 				}
 			}
 		}
@@ -353,6 +355,15 @@ func main() {
 	taxonomy.StartRuntimeTaxonomyAutoRefresh(ctx, 5*time.Minute, func(err error) {
 		if err != nil {
 			log.Printf("WARNING: horizon taxonomy refresh failed: %v", err)
+		}
+	})
+	taxonomy.InitIndustryRegistryCacheFromFirestore(fsClient.Client(), "v1", 20*time.Minute)
+	if err := taxonomy.RefreshIndustryRegistry(ctx); err != nil {
+		log.Printf("WARNING: failed to load industry registry: %v", err)
+	}
+	taxonomy.StartIndustryRegistryAutoRefresh(ctx, 10*time.Minute, func(err error) {
+		if err != nil {
+			log.Printf("WARNING: industry registry refresh failed: %v", err)
 		}
 	})
 
@@ -1324,6 +1335,8 @@ func main() {
 		horizonWatchBriefsRepo := horizonrepo.NewWatchBriefsRepository(fsClient.Client())
 		horizonWatchFeedRepo := horizonrepo.NewWatchFeedEntriesRepository(fsClient.Client())
 		horizonWatchPreferencesRepo := horizonrepo.NewWatchPreferencesRepository(fsClient.Client())
+		horizonWatchPageSnapshotsRepo := horizonrepo.NewWatchPageSnapshotsRepository(fsClient.Client())
+		horizonWatchPageHistoryRepo := horizonrepo.NewWatchPageHistoryRepository(fsClient.Client())
 		horizonStrategicRecommendationsRepo := horizonrepo.NewStrategicRecommendationsRepository(fsClient.Client())
 		horizonScopeAgentConfigsRepo := horizonrepo.NewScopeAgentConfigsRepository(fsClient.Client())
 		horizonScopeAgentStatesRepo := horizonrepo.NewScopeAgentStatesRepository(fsClient.Client())
@@ -1896,16 +1909,141 @@ func main() {
 				horizonAgentProposalsRepo,
 				horizonArbitrationDecisionsRepo,
 				ontologyFactsRepo,
-			).WithLensesRepository(horizonLensesRepo).WithMaterializedArtifactsRepository(horizonMaterializedArtifactsRepo).WithRuntimeProvisioner(func(ctx context.Context, target *horizonmodels.WatchTarget) error {
-				if _, err := watchRuntimeService.EnsureSubjectForTarget(ctx, target); err != nil {
+			).WithLensesRepository(horizonLensesRepo).
+				WithPagePersistence(horizonWatchPageSnapshotsRepo, horizonWatchPageHistoryRepo).
+				WithMaterializedArtifactsRepository(horizonMaterializedArtifactsRepo).
+				WithEdgesRepository(horizonEdgesRepo).
+				WithRuntimeProvisioner(func(ctx context.Context, target *horizonmodels.WatchTarget) error {
+					if _, err := watchRuntimeService.EnsureSubjectForTarget(ctx, target); err != nil {
+						return err
+					}
+					_, err := scopeAgentService.EnsureRuntimeForTarget(ctx, target)
 					return err
-				}
-				_, err := scopeAgentService.EnsureRuntimeForTarget(ctx, target)
-				return err
-			}).WithRedis(redisClient).
+				}).WithRedis(redisClient).
 				WithLensAttentionProvider(func(ctx context.Context, tenantID, lensID string, limit int) (*horizonwatchruntime.LensAttentionView, error) {
 					return watchRuntimeService.LensAttention(ctx, tenantID, lensID, limit)
 				})
+			if genaiHandler != nil {
+				watchService = watchService.WithPageEnricher(func(ctx context.Context, input horizonwatch.PageEnrichmentInput) (*horizonwatch.PageEnrichmentOutput, error) {
+					if strings.TrimSpace(input.HeroTitle) == "" && len(input.RiskItems) == 0 {
+						return nil, nil
+					}
+					schema := map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"heroTitle":         map[string]any{"type": "string"},
+							"heroSummary":       map[string]any{"type": "string"},
+							"heroWhyNow":        map[string]any{"type": "string"},
+							"scopeSummary":      map[string]any{"type": "string"},
+							"productSummary":    map[string]any{"type": "string"},
+							"supplyPathSummary": map[string]any{"type": "string"},
+							"riskSummary":       map[string]any{"type": "string"},
+							"affectedSummary":   map[string]any{"type": "string"},
+							"directSummary":     map[string]any{"type": "string"},
+							"indirectSummary":   map[string]any{"type": "string"},
+							"signalSummary":     map[string]any{"type": "string"},
+							"scenarioSummary":   map[string]any{"type": "string"},
+							"dashboardCaptions": map[string]any{
+								"type":                 "object",
+								"additionalProperties": map[string]any{"type": "string"},
+							},
+							"mapCaptions": map[string]any{
+								"type":                 "object",
+								"additionalProperties": map[string]any{"type": "string"},
+							},
+						},
+						"required": []string{"heroTitle", "heroSummary", "heroWhyNow", "scopeSummary", "productSummary", "supplyPathSummary", "riskSummary", "affectedSummary", "directSummary", "indirectSummary", "signalSummary", "scenarioSummary", "dashboardCaptions", "mapCaptions"},
+					}
+					payload, _ := json.Marshal(map[string]any{
+						"lensId":            input.LensID,
+						"lensName":          input.LensName,
+						"timeHorizon":       input.TimeHorizon,
+						"interestTitle":     input.InterestTitle,
+						"interestQuery":     input.InterestQuery,
+						"queryOverrides":    input.QueryOverrides,
+						"heroTitle":         input.HeroTitle,
+						"heroSummary":       input.HeroSummary,
+						"anchorItems":       input.AnchorItems,
+						"reachItems":        input.ReachItems,
+						"productItems":      input.ProductItems,
+						"supplyPathItems":   input.SupplyPathItems,
+						"riskItems":         input.RiskItems,
+						"affectedItems":     input.AffectedItems,
+						"directItems":       input.DirectItems,
+						"indirectItems":     input.IndirectItems,
+						"signalItems":       input.SignalItems,
+						"scenarioItems":     input.ScenarioItems,
+						"anchorDetails":     input.AnchorDetails,
+						"reachDetails":      input.ReachDetails,
+						"productDetails":    input.ProductDetails,
+						"supplyPathDetails": input.SupplyPathDetails,
+						"riskDetails":       input.RiskDetails,
+						"affectedDetails":   input.AffectedDetails,
+						"directDetails":     input.DirectDetails,
+						"indirectDetails":   input.IndirectDetails,
+						"signalDetails":     input.SignalDetails,
+						"scenarioDetails":   input.ScenarioDetails,
+						"evidenceDetails":   input.EvidenceDetails,
+						"dashboards":        input.Dashboards,
+						"mapFragments":      input.MapFragments,
+						"evidenceTitles":    input.EvidenceTitles,
+					})
+					req := gen_combined.GenAIRequest{
+						Model:             "",
+						SystemInstruction: "You are assembling a concise external teaser page for a geopolitical and supply-chain intelligence lens. Interpret only lens-specific aggregates derived from the lens scope, expanded graph reach, and user query. Keep the language clear, direct, non-technical, and evidence-aware. Do not invent facts beyond the provided data. Product summaries must explain affected products, their consuming entities, and transformed or downstream products. Direct summaries must explain who is hit first and why. Indirect summaries must explain second-order exposure. Signal summaries must aggregate events or structural signals and their origin. Scenario summaries must describe plausible operational paths forward implied by the current graph.",
+						Prompt: fmt.Sprintf(
+							"Return exactly one JSON object that enriches this persisted Horizon Watch page. Keep heroSummary and heroWhyNow short, dashboard captions to one sentence, and map captions to one sentence each. Use the detailed section objects, not just the item titles. Preserve the difference between direct and indirect effects, and treat global nodes as relevant only when they are reached from this lens.\n\nStructured input:\n%s",
+							string(payload),
+						),
+						ProjectID:         strings.TrimSpace(input.ProjectID),
+						Temperature:       0.2,
+						MaxOutputTokens:   2200,
+						StrictJSONEnabled: true,
+						JSONSchema:        schema,
+					}
+					resp, err := genaiHandler.GenerateStructuredViaTaskExecutor(ctx, req, 5)
+					if err != nil || resp == nil || strings.TrimSpace(resp.Content) == "" {
+						return nil, err
+					}
+					var parsed struct {
+						HeroTitle         string            `json:"heroTitle"`
+						HeroSummary       string            `json:"heroSummary"`
+						HeroWhyNow        string            `json:"heroWhyNow"`
+						ScopeSummary      string            `json:"scopeSummary"`
+						ProductSummary    string            `json:"productSummary"`
+						SupplyPathSummary string            `json:"supplyPathSummary"`
+						RiskSummary       string            `json:"riskSummary"`
+						AffectedSummary   string            `json:"affectedSummary"`
+						DirectSummary     string            `json:"directSummary"`
+						IndirectSummary   string            `json:"indirectSummary"`
+						SignalSummary     string            `json:"signalSummary"`
+						ScenarioSummary   string            `json:"scenarioSummary"`
+						DashboardCaptions map[string]string `json:"dashboardCaptions"`
+						MapCaptions       map[string]string `json:"mapCaptions"`
+					}
+					if err := json.Unmarshal([]byte(resp.Content), &parsed); err != nil {
+						return nil, err
+					}
+					return &horizonwatch.PageEnrichmentOutput{
+						Model:             strings.TrimSpace(resp.Model),
+						HeroTitle:         strings.TrimSpace(parsed.HeroTitle),
+						HeroSummary:       strings.TrimSpace(parsed.HeroSummary),
+						HeroWhyNow:        strings.TrimSpace(parsed.HeroWhyNow),
+						ScopeSummary:      strings.TrimSpace(parsed.ScopeSummary),
+						ProductSummary:    strings.TrimSpace(parsed.ProductSummary),
+						SupplyPathSummary: strings.TrimSpace(parsed.SupplyPathSummary),
+						RiskSummary:       strings.TrimSpace(parsed.RiskSummary),
+						AffectedSummary:   strings.TrimSpace(parsed.AffectedSummary),
+						DirectSummary:     strings.TrimSpace(parsed.DirectSummary),
+						IndirectSummary:   strings.TrimSpace(parsed.IndirectSummary),
+						SignalSummary:     strings.TrimSpace(parsed.SignalSummary),
+						ScenarioSummary:   strings.TrimSpace(parsed.ScenarioSummary),
+						DashboardCaptions: parsed.DashboardCaptions,
+						MapCaptions:       parsed.MapCaptions,
+						GeneratedAt:       time.Now().UTC(),
+					}, nil
+				})
+			}
 			horizonService.SetWatchService(watchService)
 			strategicRecommendationsService := horizonrecommendations.NewService(
 				horizonStrategicRecommendationsRepo,
@@ -2008,6 +2146,7 @@ func main() {
 				logger.Printf("WARNING: propagation profile lookup initialization fallback: %v", err)
 			}
 			propagationEngine.WithProfileLookup(propagationProfileLookup)
+			horizonService.SetWatchService(watchService)
 			wmVertexSearch := vertexSearchClient
 			if wmVertexSearch != nil {
 				if ds := strings.TrimSpace(getEnvWithAlt("VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID", "VERTEX_SEARCH_HORIZON_DATA_STORE_ID", "")); ds != "" {
@@ -4409,6 +4548,9 @@ func main() {
 			allowedOrigins = []string{
 				"http://localhost:5173",
 				"http://localhost:3000",
+				"https://etigram.pro",
+				"https://www.etigram.pro",
+				"https://*.etigram.pro",
 				"https://etigram.one",
 				"https://www.etigram.one",
 				"https://*.etigram.one",

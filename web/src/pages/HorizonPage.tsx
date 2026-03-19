@@ -18,6 +18,7 @@ import { useIsAdmin } from '../hooks/useIsAdmin';
 import { HorizonLoading } from '../components/HorizonLoading';
 import { HorizonEmptyState } from '../components/HorizonEmptyState';
 import { HorizonWatchSurface } from '../components/HorizonWatchSurface';
+import { HorizonWatchLensSurface } from '../components/HorizonWatchLensSurface';
 
 type HorizonFatalPipelineError = {
   title: string;
@@ -789,14 +790,25 @@ const HorizonPage: React.FC = () => {
           }}
         >
           {isWatchRoute ? (
-            <HorizonWatchSurface
-              lensId={currentProject ? selectedLensId : null}
-              projectName={currentProject?.displayName || null}
-              onOpenWorldMap={() => {
-                navigate('/horizon');
-                setShowWorldMap(true);
-              }}
-            />
+            currentProject && selectedLensId ? (
+              <HorizonWatchLensSurface
+                lensId={selectedLensId}
+                projectName={currentProject?.displayName || null}
+                onOpenWorldMap={() => {
+                  navigate('/horizon');
+                  setShowWorldMap(true);
+                }}
+              />
+            ) : (
+              <HorizonWatchSurface
+                lensId={currentProject ? selectedLensId : null}
+                projectName={currentProject?.displayName || null}
+                onOpenWorldMap={() => {
+                  navigate('/horizon');
+                  setShowWorldMap(true);
+                }}
+              />
+            )
           ) : showWorldMap ? (
             <WorldMapPanel />
           ) : currentProject ? (
@@ -805,6 +817,7 @@ const HorizonPage: React.FC = () => {
               isOpen={true}
               lensId={selectedLensId}
               projectId={currentProject.id}
+              isAdmin={isAdmin}
               initialViewMode={lensStarted ? 'progress' : (selectedLensId ? 'cockpit' : 'progress')}
               showInputInProgress={true}
               onAssemble={handleAssembleLens}

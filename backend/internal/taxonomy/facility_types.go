@@ -320,32 +320,6 @@ func FacilityKindToVertexEntityPath(k FacilityKind) string {
 	}
 }
 
-// FacilityKindToVertexSectorPath maps FacilityKind to Vertex AI sectorPath.
-func FacilityKindToVertexSectorPath(k FacilityKind) string {
-	switch k {
-	case FacilityKindPipeline, FacilityKindTerminal:
-		return "/Energy/Fossil_Fuels/Oil_Gas_Midstream"
-	case FacilityKindRefinery, FacilityKindPowerPlant:
-		return "/Energy/Fossil_Fuels/Oil_Gas_Downstream"
-	case FacilityKindMine:
-		return "/Materials/Mining/Industrial_Metals"
-	case FacilityKindSeaport:
-		return "/Industrials/Transportation/Marine"
-	case FacilityKindAirport:
-		return "/Industrials/Transportation/Air_Freight"
-	case FacilityKindDatacenter:
-		return "/Technology/Hardware/Consumer_Electronics"
-	case FacilityKindFactory:
-		return "/Technology/Semiconductors/Manufacturing"
-	case FacilityKindSubstation:
-		return "/Energy/Renewable/Wind"
-	case FacilityKindCable:
-		return "/Technology/Telecom/Infrastructure"
-	default:
-		return "/Industrials/Machinery/Industrial_Automation"
-	}
-}
-
 // =============================================================================
 // FacilityRole — supply chain stage (separate from physical FacilityKind)
 // =============================================================================

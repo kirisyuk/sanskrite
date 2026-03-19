@@ -23,6 +23,7 @@ TARGET_ETIGRAM_WATCHDOG_ONLY=0
 TARGET_CLEANUP_REVISIONS=0
 TARGET_EVENT_GATE=0
 TARGET_ENTITY_EXTRACT=0
+TARGET_AGENTMESH=0
 
 REGION=${REGION:-us-central1}
 FIRESTORE_LOCATION=${FIRESTORE_LOCATION:-$REGION}
@@ -34,12 +35,16 @@ fi
 
 # Service account for backend
 SA_BACKEND="backend@${PROJECT_ID}.iam.gserviceaccount.com"
+SA_AGENTMESH="agentmesh@${PROJECT_ID}.iam.gserviceaccount.com"
+AGENTMESH_KMS_LOCATION="${AGENTMESH_KMS_LOCATION:-global}"
+AGENTMESH_KMS_KEYRING="${AGENTMESH_KMS_KEYRING:-agentmesh}"
+AGENTMESH_KMS_KEY="${AGENTMESH_KMS_KEY:-agentmesh-agent-card}"
 
 # Secret for Cloud Scheduler secured endpoints (X-Job-Token header)
 SECRET_ADMIN_JOB_TOKEN="admin_job_token"
 
 usage() {
-  echo "Usage: scripts/deploy [--web] [--api] [--py] [--event-gate] [--entity-extract] [--etigram-ws] [--verified-proxy] [--check-infra] [--etigram-watchdog] [--etigram-watchdog-only] [--cleanup-revisions]"
+  echo "Usage: scripts/deploy [--web] [--api] [--py] [--event-gate] [--entity-extract] [--etigram-ws] [--verified-proxy] [--agentmesh] [--check-infra] [--etigram-watchdog] [--etigram-watchdog-only] [--cleanup-revisions]"
   echo "If none specified, deploy web+api. REGION env var supported (default: us-central1)."
   echo ""
   echo "Flags:"
@@ -50,6 +55,7 @@ usage() {
   echo "  --entity-extract Deploy entity extraction NLP service only (skips infra checks)"
   echo "  --etigram-ws    Deploy WS broker only (skips infra checks)"
   echo "  --verified-proxy Deploy verified-proxy only (skips infra checks)"
+  echo "  --agentmesh     Deploy AgentMesh service and its dedicated infrastructure"
   echo "  --check-infra   Run infrastructure checks only (no deployments)"
   echo "  --etigram-watchdog Ensure Cloud Scheduler job for Etigram Watchdog (calls API cron endpoint)"
   echo "  --etigram-watchdog-only Only ensure Etigram Watchdog infra/job/env (no API build/deploy)"
@@ -66,6 +72,7 @@ while [[ $# -gt 0 ]]; do
     --entity-extract) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ENTITY_EXTRACT=1; TARGET_CHECK_INFRA=0 ;;
     --etigram-ws) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ETIGRAM_WS=1; TARGET_CHECK_INFRA=0; TARGET_SETUP_ETIGRAM_INFRA=1 ;;
     --verified-proxy) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ETIGRAM_WS=0; TARGET_VERIFIED_PROXY=1; TARGET_CHECK_INFRA=0 ;;
+    --agentmesh) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ETIGRAM_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_EVENT_GATE=0; TARGET_ENTITY_EXTRACT=0; TARGET_AGENTMESH=1; TARGET_CHECK_INFRA=0 ;;
     --check-infra) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ETIGRAM_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=1 ;;
     --etigram-watchdog) TARGET_ETIGRAM_WATCHDOG=1 ;;
     --etigram-watchdog-only) TARGET_ETIGRAM_WATCHDOG=1; TARGET_ETIGRAM_WATCHDOG_ONLY=1; TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ETIGRAM_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=0 ;;
@@ -1602,7 +1609,7 @@ deploy_api() {
   if [[ "${TARGET_ETIGRAM_WATCHDOG:-0}" -eq 1 ]]; then
     enable_etigram_watchdog="1"
   fi
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://etigram.one|https://www.etigram.one|https://*.etigram.one|https://etigram.web.app|https://etigram.firebaseapp.com|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,ENABLE_CLOUD_TASKS_RISK=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE=${scout_background_queue},CLOUD_TASKS_SCOUT_BACKGROUND_DELAY=${CLOUD_TASKS_SCOUT_BACKGROUND_DELAY:-15s},CLOUD_TASKS_RISK_QUEUE=${risk_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_ETIGRAM_WATCHDOG=${enable_etigram_watchdog},PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://etigram.one/subscription/success,PAYPAL_CANCEL_URL=https://etigram.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h,GEONAMES_USERNAME=${GEONAMES_USERNAME:-kirisyuk}"
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://etigram.pro|https://www.etigram.pro|https://*.etigram.pro|https://etigram.one|https://www.etigram.one|https://*.etigram.one|https://etigram.web.app|https://etigram.firebaseapp.com|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,ENABLE_CLOUD_TASKS_RISK=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE=${scout_background_queue},CLOUD_TASKS_SCOUT_BACKGROUND_DELAY=${CLOUD_TASKS_SCOUT_BACKGROUND_DELAY:-15s},CLOUD_TASKS_RISK_QUEUE=${risk_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_ETIGRAM_WATCHDOG=${enable_etigram_watchdog},PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://etigram.one/subscription/success,PAYPAL_CANCEL_URL=https://etigram.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h,GEONAMES_USERNAME=${GEONAMES_USERNAME:-kirisyuk}"
   # Etigram Fragments: dedicated bucket + dedicated Vertex AI Search Data Store
   # Store isolation is used instead of filters (filters on structData.* are not supported in our current schema).
   local etigram_fragments_bucket="${ETIGRAM_FRAGMENTS_BUCKET:-${PROJECT_ID}-etigram-fragments}"
@@ -1735,7 +1742,7 @@ deploy_verified_proxy() {
   # Support FRONTEND_ORIGINS (comma-separated) or FRONTEND_ORIGIN (single)
   local allowed_origins="${FRONTEND_ORIGINS:-}"
   if [[ -z "$allowed_origins" ]]; then
-    local single_origin="${FRONTEND_ORIGIN:-https://etigram.one}"
+    local single_origin="${FRONTEND_ORIGIN:-https://etigram.pro}"
     # Add localhost if not already in the list
     if [[ "$single_origin" != *"localhost"* ]]; then
       allowed_origins="${single_origin},http://localhost:5173"
@@ -2199,6 +2206,297 @@ create_indexes() {
   fi
 }
 
+create_agentmesh_indexes() {
+  echo -e "${BLUE}[agentmesh] Ensuring Firestore composite indexes...${NC}"
+  gcloud firestore indexes composite create --async \
+    --collection-group=agentmesh_tasks \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=status,order=ASCENDING \
+    --field-config field-path=createdAt,order=DESCENDING \
+    --quiet >/dev/null 2>&1 || true
+  gcloud firestore indexes composite create --async \
+    --collection-group=agentmesh_tasks \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=routedAgentId,order=ASCENDING \
+    --field-config field-path=status,order=ASCENDING \
+    --field-config field-path=updatedAt,order=DESCENDING \
+    --quiet >/dev/null 2>&1 || true
+  gcloud firestore indexes composite create --async \
+    --collection-group=agentmesh_tasks \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=lease.dedupKey,order=ASCENDING \
+    --quiet >/dev/null 2>&1 || true
+  gcloud firestore indexes composite create --async \
+    --collection-group=agentmesh_traces \
+    --field-config field-path=taskId,order=ASCENDING \
+    --field-config field-path=startedAt,order=ASCENDING \
+    --quiet >/dev/null 2>&1 || true
+  gcloud firestore indexes composite create --async \
+    --collection-group=agentmesh_artifacts \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=taskId,order=ASCENDING \
+    --field-config field-path=createdAt,order=DESCENDING \
+    --quiet >/dev/null 2>&1 || true
+  echo -e "${GREEN}[agentmesh] ✓${NC} Firestore composite indexes submitted"
+}
+
+agentmesh_access_token() {
+  gcloud auth print-access-token --project "$PROJECT_ID"
+}
+
+wait_agentmesh_vertex_operation() {
+  local operation_name="$1"
+  local deadline=$((SECONDS + 300))
+  while (( SECONDS < deadline )); do
+    local response
+    response=$(curl -fsS -H "Authorization: Bearer $(agentmesh_access_token)" "https://aiplatform.googleapis.com/v1beta1/${operation_name}")
+    if python3 - <<'PY' "$response"
+import json, sys
+body=json.loads(sys.argv[1])
+sys.exit(0 if body.get("done") else 1)
+PY
+    then
+      echo "$response"
+      return 0
+    fi
+    sleep 3
+  done
+  echo -e "${RED}[agentmesh] Vertex operation timed out:${NC} $operation_name" >&2
+  return 1
+}
+
+ensure_agentmesh_reasoning_engine() {
+  local secret_name="agentmesh_reasoning_engine_name"
+  local engine_name=""
+
+  if gcloud secrets describe "$secret_name" --project "$PROJECT_ID" >/dev/null 2>&1; then
+    engine_name=$(gcloud secrets versions access latest --secret="$secret_name" --project "$PROJECT_ID" 2>/dev/null || true)
+    if [[ -n "$engine_name" ]]; then
+      if curl -fsS -H "Authorization: Bearer $(agentmesh_access_token)" "https://aiplatform.googleapis.com/v1beta1/${engine_name}" >/dev/null 2>&1; then
+        AGENTMESH_REASONING_ENGINE="$engine_name"
+        echo -e "${GREEN}[agentmesh] Using existing Reasoning Engine:${NC} $AGENTMESH_REASONING_ENGINE"
+        return 0
+      fi
+    fi
+  fi
+
+  local location="${AGENTMESH_VERTEX_LOCATION:-$REGION}"
+  local payload
+  payload=$(python3 - <<'PY' "$SA_AGENTMESH"
+import json, sys
+sa=sys.argv[1]
+body={
+  "displayName":"AgentMesh Runtime",
+  "description":"Managed Vertex substrate for AgentMesh sessions, memories, and A2A interoperability",
+  "labels":{"managed_by":"agentmesh","subsystem":"agentmesh"},
+  "contextSpec":{"memoryBankConfig":{"ttlConfig":{"defaultTtl":"2592000s","memoryRevisionDefaultTtl":"2592000s"}}},
+  "spec":{"serviceAccount":sa,"agentFramework":"custom"}
+}
+print(json.dumps(body))
+PY
+)
+
+  echo -e "${BLUE}[agentmesh] Creating Vertex Reasoning Engine...${NC}"
+  local op_response
+  op_response=$(curl -fsS -X POST \
+    -H "Authorization: Bearer $(agentmesh_access_token)" \
+    -H "Content-Type: application/json" \
+    -d "$payload" \
+    "https://aiplatform.googleapis.com/v1beta1/projects/${PROJECT_ID}/locations/${location}/reasoningEngines")
+  local op_name
+  op_name=$(python3 - <<'PY' "$op_response"
+import json, sys
+print(json.loads(sys.argv[1])["name"])
+PY
+)
+  local final_response
+  final_response=$(wait_agentmesh_vertex_operation "$op_name")
+  engine_name=$(python3 - <<'PY' "$final_response"
+import json, sys
+body=json.loads(sys.argv[1])
+print(((body.get("response") or {}).get("name")) or "")
+PY
+)
+  if [[ -z "$engine_name" ]]; then
+    echo -e "${RED}[agentmesh] Failed to obtain Reasoning Engine name from Vertex operation${NC}" >&2
+    exit 1
+  fi
+  if ! gcloud secrets describe "$secret_name" --project "$PROJECT_ID" >/dev/null 2>&1; then
+    echo -n "$engine_name" | gcloud secrets create "$secret_name" --project "$PROJECT_ID" --data-file=-
+  else
+    echo -n "$engine_name" | gcloud secrets versions add "$secret_name" --project "$PROJECT_ID" --data-file=- >/dev/null
+  fi
+  AGENTMESH_REASONING_ENGINE="$engine_name"
+  echo -e "${GREEN}[agentmesh] Created Reasoning Engine:${NC} $AGENTMESH_REASONING_ENGINE"
+}
+
+smoke_agentmesh_deploy() {
+  if [[ -z "${AGENTMESH_URL:-}" ]]; then
+    return 0
+  fi
+  echo -e "${BLUE}[agentmesh] Running post-deploy smoke check...${NC}"
+  local token=""
+  token=$(gcloud auth print-identity-token --audiences="$AGENTMESH_URL" --project "$PROJECT_ID" 2>/dev/null || true)
+  if [[ -z "$token" ]]; then
+    echo -e "${YELLOW}[agentmesh] Skipping authenticated readiness probe: unable to mint identity token${NC}"
+    return 0
+  fi
+  local response
+  response=$(curl -fsS -H "Authorization: Bearer ${token}" "${AGENTMESH_URL}/readyz")
+  if ! python3 - <<'PY' "$response"
+import json, sys
+body=json.loads(sys.argv[1])
+sys.exit(0 if body.get("ok") else 1)
+PY
+  then
+    echo -e "${RED}[agentmesh] Readiness probe failed:${NC} $response" >&2
+    exit 1
+  fi
+  echo -e "${GREEN}[agentmesh] Smoke check passed${NC}"
+}
+
+setup_agentmesh_infrastructure() {
+  echo -e "${BLUE}[agentmesh] Ensuring infrastructure...${NC}"
+  for api in \
+    firestore.googleapis.com \
+    run.googleapis.com \
+    cloudbuild.googleapis.com \
+    iam.googleapis.com \
+    secretmanager.googleapis.com \
+    cloudkms.googleapis.com \
+    cloudtasks.googleapis.com \
+    aiplatform.googleapis.com \
+    discoveryengine.googleapis.com; do
+    gcloud services enable "$api" --project "$PROJECT_ID" >/dev/null 2>&1 || true
+  done
+
+  if ! gcloud firestore databases describe --project="$PROJECT_ID" --database="(default)" >/dev/null 2>&1; then
+    gcloud firestore databases create \
+      --project="$PROJECT_ID" \
+      --database="(default)" \
+      --location="${FIRESTORE_LOCATION}" \
+      --type=firestore-native \
+      --quiet
+  fi
+
+  if ! gcloud iam service-accounts describe "$SA_AGENTMESH" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    gcloud iam service-accounts create agentmesh --display-name "AgentMesh Runtime" --project "$PROJECT_ID"
+    echo -e "${GREEN}[agentmesh] Created service account:${NC} $SA_AGENTMESH"
+  fi
+
+  for role in \
+    roles/datastore.user \
+    roles/aiplatform.user \
+    roles/secretmanager.secretAccessor \
+    roles/storage.objectAdmin \
+    roles/logging.logWriter \
+    roles/cloudtasks.enqueuer \
+    roles/cloudkms.signerVerifier; do
+    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+      --member="serviceAccount:$SA_AGENTMESH" \
+      --role="$role" \
+      --condition=None \
+      --quiet >/dev/null 2>&1 || true
+  done
+
+  if ! gcloud kms keyrings describe "$AGENTMESH_KMS_KEYRING" --location "$AGENTMESH_KMS_LOCATION" --project "$PROJECT_ID" >/dev/null 2>&1; then
+    gcloud kms keyrings create "$AGENTMESH_KMS_KEYRING" --location "$AGENTMESH_KMS_LOCATION" --project "$PROJECT_ID" >/dev/null
+    echo -e "${GREEN}[agentmesh] Created KMS keyring:${NC} $AGENTMESH_KMS_KEYRING"
+  fi
+  if ! gcloud kms keys describe "$AGENTMESH_KMS_KEY" --keyring "$AGENTMESH_KMS_KEYRING" --location "$AGENTMESH_KMS_LOCATION" --project "$PROJECT_ID" >/dev/null 2>&1; then
+    gcloud kms keys create "$AGENTMESH_KMS_KEY" \
+      --keyring "$AGENTMESH_KMS_KEYRING" \
+      --location "$AGENTMESH_KMS_LOCATION" \
+      --purpose asymmetric-signing \
+      --default-algorithm ec-sign-p256-sha256 \
+      --project "$PROJECT_ID" >/dev/null
+    echo -e "${GREEN}[agentmesh] Created KMS key:${NC} $AGENTMESH_KMS_KEY"
+  fi
+  AGENTMESH_AGENT_CARD_KMS_KEY_VERSION=$(gcloud kms keys describe "$AGENTMESH_KMS_KEY" --keyring "$AGENTMESH_KMS_KEYRING" --location "$AGENTMESH_KMS_LOCATION" --project "$PROJECT_ID" --format='value(primary.name)')
+
+  local bucket="gs://${PROJECT_ID}-agentmesh-artifacts"
+  if ! gcloud storage buckets describe "$bucket" --project "$PROJECT_ID" >/dev/null 2>&1; then
+    gcloud storage buckets create "$bucket" --location=US --uniform-bucket-level-access --project "$PROJECT_ID"
+    echo -e "${GREEN}[agentmesh] Created bucket:${NC} $bucket"
+  fi
+
+  local queue="${AGENTMESH_TASKS_QUEUE:-etigram-agentmesh}"
+  if ! gcloud tasks queues describe "$queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    gcloud tasks queues create "$queue" --location="$REGION" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
+    echo -e "${GREEN}[agentmesh] Created Cloud Tasks queue:${NC} $queue"
+  fi
+  gcloud tasks queues update "$queue" \
+    --location="$REGION" \
+    --project="$PROJECT_ID" \
+    --max-attempts=5 \
+    --min-backoff=10s \
+    --max-backoff=600s \
+    --max-retry-duration=3600s \
+    --max-dispatches-per-second="${AGENTMESH_MAX_DISPATCHES_PER_SECOND:-8}" \
+    --max-concurrent-dispatches="${AGENTMESH_MAX_CONCURRENT_DISPATCHES:-16}" \
+    --quiet >/dev/null 2>&1 || true
+
+  ensure_agentmesh_reasoning_engine
+  create_agentmesh_indexes
+}
+
+deploy_agentmesh() {
+  echo -e "${BLUE}[agentmesh] Building container image...${NC}"
+  local service="etigram-agentmesh"
+  local image_tag
+  image_tag=$(date +%s)
+  local image="us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/${service}:${image_tag}"
+  local latest_image="us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/${service}:latest"
+  gcloud builds submit "$API_DIR" \
+    --project "$PROJECT_ID" \
+    --config="$API_DIR/cmd/agentmesh/cloudbuild.yaml" \
+    --substitutions=_IMAGE_TAG="$image_tag" \
+    --quiet
+
+  local existing_url=""
+  existing_url=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
+  local public_base_url="${AGENTMESH_PUBLIC_BASE_URL:-$existing_url}"
+  local oidc_audience="${AGENTMESH_TASKS_OIDC_AUDIENCE:-$public_base_url}"
+  local target_url=""
+  if [[ -n "$public_base_url" ]]; then
+    target_url="${public_base_url}/api/v1/internal/tasks/agentmesh/run"
+  fi
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,AGENTMESH_VERTEX_LOCATION=${AGENTMESH_VERTEX_LOCATION:-global},AGENTMESH_VERTEX_REASONING_ENGINE=${AGENTMESH_REASONING_ENGINE},AGENTMESH_PUBLIC_BASE_URL=${public_base_url},AGENTMESH_TASK_TARGET_URL=${target_url},AGENTMESH_TASKS_LOCATION=${AGENTMESH_TASKS_LOCATION:-$REGION},AGENTMESH_TASKS_QUEUE=${AGENTMESH_TASKS_QUEUE:-etigram-agentmesh},AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT=$SA_AGENTMESH,AGENTMESH_TASKS_OIDC_AUDIENCE=${oidc_audience},AGENTMESH_RUNTIME_LEASE_OWNER=${AGENTMESH_RUNTIME_LEASE_OWNER:-${service}},AGENTMESH_ARTIFACT_BUCKET=${PROJECT_ID}-agentmesh-artifacts,AGENTMESH_AGENT_CARD_KMS_KEY_VERSION=${AGENTMESH_AGENT_CARD_KMS_KEY_VERSION},AGENTMESH_AGENT_CARD_KEY_ID=${AGENTMESH_AGENT_CARD_KMS_KEY_VERSION},AGENTMESH_MODEL_FLASH=${AGENTMESH_MODEL_FLASH:-gemini-3-flash-preview},AGENTMESH_MODEL_PRO=${AGENTMESH_MODEL_PRO:-gemini-3-pro-preview},VERTEX_SEARCH_DATA_STORE_ID=${VERTEX_SEARCH_DATA_STORE_ID:-rag-documents-store},AGENTMESH_VERTEX_SESSION_TTL=${AGENTMESH_VERTEX_SESSION_TTL:-86400s}"
+
+  echo -e "${BLUE}[agentmesh] Deploying to Cloud Run...${NC}"
+  gcloud run deploy "$service" \
+    --image "$image" \
+    --region "$REGION" \
+    --service-account "$SA_AGENTMESH" \
+    --min-instances="${AGENTMESH_CLOUD_RUN_MIN_INSTANCES:-0}" \
+    --max-instances="${AGENTMESH_CLOUD_RUN_MAX_INSTANCES:-4}" \
+    --concurrency="${AGENTMESH_CLOUD_RUN_CONCURRENCY:-8}" \
+    --cpu="${AGENTMESH_CLOUD_RUN_CPU:-1}" \
+    --memory="${AGENTMESH_CLOUD_RUN_MEMORY:-1Gi}" \
+    --timeout=3600 \
+    --set-env-vars "$env_vars" \
+    --project "$PROJECT_ID" \
+    --quiet
+  gcloud run services update-traffic "$service" --region "$REGION" --to-latest --quiet >/dev/null 2>&1 || true
+  AGENTMESH_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
+  echo -e "${GREEN}[agentmesh] Deployed successfully${NC}"
+  echo -e "${BLUE}[agentmesh] URL:${NC} $AGENTMESH_URL"
+
+  gcloud run services add-iam-policy-binding "$service" \
+    --region "$REGION" \
+    --member="serviceAccount:$SA_AGENTMESH" \
+    --role="roles/run.invoker" \
+    --project "$PROJECT_ID" \
+    --quiet >/dev/null 2>&1 || true
+
+  gcloud run services update "$service" \
+    --region "$REGION" \
+    --update-env-vars "AGENTMESH_PUBLIC_BASE_URL=$AGENTMESH_URL,AGENTMESH_TASK_TARGET_URL=${AGENTMESH_URL}/api/v1/internal/tasks/agentmesh/run,AGENTMESH_TASKS_OIDC_AUDIENCE=$AGENTMESH_URL" \
+    --project "$PROJECT_ID" \
+    --quiet >/dev/null 2>&1 || true
+  smoke_agentmesh_deploy
+}
+
 # Setup infrastructure only on full deploy or explicit check.
 # Individual service deploys (--api, --ws, --verified-proxy, --py) usually skip infra checks for speed,
 # BUT some flags (e.g. --etigram-watchdog) require infra steps (Cloud Scheduler jobs, env vars).
@@ -2207,6 +2505,8 @@ if [[ "$TARGET_CHECK_INFRA" -eq 1 ]]; then
   create_indexes
   echo -e "${GREEN}[infra] Infrastructure checks completed${NC}"
   exit 0
+elif [[ "$TARGET_AGENTMESH" -eq 1 ]]; then
+  setup_agentmesh_infrastructure
 elif [[ "$TARGET_ETIGRAM_WATCHDOG" -eq 1 ]]; then
   # Minimal infra needed for watchdog Cloud Scheduler job creation/update.
   setup_infrastructure
@@ -2294,6 +2594,10 @@ if [[ "$TARGET_ENTITY_EXTRACT" -eq 1 ]]; then
   deploy_entity_extract
 fi
 
+if [[ "$TARGET_AGENTMESH" -eq 1 ]]; then
+  deploy_agentmesh
+fi
+
 # Firestore indexes are only relevant for backend; skip for web-only
 # Create indexes only on full deploy (already handled in --check-infra path above)
 if [[ "$TARGET_WEB" -eq 1 && "$TARGET_API" -eq 1 && "$TARGET_PY" -eq 0 && "$TARGET_VERIFIED_PROXY" -eq 0 ]]; then
@@ -2311,6 +2615,9 @@ if [[ "$TARGET_CLEANUP_REVISIONS" -eq 1 ]]; then
   
   # Clean up revisions for all services (keep last 10 per service)
   services=("etigram-api" "etigram-telegram" "etigram-event-gate" "etigram-entity-extract" "etigram-ws" "verified-proxy")
+  if [[ "$TARGET_AGENTMESH" -eq 1 ]]; then
+    services+=("etigram-agentmesh")
+  fi
   for service in "${services[@]}"; do
     if gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
       cleanup_old_revisions "$service" "$REGION" 10
@@ -2346,6 +2653,9 @@ if [[ "$TARGET_EVENT_GATE" -eq 1 ]] && [[ -n "${EVENT_GATE_URL:-}" ]]; then
 fi
 if [[ "$TARGET_ENTITY_EXTRACT" -eq 1 ]] && [[ -n "${ENTITY_EXTRACT_URL:-}" ]]; then
   echo -e "${BLUE}Entity Extract Service:${NC} $ENTITY_EXTRACT_URL"
+fi
+if [[ "$TARGET_AGENTMESH" -eq 1 ]] && [[ -n "${AGENTMESH_URL:-}" ]]; then
+  echo -e "${BLUE}AgentMesh:${NC} $AGENTMESH_URL"
 fi
 if [[ "$TARGET_WEB" -eq 1 ]]; then
   echo -e "${BLUE}Web Static:${NC} gs://${PROJECT_ID}-web-static"

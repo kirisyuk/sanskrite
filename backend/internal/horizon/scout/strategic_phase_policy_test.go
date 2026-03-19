@@ -122,18 +122,18 @@ func TestSanitizeDomainResearchRelations_RewritesIncomingToDomain(t *testing.T) 
 	in := []agents.DiscoveredRelation{
 		{
 			SourceCanonicalPath: "/market/kz/logistics/cold-chain",
-			TargetCanonicalPath: "/domain/v1/market-opportunity/geo/kz/sector/agro-food",
+			TargetCanonicalPath: "/domain/v1/market-opportunity/geo/kz/industry/agro-food",
 			RelationType:        "PARTICIPATES_IN",
 		},
 	}
 
-	out := sanitizeDomainResearchRelations("/domain/v1/market-opportunity/geo/kz/sector/agro-food", "market-opportunity", in)
+	out := sanitizeDomainResearchRelations("/domain/v1/market-opportunity/geo/kz/industry/agro-food", "market-opportunity", in)
 	if len(out) != 1 {
 		t.Fatalf("expected 1 sanitized relation, got %d", len(out))
 	}
 
 	got := out[0]
-	if got.SourceCanonicalPath != "/domain/v1/market-opportunity/geo/kz/sector/agro-food" {
+	if got.SourceCanonicalPath != "/domain/v1/market-opportunity/geo/kz/industry/agro-food" {
 		t.Fatalf("expected sourceCanonicalPath to be rewritten to domain, got %q", got.SourceCanonicalPath)
 	}
 	if got.TargetCanonicalPath != "/market/kz/logistics/cold-chain" {

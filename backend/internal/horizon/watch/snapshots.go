@@ -245,8 +245,6 @@ func (s *Service) buildDashboardSnapshot(ctx context.Context, req DashboardReque
 		effectiveHorizon = "7d"
 	}
 
-	feed := s.buildDashboardFeed(ctx, effectiveMode, globalBriefs, myBriefs)
-
 	scope := "tenant"
 	if req.LensID != "" {
 		scope = "lens"
@@ -266,10 +264,15 @@ func (s *Service) buildDashboardSnapshot(ctx context.Context, req DashboardReque
 
 	effectiveGlobalBriefs := globalBriefs
 	effectiveMyBriefs := myBriefs
-	if req.LensID != "" && len(substrateBriefs) > 0 {
+	if req.LensID != "" {
+		lensBriefs := buildLensNarrativeBriefs(lens, lensAttention, supplyChainSubstrate, nil, nil)
+		effectiveGlobalBriefs = nil
+		effectiveMyBriefs = prependSyntheticBriefs(substrateBriefs, lensBriefs, 24)
+	} else if len(substrateBriefs) > 0 {
 		effectiveGlobalBriefs = prependSyntheticBriefs(substrateBriefs, globalBriefs, 12)
 		effectiveMyBriefs = prependSyntheticBriefs(substrateBriefs, myBriefs, 24)
 	}
+	feed := s.buildDashboardFeed(ctx, effectiveMode, effectiveGlobalBriefs, effectiveMyBriefs)
 
 	combinedBriefs := make([]*horizonmodels.WatchBrief, 0, len(effectiveGlobalBriefs)+len(effectiveMyBriefs))
 	combinedBriefs = append(combinedBriefs, effectiveGlobalBriefs...)
@@ -1052,8 +1055,8 @@ func scopeArtifactRefFromMaterializedArtifact(artifact *horizonmodels.Materializ
 }
 
 func buildSubstrateMonitoringSnapshots(lens *horizonmodels.Lens, substrate []supplyChainSubstrate) []*MonitoringDeltaSnapshot {
-	out := make([]*MonitoringDeltaSnapshot, 0, minInt(len(substrate)+1, 4))
-	if lens != nil {
+	out := make([]*MonitoringDeltaSnapshot, 0, minInt(maxInt(len(substrate), 1), 4))
+	if lens != nil && len(substrate) == 0 {
 		out = append(out, buildLensBootstrapMonitoringSnapshot(lens))
 	}
 	for _, item := range substrate {
@@ -1325,11 +1328,167 @@ func briefTouchesLensScope(brief *horizonmodels.WatchBrief, lens *horizonmodels.
 		}
 		scopeSet[path] = struct{}{}
 	}
-	if _, ok := scopeSet[strings.TrimSpace(brief.CanonicalPath)]; ok {
+	return briefTouchesPathSet(brief, scopeSet)
+}
+
+func buildLensNarrativeBriefs(
+	lens *horizonmodels.Lens,
+	lensAttention *horizonwatchruntime.LensAttentionView,
+	substrate []supplyChainSubstrate,
+	globalBriefs []*horizonmodels.WatchBrief,
+	myBriefs []*horizonmodels.WatchBrief,
+) []*horizonmodels.WatchBrief {
+	if len(globalBriefs) == 0 && len(myBriefs) == 0 {
+		return buildLensSyntheticBriefs(lens, lensAttention, substrate)
+	}
+	pathSet := buildLensNarrativePathSet(lens, lensAttention, substrate)
+	if len(pathSet) == 0 {
+		return nil
+	}
+	merged := append(append([]*horizonmodels.WatchBrief{}, myBriefs...), globalBriefs...)
+	out := make([]*horizonmodels.WatchBrief, 0, len(merged))
+	seen := make(map[string]struct{}, len(merged))
+	for _, brief := range merged {
+		if !briefTouchesPathSet(brief, pathSet) {
+			continue
+		}
+		key := strings.TrimSpace(firstNonEmpty(brief.ID, brief.TargetID, brief.CanonicalPath))
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, brief)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Hotness == out[j].Hotness {
+			return out[i].Confidence > out[j].Confidence
+		}
+		return out[i].Hotness > out[j].Hotness
+	})
+	return out
+}
+
+func buildLensSyntheticBriefs(
+	lens *horizonmodels.Lens,
+	lensAttention *horizonwatchruntime.LensAttentionView,
+	substrate []supplyChainSubstrate,
+) []*horizonmodels.WatchBrief {
+	tenantID := strings.TrimSpace(firstNonEmpty(lensTenantIDFromLens(lens), "global"))
+	now := time.Now().UTC()
+	out := make([]*horizonmodels.WatchBrief, 0, minInt(len(substrate)+4, 8))
+	if lensAttention == nil {
+		return out
+	}
+	for _, subject := range lensAttention.Subjects {
+		if subject == nil || strings.TrimSpace(subject.SubjectID) == "" {
+			continue
+		}
+		hotness := 0.35
+		if subject.LastRun != nil && len(subject.PromotedProposalIDs) > 0 {
+			hotness = 0.55
+		} else if len(subject.UniversePaths) > 0 {
+			hotness = 0.42
+		}
+		updatedAt := now
+		if subject.LastRun != nil && !subject.LastRun.UpdatedAt.IsZero() {
+			updatedAt = subject.LastRun.UpdatedAt
+		}
+		out = append(out, &horizonmodels.WatchBrief{
+			ID:            "lens-subject:" + strings.TrimSpace(subject.SubjectID),
+			TenantID:      tenantID,
+			TargetID:      "lens-subject:" + strings.TrimSpace(subject.SubjectID),
+			SubjectID:     strings.TrimSpace(subject.SubjectID),
+			CanonicalPath: strings.TrimSpace(subject.AnchorCanonicalPath),
+			Label:         firstNonEmpty(strings.TrimSpace(subject.DisplayLabel), labelFromCanonicalPath(subject.AnchorCanonicalPath)),
+			ScopeType:     "lens_subject",
+			Headline:      firstNonEmpty(strings.TrimSpace(subject.DisplayLabel), labelFromCanonicalPath(subject.AnchorCanonicalPath)),
+			Summary:       firstNonEmpty(strings.Join(subject.CoverageGaps, " • "), "Lens runtime subject assembled from current scope and propagated reach."),
+			Explanation:   "This narrative is assembled from watchruntime subjects attached to the current lens.",
+			Hotness:       hotness,
+			Confidence:    0.72,
+			RiskPosture:   firstNonEmpty(strings.ToLower(strings.TrimSpace(subject.Status)), "tracked"),
+			DominantThemes: compactUnique(append([]string{
+				"lens_subject",
+			}, subject.DomainModes...)),
+			TopAffectedTargets: compactUnique(append([]string{}, subject.UniversePaths...)),
+			Metadata: map[string]any{
+				"syntheticLensNarrative": true,
+				"subjectKind":            subject.SubjectKind,
+				"lastTriggerReason":      subjectLastTriggerReason(subject),
+			},
+			CreatedAt: updatedAt,
+			UpdatedAt: updatedAt,
+		})
+		if len(out) >= 8 {
+			break
+		}
+	}
+	return out
+}
+
+func lensTenantIDFromLens(lens *horizonmodels.Lens) string {
+	if lens == nil {
+		return ""
+	}
+	return strings.TrimSpace(firstNonEmpty(lens.TenantID, "global"))
+}
+
+func subjectLastTriggerReason(subject *horizonwatchruntime.LensAttentionSubject) string {
+	if subject == nil || subject.LastTrigger == nil {
+		return ""
+	}
+	return strings.TrimSpace(subject.LastTrigger.TriggerReason)
+}
+
+func buildLensNarrativePathSet(
+	lens *horizonmodels.Lens,
+	lensAttention *horizonwatchruntime.LensAttentionView,
+	substrate []supplyChainSubstrate,
+) map[string]struct{} {
+	pathSet := map[string]struct{}{}
+	add := func(path string) {
+		path = strings.TrimSpace(path)
+		if !isWatchScopeTargetPath(path) {
+			return
+		}
+		pathSet[path] = struct{}{}
+	}
+	if lens != nil {
+		for _, path := range lens.Scope {
+			add(path)
+		}
+	}
+	if lensAttention != nil {
+		for _, subject := range lensAttention.Subjects {
+			if subject == nil {
+				continue
+			}
+			add(subject.AnchorCanonicalPath)
+			for _, path := range subject.UniversePaths {
+				add(path)
+			}
+		}
+	}
+	for _, item := range substrate {
+		for _, path := range substrateCanonicalPaths(item) {
+			add(path)
+		}
+	}
+	return pathSet
+}
+
+func briefTouchesPathSet(brief *horizonmodels.WatchBrief, pathSet map[string]struct{}) bool {
+	if brief == nil || len(pathSet) == 0 {
+		return false
+	}
+	if _, ok := pathSet[strings.TrimSpace(brief.CanonicalPath)]; ok {
 		return true
 	}
 	for _, target := range brief.TopAffectedTargets {
-		if _, ok := scopeSet[strings.TrimSpace(target)]; ok {
+		if _, ok := pathSet[strings.TrimSpace(target)]; ok {
 			return true
 		}
 	}

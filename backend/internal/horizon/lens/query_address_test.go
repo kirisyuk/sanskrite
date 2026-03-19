@@ -12,7 +12,7 @@ func TestIsQueryAddress(t *testing.T) {
 	}{
 		{
 			name:    "valid query address",
-			address: "/query/sector:/Technology/Semiconductors/**",
+			address: "/query/industry:/industry/technology/electronics/semiconductors/**",
 			want:    true,
 		},
 		{
@@ -27,7 +27,7 @@ func TestIsQueryAddress(t *testing.T) {
 		},
 		{
 			name:    "query without prefix",
-			address: "sector:/Technology/**",
+			address: "industry:/industry/technology/**",
 			want:    false,
 		},
 	}
@@ -50,12 +50,12 @@ func TestParseQueryAddress(t *testing.T) {
 		checkEval   func(*testing.T, *QueryAddress)
 	}{
 		{
-			name:    "simple sector query",
-			address: "/query/sector:/Technology/Semiconductors/**",
+			name:    "simple industry query",
+			address: "/query/industry:/industry/technology/electronics/semiconductors/**",
 			wantErr: false,
 			checkEval: func(t *testing.T, qa *QueryAddress) {
-				f1 := &HorizonFragmentView{CanonicalPath: "/org/a", SectorPath: "/Technology/Semiconductors/Design"}
-				f2 := &HorizonFragmentView{CanonicalPath: "/org/b", SectorPath: "/Energy/Fossil_Fuels"}
+				f1 := &HorizonFragmentView{CanonicalPath: "/org/a", IndustryPaths: []string{"/industry/technology/electronics/semiconductors/design"}}
+				f2 := &HorizonFragmentView{CanonicalPath: "/org/b", IndustryPaths: []string{"/industry/energy/hydrocarbons/upstream"}}
 				if !qa.Expr.Eval(f1, &EvalContext{}) {
 					t.Errorf("expected f1 to match")
 				}
@@ -66,19 +66,19 @@ func TestParseQueryAddress(t *testing.T) {
 		},
 		{
 			name:    "OR with parentheses + AND",
-			address: `/query/(canonicalPath:"/org/tsmc" OR canonicalPath:"/org/samsung") AND sector:/Technology/**`,
+			address: `/query/(canonicalPath:"/org/tsmc" OR canonicalPath:"/org/samsung") AND industry:/industry/technology/**`,
 			wantErr: false,
 			checkEval: func(t *testing.T, qa *QueryAddress) {
 				ctx := &EvalContext{}
-				ok1 := qa.Expr.Eval(&HorizonFragmentView{CanonicalPath: "/org/tsmc", SectorPath: "/Technology/Semiconductors"}, ctx)
-				ok2 := qa.Expr.Eval(&HorizonFragmentView{CanonicalPath: "/org/samsung", SectorPath: "/Technology/Hardware"}, ctx)
-				ok3 := qa.Expr.Eval(&HorizonFragmentView{CanonicalPath: "/org/tsmc", SectorPath: "/Energy/Fossil_Fuels"}, ctx)
-				ok4 := qa.Expr.Eval(&HorizonFragmentView{CanonicalPath: "/org/other", SectorPath: "/Technology/Semiconductors"}, ctx)
+				ok1 := qa.Expr.Eval(&HorizonFragmentView{CanonicalPath: "/org/tsmc", IndustryPaths: []string{"/industry/technology/electronics/semiconductors"}}, ctx)
+				ok2 := qa.Expr.Eval(&HorizonFragmentView{CanonicalPath: "/org/samsung", IndustryPaths: []string{"/industry/technology/electronics/hardware"}}, ctx)
+				ok3 := qa.Expr.Eval(&HorizonFragmentView{CanonicalPath: "/org/tsmc", IndustryPaths: []string{"/industry/energy/hydrocarbons/upstream"}}, ctx)
+				ok4 := qa.Expr.Eval(&HorizonFragmentView{CanonicalPath: "/org/other", IndustryPaths: []string{"/industry/technology/electronics/semiconductors"}}, ctx)
 				if !ok1 || !ok2 {
 					t.Errorf("expected tsmc/samsung + technology to match")
 				}
 				if ok3 {
-					t.Errorf("expected tsmc + energy NOT to match due to sector constraint")
+					t.Errorf("expected tsmc + energy NOT to match due to industry constraint")
 				}
 				if ok4 {
 					t.Errorf("expected other org NOT to match due to canonicalPath disjunction")
@@ -87,32 +87,32 @@ func TestParseQueryAddress(t *testing.T) {
 		},
 		{
 			name:    "NOT precedence",
-			address: "/query/NOT sector:/Energy/** AND sector:/Technology/**",
+			address: "/query/NOT industry:/industry/energy/** AND industry:/industry/technology/**",
 			wantErr: false,
 			checkEval: func(t *testing.T, qa *QueryAddress) {
 				ctx := &EvalContext{}
-				if !qa.Expr.Eval(&HorizonFragmentView{SectorPath: "/Technology/Semiconductors"}, ctx) {
+				if !qa.Expr.Eval(&HorizonFragmentView{IndustryPaths: []string{"/industry/technology/electronics/semiconductors"}}, ctx) {
 					t.Errorf("expected technology to match")
 				}
-				if qa.Expr.Eval(&HorizonFragmentView{SectorPath: "/Energy/Fossil_Fuels"}, ctx) {
+				if qa.Expr.Eval(&HorizonFragmentView{IndustryPaths: []string{"/industry/energy/hydrocarbons/upstream"}}, ctx) {
 					t.Errorf("expected energy to NOT match")
 				}
 			},
 		},
 		{
 			name:    "mixed OR/AND precedence (AND binds tighter than OR)",
-			address: "/query/canonicalPath:/org/a OR canonicalPath:/org/b AND sector:/Technology/**",
+			address: "/query/canonicalPath:/org/a OR canonicalPath:/org/b AND industry:/industry/technology/**",
 			wantErr: false,
 			checkEval: func(t *testing.T, qa *QueryAddress) {
-				// Expected: (a) OR (b AND sector=Technology)
+				// Expected: (a) OR (b AND industry=technology)
 				ctx := &EvalContext{}
-				if !qa.Expr.Eval(&HorizonFragmentView{CanonicalPath: "/org/a", SectorPath: "/Energy/Fossil_Fuels"}, ctx) {
-					t.Errorf("expected /org/a to match regardless of sector")
+				if !qa.Expr.Eval(&HorizonFragmentView{CanonicalPath: "/org/a", IndustryPaths: []string{"/industry/energy/hydrocarbons/upstream"}}, ctx) {
+					t.Errorf("expected /org/a to match regardless of industry")
 				}
-				if !qa.Expr.Eval(&HorizonFragmentView{CanonicalPath: "/org/b", SectorPath: "/Technology/Software"}, ctx) {
+				if !qa.Expr.Eval(&HorizonFragmentView{CanonicalPath: "/org/b", IndustryPaths: []string{"/industry/technology/software/enterprise"}}, ctx) {
 					t.Errorf("expected /org/b + tech to match")
 				}
-				if qa.Expr.Eval(&HorizonFragmentView{CanonicalPath: "/org/b", SectorPath: "/Energy/Fossil_Fuels"}, ctx) {
+				if qa.Expr.Eval(&HorizonFragmentView{CanonicalPath: "/org/b", IndustryPaths: []string{"/industry/energy/hydrocarbons/upstream"}}, ctx) {
 					t.Errorf("expected /org/b + energy NOT to match")
 				}
 			},
@@ -134,7 +134,7 @@ func TestParseQueryAddress(t *testing.T) {
 		},
 		{
 			name:    "unbalanced parentheses",
-			address: "/query/(sector:/Technology/**",
+			address: "/query/(industry:/industry/technology/**",
 			wantErr: true,
 		},
 	}
@@ -218,7 +218,7 @@ func TestQueryAddressValidate(t *testing.T) {
 			name: "valid with sector",
 			qa: &QueryAddress{
 				Raw:  "/query/sector:/Technology/**",
-				Expr: termExpr{t: Term{Field: FieldSector, Pattern: "/Technology/**"}},
+				Expr: termExpr{t: Term{Field: FieldIndustry, Pattern: "/industry/technology/**"}},
 			},
 			wantErr: false,
 		},
@@ -227,7 +227,7 @@ func TestQueryAddressValidate(t *testing.T) {
 			qa: &QueryAddress{
 				Raw: "/query/sector:/Technology/** AND location:/loc/id/**",
 				Expr: andExpr{
-					a: termExpr{t: Term{Field: FieldSector, Pattern: "/Technology/**"}},
+					a: termExpr{t: Term{Field: FieldIndustry, Pattern: "/industry/technology/**"}},
 					b: termExpr{t: Term{Field: FieldLocation, Pattern: "/loc/id/**"}},
 				},
 			},
@@ -258,8 +258,6 @@ func TestQueryAddressValidate(t *testing.T) {
 		})
 	}
 }
-
-
 
 
 

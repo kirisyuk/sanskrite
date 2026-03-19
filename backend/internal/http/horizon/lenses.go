@@ -85,6 +85,9 @@ func normalizeDomainMapKeys(m map[string]interface{}) map[string]interface{} {
 		{"confidence", "Confidence"},
 		{"reason", "Reason"},
 		{"supplyChainExecutionPlan", "SupplyChainExecutionPlan"},
+		{"regulatoryImpactExecutionPlan", "RegulatoryImpactExecutionPlan"},
+		{"governanceExecutionPlan", "GovernanceExecutionPlan"},
+		{"ecosystemExecutionPlan", "EcosystemExecutionPlan"},
 	}
 	for _, pair := range mapping {
 		if v, ok := pick(pair[0], pair[1]); ok && v != nil {

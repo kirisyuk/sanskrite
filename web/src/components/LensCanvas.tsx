@@ -11,6 +11,7 @@ import { api, type DirectedSupplyChainExplorationRequest } from '../lib/api';
 import { LensCanvasDetails } from './LensCanvasDetails';
 import { LensCanvasCockpit } from './LensCanvasCockpit';
 import { LensCanvasProgress } from './LensCanvasProgress';
+import { HorizonWatchLensSurface } from './HorizonWatchLensSurface';
 import { WorldMapPanel } from './WorldMapPanel';
 import { QAPanel } from './QAPanel';
 import { HorizonRealtimeCallouts } from './HorizonRealtimeCallouts';
@@ -20,7 +21,7 @@ import type { AssembleLensRequest } from '../features/horizon/components/hook/As
 import type { ScoutingMode } from '../features/horizon/lib/scoutingMode';
 
 /** Lens view modes: Graph | Map | Analysis (plan §1). Graph persists when switching. */
-export type LensViewMode = 'graph' | 'map' | 'analysis';
+export type LensViewMode = 'graph' | 'map' | 'analysis' | 'brief';
 
 export interface LensCanvasProps {
   isOpen: boolean;
@@ -63,6 +64,7 @@ export interface LensCanvasProps {
     code?: string;
     phase?: string;
   } | null;
+  isAdmin?: boolean;
   onClose: () => void;
 }
 
@@ -89,6 +91,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   activeCreateSessionId = null,
   preflight = null,
   fatalError = null,
+  isAdmin = false,
   onClose,
 }) => {
   const { theme } = React.useContext(ThemeContext);
@@ -104,7 +107,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   // Lens view: Graph | Map | Analysis. Synced with URL ?view=graph|map|analysis
   const lensViewFromUrl = searchParams.get('view') as LensViewMode | null;
   const validLensView = (v: string | null): v is LensViewMode =>
-    v === 'graph' || v === 'map' || v === 'analysis';
+    v === 'graph' || v === 'map' || v === 'analysis' || v === 'brief';
   const [lensView, setLensViewState] = React.useState<LensViewMode>(() => {
     if (validLensView(lensViewFromUrl)) return lensViewFromUrl;
     if (initialLensView && validLensView(initialLensView)) return initialLensView;
@@ -498,6 +501,29 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
               >
                 Analysis
               </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={lensView === 'brief'}
+                aria-controls="lens-brief-panel"
+                onClick={() => { setLensView('brief'); setViewMode('cockpit'); }}
+                title="Lens Brief"
+                style={{
+                  border: 'none',
+                  background: lensView === 'brief' ? 'var(--white-10)' : 'transparent',
+                  color: 'var(--text-heading)',
+                  borderRadius: 10,
+                  padding: '6px 10px',
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}
+              >
+                Lens Brief
+              </button>
               <div style={{ width: 1, height: 16, background: 'var(--border-subtle)', margin: '0 4px' }} />
               <button
                 type="button"
@@ -667,6 +693,19 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                         /* Trace paths: could pan/zoom to path; keep for future */
                       }}
                       externalOpenTrigger={qaOpenTrigger}
+                    />
+                  </div>
+                )}
+                {lensView === 'brief' && lensId && (
+                  <div
+                    id="lens-brief-panel"
+                    style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+                  >
+                    <HorizonWatchLensSurface
+                      lensId={lensId}
+                      projectName={lens?.name || lens?.projectName || projectId || null}
+                      onOpenWorldMap={() => setLensView('map')}
+                      isAdmin={isAdmin}
                     />
                   </div>
                 )}

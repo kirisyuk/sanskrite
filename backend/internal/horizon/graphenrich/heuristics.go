@@ -119,7 +119,6 @@ func fragmentText(fragment *horizonmodels.HorizonFragment) string {
 		strings.ToLower(strings.TrimSpace(fragment.MarketVertical)),
 		strings.ToLower(strings.TrimSpace(fragment.GovType)),
 		strings.ToLower(strings.TrimSpace(fragment.EntityPath)),
-		strings.ToLower(strings.TrimSpace(fragment.SectorPath)),
 		strings.ToLower(strings.TrimSpace(fragment.ParentPath)),
 	}
 	for _, v := range fragment.Labels {

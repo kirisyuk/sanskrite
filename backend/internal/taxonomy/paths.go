@@ -62,26 +62,26 @@ var regionalGeoTokens = map[string]struct{}{
 	"pacific-islands": {},
 
 	// Continents and geographic zones (for loc, gov, org, market, zone, etc.).
-	"oceania":              {},
-	"europe":               {},
-	"asia":                 {},
-	"north-america":        {},
-	"south-america":        {},
-	"antarctica":           {},
-	"latin-america":        {},
-	"central-america":      {},
-	"middle-east":          {},
-	"southeast-asia":       {},
-	"eastern-africa":       {},
-	"central-africa":       {},
-	"north-africa":         {},
+	"oceania":                {},
+	"europe":                 {},
+	"asia":                   {},
+	"north-america":          {},
+	"south-america":          {},
+	"antarctica":             {},
+	"latin-america":          {},
+	"central-america":        {},
+	"middle-east":            {},
+	"southeast-asia":         {},
+	"eastern-africa":         {},
+	"central-africa":         {},
+	"north-africa":           {},
 	"central-eastern-africa": {},
-	"central-asia":         {},
-	"east-asia":            {},
-	"west-asia":            {},
-	"sub-saharan-africa":   {},
-	"mediterranean":        {},
-	"sea":                  {},
+	"central-asia":           {},
+	"east-asia":              {},
+	"west-asia":              {},
+	"sub-saharan-africa":     {},
+	"mediterranean":          {},
+	"sea":                    {},
 }
 
 // IsISO2CountryCode returns true if s is exactly 2 lowercase letters (ISO3166-1 alpha2).
@@ -175,11 +175,12 @@ func transliterateCyrillicToLatin(s string) string {
 var ValidCanonicalPathNamespace = map[string]bool{
 	"org": true,
 	// Government / state bodies (jurisdiction-scoped; prevents cross-country name collisions).
-	"gov":     true,
-	"person":  true,
-	"product": true,
-	"program": true,
-	"market":  true,
+	"gov":      true,
+	"person":   true,
+	"product":  true,
+	"program":  true,
+	"market":   true,
+	"industry": true,
 	// Executable “knowledge contract” nodes (domain/inquiry focus).
 	"domain": true,
 	// Informal communities (trade/professional/etc.).
@@ -355,6 +356,10 @@ func ValidateCanonicalPath(path string) error {
 		if domain != "" && !IsValidMarketDomain(domain) {
 			fmt.Printf("[ValidateCanonicalPath] WARNING: unknown market domain %q in %s\n", domain, path)
 		}
+	case "industry":
+		if len(parts) < 2 {
+			return fmt.Errorf("industry canonical path must have at least 2 segments: /industry/{slug}: %s", path)
+		}
 	case "segment":
 		// /segment/{domain}/{vertical}/{geo}
 		// geo: ISO2 or a regional bucket: global, mena, emea, apac, latam, na, gcc, eu, asean, nordics, benelux, anz, cis, ssa, usmca, nafta
@@ -438,7 +443,7 @@ func ValidateCanonicalPath(path string) error {
 // =============================================================================
 
 var domainContractTypes = map[string]struct{}{
-	// Supply chain & industry mapping
+	// Supply chain mapping
 	"supply-chain":    {},
 	"value-chain":     {},
 	"logistics-flow":  {},
@@ -464,11 +469,11 @@ var domainContractTypes = map[string]struct{}{
 	"pricing-dynamics":         {},
 
 	// Investment / finance
-	"investment-thesis":  {},
-	"funding-landscape":  {},
-	"exit-strategy":      {},
-	"valuation-drivers":  {},
-	"portfolio-exposure": {},
+	"investment-thesis":   {},
+	"funding-landscape":   {},
+	"exit-strategy":       {},
+	"valuation-drivers":   {},
+	"portfolio-exposure":  {},
 	"ownership-structure": {},
 
 	// Technology / innovation
@@ -501,10 +506,8 @@ var domainContractTypes = map[string]struct{}{
 	"megatrends":        {},
 	"future-outlook":    {},
 
-	// Sector / industry specific
-	"sector-overview":    {},
-	"industry-structure": {},
-	"vertical-deep-dive": {},
+	// Industry analysis
+	"industry-analysis": {},
 
 	// Affected zones (conflict, disaster, tension) — holistic discovery by qualifier types
 	"affected-zone": {},
@@ -560,7 +563,7 @@ var domainContractTypeCategories = []struct {
 	{"ECOSYSTEM / STAKEHOLDER", []string{"ecosystem-mapping", "stakeholder-mapping", "partnership-landscape", "influence-network", "power-dynamics"}},
 	{"POLICY / REGULATION", []string{"policy-impact", "regulatory-impact", "policy-and-regulation", "compliance-landscape", "security-and-compliance", "licensing-requirements", "esg-landscape"}},
 	{"SCENARIOS / TRENDS", []string{"scenario-analysis", "macro-trends", "megatrends", "future-outlook"}},
-	{"SECTOR / INDUSTRY SPECIFIC", []string{"sector-overview", "industry-structure", "vertical-deep-dive"}},
+	{"INDUSTRY ANALYSIS", []string{"industry-analysis"}},
 	{"FALLBACK (use ONLY if none of the above fit)", []string{"other"}},
 }
 
@@ -826,6 +829,38 @@ func NormalizeDomainCanonicalPath(path string) (string, error) {
 		if compositeGeo != "" {
 			pairs = append(pairs, kv{k: "geo", v: compositeGeo})
 		}
+		pairs = append(pairs, others...)
+	} else if contractType == "industry-analysis" {
+		geos := make([]string, 0, 2)
+		industryChain := make([]kv, 0, 4)
+		others := make([]kv, 0, len(pairs))
+		geoSeen := map[string]struct{}{}
+		for _, p := range pairs {
+			switch p.k {
+			case "geo":
+				if _, ok := geoSeen[p.v]; ok {
+					continue
+				}
+				geoSeen[p.v] = struct{}{}
+				geos = append(geos, p.v)
+			case "industry":
+				industryChain = append(industryChain, p)
+			default:
+				others = append(others, p)
+			}
+		}
+		sort.Strings(geos)
+		sort.SliceStable(others, func(i, j int) bool {
+			if others[i].k != others[j].k {
+				return others[i].k < others[j].k
+			}
+			return others[i].v < others[j].v
+		})
+		pairs = pairs[:0]
+		for _, geo := range geos {
+			pairs = append(pairs, kv{k: "geo", v: geo})
+		}
+		pairs = append(pairs, industryChain...)
 		pairs = append(pairs, others...)
 	} else {
 		// Default deterministic ordering.

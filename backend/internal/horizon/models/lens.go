@@ -30,6 +30,14 @@ type Lens struct {
 	// Situational; does not define execution (that's DomainModes).
 	Intents []LensIntent `json:"intents,omitempty" firestore:"intents,omitempty"`
 
+	// OriginalQuery stores the exact user prompt that produced the lens.
+	// Unlike Intents, this is the raw framing input that should influence LLM interpretation later.
+	OriginalQuery string `json:"originalQuery,omitempty" firestore:"originalQuery,omitempty"`
+
+	// DomainQueries stores explicit executable domain-level questions resolved from the original prompt.
+	// This is the product-model source of truth; ViewConfig["domains"] remains legacy compatibility metadata.
+	DomainQueries []LensDomainQuery `json:"domainQueries,omitempty" firestore:"domainQueries,omitempty"`
+
 	ViewConfig  map[string]interface{} `json:"viewConfig" firestore:"viewConfig"`
 	AlertConfig map[string]interface{} `json:"alertConfig" firestore:"alertConfig"`
 	Status      string                 `json:"status" firestore:"status"` // ACTIVE, ARCHIVED

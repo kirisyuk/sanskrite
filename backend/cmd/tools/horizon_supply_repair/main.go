@@ -2046,13 +2046,10 @@ func (r *runner) getOrCreateFragmentByPath(path string, createMissing, applyWrit
 	switch frag.Type {
 	case models.FragmentTypeProduct:
 		frag.EntityPath = "/Product"
-		frag.SectorPath = "/Product"
 	case models.FragmentTypeFacility:
 		frag.EntityPath = "/Organization/Facility"
-		frag.SectorPath = "/Industry/Other"
 	default:
 		frag.EntityPath = "/Organization"
-		frag.SectorPath = "/Industry/Other"
 	}
 	id, err := r.fragmentsRepo.Create(r.ctx, frag)
 	if err != nil {

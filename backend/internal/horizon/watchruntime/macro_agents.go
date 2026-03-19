@@ -435,7 +435,6 @@ func (s *Service) buildMacroUniverse(ctx context.Context, tenantID, anchorCanoni
 		add(fragment.ParentMarketPath)
 		add(fragment.AffiliatedOrgPath)
 		add(fragment.EntityPath)
-		add(fragment.SectorPath)
 		for _, path := range fragment.SpherePaths {
 			add(path)
 		}

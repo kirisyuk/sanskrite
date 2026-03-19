@@ -2,7 +2,7 @@ import React from 'react';
 import { HorizonNodeIcon, formatHorizonFragmentType, getHorizonNodeVisualType, getNodeColors } from './HorizonGraphNodeTypes';
 import type { GeoObject } from '../hooks/useGeoObjects';
 import type { GeoEdgeTraceSummary } from '../hooks/useGeoEdgeLayer';
-import type { SupplyChainObjectRiskOverlay } from '../lib/api';
+import type { SupplyChainObjectRiskOverlay, SupplyChainOverlayMechanism, SupplyChainOverlayMetric } from '../lib/api';
 import { geoCodeToShortName, humanizeCanonicalPath } from '../lib/uiUtils';
 
 interface MapObjectDetailProps {
@@ -25,6 +25,8 @@ interface MapObjectDetailProps {
   onDirectedExplore?: (direction: 'upstream' | 'downstream') => void;
   onClose: () => void;
 }
+
+type SectionKey = 'routes' | 'context' | 'evidence';
 
 function formatFacilityKind(value?: string): string {
   return String(value || '')
@@ -62,13 +64,6 @@ function humanizeToken(value?: string): string {
     .join(' ');
 }
 
-function compactRole(value?: string): string {
-  return String(value || '')
-    .trim()
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
 function familyAccent(family: string, isDark: boolean): string {
   switch (family) {
     case 'supply':
@@ -90,8 +85,8 @@ function familyAccent(family: string, isDark: boolean): string {
 
 function sectionCardStyle(isDark: boolean): React.CSSProperties {
   return {
-    padding: '10px 11px',
-    borderRadius: 12,
+    padding: '12px 13px',
+    borderRadius: 14,
     background: isDark ? 'rgba(148, 163, 184, 0.08)' : 'rgba(15, 23, 42, 0.035)',
     border: isDark ? '1px solid rgba(148, 163, 184, 0.14)' : '1px solid rgba(15, 23, 42, 0.06)',
   };
@@ -111,10 +106,156 @@ function compactOverlayLabel(value?: string): string {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function normalizeBusinessCopy(value?: string): string {
+  const normalized = String(value || '').trim();
+  if (!normalized) return '';
+  return normalized
+    .replace(/\bcriticality\b/gi, 'business importance')
+    .replace(/\broute fragility\b/gi, 'route resilience risk')
+    .replace(/\bmapped direct relations\b/gi, 'direct business links')
+    .replace(/\bcontext anchors\b/gi, 'business context')
+    .replace(/\bpropagation\b/gi, 'secondary spread')
+    .replace(/\bselected object\b/gi, 'this asset')
+    .replace(/\bobject\b/gi, 'asset')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function pluralize(count: number, singular: string, plural?: string): string {
+  return `${count} ${count === 1 ? singular : (plural || `${singular}s`)}`;
+}
+
+function scoreLevel(score?: number): {
+  label: string;
+  note: string;
+  accent: string;
+} {
+  if (typeof score !== 'number' || !Number.isFinite(score)) {
+    return { label: 'Unknown', note: 'No scored business importance yet', accent: 'var(--text-secondary-strong)' };
+  }
+  if (score >= 0.82) return { label: 'Very high', note: 'Major business dependency', accent: '#f97316' };
+  if (score >= 0.62) return { label: 'High', note: 'Meaningful business exposure', accent: '#f59e0b' };
+  if (score >= 0.42) return { label: 'Elevated', note: 'Watch for disruption', accent: '#38bdf8' };
+  return { label: 'Limited', note: 'Lower immediate exposure', accent: '#94a3b8' };
+}
+
+function directionLabel(direction: 'inbound' | 'outbound' | 'context'): string {
+  if (direction === 'inbound') return 'Input to this asset';
+  if (direction === 'outbound') return 'Output from this asset';
+  return 'Related route';
+}
+
+function metricValueText(metric?: SupplyChainOverlayMetric | null): string {
+  if (!metric) return '';
+  if (metric.formatted) return metric.formatted;
+  if (typeof metric.value === 'number' && Number.isFinite(metric.value)) {
+    const rounded = Math.abs(metric.value) >= 100 ? Math.round(metric.value) : Number(metric.value.toFixed(2));
+    return metric.unit ? `${rounded} ${metric.unit}` : String(rounded);
+  }
+  return '';
+}
+
+function buildBusinessBrief(
+  objectName: string,
+  overlay: SupplyChainObjectRiskOverlay | null,
+  traceSummary: GeoEdgeTraceSummary | null,
+): string {
+  const overlaySummary = normalizeBusinessCopy(overlay?.summary);
+  if (overlaySummary) return overlaySummary;
+  const firstReason = normalizeBusinessCopy(traceSummary?.whyItMatters?.[0]?.body);
+  if (firstReason) return firstReason;
+  const routeCount = traceSummary?.supplyPathCount || 0;
+  const stressedCount = traceSummary?.stressedSupplyPathCount || 0;
+  if (routeCount > 0 && stressedCount > 0) {
+    return `${objectName} is exposed through ${pluralize(routeCount, 'mapped route')}, with ${pluralize(stressedCount, 'route')} already under pressure.`;
+  }
+  if (routeCount > 0) {
+    return `${objectName} sits on ${pluralize(routeCount, 'mapped route')} in the current network view.`;
+  }
+  const relationCount = (traceSummary?.directCount || 0) + (traceSummary?.contextCount || 0);
+  if (relationCount > 0) {
+    return `${objectName} is linked to ${pluralize(relationCount, 'business node')} in the surrounding network.`;
+  }
+  return `${objectName} is visible on the map, but the current view does not yet contain enough linked business evidence for a stronger brief.`;
+}
+
+function buildActionItems(
+  objectName: string,
+  traceSummary: GeoEdgeTraceSummary | null,
+  overlay: SupplyChainObjectRiskOverlay | null,
+): string[] {
+  const actions: string[] = [];
+  const topGroup = traceSummary?.supplyGroups?.[0];
+  const topProduct = overlay?.topProducts?.[0]?.name || topGroup?.productLabel || '';
+  const bottleneckLabel = overlay?.bottleneckNodes?.[0]?.name
+    || humanizeCanonicalPath(String(overlay?.bottleneckNodes?.[0]?.canonicalPath || ''))
+    || '';
+  const stressedCount = traceSummary?.stressedSupplyPathCount || 0;
+  const directCount = traceSummary?.directCount || 0;
+  const contextCount = traceSummary?.contextCount || 0;
+
+  if (stressedCount > 0) {
+    actions.push(
+      bottleneckLabel
+        ? `Validate a fallback route or operating workaround around ${bottleneckLabel}.`
+        : `Review alternatives for the ${pluralize(stressedCount, 'route')} currently under pressure.`,
+    );
+  }
+  if (topProduct) {
+    actions.push(`Check near-term supply continuity for ${topProduct} before pressure spreads downstream.`);
+  }
+  if (directCount + contextCount > 0) {
+    actions.push(`Review the ${pluralize(directCount + contextCount, 'connected node')} most likely to amplify disruption around ${objectName}.`);
+  }
+  if (actions.length === 0 && traceSummary?.supplyPathCount) {
+    actions.push(`Review the mapped route set for ${objectName} and confirm whether backup paths exist.`);
+  }
+  if (actions.length === 0) {
+    actions.push(`Gather one more layer of commercial or operating context before treating ${objectName} as a material business risk.`);
+  }
+  return actions.slice(0, 3);
+}
+
+function buildDriverItems(
+  mechanisms: SupplyChainOverlayMechanism[],
+  metrics: SupplyChainOverlayMetric[],
+  bottleneckLabel: string,
+): Array<{ title: string; body: string }> {
+  const items: Array<{ title: string; body: string }> = [];
+  for (const mechanism of mechanisms) {
+    const title = compactOverlayLabel(mechanism.label || mechanism.key);
+    if (!title) continue;
+    items.push({
+      title,
+      body: normalizeBusinessCopy(mechanism.explanation) || `${title} is one of the strongest drivers behind the current risk signal.`,
+    });
+    if (items.length >= 2) return items;
+  }
+  for (const metric of metrics) {
+    const title = compactOverlayLabel(metric.label || metric.key);
+    if (!title) continue;
+    const valueText = metricValueText(metric);
+    items.push({
+      title,
+      body: valueText
+        ? `${title} is currently tracked at ${valueText} in the latest overlay.`
+        : `${title} is one of the signals contributing to the current view.`,
+    });
+    if (items.length >= 2) return items;
+  }
+  if (bottleneckLabel) {
+    items.push({
+      title: 'Key bottleneck',
+      body: `${bottleneckLabel} is the most visible concentration point in the current network trace.`,
+    });
+  }
+  return items.slice(0, 2);
+}
+
 function narrativeBlockStyle(isDark: boolean, isActive: boolean, accent: string): React.CSSProperties {
   return {
-    padding: '8px 9px',
-    borderRadius: 10,
+    padding: '10px 11px',
+    borderRadius: 12,
     background: isActive
       ? (isDark ? 'rgba(15, 23, 42, 0.48)' : 'rgba(255, 255, 255, 0.94)')
       : (isDark ? 'rgba(148, 163, 184, 0.05)' : 'rgba(15, 23, 42, 0.025)'),
@@ -126,6 +267,67 @@ function narrativeBlockStyle(isDark: boolean, isActive: boolean, accent: string)
     cursor: 'pointer',
   };
 }
+
+const AccordionSection: React.FC<{
+  isDark: boolean;
+  title: string;
+  subtitle?: string;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}> = ({ isDark, title, subtitle, open, onToggle, children }) => (
+  <div style={sectionCardStyle(isDark)}>
+    <button
+      type="button"
+      onClick={onToggle}
+      style={{
+        width: '100%',
+        padding: 0,
+        border: 'none',
+        background: 'transparent',
+        color: 'inherit',
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+        textAlign: 'left',
+      }}
+    >
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
+          {title}
+        </div>
+        {subtitle && (
+          <div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+            {subtitle}
+          </div>
+        )}
+      </div>
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minWidth: 58,
+          padding: '5px 10px',
+          borderRadius: 999,
+          background: isDark ? 'rgba(148,163,184,0.12)' : 'rgba(15,23,42,0.05)',
+          border: isDark ? '1px solid rgba(148,163,184,0.16)' : '1px solid rgba(15,23,42,0.08)',
+          fontSize: 10,
+          fontWeight: 800,
+          letterSpacing: '0.04em',
+          textTransform: 'uppercase',
+          color: 'var(--text-secondary-strong)',
+          flexShrink: 0,
+        }}
+      >
+        {open ? 'Hide' : 'Show'}
+      </span>
+    </button>
+    {open && <div style={{ marginTop: 12 }}>{children}</div>}
+  </div>
+);
 
 export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
   object,
@@ -153,6 +355,11 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
   }));
   const autoCompact = viewport.width < 1280 || viewport.height < 760;
   const [isCollapsed, setIsCollapsed] = React.useState(autoCompact);
+  const [openSections, setOpenSections] = React.useState<Record<SectionKey, boolean>>({
+    routes: true,
+    context: false,
+    evidence: false,
+  });
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -165,6 +372,14 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
     setIsCollapsed(autoCompact);
   }, [autoCompact, object.id]);
 
+  React.useEffect(() => {
+    setOpenSections({
+      routes: Boolean(traceSummary?.supplyGroups?.length),
+      context: false,
+      evidence: false,
+    });
+  }, [object.id, traceSummary?.supplyGroups?.length]);
+
   const visualType = getHorizonNodeVisualType(object.type, object.canonicalPath, object.label, object.facilityKind);
   const accent = getNodeColors(visualType || object.type, paletteTheme).accent;
   const facilityKindLabel = formatFacilityKind(object.facilityKind);
@@ -172,24 +387,83 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
     ? `Facility (${facilityKindLabel})`
     : formatHorizonFragmentType(object.type, object.canonicalPath, object.label);
   const countryLabel = extractCountryLabel(object.canonicalPath);
-
-  const chips = [
-    { label: 'Status', value: object.status || 'ACTIVE' },
-    edgesLoading ? { label: 'Direct', value: 'Loading…' } : { label: 'Direct', value: String(traceSummary?.directCount ?? edgesCount) },
-    !edgesLoading ? { label: 'Context', value: String(traceSummary?.contextCount ?? 0) } : null,
-    !edgesLoading ? { label: 'Paths', value: String(traceSummary?.supplyPathCount ?? 0) } : null,
-    !edgesLoading && visibleEdgesCount > 0 ? { label: 'Map lines', value: String(traceSummary?.visibleLineCount ?? visibleEdgesCount) } : null,
-    traceSummary && traceSummary.stressedSupplyPathCount > 0 ? { label: 'Stress', value: String(traceSummary.stressedSupplyPathCount) } : null,
-  ].filter(Boolean) as Array<{ label: string; value: string }>;
-
-  const overlayWidth = autoCompact ? 314 : 384;
-  const overlayMaxWidth = viewport.width < 980 ? 'calc(100% - 20px)' : 'calc(100% - 340px)';
+  const overlayWidth = autoCompact ? 320 : 392;
+  const overlayMaxWidth = viewport.width < 980 ? 'calc(100% - 20px)' : 'calc(100% - 360px)';
   const objectRiskOverlay = (traceSummary?.objectRiskOverlay || null) as SupplyChainObjectRiskOverlay | null;
   const topProducts = Array.isArray(objectRiskOverlay?.topProducts) ? objectRiskOverlay!.topProducts!.slice(0, 3) : [];
   const topMechanisms = Array.isArray(objectRiskOverlay?.topMechanisms) ? objectRiskOverlay!.topMechanisms!.slice(0, 3) : [];
   const topMetrics = Array.isArray(objectRiskOverlay?.topMetrics) ? objectRiskOverlay!.topMetrics!.slice(0, 3) : [];
-  const bottleneckNodes = Array.isArray(objectRiskOverlay?.bottleneckNodes) ? objectRiskOverlay!.bottleneckNodes!.slice(0, 3) : [];
-  const topPaths = Array.isArray(objectRiskOverlay?.topPaths) ? objectRiskOverlay!.topPaths!.slice(0, 3) : [];
+  const bottleneckLabel = objectRiskOverlay?.bottleneckNodes?.[0]?.name
+    || humanizeCanonicalPath(String(objectRiskOverlay?.bottleneckNodes?.[0]?.canonicalPath || ''))
+    || '';
+  const objectName = getObjectDisplayName(object);
+  const importance = scoreLevel(objectRiskOverlay?.criticality);
+  const directCount = traceSummary?.directCount ?? edgesCount;
+  const contextCount = traceSummary?.contextCount ?? 0;
+  const routeCount = traceSummary?.supplyPathCount ?? 0;
+  const stressedCount = traceSummary?.stressedSupplyPathCount ?? 0;
+  const relationCount = directCount + contextCount;
+  const businessBrief = buildBusinessBrief(objectName, objectRiskOverlay, traceSummary);
+  const whyItems = (traceSummary?.whyItMatters || [])
+    .map((item) => ({
+      title: normalizeBusinessCopy(item.title) || 'Why it matters',
+      body: normalizeBusinessCopy(item.body),
+    }))
+    .filter((item) => item.body)
+    .slice(0, 3);
+  const actionItems = buildActionItems(objectName, traceSummary, objectRiskOverlay);
+  const driverItems = buildDriverItems(topMechanisms, topMetrics, bottleneckLabel);
+  const contextItems = [...(traceSummary?.directRelations || []), ...(traceSummary?.contextRelations || [])]
+    .filter((relation) => relation.businessMeaning || relation.whyRelevant)
+    .slice(0, 6);
+  const summaryStrip = [
+    humanizeToken(object.status || 'ACTIVE'),
+    `Business importance: ${importance.label.toLowerCase()}`,
+    routeCount > 0 ? `${pluralize(routeCount, 'route')}` : null,
+    stressedCount > 0 ? `${pluralize(stressedCount, 'route')} under strain` : null,
+    relationCount > 0 ? `${pluralize(relationCount, 'connected node')}` : null,
+  ].filter(Boolean);
+
+  const impactCards = [
+    {
+      label: 'Business importance',
+      value: importance.label,
+      note: typeof objectRiskOverlay?.criticality === 'number'
+        ? `${formatPercentScore(objectRiskOverlay.criticality)} score • ${importance.note}`
+        : importance.note,
+      accentColor: importance.accent,
+    },
+    {
+      label: 'Route exposure',
+      value: routeCount > 0 ? pluralize(routeCount, 'route') : 'Limited',
+      note: routeCount > 0
+        ? `${pluralize(traceSummary?.supplyGroups?.length || 0, 'product lane')}`
+        : 'No mapped product routes yet',
+      accentColor: isDark ? '#fbbf24' : '#b45309',
+    },
+    {
+      label: 'Active pressure',
+      value: stressedCount > 0 ? pluralize(stressedCount, 'route') : 'Stable',
+      note: bottleneckLabel
+        ? `Main bottleneck: ${bottleneckLabel}`
+        : (stressedCount > 0 ? 'Requires route review' : 'No stressed route highlighted'),
+      accentColor: stressedCount > 0 ? (isDark ? '#fb7185' : '#be123c') : (isDark ? '#94a3b8' : '#64748b'),
+    },
+    {
+      label: 'Products in play',
+      value: topProducts.length > 0 ? pluralize(topProducts.length, 'product') : 'Not specified',
+      note: topProducts.length > 0
+        ? topProducts.map((item) => item.name || humanizeCanonicalPath(item.ref) || item.ref).filter(Boolean).join(', ')
+        : 'No dominant product surfaced yet',
+      accentColor: isDark ? '#60a5fa' : '#2563eb',
+    },
+  ];
+
+  const hasEvidence = driverItems.length > 0 || topMetrics.length > 0 || topMechanisms.length > 0 || traceSummary?.propagationEdgeCount;
+
+  const toggleSection = (key: SectionKey) => {
+    setOpenSections((current) => ({ ...current, [key]: !current[key] }));
+  };
 
   return (
     <div
@@ -202,7 +476,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
         maxHeight: `calc(100% - ${topOffset + 10}px)`,
         overflow: 'auto',
         zIndex: 20,
-        borderRadius: 18,
+        borderRadius: 20,
         background: isDark
           ? 'linear-gradient(180deg, rgba(6,18,31,0.97) 0%, rgba(3,12,22,0.96) 100%)'
           : 'linear-gradient(180deg, rgba(255,255,255,0.985) 0%, rgba(245,248,252,0.97) 100%)',
@@ -217,7 +491,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
       <button
         type="button"
         onClick={() => setIsCollapsed((value) => !value)}
-        aria-label={isCollapsed ? 'Expand fragment details' : 'Collapse fragment details'}
+        aria-label={isCollapsed ? 'Expand asset brief' : 'Collapse asset brief'}
         style={{
           position: 'absolute',
           top: 10,
@@ -241,8 +515,8 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
       <button
         type="button"
         onClick={onClose}
-        aria-label="Collapse fragment details"
-        title="Collapse fragment details"
+        aria-label="Collapse asset brief"
+        title="Collapse asset brief"
         style={{
           position: 'absolute',
           top: 10,
@@ -270,8 +544,8 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
-              width: autoCompact ? 26 : 30,
-              height: autoCompact ? 26 : 30,
+              width: autoCompact ? 28 : 32,
+              height: autoCompact ? 28 : 32,
               borderRadius: 999,
               flexShrink: 0,
               background: isDark ? 'rgba(148,163,184,0.12)' : 'rgba(15,23,42,0.05)',
@@ -284,203 +558,46 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
             <div style={{ marginBottom: 3, fontSize: 10, fontWeight: 700, letterSpacing: '0.11em', textTransform: 'uppercase', color: accent }}>
               {typeLabel}
             </div>
-            <div style={{ fontSize: autoCompact ? 15 : 18, lineHeight: 1.15, fontWeight: 750, letterSpacing: '-0.015em' }}>
-              {getObjectDisplayName(object)}
+            <div style={{ fontSize: autoCompact ? 16 : 19, lineHeight: 1.12, fontWeight: 780, letterSpacing: '-0.02em' }}>
+              {objectName}
             </div>
             {countryLabel && (
-              <div style={{ marginTop: 4, fontSize: 12, lineHeight: 1.35, opacity: 0.74 }}>
+              <div style={{ marginTop: 4, fontSize: 12, lineHeight: 1.35, opacity: 0.78 }}>
                 {countryLabel}
               </div>
             )}
           </div>
         </div>
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {chips.map((chip) => (
-            <span
-              key={`${chip.label}:${chip.value}`}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 5,
-                padding: '4px 8px',
-                borderRadius: 999,
-                fontSize: 10,
-                lineHeight: 1,
-                fontWeight: 700,
-                background: isDark ? 'rgba(148,163,184,0.12)' : 'rgba(15,23,42,0.05)',
-                border: isDark ? '1px solid rgba(148,163,184,0.16)' : '1px solid rgba(15,23,42,0.08)',
-              }}
-            >
-              <strong>{chip.label}</strong>
-              {chip.value}
-            </span>
-          ))}
+        <div
+          style={{
+            padding: '9px 11px',
+            borderRadius: 12,
+            background: isDark ? 'rgba(148,163,184,0.08)' : 'rgba(15,23,42,0.035)',
+            border: isDark ? '1px solid rgba(148,163,184,0.12)' : '1px solid rgba(15,23,42,0.06)',
+            fontSize: 11,
+            lineHeight: 1.5,
+            color: 'var(--text-secondary-strong)',
+          }}
+        >
+          {summaryStrip.join(' • ')}
         </div>
 
         {isCollapsed ? null : (
           <>
             <div style={sectionCardStyle(isDark)}>
-              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
-                Directed Exploration
-              </div>
-              <div style={{ marginTop: 6, fontSize: 12, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
-                Expand the current lens from this object and stream materialized paths directly back into the map.
-              </div>
-              <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
-                {([
-                  {
-                    direction: 'downstream' as const,
-                    label: 'Explore downstream',
-                    desc: 'Follow exposed dependencies, customers, and affected flows.',
-                  },
-                  {
-                    direction: 'upstream' as const,
-                    label: 'Explore upstream',
-                    desc: 'Trace suppliers, origin dependencies, and source infrastructure.',
-                  },
-                ]).map((action) => {
-                  const active = directedExploreBusy === action.direction;
-                  const disabled = !directedExploreSupported || !onDirectedExplore || Boolean(directedExploreBusy);
-                  return (
-                    <button
-                      key={action.direction}
-                      type="button"
-                      onClick={() => {
-                        if (disabled) return;
-                        onDirectedExplore?.(action.direction);
-                      }}
-                      disabled={disabled}
-                      style={{
-                        textAlign: 'left',
-                        padding: '10px 10px 9px',
-                        borderRadius: 10,
-                        border: '1px solid rgba(96,165,250,0.18)',
-                        background: active
-                          ? (isDark ? 'rgba(59,130,246,0.18)' : 'rgba(59,130,246,0.10)')
-                          : (isDark ? 'rgba(148,163,184,0.06)' : 'rgba(15,23,42,0.025)'),
-                        color: 'var(--text-heading)',
-                        cursor: disabled ? 'not-allowed' : 'pointer',
-                        opacity: disabled ? 0.55 : 1,
-                      }}
-                    >
-                      <div style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.2 }}>
-                        {active ? 'Starting…' : action.label}
-                      </div>
-                      <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-secondary-strong)', lineHeight: 1.35 }}>
-                        {action.desc}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-              {!directedExploreSupported && directedExploreDisabledReason && (
-                <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.4, color: 'var(--text-secondary-strong)' }}>
-                  {directedExploreDisabledReason}
-                </div>
-              )}
-              {directedExploreError && (
-                <div
-                  style={{
-                    marginTop: 8,
-                    padding: '8px 9px',
-                    borderRadius: 10,
-                    background: isDark ? 'rgba(239,68,68,0.12)' : 'rgba(239,68,68,0.08)',
-                    border: isDark ? '1px solid rgba(248,113,113,0.18)' : '1px solid rgba(239,68,68,0.16)',
-                    fontSize: 11,
-                    lineHeight: 1.4,
-                    color: isDark ? '#fca5a5' : '#b91c1c',
-                  }}
-                >
-                  {directedExploreError}
-                </div>
-              )}
-            </div>
-
-            <div style={sectionCardStyle(isDark)}>
               <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: accent }}>
-                Risk Overview
+                Business snapshot
               </div>
-              <div style={{ marginTop: 6, fontSize: 12, lineHeight: 1.5, fontWeight: 600 }}>
-                {edgesLoading
-                  ? 'Resolving supply-chain risk, supply paths, and surrounding graph context around this object…'
-                  : (objectRiskOverlay?.summary || traceSummary?.summary || 'No explainable supply-chain risk summary yet.')}
+              <div style={{ marginTop: 7, fontSize: 13, lineHeight: 1.55, fontWeight: 650 }}>
+                {edgesLoading ? 'Building the business brief from routes, connected nodes and current network pressure…' : businessBrief}
               </div>
-              {objectRiskOverlay && (
-                <>
-                  <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                    {objectRiskOverlay.primaryMechanism && (
-                      <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(251,191,36,0.16)' : 'rgba(245,158,11,0.12)' }}>
-                        {compactOverlayLabel(objectRiskOverlay.primaryMechanism)}
-                      </span>
-                    )}
-                    {typeof objectRiskOverlay.criticality === 'number' && Number.isFinite(objectRiskOverlay.criticality) && (
-                      <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(248,113,113,0.16)' : 'rgba(239,68,68,0.10)' }}>
-                        Criticality {formatPercentScore(objectRiskOverlay.criticality)}
-                      </span>
-                    )}
-                    {topProducts[0]?.name && (
-                      <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(96,165,250,0.16)' : 'rgba(37,99,235,0.10)' }}>
-                        {topProducts[0].name}
-                      </span>
-                    )}
-                  </div>
-                  {(topProducts.length > 0 || topMechanisms.length > 0 || topMetrics.length > 0 || bottleneckNodes.length > 0 || topPaths.length > 0) && (
-                    <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      {topProducts.length > 0 && (
-                        <div style={{ paddingLeft: 10, borderLeft: `2px solid ${accent}` }}>
-                          <div style={{ fontSize: 11, fontWeight: 750 }}>Top Products</div>
-                          <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
-                            {topProducts.map((item) => item.name || humanizeCanonicalPath(item.ref) || item.ref).join(', ')}
-                          </div>
-                        </div>
-                      )}
-                      {topMechanisms.length > 0 && (
-                        <div style={{ paddingLeft: 10, borderLeft: `2px solid ${accent}` }}>
-                          <div style={{ fontSize: 11, fontWeight: 750 }}>Primary Mechanisms</div>
-                          <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
-                            {topMechanisms.map((item) => compactOverlayLabel(item.label || item.key)).join(', ')}
-                          </div>
-                        </div>
-                      )}
-                      {topMetrics.length > 0 && (
-                        <div style={{ paddingLeft: 10, borderLeft: `2px solid ${accent}` }}>
-                          <div style={{ fontSize: 11, fontWeight: 750 }}>Key Metrics</div>
-                          <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
-                            {topMetrics.map((item) => compactOverlayLabel(item.label || item.key)).join(', ')}
-                          </div>
-                        </div>
-                      )}
-                      {bottleneckNodes.length > 0 && (
-                        <div style={{ paddingLeft: 10, borderLeft: `2px solid ${accent}` }}>
-                          <div style={{ fontSize: 11, fontWeight: 750 }}>Bottlenecks</div>
-                          <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
-                            {bottleneckNodes.map((item) => item.name || humanizeCanonicalPath(item.canonicalPath || '') || item.fragmentId).filter(Boolean).join(', ')}
-                          </div>
-                        </div>
-                      )}
-                      {topPaths.length > 0 && (
-                        <div style={{ paddingLeft: 10, borderLeft: `2px solid ${accent}` }}>
-                          <div style={{ fontSize: 11, fontWeight: 750 }}>Main Risk Paths</div>
-                          <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
-                            {topPaths.map((item) => {
-                              const product = item.productName || humanizeCanonicalPath(item.productRef || '') || '';
-                              const mechanism = compactOverlayLabel(item.primaryMechanism || '');
-                              return [product, mechanism].filter(Boolean).join(' · ') || item.key;
-                            }).join('; ')}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </>
-              )}
-              {!objectRiskOverlay && traceSummary && traceSummary.whyItMatters.length > 0 && (
-                <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {traceSummary.whyItMatters.map((item) => (
+              {whyItems.length > 0 && (
+                <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {whyItems.map((item) => (
                     <div key={`${item.title}:${item.body}`} style={{ paddingLeft: 10, borderLeft: `2px solid ${accent}` }}>
                       <div style={{ fontSize: 11, fontWeight: 750 }}>{item.title}</div>
-                      <div style={{ marginTop: 2, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                      <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.5, color: 'var(--text-secondary-strong)' }}>
                         {item.body}
                       </div>
                     </div>
@@ -491,207 +608,329 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
 
             <div style={sectionCardStyle(isDark)}>
               <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
-                Direct Relations
+                Impact
               </div>
-              <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {traceSummary?.directRelations.length ? traceSummary.directRelations.map((relation) => (
+              <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+                {impactCards.map((item) => (
                   <div
-                    key={relation.edgeId || `${relation.relatedFragmentId}:${relation.type}`}
-                    onMouseEnter={() => onNarrativeHover(relation.narrativeKey)}
-                    onMouseLeave={() => onNarrativeHover(null)}
-                    style={narrativeBlockStyle(isDark, activeNarrativeKey === relation.narrativeKey, familyAccent(relation.family, isDark))}
-                  >
-                    <div style={{ display: 'flex', gap: 10 }}>
-                      <div style={{ width: 8, flexShrink: 0, borderRadius: 999, background: familyAccent(relation.family, isDark) }} />
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ fontSize: 11, fontWeight: 700 }}>
-                          {relation.relatedLabel}
-                        </div>
-                        <div style={{ marginTop: 1, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                          {humanizeToken(relation.type)}
-                          {relation.relatedType ? ` · ${humanizeToken(relation.relatedType)}` : ''}
-                        </div>
-                        {(relation.businessMeaning || relation.whyRelevant) && (
-                          <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
-                            {relation.businessMeaning ? `${relation.businessMeaning}. ` : ''}
-                            {relation.whyRelevant || ''}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )) : (
-                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                    No mapped direct relations for this object yet.
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div style={sectionCardStyle(isDark)}>
-              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
-                Context
-              </div>
-              <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {traceSummary?.contextRelations.length ? traceSummary.contextRelations.map((relation) => (
-                  <div
-                    key={relation.edgeId || `${relation.relatedFragmentId}:${relation.type}`}
-                    onMouseEnter={() => onNarrativeHover(relation.narrativeKey)}
-                    onMouseLeave={() => onNarrativeHover(null)}
-                    style={narrativeBlockStyle(isDark, activeNarrativeKey === relation.narrativeKey, familyAccent(relation.family, isDark))}
-                  >
-                    <div style={{ display: 'flex', gap: 10 }}>
-                      <div style={{ width: 8, flexShrink: 0, borderRadius: 999, background: familyAccent(relation.family, isDark) }} />
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ fontSize: 11, fontWeight: 700 }}>
-                          {relation.relatedLabel}
-                        </div>
-                        <div style={{ marginTop: 1, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                          {humanizeToken(relation.type)}
-                          {relation.semanticDirection ? ` · ${humanizeToken(relation.semanticDirection)}` : ''}
-                        </div>
-                        {(relation.businessMeaning || relation.whyRelevant) && (
-                          <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
-                            {relation.businessMeaning ? `${relation.businessMeaning}. ` : ''}
-                            {relation.whyRelevant || ''}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )) : (
-                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                    No mapped context anchors for this object yet.
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div style={sectionCardStyle(isDark)}>
-              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
-                Supply Chain Paths
-              </div>
-              <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {traceSummary?.supplyGroups.length ? traceSummary.supplyGroups.map((group) => (
-                  <div
-                    key={group.id}
-                    onMouseEnter={() => onNarrativeHover(group.narrativeKey)}
-                    onMouseLeave={() => {
-                      onNarrativeHover(null);
-                      onSupplyRouteHover?.([]);
+                    key={item.label}
+                    style={{
+                      padding: '10px 10px 9px',
+                      borderRadius: 12,
+                      background: isDark ? 'rgba(15,23,42,0.34)' : 'rgba(255,255,255,0.7)',
+                      border: isDark ? '1px solid rgba(148,163,184,0.12)' : '1px solid rgba(15,23,42,0.06)',
                     }}
-                    style={narrativeBlockStyle(isDark, activeNarrativeKey === group.narrativeKey, isDark ? '#fbbf24' : '#b45309')}
                   >
-                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ fontSize: 12, fontWeight: 750, color: isDark ? '#fde68a' : '#92400e' }}>
-                          {group.productLabel}
-                        </div>
-                        <div style={{ marginTop: 2, fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: isDark ? 'rgba(253, 230, 138, 0.82)' : 'rgba(146, 64, 14, 0.76)' }}>
-                          {group.direction === 'inbound' ? 'Consumed here' : group.direction === 'outbound' ? 'Produced here' : 'Context route'}
-                        </div>
-                        <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
-                          {group.summary}
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, justifyContent: 'flex-end' }}>
-                        {group.paths[0]?.riskTag && (
-                          <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(96,165,250,0.16)' : 'rgba(37,99,235,0.10)' }}>
-                            {group.paths[0].riskTag}
-                          </span>
-                        )}
-                        <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(245, 158, 11, 0.14)' : 'rgba(245, 158, 11, 0.1)' }}>
-                          {group.routeCount} route{group.routeCount > 1 ? 's' : ''}
-                        </span>
-                        {group.stressedRouteCount > 0 && (
-                          <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(248,113,113,0.16)' : 'rgba(239,68,68,0.1)' }}>
-                            {group.stressedRouteCount} stressed
-                          </span>
-                        )}
-                        {group.hasBottleneck && (
-                          <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(251,146,60,0.16)' : 'rgba(249,115,22,0.1)' }}>
-                            Bottleneck
-                          </span>
-                        )}
-                      </div>
+                    <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
+                      {item.label}
                     </div>
-                    <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      {group.paths.slice(0, 4).map((path) => {
-                        const routeActive = activeSupplyRouteIds.includes(String(path.id || '').trim());
-                        return (
-                        <div
-                          key={path.id}
-                          onMouseEnter={() => {
-                            onNarrativeHover(null);
-                            onSupplyRouteHover?.([String(path.id || '').trim()]);
+                    <div style={{ marginTop: 6, fontSize: 15, lineHeight: 1.15, fontWeight: 780, color: item.accentColor }}>
+                      {item.value}
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                      {item.note}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={sectionCardStyle(isDark)}>
+              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
+                Suggested next checks
+              </div>
+              <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {actionItems.map((item) => (
+                  <div key={item} style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
+                    <span
+                      style={{
+                        width: 7,
+                        height: 7,
+                        borderRadius: 999,
+                        background: accent,
+                        marginTop: 5,
+                        flexShrink: 0,
+                      }}
+                    />
+                    <div style={{ fontSize: 11, lineHeight: 1.48, color: 'var(--text-secondary-strong)' }}>{item}</div>
+                  </div>
+                ))}
+              </div>
+              {(onDirectedExplore || directedExploreDisabledReason || directedExploreError) && (
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
+                    Analyst tools
+                  </div>
+                  <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+                    {([
+                      {
+                        direction: 'downstream' as const,
+                        label: 'Trace downstream',
+                        desc: 'Show exposed customers, flows and receiving hubs.',
+                      },
+                      {
+                        direction: 'upstream' as const,
+                        label: 'Trace upstream',
+                        desc: 'Show suppliers, origins and source infrastructure.',
+                      },
+                    ]).map((action) => {
+                      const active = directedExploreBusy === action.direction;
+                      const disabled = !directedExploreSupported || !onDirectedExplore || Boolean(directedExploreBusy);
+                      return (
+                        <button
+                          key={action.direction}
+                          type="button"
+                          onClick={() => {
+                            if (disabled) return;
+                            onDirectedExplore?.(action.direction);
                           }}
-                          onMouseLeave={() => {
-                            onSupplyRouteHover?.([]);
-                          }}
+                          disabled={disabled}
                           style={{
-                            paddingLeft: 10,
-                            borderLeft: routeActive
-                              ? (isDark ? '2px solid rgba(251, 191, 36, 0.95)' : '2px solid rgba(180, 83, 9, 0.9)')
-                              : (isDark ? '2px solid rgba(245, 158, 11, 0.4)' : '2px solid rgba(180, 83, 9, 0.28)'),
-                            borderRadius: 8,
-                            background: routeActive
-                              ? (isDark ? 'rgba(251, 191, 36, 0.10)' : 'rgba(245, 158, 11, 0.09)')
-                              : 'transparent',
-                            transition: 'background 140ms ease, border-color 140ms ease',
+                            textAlign: 'left',
+                            padding: '10px 10px 9px',
+                            borderRadius: 10,
+                            border: '1px solid rgba(96,165,250,0.18)',
+                            background: active
+                              ? (isDark ? 'rgba(59,130,246,0.18)' : 'rgba(59,130,246,0.10)')
+                              : (isDark ? 'rgba(148,163,184,0.06)' : 'rgba(15,23,42,0.025)'),
+                            color: 'var(--text-heading)',
+                            cursor: disabled ? 'not-allowed' : 'pointer',
+                            opacity: disabled ? 0.55 : 1,
                           }}
                         >
-                          <div style={{ fontSize: 11, fontWeight: 700 }}>
-                            {path.title}
+                          <div style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.2 }}>
+                            {active ? 'Starting…' : action.label}
                           </div>
-                          <div style={{ marginTop: 1, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                            {path.direction === 'inbound' ? 'Input route' : path.direction === 'outbound' ? 'Output route' : compactRole(path.role)}
-                            {path.legCount > 0 ? ` · ${path.legCount} leg${path.legCount > 1 ? 's' : ''}` : ''}
-                            {path.stressScore >= 0.58 ? ` · Stress ${Math.round(path.stressScore * 100)}` : ''}
-                            {path.riskTag ? ` · ${path.riskTag}` : ''}
+                          <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-secondary-strong)', lineHeight: 1.35 }}>
+                            {action.desc}
                           </div>
-                          <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
-                            {path.reason}
-                          </div>
-                        </div>
-                      )})}
-                      {group.paths.length > 4 && (
-                        <div style={{ fontSize: 10, color: 'var(--text-secondary-strong)' }}>
-                          +{group.paths.length - 4} more mapped destination{group.paths.length - 4 > 1 ? 's' : ''}
-                        </div>
-                      )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {!directedExploreSupported && directedExploreDisabledReason && (
+                    <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.4, color: 'var(--text-secondary-strong)' }}>
+                      {normalizeBusinessCopy(directedExploreDisabledReason)}
                     </div>
-                  </div>
-                )) : (
-                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                    No concrete supply paths are linked to this object yet.
-                  </div>
-                )}
-              </div>
+                  )}
+                  {directedExploreError && (
+                    <div
+                      style={{
+                        marginTop: 8,
+                        padding: '8px 9px',
+                        borderRadius: 10,
+                        background: isDark ? 'rgba(239,68,68,0.12)' : 'rgba(239,68,68,0.08)',
+                        border: isDark ? '1px solid rgba(248,113,113,0.18)' : '1px solid rgba(239,68,68,0.16)',
+                        fontSize: 11,
+                        lineHeight: 1.4,
+                        color: isDark ? '#fca5a5' : '#b91c1c',
+                      }}
+                    >
+                      {normalizeBusinessCopy(directedExploreError)}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
-            {(traceSummary?.propagationEdgeCount || 0) > 0 && (
-              <div style={sectionCardStyle(isDark)}>
-                <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
-                  Propagation
+            {traceSummary?.supplyGroups?.length ? (
+              <AccordionSection
+                isDark={isDark}
+                title="Route exposure"
+                subtitle={`${pluralize(traceSummary.supplyGroups.length, 'product lane')} linked to this asset`}
+                open={openSections.routes}
+                onToggle={() => toggleSection('routes')}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {traceSummary.supplyGroups.map((group) => (
+                    <div
+                      key={group.id}
+                      onMouseEnter={() => onNarrativeHover(group.narrativeKey)}
+                      onMouseLeave={() => {
+                        onNarrativeHover(null);
+                        onSupplyRouteHover?.([]);
+                      }}
+                      style={narrativeBlockStyle(isDark, activeNarrativeKey === group.narrativeKey, isDark ? '#fbbf24' : '#b45309')}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: 12, fontWeight: 780, color: isDark ? '#fde68a' : '#92400e' }}>
+                            {group.productLabel}
+                          </div>
+                          <div style={{ marginTop: 2, fontSize: 10, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: isDark ? 'rgba(253,230,138,0.82)' : 'rgba(146,64,14,0.76)' }}>
+                            {directionLabel(group.direction)}
+                          </div>
+                          <div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.5, color: 'var(--text-secondary-strong)' }}>
+                            {normalizeBusinessCopy(group.summary)}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, justifyContent: 'flex-end' }}>
+                          <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(245,158,11,0.14)' : 'rgba(245,158,11,0.10)' }}>
+                            {pluralize(group.routeCount, 'route')}
+                          </span>
+                          {group.stressedRouteCount > 0 && (
+                            <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(248,113,113,0.16)' : 'rgba(239,68,68,0.10)' }}>
+                              {pluralize(group.stressedRouteCount, 'stressed route')}
+                            </span>
+                          )}
+                          {group.hasBottleneck && (
+                            <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(251,146,60,0.16)' : 'rgba(249,115,22,0.10)' }}>
+                              Bottleneck
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div style={{ marginTop: 9, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {group.paths.slice(0, 2).map((path) => {
+                          const routeActive = activeSupplyRouteIds.includes(String(path.id || '').trim());
+                          return (
+                            <div
+                              key={path.id}
+                              onMouseEnter={() => {
+                                onNarrativeHover(null);
+                                onSupplyRouteHover?.([String(path.id || '').trim()]);
+                              }}
+                              onMouseLeave={() => {
+                                onSupplyRouteHover?.([]);
+                              }}
+                              style={{
+                                paddingLeft: 10,
+                                borderLeft: routeActive
+                                  ? (isDark ? '2px solid rgba(251, 191, 36, 0.95)' : '2px solid rgba(180, 83, 9, 0.9)')
+                                  : (isDark ? '2px solid rgba(245, 158, 11, 0.4)' : '2px solid rgba(180, 83, 9, 0.28)'),
+                                borderRadius: 8,
+                                background: routeActive
+                                  ? (isDark ? 'rgba(251, 191, 36, 0.10)' : 'rgba(245, 158, 11, 0.09)')
+                                  : 'transparent',
+                                transition: 'background 140ms ease, border-color 140ms ease',
+                              }}
+                            >
+                              <div style={{ fontSize: 11, fontWeight: 700 }}>
+                                {path.title}
+                              </div>
+                              <div style={{ marginTop: 1, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                                {directionLabel(path.direction)}
+                                {path.legCount > 0 ? ` • ${pluralize(path.legCount, 'leg')}` : ''}
+                                {path.stressScore >= 0.58 ? ` • ${Math.round(path.stressScore * 100)} stress` : ''}
+                                {path.riskTag ? ` • ${path.riskTag}` : ''}
+                              </div>
+                              <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                                {normalizeBusinessCopy(path.reason)}
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {group.paths.length > 2 && (
+                          <div style={{ fontSize: 10, color: 'var(--text-secondary-strong)' }}>
+                            +{group.paths.length - 2} more route{group.paths.length - 2 > 1 ? 's' : ''} in this lane
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                <div
-                  onMouseEnter={() => onNarrativeHover('propagation:overview')}
-                  onMouseLeave={() => onNarrativeHover(null)}
-                  style={{
-                    ...narrativeBlockStyle(isDark, activeNarrativeKey === 'propagation:overview', isDark ? '#94a3b8' : '#64748b'),
-                    marginTop: 6,
-                    cursor: 'pointer',
-                  }}
-                >
-                  <div style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--text-secondary-strong)' }}>
-                    Signal propagation is shown separately in gray across {traceSummary?.propagationEdgeCount || 0} link(s) touching {traceSummary?.propagationNodeCount || 0} node(s).
+              </AccordionSection>
+            ) : null}
+
+            {contextItems.length ? (
+              <AccordionSection
+                isDark={isDark}
+                title="Business context"
+                subtitle={`${pluralize(contextItems.length, 'linked node')} with business meaning in the current view`}
+                open={openSections.context}
+                onToggle={() => toggleSection('context')}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {contextItems.map((relation) => (
+                    <div
+                      key={relation.edgeId || `${relation.relatedFragmentId}:${relation.type}`}
+                      onMouseEnter={() => onNarrativeHover(relation.narrativeKey)}
+                      onMouseLeave={() => onNarrativeHover(null)}
+                      style={narrativeBlockStyle(isDark, activeNarrativeKey === relation.narrativeKey, familyAccent(relation.family, isDark))}
+                    >
+                      <div style={{ display: 'flex', gap: 10 }}>
+                        <div style={{ width: 8, flexShrink: 0, borderRadius: 999, background: familyAccent(relation.family, isDark) }} />
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: 11, fontWeight: 700 }}>
+                            {relation.relatedLabel}
+                          </div>
+                          <div style={{ marginTop: 1, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                            {humanizeToken(relation.type)}
+                            {relation.relatedType ? ` • ${humanizeToken(relation.relatedType)}` : ''}
+                          </div>
+                          <div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.5, color: 'var(--text-secondary-strong)' }}>
+                            {normalizeBusinessCopy(relation.businessMeaning) || normalizeBusinessCopy(relation.whyRelevant)}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </AccordionSection>
+            ) : null}
+
+            {hasEvidence ? (
+              <AccordionSection
+                isDark={isDark}
+                title="Analyst evidence"
+                subtitle="Technical drivers stay here by default so the main brief stays business-first"
+                open={openSections.evidence}
+                onToggle={() => toggleSection('evidence')}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {driverItems.map((item) => (
+                    <div key={`${item.title}:${item.body}`} style={{ paddingLeft: 10, borderLeft: `2px solid ${accent}` }}>
+                      <div style={{ fontSize: 11, fontWeight: 750 }}>{item.title}</div>
+                      <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                        {item.body}
+                      </div>
+                    </div>
+                  ))}
+                  {topMetrics.slice(0, 3).map((metric) => {
+                    const title = compactOverlayLabel(metric.label || metric.key);
+                    if (!title) return null;
+                    return (
+                      <div key={`${metric.key}:${metricValueText(metric)}`} style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                        <strong style={{ color: 'var(--text-heading)' }}>{title}</strong>
+                        {metricValueText(metric) ? ` • ${metricValueText(metric)}` : ''}
+                      </div>
+                    );
+                  })}
+                  {topMechanisms.slice(0, 3).map((mechanism) => {
+                    const title = compactOverlayLabel(mechanism.label || mechanism.key);
+                    if (!title) return null;
+                    return (
+                      <div key={`${mechanism.key}:${title}`} style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                        <strong style={{ color: 'var(--text-heading)' }}>{title}</strong>
+                        {typeof mechanism.score === 'number' && Number.isFinite(mechanism.score) ? ` • ${formatPercentScore(mechanism.score)} score` : ''}
+                      </div>
+                    );
+                  })}
+                  {(traceSummary?.propagationEdgeCount || 0) > 0 && (
+                    <div
+                      onMouseEnter={() => onNarrativeHover('propagation:overview')}
+                      onMouseLeave={() => onNarrativeHover(null)}
+                      style={{
+                        ...narrativeBlockStyle(isDark, activeNarrativeKey === 'propagation:overview', isDark ? '#94a3b8' : '#64748b'),
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <div style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--text-secondary-strong)' }}>
+                        Secondary spread is visible across {pluralize(traceSummary?.propagationEdgeCount || 0, 'gray link')} touching {pluralize(traceSummary?.propagationNodeCount || 0, 'node')}.
+                      </div>
+                    </div>
+                  )}
+                  <div style={{ fontSize: 10, color: 'var(--text-secondary-strong)' }}>
+                    Map lines on screen: {visibleEdgesCount || traceSummary?.visibleLineCount || 0}
                   </div>
                 </div>
-              </div>
-            )}
+              </AccordionSection>
+            ) : null}
           </>
         )}
       </div>
     </div>
   );
 };
+
+export default MapObjectDetail;

@@ -649,7 +649,7 @@ DOMAIN RULES
 - Use domains when the query is analytical or a research focus that must be expanded into multiple entities.
 - If a matching DOMAIN already exists, reuse the SAME canonicalPath.
 - DOMAIN canonicalPath: /domain/v1/{contractType}/{facetKey}/{facetValue}...
-  Examples: /domain/v1/ecosystem-mapping/geo/my/sector/energy, /domain/v1/bilateral-relations/geo/sa-ye
+  Examples: /domain/v1/ecosystem-mapping/geo/my/industry/energy, /domain/v1/bilateral-relations/geo/sa-ye
 - facetKey MUST be one of: geo, topic, subject, project, asset, material, product, commodity, crop, goods, item, application, sector, industry, market, regulation, framework, time
 - contractType MUST be one of (prefer canonical types; aliases accepted but auto-normalized):
   SUPPLY CHAIN: supply-chain, value-chain (aliases, avoid if possible: logistics-flow, trade-flow, sourcing-map, procurement-map)
@@ -662,7 +662,7 @@ DOMAIN RULES
   RELATIONSHIP/COMMONALITY: commonality-analysis
   POLICY: policy-impact, regulatory-impact (aliases: policy-and-regulation, compliance-landscape, security-and-compliance, licensing-requirements, esg-landscape → policy-impact)
   SCENARIOS: scenario-analysis, future-outlook (aliases: macro-trends, megatrends → scenario-analysis)
-  SECTOR: sector-overview, industry-structure (aliases: vertical-deep-dive → sector-overview)
+  INDUSTRY: industry-analysis
   FALLBACK: other (only if none above fit): /domain/v1/other/{custom-slug}/...
 - SUPPLY CHAIN PLAN: When contractType is supply-chain or value-chain, you MUST include supplyChainExecutionPlan with 1-10 queries. CRITICAL: The FIRST queries must go FROM ORGANIZATIONS (as producers/suppliers for downstream, or as consumers for upstream). Supply chains are actor-centric: org→product→org. direction: use "upstream" when the query asks about suppliers, raw materials, inputs, "who supplies X", "where does X get its materials", sourcing; use "downstream" when asking about customers, buyers, "who buys X", distribution; use "both" for full chain mapping. For upstream: anchors are the CONSUMER orgs (e.g. Coca-Cola for "who supplies Coca-Cola"). For downstream: anchors are PRODUCER orgs. Organization-focused supply-chain intents are valid: keep the organization in anchors / supplyChainExecutionPlan, and if canonicalPath must encode it, use facet form like /domain/v1/supply-chain/geo/us/subject/apple-inc. Do NOT emit /domain/v1/supply-chain/org/us/apple-inc/... . For product+geo queries (e.g. "Thai rice supply chain"): contractType MUST be supply-chain, facets MUST include geo and product or material. anchorType MUST be org. Use anchors (or anchors array) with canonical /org/... paths. Each query: anchor (single) or anchors (array), anchorType (org|product|deposit), direction (upstream|downstream|both), depth (3-6), productFilter/geoFilter from facets, reason. overlayQueries (Stage 2) optional. graphBuildMode MUST be "hot_path_only" for fast, hot-path-first answers when only the primary chain is needed, and "hot_path_plus_graph" when the system should continue with broader graph completion; default to "hot_path_plus_graph" when unsure.
 - ROUTE-SENSITIVE SUPPLY CHAIN: If the query mentions chokepoints, shipping routes, sea lanes, ports, terminals, pipelines, carriers, rerouting, "through/via", LNG/LPG shipping, or "from production to end-users", structure the intent for path execution. Include 3-8 anchors when evidence exists across these roles: producer org, upstream deposit/field, export facility, chokepoint/route geo, import terminal or market hub, downstream industrial consumer.
@@ -672,7 +672,7 @@ DOMAIN RULES
 	- ECOSYSTEM PLAN: When contractType is ecosystem-mapping or influence-network, you MUST include ecosystemExecutionPlan with 1-5 queries. Each query: focus (canonical path or description), focusType (geo|sector|market|org|community), depth (3-5), actorTypes (subset of [ORGANIZATION, GOV, PERSON, FACILITY, COMMUNITY]), sectorFilter, geoFilter, reason.
 - AFFECTED-ZONE / EXPOSURE: For conflict, disaster, earthquake, flood, tension, humanitarian, and security-zone queries, include anchors for zone geography plus exposed operators, facilities, markets, routes, or chokepoints when inferable. Do not reduce the intent to only /loc/... if the query implies operational exposure.
 - FINANCE / MARKET INFRASTRUCTURE: For banking, payments, insurance, exchanges, clearing, custody, portfolio exposure, or trade-finance questions, include anchors across the transmission chain when inferable: institutions, market infrastructure, regulators, sectors, and exposed corporate endpoints.
-- SECTOR / INDUSTRY STRUCTURE: For sector-overview, competitive-landscape, and industry-structure queries, include anchors across the chain when inferable: producers, facilities, markets, logistics hubs, major downstream consumers, and relevant regulators.
+- INDUSTRY ANALYSIS: For industry-analysis and competitive-landscape queries, include anchors across the chain when inferable: producers, facilities, markets, logistics hubs, major downstream consumers, and relevant regulators.
 - BILATERAL: If query is about relations between two countries → contractType bilateral-relations, geo = {cc1}-{cc2} (alphabetically sorted lowercase ISO2).
 - AFFECTED ZONE: If query asks about conflict zones, military conflicts, disaster zones, earthquake-affected areas, tension zones, humanitarian crisis areas, flood zones → contractType affected-zone, facet geo. geo: " + taxonomy.ISO2GeoDescriptionForPrompts() + ". Examples: /domain/v1/affected-zone/geo/tr-sy, /domain/v1/affected-zone/geo/sy, /domain/v1/affected-zone/geo/africa, /domain/v1/affected-zone/geo/ssa.
 - OWNERSHIP: If query asks who owns/controls an entity → contractType ownership-structure, facet subject.
@@ -742,8 +742,6 @@ var contractTypeAliases = map[string]string{
 	"stakeholder-mapping":   "ecosystem-mapping",
 	"partnership-landscape": "ecosystem-mapping",
 	"power-dynamics":        "ecosystem-mapping",
-	// Sector aliases -> sector-overview
-	"vertical-deep-dive": "sector-overview",
 	// Scenario aliases -> scenario-analysis
 	"macro-trends": "scenario-analysis",
 	"megatrends":   "scenario-analysis",
@@ -835,7 +833,7 @@ func inferIntentScenarioProfile(query string, domains []DomainResolution) intent
 			p.ecosystem = true
 		case "investment-thesis", "portfolio-exposure":
 			p.investment = true
-		case "sector-overview", "industry-structure", "competitive-landscape", "market-opportunity":
+		case "industry-analysis", "competitive-landscape", "market-opportunity":
 			p.sector = true
 		}
 	}
@@ -1003,7 +1001,7 @@ func prioritizeIntentDomains(domains []DomainResolution, profile intentScenarioP
 			return 88
 		case profile.investment && (ct == "investment-thesis" || ct == "portfolio-exposure"):
 			return 85
-		case profile.sector && (ct == "sector-overview" || ct == "industry-structure" || ct == "competitive-landscape"):
+		case profile.sector && (ct == "industry-analysis" || ct == "competitive-landscape"):
 			return 80
 		default:
 			return 50
@@ -1669,12 +1667,8 @@ func baseDomainTitle(contractType string) string {
 		return "Future outlook"
 
 	// Sector / industry
-	case "sector-overview":
-		return "Sector overview"
-	case "industry-structure":
-		return "Industry structure"
-	case "vertical-deep-dive":
-		return "Vertical deep-dive"
+	case "industry-analysis":
+		return "Industry analysis"
 
 	// Other - handled specially (returns just "Other", custom slug added elsewhere)
 	case "other":
@@ -1874,7 +1868,7 @@ func buildDomainDescriptionForIntent(contractType string, title string) string {
 		return fmt.Sprintf("Expand %s into first-order entities: trend drivers, affected sectors, timeline indicators, impact areas, and strategic responses.", ttl)
 
 	// Sector / industry
-	case "sector-overview", "industry-structure", "vertical-deep-dive":
+	case "industry-analysis":
 		return fmt.Sprintf("Expand %s into first-order entities: industry players, market structure, value chain, competitive dynamics, and growth drivers.", ttl)
 
 	// Other - use title-based description
@@ -2202,8 +2196,8 @@ RULES:
   - /market/... CAN be used as an ANCHOR when the user asks about a market as a concrete entity.
   - Domain canonicalPath MUST be: /domain/v1/{contractType}/{facetKey}/{facetValue}...
     Good DOMAIN examples:
-      /domain/v1/ecosystem-mapping/geo/my/sector/energy
-      /domain/v1/sector-overview/geo/kz/sector/agro-food
+      /domain/v1/ecosystem-mapping/geo/my/industry/energy
+      /domain/v1/industry-analysis/geo/kz/industry/agro-food
       /domain/v1/market-opportunity/geo/sg/industry/finance
       /domain/v1/affected-zone/geo/tr-sy
     Bad DOMAIN examples (these are ANCHORS, not DOMAINS):
@@ -2233,9 +2227,8 @@ RULES:
     SCENARIOS / TRENDS:
       scenario-analysis, macro-trends, megatrends, future-outlook
     SECTOR / INDUSTRY SPECIFIC (universal; no domain fallback):
-      sector-overview, industry-structure, vertical-deep-dive
-      - sector-overview: top-level domain branch for any sector (energy, agro, tech, finance, etc.)
-      - market-opportunity: sub-contract for /market/ scope; can be auto-triggered under sector-overview
+      industry-analysis
+      - industry-analysis: top-level analytical branch for strict /industry scope
     FALLBACK (use ONLY if none of the above fit):
       other — Format: /domain/v1/other/{custom-slug}/... where {custom-slug} is a lowercase kebab-case descriptor (e.g., energy-ecosystem-mapping, startup-landscape, talent-pool-analysis).
       Example: /domain/v1/other/energy-ecosystem-mapping/geo/my

@@ -320,20 +320,6 @@ func applyFragmentReport(fragment *horizonmodels.HorizonFragment, report fragmen
 		fragment.MarketVertical = report.MarketVertical.Value
 		changed = true
 	}
-	if len(fragment.IndustryPaths) == 0 && len(report.IndustryPaths) > 0 {
-		paths := make([]string, 0, len(report.IndustryPaths))
-		for _, item := range report.IndustryPaths {
-			if item.Value == "" || item.Confidence < 0.34 {
-				continue
-			}
-			paths = append(paths, item.Value)
-		}
-		paths = horizonmodels.NormalizeIndexPaths(16, paths)
-		if len(paths) > 0 {
-			fragment.IndustryPaths = paths
-			changed = true
-		}
-	}
 	if report.Chokepoint.Value == "true" && report.Chokepoint.Confidence >= 0.38 && !hasTag(fragment.Tags, "chokepoint") {
 		fragment.Tags = append(fragment.Tags, "chokepoint")
 		changed = true
@@ -456,7 +442,6 @@ func collectFragmentEvidence(fragment *horizonmodels.HorizonFragment) []evidence
 	}
 	appendField("tags", 1.0, strings.Join(fragment.Tags, " "))
 	appendField("entity_path", 1.0, fragment.EntityPath)
-	appendField("sector_path", 1.0, fragment.SectorPath)
 	appendField("parent_path", 0.9, fragment.ParentPath, fragment.ParentGovPath, fragment.ParentMarketPath)
 	appendField("market_segments", 1.3, strings.Join(fragment.MarketSegments, " "))
 	appendField("market_norm_domains", 1.3, strings.Join(fragment.MarketSegmentNormDomains, " "))

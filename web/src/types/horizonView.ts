@@ -50,6 +50,8 @@ export interface HorizonLensRecord {
   projectId: string;
   name: string;
   scope: string[];
+  originalQuery?: string;
+  domainQueries?: Array<Record<string, any>>;
   viewConfig?: HorizonLensViewConfig;
   alertConfig?: Record<string, any>;
   status: string;

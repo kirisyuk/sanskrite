@@ -295,9 +295,6 @@ func (a *ResearchAgent) mergeFragment(main *models.HorizonFragment, partial *mod
 	if partial.EntityPath != "" {
 		main.EntityPath = partial.EntityPath
 	}
-	if partial.SectorPath != "" {
-		main.SectorPath = partial.SectorPath
-	}
 	if partial.Description != "" {
 		main.Description = partial.Description
 	}

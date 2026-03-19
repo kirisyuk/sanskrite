@@ -3409,8 +3409,8 @@ func isLowSignalOrgStubForDedup(f *models.HorizonFragment) bool {
 	if !lifecycleWeak {
 		return false
 	}
-	// Extra weak signal: generic/incorrect taxonomy placement
-	if strings.EqualFold(strings.TrimSpace(f.SectorPath), "/Geography") {
+	// Extra weak signal: generic/incorrect type placement
+	if f.Type == models.FragmentTypeGeoRegion || strings.HasPrefix(strings.ToLower(strings.TrimSpace(f.CanonicalPath)), "/loc/") {
 		return true
 	}
 	// Fallback: label-only + weak lifecycle is already a strong stub pattern.

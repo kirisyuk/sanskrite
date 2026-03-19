@@ -27,6 +27,10 @@ const LEG_DIRECTION_LAYER = 'path-legs-direction';
 const LEG_OBJECT_LAYER = 'path-legs-objects';
 const LEG_OBJECT_LABEL_LAYER = 'path-legs-object-labels';
 const LEG_MEANING_LABEL_LAYER = 'path-legs-meaning-labels';
+const OBJECT_LABEL_CHIP_DARK = 'path-legs-object-label-chip-dark';
+const OBJECT_LABEL_CHIP_LIGHT = 'path-legs-object-label-chip-light';
+const MEANING_LABEL_CHIP_DARK = 'path-legs-meaning-label-chip-dark';
+const MEANING_LABEL_CHIP_LIGHT = 'path-legs-meaning-label-chip-light';
 const HOVER_ACTIVATE_DELAY_MS = 90;
 const HOVER_CLEAR_DELAY_MS = 140;
 
@@ -54,6 +58,35 @@ function canAccessMapStyle(map: maplibregl.Map): boolean {
   } catch {
     return false;
   }
+}
+
+function labelChipImageId(kind: 'object' | 'meaning', theme: ThemeMode): string {
+  if (kind === 'object') {
+    return theme === 'dark' ? OBJECT_LABEL_CHIP_DARK : OBJECT_LABEL_CHIP_LIGHT;
+  }
+  return theme === 'dark' ? MEANING_LABEL_CHIP_DARK : MEANING_LABEL_CHIP_LIGHT;
+}
+
+function drawRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+): void {
+  const r = Math.max(0, Math.min(radius, width / 2, height / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -343,8 +376,8 @@ function legObjectLabelRect(point: { x: number; y: number }, text: string): Scre
 
 function legMeaningLabelRect(point: { x: number; y: number }, text: string): ScreenRect {
   const lines = Math.max(1, String(text || '').split('\n').filter(Boolean).length);
-  const width = lineLabelWidthPx(text, 180);
-  const height = lines > 1 ? 28 : 16;
+  const width = lineLabelWidthPx(text, 180) + 20;
+  const height = lines > 1 ? 34 : 22;
   return {
     left: point.x - width / 2,
     right: point.x + width / 2,
@@ -380,6 +413,67 @@ function stylePathLegPopup(popup: maplibregl.Popup, theme: ThemeMode): void {
     tip.style.borderBottomColor = background;
     tip.style.borderLeftColor = background;
     tip.style.borderRightColor = background;
+  }
+}
+
+function renderPathLegLabelChipImage(kind: 'object' | 'meaning', theme: ThemeMode): {
+  width: number;
+  height: number;
+  data: Uint8ClampedArray;
+  pixelRatio: number;
+  stretchX: Array<[number, number]>;
+  stretchY: Array<[number, number]>;
+  content: [number, number, number, number];
+} {
+  const pixelRatio = 2;
+  const width = kind === 'meaning' ? 128 : 112;
+  const height = kind === 'meaning' ? 46 : 42;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d')!;
+  const fill = theme === 'dark'
+    ? (kind === 'meaning' ? 'rgba(15, 12, 9, 0.82)' : 'rgba(7, 12, 18, 0.9)')
+    : (kind === 'meaning' ? 'rgba(255, 249, 242, 0.94)' : 'rgba(255, 255, 255, 0.96)');
+  const stroke = theme === 'dark'
+    ? (kind === 'meaning' ? 'rgba(251, 146, 60, 0.24)' : 'rgba(96, 165, 250, 0.42)')
+    : (kind === 'meaning' ? 'rgba(194, 65, 12, 0.16)' : 'rgba(37, 99, 235, 0.24)');
+  const shadow = theme === 'dark'
+    ? 'rgba(0, 0, 0, 0.22)'
+    : (kind === 'meaning' ? 'rgba(120, 53, 15, 0.08)' : 'rgba(30, 64, 175, 0.12)');
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.shadowColor = shadow;
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetY = 2;
+  drawRoundedRect(ctx, 2, 4, width - 4, height - 8, 14);
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.lineWidth = 1.2;
+  ctx.strokeStyle = stroke;
+  ctx.stroke();
+
+  const imageData = ctx.getImageData(0, 0, width, height);
+  return {
+    width,
+    height,
+    data: imageData.data,
+    pixelRatio,
+    stretchX: [[24, width - 24]],
+    stretchY: [[16, height - 16]],
+    content: [20, 10, width - 20, height - 10],
+  };
+}
+
+function ensurePathLegLabelChipImages(map: maplibregl.Map, theme: ThemeMode): void {
+  for (const kind of ['object', 'meaning'] as const) {
+    const id = labelChipImageId(kind, theme);
+    if (map.hasImage(id)) continue;
+    const image = renderPathLegLabelChipImage(kind, theme);
+    map.addImage(id, image as any);
   }
 }
 
@@ -951,6 +1045,7 @@ export function usePathLegLayer(
   useEffect(() => {
     if (!map || !isReady || !canAccessMapStyle(map)) return;
     void ensureMarkerImages(map, data.markerObjects, theme);
+    ensurePathLegLabelChipImages(map, theme);
     const viewportFeatureCollection = buildViewportPathLegFeatureCollection(data.featureCollection, map);
 
     if (!map.getSource(SRC)) {
@@ -1371,6 +1466,12 @@ export function usePathLegLayer(
         source: SRC,
         filter: pointKindFilter('leg-meaning'),
         layout: {
+          'icon-image': labelChipImageId('meaning', theme),
+          'icon-anchor': 'center',
+          'icon-text-fit': 'both',
+          'icon-text-fit-padding': [4, 8, 4, 8],
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true,
           'text-field': ['get', 'meaningText'],
           'text-font': [...MAP_TEXT_FONT_STACK],
           'text-size': [
@@ -1380,26 +1481,32 @@ export function usePathLegLayer(
             8, 11,
           ],
           'text-max-width': 12,
-          'text-offset': [0, -0.2],
-          'text-anchor': 'bottom',
+          'text-offset': [0, 0],
+          'text-anchor': 'center',
           'text-allow-overlap': true,
           'text-ignore-placement': true,
         },
         paint: {
+          'icon-opacity': [
+            'case',
+            ['==', ['get', 'pathActive'], 1],
+            0.84,
+            0.68,
+          ],
           'text-color': [
             'case',
             ['==', ['get', 'pathActive'], 1],
-            theme === 'dark' ? '#ecfeff' : 'rgba(8,47,73,0.96)',
-            theme === 'dark' ? '#e2e8f0' : 'rgba(15,23,42,0.92)',
+            theme === 'dark' ? '#f2e7da' : 'rgba(124,45,18,0.86)',
+            theme === 'dark' ? '#dccdbb' : 'rgba(120,53,15,0.74)',
           ],
-          'text-halo-color': theme === 'dark' ? 'rgba(2,6,23,0.985)' : 'rgba(255,255,255,0.985)',
+          'text-halo-color': theme === 'dark' ? 'rgba(14,11,8,0.86)' : 'rgba(255,249,242,0.92)',
           'text-halo-width': [
             'case',
             ['==', ['get', 'pathActive'], 1],
-            2.8,
-            2.3,
+            0.64,
+            0.5,
           ],
-          'text-halo-blur': 0.7,
+          'text-halo-blur': 0.2,
           'text-opacity': meaningLabelOpacityExpression(),
         },
       });
@@ -1412,6 +1519,12 @@ export function usePathLegLayer(
         source: SRC,
         filter: hoverFilter(pointKindFilter('leg-meaning'), null),
         layout: {
+          'icon-image': labelChipImageId('meaning', theme),
+          'icon-anchor': 'center',
+          'icon-text-fit': 'both',
+          'icon-text-fit-padding': [4, 8, 4, 8],
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true,
           'text-field': ['get', 'meaningText'],
           'text-font': [...MAP_TEXT_FONT_STACK],
           'text-size': [
@@ -1421,27 +1534,28 @@ export function usePathLegLayer(
             8, 11,
           ],
           'text-max-width': 12,
-          'text-offset': [0, -0.2],
-          'text-anchor': 'bottom',
+          'text-offset': [0, 0],
+          'text-anchor': 'center',
           'text-allow-overlap': true,
           'text-ignore-placement': true,
           visibility: 'none',
         },
         paint: {
+          'icon-opacity': 0.9,
           'text-color': [
             'case',
             ['==', ['get', 'pathActive'], 1],
-            theme === 'dark' ? '#ecfeff' : 'rgba(8,47,73,0.96)',
-            theme === 'dark' ? '#e2e8f0' : 'rgba(15,23,42,0.92)',
+            theme === 'dark' ? '#f2e7da' : 'rgba(124,45,18,0.86)',
+            theme === 'dark' ? '#dccdbb' : 'rgba(120,53,15,0.74)',
           ],
-          'text-halo-color': theme === 'dark' ? 'rgba(2,6,23,0.985)' : 'rgba(255,255,255,0.985)',
+          'text-halo-color': theme === 'dark' ? 'rgba(14,11,8,0.86)' : 'rgba(255,249,242,0.92)',
           'text-halo-width': [
             'case',
             ['==', ['get', 'pathActive'], 1],
-            3,
-            2.45,
+            0.68,
+            0.56,
           ],
-          'text-halo-blur': 0.7,
+          'text-halo-blur': 0.2,
           'text-opacity': ['*', meaningLabelOpacityExpression(), 1.1],
         },
       });

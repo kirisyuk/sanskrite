@@ -39,12 +39,6 @@ type HorizonTaxonomy struct {
 	KnownProducts            map[string]ProductSpecData `json:"knownProducts,omitempty" firestore:"knownProducts,omitempty"`                       // "lithium-carbonate" -> spec
 	ProductSynonyms          map[string]string          `json:"productSynonyms,omitempty" firestore:"productSynonyms,omitempty"`                   // "Li2CO3" -> "lithium-carbonate", "battery grade lithium" -> "lithium-carbonate"
 
-	// Industry taxonomy (/industry/...) — canonical, multi-valued classification for ORG/PERSON/PRODUCT.
-	// This is intended to be more strict than free-form sectorPath.
-	AllowedIndustryPaths []string          `json:"allowedIndustryPaths,omitempty" firestore:"allowedIndustryPaths,omitempty"`
-	IndustrySynonyms     map[string]string `json:"industrySynonyms,omitempty" firestore:"industrySynonyms,omitempty"`       // normalized label -> /industry/... path
-	IndustryWikidataMap  map[string]string `json:"industryWikidataMap,omitempty" firestore:"industryWikidataMap,omitempty"` // Wikidata QID -> /industry/... path
-
 	// Natural resource deposits (/deposit/{resource-slug}/{deposit-slug})
 	AllowedDepositResources []string `json:"allowedDepositResources,omitempty" firestore:"allowedDepositResources,omitempty"`
 

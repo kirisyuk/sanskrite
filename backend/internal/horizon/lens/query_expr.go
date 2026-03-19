@@ -19,10 +19,10 @@ type Expr interface {
 type TermField string
 
 const (
-	FieldSphere       TermField = "sphere"
-	FieldSector       TermField = "sector"
-	FieldLocation     TermField = "location"
-	FieldEntityType   TermField = "entityType"
+	FieldSphere        TermField = "sphere"
+	FieldIndustry      TermField = "industry"
+	FieldLocation      TermField = "location"
+	FieldEntityType    TermField = "entityType"
 	FieldCanonicalPath TermField = "canonicalPath"
 )
 
@@ -42,8 +42,13 @@ func (e termExpr) Eval(f *HorizonFragmentView, ctx *EvalContext) bool {
 		return false
 	}
 	switch e.t.Field {
-	case FieldSector:
-		return MatchesPattern(f.SectorPath, e.t.Pattern)
+	case FieldIndustry:
+		for _, path := range f.IndustryPaths {
+			if MatchesPattern(path, e.t.Pattern) {
+				return true
+			}
+		}
+		return false
 	case FieldEntityType:
 		return MatchesPattern(f.EntityPath, e.t.Pattern)
 	case FieldCanonicalPath:
@@ -84,7 +89,7 @@ func (e notExpr) Eval(f *HorizonFragmentView, ctx *EvalContext) bool { return !e
 type HorizonFragmentView struct {
 	CanonicalPath string
 	EntityPath    string
-	SectorPath    string
+	IndustryPaths []string
 	LocationPath  string // derived from homeLocation (best-effort)
 }
 
@@ -356,8 +361,8 @@ func normalizeTerm(fieldRaw string, value string) (Term, error) {
 	switch fieldRaw {
 	case "sphere", "spherepath", "spherepaths":
 		return Term{Field: FieldSphere, Pattern: value}, nil
-	case "sector", "sectorpath":
-		return Term{Field: FieldSector, Pattern: value}, nil
+	case "industry", "industrypath", "industrypaths":
+		return Term{Field: FieldIndustry, Pattern: value}, nil
 	case "location", "locationpath":
 		return Term{Field: FieldLocation, Pattern: value}, nil
 	case "entitytype", "entity_type":
@@ -368,5 +373,4 @@ func normalizeTerm(fieldRaw string, value string) (Term, error) {
 		return Term{}, fmt.Errorf("unknown criteria field: %s", fieldRaw)
 	}
 }
-
 

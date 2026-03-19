@@ -563,7 +563,7 @@ TASK: Compare the extracted data with the source content and identify any confli
 	
 	MANDATORY - Products/services for operating organizations (always, not just for products_and_services specialty):
 	  - For any /org/ (ORGANIZATION), first determine if it's a HOLDING company or OPERATING company:
-	    - HOLDING indicators: has OWNS edges to other /org/, sectorPath contains "Financials/Capital_Markets" or "Holding", labels contain "holding", "investment", "group"
+	    - HOLDING indicators: has OWNS edges to other /org/, industryPaths indicate finance/investment or the labels contain "holding", "investment", "group"
 	    - OPERATING company: produces products/services directly
 	  - For OPERATING /org/: if there are NO PRODUCES relations with /product/... targets, add:
 	    - "What products does <org> manufacture/produce? Return as /product/{category}/{type}/{stage}/{slug} canonical paths."
@@ -579,7 +579,7 @@ TASK: Compare the extracted data with the source content and identify any confli
 	    - "What inputs/materials does this facility consume? Return as /product/... canonical paths."
 	
 	MANDATORY - Extractive industries (Mining and O&G):
-	  - If sectorPath contains "Materials/Mining" or "Energy/Fossil_Fuels/Oil_Gas":
+	  - If industryPaths indicate mining, hydrocarbons, or another extractive branch:
 	    - If no /deposit/ entities are linked (EXTRACTS_FROM or OPERATES_IN), add:
 	      - "What deposits/fields/basins does <org/fac> extract from? Return as /deposit/{resource}/{deposit-slug}."
 	    - For each product in PRODUCES: if no reserves metrics, add:

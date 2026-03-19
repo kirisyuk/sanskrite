@@ -66,7 +66,7 @@ func fragmentToGeoItem(f *models.HorizonFragment, inScope bool) (geoObjectRespon
 				f.Labels["en"],
 				f.Description,
 				f.EntityPath,
-				f.SectorPath,
+				strings.Join(f.IndustryPaths, " "),
 				f.Identifiers["facilityType"],
 				f.Identifiers["supplyChainRole"],
 			)

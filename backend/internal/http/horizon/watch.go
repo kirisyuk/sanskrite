@@ -12,13 +12,16 @@ import (
 )
 
 type createWatchTargetRequest struct {
-	Kind          string   `json:"kind"`
-	Label         string   `json:"label"`
-	CanonicalPath string   `json:"canonicalPath"`
-	FragmentID    string   `json:"fragmentId,omitempty"`
-	DomainModes   []string `json:"domainModes,omitempty"`
-	Roles         []string `json:"roles,omitempty"`
-	Priority      int      `json:"priority,omitempty"`
+	Kind           string   `json:"kind"`
+	Label          string   `json:"label"`
+	CanonicalPath  string   `json:"canonicalPath"`
+	FragmentID     string   `json:"fragmentId,omitempty"`
+	InterestTitle  string   `json:"interestTitle,omitempty"`
+	InterestQuery  string   `json:"interestQuery,omitempty"`
+	QueryOverrides []string `json:"queryOverrides,omitempty"`
+	DomainModes    []string `json:"domainModes,omitempty"`
+	Roles          []string `json:"roles,omitempty"`
+	Priority       int      `json:"priority,omitempty"`
 }
 
 type searchWatchRequest struct {
@@ -40,6 +43,11 @@ type compareWatchScenariosRequest struct {
 	LensID      string   `json:"lensId,omitempty"`
 	TimeHorizon string   `json:"timeHorizon,omitempty"`
 	ContractIDs []string `json:"contractIds,omitempty"`
+}
+
+type refreshWatchPageRequest struct {
+	LensID      string `json:"lensId,omitempty"`
+	TimeHorizon string `json:"timeHorizon,omitempty"`
 }
 
 func (h *HorizonHandlers) HandleWatchRoot(w http.ResponseWriter, r *http.Request) {
@@ -287,17 +295,20 @@ func (h *HorizonHandlers) CreateWatchTarget(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	target := &horizonmodels.WatchTarget{
-		TenantID:      authInfo.TenantID,
-		UserID:        authInfo.UID,
-		Kind:          strings.TrimSpace(req.Kind),
-		Label:         strings.TrimSpace(req.Label),
-		CanonicalPath: strings.TrimSpace(req.CanonicalPath),
-		FragmentID:    strings.TrimSpace(req.FragmentID),
-		DomainModes:   req.DomainModes,
-		Roles:         req.Roles,
-		Priority:      req.Priority,
-		Source:        "api_manual",
-		Status:        string(horizonmodels.WatchTargetStatusActive),
+		TenantID:       authInfo.TenantID,
+		UserID:         authInfo.UID,
+		Kind:           strings.TrimSpace(req.Kind),
+		Label:          strings.TrimSpace(req.Label),
+		CanonicalPath:  strings.TrimSpace(req.CanonicalPath),
+		FragmentID:     strings.TrimSpace(req.FragmentID),
+		InterestTitle:  strings.TrimSpace(req.InterestTitle),
+		InterestQuery:  strings.TrimSpace(req.InterestQuery),
+		QueryOverrides: append([]string(nil), req.QueryOverrides...),
+		DomainModes:    req.DomainModes,
+		Roles:          req.Roles,
+		Priority:       req.Priority,
+		Source:         "api_manual",
+		Status:         string(horizonmodels.WatchTargetStatusActive),
 	}
 	if target.Kind == "" {
 		target.Kind = inferWatchKind(target.CanonicalPath)
@@ -308,6 +319,74 @@ func (h *HorizonHandlers) CreateWatchTarget(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)
+}
+
+func (h *HorizonHandlers) GetWatchPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h == nil || h.watchService == nil {
+		http.Error(w, "watch service not configured", http.StatusServiceUnavailable)
+		return
+	}
+	authInfo, err := requireAuth(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	lensID := strings.TrimSpace(r.URL.Query().Get("lensId"))
+	if lensID == "" {
+		http.Error(w, "lensId is required", http.StatusBadRequest)
+		return
+	}
+	snapshot, err := h.watchService.GetLensPageSnapshot(r.Context(), authInfo.TenantID, lensID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to load watch page: %v", err), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func (h *HorizonHandlers) RefreshWatchPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h == nil || h.watchService == nil {
+		http.Error(w, "watch service not configured", http.StatusServiceUnavailable)
+		return
+	}
+	authInfo, err := requireAuth(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	var req refreshWatchPageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+	lensID := strings.TrimSpace(req.LensID)
+	if lensID == "" {
+		lensID = strings.TrimSpace(r.URL.Query().Get("lensId"))
+	}
+	if lensID == "" {
+		http.Error(w, "lensId is required", http.StatusBadRequest)
+		return
+	}
+	snapshot, err := h.watchService.RefreshLensPageSnapshot(
+		r.Context(),
+		authInfo.TenantID,
+		authInfo.UID,
+		lensID,
+		strings.TrimSpace(req.TimeHorizon),
+	)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to refresh watch page: %v", err), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
 }
 
 func (h *HorizonHandlers) DeleteWatchTarget(w http.ResponseWriter, r *http.Request) {

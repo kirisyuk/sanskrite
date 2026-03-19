@@ -1198,8 +1198,8 @@ func isLowSignalOrgStub(f *models.HorizonFragment) bool {
 	if strings.TrimSpace(f.Status) != "" && !strings.EqualFold(strings.TrimSpace(f.Governance.Status), string(models.FragmentStatusDormant)) {
 		return false
 	}
-	// Extra weak signal: generic/incorrect taxonomy placement.
-	if strings.EqualFold(strings.TrimSpace(f.SectorPath), "/Geography") {
+	// Extra weak signal: generic/incorrect type placement.
+	if f.Type == models.FragmentTypeGeoRegion || strings.HasPrefix(strings.ToLower(strings.TrimSpace(f.CanonicalPath)), "/loc/") {
 		return true
 	}
 	// Default: label-only + weak lifecycle is sufficient for stub classification.

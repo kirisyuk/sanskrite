@@ -17,7 +17,7 @@ type ProductWikidataData struct {
 	ChemicalFormula string   // P274 - Chemical formula
 	InstanceOf      []string // P31 - Instance of (for entityPath)
 	SubclassOf      []string // P279 - Subclass of (for entityPath hierarchy)
-	Industry        []string // P452 - Industry (for sectorPath)
+	Industry        []string // P452 - Industry (resolver-owned raw signal)
 	Uses            []string // P366 - Has use (applications)
 	ProducedFrom    []string // P10565 - Is produced from (upstream)
 	MaterialUsed    []string // P186 - Material used (upstream)
@@ -238,4 +238,3 @@ func (e *ProductWikidataExtractor) SearchProduct(ctx context.Context, productNam
 	// Return first result's Q-ID
 	return response.Results[0].ID, nil
 }
-

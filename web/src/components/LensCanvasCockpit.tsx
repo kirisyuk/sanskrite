@@ -173,6 +173,26 @@ const isCorridorSyntheticEdgeId = (id: string): boolean => String(id || '').trim
 const isCorridorArtifactNodeId = (id: string): boolean => isCorridorSyntheticNodeId(id) || isLegacyCorridorNodeId(id);
 const isCorridorArtifactEdgeId = (id: string): boolean => isCorridorSyntheticEdgeId(id) || isLegacyCorridorEdgeId(id);
 
+function resolveDirectedSupplyChainDirection(intent: ScoutIntentResolution | null, rawQuery: string): 'upstream' | 'downstream' | 'both' {
+  const domains = Array.isArray(intent?.domains) ? intent.domains : [];
+  for (const domain of domains as any[]) {
+    const contractType = String(domain?.contractType || '').trim().toLowerCase();
+    if (contractType !== 'supply-chain' && contractType !== 'value-chain') continue;
+    const queries = Array.isArray(domain?.supplyChainExecutionPlan?.queries) ? domain.supplyChainExecutionPlan.queries : [];
+    for (const query of queries) {
+      const direction = String(query?.direction || '').trim().toLowerCase();
+      if (direction === 'upstream' || direction === 'downstream' || direction === 'both') return direction;
+    }
+  }
+
+  const q = String(rawQuery || '').trim().toLowerCase();
+  const bothHints = ['supply chain', 'value chain', 'цепоч', 'цепочк', 'цепочка поставок', 'value-chain'];
+  if (bothHints.some((token) => q.includes(token))) return 'both';
+  const upstreamHints = ['upstream', 'supplier', 'suppliers', 'sourcing', 'source', 'sources', 'input', 'inputs', 'raw material', 'raw materials', 'кто поставляет', 'поставщик', 'поставщики', 'сырье', 'сырьё', 'источник', 'источники', 'снабж'];
+  if (upstreamHints.some((token) => q.includes(token))) return 'upstream';
+  return 'downstream';
+}
+
 /**
  * Custom edge that draws an arc (inverted parabola) going UP and over.
  * Used for central-to-central connections in Linear mode.
@@ -2249,6 +2269,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const [scoutRunLoading, setScoutRunLoading] = React.useState(false);
   const [scoutIntentMode, setScoutIntentMode] = React.useState<ScoutingMode>('general');
   const [scoutIntentModeTouched, setScoutIntentModeTouched] = React.useState(false);
+  const [scoutIntentHotPathOnly, setScoutIntentHotPathOnly] = React.useState(false);
+  const [scoutIntentDirection, setScoutIntentDirection] = React.useState<'upstream' | 'downstream' | 'both'>('downstream');
 
   const graphIntentNodeIdToLabel = React.useMemo(() => {
     const m: Record<string, string> = {};
@@ -3128,6 +3150,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         if (!alive) return;
         const nextIntent = res?.intent as ScoutIntentResolution;
         setScoutIntentIntent(nextIntent);
+        setScoutIntentDirection(resolveDirectedSupplyChainDirection(nextIntent, scoutIntentQuery));
         if (!scoutIntentModeTouched) {
           setScoutIntentMode(defaultScoutingModeForIntent(nextIntent));
         }
@@ -12153,6 +12176,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setScoutRunLoading(false);
     setScoutIntentMode('general');
     setScoutIntentModeTouched(false);
+    setScoutIntentHotPathOnly(false);
+    setScoutIntentDirection('downstream');
     setScoutIntentModalOpen(true);
   }, [closeAddNode]);
 
@@ -12165,6 +12190,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     setScoutRunLoading(false);
     setScoutIntentMode('general');
     setScoutIntentModeTouched(false);
+    setScoutIntentHotPathOnly(false);
+    setScoutIntentDirection('downstream');
   }, []);
 
   const openCommandPalette = React.useCallback(() => {
@@ -13251,6 +13278,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     }
   }, [lensId, rtGraphEdges, nodes, materializeRealtimeEdge]);
 
+  const scoutIntentHasSupplyChainContract = React.useMemo(() => {
+    const domains = Array.isArray(scoutIntentIntent?.domains) ? scoutIntentIntent?.domains : [];
+    return domains.some((domain: any) => {
+      const contractType = String(domain?.contractType || '').trim().toLowerCase();
+      return contractType === 'supply-chain' || contractType === 'value-chain';
+    });
+  }, [scoutIntentIntent]);
+
   const scoutFullForQuery = React.useCallback(
     async (query: string, options?: { onProgress?: (msg: string) => void; mode?: ScoutingMode }) => {
       const q = String(query || '').trim();
@@ -13381,20 +13416,82 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     ],
   );
 
+  const scoutHotPathForQuery = React.useCallback(
+    async (query: string, intent: ScoutIntentResolution | null, options?: { onProgress?: (msg: string) => void }) => {
+      const q = String(query || '').trim();
+      if (!lensId || q.length < 2) return;
+      const onProgress = options?.onProgress;
+      const correlationId = genCorrelationId();
+      const resolvedDirection = scoutIntentDirection === 'both' ? resolveDirectedSupplyChainDirection(intent, q) : scoutIntentDirection;
+      const direction: 'upstream' | 'downstream' = resolvedDirection === 'upstream' ? 'upstream' : 'downstream';
+
+      try {
+        onProgress?.(`Calling scope-scout-query (supply_chain hot path, ${direction})…`);
+        const res = await api.scopeScoutHorizonLensQuery(
+          lensId,
+          {
+            query: q,
+            mode: 'supply_chain',
+            specialties: specialtiesForScoutingMode('supply_chain'),
+            exploration: {
+              domainMode: 'supply_chain',
+              direction,
+              hotPathOnly: true,
+              renderTarget: 'graph',
+              ignoreFreshness: true,
+            },
+          },
+          { correlationId },
+        );
+
+        const targetCanonicalPath = String(res?.targetCanonicalPath || '').trim();
+        onProgress?.(`Intent resolved. Directed hot path job created.`);
+        if (targetCanonicalPath) {
+          onProgress?.(`Target: ${targetCanonicalPath}`);
+          setLensScopePaths((prev) => (prev.includes(targetCanonicalPath) ? prev : [...prev, targetCanonicalPath]));
+        }
+        onProgress?.(`Execution mode: hot path only (${direction}). Live updates will stream into the graph.`);
+      } catch (e) {
+        console.warn('[Cockpit] scope-scout-query hot path failed', e);
+        onProgress?.(`Error: ${(e as Error)?.message || 'scope-scout-query failed'}`);
+      }
+    },
+    [lensId, genCorrelationId, scoutIntentDirection, setLensScopePaths],
+  );
+
   const runScoutFromModal = React.useCallback(async () => {
     const q = scoutIntentQuery.trim();
     if (!q || !lensId) return;
     setScoutRunLoading(true);
     setScoutProgressLog((prev) => [...prev, `Starting ${scoutIntentMode} scout…`]);
     try {
-      await scoutFullForQuery(q, {
-        mode: scoutIntentMode,
-        onProgress: (msg) => setScoutProgressLog((prev) => [...prev, msg]),
-      });
+      if (scoutIntentMode === 'supply_chain' && scoutIntentHotPathOnly && scoutIntentHasSupplyChainContract && scoutIntentDirection !== 'both') {
+        await scoutHotPathForQuery(q, scoutIntentIntent, {
+          onProgress: (msg) => setScoutProgressLog((prev) => [...prev, msg]),
+        });
+      } else {
+        if (scoutIntentMode === 'supply_chain' && scoutIntentHotPathOnly && scoutIntentDirection === 'both') {
+          setScoutProgressLog((prev) => [...prev, 'Direction "Both" keeps the broader full supply-chain expansion.']);
+        }
+        await scoutFullForQuery(q, {
+          mode: scoutIntentMode,
+          onProgress: (msg) => setScoutProgressLog((prev) => [...prev, msg]),
+        });
+      }
     } finally {
       setScoutRunLoading(false);
     }
-  }, [lensId, scoutIntentMode, scoutIntentQuery, scoutFullForQuery]);
+  }, [
+    lensId,
+    scoutIntentMode,
+    scoutIntentQuery,
+    scoutIntentHotPathOnly,
+    scoutIntentDirection,
+    scoutIntentHasSupplyChainContract,
+    scoutIntentIntent,
+    scoutFullForQuery,
+    scoutHotPathForQuery,
+  ]);
 
   const addNodeToLens = React.useCallback(
     async (entity: HorizonSearchEntity) => {
@@ -19256,6 +19353,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         runLoading={scoutRunLoading}
         progressLog={scoutProgressLog}
         mode={scoutIntentMode}
+        showHotPathOption={scoutIntentHasSupplyChainContract}
+        hotPathOnly={scoutIntentHotPathOnly}
+        onHotPathOnlyChange={setScoutIntentHotPathOnly}
+        supplyChainDirection={scoutIntentDirection}
+        onSupplyChainDirectionChange={setScoutIntentDirection}
         onModeChange={(mode) => {
           setScoutIntentMode(mode);
           setScoutIntentModeTouched(true);

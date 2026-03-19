@@ -242,14 +242,14 @@ type scoutResultInternal struct {
 
 // ExtractFragmentData извлекает данные HorizonFragment и связи из контента источника.
 // Backward-compatible wrapper around ExtractFragmentDataWithGrounding.
-func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, targetCanonicalPath string, entityPath string, sectorPath string, specialties []string, chainContext string, domainModes []string) (*ScoutResult, error) {
-	result, _, err := a.ExtractFragmentDataWithGrounding(ctx, content, targetCanonicalPath, entityPath, sectorPath, specialties, chainContext, domainModes)
+func (a *ScoutAgent) ExtractFragmentData(ctx context.Context, content string, targetCanonicalPath string, entityPath string, specialties []string, chainContext string, domainModes []string) (*ScoutResult, error) {
+	result, _, err := a.ExtractFragmentDataWithGrounding(ctx, content, targetCanonicalPath, entityPath, specialties, chainContext, domainModes)
 	return result, err
 }
 
 // ExtractFragmentDataWithGrounding returns extracted result plus grounding evidence from full AI task result.
-func (a *ScoutAgent) ExtractFragmentDataWithGrounding(ctx context.Context, content string, targetCanonicalPath string, entityPath string, sectorPath string, specialties []string, chainContext string, domainModes []string) (*ScoutResult, *ai.GroundingEvidence, error) {
-	prompt := a.buildExtractionPrompt(content, targetCanonicalPath, entityPath, sectorPath, specialties, chainContext, domainModes)
+func (a *ScoutAgent) ExtractFragmentDataWithGrounding(ctx context.Context, content string, targetCanonicalPath string, entityPath string, specialties []string, chainContext string, domainModes []string) (*ScoutResult, *ai.GroundingEvidence, error) {
+	prompt := a.buildExtractionPrompt(content, targetCanonicalPath, entityPath, specialties, chainContext, domainModes)
 
 	verifier := ai.NewSimpleJSONVerifier()
 
@@ -400,6 +400,8 @@ func (a *ScoutAgent) ExtractFragmentDataWithGrounding(ctx context.Context, conte
 	if scoutResult.Fragment.TenantID == "" {
 		scoutResult.Fragment.TenantID = "global"
 	}
+	// Canonical industry classification is resolver-owned. Scout may only emit raw industry hints.
+	scoutResult.Fragment.IndustryPaths = nil
 
 	if scoutResult.Fragment.Governance.Owner == "" {
 		scoutResult.Fragment.Governance.Owner = "SYSTEM"
@@ -760,7 +762,7 @@ func extractionCanonicalNamespaceDetailsBlock() string {
 }
 
 // buildExtractionPrompt строит промпт для извлечения данных
-func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath string, entityPath string, sectorPath string, specialties []string, chainContext string, domainModes []string) string {
+func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath string, entityPath string, specialties []string, chainContext string, domainModes []string) string {
 	specialties = taxonomy.NormalizeSpecialties(specialties)
 	domainModes = taxonomy.NormalizeDomainModes(domainModes)
 	chainBlock := ""
@@ -799,11 +801,12 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 	fragmentContractBlock := fmt.Sprintf(`1. "fragment" Field (Object):
 - canonicalPath MUST match target canonical path
 - entityPath MUST match provided entity path
-- sectorPath MUST match provided sector path
 - %s
 - %s
 %s
 %s
+- industryPaths MUST be omitted. Canonical industry classification is assigned only by the taxonomy resolver, never by the model.
+- If the content contains industry evidence, store raw mentions in qualifiers.industryMentions as an array of short strings (e.g. ["lithium-ion batteries", "battery manufacturing", "lfp"]).
 - state: map of MetricValue entries
 - description: short factual summary
 - homeLocation: when geo is relevant, object with { name: string (city/place), iso3166_1: string (ISO3166-1 alpha2, e.g. "AE", "US") }. Required for org/facility/gov to enable geocoding.
@@ -861,8 +864,7 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 		`You are a data extraction agent (Scout) for a risk analysis system. Extract structured information about an entity and its dependencies from the provided content.`,
 		fmt.Sprintf(`TARGET ENTITY:
 - Canonical Path: %s
-- Entity Type Path: %s
-- Sector Path: %s`, targetCanonicalPath, entityPath, sectorPath),
+- Entity Type Path: %s`, targetCanonicalPath, entityPath),
 		"CONTENT TO ANALYZE:\n"+content,
 		chainBlock,
 		specBlock,

@@ -338,7 +338,7 @@ func (r *QueryResolver) pickSeedQuery(tenantID string, c conj) firestore.Query {
 	base := r.baseFragmentsQuery(tenantID)
 
 	// Choose a single positive literal for Firestore seeding (must be correct subset, then full expr filters).
-	// Priority: canonicalPath > sector > entityType > location
+	// Priority: canonicalPath > industry > entityType > location
 	bestRank := 999
 	var best *lit
 	for i := range c {
@@ -361,7 +361,7 @@ func literalSeedRank(l lit) int {
 	switch l.term.Field {
 	case FieldCanonicalPath:
 		return 1
-	case FieldSector:
+	case FieldIndustry:
 		return 2
 	case FieldEntityType:
 		return 3
@@ -377,8 +377,8 @@ func applySeed(q firestore.Query, t Term) firestore.Query {
 	switch t.Field {
 	case FieldCanonicalPath:
 		return applyPathSeed(q, "canonicalPath", p)
-	case FieldSector:
-		return applyPathSeed(q, "sectorPath", p)
+	case FieldIndustry:
+		return applyIndexPathSeed(q, p)
 	case FieldEntityType:
 		return applyPathSeed(q, "entityPath", p)
 	case FieldLocation:
@@ -408,6 +408,17 @@ func applyPathSeed(q firestore.Query, field string, pattern string) firestore.Qu
 	return q
 }
 
+func applyIndexPathSeed(q firestore.Query, pattern string) firestore.Query {
+	if strings.HasSuffix(pattern, "/**") {
+		prefix := strings.TrimSuffix(pattern, "/**")
+		return q.Where("indexPaths", "array-contains", prefix)
+	}
+	if !strings.Contains(pattern, "*") {
+		return q.Where("indexPaths", "array-contains", pattern)
+	}
+	return q
+}
+
 func parseLocPattern(pattern string) (country string, admin1 string) {
 	// Accepts: /loc/{country}, /loc/{country}/** , /loc/{country}/{admin1}, /loc/{country}/{admin1}/**
 	parts := strings.Split(strings.Trim(pattern, "/"), "/")
@@ -428,7 +439,7 @@ func fragmentToView(f *models.HorizonFragment) *HorizonFragmentView {
 	return &HorizonFragmentView{
 		CanonicalPath: f.CanonicalPath,
 		EntityPath:    f.EntityPath,
-		SectorPath:    f.SectorPath,
+		IndustryPaths: append([]string(nil), f.IndustryPaths...),
 		LocationPath:  buildLocationPath(f.HomeLocation),
 	}
 }

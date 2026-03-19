@@ -5,6 +5,7 @@ import (
 	"flag"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
@@ -459,93 +460,6 @@ func main() {
 			"ree":    "rare-earth-ore",
 		},
 
-		// Industry taxonomy (/industry/...) — v1 bootstrap (curated seed).
-		AllowedIndustryPaths: []string{
-			"/industry/energy",
-			"/industry/energy/oil-and-gas",
-			"/industry/energy/oil-and-gas/upstream",
-			"/industry/energy/oil-and-gas/midstream",
-			"/industry/energy/oil-and-gas/downstream",
-			"/industry/energy/power",
-			"/industry/energy/renewables",
-			"/industry/materials",
-			"/industry/materials/mining",
-			"/industry/materials/chemicals",
-			"/industry/industrials",
-			"/industry/industrials/transportation",
-			"/industry/industrials/transportation/airlines",
-			"/industry/industrials/transportation/rail",
-			"/industry/industrials/transportation/maritime",
-			"/industry/industrials/aerospace-and-defense",
-			"/industry/industrials/construction",
-			"/industry/technology",
-			"/industry/technology/software",
-			"/industry/technology/hardware",
-			"/industry/technology/cloud",
-			"/industry/technology/semiconductors",
-			"/industry/communications",
-			"/industry/financials",
-			"/industry/financials/banking",
-			"/industry/financials/asset-management",
-			"/industry/financials/insurance",
-			"/industry/consumer",
-			"/industry/consumer/retail",
-			"/industry/consumer/retail/grocery",
-			"/industry/healthcare",
-			"/industry/public",
-			"/industry/public/government",
-			"/industry/public/military",
-			"/industry/agriculture",
-			"/industry/real-estate",
-			"/industry/utilities",
-			"/industry/other",
-		},
-		IndustrySynonyms: map[string]string{
-			// Keys are normalized (lowercase + punctuation stripped) by the resolver.
-			"oil and gas":                 "/industry/energy/oil-and-gas",
-			"petroleum industry":          "/industry/energy/oil-and-gas",
-			"natural gas":                 "/industry/energy/oil-and-gas",
-			"lng":                         "/industry/energy/oil-and-gas",
-			"electricity":                 "/industry/energy/power",
-			"power industry":              "/industry/energy/power",
-			"renewable energy":            "/industry/energy/renewables",
-			"mining":                      "/industry/materials/mining",
-			"chemical industry":           "/industry/materials/chemicals",
-			"transport":                   "/industry/industrials/transportation",
-			"transportation":              "/industry/industrials/transportation",
-			"airline industry":            "/industry/industrials/transportation/airlines",
-			"rail transport":              "/industry/industrials/transportation/rail",
-			"maritime transport":          "/industry/industrials/transportation/maritime",
-			"aerospace":                   "/industry/industrials/aerospace-and-defense",
-			"defense industry":            "/industry/industrials/aerospace-and-defense",
-			"software industry":           "/industry/technology/software",
-			"enterprise software":         "/industry/technology/software",
-			"semiconductor industry":      "/industry/technology/semiconductors",
-			"computer hardware industry":  "/industry/technology/hardware",
-			"computer hardware":           "/industry/technology/hardware",
-			"peripheral":                  "/industry/technology/hardware",
-			"cloud computing":             "/industry/technology/cloud",
-			"telecommunications industry": "/industry/communications",
-			"telecommunications":          "/industry/communications",
-			"banking":                     "/industry/financials/banking",
-			"asset management":            "/industry/financials/asset-management",
-			"insurance":                   "/industry/financials/insurance",
-			"retail":                      "/industry/consumer/retail",
-			"grocery store":               "/industry/consumer/retail/grocery",
-			"healthcare":                  "/industry/healthcare",
-			"government":                  "/industry/public/government",
-			"military":                    "/industry/public/military",
-			"agriculture":                 "/industry/agriculture",
-			"real estate":                 "/industry/real-estate",
-			"utilities":                   "/industry/utilities",
-			"construction industry":       "/industry/industrials/construction",
-			"construction":                "/industry/industrials/construction",
-			"petroleum gas industry":      "/industry/energy/oil-and-gas",
-		},
-		IndustryWikidataMap: map[string]string{
-			// Start empty-ish; expand iteratively after reviewing output.
-		},
-
 		// Natural resource deposits (/deposit/{resource-slug}/{deposit-slug})
 		AllowedDepositResources: []string{
 			// Hydrocarbons
@@ -700,5 +614,139 @@ func main() {
 		log.Fatalf("taxonomy upsert failed: %v", err)
 	}
 
+	industryNodes := &models.IndustryNodeRegistry{
+		ID:        *version,
+		Version:   *version,
+		UpdatedAt: now,
+		Nodes:     buildIndustryNodes(seedIndustryLeafPaths()),
+	}
+	if _, err := fsClient.Client().Collection("horizon_industry_nodes").Doc(*version).Set(ctx, industryNodes); err != nil {
+		log.Fatalf("industry registry upsert failed: %v", err)
+	}
+
+	industryAliases := &models.TaxonomyAliasRegistry{
+		ID:        *version,
+		Version:   *version,
+		UpdatedAt: now,
+		Aliases:   seedIndustryAliases(),
+	}
+	if _, err := fsClient.Client().Collection("horizon_taxonomy_aliases").Doc(*version).Set(ctx, industryAliases); err != nil {
+		log.Fatalf("industry alias registry upsert failed: %v", err)
+	}
+
 	log.Printf("Seeded horizon taxonomy: project=%s version=%s updatedAt=%s", *projectID, *version, now.Format(time.RFC3339))
+}
+
+func seedIndustryLeafPaths() []string {
+	return []string{
+		"/industry/energy/hydrocarbons/oil-and-gas/upstream",
+		"/industry/energy/hydrocarbons/lng/lng-infrastructure",
+		"/industry/energy/power-and-utilities/power-generation",
+		"/industry/materials/chemicals/petrochemicals/petrochemical-production",
+		"/industry/materials/mining/mining/mining-operations",
+		"/industry/materials/metals/steel/steel-production",
+		"/industry/technology/electronics/semiconductors/semiconductor-manufacturing",
+		"/industry/technology/software/cloud/cloud-services",
+		"/industry/technology/electronics/electronics-manufacturing/electronics-assembly",
+		"/industry/energy-storage/batteries/lithium-ion",
+		"/industry/energy-storage/batteries/lithium-ion/lfp",
+		"/industry/industrial/transportation/maritime/shipping-services",
+		"/industry/industrial/transportation/logistics/logistics-services",
+		"/industry/industrial/transportation/logistics/port-operations",
+		"/industry/industrial/transportation/aviation/airport-operations",
+		"/industry/industrial/manufacturing/automotive/automotive-manufacturing",
+		"/industry/industrial/construction/building-materials/building-materials-production",
+		"/industry/aerospace-defense/aerospace/aerospace-manufacturing/aerospace-manufacturing",
+		"/industry/aerospace-defense/defense/defense-industrial/defense-manufacturing",
+		"/industry/healthcare/pharmaceuticals/pharmaceuticals/pharmaceutical-manufacturing",
+		"/industry/healthcare/providers/hospitals/hospital-services",
+		"/industry/telecom/networks/telecommunications/telecom-services",
+		"/industry/telecom/infrastructure/network-infrastructure/network-infrastructure",
+		"/industry/finance/banking/commercial-banking/banking-services",
+		"/industry/finance/payments/payments/payment-services",
+		"/industry/finance/insurance/insurance/insurance-services",
+		"/industry/finance/market-infrastructure/clearing-and-settlement/market-infrastructure",
+		"/industry/consumer/retail/general-retail/retail-operations",
+		"/industry/consumer/retail/ecommerce/ecommerce-operations",
+		"/industry/consumer/services/hospitality/hospitality-services",
+		"/industry/agriculture/farming/agriculture/agricultural-production",
+		"/industry/agriculture/food-processing/food-processing/food-manufacturing",
+		"/industry/real-estate/commercial/commercial-real-estate/property-operations",
+		"/industry/services/professional-services/business-services/business-services",
+		"/industry/services/education/education-services/education-services",
+		"/industry/public-sector/government-services/public-administration/public-administration",
+		"/industry/media/broadcasting/media-services/media-services",
+	}
+}
+
+func buildIndustryNodes(paths []string) []models.IndustryNodeData {
+	seen := map[string]struct{}{}
+	out := make([]models.IndustryNodeData, 0, len(paths)*3)
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if !strings.HasPrefix(path, "/industry/") {
+			continue
+		}
+		parts := strings.Split(strings.Trim(path, "/"), "/")
+		for i := 2; i <= len(parts); i++ {
+			cur := "/" + strings.Join(parts[:i], "/")
+			if _, ok := seen[cur]; ok {
+				continue
+			}
+			seen[cur] = struct{}{}
+			parent := ""
+			if i > 2 {
+				parent = "/" + strings.Join(parts[:i-1], "/")
+			}
+			label := parts[i-1]
+			out = append(out, models.IndustryNodeData{
+				Path:            cur,
+				ParentPath:      parent,
+				Level:           i - 2,
+				Label:           strings.ReplaceAll(label, "-", " "),
+				Status:          "active",
+				AllowedForTypes: []string{"ORGANIZATION", "FACILITY", "PRODUCT"},
+			})
+		}
+	}
+	return out
+}
+
+func seedIndustryAliases() []models.TaxonomyAliasData {
+	alias := func(kind, keyNorm, canonicalPath string) models.TaxonomyAliasData {
+		return models.TaxonomyAliasData{
+			Namespace:     taxonomy.TaxonomyNamespaceIndustry,
+			KeyKind:       kind,
+			KeyNorm:       keyNorm,
+			CanonicalPath: canonicalPath,
+			Status:        "active",
+			Source:        "seed",
+			Lang:          "en",
+		}
+	}
+	return []models.TaxonomyAliasData{
+		alias(taxonomy.TaxonomyAliasKeyKindLabel, "oil and gas", "/industry/energy/hydrocarbons/oil-and-gas/upstream"),
+		alias(taxonomy.TaxonomyAliasKeyKindLabel, "lng", "/industry/energy/hydrocarbons/lng/lng-infrastructure"),
+		alias(taxonomy.TaxonomyAliasKeyKindLabel, "power generation", "/industry/energy/power-and-utilities/power-generation"),
+		alias(taxonomy.TaxonomyAliasKeyKindLabel, "petrochemicals", "/industry/materials/chemicals/petrochemicals/petrochemical-production"),
+		alias(taxonomy.TaxonomyAliasKeyKindLabel, "mining", "/industry/materials/mining/mining/mining-operations"),
+		alias(taxonomy.TaxonomyAliasKeyKindLabel, "semiconductors", "/industry/technology/electronics/semiconductors/semiconductor-manufacturing"),
+		alias(taxonomy.TaxonomyAliasKeyKindLabel, "cloud computing", "/industry/technology/software/cloud/cloud-services"),
+		alias(taxonomy.TaxonomyAliasKeyKindLabel, "electronics assembly", "/industry/technology/electronics/electronics-manufacturing/electronics-assembly"),
+		alias(taxonomy.TaxonomyAliasKeyKindLabel, "lithium ion", "/industry/energy-storage/batteries/lithium-ion"),
+		alias(taxonomy.TaxonomyAliasKeyKindLabel, "lithium-ion", "/industry/energy-storage/batteries/lithium-ion"),
+		alias(taxonomy.TaxonomyAliasKeyKindLabel, "shipping", "/industry/industrial/transportation/maritime/shipping-services"),
+		alias(taxonomy.TaxonomyAliasKeyKindLabel, "logistics", "/industry/industrial/transportation/logistics/logistics-services"),
+		alias(taxonomy.TaxonomyAliasKeyKindLabel, "telecommunications", "/industry/telecom/networks/telecommunications/telecom-services"),
+		alias(taxonomy.TaxonomyAliasKeyKindLabel, "banking", "/industry/finance/banking/commercial-banking/banking-services"),
+		alias(taxonomy.TaxonomyAliasKeyKindLabel, "payments", "/industry/finance/payments/payments/payment-services"),
+		alias(taxonomy.TaxonomyAliasKeyKindLabel, "insurance", "/industry/finance/insurance/insurance/insurance-services"),
+		alias(taxonomy.TaxonomyAliasKeyKindLabel, "retail", "/industry/consumer/retail/general-retail/retail-operations"),
+		alias(taxonomy.TaxonomyAliasKeyKindLabel, "ecommerce", "/industry/consumer/retail/ecommerce/ecommerce-operations"),
+		alias(taxonomy.TaxonomyAliasKeyKindLabel, "agriculture", "/industry/agriculture/farming/agriculture/agricultural-production"),
+		alias(taxonomy.TaxonomyAliasKeyKindLabel, "food processing", "/industry/agriculture/food-processing/food-processing/food-manufacturing"),
+		alias(taxonomy.TaxonomyAliasKeyKindLabel, "pharmaceuticals", "/industry/healthcare/pharmaceuticals/pharmaceuticals/pharmaceutical-manufacturing"),
+		alias(taxonomy.TaxonomyAliasKeyKindLabel, "public administration", "/industry/public-sector/government-services/public-administration/public-administration"),
+		alias(taxonomy.TaxonomyAliasKeyKindAbbrev, "lfp", "/industry/energy-storage/batteries/lithium-ion/lfp"),
+	}
 }

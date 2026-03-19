@@ -98,3 +98,18 @@ func TestValidateCanonicalPath_ContinentsAndZones(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeDomainCanonicalPath_IndustryAnalysis_PreservesIndustryChain(t *testing.T) {
+	in := "/domain/v1/industry-analysis/industry/batteries/geo/us/industry/lithium-ion/industry/lfp"
+	if err := ValidateCanonicalPath(in); err != nil {
+		t.Fatalf("expected input to be valid: %v", err)
+	}
+	out, err := NormalizeDomainCanonicalPath(in)
+	if err != nil {
+		t.Fatalf("NormalizeDomainCanonicalPath error: %v", err)
+	}
+	want := "/domain/v1/industry-analysis/geo/us/industry/batteries/industry/lithium-ion/industry/lfp"
+	if out != want {
+		t.Fatalf("want %q, got %q", want, out)
+	}
+}

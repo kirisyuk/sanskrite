@@ -651,7 +651,12 @@ export function useGeoMarkerLayer(
         'text-color': isDark ? '#ffffff' : 'rgba(2,6,23,0.98)',
         'text-halo-color': isDark ? 'rgba(2,6,23,0.98)' : 'rgba(255,255,255,0.98)',
         'text-halo-width': 1.6,
-        'text-opacity': 1,
+        'text-opacity': [
+          'case',
+          ['==', ['get', 'highlightRole'], 'selected'],
+          1,
+          0,
+        ],
       },
     });
 

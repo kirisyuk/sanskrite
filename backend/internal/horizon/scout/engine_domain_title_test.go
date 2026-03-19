@@ -24,10 +24,10 @@ func TestBestEffortFindDomainContract_FallbackByTargetPath(t *testing.T) {
 	job := &hmodels.ScoutingJob{
 		AgentJob: coremodels.AgentJob{
 			State: map[string]interface{}{
-				"targetCanonicalPath": "/domain/v1/supply-chain/geo/br/sector/logistics",
+				"targetCanonicalPath": "/domain/v1/supply-chain/geo/br/industry/logistics",
 				"domains": []map[string]interface{}{
 					{
-						"canonicalPath": "/domain/v1/supply-chain/geo/br/sector/logistics",
+						"canonicalPath": "/domain/v1/supply-chain/geo/br/industry/logistics",
 						"title":         "Brazil Logistics Supply Chain Resilience",
 						"contractType":  "supply-chain",
 					},
@@ -37,7 +37,7 @@ func TestBestEffortFindDomainContract_FallbackByTargetPath(t *testing.T) {
 	}
 
 	// Simulate a retargeted/rewritten path that no longer matches contract path by exact string.
-	got := engine.bestEffortFindDomainContract(job, "/domain/v1/supply-chain/sector/logistics/geo/br")
+	got := engine.bestEffortFindDomainContract(job, "/domain/v1/supply-chain/industry/logistics/geo/br")
 	if got == nil {
 		t.Fatalf("expected domain contract to be found via fallback matching")
 	}

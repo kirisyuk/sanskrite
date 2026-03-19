@@ -20,7 +20,7 @@ import (
 // Backfills identifiers.facilityKind for FACILITY fragments in Firestore.
 // Strategy:
 // 1) Keep existing concrete values by default.
-// 2) Infer from canonicalPath + contextual signals (name/description/entity/sector/facilityType).
+// 2) Infer from canonicalPath + contextual signals (name/description/entity/industry/facilityType).
 // 3) Optionally set "other" when no concrete subtype can be inferred (to maximize completeness).
 
 func envProjectID() string {
@@ -89,6 +89,29 @@ func firstMapString(m map[string]interface{}, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func asStringSlice(v interface{}) []string {
+	switch t := v.(type) {
+	case []string:
+		out := make([]string, 0, len(t))
+		for _, item := range t {
+			if s := strings.TrimSpace(item); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []interface{}:
+		out := make([]string, 0, len(t))
+		for _, item := range t {
+			if s := asString(item); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func isConcrete(raw string, norm taxonomy.FacilityKind) bool {
@@ -173,7 +196,7 @@ func main() {
 		if last != nil {
 			q = q.StartAfter(last)
 		}
-		q = q.Select("type", "canonicalPath", "labels", "description", "entityPath", "sectorPath", "identifiers")
+		q = q.Select("type", "canonicalPath", "labels", "description", "entityPath", "industryPaths", "identifiers")
 		docs, err := q.Documents(ctx).GetAll()
 		if err != nil {
 			log.Fatalf("firestore query failed after scanned=%d: %v", scanned, err)
@@ -221,7 +244,7 @@ func main() {
 			labelEN := firstMapString(lbls, "en")
 			desc := asString(data["description"])
 			entityPath := asString(data["entityPath"])
-			sectorPath := asString(data["sectorPath"])
+			industryPaths := asStringSlice(data["industryPaths"])
 			facilityType := firstMapString(ident, "facilityType")
 			supplyRole := firstMapString(ident, "supplyChainRole")
 
@@ -230,7 +253,7 @@ func main() {
 				labelEN,
 				desc,
 				entityPath,
-				sectorPath,
+				strings.Join(industryPaths, " "),
 				facilityType,
 				supplyRole,
 			)

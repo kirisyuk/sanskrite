@@ -575,8 +575,8 @@ func mergeFragment(dst *horizonmodels.HorizonFragment, src *horizonmodels.Horizo
 		dst.EntityPath = src.EntityPath
 		changed = true
 	}
-	if strings.TrimSpace(dst.SectorPath) == "" && strings.TrimSpace(src.SectorPath) != "" {
-		dst.SectorPath = src.SectorPath
+	if len(dst.IndustryPaths) == 0 && len(src.IndustryPaths) > 0 {
+		dst.IndustryPaths = append([]string{}, src.IndustryPaths...)
 		changed = true
 	}
 

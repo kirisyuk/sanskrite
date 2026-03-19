@@ -149,7 +149,7 @@ func main() {
 	} else {
 		now := time.Now().UTC()
 		createdByProjectID := projectID
-		fragType, entityPath, sectorPath, label := inferFragmentDefaults(targetPath, *tenantID)
+		fragType, entityPath, label := inferFragmentDefaults(targetPath, *tenantID)
 		fragment = &horizonmodels.HorizonFragment{
 			TenantID:      "global",
 			Version:       1,
@@ -164,7 +164,6 @@ func main() {
 			CanonicalPath: targetPath,
 			Type:          fragType,
 			EntityPath:    entityPath,
-			SectorPath:    sectorPath,
 			State:         map[string]horizonmodels.MetricValue{},
 			Provenance: horizonmodels.Provenance{
 				SourceIDs: []string{dsID},
@@ -356,27 +355,27 @@ func main() {
 	log.Printf("DONE. Lens=%s Project=%s Tenant=%s Fragment=%s WatchdogConfig=%s Fact=%s", lensID, projectID, *tenantID, fragment.CanonicalPath, cfg.ID, factID)
 }
 
-func inferFragmentDefaults(canonicalPath string, tenantID string) (horizonmodels.FragmentType, string, string, string) {
+func inferFragmentDefaults(canonicalPath string, tenantID string) (horizonmodels.FragmentType, string, string) {
 	cp := strings.TrimSpace(canonicalPath)
 	switch {
 	case strings.HasPrefix(cp, "/program/"):
-		return horizonmodels.FragmentTypeProgram, "/program", "/sector/unknown", fmt.Sprintf("Bootstrap Program (%s)", tenantID)
+		return horizonmodels.FragmentTypeProgram, "/program", fmt.Sprintf("Bootstrap Program (%s)", tenantID)
 	case strings.HasPrefix(cp, "/market/"):
-		return horizonmodels.FragmentTypeMarket, "/market", "/sector/unknown", fmt.Sprintf("Bootstrap Market (%s)", tenantID)
+		return horizonmodels.FragmentTypeMarket, "/market", fmt.Sprintf("Bootstrap Market (%s)", tenantID)
 	case strings.HasPrefix(cp, "/product/"):
-		return horizonmodels.FragmentTypeProduct, "/product", "/sector/unknown", fmt.Sprintf("Bootstrap Product (%s)", tenantID)
+		return horizonmodels.FragmentTypeProduct, "/product", fmt.Sprintf("Bootstrap Product (%s)", tenantID)
 	case strings.HasPrefix(cp, "/fac/"):
-		return horizonmodels.FragmentTypeFacility, "/Infrastructure/Facility", "/sector/unknown", fmt.Sprintf("Bootstrap Facility (%s)", tenantID)
+		return horizonmodels.FragmentTypeFacility, "/Infrastructure/Facility", fmt.Sprintf("Bootstrap Facility (%s)", tenantID)
 	case strings.HasPrefix(cp, "/loc/"):
-		return horizonmodels.FragmentTypeGeoRegion, "/Geo/Region", "/Geography", fmt.Sprintf("Bootstrap Location (%s)", tenantID)
+		return horizonmodels.FragmentTypeGeoRegion, "/Geo/Region", fmt.Sprintf("Bootstrap Location (%s)", tenantID)
 	case strings.HasPrefix(cp, "/sphere/"):
-		return horizonmodels.FragmentTypeSphere, "/Influence/Sphere", "/Influence", fmt.Sprintf("Bootstrap Sphere (%s)", tenantID)
+		return horizonmodels.FragmentTypeSphere, "/Influence/Sphere", fmt.Sprintf("Bootstrap Sphere (%s)", tenantID)
 	case strings.HasPrefix(cp, "/person/"):
-		return horizonmodels.FragmentTypePerson, "/Person/Individual", "/sector/unknown", fmt.Sprintf("Bootstrap Person (%s)", tenantID)
+		return horizonmodels.FragmentTypePerson, "/Person/Individual", fmt.Sprintf("Bootstrap Person (%s)", tenantID)
 	case strings.HasPrefix(cp, "/event/"):
-		return horizonmodels.FragmentTypeEvent, "/Event", "/sector/unknown", fmt.Sprintf("Bootstrap Event (%s)", tenantID)
+		return horizonmodels.FragmentTypeEvent, "/Event", fmt.Sprintf("Bootstrap Event (%s)", tenantID)
 	default:
-		return horizonmodels.FragmentTypeOrganization, "/org", "/sector/unknown", fmt.Sprintf("Bootstrap Org (%s)", tenantID)
+		return horizonmodels.FragmentTypeOrganization, "/org", fmt.Sprintf("Bootstrap Org (%s)", tenantID)
 	}
 }
 

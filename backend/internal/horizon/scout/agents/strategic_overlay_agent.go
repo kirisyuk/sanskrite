@@ -214,7 +214,7 @@ DECISION POINT PATH & FORMAT RULES
 ═══════════════════════════════════════════════════════════════════════════════
 
 - canonicalPath: /decision/{domain-slug}/{decision-slug}
-  - domain-slug: extract from the domain contract (e.g., "ai-chips" from /domain/v1/power-dynamics/sector/ai-chips)
+  - domain-slug: extract from the domain contract (e.g., "ai-chips" from /domain/v1/power-dynamics/industry/ai-chips)
   - If the domain facet is geo (e.g., /domain/.../geo/ye), do NOT use the geo slug as domain-slug.
     Instead use the contract/topic slug (e.g., "geopolitical-risk") and include geo in decision-slug if needed.
   - decision-slug: lowercase kebab-case describing the decision action (e.g., "approve-euv-export-to-china")

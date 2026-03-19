@@ -1820,7 +1820,7 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 	now := time.Now().UTC()
 	dimensionFragmentIDsToPropagate := map[string]struct{}{}
 
-	ensureFragment := func(canonicalPath string, ftype models.FragmentType, label string, entityPath string, sectorPath string) (*models.HorizonFragment, error) {
+	ensureFragment := func(canonicalPath string, ftype models.FragmentType, label string, entityPath string) (*models.HorizonFragment, error) {
 		canonicalPath = strings.TrimSpace(canonicalPath)
 		if canonicalPath == "" || canonicalPath == "/" {
 			return nil, fmt.Errorf("empty canonicalPath")
@@ -1862,7 +1862,6 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 			CanonicalPath: canonicalPath,
 			Type:          ftype,
 			EntityPath:    entityPath,
-			SectorPath:    sectorPath,
 			State:         map[string]models.MetricValue{},
 			Provenance:    models.Provenance{Method: "taxonomy_dimension_seed", SourceIDs: []string{}, SourceRefs: []models.SourceRef{}},
 			Metadata:      models.FragmentMetadata{CreatedAt: now, LastUpdatedAt: now, LastVerifiedAt: now, LastFactsSeenAt: now, LastFactsAppliedAt: now, EpistemicStatus: models.EpistemicStatusVerified},
@@ -2038,7 +2037,7 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 				if sp == "" {
 					continue
 				}
-				sfrag, err := ensureFragment(sp, models.FragmentTypeSphere, sp, "/Influence/Sphere", "/Influence")
+				sfrag, err := ensureFragment(sp, models.FragmentTypeSphere, sp, "/Influence/Sphere")
 				if err != nil || sfrag == nil {
 					if err != nil {
 						fmt.Printf("[ScoutEngine] Failed to ensure sphere fragment %s: %v\n", sp, err)
@@ -2061,7 +2060,7 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 		if f.LocationPath != nil {
 			lp := strings.TrimSpace(*f.LocationPath)
 			if lp != "" {
-				gfrag, err := ensureFragment(lp, models.FragmentTypeGeoRegion, "", "/Geo/Region", "/Geography")
+				gfrag, err := ensureFragment(lp, models.FragmentTypeGeoRegion, "", "/Geo/Region")
 				if err == nil && gfrag != nil {
 					ensureInfluenceEdge(gfrag.ID, target.ID, f.Confidence, map[string]interface{}{"dimension": "geo", "path": lp, "factId": f.ID})
 					// Metric updates are optional; geo linkage should exist even without metrics.
@@ -4384,10 +4383,9 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 
 		// Пытаемся определить таксономию даже без контента
-		entityPath, sectorPath, err := e.taxonomyClassifier.ClassifyTaxonomy(ctx, job.TargetCanonicalPath)
+		entityPath, err := e.taxonomyClassifier.ClassifyTaxonomy(ctx, job.TargetCanonicalPath)
 		if err == nil {
 			extractedFragment.EntityPath = entityPath
-			extractedFragment.SectorPath = sectorPath
 		}
 
 		// Synthetic seed: use entity_semantics.MissingInfoRules (EvaluateModeSeed) as single source of truth.
@@ -4452,16 +4450,16 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		e.logLine(ctx, job, "info", "> extracting structured data")
 
 		// Phase 0 (structural extraction): extract fragment identity and basic relations (LOCATED_IN, OPERATES_IN; optional PRODUCES/SUPPLIES_TO).
-		// Определяем entityPath и sectorPath из targetCanonicalPath через LLM
-		entityPath, sectorPath, err := e.taxonomyClassifier.ClassifyTaxonomy(ctx, job.TargetCanonicalPath)
+		// Определяем entityPath из targetCanonicalPath через taxonomy classifier.
+		entityPath, err := e.taxonomyClassifier.ClassifyTaxonomy(ctx, job.TargetCanonicalPath)
 		if err != nil {
 			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageEntityExtraction, false, "taxonomy_failed", false, err)
 			_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "taxonomy_failed")
 			return fmt.Errorf("failed to classify taxonomy: %w", err)
 		}
-		e.logLine(ctx, job, "info", fmt.Sprintf("> taxonomy classified: entityPath=%s sectorPath=%s", entityPath, sectorPath))
+		e.logLine(ctx, job, "info", fmt.Sprintf("> taxonomy classified: entityPath=%s", entityPath))
 
-		scoutResult, groundingEvidence, err = e.scoutAgent.ExtractFragmentDataWithGrounding(ctx, aggregatedContent, job.TargetCanonicalPath, entityPath, sectorPath, specialties, chainContextForPrompt, domainModesForScout)
+		scoutResult, groundingEvidence, err = e.scoutAgent.ExtractFragmentDataWithGrounding(ctx, aggregatedContent, job.TargetCanonicalPath, entityPath, specialties, chainContextForPrompt, domainModesForScout)
 		if err != nil {
 			e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageEntityExtraction, false, "extraction_failed", true, err)
 			_ = e.transition(ctx, job, models.ScoutingJobStateFailed, 1.0, "extraction_failed")
@@ -6305,7 +6303,6 @@ func (e *ScoutEngine) applyIntentSphereLinks(ctx context.Context, job *models.Sc
 				Status:        "active",
 				Labels:        map[string]string{"en": sp},
 				EntityPath:    "/Influence/Sphere",
-				SectorPath:    "/Influence",
 				State:         make(map[string]models.MetricValue),
 				Governance:    models.Governance{Owner: "SYSTEM", Status: string(models.FragmentStatusActive)},
 				Provenance: models.Provenance{

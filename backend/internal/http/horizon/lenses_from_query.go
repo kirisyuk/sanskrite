@@ -667,6 +667,7 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		"spherePaths": intent.SpherePaths,
 		"keywords":    intent.Keywords,
 	}
+	domainQueries := models.ParseLensDomainQueries(intent.Domains)
 	// Preserve original query for downstream research (helps with abstract/market queries).
 	if req.Query != "" {
 		viewConfig["originalQuery"] = req.Query
@@ -681,8 +682,8 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 	}
 	// Persist domains (contracts) for downstream scout/research.
 	// When domain-as-config: store domainModes and intents; keep domains in ViewConfig for backward compat.
-	if len(intent.Domains) > 0 {
-		viewConfig["domains"] = intent.Domains
+	if len(domainQueries) > 0 {
+		viewConfig["domains"] = models.LensDomainQueriesToMaps(domainQueries)
 	}
 	if req.MaxRecursionDepth != nil {
 		viewConfig["maxRecursionDepth"] = *req.MaxRecursionDepth
@@ -700,12 +701,14 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 	}
 
 	lens := &models.Lens{
-		TenantID:   authInfo.TenantID,
-		ProjectID:  req.ProjectID,
-		Name:       name,
-		Scope:      scope,
-		ViewConfig: viewConfig,
-		Status:     status,
+		TenantID:      authInfo.TenantID,
+		ProjectID:     req.ProjectID,
+		Name:          name,
+		Scope:         scope,
+		OriginalQuery: strings.TrimSpace(req.Query),
+		DomainQueries: domainQueries,
+		ViewConfig:    viewConfig,
+		Status:        status,
 	}
 	// DomainModes: execution contracts from intent domains (contract types).
 	if len(intent.Domains) > 0 {

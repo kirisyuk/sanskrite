@@ -22,11 +22,6 @@ var builtInAllowedEventTypes = setOf(
 	"infrastructure", "tech", "strike", "election", "warning", "announcement", "incident", "other",
 )
 
-// Industry QID mapping contract is code-defined.
-// Can be expanded in code as curated mappings become available.
-var builtInAllowedIndustryPaths = setOf()
-var builtInIndustryWikidataMap = map[string]string{}
-
 var builtInEventTypeSynonyms = map[string]string{
 	"drone_attack":    "attack",
 	"missile_attack":  "attack",
@@ -98,9 +93,9 @@ var builtInProductCategoriesOrdered = []string{"raw", "component", "finished", "
 var builtInProductTypesOrdered = []string{
 	"mineral",
 	"agricultural",
-	"fruit",      // alias for agricultural (fruits, produce)
-	"crop",       // alias for agricultural (crops, grains)
-	"commodity",  // generic raw goods
+	"fruit",     // alias for agricultural (fruits, produce)
+	"crop",      // alias for agricultural (crops, grains)
+	"commodity", // generic raw goods
 	"chemical",
 	"electronic",
 	"mechanical",

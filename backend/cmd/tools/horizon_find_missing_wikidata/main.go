@@ -35,64 +35,64 @@ import (
 var globalLastSeen atomic.Value // string
 
 var (
-	projectID          = flag.String("project", "", "GCP project ID (required)")
-	tenantID           = flag.String("tenant", "global", "Tenant ID (default: global)")
-	limit              = flag.Int("limit", 100, "Max number of missing-Wikidata fragments to print")
-	maxScan            = flag.Int("max-scan", 50000, "Max fragments to scan before stopping (safety cap)")
-	pageSize           = flag.Int("page-size", 500, "Firestore page size for scanning (pagination). Lower = safer, higher = fewer round-trips")
-	startAfterDocID    = flag.String("start-after", "", "Resume cursor: start scanning after this Firestore document ID (__name__)")
-	activeOnly         = flag.Bool("active-only", true, "Only scan governance.status==ACTIVE fragments")
-	includeEntityCheck = flag.Bool("include-entity", true, "Also check linked ontology_entities by fragment.entityId (if present)")
-	suggestWikidata    = flag.Bool("suggest-wikidata", false, "If set, try to find best Wikidata QID candidates for missing fragments (dry-run suggestions)")
-	taxonomyVersion    = flag.String("taxonomy", "v1", "Horizon taxonomy version to use for industry canonicalization (default: v1)")
-	applyIndustry      = flag.Bool("apply-industry", false, "Apply canonical industryPaths to fragment and linked entity (requires --suggest-wikidata)")
-	industryScoreMin   = flag.Int("industry-score-min", 120, "Minimum suggestedScore required to apply industryPaths (safety threshold)")
-	includeWithWikidata = flag.Bool("include-with-wikidata", false, "Also include fragments that already have a Wikidata ID (useful for sampling P452 industries)")
-	onlyWithWikidata    = flag.Bool("only-with-wikidata", false, "Only include fragments that already have a Wikidata ID (skips missing-wikidata fragments)")
-	expandIndustryDict  = flag.Bool("expand-industry-dict", false, "Build/extend industrySynonyms + industryWikidataMap in horizon_taxonomy based on observed P452 from scanned fragments")
-	applyIndustryDict   = flag.Bool("apply-industry-dict", false, "If set with --expand-industry-dict, upsert merged industrySynonyms/industryWikidataMap back into horizon_taxonomy")
-	industryDictMax     = flag.Int("industry-dict-max", 500, "Max number of new industry QIDs to add into industryWikidataMap per run (safety cap)")
-	applyWikidataRef    = flag.Bool("apply-wikidata-ref", false, "Write Wikidata KBRef (and mirror identifiers.wikidataId) to fragment + linked entity when QID is confident")
-	applyWikidataNames  = flag.Bool("apply-wikidata-names", false, "Overwrite fragment/entity names from Wikidata (label/description, plus official name if present) when QID is confident")
-	wikidataScoreMin    = flag.Int("wikidata-score-min", 120, "Minimum suggestedScore required to apply Wikidata enrichment (safety threshold)")
-	progressEvery       = flag.Int("progress-every", 50, "Print progress logs every N selected rows (0 disables)")
+	projectID            = flag.String("project", "", "GCP project ID (required)")
+	tenantID             = flag.String("tenant", "global", "Tenant ID (default: global)")
+	limit                = flag.Int("limit", 100, "Max number of missing-Wikidata fragments to print")
+	maxScan              = flag.Int("max-scan", 50000, "Max fragments to scan before stopping (safety cap)")
+	pageSize             = flag.Int("page-size", 500, "Firestore page size for scanning (pagination). Lower = safer, higher = fewer round-trips")
+	startAfterDocID      = flag.String("start-after", "", "Resume cursor: start scanning after this Firestore document ID (__name__)")
+	activeOnly           = flag.Bool("active-only", true, "Only scan governance.status==ACTIVE fragments")
+	includeEntityCheck   = flag.Bool("include-entity", true, "Also check linked ontology_entities by fragment.entityId (if present)")
+	suggestWikidata      = flag.Bool("suggest-wikidata", false, "If set, try to find best Wikidata QID candidates for missing fragments (dry-run suggestions)")
+	taxonomyVersion      = flag.String("taxonomy", "v1", "Horizon taxonomy version to use for industry canonicalization (default: v1)")
+	applyIndustry        = flag.Bool("apply-industry", false, "Apply canonical industryPaths to fragment and linked entity (requires --suggest-wikidata)")
+	industryScoreMin     = flag.Int("industry-score-min", 120, "Minimum suggestedScore required to apply industryPaths (safety threshold)")
+	includeWithWikidata  = flag.Bool("include-with-wikidata", false, "Also include fragments that already have a Wikidata ID (useful for sampling P452 industries)")
+	onlyWithWikidata     = flag.Bool("only-with-wikidata", false, "Only include fragments that already have a Wikidata ID (skips missing-wikidata fragments)")
+	expandIndustryDict   = flag.Bool("expand-industry-dict", false, "Build/extend industry aliases in horizon_taxonomy_aliases based on observed P452 from scanned fragments")
+	applyIndustryDict    = flag.Bool("apply-industry-dict", false, "If set with --expand-industry-dict, upsert merged aliases back into horizon_taxonomy_aliases")
+	industryDictMax      = flag.Int("industry-dict-max", 500, "Max number of new industry QIDs to add into horizon_taxonomy_aliases per run (safety cap)")
+	applyWikidataRef     = flag.Bool("apply-wikidata-ref", false, "Write Wikidata KBRef (and mirror identifiers.wikidataId) to fragment + linked entity when QID is confident")
+	applyWikidataNames   = flag.Bool("apply-wikidata-names", false, "Overwrite fragment/entity names from Wikidata (label/description, plus official name if present) when QID is confident")
+	wikidataScoreMin     = flag.Int("wikidata-score-min", 120, "Minimum suggestedScore required to apply Wikidata enrichment (safety threshold)")
+	progressEvery        = flag.Int("progress-every", 50, "Print progress logs every N selected rows (0 disables)")
 	progressScannedEvery = flag.Int("progress-scanned-every", 2000, "Print progress logs every N scanned docs even if nothing is selected (0 disables)")
-	heartbeatSec        = flag.Int("heartbeat-sec", 10, "Emit heartbeat logs every N seconds while running (0 disables)")
-	maxCandidates      = flag.Int("max-candidates", 5, "Max Wikidata candidates to consider per fragment (when --suggest-wikidata)")
-	rateLimitMS        = flag.Int("rate-limit-ms", 120, "Delay between Wikidata API calls in milliseconds (when --suggest-wikidata)")
-	format             = flag.String("format", "jsonl", "Output format: jsonl | tsv")
-	outPath            = flag.String("out", "", "Optional output file path (default: stdout)")
+	heartbeatSec         = flag.Int("heartbeat-sec", 10, "Emit heartbeat logs every N seconds while running (0 disables)")
+	maxCandidates        = flag.Int("max-candidates", 5, "Max Wikidata candidates to consider per fragment (when --suggest-wikidata)")
+	rateLimitMS          = flag.Int("rate-limit-ms", 120, "Delay between Wikidata API calls in milliseconds (when --suggest-wikidata)")
+	format               = flag.String("format", "jsonl", "Output format: jsonl | tsv")
+	outPath              = flag.String("out", "", "Optional output file path (default: stdout)")
 )
 
 type Row struct {
-	FragmentID       string              `json:"fragmentId"`
+	FragmentID       string               `json:"fragmentId"`
 	Type             hmodels.FragmentType `json:"type"`
-	CanonicalPath    string              `json:"canonicalPath"`
-	LabelEN          string              `json:"labelEn,omitempty"`
-	LegalName        string              `json:"legalName,omitempty"`
-	ShortName        string              `json:"shortName,omitempty"`
-	GovernanceStatus string              `json:"governanceStatus,omitempty"`
-	CreatedAt        time.Time           `json:"createdAt,omitempty"`
-	UpdatedAt        time.Time           `json:"updatedAt,omitempty"`
+	CanonicalPath    string               `json:"canonicalPath"`
+	LabelEN          string               `json:"labelEn,omitempty"`
+	LegalName        string               `json:"legalName,omitempty"`
+	ShortName        string               `json:"shortName,omitempty"`
+	GovernanceStatus string               `json:"governanceStatus,omitempty"`
+	CreatedAt        time.Time            `json:"createdAt,omitempty"`
+	UpdatedAt        time.Time            `json:"updatedAt,omitempty"`
 
-	FragmentWikidataID string `json:"fragmentWikidataId,omitempty"`
-	HasFragmentWikidata bool  `json:"hasFragmentWikidata"`
+	FragmentWikidataID  string `json:"fragmentWikidataId,omitempty"`
+	HasFragmentWikidata bool   `json:"hasFragmentWikidata"`
 
-	EntityID           string `json:"entityId,omitempty"`
+	EntityID            string `json:"entityId,omitempty"`
 	EntityCanonicalName string `json:"entityCanonicalName,omitempty"`
-	EntityType         string `json:"entityType,omitempty"`
+	EntityType          string `json:"entityType,omitempty"`
 	EntityWikidataID    string `json:"entityWikidataId,omitempty"`
 	HasEntityWikidata   bool   `json:"hasEntityWikidata"`
 
 	// Suggested Wikidata linkage (if enabled)
-	SuggestedQuery     string `json:"suggestedQuery,omitempty"`
-	SuggestedQID       string `json:"suggestedQid,omitempty"`
-	SuggestedLabel     string `json:"suggestedLabel,omitempty"`
-	SuggestedDesc      string `json:"suggestedDescription,omitempty"`
-	SuggestedURL       string `json:"suggestedUrl,omitempty"`
-	SuggestedType      string `json:"suggestedType,omitempty"`
-	SuggestedTypeLabel string `json:"suggestedTypeLabel,omitempty"`
-	SuggestedScore     int    `json:"suggestedScore,omitempty"`
+	SuggestedQuery     string        `json:"suggestedQuery,omitempty"`
+	SuggestedQID       string        `json:"suggestedQid,omitempty"`
+	SuggestedLabel     string        `json:"suggestedLabel,omitempty"`
+	SuggestedDesc      string        `json:"suggestedDescription,omitempty"`
+	SuggestedURL       string        `json:"suggestedUrl,omitempty"`
+	SuggestedType      string        `json:"suggestedType,omitempty"`
+	SuggestedTypeLabel string        `json:"suggestedTypeLabel,omitempty"`
+	SuggestedScore     int           `json:"suggestedScore,omitempty"`
 	SuggestedAlt       []WDCandidate `json:"suggestedAlternatives,omitempty"`
 
 	IndustryPaths []string `json:"industryPaths,omitempty"`
@@ -173,17 +173,14 @@ func main() {
 		entityRepo = coreRepo.NewEntityRepository(db)
 	}
 
-	// Load taxonomy for industry canonicalization.
-	taxRepo := coreRepo.NewHorizonTaxonomyRepository(db)
-	tax, taxErr := taxRepo.Get(ctx, strings.TrimSpace(*taxonomyVersion))
-	if taxErr != nil {
-		log.Printf("WARNING: failed to load taxonomy %q: %v (industry canonicalization will be limited)", strings.TrimSpace(*taxonomyVersion), taxErr)
-	}
-
 	// Load runtime taxonomy cache as well (so core enrichment uses the same dictionary as backend).
 	taxonomy.InitRuntimeTaxonomyCacheFromFirestore(db, strings.TrimSpace(*taxonomyVersion), 10*time.Minute)
 	if err := taxonomy.RefreshRuntimeTaxonomy(ctx); err != nil {
 		log.Printf("WARNING: failed to refresh runtime taxonomy: %v", err)
+	}
+	taxonomy.InitIndustryRegistryCacheFromFirestore(db, strings.TrimSpace(*taxonomyVersion), 20*time.Minute)
+	if err := taxonomy.RefreshIndustryRegistry(ctx); err != nil {
+		log.Printf("WARNING: failed to refresh industry registry: %v", err)
 	}
 
 	var wdClient *shttp.WikidataClient
@@ -224,7 +221,7 @@ func main() {
 		os.Exit(130)
 	}()
 
-	rows, scanned, lastSeen, err := scan(ctx, db, entityRepo, entityCache, wdClient, tax)
+	rows, scanned, lastSeen, err := scan(ctx, db, entityRepo, entityCache, wdClient)
 	if err != nil {
 		// IMPORTANT: log.Fatalf exits immediately (no defers), so we must print resume cursor here.
 		if strings.TrimSpace(lastSeen) != "" {
@@ -245,7 +242,7 @@ func main() {
 	log.Printf("✓ Done. scanned=%d missingPrinted=%d (see log for resume cursor)", scanned, len(rows))
 }
 
-func scan(ctx context.Context, db *firestore.Client, entityRepo *coreRepo.EntityRepository, entityCache map[string]*coreModels.Entity, wdClient *shttp.WikidataClient, tax *coreModels.HorizonTaxonomy) ([]Row, int, string, error) {
+func scan(ctx context.Context, db *firestore.Client, entityRepo *coreRepo.EntityRepository, entityCache map[string]*coreModels.Entity, wdClient *shttp.WikidataClient) ([]Row, int, string, error) {
 	base := db.Collection("horizon_fragments").Where("tenantId", "==", strings.TrimSpace(*tenantID)).
 		Where("type", "in", []interface{}{string(hmodels.FragmentTypeOrganization), string(hmodels.FragmentTypePerson)}).
 		OrderBy(firestore.DocumentID, firestore.Asc)
@@ -258,14 +255,12 @@ func scan(ctx context.Context, db *firestore.Client, entityRepo *coreRepo.Entity
 	// Repos for applying changes.
 	// Use the real HorizonFragmentsRepository so updates are validated, versioned, and indexPaths are rebuilt consistently.
 	fragmentsRepo := hrepo.NewHorizonFragmentsRepository(db)
-	taxRepo := coreRepo.NewHorizonTaxonomyRepository(db)
-
 	// Caches to reduce Wikidata pressure (esp. when scanning 1000+)
 	subjectCache := map[string]*shttp.WikidataEntityData{}
 	industryCache := map[string]*shttp.WikidataEntityData{}
 
 	// Optional: accumulate a dict expansion (qid->path and label->path) from observed P452 industries.
-	dict := newIndustryDictAccumulator(tax)
+	dict := newIndustryDictAccumulator()
 
 	// Progress counters (to make long scans feel alive)
 	selected := 0
@@ -364,15 +359,15 @@ func scan(ctx context.Context, db *firestore.Client, entityRepo *coreRepo.Entity
 			hasFragWid := fWid != ""
 
 			row := Row{
-				FragmentID:         f.ID,
-				Type:               f.Type,
-				CanonicalPath:      f.CanonicalPath,
-				LabelEN:            strings.TrimSpace(f.Labels["en"]),
-				LegalName:          strings.TrimSpace(f.Identifiers["legalName"]),
-				ShortName:          strings.TrimSpace(f.Identifiers["shortName"]),
-				GovernanceStatus:   strings.TrimSpace(f.Governance.Status),
-				CreatedAt:          f.CreatedAt,
-				UpdatedAt:          f.UpdatedAt,
+				FragmentID:          f.ID,
+				Type:                f.Type,
+				CanonicalPath:       f.CanonicalPath,
+				LabelEN:             strings.TrimSpace(f.Labels["en"]),
+				LegalName:           strings.TrimSpace(f.Identifiers["legalName"]),
+				ShortName:           strings.TrimSpace(f.Identifiers["shortName"]),
+				GovernanceStatus:    strings.TrimSpace(f.Governance.Status),
+				CreatedAt:           f.CreatedAt,
+				UpdatedAt:           f.UpdatedAt,
 				FragmentWikidataID:  fWid,
 				HasFragmentWikidata: hasFragWid,
 				Reason:              "missing fragment wikidata id",
@@ -473,13 +468,12 @@ func scan(ctx context.Context, db *firestore.Client, entityRepo *coreRepo.Entity
 						if industryCache != nil {
 							beforeCache = len(industryCache)
 						}
-						_, evid := canonicalizeIndustryPathsFromWikidata(ctx, wdClient, ed, tax, industryCache, time.Duration(*rateLimitMS)*time.Millisecond)
+						paths, evid := canonicalizeIndustryPathsFromWikidata(ctx, wdClient, ed, industryCache, time.Duration(*rateLimitMS)*time.Millisecond)
 						if industryCache != nil && len(industryCache) > beforeCache {
 							industryItemFetches += (len(industryCache) - beforeCache)
 							atomic.StoreInt64(&industryItemFetchesAtomic, int64(industryItemFetches))
 						}
-						// Preview industryPaths exactly as core would apply them (conservative: QID->path mapping only).
-						row.IndustryPaths = taxonomy.MapIndustryQIDsToPaths(extractWikidataQIDList(ed.PropertiesRaw, "P452"))
+						row.IndustryPaths = paths
 						// Accumulate industry dict candidates from evidence (P452).
 						if dict != nil && len(evid) > 0 {
 							dict.Observe(evid)
@@ -529,19 +523,12 @@ func scan(ctx context.Context, db *firestore.Client, entityRepo *coreRepo.Entity
 
 	// After scan: optionally merge observed industries into taxonomy doc.
 	if dict != nil && *expandIndustryDict {
-		if tax == nil {
-			log.Printf("WARNING: taxonomy not loaded; cannot expand industry dict")
+		addedQIDs, addedSyn, err := dict.MergeIntoAliasRegistry(ctx, db, strings.TrimSpace(*taxonomyVersion), *industryDictMax, *applyIndustryDict)
+		if err != nil {
+			log.Printf("WARNING: failed to merge industry aliases: %v", err)
 		} else {
-			addedQIDs, addedSyn, updatedAllowed := dict.MergeIntoTaxonomy(tax, *industryDictMax)
-			log.Printf("industry-dict: observedQIDs=%d newQIDsAdded=%d newSynonymsAdded=%d newAllowedPathsAdded=%d",
-				dict.ObservedQIDs(), addedQIDs, addedSyn, updatedAllowed)
-			if *applyIndustryDict {
-				if err := taxRepo.Upsert(ctx, tax); err != nil {
-					log.Printf("WARNING: failed to upsert taxonomy: %v", err)
-				} else {
-					log.Printf("industry-dict: taxonomy upserted: version=%s", tax.Version)
-				}
-			}
+			log.Printf("industry-dict: observedQIDs=%d newQIDsAdded=%d newLabelAliasesAdded=%d applied=%v",
+				dict.ObservedQIDs(), addedQIDs, addedSyn, *applyIndustryDict)
 		}
 	}
 
@@ -728,7 +715,6 @@ func upsertEntityKBRef(ent *coreModels.Entity, qid string) {
 	})
 }
 
-
 type IndustryEvidence struct {
 	IndustryQID   string
 	IndustryLabel string
@@ -740,7 +726,6 @@ func canonicalizeIndustryPathsFromWikidata(
 	ctx context.Context,
 	wdClient *shttp.WikidataClient,
 	entityData *shttp.WikidataEntityData,
-	tax *coreModels.HorizonTaxonomy,
 	industryCache map[string]*shttp.WikidataEntityData,
 	delay time.Duration,
 ) ([]string, []IndustryEvidence) {
@@ -762,18 +747,16 @@ func canonicalizeIndustryPathsFromWikidata(
 			continue
 		}
 		// 1) Strict QID mapping if available
-		if tax != nil && tax.IndustryWikidataMap != nil {
-			if p := strings.TrimSpace(tax.IndustryWikidataMap[qid]); strings.HasPrefix(p, "/industry/") {
-				if _, ok := seen[p]; !ok {
-					seen[p] = struct{}{}
-					out = append(out, p)
-				}
-				evid = append(evid, IndustryEvidence{IndustryQID: qid, IndustryPath: p})
-				continue
+		if p, ok := taxonomy.ResolveIndustryKey(taxonomy.TaxonomyNamespaceIndustry, taxonomy.TaxonomyAliasKeyKindWikidata, qid); ok {
+			if _, ok := seen[p]; !ok {
+				seen[p] = struct{}{}
+				out = append(out, p)
 			}
+			evid = append(evid, IndustryEvidence{IndustryQID: qid, IndustryPath: p})
+			continue
 		}
 
-		// 2) Label-based mapping via synonyms (requires fetching industry item label)
+		// 2) Label-based mapping via alias registry (requires fetching industry item label)
 		if wdClient != nil {
 			indData := (*shttp.WikidataEntityData)(nil)
 			if industryCache != nil {
@@ -795,24 +778,13 @@ func canonicalizeIndustryPathsFromWikidata(
 			if indData != nil {
 				lbl := strings.TrimSpace(indData.Label)
 				key := normalizeIndustryKey(lbl)
-				if tax != nil && tax.IndustrySynonyms != nil {
-					if p := strings.TrimSpace(tax.IndustrySynonyms[key]); strings.HasPrefix(p, "/industry/") {
-						if _, ok := seen[p]; !ok {
-							seen[p] = struct{}{}
-							out = append(out, p)
-						}
-						evid = append(evid, IndustryEvidence{IndustryQID: qid, IndustryLabel: lbl, IndustryKey: key, IndustryPath: p})
-						continue
-					}
-				}
-				// 3) Fallback: strict but generic
-				if lbl != "" {
-					p := "/industry/other/" + slugify(lbl)
+				if p, ok := taxonomy.ResolveIndustryKey(taxonomy.TaxonomyNamespaceIndustry, taxonomy.TaxonomyAliasKeyKindLabel, lbl); ok {
 					if _, ok := seen[p]; !ok {
 						seen[p] = struct{}{}
 						out = append(out, p)
 					}
 					evid = append(evid, IndustryEvidence{IndustryQID: qid, IndustryLabel: lbl, IndustryKey: key, IndustryPath: p})
+					continue
 				}
 			}
 		}
@@ -1036,39 +1008,17 @@ func appendUnique(list []string, s string) []string {
 // ============================================================================
 
 type industryDictAccumulator struct {
-	baseTax *coreModels.HorizonTaxonomy
-
 	// Observations
 	qidCount map[string]int
 	qidPath  map[string]string // best-known canonical path for that industry QID
 	keyPath  map[string]string // normalized label -> path (synonym)
-
-	allowedPathSet map[string]struct{}
 }
 
-func newIndustryDictAccumulator(tax *coreModels.HorizonTaxonomy) *industryDictAccumulator {
-	if tax == nil {
-		return &industryDictAccumulator{
-			baseTax:        nil,
-			qidCount:       map[string]int{},
-			qidPath:        map[string]string{},
-			keyPath:        map[string]string{},
-			allowedPathSet: map[string]struct{}{},
-		}
-	}
-	allowed := map[string]struct{}{}
-	for _, p := range tax.AllowedIndustryPaths {
-		p = strings.TrimSpace(p)
-		if strings.HasPrefix(p, "/industry/") {
-			allowed[p] = struct{}{}
-		}
-	}
+func newIndustryDictAccumulator() *industryDictAccumulator {
 	return &industryDictAccumulator{
-		baseTax:         tax,
-		qidCount:        map[string]int{},
-		qidPath:         map[string]string{},
-		keyPath:         map[string]string{},
-		allowedPathSet:  allowed,
+		qidCount: map[string]int{},
+		qidPath:  map[string]string{},
+		keyPath:  map[string]string{},
 	}
 }
 
@@ -1102,14 +1052,14 @@ func (d *industryDictAccumulator) ObservedQIDs() int {
 	return len(d.qidCount)
 }
 
-// MergeIntoTaxonomy mutates the provided taxonomy by extending:
-// - IndustryWikidataMap (QID -> /industry/...)
-// - IndustrySynonyms (normalized label -> /industry/...)
-// - AllowedIndustryPaths (ensure all inserted paths and ancestors exist)
-// Returns counts of newly added entries.
-func (d *industryDictAccumulator) MergeIntoTaxonomy(tax *coreModels.HorizonTaxonomy, maxNewQIDs int) (addedQIDs, addedSynonyms, addedAllowed int) {
-	if d == nil || tax == nil {
-		return 0, 0, 0
+// MergeIntoAliasRegistry extends horizon_taxonomy_aliases with observed industry aliases.
+// It never invents canonical paths: only already-resolved /industry paths are emitted.
+func (d *industryDictAccumulator) MergeIntoAliasRegistry(ctx context.Context, db *firestore.Client, version string, maxNewQIDs int, apply bool) (addedQIDs, addedSynonyms int, err error) {
+	if d == nil || db == nil {
+		return 0, 0, nil
+	}
+	if strings.TrimSpace(version) == "" {
+		version = "v1"
 	}
 	if maxNewQIDs <= 0 {
 		maxNewQIDs = 500
@@ -1117,15 +1067,27 @@ func (d *industryDictAccumulator) MergeIntoTaxonomy(tax *coreModels.HorizonTaxon
 	if maxNewQIDs > 2000 {
 		maxNewQIDs = 2000
 	}
-
-	if tax.IndustryWikidataMap == nil {
-		tax.IndustryWikidataMap = map[string]string{}
+	docRef := db.Collection("horizon_taxonomy_aliases").Doc(version)
+	var reg coreModels.TaxonomyAliasRegistry
+	if snap, getErr := docRef.Get(ctx); getErr == nil && snap != nil && snap.Exists() {
+		if dataErr := snap.DataTo(&reg); dataErr != nil {
+			return 0, 0, dataErr
+		}
 	}
-	if tax.IndustrySynonyms == nil {
-		tax.IndustrySynonyms = map[string]string{}
+	if reg.ID == "" {
+		reg.ID = version
 	}
-	if tax.AllowedIndustryPaths == nil {
-		tax.AllowedIndustryPaths = []string{}
+	if reg.Version == "" {
+		reg.Version = version
+	}
+	seen := map[string]struct{}{}
+	for _, alias := range reg.Aliases {
+		key := strings.ToLower(strings.TrimSpace(alias.Namespace)) + "|" +
+			strings.ToLower(strings.TrimSpace(alias.KeyKind)) + "|" +
+			strings.TrimSpace(alias.KeyNorm)
+		if key != "||" {
+			seen[key] = struct{}{}
+		}
 	}
 
 	// Sort QIDs by frequency descending, add top maxNewQIDs that are not present.
@@ -1150,16 +1112,24 @@ func (d *industryDictAccumulator) MergeIntoTaxonomy(tax *coreModels.HorizonTaxon
 			break
 		}
 		qid := item.qid
-		if _, exists := tax.IndustryWikidataMap[qid]; exists {
-			continue
-		}
 		path := strings.TrimSpace(d.qidPath[qid])
 		if !strings.HasPrefix(path, "/industry/") {
 			continue
 		}
-		tax.IndustryWikidataMap[qid] = path
+		seenKey := strings.ToLower(taxonomy.TaxonomyNamespaceIndustry) + "|" + taxonomy.TaxonomyAliasKeyKindWikidata + "|" + qid
+		if _, exists := seen[seenKey]; exists {
+			continue
+		}
+		seen[seenKey] = struct{}{}
+		reg.Aliases = append(reg.Aliases, coreModels.TaxonomyAliasData{
+			Namespace:     taxonomy.TaxonomyNamespaceIndustry,
+			KeyKind:       taxonomy.TaxonomyAliasKeyKindWikidata,
+			KeyNorm:       qid,
+			CanonicalPath: path,
+			Status:        "active",
+			Source:        "tool-generated",
+		})
 		addedQIDs++
-		addedAllowed += ensureAllowedIndustryPath(tax, path)
 	}
 
 	// Add synonyms (bounded by maxNewQIDs*3 just to prevent huge growth per run).
@@ -1173,79 +1143,27 @@ func (d *industryDictAccumulator) MergeIntoTaxonomy(tax *coreModels.HorizonTaxon
 		if key == "" || !strings.HasPrefix(path, "/industry/") {
 			continue
 		}
-		if _, exists := tax.IndustrySynonyms[key]; exists {
+		seenKey := strings.ToLower(taxonomy.TaxonomyNamespaceIndustry) + "|" + taxonomy.TaxonomyAliasKeyKindLabel + "|" + key
+		if _, exists := seen[seenKey]; exists {
 			continue
 		}
-		tax.IndustrySynonyms[key] = path
+		seen[seenKey] = struct{}{}
+		reg.Aliases = append(reg.Aliases, coreModels.TaxonomyAliasData{
+			Namespace:     taxonomy.TaxonomyNamespaceIndustry,
+			KeyKind:       taxonomy.TaxonomyAliasKeyKindLabel,
+			KeyNorm:       key,
+			CanonicalPath: path,
+			Status:        "active",
+			Source:        "tool-generated",
+		})
 		addedSynonyms++
-		addedAllowed += ensureAllowedIndustryPath(tax, path)
 	}
-
-	// Keep allowlist stable sorted (helps diff stability)
-	if len(tax.AllowedIndustryPaths) > 1 {
-		sortStrings(tax.AllowedIndustryPaths)
+	if !apply {
+		return addedQIDs, addedSynonyms, nil
 	}
-
-	return addedQIDs, addedSynonyms, addedAllowed
-}
-
-// ensureAllowedIndustryPath adds path and its ancestors to AllowedIndustryPaths.
-// Returns how many new paths were appended.
-func ensureAllowedIndustryPath(tax *coreModels.HorizonTaxonomy, path string) int {
-	if tax == nil {
-		return 0
-	}
-	path = strings.TrimSpace(path)
-	if !strings.HasPrefix(path, "/industry/") {
-		return 0
-	}
-	// Build ancestors: /industry/a, /industry/a/b, ...
-	anc := industryPathWithAncestors(path, 6)
-	if len(anc) == 0 {
-		return 0
-	}
-	seen := map[string]struct{}{}
-	for _, p := range tax.AllowedIndustryPaths {
-		p = strings.TrimSpace(p)
-		if strings.HasPrefix(p, "/industry/") {
-			seen[p] = struct{}{}
-		}
-	}
-	added := 0
-	for _, p := range anc {
-		if !strings.HasPrefix(p, "/industry/") {
-			continue
-		}
-		if _, ok := seen[p]; ok {
-			continue
-		}
-		seen[p] = struct{}{}
-		tax.AllowedIndustryPaths = append(tax.AllowedIndustryPaths, p)
-		added++
-	}
-	return added
-}
-
-func industryPathWithAncestors(path string, maxDepth int) []string {
-	path = strings.TrimSpace(path)
-	if path == "" || !strings.HasPrefix(path, "/industry/") {
-		return nil
-	}
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) == 0 {
-		return nil
-	}
-	if maxDepth <= 0 {
-		maxDepth = 6
-	}
-	if len(parts) > maxDepth {
-		parts = parts[:maxDepth]
-	}
-	out := make([]string, 0, len(parts))
-	for i := 1; i <= len(parts); i++ {
-		out = append(out, "/"+strings.Join(parts[:i], "/"))
-	}
-	return out
+	reg.UpdatedAt = time.Now().UTC()
+	_, err = docRef.Set(ctx, &reg)
+	return addedQIDs, addedSynonyms, err
 }
 
 func extractFragmentWikidataID(f *hmodels.HorizonFragment) string {
@@ -1544,9 +1462,9 @@ func isOrgTypeBoost(qid string) bool {
 func isOrgTypePenalty(qid string) bool {
 	switch qid {
 	case
-		"Q482994",  // album
-		"Q7366",    // song
-		"Q571":     // book
+		"Q482994", // album
+		"Q7366",   // song
+		"Q571":    // book
 		return true
 	default:
 		return false
@@ -1637,5 +1555,3 @@ func escapeTSV(s string) string {
 	s = strings.ReplaceAll(s, "\r", " ")
 	return strings.TrimSpace(s)
 }
-
-

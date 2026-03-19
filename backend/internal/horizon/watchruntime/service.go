@@ -269,6 +269,10 @@ func (s *Service) EnsureSubjectForTarget(ctx context.Context, target *horizonmod
 		AnchorCanonicalPath: strings.TrimSpace(target.CanonicalPath),
 		AnchorFragmentID:    strings.TrimSpace(target.FragmentID),
 		DisplayLabel:        strings.TrimSpace(firstNonEmpty(target.Label, target.CanonicalPath)),
+		InterestTitle:       strings.TrimSpace(target.InterestTitle),
+		InterestQuery:       strings.TrimSpace(target.InterestQuery),
+		QueryOverrides:      compactUnique(append([]string{}, target.QueryOverrides...)),
+		PageFraming:         cloneMap(target.PageFraming),
 		Status:              mapTargetStatus(target.Status),
 		SourceMode:          sourceMode,
 		RuntimeMode:         runtimeMode,
@@ -278,10 +282,16 @@ func (s *Service) EnsureSubjectForTarget(ctx context.Context, target *horizonmod
 		LensBindings:        s.collectLensBindings(ctx, target.TenantID, target.FragmentID, target.CanonicalPath),
 		UniversePaths:       compactUnique([]string{strings.TrimSpace(target.CanonicalPath)}),
 		Metadata: map[string]any{
-			"kind":          strings.TrimSpace(target.Kind),
-			"watchTargetId": strings.TrimSpace(target.ID),
-			"source":        strings.TrimSpace(target.Source),
+			"kind":           strings.TrimSpace(target.Kind),
+			"watchTargetId":  strings.TrimSpace(target.ID),
+			"source":         strings.TrimSpace(target.Source),
+			"interestTitle":  strings.TrimSpace(target.InterestTitle),
+			"interestQuery":  strings.TrimSpace(target.InterestQuery),
+			"queryOverrides": compactUnique(append([]string{}, target.QueryOverrides...)),
 		},
+	}
+	if len(target.PageFraming) > 0 {
+		subject.Metadata["pageFraming"] = cloneMap(target.PageFraming)
 	}
 	if err := s.subjectsRepo.Upsert(ctx, subject); err != nil {
 		return nil, err
@@ -308,6 +318,10 @@ func (s *Service) EnsureSubjectForWatchdogConfig(ctx context.Context, cfg *horiz
 		AnchorCanonicalPath: strings.TrimSpace(fragment.CanonicalPath),
 		AnchorFragmentID:    strings.TrimSpace(fragment.ID),
 		DisplayLabel:        strings.TrimSpace(fragmentDisplayName(fragment)),
+		InterestTitle:       strings.TrimSpace(cfg.InterestTitle),
+		InterestQuery:       strings.TrimSpace(cfg.InterestQuery),
+		QueryOverrides:      compactUnique(append([]string{}, cfg.QueryOverrides...)),
+		PageFraming:         cloneMap(cfg.PageFraming),
 		Status:              mapWatchdogStatus(cfg.Status),
 		SourceMode:          sourceModeFromWatchdog(cfg),
 		RuntimeMode:         horizonmodels.WatchSubjectRuntimeCustomFragment,
@@ -317,7 +331,13 @@ func (s *Service) EnsureSubjectForWatchdogConfig(ctx context.Context, cfg *horiz
 		UniversePaths:       compactUnique([]string{strings.TrimSpace(fragment.CanonicalPath)}),
 		Metadata: map[string]any{
 			"watchdogConfigId": strings.TrimSpace(cfg.ID),
+			"interestTitle":    strings.TrimSpace(cfg.InterestTitle),
+			"interestQuery":    strings.TrimSpace(cfg.InterestQuery),
+			"queryOverrides":   compactUnique(append([]string{}, cfg.QueryOverrides...)),
 		},
+	}
+	if len(cfg.PageFraming) > 0 {
+		subject.Metadata["pageFraming"] = cloneMap(cfg.PageFraming)
 	}
 	if err := s.subjectsRepo.Upsert(ctx, subject); err != nil {
 		return nil, err
@@ -1365,6 +1385,14 @@ func (s *Service) ensureDerivedScopeAgentConfig(ctx context.Context, subject *ho
 		"macroAgentClass":      asString(subject.Metadata["macroAgentClass"]),
 		"lensId":               strings.TrimSpace(firstNonEmpty(subject.LensID, asString(subject.Metadata["lensId"]))),
 		"artifactCanonicalKey": strings.TrimSpace(asString(subject.Metadata["artifactCanonicalKey"])),
+		"interestTitle":        strings.TrimSpace(firstNonEmpty(subject.InterestTitle, asString(subject.Metadata["interestTitle"]))),
+		"interestQuery":        strings.TrimSpace(firstNonEmpty(subject.InterestQuery, asString(subject.Metadata["interestQuery"]))),
+		"queryOverrides":       compactUnique(append(append([]string{}, subject.QueryOverrides...), parseAnyStringSlice(subject.Metadata["queryOverrides"])...)),
+	}
+	if len(subject.PageFraming) > 0 {
+		metadata["pageFraming"] = cloneMap(subject.PageFraming)
+	} else if framing := mapFromAny(subject.Metadata["pageFraming"]); len(framing) > 0 {
+		metadata["pageFraming"] = cloneMap(framing)
 	}
 	cfg := &horizonmodels.ScopeAgentConfig{
 		TenantID:           strings.TrimSpace(subject.TenantID),
@@ -1832,6 +1860,10 @@ func normalizeAnySlice(v any) []string {
 }
 
 func parseStringSlice(v any) []string {
+	return normalizeAnySlice(v)
+}
+
+func parseAnyStringSlice(v any) []string {
 	return normalizeAnySlice(v)
 }
 

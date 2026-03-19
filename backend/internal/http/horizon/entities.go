@@ -85,7 +85,7 @@ func (h *HorizonHandlers) SearchEntities(w http.ResponseWriter, r *http.Request)
 			}
 		}
 
-		// Извлекаем location и sector из fragment
+		// Извлекаем location и industry из fragment
 		location := ""
 		if fragment.HomeLocation != nil {
 			if fragment.HomeLocation.ISO3166_1 != nil {
@@ -93,11 +93,11 @@ func (h *HorizonHandlers) SearchEntities(w http.ResponseWriter, r *http.Request)
 			}
 		}
 
-		sector := ""
-		if fragment.SectorPath != "" {
-			parts := strings.Split(strings.Trim(fragment.SectorPath, "/"), "/")
+		industry := ""
+		if len(fragment.IndustryPaths) > 0 {
+			parts := strings.Split(strings.Trim(fragment.IndustryPaths[0], "/"), "/")
 			if len(parts) > 0 {
-				sector = parts[len(parts)-1]
+				industry = parts[len(parts)-1]
 			}
 		}
 
@@ -107,14 +107,14 @@ func (h *HorizonHandlers) SearchEntities(w http.ResponseWriter, r *http.Request)
 			"name":          name,
 			"type":          string(fragment.Type),
 			"entityPath":    fragment.EntityPath,
-			"sectorPath":    fragment.SectorPath,
+			"industryPaths": fragment.IndustryPaths,
 			"description":   fragment.Description,
 		}
 		if location != "" {
 			entity["location"] = location
 		}
-		if sector != "" {
-			entity["sector"] = sector
+		if industry != "" {
+			entity["industry"] = industry
 		}
 		entities = append(entities, entity)
 	}

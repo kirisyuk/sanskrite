@@ -140,7 +140,7 @@ func (r *HorizonFragmentsRepository) buildGraphEnrichContext(ctx context.Context
 	neighborIDs := map[string]struct{}{}
 	routeHints := make([]string, 0, 8)
 	zoneHints := make([]string, 0, 8)
-	pathHints := []string{fragment.CanonicalPath, fragment.ParentPath, fragment.ParentGovPath, fragment.ParentMarketPath, fragment.EntityPath, fragment.SectorPath}
+	pathHints := []string{fragment.CanonicalPath, fragment.ParentPath, fragment.ParentGovPath, fragment.ParentMarketPath, fragment.EntityPath}
 	collectEdge := func(edge *models.DependencyEdge) {
 		if edge == nil {
 			return
@@ -175,7 +175,7 @@ func (r *HorizonFragmentsRepository) buildGraphEnrichContext(ctx context.Context
 			for _, id := range ids {
 				if n := neighbors[id]; n != nil {
 					nearby = append(nearby, n)
-					pathHints = append(pathHints, n.CanonicalPath, n.EntityPath, n.SectorPath)
+					pathHints = append(pathHints, n.CanonicalPath, n.EntityPath)
 				}
 			}
 		}
@@ -551,7 +551,7 @@ func (r *HorizonFragmentsRepository) uploadToGCS(ctx context.Context, fragment *
 			"shortName":         firstNonEmptyIdentifier(fragment.Identifiers, "shortName"),
 			"identifiers":       compactIdentifiers(fragment.Identifiers, 24),
 			"entityPath":        fragment.EntityPath,
-			"sectorPath":        fragment.SectorPath,
+			"industryPaths":     nonEmptyStrings(fragment.IndustryPaths),
 			"spherePaths":       nonEmptyStrings(fragment.SpherePaths),
 			"indexPaths":        fragment.IndexPaths,
 			"parentPath":        strings.TrimSpace(fragment.ParentPath),

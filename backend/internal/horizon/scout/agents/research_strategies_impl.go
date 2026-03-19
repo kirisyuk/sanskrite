@@ -61,10 +61,7 @@ func geoAndSectorContext(frag *models.HorizonFragment) string {
 			}
 		}
 	}
-	// Sector: from SectorPath, EntityPath, or marketSegments (domain/vertical)
-	if sp := strings.TrimSpace(frag.SectorPath); sp != "" {
-		sector = append(sector, sp)
-	}
+	// Sector: from EntityPath or marketSegments (domain/vertical)
 	if ep := strings.TrimSpace(frag.EntityPath); ep != "" {
 		sector = append(sector, ep)
 	}

@@ -123,7 +123,6 @@ func (m *ProductIOMaterializer) Apply(ctx context.Context, req *ProductIOApplyRe
 			CanonicalPath: cp,
 			Type:          horizonmodels.FragmentTypeProduct,
 			EntityPath:    "/Product",
-			SectorPath:    "/Product",
 			State:         map[string]horizonmodels.MetricValue{},
 			Provenance: horizonmodels.Provenance{
 				Method:    "hypothesis_product_io",

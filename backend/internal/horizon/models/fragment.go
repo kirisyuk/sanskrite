@@ -38,7 +38,6 @@ type HorizonFragment struct {
 	CanonicalParts *taxonomy.CanonicalPathParts `json:"canonicalParts,omitempty" firestore:"canonicalParts,omitempty"`
 	Type           FragmentType                 `json:"type" firestore:"type"`
 	EntityPath     string                       `json:"entityPath" firestore:"entityPath"` // /Organization/Corporation/Public
-	SectorPath     string                       `json:"sectorPath" firestore:"sectorPath"` // /Technology/Semiconductors/Manufacturing
 	// IndustryPaths are canonical, multi-valued industry classifications (Horizon-first taxonomy).
 	// Format: /industry/{sector}/{group}/{industry}/{subindustry}
 	IndustryPaths []string `json:"industryPaths,omitempty" firestore:"industryPaths,omitempty"`
@@ -123,7 +122,7 @@ type HorizonFragment struct {
 	HasCoordinates bool `json:"hasCoordinates,omitempty" firestore:"hasCoordinates,omitempty"`
 
 	// IndexPaths — денормализованные "координаты" фрагмента для детерминированного картографирования/фильтрации.
-	// Собирается из canonicalPath + (sectorPath/entityPath + ancestors) + location + tags + identifiers + (optional spheres).
+	// Собирается из canonicalPath + (industryPaths/entityPath + ancestors) + location + tags + identifiers + (optional spheres).
 	// Ограничено по размеру (см. BuildIndexPaths/NormalizeIndexPaths).
 	IndexPaths []string `json:"indexPaths,omitempty" firestore:"indexPaths,omitempty"`
 
@@ -294,6 +293,7 @@ func (f *HorizonFragment) Validate() error {
 	// These fields can be produced by Scout/Research and should be canonicalized before persistence.
 	f.MarketSegments = taxonomy.NormalizeSegmentPaths(f.MarketSegments)
 	f.OrgSize = taxonomy.NormalizeOrgSize(f.OrgSize)
+	f.IndustryPaths = taxonomy.NormalizeIndustryPaths(f.IndustryPaths, string(f.Type))
 
 	// Best-effort: keep FACILITY physical subtype deterministic at the model boundary.
 	// This guarantees facilityKind is populated even when writes bypass scout precreate flow
@@ -312,7 +312,7 @@ func (f *HorizonFragment) Validate() error {
 				f.Labels["en"],
 				f.Description,
 				f.EntityPath,
-				f.SectorPath,
+				strings.Join(f.IndustryPaths, " "),
 				f.Identifiers["facilityType"],
 				f.Identifiers["supplyChainRole"],
 			)
@@ -836,7 +836,7 @@ func (f *HorizonFragment) GenerateVectorText() string {
 	}
 
 	// Классификация и путь
-	if f.Type != "" || f.EntityPath != "" || f.SectorPath != "" {
+	if f.Type != "" || f.EntityPath != "" || len(f.IndustryPaths) > 0 {
 		classParts := []string{}
 		if f.Type != "" {
 			classParts = append(classParts, fmt.Sprintf("type %s", f.Type))
@@ -844,8 +844,8 @@ func (f *HorizonFragment) GenerateVectorText() string {
 		if f.EntityPath != "" {
 			classParts = append(classParts, fmt.Sprintf("entity %s", f.EntityPath))
 		}
-		if f.SectorPath != "" {
-			classParts = append(classParts, fmt.Sprintf("sector %s", f.SectorPath))
+		if len(f.IndustryPaths) > 0 {
+			classParts = append(classParts, fmt.Sprintf("industries %s", strings.Join(f.IndustryPaths, ", ")))
 		}
 		add("Classification: " + strings.Join(classParts, ", "))
 	}
@@ -922,13 +922,6 @@ func (f *HorizonFragment) GenerateVectorText() string {
 		if len(pathParts) > 0 {
 			add("Entity path tokens: " + strings.Join(pathParts, " "))
 			add("Entity leaf: " + pathParts[len(pathParts)-1])
-		}
-	}
-	if f.SectorPath != "" {
-		sectorParts := strings.Split(strings.Trim(f.SectorPath, "/"), "/")
-		if len(sectorParts) > 0 {
-			add("Sector path tokens: " + strings.Join(sectorParts, " "))
-			add("Sector leaf: " + sectorParts[len(sectorParts)-1])
 		}
 	}
 	if len(f.IndustryPaths) > 0 {

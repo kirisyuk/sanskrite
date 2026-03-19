@@ -435,7 +435,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 				fragment.Labels["en"],
 				fragment.Description,
 				fragment.EntityPath,
-				fragment.SectorPath,
+				strings.Join(fragment.IndustryPaths, " "),
 				fragment.Identifiers["facilityType"],
 				fragment.Identifiers["supplyChainRole"],
 			)

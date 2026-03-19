@@ -299,6 +299,10 @@ type WatchTarget struct {
 	Label         string         `json:"label" firestore:"label"`
 	CanonicalPath string         `json:"canonicalPath" firestore:"canonicalPath"`
 	FragmentID    string         `json:"fragmentId,omitempty" firestore:"fragmentId,omitempty"`
+	InterestTitle string         `json:"interestTitle,omitempty" firestore:"interestTitle,omitempty"`
+	InterestQuery string         `json:"interestQuery,omitempty" firestore:"interestQuery,omitempty"`
+	QueryOverrides []string      `json:"queryOverrides,omitempty" firestore:"queryOverrides,omitempty"`
+	PageFraming   map[string]any `json:"pageFraming,omitempty" firestore:"pageFraming,omitempty"`
 	DomainModes   []string       `json:"domainModes,omitempty" firestore:"domainModes,omitempty"`
 	Roles         []string       `json:"roles,omitempty" firestore:"roles,omitempty"`
 	Priority      int            `json:"priority" firestore:"priority"`
@@ -341,6 +345,10 @@ type WatchBrief struct {
 	CanonicalPath      string         `json:"canonicalPath" firestore:"canonicalPath"`
 	Label              string         `json:"label" firestore:"label"`
 	ScopeType          string         `json:"scopeType" firestore:"scopeType"`
+	InterestTitle      string         `json:"interestTitle,omitempty" firestore:"interestTitle,omitempty"`
+	InterestQuery      string         `json:"interestQuery,omitempty" firestore:"interestQuery,omitempty"`
+	QueryOverrides     []string       `json:"queryOverrides,omitempty" firestore:"queryOverrides,omitempty"`
+	PageFraming        map[string]any `json:"pageFraming,omitempty" firestore:"pageFraming,omitempty"`
 	Headline           string         `json:"headline" firestore:"headline"`
 	Summary            string         `json:"summary" firestore:"summary"`
 	Hotness            float64        `json:"hotness" firestore:"hotness"`

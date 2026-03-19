@@ -57,7 +57,7 @@
           "93ImrF7Gw7V34dtCnwij"
         ]
       },
-      "sectorPath": "",
+      "industryPaths": [],
       "state": {
         "/metric/risk/capacity_utilization": {
           "confidence": 0.25,
@@ -168,9 +168,8 @@
       "id": "anz6w0uDOjDlSorQLA6S",
       "indexPaths": [
         "/fac/sa/four-points-sheraton-riyadh-khaldia",
-        "/sector/Industrials",
-        "/sector/Industrials/Hospitality",
-        "/sector/Industrials/Hospitality/Hotels",
+        "/industry/services/hospitality",
+        "/industry/services/hospitality/hotels",
         "/entity/Organization",
         "/entity/Organization/Corporation",
         "/entity/Organization/Corporation/Private"
@@ -187,7 +186,9 @@
       "provenance": {
         "sourceIds": null
       },
-      "sectorPath": "/Industrials/Hospitality/Hotels",
+      "industryPaths": [
+        "/industry/services/hospitality/hotels"
+      ],
       "state": {
         "/metric/risk/operational_health": {
           "confidence": 0.5,

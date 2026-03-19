@@ -86,10 +86,8 @@ var profileByContractType = map[string]SteeringProfileName{
 	"megatrends":        SteeringProfileScenarioTrends,
 	"future-outlook":    SteeringProfileScenarioTrends,
 
-	// Sector / industry
-	"sector-overview":    SteeringProfileSectorIndustry,
-	"industry-structure": SteeringProfileSectorIndustry,
-	"vertical-deep-dive": SteeringProfileSectorIndustry,
+	// Industry analysis
+	"industry-analysis": SteeringProfileSectorIndustry,
 }
 
 func steeringProfileForContractType(contractType string) SteeringProfileName {

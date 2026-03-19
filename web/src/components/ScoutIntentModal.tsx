@@ -19,6 +19,9 @@ export interface ScoutIntentResolution {
     description?: string;
     supplyChainExecutionPlan?: {
       graphBuildMode?: string;
+      queries?: Array<{
+        direction?: string;
+      }>;
     };
     firstOrderEntities?: string[];
     confidence?: number;
@@ -36,6 +39,11 @@ export interface ScoutIntentModalProps {
   runLoading: boolean;
   progressLog: string[];
   mode: ScoutingMode;
+  showHotPathOption?: boolean;
+  hotPathOnly?: boolean;
+  onHotPathOnlyChange?: (next: boolean) => void;
+  supplyChainDirection?: 'upstream' | 'downstream' | 'both';
+  onSupplyChainDirectionChange?: (next: 'upstream' | 'downstream' | 'both') => void;
   onModeChange: (mode: ScoutingMode) => void;
   onClose: () => void;
   onRunScout: () => void;
@@ -67,6 +75,11 @@ export function ScoutIntentModal({
   runLoading,
   progressLog,
   mode,
+  showHotPathOption = false,
+  hotPathOnly = false,
+  onHotPathOnlyChange,
+  supplyChainDirection = 'downstream',
+  onSupplyChainDirectionChange,
   onModeChange,
   onClose,
   onRunScout,
@@ -240,6 +253,71 @@ export function ScoutIntentModal({
                   })}
                 </div>
               </div>
+
+              {showHotPathOption && mode === 'supply_chain' && (
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary-strong)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                    Supply Chain Execution
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8, marginBottom: 10 }}>
+                    {([
+                      { value: 'downstream' as const, label: 'Downstream', desc: 'Follow exposed flows, customers, and dependencies.' },
+                      { value: 'upstream' as const, label: 'Upstream', desc: 'Trace suppliers, inputs, and source dependencies.' },
+                      { value: 'both' as const, label: 'Both', desc: 'Keep the broader bidirectional chain mapping.' },
+                    ]).map((opt) => {
+                      const active = supplyChainDirection === opt.value;
+                      return (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          onClick={() => onSupplyChainDirectionChange?.(opt.value)}
+                          disabled={runLoading}
+                          aria-pressed={active}
+                          style={{
+                            textAlign: 'left',
+                            padding: '10px 10px 9px',
+                            borderRadius: 10,
+                            border: '1px solid var(--border-subtle)',
+                            background: active ? 'var(--white-10)' : 'transparent',
+                            color: 'var(--text-heading)',
+                            cursor: runLoading ? 'not-allowed' : 'pointer',
+                            opacity: runLoading ? 0.5 : 1,
+                          }}
+                        >
+                          <div style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.2 }}>{opt.label}</div>
+                          <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-secondary-strong)', lineHeight: 1.35 }}>
+                            {opt.desc}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <label
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '16px minmax(0, 1fr)',
+                      gap: 10,
+                      alignItems: 'flex-start',
+                      cursor: runLoading ? 'not-allowed' : 'pointer',
+                      opacity: runLoading ? 0.5 : 1,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={hotPathOnly}
+                      onChange={(e) => onHotPathOnlyChange?.(e.target.checked)}
+                      disabled={runLoading}
+                      style={{ marginTop: 2 }}
+                    />
+                    <span style={{ display: 'grid', gap: 2 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-heading)' }}>Only hot path</span>
+                      <span style={{ fontSize: 11, lineHeight: 1.35, color: 'var(--text-secondary-strong)' }}>
+                        Run the fast operational chain first instead of the full graph expansion. `Both` keeps the broader full pass.
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              )}
 
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary-strong)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.4 }}>
                 Resolved Intent

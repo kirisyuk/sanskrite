@@ -13,7 +13,7 @@ const MaxIndexPaths = 80
 //
 // It merges:
 // - canonicalPath (as-is)
-// - /sector + sectorPath (+ ancestors)
+// - /industry/... (+ ancestors)
 // - /entity + entityPath (+ ancestors)
 // - location paths from HomeLocation (as /loc/{country}[/{level1}[/{level2}]])
 // - /tag/{slug} for Tags
@@ -30,7 +30,6 @@ func BuildIndexPaths(f *HorizonFragment, extra []string) []string {
 	spheres := []string{}
 	industry := []string{}
 	segments := []string{}
-	sector := []string{}
 	entity := []string{}
 	identifiers := []string{}
 	tags := []string{}
@@ -39,12 +38,6 @@ func BuildIndexPaths(f *HorizonFragment, extra []string) []string {
 	cp := strings.TrimSpace(f.CanonicalPath)
 	if cp != "" {
 		canonical = append(canonical, cp)
-	}
-
-	// Sector path (guide taxonomy) → index prefix /sector/...
-	sp := strings.TrimSpace(f.SectorPath)
-	if sp != "" {
-		sector = append(sector, prefixedWithAncestors("/sector", sp, 6)...)
 	}
 
 	// Industry paths (canonical) → /industry/... (+ ancestors)
@@ -120,8 +113,6 @@ func BuildIndexPaths(f *HorizonFragment, extra []string) []string {
 			tags = append(tags, p)
 		} else if strings.HasPrefix(p, "/id/") {
 			identifiers = append(identifiers, p)
-		} else if strings.HasPrefix(p, "/sector/") {
-			sector = append(sector, p)
 		} else if strings.HasPrefix(p, "/industry/") {
 			industry = append(industry, p)
 		} else if strings.HasPrefix(p, "/entity/") {
@@ -131,7 +122,7 @@ func BuildIndexPaths(f *HorizonFragment, extra []string) []string {
 		}
 	}
 
-	return NormalizeIndexPaths(MaxIndexPaths, canonical, location, spheres, industry, segments, sector, entity, identifiers, tags, other)
+	return NormalizeIndexPaths(MaxIndexPaths, canonical, location, spheres, industry, segments, entity, identifiers, tags, other)
 }
 
 // NormalizeIndexPaths deduplicates, normalizes, and caps index paths deterministically.

@@ -398,7 +398,7 @@ func facilityAllowsPlainNameGeocode(fragment *models.HorizonFragment) bool {
 		fragment.Labels["en"],
 		fragment.Description,
 		fragment.EntityPath,
-		fragment.SectorPath,
+		strings.Join(fragment.IndustryPaths, " "),
 		fragment.Identifiers["facilityType"],
 		fragment.Identifiers["supplyChainRole"],
 	)

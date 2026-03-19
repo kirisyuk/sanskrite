@@ -525,7 +525,7 @@ export const MapFilterPanel: React.FC<MapFilterPanelProps> = ({
     { label: 'Types', value: `${selectedTypeCount}/${totalTypeCount || 0}` },
     { label: 'Zones', value: zonesEnabled ? `${selectedZoneTypeCount}/${totalZoneTypeCount || 0}` : 'Off' },
     { label: 'Flows', value: flowsEnabled ? `${selectedFlowModeCount}/${totalFlowModeCount || 0}` : 'Off' },
-    { label: 'Paths', value: pathLegsEnabled ? `${pathLegCount}` : 'Off' },
+    { label: 'Route lines', value: pathLegsEnabled ? `${pathLegCount}` : 'Off' },
     { label: 'Hops', value: `${hops}` },
   ];
   if (dateFrom || dateTo) {
@@ -539,9 +539,9 @@ export const MapFilterPanel: React.FC<MapFilterPanelProps> = ({
     <div style={panelSurface(isDark, floating)}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
         <div>
-          <div style={{ fontWeight: 700, fontSize: 14, letterSpacing: '-0.01em' }}>Filters</div>
+          <div style={{ fontWeight: 700, fontSize: 14, letterSpacing: '-0.01em' }}>View controls</div>
           <div style={{ marginTop: 2, fontSize: 10, color: 'var(--text-secondary-strong)' }}>
-            Global controls, layers and object visibility.
+            Layers, time window and object visibility.
           </div>
         </div>
         <button
@@ -567,8 +567,8 @@ export const MapFilterPanel: React.FC<MapFilterPanelProps> = ({
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, overflowY: 'auto', paddingRight: 4, marginRight: -4 }}>
         <section style={sectionSurface(isDark)}>
           <SectionHeader
-            title="Quick controls"
-            subtitle="Core scope and time window"
+            title="View scope"
+            subtitle="Network depth and time window"
             countText={`${activeDatePreset === 'custom' ? 'Custom date' : activeDatePreset.toUpperCase()} . ${hops} hops`}
             isDark={isDark}
             open={quickControlsOpen}

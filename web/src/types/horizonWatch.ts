@@ -6,6 +6,10 @@ export interface HorizonWatchBrief {
   canonicalPath: string;
   label: string;
   scopeType: string;
+  interestTitle?: string;
+  interestQuery?: string;
+  queryOverrides?: string[];
+  pageFraming?: Record<string, any>;
   headline: string;
   summary: string;
   hotness: number;
@@ -183,4 +187,172 @@ export interface HorizonWatchSearchResult {
   label: string;
   canonicalPath: string;
   fragmentId?: string;
+}
+
+export interface HorizonWatchPageHero {
+  eyebrow?: string;
+  title?: string;
+  summary?: string;
+  whyNow?: string;
+  timeHorizon?: string;
+  riskPosture?: string;
+  sourceRefs?: string[];
+  backingIds?: string[];
+  generatedAt?: string;
+}
+
+export interface HorizonWatchPageDashboardMetric {
+  id: string;
+  title: string;
+  value: string;
+  subtitle?: string;
+  tone?: string;
+  deltaValue?: string;
+  deltaDirection?: string;
+  caption?: string;
+  sourceRefs?: string[];
+  backingIds?: string[];
+  generatedAt?: string;
+}
+
+export interface HorizonWatchPageRiskItem {
+  id: string;
+  title: string;
+  summary?: string;
+  riskPosture?: string;
+  canonicalPath?: string;
+  mechanisms?: string[];
+  sourceRefs?: string[];
+  backingIds?: string[];
+  generatedAt?: string;
+}
+
+export interface HorizonWatchPageAffectedItem {
+  id: string;
+  label: string;
+  canonicalPath: string;
+  reason?: string;
+  rank?: number;
+  sourceRefs?: string[];
+  backingIds?: string[];
+  generatedAt?: string;
+}
+
+export interface HorizonWatchPageScopeItem {
+  id: string;
+  label: string;
+  canonicalPath: string;
+  kind?: string;
+  summary?: string;
+  sourceRefs?: string[];
+  backingIds?: string[];
+  generatedAt?: string;
+}
+
+export interface HorizonWatchPageSupplyPath {
+  id: string;
+  title: string;
+  summary?: string;
+  productAxis?: string;
+  anchorSupplier?: string;
+  anchorCustomer?: string;
+  stressScore?: number;
+  bindingConfidence?: number;
+  routeRefs?: string[];
+  affectedZoneRefs?: string[];
+  backingIds?: string[];
+  generatedAt?: string;
+}
+
+export interface HorizonWatchPageMapFragment {
+  id: string;
+  title: string;
+  caption?: string;
+  canonicalPaths?: string[];
+  layerHints?: string[];
+  scopeType?: string;
+  briefId?: string;
+  backingIds?: string[];
+  generatedAt?: string;
+}
+
+export interface HorizonWatchPageEvidenceItem {
+  id: string;
+  kind: string;
+  title: string;
+  summary?: string;
+  canonicalPaths?: string[];
+  briefId?: string;
+  sourceRefs?: string[];
+  generatedAt?: string;
+}
+
+export interface HorizonWatchPageSignalItem {
+  id: string;
+  kind: string;
+  title: string;
+  summary?: string;
+  canonicalPaths?: string[];
+  sourceLabel?: string;
+  sourceKind?: string;
+  backingIds?: string[];
+  generatedAt?: string;
+}
+
+export interface HorizonWatchPageScenarioItem {
+  id: string;
+  title: string;
+  description?: string;
+  targetPaths?: string[];
+  triggerConditions?: string[];
+  disconfirmers?: string[];
+  summary?: string;
+  backingIds?: string[];
+  generatedAt?: string;
+}
+
+export interface HorizonWatchPageSectionEnrichment {
+  key: string;
+  content?: string;
+  sourceRefs?: string[];
+  backingIds?: string[];
+  model?: string;
+  fallback?: boolean;
+  generatedAt?: string;
+}
+
+export interface HorizonWatchPageSnapshot {
+  id?: string;
+  tenantId: string;
+  lensId: string;
+  lensName?: string;
+  projectId?: string;
+  timeHorizon?: string;
+  interestTitle?: string;
+  interestQuery?: string;
+  queryOverrides?: string[];
+  pageFraming?: Record<string, any>;
+  buildStatus: 'NOT_BUILT' | 'READY' | 'STALE' | 'FAILED';
+  buildError?: string;
+  freshAt: string;
+  staleAfterAt: string;
+  lastRefreshRequestedAt?: string;
+  hero: HorizonWatchPageHero;
+  anchors?: HorizonWatchPageScopeItem[];
+  reach?: HorizonWatchPageScopeItem[];
+  products?: HorizonWatchPageScopeItem[];
+  supplyPaths?: HorizonWatchPageSupplyPath[];
+  whatIsAtRisk?: HorizonWatchPageRiskItem[];
+  affected?: HorizonWatchPageAffectedItem[];
+  directlyAffected?: HorizonWatchPageAffectedItem[];
+  indirectlyAffected?: HorizonWatchPageAffectedItem[];
+  dashboards?: HorizonWatchPageDashboardMetric[];
+  mapFragments?: HorizonWatchPageMapFragment[];
+  signals?: HorizonWatchPageSignalItem[];
+  scenarios?: HorizonWatchPageScenarioItem[];
+  evidence?: HorizonWatchPageEvidenceItem[];
+  sectionEnrichments?: Record<string, HorizonWatchPageSectionEnrichment>;
+  metadata?: Record<string, any>;
+  createdAt?: string;
+  updatedAt?: string;
 }

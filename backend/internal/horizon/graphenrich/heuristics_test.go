@@ -27,11 +27,22 @@ func TestApplyFragmentHeuristics_InfersGovAndMarketFields(t *testing.T) {
 	if frag.MarketVertical != "lng" {
 		t.Fatalf("expected marketVertical=lng, got %q", frag.MarketVertical)
 	}
-	if len(frag.IndustryPaths) == 0 {
-		t.Fatalf("expected industryPaths to be inferred")
-	}
 	if frag.Qualifiers["graphEnrich"] == nil {
 		t.Fatalf("expected graded graphEnrich report")
+	}
+	raw, ok := frag.Qualifiers["graphEnrich"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected graphEnrich qualifier map")
+	}
+	section, ok := raw["fragment"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected graphEnrich fragment section")
+	}
+	if _, ok := section["industryPaths"].([]map[string]interface{}); ok {
+		return
+	}
+	if _, ok := section["industryPaths"].([]interface{}); !ok {
+		t.Fatalf("expected industryPaths evidence report, got %#v", section["industryPaths"])
 	}
 }
 

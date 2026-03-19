@@ -42,7 +42,13 @@ func parseAllowedOrigins() []string {
 	// Default: allow localhost and production
 	return []string{
 		"http://localhost:5173",
+		"http://localhost:3000",
+		"https://etigram.pro",
+		"https://www.etigram.pro",
+		"https://*.etigram.pro",
 		"https://etigram.one",
+		"https://www.etigram.one",
+		"https://*.etigram.one",
 	}
 }
 
@@ -243,4 +249,3 @@ func main() {
 		log.Fatalf("Server failed: %v", err)
 	}
 }
-

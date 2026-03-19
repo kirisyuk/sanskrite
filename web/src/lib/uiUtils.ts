@@ -152,10 +152,8 @@ function domainBaseTitle(contractType: string): string {
     case 'megatrends': return 'Megatrends';
     case 'future-outlook': return 'Future outlook';
 
-    // Sector / industry
-    case 'sector-overview': return 'Sector overview';
-    case 'industry-structure': return 'Industry structure';
-    case 'vertical-deep-dive': return 'Vertical deep-dive';
+    // Industry analysis
+    case 'industry-analysis': return 'Industry analysis';
 
     // "other" is handled specially in humanizeDomainCanonicalPath
     case 'other': return 'Other';
@@ -362,4 +360,3 @@ export function humanizeCanonicalPath(path?: string): string {
   // Best-effort Title Case when string looks slug-ish (no uppercase letters).
   return titleCaseWords(s) || s;
 }
-

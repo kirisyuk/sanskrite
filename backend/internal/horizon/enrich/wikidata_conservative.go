@@ -190,7 +190,10 @@ func EnrichFragmentFromEntityData(
 		if fragment.Type == hmodels.FragmentTypeOrganization {
 			inds := extractEntityIDs(ed.PropertiesRaw, "P452")
 			if len(inds) > 0 {
-				paths := taxonomy.MapIndustryQIDsToPaths(inds)
+				paths := taxonomy.NormalizeIndustryPaths(
+					taxonomy.MapIndustryQIDsToPaths(inds),
+					string(fragment.Type),
+				)
 				if len(paths) > 0 {
 					// Overwrite is fine; these are derived.
 					if !stringSlicesEqual(fragment.IndustryPaths, paths) {

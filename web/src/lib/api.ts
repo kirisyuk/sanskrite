@@ -6,6 +6,7 @@ import type { AnalyzeRequest, AnalyzeResponse } from '../types/stance';
 import type { ScoutingMode } from '../features/horizon/lib/scoutingMode';
 import type {
   HorizonWatchBrief,
+  HorizonWatchPageSnapshot,
   HorizonWatchPreferences,
   HorizonWatchSearchResult,
   HorizonWatchSnapshot,
@@ -1694,7 +1695,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       name: string;
       type: string;
       entityPath?: string;
-      sectorPath?: string;
+      industryPaths?: string[];
       description?: string;
       location?: string;
       sector?: string;
@@ -3358,11 +3359,33 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     label: string;
     canonicalPath: string;
     fragmentId?: string;
+    interestTitle?: string;
+    interestQuery?: string;
+    queryOverrides?: string[];
     domainModes?: string[];
     roles?: string[];
     priority?: number;
   }): Promise<any> {
     const response = await this.client.post('/api/horizon/watch/targets', data);
+    return response.data;
+  }
+
+  async getHorizonWatchPage(params: {
+    lensId: string;
+  }): Promise<HorizonWatchPageSnapshot> {
+    const response = await this.client.get('/api/horizon/watch/page', {
+      params: {
+        lensId: params.lensId,
+      },
+    });
+    return response.data;
+  }
+
+  async refreshHorizonWatchPage(input: {
+    lensId: string;
+    timeHorizon?: string;
+  }): Promise<HorizonWatchPageSnapshot> {
+    const response = await this.client.post('/api/horizon/watch/page/refresh', input);
     return response.data;
   }
 

@@ -12,30 +12,29 @@ import (
 // (Governance, TenantID, Metadata, Provenance) are NOT included and must be
 // applied by ContractNormalizer before persistence.
 type FragmentPatch struct {
-	CanonicalPath   string            `json:"canonicalPath,omitempty"`
-	Type            FragmentType     `json:"type,omitempty"`
-	Labels          map[string]string `json:"labels,omitempty"`
-	State           map[string]MetricValue `json:"state,omitempty"`
-	Identifiers     map[string]string `json:"identifiers,omitempty"`
-	Description     string            `json:"description,omitempty"`
-	EntityPath      string            `json:"entityPath,omitempty"`
-	SectorPath      string            `json:"sectorPath,omitempty"`
-	HomeLocation    *Location         `json:"homeLocation,omitempty"`
-	MarketSegments  []string          `json:"marketSegments,omitempty"`
-	OrgSize         string            `json:"orgSize,omitempty"`
-	RadiusKm        float64           `json:"radiusKm,omitempty"`
-	Tags            []string          `json:"tags,omitempty"`
-	KBRefs          []KBReference     `json:"kbRefs,omitempty"`
-	NameHistory     []NameHistoryEntry `json:"nameHistory,omitempty"`
-	IndustryPaths   []string          `json:"industryPaths,omitempty"`
-	SpherePaths     []string          `json:"spherePaths,omitempty"`
-	ValidFrom       *time.Time        `json:"validFrom,omitempty"`
-	ValidTo         *time.Time        `json:"validTo,omitempty"`
-	LifecycleStage  string            `json:"lifecycleStage,omitempty"`
-	ExpectedStartDate *time.Time      `json:"expectedStartDate,omitempty"`
-	ActualStartDate   *time.Time      `json:"actualStartDate,omitempty"`
-	ExpectedEndDate   *time.Time      `json:"expectedEndDate,omitempty"`
-	ActualEndDate     *time.Time      `json:"actualEndDate,omitempty"`
+	CanonicalPath     string                 `json:"canonicalPath,omitempty"`
+	Type              FragmentType           `json:"type,omitempty"`
+	Labels            map[string]string      `json:"labels,omitempty"`
+	State             map[string]MetricValue `json:"state,omitempty"`
+	Identifiers       map[string]string      `json:"identifiers,omitempty"`
+	Description       string                 `json:"description,omitempty"`
+	EntityPath        string                 `json:"entityPath,omitempty"`
+	HomeLocation      *Location              `json:"homeLocation,omitempty"`
+	MarketSegments    []string               `json:"marketSegments,omitempty"`
+	OrgSize           string                 `json:"orgSize,omitempty"`
+	RadiusKm          float64                `json:"radiusKm,omitempty"`
+	Tags              []string               `json:"tags,omitempty"`
+	KBRefs            []KBReference          `json:"kbRefs,omitempty"`
+	NameHistory       []NameHistoryEntry     `json:"nameHistory,omitempty"`
+	IndustryPaths     []string               `json:"industryPaths,omitempty"`
+	SpherePaths       []string               `json:"spherePaths,omitempty"`
+	ValidFrom         *time.Time             `json:"validFrom,omitempty"`
+	ValidTo           *time.Time             `json:"validTo,omitempty"`
+	LifecycleStage    string                 `json:"lifecycleStage,omitempty"`
+	ExpectedStartDate *time.Time             `json:"expectedStartDate,omitempty"`
+	ActualStartDate   *time.Time             `json:"actualStartDate,omitempty"`
+	ExpectedEndDate   *time.Time             `json:"expectedEndDate,omitempty"`
+	ActualEndDate     *time.Time             `json:"actualEndDate,omitempty"`
 }
 
 // ToPatch extracts a FragmentPatch from a HorizonFragment (for backward compatibility).
@@ -65,9 +64,6 @@ func (f *HorizonFragment) ToPatch() *FragmentPatch {
 	}
 	if v := strings.TrimSpace(f.EntityPath); v != "" {
 		p.EntityPath = v
-	}
-	if v := strings.TrimSpace(f.SectorPath); v != "" {
-		p.SectorPath = v
 	}
 	if f.HomeLocation != nil {
 		p.HomeLocation = f.HomeLocation
@@ -154,9 +150,6 @@ func ApplyPatchToFragment(base *HorizonFragment, patch *FragmentPatch, effective
 	}
 	if v := strings.TrimSpace(patch.EntityPath); v != "" {
 		base.EntityPath = v
-	}
-	if v := strings.TrimSpace(patch.SectorPath); v != "" {
-		base.SectorPath = v
 	}
 	if v := strings.TrimSpace(patch.Description); v != "" {
 		base.Description = v
@@ -260,9 +253,6 @@ func ApplyPatchToFragment(base *HorizonFragment, patch *FragmentPatch, effective
 			seen[key] = struct{}{}
 			base.NameHistory = append(base.NameHistory, e)
 		}
-	}
-	if len(patch.IndustryPaths) > 0 {
-		base.IndustryPaths = append(base.IndustryPaths, patch.IndustryPaths...)
 	}
 	if len(patch.SpherePaths) > 0 {
 		base.SpherePaths = append(base.SpherePaths, patch.SpherePaths...)

@@ -56,6 +56,10 @@ type WatchSubject struct {
 	AnchorCanonicalPath string                  `json:"anchorCanonicalPath" firestore:"anchorCanonicalPath"`
 	AnchorFragmentID    string                  `json:"anchorFragmentId,omitempty" firestore:"anchorFragmentId,omitempty"`
 	DisplayLabel        string                  `json:"displayLabel" firestore:"displayLabel"`
+	InterestTitle       string                  `json:"interestTitle,omitempty" firestore:"interestTitle,omitempty"`
+	InterestQuery       string                  `json:"interestQuery,omitempty" firestore:"interestQuery,omitempty"`
+	QueryOverrides      []string                `json:"queryOverrides,omitempty" firestore:"queryOverrides,omitempty"`
+	PageFraming         map[string]any          `json:"pageFraming,omitempty" firestore:"pageFraming,omitempty"`
 	Status              WatchSubjectStatus      `json:"status" firestore:"status"`
 	SourceMode          WatchSubjectSourceMode  `json:"sourceMode" firestore:"sourceMode"`
 	RuntimeMode         WatchSubjectRuntimeMode `json:"runtimeMode" firestore:"runtimeMode"`
