@@ -1,378 +1,181 @@
-# CriticalChain — Whitepaper
+# CriticalChain — Whitepaper v3.0
 
 > Мониторинг цепочек поставок критических материалов
-> Версия 1.0 + Дополнение v2.0 + Интеграция с ядром | Март 2026
+> Версия 3.0 | Март 2026 | Canonical Document
 
 **Статус:** CriticalChain — эксперимент-подсистема. Разворачивается отдельно внутри того же GCP проекта, рядом с ядром (Horizon). Использует таксономию и возможности ядра, но в ядро не интегрируется. Совместимость с ядром сохраняется для возможного слияния в будущем.
 
 ---
 
+## Содержание
 
-CRITICALCHAIN — WHITEPAPER
-Система мониторинга цепочек поставок критических материалов
-Версия 1.0 | Март 2026
+1. [Executive Summary](#1-executive-summary)
+2. [Анализ домена](#2-анализ-домена)
+3. [Архитектура решения](#3-архитектура-решения)
+4. [UX и визуализация](#4-ux-и-визуализация)
+5. [Риски продукта](#5-риски-продукта)
+6. [Roadmap](#6-roadmap)
+7. [Принципы универсальной архитектуры](#7-принципы-универсальной-архитектуры)
+8. [Интеграция с ядром](#8-интеграция-с-ядром)
+9. [Приложение А: Источники данных](#приложение-а-источники-данных)
+10. [Приложение Б: Технические зависимости](#приложение-б-технические-зависимости)
 
-════════════════════════════════════════════════════════════════
-EXECUTIVE SUMMARY
-════════════════════════════════════════════════════════════════
+---
 
-Мир вступил в эру «войн за материалы». Редкоземельные элементы, литий, кобальт, полупроводниковый кремний, гелий и десятки других критических веществ определяют, кто производит электромобили, МРТ-сканеры, ракеты и смартфоны. Сбои в этих цепочках — от геополитических конфликтов до стихийных бедствий — обходятся мировой экономике в сотни миллиардов долларов ежегодно.
+## 1. Executive Summary
 
-CriticalChain — это профессиональный инструмент аналитики и мониторинга цепочек поставок критических материалов, их многоуровневых деривативов и связанных рисков. Продукт предназначен для корпоративных аналитиков, государственных агентств и инвестиционных фондов, которым необходимо понимать реальные зависимости — от шахты до конечного продукта.
+Мир вступил в эру «войн за материалы». Редкоземельные элементы, литий, кобальт, полупроводниковый кремний, гелий, нефть и газ — десятки критических материалов определяют, кто производит электромобили, МРТ-сканеры, ракеты и смартфоны. Сбои в этих цепочках — от геополитических конфликтов до стихийных бедствий — обходятся мировой экономике в сотни миллиардов долларов ежегодно.
 
-Ключевые характеристики продукта:
-• Граф цепочек поставок с многоуровневыми переделами (материал → полуфабрикат → конечный продукт)
-• Интерактивная карта на MapLibre: маршруты, объекты, риск-зоны
-• AI-анализ рисков через Vertex AI / Gemini с Search Grounding
-• Обновление данных каждые 6 часов из предопределённого набора открытых источников
-• Явная визуализация рисков: геополитика, санкции, конфликты, природные угрозы
-• Стек: GCP / Go / React / TypeScript / Vite / MapLibre
+**CriticalChain** — профессиональный веб-инструмент аналитики и мониторинга цепочек поставок критических материалов, их многоуровневых деривативов и связанных рисков.
 
-Рыночная дыра: существующие платформы (Everstream, Resilinc, Interos) фокусируются на supplier risk management для корпораций, но не дают аналитикам и государственным структурам инструмент для исследования полных цепочек критических материалов с переделами, с акцентом на геополитику и open data.
+### Ключевые характеристики
 
-Потенциальные покупатели: strategic intelligence команды крупных корпораций (automotive, aerospace, pharma, defense), государственные агентства по критическим материалам, хедж-фонды и commodity trading firms, ESG/sustainability исследовательские организации.
+- Граф цепочек поставок с многоуровневыми переделами (материал → полуфабрикат → конечный продукт)
+- Интерактивная карта на MapLibre: маршруты, объекты, риск-зоны
+- AI-анализ рисков через Vertex AI / Gemini с Search Grounding
+- Обновление данных каждые 6 часов из открытых источников
+- Явная визуализация рисков: геополитика, санкции, конфликты, природные угрозы
+- Risk score по единой шкале **1–5** (везде в системе)
+- Стек: GCP / Go / React / TypeScript / Vite / MapLibre
 
-════════════════════════════════════════════════════════════════
-РАЗДЕЛ 1: ЧТО ЗАБЫЛ ЗАКАЗЧИК
-════════════════════════════════════════════════════════════════
+### Целевые клиенты
 
-При анализе исходного ТЗ выявлен ряд критических пробелов, которые необходимо закрыть ДО начала разработки.
+**Первичный рынок:**
+- Консалтинговые компании (McKinsey, BCG, Kearney и аналоги) — стратегический анализ цепочек для клиентов
+- КазМунайГаз и аналогичные национальные энергетические компании — мониторинг энергетической безопасности
 
-1.1 DATA GOVERNANCE И ИСТОРИЧНОСТЬ
+**Расширенный рынок:**
+- Strategic Intelligence команды Fortune 500 (automotive, aerospace, pharma, defence)
+- Государственные агентства по критическим материалам
+- Commodity trading firms и хедж-фонды
+- ESG/sustainability исследовательские организации
 
-Забыто полностью. Критично для продукта.
+### Рыночная дыра
 
-Вопросы, требующие ответа:
-• Как долго хранить исторические снимки данных? Рекомендация: минимум 2 года rolling window, с агрегированными архивами за предыдущие периоды.
-• Как обрабатывать contradicting data из разных источников? Нужна политика source priority и conflict resolution.
-• Версионирование цепочек: если в 2024 году маршрут был X, а в 2025 стал Y — это должно быть отражено в истории.
-• Data lineage: для каждого факта в системе должно быть видно, из какого источника он получен и когда обновлён.
-• Retention policy для compliance: если продукт будет работать в EU, нужно соответствовать GDPR по данным об организациях.
+Существующие платформы (Everstream, Resilinc, Interos) фокусируются на supplier risk management для корпораций, но не дают аналитикам и государственным структурам инструмент для исследования **полных цепочек критических материалов с переделами**, с акцентом на геополитику и open data.
 
-Рекомендация: использовать BigQuery с партиционированием по дате + отдельную таблицу снимков (snapshots) для каждой сущности.
+CriticalChain занимает уникальную нишу: critical materials + multi-tier transformation chains + open data + geopolitical analysis + map visualization. Ни один из конкурентов не закрывает эту комбинацию.
 
-1.2 ALERTING И NOTIFICATIONS
+---
 
-Не упомянуто. Без алертинга продукт теряет 50% ценности.
+## 2. Анализ домена
 
-Что нужно:
-• Пользовательские watches: «уведомить меня, если risk score для цепочки лития вырастет выше 7/10»
-• Системные алерты: новый конфликт в регионе с критическими объектами, санкции против ключевого поставщика
-• Дайджест: еженедельная/ежедневная сводка по отслеживаемым материалам
-• Каналы доставки: email, Slack/Teams webhook, in-app
-
-Стек: Cloud Pub/Sub → Cloud Run workers → SendGrid/Slack API
-
-1.3 USER ROLES И MULTI-TENANCY
-
-Полностью отсутствует в ТЗ. Без этого — продукт нельзя продавать корпоративным клиентам.
-
-Предложенная модель ролей:
-• Viewer: только просмотр данных и карты
-• Analyst: создание кастомных views, экспорт данных, настройка алертов
-• Admin: управление пользователями организации, API ключи, интеграции
-• Super Admin (internal): управление источниками данных, системные настройки
-
-Multi-tenancy: каждый клиент — отдельный tenant с изолированными данными пользовательских настроек, watches, и кастомных аннотаций. Данные о цепочках — общие. Информация о рисках — общедоступна по клику (без tenant-фильтра, любой авторизованный пользователь видит все риски).
-
-1.4 API ДЛЯ ВНЕШНИХ ПОТРЕБИТЕЛЕЙ
-
-Не упомянуто, но критично для B2B монетизации.
-
-Что нужно:
-• REST API + GraphQL для программного доступа к данным о цепочках
-• Webhook API для интеграции с внутренними системами клиентов (SAP, Oracle)
-• Rate limiting по тарифным планам
-• API keys management через UI
-• OpenAPI/Swagger документация
-• SDK на Python и TypeScript (опционально, для enterprise tier)
-
-1.5 МОБАЙЛ
-
-Не упомянуто. Нужно определиться.
-
-Рекомендация: мобильный веб (PWA) как MVP. Нативные приложения — не нужны для B2B аналитического инструмента. Адаптивный дизайн с responsive MapLibre для планшетов — обязателен. Смартфон: только read-only режим (просмотр алертов, базовые карты).
-
-1.6 ИНТЕРНАЦИОНАЛИЗАЦИЯ (i18n)
-
-Забыто. Рынок критических материалов — глобальный.
-
-Рекомендация для MVP: английский как primary язык. Архитектурно подготовить i18n через react-i18next. Приоритет локализации: EN → ZH → JA → DE → FR (исходя из ключевых рынков critical minerals).
-
-1.7 ЭКСПОРТ ДАННЫХ
-
-Не упомянуто. Аналитики требуют экспорта.
-
-Форматы: CSV, Excel, JSON, PDF-отчёты (с картой и графиками). Шаблонные отчёты по материалу/региону/риску — важная фича для enterprise продаж.
-
-1.8 SANDBOX / ДЕМО РЕЖИМ
-
-Без демо-режима сложно продавать. Нужен публичный демо-стенд с реальными (но ограниченными) данными — без требования регистрации.
-**Реализация:** Публичный read-only демо. Регистрация не требуется для просмотра. Регистрация (auth) будет добавлена позже — для watches, алертов и прочих действий. В демо пользователь только видит данные, ничего ручного делать кроме просмотра нельзя.
-
-1.9 COMPLIANCE И САНКЦИОННЫЕ СПИСКИ
-
-Упомянуты конфликты, но не упомянуты конкретные compliance требования:
-• OFAC (US), EU Restrictive Measures, UN Sanctions — автоматическая проверка объектов
-• EU Critical Raw Materials Act (2024) — регуляторный контекст для европейских клиентов
-• US Inflation Reduction Act — требования к sourcing для американских клиентов
-• CBAM (Carbon Border Adjustment Mechanism) — влияет на цепочки для EU
-
-1.10 АРХИТЕКТУРНЫЕ РЕШЕНИЯ ДО КОДА
-
-Критические вопросы, требующие ответа ПРЕЖДЕ написания кода:
-
-а) Data model: как моделировать «передел»? Рекомендация: directed graph где нода — это Material или Facility, ребро — ProcessingStep с атрибутами (yield ratio, typical location, key players).
-
-б) Conflict detection: единый canonical ID для организаций и материалов. Без него данные из разных источников не сольются. Рекомендация: использовать GLEIF LEI для организаций, HS-коды + CAS номера для материалов.
-
-в) Geo model: один слой не подойдёт. Нужно разделить: точечные объекты (шахты, заводы) vs. линейные маршруты vs. полигональные риск-зоны.
-
-г) Graph storage: отдельная graph DB vs. BigQuery? Рекомендация: Spanner Graph (preview) или Neo4j на GKE для граф-запросов, BigQuery — для аналитики и ML. **Для MVP/эксперимента:** Firestore (коллекции criticalchain_nodes, criticalchain_edges) — ближе к ядру, проще. PostGIS и graph DB — Phase 2.
-
-д) AI hallucination mitigation: Gemini с Search Grounding уменьшает галлюцинации, но нужен human review workflow для AI-генерированных risk scores.
-
-════════════════════════════════════════════════════════════════
-РАЗДЕЛ 2: АНАЛИЗ ДОМЕНА
-════════════════════════════════════════════════════════════════
-
-2.1 SUPPLY CHAIN CRITICALITY: ЧТО ЭТО
+### 2.1 Supply Chain Criticality
 
 Критичность материала определяется двумя осями:
-1. Экономическая важность: незаменимость в ключевых технологиях и отраслях
-2. Риск нарушения поставок: географическая концентрация, геополитика, монополии
+1. **Экономическая важность:** незаменимость в ключевых технологиях и отраслях
+2. **Риск нарушения поставок:** географическая концентрация, геополитика, монополии
 
 Индексы и списки критических материалов:
-• USGS 2025 Critical Minerals List: 60 минералов и материалов
-• EU Critical Raw Materials Act 2024: 34 критических + 17 стратегических материалов
-• IEA Critical Minerals for Clean Energy Transitions
-• DoD Critical Materials List (США, частично открытый)
+- USGS 2025 Critical Minerals List: 60 минералов и материалов
+- EU Critical Raw Materials Act 2024: 34 критических + 17 стратегических материалов
+- IEA Critical Minerals for Clean Energy Transitions
+- DoD Critical Materials List (США, частично открытый)
 
-2.2 КАТЕГОРИИ КРИТИЧЕСКИХ МАТЕРИАЛОВ
+### 2.2 Материалы MVP v1
 
-РЕДКОЗЕМЕЛЬНЫЕ ЭЛЕМЕНТЫ (REE)
-Примеры: неодим, диспрозий, тербий, лантан, церий
-Применение: постоянные магниты (EV моторы, ветрогенераторы), электроника, катализаторы
-Риск: ~90% добычи — Китай; ~85% переработки — Китай
-Ключевые цепочки: REE оксид → сплав NdFeB → магнит → EV двигатель
+**Список материалов первого релиза:**
 
-БАТАРЕЙНЫЕ МЕТАЛЛЫ
-Литий: Австралия, Чили, Аргентина (Lithium Triangle) → 90% переработки Китай
-Кобальт: 70%+ добычи — ДРК; 80%+ рафинирования — Китай
-Никель: Индонезия, Филиппины, Россия
-Графит: ~80% производства — Китай (природный и синтетический)
-Марганец: ЮАР, Австралия, Габон
+| Материал | Категория | Ключевые риски |
+|---|---|---|
+| Литий (Li) | Батарейные металлы | Чили/Австралия → 90% переработки Китай |
+| Кобальт (Co) | Батарейные металлы | 70%+ добычи — ДРК; 80%+ рафинирования — Китай |
+| Редкоземельные элементы (REE) | Специальные металлы | ~90% добычи и ~85% переработки — Китай |
+| Гелий (He) | Специальные газы | США, Катар, РФ; нет субститутов |
+| Кремний (Si) | Полупроводниковые материалы | Китай 70% поликремния; TSMC 55% foundry |
+| **Нефть (Crude Oil)** | **Энергетические commodities** | **Hormuz, Bab-el-Mandeb, Turkish Straits** |
+| **Природный газ (Natural Gas)** | **Энергетические commodities** | **Европейские трубопроводы; СПГ-маршруты** |
 
-ПОЛУПРОВОДНИКОВЫЕ МАТЕРИАЛЫ
-Кремний metal-grade → поликремний → кремниевые вафли → чипы
-Германий, Галлий: ключевые для compound semiconductors; ~80% — Китай
-Тантал: конденсаторы; основной источник — ДРК (coltan)
-Индий: дисплеи ITO; ~58% — Китай
+### 2.3 Многоуровневые цепочки: примеры
 
-СПЕЦИАЛЬНЫЕ ГАЗЫ
-Гелий: уникально критичен; США (Wyoming), Катар, Алжир, РФ — основные источники; применение: МРТ, квантовые компьютеры, ракетное топливо
-Неон: 65-70% — Украина (до 2022); криптолитография чипов
-Ксенон, Криптон: ion propulsion, освещение
-
-ЭНЕРГЕТИЧЕСКИЕ МАТЕРИАЛЫ
-Уран: Казахстан (42%), Намибия, Канада, Австралия
-Кобальт для ядерных реакторов
-Природный газ как критическое сырьё для удобрений (аммиак)
-
-ПРОДОВОЛЬСТВЕННЫЕ/АГРО ЦЕПОЧКИ
-Калий (удобрения): Беларусь, РФ, Канада — три глобальных источника
-Фосфаты: Марокко (~70% мировых резервов), Китай, РФ
-Аммиак: зависит от природного газа
-
-МЕДИЦИНСКИЕ
-Йод: Чили, Япония — производство; применение: контрастные вещества, антисептики
-Гафний, Молибден-99: медицинские изотопы
-API (active pharmaceutical ingredients): ~80% синтезируется в Китае и Индии
-
-2.3 МНОГОУРОВНЕВЫЕ ЦЕПОЧКИ: ПРИМЕРЫ
-
-ЦЕПОЧКА ЛИТИЯ (EV)
+**Цепочка лития (EV)**
+```
 Уровень 0: Добыча → Литиевая руда / Сподумен / Соляные рапы
   └── Австралия (Greenbushes), Чили (Atacama), Аргентина
-Уровень 1: Переработка → Карбонат лития (Li2CO3) / Гидроксид лития
+Уровень 1: Переработка → Карбонат лития / Гидроксид лития
   └── Китай (~60%), Чили, Австралия
 Уровень 2: Производство катодного материала → LFP, NMC, NCA
   └── Китай (~70%), Корея (LG, Samsung), Япония (Panasonic)
 Уровень 3: Производство ячеек → Battery cells
   └── CATL (Китай), BYD, LG Energy, Panasonic, Samsung SDI
 Уровень 4: Battery pack assembly → Батарейные модули
-  └── OEM автопроизводители
 Уровень 5: Конечный продукт → Электромобили
-  └── Tesla, BYD, VW, GM, Ford, BMW...
+```
 
-ЦЕПОЧКА ГЕЛИЯ (МРТ)
-Уровень 0: Добыча → Природный газ с содержанием He
-  └── США (Wyoming, Kansas), Катар, РФ, Алжир
-Уровень 1: Очистка и сжижение → Жидкий гелий (LHe)
-  └── BLM (US), Air Liquide, Linde, Matheson
-Уровень 2: Дистрибуция → Криогенные контейнеры-танкеры
-  └── Глобальная логистика, критичность: НЕТ СУБСТИТУТОВ
-Уровень 3: Охлаждение магнитов → Сверхпроводящие магниты
-  └── Производители: Siemens Healthineers, GE Healthcare, Philips
-Уровень 4: Конечный продукт → МРТ-сканеры
-  └── Больницы, медицинские центры по всему миру
+**Цепочка нефти**
+```
+Уровень 0: Скважина (upstream) — Саудовская Аравия, Россия, США, Казахстан
+Уровень 1: Сепарация / стабилизация
+Уровень 2: Трубопровод / танкер
+  → Узкие места: Hormuz (20% мировой нефти), Bab-el-Mandeb (9%), Суэц
+Уровень 3: НПЗ (refining)
+Уровень 4: Нефтепродукты (diesel, jet fuel, naphtha, химсырьё)
+Уровень 5: Конечный потребитель
+```
 
-ЦЕПОЧКА КРЕМНИЯ (Смартфон/Чип)
-Уровень 0: Добыча кварца → SiO2
-  └── Глобально (США, Норвегия, Бразилия)
-Уровень 1: Metal-grade silicon → Si 98.5%
-  └── Китай (~70%), Норвегия, Бразилия
-Уровень 2: Поликремний → Si 99.9999%+
-  └── Китай (Daqo, GCL), США (Hemlock), Германия (Wacker)
-Уровень 3: Выращивание кристаллов → Слитки (Czochralski)
-  └── Shin-Etsu, Sumco (Япония), SK Siltron (Корея)
-Уровень 4: Нарезка и полировка → Кремниевые вафли 300mm
-  └── Те же игроки
-Уровень 5: Fab-процессинг → Чипы (TSMC, Samsung, Intel)
-  └── Тайвань (TSMC ~55% foundry), Корея, США
-Уровень 6: Сборка и тестирование (OSAT)
-  └── ASE, Amkor (Тайвань, Малайзия, Вьетнам)
-Уровень 7: Конечный продукт → Смартфон, ноутбук, авто
-  └── Apple, Samsung, Qualcomm...
+**Цепочка природного газа**
+```
+Уровень 0: Скважина / месторождение
+Уровень 1: Подготовка газа (сепарация, осушка)
+Уровень 2: Pipeline / СПГ-завод
+Уровень 3: Регазификационный терминал
+Уровень 4: Распределительная сеть (ENTSO-G monitoring)
+Уровень 5: Конечный потребитель (удобрения, электроэнергия, отопление)
+```
 
-2.4 ИСТОЧНИКИ ДАННЫХ: ОЦЕНКА
+### 2.4 Источники данных: оценка
 
-UN COMTRADE / Comtrade+
-Покрытие: ~200 стран, ежегодные и месячные данные, ~5000 HS-кодов
-Качество: ★★★★☆ (высокое, но лаг 3-18 месяцев)
-Лицензия: Бесплатно для некоммерческого использования; API с лимитами; платная подписка для bulk
-Ограничения: Нет данных по sub-national уровню; HS-коды не всегда точно выделяют critical minerals
-Рекомендация: Основной источник для trade flows. Использовать через Comtrade+ API.
+Полная таблица — в [Приложении А](#приложение-а-источники-данных).
 
-USGS Mineral Resources Data System (MRDS) + Mineral Commodity Summaries
-Покрытие: 60+ critical minerals, глобальные данные по добыче и резервам, локации шахт
-Качество: ★★★★★ (наиболее авторитетный источник по критическим минералам)
-Лицензия: Public Domain (US Government)
-Ограничения: Ежегодное обновление (январь-март); нет real-time данных
-Рекомендация: Основной источник для объектов добычи и резервов.
+**Принципы выбора источников:**
+- ACLED исключён по экономическим соображениям (~$10K/год). Заменяется многоуровневой системой косвенных сигналов + Gemini Search Grounding.
+- GDELT включён (Public Domain) как источник event detection; требует ML-фильтрации шума.
+- Для нефти и газа приоритетные источники: EIA API, IEA free datasets, ENTSO-G, JODI.
 
-IEA Critical Minerals Data Explorer
-Покрытие: Ключевые clean energy minerals (Li, Co, Ni, REE, Cu, Al)
-Качество: ★★★★☆ (хорошо для energy transition фокуса)
-Лицензия: Открытый доступ, частично с attribution
-Ограничения: Фокус только на clean energy; ограниченный API
-Рекомендация: Дополнительный источник для прогнозов спроса.
+**Политика приоритетов при конфликте источников (Conflict Resolution Policy):**
 
-BACI (CEPII International Trade Database)
-Покрытие: 200+ стран, HS 6-digit level, с 1995
-Качество: ★★★★☆ (гармонизированные данные, устраняет несоответствия)
-Лицензия: Бесплатно для исследований; commercial use требует договора
-Ограничения: Лаг ~2 года; требует регистрации
-Рекомендация: Хорош для исторического анализа trade flows.
+| Тип данных | Приоритет источников |
+|---|---|
+| Координаты объектов | USGS MRDS > OSM Overpass > Natural Earth |
+| Нефтяные объёмы и статистика | EIA > IEA > JODI > OPEC |
+| Газовые потоки (Европа) | ENTSO-G > IEA > EIA |
+| Торговые потоки (критические минералы) | UN Comtrade+ > BACI (CEPII) > OECD TiVA |
+| Страновой риск | US State Dept + FCDO + AU DFAT (консенсус ≥2 из 3) |
+| Санкции | OFAC SDN + EU Consolidated List (оба обязательны) |
+| Canonical ID организаций | GLEIF LEI (единственный авторитетный источник) |
+| Морская обстановка | NGA Maritime Safety / NAVTEX > aisstream.io |
 
-OECD TiVA (Trade in Value Added)
-Покрытие: 76 стран, ~45 отраслей; value chain декомпозиция
-Качество: ★★★★☆ (уникален для анализа добавленной стоимости в цепочках)
-Лицензия: Открытый доступ
-Ограничения: Агрегированный (по отраслям, не продуктам); лаг 3-4 года
-Рекомендация: Важен для понимания экономической зависимости.
+При конфликте приоритет определяется порядком в таблице. Если оба источника присутствуют — берётся данные из источника с более высоким приоритетом; значение из второго источника логируется как `alternative_value` для аудита.
 
-OpenStreetMap (OSM)
-Покрытие: Глобальная база объектов (шахты, заводы, порты, железные дороги)
-Качество: ★★★☆☆ (неравномерное; развитые страны — отлично, ДРК/Боливия — слабо)
-Лицензия: ODbL (Open Database License) — требует attribution и share-alike
-Ограничения: Данные требуют верификации; нет данных о собственниках
-Рекомендация: Хорошая база для геолокаций; дополнять USGS MRDS.
+### 2.5 Конкуренты и дыры в рынке
 
-Global Forest Watch / GFW Mining Layer
-Покрытие: Горнодобывающие объекты, связь с вырубкой лесов
-Качество: ★★★☆☆ (специализированный, но полезный для ESG overlay)
-Лицензия: Creative Commons BY
-Рекомендация: ESG/sustainability overlay слой.
+| Платформа | Фокус | Дыра |
+|---|---|---|
+| Everstream Analytics | AI-driven supply chain risk для логистики | Нет critical minerals специфики; нет граф переделов |
+| Resilinc | Multi-tier supplier mapping | Нет geographic visualization; нет open data |
+| Interos | AI risk intelligence, third-party mapping | Нет critical minerals; нет карты маршрутов |
+| Kpler | Commodity flows (нефть, СПГ) | Только энергетика; нет переделов; нет risk scoring |
+| Windward | Maritime AI, sanctions compliance | Только maritime; нет supply chain graph |
 
-ACLED (Armed Conflict Location & Event Data)
-Покрытие: 250+ стран, 1997-настоящее, события конфликтов с координатами
-Качество: ★★★★★ (лучший публичный источник данных о конфликтах)
-Лицензия: Бесплатно для некоммерческих; платно для коммерческих пользователей
-Ограничения: Требует коммерческой лицензии для продукта
-Рекомендация: Ключевой источник для конфликт-оверлея. Обязательно.
+**Вывод:** CriticalChain занимает уникальную нишу — единственный продукт с critical materials специфика + multi-tier chains + open data + geopolitical analysis + map visualization.
 
-GDELT Project
-Покрытие: Новостные события глобально, обновление каждые 15 минут
-Качество: ★★★☆☆ (много шума, требует фильтрации)
-Лицензия: Полностью открытый (public domain)
-Ограничения: Высокий noise ratio; требует ML-фильтрации
-Рекомендация: Источник для event detection (новые конфликты, санкции).
+---
 
-GLEIF (Global LEI Foundation) — Legal Entity Identifier
-Покрытие: 2+ млн юридических лиц с LEI
-Качество: ★★★★☆
-Лицензия: Открытый доступ (CC0)
-Рекомендация: Canonical ID для организаций в системе. Обязательно.
+## 3. Архитектура решения
 
-MarineTraffic (открытые данные)
-Покрытие: AIS-данные по судам; бесплатный tier очень ограничен
-Качество: ★★★☆☆ (полные данные — только за деньги)
-Лицензия: Коммерческая; open API очень ограничен
-Ограничения: Для маршрутов (не трекинга) — использовать исторические паттерны
-Рекомендация: Использовать sea route databases (Natural Earth, OpenSeaMap) для маршрутов, а не real-time AIS.
+### 3.1 Общая архитектура (GCP-native)
 
-Humanitarian Data Exchange (HDX) / OCHA
-Покрытие: Гуманитарные данные, включая кризисы и конфликты
-Качество: ★★★★☆ (для humanitarian context)
-Лицензия: Открытый доступ
-Рекомендация: Дополнительный источник для гуманитарных кризисов.
-
-OFAC SDN List / EU Sanctions List
-Покрытие: Санкционные списки лиц и организаций
-Качество: ★★★★★ (официальные источники)
-Лицензия: Public domain (US), открытый доступ (EU)
-Рекомендация: Автоматическая проверка объектов. Обязательно.
-
-2.5 КОНКУРЕНТЫ И ДЫРЫ В РЫНКЕ
-
-Everstream Analytics
-Что делают: AI-driven supply chain risk monitoring для логистики и procurement
-Сильные стороны: Real-time alerts, tariff intelligence, Gartner Leader 2025
-Слабые стороны: НЕ фокусируется на critical minerals specifically; нет graph visualization переделов; B2B enterprise с высокой ценой
-Дыра: Нет multi-tier material transformation chains; нет специфики critical materials
-
-Resilinc
-Что делают: Multi-tier supplier mapping, EventWatchAI (104M источников)
-Сильные стороны: Глубокое supplier mapping, Fortune 500 клиенты
-Слабые стороны: Нет специализации на critical minerals; нет географической визуализации маршрутов; очень дорого
-Дыра: Нет open data интеграции; нет focus на material transformation chains
-
-Interos
-Что делают: AI risk intelligence, deep third-party relationship mapping
-Сильные стороны: Граф зависимостей, SAP интеграция, cyber + ESG + catastrophic risks
-Слабые стороны: Нет critical minerals специфики; нет карты поставочных маршрутов
-Дыра: Нет focus на geopolitical supply concentration; нет public data approach
-
-Kpler
-Что делают: Commodity flows tracking (нефть, СПГ, сухие грузы) с AIS-трекингом
-Сильные стороны: Real-time vessel tracking, commodity volumes
-Слабые стороны: Только энергетические commodities; нет critical minerals; нет переделов
-Дыра: Нет analysis of transformation chains; нет risk scoring
-
-Windward
-Что делают: Maritime AI — vessel risk, sanctions compliance
-Сильные стороны: Vessel behavior analysis, sanctions screening
-Слабые стороны: Только maritime; нет supply chain graph; нет материального фокуса
-
-ВЫВОД: CriticalChain занимает уникальную нишу — critical materials специфика + multi-tier transformation chains + open data + geopolitical analysis + map visualization. Ни один из конкурентов не закрывает эту комбинацию.
-
-════════════════════════════════════════════════════════════════
-РАЗДЕЛ 3: АРХИТЕКТУРА РЕШЕНИЯ
-════════════════════════════════════════════════════════════════
-
-3.1 ОБЩАЯ АРХИТЕКТУРА (GCP-NATIVE)
-
+```
 ┌─────────────────────────────────────────────────────────────┐
 │                    CLIENT LAYER                              │
 │  React + TypeScript + Vite + MapLibre + Zustand/TanStack    │
-│  PWA  |  Web App (SPA)                                      │
+│  Web App (SPA) — только веб, без мобильного приложения     │
 └────────────────┬────────────────────────────────────────────┘
-                 │ HTTPS / WebSocket
+                 │ HTTPS
 ┌────────────────▼────────────────────────────────────────────┐
 │                    API GATEWAY LAYER                         │
 │  Cloud Load Balancer → Cloud Run (Go API)                   │
-│  REST API v1 | /api/v1/criticalchain/... | WebSocket        │
+│  REST API v1 | /api/v1/criticalchain/...                    │
 │  Auth: Firebase Auth / Identity Platform (общий с Horizon) │
 └────────────────┬────────────────────────────────────────────┘
                  │
@@ -380,12 +183,11 @@ Windward
     │            │                │
 ┌───▼───┐  ┌────▼────┐  ┌────────▼────────┐
 │ Graph │  │  Geo    │  │  Analytics      │
-│  DB   │  │  DB     │  │  (BigQuery)     │
-│Firestore│ │Firestore│  │  Trade flows    │
-│(MVP)   │  │GeoPoint │  │  Time series    │
-│Supply │  │(MVP)    │  │  Aggregates     │
-│Chains │  │Routes   │  └────────┬────────┘
-└───────┘  └─────────┘           │
+│Firestore│ │Firestore│  │  (BigQuery)     │
+│(MVP)   │  │GeoPoint │  │  Trade flows    │
+│Supply │  │(MVP)    │  │  Time series    │
+│Chains │  │Routes   │  │  Aggregates     │
+└───────┘  └─────────┘  └────────┬────────┘
                                   │
 ┌─────────────────────────────────▼───────────────────────────┐
 │                    DATA PIPELINE LAYER                       │
@@ -403,129 +205,183 @@ Windward
 │  ├── Event Summarization (GDELT + news)                     │
 │  └── Supply Chain Q&A (RAG over graph)                      │
 └─────────────────────────────────────────────────────────────┘
+```
 
-ВНЕШНИЕ ИСТОЧНИКИ:
-UN Comtrade API → Trade Adapter
-USGS MRDS API  → Minerals Adapter  
-ACLED API      → Conflict Adapter
-GDELT BigQuery → Events Adapter
-OFAC/EU Lists  → Sanctions Adapter
-OSM Overpass   → Geo Adapter
-IEA Data       → Energy Adapter
-GLEIF API      → Entity Adapter
+**Внешние источники (6-часовой цикл):**
+```
+Gemini Search Grounding → Signal Aggregator
+USGS MRDS API          → Minerals & Facilities Adapter
+EIA API                → Oil & Gas Adapter
+ENTSO-G API            → European Gas Flows Adapter
+JODI Data              → Global Oil/Gas Statistics Adapter
+UN Comtrade+ API       → Trade Flows Adapter
+GDELT BigQuery         → Events Adapter
+OFAC SDN XML           → Sanctions Adapter
+EU Consolidated List   → Sanctions Adapter
+GLEIF API              → Entity Canonical ID Adapter
+OSM Overpass           → Geo Enrichment Adapter
+Natural Earth          → Route Geometries Adapter
+State Dept RSS         → Country Risk Adapter
+FCDO GOV.UK API        → Country Risk Adapter
+AU DFAT RSS            → Country Risk Adapter
+NGA Maritime Safety    → Maritime Warnings Adapter
+aisstream.io           → AIS Vessel Monitoring Adapter
+FAA NOTAM API          → Aviation Risk Adapter
+```
 
-**Развёртывание:** CriticalChain — тот же Cloud Run сервис, что и Horizon; отдельные routes `/api/v1/criticalchain/...`. CI/CD: отдельный ключ `--api-criticalchain` для деплоя CriticalChain API.
+**Развёртывание:** CriticalChain — тот же Cloud Run сервис, что и Horizon; отдельные routes `/api/v1/criticalchain/...`. CI/CD: отдельный ключ `--api-criticalchain` для деплоя.
+
 **Vertex AI:** Тот же GCP проект; отдельный datastore для CriticalChain (facilities, materials, routes) — grounding не пересекается с Horizon.
-**AgentMesh:** Не используется. Data pipeline — Cloud Scheduler → Pub/Sub → Cloud Run workers (как в whitepaper).
 
-3.2 DATA MODEL: ГРАФ ЦЕПОЧЕК ПОСТАВОК
+**AgentMesh:** Не используется. Data pipeline — Cloud Scheduler → Pub/Sub → Cloud Run workers.
 
-NODES (вершины):
+### 3.2 Хранилище данных
 
+**MVP: Firestore**
+- Граф цепочек: коллекции `criticalchain_nodes`, `criticalchain_edges`
+- Гео: Firestore GeoPoint в документах (точечные объекты)
+- Маршруты: массив waypoints (LineString хранится как array)
+- Префикс `criticalchain_` изолирует от коллекций Horizon
+
+**Phase 2: PostGIS + Spanner Graph**
+- Cloud SQL (PostgreSQL + PostGIS): сложные пространственные запросы, polygon intersection
+- Cloud Spanner Graph: граф-траверсалы, многоуровневые зависимости
+- BigQuery GIS: аналитика пересечений маршрутов с зон конфликтов
+
+### 3.3 Data Model: граф цепочек поставок
+
+**NODES (вершины):**
+
+```go
 Material {
-  id: string (CAS number + HS code composite)
-  name: string
-  aliases: string[]
-  category: string  // REE | BATTERY | SEMICONDUCTOR | ENERGY | AGRO | MEDICAL | GAS — маппинг на IndustryPath/EntityPath ядра
-  criticalityScore: float (0-10)
-  riskScore: float (0-10, AI-generated)
-  hsCodes: string[]
-  casNumber: string
+  id:              string  // CAS number + HS code composite
+  name:            string
+  aliases:         string[]
+  category:        string  // critical_mineral | energy_commodity | agricultural
+  criticalityScore: float  // 1–5
+  riskScore:       float   // 1–5, AI-generated
+  hsCodes:         string[]
+  casNumber:       string
 }
 
 Facility {
-  id: string (GLEIF LEI | OSM ID | USGS ID)
-  canonicalPath: string  // /fac/{geo}/{slug} — формат ядра
-  name: string
-  facilityKind: FacilityKind  // из taxonomy: mine, refinery, seaport, terminal, ...
-  facilityRole: FacilityRole  // из taxonomy: extraction, refining, processing, ...
-  country: string (ISO3)
-  coordinates: GeoPoint (WGS84, Firestore)
-  operators: string[] (LEI references)
-  capacity: float
-  capacityUnit: string
+  id:               string  // GLEIF LEI | OSM ID | USGS ID
+  canonicalPath:    string  // /fac/{geo}/{slug}
+  name:             string
+  facilityKind:     FacilityKind  // из taxonomy: mine, refinery, seaport, ...
+  facilityRole:     FacilityRole  // из taxonomy: extraction, refining, ...
+  country:          string  // ISO3
+  coordinates:      GeoPoint  // WGS84, Firestore
+  operators:        string[]  // LEI references
+  capacity:         float
+  capacityUnit:     string
   productionMaterials: Material[]
-  materialId: string  // для material-centric индекса (lithium, cobalt, ...)
-  stage: int  // 0-5 для индексации
-  riskScore: float (AI-generated)
-  sanctioned: boolean
+  materialId:       string
+  stage:            int
+  riskScore:        float  // 1–5, AI-generated
+  sanctioned:       boolean
 }
 
 Route {
-  id: string
-  type: enum (SEA | LAND | AIR | PIPELINE | RAIL)
-  geometry: LineString (GeoJSON)
+  id:           string
+  type:         enum(SEA | LAND | AIR | PIPELINE | RAIL)
+  waypoints:    GeoPoint[]  // MVP: array; Phase 2: LineString in PostGIS
   fromFacility: Facility.id
-  toFacility: Facility.id
-  vesselTypes: string[]  // bulk carrier, tanker, etc.
+  toFacility:   Facility.id
   typicalVolume: float
-  volumeUnit: string
-  riskScore: float
+  volumeUnit:   string
+  riskScore:    float  // 1–5
 }
 
 ConflictZone {
-  id: string
-  name: string
-  geometry: Polygon (GeoJSON)
-  severity: enum (LOW | MEDIUM | HIGH | CRITICAL)
-  type: enum (ARMED | SANCTIONS | NATURAL | POLITICAL)
+  id:               string
+  name:             string
+  boundingBox:      GeoPoint[]  // MVP: bbox; Phase 2: Polygon in PostGIS
+  severity:         enum(LOW | MEDIUM | HIGH | CRITICAL)
+  type:             enum(ARMED | SANCTIONS | NATURAL | POLITICAL)
   affectedMaterials: Material[]
-  source: string (ACLED)
-  updatedAt: timestamp
+  source:           string  // FCDO | STATE_DEPT | NAVTEX | ...
+  updatedAt:        timestamp
 }
+```
 
-EDGES (рёбра):
+**EDGES (рёбра):**
 
+```go
 ProcessingStep {
-  from: Material.id | Facility.id
-  to: Material.id | Facility.id
-  type: enum (EXTRACTION | REFINING | PROCESSING | MANUFACTURING | TRANSPORT)
-  yieldRatio: float  // сколько output на единицу input
-  keyPlayers: Facility[]
+  from:                   Material.id | Facility.id
+  to:                     Material.id | Facility.id
+  type:                   enum(EXTRACTION | REFINING | PROCESSING | MANUFACTURING | TRANSPORT)
+  yieldRatio:             float
+  keyPlayers:             Facility[]
   geographicConcentration: float  // HHI index
-  riskMultiplier: float
+  riskMultiplier:         float
 }
+```
 
-Dependency {
-  from: Material.id
-  to: Material.id
-  type: enum (DERIVED | COMPONENT | SUBSTITUTE | COMPETING)
-  strength: float  // 0-1
-}
+### 3.4 Data Pipeline: 6-часовой цикл
 
-3.3 DATA PIPELINE: 6-ЧАСОВОЙ ЦИКЛ
-
+```
 Cloud Scheduler (каждые 6 часов):
-  ├── Trigger: Pub/Sub topic "pipeline-trigger"
+  ├── Worker 1: Minerals & Facilities Fetcher
+  │   └── USGS MRDS → criticalchain_nodes (facilities, mines)
   │
-  ├── Worker 1: Trade Data Fetcher
-  │   └── UN Comtrade API → BigQuery raw_trades
-  │       (месячные данные, лаг ~2 мес, но новые данные при появлении)
+  ├── Worker 2: Oil & Gas Data Fetcher
+  │   └── EIA API → criticalchain_nodes (oil fields, LNG terminals)
+  │   └── ENTSO-G API → criticalchain_edges (gas flows Europe)
+  │   └── JODI → BigQuery oil_gas_statistics
   │
-  ├── Worker 2: Minerals & Facilities Fetcher  
-  │   └── USGS MRDS → Spanner Graph (facilities) + BigQuery
+  ├── Worker 3: Trade Data Fetcher
+  │   └── UN Comtrade+ API → BigQuery raw_trades
   │
-  ├── Worker 3: Conflict & Events Fetcher
-  │   └── ACLED API → Spanner Graph (conflict_zones)
-  │   └── GDELT BigQuery public dataset → events table
+  ├── Worker 4: Country Risk Fetcher
+  │   └── US State Dept RSS → country_risk table
+  │   └── FCDO GOV.UK API → country_risk table
+  │   └── AU DFAT RSS → country_risk table
+  │   (консенсус ≥2 из 3 → risk_level повышается)
   │
-  ├── Worker 4: Sanctions Fetcher
+  ├── Worker 5: Sanctions Fetcher
   │   └── OFAC SDN XML → entity_sanctions table
   │   └── EU Consolidated List CSV → entity_sanctions table
   │
-  ├── Worker 5: Geo Enrichment
-  │   └── OSM Overpass → Facility coordinates update
-  │   └── Natural Earth routes → Route geometries
+  ├── Worker 6: Events & Signals Fetcher
+  │   └── GDELT BigQuery public dataset → events table
+  │   └── NGA Maritime Safety API → maritime_warnings table
+  │   └── FAA NOTAM API → aviation_risk table
+  │   └── aisstream.io → ais_traffic_baseline (для AIS blackout detection)
   │
-  └── Worker 6: AI Risk Scoring
-      └── Vertex AI Gemini → Batch risk scores
-          Input: entity data + recent events + sanctions
+  ├── Worker 7: Geo Enrichment
+  │   └── OSM Overpass → Facility coordinates update
+  │   └── Natural Earth → Route geometries
+  │   └── GLEIF API → canonical LEI for organisations
+  │
+  └── Worker 8: AI Risk Scoring
+      └── Vertex AI Gemini → Batch risk scores (шкала 1–5)
+          Input: entity data + country risk + events + sanctions + AIS signals
           Output: risk_scores table (BigQuery)
-          Storage: Risk scores cached 6 hours in Memorystore (Redis)
+          Cache: Memorystore Redis, TTL 6 часов
+```
 
-SOURCE ADAPTER PATTERN (расширяемость):
-Каждый источник реализует интерфейс:
+**Signal Fusion (агрегация сигналов):**
+```json
+{
+  "region": "Red Sea",
+  "risk_level": 4,
+  "confidence": "medium",
+  "signals": [
+    "AIS blackout detected (aisstream.io)",
+    "FCDO raised to Level 3",
+    "NGA NAVTEX warning active"
+  ],
+  "freshness": "2026-03-19T06:00Z",
+  "source_count": 3
+}
+```
 
+Правило: если ≥2 независимых источника подтверждают угрозу → risk_level повышается. Один источник → флаг `unconfirmed`.
+
+**Source Adapter Pattern:**
+```go
 type DataSourceAdapter interface {
   Name() string
   Fetch(ctx context.Context, since time.Time) ([]RawRecord, error)
@@ -533,955 +389,41 @@ type DataSourceAdapter interface {
   Schema() SourceSchema
   RateLimit() RateLimitConfig
 }
-
-Добавление нового источника = реализация интерфейса + регистрация в registry.
-
-3.4 AI ИНТЕГРАЦИЯ (VERTEX AI / GEMINI)
-
-Risk Scoring Pipeline:
-  Input контекст для каждого объекта:
-  - Геолокация + страна
-  - Исторические данные производства
-  - Текущие конфликты в регионе (ACLED)
-  - Санкционный статус (OFAC/EU)
-  - Зависимость от других критических материалов
-  - Последние новостные события (GDELT)
-
-  Gemini prompt: структурированный JSON output с объяснением
-  Grounding: Google Search для верификации актуальности
-  Human review queue: AI scores с confidence < 0.7 → flagged для review
-
-Search Grounding для Q&A:
-  Пользователь спрашивает: "Как повлияет эскалация в Южно-Китайском море на цепочки редкоземельных металлов?"
-  → RAG: граф цепочек + Gemini Search Grounding
-  → Structured response: affected materials + affected routes + risk delta estimate
-
-3.5 ГЕОДАННЫЕ: ВЫБОР ХРАНИЛИЩА
-
-**MVP/эксперимент:** Firestore GeoPoint в документах. Достаточно для точечных объектов (facilities), маршруты — как массив waypoints. Пространственные запросы — через клиент или ограниченные индексы.
-
-**Phase 2 (гибридный подход):**
-
-Cloud SQL (PostgreSQL + PostGIS):
-  - Точечные объекты (facilities): precise lat/lng, complex queries
-  - Маршруты (routes): LineString геометрии
-  - Конфликтные зоны: Polygon геометрии
-  - Пространственные индексы GIST
-
-BigQuery GIS:
-  - Аналитика: какие маршруты пересекают зоны конфликтов
-  - Агрегации: объём торговли по регионам
-
-Memorystore (Redis):
-  - Кэш: результаты пространственных запросов, MapLibre tile данные
-  - TTL: 6 часов (синхронизирован с pipeline)
-
-════════════════════════════════════════════════════════════════
-РАЗДЕЛ 4: UX И ВИЗУАЛИЗАЦИЯ
-════════════════════════════════════════════════════════════════
-
-4.1 КОНЦЕПЦИЯ: INVESTIGATION TOOL, НЕ DASHBOARD
-
-Для данного продукта нужен investigation tool (инструмент исследования), а не статичный dashboard. Аналитик приходит с вопросом ("что происходит с цепочкой лития?") и системе нужно дать возможность исследовать, drill down, выдвигать гипотезы.
-
-Модель взаимодействия: Progressive Disclosure
-Уровень 1: Global overview — карта мира с риск-хeatmap, топ-алерты
-Уровень 2: Material focus — выбор материала → его цепочка на карте + граф переделов
-Уровень 3: Facility detail — клик по объекту → полная карточка, риски, связи
-Уровень 4: Route analysis — конкретный маршрут → исторические данные, альтернативы
-
-4.2 КОМПОНЕНТЫ ИНТЕРФЕЙСА
-
-ГЛАВНЫЙ ЭКРАН (3-панельный layout):
-┌──────────────────────────────────────────────────────────────┐
-│ [HEADER] CriticalChain | Material Search | Alerts (3) | User │
-├────────────┬─────────────────────────────────┬───────────────┤
-│            │                                 │               │
-│ LEFT PANEL │    CENTRAL MAP (MapLibre)        │ RIGHT PANEL  │
-│            │                                 │               │
-│ Materials  │  [Layers control]               │ Chain graph   │
-│ ──────     │  [Risk heatmap overlay]         │ (D3 force/    │
-│ • Lithium  │  [Conflict zones overlay]       │  Cytoscape)   │
-│ • Cobalt   │  [Routes layer]                 │               │
-│ • Nickel   │  [Facilities dots]              │ Risk score    │
-│            │                                 │ panel         │
-│ Filters    │                                 │               │
-│ ──────     │                                 │ AI Insights   │
-│ Region     │                                 │ (Gemini)      │
-│ Risk level │                                 │               │
-│ Category   │                                 │               │
-└────────────┴─────────────────────────────────┴───────────────┘
-
-4.3 MAPLIBR СЛОИ (рекомендации)
-
-Слой 1 (base): Topo/political basemap (MapTiler или стандартный MapLibre Style)
-Слой 2: Risk heatmap — polygon fill, интенсивность = risk score
-  → Источник: ConflictZone + country risk polygons
-  → Цвет: gradient green → yellow → orange → red
-Слой 3: Conflict zones — semi-transparent polygons с border
-  → Tooltip: название конфликта, тип, severity, affected materials
-Слой 4: Trade routes — animated arc lines (flow lines)
-  → Толщина линии = объём торговли
-  → Цвет = риск маршрута
-  → Анимация: пульсирующие точки показывают направление flow
-Слой 5: Facilities — кластеризованные точки
-  → Иконки по типу (mine ⛏, factory 🏭, port ⚓)
-  → Цвет точки = risk score объекта
-  → Клик → sidebar с деталями
-Слой 6: Selected material highlight — highlight всех объектов в цепочке
-  → При выборе материала — все связанные facilities подсвечиваются
-  → Маршруты между ними — активный слой
-
-Технические детали MapLibre:
-• Использовать MapLibre GL JS v4+
-• Векторные тайлы для facilities (PMTiles или Mapbox protocol)
-• deck.gl для arc/flow визуализации поверх MapLibre
-• WebGL-based heatmap для performance
-• Cluster: supercluster для facilities > 500 объектов
-
-4.4 ГРАФ ПЕРЕДЕЛОВ (Chain Visualization)
-
-Отдельный компонент — не карта, а граф:
-• Библиотека: Cytoscape.js или D3-force
-• Layout: directed acyclic graph (DAG), left-to-right
-• Ноды: материалы (круги) и объекты (прямоугольники)
-• Рёбра: подписаны типом передела
-• Цвет нодов: risk score
-• Интерактивность: hover → tooltip, click → drill-down
-
-Пример: Цепочка лития
-[Li Ore] → [Li2CO3] → [Cathode NMC] → [Battery Cell] → [Battery Pack] → [EV]
-  ▲            ▲           ▲                ▲               ▲             ▲
- РИСК:8      РИСК:9     РИСК:7           РИСК:6           РИСК:4       РИСК:3
-(Китай)   (Китай 60%) (Китай 70%)    (CATL monopoly)    (OEM)
-
-4.5 AI-FIRST UX ПАТТЕРНЫ 2025-2026
-
-Contextual AI Panel:
-  → Постоянно доступный Gemini chat в правой панели
-  → Контекст = текущий выбранный материал/маршрут/регион
-  → Пример: "Объясни, почему риск-скор неодима вырос с 6 до 8 за последний месяц"
-  → Ответ: структурированный с источниками (Search Grounding)
-
-Proactive Alerts:
-  → AI автоматически генерирует alerts при аномалиях
-  → "Конфликт в провинции Катанга (ДРК) → 3 кобальтовых шахты в риск-зоне → цепочка батарей Tesla под угрозой"
-  → Severity + explanation + suggested actions
-
-Smart Search:
-  → Semantic search по материалам, объектам, регионам
-  → Natural language: "покажи все цепочки, зависящие от российских поставок"
-
-4.6 МОБАЙЛ
-
-Рекомендация: PWA (Progressive Web App), не нативное приложение.
-
-Mobile layout:
-  → Full-screen карта как primary view
-  → Bottom sheet для panels (material list, alerts)
-  → Упрощённый граф переделов (горизонтальная прокрутка)
-  → Push notifications через Web Push API
-
-Нативное приложение: нет необходимости в MVP. Рассмотреть в Phase 3, если появится consumer demand.
-
-════════════════════════════════════════════════════════════════
-РАЗДЕЛ 5: РИСКИ ПРОДУКТА
-════════════════════════════════════════════════════════════════
-
-5.1 ЮРИДИЧЕСКИЕ РИСКИ
-
-Data Licensing:
-• UN Comtrade: коммерческое использование данных требует проверки TOS. API для коммерческих продуктов — платный tier.
-• ACLED: обязательная коммерческая лицензия для SaaS продуктов (~ $5-15K/год)
-• OSM: ODbL требует share-alike для derivative databases. Осторожно с derived geo products.
-• USGS: Public Domain (безопасно).
-• MarineTraffic: строго коммерческая лицензия; даже historical routes — платно.
-Митигация: Юридический аудит каждого источника ПЕРЕД запуском. Бюджет на лицензии источников: $20-50K/год.
-
-Re-export Restrictions:
-• Данные о военных объектах, оборонных производствах — могут подпадать под EAR (Export Administration Regulations)
-• Данные о ядерных материалах — требуют особой осторожности
-Митигация: Исключить из MVP данные о военных и ядерных объектах. Консультация с export control юристом.
-
-GDPR / CCPA:
-• Данные об организациях (LEI, адреса, ownership) — применимо GDPR если есть PII
-• Cookies и user analytics — стандартная compliance
-Митигация: Privacy by design; DPA (Data Processing Agreement) с клиентами.
-
-EU Critical Raw Materials Act:
-• Создаёт новые compliance требования для European buyers
-• Возможность позиционировать продукт как compliance tool (плюс!)
-
-5.2 ГЕОПОЛИТИЧЕСКИЕ РИСКИ
-
-Чувствительность данных:
-• Точные данные о местоположении критических объектов (шахты, рафинировочные заводы) могут интересовать государственных акторов
-• Данные о санкционных обходах — потенциально sensitive
-• Mapping военных supply chains — прямо запрещено к публикации в ряде юрисдикций
-
-Китай:
-• ~70-80% переработки большинства critical minerals — в Китае
-• Публикация данных о китайских объектах может создать юридические риски при работе с китайскими клиентами
-• Доступ к продукту из Китая — потенциально проблематичен
-
-Санкции:
-• Нельзя предоставлять доступ к продукту пользователям из SDN-листа
-• Данные о российских и белорусских объектах — требуют disclaimer
-
-Митигация: Terms of Service с явными ограничениями; geo-blocking для sanctioned territories; legal entity screening для enterprise клиентов.
-
-5.3 ТЕХНИЧЕСКИЕ РИСКИ
-
-Data Freshness:
-• UN Comtrade лаг: 2-18 месяцев. Реальных "свежих" trade данных нет.
-• Решение: чётко показывать дату последнего обновления каждого data point; не создавать у пользователя иллюзию real-time.
-
-Source Reliability:
-• Данные о производстве из развивающихся стран (ДРК, Боливия) — часто неточные или отсутствуют
-• Решение: confidence scores для каждого data point; transparency о пробелах.
-
-AI Hallucination в Risk Scoring:
-• Gemini может генерировать правдоподобные, но неточные risk assessments
-• Особенно опасно для investment decisions
-• Решение: 
-  a) Mandatory disclaimer: AI scores — не investment advice
-  b) Human review queue для score changes > 2 points
-  c) Fact-checking через Search Grounding
-  d) Audit trail: что именно повлияло на score
-
-Graph Complexity:
-• Глобальный граф всех critical materials может достичь миллионов нодов
-• Решение: материализованные sub-graphs по материалу; ленивая загрузка; pagination
-
-5.4 БИЗНЕСОВЫЕ РИСКИ
-
-Кто покупатель:
-• ICP 1: Strategic Intelligence команды — Fortune 500 automotive, aerospace, pharma, electronics
-• ICP 2: Government agencies — Dept. of Commerce, EU Commission, BRICS equivalents
-• ICP 3: Commodity trading firms и хедж-фонды
-• ICP 4: ESG/sustainability research organizations
-• ICP 5: Consulting firms (McKinsey, BCG, Kearney)
-
-GTM:
-• Прямые продажи для enterprise (ACV $50-200K/год)
-• Partnership с Big 4 consulting для distribution
-• Government contracts — требуют FedRAMP compliance (США)
-• Freemium tier для brand awareness (ограниченные данные)
-
-Monetization:
-• Tier 1 (Free): Публичные данные, 3 материала, без alerts — $0
-• Tier 2 (Professional): All materials, 5 users, alerts, export — $2-5K/мес
-• Tier 3 (Enterprise): Unlimited users, API access, custom integrations, SLA — $10-30K/мес
-• Tier 4 (Government): On-premise option, FedRAMP, classified data integration — custom
-
-Риск: Конкуренты имеют многолетнюю фору и большие клиентские базы. Путь к рынку через niche specialization (critical materials specifically) — единственный реалистичный.
-
-════════════════════════════════════════════════════════════════
-РАЗДЕЛ 6: ROADMAP
-════════════════════════════════════════════════════════════════
-
-6.1 MVP (МЕСЯЦЫ 1-4)
-
-ФОКУС: Доказательство ценности для первых клиентов. 5 материалов, базовая карта, реальные данные.
-
-Месяц 1 — Фундамент:
-• GCP инфраструктура (Cloud Run, Cloud SQL PostGIS, BigQuery, Pub/Sub)
-• Go API: базовые CRUD endpoints для materials, facilities, routes
-• Data adapters: USGS MRDS + UN Comtrade (основные данные)
-• React/Vite/TypeScript скелет с MapLibre базовой картой
-• Firebase Auth (Google SSO)
-• CI/CD: Cloud Build → Cloud Run
-
-Месяц 2 — Данные и граф:
-• Spanner Graph или Neo4j: базовый граф для 5 материалов (Li, Co, REE, He, Si)
-• Supply chain для 5 материалов: ручная верификация данных
-• Data pipeline: ACLED + OFAC + GDELT adapters
-• Конфликтные зоны на карте
-• Базовый risk scoring (rule-based, без AI пока)
-
-Месяц 3 — UI и AI:
-• Полноценный 3-панельный layout
-• Граф переделов (Cytoscape.js)
-• MapLibre: facilities, routes, heatmap
-• Vertex AI: первый Gemini risk scoring pipeline
-• Базовые алерты (email)
-• Export: CSV, JSON
-
-Месяц 4 — Polish и запуск:
-• User roles (Admin/Analyst/Viewer)
-• Демо режим с публичным доступом
-• Performance optimization
-• Documentation
-• Security audit
-• Beta клиенты: 2-3 пилотных клиента
-
-MVP НЕ включает: мобайл PWA, внешний API, i18n, advanced AI Q&A, Government tier
-
-6.2 PHASE 2 (МЕСЯЦЫ 5-8)
-
-• 20+ материалов в системе
-• AI Q&A (RAG + Gemini Search Grounding)
-• REST API + API keys management
-• Advanced alerting (Slack/Teams/webhooks)
-• Исторические данные (2 года)
-• PWA для мобайл
-• i18n EN + ZH
-• PDF отчёты
-
-6.3 PHASE 3 (МЕСЯЦЫ 9-12)
-
-• 50+ материалов (все USGS Critical Minerals)
-• Multi-tenant SaaS с billing
-• GraphQL API
-• Custom data integrations для enterprise
-• FedRAMP assessment (для US Government)
-• Scenario modeling: "что если Китай закроет экспорт gallium?"
-• Supply chain stress testing / simulation
-
-6.4 FULL PRODUCT (ГОД 2+)
-
-• Predictive analytics: early warning system
-• Alternative supply chains: AI-generated recommendations
-• Portfolio risk: корзина материалов, portfolio exposure
-• Private data integration: клиент загружает свои supplier данные
-• Marketplace: аналитические отчёты от партнёров
-• API ecosystem: SDK, webhooks, Zapier integration
-• White-label опция
-
-6.5 ЧТО АВТОМАТИЗИРОВАТЬ СРАЗУ:
-
-✓ Data pipeline (Scheduler → Workers) — с первого дня
-✓ Sanctions checking — с первого дня  
-✓ ACLED conflict updates — с первого дня
-✓ CI/CD (Cloud Build) — с первого дня
-✓ AI risk scoring — с месяца 3
-
-ЧТО АВТОМАТИЗИРОВАТЬ ПОТОМ:
-
-○ User onboarding (пока — мануальный)
-○ Billing и subscription management (Stripe — Phase 2)
-○ Advanced alerting rules engine (Phase 2)
-○ Report generation (Phase 2)
-
-════════════════════════════════════════════════════════════════
-ПРИЛОЖЕНИЕ А: СПИСОК ИСТОЧНИКОВ ДАННЫХ С ОЦЕНКАМИ
-════════════════════════════════════════════════════════════════
-
-#  | Источник              | Покрытие | Качество | Лицензия        | Приоритет | Стоимость
-───┼───────────────────────┼──────────┼──────────┼─────────────────┼───────────┼──────────
-1  | USGS MRDS             | Глоб.    | ★★★★★    | Public Domain   | MVP       | Бесплатно
-2  | UN Comtrade+          | Глоб.    | ★★★★☆    | API платный     | MVP       | ~$5K/год
-3  | ACLED                 | 250 стр. | ★★★★★    | Коммерческая    | MVP       | ~$10K/год
-4  | OFAC SDN List         | США-SDN  | ★★★★★    | Public Domain   | MVP       | Бесплатно
-5  | EU Sanctions List     | EU       | ★★★★★    | Open            | MVP       | Бесплатно
-6  | GLEIF LEI             | Глоб.    | ★★★★☆    | CC0             | MVP       | Бесплатно
-7  | GDELT (BigQuery)      | Глоб.    | ★★★☆☆    | Public Domain   | MVP       | GCP costs
-8  | OpenStreetMap         | Глоб.    | ★★★☆☆    | ODbL (осторожно)| MVP       | Бесплатно
-9  | IEA Data Explorer     | Energy   | ★★★★☆    | Attribution     | Phase 2   | Бесплатно
-10 | BACI (CEPII)          | Глоб.    | ★★★★☆    | Research/Comm.  | Phase 2   | ~$3K/год
-11 | OECD TiVA             | 76 стр.  | ★★★★☆    | Open            | Phase 2   | Бесплатно
-12 | Natural Earth         | Глоб.    | ★★★★☆    | Public Domain   | MVP       | Бесплатно
-13 | Global Forest Watch   | Глоб.    | ★★★☆☆    | CC BY           | Phase 2   | Бесплатно
-14 | HDX / OCHA            | Гум.     | ★★★★☆    | Various CC      | Phase 2   | Бесплатно
-15 | FAO STAT              | Агро     | ★★★★☆    | Open            | Phase 2   | Бесплатно
-16 | World Bank Open Data  | Macro    | ★★★★☆    | CC BY 4.0       | Phase 2   | Бесплатно
-
-════════════════════════════════════════════════════════════════
-ПРИЛОЖЕНИЕ Б: ТЕХНИЧЕСКИЕ ЗАВИСИМОСТИ И ВЕРСИИ
-════════════════════════════════════════════════════════════════
-
-Backend (Go):
-• Go 1.22+
-• Gin или Chi (HTTP router)
-• pgx v5 (PostgreSQL/PostGIS driver)
-• cloud.google.com/go/spanner
-• cloud.google.com/go/bigquery
-• cloud.google.com/go/vertexai
-• google.golang.org/protobuf
-
-Frontend:
-• React 19+
-• TypeScript 5.4+
-• Vite 5+
-• MapLibre GL JS 4+
-• deck.gl 9+ (arc layers)
-• Cytoscape.js (supply chain graph)
-• TanStack Query v5 (data fetching)
-• Zustand (state management)
-• Recharts (time series)
-• Tailwind CSS v4
-
-GCP Services:
-• Cloud Run (API + Workers)
-• Cloud SQL (PostgreSQL 16 + PostGIS 3.4)
-• Cloud Spanner (Graph — preview feature)
-• BigQuery (analytics + GDELT)
-• Pub/Sub (pipeline orchestration)
-• Memorystore Redis (caching)
-• Cloud Scheduler (6-hour trigger)
-• Vertex AI (Gemini Pro)
-• Firebase Authentication
-• Cloud CDN (static assets)
-• Cloud Load Balancing
-• Secret Manager (API keys)
-• Cloud Build (CI/CD)
-
-════════════════════════════════════════════════════════════════
-
-© 2026 CriticalChain. Whitepaper v1.0.
-Документ подготовлен как часть архитектурного pre-development исследования.
-
-
-
-════════════════════════════════════════════════════════════════
-ДОПОЛНЕНИЕ К WHITEPAPER — ПРАВКИ И РАСШИРЕНИЯ v2.0
-════════════════════════════════════════════════════════════════
-
-Дата обновления: Март 2026
-Статус: Официальное дополнение к основному документу
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-РАЗДЕЛ 1. ИСТОЧНИКИ ДАННЫХ О КОНФЛИКТАХ И СОБЫТИЯХ (КОСВЕННЫЕ)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-1.1 Принцип: ACLED и GDELT исключены из MVP
-
-ACLED (Armed Conflict Location & Event Data Project) и GDELT исключены из MVP по экономическим соображениям: стоимость $10,000/год неприемлема на нулевой выручке. Вместо них используется многоуровневая система косвенных сигналов + Gemini Search Grounding. Принцип: freshness важнее precision на MVP. Достаточно достоверных сигналов из открытых источников лучше, чем идеальные данные за деньги.
-
-1.2 Уровни источников (от реального времени к историческим)
-
-УРОВЕНЬ 0 — GEMINI SEARCH GROUNDING (основной агрегатор)
-Инструмент: Google Gemini API с функцией Search Grounding
-Что даёт: синтез новостей в реальном времени по любому запросу ("конфликт в регионе X", "забастовка на руднике Y", "санкции против Z"). Gemini сам агрегирует Reuters, AP, BBC, Al Jazeera, локальные медиа.
-Freshness: < 1 часа
-Coverage: глобальная
-Стоимость: включена в Gemini API (pay-per-token)
-Ограничение: нет структурированных данных, только синтезированный текст — нужен парсинг через промпт
-
-УРОВЕНЬ 1 — ОФИЦИАЛЬНЫЕ TRAVEL ADVISORIES ПРАВИТЕЛЬСТВ
-
-US State Department (travel.state.gov)
-  - RSS Feed: https://travel.state.gov/content/travel/en/traveladvisories/traveladvisories.html.rss
-  - API: api.state.gov (устаревший, 2013, но работает)
-  - Формат: JSON/XML, страновые уровни 1-4
-  - Freshness: обновляется при изменении ситуации, обычно 24-72 ч
-  - Coverage: ~200 стран
-  - Лицензия: Public Domain (US Gov)
-  - Парсинг: простой RSS → country_code + advisory_level + summary
-
-UK FCDO (gov.uk/foreign-travel-advice)
-  - API: https://www.gov.uk/api/content/foreign-travel-advice/{country-slug}
-  - Формат: JSON (GOV.UK Content API)
-  - Freshness: 24-48 ч при изменениях
-  - Coverage: ~220 стран
-  - Лицензия: Open Government Licence v3.0
-  - Парсинг: GET /api/content/foreign-travel-advice/congo → поле "details.parts[*].body"
-
-Australian DFAT (smartraveller.gov.au)
-  - RSS: https://www.smartraveller.gov.au/destinations/rss
-  - Freshness: 24-72 ч
-  - Coverage: ~170 стран
-  - Лицензия: Creative Commons Attribution
-
-Агрегация: US Dept + FCDO + DFAT дают трёхточечный консенсус для страновой риск-оценки. Если два из трёх повысили уровень — сигнал достоверен.
-
-УРОВЕНЬ 2 — МОРСКИЕ И АВИАЦИОННЫЕ ПРЕДУПРЕЖДЕНИЯ
-
-AIS (Automatic Identification System) — движение судов
-  - aisstream.io: бесплатный WebSocket API, реальное время, глобальный
-  - AISHub: бесплатно при шеринге собственного фида
-  - MarineCadastre.gov (NOAA): исторические треки, GeoParquet формат
-  - Сигнал конфликта: "AIS blackout" в регионе (суда отключают транспондеры) = прокси угрозы
-  - Пример: исчезновение трафика в Баб-эль-Мандебе в 2024 → сигнал атак хуситов за несколько часов до медийного освещения
-  - Парсинг: bbox-фильтр по региону → подсчёт active vessels → отклонение от baseline = риск-сигнал
-  - Limitation: в горячих зонах суда намеренно глушат AIS — интерпретировать silence как risk, не как отсутствие трафика
-
-NAVTEX (Navigational Telex) — морские предупреждения
-  - navtex.net: бесплатный агрегатор сообщений
-  - VesselAPI NAVTEX: REST API, обновление каждые 6 ч
-  - NGA Maritime Safety API: https://msi.nga.mil/api/publications/query → категории Navigational Warnings
-  - Содержит: зоны минирования, запрещённые проходы, учения, бандитская активность
-  - Лицензия: Public Domain (US Gov, NGA)
-
-NOTAM (Notice to Airmen) — авиационные запреты
-  - FAA API: api.faa.gov/notamSearch (бесплатно, регистрация обязательна, 30 req/min)
-  - NASA NOTAM redistribution: DIP catalog, GeoJSON формат
-  - Ключевые сигналы: запрет полётов над регионом = активный конфликт или ракетная угроза
-  - Парсинг: фильтр по тексту PROHIB/RESTRICT + координаты → region_risk_flag
-
-УРОВЕНЬ 3 — ЭКОНОМИЧЕСКИЕ ПРОКСИ РИСКОВ
-
-Baltic Dry Index (BDI) — фрахт сухого балка
-  - Trading Economics: исторические данные, CSV скачивание
-  - Investing.com: исторические данные, неофициальный scraping
-  - Freightos Baltic Index (FBX): контейнерный фрахт, бесплатный terminal portal
-  - Интерпретация: резкий рост BDI/FBX по маршруту → дефицит пропускной способности = конфликт или ЧП
-  - Freshness: ежедневно
-
-Страховые индексы Lloyds / War Risk Premiums
-  - Источник: Lloyds Market Association (LMA) публикует war risk зоны
-  - Прокси: рост war risk premium на маршрут = рынок видит угрозу
-  - Парсинг: нет прямого API, мониторинг через news + Gemini Grounding
-
-УРОВЕНЬ 4 — МЕДИА И ОСИНТ
-
-Reuters / AP RSS-ленты
-  - Reuters: http://feeds.reuters.com/Reuters/worldNews (бесплатно)
-  - AP: https://rsshub.app/apnews/topics/world-news (через RSSHub)
-  - Wikipedia Current Events: https://en.wikipedia.org/wiki/Portal:Current_events (scraping / RSS)
-  - Freshness: 15-60 мин
-  - Лицензия: для MVP допустимо как информационный агрегатор (не перепродажа)
-
-Global Threat Map (OSINT GitHub)
-  - unicodeveloper/globalthreatmap: открытый проект, API поверх OSINT
-  - Не production-ready, но полезен для прототипа
-
-1.3 Стратегия обработки сигналов (Signal Fusion)
-
-На MVP: все источники → Gemini API (синтез) → structured risk signal
-Формат выхода:
-{
-  "region": "Red Sea",
-  "risk_level": 4,
-  "confidence": "medium",
-  "signals": ["AIS blackout detected", "FCDO raised to Level 3", "NAVTEX warning active"],
-  "freshness": "2026-03-19T06:00Z",
-  "source_count": 3
-}
-
-Правило MVP: если ≥2 независимых источника подтверждают угрозу в регионе → risk_level повышается. Один источник → флаг "unconfirmed".
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-РАЗДЕЛ 2. CANONICAL PATH И ТАКСОНОМИЯ ЯДРА
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-2.1 Таксономия ядра (обязательный)
-
-CriticalChain использует таксономию ядра (Horizon). Не вводим собственные enum — берём из taxonomy package:
-
-- **CanonicalPath:** `/fac/{geo}/{slug}`, `/org/{geo}/{slug}`, `/product/{category}/{type}/{stage}/{slug}`, `/route/...`, `/zone/...`
-
-- **FacilityKind:** mine, refinery, seaport, terminal, pipeline, factory, warehouse, power_plant, datacenter, substation, cable, airport, other (из taxonomy.FacilityKind)
-
-- **FacilityRole:** extraction, refining, processing, manufacturing, distribution, storage, logistics (из taxonomy.FacilityRole)
-
-- **EntityPath:** /Infrastructure/Manufacturing/Mine, /Resource/RawMaterial/Mineral, /Geo/Zone/Conflict, /Deposit/BatteryMetal и т.д. (из taxonomy.EntityPathTaxonomy)
-
-- **Geography:** /loc/{country}/{admin1} с ISO (из taxonomy, index_paths)
-
-Расширения при необходимости: FacilityKindWell, FacilityKindField для нефти/газа — или маппинг well→mine, field→Deposit.
-
-2.2 Material-first как проекция
-
-Material-centric view (lithium/mine/americas/chile/...) — не основной идентификатор. Canonical path остаётся `/fac/cl/sqm`. Поля material_id и stage — отдельные индексы. Запросы по материалу идут через material_id + stage в Firestore.
-
-2.3 Примеры (формат ядра)
-
-Литиевый рудник в Чили:
-  /fac/cl/atacama/sociedad_quimica_y_minera  (material_id: lithium, stage: 0, facilityKind: mine)
-
-Завод по переработке кобальта в Китае:
-  /fac/cn/zhejiang/huayou_cobalt  (material_id: cobalt, stage: 2, facilityKind: refinery)
-
-Порт отгрузки REE из Мьянмы:
-  /fac/mm/mandalay_region/muse_border_crossing  (material_id: ree, facilityKind: seaport)
-
-2.4 Alias Resolution и сопоставление
-
-Каждый узел хранит known_aliases. При ingestion: fuzzy match по aliases → assign canonical path. Данные из EIA, Reuters, FCDO — маппятся на граф через canonical path ядра. Версионирование: deprecated path → новый path, история сохраняется.
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-РАЗДЕЛ 3. AI RISK SCORING — ДИСКЛАЙМЕР MVP
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-3.1 Позиция продукта на MVP
-
-AI-скоринг рисков на MVP является экспериментальной функцией. Все риск-оценки генерируются языковой моделью на основе агрегированных открытых источников и не являются профессиональными финансовыми, инвестиционными или аналитическими заключениями.
-
-3.2 Текст дисклаймера (обязателен в UI)
-
-ОСНОВНОЙ ДИСКЛАЙМЕР (показывается при первом входе + в настройках):
-
-"Оценки рисков, отображаемые в этом приложении, формируются автоматически на основе открытых источников с использованием искусственного интеллекта. Они носят информационный, а не рекомендательный характер. Данные могут быть неполными, устаревшими или ошибочными. Не используйте эти данные как единственный источник для принятия коммерческих, инвестиционных или операционных решений. Разработчик не несёт ответственности за убытки, возникшие вследствие использования этих оценок."
-
-INLINE ДИСКЛАЙМЕР (рядом с каждым risk score):
-"⚠ AI-оценка. Экспериментально. Не является профессиональным заключением."
-
-3.3 Где показывать
-
-- Onboarding: полный текст, требует явного accept (чекбокс)
-- Dashboard: постоянная иконка "ℹ" рядом с заголовком Risk Score
-- Risk badge: tooltip с коротким дисклаймером при hover/tap
-- Export/Report: footer с полным текстом дисклаймера
-- API response: поле "disclaimer" в каждом ответе с risk_score
-
-3.4 Планируемое снятие ограничений
-
-Дисклаймер снимается или смягчается когда:
-- Проведена верификация модели на исторических данных (backtesting)
-- Внедрена модель ансамблирования нескольких источников
-- Привлечён domain expert для валидации алгоритма
-- Получена юридическая консультация по ответственности в целевых юрисдикциях
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-РАЗДЕЛ 4. РАСШИРЕНИЕ MVP: НЕФТЬ И ГАЗ
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-4.1 Обновлённый список материалов MVP
-
-Полный список на MVP v1:
-  - Литий (Li) — батерейная цепочка, EV
-  - Кобальт (Co) — катоды, аэрокосмос
-  - Редкоземельные элементы (REE) — магниты, электроника
-  - Гелий (He) — полупроводники, МРТ, криогеника
-  - Кремний (Si) — солнечная энергетика, полупроводники
-  → ДОБАВЛЕНО: Нефть (Crude Oil) — транспорт, нефтехимия
-  → ДОБАВЛЕНО: Природный газ (Natural Gas) — энергетика, удобрения
-
-4.2 Отличие нефти и газа от других материалов
-
-Нефть и газ — принципиально другая data landscape:
-
-ОБЪЁМ ДАННЫХ: На порядки больше источников. Нефть — самый мониторируемый товар в мире.
-ЦЕНООБРАЗОВАНИЕ: Рыночные цены (Brent, WTI, Henry Hub, TTF) обновляются в реальном времени, в отличие от лития и кобальта где цены частично непрозрачны.
-ИНФРАСТРУКТУРА: Pipeline networks, LNG terminals, tanker fleets — всё это публично отслеживается через AIS, FERC, ENTSO-G.
-РЕГУЛЯТОРЫ-ИСТОЧНИКИ: EIA, IEA, OPEC, JODI — публикуют детальную статистику ежемесячно/еженедельно.
-
-4.3 Специфические источники данных для нефти и газа
-
-EIA (U.S. Energy Information Administration)
-  - API: api.eia.gov (бесплатно, API key по регистрации)
-  - Данные: добыча по странам, запасы, импорт/экспорт, цены, прогнозы
-  - Freshness: weekly (запасы), monthly (международная статистика)
-  - Coverage: США детально + международные данные
-  - Лицензия: Public Domain
-  - Ключевые серии: PET.RWTC.W (WTI price), NG.RNGWHHD.D (Henry Hub)
-
-IEA (International Energy Agency)
-  - Данные: Oil Market Report (OMR), Gas Market Report — ежемесячно
-  - Free tier: агрегированные данные, WEO datasets (CC BY-NC-SA)
-  - API: только для enterprise лицензий — на MVP использовать free downloads
-  - Coverage: 38 стран ОЭСР + ключевые производители
-
-OPEC
-  - Annual Statistical Bulletin: скачивается бесплатно (PDF/Excel)
-  - Monthly Oil Market Report: краткое резюме бесплатно, данные платно
-  - На MVP: использовать Gemini Grounding для извлечения цифр из публичных отчётов
-
-JODI (Joint Organisations Data Initiative)
-  - URL: jodidata.org
-  - Данные: нефть и газ по ~100 странам, унифицированный формат
-  - Лицензия: бесплатно для non-commercial
-  - Freshness: с задержкой ~2 месяца — не для real-time, но для базовых объёмов
-
-Platts / Argus Media
-  - Коммерческие, не для MVP. Gemini Grounding может синтезировать публикуемые ценовые индикаторы из открытых источников.
-
-ENTSO-G (European gas network)
-  - API: transparency.entsog.eu (бесплатно)
-  - Данные: потоки газа по европейским pipeline в реальном времени
-  - Ключевой сигнал: снижение потоков через критические точки (Суджа, Nord Stream коридоры) = геополитический риск
-
-4.4 Граф переделов для нефти и газа
-
-Нефть:
-  stage0: Скважина (upstream) → stage1: Сепарация/стабилизация → stage2: Трубопровод/танкер → stage3: НПЗ (refining) → stage4: Нефтепродукты (diesel, jet fuel, naphtha) → stage5: Конечный потребитель
-
-Газ:
-  stage0: Скважина/месторождение → stage1: Подготовка газа (сепарация, осушка) → stage2: Pipeline / СПГ-завод → stage3: Регазификационный терминал → stage4: Распределительная сеть → stage5: Конечный потребитель
-
-Ключевые точки концентрации риска:
-  - Strait of Hormuz: 20% мировой нефти и 17% СПГ
-  - Bab-el-Mandeb: маршрут для 9% мировой нефти
-  - Турецкие проливы: российская нефть в Черном море
-  - Суэцкий канал: критический узел для нефтяных танкеров
-
-4.5 Переосмысление MVP scope с нефтью и газом
-
-Добавление нефти и газа РАСШИРЯЕТ аудиторию MVP:
-  - Нефтетрейдеры и commodity desks банков
-  - Энергетические компании (downstream риски)
-  - Правительственные energy security офисы
-  - Страховые компании (marine, energy risk)
-
-Но требует отдельного UI-слоя: для нефти и газа критичны price charts + flow maps (ENTSO-G стиль), которых нет в базовом supply chain view. Рекомендуется: материалы группировать по типу — "Critical Minerals" vs "Energy Commodities" — с разными дашбордами но единым графом и единой архитектурой данных.
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-РАЗДЕЛ 5. UX 2026 — ПРИНЦИПЫ ИНТЕРФЕЙСА
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-5.1 Философия: Аналитический инструмент, не приложение
-
-Этот продукт не конкурирует с потребительскими приложениями. Он конкурирует с Excel, Bloomberg Terminal, и custom Python дашбордами аналитиков. Пользователь платит за информацию, а не за красивые анимации. Каждый пиксель должен нести данные или структуру, помогающую данные воспринимать.
-
-Принцип: плотность информации > визуальная лёгкость. Никаких hero sections, никакого onboarding с иллюстрациями, никаких "пустых состояний" с котятами.
-
-5.2 Визуальный язык
-
-ТИПОГРАФИКА:
-  - Основной шрифт: JetBrains Mono (monospace) для числовых данных, метрик, кодов
-  - Текстовый шрифт: Inter или IBM Plex Sans — нейтральный, высокая читаемость при малом размере
-  - Размерная шкала: жёсткая — 11px / 13px / 15px / 19px / 24px. Ничего промежуточного.
-  - Никакого letter-spacing для красоты, только функциональный
-
-ЦВЕТОВАЯ СХЕМА:
-  Основа: тёмный фон (не чёрный — #0D1117 GitHub Dark или #111318)
-  Текст: #E6EDF3 основной, #8B949E вторичный, #484F58 disabled
-  Риск-палитра (строго семантическая):
-    risk_critical: #FF4444 (красный, только для уровня 5)
-    risk_high:     #FF8C00 (оранжевый, уровень 4)
-    risk_medium:   #FFD700 (жёлтый, уровень 3)
-    risk_low:      #00C853 (зелёный, уровень 1-2)
-    risk_unknown:  #484F58 (серый, нет данных)
-  Акцент: #4FC3F7 (голубой) — только для интерактивных элементов
-  Линии/рамки: #21262D
-  НЕ использовать: градиенты, тени, border-radius > 4px
-
-5.3 Компоненты
-
-RISK BADGE:
-  Формат: [●] CRITICAL  или  [●] 4.2 / 5
-  Реализация: цветная точка + текст уровня + числовой скор (если есть)
-  Размер: 12px точка + 11px текст, всё в одну строку
-  Hover tooltip: "Sources: FCDO L3, AIS blackout, NAVTEX active — Updated 2h ago"
-  Никаких progress bars, ring charts, или animated пульсирующих кружков
-
-SUPPLY CHAIN GRAPH:
-  Тип: Directed Acyclic Graph (DAG), горизонтальный layout (слева = добыча, справа = потребитель)
-  Узлы: прямоугольники с Canonical Path label + risk badge + объём (если доступен)
-  Рёбра: направленные линии, толщина = объём потока (нормализованный), цвет = риск ребра
-  Интерактивность: click на узел → expand/collapse дочерние узлы (drill-down в граф)
-  Zoom: mouse wheel / pinch, pan: drag
-  Рендеринг: D3.js или Cytoscape.js, SVG (не Canvas для accessibility)
-  Референс: Kpler flow diagrams — компактность и плотность; НЕ как у Palantir Gotham (слишком декоративно)
-
-DRILL-DOWN МЕХАНИКА:
-  Уровень 1 (Global): карта мира + список топ-5 рисков по материалу
-  Уровень 2 (Region): регион на карте + узлы supply chain в регионе
-  Уровень 3 (Node): карточка узла: Canonical Path, все источники данных, история риск-уровня, related events
-  Уровень 4 (Event): конкретное событие: источник, текст, дата, impact на узлы
-  Навигация: breadcrumb bar сверху, back button, URL reflects drill-down state (deep links)
-
-ТАБЛИЦЫ ДАННЫХ:
-  Стиль: плотные (row height 28px), zebra striping (#0D1117 / #161B22)
-  Сортировка: по клику на заголовок, стрелка показывает направление
-  Фильтрация: inline filter row под заголовком, не модальные панели
-  Pagination: 50/100/200 строк, не infinite scroll (аналитик должен знать где он)
-  Референс: Linear table view — минимализм и быстродействие
-
-КАРТА:
-  Тип: тёмная базовая карта (MapBox Dark или самохостируемый OpenMapTiles)
-  Слои: 1) риск по странам (choropleth), 2) потоки материалов (animated arcs), 3) ключевые узлы (точки)
-  Никаких декоративных элементов: только данные + минимальные подписи стран
-  Choropleth: та же риск-палитра что и risk badge — семантическое единство
-
-5.4 Референсы: что брать, что не брать
-
-Bloomberg Terminal — БРАТЬ: плотность данных, монохромная основа с цветовыми акцентами только для данных, keyboard-first навигация. НЕ БРАТЬ: устаревший 80-х UX, перегруженность виджетами без иерархии.
-
-Kpler — БРАТЬ: flow diagrams для commodities, geografическая визуализация потоков, чёткая сегментация по материалам. НЕ БРАТЬ: некоторые декоративные элементы в маркетинговых материалах.
-
-Linear — БРАТЬ: скорость, keyboard shortcuts, minimal chrome, мгновенный отклик UI, система меток (labels = наш risk badge). НЕ БРАТЬ: командный workflow не релевантен для нашего продукта.
-
-Resilio / Notion — НЕ БРАТЬ НИЧЕГО. Это consumer/productivity инструменты, не аналитические.
-
-5.5 Мобильная версия
-
-Философия: мобайл = read-only alert system, не full dashboard.
-
-Что есть на мобайле:
-  - Push-уведомления при изменении риск-уровня для отслеживаемых узлов
-  - Список активных алертов с risk badge и кратким описанием
-  - Детальная карточка события (tap → level 3 drill-down в упрощённом виде)
-  - Базовая карта с риск-heatmap (без интерактивного графа)
-
-Что НЕТ на мобайле:
-  - Редактирование настроек мониторинга
-  - Полный supply chain graph
-  - Таблицы данных
-  - Экспорт отчётов
-
-Технически: мобайл = отдельное React Native приложение или PWA с ограниченным набором экранов. Не адаптивная версия веб-приложения — это принципиально разные UX.
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-РАЗДЕЛ 6. ПРИНЦИПЫ УНИВЕРСАЛЬНОЙ АРХИТЕКТУРЫ
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-6.1 Принцип: новый материал = только данные, не код
-
-Система должна быть спроектирована так, чтобы добавление нового материала (например, вольфрам, марганец, платина) требовало только заполнения конфигурационных данных — без изменения кода приложения, без деплоя, без участия разработчика.
-
-Тест на универсальность: если добавление вольфрама требует хотя бы одного if/switch/hardcode в коде — архитектура нарушена.
-
-6.2 Универсальная модель данных для материала
-
-MaterialDefinition (YAML/JSON конфиг, хранится в internal/criticalchain/config/materials/).
-Taxonomy: FacilityKind, FacilityRole, stage names — из ядра (taxonomy package).
-
-```yaml
-material_id: tungsten
-display_name:
-  ru: "Вольфрам"
-  en: "Tungsten"
-chemical_symbol: W
-category: critical_mineral  # critical_mineral | energy_commodity | agricultural — маппинг на IndustryPath
-subcategory: refractory_metal
-
-units:
-  primary: metric_ton
-  aliases: [t, MT, tonne]
-  conversion_factors:
-    lb: 0.000453592
-    short_ton: 0.907185
-    kg: 0.001
-
-production_stages:
-  - id: 0
-    name: mining
-    type: extraction
-    typical_forms: [wolframite_ore, scheelite_ore]
-  - id: 1
-    name: concentration
-    type: processing
-    typical_forms: [tungsten_concentrate]
-    conversion_ratio: 0.65  # выход продукта из предыдущей стадии
-  - id: 2
-    name: apt_production
-    name_full: Ammonium Paratungstate
-    type: chemical_processing
-    typical_forms: [APT]
-    conversion_ratio: 0.85
-  - id: 3
-    name: oxide_metal
-    type: refining
-    typical_forms: [tungsten_oxide, tungsten_metal_powder]
-  - id: 4
-    name: fabrication
-    type: manufacturing
-    typical_forms: [tungsten_carbide, tungsten_wire, tungsten_alloy]
-  - id: 5
-    name: end_product
-    type: consumption
-    typical_forms: [cutting_tools, armor_piercing_rounds, filaments]
-
-data_sources:
-  - source_id: usgs_mcs
-    type: annual_statistics
-    url: https://pubs.usgs.gov/periodicals/mcs2024/mcs2024-tungsten.pdf
-    fields: [production_by_country, reserves, price]
-  - source_id: ita_tungsten
-    type: trade_data
-    url: https://www.itia.info/statistics.html
-    fields: [trade_flows, consumption]
-
-key_chokepoints:
-  - path: /loc/cn/jiangxi  # или /fac/cn/jiangxi/... для конкретного объекта
-    share_of_global_supply: 0.82
-    risk_multiplier: 2.5
-
-concentration_hhi: 8900  # Herfindahl-Hirschman Index — степень монополизации
-
-price_series:
-  unit: USD/metric_ton
-  frequency: monthly
-  sources: [metal_bulletin, fastmarkets]
 ```
 
-6.3 Универсальная модель маршрута
+### 3.5 Risk Scoring: единая шкала 1–5
 
-RouteDefinition — описывает физический путь материала между узлами.
-node_path использует canonical path ядра (/fac/{geo}/{slug}, /org/...).
+**Шкала риска (везде в системе: UI, API, база данных, конфиги):**
 
-route_id: "lithium/cl-stage0→cn-stage3"
-material: lithium
-waypoints:
-  - node_path: /fac/cl/atacama/sociedad_quimica_y_minera
-    role: origin
-  - node_path: /fac/cl/antofagasta/puerto_antofagasta
-    role: transit
-    transport_mode: truck
-    distance_km: 300
-    typical_days: 2
-  - node_path: /fac/cn/guangdong/guangzhou_nansha
-    role: transit
-    transport_mode: ocean_vessel
-    distance_km: 18000
-    typical_days: 35
-  - node_path: /fac/cn/jiangxi/ganfeng_lithium
-    role: destination
-    transport_mode: rail
-    distance_km: 800
-    typical_days: 3
+| Значение | Уровень | Цвет | Описание |
+|---|---|---|---|
+| 1 | LOW | #00C853 | Минимальный риск |
+| 2 | LOW-MEDIUM | #00C853 | Повышенное внимание |
+| 3 | MEDIUM | #FFD700 | Умеренный риск |
+| 4 | HIGH | #FF8C00 | Высокий риск |
+| 5 | CRITICAL | #FF4444 | Критический риск |
 
-risk_factors:
-  - factor_id: strait_hormuz
-    applies_to_legs: [1]  # индекс waypoint-перехода
-    risk_type: geopolitical_chokepoint
-    base_weight: 0.3
-  - factor_id: chile_political
-    applies_to_nodes: [lithium/mine/americas/chile/...]
-    risk_type: country_risk
-    weight_from_country_score: true
+**Алгоритм (weighted signal fusion):**
 
-aggregation_rule: max_weighted  # max | mean | weighted_sum | max_weighted
-
-6.4 Универсальный граф переделов
-
-TransformationGraph — описывает как материал трансформируется между стадиями:
-
-material: cobalt
-transformations:
-  - from_stage: 0  # добыча
-    to_stage: 1    # переработка концентрата
-    process_name: froth_flotation
-    typical_yield: 0.70
-    co2_kg_per_ton: 2.1
-    water_m3_per_ton: 15
-    typical_countries: [DRC, Zambia, Australia]
-  - from_stage: 1
-    to_stage: 2
-    process_name: hydrometallurgical_refining
-    typical_yield: 0.92
-    typical_countries: [China, Finland, Belgium]
-  - from_stage: 2
-    to_stage: 3
-    process_name: cathode_precursor_synthesis  # pCAM
-    typical_yield: 0.88
-    typical_countries: [China, South Korea]
-
-Граф — это конфигурация, не код. Движок читает конфиг и строит DAG автоматически. Добавление нового передела = добавить объект в массив transformations, не писать класс.
-
-6.5 Универсальные правила risk scoring
-
-RiskScoringConfig — применяется к любому материалу:
-
-scoring_version: "2.0"
-algorithm: weighted_signal_fusion
-
+```yaml
 signals:
   - id: country_risk
-    source: travel_advisories  # us_state_dept + uk_fcdo + au_dfat
+    source: travel_advisories  # US State Dept + FCDO + AU DFAT
     weight: 0.25
     scale: [1, 5]
     aggregation: max_of_three_sources
   - id: conflict_events
-    source: gemini_grounding + ais_blackout + notam
+    source: gemini_grounding + ais_blackout + navtex
     weight: 0.30
     scale: [1, 5]
-    decay_halflife_hours: 72  # событие теряет вес через 72ч если не подтверждено
+    decay_halflife_hours: 72
   - id: supply_concentration
-    source: hhi_index  # из MaterialDefinition
+    source: hhi_index
     weight: 0.20
     scale: [1, 5]
     formula: "min(5, hhi / 2000)"
   - id: price_volatility
-    source: price_series
+    source: price_series  # EIA для нефти/газа; commodity indices для минералов
     weight: 0.15
     scale: [1, 5]
     formula: "min(5, 30d_volatility_pct / 10)"
@@ -1491,230 +433,628 @@ signals:
     scale: [1, 5]
     formula: "min(5, (current - 90d_avg) / 90d_avg * 10)"
 
-node_risk_formula: "sum(signal.value * signal.weight) for signal in signals"
-route_risk_formula: "max(node_risk for node in route.waypoints) * route.chokepoint_multiplier"
-material_risk_formula: "weighted_avg(route_risk for route in material.top_routes, weight=route.volume_share)"
+node_risk_formula: "sum(signal.value * signal.weight)"
+route_risk_formula: "max(node_risk for node in waypoints) * chokepoint_multiplier"
+material_risk_formula: "weighted_avg(route_risk, weight=volume_share)"
+```
 
-Правила не зависят от материала. При добавлении вольфрама — те же сигналы, тот же алгоритм. Меняется только то, откуда берутся данные (price_series, hhi_index, key_chokepoints из MaterialDefinition).
+### 3.6 AI интеграция (Vertex AI / Gemini)
 
-6.6 Параметризованные визуализации и карта
+**Risk Scoring Pipeline:**
+- Входной контекст для каждого объекта: геолокация, страна, исторические данные производства, текущие конфликты в регионе (из signals), санкционный статус, зависимости от других материалов, последние события (GDELT)
+- Gemini prompt: структурированный JSON output с объяснением
+- Grounding: Google Search для верификации актуальности
+- Confidence < 0.7 → флаг для аудита (не блокирует публикацию; human review queue — Phase 2)
 
-Визуализации НЕ знают о конкретных материалах. Они получают конфиг:
+**Search Grounding для Q&A:**
+- Пользователь: "Как повлияет эскалация в Южно-Китайском море на цепочки редкоземельных металлов?"
+- → RAG: граф цепочек + Gemini Search Grounding
+- → Structured response: affected materials + affected routes + risk delta estimate
 
-MapLayerConfig:
-  material: tungsten  # или "all"
-  layer_type: choropleth
-  data_field: country_risk_score
-  color_scale: risk_palette  # ссылка на глобальную палитру
-  tooltip_fields: [country_name, risk_score, top_signals, last_updated]
+**Disclaimer (обязателен в UI):**
 
+*Основной (при первом входе):* "Оценки рисков формируются автоматически на основе открытых источников с использованием ИИ. Они носят информационный, а не рекомендательный характер. Не используйте их как единственный источник для коммерческих, инвестиционных или операционных решений."
+
+*Inline (рядом с каждым score):* "⚠ AI-оценка. Экспериментально."
+
+### 3.7 Alias Resolution и Fuzzy Match
+
+**Алгоритм сопоставления:**
+
+| Тип данных | Алгоритм |
+|---|---|
+| Названия компаний / организаций | TF-IDF + Levenshtein distance (порог ≤ 0.2) |
+| Описания и свободный текст объектов | Embedding similarity (Vertex AI text-embedding-004) |
+| Названия материалов и химических соединений | Exact match по CAS/HS → fallback TF-IDF |
+| Географические названия | OSM normalisation + USGS geographic names |
+
+**Правило ingestion:** при fuzzy match score > 0.85 → автоматически assign canonical path. При 0.70–0.85 → флаг `needs_review`. При < 0.70 → создаётся новая запись.
+
+Canonical ID для организаций: **GLEIF LEI** — единственный авторитетный источник.
+
+### 3.8 Геоданные
+
+**MVP (Firestore):**
+- Точечные объекты (facilities): GeoPoint в документах
+- Маршруты: массив waypoints GeoPoint
+- Пространственные запросы: клиентская фильтрация по bbox
+- Конфликтные зоны: bounding box + radius
+
+**Phase 2 (PostGIS + BigQuery GIS):**
+- Cloud SQL PostgreSQL + PostGIS: LineString для маршрутов, Polygon для зон конфликтов
+- BigQuery GIS: аналитика пересечений (какие маршруты пересекают зоны риска)
+- Memorystore Redis: кэш пространственных запросов, TTL 6 часов
+
+---
+
+## 4. UX и визуализация
+
+### 4.1 Концепция: Investigation Tool, не Dashboard
+
+Продукт конкурирует с Bloomberg Terminal, Excel и custom Python-дашбордами аналитиков. Пользователь платит за **информацию**, а не за анимации. Каждый пиксель несёт данные или структуру.
+
+**Принцип:** плотность информации > визуальная лёгкость. Никаких hero sections, онбординга с иллюстрациями, "пустых состояний" с котятами.
+
+**Модель взаимодействия: Progressive Disclosure**
+- Уровень 1: Global overview — карта мира с риск-heatmap, топ-алерты
+- Уровень 2: Material focus — выбор материала → цепочка на карте + граф переделов
+- Уровень 3: Facility detail — клик по объекту → карточка, риски, связи
+- Уровень 4: Route analysis — конкретный маршрут → исторические данные, альтернативы
+
+### 4.2 Визуальный язык
+
+**Типографика:**
+- Данные и метрики: JetBrains Mono (monospace)
+- Текст: Inter или IBM Plex Sans
+- Размерная шкала: 11 / 13 / 15 / 19 / 24 px — ничего промежуточного
+
+**Цветовая схема:**
+```
+Фон основной:  #0D1117
+Текст основной: #E6EDF3
+Текст вторичный: #8B949E
+Disabled: #484F58
+Линии/рамки: #21262D
+Акцент (интерактив): #4FC3F7
+
+Risk-палитра (строго семантическая):
+  risk_critical:  #FF4444  (уровень 5)
+  risk_high:      #FF8C00  (уровень 4)
+  risk_medium:    #FFD700  (уровень 3)
+  risk_low:       #00C853  (уровни 1–2)
+  risk_unknown:   #484F58  (нет данных)
+```
+
+### 4.3 Главный экран
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ [HEADER] CriticalChain | Material Search | Alerts | [Login] │
+├────────────┬─────────────────────────────────┬───────────────┤
+│            │                                 │               │
+│ LEFT PANEL │    CENTRAL MAP (MapLibre)        │ RIGHT PANEL  │
+│            │                                 │               │
+│ Materials  │  [Layers: Choropleth | Routes   │ Chain graph   │
+│ ──────     │   | Facilities | Conflict zones]│ (D3/Cytoscape)│
+│ • Lithium  │                                 │               │
+│ • Cobalt   │  Animated flow arcs             │ Risk score    │
+│ • REE      │  Facility clusters              │ 1–5 badge     │
+│ • Helium   │  Chokepoint markers             │               │
+│ • Silicon  │                                 │ AI Insights   │
+│ • Oil      │                                 │ (Gemini)      │
+│ • Gas      │                                 │               │
+│            │                                 │ ⚠ AI-оценка  │
+│ Filters    │                                 │ Экспериментал.│
+│ ──────     │                                 │               │
+│ Region     │                                 │               │
+│ Risk level │                                 │               │
+└────────────┴─────────────────────────────────┴───────────────┘
+```
+
+### 4.4 MapLibre слои
+
+| Слой | Данные | Визуализация |
+|---|---|---|
+| Base | Тёмная политическая карта | MapTiler Dark |
+| Choropleth | Country risk score (1–5) | Gradient по risk-палитре |
+| Conflict zones | bounding boxes риск-зон | Semi-transparent overlay |
+| Trade routes | Route + volume | Animated arcs; толщина = объём |
+| Facilities | criticalchain_nodes | Кластеры; иконка по facilityKind |
+| Chokepoints | Hormuz, Bab-el-Mandeb и др. | Маркеры с risk badge |
+
+Технические детали: MapLibre GL JS v4+; deck.gl для arc/flow визуализации; WebGL heatmap; supercluster для кластеризации объектов > 500.
+
+### 4.5 Граф переделов
+
+- Библиотека: Cytoscape.js или D3-force
+- Layout: DAG (directed acyclic graph), слева-направо
+- Узлы: материалы (круги) и объекты (прямоугольники)
+- Цвет узла: risk score по risk-палитре (1–5)
+- Рёбра: подписаны типом передела; толщина = объём потока
+- Интерактивность: hover → tooltip, click → drill-down
+
+```
+[Li Ore] → [Li₂CO₃] → [Cathode NMC] → [Battery Cell] → [Battery Pack] → [EV]
+  ▲            ▲            ▲               ▲               ▲              ▲
+ risk:4       risk:5       risk:4          risk:3           risk:2         risk:1
+(Китай)    (Китай 60%)  (Китай 70%)  (CATL monopoly)     (OEM)
+```
+
+### 4.6 Risk Badge
+
+```
+Формат: [●] CRITICAL  или  [●] 4.2 / 5
+Размер: 12px точка + 11px текст
+Hover tooltip: "Sources: FCDO L3, AIS blackout, NAVTEX active — Updated 2h ago"
+```
+
+Никаких progress bars, ring charts, animated пульсирующих кружков.
+
+### 4.7 Таблицы данных
+
+- Плотные (row height 28px), zebra striping
+- Сортировка по заголовку, inline фильтрация
+- Pagination: 50/100/200 строк (не infinite scroll)
+
+### 4.8 Режимы доступа
+
+**Демо-режим (без регистрации):**
+- Полный просмотр данных, карты, графов переделов
+- Risk scores видны с inline дисклаймером
+- **Watches и алерты недоступны** — требуется аккаунт
+- Экспорт недоступен
+
+**Авторизованный пользователь:**
+- Все функции демо-режима +
+- Создание watches (уведомления при изменении risk score)
+- Настройка алертов по материалам / регионам
+- Экспорт данных (CSV, JSON, PDF)
+- AI Q&A (Phase 2)
+
+**Алерты — только для зарегистрированных пользователей:**
+- Пользовательские watches: "уведомить при risk score > 4 для литиевой цепочки"
+- Системные алерты: новый конфликт в регионе с критическими объектами
+- Дайджест: ежедневная сводка по отслеживаемым материалам
+- Каналы MVP: email; Phase 2: Slack/Teams webhooks, in-app
+
+### 4.9 Продукт — только веб
+
+CriticalChain — веб-приложение (SPA). Мобильного приложения нет. Нативных приложений нет. PWA не реализуется.
+
+Обоснование: продукт ориентирован на корпоративных аналитиков, работающих за рабочими станциями. Таблицы данных, граф переделов и интерактивная карта с множественными слоями требуют большого экрана.
+
+### 4.10 Дополнительные функции
+
+**Data Governance:**
+- Каждый data point: источник + дата обновления видны в UI
+- Исторические снимки: 2 года rolling window (BigQuery партиционирование)
+- Data lineage: audit trail для каждого факта
+
+**Roles:**
+- Viewer: просмотр данных и карты
+- Analyst: watches, алерты, экспорт (требует авторизации)
+- Admin: управление пользователями организации, API keys
+- Super Admin: управление источниками, системные настройки
+
+**Multi-tenancy:**
+- Watches, алерты, аннотации — tenant-scoped
+- Данные цепочек (facilities, materials, routes) — общие для всех авторизованных пользователей
+- Risk scores — видны всем авторизованным
+
+**Export (Phase 2):**
+- Форматы: CSV, Excel, JSON, PDF-отчёты
+- Шаблонные отчёты по материалу / региону / риску
+
+**API (Phase 2):**
+- REST API + API keys management
+- Webhook API для интеграции с SAP, Oracle
+- Rate limiting по тарифным планам
+- OpenAPI/Swagger документация
+
+**i18n:**
+- MVP: английский язык
+- Архитектурно подготовлено через react-i18next
+- Приоритет локализации: EN → ZH → JA → DE → FR
+
+---
+
+## 5. Риски продукта
+
+### 5.1 Юридические риски
+
+**Data Licensing:**
+- UN Comtrade+: коммерческое использование — платный tier (~$5K/год)
+- ACLED: исключён по экономическим соображениям (~$10K/год). Используются бесплатные альтернативы.
+- OSM: ODbL требует share-alike для derivative databases — осторожно с derived geo products
+- USGS: Public Domain — безопасно
+- EIA: Public Domain — безопасно
+- ENTSO-G: бесплатный открытый API
+- MarineTraffic: строго коммерческая. Использовать aisstream.io (бесплатный) для AIS-сигналов
+
+Бюджет на лицензии источников: $10–20K/год (без ACLED).
+
+**Re-export Restrictions:**
+- Исключить из MVP данные о военных и ядерных объектах
+- Консультация с export control юристом
+
+**GDPR / CCPA:**
+- Privacy by design; DPA с клиентами
+- Данные об организациях (LEI, адреса) — применимо GDPR
+
+**Регуляторные возможности:**
+- EU Critical Raw Materials Act 2024 — продукт может позиционироваться как compliance tool
+- US Inflation Reduction Act — требования к sourcing для американских клиентов
+
+### 5.2 Геополитические риски
+
+- Точные данные о местоположении критических объектов могут интересовать государственных акторов
+- Данные о китайских объектах (~70–80% переработки) — юридические риски при работе с китайскими клиентами
+- Нельзя предоставлять доступ пользователям из SDN-листа
+
+**Митигация:** Terms of Service с явными ограничениями; geo-blocking для sanctioned territories; entity screening для enterprise клиентов.
+
+### 5.3 Технические риски
+
+**Data Freshness:**
+- UN Comtrade лаг: 2–18 месяцев; чётко показывать дату обновления каждого data point
+- Данные о производстве из развивающихся стран (ДРК, Боливия) — часто неточные
+
+**AI Hallucination:**
+- Mandatory disclaimer в UI (см. раздел 3.6)
+- Audit trail: что повлияло на score
+- Human review queue — Phase 2 (простой internal UI для проверки score changes > 1.5 units)
+
+**Graph Complexity:**
+- Материализованные sub-graphs по материалу; ленивая загрузка; pagination
+
+### 5.4 Бизнес-риски
+
+**Monetization:**
+- Tier 1 (Demo): публичные данные, read-only, без watches — $0
+- Tier 2 (Professional): все материалы, до 5 users, watches, алерты, export — $2–5K/мес
+- Tier 3 (Enterprise): unlimited users, API access, custom integrations, SLA — $10–30K/мес
+- Tier 4 (Government): on-premise option, FedRAMP, classified data integration — custom
+
+**GTM:**
+- Прямые продажи для enterprise (ACV $50–200K/год)
+- Партнёрство с консалтингом (Big 4) для distribution
+- Government contracts — требуют FedRAMP compliance (США)
+- Демо-режим для brand awareness
+
+---
+
+## 6. Roadmap
+
+### 6.1 MVP (Месяцы 1–4)
+
+**Фокус:** доказательство ценности для первых клиентов. 7 материалов (включая нефть и газ), базовая карта, реальные данные.
+
+**Месяц 1 — Фундамент:**
+- GCP инфраструктура: Cloud Run, Firestore, BigQuery, Pub/Sub, Memorystore
+- Go API: базовые CRUD endpoints для materials, facilities, routes
+- Data adapters: USGS MRDS + EIA API + UN Comtrade (основные данные)
+- React/Vite/TypeScript SPA с MapLibre базовой картой
+- Firebase Auth (Google SSO)
+- CI/CD: Cloud Build → Cloud Run
+- Конфиги материалов (YAML): Li, Co, REE, He, Si, Oil, Gas
+
+**Месяц 2 — Данные и граф:**
+- Firestore граф (criticalchain_nodes, criticalchain_edges): 7 материалов
+- Supply chain данные: ручная верификация для 7 материалов
+- Data pipeline: Country Risk adapters (State Dept, FCDO, DFAT) + OFAC + GDELT + ENTSO-G
+- Нефть и газ: EIA + ENTSO-G adapters; ключевые chokepoints (Hormuz, Bab-el-Mandeb)
+- Конфликтные зоны на карте (из country risk + NAVTEX)
+- Базовый risk scoring rule-based (шкала 1–5)
+
+**Месяц 3 — UI и AI:**
+- Полноценный 3-панельный layout
+- Граф переделов (Cytoscape.js), DAG layout
+- MapLibre: facilities, routes, chokepoints, choropleth
+- Vertex AI: Gemini risk scoring pipeline (шкала 1–5)
+- Базовые алерты (email) — только для авторизованных
+- Демо-режим: read-only без регистрации
+
+**Месяц 4 — Polish и запуск:**
+- User roles (Viewer / Analyst / Admin)
+- AIS blackout detection (aisstream.io integration)
+- Signal Fusion: консенсус ≥2 источников
+- Performance optimization
+- Security audit; disclaimer onboarding
+- Beta-клиенты: 2–3 пилота (целевые: консалтинг, КазМунайГаз)
+
+**MVP НЕ включает:** API для внешних клиентов, i18n, advanced AI Q&A, Government tier, PostGIS, Spanner Graph, human review queue, PDF-отчёты, Slack/Teams webhooks.
+
+### 6.2 Phase 2 (Месяцы 5–8)
+
+- 20+ материалов в системе
+- PostGIS: миграция гео-данных с LineString, Polygon для конфликтных зон
+- Spanner Graph: граф-траверсалы, multi-hop зависимости
+- AI Q&A (RAG + Gemini Search Grounding)
+- REST API + API keys management
+- Advanced alerting: Slack/Teams webhooks
+- Исторические данные (2 года)
+- Human review queue: simple internal UI для review score changes > 1.5
+- PDF отчёты
+- i18n EN + ZH
+
+### 6.3 Phase 3 (Месяцы 9–12)
+
+- 50+ материалов (все USGS Critical Minerals)
+- Multi-tenant SaaS с billing (Stripe)
+- GraphQL API
+- Custom data integrations для enterprise
+- FedRAMP assessment (US Government)
+- Scenario modeling: "что если Китай закроет экспорт gallium?"
+- Supply chain stress testing / simulation
+
+### 6.4 Full Product (Год 2+)
+
+- Predictive analytics: early warning system
+- Alternative supply chains: AI-generated recommendations
+- Portfolio risk: корзина материалов, portfolio exposure
+- Private data integration: клиент загружает свои supplier данные
+- Marketplace: аналитические отчёты от партнёров
+- White-label опция
+
+### 6.5 Автоматизация с первого дня
+
+✓ Data pipeline (Scheduler → Workers)
+✓ Sanctions checking (OFAC + EU)
+✓ Country risk aggregation (State Dept + FCDO + DFAT)
+✓ GDELT event detection
+✓ AIS blackout monitoring
+✓ CI/CD (Cloud Build)
+✓ AI risk scoring — с месяца 3
+
+○ User onboarding — пока мануальный
+○ Billing / subscription management (Stripe) — Phase 2
+○ Advanced alerting rules engine — Phase 2
+○ PDF report generation — Phase 2
+
+---
+
+## 7. Принципы универсальной архитектуры
+
+### 7.1 Принцип: новый материал = только данные, не код
+
+Добавление нового материала требует только заполнения конфигурационных данных — без изменения кода, без деплоя, без разработчика.
+
+**Тест:** если добавление вольфрама требует хотя бы одного `if/switch/hardcode` в коде — архитектура нарушена.
+
+### 7.2 MaterialDefinition (YAML конфиг)
+
+```yaml
+# internal/criticalchain/config/materials/tungsten.yaml
+material_id: tungsten
+display_name:
+  ru: "Вольфрам"
+  en: "Tungsten"
+chemical_symbol: W
+category: critical_mineral  # critical_mineral | energy_commodity | agricultural
+subcategory: refractory_metal
+
+units:
+  primary: metric_ton
+  aliases: [t, MT, tonne]
+
+production_stages:
+  - id: 0
+    name: mining
+    type: extraction
+    facilityKind: mine  # из taxonomy
+    typical_forms: [wolframite_ore, scheelite_ore]
+  - id: 1
+    name: concentration
+    type: processing
+    facilityKind: refinery
+    conversion_ratio: 0.65
+  - id: 2
+    name: apt_production
+    type: chemical_processing
+    facilityKind: factory
+    typical_forms: [APT]
+    conversion_ratio: 0.85
+
+data_sources:
+  - source_id: usgs_mcs
+    type: annual_statistics
+    fields: [production_by_country, reserves, price]
+
+key_chokepoints:
+  - path: /loc/cn/jiangxi
+    share_of_global_supply: 0.82
+    risk_multiplier: 2.5
+
+concentration_hhi: 8900
+```
+
+### 7.3 Универсальные правила risk scoring
+
+Правила не зависят от конкретного материала (см. алгоритм в разделе 3.5). При добавлении вольфрама — те же сигналы, тот же алгоритм 1–5. Меняется только конфигурация данных (price_series, hhi_index, key_chokepoints из MaterialDefinition).
+
+### 7.4 Процесс добавления нового материала
+
+```
+1. Создать YAML: internal/criticalchain/config/materials/{material}.yaml
+2. Загрузить данные: internal/criticalchain/config/entities/{material}_entities.csv
+3. Запустить ingestion: npm run ingest:material {material}
+4. Настроить data_sources в конфиге
+5. Запустить scoring: npm run score:material {material}
+6. Материал появляется в интерфейсе автоматически
+```
+
+### 7.5 Визуализации параметризованы
+
+Компоненты не знают о конкретных материалах. Они получают конфиг:
+
+```yaml
 GraphConfig:
   material: tungsten
-  max_depth: 4  # сколько уровней переделов показывать
-  node_label: canonical_path_short  # или display_name
-  edge_weight: volume_share  # толщина ребра = объём
-  color_by: node_risk_score
+  max_depth: 4
+  node_label: canonical_path_short
+  edge_weight: volume_share
+  color_by: node_risk_score  # шкала 1–5
+```
+
+---
+
+## 8. Интеграция с ядром
+
+### 8.1 Позиционирование
 
-Компонент SupplyChainGraph принимает GraphConfig и данные — и рисует граф. Добавление нового материала не требует изменения компонента — только новых данных в формате GraphConfig + nodes + edges.
+CriticalChain — эксперимент-подсистема. В ядро не интегрируется. Использует таксономию и возможности ядра. Совместимость сохраняется для возможного слияния.
 
-6.7 Добавление нового материала: пошаговый процесс (без разработчика)
+### 8.2 Таксономия ядра (обязательно)
 
-Шаг 1: Создать файл internal/criticalchain/config/materials/tungsten.yaml (заполнить по шаблону MaterialDefinition, taxonomy из ядра)
-Шаг 2: Загрузить список производителей в internal/criticalchain/config/entities/tungsten_entities.csv (company, country, stage, capacity)
-Шаг 3: Запустить скрипт: npm run ingest:material tungsten (парсит данные, строит canonical paths, создаёт граф)
-Шаг 4: Настроить data_sources в конфиге (ссылки на открытые источники данных)
-Шаг 5: Запустить: npm run score:material tungsten (первый проход risk scoring)
-Шаг 6: Материал появляется в интерфейсе автоматически
+CriticalChain использует taxonomy package ядра (Horizon):
+
+- **CanonicalPath:** `/fac/{geo}/{slug}`, `/org/{geo}/{slug}`, `/product/{category}/{type}/{stage}/{slug}`
+- **FacilityKind:** mine, refinery, seaport, terminal, pipeline, factory, warehouse, power_plant, other
+- **FacilityRole:** extraction, refining, processing, manufacturing, distribution, storage, logistics
+- **EntityPath:** /Infrastructure/Manufacturing/Mine, /Resource/RawMaterial/Mineral, /Geo/Zone/Conflict, /Deposit/BatteryMetal...
+- **Geography:** /loc/{country}/{admin1} с ISO
 
-Всё. Разработчик не нужен.
+Для нефти и газа: FacilityKindWell → маппинг на `mine`; FacilityKindField → маппинг на Deposit.
 
+### 8.3 Примеры canonical paths
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-РАЗДЕЛ 7. ИНТЕГРАЦИЯ С ЯДРОМ И АРХИТЕКТУРНЫЕ РЕШЕНИЯ (v2.0)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Зафиксированные решения (март 2026). Раздел написан для ревьюера, не знакомого с проектом.
-
-
-7.0 КОНТЕКСТ: ЧТО ТАКОЕ ЯДРО (HORIZON)
-
-«Ядро» — основная продуктовая система в репозитории. В том же репозитории и GCP проекте существует основная система — Horizon. Это платформа геополитической и supply-chain аналитики: граф сущностей (организации, объекты инфраструктуры, продукты, маршруты, зоны риска), линзы (lenses) для фокусировки анализа, watch-брифы, AI-ассистированный скраутинг. Horizon уже имеет:
-
-- **Таксономию:** иерархические пути для классификации сущностей (/org/{geo}/{slug}, /fac/{geo}/{slug}, /product/..., /zone/...), FacilityKind (mine, refinery, seaport...), FacilityRole (extraction, refining...), EntityPath (/Infrastructure/Manufacturing/Mine, /Geo/Zone/Conflict...)
-- **Firestore** как основное хранилище
-- **Vertex AI** с Search Grounding для entity resolution и RAG
-- **Firebase Auth**, multi-tenancy
-- **Data pipeline** на Cloud Scheduler + Pub/Sub + Cloud Run workers
-
-(В коде: backend/internal/horizon/, backend/internal/taxonomy/, backend/internal/ai/.)
-
-CriticalChain — эксперимент в той же экосистеме. Мы хотим проверить гипотезу «мониторинг цепочек критических материалов» без переписывания всего с нуля, но и без затягивания CriticalChain в ядро. Отсюда решения ниже.
-
-
-7.1 ПОЗИЦИОНИРОВАНИЕ
-
-**Решение:** CriticalChain — эксперимент-подсистема. В ядро не интегрируем. Разворачивается отдельно внутри того же GCP проекта. Использует таксономию и возможности ядра. Совместимость сохраняем для возможного слияния в будущем.
-
-**Почему так:**
-- Эксперимент должен быть изолирован: если гипотеза не сработает, откат не затрагивает ядро.
-- Одновременно дублировать таксономию (facility types, entity paths, canonical paths) — лишняя работа и риск рассинхронизации. Ядро уже решает задачу «как называть и классифицировать сущности».
-- Совместимость по форматам (canonical path, taxonomy enums) даёт опцию слияния позже без миграции данных.
-- «Без фанатизма»: база тестовая, финальное решение о слиянии — после валидации продукта.
-
-
-7.2 СТЕК И ХРАНИЛИЩЕ
-
-**7.2.1 Firestore, отдельные коллекции**
-
-**Решение:** Отдельные коллекции с префиксом criticalchain_ (criticalchain_entities, criticalchain_edges, criticalchain_routes и т.д.). Не смешиваем с коллекциями Horizon.
-
-**Почему так:**
-- Изоляция данных: запросы, индексы, квоты CriticalChain не влияют на Horizon.
-- Простой откат: можно отключить/удалить подсистему, не трогая ядро.
-- Ясные границы при ревью и аудите: что принадлежит эксперименту, что — продакшену.
-- Префикс criticalchain_ исключает коллизии имён с будущими коллекциями ядра.
-
-
-**7.2.2 Граф и гео: Firestore для MVP (не PostGIS, не graph DB)**
-
-**Решение:** Граф — коллекции criticalchain_nodes, criticalchain_edges. Гео — Firestore GeoPoint в документах. PostGIS и Neo4j/Spanner Graph — Phase 2.
-
-**Почему так:**
-- Ядро уже использует Firestore; команда знает модель, лимиты, паттерны. Добавлять PostGIS/Neo4j — новые зависимости, деплой, обучение.
-- Для MVP объём данных небольшой (5–7 материалов, сотни объектов). Firestore справляется. Сложные spatial-запросы (polygon intersection, nearest-neighbor) пока не критичны.
-- GeoPoint достаточен для точечных объектов (шахты, заводы, порты). Маршруты — массив waypoints. Ограничение: нет нативной поддержки LineString/Polygon; для heatmap и зон конфликтов — клиентская обработка или упрощённые структуры.
-- Когда объём вырастет или появятся требования к graph traversals / spatial joins — миграция на PostGIS и graph DB будет обоснована данными, а не превентивно.
-
-
-**7.2.3 Backend: отдельный пакет internal/criticalchain**
-
-**Решение:** Код в internal/criticalchain. Не размазываем по horizon, scout, taxonomy.
-
-**Почему так:**
-- Чёткая граница: ревьюер и разработчик сразу видят, что относится к CriticalChain.
-- Импорт taxonomy из internal/taxonomy — явная зависимость, без копипаста.
-- Упрощает отключение: исключить пакет из билда — и подсистема не компилируется.
-
-
-**7.2.4 Data Pipeline: Cloud Scheduler → Pub/Sub → Workers. AgentMesh не используем.**
-
-**Решение:** Pipeline как в основном whitepaper: Cloud Scheduler (каждые 6 ч) → Pub/Sub → Cloud Run workers. AgentMesh (внутренний multi-agent control plane ядра) не используем.
-
-**Почему так:**
-- AgentMesh ещё не протестирован в продакшене. Использовать непроверенный компонент в эксперименте — лишний риск.
-- AgentMesh — оркестрация агентов, подписанные карточки, approval workflow, Firestore leases. Для «раз в 6 часов запустить воркеры по источникам» это избыточно.
-- Простой пайплайн (Scheduler → Pub/Sub → Run) достаточен, проверен в других частях проекта, не требует изучения AgentMesh.
-- Меньше связанности: CriticalChain не зависит от внутренних контрактов mesh’а.
-
-
-7.3 API И РАЗВЁРТЫВАНИЕ
-
-**7.3.1 Deploy: тот же Cloud Run, отдельные routes**
-
-**Решение:** CriticalChain API — routes /api/v1/criticalchain/... на том же Cloud Run сервисе, что и Horizon. Не отдельный микросервис.
-
-**Почему так:**
-- Один сервис — один деплой, один Load Balancer, общие секреты и IAM. Меньше операционной нагрузки.
-- Для эксперимента отдельный сервис (ещё один Cloud Run, ещё один домен) — overkill.
-- Routes изолированы по пути; при необходимости можно вынести в отдельный сервис позже.
-
-
-**7.3.2 CI/CD: ключ --api-criticalchain**
-
-**Решение:** В скрипте деплоя — флаг --api-criticalchain. Позволяет деплоить только CriticalChain API (и его зависимости), не трогая остальное.
-
-**Почему так:**
-- Итерации по эксперименту не должны триггерить полный деплой Horizon.
-- Быстрее цикл разработки: изменил CriticalChain — задеплоил только его.
-- При слиянии с ядром флаг можно убрать или оставить как no-op.
-
-
-**7.3.3 Vertex AI: тот же проект, отдельный datastore**
-
-**Решение:** Vertex AI — в том же GCP проекте. Отдельный datastore для CriticalChain (facilities, materials, routes). Grounding для CriticalChain не пересекается с datastore Horizon.
-
-(Datastore — хранилище документов для Vertex AI Search Grounding: модель ищет по нему при ответах на вопросы.)
-
-**Почему так:**
-- Один проект — проще биллинг, квоты, IAM. Не создаём отдельный GCP проект для эксперимента.
-- Отдельный datastore: документы Horizon (фрагменты, линзы) и CriticalChain (объекты цепочек) — разные домены. Смешивание в одном datastore ухудшит релевантность grounding: запрос «риски литиевой цепочки в Чили» не должен тянуть фрагменты про Yemen supply chain.
-- При слиянии можно объединить datastores или оставить раздельными — зависит от итоговой модели данных.
-
-
-7.4 ФРОНТЕНД
-
-**Решение:** Роут /criticalchain в том же SPA (React/Vite). Отдельный раздел. Naming: criticalchain (lowercase).
-
-**Почему так:**
-- Один SPA — общий auth, общая навигация, общие компоненты (карта, граф). Пользователь может переключаться между Horizon и CriticalChain без повторного логина.
-- Отдельный роут — чёткая граница в коде (features/criticalchain/ или pages/criticalchain/). Не размазываем CriticalChain по экранам Horizon.
-- Lowercase — консистентность с URL-конвенциями, избегаем путаницы с CamelCase в путях.
-
-
-7.5 AUTH И MULTI-TENANCY
-
-**7.5.1 Auth: общий с Horizon**
-
-**Решение:** Firebase Auth / Identity Platform. Тот же провайдер, те же пользователи. CriticalChain не имеет собственной системы аутентификации.
-
-**Почему так:**
-- Один аккаунт на всю платформу. Пользователь не создаёт отдельный логин для CriticalChain.
-- Меньше кода: не дублируем логику логина, восстановления пароля, SSO.
-- Корпоративные клиенты ожидают единый вход (SSO). Раздельные auth для подсистемы усложняют onboarding.
-
-
-**7.5.2 Multi-tenancy: watches/алерты — tenant-scoped, цепочки — общие, риски — общедоступны**
-
-**Решение:**
-- Watches, алерты, кастомные аннотации — привязаны к tenant (организация/клиент в multi-tenant модели). Каждый клиент видит только свои.
-- Данные о цепочках (facilities, materials, routes) — общие. Это reference data, не персональная информация.
-- Информация о рисках — общедоступна по клику. Любой авторизованный пользователь видит все risk scores, без tenant-фильтра.
-
-**Почему так:**
-- Цепочки и риски — аналитический продукт. Ограничивать их по tenant («только мои риски») противоречит смыслу: аналитик должен видеть полную картину.
-- Watches и алерты — персональные настройки. Их изолируем по tenant.
-- «Общедоступны по клику» = после входа. Демо-режим (см. ниже) — без входа, read-only.
-
-
-7.6 ДЕМО
-
-**Решение:** Публичный read-only демо. Регистрация не требуется для просмотра. Регистрация будет добавлена позже — для watches, алертов и прочих действий. В демо пользователь только видит данные; ничего ручного делать нельзя кроме просмотра.
-
-**Почему так:**
-- Низкий порог входа: потенциальный клиент может оценить продукт без создания аккаунта. Важно для B2B sales.
-- Ограничение read-only защищает от вандализма и случайных изменений. Редактирование, сохранение watches, настройка алертов — требуют auth.
-- Регистрация «потом» — не противоречит auth. Сначала даём смотреть, затем — действовать. Это стандартный паттерн freemium/demo.
-
-
-7.7 КОНФИГ МАТЕРИАЛОВ
-
-**Решение:** YAML-конфиги в internal/criticalchain/config/materials/*.yaml. Загрузка при старте workers или ingest. Taxonomy (FacilityKind, FacilityRole, EntityPath, stage names) — из ядра. В YAML только material_id, display_name, category (маппинг на IndustryPath), production_stages (stage → string из taxonomy).
-
-**Почему так:**
-- Конфиг в репозитории — версионируется, ревьюируется, деплоится вместе с кодом. Не нужен отдельный сервис конфигов.
-- Taxonomy из ядра — единый источник правды. Не дублируем enum’ы (mine, refinery...) в YAML; ссылаемся на taxonomy package.
-- Добавление материала = новый YAML + данные, без изменения кода. Соответствует принципу «новый материал = только данные» из раздела 6.
-
-
-7.8 ГРАНИЦА С HORIZON
-
-**Решение:** Совместимость по canonical path, taxonomy, форматам. Без жёсткого слияния. HorizonFragment (модель фрагмента ядра) не используем напрямую — своя модель в CriticalChain. Связь по canonical path при необходимости. Источники и логику ядра используем, если оптимальны.
-
-**Почему так:**
-- HorizonFragment — тяжёлая модель (десятки полей, IndustryPaths, MarketSegments, SpherePaths...). CriticalChain нужны facility, material, route, risk. Подтягивать Fragment — overkill и лишние зависимости.
-- Своя модель — проще, под задачу. При слиянии можно маппить CriticalChain entity → HorizonFragment или наоборот.
-- Canonical path — общий язык. Если объект в Horizon уже есть (/fac/cl/sqm), CriticalChain может ссылаться на него по path, не дублируя данные. Решение о том, когда дублировать, а когда ссылаться — по мере накопления данных.
-- «Источники и логику — если оптимальны»: не изобретаем велосипед. Если в ядре есть адаптер под USGS или нормализация координат — переиспользуем. Но CriticalChain не обязан — может иметь свои адаптеры под свою модель.
-
-
-7.9 ВНЕ СКОУПА
-
-**Решение:** worldmonitor (проект в temp-repos/) не участвует в CriticalChain.
-
-**Почему так:** worldmonitor — отдельный эксперимент/продукт (другая тематика, другой стек). Связывать его с CriticalChain не планировалось. Упоминаем явно, чтобы ревьюер не искал интеграцию.
-
-
-═══════════════════════════════════════════════════════════════
-КОНЕЦ ДОПОЛНЕНИЯ v2.0
-═══════════════════════════════════════════════════════════════
-
+```
+Литиевый рудник в Чили:
+  /fac/cl/atacama/sociedad_quimica_y_minera
+  (material_id: lithium, stage: 0, facilityKind: mine)
+
+НПЗ в Казахстане (для нефти):
+  /fac/kz/atyrau/atyrau_refinery
+  (material_id: crude_oil, stage: 3, facilityKind: refinery)
+
+СПГ-терминал в Катаре (для газа):
+  /fac/qa/ras_laffan/qatargas_lng
+  (material_id: natural_gas, stage: 2, facilityKind: terminal)
+```
+
+### 8.4 Хранилище
+
+- **Firestore:** отдельные коллекции с префиксом `criticalchain_` (не смешивать с Horizon)
+- **Backend:** пакет `internal/criticalchain` (не размазываем по horizon, scout, taxonomy)
+- **Frontend:** роут `/criticalchain` в том же SPA
+- **Auth:** общий Firebase Auth, одни пользователи
+- **Vertex AI:** тот же проект, отдельный datastore для CriticalChain
+
+### 8.5 Multi-tenancy
+
+- Watches, алерты, аннотации — tenant-scoped
+- Данные цепочек — общие для всех авторизованных
+- Risk scores — общедоступны по клику (после авторизации)
+- Демо (без авторизации) — read-only, без watches и алертов
+
+### 8.6 Граница с Horizon
+
+- HorizonFragment не используем напрямую — своя модель в CriticalChain
+- Связь по canonical path при необходимости
+- Worldmonitor (temp-repos) не участвует в CriticalChain
+
+---
+
+## Приложение А: Источники данных
+
+### Источники MVP (6-часовой цикл)
+
+| # | Источник | Покрытие | Качество | Лицензия | Приоритет | Стоимость |
+|---|---|---|---|---|---|---|
+| 1 | USGS MRDS | Глоб. минералы | ★★★★★ | Public Domain | MVP | Бесплатно |
+| 2 | EIA API | США + международная нефть/газ | ★★★★★ | Public Domain | MVP | Бесплатно |
+| 3 | ENTSO-G API | Европейский газ | ★★★★☆ | Open | MVP | Бесплатно |
+| 4 | JODI Data | Нефть/газ ~100 стран | ★★★★☆ | CC BY-NC | MVP | Бесплатно |
+| 5 | UN Comtrade+ | Глоб. торговые потоки | ★★★★☆ | API платный | MVP | ~$5K/год |
+| 6 | OFAC SDN List | США санкции | ★★★★★ | Public Domain | MVP | Бесплатно |
+| 7 | EU Sanctions List | ЕС санкции | ★★★★★ | Open | MVP | Бесплатно |
+| 8 | GLEIF LEI | 2M+ юрлиц | ★★★★☆ | CC0 | MVP | Бесплатно |
+| 9 | GDELT (BigQuery) | Глоб. события | ★★★☆☆ | Public Domain | MVP | GCP costs |
+| 10 | OSM Overpass | Глоб. объекты | ★★★☆☆ | ODbL | MVP | Бесплатно |
+| 11 | Natural Earth | Маршруты, границы | ★★★★☆ | Public Domain | MVP | Бесплатно |
+| 12 | US State Dept RSS | Страновые риски | ★★★★☆ | Public Domain | MVP | Бесплатно |
+| 13 | FCDO GOV.UK API | Страновые риски | ★★★★☆ | OGL v3.0 | MVP | Бесплатно |
+| 14 | AU DFAT RSS | Страновые риски | ★★★★☆ | CC Attribution | MVP | Бесплатно |
+| 15 | NGA Maritime Safety | Морские предупреждения | ★★★★☆ | Public Domain | MVP | Бесплатно |
+| 16 | aisstream.io | AIS трафик реальное время | ★★★☆☆ | Free tier | MVP | Бесплатно |
+| 17 | FAA NOTAM API | Авиационные ограничения | ★★★★☆ | Public Domain | MVP | Бесплатно |
+| 18 | Gemini Search Grounding | Агрегатор новостей | ★★★★☆ | pay-per-token | MVP | Gemini API |
+
+### Источники Phase 2
+
+| # | Источник | Покрытие | Приоритет | Стоимость |
+|---|---|---|---|---|
+| 19 | IEA Data Explorer | Clean energy minerals | Phase 2 | Бесплатно |
+| 20 | BACI (CEPII) | Глоб. торговля, гармонизированная | Phase 2 | ~$3K/год |
+| 21 | OECD TiVA | Value added в цепочках | Phase 2 | Бесплатно |
+| 22 | Global Forest Watch | ESG overlay, горнодобыча | Phase 2 | Бесплатно |
+| 23 | HDX / OCHA | Гуманитарные кризисы | Phase 2 | Бесплатно |
+| 24 | FAO STAT | Агро-цепочки | Phase 2 | Бесплатно |
+| 25 | World Bank Open Data | Макро-контекст | Phase 2 | CC BY 4.0 |
+
+**Исключены по экономическим соображениям:**
+- **ACLED** (~$10K/год) — заменён многоуровневой системой косвенных сигналов (уровни 0–4: Gemini Grounding, travel advisories, AIS/NAVTEX, BDI, медиа)
+- **MarineTraffic** (коммерческая) — заменён aisstream.io (бесплатный) для AIS-сигналов
+
+---
+
+## Приложение Б: Технические зависимости
+
+### Backend (Go)
+
+```
+Go 1.22+
+Gin или Chi (HTTP router)
+cloud.google.com/go/firestore
+cloud.google.com/go/bigquery
+cloud.google.com/go/vertexai
+google.golang.org/protobuf
+```
+
+*Примечание: pgx v5 (PostgreSQL/PostGIS driver) — Phase 2. cloud.google.com/go/spanner (Spanner Graph) — Phase 2.*
+
+### Frontend
+
+```
+React 19+
+TypeScript 5.4+
+Vite 5+
+MapLibre GL JS 4+
+deck.gl 9+ (arc layers)
+Cytoscape.js (supply chain graph)
+TanStack Query v5 (data fetching)
+Zustand (state management)
+Recharts (time series)
+Tailwind CSS v4
+react-i18next (i18n, архитектурно готово)
+```
+
+### GCP Services
+
+**MVP:**
+```
+Cloud Run (API + Workers)
+Firestore (graph + geo storage)
+BigQuery (analytics + GDELT + trade flows)
+Pub/Sub (pipeline orchestration)
+Memorystore Redis (caching, TTL 6h)
+Cloud Scheduler (6-hour trigger)
+Vertex AI (Gemini Pro + Search Grounding)
+Firebase Authentication
+Cloud CDN (static assets)
+Cloud Load Balancing
+Secret Manager (API keys)
+Cloud Build (CI/CD)
+```
+
+**Phase 2 (добавляются):**
+```
+Cloud SQL (PostgreSQL 16 + PostGIS 3.4)
+Cloud Spanner (Graph — для graph traversals)
+```
+
+---
+
+*© 2026 CriticalChain. Whitepaper v3.0 — Canonical Document.*
+*Все противоречия между v1.0 и v2.0 разрешены. Решения заказчика внесены.*
+*Следующее обновление — по результатам MVP-пилота.*
