@@ -13,7 +13,7 @@ import { CriticalChainMap } from '../components/CriticalChainMap';
 import type { MapViewMode } from '../components/CriticalChainMap';
 import { CriticalChainGraph as CriticalChainGraphComponent } from '../components/CriticalChainGraph';
 import { SignalFusionPanel } from '../components/SignalFusionPanel';
-import { GlobalStatusBar } from '../components/GlobalStatusBar';
+import { MonitoringBoard } from '../components/MonitoringBoard';
 import { useAuth } from '../contexts/AuthContext';
 
 const RISK_COLORS: Record<number, string> = {
@@ -41,6 +41,41 @@ function RiskBadge({ score, size = 'sm', tooltip }: any) {
     </span>
   );
 }
+
+const MaterialGroup = ({ title, items, defaultOpen, selectedMaterial, onSelect }: any) => {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+
+  if (items.length === 0) return null;
+
+  return (
+    <div className="mb-2">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full flex items-center justify-between px-2 py-1 text-[11px] font-semibold text-[#8B949E] uppercase tracking-wider hover:text-[#E6EDF3] transition-colors"
+      >
+        <span>{title} ({items.length})</span>
+        <span>{isOpen ? '▼' : '▶'}</span>
+      </button>
+      {isOpen && (
+        <ul className="space-y-1 mt-1">
+          {items.map((m: any) => (
+            <li key={m.id}>
+              <button
+                onClick={() => onSelect(m.id)}
+                className={`w-full text-left px-3 py-1.5 rounded flex items-center justify-between text-[13px] transition-colors ${
+                  selectedMaterial === m.id ? 'bg-[#21262D] text-[#4FC3F7]' : 'hover:bg-[#21262D]/50 text-[#E6EDF3]'
+                }`}
+              >
+                <span className="truncate pr-2">{m.name}</span>
+                <RiskBadge score={m.riskScore} size="sm" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};
 
 const CriticalChainPage: React.FC = () => {
   const { user, signOut, signInWithGoogle } = useAuth();
@@ -102,9 +137,64 @@ const CriticalChainPage: React.FC = () => {
     );
   }, [materials, materialSearch]);
 
+  const groupedMaterials = useMemo(() => {
+    const groups: Record<string, typeof materials> = { critical: [], alert: [], watch: [], stable: [] };
+    filteredMaterials.forEach(m => {
+      if (m.riskScore >= 4) groups.critical.push(m);
+      else if (m.riskScore >= 3) groups.alert.push(m);
+      else if (m.riskScore >= 2) groups.watch.push(m);
+      else groups.stable.push(m);
+    });
+    // Sort descending by risk score
+    Object.values(groups).forEach(g => g.sort((a, b) => b.riskScore - a.riskScore));
+    return groups;
+  }, [filteredMaterials]);
+
+  const handleShare = () => {
+    const url = new URL(window.location.href);
+    if (selectedMaterial) url.searchParams.set('material', selectedMaterial);
+    // Dummy values based on instructions
+    url.searchParams.set('region', 'south-america');
+    url.searchParams.set('zoom', '4');
+    
+    navigator.clipboard.writeText(url.toString()).then(() => {
+      // Basic toast
+      const toast = document.createElement('div');
+      toast.className = 'fixed bottom-4 right-4 bg-green-500 text-white px-4 py-2 rounded shadow-lg z-50 text-sm font-medium';
+      toast.innerText = 'Link copied';
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 2500);
+    });
+  };
+
+  const handleExport = () => {
+    window.print();
+  };
+
   return (
-    <div className="flex flex-col h-full bg-[#0D1117] text-[#E6EDF3]">
-      <header className="flex items-center justify-between gap-4 px-4 py-3 border-b border-[#21262D]">
+    <div className="flex flex-col h-screen bg-[#0D1117] text-[#E6EDF3] print-container">
+      <style>
+        {`
+          @media print {
+            body { background: white !important; color: black !important; }
+            .print-container { height: auto !important; display: block !important; }
+            .no-print { display: none !important; }
+            .print-only { display: block !important; }
+            .print-board { overflow: visible !important; flex-wrap: wrap !important; border: none !important; }
+            * { text-shadow: none !important; box-shadow: none !important; }
+            .drill-down { border: 1px solid #ccc !important; padding: 15px !important; margin-top: 20px !important; width: 100% !important; page-break-inside: avoid; }
+            /* Hide scrolling parts */
+            .hide-scrollbar::-webkit-scrollbar { display: none; }
+          }
+          .print-only { display: none; }
+        `}
+      </style>
+
+      <div className="print-only text-xs text-gray-500 mb-4 pb-2 border-b">
+        Exported on {new Date().toLocaleString()}
+      </div>
+
+      <header className="flex items-center justify-between gap-4 px-4 py-3 border-b border-[#21262D] no-print">
         <div className="flex items-center gap-4 shrink-0">
           <h1 className="text-lg font-semibold">CriticalChain</h1>
           <div className="flex rounded overflow-hidden bg-[#21262D] p-1">
@@ -122,49 +212,54 @@ const CriticalChainPage: React.FC = () => {
             </button>
           </div>
         </div>
-        <input
-          type="search"
-          placeholder="Material Search"
-          value={materialSearch}
-          onChange={(e) => setMaterialSearch(e.target.value)}
-          className="flex-1 max-w-xs px-3 py-1.5 text-[13px] rounded bg-[#0D1117] border border-[#21262D] text-[#E6EDF3] placeholder-[#484F58] focus:outline-none focus:border-[#4FC3F7]"
-        />
+        <div className="flex-1 flex justify-center max-w-xs mx-auto">
+          <input
+            type="search"
+            placeholder="Material Search"
+            value={materialSearch}
+            onChange={(e) => setMaterialSearch(e.target.value)}
+            className="w-full px-3 py-1.5 text-[13px] rounded bg-[#0D1117] border border-[#21262D] text-[#E6EDF3] placeholder-[#484F58] focus:outline-none focus:border-[#4FC3F7]"
+          />
+        </div>
         <div className="flex items-center gap-2 shrink-0">
+          <button onClick={handleShare} className="px-3 py-1.5 text-[13px] rounded border border-[#30363D] text-[#E6EDF3] hover:bg-[#21262D]">
+            Share
+          </button>
+          <button onClick={handleExport} className="px-3 py-1.5 text-[13px] rounded border border-[#30363D] text-[#E6EDF3] hover:bg-[#21262D]">
+            Export
+          </button>
           {user ? (
-            <button onClick={() => signOut()} className="px-3 py-1.5 text-[13px] rounded bg-[#21262D] text-[#E6EDF3] hover:bg-[#21262D]/80">
+            <button onClick={() => signOut()} className="px-3 py-1.5 text-[13px] rounded bg-[#21262D] text-[#E6EDF3] hover:bg-[#21262D]/80 ml-2">
               {user.email?.split('@')[0] ?? 'Account'}
             </button>
           ) : (
-            <button onClick={() => signInWithGoogle()} className="px-3 py-1.5 text-[13px] rounded bg-[#4FC3F7] text-[#0D1117] hover:bg-[#4FC3F7]/90 font-medium">
+            <button onClick={() => signInWithGoogle()} className="px-3 py-1.5 text-[13px] rounded bg-[#4FC3F7] text-[#0D1117] hover:bg-[#4FC3F7]/90 font-medium ml-2">
               Login
             </button>
           )}
         </div>
       </header>
 
-      <GlobalStatusBar materials={materials} />
+      <div className="print-board">
+        <MonitoringBoard 
+          materials={materials} 
+          selectedMaterial={selectedMaterial} 
+          onSelect={setSelectedMaterial} 
+        />
+      </div>
 
-      <div className="flex flex-1 min-h-0">
+      <div className="flex flex-1 min-h-0 no-print">
         <aside className="w-56 border-r border-[#21262D] flex flex-col">
           <div className="flex-1 overflow-y-auto p-2">
             {materialsLoading ? (
               <div className="text-sm text-[#8B949E]">Loading...</div>
             ) : (
-              <ul className="space-y-1">
-                {filteredMaterials.map((m) => (
-                  <li key={m.id}>
-                    <button
-                      onClick={() => setSelectedMaterial(m.id)}
-                      className={`w-full text-left px-3 py-2 rounded flex items-center justify-between text-sm transition-colors ${
-                        selectedMaterial === m.id ? 'bg-[#21262D] text-[#4FC3F7]' : 'hover:bg-[#21262D]/50 text-[#E6EDF3]'
-                      }`}
-                    >
-                      <span>{m.name}</span>
-                      <RiskBadge score={m.riskScore} size="sm" />
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <div className="space-y-2">
+                <MaterialGroup title="Critical" items={groupedMaterials.critical} defaultOpen={true} selectedMaterial={selectedMaterial} onSelect={setSelectedMaterial} />
+                <MaterialGroup title="Alert" items={groupedMaterials.alert} defaultOpen={true} selectedMaterial={selectedMaterial} onSelect={setSelectedMaterial} />
+                <MaterialGroup title="Watch" items={groupedMaterials.watch} defaultOpen={false} selectedMaterial={selectedMaterial} onSelect={setSelectedMaterial} />
+                <MaterialGroup title="Stable" items={groupedMaterials.stable} defaultOpen={false} selectedMaterial={selectedMaterial} onSelect={setSelectedMaterial} />
+              </div>
             )}
           </div>
         </aside>
@@ -190,7 +285,7 @@ const CriticalChainPage: React.FC = () => {
                 />
               </div>
             </main>
-            <aside className="w-80 border-l border-[#21262D] flex flex-col">
+            <aside className="w-80 border-l border-[#21262D] flex flex-col drill-down">
               <div className="p-3 border-b border-[#21262D]">
                 <h2 className="text-sm font-medium text-[#8B949E]">Drill-down</h2>
               </div>
@@ -208,14 +303,18 @@ const CriticalChainPage: React.FC = () => {
                     ))}
                   </div>
                 ) : (
-                  <div>
+                  <div className="mb-6">
                     <h3 className="font-semibold text-[#4FC3F7] mb-2">{selectedFeature.name || 'Selected'}</h3>
                     <p className="text-[#8B949E] text-xs mb-4">Risk Level: <RiskBadge score={selectedFeature.riskScore || 0} /></p>
-                    <button className="w-full py-1.5 bg-[#21262D] hover:bg-[#30363D] rounded border border-[#30363D]">
+                    <button className="w-full py-1.5 bg-[#21262D] hover:bg-[#30363D] rounded border border-[#30363D] no-print">
                       Follow Incident
                     </button>
                   </div>
                 )}
+                
+                <div className="mt-6 pt-4 border-t border-[#21262D]">
+                  <SignalFusionPanel />
+                </div>
               </div>
             </aside>
           </>
