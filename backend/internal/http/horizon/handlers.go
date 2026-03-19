@@ -33,6 +33,7 @@ type HorizonHandlers struct {
 	mergeFragmentsRepo        *horizonrepo.FragmentsMergeRepository
 	materializedArtifactsRepo *horizonrepo.MaterializedArtifactsRepository
 	newsByFragmentsCanvas     *discovery.NewsByFragmentsCanvas
+	identifyStressesCanvas    *IdentifyStressesCanvas
 
 	// Lens Q&A (Analysis view)
 	qaEngine                *horizonqa.Engine
@@ -138,6 +139,12 @@ func (h *HorizonHandlers) WithMaterializedArtifactsRepo(r *horizonrepo.Materiali
 // WithNewsByFragmentsCanvas wires the news-by-fragments canvas (search → facts → 12-axis → propagation).
 func (h *HorizonHandlers) WithNewsByFragmentsCanvas(c *discovery.NewsByFragmentsCanvas) *HorizonHandlers {
 	h.newsByFragmentsCanvas = c
+	return h
+}
+
+// WithIdentifyStressesCanvas wires the manual identify-stresses lens canvas.
+func (h *HorizonHandlers) WithIdentifyStressesCanvas(c *IdentifyStressesCanvas) *HorizonHandlers {
+	h.identifyStressesCanvas = c
 	return h
 }
 
@@ -417,6 +424,9 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 			return
 		case "scope-scout-full":
 			h.ScopeScoutLensFull(w, r)
+			return
+		case "identify-stresses":
+			h.IdentifyStresses(w, r)
 			return
 		case "qa":
 			h.LensQA(w, r)

@@ -174,7 +174,26 @@ function meaningLabelOpacityExpression(dimmed = false): any {
       0,
       ['==', ['get', 'pathActive'], 1],
       0.9,
+      ['==', ['get', 'focusMode'], 1],
+      0.28,
       0.76,
+    ],
+    ['coalesce', ['get', 'visibilityWeight'], 1],
+  ];
+  return dimmed ? ['*', base, 0.22] : base;
+}
+
+function meaningChipOpacityExpression(dimmed = false): any {
+  const base = [
+    '*',
+    ['case',
+      ['!=', ['get', 'meaningVisible'], 1],
+      0,
+      ['==', ['get', 'pathActive'], 1],
+      0.84,
+      ['==', ['get', 'focusMode'], 1],
+      0.2,
+      0.68,
     ],
     ['coalesce', ['get', 'visibilityWeight'], 1],
   ];
@@ -972,6 +991,7 @@ export function usePathLegLayer(
               meaningText: meaningLabel,
               color: pathLegColor(stressScore, theme),
               pathActive: isNarrativeActive ? 1 : 0,
+              focusMode: hasActiveArtifacts ? 1 : 0,
               stressScore,
               visibilityWeight: localVisibilityWeight,
               artifactKey: artifactKeyForIds([artifactId]),
@@ -1487,12 +1507,7 @@ export function usePathLegLayer(
           'text-ignore-placement': true,
         },
         paint: {
-          'icon-opacity': [
-            'case',
-            ['==', ['get', 'pathActive'], 1],
-            0.84,
-            0.68,
-          ],
+          'icon-opacity': meaningChipOpacityExpression(),
           'text-color': [
             'case',
             ['==', ['get', 'pathActive'], 1],
@@ -1541,7 +1556,7 @@ export function usePathLegLayer(
           visibility: 'none',
         },
         paint: {
-          'icon-opacity': 0.9,
+          'icon-opacity': ['*', meaningChipOpacityExpression(), 1.1],
           'text-color': [
             'case',
             ['==', ['get', 'pathActive'], 1],
@@ -1587,7 +1602,10 @@ export function usePathLegLayer(
     if (map.getLayer(LEG_DIRECTION_LAYER)) map.setPaintProperty(LEG_DIRECTION_LAYER, 'text-opacity', directionOpacityExpression(lineOpacityMode));
     if (map.getLayer(LEG_OBJECT_LAYER)) map.setPaintProperty(LEG_OBJECT_LAYER, 'icon-opacity', objectIconOpacityExpression(lineOpacityMode));
     if (map.getLayer(LEG_OBJECT_LABEL_LAYER)) map.setPaintProperty(LEG_OBJECT_LABEL_LAYER, 'text-opacity', objectLabelOpacityExpression(lineOpacityMode));
-    if (map.getLayer(LEG_MEANING_LABEL_LAYER)) map.setPaintProperty(LEG_MEANING_LABEL_LAYER, 'text-opacity', meaningLabelOpacityExpression(lineOpacityMode));
+    if (map.getLayer(LEG_MEANING_LABEL_LAYER)) {
+      map.setPaintProperty(LEG_MEANING_LABEL_LAYER, 'icon-opacity', meaningChipOpacityExpression(lineOpacityMode));
+      map.setPaintProperty(LEG_MEANING_LABEL_LAYER, 'text-opacity', meaningLabelOpacityExpression(lineOpacityMode));
+    }
 
     const hoverLayers: Array<{ id: string; filter: any }> = [
       { id: HOVER_GLOW_LAYER, filter: hoverFilter(legFilter(), activeHoverId || null) },

@@ -161,13 +161,12 @@ export function useGeoObjects(
         const data = ev?.data || {};
         const canonicalPath = typeof data?.canonicalPath === 'string' ? data.canonicalPath.trim() : '';
         const rawType = typeof data?.type === 'string' ? data.type.trim().toUpperCase() : '';
-        const isAffectedZone = rawType === 'AFFECTED_ZONE' || canonicalPath.startsWith('/zone/');
-        if (!isAffectedZone) continue;
         const lat = Number(data?.coordinates?.lat);
         const lon = Number(data?.coordinates?.lon);
         if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
         const id = String(data?.fragmentId || canonicalPath || '').trim();
         if (!id || !canonicalPath) continue;
+        const isAffectedZone = rawType === 'AFFECTED_ZONE' || canonicalPath.startsWith('/zone/');
         const radiusKm = Number(data?.radiusKm);
         const activityStatusRaw = typeof data?.activityStatus === 'string' ? data.activityStatus.trim().toLowerCase() : '';
         const activityStatus =
@@ -181,8 +180,10 @@ export function useGeoObjects(
         const nextObj: GeoObject = {
           id,
           canonicalPath,
-          type: 'AFFECTED_ZONE',
+          type: isAffectedZone ? 'AFFECTED_ZONE' : (rawType || 'UNKNOWN'),
+          facilityKind: typeof data?.facilityKind === 'string' ? data.facilityKind.trim() : undefined,
           label: typeof data?.label === 'string' ? data.label.trim() : undefined,
+          description: typeof data?.description === 'string' ? data.description : undefined,
           status: typeof data?.status === 'string' ? data.status.trim() : undefined,
           coordinates: { lat, lon },
           radiusKm: Number.isFinite(radiusKm) ? radiusKm : undefined,
@@ -194,6 +195,8 @@ export function useGeoObjects(
           conflictLinked: Boolean(data?.conflictLinked),
           threatClass: typeof data?.threatClass === 'string' ? data.threatClass.trim() : undefined,
           lastMatchedAt: typeof data?.lastMatchedAt === 'string' ? data.lastMatchedAt : undefined,
+          inScope: typeof data?.inScope === 'boolean' ? data.inScope : undefined,
+          createdAt: typeof data?.createdAt === 'string' ? data.createdAt : undefined,
           updatedAt: typeof data?.updatedAt === 'string' ? data.updatedAt : new Date().toISOString(),
         };
         const idx = next.findIndex((obj) => obj.id === id || obj.canonicalPath === canonicalPath);

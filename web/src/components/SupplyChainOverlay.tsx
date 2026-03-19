@@ -76,6 +76,12 @@ export interface MaterializedArtifact {
   payload?: {
     v?: number;
     nodes?: Array<{ type: string; ref: string }>;
+    productNodes?: Array<{
+      type: string;
+      ref: string;
+      name?: string;
+      role?: string;
+    }>;
     legs?: Array<{
       index: number;
       supplierRef?: string;

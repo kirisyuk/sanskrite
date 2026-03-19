@@ -13,13 +13,15 @@ const nodesCollection = "criticalchain_nodes"
 
 // NodesRepository manages criticalchain_nodes (Material, Facility).
 type NodesRepository struct {
-	col *firestore.CollectionRef
+	client *firestore.Client
+	col    *firestore.CollectionRef
 }
 
 // NewNodesRepository creates a new NodesRepository.
 func NewNodesRepository(db *firestore.Client) *NodesRepository {
 	return &NodesRepository{
-		col: db.Collection(nodesCollection),
+		client: db,
+		col:    db.Collection(nodesCollection),
 	}
 }
 
@@ -151,7 +153,7 @@ func (r *NodesRepository) SetFacility(ctx context.Context, f *models.Facility) e
 
 // UpdateMaterialRisk updates a material's risk score and appends to risk history.
 func (r *NodesRepository) UpdateMaterialRisk(ctx context.Context, id string, score float64) error {
-	return r.col.Firestore.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+	return r.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
 		docRef := r.col.Doc(id)
 		doc, err := tx.Get(docRef)
 		if err != nil {

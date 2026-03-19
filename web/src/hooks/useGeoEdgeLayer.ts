@@ -4233,6 +4233,7 @@ export function useGeoEdgeLayer(
   const [hoveredNarrativeKey, setHoveredNarrativeKey] = useState<string | null>(null);
   const [featureNarrativeEpoch, setFeatureNarrativeEpoch] = useState(0);
   const mountedRef = useRef(true);
+  const objectsRef = useRef(objects);
   const featureIdsByNarrativeKeyRef = useRef<Map<string, Array<string | number>>>(new Map());
   const endpointMarkerIdsByNarrativeKeyRef = useRef<Map<string, Array<string | number>>>(new Map());
   const endpointRenderStateRef = useRef<EndpointRenderState | null>(null);
@@ -4244,6 +4245,10 @@ export function useGeoEdgeLayer(
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
   }, []);
+
+  useEffect(() => {
+    objectsRef.current = objects;
+  }, [objects]);
 
   useEffect(() => {
     if (!map || !selectedObject || !canAccessMapStyle(map) || !map.getSource(SRC)) return;
@@ -4391,10 +4396,11 @@ export function useGeoEdgeLayer(
       return;
     }
 
+    const currentObjects = objectsRef.current;
     const requestedHops = Math.min(MAX_HOPS, Math.max(1, hops));
     const idToCoords = new Map<string, { lon: number; lat: number }>();
     const coordsByPath = new Map<string, { lon: number; lat: number }>();
-    for (const obj of objects) {
+    for (const obj of currentObjects) {
       const lat = obj.coordinates?.lat;
       const lon = obj.coordinates?.lon;
       if (Number.isFinite(lat) && Number.isFinite(lon)) {
@@ -4442,10 +4448,10 @@ export function useGeoEdgeLayer(
         const serverCoords = res?.graph?.coordinates ?? {};
         const fragments = res?.graph?.fragments ?? [];
         const pathArtifacts = Array.isArray(res?.supplyChains?.chains) ? (res.supplyChains.chains as MaterializedArtifact[]) : [];
-        const objectIds = new Set(objects.map((obj) => obj.id));
-        const objectById = new Map<string, TraceObjectInfo>(objects.map((obj) => [obj.id, obj] as const));
+        const objectIds = new Set(currentObjects.map((obj) => obj.id));
+        const objectById = new Map<string, TraceObjectInfo>(currentObjects.map((obj) => [obj.id, obj] as const));
         const objectByPath = new Map<string, TraceObjectInfo>(
-          objects
+          currentObjects
             .filter((obj) => Boolean(obj.canonicalPath))
             .map((obj) => [obj.canonicalPath, obj] as const),
         );
@@ -4533,7 +4539,7 @@ export function useGeoEdgeLayer(
         removeLayers();
         setEdgesCount(directRelations.length + contextRelations.length);
         const visibleObjectById = new Map<string, GeoObject>();
-        for (const object of [...objects, ...newDiscovered]) {
+        for (const object of [...currentObjects, ...newDiscovered]) {
           if (!object?.id || visibleObjectById.has(object.id)) continue;
           visibleObjectById.set(object.id, object);
         }
@@ -4760,7 +4766,7 @@ export function useGeoEdgeLayer(
       } catch { /* handlers may not be attached */ }
       removeLayers();
     };
-  }, [selectedObject?.id, objects, hops, map, isReady, styleEpoch, theme, lensId]);
+  }, [selectedObject?.id, hops, map, isReady, styleEpoch, theme, lensId]);
 
   return {
     edgesLoading,

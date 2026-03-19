@@ -1,14 +1,12 @@
 /**
  * CriticalChain Map — whitepaper 4.4
  * Layers: Base (dark) | Choropleth | Chokepoints | Facilities | Routes | Conflict zones
- * deck.gl ArcLayer for animated flow arcs; supercluster for >500 facilities
+ * Routes as MapLibre lines; deck.gl ArcLayer disabled (caused jumping artifacts)
  */
 import React, { useRef, useEffect, useCallback, useMemo } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import * as topojson from 'topojson-client';
-import { MapboxOverlay } from '@deck.gl/mapbox';
-import { ArcLayer } from '@deck.gl/layers';
 import type {
   CriticalChainFacility,
   CriticalChainRoute,
@@ -77,10 +75,14 @@ function buildCountryRiskLookup(countryRisk: Record<string, number>): CountryRis
     if (!code) return;
     byIso[code] = score;
     if (code.length === 2 && countryDisplayNames) {
-      const name = countryDisplayNames.of(code);
-      if (name) {
-        const normalized = normalizeCountryName(name);
-        byName[normalized] = Math.max(byName[normalized] ?? 0, score);
+      try {
+        const name = countryDisplayNames.of(code);
+        if (name) {
+          const normalized = normalizeCountryName(name);
+          byName[normalized] = Math.max(byName[normalized] ?? 0, score);
+        }
+      } catch {
+        // Invalid region subtag (EU, XX, etc.) — skip DisplayNames lookup
       }
     }
   });
@@ -152,7 +154,6 @@ export function CriticalChainMap({
 }: CriticalChainMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const deckOverlayRef = useRef<MapboxOverlay | null>(null);
   const countriesGeoRef = useRef<GeoJSON.FeatureCollection | null>(null);
   const countryRiskLookup = useMemo(() => buildCountryRiskLookup(countryRisk), [countryRisk]);
   const refs = useRef({
@@ -169,26 +170,6 @@ export function CriticalChainMap({
     chokepoints,
     countryRiskLookup,
   };
-
-  // Arc data for deck.gl: source/target from route waypoints (first→last)
-  const arcData = useMemo(() => {
-    return routes
-      .filter((r) => r.waypoints && r.waypoints.length >= 2)
-      .map((r) => {
-        const pts = r.waypoints!;
-        const src = pts[0];
-        const tgt = pts[pts.length - 1];
-        const vol = r.typicalVolume ?? 1;
-        const width = Math.min(8, Math.max(1, Math.log2(vol + 1)));
-        return {
-          id: r.id,
-          sourcePosition: [src.longitude, src.latitude] as [number, number],
-          targetPosition: [tgt.longitude, tgt.latitude] as [number, number],
-          width,
-          riskScore: r.riskScore,
-        };
-      });
-  }, [routes]);
 
   useEffect(() => {
     const node = containerRef.current;
@@ -242,13 +223,8 @@ export function CriticalChainMap({
       addRoutesLayer(map);
       addConflictZonesLayer(map);
       addChokepointsLayer(map);
-      // deck.gl ArcLayer for flow arcs (whitepaper 4.4)
-      const deckOverlay = new MapboxOverlay({
-        interleaved: false,
-        layers: [],
-      });
-      map.addControl(deckOverlay);
-      deckOverlayRef.current = deckOverlay;
+      // deck.gl disabled — ArcLayer caused jumping triangles with zoom
+      // map.addControl(new MapboxOverlay({ layers: [] }));
       updateAllLayers(map, refs.current);
       // Choropleth: fetch TopoJSON, convert to GeoJSON, add risk
       fetch(COUNTRIES_TOPO)
@@ -256,6 +232,26 @@ export function CriticalChainMap({
       .then((world: { objects: { countries: unknown } }) => {
         const countries = world.objects.countries;
         const geojson = topojson.feature(world as object, countries as object) as GeoJSON.FeatureCollection;
+        const coords = (g: GeoJSON.Geometry): number[][] => {
+          if (g.type === 'Point') return [g.coordinates];
+          if (g.type === 'LineString') return g.coordinates;
+          if (g.type === 'Polygon') return g.coordinates.flat();
+          if (g.type === 'MultiPolygon') return g.coordinates.flat(2);
+          return [];
+        };
+        const bounds = (pts: number[][]) => {
+          if (pts.length === 0) return { height: 0, width: 0 };
+          const lons = pts.map((p) => p[0]);
+          const lats = pts.map((p) => p[1]);
+          return { height: Math.max(...lats) - Math.min(...lats), width: Math.max(...lons) - Math.min(...lons) };
+        };
+        geojson.features = geojson.features.filter((f) => {
+          const name = String((f.properties as Record<string, unknown>)?.name ?? '');
+          if (/antarctica/i.test(name)) return false;
+          const pts = coords(f.geometry);
+          const { height, width } = bounds(pts);
+          return height >= 0.5 && width >= 0.5; // skip degenerate
+        });
         countriesGeoRef.current = geojson;
         geojson.features = geojson.features.map((f) => {
           const props = (f.properties || {}) as Record<string, unknown>;
@@ -426,13 +422,20 @@ export function CriticalChainMap({
 
   const updateAllLayers = useCallback(
     (map: maplibregl.Map, data: typeof refs.current) => {
-      const { facilities: facs, routes: rts, conflictZones: zones, chokepoints: chokes } = data;
+      const facs = data.facilities ?? [];
+      const rts = data.routes ?? [];
+      const zones = data.conflictZones ?? [];
+      const chokes = data.chokepoints ?? [];
 
       const facSrc = map.getSource('facilities') as maplibregl.GeoJSONSource | undefined;
       if (facSrc) {
-        const withCoords = facs.filter(
-          (f) => f.coordinates?.latitude != null && f.coordinates?.longitude != null
-        );
+        const withCoords = facs.filter((f) => {
+          const lat = f.coordinates?.latitude;
+          const lon = f.coordinates?.longitude;
+          return typeof lat === 'number' && typeof lon === 'number' &&
+            !Number.isNaN(lat) && !Number.isNaN(lon) &&
+            lon >= -180 && lon <= 180 && lat >= -90 && lat <= 90;
+        });
         facSrc.setData({
           type: 'FeatureCollection',
           features: withCoords.map((f) => ({
@@ -448,25 +451,45 @@ export function CriticalChainMap({
 
       const routeSrc = map.getSource('routes') as maplibregl.GeoJSONSource | undefined;
       if (routeSrc) {
+        const isValidCoord = (lon: number, lat: number) =>
+          typeof lon === 'number' && typeof lat === 'number' &&
+          !Number.isNaN(lon) && !Number.isNaN(lat) &&
+          lon >= -180 && lon <= 180 && lat >= -90 && lat <= 90;
+
         const feats = rts
           .filter((r) => r.waypoints && r.waypoints.length >= 2)
-          .map((r) => ({
-            type: 'Feature' as const,
-            geometry: {
-              type: 'LineString' as const,
-              coordinates: r.waypoints!.map((w) => [w.longitude, w.latitude]),
-            },
-            properties: { id: r.id, riskScore: r.riskScore },
-          }));
+          .map((r) => {
+            const coords = r.waypoints!.map((w) => [w.longitude, w.latitude] as [number, number]);
+            const allValid = coords.every(([lon, lat]) => isValidCoord(lon, lat));
+            if (!allValid) return null;
+            return {
+              type: 'Feature' as const,
+              geometry: { type: 'LineString' as const, coordinates: coords },
+              properties: { id: r.id, riskScore: r.riskScore },
+            };
+          })
+          .filter((f): f is NonNullable<typeof f> => f != null);
         routeSrc.setData({ type: 'FeatureCollection' as const, features: feats });
       }
 
       const zoneSrc = map.getSource('conflict-zones') as maplibregl.GeoJSONSource | undefined;
       if (zoneSrc) {
+        const isValidCoord = (lon: number, lat: number) =>
+          typeof lon === 'number' && typeof lat === 'number' &&
+          !Number.isNaN(lon) && !Number.isNaN(lat) &&
+          lon >= -180 && lon <= 180 && lat >= -90 && lat <= 90;
+
         const feats = zones
           .filter((z) => z.boundingBox && z.boundingBox.length >= 3)
           .map((z) => {
-            const coords = z.boundingBox!.map((p) => [p.longitude, p.latitude]);
+            const coords = z.boundingBox!.map((p) => [p.longitude, p.latitude] as [number, number]);
+            const allValid = coords.every(([lon, lat]) => isValidCoord(lon, lat));
+            if (!allValid) return null;
+            const lons = coords.map(([lon]) => lon);
+            const lats = coords.map(([, lat]) => lat);
+            const height = Math.max(...lats) - Math.min(...lats);
+            const width = Math.max(...lons) - Math.min(...lons);
+            if (height < 0.5 || width < 0.5) return null; // degenerate → red lines
             if (coords.length >= 4 && (coords[0][0] !== coords[coords.length - 1][0] || coords[0][1] !== coords[coords.length - 1][1])) {
               coords.push(coords[0]);
             }
@@ -475,23 +498,29 @@ export function CriticalChainMap({
               geometry: { type: 'Polygon' as const, coordinates: [coords] },
               properties: { id: z.id, name: z.name, severity: z.severity },
             };
-          });
+          })
+          .filter((f): f is NonNullable<typeof f> => f != null);
         zoneSrc.setData({ type: 'FeatureCollection' as const, features: feats });
       }
 
       const chokeSrc = map.getSource('chokepoints') as maplibregl.GeoJSONSource | undefined;
       if (chokeSrc) {
-        chokeSrc.setData({
-          type: 'FeatureCollection',
-          features: chokes.map((c) => ({
-            type: 'Feature',
+        const isValidCoord = (lon: number, lat: number) =>
+          typeof lon === 'number' && typeof lat === 'number' &&
+          !Number.isNaN(lon) && !Number.isNaN(lat) &&
+          lon >= -180 && lon <= 180 && lat >= -90 && lat <= 90;
+
+        const features = chokes
+          .filter((c) => isValidCoord(c.longitude, c.latitude))
+          .map((c) => ({
+            type: 'Feature' as const,
             geometry: {
-              type: 'Point',
-              coordinates: [c.longitude, c.latitude],
+              type: 'Point' as const,
+              coordinates: [c.longitude, c.latitude] as [number, number],
             },
             properties: { id: c.id, name: c.name, riskMultiplier: c.riskMultiplier },
-          })),
-        });
+          }));
+        chokeSrc.setData({ type: 'FeatureCollection' as const, features });
       }
     },
     []
@@ -516,29 +545,6 @@ export function CriticalChainMap({
     updateAllLayers(map, refs.current);
   }, [facilities, routes, conflictZones, chokepoints, updateAllLayers]);
 
-  // deck.gl ArcLayer: update when routes or layer visibility changes
-  useEffect(() => {
-    const overlay = deckOverlayRef.current;
-    if (!overlay) return;
-    const showArcs = layerRoutes && viewMode !== 'node' && arcData.length > 0;
-    overlay.setProps({
-      layers: showArcs
-        ? [
-            new ArcLayer({
-              id: 'criticalchain-arcs',
-              data: arcData,
-              getSourcePosition: (d) => d.sourcePosition,
-              getTargetPosition: (d) => d.targetPosition,
-              getSourceColor: [79, 195, 247, 180],
-              getTargetColor: [255, 140, 0, 180],
-              getWidth: (d) => d.width,
-              greatCircle: true,
-              numSegments: 32,
-            }),
-          ]
-        : [],
-    });
-  }, [arcData, layerRoutes, viewMode]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -553,12 +559,11 @@ export function CriticalChainMap({
     setVisibility('facilities-circles', layerFacilities);
     setVisibility('facilities-clusters', layerFacilities);
     setVisibility('facilities-cluster-count', layerFacilities);
-    setVisibility('routes-line', false); // deck.gl arcs replace MapLibre routes
+    setVisibility('routes-line', layerRoutes && viewMode !== 'node');
     setVisibility('conflict-zones-fill', layerConflictZones);
   }, [viewMode, layerChoropleth, layerChokepoints, layerFacilities, layerRoutes, layerConflictZones]);
 
-  
-return (
+  return (
     <>
       <style>{`
         @keyframes pulse {
@@ -574,6 +579,7 @@ return (
           animation: pulse 1.5s infinite ease-out;
         }
       `}</style>
-      <div ref={containerRef} className="w-full h-full min-h-[400px]" /></>
-  );;
+      <div ref={containerRef} className="w-full h-full min-h-[400px]" />
+    </>
+  );
 }

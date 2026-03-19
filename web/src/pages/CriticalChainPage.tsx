@@ -267,13 +267,18 @@ const CriticalChainPage: React.FC = () => {
         {viewMode === 'map' ? (
           <>
             <main className="flex-1 min-w-0 flex flex-col">
+              {(facilities ?? []).length === 0 && (routes ?? []).length === 0 && (
+                <div className="shrink-0 px-4 py-2 bg-[#161B22] border-b border-[#21262D] text-[#8B949E] text-xs">
+                  No facilities or routes. Run the pipeline to load data from USGS, EIA, ENTSOG.
+                </div>
+              )}
               <div className="flex-1 min-h-0 relative">
                 <CriticalChainMap
-                  facilities={facilities}
-                  routes={routes}
-                  conflictZones={conflictZones}
-                  chokepoints={chokepoints}
-                  countryRisk={countryRisk}
+                  facilities={facilities ?? []}
+                  routes={routes ?? []}
+                  conflictZones={conflictZones ?? []}
+                  chokepoints={chokepoints ?? []}
+                  countryRisk={countryRisk ?? {}}
                   selectedMaterial={selectedMaterial}
                   viewMode={mapViewMode}
                   layerChoropleth

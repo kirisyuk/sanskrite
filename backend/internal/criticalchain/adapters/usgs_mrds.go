@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/criticalchain/datasource"
@@ -13,6 +14,26 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 	"google.golang.org/genproto/googleapis/type/latlng"
 )
+
+// MRDS commodity codes -> our material_id (https://mrdata.usgs.gov/mrds/commodity-codes.html)
+var mrdsCommodityToMaterial = map[string]string{
+	"CO":   "cobalt",
+	"LI":   "lithium",
+	"REE":  "ree",
+	"HE":   "helium",
+	"SIL":  "silicon",
+	"SIL_F": "silicon",
+	"GAS":  "natural_gas",
+	"OIL":  "crude_oil",
+	"OIL_G": "crude_oil",
+	"OIL_R": "crude_oil",
+	"OIL_SA": "crude_oil",
+	"OIL_SH": "crude_oil",
+	"NI":   "cobalt", // nickel-cobalt deposits
+	"NI_L": "cobalt",
+	"NI_R": "cobalt",
+	"NI_S": "cobalt",
+}
 
 const usgsMRDSBase = "https://mrdata.usgs.gov"
 
@@ -88,6 +109,10 @@ func (a *USGSMRDSAdapter) Normalize(raw datasource.RawRecord) (datasource.Canoni
 	if len(country) > 3 {
 		country = country[:3]
 	}
+	materialID := mrdsCommodityToMaterialID(m)
+	if materialID == "" {
+		materialID = "lithium" // fallback for unknown commodities
+	}
 	fac := &models.Facility{
 		ID:            id,
 		CanonicalPath: "/fac/" + country + "/" + slugify(name),
@@ -95,7 +120,7 @@ func (a *USGSMRDSAdapter) Normalize(raw datasource.RawRecord) (datasource.Canoni
 		FacilityKind:  taxonomy.FacilityKindMine,
 		FacilityRole:  taxonomy.FacilityRoleExtraction,
 		Country:       country,
-		MaterialID:    "lithium", // default; derive from commodity in full impl
+		MaterialID:    materialID,
 		Stage:         0,
 		RiskScore:     1.0,
 		UpdatedAt:     time.Now(),
@@ -122,6 +147,30 @@ func (a *USGSMRDSAdapter) Schema() datasource.SourceSchema {
 // RateLimit implements datasource.Adapter.
 func (a *USGSMRDSAdapter) RateLimit() datasource.RateLimitConfig {
 	return datasource.RateLimitConfig{RequestsPerMinute: 60, Burst: 10}
+}
+
+func mrdsCommodityToMaterialID(m map[string]interface{}) string {
+	try := func(keys ...string) string {
+		for _, k := range keys {
+			raw := stringPtr(m, k)
+			if raw == "" {
+				continue
+			}
+			// MRDS can return "CO", "CO, CU", "CO;CU" etc
+			parts := strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ';' || r == ' ' })
+			for _, p := range parts {
+				code := strings.TrimSpace(strings.ToUpper(p))
+				if code == "" {
+					continue
+				}
+				if mat, ok := mrdsCommodityToMaterial[code]; ok {
+					return mat
+				}
+			}
+		}
+		return ""
+	}
+	return try("commodity", "commod1", "commod", "commodity1")
 }
 
 func stringPtr(m map[string]interface{}, k string) string {

@@ -268,6 +268,55 @@ function narrativeBlockStyle(isDark: boolean, isActive: boolean, accent: string)
   };
 }
 
+function loadingPlaceholderStyle(isDark: boolean, width: string, height: number): React.CSSProperties {
+  return {
+    width,
+    height,
+    borderRadius: 999,
+    background: isDark ? 'rgba(148,163,184,0.16)' : 'rgba(15,23,42,0.08)',
+  };
+}
+
+const LoadingBusinessState: React.FC<{ isDark: boolean }> = ({ isDark }) => (
+  <div
+    style={sectionCardStyle(isDark)}
+    aria-live="polite"
+    aria-busy="true"
+  >
+    <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
+      Loading context
+    </div>
+    <div style={{ marginTop: 8, fontSize: 12, lineHeight: 1.5, color: 'var(--text-secondary-strong)' }}>
+      Fetching connected routes, nearby assets and business signals for this selection.
+    </div>
+
+    <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 9 }}>
+      <div style={loadingPlaceholderStyle(isDark, '72%', 10)} />
+      <div style={loadingPlaceholderStyle(isDark, '100%', 10)} />
+      <div style={loadingPlaceholderStyle(isDark, '86%', 10)} />
+    </div>
+
+    <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
+      {[0, 1, 2, 3].map((index) => (
+        <div
+          key={index}
+          style={{
+            padding: '10px 10px 9px',
+            borderRadius: 12,
+            background: isDark ? 'rgba(15,23,42,0.22)' : 'rgba(255,255,255,0.62)',
+            border: isDark ? '1px solid rgba(148,163,184,0.10)' : '1px solid rgba(15,23,42,0.05)',
+          }}
+        >
+          <div style={loadingPlaceholderStyle(isDark, '56%', 8)} />
+          <div style={{ marginTop: 9, ...loadingPlaceholderStyle(isDark, '68%', 14) }} />
+          <div style={{ marginTop: 8, ...loadingPlaceholderStyle(isDark, '92%', 8) }} />
+          <div style={{ marginTop: 5, ...loadingPlaceholderStyle(isDark, '74%', 8) }} />
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
 const AccordionSection: React.FC<{
   isDark: boolean;
   title: string;
@@ -404,6 +453,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
   const stressedCount = traceSummary?.stressedSupplyPathCount ?? 0;
   const relationCount = directCount + contextCount;
   const businessBrief = buildBusinessBrief(objectName, objectRiskOverlay, traceSummary);
+  const isDetailLoading = edgesLoading && !traceSummary;
   const whyItems = (traceSummary?.whyItMatters || [])
     .map((item) => ({
       title: normalizeBusinessCopy(item.title) || 'Why it matters',
@@ -416,13 +466,18 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
   const contextItems = [...(traceSummary?.directRelations || []), ...(traceSummary?.contextRelations || [])]
     .filter((relation) => relation.businessMeaning || relation.whyRelevant)
     .slice(0, 6);
-  const summaryStrip = [
-    humanizeToken(object.status || 'ACTIVE'),
-    `Business importance: ${importance.label.toLowerCase()}`,
-    routeCount > 0 ? `${pluralize(routeCount, 'route')}` : null,
-    stressedCount > 0 ? `${pluralize(stressedCount, 'route')} under strain` : null,
-    relationCount > 0 ? `${pluralize(relationCount, 'connected node')}` : null,
-  ].filter(Boolean);
+  const summaryStrip = isDetailLoading
+    ? [
+      humanizeToken(object.status || 'ACTIVE'),
+      'Loading route and business context',
+    ]
+    : [
+      humanizeToken(object.status || 'ACTIVE'),
+      `Business importance: ${importance.label.toLowerCase()}`,
+      routeCount > 0 ? `${pluralize(routeCount, 'route')}` : null,
+      stressedCount > 0 ? `${pluralize(stressedCount, 'route')} under strain` : null,
+      relationCount > 0 ? `${pluralize(relationCount, 'connected node')}` : null,
+    ].filter(Boolean);
 
   const impactCards = [
     {
@@ -584,13 +639,16 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
         </div>
 
         {isCollapsed ? null : (
+          isDetailLoading ? (
+            <LoadingBusinessState isDark={isDark} />
+          ) : (
           <>
             <div style={sectionCardStyle(isDark)}>
               <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: accent }}>
                 Business snapshot
               </div>
               <div style={{ marginTop: 7, fontSize: 13, lineHeight: 1.55, fontWeight: 650 }}>
-                {edgesLoading ? 'Building the business brief from routes, connected nodes and current network pressure…' : businessBrief}
+                {businessBrief}
               </div>
               {whyItems.length > 0 && (
                 <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -927,6 +985,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
               </AccordionSection>
             ) : null}
           </>
+          )
         )}
       </div>
     </div>

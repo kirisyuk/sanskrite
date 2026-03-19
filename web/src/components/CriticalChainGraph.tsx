@@ -9,6 +9,7 @@ import ReactFlow, {
   Edge,
   Controls,
   MiniMap,
+  Handle,
   useNodesState,
   useEdgesState,
   Position,
@@ -52,8 +53,10 @@ function MaterialNode({ data, selected }: NodeProps) {
       }}
       title={`${data?.label ?? ''} — Risk: ${score.toFixed(1)}/5`}
     >
-      <span className="text-[10px] font-medium truncate max-w-[44px] px-1" style={{ fontFamily: 'JetBrains Mono, monospace' }}>
-        {String(data?.label ?? '').slice(0, 6)}
+      <Handle type="target" position={Position.Left} id="target" />
+      <Handle type="source" position={Position.Right} id="source" />
+      <span className="text-[10px] font-medium truncate max-w-[48px] px-1" style={{ fontFamily: 'JetBrains Mono, monospace' }}>
+        {String(data?.label ?? '').slice(0, 10)}
       </span>
     </div>
   );
@@ -77,6 +80,8 @@ function FacilityNode({ data, selected }: NodeProps) {
       }}
       title={`${data?.label ?? ''} — Risk: ${score.toFixed(1)}/5`}
     >
+      <Handle type="target" position={Position.Left} id="target" />
+      <Handle type="source" position={Position.Right} id="source" />
       <span className="text-[10px] font-medium truncate" style={{ fontFamily: 'JetBrains Mono, monospace' }}>
         {String(data?.label ?? '').slice(0, 14)}
       </span>
@@ -155,11 +160,14 @@ function graphToFlowData(graph: GraphData): { nodes: Node[]; edges: Edge[] } {
   materialNodes.sort((a, b) => getGraphStage(a.id) - getGraphStage(b.id));
 
   materialNodes.forEach((material, index) => {
+    const label = material.id.includes(':stage:')
+      ? (material.name.split(' / ').pop() ?? material.name)
+      : material.name;
     nodes.push({
       id: material.id,
       type: 'material',
       data: {
-        label: material.name,
+        label,
         riskScore: material.riskScore,
       },
       position: { x: index * 190, y: 32 },
@@ -171,7 +179,7 @@ function graphToFlowData(graph: GraphData): { nodes: Node[]; edges: Edge[] } {
 
   const stageCounts = new Map<number, number>();
 
-  graph.facilities.forEach((f) => {
+  (graph.facilities ?? []).forEach((f) => {
     if (!seen.has(f.id)) {
       const offset = stageCounts.get(f.stage) ?? 0;
       stageCounts.set(f.stage, offset + 1);
@@ -193,7 +201,7 @@ function graphToFlowData(graph: GraphData): { nodes: Node[]; edges: Edge[] } {
     }
   });
 
-  graph.processingSteps.forEach((step) => {
+  (graph.processingSteps ?? []).forEach((step) => {
     const key = `${step.from}-${step.to}`;
     if (seen.has(step.from) && seen.has(step.to) && !edgeKeys.has(key)) {
       edgeKeys.add(key);
@@ -202,6 +210,8 @@ function graphToFlowData(graph: GraphData): { nodes: Node[]; edges: Edge[] } {
         id: key,
         source: step.from,
         target: step.to,
+        sourceHandle: 'source',
+        targetHandle: 'target',
         type: 'labeled',
         data: { label: step.type, weight },
         markerEnd: { type: MarkerType.ArrowClosed },
@@ -246,8 +256,16 @@ export const CriticalChainGraph: React.FC<{ graph: GraphData | null }> = ({
     );
   }
 
+  const hasFacilities = (graph.facilities ?? []).length > 0;
+
   return (
-    <div className="w-full h-full min-h-[200px]">
+    <div className="w-full h-full min-h-[200px] flex flex-col">
+      {!hasFacilities && (
+        <div className="shrink-0 px-4 py-2 bg-[#161B22] border-b border-[#21262D] text-[#8B949E] text-xs">
+          No facilities loaded. Run the pipeline to fetch real data (mines, refineries) from USGS, EIA, ENTSOG.
+        </div>
+      )}
+      <div className="flex-1 min-h-0">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -265,6 +283,7 @@ export const CriticalChainGraph: React.FC<{ graph: GraphData | null }> = ({
           nodeColor={(n) => getRiskColor((n.data?.riskScore as number) ?? 1)}
         />
       </ReactFlow>
+      </div>
     </div>
   );
 };

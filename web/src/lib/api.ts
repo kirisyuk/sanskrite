@@ -2864,6 +2864,47 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     return response.data;
   }
 
+  async identifyStressesForLens(
+    lensId: string,
+    params: {
+      scopeMode?: 'visible_set';
+      selectedCanonicalPath?: string;
+      visibleNodeRefs?: string[];
+      visibleArtifactKeys?: string[];
+      visibleSupplyLinkRefs?: string[];
+      clientViewId?: string;
+      maxNodes?: number;
+      maxArtifacts?: number;
+      maxFindings?: number;
+    },
+  ): Promise<{
+    jobId: string;
+    acceptedScope: {
+      scopeMode: string;
+      selectedCanonicalPath?: string;
+      visibleNodes: number;
+      acceptedNodes: number;
+      visibleArtifacts: number;
+      acceptedArtifacts: number;
+      acceptedSupplyLinks: number;
+    };
+    startedAt: string;
+    streamChannel: 'realtime';
+  }> {
+    const response = await this.client.post(`/api/horizon/lenses/${lensId}/identify-stresses`, {
+      scopeMode: params.scopeMode ?? 'visible_set',
+      selectedCanonicalPath: params.selectedCanonicalPath,
+      visibleNodeRefs: params.visibleNodeRefs ?? [],
+      visibleArtifactKeys: params.visibleArtifactKeys ?? [],
+      visibleSupplyLinkRefs: params.visibleSupplyLinkRefs ?? [],
+      clientViewId: params.clientViewId,
+      maxNodes: params.maxNodes,
+      maxArtifacts: params.maxArtifacts,
+      maxFindings: params.maxFindings,
+    });
+    return response.data;
+  }
+
   // --- Horizon Edges ---
   async getHorizonEdge(edgeId: string): Promise<any> {
     try {

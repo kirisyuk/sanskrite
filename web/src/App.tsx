@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import './i18n';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter as Router, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { ThemeProvider } from './components/ThemeProvider';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -140,20 +141,24 @@ function AppContent() {
   );
 }
 
+const queryClient = new QueryClient();
+
 export default function App() {
   const firebaseError = getFirebaseInitError();
   
   return (
-    <ThemeProvider>
-      {firebaseError ? (
-        <StartupError error={firebaseError} />
-      ) : (
-        <Router>
-          <AuthProvider>
-            <AppContent />
-          </AuthProvider>
-        </Router>
-      )}
-    </ThemeProvider>
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider>
+        {firebaseError ? (
+          <StartupError error={firebaseError} />
+        ) : (
+          <Router>
+            <AuthProvider>
+              <AppContent />
+            </AuthProvider>
+          </Router>
+        )}
+      </ThemeProvider>
+    </QueryClientProvider>
   );
 }

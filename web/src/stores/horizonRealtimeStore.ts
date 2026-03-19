@@ -66,11 +66,45 @@ export interface HorizonEdgeState {
 
 export interface HorizonArtifactState {
   id: string;
+  lensId?: string;
   canonicalKey?: string;
   displayName?: string;
   anchorSupplier?: string;
   anchorCustomer?: string;
+  productAxis?: string;
+  nodeRefs?: string[];
+  flowRefs?: string[];
+  zoneRefs?: string[];
+  affectedZoneRefs?: string[];
+  legCount?: number;
+  bindingScore?: number;
+  pathStressScore?: number;
+  riskOverlay?: any;
   payload?: any;
+  updatedAt?: number;
+}
+
+export interface HorizonIdentifyStressJobState {
+  jobId: string;
+  lensId?: string;
+  projectId?: string;
+  state?: 'started' | 'running' | 'propagating' | 'completed' | 'partial_success' | 'failed' | string;
+  findingsApplied?: number;
+  eventsPersisted?: number;
+  affectedZonesCreated?: number;
+  artifactsUpdated?: number;
+  supplyLinksUpdated?: number;
+  propagationErrors?: number;
+  acceptedNodes?: number;
+  acceptedArtifacts?: number;
+  acceptedSupplyLinks?: number;
+  touchedArtifactKeys?: string[];
+  touchedNodeRefs?: string[];
+  touchedSupplyLinks?: string[];
+  selectedCanonicalPath?: string;
+  requiresRefetch?: boolean;
+  error?: string;
+  errors?: string[];
   updatedAt?: number;
 }
 
@@ -101,6 +135,7 @@ export interface HorizonRealtimeEvent {
 interface HorizonRealtimeStore {
   assembly: HorizonAssemblyState;
   jobs: Record<string, HorizonScoutJobState>;
+  identifyJobs: Record<string, HorizonIdentifyStressJobState>;
   nodes: Record<string, HorizonNodeState>; // key: fragmentId || canonicalPath
   edges: Record<string, HorizonEdgeState>; // key: edgeId
   artifacts: Record<string, HorizonArtifactState>; // key: artifact id || canonicalKey
@@ -144,12 +179,13 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
   (set, get) => ({
     assembly: {},
     jobs: {},
+    identifyJobs: {},
     nodes: {},
     edges: {},
     artifacts: {},
     events: [],
 
-    reset: () => set({ assembly: {}, jobs: {}, nodes: {}, edges: {}, artifacts: {} }),
+    reset: () => set({ assembly: {}, jobs: {}, identifyJobs: {}, nodes: {}, edges: {}, artifacts: {} }),
     resetEvents: () => set({ events: [] }),
 
     handleWsEvent: (type, dataIn) => {
@@ -1030,6 +1066,98 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
             title: 'News & ontology facts',
             description: `Created ${eventsCreated} event${eventsCreated !== 1 ? 's' : ''}, processed ${signalsProcessed} signal${signalsProcessed !== 1 ? 's' : ''} for ${pathCount} entit${pathCount !== 1 ? 'ies' : 'y'}.`,
           };
+        } else if (type.startsWith('horizon.identify_stresses.')) {
+          const jobId = typeof data?.jobId === 'string' ? data.jobId : '';
+          const findingsApplied =
+            typeof data?.findingsApplied === 'number' ? data.findingsApplied : 0;
+          const touchedArtifacts =
+            typeof data?.touchedArtifactCount === 'number'
+              ? data.touchedArtifactCount
+              : Array.isArray(data?.touchedArtifactKeys)
+                ? data.touchedArtifactKeys.length
+                : 0;
+          const affectedZones =
+            typeof data?.affectedZonesCreated === 'number' ? data.affectedZonesCreated : 0;
+          if (type.endsWith('.started')) {
+            icon = 'info';
+            text = 'Identify stresses started';
+            humanReadable = {
+              title: 'Identify Stresses',
+              description: jobId ? `Job ${jobId.slice(0, 8)} started` : 'Started',
+            };
+          } else if (type.endsWith('.scope_resolved')) {
+            icon = 'info';
+            const nodeCount = Array.isArray(data?.acceptedNodeRefs) ? data.acceptedNodeRefs.length : 0;
+            const artifactCount = Array.isArray(data?.acceptedArtifactKeys) ? data.acceptedArtifactKeys.length : 0;
+            text = `Stress scope resolved: ${nodeCount} nodes • ${artifactCount} routes`;
+            humanReadable = {
+              title: 'Stress Scope Resolved',
+              description: `${nodeCount} nodes • ${artifactCount} routes`,
+            };
+          } else if (type.endsWith('.finding_applied')) {
+            icon = 'success';
+            text = `Applied ${findingsApplied} stress findings`;
+            humanReadable = {
+              title: 'Stress Findings Applied',
+              description: `${findingsApplied} findings • ${touchedArtifacts} routes • ${affectedZones} zones`,
+            };
+          } else if (type.endsWith('.events_persisted')) {
+            icon = 'success';
+            const persisted =
+              typeof data?.eventsPersisted === 'number' ? data.eventsPersisted : 0;
+            text = `Stress events persisted: ${persisted}`;
+            humanReadable = {
+              title: 'Stress Events Persisted',
+              description: `${persisted} ontology events`,
+            };
+          } else if (type.endsWith('.propagation_started')) {
+            icon = 'propagation';
+            const eventsInBatch =
+              typeof data?.eventsInBatch === 'number' ? data.eventsInBatch : 0;
+            text = `Stress propagation started`;
+            humanReadable = {
+              title: 'Stress Propagation',
+              description: `${eventsInBatch} events in this batch`,
+            };
+          } else if (type.endsWith('.completed')) {
+            const status = typeof data?.status === 'string' ? data.status.trim() : 'completed';
+            const propagationErrors =
+              typeof data?.propagationErrors === 'number' ? data.propagationErrors : 0;
+            icon = status === 'partial_success' ? 'info' : 'success';
+            text = status === 'partial_success' ? 'Identify stresses partially completed' : 'Identify stresses completed';
+            humanReadable = {
+              title: status === 'partial_success' ? 'Identify Stresses Partial Success' : 'Identify Stresses Completed',
+              description: `${findingsApplied} findings • ${touchedArtifacts} routes • ${affectedZones} zones${propagationErrors > 0 ? ` • ${propagationErrors} propagation errors` : ''}`,
+            };
+          } else if (type.endsWith('.failed')) {
+            icon = 'error';
+            const errorText = typeof data?.error === 'string' ? data.error : 'Unknown error';
+            text = `Identify stresses failed`;
+            humanReadable = {
+              title: 'Identify Stresses Failed',
+              description: short(errorText),
+            };
+          } else if (type.endsWith('.artifact_upserted')) {
+            icon = 'info';
+            const displayName =
+              typeof data?.displayName === 'string' && data.displayName.trim()
+                ? data.displayName.trim()
+                : typeof data?.canonicalKey === 'string'
+                  ? humanizeCanonicalPath(data.canonicalKey)
+                  : 'Supply route';
+            text = `Route stress updated: ${displayName}`;
+            humanReadable = {
+              title: 'Route Stress Updated',
+              description: displayName,
+            };
+          } else if (type.endsWith('.overlay_updated')) {
+            icon = 'info';
+            text = `Stress overlay updated`;
+            humanReadable = {
+              title: 'Stress Overlay Updated',
+              description: `${touchedArtifacts} routes touched`,
+            };
+          }
         } else if (type.startsWith('horizon.propagation.')) {
           icon = 'propagation';
           const nodesUpdated =
@@ -1162,6 +1290,187 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
 
           return { jobs: { ...s.jobs, [jobId]: next } };
         });
+        return;
+      }
+
+      if (type.startsWith('horizon.identify_stresses.')) {
+        const lensId =
+          typeof data?.lensId === 'string' && data.lensId.trim()
+            ? data.lensId.trim()
+            : undefined;
+        const projectId =
+          typeof data?.projectId === 'string' && data.projectId.trim()
+            ? data.projectId.trim()
+            : undefined;
+        const jobId =
+          typeof data?.jobId === 'string' && data.jobId.trim()
+            ? data.jobId.trim()
+            : '';
+        const touchedArtifactKeys = Array.isArray(data?.touchedArtifactKeys)
+          ? data.touchedArtifactKeys
+              .map((value: any) => String(value || '').trim())
+              .filter(Boolean)
+          : [];
+        const touchedNodeRefs = Array.isArray(data?.touchedNodes)
+          ? data.touchedNodes
+              .map((value: any) => String(value || '').trim())
+              .filter(Boolean)
+          : [];
+        const touchedSupplyLinks = Array.isArray(data?.touchedSupplyLinks)
+          ? data.touchedSupplyLinks
+              .map((value: any) => String(value || '').trim())
+              .filter(Boolean)
+          : [];
+        const upsertJob = (
+          prev: HorizonIdentifyStressJobState | undefined,
+        ): HorizonIdentifyStressJobState => ({
+          jobId: jobId || prev?.jobId || '',
+          lensId: lensId ?? prev?.lensId,
+          projectId: projectId ?? prev?.projectId,
+          state: prev?.state,
+          findingsApplied:
+            typeof data?.findingsApplied === 'number'
+              ? data.findingsApplied
+              : prev?.findingsApplied,
+          eventsPersisted:
+            typeof data?.eventsPersisted === 'number'
+              ? data.eventsPersisted
+              : prev?.eventsPersisted,
+          affectedZonesCreated:
+            typeof data?.affectedZonesCreated === 'number'
+              ? data.affectedZonesCreated
+              : prev?.affectedZonesCreated,
+          artifactsUpdated:
+            typeof data?.artifactsUpdated === 'number'
+              ? data.artifactsUpdated
+              : prev?.artifactsUpdated,
+          supplyLinksUpdated:
+            typeof data?.supplyLinksUpdated === 'number'
+              ? data.supplyLinksUpdated
+              : prev?.supplyLinksUpdated,
+          propagationErrors:
+            typeof data?.propagationErrors === 'number'
+              ? data.propagationErrors
+              : prev?.propagationErrors,
+          acceptedNodes:
+            Array.isArray(data?.acceptedNodeRefs)
+              ? data.acceptedNodeRefs.length
+              : prev?.acceptedNodes,
+          acceptedArtifacts:
+            Array.isArray(data?.acceptedArtifactKeys)
+              ? data.acceptedArtifactKeys.length
+              : prev?.acceptedArtifacts,
+          acceptedSupplyLinks:
+            Array.isArray(data?.acceptedSupplyLinks)
+              ? data.acceptedSupplyLinks.length
+              : prev?.acceptedSupplyLinks,
+          touchedArtifactKeys:
+            touchedArtifactKeys.length > 0
+              ? touchedArtifactKeys
+              : prev?.touchedArtifactKeys,
+          touchedNodeRefs:
+            touchedNodeRefs.length > 0 ? touchedNodeRefs : prev?.touchedNodeRefs,
+          touchedSupplyLinks:
+            touchedSupplyLinks.length > 0
+              ? touchedSupplyLinks
+              : prev?.touchedSupplyLinks,
+          selectedCanonicalPath:
+            typeof data?.selectedCanonicalPath === 'string'
+              ? data.selectedCanonicalPath
+              : prev?.selectedCanonicalPath,
+          requiresRefetch:
+            typeof data?.requiresRefetch === 'boolean'
+              ? data.requiresRefetch
+              : prev?.requiresRefetch,
+          error:
+            typeof data?.error === 'string' && data.error.trim()
+              ? data.error.trim()
+              : prev?.error,
+          errors:
+            Array.isArray(data?.errors)
+              ? data.errors.map((value: any) => String(value || '').trim()).filter(Boolean)
+              : prev?.errors,
+          updatedAt: now,
+        });
+
+        set((s) => {
+          const nextJobs = { ...s.identifyJobs };
+          const keys = jobId
+            ? [jobId]
+            : Object.keys(nextJobs).filter((key) => {
+                const candidate = nextJobs[key];
+                return candidate?.lensId && lensId && candidate.lensId === lensId;
+              });
+          if (keys.length === 0 && jobId) keys.push(jobId);
+          if (keys.length === 0) {
+            return s;
+          }
+          for (const key of keys) {
+            const prev = nextJobs[key];
+            const next = upsertJob(prev);
+            if (type.endsWith('.started')) next.state = 'started';
+            else if (type.endsWith('.scope_resolved')) next.state = 'running';
+            else if (type.endsWith('.finding_applied')) next.state = 'running';
+            else if (type.endsWith('.events_persisted')) next.state = 'running';
+            else if (type.endsWith('.propagation_started')) next.state = 'propagating';
+            else if (type.endsWith('.completed')) {
+              next.state =
+                typeof data?.status === 'string' && data.status.trim()
+                  ? data.status.trim()
+                  : 'completed';
+            }
+            else if (type.endsWith('.failed')) next.state = 'failed';
+            nextJobs[key] = next;
+          }
+          return { identifyJobs: nextJobs };
+        });
+
+        if (type.endsWith('.artifact_upserted')) {
+          const artifactId =
+            typeof data?.id === 'string' && data.id.trim()
+              ? data.id.trim()
+              : typeof data?.canonicalKey === 'string'
+                ? data.canonicalKey.trim()
+                : '';
+          if (artifactId) {
+            set((s) => ({
+              artifacts: {
+                ...s.artifacts,
+                [artifactId]: {
+                  ...(s.artifacts[artifactId] || { id: artifactId }),
+                  id: artifactId,
+                  lensId: data?.lensId ?? s.artifacts[artifactId]?.lensId,
+                  canonicalKey: data?.canonicalKey ?? s.artifacts[artifactId]?.canonicalKey,
+                  displayName: data?.displayName ?? s.artifacts[artifactId]?.displayName,
+                  anchorSupplier: data?.anchorSupplier ?? s.artifacts[artifactId]?.anchorSupplier,
+                  anchorCustomer: data?.anchorCustomer ?? s.artifacts[artifactId]?.anchorCustomer,
+                  productAxis: data?.productAxis ?? s.artifacts[artifactId]?.productAxis,
+                  nodeRefs: data?.nodeRefs ?? s.artifacts[artifactId]?.nodeRefs,
+                  flowRefs: data?.flowRefs ?? s.artifacts[artifactId]?.flowRefs,
+                  zoneRefs: data?.zoneRefs ?? s.artifacts[artifactId]?.zoneRefs,
+                  affectedZoneRefs: data?.affectedZoneRefs ?? s.artifacts[artifactId]?.affectedZoneRefs,
+                  legCount:
+                    typeof data?.legCount === 'number'
+                      ? data.legCount
+                      : s.artifacts[artifactId]?.legCount,
+                  bindingScore:
+                    typeof data?.bindingScore === 'number'
+                      ? data.bindingScore
+                      : s.artifacts[artifactId]?.bindingScore,
+                  pathStressScore:
+                    typeof data?.pathStressScore === 'number'
+                      ? data.pathStressScore
+                      : s.artifacts[artifactId]?.pathStressScore,
+                  riskOverlay: data?.riskOverlay ?? s.artifacts[artifactId]?.riskOverlay,
+                  payload: data?.payload ?? s.artifacts[artifactId]?.payload,
+                  updatedAt: now,
+                },
+              },
+            }));
+          }
+          return;
+        }
+
         return;
       }
 
@@ -1308,10 +1617,29 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
             nextArtifacts[artifactId] = {
               ...(nextArtifacts[artifactId] || { id: artifactId }),
               id: artifactId,
+              lensId: raw?.lensId ?? nextArtifacts[artifactId]?.lensId,
               canonicalKey: raw?.canonicalKey ?? nextArtifacts[artifactId]?.canonicalKey,
               displayName: raw?.displayName ?? nextArtifacts[artifactId]?.displayName,
               anchorSupplier: raw?.anchorSupplier ?? nextArtifacts[artifactId]?.anchorSupplier,
               anchorCustomer: raw?.anchorCustomer ?? nextArtifacts[artifactId]?.anchorCustomer,
+              productAxis: raw?.productAxis ?? nextArtifacts[artifactId]?.productAxis,
+              nodeRefs: raw?.nodeRefs ?? nextArtifacts[artifactId]?.nodeRefs,
+              flowRefs: raw?.flowRefs ?? nextArtifacts[artifactId]?.flowRefs,
+              zoneRefs: raw?.zoneRefs ?? nextArtifacts[artifactId]?.zoneRefs,
+              affectedZoneRefs: raw?.affectedZoneRefs ?? nextArtifacts[artifactId]?.affectedZoneRefs,
+              legCount:
+                typeof raw?.legCount === 'number'
+                  ? raw.legCount
+                  : nextArtifacts[artifactId]?.legCount,
+              bindingScore:
+                typeof raw?.bindingScore === 'number'
+                  ? raw.bindingScore
+                  : nextArtifacts[artifactId]?.bindingScore,
+              pathStressScore:
+                typeof raw?.pathStressScore === 'number'
+                  ? raw.pathStressScore
+                  : nextArtifacts[artifactId]?.pathStressScore,
+              riskOverlay: raw?.riskOverlay ?? nextArtifacts[artifactId]?.riskOverlay,
               payload: raw?.payload ?? nextArtifacts[artifactId]?.payload,
               updatedAt: now,
             };

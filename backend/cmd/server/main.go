@@ -2901,6 +2901,28 @@ func main() {
 					})
 					horizonHandlers = horizonHandlers.WithNewsByFragmentsCanvas(newsByFragmentsCanvas)
 					logger.Printf("News-by-fragments canvas initialized (Gemini search grounding)")
+
+					identifyStressesCanvas := horizonhttp.NewIdentifyStressesCanvas(horizonhttp.IdentifyStressesCanvasConfig{
+						Exec:                   exec,
+						FactsRepo:              ontologyFactsRepo,
+						DataSourcesRepo:        s.dsrcs,
+						FragmentsRepo:          horizonFragmentsRepo,
+						EdgesRepo:              horizonEdgesRepo,
+						MaterializedRepo:       horizonMaterializedArtifactsRepo,
+						LensesRepo:             horizonLensesRepo,
+						SignalPipeline:         signalPipeline,
+						CapabilityProfilesRepo: horizonCapabilityProfilesRepo,
+						CapabilityObsRepo:      horizonCapabilityObsRepo,
+						SupplyLinkObsRepo:      horizonSupplyLinkObsRepo,
+						RouteObsRepo:           horizonRouteObsRepo,
+						DerivedRiskRepo:        horizonDerivedRiskProfilesRepo,
+						Publisher: func(ctx context.Context, eventType string, tenantID string, payload interface{}) error {
+							return pub.PublishJSON(ctx, realtime.EventType(eventType), tenantID, payload)
+						},
+						Logger: logger,
+					})
+					horizonHandlers = horizonHandlers.WithIdentifyStressesCanvas(identifyStressesCanvas)
+					logger.Printf("Identify-stresses canvas initialized")
 				}
 			}
 

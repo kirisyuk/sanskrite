@@ -23,7 +23,7 @@ import {
 import { api } from '../lib/api';
 import type { MaterializedArtifact } from './SupplyChainOverlay';
 import type { GeoMarkerSelection } from '../hooks/useGeoMarkerLayer';
-import { humanizeCanonicalPath } from '../lib/uiUtils';
+import { humanizeCanonicalPath, humanizeSlug } from '../lib/uiUtils';
 import { useHorizonRealtimeStore } from '../stores/horizonRealtimeStore';
 
 export interface WorldMapPanelProps {
@@ -43,6 +43,30 @@ type SearchSuggestion = {
 };
 type SearchMode = 'objects' | 'supply-links';
 type HorizonSearchEntity = Awaited<ReturnType<typeof api.searchHorizonEntities>>['entities'][number];
+type ProductRouteGroup = {
+  key: string;
+  label: string;
+  canonicalPath?: string;
+  stage: string;
+  stageLabel: string;
+  searchText: string;
+  artifactIds: string[];
+  routeCount: number;
+  pinnedCount: number;
+  topRoutes: string[];
+};
+type ProductRouteEntry = {
+  key: string;
+  label: string;
+  canonicalPath?: string;
+  stage: string;
+  searchText: string;
+};
+type ProductStageFacet = {
+  key: string;
+  label: string;
+  routeCount: number;
+};
 
 const isObjectLikeSupplyAnchor = (entity: HorizonSearchEntity | null | undefined): boolean => {
   const canonicalPath = String(entity?.canonicalPath || '').trim();
@@ -67,9 +91,68 @@ const normalizeSupplyAnchorEntities = (entities: HorizonSearchEntity[]): Horizon
 type SupplyChainSearchResult = Awaited<ReturnType<typeof api.searchSupplyChains>>['results'][number];
 type ScopeTargetMode = 'new' | 'existing';
 type DirectedExploreDirection = 'upstream' | 'downstream';
-type DockPanel = 'view' | 'routes' | 'export' | null;
+type DockPanel = 'view' | 'routes' | 'products' | 'export' | null;
 
 const AFFECTED_ZONE_FRESHNESS_WINDOWS: AffectedZoneFreshnessWindow[] = [14, 30, 90, 180];
+const PRODUCT_STAGE_ORDER = [
+  'extraction',
+  'refining',
+  'smelting',
+  'liquefaction',
+  'cracking',
+  'processing',
+  'manufacturing',
+  'assembly',
+  'fresh',
+  'medical-supplies',
+  'delivery',
+  'distribution',
+  'export',
+  'service',
+] as const;
+
+function titleCaseLabel(value?: string): string {
+  const normalized = humanizeSlug(value).trim();
+  if (!normalized) return '';
+  if (/[A-Z]/.test(normalized)) return normalized;
+  return normalized
+    .split(/\s+/g)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+function parseProductCanonicalPath(path?: string): {
+  category: string;
+  productType: string;
+  stage: string;
+  slug: string;
+} | null {
+  const value = String(path || '').trim();
+  if (!value.startsWith('/product/')) return null;
+  const parts = value.split('/').filter(Boolean);
+  if (parts.length < 5 || parts[0] !== 'product') return null;
+  return {
+    category: String(parts[1] || '').trim().toLowerCase(),
+    productType: String(parts[2] || '').trim().toLowerCase(),
+    stage: String(parts[3] || '').trim().toLowerCase(),
+    slug: String(parts[4] || '').trim().toLowerCase(),
+  };
+}
+
+function productStageKey(value?: string): string {
+  const parsed = parseProductCanonicalPath(value);
+  return parsed?.stage || 'other';
+}
+
+function productStageLabel(stage: string): string {
+  return stage === 'other' ? 'Other' : titleCaseLabel(stage) || stage;
+}
+
+function productStageRank(stage: string): number {
+  const index = PRODUCT_STAGE_ORDER.indexOf(stage as typeof PRODUCT_STAGE_ORDER[number]);
+  return index >= 0 ? index : Number.MAX_SAFE_INTEGER;
+}
 
 function isDirectedExplorationCanonicalPath(canonicalPath?: string): boolean {
   const cp = String(canonicalPath || '').trim().toLowerCase();
@@ -85,6 +168,44 @@ function affectedZoneTimestamp(obj: GeoObject): number | null {
   if (!value) return null;
   const ts = new Date(value).getTime();
   return Number.isFinite(ts) ? ts : null;
+}
+
+function artifactRefreshSignature(artifact: MaterializedArtifact | null | undefined): string {
+  const riskOverlay = artifact?.riskOverlay || null;
+  const value = artifact || ({} as MaterializedArtifact);
+  return [
+    String(value.id || '').trim(),
+    String(value.canonicalKey || '').trim(),
+    String(value.displayName || '').trim(),
+    String(value.anchorSupplier || '').trim(),
+    String(value.anchorCustomer || '').trim(),
+    String(value.productAxis || '').trim(),
+    String(value.legCount || ''),
+    String(value.pathStressScore || ''),
+    String(value.traceRole || '').trim(),
+    String(value.familyId || '').trim(),
+    Array.isArray(value.nodeRefs) ? value.nodeRefs.join('|') : '',
+    Array.isArray(value.flowRefs) ? value.flowRefs.join('|') : '',
+    Array.isArray(value.zoneRefs) ? value.zoneRefs.join('|') : '',
+    Array.isArray(value.affectedZoneRefs) ? value.affectedZoneRefs.join('|') : '',
+    JSON.stringify({
+      criticality: riskOverlay?.criticality,
+      primaryMechanism: riskOverlay?.primaryMechanism,
+      topMetrics: Array.isArray(riskOverlay?.topMetrics) ? riskOverlay.topMetrics.length : 0,
+      topMechanisms: Array.isArray(riskOverlay?.mechanisms) ? riskOverlay.mechanisms.length : 0,
+      legs: Array.isArray(riskOverlay?.legs) ? riskOverlay.legs.length : 0,
+      bottleneckLegIndex: riskOverlay?.bottleneckLegIndex,
+    }),
+  ].join('::');
+}
+
+function sameArtifactRefreshSet(prev: MaterializedArtifact[], next: MaterializedArtifact[]): boolean {
+  if (prev === next) return true;
+  if (prev.length !== next.length) return false;
+  for (let index = 0; index < prev.length; index += 1) {
+    if (artifactRefreshSignature(prev[index]) !== artifactRefreshSignature(next[index])) return false;
+  }
+  return true;
 }
 
 function isAffectedZoneRenderable(
@@ -137,9 +258,12 @@ function buildSearchText(obj: GeoObject): string {
 }
 
 function artifactRouteTitle(artifact: MaterializedArtifact | null | undefined): string {
+  const productAxis = String(artifact?.productAxis || '').trim();
+  const productFallback = artifactRouteProductEntries(artifact)[0]?.label
+    || (productAxis.startsWith('/product/') ? (humanizeCanonicalPath(productAxis) || productAxis) : productAxis);
   return String(
     artifact?.displayName
-    || artifact?.productAxis
+    || productFallback
     || humanizeCanonicalPath(String(artifact?.canonicalKey || ''))
     || artifact?.id
     || 'Supply route',
@@ -153,17 +277,63 @@ function artifactRouteSubtitle(artifact: MaterializedArtifact | null | undefined
 }
 
 function artifactRouteProducts(artifact: MaterializedArtifact | null | undefined): string[] {
-  const direct = String(artifact?.productAxis || '').trim();
-  if (direct) return [direct];
+  return artifactRouteProductEntries(artifact).map((entry) => entry.label).slice(0, 3);
+}
+
+function artifactRouteProductEntries(artifact: MaterializedArtifact | null | undefined): ProductRouteEntry[] {
   const seen = new Set<string>();
-  const out: string[] = [];
+  const out: ProductRouteEntry[] = [];
+  const payload = artifact?.payload as MaterializedArtifact['payload'] & {
+    productNodes?: Array<{ type?: string; ref?: string; name?: string }>;
+  };
+  const productNodes = Array.isArray(payload?.productNodes) ? payload.productNodes : [];
+  const productNameByRef = new Map<string, string>();
+  for (const node of productNodes) {
+    const ref = String(node?.ref || '').trim();
+    if (!ref || String(node?.type || '').trim().toLowerCase() !== 'product') continue;
+    const name = String(node?.name || '').trim();
+    if (name && !productNameByRef.has(ref)) productNameByRef.set(ref, name);
+  }
+  const push = (value: string, preferredLabel?: string) => {
+    const raw = String(value || '').trim();
+    if (!raw || seen.has(raw)) return;
+    seen.add(raw);
+    const canonicalPath = raw.startsWith('/product/') ? raw : undefined;
+    const parsed = parseProductCanonicalPath(canonicalPath);
+    const stage = productStageKey(canonicalPath);
+    const label = String(preferredLabel || '').trim()
+      || (canonicalPath ? (humanizeCanonicalPath(canonicalPath) || canonicalPath) : '')
+      || titleCaseLabel(raw)
+      || raw;
+    out.push({
+      key: canonicalPath || label.toLowerCase(),
+      label,
+      canonicalPath,
+      stage,
+      searchText: [
+        label,
+        raw,
+        parsed?.category,
+        parsed?.productType,
+        productStageLabel(stage),
+      ]
+        .map((part) => String(part || '').trim().toLowerCase())
+        .filter(Boolean)
+        .join(' '),
+    });
+  };
+  const direct = String(artifact?.productAxis || '').trim();
+  if (direct) push(direct, productNameByRef.get(direct));
   const legs = Array.isArray(artifact?.payload?.legs) ? artifact!.payload!.legs! : [];
   for (const leg of legs) {
     const productRef = String(leg?.productRef || '').trim();
-    if (!productRef || seen.has(productRef)) continue;
-    seen.add(productRef);
-    out.push(humanizeCanonicalPath(productRef) || productRef);
-    if (out.length >= 3) break;
+    if (!productRef) continue;
+    push(productRef, productNameByRef.get(productRef));
+  }
+  for (const node of productNodes) {
+    const productRef = String(node?.ref || '').trim();
+    if (!productRef) continue;
+    push(productRef, node?.name);
   }
   return out;
 }
@@ -174,7 +344,7 @@ function artifactRouteSearchText(artifact: MaterializedArtifact | null | undefin
     artifactRouteSubtitle(artifact),
     String(artifact?.canonicalKey || '').trim(),
     String(artifact?.discoveryReason || '').trim(),
-    ...artifactRouteProducts(artifact),
+    ...artifactRouteProductEntries(artifact).map((entry) => entry.searchText),
   ]
     .join(' ')
     .toLowerCase();
@@ -366,6 +536,53 @@ function collectArtifactTerminalPathRefs(artifacts: MaterializedArtifact[]): str
   return refs;
 }
 
+function collectArtifactKeys(artifacts: MaterializedArtifact[]): string[] {
+  const seen = new Set<string>();
+  const keys: string[] = [];
+  for (const artifact of artifacts || []) {
+    const key = artifactCatalogKey(artifact);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    keys.push(key);
+  }
+  return keys;
+}
+
+function artifactCatalogKey(artifact: MaterializedArtifact | null | undefined): string {
+  return String(artifact?.canonicalKey || artifact?.id || '').trim();
+}
+
+function collectArtifactSupplyLinkRefs(artifacts: MaterializedArtifact[]): string[] {
+  const seen = new Set<string>();
+  const refs: string[] = [];
+  const push = (value: unknown) => {
+    const ref = String(value || '').trim();
+    if (!ref || !ref.startsWith('/supply-link/') || seen.has(ref)) return;
+    seen.add(ref);
+    refs.push(ref);
+  };
+  for (const artifact of artifacts || []) {
+    for (const ref of Array.isArray(artifact?.matchedRefs) ? artifact.matchedRefs : []) push(ref);
+    for (const ref of Array.isArray(artifact?.nodeRefs) ? artifact.nodeRefs : []) push(ref);
+    const payload = artifact?.payload as (MaterializedArtifact['payload'] & {
+      nodes?: Array<{ ref?: string }>;
+      edges?: Array<{ supplyLinkId?: string; supplyLinkCanonicalPath?: string; qualifiers?: Record<string, any> }>;
+      legs?: Array<{ supplyLinkRef?: string; supplyLinkCanonicalPath?: string }>;
+    }) | undefined;
+    for (const node of Array.isArray(payload?.nodes) ? payload.nodes : []) push(node?.ref);
+    for (const edge of Array.isArray(payload?.edges) ? payload.edges : []) {
+      push(edge?.supplyLinkId);
+      push(edge?.supplyLinkCanonicalPath);
+      push(edge?.qualifiers?.supplyLinkCanonicalPath);
+    }
+    for (const leg of Array.isArray(payload?.legs) ? payload.legs : []) {
+      push(leg?.supplyLinkRef);
+      push(leg?.supplyLinkCanonicalPath);
+    }
+  }
+  return refs;
+}
+
 export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const overlayTopOffset = scope?.lensId ? 58 : 10;
   const containerRef = React.useRef<HTMLDivElement | null>(null);
@@ -417,6 +634,8 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [pathLegClusteringEnabled, setPathLegClusteringEnabled] = React.useState(Boolean(scope?.lensId));
   const [activeDockPanel, setActiveDockPanel] = React.useState<DockPanel>(null);
   const [routeSearchQuery, setRouteSearchQuery] = React.useState('');
+  const [productSearchQuery, setProductSearchQuery] = React.useState('');
+  const [activeProductStages, setActiveProductStages] = React.useState<Set<string> | null>(null);
   const [selectedRouteArtifactIds, setSelectedRouteArtifactIds] = React.useState<string[]>([]);
   const [hoveredRouteArtifactIds, setHoveredRouteArtifactIds] = React.useState<string[]>([]);
   const [activeFlowModes, setActiveFlowModes] = React.useState<Set<TransportFlowMode> | null>(null);
@@ -436,10 +655,25 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [pathArtifacts, setPathArtifacts] = React.useState<MaterializedArtifact[]>([]);
   const [pathArtifactsLoaded, setPathArtifactsLoaded] = React.useState(false);
   const realtimeArtifacts = useHorizonRealtimeStore((s) => s.artifacts);
+  const identifyJobs = useHorizonRealtimeStore((s) => s.identifyJobs);
+  const [identifySubmitting, setIdentifySubmitting] = React.useState(false);
+  const [identifyError, setIdentifyError] = React.useState<string | null>(null);
+  const [identifyJobId, setIdentifyJobId] = React.useState<string | null>(null);
   const stackSelectionRef = React.useRef<MapObjectStackSelection | null>(null);
   const routeSelectionVisibleRef = React.useRef(false);
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
   const scopeDialogBackdropRef = React.useRef<HTMLDivElement | null>(null);
+  const scopeLensRef = React.useRef(scope?.lensId || '');
+  const identifyViewIdRef = React.useRef(
+    (globalThis.crypto && 'randomUUID' in globalThis.crypto)
+      ? (globalThis.crypto as Crypto).randomUUID()
+      : `world-map-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+  const identifyRefreshKeyRef = React.useRef<string | null>(null);
+
+  React.useEffect(() => {
+    scopeLensRef.current = scope?.lensId || '';
+  }, [scope?.lensId]);
 
   React.useEffect(() => {
     stackSelectionRef.current = stackSelection;
@@ -485,6 +719,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     preferredGeoObjectPaths,
     Boolean(scope?.lensId),
   );
+  const showMapPreparingOverlay = !isReady || (loading && allObjects.length === 0);
 
   const {
     edgesLoading,
@@ -556,17 +791,17 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   }, [activeNarrativeKey, traceSummary]);
   const supplyNarrativeLegsVisible = activeSupplyArtifactIds.length > 0;
   const routeCatalog = React.useMemo(() => {
-    const byId = new Map<string, MaterializedArtifact>();
+    const byKey = new Map<string, MaterializedArtifact>();
     const register = (artifact: MaterializedArtifact | null | undefined) => {
-      const id = String(artifact?.id || '').trim();
-      if (!id || byId.has(id)) return;
-      byId.set(id, artifact!);
+      const key = artifactCatalogKey(artifact);
+      if (!key || byKey.has(key)) return;
+      byKey.set(key, artifact!);
     };
     for (const artifact of pathArtifacts) register(artifact);
     for (const artifact of relatedPathArtifacts) register(artifact);
     for (const artifact of manualPathArtifacts) register(artifact);
     register(activeManualChain?.artifact as MaterializedArtifact | undefined);
-    return Array.from(byId.values());
+    return Array.from(byKey.values());
   }, [activeManualChain, manualPathArtifacts, pathArtifacts, relatedPathArtifacts]);
   const selectedRouteArtifactIdSet = React.useMemo(
     () => new Set(selectedRouteArtifactIds.map((value) => String(value || '').trim()).filter(Boolean)),
@@ -610,9 +845,9 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     if (!pathLegsEnabled && !supplyNarrativeLegsVisible && !routeEmphasisVisible) return [] as MaterializedArtifact[];
     const merged = new Map<string, MaterializedArtifact>();
     const register = (artifact: MaterializedArtifact | null | undefined) => {
-      const id = String(artifact?.id || '').trim();
-      if (!id) return;
-      merged.set(id, artifact!);
+      const key = artifactCatalogKey(artifact);
+      if (!key) return;
+      merged.set(key, artifact!);
     };
     if (pathLegsEnabled) {
       for (const artifact of pathArtifacts) register(artifact);
@@ -709,8 +944,91 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
       : routeCatalog;
     return [...items].sort((left, right) => artifactRouteTitle(left).localeCompare(artifactRouteTitle(right)));
   }, [routeCatalog, routeSearchQueryTrim]);
+  const productSearchQueryTrim = productSearchQuery.trim().toLowerCase();
+  const productOverlayData = React.useMemo(() => {
+    const groups = new Map<string, ProductRouteGroup>();
+    const stageRouteCounts = new Map<string, number>();
+    for (const artifact of routeCatalog) {
+      const artifactId = String(artifact?.id || '').trim();
+      if (!artifactId) continue;
+      const artifactStages = new Set<string>();
+      const products = artifactRouteProductEntries(artifact);
+      const entries = products.length > 0
+        ? products
+        : [{
+          key: 'unspecified-product',
+          label: 'Unspecified product',
+          canonicalPath: undefined,
+          stage: 'other',
+          searchText: 'unspecified product other',
+        } satisfies ProductRouteEntry];
+      for (const entry of entries) {
+        const key = String(entry.key || '').trim().toLowerCase() || 'unspecified-product';
+        if (!groups.has(key)) {
+          const stage = String(entry.stage || 'other').trim().toLowerCase() || 'other';
+          groups.set(key, {
+            key,
+            label: entry.label,
+            canonicalPath: entry.canonicalPath,
+            stage,
+            stageLabel: productStageLabel(stage),
+            searchText: [
+              entry.searchText,
+              entry.canonicalPath,
+            ]
+              .map((part) => String(part || '').trim().toLowerCase())
+              .filter(Boolean)
+              .join(' '),
+            artifactIds: [],
+            routeCount: 0,
+            pinnedCount: 0,
+            topRoutes: [],
+          });
+        }
+        const group = groups.get(key)!;
+        group.artifactIds.push(artifactId);
+        group.routeCount += 1;
+        if (artifact.isPinned) group.pinnedCount += 1;
+        if (group.topRoutes.length < 3) group.topRoutes.push(artifactRouteTitle(artifact));
+        artifactStages.add(group.stage);
+      }
+      for (const stage of artifactStages) {
+        stageRouteCounts.set(stage, (stageRouteCounts.get(stage) || 0) + 1);
+      }
+    }
+    const allGroups = Array.from(groups.values())
+      .map((group) => ({
+        ...group,
+        artifactIds: Array.from(new Set(group.artifactIds)),
+        topRoutes: Array.from(new Set(group.topRoutes)).slice(0, 3),
+      }))
+      .sort((left, right) =>
+        productStageRank(left.stage) - productStageRank(right.stage)
+        || right.routeCount - left.routeCount
+        || left.label.localeCompare(right.label));
+    const stageFacets: ProductStageFacet[] = Array.from(stageRouteCounts.entries())
+      .map(([key, routeCount]) => ({
+        key,
+        label: productStageLabel(key),
+        routeCount,
+      }))
+      .sort((left, right) =>
+        productStageRank(left.key) - productStageRank(right.key)
+        || right.routeCount - left.routeCount
+        || left.label.localeCompare(right.label));
+    const groupsByStage = activeProductStages && activeProductStages.size > 0
+      ? allGroups.filter((group) => activeProductStages.has(group.stage))
+      : allGroups;
+    const visibleGroups = productSearchQueryTrim
+      ? groupsByStage.filter((group) => group.searchText.includes(productSearchQueryTrim))
+      : groupsByStage;
+    return { stageFacets, visibleGroups };
+  }, [activeProductStages, productSearchQueryTrim, routeCatalog]);
+  const productStageFacets = productOverlayData.stageFacets;
+  const productRouteGroups = productOverlayData.visibleGroups;
   const viewOverlayOpen = activeDockPanel === 'view';
   const routesOverlayOpen = activeDockPanel === 'routes';
+  const productsOverlayOpen = activeDockPanel === 'products';
   const exportOverlayOpen = activeDockPanel === 'export';
   const allStaticZones = STATIC_ZONE_DATA.features;
   const zoneTypeCounts = React.useMemo(() => deriveZoneTypeCounts(allStaticZones), [allStaticZones]);
@@ -730,6 +1048,99 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     () => slugifyDownloadPart(selectedObject ? getSearchObjectTitle(selectedObject) : 'world-map', 'world-map'),
     [selectedObject],
   );
+  const latestIdentifyJob = React.useMemo(() => {
+    const jobs = Object.values(identifyJobs || {}).filter(
+      (job) => String(job?.lensId || '').trim() === String(scope?.lensId || '').trim(),
+    );
+    if (jobs.length === 0) return null;
+    jobs.sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0));
+    if (identifyJobId) {
+      const exact = jobs.find((job) => String(job.jobId || '').trim() === identifyJobId);
+      if (exact) return exact;
+    }
+    return jobs[0] || null;
+  }, [identifyJobId, identifyJobs, scope?.lensId]);
+  const identifyRunning = latestIdentifyJob?.state === 'started'
+    || latestIdentifyJob?.state === 'running'
+    || latestIdentifyJob?.state === 'propagating';
+  const identifyScopeArtifacts = React.useMemo(
+    () => (activePathArtifacts.length > 0 ? activePathArtifacts : routeCatalog),
+    [activePathArtifacts, routeCatalog],
+  );
+  const identifyVisibleNodeRefs = React.useMemo(() => {
+    const refs = new Set<string>();
+    const push = (value: string | null | undefined) => {
+      const ref = String(value || '').trim();
+      if (ref) refs.add(ref);
+    };
+    push(selectedObject?.canonicalPath);
+    for (const object of visibleMapObjects) push(object?.canonicalPath);
+    return Array.from(refs);
+  }, [selectedObject?.canonicalPath, visibleMapObjects]);
+  const identifyVisibleArtifactKeys = React.useMemo(
+    () => collectArtifactKeys(identifyScopeArtifacts),
+    [identifyScopeArtifacts],
+  );
+  const identifyVisibleSupplyLinkRefs = React.useMemo(() => {
+    const refs = new Set<string>();
+    for (const ref of collectArtifactSupplyLinkRefs(identifyScopeArtifacts)) refs.add(ref);
+    const selectedPath = String(selectedObject?.canonicalPath || '').trim();
+    if (selectedPath.startsWith('/supply-link/')) refs.add(selectedPath);
+    return Array.from(refs);
+  }, [identifyScopeArtifacts, selectedObject?.canonicalPath]);
+  const identifyTouchedRouteLabels = React.useMemo(() => {
+    const routeByKey = new Map<string, MaterializedArtifact>();
+    for (const artifact of routeCatalog) {
+      const keys = [String(artifact?.canonicalKey || '').trim(), String(artifact?.id || '').trim()].filter(Boolean);
+      for (const key of keys) {
+        if (!routeByKey.has(key)) routeByKey.set(key, artifact);
+      }
+    }
+    return (latestIdentifyJob?.touchedArtifactKeys || [])
+      .map((key) => {
+        const artifact = routeByKey.get(String(key || '').trim());
+        return artifact ? artifactRouteTitle(artifact) : (humanizeCanonicalPath(String(key || '').trim()) || String(key || '').trim());
+      })
+      .filter(Boolean)
+      .slice(0, 6);
+  }, [latestIdentifyJob?.touchedArtifactKeys, routeCatalog]);
+  const identifyTouchedSupplyLinkLabels = React.useMemo(
+    () => (latestIdentifyJob?.touchedSupplyLinks || [])
+      .map((ref) => humanizeCanonicalPath(String(ref || '').trim()) || String(ref || '').trim())
+      .filter(Boolean)
+      .slice(0, 6),
+    [latestIdentifyJob?.touchedSupplyLinks],
+  );
+  const identifyTouchedNodeLabels = React.useMemo(
+    () => (latestIdentifyJob?.touchedNodeRefs || [])
+      .map((ref) => humanizeCanonicalPath(String(ref || '').trim()) || String(ref || '').trim())
+      .filter(Boolean)
+      .slice(0, 6),
+    [latestIdentifyJob?.touchedNodeRefs],
+  );
+  const identifyErrorLines = React.useMemo(() => {
+    const raw = [
+      ...(Array.isArray(latestIdentifyJob?.errors) ? latestIdentifyJob.errors : []),
+      latestIdentifyJob?.error,
+      identifyError,
+    ];
+    return Array.from(new Set(raw.map((value) => String(value || '').trim()).filter(Boolean))).slice(0, 4);
+  }, [identifyError, latestIdentifyJob]);
+  const reloadSupplyChains = React.useCallback(async () => {
+    const requestedLensId = String(scope?.lensId || '').trim();
+    if (!requestedLensId) return;
+    try {
+      const payload = await api.getSupplyChainsByLens(requestedLensId);
+      if (scopeLensRef.current !== requestedLensId) return;
+      const nextArtifacts = Array.isArray(payload?.chains) ? (payload.chains as MaterializedArtifact[]) : [];
+      setPathArtifacts((current) => (sameArtifactRefreshSet(current, nextArtifacts) ? current : nextArtifacts));
+      setPathArtifactsLoaded(true);
+    } catch {
+      if (scopeLensRef.current !== requestedLensId) return;
+      setPathArtifacts((current) => (current.length === 0 ? current : []));
+      setPathArtifactsLoaded(true);
+    }
+  }, [scope?.lensId]);
 
   const handleExportJson = React.useCallback(() => {
     if (!selectedObject || !selectionExportData) return;
@@ -820,6 +1231,8 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   React.useEffect(() => {
     setPathLegsEnabled(Boolean(scope?.lensId));
     setPathLegClusteringEnabled(Boolean(scope?.lensId));
+    setIdentifyError(null);
+    setIdentifyJobId(null);
     if (scope?.lensId) {
       setPathArtifactsLoaded(false);
       return;
@@ -832,26 +1245,14 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     if (!scope?.lensId) return;
     let cancelled = false;
     const load = async () => {
-      try {
-        const payload = await api.getSupplyChainsByLens(scope.lensId);
-        if (!cancelled) {
-          setPathArtifacts(Array.isArray(payload?.chains) ? (payload.chains as MaterializedArtifact[]) : []);
-          setPathArtifactsLoaded(true);
-        }
-      } catch {
-        if (!cancelled) {
-          setPathArtifacts([]);
-          setPathArtifactsLoaded(true);
-        }
-      }
+      if (cancelled) return;
+      await reloadSupplyChains();
     };
     void load();
-    const timer = window.setInterval(() => { void load(); }, 60_000);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
     };
-  }, [scope?.lensId]);
+  }, [reloadSupplyChains, scope?.lensId]);
 
   React.useEffect(() => {
     if (!scope?.lensId) return;
@@ -871,17 +1272,45 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
         const candidate: MaterializedArtifact = {
           ...(current || { id: key, kind: 'SUPPLY_CHAIN_PATH' }),
           id: key,
+          lensId: raw?.lensId || current?.lensId,
           canonicalKey: raw?.canonicalKey || current?.canonicalKey,
           displayName: raw?.displayName || current?.displayName,
           anchorSupplier: raw?.anchorSupplier || current?.anchorSupplier,
           anchorCustomer: raw?.anchorCustomer || current?.anchorCustomer,
+          productAxis: raw?.productAxis || current?.productAxis,
+          nodeRefs: raw?.nodeRefs || current?.nodeRefs,
+          flowRefs: raw?.flowRefs || current?.flowRefs,
+          zoneRefs: raw?.zoneRefs || current?.zoneRefs,
+          affectedZoneRefs: raw?.affectedZoneRefs || current?.affectedZoneRefs,
+          legCount: typeof raw?.legCount === 'number' ? raw.legCount : current?.legCount,
+          bindingScore: typeof raw?.bindingScore === 'number' ? raw.bindingScore : current?.bindingScore,
+          pathStressScore: typeof raw?.pathStressScore === 'number' ? raw.pathStressScore : current?.pathStressScore,
+          riskOverlay: raw?.riskOverlay || current?.riskOverlay,
           payload: raw?.payload || current?.payload,
         };
         next.set(key, candidate);
       }
-      return Array.from(next.values());
+      const merged = Array.from(next.values());
+      return sameArtifactRefreshSet(prev, merged) ? prev : merged;
     });
   }, [realtimeArtifacts, scope?.lensId]);
+
+  React.useEffect(() => {
+    if (!scope?.lensId || !latestIdentifyJob?.jobId) return;
+    const state = String(latestIdentifyJob.state || '').trim();
+    if (state !== 'completed' && state !== 'failed' && state !== 'partial_success' && !latestIdentifyJob.requiresRefetch) return;
+    const refreshKey = [
+      latestIdentifyJob.jobId,
+      state,
+      String(latestIdentifyJob.updatedAt || ''),
+      latestIdentifyJob.requiresRefetch ? 'refetch' : 'steady',
+    ].join(':');
+    if (identifyRefreshKeyRef.current === refreshKey) return;
+    identifyRefreshKeyRef.current = refreshKey;
+    if (latestIdentifyJob.requiresRefetch || state === 'completed' || state === 'partial_success') {
+      void reloadSupplyChains();
+    }
+  }, [latestIdentifyJob, reloadSupplyChains, scope?.lensId]);
 
   React.useEffect(() => {
     const availableIds = new Set(routeCatalog.map((artifact) => String(artifact.id || '').trim()).filter(Boolean));
@@ -890,6 +1319,12 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
       return next.length === current.length ? current : next;
     });
   }, [routeCatalog]);
+
+  const resetProductsPanelState = React.useCallback(() => {
+    setSelectedRouteArtifactIds([]);
+    setActiveProductStages(null);
+    setProductSearchQuery('');
+  }, []);
 
   React.useEffect(() => {
     if (routeSelectionVisible && !routeSelectionVisibleRef.current) {
@@ -1178,6 +1613,45 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     },
     [scope?.lensId, selectedObject],
   );
+
+  const handleIdentifyStresses = React.useCallback(async () => {
+    if (!scope?.lensId || identifyRunning || identifySubmitting) return;
+    const selectedCanonicalPath = String(selectedObject?.canonicalPath || '').trim();
+    try {
+      setIdentifySubmitting(true);
+      setIdentifyError(null);
+      const response = await api.identifyStressesForLens(scope.lensId, {
+        scopeMode: 'visible_set',
+        selectedCanonicalPath: selectedCanonicalPath || undefined,
+        visibleNodeRefs: identifyVisibleNodeRefs,
+        visibleArtifactKeys: identifyVisibleArtifactKeys,
+        visibleSupplyLinkRefs: identifyVisibleSupplyLinkRefs,
+        clientViewId: identifyViewIdRef.current,
+        maxNodes: 40,
+        maxArtifacts: 25,
+        maxFindings: 120,
+      });
+      if (response?.jobId) {
+        setIdentifyJobId(String(response.jobId));
+      }
+    } catch (error: any) {
+      const detail =
+        String(error?.response?.data?.error || '').trim()
+        || String(error?.response?.data?.detail || '').trim()
+        || String(error?.message || '').trim();
+      setIdentifyError(detail || 'Failed to start stress identification.');
+    } finally {
+      setIdentifySubmitting(false);
+    }
+  }, [
+    identifyRunning,
+    identifySubmitting,
+    identifyVisibleArtifactKeys,
+    identifyVisibleNodeRefs,
+    identifyVisibleSupplyLinkRefs,
+    scope?.lensId,
+    selectedObject?.canonicalPath,
+  ]);
 
   const resolveSupplyAnchor = React.useCallback(async (query: string): Promise<HorizonSearchEntity | null> => {
     const trimmed = query.trim();
@@ -1589,7 +2063,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
       <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
         <div ref={containerRef} style={{ width: '100%', height: '100%', minHeight: 280 }} />
 
-        {(loading || !isReady) && (
+        {showMapPreparingOverlay && (
           <div
             style={{
               position: 'absolute',
@@ -2051,7 +2525,169 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
             )}
           </div>
 
-          <div style={{ position: 'relative', pointerEvents: 'auto' }}>
+          <div style={{ position: 'relative', pointerEvents: 'auto', order: 4 }}>
+            <button
+              type="button"
+              title={
+                !scope?.lensId
+                  ? 'Open a Horizon lens to identify stresses'
+                  : identifyRunning
+                    ? 'Stress identification is already running'
+                    : 'Identify stress factors for visible objects and routes'
+              }
+              aria-label="Identify stresses"
+              onClick={() => {
+                void handleIdentifyStresses();
+              }}
+              disabled={!scope?.lensId || identifyRunning || identifySubmitting}
+              style={{
+                ...mapDockControlButtonStyle(isDark, identifyRunning || identifySubmitting, isDark ? '#f97316' : '#c2410c'),
+                opacity: !scope?.lensId || identifyRunning || identifySubmitting ? 0.72 : 1,
+                cursor: !scope?.lensId || identifyRunning || identifySubmitting ? 'not-allowed' : 'pointer',
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z" />
+              </svg>
+              <span>{identifySubmitting || identifyRunning ? 'Scanning…' : 'Identify Stresses'}</span>
+            </button>
+            {(latestIdentifyJob || identifyError) && (
+              <div style={{ position: 'absolute', top: 'calc(100% + 10px)', right: 0 }}>
+                <div style={{ ...mapDockOverlayCardStyle(isDark, 332), padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-heading)' }}>Stress Job</div>
+                      <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                        {latestIdentifyJob
+                          ? `State: ${String(latestIdentifyJob.state || 'started').replace(/_/g, ' ')}`
+                          : 'Launch failed'}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
+                      {latestIdentifyJob?.jobId ? latestIdentifyJob.jobId.slice(0, 8) : 'local'}
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      borderRadius: 12,
+                      border: '1px solid var(--border-subtle)',
+                      background: mapSearchPaletteChrome.subtleSurface,
+                      padding: '10px 12px',
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                      gap: 8,
+                    }}
+                  >
+                    {[
+                      { label: 'Visible nodes', value: `${latestIdentifyJob?.acceptedNodes ?? identifyVisibleNodeRefs.length}` },
+                      { label: 'Visible routes', value: `${latestIdentifyJob?.acceptedArtifacts ?? identifyVisibleArtifactKeys.length}` },
+                      { label: 'Findings', value: `${latestIdentifyJob?.findingsApplied ?? 0}` },
+                      { label: 'Events', value: `${latestIdentifyJob?.eventsPersisted ?? 0}` },
+                      { label: 'Supply links', value: `${latestIdentifyJob?.supplyLinksUpdated ?? latestIdentifyJob?.acceptedSupplyLinks ?? identifyVisibleSupplyLinkRefs.length}` },
+                      { label: 'Zones', value: `${latestIdentifyJob?.affectedZonesCreated ?? 0}` },
+                    ].map((item) => (
+                      <div
+                        key={item.label}
+                        style={{
+                          padding: '8px 9px',
+                          borderRadius: 10,
+                          background: isDark ? 'rgba(15,23,42,0.34)' : 'rgba(255,255,255,0.72)',
+                          border: isDark ? '1px solid rgba(148,163,184,0.12)' : '1px solid rgba(15,23,42,0.06)',
+                        }}
+                      >
+                        <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
+                          {item.label}
+                        </div>
+                        <div style={{ marginTop: 5, fontSize: 15, fontWeight: 800, color: 'var(--text-heading)' }}>{item.value}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                    <div>
+                      Touched paths: {latestIdentifyJob?.artifactsUpdated ?? latestIdentifyJob?.touchedArtifactKeys?.length ?? 0}
+                    </div>
+                    <div>
+                      Touched nodes: {latestIdentifyJob?.touchedNodeRefs?.length ?? 0}
+                    </div>
+                    <div>
+                      Propagation: {latestIdentifyJob?.state === 'propagating'
+                        ? 'running'
+                        : latestIdentifyJob?.state === 'completed'
+                          ? 'completed'
+                          : latestIdentifyJob?.state === 'partial_success'
+                            ? 'partial success'
+                            : latestIdentifyJob?.state === 'failed'
+                              ? 'failed'
+                              : 'pending'}
+                    </div>
+                    {typeof latestIdentifyJob?.propagationErrors === 'number' && latestIdentifyJob.propagationErrors > 0 && (
+                      <div>Propagation errors: {latestIdentifyJob.propagationErrors}</div>
+                    )}
+                    {latestIdentifyJob?.requiresRefetch && (
+                      <div>Overlay refresh requested for large route delta.</div>
+                    )}
+                  </div>
+
+                  {identifyTouchedRouteLabels.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
+                        Touched Routes
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {identifyTouchedRouteLabels.map((label) => (
+                          <span
+                            key={label}
+                            style={{
+                              borderRadius: 999,
+                              border: '1px solid var(--border-subtle)',
+                              background: mapSearchPaletteChrome.subtleSurface,
+                              padding: '5px 8px',
+                              fontSize: 11,
+                              color: 'var(--text-heading)',
+                            }}
+                          >
+                            {label}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {identifyTouchedSupplyLinkLabels.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
+                        Supply Links
+                      </div>
+                      <div style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--text-secondary-strong)' }}>
+                        {identifyTouchedSupplyLinkLabels.join(' • ')}
+                      </div>
+                    </div>
+                  )}
+
+                  {identifyTouchedNodeLabels.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
+                        Nodes
+                      </div>
+                      <div style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--text-secondary-strong)' }}>
+                        {identifyTouchedNodeLabels.join(' • ')}
+                      </div>
+                    </div>
+                  )}
+
+                  {identifyErrorLines.length > 0 && (
+                    <div style={{ borderRadius: 10, border: '1px solid rgba(239,68,68,0.28)', background: isDark ? 'rgba(127,29,29,0.26)' : 'rgba(254,226,226,0.82)', padding: '10px 11px', fontSize: 11, lineHeight: 1.45, color: isDark ? '#fecaca' : '#991b1b' }}>
+                      {identifyErrorLines.join(' • ')}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div style={{ position: 'relative', pointerEvents: 'auto', order: 3 }}>
             <button
               type="button"
               title={exportOverlayOpen ? 'Hide export options' : 'Export current view'}
@@ -2130,6 +2766,240 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
                   >
                     {edgesLoading && selectedObject ? 'Preparing JSON...' : 'Download JSON snapshot'}
                   </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div style={{ position: 'relative', pointerEvents: 'auto', order: 2 }}>
+            <button
+              type="button"
+              title={productsOverlayOpen ? 'Hide product route groups' : 'Select routes by product'}
+              aria-label={productsOverlayOpen ? 'Hide product route groups' : 'Select routes by product'}
+              onClick={() => {
+                setActiveDockPanel((current) => {
+                  if (current === 'products') {
+                    resetProductsPanelState();
+                    return null;
+                  }
+                  return 'products';
+                });
+              }}
+              style={mapDockControlButtonStyle(isDark, productsOverlayOpen, isDark ? '#34d399' : '#0f766e')}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 3 4 7l8 4 8-4-8-4Z" />
+                <path d="m4 12 8 4 8-4" />
+                <path d="m4 17 8 4 8-4" />
+              </svg>
+              <span>Products</span>
+            </button>
+            {productsOverlayOpen && (
+              <div style={{ position: 'absolute', top: 0, right: 'calc(100% + 10px)' }}>
+                <div style={{ ...mapDockOverlayCardStyle(isDark, 380), padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-heading)' }}>Route Products</div>
+                      <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                        Select or clear all loaded routes grouped under a product.
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
+                      {productRouteGroups.length} groups
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => setActiveProductStages(null)}
+                      style={{
+                        borderRadius: 999,
+                        border: !activeProductStages || activeProductStages.size === 0
+                          ? `1px solid ${mapSearchPaletteChrome.activeItemBorder}`
+                          : '1px solid var(--border-subtle)',
+                        background: !activeProductStages || activeProductStages.size === 0
+                          ? mapSearchPaletteChrome.activeItemBackground
+                          : mapSearchPaletteChrome.subtleSurface,
+                        color: 'var(--text-heading)',
+                        padding: '7px 10px',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      All stages
+                    </button>
+                    {productStageFacets.map((facet) => {
+                      const active = Boolean(activeProductStages?.has(facet.key));
+                      return (
+                        <button
+                          key={facet.key}
+                          type="button"
+                          onClick={() => {
+                            setActiveProductStages((current) => {
+                              const next = new Set(Array.from(current || []));
+                              if (next.has(facet.key)) next.delete(facet.key);
+                              else next.add(facet.key);
+                              return next.size > 0 ? next : null;
+                            });
+                          }}
+                          style={{
+                            borderRadius: 999,
+                            border: active
+                              ? `1px solid ${mapSearchPaletteChrome.activeItemBorder}`
+                              : '1px solid var(--border-subtle)',
+                            background: active
+                              ? mapSearchPaletteChrome.activeItemBackground
+                              : mapSearchPaletteChrome.subtleSurface,
+                            color: 'var(--text-heading)',
+                            padding: '7px 10px',
+                            fontSize: 11,
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {facet.label} · {facet.routeCount}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input
+                      type="search"
+                      value={productSearchQuery}
+                      onChange={(event) => setProductSearchQuery(event.target.value)}
+                      placeholder="Search products"
+                      style={{
+                        flex: 1,
+                        borderRadius: 10,
+                        border: '1px solid var(--border-subtle)',
+                        background: mapSearchPaletteChrome.subtleSurface,
+                        color: 'var(--text-heading)',
+                        padding: '9px 11px',
+                        fontSize: 12,
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={resetProductsPanelState}
+                      disabled={
+                        selectedRouteArtifactIdSet.size === 0
+                        && (!activeProductStages || activeProductStages.size === 0)
+                        && !productSearchQueryTrim
+                      }
+                      style={{
+                        borderRadius: 10,
+                        border: '1px solid var(--border-subtle)',
+                        background: 'transparent',
+                        color:
+                          selectedRouteArtifactIdSet.size > 0 || (activeProductStages && activeProductStages.size > 0) || productSearchQueryTrim
+                            ? 'var(--text-secondary-strong)'
+                            : 'var(--text-secondary)',
+                        padding: '9px 10px',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        cursor:
+                          selectedRouteArtifactIdSet.size > 0 || (activeProductStages && activeProductStages.size > 0) || productSearchQueryTrim
+                            ? 'pointer'
+                            : 'not-allowed',
+                        opacity:
+                          selectedRouteArtifactIdSet.size > 0 || (activeProductStages && activeProductStages.size > 0) || productSearchQueryTrim
+                            ? 1
+                            : 0.55,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      Reset
+                    </button>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                    <span>{productRouteGroups.length} shown</span>
+                    <span>•</span>
+                    <span>{activeProductStages && activeProductStages.size > 0 ? `${activeProductStages.size} stages active` : 'All stages'}</span>
+                    <span>•</span>
+                    <span>{selectedRouteArtifactIdSet.size > 0 ? `${selectedRouteArtifactIdSet.size} routes selected` : 'No route filter applied'}</span>
+                  </div>
+
+                  <div style={{ maxHeight: 420, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, paddingRight: 2 }}>
+                    {productRouteGroups.length === 0 && (
+                      <div style={{ borderRadius: 12, border: '1px solid var(--border-subtle)', background: mapSearchPaletteChrome.subtleSurface, padding: '12px 14px', fontSize: 12, color: 'var(--text-secondary-strong)' }}>
+                        No loaded product groups match this search.
+                      </div>
+                    )}
+                    {productRouteGroups.map((group) => {
+                      const selectedCount = group.artifactIds.filter((artifactId) => selectedRouteArtifactIdSet.has(artifactId)).length;
+                      const allSelected = selectedCount > 0 && selectedCount === group.artifactIds.length;
+                      const partiallySelected = selectedCount > 0 && !allSelected;
+                      return (
+                        <button
+                          key={group.key}
+                          type="button"
+                          onClick={() => {
+                            setSelectedRouteArtifactIds((current) => {
+                              const next = new Set(current.map((value) => String(value || '').trim()).filter(Boolean));
+                              if (allSelected) {
+                                for (const artifactId of group.artifactIds) next.delete(artifactId);
+                              } else {
+                                for (const artifactId of group.artifactIds) next.add(artifactId);
+                              }
+                              return Array.from(next);
+                            });
+                          }}
+                          style={{
+                            width: '100%',
+                            textAlign: 'left',
+                            borderRadius: 12,
+                            border: allSelected || partiallySelected ? `1px solid ${mapSearchPaletteChrome.activeItemBorder}` : '1px solid var(--border-subtle)',
+                            background: allSelected || partiallySelected ? mapSearchPaletteChrome.activeItemBackground : mapSearchPaletteChrome.subtleSurface,
+                            color: 'var(--text-heading)',
+                            padding: '11px 12px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 6,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)' }}>
+                                {group.label}
+                              </div>
+                              <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                                {group.stageLabel} • {group.routeCount} routes
+                                {group.pinnedCount > 0 ? ` • ${group.pinnedCount} pinned` : ''}
+                                {selectedCount > 0 ? ` • ${selectedCount} selected` : ''}
+                              </div>
+                            </div>
+                            <div
+                              style={{
+                                minWidth: 18,
+                                height: 18,
+                                borderRadius: 999,
+                                border: allSelected || partiallySelected ? `1px solid ${mapSearchPaletteChrome.activeItemBorder}` : '1px solid var(--border-subtle)',
+                                background: allSelected || partiallySelected ? mapSearchPaletteChrome.activeItemBackground : 'transparent',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: 10,
+                                fontWeight: 900,
+                                color: allSelected || partiallySelected ? 'var(--text-heading)' : 'transparent',
+                              }}
+                            >
+                              {allSelected ? '✓' : partiallySelected ? '•' : '✓'}
+                            </div>
+                          </div>
+                          {group.topRoutes.length > 0 && (
+                            <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                              {group.topRoutes.join(' • ')}
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
             )}
