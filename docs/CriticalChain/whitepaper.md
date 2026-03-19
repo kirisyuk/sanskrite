@@ -1,7 +1,9 @@
 # CriticalChain — Whitepaper
 
 > Мониторинг цепочек поставок критических материалов
-> Версия 1.0 + Дополнение v2.0 | Март 2026
+> Версия 1.0 + Дополнение v2.0 + Интеграция с ядром | Март 2026
+
+**Статус:** CriticalChain — эксперимент-подсистема. Разворачивается отдельно внутри того же GCP проекта, рядом с ядром (Horizon). Использует таксономию и возможности ядра, но в ядро не интегрируется. Совместимость с ядром сохраняется для возможного слияния в будущем.
 
 ---
 
@@ -71,7 +73,7 @@ CriticalChain — это профессиональный инструмент �
 • Admin: управление пользователями организации, API ключи, интеграции
 • Super Admin (internal): управление источниками данных, системные настройки
 
-Multi-tenancy: каждый клиент — отдельный tenant с изолированными данными пользовательских настроек, watches, и кастомных аннотаций. Данные о цепочках — общие.
+Multi-tenancy: каждый клиент — отдельный tenant с изолированными данными пользовательских настроек, watches, и кастомных аннотаций. Данные о цепочках — общие. Информация о рисках — общедоступна по клику (без tenant-фильтра, любой авторизованный пользователь видит все риски).
 
 1.4 API ДЛЯ ВНЕШНИХ ПОТРЕБИТЕЛЕЙ
 
@@ -106,6 +108,7 @@ Multi-tenancy: каждый клиент — отдельный tenant с изо
 1.8 SANDBOX / ДЕМО РЕЖИМ
 
 Без демо-режима сложно продавать. Нужен публичный демо-стенд с реальными (но ограниченными) данными — без требования регистрации.
+**Реализация:** Публичный read-only демо. Регистрация не требуется для просмотра. Регистрация (auth) будет добавлена позже — для watches, алертов и прочих действий. В демо пользователь только видит данные, ничего ручного делать кроме просмотра нельзя.
 
 1.9 COMPLIANCE И САНКЦИОННЫЕ СПИСКИ
 
@@ -125,7 +128,7 @@ Multi-tenancy: каждый клиент — отдельный tenant с изо
 
 в) Geo model: один слой не подойдёт. Нужно разделить: точечные объекты (шахты, заводы) vs. линейные маршруты vs. полигональные риск-зоны.
 
-г) Graph storage: отдельная graph DB vs. BigQuery? Рекомендация: Spanner Graph (preview) или Neo4j на GKE для граф-запросов, BigQuery — для аналитики и ML.
+г) Graph storage: отдельная graph DB vs. BigQuery? Рекомендация: Spanner Graph (preview) или Neo4j на GKE для граф-запросов, BigQuery — для аналитики и ML. **Для MVP/эксперимента:** Firestore (коллекции criticalchain_nodes, criticalchain_edges) — ближе к ядру, проще. PostGIS и graph DB — Phase 2.
 
 д) AI hallucination mitigation: Gemini с Search Grounding уменьшает галлюцинации, но нужен human review workflow для AI-генерированных risk scores.
 
@@ -369,8 +372,8 @@ Windward
 ┌────────────────▼────────────────────────────────────────────┐
 │                    API GATEWAY LAYER                         │
 │  Cloud Load Balancer → Cloud Run (Go API)                   │
-│  REST API v1 | GraphQL | WebSocket (alerts)                 │
-│  Auth: Firebase Auth / Identity Platform                     │
+│  REST API v1 | /api/v1/criticalchain/... | WebSocket        │
+│  Auth: Firebase Auth / Identity Platform (общий с Horizon) │
 └────────────────┬────────────────────────────────────────────┘
                  │
     ┌────────────┼────────────────┐
@@ -378,9 +381,9 @@ Windward
 ┌───▼───┐  ┌────▼────┐  ┌────────▼────────┐
 │ Graph │  │  Geo    │  │  Analytics      │
 │  DB   │  │  DB     │  │  (BigQuery)     │
-│Spanner│  │PostGIS/ │  │  Trade flows    │
-│ Graph │  │Cloud SQL│  │  Time series    │
-│Supply │  │Objects  │  │  Aggregates     │
+│Firestore│ │Firestore│  │  Trade flows    │
+│(MVP)   │  │GeoPoint │  │  Time series    │
+│Supply │  │(MVP)    │  │  Aggregates     │
 │Chains │  │Routes   │  └────────┬────────┘
 └───────┘  └─────────┘           │
                                   │
@@ -411,6 +414,10 @@ OSM Overpass   → Geo Adapter
 IEA Data       → Energy Adapter
 GLEIF API      → Entity Adapter
 
+**Развёртывание:** CriticalChain — тот же Cloud Run сервис, что и Horizon; отдельные routes `/api/v1/criticalchain/...`. CI/CD: отдельный ключ `--api-criticalchain` для деплоя CriticalChain API.
+**Vertex AI:** Тот же GCP проект; отдельный datastore для CriticalChain (facilities, materials, routes) — grounding не пересекается с Horizon.
+**AgentMesh:** Не используется. Data pipeline — Cloud Scheduler → Pub/Sub → Cloud Run workers (как в whitepaper).
+
 3.2 DATA MODEL: ГРАФ ЦЕПОЧЕК ПОСТАВОК
 
 NODES (вершины):
@@ -419,7 +426,7 @@ Material {
   id: string (CAS number + HS code composite)
   name: string
   aliases: string[]
-  category: enum (REE | BATTERY | SEMICONDUCTOR | ENERGY | AGRO | MEDICAL | GAS)
+  category: string  // REE | BATTERY | SEMICONDUCTOR | ENERGY | AGRO | MEDICAL | GAS — маппинг на IndustryPath/EntityPath ядра
   criticalityScore: float (0-10)
   riskScore: float (0-10, AI-generated)
   hsCodes: string[]
@@ -428,14 +435,18 @@ Material {
 
 Facility {
   id: string (GLEIF LEI | OSM ID | USGS ID)
+  canonicalPath: string  // /fac/{geo}/{slug} — формат ядра
   name: string
-  type: enum (MINE | REFINERY | PROCESSING | FACTORY | PORT | STORAGE)
+  facilityKind: FacilityKind  // из taxonomy: mine, refinery, seaport, terminal, ...
+  facilityRole: FacilityRole  // из taxonomy: extraction, refining, processing, ...
   country: string (ISO3)
-  coordinates: Point (WGS84)
+  coordinates: GeoPoint (WGS84, Firestore)
   operators: string[] (LEI references)
   capacity: float
   capacityUnit: string
   productionMaterials: Material[]
+  materialId: string  // для material-centric индекса (lithium, cobalt, ...)
+  stage: int  // 0-5 для индексации
   riskScore: float (AI-generated)
   sanctioned: boolean
 }
@@ -547,23 +558,22 @@ Search Grounding для Q&A:
 
 3.5 ГЕОДАННЫЕ: ВЫБОР ХРАНИЛИЩА
 
-Решение: ГИБРИДНЫЙ ПОДХОД
+**MVP/эксперимент:** Firestore GeoPoint в документах. Достаточно для точечных объектов (facilities), маршруты — как массив waypoints. Пространственные запросы — через клиент или ограниченные индексы.
+
+**Phase 2 (гибридный подход):**
 
 Cloud SQL (PostgreSQL + PostGIS):
   - Точечные объекты (facilities): precise lat/lng, complex queries
   - Маршруты (routes): LineString геометрии
   - Конфликтные зоны: Polygon геометрии
   - Пространственные индексы GIST
-  - Хорошо для: spatial queries, nearby search, polygon intersection
 
 BigQuery GIS:
   - Аналитика: какие маршруты пересекают зоны конфликтов
   - Агрегации: объём торговли по регионам
-  - Хорошо для: большие объёмы, сложные аналитические запросы
 
 Memorystore (Redis):
-  - Кэш: результаты пространственных запросов
-  - Кэш: MapLibre tile данные
+  - Кэш: результаты пространственных запросов, MapLibre tile данные
   - TTL: 6 часов (синхронизирован с pipeline)
 
 ════════════════════════════════════════════════════════════════
@@ -1044,64 +1054,43 @@ Global Threat Map (OSINT GitHub)
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-РАЗДЕЛ 2. CANONICAL PATH — КОНЦЕПЦИЯ И ФОРМАТ
+РАЗДЕЛ 2. CANONICAL PATH И ТАКСОНОМИЯ ЯДРА
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-2.1 Переход от Canonical ID к Canonical Path
+2.1 Таксономия ядра (обязательный)
 
-Термин "Canonical ID" заменяется на "Canonical Path". Это не просто уникальный идентификатор сущности, а явный путь в иерархическом графе цепочки поставок. Путь несёт структурную семантику: он показывает, где сущность находится в системе, как она связана с другими узлами, и как к ней прийти из корня иерархии.
+CriticalChain использует таксономию ядра (Horizon). Не вводим собственные enum — берём из taxonomy package:
 
-Аналогия: как файловый путь /usr/local/bin/python описывает не только имя файла, но и его положение в файловой системе — Canonical Path описывает узел в supply chain graph через его положение в иерархии переделов, географии и цепочек трансформации.
+- **CanonicalPath:** `/fac/{geo}/{slug}`, `/org/{geo}/{slug}`, `/product/{category}/{type}/{stage}/{slug}`, `/route/...`, `/zone/...`
 
-2.2 Структура Canonical Path
+- **FacilityKind:** mine, refinery, seaport, terminal, pipeline, factory, warehouse, power_plant, datacenter, substation, cable, airport, other (из taxonomy.FacilityKind)
 
-Формат: {material}/{source_type}/{geography}/{stage}/{entity}
+- **FacilityRole:** extraction, refining, processing, manufacturing, distribution, storage, logistics (из taxonomy.FacilityRole)
 
-Сегменты:
-  material    — тип сырья (lithium, cobalt, ree, helium, silicon, crude_oil, natural_gas)
-  source_type — происхождение (mine, well, field, refinery, processor, trader, port, end_user)
-  geography   — иерархия: {continent}/{country}/{region}/{city_or_site}
-  stage       — стадия передела (0=extraction, 1=processing, 2=refining, 3=precursor, 4=component, 5=product)
-  entity      — нормализованное название сущности (slug, lowercase, underscores)
+- **EntityPath:** /Infrastructure/Manufacturing/Mine, /Resource/RawMaterial/Mineral, /Geo/Zone/Conflict, /Deposit/BatteryMetal и т.д. (из taxonomy.EntityPathTaxonomy)
 
-2.3 Примеры Canonical Path
+- **Geography:** /loc/{country}/{admin1} с ISO (из taxonomy, index_paths)
+
+Расширения при необходимости: FacilityKindWell, FacilityKindField для нефти/газа — или маппинг well→mine, field→Deposit.
+
+2.2 Material-first как проекция
+
+Material-centric view (lithium/mine/americas/chile/...) — не основной идентификатор. Canonical path остаётся `/fac/cl/sqm`. Поля material_id и stage — отдельные индексы. Запросы по материалу идут через material_id + stage в Firestore.
+
+2.3 Примеры (формат ядра)
 
 Литиевый рудник в Чили:
-  lithium/mine/americas/chile/atacama/stage0/sociedad_quimica_y_minera
+  /fac/cl/atacama/sociedad_quimica_y_minera  (material_id: lithium, stage: 0, facilityKind: mine)
 
 Завод по переработке кобальта в Китае:
-  cobalt/refinery/asia/china/zhejiang/stage2/huayou_cobalt
+  /fac/cn/zhejiang/huayou_cobalt  (material_id: cobalt, stage: 2, facilityKind: refinery)
 
 Порт отгрузки REE из Мьянмы:
-  ree/port/asia/myanmar/mandalay_region/stage1/muse_border_crossing
+  /fac/mm/mandalay_region/muse_border_crossing  (material_id: ree, facilityKind: seaport)
 
-Газовое месторождение в Катаре:
-  natural_gas/field/middle_east/qatar/north_field/stage0/qatar_energy_nf
+2.4 Alias Resolution и сопоставление
 
-Нефтяной терминал в Роттердаме:
-  crude_oil/port/europe/netherlands/rotterdam/stage2/vopak_maasvlakte
-
-LFP-катод (промежуточный передел лития):
-  lithium/processor/asia/china/hunan/stage3/btr_new_energy_lfp
-
-2.4 Как строится Canonical Path
-
-Алгоритм построения:
-1. Нормализовать название сущности (alias resolution): "SQM", "Sociedad Química y Minera", "SQM Chile" → sociedad_quimica_y_minera
-2. Определить материал через entity_material_map (словарь: компания → материалы)
-3. Геолокировать через GeoNames или собственный справочник → {continent}/{country}/{region}
-4. Определить стадию передела через production_stage_classifier (по типу деятельности)
-5. Выбрать source_type из фиксированного словаря
-
-Alias Resolution: каждый Canonical Path хранит массив known_aliases — все вариации написания из разных источников. При ingestion нового datapoint — fuzzy match по aliases → assign canonical path.
-
-2.5 Использование Canonical Path для сопоставления данных
-
-Сопоставление cross-source: данные из EIA, Reuters, FCDO, AIS — все маппятся на единый граф через Canonical Path. Запись из Reuters "SQM приостановила добычу" → resolve "SQM" → canonical path lithium/mine/.../sociedad_quimica_y_minera → прикрепить событие к узлу графа.
-
-Граф строится как направленный граф (DAG): узлы = Canonical Paths, рёбра = физические потоки материала. Путь от корня (добыча) до листа (конечный потребитель) — это полная цепочка поставок. Canonical Path позволяет однозначно определить позицию любого узла в этом DAG без знания всего графа заранее.
-
-Версионирование: если компания меняет владельца или перепрофилируется — старый path помечается deprecated, создаётся новый. История сохраняется для аналитики.
+Каждый узел хранит known_aliases. При ingestion: fuzzy match по aliases → assign canonical path. Данные из EIA, Reuters, FCDO — маппятся на граф через canonical path ядра. Версионирование: deprecated path → новый path, история сохраняется.
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1332,14 +1321,16 @@ Resilio / Notion — НЕ БРАТЬ НИЧЕГО. Это consumer/productivity 
 
 6.2 Универсальная модель данных для материала
 
-MaterialDefinition (YAML/JSON конфиг, хранится в data/materials/):
+MaterialDefinition (YAML/JSON конфиг, хранится в internal/criticalchain/config/materials/).
+Taxonomy: FacilityKind, FacilityRole, stage names — из ядра (taxonomy package).
 
+```yaml
 material_id: tungsten
 display_name:
   ru: "Вольфрам"
   en: "Tungsten"
 chemical_symbol: W
-category: critical_mineral  # critical_mineral | energy_commodity | agricultural
+category: critical_mineral  # critical_mineral | energy_commodity | agricultural — маппинг на IndustryPath
 subcategory: refractory_metal
 
 units:
@@ -1390,7 +1381,7 @@ data_sources:
     fields: [trade_flows, consumption]
 
 key_chokepoints:
-  - path: critical_mineral/mine/asia/china/jiangxi/stage0
+  - path: /loc/cn/jiangxi  # или /fac/cn/jiangxi/... для конкретного объекта
     share_of_global_supply: 0.82
     risk_multiplier: 2.5
 
@@ -1400,27 +1391,29 @@ price_series:
   unit: USD/metric_ton
   frequency: monthly
   sources: [metal_bulletin, fastmarkets]
+```
 
 6.3 Универсальная модель маршрута
 
-RouteDefinition — описывает физический путь материала между узлами:
+RouteDefinition — описывает физический путь материала между узлами.
+node_path использует canonical path ядра (/fac/{geo}/{slug}, /org/...).
 
-route_id: "lithium/mine/americas/chile/atacama/.../stage0→stage3/china/..."
+route_id: "lithium/cl-stage0→cn-stage3"
 material: lithium
 waypoints:
-  - node_path: lithium/mine/americas/chile/atacama/stage0/sqm
+  - node_path: /fac/cl/atacama/sociedad_quimica_y_minera
     role: origin
-  - node_path: lithium/port/americas/chile/antofagasta/stage1/puerto_antofagasta
+  - node_path: /fac/cl/antofagasta/puerto_antofagasta
     role: transit
     transport_mode: truck
     distance_km: 300
     typical_days: 2
-  - node_path: lithium/port/asia/china/guangdong/stage2/guangzhou_nansha
+  - node_path: /fac/cn/guangdong/guangzhou_nansha
     role: transit
     transport_mode: ocean_vessel
     distance_km: 18000
     typical_days: 35
-  - node_path: lithium/processor/asia/china/jiangxi/stage3/ganfeng_lithium
+  - node_path: /fac/cn/jiangxi/ganfeng_lithium
     role: destination
     transport_mode: rail
     distance_km: 800
@@ -1526,14 +1519,200 @@ GraphConfig:
 
 6.7 Добавление нового материала: пошаговый процесс (без разработчика)
 
-Шаг 1: Создать файл data/materials/tungsten.yaml (заполнить по шаблону MaterialDefinition)
-Шаг 2: Загрузить список производителей в data/entities/tungsten_entities.csv (company, country, stage, capacity)
+Шаг 1: Создать файл internal/criticalchain/config/materials/tungsten.yaml (заполнить по шаблону MaterialDefinition, taxonomy из ядра)
+Шаг 2: Загрузить список производителей в internal/criticalchain/config/entities/tungsten_entities.csv (company, country, stage, capacity)
 Шаг 3: Запустить скрипт: npm run ingest:material tungsten (парсит данные, строит canonical paths, создаёт граф)
 Шаг 4: Настроить data_sources в конфиге (ссылки на открытые источники данных)
 Шаг 5: Запустить: npm run score:material tungsten (первый проход risk scoring)
 Шаг 6: Материал появляется в интерфейсе автоматически
 
 Всё. Разработчик не нужен.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+РАЗДЕЛ 7. ИНТЕГРАЦИЯ С ЯДРОМ И АРХИТЕКТУРНЫЕ РЕШЕНИЯ (v2.0)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Зафиксированные решения (март 2026). Раздел написан для ревьюера, не знакомого с проектом.
+
+
+7.0 КОНТЕКСТ: ЧТО ТАКОЕ ЯДРО (HORIZON)
+
+«Ядро» — основная продуктовая система в репозитории. В том же репозитории и GCP проекте существует основная система — Horizon. Это платформа геополитической и supply-chain аналитики: граф сущностей (организации, объекты инфраструктуры, продукты, маршруты, зоны риска), линзы (lenses) для фокусировки анализа, watch-брифы, AI-ассистированный скраутинг. Horizon уже имеет:
+
+- **Таксономию:** иерархические пути для классификации сущностей (/org/{geo}/{slug}, /fac/{geo}/{slug}, /product/..., /zone/...), FacilityKind (mine, refinery, seaport...), FacilityRole (extraction, refining...), EntityPath (/Infrastructure/Manufacturing/Mine, /Geo/Zone/Conflict...)
+- **Firestore** как основное хранилище
+- **Vertex AI** с Search Grounding для entity resolution и RAG
+- **Firebase Auth**, multi-tenancy
+- **Data pipeline** на Cloud Scheduler + Pub/Sub + Cloud Run workers
+
+(В коде: backend/internal/horizon/, backend/internal/taxonomy/, backend/internal/ai/.)
+
+CriticalChain — эксперимент в той же экосистеме. Мы хотим проверить гипотезу «мониторинг цепочек критических материалов» без переписывания всего с нуля, но и без затягивания CriticalChain в ядро. Отсюда решения ниже.
+
+
+7.1 ПОЗИЦИОНИРОВАНИЕ
+
+**Решение:** CriticalChain — эксперимент-подсистема. В ядро не интегрируем. Разворачивается отдельно внутри того же GCP проекта. Использует таксономию и возможности ядра. Совместимость сохраняем для возможного слияния в будущем.
+
+**Почему так:**
+- Эксперимент должен быть изолирован: если гипотеза не сработает, откат не затрагивает ядро.
+- Одновременно дублировать таксономию (facility types, entity paths, canonical paths) — лишняя работа и риск рассинхронизации. Ядро уже решает задачу «как называть и классифицировать сущности».
+- Совместимость по форматам (canonical path, taxonomy enums) даёт опцию слияния позже без миграции данных.
+- «Без фанатизма»: база тестовая, финальное решение о слиянии — после валидации продукта.
+
+
+7.2 СТЕК И ХРАНИЛИЩЕ
+
+**7.2.1 Firestore, отдельные коллекции**
+
+**Решение:** Отдельные коллекции с префиксом criticalchain_ (criticalchain_entities, criticalchain_edges, criticalchain_routes и т.д.). Не смешиваем с коллекциями Horizon.
+
+**Почему так:**
+- Изоляция данных: запросы, индексы, квоты CriticalChain не влияют на Horizon.
+- Простой откат: можно отключить/удалить подсистему, не трогая ядро.
+- Ясные границы при ревью и аудите: что принадлежит эксперименту, что — продакшену.
+- Префикс criticalchain_ исключает коллизии имён с будущими коллекциями ядра.
+
+
+**7.2.2 Граф и гео: Firestore для MVP (не PostGIS, не graph DB)**
+
+**Решение:** Граф — коллекции criticalchain_nodes, criticalchain_edges. Гео — Firestore GeoPoint в документах. PostGIS и Neo4j/Spanner Graph — Phase 2.
+
+**Почему так:**
+- Ядро уже использует Firestore; команда знает модель, лимиты, паттерны. Добавлять PostGIS/Neo4j — новые зависимости, деплой, обучение.
+- Для MVP объём данных небольшой (5–7 материалов, сотни объектов). Firestore справляется. Сложные spatial-запросы (polygon intersection, nearest-neighbor) пока не критичны.
+- GeoPoint достаточен для точечных объектов (шахты, заводы, порты). Маршруты — массив waypoints. Ограничение: нет нативной поддержки LineString/Polygon; для heatmap и зон конфликтов — клиентская обработка или упрощённые структуры.
+- Когда объём вырастет или появятся требования к graph traversals / spatial joins — миграция на PostGIS и graph DB будет обоснована данными, а не превентивно.
+
+
+**7.2.3 Backend: отдельный пакет internal/criticalchain**
+
+**Решение:** Код в internal/criticalchain. Не размазываем по horizon, scout, taxonomy.
+
+**Почему так:**
+- Чёткая граница: ревьюер и разработчик сразу видят, что относится к CriticalChain.
+- Импорт taxonomy из internal/taxonomy — явная зависимость, без копипаста.
+- Упрощает отключение: исключить пакет из билда — и подсистема не компилируется.
+
+
+**7.2.4 Data Pipeline: Cloud Scheduler → Pub/Sub → Workers. AgentMesh не используем.**
+
+**Решение:** Pipeline как в основном whitepaper: Cloud Scheduler (каждые 6 ч) → Pub/Sub → Cloud Run workers. AgentMesh (внутренний multi-agent control plane ядра) не используем.
+
+**Почему так:**
+- AgentMesh ещё не протестирован в продакшене. Использовать непроверенный компонент в эксперименте — лишний риск.
+- AgentMesh — оркестрация агентов, подписанные карточки, approval workflow, Firestore leases. Для «раз в 6 часов запустить воркеры по источникам» это избыточно.
+- Простой пайплайн (Scheduler → Pub/Sub → Run) достаточен, проверен в других частях проекта, не требует изучения AgentMesh.
+- Меньше связанности: CriticalChain не зависит от внутренних контрактов mesh’а.
+
+
+7.3 API И РАЗВЁРТЫВАНИЕ
+
+**7.3.1 Deploy: тот же Cloud Run, отдельные routes**
+
+**Решение:** CriticalChain API — routes /api/v1/criticalchain/... на том же Cloud Run сервисе, что и Horizon. Не отдельный микросервис.
+
+**Почему так:**
+- Один сервис — один деплой, один Load Balancer, общие секреты и IAM. Меньше операционной нагрузки.
+- Для эксперимента отдельный сервис (ещё один Cloud Run, ещё один домен) — overkill.
+- Routes изолированы по пути; при необходимости можно вынести в отдельный сервис позже.
+
+
+**7.3.2 CI/CD: ключ --api-criticalchain**
+
+**Решение:** В скрипте деплоя — флаг --api-criticalchain. Позволяет деплоить только CriticalChain API (и его зависимости), не трогая остальное.
+
+**Почему так:**
+- Итерации по эксперименту не должны триггерить полный деплой Horizon.
+- Быстрее цикл разработки: изменил CriticalChain — задеплоил только его.
+- При слиянии с ядром флаг можно убрать или оставить как no-op.
+
+
+**7.3.3 Vertex AI: тот же проект, отдельный datastore**
+
+**Решение:** Vertex AI — в том же GCP проекте. Отдельный datastore для CriticalChain (facilities, materials, routes). Grounding для CriticalChain не пересекается с datastore Horizon.
+
+(Datastore — хранилище документов для Vertex AI Search Grounding: модель ищет по нему при ответах на вопросы.)
+
+**Почему так:**
+- Один проект — проще биллинг, квоты, IAM. Не создаём отдельный GCP проект для эксперимента.
+- Отдельный datastore: документы Horizon (фрагменты, линзы) и CriticalChain (объекты цепочек) — разные домены. Смешивание в одном datastore ухудшит релевантность grounding: запрос «риски литиевой цепочки в Чили» не должен тянуть фрагменты про Yemen supply chain.
+- При слиянии можно объединить datastores или оставить раздельными — зависит от итоговой модели данных.
+
+
+7.4 ФРОНТЕНД
+
+**Решение:** Роут /criticalchain в том же SPA (React/Vite). Отдельный раздел. Naming: criticalchain (lowercase).
+
+**Почему так:**
+- Один SPA — общий auth, общая навигация, общие компоненты (карта, граф). Пользователь может переключаться между Horizon и CriticalChain без повторного логина.
+- Отдельный роут — чёткая граница в коде (features/criticalchain/ или pages/criticalchain/). Не размазываем CriticalChain по экранам Horizon.
+- Lowercase — консистентность с URL-конвенциями, избегаем путаницы с CamelCase в путях.
+
+
+7.5 AUTH И MULTI-TENANCY
+
+**7.5.1 Auth: общий с Horizon**
+
+**Решение:** Firebase Auth / Identity Platform. Тот же провайдер, те же пользователи. CriticalChain не имеет собственной системы аутентификации.
+
+**Почему так:**
+- Один аккаунт на всю платформу. Пользователь не создаёт отдельный логин для CriticalChain.
+- Меньше кода: не дублируем логику логина, восстановления пароля, SSO.
+- Корпоративные клиенты ожидают единый вход (SSO). Раздельные auth для подсистемы усложняют onboarding.
+
+
+**7.5.2 Multi-tenancy: watches/алерты — tenant-scoped, цепочки — общие, риски — общедоступны**
+
+**Решение:**
+- Watches, алерты, кастомные аннотации — привязаны к tenant (организация/клиент в multi-tenant модели). Каждый клиент видит только свои.
+- Данные о цепочках (facilities, materials, routes) — общие. Это reference data, не персональная информация.
+- Информация о рисках — общедоступна по клику. Любой авторизованный пользователь видит все risk scores, без tenant-фильтра.
+
+**Почему так:**
+- Цепочки и риски — аналитический продукт. Ограничивать их по tenant («только мои риски») противоречит смыслу: аналитик должен видеть полную картину.
+- Watches и алерты — персональные настройки. Их изолируем по tenant.
+- «Общедоступны по клику» = после входа. Демо-режим (см. ниже) — без входа, read-only.
+
+
+7.6 ДЕМО
+
+**Решение:** Публичный read-only демо. Регистрация не требуется для просмотра. Регистрация будет добавлена позже — для watches, алертов и прочих действий. В демо пользователь только видит данные; ничего ручного делать нельзя кроме просмотра.
+
+**Почему так:**
+- Низкий порог входа: потенциальный клиент может оценить продукт без создания аккаунта. Важно для B2B sales.
+- Ограничение read-only защищает от вандализма и случайных изменений. Редактирование, сохранение watches, настройка алертов — требуют auth.
+- Регистрация «потом» — не противоречит auth. Сначала даём смотреть, затем — действовать. Это стандартный паттерн freemium/demo.
+
+
+7.7 КОНФИГ МАТЕРИАЛОВ
+
+**Решение:** YAML-конфиги в internal/criticalchain/config/materials/*.yaml. Загрузка при старте workers или ingest. Taxonomy (FacilityKind, FacilityRole, EntityPath, stage names) — из ядра. В YAML только material_id, display_name, category (маппинг на IndustryPath), production_stages (stage → string из taxonomy).
+
+**Почему так:**
+- Конфиг в репозитории — версионируется, ревьюируется, деплоится вместе с кодом. Не нужен отдельный сервис конфигов.
+- Taxonomy из ядра — единый источник правды. Не дублируем enum’ы (mine, refinery...) в YAML; ссылаемся на taxonomy package.
+- Добавление материала = новый YAML + данные, без изменения кода. Соответствует принципу «новый материал = только данные» из раздела 6.
+
+
+7.8 ГРАНИЦА С HORIZON
+
+**Решение:** Совместимость по canonical path, taxonomy, форматам. Без жёсткого слияния. HorizonFragment (модель фрагмента ядра) не используем напрямую — своя модель в CriticalChain. Связь по canonical path при необходимости. Источники и логику ядра используем, если оптимальны.
+
+**Почему так:**
+- HorizonFragment — тяжёлая модель (десятки полей, IndustryPaths, MarketSegments, SpherePaths...). CriticalChain нужны facility, material, route, risk. Подтягивать Fragment — overkill и лишние зависимости.
+- Своя модель — проще, под задачу. При слиянии можно маппить CriticalChain entity → HorizonFragment или наоборот.
+- Canonical path — общий язык. Если объект в Horizon уже есть (/fac/cl/sqm), CriticalChain может ссылаться на него по path, не дублируя данные. Решение о том, когда дублировать, а когда ссылаться — по мере накопления данных.
+- «Источники и логику — если оптимальны»: не изобретаем велосипед. Если в ядре есть адаптер под USGS или нормализация координат — переиспользуем. Но CriticalChain не обязан — может иметь свои адаптеры под свою модель.
+
+
+7.9 ВНЕ СКОУПА
+
+**Решение:** worldmonitor (проект в temp-repos/) не участвует в CriticalChain.
+
+**Почему так:** worldmonitor — отдельный эксперимент/продукт (другая тематика, другой стек). Связывать его с CriticalChain не планировалось. Упоминаем явно, чтобы ревьюер не искал интеграцию.
+
 
 ═══════════════════════════════════════════════════════════════
 КОНЕЦ ДОПОЛНЕНИЯ v2.0
