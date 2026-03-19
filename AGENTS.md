@@ -265,11 +265,11 @@ Required behavior:
 | main (оркестратор) | `sonnet` | Держит контекст, принимает решения |
 | planner | `gpro` | Декомпозиция, не глубокий анализ |
 | research | `gpro` | Хороший баланс цена/качество для анализа |
-| engineering (простой) | `sonnet` | Кодирование требует точности |
-| engineering (рефакторинг/архитектура) | `sonnet` или `opus` | По сложности |
+| engineering (обычный) | `gpro` | SWE-Bench 80.6% — уровень Opus, лучше Sonnet на коде |
+| engineering (критичный/сложный рефакторинг) | `opus` | Максимальное качество для production-критичного кода |
 | reviewer (рутинный PR) | `gpro` | Достаточно для паттерн-матчинга |
 | reviewer (архитектурное решение) | `opus` | Максимальное качество там где критично |
-| генерация документов | `sonnet` | Структурный вывод, достаточно |
+| генерация документов | `gpro` | Достаточно для структурного вывода |
 
 ### Как обращаться к специалистам
 
@@ -278,7 +278,7 @@ Required behavior:
 ```
 planner    → model: "gpro"
 research   → model: "gpro"
-engineering (обычный)  → model: "sonnet"
+engineering (обычный)  → model: "gpro"
 engineering (критичный) → model: "opus"
 reviewer (обычный)     → model: "gpro"
 reviewer (критичный)   → model: "opus"
