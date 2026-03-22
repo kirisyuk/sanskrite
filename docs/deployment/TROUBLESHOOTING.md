@@ -161,7 +161,7 @@ gcloud run revisions list --service etigram-api --region us-central1 --limit 3
 gcloud run services update-traffic etigram-api --region us-central1 --to-latest
 
 # Проверить
-curl $(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')/health
+curl "$(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')/healthz"
 ```
 
 ---
@@ -322,7 +322,7 @@ for svc in etigram-api etigram-telegram; do
   URL=$(gcloud run services describe $svc --region us-central1 --format='value(status.url)' 2>/dev/null)
   if [[ -n "$URL" ]]; then
     echo "$svc: $URL"
-    curl -s "$URL/health" | jq . || echo "No /health endpoint"
+    curl -s "$URL/healthz" | jq . || echo "No /healthz endpoint"
   fi
 done
 
@@ -366,7 +366,7 @@ gcloud run services update-traffic etigram-api \
   --to-revisions etigram-api-00006=100
 
 # 3. Проверить
-curl $(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')/health
+curl "$(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')/healthz"
 ```
 
 ### Полная переустановка инфраструктуры

@@ -1101,7 +1101,7 @@ gcloud firestore indexes composite create \
 - **Allowlist по domain mode** — для каждого режима задан список разрешённых типов рёбер (DependencyType) при записи и фильтрации; при `general` ограничений нет.
 - **Semantic groups** — справочник DependencyType → семантическая группа (`supply_chain`, `governance`, `market`, `strategic`, `domain`, `person`, `transition`, `other`) для фильтрации в API/UI и выбора allowlist.
 
-Подробнее см. [ТЗ: Domain-specific фазы Scout и composable agents](../implementation/SCOUT_DOMAIN_PHASES_AND_COMPOSABLE_AGENTS_TZ.md).
+Подробнее см. [ТЗ: Domain-specific фазы Scout и composable agents](../../archive/horizon-implementation/SCOUT_DOMAIN_PHASES_AND_COMPOSABLE_AGENTS_TZ.md).
 
 **Канонические типы рёбер (TZ §6.1):** в промптах и при записи используются только канонические типы. Устаревшие типы (RELATED_TO, AFFILIATED_WITH, DOMINATES, WORKS_FOR, RENAMED_TO, ABOUT, BROADENS_TO и др.) маппятся в нормализаторе: RELATED_TO/AFFILIATED_WITH/PARTNERS_WITH → ASSOCIATED_WITH; переходы (RENAMED_TO, MERGED_INTO, …) → CORPORATE_TRANSITION; домен↔домен → DOMAIN_RELATION или FOCUSES_ON; домен→объект → FOCUSES_ON; DOMINATES → PARTICIPATES_IN; WORKS_FOR/KEY_PERSON → EMPLOYED_BY.
 

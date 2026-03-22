@@ -53,6 +53,10 @@ graph TD
 - Infra: GCP/Firebase deployment, service accounts, CI/CD.
 
 ### Key Links
+- Documentation index: [docs/README.md](../README.md)
+- **HTTP route catalog (platform `/api/v1`, WS, internal tasks):** [apis.md](apis.md)
+- Vertex AI Search (RAG): [vertex-ai-search.md](vertex-ai-search.md)
+- Archived docs policy: [docs/archive/README.md](../archive/README.md)
 - Backend packages: `backend/internal/*`
 - Frontend app: `web/src/*`
 - Infra/config: `docs/deployment/*`, `web/cloudbuild.deploy.yaml`, `scripts/*`, `backend/Dockerfile`

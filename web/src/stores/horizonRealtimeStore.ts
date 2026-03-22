@@ -98,6 +98,7 @@ export interface HorizonIdentifyStressJobState {
   acceptedNodes?: number;
   acceptedArtifacts?: number;
   acceptedSupplyLinks?: number;
+  acceptedRelations?: number;
   touchedArtifactKeys?: string[];
   touchedNodeRefs?: string[];
   touchedSupplyLinks?: string[];
@@ -105,6 +106,45 @@ export interface HorizonIdentifyStressJobState {
   requiresRefetch?: boolean;
   error?: string;
   errors?: string[];
+  updatedAt?: number;
+}
+
+export interface HorizonCompleteSubstrateJobState {
+  jobId: string;
+  lensId?: string;
+  projectId?: string;
+  state?: 'started' | 'running' | 'completed' | 'failed' | string;
+  acceptedNodes?: number;
+  acceptedArtifacts?: number;
+  acceptedSupplyLinks?: number;
+  acceptedRelations?: number;
+  artifactsCreated?: number;
+  artifactsUpdated?: number;
+  completedLinks?: string[];
+  artifactKeys?: string[];
+  selectedCanonicalPath?: string;
+  requiresRefetch?: boolean;
+  error?: string;
+  updatedAt?: number;
+}
+
+export interface HorizonRecoverMetricsJobState {
+  jobId: string;
+  lensId?: string;
+  projectId?: string;
+  state?: 'started' | 'running' | 'completed' | 'failed' | string;
+  acceptedNodes?: number;
+  acceptedArtifacts?: number;
+  acceptedSupplyLinks?: number;
+  acceptedRelations?: number;
+  artifactsUpdated?: number;
+  supplyLinksUpdated?: number;
+  recoveredLinks?: string[];
+  touchedArtifactKeys?: string[];
+  touchedNodeRefs?: string[];
+  selectedCanonicalPath?: string;
+  requiresRefetch?: boolean;
+  error?: string;
   updatedAt?: number;
 }
 
@@ -136,6 +176,8 @@ interface HorizonRealtimeStore {
   assembly: HorizonAssemblyState;
   jobs: Record<string, HorizonScoutJobState>;
   identifyJobs: Record<string, HorizonIdentifyStressJobState>;
+  completeSubstrateJobs: Record<string, HorizonCompleteSubstrateJobState>;
+  recoverMetricsJobs: Record<string, HorizonRecoverMetricsJobState>;
   nodes: Record<string, HorizonNodeState>; // key: fragmentId || canonicalPath
   edges: Record<string, HorizonEdgeState>; // key: edgeId
   artifacts: Record<string, HorizonArtifactState>; // key: artifact id || canonicalKey
@@ -180,12 +222,14 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
     assembly: {},
     jobs: {},
     identifyJobs: {},
+    completeSubstrateJobs: {},
+    recoverMetricsJobs: {},
     nodes: {},
     edges: {},
     artifacts: {},
     events: [],
 
-    reset: () => set({ assembly: {}, jobs: {}, identifyJobs: {}, nodes: {}, edges: {}, artifacts: {} }),
+    reset: () => set({ assembly: {}, jobs: {}, identifyJobs: {}, completeSubstrateJobs: {}, recoverMetricsJobs: {}, nodes: {}, edges: {}, artifacts: {} }),
     resetEvents: () => set({ events: [] }),
 
     handleWsEvent: (type, dataIn) => {
@@ -1158,6 +1202,89 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
               description: `${touchedArtifacts} routes touched`,
             };
           }
+        } else if (type.startsWith('horizon.complete_substrate.')) {
+          const jobId = typeof data?.jobId === 'string' ? data.jobId : '';
+          const artifactsCreated = typeof data?.artifactsCreated === 'number' ? data.artifactsCreated : 0;
+          const artifactsUpdated = typeof data?.artifactsUpdated === 'number' ? data.artifactsUpdated : 0;
+          const completedLinks = Array.isArray(data?.completedLinks) ? data.completedLinks.length : 0;
+          if (type.endsWith('.started')) {
+            icon = 'info';
+            text = 'Complete links started';
+            humanReadable = {
+              title: 'Complete Links',
+              description: jobId ? `Job ${jobId.slice(0, 8)} started` : 'Started',
+            };
+          } else if (type.endsWith('.batch_applied')) {
+            icon = 'success';
+            text = `Completed links batch applied`;
+            humanReadable = {
+              title: 'Links Materialized',
+              description: `${artifactsCreated + artifactsUpdated} routes • ${completedLinks} links`,
+            };
+          } else if (type.endsWith('.completed')) {
+            icon = 'success';
+            text = 'Complete links finished';
+            humanReadable = {
+              title: 'Complete Links Finished',
+              description: `${artifactsCreated} created • ${artifactsUpdated} updated`,
+            };
+          } else if (type.endsWith('.failed')) {
+            icon = 'error';
+            const errorText = typeof data?.error === 'string' ? data.error : 'Unknown error';
+            text = 'Complete links failed';
+            humanReadable = {
+              title: 'Complete Links Failed',
+              description: short(errorText),
+            };
+          }
+        } else if (type.startsWith('horizon.recover_metrics.')) {
+          const jobId = typeof data?.jobId === 'string' ? data.jobId : '';
+          const artifactsUpdated = typeof data?.artifactsUpdated === 'number' ? data.artifactsUpdated : 0;
+          const supplyLinksUpdated = typeof data?.supplyLinksUpdated === 'number' ? data.supplyLinksUpdated : 0;
+          const recoveredLinks = Array.isArray(data?.recoveredLinks) ? data.recoveredLinks.length : 0;
+          if (type.endsWith('.started')) {
+            icon = 'info';
+            text = 'Recover metrics started';
+            humanReadable = {
+              title: 'Recover Metrics',
+              description: jobId ? `Job ${jobId.slice(0, 8)} started` : 'Started',
+            };
+          } else if (type.endsWith('.batch_applied')) {
+            icon = 'success';
+            text = 'Metrics batch applied';
+            humanReadable = {
+              title: 'Metrics Materialized',
+              description: `${artifactsUpdated} routes • ${supplyLinksUpdated} links`,
+            };
+          } else if (type.endsWith('.completed')) {
+            icon = 'success';
+            text = 'Recover metrics finished';
+            humanReadable = {
+              title: 'Recover Metrics Finished',
+              description: `${artifactsUpdated} routes • ${recoveredLinks} links`,
+            };
+          } else if (type.endsWith('.failed')) {
+            icon = 'error';
+            const errorText = typeof data?.error === 'string' ? data.error : 'Unknown error';
+            text = 'Recover metrics failed';
+            humanReadable = {
+              title: 'Recover Metrics Failed',
+              description: short(errorText),
+            };
+          } else if (type.endsWith('.artifact_upserted')) {
+            icon = 'info';
+            const displayName =
+              typeof data?.displayName === 'string' && data.displayName.trim()
+                ? data.displayName.trim()
+                : typeof data?.canonicalKey === 'string'
+                  ? humanizeCanonicalPath(data.canonicalKey)
+                  : 'Supply route';
+            text = `Route metrics updated: ${displayName}`;
+            humanReadable = {
+              title: 'Route Metrics Updated',
+              description: displayName,
+            };
+          }
         } else if (type.startsWith('horizon.propagation.')) {
           icon = 'propagation';
           const nodesUpdated =
@@ -1364,6 +1491,10 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
             Array.isArray(data?.acceptedSupplyLinks)
               ? data.acceptedSupplyLinks.length
               : prev?.acceptedSupplyLinks,
+          acceptedRelations:
+            typeof data?.acceptedRelationCount === 'number'
+              ? data.acceptedRelationCount
+              : prev?.acceptedRelations,
           touchedArtifactKeys:
             touchedArtifactKeys.length > 0
               ? touchedArtifactKeys
@@ -1423,6 +1554,246 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
             nextJobs[key] = next;
           }
           return { identifyJobs: nextJobs };
+        });
+
+        if (type.endsWith('.artifact_upserted')) {
+          const artifactId =
+            typeof data?.id === 'string' && data.id.trim()
+              ? data.id.trim()
+              : typeof data?.canonicalKey === 'string'
+                ? data.canonicalKey.trim()
+                : '';
+          if (artifactId) {
+            set((s) => ({
+              artifacts: {
+                ...s.artifacts,
+                [artifactId]: {
+                  ...(s.artifacts[artifactId] || { id: artifactId }),
+                  id: artifactId,
+                  lensId: data?.lensId ?? s.artifacts[artifactId]?.lensId,
+                  canonicalKey: data?.canonicalKey ?? s.artifacts[artifactId]?.canonicalKey,
+                  displayName: data?.displayName ?? s.artifacts[artifactId]?.displayName,
+                  anchorSupplier: data?.anchorSupplier ?? s.artifacts[artifactId]?.anchorSupplier,
+                  anchorCustomer: data?.anchorCustomer ?? s.artifacts[artifactId]?.anchorCustomer,
+                  productAxis: data?.productAxis ?? s.artifacts[artifactId]?.productAxis,
+                  nodeRefs: data?.nodeRefs ?? s.artifacts[artifactId]?.nodeRefs,
+                  flowRefs: data?.flowRefs ?? s.artifacts[artifactId]?.flowRefs,
+                  zoneRefs: data?.zoneRefs ?? s.artifacts[artifactId]?.zoneRefs,
+                  affectedZoneRefs: data?.affectedZoneRefs ?? s.artifacts[artifactId]?.affectedZoneRefs,
+                  legCount:
+                    typeof data?.legCount === 'number'
+                      ? data.legCount
+                      : s.artifacts[artifactId]?.legCount,
+                  bindingScore:
+                    typeof data?.bindingScore === 'number'
+                      ? data.bindingScore
+                      : s.artifacts[artifactId]?.bindingScore,
+                  pathStressScore:
+                    typeof data?.pathStressScore === 'number'
+                      ? data.pathStressScore
+                      : s.artifacts[artifactId]?.pathStressScore,
+                  riskOverlay: data?.riskOverlay ?? s.artifacts[artifactId]?.riskOverlay,
+                  payload: data?.payload ?? s.artifacts[artifactId]?.payload,
+                  updatedAt: now,
+                },
+              },
+            }));
+          }
+          return;
+        }
+
+        return;
+      }
+
+      if (type.startsWith('horizon.complete_substrate.')) {
+        const lensId =
+          typeof data?.lensId === 'string' && data.lensId.trim()
+            ? data.lensId.trim()
+            : undefined;
+        const projectId =
+          typeof data?.projectId === 'string' && data.projectId.trim()
+            ? data.projectId.trim()
+            : undefined;
+        const jobId =
+          typeof data?.jobId === 'string' && data.jobId.trim()
+            ? data.jobId.trim()
+            : '';
+        const completedLinks = Array.isArray(data?.completedLinks)
+          ? data.completedLinks.map((value: any) => String(value || '').trim()).filter(Boolean)
+          : [];
+        const artifactKeys = Array.isArray(data?.artifactKeys)
+          ? data.artifactKeys.map((value: any) => String(value || '').trim()).filter(Boolean)
+          : [];
+        const upsertJob = (
+          prev: HorizonCompleteSubstrateJobState | undefined,
+        ): HorizonCompleteSubstrateJobState => ({
+          jobId: jobId || prev?.jobId || '',
+          lensId: lensId ?? prev?.lensId,
+          projectId: projectId ?? prev?.projectId,
+          state: prev?.state,
+          acceptedNodes:
+            typeof data?.acceptedScope?.acceptedNodes === 'number'
+              ? data.acceptedScope.acceptedNodes
+              : prev?.acceptedNodes,
+          acceptedArtifacts:
+            typeof data?.acceptedScope?.acceptedArtifacts === 'number'
+              ? data.acceptedScope.acceptedArtifacts
+              : prev?.acceptedArtifacts,
+          acceptedSupplyLinks:
+            typeof data?.acceptedScope?.acceptedSupplyLinks === 'number'
+              ? data.acceptedScope.acceptedSupplyLinks
+              : prev?.acceptedSupplyLinks,
+          acceptedRelations:
+            typeof data?.acceptedScope?.acceptedRelations === 'number'
+              ? data.acceptedScope.acceptedRelations
+              : prev?.acceptedRelations,
+          artifactsCreated:
+            typeof data?.artifactsCreated === 'number'
+              ? data.artifactsCreated
+              : prev?.artifactsCreated,
+          artifactsUpdated:
+            typeof data?.artifactsUpdated === 'number'
+              ? data.artifactsUpdated
+              : prev?.artifactsUpdated,
+          completedLinks:
+            completedLinks.length > 0 ? completedLinks : prev?.completedLinks,
+          artifactKeys:
+            artifactKeys.length > 0 ? artifactKeys : prev?.artifactKeys,
+          selectedCanonicalPath:
+            typeof data?.acceptedScope?.selectedCanonicalPath === 'string'
+              ? data.acceptedScope.selectedCanonicalPath
+              : prev?.selectedCanonicalPath,
+          requiresRefetch:
+            type.endsWith('.batch_applied') || type.endsWith('.completed')
+              ? true
+              : prev?.requiresRefetch,
+          error:
+            typeof data?.error === 'string' && data.error.trim()
+              ? data.error.trim()
+              : prev?.error,
+          updatedAt: now,
+        });
+
+        set((s) => {
+          const nextJobs = { ...s.completeSubstrateJobs };
+          const keys = jobId
+            ? [jobId]
+            : Object.keys(nextJobs).filter((key) => {
+                const candidate = nextJobs[key];
+                return candidate?.lensId && lensId && candidate.lensId === lensId;
+              });
+          if (keys.length === 0 && jobId) keys.push(jobId);
+          if (keys.length === 0) return s;
+          for (const key of keys) {
+            const prev = nextJobs[key];
+            const next = upsertJob(prev);
+            if (type.endsWith('.started')) next.state = 'started';
+            else if (type.endsWith('.batch_applied')) next.state = 'running';
+            else if (type.endsWith('.completed')) next.state = 'completed';
+            else if (type.endsWith('.failed')) next.state = 'failed';
+            nextJobs[key] = next;
+          }
+          return { completeSubstrateJobs: nextJobs };
+        });
+        return;
+      }
+
+      if (type.startsWith('horizon.recover_metrics.')) {
+        const lensId =
+          typeof data?.lensId === 'string' && data.lensId.trim()
+            ? data.lensId.trim()
+            : undefined;
+        const projectId =
+          typeof data?.projectId === 'string' && data.projectId.trim()
+            ? data.projectId.trim()
+            : undefined;
+        const jobId =
+          typeof data?.jobId === 'string' && data.jobId.trim()
+            ? data.jobId.trim()
+            : '';
+        const recoveredLinks = Array.isArray(data?.recoveredLinks)
+          ? data.recoveredLinks.map((value: any) => String(value || '').trim()).filter(Boolean)
+          : [];
+        const artifactKeys = Array.isArray(data?.touchedArtifactKeys)
+          ? data.touchedArtifactKeys.map((value: any) => String(value || '').trim()).filter(Boolean)
+          : [];
+        const nodeRefs = Array.isArray(data?.touchedNodeRefs)
+          ? data.touchedNodeRefs.map((value: any) => String(value || '').trim()).filter(Boolean)
+          : [];
+        const upsertJob = (
+          prev: HorizonRecoverMetricsJobState | undefined,
+        ): HorizonRecoverMetricsJobState => ({
+          jobId: jobId || prev?.jobId || '',
+          lensId: lensId ?? prev?.lensId,
+          projectId: projectId ?? prev?.projectId,
+          state: prev?.state,
+          acceptedNodes:
+            typeof data?.acceptedScope?.acceptedNodes === 'number'
+              ? data.acceptedScope.acceptedNodes
+              : prev?.acceptedNodes,
+          acceptedArtifacts:
+            typeof data?.acceptedScope?.acceptedArtifacts === 'number'
+              ? data.acceptedScope.acceptedArtifacts
+              : prev?.acceptedArtifacts,
+          acceptedSupplyLinks:
+            typeof data?.acceptedScope?.acceptedSupplyLinks === 'number'
+              ? data.acceptedScope.acceptedSupplyLinks
+              : prev?.acceptedSupplyLinks,
+          acceptedRelations:
+            typeof data?.acceptedScope?.acceptedRelations === 'number'
+              ? data.acceptedScope.acceptedRelations
+              : prev?.acceptedRelations,
+          artifactsUpdated:
+            typeof data?.artifactsUpdated === 'number'
+              ? data.artifactsUpdated
+              : prev?.artifactsUpdated,
+          supplyLinksUpdated:
+            typeof data?.supplyLinksUpdated === 'number'
+              ? data.supplyLinksUpdated
+              : prev?.supplyLinksUpdated,
+          recoveredLinks:
+            recoveredLinks.length > 0 ? recoveredLinks : prev?.recoveredLinks,
+          touchedArtifactKeys:
+            artifactKeys.length > 0 ? artifactKeys : prev?.touchedArtifactKeys,
+          touchedNodeRefs:
+            nodeRefs.length > 0 ? nodeRefs : prev?.touchedNodeRefs,
+          selectedCanonicalPath:
+            typeof data?.acceptedScope?.selectedCanonicalPath === 'string'
+              ? data.acceptedScope.selectedCanonicalPath
+              : prev?.selectedCanonicalPath,
+          requiresRefetch:
+            typeof data?.requiresRefetch === 'boolean'
+              ? data.requiresRefetch
+              : type.endsWith('.batch_applied') || type.endsWith('.completed')
+                ? true
+                : prev?.requiresRefetch,
+          error:
+            typeof data?.error === 'string' && data.error.trim()
+              ? data.error.trim()
+              : prev?.error,
+          updatedAt: now,
+        });
+
+        set((s) => {
+          const nextJobs = { ...s.recoverMetricsJobs };
+          const keys = jobId
+            ? [jobId]
+            : Object.keys(nextJobs).filter((key) => {
+                const candidate = nextJobs[key];
+                return candidate?.lensId && lensId && candidate.lensId === lensId;
+              });
+          if (keys.length === 0 && jobId) keys.push(jobId);
+          if (keys.length === 0) return s;
+          for (const key of keys) {
+            const prev = nextJobs[key];
+            const next = upsertJob(prev);
+            if (type.endsWith('.started')) next.state = 'started';
+            else if (type.endsWith('.batch_applied')) next.state = 'running';
+            else if (type.endsWith('.completed')) next.state = 'completed';
+            else if (type.endsWith('.failed')) next.state = 'failed';
+            nextJobs[key] = next;
+          }
+          return { recoverMetricsJobs: nextJobs };
         });
 
         if (type.endsWith('.artifact_upserted')) {

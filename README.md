@@ -25,38 +25,47 @@ A modern Discovery platform for source analysis and profiling using AI.
 ```
 .
 ├── backend/
-│   ├── cmd/server/           # Main server entry point
+│   ├── cmd/server/              # Main API server
+│   ├── cmd/agentmesh/           # AgentMesh CLI / jobs
+│   ├── cmd/tools/               # One-off smoke tools (incl. Horizon)
 │   ├── internal/
-│   │   ├── ai/              # AI task executor (Vertex, OpenAI, Claude)
-│   │   ├── http/            # HTTP handlers
-│   │   ├── repo/            # Firestore repositories
-│   │   ├── models/          # Data models
-│   │   ├── prompts/         # AI prompts
-│   │   ├── crawler/         # Web content fetcher
-│   │   ├── telegram/        # Telegram client
-│   │   └── discovery/       # Source profiling logic
+│   │   ├── ai/                  # AI task executor (Vertex, OpenAI, Claude, …)
+│   │   ├── http/                # HTTP handlers (core + horizon/, criticalchain/)
+│   │   ├── horizon/             # Horizon: fragments, lens, scout, propagation, …
+│   │   ├── criticalchain/       # Critical chain scheduling / pipeline
+│   │   ├── agentmesh/           # Agent mesh runtime, policy, transport
+│   │   ├── realtime/            # Pub/Sub and realtime bridge
+│   │   ├── repo/                # Firestore repositories
+│   │   ├── models/              # Data models
+│   │   ├── discovery/           # Source discovery & orchestration
+│   │   ├── crawler/             # Web fetch / extract
+│   │   ├── telegram/            # Telegram client
+│   │   └── …                    # genai, ontology, taxonomy, cache, …
 │   └── go.mod
 ├── web/
 │   ├── src/
-│   │   ├── components/      # React components
-│   │   ├── contexts/        # React contexts (Auth)
-│   │   ├── lib/            # Firebase, API client
-│   │   ├── pages/          # Page components
-│   │   ├── stores/         # Zustand stores
-│   │   └── types/          # TypeScript types
+│   │   ├── components/          # UI components (incl. Lens / Horizon canvas)
+│   │   ├── contexts/            # Auth and shared context
+│   │   ├── lib/                 # API client, Firebase
+│   │   ├── pages/               # Routes (Discovery, Horizon, …)
+│   │   ├── stores/              # Zustand stores
+│   │   └── types/               # TypeScript types
 │   └── package.json
+├── docs/                        # Architecture, Horizon, deployment, notes
 ├── python/
-│   └── telegram_service/   # Telegram polling service
+│   └── telegram_service/        # Telegram polling service
 └── scripts/
-    ├── deploy              # Main deployment script
-    └── dev.ps1            # Local development script
+    ├── deploy                   # Main deployment script
+    └── dev.ps1                  # Local development (Windows)
 ```
+
+Документация: [docs/README.md](docs/README.md). Подсистема Horizon: [docs/horizon/README.md](docs/horizon/README.md).
 
 ## Getting Started
 
 ### Prerequisites
 
-- **Go 1.24+**
+- **Go 1.25+** (см. `backend/go.mod`)
 - **Node.js 18+**
 - **Python 3.11+**
 - **GCP Project** with Firestore, Vertex AI, Cloud Run enabled
@@ -141,8 +150,15 @@ Service will run on `http://localhost:8081`
 
 ## API Endpoints
 
+**Полный каталог** маршрутов платформы (`/api/v1`), health, WebSocket, внутренних задач, Critical Chain и ссылка на Horizon: [docs/architecture/apis.md](docs/architecture/apis.md). Ниже — только самые частые точки входа.
+
 ### Authentication
-All endpoints require `Authorization: Bearer <firebase-id-token>` header.
+
+Большинство пользовательских маршрутов требуют `Authorization: Bearer <firebase-id-token>`. Исключения (публичные вебхуки, демо Critical Chain, часть `/api/v1/waitlist`, прокси фидов Horizon и т.д.) перечислены в каталоге API.
+
+### Health
+
+- `GET /healthz` или `GET /api/v1/healthz`
 
 ### Users
 - `POST /api/v1/users` - Create user
@@ -156,9 +172,19 @@ All endpoints require `Authorization: Bearer <firebase-id-token>` header.
 - `PUT /api/v1/projects/{id}` - Update project
 - `DELETE /api/v1/projects/{id}` - Delete project
 
+У проекта большое число вложенных путей (документы, поиск, vertex-search, analytics, agent-jobs, сценарии и т.д.) — см. [apis.md](docs/architecture/apis.md).
+
 ### Discovery
 - `POST /api/v1/sources-discovery/execute` - Execute discovery analysis
 - `GET /api/v1/projects/{id}/datasources` - Get sources for project
+
+### Horizon
+
+Базовый префикс: `/api/horizon`. Реестр маршрутов и подпутей линзы/фрагмента: [docs/horizon/api/endpoints.md](docs/horizon/api/endpoints.md).
+
+### Critical Chain
+
+Демо-данные и админ pipeline: префикс `/api/v1/criticalchain` — см. [apis.md](docs/architecture/apis.md).
 
 ## Deployment
 
@@ -207,7 +233,7 @@ echo "YOUR_AISSTREAM_KEY" | gcloud secrets versions add aisstream_api_key --data
 ```bash
 # Check health
 API_URL=$(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')
-curl $API_URL/health
+curl "$API_URL/healthz"
 
 # View logs
 gcloud run services logs read etigram-api --region us-central1 --limit 20
@@ -244,29 +270,26 @@ gcloud run services logs read etigram-api --region us-central1 --limit 20
 5. **Frontend UI**
    - Discovery page with chat-like interface
    - Source input (URLs + @telegram handles)
-   - Real-time source status display
+   - Real-time updates (WebSocket / store integration where wired)
    - Profile visualization
 
-### Pending 🚧
+6. **Horizon**
+   - Graph of `HorizonFragment`, lenses, Scout pipeline, dependency edges, Horizon UI (`HorizonPage`, lens canvas)
+   - Детали и статус фич: [docs/horizon/README.md](docs/horizon/README.md), [roadmap](docs/horizon/implementation/roadmap.md)
 
-1. **Real-time Updates**
-   - GCP Pub/Sub integration
-   - WebSocket bridge for status updates
+### Pending / в развитии 🚧
 
-2. **Background Processing**
-   - Async source fetching & profiling
-   - Queue-based task execution
+1. **Наблюдаемость и SRE**
+   - Расширенные SLO, алерты, единые дашборды
 
-3. **UI Enhancements**
-   - Error handling & retry logic
-   - Loading states & animations
-   - Responsive design improvements
-   - Dark mode polish
+2. **CI/CD**
+   - Полностью автоматизированный pipeline и политика окружений
 
-4. **Deployment Automation**
-   - CI/CD pipeline
-   - Automated testing
-   - Environment management
+3. **UI**
+   - Дальнейшая полировка ошибок, загрузки, адаптива и тёмной темы
+
+4. **Horizon**
+   - Отдельные крупные ветки из roadmap (signaling pipeline, часть governance и метрик) — см. таблицу статуса в roadmap
 
 ## Data Models
 

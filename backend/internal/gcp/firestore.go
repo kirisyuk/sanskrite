@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"cloud.google.com/go/firestore"
 	"cloud.google.com/go/storage"
+	"golang.org/x/oauth2"
 	"google.golang.org/api/googleapi"
+	"google.golang.org/api/option"
 )
 
 type FirestoreClient struct {
@@ -16,7 +19,11 @@ type FirestoreClient struct {
 }
 
 func NewFirestoreClient(ctx context.Context, projectID string) (*FirestoreClient, error) {
-	c, err := firestore.NewClient(ctx, projectID)
+	opts := []option.ClientOption{}
+	if accessToken := strings.TrimSpace(firstNonEmptyEnv("GOOGLE_OAUTH_ACCESS_TOKEN", "GCLOUD_ACCESS_TOKEN")); accessToken != "" {
+		opts = append(opts, option.WithTokenSource(oauth2.StaticTokenSource(&oauth2.Token{AccessToken: accessToken})))
+	}
+	c, err := firestore.NewClient(ctx, projectID, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -35,11 +42,24 @@ type GCSClient struct {
 }
 
 func NewGCSClient(ctx context.Context, projectID string) (*GCSClient, error) {
-	c, err := storage.NewClient(ctx)
+	opts := []option.ClientOption{}
+	if accessToken := strings.TrimSpace(firstNonEmptyEnv("GOOGLE_OAUTH_ACCESS_TOKEN", "GCLOUD_ACCESS_TOKEN")); accessToken != "" {
+		opts = append(opts, option.WithTokenSource(oauth2.StaticTokenSource(&oauth2.Token{AccessToken: accessToken})))
+	}
+	c, err := storage.NewClient(ctx, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return &GCSClient{client: c}, nil
+}
+
+func firstNonEmptyEnv(keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(strings.TrimSpace(key))); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (g *GCSClient) UploadBytes(ctx context.Context, bucket, object string, data []byte, contentType string, metadata map[string]string) error {

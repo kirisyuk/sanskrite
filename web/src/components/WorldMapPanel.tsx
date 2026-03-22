@@ -7,7 +7,7 @@ import { useGeoZoneLayer } from '../hooks/useGeoZoneLayer';
 import { useGeoEdgeLayer, GEO_EDGE_INTERACTIVE_LAYERS } from '../hooks/useGeoEdgeLayer';
 import { useStaticZoneLayer } from '../hooks/useStaticZoneLayer';
 import { useTransportFlowLayer } from '../hooks/useTransportFlowLayer';
-import { usePathLegLayer } from '../hooks/usePathLegLayer';
+import { usePathLegLayer, type PathLegVisibilityPolicy } from '../hooks/usePathLegLayer';
 import { usePathLegClusterLayer } from '../hooks/usePathLegClusterLayer';
 import { useVesselLayer, vesselsApiAvailable as isVesselsApiAvailable } from '../hooks/useVesselLayer';
 import { MapFilterPanel } from './MapFilterPanel';
@@ -20,7 +20,7 @@ import {
   type TransportFlowFeature,
   type TransportFlowMode,
 } from '../lib/staticTransportFlows';
-import { api } from '../lib/api';
+import { api, type IdentifyStressVisibleRelation } from '../lib/api';
 import type { MaterializedArtifact } from './SupplyChainOverlay';
 import type { GeoMarkerSelection } from '../hooks/useGeoMarkerLayer';
 import { humanizeCanonicalPath, humanizeSlug } from '../lib/uiUtils';
@@ -583,6 +583,87 @@ function collectArtifactSupplyLinkRefs(artifacts: MaterializedArtifact[]): strin
   return refs;
 }
 
+function collectVisibleGraphRelations(
+  selectionExportData: any,
+  objects: GeoObject[],
+  selectedObject: GeoObject | null,
+): IdentifyStressVisibleRelation[] {
+  const idToPath = new Map<string, string>();
+  for (const object of objects || []) {
+    const id = String(object?.id || '').trim();
+    const canonicalPath = String(object?.canonicalPath || '').trim();
+    if (id && canonicalPath && !idToPath.has(id)) idToPath.set(id, canonicalPath);
+  }
+  if (selectedObject?.id && selectedObject?.canonicalPath) {
+    idToPath.set(String(selectedObject.id).trim(), String(selectedObject.canonicalPath).trim());
+  }
+  const out: IdentifyStressVisibleRelation[] = [];
+  const seen = new Set<string>();
+  const push = (relation: IdentifyStressVisibleRelation) => {
+    const sourceCanonicalPath = String(relation.sourceCanonicalPath || '').trim();
+    const targetCanonicalPath = String(relation.targetCanonicalPath || '').trim();
+    const edgeId = String(relation.edgeId || '').trim();
+    const relationType = String(relation.relationType || '').trim();
+    const relationRole = String(relation.relationRole || '').trim();
+    if (!sourceCanonicalPath && !targetCanonicalPath && !edgeId) return;
+    const key = [edgeId, sourceCanonicalPath, targetCanonicalPath, relationType, relationRole].join('|');
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({
+      edgeId: edgeId || undefined,
+      sourceCanonicalPath: sourceCanonicalPath || undefined,
+      targetCanonicalPath: targetCanonicalPath || undefined,
+      relationType: relationType || undefined,
+      relationFamily: String(relation.relationFamily || '').trim() || undefined,
+      relationRole: relationRole || undefined,
+      businessMeaning: String(relation.businessMeaning || '').trim() || undefined,
+      whyRelevant: String(relation.whyRelevant || '').trim() || undefined,
+      criticality: typeof relation.criticality === 'number' ? relation.criticality : undefined,
+    });
+  };
+
+  const relationLists = [
+    { items: selectionExportData?.directRelations, role: 'direct' },
+    { items: selectionExportData?.contextRelations, role: 'context' },
+  ];
+  for (const list of relationLists) {
+    for (const raw of Array.isArray(list.items) ? list.items : []) {
+      const sourceId = String(raw?.sourceId || '').trim();
+      const targetId = String(raw?.targetId || '').trim();
+      const sourceCanonicalPath = idToPath.get(sourceId) || '';
+      const targetCanonicalPath = String(raw?.relatedCanonicalPath || '').trim() || idToPath.get(targetId) || '';
+      push({
+        edgeId: String(raw?.edgeId || '').trim() || undefined,
+        sourceCanonicalPath: sourceCanonicalPath || undefined,
+        targetCanonicalPath: targetCanonicalPath || undefined,
+        relationType: String(raw?.type || '').trim() || undefined,
+        relationFamily: String(raw?.family || '').trim() || undefined,
+        relationRole: list.role,
+        businessMeaning: String(raw?.businessMeaning || '').trim() || undefined,
+        whyRelevant: String(raw?.whyRelevant || '').trim() || undefined,
+        criticality: typeof raw?.criticality === 'number' ? raw.criticality : undefined,
+      });
+    }
+  }
+
+  for (const raw of Array.isArray(selectionExportData?.trace?.propagation?.edges) ? selectionExportData.trace.propagation.edges : []) {
+    const sourceId = String(raw?.sourceFragmentId || '').trim();
+    const targetId = String(raw?.targetFragmentId || '').trim();
+    const sourceCanonicalPath = idToPath.get(sourceId) || '';
+    const targetCanonicalPath = idToPath.get(targetId) || '';
+    push({
+      edgeId: String(raw?.edgeId || '').trim() || undefined,
+      sourceCanonicalPath: sourceCanonicalPath || undefined,
+      targetCanonicalPath: targetCanonicalPath || undefined,
+      relationType: 'PROPAGATES_TO',
+      relationFamily: 'propagation',
+      relationRole: 'propagation',
+    });
+  }
+
+  return out;
+}
+
 export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const overlayTopOffset = scope?.lensId ? 58 : 10;
   const containerRef = React.useRef<HTMLDivElement | null>(null);
@@ -636,6 +717,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [routeSearchQuery, setRouteSearchQuery] = React.useState('');
   const [productSearchQuery, setProductSearchQuery] = React.useState('');
   const [activeProductStages, setActiveProductStages] = React.useState<Set<string> | null>(null);
+  const [selectedProductGroupKeys, setSelectedProductGroupKeys] = React.useState<string[]>([]);
   const [selectedRouteArtifactIds, setSelectedRouteArtifactIds] = React.useState<string[]>([]);
   const [hoveredRouteArtifactIds, setHoveredRouteArtifactIds] = React.useState<string[]>([]);
   const [activeFlowModes, setActiveFlowModes] = React.useState<Set<TransportFlowMode> | null>(null);
@@ -656,9 +738,21 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [pathArtifactsLoaded, setPathArtifactsLoaded] = React.useState(false);
   const realtimeArtifacts = useHorizonRealtimeStore((s) => s.artifacts);
   const identifyJobs = useHorizonRealtimeStore((s) => s.identifyJobs);
+  const completeSubstrateJobs = useHorizonRealtimeStore((s) => s.completeSubstrateJobs);
+  const recoverMetricsJobs = useHorizonRealtimeStore((s) => s.recoverMetricsJobs);
+  const [toolsMenuOpen, setToolsMenuOpen] = React.useState(false);
+  const [completeSubstrateSubmitting, setCompleteSubstrateSubmitting] = React.useState(false);
+  const [completeSubstrateError, setCompleteSubstrateError] = React.useState<string | null>(null);
+  const [completeSubstrateJobId, setCompleteSubstrateJobId] = React.useState<string | null>(null);
+  const [dismissedCompleteSubstrateOverlayKey, setDismissedCompleteSubstrateOverlayKey] = React.useState<string | null>(null);
+  const [recoverMetricsSubmitting, setRecoverMetricsSubmitting] = React.useState(false);
+  const [recoverMetricsError, setRecoverMetricsError] = React.useState<string | null>(null);
+  const [recoverMetricsJobId, setRecoverMetricsJobId] = React.useState<string | null>(null);
+  const [dismissedRecoverMetricsOverlayKey, setDismissedRecoverMetricsOverlayKey] = React.useState<string | null>(null);
   const [identifySubmitting, setIdentifySubmitting] = React.useState(false);
   const [identifyError, setIdentifyError] = React.useState<string | null>(null);
   const [identifyJobId, setIdentifyJobId] = React.useState<string | null>(null);
+  const [dismissedIdentifyOverlayKey, setDismissedIdentifyOverlayKey] = React.useState<string | null>(null);
   const stackSelectionRef = React.useRef<MapObjectStackSelection | null>(null);
   const routeSelectionVisibleRef = React.useRef(false);
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -1022,10 +1116,15 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     const visibleGroups = productSearchQueryTrim
       ? groupsByStage.filter((group) => group.searchText.includes(productSearchQueryTrim))
       : groupsByStage;
-    return { stageFacets, visibleGroups };
+    const allGroupsByKey = new Map<string, ProductRouteGroup>();
+    for (const group of allGroups) {
+      allGroupsByKey.set(String(group.key || '').trim().toLowerCase(), group);
+    }
+    return { stageFacets, visibleGroups, allGroupsByKey };
   }, [activeProductStages, productSearchQueryTrim, routeCatalog]);
   const productStageFacets = productOverlayData.stageFacets;
   const productRouteGroups = productOverlayData.visibleGroups;
+  const productRouteGroupsByKey = productOverlayData.allGroupsByKey;
   const viewOverlayOpen = activeDockPanel === 'view';
   const routesOverlayOpen = activeDockPanel === 'routes';
   const productsOverlayOpen = activeDockPanel === 'products';
@@ -1060,6 +1159,34 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     }
     return jobs[0] || null;
   }, [identifyJobId, identifyJobs, scope?.lensId]);
+  const latestCompleteSubstrateJob = React.useMemo(() => {
+    const jobs = Object.values(completeSubstrateJobs || {}).filter(
+      (job) => String(job?.lensId || '').trim() === String(scope?.lensId || '').trim(),
+    );
+    if (jobs.length === 0) return null;
+    jobs.sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0));
+    if (completeSubstrateJobId) {
+      const exact = jobs.find((job) => String(job.jobId || '').trim() === completeSubstrateJobId);
+      if (exact) return exact;
+    }
+    return jobs[0] || null;
+  }, [completeSubstrateJobId, completeSubstrateJobs, scope?.lensId]);
+  const latestRecoverMetricsJob = React.useMemo(() => {
+    const jobs = Object.values(recoverMetricsJobs || {}).filter(
+      (job) => String(job?.lensId || '').trim() === String(scope?.lensId || '').trim(),
+    );
+    if (jobs.length === 0) return null;
+    jobs.sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0));
+    if (recoverMetricsJobId) {
+      const exact = jobs.find((job) => String(job.jobId || '').trim() === recoverMetricsJobId);
+      if (exact) return exact;
+    }
+    return jobs[0] || null;
+  }, [recoverMetricsJobId, recoverMetricsJobs, scope?.lensId]);
+  const completeSubstrateRunning = latestCompleteSubstrateJob?.state === 'started'
+    || latestCompleteSubstrateJob?.state === 'running';
+  const recoverMetricsRunning = latestRecoverMetricsJob?.state === 'started'
+    || latestRecoverMetricsJob?.state === 'running';
   const identifyRunning = latestIdentifyJob?.state === 'started'
     || latestIdentifyJob?.state === 'running'
     || latestIdentifyJob?.state === 'propagating';
@@ -1088,6 +1215,27 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     if (selectedPath.startsWith('/supply-link/')) refs.add(selectedPath);
     return Array.from(refs);
   }, [identifyScopeArtifacts, selectedObject?.canonicalPath]);
+  const identifyVisibleRelations = React.useMemo(
+    () => collectVisibleGraphRelations(selectionExportData, mapObjects, selectedObject),
+    [mapObjects, selectedObject, selectionExportData],
+  );
+  const toolScopePayload = React.useMemo(() => ({
+    scopeMode: 'visible_set' as const,
+    selectedCanonicalPath: String(selectedObject?.canonicalPath || '').trim() || undefined,
+    visibleNodeRefs: identifyVisibleNodeRefs,
+    visibleArtifactKeys: identifyVisibleArtifactKeys,
+    visibleSupplyLinkRefs: identifyVisibleSupplyLinkRefs,
+    visibleRelations: identifyVisibleRelations,
+    clientViewId: identifyViewIdRef.current,
+    maxNodes: 40,
+    maxArtifacts: 25,
+  }), [
+    identifyVisibleArtifactKeys,
+    identifyVisibleNodeRefs,
+    identifyVisibleRelations,
+    identifyVisibleSupplyLinkRefs,
+    selectedObject?.canonicalPath,
+  ]);
   const identifyTouchedRouteLabels = React.useMemo(() => {
     const routeByKey = new Map<string, MaterializedArtifact>();
     for (const artifact of routeCatalog) {
@@ -1118,6 +1266,32 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
       .slice(0, 6),
     [latestIdentifyJob?.touchedNodeRefs],
   );
+  const identifyOverlayKey = React.useMemo(() => {
+    const jobId = String(latestIdentifyJob?.jobId || '').trim();
+    if (jobId) return `job:${jobId}`;
+    const localError = String(identifyError || '').trim();
+    if (localError) return `error:${localError}`;
+    return '';
+  }, [identifyError, latestIdentifyJob?.jobId]);
+  const identifyOverlayVisible = Boolean(identifyOverlayKey) && dismissedIdentifyOverlayKey !== identifyOverlayKey;
+  const completeSubstrateOverlayKey = React.useMemo(() => {
+    const jobId = String(latestCompleteSubstrateJob?.jobId || '').trim();
+    if (jobId) return `job:${jobId}`;
+    const localError = String(completeSubstrateError || '').trim();
+    if (localError) return `error:${localError}`;
+    return '';
+  }, [completeSubstrateError, latestCompleteSubstrateJob?.jobId]);
+  const completeSubstrateOverlayVisible = Boolean(completeSubstrateOverlayKey)
+    && dismissedCompleteSubstrateOverlayKey !== completeSubstrateOverlayKey;
+  const recoverMetricsOverlayKey = React.useMemo(() => {
+    const jobId = String(latestRecoverMetricsJob?.jobId || '').trim();
+    if (jobId) return `job:${jobId}`;
+    const localError = String(recoverMetricsError || '').trim();
+    if (localError) return `error:${localError}`;
+    return '';
+  }, [latestRecoverMetricsJob?.jobId, recoverMetricsError]);
+  const recoverMetricsOverlayVisible = Boolean(recoverMetricsOverlayKey)
+    && dismissedRecoverMetricsOverlayKey !== recoverMetricsOverlayKey;
   const identifyErrorLines = React.useMemo(() => {
     const raw = [
       ...(Array.isArray(latestIdentifyJob?.errors) ? latestIdentifyJob.errors : []),
@@ -1126,6 +1300,20 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     ];
     return Array.from(new Set(raw.map((value) => String(value || '').trim()).filter(Boolean))).slice(0, 4);
   }, [identifyError, latestIdentifyJob]);
+  const completeSubstrateErrorLines = React.useMemo(() => {
+    const raw = [
+      latestCompleteSubstrateJob?.error,
+      completeSubstrateError,
+    ];
+    return Array.from(new Set(raw.map((value) => String(value || '').trim()).filter(Boolean))).slice(0, 4);
+  }, [completeSubstrateError, latestCompleteSubstrateJob]);
+  const recoverMetricsErrorLines = React.useMemo(() => {
+    const raw = [
+      latestRecoverMetricsJob?.error,
+      recoverMetricsError,
+    ];
+    return Array.from(new Set(raw.map((value) => String(value || '').trim()).filter(Boolean))).slice(0, 4);
+  }, [latestRecoverMetricsJob, recoverMetricsError]);
   const reloadSupplyChains = React.useCallback(async () => {
     const requestedLensId = String(scope?.lensId || '').trim();
     if (!requestedLensId) return;
@@ -1231,6 +1419,11 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   React.useEffect(() => {
     setPathLegsEnabled(Boolean(scope?.lensId));
     setPathLegClusteringEnabled(Boolean(scope?.lensId));
+    setToolsMenuOpen(false);
+    setCompleteSubstrateError(null);
+    setCompleteSubstrateJobId(null);
+    setRecoverMetricsError(null);
+    setRecoverMetricsJobId(null);
     setIdentifyError(null);
     setIdentifyJobId(null);
     if (scope?.lensId) {
@@ -1296,6 +1489,40 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   }, [realtimeArtifacts, scope?.lensId]);
 
   React.useEffect(() => {
+    if (!scope?.lensId || !latestCompleteSubstrateJob?.jobId) return;
+    const state = String(latestCompleteSubstrateJob.state || '').trim();
+    if (state !== 'completed' && state !== 'failed' && !latestCompleteSubstrateJob.requiresRefetch) return;
+    const refreshKey = [
+      latestCompleteSubstrateJob.jobId,
+      state,
+      String(latestCompleteSubstrateJob.updatedAt || ''),
+      latestCompleteSubstrateJob.requiresRefetch ? 'refetch' : 'steady',
+    ].join(':');
+    if (identifyRefreshKeyRef.current === `substrate:${refreshKey}`) return;
+    identifyRefreshKeyRef.current = `substrate:${refreshKey}`;
+    if (latestCompleteSubstrateJob.requiresRefetch || state === 'completed') {
+      void reloadSupplyChains();
+    }
+  }, [latestCompleteSubstrateJob, reloadSupplyChains, scope?.lensId]);
+
+  React.useEffect(() => {
+    if (!scope?.lensId || !latestRecoverMetricsJob?.jobId) return;
+    const state = String(latestRecoverMetricsJob.state || '').trim();
+    if (state !== 'completed' && state !== 'failed' && !latestRecoverMetricsJob.requiresRefetch) return;
+    const refreshKey = [
+      latestRecoverMetricsJob.jobId,
+      state,
+      String(latestRecoverMetricsJob.updatedAt || ''),
+      latestRecoverMetricsJob.requiresRefetch ? 'refetch' : 'steady',
+    ].join(':');
+    if (identifyRefreshKeyRef.current === `metrics:${refreshKey}`) return;
+    identifyRefreshKeyRef.current = `metrics:${refreshKey}`;
+    if (latestRecoverMetricsJob.requiresRefetch || state === 'completed') {
+      void reloadSupplyChains();
+    }
+  }, [latestRecoverMetricsJob, reloadSupplyChains, scope?.lensId]);
+
+  React.useEffect(() => {
     if (!scope?.lensId || !latestIdentifyJob?.jobId) return;
     const state = String(latestIdentifyJob.state || '').trim();
     if (state !== 'completed' && state !== 'failed' && state !== 'partial_success' && !latestIdentifyJob.requiresRefetch) return;
@@ -1320,11 +1547,63 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     });
   }, [routeCatalog]);
 
+  React.useEffect(() => {
+    const availableGroupKeys = new Set(Array.from(productRouteGroupsByKey.keys()));
+    setSelectedProductGroupKeys((current) => {
+      const next = current.filter((key) => availableGroupKeys.has(String(key || '').trim().toLowerCase()));
+      return next.length === current.length ? current : next;
+    });
+  }, [productRouteGroupsByKey]);
+
   const resetProductsPanelState = React.useCallback(() => {
+    setSelectedProductGroupKeys([]);
     setSelectedRouteArtifactIds([]);
     setActiveProductStages(null);
     setProductSearchQuery('');
   }, []);
+
+  const selectedProductGroupKeySet = React.useMemo(
+    () => new Set(selectedProductGroupKeys.map((value) => String(value || '').trim().toLowerCase()).filter(Boolean)),
+    [selectedProductGroupKeys],
+  );
+  const selectedProductCanonicalPaths = React.useMemo(() => {
+    const out = new Set<string>();
+    for (const key of selectedProductGroupKeySet) {
+      const group = productRouteGroupsByKey.get(key);
+      const canonicalPath = String(group?.canonicalPath || '').trim();
+      if (canonicalPath) out.add(canonicalPath);
+    }
+    return out;
+  }, [productRouteGroupsByKey, selectedProductGroupKeySet]);
+  const productSuppressedLegIds = React.useMemo(() => {
+    if (selectedProductGroupKeySet.size === 0 && selectedProductCanonicalPaths.size === 0) return [] as string[];
+    const suppressed = new Set<string>();
+    for (const artifact of activePathArtifacts) {
+      const artifactId = String(artifact?.id || '').trim();
+      if (!artifactId) continue;
+      const artifactEntries = artifactRouteProductEntries(artifact);
+      const artifactMatches = artifactEntries.some((entry) => {
+        const entryKey = String(entry.key || '').trim().toLowerCase();
+        const canonicalPath = String(entry.canonicalPath || '').trim();
+        return selectedProductGroupKeySet.has(entryKey) || (canonicalPath && selectedProductCanonicalPaths.has(canonicalPath));
+      });
+      const directProductAxis = String(artifact?.productAxis || '').trim();
+      const artifactAxisMatches = Boolean(directProductAxis)
+        && (selectedProductCanonicalPaths.has(directProductAxis) || selectedProductGroupKeySet.has(directProductAxis.toLowerCase()));
+      const legs = Array.isArray(artifact?.payload?.legs) ? artifact.payload.legs : [];
+      for (const leg of legs) {
+        const legIndex = Number(leg?.index);
+        if (!Number.isFinite(legIndex)) continue;
+        const legId = `${artifactId}:leg:${legIndex}`;
+        const productRef = String(leg?.productRef || '').trim();
+        const productMatches = Boolean(productRef)
+          && (selectedProductCanonicalPaths.has(productRef) || selectedProductGroupKeySet.has(productRef.toLowerCase()));
+        if (productMatches || (!productRef && (artifactMatches || artifactAxisMatches))) continue;
+        suppressed.add(legId);
+      }
+    }
+    return Array.from(suppressed);
+  }, [activePathArtifacts, selectedProductCanonicalPaths, selectedProductGroupKeySet]);
 
   React.useEffect(() => {
     if (routeSelectionVisible && !routeSelectionVisibleRef.current) {
@@ -1614,21 +1893,75 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     [scope?.lensId, selectedObject],
   );
 
+  const handleCompleteSubstrate = React.useCallback(async () => {
+    if (!scope?.lensId || completeSubstrateRunning || completeSubstrateSubmitting) return;
+    try {
+      setCompleteSubstrateSubmitting(true);
+      setCompleteSubstrateError(null);
+      setDismissedCompleteSubstrateOverlayKey(null);
+      setToolsMenuOpen(false);
+      const response = await api.completeSubstrateForLens(scope.lensId, {
+        ...toolScopePayload,
+        maxCompletions: 80,
+      });
+      if (response?.jobId) {
+        setCompleteSubstrateJobId(String(response.jobId));
+      }
+    } catch (error: any) {
+      const detail =
+        String(error?.response?.data?.error || '').trim()
+        || String(error?.response?.data?.detail || '').trim()
+        || String(error?.message || '').trim();
+      setCompleteSubstrateError(detail || 'Failed to start link completion.');
+    } finally {
+      setCompleteSubstrateSubmitting(false);
+    }
+  }, [
+    completeSubstrateRunning,
+    completeSubstrateSubmitting,
+    scope?.lensId,
+    toolScopePayload,
+  ]);
+
+  const handleRecoverMetrics = React.useCallback(async () => {
+    if (!scope?.lensId || recoverMetricsRunning || recoverMetricsSubmitting) return;
+    try {
+      setRecoverMetricsSubmitting(true);
+      setRecoverMetricsError(null);
+      setDismissedRecoverMetricsOverlayKey(null);
+      setToolsMenuOpen(false);
+      const response = await api.recoverMetricsForLens(scope.lensId, {
+        ...toolScopePayload,
+        maxRecoveries: 80,
+      });
+      if (response?.jobId) {
+        setRecoverMetricsJobId(String(response.jobId));
+      }
+    } catch (error: any) {
+      const detail =
+        String(error?.response?.data?.error || '').trim()
+        || String(error?.response?.data?.detail || '').trim()
+        || String(error?.message || '').trim();
+      setRecoverMetricsError(detail || 'Failed to start metrics recovery.');
+    } finally {
+      setRecoverMetricsSubmitting(false);
+    }
+  }, [
+    recoverMetricsRunning,
+    recoverMetricsSubmitting,
+    scope?.lensId,
+    toolScopePayload,
+  ]);
+
   const handleIdentifyStresses = React.useCallback(async () => {
     if (!scope?.lensId || identifyRunning || identifySubmitting) return;
-    const selectedCanonicalPath = String(selectedObject?.canonicalPath || '').trim();
     try {
       setIdentifySubmitting(true);
       setIdentifyError(null);
+      setDismissedIdentifyOverlayKey(null);
+      setToolsMenuOpen(false);
       const response = await api.identifyStressesForLens(scope.lensId, {
-        scopeMode: 'visible_set',
-        selectedCanonicalPath: selectedCanonicalPath || undefined,
-        visibleNodeRefs: identifyVisibleNodeRefs,
-        visibleArtifactKeys: identifyVisibleArtifactKeys,
-        visibleSupplyLinkRefs: identifyVisibleSupplyLinkRefs,
-        clientViewId: identifyViewIdRef.current,
-        maxNodes: 40,
-        maxArtifacts: 25,
+        ...toolScopePayload,
         maxFindings: 120,
       });
       if (response?.jobId) {
@@ -1646,11 +1979,8 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   }, [
     identifyRunning,
     identifySubmitting,
-    identifyVisibleArtifactKeys,
-    identifyVisibleNodeRefs,
-    identifyVisibleSupplyLinkRefs,
     scope?.lensId,
-    selectedObject?.canonicalPath,
+    toolScopePayload,
   ]);
 
   const resolveSupplyAnchor = React.useCallback(async (query: string): Promise<HorizonSearchEntity | null> => {
@@ -1980,6 +2310,22 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     focusedSupplyArtifactIds,
     { selectedObject },
   );
+  const effectivePathLegVisibilityPolicy = React.useMemo<PathLegVisibilityPolicy | undefined>(() => {
+    const base = pathLegClusterState.visibilityPolicy;
+    if ((!base || Object.keys(base).length === 0) && productSuppressedLegIds.length === 0) return base;
+    const suppressed = new Set<string>([
+      ...((base?.suppressedLegIds || []).map((value) => String(value || '').trim()).filter(Boolean)),
+      ...productSuppressedLegIds,
+    ]);
+    const revealed = (base?.revealedLegIds || [])
+      .map((value) => String(value || '').trim())
+      .filter((value) => value && !suppressed.has(value));
+    return {
+      ...base,
+      suppressedLegIds: Array.from(suppressed),
+      revealedLegIds: revealed,
+    };
+  }, [pathLegClusterState.visibilityPolicy, productSuppressedLegIds]);
   const baseMarkerObjects = React.useMemo(() => {
     const candidatesById = new Map<string, GeoObject>();
     for (const object of [...visibleMapObjects, ...forcedRouteEndpointObjects]) {
@@ -2005,7 +2351,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     theme,
     pathLegsEnabled || (!pathLegClusteringEnabled && (supplyNarrativeLegsVisible || routeEmphasisVisible)),
     focusedSupplyArtifactIds,
-    pathLegClusterState.visibilityPolicy,
+    effectivePathLegVisibilityPolicy,
   );
   useVesselLayer(map, isReady, styleEpoch, vesselsEnabled, theme);
 
@@ -2375,7 +2721,10 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
                     />
                     <button
                       type="button"
-                      onClick={() => setSelectedRouteArtifactIds([])}
+                      onClick={() => {
+                        setSelectedProductGroupKeys([]);
+                        setSelectedRouteArtifactIds([]);
+                      }}
                       disabled={selectedRouteArtifactIdSet.size === 0}
                       style={{
                         borderRadius: 10,
@@ -2456,6 +2805,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
                           key={artifactId}
                           type="button"
                           onClick={() => {
+                            setSelectedProductGroupKeys([]);
                             setSelectedRouteArtifactIds((current) => {
                               const currentSet = new Set(current.map((value) => String(value || '').trim()).filter(Boolean));
                               if (currentSet.has(artifactId)) currentSet.delete(artifactId);
@@ -2530,29 +2880,364 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
               type="button"
               title={
                 !scope?.lensId
-                  ? 'Open a Horizon lens to identify stresses'
-                  : identifyRunning
-                    ? 'Stress identification is already running'
-                    : 'Identify stress factors for visible objects and routes'
+                  ? 'Open a Horizon lens to use supply-chain tools'
+                  : 'Supply-chain tools for visible objects and routes'
               }
-              aria-label="Identify stresses"
+              aria-label="Tools"
               onClick={() => {
-                void handleIdentifyStresses();
+                if (!scope?.lensId) return;
+                setToolsMenuOpen((current) => !current);
               }}
-              disabled={!scope?.lensId || identifyRunning || identifySubmitting}
+              disabled={!scope?.lensId}
               style={{
-                ...mapDockControlButtonStyle(isDark, identifyRunning || identifySubmitting, isDark ? '#f97316' : '#c2410c'),
-                opacity: !scope?.lensId || identifyRunning || identifySubmitting ? 0.72 : 1,
-                cursor: !scope?.lensId || identifyRunning || identifySubmitting ? 'not-allowed' : 'pointer',
+                ...mapDockControlButtonStyle(
+                  isDark,
+                  toolsMenuOpen
+                    || completeSubstrateRunning
+                    || completeSubstrateSubmitting
+                    || recoverMetricsRunning
+                    || recoverMetricsSubmitting
+                    || identifyRunning
+                    || identifySubmitting,
+                  isDark ? '#f97316' : '#c2410c',
+                ),
+                opacity: !scope?.lensId ? 0.72 : 1,
+                cursor: !scope?.lensId ? 'not-allowed' : 'pointer',
               }}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z" />
+                <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82L4.21 7.2a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
               </svg>
-              <span>{identifySubmitting || identifyRunning ? 'Scanning…' : 'Identify Stresses'}</span>
+              <span>Tools</span>
             </button>
-            {(latestIdentifyJob || identifyError) && (
+            {toolsMenuOpen && scope?.lensId && (
               <div style={{ position: 'absolute', top: 'calc(100% + 10px)', right: 0 }}>
+                <div style={{ ...mapDockOverlayCardStyle(isDark, 272), padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={() => { void handleCompleteSubstrate(); }}
+                    disabled={completeSubstrateRunning || completeSubstrateSubmitting}
+                    style={{
+                      width: '100%',
+                      borderRadius: 12,
+                      border: '1px solid var(--border-subtle)',
+                      background: mapSearchPaletteChrome.subtleSurface,
+                      color: 'var(--text-heading)',
+                      padding: '10px 12px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 10,
+                      cursor: completeSubstrateRunning || completeSubstrateSubmitting ? 'not-allowed' : 'pointer',
+                      opacity: completeSubstrateRunning || completeSubstrateSubmitting ? 0.72 : 1,
+                    }}
+                  >
+                    <span style={{ fontSize: 13, fontWeight: 700 }}>Complete Links</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                      {completeSubstrateSubmitting || completeSubstrateRunning ? 'Running…' : 'Materialize routes'}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { void handleRecoverMetrics(); }}
+                    disabled={recoverMetricsRunning || recoverMetricsSubmitting}
+                    style={{
+                      width: '100%',
+                      borderRadius: 12,
+                      border: '1px solid var(--border-subtle)',
+                      background: mapSearchPaletteChrome.subtleSurface,
+                      color: 'var(--text-heading)',
+                      padding: '10px 12px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 10,
+                      cursor: recoverMetricsRunning || recoverMetricsSubmitting ? 'not-allowed' : 'pointer',
+                      opacity: recoverMetricsRunning || recoverMetricsSubmitting ? 0.72 : 1,
+                    }}
+                  >
+                    <span style={{ fontSize: 13, fontWeight: 700 }}>Recover Metrics</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                      {recoverMetricsSubmitting || recoverMetricsRunning ? 'Running…' : 'Fill route metrics'}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { void handleIdentifyStresses(); }}
+                    disabled={identifyRunning || identifySubmitting}
+                    style={{
+                      width: '100%',
+                      borderRadius: 12,
+                      border: '1px solid var(--border-subtle)',
+                      background: mapSearchPaletteChrome.subtleSurface,
+                      color: 'var(--text-heading)',
+                      padding: '10px 12px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 10,
+                      cursor: identifyRunning || identifySubmitting ? 'not-allowed' : 'pointer',
+                      opacity: identifyRunning || identifySubmitting ? 0.72 : 1,
+                    }}
+                  >
+                    <span style={{ fontSize: 13, fontWeight: 700 }}>Identify Stresses</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                      {identifySubmitting || identifyRunning ? 'Running…' : 'Apply risk metrics'}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            )}
+            {completeSubstrateOverlayVisible && (
+              <div style={{ position: 'absolute', top: toolsMenuOpen ? 'calc(100% + 136px)' : 'calc(100% + 10px)', right: 0 }}>
+                <div style={{ ...mapDockOverlayCardStyle(isDark, 332), padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-heading)' }}>Link Completion</div>
+                      <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                        {latestCompleteSubstrateJob
+                          ? `State: ${String(latestCompleteSubstrateJob.state || 'started').replace(/_/g, ' ')}`
+                          : 'Launch failed'}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
+                        {latestCompleteSubstrateJob?.jobId ? latestCompleteSubstrateJob.jobId.slice(0, 8) : 'local'}
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="Close link completion overlay"
+                        title="Close"
+                        onClick={() => {
+                          if (!completeSubstrateOverlayKey) return;
+                          setDismissedCompleteSubstrateOverlayKey(completeSubstrateOverlayKey);
+                        }}
+                        style={{
+                          width: 24,
+                          height: 24,
+                          borderRadius: 999,
+                          border: '1px solid var(--border-subtle)',
+                          background: mapSearchPaletteChrome.subtleSurface,
+                          color: 'var(--text-secondary-strong)',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: 'pointer',
+                          fontSize: 14,
+                          fontWeight: 900,
+                          lineHeight: 1,
+                          padding: 0,
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      borderRadius: 12,
+                      border: '1px solid var(--border-subtle)',
+                      background: mapSearchPaletteChrome.subtleSurface,
+                      padding: '10px 12px',
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                      gap: 8,
+                    }}
+                  >
+                    {[
+                      { label: 'Visible nodes', value: `${latestCompleteSubstrateJob?.acceptedNodes ?? identifyVisibleNodeRefs.length}` },
+                      { label: 'Visible routes', value: `${latestCompleteSubstrateJob?.acceptedArtifacts ?? identifyVisibleArtifactKeys.length}` },
+                      { label: 'Relations', value: `${latestCompleteSubstrateJob?.acceptedRelations ?? identifyVisibleRelations.length}` },
+                      { label: 'Supply links', value: `${latestCompleteSubstrateJob?.acceptedSupplyLinks ?? identifyVisibleSupplyLinkRefs.length}` },
+                      { label: 'Created', value: `${latestCompleteSubstrateJob?.artifactsCreated ?? 0}` },
+                      { label: 'Updated', value: `${latestCompleteSubstrateJob?.artifactsUpdated ?? 0}` },
+                    ].map((metric) => (
+                      <div
+                        key={metric.label}
+                        style={{
+                          minWidth: 0,
+                          borderRadius: 10,
+                          border: '1px solid var(--border-subtle)',
+                          background: 'rgba(255,255,255,0.02)',
+                          padding: '8px 10px',
+                        }}
+                      >
+                        <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-secondary-strong)' }}>
+                          {metric.label}
+                        </div>
+                        <div style={{ marginTop: 6, fontSize: 20, fontWeight: 800, color: 'var(--text-heading)' }}>
+                          {metric.value}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', display: 'grid', gap: 3 }}>
+                    <div>Completed links: {latestCompleteSubstrateJob?.completedLinks?.length ?? 0}</div>
+                    <div>Touched paths: {latestCompleteSubstrateJob?.artifactKeys?.length ?? 0}</div>
+                    {latestCompleteSubstrateJob?.requiresRefetch && (
+                      <div>Refreshing routes on completion…</div>
+                    )}
+                  </div>
+
+                  {completeSubstrateErrorLines.length > 0 && (
+                    <div
+                      style={{
+                        borderRadius: 10,
+                        border: '1px solid rgba(239,68,68,0.45)',
+                        background: 'rgba(127,29,29,0.3)',
+                        padding: '10px 12px',
+                        fontSize: 12,
+                        color: '#fecaca',
+                        display: 'grid',
+                        gap: 6,
+                      }}
+                    >
+                      {completeSubstrateErrorLines.map((line) => (
+                        <div key={line}>{line}</div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+            {recoverMetricsOverlayVisible && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: completeSubstrateOverlayVisible
+                    ? (toolsMenuOpen ? 'calc(100% + 500px)' : 'calc(100% + 374px)')
+                    : (toolsMenuOpen ? 'calc(100% + 184px)' : 'calc(100% + 10px)'),
+                  right: 0,
+                }}
+              >
+                <div style={{ ...mapDockOverlayCardStyle(isDark, 332), padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-heading)' }}>Metric Recovery</div>
+                      <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                        {latestRecoverMetricsJob
+                          ? `State: ${String(latestRecoverMetricsJob.state || 'started').replace(/_/g, ' ')}`
+                          : 'Launch failed'}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
+                        {latestRecoverMetricsJob?.jobId ? latestRecoverMetricsJob.jobId.slice(0, 8) : 'local'}
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="Close metric recovery overlay"
+                        title="Close"
+                        onClick={() => {
+                          if (!recoverMetricsOverlayKey) return;
+                          setDismissedRecoverMetricsOverlayKey(recoverMetricsOverlayKey);
+                        }}
+                        style={{
+                          width: 24,
+                          height: 24,
+                          borderRadius: 999,
+                          border: '1px solid var(--border-subtle)',
+                          background: mapSearchPaletteChrome.subtleSurface,
+                          color: 'var(--text-secondary-strong)',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: 'pointer',
+                          fontSize: 14,
+                          fontWeight: 900,
+                          lineHeight: 1,
+                          padding: 0,
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      borderRadius: 12,
+                      border: '1px solid var(--border-subtle)',
+                      background: mapSearchPaletteChrome.subtleSurface,
+                      padding: '10px 12px',
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                      gap: 8,
+                    }}
+                  >
+                    {[
+                      { label: 'Visible nodes', value: `${latestRecoverMetricsJob?.acceptedNodes ?? identifyVisibleNodeRefs.length}` },
+                      { label: 'Visible routes', value: `${latestRecoverMetricsJob?.acceptedArtifacts ?? identifyVisibleArtifactKeys.length}` },
+                      { label: 'Relations', value: `${latestRecoverMetricsJob?.acceptedRelations ?? identifyVisibleRelations.length}` },
+                      { label: 'Supply links', value: `${latestRecoverMetricsJob?.acceptedSupplyLinks ?? identifyVisibleSupplyLinkRefs.length}` },
+                      { label: 'Updated', value: `${latestRecoverMetricsJob?.artifactsUpdated ?? 0}` },
+                      { label: 'Recovered', value: `${latestRecoverMetricsJob?.recoveredLinks?.length ?? 0}` },
+                    ].map((metric) => (
+                      <div
+                        key={metric.label}
+                        style={{
+                          minWidth: 0,
+                          borderRadius: 10,
+                          border: '1px solid var(--border-subtle)',
+                          background: 'rgba(255,255,255,0.02)',
+                          padding: '8px 10px',
+                        }}
+                      >
+                        <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-secondary-strong)' }}>
+                          {metric.label}
+                        </div>
+                        <div style={{ marginTop: 6, fontSize: 20, fontWeight: 800, color: 'var(--text-heading)' }}>
+                          {metric.value}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', display: 'grid', gap: 3 }}>
+                    <div>Recovered links: {latestRecoverMetricsJob?.recoveredLinks?.length ?? 0}</div>
+                    <div>Touched paths: {latestRecoverMetricsJob?.touchedArtifactKeys?.length ?? 0}</div>
+                    <div>Touched nodes: {latestRecoverMetricsJob?.touchedNodeRefs?.length ?? 0}</div>
+                    {latestRecoverMetricsJob?.requiresRefetch && (
+                      <div>Refreshing routes on completion…</div>
+                    )}
+                  </div>
+
+                  {recoverMetricsErrorLines.length > 0 && (
+                    <div
+                      style={{
+                        borderRadius: 10,
+                        border: '1px solid rgba(239,68,68,0.45)',
+                        background: 'rgba(127,29,29,0.3)',
+                        padding: '10px 12px',
+                        fontSize: 12,
+                        color: '#fecaca',
+                        display: 'grid',
+                        gap: 6,
+                      }}
+                    >
+                      {recoverMetricsErrorLines.map((line) => (
+                        <div key={line}>{line}</div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+            {identifyOverlayVisible && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: recoverMetricsOverlayVisible
+                    ? (toolsMenuOpen ? 'calc(100% + 864px)' : 'calc(100% + 738px)')
+                    : completeSubstrateOverlayVisible
+                      ? (toolsMenuOpen ? 'calc(100% + 500px)' : 'calc(100% + 374px)')
+                      : (toolsMenuOpen ? 'calc(100% + 184px)' : 'calc(100% + 10px)'),
+                  right: 0,
+                }}
+              >
                 <div style={{ ...mapDockOverlayCardStyle(isDark, 332), padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
                     <div>
@@ -2563,8 +3248,37 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
                           : 'Launch failed'}
                       </div>
                     </div>
-                    <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
-                      {latestIdentifyJob?.jobId ? latestIdentifyJob.jobId.slice(0, 8) : 'local'}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
+                        {latestIdentifyJob?.jobId ? latestIdentifyJob.jobId.slice(0, 8) : 'local'}
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="Close stress job overlay"
+                        title="Close"
+                        onClick={() => {
+                          if (!identifyOverlayKey) return;
+                          setDismissedIdentifyOverlayKey(identifyOverlayKey);
+                        }}
+                        style={{
+                          width: 24,
+                          height: 24,
+                          borderRadius: 999,
+                          border: '1px solid var(--border-subtle)',
+                          background: mapSearchPaletteChrome.subtleSurface,
+                          color: 'var(--text-secondary-strong)',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: 'pointer',
+                          fontSize: 14,
+                          fontWeight: 900,
+                          lineHeight: 1,
+                          padding: 0,
+                        }}
+                      >
+                        ×
+                      </button>
                     </div>
                   </div>
 
@@ -2582,6 +3296,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
                     {[
                       { label: 'Visible nodes', value: `${latestIdentifyJob?.acceptedNodes ?? identifyVisibleNodeRefs.length}` },
                       { label: 'Visible routes', value: `${latestIdentifyJob?.acceptedArtifacts ?? identifyVisibleArtifactKeys.length}` },
+                      { label: 'Relations', value: `${latestIdentifyJob?.acceptedRelations ?? identifyVisibleRelations.length}` },
                       { label: 'Findings', value: `${latestIdentifyJob?.findingsApplied ?? 0}` },
                       { label: 'Events', value: `${latestIdentifyJob?.eventsPersisted ?? 0}` },
                       { label: 'Supply links', value: `${latestIdentifyJob?.supplyLinksUpdated ?? latestIdentifyJob?.acceptedSupplyLinks ?? identifyVisibleSupplyLinkRefs.length}` },
@@ -2933,11 +3648,19 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
                       const selectedCount = group.artifactIds.filter((artifactId) => selectedRouteArtifactIdSet.has(artifactId)).length;
                       const allSelected = selectedCount > 0 && selectedCount === group.artifactIds.length;
                       const partiallySelected = selectedCount > 0 && !allSelected;
+                      const groupKey = String(group.key || '').trim().toLowerCase();
+                      const groupFilterActive = selectedProductGroupKeySet.has(groupKey);
                       return (
                         <button
                           key={group.key}
                           type="button"
                           onClick={() => {
+                            setSelectedProductGroupKeys((current) => {
+                              const next = new Set(current.map((value) => String(value || '').trim().toLowerCase()).filter(Boolean));
+                              if (groupFilterActive) next.delete(groupKey);
+                              else next.add(groupKey);
+                              return Array.from(next);
+                            });
                             setSelectedRouteArtifactIds((current) => {
                               const next = new Set(current.map((value) => String(value || '').trim()).filter(Boolean));
                               if (allSelected) {
@@ -2952,8 +3675,8 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
                             width: '100%',
                             textAlign: 'left',
                             borderRadius: 12,
-                            border: allSelected || partiallySelected ? `1px solid ${mapSearchPaletteChrome.activeItemBorder}` : '1px solid var(--border-subtle)',
-                            background: allSelected || partiallySelected ? mapSearchPaletteChrome.activeItemBackground : mapSearchPaletteChrome.subtleSurface,
+                            border: allSelected || partiallySelected || groupFilterActive ? `1px solid ${mapSearchPaletteChrome.activeItemBorder}` : '1px solid var(--border-subtle)',
+                            background: allSelected || partiallySelected || groupFilterActive ? mapSearchPaletteChrome.activeItemBackground : mapSearchPaletteChrome.subtleSurface,
                             color: 'var(--text-heading)',
                             padding: '11px 12px',
                             display: 'flex',

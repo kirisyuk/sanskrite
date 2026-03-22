@@ -340,6 +340,6 @@
 
 ## 14. Связанные документы
 
-1. `docs/horizon/implementation/INTERNAL_FIRST_GROUNDING_IMPLEMENTATION_PLAN.md`
-2. `docs/horizon/implementation/ORG_IDENTITY_ANCHOR_AND_CORPORATE_TRANSITIONS.md`
-3. `docs/horizon/implementation/BIG_BANG_EDGE_POLICY_REMEDIATION_PLAN.md`
+1. `docs/archive/horizon-implementation/INTERNAL_FIRST_GROUNDING_IMPLEMENTATION_PLAN.md`
+2. `docs/archive/horizon-implementation/ORG_IDENTITY_ANCHOR_AND_CORPORATE_TRANSITIONS.md`
+3. `docs/archive/horizon-implementation/BIG_BANG_EDGE_POLICY_REMEDIATION_PLAN.md`

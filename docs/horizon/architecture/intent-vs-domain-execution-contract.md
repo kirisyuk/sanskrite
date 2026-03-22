@@ -125,7 +125,7 @@ Domain mode (`domainModes` / `domainMode` в job state) влияет на мно
 
 ## 8. Связанные документы
 
-- [INTENT_DOMAIN_REFACTORING_PLAN](../implementation/INTENT_DOMAIN_REFACTORING_PLAN.md) — план исполнения рефакторинга
-- [SCOUT_DOMAIN_PHASES_AND_COMPOSABLE_AGENTS_TZ](../implementation/SCOUT_DOMAIN_PHASES_AND_COMPOSABLE_AGENTS_TZ.md) — фазы Scout, composable Research/Critic
+- [INTENT_DOMAIN_REFACTORING_PLAN](../../archive/horizon-implementation/INTENT_DOMAIN_REFACTORING_PLAN.md) — план исполнения рефакторинга
+- [SCOUT_DOMAIN_PHASES_AND_COMPOSABLE_AGENTS_TZ](../../archive/horizon-implementation/SCOUT_DOMAIN_PHASES_AND_COMPOSABLE_AGENTS_TZ.md) — фазы Scout, composable Research/Critic
 - `backend/internal/horizon/domain/steering_profiles.go` — маппинг contractType → steering profile → domain mode
 - `backend/internal/horizon/scout/engine_ext.go` — `ensureJobDomainMode`, `contractTypesFromDomainsRaw`

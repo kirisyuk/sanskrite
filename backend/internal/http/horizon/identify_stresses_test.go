@@ -108,7 +108,7 @@ func TestIdentifyStressFingerprintAndTags(t *testing.T) {
 
 func TestCoverageAndGateStatus(t *testing.T) {
 	richMetrics := map[string]horizonmodels.MetricValue{
-		"lead_time_days":                       {Value: 17, Confidence: 0.9},
+		"lead_time_days":                      {Value: 17, Confidence: 0.9},
 		"inventory_cover_days_at_destination": {Value: 6, Confidence: 0.9},
 		"share":                               {Value: 0.7, Confidence: 0.9},
 		"switch_time_days":                    {Value: 45, Confidence: 0.9},
@@ -191,12 +191,12 @@ func TestApplyFindingToFragmentUpdatesRiskMetricsAndQualifiers(t *testing.T) {
 		Metadata:      horizonmodels.FragmentMetadata{},
 	}
 	finding := StressFinding{
-		TargetType:   "supply_link",
-		SupplyLinkRef: "/supply-link/global/a/product/b",
-		StressorType: "sanctions",
-		Mechanism:    "control_exposure",
-		Severity:     "critical",
-		Confidence:   0.91,
+		TargetType:       "supply_link",
+		SupplyLinkRef:    "/supply-link/global/a/product/b",
+		StressorType:     "sanctions",
+		Mechanism:        "control_exposure",
+		Severity:         "critical",
+		Confidence:       0.91,
 		AffectedZoneRefs: []string{"/zone/global/red-sea"},
 		ZoneRefs:         []string{"/zone/maritime/red-sea"},
 		GeoRefs:          []string{"/geo/eg", "/geo/sa"},
@@ -288,16 +288,16 @@ func TestApplyFindingToArtifactUpdatesLegEdgeAndIndexes(t *testing.T) {
 	}
 
 	finding := StressFinding{
-		TargetType:      "supply_link",
-		ArtifactKey:     "artifact/path-1",
-		SupplyLinkRef:   "/supply-link/global/supplier-a/product-material-lithium/customer-b",
-		ProductRef:      "/product/material/lithium",
-		StressorType:    "route_disruption",
-		Mechanism:       "route_fragility",
-		Severity:        "high",
-		Confidence:      0.86,
-		FlowRefs:        []string{"/flow/maritime/suez"},
-		ZoneRefs:        []string{"/zone/maritime/suez"},
+		TargetType:       "supply_link",
+		ArtifactKey:      "artifact/path-1",
+		SupplyLinkRef:    "/supply-link/global/supplier-a/product-material-lithium/customer-b",
+		ProductRef:       "/product/material/lithium",
+		StressorType:     "route_disruption",
+		Mechanism:        "route_fragility",
+		Severity:         "high",
+		Confidence:       0.86,
+		FlowRefs:         []string{"/flow/maritime/suez"},
+		ZoneRefs:         []string{"/zone/maritime/suez"},
 		AffectedZoneRefs: []string{"/zone/global/red-sea"},
 		MetricObservations: []StressMetricObservation{
 			{MetricKey: "lead_time_days", Value: 21, Confidence: 0.8, Unit: "days"},
@@ -345,5 +345,88 @@ func TestApplyFindingToArtifactUpdatesLegEdgeAndIndexes(t *testing.T) {
 	}
 	if got := parsed.Edges[0].Qualifiers[horizonmodels.QualifierPathStressScore]; got == nil {
 		t.Fatalf("expected edge qualifier %q to be set", horizonmodels.QualifierPathStressScore)
+	}
+}
+
+func TestBindFindingToScopeReplacesMismatchedArtifactWithMatchingPathLeg(t *testing.T) {
+	canvas := &IdentifyStressesCanvas{}
+
+	wrong := &horizonmodels.MaterializedArtifact{
+		CanonicalKey: "artifact/wrong",
+		ProductAxis:  "/product/component/electronic/manufacturing/logic-wafer",
+		Payload: horizonmodels.BuildSupplyChainPathPayload(
+			[]horizonmodels.SupplyChainPathNode{
+				{Type: "org", Ref: "/org/nl/asml-holding-nv"},
+				{Type: "product", Ref: "/product/component/electronic/manufacturing/logic-wafer"},
+				{Type: "org", Ref: "/org/us/nvidia-corp"},
+			},
+			nil,
+			[]horizonmodels.SupplyChainPathLeg{
+				{
+					Index:                   0,
+					SupplierRef:             "/org/nl/asml-holding-nv",
+					CustomerRef:             "/org/us/nvidia-corp",
+					ProductRef:              "/product/component/electronic/manufacturing/logic-wafer",
+					SupplyLinkCanonicalPath: "/supply-link/global/asml-holding-nv/logic-wafer/nvidia-corp",
+				},
+			},
+			nil,
+			nil,
+		),
+	}
+	right := &horizonmodels.MaterializedArtifact{
+		CanonicalKey: "artifact/right",
+		ProductAxis:  "/product/finished/mechanical/assembly/euv-lithography-system",
+		Payload: horizonmodels.BuildSupplyChainPathPayload(
+			[]horizonmodels.SupplyChainPathNode{
+				{Type: "org", Ref: "/org/nl/asml-holding-nv"},
+				{Type: "product", Ref: "/product/finished/mechanical/assembly/euv-lithography-system"},
+				{Type: "org", Ref: "/org/tw/taiwan-semiconductor-manufacturing-co-ltd"},
+			},
+			nil,
+			[]horizonmodels.SupplyChainPathLeg{
+				{
+					Index:                   2,
+					SupplierRef:             "/org/nl/asml-holding-nv",
+					CustomerRef:             "/org/tw/taiwan-semiconductor-manufacturing-co-ltd",
+					ProductRef:              "/product/finished/mechanical/assembly/euv-lithography-system",
+					SupplyLinkCanonicalPath: "/supply-link/global/asml-holding-nv/euv-lithography-system/taiwan-semiconductor-manufacturing-co-ltd",
+				},
+			},
+			nil,
+			nil,
+		),
+	}
+
+	scope := &identifyStressScope{
+		Artifacts: []*horizonmodels.MaterializedArtifact{wrong, right},
+		NodeRefs: []string{
+			"/org/nl/asml-holding-nv",
+			"/org/tw/taiwan-semiconductor-manufacturing-co-ltd",
+		},
+	}
+	finding := StressFinding{
+		TargetType:    "product_on_link",
+		ArtifactKey:   "artifact/wrong",
+		SupplyLinkRef: "/supply-link/global/asml-holding-nv/euv-lithography-system/taiwan-semiconductor-manufacturing-co-ltd",
+		ProductRef:    "/product/finished/mechanical/assembly/euv-lithography-system",
+		TargetRefs: []string{
+			"/org/nl/asml-holding-nv",
+			"/org/tw/taiwan-semiconductor-manufacturing-co-ltd",
+		},
+	}
+
+	got := canvas.bindFindingToScope(finding, scope)
+	if got.ArtifactKey != "artifact/right" {
+		t.Fatalf("expected artifact/right, got %q", got.ArtifactKey)
+	}
+	if got.TargetType != "path_leg" {
+		t.Fatalf("expected path_leg target type, got %q", got.TargetType)
+	}
+	if got.LegIndex == nil || *got.LegIndex != 2 {
+		t.Fatalf("expected leg index 2, got %+v", got.LegIndex)
+	}
+	if got.ProductRef != "/product/finished/mechanical/assembly/euv-lithography-system" {
+		t.Fatalf("expected EUV product ref, got %q", got.ProductRef)
 	}
 }

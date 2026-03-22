@@ -16,16 +16,52 @@
 | edgeModality, ValidFrom/ValidTo | ✅ | qualifiers, `normalizeTemporalModality`, policy_checker |
 | QueryAddress | ✅ | `query_address.go`, `query_resolver.go`, `query_refresh_job.go` |
 | Policy infrastructure | ✅ | Policy interface, PolicyExecutor, Firestore collections |
-| MaterializedArtifact, SupplyLink | ✅ | core-model/runtime готовы; API endpoints для SupplyLink/paths — в TODO (см. секцию F) |
+| MaterializedArtifact, SupplyLink | ✅ | Модели + runtime; **REST:** `GET /api/horizon/supply-chains/by-node`, `GET .../by-lens`, `POST .../supply-chains/search` (`supply_chains.go`). **Линза:** `POST .../lenses/{id}/complete-substrate`, `recover-metrics`, `identify-stresses` — дозаполнение/метрики/стрессы по scope (см. `handlers.go`). Отдельного CRUD «по одному SupplyLink id» под префиксом `/supply-links/…` может не быть — смотреть код. |
 | Ручной scouting клиентов организации | ✅ | через `POST /api/horizon/fragments/{id}/refresh` + `specialties=["supply_chain"]` |
 | Appetite governance (override + audit trail) | ◑ | runtime appetite есть; analyst override endpoint и audit trail — в TODO |
-| Interpretation queue hardening (DLQ/retry/SLO) | ❌ | базовая очередь есть, hardening ещё не завершён |
+| Interpretation queue hardening (DLQ/retry/SLO) | ◑ | `horizon_interpretation_queue`, `InterpretationQueue`/`Processor`/`Interpreter`, фоновый `Start`+batch, `MarkFailed` — **база есть**. Нет целевого DLQ/политики ретраев/SLO/наблюдаемости из «hardening»-плана; отдельно в Scout есть DLQ для policy persist (`policy_persist_queue.go`). |
 | Lens-specific highProfile | ❌ | отложено до полноценного дизайна |
-| Метрики в оверлей | ❌ | метрики пока в `State` фрагментов |
-| Org identity anchor & transitions | ❌ | identity anchor, nameHistory, transition edges (RENAMED_TO, LEGAL_SUCCESSOR_OF…); см. `ORG_IDENTITY_ANCHOR_AND_CORPORATE_TRANSITIONS.md` |
-| Scout domain phases & composable agents | ✅ | Domain modes (intent→job.State), allowlists, semantic groups; CriticPipeline/ResearchPipeline by mode; Phase 0–3 in engine; domain mode in child jobs; canonical edge types (ASSOCIATED_WITH, CORPORATE_TRANSITION, DOMAIN_RELATION). Toggle: `HORIZON_SCOUT_COMPOSABLE_PIPELINE=false` для отката на монолитный путь. ТЗ: `SCOUT_DOMAIN_PHASES_AND_COMPOSABLE_AGENTS_TZ.md`. |
-| Signaling Pipeline | ❌ | Отдельный пайплайн: news flow → events → 12-axis signals → propagation. Scout не создаёт сигналы. План: `SIGNALING_PIPELINE_IMPLEMENTATION_PLAN.md`. |
+| Метрики в оверлей | ◑ | Базовые метрики по-прежнему в `State` фрагмента; **уже есть API** `GET /api/horizon/rollup/{fragmentId}` и `.../explain` (клиент: `web/src/lib/api.ts`). Полноценный «оверлей метрик» в UI/единый продуктовый слой — в развитии. |
+| Org identity anchor & transitions | ◑ | **В коде уже есть:** `NameHistory` на фрагменте (`models/fragment.go`), типы рёбер `RENAMED_TO`/`LEGAL_SUCCESSOR_OF`/`CORPORATE_TRANSITION` (`dependency_edge.go`), промпты Scout/Research/Critic, приоритеты anchor в `scout/org_deduplicator.go`. **Нет как единого продукта:** governance/audit и полный контракт из `ORG_IDENTITY_ANCHOR_AND_CORPORATE_TRANSITIONS.md` (архив). |
+| Scout domain phases & composable agents | ✅ | Domain modes (intent→job.State), allowlists, semantic groups; CriticPipeline/ResearchPipeline by mode; Phase 0–3 in engine; domain mode in child jobs; canonical edge types (ASSOCIATED_WITH, CORPORATE_TRANSITION, DOMAIN_RELATION). Toggle: `HORIZON_SCOUT_COMPOSABLE_PIPELINE=false` для отката на монолитный путь. ТЗ: `docs/archive/horizon-implementation/SCOUT_DOMAIN_PHASES_AND_COMPOSABLE_AGENTS_TZ.md`. |
+| Signaling Pipeline | ◑ | **Уже в проде по частям:** `POST /api/horizon/events:inject`, `POST /api/horizon/events:extract-signals`, `POST /api/horizon/canvas/news-by-fragments`, `scout/signal_pipeline.go` + risk jobs / propagation. Scout по-прежнему не «создаёт сигналы» как отдельный продуктовый поток. Полный автономный pipeline «rss → events → 12-axis → propagation» как в плане — **не сведён**; план: `docs/archive/horizon-implementation/SIGNALING_PIPELINE_IMPLEMENTATION_PLAN.md`. |
 | Fractal Hierarchy & Scale-Invariant Contracts | ◑ | Sphere taxonomy (L1/L2/L3+), SpherePaths, ResolutionHint, ParentPath — реализованы. Zoom, Metric Composition, Edge Projection — отложены. Units deprecated. Chokepoint transit amplification — реализовано. |
+
+## Отдельный хвост: расследование кривых existingArtifact bindings
+
+Это отдельная задача построителя/матчинг-слоя materialized artifacts, а не задача `complete-substrate`.
+
+Наблюдение:
+1. `complete-substrate` уже ограничен существующим набором `supplyLinkRef` gaps и не должен invent-ить новые supply links.
+2. При этом `existingArtifactKey` иногда указывает на неверный materialized artifact, хотя сам completion остаётся на корректном `supplyLinkRef`.
+3. Это выглядит как дефект matcher/indexing/graph-builder, который нужно расследовать отдельно и не смешивать с логикой LLM-completer.
+
+Примеры для расследования:
+1. `Australia`:
+   `/supply-link/global/gladstone-lng-facility-df1b26052d/liquefied-natural-gas-762b96778e/incheon-lng-power-plant-cbe1bca8db`
+   -> `existingArtifactKey=/supply-chain/global/fac_au_darwin-lng-plant/product_finished_mechanical_assembly_liquefied-natural-gas/fac_kr_incheon-lng-power-plant`
+   Это похоже на неверную подстановку чужого LNG artifact по тому же customer/product.
+2. `Australia`:
+   `/supply-link/global/mount-tom-price-mine-5c255a0605/iron-ore-09a1e57ced/port-kembla-steelworks-9b0a55d835`
+   -> `existingArtifactKey=/supply-chain/global/fac_au_saraji-mine/product_finished_mechanical_assembly_metallurgical-coal/fac_au_port-kembla-steelworks`
+   Это явный cross-product / cross-supplier mismatch.
+3. `Australia`:
+   `/supply-link/global/pinjarra-refinery-c5427282ce/alumina-486799c458/tomago-aluminium-smelter-809fb6e329`
+   -> `existingArtifactKey=/supply-chain/global/fac_au_north-west-shelf-pipeline/product_finished_mechanical_assembly_gas-transmission/fac_au_tomago-aluminium-smelter`
+   Это mismatch по product family и по nature of path.
+4. `Australia`:
+   `/supply-link/global/north-field-production-complex-79132f6bca/natural-gas-ad1d7c0799/qatarenergy-85dbfb94bc`
+   -> `existingArtifactKey=/supply-chain/global/fac_au_darwin-lng-plant/product_finished_mechanical_assembly_liquefied-natural-gas/fac_au_darlot-gold-mine-power-station`
+   Это совсем чужой artifact и вероятный дефект в selection/index fallback.
+5. `Port of Eilat`:
+   `/supply-link/global/zin-phosphate-mine-5f4ed4c89b/phosphate-rock-65f8a8044e/mishor-rotem-plant-0ef8fd9d96`
+   -> `existingArtifactKey=/supply-chain/global/fac_il_zin-phosphate-mine/product_finished_mechanical_assembly_phosphoric-acid/fac_us_st-louis-plant`
+   Это выглядит как подмена downstream export artifact вместо локального mine->plant materialization.
+
+Отдельный DoD для этого хвоста:
+1. `existingArtifactKey` не может указывать на artifact с чужим supplier/customer/product family.
+2. Для match selection появляется объяснимый `match reason` и trace.
+3. Regression suite покрывает случаи `same customer / wrong product`, `same product / wrong supplier`, `same endpoint / wrong path family`, `export artifact accidentally selected for local intra-chain link`.
 
 ## Unified Remediation Plan (единый всеобъемлющий план, 2026-03)
 
@@ -316,6 +352,28 @@ Acceptance criteria программы:
 Release gate:
 1. Следующий этап разрешается только после выполнения DoD предыдущего этапа и прохождения replay/shadow checks.
 
+### Статус WS0–WS12 относительно кода (аудит 2026-03)
+
+Ниже — **не замена DoD**, а ориентир «что уже видно в репозитории» на дату аудита. Противоречия с таблицей сверху разрешаются в пользу **кода**.
+
+| WS | Код | Комментарий |
+|----|-----|----------------|
+| 0 | ◑ | Нормализация и вывод `reason_code` / `normalizationReasonCode`: `scout/pipeline_orchestration.go` (`normalizeStopReasonCode`, `deriveStopReasonCode`), запись в `job.State` в `engine.go`. Полный реестр `hard_stop\|soft_stop\|recoverable` + операционная baseline-таблица по 7 дням — **не доказаны закрытыми** одним только кодом. |
+| 1 | ◑ | `internal/horizon/edgesemantics/direction_policy.go`, `models/edge_canonicalization.go`, `policy/edge_canonicalization_policy.go`, `scout/engine_ext.go` — слой USOT живой. DoD «нулевая рассинхронизация» — метрика/процесс. |
+| 2 | ◑ | Composable/domain modes, `EnrichFragmentWithGroundingWithDomainModes`, откат `HORIZON_SCOUT_COMPOSABLE_PIPELINE` — в коде Scout. |
+| 3 | ◑ | Единый источник для `DomainMode` и таксономии есть (`internal/taxonomy/domain_mode.go` и др.); **CI-проверка drift** списков в промптах — уточнять в пайплайне репозитория. |
+| 4 | ◑ | Точки входа из плана (`post_processing_policy.go`, `engine.go`, `missing_info_*`, `domain/engine.go`) активно менялись; **все 13 подпунктов false-stop** и сценарные тесты из DoD — требуют отдельной матрицы «пункт → тест/PR». |
+| 5 | ◑ | `domain/gate_config.go`, `domain/engine.go`, `scout/planner.go` — есть; адаптивные минимумы ширины как в тексте roadmap — проверять по gate-логике и тестам. |
+| 6 | ◑ | Цикл/`ready_with_gaps`/`domain/engine` — логика частично совпадает с планом; строгий mandatory recovery из DoD — верифицировать тестами. |
+| 7 | ◑ | Поддержка `/zone/...`, тесты в `taxonomy/`; DoD «near-zero incomplete canonicalParts» — эксплуатационная метрика. |
+| 8 | ◑ | ISO2 / enforcement: `policy/enforcement_executor.go` и связанные пути; точная частота `low_confidence_iso2_inference` — из логов/BQ. |
+| 9 | ◑ | В `scout/supply_chain_parser.go` — явные guard’ы против materialization `SUPPLIES_TO` для financial/product paths (`financial-flow`, `/product/finance/` …). Поле `flow_kind` **как в тексте WS9** может называться иначе или быть распределено по проверкам — сверять файл. |
+| 10 | ◑ | `scout/edge_directional_roles.go`, `policy/validation_policy.go` присутствуют. |
+| 11 | ◑ | Интеграционные/контрактные тесты в `scout/*_test.go`, `domain/*_test` много; **golden replay / shadow на прод-трафике** — в основном процесс, не один файл. |
+| 12 | ◑ | Feature flags и canary — частично через env (`HORIZON_*`, Cloud Tasks); полный сценарий 10%→50%→100% из текста — операционный playbook. |
+
+**Вывод:** программа WS0–WS12 — **живая дорожная карта**; значительная часть инфраструктуры (USOT, domain modes, supply parser guards, reason codes, interpretation queue base) **уже в коде**, но **Acceptance criteria** внизу WS12 (пороги quarantine, исключение `ready_with_gaps` и т.д.) нужно подтверждать **метриками/релизными гейтами**, а не только чтением roadmap.
+
 ### Детализация исполнения (обязательная надстройка к WS0-WS12)
 
 Этот блок задает точный backlog исполнения с идентификаторами задач. Любая реализация в PR должна ссылаться на `Task ID`.
@@ -464,7 +522,7 @@ Acceptance:
 Статус (2026-03-01):
 1. `TASK-S5-01` выполнен: добавлен `scripts/horizon_shadow_replay.sh` (лог-анализ + release gates + JSON report).
 2. `TASK-S5-02` выполнен: добавлен `scripts/horizon_canary_rollout.sh` (10/50/100 phases + gate checks + auto-rollback).
-3. `TASK-S5-03` выполнен: зафиксирован runbook `docs/horizon/implementation/SHADOW_CANARY_ROLLOUT.md` с OK-rules/SLO gate-порогами и операционной процедурой.
+3. `TASK-S5-03` выполнен: зафиксирован runbook `docs/archive/horizon-implementation/SHADOW_CANARY_ROLLOUT.md` с OK-rules/SLO gate-порогами и операционной процедурой.
 
 Acceptance:
 1. Все release gates выполнены (см. секцию ниже).
@@ -528,7 +586,7 @@ Acceptance:
 
 ## Delta (2026-02-13): Internal-First Grounding (v5)
 
-Источник: `docs/horizon/implementation/INTERNAL_FIRST_GROUNDING_IMPLEMENTATION_PLAN.md` (rev v5).
+Источник: `docs/archive/horizon-implementation/INTERNAL_FIRST_GROUNDING_IMPLEMENTATION_PLAN.md` (rev v5).
 
 Фиксируем согласованные уточнения без урезания целевого функционального объёма:
 
@@ -590,7 +648,9 @@ Acceptance:
 
 **Контекст:** Scout больше не создаёт сигналы. Сигналы — отдельный пайплайн из потока новостей. Источники (rss, horizon_monitor_feed) уже есть; система сама управляет расписанием поллинга.
 
-**План:** см. `SIGNALING_PIPELINE_IMPLEMENTATION_PLAN.md`.
+**Уже в коде (кирпичи):** см. сводную строку **Signaling Pipeline** в таблице «Статус реализации» выше (`events:inject`, `events:extract-signals`, `canvas/news-by-fragments`, `scout/signal_pipeline.go`).
+
+**План (полная склейка продукта):** см. `docs/archive/horizon-implementation/SIGNALING_PIPELINE_IMPLEMENTATION_PLAN.md`.
 
 **В roadmap (позже):**
 - **Fallback для слепых зон:** org в графе, но не попал ни в один event из концентрационных фидов — возможность точечного досмотра по запросу пользователя (например, "проверь новости по G42"). Не делать регулярным сканом по всем org.
@@ -694,7 +754,7 @@ Acceptance:
 
 ### 8) Domain Answer Layer + DomainContractEngine
 
-**Дизайн-документ**: `docs/horizon/implementation/DOMAIN_ANSWER_LAYER_DESIGN.md`
+**Дизайн-документ**: `docs/archive/horizon-implementation/DOMAIN_ANSWER_LAYER_DESIGN.md`
 
 **Суть**: Ввести над графом `Domain Answer Layer` — домены как структурированные контракты, ответ собирается из артефактов, граф объясняет ответ (path-centric), а не заменяет его. Исполнение контрактов — в выделенном движке `DomainContractEngine`.
 
@@ -1007,7 +1067,7 @@ Acceptance:
 
 ## Пайплайн Scout → Critic → Research → Policy
 
-**Контекст**: Анализ пайплайна Horizon в `engine.go` (см. `HORIZON_PIPELINE_ANALYSIS.md`).
+**Контекст**: Анализ пайплайна Horizon в `engine.go` (см. [HORIZON_PIPELINE_ANALYSIS.md](../../notes/HORIZON_PIPELINE_ANALYSIS.md)).
 
 **Текущий порядок** (соблюдён): Intent Resolution → Scout → Critic → Research → Critic Re-validation → Conflict Resolution → Metrics → Persistence → Policy Check.
 
@@ -1375,7 +1435,7 @@ Acceptance:
   - Убедиться, что background refresh корректно управляет подписками (added/removed paths) и не оставляет “мёртвых” подписок.
 - **Документация (backend-first)**
   - Держать `architecture/taxonomy.md` и `architecture/query-address.md` синхронно с кодом (не обещать enforcement, которого нет).
-  - В `IMPLEMENTATION_AUDIT.md` поддерживать актуальный “snapshot” (деплой/инфра/текущее состояние миграций).
+  - В `docs/archive/horizon/IMPLEMENTATION_AUDIT.md` поддерживать актуальный “snapshot” (деплой/инфра/текущее состояние миграций).
 - **Операционные контуры**
   - После завершения backfill: безопасно включить обратно Cloud Tasks / Scout queue (если была на паузе).
 - **Technical debt: нейминг RAG → document indexing (отложено)**
@@ -1421,7 +1481,7 @@ Acceptance:
 Отсюда и до секции **“Обработка метрик при propagation (семантика поверх "доставки дельт")”** включительно — один целостный блок работ: новые canonical paths, новые fragment/edge types, нормализация, требования Critic/Scout, lifecycle/time, edge metrics/temporal validity, и интеграция с propagation.
 ---
 - **Organization Identity Anchor & Corporate Transitions (rename/rebrand/successor)** — ❌ **TODO**
-  - Вынесено в отдельный документ для реализации отдельным агентом: `docs/horizon/implementation/ORG_IDENTITY_ANCHOR_AND_CORPORATE_TRANSITIONS.md`.
+  - Вынесено в отдельный документ для реализации отдельным агентом: `docs/archive/horizon-implementation/ORG_IDENTITY_ANCHOR_AND_CORPORATE_TRANSITIONS.md`.
   - В `roadmap.md` оставляем только статус/ссылку, чтобы не перегружать основной roadmap деталями национальных реестров, identity anchor и transition-логики.
 
 - **Natural Resource Deposit (`/deposit/`) и EXTRACTS_FROM** — ✅ **Реализовано**
@@ -2754,7 +2814,7 @@ type PolicyDecision struct {
 
 **Цель**: создать структурный слой для ответов на вопросы типа "What are the top supply disruption risks for Tesla battery logistics?" — из графа и фактов, а не через LLM каждый раз.
 
-**Детальный план**: см. [signals-and-semantic-propagation-plan.md](signals-and-semantic-propagation-plan.md)
+**Детальный план**: см. [signals-and-semantic-propagation-plan.md](../../archive/horizon-implementation/signals-and-semantic-propagation-plan.md)
 
 **TODO (критические пути)**:
 
@@ -2977,6 +3037,8 @@ type PolicyDecision struct {
 
 ## Этап 1: Модели данных и репозитории
 
+> **Исторический черновик плана.** Фактическая раскладка: модели в `backend/internal/horizon/models/`, репозитории Horizon в `backend/internal/horizon/repo/*.go` (не в `internal/repo/`). См. также [code-organization.md](../architecture/code-organization.md).
+
 **Цель**: Создание базовых моделей данных и репозиториев для работы с Firestore
 
 **Задачи**:
@@ -2987,12 +3049,8 @@ type PolicyDecision struct {
    - `DependencyEdge` (`backend/internal/horizon/models/dependency_edge.go`)
    - `WatchdogConfig` (`backend/internal/horizon/models/watchdog.go`)
 
-2. Создание репозиториев:
-   - `HorizonFragmentRepository` (`backend/internal/repo/horizon_fragments.go`)
-   - `FrameRepository` (`backend/internal/repo/frames.go`)
-   - `LensRepository` (`backend/internal/repo/lenses.go`)
-   - `DependencyEdgeRepository` (`backend/internal/repo/dependency_edges.go`)
-   - `WatchdogConfigRepository` (`backend/internal/repo/watchdog_configs.go`)
+2. Создание репозиториев (**актуальные пути**):
+   - репозитории фрагментов/фреймов/линз и т.д. — `backend/internal/horizon/repo/` (например `fragments.go`, `frames.go`, `lenses.go`, `dependency_edges.go`, `watchdog_configs.go`)
 
 3. Создание Firestore индексов:
    - Обновление `web/firestore.indexes.json`
@@ -3270,5 +3328,5 @@ type PolicyDecision struct {
 - [Технические решения](technical-decisions.md)
 - [Архитектурный обзор](../architecture/overview.md)
 - [Supply Chain & Influence Model](../architecture/supply-chain-influence-model.md)
-- [ТЗ: Domain-specific фазы Scout, composable Research/Critic, упрощение рёбер](SCOUT_DOMAIN_PHASES_AND_COMPOSABLE_AGENTS_TZ.md)
-- [Risk Architecture](../../../risk-architecture.md) — Canonical Paths, Signal Propagation, Lazy Interpretation
+- [ТЗ: Domain-specific фазы Scout, composable Research/Critic, упрощение рёбер](../../archive/horizon-implementation/SCOUT_DOMAIN_PHASES_AND_COMPOSABLE_AGENTS_TZ.md)
+- [Risk Architecture](../../notes/risk-architecture.md) — Canonical Paths, Signal Propagation, Lazy Interpretation

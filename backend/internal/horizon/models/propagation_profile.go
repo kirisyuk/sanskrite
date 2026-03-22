@@ -1,7 +1,7 @@
 package models
 
 // PropagationProfile defines how an axis propagates through the graph.
-// See risk-architecture.md Contract 3 for full specification.
+// See docs/notes/risk-architecture.md Contract 3 for full specification.
 type PropagationProfile struct {
 	AxisKey        string           `json:"axisKey" firestore:"axisKey"`               // Reference to AxisSpec key
 	DefaultDamping float64          `json:"defaultDamping" firestore:"defaultDamping"`   // [0.0, 1.0]
@@ -26,7 +26,7 @@ type TransformationRule struct {
 }
 
 // DefaultPropagationProfiles returns default propagation profiles for all 12 axes.
-// These match the specifications from risk-architecture.md (lines 416-426).
+// These match the specifications from docs/notes/risk-architecture.md (lines 416-426).
 func DefaultPropagationProfiles() map[string]PropagationProfile {
 	return map[string]PropagationProfile{
 		AxisLegalAccess: {

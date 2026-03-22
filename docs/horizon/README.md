@@ -45,19 +45,15 @@
 
 ### Реализация
 
-- **[Roadmap](implementation/roadmap.md)** — план реализации по этапам
-- **[Технические решения](implementation/technical-decisions.md)** — ключевые технические решения и обоснования
+- **[Roadmap](implementation/roadmap.md)** — единственный актуальный статус и план (источник правды по этапам)
+- **[Технические решения](implementation/technical-decisions.md)** — зафиксированные решения
+- **[Архив планов и ТЗ](../archive/horizon-implementation/)** — черновики, разовые планы, QA-разборы (не обязаны совпадать с текущим кодом построчно)
 
 ## Статус реализации
 
-**Текущий статус**: Документация
+Реализация ведётся в моноядре (`backend/internal/horizon`, HTTP в `backend/internal/http/horizon`, часть UI в `web/src/pages/HorizonPage.tsx` и связанных компонентах). **Актуальная сводка по компонентам и хвостам работ** — в [implementation/roadmap.md](implementation/roadmap.md) (таблица в начале документа).
 
-- ✅ Архитектурная документация
-- ⏳ Модели данных (в разработке)
-- ⏳ Scout Engine (планируется)
-- ⏳ Lens Subsystem (планируется)
-- ⏳ Propagation Engine (планируется)
-- ⏳ Watchdog (планируется)
+Кратко: базовые модели, Firestore-репозитории, Lens API, Scout (в т.ч. composable pipeline / domain modes), QueryAddress, политики и значительная часть графа и субстрата уже в коде; отдельные направления (signaling pipeline, часть appetite governance, lens-specific highProfile и др.) помечены в roadmap как незавершённые или отложенные.
 
 ## Ключевые концепции
 
@@ -134,8 +130,9 @@ ExposurePath — **канонический, типизированный арт
 
 - **Firestore** — основное хранилище данных
 - **AI система** (`internal/ai`) — для LLM вызовов агентов
-- **Agent система** (`internal/agents`) — для оркестрации задач
-- **Realtime** (`internal/realtime`) — для обновлений в реальном времени
+- **Agents** (`internal/agents`) — вспомогательная оркестрация там, где подключено к основному приложению
+- **AgentMesh** (`internal/agentmesh`) — отдельная подсистема агентов (см. `backend/internal/agentmesh/README.md`)
+- **Realtime** (`internal/realtime`) — Pub/Sub и мост обновлений для клиента
 - **Мультитенантность** — через TenantID во всех моделях
 
 Подробнее см. [Интеграция с Sanskrite](architecture/integration.md).

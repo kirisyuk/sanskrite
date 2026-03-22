@@ -14,7 +14,7 @@ echo "YOUR_REAL_KEY" | gcloud secrets versions add anthropic_api_key --data-file
 echo "YOUR_REAL_KEY" | gcloud secrets versions add grok_api_key --data-file=-
 
 # 3. Проверить что всё работает
-curl $(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')/health
+curl "$(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')/healthz"
 ```
 
 ---
@@ -47,7 +47,7 @@ gcloud run services describe etigram-api --region us-central1 --format="value(st
 gcloud run services logs read etigram-api --region us-central1 --limit 20
 
 # ✓ Health check OK?
-curl $(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')/health
+curl "$(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')/healthz"
 ```
 
 ---

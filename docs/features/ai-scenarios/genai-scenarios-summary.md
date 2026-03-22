@@ -73,7 +73,7 @@ Timing caveats:
 - Gemini
   - Tools + Search в одном запросе не поддержаны публичным API: используем двухшаговый пайплайн (tool → grounded) с объединением Usage/Sources/SearchQueries.
   - Strict JSON: через function tool `return_structured` (без `response_mime_type`), схема валидируется на сервере. 
-  - MALFORMED_FUNCTION_CALL: см. `docs/gemini-scenarios.md` — упрощать схему, один tool, понижать temperature.
+  - MALFORMED_FUNCTION_CALL: см. [gemini-scenarios.md](./gemini-scenarios.md) — упрощать схему, один tool, понижать temperature.
 
 - OpenAI
   - Web search включается как tool; парсим источники/запросы из function calls и текста. 

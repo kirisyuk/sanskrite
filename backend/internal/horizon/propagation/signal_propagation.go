@@ -51,7 +51,7 @@ type SignalSimulationResult struct {
 }
 
 // PropagateSignal propagates a signal through the graph using axis-based profiles.
-// This implements bounded propagation according to risk-architecture.md.
+// This implements bounded propagation according to docs/notes/risk-architecture.md.
 func (e *PropagationEngine) PropagateSignal(
 	ctx context.Context,
 	signal *horizonmodels.SignalDescriptor,
@@ -65,7 +65,7 @@ func (e *PropagationEngine) PropagateSignal(
 }
 
 // PropagateSignalFromSeeds propagates a signal starting from explicit seed fragment IDs.
-// This matches risk-architecture.md conceptual signature: propagate(signal, seedNodes, profile).
+// This matches docs/notes/risk-architecture.md conceptual signature: propagate(signal, seedNodes, profile).
 func (e *PropagationEngine) PropagateSignalFromSeeds(
 	ctx context.Context,
 	signal *horizonmodels.SignalDescriptor,
@@ -1396,7 +1396,7 @@ func (e *PropagationEngine) calculateDampedAmplitudeWithBreakdown(
 		"input_amplitude": inputAmplitude,
 	}
 
-	// Base damping (risk-architecture.md "edge physics")
+	// Base damping (docs/notes/risk-architecture.md "edge physics")
 	baseDamping := profile.DefaultDamping
 	effectiveDamping := baseDamping + (1-baseDamping)*edge.Properties.Criticality*0.5
 	factors["profile_default_damping"] = baseDamping

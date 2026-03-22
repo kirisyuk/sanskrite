@@ -1,7 +1,7 @@
 package models
 
 // AxisSpec defines the properties of a quasi-physical axis.
-// See risk-architecture.md Contract 2 for full specification.
+// See docs/notes/risk-architecture.md Contract 2 for full specification.
 type AxisSpec struct {
 	Key              string   `json:"key" firestore:"key"`                           // e.g., "legal/access"
 	Label            string   `json:"label" firestore:"label"`                       // Human-readable label

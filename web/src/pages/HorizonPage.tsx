@@ -107,6 +107,7 @@ const HorizonPage: React.FC = () => {
   const [preflightOpen, setPreflightOpen] = React.useState(false);
   const [preflightResult, setPreflightResult] = React.useState<any | null>(null);
   const [preflightMode, setPreflightMode] = React.useState<'just_open' | 'research_first'>('research_first');
+  const [preflightHotPathOnly, setPreflightHotPathOnly] = React.useState(false);
   const [preflightSelectedDomains, setPreflightSelectedDomains] = React.useState<Record<string, boolean>>({});
   const [preflightSelectedAnchors, setPreflightSelectedAnchors] = React.useState<Record<string, boolean>>({});
   const [preflightFocus, setPreflightFocus] = React.useState('');
@@ -540,6 +541,11 @@ const HorizonPage: React.FC = () => {
       setPreflightFocus(String(preflight?.intent?.focus || '').trim());
       setPreflightDomainsDraft(Array.isArray(preflight?.intent?.domains) ? (preflight.intent.domains as any[]) : []);
       setPreflightAnchorsDraft(Array.isArray(preflight?.intent?.anchors) ? (preflight.intent.anchors as any[]) : []);
+      setPreflightHotPathOnly(
+        (domains as any[]).some((d: any) =>
+          /^(supply-chain|value-chain)$/i.test(String(d?.contractType || '').trim())
+          && String(d?.supplyChainExecutionPlan?.graphBuildMode || '').trim().toLowerCase() === 'hot_path_only'),
+      );
       setPreflightOpen(true);
       openedPreflight = true;
     } catch (error) {
@@ -572,6 +578,7 @@ const HorizonPage: React.FC = () => {
     pendingCreateRef.current = null;
     setPreflightDomainsDraft([]);
     setPreflightAnchorsDraft([]);
+    setPreflightHotPathOnly(false);
     setPreflightSelectedDomains({});
     setPreflightSelectedAnchors({});
     setPreflightFocus('');
@@ -608,7 +615,19 @@ const HorizonPage: React.FC = () => {
       const intentOverride = {
         ...preflightResult.intent,
         focus: String(preflightFocus || '').trim() || String(preflightResult?.intent?.focus || '').trim(),
-        domains: filteredDomains,
+        domains: filteredDomains.map((d: any) => {
+          if (!/^(supply-chain|value-chain)$/i.test(String(d?.contractType || '').trim())) return d;
+          const currentPlan = d?.supplyChainExecutionPlan && typeof d.supplyChainExecutionPlan === 'object'
+            ? d.supplyChainExecutionPlan
+            : {};
+          return {
+            ...d,
+            supplyChainExecutionPlan: {
+              ...currentPlan,
+              graphBuildMode: preflightHotPathOnly ? 'hot_path_only' : 'hot_path_plus_graph',
+            },
+          };
+        }),
         anchors: filteredAnchors,
       };
 
@@ -675,7 +694,7 @@ const HorizonPage: React.FC = () => {
       setIsCreatingLens(false);
       // Keep correlation/session IDs while we stay in Progress (until user opens the lens).
     }
-  }, [preflightMode, preflightResult, preflightSelectedAnchors, preflightSelectedDomains, preflightDomainsDraft, preflightAnchorsDraft, preflightFocus, reportFatalPipelineError, setSelectedLensId]);
+  }, [preflightHotPathOnly, preflightMode, preflightResult, preflightSelectedAnchors, preflightSelectedDomains, preflightDomainsDraft, preflightAnchorsDraft, preflightFocus, reportFatalPipelineError, setSelectedLensId]);
 
   const isValidCanonicalPath = React.useCallback((cp: string) => {
     const s = String(cp || '').trim();
@@ -833,6 +852,8 @@ const HorizonPage: React.FC = () => {
                       reason: String(preflightResult?.recommendation?.reason || '').trim(),
                       mode: preflightMode,
                       setMode: setPreflightMode,
+                      hotPathOnly: preflightHotPathOnly,
+                      setHotPathOnly: setPreflightHotPathOnly,
                       focus: preflightFocus,
                       setFocus: setPreflightFocus,
                       domainsDraft: preflightDomainsDraft || [],

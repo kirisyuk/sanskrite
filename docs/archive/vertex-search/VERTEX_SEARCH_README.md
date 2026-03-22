@@ -2,7 +2,7 @@
 
 ## Quick Start
 
-Пу### 1. Configure Environment Variables
+### 1. Configure Environment Variables
 Set these in your deployment:
 - `VERTEX_SEARCH_DATA_STORE_ID=rag-documents-store`
 - `VERTEX_SEARCH_LOCATION=global`
@@ -50,7 +50,7 @@ const results = await fetch('/api/v1/projects/{projectId}/vertex-search', {
 
 ## Architecture
 
-See [vertex-search-multi-tenancy.md](./vertex-search-multi-tenancy.md) for detailed architecture.
+See [vertex-search-multi-tenancy.md](../../architecture/vertex-search-multi-tenancy.md) for detailed architecture.
 
 ## Monitoring
 

@@ -2,8 +2,10 @@
 
 ### Process Topology
 - Entrypoint: `backend/cmd/server/main.go`
-- HTTP/WS handlers: `backend/internal/http/*`, `backend/internal/realtime/ws.go`
-- Core modules: `internal/ai`, `internal/discovery`, `internal/repo`, `internal/gcp`, `internal/realtime`, `internal/http`, `internal/telegram`
+- HTTP/WS handlers: `backend/internal/http/*`, `backend/internal/http/horizon/*`, `backend/internal/http/criticalchain/*`, `backend/internal/realtime/ws.go`
+- Core modules: `internal/ai`, `internal/discovery`, `internal/horizon`, `internal/criticalchain`, `internal/agentmesh`, `internal/repo`, `internal/gcp`, `internal/realtime`, `internal/telegram`, …
+
+Маршруты: [apis.md](../apis.md), Horizon: [horizon/api/endpoints.md](../../horizon/api/endpoints.md).
 
 ### Package Map
 ```mermaid

@@ -18,6 +18,7 @@ import (
 	"cloud.google.com/go/firestore"
 	redis "github.com/redis/go-redis/v9"
 	"golang.org/x/time/rate"
+	"google.golang.org/api/iterator"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -2259,6 +2260,26 @@ func (r *HorizonFragmentsRepository) FindSupplyLinksByCustomer(
 	return r.findSupplyLinksByRefFields(ctx, queryTenant, []string{"customerRef", "customerFacilityRef"}, customerCandidates, limit)
 }
 
+// FindSupplyLinksByCustomerAnyTenant finds SupplyLink fragments across all tenants where customer refs match.
+func (r *HorizonFragmentsRepository) FindSupplyLinksByCustomerAnyTenant(
+	ctx context.Context,
+	customerRef string,
+	limit int,
+) ([]*models.HorizonFragment, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	customerRef = normalizeSupplyLinkRef(customerRef)
+	if customerRef == "" {
+		return nil, nil
+	}
+	customerCandidates := r.buildSupplyLinkActorRefAliases(ctx, customerRef, "global")
+	if len(customerCandidates) == 0 {
+		customerCandidates = map[string]struct{}{customerRef: {}}
+	}
+	return r.findSupplyLinksByRefFieldsAnyTenant(ctx, []string{"customerRef", "customerFacilityRef"}, customerCandidates, limit)
+}
+
 // FindSupplyLinksBySupplier finds SupplyLink fragments where supplierRef matches.
 func (r *HorizonFragmentsRepository) FindSupplyLinksBySupplier(
 	ctx context.Context,
@@ -2282,6 +2303,69 @@ func (r *HorizonFragmentsRepository) FindSupplyLinksBySupplier(
 		supplierCandidates = map[string]struct{}{supplierRef: {}}
 	}
 	return r.findSupplyLinksByRefFields(ctx, queryTenant, []string{"supplierRef", "supplierFacilityRef"}, supplierCandidates, limit)
+}
+
+// FindSupplyLinksBySupplierAnyTenant finds SupplyLink fragments across all tenants where supplier refs match.
+func (r *HorizonFragmentsRepository) FindSupplyLinksBySupplierAnyTenant(
+	ctx context.Context,
+	supplierRef string,
+	limit int,
+) ([]*models.HorizonFragment, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	supplierRef = normalizeSupplyLinkRef(supplierRef)
+	if supplierRef == "" {
+		return nil, nil
+	}
+	supplierCandidates := r.buildSupplyLinkActorRefAliases(ctx, supplierRef, "global")
+	if len(supplierCandidates) == 0 {
+		supplierCandidates = map[string]struct{}{supplierRef: {}}
+	}
+	return r.findSupplyLinksByRefFieldsAnyTenant(ctx, []string{"supplierRef", "supplierFacilityRef"}, supplierCandidates, limit)
+}
+
+// FindSupplyLinksByProduct finds SupplyLink fragments where productRef matches.
+func (r *HorizonFragmentsRepository) FindSupplyLinksByProduct(
+	ctx context.Context,
+	productRef string,
+	tenantID string,
+	limit int,
+) ([]*models.HorizonFragment, error) {
+	if r == nil {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	productRef = normalizeSupplyLinkRef(productRef)
+	if productRef == "" {
+		return nil, nil
+	}
+	queryTenant := strings.TrimSpace(tenantID)
+	if queryTenant == "" {
+		queryTenant = "global"
+	}
+	return r.findSupplyLinksByRefFields(ctx, queryTenant, []string{"productRef"}, map[string]struct{}{productRef: {}}, limit)
+}
+
+// FindSupplyLinksByProductAnyTenant finds SupplyLink fragments across all tenants where productRef matches.
+func (r *HorizonFragmentsRepository) FindSupplyLinksByProductAnyTenant(
+	ctx context.Context,
+	productRef string,
+	limit int,
+) ([]*models.HorizonFragment, error) {
+	if r == nil {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	productRef = normalizeSupplyLinkRef(productRef)
+	if productRef == "" {
+		return nil, nil
+	}
+	return r.findSupplyLinksByRefFieldsAnyTenant(ctx, []string{"productRef"}, map[string]struct{}{productRef: {}}, limit)
 }
 
 // FindSupplyLinksByTransportVia finds SupplyLink fragments where transportViaRefs contains path.
@@ -2324,6 +2408,57 @@ func (r *HorizonFragmentsRepository) FindSupplyLinksByTransportVia(
 		if strings.TrimSpace(fragment.ID) == "" {
 			fragment.ID = doc.Ref.ID
 		}
+		out = append(out, &fragment)
+	}
+	return out, nil
+}
+
+// FindSupplyLinksByTransportViaAnyTenant finds SupplyLink fragments across all tenants where transportViaRefs contains path.
+func (r *HorizonFragmentsRepository) FindSupplyLinksByTransportViaAnyTenant(
+	ctx context.Context,
+	transportRef string,
+	limit int,
+) ([]*models.HorizonFragment, error) {
+	if r == nil {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	transportRef = normalizeSupplyLinkRef(transportRef)
+	if transportRef == "" {
+		return nil, nil
+	}
+	iter := r.col.
+		Where("transportViaRefs", "array-contains", transportRef).
+		Documents(ctx)
+	defer iter.Stop()
+
+	out := make([]*models.HorizonFragment, 0, min(limit, 64))
+	seen := make(map[string]struct{}, min(limit, 64))
+	for {
+		if len(out) >= limit {
+			return out, nil
+		}
+		doc, err := iter.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		var fragment models.HorizonFragment
+		if err := doc.DataTo(&fragment); err != nil {
+			continue
+		}
+		assignLoadedFragmentID(&fragment, doc)
+		if fragment.Type != models.FragmentTypeSupplyLink {
+			continue
+		}
+		if _, ok := seen[fragment.ID]; ok {
+			continue
+		}
+		seen[fragment.ID] = struct{}{}
 		out = append(out, &fragment)
 	}
 	return out, nil
@@ -2391,6 +2526,70 @@ func (r *HorizonFragmentsRepository) findSupplyLinksByRefFields(
 				seen[fragment.ID] = struct{}{}
 				out = append(out, &fragment)
 			}
+		}
+	}
+	return out, nil
+}
+
+func (r *HorizonFragmentsRepository) findSupplyLinksByRefFieldsAnyTenant(
+	ctx context.Context,
+	fields []string,
+	candidates map[string]struct{},
+	limit int,
+) ([]*models.HorizonFragment, error) {
+	if r == nil {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	if len(fields) == 0 || len(candidates) == 0 {
+		return nil, nil
+	}
+	refs := make([]string, 0, len(candidates))
+	for ref := range candidates {
+		if ref = normalizeSupplyLinkRef(ref); ref != "" {
+			refs = append(refs, ref)
+		}
+	}
+	sort.Strings(refs)
+	seen := make(map[string]struct{}, min(limit, len(refs)*len(fields)))
+	out := make([]*models.HorizonFragment, 0, min(limit, len(refs)*len(fields)))
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		for _, ref := range refs {
+			iter := r.col.Where(field, "==", ref).Documents(ctx)
+			for {
+				if len(out) >= limit {
+					iter.Stop()
+					return out, nil
+				}
+				doc, err := iter.Next()
+				if err == iterator.Done {
+					break
+				}
+				if err != nil {
+					iter.Stop()
+					return nil, err
+				}
+				var fragment models.HorizonFragment
+				if err := doc.DataTo(&fragment); err != nil {
+					continue
+				}
+				assignLoadedFragmentID(&fragment, doc)
+				if fragment.Type != models.FragmentTypeSupplyLink {
+					continue
+				}
+				if _, ok := seen[fragment.ID]; ok {
+					continue
+				}
+				seen[fragment.ID] = struct{}{}
+				out = append(out, &fragment)
+			}
+			iter.Stop()
 		}
 	}
 	return out, nil

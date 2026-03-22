@@ -4,20 +4,128 @@
 
 API системы мониторинга горизонта предоставляет endpoints для управления Lens, HorizonFragment, DependencyEdge и мониторинга процессов Scout и Propagation.
 
+## Источник правды по маршрутам
+
+Полный перечень путей и методов задаётся в коде (при расхождении с этой страницей верен **код**):
+
+- `backend/internal/http/horizon/handlers.go` — `HorizonHandlers.RegisterRoutes` (большинство `/api/horizon/*`).
+- `backend/internal/http/horizon/handlers.go` — `HandleLensRoutes`, `HandleFragmentRoutes`, `HandleEdgeRoutes`, `HandleScoutRoutes` (подпути).
+- `backend/internal/http/horizon/enforcement_handlers.go` — `EnforcementHandlers.RegisterRoutes` (`/api/horizon/enforcement/*`).
+- `backend/internal/http/horizon/horizonmonitor_external_routes.go` — `RegisterFeedRoutes` (`/api/horizon/feeds/*`, см. ниже про аутентификацию).
+
+Ниже — **сводный реестр** (без дублирования всех query-параметров). Детальные JSON-примеры в следующих разделах страницы носят иллюстративный характер.
+
+### Аутентификация
+
+Большинство маршрутов проходят через тот же Firebase **Bearer**, что и остальной API: заголовок `Authorization: Bearer <firebase_id_token>`. Tenant извлекается из контекста авторизации (профиль пользователя), а не обязательно из отдельного заголовка — см. `backend/internal/http/auth.go`.
+
+Исключение: **`/api/horizon/feeds/*`** регистрируются без `authMiddleware` (прокси для поллинга и обхода CORS); ключи внешних API при необходимости на стороне сервера.
+
+### Реестр: корневые префиксы (`RegisterRoutes`)
+
+| Метод (типично) | Путь | Назначение |
+|-----------------|------|------------|
+| POST | `/api/horizon/intent/resolve` | Разбор NL → intent |
+| GET, POST | `/api/horizon/lenses` | Список / создание линз |
+| POST | `/api/horizon/lenses/preflight` | Preflight без записи |
+| POST | `/api/horizon/lenses/from-query` | Создание линзы из запроса |
+| * | `/api/horizon/lenses/{lensId}/…` | См. таблицу подпутей линзы |
+| GET | `/api/horizon/fragments?lensId=…` | Список фрагментов в scope линзы |
+| GET | `/api/horizon/fragments/by-path` | Фрагмент по каноническому пути |
+| * | `/api/horizon/fragments/{id}/…` | См. таблицу подпутей фрагмента |
+| GET | `/api/horizon/supply-chains/by-node` | Цепочки по узлу |
+| GET | `/api/horizon/supply-chains/by-lens` | Цепочки по линзе |
+| GET | `/api/horizon/supply-chains/search` | Поиск цепочек |
+| GET | `/api/horizon/geo-objects` | Гео-объекты |
+| POST | `/api/horizon/geo-objects/by-paths` | Гео по путям |
+| GET | `/api/horizon/map-activity` | Активность для карты |
+| * | `/api/horizon/profiles/{profileId}` | Профиль по id (если handler подключён) |
+| GET | `/api/horizon/rollup/{fragmentId}` | Агрегат (например `kind=risk`) |
+| GET | `/api/horizon/rollup/{fragmentId}/explain` | Объяснение rollup |
+| GET | `/api/horizon/risk/concentration` | Концентрация риска |
+| * | `/api/horizon/risk/jobs`, `/api/horizon/risk/jobs/{id}/…` | Risk jobs |
+| * | `/api/horizon/watch`, `/api/horizon/watch/…` | Watch: targets, page, scenarios, triggers, sync, metrics, … |
+| GET, POST | `/api/horizon/recommendations`, `/api/horizon/recommendations/count`, `/api/horizon/recommendations/{id}/…` | Стратегические рекомендации |
+| GET, PUT | `/api/horizon/ai-explanations/edge/{edgeId}` | Кэш объяснений рёбер |
+| POST | `/api/horizon/edges` | Создание ребра |
+| GET, PUT, DELETE | `/api/horizon/edges/{id}` | Чтение / обновление / удаление |
+| POST | `/api/horizon/edges/{id}/hitl` | Human-in-the-loop по ребру |
+| GET | `/api/horizon/scout/jobs/` | Список scouting jobs |
+| GET | `/api/horizon/scout/jobs/{jobId}` | Конкретный job |
+| GET | `/api/horizon/propagation/status` | Статус propagation |
+| POST | `/api/horizon/propagation/trigger` | Запуск propagation |
+| GET | `/api/horizon/propagation/trace` | Трассировка путей |
+| POST | `/api/horizon/events:inject` | Инъекция события (отладка / pipeline) |
+| POST | `/api/horizon/events:extract-signals` | Извлечение 12-axis по фактам |
+| POST | `/api/horizon/canvas/news-by-fragments` | Canvas: новости по фрагментам |
+| GET | `/api/horizon/ontology-facts/by-canonical-path` | Факты онтологии по пути |
+| POST | `/api/horizon/scenarios/run` | Сценарий encode → propagate → decode |
+| GET | `/api/horizon/entities/search` | Поиск сущностей (LER) |
+| POST | `/api/horizon/co-pilot/chat` | Co-pilot чат |
+
+### Подпути линзы: `/api/horizon/lenses/{lensId}/…`
+
+| Подпуть | Назначение |
+|---------|------------|
+| `product-io:apply` | Применение product IO |
+| `items`, `items/{itemId}` | Элементы линзы (CRUD) |
+| `assembly-status` | Статус сборки |
+| `cockpit` | Данные cockpit |
+| `simulate` | What-if |
+| `recalculate` | Пересчёт линзы |
+| `transfer` | Перенос |
+| `scope-scout`, `scope-scout-query`, `scope-scout-full` | Scout по scope |
+| `identify-stresses` | Canvas: идентификация стрессов |
+| `complete-substrate` | Дозаполнение материализованного субстрата |
+| `recover-metrics` | Восстановление метрик supply |
+| `qa` | Lens Q&A (SSE) |
+| `telemetry/…` | Телеметрия job |
+| `graph-query` | Запрос к графу |
+| `graph-intent/plan`, `graph-intent/apply`, `graph-intent/dry-run` | План / применение graph intent |
+| `control-corridor` | Control corridor |
+| `artifacts`, `artifacts/stats`, `artifacts/context` | Артефакты линзы |
+| `attention` | Attention слой |
+
+Метод (GET/POST/PATCH/DELETE) для каждого подпути смотрите в `HandleLensRoutes` и соответствующих файлах обработчиков.
+
+### Подпути фрагмента: `/api/horizon/fragments/{id}/…`
+
+| Суффикс | Назначение |
+|---------|------------|
+| `/profile`, `/profile/refresh`, `/profile/versions` | Профиль узла |
+| `/ensure-entity`, `/entity`, `/enrich-entity` | Связь с core entity |
+| `/product-io:extract` | Извлечение product IO |
+| `/dependencies` | Зависимости |
+| `/trace` | Трассировка |
+| `/metrics`, `/provenance`, `/interpretation` | Метрики, происхождение, интерпретация |
+| `/versions` | Версии фрагмента |
+| `/refresh` | Обновление / scout refresh |
+| `/expand-materials` | Расширение материалов |
+
+Корень: **GET/DELETE** `/api/horizon/fragments/{id}` — получить / удалить фрагмент.
+
+### Enforcement
+
+| Метод | Путь |
+|-------|------|
+| GET | `/api/horizon/enforcement/jobs` |
+| GET, POST | `/api/horizon/enforcement/jobs/{id}`, `…/execute`, `…/skip` |
+| POST | `/api/horizon/enforcement/execute-batch` |
+| GET | `/api/horizon/enforcement/check-results`, `…/{jobId}` |
+
+### Внешние фиды (без Firebase middleware)
+
+`GET` прокси: `/api/horizon/feeds/usgs/earthquakes`, `opensky/flights`, `gdelt/geo`, `ucdp/events`, `hapi/conflict`, `noaa/climate`, `nga/warnings`, `faa/status`, `acled/events`, `firms/fires` — см. `horizonmonitor_external_routes.go`.
+
 ## Базовый URL
 
 ```
 https://api.sanskrite.com/api/horizon
 ```
 
-## Аутентификация
+## Аутентификация (кратко)
 
-Все запросы требуют аутентификации через Firebase Auth:
-
-```
-Authorization: Bearer <firebase_token>
-X-Tenant-ID: <tenant_id>
-```
+См. раздел **«Источник правды → Аутентификация»** выше: обычно достаточно `Authorization: Bearer <firebase_id_token>`; tenant берётся из данных пользователя. Заголовок `X-Tenant-ID` для Horizon **не является** обязательным контрактом в коде авторизации.
 
 ## Endpoints
 

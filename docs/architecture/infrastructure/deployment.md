@@ -10,7 +10,7 @@ This page summarizes and links to the authoritative deployment docs.
 ### Backend
 - Container image via `backend/Dockerfile`
 - Entrypoint `backend/cmd/server/main.go`
-- Refer to `DEPLOYMENT.md`, `DEPLOYMENT_STATUS.md`, and `docs/deployment/DEPLOYMENT_IMPROVEMENTS_SUMMARY.md`
+- Refer to `docs/notes/DEPLOYMENT.md`, `docs/notes/DEPLOYMENT_STATUS.md`, and `docs/deployment/DEPLOYMENT_IMPROVEMENTS_SUMMARY.md`
 
 ### Scripts
 - `scripts/deploy`, `scripts/deploy-gcp.ps1`, `scripts/dev.ps1`

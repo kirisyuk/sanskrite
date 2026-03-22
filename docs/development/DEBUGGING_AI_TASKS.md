@@ -188,5 +188,5 @@ taskCtx, cancel := context.WithTimeout(context.Background(), taskTimeout)
 - `/Users/kirisyuk/cursor/sanskrite/backend/internal/ai/task_executor.go` - Core task execution logic
 - `/Users/kirisyuk/cursor/sanskrite/backend/internal/http/meta.go` - Meta analysis HTTP handlers
 - `/Users/kirisyuk/cursor/sanskrite/backend/internal/ai/verifiers.go` - Response verification logic
-- `/Users/kirisyuk/cursor/sanskrite/docs/META_WINDOW_SIZE_ANALYSIS.md` - Analysis of window size issues and optimization strategies
+- [META_WINDOW_SIZE_ANALYSIS.md](../notes/META_WINDOW_SIZE_ANALYSIS.md) — размер контекстного окна и стратегии оптимизации
 

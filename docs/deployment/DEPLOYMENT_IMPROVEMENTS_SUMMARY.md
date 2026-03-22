@@ -147,7 +147,7 @@ Telegram Service: https://etigram-telegram-xxx.run.app
 
 Post-deployment checklist:
   ☐ Verify secrets have real API keys
-  ☐ Test API health: curl $API_URL/health
+  ☐ Test API health: curl "$API_URL/healthz"
   ☐ Check Cloud Run logs for errors
 ```
 

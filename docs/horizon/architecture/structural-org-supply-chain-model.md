@@ -823,7 +823,7 @@ scenario: {vat_rate_from: 12, vat_rate_to: 16}
 |----------|-------|
 | [supply-chain-influence-model.md](supply-chain-influence-model.md) | SupplyLink, PathBuilder, стыковка |
 | [data-model.md](data-model.md) | HorizonFragment, FragmentType |
-| [ORG_IDENTITY_ANCHOR_AND_CORPORATE_TRANSITIONS.md](../implementation/ORG_IDENTITY_ANCHOR_AND_CORPORATE_TRANSITIONS.md) | Преобразования юрлиц |
+| [ORG_IDENTITY_ANCHOR_AND_CORPORATE_TRANSITIONS.md](../../archive/horizon-implementation/ORG_IDENTITY_ANCHOR_AND_CORPORATE_TRANSITIONS.md) | Преобразования юрлиц |
 | [industry-taxonomy.md](industry-taxonomy.md) | Доменные шаблоны |
 
 ---

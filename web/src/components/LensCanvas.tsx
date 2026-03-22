@@ -43,6 +43,8 @@ export interface LensCanvasProps {
     reason?: string;
     mode: 'just_open' | 'research_first';
     setMode: (mode: 'just_open' | 'research_first') => void;
+    hotPathOnly?: boolean;
+    setHotPathOnly?: (next: boolean) => void;
     focus: string;
     setFocus: (focus: string) => void;
     domainsDraft: any[];

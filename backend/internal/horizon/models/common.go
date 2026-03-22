@@ -132,7 +132,7 @@ type Provenance struct {
 	DataSourceIDs []string    `json:"dataSourceIds,omitempty" firestore:"dataSourceIds,omitempty"` // DataSource IDs
 	DocumentIDs   []string    `json:"documentIds,omitempty" firestore:"documentIds,omitempty"`     // Document IDs
 	// Contributions is the bounded, structured provenance for this metric path on this node.
-	// It is the primary contract for tracing how a value arrived (risk-architecture.md "Top-K provenance").
+	// It is the primary contract for tracing how a value arrived (docs/notes/risk-architecture.md "Top-K provenance").
 	Contributions []Contribution `json:"contributions,omitempty" firestore:"contributions,omitempty"`
 	ObservedAt    *time.Time     `json:"observedAt,omitempty" firestore:"observedAt,omitempty"`
 	Method        string         `json:"method,omitempty" firestore:"method,omitempty"` // extracted, curated, imported
@@ -179,7 +179,7 @@ type GroundingResolutionStats struct {
 
 // Contribution represents a single source contribution to a metric at a node.
 // It stores the source signal, source event, propagation path, and the post-decay amplitude.
-// This matches risk-architecture.md (Lazy Interpretation input contract).
+// This matches docs/notes/risk-architecture.md (Lazy Interpretation input contract).
 type Contribution struct {
 	SignalID      string    `json:"signalId" firestore:"signalId"`
 	SourceEventID string    `json:"sourceEventId" firestore:"sourceEventId"`

@@ -18,6 +18,8 @@ export interface LensCanvasProgressProps {
     reason?: string;
     mode: 'just_open' | 'research_first';
     setMode: (mode: 'just_open' | 'research_first') => void;
+    hotPathOnly?: boolean;
+    setHotPathOnly?: (next: boolean) => void;
     focus: string;
     setFocus: (focus: string) => void;
     domainsDraft: any[];
@@ -44,6 +46,8 @@ export interface LensCanvasProgressProps {
 const formatEdgeType = (type: string) => {
   return (type || '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
 };
+
+const isSupplyChainContractType = (value?: string) => /^(supply-chain|value-chain)$/i.test(String(value || '').trim());
 
 const getIcon = (icon?: string) => {
   switch (icon) {
@@ -158,6 +162,20 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
       anchors += 1;
     }
     return { domains, anchors };
+  }, [preflightActive, preflight]);
+
+  const preflightHasSelectedSupplyChainDomains = React.useMemo(() => {
+    if (!preflightActive || !preflight) return false;
+    const domainsDraft = Array.isArray(preflight.domainsDraft) ? preflight.domainsDraft : [];
+    for (const d of domainsDraft) {
+      const cp = String(d?.canonicalPath || '').trim();
+      if (!cp) continue;
+      if (preflight.selectedDomains?.[cp] === false) continue;
+      if (isSupplyChainContractType(String(d?.contractType || '').trim()) || cp.startsWith('/domain/v1/supply-chain/') || cp.startsWith('/domain/v1/value-chain/')) {
+        return true;
+      }
+    }
+    return false;
   }, [preflightActive, preflight]);
 
   const selectedAnchorCountryCodes = React.useMemo(() => {
@@ -460,6 +478,45 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
                       }}
                     />
                   </div>
+
+                  {preflightHasSelectedSupplyChainDomains && (
+                    <div
+                      style={{
+                        border: '1px solid var(--border-subtle)',
+                        borderRadius: 12,
+                        padding: 12,
+                        background: 'var(--bg-subtle)',
+                      }}
+                    >
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary-strong)', marginBottom: 8 }}>
+                        Supply Chain Execution
+                      </div>
+                      <label
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: '16px minmax(0, 1fr)',
+                          gap: 10,
+                          alignItems: 'flex-start',
+                          cursor: preflight.isBusy ? 'not-allowed' : 'pointer',
+                          opacity: preflight.isBusy ? 0.6 : 1,
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={Boolean(preflight.hotPathOnly)}
+                          onChange={(e) => preflight.setHotPathOnly?.(e.target.checked)}
+                          disabled={preflight.isBusy}
+                          style={{ marginTop: 2 }}
+                        />
+                        <span style={{ display: 'grid', gap: 2 }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)' }}>Only hot path</span>
+                          <span style={{ fontSize: 11, lineHeight: 1.35, color: 'var(--text-tertiary)' }}>
+                            Start with the fast operational supply path and skip the broader graph completion unless you request it later.
+                          </span>
+                        </span>
+                      </label>
+                    </div>
+                  )}
 
                   <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr', alignItems: 'start' }}>
                     <div

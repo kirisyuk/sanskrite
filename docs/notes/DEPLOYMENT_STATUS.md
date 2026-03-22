@@ -169,7 +169,7 @@ gcloud run services describe etigram-api --region us-central1 \
 
 # 2. Health check backend
 API_URL=$(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')
-curl $API_URL/health
+curl "$API_URL/healthz"
 
 # 3. Проверить логи на ошибки
 gcloud run services logs read etigram-api --region us-central1 --limit 20

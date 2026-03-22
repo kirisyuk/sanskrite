@@ -121,7 +121,7 @@ gcloud run services logs tail etigram-api --region us-central1
 ```bash
 # Backend API
 API_URL=$(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')
-curl $API_URL/health
+curl "$API_URL/healthz"
 
 # Telegram Service
 TG_URL=$(gcloud run services describe etigram-telegram --region us-central1 --format='value(status.url)')
@@ -325,7 +325,7 @@ gcloud run services update-traffic etigram-api \
   --to-revisions etigram-api-00006=100
 
 # 3. Проверить что откатились
-curl $(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')/health
+curl "$(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')/healthz"
 ```
 
 ---

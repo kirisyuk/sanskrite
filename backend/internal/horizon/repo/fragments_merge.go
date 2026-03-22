@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -474,32 +475,52 @@ func (r *FragmentsMergeRepository) rewriteSupplyLinksPaths(ctx context.Context, 
 	if len(pathsToReplace) == 0 {
 		return
 	}
-
-	supplyLinks := make(map[string]*models.HorizonFragment)
-	collectLinks := func(items []*models.HorizonFragment) {
-		for _, item := range items {
-			if item == nil || item.Type != models.FragmentTypeSupplyLink || strings.TrimSpace(item.ID) == "" {
-				continue
-			}
-			supplyLinks[item.ID] = item
+	replacements := make(map[string]string, len(pathsToReplace))
+	for _, oldPath := range pathsToReplace {
+		oldPath = strings.TrimSpace(oldPath)
+		if oldPath == "" || oldPath == target {
+			continue
 		}
+		replacements[oldPath] = target
 	}
-	if tenantID == "global" {
-		if items, err := r.fragmentsRepo.ListByType(ctx, models.FragmentTypeSupplyLink, 5000); err == nil {
-			collectLinks(items)
-		}
-	} else {
-		if items, err := r.fragmentsRepo.ListByTypeAndTenant(ctx, tenantID, models.FragmentTypeSupplyLink, 2500); err == nil {
-			collectLinks(items)
-		}
-		if items, err := r.fragmentsRepo.ListByTypeAndTenant(ctx, "global", models.FragmentTypeSupplyLink, 2500); err == nil {
-			collectLinks(items)
-		}
+	if len(replacements) == 0 {
+		return
 	}
+	_, _ = r.RewriteSupplyLinksForPathPairs(ctx, tenantID, replacements)
+}
 
-	for _, link := range supplyLinks {
+// RewriteSupplyLinksForPathPairs rewrites embedded canonical-path refs inside SUPPLY_LINK fragments.
+// It is safe to run as a repair pass after merges, because it rewrites by old->new path pairs and
+// then re-materializes the supply-link canonicalPath plus dependent redirects/materialized stores.
+func (r *FragmentsMergeRepository) RewriteSupplyLinksForPathPairs(ctx context.Context, tenantID string, replacements map[string]string) (int, error) {
+	if r == nil || r.fragmentsRepo == nil {
+		return 0, nil
+	}
+	replacements = normalizePathReplacementMap(replacements)
+	if len(replacements) == 0 {
+		return 0, nil
+	}
+	log.Printf("[FragmentsMerge] rewrite supply links: tenant=%s pathPairs=%d", tenantID, len(replacements))
+
+	supplyLinks, err := r.collectSupplyLinksForPathPairs(ctx, tenantID, replacements)
+	if err != nil {
+		return 0, err
+	}
+	log.Printf("[FragmentsMerge] rewrite supply links: collected links=%d", len(supplyLinks))
+	updated := 0
+	orderedOldPaths := make([]string, 0, len(replacements))
+	for oldPath := range replacements {
+		orderedOldPaths = append(orderedOldPaths, oldPath)
+	}
+	sort.Strings(orderedOldPaths)
+
+	for idx, link := range supplyLinks {
+		if idx > 0 && idx%10 == 0 {
+			log.Printf("[FragmentsMerge] rewrite supply links progress: processed=%d updated=%d total=%d", idx, updated, len(supplyLinks))
+		}
 		changed := false
-		for _, oldPath := range pathsToReplace {
+		for _, oldPath := range orderedOldPaths {
+			target := replacements[oldPath]
 			if replaceCanonicalPathInOptionalString(link.SupplierRef, oldPath, target) {
 				changed = true
 			}
@@ -531,7 +552,7 @@ func (r *FragmentsMergeRepository) rewriteSupplyLinksPaths(ctx context.Context, 
 			}
 		}
 		if err := r.fragmentsRepo.Update(ctx, link); err != nil {
-			continue
+			return updated, err
 		}
 		if oldLinkPath != "" && link.CanonicalPath != "" && oldLinkPath != link.CanonicalPath {
 			r.recordPathRedirects(ctx, string(models.FragmentTypeSupplyLink), []string{oldLinkPath}, link.CanonicalPath)
@@ -541,7 +562,162 @@ func (r *FragmentsMergeRepository) rewriteSupplyLinksPaths(ctx context.Context, 
 			r.rewriteOntologyFactsPathsForPaths(ctx, link.TenantID, []string{oldLinkPath}, link.CanonicalPath)
 			r.rewriteOntologyEntitiesPathsForPaths(ctx, link.TenantID, []string{oldLinkPath}, link.CanonicalPath)
 		}
+		updated++
 	}
+	return updated, nil
+}
+
+// RewriteProductPathReferencesForPathPairs repairs downstream stores for old->new product canonical path pairs.
+// It is intended for post-merge backfills where synonym fragments are already gone, but dependent stores
+// (materialized artifacts, lenses, watch subjects, ontology, supply links) still reference old product paths.
+func (r *FragmentsMergeRepository) RewriteProductPathReferencesForPathPairs(ctx context.Context, tenantID string, replacements map[string]string) (int, error) {
+	if r == nil {
+		return 0, nil
+	}
+	replacements = normalizePathReplacementMap(replacements)
+	if len(replacements) == 0 {
+		return 0, nil
+	}
+	orderedOldPaths := make([]string, 0, len(replacements))
+	for oldPath := range replacements {
+		orderedOldPaths = append(orderedOldPaths, oldPath)
+	}
+	sort.Strings(orderedOldPaths)
+	log.Printf("[FragmentsMerge] rewrite product path references: tenant=%s pathPairs=%d", tenantID, len(orderedOldPaths))
+	for idx, oldPath := range orderedOldPaths {
+		if idx > 0 && idx%10 == 0 {
+			log.Printf("[FragmentsMerge] rewrite product path references progress: processed=%d total=%d", idx, len(orderedOldPaths))
+		}
+		target := replacements[oldPath]
+		r.recordPathRedirects(ctx, string(models.FragmentTypeProduct), []string{oldPath}, target)
+		r.rewriteMaterializedArtifactsPathsForPaths(ctx, tenantID, models.FragmentTypeProduct, []string{oldPath}, target)
+	}
+	updatedSupplyLinks, err := r.RewriteSupplyLinksForPathPairs(ctx, tenantID, replacements)
+	if err != nil {
+		return 0, err
+	}
+	return updatedSupplyLinks, nil
+}
+
+func (r *FragmentsMergeRepository) collectSupplyLinksForPathPairs(ctx context.Context, tenantID string, replacements map[string]string) ([]*models.HorizonFragment, error) {
+	supplyLinks := make(map[string]*models.HorizonFragment)
+	collectLinks := func(items []*models.HorizonFragment) {
+		for _, item := range items {
+			if item == nil || item.Type != models.FragmentTypeSupplyLink || strings.TrimSpace(item.ID) == "" {
+				continue
+			}
+			supplyLinks[item.ID] = item
+		}
+	}
+	orderedOldPaths := make([]string, 0, len(replacements))
+	for oldPath := range replacements {
+		orderedOldPaths = append(orderedOldPaths, oldPath)
+	}
+	sort.Strings(orderedOldPaths)
+	for idx, oldPath := range orderedOldPaths {
+		if idx > 0 && idx%10 == 0 {
+			log.Printf("[FragmentsMerge] collect supply links progress: scannedPaths=%d collectedLinks=%d totalPaths=%d", idx, len(supplyLinks), len(orderedOldPaths))
+		}
+		if items, err := r.findSupplyLinksByPath(ctx, tenantID, oldPath); err != nil {
+			return nil, err
+		} else {
+			collectLinks(items)
+		}
+	}
+	out := make([]*models.HorizonFragment, 0, len(supplyLinks))
+	for _, link := range supplyLinks {
+		out = append(out, link)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return strings.TrimSpace(out[i].ID) < strings.TrimSpace(out[j].ID)
+	})
+	return out, nil
+}
+
+func (r *FragmentsMergeRepository) findSupplyLinksByPath(ctx context.Context, tenantID, path string) ([]*models.HorizonFragment, error) {
+	path = strings.TrimSpace(path)
+	if path == "" || r == nil || r.fragmentsRepo == nil {
+		return nil, nil
+	}
+	limit := 10000
+	collect := func(out map[string]*models.HorizonFragment, items []*models.HorizonFragment) {
+		for _, item := range items {
+			if item == nil || item.Type != models.FragmentTypeSupplyLink || strings.TrimSpace(item.ID) == "" {
+				continue
+			}
+			out[item.ID] = item
+		}
+	}
+	found := make(map[string]*models.HorizonFragment)
+	if tenantID == "global" {
+		if items, err := r.fragmentsRepo.FindSupplyLinksBySupplierAnyTenant(ctx, path, limit); err != nil {
+			return nil, err
+		} else {
+			collect(found, items)
+		}
+		if items, err := r.fragmentsRepo.FindSupplyLinksByCustomerAnyTenant(ctx, path, limit); err != nil {
+			return nil, err
+		} else {
+			collect(found, items)
+		}
+		if items, err := r.fragmentsRepo.FindSupplyLinksByProductAnyTenant(ctx, path, limit); err != nil {
+			return nil, err
+		} else {
+			collect(found, items)
+		}
+		if items, err := r.fragmentsRepo.FindSupplyLinksByTransportViaAnyTenant(ctx, path, limit); err != nil {
+			return nil, err
+		} else {
+			collect(found, items)
+		}
+	} else {
+		for _, scopeTenant := range []string{tenantID, "global"} {
+			if items, err := r.fragmentsRepo.FindSupplyLinksBySupplier(ctx, path, scopeTenant, limit); err != nil {
+				return nil, err
+			} else {
+				collect(found, items)
+			}
+			if items, err := r.fragmentsRepo.FindSupplyLinksByCustomer(ctx, path, scopeTenant, limit); err != nil {
+				return nil, err
+			} else {
+				collect(found, items)
+			}
+			if items, err := r.fragmentsRepo.FindSupplyLinksByProduct(ctx, path, scopeTenant, limit); err != nil {
+				return nil, err
+			} else {
+				collect(found, items)
+			}
+			if items, err := r.fragmentsRepo.FindSupplyLinksByTransportVia(ctx, path, scopeTenant, limit); err != nil {
+				return nil, err
+			} else {
+				collect(found, items)
+			}
+		}
+	}
+	out := make([]*models.HorizonFragment, 0, len(found))
+	for _, item := range found {
+		out = append(out, item)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return strings.TrimSpace(out[i].ID) < strings.TrimSpace(out[j].ID)
+	})
+	return out, nil
+}
+
+func normalizePathReplacementMap(replacements map[string]string) map[string]string {
+	if len(replacements) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(replacements))
+	for oldPath, newPath := range replacements {
+		oldPath = strings.TrimSpace(oldPath)
+		newPath = strings.TrimSpace(newPath)
+		if oldPath == "" || newPath == "" || oldPath == newPath {
+			continue
+		}
+		out[oldPath] = newPath
+	}
+	return out
 }
 
 func (r *FragmentsMergeRepository) rewriteWatchSubjectsPaths(ctx context.Context, tenantID string, dup, primary *models.HorizonFragment) {

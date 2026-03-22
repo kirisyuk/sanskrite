@@ -22,7 +22,7 @@ bash scripts/deploy --py     # Telegram service only
 
 ```bash
 # Health check
-curl $(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')/health
+curl "$(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')/healthz"
 
 # Logs (last 20 lines)
 gcloud run services logs read etigram-api --region us-central1 --limit 20
@@ -90,7 +90,7 @@ gcloud run revisions list --service etigram-api --region us-central1 --limit 5
 gcloud run services update-traffic etigram-api --region us-central1 --to-revisions etigram-api-00006=100
 
 # 3. Verify
-curl $(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')/health
+curl "$(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')/healthz"
 ```
 
 ---

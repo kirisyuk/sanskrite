@@ -155,7 +155,7 @@ gcloud run services describe etigram-api --region=us-central1 --format='value(sp
 ### Check Service Health
 ```bash
 # Backend
-curl https://etigram-api-<hash>-uc.a.run.app/health
+curl "https://etigram-api-<hash>-uc.a.run.app/healthz"
 
 # Check WebSocket
 wscat -c wss://etigram-api-<hash>-uc.a.run.app/ws?token=YOUR_TOKEN

@@ -48,6 +48,8 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/cache"
 
 	// Horizon system
+	criticalchain "github.com/igorkirisyuk/sanskrite/internal/criticalchain"
+	criticalchainpipeline "github.com/igorkirisyuk/sanskrite/internal/criticalchain/pipeline"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon"
 	horizoncriticalpath "github.com/igorkirisyuk/sanskrite/internal/horizon/critical_path"
 	horizonenrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
@@ -75,10 +77,8 @@ import (
 	horizonwatch "github.com/igorkirisyuk/sanskrite/internal/horizon/watch"
 	horizonwatchdog "github.com/igorkirisyuk/sanskrite/internal/horizon/watchdog"
 	horizonwatchruntime "github.com/igorkirisyuk/sanskrite/internal/horizon/watchruntime"
-	horizonhttp "github.com/igorkirisyuk/sanskrite/internal/http/horizon"
-	criticalchain "github.com/igorkirisyuk/sanskrite/internal/criticalchain"
 	criticalchainhttp "github.com/igorkirisyuk/sanskrite/internal/http/criticalchain"
-	criticalchainpipeline "github.com/igorkirisyuk/sanskrite/internal/criticalchain/pipeline"
+	horizonhttp "github.com/igorkirisyuk/sanskrite/internal/http/horizon"
 )
 
 // tavilyClientAdapterForAgents адаптирует httphandlers.TavilyClient к agents.TavilySearchClient интерфейсу
@@ -2923,6 +2923,39 @@ func main() {
 					})
 					horizonHandlers = horizonHandlers.WithIdentifyStressesCanvas(identifyStressesCanvas)
 					logger.Printf("Identify-stresses canvas initialized")
+
+					completeSubstrateCanvas := horizonhttp.NewCompleteSubstrateCanvas(horizonhttp.CompleteSubstrateCanvasConfig{
+						Exec:             exec,
+						FragmentsRepo:    horizonFragmentsRepo,
+						EdgesRepo:        horizonEdgesRepo,
+						MaterializedRepo: horizonMaterializedArtifactsRepo,
+						LensesRepo:       horizonLensesRepo,
+						Publisher: func(ctx context.Context, eventType string, tenantID string, payload interface{}) error {
+							return pub.PublishJSON(ctx, realtime.EventType(eventType), tenantID, payload)
+						},
+						Logger: logger,
+					})
+					horizonHandlers = horizonHandlers.WithCompleteSubstrateCanvas(completeSubstrateCanvas)
+					logger.Printf("Complete-substrate backend initialized")
+
+					recoverMetricsCanvas := horizonhttp.NewRecoverMetricsCanvas(horizonhttp.RecoverMetricsCanvasConfig{
+						Exec:                   exec,
+						FragmentsRepo:          horizonFragmentsRepo,
+						EdgesRepo:              horizonEdgesRepo,
+						MaterializedRepo:       horizonMaterializedArtifactsRepo,
+						LensesRepo:             horizonLensesRepo,
+						CapabilityProfilesRepo: horizonCapabilityProfilesRepo,
+						CapabilityObsRepo:      horizonCapabilityObsRepo,
+						SupplyLinkObsRepo:      horizonSupplyLinkObsRepo,
+						RouteObsRepo:           horizonRouteObsRepo,
+						DerivedRiskRepo:        horizonDerivedRiskProfilesRepo,
+						Publisher: func(ctx context.Context, eventType string, tenantID string, payload interface{}) error {
+							return pub.PublishJSON(ctx, realtime.EventType(eventType), tenantID, payload)
+						},
+						Logger: logger,
+					})
+					horizonHandlers = horizonHandlers.WithRecoverMetricsCanvas(recoverMetricsCanvas)
+					logger.Printf("Recover-metrics backend initialized")
 				}
 			}
 

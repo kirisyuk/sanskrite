@@ -34,6 +34,8 @@ type HorizonHandlers struct {
 	materializedArtifactsRepo *horizonrepo.MaterializedArtifactsRepository
 	newsByFragmentsCanvas     *discovery.NewsByFragmentsCanvas
 	identifyStressesCanvas    *IdentifyStressesCanvas
+	completeSubstrateCanvas   *CompleteSubstrateCanvas
+	recoverMetricsCanvas      *RecoverMetricsCanvas
 
 	// Lens Q&A (Analysis view)
 	qaEngine                *horizonqa.Engine
@@ -145,6 +147,18 @@ func (h *HorizonHandlers) WithNewsByFragmentsCanvas(c *discovery.NewsByFragments
 // WithIdentifyStressesCanvas wires the manual identify-stresses lens canvas.
 func (h *HorizonHandlers) WithIdentifyStressesCanvas(c *IdentifyStressesCanvas) *HorizonHandlers {
 	h.identifyStressesCanvas = c
+	return h
+}
+
+// WithCompleteSubstrateCanvas wires the materialized supply-substrate completion backend module.
+func (h *HorizonHandlers) WithCompleteSubstrateCanvas(c *CompleteSubstrateCanvas) *HorizonHandlers {
+	h.completeSubstrateCanvas = c
+	return h
+}
+
+// WithRecoverMetricsCanvas wires the supply-metrics recovery backend module.
+func (h *HorizonHandlers) WithRecoverMetricsCanvas(c *RecoverMetricsCanvas) *HorizonHandlers {
+	h.recoverMetricsCanvas = c
 	return h
 }
 
@@ -427,6 +441,12 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 			return
 		case "identify-stresses":
 			h.IdentifyStresses(w, r)
+			return
+		case "complete-substrate":
+			h.CompleteSubstrate(w, r)
+			return
+		case "recover-metrics":
+			h.RecoverMetrics(w, r)
 			return
 		case "qa":
 			h.LensQA(w, r)

@@ -1,7 +1,7 @@
 package signal
 
 // This package is a tiny "namespace anchor" for the Signal Propagation System
-// described in risk-architecture.md.
+// described in docs/notes/risk-architecture.md.
 //
 // It intentionally contains only stable identifiers/constants that should be shared
 // across extract/seed/propagate/trigger/interpret layers to avoid drift.

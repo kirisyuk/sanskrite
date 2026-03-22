@@ -114,4 +114,4 @@
 
 ## Связанный документ
 
-- `docs/horizon/implementation/BIG_BANG_EDGE_POLICY_REMEDIATION_PLAN.md` (policyStatus/penalty/quarantine контракт)
+- `docs/archive/horizon-implementation/BIG_BANG_EDGE_POLICY_REMEDIATION_PLAN.md` (policyStatus/penalty/quarantine контракт)

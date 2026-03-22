@@ -184,7 +184,7 @@
 
 ## Документация
 
-- ✅ Детальный план: `docs/horizon/implementation/signals-and-semantic-propagation-plan.md`
+- ✅ Детальный план: `docs/archive/horizon-implementation/signals-and-semantic-propagation-plan.md`
 - ✅ Roadmap обновлён: `docs/horizon/implementation/roadmap.md` (секции D и E)
 
 ---

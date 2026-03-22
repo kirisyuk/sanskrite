@@ -3685,5 +3685,5 @@ Realtime должен:
 - [docs/horizon/ux/user-journey.md](./user-journey.md)
 - [docs/horizon/architecture/materialized-artifacts.md](../architecture/materialized-artifacts.md)
 - [docs/horizon/architecture/query-address.md](../architecture/query-address.md)
-- [docs/horizon/implementation/RISK_SIGNAL_PIPELINE_TECHNICAL_DESIGN.md](../implementation/RISK_SIGNAL_PIPELINE_TECHNICAL_DESIGN.md)
-- [docs/horizon/implementation/WORLDMONITOR_TRANSFORMATION_DRAFT.md](../implementation/WORLDMONITOR_TRANSFORMATION_DRAFT.md)
+- [RISK_SIGNAL_PIPELINE_TECHNICAL_DESIGN](../../archive/horizon-implementation/RISK_SIGNAL_PIPELINE_TECHNICAL_DESIGN.md)
+- [WORLDMONITOR_TRANSFORMATION_DRAFT](../../archive/horizon-implementation/WORLDMONITOR_TRANSFORMATION_DRAFT.md)

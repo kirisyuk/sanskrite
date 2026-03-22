@@ -7,7 +7,7 @@ import (
 
 // SignalDescriptor is the canonical representation of a quasi-physical impulse.
 // It is extracted from events and stored as OntologyFact(kind=signal).
-// See risk-architecture.md Contract 1 for full specification.
+// See docs/notes/risk-architecture.md Contract 1 for full specification.
 type SignalDescriptor struct {
 	// === Identity ===
 	ID        string    `json:"id" firestore:"id"`

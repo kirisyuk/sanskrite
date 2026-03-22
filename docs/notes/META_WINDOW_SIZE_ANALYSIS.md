@@ -313,5 +313,5 @@ WARNING: meta: large window detected (>100KB). Consider limiting message count.
 
 - `/Users/kirisyuk/cursor/sanskrite/backend/internal/http/meta.go` - Window building logic
 - `/Users/kirisyuk/cursor/sanskrite/backend/internal/ai/task_executor.go` - Task execution
-- `/Users/kirisyuk/cursor/sanskrite/docs/DEBUGGING_AI_TASKS.md` - Timeout fixes
+- [docs/development/DEBUGGING_AI_TASKS.md](../development/DEBUGGING_AI_TASKS.md) — таймауты и отладка AI-задач
 

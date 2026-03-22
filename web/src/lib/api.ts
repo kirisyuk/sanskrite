@@ -127,6 +127,18 @@ export interface SupplyChainArtifactResponse {
   [key: string]: any;
 }
 
+export interface IdentifyStressVisibleRelation {
+  edgeId?: string;
+  sourceCanonicalPath?: string;
+  targetCanonicalPath?: string;
+  relationType?: string;
+  relationFamily?: string;
+  relationRole?: string;
+  businessMeaning?: string;
+  whyRelevant?: string;
+  criticality?: number;
+}
+
 class ApiClient {
   private client: AxiosInstance;
 
@@ -2872,6 +2884,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       visibleNodeRefs?: string[];
       visibleArtifactKeys?: string[];
       visibleSupplyLinkRefs?: string[];
+      visibleRelations?: IdentifyStressVisibleRelation[];
       clientViewId?: string;
       maxNodes?: number;
       maxArtifacts?: number;
@@ -2887,6 +2900,8 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       visibleArtifacts: number;
       acceptedArtifacts: number;
       acceptedSupplyLinks: number;
+      visibleRelations: number;
+      acceptedRelations: number;
     };
     startedAt: string;
     streamChannel: 'realtime';
@@ -2897,10 +2912,101 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       visibleNodeRefs: params.visibleNodeRefs ?? [],
       visibleArtifactKeys: params.visibleArtifactKeys ?? [],
       visibleSupplyLinkRefs: params.visibleSupplyLinkRefs ?? [],
+      visibleRelations: params.visibleRelations ?? [],
       clientViewId: params.clientViewId,
       maxNodes: params.maxNodes,
       maxArtifacts: params.maxArtifacts,
       maxFindings: params.maxFindings,
+    });
+    return response.data;
+  }
+
+  async completeSubstrateForLens(
+    lensId: string,
+    params: {
+      scopeMode?: 'visible_set';
+      selectedCanonicalPath?: string;
+      visibleNodeRefs?: string[];
+      visibleArtifactKeys?: string[];
+      visibleSupplyLinkRefs?: string[];
+      visibleRelations?: IdentifyStressVisibleRelation[];
+      clientViewId?: string;
+      maxNodes?: number;
+      maxArtifacts?: number;
+      maxCompletions?: number;
+    },
+  ): Promise<{
+    jobId: string;
+    acceptedScope: {
+      scopeMode: string;
+      selectedCanonicalPath?: string;
+      visibleNodes: number;
+      acceptedNodes: number;
+      visibleArtifacts: number;
+      acceptedArtifacts: number;
+      acceptedSupplyLinks: number;
+      visibleRelations: number;
+      acceptedRelations: number;
+    };
+    startedAt: string;
+    streamChannel: 'realtime';
+  }> {
+    const response = await this.client.post(`/api/horizon/lenses/${lensId}/complete-substrate`, {
+      scopeMode: params.scopeMode ?? 'visible_set',
+      selectedCanonicalPath: params.selectedCanonicalPath,
+      visibleNodeRefs: params.visibleNodeRefs ?? [],
+      visibleArtifactKeys: params.visibleArtifactKeys ?? [],
+      visibleSupplyLinkRefs: params.visibleSupplyLinkRefs ?? [],
+      visibleRelations: params.visibleRelations ?? [],
+      clientViewId: params.clientViewId,
+      maxNodes: params.maxNodes,
+      maxArtifacts: params.maxArtifacts,
+      maxCompletions: params.maxCompletions,
+    });
+    return response.data;
+  }
+
+  async recoverMetricsForLens(
+    lensId: string,
+    params: {
+      scopeMode?: 'visible_set';
+      selectedCanonicalPath?: string;
+      visibleNodeRefs?: string[];
+      visibleArtifactKeys?: string[];
+      visibleSupplyLinkRefs?: string[];
+      visibleRelations?: IdentifyStressVisibleRelation[];
+      clientViewId?: string;
+      maxNodes?: number;
+      maxArtifacts?: number;
+      maxRecoveries?: number;
+    },
+  ): Promise<{
+    jobId: string;
+    acceptedScope: {
+      scopeMode: string;
+      selectedCanonicalPath?: string;
+      visibleNodes: number;
+      acceptedNodes: number;
+      visibleArtifacts: number;
+      acceptedArtifacts: number;
+      acceptedSupplyLinks: number;
+      visibleRelations: number;
+      acceptedRelations: number;
+    };
+    startedAt: string;
+    streamChannel: 'realtime';
+  }> {
+    const response = await this.client.post(`/api/horizon/lenses/${lensId}/recover-metrics`, {
+      scopeMode: params.scopeMode ?? 'visible_set',
+      selectedCanonicalPath: params.selectedCanonicalPath,
+      visibleNodeRefs: params.visibleNodeRefs ?? [],
+      visibleArtifactKeys: params.visibleArtifactKeys ?? [],
+      visibleSupplyLinkRefs: params.visibleSupplyLinkRefs ?? [],
+      visibleRelations: params.visibleRelations ?? [],
+      clientViewId: params.clientViewId,
+      maxNodes: params.maxNodes,
+      maxArtifacts: params.maxArtifacts,
+      maxRecoveries: params.maxRecoveries,
     });
     return response.data;
   }

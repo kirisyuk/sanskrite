@@ -52,7 +52,7 @@ doc := &models.Document{
 
 ### 4. Документация
 - `docs/architecture/vertex-search-multi-tenancy.md` - полная архитектура
-- `docs/architecture/VERTEX_SEARCH_README.md` - quick start
+- `docs/archive/vertex-search/VERTEX_SEARCH_README.md` - quick start (архив)
 - Обновлены комментарии в коде
 
 ## Архитектура
@@ -231,4 +231,4 @@ gcloud discovery-engine operations list \
 
 **Documentation**:
 - `docs/architecture/vertex-search-multi-tenancy.md` - полная архитектура
-- `docs/architecture/VERTEX_SEARCH_README.md` - quick start guide
+- `docs/archive/vertex-search/VERTEX_SEARCH_README.md` - quick start guide (архив)
