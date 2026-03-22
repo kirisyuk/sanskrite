@@ -19,13 +19,15 @@ import (
 	"google.golang.org/api/iterator"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	appcache "github.com/igorkirisyuk/sanskrite/internal/cache"
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 var (
-	mode            = flag.String("mode", "report", "Mode: report")
+	mode            = flag.String("mode", "report", "Mode: report|backfill-relation-kind")
 	projectID       = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project ID")
 	tenantID        = flag.String("tenant", "global", "Tenant ID")
 	reportInPath    = flag.String("report-in", "", "Optional existing transform review report JSON to load instead of rescanning the database")
@@ -42,6 +44,9 @@ var (
 	maxActorOutputs = flag.Int("max-actor-outputs", 12, "Skip actor I/O inference for actors with more distinct output products")
 	maxActorCross   = flag.Int("max-actor-cross", 72, "Skip actor I/O inference when input/output cross-product exceeds this number")
 )
+
+var toolRedisClient = appcache.NewRedisClient()
+var toolProductDictRuntime *productdict.Runtime
 
 type productRecord struct {
 	ID            string
@@ -110,15 +115,15 @@ type transformCandidate struct {
 }
 
 type transformCandidateLite struct {
-	ID                string    `json:"id"`
-	From              productLite `json:"from"`
-	To                productLite `json:"to"`
-	HeuristicScore    float64   `json:"heuristicScore"`
-	Reasons           []string  `json:"reasons,omitempty"`
-	DirectEdgeCount   int       `json:"directEdgeCount"`
-	ActorEvidenceCount int      `json:"actorEvidenceCount"`
-	AssemblyEdgeCount int       `json:"assemblyEdgeCount"`
-	ActorSamples      []string  `json:"actorSamples,omitempty"`
+	ID                 string      `json:"id"`
+	From               productLite `json:"from"`
+	To                 productLite `json:"to"`
+	HeuristicScore     float64     `json:"heuristicScore"`
+	Reasons            []string    `json:"reasons,omitempty"`
+	DirectEdgeCount    int         `json:"directEdgeCount"`
+	ActorEvidenceCount int         `json:"actorEvidenceCount"`
+	AssemblyEdgeCount  int         `json:"assemblyEdgeCount"`
+	ActorSamples       []string    `json:"actorSamples,omitempty"`
 }
 
 type productLite struct {
@@ -137,42 +142,42 @@ type productLite struct {
 }
 
 type transformReviewEntry struct {
-	CandidateID        string                      `json:"candidateId"`
-	FromFragmentID     string                      `json:"fromFragmentId"`
-	FromPath           string                      `json:"fromPath"`
-	FromName           string                      `json:"fromName"`
-	ToFragmentID       string                      `json:"toFragmentId"`
-	ToPath             string                      `json:"toPath"`
-	ToName             string                      `json:"toName"`
-	Accepted           bool                        `json:"accepted"`
-	Confidence         float64                     `json:"confidence"`
-	DecisionSource     string                      `json:"decisionSource"`
-	Reason             string                      `json:"reason,omitempty"`
-	HeuristicScore     float64                     `json:"heuristicScore"`
-	Reasons            []string                    `json:"reasons,omitempty"`
-	DirectEdges        []directTransformEvidence   `json:"directEdges,omitempty"`
-	ActorEvidence      []actorTransformEvidence    `json:"actorEvidence,omitempty"`
-	AssemblyEvidence   []assemblyTransformEvidence `json:"assemblyEvidence,omitempty"`
-	FromStage          string                      `json:"fromStage,omitempty"`
-	ToStage            string                      `json:"toStage,omitempty"`
-	FromStageOrder     int                         `json:"fromStageOrder,omitempty"`
-	ToStageOrder       int                         `json:"toStageOrder,omitempty"`
+	CandidateID      string                      `json:"candidateId"`
+	FromFragmentID   string                      `json:"fromFragmentId"`
+	FromPath         string                      `json:"fromPath"`
+	FromName         string                      `json:"fromName"`
+	ToFragmentID     string                      `json:"toFragmentId"`
+	ToPath           string                      `json:"toPath"`
+	ToName           string                      `json:"toName"`
+	Accepted         bool                        `json:"accepted"`
+	Confidence       float64                     `json:"confidence"`
+	DecisionSource   string                      `json:"decisionSource"`
+	Reason           string                      `json:"reason,omitempty"`
+	HeuristicScore   float64                     `json:"heuristicScore"`
+	Reasons          []string                    `json:"reasons,omitempty"`
+	DirectEdges      []directTransformEvidence   `json:"directEdges,omitempty"`
+	ActorEvidence    []actorTransformEvidence    `json:"actorEvidence,omitempty"`
+	AssemblyEvidence []assemblyTransformEvidence `json:"assemblyEvidence,omitempty"`
+	FromStage        string                      `json:"fromStage,omitempty"`
+	ToStage          string                      `json:"toStage,omitempty"`
+	FromStageOrder   int                         `json:"fromStageOrder,omitempty"`
+	ToStageOrder     int                         `json:"toStageOrder,omitempty"`
 }
 
 type transformReviewSummary struct {
-	ProductsLoaded       int  `json:"productsLoaded"`
-	SynonymPairsLoaded   int  `json:"synonymPairsLoaded"`
-	TransformEdgesLoaded int  `json:"transformEdgesLoaded"`
-	ProducesEdgesLoaded  int  `json:"producesEdgesLoaded"`
-	SupplyLinksLoaded    int  `json:"supplyLinksLoaded"`
-	AssemblyArtifactsLoaded int `json:"assemblyArtifactsLoaded"`
-	CandidatesGenerated  int  `json:"candidatesGenerated"`
-	CandidatesReviewed   int  `json:"candidatesReviewed"`
-	AcceptedPairs        int  `json:"acceptedPairs"`
-	RejectedPairs        int  `json:"rejectedPairs"`
-	CuratedRejects       int  `json:"curatedRejects"`
-	PersistedPairs       int  `json:"persistedPairs"`
-	LLMEnabled           bool `json:"llmEnabled"`
+	ProductsLoaded          int  `json:"productsLoaded"`
+	SynonymPairsLoaded      int  `json:"synonymPairsLoaded"`
+	TransformEdgesLoaded    int  `json:"transformEdgesLoaded"`
+	ProducesEdgesLoaded     int  `json:"producesEdgesLoaded"`
+	SupplyLinksLoaded       int  `json:"supplyLinksLoaded"`
+	AssemblyArtifactsLoaded int  `json:"assemblyArtifactsLoaded"`
+	CandidatesGenerated     int  `json:"candidatesGenerated"`
+	CandidatesReviewed      int  `json:"candidatesReviewed"`
+	AcceptedPairs           int  `json:"acceptedPairs"`
+	RejectedPairs           int  `json:"rejectedPairs"`
+	CuratedRejects          int  `json:"curatedRejects"`
+	PersistedPairs          int  `json:"persistedPairs"`
+	LLMEnabled              bool `json:"llmEnabled"`
 }
 
 type transformReviewReport struct {
@@ -191,13 +196,13 @@ type llmTransformDecision struct {
 }
 
 type candidateAccumulator struct {
-	FromID          string
-	FromPath        string
-	ToID            string
-	ToPath          string
-	Reasons         map[string]struct{}
-	DirectEdgeIDs   map[string]struct{}
-	ActorEvidence   map[string]actorTransformEvidence
+	FromID           string
+	FromPath         string
+	ToID             string
+	ToPath           string
+	Reasons          map[string]struct{}
+	DirectEdgeIDs    map[string]struct{}
+	ActorEvidence    map[string]actorTransformEvidence
 	AssemblyEvidence map[string]assemblyTransformEvidence
 }
 
@@ -220,19 +225,37 @@ func main() {
 	if strings.TrimSpace(*projectID) == "" {
 		log.Fatal("--project is required")
 	}
-	if strings.TrimSpace(*mode) != "report" {
-		log.Fatalf("unsupported --mode=%q (want report)", strings.TrimSpace(*mode))
-	}
-
 	ctx := context.Background()
 	fsClient, err := gcp.NewFirestoreClient(ctx, strings.TrimSpace(*projectID))
 	if err != nil {
 		log.Fatalf("failed to init Firestore client: %v", err)
 	}
 	defer fsClient.Close()
+	toolProductDictRuntime = productdict.NewRuntime(fsClient.Client()).
+		WithTenantID(strings.TrimSpace(*tenantID)).
+		WithTransformCollection(strings.TrimSpace(*pairCollection))
+	if toolRedisClient != nil {
+		toolProductDictRuntime.WithRedis(toolRedisClient)
+	}
 
 	log.Printf("=== Horizon Product Transform Miner ===")
 	log.Printf("project=%s tenant=%s", strings.TrimSpace(*projectID), strings.TrimSpace(*tenantID))
+
+	switch strings.TrimSpace(*mode) {
+	case "report":
+	case "backfill-relation-kind":
+		updated, assembly, transformation, err := backfillRelationKind(ctx, fsClient.Client())
+		if err != nil {
+			log.Fatalf("failed to backfill relationKind: %v", err)
+		}
+		fmt.Printf("\nRelationKind Backfill\n")
+		fmt.Printf("  updated_docs: %d\n", updated)
+		fmt.Printf("  assembly_docs: %d\n", assembly)
+		fmt.Printf("  transformation_docs: %d\n", transformation)
+		return
+	default:
+		log.Fatalf("unsupported --mode=%q (want report|backfill-relation-kind)", strings.TrimSpace(*mode))
+	}
 
 	if path := strings.TrimSpace(*reportInPath); path != "" {
 		report, err := loadReport(path)
@@ -268,11 +291,11 @@ func main() {
 	}
 	log.Printf("loaded %d active synonym pairs", len(synonymPairs))
 
-	transformEdges, err := loadDependencyEdgesByType(ctx, fsClient.Client(), models.DependencyTypeTransformsInto)
+	transformEdges, err := loadProductTransitionEdges(ctx, fsClient.Client())
 	if err != nil {
-		log.Fatalf("failed to load TRANSFORMS_INTO edges: %v", err)
+		log.Fatalf("failed to load product transition edges: %v", err)
 	}
-	log.Printf("loaded %d TRANSFORMS_INTO edges", len(transformEdges))
+	log.Printf("loaded %d product transition edges (TRANSFORMS_INTO + ASSEMBLES_INTO)", len(transformEdges))
 
 	producesEdges, err := loadDependencyEdgesByType(ctx, fsClient.Client(), models.DependencyTypeProduces)
 	if err != nil {
@@ -499,6 +522,22 @@ func loadDependencyEdgesByType(ctx context.Context, db *firestore.Client, edgeTy
 	return out, nil
 }
 
+func loadProductTransitionEdges(ctx context.Context, db *firestore.Client) ([]models.DependencyEdge, error) {
+	edgeTypes := []models.DependencyType{
+		models.DependencyTypeTransformsInto,
+		models.DependencyTypeAssemblesInto,
+	}
+	out := make([]models.DependencyEdge, 0, 4096)
+	for _, edgeType := range edgeTypes {
+		edges, err := loadDependencyEdgesByType(ctx, db, edgeType)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, edges...)
+	}
+	return out, nil
+}
+
 func loadSupplyLinks(ctx context.Context, db *firestore.Client) ([]models.HorizonFragment, error) {
 	iter := db.Collection("horizon_fragments").
 		Where("tenantId", "==", strings.TrimSpace(*tenantID)).
@@ -682,7 +721,7 @@ func buildTransformCandidates(
 		if !ok {
 			continue
 		}
-		addCandidate(fromRec, toRec, "direct_transforms_into", func(item *candidateAccumulator) {
+		addCandidate(fromRec, toRec, fmt.Sprintf("direct_%s", strings.ToLower(strings.TrimSpace(string(edge.Type)))), func(item *candidateAccumulator) {
 			if id := strings.TrimSpace(edge.ID); id != "" {
 				item.DirectEdgeIDs[id] = struct{}{}
 			}
@@ -963,6 +1002,21 @@ func reviewTransformCandidates(ctx context.Context, candidates []transformCandid
 func applyConservativeCuration(report transformReviewReport) transformReviewReport {
 	for i := range report.Pairs {
 		pair := &report.Pairs[i]
+		if strings.TrimSpace(pair.DecisionSource) == "manual_curated_reject" {
+			pair.Accepted = false
+			continue
+		}
+		if pair.Accepted {
+			if reason, accept := conservativeAcceptReason(*pair); accept {
+				pair.DecisionSource = "curated_accept"
+				if strings.TrimSpace(pair.Reason) == "" {
+					pair.Reason = reason
+				} else if !strings.Contains(pair.Reason, reason) {
+					pair.Reason = strings.TrimSpace(pair.Reason) + "; " + reason
+				}
+				continue
+			}
+		}
 		if !pair.Accepted {
 			if reason, accept := conservativeAcceptReason(*pair); accept {
 				pair.Accepted = true
@@ -1015,6 +1069,9 @@ func conservativeAcceptReason(pair transformReviewEntry) (string, bool) {
 	if isDirectBatteryMaterialToCellStep(pair) {
 		return "curated_accept: direct battery material to cell manufacturing step", true
 	}
+	if isNearestFinalAssemblyStep(pair) {
+		return "curated_accept: nearest direct assembly into final product is allowed when no useful intermediate product is missing", true
+	}
 	return "", false
 }
 
@@ -1062,7 +1119,7 @@ func conservativeRejectReason(pair transformReviewEntry) (string, bool) {
 	if containsAny(pair.FromPath, "gas-turbine-hot-path") && containsAny(pair.ToPath, "gas-turbine-blades") {
 		return "curated_reject: hot-path assembly to blade component is not a canonical direct transform", true
 	}
-	if containsAny(pair.FromPath, "automotive-steel-sheet", "automotive-components") && isVehicleLikeOutput(pair.ToPath, pair.ToName) {
+	if containsAny(pair.FromPath, "automotive-steel-sheet", "automotive-components") && isVehicleLikeOutput(pair.ToPath, pair.ToName) && !isNearestFinalAssemblyStep(pair) {
 		return "curated_reject: broad material/component bundle to final vehicle skips major intermediate assemblies", true
 	}
 	if containsAny(pair.FromPath, "iron-ore") && containsAny(pair.ToPath, "steel-coil", "steel-sheet", "hot-rolled-steel", "cold-rolled-steel") {
@@ -1072,7 +1129,8 @@ func conservativeRejectReason(pair transformReviewEntry) (string, bool) {
 		return "curated_reject: packaging component to finished beverage skips packaging/filling stage", true
 	}
 	if containsAny(pair.FromPath, "steel-plate", "steel-coil", "automotive-steel", "high-grade-automotive-steel") &&
-		(isVehicleLikeOutput(pair.ToPath, pair.ToName) || containsAny(pair.ToPath, "marine-vessel", "mining-truck", "abs-braking-system")) {
+		(isVehicleLikeOutput(pair.ToPath, pair.ToName) || containsAny(pair.ToPath, "marine-vessel", "mining-truck", "abs-braking-system")) &&
+		!isNearestFinalAssemblyStep(pair) {
 		return "curated_reject: broad steel material to final vehicle/system skips component fabrication stages", true
 	}
 	if containsAny(pair.FromPath, "coking-coal", "/coke") && containsAny(pair.ToPath, "crude-steel", "steel-coil", "hot-rolled-steel") {
@@ -1178,7 +1236,7 @@ func buildTransformReviewPrompt(payload string) string {
 		"Class-subclass, general-specific, family-member, or grade-variant relationships are NOT transformations and must be rejected.\n" +
 		"Logistics, services, routes, handling, freight, ports, compliance, documents, and business activities are NOT products and must be rejected.\n" +
 		"Do not accept simple co-occurrence or trading adjacency. Receiving product A and selling product B is not enough unless it clearly implies processing/production.\n" +
-		"Direct final assembly is allowed when it is the nearest concrete step and there is no useful missing intermediate product in the data. Example: a finished display module -> a specific smartphone model can be accepted.\n" +
+		"Direct final assembly is allowed when it is the nearest concrete step and there is no useful missing intermediate product in the data. Example: a finished display module -> a specific smartphone model can be accepted. Likewise, finished components such as tires, battery packs, cockpit modules, or powertrains can map directly into a final vehicle when that is the nearest real assembly step.\n" +
 		"Good accepts: bauxite -> alumina; alumina -> aluminum; crude oil -> naphtha; naphtha -> ethylene; copper concentrate -> blister copper; cathode active material precursor -> cathode active material; battery cell -> battery module; battery module -> battery pack; aluminum ingot -> aluminum sheet.\n" +
 		"Good rejects: aluminum -> alumina; LNG -> natural gas; sodium hydroxide -> caustic soda; fruit -> pineapple; steel -> automotive steel; maritime freight -> nickel concentrate; port handling services -> maritime freight; battery pack -> LFP battery cell; iron ore -> hot-rolled steel coil; lithium carbonate -> battery cell; semiconductor design -> application processor; nuclear fuel assembly -> electricity.\n" +
 		"If direction looks backwards, reject it. If evidence looks like generic supply/trade without conversion, reject it. If one side is broader/narrower taxonomy only, reject it. If the pair jumps across several missing intermediates, reject it.\n" +
@@ -1226,10 +1284,30 @@ func persistAcceptedPairs(ctx context.Context, db *firestore.Client, reviewed []
 	col := db.Collection(strings.TrimSpace(*pairCollection))
 	now := firestore.ServerTimestamp
 	persisted := 0
+	// TODO(product-transforms): run a one-off backfill for older Firestore docs so
+	// every existing horizon_product_transform_pairs record also gets relationKind.
 	for _, pair := range reviewed {
 		if !pair.Accepted {
+			snap, err := col.Doc(pair.CandidateID).Get(ctx)
+			if err == nil && snap.Exists() {
+				if _, err := col.Doc(pair.CandidateID).Set(ctx, map[string]interface{}{
+					"tenantId":       strings.TrimSpace(*tenantID),
+					"active":         false,
+					"decisionSource": pair.DecisionSource,
+					"reason":         pair.Reason,
+					"updatedAt":      now,
+				}, firestore.MergeAll); err != nil {
+					return persisted, err
+				}
+				if toolProductDictRuntime != nil {
+					if err := toolProductDictRuntime.SyncTransformPairWrite(ctx, strings.TrimSpace(*tenantID), pair.FromPath, pair.ToPath, inferRelationKind(pair), false); err != nil {
+						return persisted, err
+					}
+				}
+			}
 			continue
 		}
+		relationKind := inferRelationKind(pair)
 		doc := map[string]interface{}{
 			"tenantId":         strings.TrimSpace(*tenantID),
 			"fromFragmentId":   pair.FromFragmentID,
@@ -1238,6 +1316,7 @@ func persistAcceptedPairs(ctx context.Context, db *firestore.Client, reviewed []
 			"toFragmentId":     pair.ToFragmentID,
 			"toPath":           pair.ToPath,
 			"toName":           pair.ToName,
+			"relationKind":     relationKind,
 			"decisionSource":   pair.DecisionSource,
 			"confidence":       pair.Confidence,
 			"reason":           pair.Reason,
@@ -1256,9 +1335,102 @@ func persistAcceptedPairs(ctx context.Context, db *firestore.Client, reviewed []
 		if _, err := col.Doc(pair.CandidateID).Set(ctx, doc, firestore.MergeAll); err != nil {
 			return persisted, err
 		}
+		if toolProductDictRuntime != nil {
+			if err := toolProductDictRuntime.SyncTransformPairWrite(ctx, strings.TrimSpace(*tenantID), pair.FromPath, pair.ToPath, relationKind, true); err != nil {
+				return persisted, err
+			}
+		}
 		persisted++
 	}
 	return persisted, nil
+}
+
+func backfillRelationKind(ctx context.Context, db *firestore.Client) (updated int, assembly int, transformation int, err error) {
+	type pendingSync struct {
+		fromPath     string
+		toPath       string
+		relationKind string
+		active       bool
+	}
+	col := db.Collection(strings.TrimSpace(*pairCollection))
+	iter := col.Where("tenantId", "==", strings.TrimSpace(*tenantID)).Documents(ctx)
+	now := firestore.ServerTimestamp
+
+	batch := db.Batch()
+	pending := 0
+	pendingSyncs := make([]pendingSync, 0, 400)
+	flush := func() error {
+		if pending == 0 {
+			return nil
+		}
+		if _, err := batch.Commit(ctx); err != nil {
+			return err
+		}
+		if toolProductDictRuntime != nil {
+			for _, syncOp := range pendingSyncs {
+				if err := toolProductDictRuntime.SyncTransformPairWrite(ctx, strings.TrimSpace(*tenantID), syncOp.fromPath, syncOp.toPath, syncOp.relationKind, syncOp.active); err != nil {
+					return err
+				}
+			}
+		}
+		batch = db.Batch()
+		pending = 0
+		pendingSyncs = pendingSyncs[:0]
+		return nil
+	}
+
+	for {
+		doc, derr := iter.Next()
+		if derr == iterator.Done {
+			break
+		}
+		if derr != nil {
+			return updated, assembly, transformation, derr
+		}
+		data := doc.Data()
+		pair := transformReviewEntry{
+			CandidateID:    doc.Ref.ID,
+			FromFragmentID: stringValue(data["fromFragmentId"]),
+			FromPath:       stringValue(data["fromPath"]),
+			FromName:       stringValue(data["fromName"]),
+			ToFragmentID:   stringValue(data["toFragmentId"]),
+			ToPath:         stringValue(data["toPath"]),
+			ToName:         stringValue(data["toName"]),
+			Reason:         stringValue(data["reason"]),
+			DecisionSource: stringValue(data["decisionSource"]),
+		}
+		if pair.FromPath == "" || pair.ToPath == "" {
+			continue
+		}
+		relationKind := inferRelationKind(pair)
+		switch relationKind {
+		case "assembly":
+			assembly++
+		default:
+			transformation++
+		}
+		batch.Set(doc.Ref, map[string]interface{}{
+			"relationKind": relationKind,
+			"updatedAt":    now,
+		}, firestore.MergeAll)
+		pendingSyncs = append(pendingSyncs, pendingSync{
+			fromPath:     pair.FromPath,
+			toPath:       pair.ToPath,
+			relationKind: relationKind,
+			active:       !doc.Exists() || boolValue(data["active"]),
+		})
+		pending++
+		updated++
+		if pending >= 400 {
+			if err := flush(); err != nil {
+				return updated, assembly, transformation, err
+			}
+		}
+	}
+	if err := flush(); err != nil {
+		return updated, assembly, transformation, err
+	}
+	return updated, assembly, transformation, nil
 }
 
 func buildProductRecord(f *models.HorizonFragment) productRecord {
@@ -1571,7 +1743,7 @@ func boolValue(v interface{}) bool {
 func stringValue(v interface{}) string {
 	switch x := v.(type) {
 	case string:
-		return x
+		return strings.TrimSpace(x)
 	default:
 		return ""
 	}
@@ -1843,6 +2015,10 @@ func isVehicleLikeOutput(path string, name string) bool {
 		"pickup-truck",
 		"suv",
 		"sedan",
+		"sports-car",
+		"sports-cars",
+		"luxury-sports-cars",
+		"luxury passenger vehicles",
 		"/bmw-",
 		"/renault-",
 		"/chery-",
@@ -1850,5 +2026,176 @@ func isVehicleLikeOutput(path string, name string) bool {
 		"/toyota-",
 		"/chevrolet-",
 		"/peugeot-",
+	)
+}
+
+func isNearestFinalAssemblyStep(pair transformReviewEntry) bool {
+	if !isVehicleLikeOutput(pair.ToPath, pair.ToName) && !isFinalDeviceLikeOutput(pair.ToPath, pair.ToName) {
+		return false
+	}
+	if isBroadMaterialSource(pair.FromPath, pair.FromName) {
+		return false
+	}
+	if !isTerminalAssemblyTarget(pair.ToPath, pair.ToName) {
+		return false
+	}
+	return isSpecificAssemblyComponentSource(pair.FromPath, pair.FromName)
+}
+
+func inferRelationKind(pair transformReviewEntry) string {
+	if isAssemblyLikePair(pair) {
+		return "assembly"
+	}
+	return "transformation"
+}
+
+func isAssemblyLikePair(pair transformReviewEntry) bool {
+	if isNearestFinalAssemblyStep(pair) {
+		return true
+	}
+	if hasAssemblyEvidence(pair) && isSpecificAssemblyComponentSource(pair.FromPath, pair.FromName) {
+		return true
+	}
+	if isSpecificAssemblyComponentSource(pair.FromPath, pair.FromName) && isAssemblyLikeTarget(pair.ToPath, pair.ToName) {
+		return true
+	}
+	return false
+}
+
+func hasAssemblyEvidence(pair transformReviewEntry) bool {
+	return len(pair.AssemblyEvidence) > 0
+}
+
+func isFinalDeviceLikeOutput(path string, name string) bool {
+	path = strings.ToLower(strings.TrimSpace(path))
+	name = strings.ToLower(strings.TrimSpace(name))
+	if containsAny(path,
+		"/product/finished/electronic/assembly/smartphone",
+		"/product/finished/electronic/assembly/iphone",
+		"/product/finished/electronic/assembly/huawei-mate",
+		"/product/finished/electronic/assembly/tablet",
+		"/product/finished/electronic/assembly/ipad",
+		"/product/finished/electronic/assembly/consumer-electronics",
+		"/product/finished/electronic/assembly/electronic-toys",
+		"/product/finished/mechanical/assembly/smartphone",
+		"/product/finished/mechanical/assembly/tablet",
+	) {
+		return true
+	}
+	return name == "smartphone" ||
+		name == "iphone" ||
+		name == "tablet" ||
+		name == "ipad" ||
+		name == "consumer electronics" ||
+		name == "electronic toys"
+}
+
+func isBroadMaterialSource(path string, name string) bool {
+	s := strings.ToLower(strings.TrimSpace(path + " " + name))
+	return containsAny(s,
+		"steel-coil",
+		"steel-sheet",
+		"steel-slab",
+		"automotive-steel",
+		"high-grade-automotive-steel",
+		"cold-rolled-steel-sheet",
+		"hot-rolled-steel-strip",
+		"iron-ore",
+		"crude-steel",
+		"pig-iron",
+		"alumina",
+		"aluminum-ingot",
+		"aluminium-ingot",
+		"polypropylene",
+		"synthetic-rubber",
+		"natural-rubber",
+		"tsr-20",
+	)
+}
+
+func isSpecificAssemblyComponentSource(path string, name string) bool {
+	s := strings.ToLower(strings.TrimSpace(path + " " + name))
+	return containsAny(s,
+		"tire",
+		"tires",
+		"battery-cell",
+		"battery-pack",
+		"battery module",
+		"battery-module",
+		"module",
+		"powertrain",
+		"display-module",
+		"display assembly",
+		"cockpit",
+		"chassis-module",
+		"chassis corner module",
+		"control-unit",
+		"sensor",
+		"radar",
+		"braking-system",
+		"instrument-cluster",
+		"seat",
+		"seating-system",
+		"harness",
+		"pcba",
+		"printed-circuit-board-assembly",
+		"electronic-control-unit",
+		"engine-control-unit",
+		"semiconductor-package",
+		"packaged-semiconductor",
+		"semiconductor-chip",
+		"logic-chip",
+		"microcontroller",
+		"chipset",
+		"display-driver",
+		"optical column",
+	)
+}
+
+func isAssemblyLikeTarget(path string, name string) bool {
+	s := strings.ToLower(strings.TrimSpace(path + " " + name))
+	if isVehicleLikeOutput(path, name) || isFinalDeviceLikeOutput(path, name) {
+		return true
+	}
+	return containsAny(s,
+		"module",
+		"pack",
+		"system",
+		"unit",
+		"board",
+		"logic-board",
+		"pcba",
+		"printed-circuit-board-assembly",
+		"sensor",
+		"platform",
+		"control-unit",
+		"engine-control-unit",
+		"instrument-cluster",
+		"cockpit",
+		"radar",
+		"battery-management-system",
+		"adas-platform",
+		"power-supply-unit",
+		"display-module",
+		"package",
+	)
+}
+
+func isTerminalAssemblyTarget(path string, name string) bool {
+	s := strings.ToLower(strings.TrimSpace(path + " " + name))
+	if isVehicleLikeOutput(path, name) {
+		return true
+	}
+	return containsAny(s,
+		"/smartphone",
+		"/iphone",
+		"/mate-",
+		"/tablet",
+		"/ipad",
+		"sterile-injectables",
+		"beverage-inventory",
+		"retail-ready-packaged-fruits",
+		"whole fresh durian",
+		"packaged-fruits",
 	)
 }

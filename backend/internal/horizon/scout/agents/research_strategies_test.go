@@ -18,10 +18,10 @@ func TestSupplyChainEnrichmentPrompt_OnlyCanonicalTypes(t *testing.T) {
 		MissingInfo: []string{"Find suppliers"},
 	}
 	prompt := a.buildSupplyChainEnrichmentPrompt(input)
-	// Operational types only (fractal model): PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM
+	// Operational types only (fractal model): PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, EXTRACTS_FROM
 	if !strings.Contains(prompt, "PRODUCES") || !strings.Contains(prompt, "SUPPLIES_TO") ||
-		!strings.Contains(prompt, "TRANSFORMS_INTO") || !strings.Contains(prompt, "EXTRACTS_FROM") {
-		t.Error("SupplyChain prompt should list operational types: PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM")
+		!strings.Contains(prompt, "TRANSFORMS_INTO") || !strings.Contains(prompt, "ASSEMBLES_INTO") || !strings.Contains(prompt, "EXTRACTS_FROM") {
+		t.Error("SupplyChain prompt should list operational types: PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, EXTRACTS_FROM")
 	}
 	if !strings.Contains(strings.ToUpper(prompt), "USE ONLY") {
 		t.Error("SupplyChain prompt should restrict to canonical types only (Use ONLY ...)")

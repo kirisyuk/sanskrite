@@ -178,6 +178,15 @@ func TestConservativeRejectReasonRejectsBatteryLongJumpAndElectricity(t *testing
 	}
 	if _, reject := conservativeRejectReason(transformReviewEntry{
 		Accepted: true,
+		FromPath: "/product/finished/mechanical/assembly/p-zero-tires",
+		FromName: "Pirelli P Zero Tires",
+		ToPath:   "/product/finished/mechanical/assembly/luxury-sports-cars",
+		ToName:   "Luxury Sports Cars",
+	}); reject {
+		t.Fatalf("expected direct tire to final vehicle assembly step to remain allowed")
+	}
+	if _, reject := conservativeRejectReason(transformReviewEntry{
+		Accepted: true,
 		FromPath: "/product/component/electronic/manufacturing/automotive-semiconductor-wafer",
 		ToPath:   "/product/finished/mechanical/assembly/electronic-control-unit",
 	}); !reject {
@@ -218,6 +227,53 @@ func TestConservativeAcceptReasonRescuesDirectBatteryMaterialToCellStep(t *testi
 		ToName:   "Battery Cell",
 	}); accept {
 		t.Fatalf("expected pCAM to battery cell to avoid rescue")
+	}
+	if _, accept := conservativeAcceptReason(transformReviewEntry{
+		Accepted: false,
+		FromPath: "/product/component/electronic/manufacturing/battery-pack",
+		FromName: "EV Battery Pack",
+		ToPath:   "/product/finished/mechanical/assembly/electric-vehicles",
+		ToName:   "Electric Vehicles",
+	}); !accept {
+		t.Fatalf("expected direct battery pack to final vehicle assembly step to be rescued")
+	}
+	if _, accept := conservativeAcceptReason(transformReviewEntry{
+		Accepted: false,
+		FromPath: "/product/component/electronic/manufacturing/lithium-ion-battery-pack",
+		FromName: "Lithium-Ion Battery Pack",
+		ToPath:   "/product/component/electronic/manufacturing/smartphone-soc",
+		ToName:   "Smartphone SoC",
+	}); accept {
+		t.Fatalf("expected battery pack to smartphone SoC to remain rejected")
+	}
+}
+
+func TestInferRelationKindDistinguishesAssemblyAndTransformation(t *testing.T) {
+	if got := inferRelationKind(transformReviewEntry{
+		FromPath: "/product/finished/mechanical/assembly/p-zero-tires",
+		FromName: "Pirelli P Zero Tires",
+		ToPath:   "/product/finished/mechanical/assembly/luxury-sports-cars",
+		ToName:   "Luxury Sports Cars",
+	}); got != "assembly" {
+		t.Fatalf("expected assembly, got %q", got)
+	}
+
+	if got := inferRelationKind(transformReviewEntry{
+		FromPath: "/product/finished/mechanical/assembly/alumina",
+		FromName: "Alumina",
+		ToPath:   "/product/finished/mechanical/assembly/aluminium",
+		ToName:   "Aluminium",
+	}); got != "transformation" {
+		t.Fatalf("expected transformation, got %q", got)
+	}
+
+	if got := inferRelationKind(transformReviewEntry{
+		FromPath: "/product/component/electronic/assembly/packaged-semiconductor",
+		FromName: "Packaged Semiconductor",
+		ToPath:   "/product/component/electronic/assembly/radar-sensor",
+		ToName:   "77GHz Radar Sensor",
+	}); got != "assembly" {
+		t.Fatalf("expected assembly for component integration, got %q", got)
 	}
 }
 
@@ -285,6 +341,31 @@ func TestConservativeRejectReasonRejectsUpstreamBatteryPrecursorAndIronOreLongJu
 		ToName:   "Liquid Helium",
 	}); !reject {
 		t.Fatalf("expected industrial gases to liquid helium to be rejected")
+	}
+}
+
+func TestApplyConservativeCurationPreservesManualCuratedReject(t *testing.T) {
+	report := transformReviewReport{
+		Pairs: []transformReviewEntry{
+			{
+				Accepted:       false,
+				DecisionSource: "manual_curated_reject",
+				FromPath:       "/product/component/electronic/assembly/automotive-chipset",
+				ToPath:         "/product/finished/mechanical/assembly/electric-vehicles",
+				ToName:         "Electric Vehicles",
+				Reason:         "automotive chipset to final vehicle skips obvious PCB/module/control-unit intermediates",
+			},
+		},
+	}
+	got := applyConservativeCuration(report)
+	if len(got.Pairs) != 1 {
+		t.Fatalf("expected 1 pair, got %d", len(got.Pairs))
+	}
+	if got.Pairs[0].Accepted {
+		t.Fatalf("expected manual curated reject to remain rejected")
+	}
+	if got.Pairs[0].DecisionSource != "manual_curated_reject" {
+		t.Fatalf("expected decision source to remain manual_curated_reject, got %q", got.Pairs[0].DecisionSource)
 	}
 }
 

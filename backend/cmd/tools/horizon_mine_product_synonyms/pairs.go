@@ -702,6 +702,11 @@ func persistAcceptedPairs(ctx context.Context, db *firestore.Client, reviewed []
 		if _, err := col.Doc(docID).Set(ctx, doc, firestore.MergeAll); err != nil {
 			return persisted, err
 		}
+		if toolProductDictRuntime != nil {
+			if err := toolProductDictRuntime.SyncSynonymPairWrite(ctx, strings.TrimSpace(*tenantID), pair.CanonicalPath, pair.SynonymPath, true); err != nil {
+				return persisted, err
+			}
+		}
 		persisted++
 	}
 	if persisted > 0 {

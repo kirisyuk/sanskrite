@@ -197,9 +197,7 @@ func buildFragmentTraceSupplyChainStats(chains []*horizonmodels.MaterializedArti
 
 func fragmentIDFromFragmentSubroute(path string, suffix string) string {
 	path = strings.TrimPrefix(path, "/api/horizon/fragments/")
-	if strings.HasSuffix(path, suffix) {
-		path = strings.TrimSuffix(path, suffix)
-	}
+	path = strings.TrimSuffix(path, suffix)
 	path = strings.Trim(path, "/")
 	if path == "" {
 		return ""

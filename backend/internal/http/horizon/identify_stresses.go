@@ -27,11 +27,11 @@ import (
 )
 
 const (
-	defaultIdentifyStressesMaxNodes     = 40
-	defaultIdentifyStressesMaxArtifacts = 25
-	defaultIdentifyStressesMaxFindings  = 120
-	defaultIdentifyStressesMaxRelations = 240
-	identifyStressesBatchSize           = 12
+	defaultIdentifyStressesMaxNodes      = 40
+	defaultIdentifyStressesMaxArtifacts  = 25
+	defaultIdentifyStressesMaxFindings   = 120
+	defaultIdentifyStressesMaxRelations  = 240
+	identifyStressesBatchSize            = 12
 )
 
 var (
@@ -276,85 +276,6 @@ type StressMetricObservation struct {
 	Description string  `json:"description,omitempty"`
 }
 
-func (s *StressFinding) UnmarshalJSON(data []byte) error {
-	var raw map[string]interface{}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	s.ID = coerceJSONString(raw["id"])
-	s.TargetType = coerceJSONString(raw["targetType"])
-	s.TargetRefs = coerceJSONStringSlice(raw["targetRefs"])
-	s.ArtifactKey = coerceJSONString(raw["artifactKey"])
-	if idx, ok := coerceJSONInt(raw["legIndex"]); ok {
-		s.LegIndex = &idx
-	} else {
-		s.LegIndex = nil
-	}
-	s.SupplyLinkRef = coerceJSONString(raw["supplyLinkRef"])
-	s.ProductRef = coerceJSONString(raw["productRef"])
-	s.StressorType = coerceJSONString(raw["stressorType"])
-	s.Mechanism = coerceJSONString(raw["mechanism"])
-	s.Severity = coerceJSONString(raw["severity"])
-	s.Confidence = coerceJSONFloat(raw["confidence"])
-	s.EffectiveAt = coerceJSONString(raw["effectiveAt"])
-	s.TimeHorizon = coerceJSONString(raw["timeHorizon"])
-	s.GeoRefs = coerceJSONStringSlice(raw["geoRefs"])
-	s.FlowRefs = coerceJSONStringSlice(raw["flowRefs"])
-	s.ZoneRefs = coerceJSONStringSlice(raw["zoneRefs"])
-	s.AffectedZoneRefs = coerceJSONStringSlice(raw["affectedZoneRefs"])
-	if qualifierDeltas, ok := raw["qualifierDeltas"].(map[string]interface{}); ok && len(qualifierDeltas) > 0 {
-		s.QualifierDeltas = qualifierDeltas
-	} else {
-		s.QualifierDeltas = nil
-	}
-	s.Summary = coerceJSONString(raw["summary"])
-	s.EventType = coerceJSONString(raw["eventType"])
-	s.FactType = coerceJSONString(raw["factType"])
-
-	if metricsRaw, ok := raw["metricObservations"]; ok {
-		metricsData, err := json.Marshal(metricsRaw)
-		if err != nil {
-			return err
-		}
-		var metrics []StressMetricObservation
-		if err := json.Unmarshal(metricsData, &metrics); err != nil {
-			return err
-		}
-		s.MetricObservations = metrics
-	} else {
-		s.MetricObservations = nil
-	}
-
-	if evidenceRaw, ok := raw["evidence"]; ok {
-		evidenceData, err := json.Marshal(evidenceRaw)
-		if err != nil {
-			return err
-		}
-		var evidence []StressEvidence
-		if err := json.Unmarshal(evidenceData, &evidence); err != nil {
-			return err
-		}
-		s.Evidence = evidence
-	} else {
-		s.Evidence = nil
-	}
-	return nil
-}
-
-func (m *StressMetricObservation) UnmarshalJSON(data []byte) error {
-	var raw map[string]interface{}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	m.MetricKey = coerceJSONString(firstNonEmptyValue(raw["metricKey"], raw["key"]))
-	m.Value = coerceJSONFloat(firstNonEmptyValue(raw["value"], raw["metricValue"]))
-	m.Unit = coerceJSONString(raw["unit"])
-	m.Confidence = coerceJSONFloat(raw["confidence"])
-	m.Scope = coerceJSONString(raw["scope"])
-	m.Description = coerceJSONString(raw["description"])
-	return nil
-}
-
 type StressEvidence struct {
 	URL     string `json:"url,omitempty"`
 	Title   string `json:"title,omitempty"`
@@ -378,150 +299,6 @@ func (v typedJSONVerifier[T]) VerifyAndParse(rawJSON string) (interface{}, error
 		return nil, err
 	}
 	return out, nil
-}
-
-func coerceJSONString(raw interface{}) string {
-	switch v := raw.(type) {
-	case string:
-		return strings.TrimSpace(v)
-	case nil:
-		return ""
-	default:
-		return strings.TrimSpace(fmt.Sprintf("%v", v))
-	}
-}
-
-func coerceJSONStringSlice(raw interface{}) []string {
-	switch v := raw.(type) {
-	case []string:
-		return uniqueCanonicalRefs(v)
-	case []interface{}:
-		out := make([]string, 0, len(v))
-		for _, item := range v {
-			text := coerceJSONString(item)
-			if text != "" {
-				out = append(out, text)
-			}
-		}
-		return uniqueCanonicalRefs(out)
-	case string:
-		text := strings.TrimSpace(v)
-		if text == "" {
-			return nil
-		}
-		return []string{text}
-	default:
-		text := coerceJSONString(raw)
-		if text == "" {
-			return nil
-		}
-		return []string{text}
-	}
-}
-
-func coerceJSONFloat(raw interface{}) float64 {
-	switch v := raw.(type) {
-	case float64:
-		return v
-	case float32:
-		return float64(v)
-	case int:
-		return float64(v)
-	case int32:
-		return float64(v)
-	case int64:
-		return float64(v)
-	case uint:
-		return float64(v)
-	case uint32:
-		return float64(v)
-	case uint64:
-		return float64(v)
-	case bool:
-		if v {
-			return 1
-		}
-		return 0
-	case string:
-		trimmed := strings.TrimSpace(v)
-		if trimmed == "" {
-			return 0
-		}
-		if strings.EqualFold(trimmed, "true") {
-			return 1
-		}
-		if strings.EqualFold(trimmed, "false") {
-			return 0
-		}
-		parsed, err := strconv.ParseFloat(trimmed, 64)
-		if err != nil {
-			return 0
-		}
-		return parsed
-	case json.Number:
-		parsed, err := v.Float64()
-		if err != nil {
-			return 0
-		}
-		return parsed
-	default:
-		return 0
-	}
-}
-
-func coerceJSONInt(raw interface{}) (int, bool) {
-	switch v := raw.(type) {
-	case int:
-		return v, true
-	case int32:
-		return int(v), true
-	case int64:
-		return int(v), true
-	case uint:
-		return int(v), true
-	case uint32:
-		return int(v), true
-	case uint64:
-		return int(v), true
-	case float64:
-		return int(v), true
-	case float32:
-		return int(v), true
-	case string:
-		trimmed := strings.TrimSpace(v)
-		if trimmed == "" {
-			return 0, false
-		}
-		parsed, err := strconv.Atoi(trimmed)
-		if err != nil {
-			return 0, false
-		}
-		return parsed, true
-	case json.Number:
-		parsed, err := v.Int64()
-		if err != nil {
-			return 0, false
-		}
-		return int(parsed), true
-	default:
-		return 0, false
-	}
-}
-
-func firstNonEmptyValue(values ...interface{}) interface{} {
-	for _, value := range values {
-		switch v := value.(type) {
-		case nil:
-			continue
-		case string:
-			if strings.TrimSpace(v) != "" {
-				return v
-			}
-		default:
-			return value
-		}
-	}
-	return nil
 }
 
 func (h *HorizonHandlers) IdentifyStresses(w http.ResponseWriter, r *http.Request) {
@@ -767,7 +544,6 @@ func (c *IdentifyStressesCanvas) run(ctx context.Context, tenantID string, lens 
 		"acceptedNodeRefs":      scope.NodeRefs,
 		"acceptedArtifactKeys":  scope.ArtifactKeys,
 		"acceptedSupplyLinks":   scope.SupplyLinkRefs,
-		"acceptedRelationCount": len(scope.VisibleRelations),
 		"acceptedGeoRefs":       scope.GeoRefs,
 		"acceptedZoneRefs":      scope.ZoneRefs,
 		"acceptedAffectedZones": scope.AffectedZoneRefs,
@@ -785,7 +561,17 @@ func (c *IdentifyStressesCanvas) run(ctx context.Context, tenantID string, lens 
 	findings = c.filterAndPrioritizeFindings(findings, scope, req.MaxFindings)
 
 	if len(findings) == 0 {
-		c.publishIdentifyStressesCompletion(ctx, tenantID, lens, jobID, "completed", 0, 0, 0, 0, 0, 0, 0, nil)
+		_ = c.publish(ctx, "horizon.identify_stresses.completed", tenantID, map[string]interface{}{
+			"jobId":              jobID,
+			"tenantId":           tenantID,
+			"lensId":             strings.TrimSpace(lens.ID),
+			"projectId":          strings.TrimSpace(lens.ProjectID),
+			"status":             "completed",
+			"findingsApplied":    0,
+			"eventsPersisted":    0,
+			"propagationBatches": 0,
+			"completedAt":        time.Now().UTC().Format(time.RFC3339Nano),
+		})
 		return nil
 	}
 
@@ -795,8 +581,6 @@ func (c *IdentifyStressesCanvas) run(ctx context.Context, tenantID string, lens 
 	var totalArtifacts int
 	var totalSupplyLinks int
 	var propagationBatches int
-	var propagationErrors int
-	var partialErrors []string
 
 	for start := 0; start < len(findings); start += identifyStressesBatchSize {
 		end := start + identifyStressesBatchSize
@@ -805,25 +589,6 @@ func (c *IdentifyStressesCanvas) run(ctx context.Context, tenantID string, lens 
 		}
 		res, err := c.applyFindingBatch(ctx, tenantID, lens, scope, findings[start:end], groundingEvidence)
 		if err != nil {
-			if totalApplied > 0 || totalEvents > 0 || totalZones > 0 || totalArtifacts > 0 || totalSupplyLinks > 0 {
-				partialErrors = append(partialErrors, err.Error())
-				c.publishIdentifyStressesCompletion(
-					ctx,
-					tenantID,
-					lens,
-					jobID,
-					"partial_success",
-					totalApplied,
-					totalEvents,
-					totalZones,
-					totalArtifacts,
-					totalSupplyLinks,
-					propagationBatches,
-					propagationErrors,
-					partialErrors,
-				)
-				return nil
-			}
 			return err
 		}
 		totalApplied += res.FindingsApplied
@@ -857,10 +622,7 @@ func (c *IdentifyStressesCanvas) run(ctx context.Context, tenantID string, lens 
 				"eventsInBatch": len(res.CreatedEvents),
 			})
 			for _, eventFact := range res.CreatedEvents {
-				if err := c.signalPipeline.ProcessEvent(ctx, eventFact); err != nil {
-					propagationErrors++
-					partialErrors = append(partialErrors, fmt.Sprintf("propagation %s: %v", strings.TrimSpace(eventFact.ID), err))
-				}
+				_ = c.signalPipeline.ProcessEvent(ctx, eventFact)
 			}
 		}
 
@@ -877,25 +639,20 @@ func (c *IdentifyStressesCanvas) run(ctx context.Context, tenantID string, lens 
 		}
 	}
 
-	status := "completed"
-	if len(partialErrors) > 0 {
-		status = "partial_success"
-	}
-	c.publishIdentifyStressesCompletion(
-		ctx,
-		tenantID,
-		lens,
-		jobID,
-		status,
-		totalApplied,
-		totalEvents,
-		totalZones,
-		totalArtifacts,
-		totalSupplyLinks,
-		propagationBatches,
-		propagationErrors,
-		partialErrors,
-	)
+	_ = c.publish(ctx, "horizon.identify_stresses.completed", tenantID, map[string]interface{}{
+		"jobId":                jobID,
+		"tenantId":             tenantID,
+		"lensId":               strings.TrimSpace(lens.ID),
+		"projectId":            strings.TrimSpace(lens.ProjectID),
+		"status":               "completed",
+		"findingsApplied":      totalApplied,
+		"eventsPersisted":      totalEvents,
+		"affectedZonesCreated": totalZones,
+		"artifactsUpdated":     totalArtifacts,
+		"supplyLinksUpdated":   totalSupplyLinks,
+		"propagationBatches":   propagationBatches,
+		"completedAt":          time.Now().UTC().Format(time.RFC3339Nano),
+	})
 	return nil
 }
 
@@ -912,11 +669,11 @@ func (c *IdentifyStressesCanvas) resolveScope(ctx context.Context, lens *horizon
 	)
 	relationNodeRefs := make([]string, 0, len(visibleRelations)*2)
 	for _, relation := range visibleRelations {
-		if relation.SourceCanonicalPath != "" {
-			relationNodeRefs = append(relationNodeRefs, relation.SourceCanonicalPath)
+		if s := strings.TrimSpace(relation.SourceCanonicalPath); s != "" {
+			relationNodeRefs = append(relationNodeRefs, s)
 		}
-		if relation.TargetCanonicalPath != "" {
-			relationNodeRefs = append(relationNodeRefs, relation.TargetCanonicalPath)
+		if s := strings.TrimSpace(relation.TargetCanonicalPath); s != "" {
+			relationNodeRefs = append(relationNodeRefs, s)
 		}
 	}
 	nodeRefs := uniqueCanonicalRefs(append(append([]string{selected}, req.VisibleNodeRefs...), relationNodeRefs...))
@@ -927,6 +684,52 @@ func (c *IdentifyStressesCanvas) resolveScope(ctx context.Context, lens *horizon
 		SelectedCanonicalPath: selected,
 		VisibleRelations:      visibleRelations,
 	}
+	if len(nodeRefs) > 0 && c.fragmentsRepo != nil {
+		frags, err := c.fragmentsRepo.ListByCanonicalPaths(ctx, nodeRefs)
+		if err != nil {
+			return nil, fmt.Errorf("identify-stresses: load node scope: %w", err)
+		}
+		byPath := make(map[string]*horizonmodels.HorizonFragment, len(frags))
+		for _, frag := range frags {
+			if frag == nil {
+				continue
+			}
+			cp := strings.TrimSpace(frag.CanonicalPath)
+			if cp != "" {
+				byPath[cp] = frag
+			}
+		}
+		scored := make([]*horizonmodels.HorizonFragment, 0, len(byPath))
+		for _, cp := range nodeRefs {
+			if frag := byPath[cp]; frag != nil {
+				scored = append(scored, frag)
+			}
+		}
+		sort.SliceStable(scored, func(i, j int) bool {
+			left := scored[i]
+			right := scored[j]
+			if strings.TrimSpace(left.CanonicalPath) == selected {
+				return true
+			}
+			if strings.TrimSpace(right.CanonicalPath) == selected {
+				return false
+			}
+			leftScore := metricValue(left.State, "supply_chain_criticality")
+			rightScore := metricValue(right.State, "supply_chain_criticality")
+			if leftScore == rightScore {
+				return strings.TrimSpace(left.CanonicalPath) < strings.TrimSpace(right.CanonicalPath)
+			}
+			return leftScore > rightScore
+		})
+		if req.MaxNodes > 0 && len(scored) > req.MaxNodes {
+			scored = scored[:req.MaxNodes]
+		}
+		scope.NodeFragments = scored
+		scope.NodeRefs = make([]string, 0, len(scored))
+		for _, frag := range scored {
+			scope.NodeRefs = append(scope.NodeRefs, strings.TrimSpace(frag.CanonicalPath))
+		}
+	}
 
 	tenantID := firstNonEmptyString(strings.TrimSpace(lens.TenantID), "global")
 	artifacts := make([]*horizonmodels.MaterializedArtifact, 0, len(artifactKeys))
@@ -934,80 +737,14 @@ func (c *IdentifyStressesCanvas) resolveScope(ctx context.Context, lens *horizon
 		if c.materializedRepo == nil {
 			break
 		}
-		keyCandidates := uniqueStrings([]string{
-			strings.TrimSpace(artKey),
-			strings.TrimPrefix(strings.TrimSpace(artKey), "/"),
-		})
-		tenantCandidates := uniqueStrings([]string{tenantID, "global"})
-		var artifact *horizonmodels.MaterializedArtifact
-		for _, tenantCandidate := range tenantCandidates {
-			for _, keyCandidate := range keyCandidates {
-				found, err := c.materializedRepo.GetByCanonicalKeyAnyKind(ctx, tenantCandidate, keyCandidate)
-				if err == nil && found != nil {
-					artifact = found
-					break
-				}
-			}
-			if artifact != nil {
-				break
-			}
-		}
-		if artifact == nil || artifact.Kind != horizonmodels.MaterializedKindSupplyChainPath {
+		artifact, err := c.materializedRepo.GetByCanonicalKeyAnyKind(ctx, tenantID, strings.TrimPrefix(strings.TrimSpace(artKey), "/"))
+		if err != nil || artifact == nil || artifact.Kind != horizonmodels.MaterializedKindSupplyChainPath {
 			continue
 		}
 		horizonmodels.PopulateMaterializedArtifactIndexes(artifact)
 		artifacts = append(artifacts, artifact)
 	}
-	if seeded := c.bootstrapVisiblePathArtifacts(ctx, lens, selected, nodeRefs, visibleRelations, supplyLinkRefs, artifactKeys, req.MaxArtifacts); len(seeded) > 0 {
-		merged := make([]*horizonmodels.MaterializedArtifact, 0, len(artifacts)+len(seeded))
-		seen := make(map[string]struct{}, len(artifacts)+len(seeded))
-		for _, artifact := range append(artifacts, seeded...) {
-			if artifact == nil {
-				continue
-			}
-			key := strings.TrimPrefix(strings.TrimSpace(artifact.CanonicalKey), "/")
-			if key == "" {
-				continue
-			}
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			seen[key] = struct{}{}
-			merged = append(merged, artifact)
-		}
-		artifacts = merged
-	}
-	if synthesized := c.synthesizeOrphanSupplyLinkArtifacts(ctx, lens, supplyLinkRefs, artifacts, req.MaxArtifacts); len(synthesized) > 0 {
-		merged := make([]*horizonmodels.MaterializedArtifact, 0, len(artifacts)+len(synthesized))
-		seen := make(map[string]struct{}, len(artifacts)+len(synthesized))
-		for _, artifact := range append(artifacts, synthesized...) {
-			if artifact == nil {
-				continue
-			}
-			key := strings.TrimPrefix(strings.TrimSpace(artifact.CanonicalKey), "/")
-			if key == "" {
-				continue
-			}
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			seen[key] = struct{}{}
-			merged = append(merged, artifact)
-		}
-		artifacts = merged
-	}
-	requestedSupplyLinks := setFromStrings(supplyLinkRefs)
 	sort.SliceStable(artifacts, func(i, j int) bool {
-		leftCoverage := overlapCount(collectSupplyLinkRefsFromArtifact(artifacts[i]), requestedSupplyLinks)
-		rightCoverage := overlapCount(collectSupplyLinkRefsFromArtifact(artifacts[j]), requestedSupplyLinks)
-		if leftCoverage != rightCoverage {
-			return leftCoverage > rightCoverage
-		}
-		leftSynthetic := isIdentifySyntheticArtifact(artifacts[i])
-		rightSynthetic := isIdentifySyntheticArtifact(artifacts[j])
-		if leftSynthetic != rightSynthetic {
-			return leftSynthetic
-		}
 		if artifacts[i].PathStressScore == artifacts[j].PathStressScore {
 			return strings.TrimSpace(artifacts[i].CanonicalKey) < strings.TrimSpace(artifacts[j].CanonicalKey)
 		}
@@ -1060,163 +797,46 @@ func (c *IdentifyStressesCanvas) resolveScope(ctx context.Context, lens *horizon
 	scope.GeoRefs = sortedRefKeys(geoSet)
 	scope.ZoneRefs = sortedRefKeys(zoneSet)
 	scope.AffectedZoneRefs = sortedRefKeys(affectedSet)
-	preferredNodeSet := make(map[string]struct{})
-	addRef(preferredNodeSet, selected)
-	for _, artifact := range artifacts {
-		for _, ref := range collectArtifactNodeRefs(artifact) {
-			addRef(preferredNodeSet, ref)
-		}
-	}
-	nodeRefs = uniqueCanonicalRefs(append(nodeRefs, sortedRefKeys(preferredNodeSet)...))
-	if len(nodeRefs) > 0 && c.fragmentsRepo != nil {
-		frags, err := c.fragmentsRepo.ListByCanonicalPaths(ctx, nodeRefs)
-		if err != nil {
-			return nil, fmt.Errorf("identify-stresses: load node scope: %w", err)
-		}
-		byPath := make(map[string]*horizonmodels.HorizonFragment, len(frags))
-		for _, frag := range frags {
-			if frag == nil {
-				continue
-			}
-			cp := strings.TrimSpace(frag.CanonicalPath)
-			if cp != "" {
-				byPath[cp] = frag
-			}
-		}
-		scored := make([]*horizonmodels.HorizonFragment, 0, len(byPath))
-		for _, cp := range nodeRefs {
-			if frag := byPath[cp]; frag != nil {
-				scored = append(scored, frag)
-			}
-		}
-		sort.SliceStable(scored, func(i, j int) bool {
-			left := scored[i]
-			right := scored[j]
-			leftPath := strings.TrimSpace(left.CanonicalPath)
-			rightPath := strings.TrimSpace(right.CanonicalPath)
-			if leftPath == selected {
-				return true
-			}
-			if rightPath == selected {
-				return false
-			}
-			_, leftPreferred := preferredNodeSet[leftPath]
-			_, rightPreferred := preferredNodeSet[rightPath]
-			if leftPreferred != rightPreferred {
-				return leftPreferred
-			}
-			leftScore := metricValue(left.State, "supply_chain_criticality")
-			rightScore := metricValue(right.State, "supply_chain_criticality")
-			if leftScore == rightScore {
-				return leftPath < rightPath
-			}
-			return leftScore > rightScore
-		})
-		if req.MaxNodes > 0 && len(scored) > req.MaxNodes {
-			scored = scored[:req.MaxNodes]
-		}
-		scope.NodeFragments = scored
-		scope.NodeRefs = make([]string, 0, len(scored))
-		for _, frag := range scored {
-			scope.NodeRefs = append(scope.NodeRefs, strings.TrimSpace(frag.CanonicalPath))
-		}
-	}
 	return scope, nil
 }
 
-func (c *IdentifyStressesCanvas) bootstrapVisiblePathArtifacts(
-	ctx context.Context,
-	lens *horizonmodels.Lens,
-	selected string,
-	nodeRefs []string,
-	visibleRelations []IdentifyStressVisibleRelation,
-	supplyLinkRefs []string,
-	artifactKeys []string,
-	maxArtifacts int,
-) []*horizonmodels.MaterializedArtifact {
-	if c.materializedRepo == nil || lens == nil {
-		return nil
+func identifyScopeArtifactRef(artifact *horizonmodels.MaterializedArtifact) horizonmodels.ScopeArtifactRef {
+	if artifact == nil {
+		return horizonmodels.ScopeArtifactRef{}
 	}
-	if len(artifactKeys) >= maxInt(minInt(maxArtifacts, 6), 3) && len(supplyLinkRefs) >= 6 {
-		return nil
+	horizonmodels.PopulateSupplyChainPathIndexes(artifact)
+	ref := horizonmodels.ScopeArtifactRef{
+		Kind:             string(artifact.Kind),
+		DisplayName:      strings.TrimSpace(artifact.DisplayName),
+		AnchorSupplier:   strings.TrimSpace(artifact.AnchorSupplier),
+		AnchorCustomer:   strings.TrimSpace(artifact.AnchorCustomer),
+		ProductAxis:      strings.TrimSpace(artifact.ProductAxis),
+		NodeRefs:         uniqueCanonicalRefs(append([]string(nil), artifact.NodeRefs...)),
+		Status:           strings.TrimSpace(artifact.PathStatus),
+		GeoRefs:          uniqueCanonicalRefs(append([]string(nil), artifact.GeoRefs...)),
+		FlowRefs:         uniqueCanonicalRefs(append([]string(nil), artifact.FlowRefs...)),
+		ZoneRefs:         uniqueCanonicalRefs(append([]string(nil), artifact.ZoneRefs...)),
+		AffectedZoneRefs: uniqueCanonicalRefs(append([]string(nil), artifact.AffectedZoneRefs...)),
 	}
-	candidateNodeRefs := uniqueCanonicalRefs(nodeRefs)
-	if selected != "" {
-		candidateNodeRefs = uniqueCanonicalRefs(append([]string{selected}, candidateNodeRefs...))
+	if artifact.Kind != horizonmodels.MaterializedKindSupplyChainPath {
+		return ref
 	}
-	for _, relation := range visibleRelations {
-		if relation.SourceCanonicalPath != "" {
-			candidateNodeRefs = append(candidateNodeRefs, relation.SourceCanonicalPath)
-		}
-		if relation.TargetCanonicalPath != "" {
-			candidateNodeRefs = append(candidateNodeRefs, relation.TargetCanonicalPath)
-		}
+	parsed, err := horizonmodels.ParseSupplyChainPathPayload(artifact.Payload)
+	if err != nil || parsed == nil {
+		return ref
 	}
-	candidateNodeRefs = uniqueCanonicalRefs(candidateNodeRefs)
-	if len(candidateNodeRefs) == 0 {
-		return nil
-	}
-
-	type scoredArtifact struct {
-		artifact *horizonmodels.MaterializedArtifact
-		score    float64
-	}
-	foundByKey := map[string]scoredArtifact{}
-	queryLimit := maxInt(maxArtifacts*8, 120)
-	for _, tenantCandidate := range uniqueStrings([]string{strings.TrimSpace(lens.TenantID), "global"}) {
-		found, err := c.materializedRepo.FindByNodeRefsAny(ctx, tenantCandidate, candidateNodeRefs, horizonmodels.MaterializedKindSupplyChainPath, queryLimit)
-		if err != nil {
-			if c.logger != nil {
-				c.logger.Printf("identify-stresses: bootstrap path discovery warning tenant=%s: %v", tenantCandidate, err)
-			}
-			continue
-		}
-		for _, artifact := range found {
-			if artifact == nil || artifact.Kind != horizonmodels.MaterializedKindSupplyChainPath {
-				continue
-			}
-			horizonmodels.PopulateMaterializedArtifactIndexes(artifact)
-			score := scoreVisiblePathCandidate(artifact, selected, candidateNodeRefs, visibleRelations, supplyLinkRefs)
-			if score <= 0 {
-				continue
-			}
-			key := strings.TrimPrefix(strings.TrimSpace(artifact.CanonicalKey), "/")
-			existing, ok := foundByKey[key]
-			if !ok || score > existing.score {
-				foundByKey[key] = scoredArtifact{artifact: artifact, score: score}
-			}
-		}
-	}
-	if len(foundByKey) == 0 {
-		return nil
-	}
-	scored := make([]scoredArtifact, 0, len(foundByKey))
-	for _, item := range foundByKey {
-		scored = append(scored, item)
-	}
-	sort.SliceStable(scored, func(i, j int) bool {
-		if scored[i].score == scored[j].score {
-			return strings.TrimSpace(scored[i].artifact.CanonicalKey) < strings.TrimSpace(scored[j].artifact.CanonicalKey)
-		}
-		return scored[i].score > scored[j].score
-	})
-
-	importLimit := maxInt(minInt(maxArtifacts, 24), 6)
-	out := make([]*horizonmodels.MaterializedArtifact, 0, minInt(len(scored), importLimit))
-	for _, item := range scored {
-		if len(out) >= importLimit {
-			break
-		}
-		artifact := c.ensureLensScopedArtifact(ctx, lens, item.artifact)
-		if artifact == nil {
-			continue
-		}
-		out = append(out, artifact)
-	}
-	if len(out) > 0 && c.logger != nil {
-		c.logger.Printf("identify-stresses: bootstrapped %d route artifacts for lens %s", len(out), strings.TrimSpace(lens.ID))
-	}
-	return out
+	summary := horizonmodels.SummarizeSupplyChainPathBindings(parsed)
+	ref.GeoRefs = summary.GeoRefs
+	ref.FlowRefs = summary.FlowRefs
+	ref.ZoneRefs = summary.ZoneRefs
+	ref.AffectedZoneRefs = summary.AffectedZoneRefs
+	ref.SpatialSemantics = summary.SpatialSemantics
+	ref.LegCount = summary.LegCount
+	ref.BindingConfidence = summary.BindingConfidence
+	ref.PathStressScore = summary.PathStressScore
+	ref.BottleneckLegIndex = summary.BottleneckLegIndex
+	ref.RecoveryLatencyHrs = summary.RecoveryLatencyHrs
+	return ref
 }
 
 func (c *IdentifyStressesCanvas) ensureLensScopedArtifact(ctx context.Context, lens *horizonmodels.Lens, artifact *horizonmodels.MaterializedArtifact) *horizonmodels.MaterializedArtifact {
@@ -1305,126 +925,6 @@ func (c *IdentifyStressesCanvas) upsertLensScopeArtifact(ctx context.Context, le
 	}
 }
 
-func (c *IdentifyStressesCanvas) synthesizeOrphanSupplyLinkArtifacts(
-	ctx context.Context,
-	lens *horizonmodels.Lens,
-	supplyLinkRefs []string,
-	artifacts []*horizonmodels.MaterializedArtifact,
-	maxArtifacts int,
-) []*horizonmodels.MaterializedArtifact {
-	if c.fragmentsRepo == nil || c.materializedRepo == nil || lens == nil {
-		return nil
-	}
-	synthLimit := maxInt(minInt(maxArtifacts, 12), 6)
-	out := make([]*horizonmodels.MaterializedArtifact, 0, synthLimit)
-	for _, ref := range supplyLinkRefs {
-		ref = strings.TrimSpace(ref)
-		if ref == "" {
-			continue
-		}
-		frag, err := c.fragmentsRepo.GetByCanonicalPath(ctx, ref)
-		if err != nil || frag == nil {
-			continue
-		}
-		productRef := ""
-		if frag.ProductRef != nil {
-			productRef = strings.TrimSpace(*frag.ProductRef)
-		}
-		if hasMatchingArtifactForSupplyLink(artifacts, ref, productRef) || hasMatchingArtifactForSupplyLink(out, ref, productRef) {
-			continue
-		}
-		artifact := c.ensureSyntheticSupplyLinkArtifact(ctx, lens, frag)
-		if artifact == nil {
-			continue
-		}
-		out = append(out, artifact)
-		if len(out) >= synthLimit {
-			break
-		}
-	}
-	if len(out) > 0 && c.logger != nil {
-		c.logger.Printf("identify-stresses: synthesized %d single-link path artifacts for lens %s", len(out), strings.TrimSpace(lens.ID))
-	}
-	return out
-}
-
-func hasMatchingArtifactForSupplyLink(artifacts []*horizonmodels.MaterializedArtifact, supplyLinkRef, productRef string) bool {
-	supplyLinkRef = strings.TrimSpace(supplyLinkRef)
-	productRef = strings.TrimSpace(productRef)
-	for _, artifact := range artifacts {
-		if artifact == nil {
-			continue
-		}
-		if !containsString(collectSupplyLinkRefsFromArtifact(artifact), supplyLinkRef) {
-			continue
-		}
-		if productRef == "" || containsString(collectArtifactProductRefs(artifact), productRef) {
-			return true
-		}
-	}
-	return false
-}
-
-func (c *IdentifyStressesCanvas) ensureSyntheticSupplyLinkArtifact(ctx context.Context, lens *horizonmodels.Lens, fragment *horizonmodels.HorizonFragment) *horizonmodels.MaterializedArtifact {
-	artifact := buildSingleSupplyLinkArtifact(fragment, firstNonEmptyString(strings.TrimSpace(lens.TenantID), "global"), strings.TrimSpace(lens.ID))
-	if artifact == nil {
-		return nil
-	}
-	return c.ensureLensScopedArtifact(ctx, lens, artifact)
-}
-
-func scoreVisiblePathCandidate(
-	artifact *horizonmodels.MaterializedArtifact,
-	selected string,
-	nodeRefs []string,
-	visibleRelations []IdentifyStressVisibleRelation,
-	supplyLinkRefs []string,
-) float64 {
-	if artifact == nil {
-		return 0
-	}
-	score := 0.0
-	nodeSet := make(map[string]struct{}, len(nodeRefs))
-	for _, ref := range nodeRefs {
-		addRef(nodeSet, ref)
-	}
-	artifactNodes := collectArtifactNodeRefs(artifact)
-	nodeOverlap := 0
-	for _, ref := range artifactNodes {
-		if _, ok := nodeSet[ref]; ok {
-			nodeOverlap++
-		}
-	}
-	score += float64(nodeOverlap) * 16
-	if selected != "" && containsString(artifactNodes, selected) {
-		score += 28
-	}
-	if strings.TrimSpace(artifact.AnchorSupplier) == selected || strings.TrimSpace(artifact.AnchorCustomer) == selected {
-		score += 18
-	}
-	if overlap := overlapCount(collectSupplyLinkRefsFromArtifact(artifact), setFromStrings(supplyLinkRefs)); overlap > 0 {
-		score += float64(overlap) * 22
-	}
-	relationMatches := 0
-	for _, relation := range visibleRelations {
-		if relation.SourceCanonicalPath == "" && relation.TargetCanonicalPath == "" {
-			continue
-		}
-		if containsString(artifactNodes, relation.SourceCanonicalPath) || containsString(artifactNodes, relation.TargetCanonicalPath) {
-			relationMatches++
-		}
-		if strings.TrimSpace(relation.SourceCanonicalPath) != "" && strings.TrimSpace(relation.TargetCanonicalPath) != "" {
-			if artifactContainsLegEndpoints(artifact, relation.SourceCanonicalPath, relation.TargetCanonicalPath) {
-				relationMatches += 2
-			}
-		}
-	}
-	score += float64(relationMatches) * 6
-	score += artifact.PathStressScore * 8
-	score += math.Min(float64(artifact.LegCount), 6) * 1.5
-	return score
-}
-
 func (c *IdentifyStressesCanvas) runGroundedSynthesis(ctx context.Context, tenantID string, lens *horizonmodels.Lens, scope *identifyStressScope) (string, []StressEvidence, error) {
 	prompt := c.buildGroundedSynthesisPrompt(lens, scope)
 	task := &ai.AITask{
@@ -1433,7 +933,7 @@ func (c *IdentifyStressesCanvas) runGroundedSynthesis(ctx context.Context, tenan
 		AIRequirements: ai.AIRequirements{
 			PreferredModel:            "gemini-3-flash-preview",
 			MinContextWindow:          32000,
-			MaxOutputSize:             16384,
+			MaxOutputSize:             8192,
 			MinCapabilityScore:        6,
 			TextGenerationCapability:  true,
 			SearchGroundingCapability: true,
@@ -1473,7 +973,7 @@ func (c *IdentifyStressesCanvas) normalizeGroundedSynthesis(ctx context.Context,
 		AIRequirements: ai.AIRequirements{
 			PreferredModel:           "gemini-3-flash-preview",
 			MinContextWindow:         32000,
-			MaxOutputSize:            16384,
+			MaxOutputSize:            8192,
 			MinCapabilityScore:       6,
 			TextGenerationCapability: true,
 		},
@@ -1484,238 +984,13 @@ func (c *IdentifyStressesCanvas) normalizeGroundedSynthesis(ctx context.Context,
 	}
 	raw, err := c.exec.ExecuteStructuredTask(ctx, task)
 	if err != nil {
-		fallback := parseGroundedDossierFindings(grounded)
-		if len(fallback) > 0 {
-			return fallback, nil
-		}
 		return nil, fmt.Errorf("identify-stresses normalize: %w", err)
 	}
 	typed, ok := raw.(stressFindingEnvelope)
 	if !ok {
-		fallback := parseGroundedDossierFindings(grounded)
-		if len(fallback) > 0 {
-			return fallback, nil
-		}
 		return nil, fmt.Errorf("identify-stresses normalize: unexpected verifier result")
 	}
-	if len(typed.Findings) == 0 {
-		if fallback := parseGroundedDossierFindings(grounded); len(fallback) > 0 {
-			return fallback, nil
-		}
-	}
 	return typed.Findings, nil
-}
-
-func parseGroundedDossierFindings(grounded string) []StressFinding {
-	lines := strings.Split(grounded, "\n")
-	blocks := make([][]string, 0, 8)
-	current := []string{}
-	for _, rawLine := range lines {
-		line := strings.TrimSpace(rawLine)
-		if strings.HasPrefix(strings.ToUpper(line), "FINDING ") {
-			if len(current) > 0 {
-				blocks = append(blocks, current)
-			}
-			current = []string{line}
-			continue
-		}
-		if len(current) == 0 {
-			continue
-		}
-		current = append(current, rawLine)
-	}
-	if len(current) > 0 {
-		blocks = append(blocks, current)
-	}
-	out := make([]StressFinding, 0, len(blocks))
-	for _, block := range blocks {
-		finding := parseGroundedDossierBlock(block)
-		if strings.TrimSpace(finding.TargetType) == "" && len(finding.TargetRefs) == 0 && strings.TrimSpace(finding.Summary) == "" {
-			continue
-		}
-		out = append(out, finding)
-	}
-	return out
-}
-
-func parseGroundedDossierBlock(lines []string) StressFinding {
-	finding := StressFinding{
-		QualifierDeltas: map[string]interface{}{},
-		FactType:        "stress_finding",
-	}
-	var evidence []StressEvidence
-	evidenceMode := false
-	for _, rawLine := range lines {
-		line := strings.TrimSpace(rawLine)
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(strings.ToUpper(line), "FINDING ") {
-			finding.ID = "dossier_" + normalizeStressToken(strings.TrimPrefix(strings.ToLower(line), "finding "))
-			continue
-		}
-		if evidenceMode {
-			if strings.HasPrefix(line, "- ") {
-				url := strings.TrimSpace(strings.TrimPrefix(line, "- "))
-				if url != "" {
-					evidence = append(evidence, StressEvidence{URL: url, Domain: evidenceDomain(url)})
-				}
-				continue
-			}
-			evidenceMode = false
-		}
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := normalizeStressToken(parts[0])
-		value := strings.TrimSpace(parts[1])
-		switch key {
-		case "targettype":
-			finding.TargetType = normalizeStressToken(value)
-		case "targetrefs":
-			finding.TargetRefs = splitDossierRefs(value)
-		case "artifactkey":
-			finding.ArtifactKey = strings.TrimSpace(value)
-		case "legindex":
-			if idx, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
-				finding.LegIndex = &idx
-			}
-		case "supplylinkref":
-			finding.SupplyLinkRef = strings.TrimSpace(value)
-		case "productref":
-			finding.ProductRef = strings.TrimSpace(value)
-		case "stressortype":
-			finding.StressorType = normalizeStressorToken(value)
-		case "primarymechanism", "mechanism":
-			finding.Mechanism = normalizeMechanismToken(value)
-		case "severity":
-			finding.Severity = normalizeSeverityToken(value)
-		case "confidence":
-			finding.Confidence = coerceJSONFloat(value)
-		case "effectiveat":
-			finding.EffectiveAt = strings.TrimSpace(value)
-		case "timehorizon":
-			finding.TimeHorizon = normalizeTimeHorizonToken(value)
-		case "georefs":
-			finding.GeoRefs = splitDossierRefs(value)
-		case "flowrefs":
-			finding.FlowRefs = splitDossierRefs(value)
-		case "zonerefs":
-			finding.ZoneRefs = splitDossierRefs(value)
-		case "affectedzonerefs":
-			finding.AffectedZoneRefs = splitDossierRefs(value)
-		case "metricimpacts":
-			finding.MetricObservations = parseDossierMetricImpacts(value)
-		case "qualifierdeltas":
-			finding.QualifierDeltas = parseDossierQualifiers(value)
-		case "summary":
-			finding.Summary = value
-		case "evidence":
-			evidenceMode = true
-		}
-	}
-	if len(evidence) > 0 {
-		finding.Evidence = evidence
-	}
-	if finding.EventType == "" {
-		finding.EventType = finding.StressorType
-	}
-	if len(finding.QualifierDeltas) == 0 {
-		finding.QualifierDeltas = nil
-	}
-	return finding
-}
-
-func splitDossierRefs(value string) []string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil
-	}
-	parts := strings.Split(value, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		item := strings.TrimSpace(part)
-		if item != "" {
-			out = append(out, item)
-		}
-	}
-	return uniqueCanonicalRefs(out)
-}
-
-func parseDossierMetricImpacts(value string) []StressMetricObservation {
-	items := strings.Split(value, ";")
-	out := make([]StressMetricObservation, 0, len(items))
-	for _, item := range items {
-		item = strings.TrimSpace(item)
-		if item == "" {
-			continue
-		}
-		metricParts := strings.Split(item, "|")
-		left := strings.TrimSpace(metricParts[0])
-		scope := ""
-		confidence := 0.0
-		if len(metricParts) > 1 {
-			scope = strings.TrimSpace(metricParts[1])
-		}
-		if len(metricParts) > 2 {
-			confidence = coerceJSONFloat(metricParts[2])
-		}
-		keyValue := strings.SplitN(left, "=", 2)
-		if len(keyValue) != 2 {
-			continue
-		}
-		metricKey := normalizeStressToken(strings.TrimSpace(keyValue[0]))
-		right := strings.TrimSpace(keyValue[1])
-		valuePart := right
-		unit := ""
-		if fields := strings.Fields(right); len(fields) > 1 {
-			valuePart = fields[0]
-			unit = strings.Join(fields[1:], " ")
-		}
-		if valuePart == "" {
-			continue
-		}
-		out = append(out, StressMetricObservation{
-			MetricKey:   metricKey,
-			Value:       coerceJSONFloat(valuePart),
-			Unit:        unit,
-			Confidence:  confidence,
-			Scope:       scope,
-			Description: "",
-		})
-	}
-	return out
-}
-
-func parseDossierQualifiers(value string) map[string]interface{} {
-	items := strings.Split(value, ";")
-	out := make(map[string]interface{}, len(items))
-	for _, item := range items {
-		item = strings.TrimSpace(item)
-		if item == "" {
-			continue
-		}
-		parts := strings.SplitN(item, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := normalizeStressToken(parts[0])
-		rawValue := strings.TrimSpace(parts[1])
-		switch strings.ToLower(rawValue) {
-		case "true":
-			out[key] = true
-		case "false":
-			out[key] = false
-		default:
-			if number, err := strconv.ParseFloat(rawValue, 64); err == nil {
-				out[key] = number
-			} else {
-				out[key] = rawValue
-			}
-		}
-	}
-	return out
 }
 
 func normalizeStressToken(value string) string {
@@ -1740,70 +1015,6 @@ func normalizeStressToken(value string) string {
 	out = strings.ReplaceAll(out, "/", "_")
 	out = strings.ReplaceAll(out, "__", "_")
 	return strings.Trim(out, "_")
-}
-
-func normalizeStressorToken(value string) string {
-	token := normalizeStressToken(value)
-	switch token {
-	case "security_conflict":
-		return "security_conflict"
-	case "route_disruption", "route_fragility":
-		return "route_disruption"
-	case "carrier_service_interruption", "carrier_or_service_interruption", "service_interruption":
-		return "carrier_or_service_interruption"
-	case "supplier_outage":
-		return "supplier_outage"
-	case "capacity_shock", "capacity_drop":
-		return "capacity_drop"
-	case "inventory_shortfall", "inventory_vulnerability":
-		return "inventory_shortfall"
-	case "labor_action":
-		return "labor_action"
-	case "export_controls", "export_control":
-		return "export_controls"
-	case "customs_restrictions", "customs_friction":
-		return "customs_restrictions"
-	}
-	return token
-}
-
-func normalizeMechanismToken(value string) string {
-	token := normalizeStressToken(value)
-	switch token {
-	case "route_disruption", "route_fragility":
-		return "route_fragility"
-	case "carrier_service_interruption", "carrier_or_service_interruption", "service_dependency":
-		return "service_dependency"
-	case "supplier_outage", "sole_source_lock_in":
-		return "sole_source_lock_in"
-	case "capacity_shock", "inventory_vulnerability", "inventory_shortfall":
-		return "inventory_vulnerability"
-	case "control_exposure", "export_controls", "regulatory_block":
-		return "control_exposure"
-	case "customs_friction", "customs_restrictions", "port_or_border_congestion":
-		return "customs_friction"
-	case "low_substitutability":
-		return "low_substitutability"
-	}
-	return token
-}
-
-func normalizeSeverityToken(value string) string {
-	token := normalizeStressToken(value)
-	switch token {
-	case "critical", "high", "medium", "low":
-		return token
-	}
-	return ""
-}
-
-func normalizeTimeHorizonToken(value string) string {
-	token := normalizeStressToken(value)
-	switch token {
-	case "immediate", "near_term", "medium_term", "long_term", "unknown":
-		return token
-	}
-	return ""
 }
 
 func (c *IdentifyStressesCanvas) enrichAndBindFindings(findings []StressFinding, scope *identifyStressScope) []StressFinding {
@@ -1970,6 +1181,164 @@ func normalizeRefsAgainstScope(refs []string, allowed []string) []string {
 	return uniqueCanonicalRefs(out)
 }
 
+func bestProductRefForArtifact(artifact *horizonmodels.MaterializedArtifact, finding StressFinding) string {
+	productRefs := collectArtifactProductRefs(artifact)
+	for _, targetRef := range finding.TargetRefs {
+		if containsString(productRefs, targetRef) {
+			return targetRef
+		}
+	}
+	if finding.ProductRef != "" && containsString(productRefs, finding.ProductRef) {
+		return finding.ProductRef
+	}
+	if strings.TrimSpace(artifact.ProductAxis) != "" {
+		return strings.TrimSpace(artifact.ProductAxis)
+	}
+	if len(productRefs) > 0 {
+		return productRefs[0]
+	}
+	return ""
+}
+
+func bestArtifactBindingForFinding(artifacts []*horizonmodels.MaterializedArtifact, finding StressFinding) artifactBindingMatch {
+	best := artifactBindingMatch{LegIndex: -1}
+	for _, artifact := range artifacts {
+		match := artifactBindingForFinding(artifact, finding)
+		if match.Artifact == nil {
+			continue
+		}
+		if match.Score > best.Score || (match.Score == best.Score && match.LegIndex >= 0 && (best.LegIndex < 0 || match.LegIndex < best.LegIndex)) {
+			best = match
+		}
+	}
+	return best
+}
+
+func artifactBindingForFinding(artifact *horizonmodels.MaterializedArtifact, finding StressFinding) artifactBindingMatch {
+	match := artifactBindingMatch{Artifact: artifact, LegIndex: -1}
+	if artifact == nil {
+		return match
+	}
+	score := 0.0
+	artifactKey := strings.TrimPrefix(strings.TrimSpace(artifact.CanonicalKey), "/")
+	if finding.ArtifactKey != "" && artifactKey == strings.TrimPrefix(strings.TrimSpace(finding.ArtifactKey), "/") {
+		score += 100
+	}
+	artifactProductRefs := collectArtifactProductRefs(artifact)
+	if finding.ProductRef != "" {
+		if containsString(artifactProductRefs, finding.ProductRef) {
+			score += 90
+			match.ProductMatched = true
+			match.ProductRef = strings.TrimSpace(finding.ProductRef)
+		} else {
+			score -= 80
+		}
+	}
+	artifactNodeRefs := collectArtifactNodeRefs(artifact)
+	targetMatchCount := 0
+	for _, targetRef := range finding.TargetRefs {
+		if containsString(artifactNodeRefs, targetRef) {
+			targetMatchCount++
+		}
+	}
+	score += float64(targetMatchCount) * 22
+	if strings.TrimSpace(artifact.AnchorSupplier) != "" && containsString(finding.TargetRefs, strings.TrimSpace(artifact.AnchorSupplier)) {
+		score += 18
+	}
+	if strings.TrimSpace(artifact.AnchorCustomer) != "" && containsString(finding.TargetRefs, strings.TrimSpace(artifact.AnchorCustomer)) {
+		score += 18
+	}
+
+	if finding.SupplyLinkRef != "" {
+		if containsString(collectSupplyLinkRefsFromArtifact(artifact), finding.SupplyLinkRef) {
+			score += 120
+			match.LinkMatched = true
+			match.LinkRef = strings.TrimSpace(finding.SupplyLinkRef)
+		} else {
+			score -= 60
+		}
+	}
+
+	parsed, err := horizonmodels.ParseSupplyChainPathPayload(artifact.Payload)
+	if err == nil && parsed != nil {
+		for _, leg := range parsed.Legs {
+			legScore := score
+			legMatchedProduct := match.ProductMatched
+			legMatchedLink := match.LinkMatched
+			productRef := strings.TrimSpace(match.ProductRef)
+			linkRef := strings.TrimSpace(match.LinkRef)
+			if finding.SupplyLinkRef != "" {
+				if strings.TrimSpace(leg.SupplyLinkCanonicalPath) == strings.TrimSpace(finding.SupplyLinkRef) {
+					legScore += 140
+					legMatchedLink = true
+					linkRef = strings.TrimSpace(finding.SupplyLinkRef)
+				} else {
+					legScore -= 10
+				}
+			}
+			if finding.ProductRef != "" {
+				if strings.TrimSpace(leg.ProductRef) == strings.TrimSpace(finding.ProductRef) {
+					legScore += 100
+					legMatchedProduct = true
+					productRef = strings.TrimSpace(finding.ProductRef)
+				} else if strings.TrimSpace(leg.ProductRef) != "" {
+					legScore -= 50
+				}
+			}
+			for _, targetRef := range finding.TargetRefs {
+				if targetRef == strings.TrimSpace(leg.SupplierRef) || targetRef == strings.TrimSpace(leg.CustomerRef) {
+					legScore += 24
+				}
+			}
+			if hasOverlap(finding.GeoRefs, leg.GeoRefs) {
+				legScore += 8
+			}
+			if hasOverlap(finding.ZoneRefs, leg.ZoneRefs) || hasOverlap(finding.AffectedZoneRefs, leg.AffectedZoneRefs) {
+				legScore += 8
+			}
+			if legScore > match.Score || (legScore == match.Score && leg.Index >= 0 && (match.LegIndex < 0 || leg.Index < match.LegIndex)) {
+				match.Score = legScore
+				match.LegIndex = leg.Index
+				match.LinkRef = firstNonEmptyString(linkRef, strings.TrimSpace(leg.SupplyLinkCanonicalPath))
+				match.ProductRef = firstNonEmptyString(productRef, strings.TrimSpace(leg.ProductRef), strings.TrimSpace(artifact.ProductAxis))
+				match.ProductMatched = legMatchedProduct
+				match.LinkMatched = legMatchedLink
+			}
+		}
+	}
+
+	if match.ProductRef == "" {
+		match.ProductRef = bestProductRefForArtifact(artifact, finding)
+	}
+	if match.Score == 0 {
+		match.Score = score
+	}
+	return match
+}
+
+func hasOverlap(left []string, right []string) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return false
+	}
+	set := make(map[string]struct{}, len(left))
+	for _, item := range left {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			set[item] = struct{}{}
+		}
+	}
+	for _, item := range right {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, ok := set[item]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *IdentifyStressesCanvas) filterAndPrioritizeFindings(findings []StressFinding, scope *identifyStressScope, maxFindings int) []StressFinding {
 	if len(findings) == 0 {
 		return nil
@@ -1980,19 +1349,17 @@ func (c *IdentifyStressesCanvas) filterAndPrioritizeFindings(findings []StressFi
 	}
 	allowedArtifacts := make(map[string]struct{}, len(scope.ArtifactKeys))
 	for _, ref := range scope.ArtifactKeys {
-		addRef(allowedArtifacts, strings.TrimPrefix(strings.TrimSpace(ref), "/"))
+		addRef(allowedArtifacts, ref)
 	}
 	allowedSupplyLinks := make(map[string]struct{}, len(scope.SupplyLinkRefs))
 	for _, ref := range scope.SupplyLinkRefs {
-		addRef(allowedSupplyLinks, strings.TrimSpace(ref))
+		addRef(allowedSupplyLinks, ref)
 	}
 	out := make([]StressFinding, 0, len(findings))
 	for _, finding := range findings {
-		finding.TargetType = normalizeStressToken(finding.TargetType)
-		finding.StressorType = normalizeStressorToken(finding.StressorType)
-		finding.Mechanism = normalizeMechanismToken(finding.Mechanism)
-		finding.Severity = normalizeSeverityToken(finding.Severity)
-		finding.TimeHorizon = normalizeTimeHorizonToken(finding.TimeHorizon)
+		finding.TargetType = strings.TrimSpace(strings.ToLower(finding.TargetType))
+		finding.StressorType = strings.TrimSpace(strings.ToLower(finding.StressorType))
+		finding.Mechanism = strings.TrimSpace(strings.ToLower(finding.Mechanism))
 		finding.ArtifactKey = strings.TrimPrefix(strings.TrimSpace(finding.ArtifactKey), "/")
 		finding.SupplyLinkRef = strings.TrimSpace(finding.SupplyLinkRef)
 		finding.ProductRef = strings.TrimSpace(finding.ProductRef)
@@ -2263,7 +1630,7 @@ func (c *IdentifyStressesCanvas) applyFindingBatch(ctx context.Context, tenantID
 	}, nil
 }
 
-func (c *IdentifyStressesCanvas) upsertStressFacts(ctx context.Context, tenantID string, lens *horizonmodels.Lens, finding StressFinding, quasiSourceID string, groundingEvidence []StressEvidence, now time.Time) (*coremodels.OntologyFact, *coremodels.OntologyFact, error) {
+func (c *IdentifyStressesCanvas) upsertStressFacts(ctx context.Context, tenantID string, _ *horizonmodels.Lens, finding StressFinding, quasiSourceID string, groundingEvidence []StressEvidence, now time.Time) (*coremodels.OntologyFact, *coremodels.OntologyFact, error) {
 	if c.factsRepo == nil {
 		return nil, nil, nil
 	}
@@ -2961,9 +2328,7 @@ func (c *IdentifyStressesCanvas) buildGroundedSynthesisPrompt(lens *horizonmodel
 	var b strings.Builder
 	b.WriteString("You are identifying current supply-chain stressors for a Horizon lens.\n")
 	b.WriteString("Return a compact research dossier grounded in current web search evidence.\n")
-	b.WriteString("Do not generalize beyond the scope. Prefer stressors active now or very recently active.\n")
-	b.WriteString("Write the dossier in a machine-friendly plain-text format so a second model can convert it into strict JSON without ambiguity.\n")
-	b.WriteString("Do not write markdown tables. Do not write code fences. Do not write prose essays.\n\n")
+	b.WriteString("Do not generalize beyond the scope. Prefer stressors active now or very recently active.\n\n")
 	b.WriteString("Lens:\n")
 	b.WriteString(fmt.Sprintf("- lensId: %s\n- projectId: %s\n", strings.TrimSpace(lens.ID), strings.TrimSpace(lens.ProjectID)))
 	if scope.SelectedCanonicalPath != "" {
@@ -3015,94 +2380,27 @@ func (c *IdentifyStressesCanvas) buildGroundedSynthesisPrompt(lens *horizonmodel
 			b.WriteString("- " + ref + "\n")
 		}
 	}
-	if len(scope.VisibleRelations) > 0 {
-		b.WriteString("\nVisible graph relations on the map:\n")
-		for _, relation := range scope.VisibleRelations {
-			b.WriteString(fmt.Sprintf("- source=%s | target=%s | type=%s | family=%s | role=%s | criticality=%.3f | edgeId=%s\n",
-				strings.TrimSpace(relation.SourceCanonicalPath),
-				strings.TrimSpace(relation.TargetCanonicalPath),
-				strings.TrimSpace(relation.RelationType),
-				strings.TrimSpace(relation.RelationFamily),
-				strings.TrimSpace(relation.RelationRole),
-				relation.Criticality,
-				strings.TrimSpace(relation.EdgeID),
-			))
-			if relation.BusinessMeaning != "" {
-				b.WriteString("  businessMeaning: " + relation.BusinessMeaning + "\n")
-			}
-			if relation.WhyRelevant != "" {
-				b.WriteString("  whyRelevant: " + relation.WhyRelevant + "\n")
-			}
-		}
-	}
 	b.WriteString("\nResearch task:\n")
 	b.WriteString("- Identify sanctions, export-controls, customs friction, port/border congestion, route disruption, carrier/service interruption, supplier outage, capacity shock, inventory shortfall, regulatory block, security conflict, natural hazard, labor action, insurance or finance restrictions, cyber operational disruption.\n")
-	b.WriteString("- Focus on direct impacts to listed products, shipments, supply links, paths, legs, orgs, facilities, and affected zones.\n")
-	b.WriteString("- Prefer findings that bind to an allowed artifactKey, supplyLinkRef, or path leg whenever the evidence can reasonably be mapped to a listed shipment or route.\n")
-	b.WriteString("- If the evidence names only a node or facility, still explain which listed products or deliveries are affected and attach the matching artifactKey or supplyLinkRef when possible.\n")
-	b.WriteString("- Avoid generic country-level risk blur unless it directly explains a listed product flow, plant, exporter, importer, port, pipeline, or shipment path.\n")
+	b.WriteString("- Focus on direct impacts to listed nodes, supply links, products, paths, legs, and affected zones.\n")
 	b.WriteString("- For each stressor mention the best matching target refs from scope, current severity, why it matters operationally, affected zones if any, and concrete metrics or booleans implied by evidence.\n")
 	b.WriteString("- Include source URLs inline in the dossier.\n")
 	b.WriteString("- Prefer concise blocks per target.\n")
-	b.WriteString("\nRequired dossier format for each finding:\n")
-	b.WriteString("FINDING <number>\n")
-	b.WriteString("targetType: <node|supply_link|path|path_leg|product_on_link>\n")
-	b.WriteString("targetRefs: <comma-separated canonical refs from scope>\n")
-	b.WriteString("artifactKey: <artifact key from scope or empty>\n")
-	b.WriteString("legIndex: <integer or empty>\n")
-	b.WriteString("supplyLinkRef: <canonical supply-link ref or empty>\n")
-	b.WriteString("productRef: <canonical product ref or empty>\n")
-	b.WriteString("stressorType: <allowed taxonomy value>\n")
-	b.WriteString("primaryMechanism: <allowed mechanism value>\n")
-	b.WriteString("severity: <low|medium|high|critical>\n")
-	b.WriteString("confidence: <number 0..1>\n")
-	b.WriteString("effectiveAt: <RFC3339 date-time, YYYY-MM-DD, or empty>\n")
-	b.WriteString("timeHorizon: <immediate|near_term|medium_term|long_term|unknown>\n")
-	b.WriteString("geoRefs: <comma-separated canonical refs>\n")
-	b.WriteString("flowRefs: <comma-separated canonical refs>\n")
-	b.WriteString("zoneRefs: <comma-separated canonical refs>\n")
-	b.WriteString("affectedZoneRefs: <comma-separated canonical refs>\n")
-	b.WriteString("metricImpacts: <semicolon-separated items metricKey=value unit|scope|confidence>\n")
-	b.WriteString("qualifierDeltas: <semicolon-separated key=value items>\n")
-	b.WriteString("summary: <1-3 sentences>\n")
-	b.WriteString("evidence: <one URL per line prefixed by '- '>\n")
-	b.WriteString("\nRules:\n")
-	b.WriteString("- Use only refs and artifact keys that appear in the supplied scope.\n")
-	b.WriteString("- Do not invent targets outside the scope.\n")
-	b.WriteString("- Prefer business-meaningful findings: product shortage, route blockage, export restriction, plant outage, customs friction, carrier interruption, or sanctions impact on a real shipment or supply dependency.\n")
-	b.WriteString("- When several node-only facts roll up into the same product flow, emit the path/path_leg/supply_link impact instead of duplicating weak node-only findings.\n")
-	b.WriteString("- confidence must always be numeric, never words, never quoted.\n")
-	b.WriteString("- metric values should be explicit numbers or booleans when possible.\n")
-	b.WriteString("- If the evidence is weak, lower confidence instead of adding prose hedging.\n")
 	return b.String()
 }
 
-func (c *IdentifyStressesCanvas) buildNormalizationPrompt(lens *horizonmodels.Lens, scope *identifyStressScope, grounded string) string {
+func (c *IdentifyStressesCanvas) buildNormalizationPrompt(_ *horizonmodels.Lens, scope *identifyStressScope, grounded string) string {
 	var b strings.Builder
-	b.WriteString("Normalize the grounded research dossier into one strict JSON object.\n")
-	b.WriteString("Return JSON only. Do not return markdown. Do not return code fences. Do not return commentary. Do not return any text before or after the JSON object.\n")
-	b.WriteString("The response MUST be valid JSON starting with '{' and ending with '}'.\n")
-	b.WriteString("The JSON shape MUST be exactly {\"findings\":[...]}. If there are no valid findings, return {\"findings\":[]}.\n")
+	b.WriteString("Normalize the grounded research dossier into strict JSON.\n")
+	b.WriteString("Return JSON only with shape {\"findings\":[...]}\n")
 	b.WriteString("Every finding must stay inside the provided scope.\n")
 	b.WriteString("Allowed targetType values: node, supply_link, path, path_leg, product_on_link.\n")
 	b.WriteString("Allowed stressorType values: sanctions, export_controls, customs_restrictions, port_or_border_congestion, route_disruption, carrier_or_service_interruption, supplier_outage, capacity_drop, inventory_shortfall, regulatory_block, security_conflict, natural_hazard, labor_action, insurance_finance_restriction, cyber_operational_disruption.\n")
 	b.WriteString("Allowed mechanism values: control_exposure, customs_friction, route_fragility, inventory_vulnerability, service_dependency, sole_source_lock_in, low_substitutability.\n")
 	b.WriteString("Allowed severity values: low, medium, high, critical.\n")
-	b.WriteString("For each finding include these fields exactly: id, targetType, targetRefs, artifactKey, legIndex, supplyLinkRef, productRef, stressorType, mechanism, severity, confidence, effectiveAt, timeHorizon, geoRefs, flowRefs, zoneRefs, affectedZoneRefs, metricObservations, qualifierDeltas, evidence, summary, eventType, factType.\n")
-	b.WriteString("metricObservations items shape: {\"metricKey\":\"string\",\"value\":number|boolean,\"unit\":\"string\",\"confidence\":number,\"scope\":\"string\",\"description\":\"string\"}\n")
-	b.WriteString("evidence items shape: {\"url\":\"string\",\"title\":\"string\",\"snippet\":\"string\",\"domain\":\"string\"}\n")
-	b.WriteString("qualifierDeltas must be a JSON object with string keys and scalar JSON values.\n")
-	b.WriteString("Use [] for empty arrays, {} for empty qualifierDeltas, and \"\" for empty optional strings. Do not use null.\n")
-	b.WriteString("confidence must always be a JSON number between 0 and 1. Never return it as a string.\n")
-	b.WriteString("legIndex must be an integer or 0 when unknown for a path_leg finding; use 0 for non-leg findings.\n")
-	b.WriteString("If a value is unknown, keep the field but use an empty string, empty array, empty object, or 0 as appropriate.\n")
-	b.WriteString("Do not invent refs, artifact keys, metrics, or evidence that are not supported by the dossier.\n")
-	b.WriteString("Do not merge distinct stressors into one finding if they affect different targets or mechanisms.\n")
-	b.WriteString("Prefer findings that point to a real shipment, supply link, path, or path_leg over generic node-only findings when both are possible from the dossier.\n")
-	b.WriteString("If a node-only stressor clearly affects one or more listed supply paths, copy the matching artifactKey and supplyLinkRef into the finding.\n")
-	b.WriteString("Use concise summaries only.\n")
-	b.WriteString("\nExample output shape:\n")
-	b.WriteString("{\"findings\":[{\"id\":\"stress_example\",\"targetType\":\"path_leg\",\"targetRefs\":[\"/org/example-supplier\"],\"artifactKey\":\"artifact/example\",\"legIndex\":2,\"supplyLinkRef\":\"/supply-link/example\",\"productRef\":\"/product/example\",\"stressorType\":\"route_disruption\",\"mechanism\":\"route_fragility\",\"severity\":\"high\",\"confidence\":0.84,\"effectiveAt\":\"2026-03-19\",\"timeHorizon\":\"immediate\",\"geoRefs\":[\"/geo/example-port\"],\"flowRefs\":[],\"zoneRefs\":[],\"affectedZoneRefs\":[],\"metricObservations\":[{\"metricKey\":\"path_stress_score\",\"value\":0.81,\"unit\":\"score\",\"confidence\":0.84,\"scope\":\"path_leg\",\"description\":\"Route disruption materially increases leg stress.\"}],\"qualifierDeltas\":{\"bottleneck\":true},\"evidence\":[{\"url\":\"https://example.com\",\"title\":\"Example\",\"snippet\":\"Short evidence snippet.\",\"domain\":\"example.com\"}],\"summary\":\"Brief summary.\",\"eventType\":\"route_disruption\",\"factType\":\"stress_finding\"}]}\n")
+	b.WriteString("For each finding include: id, targetType, targetRefs, artifactKey, legIndex, supplyLinkRef, productRef, stressorType, mechanism, severity, confidence, effectiveAt, timeHorizon, geoRefs, flowRefs, zoneRefs, affectedZoneRefs, metricObservations, qualifierDeltas, evidence, summary, eventType, factType.\n")
+	b.WriteString("metricObservations items shape: {metricKey,value,unit,confidence,scope,description}\n")
+	b.WriteString("evidence items shape: {url,title,snippet,domain}\n")
 	b.WriteString("Only use artifactKey values from this list:\n")
 	for _, key := range scope.ArtifactKeys {
 		b.WriteString("- " + strings.TrimPrefix(strings.TrimSpace(key), "/") + "\n")
@@ -3117,18 +2415,6 @@ func (c *IdentifyStressesCanvas) buildNormalizationPrompt(lens *horizonmodels.Le
 			b.WriteString("- " + ref + "\n")
 		}
 	}
-	if len(scope.VisibleRelations) > 0 {
-		b.WriteString("Visible graph relations to respect:\n")
-		for _, relation := range scope.VisibleRelations {
-			b.WriteString(fmt.Sprintf("- %s -> %s | type=%s | role=%s | edgeId=%s\n",
-				strings.TrimSpace(relation.SourceCanonicalPath),
-				strings.TrimSpace(relation.TargetCanonicalPath),
-				strings.TrimSpace(relation.RelationType),
-				strings.TrimSpace(relation.RelationRole),
-				strings.TrimSpace(relation.EdgeID),
-			))
-		}
-	}
 	b.WriteString("\nGrounded dossier:\n")
 	b.WriteString(grounded)
 	return b.String()
@@ -3139,159 +2425,6 @@ func (c *IdentifyStressesCanvas) publish(ctx context.Context, eventType string, 
 		return nil
 	}
 	return c.publisher(ctx, eventType, firstNonEmptyString(tenantID, "global"), payload)
-}
-
-func normalizeVisibleRelations(in []IdentifyStressVisibleRelation) []IdentifyStressVisibleRelation {
-	if len(in) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(in))
-	out := make([]IdentifyStressVisibleRelation, 0, len(in))
-	for _, raw := range in {
-		rel := IdentifyStressVisibleRelation{
-			EdgeID:              strings.TrimSpace(raw.EdgeID),
-			SourceCanonicalPath: strings.TrimSpace(raw.SourceCanonicalPath),
-			TargetCanonicalPath: strings.TrimSpace(raw.TargetCanonicalPath),
-			RelationType:        strings.TrimSpace(strings.ToUpper(raw.RelationType)),
-			RelationFamily:      strings.TrimSpace(strings.ToLower(raw.RelationFamily)),
-			RelationRole:        strings.TrimSpace(strings.ToLower(raw.RelationRole)),
-			BusinessMeaning:     strings.TrimSpace(raw.BusinessMeaning),
-			WhyRelevant:         strings.TrimSpace(raw.WhyRelevant),
-			Criticality:         raw.Criticality,
-		}
-		if rel.SourceCanonicalPath == "" && rel.TargetCanonicalPath == "" && rel.EdgeID == "" {
-			continue
-		}
-		key := strings.Join([]string{
-			rel.EdgeID,
-			rel.SourceCanonicalPath,
-			rel.TargetCanonicalPath,
-			rel.RelationType,
-			rel.RelationRole,
-		}, "|")
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, rel)
-	}
-	return out
-}
-
-func prioritizeVisibleRelations(in []IdentifyStressVisibleRelation, selected string, preferredNodeRefs []string, limit int) []IdentifyStressVisibleRelation {
-	if len(in) == 0 {
-		return nil
-	}
-	if limit <= 0 {
-		limit = defaultIdentifyStressesMaxRelations
-	}
-	preferredSet := make(map[string]struct{}, len(preferredNodeRefs)+1)
-	for _, ref := range preferredNodeRefs {
-		ref = strings.TrimSpace(ref)
-		if ref != "" {
-			preferredSet[ref] = struct{}{}
-		}
-	}
-	selected = strings.TrimSpace(selected)
-	if selected != "" {
-		preferredSet[selected] = struct{}{}
-	}
-	type scoredRelation struct {
-		relation IdentifyStressVisibleRelation
-		score    float64
-	}
-	scored := make([]scoredRelation, 0, len(in))
-	for _, rel := range in {
-		score := 0.0
-		source := strings.TrimSpace(rel.SourceCanonicalPath)
-		target := strings.TrimSpace(rel.TargetCanonicalPath)
-		relType := strings.ToUpper(strings.TrimSpace(rel.RelationType))
-		family := strings.ToLower(strings.TrimSpace(rel.RelationFamily))
-		role := strings.ToLower(strings.TrimSpace(rel.RelationRole))
-
-		if selected != "" && (source == selected || target == selected) {
-			score += 200
-		}
-		if _, ok := preferredSet[source]; ok {
-			score += 50
-		}
-		if _, ok := preferredSet[target]; ok {
-			score += 50
-		}
-		switch role {
-		case "path_leg":
-			score += 160
-		case "direct":
-			score += 80
-		case "context":
-			score += 45
-		case "propagation":
-			score += 15
-		case "lens_edge":
-			score += 10
-		}
-		switch family {
-		case "supply_path":
-			score += 120
-		case "supply_chain":
-			score += 90
-		case "dependency":
-			score += 55
-		case "propagation":
-			score += 10
-		}
-		switch relType {
-		case "SUPPLY_PATH_LEG", "SUPPLIES_TO", "SUPPLY_LINK", "DELIVERS_TO":
-			score += 100
-		case "DEPENDS_ON", "RELIES_ON", "USES":
-			score += 60
-		case "LOCATED_IN", "HAS_MARKET_SEGMENT":
-			score -= 80
-		case "INFLUENCES":
-			score -= 20
-		}
-		if rel.Criticality > 0 {
-			score += rel.Criticality * 100
-		}
-		if strings.TrimSpace(rel.BusinessMeaning) != "" {
-			score += 10
-		}
-		if strings.TrimSpace(rel.WhyRelevant) != "" {
-			score += 10
-		}
-		if score <= 0 {
-			continue
-		}
-		scored = append(scored, scoredRelation{relation: rel, score: score})
-	}
-	sort.SliceStable(scored, func(i, j int) bool {
-		if scored[i].score != scored[j].score {
-			return scored[i].score > scored[j].score
-		}
-		left := scored[i].relation
-		right := scored[j].relation
-		return strings.Join([]string{
-			left.RelationRole,
-			left.RelationType,
-			left.SourceCanonicalPath,
-			left.TargetCanonicalPath,
-			left.EdgeID,
-		}, "|") < strings.Join([]string{
-			right.RelationRole,
-			right.RelationType,
-			right.SourceCanonicalPath,
-			right.TargetCanonicalPath,
-			right.EdgeID,
-		}, "|")
-	})
-	if len(scored) > limit {
-		scored = scored[:limit]
-	}
-	out := make([]IdentifyStressVisibleRelation, 0, len(scored))
-	for _, item := range scored {
-		out = append(out, item.relation)
-	}
-	return out
 }
 
 func (c *IdentifyStressesCanvas) publishNodeUpsert(ctx context.Context, tenantID string, fragment *horizonmodels.HorizonFragment, operation string) error {
@@ -3634,30 +2767,6 @@ func collectSupplyLinkRefsFromArtifact(artifact *horizonmodels.MaterializedArtif
 	return uniqueCanonicalRefs(out)
 }
 
-func artifactContainsLegEndpoints(artifact *horizonmodels.MaterializedArtifact, sourceRef, targetRef string) bool {
-	if artifact == nil {
-		return false
-	}
-	sourceRef = strings.TrimSpace(sourceRef)
-	targetRef = strings.TrimSpace(targetRef)
-	if sourceRef == "" || targetRef == "" {
-		return false
-	}
-	parsed, err := horizonmodels.ParseSupplyChainPathPayload(artifact.Payload)
-	if err != nil || parsed == nil {
-		return false
-	}
-	for _, leg := range parsed.Legs {
-		if strings.TrimSpace(leg.SupplierRef) == sourceRef && strings.TrimSpace(leg.CustomerRef) == targetRef {
-			return true
-		}
-		if strings.TrimSpace(leg.SupplierRef) == targetRef && strings.TrimSpace(leg.CustomerRef) == sourceRef {
-			return true
-		}
-	}
-	return false
-}
-
 func collectArtifactNodeRefs(artifact *horizonmodels.MaterializedArtifact) []string {
 	if artifact == nil {
 		return nil
@@ -3703,113 +2812,145 @@ func collectArtifactProductRefs(artifact *horizonmodels.MaterializedArtifact) []
 	return uniqueCanonicalRefs(out)
 }
 
-func setFromStrings(values []string) map[string]struct{} {
-	set := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		set[value] = struct{}{}
+func cloneMetricValueMap(in map[string]horizonmodels.MetricValue) map[string]horizonmodels.MetricValue {
+	if len(in) == 0 {
+		return nil
 	}
-	return set
+	out := make(map[string]horizonmodels.MetricValue, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
-func overlapCount(values []string, set map[string]struct{}) int {
-	if len(values) == 0 || len(set) == 0 {
-		return 0
+func sortedMetricKeys(metrics map[string]horizonmodels.MetricValue) []string {
+	if len(metrics) == 0 {
+		return nil
 	}
-	count := 0
-	seen := map[string]struct{}{}
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		if _, ok := set[value]; ok {
-			count++
-		}
+	keys := make([]string, 0, len(metrics))
+	for key := range metrics {
+		keys = append(keys, key)
 	}
-	return count
+	sort.Strings(keys)
+	return keys
 }
 
-func bestProductRefForArtifact(artifact *horizonmodels.MaterializedArtifact, finding StressFinding) string {
-	productRefs := collectArtifactProductRefs(artifact)
-	for _, targetRef := range finding.TargetRefs {
-		if containsString(productRefs, targetRef) {
-			return targetRef
+func buildIdentifyPathEdgeQualifiers(metrics map[string]horizonmodels.MetricValue, leg horizonmodels.SupplyChainPathLeg, role string, legOrder int) map[string]interface{} {
+	qualifiers := map[string]interface{}{
+		"role":              role,
+		"segmentConfidence": leg.SegmentConfidence,
+		"legOrder":          legOrder,
+	}
+	if leg.Mode != "" {
+		qualifiers[horizonmodels.QualifierRouteMode] = leg.Mode
+	}
+	if len(leg.GeoRefs) > 0 {
+		qualifiers[horizonmodels.QualifierGeoRefs] = append([]string(nil), leg.GeoRefs...)
+	}
+	if len(leg.FlowRefs) > 0 {
+		qualifiers[horizonmodels.QualifierFlowRefs] = append([]string(nil), leg.FlowRefs...)
+	}
+	if len(leg.AlternateFlowRefs) > 0 {
+		qualifiers[horizonmodels.QualifierAlternateFlowRefs] = append([]string(nil), leg.AlternateFlowRefs...)
+	}
+	if len(leg.ZoneRefs) > 0 {
+		qualifiers[horizonmodels.QualifierZoneRefs] = append([]string(nil), leg.ZoneRefs...)
+	}
+	if len(leg.AffectedZoneRefs) > 0 {
+		qualifiers[horizonmodels.QualifierAffectedZoneRefs] = append([]string(nil), leg.AffectedZoneRefs...)
+	}
+	if len(leg.SpatialSemantics) > 0 {
+		qualifiers[horizonmodels.QualifierSpatialSemantics] = append([]string(nil), leg.SpatialSemantics...)
+	}
+	if leg.BindingConfidence > 0 {
+		qualifiers[horizonmodels.QualifierBindingConfidence] = leg.BindingConfidence
+	}
+	if leg.Stress != nil {
+		qualifiers[horizonmodels.QualifierPathStressScore] = leg.Stress.StressScore
+		qualifiers[horizonmodels.QualifierPathFragility] = leg.Stress.Fragility
+		qualifiers[horizonmodels.QualifierPathRerouteability] = leg.Stress.Rerouteability
+		qualifiers[horizonmodels.QualifierPathZonePressure] = leg.Stress.ZonePressure
+		qualifiers[horizonmodels.QualifierPathAffectedPressure] = leg.Stress.AffectedZonePressure
+		qualifiers[horizonmodels.QualifierRecoveryLatencyHours] = leg.Stress.RecoveryLatencyHrs
+		if len(leg.Stress.DominantFactors) > 0 {
+			qualifiers["dominantFactors"] = append([]string(nil), leg.Stress.DominantFactors...)
 		}
 	}
-	if finding.ProductRef != "" && containsString(productRefs, finding.ProductRef) {
-		return finding.ProductRef
+	if len(leg.TransportViaRefs) > 0 {
+		qualifiers[horizonmodels.QualifierTransportVia] = append([]string(nil), leg.TransportViaRefs...)
 	}
-	if strings.TrimSpace(artifact.ProductAxis) != "" {
-		return strings.TrimSpace(artifact.ProductAxis)
+	if leg.VesselType != "" {
+		qualifiers["vesselType"] = leg.VesselType
 	}
-	if len(productRefs) > 0 {
-		return productRefs[0]
+	if len(metrics) > 0 {
+		qualifiers["metricKeys"] = sortedMetricKeys(metrics)
 	}
-	return ""
+	return qualifiers
 }
 
-func identifyScopeArtifactRef(artifact *horizonmodels.MaterializedArtifact) horizonmodels.ScopeArtifactRef {
-	if artifact == nil {
-		return horizonmodels.ScopeArtifactRef{}
+func identifyCanonicalSlug(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ""
 	}
-	horizonmodels.PopulateSupplyChainPathIndexes(artifact)
-	ref := horizonmodels.ScopeArtifactRef{
-		Kind:             string(artifact.Kind),
-		DisplayName:      strings.TrimSpace(artifact.DisplayName),
-		AnchorSupplier:   strings.TrimSpace(artifact.AnchorSupplier),
-		AnchorCustomer:   strings.TrimSpace(artifact.AnchorCustomer),
-		ProductAxis:      strings.TrimSpace(artifact.ProductAxis),
-		NodeRefs:         uniqueCanonicalRefs(append([]string(nil), artifact.NodeRefs...)),
-		Status:           strings.TrimSpace(artifact.PathStatus),
-		GeoRefs:          uniqueCanonicalRefs(append([]string(nil), artifact.GeoRefs...)),
-		FlowRefs:         uniqueCanonicalRefs(append([]string(nil), artifact.FlowRefs...)),
-		ZoneRefs:         uniqueCanonicalRefs(append([]string(nil), artifact.ZoneRefs...)),
-		AffectedZoneRefs: uniqueCanonicalRefs(append([]string(nil), artifact.AffectedZoneRefs...)),
+	return strings.Trim(strings.ReplaceAll(ref, "/", "_"), "_")
+}
+
+func buildIdentifyStructuralPathKey(tenantID, supplierRef, productRef, customerRef string) string {
+	supplierSlug := identifyCanonicalSlug(supplierRef)
+	productSlug := identifyCanonicalSlug(productRef)
+	customerSlug := identifyCanonicalSlug(customerRef)
+	if supplierSlug == "" || productSlug == "" || customerSlug == "" {
+		return ""
 	}
-	if artifact.Kind != horizonmodels.MaterializedKindSupplyChainPath {
+	return fmt.Sprintf("/supply-chain/%s/%s/%s/%s", firstNonEmptyString(strings.TrimSpace(tenantID), "global"), supplierSlug, productSlug, customerSlug)
+}
+
+func bestEffortRefLabel(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(ref, "/"), "/")
+	if len(parts) == 0 {
 		return ref
 	}
-	parsed, err := horizonmodels.ParseSupplyChainPathPayload(artifact.Payload)
-	if err != nil || parsed == nil {
-		return ref
+	slug := parts[len(parts)-1]
+	slug = strings.ReplaceAll(slug, "-", " ")
+	slug = strings.ReplaceAll(slug, "_", " ")
+	words := strings.Fields(slug)
+	for i, word := range words {
+		if word == "" {
+			continue
+		}
+		words[i] = strings.ToUpper(word[:1]) + word[1:]
 	}
-	summary := horizonmodels.SummarizeSupplyChainPathBindings(parsed)
-	ref.GeoRefs = summary.GeoRefs
-	ref.FlowRefs = summary.FlowRefs
-	ref.ZoneRefs = summary.ZoneRefs
-	ref.AffectedZoneRefs = summary.AffectedZoneRefs
-	ref.SpatialSemantics = summary.SpatialSemantics
-	ref.LegCount = summary.LegCount
-	ref.BindingConfidence = summary.BindingConfidence
-	ref.PathStressScore = summary.PathStressScore
-	ref.BottleneckLegIndex = summary.BottleneckLegIndex
-	ref.RecoveryLatencyHrs = summary.RecoveryLatencyHrs
-	return ref
+	return strings.Join(words, " ")
 }
 
-func isIdentifySyntheticArtifact(artifact *horizonmodels.MaterializedArtifact) bool {
-	if artifact == nil {
-		return false
+func buildIdentifyArtifactDisplayName(supplierRef, productRef, customerRef string) string {
+	return strings.TrimSpace(fmt.Sprintf("%s -> %s -> %s", bestEffortRefLabel(supplierRef), bestEffortRefLabel(productRef), bestEffortRefLabel(customerRef)))
+}
+
+func buildIdentifyArtifactLabels(supplierRef, productRef, customerRef string) map[string]string {
+	return map[string]string{
+		"supplier": bestEffortRefLabel(supplierRef),
+		"product":  bestEffortRefLabel(productRef),
+		"customer": bestEffortRefLabel(customerRef),
 	}
-	if strings.TrimSpace(artifact.CreatedBy) == "identify_stresses:bootstrap_supply_link" || strings.TrimSpace(artifact.UpdatedBy) == "identify_stresses:bootstrap_supply_link" {
-		return true
+}
+
+func supplyPathNodeType(ref string) string {
+	switch {
+	case strings.HasPrefix(ref, "/product/"):
+		return "product"
+	case strings.HasPrefix(ref, "/fac/"):
+		return "fac"
+	case strings.HasPrefix(ref, "/deposit/"):
+		return "deposit"
+	default:
+		return "org"
 	}
-	if raw, ok := artifact.Payload["notes"]; ok {
-		if notes, ok := raw.(map[string]interface{}); ok {
-			if flag, ok := notes["bootstrapSynthetic"].(bool); ok {
-				return flag
-			}
-		}
-	}
-	return false
 }
 
 func buildSingleSupplyLinkArtifact(fragment *horizonmodels.HorizonFragment, tenantID, lensID string) *horizonmodels.MaterializedArtifact {
@@ -3983,286 +3124,6 @@ func buildSingleSupplyLinkArtifact(fragment *horizonmodels.HorizonFragment, tena
 	}
 	horizonmodels.PopulateMaterializedArtifactIndexes(artifact)
 	return artifact
-}
-
-func buildIdentifyStructuralPathKey(tenantID, supplierRef, productRef, customerRef string) string {
-	supplierSlug := identifyCanonicalSlug(supplierRef)
-	productSlug := identifyCanonicalSlug(productRef)
-	customerSlug := identifyCanonicalSlug(customerRef)
-	if supplierSlug == "" || productSlug == "" || customerSlug == "" {
-		return ""
-	}
-	return fmt.Sprintf("/supply-chain/%s/%s/%s/%s", firstNonEmptyString(strings.TrimSpace(tenantID), "global"), supplierSlug, productSlug, customerSlug)
-}
-
-func identifyCanonicalSlug(ref string) string {
-	ref = strings.TrimSpace(ref)
-	if ref == "" {
-		return ""
-	}
-	return strings.Trim(strings.ReplaceAll(ref, "/", "_"), "_")
-}
-
-func buildIdentifyArtifactDisplayName(supplierRef, productRef, customerRef string) string {
-	return strings.TrimSpace(fmt.Sprintf("%s -> %s -> %s", bestEffortRefLabel(supplierRef), bestEffortRefLabel(productRef), bestEffortRefLabel(customerRef)))
-}
-
-func buildIdentifyArtifactLabels(supplierRef, productRef, customerRef string) map[string]string {
-	return map[string]string{
-		"supplier": bestEffortRefLabel(supplierRef),
-		"product":  bestEffortRefLabel(productRef),
-		"customer": bestEffortRefLabel(customerRef),
-	}
-}
-
-func supplyPathNodeType(ref string) string {
-	switch {
-	case strings.HasPrefix(ref, "/product/"):
-		return "product"
-	case strings.HasPrefix(ref, "/fac/"):
-		return "fac"
-	case strings.HasPrefix(ref, "/deposit/"):
-		return "deposit"
-	default:
-		return "org"
-	}
-}
-
-func bestEffortRefLabel(ref string) string {
-	ref = strings.TrimSpace(ref)
-	if ref == "" {
-		return ""
-	}
-	parts := strings.Split(strings.Trim(ref, "/"), "/")
-	if len(parts) == 0 {
-		return ref
-	}
-	slug := parts[len(parts)-1]
-	slug = strings.ReplaceAll(slug, "-", " ")
-	slug = strings.ReplaceAll(slug, "_", " ")
-	words := strings.Fields(slug)
-	for i, word := range words {
-		if word == "" {
-			continue
-		}
-		words[i] = strings.ToUpper(word[:1]) + word[1:]
-	}
-	return strings.Join(words, " ")
-}
-
-func cloneMetricValueMap(in map[string]horizonmodels.MetricValue) map[string]horizonmodels.MetricValue {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]horizonmodels.MetricValue, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
-}
-
-func buildIdentifyPathEdgeQualifiers(metrics map[string]horizonmodels.MetricValue, leg horizonmodels.SupplyChainPathLeg, role string, legOrder int) map[string]interface{} {
-	qualifiers := map[string]interface{}{
-		"role":              role,
-		"segmentConfidence": leg.SegmentConfidence,
-		"legOrder":          legOrder,
-	}
-	if leg.Mode != "" {
-		qualifiers[horizonmodels.QualifierRouteMode] = leg.Mode
-	}
-	if len(leg.GeoRefs) > 0 {
-		qualifiers[horizonmodels.QualifierGeoRefs] = append([]string(nil), leg.GeoRefs...)
-	}
-	if len(leg.FlowRefs) > 0 {
-		qualifiers[horizonmodels.QualifierFlowRefs] = append([]string(nil), leg.FlowRefs...)
-	}
-	if len(leg.AlternateFlowRefs) > 0 {
-		qualifiers[horizonmodels.QualifierAlternateFlowRefs] = append([]string(nil), leg.AlternateFlowRefs...)
-	}
-	if len(leg.ZoneRefs) > 0 {
-		qualifiers[horizonmodels.QualifierZoneRefs] = append([]string(nil), leg.ZoneRefs...)
-	}
-	if len(leg.AffectedZoneRefs) > 0 {
-		qualifiers[horizonmodels.QualifierAffectedZoneRefs] = append([]string(nil), leg.AffectedZoneRefs...)
-	}
-	if len(leg.SpatialSemantics) > 0 {
-		qualifiers[horizonmodels.QualifierSpatialSemantics] = append([]string(nil), leg.SpatialSemantics...)
-	}
-	if leg.BindingConfidence > 0 {
-		qualifiers[horizonmodels.QualifierBindingConfidence] = leg.BindingConfidence
-	}
-	if leg.Stress != nil {
-		qualifiers[horizonmodels.QualifierPathStressScore] = leg.Stress.StressScore
-		qualifiers[horizonmodels.QualifierPathFragility] = leg.Stress.Fragility
-		qualifiers[horizonmodels.QualifierPathRerouteability] = leg.Stress.Rerouteability
-		qualifiers[horizonmodels.QualifierPathZonePressure] = leg.Stress.ZonePressure
-		qualifiers[horizonmodels.QualifierPathAffectedPressure] = leg.Stress.AffectedZonePressure
-		qualifiers[horizonmodels.QualifierRecoveryLatencyHours] = leg.Stress.RecoveryLatencyHrs
-		if len(leg.Stress.DominantFactors) > 0 {
-			qualifiers["dominantFactors"] = append([]string(nil), leg.Stress.DominantFactors...)
-		}
-	}
-	if len(leg.TransportViaRefs) > 0 {
-		qualifiers[horizonmodels.QualifierTransportVia] = append([]string(nil), leg.TransportViaRefs...)
-	}
-	if leg.VesselType != "" {
-		qualifiers["vesselType"] = leg.VesselType
-	}
-	if len(metrics) > 0 {
-		qualifiers["metricKeys"] = sortedMetricKeys(metrics)
-	}
-	return qualifiers
-}
-
-func sortedMetricKeys(metrics map[string]horizonmodels.MetricValue) []string {
-	if len(metrics) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(metrics))
-	for key := range metrics {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func bestArtifactBindingForFinding(artifacts []*horizonmodels.MaterializedArtifact, finding StressFinding) artifactBindingMatch {
-	best := artifactBindingMatch{LegIndex: -1}
-	for _, artifact := range artifacts {
-		match := artifactBindingForFinding(artifact, finding)
-		if match.Artifact == nil {
-			continue
-		}
-		if match.Score > best.Score || (match.Score == best.Score && match.LegIndex >= 0 && (best.LegIndex < 0 || match.LegIndex < best.LegIndex)) {
-			best = match
-		}
-	}
-	return best
-}
-
-func artifactBindingForFinding(artifact *horizonmodels.MaterializedArtifact, finding StressFinding) artifactBindingMatch {
-	match := artifactBindingMatch{Artifact: artifact, LegIndex: -1}
-	if artifact == nil {
-		return match
-	}
-	score := 0.0
-	artifactKey := strings.TrimPrefix(strings.TrimSpace(artifact.CanonicalKey), "/")
-	if finding.ArtifactKey != "" && artifactKey == strings.TrimPrefix(strings.TrimSpace(finding.ArtifactKey), "/") {
-		score += 100
-	}
-	artifactProductRefs := collectArtifactProductRefs(artifact)
-	if finding.ProductRef != "" {
-		if containsString(artifactProductRefs, finding.ProductRef) {
-			score += 90
-			match.ProductMatched = true
-			match.ProductRef = strings.TrimSpace(finding.ProductRef)
-		} else {
-			score -= 80
-		}
-	}
-	artifactNodeRefs := collectArtifactNodeRefs(artifact)
-	targetMatchCount := 0
-	for _, targetRef := range finding.TargetRefs {
-		if containsString(artifactNodeRefs, targetRef) {
-			targetMatchCount++
-		}
-	}
-	score += float64(targetMatchCount) * 22
-	if strings.TrimSpace(artifact.AnchorSupplier) != "" && containsString(finding.TargetRefs, strings.TrimSpace(artifact.AnchorSupplier)) {
-		score += 18
-	}
-	if strings.TrimSpace(artifact.AnchorCustomer) != "" && containsString(finding.TargetRefs, strings.TrimSpace(artifact.AnchorCustomer)) {
-		score += 18
-	}
-
-	if finding.SupplyLinkRef != "" {
-		if containsString(collectSupplyLinkRefsFromArtifact(artifact), finding.SupplyLinkRef) {
-			score += 120
-			match.LinkMatched = true
-			match.LinkRef = strings.TrimSpace(finding.SupplyLinkRef)
-		} else {
-			score -= 60
-		}
-	}
-
-	parsed, err := horizonmodels.ParseSupplyChainPathPayload(artifact.Payload)
-	if err == nil && parsed != nil {
-		for _, leg := range parsed.Legs {
-			legScore := score
-			legMatchedProduct := match.ProductMatched
-			legMatchedLink := match.LinkMatched
-			productRef := strings.TrimSpace(match.ProductRef)
-			linkRef := strings.TrimSpace(match.LinkRef)
-			if finding.SupplyLinkRef != "" {
-				if strings.TrimSpace(leg.SupplyLinkCanonicalPath) == strings.TrimSpace(finding.SupplyLinkRef) {
-					legScore += 140
-					legMatchedLink = true
-					linkRef = strings.TrimSpace(finding.SupplyLinkRef)
-				} else {
-					legScore -= 10
-				}
-			}
-			if finding.ProductRef != "" {
-				if strings.TrimSpace(leg.ProductRef) == strings.TrimSpace(finding.ProductRef) {
-					legScore += 100
-					legMatchedProduct = true
-					productRef = strings.TrimSpace(finding.ProductRef)
-				} else if strings.TrimSpace(leg.ProductRef) != "" {
-					legScore -= 50
-				}
-			}
-			for _, targetRef := range finding.TargetRefs {
-				if targetRef == strings.TrimSpace(leg.SupplierRef) || targetRef == strings.TrimSpace(leg.CustomerRef) {
-					legScore += 24
-				}
-			}
-			if hasOverlap(finding.GeoRefs, leg.GeoRefs) {
-				legScore += 8
-			}
-			if hasOverlap(finding.ZoneRefs, leg.ZoneRefs) || hasOverlap(finding.AffectedZoneRefs, leg.AffectedZoneRefs) {
-				legScore += 8
-			}
-			if legScore > match.Score || (legScore == match.Score && leg.Index >= 0 && (match.LegIndex < 0 || leg.Index < match.LegIndex)) {
-				match.Score = legScore
-				match.LegIndex = leg.Index
-				match.LinkRef = firstNonEmptyString(linkRef, strings.TrimSpace(leg.SupplyLinkCanonicalPath))
-				match.ProductRef = firstNonEmptyString(productRef, strings.TrimSpace(leg.ProductRef), strings.TrimSpace(artifact.ProductAxis))
-				match.ProductMatched = legMatchedProduct
-				match.LinkMatched = legMatchedLink
-			}
-		}
-	}
-
-	if match.ProductRef == "" {
-		match.ProductRef = bestProductRefForArtifact(artifact, finding)
-	}
-	if match.Score == 0 {
-		match.Score = score
-	}
-	return match
-}
-
-func hasOverlap(left []string, right []string) bool {
-	if len(left) == 0 || len(right) == 0 {
-		return false
-	}
-	set := make(map[string]struct{}, len(left))
-	for _, item := range left {
-		item = strings.TrimSpace(item)
-		if item != "" {
-			set[item] = struct{}{}
-		}
-	}
-	for _, item := range right {
-		item = strings.TrimSpace(item)
-		if item == "" {
-			continue
-		}
-		if _, ok := set[item]; ok {
-			return true
-		}
-	}
-	return false
 }
 
 func parsedEdgeEndpointRefs(parsed *horizonmodels.SupplyChainPathPayload, edge horizonmodels.SupplyChainPathEdge) (string, string) {
@@ -4552,9 +3413,7 @@ func uniqueCanonicalRefs(values []string) []string {
 		if value == "" {
 			continue
 		}
-		if strings.HasPrefix(value, "/artifact/") {
-			value = strings.TrimPrefix(value, "/artifact/")
-		}
+		value = strings.TrimPrefix(value, "/artifact/")
 		if _, ok := seen[value]; ok {
 			continue
 		}
@@ -4664,6 +3523,210 @@ func cloneStringMap(raw interface{}) map[string]string {
 		}
 	}
 	return out
+}
+
+func coerceJSONInt(raw interface{}) (int, bool) {
+	switch v := raw.(type) {
+	case int:
+		return v, true
+	case int32:
+		return int(v), true
+	case int64:
+		return int(v), true
+	case uint:
+		return int(v), true
+	case uint32:
+		return int(v), true
+	case uint64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case float32:
+		return int(v), true
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return 0, false
+		}
+		parsed, err := strconv.Atoi(trimmed)
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	case json.Number:
+		parsed, err := v.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return int(parsed), true
+	default:
+		return 0, false
+	}
+}
+
+func normalizeVisibleRelations(in []IdentifyStressVisibleRelation) []IdentifyStressVisibleRelation {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]IdentifyStressVisibleRelation, 0, len(in))
+	for _, raw := range in {
+		rel := IdentifyStressVisibleRelation{
+			EdgeID:              strings.TrimSpace(raw.EdgeID),
+			SourceCanonicalPath: strings.TrimSpace(raw.SourceCanonicalPath),
+			TargetCanonicalPath: strings.TrimSpace(raw.TargetCanonicalPath),
+			RelationType:        strings.TrimSpace(strings.ToUpper(raw.RelationType)),
+			RelationFamily:      strings.TrimSpace(strings.ToLower(raw.RelationFamily)),
+			RelationRole:        strings.TrimSpace(strings.ToLower(raw.RelationRole)),
+			BusinessMeaning:     strings.TrimSpace(raw.BusinessMeaning),
+			WhyRelevant:         strings.TrimSpace(raw.WhyRelevant),
+			Criticality:         raw.Criticality,
+		}
+		if rel.SourceCanonicalPath == "" && rel.TargetCanonicalPath == "" && rel.EdgeID == "" {
+			continue
+		}
+		key := strings.Join([]string{
+			rel.EdgeID,
+			rel.SourceCanonicalPath,
+			rel.TargetCanonicalPath,
+			rel.RelationType,
+			rel.RelationRole,
+		}, "|")
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, rel)
+	}
+	return out
+}
+
+func prioritizeVisibleRelations(in []IdentifyStressVisibleRelation, selected string, preferredNodeRefs []string, limit int) []IdentifyStressVisibleRelation {
+	if len(in) == 0 {
+		return nil
+	}
+	if limit <= 0 {
+		limit = defaultIdentifyStressesMaxRelations
+	}
+	preferredSet := make(map[string]struct{}, len(preferredNodeRefs)+1)
+	for _, ref := range preferredNodeRefs {
+		ref = strings.TrimSpace(ref)
+		if ref != "" {
+			preferredSet[ref] = struct{}{}
+		}
+	}
+	selected = strings.TrimSpace(selected)
+	if selected != "" {
+		preferredSet[selected] = struct{}{}
+	}
+	type scoredRelation struct {
+		relation IdentifyStressVisibleRelation
+		score    float64
+	}
+	scored := make([]scoredRelation, 0, len(in))
+	for _, rel := range in {
+		score := 0.0
+		source := strings.TrimSpace(rel.SourceCanonicalPath)
+		target := strings.TrimSpace(rel.TargetCanonicalPath)
+		relType := strings.ToUpper(strings.TrimSpace(rel.RelationType))
+		family := strings.ToLower(strings.TrimSpace(rel.RelationFamily))
+		role := strings.ToLower(strings.TrimSpace(rel.RelationRole))
+
+		if selected != "" && (source == selected || target == selected) {
+			score += 200
+		}
+		if _, ok := preferredSet[source]; ok {
+			score += 50
+		}
+		if _, ok := preferredSet[target]; ok {
+			score += 50
+		}
+		switch role {
+		case "path_leg":
+			score += 160
+		case "direct":
+			score += 80
+		case "context":
+			score += 45
+		case "propagation":
+			score += 15
+		case "lens_edge":
+			score += 10
+		}
+		switch family {
+		case "supply_path":
+			score += 120
+		case "supply_chain":
+			score += 90
+		case "dependency":
+			score += 55
+		case "propagation":
+			score += 10
+		}
+		switch relType {
+		case "SUPPLY_PATH_LEG", "SUPPLIES_TO", "SUPPLY_LINK", "DELIVERS_TO":
+			score += 100
+		case "DEPENDS_ON", "RELIES_ON", "USES":
+			score += 60
+		case "LOCATED_IN", "HAS_MARKET_SEGMENT":
+			score -= 80
+		case "INFLUENCES":
+			score -= 20
+		}
+		if rel.Criticality > 0 {
+			score += rel.Criticality * 100
+		}
+		if strings.TrimSpace(rel.BusinessMeaning) != "" {
+			score += 10
+		}
+		if strings.TrimSpace(rel.WhyRelevant) != "" {
+			score += 10
+		}
+		if score <= 0 {
+			continue
+		}
+		scored = append(scored, scoredRelation{relation: rel, score: score})
+	}
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].score != scored[j].score {
+			return scored[i].score > scored[j].score
+		}
+		left := scored[i].relation
+		right := scored[j].relation
+		return strings.Join([]string{
+			left.RelationRole,
+			left.RelationType,
+			left.SourceCanonicalPath,
+			left.TargetCanonicalPath,
+			left.EdgeID,
+		}, "|") < strings.Join([]string{
+			right.RelationRole,
+			right.RelationType,
+			right.SourceCanonicalPath,
+			right.TargetCanonicalPath,
+			right.EdgeID,
+		}, "|")
+	})
+	if len(scored) > limit {
+		scored = scored[:limit]
+	}
+	out := make([]IdentifyStressVisibleRelation, 0, len(scored))
+	for _, item := range scored {
+		out = append(out, item.relation)
+	}
+	return out
+}
+
+func setFromStrings(values []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		set[value] = struct{}{}
+	}
+	return set
 }
 
 func findingCoordinates(finding StressFinding) (float64, float64, bool) {

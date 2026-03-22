@@ -8,22 +8,22 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
-	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
 // QueryResolver resolves QueryAddress to a list of canonical paths
 type QueryResolver struct {
-	fragmentsRepo *horizonrepo.HorizonFragmentsRepository
+	fragmentsRepo     *horizonrepo.HorizonFragmentsRepository
 	ontologyFactsRepo *corerepo.OntologyFactsRepository
 }
 
 // NewQueryResolver creates a new QueryResolver
 func NewQueryResolver(fragmentsRepo *horizonrepo.HorizonFragmentsRepository, ontologyFactsRepo *corerepo.OntologyFactsRepository) *QueryResolver {
 	return &QueryResolver{
-		fragmentsRepo:      fragmentsRepo,
-		ontologyFactsRepo:  ontologyFactsRepo,
+		fragmentsRepo:     fragmentsRepo,
+		ontologyFactsRepo: ontologyFactsRepo,
 	}
 }
 
@@ -31,7 +31,7 @@ func NewQueryResolver(fragmentsRepo *horizonrepo.HorizonFragmentsRepository, ont
 // Returns (canonicalPaths, error)
 func (r *QueryResolver) Resolve(ctx context.Context, tenantID string, queryAddress *QueryAddress) ([]string, error) {
 	startTime := time.Now()
-	
+
 	if queryAddress == nil {
 		return nil, fmt.Errorf("nil query address")
 	}
@@ -73,7 +73,7 @@ func (r *QueryResolver) Resolve(ctx context.Context, tenantID string, queryAddre
 	skippedCount := fetchedCount - matchedCount
 
 	duration := time.Since(startTime)
-	log.Printf("[QueryResolver] Resolved query %q: %d paths found (matched %d, skipped %d) in %v", 
+	log.Printf("[QueryResolver] Resolved query %q: %d paths found (matched %d, skipped %d) in %v",
 		queryAddress.Raw, len(canonicalPaths), matchedCount, skippedCount, duration)
 
 	return canonicalPaths, nil
@@ -388,7 +388,7 @@ func applySeed(q firestore.Query, t Term) firestore.Query {
 			return q.Where("homeLocation.iso3166_2", "==", strings.ToUpper(cc)+"-"+strings.ToUpper(admin1))
 		}
 		if cc != "" {
-			return q.Where("homeLocation.iso3166_1", "==", strings.ToLower(cc))
+			return q.Where("geoSlug", "==", strings.ToLower(cc))
 		}
 		return q
 	default:
@@ -440,20 +440,23 @@ func fragmentToView(f *models.HorizonFragment) *HorizonFragmentView {
 		CanonicalPath: f.CanonicalPath,
 		EntityPath:    f.EntityPath,
 		IndustryPaths: append([]string(nil), f.IndustryPaths...),
-		LocationPath:  buildLocationPath(f.HomeLocation),
+		LocationPath:  buildLocationPath(f.GeoSlug, f.HomeLocation),
 	}
 }
 
 // buildLocationPath builds a best-effort canonicalized location path for QueryAddress matching.
 // Canonical format: /loc/{country}[/{level1}[/{level2}]]
-// HorizonFragment stores only ISO3166-1 + ISO3166-2; we map to /loc/{country}/{level1}.
-func buildLocationPath(homeLocation *models.Location) string {
-	if homeLocation == nil || homeLocation.ISO3166_1 == nil || strings.TrimSpace(*homeLocation.ISO3166_1) == "" {
+// It prefers the fragment-level geoSlug and enriches it with admin1 from homeLocation when available.
+func buildLocationPath(geoSlug string, homeLocation *models.Location) string {
+	country := strings.ToLower(strings.TrimSpace(geoSlug))
+	if country == "" && homeLocation != nil && homeLocation.ISO3166_1 != nil {
+		country = strings.ToLower(strings.TrimSpace(*homeLocation.ISO3166_1))
+	}
+	if country == "" {
 		return ""
 	}
-	country := strings.ToLower(strings.TrimSpace(*homeLocation.ISO3166_1))
 	admin1 := "na"
-	if homeLocation.ISO3166_2 != nil && strings.TrimSpace(*homeLocation.ISO3166_2) != "" {
+	if homeLocation != nil && homeLocation.ISO3166_2 != nil && strings.TrimSpace(*homeLocation.ISO3166_2) != "" {
 		parts := strings.Split(strings.TrimSpace(*homeLocation.ISO3166_2), "-")
 		if len(parts) > 1 && strings.TrimSpace(parts[1]) != "" {
 			admin1 = strings.ToLower(strings.TrimSpace(parts[1]))

@@ -23,6 +23,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/graphenrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
 )
 
@@ -61,18 +62,19 @@ func getEdgeAffectCollector(ctx context.Context) func(string, string) {
 
 // DependencyEdgesRepository репозиторий для работы с DependencyEdge
 type DependencyEdgesRepository struct {
-	db               *firestore.Client
-	col              *firestore.CollectionRef
-	validationPolicy *policy.PolicyExecutor      // Optional: for edge validation
-	fragmentsRepo    *HorizonFragmentsRepository // Optional: for fragment type lookup
-	telemetryRepo    *HorizonTelemetryRepository // Optional: aggregated edge policy KPIs
-	onUpsert         func(ctx context.Context, edge *models.DependencyEdge)
-	storage          *gcp.GCSClient
-	bucket           string
-	useGCS           bool
-	uploadLimiter    *rate.Limiter
-	vertexSyncBatcher *VertexSyncBatcher
+	db                 *firestore.Client
+	col                *firestore.CollectionRef
+	validationPolicy   *policy.PolicyExecutor      // Optional: for edge validation
+	fragmentsRepo      *HorizonFragmentsRepository // Optional: for fragment type lookup
+	telemetryRepo      *HorizonTelemetryRepository // Optional: aggregated edge policy KPIs
+	onUpsert           func(ctx context.Context, edge *models.DependencyEdge)
+	storage            *gcp.GCSClient
+	bucket             string
+	useGCS             bool
+	uploadLimiter      *rate.Limiter
+	vertexSyncBatcher  *VertexSyncBatcher
 	vertexSearchDelete func(ctx context.Context, edgeID string) error
+	productDictionary  *productdict.Runtime
 }
 
 type EdgeUpdateOptions struct {
@@ -142,6 +144,11 @@ func (r *DependencyEdgesRepository) WithVertexSearchDelete(fn func(ctx context.C
 	return r
 }
 
+func (r *DependencyEdgesRepository) WithProductDictionary(dict *productdict.Runtime) *DependencyEdgesRepository {
+	r.productDictionary = dict
+	return r
+}
+
 func (r *DependencyEdgesRepository) resolveEndpointTypesAndPaths(ctx context.Context, edge *models.DependencyEdge) (sourceType, targetType, sourcePath, targetPath string) {
 	if r == nil || r.fragmentsRepo == nil || edge == nil {
 		return "", "", "", ""
@@ -157,6 +164,98 @@ func (r *DependencyEdgesRepository) resolveEndpointTypesAndPaths(ctx context.Con
 	srcTypeActual, _ := edgesemantics.ReconcileTypeWithCanonicalPath(models.FragmentType(sourceType), sourcePath)
 	dstTypeActual, _ := edgesemantics.ReconcileTypeWithCanonicalPath(models.FragmentType(targetType), targetPath)
 	return string(srcTypeActual), string(dstTypeActual), sourcePath, targetPath
+}
+
+func (r *DependencyEdgesRepository) applyProductRelationDictionary(
+	ctx context.Context,
+	edge *models.DependencyEdge,
+	sourceType string,
+	targetType string,
+	sourcePath string,
+	targetPath string,
+) {
+	if r == nil || r.productDictionary == nil || edge == nil {
+		return
+	}
+	normalized, known, relationKind, changed, err := r.productDictionary.NormalizeProductEdgeTypeForTenant(
+		ctx,
+		firstNonEmptyString(strings.TrimSpace(edge.TenantID), "global"),
+		edge.Type,
+		models.FragmentType(strings.TrimSpace(sourceType)),
+		models.FragmentType(strings.TrimSpace(targetType)),
+		sourcePath,
+		targetPath,
+	)
+	if err != nil || !known {
+		if err != nil {
+			log.Printf("[DependencyEdgesRepository] WARNING: product relation dictionary lookup failed edge=%s type=%s err=%v", strings.TrimSpace(edge.ID), string(edge.Type), err)
+		}
+		return
+	}
+	if edge.Qualifiers == nil {
+		edge.Qualifiers = map[string]interface{}{}
+	}
+	edge.Qualifiers["productRelationKind"] = relationKind
+	if changed {
+		prevType := edge.Type
+		edge.Type = normalized
+		edge.Qualifiers["normalizedByProductRelationDictionary"] = true
+		edge.Qualifiers["normalizedFromEdgeType"] = string(prevType)
+		edge.Qualifiers["normalizedEdgeType"] = string(normalized)
+	}
+}
+
+func (r *DependencyEdgesRepository) recordUnknownProductRelationCandidateAsync(edge *models.DependencyEdge, sourceType, targetType, sourcePath, targetPath string) {
+	if r == nil || r.productDictionary == nil || edge == nil {
+		return
+	}
+	if models.FragmentType(strings.TrimSpace(sourceType)) != models.FragmentTypeProduct || models.FragmentType(strings.TrimSpace(targetType)) != models.FragmentTypeProduct {
+		return
+	}
+	if !productdictSupportsEdgeType(edge.Type) {
+		return
+	}
+	e := *edge
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("[DependencyEdgesRepository] ERROR: transform candidate hook panic recovered: edgeId=%s panic=%v", strings.TrimSpace(e.ID), rec)
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		_ = r.productDictionary.RecordUnknownTransformCandidate(ctx, productdict.TransformObservation{
+			TenantID:         firstNonEmptyString(strings.TrimSpace(e.TenantID), "global"),
+			FromPath:         sourcePath,
+			ToPath:           targetPath,
+			ObservedEdgeType: e.Type,
+			RelationHint:     relationHintForEdge(e.Type),
+			SourceKind:       "edge_create",
+			EdgeID:           strings.TrimSpace(e.ID),
+			SourceFragmentID: strings.TrimSpace(e.SourceFragmentID),
+			TargetFragmentID: strings.TrimSpace(e.TargetFragmentID),
+		})
+	}()
+}
+
+func relationHintForEdge(edgeType models.DependencyType) string {
+	switch edgeType {
+	case models.DependencyTypeAssemblesInto:
+		return "assembly"
+	case models.DependencyTypeTransformsInto:
+		return "transformation"
+	default:
+		return ""
+	}
+}
+
+func productdictSupportsEdgeType(edgeType models.DependencyType) bool {
+	switch edgeType {
+	case models.DependencyTypeTransformsInto, models.DependencyTypeAssemblesInto, models.DependencyTypeDependsOn:
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *DependencyEdgesRepository) uploadToGCS(ctx context.Context, edge *models.DependencyEdge) error {
@@ -737,6 +836,7 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 			canonFromEdgeType != "",
 		)
 	}
+	r.applyProductRelationDictionary(ctx, edge, sourceType, targetType, sourcePath, targetPath)
 	graphenrich.ApplyEdgeHeuristics(edge, sourcePath, targetPath)
 
 	now := time.Now().UTC()
@@ -779,6 +879,7 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 	if fn := getEdgeAffectCollector(ctx); fn != nil {
 		fn(edge.SourceFragmentID, edge.TargetFragmentID)
 	}
+	r.recordUnknownProductRelationCandidateAsync(edge, sourceType, targetType, sourcePath, targetPath)
 	r.runOnUpsertAsync(edge)
 
 	log.Printf("%s Edge created successfully: id=%s", logPrefix, edge.ID)
@@ -867,6 +968,8 @@ func (r *DependencyEdgesRepository) CreateMany(ctx context.Context, edges []*mod
 			if edge == nil {
 				continue
 			}
+			sourceType, targetType, sourcePath, targetPath := r.resolveEndpointTypesAndPaths(ctx, edge)
+			r.applyProductRelationDictionary(ctx, edge, sourceType, targetType, sourcePath, targetPath)
 			graphenrich.ApplyEdgeHeuristics(edge, "", "")
 			edge.Metadata.CreatedAt = now
 			edge.Metadata.LastUpdatedAt = now
@@ -925,6 +1028,7 @@ func (r *DependencyEdgesRepository) CreateMany(ctx context.Context, edges []*mod
 		}
 		for _, edge := range chunkByID {
 			if edge != nil {
+				sourceType, targetType, sourcePath, targetPath := r.resolveEndpointTypesAndPaths(ctx, edge)
 				if _, ok := existingByID[edge.ID]; ok {
 					tracking.RecordEdgeUpdated(ctx, edge.ID)
 				} else {
@@ -937,6 +1041,9 @@ func (r *DependencyEdgesRepository) CreateMany(ctx context.Context, edges []*mod
 				}
 				if fn != nil {
 					fn(edge.SourceFragmentID, edge.TargetFragmentID)
+				}
+				if _, ok := existingByID[edge.ID]; !ok {
+					r.recordUnknownProductRelationCandidateAsync(edge, sourceType, targetType, sourcePath, targetPath)
 				}
 				r.runOnUpsertAsync(edge)
 			}
@@ -1378,7 +1485,8 @@ func (r *DependencyEdgesRepository) updateWithOptions(ctx context.Context, edge 
 	if edge == nil || edge.ID == "" {
 		return ErrInvalidDocument
 	}
-	_, _, sourcePath, targetPath := r.resolveEndpointTypesAndPaths(ctx, edge)
+	sourceType, targetType, sourcePath, targetPath := r.resolveEndpointTypesAndPaths(ctx, edge)
+	r.applyProductRelationDictionary(ctx, edge, sourceType, targetType, sourcePath, targetPath)
 	graphenrich.ApplyEdgeHeuristics(edge, sourcePath, targetPath)
 	if err := edge.Validate(); err != nil {
 		return fmt.Errorf("validation error: %w", err)

@@ -232,44 +232,44 @@ func registerAll() {
 		ExtractionBlock: `ENTITY TYPE: PRODUCT
 - Required execution order:
   1) Resolve canonical product taxonomy and aliases.
-  2) Build upstream/downstream product chain via TRANSFORMS_INTO.
+  2) Build upstream/downstream product chain via TRANSFORMS_INTO and ASSEMBLES_INTO.
   3) Connect actors/facilities that PRODUCE/CONSUME this product.
   4) Fill key supply-chain evidence (volumes/capacity/contracts where available).
 - Identify critical infrastructure dependencies: transport chokepoints (straits, canals, pipelines) through which this product's supply chain flows. Create DEPENDS_ON edges to these infrastructure nodes.
 - Taxonomically correct edge types:
-  - Required/primary: TRANSFORMS_INTO, PRODUCES, SUPPLIES_TO
+  - Required/primary: TRANSFORMS_INTO, ASSEMBLES_INTO, PRODUCES, SUPPLIES_TO
   - Allowed when evidence exists: SUPPLIES_TO, DEPENDS_ON, TRADED_IN
   - Avoid: OWNS for actor-product commercial flows.
-  - Avoid: PRODUCT -> PRODUCT with PRODUCES; use TRANSFORMS_INTO.
+  - Avoid: PRODUCT -> PRODUCT with PRODUCES; use TRANSFORMS_INTO for processing/refining and ASSEMBLES_INTO for direct assembly.
   - Avoid: APPLIES_TO unless source is an explicit /mechanism/... fragment.
 - Missing info priorities:
   - Missing upstream raw inputs.
-  - Missing downstream transformed products.
+  - Missing downstream transformed or directly assembled products.
   - Missing producer/facility nodes and chain continuity gaps.`,
 		ResearchBlock: `ENTITY TYPE: PRODUCT
 - Required execution order:
   1) Resolve canonical product taxonomy and aliases.
-  2) Build upstream/downstream product chain via TRANSFORMS_INTO.
+  2) Build upstream/downstream product chain via TRANSFORMS_INTO and ASSEMBLES_INTO.
   3) Connect actors/facilities that PRODUCE/CONSUME this product.
   4) Fill key supply-chain evidence (volumes/capacity/contracts where available).
 - Identify critical infrastructure dependencies: transport chokepoints through which this product's supply chain flows. Create DEPENDS_ON edges.
 - Taxonomically correct edge types:
-  - Required/primary: TRANSFORMS_INTO, PRODUCES, SUPPLIES_TO
+  - Required/primary: TRANSFORMS_INTO, ASSEMBLES_INTO, PRODUCES, SUPPLIES_TO
   - Allowed when evidence exists: SUPPLIES_TO, DEPENDS_ON, TRADED_IN
   - Avoid: OWNS for actor-product commercial flows.
-  - Avoid: PRODUCT -> PRODUCT with PRODUCES; use TRANSFORMS_INTO.
+  - Avoid: PRODUCT -> PRODUCT with PRODUCES; use TRANSFORMS_INTO for processing/refining and ASSEMBLES_INTO for direct assembly.
   - Avoid: APPLIES_TO unless source is an explicit /mechanism/... fragment.
 - Missing info priorities:
   - Missing upstream raw inputs.
-  - Missing downstream transformed products.
+  - Missing downstream transformed or directly assembled products.
   - Missing producer/facility nodes and chain continuity gaps.`,
 		MissingInfoRules: []MissingInfoRule{
 			{Trigger: TriggerFieldEmpty, FieldPath: "Labels.en", QuestionTemplate: "entity label/name in English for %s"},
-			{Trigger: TriggerRelationMissing, RelationType: "TRANSFORMS_INTO", QuestionTemplate: "What are the upstream materials and downstream derived products for %s (produced from / used to produce)? Return TRANSFORMS_INTO relationships between products."},
+			{Trigger: TriggerRelationMissing, RelationType: "TRANSFORMS_INTO", QuestionTemplate: "What are the upstream materials and downstream derived or directly assembled products for %s (produced from / used to produce / assembled into)? Return TRANSFORMS_INTO for processing/refining and ASSEMBLES_INTO for direct assembly between products."},
 			{Trigger: TriggerRelationCountBelow, MinCount: 1, QuestionTemplate: "relationships with other entities for %s"},
 			{Trigger: TriggerSeed, QuestionTemplate: "What products and services does %s produce/offer? Provide a canonical list of outputs suitable for /product/... paths."},
 			{Trigger: TriggerSeed, QuestionTemplate: "What key inputs/materials/components does %s consume? Provide a canonical list of inputs suitable for /product/... paths."},
-			{Trigger: TriggerSeed, QuestionTemplate: "What are the upstream materials and downstream derived products for %s (produced from / used to produce)? Return TRANSFORMS_INTO relationships between products."},
+			{Trigger: TriggerSeed, QuestionTemplate: "What are the upstream materials and downstream derived or directly assembled products for %s (produced from / used to produce / assembled into)? Return TRANSFORMS_INTO for processing/refining and ASSEMBLES_INTO for direct assembly between products."},
 		},
 	}
 
@@ -826,7 +826,7 @@ func registerAll() {
 }
 
 // supplyChainExtractionBlockOverrides: when domain mode is supply_chain, use these blocks instead.
-// No DEPENDS_ON; only PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN, HAS_MARKET_SEGMENT.
+// No DEPENDS_ON; only PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN, HAS_MARKET_SEGMENT.
 var supplyChainExtractionBlockOverrides = map[EntityTypeKey]string{
 	EntityTypeOrganization: `ENTITY TYPE: ORGANIZATION (supply chain scope)
 - Required aspects: products (PRODUCES), customers/suppliers (SUPPLIES_TO), locations (LOCATED_IN, OPERATES_IN).
@@ -840,9 +840,9 @@ var supplyChainExtractionBlockOverrides = map[EntityTypeKey]string{
 - Taxonomically correct edge types: HAS_MARKET_SEGMENT, PARTICIPATES_IN only.
 - Missing info priorities: market segments, key players.`,
 	EntityTypeProduct: `ENTITY TYPE: PRODUCT (supply chain scope)
-- Required: TRANSFORMS_INTO (upstream/downstream), PRODUCES (actor→product), SUPPLIES_TO (flow).
-- Do NOT use DEPENDS_ON. Use TRANSFORMS_INTO for product chain; PRODUCES/SUPPLIES_TO for actor links.
-- Taxonomically correct edge types: TRANSFORMS_INTO, PRODUCES, SUPPLIES_TO.
+- Required: TRANSFORMS_INTO / ASSEMBLES_INTO (upstream/downstream), PRODUCES (actor→product), SUPPLIES_TO (flow).
+- Do NOT use DEPENDS_ON. Use TRANSFORMS_INTO for processing/refining steps, ASSEMBLES_INTO for direct assembly steps, and PRODUCES/SUPPLIES_TO for actor links.
+- Taxonomically correct edge types: TRANSFORMS_INTO, ASSEMBLES_INTO, PRODUCES, SUPPLIES_TO.
 - Do NOT use PARTICIPATES_IN for PRODUCT -> MARKET. If market trading context is explicitly needed, use TRADED_IN only outside the operational supply-chain contract.
 - Missing info priorities: upstream inputs, downstream products, producers, consumers.`,
 	EntityTypeFacility: `ENTITY TYPE: FACILITY (supply chain scope)

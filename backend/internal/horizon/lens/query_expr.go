@@ -80,8 +80,12 @@ func (e andExpr) collectTerms(out *[]Term)  { e.a.collectTerms(out); e.b.collect
 func (e orExpr) collectTerms(out *[]Term)   { e.a.collectTerms(out); e.b.collectTerms(out) }
 func (e notExpr) collectTerms(out *[]Term)  { e.x.collectTerms(out) }
 
-func (e andExpr) Eval(f *HorizonFragmentView, ctx *EvalContext) bool { return e.a.Eval(f, ctx) && e.b.Eval(f, ctx) }
-func (e orExpr) Eval(f *HorizonFragmentView, ctx *EvalContext) bool  { return e.a.Eval(f, ctx) || e.b.Eval(f, ctx) }
+func (e andExpr) Eval(f *HorizonFragmentView, ctx *EvalContext) bool {
+	return e.a.Eval(f, ctx) && e.b.Eval(f, ctx)
+}
+func (e orExpr) Eval(f *HorizonFragmentView, ctx *EvalContext) bool {
+	return e.a.Eval(f, ctx) || e.b.Eval(f, ctx)
+}
 func (e notExpr) Eval(f *HorizonFragmentView, ctx *EvalContext) bool { return !e.x.Eval(f, ctx) }
 
 // HorizonFragmentView is a minimal projection used by QueryResolver.
@@ -90,7 +94,7 @@ type HorizonFragmentView struct {
 	CanonicalPath string
 	EntityPath    string
 	IndustryPaths []string
-	LocationPath  string // derived from homeLocation (best-effort)
+	LocationPath  string // derived from geoSlug/homeLocation (best-effort)
 }
 
 // EvalContext contains precomputed sets for expensive predicates.
@@ -373,4 +377,3 @@ func normalizeTerm(fieldRaw string, value string) (Term, error) {
 		return Term{}, fmt.Errorf("unknown criteria field: %s", fieldRaw)
 	}
 }
-

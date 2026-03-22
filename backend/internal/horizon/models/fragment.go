@@ -36,8 +36,11 @@ type HorizonFragment struct {
 	//
 	// IMPORTANT: canonicalPath remains the read-path across the system for compatibility.
 	CanonicalParts *taxonomy.CanonicalPathParts `json:"canonicalParts,omitempty" firestore:"canonicalParts,omitempty"`
-	Type           FragmentType                 `json:"type" firestore:"type"`
-	EntityPath     string                       `json:"entityPath" firestore:"entityPath"` // /Organization/Corporation/Public
+	// GeoSlug is a unified top-level geo token derived from canonicalPath (preferred) or homeLocation.
+	// It enables cross-namespace filtering without querying namespace-specific nested fields.
+	GeoSlug    string       `json:"geoSlug,omitempty" firestore:"geoSlug,omitempty"`
+	Type       FragmentType `json:"type" firestore:"type"`
+	EntityPath string       `json:"entityPath" firestore:"entityPath"` // /Organization/Corporation/Public
 	// IndustryPaths are canonical, multi-valued industry classifications (Horizon-first taxonomy).
 	// Format: /industry/{sector}/{group}/{industry}/{subindustry}
 	IndustryPaths []string `json:"industryPaths,omitempty" firestore:"industryPaths,omitempty"`
@@ -495,6 +498,9 @@ func (f *HorizonFragment) Validate() error {
 			f.Tags = appendTagIfMissing(f.Tags, "chokepoint")
 		}
 	}
+
+	// Unified geo filter coordinate. Prefer canonicalPath semantics over inferred homeLocation.
+	f.GeoSlug = DeriveGeoSlug(f.CanonicalPath, f.HomeLocation)
 
 	// Best-effort: ensure indexPaths is always present for new/updated fragments.
 	// This keeps expand/graph filtering deterministic without requiring backfills.

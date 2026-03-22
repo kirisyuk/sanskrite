@@ -14,6 +14,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/merge"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
@@ -44,6 +45,7 @@ type CanonicalPathResolver struct {
 	geonamesClient     coreontology.GeoNamesClientInterface
 	redirectsRepo      *repo.CanonicalPathRedirectsRepository
 	telemetryRepo      *repo.HorizonTelemetryRepository
+	productDictionary  *productdict.Runtime
 
 	// Stats counters (atomic; best-effort only).
 	resolveCalls               int64
@@ -95,6 +97,14 @@ func (r *CanonicalPathResolver) WithTelemetryRepo(repo *repo.HorizonTelemetryRep
 		return r
 	}
 	r.telemetryRepo = repo
+	return r
+}
+
+func (r *CanonicalPathResolver) WithProductDictionary(dict *productdict.Runtime) *CanonicalPathResolver {
+	if r == nil {
+		return r
+	}
+	r.productDictionary = dict
 	return r
 }
 
@@ -201,6 +211,15 @@ func (r *CanonicalPathResolver) Resolve(
 			result.NormalizationSteps = append(result.NormalizationSteps,
 				fmt.Sprintf("product_taxonomy: %s -> %s", result.CanonicalPath, norm))
 			result.CanonicalPath = norm
+		}
+		if r.productDictionary != nil {
+			if canonicalPath, matched, err := r.productDictionary.CanonicalizeProductPath(ctx, result.CanonicalPath); err == nil && matched && canonicalPath != "" && canonicalPath != result.CanonicalPath {
+				result.NormalizationSteps = append(result.NormalizationSteps,
+					fmt.Sprintf("product_synonym_dictionary: %s -> %s", result.CanonicalPath, canonicalPath))
+				result.CanonicalPath = canonicalPath
+			} else if err != nil {
+				log.Printf("%s WARNING: product dictionary lookup failed for path=%s err=%v", logPrefix, result.CanonicalPath, err)
+			}
 		}
 	}
 

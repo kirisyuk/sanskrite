@@ -213,7 +213,7 @@ const supplyChainOperationalModelBlock = `CRITICAL — Supply chain operational 
 2. Chain nodes use their real types: /org/ for organizations, /fac/ for facilities, /product/ for products.
 3. When a specific production facility is unknown or not separable (small org / org-level production only), use ORG → PRODUCES → PRODUCT directly.
 4. Product = catalog entity. One product type, one node. Do not duplicate products for transport steps. Use transportVia array on the supplies edge. A product must NOT appear more than once in a single supply chain path — no pseudo-cycles.
-5. Use only PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM.
+5. Use only PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, EXTRACTS_FROM.
 6. For long-haul, cross-border, maritime, pipeline, rail, or chokepoint-sensitive supply legs, include transportVia with real facility/chokepoint canonical paths whenever evidence or geography makes the route reasonably inferable.
 7. Prefer canonical ports, terminals, pipelines, straits, canals, warehouses, and intermodal nodes in transportVia over vague words like "shipping", "logistics", or "distribution".
 8. Only product-carrying flow belongs in the chain. If an organization merely owns, controls, manages, or operates an adjacent facility, emit OWNS / CONTROLS / MANAGES separately. Do NOT encode that as FACILITY → PRODUCT → ORG.`
@@ -266,7 +266,7 @@ const supplyChainMandatoryBlock = `MANDATORY — SUPPLY CHAIN RULES (NO EXCEPTIO
 - Preferred chain model: org → fac → product → fac → org. Organizations at the ends, facilities in the middle, products between facilities.
 - Fallback model (only when concrete production facility is unknown or not separable): org → product.
 - Nodes: /org/ for organizations, /fac/ for facilities, /product/ for products, /deposit/ for deposits.
-- Edge types: PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM.
+- Edge types: PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, EXTRACTS_FROM.
 - Product: one per type in path. No duplicates. No "Freight" or "delivery" as product unless that IS the facility's service.
 - If you cannot satisfy these rules, omit the relation. Do NOT output invalid links.`
 

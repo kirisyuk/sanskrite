@@ -19,10 +19,12 @@ import (
 	appcache "github.com/igorkirisyuk/sanskrite/internal/cache"
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 var toolRedisClient *redis.Client
+var toolProductDictRuntime *productdict.Runtime
 
 // TODO: Add a separate service-synonym mining pass and storage flow.
 // Keep it isolated from product/material synonyms: service aliases have a different
@@ -222,6 +224,12 @@ func main() {
 	}
 	defer fsClient.Close()
 	toolRedisClient = appcache.NewRedisClient()
+	toolProductDictRuntime = productdict.NewRuntime(fsClient.Client()).
+		WithTenantID(strings.TrimSpace(*tenantID)).
+		WithSynonymCollection(strings.TrimSpace(*pairCollection))
+	if toolRedisClient != nil {
+		toolProductDictRuntime.WithRedis(toolRedisClient)
+	}
 
 	log.Printf("=== Horizon Product Synonym Miner ===")
 	log.Printf("project=%s tenant=%s", strings.TrimSpace(*projectID), strings.TrimSpace(*tenantID))

@@ -16,6 +16,7 @@ import (
 // IntentResolution is a lightweight, reusable representation of user intent.
 // It is intentionally taxonomy-first: spherePaths must be canonical (/sphere/...), and anchors must be canonical paths.
 type IntentResolution struct {
+	Title       string   `json:"title"`
 	Focus       string   `json:"focus"`
 	SpherePaths []string `json:"spherePaths"`
 	Keywords    []string `json:"keywords"`
@@ -230,6 +231,7 @@ func (a *IntentResolverAgent) ResolveWithContext(ctx context.Context, query stri
 	}
 
 	// Normalize + validate (taxonomy-first).
+	out.Title = strings.TrimSpace(out.Title)
 	out.Focus = strings.TrimSpace(out.Focus)
 
 	// Normalize spheres (synonyms + allowlist).
@@ -492,6 +494,7 @@ func (a *IntentResolverAgent) ResolveWithContext(ctx context.Context, query stri
 	if len(out.Anchors) == 0 && len(out.Domains) == 0 {
 		return nil, fmt.Errorf("no valid anchors/domains after canonical validation")
 	}
+	out.Title = buildLensTitleForIntent(out.Title, out.Focus, query, out.Domains)
 
 	// Normalize decomposition hints: filter to valid anchors, dedupe, cap.
 	if len(out.DecompositionHints) > 0 && len(out.Anchors) > 0 {
@@ -581,6 +584,7 @@ USER QUERY:
 %s
 %s%sOUTPUT JSON SCHEMA:
 {
+  "title": "string (concise English lens title; this will be used directly as the lens name)",
   "focus": "string (short, reusable intent statement, English)",
   "spherePaths": ["string (canonical /sphere/... only)"],
   "keywords": ["string (non-canonical tokens for search)"],
@@ -645,6 +649,7 @@ USER QUERY:
 ═══════════════════════════════════════════
 DOMAIN RULES
 ═══════════════════════════════════════════
+- title MUST be a concise English lens title derived from the user query. It will be used directly as the lens name.
 - A DOMAIN is an executable knowledge contract: "what the user wants to know" and how to explore it.
 - Use domains when the query is analytical or a research focus that must be expanded into multiple entities.
 - If a matching DOMAIN already exists, reuse the SAME canonicalPath.
@@ -1780,6 +1785,45 @@ func buildDomainTitleFromFocusForIntent(focus string) string {
 		return ""
 	}
 	r := []rune(s)
+	if len(r) > 0 {
+		r[0] = unicode.ToUpper(r[0])
+	}
+	return strings.TrimSpace(string(r))
+}
+
+func buildLensTitleForIntent(existingTitle, focus, query string, domains []DomainResolution) string {
+	if title := normalizeLensTitleCandidate(existingTitle); title != "" {
+		return title
+	}
+	for _, d := range domains {
+		if title := normalizeLensTitleCandidate(d.Title); title != "" {
+			return title
+		}
+	}
+	if title := normalizeLensTitleCandidate(buildDomainTitleFromFocusForIntent(focus)); title != "" {
+		return title
+	}
+	return normalizeLensTitleCandidate(buildDomainTitleFromFocusForIntent(query))
+}
+
+func normalizeLensTitleCandidate(title string) string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return ""
+	}
+	title = strings.Trim(title, " \t\r\n.,;:!?-")
+	if title == "" {
+		return ""
+	}
+	parts := strings.Fields(title)
+	if len(parts) > 10 {
+		parts = parts[:10]
+	}
+	title = strings.Join(parts, " ")
+	if title == "" {
+		return ""
+	}
+	r := []rune(title)
 	if len(r) > 0 {
 		r[0] = unicode.ToUpper(r[0])
 	}

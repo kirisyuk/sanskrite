@@ -220,6 +220,11 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeProduct},
 		Description:      "Product transforms into downstream product",
 	},
+	models.DependencyTypeAssemblesInto: {
+		ValidSourceTypes: []models.FragmentType{models.FragmentTypeProduct},
+		ValidTargetTypes: []models.FragmentType{models.FragmentTypeProduct},
+		Description:      "Component/subassembly product assembles into downstream product",
+	},
 	models.DependencyTypeExtractsFrom: {
 		ValidSourceTypes: []models.FragmentType{models.FragmentTypeFacility},
 		ValidTargetTypes: []models.FragmentType{models.FragmentTypeDeposit},

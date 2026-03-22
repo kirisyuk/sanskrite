@@ -543,7 +543,7 @@ func (b *SupplyChainPathBuilder) findSupplyLinksByCustomerAndTenant(
 	return segments, nil
 }
 
-// filterByProductTransformation filters segments by TRANSFORMS_INTO relationship.
+// filterByProductTransformation filters segments by product transition relationship.
 func (b *SupplyChainPathBuilder) filterByProductTransformation(
 	ctx context.Context,
 	downstreamProduct string,
@@ -552,7 +552,7 @@ func (b *SupplyChainPathBuilder) filterByProductTransformation(
 	var filtered []PathSegment
 
 	for _, segment := range segments {
-		// Check if segment.ProductRef TRANSFORMS_INTO downstreamProduct
+		// Check if segment.ProductRef reaches downstreamProduct via canonical product transition
 		hasTransformation, err := b.checkProductTransformation(ctx, segment.ProductRef, downstreamProduct)
 		if err == nil && hasTransformation {
 			filtered = append(filtered, segment)
@@ -562,13 +562,13 @@ func (b *SupplyChainPathBuilder) filterByProductTransformation(
 	return filtered
 }
 
-// checkProductTransformation checks if upstreamProduct TRANSFORMS_INTO downstreamProduct.
+// checkProductTransformation checks if upstreamProduct has a canonical product transition to downstreamProduct.
 func (b *SupplyChainPathBuilder) checkProductTransformation(
 	ctx context.Context,
 	upstreamProduct string,
 	downstreamProduct string,
 ) (bool, error) {
-	cacheKey := "transforms:" + upstreamProduct + "|" + downstreamProduct
+	cacheKey := "product-transition:" + upstreamProduct + "|" + downstreamProduct
 	if b.cache != nil {
 		if v, ok := b.cache.get(cacheKey); ok {
 			if vb, ok := v.(bool); ok {
@@ -589,7 +589,7 @@ func (b *SupplyChainPathBuilder) checkProductTransformation(
 		return false, err
 	}
 
-	// Check for TRANSFORMS_INTO edge
+	// Check for product transition edge
 	edges, err := b.edgesRepo.ListBySource(ctx, "global", upstreamFrag.ID, nil, 100)
 	if err != nil {
 		return false, err
@@ -597,7 +597,7 @@ func (b *SupplyChainPathBuilder) checkProductTransformation(
 
 	found := false
 	for _, edge := range edges {
-		if edge.Type == models.DependencyTypeTransformsInto && edge.TargetFragmentID == downstreamFrag.ID {
+		if models.IsProductTransitionEdgeType(edge.Type) && edge.TargetFragmentID == downstreamFrag.ID {
 			found = true
 			break
 		}
@@ -615,7 +615,7 @@ func (b *SupplyChainPathBuilder) areProductsCompatible(
 	upstreamProduct string,
 	downstreamProduct string,
 ) bool {
-	// Check for TRANSFORMS_INTO relationship
+	// Check for product transition relationship
 	hasTransformation, err := b.checkProductTransformation(ctx, upstreamProduct, downstreamProduct)
 	if err == nil && hasTransformation {
 		return true
@@ -1321,9 +1321,9 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 			currentProductIdx := productIdx
 			nextProductIdx := nodeIndexMap[nextSegment.ProductRef]
 
-			// Check if products are connected via TRANSFORMS_INTO (optional)
+			// Check if products are connected via canonical product transition (optional)
 			// For now, we'll add it as "optional" mode
-			relation := "TRANSFORMS_INTO"
+			relation := string(models.ProductToProductEdgeTypeFromPaths(segment.ProductRef, nextSegment.ProductRef))
 			mode := "optional"
 			edges = append(edges, models.SupplyChainPathEdge{
 				Type:             "ONTOLOGY",

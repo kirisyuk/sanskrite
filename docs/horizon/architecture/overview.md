@@ -4,6 +4,22 @@
 
 Система мониторинга горизонта является подсистемой платформы Sanskrite, интегрированной в моноядре. Она использует существующую инфраструктуру (Firestore, AI, агенты, realtime) и добавляет доменные пакеты под `backend/internal/horizon/` и HTTP под `backend/internal/http/horizon/`.
 
+## Обязательный документ для supply-chain логики
+
+Если работа касается:
+- products
+- product synonyms
+- `TRANSFORMS_INTO` / `ASSEMBLES_INTO`
+- `SUPPLY_LINK`
+- materialized supply-chain artifacts
+- pathbuilder и сборки цепочек
+
+то перед погружением в код нужно прочитать:
+
+- [Supply Chain Canonical Control Plane](supply-chain-canonical-control-plane.md)
+
+Именно этот слой теперь задаёт продуктовую идентичность и допустимые product-to-product шаги для всего supply-chain ядра.
+
 **Соответствие коду:** диаграмма ниже — обзорная; детальный состав пакетов и точный реестр REST см. [code-organization.md](code-organization.md) и [api/endpoints.md](../api/endpoints.md). Узлы вроде «Cloud Functions / Watchdog» на схеме отражают целевую или частичную автоматизацию и могут различаться по деплою.
 
 ## Диаграмма контейнеров (C4 L2)
@@ -288,4 +304,3 @@ watchdog/
 - [Модель данных](data-model.md)
 - [Интеграция с Sanskrite](integration.md)
 - [Компоненты системы](components.md)
-

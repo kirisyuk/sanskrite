@@ -7,6 +7,14 @@
 - **Runtime taxonomy (источник правды для бэкенда)**: хранится в Firestore в коллекции `horizon_taxonomy`, doc id = версия (по умолчанию `v1`). Бэкенд загружает её при старте и периодически обновляет в памяти. Это то, что реально используется для нормализации/валидации некоторых словарей (например `spherePaths`, `eventType`, `relationType`).
 - **Core taxonomy (гайд для классификации/LLM)**: описывает рекомендуемые `entityPath`, `sectorPath` и метрики. Важно: **этот слой сейчас не является строгой allow-list в рантайме** (сервер не блокирует неизвестные значения `entityPath/sectorPath`), но он используется как контракт и база для промптов/классификатора.
 
+Отдельно от этих двух слоёв теперь существует третий, самостоятельный operational layer:
+
+- **Supply Chain Canonical Control Plane**: словари канонических продуктов, product synonyms, product transform/assembly pairs и candidate queues.
+
+Он не живёт внутри общего `horizon_taxonomy` blob и описан отдельно:
+
+- [Supply Chain Canonical Control Plane](/Users/kirisyuk/cursor/sanskrite/docs/horizon/architecture/supply-chain-canonical-control-plane.md)
+
 Таксономия в документации ниже приведена в backend-first виде: сначала то, что “enforced” бэкендом, потом — рекомендации (Core taxonomy guide).
 
 ## 0. Runtime taxonomy (Firestore, backend source of truth)
@@ -852,4 +860,3 @@ Classify the entity using:
 - [Модель данных](data-model.md)
 - [Scout Workflow](../workflows/scout-workflow.md)
 - [Архитектурный обзор](overview.md)
-

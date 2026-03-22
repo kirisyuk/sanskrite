@@ -4433,7 +4433,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			// For product nodes, request value chain transformations (product→product).
 			if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/product/") {
 				validationResult.MissingInfo = append(validationResult.MissingInfo,
-					fmt.Sprintf("What materials is %s produced from, and what products does it transform into? Return TRANSFORMS_INTO relationships between products. Format: JSON.", job.TargetCanonicalPath),
+					fmt.Sprintf("What materials is %s produced from, and what products does it transform into or assemble into? Return TRANSFORMS_INTO for processing/refining and ASSEMBLES_INTO for direct assembly between products. Format: JSON.", job.TargetCanonicalPath),
 				)
 			}
 		}

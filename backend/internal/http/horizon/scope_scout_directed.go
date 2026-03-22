@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	horizonsupplychain "github.com/igorkirisyuk/sanskrite/internal/horizon/supplychain"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
@@ -87,20 +88,45 @@ func isAllowedSupplyChainAnchorPath(canonicalPath string) bool {
 		strings.HasPrefix(cp, "/deposit/")
 }
 
-func allowedSupplyChainAnchorType(canonicalPath string) string {
+func isAllowedOneHopSupplyChainAnchorPath(canonicalPath string) bool {
+	cp := strings.TrimSpace(strings.ToLower(canonicalPath))
+	return strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/fac/")
+}
+
+func oneHopAnchorTypeForPath(canonicalPath string) string {
 	cp := strings.TrimSpace(strings.ToLower(canonicalPath))
 	switch {
 	case strings.HasPrefix(cp, "/org/"):
-		return "org"
-	case strings.HasPrefix(cp, "/gov/"):
-		return "gov"
+		return "ORG"
 	case strings.HasPrefix(cp, "/fac/"):
-		return "fac"
-	case strings.HasPrefix(cp, "/product/"):
-		return "product"
-	case strings.HasPrefix(cp, "/deposit/"):
-		return "deposit"
+		return "FAC"
 	default:
 		return ""
 	}
+}
+
+func shouldRouteDirectedExplorationToOneHop(targetCanonicalPath string, cfg *horizonmodels.DirectedExplorationConfig) bool {
+	if cfg == nil {
+		return false
+	}
+	// Public downstream ORG/FAC exploration should converge on the canonical one-hop runtime.
+	// Legacy directed exploration remains only as a compatibility path for upstream and non-ORG/FAC cases.
+	if strings.TrimSpace(strings.ToLower(cfg.DomainMode)) != taxonomy.DomainModeSupplyChain {
+		return false
+	}
+	if strings.TrimSpace(strings.ToLower(cfg.Direction)) != "downstream" {
+		return false
+	}
+	return isAllowedOneHopSupplyChainAnchorPath(targetCanonicalPath)
+}
+
+func buildOneHopOptionsForDirectedExploration(targetCanonicalPath string) horizonsupplychain.OneHopDownstreamOptions {
+	return horizonsupplychain.NormalizeOptions(horizonsupplychain.OneHopDownstreamOptions{
+		AnchorRef:             strings.TrimSpace(targetCanonicalPath),
+		AnchorType:            oneHopAnchorTypeForPath(targetCanonicalPath),
+		MaxBranchesPerProduct: 12,
+		IncludeInputsContext:  true,
+		AllowOrgFallback:      true,
+		AllowLLMFallback:      true,
+	})
 }

@@ -408,7 +408,7 @@ func chainEdgeVariantKey(relationType string, qualifiers map[string]interface{})
 		if product := extractProductQualifier(qualifiers); product != "" {
 			return "product=" + product
 		}
-	case string(models.DependencyTypeTransformsInto):
+	case string(models.DependencyTypeTransformsInto), string(models.DependencyTypeAssemblesInto):
 		if atFacility := strings.TrimSpace(parseStateString(qualifiers[models.QualifierAtFacility])); atFacility != "" {
 			return "at_facility=" + atFacility
 		}

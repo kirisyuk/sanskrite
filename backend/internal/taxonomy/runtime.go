@@ -95,6 +95,7 @@ var builtInAllowedRelationTypes = map[string]struct{}{
 	"DEPENDS_ON":      {},
 	"AFFECTS":         {},
 	"TRANSFORMS_INTO": {},
+	"ASSEMBLES_INTO":  {},
 	"EXTRACTS_FROM":   {}, // FACILITY → DEPOSIT
 	// Market participation
 	"PARTICIPATES_IN": {},

@@ -104,6 +104,7 @@ func classifyEdgeFamily(axis string, fromFrag *horizonmodels.HorizonFragment, ed
 		return "regulatory_control"
 	case horizonmodels.DependencyTypeSuppliesTo,
 		horizonmodels.DependencyTypeTransformsInto,
+		horizonmodels.DependencyTypeAssemblesInto,
 		horizonmodels.DependencyTypeExtractsFrom,
 		horizonmodels.DependencyTypeProduces:
 		if strings.Contains(text, "lng") || strings.Contains(text, "gas") || strings.Contains(text, "pipeline") || strings.Contains(text, "refinery") {

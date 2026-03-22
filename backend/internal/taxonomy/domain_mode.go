@@ -116,7 +116,7 @@ func EntityActorTypesForDomainMode(mode string) string {
 // CONSUMES removed: use SUPPLIES_TO(product→org) for input flow. Single source of truth.
 // Must stay in sync with edgesemantics.domainModeAllowlists[supply_chain].
 var SupplyChainEdgeTypes = []string{
-	"PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "EXTRACTS_FROM",
+	"PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "EXTRACTS_FROM",
 	"LOCATED_IN", "OPERATES_IN", "PARTICIPATES_IN",
 	"HAS_MARKET_SEGMENT",
 }
@@ -156,12 +156,12 @@ func IsSupplyChainEdgeType(t string) bool {
 // SupplyChainOperationalEdgeTypes are the only edge types for supply chain structural links (fac→fac, fac→product).
 // Use for "Use ONLY these" in supply chain prompts. Subset of SupplyChainEdgeTypes.
 var SupplyChainOperationalEdgeTypes = []string{
-	"PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "EXTRACTS_FROM",
+	"PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "EXTRACTS_FROM",
 }
 
 // SupplyChainOperationalEdgeTypesString returns comma-separated list for operational-link prompts.
 func SupplyChainOperationalEdgeTypesString() string {
-	return "PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM"
+	return "PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, EXTRACTS_FROM"
 }
 
 // GovernanceEdgeTypes returns canonical edge types for governance/organizational management context.

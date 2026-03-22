@@ -186,8 +186,8 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 				}
 			}
 
-			// Infer TRANSFORMS_INTO with at_facility when pattern: product -> facility -> product
-			// The facility consumes upstream product and produces downstream product; transformation happens there.
+			// Infer product-transition edge with at_facility when pattern: product -> facility -> product.
+			// The facility consumes upstream product and produces downstream product; the step happens there.
 			if i >= 1 && i < len(chain.Nodes)-1 {
 				prevNode := chain.Nodes[i-1]
 				nextNode := chain.Nodes[i+1]
@@ -203,12 +203,13 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 						if shouldSwapProductStageOrder(prevPath, nextPath) {
 							srcPath, dstPath = nextPath, prevPath
 						}
+						relType := models.ProductToProductEdgeTypeFromPaths(srcPath, dstPath)
 						transformEdge := &ChainEdge{
 							SourceCanonicalPath: srcPath,
 							TargetCanonicalPath: dstPath,
-							RelationType:        string(models.DependencyTypeTransformsInto),
+							RelationType:        string(relType),
 							Confidence:          chain.Confidence,
-							Reason:              fmt.Sprintf("Supply chain: %s transforms into %s at %s. %s", prevNode.Name, nextNode.Name, node.Name, chain.Reason),
+							Reason:              fmt.Sprintf("Supply chain: %s transitions into %s at %s. %s", prevNode.Name, nextNode.Name, node.Name, chain.Reason),
 							Qualifiers: map[string]interface{}{
 								models.QualifierAtFacility: facPath,
 							},
@@ -637,12 +638,12 @@ func (p *SupplyChainParser) inferFragmentType(nodeType string, canonicalPath str
 
 // createEdgeBetweenNodes creates an edge based on the node types.
 // Supply chain pattern: actor → product → actor → product
-// Operational model: PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM only. NO DEPENDS_ON.
+// Operational model: PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, EXTRACTS_FROM only. NO DEPENDS_ON.
 // - Actor (org/fac) → Product: PRODUCES
 // - Product → Actor: abstain. Flow is captured by SupplyLink segments (fac1 SUPPLIES_TO fac2 via product).
 // - Facility → Deposit: EXTRACTS_FROM
 // - Actor → Actor: no direct inference (ambiguous without product-flow context)
-// - Product → Product: TRANSFORMS_INTO
+// - Product → Product: TRANSFORMS_INTO or ASSEMBLES_INTO
 // - Unknown pair: abstain (return nil, true).
 func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNode, confidence float64, reason string) (*ChainEdge, bool) {
 	fromPath := normalizeSupplyChainCanonicalPath(from.CanonicalPath)
@@ -709,16 +710,17 @@ func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNo
 	case fromIsActor && toIsActor:
 		return nil, false
 
-	// product → product: transformation
+	// product → product: transformation or direct assembly
 	case fromIsProduct && toIsProduct:
 		srcPath, dstPath := fromPath, toPath
 		if shouldSwapProductStageOrder(fromPath, toPath) {
 			srcPath, dstPath = toPath, fromPath
 		}
+		relType := models.ProductToProductEdgeTypeFromPaths(srcPath, dstPath)
 		return &ChainEdge{
 			SourceCanonicalPath: srcPath,
 			TargetCanonicalPath: dstPath,
-			RelationType:        string(models.DependencyTypeTransformsInto),
+			RelationType:        string(relType),
 			Confidence:          confidence,
 			Reason:              fmt.Sprintf("Supply chain: %s → %s. %s", from.Name, to.Name, reason),
 		}, false
@@ -1043,7 +1045,7 @@ func (cc *ChainContext) ToPromptContext() string {
 	return sb.String()
 }
 
-// shouldSwapProductStageOrder returns true when a TRANSFORMS_INTO edge has
+// shouldSwapProductStageOrder returns true when a product-transition edge has
 // downstream product as source and upstream product as target.
 // Correct semantics: upstream (lower stage rank) → downstream (higher stage rank).
 // Delegates to models.ProductStageRankFromCanonicalPath (single source of truth).

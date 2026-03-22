@@ -740,12 +740,14 @@ Choose relationType to match the CORRECT semantic direction:
 - PARTNERS_WITH: partnership/collaboration (symmetric; direction is not important but still output as source->target).
 -  Clarification: peer collaboration (joint venture, MoU, alliance). Not ownership or supply-chain.
 - PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY or DEPOSIT, target MUST be PRODUCT).
-  For PRODUCT -> PRODUCT value-chain steps, use TRANSFORMS_INTO (NOT PRODUCES).
+  For PRODUCT -> PRODUCT value-chain steps, use TRANSFORMS_INTO for processing/refining and ASSEMBLES_INTO for nearest assembly steps (NOT PRODUCES).
 -  Clarification: manufacturer/producer -> product output.
 - TRANSFORMS_INTO: upstream raw/earlier-stage PRODUCT -> downstream refined/later-stage PRODUCT.
   Direction is strict and MUST follow the value chain: extraction → refining → smelting → processing → manufacturing → assembly.
   Example: copper-ore TRANSFORMS_INTO copper-concentrate TRANSFORMS_INTO copper-anode (NEVER reversed).
   Source = raw input material. Target = processed output material.
+- ASSEMBLES_INTO: component/subassembly PRODUCT -> downstream assembled PRODUCT.
+  Example: battery-pack ASSEMBLES_INTO electric-vehicle. display-module ASSEMBLES_INTO smartphone-line.
 - EXTRACTS_FROM: source (FACILITY) extracts from target (DEPOSIT). Use for mines/oil fields/ore bodies.
 -  Clarification: extraction relationship (facility/mine -> resource deposit).
 - ASSURES: source (ORGANIZATION) provides independent assurance to target (ORG/FACILITY/PROGRAM). Add qualifiers.assurance_type: audit|certification|regulatory|inspection.

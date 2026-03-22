@@ -15,6 +15,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 )
 
 var ErrMaterializedArtifactNotFound = errors.New("materialized artifact not found")
@@ -28,6 +29,7 @@ type MaterializedArtifactsRepository struct {
 	useGCS            bool
 	uploadLimiter     *rate.Limiter
 	vertexSyncBatcher *VertexSyncBatcher
+	productDictionary *productdict.Runtime
 }
 
 // NewMaterializedArtifactsRepository создает новый репозиторий
@@ -52,6 +54,11 @@ func (r *MaterializedArtifactsRepository) WithStorage(storage *gcp.GCSClient, bu
 // WithVertexSyncBatcher configures batched Vertex AI Search sync for materialized artifacts.
 func (r *MaterializedArtifactsRepository) WithVertexSyncBatcher(batcher *VertexSyncBatcher) *MaterializedArtifactsRepository {
 	r.vertexSyncBatcher = batcher
+	return r
+}
+
+func (r *MaterializedArtifactsRepository) WithProductDictionary(dict *productdict.Runtime) *MaterializedArtifactsRepository {
+	r.productDictionary = dict
 	return r
 }
 
@@ -122,6 +129,11 @@ func (r *MaterializedArtifactsRepository) uploadToGCS(ctx context.Context, artif
 func (r *MaterializedArtifactsRepository) Create(ctx context.Context, artifact *horizonmodels.MaterializedArtifact) (string, error) {
 	if artifact == nil {
 		return "", fmt.Errorf("artifact is nil")
+	}
+	if r.productDictionary != nil {
+		if _, err := r.productDictionary.NormalizeArtifact(ctx, artifact); err != nil {
+			log.Printf("[MaterializedArtifacts] WARNING: product dictionary normalization failed on create artifact=%s key=%s err=%v", strings.TrimSpace(artifact.ID), strings.TrimSpace(artifact.CanonicalKey), err)
+		}
 	}
 	horizonmodels.PopulateMaterializedArtifactIndexes(artifact)
 
@@ -259,6 +271,11 @@ func (r *MaterializedArtifactsRepository) Update(ctx context.Context, artifact *
 	if artifact.ID == "" {
 		return fmt.Errorf("id is required")
 	}
+	if r.productDictionary != nil {
+		if _, err := r.productDictionary.NormalizeArtifact(ctx, artifact); err != nil {
+			log.Printf("[MaterializedArtifacts] WARNING: product dictionary normalization failed on update artifact=%s key=%s err=%v", strings.TrimSpace(artifact.ID), strings.TrimSpace(artifact.CanonicalKey), err)
+		}
+	}
 	horizonmodels.PopulateMaterializedArtifactIndexes(artifact)
 
 	if err := artifact.Validate(); err != nil {
@@ -339,6 +356,11 @@ func (r *MaterializedArtifactsRepository) BatchUpsert(ctx context.Context, artif
 		for _, a := range batch {
 			if a == nil {
 				continue
+			}
+			if r.productDictionary != nil {
+				if _, err := r.productDictionary.NormalizeArtifact(ctx, a); err != nil {
+					log.Printf("[MaterializedArtifacts] WARNING: product dictionary normalization failed on batch upsert artifact=%s key=%s err=%v", strings.TrimSpace(a.ID), strings.TrimSpace(a.CanonicalKey), err)
+				}
 			}
 			horizonmodels.PopulateMaterializedArtifactIndexes(a)
 			if err := a.Validate(); err != nil {

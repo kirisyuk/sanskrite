@@ -54,6 +54,10 @@ const (
 	// Used for generic value chain relationships (e.g., lithium-ore → lithium-carbonate → cathode-material → battery-cell).
 	// Source: upstream product (earlier stage), Target: downstream product (later stage).
 	DependencyTypeTransformsInto DependencyType = "TRANSFORMS_INTO"
+	// DependencyTypeAssemblesInto represents nearest-step assembly: component/subassembly product X assembles into product Y.
+	// Used for direct assembly steps (e.g., tire -> vehicle, battery-pack -> electric-vehicle, display-module -> smartphone-line).
+	// Source: upstream component/subassembly product, Target: downstream assembled product.
+	DependencyTypeAssemblesInto DependencyType = "ASSEMBLES_INTO"
 	// DependencyTypeExtractsFrom represents facility extracting resources from a deposit.
 	// Direction: FACILITY → DEPOSIT (e.g., mine extracts from ore deposit, platform extracts from oil field).
 	// More precise than LOCATED_IN, captures the operational relationship.
@@ -329,7 +333,7 @@ const (
 	IntegrationTypeArmsLength  = "arm's-length" // spot/short-term commercial, pure financial
 )
 
-// QualifierAtFacility is used on TRANSFORMS_INTO edges to indicate where the product transformation occurs.
+// QualifierAtFacility is used on TRANSFORMS_INTO / ASSEMBLES_INTO edges to indicate where the product step occurs.
 // Value: canonical path of the facility (e.g. /fac/us/silver-peak).
 // Semantics: products transform; the facility is the qualifier (where it happens).
 const QualifierAtFacility = "at_facility"

@@ -642,14 +642,15 @@ TASK: Compare the extracted data with the source content and identify any confli
 	  - NOTE: PERSON relations may appear inverted due to extraction being anchored on the organization; still treat them as valid signals for completeness.
 	- If "products_and_services" specialty is requested (ENHANCED requirements beyond the baseline):
 	  - For ORGANIZATION/FACILITY: in addition to baseline PRODUCES/SUPPLIES_TO, also check for:
-	    - TRANSFORMS_INTO relations for products (value chain)
+	    - TRANSFORMS_INTO / ASSEMBLES_INTO relations for products (value chain + direct assembly)
 	    - Capacity/volume metrics on edges
-	    - Add questions for missing transformations and metrics.
-	  - For PRODUCT: if there are no product-to-product transformation relations (TRANSFORMS_INTO), add a question:
-	    - "What is this product produced from and what does it transform into? Provide upstream/downstream products."
+	    - Add questions for missing transformations/assembly links and metrics.
+	  - For PRODUCT: if there are no product-to-product transition relations (TRANSFORMS_INTO / ASSEMBLES_INTO), add a question:
+	    - "What is this product produced from, what does it transform into, and what does it assemble into? Provide upstream/downstream products."
 	  - TRANSFORMS_INTO DIRECTION INVARIANT: source MUST be upstream (raw/earlier-stage), target MUST be downstream (refined/later-stage).
 	    Stage order: extraction < refining < smelting < processing < manufacturing < assembly.
 	    If any TRANSFORMS_INTO edge points from a later-stage product to an earlier-stage product, flag it as a direction error.
+	  - ASSEMBLES_INTO DIRECTION INVARIANT: source MUST be component/subassembly, target MUST be the downstream assembled product.
 	- If "supply_chain" specialty is requested:
 	  - Validate that extracted supply chains are COMPLETE and COHERENT:
 	    - Nodes must alternate: actor (org/fac) → product → actor → product → ...

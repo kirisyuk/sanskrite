@@ -222,6 +222,13 @@ func (c *CompleteSubstrateCanvas) DebugComplete(ctx context.Context, tenantID st
 			c.logger.Printf("complete-substrate: grounded completion warning: %v", err)
 		}
 	}
+	maxCompletions := req.MaxCompletions
+	if maxCompletions <= 0 {
+		maxCompletions = defaultCompleteSubstrateMaxCompletions
+	}
+	if len(completions) > maxCompletions {
+		completions = completions[:maxCompletions]
+	}
 	if c.logger != nil {
 		c.logger.Printf(
 			"complete-substrate: debug scope tenant=%s lens=%s selected=%s nodes=%d artifacts=%d supplyLinks=%d relations=%d gaps=%d completions=%d useLLM=%t",

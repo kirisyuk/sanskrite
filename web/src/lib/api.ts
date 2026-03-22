@@ -127,6 +127,47 @@ export interface SupplyChainArtifactResponse {
   [key: string]: any;
 }
 
+export interface HorizonProductPrefetchSuggestion {
+  canonicalPath: string;
+  label: string;
+  matchedLabel?: string;
+  matchedPath?: string;
+  canonicalizedFrom?: string;
+  sourceScope?: string;
+  score: number;
+}
+
+export interface HorizonProductPrefetchResponse {
+  query: string;
+  limit: number;
+  suggestions: HorizonProductPrefetchSuggestion[];
+}
+
+export interface HorizonProductStreamNode {
+  canonicalPath: string;
+  label?: string;
+  hop: number;
+}
+
+export interface HorizonProductStreamEdge {
+  fromPath: string;
+  toPath: string;
+  relationKind: string;
+}
+
+export interface HorizonProductStreamResponse {
+  query: string;
+  resolvedPath: string;
+  resolvedLabel?: string;
+  direction: string;
+  hops: number;
+  limitPerHop: number;
+  truncated: boolean;
+  cache?: Record<string, boolean>;
+  nodes: HorizonProductStreamNode[];
+  edges: HorizonProductStreamEdge[];
+}
+
 export interface IdentifyStressVisibleRelation {
   edgeId?: string;
   sourceCanonicalPath?: string;
@@ -186,7 +227,7 @@ class ApiClient {
           }).catch(() => {});
         } else if (error.response.status >= 500) {
           // Best-effort endpoints (autocomplete/prefetch) shouldn't mark the whole server as unavailable.
-          if (url.includes('/api/horizon/entities/search')) {
+          if (url.includes('/api/horizon/entities/search') || url.includes('/api/horizon/products/prefetch')) {
             return Promise.reject(error);
           }
           // Server error (5xx)
@@ -1757,6 +1798,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   // Horizon - Intent precheck (NL -> taxonomy-aligned intent)
   async resolveHorizonIntent(input: { query: string }): Promise<{
     intent: {
+      title: string;
       focus: string;
       spherePaths: string[];
       keywords: string[];
@@ -1793,6 +1835,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     options?: { correlationId?: string; sessionId?: string }
   ): Promise<{
     intent: {
+      title: string;
       focus: string;
       spherePaths: string[];
       keywords: string[];
@@ -1855,6 +1898,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     options?: { correlationId?: string; sessionId?: string }
   ): Promise<{
     intent: {
+      title: string;
       focus: string;
       spherePaths: string[];
       keywords: string[];
@@ -1977,6 +2021,31 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       console.error(`[API] updateHorizonLens error:`, error);
       throw error;
     }
+  }
+
+  async prefetchHorizonProducts(
+    params: {
+      query: string;
+      limit?: number;
+    },
+    signal?: AbortSignal
+  ): Promise<HorizonProductPrefetchResponse> {
+    const response = await this.client.get('/api/horizon/products/prefetch', {
+      params,
+      signal,
+    });
+    return response.data;
+  }
+
+  async getHorizonProductStream(input: {
+    query?: string;
+    productRef?: string;
+    direction?: 'upstream' | 'downstream';
+    hops?: number;
+    limitPerHop?: number;
+  }): Promise<HorizonProductStreamResponse> {
+    const response = await this.client.post('/api/horizon/products/stream', input);
+    return response.data;
   }
 
   async deleteHorizonLens(lensId: string): Promise<{ success: boolean }> {

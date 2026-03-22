@@ -169,7 +169,7 @@ func (e *ScoutEngine) ExpandProductMaterials(
 	return result, nil
 }
 
-// countUpstreamProducts counts products that have TRANSFORMS_INTO edge pointing to the given fragment.
+// countUpstreamProducts counts products that have product-transition edges pointing to the given fragment.
 func (e *ScoutEngine) countUpstreamProducts(ctx context.Context, fragmentID string) (int, error) {
 	if e.edgesRepo == nil {
 		return 0, nil
@@ -180,14 +180,14 @@ func (e *ScoutEngine) countUpstreamProducts(ctx context.Context, fragmentID stri
 	}
 	count := 0
 	for _, edge := range edges {
-		if edge.Type == models.DependencyTypeTransformsInto {
+		if models.IsProductTransitionEdgeType(edge.Type) {
 			count++
 		}
 	}
 	return count, nil
 }
 
-// countDownstreamProducts counts products that this fragment has TRANSFORMS_INTO edge to.
+// countDownstreamProducts counts products that this fragment has product-transition edges to.
 func (e *ScoutEngine) countDownstreamProducts(ctx context.Context, fragmentID string) (int, error) {
 	if e.edgesRepo == nil {
 		return 0, nil
@@ -198,7 +198,7 @@ func (e *ScoutEngine) countDownstreamProducts(ctx context.Context, fragmentID st
 	}
 	count := 0
 	for _, edge := range edges {
-		if edge.Type == models.DependencyTypeTransformsInto {
+		if models.IsProductTransitionEdgeType(edge.Type) {
 			count++
 		}
 	}
@@ -222,8 +222,3 @@ func (e *ScoutEngine) countProducers(ctx context.Context, fragmentID string) (in
 	}
 	return count, nil
 }
-
-
-
-
-

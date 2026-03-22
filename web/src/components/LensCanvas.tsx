@@ -11,6 +11,7 @@ import { api, type DirectedSupplyChainExplorationRequest } from '../lib/api';
 import { LensCanvasDetails } from './LensCanvasDetails';
 import { LensCanvasCockpit } from './LensCanvasCockpit';
 import { LensCanvasProgress } from './LensCanvasProgress';
+import { LensAssembly } from './LensAssembly';
 import { HorizonWatchLensSurface } from './HorizonWatchLensSurface';
 import { WorldMapPanel } from './WorldMapPanel';
 import { QAPanel } from './QAPanel';
@@ -28,7 +29,7 @@ export interface LensCanvasProps {
   lensId: string | null;
   projectId?: string | null;
   /** @deprecated Use lensView for graph/map/analysis. Kept for backward compat with initialViewMode. */
-  initialViewMode?: 'details' | 'cockpit' | 'progress';
+  initialViewMode?: 'assembly' | 'details' | 'cockpit' | 'progress';
   /** Initial lens view (Graph | Map | Analysis). Synced with URL ?view= */
   initialLensView?: LensViewMode;
   showInputInProgress?: boolean;
@@ -103,7 +104,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   const [loading, setLoading] = React.useState(false);
   const [loadingJobs, setLoadingJobs] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [viewMode, setViewMode] = React.useState<'details' | 'cockpit' | 'progress'>(initialViewMode);
+  const [viewMode, setViewMode] = React.useState<'assembly' | 'details' | 'cockpit' | 'progress'>(initialViewMode);
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Lens view: Graph | Map | Analysis. Synced with URL ?view=graph|map|analysis
@@ -193,13 +194,19 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
     } else {
       // When a lens is created from a query, HorizonPage keeps initialViewMode='progress'
       // so the user stays in the progress feed. Respect that choice and do not auto-switch.
-      setViewMode(initialViewMode === 'progress' ? 'progress' : 'cockpit');
+      if (initialViewMode === 'progress') {
+        setViewMode('progress');
+      } else if (initialViewMode === 'assembly') {
+        setViewMode('assembly');
+      } else {
+        setViewMode('cockpit');
+      }
     }
   }, [lensId, initialViewMode]);
 
-  // If no lens is selected and user tries to switch to details/cockpit, switch back to progress
+  // If no lens is selected and user tries to switch to lens-bound modes, switch back to progress.
   React.useEffect(() => {
-    if (!lensId && !lens && (viewMode === 'details' || viewMode === 'cockpit')) {
+    if (!lensId && !lens && (viewMode === 'assembly' || viewMode === 'details' || viewMode === 'cockpit')) {
       setViewMode('progress');
     }
   }, [lensId, lens, viewMode]);
@@ -232,6 +239,12 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
         setLens(lensData);
         setAssemblyStatus(assemblyData);
         setScoutingJobs(jobsData.jobs || []);
+        if (initialViewMode !== 'progress') {
+          const scopeSize = Array.isArray(lensData?.scope) ? lensData.scope.length : 0;
+          if (scopeSize === 0) {
+            setViewMode('assembly');
+          }
+        }
         lensSnapshotCache.set(lensId, {
           lens: lensData,
           assemblyStatus: assemblyData,
@@ -276,7 +289,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
         scopeFragments: lens.scopeFragments,
         resolvedQueries: lens.resolvedQueries,
         lastResolved: lens.lastResolved,
-      });
+      }, { skipScouting: true });
       setLens(updated);
       lensSnapshotCache.set(lensId, {
         lens: updated,
@@ -433,6 +446,29 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
         >
           {(lensId || lens) && (
             <>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={viewMode === 'assembly'}
+                aria-controls="lens-assembly-panel"
+                onClick={() => setViewMode('assembly')}
+                title="Assembly"
+                style={{
+                  border: 'none',
+                  background: viewMode === 'assembly' ? 'var(--white-10)' : 'transparent',
+                  color: 'var(--text-heading)',
+                  borderRadius: 10,
+                  padding: '6px 10px',
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}
+              >
+                Assembly
+              </button>
               {/* Graph | Map | Analysis — plan §1. Graph persists when switching. */}
               <button
                 type="button"
@@ -584,13 +620,13 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
         </div>
 
         <div 
-          className={(viewMode === 'cockpit' || viewMode === 'progress' || viewMode === 'details') ? '' : 'space-y-6 py-2'} 
+          className={(viewMode === 'assembly' || viewMode === 'cockpit' || viewMode === 'progress' || viewMode === 'details') ? '' : 'space-y-6 py-2'} 
           style={{ 
             display: 'flex', 
             flexDirection: 'column', 
-            flex: (viewMode === 'cockpit' || viewMode === 'progress' || viewMode === 'details') ? 1 : 'none',
-            minHeight: (viewMode === 'cockpit' || viewMode === 'progress' || viewMode === 'details') ? 0 : 'auto',
-            overflow: (viewMode === 'cockpit' || viewMode === 'progress' || viewMode === 'details') ? 'hidden' : 'visible',
+            flex: (viewMode === 'assembly' || viewMode === 'cockpit' || viewMode === 'progress' || viewMode === 'details') ? 1 : 'none',
+            minHeight: (viewMode === 'assembly' || viewMode === 'cockpit' || viewMode === 'progress' || viewMode === 'details') ? 0 : 'auto',
+            overflow: (viewMode === 'assembly' || viewMode === 'cockpit' || viewMode === 'progress' || viewMode === 'details') ? 'hidden' : 'visible',
           }}
         >
           {loading && !lens ? (
@@ -664,6 +700,24 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                 preflight={preflight}
                 fatalError={fatalError || assemblyFatalError}
               />
+            )}
+            {viewMode === 'assembly' && lens && (
+              <div id="lens-assembly-panel" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <LensAssembly
+                  lens={lens}
+                  projectId={projectId || lens?.projectId}
+                  onApplyScope={updateLensScope}
+                  onOpenGraph={() => {
+                    setLensView('graph');
+                    setViewMode('cockpit');
+                  }}
+                  onOpenMap={() => {
+                    setLensView('map');
+                    setViewMode('cockpit');
+                  }}
+                  onAssemble={onAssemble}
+                />
+              </div>
             )}
             {viewMode === 'details' && lens && (
               <LensCanvasDetails

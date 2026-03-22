@@ -15,8 +15,8 @@ type LensItem struct {
 	LensID    string `json:"lensId" firestore:"lensId"` // связь с Lens
 
 	// kind/subkind — расширяемая классификация (как у Interaction).
-	Kind    string  `json:"kind" firestore:"kind"`                             // "node" | "edge" | "viewport" | "layout"
-	Subkind *string `json:"subkind,omitempty" firestore:"subkind,omitempty"`   // для edge: DependencyType; для node: "fragment" | ...
+	Kind    string  `json:"kind" firestore:"kind"`                           // "node" | "edge" | "viewport" | "layout"
+	Subkind *string `json:"subkind,omitempty" firestore:"subkind,omitempty"` // для edge: DependencyType; для node: "fragment" | ...
 
 	// kind="node"
 	FragmentID    *string            `json:"fragmentId,omitempty" firestore:"fragmentId,omitempty"`
@@ -124,17 +124,18 @@ func (li *LensItem) Validate() error {
 			return fmt.Errorf("subkind (DependencyType) is required for edge kind")
 		}
 		validEdgeTypes := map[string]bool{
-			string(DependencyTypeSuppliesTo):   true,
-			string(DependencyTypeLocatedIn):    true,
-			string(DependencyTypeOwns):         true,
-			string(DependencyTypeSubsidiaryOf): true,
-			string(DependencyTypeProduces):     true,
-			string(DependencyTypeOperatesIn):   true,
-			string(DependencyTypeRegulates):    true,
-			string(DependencyTypeCompetesWith): true,
-			string(DependencyTypeDependsOn):    true,
-			string(DependencyTypeInfluences):   true,
+			string(DependencyTypeSuppliesTo):     true,
+			string(DependencyTypeLocatedIn):      true,
+			string(DependencyTypeOwns):           true,
+			string(DependencyTypeSubsidiaryOf):   true,
+			string(DependencyTypeProduces):       true,
+			string(DependencyTypeOperatesIn):     true,
+			string(DependencyTypeRegulates):      true,
+			string(DependencyTypeCompetesWith):   true,
+			string(DependencyTypeDependsOn):      true,
+			string(DependencyTypeInfluences):     true,
 			string(DependencyTypeTransformsInto): true,
+			string(DependencyTypeAssemblesInto):  true,
 			// Governance / org-person
 			string(DependencyTypeManages):       true,
 			string(DependencyTypeControls):      true,
@@ -185,7 +186,3 @@ func (li *LensItem) Validate() error {
 
 	return nil
 }
-
-
-
-

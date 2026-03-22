@@ -254,6 +254,24 @@
       ]
     },
     {
+      "collectionGroup": "horizon_product_transform_pairs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "active", "order": "ASCENDING" },
+        { "fieldPath": "fromPath", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_product_transform_pairs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "active", "order": "ASCENDING" },
+        { "fieldPath": "toPath", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "ontology_events",
       "queryScope": "COLLECTION",
       "fields": [
@@ -806,8 +824,25 @@
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "geoSlug", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_fragments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
         { "fieldPath": "governance.status", "order": "ASCENDING" },
         { "fieldPath": "indexPaths", "arrayConfig": "CONTAINS" }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_fragments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "governance.status", "order": "ASCENDING" },
+        { "fieldPath": "geoSlug", "order": "ASCENDING" }
       ]
     },
     {

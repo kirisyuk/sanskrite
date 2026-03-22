@@ -9,6 +9,12 @@
 - описывать реальные канонические шаги переработки, производства или сборки
 - позволять потом собирать длинные продуктовые цепочки из коротких эталонных шагов
 
+Теперь в словаре для каждой пары отдельно фиксируется тип связи:
+- `relationKind = transformation`
+- `relationKind = assembly`
+
+То есть словарь больше не заставляет downstream-логику угадывать по имени пары, является ли шаг именно переделом или сборкой.
+
 Примеры смысла:
 - `bauxite -> alumina`
 - `spodumene concentrate -> lithium carbonate`
@@ -68,7 +74,10 @@
 Пример правильной логики:
 - хорошо: `battery cell -> battery module`
 - хорошо: `battery module -> battery pack`
-- плохо: `battery cell -> electric vehicle`
+- хорошо: `tire -> vehicle`, если это уже готовая шина и в данных нет отдельной полезной промежуточной продуктовой стадии
+- хорошо: `battery pack -> electric vehicle`, если это ближайший реальный assembly step
+- плохо: `steel coil -> vehicle`
+- плохо: `battery material -> vehicle`
 
 ## Какие пары отбрасывались
 
@@ -175,3 +184,9 @@
 - чтобы downstream-алгоритмы могли различать conversion и assembly
 
 Пока такого типа нет, прямые assembly steps допустимо хранить в текущем canonical transform dictionary.
+Особенно это касается случаев вида:
+- `tire -> vehicle`
+- `battery pack -> vehicle`
+- `module -> final device`
+
+То есть отсутствие отдельного `ASSEMBLED_INTO` сейчас не повод терять такие прямые шаги.

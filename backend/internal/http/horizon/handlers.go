@@ -6,10 +6,12 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon"
+	horizonproductdict "github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	horizonprop "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonqa "github.com/igorkirisyuk/sanskrite/internal/horizon/qa"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
+	horizonsupplychain "github.com/igorkirisyuk/sanskrite/internal/horizon/supplychain"
 	horizonwatch "github.com/igorkirisyuk/sanskrite/internal/horizon/watch"
 	horizonwatchruntime "github.com/igorkirisyuk/sanskrite/internal/horizon/watchruntime"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
@@ -36,6 +38,8 @@ type HorizonHandlers struct {
 	identifyStressesCanvas    *IdentifyStressesCanvas
 	completeSubstrateCanvas   *CompleteSubstrateCanvas
 	recoverMetricsCanvas      *RecoverMetricsCanvas
+	oneHopDownstreamService   *horizonsupplychain.OneHopDownstreamService
+	productDictionary         *horizonproductdict.Runtime
 
 	// Lens Q&A (Analysis view)
 	qaEngine                *horizonqa.Engine
@@ -76,6 +80,11 @@ func (h *HorizonHandlers) WithGenAIHandler(handler *httputil.GenAIHandler) *Hori
 // WithProfilesHandler добавляет ProfilesHandler
 func (h *HorizonHandlers) WithProfilesHandler(handler *ProfilesHandler) *HorizonHandlers {
 	h.profilesHandler = handler
+	return h
+}
+
+func (h *HorizonHandlers) WithProductDictionary(dict *horizonproductdict.Runtime) *HorizonHandlers {
+	h.productDictionary = dict
 	return h
 }
 
@@ -162,6 +171,11 @@ func (h *HorizonHandlers) WithRecoverMetricsCanvas(c *RecoverMetricsCanvas) *Hor
 	return h
 }
 
+func (h *HorizonHandlers) WithOneHopDownstreamService(svc *horizonsupplychain.OneHopDownstreamService) *HorizonHandlers {
+	h.oneHopDownstreamService = svc
+	return h
+}
+
 // WithQAEngine wires the Lens Q&A engine (Decompose → Simulate → Synthesize).
 func (h *HorizonHandlers) WithQAEngine(engine *horizonqa.Engine, ctxBuilder *horizonqa.AnswerContextBuilder, synthesizer *horizonqa.AnswerSynthesizer, sessionsRepo *horizonrepo.QASessionsRepository) *HorizonHandlers {
 	h.qaEngine = engine
@@ -239,6 +253,8 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 	mux.Handle("/api/horizon/supply-chains/by-node", authMiddleware(http.HandlerFunc(h.GetSupplyChainsByNode)))
 	mux.Handle("/api/horizon/supply-chains/by-lens", authMiddleware(http.HandlerFunc(h.GetSupplyChainsByLens)))
 	mux.Handle("/api/horizon/supply-chains/search", authMiddleware(http.HandlerFunc(h.SearchSupplyChains)))
+	mux.Handle("/api/horizon/products/prefetch", authMiddleware(http.HandlerFunc(h.GetProductPrefetch)))
+	mux.Handle("/api/horizon/products/stream", authMiddleware(http.HandlerFunc(h.GetProductStream)))
 	mux.Handle("/api/horizon/geo-objects", authMiddleware(http.HandlerFunc(h.ListGeoObjects)))
 	mux.Handle("/api/horizon/geo-objects/by-paths", authMiddleware(http.HandlerFunc(h.ListGeoObjectsByPaths)))
 	mux.Handle("/api/horizon/map-activity", authMiddleware(http.HandlerFunc(h.ListMapActivity)))
@@ -445,6 +461,18 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 		case "complete-substrate":
 			h.CompleteSubstrate(w, r)
 			return
+		case "supply-chain":
+			if len(pathParts) < 3 {
+				http.Error(w, "Supply-chain action is required", http.StatusBadRequest)
+				return
+			}
+			switch strings.TrimSpace(pathParts[2]) {
+			case "one-hop-downstream":
+				h.StartLensOneHopDownstream(w, r)
+			default:
+				http.Error(w, "Unknown supply-chain action", http.StatusNotFound)
+			}
+			return
 		case "recover-metrics":
 			h.RecoverMetrics(w, r)
 			return
@@ -618,6 +646,11 @@ func (h *HorizonHandlers) HandleFragmentRoutes(w http.ResponseWriter, r *http.Re
 
 	if strings.HasSuffix(r.URL.Path, "/expand-materials") {
 		h.ExpandProductMaterials(w, r)
+		return
+	}
+
+	if strings.HasSuffix(r.URL.Path, "/expand-one-hop-downstream") {
+		h.StartFragmentOneHopDownstream(w, r)
 		return
 	}
 

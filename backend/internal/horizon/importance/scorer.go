@@ -715,6 +715,7 @@ func directEdgeTypeWeight(edgeType horizonmodels.DependencyType) float64 {
 	case horizonmodels.DependencyTypeSuppliesTo,
 		horizonmodels.DependencyTypeProduces,
 		horizonmodels.DependencyTypeTransformsInto,
+		horizonmodels.DependencyTypeAssemblesInto,
 		horizonmodels.DependencyTypeExtractsFrom,
 		horizonmodels.DependencyTypeRegulates,
 		horizonmodels.DependencyTypeControls,

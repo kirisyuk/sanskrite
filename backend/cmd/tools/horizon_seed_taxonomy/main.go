@@ -265,6 +265,7 @@ func main() {
 			"DEPENDS_ON",
 			"SUBSIDIARY_OF",
 			"TRANSFORMS_INTO",
+			"ASSEMBLES_INTO",
 			"EXTRACTS_FROM", // FACILITY → DEPOSIT
 			// Market participation
 			"PARTICIPATES_IN",

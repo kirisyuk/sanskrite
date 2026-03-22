@@ -727,6 +727,50 @@ func TestParseSupplyChains_TransformsIntoDirectionCorrect_NoSwap(t *testing.T) {
 	}
 }
 
+func TestParseSupplyChains_ComponentToFinished_UsesAssemblesInto(t *testing.T) {
+	parser := NewSupplyChainParser()
+	chains := []agents.SupplyChain{
+		{
+			Confidence: 0.89,
+			Reason:     "Tire assembled into electric vehicle",
+			Nodes: []agents.SupplyChainNode{
+				{
+					CanonicalPath: "/product/component/mechanical/assembly/tire",
+					Name:          "Tire",
+					Type:          "PRODUCT",
+				},
+				{
+					CanonicalPath: "/product/finished/mechanical/assembly/electric-vehicle",
+					Name:          "Electric Vehicle",
+					Type:          "PRODUCT",
+				},
+			},
+		},
+	}
+
+	result, err := parser.ParseSupplyChains(chains, "/product/component/mechanical/assembly/tire")
+	if err != nil {
+		t.Fatalf("ParseSupplyChains() error = %v", err)
+	}
+
+	var assemblyEdge *ChainEdge
+	for _, e := range result.Edges {
+		if e.RelationType == string(models.DependencyTypeAssemblesInto) {
+			assemblyEdge = e
+			break
+		}
+	}
+	if assemblyEdge == nil {
+		t.Fatalf("expected ASSEMBLES_INTO edge")
+	}
+	if assemblyEdge.SourceCanonicalPath != "/product/component/mechanical/assembly/tire" {
+		t.Fatalf("ASSEMBLES_INTO source=%q, want tire (component)", assemblyEdge.SourceCanonicalPath)
+	}
+	if assemblyEdge.TargetCanonicalPath != "/product/finished/mechanical/assembly/electric-vehicle" {
+		t.Fatalf("ASSEMBLES_INTO target=%q, want electric-vehicle (assembled product)", assemblyEdge.TargetCanonicalPath)
+	}
+}
+
 func TestParseSupplyChains_TransformsIntoViaFacility_DirectionSwap(t *testing.T) {
 	parser := NewSupplyChainParser()
 	chains := []agents.SupplyChain{

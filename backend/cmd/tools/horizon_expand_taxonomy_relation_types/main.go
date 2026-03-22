@@ -20,7 +20,8 @@ import (
 // Expands Horizon taxonomy relation types in Firestore WITHOUT overwriting the full taxonomy document.
 //
 // Usage:
-//   go run ./cmd/tools/horizon_expand_taxonomy_relation_types --project <gcp-project> --version v1
+//
+//	go run ./cmd/tools/horizon_expand_taxonomy_relation_types --project <gcp-project> --version v1
 func main() {
 	ctx := context.Background()
 
@@ -64,6 +65,7 @@ func main() {
 		string(horizonmodels.DependencyTypeDependsOn),
 		string(horizonmodels.DependencyTypeAffects),
 		string(horizonmodels.DependencyTypeTransformsInto),
+		string(horizonmodels.DependencyTypeAssemblesInto),
 		string(horizonmodels.DependencyTypeExtractsFrom),
 		// Market participation
 		string(horizonmodels.DependencyTypeParticipatesIn),

@@ -136,6 +136,23 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// Ensure scope contains this canonical path for node-scoped requests regardless of runtime branch.
+	scopeAdded := false
+	{
+		seen := map[string]struct{}{}
+		for _, p := range lens.Scope {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			seen[p] = struct{}{}
+		}
+		if _, ok := seen[targetCanonicalPath]; !ok {
+			lens.Scope = append(lens.Scope, targetCanonicalPath)
+			scopeAdded = true
+		}
+	}
+
 	// Attach realtime ctx (best-effort)
 	ctx := rtctx.With(r.Context(), rtctx.Context{
 		TenantID:      authInfo.TenantID,
@@ -144,6 +161,31 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 		CorrelationID: correlationID,
 		SessionID:     sessionID,
 	})
+
+	if shouldRouteDirectedExplorationToOneHop(targetCanonicalPath, directedExploration) {
+		if h.oneHopDownstreamService == nil || h.scoutingJobsRepo == nil {
+			http.Error(w, "One-hop downstream service unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		opts := buildOneHopOptionsForDirectedExploration(targetCanonicalPath)
+		jobID, err := h.createOneHopJob(ctx, authInfo.UID, authInfo.TenantID, lens.ProjectID, lens.ID, opts)
+		if err != nil {
+			http.Error(w, "Failed to enqueue one-hop downstream job: "+strings.TrimSpace(err.Error()), http.StatusServiceUnavailable)
+			return
+		}
+		if scopeAdded {
+			_ = h.service.Lens().UpdateLens(hlens.WithSkipScouting(ctx), lens)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Correlation-Id", correlationID)
+		json.NewEncoder(w).Encode(scopeScoutLensNodeResponse{
+			JobID:      jobID,
+			ScopeAdded: scopeAdded,
+			Target:     strings.TrimSpace(opts.AnchorRef),
+			Lens:       lens,
+		})
+		return
+	}
 
 	ready, reason, message := h.scoutExecutionAvailability()
 	if !ready {
@@ -162,23 +204,6 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 			"mode": "scope_scout",
 		})
 		return
-	}
-
-	// Ensure scope contains this canonical path
-	scopeAdded := false
-	{
-		seen := map[string]struct{}{}
-		for _, p := range lens.Scope {
-			p = strings.TrimSpace(p)
-			if p == "" {
-				continue
-			}
-			seen[p] = struct{}{}
-		}
-		if _, ok := seen[targetCanonicalPath]; !ok {
-			lens.Scope = append(lens.Scope, targetCanonicalPath)
-			scopeAdded = true
-		}
 	}
 
 	// Create scouting job (depth=1 by default) — best-effort and idempotent on active jobs.
@@ -234,6 +259,8 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 				state["hotPathCanonicalPaths"] = hotPathCanonicalPaths
 			}
 			state["ignoreFreshnessForUserRequest"] = directedExploration.IgnoreFreshness
+			state["legacyDirectedExplorationDeprecated"] = true
+			state["legacyDirectedExplorationReason"] = "prefer_one_hop_downstream_for_org_fac_downstream"
 		}
 		if len(specialties) > 0 {
 			state["specialties"] = specialties

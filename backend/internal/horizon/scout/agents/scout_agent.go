@@ -583,9 +583,11 @@ const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends 
      If THIS FRAGMENT is the investee (e.g., "invested in by X"), set explicit sourceCanonicalPath/sourceType/sourceName = X and targetCanonicalPath = THIS FRAGMENT.
    - PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY or DEPOSIT, target MUST be PRODUCT).
    - For input products: SUPPLIES_TO(product->org/fac) is allowed.
-   - TRANSFORMS_INTO: upstream PRODUCT -> downstream PRODUCT (value-chain transformation).
+   - TRANSFORMS_INTO: upstream PRODUCT -> downstream PRODUCT (value-chain transformation / processing).
      Direction is strict: source MUST be the raw/earlier-stage product, target MUST be the refined/later-stage product.
      Example: copper-ore TRANSFORMS_INTO copper-concentrate (NEVER the reverse). iron-ore TRANSFORMS_INTO iron-pellet (NEVER the reverse).
+   - ASSEMBLES_INTO: component/subassembly PRODUCT -> assembled downstream PRODUCT.
+     Use for nearest assembly steps such as tire -> vehicle, battery-pack -> electric-vehicle, display-module -> smartphone-line.
    - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT.
    - If THIS FRAGMENT is DEPOSIT and evidence says "X extracts from this deposit" or "X depends on this deposit":
      use explicit sourceCanonicalPath/sourceType/sourceName for X and keep targetCanonicalPath = THIS FRAGMENT.
@@ -655,11 +657,12 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
 
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) {
 		b.WriteString(`   SUPPLY CHAIN MODE (operational edges only):
-   - Do NOT use DEPENDS_ON for supply links. Use PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM.
+   - Do NOT use DEPENDS_ON for supply links. Use PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, EXTRACTS_FROM.
    - Operational type matrix (hard contract):
      - PRODUCES: ORGANIZATION|FACILITY|DEPOSIT -> PRODUCT
      - SUPPLIES_TO: ORGANIZATION|FACILITY|PRODUCT -> ORGANIZATION|FACILITY
-     - TRANSFORMS_INTO: PRODUCT -> PRODUCT (upstream -> downstream)
+     - TRANSFORMS_INTO: PRODUCT -> PRODUCT (upstream -> downstream processing)
+     - ASSEMBLES_INTO: PRODUCT -> PRODUCT (component/subassembly -> assembled downstream product)
      - EXTRACTS_FROM: FACILITY -> DEPOSIT
    - For actor↔actor SUPPLIES_TO links, include qualifiers.source_role=supplier and qualifiers.target_role=customer.
    - OWNS is allowed ONLY for supply-relevant ownership:
@@ -677,7 +680,7 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
    - PARTICIPATES_IN: ORG/FACILITY -> MARKET (commercial market participation). For "market depends on org" use PARTICIPATES_IN with ORG as source.
    - TRADED_IN: PRODUCT -> MARKET only for product trading/price-discovery context.
    - MARKET source guard in supply_chain: MARKET may emit only PARTICIPATES_IN and HAS_MARKET_SEGMENT (plus DOMAIN scaffold when source is /domain/...).
-     Never emit PRODUCES/SUPPLIES_TO/TRANSFORMS_INTO/EXTRACTS_FROM/OPERATES_IN from MARKET.
+     Never emit PRODUCES/SUPPLIES_TO/TRANSFORMS_INTO/ASSEMBLES_INTO/EXTRACTS_FROM/OPERATES_IN from MARKET.
    - REGULATES: GOV entity (/gov/...) -> MARKET or ORG (domestic regulatory oversight). NEVER use DEPENDS_ON for government regulation.
    - ADMINISTERS: GOV entity (/gov/...) -> subordinate GOV/PROGRAM/FACILITY (administrative hierarchy).
    - For transmission/capacity add throughput_share, capacity_constraint, reroute_penalty when known.

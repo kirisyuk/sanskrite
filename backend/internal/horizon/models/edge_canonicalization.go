@@ -1,6 +1,7 @@
 package models
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
@@ -42,6 +43,61 @@ func NormalizeSymmetricEdge(sourceID, targetID string, edgeType DependencyType) 
 // IsSymmetricEdge returns true if the edge type is symmetric.
 func IsSymmetricEdge(edgeType DependencyType) bool {
 	return SymmetricEdgeTypes[edgeType]
+}
+
+// IsProductTransitionEdgeType reports whether the edge type is a product->product
+// upstream/downstream step used in supply-chain continuity checks.
+func IsProductTransitionEdgeType(edgeType DependencyType) bool {
+	switch edgeType {
+	case DependencyTypeTransformsInto, DependencyTypeAssemblesInto:
+		return true
+	default:
+		return false
+	}
+}
+
+// ProductToProductEdgeTypeFromPaths selects the canonical product->product edge type.
+// Assembly is reserved for nearest-step component/subassembly -> assembled product links.
+// Everything else stays TRANSFORMS_INTO.
+func ProductToProductEdgeTypeFromPaths(sourcePath, targetPath string) DependencyType {
+	if shouldPreferAssemblesIntoByProductPaths(sourcePath, targetPath) {
+		return DependencyTypeAssemblesInto
+	}
+	return DependencyTypeTransformsInto
+}
+
+func shouldPreferAssemblesIntoByProductPaths(sourcePath, targetPath string) bool {
+	src, srcOK := parseProductCanonicalParts(sourcePath)
+	tgt, tgtOK := parseProductCanonicalParts(targetPath)
+	if !srcOK || !tgtOK {
+		return false
+	}
+	srcCategory := strings.ToLower(strings.TrimSpace(src.Category))
+	tgtCategory := strings.ToLower(strings.TrimSpace(tgt.Category))
+	srcStage := strings.ToLower(strings.TrimSpace(src.Stage))
+	tgtStage := strings.ToLower(strings.TrimSpace(tgt.Stage))
+
+	targetLooksAssembled := tgtCategory == "finished" || tgtStage == "assembly"
+	sourceLooksSubassembly := srcCategory == "component" || srcStage == "assembly" || srcStage == "manufacturing" || srcCategory == "finished"
+	if !targetLooksAssembled || !sourceLooksSubassembly {
+		return false
+	}
+	if srcCategory == "raw" {
+		return false
+	}
+	return true
+}
+
+func parseProductCanonicalParts(path string) (*taxonomy.ProductPathParts, bool) {
+	path = strings.TrimSpace(path)
+	if path == "" || !strings.HasPrefix(path, "/product/") {
+		return nil, false
+	}
+	parts, err := taxonomy.ParseCanonicalPathParts(path)
+	if err != nil || parts == nil || parts.Product == nil {
+		return nil, false
+	}
+	return parts.Product, true
 }
 
 // isDynastyOrTribeCommunity checks if a canonicalPath represents a dynasty or tribe community.
@@ -637,6 +693,14 @@ func CanonicalizeEdgeWithPaths(edgeType DependencyType, sourceType, targetType F
 		edgeType = newType
 	}
 
+	if edgeType == DependencyTypeTransformsInto &&
+		sourceType == FragmentTypeProduct &&
+		targetType == FragmentTypeProduct &&
+		sourcePath != "" && targetPath != "" &&
+		ProductToProductEdgeTypeFromPaths(sourcePath, targetPath) == DependencyTypeAssemblesInto {
+		return DependencyTypeAssemblesInto, shouldSwap, true, "canonicalize: PRODUCT transition promoted to ASSEMBLES_INTO by product category/stage"
+	}
+
 	// Additional path-based canonicalization: OWNS from ORG to COMMUNITY (dynasty/tribe) should be reversed.
 	// Dynasties and tribes own organizations, not the reverse.
 	if edgeType == DependencyTypeOwns &&
@@ -667,16 +731,16 @@ func CanonicalizeEdgeWithPaths(edgeType DependencyType, sourceType, targetType F
 		// Source path is prefix of target: correct direction, no swap
 	}
 
-	// TRANSFORMS_INTO: upstream product stage must point to downstream stage.
+	// Product transition edges: upstream product stage must point to downstream stage.
 	// Example: extraction -> processing (never the reverse).
-	if edgeType == DependencyTypeTransformsInto &&
+	if IsProductTransitionEdgeType(edgeType) &&
 		sourceType == FragmentTypeProduct &&
 		targetType == FragmentTypeProduct &&
 		sourcePath != "" && targetPath != "" {
 		srcStageRank, srcOk := ProductStageRankFromCanonicalPath(sourcePath)
 		tgtStageRank, tgtOk := ProductStageRankFromCanonicalPath(targetPath)
 		if srcOk && tgtOk && srcStageRank > tgtStageRank {
-			return edgeType, !shouldSwap, true, "canonicalize: TRANSFORMS_INTO downstream->upstream -> upstream->downstream (by product stage order)"
+			return edgeType, !shouldSwap, true, fmt.Sprintf("canonicalize: %s downstream->upstream -> upstream->downstream (by product stage order)", edgeType)
 		}
 	}
 

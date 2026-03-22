@@ -2,6 +2,15 @@
 
 Документ описывает подход к канонизации supply-chain связей в Horizon графе.
 
+Важное замечание:
+
+этот документ описывает семантику supply-chain канонизации, но не является главным документом про product identity и canonical product steps.
+Для этого теперь есть отдельный верхнеуровневый документ:
+
+- [Supply Chain Canonical Control Plane](/Users/kirisyuk/cursor/sanskrite/docs/horizon/architecture/supply-chain-canonical-control-plane.md)
+
+Если задача касается products, synonyms, transforms, assembly или materialized supply-chain paths, начинать нужно именно с него.
+
 ---
 
 ## 1. От организации (Organization-Centric View)
@@ -281,4 +290,3 @@
 | `unknown` | `not_fit` | `null` | Неизвестно |
 
 `produces_adjacent` указывает на потенциальную связь `REQUIRES` между продуктами.
-

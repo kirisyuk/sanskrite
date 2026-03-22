@@ -87,6 +87,7 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 				models.DependencyTypeProduces,
 				models.DependencyTypeSuppliesTo,
 				models.DependencyTypeTransformsInto,
+				models.DependencyTypeAssemblesInto,
 				models.DependencyTypeExtractsFrom,
 			},
 			OverlayEdges: []models.DependencyType{

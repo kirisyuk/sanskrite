@@ -403,14 +403,19 @@ func (e *SupplyChainQueryEngine) populateProductAdjacency(ctx context.Context, s
 	if len(sourceIDs) == 0 {
 		return nil
 	}
-	edgeType := models.DependencyTypeTransformsInto
-	downstreamEdges, err := e.edgesRepo.ListBySourceIDsAndType(ctx, "global", sourceIDs, edgeType)
-	if err != nil {
-		return err
-	}
-	upstreamEdges, err := e.edgesRepo.ListByTargetIDsAndType(ctx, "global", sourceIDs, edgeType)
-	if err != nil {
-		return err
+	downstreamEdges := make([]*models.DependencyEdge, 0)
+	upstreamEdges := make([]*models.DependencyEdge, 0)
+	for _, edgeType := range []models.DependencyType{models.DependencyTypeTransformsInto, models.DependencyTypeAssemblesInto} {
+		typedDownstream, err := e.edgesRepo.ListBySourceIDsAndType(ctx, "global", sourceIDs, edgeType)
+		if err != nil {
+			return err
+		}
+		downstreamEdges = append(downstreamEdges, typedDownstream...)
+		typedUpstream, err := e.edgesRepo.ListByTargetIDsAndType(ctx, "global", sourceIDs, edgeType)
+		if err != nil {
+			return err
+		}
+		upstreamEdges = append(upstreamEdges, typedUpstream...)
 	}
 	relatedIDs := make(map[string]struct{}, len(downstreamEdges)+len(upstreamEdges))
 	for _, edge := range downstreamEdges {
@@ -525,32 +530,36 @@ func (e *SupplyChainQueryEngine) resolveProductClosure(
 	for depth := 0; depth < opts.MaxProductClosureDepth && len(frontier) > 0; depth++ {
 		nextIDs := make(map[string]struct{})
 		if opts.ClosureMode == ProductClosureDownstream || opts.ClosureMode == ProductClosureBoth {
-			edges, err := e.edgesRepo.ListBySourceIDsAndType(ctx, "global", frontier, models.DependencyTypeTransformsInto)
-			if err != nil {
-				return nil, err
-			}
-			for _, edge := range edges {
-				if edge == nil {
-					continue
+			for _, edgeType := range []models.DependencyType{models.DependencyTypeTransformsInto, models.DependencyTypeAssemblesInto} {
+				edges, err := e.edgesRepo.ListBySourceIDsAndType(ctx, "global", frontier, edgeType)
+				if err != nil {
+					return nil, err
 				}
-				targetID := strings.TrimSpace(edge.TargetFragmentID)
-				if targetID != "" {
-					nextIDs[targetID] = struct{}{}
+				for _, edge := range edges {
+					if edge == nil {
+						continue
+					}
+					targetID := strings.TrimSpace(edge.TargetFragmentID)
+					if targetID != "" {
+						nextIDs[targetID] = struct{}{}
+					}
 				}
 			}
 		}
 		if opts.ClosureMode == ProductClosureUpstream || opts.ClosureMode == ProductClosureBoth {
-			edges, err := e.edgesRepo.ListByTargetIDsAndType(ctx, "global", frontier, models.DependencyTypeTransformsInto)
-			if err != nil {
-				return nil, err
-			}
-			for _, edge := range edges {
-				if edge == nil {
-					continue
+			for _, edgeType := range []models.DependencyType{models.DependencyTypeTransformsInto, models.DependencyTypeAssemblesInto} {
+				edges, err := e.edgesRepo.ListByTargetIDsAndType(ctx, "global", frontier, edgeType)
+				if err != nil {
+					return nil, err
 				}
-				sourceID := strings.TrimSpace(edge.SourceFragmentID)
-				if sourceID != "" {
-					nextIDs[sourceID] = struct{}{}
+				for _, edge := range edges {
+					if edge == nil {
+						continue
+					}
+					sourceID := strings.TrimSpace(edge.SourceFragmentID)
+					if sourceID != "" {
+						nextIDs[sourceID] = struct{}{}
+					}
 				}
 			}
 		}

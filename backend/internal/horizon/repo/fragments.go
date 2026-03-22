@@ -28,6 +28,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/graphenrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -108,6 +109,83 @@ func PrepareFragmentForValidation(fragment *models.HorizonFragment) {
 	bestEffortReconcileFragmentTypeFromPath(fragment)
 	graphenrich.ApplyFragmentHeuristics(fragment)
 	ensurePersistInvariants(fragment)
+}
+
+func (r *HorizonFragmentsRepository) normalizeProductDictionaryRefs(ctx context.Context, fragment *models.HorizonFragment) error {
+	if r == nil || r.productDictionary == nil || fragment == nil {
+		return nil
+	}
+	tenantID := firstNonEmptyFragmentTenant(fragment.TenantID)
+	if fragment.Type == models.FragmentTypeProduct {
+		canonicalPath, matched, err := r.productDictionary.CanonicalizeProductPathForTenant(ctx, tenantID, fragment.CanonicalPath)
+		if err != nil {
+			return err
+		}
+		if matched && canonicalPath != "" && canonicalPath != fragment.CanonicalPath {
+			fragment.CanonicalPath = canonicalPath
+			fragment.CanonicalParts = nil
+		}
+	}
+	if fragment.ProductRef != nil {
+		canonicalPath, matched, err := r.productDictionary.CanonicalizeProductPathForTenant(ctx, tenantID, strings.TrimSpace(*fragment.ProductRef))
+		if err != nil {
+			return err
+		}
+		if matched && canonicalPath != "" {
+			fragment.ProductRef = ptrString(canonicalPath)
+		}
+	}
+	return nil
+}
+
+func (r *HorizonFragmentsRepository) recordUnknownProductCandidatesAsync(fragment *models.HorizonFragment) {
+	if r == nil || r.productDictionary == nil || fragment == nil {
+		return
+	}
+	f := *fragment
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("[HorizonFragments] ERROR: product candidate hook panic recovered: fragmentId=%s canonicalPath=%s panic=%v stack=%s",
+					strings.TrimSpace(f.ID), strings.TrimSpace(f.CanonicalPath), rec, string(debug.Stack()))
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if f.Type == models.FragmentTypeProduct {
+			_ = r.productDictionary.RecordUnknownProductCandidate(ctx, productdict.ProductObservation{
+				TenantID:     firstNonEmptyFragmentTenant(f.TenantID),
+				ObservedPath: strings.TrimSpace(f.CanonicalPath),
+				ObservedName: fragmentDisplayName(&f),
+				SourceKind:   "fragment_create",
+				FragmentID:   strings.TrimSpace(f.ID),
+			})
+		}
+		if f.Type == models.FragmentTypeSupplyLink && f.ProductRef != nil {
+			_ = r.productDictionary.RecordUnknownProductCandidate(ctx, productdict.ProductObservation{
+				TenantID:     firstNonEmptyFragmentTenant(f.TenantID),
+				ObservedPath: strings.TrimSpace(*f.ProductRef),
+				ObservedName: "",
+				SourceKind:   "supply_link_product_ref",
+				FragmentID:   strings.TrimSpace(f.ID),
+			})
+		}
+	}()
+}
+
+func firstNonEmptyFragmentTenant(tenantID string) string {
+	if v := strings.TrimSpace(tenantID); v != "" {
+		return v
+	}
+	return "global"
+}
+
+func ptrString(v string) *string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return nil
+	}
+	return &v
 }
 
 func validateForbiddenSyntheticPlaceholderForCreate(fragment *models.HorizonFragment) error {
@@ -332,7 +410,8 @@ type HorizonFragmentsRepository struct {
 	// Used on fragment delete to avoid stale search hits.
 	vertexSearchDelete func(ctx context.Context, fragmentID string) error
 
-	redisCache *redis.Client
+	redisCache        *redis.Client
+	productDictionary *productdict.Runtime
 }
 
 // NewHorizonFragmentsRepository создает новый репозиторий
@@ -447,6 +526,11 @@ func (r *HorizonFragmentsRepository) WithRedis(c *redis.Client) *HorizonFragment
 	return r
 }
 
+func (r *HorizonFragmentsRepository) WithProductDictionary(dict *productdict.Runtime) *HorizonFragmentsRepository {
+	r.productDictionary = dict
+	return r
+}
+
 // WithVertexSearchSync настраивает синхронизацию с Vertex AI Search (legacy single-URI mode).
 // Deprecated: use WithVertexSyncBatcher for better quota management.
 func (r *HorizonFragmentsRepository) WithVertexSearchSync(syncFn func(ctx context.Context, gcsURI string) (operationName string, err error)) *HorizonFragmentsRepository {
@@ -554,6 +638,7 @@ func (r *HorizonFragmentsRepository) uploadToGCS(ctx context.Context, fragment *
 			"entityPath":        fragment.EntityPath,
 			"industryPaths":     nonEmptyStrings(fragment.IndustryPaths),
 			"spherePaths":       nonEmptyStrings(fragment.SpherePaths),
+			"geoSlug":           strings.TrimSpace(fragment.GeoSlug),
 			"indexPaths":        fragment.IndexPaths,
 			"parentPath":        strings.TrimSpace(fragment.ParentPath),
 			"parentGovPath":     strings.TrimSpace(fragment.ParentGovPath),
@@ -938,6 +1023,9 @@ func (r *HorizonFragmentsRepository) createWithOptions(ctx context.Context, frag
 	if fragment == nil {
 		return "", ErrInvalidDocument
 	}
+	if err := r.normalizeProductDictionaryRefs(ctx, fragment); err != nil {
+		log.Printf("[HorizonFragments] WARNING: product dictionary normalization failed on create path=%s err=%v", strings.TrimSpace(fragment.CanonicalPath), err)
+	}
 	PrepareFragmentForValidation(fragment)
 	if err := fragment.Validate(); err != nil {
 		return "", fmt.Errorf("validation error: %w", err)
@@ -1081,6 +1169,7 @@ func (r *HorizonFragmentsRepository) createWithOptions(ctx context.Context, frag
 	}
 
 	// Best-effort onUpsert hook (async, panic-safe)
+	r.recordUnknownProductCandidatesAsync(fragment)
 	r.runOnUpsertAsync(fragment)
 
 	return fragment.ID, nil
@@ -1179,6 +1268,48 @@ func (r *HorizonFragmentsRepository) GetByCanonicalPath(ctx context.Context, can
 	return best, nil
 }
 
+func (r *HorizonFragmentsRepository) GetByCanonicalPathForTenant(ctx context.Context, tenantID string, canonicalPath string) (*models.HorizonFragment, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" || tenantID == "global" {
+		return r.GetByCanonicalPath(ctx, canonicalPath)
+	}
+	if frag, err := r.getByCanonicalPathForSingleTenant(ctx, tenantID, canonicalPath); err == nil && frag != nil {
+		return frag, nil
+	}
+	return r.GetByCanonicalPath(ctx, canonicalPath)
+}
+
+func (r *HorizonFragmentsRepository) getByCanonicalPathForSingleTenant(ctx context.Context, tenantID string, canonicalPath string) (*models.HorizonFragment, error) {
+	if canonicalPath == "" {
+		return nil, ErrInvalidDocument
+	}
+	cp := strings.TrimSpace(canonicalPath)
+	if claim, err := r.getPathClaim(ctx, tenantID, cp); err == nil && claim != nil && strings.TrimSpace(claim.FragmentID) != "" {
+		if frag, gerr := r.Get(ctx, strings.TrimSpace(claim.FragmentID)); gerr == nil && frag != nil {
+			if strings.TrimSpace(frag.CanonicalPath) == cp && strings.TrimSpace(frag.TenantID) == tenantID {
+				return frag, nil
+			}
+		}
+	}
+	q := r.col.Where("tenantId", "==", tenantID).Where("canonicalPath", "==", cp)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(docs) == 0 {
+		return nil, ErrFragmentNotFound
+	}
+	best, err := selectPreferredFragmentFromDocs(docs, cp)
+	if err != nil {
+		return nil, err
+	}
+	if best == nil {
+		return nil, ErrFragmentNotFound
+	}
+	_ = r.upsertPathClaim(ctx, tenantID, cp, strings.TrimSpace(best.ID))
+	return best, nil
+}
+
 // BatchGetByCanonicalPaths fetches fragments for canonical paths with Redis-assisted chunked Firestore prefetch.
 // Missing paths are omitted from the result map.
 func (r *HorizonFragmentsRepository) BatchGetByCanonicalPaths(ctx context.Context, canonicalPaths []string) (map[string]*models.HorizonFragment, error) {
@@ -1259,6 +1390,31 @@ func (r *HorizonFragmentsRepository) BatchGetByCanonicalPaths(ctx context.Contex
 			_ = r.upsertPathClaim(ctx, "global", cp, strings.TrimSpace(best.ID))
 			r.setFragmentInRedis(ctx, cp, best)
 		}
+	}
+	return result, nil
+}
+
+func (r *HorizonFragmentsRepository) BatchGetByCanonicalPathsForTenant(ctx context.Context, tenantID string, canonicalPaths []string) (map[string]*models.HorizonFragment, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" || tenantID == "global" {
+		return r.BatchGetByCanonicalPaths(ctx, canonicalPaths)
+	}
+	result := make(map[string]*models.HorizonFragment, len(canonicalPaths))
+	seen := map[string]struct{}{}
+	for _, raw := range canonicalPaths {
+		cp := strings.TrimSpace(raw)
+		if cp == "" {
+			continue
+		}
+		if _, ok := seen[cp]; ok {
+			continue
+		}
+		seen[cp] = struct{}{}
+		frag, err := r.GetByCanonicalPathForTenant(ctx, tenantID, cp)
+		if err != nil || frag == nil {
+			continue
+		}
+		result[cp] = frag
 	}
 	return result, nil
 }
@@ -1545,6 +1701,47 @@ func (r *HorizonFragmentsRepository) FindByLabel(ctx context.Context, lang, valu
 	return fragments, nil
 }
 
+func (r *HorizonFragmentsRepository) FindByLabelForTenant(ctx context.Context, tenantID, lang, value string, fragType models.FragmentType) ([]*models.HorizonFragment, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" || tenantID == "global" {
+		return r.FindByLabel(ctx, lang, value, fragType)
+	}
+	tenantFragments, err := r.findByLabelForSingleTenant(ctx, tenantID, lang, value, fragType)
+	if err != nil {
+		return nil, err
+	}
+	globalFragments, err := r.FindByLabel(ctx, lang, value, fragType)
+	if err != nil {
+		return nil, err
+	}
+	return mergeFragmentsPreferTenant(tenantFragments, globalFragments, 20), nil
+}
+
+func (r *HorizonFragmentsRepository) findByLabelForSingleTenant(ctx context.Context, tenantID, lang, value string, fragType models.FragmentType) ([]*models.HorizonFragment, error) {
+	if lang == "" || value == "" {
+		return nil, ErrInvalidDocument
+	}
+	fieldPath := fmt.Sprintf("labels.%s", lang)
+	q := r.col.Where("tenantId", "==", tenantID).Where(fieldPath, "==", value)
+	if fragType != "" {
+		q = q.Where("type", "==", string(fragType))
+	}
+	docs, err := q.Limit(10).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	fragments := make([]*models.HorizonFragment, 0, len(docs))
+	for _, doc := range docs {
+		var fragment models.HorizonFragment
+		if err := doc.DataTo(&fragment); err != nil {
+			continue
+		}
+		assignLoadedFragmentID(&fragment, doc)
+		fragments = append(fragments, &fragment)
+	}
+	return fragments, nil
+}
+
 // FindByNormalizedLegalName finds organizations whose normalized legalName matches.
 // Normalization removes legal suffixes (LLC, Inc, Ltd, etc.) and standardizes punctuation.
 // This is a client-side filter because Firestore doesn't support computed field queries.
@@ -1631,6 +1828,9 @@ func (r *HorizonFragmentsRepository) UpdateDerived(ctx context.Context, fragment
 func (r *HorizonFragmentsRepository) updateWithOptions(ctx context.Context, fragment *models.HorizonFragment, opts UpdateOptions) error {
 	if fragment == nil || fragment.ID == "" {
 		return ErrInvalidDocument
+	}
+	if err := r.normalizeProductDictionaryRefs(ctx, fragment); err != nil {
+		log.Printf("[HorizonFragments] WARNING: product dictionary normalization failed on update fragment=%s path=%s err=%v", strings.TrimSpace(fragment.ID), strings.TrimSpace(fragment.CanonicalPath), err)
 	}
 	PrepareFragmentForValidation(fragment)
 	r.applyGraphEnrich(ctx, fragment)
@@ -2123,6 +2323,118 @@ func (r *HorizonFragmentsRepository) SearchPrefix(ctx context.Context, query str
 		out = append(out, &f)
 	}
 	return out, nil
+}
+
+func (r *HorizonFragmentsRepository) SearchPrefixForTenant(ctx context.Context, tenantID string, query string, limit int) ([]*models.HorizonFragment, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" || tenantID == "global" {
+		return r.SearchPrefix(ctx, query, limit)
+	}
+	tenantFragments, err := r.searchPrefixForSingleTenant(ctx, tenantID, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	globalFragments, err := r.SearchPrefix(ctx, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	return mergeFragmentsPreferTenant(tenantFragments, globalFragments, limit), nil
+}
+
+func (r *HorizonFragmentsRepository) searchPrefixForSingleTenant(ctx context.Context, tenantID string, query string, limit int) ([]*models.HorizonFragment, error) {
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	base := r.col.
+		Where("tenantId", "==", tenantID).
+		Where("governance.status", "==", "ACTIVE")
+
+	if strings.HasPrefix(q, "/") {
+		docs, err := base.
+			Where("canonicalPath", ">=", q).
+			Where("canonicalPath", "<", q+"\ufffd").
+			OrderBy("canonicalPath", firestore.Asc).
+			Limit(limit).
+			Documents(ctx).
+			GetAll()
+		if err != nil {
+			return nil, err
+		}
+		return docsToFragments(docs), nil
+	}
+	docs, err := base.
+		Where("labels.en", ">=", q).
+		Where("labels.en", "<", q+"\ufffd").
+		OrderBy("labels.en", firestore.Asc).
+		Limit(limit).
+		Documents(ctx).
+		GetAll()
+	if err != nil {
+		return nil, err
+	}
+	return docsToFragments(docs), nil
+}
+
+func docsToFragments(docs []*firestore.DocumentSnapshot) []*models.HorizonFragment {
+	out := make([]*models.HorizonFragment, 0, len(docs))
+	for _, d := range docs {
+		var f models.HorizonFragment
+		if err := d.DataTo(&f); err != nil {
+			continue
+		}
+		assignLoadedFragmentID(&f, d)
+		out = append(out, &f)
+	}
+	return out
+}
+
+func mergeFragmentsPreferTenant(primary []*models.HorizonFragment, fallback []*models.HorizonFragment, limit int) []*models.HorizonFragment {
+	if limit <= 0 {
+		limit = len(primary) + len(fallback)
+	}
+	out := make([]*models.HorizonFragment, 0, minInt(limit, len(primary)+len(fallback)))
+	seen := map[string]struct{}{}
+	appendList := func(items []*models.HorizonFragment) {
+		for _, frag := range items {
+			if frag == nil {
+				continue
+			}
+			key := strings.TrimSpace(frag.CanonicalPath)
+			if key == "" {
+				key = strings.TrimSpace(frag.ID)
+			}
+			if key == "" {
+				continue
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, frag)
+			if len(out) >= limit {
+				return
+			}
+		}
+	}
+	appendList(primary)
+	if len(out) < limit {
+		appendList(fallback)
+	}
+	return out
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // ListByCanonicalPaths получает список HorizonFragment по массиву canonicalPath

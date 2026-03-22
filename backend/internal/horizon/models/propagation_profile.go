@@ -3,11 +3,11 @@ package models
 // PropagationProfile defines how an axis propagates through the graph.
 // See docs/notes/risk-architecture.md Contract 3 for full specification.
 type PropagationProfile struct {
-	AxisKey        string           `json:"axisKey" firestore:"axisKey"`               // Reference to AxisSpec key
-	DefaultDamping float64          `json:"defaultDamping" firestore:"defaultDamping"`   // [0.0, 1.0]
-	DefaultMaxHops int             `json:"defaultMaxHops" firestore:"defaultMaxHops"`   // Typical propagation depth
-	PropagationMode string          `json:"propagationMode" firestore:"propagationMode"` // "upstream", "downstream", "both"
-	StrongEdges    []StrongEdgeSpec `json:"strongEdges,omitempty" firestore:"strongEdges,omitempty"`
+	AxisKey         string               `json:"axisKey" firestore:"axisKey"`                 // Reference to AxisSpec key
+	DefaultDamping  float64              `json:"defaultDamping" firestore:"defaultDamping"`   // [0.0, 1.0]
+	DefaultMaxHops  int                  `json:"defaultMaxHops" firestore:"defaultMaxHops"`   // Typical propagation depth
+	PropagationMode string               `json:"propagationMode" firestore:"propagationMode"` // "upstream", "downstream", "both"
+	StrongEdges     []StrongEdgeSpec     `json:"strongEdges,omitempty" firestore:"strongEdges,omitempty"`
 	Transformations []TransformationRule `json:"transformations,omitempty" firestore:"transformations,omitempty"`
 }
 
@@ -15,7 +15,7 @@ type PropagationProfile struct {
 type StrongEdgeSpec struct {
 	Type      string  `json:"type" firestore:"type"`           // Edge type (e.g., "OWNS", "SUPPLIES_TO")
 	Direction string  `json:"direction" firestore:"direction"` // "source_to_target" | "target_to_source" | "both"
-	Weight    float64 `json:"weight" firestore:"weight"`      // Edge weight multiplier (default 1.0)
+	Weight    float64 `json:"weight" firestore:"weight"`       // Edge weight multiplier (default 1.0)
 }
 
 // TransformationRule defines axis transformation when signal passes through an edge.
@@ -30,7 +30,7 @@ type TransformationRule struct {
 func DefaultPropagationProfiles() map[string]PropagationProfile {
 	return map[string]PropagationProfile{
 		AxisLegalAccess: {
-			AxisKey:        AxisLegalAccess,
+			AxisKey:         AxisLegalAccess,
 			DefaultDamping:  0.95,
 			DefaultMaxHops:  5,
 			PropagationMode: "upstream",
@@ -45,7 +45,7 @@ func DefaultPropagationProfiles() map[string]PropagationProfile {
 			},
 		},
 		AxisLegalCompliance: {
-			AxisKey:        AxisLegalCompliance,
+			AxisKey:         AxisLegalCompliance,
 			DefaultDamping:  0.85,
 			DefaultMaxHops:  3,
 			PropagationMode: "both",
@@ -57,7 +57,7 @@ func DefaultPropagationProfiles() map[string]PropagationProfile {
 			Transformations: []TransformationRule{},
 		},
 		AxisFinancialSettlement: {
-			AxisKey:        AxisFinancialSettlement,
+			AxisKey:         AxisFinancialSettlement,
 			DefaultDamping:  0.85,
 			DefaultMaxHops:  4,
 			PropagationMode: "both",
@@ -69,7 +69,7 @@ func DefaultPropagationProfiles() map[string]PropagationProfile {
 			Transformations: []TransformationRule{},
 		},
 		AxisFinancialCredit: {
-			AxisKey:        AxisFinancialCredit,
+			AxisKey:         AxisFinancialCredit,
 			DefaultDamping:  0.80,
 			DefaultMaxHops:  4,
 			PropagationMode: "both",
@@ -81,7 +81,7 @@ func DefaultPropagationProfiles() map[string]PropagationProfile {
 			Transformations: []TransformationRule{},
 		},
 		AxisPhysicalFlowSupply: {
-			AxisKey:        AxisPhysicalFlowSupply,
+			AxisKey:         AxisPhysicalFlowSupply,
 			DefaultDamping:  0.75,
 			DefaultMaxHops:  4,
 			PropagationMode: "both",
@@ -89,6 +89,7 @@ func DefaultPropagationProfiles() map[string]PropagationProfile {
 				{Type: "SUPPLIES_TO", Direction: "both", Weight: 1.0},
 				{Type: "DEPENDS_ON", Direction: "both", Weight: 0.9},
 				{Type: "TRANSFORMS_INTO", Direction: "source_to_target", Weight: 0.8},
+				{Type: "ASSEMBLES_INTO", Direction: "source_to_target", Weight: 0.8},
 				{Type: "PRODUCES", Direction: "source_to_target", Weight: 0.85},
 				{Type: "OPERATES_IN", Direction: "source_to_target", Weight: 0.85},
 				{Type: "MANAGES", Direction: "source_to_target", Weight: 0.80},
@@ -99,7 +100,7 @@ func DefaultPropagationProfiles() map[string]PropagationProfile {
 			Transformations: []TransformationRule{},
 		},
 		AxisPhysicalFlowDemand: {
-			AxisKey:        AxisPhysicalFlowDemand,
+			AxisKey:         AxisPhysicalFlowDemand,
 			DefaultDamping:  0.75,
 			DefaultMaxHops:  4,
 			PropagationMode: "upstream",
@@ -109,7 +110,7 @@ func DefaultPropagationProfiles() map[string]PropagationProfile {
 			Transformations: []TransformationRule{},
 		},
 		AxisLogisticsCapacity: {
-			AxisKey:        AxisLogisticsCapacity,
+			AxisKey:         AxisLogisticsCapacity,
 			DefaultDamping:  0.70,
 			DefaultMaxHops:  3,
 			PropagationMode: "downstream",
@@ -121,7 +122,7 @@ func DefaultPropagationProfiles() map[string]PropagationProfile {
 			Transformations: []TransformationRule{},
 		},
 		AxisLogisticsLatency: {
-			AxisKey:        AxisLogisticsLatency,
+			AxisKey:         AxisLogisticsLatency,
 			DefaultDamping:  0.70,
 			DefaultMaxHops:  3,
 			PropagationMode: "downstream",
@@ -133,7 +134,7 @@ func DefaultPropagationProfiles() map[string]PropagationProfile {
 			Transformations: []TransformationRule{},
 		},
 		AxisOperationalContinuity: {
-			AxisKey:        AxisOperationalContinuity,
+			AxisKey:         AxisOperationalContinuity,
 			DefaultDamping:  0.70,
 			DefaultMaxHops:  3,
 			PropagationMode: "upstream",
@@ -146,7 +147,7 @@ func DefaultPropagationProfiles() map[string]PropagationProfile {
 			Transformations: []TransformationRule{},
 		},
 		AxisInfoUncertainty: {
-			AxisKey:        AxisInfoUncertainty,
+			AxisKey:         AxisInfoUncertainty,
 			DefaultDamping:  0.60,
 			DefaultMaxHops:  2,
 			PropagationMode: "both",
@@ -158,7 +159,7 @@ func DefaultPropagationProfiles() map[string]PropagationProfile {
 			Transformations: []TransformationRule{},
 		},
 		AxisInfoReputation: {
-			AxisKey:        AxisInfoReputation,
+			AxisKey:         AxisInfoReputation,
 			DefaultDamping:  0.60,
 			DefaultMaxHops:  2,
 			PropagationMode: "both",
@@ -170,7 +171,7 @@ func DefaultPropagationProfiles() map[string]PropagationProfile {
 			Transformations: []TransformationRule{},
 		},
 		AxisGeoConflict: {
-			AxisKey:        AxisGeoConflict,
+			AxisKey:         AxisGeoConflict,
 			DefaultDamping:  0.80,
 			DefaultMaxHops:  2,
 			PropagationMode: "downstream",

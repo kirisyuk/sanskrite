@@ -22,6 +22,17 @@ The accepted quality bar is intentionally strict:
 - not class/subclass or broad/narrow taxonomy relations
 - not long multi-step jumps that skip obvious intermediates
 
+Important nuance:
+- nearest direct assembly into a final product is allowed when there is no useful missing intermediate in the data
+- examples now considered valid:
+  - `tire -> vehicle`
+  - `battery pack -> electric vehicle`
+  - `display module -> smartphone`
+- examples still rejected:
+  - `steel sheet -> vehicle`
+  - `battery material -> vehicle`
+  - `iron ore -> hot-rolled steel`
+
 ## Data Sources Used
 
 The tool scans the live Firestore graph and combines three evidence sources:
@@ -160,6 +171,9 @@ These docs were written as canonical sample pairs into:
 Each doc stores:
 - canonical `fromFragmentId` / `fromPath` / `fromName`
 - canonical `toFragmentId` / `toPath` / `toName`
+- `relationKind`:
+  - `transformation`
+  - `assembly`
 - confidence
 - review reason
 - heuristic score
@@ -178,6 +192,9 @@ Current curated rejects include:
 - energy-generation outputs like `... -> electricity`
 - battery-material long jumps like `cathode-active-material -> battery-pack`
 - cell-to-final-vehicle jumps like `battery-cell -> electric-vehicle`
+- broad material-to-final-product jumps like `steel-sheet -> vehicle`
+
+But the curation layer now explicitly allows nearest direct final assembly steps when the source is already a concrete component/module/pack and there is no useful missing intermediate product in the graph.
 
 This curation is implemented directly in:
 - [main.go](/Users/kirisyuk/cursor/sanskrite/backend/cmd/tools/horizon_mine_product_transforms/main.go)

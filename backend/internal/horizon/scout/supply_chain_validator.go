@@ -34,6 +34,7 @@ var operationalEdgeTypes = map[string]bool{
 	"PRODUCES":        true,
 	"SUPPLIES_TO":     true,
 	"TRANSFORMS_INTO": true,
+	"ASSEMBLES_INTO":  true,
 	"EXTRACTS_FROM":   true,
 }
 
@@ -84,10 +85,10 @@ func (v *SupplyChainStrictValidator) ValidateEdge(edge *ChainEdge, jobID string,
 			if !strings.HasPrefix(dstPath, "/product/") {
 				return &SupplyChainValidationError{Reason: "produces_target_must_be_product", Path: dstPath, JobID: jobID, ChainIdx: chainIdx}
 			}
-		case "TRANSFORMS_INTO":
+		case "TRANSFORMS_INTO", "ASSEMBLES_INTO":
 			// product→product (value chain)
 			if !strings.HasPrefix(srcPath, "/product/") || !strings.HasPrefix(dstPath, "/product/") {
-				return &SupplyChainValidationError{Reason: "transforms_into_must_be_product_to_product", Path: srcPath + "->" + dstPath, JobID: jobID, ChainIdx: chainIdx}
+				return &SupplyChainValidationError{Reason: "product_transition_must_be_product_to_product", Path: srcPath + "->" + dstPath, JobID: jobID, ChainIdx: chainIdx}
 			}
 		case "EXTRACTS_FROM":
 			// fac→deposit
@@ -183,7 +184,7 @@ func (v *SupplyChainStrictValidator) ValidateSupplyLink(f *models.HorizonFragmen
 	return nil
 }
 
-// IsOperationalEdgeType returns true for PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, EXTRACTS_FROM.
+// IsOperationalEdgeType returns true for PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, EXTRACTS_FROM.
 func IsOperationalEdgeType(relType string) bool {
 	return operationalEdgeTypes[strings.TrimSpace(strings.ToUpper(relType))]
 }

@@ -27,6 +27,7 @@ func sanitizeIntentForLensCreation(in *agents.IntentResolution) *agents.IntentRe
 		return nil
 	}
 	out := *in
+	out.Title = strings.TrimSpace(out.Title)
 	out.Focus = strings.TrimSpace(out.Focus)
 	out.SpherePaths = dedupStrings(trimStrings(out.SpherePaths))
 	out.Keywords = dedupStrings(trimStrings(out.Keywords))
@@ -637,25 +638,13 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	name := req.Name
+	name := ""
+	if intent != nil {
+		name = strings.TrimSpace(intent.Title)
+	}
 	if name == "" {
-		// Prefer an explicit English anchor name when available (more stable than free-form focus).
-		// Fallback to focus otherwise.
-		if intent != nil && len(intent.Anchors) > 0 {
-			if n := strings.TrimSpace(intent.Anchors[0].Name); n != "" {
-				name = n
-			} else {
-				name = intent.Focus
-			}
-		} else if intent != nil && len(intent.Domains) > 0 {
-			if t := strings.TrimSpace(intent.Domains[0].Title); t != "" {
-				name = t
-			} else {
-				name = intent.Focus
-			}
-		} else {
-			name = intent.Focus
-		}
+		http.Error(w, "intent title is required", http.StatusBadRequest)
+		return
 	}
 	status := strings.ToUpper(req.Status)
 	if status == "" {
@@ -663,6 +652,7 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 	}
 
 	viewConfig := map[string]interface{}{
+		"title":       intent.Title,
 		"focus":       intent.Focus,
 		"spherePaths": intent.SpherePaths,
 		"keywords":    intent.Keywords,

@@ -634,6 +634,8 @@ func buildAssemblyPayloadFromInputs(
 		switch edgeType {
 		case "TRANSFORMS_INTO":
 			addTransform(source, target, "TRANSFORMS_INTO", "heuristic")
+		case "ASSEMBLES_INTO":
+			addTransform(source, target, "ASSEMBLES_INTO", "heuristic")
 		case "PRODUCES":
 			if addActorNode(source, "producer") && addProductNode(target) {
 				connect(source, target)
@@ -645,7 +647,7 @@ func buildAssemblyPayloadFromInputs(
 			targetIsProduct := strings.HasPrefix(target, "/product/")
 			switch {
 			case sourceIsProduct && targetIsProduct:
-				addTransform(source, target, "TRANSFORMS_INTO", "heuristic")
+				addTransform(source, target, string(models.ProductToProductEdgeTypeFromPaths(source, target)), "heuristic")
 			case sourceIsProduct:
 				if addProductNode(source) && addActorNode(target, "customer") {
 					connect(source, target)
@@ -758,7 +760,8 @@ func buildAssemblyPayloadFromInputs(
 			}
 		}
 		for _, edge := range contribution.parsed.Edges {
-			if strings.TrimSpace(edge.Type) == "ONTOLOGY" && strings.EqualFold(strings.TrimSpace(edge.Relation), "TRANSFORMS_INTO") {
+			if strings.TrimSpace(edge.Type) == "ONTOLOGY" &&
+				(strings.EqualFold(strings.TrimSpace(edge.Relation), "TRANSFORMS_INTO") || strings.EqualFold(strings.TrimSpace(edge.Relation), "ASSEMBLES_INTO")) {
 				fromProduct := strings.TrimSpace(edge.ProductRef)
 				if fromProduct == "" && edge.FromProductIndex != nil && *edge.FromProductIndex >= 0 && *edge.FromProductIndex < len(contribution.parsed.Nodes) {
 					fromProduct = contribution.parsed.Nodes[*edge.FromProductIndex].Ref
@@ -767,7 +770,7 @@ func buildAssemblyPayloadFromInputs(
 				if edge.ToProductIndex != nil && *edge.ToProductIndex >= 0 && *edge.ToProductIndex < len(contribution.parsed.Nodes) {
 					toProduct = contribution.parsed.Nodes[*edge.ToProductIndex].Ref
 				}
-				addTransform(fromProduct, toProduct, "TRANSFORMS_INTO", status)
+				addTransform(fromProduct, toProduct, strings.ToUpper(strings.TrimSpace(edge.Relation)), status)
 			}
 		}
 		for idx := 0; idx < len(contribution.parsed.Legs)-1; idx++ {
@@ -776,7 +779,7 @@ func buildAssemblyPayloadFromInputs(
 			if canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(left.ProductRef)) == canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(right.ProductRef)) {
 				continue
 			}
-			addTransform(left.ProductRef, right.ProductRef, "TRANSFORMS_INTO", status)
+			addTransform(left.ProductRef, right.ProductRef, string(models.ProductToProductEdgeTypeFromPaths(left.ProductRef, right.ProductRef)), status)
 		}
 	}
 

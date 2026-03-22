@@ -100,3 +100,26 @@ func TestNormalizeSupplyChainGraphBuildMode(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildLensTitleForIntent_PrefersExistingIntentTitle(t *testing.T) {
+	got := buildLensTitleForIntent("  Gulf LNG Exposure  ", "ignored focus", "ignored query", []DomainResolution{{
+		Title: "Ignored domain title",
+	}})
+	if got != "Gulf LNG Exposure" {
+		t.Fatalf("buildLensTitleForIntent(existing) = %q, want %q", got, "Gulf LNG Exposure")
+	}
+}
+
+func TestBuildLensTitleForIntent_FallsBackToDomainTitleThenFocus(t *testing.T) {
+	got := buildLensTitleForIntent("", "qatar lng exposure through hormuz", "fallback query", []DomainResolution{{
+		Title: "Qatar LNG Supply Chain",
+	}})
+	if got != "Qatar LNG Supply Chain" {
+		t.Fatalf("buildLensTitleForIntent(domain) = %q, want %q", got, "Qatar LNG Supply Chain")
+	}
+
+	got = buildLensTitleForIntent("", "qatar lng exposure through hormuz", "fallback query", nil)
+	if got != "Qatar lng exposure through hormuz" {
+		t.Fatalf("buildLensTitleForIntent(focus) = %q, want %q", got, "Qatar lng exposure through hormuz")
+	}
+}

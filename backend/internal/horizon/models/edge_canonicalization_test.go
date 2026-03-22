@@ -163,6 +163,38 @@ func TestCanonicalizeEdgeWithPaths_TransformsIntoUpstreamToDownstream_Stays(t *t
 	}
 }
 
+func TestProductToProductEdgeTypeFromPaths_ComponentToFinished_PrefersAssemblesInto(t *testing.T) {
+	edgeType := ProductToProductEdgeTypeFromPaths(
+		"/product/component/mechanical/assembly/tire",
+		"/product/finished/mechanical/assembly/electric-vehicle",
+	)
+	if edgeType != DependencyTypeAssemblesInto {
+		t.Fatalf("expected ASSEMBLES_INTO, got %s", edgeType)
+	}
+}
+
+func TestCanonicalizeEdgeWithPaths_TransformsIntoComponentToFinished_PromotesAssemblesInto(t *testing.T) {
+	newType, shouldSwap, changed, reason := CanonicalizeEdgeWithPaths(
+		DependencyTypeTransformsInto,
+		FragmentTypeProduct,
+		FragmentTypeProduct,
+		"/product/component/mechanical/assembly/tire",
+		"/product/finished/mechanical/assembly/electric-vehicle",
+	)
+	if !changed {
+		t.Fatalf("expected canonicalization change")
+	}
+	if newType != DependencyTypeAssemblesInto {
+		t.Fatalf("expected ASSEMBLES_INTO, got %s", newType)
+	}
+	if shouldSwap {
+		t.Fatalf("expected shouldSwap=false")
+	}
+	if reason == "" {
+		t.Fatalf("expected non-empty canonicalization reason")
+	}
+}
+
 func TestCanonicalizeEdge_DepositAdministersOrg_SwapOnly(t *testing.T) {
 	newType, shouldSwap, changed, reason := CanonicalizeEdge(
 		DependencyTypeAdministers,

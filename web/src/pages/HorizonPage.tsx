@@ -96,6 +96,7 @@ const HorizonPage: React.FC = () => {
   const resetRealtime = useHorizonRealtimeStore((s) => s.reset);
   const resetEvents = useHorizonRealtimeStore((s) => s.resetEvents);
   const [lensStarted, setLensStarted] = React.useState(false);
+  const [preferredLensCanvasMode, setPreferredLensCanvasMode] = React.useState<'assembly' | 'cockpit' | 'progress'>('progress');
   const [isCreatingLens, setIsCreatingLens] = React.useState(false);
   const [activeCreateCorrelationId, setActiveCreateCorrelationId] = React.useState<string | null>(null);
   const [activeCreateSessionId, setActiveCreateSessionId] = React.useState<string | null>(null);
@@ -317,6 +318,7 @@ const HorizonPage: React.FC = () => {
   
   const handleResetChat = React.useCallback(() => {
     setCurrentProject(null);
+    setPreferredLensCanvasMode('progress');
     setSelectedLensId(null);
     setShowWorldMap(false);
     saveHorizonState(null, null);
@@ -326,6 +328,21 @@ const HorizonPage: React.FC = () => {
   const handleCreateProject = React.useCallback(() => {
     window.dispatchEvent(new CustomEvent('horizon:create-project'));
   }, []);
+
+  const horizonProjects = React.useMemo(
+    () => projects.filter((project) => project.projectType === 'horizon'),
+    [projects],
+  );
+
+  const handleSelectExistingProject = React.useCallback((projectId: string) => {
+    const project = horizonProjects.find((item) => item.id === projectId);
+    if (!project) return;
+    setCurrentProject(project);
+    setPreferredLensCanvasMode('progress');
+    setSelectedLensId(null);
+    setShowWorldMap(false);
+    setCreateFatalError(null);
+  }, [horizonProjects, setCurrentProject, setSelectedLensId, setShowWorldMap, setCreateFatalError]);
   
   const handleCloseAllModals = React.useCallback(() => {
     setShowSettings(false);
@@ -418,6 +435,7 @@ const HorizonPage: React.FC = () => {
           { skipScouting: true },
         );
         if (lens?.id) {
+          setPreferredLensCanvasMode('assembly');
           setSelectedLensId(lens.id);
           window.dispatchEvent(new CustomEvent('horizon:lens-created', {
             detail: { lensId: lens.id, projectId: request.projectId },
@@ -490,6 +508,7 @@ const HorizonPage: React.FC = () => {
         );
 
         if (lens?.id) {
+          setPreferredLensCanvasMode('assembly');
           setSelectedLensId(lens.id);
           window.dispatchEvent(new CustomEvent('horizon:lens-created', {
             detail: { lensId: lens.id, projectId: request.projectId },
@@ -650,6 +669,7 @@ const HorizonPage: React.FC = () => {
       pendingCreateRef.current = null;
 
       if (result?.lens?.id) {
+        setPreferredLensCanvasMode('progress');
         // Select the newly created lens so Cockpit/Details tabs become available,
         // but keep the user in Progress while the pipeline is running (lensStarted=true).
         setSelectedLensId(result.lens.id);
@@ -751,6 +771,7 @@ const HorizonPage: React.FC = () => {
         projectId={currentProject?.id || null}
         onSelectLens={(lensId) => {
           setShowWorldMap(false);
+          setPreferredLensCanvasMode('cockpit');
           setSelectedLensId(lensId);
           // User explicitly chose to open a lens: stop treating this as an in-progress creation feed.
           setLensStarted(false);
@@ -767,6 +788,7 @@ const HorizonPage: React.FC = () => {
         onOpenWorldMap={() => {
           navigate('/horizon');
           setShowWorldMap(true);
+          setPreferredLensCanvasMode('progress');
           setLensStarted(false);
           setActiveCreateCorrelationId(null);
           setActiveCreateSessionId(null);
@@ -774,17 +796,26 @@ const HorizonPage: React.FC = () => {
         }}
         isWorldMapActive={showWorldMap}
         onNewLens={() => {
+          if (!currentProject) return;
           setShowWorldMap(false);
-          // Ensure project is selected (should already be selected when hovering, but double-check)
-          // Clear states and show input field for new lens
           setSelectedLensId(null);
           setLensStarted(false);
           resetEvents();
           setActiveCreateCorrelationId(null);
           setActiveCreateSessionId(null);
           setCreateFatalError(null);
-          // Note: currentProject should already be set from SidebarPanel project selection
-          // LensCanvas will use currentProject.id as projectId for creating the lens
+          setPreferredLensCanvasMode('assembly');
+          void handleAssembleLens({
+            projectId: currentProject.id,
+            query: '',
+            name: 'untitled lens',
+            createEmptyLens: true,
+            prefetchScope: [],
+            filters: {
+              maxRecursionDepth: 1,
+              mode: 'general',
+            },
+          });
         }}
       />
 
@@ -837,7 +868,7 @@ const HorizonPage: React.FC = () => {
               lensId={selectedLensId}
               projectId={currentProject.id}
               isAdmin={isAdmin}
-              initialViewMode={lensStarted ? 'progress' : (selectedLensId ? 'cockpit' : 'progress')}
+              initialViewMode={lensStarted ? 'progress' : (selectedLensId ? preferredLensCanvasMode : 'progress')}
               showInputInProgress={true}
               onAssemble={handleAssembleLens}
               // Keep Progress "active" after lens creation until user explicitly opens the lens.
@@ -874,6 +905,7 @@ const HorizonPage: React.FC = () => {
               onClose={() => {
                 // Only close lens if one is selected, otherwise just reset state
                 if (selectedLensId) {
+                  setPreferredLensCanvasMode('progress');
                   setSelectedLensId(null);
                 }
                 setLensStarted(false);
@@ -885,7 +917,14 @@ const HorizonPage: React.FC = () => {
           ) : projectsLoading || !hasRestoredProject ? (
             <HorizonLoading />
           ) : (
-            <HorizonEmptyState onCreateProject={handleCreateProject} />
+            <HorizonEmptyState
+              onCreateProject={handleCreateProject}
+              existingProjects={horizonProjects.map((project) => ({
+                id: project.id,
+                displayName: project.displayName,
+              }))}
+              onSelectProject={handleSelectExistingProject}
+            />
           )}
         </div>
       </div>

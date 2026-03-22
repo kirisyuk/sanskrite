@@ -18,6 +18,7 @@
 ### Архитектура
 
 - **[Обзор архитектуры](architecture/overview.md)** — высокоуровневая архитектура системы и интеграция с Sanskrite
+- **[Supply Chain Canonical Control Plane](architecture/supply-chain-canonical-control-plane.md)** — обязательный верхнеуровневый документ про canonical products, synonyms, transforms/assembly pairs и candidate queues; его нужно читать перед работой с supply-chain кодом
 - **[Компоненты системы](architecture/components.md)** — детальное описание компонентов (Scout Engine, Propagation Engine, Watchdog, Lens Subsystem)
 - **[Модель данных](architecture/data-model.md)** — структуры данных, схемы Firestore, связи с существующими моделями
 - **[Интеграция](architecture/integration.md)** — интеграция с существующими компонентами Sanskrite

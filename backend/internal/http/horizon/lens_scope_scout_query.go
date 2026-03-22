@@ -139,6 +139,42 @@ func (h *HorizonHandlers) ScopeScoutLensQuery(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	if shouldRouteDirectedExplorationToOneHop(targetCanonicalPath, directedExploration) {
+		if h.oneHopDownstreamService == nil || h.scoutingJobsRepo == nil {
+			http.Error(w, "One-hop downstream service unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		opts := buildOneHopOptionsForDirectedExploration(targetCanonicalPath)
+		jobID, err := h.createOneHopJob(ctx, authInfo.UID, authInfo.TenantID, lens.ProjectID, lens.ID, opts)
+		if err != nil {
+			msg := "Failed to enqueue one-hop downstream job: " + strings.TrimSpace(err.Error())
+			h.publishAssemblyFatal(
+				ctx,
+				authInfo.TenantID,
+				lens.ProjectID,
+				lens.ID,
+				"scouting",
+				correlationID,
+				sessionID,
+				"one_hop_job_enqueue_failed",
+				msg,
+			)
+			writeFatalPipelineError(w, http.StatusServiceUnavailable, "one_hop_job_enqueue_failed", msg, "scouting", map[string]interface{}{
+				"targetCanonicalPath": strings.TrimSpace(opts.AnchorRef),
+			})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Correlation-Id", correlationID)
+		_ = json.NewEncoder(w).Encode(scopeScoutLensQueryResponse{
+			JobID:      jobID,
+			ScopeAdded: false,
+			Target:     strings.TrimSpace(opts.AnchorRef),
+			Lens:       lens,
+		})
+		return
+	}
+
 	// Deferred scope: do NOT add to scope here. Scope is added only when Scout creates the fragment (max 5 per lens).
 	scopeAdded := false
 
@@ -197,6 +233,8 @@ func (h *HorizonHandlers) ScopeScoutLensQuery(w http.ResponseWriter, r *http.Req
 				state["hotPathCanonicalPaths"] = hotPathCanonicalPaths
 			}
 			state["ignoreFreshnessForUserRequest"] = directedExploration.IgnoreFreshness
+			state["legacyDirectedExplorationDeprecated"] = true
+			state["legacyDirectedExplorationReason"] = "prefer_one_hop_downstream_for_org_fac_downstream"
 		}
 		if len(specialties) > 0 {
 			state["specialties"] = specialties

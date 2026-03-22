@@ -435,7 +435,7 @@ func buildGraphProductItems(graph *lensDiagnosticGraph, now time.Time) []horizon
 			if actor := graph.Nodes[relation.SourceFragmentID]; actor != nil {
 				product.producers = compactUnique(append(product.producers, lensDiagnosticFragmentLabel(actor)))
 			}
-		case string(horizonmodels.DependencyTypeTransformsInto):
+		case string(horizonmodels.DependencyTypeTransformsInto), string(horizonmodels.DependencyTypeAssemblesInto):
 			if downstream := graph.Nodes[relation.TargetFragmentID]; downstream != nil && downstream.ID != related.ID {
 				product.transformedInto = compactUnique(append(product.transformedInto, lensDiagnosticFragmentLabel(downstream)))
 			}
@@ -1022,6 +1022,8 @@ func describeLensDiagnosticRelation(centerLabel string, relation lensDiagnosticR
 		return fmt.Sprintf("%s produces one of the products carrying current exposure.", other)
 	case string(horizonmodels.DependencyTypeTransformsInto):
 		return fmt.Sprintf("%s appears in the transformed downstream product chain surfaced by the lens.", other)
+	case string(horizonmodels.DependencyTypeAssemblesInto):
+		return fmt.Sprintf("%s appears in the assembled downstream product chain surfaced by the lens.", other)
 	case string(horizonmodels.DependencyTypeAffects):
 		return fmt.Sprintf("%s is a direct affected node or zone feeding pressure into the lens.", other)
 	default:
@@ -1040,6 +1042,8 @@ func lensDiagnosticRelationPriority(edgeType string) int {
 	case string(horizonmodels.DependencyTypeConsumes):
 		return 96
 	case string(horizonmodels.DependencyTypeTransformsInto):
+		return 95
+	case string(horizonmodels.DependencyTypeAssemblesInto):
 		return 95
 	case string(horizonmodels.DependencyTypeAffects):
 		return 94
@@ -1065,6 +1069,8 @@ func lensDiagnosticSignalTitle(relation lensDiagnosticRelation) string {
 		return "Pressure originating in " + other
 	case string(horizonmodels.DependencyTypeTransformsInto):
 		return other + " transformed output chain"
+	case string(horizonmodels.DependencyTypeAssemblesInto):
+		return other + " assembled output chain"
 	default:
 		return other + " is shaping the current diagnosis"
 	}
@@ -1076,6 +1082,7 @@ func isLensSupplyRelevantRelation(edgeType string) bool {
 		string(horizonmodels.DependencyTypeProduces),
 		string(horizonmodels.DependencyTypeConsumes),
 		string(horizonmodels.DependencyTypeTransformsInto),
+		string(horizonmodels.DependencyTypeAssemblesInto),
 		string(horizonmodels.DependencyTypeDependsOn),
 		string(horizonmodels.DependencyTypeExtractsFrom),
 		string(horizonmodels.DependencyTypeAffects),
@@ -1105,7 +1112,7 @@ func isLensGraphSignalRelation(graph *lensDiagnosticGraph, relation lensDiagnost
 	}
 	path := strings.TrimSpace(relation.RelatedCanonicalPath)
 	switch relation.Type {
-	case string(horizonmodels.DependencyTypeConsumes), string(horizonmodels.DependencyTypeTransformsInto):
+	case string(horizonmodels.DependencyTypeConsumes), string(horizonmodels.DependencyTypeTransformsInto), string(horizonmodels.DependencyTypeAssemblesInto):
 		return true
 	case string(horizonmodels.DependencyTypeAffects), string(horizonmodels.DependencyTypeDependsOn):
 		return canonicalPathImpactPriority(path) >= 2

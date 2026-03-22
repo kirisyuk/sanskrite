@@ -16,7 +16,7 @@ const (
 	GraphIntentClassCreate    = "create"
 	GraphIntentClassUpdate    = "update"
 	GraphIntentClassDelete    = "delete"
-	GraphIntentClassMerge    = "merge"
+	GraphIntentClassMerge     = "merge"
 	GraphIntentClassTransform = "transform"
 	GraphIntentClassMixed     = "mixed"
 	GraphIntentClassUnknown   = "unknown"
@@ -106,8 +106,8 @@ type GraphIntentPlanResponse struct {
 	Confidence             float64                   `json:"confidence"`
 	Create                 GraphIntentCreateBlock    `json:"create"`
 	Update                 GraphIntentUpdateBlock    `json:"update"`
-	Delete                 GraphIntentDeleteBlock   `json:"delete"`
-	Merge                  GraphIntentMergeBlock    `json:"merge"`
+	Delete                 GraphIntentDeleteBlock    `json:"delete"`
+	Merge                  GraphIntentMergeBlock     `json:"merge"`
 	Transform              GraphIntentTransformBlock `json:"transform"`
 	Explanations           []string                  `json:"explanations,omitempty"`
 	Warnings               []string                  `json:"warnings,omitempty"`
@@ -179,8 +179,8 @@ type GraphIntentDeleteBlock struct {
 // Edge reassignment deduplicates: if primary already has same (source,target,type), duplicate edge is deleted.
 type GraphIntentMergeBlock struct {
 	PrimaryNodeID     string   `json:"primaryNodeId"`
-	DuplicateNodeIDs []string `json:"duplicateNodeIds,omitempty"`
-	MergeFragmentData *bool   `json:"mergeFragmentData,omitempty"` // fill-first merge of Labels, Identifiers, State. Nil = true.
+	DuplicateNodeIDs  []string `json:"duplicateNodeIds,omitempty"`
+	MergeFragmentData *bool    `json:"mergeFragmentData,omitempty"` // fill-first merge of Labels, Identifiers, State. Nil = true.
 }
 
 type GraphIntentNodePatch struct {
@@ -511,18 +511,18 @@ func normalizeMechanismCanonicalPathForGraphIntent(path string) (string, bool) {
 		return "", false
 	}
 	mapped := map[string]string{
-		"tax":        "regulatory",
-		"fiscal":     "economic",
-		"monetary":   "economic",
-		"sanctions":  "regulatory",
-		"tariff":     "regulatory",
-		"subsidy":    "economic",
-		"incentive":  "economic",
-		"license":    "regulatory",
-		"permit":     "regulatory",
-		"quota":      "regulatory",
-		"embargo":    "regulatory",
-		"ban":        "regulatory",
+		"tax":         "regulatory",
+		"fiscal":      "economic",
+		"monetary":    "economic",
+		"sanctions":   "regulatory",
+		"tariff":      "regulatory",
+		"subsidy":     "economic",
+		"incentive":   "economic",
+		"license":     "regulatory",
+		"permit":      "regulatory",
+		"quota":       "regulatory",
+		"embargo":     "regulatory",
+		"ban":         "regulatory",
 		"restriction": "regulatory",
 	}
 	next, ok := mapped[category]
@@ -672,8 +672,8 @@ func (p *GraphIntentPlanResponse) MapToActions() *GraphIntentActionPlan {
 	}
 	if strings.TrimSpace(p.Merge.PrimaryNodeID) != "" && len(p.Merge.DuplicateNodeIDs) > 0 {
 		push("merge_nodes", "merge", p.Merge.PrimaryNodeID, map[string]interface{}{
-			"primaryNodeId":    p.Merge.PrimaryNodeID,
-			"duplicateNodeIds": p.Merge.DuplicateNodeIDs,
+			"primaryNodeId":     p.Merge.PrimaryNodeID,
+			"duplicateNodeIds":  p.Merge.DuplicateNodeIDs,
 			"mergeFragmentData": p.Merge.MergeFragmentData,
 		})
 	}
@@ -844,6 +844,7 @@ var graphIntentAllowedRuntimeRelationTypes = map[string]struct{}{
 	string(DependencyTypeDependsOn):           {},
 	string(DependencyTypeInfluences):          {},
 	string(DependencyTypeTransformsInto):      {},
+	string(DependencyTypeAssemblesInto):       {},
 	string(DependencyTypeExtractsFrom):        {},
 	string(DependencyTypeParticipatesIn):      {},
 	string(DependencyTypeTradedIn):            {},

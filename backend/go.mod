@@ -4,10 +4,10 @@ go 1.25.1
 
 require (
 	baliance.com/gooxml v1.0.1
-	gopkg.in/yaml.v3 v3.0.1
 	cloud.google.com/go/bigquery v1.72.0
 	cloud.google.com/go/cloudtasks v1.13.7
 	cloud.google.com/go/firestore v1.20.0
+	cloud.google.com/go/kms v1.23.2
 	cloud.google.com/go/pubsub v1.50.1
 	cloud.google.com/go/secretmanager v1.16.0
 	cloud.google.com/go/storage v1.56.0
@@ -26,8 +26,10 @@ require (
 	golang.org/x/text v0.30.0
 	golang.org/x/time v0.14.0
 	google.golang.org/api v0.255.0
+	google.golang.org/genproto v0.0.0-20251103181224-f26f9409b101
 	google.golang.org/grpc v1.76.0
 	google.golang.org/protobuf v1.36.10
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -37,7 +39,6 @@ require (
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	cloud.google.com/go/iam v1.5.3 // indirect
-	cloud.google.com/go/kms v1.23.2 // indirect
 	cloud.google.com/go/longrunning v0.7.0 // indirect
 	cloud.google.com/go/monitoring v1.24.3 // indirect
 	cloud.google.com/go/pubsub/v2 v2.0.0 // indirect
@@ -100,8 +101,6 @@ require (
 	golang.org/x/tools v0.37.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	google.golang.org/appengine/v2 v2.0.2 // indirect
-	google.golang.org/genproto v0.0.0-20251103181224-f26f9409b101 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20251103181224-f26f9409b101 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251103181224-f26f9409b101 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

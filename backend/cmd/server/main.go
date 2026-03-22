@@ -61,6 +61,7 @@ import (
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonpathbuilder "github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
 	horizonpolicy "github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
+	horizonproductdict "github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	horizonprofile "github.com/igorkirisyuk/sanskrite/internal/horizon/profile"
 	horizonpropagation "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonqa "github.com/igorkirisyuk/sanskrite/internal/horizon/qa"
@@ -72,6 +73,7 @@ import (
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	horizonagents "github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	horizonsignals "github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
+	horizonsupplychain "github.com/igorkirisyuk/sanskrite/internal/horizon/supplychain"
 	horizontasks "github.com/igorkirisyuk/sanskrite/internal/horizon/tasks"
 	horizontelemetry "github.com/igorkirisyuk/sanskrite/internal/horizon/telemetry"
 	horizonwatch "github.com/igorkirisyuk/sanskrite/internal/horizon/watch"
@@ -454,6 +456,7 @@ func main() {
 	var bigqueryAIService *services.BigQueryAIService
 	var horizonService *horizon.HorizonService
 	var horizonHandlers *horizonhttp.HorizonHandlers
+	var oneHopDownstreamService *horizonsupplychain.OneHopDownstreamService
 	var profilesHandler *horizonhttp.ProfilesHandler
 	var profileGenerator *horizonprofile.Generator
 	var profileScheduler *horizonprofile.Scheduler
@@ -1236,6 +1239,12 @@ func main() {
 		horizonLensesRepo := horizonrepo.NewLensesRepository(fsClient.Client())
 		horizonEdgesRepo := horizonrepo.NewDependencyEdgesRepository(fsClient.Client())
 		horizonEdgesRepo.WithFragmentsRepo(horizonFragmentsRepo)
+		productDictionary := horizonproductdict.NewRuntime(fsClient.Client()).WithTenantID("global")
+		if redisClient != nil {
+			productDictionary.WithRedis(redisClient)
+		}
+		horizonFragmentsRepo.WithProductDictionary(productDictionary)
+		horizonEdgesRepo.WithProductDictionary(productDictionary)
 		if parseEnvBool(getEnv("HORIZON_IMPORTANCE_RUNTIME_ENABLED", "true")) {
 			importanceScorer := horizonimportance.NewScorer(horizonFragmentsRepo, horizonEdgesRepo)
 			importanceUpdater := horizonimportance.NewRuntimeUpdater("global", importanceScorer, horizonFragmentsRepo, 2048)
@@ -1332,6 +1341,7 @@ func main() {
 		horizonProfilePoliciesRepo := horizonrepo.NewFragmentProfileRefreshPoliciesRepository(fsClient.Client())
 		horizonLensArtifactsRepo := horizonrepo.NewLensArtifactsRepository(fsClient.Client())
 		horizonMaterializedArtifactsRepo := horizonrepo.NewMaterializedArtifactsRepository(fsClient.Client())
+		horizonMaterializedArtifactsRepo.WithProductDictionary(productDictionary)
 		horizonDomainAnswerSnapshotsRepo := horizonrepo.NewDomainAnswerSnapshotsRepository(fsClient.Client())
 		horizonWatchPacksRepo := horizonrepo.NewWatchPacksRepository(fsClient.Client())
 		horizonWatchTargetsRepo := horizonrepo.NewWatchTargetsRepository(fsClient.Client())
@@ -2587,6 +2597,7 @@ func main() {
 			if horizonTelemetryRepo != nil {
 				canonicalPathResolver.WithTelemetryRepo(horizonTelemetryRepo)
 			}
+			canonicalPathResolver.WithProductDictionary(productDictionary)
 			// Supply chain path materialization: parsed chains → MaterializedArtifact
 			if horizonMaterializedArtifactsRepo != nil {
 				supplyChainPathBuilder := horizonpathbuilder.NewSupplyChainPathBuilder(
@@ -2821,11 +2832,31 @@ func main() {
 				logger.Printf("WARNING: Profile generator not initialized (ai executor is nil)")
 			}
 
+			oneHopDownstreamService = horizonsupplychain.NewOneHopDownstreamService(horizonsupplychain.OneHopDownstreamServiceConfig{
+				Exec:             exec,
+				FragmentsRepo:    horizonFragmentsRepo,
+				EdgesRepo:        horizonEdgesRepo,
+				MaterializedRepo: horizonMaterializedArtifactsRepo,
+				LensesRepo:       horizonLensesRepo,
+				ScoutingJobsRepo: horizonScoutingJobsRepo,
+				ProductDict:      productDictionary,
+				PathResolver:     canonicalPathResolver,
+				Logger:           logger,
+				Publisher: func(ctx context.Context, eventType string, tenantID string, payload interface{}) error {
+					if pub == nil {
+						return nil
+					}
+					return pub.PublishJSON(ctx, realtime.EventType(eventType), tenantID, payload)
+				},
+			})
+
 			// Create HTTP handlers
 			horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService).
 				WithLensItemsHandler(horizonLensItemsHandler).
 				WithMergeFragmentsRepo(horizonFragmentsMergeRepo).
 				WithMaterializedArtifactsRepo(horizonMaterializedArtifactsRepo).
+				WithOneHopDownstreamService(oneHopDownstreamService).
+				WithProductDictionary(productDictionary).
 				WithDocumentsRepo(docsRepo).
 				WithUsersRepo(s.users).
 				WithGenAIHandler(genaiHandler).
@@ -3177,7 +3208,17 @@ func main() {
 		execCtx, cancel := context.WithTimeout(execBase, execTimeout)
 		defer cancel()
 
-		if err := scoutEngine.ExecuteScoutingJob(execCtx, job); err != nil {
+		execErr := error(nil)
+		if horizonsupplychain.IsOneHopJob(job) {
+			if oneHopDownstreamService == nil {
+				execErr = fmt.Errorf("one-hop downstream service is not initialized")
+			} else {
+				execErr = oneHopDownstreamService.ExecuteJob(execCtx, job)
+			}
+		} else {
+			execErr = scoutEngine.ExecuteScoutingJob(execCtx, job)
+		}
+		if err := execErr; err != nil {
 			logger.Printf("ERROR: Scout job execution failed: jobId=%s, canonicalPath=%s, error=%v", jobID, job.TargetCanonicalPath, err)
 
 			// If the job is already in a terminal state (rejected/failed/verified),

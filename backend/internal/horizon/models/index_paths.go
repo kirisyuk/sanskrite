@@ -244,12 +244,12 @@ func withAncestors(path string, maxDepth int) []string {
 }
 
 func buildLocationIndexPaths(f *HorizonFragment) []string {
-	if f == nil || f.HomeLocation == nil {
+	if f == nil {
 		return nil
 	}
 
-	cc := ""
-	if f.HomeLocation.ISO3166_1 != nil {
+	cc := strings.ToLower(strings.TrimSpace(f.GeoSlug))
+	if cc == "" && f.HomeLocation != nil && f.HomeLocation.ISO3166_1 != nil {
 		cc = strings.ToLower(strings.TrimSpace(*f.HomeLocation.ISO3166_1))
 	}
 	if cc == "" {
@@ -257,7 +257,7 @@ func buildLocationIndexPaths(f *HorizonFragment) []string {
 	}
 
 	admin1 := "na"
-	if f.HomeLocation.ISO3166_2 != nil {
+	if f.HomeLocation != nil && f.HomeLocation.ISO3166_2 != nil {
 		iso := strings.TrimSpace(*f.HomeLocation.ISO3166_2)
 		// Common format: "US-CA" → admin1 = "ca"
 		if idx := strings.Index(iso, "-"); idx >= 0 && idx+1 < len(iso) {
