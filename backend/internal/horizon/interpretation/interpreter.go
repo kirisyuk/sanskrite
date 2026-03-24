@@ -63,7 +63,7 @@ type Mitigation struct {
 type Interpreter struct {
 	aiExecutor         *ai.AITaskExecutor
 	fragmentsRepo      *repo.HorizonFragmentsRepository
-	signalsRepo        SignalsRepo // For retrieving signal details
+	signalsRepo        SignalsRepo        // For retrieving signal details
 	eventFactsResolver EventFactsResolver // Optional: resolve SourceEventID to fact summary for prompt
 	feedbackEmitter    feedback.Emitter
 }
@@ -118,11 +118,12 @@ func (i *Interpreter) Interpret(ctx context.Context, request *InterpretationRequ
 			continue
 		}
 		metrics[metricPath] = value.Value
-		axis := metricExtractAxis(metricPath)
+		axis, mech := metricExtractAxisAndMechanism(metricPath)
 		if axis != "" {
 			axisBreakdown = append(axisBreakdown, AxisContribution{
 				Axis:      axis,
 				Amplitude: value.Value,
+				Mechanism: mech,
 			})
 		}
 	}
@@ -448,8 +449,18 @@ func (i *Interpreter) buildInterpretationPromptFromData(
 		metricsText += fmt.Sprintf("- %s: %.2f\n", path, value)
 	}
 	axisText := ""
+	hasMechanism := false
 	for _, contrib := range axisBreakdown {
-		axisText += fmt.Sprintf("- %s: %.2f\n", contrib.Axis, contrib.Amplitude)
+		if strings.TrimSpace(contrib.Mechanism) != "" {
+			hasMechanism = true
+			axisText += fmt.Sprintf("- %s (mechanism=%s): %.2f\n", contrib.Axis, contrib.Mechanism, contrib.Amplitude)
+		} else {
+			axisText += fmt.Sprintf("- %s: %.2f\n", contrib.Axis, contrib.Amplitude)
+		}
+	}
+	regulatoryNote := ""
+	if hasMechanism {
+		regulatoryNote = "\nSome axis entries include a mechanism slug from the metric path: relate findings to specific regulatory or policy instruments where evidence supports it.\n"
 	}
 	eventsText := ""
 	for j, event := range topEvents {
@@ -465,7 +476,7 @@ Current %s Metrics:
 
 Axis Breakdown:
 %s
-
+%s
 Top Contributing Events:
 %s
 
@@ -491,7 +502,7 @@ OUTPUT FORMAT (strict JSON):
 }
 
 Return ONLY valid JSON, no markdown code fences.`,
-		polarity, nodeLabel, canonicalPath, polarity, metricsText, axisText, eventsText, polarity)
+		polarity, nodeLabel, canonicalPath, polarity, metricsText, axisText, regulatoryNote, eventsText, polarity)
 }
 
 // buildInterpretationPrompt builds the LLM prompt for interpretation.
@@ -518,15 +529,19 @@ func metricHasPolarity(metricPath, polarity string) bool {
 	return len(metricPath) >= len(prefix) && metricPath[:len(prefix)] == prefix
 }
 
-func metricExtractAxis(metricPath string) string {
+func metricExtractAxisAndMechanism(metricPath string) (axis string, mechanism string) {
 	parts := splitPathParts(metricPath)
 	if len(parts) < 3 {
-		return ""
+		return "", ""
 	}
 	if parts[0] != "metric" {
-		return ""
+		return "", ""
 	}
-	return parts[2]
+	axis = parts[2]
+	if len(parts) >= 4 {
+		mechanism = parts[3]
+	}
+	return axis, mechanism
 }
 
 func splitPathParts(path string) []string {

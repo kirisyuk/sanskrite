@@ -195,6 +195,12 @@ func TestCanonicalizeEdgeWithPaths_TransformsIntoComponentToFinished_PromotesAss
 	}
 }
 
+func TestIsProductTransitionEdgeType_IncludesUsedIn(t *testing.T) {
+	if !IsProductTransitionEdgeType(DependencyTypeUsedIn) {
+		t.Fatal("expected USED_IN to be treated as a product transition edge")
+	}
+}
+
 func TestCanonicalizeEdge_DepositAdministersOrg_SwapOnly(t *testing.T) {
 	newType, shouldSwap, changed, reason := CanonicalizeEdge(
 		DependencyTypeAdministers,

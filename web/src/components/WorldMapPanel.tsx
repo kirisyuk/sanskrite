@@ -13,6 +13,7 @@ import { useVesselLayer, vesselsApiAvailable as isVesselsApiAvailable } from '..
 import { MapFilterPanel } from './MapFilterPanel';
 import { MapObjectDetail } from './MapObjectDetail';
 import { MapObjectStackPanel } from './MapObjectStackPanel';
+import { SimulationMapOverlayPanel } from './SimulationMapOverlayPanel';
 import { STATIC_ZONE_DATA, deriveZoneTypeCounts, type StaticZoneFeature, type StaticZoneType } from '../lib/staticZones';
 import {
   STATIC_TRANSPORT_FLOW_DATA,
@@ -713,6 +714,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [flowsEnabled, setFlowsEnabled] = React.useState(false);
   const [pathLegsEnabled, setPathLegsEnabled] = React.useState(Boolean(scope?.lensId));
   const [pathLegClusteringEnabled, setPathLegClusteringEnabled] = React.useState(Boolean(scope?.lensId));
+  const [simulationViewFilterEnabled, setSimulationViewFilterEnabled] = React.useState(false);
   const [activeDockPanel, setActiveDockPanel] = React.useState<DockPanel>(null);
   const [routeSearchQuery, setRouteSearchQuery] = React.useState('');
   const [productSearchQuery, setProductSearchQuery] = React.useState('');
@@ -1611,6 +1613,11 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     }
     routeSelectionVisibleRef.current = routeSelectionVisible;
   }, [routeSelectionVisible]);
+
+  React.useEffect(() => {
+    if (simulationViewFilterEnabled) return;
+    setSelectedRouteArtifactIds([]);
+  }, [simulationViewFilterEnabled]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -2591,6 +2598,66 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
                     onSelectAllFlowModes={() => setActiveFlowModes(null)}
                     onSelectNoneFlowModes={() => setActiveFlowModes(new Set())}
                   />
+
+                  <div
+                    style={{
+                      borderRadius: 12,
+                      border: '1px solid var(--border-subtle)',
+                      background: mapSearchPaletteChrome.subtleSurface,
+                      padding: '10px 12px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 10,
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)' }}>Simulation stress</div>
+                        <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                          Use simulation overlays as a live view filter on route lines.
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setSimulationViewFilterEnabled((value) => !value)}
+                        disabled={!scope?.lensId}
+                        style={{
+                          borderRadius: 999,
+                          border: simulationViewFilterEnabled ? '1px solid rgba(14,165,233,0.32)' : '1px solid var(--border-subtle)',
+                          background: simulationViewFilterEnabled
+                            ? (isDark ? 'rgba(14,165,233,0.16)' : 'rgba(14,165,233,0.10)')
+                            : 'transparent',
+                          color: simulationViewFilterEnabled ? (isDark ? '#bae6fd' : '#075985') : 'var(--text-secondary-strong)',
+                          padding: '6px 10px',
+                          fontSize: 11,
+                          fontWeight: 800,
+                          cursor: scope?.lensId ? 'pointer' : 'not-allowed',
+                          opacity: scope?.lensId ? 1 : 0.6,
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {simulationViewFilterEnabled ? 'On' : 'Off'}
+                      </button>
+                    </div>
+
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                      {simulationViewFilterEnabled
+                        ? (selectedRouteArtifactIdSet.size > 0
+                          ? `${selectedRouteArtifactIdSet.size} routes highlighted by simulation signals`
+                          : 'Simulation filter is active. Pick shoulders, products or path chains below.')
+                        : 'Disabled. The map shows ordinary route/path stress only.'}
+                    </div>
+
+                    {simulationViewFilterEnabled && (
+                      <SimulationMapOverlayPanel
+                        lensId={scope?.lensId || null}
+                        routeCatalog={routeCatalog}
+                        selectedRouteArtifactIds={selectedRouteArtifactIds}
+                        onChangeSelectedRouteArtifactIds={setSelectedRouteArtifactIds}
+                        isDark={isDark}
+                      />
+                    )}
+                  </div>
 
                   <div
                     style={{

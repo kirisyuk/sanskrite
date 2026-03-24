@@ -9,6 +9,7 @@ func TestDefaultAxisSpecs_PhysicalFlowSupplyIncludesOrganizationControlEdges(t *
 		"CONTROLS":    true,
 		"MANAGES":     true,
 		"OPERATES_IN": true,
+		"USED_IN":     true,
 	}
 	got := map[string]bool{}
 	for _, edgeType := range spec.StrongEdgeTypes {
@@ -26,6 +27,7 @@ func TestDefaultPropagationProfiles_PhysicalFlowSupplyIncludesBidirectionalSuppl
 	foundSupplies := false
 	foundProduces := false
 	foundOperatesIn := false
+	foundUsedIn := false
 	for _, spec := range profile.StrongEdges {
 		switch spec.Type {
 		case "SUPPLIES_TO":
@@ -34,6 +36,8 @@ func TestDefaultPropagationProfiles_PhysicalFlowSupplyIncludesBidirectionalSuppl
 			foundProduces = spec.Direction == "source_to_target"
 		case "OPERATES_IN":
 			foundOperatesIn = spec.Direction == "source_to_target"
+		case "USED_IN":
+			foundUsedIn = spec.Direction == "source_to_target"
 		}
 	}
 	if !foundSupplies {
@@ -44,5 +48,8 @@ func TestDefaultPropagationProfiles_PhysicalFlowSupplyIncludesBidirectionalSuppl
 	}
 	if !foundOperatesIn {
 		t.Fatalf("physical_flow/supply profile must include OPERATES_IN source_to_target")
+	}
+	if !foundUsedIn {
+		t.Fatalf("physical_flow/supply profile must include USED_IN source_to_target")
 	}
 }

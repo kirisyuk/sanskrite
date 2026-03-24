@@ -94,7 +94,15 @@ func IsMarketRelationType(t models.DependencyType) bool {
 
 // supplyChainAllowlistFromTaxonomy derives allowlist from taxonomy.SupplyChainEdgeTypes (single source of truth).
 func supplyChainAllowlistFromTaxonomy() []models.DependencyType {
-	types := taxonomy.SupplyChainEdgeTypes
+	return allowlistFromTaxonomy(taxonomy.SupplyChainEdgeTypes)
+}
+
+// policyImpactAllowlistFromTaxonomy derives allowlist from taxonomy.PolicyImpactEdgeTypes.
+func policyImpactAllowlistFromTaxonomy() []models.DependencyType {
+	return allowlistFromTaxonomy(taxonomy.PolicyImpactEdgeTypes)
+}
+
+func allowlistFromTaxonomy(types []string) []models.DependencyType {
 	out := make([]models.DependencyType, 0, len(types))
 	for _, t := range types {
 		out = append(out, models.DependencyType(t))
@@ -136,21 +144,8 @@ var domainModeAllowlists = map[string][]models.DependencyType{
 		models.DependencyTypeUsesMechanism,
 		models.DependencyTypeAppliesTo,
 	},
-	taxonomy.DomainModePolicyImpact: {
-		models.DependencyTypeRegulates,
-		models.DependencyTypeControlsAccess,
-		models.DependencyTypeImposesCondition,
-		models.DependencyTypeGatekeepsDecision,
-		models.DependencyTypeUsesMechanism,
-		models.DependencyTypeAppliesTo,
-		models.DependencyTypeInfluences,
-		models.DependencyTypeDependsOn,
-		models.DependencyTypeParticipatesIn,
-		models.DependencyTypeTradedIn,
-		models.DependencyTypeLocatedIn,
-		models.DependencyTypeOperatesIn,
-		models.DependencyTypeAdministers,
-	},
+	// Policy-impact: set in init() from taxonomy.PolicyImpactEdgeTypes (single source of truth).
+	taxonomy.DomainModePolicyImpact: nil,
 	taxonomy.DomainModeEcosystem: {
 		models.DependencyTypeParticipatesIn,
 		models.DependencyTypeTradedIn,
@@ -171,6 +166,7 @@ var domainModeAllowlists = map[string][]models.DependencyType{
 
 func init() {
 	domainModeAllowlists[taxonomy.DomainModeSupplyChain] = supplyChainAllowlistFromTaxonomy()
+	domainModeAllowlists[taxonomy.DomainModePolicyImpact] = policyImpactAllowlistFromTaxonomy()
 }
 
 func EdgeAllowlistByDomainMode(mode string) []models.DependencyType {

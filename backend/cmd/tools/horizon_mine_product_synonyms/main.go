@@ -31,7 +31,7 @@ var toolProductDictRuntime *productdict.Runtime
 // error profile (service vs route vs capability vs compliance/process) and should
 // use their own prompts, review criteria, and collection.
 var (
-	mode              = flag.String("mode", "report", "Mode: report, pairs, pair-decisions, repair-supply-links, or apply")
+	mode              = flag.String("mode", "report", "Mode: report, pairs, pair-decisions, repair-supply-links, apply, or dedup-backfill")
 	projectID         = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project ID")
 	tenantID          = flag.String("tenant", "global", "Tenant ID")
 	pageSize          = flag.Int("page-size", 500, "Firestore page size")
@@ -276,8 +276,17 @@ func main() {
 			log.Fatalf("repair-supply-links failed: %v", err)
 		}
 		return
+	case "dedup-backfill":
+		desired, deactivated, err := backfillSemanticDedup(ctx, fsClient.Client())
+		if err != nil {
+			log.Fatalf("dedup-backfill failed: %v", err)
+		}
+		fmt.Printf("\nSemantic Dedup Backfill\n")
+		fmt.Printf("  desired_active_docs: %d\n", desired)
+		fmt.Printf("  deactivated_docs: %d\n", deactivated)
+		return
 	default:
-		log.Fatalf("unsupported --mode=%q (want report|pairs|pair-decisions|repair-supply-links|apply)", *mode)
+		log.Fatalf("unsupported --mode=%q (want report|pairs|pair-decisions|repair-supply-links|apply|dedup-backfill)", *mode)
 	}
 
 	products, lastSeen, err := loadProducts(ctx, fsClient.Client())

@@ -130,6 +130,8 @@ func systemAgents(baseURL string) []contracts.AgentSpec {
 			Capabilities: []contracts.CapabilitySpec{
 				{Name: "mesh.route", Description: "Route and prepare tasks for execution."},
 				{Name: "mesh.plan", Description: "Plan execution strategy and budgets."},
+				{Name: "sim.plan", Description: "Plan simulation ensemble execution and world fan-out."},
+				{Name: "sim.aggregate", Description: "Aggregate world outputs into a simulation bundle."},
 			},
 			Policy: contracts.InvocationPolicy{
 				AllowedCallers:         []string{"internal", "mesh.supervisor", "mesh.worker", "mesh.reviewer"},
@@ -149,6 +151,9 @@ func systemAgents(baseURL string) []contracts.AgentSpec {
 			TrustZone:   contracts.TrustZoneGCP,
 			Capabilities: []contracts.CapabilitySpec{
 				{Name: "mesh.execute", Description: "Execute tasks using Vertex AI."},
+				{Name: "sim.world.bootstrap", Description: "Bootstrap one simulation world and execute its ticks."},
+				{Name: "sim.population.generate", Description: "Generate normalized simulation population archetypes."},
+				{Name: "sim.world.step", Description: "Generate normalized actions for one simulation world step."},
 			},
 			Policy: contracts.InvocationPolicy{
 				AllowedCallers:         []string{"internal", "mesh.supervisor"},
@@ -168,6 +173,7 @@ func systemAgents(baseURL string) []contracts.AgentSpec {
 			TrustZone:   contracts.TrustZoneInternal,
 			Capabilities: []contracts.CapabilitySpec{
 				{Name: "mesh.review", Description: "Review output and decide acceptance/rejection."},
+				{Name: "sim.review", Description: "Review simulation bundle consistency and grounding coverage."},
 			},
 			Policy: contracts.InvocationPolicy{
 				AllowedCallers:         []string{"internal", "mesh.supervisor", "mesh.worker"},

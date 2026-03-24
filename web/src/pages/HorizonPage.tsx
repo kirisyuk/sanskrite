@@ -450,6 +450,49 @@ const HorizonPage: React.FC = () => {
         return;
       }
 
+      const q = String(request.query || '').trim();
+      const prefetchScope = Array.from(
+        new Set(
+          (request.prefetchScope || [])
+            .map((x) => String(x || '').trim())
+            .filter(Boolean),
+        ),
+      );
+
+      // Mode 1: no free-text query — create a lens directly from preselected scope.
+      if (!q && prefetchScope.length > 0) {
+        // Product-only creation is a direct scope bootstrap, not a research pipeline.
+        // Keep the input surface visible and avoid the temporary Progress flapper.
+        setIsCreatingLens(false);
+        const defaultName = prefetchScope.length === 1
+          ? prefetchScope[0].split('/').filter(Boolean).slice(-1)[0] || 'Lens'
+          : `Lens (${prefetchScope.length})`;
+        const lens = await api.createHorizonLens(
+          {
+            projectId: request.projectId,
+            name: String(request.name || '').trim() || defaultName,
+            scope: prefetchScope,
+            status: 'ACTIVE',
+          },
+          { skipScouting: true },
+        );
+
+        if (lens?.id) {
+          setPreferredLensCanvasMode('cockpit');
+          setSelectedLensId(lens.id);
+          window.dispatchEvent(new CustomEvent('horizon:lens-created', {
+            detail: { lensId: lens.id, projectId: request.projectId },
+          }));
+        } else {
+          setSelectedLensId(null);
+        }
+        setLensStarted(false);
+        setActiveCreateCorrelationId(null);
+        setActiveCreateSessionId(null);
+        resetEvents();
+        return;
+      }
+
       // Two creation modes:
       // 1) Prefetch-only (chips only): create lens with explicit scope (no scouting).
       // 2) Query (+ optional prefetch scope): create lens from NL query (scouting), merging prefetchScope into final scope.
@@ -481,42 +524,6 @@ const HorizonPage: React.FC = () => {
         });
       } catch {
         // ignore
-      }
-
-      const q = String(request.query || '').trim();
-      const prefetchScope = Array.from(
-        new Set(
-          (request.prefetchScope || [])
-            .map((x) => String(x || '').trim())
-            .filter(Boolean),
-        ),
-      );
-
-      // Mode 1: no free-text query — create a lens directly from preselected scope.
-      if (!q && prefetchScope.length > 0) {
-        const defaultName = prefetchScope.length === 1
-          ? prefetchScope[0].split('/').filter(Boolean).slice(-1)[0] || 'Lens'
-          : `Lens (${prefetchScope.length})`;
-        const lens = await api.createHorizonLens(
-          {
-            projectId: request.projectId,
-            name: String(request.name || '').trim() || defaultName,
-            scope: prefetchScope,
-            status: 'ACTIVE',
-          },
-          { correlationId, sessionId, skipScouting: true },
-        );
-
-        if (lens?.id) {
-          setPreferredLensCanvasMode('assembly');
-          setSelectedLensId(lens.id);
-          window.dispatchEvent(new CustomEvent('horizon:lens-created', {
-            detail: { lensId: lens.id, projectId: request.projectId },
-          }));
-        } else {
-          setSelectedLensId(null);
-        }
-        return;
       }
 
       // Mode 2: query-based lens creation — preflight first (“How we understood your request”).
@@ -804,18 +811,7 @@ const HorizonPage: React.FC = () => {
           setActiveCreateCorrelationId(null);
           setActiveCreateSessionId(null);
           setCreateFatalError(null);
-          setPreferredLensCanvasMode('assembly');
-          void handleAssembleLens({
-            projectId: currentProject.id,
-            query: '',
-            name: 'untitled lens',
-            createEmptyLens: true,
-            prefetchScope: [],
-            filters: {
-              maxRecursionDepth: 1,
-              mode: 'general',
-            },
-          });
+          setPreferredLensCanvasMode('progress');
         }}
       />
 

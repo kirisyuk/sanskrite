@@ -393,6 +393,100 @@ func TestValidationPolicy_SuppliesToActorPairRequiresDirectionEvidence(t *testin
 	}
 }
 
+func TestValidationPolicy_ControlsAccessRequiresDirectionEvidence(t *testing.T) {
+	p := &ValidationPolicy{rulesRepo: testValidationRulesRepo{}}
+
+	decision, err := p.Decide(context.Background(), PolicyInput{
+		Kind: "edge",
+		Context: map[string]interface{}{
+			"validationKind":      "edge",
+			"sourceType":          string(horizonmodels.FragmentTypeOrganization),
+			"targetType":          string(horizonmodels.FragmentTypeMarket),
+			"sourceCanonicalPath": "/gov/ae/ministry-of-finance",
+			"targetCanonicalPath": "/market/ae/capital/foreign-direct-investment",
+			"relationType":        string(horizonmodels.DependencyTypeControlsAccess),
+			"reason":              "The ministry can restrict foreign investor access to the market.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if decision.Action != ActionQuarantineSoft {
+		t.Fatalf("expected %s for CONTROLS_ACCESS without policy roles, got %s", ActionQuarantineSoft, decision.Action)
+	}
+
+	decision2, err := p.Decide(context.Background(), PolicyInput{
+		Kind: "edge",
+		Context: map[string]interface{}{
+			"validationKind":      "edge",
+			"sourceType":          string(horizonmodels.FragmentTypeOrganization),
+			"targetType":          string(horizonmodels.FragmentTypeMarket),
+			"sourceCanonicalPath": "/gov/ae/ministry-of-finance",
+			"targetCanonicalPath": "/market/ae/capital/foreign-direct-investment",
+			"relationType":        string(horizonmodels.DependencyTypeControlsAccess),
+			"reason":              "The ministry can restrict foreign investor access to the market.",
+			"qualifiers": map[string]interface{}{
+				"source_role":     "controller",
+				"target_role":     "access_subject",
+				"direction_basis": "controller_to_access_subject",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide() with roles error = %v", err)
+	}
+	if decision2.Action == ActionQuarantineSoft {
+		t.Fatalf("expected non-quarantine with explicit controller/access_subject roles, got %s", decision2.Action)
+	}
+}
+
+func TestValidationPolicy_ImposesConditionMechanismRolesAllow(t *testing.T) {
+	p := &ValidationPolicy{rulesRepo: testValidationRulesRepo{}}
+
+	decision, err := p.Decide(context.Background(), PolicyInput{
+		Kind: "edge",
+		Context: map[string]interface{}{
+			"validationKind":      "edge",
+			"sourceType":          string(horizonmodels.FragmentTypeMechanism),
+			"targetType":          string(horizonmodels.FragmentTypeOrganization),
+			"sourceCanonicalPath": "/mechanism/regulatory/corporate-income-tax-rate-increase",
+			"targetCanonicalPath": "/org/ae/dubai-international-financial-centre",
+			"relationType":        string(horizonmodels.DependencyTypeImposesCondition),
+			"reason":              "The rate increase imposes a higher tax burden on DIFC entities.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if decision.Action != ActionQuarantineSoft {
+		t.Fatalf("expected %s for IMPOSES_CONDITION without policy roles, got %s", ActionQuarantineSoft, decision.Action)
+	}
+
+	decision2, err := p.Decide(context.Background(), PolicyInput{
+		Kind: "edge",
+		Context: map[string]interface{}{
+			"validationKind":      "edge",
+			"sourceType":          string(horizonmodels.FragmentTypeMechanism),
+			"targetType":          string(horizonmodels.FragmentTypeOrganization),
+			"sourceCanonicalPath": "/mechanism/regulatory/corporate-income-tax-rate-increase",
+			"targetCanonicalPath": "/org/ae/dubai-international-financial-centre",
+			"relationType":        string(horizonmodels.DependencyTypeImposesCondition),
+			"reason":              "The rate increase imposes a higher tax burden on DIFC entities.",
+			"qualifiers": map[string]interface{}{
+				"source_role":     "mechanism",
+				"target_role":     "conditioned_entity",
+				"direction_basis": "mechanism_to_constrained_entity",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Decide() with roles error = %v", err)
+	}
+	if decision2.Action == ActionQuarantineSoft {
+		t.Fatalf("expected non-quarantine with explicit imposer/constrained_entity roles, got %s", decision2.Action)
+	}
+}
+
 func TestValidationPolicy_OrgConsumesOrgQuarantine(t *testing.T) {
 	// CONSUMES removed from taxonomy; legacy CONSUMES is canonicalized to SUPPLIES_TO before validation.
 	// This test now verifies MARKET->MARKET PARTICIPATES_IN is quarantined (same pattern).

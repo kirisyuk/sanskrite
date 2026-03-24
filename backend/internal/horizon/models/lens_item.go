@@ -136,6 +136,7 @@ func (li *LensItem) Validate() error {
 			string(DependencyTypeInfluences):     true,
 			string(DependencyTypeTransformsInto): true,
 			string(DependencyTypeAssemblesInto):  true,
+			string(DependencyTypeUsedIn):         true,
 			// Governance / org-person
 			string(DependencyTypeManages):       true,
 			string(DependencyTypeControls):      true,

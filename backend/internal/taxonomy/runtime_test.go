@@ -178,6 +178,54 @@ func TestIsValidEdgeMetric(t *testing.T) {
 	}
 }
 
+func TestIsValidEdgeQualifier(t *testing.T) {
+	withRuntimeTaxonomy(t, nil)
+
+	tests := []struct {
+		edgeType      string
+		qualifierName string
+		want          bool
+	}{
+		{"OWNS", "share_type", true},
+		{"OWNS", "voting_rights_percent", true},
+		{"CONTROLS", "control_type", true},
+		{"AFFECTS", "pass_through_estimate", true},
+		{"AFFECTS", "lag_quarters", true},
+		{"IN_GEO_SCOPE", "scope_basis", true},
+		{"INFLUENCES", "via", true},
+		{"INFLUENCES", "strength", true},
+		{"INVESTS_IN", "round", true},
+		{"OWNS", "round", false},
+		{"IN_GEO_SCOPE", "pass_through_estimate", false},
+		{"", "share_type", false},
+		{"OWNS", "", false},
+	}
+
+	for _, tt := range tests {
+		if got := IsValidEdgeQualifier(tt.edgeType, tt.qualifierName); got != tt.want {
+			t.Errorf("IsValidEdgeQualifier(%q, %q)=%v, want %v", tt.edgeType, tt.qualifierName, got, tt.want)
+		}
+	}
+}
+
+func TestGetAllowedEdgeQualifiers_ReturnsCopy(t *testing.T) {
+	withRuntimeTaxonomy(t, nil)
+
+	got := GetAllowedEdgeQualifiers("AFFECTS")
+	if len(got) == 0 {
+		t.Fatal("expected allowed qualifiers for AFFECTS")
+	}
+	if !containsString(got, "pass_through_estimate") || !containsString(got, "channel_type") {
+		t.Fatalf("expected transmission qualifiers in AFFECTS contract, got %v", got)
+	}
+
+	got[0] = "mutated"
+	again := GetAllowedEdgeQualifiers("AFFECTS")
+	if len(again) == 0 || again[0] == "mutated" {
+		t.Fatal("expected GetAllowedEdgeQualifiers to return a defensive copy")
+	}
+}
+
 func TestIsValidEdgeModality(t *testing.T) {
 	withRuntimeTaxonomy(t, &RuntimeTaxonomy{
 		Version: "test",
@@ -283,4 +331,13 @@ func TestIsValidMetricUnit_RuntimeAllowlist_FailOpen(t *testing.T) {
 	if IsValidMetricUnit("USD$", true) {
 		t.Errorf("IsValidMetricUnit(USD$, true)=true, want false")
 	}
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }

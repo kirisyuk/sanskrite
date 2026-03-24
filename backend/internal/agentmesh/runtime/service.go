@@ -26,6 +26,22 @@ type Service struct {
 	dispatcher     *tasks.Dispatcher
 	artifactBucket string
 	logger         *log.Logger
+	processors     []TaskProcessor
+}
+
+type TaskProcessor interface {
+	CanHandle(task *contracts.MeshTask) bool
+	Process(ctx context.Context, runtime *Service, task *contracts.MeshTask, leaseOwner string) (*ProcessResult, error)
+}
+
+type ProcessResult struct {
+	Status          contracts.TaskStatus
+	Output          map[string]any
+	ArtifactPayload any
+	ReviewOutput    map[string]any
+	ReviewAccepted  *bool
+	RetryClass      contracts.RetryClass
+	LastError       string
 }
 
 func NewService(store *repo.Store, control *controlplane.Service, vertexSvc *vertex.Service, traces *meshtrace.Service, dispatcher *tasks.Dispatcher, artifactBucket string, logger *log.Logger) *Service {
@@ -38,6 +54,13 @@ func NewService(store *repo.Store, control *controlplane.Service, vertexSvc *ver
 		artifactBucket: strings.TrimSpace(artifactBucket),
 		logger:         logger,
 	}
+}
+
+func (s *Service) WithProcessor(processor TaskProcessor) *Service {
+	if processor != nil {
+		s.processors = append(s.processors, processor)
+	}
+	return s
 }
 
 func (s *Service) CreateTask(ctx context.Context, task *contracts.MeshTask, req policy.RequestContext, skipEnqueue bool) (*contracts.MeshTask, error) {
@@ -102,6 +125,76 @@ func (s *Service) ExecuteTask(ctx context.Context, taskID, leaseOwner string) er
 	go s.leaseHeartbeatLoop(heartbeatCtx, task.ID, leaseOwner, 2*time.Minute)
 
 	usage := task.Usage
+
+	if processor := s.processorFor(task); processor != nil {
+		result, err := processor.Process(ctx, s, task, leaseOwner)
+		if err != nil {
+			_ = s.traces.FinishSpan(ctx, span, "failed", nil, map[string]any{"error": err.Error()})
+			return s.retryOrFail(ctx, task, leaseOwner, classifyRetry(err), err, usage)
+		}
+		status := contracts.TaskStatusSucceeded
+		if result != nil && result.Status != "" {
+			status = result.Status
+		}
+		artifactIDs := []string{}
+		if result != nil && result.ArtifactPayload != nil {
+			artifactID := uuid.NewString()
+			artifact := &contracts.ArtifactRef{
+				ID:       artifactID,
+				TenantID: task.TenantID,
+				TaskID:   task.ID,
+				Kind:     "task-output",
+				Metadata: map[string]string{"agentId": task.RoutedAgentID, "capability": task.Capability},
+			}
+			if err := s.store.SaveArtifactPayload(ctx, s.artifactBucket, artifact, result.ArtifactPayload); err != nil {
+				_ = s.traces.FinishSpan(ctx, span, "failed", nil, map[string]any{"error": err.Error()})
+				return s.retryOrFail(ctx, task, leaseOwner, contracts.RetryClassTransient, err, usage)
+			}
+			artifactIDs = append(artifactIDs, artifactID)
+		}
+		output := map[string]any{}
+		if result != nil && result.Output != nil {
+			output = result.Output
+		}
+		if result != nil && result.ReviewOutput != nil {
+			task.ReviewOutput = result.ReviewOutput
+		}
+		if result != nil && result.ReviewAccepted != nil {
+			task.ReviewAccepted = result.ReviewAccepted
+		}
+		if result != nil && result.ReviewOutput != nil {
+			output["review"] = result.ReviewOutput
+		}
+		if result != nil && result.ReviewAccepted != nil {
+			output["reviewAccepted"] = *result.ReviewAccepted
+		}
+		task.Output = output
+		switch status {
+		case contracts.TaskStatusSucceeded:
+			_ = s.traces.FinishSpan(ctx, span, "succeeded", nil, map[string]any{"artifacts": artifactIDs})
+			return s.store.CompleteTask(ctx, task.ID, leaseOwner, status, output, artifactIDs)
+		case contracts.TaskStatusDegraded:
+			rationale := ""
+			if result != nil {
+				rationale = strings.TrimSpace(result.LastError)
+			}
+			_ = s.traces.FinishSpan(ctx, span, "degraded", nil, map[string]any{"artifacts": artifactIDs, "rationale": rationale})
+			return s.store.FailTask(ctx, task.ID, leaseOwner, contracts.RetryClassPermanent, rationale, true)
+		default:
+			retryClass := contracts.RetryClassPermanent
+			lastError := "processor failed"
+			if result != nil {
+				if result.RetryClass != "" {
+					retryClass = result.RetryClass
+				}
+				if strings.TrimSpace(result.LastError) != "" {
+					lastError = strings.TrimSpace(result.LastError)
+				}
+			}
+			_ = s.traces.FinishSpan(ctx, span, "failed", nil, map[string]any{"error": lastError})
+			return s.retryOrFail(ctx, task, leaseOwner, retryClass, fmt.Errorf("%s", lastError), usage)
+		}
+	}
 
 	task.SessionRef, err = s.vertex.EnsureSession(ctx, task)
 	if err != nil {
@@ -325,6 +418,31 @@ func (s *Service) enforceBudget(budget contracts.BudgetPolicy, usage contracts.U
 	}
 	if budget.MaxSpendUSD > 0 && usage.EstimatedSpendUSD > budget.MaxSpendUSD {
 		return fmt.Errorf("spend budget exceeded")
+	}
+	return nil
+}
+
+func (s *Service) Store() *repo.Store {
+	return s.store
+}
+
+func (s *Service) Vertex() *vertex.Service {
+	return s.vertex
+}
+
+func (s *Service) ArtifactBucket() string {
+	return s.artifactBucket
+}
+
+func (s *Service) Logger() *log.Logger {
+	return s.logger
+}
+
+func (s *Service) processorFor(task *contracts.MeshTask) TaskProcessor {
+	for _, processor := range s.processors {
+		if processor != nil && processor.CanHandle(task) {
+			return processor
+		}
 	}
 	return nil
 }

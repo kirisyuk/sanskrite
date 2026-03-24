@@ -193,10 +193,10 @@ func overlayApplyOrganizationSemantics(
 	fragment *horizonmodels.HorizonFragment,
 	overlay *PropagationNodeOverlay,
 	addRole func(string),
-	addExposure func(string),
-	setPrimary func(string),
-	setBusiness func(string),
-	forceBusiness func(string),
+	_ func(string),
+	_ func(string),
+	_ func(string),
+	_ func(string),
 	applyDomainSemantic func(string, string, float64, float64, float64, ...string),
 ) bool {
 	if fragment == nil || overlay == nil || fragment.Type != horizonmodels.FragmentTypeOrganization {
@@ -248,9 +248,9 @@ func overlayApplyMarketDomainSemantics(
 	overlay *PropagationNodeOverlay,
 	addRole func(string),
 	addExposure func(string),
-	setPrimary func(string),
-	setBusiness func(string),
-	forceBusiness func(string),
+	_ func(string),
+	_ func(string),
+	_ func(string),
 	applyDomainSemantic func(string, string, float64, float64, float64, ...string),
 ) bool {
 	if fragment == nil || overlay == nil {

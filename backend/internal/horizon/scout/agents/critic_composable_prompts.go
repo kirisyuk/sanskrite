@@ -163,10 +163,13 @@ RELATIONS:
 
 	Validate ownership and control coherence:
 1. parent/subsidiary direction consistency;
-2. board and executive coverage at practical broad level;
-3. government hierarchy consistency when /gov/ entities appear;
-4. assurance linkage quality when auditors/certifiers are present (ASSURES + assurance_type);
-5. missing information that should be researched before deep dive.
+2. beneficial-owner completeness: call out when UBO, nominee/trustee vehicle, or indirect holding layer appears missing;
+3. voting-rights vs equity divergence: call out when OWNS exists but voting/control evidence is thin or contradictory;
+4. board and executive coverage at practical broad level;
+5. community/dynasty lineage completeness when COMMUNITY nodes materially explain control;
+6. government hierarchy consistency when /gov/ entities appear;
+7. assurance linkage quality when auditors/certifiers are present (ASSURES + assurance_type);
+8. missing information that should be researched before deep dive.
 
 %s
 
@@ -292,10 +295,13 @@ Allowed actor types: %s.
 
 Validate ownership and control coherence:
 1. parent/subsidiary direction consistency;
-2. board and executive coverage at practical broad level;
-3. government hierarchy consistency when /gov/ entities appear;
-4. assurance linkage quality when auditors/certifiers are present;
-5. missing information that should be researched before deep dive.`,
+2. beneficial-owner completeness: call out when UBO, nominee/trustee vehicle, or indirect holding layer appears missing;
+3. voting-rights vs equity divergence: call out when OWNS exists but voting/control evidence is thin or contradictory;
+4. board and executive coverage at practical broad level;
+5. community/dynasty lineage completeness when COMMUNITY nodes materially explain control;
+6. government hierarchy consistency when /gov/ entities appear;
+7. assurance linkage quality when auditors/certifiers are present;
+8. missing information that should be researched before deep dive.`,
 				relationTypesPromptForDomainMode(taxonomy.DomainModeGovernance),
 				taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeGovernance)))
 
@@ -332,12 +338,16 @@ Canonical path rules:
 %s
 
 Validate:
-1. policy channel consistency: regulator/program/mechanism links are directionally coherent;
-2. impact graph quality: affected segments are explicit and connected;
-3. relation taxonomy compliance;
-4. scenario modeling readiness (quantitative qualifiers on edges);
-5. observability completeness;
-6. five-layer coverage check: Policy Source, Transmission Channel, Exposure, Response, Observability.`,
+1. policy channel consistency: gatekeeper/regulator/admin/mechanism links are directionally coherent and use the correct semantic source;
+2. directed role contract: core policy-impact edges should resolve to canonical role pairs
+   gatekeeper->decision_point, mechanism_user->mechanism, controller->access_subject, imposer->constrained_entity,
+   mechanism->applicable_entity, administrator->administered_entity, scope_owner->geo_scope, impact_source->affected_entity;
+3. impact graph quality: affected segments are explicit and connected;
+4. geo/community/media/program completeness: flag when a policy graph lacks explicit geo scope, downstream community/media transmission, or program execution layer where those are materially relevant;
+5. relation taxonomy compliance;
+6. scenario modeling readiness (quantitative qualifiers on edges);
+7. observability completeness;
+8. five-layer coverage check: Policy Source, Mechanism, Scope/Exposure, Transmission/Response, Observability.`,
 				relationTypesPromptForDomainMode(taxonomy.DomainModePolicyImpact),
 				taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModePolicyImpact),
 				taxonomy.ExtendedCanonicalPathRulesPrompt()))
@@ -395,17 +405,32 @@ RELATIONS:
 %s
 
 Validate:
-1. policy channel consistency: regulator/program/mechanism links are directionally coherent;
-2. impact graph quality: affected segments are explicit and connected through interpretable channels;
-3. relation taxonomy compliance (type-direction-entity compatibility);
-4. SCENARIO MODELING READINESS (critical for policy-impact):
+1. policy channel consistency: gatekeeper/regulator/admin/mechanism links are directionally coherent and use the correct semantic source;
+2. DIRECTED ROLE CONTRACT (critical):
+   a. GATEKEEPS_DECISION must read gatekeeper -> decision_point;
+   b. USES_MECHANISM must read mechanism_user -> mechanism;
+   c. CONTROLS_ACCESS must read controller -> access_subject;
+   d. IMPOSES_CONDITION must read imposer -> constrained_entity;
+   e. APPLIES_TO must read mechanism -> applicable_entity;
+   f. ADMINISTERS must read administrator -> administered_entity;
+   g. IN_GEO_SCOPE must read scope_owner -> geo_scope;
+   h. AFFECTS must read impact_source -> affected_entity;
+   If the extracted relation implies one of these but reverses the semantic source, mark invalid and add a specific missingInfo question.
+3. impact graph quality: affected segments are explicit and connected through interpretable channels;
+4. geo/community/media/program transmission completeness:
+   a. is there an explicit geo scope when jurisdiction or local applicability matters?
+   b. are communities or programs connected when they materially transmit adoption/compliance/evasion?
+   c. if a community or org uses a media channel to transmit the effect, is the media endpoint represented?
+5. relation taxonomy compliance (type-direction-entity compatibility);
+6. SCENARIO MODELING READINESS (critical for policy-impact):
    a. do REGULATES/IMPOSES_CONDITION edges carry quantitative qualifiers (rate_from, rate_to, effective_date)?
-   b. do exposure edges carry pass_through_estimate, elasticity_hint, or sector_sensitivity?
-   c. do INFLUENCES edges specify channel_type, lag_quarters, observability?
-   d. flag edges lacking quantitative qualifiers as missingInfo with specific questions (e.g., "What is the estimated pass-through rate for VAT increase on food retail?");
-5. OBSERVABILITY COMPLETENESS: are there edges or segments with no plausible measurement source?
+   b. do IN_GEO_SCOPE edges carry scope basis when inferable?
+   c. do exposure edges carry pass_through_estimate, elasticity_hint, or sector_sensitivity?
+   d. do AFFECTS/INFLUENCES edges specify channel_type, lag_quarters, observability?
+   e. flag edges lacking quantitative qualifiers as missingInfo with specific questions (e.g., "What is the estimated pass-through rate for VAT increase on food retail?");
+7. OBSERVABILITY COMPLETENESS: are there edges or segments with no plausible measurement source?
    Flag segments where effect measurement is unclear as missingInfo;
-6. five-layer coverage check: Policy Source, Transmission Channel, Exposure, Response, Observability.
+8. five-layer coverage check: Policy Source, Mechanism, Scope/Exposure, Transmission/Response, Observability.
    Report which layers are missing or thin for the current fragment.
 
 %s

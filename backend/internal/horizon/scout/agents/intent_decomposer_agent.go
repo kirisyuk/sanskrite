@@ -241,7 +241,7 @@ Example: { "relationType": "DEPENDS_ON", "qualifiers": { "facet": "communication
 		relationEnum = taxonomy.SupplyChainEdgeTypesForPrompt()
 		relationRulesBlock = relationRulesBlockSupplyChain
 		validationSuffix = validationSuffixSupplyChain
-		dependsOnBlock = `SUPPLY CHAIN: Do NOT use DEPENDS_ON. Use PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, EXTRACTS_FROM, PARTICIPATES_IN for supply chain links. Use TRADED_IN only for explicit product↔market trading context, not for operational flow.
+		dependsOnBlock = `SUPPLY CHAIN: Do NOT use DEPENDS_ON. Use PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, EXTRACTS_FROM, PARTICIPATES_IN for supply chain links. Use TRADED_IN only for explicit product↔market trading context, not for operational flow.
 `
 	}
 
@@ -389,7 +389,7 @@ Choose relationType to match this direction:
   Do NOT use INVESTS_IN here to represent incoming investors into TARGET.
 - PARTNERS_WITH: partnership/collaboration (symmetric; direction is not important but still output as source->target).
 - PRODUCES: source produces target (source MUST be ORGANIZATION/FACILITY/DEPOSIT; target is a PRODUCT).
-  For PRODUCT -> PRODUCT value-chain steps, use TRANSFORMS_INTO for processing/refining and ASSEMBLES_INTO for direct component/subassembly -> assembled-product steps (NOT PRODUCES).
+  For PRODUCT -> PRODUCT value-chain steps, use TRANSFORMS_INTO for processing/refining, ASSEMBLES_INTO for direct component/subassembly -> assembled-product steps, and USED_IN for strong operational input semantics (NOT PRODUCES).
 - REGULATES: source regulates target (domestic jurisdictional oversight only; source is typically a government/agency org regulating entities within its jurisdiction). For sanctions or extra-territorial restrictions use CONTROLS_ACCESS.
 - COMPETES_WITH / INFLUENCES: as labeled.
 - RENAMED_TO: organization legal rename (ORG -> ORG).
@@ -422,12 +422,13 @@ Choose relationType to match this direction:
 
 	relationRulesBlockSupplyChain = `RELATION DIRECTION RULES (STRICT — supply-chain contract only):
 Each relation is a directed edge FROM TARGET (source) TO targetCanonicalPath (target).
-Use ONLY these relation types (canonical): PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN, PARTICIPATES_IN, HAS_MARKET_SEGMENT.
+Use ONLY these relation types (canonical): PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN, PARTICIPATES_IN, HAS_MARKET_SEGMENT.
 Do NOT use DEPENDS_ON, PARTNERS_WITH, COMPETES_WITH, SUBSIDIARY_OF, OWNS, INVESTS_IN, or other non-supply-chain types.
 - PRODUCES: source MUST be ORGANIZATION|FACILITY|DEPOSIT, target MUST be PRODUCT.
 - SUPPLIES_TO: source MUST be ORGANIZATION|FACILITY|PRODUCT, target MUST be ORGANIZATION|FACILITY.
 - TRANSFORMS_INTO: source MUST be PRODUCT, target MUST be PRODUCT (upstream -> downstream).
 - ASSEMBLES_INTO: source MUST be PRODUCT, target MUST be PRODUCT (component/subassembly -> assembled downstream product).
+- USED_IN: source MUST be PRODUCT, target MUST be PRODUCT (strong operational input, not transformation, not assembly).
 - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT.
 - LOCATED_IN: target MUST be GEO_REGION.
 - OPERATES_IN: source MUST be ORGANIZATION|PERSON, target MUST be GEO_REGION|FACILITY|DEPOSIT.
@@ -435,14 +436,14 @@ Do NOT use DEPENDS_ON, PARTNERS_WITH, COMPETES_WITH, SUBSIDIARY_OF, OWNS, INVEST
 - HAS_MARKET_SEGMENT: source MUST be MARKET, target MUST be MARKET (parent -> child segment).
 - MARKET source guard in supply_chain:
   MARKET may emit only PARTICIPATES_IN / HAS_MARKET_SEGMENT (plus DOMAIN scaffold when source is /domain/...).
-  Never emit PRODUCES/SUPPLIES_TO/TRANSFORMS_INTO/ASSEMBLES_INTO/EXTRACTS_FROM/OPERATES_IN from MARKET.
+  Never emit PRODUCES/SUPPLIES_TO/TRANSFORMS_INTO/ASSEMBLES_INTO/USED_IN/EXTRACTS_FROM/OPERATES_IN from MARKET.
 `
 
 	validationSuffixGeneral = `  - ORGANIZATION ↔ MARKET: PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES (domestic oversight), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES.
-  - For PRODUCT -> PRODUCT steps, use TRANSFORMS_INTO for processing/refining and ASSEMBLES_INTO for direct assembly (not PRODUCES).
+  - For PRODUCT -> PRODUCT steps, use TRANSFORMS_INTO for processing/refining, ASSEMBLES_INTO for direct assembly, and USED_IN for strong operational input semantics (not PRODUCES).
 `
 
-	validationSuffixSupplyChain = `  - For PRODUCT -> PRODUCT steps, use TRANSFORMS_INTO for processing/refining and ASSEMBLES_INTO for direct assembly (not PRODUCES).
+	validationSuffixSupplyChain = `  - For PRODUCT -> PRODUCT steps, use TRANSFORMS_INTO for processing/refining, ASSEMBLES_INTO for direct assembly, and USED_IN for strong operational input semantics (not PRODUCES).
   - In supply_chain mode, MARKET source may emit only PARTICIPATES_IN or HAS_MARKET_SEGMENT. PRODUCT -> MARKET uses TRADED_IN only when explicit trading/pricing context exists.
 `
 )

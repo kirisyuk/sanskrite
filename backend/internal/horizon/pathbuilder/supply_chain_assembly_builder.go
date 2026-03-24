@@ -10,6 +10,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -75,11 +76,12 @@ type SupplyChainAssemblyResult struct {
 }
 
 type SupplyChainAssemblyBuilder struct {
-	fragmentsRepo *repo.HorizonFragmentsRepository
-	edgesRepo     *repo.DependencyEdgesRepository
-	artifactsRepo *repo.MaterializedArtifactsRepository
-	pathBuilder   *SupplyChainPathBuilder
-	queryEngine   *SupplyChainQueryEngine
+	fragmentsRepo     *repo.HorizonFragmentsRepository
+	edgesRepo         *repo.DependencyEdgesRepository
+	artifactsRepo     *repo.MaterializedArtifactsRepository
+	pathBuilder       *SupplyChainPathBuilder
+	queryEngine       *SupplyChainQueryEngine
+	productDictionary *productdict.Runtime
 }
 
 func NewSupplyChainAssemblyBuilder(
@@ -98,6 +100,14 @@ func NewSupplyChainAssemblyBuilder(
 		pathBuilder:   pathBuilder,
 		queryEngine:   NewSupplyChainQueryEngine(fragmentsRepo, edgesRepo),
 	}
+}
+
+func (b *SupplyChainAssemblyBuilder) WithProductDictionary(dict *productdict.Runtime) *SupplyChainAssemblyBuilder {
+	if b == nil {
+		return b
+	}
+	b.productDictionary = dict
+	return b
 }
 
 type assemblyContribution struct {
@@ -235,7 +245,7 @@ func (b *SupplyChainAssemblyBuilder) BuildAndMaterialize(ctx context.Context, op
 		}, nil
 	}
 
-	payload, labels, nodeRefs, coverage, openGaps := buildAssemblyPayloadFromInputs(resolvedAnchors, contributions, opts)
+	payload, labels, nodeRefs, coverage, openGaps := buildAssemblyPayloadFromInputs(resolvedAnchors, contributions, opts, b.productDictionary)
 	if payload == nil || coverage == nil || (coverage.ProductsN == 0 && coverage.ActorsN == 0) {
 		return &SupplyChainAssemblyResult{
 			Status:            "empty",
@@ -271,9 +281,7 @@ func (b *SupplyChainAssemblyBuilder) BuildAndMaterialize(ctx context.Context, op
 	if len(opts.BackgroundContinuationJobIDs) > 0 {
 		payload["backgroundContinuationJobIds"] = append([]string(nil), opts.BackgroundContinuationJobIDs...)
 	}
-	if coverage != nil {
-		coverage.DerivedPathsN = len(derivedPathKeys)
-	}
+	coverage.DerivedPathsN = len(derivedPathKeys)
 	canonicalKey := buildSupplyChainAssemblyCanonicalKey(traceOpts.TenantIDOrGlobal(), resolvedAnchors, opts.GeoFilters)
 	displayName := buildSupplyChainAssemblyDisplayName(resolvedAnchors)
 	artifact := &models.MaterializedArtifact{
@@ -493,13 +501,14 @@ func buildAssemblyPayloadFromContributions(
 	contributions []assemblyContribution,
 	opts SupplyChainAssemblyOptions,
 ) (map[string]interface{}, map[string]string, []string, *models.SupplyChainAssemblyCoverage, []string) {
-	return buildAssemblyPayloadFromInputs(anchors, contributions, opts)
+	return buildAssemblyPayloadFromInputs(anchors, contributions, opts, nil)
 }
 
 func buildAssemblyPayloadFromInputs(
 	anchors []string,
 	contributions []assemblyContribution,
 	opts SupplyChainAssemblyOptions,
+	productDictionary *productdict.Runtime,
 ) (map[string]interface{}, map[string]string, []string, *models.SupplyChainAssemblyCoverage, []string) {
 	productNodes := make(map[string]models.SupplyChainAssemblyNode)
 	actorNodes := make(map[string]models.SupplyChainAssemblyNode)
@@ -564,9 +573,38 @@ func buildAssemblyPayloadFromInputs(
 		actorNodes[ref] = models.SupplyChainAssemblyNode{Type: inferAssemblyActorType(ref), Ref: ref, Name: assemblyNodeLabel(ref, opts.RawNodeLabels), Role: role}
 		return true
 	}
-	addTransform := func(fromProduct, toProduct, relation, status string) {
+	normalizeProductRelation := func(fromProduct, toProduct, relation string) (string, string, string) {
 		fromProduct = canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(fromProduct))
 		toProduct = canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(toProduct))
+		relation = strings.ToUpper(strings.TrimSpace(relation))
+		if fromProduct == "" || toProduct == "" {
+			return fromProduct, toProduct, relation
+		}
+		if productDictionary != nil && strings.HasPrefix(fromProduct, "/product/") && strings.HasPrefix(toProduct, "/product/") {
+			if resolution, err := productDictionary.ResolveProductRelationForTenant(context.Background(), strings.TrimSpace(opts.TenantID), fromProduct, toProduct); err == nil {
+				if strings.TrimSpace(resolution.FromPath) != "" {
+					fromProduct = strings.TrimSpace(resolution.FromPath)
+				}
+				if strings.TrimSpace(resolution.ToPath) != "" {
+					toProduct = strings.TrimSpace(resolution.ToPath)
+				}
+				if resolution.Known {
+					return fromProduct, toProduct, string(resolution.EdgeType)
+				}
+			}
+		}
+		srcRank, srcOK := models.ProductStageRankFromCanonicalPath(fromProduct)
+		dstRank, dstOK := models.ProductStageRankFromCanonicalPath(toProduct)
+		if srcOK && dstOK && srcRank > dstRank {
+			fromProduct, toProduct = toProduct, fromProduct
+		}
+		if relation != "TRANSFORMS_INTO" && relation != "ASSEMBLES_INTO" && relation != "USED_IN" {
+			relation = string(models.ProductToProductEdgeTypeFromPaths(fromProduct, toProduct))
+		}
+		return fromProduct, toProduct, relation
+	}
+	addTransform := func(fromProduct, toProduct, relation, status string) {
+		fromProduct, toProduct, relation = normalizeProductRelation(fromProduct, toProduct, relation)
 		if fromProduct == "" || toProduct == "" || fromProduct == toProduct {
 			return
 		}
@@ -589,10 +627,12 @@ func buildAssemblyPayloadFromInputs(
 			Status:         strings.TrimSpace(status),
 		}
 		connect(fromProduct, toProduct)
-		if assemblyCandidates[toProduct] == nil {
-			assemblyCandidates[toProduct] = map[string]struct{}{}
+		if relation != "USED_IN" {
+			if assemblyCandidates[toProduct] == nil {
+				assemblyCandidates[toProduct] = map[string]struct{}{}
+			}
+			assemblyCandidates[toProduct][fromProduct] = struct{}{}
 		}
-		assemblyCandidates[toProduct][fromProduct] = struct{}{}
 	}
 	addActorEdge := func(sourceRef, targetRef, relation, status string) {
 		sourceRef = canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(sourceRef))
@@ -636,6 +676,8 @@ func buildAssemblyPayloadFromInputs(
 			addTransform(source, target, "TRANSFORMS_INTO", "heuristic")
 		case "ASSEMBLES_INTO":
 			addTransform(source, target, "ASSEMBLES_INTO", "heuristic")
+		case "USED_IN":
+			addTransform(source, target, "USED_IN", "heuristic")
 		case "PRODUCES":
 			if addActorNode(source, "producer") && addProductNode(target) {
 				connect(source, target)
@@ -761,7 +803,9 @@ func buildAssemblyPayloadFromInputs(
 		}
 		for _, edge := range contribution.parsed.Edges {
 			if strings.TrimSpace(edge.Type) == "ONTOLOGY" &&
-				(strings.EqualFold(strings.TrimSpace(edge.Relation), "TRANSFORMS_INTO") || strings.EqualFold(strings.TrimSpace(edge.Relation), "ASSEMBLES_INTO")) {
+				(strings.EqualFold(strings.TrimSpace(edge.Relation), "TRANSFORMS_INTO") ||
+					strings.EqualFold(strings.TrimSpace(edge.Relation), "ASSEMBLES_INTO") ||
+					strings.EqualFold(strings.TrimSpace(edge.Relation), "USED_IN")) {
 				fromProduct := strings.TrimSpace(edge.ProductRef)
 				if fromProduct == "" && edge.FromProductIndex != nil && *edge.FromProductIndex >= 0 && *edge.FromProductIndex < len(contribution.parsed.Nodes) {
 					fromProduct = contribution.parsed.Nodes[*edge.FromProductIndex].Ref

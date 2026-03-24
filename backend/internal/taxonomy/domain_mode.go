@@ -116,7 +116,7 @@ func EntityActorTypesForDomainMode(mode string) string {
 // CONSUMES removed: use SUPPLIES_TO(product→org) for input flow. Single source of truth.
 // Must stay in sync with edgesemantics.domainModeAllowlists[supply_chain].
 var SupplyChainEdgeTypes = []string{
-	"PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "EXTRACTS_FROM",
+	"PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "USED_IN", "EXTRACTS_FROM",
 	"LOCATED_IN", "OPERATES_IN", "PARTICIPATES_IN",
 	"HAS_MARKET_SEGMENT",
 }
@@ -156,12 +156,12 @@ func IsSupplyChainEdgeType(t string) bool {
 // SupplyChainOperationalEdgeTypes are the only edge types for supply chain structural links (fac→fac, fac→product).
 // Use for "Use ONLY these" in supply chain prompts. Subset of SupplyChainEdgeTypes.
 var SupplyChainOperationalEdgeTypes = []string{
-	"PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "EXTRACTS_FROM",
+	"PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "USED_IN", "EXTRACTS_FROM",
 }
 
 // SupplyChainOperationalEdgeTypesString returns comma-separated list for operational-link prompts.
 func SupplyChainOperationalEdgeTypesString() string {
-	return "PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, EXTRACTS_FROM"
+	return strings.Join(SupplyChainOperationalEdgeTypes, ", ")
 }
 
 // GovernanceEdgeTypes returns canonical edge types for governance/organizational management context.
@@ -235,8 +235,10 @@ func StrategicEdgeTypesString() string {
 }
 
 // PolicyImpactEdgeTypes is the allowlist for policy_impact mode.
+// Keep this as the single source of truth for prompt/runtime contract.
 var PolicyImpactEdgeTypes = []string{
-	"REGULATES", "CONTROLS_ACCESS", "IMPOSES_CONDITION", "GATEKEEPS_DECISION", "USES_MECHANISM", "APPLIES_TO", "INFLUENCES", "DEPENDS_ON", "PARTICIPATES_IN", "TRADED_IN", "LOCATED_IN", "OPERATES_IN", "ADMINISTERS",
+	"REGULATES", "CONTROLS_ACCESS", "IMPOSES_CONDITION", "GATEKEEPS_DECISION", "USES_MECHANISM", "APPLIES_TO", "IN_GEO_SCOPE", "AFFECTS", "ADMINISTERS",
+	"INFLUENCES", "DEPENDS_ON", "PARTICIPATES_IN", "TRADED_IN", "LOCATED_IN", "OPERATES_IN",
 	"HAS_SUBGROUP", "MEMBER_OF", "AFFILIATED_WITH", "OPERATES_VIA",
 }
 

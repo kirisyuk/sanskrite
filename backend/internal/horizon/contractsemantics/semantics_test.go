@@ -37,6 +37,9 @@ func TestEdgeLayerClassification(t *testing.T) {
 	if got := EdgeLayer(models.DependencyTypeSuppliesTo); got != GraphLayerPathCarried {
 		t.Fatalf("expected path carried, got %s", got)
 	}
+	if got := EdgeLayer(models.DependencyTypeUsedIn); got != GraphLayerPathCarried {
+		t.Fatalf("expected USED_IN to be path carried, got %s", got)
+	}
 	if got := EdgeLayer(models.DependencyTypeRegulates); got != GraphLayerContractOverlay {
 		t.Fatalf("expected contract overlay, got %s", got)
 	}
@@ -79,6 +82,8 @@ func TestGovernanceAndPolicyRemainOverlayContracts(t *testing.T) {
 			models.DependencyTypeProduces,
 			models.DependencyTypeSuppliesTo,
 			models.DependencyTypeTransformsInto,
+			models.DependencyTypeAssemblesInto,
+			models.DependencyTypeUsedIn,
 			models.DependencyTypeExtractsFrom,
 		} {
 			if ModeAllowsEdge(mode, forbidden) {

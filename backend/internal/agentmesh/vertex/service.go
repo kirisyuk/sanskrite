@@ -220,10 +220,37 @@ func (s *Service) ExecuteTask(ctx context.Context, task *contracts.MeshTask, rev
 }
 
 func buildPrompt(task *contracts.MeshTask, review bool, inputJSON string) string {
+	if !review {
+		switch strings.TrimSpace(task.Capability) {
+		case "sim.population.generate":
+			return "Return JSON only. Generate 20-40 heterogeneous socio-economic archetypes as an array. Each item must contain agentClass, displayName, populationWeight, traits, beliefState, resourceState, allowedActions, messageStyle, policyHints, originKind, originRefs, justification. allowedActions must be chosen only from: " + strings.Join(contractsToActionVocabulary(), ", ") + ".\n\nInput:\n" + inputJSON
+		case "sim.world.step":
+			return "Return JSON only with shape {\"actions\":[...]}. Each action must contain type, actorId, targetRefs, payload, justification, requiresGrounding. type must be chosen only from: " + strings.Join(contractsToActionVocabulary(), ", ") + ". Keep actions sparse and bounded. No prose.\n\nInput:\n" + inputJSON
+		case "sim.review":
+			return "Return JSON only with keys accepted:boolean, rationale:string, groundingCoverage:number, issues:string[]. Evaluate consistency, grounding completeness, bounded actions, and plausibility.\n\nInput:\n" + inputJSON
+		}
+	}
 	if review {
 		return "Review the task output and respond with JSON containing accepted:boolean, rationale:string, and quality:string.\n\nTask capability: " + task.Capability + "\n\nOutput to review:\n" + inputJSON
 	}
 	return "You are the AgentMesh worker. Produce a concise JSON object with keys summary, result, confidence, and nextActions for the requested capability.\n\nCapability: " + task.Capability + "\n\nInput:\n" + inputJSON
+}
+
+func contractsToActionVocabulary() []string {
+	return []string{
+		"broadcast_message",
+		"change_belief",
+		"buy",
+		"sell",
+		"delay_purchase",
+		"switch_supplier",
+		"lobby",
+		"issue_statement",
+		"enforce_rule",
+		"adjust_budget",
+		"escalate",
+		"do_nothing",
+	}
 }
 
 func (s *Service) doVertexJSON(ctx context.Context, method, rawURL string, payload map[string]any) (map[string]any, error) {

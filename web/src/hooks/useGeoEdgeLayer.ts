@@ -26,6 +26,7 @@ const LABEL_LAYER = 'geo-edges-label';
 const SUPPLY_LABEL_LAYER = 'geo-edges-supply-label';
 const CORRIDOR_FIELD_LAYER = 'geo-edges-corridor-field';
 const CORRIDOR_FIELD_ACCENT_LAYER = 'geo-edges-corridor-field-accent';
+const ENDPOINT_CONNECTOR_LAYER = 'geo-edge-endpoints-connectors';
 const ENDPOINT_POINTS_LAYER = 'geo-edge-endpoints-points';
 const ENDPOINT_LABEL_LAYER = 'geo-edge-endpoints-label';
 const ENDPOINT_LABEL_CHIP_DARK = 'geo-edge-endpoint-chip-dark';
@@ -38,6 +39,7 @@ const MAX_HOPS = 3;
 export const GEO_EDGE_INTERACTIVE_LAYERS = [
   CORRIDOR_FIELD_LAYER,
   CORRIDOR_FIELD_ACCENT_LAYER,
+  ENDPOINT_CONNECTOR_LAYER,
   ENDPOINT_POINTS_LAYER,
   ENDPOINT_LABEL_LAYER,
   HOP_1_LAYER,
@@ -66,6 +68,13 @@ type EndpointLabelMeta = {
   strong: boolean;
   tier: EndpointLabelTier;
   narrativeKeys: string[];
+  summaryId?: string;
+};
+type EndpointHotspotSummary = {
+  id: string;
+  point: [number, number];
+  label: string;
+  priority: number;
 };
 type EndpointSourceEntry = {
   key: string;
@@ -80,6 +89,7 @@ type EndpointPlacedEntry = {
   anchorPoint: [number, number];
 };
 type EndpointRenderState = {
+  sourceEntries: EndpointSourceEntry[];
   placedEntries: EndpointPlacedEntry[];
   tierByKey: Map<string, EndpointLabelTier>;
   narrativeKeysByEndpointKey: Map<string, string[]>;
@@ -220,6 +230,8 @@ const ENDPOINT_LABEL_OFFSET_X_PX = 20;
 const ENDPOINT_LABEL_HEIGHT_PX = 15;
 const ENDPOINT_LABEL_CHAR_WIDTH_PX = 6.4;
 const ENDPOINT_LABEL_MAX_WIDTH_PX = 220;
+const ENDPOINT_SUMMARY_MIN_CLUSTER_SIZE = 3;
+const ENDPOINT_SUMMARY_OFFSET_Y_PX = 18;
 const DIRECT_LEGEND_COLOR = '#60a5fa';
 const CONTEXT_LEGEND_COLOR = '#2dd4bf';
 const SUPPLY_LEGEND_COLOR = '#f59e0b';
@@ -1712,47 +1724,86 @@ function endpointLabelFeatureId(key: string): string {
   return `${key}:label`;
 }
 
+function endpointSummaryFeatureId(id: string): string {
+  return `${id}:summary`;
+}
+
 function buildEndpointFeatureCollection(
   endpointEntries: EndpointSourceEntry[],
   theme: ThemeMode,
   labelMetaByKey?: Map<string, EndpointLabelMeta>,
+  summaries: EndpointHotspotSummary[] = [],
 ): GeoJSON.FeatureCollection {
   return {
     type: 'FeatureCollection',
-    features: endpointEntries.flatMap(({ key, object }) => {
-      const actualPoint: [number, number] = [object.coordinates!.lon, object.coordinates!.lat];
-      const meta = labelMetaByKey?.get(key);
-      const endpointLabel = meta?.labelText || compactLabel(String(object.label || '').trim() || humanizeCanonicalPath(object.canonicalPath) || object.canonicalPath, 28);
-      const output: GeoJSON.Feature[] = [];
-      const feature = buildPointFeature({
-        ...object,
-        coordinates: { lat: actualPoint[1], lon: actualPoint[0] },
-      }, theme) as GeoJSON.Feature<GeoJSON.Point>;
-      feature.id = endpointMarkerFeatureId(key);
-      feature.properties = {
-        ...(feature.properties || {}),
-        kind: 'endpoint-marker',
-        endpointKey: key,
-      };
-      output.push(feature);
-      output.push({
-        id: endpointLabelFeatureId(key),
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: actualPoint },
-        properties: {
-          kind: 'endpoint-label',
+    features: [
+      ...endpointEntries.flatMap(({ key, object, displayPoint, anchorPoint }) => {
+        const actualPoint: [number, number] = anchorPoint || [object.coordinates!.lon, object.coordinates!.lat];
+        const renderedPoint: [number, number] = displayPoint || actualPoint;
+        const meta = labelMetaByKey?.get(key);
+        const endpointLabel = meta?.labelText || compactLabel(String(object.label || '').trim() || humanizeCanonicalPath(object.canonicalPath) || object.canonicalPath, 28);
+        const output: GeoJSON.Feature[] = [];
+        if (
+          Math.abs(renderedPoint[0] - actualPoint[0]) > 1e-7
+          || Math.abs(renderedPoint[1] - actualPoint[1]) > 1e-7
+        ) {
+          output.push({
+            id: `${key}:connector`,
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: [actualPoint, renderedPoint] },
+            properties: {
+              kind: 'endpoint-connector',
+              endpointKey: key,
+            },
+          } as GeoJSON.Feature<GeoJSON.LineString>);
+        }
+        const feature = buildPointFeature({
+          ...object,
+          coordinates: { lat: renderedPoint[1], lon: renderedPoint[0] },
+        }, theme) as GeoJSON.Feature<GeoJSON.Point>;
+        feature.id = endpointMarkerFeatureId(key);
+        feature.properties = {
+          ...(feature.properties || {}),
+          kind: 'endpoint-marker',
           endpointKey: key,
-          endpointLabel,
-          labelPriority: meta?.priority ?? 0,
-          labelVisible: meta?.visible !== false ? 1 : 0,
-          labelChip: meta?.chip ? 1 : 0,
-          labelSubdued: meta?.subdued ? 1 : 0,
-          labelStrong: meta?.strong ? 1 : 0,
-          labelTier: meta?.tier || 'propagation',
+        };
+        output.push(feature);
+        if (!meta?.summaryId) {
+          output.push({
+            id: endpointLabelFeatureId(key),
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: renderedPoint },
+            properties: {
+              kind: 'endpoint-label',
+              endpointKey: key,
+              endpointLabel,
+              labelPriority: meta?.priority ?? 0,
+              labelVisible: meta?.visible !== false ? 1 : 0,
+              labelChip: meta?.chip ? 1 : 0,
+              labelSubdued: meta?.subdued ? 1 : 0,
+              labelStrong: meta?.strong ? 1 : 0,
+              labelTier: meta?.tier || 'propagation',
+            },
+          } as GeoJSON.Feature<GeoJSON.Point>);
+        }
+        return output;
+      }),
+      ...summaries.map((summary) => ({
+        id: endpointSummaryFeatureId(summary.id),
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: summary.point },
+        properties: {
+          kind: 'endpoint-summary',
+          endpointLabel: summary.label,
+          labelPriority: summary.priority,
+          labelVisible: 1,
+          labelChip: 1,
+          labelSubdued: 0,
+          labelStrong: 1,
+          labelTier: 'context',
         },
-      } as GeoJSON.Feature<GeoJSON.Point>);
-      return output;
-    }),
+      } as GeoJSON.Feature<GeoJSON.Point>)),
+    ],
   };
 }
 
@@ -1808,6 +1859,72 @@ function endpointMarkersOverlap(
   return rectsOverlap(markerA, markerB, padding);
 }
 
+function endpointHotspotRadiusPx(zoom: number): number {
+  if (zoom >= 10) return 40;
+  if (zoom >= 8) return 46;
+  if (zoom >= 6) return 52;
+  return 58;
+}
+
+function endpointHotspotVisibleCap(zoom: number): number {
+  if (zoom >= 10) return 4;
+  if (zoom >= 8) return 3;
+  if (zoom >= 6) return 2;
+  return 1;
+}
+
+function buildEndpointHotspotIndex(
+  entries: Array<{ key: string; x: number; y: number }>,
+  zoom: number,
+): Map<string, string> {
+  const hotspotByKey = new Map<string, string>();
+  if (entries.length === 0) return hotspotByKey;
+
+  const radius = endpointHotspotRadiusPx(zoom);
+  const radiusSq = radius * radius;
+  const unvisited = new Set(entries.map((entry) => entry.key));
+  const entryByKey = new Map(entries.map((entry) => [entry.key, entry] as const));
+  let groupIndex = 0;
+
+  while (unvisited.size > 0) {
+    const seedKey = unvisited.values().next().value as string | undefined;
+    if (!seedKey) break;
+    const queue = [seedKey];
+    const hotspotId = `hotspot:${groupIndex += 1}`;
+    unvisited.delete(seedKey);
+
+    while (queue.length > 0) {
+      const key = queue.shift();
+      if (!key) continue;
+      const anchor = entryByKey.get(key);
+      if (!anchor) continue;
+      hotspotByKey.set(key, hotspotId);
+
+      for (const candidateKey of Array.from(unvisited)) {
+        const candidate = entryByKey.get(candidateKey);
+        if (!candidate) continue;
+        const dx = candidate.x - anchor.x;
+        const dy = candidate.y - anchor.y;
+        if ((dx * dx) + (dy * dy) > radiusSq) continue;
+        unvisited.delete(candidateKey);
+        queue.push(candidateKey);
+      }
+    }
+  }
+
+  return hotspotByKey;
+}
+
+function summaryLabelRect(point: { x: number; y: number }, label: string): ScreenRect {
+  const width = clamp(label.length * ENDPOINT_LABEL_CHAR_WIDTH_PX, 48, ENDPOINT_LABEL_MAX_WIDTH_PX);
+  return {
+    left: point.x + ENDPOINT_LABEL_OFFSET_X_PX,
+    right: point.x + ENDPOINT_LABEL_OFFSET_X_PX + width,
+    top: point.y - ENDPOINT_LABEL_HEIGHT_PX / 2,
+    bottom: point.y + ENDPOINT_LABEL_HEIGHT_PX / 2,
+  };
+}
+
 function endpointTierPriority(tier: EndpointLabelTier): number {
   if (tier === 'selected') return 100;
   if (tier === 'direct') return 82;
@@ -1816,7 +1933,7 @@ function endpointTierPriority(tier: EndpointLabelTier): number {
   return 40;
 }
 
-function buildEndpointLabelMetaMap(
+function buildEndpointPresentationState(
   map: maplibregl.Map,
   endpointEntries: EndpointPlacedEntry[],
   tierByKey: Map<string, EndpointLabelTier>,
@@ -1824,7 +1941,10 @@ function buildEndpointLabelMetaMap(
   forcedVisibleKeys: ReadonlySet<string>,
   activeNarrativeKey: string | null,
   zoom: number,
-): Map<string, EndpointLabelMeta> {
+): {
+  labelMetaByKey: Map<string, EndpointLabelMeta>;
+  summaries: EndpointHotspotSummary[];
+} {
   const activeNarrative = String(activeNarrativeKey || '').trim();
   const activeBoostKeys = new Set<string>();
   if (activeNarrative) {
@@ -1842,12 +1962,32 @@ function buildEndpointLabelMetaMap(
       const rightScore = endpointTierPriority(rightTier) + (activeBoostKeys.has(right.key) ? 24 : 0);
       return rightScore - leftScore;
     });
-  const globalBudget = zoom >= 9 ? 34 : zoom >= 8 ? 28 : zoom >= 7 ? 24 : zoom >= 6 ? 20 : zoom >= 5 ? 14 : 10;
+  const globalBudget = zoom >= 9 ? 28 : zoom >= 8 ? 24 : zoom >= 7 ? 20 : zoom >= 6 ? 16 : zoom >= 5 ? 12 : 8;
   const projectedEntries = endpointEntries.map((entry) => {
+    const projected = map.project({ lng: entry.displayPoint[0], lat: entry.displayPoint[1] });
+    return { ...entry, x: projected.x, y: projected.y };
+  });
+  const projectedAnchorEntries = endpointEntries.map((entry) => {
     const projected = map.project({ lng: entry.anchorPoint[0], lat: entry.anchorPoint[1] });
     return { ...entry, x: projected.x, y: projected.y };
   });
   const projectedByKey = new Map(projectedEntries.map((entry) => [entry.key, entry] as const));
+  const hotspotByKey = buildEndpointHotspotIndex(projectedAnchorEntries, zoom);
+  const hotspotEntries = new Map<string, typeof projectedEntries>();
+  for (const entry of projectedEntries) {
+    const hotspotKey = hotspotByKey.get(entry.key) || entry.key;
+    const items = hotspotEntries.get(hotspotKey);
+    if (items) items.push(entry);
+    else hotspotEntries.set(hotspotKey, [entry]);
+  }
+  const hotspotSummaryIds = new Map<string, string>();
+  for (const [hotspotKey, entries] of hotspotEntries.entries()) {
+    if (entries.length >= ENDPOINT_SUMMARY_MIN_CLUSTER_SIZE) {
+      hotspotSummaryIds.set(hotspotKey, hotspotKey);
+    }
+  }
+  const hotspotVisibleCount = new Map<string, number>();
+  const hotspotVisibleCap = endpointHotspotVisibleCap(zoom);
   const markerRects = projectedEntries.map((entry) => ({
     key: entry.key,
     rect: endpointMarkerRect(entry),
@@ -1859,10 +1999,16 @@ function buildEndpointLabelMetaMap(
   for (const entry of visibleCandidates) {
     const tier = tierByKey.get(entry.key) || 'propagation';
     const forcedVisible = forcedVisibleKeys.has(entry.key);
-    const alwaysVisible = tier === 'selected' || tier === 'direct' || tier === 'path' || tier === 'context';
+    const selectedLabel = tier === 'selected';
+    const hotspotKey = hotspotByKey.get(entry.key) || entry.key;
+    const hotspotCount = hotspotVisibleCount.get(hotspotKey) || 0;
+    if (hotspotSummaryIds.has(hotspotKey)) continue;
     const protectedLabel =
       forcedVisible
-      || alwaysVisible
+      || selectedLabel
+      || tier === 'direct'
+      || tier === 'path'
+      || tier === 'context'
       || activeBoostKeys.has(entry.key);
     const projected = projectedByKey.get(entry.key);
     if (!projected) continue;
@@ -1870,15 +2016,62 @@ function buildEndpointLabelMetaMap(
     const collidesWithAcceptedLabel = occupiedLabelRects.some((rect) => rectsOverlap(rect, labelRect, protectedLabel ? 2 : 5));
     const collidesWithMarker = markerRects.some((marker) => marker.key !== entry.key && rectsOverlap(marker.rect, labelRect, 2));
 
+    if (!selectedLabel) {
+      if (hotspotCount >= hotspotVisibleCap) continue;
+      if (collidesWithAcceptedLabel || collidesWithMarker) continue;
+    }
     if (!protectedLabel) {
       if (visibleOptionalCount >= globalBudget) continue;
-      if (collidesWithAcceptedLabel || collidesWithMarker) continue;
       visibleOptionalCount += 1;
     }
-
-    if (protectedLabel && !alwaysVisible && collidesWithAcceptedLabel && zoom < 5.5 && !forcedVisible) continue;
     globallyVisible.add(entry.key);
     occupiedLabelRects.push(labelRect);
+    hotspotVisibleCount.set(hotspotKey, hotspotCount + 1);
+  }
+
+  const summaries: EndpointHotspotSummary[] = [];
+  const summaryCandidates = Array.from(hotspotSummaryIds.entries())
+    .map(([hotspotKey, summaryId]) => {
+      const entries = hotspotEntries.get(hotspotKey) || [];
+      if (entries.length === 0) return null;
+      const ranked = [...entries].sort((left, right) => {
+        const leftTier = tierByKey.get(left.key) || 'propagation';
+        const rightTier = tierByKey.get(right.key) || 'propagation';
+        const leftScore = endpointTierPriority(leftTier) + (activeBoostKeys.has(left.key) ? 24 : 0);
+        const rightScore = endpointTierPriority(rightTier) + (activeBoostKeys.has(right.key) ? 24 : 0);
+        return rightScore - leftScore;
+      });
+      const primary = ranked[0];
+      const centroidX = entries.reduce((sum, item) => sum + item.x, 0) / entries.length;
+      const centroidY = entries.reduce((sum, item) => sum + item.y, 0) / entries.length - ENDPOINT_SUMMARY_OFFSET_Y_PX;
+      const lngLat = map.unproject([centroidX, centroidY]);
+      const primaryLabel = compactLabel(
+        String(primary.object.label || '').trim() || humanizeCanonicalPath(primary.object.canonicalPath) || primary.object.canonicalPath,
+        20,
+      );
+      return {
+        id: summaryId,
+        point: [lngLat.lng, lngLat.lat] as [number, number],
+        label: `${primaryLabel} +${Math.max(entries.length - 1, 1)}`,
+        priority: endpointTierPriority(tierByKey.get(primary.key) || 'propagation') + 12,
+        x: centroidX,
+        y: centroidY,
+      };
+    })
+    .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate))
+    .sort((left, right) => right.priority - left.priority);
+
+  for (const candidate of summaryCandidates) {
+    const rect = summaryLabelRect(candidate, candidate.label);
+    const collidesWithAcceptedLabel = occupiedLabelRects.some((item) => rectsOverlap(item, rect, 4));
+    if (collidesWithAcceptedLabel) continue;
+    occupiedLabelRects.push(rect);
+    summaries.push({
+      id: candidate.id,
+      point: candidate.point,
+      label: candidate.label,
+      priority: candidate.priority,
+    });
   }
 
   const meta = new Map<string, EndpointLabelMeta>();
@@ -1888,21 +2081,27 @@ function buildEndpointLabelMetaMap(
     const strong = tier === 'selected' || tier === 'direct' || tier === 'path' || tier === 'context' || active;
     const priority = endpointTierPriority(tier) + (active ? 32 : 0) + (strong ? 8 : 0);
     const visible = globallyVisible.has(entry.key);
+    const hotspotKey = hotspotByKey.get(entry.key) || entry.key;
+    const summaryId = hotspotSummaryIds.get(hotspotKey);
     meta.set(entry.key, {
       labelText: compactLabel(
         String(entry.object.label || '').trim() || humanizeCanonicalPath(entry.object.canonicalPath) || entry.object.canonicalPath,
         strong ? 32 : 24,
       ),
       priority,
-      visible,
+      visible: summaryId ? false : visible,
       chip: visible && strong,
       subdued: !active && tier === 'propagation',
       strong,
       tier,
       narrativeKeys: narrativeKeysByEndpointKey.get(entry.key) || [],
+      summaryId,
     });
   }
-  return meta;
+  return {
+    labelMetaByKey: meta,
+    summaries,
+  };
 }
 
 function buildEndpointSourceData(
@@ -1912,7 +2111,7 @@ function buildEndpointSourceData(
   map: maplibregl.Map,
   zoom: number,
 ): GeoJSON.FeatureCollection {
-  const labelMetaByKey = buildEndpointLabelMetaMap(
+  const presentation = buildEndpointPresentationState(
     map,
     renderState.placedEntries,
     renderState.tierByKey,
@@ -1921,7 +2120,12 @@ function buildEndpointSourceData(
     activeNarrativeKey,
     zoom,
   );
-  return buildEndpointFeatureCollection(renderState.placedEntries, theme, labelMetaByKey);
+  return buildEndpointFeatureCollection(
+    renderState.placedEntries,
+    theme,
+    presentation.labelMetaByKey,
+    presentation.summaries,
+  );
 }
 
 function spreadEndpointEntries(
@@ -1955,10 +2159,18 @@ function spreadEndpointEntries(
 
   const zoom = map.getZoom();
   const zoomSpreadFactor = clamp((zoom - 3.8) / 4.4, 0, 1);
-  const minDistancePx = ENDPOINT_MARKER_SIZE_PX + ENDPOINT_MARKER_PADDING_PX + zoomSpreadFactor * 10;
-  const maxOffsetPx = 10 + zoomSpreadFactor * 26;
-  const collisionPadding = 2 + zoomSpreadFactor * 4;
-  const relaxationIterations = zoom >= 8 ? 14 : zoom >= 6 ? 10 : 7;
+  const clusterSizeFactor = clamp(entries.length - 1, 1, 10);
+  const minDistancePx =
+    ENDPOINT_MARKER_SIZE_PX
+    + ENDPOINT_MARKER_PADDING_PX
+    + zoomSpreadFactor * 16
+    + clusterSizeFactor * 4.5;
+  const maxOffsetPx =
+    28
+    + zoomSpreadFactor * 44
+    + clusterSizeFactor * 9;
+  const collisionPadding = 4 + zoomSpreadFactor * 6 + clusterSizeFactor * 0.8;
+  const relaxationIterations = zoom >= 8 ? 22 : zoom >= 6 ? 16 : 12;
   const hasAnyOverlap = () => {
     for (let i = 0; i < points.length; i += 1) {
       for (let j = i + 1; j < points.length; j += 1) {
@@ -1992,7 +2204,11 @@ function spreadEndpointEntries(
         }
         const nx = dx / distance;
         const ny = dy / distance;
-        const push = clamp(Math.max(minDistancePx - distance, 4), 2.5, 11 + zoomSpreadFactor * 3.5) * 0.4;
+        const push = clamp(
+          Math.max(minDistancePx - distance, 6),
+          4,
+          18 + zoomSpreadFactor * 8 + clusterSizeFactor * 1.6,
+        ) * 0.52;
         a.x -= nx * push;
         a.y -= ny * push;
         b.x += nx * push;
@@ -4099,6 +4315,30 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
   });
 
   map.addLayer({
+    id: ENDPOINT_CONNECTOR_LAYER,
+    type: 'line',
+    source: ENDPOINT_SRC,
+    filter: ['==', ['get', 'kind'], 'endpoint-connector'],
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': theme === 'dark' ? 'rgba(148,163,184,0.44)' : 'rgba(100,116,139,0.36)',
+      'line-width': [
+        'interpolate', ['linear'], ['zoom'],
+        4, 0.9,
+        8, 1.1,
+        10, 1.25,
+      ],
+      'line-opacity': [
+        'interpolate', ['linear'], ['zoom'],
+        4, 0.44,
+        8, 0.52,
+        10, 0.6,
+      ],
+      'line-dasharray': ['literal', [1.2, 1.6]],
+    },
+  });
+
+  map.addLayer({
     id: ENDPOINT_POINTS_LAYER,
     type: 'symbol',
     source: ENDPOINT_SRC,
@@ -4118,7 +4358,7 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
     id: ENDPOINT_LABEL_LAYER,
     type: 'symbol',
     source: ENDPOINT_SRC,
-    filter: ['==', ['get', 'kind'], 'endpoint-label'],
+    filter: ['match', ['get', 'kind'], ['endpoint-label', 'endpoint-summary'], true, false],
     layout: {
       'symbol-sort-key': ['get', 'labelPriority'],
       'icon-image': endpointChipImageId(theme),
@@ -4289,7 +4529,15 @@ export function useGeoEdgeLayer(
       const renderState = endpointRenderStateRef.current;
       const endpointSrc = map.getSource(ENDPOINT_SRC) as maplibregl.GeoJSONSource | undefined;
       if (!renderState || !endpointSrc) return;
-      endpointSrc.setData(buildEndpointSourceData(renderState, theme, activeNarrativeKey, map, map.getZoom()));
+      const nextPlacedEntries = renderState.sourceEntries.length > 0
+        ? spreadEndpointEntries(map, renderState.sourceEntries)
+        : [];
+      const nextRenderState: EndpointRenderState = {
+        ...renderState,
+        placedEntries: nextPlacedEntries,
+      };
+      endpointRenderStateRef.current = nextRenderState;
+      endpointSrc.setData(buildEndpointSourceData(nextRenderState, theme, activeNarrativeKey, map, map.getZoom()));
       setFeatureNarrativeEpoch((value) => value + 1);
     };
 
@@ -4340,6 +4588,7 @@ export function useGeoEdgeLayer(
       try {
         if (map.getLayer(ENDPOINT_LABEL_LAYER)) map.removeLayer(ENDPOINT_LABEL_LAYER);
         if (map.getLayer(ENDPOINT_POINTS_LAYER)) map.removeLayer(ENDPOINT_POINTS_LAYER);
+        if (map.getLayer(ENDPOINT_CONNECTOR_LAYER)) map.removeLayer(ENDPOINT_CONNECTOR_LAYER);
         if (map.getLayer(SUPPLY_LABEL_LAYER)) map.removeLayer(SUPPLY_LABEL_LAYER);
         if (map.getLayer(CORRIDOR_FIELD_ACCENT_LAYER)) map.removeLayer(CORRIDOR_FIELD_ACCENT_LAYER);
         if (map.getLayer(CORRIDOR_FIELD_LAYER)) map.removeLayer(CORRIDOR_FIELD_LAYER);
@@ -4370,6 +4619,7 @@ export function useGeoEdgeLayer(
 
     const bringEndpointLayersToFront = () => {
       try {
+        if (map.getLayer(ENDPOINT_CONNECTOR_LAYER)) map.moveLayer(ENDPOINT_CONNECTOR_LAYER);
         if (map.getLayer(ENDPOINT_POINTS_LAYER)) map.moveLayer(ENDPOINT_POINTS_LAYER);
         if (map.getLayer(ENDPOINT_LABEL_LAYER)) map.moveLayer(ENDPOINT_LABEL_LAYER);
       } catch { /* style/layers may be mid-transition */ }
@@ -4652,6 +4902,7 @@ export function useGeoEdgeLayer(
         }
         endpointMarkerIdsByNarrativeKeyRef.current = endpointMarkerIdsByNarrativeKey;
         const endpointRenderState: EndpointRenderState = {
+          sourceEntries: endpointEntries,
           placedEntries: spreadEntries,
           tierByKey: endpointTierByKey,
           narrativeKeysByEndpointKey,

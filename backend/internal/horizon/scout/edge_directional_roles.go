@@ -62,11 +62,20 @@ func requiresDirectionalRoleAutofill(
 ) bool {
 	isOrg := func(t models.FragmentType) bool { return t == models.FragmentTypeOrganization }
 	isFac := func(t models.FragmentType) bool { return t == models.FragmentTypeFacility }
+	isGeo := func(t models.FragmentType) bool { return t == models.FragmentTypeGeoRegion }
+	isDecision := func(t models.FragmentType) bool { return t == models.FragmentTypeDecisionPoint }
+	isMechanism := func(t models.FragmentType) bool { return t == models.FragmentTypeMechanism }
 	isProgram := func(t models.FragmentType) bool { return t == models.FragmentTypeProgram }
+	isMarket := func(t models.FragmentType) bool { return t == models.FragmentTypeMarket }
+	isProduct := func(t models.FragmentType) bool { return t == models.FragmentTypeProduct }
 	isCommunity := func(t models.FragmentType) bool { return t == models.FragmentTypeCommunity }
+	isMedia := func(t models.FragmentType) bool { return t == models.FragmentTypeMediaChannel }
 	isPerson := func(t models.FragmentType) bool { return t == models.FragmentTypePerson }
 	isActorLike := func(t models.FragmentType) bool {
 		return isOrg(t) || isFac(t) || isProgram(t) || isCommunity(t) || isPerson(t)
+	}
+	isPolicyTarget := func(t models.FragmentType) bool {
+		return isActorLike(t) || isMarket(t) || isProduct(t)
 	}
 
 	switch edgeType {
@@ -80,6 +89,23 @@ func requiresDirectionalRoleAutofill(
 		return isActorLike(sourceType) && isActorLike(targetType)
 	case models.DependencyTypeSuppliesTo:
 		return (isOrg(sourceType) || isFac(sourceType)) && (isOrg(targetType) || isFac(targetType))
+	case models.DependencyTypeGatekeepsDecision:
+		return (isOrg(sourceType) || isProgram(sourceType) || isCommunity(sourceType) || isPerson(sourceType)) && isDecision(targetType)
+	case models.DependencyTypeUsesMechanism:
+		return (isOrg(sourceType) || isProgram(sourceType) || isCommunity(sourceType) || isDecision(sourceType)) && isMechanism(targetType)
+	case models.DependencyTypeControlsAccess:
+		return (isOrg(sourceType) || isProgram(sourceType) || isCommunity(sourceType)) && isPolicyTarget(targetType)
+	case models.DependencyTypeImposesCondition:
+		return (isMechanism(sourceType) || isOrg(sourceType) || isProgram(sourceType) || isCommunity(sourceType)) && isPolicyTarget(targetType)
+	case models.DependencyTypeAppliesTo:
+		return isMechanism(sourceType) && isPolicyTarget(targetType)
+	case models.DependencyTypeAdministers:
+		return (isOrg(sourceType) || isProgram(sourceType)) && (isOrg(targetType) || isProgram(targetType) || isGeo(targetType))
+	case models.DependencyTypeInGeoScope:
+		return (isDecision(sourceType) || isMechanism(sourceType) || isOrg(sourceType) || isProgram(sourceType) || isMarket(sourceType)) && isGeo(targetType)
+	case models.DependencyTypeAffects:
+		return (isMechanism(sourceType) || isProgram(sourceType) || isOrg(sourceType) || isCommunity(sourceType) || isMarket(sourceType)) &&
+			(isActorLike(targetType) || isMarket(targetType) || isProduct(targetType) || isGeo(targetType) || isMedia(targetType))
 	default:
 		return false
 	}
@@ -101,6 +127,22 @@ func deterministicDirectionalRoleContract(edgeType models.DependencyType) (sourc
 		return "dependent", "dependency", "dependent_to_dependency", true
 	case models.DependencyTypeSuppliesTo:
 		return "supplier", "customer", "supplier_to_customer", true
+	case models.DependencyTypeGatekeepsDecision:
+		return "gatekeeper", "decision_point", "gatekeeper_to_decision", true
+	case models.DependencyTypeUsesMechanism:
+		return "mechanism_user", "mechanism", "user_to_mechanism", true
+	case models.DependencyTypeControlsAccess:
+		return "controller", "access_subject", "controller_to_access_subject", true
+	case models.DependencyTypeImposesCondition:
+		return "imposer", "constrained_entity", "imposer_to_constrained_entity", true
+	case models.DependencyTypeAppliesTo:
+		return "mechanism", "applicable_entity", "mechanism_to_applicable_entity", true
+	case models.DependencyTypeAdministers:
+		return "administrator", "administered_entity", "administrator_to_administered_entity", true
+	case models.DependencyTypeInGeoScope:
+		return "scope_owner", "geo_scope", "scope_owner_to_geo_scope", true
+	case models.DependencyTypeAffects:
+		return "impact_source", "affected_entity", "impact_source_to_affected_entity", true
 	default:
 		return "", "", "", false
 	}
@@ -185,6 +227,62 @@ func canonicalDirectionalRole(edgeType models.DependencyType, role string, sourc
 		if !source && inDirectionalRole(role, "customer", "buyer", "consumer", "recipient", "offtaker") {
 			return "customer", true
 		}
+	case models.DependencyTypeGatekeepsDecision:
+		if source && inDirectionalRole(role, "gatekeeper", "approver", "decision_maker", "authority", "veto_holder") {
+			return "gatekeeper", true
+		}
+		if !source && inDirectionalRole(role, "decision_point", "decision", "approval", "ruling") {
+			return "decision_point", true
+		}
+	case models.DependencyTypeUsesMechanism:
+		if source && inDirectionalRole(role, "mechanism_user", "policy_source", "decision", "regulator", "administrator") {
+			return "mechanism_user", true
+		}
+		if !source && inDirectionalRole(role, "mechanism", "instrument", "policy_mechanism") {
+			return "mechanism", true
+		}
+	case models.DependencyTypeControlsAccess:
+		if source && inDirectionalRole(role, "controller", "gatekeeper", "access_controller", "regulator") {
+			return "controller", true
+		}
+		if !source && inDirectionalRole(role, "access_subject", "controlled_access_target", "affected_entity", "regulated_entity", "subject") {
+			return "access_subject", true
+		}
+	case models.DependencyTypeImposesCondition:
+		if source && inDirectionalRole(role, "imposer", "condition_imposer", "regulator", "mechanism") {
+			return "imposer", true
+		}
+		if !source && inDirectionalRole(role, "constrained_entity", "conditioned_entity", "affected_entity", "subject") {
+			return "constrained_entity", true
+		}
+	case models.DependencyTypeAppliesTo:
+		if source && inDirectionalRole(role, "mechanism", "instrument", "rule") {
+			return "mechanism", true
+		}
+		if !source && inDirectionalRole(role, "applicable_entity", "covered_entity", "subject", "affected_entity") {
+			return "applicable_entity", true
+		}
+	case models.DependencyTypeAdministers:
+		if source && inDirectionalRole(role, "administrator", "administering_body", "operator") {
+			return "administrator", true
+		}
+		if !source && inDirectionalRole(role, "administered_entity", "administered_program", "subordinate") {
+			return "administered_entity", true
+		}
+	case models.DependencyTypeInGeoScope:
+		if source && inDirectionalRole(role, "scope_owner", "scoped_instrument", "mechanism", "policy_source") {
+			return "scope_owner", true
+		}
+		if !source && inDirectionalRole(role, "geo_scope", "jurisdiction", "geography", "location") {
+			return "geo_scope", true
+		}
+	case models.DependencyTypeAffects:
+		if source && inDirectionalRole(role, "impact_source", "mechanism", "source", "driver") {
+			return "impact_source", true
+		}
+		if !source && inDirectionalRole(role, "affected_entity", "impacted_entity", "exposure_target") {
+			return "affected_entity", true
+		}
 	}
 	return "", false
 }
@@ -222,6 +320,38 @@ func canonicalDirectionalBasis(edgeType models.DependencyType, direction string)
 	case models.DependencyTypeSuppliesTo:
 		if inDirectionalRole(dir, "supplier_to_customer", "provider_to_recipient") {
 			return "supplier_to_customer", true
+		}
+	case models.DependencyTypeGatekeepsDecision:
+		if inDirectionalRole(dir, "gatekeeper_to_decision", "authority_to_decision", "approver_to_decision") {
+			return "gatekeeper_to_decision", true
+		}
+	case models.DependencyTypeUsesMechanism:
+		if inDirectionalRole(dir, "user_to_mechanism", "decision_to_mechanism", "source_to_mechanism") {
+			return "user_to_mechanism", true
+		}
+	case models.DependencyTypeControlsAccess:
+		if inDirectionalRole(dir, "controller_to_access_subject", "gatekeeper_to_subject", "controller_to_target") {
+			return "controller_to_access_subject", true
+		}
+	case models.DependencyTypeImposesCondition:
+		if inDirectionalRole(dir, "imposer_to_constrained_entity", "mechanism_to_constrained_entity", "regulator_to_constrained_entity") {
+			return "imposer_to_constrained_entity", true
+		}
+	case models.DependencyTypeAppliesTo:
+		if inDirectionalRole(dir, "mechanism_to_applicable_entity", "instrument_to_subject") {
+			return "mechanism_to_applicable_entity", true
+		}
+	case models.DependencyTypeAdministers:
+		if inDirectionalRole(dir, "administrator_to_administered_entity", "operator_to_administered_entity") {
+			return "administrator_to_administered_entity", true
+		}
+	case models.DependencyTypeInGeoScope:
+		if inDirectionalRole(dir, "scope_owner_to_geo_scope", "mechanism_to_geo_scope", "instrument_to_jurisdiction") {
+			return "scope_owner_to_geo_scope", true
+		}
+	case models.DependencyTypeAffects:
+		if inDirectionalRole(dir, "impact_source_to_affected_entity", "source_to_affected_entity", "driver_to_affected_entity") {
+			return "impact_source_to_affected_entity", true
 		}
 	}
 	return "", false

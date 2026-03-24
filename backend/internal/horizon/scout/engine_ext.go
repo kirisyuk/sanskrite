@@ -24,6 +24,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/regstress"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
@@ -170,6 +171,23 @@ func extractRadiusKmFromQualifiers(q map[string]interface{}) (float64, bool) {
 		}
 	}
 	return 0, false
+}
+
+func supplyChainSubstitutabilityHeuristic(edgeType models.DependencyType, srcPath, dstPath string) float64 {
+	_ = srcPath
+	switch edgeType {
+	case models.DependencyTypeSuppliesTo:
+		if strings.HasPrefix(strings.TrimSpace(dstPath), "/product/") {
+			return 0.24
+		}
+		return 0.40
+	case models.DependencyTypeTransformsInto, models.DependencyTypeAssemblesInto, models.DependencyTypeUsedIn:
+		return 0.44
+	case models.DependencyTypeExtractsFrom:
+		return 0.36
+	default:
+		return 0.52
+	}
 }
 
 func parseStateInt(v interface{}, def int) int {
@@ -3234,6 +3252,19 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 			}
 			domainResearchRelations = append(domainResearchRelations, rels...)
 		}
+		autoRefine := len(domainResearchRelations) > 0 && regulatoryGraphNeedsAutoRefine(domainResearchRelations, domainCP)
+		refineFlag := false
+		if job.State != nil {
+			refineFlag = parseStateBool(job.State["regulatoryImpactRefinePass"], false)
+		}
+		if len(domainResearchRelations) > 0 && (autoRefine || refineFlag) {
+			extra, rerr := e.researchAgent.EnrichRegulatoryImpactRefinement(ctx, domainCP, domainResearchRelations)
+			if rerr != nil {
+				e.logLine(ctx, job, "warn", fmt.Sprintf("> regulatory impact refinement failed: %v", rerr))
+			} else if len(extra) > 0 {
+				domainResearchRelations = append(domainResearchRelations, extra...)
+			}
+		}
 		if job.State == nil {
 			job.State = map[string]interface{}{}
 		}
@@ -3846,6 +3877,47 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		})
 	}
 	if len(domainResearchRelations) > 0 {
+		// Affected-zone holistic research intentionally bypasses domain-mode relation filtering
+		// in ResearchAgent; do not re-apply contract-derived allowlists here.
+		if !agents.IsAffectedZoneContractType(contractType) {
+			domainResearchRelations = sanitizeDomainResearchRelations(domainCP, contractType, domainResearchRelations)
+		}
+		domainResearchRelations = dedupeDiscoveredRelations(domainResearchRelations)
+		if agents.IsPolicyImpactContractType(contractType) && len(domainResearchRelations) > 0 {
+			domainResearchRelations = RegulatoryImpactStrictValidator{}.ValidateRelations(domainResearchRelations)
+			cov := ValidateRegulatoryImpactLayerCoverage(domainResearchRelations)
+			domainResearchRelations = ApplyRegulatoryLayerOrphanPenalty(domainResearchRelations, cov)
+			suff := ComputeRegulatoryGraphSufficiency(domainResearchRelations)
+			if job.State == nil {
+				job.State = map[string]interface{}{}
+			}
+			job.State["regulatoryGraphSufficiency"] = map[string]interface{}{
+				"tier":        string(suff.Tier),
+				"gaps":        suff.Gaps,
+				"quantScore":  suff.QuantScore,
+				"temporalPct": suff.TemporalPct,
+			}
+			if tiss := ValidateRegulatoryTemporalConsistency(domainResearchRelations); len(tiss) > 0 {
+				msgs := make([]string, 0, len(tiss))
+				for _, ti := range tiss {
+					msgs = append(msgs, ti.Message)
+				}
+				job.State["regulatoryTemporalIssues"] = msgs
+			}
+			mergeWorkingRegulatoryScopeFromRelations(job, domainResearchRelations)
+			domainResearchRelations = applyPolicyImpactCriticToRelations(ctx, e, job, frag, domainCP, domainResearchRelations)
+			persist := map[string]interface{}{
+				"regulatoryGraphSufficiency":   job.State["regulatoryGraphSufficiency"],
+				stateKeyWorkingRegulatoryScope: job.State[stateKeyWorkingRegulatoryScope],
+			}
+			if v, ok := job.State["regulatoryTemporalIssues"]; ok {
+				persist["regulatoryTemporalIssues"] = v
+			}
+			if v, ok := job.State["regulatoryImpactCriticMissingInfo"]; ok {
+				persist["regulatoryImpactCriticMissingInfo"] = v
+			}
+			_ = e.scoutingJobsRepo.UpdateState(ctx, job.ID, persist)
+		}
 		rels = append(rels, domainResearchRelations...)
 		zoneN := 0
 		for _, r := range domainResearchRelations {
@@ -3976,8 +4048,13 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		for _, dm := range domainModes {
 			if dm == taxonomy.DomainModeGovernance || dm == taxonomy.DomainModePolicyImpact || dm == taxonomy.DomainModeEcosystem {
 				rootPath := ""
-				if frag != nil {
-					rootPath = strings.TrimSpace(frag.CanonicalPath)
+				if dm == taxonomy.DomainModePolicyImpact {
+					rootPath = policyImpactMaterializationRoot(domainCP, firstOrder, getRegulatoryImpactPlanFromJobState(job, domainCP), rels)
+				}
+				if rootPath == "" {
+					if frag != nil {
+						rootPath = strings.TrimSpace(frag.CanonicalPath)
+					}
 				}
 				if rootPath == "" || strings.HasPrefix(rootPath, "/domain/") {
 					for _, fo := range firstOrder {
@@ -3988,6 +4065,10 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 					}
 				}
 				if rootPath != "" && !strings.HasPrefix(rootPath, "/domain/") {
+					policyImpactArtifactStage := dm == taxonomy.DomainModePolicyImpact
+					if policyImpactArtifactStage {
+						e.pipelineStageBegin(ctx, job, pipelineRuntimeName, stageDomainPolicyImpactArtifact, false, "domain_policy_impact_artifact")
+					}
 					artifact, matErr := e.domainArtifactBuilder.MaterializeRelationsGraph(
 						ctx,
 						strings.TrimSpace(job.TenantID),
@@ -3995,12 +4076,46 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 						strings.TrimSpace(job.LensID),
 						rootPath, dm, contractType, title,
 					)
-					if matErr != nil {
+					if policyImpactArtifactStage {
+						switch {
+						case matErr != nil:
+							fmt.Printf("[DomainArtifact] materialization failed: jobId=%s mode=%s root=%s err=%v\n",
+								strings.TrimSpace(job.ID), dm, rootPath, matErr)
+							e.pipelineStageFail(ctx, job, pipelineRuntimeName, stageDomainPolicyImpactArtifact, false, "domain_policy_impact_artifact_failed", true, matErr)
+						case artifact == nil:
+							e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageDomainPolicyImpactArtifact, false, "domain_policy_impact_artifact_skip_empty_graph")
+						default:
+							e.pipelineStageComplete(ctx, job, pipelineRuntimeName, stageDomainPolicyImpactArtifact, false, "domain_policy_impact_artifact_done")
+							fmt.Printf("[DomainArtifact] materialized: jobId=%s mode=%s kind=%s key=%s nodes=%d\n",
+								strings.TrimSpace(job.ID), dm, string(artifact.Kind), artifact.CanonicalKey, len(artifact.NodeRefs))
+							piRels := domainResearchRelations
+							if len(piRels) == 0 {
+								piRels = filterPolicyImpactRelations(rels)
+							}
+							if len(piRels) > 0 {
+								paths := regstress.BuildPathsFromRelations(piRels, domainCP, 5)
+								if err := e.domainArtifactBuilder.UpsertRegulatoryTransmissionArtifact(ctx, strings.TrimSpace(job.TenantID), strings.TrimSpace(job.ProjectID), strings.TrimSpace(job.LensID), rootPath, paths); err != nil {
+									e.logLine(ctx, job, "warn", fmt.Sprintf("> regulatory transmission artifact: %v", err))
+								}
+								if err := e.domainArtifactBuilder.UpsertRegulatoryScenarioArtifact(ctx, strings.TrimSpace(job.TenantID), strings.TrimSpace(job.ProjectID), strings.TrimSpace(job.LensID), rootPath, paths, regulatoryWhatIfScenariosFromJob(job)); err != nil {
+									e.logLine(ctx, job, "warn", fmt.Sprintf("> regulatory scenario artifact: %v", err))
+								}
+								if err := e.domainArtifactBuilder.UpsertRegulatoryTimelineArtifact(ctx, strings.TrimSpace(job.TenantID), strings.TrimSpace(job.ProjectID), strings.TrimSpace(job.LensID), rootPath, piRels); err != nil {
+									e.logLine(ctx, job, "warn", fmt.Sprintf("> regulatory timeline artifact: %v", err))
+								}
+								if err := e.domainArtifactBuilder.UpsertRegulatoryCascadeArtifact(ctx, strings.TrimSpace(job.TenantID), strings.TrimSpace(job.ProjectID), strings.TrimSpace(job.LensID), rootPath, regulatoryCascadeDirectAffectedPaths(piRels)); err != nil {
+									e.logLine(ctx, job, "warn", fmt.Sprintf("> regulatory cascade artifact: %v", err))
+								}
+							}
+						}
+					} else if matErr != nil {
 						fmt.Printf("[DomainArtifact] materialization failed: jobId=%s mode=%s root=%s err=%v\n",
 							strings.TrimSpace(job.ID), dm, rootPath, matErr)
 					} else if artifact != nil {
 						fmt.Printf("[DomainArtifact] materialized: jobId=%s mode=%s kind=%s key=%s nodes=%d\n",
 							strings.TrimSpace(job.ID), dm, string(artifact.Kind), artifact.CanonicalKey, len(artifact.NodeRefs))
+					}
+					if artifact != nil {
 						if lensID := strings.TrimSpace(job.LensID); lensID != "" && artifact.CanonicalKey != "" {
 							scopePath := fmt.Sprintf("/artifact/%s", artifact.CanonicalKey)
 							e.bestEffortDeferredScopeAdd(ctx, lensID, scopePath)
@@ -4009,6 +4124,8 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 							recordGovernanceArtifactState(job, artifact, contractType)
 						}
 					}
+				} else if dm == taxonomy.DomainModePolicyImpact {
+					e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageDomainPolicyImpactArtifact, false, "domain_policy_impact_artifact_skip_no_root")
 				}
 			}
 		}
@@ -4029,8 +4146,9 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stagePolicyAudit, true, "policy_audit_inline_skip")
 	}
 
-	// Best-effort propagation trigger for the domain node. Skipped for supply chain fast-path.
-	if !isSupplyChainFastPath && e.propagationTrigger != nil {
+	// Best-effort propagation trigger for the domain node. Supply chain fast-path skips unless chains were materialized (domain metrics may still need propagation).
+	shouldTriggerDomainPropagation := e.propagationTrigger != nil && (!isSupplyChainFastPath || len(domainResearchChains) > 0)
+	if shouldTriggerDomainPropagation {
 		rc, _ := rtctx.Get(ctx)
 		fid := fragmentID
 		runAsyncSafe("domain_node_propagation", func() {
@@ -6201,6 +6319,8 @@ func (e *ScoutEngine) processRelationsInternal(
 				policy.ApplyValidationDecisionBestEffort(logPrefix, decision, policy.ValidationDecisionHandlers{
 					Reverse: func() {
 						edgeSourceID, edgeTargetID = edgeTargetID, edgeSourceID
+						srcTypeActual, dstTypeActual = dstTypeActual, srcTypeActual
+						srcPathActual, dstPathActual = dstPathActual, srcPathActual
 						directionChanged = true
 						edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
 					},
@@ -6245,6 +6365,8 @@ func (e *ScoutEngine) processRelationsInternal(
 			if !valid {
 				if shouldReverse {
 					edgeSourceID, edgeTargetID = edgeTargetID, edgeSourceID
+					srcTypeActual, dstTypeActual = dstTypeActual, srcTypeActual
+					srcPathActual, dstPathActual = dstPathActual, srcPathActual
 					directionChanged = true
 					edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
 				} else {
@@ -8624,150 +8746,6 @@ func dedupSupplyChainHotPathVariants(in []agents.SupplyChainQuery) []agents.Supp
 	return out
 }
 
-func persistSupplyChainFallbackContext(
-	ctx context.Context,
-	e *ScoutEngine,
-	job *models.ScoutingJob,
-	anchorOrgs []string,
-	childOrgs []string,
-	facilities []string,
-	gapHints []string,
-) bool {
-	if job == nil {
-		return false
-	}
-	if job.State == nil {
-		job.State = map[string]interface{}{}
-	}
-	cc, _ := ParseChainContext(job.State["chainContext"])
-	if cc == nil {
-		cc = NewChainContext()
-	}
-	if cc.NodeLabels == nil {
-		cc.NodeLabels = make(map[string]string)
-	}
-	changed := false
-	nodeSet := make(map[string]struct{}, len(cc.DiscoveredNodes))
-	for _, ref := range cc.DiscoveredNodes {
-		nodeSet[ref] = struct{}{}
-	}
-	addNode := func(ref string) {
-		ref = strings.TrimSpace(ref)
-		if ref == "" {
-			return
-		}
-		if _, ok := nodeSet[ref]; ok {
-			return
-		}
-		nodeSet[ref] = struct{}{}
-		cc.DiscoveredNodes = append(cc.DiscoveredNodes, ref)
-		if _, ok := cc.NodeLabels[ref]; !ok {
-			if label := slugToReadableName(ref); label != "" {
-				cc.NodeLabels[ref] = label
-			}
-		}
-		changed = true
-	}
-	for _, ref := range anchorOrgs {
-		addNode(ref)
-	}
-	for _, ref := range childOrgs {
-		addNode(ref)
-	}
-	for _, ref := range facilities {
-		addNode(ref)
-	}
-
-	edgeSet := make(map[string]struct{}, len(cc.DiscoveredEdges))
-	for _, edge := range cc.DiscoveredEdges {
-		key := strings.TrimSpace(edge.Source) + "|" + strings.TrimSpace(edge.Target) + "|" + strings.TrimSpace(edge.EdgeType)
-		edgeSet[key] = struct{}{}
-	}
-	addEdge := func(source, target, edgeType string) {
-		source = strings.TrimSpace(source)
-		target = strings.TrimSpace(target)
-		edgeType = strings.TrimSpace(edgeType)
-		if source == "" || target == "" || edgeType == "" || source == target {
-			return
-		}
-		key := source + "|" + target + "|" + edgeType
-		if _, ok := edgeSet[key]; ok {
-			return
-		}
-		edgeSet[key] = struct{}{}
-		cc.DiscoveredEdges = append(cc.DiscoveredEdges, ChainContextEdge{Source: source, Target: target, EdgeType: edgeType})
-		changed = true
-	}
-	for _, parent := range anchorOrgs {
-		for _, child := range childOrgs {
-			addEdge(parent, child, "CONTROLS")
-		}
-		for _, fac := range facilities {
-			addEdge(parent, fac, "OWNS")
-		}
-	}
-
-	cc.GapHints = mergeUniqueStrings(cc.GapHints, gapHints)
-	if len(facilities) == 0 {
-		for _, ref := range anchorOrgs {
-			ref = strings.TrimSpace(ref)
-			if ref != "" {
-				cc.GapHints = mergeUniqueStrings(cc.GapHints, []string{"find facilities or distribution nodes for " + ref})
-			}
-		}
-	}
-
-	contextJSON, err := cc.ToJSON()
-	if err != nil {
-		return changed
-	}
-	job.State["chainContext"] = contextJSON
-	job.State["supplyChainFallbackContextPersisted"] = true
-	discoveredNodesCount := len(cc.DiscoveredNodes)
-	discoveredEdgesCount := len(cc.DiscoveredEdges)
-	materializedFragments := parseStateFloatLoose(nil, 0)
-	materializedEdges := parseStateFloatLoose(nil, 0)
-	materializedSupplyLinks := parseStateFloatLoose(nil, 0)
-	materializedPaths := parseStateFloatLoose(nil, 0)
-	if existing, ok := job.State["supplyChainMaterialization"].(map[string]interface{}); ok {
-		materializedFragments = parseStateFloatLoose(existing["materializedFragments"], 0)
-		materializedEdges = parseStateFloatLoose(existing["materializedEdges"], 0)
-		materializedSupplyLinks = parseStateFloatLoose(existing["materializedSupplyLinks"], 0)
-		materializedPaths = parseStateFloatLoose(existing["materializedPaths"], 0)
-	}
-	job.State["supplyChainDiscovery"] = map[string]interface{}{
-		"discoveredNodes":    float64(discoveredNodesCount),
-		"discoveredEdges":    float64(discoveredEdgesCount),
-		"normalizedSegments": float64(0),
-	}
-	job.State["supplyChainMaterialization"] = map[string]interface{}{
-		"materializedFragments":   materializedFragments,
-		"materializedEdges":       materializedEdges,
-		"materializedSupplyLinks": materializedSupplyLinks,
-		"materializedPaths":       materializedPaths,
-	}
-	job.State["supplyChainSummary"] = map[string]interface{}{
-		"discoveredNodes":         float64(discoveredNodesCount),
-		"discoveredEdges":         float64(discoveredEdgesCount),
-		"normalizedSegments":      float64(0),
-		"materializedFragments":   materializedFragments,
-		"materializedEdges":       materializedEdges,
-		"materializedSupplyLinks": materializedSupplyLinks,
-		"materializedPaths":       materializedPaths,
-		"gapHints":                float64(len(cc.GapHints)),
-	}
-	if e != nil && e.scoutingJobsRepo != nil {
-		_ = e.scoutingJobsRepo.UpdateState(ctx, job.ID, map[string]interface{}{
-			"chainContext":                        contextJSON,
-			"supplyChainDiscovery":                job.State["supplyChainDiscovery"],
-			"supplyChainMaterialization":          job.State["supplyChainMaterialization"],
-			"supplyChainSummary":                  job.State["supplyChainSummary"],
-			"supplyChainFallbackContextPersisted": true,
-		})
-	}
-	return true
-}
-
 // runSupplyChainStage2Overlays runs overlay queries (regulatory, market, decision_points) over parsed chains.
 // Anchors are extracted from chain nodes (org, market paths). Results: DependencyEdges (REGULATES, INFLUENCES).
 func (e *ScoutEngine) runSupplyChainStage2Overlays(
@@ -8969,10 +8947,14 @@ func (e *ScoutEngine) processSupplyChains(
 	if job != nil {
 		scope := mergeWorkingProductScopeFromChains(job, chains, "chain_discovery")
 		persistWorkingProductScope(ctx, e, job, scope)
+		applyWorkingProductScopeProductDictionary(ctx, e, job)
 	}
 	persistScopedObservationsFromChains(ctx, e, job, chains)
 
 	parser := NewSupplyChainParser()
+	if e.canonicalPathResolver != nil {
+		parser = parser.WithProductDictionary(e.canonicalPathResolver.productDictionary)
+	}
 	sourceCanonicalPath := ""
 	if sourceFragment != nil {
 		sourceCanonicalPath = strings.TrimSpace(sourceFragment.CanonicalPath)
@@ -9531,6 +9513,37 @@ func (e *ScoutEngine) processSupplyChains(
 		}
 
 		edgeType := models.DependencyType(chainEdge.RelationType)
+		productRelationKind := ""
+		productRelationDictionaryNormalized := false
+		dictionaryDirectionChanged := false
+		dictionaryTypeChanged := false
+		dictionaryNormalizedFromEdgeType := ""
+		if e.canonicalPathResolver != nil && e.canonicalPathResolver.productDictionary != nil &&
+			strings.HasPrefix(strings.TrimSpace(srcPath), "/product/") &&
+			strings.HasPrefix(strings.TrimSpace(dstPath), "/product/") {
+			resolution, rerr := e.canonicalPathResolver.productDictionary.ResolveProductRelationForTenant(
+				ctx,
+				strings.TrimSpace(firstNonEmpty(job.TenantID, "global")),
+				srcPath,
+				dstPath,
+			)
+			if rerr != nil {
+				e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainEdge] product relation dictionary lookup failed source=%s target=%s err=%v", srcPath, dstPath, rerr))
+			} else if resolution.Known {
+				productRelationKind = resolution.RelationKind
+				productRelationDictionaryNormalized = true
+				if resolution.Swapped {
+					sourceID, targetID = targetID, sourceID
+					srcPath, dstPath = resolution.FromPath, resolution.ToPath
+					dictionaryDirectionChanged = true
+				}
+				if edgeType != resolution.EdgeType {
+					dictionaryNormalizedFromEdgeType = string(edgeType)
+					edgeType = resolution.EdgeType
+					dictionaryTypeChanged = true
+				}
+			}
+		}
 
 		// Policy: self-loop prevention
 		if strings.TrimSpace(sourceID) == "" || strings.TrimSpace(targetID) == "" || IsSelfLoop(sourceID, targetID) {
@@ -9565,8 +9578,7 @@ func (e *ScoutEngine) processSupplyChains(
 
 		// Policy: direction validation & reversal (best-effort, same behavior as processDiscoveredRelations).
 		edgeCriticality := normalizeEdgeConfidence(chainEdge.Confidence)
-		directionChanged := false
-		directionReversed := false
+		directionChanged := dictionaryDirectionChanged || dictionaryTypeChanged
 		policyStatus := models.PolicyStatusClean
 		policyReason := ""
 		policyPenalty := 0.0
@@ -9636,8 +9648,9 @@ func (e *ScoutEngine) processSupplyChains(
 				policy.ApplyValidationDecisionBestEffort(logPrefix, decision, policy.ValidationDecisionHandlers{
 					Reverse: func() {
 						sourceID, targetID = targetID, sourceID
+						srcPath, dstPath = dstPath, srcPath
+						srcTypeActual, dstTypeActual = dstTypeActual, srcTypeActual
 						directionChanged = true
-						directionReversed = true
 						edgeReversed++
 						msg := fmt.Sprintf("%s REVERSE edge=%s -[%s]-> %s path=%s",
 							logPrefix, chainEdge.SourceCanonicalPath, edgeType, chainEdge.TargetCanonicalPath, decision.DecisionPath)
@@ -9702,14 +9715,9 @@ func (e *ScoutEngine) processSupplyChains(
 			continue
 		}
 
-		contextSrcPath := srcPath
-		contextDstPath := dstPath
-		if directionReversed {
-			contextSrcPath, contextDstPath = contextDstPath, contextSrcPath
-		}
 		acceptedContextEdges = append(acceptedContextEdges, &ChainEdge{
-			SourceCanonicalPath: contextSrcPath,
-			TargetCanonicalPath: contextDstPath,
+			SourceCanonicalPath: srcPath,
+			TargetCanonicalPath: dstPath,
 			RelationType:        string(edgeType),
 			Confidence:          chainEdge.Confidence,
 			Reason:              chainEdge.Reason,
@@ -9734,6 +9742,15 @@ func (e *ScoutEngine) processSupplyChains(
 					qualifiers[k] = v
 				}
 			}
+		}
+		if productRelationKind != "" {
+			qualifiers["productRelationKind"] = productRelationKind
+		}
+		if productRelationDictionaryNormalized {
+			qualifiers["normalizedByProductRelationDictionary"] = true
+		}
+		if dictionaryNormalizedFromEdgeType != "" {
+			qualifiers["normalizedFromEdgeType"] = dictionaryNormalizedFromEdgeType
 		}
 		// Canonicalize qualifier facility paths (at_facility, transport_via) — same rules as other fragments
 		qualifiers = e.canonicalizeQualifierFacilityPaths(ctx, qualifiers, pathRewrites)
@@ -9763,6 +9780,11 @@ func (e *ScoutEngine) processSupplyChains(
 		}
 		edge.SetPolicyStatus(policyStatus, policyReason, policyPenalty)
 		applyBestEffortEdgeEnrichment(edge, srcPath, dstPath)
+		edge.SetSubstitutability(supplyChainSubstitutabilityHeuristic(edgeType, srcPath, dstPath))
+		if edge.Qualifiers != nil {
+			edge.Qualifiers[models.QualifierThroughputShare] = 1.0
+		}
+		applyPathStressToSupplyEdge(edge, chainEdge)
 
 		// Final allowlist gate: never persist out-of-contract types for supply-chain edges.
 		allowed := IsAllowedSupplyChainPersistRelation(srcPath, dstPath, edgeType)

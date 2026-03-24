@@ -29,8 +29,8 @@ type Dispatcher struct {
 }
 
 func NewDispatcher(ctx context.Context, projectID, location, queue, targetURL, saEmail, audience string) (*Dispatcher, error) {
-	if strings.TrimSpace(projectID) == "" || strings.TrimSpace(location) == "" || strings.TrimSpace(queue) == "" || strings.TrimSpace(targetURL) == "" || strings.TrimSpace(saEmail) == "" {
-		return nil, fmt.Errorf("projectID, location, queue, targetURL, and saEmail are required")
+	if strings.TrimSpace(projectID) == "" || strings.TrimSpace(location) == "" || strings.TrimSpace(queue) == "" || strings.TrimSpace(targetURL) == "" {
+		return nil, fmt.Errorf("projectID, location, queue, and targetURL are required")
 	}
 	client, err := cloudtasks.NewClient(ctx)
 	if err != nil {
@@ -66,23 +66,24 @@ func (d *Dispatcher) EnqueueTask(ctx context.Context, taskID string) error {
 		return err
 	}
 	parent := fmt.Sprintf("projects/%s/locations/%s/queues/%s", d.projectID, d.location, d.queue)
+	httpRequest := &taskspb.HttpRequest{
+		HttpMethod: taskspb.HttpMethod_POST,
+		Url:        d.targetURL,
+		Headers:    map[string]string{"Content-Type": "application/json"},
+		Body:       body,
+	}
+	if strings.TrimSpace(d.saEmail) != "" {
+		httpRequest.AuthorizationHeader = &taskspb.HttpRequest_OidcToken{
+			OidcToken: &taskspb.OidcToken{
+				ServiceAccountEmail: d.saEmail,
+				Audience:            d.audience,
+			},
+		}
+	}
 	_, err = d.client.CreateTask(ctx, &taskspb.CreateTaskRequest{
 		Parent: parent,
 		Task: &taskspb.Task{
-			MessageType: &taskspb.Task_HttpRequest{
-				HttpRequest: &taskspb.HttpRequest{
-					HttpMethod: taskspb.HttpMethod_POST,
-					Url:        d.targetURL,
-					Headers:    map[string]string{"Content-Type": "application/json"},
-					Body:       body,
-					AuthorizationHeader: &taskspb.HttpRequest_OidcToken{
-						OidcToken: &taskspb.OidcToken{
-							ServiceAccountEmail: d.saEmail,
-							Audience:            d.audience,
-						},
-					},
-				},
-			},
+			MessageType: &taskspb.Task_HttpRequest{HttpRequest: httpRequest},
 			ScheduleTime: timestamppb.New(time.Now().UTC()),
 		},
 	})

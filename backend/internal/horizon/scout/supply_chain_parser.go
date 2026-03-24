@@ -1,12 +1,14 @@
 package scout
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/supplysemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
@@ -14,11 +16,21 @@ import (
 
 // SupplyChainParser converts supply chain objects from agent output
 // into HorizonFragments and DependencyEdges for graph insertion.
-type SupplyChainParser struct{}
+type SupplyChainParser struct {
+	productDictionary *productdict.Runtime
+}
 
 // NewSupplyChainParser creates a new supply chain parser instance.
 func NewSupplyChainParser() *SupplyChainParser {
 	return &SupplyChainParser{}
+}
+
+func (p *SupplyChainParser) WithProductDictionary(dict *productdict.Runtime) *SupplyChainParser {
+	if p == nil {
+		return p
+	}
+	p.productDictionary = dict
+	return p
 }
 
 // FlowEdgeContract captures completeness and validation gaps for segment metrics (plan 5.3).
@@ -91,7 +103,7 @@ type ParsedChainStats struct {
 type ChainEdge struct {
 	SourceCanonicalPath string
 	TargetCanonicalPath string
-	RelationType        string // PRODUCES, SUPPLIES_TO, DEPENDS_ON, TRANSFORMS_INTO
+	RelationType        string // PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN
 	Confidence          float64
 	Reason              string
 	// Qualifiers carry edge-specific metadata (e.g. at_facility for TRANSFORMS_INTO).
@@ -199,11 +211,7 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 					nextPath := strings.TrimSpace(nextNode.CanonicalPath)
 					facPath := strings.TrimSpace(node.CanonicalPath)
 					if prevPath != "" && nextPath != "" && facPath != "" {
-						srcPath, dstPath := prevPath, nextPath
-						if shouldSwapProductStageOrder(prevPath, nextPath) {
-							srcPath, dstPath = nextPath, prevPath
-						}
-						relType := models.ProductToProductEdgeTypeFromPaths(srcPath, dstPath)
+						srcPath, dstPath, relType := p.normalizeProductRelation(prevPath, nextPath)
 						transformEdge := &ChainEdge{
 							SourceCanonicalPath: srcPath,
 							TargetCanonicalPath: dstPath,
@@ -638,12 +646,12 @@ func (p *SupplyChainParser) inferFragmentType(nodeType string, canonicalPath str
 
 // createEdgeBetweenNodes creates an edge based on the node types.
 // Supply chain pattern: actor → product → actor → product
-// Operational model: PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, EXTRACTS_FROM only. NO DEPENDS_ON.
+// Operational model: PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, EXTRACTS_FROM only. NO DEPENDS_ON.
 // - Actor (org/fac) → Product: PRODUCES
 // - Product → Actor: abstain. Flow is captured by SupplyLink segments (fac1 SUPPLIES_TO fac2 via product).
 // - Facility → Deposit: EXTRACTS_FROM
 // - Actor → Actor: no direct inference (ambiguous without product-flow context)
-// - Product → Product: TRANSFORMS_INTO or ASSEMBLES_INTO
+// - Product → Product: TRANSFORMS_INTO or ASSEMBLES_INTO or USED_IN
 // - Unknown pair: abstain (return nil, true).
 func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNode, confidence float64, reason string) (*ChainEdge, bool) {
 	fromPath := normalizeSupplyChainCanonicalPath(from.CanonicalPath)
@@ -712,11 +720,7 @@ func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNo
 
 	// product → product: transformation or direct assembly
 	case fromIsProduct && toIsProduct:
-		srcPath, dstPath := fromPath, toPath
-		if shouldSwapProductStageOrder(fromPath, toPath) {
-			srcPath, dstPath = toPath, fromPath
-		}
-		relType := models.ProductToProductEdgeTypeFromPaths(srcPath, dstPath)
+		srcPath, dstPath, relType := p.normalizeProductRelation(fromPath, toPath)
 		return &ChainEdge{
 			SourceCanonicalPath: srcPath,
 			TargetCanonicalPath: dstPath,
@@ -728,6 +732,31 @@ func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNo
 	default:
 		return nil, true
 	}
+}
+
+func (p *SupplyChainParser) normalizeProductRelation(sourcePath, targetPath string) (string, string, models.DependencyType) {
+	sourcePath = normalizeSupplyChainCanonicalPath(sourcePath)
+	targetPath = normalizeSupplyChainCanonicalPath(targetPath)
+	if sourcePath == "" || targetPath == "" {
+		return sourcePath, targetPath, models.DependencyTypeTransformsInto
+	}
+	if p != nil && p.productDictionary != nil {
+		if resolution, err := p.productDictionary.ResolveProductRelation(context.Background(), sourcePath, targetPath); err == nil {
+			if strings.TrimSpace(resolution.FromPath) != "" {
+				sourcePath = strings.TrimSpace(resolution.FromPath)
+			}
+			if strings.TrimSpace(resolution.ToPath) != "" {
+				targetPath = strings.TrimSpace(resolution.ToPath)
+			}
+			if resolution.Known {
+				return sourcePath, targetPath, resolution.EdgeType
+			}
+		}
+	}
+	if shouldSwapProductStageOrder(sourcePath, targetPath) {
+		sourcePath, targetPath = targetPath, sourcePath
+	}
+	return sourcePath, targetPath, models.ProductToProductEdgeTypeFromPaths(sourcePath, targetPath)
 }
 
 func (p *SupplyChainParser) maybeCreateFacilityActorOverlay(

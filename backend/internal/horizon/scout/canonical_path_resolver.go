@@ -11,6 +11,8 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/geoambiguity"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/govdict"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/mechanismdict"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/merge"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
@@ -45,7 +47,9 @@ type CanonicalPathResolver struct {
 	geonamesClient     coreontology.GeoNamesClientInterface
 	redirectsRepo      *repo.CanonicalPathRedirectsRepository
 	telemetryRepo      *repo.HorizonTelemetryRepository
-	productDictionary  *productdict.Runtime
+	productDictionary    *productdict.Runtime
+	mechanismDictionary  *mechanismdict.Runtime
+	govDictionary        *govdict.Runtime
 
 	// Stats counters (atomic; best-effort only).
 	resolveCalls               int64
@@ -106,6 +110,40 @@ func (r *CanonicalPathResolver) WithProductDictionary(dict *productdict.Runtime)
 	}
 	r.productDictionary = dict
 	return r
+}
+
+// WithMechanismDictionary wires mechanism synonym lookup into Resolve (regulatory identity).
+func (r *CanonicalPathResolver) WithMechanismDictionary(dict *mechanismdict.Runtime) *CanonicalPathResolver {
+	if r == nil {
+		return r
+	}
+	r.mechanismDictionary = dict
+	return r
+}
+
+// WithGovDictionary wires government/regulator synonym lookup into Resolve.
+func (r *CanonicalPathResolver) WithGovDictionary(dict *govdict.Runtime) *CanonicalPathResolver {
+	if r == nil {
+		return r
+	}
+	r.govDictionary = dict
+	return r
+}
+
+// CanonicalizeProductDictionaryPath returns the synonym-dictionary canonical path for a product ref when known.
+// Fail-open: returns the input path when resolver or dictionary is unavailable or lookup fails.
+func (r *CanonicalPathResolver) CanonicalizeProductDictionaryPath(ctx context.Context, productPath string) string {
+	productPath = strings.TrimSpace(productPath)
+	if productPath == "" || !strings.HasPrefix(productPath, "/product/") {
+		return productPath
+	}
+	if r == nil || r.productDictionary == nil {
+		return productPath
+	}
+	if c, matched, err := r.productDictionary.CanonicalizeProductPath(ctx, productPath); err == nil && matched && strings.TrimSpace(c) != "" {
+		return strings.TrimSpace(c)
+	}
+	return productPath
 }
 
 // ResolveResult contains the result of canonical path resolution.
@@ -219,6 +257,32 @@ func (r *CanonicalPathResolver) Resolve(
 				result.CanonicalPath = canonicalPath
 			} else if err != nil {
 				log.Printf("%s WARNING: product dictionary lookup failed for path=%s err=%v", logPrefix, result.CanonicalPath, err)
+			}
+		}
+	}
+
+	// Step 1.65: Mechanism and /gov/ synonym dictionaries (regulatory identity control plane).
+	if fragmentType == models.FragmentTypeMechanism && r.mechanismDictionary != nil {
+		cp := strings.TrimSpace(result.CanonicalPath)
+		if strings.HasPrefix(cp, "/mechanism/") {
+			if canonicalPath, matched, err := r.mechanismDictionary.CanonicalizeMechanismPath(ctx, cp); err == nil && matched && canonicalPath != "" && canonicalPath != cp {
+				result.NormalizationSteps = append(result.NormalizationSteps,
+					fmt.Sprintf("mechanism_synonym_dictionary: %s -> %s", cp, canonicalPath))
+				result.CanonicalPath = canonicalPath
+			} else if err != nil {
+				log.Printf("%s WARNING: mechanism dictionary lookup failed for path=%s err=%v", logPrefix, cp, err)
+			}
+		}
+	}
+	if r.govDictionary != nil {
+		cp := strings.TrimSpace(result.CanonicalPath)
+		if strings.HasPrefix(cp, "/gov/") {
+			if canonicalPath, matched, err := r.govDictionary.CanonicalizeGovPath(ctx, cp); err == nil && matched && canonicalPath != "" && canonicalPath != cp {
+				result.NormalizationSteps = append(result.NormalizationSteps,
+					fmt.Sprintf("gov_synonym_dictionary: %s -> %s", cp, canonicalPath))
+				result.CanonicalPath = canonicalPath
+			} else if err != nil {
+				log.Printf("%s WARNING: gov dictionary lookup failed for path=%s err=%v", logPrefix, cp, err)
 			}
 		}
 	}

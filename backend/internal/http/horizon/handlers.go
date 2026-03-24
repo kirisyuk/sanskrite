@@ -255,6 +255,7 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 	mux.Handle("/api/horizon/supply-chains/search", authMiddleware(http.HandlerFunc(h.SearchSupplyChains)))
 	mux.Handle("/api/horizon/products/prefetch", authMiddleware(http.HandlerFunc(h.GetProductPrefetch)))
 	mux.Handle("/api/horizon/products/stream", authMiddleware(http.HandlerFunc(h.GetProductStream)))
+	mux.Handle("/api/horizon/products/producers", authMiddleware(http.HandlerFunc(h.GetProductProducers)))
 	mux.Handle("/api/horizon/geo-objects", authMiddleware(http.HandlerFunc(h.ListGeoObjects)))
 	mux.Handle("/api/horizon/geo-objects/by-paths", authMiddleware(http.HandlerFunc(h.ListGeoObjectsByPaths)))
 	mux.Handle("/api/horizon/map-activity", authMiddleware(http.HandlerFunc(h.ListMapActivity)))
@@ -314,6 +315,8 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 
 	// Domain scenario: Encode → Propagate → Decode (policy-impact, etc.)
 	mux.Handle("/api/horizon/scenarios/run", authMiddleware(http.HandlerFunc(h.RunScenario)))
+	mux.Handle("/api/horizon/simulations", authMiddleware(http.HandlerFunc(h.HandleSimulationsRoot)))
+	mux.Handle("/api/horizon/simulations/", authMiddleware(http.HandlerFunc(h.HandleSimulationRoutes)))
 
 	// Entity search (Live Entity Recognition)
 	mux.Handle("/api/horizon/entities/search", authMiddleware(http.HandlerFunc(h.SearchEntities)))

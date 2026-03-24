@@ -119,6 +119,7 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 			TraceDropped:      0,
 		}, nil
 	}
+	e.enrichSignalRegulatoryContextFromSeeds(ctx, signal, seedFragmentIDs)
 
 	log.Printf("%s start signalId=%s axis=%s polarity=%s amp=%.3f seeds=%d",
 		signalsys.LogPropagate,
@@ -373,10 +374,11 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 			if adapter != nil {
 				beforeHook := nextAmplitude
 				hookSignal := &horizonmodels.SignalDescriptor{
-					Axis:      nextAxis,
-					Mechanism: signal.Mechanism,
-					Amplitude: nextAmplitude,
-					Polarity:  signal.Polarity,
+					Axis:              nextAxis,
+					Mechanism:         signal.Mechanism,
+					Amplitude:         nextAmplitude,
+					Polarity:          signal.Polarity,
+					RegulatoryContext: signal.RegulatoryContext,
 				}
 				if hook, err := adapter.TransferHook(ctx, hookSignal, neighbor.edge, frag); err == nil && hook != nil {
 					traceFactors = mergeFactorMaps(traceFactors, hook.DebugFactors, "adapter.")
@@ -623,6 +625,7 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 			TraceDropped:      0,
 		}, nil
 	}
+	e.enrichSignalRegulatoryContextFromSeeds(ctx, signal, seedFragmentIDs)
 	log.Printf("%s preview-start signalId=%s axis=%s polarity=%s amp=%.3f seeds=%d",
 		signalsys.LogPropagate,
 		strings.TrimSpace(signal.ID),
@@ -903,10 +906,11 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 			if adapter != nil {
 				beforeHook := nextAmplitude
 				hookSignal := &horizonmodels.SignalDescriptor{
-					Axis:      nextAxis,
-					Mechanism: signal.Mechanism,
-					Amplitude: nextAmplitude,
-					Polarity:  signal.Polarity,
+					Axis:              nextAxis,
+					Mechanism:         signal.Mechanism,
+					Amplitude:         nextAmplitude,
+					Polarity:          signal.Polarity,
+					RegulatoryContext: signal.RegulatoryContext,
 				}
 				if hook, err := adapter.TransferHook(ctx, hookSignal, neighbor.edge, frag); err == nil && hook != nil {
 					traceFactors = mergeFactorMaps(traceFactors, hook.DebugFactors, "adapter.")

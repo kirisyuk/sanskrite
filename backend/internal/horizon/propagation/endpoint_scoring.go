@@ -366,7 +366,7 @@ func endpointTypeAllowed(ft horizonmodels.FragmentType) bool {
 	}
 }
 
-func endpointTypeBonus(axis string, frag *horizonmodels.HorizonFragment, profile EndpointScoringProfile) (float64, string) {
+func endpointTypeBonus(_ string, frag *horizonmodels.HorizonFragment, profile EndpointScoringProfile) (float64, string) {
 	if frag == nil {
 		return 0, ""
 	}

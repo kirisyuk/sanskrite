@@ -403,15 +403,19 @@ func (e *SupplyChainQueryEngine) populateProductAdjacency(ctx context.Context, s
 	if len(sourceIDs) == 0 {
 		return nil
 	}
+	tenantID := strings.TrimSpace(opts.TenantID)
+	if tenantID == "" {
+		tenantID = "global"
+	}
 	downstreamEdges := make([]*models.DependencyEdge, 0)
 	upstreamEdges := make([]*models.DependencyEdge, 0)
-	for _, edgeType := range []models.DependencyType{models.DependencyTypeTransformsInto, models.DependencyTypeAssemblesInto} {
-		typedDownstream, err := e.edgesRepo.ListBySourceIDsAndType(ctx, "global", sourceIDs, edgeType)
+	for _, edgeType := range models.ProductTransitionEdgeTypes() {
+		typedDownstream, err := e.edgesRepo.ListBySourceIDsAndType(ctx, tenantID, sourceIDs, edgeType)
 		if err != nil {
 			return err
 		}
 		downstreamEdges = append(downstreamEdges, typedDownstream...)
-		typedUpstream, err := e.edgesRepo.ListByTargetIDsAndType(ctx, "global", sourceIDs, edgeType)
+		typedUpstream, err := e.edgesRepo.ListByTargetIDsAndType(ctx, tenantID, sourceIDs, edgeType)
 		if err != nil {
 			return err
 		}
@@ -530,7 +534,7 @@ func (e *SupplyChainQueryEngine) resolveProductClosure(
 	for depth := 0; depth < opts.MaxProductClosureDepth && len(frontier) > 0; depth++ {
 		nextIDs := make(map[string]struct{})
 		if opts.ClosureMode == ProductClosureDownstream || opts.ClosureMode == ProductClosureBoth {
-			for _, edgeType := range []models.DependencyType{models.DependencyTypeTransformsInto, models.DependencyTypeAssemblesInto} {
+			for _, edgeType := range models.ProductTransitionEdgeTypes() {
 				edges, err := e.edgesRepo.ListBySourceIDsAndType(ctx, "global", frontier, edgeType)
 				if err != nil {
 					return nil, err
@@ -547,7 +551,7 @@ func (e *SupplyChainQueryEngine) resolveProductClosure(
 			}
 		}
 		if opts.ClosureMode == ProductClosureUpstream || opts.ClosureMode == ProductClosureBoth {
-			for _, edgeType := range []models.DependencyType{models.DependencyTypeTransformsInto, models.DependencyTypeAssemblesInto} {
+			for _, edgeType := range models.ProductTransitionEdgeTypes() {
 				edges, err := e.edgesRepo.ListByTargetIDsAndType(ctx, "global", frontier, edgeType)
 				if err != nil {
 					return nil, err

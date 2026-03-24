@@ -44,6 +44,15 @@ type ProductTransformPair struct {
 	RelationKind string `json:"relationKind"`
 }
 
+type ProductRelationResolution struct {
+	Known        bool                  `json:"known"`
+	Swapped      bool                  `json:"swapped"`
+	FromPath     string                `json:"fromPath"`
+	ToPath       string                `json:"toPath"`
+	RelationKind string                `json:"relationKind"`
+	EdgeType     models.DependencyType `json:"edgeType"`
+}
+
 type ProductStreamNode struct {
 	CanonicalPath string `json:"canonicalPath"`
 	Hop           int    `json:"hop"`
@@ -221,6 +230,78 @@ func (r *Runtime) IsKnownProductPathForTenant(ctx context.Context, tenantID stri
 	return ok, nil
 }
 
+func (r *Runtime) SearchCanonicalProductPathsForTenant(ctx context.Context, tenantID string, query string, limit int) ([]string, error) {
+	query = strings.TrimSpace(query)
+	if r == nil || query == "" {
+		return []string{}, nil
+	}
+	if err := r.EnsureFresh(ctx); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 8
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	effectiveTenant := r.resolveTenantID(ctx, tenantID)
+	queryNorm := normalizeProductSearchText(query)
+	if queryNorm == "" {
+		return []string{}, nil
+	}
+
+	type scoredPath struct {
+		path  string
+		score int
+	}
+
+	r.mu.RLock()
+	merged := r.mergedTransformKindsLocked(effectiveTenant)
+	best := map[string]int{}
+	for rawKey := range merged {
+		parts := strings.SplitN(rawKey, "\n", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		for _, rawPath := range parts {
+			path := strings.TrimSpace(rawPath)
+			if path == "" || !strings.HasPrefix(path, "/product/") {
+				continue
+			}
+			score := scoreCanonicalProductPathMatch(queryNorm, path)
+			if score <= 0 {
+				continue
+			}
+			if current, ok := best[path]; !ok || score > current {
+				best[path] = score
+			}
+		}
+	}
+	r.mu.RUnlock()
+
+	if len(best) == 0 {
+		return []string{}, nil
+	}
+	scored := make([]scoredPath, 0, len(best))
+	for path, score := range best {
+		scored = append(scored, scoredPath{path: path, score: score})
+	}
+	sort.Slice(scored, func(i, j int) bool {
+		if scored[i].score != scored[j].score {
+			return scored[i].score > scored[j].score
+		}
+		return scored[i].path < scored[j].path
+	})
+	if len(scored) > limit {
+		scored = scored[:limit]
+	}
+	out := make([]string, 0, len(scored))
+	for _, item := range scored {
+		out = append(out, item.path)
+	}
+	return out, nil
+}
+
 func (r *Runtime) ExpandProductStream(ctx context.Context, seedPath string, direction string, maxHops int, maxPerHop int) (*ProductStreamExpansion, error) {
 	return r.ExpandProductStreamForTenant(ctx, "", seedPath, direction, maxHops, maxPerHop)
 }
@@ -342,6 +423,56 @@ func (r *Runtime) NormalizeProductEdgeType(
 	return r.NormalizeProductEdgeTypeForTenant(ctx, "", edgeType, sourceType, targetType, sourcePath, targetPath)
 }
 
+func (r *Runtime) ResolveProductRelation(ctx context.Context, sourcePath string, targetPath string) (ProductRelationResolution, error) {
+	return r.ResolveProductRelationForTenant(ctx, "", sourcePath, targetPath)
+}
+
+func (r *Runtime) ResolveProductRelationForTenant(ctx context.Context, tenantID string, sourcePath string, targetPath string) (ProductRelationResolution, error) {
+	sourcePath = strings.TrimSpace(sourcePath)
+	targetPath = strings.TrimSpace(targetPath)
+	if r == nil {
+		return ProductRelationResolution{FromPath: sourcePath, ToPath: targetPath}, nil
+	}
+	if sourcePath == "" || targetPath == "" {
+		return ProductRelationResolution{FromPath: sourcePath, ToPath: targetPath}, nil
+	}
+	if !strings.HasPrefix(sourcePath, "/product/") || !strings.HasPrefix(targetPath, "/product/") {
+		return ProductRelationResolution{FromPath: sourcePath, ToPath: targetPath}, nil
+	}
+	if err := r.EnsureFresh(ctx); err != nil {
+		return ProductRelationResolution{}, err
+	}
+	effectiveTenant := r.resolveTenantID(ctx, tenantID)
+	fromPath, _, err := r.CanonicalizeProductPathForTenant(ctx, effectiveTenant, sourcePath)
+	if err != nil {
+		return ProductRelationResolution{}, err
+	}
+	toPath, _, err := r.CanonicalizeProductPathForTenant(ctx, effectiveTenant, targetPath)
+	if err != nil {
+		return ProductRelationResolution{}, err
+	}
+	if relationKind, ok := r.lookupTransformKind(effectiveTenant, fromPath, toPath); ok {
+		return ProductRelationResolution{
+			Known:        true,
+			FromPath:     fromPath,
+			ToPath:       toPath,
+			RelationKind: relationKind,
+			EdgeType:     desiredEdgeTypeForKind(relationKind),
+		}, nil
+	}
+	if relationKind, ok := r.lookupTransformKind(effectiveTenant, toPath, fromPath); ok {
+		return ProductRelationResolution{
+			Known:        true,
+			Swapped:      true,
+			FromPath:     toPath,
+			ToPath:       fromPath,
+			RelationKind: relationKind,
+			EdgeType:     desiredEdgeTypeForKind(relationKind),
+		}, nil
+	}
+	return ProductRelationResolution{FromPath: fromPath, ToPath: toPath}, nil
+}
+
 func (r *Runtime) NormalizeProductEdgeTypeForTenant(
 	ctx context.Context,
 	tenantID string,
@@ -359,24 +490,15 @@ func (r *Runtime) NormalizeProductEdgeTypeForTenant(
 	if !supportsProductRelationDictionary(edgeType) {
 		return edgeType, false, "", false, nil
 	}
-	if err := r.EnsureFresh(ctx); err != nil {
-		return edgeType, false, "", false, err
-	}
-	effectiveTenant := r.resolveTenantID(ctx, tenantID)
-	fromPath, _, err := r.CanonicalizeProductPathForTenant(ctx, effectiveTenant, sourcePath)
+	resolution, err := r.ResolveProductRelationForTenant(ctx, tenantID, sourcePath, targetPath)
 	if err != nil {
 		return edgeType, false, "", false, err
 	}
-	toPath, _, err := r.CanonicalizeProductPathForTenant(ctx, effectiveTenant, targetPath)
-	if err != nil {
-		return edgeType, false, "", false, err
-	}
-	relationKind, ok := r.lookupTransformKind(effectiveTenant, fromPath, toPath)
-	if !ok {
+	if !resolution.Known {
 		return edgeType, false, "", false, nil
 	}
-	normalized := desiredEdgeTypeForKind(relationKind)
-	return normalized, true, relationKind, normalized != edgeType, nil
+	normalized := resolution.EdgeType
+	return normalized, true, resolution.RelationKind, normalized != edgeType, nil
 }
 
 func (r *Runtime) listTransformAdjacency(ctx context.Context, tenantID string, path string, direction StreamDirection) ([]ProductTransformPair, bool, bool, error) {
@@ -1056,7 +1178,7 @@ func (r *Runtime) queryTransformAdjacencyDocs(ctx context.Context, tenantID, fie
 
 func supportsProductRelationDictionary(edgeType models.DependencyType) bool {
 	switch edgeType {
-	case models.DependencyTypeTransformsInto, models.DependencyTypeAssemblesInto, models.DependencyTypeDependsOn:
+	case models.DependencyTypeTransformsInto, models.DependencyTypeAssemblesInto, models.DependencyTypeUsedIn, models.DependencyTypeDependsOn:
 		return true
 	default:
 		return false
@@ -1064,8 +1186,11 @@ func supportsProductRelationDictionary(edgeType models.DependencyType) bool {
 }
 
 func desiredEdgeTypeForKind(kind string) models.DependencyType {
-	if normalizeRelationKind(kind) == "assembly" {
+	switch normalizeRelationKind(kind) {
+	case "assembly":
 		return models.DependencyTypeAssemblesInto
+	case "usage":
+		return models.DependencyTypeUsedIn
 	}
 	return models.DependencyTypeTransformsInto
 }
@@ -1074,6 +1199,8 @@ func relationHintForEdgeType(edgeType models.DependencyType) string {
 	switch edgeType {
 	case models.DependencyTypeAssemblesInto:
 		return "assembly"
+	case models.DependencyTypeUsedIn:
+		return "usage"
 	case models.DependencyTypeTransformsInto:
 		return "transformation"
 	default:
@@ -1083,8 +1210,11 @@ func relationHintForEdgeType(edgeType models.DependencyType) string {
 
 func normalizeRelationKind(v string) string {
 	v = strings.ToLower(strings.TrimSpace(v))
-	if v == "assembly" {
+	switch v {
+	case "assembly":
 		return "assembly"
+	case "usage", "used_in", "used-in":
+		return "usage"
 	}
 	return "transformation"
 }
@@ -1203,6 +1333,44 @@ func lastPathSegment(path string) string {
 	}
 	parts := strings.Split(path, "/")
 	return strings.TrimSpace(parts[len(parts)-1])
+}
+
+func normalizeProductSearchText(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer("/", " ", "-", " ", "_", " ", ".", " ", "(", " ", ")", " ")
+	return strings.Join(strings.Fields(replacer.Replace(value)), " ")
+}
+
+func scoreCanonicalProductPathMatch(queryNorm string, path string) int {
+	path = strings.TrimSpace(path)
+	if path == "" || queryNorm == "" {
+		return 0
+	}
+	pathNorm := normalizeProductSearchText(path)
+	segmentNorm := normalizeProductSearchText(lastPathSegment(path))
+	score := 0
+	if segmentNorm == queryNorm {
+		score += 220
+	}
+	if pathNorm == queryNorm {
+		score += 180
+	}
+	if strings.HasPrefix(segmentNorm, queryNorm) {
+		score += 120
+	}
+	if strings.HasPrefix(pathNorm, queryNorm) {
+		score += 40
+	}
+	if strings.Contains(segmentNorm, queryNorm) {
+		score += 30
+	}
+	if strings.Contains(pathNorm, queryNorm) {
+		score += 15
+	}
+	return score
 }
 
 func normalizeAliasKey(name string) string {

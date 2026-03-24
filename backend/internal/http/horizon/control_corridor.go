@@ -321,6 +321,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 		string(horizonmodels.DependencyTypeProduces):         {},
 		string(horizonmodels.DependencyTypeTransformsInto):   {},
 		string(horizonmodels.DependencyTypeAssemblesInto):    {},
+		string(horizonmodels.DependencyTypeUsedIn):           {},
 		string(horizonmodels.DependencyTypeExtractsFrom):     {},
 		string(horizonmodels.DependencyTypeParticipatesIn):   {},
 		string(horizonmodels.DependencyTypeDominates):        {},

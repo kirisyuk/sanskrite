@@ -120,7 +120,8 @@ func ensureWorkingProductScopeLoaded(
 		if len(rawProducts) > 0 || strings.TrimSpace(domainPath) != "" {
 			scope = ensureWorkingProductScopeSeeded(job, rawProducts, sourceKind, domainPath)
 		}
-		return scope
+		applyWorkingProductScopeProductDictionary(ctx, engine, job)
+		return loadWorkingProductScopeFromJob(job)
 	}
 
 	if engine != nil && engine.workingProductScopesRepo != nil && strings.TrimSpace(job.ID) != "" {
@@ -142,7 +143,8 @@ func ensureWorkingProductScopeLoaded(
 				persisted = ensureWorkingProductScopeSeeded(job, rawProducts, sourceKind, domainPath)
 				persistWorkingProductScope(ctx, engine, job, persisted)
 			}
-			return persisted
+			applyWorkingProductScopeProductDictionary(ctx, engine, job)
+			return loadWorkingProductScopeFromJob(job)
 		}
 	}
 
@@ -151,7 +153,8 @@ func ensureWorkingProductScopeLoaded(
 	if scope != nil && engine != nil {
 		persistWorkingProductScope(ctx, engine, job, scope)
 	}
-	return scope
+	applyWorkingProductScopeProductDictionary(ctx, engine, job)
+	return loadWorkingProductScopeFromJob(job)
 }
 
 func mergeWorkingProductScopeFromChains(job *models.ScoutingJob, chains []agents.SupplyChain, sourceKind string) *models.WorkingProductScope {
@@ -599,4 +602,46 @@ func discoveredProductConfidence(value float64) float64 {
 		return 1
 	}
 	return value
+}
+
+func applyWorkingProductScopeProductDictionary(ctx context.Context, e *ScoutEngine, job *models.ScoutingJob) {
+	if job == nil || e == nil || e.canonicalPathResolver == nil {
+		return
+	}
+	scope := loadWorkingProductScopeFromJob(job)
+	if scope == nil || len(scope.CanonicalProducts) == 0 {
+		return
+	}
+	changed := false
+	for i := range scope.CanonicalProducts {
+		entry := &scope.CanonicalProducts[i]
+		if cp := e.canonicalPathResolver.CanonicalizeProductDictionaryPath(ctx, entry.ProductRef); cp != "" && cp != entry.ProductRef {
+			entry.ProductRef = cp
+			changed = true
+		}
+		if entry.PrimaryOperationalRef != "" {
+			if cp := e.canonicalPathResolver.CanonicalizeProductDictionaryPath(ctx, entry.PrimaryOperationalRef); cp != "" && cp != entry.PrimaryOperationalRef {
+				entry.PrimaryOperationalRef = cp
+				changed = true
+			}
+		}
+		for j := range entry.EquivalentProductRefs {
+			if cp := e.canonicalPathResolver.CanonicalizeProductDictionaryPath(ctx, entry.EquivalentProductRefs[j]); cp != "" && cp != entry.EquivalentProductRefs[j] {
+				entry.EquivalentProductRefs[j] = cp
+				changed = true
+			}
+		}
+		for j := range entry.SeedRefs {
+			if cp := e.canonicalPathResolver.CanonicalizeProductDictionaryPath(ctx, entry.SeedRefs[j]); cp != "" && cp != entry.SeedRefs[j] {
+				entry.SeedRefs[j] = cp
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return
+	}
+	scope.Normalize()
+	mirrorWorkingProductScopeToJob(job, scope)
+	persistWorkingProductScope(ctx, e, job, scope)
 }

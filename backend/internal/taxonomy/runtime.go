@@ -96,6 +96,7 @@ var builtInAllowedRelationTypes = map[string]struct{}{
 	"AFFECTS":         {},
 	"TRANSFORMS_INTO": {},
 	"ASSEMBLES_INTO":  {},
+	"USED_IN":         {},
 	"EXTRACTS_FROM":   {}, // FACILITY → DEPOSIT
 	// Market participation
 	"PARTICIPATES_IN": {},
@@ -241,6 +242,8 @@ func NormalizeRelationType(in string) string {
 		return "INVESTS_IN"
 	case "DEPENDS":
 		return "DEPENDS_ON"
+	case "USES_IN", "USED_FOR", "USED IN", "USED_IN":
+		return "USED_IN"
 	case "RENAMED", "RENAMED_AS", "NAME_CHANGED_TO", "NAME_CHANGE", "RENAME_TO":
 		return "RENAMED_TO"
 	case "REBRANDED", "REBRAND", "REBRANDED_AS", "BRAND_CHANGED_TO":
@@ -490,6 +493,35 @@ func IsValidEdgeMetric(edgeType, metricName string) bool {
 	if metrics, ok := builtInAllowedEdgeMetrics[et]; ok {
 		for _, m := range metrics {
 			if strings.ToLower(m) == mn {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+// GetAllowedEdgeQualifiers returns the allowed qualifier names for an edge type.
+func GetAllowedEdgeQualifiers(edgeType string) []string {
+	et := strings.ToUpper(strings.TrimSpace(edgeType))
+	if qualifiers, ok := builtInAllowedEdgeQualifiers[et]; ok {
+		out := make([]string, len(qualifiers))
+		copy(out, qualifiers)
+		return out
+	}
+	return nil
+}
+
+// IsValidEdgeQualifier checks if a qualifier name is valid for a given edge type.
+func IsValidEdgeQualifier(edgeType, qualifierName string) bool {
+	et := strings.ToUpper(strings.TrimSpace(edgeType))
+	qn := strings.ToLower(strings.TrimSpace(qualifierName))
+	if et == "" || qn == "" {
+		return false
+	}
+	if qualifiers, ok := builtInAllowedEdgeQualifiers[et]; ok {
+		for _, q := range qualifiers {
+			if strings.ToLower(q) == qn {
 				return true
 			}
 		}

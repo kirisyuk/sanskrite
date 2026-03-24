@@ -586,8 +586,8 @@ export function useGeoMarkerLayer(
         'text-variable-anchor': ['literal', ['right', 'left', 'top-right', 'bottom-right', 'top', 'bottom']],
         'text-radial-offset': 1.3,
         'text-max-width': 10,
-        'text-allow-overlap': true,
-        'text-ignore-placement': true,
+        'text-allow-overlap': false,
+        'text-ignore-placement': false,
       },
       paint: {
         'icon-opacity': ['get', 'opacity'],

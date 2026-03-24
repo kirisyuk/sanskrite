@@ -148,13 +148,14 @@ func (b *SupplyChainPathBuilder) evaluatePathSufficiency(ctx context.Context, pa
 			}
 		}
 		join.ProductContinuity = productContinuity
-		if productContinuity == "contradiction" {
+		switch productContinuity {
+		case "contradiction":
 			join.Status = models.SupplyChainSufficiencyForensicGap
 			join.Reasons = append(join.Reasons, "product continuity contradiction")
 			suff.HardFailures = append(suff.HardFailures, fmt.Sprintf("join %d product continuity contradiction", idx))
 			hasHardFailure = true
 			suff.Score -= 0.24
-		} else if productContinuity == "unknown" {
+		case "unknown":
 			if join.Status == models.SupplyChainSufficiencyValidated {
 				join.Status = models.SupplyChainSufficiencyHeuristic
 			}

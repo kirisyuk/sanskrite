@@ -1,0 +1,822 @@
+{
+  "metadata": {
+    "id": "space-satellite-sanctions-brics-gcc-2026",
+    "title": "BRICS-GCC space and satellite sanctions/compliance shock",
+    "version": "v1",
+    "description": "Secondary sanctions, export controls, launch restrictions, and cross-border compliance friction across the BRICS-GCC satellite and launch value chain.",
+    "actionOntology": "sim.action.v2"
+  },
+  "graphRequirements": {
+    "scopeAnchors": [
+      "/domain/v1/supply-chain/geo/brics-gcc/sector/space",
+      "/gov/cn/cnsa",
+      "/org/ru/roscosmos",
+      "/gov/in/isro",
+      "/market/brics/aerospace/satellite-services"
+    ],
+    "requiredPaths": [
+      "/domain/v1/supply-chain/geo/brics-gcc/sector/space",
+      "/gov/cn/cnsa",
+      "/org/ru/roscosmos",
+      "/gov/in/isro",
+      "/gov/ae/uae-space-agency",
+      "/gov/sa/saudi-space-commission",
+      "/market/brics/aerospace/satellite-services",
+      "/product/finished/electronic/assembly/small-satellites",
+      "/product/finished/mechanical/assembly/launch-vehicles",
+      "/product/finished/mechanical/assembly/rocket-engines",
+      "/fac/cn/beijing-rocket-manufacturing-plant",
+      "/fac/cn/beijing-liquid-rocket-engine-facility",
+      "/fac/ru/khimki-plant",
+      "/fac/in/satish-dhawan-space-centre",
+      "/fac/cn/wenchang-port"
+    ],
+    "requiredEdgeTypes": [
+      "SUPPLY_LINK",
+      "DEPENDS_ON",
+      "REGULATES",
+      "INFLUENCES",
+      "USED_IN"
+    ],
+    "requiredBindings": [
+      {
+        "agentClass": "export_control_officer",
+        "requiredOrigins": [
+          "/gov/cn/cnsa"
+        ],
+        "minOriginRefs": 1
+      },
+      {
+        "agentClass": "launch_manifest_planner",
+        "requiredOrigins": [
+          "/market/brics/aerospace/satellite-services"
+        ],
+        "minOriginRefs": 1
+      },
+      {
+        "agentClass": "launch_vehicle_manufacturer",
+        "requiredOrigins": [
+          "/product/finished/mechanical/assembly/launch-vehicles"
+        ],
+        "minOriginRefs": 1
+      },
+      {
+        "agentClass": "satellite_manufacturer",
+        "requiredOrigins": [
+          "/product/finished/electronic/assembly/small-satellites"
+        ],
+        "minOriginRefs": 1
+      },
+      {
+        "agentClass": "procurement_compliance_lead",
+        "requiredOrigins": [
+          "/market/brics/aerospace/satellite-services"
+        ],
+        "minOriginRefs": 1
+      },
+      {
+        "agentClass": "aerospace_settlement_bank",
+        "requiredOrigins": [
+          "/market/brics/aerospace/satellite-services"
+        ],
+        "minOriginRefs": 1
+      }
+    ]
+  },
+  "interpretation": {
+    "overlay": "space_satellite_sanctions",
+    "executiveAudience": "functional",
+    "priorityDimensions": [
+      "policy_pressure",
+      "supply_stress",
+      "price_pressure",
+      "risk_score"
+    ]
+  },
+  "population": [
+    {
+      "agentClass": "export_control_officer",
+      "displayNamePattern": "Export controls desk %d",
+      "count": 2,
+      "populationWeightBase": 1.4,
+      "populationWeightStep": 0.04,
+      "originRefs": [
+        "/gov/cn/cnsa",
+        "/domain/v1/supply-chain/geo/brics-gcc/sector/space"
+      ],
+      "allowedActions": [
+        "enforce_rule",
+        "issue_statement",
+        "broadcast_message",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.92,
+        "riskBias": 0.72
+      },
+      "beliefState": {
+        "trust": 0.58,
+        "stress": 0.42
+      },
+      "resourceState": {
+        "budget": 0.74
+      },
+      "messageStyle": "institutional",
+      "policyHints": {
+        "role": "export-controls"
+      }
+    },
+    {
+      "agentClass": "sanctions_compliance_officer",
+      "displayNamePattern": "Sanctions screening desk %d",
+      "count": 2,
+      "populationWeightBase": 1.34,
+      "populationWeightStep": 0.03,
+      "originRefs": [
+        "/market/brics/aerospace/satellite-services",
+        "/gov/cn/cnsa"
+      ],
+      "allowedActions": [
+        "issue_statement",
+        "request_exemption",
+        "change_belief",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.88,
+        "riskBias": 0.68
+      },
+      "beliefState": {
+        "trust": 0.56,
+        "stress": 0.46
+      },
+      "resourceState": {
+        "budget": 0.68
+      },
+      "messageStyle": "compliance",
+      "policyHints": {
+        "role": "screening"
+      }
+    },
+    {
+      "agentClass": "launch_regulator",
+      "displayNamePattern": "Launch regulator desk %d",
+      "count": 2,
+      "populationWeightBase": 1.28,
+      "populationWeightStep": 0.03,
+      "originRefs": [
+        "/gov/in/isro",
+        "/gov/ae/uae-space-agency"
+      ],
+      "allowedActions": [
+        "enforce_rule",
+        "issue_statement",
+        "broadcast_message",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.84,
+        "riskBias": 0.64
+      },
+      "beliefState": {
+        "trust": 0.6,
+        "stress": 0.4
+      },
+      "resourceState": {
+        "budget": 0.7
+      },
+      "messageStyle": "regulatory",
+      "policyHints": {
+        "role": "launch-licensing"
+      }
+    },
+    {
+      "agentClass": "roscosmos_program_office",
+      "displayNamePattern": "Roscosmos program office %d",
+      "count": 2,
+      "populationWeightBase": 1.22,
+      "populationWeightStep": 0.03,
+      "originRefs": [
+        "/org/ru/roscosmos",
+        "/market/brics/aerospace/satellite-services"
+      ],
+      "allowedActions": [
+        "issue_statement",
+        "request_exemption",
+        "reprioritize_flow",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.82,
+        "riskBias": 0.64
+      },
+      "beliefState": {
+        "trust": 0.44,
+        "stress": 0.48
+      },
+      "resourceState": {
+        "budget": 0.62
+      },
+      "messageStyle": "program",
+      "policyHints": {
+        "role": "program-office"
+      }
+    },
+    {
+      "agentClass": "isro_program_office",
+      "displayNamePattern": "ISRO program office %d",
+      "count": 2,
+      "populationWeightBase": 1.22,
+      "populationWeightStep": 0.03,
+      "originRefs": [
+        "/gov/in/isro",
+        "/fac/in/satish-dhawan-space-centre"
+      ],
+      "allowedActions": [
+        "issue_statement",
+        "allocate_capacity",
+        "reprioritize_flow",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.84,
+        "riskBias": 0.6
+      },
+      "beliefState": {
+        "trust": 0.5,
+        "stress": 0.42
+      },
+      "resourceState": {
+        "budget": 0.62
+      },
+      "messageStyle": "program",
+      "policyHints": {
+        "role": "program-office"
+      }
+    },
+    {
+      "agentClass": "uae_space_procurement",
+      "displayNamePattern": "UAE space procurement",
+      "count": 1,
+      "populationWeightBase": 1.1,
+      "originRefs": [
+        "/gov/ae/uae-space-agency",
+        "/market/brics/aerospace/satellite-services"
+      ],
+      "allowedActions": [
+        "delay_purchase",
+        "request_exemption",
+        "issue_statement",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.74,
+        "riskBias": 0.54
+      },
+      "beliefState": {
+        "trust": 0.52,
+        "stress": 0.4
+      },
+      "resourceState": {
+        "budget": 0.58
+      },
+      "messageStyle": "public-procurement",
+      "policyHints": {
+        "role": "customer-procurement"
+      }
+    },
+    {
+      "agentClass": "saudi_space_procurement",
+      "displayNamePattern": "Saudi space procurement",
+      "count": 1,
+      "populationWeightBase": 1.1,
+      "originRefs": [
+        "/gov/sa/saudi-space-commission",
+        "/market/brics/aerospace/satellite-services"
+      ],
+      "allowedActions": [
+        "delay_purchase",
+        "request_exemption",
+        "issue_statement",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.74,
+        "riskBias": 0.54
+      },
+      "beliefState": {
+        "trust": 0.52,
+        "stress": 0.4
+      },
+      "resourceState": {
+        "budget": 0.58
+      },
+      "messageStyle": "public-procurement",
+      "policyHints": {
+        "role": "customer-procurement"
+      }
+    },
+    {
+      "agentClass": "launch_vehicle_manufacturer",
+      "displayNamePattern": "Launch vehicle program desk %d",
+      "count": 3,
+      "populationWeightBase": 1.28,
+      "populationWeightStep": 0.04,
+      "originRefs": [
+        "/fac/cn/beijing-rocket-manufacturing-plant",
+        "/product/finished/mechanical/assembly/launch-vehicles"
+      ],
+      "allowedActions": [
+        "adjust_budget",
+        "allocate_capacity",
+        "request_exemption",
+        "issue_statement",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.82,
+        "riskBias": 0.62
+      },
+      "beliefState": {
+        "trust": 0.44,
+        "stress": 0.5
+      },
+      "beliefStateStep": {
+        "stress": 0.02
+      },
+      "resourceState": {
+        "budget": 0.56
+      },
+      "resourceStateStep": {
+        "budget": 0.02
+      },
+      "messageStyle": "industrial",
+      "policyHints": {
+        "role": "launch-vehicle-oem"
+      }
+    },
+    {
+      "agentClass": "rocket_engine_supplier",
+      "displayNamePattern": "Rocket engine supply desk %d",
+      "count": 2,
+      "populationWeightBase": 1.24,
+      "populationWeightStep": 0.03,
+      "originRefs": [
+        "/fac/cn/beijing-liquid-rocket-engine-facility",
+        "/fac/ru/khimki-plant",
+        "/product/finished/mechanical/assembly/rocket-engines"
+      ],
+      "allowedActions": [
+        "reserve_inventory",
+        "allocate_capacity",
+        "adjust_budget",
+        "issue_statement",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.78,
+        "riskBias": 0.6
+      },
+      "beliefState": {
+        "trust": 0.42,
+        "stress": 0.48
+      },
+      "resourceState": {
+        "budget": 0.54
+      },
+      "messageStyle": "supply",
+      "policyHints": {
+        "role": "engines"
+      }
+    },
+    {
+      "agentClass": "satellite_manufacturer",
+      "displayNamePattern": "Satellite manufacturing desk %d",
+      "count": 3,
+      "populationWeightBase": 1.26,
+      "populationWeightStep": 0.03,
+      "originRefs": [
+        "/product/finished/electronic/assembly/small-satellites",
+        "/fac/ru/polyot-omsk"
+      ],
+      "allowedActions": [
+        "reserve_inventory",
+        "reprioritize_flow",
+        "adjust_budget",
+        "issue_statement",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.8,
+        "riskBias": 0.58
+      },
+      "beliefState": {
+        "trust": 0.46,
+        "stress": 0.46
+      },
+      "resourceState": {
+        "budget": 0.58
+      },
+      "messageStyle": "manufacturing",
+      "policyHints": {
+        "role": "satellite-oem"
+      }
+    },
+    {
+      "agentClass": "launch_manifest_planner",
+      "displayNamePattern": "Launch manifest planning desk %d",
+      "count": 2,
+      "populationWeightBase": 1.36,
+      "populationWeightStep": 0.03,
+      "originRefs": [
+        "/fac/cn/wenchang-port",
+        "/fac/in/satish-dhawan-space-centre",
+        "/market/brics/aerospace/satellite-services"
+      ],
+      "allowedActions": [
+        "reprioritize_flow",
+        "allocate_capacity",
+        "reroute_shipment",
+        "issue_statement",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.88,
+        "riskBias": 0.66
+      },
+      "beliefState": {
+        "trust": 0.4,
+        "stress": 0.5
+      },
+      "resourceState": {
+        "budget": 0.62
+      },
+      "messageStyle": "planning",
+      "policyHints": {
+        "role": "manifest"
+      }
+    },
+    {
+      "agentClass": "cross_border_logistics_operator",
+      "displayNamePattern": "Cross-border aerospace logistics %d",
+      "count": 2,
+      "populationWeightBase": 1.18,
+      "populationWeightStep": 0.03,
+      "originRefs": [
+        "/market/brics/aerospace/satellite-services",
+        "/fac/cn/wenchang-port"
+      ],
+      "allowedActions": [
+        "reroute_shipment",
+        "expedite_shipment",
+        "adjust_budget",
+        "issue_statement",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.76,
+        "riskBias": 0.58
+      },
+      "beliefState": {
+        "trust": 0.42,
+        "stress": 0.46
+      },
+      "resourceState": {
+        "budget": 0.52
+      },
+      "messageStyle": "logistics",
+      "policyHints": {
+        "role": "cross-border"
+      }
+    },
+    {
+      "agentClass": "satellite_services_customer",
+      "displayNamePattern": "Satellite services customer %d",
+      "count": 2,
+      "populationWeightBase": 1.08,
+      "populationWeightStep": 0.02,
+      "originRefs": [
+        "/market/brics/aerospace/satellite-services",
+        "/gov/ae/uae-space-agency"
+      ],
+      "allowedActions": [
+        "delay_purchase",
+        "issue_statement",
+        "change_belief",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.7,
+        "riskBias": 0.52
+      },
+      "beliefState": {
+        "trust": 0.48,
+        "stress": 0.42
+      },
+      "resourceState": {
+        "budget": 0.56
+      },
+      "messageStyle": "customer",
+      "policyHints": {
+        "role": "demand"
+      }
+    },
+    {
+      "agentClass": "aerospace_settlement_bank",
+      "displayNamePattern": "Aerospace settlement bank %d",
+      "count": 2,
+      "populationWeightBase": 1.16,
+      "populationWeightStep": 0.03,
+      "originRefs": [
+        "/market/brics/aerospace/satellite-services"
+      ],
+      "allowedActions": [
+        "adjust_budget",
+        "hedge_cost",
+        "issue_statement",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.74,
+        "riskBias": 0.6
+      },
+      "beliefState": {
+        "trust": 0.46,
+        "stress": 0.44
+      },
+      "resourceState": {
+        "budget": 0.7
+      },
+      "messageStyle": "finance",
+      "policyHints": {
+        "role": "settlement"
+      }
+    },
+    {
+      "agentClass": "space_insurer",
+      "displayNamePattern": "Space insurance desk",
+      "count": 1,
+      "populationWeightBase": 1.08,
+      "originRefs": [
+        "/market/brics/aerospace/satellite-services"
+      ],
+      "allowedActions": [
+        "adjust_budget",
+        "adjust_guidance",
+        "issue_statement",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.72,
+        "riskBias": 0.58
+      },
+      "beliefState": {
+        "trust": 0.5,
+        "stress": 0.4
+      },
+      "resourceState": {
+        "budget": 0.68
+      },
+      "messageStyle": "risk",
+      "policyHints": {
+        "role": "insurance"
+      }
+    },
+    {
+      "agentClass": "procurement_compliance_lead",
+      "displayNamePattern": "Procurement compliance lead %d",
+      "count": 2,
+      "populationWeightBase": 1.32,
+      "populationWeightStep": 0.03,
+      "originRefs": [
+        "/market/brics/aerospace/satellite-services",
+        "/gov/sa/saudi-space-commission"
+      ],
+      "allowedActions": [
+        "request_exemption",
+        "reprioritize_flow",
+        "adjust_budget",
+        "issue_statement",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.9,
+        "riskBias": 0.68
+      },
+      "beliefState": {
+        "trust": 0.42,
+        "stress": 0.52
+      },
+      "resourceState": {
+        "budget": 0.6
+      },
+      "messageStyle": "compliance-ops",
+      "policyHints": {
+        "role": "counterparty-screening"
+      }
+    },
+    {
+      "agentClass": "market_intelligence_analyst",
+      "displayNamePattern": "Space market intelligence",
+      "count": 1,
+      "populationWeightBase": 1.02,
+      "originRefs": [
+        "/market/brics/aerospace/satellite-services"
+      ],
+      "allowedActions": [
+        "broadcast_message",
+        "adjust_guidance",
+        "change_belief",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.88,
+        "riskBias": 0.56
+      },
+      "beliefState": {
+        "trust": 0.54,
+        "stress": 0.32
+      },
+      "resourceState": {
+        "budget": 0.62
+      },
+      "messageStyle": "analysis",
+      "policyHints": {
+        "role": "market-intel"
+      }
+    },
+    {
+      "agentClass": "pr_agent",
+      "displayNamePattern": "Space PR desk",
+      "count": 1,
+      "populationWeightBase": 1.0,
+      "originRefs": [
+        "/market/brics/aerospace/satellite-services",
+        "/org/ru/roscosmos"
+      ],
+      "allowedActions": [
+        "broadcast_message",
+        "issue_statement",
+        "adjust_guidance",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.9,
+        "riskBias": 0.54
+      },
+      "beliefState": {
+        "trust": 0.56,
+        "stress": 0.3
+      },
+      "resourceState": {
+        "budget": 0.64
+      },
+      "messageStyle": "communications",
+      "policyHints": {
+        "role": "external-comms"
+      }
+    }
+  ],
+  "directInteractions": [
+    {
+      "id": "export_enforcement_hits_manufacturing",
+      "axes": [
+        "legal/compliance"
+      ],
+      "sourceClasses": [
+        "export_control_officer",
+        "launch_regulator"
+      ],
+      "actionTypes": [
+        "enforce_rule"
+      ],
+      "minStep": 0,
+      "targetSelectors": [
+        "launch_vehicle_manufacturer",
+        "satellite_manufacturer",
+        "aerospace_settlement_bank",
+        "procurement_compliance_lead"
+      ],
+      "limit": 4,
+      "effects": {
+        "stressDelta": 0.08,
+        "trustDelta": -0.05,
+        "budgetDelta": -0.05,
+        "attentionDelta": 0.07
+      }
+    },
+    {
+      "id": "compliance_triage_pulls_regulators",
+      "axes": [
+        "legal/compliance",
+        "financial/settlement"
+      ],
+      "sourceClasses": [
+        "procurement_compliance_lead",
+        "sanctions_compliance_officer"
+      ],
+      "actionTypes": [
+        "request_exemption",
+        "issue_statement"
+      ],
+      "minStep": 1,
+      "targetSelectors": [
+        "export_control_officer",
+        "launch_regulator",
+        "roscosmos_program_office",
+        "isro_program_office"
+      ],
+      "limit": 4,
+      "effects": {
+        "stressDelta": 0.03,
+        "trustDelta": 0.02,
+        "budgetDelta": 0.0,
+        "attentionDelta": 0.08
+      }
+    },
+    {
+      "id": "manifest_reprioritization_hits_customers",
+      "axes": [
+        "physical_flow/demand"
+      ],
+      "sourceClasses": [
+        "launch_manifest_planner"
+      ],
+      "actionTypes": [
+        "reprioritize_flow",
+        "allocate_capacity"
+      ],
+      "minStep": 1,
+      "targetSelectors": [
+        "satellite_services_customer",
+        "uae_space_procurement",
+        "saudi_space_procurement",
+        "launch_vehicle_manufacturer"
+      ],
+      "limit": 4,
+      "effects": {
+        "stressDelta": 0.06,
+        "trustDelta": -0.03,
+        "budgetDelta": -0.02,
+        "attentionDelta": 0.05
+      }
+    },
+    {
+      "id": "bank_repricing_hits_delivery_chain",
+      "axes": [
+        "financial/settlement"
+      ],
+      "sourceClasses": [
+        "aerospace_settlement_bank",
+        "space_insurer"
+      ],
+      "actionTypes": [
+        "adjust_budget",
+        "adjust_guidance",
+        "hedge_cost"
+      ],
+      "minStep": 1,
+      "targetSelectors": [
+        "launch_vehicle_manufacturer",
+        "rocket_engine_supplier",
+        "satellite_manufacturer",
+        "satellite_services_customer"
+      ],
+      "limit": 4,
+      "effects": {
+        "stressDelta": 0.05,
+        "trustDelta": -0.02,
+        "budgetDelta": -0.06,
+        "attentionDelta": 0.03
+      }
+    },
+    {
+      "id": "narrative_spillover_changes_customer_attention",
+      "axes": [
+        "info/uncertainty"
+      ],
+      "sourceClasses": [
+        "market_intelligence_analyst",
+        "pr_agent"
+      ],
+      "actionTypes": [
+        "broadcast_message",
+        "adjust_guidance"
+      ],
+      "minStep": 0,
+      "targetSelectors": [
+        "satellite_services_customer",
+        "uae_space_procurement",
+        "saudi_space_procurement",
+        "procurement_compliance_lead"
+      ],
+      "limit": 4,
+      "effects": {
+        "stressDelta": 0.03,
+        "trustDelta": -0.03,
+        "budgetDelta": 0.0,
+        "attentionDelta": 0.09
+      }
+    }
+  ]
+}

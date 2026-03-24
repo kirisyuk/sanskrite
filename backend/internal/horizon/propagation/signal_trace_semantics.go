@@ -83,6 +83,7 @@ func classifySignalChannel(axis string, edgeType horizonmodels.DependencyType) s
 		return "regulatory"
 	case horizonmodels.DependencyTypeDependsOn,
 		horizonmodels.DependencyTypeSuppliesTo,
+		horizonmodels.DependencyTypeUsedIn,
 		horizonmodels.DependencyTypeParticipatesIn,
 		horizonmodels.DependencyTypeTradedIn,
 		horizonmodels.DependencyTypeInvestsIn:

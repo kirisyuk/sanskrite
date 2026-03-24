@@ -105,6 +105,7 @@ func classifyEdgeFamily(axis string, fromFrag *horizonmodels.HorizonFragment, ed
 	case horizonmodels.DependencyTypeSuppliesTo,
 		horizonmodels.DependencyTypeTransformsInto,
 		horizonmodels.DependencyTypeAssemblesInto,
+		horizonmodels.DependencyTypeUsedIn,
 		horizonmodels.DependencyTypeExtractsFrom,
 		horizonmodels.DependencyTypeProduces:
 		if strings.Contains(text, "lng") || strings.Contains(text, "gas") || strings.Contains(text, "pipeline") || strings.Contains(text, "refinery") {

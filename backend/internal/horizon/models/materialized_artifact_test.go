@@ -218,6 +218,64 @@ func TestBuildSupplyChainPathPayloadDetailed_WithFamily(t *testing.T) {
 	}
 }
 
+func TestBuildSupplyChainPathPayloadDetailed_IncludesMetricSummary(t *testing.T) {
+	payload := BuildSupplyChainPathPayloadDetailed(
+		[]SupplyChainPathNode{{Type: "org", Ref: "/org/us/slb"}},
+		nil,
+		[]SupplyChainPathLeg{{Index: 0, BindingConfidence: 0.72}},
+		&SupplyChainPathStress{
+			PathScore:          0.81,
+			RecoveryLatencyHrs: 96,
+			BottleneckLegIndex: 0,
+		},
+		nil,
+		nil,
+		nil,
+	)
+	metrics, ok := payload["metrics"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected payload metrics block, got %#v", payload["metrics"])
+	}
+	if got := metrics["pathStressScore"]; got != 0.81 {
+		t.Fatalf("pathStressScore=%v, want 0.81", got)
+	}
+	if got := metrics["legCount"]; got != 1 {
+		t.Fatalf("legCount=%v, want 1", got)
+	}
+}
+
+func TestPopulateMaterializedArtifactIndexesSetsPathMetricIndexes(t *testing.T) {
+	artifact := &MaterializedArtifact{
+		Kind: MaterializedKindSupplyChainPath,
+		Payload: BuildSupplyChainPathPayloadDetailed(
+			[]SupplyChainPathNode{{Type: "org", Ref: "/org/us/slb"}},
+			nil,
+			[]SupplyChainPathLeg{{Index: 0, BindingConfidence: 0.66}},
+			&SupplyChainPathStress{
+				PathScore:          0.74,
+				RecoveryLatencyHrs: 72,
+				BottleneckLegIndex: 0,
+			},
+			nil,
+			nil,
+			nil,
+		),
+	}
+	PopulateMaterializedArtifactIndexes(artifact)
+	if artifact.LegCount != 1 {
+		t.Fatalf("legCount=%d, want 1", artifact.LegCount)
+	}
+	if artifact.BindingScore <= 0.65 || artifact.BindingScore >= 0.67 {
+		t.Fatalf("bindingScore=%.3f, want ~0.66", artifact.BindingScore)
+	}
+	if artifact.PathStressScore != 0.74 {
+		t.Fatalf("pathStressScore=%.2f, want 0.74", artifact.PathStressScore)
+	}
+	if artifact.RecoveryLatencyHrs != 72 {
+		t.Fatalf("recoveryLatencyHrs=%.1f, want 72", artifact.RecoveryLatencyHrs)
+	}
+}
+
 func TestParseSupplyChainPathPayload(t *testing.T) {
 	payload := map[string]interface{}{
 		"v": float64(1), // JSON unmarshal uses float64

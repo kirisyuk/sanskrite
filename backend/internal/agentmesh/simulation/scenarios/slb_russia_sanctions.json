@@ -1,0 +1,676 @@
+{
+  "metadata": {
+    "id": "slb-russia-sanctions-2026",
+    "title": "SLB Russia sanctions and transshipment shock",
+    "version": "v1",
+    "description": "Secondary sanctions, export-control pressure, transshipment friction, and localization stress across SLB-related oilfield-services flows into Russia.",
+    "actionOntology": "sim.action.v2"
+  },
+  "graphRequirements": {
+    "scopeAnchors": [
+      "/org/us/slb",
+      "/domain/v1/supply-chain/geo/ru/subject/slb",
+      "/domain/v1/policy-impact/geo/ru/topic/sanctions",
+      "/market/ru/energy/oilfield-services",
+      "/fac/ae/jebel-ali-logistics-center"
+    ],
+    "requiredPaths": [
+      "/org/us/slb",
+      "/org/ae/schlumberger-middle-east",
+      "/loc/ru",
+      "/domain/v1/supply-chain/geo/ru/subject/slb",
+      "/domain/v1/policy-impact/geo/ru/topic/sanctions",
+      "/market/ru/energy/oilfield-services",
+      "/fac/ae/jebel-ali-logistics-center",
+      "/fac/ru/rosneft-supply-base",
+      "/fac/ru/tyumen-reda-pump-plant",
+      "/fac/ru/tyumen-specialty-chemicals-plant",
+      "/fac/kz/atyrau-liquid-mud-plant",
+      "/fac/kz/kazphosphate-taraz-plant",
+      "/fac/cn/jereh-yantai-manufacturing-center",
+      "/fac/cn/kerui-petroleum-dongying-factory",
+      "/product/finished/mechanical/assembly/centrifugal-pumps",
+      "/product/finished/mechanical/assembly/well-completion-systems",
+      "/product/finished/chemical/manufacturing/specialty-drilling-chemicals",
+      "/product/raw/chemical/distribution/bulk-drilling-chemicals"
+    ],
+    "requiredEdgeTypes": [
+      "SUPPLY_LINK",
+      "DEPENDS_ON",
+      "SUPPLIES_TO",
+      "PRODUCES",
+      "REGULATES",
+      "INFLUENCES"
+    ],
+    "requiredBindings": [
+      {
+        "agentClass": "slb_russia_procurement_lead",
+        "requiredOrigins": [
+          "/org/us/slb",
+          "/market/ru/energy/oilfield-services"
+        ],
+        "minOriginRefs": 1
+      },
+      {
+        "agentClass": "jebel_ali_hub_operator",
+        "requiredOrigins": [
+          "/fac/ae/jebel-ali-logistics-center"
+        ],
+        "minOriginRefs": 1
+      },
+      {
+        "agentClass": "tyumen_pump_assembly_operator",
+        "requiredOrigins": [
+          "/fac/ru/tyumen-reda-pump-plant"
+        ],
+        "minOriginRefs": 1
+      },
+      {
+        "agentClass": "tyumen_chemicals_operator",
+        "requiredOrigins": [
+          "/fac/ru/tyumen-specialty-chemicals-plant"
+        ],
+        "minOriginRefs": 1
+      },
+      {
+        "agentClass": "sanctions_compliance_officer",
+        "requiredOrigins": [
+          "/domain/v1/policy-impact/geo/ru/topic/sanctions"
+        ],
+        "minOriginRefs": 1
+      }
+    ]
+  },
+  "interpretation": {
+    "overlay": "slb_russia_sanctions",
+    "executiveAudience": "functional",
+    "priorityDimensions": [
+      "policy_pressure",
+      "supply_stress",
+      "price_pressure",
+      "risk_score"
+    ]
+  },
+  "population": [
+    {
+      "agentClass": "export_control_officer",
+      "displayNamePattern": "Export controls desk %d",
+      "count": 2,
+      "populationWeightBase": 1.36,
+      "populationWeightStep": 0.03,
+      "originRefs": [
+        "/domain/v1/policy-impact/geo/ru/topic/sanctions"
+      ],
+      "allowedActions": [
+        "enforce_rule",
+        "issue_statement",
+        "broadcast_message",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.9,
+        "riskBias": 0.72
+      },
+      "beliefState": {
+        "trust": 0.58,
+        "stress": 0.4
+      },
+      "resourceState": {
+        "budget": 0.72
+      },
+      "messageStyle": "institutional",
+      "policyHints": {
+        "role": "export-controls"
+      }
+    },
+    {
+      "agentClass": "sanctions_compliance_officer",
+      "displayNamePattern": "Sanctions compliance desk %d",
+      "count": 2,
+      "populationWeightBase": 1.32,
+      "populationWeightStep": 0.03,
+      "originRefs": [
+        "/org/us/slb",
+        "/domain/v1/policy-impact/geo/ru/topic/sanctions"
+      ],
+      "allowedActions": [
+        "request_exemption",
+        "issue_statement",
+        "change_belief",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.88,
+        "riskBias": 0.68
+      },
+      "beliefState": {
+        "trust": 0.54,
+        "stress": 0.46
+      },
+      "resourceState": {
+        "budget": 0.68
+      },
+      "messageStyle": "compliance",
+      "policyHints": {
+        "role": "sanctions-screening"
+      }
+    },
+    {
+      "agentClass": "transshipment_compliance_officer",
+      "displayNamePattern": "Transshipment compliance desk %d",
+      "count": 2,
+      "populationWeightBase": 1.24,
+      "populationWeightStep": 0.03,
+      "originRefs": [
+        "/fac/ae/jebel-ali-logistics-center",
+        "/org/ae/schlumberger-middle-east"
+      ],
+      "allowedActions": [
+        "request_exemption",
+        "issue_statement",
+        "reprioritize_flow",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.86,
+        "riskBias": 0.64
+      },
+      "beliefState": {
+        "trust": 0.52,
+        "stress": 0.44
+      },
+      "resourceState": {
+        "budget": 0.64
+      },
+      "messageStyle": "compliance-ops",
+      "policyHints": {
+        "role": "transshipment-gate"
+      }
+    },
+    {
+      "agentClass": "slb_russia_procurement_lead",
+      "displayNamePattern": "SLB Russia procurement lead %d",
+      "count": 2,
+      "populationWeightBase": 1.44,
+      "populationWeightStep": 0.04,
+      "originRefs": [
+        "/org/us/slb",
+        "/market/ru/energy/oilfield-services"
+      ],
+      "allowedActions": [
+        "request_exemption",
+        "switch_supplier",
+        "adjust_budget",
+        "reprioritize_flow",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.94,
+        "riskBias": 0.7
+      },
+      "beliefState": {
+        "trust": 0.4,
+        "stress": 0.54
+      },
+      "resourceState": {
+        "budget": 0.58
+      },
+      "messageStyle": "procurement",
+      "policyHints": {
+        "role": "russia-procurement"
+      }
+    },
+    {
+      "agentClass": "jebel_ali_hub_operator",
+      "displayNamePattern": "Jebel Ali hub operator %d",
+      "count": 2,
+      "populationWeightBase": 1.26,
+      "populationWeightStep": 0.03,
+      "originRefs": [
+        "/fac/ae/jebel-ali-logistics-center",
+        "/org/ae/schlumberger-middle-east"
+      ],
+      "allowedActions": [
+        "reroute_shipment",
+        "reserve_inventory",
+        "issue_statement",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.84,
+        "riskBias": 0.6
+      },
+      "beliefState": {
+        "trust": 0.46,
+        "stress": 0.44
+      },
+      "resourceState": {
+        "budget": 0.54
+      },
+      "messageStyle": "logistics",
+      "policyHints": {
+        "role": "hub-ops"
+      }
+    },
+    {
+      "agentClass": "tyumen_pump_assembly_operator",
+      "displayNamePattern": "Tyumen REDA assembly %d",
+      "count": 2,
+      "populationWeightBase": 1.2,
+      "populationWeightStep": 0.03,
+      "originRefs": [
+        "/fac/ru/tyumen-reda-pump-plant",
+        "/product/finished/mechanical/assembly/centrifugal-pumps"
+      ],
+      "allowedActions": [
+        "allocate_capacity",
+        "reserve_inventory",
+        "adjust_budget",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.78,
+        "riskBias": 0.6
+      },
+      "beliefState": {
+        "trust": 0.44,
+        "stress": 0.48
+      },
+      "resourceState": {
+        "budget": 0.52
+      },
+      "messageStyle": "industrial",
+      "policyHints": {
+        "role": "local-assembly"
+      }
+    },
+    {
+      "agentClass": "tyumen_chemicals_operator",
+      "displayNamePattern": "Tyumen chemicals operator %d",
+      "count": 2,
+      "populationWeightBase": 1.18,
+      "populationWeightStep": 0.03,
+      "originRefs": [
+        "/fac/ru/tyumen-specialty-chemicals-plant",
+        "/product/finished/chemical/manufacturing/specialty-drilling-chemicals"
+      ],
+      "allowedActions": [
+        "allocate_capacity",
+        "switch_supplier",
+        "adjust_budget",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.76,
+        "riskBias": 0.58
+      },
+      "beliefState": {
+        "trust": 0.46,
+        "stress": 0.46
+      },
+      "resourceState": {
+        "budget": 0.54
+      },
+      "messageStyle": "industrial",
+      "policyHints": {
+        "role": "local-chemicals"
+      }
+    },
+    {
+      "agentClass": "china_equipment_supplier",
+      "displayNamePattern": "Chinese OFS supplier %d",
+      "count": 2,
+      "populationWeightBase": 1.16,
+      "populationWeightStep": 0.03,
+      "originRefs": [
+        "/fac/cn/jereh-yantai-manufacturing-center",
+        "/fac/cn/kerui-petroleum-dongying-factory"
+      ],
+      "allowedActions": [
+        "reserve_inventory",
+        "issue_statement",
+        "adjust_budget",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.72,
+        "riskBias": 0.58
+      },
+      "beliefState": {
+        "trust": 0.48,
+        "stress": 0.4
+      },
+      "resourceState": {
+        "budget": 0.56
+      },
+      "messageStyle": "supplier",
+      "policyHints": {
+        "role": "equipment"
+      }
+    },
+    {
+      "agentClass": "kazakh_chemical_supplier",
+      "displayNamePattern": "Kazakh chemicals supplier %d",
+      "count": 2,
+      "populationWeightBase": 1.14,
+      "populationWeightStep": 0.03,
+      "originRefs": [
+        "/fac/kz/atyrau-liquid-mud-plant",
+        "/fac/kz/kazphosphate-taraz-plant"
+      ],
+      "allowedActions": [
+        "reserve_inventory",
+        "switch_supplier",
+        "issue_statement",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.7,
+        "riskBias": 0.54
+      },
+      "beliefState": {
+        "trust": 0.5,
+        "stress": 0.38
+      },
+      "resourceState": {
+        "budget": 0.58
+      },
+      "messageStyle": "supplier",
+      "policyHints": {
+        "role": "chemicals"
+      }
+    },
+    {
+      "agentClass": "russian_oilfield_customer",
+      "displayNamePattern": "Russian oilfield customer %d",
+      "count": 2,
+      "populationWeightBase": 1.12,
+      "populationWeightStep": 0.02,
+      "originRefs": [
+        "/fac/ru/rosneft-supply-base",
+        "/market/ru/energy/oilfield-services"
+      ],
+      "allowedActions": [
+        "delay_purchase",
+        "change_belief",
+        "issue_statement",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.74,
+        "riskBias": 0.52
+      },
+      "beliefState": {
+        "trust": 0.5,
+        "stress": 0.42
+      },
+      "resourceState": {
+        "budget": 0.56
+      },
+      "messageStyle": "customer",
+      "policyHints": {
+        "role": "oilfield-customer"
+      }
+    },
+    {
+      "agentClass": "ofs_settlement_bank",
+      "displayNamePattern": "OFS settlement bank %d",
+      "count": 2,
+      "populationWeightBase": 1.16,
+      "populationWeightStep": 0.02,
+      "originRefs": [
+        "/market/ru/energy/oilfield-services"
+      ],
+      "allowedActions": [
+        "hedge_cost",
+        "adjust_budget",
+        "issue_statement",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.74,
+        "riskBias": 0.6
+      },
+      "beliefState": {
+        "trust": 0.46,
+        "stress": 0.4
+      },
+      "resourceState": {
+        "budget": 0.7
+      },
+      "messageStyle": "finance",
+      "policyHints": {
+        "role": "settlement"
+      }
+    },
+    {
+      "agentClass": "trade_credit_insurer",
+      "displayNamePattern": "Trade credit insurer %d",
+      "count": 1,
+      "populationWeightBase": 1.08,
+      "populationWeightStep": 0.0,
+      "originRefs": [
+        "/market/ru/energy/oilfield-services"
+      ],
+      "allowedActions": [
+        "adjust_guidance",
+        "issue_statement",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.72,
+        "riskBias": 0.56
+      },
+      "beliefState": {
+        "trust": 0.5,
+        "stress": 0.36
+      },
+      "resourceState": {
+        "budget": 0.68
+      },
+      "messageStyle": "risk",
+      "policyHints": {
+        "role": "insurance"
+      }
+    },
+    {
+      "agentClass": "parallel_import_broker",
+      "displayNamePattern": "Parallel-import broker %d",
+      "count": 2,
+      "populationWeightBase": 1.08,
+      "populationWeightStep": 0.02,
+      "originRefs": [
+        "/fac/ae/jebel-ali-logistics-center",
+        "/loc/ru"
+      ],
+      "allowedActions": [
+        "reroute_shipment",
+        "switch_supplier",
+        "broadcast_message",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.8,
+        "riskBias": 0.58
+      },
+      "beliefState": {
+        "trust": 0.42,
+        "stress": 0.44
+      },
+      "resourceState": {
+        "budget": 0.5
+      },
+      "messageStyle": "grey-trade",
+      "policyHints": {
+        "role": "routing"
+      }
+    },
+    {
+      "agentClass": "market_intelligence_analyst",
+      "displayNamePattern": "Oilfield market intelligence %d",
+      "count": 1,
+      "populationWeightBase": 1.02,
+      "populationWeightStep": 0.0,
+      "originRefs": [
+        "/market/ru/energy/oilfield-services"
+      ],
+      "allowedActions": [
+        "broadcast_message",
+        "change_belief",
+        "adjust_guidance",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.88,
+        "riskBias": 0.56
+      },
+      "beliefState": {
+        "trust": 0.54,
+        "stress": 0.3
+      },
+      "resourceState": {
+        "budget": 0.6
+      },
+      "messageStyle": "analysis",
+      "policyHints": {
+        "role": "market-intel"
+      }
+    },
+    {
+      "agentClass": "pr_agent",
+      "displayNamePattern": "SLB Russia PR desk",
+      "count": 1,
+      "populationWeightBase": 1.02,
+      "populationWeightStep": 0.0,
+      "originRefs": [
+        "/org/us/slb",
+        "/market/ru/energy/oilfield-services"
+      ],
+      "allowedActions": [
+        "broadcast_message",
+        "issue_statement",
+        "adjust_guidance",
+        "do_nothing"
+      ],
+      "traits": {
+        "attention": 0.9,
+        "riskBias": 0.54
+      },
+      "beliefState": {
+        "trust": 0.56,
+        "stress": 0.3
+      },
+      "resourceState": {
+        "budget": 0.62
+      },
+      "messageStyle": "communications",
+      "policyHints": {
+        "role": "external-comms"
+      }
+    }
+  ],
+  "directInteractions": [
+    {
+      "id": "sanctions-gate-procurement",
+      "axes": [
+        "legal/compliance",
+        "legal/access"
+      ],
+      "sourceClasses": [
+        "export_control_officer",
+        "sanctions_compliance_officer",
+        "transshipment_compliance_officer"
+      ],
+      "actionTypes": [
+        "enforce_rule",
+        "request_exemption",
+        "issue_statement"
+      ],
+      "minStep": 0,
+      "maxStep": 5,
+      "variantMin": 0,
+      "variantMax": 6,
+      "targetSelectors": [
+        "slb_russia_procurement_lead",
+        "jebel_ali_hub_operator",
+        "parallel_import_broker"
+      ],
+      "limit": 3,
+      "effects": {
+        "stressDelta": 0.08,
+        "trustDelta": -0.03,
+        "budgetDelta": -0.02,
+        "attentionDelta": 0.05
+      }
+    },
+    {
+      "id": "hub-pressure-localization",
+      "axes": [
+        "physical_flow/supply",
+        "logistics/capacity",
+        "logistics/latency"
+      ],
+      "sourceClasses": [
+        "jebel_ali_hub_operator",
+        "parallel_import_broker",
+        "slb_russia_procurement_lead"
+      ],
+      "actionTypes": [
+        "reroute_shipment",
+        "reprioritize_flow",
+        "switch_supplier"
+      ],
+      "minStep": 1,
+      "maxStep": 5,
+      "variantMin": 0,
+      "variantMax": 6,
+      "targetSelectors": [
+        "tyumen_pump_assembly_operator",
+        "tyumen_chemicals_operator",
+        "russian_oilfield_customer"
+      ],
+      "limit": 3,
+      "effects": {
+        "stressDelta": 0.05,
+        "trustDelta": -0.01,
+        "budgetDelta": -0.03,
+        "attentionDelta": 0.04
+      }
+    },
+    {
+      "id": "finance-to-narrative",
+      "axes": [
+        "financial/settlement",
+        "info/reputation",
+        "info/uncertainty"
+      ],
+      "sourceClasses": [
+        "ofs_settlement_bank",
+        "trade_credit_insurer",
+        "market_intelligence_analyst"
+      ],
+      "actionTypes": [
+        "hedge_cost",
+        "adjust_guidance",
+        "change_belief",
+        "issue_statement"
+      ],
+      "minStep": 1,
+      "maxStep": 5,
+      "variantMin": 0,
+      "variantMax": 6,
+      "targetSelectors": [
+        "pr_agent",
+        "slb_russia_procurement_lead",
+        "russian_oilfield_customer"
+      ],
+      "limit": 3,
+      "effects": {
+        "stressDelta": 0.04,
+        "trustDelta": -0.03,
+        "budgetDelta": -0.02,
+        "attentionDelta": 0.06
+      }
+    }
+  ]
+}

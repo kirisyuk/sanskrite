@@ -117,6 +117,22 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
     return 'graph';
   });
 
+  const graphModeActive = viewMode === 'cockpit' && lensView === 'graph';
+  const mapModeActive = viewMode === 'cockpit' && lensView === 'map';
+  const analysisModeActive = viewMode === 'cockpit' && lensView === 'analysis';
+  const briefModeActive = viewMode === 'cockpit' && lensView === 'brief';
+  const tabActiveBackground = 'var(--white-10)';
+  const tabHoverBackground = theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(15,23,42,0.06)';
+
+  const handleTabMouseEnter = React.useCallback((event: React.MouseEvent<HTMLButtonElement>, active: boolean) => {
+    if (active) return;
+    event.currentTarget.style.background = tabHoverBackground;
+  }, [tabHoverBackground]);
+
+  const handleTabMouseLeave = React.useCallback((event: React.MouseEvent<HTMLButtonElement>, active: boolean) => {
+    event.currentTarget.style.background = active ? tabActiveBackground : 'transparent';
+  }, []);
+
   const setLensView = React.useCallback(
     (next: LensViewMode) => {
       setLensViewState(next);
@@ -446,40 +462,19 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
         >
           {(lensId || lens) && (
             <>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={viewMode === 'assembly'}
-                aria-controls="lens-assembly-panel"
-                onClick={() => setViewMode('assembly')}
-                title="Assembly"
-                style={{
-                  border: 'none',
-                  background: viewMode === 'assembly' ? 'var(--white-10)' : 'transparent',
-                  color: 'var(--text-heading)',
-                  borderRadius: 10,
-                  padding: '6px 10px',
-                  cursor: 'pointer',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: 12,
-                  fontWeight: 600,
-                }}
-              >
-                Assembly
-              </button>
               {/* Graph | Map | Analysis — plan §1. Graph persists when switching. */}
               <button
                 type="button"
                 role="tab"
-                aria-selected={lensView === 'graph'}
+                aria-selected={graphModeActive}
                 aria-controls="lens-graph-panel"
                 onClick={() => { setLensView('graph'); setViewMode('cockpit'); }}
+                onMouseEnter={(event) => handleTabMouseEnter(event, graphModeActive)}
+                onMouseLeave={(event) => handleTabMouseLeave(event, graphModeActive)}
                 title="Graph"
                 style={{
                   border: 'none',
-                  background: lensView === 'graph' ? 'var(--white-10)' : 'transparent',
+                  background: graphModeActive ? tabActiveBackground : 'transparent',
                   color: 'var(--text-heading)',
                   borderRadius: 10,
                   padding: '6px 10px',
@@ -496,13 +491,15 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
               <button
                 type="button"
                 role="tab"
-                aria-selected={lensView === 'map'}
+                aria-selected={mapModeActive}
                 aria-controls="lens-map-panel"
                 onClick={() => { setLensView('map'); setViewMode('cockpit'); }}
+                onMouseEnter={(event) => handleTabMouseEnter(event, mapModeActive)}
+                onMouseLeave={(event) => handleTabMouseLeave(event, mapModeActive)}
                 title="Map"
                 style={{
                   border: 'none',
-                  background: lensView === 'map' ? 'var(--white-10)' : 'transparent',
+                  background: mapModeActive ? tabActiveBackground : 'transparent',
                   color: 'var(--text-heading)',
                   borderRadius: 10,
                   padding: '6px 10px',
@@ -519,13 +516,15 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
               <button
                 type="button"
                 role="tab"
-                aria-selected={lensView === 'analysis'}
+                aria-selected={analysisModeActive}
                 aria-controls="lens-analysis-panel"
                 onClick={() => { setLensView('analysis'); setViewMode('cockpit'); }}
+                onMouseEnter={(event) => handleTabMouseEnter(event, analysisModeActive)}
+                onMouseLeave={(event) => handleTabMouseLeave(event, analysisModeActive)}
                 title="Analysis"
                 style={{
                   border: 'none',
-                  background: lensView === 'analysis' ? 'var(--white-10)' : 'transparent',
+                  background: analysisModeActive ? tabActiveBackground : 'transparent',
                   color: 'var(--text-heading)',
                   borderRadius: 10,
                   padding: '6px 10px',
@@ -542,13 +541,15 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
               <button
                 type="button"
                 role="tab"
-                aria-selected={lensView === 'brief'}
+                aria-selected={briefModeActive}
                 aria-controls="lens-brief-panel"
                 onClick={() => { setLensView('brief'); setViewMode('cockpit'); }}
+                onMouseEnter={(event) => handleTabMouseEnter(event, briefModeActive)}
+                onMouseLeave={(event) => handleTabMouseLeave(event, briefModeActive)}
                 title="Lens Brief"
                 style={{
                   border: 'none',
-                  background: lensView === 'brief' ? 'var(--white-10)' : 'transparent',
+                  background: briefModeActive ? tabActiveBackground : 'transparent',
                   color: 'var(--text-heading)',
                   borderRadius: 10,
                   padding: '6px 10px',
@@ -569,10 +570,12 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                 aria-selected={viewMode === 'details'}
                 aria-controls="lens-details-panel"
                 onClick={() => setViewMode('details')}
+                onMouseEnter={(event) => handleTabMouseEnter(event, viewMode === 'details')}
+                onMouseLeave={(event) => handleTabMouseLeave(event, viewMode === 'details')}
                 title="Details"
                 style={{
                   border: 'none',
-                  background: viewMode === 'details' ? 'var(--white-10)' : 'transparent',
+                  background: viewMode === 'details' ? tabActiveBackground : 'transparent',
                   color: 'var(--text-heading)',
                   borderRadius: 10,
                   padding: '6px 8px',
@@ -596,10 +599,12 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
             aria-selected={viewMode === 'progress'}
             aria-controls="lens-progress-panel"
             onClick={() => setViewMode('progress')}
+            onMouseEnter={(event) => handleTabMouseEnter(event, viewMode === 'progress')}
+            onMouseLeave={(event) => handleTabMouseLeave(event, viewMode === 'progress')}
             title="Progress"
             style={{
               border: 'none',
-              background: viewMode === 'progress' ? 'var(--white-10)' : 'transparent',
+              background: viewMode === 'progress' ? tabActiveBackground : 'transparent',
               color: 'var(--text-heading)',
               borderRadius: 10,
               padding: '6px 8px',

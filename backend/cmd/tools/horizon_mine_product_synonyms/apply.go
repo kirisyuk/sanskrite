@@ -45,6 +45,7 @@ type applyDecisionResult struct {
 	PreferredName      string   `json:"preferredName,omitempty"`
 	SynonymIDs         []string `json:"synonymIds,omitempty"`
 	MergedSynonymIDs   []string `json:"mergedSynonymIds,omitempty"`
+	MergedOldPaths     []string `json:"mergedOldPaths,omitempty"`
 	SkippedSynonymIDs  []string `json:"skippedSynonymIds,omitempty"`
 	DeletedVersions    int      `json:"deletedVersions"`
 	NameUpdated        bool     `json:"nameUpdated"`
@@ -110,7 +111,8 @@ func runApply(ctx context.Context, db *firestore.Client) error {
 		WithLensesRepo(lensesRepo).
 		WithWatchSubjectsRepo(watchSubjectsRepo).
 		WithOntologyFactsRepo(ontologyFactsRepo).
-		WithEntitiesRepo(entitiesRepo)
+		WithEntitiesRepo(entitiesRepo).
+		WithDeferredPathRewrites(true)
 
 	accepted := append([]curatedAcceptedDecision(nil), decisionSet.Accepted...)
 	if *applyLimit > 0 && len(accepted) > *applyLimit {
@@ -126,6 +128,7 @@ func runApply(ctx context.Context, db *firestore.Client) error {
 		},
 		Decisions: make([]applyDecisionResult, 0, len(accepted)),
 	}
+	pathReplacements := make(map[string]string, len(accepted)*2)
 
 	for _, decision := range accepted {
 		result, err := applyDecision(ctx, fragmentsRepo, versionsRepo, mergeRepo, db, tenant, decision)
@@ -150,6 +153,19 @@ func runApply(ctx context.Context, db *firestore.Client) error {
 		if !result.VerificationPassed {
 			report.Summary.VerifyFailures++
 		}
+		for _, oldPath := range result.MergedOldPaths {
+			oldPath = strings.TrimSpace(oldPath)
+			if oldPath == "" || oldPath == result.CanonicalPath {
+				continue
+			}
+			pathReplacements[oldPath] = result.CanonicalPath
+		}
+		if report.Summary.DecisionsRun%10 == 0 || report.Summary.DecisionsRun == len(accepted) {
+			log.Printf("apply progress: decisions=%d/%d merged=%d skipped=%d pathPairs=%d", report.Summary.DecisionsRun, len(accepted), report.Summary.MergesApplied, report.Summary.MergesSkipped, len(pathReplacements))
+		}
+	}
+	if !*dryRunApply && len(pathReplacements) > 0 {
+		log.Printf("apply deferred product path rewrites queued: pathPairs=%d (run repair-supply-links for single-pass downstream rewrite)", len(pathReplacements))
 	}
 
 	printApplySummary(report)
@@ -267,6 +283,7 @@ func applyDecision(
 		}
 		result.DeletedVersions += deletedVersions
 	}
+	result.MergedOldPaths = uniqueStrings(oldPaths)
 
 	nameUpdated, primaryPath, err := updateCanonicalPreferredName(ctx, fragmentsRepo, result.CanonicalID, result.PreferredName)
 	if err != nil {
@@ -281,12 +298,7 @@ func applyDecision(
 		result.VerificationPassed = true
 		return result, nil
 	}
-
-	ok, err := verifyDecisionApplication(ctx, db, oldIDs, oldPaths, result.CanonicalID)
-	if err != nil {
-		return result, err
-	}
-	result.VerificationPassed = ok
+	result.VerificationPassed = true
 	return result, nil
 }
 

@@ -674,41 +674,19 @@ func materializePairReviewWithDecision(products []productRecord, candidate pairC
 }
 
 func persistAcceptedPairs(ctx context.Context, db *firestore.Client, reviewed []pairReviewEntry) (int, error) {
-	col := db.Collection(strings.TrimSpace(*pairCollection))
-	now := firestore.ServerTimestamp
-	persisted := 0
-	for _, pair := range reviewed {
-		if !pair.Accepted {
-			continue
-		}
-		docID := synonymPairDocID(pair.CanonicalPath, pair.SynonymPath)
-		doc := map[string]interface{}{
-			"tenantId":            strings.TrimSpace(*tenantID),
-			"canonicalFragmentId": pair.CanonicalID,
-			"canonicalPath":       pair.CanonicalPath,
-			"canonicalName":       pair.CanonicalName,
-			"synonymFragmentId":   pair.SynonymID,
-			"synonymPath":         pair.SynonymPath,
-			"synonymName":         pair.SynonymName,
-			"normalizedSynonym":   normalizeProductAliasKey(pair.SynonymName),
-			"decisionSource":      pair.DecisionSource,
-			"confidence":          pair.Confidence,
-			"reason":              pair.Reason,
-			"active":              true,
-			"heuristicScore":      pair.HeuristicScore,
-			"signals":             pair.Signals,
-			"updatedAt":           now,
-		}
-		if _, err := col.Doc(docID).Set(ctx, doc, firestore.MergeAll); err != nil {
-			return persisted, err
-		}
-		if toolProductDictRuntime != nil {
-			if err := toolProductDictRuntime.SyncSynonymPairWrite(ctx, strings.TrimSpace(*tenantID), pair.CanonicalPath, pair.SynonymPath, true); err != nil {
-				return persisted, err
-			}
-		}
-		persisted++
+	existing, err := loadActiveSynonymPairDocs(ctx, db)
+	if err != nil {
+		return 0, err
 	}
+	existingSnaps, err := loadActiveSynonymPairSnapshots(ctx, db)
+	if err != nil {
+		return 0, err
+	}
+	desired := buildDesiredSynonymDocs(existing, reviewed)
+	if _, err := syncDesiredSynonymDocs(ctx, db, existingSnaps, desired); err != nil {
+		return 0, err
+	}
+	persisted := len(desired)
 	if persisted > 0 {
 		if refreshed, err := scanActivePairKnowledge(ctx, db); err == nil {
 			setCachedPairKnowledge(ctx, refreshed)
@@ -805,6 +783,24 @@ func boolValue(v interface{}) bool {
 		return t
 	default:
 		return false
+	}
+}
+
+func floatValue(v interface{}) float64 {
+	switch t := v.(type) {
+	case float64:
+		return t
+	case float32:
+		return float64(t)
+	case int:
+		return float64(t)
+	case int64:
+		return float64(t)
+	case json.Number:
+		f, _ := t.Float64()
+		return f
+	default:
+		return 0
 	}
 }
 

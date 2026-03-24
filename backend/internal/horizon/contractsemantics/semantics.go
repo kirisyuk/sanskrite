@@ -88,6 +88,7 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 				models.DependencyTypeSuppliesTo,
 				models.DependencyTypeTransformsInto,
 				models.DependencyTypeAssemblesInto,
+				models.DependencyTypeUsedIn,
 				models.DependencyTypeExtractsFrom,
 			},
 			OverlayEdges: []models.DependencyType{
@@ -158,6 +159,8 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 				models.DependencyTypeGatekeepsDecision,
 				models.DependencyTypeUsesMechanism,
 				models.DependencyTypeAppliesTo,
+				models.DependencyTypeInGeoScope,
+				models.DependencyTypeAffects,
 				models.DependencyTypeAdministers,
 				models.DependencyTypeParticipatesIn,
 				models.DependencyTypeTradedIn,
@@ -172,7 +175,13 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 				models.DependencyTypeInfluences,
 				models.DependencyTypeDependsOn,
 			},
-			ArtifactKinds: []models.MaterializedKind{models.MaterializedKindRegulatoryImpactMap},
+			ArtifactKinds: []models.MaterializedKind{
+				models.MaterializedKindRegulatoryImpactMap,
+				models.MaterializedKindRegulatoryImpactTransmissionPath,
+				models.MaterializedKindRegulatoryTimeline,
+				models.MaterializedKindRegulatoryCascadeMap,
+				models.MaterializedKindRegulatoryImpactScenario,
+			},
 			ComplementaryModes: []string{
 				taxonomy.DomainModeSupplyChain,
 				taxonomy.DomainModeGovernance,
@@ -321,7 +330,7 @@ func EdgeLayer(edgeType models.DependencyType) GraphLayer {
 	switch edgeType {
 	case models.DependencyTypeAffects, models.DependencyTypeTriggeredBy:
 		return GraphLayerCorePropagation
-	case models.DependencyTypeProduces, models.DependencyTypeSuppliesTo, models.DependencyTypeTransformsInto, models.DependencyTypeExtractsFrom:
+	case models.DependencyTypeProduces, models.DependencyTypeSuppliesTo, models.DependencyTypeTransformsInto, models.DependencyTypeAssemblesInto, models.DependencyTypeUsedIn, models.DependencyTypeExtractsFrom:
 		return GraphLayerPathCarried
 	case models.DependencyTypeOwns, models.DependencyTypeSubsidiaryOf, models.DependencyTypeControls,
 		models.DependencyTypeManages, models.DependencyTypeInvestsIn, models.DependencyTypeBoardMemberOf,

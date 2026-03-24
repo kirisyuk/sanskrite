@@ -27,7 +27,7 @@ import (
 )
 
 var (
-	mode            = flag.String("mode", "report", "Mode: report|backfill-relation-kind")
+	mode            = flag.String("mode", "report", "Mode: report|backfill-relation-kind|dedup-backfill")
 	projectID       = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project ID")
 	tenantID        = flag.String("tenant", "global", "Tenant ID")
 	reportInPath    = flag.String("report-in", "", "Optional existing transform review report JSON to load instead of rescanning the database")
@@ -244,17 +244,27 @@ func main() {
 	switch strings.TrimSpace(*mode) {
 	case "report":
 	case "backfill-relation-kind":
-		updated, assembly, transformation, err := backfillRelationKind(ctx, fsClient.Client())
+		updated, assembly, usage, transformation, err := backfillRelationKind(ctx, fsClient.Client())
 		if err != nil {
 			log.Fatalf("failed to backfill relationKind: %v", err)
 		}
 		fmt.Printf("\nRelationKind Backfill\n")
 		fmt.Printf("  updated_docs: %d\n", updated)
 		fmt.Printf("  assembly_docs: %d\n", assembly)
+		fmt.Printf("  usage_docs: %d\n", usage)
 		fmt.Printf("  transformation_docs: %d\n", transformation)
 		return
+	case "dedup-backfill":
+		active, deactivated, err := backfillSemanticTransformDedup(ctx, fsClient.Client())
+		if err != nil {
+			log.Fatalf("failed to backfill semantic dedup: %v", err)
+		}
+		fmt.Printf("\nTransform Semantic Dedup Backfill\n")
+		fmt.Printf("  active_docs: %d\n", active)
+		fmt.Printf("  deactivated_docs: %d\n", deactivated)
+		return
 	default:
-		log.Fatalf("unsupported --mode=%q (want report|backfill-relation-kind)", strings.TrimSpace(*mode))
+		log.Fatalf("unsupported --mode=%q (want report|backfill-relation-kind|dedup-backfill)", strings.TrimSpace(*mode))
 	}
 
 	if path := strings.TrimSpace(*reportInPath); path != "" {
@@ -1149,7 +1159,7 @@ func conservativeRejectReason(pair transformReviewEntry) (string, bool) {
 		return "curated_reject: upstream rubber to finished tire skips compound and tire-building stages", true
 	}
 	if containsAny(pair.FromPath, "flotation-reagents", "software-integration", "precision-machining") {
-		return "curated_reject: process/reagent inputs are not canonical product transformation sources", true
+		return "curated_reject: service/process activity is not a canonical product relation source", true
 	}
 	if containsAny(pair.FromPath, "industrial-gases") && containsAny(pair.ToPath, "helium", "liquid-helium", "ultra-high-purity-helium") {
 		return "curated_reject: broad industrial gas family to specific purified gas is class/subclass, not canonical transform", true
@@ -1227,19 +1237,20 @@ func adjudicateTransformBatchWithLLM(ctx context.Context, exec *ai.AITaskExecuto
 }
 
 func buildTransformReviewPrompt(payload string) string {
-	return "You are reviewing PRODUCT/MATERIAL transformation pairs for a supply-chain graph.\n" +
-		"You need TRUE product transformation pairs only: input/feedstock/intermediate product -> downstream output/resulting product.\n" +
-		"Accept only when the FROM product can plausibly be processed, refined, converted, manufactured, assembled, or transformed into the TO product.\n" +
-		"Only accept DIRECT or ADJACENT canonical transformation steps. Do NOT accept long multi-step jumps that skip obvious intermediates.\n" +
+	return "You are reviewing PRODUCT/MATERIAL relation pairs for a supply-chain graph.\n" +
+		"You need TRUE canonical product-relation pairs only: upstream input/component/operational input -> direct downstream product.\n" +
+		"Accept only when the FROM product can plausibly be processed, refined, converted, manufactured, assembled into, or directly used in the TO product.\n" +
+		"Only accept DIRECT or ADJACENT canonical product relation steps. Do NOT accept long multi-step jumps that skip obvious intermediates.\n" +
 		"If A usually becomes B, then C, then D, reject A -> D and accept only the nearest canonical step(s).\n" +
 		"These are NOT synonyms. If the pair is just two names for the same thing, reject it.\n" +
-		"Class-subclass, general-specific, family-member, or grade-variant relationships are NOT transformations and must be rejected.\n" +
+		"Class-subclass, general-specific, family-member, or grade-variant relationships are NOT canonical product relations and must be rejected.\n" +
 		"Logistics, services, routes, handling, freight, ports, compliance, documents, and business activities are NOT products and must be rejected.\n" +
-		"Do not accept simple co-occurrence or trading adjacency. Receiving product A and selling product B is not enough unless it clearly implies processing/production.\n" +
+		"Do not accept simple co-occurrence or trading adjacency. Receiving product A and selling product B is not enough unless it clearly implies direct processing, direct assembly, or direct operational usage.\n" +
 		"Direct final assembly is allowed when it is the nearest concrete step and there is no useful missing intermediate product in the data. Example: a finished display module -> a specific smartphone model can be accepted. Likewise, finished components such as tires, battery packs, cockpit modules, or powertrains can map directly into a final vehicle when that is the nearest real assembly step.\n" +
-		"Good accepts: bauxite -> alumina; alumina -> aluminum; crude oil -> naphtha; naphtha -> ethylene; copper concentrate -> blister copper; cathode active material precursor -> cathode active material; battery cell -> battery module; battery module -> battery pack; aluminum ingot -> aluminum sheet.\n" +
-		"Good rejects: aluminum -> alumina; LNG -> natural gas; sodium hydroxide -> caustic soda; fruit -> pineapple; steel -> automotive steel; maritime freight -> nickel concentrate; port handling services -> maritime freight; battery pack -> LFP battery cell; iron ore -> hot-rolled steel coil; lithium carbonate -> battery cell; semiconductor design -> application processor; nuclear fuel assembly -> electricity.\n" +
-		"If direction looks backwards, reject it. If evidence looks like generic supply/trade without conversion, reject it. If one side is broader/narrower taxonomy only, reject it. If the pair jumps across several missing intermediates, reject it.\n" +
+		"Direct usage is allowed only when it is a specific and strong product/product dependency, not a broad end-use category. Example: helium -> MRI scanner can be accepted. Example reject: helium -> healthcare industry.\n" +
+		"Good accepts: bauxite -> alumina; alumina -> aluminum; crude oil -> naphtha; naphtha -> ethylene; copper concentrate -> blister copper; cathode active material precursor -> cathode active material; battery cell -> battery module; battery module -> battery pack; aluminum ingot -> aluminum sheet; helium -> MRI scanner.\n" +
+		"Good rejects: aluminum -> alumina; LNG -> natural gas; sodium hydroxide -> caustic soda; fruit -> pineapple; steel -> automotive steel; maritime freight -> nickel concentrate; port handling services -> maritime freight; battery pack -> LFP battery cell; iron ore -> hot-rolled steel coil; lithium carbonate -> battery cell; semiconductor design -> application processor; nuclear fuel assembly -> electricity; helium -> healthcare industry.\n" +
+		"If direction looks backwards, reject it. If evidence looks like generic supply/trade without direct product semantics, reject it. If one side is broader/narrower taxonomy only, reject it. If the pair jumps across several missing intermediates, reject it.\n" +
 		"Return EXACTLY one strict JSON array. Do not wrap it in an outer object. Do not add markdown. Do not add prose.\n" +
 		"Each array item must use this exact structure:\n" +
 		"[\n" +
@@ -1281,71 +1292,21 @@ func materializeReview(candidate transformCandidate, accepted bool, source strin
 }
 
 func persistAcceptedPairs(ctx context.Context, db *firestore.Client, reviewed []transformReviewEntry) (int, error) {
-	col := db.Collection(strings.TrimSpace(*pairCollection))
-	now := firestore.ServerTimestamp
-	persisted := 0
-	// TODO(product-transforms): run a one-off backfill for older Firestore docs so
-	// every existing horizon_product_transform_pairs record also gets relationKind.
-	for _, pair := range reviewed {
-		if !pair.Accepted {
-			snap, err := col.Doc(pair.CandidateID).Get(ctx)
-			if err == nil && snap.Exists() {
-				if _, err := col.Doc(pair.CandidateID).Set(ctx, map[string]interface{}{
-					"tenantId":       strings.TrimSpace(*tenantID),
-					"active":         false,
-					"decisionSource": pair.DecisionSource,
-					"reason":         pair.Reason,
-					"updatedAt":      now,
-				}, firestore.MergeAll); err != nil {
-					return persisted, err
-				}
-				if toolProductDictRuntime != nil {
-					if err := toolProductDictRuntime.SyncTransformPairWrite(ctx, strings.TrimSpace(*tenantID), pair.FromPath, pair.ToPath, inferRelationKind(pair), false); err != nil {
-						return persisted, err
-					}
-				}
-			}
-			continue
-		}
-		relationKind := inferRelationKind(pair)
-		doc := map[string]interface{}{
-			"tenantId":         strings.TrimSpace(*tenantID),
-			"fromFragmentId":   pair.FromFragmentID,
-			"fromPath":         pair.FromPath,
-			"fromName":         pair.FromName,
-			"toFragmentId":     pair.ToFragmentID,
-			"toPath":           pair.ToPath,
-			"toName":           pair.ToName,
-			"relationKind":     relationKind,
-			"decisionSource":   pair.DecisionSource,
-			"confidence":       pair.Confidence,
-			"reason":           pair.Reason,
-			"heuristicScore":   pair.HeuristicScore,
-			"reasons":          pair.Reasons,
-			"directEdges":      pair.DirectEdges,
-			"actorEvidence":    pair.ActorEvidence,
-			"assemblyEvidence": pair.AssemblyEvidence,
-			"fromStage":        pair.FromStage,
-			"toStage":          pair.ToStage,
-			"fromStageOrder":   pair.FromStageOrder,
-			"toStageOrder":     pair.ToStageOrder,
-			"active":           true,
-			"updatedAt":        now,
-		}
-		if _, err := col.Doc(pair.CandidateID).Set(ctx, doc, firestore.MergeAll); err != nil {
-			return persisted, err
-		}
-		if toolProductDictRuntime != nil {
-			if err := toolProductDictRuntime.SyncTransformPairWrite(ctx, strings.TrimSpace(*tenantID), pair.FromPath, pair.ToPath, relationKind, true); err != nil {
-				return persisted, err
-			}
-		}
-		persisted++
+	existing, err := loadActiveTransformPairDocs(ctx, db)
+	if err != nil {
+		return 0, err
 	}
-	return persisted, nil
+	desired, synonymDesired := buildDesiredTransformDocs(existing, reviewed)
+	if _, err := syncDesiredSynonymDocsTransform(ctx, db, loadActiveSynonymPairDocsTransform(ctx, db), synonymDesired); err != nil {
+		return 0, err
+	}
+	if _, err := syncDesiredTransformDocs(ctx, db, existing, desired); err != nil {
+		return 0, err
+	}
+	return len(desired), nil
 }
 
-func backfillRelationKind(ctx context.Context, db *firestore.Client) (updated int, assembly int, transformation int, err error) {
+func backfillRelationKind(ctx context.Context, db *firestore.Client) (updated int, assembly int, usage int, transformation int, err error) {
 	type pendingSync struct {
 		fromPath     string
 		toPath       string
@@ -1385,7 +1346,7 @@ func backfillRelationKind(ctx context.Context, db *firestore.Client) (updated in
 			break
 		}
 		if derr != nil {
-			return updated, assembly, transformation, derr
+			return updated, assembly, usage, transformation, derr
 		}
 		data := doc.Data()
 		pair := transformReviewEntry{
@@ -1406,6 +1367,8 @@ func backfillRelationKind(ctx context.Context, db *firestore.Client) (updated in
 		switch relationKind {
 		case "assembly":
 			assembly++
+		case "usage":
+			usage++
 		default:
 			transformation++
 		}
@@ -1423,14 +1386,14 @@ func backfillRelationKind(ctx context.Context, db *firestore.Client) (updated in
 		updated++
 		if pending >= 400 {
 			if err := flush(); err != nil {
-				return updated, assembly, transformation, err
+				return updated, assembly, usage, transformation, err
 			}
 		}
 	}
 	if err := flush(); err != nil {
-		return updated, assembly, transformation, err
+		return updated, assembly, usage, transformation, err
 	}
-	return updated, assembly, transformation, nil
+	return updated, assembly, usage, transformation, nil
 }
 
 func buildProductRecord(f *models.HorizonFragment) productRecord {
@@ -2043,10 +2006,51 @@ func isNearestFinalAssemblyStep(pair transformReviewEntry) bool {
 }
 
 func inferRelationKind(pair transformReviewEntry) string {
+	if isUsageLikePair(pair) {
+		return "usage"
+	}
 	if isAssemblyLikePair(pair) {
 		return "assembly"
 	}
 	return "transformation"
+}
+
+func isUsageLikePair(pair transformReviewEntry) bool {
+	all := strings.ToLower(strings.TrimSpace(strings.Join([]string{
+		pair.FromPath,
+		pair.ToPath,
+		pair.FromName,
+		pair.ToName,
+		pair.Reason,
+		strings.Join(pair.Reasons, " "),
+	}, " | ")))
+	if all == "" {
+		return false
+	}
+	if containsAny(all,
+		" used in ",
+		"is used in",
+		"used by",
+		"coolant",
+		"cryogen",
+		"shielding gas",
+		"process gas",
+		"working fluid",
+		"reagent",
+		"catalyst",
+		"etchant",
+		"consumable",
+		"helium",
+	) {
+		if containsAny(all, "industry", "sector", "market", "application", "services") {
+			return false
+		}
+		if isAssemblyLikePair(pair) {
+			return false
+		}
+		return true
+	}
+	return false
 }
 
 func isAssemblyLikePair(pair transformReviewEntry) bool {

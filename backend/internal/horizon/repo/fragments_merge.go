@@ -55,6 +55,7 @@ type FragmentsMergeRepository struct {
 	watchSubjectsRepo *WatchSubjectsRepository
 	ontologyFactsRepo *corerepo.OntologyFactsRepository
 	entitiesRepo      *corerepo.EntityRepository
+	deferPathRewrites bool
 }
 
 // NewFragmentsMergeRepository creates a new merge repository.
@@ -128,6 +129,16 @@ func (r *FragmentsMergeRepository) WithEntitiesRepo(repo *corerepo.EntityReposit
 		return r
 	}
 	r.entitiesRepo = repo
+	return r
+}
+
+// WithDeferredPathRewrites disables per-merge downstream path rewrites so callers can
+// perform a single consolidated rewrite pass after a batch of merges.
+func (r *FragmentsMergeRepository) WithDeferredPathRewrites(enabled bool) *FragmentsMergeRepository {
+	if r == nil {
+		return r
+	}
+	r.deferPathRewrites = enabled
 	return r
 }
 
@@ -211,19 +222,21 @@ func (r *FragmentsMergeRepository) mergeFragment(ctx context.Context, req MergeR
 	// 4.5. Record canonical path redirects so Resolve() returns the final path after merges.
 	r.recordMergeRedirects(ctx, dup, primary)
 
-	// 4.6. Rewrite canonical paths in materialized artifacts (supply chains, domain artifacts).
-	r.rewriteMaterializedArtifactsPaths(ctx, tenantID, dup, primary)
+	if !r.deferPathRewrites {
+		// 4.6. Rewrite canonical paths in materialized artifacts (supply chains, domain artifacts).
+		r.rewriteMaterializedArtifactsPaths(ctx, tenantID, dup, primary)
 
-	// 4.7. Rewrite lens scope entries (fromPath -> toPath) so UI/graph stay consistent.
-	r.rewriteLensScopePaths(ctx, tenantID, dup, primary)
+		// 4.7. Rewrite lens scope entries (fromPath -> toPath) so UI/graph stay consistent.
+		r.rewriteLensScopePaths(ctx, tenantID, dup, primary)
 
-	// 4.8. Rewrite supply-link refs that embed merged node paths into their identity.
-	r.rewriteSupplyLinksPaths(ctx, tenantID, dup, primary)
+		// 4.8. Rewrite supply-link refs that embed merged node paths into their identity.
+		r.rewriteSupplyLinksPaths(ctx, tenantID, dup, primary)
 
-	// 4.9. Rewrite watch/runtime and ontology stores indexed by canonicalPath.
-	r.rewriteWatchSubjectsPaths(ctx, tenantID, dup, primary)
-	r.rewriteOntologyFactsPaths(ctx, tenantID, dup, primary)
-	r.rewriteOntologyEntitiesPaths(ctx, tenantID, dup, primary)
+		// 4.9. Rewrite watch/runtime and ontology stores indexed by canonicalPath.
+		r.rewriteWatchSubjectsPaths(ctx, tenantID, dup, primary)
+		r.rewriteOntologyFactsPaths(ctx, tenantID, dup, primary)
+		r.rewriteOntologyEntitiesPaths(ctx, tenantID, dup, primary)
+	}
 
 	// 5. Delete duplicate
 	if err := r.fragmentsRepo.Delete(ctx, dupID); err != nil {
@@ -295,6 +308,10 @@ func (r *FragmentsMergeRepository) rewriteMaterializedArtifactsPathsForPaths(ctx
 		models.MaterializedKindSupplyChainPath,
 		models.MaterializedKindSupplyChainAssemblyGraph,
 		models.MaterializedKindRegulatoryImpactMap,
+		models.MaterializedKindRegulatoryImpactTransmissionPath,
+		models.MaterializedKindRegulatoryTimeline,
+		models.MaterializedKindRegulatoryCascadeMap,
+		models.MaterializedKindRegulatoryImpactScenario,
 		models.MaterializedKindGovernanceChain,
 		models.MaterializedKindEcosystemMap,
 	}
@@ -591,6 +608,10 @@ func (r *FragmentsMergeRepository) RewriteProductPathReferencesForPathPairs(ctx 
 		target := replacements[oldPath]
 		r.recordPathRedirects(ctx, string(models.FragmentTypeProduct), []string{oldPath}, target)
 		r.rewriteMaterializedArtifactsPathsForPaths(ctx, tenantID, models.FragmentTypeProduct, []string{oldPath}, target)
+		r.rewriteLensScopePathsForPaths(ctx, tenantID, []string{oldPath}, target)
+		r.rewriteWatchSubjectsPathsForPaths(ctx, tenantID, []string{oldPath}, target, "", "")
+		r.rewriteOntologyFactsPathsForPaths(ctx, tenantID, []string{oldPath}, target)
+		r.rewriteOntologyEntitiesPathsForPaths(ctx, tenantID, []string{oldPath}, target)
 	}
 	updatedSupplyLinks, err := r.RewriteSupplyLinksForPathPairs(ctx, tenantID, replacements)
 	if err != nil {

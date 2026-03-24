@@ -26,6 +26,13 @@ import (
 	"cloud.google.com/go/firestore"
 	"cloud.google.com/go/pubsub"
 	"github.com/igorkirisyuk/sanskrite/internal/adapters"
+	agentmeshcontrol "github.com/igorkirisyuk/sanskrite/internal/agentmesh/controlplane"
+	agentmeshpolicy "github.com/igorkirisyuk/sanskrite/internal/agentmesh/policy"
+	agentmeshregistry "github.com/igorkirisyuk/sanskrite/internal/agentmesh/registry"
+	agentmeshrepo "github.com/igorkirisyuk/sanskrite/internal/agentmesh/repo"
+	agentmeshruntime "github.com/igorkirisyuk/sanskrite/internal/agentmesh/runtime"
+	agentmeshsubmitter "github.com/igorkirisyuk/sanskrite/internal/agentmesh/submitter"
+	agentmeshtasks "github.com/igorkirisyuk/sanskrite/internal/agentmesh/tasks"
 	"github.com/igorkirisyuk/sanskrite/internal/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/crawler"
@@ -54,10 +61,12 @@ import (
 	horizoncriticalpath "github.com/igorkirisyuk/sanskrite/internal/horizon/critical_path"
 	horizonenrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	horizonfeedback "github.com/igorkirisyuk/sanskrite/internal/horizon/feedback"
+	horizongovdict "github.com/igorkirisyuk/sanskrite/internal/horizon/govdict"
 	horizongraphenrich "github.com/igorkirisyuk/sanskrite/internal/horizon/graphenrich"
 	horizonimportance "github.com/igorkirisyuk/sanskrite/internal/horizon/importance"
 	horizoninterp "github.com/igorkirisyuk/sanskrite/internal/horizon/interpretation"
 	horizonlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
+	horizonmechanismdict "github.com/igorkirisyuk/sanskrite/internal/horizon/mechanismdict"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonpathbuilder "github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
 	horizonpolicy "github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
@@ -66,6 +75,7 @@ import (
 	horizonpropagation "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonqa "github.com/igorkirisyuk/sanskrite/internal/horizon/qa"
 	horizonrecommendations "github.com/igorkirisyuk/sanskrite/internal/horizon/recommendations"
+	horizonregulatorytransform "github.com/igorkirisyuk/sanskrite/internal/horizon/regulatorytransform"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonrisk "github.com/igorkirisyuk/sanskrite/internal/horizon/risk"
 	horizonrtctx "github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
@@ -73,6 +83,7 @@ import (
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	horizonagents "github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	horizonsignals "github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
+	horizonsimulation "github.com/igorkirisyuk/sanskrite/internal/horizon/simulation"
 	horizonsupplychain "github.com/igorkirisyuk/sanskrite/internal/horizon/supplychain"
 	horizontasks "github.com/igorkirisyuk/sanskrite/internal/horizon/tasks"
 	horizontelemetry "github.com/igorkirisyuk/sanskrite/internal/horizon/telemetry"
@@ -390,6 +401,52 @@ func main() {
 	}
 
 	logger := log.New(os.Stdout, "[sanskrite] ", log.LstdFlags|log.Lshortfile)
+
+	var horizonSimulationSubmitter *agentmeshsubmitter.Service
+	{
+		meshStore := agentmeshrepo.NewStore(fsClient.Client(), gcsClient)
+		baseURL := strings.TrimRight(strings.TrimSpace(getEnv("AGENTMESH_PUBLIC_BASE_URL", "")), "/")
+		if baseURL == "" {
+			baseURL = strings.TrimRight(strings.TrimSpace(getEnv("CLOUD_RUN_URL", "")), "/")
+		}
+		meshRegistry := agentmeshregistry.NewService(agentmeshregistry.NewHMACSigner(getEnv("AGENTMESH_SERVER_SIGNING_SECRET", "server-local-secret"), "server-local"))
+		if err := meshRegistry.BootstrapSystemAgents(ctx, baseURL); err != nil {
+			logger.Printf("WARNING: local AgentMesh registry bootstrap for Horizon simulations failed: %v", err)
+		} else {
+			meshControl := agentmeshcontrol.NewService(meshRegistry, agentmeshpolicy.NewService())
+			var meshDispatcher *agentmeshtasks.Dispatcher
+			taskTargetURL := strings.TrimSpace(getEnv("AGENTMESH_TASK_TARGET_URL", ""))
+			if taskTargetURL != "" {
+				taskOIDCSA := getEnv("AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT", "backend@"+projectID+".iam.gserviceaccount.com")
+				if enabledEnv("AGENTMESH_TASKS_DISABLE_OIDC") {
+					taskOIDCSA = ""
+				}
+				meshDispatcher, err = agentmeshtasks.NewDispatcher(
+					ctx,
+					projectID,
+					getEnv("AGENTMESH_TASKS_LOCATION", "us-central1"),
+					getEnv("AGENTMESH_TASKS_QUEUE", "etigram-agentmesh"),
+					taskTargetURL,
+					taskOIDCSA,
+					getEnv("AGENTMESH_TASKS_OIDC_AUDIENCE", ""),
+				)
+				if err != nil {
+					logger.Printf("WARNING: local AgentMesh dispatcher for Horizon simulations failed: %v", err)
+					meshDispatcher = nil
+				}
+			}
+			meshRuntime := agentmeshruntime.NewService(
+				meshStore,
+				meshControl,
+				nil,
+				nil,
+				meshDispatcher,
+				getEnv("AGENTMESH_ARTIFACT_BUCKET", projectID+"-agentmesh-artifacts"),
+				logger,
+			)
+			horizonSimulationSubmitter = agentmeshsubmitter.NewService(meshRuntime)
+		}
+	}
 
 	s := &server{fbApp: fbApp, fs: fsClient, logger: logger}
 	// Repositories
@@ -1245,6 +1302,16 @@ func main() {
 		}
 		horizonFragmentsRepo.WithProductDictionary(productDictionary)
 		horizonEdgesRepo.WithProductDictionary(productDictionary)
+		mechanismDictionary := horizonmechanismdict.NewRuntime(fsClient.Client())
+		govDictionary := horizongovdict.NewRuntime(fsClient.Client())
+		regulatoryTransformRegistry := horizonregulatorytransform.NewRegistry()
+		if rt, err := horizonregulatorytransform.LoadRegistryFromFirestore(context.Background(), fsClient.Client()); err != nil {
+			logger.Printf("WARNING: horizon_regulatory_transform_pairs load failed: %v", err)
+		} else if rt != nil {
+			regulatoryTransformRegistry = rt
+		}
+		horizonFragmentsRepo.WithMechanismDictionary(mechanismDictionary).WithGovDictionary(govDictionary)
+		horizonEdgesRepo.WithRegulatoryTransformRegistry(regulatoryTransformRegistry)
 		if parseEnvBool(getEnv("HORIZON_IMPORTANCE_RUNTIME_ENABLED", "true")) {
 			importanceScorer := horizonimportance.NewScorer(horizonFragmentsRepo, horizonEdgesRepo)
 			importanceUpdater := horizonimportance.NewRuntimeUpdater("global", importanceScorer, horizonFragmentsRepo, 2048)
@@ -1341,7 +1408,14 @@ func main() {
 		horizonProfilePoliciesRepo := horizonrepo.NewFragmentProfileRefreshPoliciesRepository(fsClient.Client())
 		horizonLensArtifactsRepo := horizonrepo.NewLensArtifactsRepository(fsClient.Client())
 		horizonMaterializedArtifactsRepo := horizonrepo.NewMaterializedArtifactsRepository(fsClient.Client())
-		horizonMaterializedArtifactsRepo.WithProductDictionary(productDictionary)
+		horizonMaterializedArtifactsRepo.WithProductDictionary(productDictionary).
+			WithMechanismDictionary(mechanismDictionary).
+			WithGovDictionary(govDictionary)
+		horizonSimulationRunsRepo := horizonrepo.NewSimulationRunsRepository(fsClient.Client())
+		horizonSimulationWorldsRepo := horizonrepo.NewSimulationWorldsRepository(fsClient.Client())
+		horizonSimulationAgentsRepo := horizonrepo.NewSimulationAgentsRepository(fsClient.Client())
+		horizonSimulationEventsRepo := horizonrepo.NewSimulationEventsRepository(fsClient.Client())
+		horizonSimulationArtifactsRepo := horizonrepo.NewSimulationArtifactsRepository(fsClient.Client())
 		horizonDomainAnswerSnapshotsRepo := horizonrepo.NewDomainAnswerSnapshotsRepository(fsClient.Client())
 		horizonWatchPacksRepo := horizonrepo.NewWatchPacksRepository(fsClient.Client())
 		horizonWatchTargetsRepo := horizonrepo.NewWatchTargetsRepository(fsClient.Client())
@@ -2394,6 +2468,33 @@ func main() {
 			propagationEngine.WithCriticalPathDetector(criticalPathDetector)
 
 			horizonService.SetPropagationEngine(propagationEngine)
+			simulationService, err := horizonsimulation.NewService(horizonsimulation.Dependencies{
+				RunsRepo:                 horizonSimulationRunsRepo,
+				WorldsRepo:               horizonSimulationWorldsRepo,
+				AgentsRepo:               horizonSimulationAgentsRepo,
+				EventsRepo:               horizonSimulationEventsRepo,
+				ArtifactsRepo:            horizonSimulationArtifactsRepo,
+				FragmentsRepo:            horizonFragmentsRepo,
+				EdgesRepo:                horizonEdgesRepo,
+				LensesRepo:               horizonLensesRepo,
+				MaterializedRepo:         horizonMaterializedArtifactsRepo,
+				OntologyFactsRepo:        ontologyFactsRepo,
+				PropagationEngine:        propagationEngine,
+				PropagationProfileLookup: propagationProfileLookup,
+				Submitter:                horizonSimulationSubmitter,
+				Logger:                   logger,
+				Publisher: func(ctx context.Context, eventType string, tenantID string, payload any) error {
+					if pub == nil {
+						return nil
+					}
+					return pub.PublishJSON(ctx, realtime.EventType(eventType), tenantID, payload)
+				},
+			})
+			if err != nil {
+				logger.Printf("WARNING: simulation service initialization failed: %v", err)
+			} else {
+				horizonService.SetSimulationService(simulationService)
+			}
 			scopeAgentService.SetScenarioRuntime(propagationEngine, propagationProfileLookup)
 			riskAppetiteRepo := horizonrepo.NewRiskAppetiteProfilesRepository(fsClient.Client())
 			appetiteResolver := horizonrisk.NewAppetiteResolver(riskAppetiteRepo, horizonFragmentsRepo, horizonEdgesRepo)
@@ -2597,7 +2698,9 @@ func main() {
 			if horizonTelemetryRepo != nil {
 				canonicalPathResolver.WithTelemetryRepo(horizonTelemetryRepo)
 			}
-			canonicalPathResolver.WithProductDictionary(productDictionary)
+			canonicalPathResolver.WithProductDictionary(productDictionary).
+				WithMechanismDictionary(mechanismDictionary).
+				WithGovDictionary(govDictionary)
 			// Supply chain path materialization: parsed chains → MaterializedArtifact
 			if horizonMaterializedArtifactsRepo != nil {
 				supplyChainPathBuilder := horizonpathbuilder.NewSupplyChainPathBuilder(
@@ -2610,7 +2713,7 @@ func main() {
 					horizonFragmentsRepo,
 					horizonEdgesRepo,
 					horizonMaterializedArtifactsRepo,
-				)
+				).WithProductDictionary(productDictionary)
 				scoutEngine.WithDomainArtifactBuilder(domainArtifactBuilder)
 			}
 			if geonamesClientForHorizon != nil {
@@ -5056,6 +5159,14 @@ func getEnv(key, def string) string {
 		return def
 	}
 	return v
+}
+
+func enabledEnv(key string) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return false
+	}
+	return v != "0" && !strings.EqualFold(v, "false")
 }
 
 func getEnvInt(key string, def int) int {

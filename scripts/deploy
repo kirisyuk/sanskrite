@@ -1517,6 +1517,29 @@ deploy_api() {
     --member="serviceAccount:$SA_BACKEND" \
     --role="roles/iam.serviceAccountUser" \
     --quiet >/dev/null 2>&1 || true
+  # Horizon simulation submitter can enqueue Cloud Tasks that mint OIDC tokens for AgentMesh.
+  # That requires backend@ to have iam.serviceAccountUser on agentmesh@ when API targets AgentMesh.
+  gcloud iam service-accounts add-iam-policy-binding "$SA_AGENTMESH" \
+    --member="serviceAccount:$SA_BACKEND" \
+    --role="roles/iam.serviceAccountUser" \
+    --quiet >/dev/null 2>&1 || true
+  gcloud iam service-accounts add-iam-policy-binding "$SA_AGENTMESH" \
+    --member="serviceAccount:$SA_BACKEND" \
+    --role="roles/iam.serviceAccountTokenCreator" \
+    --quiet >/dev/null 2>&1 || true
+  local project_number
+  project_number=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)' 2>/dev/null || echo "")
+  if [[ -n "$project_number" ]]; then
+    local cloudtasks_service_agent="service-${project_number}@gcp-sa-cloudtasks.iam.gserviceaccount.com"
+    gcloud iam service-accounts add-iam-policy-binding "$SA_AGENTMESH" \
+      --member="serviceAccount:${cloudtasks_service_agent}" \
+      --role="roles/iam.serviceAccountUser" \
+      --quiet >/dev/null 2>&1 || true
+    gcloud iam service-accounts add-iam-policy-binding "$SA_AGENTMESH" \
+      --member="serviceAccount:${cloudtasks_service_agent}" \
+      --role="roles/iam.serviceAccountTokenCreator" \
+      --quiet >/dev/null 2>&1 || true
+  fi
 
   # Clean up any local binaries before Cloud Build (they're not needed, built in Docker)
   echo -e "${BLUE}[api] Cleaning up local build artifacts...${NC}"
@@ -1614,6 +1637,14 @@ deploy_api() {
   if [[ -n "$entity_extract_url" ]]; then
     echo -e "${BLUE}[api] Found Entity Extract service:${NC} $entity_extract_url"
   fi
+  local agentmesh_url="${AGENTMESH_PUBLIC_BASE_URL:-}"
+  local agentmesh_service="etigram-agentmesh"
+  if [[ -z "$agentmesh_url" ]] && gcloud run services describe "$agentmesh_service" --region="$REGION" >/dev/null 2>&1; then
+    agentmesh_url=$(gcloud run services describe "$agentmesh_service" --region="$REGION" --format='value(status.url)' 2>/dev/null || echo "")
+  fi
+  if [[ -n "$agentmesh_url" ]]; then
+    echo -e "${BLUE}[api] Found AgentMesh service:${NC} $agentmesh_url"
+  fi
   
   # Build env vars string
   # Note: VERTEX_SEARCH_LOCATION must be "global" for Discovery Engine Data Stores
@@ -1673,6 +1704,9 @@ deploy_api() {
   fi
   if [[ -n "$entity_extract_url" ]]; then
     env_vars="$env_vars,ENTITY_EXTRACT_SERVICE_URL=$entity_extract_url,ENTITY_EXTRACT_MODE=${resolved_entity_extract_mode}"
+  fi
+  if [[ -n "$agentmesh_url" ]]; then
+    env_vars="$env_vars,AGENTMESH_PUBLIC_BASE_URL=$agentmesh_url,AGENTMESH_TASK_TARGET_URL=${agentmesh_url}/api/v1/internal/tasks/agentmesh/run,AGENTMESH_TASKS_LOCATION=${AGENTMESH_TASKS_LOCATION:-$REGION},AGENTMESH_TASKS_QUEUE=${AGENTMESH_TASKS_QUEUE:-etigram-agentmesh},AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,AGENTMESH_TASKS_OIDC_AUDIENCE=$agentmesh_url,AGENTMESH_TASKS_DISABLE_OIDC=${AGENTMESH_TASKS_DISABLE_OIDC:-1},AGENTMESH_ARTIFACT_BUCKET=${PROJECT_ID}-agentmesh-artifacts"
   fi
 
   local api_cpu="${API_CLOUD_RUN_CPU:-2}"
@@ -2154,6 +2188,50 @@ create_indexes() {
     --field-config field-path=updatedAt,order=DESCENDING \
     --quiet || true
 
+  # Horizon simulation MVP indexes
+  gcloud firestore indexes composite create --async \
+    --collection-group=horizon_simulation_runs \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=createdAt,order=DESCENDING \
+    --quiet || true
+  gcloud firestore indexes composite create --async \
+    --collection-group=horizon_simulation_worlds \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=runId,order=ASCENDING \
+    --field-config field-path=worldIndex,order=ASCENDING \
+    --quiet || true
+  gcloud firestore indexes composite create --async \
+    --collection-group=horizon_simulation_worlds \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=runId,order=ASCENDING \
+    --field-config field-path=status,order=ASCENDING \
+    --quiet || true
+  gcloud firestore indexes composite create --async \
+    --collection-group=horizon_simulation_agents \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=runId,order=ASCENDING \
+    --field-config field-path=worldId,order=ASCENDING \
+    --quiet || true
+  gcloud firestore indexes composite create --async \
+    --collection-group=horizon_simulation_events \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=runId,order=ASCENDING \
+    --field-config field-path=createdAt,order=ASCENDING \
+    --quiet || true
+  gcloud firestore indexes composite create --async \
+    --collection-group=horizon_simulation_events \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=runId,order=ASCENDING \
+    --field-config field-path=worldId,order=ASCENDING \
+    --field-config field-path=createdAt,order=ASCENDING \
+    --quiet || true
+  gcloud firestore indexes composite create --async \
+    --collection-group=horizon_simulation_artifacts \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=runId,order=ASCENDING \
+    --field-config field-path=createdAt,order=ASCENDING \
+    --quiet || true
+
   # Vector index for rag_chunks.embedding (dimension=1536)
   # Vector fields are created as composite indexes with vector-config
   echo -e "${BLUE}[firestore] Ensuring vector index for rag_chunks.embedding...${NC}"
@@ -2444,7 +2522,14 @@ setup_agentmesh_infrastructure() {
       --project "$PROJECT_ID" >/dev/null
     echo -e "${GREEN}[agentmesh] Created KMS key:${NC} $AGENTMESH_KMS_KEY"
   fi
-  AGENTMESH_AGENT_CARD_KMS_KEY_VERSION=$(gcloud kms keys describe "$AGENTMESH_KMS_KEY" --keyring "$AGENTMESH_KMS_KEYRING" --location "$AGENTMESH_KMS_LOCATION" --project "$PROJECT_ID" --format='value(primary.name)')
+  AGENTMESH_AGENT_CARD_KMS_KEY_VERSION=$(gcloud kms keys versions list \
+    --key "$AGENTMESH_KMS_KEY" \
+    --keyring "$AGENTMESH_KMS_KEYRING" \
+    --location "$AGENTMESH_KMS_LOCATION" \
+    --project "$PROJECT_ID" \
+    --filter='state=ENABLED' \
+    --limit=1 \
+    --format='value(name)')
 
   local bucket="gs://${PROJECT_ID}-agentmesh-artifacts"
   if ! gcloud storage buckets describe "$bucket" --project "$PROJECT_ID" >/dev/null 2>&1; then
@@ -2487,13 +2572,27 @@ deploy_agentmesh() {
 
   local existing_url=""
   existing_url=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
+  if [[ -z "${AGENTMESH_AGENT_CARD_KMS_KEY_VERSION:-}" ]]; then
+    AGENTMESH_AGENT_CARD_KMS_KEY_VERSION=$(gcloud kms keys versions list \
+      --key "$AGENTMESH_KMS_KEY" \
+      --keyring "$AGENTMESH_KMS_KEYRING" \
+      --location "$AGENTMESH_KMS_LOCATION" \
+      --project "$PROJECT_ID" \
+      --filter='state=ENABLED' \
+      --limit=1 \
+      --format='value(name)' 2>/dev/null || true)
+  fi
+  if [[ -z "${AGENTMESH_AGENT_CARD_KMS_KEY_VERSION:-}" ]]; then
+    echo -e "${RED}[agentmesh] Failed to resolve AGENTMESH_AGENT_CARD_KMS_KEY_VERSION${NC}" >&2
+    exit 1
+  fi
   local public_base_url="${AGENTMESH_PUBLIC_BASE_URL:-$existing_url}"
   local oidc_audience="${AGENTMESH_TASKS_OIDC_AUDIENCE:-$public_base_url}"
   local target_url=""
   if [[ -n "$public_base_url" ]]; then
     target_url="${public_base_url}/api/v1/internal/tasks/agentmesh/run"
   fi
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,AGENTMESH_VERTEX_LOCATION=${AGENTMESH_VERTEX_LOCATION:-global},AGENTMESH_VERTEX_REASONING_ENGINE=${AGENTMESH_REASONING_ENGINE},AGENTMESH_PUBLIC_BASE_URL=${public_base_url},AGENTMESH_TASK_TARGET_URL=${target_url},AGENTMESH_TASKS_LOCATION=${AGENTMESH_TASKS_LOCATION:-$REGION},AGENTMESH_TASKS_QUEUE=${AGENTMESH_TASKS_QUEUE:-etigram-agentmesh},AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT=$SA_AGENTMESH,AGENTMESH_TASKS_OIDC_AUDIENCE=${oidc_audience},AGENTMESH_RUNTIME_LEASE_OWNER=${AGENTMESH_RUNTIME_LEASE_OWNER:-${service}},AGENTMESH_ARTIFACT_BUCKET=${PROJECT_ID}-agentmesh-artifacts,AGENTMESH_AGENT_CARD_KMS_KEY_VERSION=${AGENTMESH_AGENT_CARD_KMS_KEY_VERSION},AGENTMESH_AGENT_CARD_KEY_ID=${AGENTMESH_AGENT_CARD_KMS_KEY_VERSION},AGENTMESH_MODEL_FLASH=${AGENTMESH_MODEL_FLASH:-gemini-3-flash-preview},AGENTMESH_MODEL_PRO=${AGENTMESH_MODEL_PRO:-gemini-3-pro-preview},VERTEX_SEARCH_DATA_STORE_ID=${VERTEX_SEARCH_DATA_STORE_ID:-rag-documents-store},AGENTMESH_VERTEX_SESSION_TTL=${AGENTMESH_VERTEX_SESSION_TTL:-86400s}"
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,AGENTMESH_VERTEX_LOCATION=${AGENTMESH_VERTEX_LOCATION:-global},AGENTMESH_VERTEX_REASONING_ENGINE=${AGENTMESH_REASONING_ENGINE},AGENTMESH_PUBLIC_BASE_URL=${public_base_url},AGENTMESH_TASK_TARGET_URL=${target_url},AGENTMESH_TASKS_LOCATION=${AGENTMESH_TASKS_LOCATION:-$REGION},AGENTMESH_TASKS_QUEUE=${AGENTMESH_TASKS_QUEUE:-etigram-agentmesh},AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,AGENTMESH_TASKS_OIDC_AUDIENCE=${oidc_audience},AGENTMESH_TASKS_DISABLE_OIDC=${AGENTMESH_TASKS_DISABLE_OIDC:-1},AGENTMESH_ALLOW_UNAUTH_INTERNAL_TASKS=${AGENTMESH_ALLOW_UNAUTH_INTERNAL_TASKS:-1},AGENTMESH_RUNTIME_LEASE_OWNER=${AGENTMESH_RUNTIME_LEASE_OWNER:-${service}},AGENTMESH_ARTIFACT_BUCKET=${PROJECT_ID}-agentmesh-artifacts,AGENTMESH_AGENT_CARD_KMS_KEY_VERSION=${AGENTMESH_AGENT_CARD_KMS_KEY_VERSION},AGENTMESH_AGENT_CARD_KEY_ID=${AGENTMESH_AGENT_CARD_KMS_KEY_VERSION},AGENTMESH_MODEL_FLASH=${AGENTMESH_MODEL_FLASH:-gemini-3-flash-preview},AGENTMESH_MODEL_PRO=${AGENTMESH_MODEL_PRO:-gemini-3-pro-preview},VERTEX_SEARCH_DATA_STORE_ID=${VERTEX_SEARCH_DATA_STORE_ID:-rag-documents-store},AGENTMESH_VERTEX_SESSION_TTL=${AGENTMESH_VERTEX_SESSION_TTL:-86400s}"
 
   echo -e "${BLUE}[agentmesh] Deploying to Cloud Run...${NC}"
   gcloud run deploy "$service" \

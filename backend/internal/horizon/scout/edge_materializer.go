@@ -359,6 +359,8 @@ func (e *ScoutEngine) materializeRelationEdge(
 			policy.ApplyValidationDecisionBestEffort(logPrefix, decision, policy.ValidationDecisionHandlers{
 				Reverse: func() {
 					edgeSourceID, edgeTargetID = edgeTargetID, edgeSourceID
+					srcTypeActual, dstTypeActual = dstTypeActual, srcTypeActual
+					srcPathActual, dstPathActual = dstPathActual, srcPathActual
 					directionChanged = true
 					edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
 				},
@@ -419,6 +421,8 @@ func (e *ScoutEngine) materializeRelationEdge(
 		if !valid {
 			if shouldReverse {
 				edgeSourceID, edgeTargetID = edgeTargetID, edgeSourceID
+				srcTypeActual, dstTypeActual = dstTypeActual, srcTypeActual
+				srcPathActual, dstPathActual = dstPathActual, srcPathActual
 				directionChanged = true
 				edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
 			} else {

@@ -1505,6 +1505,17 @@ func (pc *PolicyChecker) checkEdgeCompleteness(edge *horizonmodels.DependencyEdg
 		}
 		return false
 	}
+	hasContractQualifier := func(keys ...string) bool {
+		for _, k := range keys {
+			if !taxonomy.IsValidEdgeQualifier(string(edge.Type), k) {
+				continue
+			}
+			if hasQualifier(k) {
+				return true
+			}
+		}
+		return false
+	}
 
 	switch edge.Type {
 	case horizonmodels.DependencyTypeOwns:
@@ -1514,6 +1525,34 @@ func (pc *PolicyChecker) checkEdgeCompleteness(edge *horizonmodels.DependencyEdg
 				"edge_completeness_owns_percent",
 				"OWNS edge missing ownership percentage. Enrichment recommended: capture stake/share percent.",
 				"metrics.ownership_percent or qualifiers.ownership_percent",
+			)
+		}
+		if !hasContractQualifier("share_type") {
+			add(
+				SeverityInfo,
+				"edge_completeness_owns_share_type",
+				"OWNS edge missing share type. Enrichment recommended: distinguish direct, indirect, and beneficial ownership.",
+				"qualifiers.share_type",
+			)
+		}
+
+	case horizonmodels.DependencyTypeSubsidiaryOf:
+		if !hasContractQualifier("share_type") {
+			add(
+				SeverityInfo,
+				"edge_completeness_subsidiary_share_type",
+				"SUBSIDIARY_OF edge missing share type. Enrichment recommended: capture whether the upstream owner is direct, indirect, or beneficial.",
+				"qualifiers.share_type",
+			)
+		}
+
+	case horizonmodels.DependencyTypeControls:
+		if !hasContractQualifier("control_type", "mechanism") {
+			add(
+				SeverityWarning,
+				"edge_completeness_controls_mechanism",
+				"CONTROLS edge missing control basis. Enrichment recommended: capture control_type and/or mechanism (board, veto, trustee, state mandate, etc.).",
+				"qualifiers.control_type or qualifiers.mechanism",
 			)
 		}
 
@@ -1559,6 +1598,42 @@ func (pc *PolicyChecker) checkEdgeCompleteness(edge *horizonmodels.DependencyEdg
 				"edge_temporal_unknown_modality",
 				"Relation has no temporal modality or validity window. Enrichment recommended: mark actual/projected/historical and add validFrom/validTo when known.",
 				"qualifiers.edgeModality and/or validFrom/validTo",
+			)
+		}
+
+	case horizonmodels.DependencyTypeInGeoScope:
+		if !hasContractQualifier("scope_basis") {
+			add(
+				SeverityInfo,
+				"edge_completeness_geo_scope_basis",
+				"IN_GEO_SCOPE edge missing scope basis. Enrichment recommended: capture whether scope is legal, administrative, operational, or de facto.",
+				"qualifiers.scope_basis",
+			)
+		}
+
+	case horizonmodels.DependencyTypeAffects,
+		horizonmodels.DependencyTypeInfluences,
+		horizonmodels.DependencyTypeAppliesTo,
+		horizonmodels.DependencyTypeImposesCondition,
+		horizonmodels.DependencyTypeOperatesVia:
+		if !hasContractQualifier(
+			"pass_through_estimate",
+			"channel_type",
+			"lag_quarters",
+			"measurement_lag_months",
+			"measurement_confidence",
+			"tax_base_coverage",
+			"elasticity_hint",
+			"sector_sensitivity",
+			"scope_basis",
+			"impact",
+			"type",
+		) {
+			add(
+				SeverityInfo,
+				"edge_completeness_transmission_qualifiers",
+				fmt.Sprintf("%s edge is missing transmission qualifiers. Enrichment recommended: capture scope, channel, lag, or pass-through semantics.", edge.Type),
+				"qualifiers.pass_through_estimate or qualifiers.channel_type or qualifiers.measurement_lag_months",
 			)
 		}
 	}

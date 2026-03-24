@@ -13,7 +13,7 @@ import (
 var deprecatedRelationTypes = []string{
 	"RELATED_TO", "PARTNERS_WITH", "DOMINATES",
 	"WORKS_FOR", "HAS_KEY_PERSON", "RENAMED_TO", "KEY_PERSON",
-	"ABOUT", "AFFECTS", "SURFACES", "INVOLVES_ACTOR", "IN_GEO_SCOPE",
+	"ABOUT", "SURFACES", "INVOLVES_ACTOR",
 	"RELATED_DOMAIN", "BROADENS_TO", "NARROWS_TO",
 }
 
@@ -123,6 +123,46 @@ func TestSupplyChainValidationPrompt_IncludesWorkingProductScopeRules(t *testing
 	}
 	if !strings.Contains(prompt, "productCandidates must be genuinely new scope additions") {
 		t.Fatalf("prompt must include candidate scope rule")
+	}
+}
+
+func TestPolicyImpactValidationPrompt_RequiresDirectedFiveLayerCoverage(t *testing.T) {
+	agent := NewCriticAgent(nil)
+	prompt := agent.buildPolicyImpactValidationPrompt(CriticValidatorInput{
+		Fragment: &models.HorizonFragment{
+			CanonicalPath: "/gov/ae/ministry-of-finance",
+			Type:          models.FragmentTypeOrganization,
+		},
+	})
+	for _, want := range []string{
+		"GATEKEEPS_DECISION must read gatekeeper -> decision_point",
+		"IN_GEO_SCOPE must read scope_owner -> geo_scope",
+		"AFFECTS must read impact_source -> affected_entity",
+		"geo/community/media/program transmission completeness",
+		"five-layer coverage check: Policy Source, Mechanism, Scope/Exposure, Transmission/Response, Observability",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("policy-impact validation prompt missing %q", want)
+		}
+	}
+}
+
+func TestGovernanceValidationPrompt_RequiresBeneficialOwnershipChecks(t *testing.T) {
+	agent := NewCriticAgent(nil)
+	prompt := agent.buildGovernanceValidationPrompt(CriticValidatorInput{
+		Fragment: &models.HorizonFragment{
+			CanonicalPath: "/org/ae/difc-opco",
+			Type:          models.FragmentTypeOrganization,
+		},
+	})
+	for _, want := range []string{
+		"beneficial-owner completeness",
+		"voting-rights vs equity divergence",
+		"community/dynasty lineage completeness",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("governance validation prompt missing %q", want)
+		}
 	}
 }
 

@@ -25,7 +25,9 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/govdict"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/graphenrich"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/mechanismdict"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
@@ -133,6 +135,53 @@ func (r *HorizonFragmentsRepository) normalizeProductDictionaryRefs(ctx context.
 		}
 		if matched && canonicalPath != "" {
 			fragment.ProductRef = ptrString(canonicalPath)
+		}
+	}
+	return nil
+}
+
+func (r *HorizonFragmentsRepository) normalizeRegulatoryDictionaryRefs(ctx context.Context, fragment *models.HorizonFragment) error {
+	if r == nil || fragment == nil {
+		return nil
+	}
+	if r.mechanismDictionary != nil && fragment.Type == models.FragmentTypeMechanism {
+		cp := strings.TrimSpace(fragment.CanonicalPath)
+		if strings.HasPrefix(cp, "/mechanism/") {
+			canonicalPath, matched, err := r.mechanismDictionary.CanonicalizeMechanismPath(ctx, cp)
+			if err != nil {
+				return err
+			}
+			if matched && canonicalPath != "" && canonicalPath != cp {
+				fragment.CanonicalPath = canonicalPath
+				fragment.CanonicalParts = nil
+			} else if !matched {
+				r.mechanismDictionary.RecordUnknownMechanismCandidateAsync(
+					firstNonEmptyFragmentTenant(fragment.TenantID),
+					cp,
+					strings.TrimSpace(fragment.ID),
+					"fragment_persist",
+				)
+			}
+		}
+	}
+	if r.govDictionary != nil {
+		cp := strings.TrimSpace(fragment.CanonicalPath)
+		if strings.HasPrefix(cp, "/gov/") {
+			canonicalPath, matched, err := r.govDictionary.CanonicalizeGovPath(ctx, cp)
+			if err != nil {
+				return err
+			}
+			if matched && canonicalPath != "" && canonicalPath != cp {
+				fragment.CanonicalPath = canonicalPath
+				fragment.CanonicalParts = nil
+			} else if !matched && fragment.Type == models.FragmentTypeOrganization {
+				r.govDictionary.RecordUnknownGovCandidateAsync(
+					firstNonEmptyFragmentTenant(fragment.TenantID),
+					cp,
+					strings.TrimSpace(fragment.ID),
+					"fragment_persist",
+				)
+			}
 		}
 	}
 	return nil
@@ -410,8 +459,10 @@ type HorizonFragmentsRepository struct {
 	// Used on fragment delete to avoid stale search hits.
 	vertexSearchDelete func(ctx context.Context, fragmentID string) error
 
-	redisCache        *redis.Client
-	productDictionary *productdict.Runtime
+	redisCache           *redis.Client
+	productDictionary    *productdict.Runtime
+	mechanismDictionary  *mechanismdict.Runtime
+	govDictionary        *govdict.Runtime
 }
 
 // NewHorizonFragmentsRepository создает новый репозиторий
@@ -528,6 +579,22 @@ func (r *HorizonFragmentsRepository) WithRedis(c *redis.Client) *HorizonFragment
 
 func (r *HorizonFragmentsRepository) WithProductDictionary(dict *productdict.Runtime) *HorizonFragmentsRepository {
 	r.productDictionary = dict
+	return r
+}
+
+func (r *HorizonFragmentsRepository) WithMechanismDictionary(dict *mechanismdict.Runtime) *HorizonFragmentsRepository {
+	if r == nil {
+		return r
+	}
+	r.mechanismDictionary = dict
+	return r
+}
+
+func (r *HorizonFragmentsRepository) WithGovDictionary(dict *govdict.Runtime) *HorizonFragmentsRepository {
+	if r == nil {
+		return r
+	}
+	r.govDictionary = dict
 	return r
 }
 
@@ -1025,6 +1092,9 @@ func (r *HorizonFragmentsRepository) createWithOptions(ctx context.Context, frag
 	}
 	if err := r.normalizeProductDictionaryRefs(ctx, fragment); err != nil {
 		log.Printf("[HorizonFragments] WARNING: product dictionary normalization failed on create path=%s err=%v", strings.TrimSpace(fragment.CanonicalPath), err)
+	}
+	if err := r.normalizeRegulatoryDictionaryRefs(ctx, fragment); err != nil {
+		log.Printf("[HorizonFragments] WARNING: regulatory dictionary normalization failed on create path=%s err=%v", strings.TrimSpace(fragment.CanonicalPath), err)
 	}
 	PrepareFragmentForValidation(fragment)
 	if err := fragment.Validate(); err != nil {
@@ -1831,6 +1901,9 @@ func (r *HorizonFragmentsRepository) updateWithOptions(ctx context.Context, frag
 	}
 	if err := r.normalizeProductDictionaryRefs(ctx, fragment); err != nil {
 		log.Printf("[HorizonFragments] WARNING: product dictionary normalization failed on update fragment=%s path=%s err=%v", strings.TrimSpace(fragment.ID), strings.TrimSpace(fragment.CanonicalPath), err)
+	}
+	if err := r.normalizeRegulatoryDictionaryRefs(ctx, fragment); err != nil {
+		log.Printf("[HorizonFragments] WARNING: regulatory dictionary normalization failed on update fragment=%s path=%s err=%v", strings.TrimSpace(fragment.ID), strings.TrimSpace(fragment.CanonicalPath), err)
 	}
 	PrepareFragmentForValidation(fragment)
 	r.applyGraphEnrich(ctx, fragment)

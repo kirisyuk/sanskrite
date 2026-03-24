@@ -253,7 +253,15 @@ func appendControlAnnotations(
 	if target == nil || strings.TrimSpace(target.CanonicalPath) == "" {
 		return
 	}
-	for _, key := range []string{"control_type", "mechanism", "ownership_percent", "stake_pct"} {
+	for _, key := range []string{
+		"control_type",
+		"mechanism",
+		"ownership_percent",
+		"stake_pct",
+		"voting_percent",
+		"voting_rights_percent",
+		"share_type",
+	} {
 		if v, ok := edge.Qualifiers[key]; ok {
 			val := strings.TrimSpace(fmt.Sprint(v))
 			if val == "" {

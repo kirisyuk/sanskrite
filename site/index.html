@@ -68,7 +68,7 @@
             <div class="nav-links" id="site-nav">
               <a href="#about" data-i18n="nav.about">About</a>
               <a href="#services" data-i18n="nav.services">Services</a>
-              <a href="./platform.html" data-i18n="nav.platform">Platform</a>
+              <a href="#platform" data-i18n="nav.platform">Platforms</a>
               <a href="#contact" data-i18n="nav.contact">Contact</a>
             </div>
           </div>
@@ -182,29 +182,60 @@
           </div>
         </section>
 
-        <section class="platform section reveal" id="platform">
-          <div class="platform-panel">
-            <div class="platform-copy">
-              <h2 data-i18n="platform.title">Access to the working platform.</h2>
-              <p data-i18n="platform.text">
-                Platform access is provided separately for approved workflows and
-                client mandates. Public site materials remain intentionally
-                limited.
-              </p>
-              <a
-                class="platform-link"
-                href="./platform.html"
-                data-i18n="platform.cta"
-              >
-                Discover Platform
-              </a>
-            </div>
-            <img
-              src="./images/platform.png"
-              alt="Abstract image for platform access"
-              data-i18n-alt="platform.alt"
-              class="platform-image"
-            />
+        <section class="platforms section reveal" id="platform">
+          <div class="services-heading">
+            <div class="section-label" data-i18n="platforms.label">Platforms</div>
+            <h2 data-i18n="platforms.title">Two operating layers.</h2>
+            <p class="platforms-intro" data-i18n="platforms.text">
+              Etigram is structured around a decision surface for exposed operations and a
+              separate simulation layer for scenario requests and real-world response.
+            </p>
+          </div>
+
+          <div class="platforms-grid">
+            <article class="platforms-card reveal-card">
+              <img
+                src="./images/platform-design.png"
+                alt="Horizon Decision Fabric overview"
+                data-i18n-alt="platforms.fabric.alt"
+                class="platforms-card__image"
+              />
+              <div class="platforms-card__copy">
+                <h3 data-i18n="platforms.fabric.title">Horizon Decision Fabric</h3>
+                <p class="service-subtitle" data-i18n="platforms.fabric.subtitle">
+                  Structured intelligence surface
+                </p>
+                <p data-i18n="platforms.fabric.text">
+                  Decision Fabric organizes objects, dependencies, signals, and cases into a
+                  disciplined working surface for exposed operating environments.
+                </p>
+                <a class="platform-link" href="./platform.html" data-i18n="platforms.fabric.cta">
+                  Discover Platform
+                </a>
+              </div>
+            </article>
+
+            <article class="platforms-card reveal-card">
+              <img
+                src="./images/agentmesh.png"
+                alt="Horizon Agent Horde overview"
+                data-i18n-alt="platforms.mesh.alt"
+                class="platforms-card__image"
+              />
+              <div class="platforms-card__copy">
+                <h3 data-i18n="platforms.mesh.title">Horizon Agent Horde</h3>
+                <p class="service-subtitle" data-i18n="platforms.mesh.subtitle">
+                  Multi-agent simulation layer
+                </p>
+                <p data-i18n="platforms.mesh.text">
+                  Agent Horde simulates how institutions, companies, markets, and narratives
+                  may respond to scenario-driven requests across governed multi-agent worlds.
+                </p>
+                <a class="platform-link" href="./agent-mesh.html" data-i18n="platforms.mesh.cta">
+                  Discover Platform
+                </a>
+              </div>
+            </article>
           </div>
         </section>
       </main>

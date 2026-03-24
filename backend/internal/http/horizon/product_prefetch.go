@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"unicode"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
@@ -92,6 +93,13 @@ func (h *HorizonHandlers) findProductPrefetchSuggestions(ctx context.Context, te
 	if query == "" {
 		return []productPrefetchSuggestionResponse{}, nil
 	}
+	pairBackedSuggestions, seenCanonicals, err := h.findPairBackedProductPrefetchSuggestions(ctx, tenantID, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	if len(pairBackedSuggestions) >= limit {
+		return pairBackedSuggestions[:limit], nil
+	}
 	rawLimit := limit * 4
 	if rawLimit < 12 {
 		rawLimit = 12
@@ -110,23 +118,143 @@ func (h *HorizonHandlers) findProductPrefetchSuggestions(ctx context.Context, te
 		}
 	}
 
-	exact, err := h.service.Fragments().FindByLabelForTenant(ctx, tenantID, "en", query, horizonmodels.FragmentTypeProduct)
+	for _, variant := range productPrefetchQueryVariants(query) {
+		exact, err := h.service.Fragments().FindByLabelForTenant(ctx, tenantID, "en", variant, horizonmodels.FragmentTypeProduct)
+		if err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, filterProductFragments(exact)...)
+
+		prefix, err := h.service.Fragments().SearchPrefixForTenant(ctx, tenantID, variant, rawLimit)
+		if err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, filterProductFragments(prefix)...)
+	}
+
+	fallbackSuggestions, err := rankProductPrefetchSuggestions(ctx, tenantID, query, candidates, h, limit)
 	if err != nil {
 		return nil, err
 	}
-	candidates = append(candidates, filterProductFragments(exact)...)
-
-	prefix, err := h.service.Fragments().SearchPrefixForTenant(ctx, tenantID, query, rawLimit)
-	if err != nil {
-		return nil, err
+	out := make([]productPrefetchSuggestionResponse, 0, limit)
+	for _, item := range pairBackedSuggestions {
+		out = append(out, item)
 	}
-	candidates = append(candidates, filterProductFragments(prefix)...)
+	for _, item := range fallbackSuggestions {
+		cp := strings.TrimSpace(item.CanonicalPath)
+		if cp == "" {
+			continue
+		}
+		if _, ok := seenCanonicals[cp]; ok {
+			continue
+		}
+		out = append(out, item)
+		seenCanonicals[cp] = struct{}{}
+		if len(out) >= limit {
+			break
+		}
+	}
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
 
-	return rankProductPrefetchSuggestions(ctx, tenantID, query, candidates, h, limit)
+func productPrefetchQueryVariants(query string) []string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 4)
+	appendVariant := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	appendVariant(query)
+	appendVariant(strings.ToLower(query))
+	appendVariant(titleCaseQuery(query))
+	return out
+}
+
+func titleCaseQuery(query string) string {
+	parts := strings.Fields(strings.TrimSpace(query))
+	if len(parts) == 0 {
+		return ""
+	}
+	for i, part := range parts {
+		runes := []rune(strings.ToLower(part))
+		if len(runes) == 0 {
+			continue
+		}
+		runes[0] = unicode.ToUpper(runes[0])
+		parts[i] = string(runes)
+	}
+	return strings.Join(parts, " ")
+}
+
+func (h *HorizonHandlers) findPairBackedProductPrefetchSuggestions(ctx context.Context, tenantID string, query string, limit int) ([]productPrefetchSuggestionResponse, map[string]struct{}, error) {
+	if h == nil || h.productDictionary == nil || h.service == nil || h.service.Fragments() == nil {
+		return []productPrefetchSuggestionResponse{}, map[string]struct{}{}, nil
+	}
+	paths, err := h.productDictionary.SearchCanonicalProductPathsForTenant(ctx, tenantID, query, max(limit*3, 12))
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(paths) == 0 {
+		return []productPrefetchSuggestionResponse{}, map[string]struct{}{}, nil
+	}
+	frags, err := h.service.Fragments().BatchGetByCanonicalPathsForTenant(ctx, tenantID, paths)
+	if err != nil {
+		return nil, nil, err
+	}
+	queryNorm := normalizeProductPrefetchText(query)
+	out := make([]productPrefetchSuggestionResponse, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		seen[path] = struct{}{}
+		frag := frags[path]
+		label := fragmentDisplayName(frag)
+		if label == "" {
+			label = humanizeProductPath(path)
+		}
+		out = append(out, productPrefetchSuggestionResponse{
+			CanonicalPath: path,
+			Label:         label,
+			MatchedLabel:  label,
+			MatchedPath:   path,
+			SourceScope:   sourceScopeForFragment(tenantID, frag),
+			Score:         500 + scoreProductPrefetchPath(queryNorm, path, label),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Score != out[j].Score {
+			return out[i].Score > out[j].Score
+		}
+		if out[i].Label != out[j].Label {
+			return out[i].Label < out[j].Label
+		}
+		return out[i].CanonicalPath < out[j].CanonicalPath
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, seen, nil
 }
 
 func rankProductPrefetchSuggestions(ctx context.Context, tenantID string, query string, candidates []*horizonmodels.HorizonFragment, h *HorizonHandlers, limit int) ([]productPrefetchSuggestionResponse, error) {
-	queryNorm := strings.ToLower(strings.TrimSpace(query))
+	queryNorm := normalizeProductPrefetchText(query)
 	if queryNorm == "" || h == nil || h.productDictionary == nil || h.service == nil || h.service.Fragments() == nil {
 		return []productPrefetchSuggestionResponse{}, nil
 	}
@@ -187,14 +315,10 @@ func rankProductPrefetchSuggestions(ctx context.Context, tenantID string, query 
 			},
 			candidateTenant: strings.TrimSpace(frag.TenantID),
 		}
-		if frag.CanonicalPath != canonicalPath {
-			suggestion.CanonicalizedFrom = strings.TrimSpace(frag.CanonicalPath)
-		}
-		if strings.TrimSpace(frag.TenantID) != "" && strings.TrimSpace(frag.TenantID) == strings.TrimSpace(tenantID) && strings.TrimSpace(tenantID) != "global" {
-			suggestion.SourceScope = "tenant"
-		} else {
-			suggestion.SourceScope = "global"
-		}
+			if frag.CanonicalPath != canonicalPath {
+				suggestion.CanonicalizedFrom = strings.TrimSpace(frag.CanonicalPath)
+			}
+			suggestion.SourceScope = sourceScopeForFragment(tenantID, frag)
 
 		current, ok := bestByCanonical[canonicalPath]
 		if !ok || productPrefetchSuggestionLess(current, suggestion, tenantID) {
@@ -225,10 +349,10 @@ func scoreProductPrefetchCandidate(queryNorm string, tenantID string, frag *hori
 	if frag == nil {
 		return 0
 	}
-	label := strings.ToLower(strings.TrimSpace(fragmentDisplayName(frag)))
-	canonicalLabelNorm := strings.ToLower(strings.TrimSpace(canonicalLabel))
-	path := strings.ToLower(strings.TrimSpace(frag.CanonicalPath))
-	canonicalPathNorm := strings.ToLower(strings.TrimSpace(canonicalPath))
+	label := normalizeProductPrefetchText(fragmentDisplayName(frag))
+	canonicalLabelNorm := normalizeProductPrefetchText(canonicalLabel)
+	path := normalizeProductPrefetchText(frag.CanonicalPath)
+	canonicalPathNorm := normalizeProductPrefetchText(canonicalPath)
 	score := 0
 
 	if label == queryNorm || canonicalLabelNorm == queryNorm {
@@ -258,6 +382,31 @@ func scoreProductPrefetchCandidate(queryNorm string, tenantID string, frag *hori
 	return score
 }
 
+func scoreProductPrefetchPath(queryNorm string, canonicalPath string, label string) int {
+	labelNorm := normalizeProductPrefetchText(label)
+	pathNorm := normalizeProductPrefetchText(canonicalPath)
+	score := 0
+	if labelNorm == queryNorm {
+		score += 120
+	}
+	if pathNorm == queryNorm {
+		score += 110
+	}
+	if strings.HasPrefix(labelNorm, queryNorm) {
+		score += 40
+	}
+	if strings.HasPrefix(pathNorm, queryNorm) {
+		score += 30
+	}
+	if strings.Contains(labelNorm, queryNorm) {
+		score += 10
+	}
+	if strings.Contains(pathNorm, queryNorm) {
+		score += 6
+	}
+	return score
+}
+
 func productPrefetchSuggestionLess(current scoredProductPrefetchSuggestion, candidate scoredProductPrefetchSuggestion, tenantID string) bool {
 	if candidate.Score != current.Score {
 		return candidate.Score > current.Score
@@ -272,4 +421,50 @@ func productPrefetchSuggestionLess(current scoredProductPrefetchSuggestion, cand
 		return false
 	}
 	return candidate.Label < current.Label
+}
+
+func normalizeProductPrefetchText(value string) string {
+	replacer := strings.NewReplacer("/", " ", "-", " ", "_", " ", ".", " ", "(", " ", ")", " ")
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(replacer.Replace(value)))), " ")
+}
+
+func humanizeProductPath(path string) string {
+	segment := lastNonEmptyPathSegment(path)
+	if segment == "" {
+		return path
+	}
+	parts := strings.Fields(strings.ReplaceAll(segment, "-", " "))
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(part[:1]) + part[1:]
+	}
+	return strings.Join(parts, " ")
+}
+
+func lastNonEmptyPathSegment(path string) string {
+	path = strings.Trim(strings.TrimSpace(path), "/")
+	if path == "" {
+		return ""
+	}
+	parts := strings.Split(path, "/")
+	return strings.TrimSpace(parts[len(parts)-1])
+}
+
+func sourceScopeForFragment(tenantID string, frag *horizonmodels.HorizonFragment) string {
+	if frag == nil {
+		return "global"
+	}
+	if strings.TrimSpace(frag.TenantID) != "" && strings.TrimSpace(frag.TenantID) == strings.TrimSpace(tenantID) && strings.TrimSpace(tenantID) != "global" {
+		return "tenant"
+	}
+	return "global"
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

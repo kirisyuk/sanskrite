@@ -107,7 +107,7 @@ type BuildPathOptions struct {
 	MaxBranching int
 	// MaxPaths limits how many distinct paths to return (top by confidence). 0 = 10.
 	MaxPaths int
-	// RequireProductTransformation if true, requires TRANSFORMS_INTO between products
+	// RequireProductTransformation if true, requires a canonical product-transition edge between products.
 	RequireProductTransformation bool
 	// EffectiveAt filters links by time validity (nil = no time filter)
 	EffectiveAt *time.Time
@@ -868,6 +868,7 @@ func (b *SupplyChainPathBuilder) MaterializePath(
 		if parsedMerged, perr := models.ParseSupplyChainPathPayload(artifact.Payload); perr == nil && parsedMerged != nil && parsedMerged.Sufficiency != nil {
 			artifact.PathStatus = models.EffectivePathStatusFromSufficiency(parsedMerged.Sufficiency)
 		}
+		models.PopulateMaterializedArtifactIndexes(artifact)
 
 		if err := artifact.Validate(); err != nil {
 			return "", fmt.Errorf("validation error after merge: %w", err)
@@ -964,6 +965,7 @@ func (b *SupplyChainPathBuilder) MaterializePathsBatch(
 				artifact.PathStatus = models.EffectivePathStatusFromSufficiency(parsedMerged.Sufficiency)
 			}
 		}
+		models.PopulateMaterializedArtifactIndexes(artifact)
 		artifacts = append(artifacts, artifact)
 	}
 	if len(artifacts) == 0 {

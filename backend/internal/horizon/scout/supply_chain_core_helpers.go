@@ -1,13 +1,11 @@
 package scout
 
 import (
-	"context"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/supplysemantics"
 )
 
@@ -576,39 +574,4 @@ func isSupplyChainSupplierPath(path string) bool {
 func isSupplyChainCustomerPath(path string) bool {
 	path = strings.TrimSpace(path)
 	return strings.HasPrefix(path, "/org/") || strings.HasPrefix(path, "/fac/") || strings.HasPrefix(path, "/gov/")
-}
-
-func supplyChainEdgeExists(
-	ctx context.Context,
-	edgesRepo *repo.DependencyEdgesRepository,
-	tenantID, sourceID, targetID string,
-	edgeType models.DependencyType,
-	qualifiers map[string]interface{},
-) bool {
-	if edgesRepo == nil {
-		return false
-	}
-	sourceID = strings.TrimSpace(sourceID)
-	targetID = strings.TrimSpace(targetID)
-	if sourceID == "" || targetID == "" {
-		return false
-	}
-	variant := chainEdgeVariantKey(string(edgeType), qualifiers)
-	if variant == "" {
-		_, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, sourceID, targetID, edgeType)
-		return err == nil
-	}
-	edges, err := edgesRepo.ListBySourceTargetAndType(ctx, tenantID, sourceID, targetID, edgeType, 50)
-	if err != nil {
-		return false
-	}
-	for _, edge := range edges {
-		if edge == nil {
-			continue
-		}
-		if chainEdgeVariantKey(string(edge.Type), edge.Qualifiers) == variant {
-			return true
-		}
-	}
-	return false
 }

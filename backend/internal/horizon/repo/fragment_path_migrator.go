@@ -165,6 +165,10 @@ func (m *FragmentPathMigrator) rewriteMaterializedArtifacts(ctx context.Context,
 	kinds := []models.MaterializedKind{
 		models.MaterializedKindSupplyChainPath,
 		models.MaterializedKindRegulatoryImpactMap,
+		models.MaterializedKindRegulatoryImpactTransmissionPath,
+		models.MaterializedKindRegulatoryTimeline,
+		models.MaterializedKindRegulatoryCascadeMap,
+		models.MaterializedKindRegulatoryImpactScenario,
 		models.MaterializedKindGovernanceChain,
 		models.MaterializedKindEcosystemMap,
 	}

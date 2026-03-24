@@ -199,7 +199,9 @@ func (a *ResearchAgent) findFacilitiesForOrgsBatch(ctx context.Context, orgPaths
 
 1. CHILD ORGANIZATIONS (priority): If the org produces goods not only through its own facilities but also through subsidiaries, controlled entities, or partners that manufacture on its behalf — return those child orgs FIRST. We will drill into them in the next iteration. For government bodies (/gov/...): include subordinate agencies, state-owned enterprises they control.
 
-2. PRODUCTION FACILITIES: Factories, plants, refineries, assembly sites, and other facilities that DIRECTLY transform materials into products. Exclude pure warehouses, distribution centers, fulfillment hubs, retail sites, and logistics nodes unless the facility's own primary output is a service. For government bodies: include production, processing, or depot facilities only when they directly manufacture, refine, or store strategic goods as operational stock. Do NOT invent synthetic facilities; if no concrete production facility is known, return an empty facilities list (org-level production will be represented later as org -> PRODUCES -> product).
+2. PRODUCTION FACILITIES: Factories, plants, refineries, assembly sites, and other facilities that DIRECTLY transform materials into products. Exclude pure warehouses, distribution centers, fulfillment hubs, retail sites, and logistics nodes unless the facility's own primary output is a service.
+   Exception: when the chain is explicitly cross-border, sanctions-sensitive, customs-sensitive, import-constrained, or route-sensitive, INCLUDE operational relay facilities that materially gate the flow: bonded warehouses, customs terminals, inland terminals, transshipment depots, service depots, and seaport/airport terminals.
+   For government bodies: include production, processing, or depot facilities only when they directly manufacture, refine, or store strategic goods as operational stock. Do NOT invent synthetic facilities; if no concrete production facility is known, return an empty facilities list (org-level production will be represented later as org -> PRODUCES -> product).
    Preserve place-bearing names exactly when they are part of the official site/facility name (e.g. Wuxi, Huizhou, Eilat, Binh Duong, Riyadh). Do NOT drop the place token and do NOT collapse such facilities into generic "... general production" labels when a concrete site clue exists.
 
 Organizations (use /org/... or /gov/... paths):
@@ -291,7 +293,8 @@ func (a *ResearchAgent) findRecipientFacsForProductsBatch(ctx context.Context, p
 	prompt := fmt.Sprintf(`You are a supply chain research agent. For each product below, find ALL facilities that use this product as INPUT for their own production (manufacturing, processing, assembly, refining).
 
 Include: facilities that transform, process, or assemble this product into something else — the direct next link in the supply chain.
-Exclude: pure distributors, retailers, logistics hubs, end consumers — only production facilities.
+Exclude: pure distributors, retailers, and end consumers.
+Exception: when the flow is cross-border, sanctions-sensitive, customs-sensitive, or route-sensitive, include operational relay facilities that materially gate the next step of the product flow: bonded warehouses, customs terminals, seaport terminals, inland terminals, transshipment depots, and service depots.
 
 Products:
 %s
@@ -420,7 +423,9 @@ func (a *ResearchAgent) findSupplierFacsForProductsBatch(ctx context.Context, pr
 	prompt := fmt.Sprintf(`You are a supply chain research agent (UPSTREAM tracing). For each product below, find ALL facilities that PRODUCE and SUPPLY this product to the market.
 
 Include: extraction sites, refineries, processing plants, manufacturing facilities that output this product. The direct upstream link — who makes this product before it reaches consumers/processors.
-Exclude: distributors, traders, logistics hubs — only production facilities. Return only concrete facilities (no synthetic general-production placeholders). Use /fac/na/{facilitySlug} ONLY as a last resort after checking facility name, site/city mention, operator context, and source text for geography.
+Exclude: distributors and traders — only production facilities by default.
+Exception: if the product is known to move through operational relay sites before controlled delivery, you may include transshipment/bonded/customs facilities as additional gated hubs only when they are concretely evidenced and materially gate the flow.
+Return only concrete facilities (no synthetic general-production placeholders). Use /fac/na/{facilitySlug} ONLY as a last resort after checking facility name, site/city mention, operator context, and source text for geography.
 
 Products:
 %s

@@ -99,14 +99,14 @@ type oneHopStep struct {
 }
 
 type oneHopContext struct {
-	Anchor           *horizonmodels.HorizonFragment
+	Anchor            *horizonmodels.HorizonFragment
 	RelatedFacilities []*horizonmodels.HorizonFragment
-	OwnerOrgs        []*horizonmodels.HorizonFragment
-	InputProducts    []*horizonmodels.HorizonFragment
-	OutputProducts   []*horizonmodels.HorizonFragment
-	DownstreamActors []*horizonmodels.HorizonFragment
-	ProductEdges     []*horizonmodels.DependencyEdge
-	PathArtifacts    []*horizonmodels.MaterializedArtifact
+	OwnerOrgs         []*horizonmodels.HorizonFragment
+	InputProducts     []*horizonmodels.HorizonFragment
+	OutputProducts    []*horizonmodels.HorizonFragment
+	DownstreamActors  []*horizonmodels.HorizonFragment
+	ProductEdges      []*horizonmodels.DependencyEdge
+	PathArtifacts     []*horizonmodels.MaterializedArtifact
 }
 
 type oneHopPersistStats struct {
@@ -264,21 +264,21 @@ func (s *OneHopDownstreamService) ExecuteJob(ctx context.Context, job *horizonmo
 
 	affected := sortedKeys(stats.AffectedPaths)
 	_ = s.publishLifecycleEvent(ctx, "horizon.supply_chain.one_hop.completed", tenantID, map[string]interface{}{
-		"tenantId":             tenantID,
-		"projectId":            projectID,
-		"lensId":               lensID,
-		"jobId":                strings.TrimSpace(job.ID),
-		"anchorRef":            anchor.CanonicalPath,
-		"anchorType":           string(anchor.Type),
-		"scope":                "one_hop_downstream",
-		"status":               "completed",
-		"fragmentsCreated":     stats.FragmentsCreated,
-		"edgesCreated":         stats.EdgesCreated,
-		"artifactsCreated":     stats.ArtifactsCreated,
-		"candidateCounts":      map[string]int{"synonym": stats.SynonymCandidates, "transform": stats.TransformCandidates},
+		"tenantId":               tenantID,
+		"projectId":              projectID,
+		"lensId":                 lensID,
+		"jobId":                  strings.TrimSpace(job.ID),
+		"anchorRef":              anchor.CanonicalPath,
+		"anchorType":             string(anchor.Type),
+		"scope":                  "one_hop_downstream",
+		"status":                 "completed",
+		"fragmentsCreated":       stats.FragmentsCreated,
+		"edgesCreated":           stats.EdgesCreated,
+		"artifactsCreated":       stats.ArtifactsCreated,
+		"candidateCounts":        map[string]int{"synonym": stats.SynonymCandidates, "transform": stats.TransformCandidates},
 		"affectedCanonicalPaths": affected,
-		"durationMs":           duration.Milliseconds(),
-		"stepsAccepted":        len(steps),
+		"durationMs":             duration.Milliseconds(),
+		"stepsAccepted":          len(steps),
 	})
 	return nil
 }
@@ -429,10 +429,10 @@ func (s *OneHopDownstreamService) collectContext(ctx context.Context, tenantID s
 	}
 	productEdges := make([]*horizonmodels.DependencyEdge, 0, 32)
 	if len(productPathIDs) > 0 {
-		transformEdges, _ := s.edgesRepo.ListBySourceIDsAndType(ctx, tenantID, productPathIDs, horizonmodels.DependencyTypeTransformsInto)
-		assemblyEdges, _ := s.edgesRepo.ListBySourceIDsAndType(ctx, tenantID, productPathIDs, horizonmodels.DependencyTypeAssemblesInto)
-		productEdges = append(productEdges, transformEdges...)
-		productEdges = append(productEdges, assemblyEdges...)
+		for _, edgeType := range horizonmodels.ProductTransitionEdgeTypes() {
+			typedEdges, _ := s.edgesRepo.ListBySourceIDsAndType(ctx, tenantID, productPathIDs, edgeType)
+			productEdges = append(productEdges, typedEdges...)
+		}
 	}
 	out.ProductEdges = productEdges
 
@@ -720,14 +720,11 @@ func (s *OneHopDownstreamService) persistSteps(
 			}
 		}
 
-		if step.StepKind == "transformation" || step.StepKind == "assembly" {
+		if step.StepKind == "transformation" || step.StepKind == "assembly" || step.StepKind == "usage" {
 			if targetProduct == nil {
 				continue
 			}
-			edgeType := horizonmodels.DependencyTypeTransformsInto
-			if step.StepKind == "assembly" {
-				edgeType = horizonmodels.DependencyTypeAssemblesInto
-			}
+			edgeType := edgeTypeForStepKind(step.StepKind)
 			if s.productDict != nil {
 				if _, known, _, _, err := s.productDict.NormalizeProductEdgeType(ctx, edgeType, horizonmodels.FragmentTypeProduct, horizonmodels.FragmentTypeProduct, sourceProduct.CanonicalPath, targetProduct.CanonicalPath); err == nil && !known {
 					stats.TransformCandidates++
@@ -813,8 +810,8 @@ func (s *OneHopDownstreamService) ensureFragmentByPath(
 		State:         map[string]horizonmodels.MetricValue{},
 		Governance:    horizonmodels.Governance{Owner: "SYSTEM", Status: string(horizonmodels.FragmentStatusActive)},
 		Metadata: horizonmodels.FragmentMetadata{
-			CreatedAt:      time.Now().UTC(),
-			LastUpdatedAt:  time.Now().UTC(),
+			CreatedAt:       time.Now().UTC(),
+			LastUpdatedAt:   time.Now().UTC(),
 			EpistemicStatus: horizonmodels.EpistemicStatusLowConfidence,
 		},
 		Provenance: horizonmodels.Provenance{Method: provenanceMethod},
@@ -851,7 +848,7 @@ func (s *OneHopDownstreamService) ensureEdge(
 		TargetFragmentID: strings.TrimSpace(target.ID),
 		Type:             edgeType,
 		Properties: horizonmodels.EdgeProperties{
-			Criticality:  clamp01(floatOrDefault(qualifiers["confidence"], 0.75)),
+			Criticality:   clamp01(floatOrDefault(qualifiers["confidence"], 0.75)),
 			Amplification: 1,
 		},
 		Qualifiers: qualifiers,
@@ -904,11 +901,60 @@ func (s *OneHopDownstreamService) ensureMaterializedPath(
 	if s.materializedRepo != nil {
 		if existing, err := s.materializedRepo.GetByCanonicalKey(ctx, segment.TenantID, horizonmodels.MaterializedKindSupplyChainPath, canonicalKey); err == nil && existing != nil {
 			_, err = s.pathBuilder.MaterializePath(ctx, path, segment.TenantID, lensID, canonicalKey)
+			if err == nil && strings.TrimSpace(lensID) != "" && s.lensesRepo != nil {
+				if artifact, artErr := s.materializedRepo.GetByCanonicalKey(ctx, segment.TenantID, horizonmodels.MaterializedKindSupplyChainPath, canonicalKey); artErr == nil && artifact != nil {
+					_ = s.lensesRepo.UpsertScopeArtifact(ctx, strings.TrimSpace(lensID), strings.TrimPrefix(strings.TrimSpace(artifact.CanonicalKey), "/"), oneHopScopeArtifactRef(artifact))
+				}
+			}
 			return false, err
 		}
 	}
 	_, err := s.pathBuilder.MaterializePath(ctx, path, segment.TenantID, lensID, canonicalKey)
+	if err == nil && strings.TrimSpace(lensID) != "" && s.lensesRepo != nil && s.materializedRepo != nil {
+		if artifact, artErr := s.materializedRepo.GetByCanonicalKey(ctx, segment.TenantID, horizonmodels.MaterializedKindSupplyChainPath, canonicalKey); artErr == nil && artifact != nil {
+			_ = s.lensesRepo.UpsertScopeArtifact(ctx, strings.TrimSpace(lensID), strings.TrimPrefix(strings.TrimSpace(artifact.CanonicalKey), "/"), oneHopScopeArtifactRef(artifact))
+		}
+	}
 	return err == nil, err
+}
+
+func oneHopScopeArtifactRef(artifact *horizonmodels.MaterializedArtifact) horizonmodels.ScopeArtifactRef {
+	if artifact == nil {
+		return horizonmodels.ScopeArtifactRef{}
+	}
+	horizonmodels.PopulateMaterializedArtifactIndexes(artifact)
+	ref := horizonmodels.ScopeArtifactRef{
+		Kind:               string(artifact.Kind),
+		DisplayName:        artifact.DisplayName,
+		AnchorSupplier:     artifact.AnchorSupplier,
+		AnchorCustomer:     artifact.AnchorCustomer,
+		ProductAxis:        artifact.ProductAxis,
+		NodeRefs:           append([]string(nil), artifact.NodeRefs...),
+		Status:             artifact.PathStatus,
+		GeoRefs:            append([]string(nil), artifact.GeoRefs...),
+		FlowRefs:           append([]string(nil), artifact.FlowRefs...),
+		ZoneRefs:           append([]string(nil), artifact.ZoneRefs...),
+		AffectedZoneRefs:   append([]string(nil), artifact.AffectedZoneRefs...),
+		LegCount:           artifact.LegCount,
+		BindingConfidence:  artifact.BindingScore,
+		PathStressScore:    artifact.PathStressScore,
+		BottleneckLegIndex: artifact.BottleneckLeg,
+		RecoveryLatencyHrs: artifact.RecoveryLatencyHrs,
+	}
+	if parsed, err := horizonmodels.ParseSupplyChainPathPayload(artifact.Payload); err == nil && parsed != nil {
+		summary := horizonmodels.SummarizeSupplyChainPathBindings(parsed)
+		ref.GeoRefs = summary.GeoRefs
+		ref.FlowRefs = summary.FlowRefs
+		ref.ZoneRefs = summary.ZoneRefs
+		ref.AffectedZoneRefs = summary.AffectedZoneRefs
+		ref.SpatialSemantics = summary.SpatialSemantics
+		ref.LegCount = summary.LegCount
+		ref.BindingConfidence = summary.BindingConfidence
+		ref.PathStressScore = summary.PathStressScore
+		ref.BottleneckLegIndex = summary.BottleneckLegIndex
+		ref.RecoveryLatencyHrs = summary.RecoveryLatencyHrs
+	}
+	return ref
 }
 
 func (s *OneHopDownstreamService) buildPrompt(anchor *horizonmodels.HorizonFragment, contextData *oneHopContext, opts OneHopDownstreamOptions) string {
@@ -918,11 +964,11 @@ func (s *OneHopDownstreamService) buildPrompt(anchor *horizonmodels.HorizonFragm
 			"type":          string(anchor.Type),
 			"label":         fragmentLabel(anchor),
 		},
-		"relatedFacilities": summarizeFragments(contextData.RelatedFacilities, maxPromptFacilities),
-		"ownerOrgs":         summarizeFragments(contextData.OwnerOrgs, maxPromptActors),
-		"inputProducts":     summarizeFragments(contextData.InputProducts, maxPromptProducts),
-		"outputProducts":    summarizeFragments(contextData.OutputProducts, maxPromptProducts),
-		"knownDownstreamActors": summarizeFragments(contextData.DownstreamActors, maxPromptActors),
+		"relatedFacilities":       summarizeFragments(contextData.RelatedFacilities, maxPromptFacilities),
+		"ownerOrgs":               summarizeFragments(contextData.OwnerOrgs, maxPromptActors),
+		"inputProducts":           summarizeFragments(contextData.InputProducts, maxPromptProducts),
+		"outputProducts":          summarizeFragments(contextData.OutputProducts, maxPromptProducts),
+		"knownDownstreamActors":   summarizeFragments(contextData.DownstreamActors, maxPromptActors),
 		"knownProductTransitions": summarizeProductEdges(contextData.ProductEdges),
 		"knownMaterializedPaths":  summarizeArtifacts(contextData.PathArtifacts),
 		"options": map[string]interface{}{
@@ -940,18 +986,20 @@ func (s *OneHopDownstreamService) buildPrompt(anchor *horizonmodels.HorizonFragm
 	b.WriteString("Depth is STRICTLY one hop. Prefer recall across parallel immediate branches, not depth.\n")
 	b.WriteString("You MUST use canonical refs, not prose names, for actors and products.\n")
 	b.WriteString("Prefer downstream FACILITY refs. Use ORG refs only when the facility cannot be supported.\n")
-	b.WriteString("Allowed step kinds ONLY: pass_through, transformation, assembly.\n")
+	b.WriteString("Allowed step kinds ONLY: pass_through, transformation, assembly, usage.\n")
 	b.WriteString("Definitions:\n")
 	b.WriteString("- pass_through: the same canonical product class is handed to the next actor without product change.\n")
 	b.WriteString("- transformation: the upstream product is processed/refined into the next canonical product class.\n")
 	b.WriteString("- assembly: a component/module/subassembly is assembled into the next canonical product class.\n")
+	b.WriteString("- usage: the upstream product is directly used by the downstream product or equipment, but does not transform into it and does not become an assembled component of it.\n")
 	b.WriteString("Strict bans:\n")
 	b.WriteString("- no long jumps across obvious intermediate stages\n")
-	b.WriteString("- no broad usage categories or end-use industries\n")
+	b.WriteString("- no broad end-use industries or weak generic usage categories\n")
 	b.WriteString("- no loops without strong reason\n")
 	b.WriteString("- no service/logistics/document nodes as products\n")
 	b.WriteString("- no raw-material-to-final-product jumps like ore -> vehicle\n")
 	b.WriteString("- class/subclass is not synonymy and not nearest downstream unless it is the immediate assembled product class\n")
+	b.WriteString("Direct operational usage is allowed when it is a specific nearest product/product dependency. Example allowed: helium -> MRI scanner. Example not allowed: helium -> healthcare industry.\n")
 	b.WriteString("Direct nearest assembly into a final product is allowed when there is no meaningful intermediate product stage. Examples allowed: tire -> vehicle, battery-pack -> electric-vehicle, display-module -> smartphone. Examples not allowed: steel-sheet -> vehicle, ore -> vehicle.\n")
 	b.WriteString("Products must stay at a stable abstraction level. Use product classes, not serial instances or specific traded units.\n")
 	b.WriteString("For each step, explain why it is the nearest step and why you did not choose a broader or farther target.\n")
@@ -961,7 +1009,7 @@ func (s *OneHopDownstreamService) buildPrompt(anchor *horizonmodels.HorizonFragm
 	b.WriteString("- mixed: both graph and search grounding materially support it\n")
 	b.WriteString("- llm_fallback: plausible nearest industrial step when direct grounding is weak but still coherent\n")
 	b.WriteString("Return EXACTLY one strict JSON object with this shape:\n")
-	b.WriteString("{\"steps\":[{\"sourceActorRef\":\"/fac/... or /org/...\",\"sourceActorType\":\"FAC|ORG\",\"sourceProductRef\":\"/product/...\",\"stepKind\":\"pass_through|transformation|assembly\",\"targetProductRef\":\"/product/...\",\"targetActorRef\":\"/fac/... or /org/... or empty\",\"targetActorType\":\"FAC|ORG or empty\",\"confidence\":0.0,\"groundingMode\":\"graph|search|mixed|llm_fallback\",\"evidence\":[\"short evidence string\"],\"whyNearestStep\":\"...\",\"whyNotBroaderStep\":\"...\"}]}\n")
+	b.WriteString("{\"steps\":[{\"sourceActorRef\":\"/fac/... or /org/...\",\"sourceActorType\":\"FAC|ORG\",\"sourceProductRef\":\"/product/...\",\"stepKind\":\"pass_through|transformation|assembly|usage\",\"targetProductRef\":\"/product/...\",\"targetActorRef\":\"/fac/... or /org/... or empty\",\"targetActorType\":\"FAC|ORG or empty\",\"confidence\":0.0,\"groundingMode\":\"graph|search|mixed|llm_fallback\",\"evidence\":[\"short evidence string\"],\"whyNearestStep\":\"...\",\"whyNotBroaderStep\":\"...\"}]}\n")
 	b.WriteString("If a field is unknown, use empty string or empty array. No markdown. No prose outside JSON.\n\n")
 	b.WriteString("Graph context JSON:\n")
 	b.Write(blob)
@@ -998,7 +1046,7 @@ func validateNormalizedStep(step oneHopStep) error {
 		if step.TargetProductRef != "" && step.TargetProductRef != step.SourceProductRef {
 			return fmt.Errorf("pass_through must keep the same product")
 		}
-	case "transformation", "assembly":
+	case "transformation", "assembly", "usage":
 		if step.TargetProductRef == "" || step.TargetProductRef == step.SourceProductRef {
 			return fmt.Errorf("transition must change product")
 		}
@@ -1018,6 +1066,9 @@ func isBroadLongJump(step oneHopStep) bool {
 		return false
 	}
 	if step.StepKind == "pass_through" {
+		return false
+	}
+	if step.StepKind == "usage" {
 		return false
 	}
 	rawLike := containsAny(source, "ore", "concentrate", "raw-", "crude", "/raw/", "/material/", "feedstock", "yellowcake")
@@ -1044,19 +1095,19 @@ func shouldMaterializeStep(step oneHopStep, sourceActor, targetActor *horizonmod
 
 func buildStepQualifiers(step oneHopStep, anchor *horizonmodels.HorizonFragment, purpose string) map[string]interface{} {
 	qualifiers := map[string]interface{}{
-		"oneHopPurpose":      purpose,
-		"oneHopStepKind":     step.StepKind,
-		"oneHopConfidence":   step.Confidence,
-		"groundingMode":      step.GroundingMode,
-		"whyNearestStep":     step.WhyNearestStep,
-		"whyNotBroaderStep":  step.WhyNotBroaderStep,
-		"oneHopGenerated":    true,
-		"oneHopAnchorRef":    strings.TrimSpace(anchor.CanonicalPath),
-		"oneHopAnchorType":   string(anchor.Type),
-		"source_role":        "supplier",
-		"target_role":        "customer",
-		"evidence":           append([]string(nil), step.Evidence...),
-		"confidence":         step.Confidence,
+		"oneHopPurpose":     purpose,
+		"oneHopStepKind":    step.StepKind,
+		"oneHopConfidence":  step.Confidence,
+		"groundingMode":     step.GroundingMode,
+		"whyNearestStep":    step.WhyNearestStep,
+		"whyNotBroaderStep": step.WhyNotBroaderStep,
+		"oneHopGenerated":   true,
+		"oneHopAnchorRef":   strings.TrimSpace(anchor.CanonicalPath),
+		"oneHopAnchorType":  string(anchor.Type),
+		"source_role":       "supplier",
+		"target_role":       "customer",
+		"evidence":          append([]string(nil), step.Evidence...),
+		"confidence":        step.Confidence,
 	}
 	if purpose == "actor_output" || purpose == "target_output" {
 		delete(qualifiers, "source_role")
@@ -1065,6 +1116,9 @@ func buildStepQualifiers(step oneHopStep, anchor *horizonmodels.HorizonFragment,
 	if purpose == "product_transition" {
 		delete(qualifiers, "source_role")
 		delete(qualifiers, "target_role")
+		if relationKind := relationKindForStepKind(step.StepKind); relationKind != "" {
+			qualifiers["productRelationKind"] = relationKind
+		}
 	}
 	return qualifiers
 }
@@ -1105,16 +1159,16 @@ func (s *OneHopDownstreamService) completeJob(
 	job.State["artifactsCreated"] = stats.ArtifactsCreated
 	job.State["affectedCanonicalPaths"] = sortedKeys(stats.AffectedPaths)
 	job.Result = map[string]interface{}{
-		"scope":                "one_hop_downstream",
-		"anchorRef":            strings.TrimSpace(anchor.CanonicalPath),
-		"anchorType":           string(anchor.Type),
-		"stepsAccepted":        len(steps),
-		"fragmentsCreated":     stats.FragmentsCreated,
-		"edgesCreated":         stats.EdgesCreated,
-		"artifactsCreated":     stats.ArtifactsCreated,
-		"candidateCounts":      map[string]int{"synonym": stats.SynonymCandidates, "transform": stats.TransformCandidates},
+		"scope":                  "one_hop_downstream",
+		"anchorRef":              strings.TrimSpace(anchor.CanonicalPath),
+		"anchorType":             string(anchor.Type),
+		"stepsAccepted":          len(steps),
+		"fragmentsCreated":       stats.FragmentsCreated,
+		"edgesCreated":           stats.EdgesCreated,
+		"artifactsCreated":       stats.ArtifactsCreated,
+		"candidateCounts":        map[string]int{"synonym": stats.SynonymCandidates, "transform": stats.TransformCandidates},
 		"affectedCanonicalPaths": sortedKeys(stats.AffectedPaths),
-		"durationMs":           duration.Milliseconds(),
+		"durationMs":             duration.Milliseconds(),
 	}
 	return s.scoutingJobsRepo.Update(ctx, job)
 }
@@ -1384,6 +1438,32 @@ func normalizeStepKind(v string) string {
 		return "transformation"
 	case "assembly", "assemble", "assembled_into":
 		return "assembly"
+	case "usage", "use", "used in", "used_in", "used-in":
+		return "usage"
+	default:
+		return ""
+	}
+}
+
+func edgeTypeForStepKind(stepKind string) horizonmodels.DependencyType {
+	switch strings.TrimSpace(stepKind) {
+	case "assembly":
+		return horizonmodels.DependencyTypeAssemblesInto
+	case "usage":
+		return horizonmodels.DependencyTypeUsedIn
+	default:
+		return horizonmodels.DependencyTypeTransformsInto
+	}
+}
+
+func relationKindForStepKind(stepKind string) string {
+	switch strings.TrimSpace(stepKind) {
+	case "assembly":
+		return "assembly"
+	case "usage":
+		return "usage"
+	case "transformation":
+		return "transformation"
 	default:
 		return ""
 	}

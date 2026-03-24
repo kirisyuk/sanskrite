@@ -35,6 +35,43 @@ func TestApplyIntentResolutionQualityRules_SynthesizesSupplyPlan(t *testing.T) {
 	}
 }
 
+func TestSynthesizeSupplyChainExecutionPlan_IncludesFacilityAnchors(t *testing.T) {
+	d := &DomainResolution{
+		ContractType: "supply-chain",
+		Facets: map[string][]string{
+			"geo":     {"ru"},
+			"product": {"oilfield equipment"},
+		},
+	}
+	anchors := []struct {
+		CanonicalPath string  `json:"canonicalPath"`
+		Type          string  `json:"type"`
+		Name          string  `json:"name,omitempty"`
+		Confidence    float64 `json:"confidence"`
+		Reason        string  `json:"reason"`
+	}{
+		{CanonicalPath: "/fac/ae/jebel-ali-terminal", Type: "FACILITY", Confidence: 0.91, Reason: "relay terminal anchor"},
+		{CanonicalPath: "/org/us/slb", Type: "ORGANIZATION", Confidence: 0.94, Reason: "subject anchor"},
+	}
+
+	plan := synthesizeSupplyChainExecutionPlan("SLB equipment routed via Jebel Ali into Russia", d, anchors, intentScenarioProfile{routeSensitive: true})
+	if plan == nil || len(plan.Queries) == 0 {
+		t.Fatalf("expected synthesized supply chain plan, got %#v", plan)
+	}
+	foundFacility := false
+	for _, q := range plan.Queries {
+		if q.Anchor == "/fac/ae/jebel-ali-terminal" {
+			foundFacility = true
+			if q.AnchorType != "fac" {
+				t.Fatalf("expected facility anchorType, got %q", q.AnchorType)
+			}
+		}
+	}
+	if !foundFacility {
+		t.Fatalf("expected facility anchor query in %#v", plan.Queries)
+	}
+}
+
 func TestApplyIntentResolutionQualityRules_SynthesizesRegulatoryPlan(t *testing.T) {
 	out := IntentResolution{
 		Domains: []DomainResolution{{

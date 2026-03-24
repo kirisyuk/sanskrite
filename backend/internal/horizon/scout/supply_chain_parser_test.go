@@ -1,11 +1,13 @@
 package scout
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 )
 
@@ -42,6 +44,48 @@ func TestSupplyChainParser_AbstainsOnUnknownPair(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected abstain warning in ParseWarnings: %v", result.ParseWarnings)
+	}
+}
+
+func TestSupplyChainParser_UsesProductRelationDictionaryBeforeStageHeuristic(t *testing.T) {
+	dict := productdict.NewRuntime(nil)
+	if err := dict.SyncTransformPairWrite(
+		context.Background(),
+		"global",
+		"/product/finished/mechanical/assembly/helium",
+		"/product/finished/mechanical/assembly/mri-scanner",
+		"usage",
+		true,
+	); err != nil {
+		t.Fatalf("SyncTransformPairWrite() error = %v", err)
+	}
+	parser := NewSupplyChainParser().WithProductDictionary(dict)
+	chains := []agents.SupplyChain{
+		{
+			Confidence: 0.93,
+			Nodes: []agents.SupplyChainNode{
+				{CanonicalPath: "/product/finished/mechanical/assembly/mri-scanner", Type: "PRODUCT", Name: "MRI Scanner"},
+				{CanonicalPath: "/product/finished/mechanical/assembly/helium", Type: "PRODUCT", Name: "Helium"},
+			},
+		},
+	}
+
+	result, err := parser.ParseSupplyChains(chains, "/product/finished/mechanical/assembly/mri-scanner")
+	if err != nil {
+		t.Fatalf("ParseSupplyChains() error = %v", err)
+	}
+	if len(result.Edges) != 1 {
+		t.Fatalf("edges=%d, want 1", len(result.Edges))
+	}
+	edge := result.Edges[0]
+	if edge.SourceCanonicalPath != "/product/finished/mechanical/assembly/helium" {
+		t.Fatalf("source=%q, want helium", edge.SourceCanonicalPath)
+	}
+	if edge.TargetCanonicalPath != "/product/finished/mechanical/assembly/mri-scanner" {
+		t.Fatalf("target=%q, want mri-scanner", edge.TargetCanonicalPath)
+	}
+	if edge.RelationType != string(models.DependencyTypeUsedIn) {
+		t.Fatalf("relation=%q, want USED_IN", edge.RelationType)
 	}
 }
 

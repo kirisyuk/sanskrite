@@ -169,7 +169,7 @@ func main() {
 
 func runSupplyRepair(ctx context.Context, projectID, tenantID string, refs []string, limit int, expandOwned bool) (map[string]any, error) {
 	args := []string{
-		"run", "./cmd/tools/horizon_supply_repair",
+		"run", "./backend/cmd/tools/horizon_supply_repair",
 		"-project", strings.TrimSpace(projectID),
 		"-tenant", strings.TrimSpace(tenantID),
 		"-mode", "repair",

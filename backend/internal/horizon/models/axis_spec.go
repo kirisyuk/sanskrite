@@ -103,7 +103,7 @@ func DefaultAxisSpecs() map[string]AxisSpec {
 			DefaultDamping:  0.75,
 			DefaultMaxHops:  4,
 			PropagationMode: "both",
-			StrongEdgeTypes: []string{"SUPPLIES_TO", "DEPENDS_ON", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "PRODUCES", "OWNS", "CONTROLS", "MANAGES", "OPERATES_IN", "PARTNERS_WITH"},
+			StrongEdgeTypes: []string{"SUPPLIES_TO", "DEPENDS_ON", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "USED_IN", "PRODUCES", "OWNS", "CONTROLS", "MANAGES", "OPERATES_IN", "PARTNERS_WITH"},
 			TransformsTo:    []string{},
 		},
 		AxisPhysicalFlowDemand: {
@@ -112,7 +112,7 @@ func DefaultAxisSpecs() map[string]AxisSpec {
 			DefaultDamping:  0.75,
 			DefaultMaxHops:  4,
 			PropagationMode: "downstream",
-			StrongEdgeTypes: []string{"SUPPLIES_TO", "DEPENDS_ON", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "TRADED_IN"},
+			StrongEdgeTypes: []string{"SUPPLIES_TO", "DEPENDS_ON", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "USED_IN", "TRADED_IN"},
 			TransformsTo:    []string{},
 		},
 		AxisLogisticsCapacity: {

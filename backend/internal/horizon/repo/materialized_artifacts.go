@@ -14,6 +14,8 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/govdict"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/mechanismdict"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 )
@@ -22,14 +24,16 @@ var ErrMaterializedArtifactNotFound = errors.New("materialized artifact not foun
 
 // MaterializedArtifactsRepository репозиторий для работы с MaterializedArtifact
 type MaterializedArtifactsRepository struct {
-	col               *firestore.CollectionRef
-	db                *firestore.Client
-	storage           *gcp.GCSClient
-	bucket            string
-	useGCS            bool
-	uploadLimiter     *rate.Limiter
-	vertexSyncBatcher *VertexSyncBatcher
-	productDictionary *productdict.Runtime
+	col                 *firestore.CollectionRef
+	db                  *firestore.Client
+	storage             *gcp.GCSClient
+	bucket              string
+	useGCS              bool
+	uploadLimiter       *rate.Limiter
+	vertexSyncBatcher   *VertexSyncBatcher
+	productDictionary   *productdict.Runtime
+	mechanismDictionary *mechanismdict.Runtime
+	govDictionary       *govdict.Runtime
 }
 
 // NewMaterializedArtifactsRepository создает новый репозиторий
@@ -60,6 +64,20 @@ func (r *MaterializedArtifactsRepository) WithVertexSyncBatcher(batcher *VertexS
 func (r *MaterializedArtifactsRepository) WithProductDictionary(dict *productdict.Runtime) *MaterializedArtifactsRepository {
 	r.productDictionary = dict
 	return r
+}
+
+func (r *MaterializedArtifactsRepository) applyDictionaryNormalizations(ctx context.Context, artifact *horizonmodels.MaterializedArtifact) {
+	if artifact == nil {
+		return
+	}
+	if r.productDictionary != nil {
+		if _, err := r.productDictionary.NormalizeArtifact(ctx, artifact); err != nil {
+			log.Printf("[MaterializedArtifacts] WARNING: product dictionary normalization failed artifact=%s key=%s err=%v", strings.TrimSpace(artifact.ID), strings.TrimSpace(artifact.CanonicalKey), err)
+		}
+	}
+	if _, err := r.normalizeMechanismGovPathsInArtifact(ctx, artifact); err != nil {
+		log.Printf("[MaterializedArtifacts] WARNING: mechanism/gov dictionary normalization failed artifact=%s key=%s err=%v", strings.TrimSpace(artifact.ID), strings.TrimSpace(artifact.CanonicalKey), err)
+	}
 }
 
 // uploadToGCS exports the artifact to GCS for Vertex AI Search indexing.
@@ -130,11 +148,7 @@ func (r *MaterializedArtifactsRepository) Create(ctx context.Context, artifact *
 	if artifact == nil {
 		return "", fmt.Errorf("artifact is nil")
 	}
-	if r.productDictionary != nil {
-		if _, err := r.productDictionary.NormalizeArtifact(ctx, artifact); err != nil {
-			log.Printf("[MaterializedArtifacts] WARNING: product dictionary normalization failed on create artifact=%s key=%s err=%v", strings.TrimSpace(artifact.ID), strings.TrimSpace(artifact.CanonicalKey), err)
-		}
-	}
+	r.applyDictionaryNormalizations(ctx, artifact)
 	horizonmodels.PopulateMaterializedArtifactIndexes(artifact)
 
 	if err := artifact.Validate(); err != nil {
@@ -271,11 +285,7 @@ func (r *MaterializedArtifactsRepository) Update(ctx context.Context, artifact *
 	if artifact.ID == "" {
 		return fmt.Errorf("id is required")
 	}
-	if r.productDictionary != nil {
-		if _, err := r.productDictionary.NormalizeArtifact(ctx, artifact); err != nil {
-			log.Printf("[MaterializedArtifacts] WARNING: product dictionary normalization failed on update artifact=%s key=%s err=%v", strings.TrimSpace(artifact.ID), strings.TrimSpace(artifact.CanonicalKey), err)
-		}
-	}
+	r.applyDictionaryNormalizations(ctx, artifact)
 	horizonmodels.PopulateMaterializedArtifactIndexes(artifact)
 
 	if err := artifact.Validate(); err != nil {
@@ -357,11 +367,7 @@ func (r *MaterializedArtifactsRepository) BatchUpsert(ctx context.Context, artif
 			if a == nil {
 				continue
 			}
-			if r.productDictionary != nil {
-				if _, err := r.productDictionary.NormalizeArtifact(ctx, a); err != nil {
-					log.Printf("[MaterializedArtifacts] WARNING: product dictionary normalization failed on batch upsert artifact=%s key=%s err=%v", strings.TrimSpace(a.ID), strings.TrimSpace(a.CanonicalKey), err)
-				}
-			}
+			r.applyDictionaryNormalizations(ctx, a)
 			horizonmodels.PopulateMaterializedArtifactIndexes(a)
 			if err := a.Validate(); err != nil {
 				return ids, fmt.Errorf("artifact validation failed: %w", err)

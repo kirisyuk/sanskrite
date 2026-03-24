@@ -20,6 +20,7 @@ import (
 	horizonrisk "github.com/igorkirisyuk/sanskrite/internal/horizon/risk"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scopeagent"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
+	horizonsimulation "github.com/igorkirisyuk/sanskrite/internal/horizon/simulation"
 	horizonwatch "github.com/igorkirisyuk/sanskrite/internal/horizon/watch"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/watchdog"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/watchruntime"
@@ -43,6 +44,7 @@ type HorizonService struct {
 	watchService      *horizonwatch.Service
 	recommendations   *recommendations.Service
 	watchRuntime      *watchruntime.Service
+	simulationService *horizonsimulation.Service
 
 	// Репозитории horizon
 	fragmentsRepo        *repo.HorizonFragmentsRepository
@@ -175,6 +177,10 @@ func (s *HorizonService) SetWatchRuntimeService(watchRuntimeService *watchruntim
 	s.watchRuntime = watchRuntimeService
 }
 
+func (s *HorizonService) SetSimulationService(simulationService *horizonsimulation.Service) {
+	s.simulationService = simulationService
+}
+
 // Scout возвращает Scout Engine
 func (s *HorizonService) Scout() *scout.ScoutEngine {
 	return s.scoutEngine
@@ -209,6 +215,10 @@ func (s *HorizonService) StrategicRecommendations() *recommendations.Service {
 
 func (s *HorizonService) WatchRuntime() *watchruntime.Service {
 	return s.watchRuntime
+}
+
+func (s *HorizonService) Simulation() *horizonsimulation.Service {
+	return s.simulationService
 }
 
 // Fragments возвращает HorizonFragmentsRepository

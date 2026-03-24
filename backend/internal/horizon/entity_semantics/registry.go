@@ -192,7 +192,7 @@ func ExtractionBlockForPath(canonicalPath string, fragmentType models.FragmentTy
 
 // ExtractionBlockForPathAndDomainModes returns the extraction block, with supply-chain-specific overrides
 // when domain modes include supply_chain. Supply chain contract: use only PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO,
-// EXTRACTS_FROM, LOCATED_IN, OPERATES_IN, HAS_MARKET_SEGMENT (no DEPENDS_ON).
+// USED_IN, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN, HAS_MARKET_SEGMENT (no DEPENDS_ON).
 func ExtractionBlockForPathAndDomainModes(canonicalPath string, fragmentType models.FragmentType, communityType string, domainModes []string) string {
 	def := GetDefinitionByPath(canonicalPath, fragmentType, communityType)
 	if def == nil {

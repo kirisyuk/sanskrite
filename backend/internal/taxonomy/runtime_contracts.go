@@ -1,5 +1,7 @@
 package taxonomy
 
+import "strings"
+
 // Code-defined runtime contracts.
 // These are the authoritative rule sets used by validators/normalizers.
 
@@ -278,6 +280,62 @@ var builtInLifecycleStageAliases = map[string]string{
 	"mothballed":      "suspended",
 }
 
+var builtInDirectionalEdgeQualifiers = []string{
+	"source_role",
+	"target_role",
+	"direction_basis",
+	"edgeModality",
+}
+
+var builtInOwnershipEdgeQualifiers = []string{
+	"ownership_percent",
+	"stake_pct",
+	"voting_percent",
+	"voting_rights_percent",
+	"share_type",
+	"control_type",
+	"mechanism",
+}
+
+var builtInPolicyTransmissionEdgeQualifiers = []string{
+	"scope_basis",
+	"channel_type",
+	"lag_quarters",
+	"measurement_lag_months",
+	"measurement_confidence",
+	"pass_through_estimate",
+	"elasticity_hint",
+	"sector_sensitivity",
+	"tax_base_coverage",
+	"effective_date",
+	"rate_from",
+	"rate_to",
+	"impact",
+	"type",
+}
+
+func mergedQualifierKeys(groups ...[]string) []string {
+	if len(groups) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, 16)
+	out := make([]string, 0, 16)
+	for _, group := range groups {
+		for _, key := range group {
+			key = strings.TrimSpace(key)
+			if key == "" {
+				continue
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, key)
+		}
+	}
+	return out
+}
+
 var builtInAllowedEdgeMetrics = map[string][]string{
 	"OWNS":            {"ownership_percent", "voting_percent", "voting_rights_percent"},
 	"SUBSIDIARY_OF":   {"ownership_percent"},
@@ -289,6 +347,33 @@ var builtInAllowedEdgeMetrics = map[string][]string{
 	"BOARD_MEMBER_OF": {"tenure_years"},
 	"OPERATES_IN":     {"market_share"},
 	"COMPETES_WITH":   {"relative_market_share"},
+}
+
+var builtInAllowedEdgeQualifiers = map[string][]string{
+	"OWNS":               mergedQualifierKeys(builtInDirectionalEdgeQualifiers, builtInOwnershipEdgeQualifiers),
+	"SUBSIDIARY_OF":      mergedQualifierKeys(builtInDirectionalEdgeQualifiers, builtInOwnershipEdgeQualifiers),
+	"CONTROLS":           mergedQualifierKeys(builtInDirectionalEdgeQualifiers, builtInOwnershipEdgeQualifiers),
+	"INVESTS_IN":         mergedQualifierKeys(builtInDirectionalEdgeQualifiers, []string{"round", "fundingRound", "roundType"}),
+	"BOARD_MEMBER_OF":    mergedQualifierKeys(builtInDirectionalEdgeQualifiers, []string{"role", "title"}),
+	"EMPLOYED_BY":        mergedQualifierKeys(builtInDirectionalEdgeQualifiers, []string{"role", "title"}),
+	"MANAGES":            mergedQualifierKeys(builtInDirectionalEdgeQualifiers, []string{"control_type", "mechanism", "role", "title"}),
+	"ADMINISTERS":        mergedQualifierKeys(builtInDirectionalEdgeQualifiers, builtInPolicyTransmissionEdgeQualifiers),
+	"GATEKEEPS_DECISION": mergedQualifierKeys(builtInDirectionalEdgeQualifiers, []string{"scope_basis", "effective_date"}),
+	"USES_MECHANISM":     mergedQualifierKeys(builtInDirectionalEdgeQualifiers, []string{"scope_basis", "effective_date"}),
+	"CONTROLS_ACCESS":    mergedQualifierKeys(builtInDirectionalEdgeQualifiers, []string{"type", "impact", "mechanism", "effective_date"}),
+	"IMPOSES_CONDITION":  mergedQualifierKeys(builtInDirectionalEdgeQualifiers, builtInPolicyTransmissionEdgeQualifiers),
+	"APPLIES_TO":         mergedQualifierKeys(builtInDirectionalEdgeQualifiers, builtInPolicyTransmissionEdgeQualifiers),
+	"IN_GEO_SCOPE":       mergedQualifierKeys(builtInDirectionalEdgeQualifiers, []string{"scope_basis", "effective_date"}),
+	"AFFECTS":            mergedQualifierKeys(builtInDirectionalEdgeQualifiers, builtInPolicyTransmissionEdgeQualifiers),
+	"INFLUENCES": mergedQualifierKeys(
+		builtInDirectionalEdgeQualifiers,
+		builtInPolicyTransmissionEdgeQualifiers,
+		[]string{"via", "mechanism", "direction", "reversible", "conditionality", "strength"},
+	),
+	"OPERATES_VIA": mergedQualifierKeys(
+		builtInDirectionalEdgeQualifiers,
+		[]string{"channel_type", "measurement_lag_months", "measurement_confidence", "scope_basis"},
+	),
 }
 
 var builtInAllowedEdgeModalities = setOf("actual", "projected", "historical", "potential")

@@ -45,11 +45,23 @@ func IsSymmetricEdge(edgeType DependencyType) bool {
 	return SymmetricEdgeTypes[edgeType]
 }
 
+var productTransitionEdgeTypes = []DependencyType{
+	DependencyTypeTransformsInto,
+	DependencyTypeAssemblesInto,
+	DependencyTypeUsedIn,
+}
+
+// ProductTransitionEdgeTypes returns the canonical product->product transition edge types
+// used by supply-chain continuity, path closure, and materialized graph assembly.
+func ProductTransitionEdgeTypes() []DependencyType {
+	return productTransitionEdgeTypes
+}
+
 // IsProductTransitionEdgeType reports whether the edge type is a product->product
 // upstream/downstream step used in supply-chain continuity checks.
 func IsProductTransitionEdgeType(edgeType DependencyType) bool {
 	switch edgeType {
-	case DependencyTypeTransformsInto, DependencyTypeAssemblesInto:
+	case DependencyTypeTransformsInto, DependencyTypeAssemblesInto, DependencyTypeUsedIn:
 		return true
 	default:
 		return false

@@ -180,6 +180,23 @@ func (e *MacroEconomicalEngine) TransferHook(ctx context.Context, signal *horizo
 		debugFactors["semantics_node_factor"] = 0.0
 		return &TransferResult{Skip: true, DebugFactors: debugFactors}, nil
 	}
+	if signal.RegulatoryContext != nil {
+		inst := strings.TrimSpace(signal.RegulatoryContext.InstrumentPath)
+		nodePath := ""
+		if node != nil {
+			nodePath = strings.TrimSpace(node.CanonicalPath)
+		}
+		if inst != "" && inst == nodePath {
+			factor *= 1.12
+			debugFactors["regulatory_context_instrument_match"] = 1.12
+		}
+	}
+	if mech := strings.TrimSpace(signal.Mechanism); mech != "" && node != nil {
+		if strings.Contains(strings.TrimSpace(node.CanonicalPath), mech) {
+			factor *= 1.05
+			debugFactors["signal_mechanism_slug_match"] = 1.05
+		}
+	}
 	if v, ok := qualifierFloat(edge.Qualifiers, "pass_through_estimate", "passThroughEstimate"); ok {
 		qf := clamp(v, 0.25, 1.35)
 		factor *= qf
@@ -232,6 +249,18 @@ func (e *MacroEconomicalEngine) TransferHook(ctx context.Context, signal *horizo
 	case horizonmodels.DependencyTypeRegulates:
 		factor *= 1.03
 		debugFactors["edge_type_factor"] = 1.03
+	case horizonmodels.DependencyTypeGatekeepsDecision:
+		factor *= 1.04
+		debugFactors["edge_type_factor"] = 1.04
+	case horizonmodels.DependencyTypeUsesMechanism:
+		factor *= 1.02
+		debugFactors["edge_type_factor"] = 1.02
+	case horizonmodels.DependencyTypeProduces, horizonmodels.DependencyTypeTransformsInto, horizonmodels.DependencyTypeAssemblesInto, horizonmodels.DependencyTypeUsedIn:
+		factor *= 0.98
+		debugFactors["edge_type_factor"] = 0.98
+	case horizonmodels.DependencyTypeExtractsFrom:
+		factor *= 0.97
+		debugFactors["edge_type_factor"] = 0.97
 	}
 
 	adjustedAmplitude := clamp01(signal.Amplitude * factor)

@@ -748,11 +748,17 @@ func requiresDirectionalRoleEvidence(
 ) bool {
 	isOrg := func(t horizonmodels.FragmentType) bool { return t == horizonmodels.FragmentTypeOrganization }
 	isFac := func(t horizonmodels.FragmentType) bool { return t == horizonmodels.FragmentTypeFacility }
+	isMechanism := func(t horizonmodels.FragmentType) bool { return t == horizonmodels.FragmentTypeMechanism }
 	isProgram := func(t horizonmodels.FragmentType) bool { return t == horizonmodels.FragmentTypeProgram }
+	isMarket := func(t horizonmodels.FragmentType) bool { return t == horizonmodels.FragmentTypeMarket }
+	isProduct := func(t horizonmodels.FragmentType) bool { return t == horizonmodels.FragmentTypeProduct }
 	isCommunity := func(t horizonmodels.FragmentType) bool { return t == horizonmodels.FragmentTypeCommunity }
 	isPerson := func(t horizonmodels.FragmentType) bool { return t == horizonmodels.FragmentTypePerson }
 	isActorLike := func(t horizonmodels.FragmentType) bool {
 		return isOrg(t) || isFac(t) || isProgram(t) || isCommunity(t) || isPerson(t)
+	}
+	isPolicyTarget := func(t horizonmodels.FragmentType) bool {
+		return isActorLike(t) || isMarket(t) || isProduct(t)
 	}
 
 	switch edgeType {
@@ -770,6 +776,10 @@ func requiresDirectionalRoleEvidence(
 			return false
 		}
 		return (isOrg(sourceType) || isFac(sourceType)) && (isOrg(targetType) || isFac(targetType))
+	case horizonmodels.DependencyTypeControlsAccess:
+		return (isOrg(sourceType) || isProgram(sourceType) || isCommunity(sourceType)) && isPolicyTarget(targetType)
+	case horizonmodels.DependencyTypeImposesCondition:
+		return (isMechanism(sourceType) || isOrg(sourceType) || isProgram(sourceType) || isCommunity(sourceType)) && isPolicyTarget(targetType)
 	default:
 		return false
 	}
@@ -810,6 +820,30 @@ func rolePairMatchesEdgeType(edgeType horizonmodels.DependencyType, sourceRole, 
 	case horizonmodels.DependencyTypeSuppliesTo:
 		return inRole(sourceRole, "supplier", "provider", "seller", "producer", "vendor") &&
 			inRole(targetRole, "customer", "buyer", "consumer", "recipient", "offtaker")
+	case horizonmodels.DependencyTypeGatekeepsDecision:
+		return inRole(sourceRole, "gatekeeper", "approver", "decision_maker", "authority", "veto_holder") &&
+			inRole(targetRole, "decision_point", "decision", "approval", "ruling")
+	case horizonmodels.DependencyTypeUsesMechanism:
+		return inRole(sourceRole, "mechanism_user", "policy_source", "decision", "regulator", "administrator") &&
+			inRole(targetRole, "mechanism", "instrument", "policy_mechanism")
+	case horizonmodels.DependencyTypeControlsAccess:
+		return inRole(sourceRole, "controller", "gatekeeper", "access_controller", "regulator") &&
+			inRole(targetRole, "access_subject", "controlled_access_target", "affected_entity", "regulated_entity", "subject")
+	case horizonmodels.DependencyTypeImposesCondition:
+		return inRole(sourceRole, "imposer", "condition_imposer", "regulator", "mechanism") &&
+			inRole(targetRole, "constrained_entity", "conditioned_entity", "affected_entity", "subject")
+	case horizonmodels.DependencyTypeAppliesTo:
+		return inRole(sourceRole, "mechanism", "instrument", "rule") &&
+			inRole(targetRole, "applicable_entity", "covered_entity", "subject", "affected_entity")
+	case horizonmodels.DependencyTypeAdministers:
+		return inRole(sourceRole, "administrator", "administering_body", "operator") &&
+			inRole(targetRole, "administered_entity", "administered_program", "subordinate")
+	case horizonmodels.DependencyTypeInGeoScope:
+		return inRole(sourceRole, "scope_owner", "scoped_instrument", "mechanism", "policy_source") &&
+			inRole(targetRole, "geo_scope", "jurisdiction", "geography", "location")
+	case horizonmodels.DependencyTypeAffects:
+		return inRole(sourceRole, "impact_source", "mechanism", "source", "driver") &&
+			inRole(targetRole, "affected_entity", "impacted_entity", "exposure_target")
 	default:
 		return false
 	}
@@ -831,6 +865,22 @@ func directionQualifierMatchesEdgeType(edgeType horizonmodels.DependencyType, di
 		return inRole(direction, "dependent_to_dependency", "consumer_to_supplier")
 	case horizonmodels.DependencyTypeSuppliesTo:
 		return inRole(direction, "supplier_to_customer", "provider_to_recipient")
+	case horizonmodels.DependencyTypeGatekeepsDecision:
+		return inRole(direction, "gatekeeper_to_decision", "authority_to_decision", "approver_to_decision")
+	case horizonmodels.DependencyTypeUsesMechanism:
+		return inRole(direction, "user_to_mechanism", "decision_to_mechanism", "source_to_mechanism")
+	case horizonmodels.DependencyTypeControlsAccess:
+		return inRole(direction, "controller_to_access_subject", "gatekeeper_to_subject", "controller_to_target")
+	case horizonmodels.DependencyTypeImposesCondition:
+		return inRole(direction, "imposer_to_constrained_entity", "mechanism_to_constrained_entity", "regulator_to_constrained_entity")
+	case horizonmodels.DependencyTypeAppliesTo:
+		return inRole(direction, "mechanism_to_applicable_entity", "instrument_to_subject")
+	case horizonmodels.DependencyTypeAdministers:
+		return inRole(direction, "administrator_to_administered_entity", "operator_to_administered_entity")
+	case horizonmodels.DependencyTypeInGeoScope:
+		return inRole(direction, "scope_owner_to_geo_scope", "mechanism_to_geo_scope", "instrument_to_jurisdiction")
+	case horizonmodels.DependencyTypeAffects:
+		return inRole(direction, "impact_source_to_affected_entity", "source_to_affected_entity", "driver_to_affected_entity")
 	default:
 		return false
 	}

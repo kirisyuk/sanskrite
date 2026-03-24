@@ -135,6 +135,8 @@ The current implementation is production-oriented for internal use, but it is st
 
 - runtime binary: [`../../cmd/agentmesh/README.md`](../../cmd/agentmesh/README.md)
 - deploy script: [`/Users/kirisyuk/cursor/sanskrite/scripts/deploy`](/Users/kirisyuk/cursor/sanskrite/scripts/deploy)
+- research note: [`./SOCIOECONOMIC_SIMULATION_SYSTEM.md`](./SOCIOECONOMIC_SIMULATION_SYSTEM.md)
+- simulation runtime architecture: [`./SIMULATION_RUNTIME_ARCHITECTURE.md`](./SIMULATION_RUNTIME_ARCHITECTURE.md)
 
 ## External References
 

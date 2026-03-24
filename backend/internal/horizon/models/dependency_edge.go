@@ -58,6 +58,10 @@ const (
 	// Used for direct assembly steps (e.g., tire -> vehicle, battery-pack -> electric-vehicle, display-module -> smartphone-line).
 	// Source: upstream component/subassembly product, Target: downstream assembled product.
 	DependencyTypeAssemblesInto DependencyType = "ASSEMBLES_INTO"
+	// DependencyTypeUsedIn represents direct functional usage: product X is used in downstream product Y
+	// without transforming into Y or becoming an assembled component of Y.
+	// Used for operational/functional inputs (e.g., helium -> MRI-scanner, shielding-gas -> welding-system).
+	DependencyTypeUsedIn DependencyType = "USED_IN"
 	// DependencyTypeExtractsFrom represents facility extracting resources from a deposit.
 	// Direction: FACILITY → DEPOSIT (e.g., mine extracts from ore deposit, platform extracts from oil field).
 	// More precise than LOCATED_IN, captures the operational relationship.
@@ -333,7 +337,7 @@ const (
 	IntegrationTypeArmsLength  = "arm's-length" // spot/short-term commercial, pure financial
 )
 
-// QualifierAtFacility is used on TRANSFORMS_INTO / ASSEMBLES_INTO edges to indicate where the product step occurs.
+// QualifierAtFacility is used on TRANSFORMS_INTO / ASSEMBLES_INTO / USED_IN edges to indicate where the product step occurs.
 // Value: canonical path of the facility (e.g. /fac/us/silver-peak).
 // Semantics: products transform; the facility is the qualifier (where it happens).
 const QualifierAtFacility = "at_facility"

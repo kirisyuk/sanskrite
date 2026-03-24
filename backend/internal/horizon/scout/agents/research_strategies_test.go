@@ -18,10 +18,10 @@ func TestSupplyChainEnrichmentPrompt_OnlyCanonicalTypes(t *testing.T) {
 		MissingInfo: []string{"Find suppliers"},
 	}
 	prompt := a.buildSupplyChainEnrichmentPrompt(input)
-	// Operational types only (fractal model): PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, EXTRACTS_FROM
+	// Operational types only (fractal model): PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, EXTRACTS_FROM
 	if !strings.Contains(prompt, "PRODUCES") || !strings.Contains(prompt, "SUPPLIES_TO") ||
-		!strings.Contains(prompt, "TRANSFORMS_INTO") || !strings.Contains(prompt, "ASSEMBLES_INTO") || !strings.Contains(prompt, "EXTRACTS_FROM") {
-		t.Error("SupplyChain prompt should list operational types: PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, EXTRACTS_FROM")
+		!strings.Contains(prompt, "TRANSFORMS_INTO") || !strings.Contains(prompt, "ASSEMBLES_INTO") || !strings.Contains(prompt, "USED_IN") || !strings.Contains(prompt, "EXTRACTS_FROM") {
+		t.Error("SupplyChain prompt should list operational types: PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, EXTRACTS_FROM")
 	}
 	if !strings.Contains(strings.ToUpper(prompt), "USE ONLY") {
 		t.Error("SupplyChain prompt should restrict to canonical types only (Use ONLY ...)")
@@ -42,9 +42,11 @@ func TestSupplyChainHotPathPrompt_PrefersConcreteOperationalNodes(t *testing.T) 
 		"Target 6-20 chains",
 		"Prefer concrete operational nodes: factories, plants, mines, depots, bonded warehouses, customs terminals, ports, inland terminals, distribution centers, fulfillment hubs, and stores",
 		"supplier/factory -> product family -> import/customs/port/DC -> recipient facility/store/e-commerce node",
+		"If there are multiple credible relay hubs or corridor variants, return them as distinct branches or distinct routeObservations",
 		"local distribution centers, and major downstream store / e-commerce fulfillment branches",
 		"Support branches are useful, but must not crowd out the main goods flows",
 		"For sanctions-sensitive, cross-border inbound, import-constrained, or export-control-sensitive flows, explicitly seek customs terminals, rerouted corridors, alternative import nodes, export-license gates, and sanctioned/control-sensitive touchpoints.",
+		"screening / licensing / settlement / insurance control points",
 		"When the query is subject-scoped around a named company, asset, or operator, keep the graph centered on that subject.",
 		"When evidence points to a target geography or inbound destination, prioritize chains that enter, terminate in, or materially support that geography.",
 		"Do not stop at org -> product -> org if a more operational chain is available",
@@ -82,7 +84,11 @@ func TestSupplyChainPreHotPathPrompt_AlwaysSoftSteering(t *testing.T) {
 		"Do NOT build supply chains here",
 		"It must NEVER act as a hard filter",
 		"candidateAnchorTerms",
+		"candidateTransitHubTerms",
+		"candidateGateTerms",
+		"candidateRouteGeographies",
 		"For OEM/service/spare-parts cases, think in terms of parts manufacturing, authorized suppliers, repair centers, service depots",
+		"For sanctions-/customs-/export-control-sensitive cases, think separately about physical relay hubs",
 		"derivedProductFilters",
 	} {
 		if !strings.Contains(prompt, want) {
@@ -114,14 +120,18 @@ func TestSupplyChainHotPathCapabilityPrompt_StaysTopologyStable(t *testing.T) {
 			},
 		},
 		&SupplyChainPreHotPathPlan{
-			Strategy:              "commodity_corridor",
-			DerivedProductFilters: []string{"lng"},
+			Strategy:                  "commodity_corridor",
+			CandidateTransitHubTerms:  []string{"jebel ali", "rotterdam"},
+			CandidateGateTerms:        []string{"export license", "customs screening"},
+			CandidateRouteGeographies: []string{"ae", "nl"},
+			DerivedProductFilters:     []string{"lng"},
 		},
 	)
 	for _, want := range []string{
 		"Do NOT create new topology. Do NOT add or remove graph entities.",
 		"carrierProductObservations are practically required when evidence exists",
 		"When the current chains are cross-border, sanctions-sensitive, import-constrained, export-control-sensitive, or customs-sensitive, prefer adding linkObservations / routeObservations",
+		"If relay hubs or control points are known but are not part of the current topology, surface them in routeObservations / linkObservations rather than dropping them.",
 		"Do NOT return supplyChains or nodes in this pass.",
 		"\"carrierProductObservations\": [",
 		"PRE-HOT-PATH STEERING:",
@@ -166,9 +176,34 @@ func TestGovernanceEnrichmentPrompt_OwnsDirectionGuardrails(t *testing.T) {
 		"For INVESTS_IN, direction is ALWAYS investor -> investee.",
 		"qualifiers.source_role and qualifiers.target_role",
 		"\"sourceCanonicalPath?\", \"sourceType?\", \"sourceName?\"",
+		"nominee vehicles, trustees, and indirect holding layers",
+		"voting_rights_percent",
+		"share_type=direct|indirect|beneficial",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("governance prompt missing OWNS direction guardrail %q", want)
+		}
+	}
+}
+
+func TestGovernanceFullPrompt_RequiresBeneficialOwnershipAndPeopleLayers(t *testing.T) {
+	a := NewResearchAgent(nil)
+	prompt := a.buildGovernanceFullPrompt(GovernanceQuery{
+		Target:       "/org/ae/difc-opco",
+		TargetType:   "organization",
+		Direction:    "both",
+		Depth:        4,
+		IncludeBoard: true,
+	})
+	for _, want := range []string{
+		"Capture nominee structures, trustees, proxy vehicles, and voting-rights divergence explicitly",
+		"PEOPLE / GOVERNANCE LAYER:",
+		"COMMUNITY / LINEAGE LAYER:",
+		"voting_rights_percent",
+		"trustee_mandate",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("governance full prompt missing %q", want)
 		}
 	}
 }
@@ -279,6 +314,41 @@ func TestPolicyImpactEnrichmentPrompt_DomainTargetGuardrails(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "PARTICIPATES_IN direction is participant -> market.") {
 		t.Fatalf("expected strict PARTICIPATES_IN direction guardrail in policy impact prompt")
+	}
+	for _, want := range []string{
+		"BUILD FIVE DIRECTED LAYERS:",
+		"IN_GEO_SCOPE",
+		"AFFECTS impact_source->affected_entity",
+		"Media/community tail",
+		"qualifiers.source_role, qualifiers.target_role, and qualifiers.direction_basis",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected policy impact prompt to include %q", want)
+		}
+	}
+}
+
+func TestPolicyImpactFullPrompt_RequiresDirectedFiveLayerGraph(t *testing.T) {
+	a := NewResearchAgent(nil)
+	prompt := a.buildRegulatoryImpactFullPrompt(RegulatoryImpactQuery{
+		Instrument:   "Corporate income tax",
+		Jurisdiction: "ae",
+		Depth:        4,
+		ImpactScope:  "sector-specific",
+		Reason:       "Test Dubai CIT transmission",
+	})
+	for _, want := range []string{
+		"BUILD FIVE DIRECTED LAYERS:",
+		"POLICY SOURCE LAYER",
+		"SCOPE LAYER",
+		"RESPONSE / OBSERVABILITY LAYER",
+		"scope_owner->geo_scope",
+		"impact_source->affected_entity",
+		"For IN_GEO_SCOPE: qualifiers.scope_basis when inferable",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected policy impact full prompt to include %q", want)
+		}
 	}
 }
 

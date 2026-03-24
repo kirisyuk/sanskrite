@@ -415,6 +415,9 @@ func BuildSupplyChainPathPayloadDetailed(nodes []SupplyChainPathNode, edges []Su
 	if stress != nil {
 		payload["stress"] = stress
 	}
+	if metrics := buildSupplyChainPathPayloadMetrics(legs, stress); len(metrics) > 0 {
+		payload["metrics"] = metrics
+	}
 	if sufficiency != nil {
 		payload["sufficiency"] = sufficiency
 	}
@@ -425,6 +428,37 @@ func BuildSupplyChainPathPayloadDetailed(nodes []SupplyChainPathNode, edges []Su
 		payload["notes"] = notes
 	}
 	return payload
+}
+
+func buildSupplyChainPathPayloadMetrics(legs []SupplyChainPathLeg, stress *SupplyChainPathStress) map[string]interface{} {
+	if len(legs) == 0 && stress == nil {
+		return nil
+	}
+	metrics := map[string]interface{}{}
+	if len(legs) > 0 {
+		var bindingTotal float64
+		for _, leg := range legs {
+			bindingTotal += leg.BindingConfidence
+		}
+		metrics["legCount"] = len(legs)
+		metrics["bindingConfidence"] = bindingTotal / float64(len(legs))
+	}
+	if stress != nil {
+		metrics["pathStressScore"] = stress.PathScore
+		metrics["fragility"] = stress.Fragility
+		metrics["rerouteability"] = stress.Rerouteability
+		metrics["zonePressure"] = stress.ZonePressure
+		metrics["affectedZonePressure"] = stress.AffectedZonePressure
+		metrics["recoveryLatencyHours"] = stress.RecoveryLatencyHrs
+		metrics["bottleneckLegIndex"] = stress.BottleneckLegIndex
+		if len(stress.DominantFactors) > 0 {
+			metrics["dominantFactors"] = append([]string(nil), stress.DominantFactors...)
+		}
+	}
+	if len(metrics) == 0 {
+		return nil
+	}
+	return metrics
 }
 
 type SupplyChainAssemblyGraphPayloadOptions struct {
@@ -974,10 +1008,11 @@ func inferMissingOperationalEdgeMetadata(parsed *SupplyChainPathPayload, edge *S
 	}
 	changed := false
 	if strings.TrimSpace(edge.Role) == "" {
-		if edge.Type == "SUPPLY_LINK" {
+		switch edge.Type {
+		case "SUPPLY_LINK":
 			edge.Role = "product_flow"
 			changed = true
-		} else if edge.Type == "LOGISTICS" {
+		case "LOGISTICS":
 			edge.Role = "logistics_leg"
 			changed = true
 		}
@@ -1374,6 +1409,11 @@ func PopulateMaterializedArtifactIndexes(artifact *MaterializedArtifact) {
 			flowRefs = uniqueTrimmedStrings(summary.FlowRefs)
 			zoneRefs = uniqueTrimmedStrings(summary.ZoneRefs)
 			affectedZoneRefs = uniqueTrimmedStrings(summary.AffectedZoneRefs)
+			artifact.LegCount = summary.LegCount
+			artifact.BindingScore = summary.BindingConfidence
+			artifact.PathStressScore = summary.PathStressScore
+			artifact.BottleneckLeg = summary.BottleneckLegIndex
+			artifact.RecoveryLatencyHrs = summary.RecoveryLatencyHrs
 		}
 		PopulateSupplyChainPathSufficiency(artifact)
 		PopulateSupplyChainPathFamily(artifact)
@@ -1712,11 +1752,18 @@ func (a *MaterializedArtifact) GenerateVectorText() string {
 				}
 			}
 		}
-	case MaterializedKindGovernanceChain, MaterializedKindRegulatoryImpactMap, MaterializedKindEcosystemMap:
+	case MaterializedKindGovernanceChain, MaterializedKindRegulatoryImpactMap,
+		MaterializedKindRegulatoryImpactTransmissionPath, MaterializedKindRegulatoryTimeline,
+		MaterializedKindRegulatoryCascadeMap, MaterializedKindRegulatoryImpactScenario,
+		MaterializedKindEcosystemMap:
 		kindLabel := map[MaterializedKind]string{
-			MaterializedKindGovernanceChain:     "Governance Chain",
-			MaterializedKindRegulatoryImpactMap: "Regulatory Impact Map",
-			MaterializedKindEcosystemMap:        "Ecosystem Map",
+			MaterializedKindGovernanceChain:                  "Governance Chain",
+			MaterializedKindRegulatoryImpactMap:              "Regulatory Impact Map",
+			MaterializedKindRegulatoryImpactTransmissionPath: "Regulatory Transmission Paths",
+			MaterializedKindRegulatoryTimeline:               "Regulatory Timeline",
+			MaterializedKindRegulatoryCascadeMap:             "Regulatory Cascade Map",
+			MaterializedKindRegulatoryImpactScenario:         "Regulatory What-If Scenarios",
+			MaterializedKindEcosystemMap:                     "Ecosystem Map",
 		}
 		if lbl, ok := kindLabel[a.Kind]; ok && a.DisplayName == "" {
 			b.WriteString(lbl + "\n")
@@ -2491,7 +2538,10 @@ func ReplaceCanonicalPathInArtifact(artifact *MaterializedArtifact, oldPath, new
 				Notes:                           parsed.Notes,
 			})
 		}
-	case MaterializedKindRegulatoryImpactMap, MaterializedKindGovernanceChain, MaterializedKindEcosystemMap:
+	case MaterializedKindRegulatoryImpactMap, MaterializedKindRegulatoryImpactTransmissionPath,
+		MaterializedKindRegulatoryTimeline, MaterializedKindRegulatoryCascadeMap,
+		MaterializedKindRegulatoryImpactScenario,
+		MaterializedKindGovernanceChain, MaterializedKindEcosystemMap:
 		parsed, err := ParseRelationsGraphPayload(artifact.Payload)
 		if err == nil && parsed != nil {
 			for i := range parsed.Nodes {

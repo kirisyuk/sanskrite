@@ -1,6 +1,9 @@
 package repo
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestNormalizeSupplyLinkRef_NormalizesLegacyOrgPath(t *testing.T) {
 	got := normalizeSupplyLinkRef("/org/tesla-inc")
@@ -11,7 +14,7 @@ func TestNormalizeSupplyLinkRef_NormalizesLegacyOrgPath(t *testing.T) {
 
 func TestBuildSupplyLinkCustomerRefAliases_NoEdgesRepoKeepsNormalizedInput(t *testing.T) {
 	r := &HorizonFragmentsRepository{}
-	aliases := r.buildSupplyLinkCustomerRefAliases(nil, "/org/tesla-inc", "global")
+	aliases := r.buildSupplyLinkCustomerRefAliases(context.Background(), "/org/tesla-inc", "global")
 	if len(aliases) != 1 {
 		t.Fatalf("expected 1 alias, got %d (%v)", len(aliases), aliases)
 	}

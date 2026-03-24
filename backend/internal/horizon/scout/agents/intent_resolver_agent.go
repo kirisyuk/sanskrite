@@ -76,11 +76,12 @@ const (
 
 // SupplyChainQuery defines one holistic supply chain request (anchor + direction + filters).
 // Optional Level: 1 = top ORGs only (depth 1), 2 = ORG+FACs+products expansion (depth 2-3).
-// When Anchors is non-empty, it takes precedence over Anchor: build chains FROM each of these orgs (producers).
+// When Anchors is non-empty, it takes precedence over Anchor.
+// Supported anchor types are org, fac, deposit, and product.
 type SupplyChainQuery struct {
 	Anchor        string   `json:"anchor" firestore:"anchor"`                                   // canonical path (single). Used when Anchors is empty.
 	Anchors       []string `json:"anchors,omitempty" firestore:"anchors,omitempty"`             // list of org paths for "from organizations" queries
-	AnchorType    string   `json:"anchorType" firestore:"anchorType"`                           // "org" | "product" | "deposit"
+	AnchorType    string   `json:"anchorType" firestore:"anchorType"`                           // "org" | "fac" | "product" | "deposit"
 	Direction     string   `json:"direction" firestore:"direction"`                             // "down" (org→fac→product→fac→org tree). Legacy: "upstream"/"downstream"/"both" mapped to "down".
 	Depth         int      `json:"depth" firestore:"depth"`                                     // 3-6
 	Level         int      `json:"level,omitempty" firestore:"level,omitempty"`                 // optional: 1 = top ORGs, 2 = expansion (staged queries)
@@ -1218,7 +1219,7 @@ func synthesizeSupplyChainExecutionPlan(
 	},
 	profile intentScenarioProfile,
 ) *SupplyChainExecutionPlan {
-	anchorPaths := collectIntentAnchorPathsByPrefix(anchors, "/org/", "/deposit/", "/product/")
+	anchorPaths := collectIntentAnchorPathsByPrefix(anchors, "/org/", "/fac/", "/deposit/", "/product/")
 	if len(anchorPaths) == 0 {
 		return nil
 	}
@@ -1237,6 +1238,8 @@ func synthesizeSupplyChainExecutionPlan(
 		switch {
 		case strings.HasPrefix(cp, "/org/"):
 			q.AnchorType = "org"
+		case strings.HasPrefix(cp, "/fac/"):
+			q.AnchorType = "fac"
 		case strings.HasPrefix(cp, "/deposit/"):
 			q.AnchorType = "deposit"
 		case strings.HasPrefix(cp, "/product/"):
@@ -1335,23 +1338,23 @@ func synthesizeGovernanceExecutionPlan(
 		Reason        string  `json:"reason"`
 	},
 ) *GovernanceExecutionPlan {
-	target := ""
-	targetType := ""
-	for _, cp := range collectIntentAnchorPathsByPrefix(anchors, "/community/", "/org/", "/gov/", "/person/") {
-		target = cp
-		switch {
-		case strings.HasPrefix(cp, "/community/"):
-			targetType = "community"
-		case strings.HasPrefix(cp, "/org/"):
-			targetType = "org"
-		case strings.HasPrefix(cp, "/gov/"):
-			targetType = "gov"
-		case strings.HasPrefix(cp, "/person/"):
-			targetType = "person"
-		}
-		break
+	cps := collectIntentAnchorPathsByPrefix(anchors, "/community/", "/org/", "/gov/", "/person/")
+	if len(cps) == 0 {
+		return nil
 	}
-	if target == "" || targetType == "" {
+	target := cps[0]
+	var targetType string
+	switch {
+	case strings.HasPrefix(target, "/community/"):
+		targetType = "community"
+	case strings.HasPrefix(target, "/org/"):
+		targetType = "org"
+	case strings.HasPrefix(target, "/gov/"):
+		targetType = "gov"
+	case strings.HasPrefix(target, "/person/"):
+		targetType = "person"
+	}
+	if targetType == "" {
 		return nil
 	}
 	contractType := normalizeContractTypeAlias(d.ContractType)
@@ -1384,7 +1387,7 @@ func synthesizeGovernanceExecutionPlan(
 }
 
 func synthesizeEcosystemExecutionPlan(
-	query string,
+	_ string,
 	d *DomainResolution,
 	anchors []struct {
 		CanonicalPath string  `json:"canonicalPath"`

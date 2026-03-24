@@ -202,6 +202,7 @@ func classifyPathFamilies(ev SignalPropagationTraceEvent) []string {
 	case string(horizonmodels.DependencyTypeSuppliesTo),
 		string(horizonmodels.DependencyTypeTransformsInto),
 		string(horizonmodels.DependencyTypeAssemblesInto),
+		string(horizonmodels.DependencyTypeUsedIn),
 		string(horizonmodels.DependencyTypeExtractsFrom),
 		string(horizonmodels.DependencyTypeProduces):
 		add("energy_supply_chain")

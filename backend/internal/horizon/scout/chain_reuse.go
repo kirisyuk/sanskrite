@@ -173,23 +173,36 @@ func addArtifactToLensScope(
 	if lensesRepo == nil || lensID == "" || artifact == nil || strings.TrimSpace(artifact.CanonicalKey) == "" {
 		return false
 	}
+	models.PopulateMaterializedArtifactIndexes(artifact)
 	artifactRef := "/artifact/" + strings.TrimPrefix(strings.TrimSpace(artifact.CanonicalKey), "/")
-	res, err := lensesRepo.AddScopeCanonicalPathAutoManaged(ctx, lensID, artifactRef, models.MaxAutoArtifactScopeAddsPerLens)
-	if err != nil || !res.Added {
-		if res.Added {
-			return true
-		}
-		return false
+	addedToScope := false
+	if res, err := lensesRepo.AddScopeCanonicalPathAutoManaged(ctx, lensID, artifactRef, models.MaxAutoArtifactScopeAddsPerLens); err == nil && res.Added {
+		addedToScope = true
 	}
-	// Persist ScopeArtifacts metadata so frontend can render immediately.
+
+	// Persist ScopeArtifacts metadata regardless of auto-managed scope budget. The
+	// path may fail to enter `/artifact/...` scope when the budget is full, but the
+	// lens should still retain metric-rich artifact metadata for runtime and UI use.
 	artKey := strings.TrimPrefix(strings.TrimSpace(artifact.CanonicalKey), "/")
 	ref := models.ScopeArtifactRef{
-		Kind:        string(artifact.Kind),
-		DisplayName: artifact.DisplayName,
-		NodeRefs:    artifact.NodeRefs,
-		Status:      artifact.PathStatus,
+		Kind:           string(artifact.Kind),
+		DisplayName:    artifact.DisplayName,
+		AnchorSupplier: artifact.AnchorSupplier,
+		AnchorCustomer: artifact.AnchorCustomer,
+		ProductAxis:    artifact.ProductAxis,
+		NodeRefs:       append([]string(nil), artifact.NodeRefs...),
+		Status:         artifact.PathStatus,
 	}
 	if artifact.Kind == models.MaterializedKindSupplyChainPath {
+		ref.GeoRefs = append([]string(nil), artifact.GeoRefs...)
+		ref.FlowRefs = append([]string(nil), artifact.FlowRefs...)
+		ref.ZoneRefs = append([]string(nil), artifact.ZoneRefs...)
+		ref.AffectedZoneRefs = append([]string(nil), artifact.AffectedZoneRefs...)
+		ref.LegCount = artifact.LegCount
+		ref.BindingConfidence = artifact.BindingScore
+		ref.PathStressScore = artifact.PathStressScore
+		ref.BottleneckLegIndex = artifact.BottleneckLeg
+		ref.RecoveryLatencyHrs = artifact.RecoveryLatencyHrs
 		if parsed, err := models.ParseSupplyChainPathPayload(artifact.Payload); err == nil && parsed != nil {
 			summary := models.SummarizeSupplyChainPathBindings(parsed)
 			ref.GeoRefs = summary.GeoRefs
@@ -204,23 +217,8 @@ func addArtifactToLensScope(
 			ref.RecoveryLatencyHrs = summary.RecoveryLatencyHrs
 		}
 	}
-	_ = lensesRepo.UpsertScopeArtifact(ctx, lensID, artKey, models.ScopeArtifactRef{
-		Kind:               ref.Kind,
-		DisplayName:        ref.DisplayName,
-		NodeRefs:           ref.NodeRefs,
-		Status:             ref.Status,
-		GeoRefs:            ref.GeoRefs,
-		FlowRefs:           ref.FlowRefs,
-		ZoneRefs:           ref.ZoneRefs,
-		AffectedZoneRefs:   ref.AffectedZoneRefs,
-		SpatialSemantics:   ref.SpatialSemantics,
-		LegCount:           ref.LegCount,
-		BindingConfidence:  ref.BindingConfidence,
-		PathStressScore:    ref.PathStressScore,
-		BottleneckLegIndex: ref.BottleneckLegIndex,
-		RecoveryLatencyHrs: ref.RecoveryLatencyHrs,
-	})
-	return true
+	_ = lensesRepo.UpsertScopeArtifact(ctx, lensID, artKey, ref)
+	return addedToScope
 }
 
 // filterScopeWorthyRefs selects canonical paths suitable for lens scope from NodeRefs.

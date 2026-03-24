@@ -10,6 +10,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -17,9 +18,10 @@ import (
 // DomainArtifactBuilder builds materialized artifacts for non-supply-chain domains
 // (governance chains, regulatory impact maps, ecosystem maps).
 type DomainArtifactBuilder struct {
-	fragmentsRepo *repo.HorizonFragmentsRepository
-	edgesRepo     *repo.DependencyEdgesRepository
-	artifactsRepo *repo.MaterializedArtifactsRepository
+	fragmentsRepo     *repo.HorizonFragmentsRepository
+	edgesRepo         *repo.DependencyEdgesRepository
+	artifactsRepo     *repo.MaterializedArtifactsRepository
+	productDictionary *productdict.Runtime
 }
 
 // NewDomainArtifactBuilder creates a new builder.
@@ -33,6 +35,15 @@ func NewDomainArtifactBuilder(
 		edgesRepo:     edgesRepo,
 		artifactsRepo: artifactsRepo,
 	}
+}
+
+// WithProductDictionary enables product-stream expansion for regulatory cascade overlays.
+func (b *DomainArtifactBuilder) WithProductDictionary(d *productdict.Runtime) *DomainArtifactBuilder {
+	if b == nil {
+		return b
+	}
+	b.productDictionary = d
+	return b
 }
 
 // MaterializeRelationsGraph builds and persists a domain-specific relations graph artifact.

@@ -84,6 +84,9 @@ func (e *ScoutEngine) runSupplyChainAssemblyStage(
 
 	rawNodeRefs, rawNodeLabels, rawEdges, frontiers := collectSupplyChainAssemblyRawGraph(job)
 	builder := pathbuilder.NewSupplyChainAssemblyBuilder(e.fragmentsRepo, e.edgesRepo, e.supplyChainPathBuilder)
+	if e.canonicalPathResolver != nil {
+		builder = builder.WithProductDictionary(e.canonicalPathResolver.productDictionary)
+	}
 	result, err := builder.BuildAndMaterialize(ctx, pathbuilder.SupplyChainAssemblyOptions{
 		TenantID:      strings.TrimSpace(firstNonEmpty(job.TenantID, "global")),
 		ProjectID:     strings.TrimSpace(job.ProjectID),

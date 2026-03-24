@@ -256,3 +256,50 @@ func TestWithDeterministicDirectionalRoleQualifiers_SkipsNonAmbiguousTypePairs(t
 		t.Fatalf("expected nil qualifiers passthrough, got %#v", quals)
 	}
 }
+
+func TestWithDeterministicDirectionalRoleQualifiers_ControlsAccessFillsPolicyRoles(t *testing.T) {
+	quals, changed := withDeterministicDirectionalRoleQualifiers(
+		models.DependencyTypeControlsAccess,
+		models.FragmentTypeOrganization,
+		models.FragmentTypeMarket,
+		nil,
+	)
+	if !changed {
+		t.Fatalf("expected changed=true for CONTROLS_ACCESS org->market without qualifiers")
+	}
+	if got := quals["source_role"]; got != "controller" {
+		t.Fatalf("expected source_role=controller, got %v", got)
+	}
+	if got := quals["target_role"]; got != "access_subject" {
+		t.Fatalf("expected target_role=access_subject, got %v", got)
+	}
+	if got := quals["direction_basis"]; got != "controller_to_access_subject" {
+		t.Fatalf("expected direction_basis=controller_to_access_subject, got %v", got)
+	}
+}
+
+func TestWithDeterministicDirectionalRoleQualifiers_InGeoScopeRepairsAliases(t *testing.T) {
+	in := map[string]interface{}{
+		"source_role":     "policy_source",
+		"target_role":     "jurisdiction",
+		"direction_basis": "instrument_to_jurisdiction",
+	}
+	quals, changed := withDeterministicDirectionalRoleQualifiers(
+		models.DependencyTypeInGeoScope,
+		models.FragmentTypeMechanism,
+		models.FragmentTypeGeoRegion,
+		in,
+	)
+	if !changed {
+		t.Fatalf("expected changed=true for IN_GEO_SCOPE alias repair")
+	}
+	if got := quals["source_role"]; got != "scope_owner" {
+		t.Fatalf("expected source_role=scope_owner, got %v", got)
+	}
+	if got := quals["target_role"]; got != "geo_scope" {
+		t.Fatalf("expected target_role=geo_scope, got %v", got)
+	}
+	if got := quals["direction_basis"]; got != "scope_owner_to_geo_scope" {
+		t.Fatalf("expected direction_basis=scope_owner_to_geo_scope, got %v", got)
+	}
+}

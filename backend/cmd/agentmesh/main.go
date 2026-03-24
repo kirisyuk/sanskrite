@@ -15,12 +15,14 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/agentmesh/registry"
 	agentmeshrepo "github.com/igorkirisyuk/sanskrite/internal/agentmesh/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/agentmesh/runtime"
+	agentmeshsimulation "github.com/igorkirisyuk/sanskrite/internal/agentmesh/simulation"
 	"github.com/igorkirisyuk/sanskrite/internal/agentmesh/tasks"
 	meshtrace "github.com/igorkirisyuk/sanskrite/internal/agentmesh/trace"
 	"github.com/igorkirisyuk/sanskrite/internal/agentmesh/transport/a2a"
 	"github.com/igorkirisyuk/sanskrite/internal/agentmesh/transport/mcp"
 	"github.com/igorkirisyuk/sanskrite/internal/agentmesh/vertex"
 	gcp "github.com/igorkirisyuk/sanskrite/internal/gcp"
+	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"google.golang.org/api/idtoken"
 )
 
@@ -82,17 +84,30 @@ func main() {
 		log.Fatalf("vertex service: %v", err)
 	}
 	traceSvc := meshtrace.NewService(store, logger)
+	simulationProcessor := agentmeshsimulation.NewProcessor(
+		horizonrepo.NewSimulationRunsRepository(fs.Client()),
+		horizonrepo.NewSimulationWorldsRepository(fs.Client()),
+		horizonrepo.NewSimulationAgentsRepository(fs.Client()),
+		horizonrepo.NewSimulationEventsRepository(fs.Client()),
+		horizonrepo.NewSimulationArtifactsRepository(fs.Client()),
+		nil,
+		logger,
+	)
 
 	var dispatcher *tasks.Dispatcher
 	taskTargetURL := strings.TrimSpace(os.Getenv("AGENTMESH_TASK_TARGET_URL"))
 	if taskTargetURL != "" {
+		taskOIDCSA := envOr("AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT", "backend@"+*projectID+".iam.gserviceaccount.com")
+		if envEnabled("AGENTMESH_TASKS_DISABLE_OIDC") {
+			taskOIDCSA = ""
+		}
 		dispatcher, err = tasks.NewDispatcher(
 			ctx,
 			*projectID,
 			envOr("AGENTMESH_TASKS_LOCATION", "us-central1"),
 			envOr("AGENTMESH_TASKS_QUEUE", "etigram-agentmesh"),
 			taskTargetURL,
-			envOr("AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT", "agentmesh@"+*projectID+".iam.gserviceaccount.com"),
+			taskOIDCSA,
 			envOr("AGENTMESH_TASKS_OIDC_AUDIENCE", ""),
 		)
 		if err != nil {
@@ -109,7 +124,7 @@ func main() {
 		dispatcher,
 		envOr("AGENTMESH_ARTIFACT_BUCKET", *projectID+"-agentmesh-artifacts"),
 		logger,
-	)
+	).WithProcessor(simulationProcessor)
 	if err := store.SavePolicySnapshot(ctx, "default", map[string]any{
 		"vertexSubstrate": "enabled",
 		"a2aVersion":      "1.0.0",
@@ -166,6 +181,9 @@ func main() {
 }
 
 func verifyOIDCToken(r *http.Request) error {
+	if envEnabled("AGENTMESH_ALLOW_UNAUTH_INTERNAL_TASKS") {
+		return nil
+	}
 	rawToken := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 	if rawToken == "" {
 		return httpError("missing bearer token")
@@ -203,6 +221,14 @@ func envOr(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envEnabled(name string) bool {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return false
+	}
+	return value != "0" && !strings.EqualFold(value, "false")
 }
 
 func requiredEnv(name string) string {

@@ -11,9 +11,10 @@ func TestBuildTransformReviewPromptIncludesHardRejects(t *testing.T) {
 	prompt := buildTransformReviewPrompt(`[]`)
 	required := []string{
 		"These are NOT synonyms",
-		"Only accept DIRECT or ADJACENT canonical transformation steps",
+		"Only accept DIRECT or ADJACENT canonical product relation steps",
 		"Direct final assembly is allowed",
-		"Class-subclass, general-specific, family-member, or grade-variant relationships are NOT transformations",
+		"helium -> MRI scanner",
+		"Class-subclass, general-specific, family-member, or grade-variant relationships are NOT canonical product relations",
 		"Logistics, services, routes, handling, freight, ports, compliance, documents, and business activities are NOT products",
 		"iron ore -> hot-rolled steel coil",
 		"battery pack -> LFP battery cell",
@@ -248,7 +249,7 @@ func TestConservativeAcceptReasonRescuesDirectBatteryMaterialToCellStep(t *testi
 	}
 }
 
-func TestInferRelationKindDistinguishesAssemblyAndTransformation(t *testing.T) {
+func TestInferRelationKindDistinguishesAssemblyUsageAndTransformation(t *testing.T) {
 	if got := inferRelationKind(transformReviewEntry{
 		FromPath: "/product/finished/mechanical/assembly/p-zero-tires",
 		FromName: "Pirelli P Zero Tires",
@@ -274,6 +275,16 @@ func TestInferRelationKindDistinguishesAssemblyAndTransformation(t *testing.T) {
 		ToName:   "77GHz Radar Sensor",
 	}); got != "assembly" {
 		t.Fatalf("expected assembly for component integration, got %q", got)
+	}
+
+	if got := inferRelationKind(transformReviewEntry{
+		FromPath: "/product/raw/mineral/helium",
+		FromName: "Helium",
+		ToPath:   "/product/finished/medical/assembly/mri-scanner",
+		ToName:   "MRI Scanner",
+		Reason:   "Liquid helium is used in MRI scanner cryogenic cooling systems.",
+	}); got != "usage" {
+		t.Fatalf("expected usage for direct operational product dependency, got %q", got)
 	}
 }
 

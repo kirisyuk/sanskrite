@@ -408,10 +408,6 @@ func (r *LensesRepository) IncrementDeferredScopeAddCount(ctx context.Context, l
 	return err
 }
 
-func deferredScopeAddCount(viewConfig map[string]interface{}) int {
-	return scopeAutoAddCount(viewConfig, models.ScopeAutoAddEntityCounterKey)
-}
-
 func scopeAutoAddCount(viewConfig map[string]interface{}, key string) int {
 	if viewConfig == nil {
 		return 0

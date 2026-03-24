@@ -28,6 +28,7 @@ var edgeTypeToSemanticGroup = map[DependencyType]string{
 	DependencyTypeSuppliesTo:     SemanticGroupSupplyChain,
 	DependencyTypeTransformsInto: SemanticGroupSupplyChain,
 	DependencyTypeAssemblesInto:  SemanticGroupSupplyChain,
+	DependencyTypeUsedIn:         SemanticGroupSupplyChain,
 	DependencyTypeExtractsFrom:   SemanticGroupSupplyChain,
 	DependencyTypeLocatedIn:      SemanticGroupSupplyChain,
 	DependencyTypeOperatesIn:     SemanticGroupSupplyChain,

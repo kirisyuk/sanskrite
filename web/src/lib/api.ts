@@ -127,6 +127,105 @@ export interface SupplyChainArtifactResponse {
   [key: string]: any;
 }
 
+export interface HorizonSimulationOverlayItem {
+  id?: string;
+  title?: string;
+  kind?: string;
+  score?: number;
+  riskCategory?: string;
+  explanation?: string;
+  functions?: string[];
+  disciplines?: string[];
+  targetRefs?: string[];
+  targetCountryCode?: string;
+  productPath?: string;
+  signalRefs?: string[];
+  dominantMechanisms?: string[];
+  recommendedActions?: string[];
+  sourceId?: string;
+  sourceTitle?: string;
+  targetId?: string;
+  targetTitle?: string;
+  affectedRoles?: string[];
+  [key: string]: any;
+}
+
+export interface HorizonSimulationRoleOverlay {
+  role: string;
+  title?: string;
+  primaryLens?: string;
+  priorityFunctions?: string[];
+  priorityDisciplines?: string[];
+  summary?: string[];
+  immediateActions?: string[];
+  weeklyMonitoring?: string[];
+  decisionDemands?: string[];
+  targets?: {
+    shoulders?: string[];
+    products?: string[];
+    pathChains?: string[];
+    cascades?: string[];
+  };
+  [key: string]: any;
+}
+
+export interface HorizonSimulationResultOverlays {
+  shoulders: HorizonSimulationOverlayItem[];
+  products: HorizonSimulationOverlayItem[];
+  pathChains: HorizonSimulationOverlayItem[];
+  cascades: HorizonSimulationOverlayItem[];
+  roles: HorizonSimulationRoleOverlay[];
+}
+
+export interface HorizonSimulationBundleViewResponse {
+  runId: string;
+  artifactId: string;
+  kind: 'bundle_view' | string;
+  bundle: Record<string, any>;
+}
+
+export interface HorizonSimulationOverlayFilters {
+  kinds?: Array<'shoulders' | 'products' | 'pathChains' | 'cascades' | 'roles' | string>;
+  functions?: string[];
+  disciplines?: string[];
+  roles?: string[];
+  targets?: string[];
+  ids?: string[];
+  categories?: string[];
+  q?: string;
+  minScore?: number;
+}
+
+export interface HorizonSimulationOverlaysResponse {
+  runId: string;
+  artifactId: string;
+  kind: 'simulation_result_overlays' | string;
+  filters: HorizonSimulationOverlayFilters;
+  overlays: HorizonSimulationResultOverlays;
+}
+
+export interface HorizonSimulationRunSummary {
+  id: string;
+  status: string;
+  tenantId?: string;
+  projectId?: string;
+  request?: {
+    question?: string;
+    lensId?: string;
+    domainModes?: string[];
+    mode?: string;
+    audience?: string;
+  };
+  summary?: Record<string, any>;
+  review?: Record<string, any>;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface HorizonSimulationRunsResponse {
+  runs: HorizonSimulationRunSummary[];
+}
+
 export interface HorizonProductPrefetchSuggestion {
   canonicalPath: string;
   label: string;
@@ -166,6 +265,24 @@ export interface HorizonProductStreamResponse {
   cache?: Record<string, boolean>;
   nodes: HorizonProductStreamNode[];
   edges: HorizonProductStreamEdge[];
+}
+
+export interface HorizonProductProducer {
+  fragmentId: string;
+  canonicalPath?: string;
+  label?: string;
+  fragmentType?: string;
+  geoSlug?: string;
+  sourceScope?: string;
+  edgeCount?: number;
+}
+
+export interface HorizonProductProducersResponse {
+  query: string;
+  resolvedPath: string;
+  resolvedLabel?: string;
+  limit: number;
+  producers: HorizonProductProducer[];
 }
 
 export interface IdentifyStressVisibleRelation {
@@ -227,7 +344,7 @@ class ApiClient {
           }).catch(() => {});
         } else if (error.response.status >= 500) {
           // Best-effort endpoints (autocomplete/prefetch) shouldn't mark the whole server as unavailable.
-          if (url.includes('/api/horizon/entities/search') || url.includes('/api/horizon/products/prefetch')) {
+          if (url.includes('/api/horizon/entities/search') || url.includes('/api/horizon/products/prefetch') || url.includes('/api/horizon/products/producers')) {
             return Promise.reject(error);
           }
           // Server error (5xx)
@@ -2045,6 +2162,15 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     limitPerHop?: number;
   }): Promise<HorizonProductStreamResponse> {
     const response = await this.client.post('/api/horizon/products/stream', input);
+    return response.data;
+  }
+
+  async getHorizonProductProducers(input: {
+    query?: string;
+    productRef?: string;
+    limit?: number;
+  }): Promise<HorizonProductProducersResponse> {
+    const response = await this.client.post('/api/horizon/products/producers', input);
     return response.data;
   }
 
@@ -3957,6 +4083,40 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     } catch (e) {
       if ((e as Error).name !== 'AbortError') callbacks.onError?.(e as Error);
     }
+  }
+
+  async getHorizonSimulationBundleView(runId: string): Promise<HorizonSimulationBundleViewResponse> {
+    const response = await this.client.get<HorizonSimulationBundleViewResponse>(`/api/horizon/simulations/${encodeURIComponent(runId)}/bundle-view`);
+    return response.data;
+  }
+
+  async listHorizonSimulationRuns(): Promise<HorizonSimulationRunsResponse> {
+    const response = await this.client.get<HorizonSimulationRunsResponse>('/api/horizon/simulations');
+    return response.data;
+  }
+
+  async getHorizonSimulationOverlays(
+    runId: string,
+    filters?: HorizonSimulationOverlayFilters,
+  ): Promise<HorizonSimulationOverlaysResponse> {
+    const params: Record<string, string> = {};
+    const appendCSV = (key: string, values?: string[]) => {
+      if (Array.isArray(values) && values.length > 0) params[key] = values.join(',');
+    };
+    appendCSV('kinds', filters?.kinds as string[] | undefined);
+    appendCSV('functions', filters?.functions);
+    appendCSV('disciplines', filters?.disciplines);
+    appendCSV('roles', filters?.roles);
+    appendCSV('targets', filters?.targets);
+    appendCSV('ids', filters?.ids);
+    appendCSV('categories', filters?.categories);
+    if (typeof filters?.minScore === 'number') params.minScore = String(filters.minScore);
+    if (filters?.q?.trim()) params.q = filters.q.trim();
+    const response = await this.client.get<HorizonSimulationOverlaysResponse>(
+      `/api/horizon/simulations/${encodeURIComponent(runId)}/overlays`,
+      { params },
+    );
+    return response.data;
   }
 }
 

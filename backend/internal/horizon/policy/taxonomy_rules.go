@@ -257,15 +257,15 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 				{EdgeType: "FOCUSES_ON", Direction: "DOMAIN → *", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DOMAIN", "ORGANIZATION", "PERSON", "MARKET", "PRODUCT", "PROGRAM", "FACILITY", "GEO_REGION", "COMMUNITY", "MEDIA_CHANNEL", "DEPOSIT"}},
 				// Domain → Actor (principal entities involved in a domain).
 				{EdgeType: "INVOLVES_ACTOR", Direction: "DOMAIN → ORG|PERSON|COMMUNITY", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"ORGANIZATION", "PERSON", "COMMUNITY"}},
-				// Domain → Geo scope.
-				{EdgeType: "IN_GEO_SCOPE", Direction: "DOMAIN → GEO_REGION", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"GEO_REGION"}},
+				// Domain/policy source → Geo scope.
+				{EdgeType: "IN_GEO_SCOPE", Direction: "DOMAIN|DECISION_POINT|MECHANISM|ORG|PROGRAM|MARKET → GEO_REGION", ValidSource: []string{"DOMAIN", "DECISION_POINT", "MECHANISM", "ORGANIZATION", "PROGRAM", "MARKET"}, ValidTarget: []string{"GEO_REGION"}},
 				// Domain → About (topic/subject matter).
 				{EdgeType: "ABOUT", Direction: "DOMAIN → *", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DOMAIN", "ORGANIZATION", "PERSON", "MARKET", "PRODUCT", "PROGRAM", "FACILITY", "GEO_REGION", "COMMUNITY", "MEDIA_CHANNEL", "DEPOSIT"}},
 				// Domain → Domain (contract relationships).
 				{EdgeType: "RELATED_DOMAIN", Direction: "DOMAIN → DOMAIN", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DOMAIN"}},
 				{EdgeType: "BROADENS_TO", Direction: "DOMAIN → DOMAIN", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DOMAIN"}},
 				{EdgeType: "NARROWS_TO", Direction: "DOMAIN → DOMAIN", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DOMAIN"}},
-				{EdgeType: "AFFECTS", Direction: "DOMAIN|AFFECTED_ZONE → DOMAIN|FACILITY|ORGANIZATION|GEO_REGION", ValidSource: []string{"DOMAIN", "AFFECTED_ZONE"}, ValidTarget: []string{"DOMAIN", "FACILITY", "ORGANIZATION", "GEO_REGION", "PRODUCT", "PROGRAM"}},
+				{EdgeType: "AFFECTS", Direction: "DOMAIN|AFFECTED_ZONE|MECHANISM|ORG|PROGRAM|COMMUNITY|MARKET → DOMAIN|FACILITY|ORGANIZATION|GEO_REGION|PRODUCT|PROGRAM|COMMUNITY|MEDIA_CHANNEL|MARKET", ValidSource: []string{"DOMAIN", "AFFECTED_ZONE", "MECHANISM", "ORGANIZATION", "PROGRAM", "COMMUNITY", "MARKET"}, ValidTarget: []string{"DOMAIN", "FACILITY", "ORGANIZATION", "GEO_REGION", "PRODUCT", "PROGRAM", "COMMUNITY", "MEDIA_CHANNEL", "MARKET"}},
 				{EdgeType: "TRIGGERED_BY", Direction: "AFFECTED_ZONE → EVENT", ValidSource: []string{"AFFECTED_ZONE"}, ValidTarget: []string{"EVENT"}},
 				// DEPENDS_ON is broadly used; allow DOMAIN and existing entity usage.
 				{EdgeType: "DEPENDS_ON", Direction: "* → *", ValidSource: []string{"DOMAIN", "ORGANIZATION", "PERSON", "MARKET", "PRODUCT", "PROGRAM", "FACILITY", "GEO_REGION", "COMMUNITY", "MEDIA_CHANNEL", "DEPOSIT"}, ValidTarget: []string{"DOMAIN", "ORGANIZATION", "PERSON", "MARKET", "PRODUCT", "PROGRAM", "FACILITY", "GEO_REGION", "COMMUNITY", "MEDIA_CHANNEL", "DEPOSIT"}},
@@ -275,15 +275,15 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 				{EdgeType: "SURFACES", Direction: "DOMAIN → DECISION_POINT|MECHANISM", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DECISION_POINT", "MECHANISM"}, Description: "Domain surfaces strategic decision points"},
 				// CONTROLS_ACCESS: strategic gatekeeping (block/enable/delay/monitor).
 				// Source: DECISION_POINT or GOV/ORG/COMMUNITY (gatekeeper). Target: entity being controlled.
-				{EdgeType: "CONTROLS_ACCESS", Direction: "DECISION_POINT|ORG|COMMUNITY → ORG|FACILITY|PRODUCT|MARKET|PROGRAM", ValidSource: []string{"DECISION_POINT", "ORGANIZATION", "COMMUNITY"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET", "PROGRAM"}, Description: "Strategic gatekeeping relation"},
+				{EdgeType: "CONTROLS_ACCESS", Direction: "DECISION_POINT|ORG|COMMUNITY|PROGRAM → ORG|FACILITY|PRODUCT|MARKET|PROGRAM|COMMUNITY", ValidSource: []string{"DECISION_POINT", "ORGANIZATION", "COMMUNITY", "PROGRAM"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET", "PROGRAM", "COMMUNITY"}, Description: "Strategic gatekeeping relation"},
 				// IMPOSES_CONDITION: soft power / compliance requirements.
-				{EdgeType: "IMPOSES_CONDITION", Direction: "ORG|DECISION_POINT|COMMUNITY → ORG|FACILITY|PRODUCT", ValidSource: []string{"ORGANIZATION", "DECISION_POINT", "COMMUNITY"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT"}, Description: "Imposing rules/costs/compliance"},
+				{EdgeType: "IMPOSES_CONDITION", Direction: "MECHANISM|ORG|DECISION_POINT|COMMUNITY|PROGRAM → ORG|FACILITY|PRODUCT|MARKET|PROGRAM|COMMUNITY", ValidSource: []string{"MECHANISM", "ORGANIZATION", "DECISION_POINT", "COMMUNITY", "PROGRAM"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET", "PROGRAM", "COMMUNITY"}, Description: "Imposing rules/costs/compliance"},
 				// GATEKEEPS_DECISION: actor controls a strategic decision point.
-				{EdgeType: "GATEKEEPS_DECISION", Direction: "ORG|COMMUNITY → DECISION_POINT", ValidSource: []string{"ORGANIZATION", "COMMUNITY"}, ValidTarget: []string{"DECISION_POINT"}, Description: "Actor gatekeeps a strategic decision"},
+				{EdgeType: "GATEKEEPS_DECISION", Direction: "ORG|COMMUNITY|PROGRAM|PERSON → DECISION_POINT", ValidSource: []string{"ORGANIZATION", "COMMUNITY", "PROGRAM", "PERSON"}, ValidTarget: []string{"DECISION_POINT"}, Description: "Actor gatekeeps a strategic decision"},
 				// USES_MECHANISM: agent possesses/uses a control mechanism.
-				{EdgeType: "USES_MECHANISM", Direction: "DECISION_POINT|ORG|COMMUNITY → MECHANISM", ValidSource: []string{"DECISION_POINT", "ORGANIZATION", "COMMUNITY"}, ValidTarget: []string{"MECHANISM"}, Description: "Agent uses control mechanism"},
+				{EdgeType: "USES_MECHANISM", Direction: "DECISION_POINT|ORG|COMMUNITY|PROGRAM → MECHANISM", ValidSource: []string{"DECISION_POINT", "ORGANIZATION", "COMMUNITY", "PROGRAM"}, ValidTarget: []string{"MECHANISM"}, Description: "Agent uses control mechanism"},
 				// APPLIES_TO: mechanism scope.
-				{EdgeType: "APPLIES_TO", Direction: "MECHANISM → ORG|FACILITY|PRODUCT|MARKET", ValidSource: []string{"MECHANISM"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET"}, Description: "Mechanism applies to entity"},
+				{EdgeType: "APPLIES_TO", Direction: "MECHANISM → ORG|FACILITY|PRODUCT|MARKET|COMMUNITY|PROGRAM", ValidSource: []string{"MECHANISM"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET", "COMMUNITY", "PROGRAM"}, Description: "Mechanism applies to entity"},
 			},
 		},
 		SymmetricEdges: []string{

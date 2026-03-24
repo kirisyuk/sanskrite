@@ -54,6 +54,7 @@ func GraphIntentRelationTypeDescriptions(types []string) string {
 		"INFLUENCES":           "General influence (policy, market)",
 		"TRANSFORMS_INTO":      "Transformation of entity/product",
 		"ASSEMBLES_INTO":       "Assembly of component/subassembly into downstream product",
+		"USED_IN":              "Operational input product is used in downstream product",
 		"EXTRACTS_FROM":        "Extracts from source",
 		"PARTICIPATES_IN":      "Entity participates in a market",
 		"TRADED_IN":            "Product is traded or price-discovered in a market",

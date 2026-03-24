@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Etigram Agent Horde</title>
+    <meta
+      id="meta-description"
+      name="description"
+      content="Horizon Agent Horde simulates real-world response to scenario requests across governed multi-agent worlds."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Sora:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body data-page="agent-mesh">
+    <div class="site-shell">
+      <header class="subpage-hero subpage-hero--platform" id="top">
+        <nav class="topbar" aria-label="Primary" data-i18n-aria-label="nav.aria.primary">
+          <a class="brand" href="./index.html">Etigram</a>
+          <div class="topbar-controls">
+            <div
+              class="language-switcher"
+              aria-label="Language selector"
+              data-i18n-aria-label="nav.aria.languageSelector"
+            >
+              <button
+                class="language-button is-active"
+                type="button"
+                data-lang="en"
+                aria-label="Switch to English"
+                data-i18n-aria-label="nav.aria.switchEnglish"
+              >
+                EN
+              </button>
+              <button
+                class="language-button"
+                type="button"
+                data-lang="ru"
+                aria-label="Переключить на русский"
+                data-i18n-aria-label="nav.aria.switchRussian"
+              >
+                RU
+              </button>
+              <button
+                class="language-button"
+                type="button"
+                data-lang="kz"
+                aria-label="Қазақ тіліне ауыстыру"
+                data-i18n-aria-label="nav.aria.switchKazakh"
+              >
+                KZ
+              </button>
+            </div>
+            <button
+              class="nav-toggle"
+              type="button"
+              aria-expanded="false"
+              aria-controls="site-nav"
+              data-i18n="nav.menu"
+            >
+              Menu
+            </button>
+            <div class="nav-links" id="site-nav">
+              <a href="./index.html#about" data-i18n="nav.about">About</a>
+              <a href="./index.html#services" data-i18n="nav.services">Services</a>
+              <a href="./index.html#platform" data-i18n="nav.platform">Platforms</a>
+              <a href="./index.html#contact" data-i18n="nav.contact">Contact</a>
+            </div>
+          </div>
+        </nav>
+
+        <div class="subpage-hero__inner">
+          <div class="subpage-hero__copy">
+            <p class="eyebrow" data-i18n="agentMeshPage.eyebrow">Horizon Agent Horde</p>
+            <h1 data-i18n="agentMeshPage.title">
+              Multi-agent simulation of real-world response to scenario requests.
+            </h1>
+            <p class="hero-text" data-i18n="agentMeshPage.text">
+              Agent Horde runs governed simulation worlds to observe how institutions,
+              companies, markets, and narratives may move in response to scenario-driven requests.
+            </p>
+            <div class="subpage-hero__actions">
+              <a class="hero-link" href="#agent-mesh-operation" data-i18n="agentMeshPage.ctaPrimary">
+                View Operating Model
+              </a>
+              <a
+                class="hero-link hero-link--secondary"
+                href="#agent-mesh-cases"
+                data-i18n="agentMeshPage.ctaSecondary"
+              >
+                View Simulation Cases
+              </a>
+            </div>
+          </div>
+
+          <div class="subpage-hero__visual platform-visual platform-visual--map">
+            <img
+              src="./images/agentmesh.png"
+              alt="Horizon Agent Horde overview"
+              data-i18n-alt="agentMeshPage.hero.alt"
+              class="platform-visual-image"
+            />
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <section class="platform-mesh section reveal" id="agent-mesh-operation">
+          <div class="services-heading">
+            <div class="section-label" data-i18n="agentMeshPage.operation.label">Agent Horde Operation</div>
+            <h2 data-i18n="agentMeshPage.operation.title">Signal injection, governed world simulation, and traceable review.</h2>
+          </div>
+
+          <div class="platform-mesh__panel reveal-card">
+            <div class="platform-mesh__visual">
+              <img
+                src="./images/agentmesh.png"
+                alt="Agent Horde simulation layer"
+                data-i18n-alt="agentMeshPage.operation.alt"
+                class="platform-visual-image"
+                loading="lazy"
+              />
+            </div>
+            <div class="platform-mesh__tiles">
+              <article class="mesh-tile">
+                <h3 data-i18n="agentMeshPage.operation.signal.title">Signal Injection</h3>
+                <p class="service-subtitle" data-i18n="agentMeshPage.operation.signal.subtitle">
+                  Scenario request framing
+                </p>
+                <p data-i18n="agentMeshPage.operation.signal.text">
+                  A simulation run begins with a scenario request: a regulatory move,
+                  market disruption, access restriction, industrial event, or narrative shift.
+                </p>
+              </article>
+
+              <article class="mesh-tile">
+                <h3 data-i18n="agentMeshPage.operation.worlds.title">World Simulation</h3>
+                <p class="service-subtitle" data-i18n="agentMeshPage.operation.worlds.subtitle">
+                  Agent populations, reaction paths, scenario variation
+                </p>
+                <p data-i18n="agentMeshPage.operation.worlds.text">
+                  Multiple governed worlds can be explored in parallel so competing institutional,
+                  commercial, and narrative reactions are tested rather than assumed.
+                </p>
+              </article>
+
+              <article class="mesh-tile">
+                <h3 data-i18n="agentMeshPage.operation.trace.title">Traceable Outcomes</h3>
+                <p class="service-subtitle" data-i18n="agentMeshPage.operation.trace.subtitle">
+                  Artifacts, lineage, review stages
+                </p>
+                <p data-i18n="agentMeshPage.operation.trace.text">
+                  Each run preserves artifacts, task lineage, review checkpoints, and aggregate
+                  output so alternative reactions can be compared and challenged.
+                </p>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section class="platform-story section reveal" id="agent-mesh-cases">
+          <div class="services-heading">
+            <div class="section-label" data-i18n="agentMeshPage.cases.label">Simulation Cases</div>
+            <h2 data-i18n="agentMeshPage.cases.title">Representative scenario requests for governed multi-agent runs.</h2>
+          </div>
+
+          <div class="platform-story__list">
+            <article class="platform-case reveal-card">
+              <div class="platform-case__copy">
+                <p class="service-index">01</p>
+                <h3 data-i18n="agentMeshPage.cases.supply.title">Supply Shock and Escalation</h3>
+                <p class="service-subtitle" data-i18n="agentMeshPage.cases.supply.subtitle">
+                  Facilities, corridors, substitute paths, reaction timing
+                </p>
+                <p data-i18n="agentMeshPage.cases.supply.text">
+                  Test how firms, regulators, logistics actors, and adjacent operators may react
+                  when a disruption signal is introduced into a concentrated supply chain.
+                </p>
+              </div>
+              <div class="platform-case__visual">
+                <img
+                  src="./images/map-connected.png"
+                  alt="Supply shock simulation case"
+                  data-i18n-alt="agentMeshPage.cases.supply.alt"
+                  class="platform-case__image"
+                  loading="lazy"
+                />
+              </div>
+            </article>
+
+            <article class="platform-case reveal-card">
+              <div class="platform-case__copy">
+                <p class="service-index">02</p>
+                <h3 data-i18n="agentMeshPage.cases.regulatory.title">Regulatory Move and Response</h3>
+                <p class="service-subtitle" data-i18n="agentMeshPage.cases.regulatory.subtitle">
+                  Jurisdictions, enforcement paths, downstream adaptation
+                </p>
+                <p data-i18n="agentMeshPage.cases.regulatory.text">
+                  Simulate how legal, administrative, and market participants may respond when a
+                  rule change, sanctions signal, or licensing constraint enters the system.
+                </p>
+              </div>
+              <div class="platform-case__visual">
+                <img
+                  src="./images/affected-areas.png"
+                  alt="Regulatory response simulation case"
+                  data-i18n-alt="agentMeshPage.cases.regulatory.alt"
+                  class="platform-case__image"
+                  loading="lazy"
+                />
+              </div>
+            </article>
+
+            <article class="platform-case reveal-card">
+              <div class="platform-case__copy">
+                <p class="service-index">03</p>
+                <h3 data-i18n="agentMeshPage.cases.narrative.title">Narrative Cascade and Alignment</h3>
+                <p class="service-subtitle" data-i18n="agentMeshPage.cases.narrative.subtitle">
+                  Institutional messaging, market perception, secondary coordination
+                </p>
+                <p data-i18n="agentMeshPage.cases.narrative.text">
+                  Observe how narrative actors, institutions, and commercial entities may align,
+                  diverge, or reinforce each other after a scenario-driven signal enters public space.
+                </p>
+              </div>
+              <div class="platform-case__visual">
+                <img
+                  src="./images/graph.png"
+                  alt="Narrative cascade simulation case"
+                  data-i18n-alt="agentMeshPage.cases.narrative.alt"
+                  class="platform-case__image"
+                  loading="lazy"
+                />
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="platform-summary section reveal">
+          <div class="platform-summary__panel">
+            <div class="platform-summary__copy">
+              <div class="section-label" data-i18n="agentMeshPage.summary.label">Simulation layer</div>
+              <h2 data-i18n="agentMeshPage.summary.title">
+                A governed environment for testing reaction before reality forces it.
+              </h2>
+              <p data-i18n="agentMeshPage.summary.text">
+                Agent Horde is designed to simulate plausible institutional and market response paths
+                without reducing complex reaction to a single forecast.
+              </p>
+            </div>
+            <a class="platform-link" href="https://etigram.pro" data-i18n="agentMeshPage.summary.cta">
+              Learn More About Access
+            </a>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer section reveal" id="contact">
+        <div class="footer-brand">
+          <div class="section-label" data-i18n="footer.label">Etigram</div>
+          <p class="footer-title" data-i18n="footer.title">Decision Factory</p>
+          <p class="footer-note" data-i18n="footer.note">
+            Strategic intelligence, monitoring, and scenario services.
+          </p>
+        </div>
+
+        <div class="footer-columns">
+          <div>
+            <h4 data-i18n="footer.location.title">Location</h4>
+            <p data-i18n="footer.location.line1">Dostyk, 16</p>
+            <p data-i18n="footer.location.line2">Astana, Kazakhstan</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.contact.title">Contact</h4>
+            <p data-i18n="footer.contact.line1">hi@etigram.pro</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.availability.title">Availability</h4>
+            <p data-i18n="footer.availability.line1">Meetings by request</p>
+            <p data-i18n="footer.availability.line2">Additional details coming soon</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.legal.title">Legal</h4>
+            <div class="footer-links">
+              <a href="https://etigram.pro/privacy" data-i18n="footer.legal.privacy">Privacy Notice</a>
+              <a href="https://etigram.pro/terms" data-i18n="footer.legal.terms">Terms of Usage</a>
+              <a href="https://etigram.pro/technical-disclosure" data-i18n="footer.legal.technical">Technical Disclosure</a>
+            </div>
+          </div>
+        </div>
+      </footer>
+    </div>
+
+    <script src="./script.js"></script>
+  </body>
+</html>

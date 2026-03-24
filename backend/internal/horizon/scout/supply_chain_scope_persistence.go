@@ -30,20 +30,6 @@ var capabilityMetricKeys = map[string]struct{}{
 	"service_criticality":         {},
 }
 
-var supplyLinkRiskMetricKeys = map[string]struct{}{
-	"confidence":                          {},
-	"volume":                              {},
-	"share":                               {},
-	"lead_time_days":                      {},
-	"customs_clearance_days":              {},
-	"inventory_cover_days_at_destination": {},
-	"switch_time_days":                    {},
-	"technical_fit":                       {},
-	"regulatory_fit":                      {},
-	"fill_rate":                           {},
-	"rejection_rate":                      {},
-}
-
 func persistSupplyChainScopeArtifacts(ctx context.Context, e *ScoutEngine, job *models.ScoutingJob, frag *models.HorizonFragment, seg *SupplyLinkSegment) {
 	if e == nil || frag == nil || seg == nil {
 		return
@@ -239,7 +225,7 @@ func cloneInterfaceMapForPersistence(in map[string]interface{}) map[string]inter
 	return out
 }
 
-func effectiveVesselType(seg *SupplyLinkSegment, frag *models.HorizonFragment) string {
+func effectiveVesselType(_ *SupplyLinkSegment, frag *models.HorizonFragment) string {
 	if frag != nil && frag.Qualifiers != nil {
 		for _, key := range []string{"vesselType", "vessel_type"} {
 			if raw, ok := frag.Qualifiers[key].(string); ok {

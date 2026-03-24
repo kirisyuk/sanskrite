@@ -11,6 +11,9 @@ func TestNormalizeRelationKind(t *testing.T) {
 	if got := normalizeRelationKind("assembly"); got != "assembly" {
 		t.Fatalf("normalizeRelationKind(assembly) = %q", got)
 	}
+	if got := normalizeRelationKind("usage"); got != "usage" {
+		t.Fatalf("normalizeRelationKind(usage) = %q", got)
+	}
 	if got := normalizeRelationKind(""); got != "transformation" {
 		t.Fatalf("normalizeRelationKind(empty) = %q", got)
 	}
@@ -19,6 +22,9 @@ func TestNormalizeRelationKind(t *testing.T) {
 func TestDesiredEdgeTypeForKind(t *testing.T) {
 	if got := desiredEdgeTypeForKind("assembly"); got != models.DependencyTypeAssemblesInto {
 		t.Fatalf("desiredEdgeTypeForKind(assembly) = %q", got)
+	}
+	if got := desiredEdgeTypeForKind("usage"); got != models.DependencyTypeUsedIn {
+		t.Fatalf("desiredEdgeTypeForKind(usage) = %q", got)
 	}
 	if got := desiredEdgeTypeForKind("transformation"); got != models.DependencyTypeTransformsInto {
 		t.Fatalf("desiredEdgeTypeForKind(transformation) = %q", got)
@@ -30,6 +36,7 @@ func TestSupportsProductRelationDictionary(t *testing.T) {
 		models.DependencyTypeDependsOn,
 		models.DependencyTypeTransformsInto,
 		models.DependencyTypeAssemblesInto,
+		models.DependencyTypeUsedIn,
 	} {
 		if !supportsProductRelationDictionary(edgeType) {
 			t.Fatalf("expected edgeType=%q to be supported", edgeType)
@@ -169,6 +176,41 @@ func TestSyncTransformPairWriteUpdatesSnapshot(t *testing.T) {
 	}
 }
 
+func TestResolveProductRelationForTenantExactAndReverse(t *testing.T) {
+	rt := &Runtime{
+		loaded:         true,
+		synonymToCanon: map[string]map[string]string{},
+		knownPaths:     map[string]map[string]struct{}{},
+		transformKinds: map[string]map[string]string{
+			"global": {
+				transformKey("/product/raw/mineral/extraction/bauxite", "/product/finished/chemical/processing/alumina"): "transformation",
+			},
+		},
+	}
+
+	exact, err := rt.ResolveProductRelation(context.Background(), "/product/raw/mineral/extraction/bauxite", "/product/finished/chemical/processing/alumina")
+	if err != nil {
+		t.Fatalf("ResolveProductRelation exact returned error: %v", err)
+	}
+	if !exact.Known || exact.Swapped {
+		t.Fatalf("expected exact resolution without swap, got %+v", exact)
+	}
+	if exact.EdgeType != models.DependencyTypeTransformsInto {
+		t.Fatalf("expected TRANSFORMS_INTO, got %+v", exact)
+	}
+
+	reverse, err := rt.ResolveProductRelation(context.Background(), "/product/finished/chemical/processing/alumina", "/product/raw/mineral/extraction/bauxite")
+	if err != nil {
+		t.Fatalf("ResolveProductRelation reverse returned error: %v", err)
+	}
+	if !reverse.Known || !reverse.Swapped {
+		t.Fatalf("expected reverse resolution with swap, got %+v", reverse)
+	}
+	if reverse.FromPath != "/product/raw/mineral/extraction/bauxite" || reverse.ToPath != "/product/finished/chemical/processing/alumina" {
+		t.Fatalf("expected normalized upstream/downstream orientation, got %+v", reverse)
+	}
+}
+
 func TestSyncSynonymPairWriteRecanonicalizesTransforms(t *testing.T) {
 	rt := &Runtime{
 		loaded:         true,
@@ -198,5 +240,30 @@ func TestSyncSynonymPairWriteRecanonicalizesTransforms(t *testing.T) {
 	}
 	if kind, ok := rt.lookupTransformKind("global", "/product/refined/aluminum", "/product/component/car-body"); !ok || kind != "assembly" {
 		t.Fatalf("expected recanonicalized assembly edge, got %q, ok=%t", kind, ok)
+	}
+}
+
+func TestSearchCanonicalProductPathsForTenant(t *testing.T) {
+	rt := &Runtime{
+		loaded:         true,
+		synonymToCanon: map[string]map[string]string{},
+		knownPaths:     map[string]map[string]struct{}{},
+		transformKinds: map[string]map[string]string{
+			"global": {
+				transformKey("/product/raw/mineral/extraction/lithium-ore", "/product/finished/chemical/refining/lithium-carbonate"):   "transformation",
+				transformKey("/product/raw/mineral/extraction/lithium-brine", "/product/finished/chemical/refining/lithium-carbonate"): "transformation",
+			},
+		},
+	}
+
+	out, err := rt.SearchCanonicalProductPathsForTenant(context.Background(), "global", "lithium", 8)
+	if err != nil {
+		t.Fatalf("SearchCanonicalProductPathsForTenant returned error: %v", err)
+	}
+	if len(out) < 2 {
+		t.Fatalf("expected at least 2 pair-backed lithium products, got %v", out)
+	}
+	if out[0] != "/product/finished/chemical/refining/lithium-carbonate" && out[0] != "/product/raw/mineral/extraction/lithium-brine" && out[0] != "/product/raw/mineral/extraction/lithium-ore" {
+		t.Fatalf("unexpected first result: %v", out)
 	}
 }

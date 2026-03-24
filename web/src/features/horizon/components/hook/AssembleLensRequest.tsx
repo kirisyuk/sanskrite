@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ThemeContext } from '../../../../components/ThemeProvider';
-import { api } from '../../../../lib/api';
+import { ProductScopeComposer, type ProductScopeSelection } from '../../../../components/ProductScopeComposer';
+import { api, type HorizonProductPrefetchSuggestion } from '../../../../lib/api';
 import { useProjectsStore } from '../../../../stores/projectsStore';
 import {
   defaultScoutingModeForCanonicalPath,
@@ -37,6 +38,8 @@ export interface AssembleLensRequest {
   };
 }
 
+type EntryMode = 'freeform' | 'product' | 'entity';
+
 const PLACEHOLDER_VARIANTS = [
   "What are you analyzing?",
   "What are you investigating?",
@@ -58,6 +61,39 @@ const SUGGESTIONS = [
   "Amazon logistics network",
 ];
 
+const entryModeIcon = (mode: EntryMode) => {
+  switch (mode) {
+    case 'product':
+      return (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M16.5 9.4 7.55 4.24" />
+          <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+          <polyline points="3.29 7 12 12 20.71 7" />
+          <line x1="12" y1="22" x2="12" y2="12" />
+        </svg>
+      );
+    case 'entity':
+      return (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M3 21h18" />
+          <path d="M5 21V7l7-4 7 4v14" />
+          <path d="M9 11h.01" />
+          <path d="M15 11h.01" />
+          <path d="M9 15h.01" />
+          <path d="M15 15h.01" />
+        </svg>
+      );
+    default:
+      return (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M4 7h16" />
+          <path d="M7 12h10" />
+          <path d="M10 17h4" />
+        </svg>
+      );
+  }
+};
+
 const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({ 
   projectId, 
   onAssemble, 
@@ -68,10 +104,17 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
   const currentProject = useProjectsStore((s) => s.currentProject);
   const [inputValue, setInputValue] = useState('');
   type PrefetchEntity = { id: string; canonicalPath: string; name: string; type: string };
+  const [entryMode, setEntryMode] = useState<EntryMode>('freeform');
   const [selectedEntities, setSelectedEntities] = useState<PrefetchEntity[]>([]);
+  const [selectedProducts, setSelectedProducts] = useState<ProductScopeSelection[]>([]);
+  const [activeProductPath, setActiveProductPath] = useState<string | null>(null);
   const [entityLoading, setEntityLoading] = useState(false);
   const [entitySuggestions, setEntitySuggestions] = useState<PrefetchEntity[]>([]);
   const [showEntityDropdown, setShowEntityDropdown] = useState(false);
+  const [productLoading, setProductLoading] = useState(false);
+  const [productSuggestions, setProductSuggestions] = useState<HorizonProductPrefetchSuggestion[]>([]);
+  const [showProductDropdown, setShowProductDropdown] = useState(false);
+  const [showModeDropdown, setShowModeDropdown] = useState(false);
   const [filters, setFilters] = useState<{
     maxRecursionDepth: number;
     mode: LensMode;
@@ -90,7 +133,9 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
   const settingsTitleId = React.useId();
   const settingsDescId = React.useId();
   const entityAbortRef = useRef<AbortController | null>(null);
+  const productAbortRef = useRef<AbortController | null>(null);
   const entityDebounceRef = useRef<number | null>(null);
+  const productDebounceRef = useRef<number | null>(null);
   const [placeholder] = useState(() => 
     PLACEHOLDER_VARIANTS[Math.floor(Math.random() * PLACEHOLDER_VARIANTS.length)]
   );
@@ -196,12 +241,29 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
     });
   }, [modeTouched, selectedEntities]);
 
+  useEffect(() => {
+    if (selectedProducts.length === 0) {
+      if (activeProductPath !== null) setActiveProductPath(null);
+      return;
+    }
+    if (!activeProductPath || !selectedProducts.some((item) => item.canonicalPath === activeProductPath)) {
+      setActiveProductPath(selectedProducts[selectedProducts.length - 1].canonicalPath);
+    }
+  }, [activeProductPath, selectedProducts]);
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setInputValue(e.target.value);
   };
 
   // Prefetch entity suggestions (existing objects) for chip selection.
   useEffect(() => {
+    if (entryMode !== 'freeform') {
+      setEntitySuggestions([]);
+      setEntityLoading(false);
+      setShowEntityDropdown(false);
+      try { entityAbortRef.current?.abort(); } catch {}
+      return;
+    }
     // Keep UX natural:
     // - chips live "inside" the query input
     // - we only show entity suggestions when the user is typing a single token (no spaces)
@@ -254,6 +316,53 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
     };
   }, [inputValue, selectedEntities]);
 
+  useEffect(() => {
+    if (entryMode !== 'product') {
+      setProductSuggestions([]);
+      setProductLoading(false);
+      setShowProductDropdown(false);
+      try { productAbortRef.current?.abort(); } catch {}
+      return;
+    }
+
+    const raw = inputValue.trim();
+    if (raw.length < 2) {
+      setProductSuggestions([]);
+      setProductLoading(false);
+      setShowProductDropdown(false);
+      try { productAbortRef.current?.abort(); } catch {}
+      return;
+    }
+
+    if (productDebounceRef.current) {
+      window.clearTimeout(productDebounceRef.current);
+    }
+
+    setProductLoading(true);
+    productDebounceRef.current = window.setTimeout(async () => {
+      try {
+        try { productAbortRef.current?.abort(); } catch {}
+        const ac = new AbortController();
+        productAbortRef.current = ac;
+        const res = await api.prefetchHorizonProducts({ query: raw, limit: 8 }, ac.signal);
+        const selected = new Set(selectedProducts.map((e) => e.canonicalPath));
+        const list = (res?.suggestions || []).filter((item) => !selected.has(String(item.canonicalPath || '').trim()));
+        setProductSuggestions(list);
+        setShowProductDropdown(list.length > 0);
+      } catch (err: any) {
+        if (err?.name === 'AbortError' || err?.code === 'ERR_CANCELED') return;
+        setProductSuggestions([]);
+        setShowProductDropdown(false);
+      } finally {
+        setProductLoading(false);
+      }
+    }, 160) as unknown as number;
+
+    return () => {
+      if (productDebounceRef.current) window.clearTimeout(productDebounceRef.current);
+    };
+  }, [entryMode, inputValue, selectedProducts]);
+
   // Close dropdown on outside click.
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
@@ -261,6 +370,8 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
       if (!el) return;
       if (el.contains(e.target as any)) return;
       setShowEntityDropdown(false);
+      setShowProductDropdown(false);
+      setShowModeDropdown(false);
     };
     window.addEventListener('mousedown', onDown);
     return () => window.removeEventListener('mousedown', onDown);
@@ -286,15 +397,43 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
     setSelectedEntities((prev) => prev.filter((x) => x.canonicalPath !== cp));
   };
 
+  const addProduct = (suggestion: HorizonProductPrefetchSuggestion) => {
+    const canonicalPath = String(suggestion.canonicalPath || '').trim();
+    if (!canonicalPath) return;
+    setSelectedProducts((prev) => {
+      if (prev.some((item) => item.canonicalPath === canonicalPath)) return prev;
+      return [
+        ...prev,
+        {
+          canonicalPath,
+          label: suggestion.label || suggestion.matchedLabel || canonicalPath.split('/').filter(Boolean).slice(-1)[0] || canonicalPath,
+          sourceScope: suggestion.sourceScope,
+        },
+      ];
+    });
+    setActiveProductPath(canonicalPath);
+    setInputValue('');
+    setShowProductDropdown(false);
+    window.setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  const removeProduct = (canonicalPath: string) => {
+    const cp = String(canonicalPath || '').trim();
+    if (!cp) return;
+    setSelectedProducts((prev) => prev.filter((item) => item.canonicalPath !== cp));
+  };
+
   const handleAssemble = () => {
-    const q = inputValue.trim();
-    const prefetchScope = selectedEntities.map((e) => e.canonicalPath).filter(Boolean);
+    const q = entryMode === 'freeform' ? inputValue.trim() : '';
+    const prefetchScope =
+      entryMode === 'product'
+        ? selectedProducts.map((e) => e.canonicalPath).filter(Boolean)
+        : selectedEntities.map((e) => e.canonicalPath).filter(Boolean);
     if (!q && prefetchScope.length === 0) return;
 
     const buildPrefetchLensName = () => {
       if (q) return '';
-      const names = selectedEntities
-        .map((e) => String(e?.name || '').trim())
+      const names = (entryMode === 'product' ? selectedProducts.map((e) => e.label) : selectedEntities.map((e) => String(e?.name || '').trim()))
         .filter(Boolean);
       if (names.length === 0) return '';
       const first = names[0];
@@ -311,19 +450,6 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
       filters,
     };
 
-    onAssemble(request);
-  };
-
-  const handleCreateEmptyLens = () => {
-    if (disabled) return;
-    const request: AssembleLensRequest = {
-      projectId,
-      query: '',
-      name: 'untitled lens',
-      createEmptyLens: true,
-      prefetchScope: [],
-      filters,
-    };
     onAssemble(request);
   };
 
@@ -373,7 +499,7 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
     width: '100%',
     maxWidth: '960px',
     borderRadius: '16px',
-    overflow: 'hidden',
+    overflow: 'visible',
     transition: 'all 0.3s ease',
     background: theme === 'dark' ? 'var(--bg-elevated)' : 'var(--bg-elevated)',
     border: '1px solid var(--border-subtle)',
@@ -381,8 +507,14 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
       ? (theme === 'dark' ? '0 -4px 20px rgba(0,0,0,0.2)' : '0 -4px 20px rgba(0,0,0,0.05)')
       : (theme === 'dark' ? '0 20px 60px rgba(0,0,0,0.4)' : '0 20px 60px rgba(0,0,0,0.15)'),
     display: 'flex',
-    alignItems: 'center',
+    flexDirection: 'column',
     position: 'relative',
+  };
+
+  const inputRowStyle: React.CSSProperties = {
+    width: '100%',
+    display: 'flex',
+    alignItems: 'center',
   };
 
   const tokenFieldStyle: React.CSSProperties = {
@@ -419,7 +551,13 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
     color: 'var(--text-heading)',
   };
 
-  const sendBtnDisabled = disabled || (!inputValue.trim() && selectedEntities.length === 0);
+  const activeSelections = entryMode === 'product' ? selectedProducts : selectedEntities;
+  const hasSelectedObjects = selectedProducts.length > 0 || selectedEntities.length > 0;
+  const sendBtnDisabled = disabled || (entryMode === 'freeform'
+    ? (!inputValue.trim() && selectedEntities.length === 0)
+    : selectedProducts.length === 0);
+  const modeLabel =
+    entryMode === 'product' ? 'By Product' : entryMode === 'entity' ? 'By Entity' : 'Research';
 
   return (
     <div style={containerStyle}>
@@ -446,129 +584,263 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
       )}
       <div style={inputContainerStyle} ref={rootRef}>
         <div style={containerStyleForInput}>
-          {/* Left Icon */}
-          <div style={{ paddingLeft: 16, display: 'flex', alignItems: 'center', color: 'var(--text-secondary-strong)' }}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/>
-            </svg>
+          <div style={inputRowStyle}>
+            {/* Left Icon */}
+            <div style={{ paddingLeft: 16, display: 'flex', alignItems: 'center', color: 'var(--text-secondary-strong)' }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/>
+              </svg>
+            </div>
+
+            {/* Tokenized input: chips + free text in one "natural" field */}
+            <div
+              style={tokenFieldStyle}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                inputRef.current?.focus();
+              }}
+            >
+              {entryMode === 'product'
+                ? selectedProducts.map((p) => (
+                    <button
+                      key={p.canonicalPath}
+                      type="button"
+                      onClick={() => setActiveProductPath(p.canonicalPath)}
+                      title={p.label}
+                      style={{
+                        ...chipStyle,
+                        border: activeProductPath === p.canonicalPath ? '1px solid var(--accent-primary)' : chipStyle.border,
+                      }}
+                    >
+                      <span style={{ fontSize: 12, fontWeight: 750, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {p.label}
+                      </span>
+                      <span
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          removeProduct(p.canonicalPath);
+                        }}
+                        style={{ fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0 }}
+                      >
+                        ×
+                      </span>
+                    </button>
+                  ))
+                : selectedEntities.map((e) => (
+                    <button
+                      key={e.canonicalPath}
+                      type="button"
+                      onClick={() => removeEntity(e.canonicalPath)}
+                      title={`Remove ${e.name}`}
+                      style={chipStyle}
+                    >
+                      <span style={{ fontSize: 12, fontWeight: 750, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {e.name}
+                      </span>
+                      <span style={{ fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0 }}>
+                        ×
+                      </span>
+                    </button>
+                  ))}
+
+              <input
+                ref={inputRef}
+                type="text"
+                value={inputValue}
+                onChange={handleInputChange}
+                placeholder={activeSelections.length === 0 ? (entryMode === 'product' ? 'Search products by canonical name or synonym' : placeholder) : ''}
+                style={queryInputStyle}
+                disabled={disabled}
+                onFocus={() => {
+                  if (entryMode === 'product') {
+                    if (productSuggestions.length > 0) setShowProductDropdown(true);
+                  } else if (entitySuggestions.length > 0) {
+                    setShowEntityDropdown(true);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    setShowModeDropdown(false);
+                    setShowEntityDropdown(false);
+                    setShowProductDropdown(false);
+                    return;
+                  }
+                  if (e.key === 'Enter' && !disabled) {
+                    e.preventDefault();
+                    if (entryMode === 'product' && productSuggestions.length > 0) {
+                      addProduct(productSuggestions[0]);
+                      return;
+                    }
+                    handleAssemble();
+                  }
+                }}
+              />
+
+              {(entryMode === 'product' ? productLoading : entityLoading) && (
+                <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                  Searching…
+                </span>
+              )}
+            </div>
+
+            {/* Right Actions */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingRight: 12 }}>
+              <button
+                type="button"
+                aria-label="Settings"
+                onClick={() => setShowSettings(true)}
+                style={{
+                  width: 32,
+                  height: 32,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: 8,
+                  background: 'transparent',
+                  color: 'var(--text-secondary)',
+                  border: 'none',
+                  cursor: 'pointer',
+                  transition: 'background 0.2s',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--white-10)')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+                </svg>
+              </button>
+
+              <button
+                type="button"
+                aria-label="Start"
+                onClick={handleAssemble}
+                disabled={sendBtnDisabled}
+                style={{
+                  width: 32,
+                  height: 32,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: 8,
+                  background: sendBtnDisabled ? 'transparent' : 'var(--accent-primary)',
+                  color: sendBtnDisabled ? 'var(--text-disabled)' : '#ffffff',
+                  border: 'none',
+                  cursor: sendBtnDisabled ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.2s',
+                  opacity: sendBtnDisabled ? 0.5 : 1,
+                }}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M5 12h14" />
+                  <path d="m12 5 7 7-7 7" />
+                </svg>
+              </button>
+            </div>
           </div>
 
-          {/* Tokenized input: chips + free text in one "natural" field */}
           <div
-            style={tokenFieldStyle}
-            onMouseDown={(e) => {
-              // Focus the input when user clicks anywhere inside the token field.
-              e.preventDefault();
-              inputRef.current?.focus();
+            style={{
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'flex-start',
+              padding: '10px 14px 12px',
+              borderTop: '1px solid var(--border-subtle)',
             }}
           >
-            {selectedEntities.map((e) => (
+            <div style={{ position: 'relative' }}>
               <button
-                key={e.canonicalPath}
                 type="button"
-                onClick={() => removeEntity(e.canonicalPath)}
-                title={`Remove ${e.name}`}
-                style={chipStyle}
+                onClick={() => setShowModeDropdown((prev) => !prev)}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  borderRadius: 999,
+                  border: 'none',
+                  background: 'transparent',
+                  color: 'var(--text-secondary-strong)',
+                  padding: '4px 8px',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
               >
-                <span style={{ fontSize: 12, fontWeight: 750, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {e.name}
-                </span>
-                <span style={{ fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0 }}>
-                  ×
-                </span>
+                <span style={{ display: 'inline-flex' }}>{entryModeIcon(entryMode)}</span>
+                <span>{modeLabel}</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
               </button>
-            ))}
 
-            <input
-              ref={inputRef}
-              type="text"
-              value={inputValue}
-              onChange={handleInputChange}
-              placeholder={selectedEntities.length === 0 ? placeholder : ''}
-              style={queryInputStyle}
-              disabled={disabled}
-              onFocus={() => {
-                if (entitySuggestions.length > 0) setShowEntityDropdown(true);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') {
-                  setShowEntityDropdown(false);
-                  return;
-                }
-                if (e.key === 'Enter' && !disabled) {
-                  e.preventDefault();
-                  handleAssemble();
-                }
-              }}
-            />
-
-            {entityLoading && (
-              <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                Searching…
-              </span>
-            )}
-          </div>
-
-          {/* Right Actions */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingRight: 12 }}>
-            {/* Settings button */}
-            <button
-              type="button"
-              aria-label="Settings"
-              onClick={() => setShowSettings(true)}
-              style={{
-                width: 32,
-                height: 32,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderRadius: 8,
-                background: 'transparent',
-                color: 'var(--text-secondary)',
-                border: 'none',
-                cursor: 'pointer',
-                transition: 'background 0.2s',
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--white-10)')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="3" />
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z" />
-              </svg>
-            </button>
-
-            {/* Send arrow */}
-            <button
-              type="button"
-              aria-label="Start"
-              onClick={handleAssemble}
-              disabled={sendBtnDisabled}
-              style={{
-                width: 32,
-                height: 32,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderRadius: 8,
-                background: sendBtnDisabled ? 'transparent' : 'var(--accent-primary)',
-                color: sendBtnDisabled ? 'var(--text-disabled)' : '#ffffff',
-                border: 'none',
-                cursor: sendBtnDisabled ? 'not-allowed' : 'pointer',
-                transition: 'all 0.2s',
-                opacity: sendBtnDisabled ? 0.5 : 1,
-              }}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M5 12h14" />
-                <path d="m12 5 7 7-7 7" />
-              </svg>
-            </button>
+              {showModeDropdown && (
+                <div
+                  style={{
+                  position: 'absolute',
+                  top: '100%',
+                  left: 0,
+                  marginTop: 10,
+                  minWidth: 196,
+                  borderRadius: 14,
+                    border: '1px solid var(--border-subtle)',
+                    background: 'var(--bg-elevated)',
+                    boxShadow: theme === 'dark' ? '0 22px 60px rgba(0,0,0,0.45)' : '0 22px 60px rgba(0,0,0,0.14)',
+                    overflow: 'hidden',
+                    zIndex: 90,
+                  }}
+                >
+                  {([
+                    { key: 'freeform', label: 'Research', disabled: false },
+                    { key: 'product', label: 'By Product', disabled: false },
+                    { key: 'entity', label: 'By Entity', disabled: true },
+                  ] as { key: EntryMode; label: string; disabled: boolean }[]).map((option) => {
+                    const active = entryMode === option.key;
+                    return (
+                      <button
+                        key={option.key}
+                        type="button"
+                        disabled={option.disabled}
+                        onClick={() => {
+                          if (option.disabled) return;
+                          setEntryMode(option.key);
+                          setInputValue('');
+                          setShowModeDropdown(false);
+                          setShowEntityDropdown(false);
+                          setShowProductDropdown(false);
+                          window.setTimeout(() => inputRef.current?.focus(), 0);
+                        }}
+                        style={{
+                          width: '100%',
+                          textAlign: 'left',
+                          padding: '10px 12px',
+                          border: 'none',
+                          background: active ? 'var(--white-06)' : 'transparent',
+                          color: option.disabled ? 'var(--text-disabled)' : 'var(--text-heading)',
+                          cursor: option.disabled ? 'not-allowed' : 'pointer',
+                          fontSize: 12,
+                          fontWeight: active ? 800 : 650,
+                          opacity: option.disabled ? 0.56 : 1,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8,
+                        }}
+                      >
+                        <span style={{ display: 'inline-flex', color: option.disabled ? 'var(--text-disabled)' : 'var(--text-secondary-strong)' }}>
+                          {entryModeIcon(option.key)}
+                        </span>
+                        <span>{option.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
         {/* Entity dropdown (prefetch) */}
-        {showEntityDropdown && entitySuggestions.length > 0 && (
+        {entryMode === 'freeform' && showEntityDropdown && entitySuggestions.length > 0 && (
           <div
             style={{
               position: 'absolute',
@@ -619,10 +891,88 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
             ))}
           </div>
         )}
+        {entryMode === 'product' && showProductDropdown && productSuggestions.length > 0 && (
+          <div
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              top: '100%',
+              marginTop: 56,
+              borderRadius: 14,
+              border: '1px solid var(--border-subtle)',
+              background: 'var(--bg-elevated)',
+              boxShadow: theme === 'dark' ? '0 22px 60px rgba(0,0,0,0.45)' : '0 22px 60px rgba(0,0,0,0.14)',
+              overflow: 'hidden',
+              zIndex: 80,
+            }}
+          >
+            {productSuggestions.slice(0, 8).map((item) => (
+              <button
+                key={item.canonicalPath}
+                type="button"
+                onClick={() => addProduct(item)}
+                style={{
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: '10px 12px',
+                  border: 'none',
+                  background: 'transparent',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                }}
+                onMouseEnter={(ev) => (ev.currentTarget.style.background = 'var(--white-06)')}
+                onMouseLeave={(ev) => (ev.currentTarget.style.background = 'transparent')}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 750, color: 'var(--text-heading)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {item.label}
+                  </div>
+                  <div style={{ marginTop: 2, fontSize: 11, color: 'var(--text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {item.canonicalPath}
+                  </div>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', flexShrink: 0 }}>
+                  {item.sourceScope || 'global'}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
+      {entryMode === 'product' && selectedProducts.length > 0 && (
+        <div
+          style={{
+            width: '100%',
+            maxWidth: '1280px',
+            marginTop: 24,
+            minHeight: 440,
+            flex: pinnedBottom ? 1 : undefined,
+          }}
+        >
+          <ProductScopeComposer
+            selectedProducts={selectedProducts}
+            activePath={activeProductPath}
+            onSelectProduct={setActiveProductPath}
+            maxHops={3}
+            maxPerHop={7}
+            minHeight={440}
+          />
+        </div>
+      )}
+
+      {!pinnedBottom && entryMode === 'product' && selectedProducts.length === 0 && (
+        <div style={{ marginTop: 18, fontSize: 13, color: 'var(--text-tertiary)', textAlign: 'center', maxWidth: 520, lineHeight: 1.5 }}>
+          Pick a product to explore its chain.
+        </div>
+      )}
+
       {/* Suggestions (only when centered) */}
-      {!pinnedBottom && (
+      {!pinnedBottom && entryMode === 'freeform' && !hasSelectedObjects && (
         <div style={{ 
           marginTop: 16, 
           fontSize: 13, 
@@ -658,37 +1008,6 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
               {i < suggestions.length - 1 && <span style={{ margin: '0 8px', color: 'var(--text-disabled, rgba(255,255,255,0.1))' }}>|</span>}
             </React.Fragment>
           ))}
-          {suggestions.length > 0 && <span style={{ margin: '0 8px', color: 'var(--text-disabled, rgba(255,255,255,0.1))' }}>|</span>}
-          <button
-            type="button"
-            onClick={handleCreateEmptyLens}
-            disabled={disabled}
-            style={{
-              cursor: disabled ? 'not-allowed' : 'pointer',
-              color: 'var(--text-secondary)',
-              border: 'none',
-              borderBottom: '1px dashed var(--border-subtle, rgba(255,255,255,0.2))',
-              background: 'var(--white-06)',
-              borderRadius: 6,
-              padding: '0 6px',
-              fontSize: 13,
-              lineHeight: 1.6,
-              opacity: disabled ? 0.55 : 1,
-              transition: 'color 0.2s, background-color 0.2s',
-            }}
-            onMouseEnter={(e) => {
-              if (!disabled) {
-                e.currentTarget.style.color = 'var(--text-heading)';
-                e.currentTarget.style.background = 'var(--white-10)';
-              }
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'var(--white-06)';
-              e.currentTarget.style.color = 'var(--text-secondary)';
-            }}
-          >
-            Create empty lens
-          </button>
         </div>
       )}
 

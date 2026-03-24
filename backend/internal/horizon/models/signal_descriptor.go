@@ -20,6 +20,9 @@ type SignalDescriptor struct {
 	Amplitude float64 `json:"amplitude" firestore:"amplitude"`                     // [0.0, 1.0] - strength of the impulse
 	Polarity  string  `json:"polarity" firestore:"polarity"`                       // "risk" | "opportunity"
 
+	// RegulatoryContext optional structured scope for policy-impact origin signals.
+	RegulatoryContext *SignalRegulatoryContext `json:"regulatoryContext,omitempty" firestore:"regulatoryContext,omitempty"`
+
 	// === Spatial Binding (the "where") ===
 	ActorPaths   []string `json:"actorPaths,omitempty" firestore:"actorPaths,omitempty"`     // Who caused this (e.g., ["/gov/ir/civil-aviation"])
 	SeedPaths    []string `json:"seedPaths,omitempty" firestore:"seedPaths,omitempty"`       // Where to inject the impulse (initial affected nodes)
@@ -39,6 +42,14 @@ type SignalDescriptor struct {
 	// ChainRefs lists IDs of MaterializedArtifact (supply chain paths) affected by this signal.
 	// Populated during seed injection when seed nodes belong to identified supply chains.
 	ChainRefs []string `json:"chainRefs,omitempty" firestore:"chainRefs,omitempty"`
+}
+
+// SignalRegulatoryContext carries instrument-centric metadata for regulatory-origin signals.
+type SignalRegulatoryContext struct {
+	InstrumentPath string    `json:"instrumentPath,omitempty" firestore:"instrumentPath,omitempty"`
+	Jurisdiction   string    `json:"jurisdiction,omitempty" firestore:"jurisdiction,omitempty"`
+	EffectiveDate  time.Time `json:"effectiveDate,omitempty" firestore:"effectiveDate,omitempty"`
+	Severity       string    `json:"severity,omitempty" firestore:"severity,omitempty"`
 }
 
 // SignalConstraints represents conditions and scope for signal propagation.

@@ -120,6 +120,15 @@ DIRECTION ROLE CONTRACT (mandatory when applicable):
 - For OWNS/SUBSIDIARY_OF/INVESTS_IN/ASSURES/CONTROLS (ORG↔ORG), DEPENDS_ON (actor↔actor), and SUPPLIES_TO (ORG/FACILITY↔ORG/FACILITY), ALWAYS include qualifiers.source_role and qualifiers.target_role.
 - Use role pairs: owner->owned_entity, subsidiary->parent_owner, investor->investee, assurer->assuree, controller->controlled_entity, dependent->dependency, supplier->customer.
 - Also include qualifiers.direction_basis when direction is explicit (owner_to_owned, investor_to_investee, dependent_to_dependency, supplier_to_customer).
+- For policy-impact core edges, also keep directed-role qualifiers explicit:
+  gatekeeper->decision_point for GATEKEEPS_DECISION,
+  mechanism_user->mechanism for USES_MECHANISM,
+  controller->access_subject for CONTROLS_ACCESS,
+  imposer->constrained_entity for IMPOSES_CONDITION,
+  mechanism->applicable_entity for APPLIES_TO,
+  administrator->administered_entity for ADMINISTERS,
+  scope_owner->geo_scope for IN_GEO_SCOPE,
+  impact_source->affected_entity for AFFECTS.
 - If direction is unclear, omit the relation instead of guessing.
 
 ZONE GEO CONTRACT:
@@ -213,10 +222,12 @@ const supplyChainOperationalModelBlock = `CRITICAL — Supply chain operational 
 2. Chain nodes use their real types: /org/ for organizations, /fac/ for facilities, /product/ for products.
 3. When a specific production facility is unknown or not separable (small org / org-level production only), use ORG → PRODUCES → PRODUCT directly.
 4. Product = catalog entity. One product type, one node. Do not duplicate products for transport steps. Use transportVia array on the supplies edge. A product must NOT appear more than once in a single supply chain path — no pseudo-cycles.
-5. Use only PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, EXTRACTS_FROM.
+5. Use only PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, EXTRACTS_FROM.
 6. For long-haul, cross-border, maritime, pipeline, rail, or chokepoint-sensitive supply legs, include transportVia with real facility/chokepoint canonical paths whenever evidence or geography makes the route reasonably inferable.
 7. Prefer canonical ports, terminals, pipelines, straits, canals, warehouses, and intermodal nodes in transportVia over vague words like "shipping", "logistics", or "distribution".
-8. Only product-carrying flow belongs in the chain. If an organization merely owns, controls, manages, or operates an adjacent facility, emit OWNS / CONTROLS / MANAGES separately. Do NOT encode that as FACILITY → PRODUCT → ORG.`
+8. Only product-carrying flow belongs in the chain. If an organization merely owns, controls, manages, or operates an adjacent facility, emit OWNS / CONTROLS / MANAGES separately. Do NOT encode that as FACILITY → PRODUCT → ORG.
+9. Physical relay hubs (bonded warehouses, customs terminals, inland terminals, depots, service depots, seaport/airport terminals) may appear as operational facilities or in transportVia when they materially gate the flow.
+10. Non-product-carrying control points (screening, licensing, settlement, insurance, service authorization) must NOT become fake product nodes. Capture them via observations/qualifiers or concrete actor relations when grounded.`
 
 const supplyChainProductGranularityBlock = `PRODUCT GRANULARITY (what counts as a product node):
 - Tech/consumer products: use MODEL LINE / product family level. NOT specific SKU or version.
@@ -230,7 +241,8 @@ const supplyChainSpecialScenariosBlock = `SPECIAL SCENARIOS:
 - Toll manufacturing: raw from fac A, processing at fac B, result to A or C. Segments: fac_A→product→fac_B→product→fac_C.
 - Distributors/resellers: fac with type distribution/sales; supplies without produces.
 - Software vendors: prefer concrete production/delivery facilities when known; if production is org-level and facilities are not separable, model as org→product.
-- Co-product/by-product: one process (fac)→multiple product. Multiple PRODUCES edges from one fac.`
+- Co-product/by-product: one process (fac)→multiple product. Multiple PRODUCES edges from one fac.
+- Sanctions/customs/export-control flows: explicitly look for relay hubs, bonded/customs terminals, reroute corridors, and execution gates before concluding the route is single-hub.`
 
 // holisticOutputSchemaBlock returns the full JSON schema for holistic/refine prompts (fragment partial merge + relations).
 func holisticOutputSchemaBlock() string {
@@ -266,7 +278,7 @@ const supplyChainMandatoryBlock = `MANDATORY — SUPPLY CHAIN RULES (NO EXCEPTIO
 - Preferred chain model: org → fac → product → fac → org. Organizations at the ends, facilities in the middle, products between facilities.
 - Fallback model (only when concrete production facility is unknown or not separable): org → product.
 - Nodes: /org/ for organizations, /fac/ for facilities, /product/ for products, /deposit/ for deposits.
-- Edge types: PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, EXTRACTS_FROM.
+- Edge types: PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, EXTRACTS_FROM.
 - Product: one per type in path. No duplicates. No "Freight" or "delivery" as product unless that IS the facility's service.
 - If you cannot satisfy these rules, omit the relation. Do NOT output invalid links.`
 
@@ -294,11 +306,15 @@ func strategySupplyChainsJSONContractBlock() string {
   - "role": OPTIONAL string
 - Use /org/ for organizations, /fac/ for facilities, /product/ for products, /deposit/ for deposits. Do NOT invent synthetic /fac/*-general-production placeholders. If production is only known at org level, use org→product.
 - transportVia is operationally important. When the leg is cross-border or route-sensitive and a plausible business route is known, do not leave transportVia empty.
+- When multiple credible relay hubs exist, prefer returning parallel chains or routeObservations instead of collapsing everything into a single dominant hub.
 - productCandidates are scope additions, not duplicates of nodes[]. Use them only when the current working product set needs extension.
 - carrierProductObservations must be reusable actor×product facts and should be present when evidence supports reusable baseline metrics; linkObservations must be customer/destination specific; routeObservations must be transport/path specific.
 - For sanctions-/export-control-/customs-sensitive cross-border flows, prefer linkObservations or routeObservations with:
   - metrics like customs_clearance_days, lead_time_days, inventory_cover_days_at_destination, regulatory_fit, switch_time_days
   - qualifiers like export_license_required, sanctions_touchpoint, approved_vendor_only, service_contract_required, dual_use_flag
+- For gate-controlled flows, do not leave control points implicit. Capture them either as:
+  - concrete relay facilities in transportVia / routeObservations when they are physical sites (bonded warehouse, seaport terminal, customs terminal, inland terminal, service depot), or
+  - canonical relations / observations when they are organizations or authorities (screening office, licensing authority, settlement bank, trade-credit insurer, service-authorization gate).
 - Good transportVia examples: /fac/sea/strait-of-hormuz-terminal, /fac/eg/suez-terminal, /fac/nl/port-of-rotterdam, /fac/ae/jebel-ali-terminal.
 - Bad transportVia examples: generic words, regions, countries, products, or non-facility placeholders.
 - INVALID shape example: "nodes": "A -> B -> C"
@@ -709,6 +725,9 @@ func (a *ResearchAgent) runSupplyChainPreHotPathPrompt(ctx context.Context, prom
 	plan.CandidateProductFamilies = dedupStrings(plan.CandidateProductFamilies, 6)
 	plan.CandidateOperationalAnchorClasses = dedupStrings(plan.CandidateOperationalAnchorClasses, 8)
 	plan.CandidateFlowArchetypes = dedupStrings(plan.CandidateFlowArchetypes, 8)
+	plan.CandidateTransitHubTerms = dedupStrings(plan.CandidateTransitHubTerms, 8)
+	plan.CandidateGateTerms = dedupStrings(plan.CandidateGateTerms, 8)
+	plan.CandidateRouteGeographies = dedupStrings(plan.CandidateRouteGeographies, 8)
 	plan.SearchFocus = dedupStrings(plan.SearchFocus, 8)
 	plan.PreferredEvidence = dedupStrings(plan.PreferredEvidence, 8)
 	plan.DerivedProductFilters = dedupStrings(plan.DerivedProductFilters, 4)
@@ -723,6 +742,9 @@ func (a *ResearchAgent) runSupplyChainPreHotPathPrompt(ctx context.Context, prom
 		len(plan.CandidateProductFamilies) == 0 &&
 		len(plan.CandidateOperationalAnchorClasses) == 0 &&
 		len(plan.CandidateFlowArchetypes) == 0 &&
+		len(plan.CandidateTransitHubTerms) == 0 &&
+		len(plan.CandidateGateTerms) == 0 &&
+		len(plan.CandidateRouteGeographies) == 0 &&
 		len(plan.SearchFocus) == 0 &&
 		len(plan.DerivedProductFilters) == 0 {
 		return nil, nil
@@ -742,6 +764,9 @@ func sanitizeSupplyChainPreHotPathPlan(data []byte) ([]byte, error) {
 	sanitizeStringSliceField(root, "candidateProductFamilies")
 	sanitizeStringSliceField(root, "candidateOperationalAnchorClasses")
 	sanitizeStringSliceField(root, "candidateFlowArchetypes")
+	sanitizeStringSliceField(root, "candidateTransitHubTerms")
+	sanitizeStringSliceField(root, "candidateGateTerms")
+	sanitizeStringSliceField(root, "candidateRouteGeographies")
 	sanitizeStringSliceField(root, "searchFocus")
 	sanitizeStringSliceField(root, "preferredEvidence")
 	sanitizeStringSliceField(root, "derivedProductFilters")
@@ -880,8 +905,6 @@ func anyToString(raw interface{}) string {
 	case string:
 		return t
 	case fmt.Stringer:
-		return t.String()
-	case json.Number:
 		return t.String()
 	default:
 		return fmt.Sprintf("%v", raw)
@@ -2322,6 +2345,9 @@ WHAT TO RETURN:
 - candidateProductFamilies: more concrete product families or operational sub-families worth prioritizing
 - candidateOperationalAnchorClasses: likely node classes to look for first
 - candidateFlowArchetypes: likely topology shapes for this domain
+- candidateTransitHubTerms: likely transshipment, customs, bonded, depot, inland-terminal, or relay hub terms worth retrying
+- candidateGateTerms: likely non-product-carrying control points that gate execution (screening, licensing, settlement, insurance, service authorization)
+- candidateRouteGeographies: likely relay geographies or corridor countries worth checking before concluding the route is single-hub
 - searchFocus: concise retrieval foci for the next hot-path prompt
 - preferredEvidence: source/evidence classes to trust first
 - derivedProductFilters: up to 3 concrete product filter strings that MAY be used for a focused retry if the first hot-path pass is too broad
@@ -2333,6 +2359,7 @@ SOFT-STEERING RULES:
 - For broad company anchors, include high-signal operational aliases, business units, country subsidiaries, depot/operator names, or common abbreviations when they materially improve retrieval.
 - For OEM/service/spare-parts cases, think in terms of parts manufacturing, authorized suppliers, repair centers, service depots, installed-base support, customer plants, outage/maintenance support.
 - For commodity corridor cases, think in terms of mines/wells/plants, terminals, ports, refineries, processors, chokepoints, and destination facilities.
+- For sanctions-/customs-/export-control-sensitive cases, think separately about physical relay hubs, customs/bonded gates, screening/licensing/settlement/insurance gates, and alternative relay geographies.
 
 OUTPUT:
 Return ONLY valid JSON:
@@ -2343,6 +2370,9 @@ Return ONLY valid JSON:
   "candidateProductFamilies": ["..."],
   "candidateOperationalAnchorClasses": ["..."],
   "candidateFlowArchetypes": ["..."],
+  "candidateTransitHubTerms": ["..."],
+  "candidateGateTerms": ["..."],
+  "candidateRouteGeographies": ["..."],
   "searchFocus": ["..."],
   "preferredEvidence": ["..."],
   "derivedProductFilters": ["..."],
@@ -2385,13 +2415,24 @@ func (a *ResearchAgent) buildSupplyChainFullQueryPrompt(query SupplyChainQuery) 
 
 	taskBlock := `TASK: Build supply chain trees (1-to-many at each level). Depth: ` + fmt.Sprintf("%d", depth) + ` hops. ` + anchorDesc + filters + `
 
+ANCHOR HANDLING:
+- If anchorType=org: start from the organization and expand its facilities, products, recipients, and relay facilities.
+- If anchorType=fac: start from the facility and expand its direct products, upstream inputs, downstream recipients, and the organizations around it.
+- If anchorType=product: start from the product and trace concrete manufacturers, recipient facilities, relay hubs, and destination organizations.
+- If anchorType=deposit: start from the deposit and expand extraction/processing operators, downstream processors, and route-sensitive relay nodes.
+
 TREE STRUCTURE (each step fans out 1→many):
 Step 1 — ORG → [child orgs, facilities]: For each org anchor, find ALL organizations under it (subsidiaries, controlled, partners) AND its own production facilities. One org may have many child orgs and many facilities.
 Step 2 — FAC → [products]: For each facility, find ALL products/services THIS facility produces directly. One facility may produce many products. Do NOT include products of related or parent companies.
 Step 3 — PRODUCT → [recipient facs → orgs]: For each product, find ALL facilities that receive/consume it, and their parent organizations. One product may go to many recipients.
 Step 4 — Recurse: From each recipient org (back to Step 1) until depth reached.
 
-OUTPUT ONE CHAIN PER LEAF PATH. If org A has fac F1 and fac F2, and F1 produces P1 and P2 — output separate chains: A→F1→P1→..., A→F1→P2→..., A→F2→... etc.`
+OUTPUT ONE CHAIN PER LEAF PATH. If org A has fac F1 and fac F2, and F1 produces P1 and P2 — output separate chains: A→F1→P1→..., A→F1→P2→..., A→F2→... etc.
+
+ROUTE / GATE DISCIPLINE:
+- For cross-border, rerouted, sanctions-sensitive, customs-sensitive, or import-controlled flows, actively look for more than one credible relay hub when the route is known to fork or reroute.
+- Physical relay nodes belong in transportVia and routeObservations.
+- Non-product-carrying gates (screening, licensing, settlement, trade-credit insurance, service authorization) must not be invented as product nodes; capture them in linkObservations / routeObservations qualifiers or canonical relations when they are concrete actors.`
 
 	return fmt.Sprintf(`You are a supply chain research agent.
 
@@ -2443,9 +2484,15 @@ func (a *ResearchAgent) buildSupplyChainHotPathPrompt(query SupplyChainQuery, pr
 - Mixed anchors are valid. Anchors may be organizations, facilities, deposits, products, or a mix.
 - Prefer concrete operational nodes: factories, plants, mines, depots, bonded warehouses, customs terminals, ports, inland terminals, distribution centers, fulfillment hubs, and stores when they are operationally relevant.
 - For each main branch, try to return a full operational slice: supplier/factory -> product family -> import/customs/port/DC -> recipient facility/store/e-commerce node.
+- If there are multiple credible relay hubs or corridor variants, return them as distinct branches or distinct routeObservations instead of silently collapsing to one route.
 - For retail / distribution anchors, include the main inbound product families, import/distribution branches, owned subsidiaries, publishing/import arms, local distribution centers, and major downstream store / e-commerce fulfillment branches when they are directly relevant.
 - Explicitly separate main goods flow from component/material inputs and from support/logistics/infrastructure branches. Support branches are useful, but must not crowd out the main goods flows.
 - Include transportVia when a route/chokepoint is known. Include alternatives when a customer/product pair has plausible substitute suppliers.
+- For sanctions-sensitive, customs-sensitive, or export-control-sensitive flows, explicitly search not only for the main route but also for:
+  - relay hubs,
+  - bonded / customs / inland-terminal gates,
+  - screening / licensing / settlement / insurance control points,
+  - alternative relay geographies.
 - When evidence supports reusable actor×product baseline facts, include carrierProductObservations in the same response. Do not leave reusable baseline metrics implicit.
 - Prefer branches that maximize first-pass decision value: main products, main suppliers, main import/distribution nodes, main transformations, main customer/distribution branches.
 - For sanctions-sensitive, cross-border inbound, import-constrained, or export-control-sensitive flows, explicitly seek customs terminals, rerouted corridors, alternative import nodes, export-license gates, and sanctioned/control-sensitive touchpoints.
@@ -2465,6 +2512,7 @@ func (a *ResearchAgent) buildSupplyChainHotPathPrompt(query SupplyChainQuery, pr
 				"- Do NOT ignore relevant branches just because they are not named here.\n" +
 				"- If strategy suggests OEM/service topology, explicitly seek service depots, repair centers, authorized suppliers, installed-base support nodes, and customer plant/site recipients.\n" +
 				"- If strategy suggests commodity corridor topology, explicitly seek production facilities, terminals, ports, chokepoints, processors, and destination facilities.\n" +
+				"- If steering includes transit hubs, gate terms, or route geographies, treat them as high-signal retry terms for relay hubs and control points.\n" +
 				string(b)
 		}
 	}
@@ -2534,6 +2582,7 @@ STRICT RULES:
 - Keep one product per link/leg. Do NOT smear multi-product truth across a single link.
 - Do NOT restate route-specific or customer-specific facts as reusable capability baseline.
 - When the current chains are cross-border, sanctions-sensitive, import-constrained, export-control-sensitive, or customs-sensitive, prefer adding linkObservations / routeObservations for customs_clearance_days, inventory_cover_days_at_destination, regulatory_fit, switch_time_days, export_license_required, sanctions_touchpoint, approved_vendor_only, service_contract_required, and dual_use_flag whenever evidence exists.
+- If relay hubs or control points are known but are not part of the current topology, surface them in routeObservations / linkObservations rather than dropping them.
 - Prefer concrete reusable metric keys only from this whitelist:
 %s
 - Use ONLY valid canonical paths already present in the provided chains for carrierRef/productRef, unless you are returning a genuinely new productCandidate.
@@ -2676,15 +2725,16 @@ DIRECTION RULES (CRITICAL):
 - For directed ORG->ORG edges above, include qualifiers.source_role and qualifiers.target_role.
 
 WHAT TO FIND (prioritize completeness):
-1. Ownership chain: Trace to ultimate parent or beneficial owner. OWNS (parent→subsidiary): ORG/PERSON/COMMUNITY→ORG. SUBSIDIARY_OF (subsidiary→parent). Include intermediate holding companies. metrics.ownership_percent when known. COMMUNITY (dynasty, tribe) can OWNS ORGANIZATION. UPSTREAM: when this entity is owned/controlled by X, emit OWNS/CONTROLS with explicit sourceCanonicalPath/sourceType/sourceName = X, target = CURRENT FRAGMENT.
-2. Control: CONTROLS (controller→controlled): ORG/PERSON/COMMUNITY→ORG/FACILITY. State control, voting rights, contractual control. Who controls at each level? Do NOT model external audit/certification oversight as CONTROLS; use ASSURES with assurance_type.
-3. Full board: BOARD_MEMBER_OF (PERSON→ORG). All board members for significant organizations.
-4. Management: MANAGES (manager→managed). CEO, director, operator — formal authority over org/subsidiary. Full C-suite: EMPLOYED_BY (PERSON→ORG) for employment. FOUNDED (PERSON→ORG) for founders.
-5. Investment: INVESTS_IN (investor→target). Include metrics (investment_amount, round, valuation) when known.
-6. Community influence layer: HAS_SUBGROUP for dynasty/tribe/family branches, MEMBER_OF for people whose lineage materially affects authority, AFFILIATED_WITH for community/person → formal organization ties, OPERATES_VIA for community/org → media channel when the channel is used for mobilization, coordination, or control signaling.
-7. Government hierarchy: ADMINISTERS (GOV/ORG with /gov/ path → subordinate GOV or PROGRAM). Full hierarchy to leaf agencies.
-8. External assurance in governance: ASSURES for auditors and certifiers linked to this org/facility/program (do not emit AUDITED_BY legacy inverse).
-9. Return entities (parents, subsidiaries, board members, investors, gov bodies, auditors/certifiers, communities, media channels, programs) that should be explored further (child jobs will recurse).
+1. Ownership chain: Trace to ultimate parent or beneficial owner. OWNS (parent→subsidiary): ORG/PERSON/COMMUNITY→ORG. SUBSIDIARY_OF (subsidiary→parent). Include intermediate holding companies, SPVs, nominee vehicles, trustees, and indirect holding layers. metrics.ownership_percent when known. COMMUNITY (dynasty, tribe) can OWNS ORGANIZATION. UPSTREAM: when this entity is owned/controlled by X, emit OWNS/CONTROLS with explicit sourceCanonicalPath/sourceType/sourceName = X, target = CURRENT FRAGMENT.
+2. Beneficial vs nominal ownership: explicitly separate direct legal owner, indirect owner, and beneficial owner. Use qualifiers.share_type=direct|indirect|beneficial when inferable. Capture voting rights separately from equity when they diverge via metrics/qualifiers.voting_rights_percent.
+3. Control: CONTROLS (controller→controlled): ORG/PERSON/COMMUNITY→ORG/FACILITY. State control, voting rights, board control, contractual control, golden share, veto rights, trustee mandate. Who controls at each level? Do NOT model external audit/certification oversight as CONTROLS; use ASSURES with assurance_type.
+4. Full board: BOARD_MEMBER_OF (PERSON→ORG). All board members for significant organizations, especially where board seats explain beneficial control or proxy ownership.
+5. Management: MANAGES (manager→managed). CEO, director, operator — formal authority over org/subsidiary. Full C-suite: EMPLOYED_BY (PERSON→ORG) for employment. FOUNDED (PERSON→ORG) for founders.
+6. Investment: INVESTS_IN (investor→target). Include metrics (investment_amount, round, valuation) when known.
+7. Community influence layer: HAS_SUBGROUP for dynasty/tribe/family branches, MEMBER_OF for people whose lineage materially affects authority, AFFILIATED_WITH for community/person → formal organization ties, OPERATES_VIA for community/org → media channel when the channel is used for mobilization, coordination, or control signaling.
+8. Government hierarchy: ADMINISTERS (GOV/ORG with /gov/ path → subordinate GOV or PROGRAM). Full hierarchy to leaf agencies.
+9. External assurance in governance: ASSURES for auditors and certifiers linked to this org/facility/program (do not emit AUDITED_BY legacy inverse).
+10. Return entities (parents, subsidiaries, board members, investors, gov bodies, auditors/certifiers, communities, media channels, programs) that should be explored further (child jobs will recurse).
 
 INTEGRATION_TYPE qualifier (for OWNS): When the ownership fits a known pattern, add qualifiers.integration_type:
 - "vertical": subsidiary is part of vertically integrated supply chain (e.g., BYD owning battery/cell producers)
@@ -2700,7 +2750,7 @@ QUESTIONS TO ANSWER (from Critic; prioritize these):
 Return a JSON object:
 {
   "fragment": { updated fields if any },
-  "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "sourceCanonicalPath?", "sourceType?", "sourceName?", "metrics": { "ownership_percent", "investment_amount", ... }, "qualifiers": { "integration_type"?: "vertical|partnership|arm's-length", "source_role"?: "owner|investor|assurer|controller|subsidiary", "target_role"?: "owned_entity|investee|assuree|controlled_entity|parent_owner" } } ],
+  "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "sourceCanonicalPath?", "sourceType?", "sourceName?", "metrics": { "ownership_percent", "voting_rights_percent", "investment_amount", ... }, "qualifiers": { "integration_type"?: "vertical|partnership|arm's-length", "share_type"?: "direct|indirect|beneficial", "control_type"?: "equity|board|golden_share|veto|trustee|state|contractual", "mechanism"?: "board_majority|golden_share|veto_right|trustee_mandate|nominee_structure", "source_role"?: "owner|investor|assurer|controller|subsidiary", "target_role"?: "owned_entity|investee|assuree|controlled_entity|parent_owner" } } ],
   "supplyChains": []
 }
 
@@ -2922,6 +2972,15 @@ Use ONLY these relation types: %s.
 Do NOT use generic relation types outside this list.
 STRICT DIRECTION/TYPING RULES (MANDATORY):
 - Domain is config, not a graph node: targetCanonicalPath MUST NOT start with /domain/.
+- Keep the graph directed and role-first. For core policy-impact edges, ALWAYS include qualifiers.source_role, qualifiers.target_role, and qualifiers.direction_basis using these canonical pairs:
+  GATEKEEPS_DECISION gatekeeper->decision_point,
+  USES_MECHANISM mechanism_user->mechanism,
+  CONTROLS_ACCESS controller->access_subject,
+  IMPOSES_CONDITION imposer->constrained_entity,
+  APPLIES_TO mechanism->applicable_entity,
+  ADMINISTERS administrator->administered_entity,
+  IN_GEO_SCOPE scope_owner->geo_scope,
+  AFFECTS impact_source->affected_entity.
 - PARTICIPATES_IN direction is participant -> market.
   - source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM/PERSON.
   - target MUST be MARKET and targetCanonicalPath MUST start with /market/.
@@ -2931,21 +2990,32 @@ STRICT DIRECTION/TYPING RULES (MANDATORY):
   - source MUST be PRODUCT, target MUST be MARKET.
   - Use for product trading/price-discovery context only.
 - REGULATES/ADMINISTERS must originate from regulator/admin source (/gov/...), not from affected market/entity. REGULATES is for same-jurisdiction oversight only; for sanctions use CONTROLS_ACCESS.
+- GATEKEEPS_DECISION is gatekeeper -> decision point. USES_MECHANISM is decision/org/gov/community/program -> mechanism.
+- APPLIES_TO is mechanism -> covered entity. CONTROLS_ACCESS and IMPOSES_CONDITION are controller/imposer -> affected entity. IN_GEO_SCOPE is policy source/mechanism -> jurisdiction/location. AFFECTS is upstream impact source -> downstream affected entity.
 - For any relation where semantic source is not CURRENT FRAGMENT, explicit sourceCanonicalPath/sourceType/sourceName is REQUIRED.
+
+BUILD FIVE DIRECTED LAYERS:
+1. Policy source layer: gatekeepers, regulators, administrators, programs, and decision points that set or authorize the move.
+2. Mechanism layer: concrete mechanisms/instruments used to transmit the policy.
+3. Scope and exposure layer: explicit IN_GEO_SCOPE, APPLIES_TO, REGULATES, CONTROLS_ACCESS, IMPOSES_CONDITION edges to markets, orgs, products, communities, programs, and geographies.
+4. Transmission and response layer: downstream AFFECTS/INFLUENCES edges, including community-mediated and media-mediated pass-through when they materially change compliance, lobbying, evasion, adoption, or sentiment.
+5. Observability layer: how the effect would actually be measured, with timing lags and confidence.
 
 WHAT TO FIND:
 1. Policy instruments and mechanisms (tax rate changes, exemptions, compliance controls, enforcement mechanisms).
 2. Regulator/program authority chains (who sets/administers policy; what is in scope).
-3. Exposure links to affected segments (markets, organizations, communities, geographies).
-4. Influence channels suitable for propagation modeling (formal and indirect channels).
+3. Geo scope and exposure links to affected segments (markets, organizations, products, communities, programs, locations).
+4. Transmission channels suitable for propagation modeling (formal, market, community, and media channels).
 4a. Community-mediated transmission: use HAS_SUBGROUP, MEMBER_OF, AFFILIATED_WITH, and OPERATES_VIA when informal networks, clan/dynasty structures, or controlled channels materially change policy adoption, compliance, lobbying, evasion, or pass-through.
+4b. Media/community tail: when a community, organization, or program transmits the policy via a specific channel, add OPERATES_VIA and continue the downstream path instead of stopping at the community node.
 5. QUANTITATIVE QUALIFIERS (CRITICAL for scenario modeling — provide best estimates even when uncertain):
    - For REGULATES/CONTROLS_ACCESS/IMPOSES_CONDITION edges: qualifiers.rate_from, qualifiers.rate_to, qualifiers.effective_date when the instrument has numeric parameters.
+   - For IN_GEO_SCOPE edges: qualifiers.scope_basis ("jurisdiction"|"market_rule"|"program_area"|"administrative_boundary") when inferable.
    - For exposure edges (to markets/orgs/communities): qualifiers.pass_through_estimate (0.0-1.0: share of cost passed downstream),
      qualifiers.elasticity_hint ("inelastic"|"unit_elastic"|"elastic"|"unknown"),
      qualifiers.tax_base_coverage ("full"|"partial"|"exempt"),
      qualifiers.sector_sensitivity ("low"|"medium"|"high").
-   - For INFLUENCES edges: qualifiers.channel_type ("formal_regulation"|"price_signal"|"behavioral"|"substitution"|"evasion"),
+   - For AFFECTS/INFLUENCES edges: qualifiers.channel_type ("formal_regulation"|"price_signal"|"behavioral"|"substitution"|"evasion"|"community_signal"|"media_signal"),
      qualifiers.lag_quarters (estimated delay in quarters before effect materializes),
      qualifiers.observability ("direct"|"proxy"|"modeled").
 6. Observability metadata: for each major impact channel, note HOW the effect would be measured
@@ -3049,6 +3119,108 @@ func (a *ResearchAgent) EnrichRegulatoryImpactFull(ctx context.Context, query Re
 	return filteredRelations, nil
 }
 
+// EnrichRegulatoryImpactRefinement asks for additional policy-impact edges given an existing graph.
+// Intended for a second pass when job state sets regulatoryImpactRefinePass, or when the first
+// pass returned a sparse relation set. New relations are filtered with the policy_impact allowlist.
+func (a *ResearchAgent) EnrichRegulatoryImpactRefinement(ctx context.Context, domainCP string, existing []DiscoveredRelation) ([]DiscoveredRelation, error) {
+	if a == nil || a.executor == nil {
+		return nil, fmt.Errorf("research agent executor not configured")
+	}
+	domainCP = strings.TrimSpace(domainCP)
+	prompt := a.buildRegulatoryImpactRefinementPrompt(domainCP, existing)
+	out, err := a.runResearchPrompt(ctx, prompt, nil)
+	if err != nil || out == nil {
+		return nil, err
+	}
+	filteredRelations, _ := FilterDomainRelations(ctx, taxonomy.DomainModePolicyImpact, out.Relations)
+	return filteredRelations, nil
+}
+
+func (a *ResearchAgent) buildRegulatoryImpactRefinementPrompt(domainCP string, existing []DiscoveredRelation) string {
+	seen := map[string]struct{}{}
+	var nodeList []string
+	addNode := func(path string) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return
+		}
+		if _, ok := seen[path]; ok {
+			return
+		}
+		seen[path] = struct{}{}
+		nodeList = append(nodeList, path)
+	}
+	for _, r := range existing {
+		addNode(r.TargetCanonicalPath)
+		addNode(r.SourceCanonicalPath)
+	}
+	if domainCP != "" {
+		addNode(domainCP)
+	}
+	maxNodes := 48
+	if len(nodeList) > maxNodes {
+		nodeList = nodeList[:maxNodes]
+	}
+	var edgeLines []string
+	maxEdges := 64
+	for i, r := range existing {
+		if i >= maxEdges {
+			break
+		}
+		s := strings.TrimSpace(r.SourceCanonicalPath)
+		t := strings.TrimSpace(r.TargetCanonicalPath)
+		if s == "" || t == "" {
+			continue
+		}
+		edgeLines = append(edgeLines, fmt.Sprintf("%s --%s--> %s", s, strings.TrimSpace(taxonomy.NormalizeRelationType(r.RelationType)), t))
+	}
+	nodesBlock := strings.Join(nodeList, "\n")
+	edgesBlock := strings.Join(edgeLines, "\n")
+	if nodesBlock == "" {
+		nodesBlock = "(none)"
+	}
+	if edgesBlock == "" {
+		edgesBlock = "(none)"
+	}
+	return fmt.Sprintf(`You are a research agent. DENSIFY a regulatory / policy impact graph.
+
+DOMAIN CONTRACT ANCHOR (may appear in edges): %s
+
+KNOWN NODES (canonical paths; prefer linking these before inventing new entities):
+%s
+
+KNOWN EDGES (do not repeat these exact triples):
+%s
+
+TASK: Add NEW relations only. Connect missing layers:
+- GOV / ORG -> DECISION_POINT (GATEKEEPS_DECISION, REGULATES where domestic, CONTROLS_ACCESS for sanctions)
+- DECISION_POINT -> MECHANISM (USES_MECHANISM)
+- MECHANISM -> MARKET / ORG / FACILITY (APPLIES_TO, IMPOSES_CONDITION, INFLUENCES)
+
+Use ONLY these relation types: %s.
+ENTITY TYPES: %s.
+
+CANONICAL PATH RULES:
+%s
+
+Return JSON:
+{
+  "fragment": null,
+  "relations": [ { "targetName", "targetType", "targetCanonicalPath", "relationType", "reason", "confidence", "qualifiers": {}, "sourceCanonicalPath?", "sourceType?", "sourceName?" } ],
+  "supplyChains": []
+}
+
+Set sourceCanonicalPath/sourceType/sourceName for every relation where source is not obvious.
+Return ONLY valid JSON. No markdown.`,
+		domainCP,
+		nodesBlock,
+		edgesBlock,
+		relationTypesPromptForDomainMode(taxonomy.DomainModePolicyImpact),
+		taxonomy.EntityTypesForDomainMode(taxonomy.DomainModePolicyImpact),
+		taxonomy.ExtendedCanonicalPathRulesPrompt(),
+	)
+}
+
 func (a *ResearchAgent) buildRegulatoryImpactFullPrompt(query RegulatoryImpactQuery) string {
 	instrument := strings.TrimSpace(query.Instrument)
 	jurisdiction := strings.TrimSpace(query.Jurisdiction)
@@ -3095,16 +3267,28 @@ CANONICAL PATH RULES:
 
 %s
 
-BUILD THREE LAYERS:
-1. DECISION LAYER: Government entities (GOV) --GATEKEEPS_DECISION/REGULATES(domestic only)/CONTROLS_ACCESS(sanctions)--> DECISION_POINT
-2. MECHANISM LAYER: DECISION_POINT --USES_MECHANISM--> MECHANISM; MECHANISM --APPLIES_TO--> MARKET/ORG
-3. IMPACT LAYER: MECHANISM --IMPOSES_CONDITION/INFLUENCES--> affected segments/organizations
+BUILD FIVE DIRECTED LAYERS:
+1. POLICY SOURCE LAYER: Government entities, administrators, communities, and decision points linked by GATEKEEPS_DECISION / REGULATES / ADMINISTERS / CONTROLS_ACCESS.
+2. MECHANISM LAYER: DECISION_POINT/ORG/GOV/COMMUNITY/PROGRAM --USES_MECHANISM--> MECHANISM.
+3. SCOPE LAYER: source/mechanism --IN_GEO_SCOPE--> GEO and MECHANISM --APPLIES_TO--> MARKET/ORG/FACILITY/PRODUCT/COMMUNITY/PROGRAM.
+4. IMPACT LAYER: source/mechanism --IMPOSES_CONDITION/AFFECTS/INFLUENCES--> affected segments, organizations, products, communities, media channels, and programs.
+5. RESPONSE / OBSERVABILITY LAYER: continue through community and media channels when they transmit compliance, lobbying, evasion, sentiment, or adoption; include measurable lag/observability qualifiers.
 Note: use REGULATES only for domestic jurisdictional authority. For sanctions, trade bans, or extra-territorial restrictions use CONTROLS_ACCESS or IMPOSES_CONDITION.
+Keep the graph directed and role-first. For core policy-impact edges, ALWAYS include qualifiers.source_role, qualifiers.target_role, and qualifiers.direction_basis using canonical pairs:
+- gatekeeper->decision_point for GATEKEEPS_DECISION
+- mechanism_user->mechanism for USES_MECHANISM
+- controller->access_subject for CONTROLS_ACCESS
+- imposer->constrained_entity for IMPOSES_CONDITION
+- mechanism->applicable_entity for APPLIES_TO
+- administrator->administered_entity for ADMINISTERS
+- scope_owner->geo_scope for IN_GEO_SCOPE
+- impact_source->affected_entity for AFFECTS
 
 QUANTITATIVE QUALIFIERS (CRITICAL):
 - For REGULATES/CONTROLS_ACCESS/IMPOSES_CONDITION: qualifiers.rate_from, qualifiers.rate_to, qualifiers.effective_date
+- For IN_GEO_SCOPE: qualifiers.scope_basis when inferable
 - For exposure edges: qualifiers.pass_through_estimate (0.0-1.0), qualifiers.elasticity_hint, qualifiers.sector_sensitivity
-- For INFLUENCES: qualifiers.channel_type, qualifiers.lag_quarters, qualifiers.observability
+- For AFFECTS/INFLUENCES: qualifiers.channel_type, qualifiers.lag_quarters, qualifiers.observability
 %s
 
 Return a JSON object:
@@ -3180,7 +3364,8 @@ BOARD/PEOPLE LAYER:
 	subtypeBlock := `
 OWNERSHIP MODE (default):
 - Prioritize UBO, holding chains, direct vs indirect beneficial stakes, intermediate holding vehicles.
-- When ownership and control diverge, preserve both: OWNS for equity stake, CONTROLS for non-equity or governance control.`
+- When ownership and control diverge, preserve both: OWNS for equity stake, CONTROLS for non-equity or governance control.
+- Capture nominee structures, trustees, proxy vehicles, and voting-rights divergence explicitly when evidence exists.`
 	if governanceMode == "control" {
 		subtypeBlock = `
 CONTROL MODE (control-map):
@@ -3207,10 +3392,15 @@ BUILD THESE LAYERS:
    - UBO (Ultimate Beneficial Owner: ORG, PERSON, or COMMUNITY dynasty/tribe) --OWNS--> Holding --OWNS--> Subsidiary
    - ORG --SUBSIDIARY_OF--> Parent
 2. CONTROL LAYER:
-   - ORG/GOV --CONTROLS/MANAGES--> ORG
+   - ORG/GOV/COMMUNITY/PERSON --CONTROLS/MANAGES--> ORG
+   - Preserve ownership vs control divergence when voting rights, board control, golden shares, veto rights, trustee mandates, or nominee structures are the real mechanism
 3. INVESTMENT:
    - ORG --INVESTS_IN--> ORG
-4. COMMUNITY / LINEAGE LAYER:
+4. PEOPLE / GOVERNANCE LAYER:
+   - PERSON --BOARD_MEMBER_OF--> ORGANIZATION
+   - PERSON --EMPLOYED_BY--> ORGANIZATION
+   - PERSON/ORG --FOUNDED--> ORGANIZATION|PROGRAM
+5. COMMUNITY / LINEAGE LAYER:
    - COMMUNITY (dynasty/tribe/family network) --HAS_SUBGROUP--> COMMUNITY
    - PERSON --MEMBER_OF--> COMMUNITY when lineage materially affects ownership/control
    - COMMUNITY or PERSON --AFFILIATED_WITH--> ORGANIZATION when the tie explains beneficial ownership, patronage, or command structure
@@ -3219,7 +3409,8 @@ BUILD THESE LAYERS:
 %s
 
 QUALIFIERS on OWNS edges: qualifiers.share (ownership percentage 0.0-1.0), qualifiers.share_type (direct|indirect|beneficial).
-QUALIFIERS on CONTROLS edges: qualifiers.control_type (operational|strategic|regulatory), qualifiers.mechanism (board_majority|golden_share|veto_right|...).
+QUALIFIERS on CONTROLS edges: qualifiers.control_type (operational|strategic|regulatory|board|trustee|state|contractual), qualifiers.mechanism (board_majority|golden_share|veto_right|trustee_mandate|nominee_structure|ministerial_appointment|operating_mandate).
+When evidence exists, also capture metrics/qualifiers.voting_rights_percent separately from equity stake.
 
 Return a JSON object:
 {

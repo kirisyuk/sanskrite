@@ -1,6 +1,7 @@
 package scout
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -113,7 +114,7 @@ func TestEnsureWorkingProductScopeLoadedBackfillsLegacyWorkingProductRefs(t *tes
 			},
 		},
 	}
-	scope := ensureWorkingProductScopeLoaded(nil, nil, job, nil, "query_seed", "/domain/test")
+	scope := ensureWorkingProductScopeLoaded(context.Background(), nil, job, nil, "query_seed", "/domain/test")
 	if scope == nil {
 		t.Fatal("scope is nil")
 	}
@@ -185,15 +186,6 @@ func TestWorkingProductScopeCollapsesAliasAcronymEquivalence(t *testing.T) {
 	if len(entry.EquivalentProductRefs) < 2 {
 		t.Fatalf("equivalent refs = %v, want seeded alias and lng ref collapsed", entry.EquivalentProductRefs)
 	}
-}
-
-func containsStringWP(values []string, target string) bool {
-	for _, value := range values {
-		if strings.TrimSpace(value) == strings.TrimSpace(target) {
-			return true
-		}
-	}
-	return false
 }
 
 func containsStringWithSuffixWP(values []string, suffix string) bool {

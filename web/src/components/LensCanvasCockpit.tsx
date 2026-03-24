@@ -101,6 +101,7 @@ import { ProgramProfileModal } from './ProgramProfileModal';
 import { GraphIntentResultCard } from './GraphIntentResultCard';
 import { ScoutIntentModal, type ScoutIntentResolution } from './ScoutIntentModal';
 import { SupplyChainOverlay, type MaterializedArtifact } from './SupplyChainOverlay';
+import { SimulationOverlayPanel } from './SimulationOverlayPanel';
 import {
   defaultScoutingModeForCanonicalPath,
   defaultScoutingModeForIntent,
@@ -1852,6 +1853,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const toolbarMenuRef = React.useRef<HTMLDivElement | null>(null);
   // Right-side pushable overlays: actions, view, info
   const [actionsOverlayOpen, setActionsOverlayOpen] = React.useState(false);
+  const [simulationOverlayOpen, setSimulationOverlayOpen] = React.useState(false);
   const [viewOverlayOpen, setViewOverlayOpen] = React.useState(false);
   const [infoOverlayOpen, setInfoOverlayOpen] = React.useState(false);
   const [showLayoutMenu, setShowLayoutMenu] = React.useState(false);
@@ -12298,6 +12300,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     return fid;
   }, [nodes, selectedNodeId]);
 
+  const visibleCanonicalPaths = React.useMemo(
+    () =>
+      nodes
+        .map((node) => String((node.data as any)?.canonicalPath || '').trim())
+        .filter(Boolean),
+    [nodes],
+  );
+
   const suggestedModelerTargetPaths = React.useMemo(() => {
     const seen = new Set<string>();
     const out: string[] = [];
@@ -16322,6 +16332,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             <button
               type="button"
               onClick={() => {
+                setSimulationOverlayOpen(false);
                 setViewOverlayOpen(false);
                 setInfoOverlayOpen(false);
                 setActionsOverlayOpen((v) => {
@@ -16358,6 +16369,46 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             </div>
           )}
 
+          <div style={{ position: 'relative', pointerEvents: 'auto' }}>
+            <button
+              type="button"
+              onClick={() => {
+                setActionsOverlayOpen(false);
+                setViewOverlayOpen(false);
+                setInfoOverlayOpen(false);
+                setSimulationOverlayOpen((v) => {
+                  if (!v) clearHoverWhenOverlayOpens();
+                  return !v;
+                });
+              }}
+              disabled={!lensId}
+              title={lensId ? 'Simulation overlays' : 'Open a lens first'}
+              aria-label="Simulation overlays"
+              style={{
+                ...pushableButtonStyle(simulationOverlayOpen),
+                opacity: lensId ? 1 : 0.5,
+                cursor: lensId ? 'pointer' : 'not-allowed',
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 19h16" />
+                <path d="M7 16V8" />
+                <path d="M12 16V5" />
+                <path d="M17 16v-3" />
+              </svg>
+            </button>
+            {simulationOverlayOpen && lensId && (
+              <div style={{ position: 'absolute', top: 0, right: 'calc(100% + 8px)' }}>
+                <SimulationOverlayPanel
+                  lensId={lensId}
+                  isVisible={simulationOverlayOpen}
+                  visibleTargetRefs={visibleCanonicalPaths}
+                  selectedTargetRef={selectedNodeCanonicalPath}
+                />
+              </div>
+            )}
+          </div>
+
           {/* 2. View & highlight */}
           <div style={{ position: 'relative', pointerEvents: 'auto' }}>
             <button
@@ -16365,6 +16416,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               onClick={() => {
                 if (graphEmpty) return;
                 setActionsOverlayOpen(false);
+                setSimulationOverlayOpen(false);
                 setInfoOverlayOpen(false);
                 setViewOverlayOpen((v) => {
                   if (!v) clearHoverWhenOverlayOpens();
@@ -16393,6 +16445,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               type="button"
               onClick={() => {
                 setActionsOverlayOpen(false);
+                setSimulationOverlayOpen(false);
                 setViewOverlayOpen(false);
                 setInfoOverlayOpen((v) => {
                   if (!v) clearHoverWhenOverlayOpens();

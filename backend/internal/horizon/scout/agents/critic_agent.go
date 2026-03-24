@@ -640,13 +640,13 @@ TASK: Compare the extracted data with the source content and identify any confli
 	  - If there are no PERSON relations relevant to leadership (MANAGES / EMPLOYED_BY / BOARD_MEMBER_OF / FOUNDED), add specific questions like:
 	    - "Who is the CEO/CFO/COO/CTO/CIO/CMO/CHRO of <org>?" and "Who are the board members/chair of <org>?" and "Who founded <org>?"
 	  - NOTE: PERSON relations may appear inverted due to extraction being anchored on the organization; still treat them as valid signals for completeness.
-	- If "products_and_services" specialty is requested (ENHANCED requirements beyond the baseline):
+	  - If "products_and_services" specialty is requested (ENHANCED requirements beyond the baseline):
 	  - For ORGANIZATION/FACILITY: in addition to baseline PRODUCES/SUPPLIES_TO, also check for:
-	    - TRANSFORMS_INTO / ASSEMBLES_INTO relations for products (value chain + direct assembly)
+	    - TRANSFORMS_INTO / ASSEMBLES_INTO / USED_IN relations for products (value chain + direct assembly + functional input)
 	    - Capacity/volume metrics on edges
 	    - Add questions for missing transformations/assembly links and metrics.
-	  - For PRODUCT: if there are no product-to-product transition relations (TRANSFORMS_INTO / ASSEMBLES_INTO), add a question:
-	    - "What is this product produced from, what does it transform into, and what does it assemble into? Provide upstream/downstream products."
+	  - For PRODUCT: if there are no product-to-product transition relations (TRANSFORMS_INTO / ASSEMBLES_INTO / USED_IN), add a question:
+	    - "What is this product produced from, what does it transform into, what does it assemble into, and what is it used in? Provide upstream/downstream products."
 	  - TRANSFORMS_INTO DIRECTION INVARIANT: source MUST be upstream (raw/earlier-stage), target MUST be downstream (refined/later-stage).
 	    Stage order: extraction < refining < smelting < processing < manufacturing < assembly.
 	    If any TRANSFORMS_INTO edge points from a later-stage product to an earlier-stage product, flag it as a direction error.

@@ -10,9 +10,14 @@ import (
 type MaterializedKind string
 
 const (
-	MaterializedKindSupplyChainPath          MaterializedKind = "SUPPLY_CHAIN_PATH"
-	MaterializedKindSupplyChainAssemblyGraph MaterializedKind = "SUPPLY_CHAIN_ASSEMBLY_GRAPH"
-	MaterializedKindRegulatoryImpactMap      MaterializedKind = "REGULATORY_IMPACT_MAP"
+	MaterializedKindSupplyChainPath                  MaterializedKind = "SUPPLY_CHAIN_PATH"
+	MaterializedKindSupplyChainAssemblyGraph         MaterializedKind = "SUPPLY_CHAIN_ASSEMBLY_GRAPH"
+	MaterializedKindRegulatoryImpactMap              MaterializedKind = "REGULATORY_IMPACT_MAP"
+	MaterializedKindRegulatoryImpactTransmissionPath MaterializedKind = "REGULATORY_IMPACT_TRANSMISSION_PATH"
+	MaterializedKindRegulatoryTimeline               MaterializedKind = "REGULATORY_TIMELINE"
+	MaterializedKindRegulatoryCascadeMap             MaterializedKind = "REGULATORY_CASCADE_MAP"
+	// MaterializedKindRegulatoryImpactScenario stores what-if stress deltas per path for one or more override sets.
+	MaterializedKindRegulatoryImpactScenario MaterializedKind = "REGULATORY_IMPACT_SCENARIO"
 	MaterializedKindGovernanceChain          MaterializedKind = "GOVERNANCE_CHAIN"
 	MaterializedKindEcosystemMap             MaterializedKind = "ECOSYSTEM_MAP"
 )
@@ -20,7 +25,11 @@ const (
 // Valid checks if the MaterializedKind is valid.
 func (k MaterializedKind) Valid() bool {
 	switch k {
-	case MaterializedKindSupplyChainPath, MaterializedKindSupplyChainAssemblyGraph, MaterializedKindRegulatoryImpactMap, MaterializedKindGovernanceChain, MaterializedKindEcosystemMap:
+	case MaterializedKindSupplyChainPath, MaterializedKindSupplyChainAssemblyGraph,
+		MaterializedKindRegulatoryImpactMap, MaterializedKindRegulatoryImpactTransmissionPath,
+		MaterializedKindRegulatoryTimeline, MaterializedKindRegulatoryCascadeMap,
+		MaterializedKindRegulatoryImpactScenario,
+		MaterializedKindGovernanceChain, MaterializedKindEcosystemMap:
 		return true
 	default:
 		return false
@@ -93,29 +102,30 @@ type MaterializedArtifact struct {
 	ProductAxis      string   `json:"productAxis,omitempty" firestore:"productAxis,omitempty"`
 
 	// Response-only selection metadata. Not persisted.
-	DiscoverySource      string                   `json:"discoverySource,omitempty" firestore:"-"`
-	DiscoveryReason      string                   `json:"discoveryReason,omitempty" firestore:"-"`
-	MatchedRefs          []string                 `json:"matchedRefs,omitempty" firestore:"-"`
-	OverlapScore         float64                  `json:"overlapScore,omitempty" firestore:"-"`
-	IsPinned             bool                     `json:"isPinned,omitempty" firestore:"-"`
-	TraceRole            string                   `json:"traceRole,omitempty" firestore:"-"`
-	TraceReason          string                   `json:"traceReason,omitempty" firestore:"-"`
-	TracePriority        int                      `json:"tracePriority,omitempty" firestore:"-"`
-	LegCount             int                      `json:"legCount,omitempty" firestore:"-"`
-	BindingScore         float64                  `json:"bindingScore,omitempty" firestore:"-"`
-	PathStressScore      float64                  `json:"pathStressScore,omitempty" firestore:"-"`
-	BottleneckLeg        int                      `json:"bottleneckLegIndex,omitempty" firestore:"-"`
-	SufficiencyStatus    string                   `json:"sufficiencyStatus,omitempty" firestore:"-"`
-	SufficiencyScore     float64                  `json:"sufficiencyScore,omitempty" firestore:"-"`
-	GapCount             int                      `json:"gapCount,omitempty" firestore:"-"`
-	UnresolvedJoinCount  int                      `json:"unresolvedJoinCount,omitempty" firestore:"-"`
-	ValidatedJoinCount   int                      `json:"validatedJoinCount,omitempty" firestore:"-"`
-	IsConfirmedPath      bool                     `json:"isConfirmedPath,omitempty" firestore:"-"`
-	FamilyID             string                   `json:"familyId,omitempty" firestore:"-"`
-	FamilyPathCount      int                      `json:"familyPathCount,omitempty" firestore:"-"`
-	FamilyValidatedCount int                      `json:"familyValidatedCount,omitempty" firestore:"-"`
-	FamilyGapCount       int                      `json:"familyGapCount,omitempty" firestore:"-"`
-	TraceEndpoints       *SupplyChainTraceContext `json:"traceEndpoints,omitempty" firestore:"-"`
+	DiscoverySource      string                      `json:"discoverySource,omitempty" firestore:"-"`
+	DiscoveryReason      string                      `json:"discoveryReason,omitempty" firestore:"-"`
+	MatchedRefs          []string                    `json:"matchedRefs,omitempty" firestore:"-"`
+	OverlapScore         float64                     `json:"overlapScore,omitempty" firestore:"-"`
+	IsPinned             bool                        `json:"isPinned,omitempty" firestore:"-"`
+	TraceRole            string                      `json:"traceRole,omitempty" firestore:"-"`
+	TraceReason          string                      `json:"traceReason,omitempty" firestore:"-"`
+	TracePriority        int                         `json:"tracePriority,omitempty" firestore:"-"`
+	LegCount             int                         `json:"legCount,omitempty" firestore:"-"`
+	BindingScore         float64                     `json:"bindingScore,omitempty" firestore:"-"`
+	PathStressScore      float64                     `json:"pathStressScore,omitempty" firestore:"-"`
+	BottleneckLeg        int                         `json:"bottleneckLegIndex,omitempty" firestore:"-"`
+	RecoveryLatencyHrs   float64                     `json:"recoveryLatencyHours,omitempty" firestore:"-"`
+	SufficiencyStatus    string                      `json:"sufficiencyStatus,omitempty" firestore:"-"`
+	SufficiencyScore     float64                     `json:"sufficiencyScore,omitempty" firestore:"-"`
+	GapCount             int                         `json:"gapCount,omitempty" firestore:"-"`
+	UnresolvedJoinCount  int                         `json:"unresolvedJoinCount,omitempty" firestore:"-"`
+	ValidatedJoinCount   int                         `json:"validatedJoinCount,omitempty" firestore:"-"`
+	IsConfirmedPath      bool                        `json:"isConfirmedPath,omitempty" firestore:"-"`
+	FamilyID             string                      `json:"familyId,omitempty" firestore:"-"`
+	FamilyPathCount      int                         `json:"familyPathCount,omitempty" firestore:"-"`
+	FamilyValidatedCount int                         `json:"familyValidatedCount,omitempty" firestore:"-"`
+	FamilyGapCount       int                         `json:"familyGapCount,omitempty" firestore:"-"`
+	TraceEndpoints       *SupplyChainTraceContext    `json:"traceEndpoints,omitempty" firestore:"-"`
 	RiskOverlay          *SupplyChainPathRiskOverlay `json:"riskOverlay,omitempty" firestore:"-"`
 }
 
@@ -162,7 +172,10 @@ func (a *MaterializedArtifact) Validate() error {
 		if err := validateSupplyChainAssemblyGraphPayload(a.Payload); err != nil {
 			return fmt.Errorf("invalid SUPPLY_CHAIN_ASSEMBLY_GRAPH payload: %w", err)
 		}
-	case MaterializedKindRegulatoryImpactMap, MaterializedKindGovernanceChain, MaterializedKindEcosystemMap:
+	case MaterializedKindRegulatoryImpactMap, MaterializedKindRegulatoryImpactTransmissionPath,
+		MaterializedKindRegulatoryTimeline, MaterializedKindRegulatoryCascadeMap,
+		MaterializedKindRegulatoryImpactScenario,
+		MaterializedKindGovernanceChain, MaterializedKindEcosystemMap:
 		if err := validateRelationsGraphPayload(a.Payload); err != nil {
 			return fmt.Errorf("invalid %s payload: %w", string(a.Kind), err)
 		}
@@ -261,7 +274,7 @@ type SupplyChainPathPayload struct {
 	Nodes []SupplyChainPathNode `json:"nodes"`
 
 	// Edges: optional array of edges/transitions between nodes.
-	// Can represent supply links, ontology transitions (TRANSFORMS_INTO), etc.
+	// Can represent supply links, ontology transitions (TRANSFORMS_INTO / ASSEMBLES_INTO / USED_IN), etc.
 	Edges []SupplyChainPathEdge `json:"edges,omitempty"`
 
 	// Legs: optional ordered operational legs with route/zone bindings.
@@ -455,7 +468,7 @@ type SupplyChainPathEdge struct {
 	Metrics    map[string]MetricValue `json:"metrics,omitempty"`
 	Qualifiers map[string]interface{} `json:"qualifiers,omitempty"`
 
-	// Relation: for ONTOLOGY edges, the relation type (e.g., "TRANSFORMS_INTO")
+	// Relation: for ONTOLOGY edges, the relation type (e.g., "TRANSFORMS_INTO", "USED_IN")
 	Relation string `json:"relation,omitempty"`
 
 	// FromProductIndex/ToProductIndex: for ONTOLOGY edges, product node indices

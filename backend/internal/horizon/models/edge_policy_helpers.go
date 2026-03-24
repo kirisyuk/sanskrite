@@ -7,6 +7,7 @@ func HasOwnershipEvidence(reason string, qualifiers map[string]interface{}, metr
 	ownershipMetricKeys := []string{
 		"ownership_percent",
 		"voting_percent",
+		"voting_rights_percent",
 		"equity_share",
 		"stake_percent",
 		"controlling_interest",
@@ -19,9 +20,14 @@ func HasOwnershipEvidence(reason string, qualifiers map[string]interface{}, metr
 
 	ownershipQualifierKeys := []string{
 		"ownership_percent",
+		"stake_pct",
 		"voting_percent",
+		"voting_rights_percent",
 		"equity_share",
 		"stake_percent",
+		"share_type",
+		"control_type",
+		"mechanism",
 		"ownershipEvidence",
 		"isOwner",
 	}
@@ -48,7 +54,12 @@ func HasOwnershipEvidence(reason string, qualifiers map[string]interface{}, metr
 			if s == "" {
 				continue
 			}
-			if s == "true" || s == "yes" || s == "owner" {
+			if s == "true" || s == "yes" || s == "owner" ||
+				s == "direct" || s == "indirect" || s == "beneficial" ||
+				s == "equity" || s == "board" || s == "golden_share" ||
+				s == "veto" || s == "trustee" || s == "state" || s == "contractual" ||
+				s == "board_majority" || s == "veto_right" ||
+				s == "trustee_mandate" || s == "nominee_structure" {
 				return true
 			}
 		}
@@ -69,6 +80,10 @@ func HasOwnershipEvidence(reason string, qualifiers map[string]interface{}, metr
 		"subsidiary",
 		"majority share",
 		"controlling interest",
+		"beneficial owner",
+		"ultimate beneficial owner",
+		"nominee",
+		"trustee",
 	}
 	for _, term := range ownershipTerms {
 		if strings.Contains(text, term) {

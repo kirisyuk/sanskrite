@@ -309,7 +309,13 @@ func (e *PropagationEngine) buildTypedRWRTransition(
 	}
 	if adapter != nil {
 		beforeHook := nextAmplitude
-		hookSignal := &horizonmodels.SignalDescriptor{Axis: nextAxis, Mechanism: signal.Mechanism, Amplitude: nextAmplitude, Polarity: signal.Polarity}
+		hookSignal := &horizonmodels.SignalDescriptor{
+			Axis:              nextAxis,
+			Mechanism:         signal.Mechanism,
+			Amplitude:         nextAmplitude,
+			Polarity:          signal.Polarity,
+			RegulatoryContext: signal.RegulatoryContext,
+		}
 		if hook, err := adapter.TransferHook(ctx, hookSignal, neighbor.edge, fromNode.Fragment); err == nil && hook != nil {
 			traceFactors = mergeFactorMaps(traceFactors, hook.DebugFactors, "adapter.")
 			if hook.Skip {

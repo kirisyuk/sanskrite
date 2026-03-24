@@ -60,11 +60,12 @@ const (
 	stageEntitySupplyChainFastAssembly = "supply_chain_fast_assembly"
 	stageEntitySupplyChainRefine       = "supply_chain_refine"
 
-	stageDomainFragmentUpsert      = "domain_fragment_upsert"
-	stageDomainRelationMaterialize = "domain_relation_materialization"
-	stageDomainSupplyChains        = "domain_supply_chain_materialization"
-	stageDomainOverlayExtraction   = "domain_overlay_extraction"
-	stageDomainOverlayRelations    = "domain_overlay_relation_materialization"
+	stageDomainFragmentUpsert       = "domain_fragment_upsert"
+	stageDomainRelationMaterialize  = "domain_relation_materialization"
+	stageDomainSupplyChains         = "domain_supply_chain_materialization"
+	stageDomainPolicyImpactArtifact = "domain_policy_impact_artifact"
+	stageDomainOverlayExtraction    = "domain_overlay_extraction"
+	stageDomainOverlayRelations     = "domain_overlay_relation_materialization"
 
 	stageArtifactPersistence = "artifact_persistence"
 )
@@ -181,6 +182,7 @@ func normalizePipelineStage(stage string) string {
 		stageEntitySupplyChainMaterialize,
 		stageDomainRelationMaterialize,
 		stageDomainSupplyChains,
+		stageDomainPolicyImpactArtifact,
 		stageDomainOverlayRelations,
 		stageArtifactPersistence:
 		return stageMaterialize
@@ -916,7 +918,6 @@ func (e *ScoutEngine) finalizePipelineRun(ctx context.Context, job *models.Scout
 		if !found {
 			barrier.Missing = append(barrier.Missing, stageEntitySupplyChainFastAssembly)
 		}
-		barrier.Ready = false
 	}
 	degraded, degradeDetails := collectPipelineDegradation(job)
 
