@@ -185,6 +185,14 @@ func (s *Service) ListRecentByTenant(ctx context.Context, tenantID string, limit
 	return s.runs.ListRecentByTenant(ctx, tenantID, limit)
 }
 
+func (s *Service) GetLatestRunByLens(ctx context.Context, tenantID, lensID string) (*horizonmodels.SimulationRun, error) {
+	return s.runs.GetLatestByTenantAndLens(ctx, tenantID, lensID)
+}
+
+func (s *Service) ListRunsByLens(ctx context.Context, tenantID, lensID string, limit int) ([]*horizonmodels.SimulationRun, error) {
+	return s.runs.ListByTenantAndLens(ctx, tenantID, lensID, limit)
+}
+
 func (s *Service) ListWorlds(ctx context.Context, tenantID, runID string) ([]*horizonmodels.SimulationWorld, error) {
 	return s.worlds.ListByRun(ctx, tenantID, runID, 256)
 }

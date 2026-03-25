@@ -153,6 +153,38 @@ const edgeLabelOffset = (
   };
 };
 
+type EdgeCaptionShortFn = (raw: any) => string | undefined;
+
+/** Product + dominant stress factors on materialized path edges (readable without opening inspector). */
+const buildSupplyPathEdgeCaption = (params: {
+  edgeType: string;
+  role?: string;
+  getEdgeCaptionShort: EdgeCaptionShortFn;
+  productRef?: string;
+  dominantFactors?: unknown[];
+  stressScore?: number;
+  bottleneck?: boolean;
+}): string => {
+  const role = String(params.role || '').trim();
+  const base =
+    role === 'logistics_leg'
+      ? 'Via'
+      : params.getEdgeCaptionShort(params.edgeType) || params.edgeType;
+  const parts: string[] = [base];
+  const pr = String(params.productRef || '').trim();
+  if (pr) parts.push(humanizeCanonicalPath(pr) || pr);
+  const factors = Array.isArray(params.dominantFactors)
+    ? params.dominantFactors.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 2)
+    : [];
+  if (factors.length) parts.push(factors.join(' · '));
+  if (typeof params.stressScore === 'number' && Number.isFinite(params.stressScore) && params.stressScore > 0) {
+    parts.push(
+      params.bottleneck ? `bottleneck ${params.stressScore.toFixed(2)}` : `stress ${params.stressScore.toFixed(2)}`,
+    );
+  }
+  return parts.join(' · ');
+};
+
 const CORRIDOR_SYN_NODE_PREFIX = 'corridor:syn:';
 const CORRIDOR_SYN_EDGE_PREFIX = 'corridor:synedge:';
 const CORRIDOR_LEGACY_NODE_PREFIXES = ['corridor:group:', 'corridor:lane:', 'corridor:node:', 'corridor:more:'] as const;
@@ -328,9 +360,20 @@ const ExplainEdgeLabel: React.FC<{
             fontWeight: 700,
             letterSpacing: '0.2px',
             boxShadow: theme === 'dark' ? '0 8px 20px rgba(0,0,0,0.35)' : '0 8px 20px rgba(0,0,0,0.12)',
+            maxWidth: 340,
           }}
         >
-          <span style={{ pointerEvents: 'none' }}>{caption}</span>
+          <span
+            style={{
+              pointerEvents: 'none',
+              maxWidth: 300,
+              whiteSpace: 'normal',
+              lineHeight: 1.25,
+              textAlign: 'center',
+            }}
+          >
+            {caption}
+          </span>
           {typeof onExplain === 'function' && (
             <button
               type="button"
@@ -4816,10 +4859,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       const payloadLegs = artifact.payload?.legs || [];
       const pathStress = artifact.payload?.stress || null;
       const legByIndex = new Map<number, (typeof payloadLegs)[number]>();
-      for (const leg of payloadLegs) {
-        if (typeof leg?.index === 'number' && Number.isFinite(leg.index)) {
-          legByIndex.set(leg.index, leg);
-        }
+      for (let li = 0; li < payloadLegs.length; li += 1) {
+        const leg = payloadLegs[li];
+        const n = Number((leg as any)?.index ?? (leg as any)?.Index);
+        const resolved = Number.isFinite(n) ? n : li;
+        legByIndex.set(resolved, leg);
       }
       const existingEdgeIds = new Set((edges || []).map((e) => String((e as any)?.id || '').trim()));
       const resolvePathEdgeType = (edge: any): string => {
@@ -4968,6 +5012,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           riskCoverageStatus: String(artifact.sufficiencyStatus || pathSufficiency?.status || '').trim() || undefined,
         } as Record<string, any>;
 
+        const supplyEdgeCaption = buildSupplyPathEdgeCaption({
+          edgeType,
+          role: String(e.role || ''),
+          getEdgeCaptionShort,
+          productRef: String(pathEdgeMeta.pathProductRef || e.productRef || '').trim() || undefined,
+          dominantFactors: pathEdgeMeta.pathDominantFactors,
+          stressScore: pathEdgeMeta.pathStressScore,
+          bottleneck: pathEdgeMeta.pathBottleneck,
+        });
+
         const productIdx = e.productNodeIndex ?? e.viaProductIndex ?? (e as any).productNodeIndex ?? (e as any).viaProductIndex;
         if (
           edgeType === 'SUPPLIES_TO' &&
@@ -4985,7 +5039,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               'PRODUCES',
               {
                 ...pathEdgeMeta,
-                edgeCaption: getEdgeCaptionShort('PRODUCES'),
+                edgeCaption: buildSupplyPathEdgeCaption({
+                  edgeType: 'PRODUCES',
+                  role: String(e.role || ''),
+                  getEdgeCaptionShort,
+                  productRef: String(pathEdgeMeta.pathProductRef || e.productRef || '').trim() || undefined,
+                  dominantFactors: pathEdgeMeta.pathDominantFactors,
+                  stressScore: pathEdgeMeta.pathStressScore,
+                  bottleneck: pathEdgeMeta.pathBottleneck,
+                }),
               },
             );
             addEdge(
@@ -4995,7 +5057,15 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               'SUPPLIES_TO',
               {
                 ...pathEdgeMeta,
-                edgeCaption: getEdgeCaptionShort('SUPPLIES_TO'),
+                edgeCaption: buildSupplyPathEdgeCaption({
+                  edgeType: 'SUPPLIES_TO',
+                  role: String(e.role || ''),
+                  getEdgeCaptionShort,
+                  productRef: String(pathEdgeMeta.pathProductRef || e.productRef || '').trim() || undefined,
+                  dominantFactors: pathEdgeMeta.pathDominantFactors,
+                  stressScore: pathEdgeMeta.pathStressScore,
+                  bottleneck: pathEdgeMeta.pathBottleneck,
+                }),
               },
             );
             continue;
@@ -5009,10 +5079,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           edgeType,
           {
             ...pathEdgeMeta,
-            edgeCaption:
-              String(e.role || '').trim() === 'logistics_leg'
-                ? 'Via'
-                : getEdgeCaptionShort(edgeType),
+            edgeCaption: supplyEdgeCaption,
           },
         );
       }
@@ -7409,7 +7476,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       }, 100);
 
       // 5. Сохраняем LensItems асинхронно в фоне и обновляем ID
-      dbg('[Cockpit] Saving lens items in background...', { nodes: fragments.length, edges: edges.length });
+      dbg('[Cockpit] Saving lens items in background...', { nodes: fragments.length, edges: filteredEdges.length });
       
       // Создаём LensItems для сохранения
       const posByFragmentId = new Map<string, { x: number; y: number }>();
@@ -7445,21 +7512,36 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         };
       });
 
-      // Persist edges in the same order as we render them (graphEdges) to keep response↔edge mapping stable.
-      const edgeItems: Partial<LensItem>[] = graphEdges.map((e: any) => {
-        const edgeType = String(e?.data?.edgeType || e?.label || e?.data?.subkind || '').trim() || 'DEPENDS_ON';
-        return {
-          kind: 'edge' as const,
-          subkind: edgeType,
-          sourceFragmentId: norm(e.source),
-          targetFragmentId: norm(e.target),
-          edgeType: edgeType as any,
-          criticality: e?.data?.criticality,
-          amplification: e?.data?.amplification,
-          latencyHours: e?.data?.latencyHours,
-          direction: 'forward' as const,
-        };
-      });
+      // Persist only the visible/surviving edges and resolve real fragment ids from the laid-out nodes.
+      const fragmentIdByNodeId = new Map<string, string>();
+      for (const node of layoutedNodes) {
+        const nodeId = norm(node?.id);
+        const fragmentId = norm((node?.data as any)?.fragmentId || node?.id);
+        if (nodeId && fragmentId) fragmentIdByNodeId.set(nodeId, fragmentId);
+      }
+      const persistedEdges = filteredEdges;
+      const edgeItems = persistedEdges.reduce<Partial<LensItem>[]>((acc, e: any) => {
+          const edgeType = String(e?.data?.edgeType || e?.label || e?.data?.subkind || '').trim() || 'DEPENDS_ON';
+          const sourceFragmentId =
+            fragmentIdByNodeId.get(norm(e?.source)) ||
+            norm(e?.data?.sourceFragmentId || e?.source);
+          const targetFragmentId =
+            fragmentIdByNodeId.get(norm(e?.target)) ||
+            norm(e?.data?.targetFragmentId || e?.target);
+          if (!sourceFragmentId || !targetFragmentId || sourceFragmentId === targetFragmentId) return acc;
+          acc.push({
+            kind: 'edge' as const,
+            subkind: edgeType,
+            sourceFragmentId,
+            targetFragmentId,
+            edgeType: edgeType as any,
+            criticality: e?.data?.criticality,
+            amplification: e?.data?.amplification,
+            latencyHours: e?.data?.latencyHours,
+            direction: 'forward' as const,
+          });
+          return acc;
+        }, []);
 
       // Сохраняем асинхронно и обновляем ID
       Promise.all([
@@ -7502,7 +7584,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           
           responses.slice(nodeItems.length, nodeItems.length + edgeItems.length).forEach((response, index) => {
             const itemData = edgeItems[index];
-            const localEdgeId = String((graphEdges[index] as any)?.id || '').trim();
+            const localEdgeId = String((persistedEdges[index] as any)?.id || '').trim();
             if (localEdgeId) edgeLensItemIdByLocalEdgeId.set(localEdgeId, response.id);
             createdItems.push({
               id: response.id,
@@ -10947,9 +11029,29 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       return applyFragmentProfileDimming(applySelectedEdge(orderByRaised(out)));
     }
 
-    // Default: dim all edges, hide labels
-    return applyFragmentProfileDimming(applySelectedEdge(edgesForDisplay));
-  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, hoverHighlightMode, signalPropagationOverlay, signalPropagationEdgeIdSet, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId, selectedEdgeId, selectedLevelsAggGroupId, selectedLevelsAggEdgeType, fragmentProfileActiveNodeId, domainOverlayHoverEdgeIdSet, domainOverlayHoverNodeIdSet, domainOverlayHighlightEdgeIds, domainOverlayHighlightNodeIds, controlCorridorMode, focusMode, qaHighlightEdgeIdSet]);
+    // Default: dim edges; keep captions visible on materialized supply-path segments so product + stress
+    // drivers are readable without hover (generic edgeCaption alone is not enough).
+    const defaultOut = edgesForDisplay.map((e) => {
+      const d: any = (e as any)?.data || {};
+      const pathId = String(d.pathArtifactId || '').trim();
+      const { baseStyle } = baseStyled(e);
+      if (!pathId) {
+        return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY }, false);
+      }
+      const stressOn =
+        typeof d.pathStressScore === 'number' && Number.isFinite(d.pathStressScore) && d.pathStressScore > 0;
+      const hasProduct = Boolean(String(d.pathProductRef || '').trim());
+      const hasFactors = Array.isArray(d.pathDominantFactors) && d.pathDominantFactors.length > 0;
+      const showPathCaption =
+        isSupplyChainLayout || simulationOverlayOpen || stressOn || hasProduct || hasFactors;
+      if (!showPathCaption) {
+        return withLabel(e, false, { ...baseStyle, opacity: DIM_OPACITY }, false);
+      }
+      const strokeWidth = typeof (baseStyle as any).strokeWidth === 'number' ? (baseStyle as any).strokeWidth : 1.5;
+      return withLabel(e, true, { ...baseStyle, opacity: 1, strokeWidth: strokeWidth + 0.35 }, true);
+    });
+    return applyFragmentProfileDimming(applySelectedEdge(orderByRaised(defaultOut)));
+  }, [baseVisibleEdges, hoveredEdgeId, hoveredGroupId, hoveredNodeId, nodes, normalizeEdgeType, selectedNodeId, perfMode, hoverHighlight, hoverHighlightMode, signalPropagationOverlay, signalPropagationEdgeIdSet, theme, getEdgeCaptionShort, isLevelsLayout, levelsAggKeysByNodeId, selectedEdgeId, selectedLevelsAggGroupId, selectedLevelsAggEdgeType, fragmentProfileActiveNodeId, domainOverlayHoverEdgeIdSet, domainOverlayHoverNodeIdSet, domainOverlayHighlightEdgeIds, domainOverlayHighlightNodeIds, controlCorridorMode, focusMode, qaHighlightEdgeIdSet, isSupplyChainLayout, simulationOverlayOpen]);
 
   // Right-side temporary stacking toggle (Levels layout):
   // The layout will mark the controlling node with stackGroupKey/stackCount/stackExpanded.
@@ -13177,6 +13279,23 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const existingIndex = current.findIndex((edge: any) => String(edge?.id || '').trim() === edgeId);
         if (existingIndex >= 0) {
           const existing = current[existingIndex] as any;
+          const existingData = existing?.data || {};
+          const sameShape =
+            String(existing?.source || '').trim() === sourceNodeId &&
+            String(existing?.target || '').trim() === targetNodeId &&
+            String(existing?.type || '').trim() === 'default' &&
+            String(existingData?.edgeType || '').trim() === edgeType &&
+            String(existingData?.edgeCaption || '').trim() === String(getEdgeCaptionShort(edgeType) || '').trim() &&
+            String(existingData?.sourceFragmentId || '').trim() === sourceFragmentId &&
+            String(existingData?.targetFragmentId || '').trim() === targetFragmentId &&
+            String(existingData?.sourceCanonicalPath || '').trim() === String(raw?.sourceCanonicalPath || '').trim() &&
+            String(existingData?.targetCanonicalPath || '').trim() === String(raw?.targetCanonicalPath || '').trim() &&
+            String(existingData?.lensItemId || '').trim() === String(cachedLensItemId || '').trim() &&
+            Boolean(existingData?.isDirectedExplorationSynthetic) === true &&
+            JSON.stringify(existingData?.qualifiers ?? null) === JSON.stringify(raw?.qualifiers ?? null) &&
+            JSON.stringify(existing?.style || null) === JSON.stringify(baseStyle || null) &&
+            String((existing?.markerEnd as any)?.color || '').trim() === stroke;
+          if (sameShape) return prev;
           const merged = {
             ...existing,
             ...nextEdge,

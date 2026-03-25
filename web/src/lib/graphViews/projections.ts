@@ -18,6 +18,8 @@ import type {
   SupplyFlowGraphViewState,
   ValueChainGraphViewState,
   SupplyFlowViewMeta,
+  InfluenceActorRole,
+  InfluenceClass,
   InfluenceViewMeta,
   ValueChainViewMeta,
 } from './types';
@@ -164,98 +166,482 @@ export function buildInfluenceProjection<T = any>(
   edges: Edge[],
   viewState: InfluenceGraphViewState,
 ): GraphProjectionResult<T> {
-  const degrees = degreeMapFor(edges);
   const assignments = new Map<string, LayeredAssignment>();
-  const clusterColumn = {
-    family: 0,
-    community: 1,
-    organization: 2,
-    institution: 3,
-    geography: 4,
-    market: 5,
-    other: 6,
-  } as const;
-  const actorLane = {
-    family: 0,
+
+  type ActorBase = ReturnType<typeof classifyInfluenceActor>;
+  type DraftNode = {
+    id: string;
+    node: Node<T>;
+    label: string;
+    degree: number;
+    base: ActorBase;
+    meta: InfluenceViewMeta;
+  };
+  type VisibleEdge = {
+    edge: Edge;
+    id: string;
+    source: string;
+    target: string;
+    influenceClass: InfluenceClass;
+    edgeType: string;
+  };
+
+  const actorPriority = (role: InfluenceActorRole): number => {
+    switch (role) {
+      case 'dynasty':
+        return 0;
+      case 'family':
+        return 1;
+      case 'tribe':
+        return 2;
+      case 'community':
+        return 3;
+      case 'organization':
+        return 4;
+      case 'facility':
+        return 5;
+      case 'intermediary':
+        return 6;
+      case 'person':
+        return 7;
+      case 'government':
+        return 8;
+      case 'regulator':
+        return 9;
+      case 'market':
+        return 10;
+      case 'country':
+        return 11;
+      case 'region':
+        return 12;
+      default:
+        return 20;
+    }
+  };
+
+  const ownershipLaneByRole: Record<InfluenceActorRole, number> = {
     dynasty: 0,
+    family: 0,
     tribe: 1,
     community: 1,
     organization: 2,
+    facility: 2,
+    intermediary: 3,
+    person: 3,
     government: 2,
     regulator: 1,
-    person: 3,
-    country: 0,
-    region: 0,
     market: 4,
-    intermediary: 3,
-    facility: 2,
-    other: 5,
+    country: 5,
+    region: 5,
+    other: 6,
+  };
+
+  const railLane = {
+    lineage: 0,
+    governance: 1,
+    ownership: 2,
+    people: 3,
+    market: 4,
+    geography: 5,
+    other: 6,
   } as const;
 
-  const projectedNodes = nodes
-    .map((node) => {
-      const metaBase = classifyInfluenceActor(node);
-      if (viewState.actorClassFilter !== 'all' && metaBase.actorRole !== viewState.actorClassFilter) {
-        return null;
-      }
-      const degree = degrees.get(String(node.id || '').trim()) || 0;
-      const clusterId = metaBase.geoAnchor
-        ? `${metaBase.clusterIdSeed}:${metaBase.geoAnchor.id}`
-        : metaBase.clusterIdSeed;
-      const influenceMeta: InfluenceViewMeta = {
-        clusterId,
-        clusterKind: metaBase.clusterKind,
-        clusterLabel: metaBase.clusterLabel,
-        actorRole: metaBase.actorRole,
-        geoAnchor: metaBase.geoAnchor,
-        countryAnchor: metaBase.geoAnchor?.kind === 'country' ? metaBase.geoAnchor.id : undefined,
-        centralityBucket: degree >= 6 ? 'high' : degree >= 3 ? 'medium' : 'low',
-      };
-      assignments.set(String(node.id || '').trim(), {
-        column: clusterColumn[influenceMeta.clusterKind],
-        lane: actorLane[influenceMeta.actorRole],
-        clusterKey: influenceMeta.clusterId,
-        orderKey: `${influenceMeta.centralityBucket}:${labelOf(node)}`,
-        importance: degree + (influenceMeta.centralityBucket === 'high' ? 6 : influenceMeta.centralityBucket === 'medium' ? 3 : 0),
-        pinned: influenceMeta.actorRole === 'country' || influenceMeta.actorRole === 'region' || influenceMeta.actorRole === 'family' || influenceMeta.actorRole === 'dynasty',
-      });
-      return {
-        ...node,
-        data: {
-          ...(node.data as any),
-          graphView: 'influence-network',
-          geoAnchor: influenceMeta.geoAnchor,
-          influenceMeta,
-        },
-      };
-    })
-    .filter((node): node is Node<T> => Boolean(node));
+  const ownershipPriority = (edgeType: string): number => {
+    switch (edgeType) {
+      case 'OWNS':
+      case 'PARENT_OF':
+      case 'SUBSIDIARY_OF':
+        return 1;
+      case 'CONTROLS':
+        return 2;
+      case 'MANAGES':
+        return 3;
+      case 'INVESTS_IN':
+        return 4;
+      default:
+        return 99;
+    }
+  };
 
-  const visibleNodeIds = new Set(projectedNodes.map((node) => String(node.id || '').trim()));
-  const projectedEdges = edges
-    .filter((edge) => visibleNodeIds.has(String(edge.source || '').trim()) && visibleNodeIds.has(String(edge.target || '').trim()))
+  const directionForOwnership = (edgeType: string, source: string, target: string): { parentId: string; childId: string } | null => {
+    if (!source || !target) return null;
+    if (edgeType === 'SUBSIDIARY_OF') return { parentId: target, childId: source };
+    if (edgeType === 'OWNS' || edgeType === 'PARENT_OF' || edgeType === 'CONTROLS' || edgeType === 'MANAGES' || edgeType === 'INVESTS_IN') {
+      return { parentId: source, childId: target };
+    }
+    return null;
+  };
+
+  const roleForRail = (draft: DraftNode, fallback?: InfluenceViewMeta['rail']): NonNullable<InfluenceViewMeta['rail']> => {
+    if (draft.meta.isOwnershipCore) return 'ownership';
+    if (fallback) return fallback;
+    switch (draft.base.actorRole) {
+      case 'dynasty':
+      case 'family':
+      case 'tribe':
+      case 'community':
+        return 'lineage';
+      case 'person':
+      case 'intermediary':
+        return 'people';
+      case 'government':
+      case 'regulator':
+        return 'governance';
+      case 'market':
+        return 'market';
+      case 'country':
+      case 'region':
+        return 'geography';
+      case 'organization':
+      case 'facility':
+        return 'ownership';
+      default:
+        return 'other';
+    }
+  };
+
+  const rawVisibleNodes = nodes
+    .map((node) => {
+      const id = String(node.id || '').trim();
+      if (!id) return null;
+      const base = classifyInfluenceActor(node);
+      if (viewState.actorClassFilter !== 'all' && base.actorRole !== viewState.actorClassFilter) return null;
+      const clusterId = base.geoAnchor ? `${base.clusterIdSeed}:${base.geoAnchor.id}` : base.clusterIdSeed;
+      const degree = 0;
+      const meta: InfluenceViewMeta = {
+        clusterId,
+        clusterKind: base.clusterKind,
+        clusterLabel: base.clusterLabel,
+        actorRole: base.actorRole,
+        geoAnchor: base.geoAnchor,
+        countryAnchor: base.geoAnchor?.kind === 'country' ? base.geoAnchor.id : undefined,
+        centralityBucket: 'low',
+      };
+      return {
+        id,
+        node,
+        label: labelOf(node),
+        degree,
+        base,
+        meta,
+      } satisfies DraftNode;
+    })
+    .filter((node): node is DraftNode => Boolean(node));
+
+  const visibleNodeIds = new Set(rawVisibleNodes.map((node) => node.id));
+  const visibleEdges = edges
     .map((edge) => {
+      const id = String(edge.id || '').trim();
+      const source = String(edge.source || '').trim();
+      const target = String(edge.target || '').trim();
+      if (!id || !source || !target) return null;
+      if (!visibleNodeIds.has(source) || !visibleNodeIds.has(target)) return null;
       const influenceClass = classifyInfluenceRelation(edgeTypeOf(edge));
       if (viewState.influenceClassFilter !== 'all' && influenceClass !== viewState.influenceClassFilter) return null;
-      const sourceNode = projectedNodes.find((node) => node.id === edge.source);
-      const targetNode = projectedNodes.find((node) => node.id === edge.target);
-      const sourceMeta = (sourceNode?.data as any)?.influenceMeta as InfluenceViewMeta | undefined;
-      const targetMeta = (targetNode?.data as any)?.influenceMeta as InfluenceViewMeta | undefined;
-      const bundleId =
-        sourceMeta?.geoAnchor?.id && targetMeta?.geoAnchor?.id
-          ? `${sourceMeta.geoAnchor.id}:${targetMeta.geoAnchor.id}:${influenceClass}`
-          : `${sourceMeta?.clusterId || 'source'}:${targetMeta?.clusterId || 'target'}:${influenceClass}`;
-      return decorateEdgeMeta(edge, {
-        graphView: 'influence-network',
-        routingHint: {
-          preferredAxis: sourceMeta?.clusterId === targetMeta?.clusterId ? 'vertical' : 'horizontal',
-          sameCluster: sourceMeta?.clusterId === targetMeta?.clusterId,
-          bundleId,
-        },
-        influenceMeta: { influenceClass },
-      });
+      return {
+        edge,
+        id,
+        source,
+        target,
+        influenceClass,
+        edgeType: edgeTypeOf(edge),
+      } satisfies VisibleEdge;
     })
-    .filter((edge): edge is Edge => Boolean(edge));
+    .filter((edge): edge is VisibleEdge => Boolean(edge));
+
+  const visibleDegrees = degreeMapFor(visibleEdges.map((edge) => edge.edge));
+  const nodeById = new Map<string, DraftNode>();
+  for (const draft of rawVisibleNodes) {
+    const degree = visibleDegrees.get(draft.id) || 0;
+    draft.degree = degree;
+    draft.meta.centralityBucket = degree >= 6 ? 'high' : degree >= 3 ? 'medium' : 'low';
+    nodeById.set(draft.id, draft);
+  }
+
+  const parentByNodeId = new Map<string, string>();
+  const parentPriorityByNodeId = new Map<string, number>();
+  const childrenByParentId = new Map<string, string[]>();
+  const ownershipNodeIds = new Set<string>();
+
+  for (const edge of visibleEdges) {
+    if (edge.influenceClass !== 'ownership-control') continue;
+    const directed = directionForOwnership(edge.edgeType, edge.source, edge.target);
+    if (!directed) continue;
+    const priority = ownershipPriority(edge.edgeType);
+    const existingPriority = parentPriorityByNodeId.get(directed.childId);
+    if (existingPriority == null || priority < existingPriority) {
+      parentByNodeId.set(directed.childId, directed.parentId);
+      parentPriorityByNodeId.set(directed.childId, priority);
+    }
+    ownershipNodeIds.add(directed.parentId);
+    ownershipNodeIds.add(directed.childId);
+  }
+
+  for (const [childId, parentId] of parentByNodeId.entries()) {
+    const list = childrenByParentId.get(parentId) || [];
+    list.push(childId);
+    childrenByParentId.set(parentId, list);
+  }
+
+  const rootScore = (nodeId: string): number => {
+    const draft = nodeById.get(nodeId);
+    if (!draft) return 0;
+    let score = 0;
+    if (draft.base.actorRole === 'dynasty') score += 12;
+    else if (draft.base.actorRole === 'family') score += 10;
+    else if (draft.base.actorRole === 'tribe' || draft.base.actorRole === 'community') score += 8;
+    else if (draft.base.actorRole === 'organization') score += 5;
+    score += draft.degree;
+    return score;
+  };
+
+  const ownershipRoots = Array.from(ownershipNodeIds)
+    .filter((nodeId) => !parentByNodeId.has(nodeId) || !ownershipNodeIds.has(parentByNodeId.get(nodeId)!))
+    .sort((a, b) => {
+      const scoreDiff = rootScore(b) - rootScore(a);
+      if (scoreDiff !== 0) return scoreDiff;
+      return (nodeById.get(a)?.label || a).localeCompare(nodeById.get(b)?.label || b);
+    });
+
+  const depthByNodeId = new Map<string, number>();
+  const rootByNodeId = new Map<string, string>();
+  const visitOwnership = (nodeId: string, rootId: string, depth: number) => {
+    const prevDepth = depthByNodeId.get(nodeId);
+    if (prevDepth != null && prevDepth <= depth) return;
+    depthByNodeId.set(nodeId, depth);
+    rootByNodeId.set(nodeId, rootId);
+    const children = (childrenByParentId.get(nodeId) || []).slice().sort((a, b) => {
+      const aNode = nodeById.get(a);
+      const bNode = nodeById.get(b);
+      const actorDiff = actorPriority(aNode?.base.actorRole || 'other') - actorPriority(bNode?.base.actorRole || 'other');
+      if (actorDiff !== 0) return actorDiff;
+      return (aNode?.label || a).localeCompare(bNode?.label || b);
+    });
+    for (const childId of children) visitOwnership(childId, rootId, depth + 1);
+  };
+
+  for (const rootId of ownershipRoots) {
+    visitOwnership(rootId, rootId, 0);
+  }
+
+  for (const nodeId of ownershipNodeIds) {
+    if (depthByNodeId.has(nodeId)) continue;
+    visitOwnership(nodeId, nodeId, 0);
+  }
+
+  for (const nodeId of ownershipNodeIds) {
+    const draft = nodeById.get(nodeId);
+    if (!draft) continue;
+    draft.meta.isOwnershipCore = true;
+    draft.meta.controlDepth = depthByNodeId.get(nodeId) ?? 0;
+    draft.meta.rootId = rootByNodeId.get(nodeId) || nodeId;
+    draft.meta.anchorId = parentByNodeId.get(nodeId) || nodeId;
+    draft.meta.isRootOwner = (draft.meta.controlDepth ?? 0) === 0;
+  }
+
+  const incidentVisibleEdges = new Map<string, VisibleEdge[]>();
+  const addIncident = (nodeId: string, edge: VisibleEdge) => {
+    const list = incidentVisibleEdges.get(nodeId) || [];
+    list.push(edge);
+    incidentVisibleEdges.set(nodeId, list);
+  };
+  for (const edge of visibleEdges) {
+    addIncident(edge.source, edge);
+    addIncident(edge.target, edge);
+  }
+
+  const placementByNodeId = new Map<string, { column: number; anchorId: string; rootId: string; rail: NonNullable<InfluenceViewMeta['rail']> }>();
+
+  for (const draft of rawVisibleNodes) {
+    if (!draft.meta.isOwnershipCore) continue;
+    const column = draft.meta.controlDepth ?? 0;
+    const rootId = draft.meta.rootId || draft.id;
+    const anchorId = draft.meta.anchorId || draft.id;
+    placementByNodeId.set(draft.id, { column, anchorId, rootId, rail: 'ownership' });
+    draft.meta.rail = 'ownership';
+  }
+
+  const inferPlacement = (draft: DraftNode): { column: number; anchorId: string; rootId: string; rail: NonNullable<InfluenceViewMeta['rail']> } => {
+    const incident = incidentVisibleEdges.get(draft.id) || [];
+    let best: { score: number; column: number; anchorId: string; rootId: string; rail: NonNullable<InfluenceViewMeta['rail']> } | null = null;
+    for (const edge of incident) {
+      const otherId = edge.source === draft.id ? edge.target : edge.source;
+      const otherPlacement = placementByNodeId.get(otherId);
+      if (!otherPlacement) continue;
+      let rail = roleForRail(draft);
+      let column = otherPlacement.column;
+      let score = 0;
+      switch (edge.influenceClass) {
+        case 'board-executive':
+          rail = 'people';
+          column = otherPlacement.column;
+          score = 140;
+          break;
+        case 'family-community':
+          rail = roleForRail(draft, 'lineage');
+          column = Math.max(0, otherPlacement.column - (rail === 'lineage' ? 1 : 0));
+          score = 130;
+          break;
+        case 'regulatory-leverage':
+        case 'political-access':
+          rail = 'governance';
+          column = otherPlacement.column + 1;
+          score = 120;
+          break;
+        case 'commercial-dependence':
+          rail = draft.base.actorRole === 'market' ? 'market' : roleForRail(draft);
+          column = otherPlacement.column + (rail === 'ownership' ? 0 : 1);
+          score = 96;
+          break;
+        case 'influence-general':
+          rail = roleForRail(draft);
+          column = otherPlacement.column + (rail === 'market' || rail === 'geography' ? 2 : 1);
+          score = 88;
+          break;
+        case 'other':
+          rail = roleForRail(draft);
+          column = otherPlacement.column + (rail === 'lineage' ? 0 : 1);
+          score = 60;
+          break;
+        default:
+          rail = roleForRail(draft);
+          column = otherPlacement.column;
+          score = 80;
+          break;
+      }
+      if (draft.base.actorRole === 'country' || draft.base.actorRole === 'region') {
+        rail = 'geography';
+        column = otherPlacement.column + 2;
+        score += 4;
+      } else if (draft.base.actorRole === 'market') {
+        rail = 'market';
+        column = otherPlacement.column + 2;
+        score += 4;
+      } else if (draft.base.actorRole === 'government' || draft.base.actorRole === 'regulator') {
+        rail = 'governance';
+        column = otherPlacement.column + 1;
+        score += 6;
+      }
+      if (!best || score > best.score) {
+        best = {
+          score,
+          column,
+          anchorId: otherPlacement.anchorId || otherId,
+          rootId: otherPlacement.rootId || otherId,
+          rail,
+        };
+      }
+    }
+    if (best) {
+      return { column: Math.max(0, best.column), anchorId: best.anchorId, rootId: best.rootId, rail: best.rail };
+    }
+
+    const fallbackRail = roleForRail(draft);
+    const fallbackColumn =
+      fallbackRail === 'lineage' ? 0 :
+      fallbackRail === 'ownership' ? 1 :
+      fallbackRail === 'people' ? 2 :
+      fallbackRail === 'governance' ? 3 :
+      fallbackRail === 'market' ? 4 :
+      fallbackRail === 'geography' ? 5 :
+      3;
+    return { column: fallbackColumn, anchorId: draft.id, rootId: draft.id, rail: fallbackRail };
+  };
+
+  for (let pass = 0; pass < 4; pass += 1) {
+    let changed = false;
+    for (const draft of rawVisibleNodes) {
+      if (placementByNodeId.has(draft.id)) continue;
+      const placement = inferPlacement(draft);
+      placementByNodeId.set(draft.id, placement);
+      draft.meta.anchorId = placement.anchorId;
+      draft.meta.rootId = placement.rootId;
+      draft.meta.rail = placement.rail;
+      changed = true;
+    }
+    if (!changed) break;
+  }
+
+  const projectedNodes = rawVisibleNodes.map((draft) => {
+    const placement = placementByNodeId.get(draft.id) || {
+      column: 0,
+      anchorId: draft.id,
+      rootId: draft.id,
+      rail: roleForRail(draft),
+    };
+    draft.meta.anchorId = draft.meta.anchorId || placement.anchorId;
+    draft.meta.rootId = draft.meta.rootId || placement.rootId;
+    draft.meta.rail = draft.meta.rail || placement.rail;
+    const laneBase = railLane[draft.meta.rail || 'other'] ?? railLane.other;
+    const lane = draft.meta.isOwnershipCore
+      ? ownershipLaneByRole[draft.base.actorRole] ?? railLane.ownership
+      : laneBase;
+    const stableOrderHint = Number(viewState.stableOrderHints?.[draft.id] ?? 0) || 0;
+    const clusterRoot = draft.meta.rootId || placement.rootId || draft.id;
+    const clusterAnchor = draft.meta.anchorId || placement.anchorId || draft.id;
+    assignments.set(draft.id, {
+      column: placement.column,
+      lane,
+      clusterKey: draft.meta.isOwnershipCore
+        ? `spine:${clusterRoot}`
+        : `${draft.meta.rail || 'other'}:${clusterAnchor}:${clusterRoot}`,
+      orderKey: `${String(stableOrderHint).padStart(6, '0')}:${String(draft.meta.controlDepth ?? 99).padStart(2, '0')}:${actorPriority(draft.base.actorRole)}:${draft.label}`,
+      importance:
+        draft.degree +
+        (draft.meta.isRootOwner ? 10 : 0) +
+        (draft.meta.isOwnershipCore ? 7 : 0) +
+        (draft.base.actorRole === 'regulator' ? 3 : 0) +
+        (draft.base.actorRole === 'market' ? 2 : 0),
+      pinned:
+        Boolean(draft.meta.isRootOwner) ||
+        draft.base.actorRole === 'country' ||
+        draft.base.actorRole === 'region' ||
+        draft.base.actorRole === 'dynasty' ||
+        draft.base.actorRole === 'family',
+    });
+    return {
+      ...draft.node,
+      data: {
+        ...(draft.node.data as any),
+        graphView: 'influence-network',
+        geoAnchor: draft.meta.geoAnchor,
+        influenceMeta: draft.meta,
+      },
+    };
+  });
+
+  const projectedNodeById = new Map(projectedNodes.map((node) => [String(node.id || '').trim(), node]));
+  const projectedEdges = visibleEdges.map((entry) => {
+    const sourceMeta = (projectedNodeById.get(entry.source)?.data as any)?.influenceMeta as InfluenceViewMeta | undefined;
+    const targetMeta = (projectedNodeById.get(entry.target)?.data as any)?.influenceMeta as InfluenceViewMeta | undefined;
+    const sameAnchor = Boolean(sourceMeta?.anchorId && targetMeta?.anchorId && sourceMeta.anchorId === targetMeta.anchorId);
+    const sameRail = Boolean(sourceMeta?.rail && targetMeta?.rail && sourceMeta.rail === targetMeta.rail);
+    const preferredAxis =
+      entry.influenceClass === 'ownership-control' ? 'horizontal' :
+      entry.influenceClass === 'board-executive' ? 'vertical' :
+      entry.influenceClass === 'family-community' ? 'vertical' :
+      entry.influenceClass === 'regulatory-leverage' || entry.influenceClass === 'political-access'
+        ? (sameAnchor ? 'vertical' : 'horizontal')
+        : sameRail && sameAnchor
+          ? 'vertical'
+          : 'horizontal';
+    const bundleId =
+      sourceMeta?.rootId && targetMeta?.rootId && sourceMeta.rootId === targetMeta.rootId
+        ? `${sourceMeta.rootId}:${entry.influenceClass}:${sourceMeta.rail || 'other'}:${targetMeta.rail || 'other'}`
+        : sourceMeta?.geoAnchor?.id && targetMeta?.geoAnchor?.id
+          ? `${sourceMeta.geoAnchor.id}:${targetMeta.geoAnchor.id}:${entry.influenceClass}`
+          : `${sourceMeta?.clusterId || 'source'}:${targetMeta?.clusterId || 'target'}:${entry.influenceClass}`;
+    return decorateEdgeMeta(entry.edge, {
+      graphView: 'influence-network',
+      routingHint: {
+        preferredAxis,
+        sameCluster: sameAnchor && sameRail,
+        sameLane: sameRail,
+        bundleId,
+      },
+      influenceMeta: { influenceClass: entry.influenceClass },
+    });
+  });
 
   return { nodes: projectedNodes, edges: projectedEdges, assignments };
 }

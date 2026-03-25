@@ -96,6 +96,34 @@ func TestDirectedExplorationAnchorPathHelpers(t *testing.T) {
 	}
 }
 
+func TestDirectedExplorationShouldIgnoreFreshness_ManualApiTrigger(t *testing.T) {
+	job := &horizonmodels.ScoutingJob{
+		AgentJob: coremodels.AgentJob{
+			State: map[string]interface{}{
+				"triggerOrigin": "api_manual",
+			},
+		},
+	}
+
+	if !directedExplorationShouldIgnoreFreshness(job) {
+		t.Fatal("expected manual api trigger to bypass freshness")
+	}
+}
+
+func TestDirectedExplorationShouldIgnoreFreshness_ForceDeepScout(t *testing.T) {
+	job := &horizonmodels.ScoutingJob{
+		AgentJob: coremodels.AgentJob{
+			State: map[string]interface{}{
+				"forceDeepScout": true,
+			},
+		},
+	}
+
+	if !directedExplorationShouldIgnoreFreshness(job) {
+		t.Fatal("expected forceDeepScout to bypass freshness")
+	}
+}
+
 func TestDirectedSupplyChainExplorationToolsSelection(t *testing.T) {
 	upstream := &horizonmodels.ScoutingJob{
 		AgentJob: coremodels.AgentJob{

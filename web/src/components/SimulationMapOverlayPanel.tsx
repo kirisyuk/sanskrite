@@ -19,8 +19,6 @@ const OVERLAY_KINDS: Array<{ key: OverlayKind; label: string }> = [
   { key: 'roles', label: 'Roles' },
 ];
 
-const USABLE_RUN_STATUSES = new Set(['SUCCEEDED', 'DEGRADED', 'REVIEWING', 'AGGREGATING']);
-
 const emptyOverlays = (): HorizonSimulationResultOverlays => ({
   shoulders: [],
   products: [],
@@ -92,18 +90,6 @@ const routeCountryCodes = (artifact: MaterializedArtifact): string[] => {
   return Array.from(codes);
 };
 
-const pickLatestRun = (runs: HorizonSimulationRunSummary[], lensId: string): HorizonSimulationRunSummary | null => {
-  const matching = runs
-    .filter((run) => String(run.request?.lensId || '').trim() === lensId)
-    .sort((a, b) => {
-      const aTs = Date.parse(String(a.createdAt || a.updatedAt || '')) || 0;
-      const bTs = Date.parse(String(b.createdAt || b.updatedAt || '')) || 0;
-      return bTs - aTs;
-    });
-  if (matching.length === 0) return null;
-  return matching.find((run) => USABLE_RUN_STATUSES.has(String(run.status || '').trim().toUpperCase())) || matching[0];
-};
-
 const formatDate = (value?: string): string => {
   const ts = Date.parse(String(value || ''));
   if (!Number.isFinite(ts)) return 'unknown';
@@ -143,12 +129,49 @@ const overlayMatchCount = (item: HorizonSimulationOverlayItem, matcher: RouteMat
   return score;
 };
 
+const matchedArtifactIdsForOverlay = (item: HorizonSimulationOverlayItem, routeMatchers: RouteMatcher[]): string[] => {
+  const ranked = routeMatchers
+    .map((matcher) => {
+      const directWeight = overlayMatchCount(item, matcher);
+      const stressWeight = typeof matcher.artifact.pathStressScore === 'number' ? matcher.artifact.pathStressScore : 0;
+      return {
+        artifactId: String(matcher.artifact.id || '').trim(),
+        directWeight,
+        stressWeight,
+      };
+    })
+    .filter((entry) => entry.artifactId && entry.directWeight > 0)
+    .sort((a, b) => b.directWeight - a.directWeight || b.stressWeight - a.stressWeight || a.artifactId.localeCompare(b.artifactId));
+
+  if (ranked.length === 0) return [];
+
+  const bestDirectWeight = ranked[0]?.directWeight || 0;
+  const minimumDirectWeight = Math.max(1, bestDirectWeight - 1);
+  return ranked
+    .filter((entry) => entry.directWeight >= minimumDirectWeight)
+    .slice(0, 16)
+    .map((entry) => entry.artifactId);
+};
+
 interface SimulationMapOverlayPanelProps {
   lensId: string | null;
   routeCatalog: MaterializedArtifact[];
   selectedRouteArtifactIds: string[];
   onChangeSelectedRouteArtifactIds: (ids: string[]) => void;
+  onSelectionChange?: (selection: SimulationMapOverlaySelection) => void;
   isDark: boolean;
+}
+
+export interface SimulationMapOverlaySelection {
+  lensId: string | null;
+  runId: string;
+  activeOverlayIds: string[];
+  activeItems: HorizonSimulationOverlayItem[];
+  matchedArtifactIds: string[];
+  matchedArtifactIdsByOverlay: Record<string, string[]>;
+  targetRefs: string[];
+  targetCountryCodes: string[];
+  productPaths: string[];
 }
 
 export function SimulationMapOverlayPanel({
@@ -156,9 +179,11 @@ export function SimulationMapOverlayPanel({
   routeCatalog,
   selectedRouteArtifactIds,
   onChangeSelectedRouteArtifactIds,
+  onSelectionChange,
   isDark,
 }: SimulationMapOverlayPanelProps) {
-  const [latestRun, setLatestRun] = React.useState<HorizonSimulationRunSummary | null>(null);
+  const [runs, setRuns] = React.useState<HorizonSimulationRunSummary[]>([]);
+  const [selectedRunId, setSelectedRunId] = React.useState('');
   const [loadingRun, setLoadingRun] = React.useState(false);
   const [loadingOverlays, setLoadingOverlays] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -197,21 +222,33 @@ export function SimulationMapOverlayPanel({
     [routeCatalog],
   );
 
+  const selectedRun = React.useMemo(
+    () => runs.find((run) => String(run.id || '').trim() === selectedRunId) || null,
+    [runs, selectedRunId],
+  );
+
   React.useEffect(() => {
     if (!lensId) return;
     let cancelled = false;
     setLoadingRun(true);
     setError(null);
     api
-      .listHorizonSimulationRuns()
+      .listHorizonSimulationRunsForLens(lensId, 50)
       .then((response) => {
         if (cancelled) return;
-        setLatestRun(pickLatestRun(response.runs || [], lensId));
+        const nextRuns = Array.isArray(response.runs) ? response.runs : [];
+        setRuns(nextRuns);
+        setSelectedRunId((current) => {
+          const currentId = String(current || '').trim();
+          if (currentId && nextRuns.some((run) => String(run.id || '').trim() === currentId)) return currentId;
+          return String(nextRuns[0]?.id || '').trim();
+        });
       })
       .catch((err: any) => {
         if (cancelled) return;
         setError(err?.message || 'Failed to load simulation runs');
-        setLatestRun(null);
+        setRuns([]);
+        setSelectedRunId('');
       })
       .finally(() => {
         if (!cancelled) setLoadingRun(false);
@@ -240,12 +277,15 @@ export function SimulationMapOverlayPanel({
   ]);
 
   React.useEffect(() => {
-    if (!latestRun?.id) return;
+    if (!selectedRunId) {
+      setRawOverlays(emptyOverlays());
+      return;
+    }
     let cancelled = false;
     setLoadingOverlays(true);
     setError(null);
     api
-      .getHorizonSimulationOverlays(latestRun.id, backendFilters)
+      .getHorizonSimulationOverlays(selectedRunId, backendFilters)
       .then((response) => {
         if (cancelled) return;
         setRawOverlays(response.overlays || emptyOverlays());
@@ -261,7 +301,7 @@ export function SimulationMapOverlayPanel({
     return () => {
       cancelled = true;
     };
-  }, [backendFilters, latestRun?.id]);
+  }, [backendFilters, selectedRunId]);
 
   const matchMap = React.useMemo(() => {
     const byOverlayId = new Map<string, string[]>();
@@ -274,15 +314,7 @@ export function SimulationMapOverlayPanel({
     for (const item of overlayLists) {
       const overlayId = String(item.id || '').trim();
       if (!overlayId) continue;
-      const matched = routeMatchers
-        .map((matcher) => ({
-          artifactId: String(matcher.artifact.id || '').trim(),
-          weight: overlayMatchCount(item, matcher) + (typeof matcher.artifact.pathStressScore === 'number' ? matcher.artifact.pathStressScore : 0),
-        }))
-        .filter((entry) => entry.artifactId && entry.weight > 0)
-        .sort((a, b) => b.weight - a.weight)
-        .map((entry) => entry.artifactId);
-      byOverlayId.set(overlayId, matched);
+      byOverlayId.set(overlayId, matchedArtifactIdsForOverlay(item, routeMatchers));
     }
     return byOverlayId;
   }, [rawOverlays, routeMatchers]);
@@ -338,13 +370,71 @@ export function SimulationMapOverlayPanel({
     if (!id) return;
     React.startTransition(() => {
       setActiveOverlayIds((current) => {
-        const set = new Set(current.map((value) => String(value || '').trim()).filter(Boolean));
-        if (set.has(id)) set.delete(id);
-        else set.add(id);
-        return Array.from(set);
+        const currentSet = new Set(current.map((value) => String(value || '').trim()).filter(Boolean));
+        if (currentSet.has(id)) currentSet.delete(id);
+        else currentSet.add(id);
+        return Array.from(currentSet);
       });
     });
   }, []);
+
+  const activeOverlayItems = React.useMemo(() => {
+    const byId = new Map<string, HorizonSimulationOverlayItem>();
+    for (const item of [
+      ...filteredOverlays.shoulders,
+      ...filteredOverlays.products,
+      ...filteredOverlays.pathChains,
+      ...filteredOverlays.cascades,
+    ]) {
+      const id = String(item.id || '').trim();
+      if (!id) continue;
+      byId.set(id, item);
+    }
+    return activeOverlayIds
+      .map((id) => byId.get(String(id || '').trim()) || null)
+      .filter((item): item is HorizonSimulationOverlayItem => Boolean(item));
+  }, [activeOverlayIds, filteredOverlays]);
+
+  const activeSelection = React.useMemo<SimulationMapOverlaySelection>(() => {
+    const matchedArtifactSet = new Set<string>();
+    const targetRefSet = new Set<string>();
+    const targetCountrySet = new Set<string>();
+    const productPathSet = new Set<string>();
+    for (const item of activeOverlayItems) {
+      const overlayId = String(item.id || '').trim();
+      for (const artifactId of matchMap.get(overlayId) || []) {
+        if (artifactId) matchedArtifactSet.add(artifactId);
+      }
+      for (const ref of item.targetRefs || []) {
+        const trimmed = String(ref || '').trim();
+        if (trimmed) targetRefSet.add(trimmed);
+      }
+      const countryCode = String(item.targetCountryCode || '').trim().toLowerCase();
+      if (countryCode) targetCountrySet.add(countryCode);
+      const productPath = String(item.productPath || '').trim();
+      if (productPath) productPathSet.add(productPath);
+    }
+    return {
+      lensId: lensId || null,
+      runId: selectedRunId,
+      activeOverlayIds: [...activeOverlayIds],
+      activeItems: activeOverlayItems,
+      matchedArtifactIds: Array.from(matchedArtifactSet),
+      matchedArtifactIdsByOverlay: Object.fromEntries(
+        activeOverlayItems.map((item) => {
+          const overlayId = String(item.id || '').trim();
+          return [overlayId, overlayId ? [...(matchMap.get(overlayId) || [])] : []];
+        }),
+      ),
+      targetRefs: Array.from(targetRefSet),
+      targetCountryCodes: Array.from(targetCountrySet),
+      productPaths: Array.from(productPathSet),
+    };
+  }, [activeOverlayIds, activeOverlayItems, lensId, matchMap, selectedRunId]);
+
+  React.useEffect(() => {
+    onSelectionChange?.(activeSelection);
+  }, [activeSelection, onSelectionChange]);
 
   const cardStyle: React.CSSProperties = {
     borderRadius: 12,
@@ -439,12 +529,15 @@ export function SimulationMapOverlayPanel({
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 'min(62vh, 680px)', overflowY: 'auto', paddingRight: 2 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
         <div>
           <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-heading)' }}>Simulation stress</div>
           <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-            {latestRun ? `${latestRun.status} · ${formatDate(latestRun.createdAt || latestRun.updatedAt)}` : 'No simulation run found for this lens'}
+            Lens ID: {lensId || 'none'}
+          </div>
+          <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+            {selectedRun ? `${selectedRun.status} · ${formatDate(selectedRun.createdAt || selectedRun.updatedAt)}` : 'No simulation run found for this lens'}
           </div>
         </div>
         <button
@@ -463,6 +556,34 @@ export function SimulationMapOverlayPanel({
         >
           Refresh
         </button>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-secondary-strong)' }}>Simulation run</div>
+        <select
+          value={selectedRunId}
+          onChange={(event) => setSelectedRunId(String(event.target.value || '').trim())}
+          style={{
+            borderRadius: 10,
+            border: '1px solid var(--border-subtle)',
+            background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+            color: 'var(--text-heading)',
+            padding: '9px 11px',
+            fontSize: 12,
+          }}
+        >
+          {runs.length === 0 ? <option value="">No runs</option> : null}
+          {runs.map((run) => {
+            const runId = String(run.id || '').trim();
+            const question = String(run.request?.question || '').trim();
+            const preview = question ? ` · ${question}` : '';
+            return (
+              <option key={runId} value={runId}>
+                {`${run.status} · ${formatDate(run.createdAt || run.updatedAt)} · ${runId.slice(0, 8)}${preview}`.slice(0, 160)}
+              </option>
+            );
+          })}
+        </select>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 6 }}>

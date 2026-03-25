@@ -38,21 +38,21 @@ const (
 // PostProcessingPolicy is the unified decision point that gates every post-processing
 // step for both entity-scouting and domain-expansion job paths.
 type PostProcessingPolicy struct {
-	PipelineTier                  int
-	RecursionDepth                int
-	MaxRecursionDepth             int
-	PlanModeResearchDone          bool
-	HasDomainExpansionPeer        bool
-	IsDomainExpansionJob          bool
-	CascadeBudgetScale            float64
-	DomainModes                   []string
-	OriginalQuery                 string
-	EpistemicStatus               models.EpistemicStatus
-	CriticGapCount                int
-	CriticalOpenCount             int
-	EvidenceCoverage              float64
-	RelationChildSchedulingOptIn  bool // Scout-it from modal: user explicitly requested hop depth
-	TargetIsMarket                 bool // Target path is /market/... — allow relation children in domain expansion
+	PipelineTier                 int
+	RecursionDepth               int
+	MaxRecursionDepth            int
+	PlanModeResearchDone         bool
+	HasDomainExpansionPeer       bool
+	IsDomainExpansionJob         bool
+	CascadeBudgetScale           float64
+	DomainModes                  []string
+	OriginalQuery                string
+	EpistemicStatus              models.EpistemicStatus
+	CriticGapCount               int
+	CriticalOpenCount            int
+	EvidenceCoverage             float64
+	RelationChildSchedulingOptIn bool // Scout-it from modal: user explicitly requested hop depth
+	TargetIsMarket               bool // Target path is /market/... — allow relation children in domain expansion
 }
 
 func stateCollectionLen(raw interface{}) int {
@@ -164,7 +164,7 @@ func NewPostProcessingPolicy(job *models.ScoutingJob) *PostProcessingPolicy {
 		CriticalOpenCount:            criticalOpenCount,
 		EvidenceCoverage:             evidenceCoverage,
 		RelationChildSchedulingOptIn: relationChildSchedulingOptIn,
-		TargetIsMarket:                 targetIsMarket,
+		TargetIsMarket:               targetIsMarket,
 	}
 }
 
@@ -173,9 +173,6 @@ func NewPostProcessingPolicy(job *models.ScoutingJob) *PostProcessingPolicy {
 func (p *PostProcessingPolicy) CanSkipPlanning() bool {
 	if p == nil {
 		return false
-	}
-	if p.HasDomainExpansionPeer {
-		return true
 	}
 	if p.PipelineTier < 2 {
 		return false
@@ -200,33 +197,18 @@ func (p *PostProcessingPolicy) ShouldRun(step PostProcessingStep) bool {
 	}
 	switch step {
 	case StepSourcePlanning:
-		if p.HasDomainExpansionPeer {
-			return false
-		}
 		return p.PipelineTier < 2
 
 	case StepResearch:
-		if p.HasDomainExpansionPeer {
-			return false
-		}
 		return p.PipelineTier < 2 && !p.PlanModeResearchDone
 
 	case StepCritic:
-		if p.HasDomainExpansionPeer {
-			return false
-		}
 		return p.PipelineTier <= 1
 
 	case StepReValidation:
-		if p.HasDomainExpansionPeer {
-			return false
-		}
 		return p.PipelineTier == 0
 
 	case StepMetrics:
-		if p.HasDomainExpansionPeer {
-			return false
-		}
 		return p.PipelineTier == 0
 
 	case StepArtifactMaterialization:

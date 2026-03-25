@@ -48,11 +48,19 @@ func isDirectedSupplyChainExplorationJob(job *horizonmodels.ScoutingJob) bool {
 }
 
 func directedExplorationShouldIgnoreFreshness(job *horizonmodels.ScoutingJob) bool {
-	cfg := parseDirectedExplorationConfig(job)
-	if cfg == nil {
-		return parseStateBool(job.State["ignoreFreshnessForUserRequest"], false)
+	if job == nil {
+		return false
 	}
-	return cfg.IgnoreFreshness || parseStateBool(job.State["ignoreFreshnessForUserRequest"], false)
+	cfg := parseDirectedExplorationConfig(job)
+	manualOverride := parseStateBool(job.State["ignoreFreshnessForUserRequest"], false) ||
+		parseStateBool(job.State["forceDeepScout"], false)
+	if triggerOrigin := strings.TrimSpace(parseStateString(job.State["triggerOrigin"])); triggerOrigin == "api_manual" {
+		manualOverride = true
+	}
+	if cfg == nil {
+		return manualOverride
+	}
+	return cfg.IgnoreFreshness || manualOverride
 }
 
 func directedExplorationRenderTarget(job *horizonmodels.ScoutingJob) string {

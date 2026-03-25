@@ -106,34 +106,63 @@ test('supply flow layout classifies routes and keeps chokepoints pinned to the f
   assert.ok((nodeById.get('plant')?.position?.x || 0) > (nodeById.get('ore')?.position?.x || 0));
 });
 
-test('influence network layout keeps geography and family clusters distinct', async () => {
+test('influence network layout builds an ownership spine with attached governance and market rails', async () => {
   const nodes = [
+    makeNode('dynasty', { canonicalPath: '/community/om/al-said/dynasty', label: 'Al Said Dynasty', type: 'COMMUNITY' }),
     makeNode('family', { canonicalPath: '/community/om/al-said/family', label: 'Al Said Family', type: 'COMMUNITY' }),
-    makeNode('tribe', { canonicalPath: '/community/ae/bani-yas/tribe', label: 'Bani Yas Tribe', type: 'COMMUNITY' }),
     makeNode('holdco', { canonicalPath: '/org/om/holding-company', label: 'Holding Co', type: 'ORGANIZATION' }),
-    makeNode('foreign', { canonicalPath: '/org/gb/foreign-asset', label: 'Foreign Asset', type: 'ORGANIZATION' }),
+    makeNode('opco', { canonicalPath: '/org/gb/operating-company', label: 'Operating Co', type: 'ORGANIZATION' }),
+    makeNode('asset', { canonicalPath: '/fac/gb/strategic-terminal', label: 'Strategic Terminal', type: 'FACILITY' }),
+    makeNode('executive', { canonicalPath: '/person/om/chairman', label: 'Chairman', type: 'PERSON' }),
     makeNode('gov', { canonicalPath: '/gov/gb/regulator', label: 'UK Regulator', type: 'GOV' }),
     makeNode('bloc', { canonicalPath: '/market/gcc/space-services', label: 'GCC space services', type: 'MARKET' }),
+    makeNode('country', { canonicalPath: '/loc/gb', label: 'United Kingdom', type: 'COUNTRY' }),
   ];
   const edges = [
+    makeEdge('i0', 'dynasty', 'family', 'HAS_SUBGROUP'),
     makeEdge('i1', 'family', 'holdco', 'OWNS'),
-    makeEdge('i2', 'holdco', 'foreign', 'CONTROLS'),
-    makeEdge('i3', 'gov', 'foreign', 'REGULATES'),
-    makeEdge('i4', 'tribe', 'family', 'AFFILIATED_WITH'),
-    makeEdge('i5', 'foreign', 'bloc', 'INFLUENCES'),
+    makeEdge('i2', 'holdco', 'opco', 'CONTROLS'),
+    makeEdge('i3', 'opco', 'asset', 'OWNS'),
+    makeEdge('i4', 'executive', 'opco', 'EXECUTIVE_OF'),
+    makeEdge('i5', 'gov', 'opco', 'REGULATES'),
+    makeEdge('i6', 'opco', 'bloc', 'INFLUENCES'),
+    makeEdge('i7', 'country', 'opco', 'IMPACTS'),
   ];
 
   const arranged = await layoutInfluenceNetwork(nodes, edges, {});
   const nodeById = new Map(arranged.nodes.map((node) => [node.id, node]));
   const edgeById = new Map(arranged.edges.map((edge) => [edge.id, edge]));
 
+  const familyX = nodeById.get('family')?.position?.x || 0;
+  const holdcoX = nodeById.get('holdco')?.position?.x || 0;
+  const opcoX = nodeById.get('opco')?.position?.x || 0;
+  const assetX = nodeById.get('asset')?.position?.x || 0;
+  const executiveX = nodeById.get('executive')?.position?.x || 0;
+  const govX = nodeById.get('gov')?.position?.x || 0;
+  const blocX = nodeById.get('bloc')?.position?.x || 0;
+  const countryX = nodeById.get('country')?.position?.x || 0;
+
+  assert.ok((nodeById.get('dynasty')?.position?.x || 0) <= familyX);
+  assert.ok(familyX < holdcoX);
+  assert.ok(holdcoX < opcoX);
+  assert.ok(opcoX < assetX);
+  assert.ok(Math.abs(executiveX - opcoX) < 180);
+  assert.ok(govX > opcoX);
+  assert.ok(blocX > opcoX);
+  assert.ok(countryX >= blocX || countryX > opcoX);
   assert.equal((nodeById.get('family')?.data as any)?.influenceMeta?.actorRole, 'family');
-  assert.equal((nodeById.get('tribe')?.data as any)?.influenceMeta?.actorRole, 'tribe');
+  assert.equal((nodeById.get('dynasty')?.data as any)?.influenceMeta?.actorRole, 'dynasty');
   assert.equal((nodeById.get('gov')?.data as any)?.influenceMeta?.actorRole, 'regulator');
-  assert.equal((nodeById.get('foreign')?.data as any)?.influenceMeta?.geoAnchor?.id, 'GB');
+  assert.equal((nodeById.get('opco')?.data as any)?.influenceMeta?.geoAnchor?.id, 'GB');
   assert.equal((nodeById.get('bloc')?.data as any)?.influenceMeta?.geoAnchor?.label, 'GCC');
-  assert.equal((edgeById.get('i3')?.data as any)?.influenceMeta?.influenceClass, 'regulatory-leverage');
-  assert.equal((edgeById.get('i5')?.data as any)?.influenceMeta?.influenceClass, 'influence-general');
+  assert.equal((nodeById.get('family')?.data as any)?.influenceMeta?.isRootOwner, true);
+  assert.equal((nodeById.get('holdco')?.data as any)?.influenceMeta?.controlDepth, 1);
+  assert.equal((nodeById.get('opco')?.data as any)?.influenceMeta?.controlDepth, 2);
+  assert.equal((nodeById.get('executive')?.data as any)?.influenceMeta?.rail, 'people');
+  assert.equal((nodeById.get('gov')?.data as any)?.influenceMeta?.rail, 'governance');
+  assert.equal((edgeById.get('i4')?.data as any)?.routingHint?.preferredAxis, 'vertical');
+  assert.equal((edgeById.get('i5')?.data as any)?.influenceMeta?.influenceClass, 'regulatory-leverage');
+  assert.equal((edgeById.get('i6')?.data as any)?.influenceMeta?.influenceClass, 'influence-general');
 });
 
 test('value chain layout keeps regulators in support rail and economic stages left-to-right', async () => {
@@ -173,15 +202,18 @@ test('value chain layout keeps regulators in support rail and economic stages le
   assert.equal(policy.semanticGroupColors, false);
 });
 
-test('specialized handle policies prefer vertical routing for same-cluster or support edges', () => {
+test('specialized handle policies prefer vertical routing for same-cluster and horizontal routing for ownership spines', () => {
   const nodes = [
     makeNode('a', { graphView: 'influence-network', influenceMeta: { clusterId: 'family:OM', clusterKind: 'family', actorRole: 'family' } }, { x: 0, y: 0 }),
     makeNode('b', { graphView: 'influence-network', influenceMeta: { clusterId: 'family:OM', clusterKind: 'family', actorRole: 'dynasty' } }, { x: 10, y: 140 }),
+    makeNode('e', { graphView: 'influence-network', influenceMeta: { clusterId: 'spine:OM', clusterKind: 'organization', actorRole: 'organization' } }, { x: 0, y: 220 }),
+    makeNode('f', { graphView: 'influence-network', influenceMeta: { clusterId: 'spine:OM', clusterKind: 'organization', actorRole: 'organization' } }, { x: 240, y: 240 }),
     makeNode('c', { graphView: 'value-chain', valueChainMeta: { stage: 'support', role: 'regulator' } }, { x: 100, y: 0 }),
     makeNode('d', { graphView: 'value-chain', valueChainMeta: { stage: 'operators', role: 'operator' } }, { x: 110, y: 140 }),
   ];
   const influenceEdges = recalculateInfluenceHandles([
     makeEdge('e1', 'a', 'b', 'AFFILIATED_WITH', { routingHint: { sameCluster: true } }),
+    makeEdge('e4', 'e', 'f', 'OWNS', { routingHint: { preferredAxis: 'horizontal' } }),
   ], nodes as any);
   const valueEdges = recalculateValueChainHandles([
     makeEdge('e2', 'c', 'd', 'REGULATES', { routingHint: { preferredAxis: 'vertical' }, valueChainMeta: { valueClass: 'governance-context' } }),
@@ -191,6 +223,7 @@ test('specialized handle policies prefer vertical routing for same-cluster or su
   ], nodes as any);
 
   assert.equal(influenceEdges[0]?.sourceHandle, 'source-bottom');
+  assert.equal(influenceEdges[1]?.sourceHandle, 'source-right');
   assert.equal(valueEdges[0]?.sourceHandle, 'source-bottom');
   assert.equal(flowEdges[0]?.sourceHandle, 'source-right');
 });

@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -34,6 +35,9 @@ func TestLiveRSSHeuristicProbe(t *testing.T) {
 
 	feeds, err := loadIntelFeedsForProbe()
 	if err != nil {
+		if errors.Is(err, errRSSProbeFeedsPathUnset) {
+			t.Skip(err.Error())
+		}
 		t.Fatalf("load feeds: %v", err)
 	}
 	if len(feeds) == 0 {
@@ -173,15 +177,22 @@ func TestLiveRSSHeuristicProbe(t *testing.T) {
 	)
 }
 
+var errRSSProbeFeedsPathUnset = errors.New("set RSS_PROBE_FEEDS_PATH to feeds.ts (INTEL_SOURCES), or clone worldmonitor under temp-repos/worldmonitor")
+
 func loadIntelFeedsForProbe() ([]probeFeed, error) {
 	path := strings.TrimSpace(os.Getenv("RSS_PROBE_FEEDS_PATH"))
 	if path == "" {
 		_, thisFile, _, ok := runtime.Caller(0)
 		if !ok {
-			return nil, os.ErrNotExist
+			return nil, errRSSProbeFeedsPathUnset
 		}
 		repoRoot := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "../../.."))
-		path = filepath.Join(repoRoot, "temp-repos", "worldmonitor", "src", "config", "feeds.ts")
+		candidate := filepath.Join(repoRoot, "temp-repos", "worldmonitor", "src", "config", "feeds.ts")
+		if st, statErr := os.Stat(candidate); statErr == nil && !st.IsDir() {
+			path = candidate
+		} else {
+			return nil, errRSSProbeFeedsPathUnset
+		}
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {

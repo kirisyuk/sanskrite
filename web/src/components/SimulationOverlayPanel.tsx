@@ -19,8 +19,6 @@ const OVERLAY_KINDS: Array<{ key: OverlayKind; label: string }> = [
   { key: 'roles', label: 'Roles' },
 ];
 
-const USABLE_RUN_STATUSES = new Set(['SUCCEEDED', 'DEGRADED', 'REVIEWING', 'AGGREGATING']);
-
 const emptyOverlays = (): HorizonSimulationResultOverlays => ({
   shoulders: [],
   products: [],
@@ -75,18 +73,6 @@ const roleMatchesVisibleRefs = (
   return allTargets.some((target) => activeOverlayIDs.has(String(target || '').trim()));
 };
 
-const pickLatestRun = (runs: HorizonSimulationRunSummary[], lensId: string): HorizonSimulationRunSummary | null => {
-  const matching = runs
-    .filter((run) => String(run.request?.lensId || '').trim() === lensId)
-    .sort((a, b) => {
-      const aTs = Date.parse(String(a.createdAt || a.updatedAt || '')) || 0;
-      const bTs = Date.parse(String(b.createdAt || b.updatedAt || '')) || 0;
-      return bTs - aTs;
-    });
-  if (matching.length === 0) return null;
-  return matching.find((run) => USABLE_RUN_STATUSES.has(String(run.status || '').trim().toUpperCase())) || matching[0];
-};
-
 const formatDate = (value?: string): string => {
   const ts = Date.parse(String(value || ''));
   if (!Number.isFinite(ts)) return 'unknown';
@@ -113,7 +99,8 @@ export function SimulationOverlayPanel({
   selectedTargetRef = null,
 }: SimulationOverlayPanelProps) {
   const { theme } = React.useContext(ThemeContext);
-  const [latestRun, setLatestRun] = React.useState<HorizonSimulationRunSummary | null>(null);
+  const [runs, setRuns] = React.useState<HorizonSimulationRunSummary[]>([]);
+  const [selectedRunId, setSelectedRunId] = React.useState('');
   const [loadingRun, setLoadingRun] = React.useState(false);
   const [loadingOverlays, setLoadingOverlays] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -153,6 +140,10 @@ export function SimulationOverlayPanel({
     [visibleTargetRefs],
   );
   const selectedTargetRefNormalized = String(selectedTargetRef || '').trim();
+  const selectedRun = React.useMemo(
+    () => runs.find((run) => String(run.id || '').trim() === selectedRunId) || null,
+    [runs, selectedRunId],
+  );
 
   React.useEffect(() => {
     if (!isVisible || !lensId) return;
@@ -160,15 +151,22 @@ export function SimulationOverlayPanel({
     setLoadingRun(true);
     setError(null);
     api
-      .listHorizonSimulationRuns()
+      .listHorizonSimulationRunsForLens(lensId, 50)
       .then((response) => {
         if (cancelled) return;
-        setLatestRun(pickLatestRun(response.runs || [], lensId));
+        const nextRuns = Array.isArray(response.runs) ? response.runs : [];
+        setRuns(nextRuns);
+        setSelectedRunId((current) => {
+          const currentId = String(current || '').trim();
+          if (currentId && nextRuns.some((run) => String(run.id || '').trim() === currentId)) return currentId;
+          return String(nextRuns[0]?.id || '').trim();
+        });
       })
       .catch((err: any) => {
         if (cancelled) return;
         setError(err?.message || 'Failed to load simulation runs');
-        setLatestRun(null);
+        setRuns([]);
+        setSelectedRunId('');
       })
       .finally(() => {
         if (!cancelled) setLoadingRun(false);
@@ -202,12 +200,16 @@ export function SimulationOverlayPanel({
   ]);
 
   React.useEffect(() => {
-    if (!isVisible || !latestRun?.id) return;
+    if (!isVisible) return;
+    if (!selectedRunId) {
+      setRawOverlays(emptyOverlays());
+      return;
+    }
     let cancelled = false;
     setLoadingOverlays(true);
     setError(null);
     api
-      .getHorizonSimulationOverlays(latestRun.id, backendFilters)
+      .getHorizonSimulationOverlays(selectedRunId, backendFilters)
       .then((response) => {
         if (cancelled) return;
         setRawOverlays(response.overlays || emptyOverlays());
@@ -223,7 +225,7 @@ export function SimulationOverlayPanel({
     return () => {
       cancelled = true;
     };
-  }, [backendFilters, isVisible, latestRun?.id]);
+  }, [backendFilters, isVisible, selectedRunId]);
 
   const filteredOverlays = React.useMemo<HorizonSimulationResultOverlays>(() => {
     const shoulders = rawOverlays.shoulders.filter((item) =>
@@ -424,14 +426,14 @@ export function SimulationOverlayPanel({
             Simulation Overlays
           </div>
           <div style={{ fontSize: 15, fontWeight: 900 }}>
-            {latestRun ? `Run ${latestRun.id.slice(0, 8)}` : 'No simulation run'}
+            {selectedRun ? `Run ${selectedRun.id.slice(0, 8)}` : 'No simulation run'}
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            {latestRun ? `${latestRun.status} · ${formatDate(latestRun.createdAt || latestRun.updatedAt)}` : 'Open a lens with a completed simulation run.'}
+            {selectedRun ? `${selectedRun.status} · ${formatDate(selectedRun.createdAt || selectedRun.updatedAt)}` : 'Open a lens with a completed simulation run.'}
           </div>
-          {latestRun?.request?.question ? (
+          {selectedRun?.request?.question ? (
             <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-              {latestRun.request.question}
+              {selectedRun.request.question}
             </div>
           ) : null}
         </div>
@@ -452,6 +454,24 @@ export function SimulationOverlayPanel({
           Refresh
         </button>
       </div>
+
+      <select
+        value={selectedRunId}
+        onChange={(event) => setSelectedRunId(String(event.target.value || '').trim())}
+        style={filterInputStyle}
+      >
+        {runs.length === 0 ? <option value="">No runs</option> : null}
+        {runs.map((run) => {
+          const runId = String(run.id || '').trim();
+          const question = String(run.request?.question || '').trim();
+          const preview = question ? ` · ${question}` : '';
+          return (
+            <option key={runId} value={runId}>
+              {`${run.status} · ${formatDate(run.createdAt || run.updatedAt)} · ${runId.slice(0, 8)}${preview}`.slice(0, 160)}
+            </option>
+          );
+        })}
+      </select>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
         {OVERLAY_KINDS.map(({ key, label }) => {

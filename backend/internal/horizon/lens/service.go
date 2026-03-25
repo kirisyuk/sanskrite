@@ -1683,6 +1683,8 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			addDeferredScopePathIfUnderLimit(ctx, s.lensesRepo, lens, lensID, strings.TrimSpace(canonicalPath), models.MaxAutoScopeAddsPerLens)
 		}
 		// Cache hit for deferred path: add to scope so it becomes visible under the managed policy.
+		// Important: unlike static scope, a cache hit alone must NOT suppress deferred anchor scouting.
+		// Otherwise ownership/policy-impact domain jobs can run against stale/thin substrate graphs.
 		if isCacheHit && fragment != nil {
 			addDeferredScopePathIfUnderLimit(ctx, s.lensesRepo, lens, lensID, strings.TrimSpace(canonicalPath), models.MaxAutoScopeAddsPerLens)
 			cacheHits++
@@ -1706,8 +1708,35 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 				"version":         fragment.Version,
 			})
 			// /domain paths are executable contracts, not only cached nodes.
-			// Even with cache hit we still allow job creation below.
-			if !isDomainPath {
+			// For non-domain deferred anchors, only skip job creation when the cache hit is sufficiently fresh.
+			if shouldSkipDeferredCacheHitScouting(isDomainPath, isFragmentFreshEnough) {
+				trace.Log(ctx, "root_jobs", "root_jobs.skip_fresh_verified", map[string]any{
+					"tenantId":        strings.TrimSpace(lens.TenantID),
+					"projectId":       strings.TrimSpace(lens.ProjectID),
+					"lensId":          lensID,
+					"canonicalPath":   strings.TrimSpace(canonicalPath),
+					"fragmentId":      strings.TrimSpace(fragment.ID),
+					"epistemicStatus": string(fragment.Metadata.EpistemicStatus),
+					"deferred":        true,
+					"lastVerifiedAt": func() string {
+						if fragment.Metadata.LastVerifiedAt.IsZero() {
+							return ""
+						}
+						return fragment.Metadata.LastVerifiedAt.UTC().Format(time.RFC3339Nano)
+					}(),
+				})
+				s.publish(ctx, realtime.EventType("horizon.scout.job.completed"), map[string]interface{}{
+					"tenantId":        lens.TenantID,
+					"projectId":       lens.ProjectID,
+					"lensId":          lensID,
+					"jobId":           "",
+					"fragmentId":      fragment.ID,
+					"canonicalPath":   strings.TrimSpace(canonicalPath),
+					"epistemicStatus": string(fragment.Metadata.EpistemicStatus),
+					"confidence":      1.0,
+					"hint":            "cached_verified_skip_scout",
+					"deferred":        true,
+				})
 				continue
 			}
 		}

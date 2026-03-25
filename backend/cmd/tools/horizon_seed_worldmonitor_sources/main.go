@@ -23,7 +23,6 @@ import (
 )
 
 const (
-	defaultFeedsPath               = "../temp-repos/worldmonitor/src/config/feeds.ts"
 	worldMonitorIngestModeOntology = "ontology_fact"
 	defaultPollMinutes             = 60
 	defaultDisableLLMProcessing    = true
@@ -112,7 +111,7 @@ type runStats struct {
 
 func main() {
 	projectID := flag.String("project", os.Getenv("GCP_PROJECT_ID"), "GCP project id (or set GCP_PROJECT_ID)")
-	feedsPath := flag.String("feeds", defaultFeedsPath, "Path to worldmonitor feeds.ts")
+	feedsPath := flag.String("feeds", "", "Path to feeds.ts containing INTEL_SOURCES (required; clone HorizonMonitor/worldmonitor separately if needed)")
 	apply := flag.Bool("apply", false, "Apply changes to Firestore (default: dry-run)")
 	status := flag.String("status", "paused", "Source status to enforce (active|paused|completed)")
 	ownerUserID := flag.String("owner-user-id", "worldmonitor-bootstrap", "Owner user ID for created sources")
@@ -139,6 +138,9 @@ func main() {
 	}
 
 	feedsFile := resolveFeedsPath(strings.TrimSpace(*feedsPath))
+	if feedsFile == "" {
+		log.Fatal("-feeds is required (path to feeds.ts with INTEL_SOURCES)")
+	}
 	raw, err := os.ReadFile(feedsFile)
 	if err != nil {
 		log.Fatalf("read feeds file: %v", err)
@@ -287,8 +289,9 @@ func main() {
 }
 
 func resolveFeedsPath(in string) string {
-	if strings.TrimSpace(in) == "" {
-		in = defaultFeedsPath
+	in = strings.TrimSpace(in)
+	if in == "" {
+		return ""
 	}
 	if filepath.IsAbs(in) {
 		return filepath.Clean(in)

@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -116,6 +117,166 @@ func (r *SimulationRunsRepository) ListRecentByTenant(ctx context.Context, tenan
 		out = append(out, &run)
 	}
 	return out, nil
+}
+
+func simulationRunTenantCandidates(tenantID string) []string {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return nil
+	}
+	if tenantID == "system" || tenantID == "global" {
+		return []string{tenantID}
+	}
+	return []string{tenantID, "system"}
+}
+
+func simulationRunLensMatches(run *horizonmodels.SimulationRun, lensID string) bool {
+	if run == nil {
+		return false
+	}
+	lensID = strings.TrimSpace(lensID)
+	if lensID == "" {
+		return false
+	}
+	if strings.TrimSpace(run.Request.LensID) == lensID {
+		return true
+	}
+	if strings.TrimSpace(run.BaselineRefs.LensID) == lensID {
+		return true
+	}
+	return false
+}
+
+func (r *SimulationRunsRepository) listRecentAcrossTenants(ctx context.Context, tenantIDs []string, perTenantLimit int) ([]*horizonmodels.SimulationRun, error) {
+	if perTenantLimit <= 0 {
+		perTenantLimit = 50
+	}
+	out := make([]*horizonmodels.SimulationRun, 0, perTenantLimit*len(tenantIDs))
+	seen := map[string]struct{}{}
+	for _, tenantID := range tenantIDs {
+		tenantID = strings.TrimSpace(tenantID)
+		if tenantID == "" {
+			continue
+		}
+		runs, err := r.ListRecentByTenant(ctx, tenantID, perTenantLimit)
+		if err != nil {
+			return nil, err
+		}
+		for _, run := range runs {
+			if run == nil || strings.TrimSpace(run.ID) == "" {
+				continue
+			}
+			if _, ok := seen[run.ID]; ok {
+				continue
+			}
+			seen[run.ID] = struct{}{}
+			out = append(out, run)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
+func (r *SimulationRunsRepository) GetLatestByTenantAndLens(ctx context.Context, tenantID, lensID string) (*horizonmodels.SimulationRun, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	lensID = strings.TrimSpace(lensID)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenantID is required")
+	}
+	if lensID == "" {
+		return nil, fmt.Errorf("lensID is required")
+	}
+	candidates := simulationRunTenantCandidates(tenantID)
+	q := r.col.Where("request.lensId", "==", lensID).OrderBy("createdAt", firestore.Desc).Limit(1)
+	if len(candidates) == 1 {
+		q = q.Where("tenantId", "==", candidates[0])
+	} else {
+		q = q.Where("tenantId", "in", candidates)
+	}
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		candidateRuns, fallbackErr := r.listRecentAcrossTenants(ctx, candidates, 100)
+		if fallbackErr != nil {
+			return nil, err
+		}
+		for _, run := range candidateRuns {
+			if simulationRunLensMatches(run, lensID) {
+				return run, nil
+			}
+		}
+		return nil, err
+	}
+	if len(docs) == 0 {
+		return nil, fmt.Errorf("simulation run not found")
+	}
+	var run horizonmodels.SimulationRun
+	if err := docs[0].DataTo(&run); err != nil {
+		return nil, err
+	}
+	if run.ID == "" {
+		run.ID = docs[0].Ref.ID
+	}
+	return &run, nil
+}
+
+func (r *SimulationRunsRepository) ListByTenantAndLens(ctx context.Context, tenantID, lensID string, limit int) ([]*horizonmodels.SimulationRun, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	lensID = strings.TrimSpace(lensID)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenantID is required")
+	}
+	if lensID == "" {
+		return nil, fmt.Errorf("lensID is required")
+	}
+	if limit <= 0 {
+		limit = 25
+	}
+	candidates := simulationRunTenantCandidates(tenantID)
+	q := r.col.Where("request.lensId", "==", lensID).OrderBy("createdAt", firestore.Desc).Limit(limit)
+	if len(candidates) == 1 {
+		q = q.Where("tenantId", "==", candidates[0])
+	} else {
+		q = q.Where("tenantId", "in", candidates)
+	}
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		candidateRuns, fallbackErr := r.listRecentAcrossTenants(ctx, candidates, max(limit*4, 100))
+		if fallbackErr != nil {
+			return nil, err
+		}
+		out := make([]*horizonmodels.SimulationRun, 0, limit)
+		for _, run := range candidateRuns {
+			if !simulationRunLensMatches(run, lensID) {
+				continue
+			}
+			out = append(out, run)
+			if len(out) >= limit {
+				break
+			}
+		}
+		return out, nil
+	}
+	out := make([]*horizonmodels.SimulationRun, 0, len(docs))
+	for _, doc := range docs {
+		var run horizonmodels.SimulationRun
+		if err := doc.DataTo(&run); err != nil {
+			continue
+		}
+		if run.ID == "" {
+			run.ID = doc.Ref.ID
+		}
+		out = append(out, &run)
+	}
+	return out, nil
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 type SimulationWorldsRepository struct {

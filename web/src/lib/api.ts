@@ -204,6 +204,37 @@ export interface HorizonSimulationOverlaysResponse {
   overlays: HorizonSimulationResultOverlays;
 }
 
+export interface HorizonSimulationExplanationRoleImpact {
+  role: string;
+  implication: string;
+}
+
+export interface HorizonSimulationExplanationMetric {
+  label: string;
+  value: string;
+}
+
+export interface HorizonSimulationExplanationPayload {
+  title: string;
+  summary: string;
+  stressNarrative: string[];
+  affectedObjects: string[];
+  affectedLinks: string[];
+  cascadeRisks: string[];
+  roleImplications: HorizonSimulationExplanationRoleImpact[];
+  recommendedActions: string[];
+  keyMetrics: HorizonSimulationExplanationMetric[];
+}
+
+export interface HorizonSimulationExplanationResponse {
+  runId: string;
+  artifactId: string;
+  kind: 'simulation_explanation' | string;
+  overlayId: string;
+  overlayKind: string;
+  explanation: HorizonSimulationExplanationPayload;
+}
+
 export interface HorizonSimulationRunSummary {
   id: string;
   status: string;
@@ -2613,7 +2644,11 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       const response = await this.client.post<{ id: string }>(`/api/horizon/lenses/${lensId}/items`, data);
       return response.data;
     } catch (error: any) {
-      console.error(`[API] createLensItem error:`, error);
+      console.error(`[API] createLensItem error:`, {
+        status: error?.response?.status,
+        data: error?.response?.data,
+        request: data,
+      });
       throw error;
     }
   }
@@ -4095,6 +4130,52 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     return response.data;
   }
 
+  async listHorizonSimulationRunsForLens(lensId: string, limit = 25): Promise<HorizonSimulationRunsResponse> {
+    const response = await this.client.get<HorizonSimulationRunsResponse>(
+      `/api/horizon/lenses/${encodeURIComponent(lensId)}/simulations`,
+      { params: { limit: String(limit) } },
+    );
+    return response.data;
+  }
+
+  async getLatestHorizonSimulationRunForLens(lensId: string): Promise<HorizonSimulationRunSummary> {
+    const response = await this.client.get<HorizonSimulationRunSummary>(
+      `/api/horizon/lenses/${encodeURIComponent(lensId)}/simulations/latest`,
+    );
+    return response.data;
+  }
+
+  async getLatestHorizonSimulationBundleViewForLens(lensId: string): Promise<HorizonSimulationBundleViewResponse> {
+    const response = await this.client.get<HorizonSimulationBundleViewResponse>(
+      `/api/horizon/lenses/${encodeURIComponent(lensId)}/simulations/latest/bundle-view`,
+    );
+    return response.data;
+  }
+
+  async getLatestHorizonSimulationOverlaysForLens(
+    lensId: string,
+    filters?: HorizonSimulationOverlayFilters,
+  ): Promise<HorizonSimulationOverlaysResponse> {
+    const params: Record<string, string> = {};
+    const appendCSV = (key: string, values?: string[]) => {
+      if (Array.isArray(values) && values.length > 0) params[key] = values.join(',');
+    };
+    appendCSV('kinds', filters?.kinds as string[] | undefined);
+    appendCSV('functions', filters?.functions);
+    appendCSV('disciplines', filters?.disciplines);
+    appendCSV('roles', filters?.roles);
+    appendCSV('targets', filters?.targets);
+    appendCSV('ids', filters?.ids);
+    appendCSV('categories', filters?.categories);
+    if (typeof filters?.minScore === 'number') params.minScore = String(filters.minScore);
+    if (filters?.q?.trim()) params.q = filters.q.trim();
+    const response = await this.client.get<HorizonSimulationOverlaysResponse>(
+      `/api/horizon/lenses/${encodeURIComponent(lensId)}/simulations/latest/overlays`,
+      { params },
+    );
+    return response.data;
+  }
+
   async getHorizonSimulationOverlays(
     runId: string,
     filters?: HorizonSimulationOverlayFilters,
@@ -4115,6 +4196,17 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     const response = await this.client.get<HorizonSimulationOverlaysResponse>(
       `/api/horizon/simulations/${encodeURIComponent(runId)}/overlays`,
       { params },
+    );
+    return response.data;
+  }
+
+  async explainHorizonSimulationOverlay(
+    runId: string,
+    payload: { overlayId: string; kind?: string; matchedArtifactIds?: string[] },
+  ): Promise<HorizonSimulationExplanationResponse> {
+    const response = await this.client.post<HorizonSimulationExplanationResponse>(
+      `/api/horizon/simulations/${encodeURIComponent(runId)}/explain`,
+      payload,
     );
     return response.data;
   }

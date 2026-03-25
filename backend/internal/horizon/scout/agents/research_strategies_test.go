@@ -186,6 +186,19 @@ func TestGovernanceEnrichmentPrompt_OwnsDirectionGuardrails(t *testing.T) {
 	}
 }
 
+func TestGeneralResearchExplicitSourceRulesBlock_GeoAnchorGuardrails(t *testing.T) {
+	block := generalResearchExplicitSourceRulesBlock()
+	for _, want := range []string{
+		"GEO_REGION exception: when CURRENT FRAGMENT is /loc/...",
+		"that discovered entity is usually the SOURCE and CURRENT FRAGMENT is the TARGET via LOCATED_IN/OPERATES_IN",
+		"never express regional presence as CURRENT FRAGMENT -> entity with OWNS, MEMBER_OF, HAS_SUBGROUP",
+	} {
+		if !strings.Contains(block, want) {
+			t.Fatalf("explicit source rules block missing geo guardrail %q", want)
+		}
+	}
+}
+
 func TestGovernanceFullPrompt_RequiresBeneficialOwnershipAndPeopleLayers(t *testing.T) {
 	a := NewResearchAgent(nil)
 	prompt := a.buildGovernanceFullPrompt(GovernanceQuery{

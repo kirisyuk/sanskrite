@@ -229,7 +229,8 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 				{EdgeType: "BOARD_MEMBER_OF", Direction: "PERSON → ORGANIZATION", ValidSource: []string{"PERSON"}, ValidTarget: []string{"ORGANIZATION"}},
 				{EdgeType: "KEY_PERSON", Direction: "PERSON → ORGANIZATION", ValidSource: []string{"PERSON"}, ValidTarget: []string{"ORGANIZATION"}},
 				{EdgeType: "FOUNDED", Direction: "PERSON|ORG → ORGANIZATION|PROGRAM", ValidSource: []string{"PERSON", "ORGANIZATION"}, ValidTarget: []string{"ORGANIZATION", "PROGRAM"}},
-				{EdgeType: "OWNS", Direction: "ORG|PERSON → ORG|FACILITY|PRODUCT|DEPOSIT", ValidSource: []string{"ORGANIZATION", "PERSON"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT", "DEPOSIT"}},
+				// COMMUNITY can also be an owner/controller (e.g., dynasty, tribe, family network).
+				{EdgeType: "OWNS", Direction: "ORG|PERSON|COMMUNITY → ORG|FACILITY|PRODUCT|DEPOSIT", ValidSource: []string{"ORGANIZATION", "PERSON", "COMMUNITY"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT", "DEPOSIT"}},
 				// COMMUNITY can also be an actor (e.g., dynasty) that controls organizations/facilities.
 				{EdgeType: "CONTROLS", Direction: "ORG|PERSON|COMMUNITY → ORG|FACILITY|PRODUCT", ValidSource: []string{"ORGANIZATION", "PERSON", "COMMUNITY"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT"}},
 				{EdgeType: "REGULATES", Direction: "ORGANIZATION → *", ValidSource: []string{"ORGANIZATION"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT", "GEO_REGION", "MARKET"}},

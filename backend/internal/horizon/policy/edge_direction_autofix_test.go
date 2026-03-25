@@ -125,6 +125,51 @@ func TestResolveEdgeDirectionAutoFixCommunityFoundedPerson(t *testing.T) {
 	}
 }
 
+func TestResolveEdgeDirectionAutoFixCommunityOwnsOrganization_IsPreserved(t *testing.T) {
+	_, ok := ResolveEdgeDirectionAutoFix(
+		horizonmodels.DependencyTypeOwns,
+		horizonmodels.FragmentTypeCommunity,
+		horizonmodels.FragmentTypeOrganization,
+	)
+	if ok {
+		t.Fatalf("expected canonical COMMUNITY -> ORGANIZATION OWNS to be preserved without auto-fix")
+	}
+}
+
+func TestResolveEdgeDirectionAutoFixGeoMemberOfOrganization(t *testing.T) {
+	fix, ok := ResolveEdgeDirectionAutoFix(
+		horizonmodels.DependencyTypeMemberOf,
+		horizonmodels.FragmentTypeGeoRegion,
+		horizonmodels.FragmentTypeOrganization,
+	)
+	if !ok {
+		t.Fatalf("expected auto-fix for GEO_REGION MEMBER_OF ORGANIZATION")
+	}
+	if fix.NewType != horizonmodels.DependencyTypeLocatedIn {
+		t.Fatalf("expected LOCATED_IN, got %s", fix.NewType)
+	}
+	if !fix.ShouldSwap {
+		t.Fatalf("expected shouldSwap=true")
+	}
+}
+
+func TestResolveEdgeDirectionAutoFixOrganizationOwnsGeo(t *testing.T) {
+	fix, ok := ResolveEdgeDirectionAutoFix(
+		horizonmodels.DependencyTypeOwns,
+		horizonmodels.FragmentTypeOrganization,
+		horizonmodels.FragmentTypeGeoRegion,
+	)
+	if !ok {
+		t.Fatalf("expected auto-fix for ORGANIZATION OWNS GEO_REGION")
+	}
+	if fix.NewType != horizonmodels.DependencyTypeLocatedIn {
+		t.Fatalf("expected LOCATED_IN, got %s", fix.NewType)
+	}
+	if fix.ShouldSwap {
+		t.Fatalf("expected shouldSwap=false")
+	}
+}
+
 func TestResolveEdgeDirectionAutoFixDepositAdministersOrg(t *testing.T) {
 	fix, ok := ResolveEdgeDirectionAutoFix(
 		horizonmodels.DependencyTypeAdministers,

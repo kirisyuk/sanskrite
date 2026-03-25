@@ -570,11 +570,11 @@ const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends 
    - OPERATES_IN: source operates in target (source MUST be ORGANIZATION or PERSON, target MUST be GEO_REGION or FACILITY or DEPOSIT).
    - REGULATES: source regulates target (source MUST be ORGANIZATION — only orgs can regulate).
      JURISDICTION RULE: use REGULATES only for domestic regulatory oversight within the regulator's own jurisdiction. For sanctions, trade restrictions, or extra-territorial enforcement use CONTROLS_ACCESS or IMPOSES_CONDITION.
-   - OWNS: source owns target (source MUST be ORGANIZATION or PERSON - only orgs/persons can own).
+   - OWNS: source owns target (source MUST be ORGANIZATION, PERSON, or COMMUNITY when the community is the real owner, e.g. dynasty/tribe/family network).
      Direction is strict: owner -> owned entity.
      If evidence says THIS FRAGMENT is owned by X, keep relationType=OWNS and set explicit sourceCanonicalPath/sourceType/sourceName = X, with targetCanonicalPath = THIS FRAGMENT.
      Never output reversed OWNS (THIS FRAGMENT -> its owner).
-   - SUBSIDIARY_OF: source is owned/controlled by target (target can be ORGANIZATION or PERSON; will be normalized to OWNS in graph).
+   - SUBSIDIARY_OF: source is owned/controlled by target (target can be ORGANIZATION, PERSON, or COMMUNITY; will be normalized to OWNS in graph).
    - CONTROLS: source controls target (non-equity/indirect control: voting control, state control, contractual control).
      Do NOT use CONTROLS for external audit/certification/inspection oversight; use ASSURES with qualifiers.assurance_type.
    - MANAGES: source manages target (formal authority: CEO/executive/director/operator).

@@ -398,3 +398,63 @@ func TestCanonicalizeEdge_CommunityAffiliatedWithOrganization_IsPreserved(t *tes
 		t.Fatalf("expected empty reason for preserved canonical edge, got %q", reason)
 	}
 }
+
+func TestCanonicalizeEdge_CommunityOwnsOrganization_IsPreserved(t *testing.T) {
+	newType, shouldSwap, changed, reason := CanonicalizeEdge(
+		DependencyTypeOwns,
+		FragmentTypeCommunity,
+		FragmentTypeOrganization,
+	)
+	if changed {
+		t.Fatalf("expected canonical COMMUNITY OWNS ORGANIZATION to be preserved")
+	}
+	if newType != DependencyTypeOwns {
+		t.Fatalf("expected OWNS, got %s", newType)
+	}
+	if shouldSwap {
+		t.Fatalf("expected shouldSwap=false")
+	}
+	if reason != "" {
+		t.Fatalf("expected empty reason for preserved canonical edge, got %q", reason)
+	}
+}
+
+func TestCanonicalizeEdge_GeoMemberOfCommunity_BecomesLocatedInWithSwap(t *testing.T) {
+	newType, shouldSwap, changed, reason := CanonicalizeEdge(
+		DependencyTypeMemberOf,
+		FragmentTypeGeoRegion,
+		FragmentTypeCommunity,
+	)
+	if !changed {
+		t.Fatalf("expected canonicalization change")
+	}
+	if newType != DependencyTypeLocatedIn {
+		t.Fatalf("expected LOCATED_IN, got %s", newType)
+	}
+	if !shouldSwap {
+		t.Fatalf("expected shouldSwap=true")
+	}
+	if reason == "" {
+		t.Fatalf("expected non-empty reason")
+	}
+}
+
+func TestCanonicalizeEdge_OrganizationOwnsGeo_BecomesLocatedIn(t *testing.T) {
+	newType, shouldSwap, changed, reason := CanonicalizeEdge(
+		DependencyTypeOwns,
+		FragmentTypeOrganization,
+		FragmentTypeGeoRegion,
+	)
+	if !changed {
+		t.Fatalf("expected canonicalization change")
+	}
+	if newType != DependencyTypeLocatedIn {
+		t.Fatalf("expected LOCATED_IN, got %s", newType)
+	}
+	if shouldSwap {
+		t.Fatalf("expected shouldSwap=false")
+	}
+	if reason == "" {
+		t.Fatalf("expected non-empty reason")
+	}
+}

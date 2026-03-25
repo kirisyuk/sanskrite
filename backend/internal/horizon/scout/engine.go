@@ -4019,7 +4019,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 						"epistemicStatus": string(existingFragment.Metadata.EpistemicStatus),
 						"version":         existingFragment.Version,
 					})
-					if !directedExplorationActive {
+					if !directedExplorationActive && !directedExplorationShouldIgnoreFreshness(job) {
 						return nil
 					}
 				}

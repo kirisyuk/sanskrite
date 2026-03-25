@@ -1661,8 +1661,14 @@ func (e *ScoutEngine) bestEffortEnrichRelationTargetGeo(ctx context.Context, fra
 			updated = true
 		}
 	}
-	if !models.HasRealGeoCoordinates(fragment.Coordinates) && e.bestEffortGeocodeRelationTargetCandidates(ctx, fragment, parent) {
-		updated = true
+	if !models.HasRealGeoCoordinates(fragment.Coordinates) {
+		if fragment.Type == models.FragmentTypeFacility {
+			if result, err := RevalidateFacilityGeo(ctx, fragment, e.geocodingClient); err == nil && result.Applied {
+				updated = true
+			}
+		} else if e.bestEffortGeocodeRelationTargetCandidates(ctx, fragment, parent) {
+			updated = true
+		}
 	}
 	if updated && e.fragmentsRepo != nil && strings.TrimSpace(fragment.ID) != "" {
 		if err := e.fragmentsRepo.Update(ctx, fragment); err != nil {
@@ -6830,6 +6836,7 @@ func normalizeRelationEdge(sourceFrag *models.HorizonFragment, sourceID, targetI
 	isFac := func(t models.FragmentType) bool { return t == models.FragmentTypeFacility }
 	isProd := func(t models.FragmentType) bool { return t == models.FragmentTypeProduct }
 	isPerson := func(t models.FragmentType) bool { return t == models.FragmentTypePerson }
+	isCommunity := func(t models.FragmentType) bool { return t == models.FragmentTypeCommunity }
 
 	changed := false
 
@@ -6874,7 +6881,8 @@ func normalizeRelationEdge(sourceFrag *models.HorizonFragment, sourceID, targetI
 			break
 		}
 		// If it's clearly inverted, swap (e.g., FAC owns ORG / PRODUCT owns ORG).
-		if !isOrg(srcType) && !isPerson(srcType) && (isOrg(targetType) || isPerson(targetType)) && !isGeo(srcType) {
+		if !isOrg(srcType) && !isPerson(srcType) && !isCommunity(srcType) &&
+			(isOrg(targetType) || isPerson(targetType)) && !isGeo(srcType) {
 			sourceID, targetID = targetID, sourceID
 			changed = true
 		}

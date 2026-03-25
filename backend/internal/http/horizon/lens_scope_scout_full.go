@@ -207,20 +207,23 @@ func (h *HorizonHandlers) ScopeScoutLensFull(w http.ResponseWriter, r *http.Requ
 
 		plannerPriorityTier := inferPlannerPriorityTierForScopeScout(canonicalPath, supplyChainMode)
 		state := map[string]interface{}{
-			"targetCanonicalPath": canonicalPath,
-			"lensId":              lensID,
-			"currentState":        string(models.ScoutingJobStatePending),
-			"scoutingStrategy":    string(models.ScoutingStrategySnapshot),
-			"plannerPriorityTier": plannerPriorityTier,
-			"recursionDepth":      0.0,
-			"maxRecursionDepth":   float64(maxRecursionDepth),
-			"deferredScopeAdd":    true,
-			"trigger":             "ui.graph.scope_scout_full",
-			"uiScoutingMode":      scoutingMode,
-			"correlationId":       correlationID,
-			"sessionId":           sessionID,
-			"query":               q,
-			"originalQuery":       q,
+			"targetCanonicalPath":           canonicalPath,
+			"lensId":                        lensID,
+			"currentState":                  string(models.ScoutingJobStatePending),
+			"scoutingStrategy":              string(models.ScoutingStrategySnapshot),
+			"plannerPriorityTier":           plannerPriorityTier,
+			"recursionDepth":                0.0,
+			"maxRecursionDepth":             float64(maxRecursionDepth),
+			"deferredScopeAdd":              true,
+			"trigger":                       "ui.graph.scope_scout_full",
+			"triggerOrigin":                 "api_manual",
+			"uiScoutingMode":                scoutingMode,
+			"correlationId":                 correlationID,
+			"sessionId":                     sessionID,
+			"query":                         q,
+			"originalQuery":                 q,
+			"ignoreFreshnessForUserRequest": true,
+			"forceDeepScout":                true,
 		}
 		if inputPath != canonicalPath {
 			state["aliasCanonicalPath"] = inputPath

@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 func TestClassifyScope(t *testing.T) {
@@ -125,5 +127,26 @@ func TestSplitScopeBackwardCompat(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("splitScope should include artifact refs in static paths for backward compat, got %v", staticPaths)
+	}
+}
+
+func TestDeferredAnchorCacheHitStillRequiresScoutingWhenNotFresh(t *testing.T) {
+	if shouldSkipDeferredCacheHitScouting(false, false) {
+		t.Fatal("stale deferred anchor cache hit should not suppress scout job creation")
+	}
+}
+
+func TestDeferredAnchorFreshCacheHitCanSkipScouting(t *testing.T) {
+	if !shouldSkipDeferredCacheHitScouting(false, true) {
+		t.Fatal("fresh deferred anchor cache hit should suppress duplicate scout job creation")
+	}
+	if shouldSkipDeferredCacheHitScouting(true, true) {
+		t.Fatal("domain contract paths must not suppress scout execution even when cached")
+	}
+}
+
+func TestConglomeratesMarketDomainIsValid(t *testing.T) {
+	if !taxonomy.IsValidMarketDomain("conglomerates") {
+		t.Fatal("expected conglomerates market domain to be valid")
 	}
 }

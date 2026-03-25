@@ -239,16 +239,19 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 			}
 		}
 		state := map[string]interface{}{
-			"targetCanonicalPath":          targetCanonicalPath,
-			"lensId":                       lens.ID,
-			"currentState":                 string(models.ScoutingJobStatePending),
-			"scoutingStrategy":             string(models.ScoutingStrategySnapshot),
-			"recursionDepth":               0.0,
-			"maxRecursionDepth":            float64(maxDepth),
-			"trigger":                      trigger,
-			"uiScoutingMode":               scoutingMode,
-			"correlationId":                correlationID,
-			"relationChildSchedulingOptIn": true, // User explicitly requested hop depth — allow relation children regardless of domain expansion
+			"targetCanonicalPath":           targetCanonicalPath,
+			"lensId":                        lens.ID,
+			"currentState":                  string(models.ScoutingJobStatePending),
+			"scoutingStrategy":              string(models.ScoutingStrategySnapshot),
+			"recursionDepth":                0.0,
+			"maxRecursionDepth":             float64(maxDepth),
+			"trigger":                       trigger,
+			"triggerOrigin":                 "api_manual",
+			"uiScoutingMode":                scoutingMode,
+			"correlationId":                 correlationID,
+			"ignoreFreshnessForUserRequest": true,
+			"forceDeepScout":                true,
+			"relationChildSchedulingOptIn":  true, // User explicitly requested hop depth — allow relation children regardless of domain expansion
 		}
 		if scoutingMode == taxonomy.DomainModeSupplyChain || scoutingMode == taxonomy.DomainModeGovernance {
 			state["domainModes"] = []string{scoutingMode}
@@ -258,7 +261,6 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 			if len(hotPathCanonicalPaths) > 0 {
 				state["hotPathCanonicalPaths"] = hotPathCanonicalPaths
 			}
-			state["ignoreFreshnessForUserRequest"] = directedExploration.IgnoreFreshness
 			state["legacyDirectedExplorationDeprecated"] = true
 			state["legacyDirectedExplorationReason"] = "prefer_one_hop_downstream_for_org_fac_downstream"
 		}

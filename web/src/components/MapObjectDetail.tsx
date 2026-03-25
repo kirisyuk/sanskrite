@@ -4,6 +4,7 @@ import type { GeoObject } from '../hooks/useGeoObjects';
 import type { GeoEdgeTraceSummary } from '../hooks/useGeoEdgeLayer';
 import type { SupplyChainObjectRiskOverlay, SupplyChainOverlayMechanism, SupplyChainOverlayMetric } from '../lib/api';
 import { geoCodeToShortName, humanizeCanonicalPath } from '../lib/uiUtils';
+import { mapFamilyAccentColor, mapLayerColor } from '../lib/mapRenderPolicy';
 
 interface MapObjectDetailProps {
   object: GeoObject;
@@ -65,22 +66,7 @@ function humanizeToken(value?: string): string {
 }
 
 function familyAccent(family: string, isDark: boolean): string {
-  switch (family) {
-    case 'supply':
-      return isDark ? '#fbbf24' : '#b45309';
-    case 'control':
-      return isDark ? '#93c5fd' : '#2563eb';
-    case 'risk':
-    case 'influence':
-      return isDark ? '#fb7185' : '#be123c';
-    case 'location':
-    case 'market':
-      return isDark ? '#2dd4bf' : '#0f766e';
-    case 'social':
-      return isDark ? '#c4b5fd' : '#7c3aed';
-    default:
-      return isDark ? '#cbd5e1' : '#64748b';
-  }
+  return mapFamilyAccentColor(family, isDark ? 'dark' : 'light');
 }
 
 function sectionCardStyle(isDark: boolean): React.CSSProperties {
@@ -494,7 +480,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
       note: routeCount > 0
         ? `${pluralize(traceSummary?.supplyGroups?.length || 0, 'product lane')}`
         : 'No mapped product routes yet',
-      accentColor: isDark ? '#fbbf24' : '#b45309',
+      accentColor: mapLayerColor('supply', isDark ? 'dark' : 'light'),
     },
     {
       label: 'Active pressure',
@@ -808,11 +794,11 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
                         onNarrativeHover(null);
                         onSupplyRouteHover?.([]);
                       }}
-                      style={narrativeBlockStyle(isDark, activeNarrativeKey === group.narrativeKey, isDark ? '#fbbf24' : '#b45309')}
+                      style={narrativeBlockStyle(isDark, activeNarrativeKey === group.narrativeKey, mapLayerColor('supply', isDark ? 'dark' : 'light'))}
                     >
                       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
                         <div style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: 12, fontWeight: 780, color: isDark ? '#fde68a' : '#92400e' }}>
+                          <div style={{ fontSize: 12, fontWeight: 780, color: mapLayerColor('supply', isDark ? 'dark' : 'light') }}>
                             {group.productLabel}
                           </div>
                           <div style={{ marginTop: 2, fontSize: 10, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: isDark ? 'rgba(253,230,138,0.82)' : 'rgba(146,64,14,0.76)' }}>

@@ -62,6 +62,37 @@ const geoBadgeLabel = (geo?: GeoAnchorMeta | null): string => {
   return geo.label || geo.id || '';
 };
 
+const titleizeBadge = (value?: string | null): string => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  return raw
+    .split(/[_\-\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+};
+
+const influenceRailLabel = (meta: InfluenceViewMeta): string => {
+  if (meta.isRootOwner) return 'Root owner';
+  if (typeof meta.controlDepth === 'number' && meta.isOwnershipCore) return meta.controlDepth === 0 ? 'Control root' : `Control L${meta.controlDepth}`;
+  switch (meta.rail) {
+    case 'lineage':
+      return 'Lineage';
+    case 'ownership':
+      return 'Ownership';
+    case 'people':
+      return 'Board / people';
+    case 'governance':
+      return 'Governance';
+    case 'market':
+      return 'Market context';
+    case 'geography':
+      return 'Geography';
+    default:
+      return titleizeBadge(meta.clusterKind);
+  }
+};
+
 const badgeStyle = (
   theme: 'light' | 'dark',
   accent: string,
@@ -129,9 +160,9 @@ const SpecializedNodeMetaChrome: React.FC<{
     const meta = data.influenceMeta;
     return (
       <div style={wrapStyle}>
-        <span style={badgeStyle(theme, accentColor)}>{meta.actorRole}</span>
-        <span style={badgeStyle(theme, accentColor, true)}>{meta.clusterKind}</span>
-        {meta.centralityBucket && <span style={badgeStyle(theme, accentColor, true)}>{meta.centralityBucket}</span>}
+        <span style={badgeStyle(theme, accentColor)}>{titleizeBadge(meta.actorRole)}</span>
+        <span style={badgeStyle(theme, accentColor, true)}>{influenceRailLabel(meta)}</span>
+        {meta.centralityBucket === 'high' && <span style={badgeStyle(theme, accentColor, true)}>High centrality</span>}
         {geoBadgeLabel(geo) && <span style={badgeStyle(theme, accentColor, true)}>{geoBadgeLabel(geo)}</span>}
       </div>
     );

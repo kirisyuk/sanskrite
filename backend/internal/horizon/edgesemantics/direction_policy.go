@@ -30,6 +30,7 @@ var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
 		ValidSourceTypes: []models.FragmentType{
 			models.FragmentTypeOrganization,
 			models.FragmentTypePerson,
+			models.FragmentTypeCommunity,
 		},
 		ValidTargetTypes: []models.FragmentType{
 			models.FragmentTypeOrganization,

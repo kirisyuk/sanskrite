@@ -264,7 +264,7 @@ export function buildPointFeature(
       canonicalPath: obj.canonicalPath,
       iconKey: iconKey(vt, color),
       color,
-      opacity: muted ? 0.04 : obj.inScope === false ? 0.5 : 1.0,
+      opacity: muted ? 0.015 : obj.inScope === false ? 0.5 : 1.0,
       focusState: muted ? 0 : 1,
       type: obj.type,
       label: obj.label || humanizeCanonicalPath(obj.canonicalPath) || obj.canonicalPath,

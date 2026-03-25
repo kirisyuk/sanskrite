@@ -112,3 +112,50 @@ func TestBestEffortEnrichRelationTargetGeo_OrganizationUsesCanonicalCountryAndGe
 		t.Fatalf("unexpected coordinates: %+v", target.Coordinates)
 	}
 }
+
+func TestBestEffortEnrichRelationTargetGeo_FacilityUsesFullNameForResolve(t *testing.T) {
+	geocoder := &fakeGeocodingClient{
+		results: map[string]*coreontology.GeocodingResult{
+			"Jiuquan Satellite Launch Center, CN": {
+				Lat:              40.984524,
+				Lon:              100.208695,
+				FormattedAddress: "Buge Yin'a Rila, Ejin Banner, Alxa League, Inner Mongolia, China, 735412",
+				PlaceID:          "google-place-jiuquan-launch-center",
+				Provider:         "google_geocoding",
+			},
+			"Launch, CN": {
+				Lat:              28.4289124,
+				Lon:              -80.5776203,
+				FormattedAddress: "Launch Complex 29, Cape Canaveral, FL, United States",
+				PlaceID:          "bad-launch-hit",
+				Provider:         "nominatim",
+			},
+		},
+	}
+	engine := &ScoutEngine{geocodingClient: geocoder}
+	target := &models.HorizonFragment{
+		Type:          models.FragmentTypeFacility,
+		CanonicalPath: "/fac/cn/jiuquan-satellite-launch-center",
+		Labels:        map[string]string{"en": "Jiuquan Satellite Launch Center"},
+	}
+
+	engine.bestEffortEnrichRelationTargetGeo(context.Background(), target, nil, "test", "job-4")
+
+	if target.Coordinates == nil {
+		t.Fatalf("expected geocoded coordinates")
+	}
+	if target.Coordinates.Lat != 40.984524 || target.Coordinates.Lon != 100.208695 {
+		t.Fatalf("unexpected coordinates: %+v", target.Coordinates)
+	}
+	if len(geocoder.calls) == 0 || geocoder.calls[0] != "Jiuquan Satellite Launch Center, CN" {
+		t.Fatalf("expected full-name query first, got %#v", geocoder.calls)
+	}
+	for _, call := range geocoder.calls {
+		if call == "Launch, CN" {
+			t.Fatalf("did not expect weak hint query after successful full-name resolve: %#v", geocoder.calls)
+		}
+	}
+	if got := target.Identifiers["geoCoordinatesQuery"]; got != "Jiuquan Satellite Launch Center, CN" {
+		t.Fatalf("expected attribution query to use full name, got %q", got)
+	}
+}

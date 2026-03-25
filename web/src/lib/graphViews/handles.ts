@@ -65,7 +65,11 @@ export function recalculateInfluenceHandles(
     const targetNode = nodeMap.get(String(edge.target || '').trim());
     const routingHint = ((edge as any)?.data?.routingHint || {}) as any;
     const sameCluster = Boolean(routingHint.sameCluster);
-    const handles = directionalHandles(sourceNode, targetNode, { sameLaneThreshold: sameCluster ? 72 : 30, preferVertical: sameCluster });
+    const preferVertical = routingHint.preferredAxis === 'vertical' || sameCluster;
+    const handles = directionalHandles(sourceNode, targetNode, {
+      sameLaneThreshold: sameCluster ? 72 : routingHint.preferredAxis === 'horizontal' ? 18 : 30,
+      preferVertical,
+    });
     return { ...edge, ...handles };
   });
 }

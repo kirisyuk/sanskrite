@@ -49,6 +49,24 @@ func TestEdgeDirectionPolicies_OWNS_IncludesDeposit(t *testing.T) {
 	}
 }
 
+func TestEdgeDirectionPolicies_OWNS_IncludesCommunitySource(t *testing.T) {
+	rule, exists := EdgeDirectionPolicies[models.DependencyTypeOwns]
+	if !exists {
+		t.Fatal("OWNS edge direction policy not found")
+	}
+
+	hasCommunity := false
+	for _, sourceType := range rule.ValidSourceTypes {
+		if sourceType == models.FragmentTypeCommunity {
+			hasCommunity = true
+			break
+		}
+	}
+	if !hasCommunity {
+		t.Error("OWNS should allow COMMUNITY as source type")
+	}
+}
+
 func TestEdgeDirectionPolicies_PRODUCES_IncludesDeposit(t *testing.T) {
 	// Verify PRODUCES policy includes DEPOSIT as valid source
 	rule, exists := EdgeDirectionPolicies[models.DependencyTypeProduces]
@@ -327,5 +345,28 @@ func TestCanonicalizeEdge_ProductOwnsOrganization_ToProduces(t *testing.T) {
 				t.Fatalf("CanonicalizeEdge() changed=%v, want %v", gotChanged, tt.wantChange)
 			}
 		})
+	}
+}
+
+func TestNormalizeRelationEdge_OwnsCommunityToOrganization_IsPreserved(t *testing.T) {
+	sourceFrag := &models.HorizonFragment{Type: models.FragmentTypeCommunity}
+
+	gotSource, gotTarget, gotType, changed := normalizeRelationEdge(
+		sourceFrag,
+		"community-id",
+		"org-id",
+		models.DependencyTypeOwns,
+		models.FragmentTypeOrganization,
+		false,
+		nil,
+	)
+	if changed {
+		t.Fatalf("expected COMMUNITY -> ORGANIZATION OWNS to remain canonical")
+	}
+	if gotSource != "community-id" || gotTarget != "org-id" {
+		t.Fatalf("expected source/target unchanged, got %q -> %q", gotSource, gotTarget)
+	}
+	if gotType != models.DependencyTypeOwns {
+		t.Fatalf("expected OWNS, got %s", gotType)
 	}
 }

@@ -335,19 +335,21 @@ func registerAll() {
 			{Key: "regulation", Title: "Regulatory Environment", Description: "Programs, mechanisms, jurisdictions", Required: false, Order: 5},
 		},
 		ExtractionBlock: `ENTITY TYPE: GEO_REGION
-- Required aspects to extract: organizations operating (OPERATES_IN, LOCATED_IN), markets present (PARTICIPATES_IN geo), deposits (DEPOSIT LOCATED_IN), regulatory environment (REGULATES, PROGRAM).
+- Required aspects to extract: organizations/communities/deposits/programs located or operating in region, and regulatory environment.
 - Taxonomically correct edge types:
-  - Required/primary: LOCATED_IN (entities in region), OPERATES_IN (orgs operating in region)
-  - Allowed when evidence exists: REGULATES (gov bodies in region), PARTICIPATES_IN (markets)
-  - Avoid: GEO_REGION as source of OWNS; use LOCATED_IN/OPERATES_IN for placement.
+  - Required/primary: LOCATED_IN (entity -> this geo), OPERATES_IN (org/person -> this geo or facility/deposit)
+  - Allowed when evidence exists: ADMINISTERS (gov/program hierarchy into geo), REGULATES (gov bodies acting within jurisdiction)
+  - Use explicit source for entities discovered in this region: organization/community/deposit/program/person should usually be the SOURCE and this GEO_REGION should be the TARGET.
+  - Avoid: GEO_REGION as source of OWNS, MEMBER_OF, HAS_SUBGROUP, or generic placement edges; use LOCATED_IN/OPERATES_IN for presence in region.
 - Missing info priorities:
   - Missing organizations in region.
-  - Missing markets and deposits.
+  - Missing communities, deposits, and programs in region.
   - Missing regulatory context.`,
 		ResearchBlock: `ENTITY TYPE: GEO_REGION
-- Required aspects: organizations, markets, deposits, regulatory environment.
-- Taxonomically correct edge types: LOCATED_IN, OPERATES_IN, REGULATES, PARTICIPATES_IN.
-- Missing info priorities: actors, markets, deposits, regulation.`,
+- Required aspects: organizations, communities, deposits, programs, regulatory environment.
+- Taxonomically correct edge types: LOCATED_IN, OPERATES_IN, ADMINISTERS, REGULATES.
+- GEO_REGION is often the semantic target for placement facts: emit entity -> LOCATED_IN/OPERATES_IN -> this geo, not this geo -> entity.
+- Missing info priorities: actors, communities, deposits, programs, regulation.`,
 		MissingInfoRules: []MissingInfoRule{
 			{Trigger: TriggerFieldEmpty, FieldPath: "Labels.en", QuestionTemplate: "entity label/name in English for %s"},
 			{Trigger: TriggerRelationCountBelow, MinCount: 1, QuestionTemplate: "relationships with other entities for %s"},
@@ -451,11 +453,12 @@ func registerAll() {
 - Required execution order:
   1) Resolve lineage structure via HAS_SUBGROUP.
   2) Resolve key persons and membership links (MEMBER_OF).
-  3) Resolve influence ties to org/gov/market (prefer CONTROLS/INFLUENCES over OWNS when appropriate).
+  3) Resolve ownership/control/influence ties to org/gov/market.
   4) Resolve affiliated formal entities and channels used (AFFILIATED_WITH / OPERATES_VIA).
 - Taxonomically correct edge types:
   - Required/primary: HAS_SUBGROUP, MEMBER_OF, AFFILIATED_WITH
-  - Allowed when evidence exists: CONTROLS, INFLUENCES, OPERATES_VIA, DEPENDS_ON
+  - Allowed when evidence exists: OWNS, CONTROLS, INFLUENCES, OPERATES_VIA, DEPENDS_ON
+  - Use OWNS when beneficial/legal ownership is explicit; use CONTROLS or INFLUENCES for informal, political, or soft-power authority.
   - Avoid: ORG -> dynasty/tribe OWNS inversions and generic untyped association edges.
 - Missing info priorities:
   - Missing branch/sub-clan hierarchy.
@@ -465,11 +468,12 @@ func registerAll() {
 - Required execution order:
   1) Resolve lineage structure via HAS_SUBGROUP.
   2) Resolve key persons and membership links (MEMBER_OF).
-  3) Resolve influence ties to org/gov/market (prefer CONTROLS/INFLUENCES over OWNS when appropriate).
+  3) Resolve ownership/control/influence ties to org/gov/market.
   4) Resolve affiliated formal entities and channels used (AFFILIATED_WITH / OPERATES_VIA).
 - Taxonomically correct edge types:
   - Required/primary: HAS_SUBGROUP, MEMBER_OF, AFFILIATED_WITH
-  - Allowed when evidence exists: CONTROLS, INFLUENCES, OPERATES_VIA, DEPENDS_ON
+  - Allowed when evidence exists: OWNS, CONTROLS, INFLUENCES, OPERATES_VIA, DEPENDS_ON
+  - Use OWNS when beneficial/legal ownership is explicit; use CONTROLS or INFLUENCES for informal, political, or soft-power authority.
   - Avoid: ORG -> dynasty/tribe OWNS inversions and generic untyped association edges.
 - Missing info priorities:
   - Missing branch/sub-clan hierarchy.
@@ -494,11 +498,12 @@ func registerAll() {
 - Required execution order:
   1) Resolve lineage structure via HAS_SUBGROUP (sub-tribes, clans).
   2) Resolve key persons and membership links (MEMBER_OF).
-  3) Resolve influence ties to org/gov/market (prefer CONTROLS/INFLUENCES over OWNS when appropriate).
+  3) Resolve ownership/control/influence ties to org/gov/market.
   4) Resolve affiliated formal entities and channels used (AFFILIATED_WITH / OPERATES_VIA).
 - Taxonomically correct edge types:
   - Required/primary: HAS_SUBGROUP, MEMBER_OF, AFFILIATED_WITH
-  - Allowed when evidence exists: CONTROLS, INFLUENCES, OPERATES_VIA, DEPENDS_ON
+  - Allowed when evidence exists: OWNS, CONTROLS, INFLUENCES, OPERATES_VIA, DEPENDS_ON
+  - Use OWNS when beneficial/legal ownership is explicit; use CONTROLS or INFLUENCES for informal, political, or soft-power authority.
   - Avoid: ORG -> tribe OWNS inversions and generic untyped association edges.
 - Missing info priorities:
   - Missing branch/sub-clan hierarchy.
@@ -508,11 +513,12 @@ func registerAll() {
 - Required execution order:
   1) Resolve lineage structure via HAS_SUBGROUP.
   2) Resolve key persons and membership links (MEMBER_OF).
-  3) Resolve influence ties to org/gov/market (prefer CONTROLS/INFLUENCES over OWNS when appropriate).
+  3) Resolve ownership/control/influence ties to org/gov/market.
   4) Resolve affiliated formal entities and channels used (AFFILIATED_WITH / OPERATES_VIA).
 - Taxonomically correct edge types:
   - Required/primary: HAS_SUBGROUP, MEMBER_OF, AFFILIATED_WITH
-  - Allowed when evidence exists: CONTROLS, INFLUENCES, OPERATES_VIA, DEPENDS_ON
+  - Allowed when evidence exists: OWNS, CONTROLS, INFLUENCES, OPERATES_VIA, DEPENDS_ON
+  - Use OWNS when beneficial/legal ownership is explicit; use CONTROLS or INFLUENCES for informal, political, or soft-power authority.
 - Missing info priorities:
   - Missing branch/sub-clan hierarchy.
   - Missing canonical key members.

@@ -2018,6 +2018,8 @@ func generalResearchExplicitSourceRulesBlock() string {
 - CONTROLS_ACCESS / IMPOSES_CONDITION: source is controller/imposer, target is affected entity.
 - For actor↔actor DEPENDS_ON and ORG/FACILITY SUPPLIES_TO, include qualifiers.source_role/target_role (dependent->dependency, supplier->customer).
 - For phase-1 business edges (DEPENDS_ON, SUPPLIES_TO, LOCATED_IN, etc.), keep default source unless evidence explicitly requires otherwise.
+- GEO_REGION exception: when CURRENT FRAGMENT is /loc/... and you discover an organization, community, deposit, program, facility, or person that is in this region, that discovered entity is usually the SOURCE and CURRENT FRAGMENT is the TARGET via LOCATED_IN/OPERATES_IN.
+- For GEO_REGION tasks, never express regional presence as CURRENT FRAGMENT -> entity with OWNS, MEMBER_OF, HAS_SUBGROUP, or similar social/governance edges.
 - Exception: for OWNS/INVESTS_IN/ASSURES/CONTROLS, use explicit source whenever THIS FRAGMENT is the semantic target.
 - For directed ORG->ORG edges above, include qualifiers.source_role and qualifiers.target_role.`
 }

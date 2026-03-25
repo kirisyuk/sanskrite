@@ -164,6 +164,12 @@ export interface InfluenceViewMeta {
   geoAnchor?: GeoAnchorMeta;
   countryAnchor?: string;
   centralityBucket?: 'low' | 'medium' | 'high';
+  rail?: 'lineage' | 'ownership' | 'people' | 'governance' | 'market' | 'geography' | 'other';
+  controlDepth?: number;
+  anchorId?: string;
+  rootId?: string;
+  isOwnershipCore?: boolean;
+  isRootOwner?: boolean;
 }
 
 export interface ValueChainViewMeta {

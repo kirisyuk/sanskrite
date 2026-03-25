@@ -60,10 +60,10 @@ export async function layoutInfluenceNetwork<T = any>(
   const laidOutNodes = layeredClusterLayout(projection.nodes, projection.edges, projection.assignments, {
     nodeWidth: options.nodeWidth,
     nodeHeight: options.nodeHeight,
-    columnGap: 340,
-    laneGap: 220,
-    clusterGap: 64,
-    subcolumnGap: 124,
+    columnGap: 320,
+    laneGap: 196,
+    clusterGap: 48,
+    subcolumnGap: 108,
   });
   const laidOutEdges = projection.edges.map((edge) => ensureGraphViewEdgeMeta(edge, { graphView: 'influence-network' }));
   return { nodes: laidOutNodes, edges: laidOutEdges };

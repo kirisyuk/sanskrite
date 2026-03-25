@@ -100,8 +100,18 @@ function artifactLegStringList(leg: any, ...keys: string[]): string[] {
 
 function artifactLegNumber(leg: any, ...keys: string[]): number | null {
   const value = artifactLegField<unknown>(leg, ...keys);
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function resolvedArtifactLegIndex(leg: any, arrayIndex: number): number {
+  const fromField = artifactLegNumber(leg, 'index', 'Index');
+  if (fromField != null) return fromField;
+  return arrayIndex;
 }
 
 function dedupeCoords(coords: [number, number][]): [number, number][] {
@@ -434,9 +444,9 @@ export function usePathLegClusterLayer(
       const artifactFocus = activeArtifactSet.has(artifactId) || (artifactFamilyId && focusFamilyIds.has(artifactFamilyId));
       const legsPayload = Array.isArray(artifact.payload?.legs) ? artifact.payload.legs : [];
 
-      for (const leg of legsPayload) {
-        const legIndex = artifactLegNumber(leg, 'index', 'Index');
-        if (legIndex == null) continue;
+      for (let legArrayIndex = 0; legArrayIndex < legsPayload.length; legArrayIndex += 1) {
+        const leg = legsPayload[legArrayIndex];
+        const legIndex = resolvedArtifactLegIndex(leg, legArrayIndex);
         const sourceRef = artifactLegString(leg, 'supplierRef', 'SupplierRef');
         const targetRef = artifactLegString(leg, 'customerRef', 'CustomerRef');
         if (!sourceRef || !targetRef) continue;

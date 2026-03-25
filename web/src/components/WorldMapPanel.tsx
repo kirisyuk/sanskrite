@@ -13,7 +13,8 @@ import { useVesselLayer, vesselsApiAvailable as isVesselsApiAvailable } from '..
 import { MapFilterPanel } from './MapFilterPanel';
 import { MapObjectDetail } from './MapObjectDetail';
 import { MapObjectStackPanel } from './MapObjectStackPanel';
-import { SimulationMapOverlayPanel } from './SimulationMapOverlayPanel';
+import { SimulationExplanationOverlay, type SimulationExplanationOverlayState } from './SimulationExplanationOverlay';
+import { SimulationMapOverlayPanel, type SimulationMapOverlaySelection } from './SimulationMapOverlayPanel';
 import { STATIC_ZONE_DATA, deriveZoneTypeCounts, type StaticZoneFeature, type StaticZoneType } from '../lib/staticZones';
 import {
   STATIC_TRANSPORT_FLOW_DATA,
@@ -21,11 +22,13 @@ import {
   type TransportFlowFeature,
   type TransportFlowMode,
 } from '../lib/staticTransportFlows';
-import { api, type IdentifyStressVisibleRelation } from '../lib/api';
+import { api, type HorizonSimulationOverlayItem, type IdentifyStressVisibleRelation } from '../lib/api';
 import type { MaterializedArtifact } from './SupplyChainOverlay';
 import type { GeoMarkerSelection } from '../hooks/useGeoMarkerLayer';
 import { humanizeCanonicalPath, humanizeSlug } from '../lib/uiUtils';
 import { useHorizonRealtimeStore } from '../stores/horizonRealtimeStore';
+import { mapLayerColor } from '../lib/mapRenderPolicy';
+import { artifactMatchesRouteVisibility, type MapRouteVisibilitySelection } from '../lib/mapRouteVisibility';
 
 export interface WorldMapPanelProps {
   scope?: { lensId: string };
@@ -68,6 +71,18 @@ type ProductStageFacet = {
   label: string;
   routeCount: number;
 };
+type SimulationExplanationCache = Record<string, SimulationExplanationOverlayState>;
+
+const normalizeCountryFromCanonicalPath = (value: string): string => {
+  const match = String(value || '').trim().toLowerCase().match(/^\/(?:fac|org|loc|gov|deposit|market|product)\/([a-z]{2})(?:\/|$)/);
+  return match?.[1] || '';
+};
+
+const compactStringList = (values: string[]): string[] =>
+  Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
+
+const compactNonEmptyStrings = (values: string[]): string[] =>
+  Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
 
 const isObjectLikeSupplyAnchor = (entity: HorizonSearchEntity | null | undefined): boolean => {
   const canonicalPath = String(entity?.canonicalPath || '').trim();
@@ -92,7 +107,7 @@ const normalizeSupplyAnchorEntities = (entities: HorizonSearchEntity[]): Horizon
 type SupplyChainSearchResult = Awaited<ReturnType<typeof api.searchSupplyChains>>['results'][number];
 type ScopeTargetMode = 'new' | 'existing';
 type DirectedExploreDirection = 'upstream' | 'downstream';
-type DockPanel = 'view' | 'routes' | 'products' | 'export' | null;
+type DockPanel = 'view' | 'simulation' | 'routes' | 'products' | 'export' | null;
 
 const AFFECTED_ZONE_FRESHNESS_WINDOWS: AffectedZoneFreshnessWindow[] = [14, 30, 90, 180];
 const PRODUCT_STAGE_ORDER = [
@@ -714,10 +729,11 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [flowsEnabled, setFlowsEnabled] = React.useState(false);
   const [pathLegsEnabled, setPathLegsEnabled] = React.useState(Boolean(scope?.lensId));
   const [pathLegClusteringEnabled, setPathLegClusteringEnabled] = React.useState(Boolean(scope?.lensId));
-  const [simulationViewFilterEnabled, setSimulationViewFilterEnabled] = React.useState(false);
   const [activeDockPanel, setActiveDockPanel] = React.useState<DockPanel>(null);
   const [routeSearchQuery, setRouteSearchQuery] = React.useState('');
   const [productSearchQuery, setProductSearchQuery] = React.useState('');
+  const [simulationSelection, setSimulationSelection] = React.useState<SimulationMapOverlaySelection | null>(null);
+  const [simulationExplanationCache, setSimulationExplanationCache] = React.useState<SimulationExplanationCache>({});
   const [activeProductStages, setActiveProductStages] = React.useState<Set<string> | null>(null);
   const [selectedProductGroupKeys, setSelectedProductGroupKeys] = React.useState<string[]>([]);
   const [selectedRouteArtifactIds, setSelectedRouteArtifactIds] = React.useState<string[]>([]);
@@ -816,6 +832,10 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     Boolean(scope?.lensId),
   );
   const showMapPreparingOverlay = !isReady || (loading && allObjects.length === 0);
+  const routeVisibilitySelection = React.useMemo<MapRouteVisibilitySelection>(() => ({
+    artifactIds: selectedRouteArtifactIds,
+    productRefs: selectedProductGroupKeys,
+  }), [selectedProductGroupKeys, selectedRouteArtifactIds]);
 
   const {
     edgesLoading,
@@ -838,6 +858,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     theme,
     hops,
     scope?.lensId,
+    routeVisibilitySelection,
   );
   const mapObjects = React.useMemo(
     () => (discoveredObjects.length > 0 ? [...filteredObjects, ...discoveredObjects] : filteredObjects),
@@ -943,6 +964,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     const register = (artifact: MaterializedArtifact | null | undefined) => {
       const key = artifactCatalogKey(artifact);
       if (!key) return;
+      if (!artifactMatchesRouteVisibility(artifact, routeVisibilitySelection)) return;
       merged.set(key, artifact!);
     };
     if (pathLegsEnabled) {
@@ -964,7 +986,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
       }
     }
     return Array.from(merged.values());
-  }, [activeSupplyArtifactIds, manualPathArtifacts, pathArtifacts, pathLegsEnabled, relatedPathArtifacts, routeCatalog, routeEmphasisVisible, focusedRouteArtifactIdSet, supplyNarrativeLegsVisible]);
+  }, [activeSupplyArtifactIds, manualPathArtifacts, pathArtifacts, pathLegsEnabled, relatedPathArtifacts, routeCatalog, routeEmphasisVisible, routeVisibilitySelection, focusedRouteArtifactIdSet, supplyNarrativeLegsVisible]);
   const clusterProjectionEnabled = pathLegClusteringEnabled && (pathLegsEnabled || supplyNarrativeLegsVisible || routeEmphasisVisible);
   const activePathRefs = React.useMemo(() => collectArtifactPathRefs(activePathArtifacts), [activePathArtifacts]);
   const preferredOverlayObjectPaths = React.useMemo(() => {
@@ -1009,11 +1031,242 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     () => new Set(forcedRouteEndpointObjects.map((object) => String(object?.id || '').trim()).filter(Boolean)),
     [forcedRouteEndpointObjects],
   );
+  const simulationFocusedPathRefs = React.useMemo(
+    () =>
+      new Set(
+        [
+          ...(simulationSelection?.targetRefs || []),
+          ...(simulationSelection?.productPaths || []),
+        ]
+          .map((value) => String(value || '').trim())
+          .filter(Boolean),
+      ),
+    [simulationSelection],
+  );
+  const simulationFocusedCountryCodes = React.useMemo(
+    () =>
+      new Set(
+        (simulationSelection?.targetCountryCodes || [])
+          .map((value) => String(value || '').trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    [simulationSelection],
+  );
+  const simulationLegFocus = React.useMemo(() => {
+    const empty = {
+      revealedLegIds: [] as string[],
+      visibleObjectPaths: [] as string[],
+      visibleObjectIds: [] as string[],
+      stressedLegIds: [] as string[],
+      legCaptionById: {} as Record<string, string>,
+    };
+    if ((simulationSelection?.activeItems?.length || 0) === 0) return empty;
+    if (activePathArtifacts.length === 0) return empty;
+    const revealedLegIds = new Set<string>();
+    const visibleObjectPaths = new Set<string>();
+    const visibleObjectIds = new Set<string>();
+    const stressedLegIds = new Set<string>();
+    const legCaptionById: Record<string, string> = {};
+    const objectIdByPath = new Map<string, string>();
+    for (const object of pathOverlayObjects) {
+      const canonicalPath = String(object?.canonicalPath || '').trim();
+      const objectId = String(object?.id || '').trim();
+      if (!canonicalPath || !objectId || objectIdByPath.has(canonicalPath)) continue;
+      objectIdByPath.set(canonicalPath, objectId);
+    }
+    const requireProduct = simulationFocusedPathRefs.size > 0
+      && Array.from(simulationFocusedPathRefs).some((ref) => ref.startsWith('/product/'));
+    const requireRouteTarget = simulationFocusedPathRefs.size > 0 || simulationFocusedCountryCodes.size > 0;
+    for (const artifact of activePathArtifacts) {
+      const artifactId = String(artifact?.id || '').trim();
+      if (!artifactId) continue;
+      const legs = Array.isArray(artifact?.payload?.legs) ? artifact.payload.legs : [];
+      const matchedLegs: Array<{
+        legIndex: number;
+        refs: string[];
+        overlayTitles: string[];
+        supplierRef: string;
+        customerRef: string;
+      }> = [];
+      const legDetails = new Map<number, {
+        refs: string[];
+        supplierRef: string;
+        customerRef: string;
+        overlayTitles: string[];
+      }>();
+      legs.forEach((leg: any, index: number) => {
+        const legIndex = Number.isFinite(Number(leg?.index)) ? Number(leg.index) : index;
+        const supplierRef = String(leg?.supplierRef || '').trim();
+        const customerRef = String(leg?.customerRef || '').trim();
+        const refs = [
+          supplierRef,
+          customerRef,
+          String(leg?.productRef || '').trim(),
+          ...((Array.isArray(leg?.transportViaRefs) ? leg.transportViaRefs : []).map((value: unknown) => String(value || '').trim())),
+          ...((Array.isArray(leg?.flowRefs) ? leg.flowRefs : []).map((value: unknown) => String(value || '').trim())),
+          ...((Array.isArray(leg?.zoneRefs) ? leg.zoneRefs : []).map((value: unknown) => String(value || '').trim())),
+          ...((Array.isArray(leg?.affectedZoneRefs) ? leg.affectedZoneRefs : []).map((value: unknown) => String(value || '').trim())),
+        ].filter(Boolean);
+        const productRef = String(leg?.productRef || '').trim();
+        const countries = refs.map(normalizeCountryFromCanonicalPath).filter(Boolean);
+        const productHit = productRef ? simulationFocusedPathRefs.has(productRef) : false;
+        const refHit = refs.some((ref) => simulationFocusedPathRefs.has(ref));
+        const countryHit = countries.some((code) => simulationFocusedCountryCodes.has(code));
+        const matches = (requireProduct ? productHit : true) && (requireRouteTarget ? (refHit || countryHit || productHit) : true);
+        const overlayTitles = compactNonEmptyStrings(
+          (simulationSelection?.activeItems || [])
+            .filter((item) => {
+              const targetRefs = Array.isArray(item.targetRefs)
+                ? item.targetRefs.map((value) => String(value || '').trim()).filter(Boolean)
+                : [];
+              const targetCountryCode = String(item.targetCountryCode || '').trim().toLowerCase();
+              const targetProductPath = String(item.productPath || '').trim();
+              const targetRefHit = targetRefs.some((ref) => refs.includes(ref));
+              const targetCountryHit = targetCountryCode ? countries.includes(targetCountryCode) : false;
+              const targetProductHit = targetProductPath ? productRef === targetProductPath : false;
+              return targetRefHit || targetCountryHit || targetProductHit;
+            })
+            .map((item) => String(item.title || item.id || '').trim()),
+        );
+        legDetails.set(legIndex, {
+          refs,
+          supplierRef,
+          customerRef,
+          overlayTitles,
+        });
+        if (!matches) return;
+        matchedLegs.push({
+          legIndex,
+          refs,
+          overlayTitles,
+          supplierRef,
+          customerRef,
+        });
+      });
+      if (matchedLegs.length === 0) continue;
+      const minLegIndex = Math.min(...matchedLegs.map((entry) => entry.legIndex));
+      const maxLegIndex = Math.max(...matchedLegs.map((entry) => entry.legIndex));
+      const artifactStressTitles = compactNonEmptyStrings(matchedLegs.flatMap((entry) => entry.overlayTitles)).slice(0, 2);
+      for (let legIndex = minLegIndex; legIndex <= maxLegIndex; legIndex += 1) {
+        const detail = legDetails.get(legIndex);
+        if (!detail) continue;
+        const legId = `${artifactId}:leg:${legIndex}`;
+        revealedLegIds.add(legId);
+        stressedLegIds.add(legId);
+        for (const ref of detail.refs) {
+          visibleObjectPaths.add(ref);
+          const objectId = objectIdByPath.get(ref);
+          if (objectId) visibleObjectIds.add(objectId);
+        }
+        const stressTitle = compactNonEmptyStrings(detail.overlayTitles).slice(0, 2).join(' + ') || artifactStressTitles.join(' + ');
+        const sourceLabel = detail.supplierRef ? (humanizeCanonicalPath(detail.supplierRef) || detail.supplierRef) : '';
+        const targetLabel = detail.customerRef ? (humanizeCanonicalPath(detail.customerRef) || detail.customerRef) : '';
+        const linkLabel = sourceLabel && targetLabel ? `${sourceLabel} -> ${targetLabel}` : sourceLabel || targetLabel;
+        const captionParts = [stressTitle, linkLabel].filter(Boolean);
+        if (captionParts.length > 0) legCaptionById[legId] = captionParts.join('\n');
+      }
+    }
+    return {
+      revealedLegIds: Array.from(revealedLegIds),
+      visibleObjectPaths: Array.from(visibleObjectPaths),
+      visibleObjectIds: Array.from(visibleObjectIds),
+      stressedLegIds: Array.from(stressedLegIds),
+      legCaptionById,
+    };
+  }, [activePathArtifacts, pathOverlayObjects, simulationFocusedCountryCodes, simulationFocusedPathRefs, simulationSelection]);
+  const simulationFocusedObjectIds = React.useMemo(() => {
+    if (simulationLegFocus.visibleObjectIds.length > 0) return simulationLegFocus.visibleObjectIds;
+    if ((simulationSelection?.activeItems?.length || 0) === 0 || (simulationFocusedPathRefs.size === 0 && simulationFocusedCountryCodes.size === 0)) return [] as string[];
+    const byId = new Set<string>();
+    for (const object of pathOverlayObjects) {
+      const objectId = String(object?.id || '').trim();
+      if (!objectId) continue;
+      const canonicalPath = String(object?.canonicalPath || '').trim();
+      const countryCode = normalizeCountryFromCanonicalPath(canonicalPath);
+      if (
+        (canonicalPath && simulationFocusedPathRefs.has(canonicalPath))
+        || (countryCode && simulationFocusedCountryCodes.has(countryCode))
+      ) {
+        byId.add(objectId);
+      }
+    }
+    return Array.from(byId);
+  }, [pathOverlayObjects, simulationFocusedCountryCodes, simulationFocusedPathRefs, simulationSelection, simulationLegFocus.visibleObjectIds]);
+  const simulationFocusedObjectIdSet = React.useMemo(
+    () => new Set(simulationFocusedObjectIds),
+    [simulationFocusedObjectIds],
+  );
+  const simulationStressEnabled = (simulationSelection?.activeItems?.length || 0) > 0;
+  const primarySimulationOverlay = React.useMemo<HorizonSimulationOverlayItem | null>(() => {
+    const items = simulationSelection?.activeItems || [];
+    if (items.length === 0) return null;
+    return items[items.length - 1] || null;
+  }, [simulationSelection]);
+  const primarySimulationOverlayId = String(primarySimulationOverlay?.id || '').trim();
+  const primarySimulationRunId = String(simulationSelection?.runId || '').trim();
+  const primarySimulationLensId = String(simulationSelection?.lensId || scope?.lensId || '').trim();
+  const primarySimulationMatchedArtifactIds = React.useMemo(() => {
+    if (!primarySimulationOverlayId) return [] as string[];
+    return simulationSelection?.matchedArtifactIdsByOverlay?.[primarySimulationOverlayId] || [];
+  }, [primarySimulationOverlayId, simulationSelection]);
+  const primarySimulationExplanationKey = primarySimulationRunId && primarySimulationOverlayId
+    ? `${primarySimulationRunId}:${primarySimulationOverlayId}`
+    : '';
+  const primarySimulationExplanationState = primarySimulationExplanationKey
+    ? (simulationExplanationCache[primarySimulationExplanationKey] || { status: 'idle' })
+    : { status: 'idle' as const };
+  React.useEffect(() => {
+    if (!simulationStressEnabled || !primarySimulationRunId || !primarySimulationOverlayId || !primarySimulationOverlay) return;
+    const cacheKey = `${primarySimulationRunId}:${primarySimulationOverlayId}`;
+    const current = simulationExplanationCache[cacheKey];
+    if (current && (current.status === 'loading' || current.status === 'ready' || current.status === 'error')) return;
+    let cancelled = false;
+    setSimulationExplanationCache((prev) => ({
+      ...prev,
+      [cacheKey]: { status: 'loading' },
+    }));
+    api.explainHorizonSimulationOverlay(primarySimulationRunId, {
+      overlayId: primarySimulationOverlayId,
+      kind: String(primarySimulationOverlay.kind || '').trim() || undefined,
+      matchedArtifactIds: primarySimulationMatchedArtifactIds,
+    })
+      .then((response) => {
+        if (cancelled) return;
+        setSimulationExplanationCache((prev) => ({
+          ...prev,
+          [cacheKey]: {
+            status: 'ready',
+            data: response.explanation,
+          },
+        }));
+      })
+      .catch((err: any) => {
+        if (cancelled) return;
+        setSimulationExplanationCache((prev) => ({
+          ...prev,
+          [cacheKey]: {
+            status: 'error',
+            error: err?.response?.data?.error || err?.message || 'Failed to generate explanation',
+          },
+        }));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    primarySimulationMatchedArtifactIds,
+    primarySimulationOverlay,
+    primarySimulationOverlayId,
+    primarySimulationRunId,
+    simulationExplanationCache,
+    simulationStressEnabled,
+  ]);
   const effectiveMutedObjectIds = React.useMemo(() => {
     if (!routeEmphasisVisible) return mutedObjectIds;
     const protectedIds = new Set<string>([
       ...highlightedGatewayObjectIds,
       ...Array.from(forcedRouteEndpointObjectIds),
+      ...Array.from(simulationFocusedObjectIdSet),
       ...(selectedObject?.id ? [selectedObject.id] : []),
       ...(searchHighlightedObjectId ? [searchHighlightedObjectId] : []),
     ]);
@@ -1031,6 +1284,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     routeEmphasisVisible,
     searchHighlightedObjectId,
     selectedObject,
+    simulationFocusedObjectIdSet,
     visibleMapObjects,
   ]);
   const routeSearchQueryTrim = routeSearchQuery.trim().toLowerCase();
@@ -1128,6 +1382,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const productRouteGroups = productOverlayData.visibleGroups;
   const productRouteGroupsByKey = productOverlayData.allGroupsByKey;
   const viewOverlayOpen = activeDockPanel === 'view';
+  const simulationOverlayOpen = activeDockPanel === 'simulation';
   const routesOverlayOpen = activeDockPanel === 'routes';
   const productsOverlayOpen = activeDockPanel === 'products';
   const exportOverlayOpen = activeDockPanel === 'export';
@@ -1568,45 +1823,6 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     () => new Set(selectedProductGroupKeys.map((value) => String(value || '').trim().toLowerCase()).filter(Boolean)),
     [selectedProductGroupKeys],
   );
-  const selectedProductCanonicalPaths = React.useMemo(() => {
-    const out = new Set<string>();
-    for (const key of selectedProductGroupKeySet) {
-      const group = productRouteGroupsByKey.get(key);
-      const canonicalPath = String(group?.canonicalPath || '').trim();
-      if (canonicalPath) out.add(canonicalPath);
-    }
-    return out;
-  }, [productRouteGroupsByKey, selectedProductGroupKeySet]);
-  const productSuppressedLegIds = React.useMemo(() => {
-    if (selectedProductGroupKeySet.size === 0 && selectedProductCanonicalPaths.size === 0) return [] as string[];
-    const suppressed = new Set<string>();
-    for (const artifact of activePathArtifacts) {
-      const artifactId = String(artifact?.id || '').trim();
-      if (!artifactId) continue;
-      const artifactEntries = artifactRouteProductEntries(artifact);
-      const artifactMatches = artifactEntries.some((entry) => {
-        const entryKey = String(entry.key || '').trim().toLowerCase();
-        const canonicalPath = String(entry.canonicalPath || '').trim();
-        return selectedProductGroupKeySet.has(entryKey) || (canonicalPath && selectedProductCanonicalPaths.has(canonicalPath));
-      });
-      const directProductAxis = String(artifact?.productAxis || '').trim();
-      const artifactAxisMatches = Boolean(directProductAxis)
-        && (selectedProductCanonicalPaths.has(directProductAxis) || selectedProductGroupKeySet.has(directProductAxis.toLowerCase()));
-      const legs = Array.isArray(artifact?.payload?.legs) ? artifact.payload.legs : [];
-      for (const leg of legs) {
-        const legIndex = Number(leg?.index);
-        if (!Number.isFinite(legIndex)) continue;
-        const legId = `${artifactId}:leg:${legIndex}`;
-        const productRef = String(leg?.productRef || '').trim();
-        const productMatches = Boolean(productRef)
-          && (selectedProductCanonicalPaths.has(productRef) || selectedProductGroupKeySet.has(productRef.toLowerCase()));
-        if (productMatches || (!productRef && (artifactMatches || artifactAxisMatches))) continue;
-        suppressed.add(legId);
-      }
-    }
-    return Array.from(suppressed);
-  }, [activePathArtifacts, selectedProductCanonicalPaths, selectedProductGroupKeySet]);
-
   React.useEffect(() => {
     if (routeSelectionVisible && !routeSelectionVisibleRef.current) {
       setPathLegClusteringEnabled(false);
@@ -1615,9 +1831,10 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   }, [routeSelectionVisible]);
 
   React.useEffect(() => {
-    if (simulationViewFilterEnabled) return;
+    if (simulationOverlayOpen) return;
     setSelectedRouteArtifactIds([]);
-  }, [simulationViewFilterEnabled]);
+    setSimulationSelection(null);
+  }, [simulationOverlayOpen]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -2300,11 +2517,12 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
         ...(selectedObject?.id ? [{ id: selectedObject.id, role: 'selected' as const }] : []),
         ...Array.from(forcedRouteEndpointObjectIds).map((id) => ({ id, role: 'gateway' as const })),
         ...highlightedGatewayObjectIds.map((id) => ({ id, role: 'gateway' as const })),
+        ...Array.from(simulationFocusedObjectIdSet).map((id) => ({ id, role: 'gateway' as const })),
         ...(searchHighlightedObjectId ? [{ id: searchHighlightedObjectId, role: 'search' as const }] : []),
       ],
       mutedObjectIds: effectiveMutedObjectIds,
     }),
-    [effectiveMutedObjectIds, forcedRouteEndpointObjectIds, highlightedGatewayObjectIds, searchHighlightedObjectId, selectedObject],
+    [effectiveMutedObjectIds, forcedRouteEndpointObjectIds, highlightedGatewayObjectIds, searchHighlightedObjectId, selectedObject, simulationFocusedObjectIdSet],
   );
   const pathLegClusterState = usePathLegClusterLayer(
     map,
@@ -2319,20 +2537,37 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   );
   const effectivePathLegVisibilityPolicy = React.useMemo<PathLegVisibilityPolicy | undefined>(() => {
     const base = pathLegClusterState.visibilityPolicy;
-    if ((!base || Object.keys(base).length === 0) && productSuppressedLegIds.length === 0) return base;
-    const suppressed = new Set<string>([
-      ...((base?.suppressedLegIds || []).map((value) => String(value || '').trim()).filter(Boolean)),
-      ...productSuppressedLegIds,
-    ]);
-    const revealed = (base?.revealedLegIds || [])
+    const hasSimulationLegFocus = simulationLegFocus.revealedLegIds.length > 0;
+    if ((!base || Object.keys(base).length === 0) && !hasSimulationLegFocus) return base;
+    const suppressed = new Set<string>((base?.suppressedLegIds || []).map((value) => String(value || '').trim()).filter(Boolean));
+    if (hasSimulationLegFocus) {
+      for (const artifact of activePathArtifacts) {
+        const artifactId = String(artifact?.id || '').trim();
+        if (!artifactId) continue;
+        const legs = Array.isArray(artifact?.payload?.legs) ? artifact.payload.legs : [];
+        legs.forEach((leg: any, index: number) => {
+          const legIndex = Number.isFinite(Number(leg?.index)) ? Number(leg.index) : index;
+          const legId = `${artifactId}:leg:${legIndex}`;
+          if (!simulationLegFocus.revealedLegIds.includes(legId)) suppressed.add(legId);
+        });
+      }
+    }
+    const revealed = [...(base?.revealedLegIds || []), ...simulationLegFocus.revealedLegIds]
       .map((value) => String(value || '').trim())
       .filter((value) => value && !suppressed.has(value));
     return {
       ...base,
       suppressedLegIds: Array.from(suppressed),
       revealedLegIds: revealed,
+      visibleObjectIds: compactStringList([...(base?.visibleObjectIds || []), ...simulationLegFocus.visibleObjectIds]),
+      visibleObjectPaths: compactStringList([...(base?.visibleObjectPaths || []), ...simulationLegFocus.visibleObjectPaths]),
+      stressedLegIds: compactStringList([...(base?.stressedLegIds || []), ...simulationLegFocus.stressedLegIds]),
+      legCaptionById: {
+        ...(base?.legCaptionById || {}),
+        ...(simulationLegFocus.legCaptionById || {}),
+      },
     };
-  }, [pathLegClusterState.visibilityPolicy, productSuppressedLegIds]);
+  }, [activePathArtifacts, pathLegClusterState.visibilityPolicy, simulationLegFocus]);
   const baseMarkerObjects = React.useMemo(() => {
     const candidatesById = new Map<string, GeoObject>();
     for (const object of [...visibleMapObjects, ...forcedRouteEndpointObjects]) {
@@ -2359,6 +2594,8 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     pathLegsEnabled || (!pathLegClusteringEnabled && (supplyNarrativeLegsVisible || routeEmphasisVisible)),
     focusedSupplyArtifactIds,
     effectivePathLegVisibilityPolicy,
+    routeVisibilitySelection,
+    simulationStressEnabled,
   );
   useVesselLayer(map, isReady, styleEpoch, vesselsEnabled, theme);
 
@@ -2610,66 +2847,6 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
                       gap: 10,
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}>
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)' }}>Simulation stress</div>
-                        <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                          Use simulation overlays as a live view filter on route lines.
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setSimulationViewFilterEnabled((value) => !value)}
-                        disabled={!scope?.lensId}
-                        style={{
-                          borderRadius: 999,
-                          border: simulationViewFilterEnabled ? '1px solid rgba(14,165,233,0.32)' : '1px solid var(--border-subtle)',
-                          background: simulationViewFilterEnabled
-                            ? (isDark ? 'rgba(14,165,233,0.16)' : 'rgba(14,165,233,0.10)')
-                            : 'transparent',
-                          color: simulationViewFilterEnabled ? (isDark ? '#bae6fd' : '#075985') : 'var(--text-secondary-strong)',
-                          padding: '6px 10px',
-                          fontSize: 11,
-                          fontWeight: 800,
-                          cursor: scope?.lensId ? 'pointer' : 'not-allowed',
-                          opacity: scope?.lensId ? 1 : 0.6,
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {simulationViewFilterEnabled ? 'On' : 'Off'}
-                      </button>
-                    </div>
-
-                    <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                      {simulationViewFilterEnabled
-                        ? (selectedRouteArtifactIdSet.size > 0
-                          ? `${selectedRouteArtifactIdSet.size} routes highlighted by simulation signals`
-                          : 'Simulation filter is active. Pick shoulders, products or path chains below.')
-                        : 'Disabled. The map shows ordinary route/path stress only.'}
-                    </div>
-
-                    {simulationViewFilterEnabled && (
-                      <SimulationMapOverlayPanel
-                        lensId={scope?.lensId || null}
-                        routeCatalog={routeCatalog}
-                        selectedRouteArtifactIds={selectedRouteArtifactIds}
-                        onChangeSelectedRouteArtifactIds={setSelectedRouteArtifactIds}
-                        isDark={isDark}
-                      />
-                    )}
-                  </div>
-
-                  <div
-                    style={{
-                      borderRadius: 12,
-                      border: '1px solid var(--border-subtle)',
-                      background: mapSearchPaletteChrome.subtleSurface,
-                      padding: '10px 12px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 10,
-                    }}
-                  >
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }}>
                       <div>
                         <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)' }}>Affected zones window</div>
@@ -2739,12 +2916,45 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
           <div style={{ position: 'relative', pointerEvents: 'auto' }}>
             <button
               type="button"
+              title={simulationOverlayOpen ? 'Hide simulation overlays' : 'Show simulation overlays'}
+              aria-label={simulationOverlayOpen ? 'Hide simulation overlays' : 'Show simulation overlays'}
+              onClick={() => {
+                setActiveDockPanel((current) => (current === 'simulation' ? null : 'simulation'));
+              }}
+              style={mapDockControlButtonStyle(isDark, simulationOverlayOpen, isDark ? '#c084fc' : '#7c3aed')}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M5 19V9" />
+                <path d="M12 19V5" />
+                <path d="M19 19v-7" />
+              </svg>
+              <span>Simulation</span>
+            </button>
+            {simulationOverlayOpen && (
+              <div style={{ position: 'absolute', top: 0, right: 'calc(100% + 10px)' }}>
+                <div style={{ ...mapDockOverlayCardStyle(isDark, 352), padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <SimulationMapOverlayPanel
+                    lensId={scope?.lensId || null}
+                    routeCatalog={routeCatalog}
+                    selectedRouteArtifactIds={selectedRouteArtifactIds}
+                    onChangeSelectedRouteArtifactIds={setSelectedRouteArtifactIds}
+                    onSelectionChange={setSimulationSelection}
+                    isDark={isDark}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div style={{ position: 'relative', pointerEvents: 'auto' }}>
+            <button
+              type="button"
               title={routesOverlayOpen ? 'Hide supply routes' : 'Supply routes'}
               aria-label={routesOverlayOpen ? 'Hide supply routes' : 'Supply routes'}
               onClick={() => {
                 setActiveDockPanel((current) => (current === 'routes' ? null : 'routes'));
               }}
-              style={mapDockControlButtonStyle(isDark, routesOverlayOpen, isDark ? '#f59e0b' : '#b45309')}
+              style={mapDockControlButtonStyle(isDark, routesOverlayOpen, mapLayerColor('supply', theme))}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M4 7h11" />
@@ -2813,7 +3023,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 11, color: 'var(--text-secondary-strong)' }}>
                     <span>{filteredRouteCatalog.length} shown</span>
                     <span>•</span>
-                    <span>{routeSelectionVisible ? 'Only selected routes are emphasized' : 'All loaded routes are active'}</span>
+                    <span>{routeSelectionVisible ? 'Only selected routes are visible' : 'All loaded routes are active'}</span>
                   </div>
 
                   <div
@@ -4332,7 +4542,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
                 onClick={() => setManualChainOverlayCollapsed(false)}
                 title={`Show ${String(activeManualChain.artifact.displayName || 'Supply chain').trim()}`}
                 aria-label={`Show ${String(activeManualChain.artifact.displayName || 'Supply chain').trim()}`}
-                style={mapDockButtonStyle(isDark, true, isDark ? '#f59e0b' : '#b45309')}
+                style={mapDockButtonStyle(isDark, true, mapLayerColor('supply', theme))}
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M4 7h11" />
@@ -4817,6 +5027,17 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
           </div>
         )}
 
+        {simulationStressEnabled && primarySimulationOverlay && primarySimulationRunId && primarySimulationLensId && (
+          <SimulationExplanationOverlay
+            isDark={isDark}
+            lensId={primarySimulationLensId}
+            runId={primarySimulationRunId}
+            overlay={primarySimulationOverlay}
+            state={primarySimulationExplanationState}
+            additionalSelectedCount={Math.max(0, (simulationSelection?.activeItems?.length || 0) - 1)}
+          />
+        )}
+
         {selectedObject && !stackSelection && (
           selectedObjectOverlayCollapsed ? (
             <div
@@ -4902,11 +5123,11 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
               Active map layers
             </div>
             {[
-              { label: 'Direct links', note: `${traceSummary?.directCount ?? edgesCount} core relations`, color: isDark ? '#60a5fa' : '#2563eb' },
-              { label: 'Business context', note: `${traceSummary?.contextCount ?? 0} surrounding links`, color: isDark ? '#2dd4bf' : '#0d9488' },
-              { label: 'Supply routes', note: `${traceSummary?.supplyPathCount ?? 0} mapped routes`, color: isDark ? '#f59e0b' : '#b45309' },
-              { label: 'Propagation', note: `${traceSummary?.propagationEdgeCount ?? 0} secondary links`, color: isDark ? '#94a3b8' : '#64748b' },
-              { label: 'Route lines', note: pathLegsEnabled ? `${pathLegStats.legCount} visible` : 'Hidden', color: isDark ? '#fb923c' : '#c2410c' },
+              { label: 'Direct links', note: `${traceSummary?.directCount ?? edgesCount} core relations`, color: mapLayerColor('direct', theme) },
+              { label: 'Business context', note: `${traceSummary?.contextCount ?? 0} surrounding links`, color: mapLayerColor('context', theme) },
+              { label: 'Supply routes', note: `${traceSummary?.supplyPathCount ?? 0} mapped routes`, color: mapLayerColor('supply', theme) },
+              { label: 'Propagation', note: `${traceSummary?.propagationEdgeCount ?? 0} secondary links`, color: mapLayerColor('propagation', theme) },
+              { label: 'Route legs', note: pathLegsEnabled ? `${pathLegStats.legCount} visible` : 'Hidden', color: mapLayerColor('supply', theme) },
             ].map((item) => (
               <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ width: 10, height: 10, borderRadius: 999, background: item.color, flexShrink: 0 }} />

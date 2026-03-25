@@ -61,6 +61,12 @@ func splitScope(scope []string) (staticPaths []string, queryAddresses []string) 
 	return s, q
 }
 
+// shouldSkipDeferredCacheHitScouting decides whether a deferred scope path with a cache hit
+// may suppress a new scout job. Only fresh non-domain anchors may skip.
+func shouldSkipDeferredCacheHitScouting(isDomainPath, isFragmentFreshEnough bool) bool {
+	return !isDomainPath && isFragmentFreshEnough
+}
+
 // resolveQueryAddresses резолвит QueryAddress в canonical paths с логированием ошибок
 // Возвращает map[queryAddress][]canonicalPaths и список ошибок
 func resolveQueryAddresses(

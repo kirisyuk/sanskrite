@@ -5,12 +5,21 @@ import type { MaterializedArtifact } from '../components/SupplyChainOverlay';
 import { STATIC_TRANSPORT_FLOW_DATA, type TransportFlowFeature } from '../lib/staticTransportFlows';
 import { buildPointFeature, ensureMarkerImages } from './useGeoMarkerLayer';
 import { MAP_TEXT_FONT_STACK } from './useMapInstance';
-import { humanizeCanonicalPath } from '../lib/uiUtils';
+import { geoCodeToShortName, humanizeCanonicalPath, humanizeSlug } from '../lib/uiUtils';
+import { mapLayerColor, simulationStressColor } from '../lib/mapRenderPolicy';
+import {
+  artifactMatchesRouteVisibility,
+  legMatchesRouteVisibility,
+  type MapRouteVisibilitySelection,
+} from '../lib/mapRouteVisibility';
 
 const SRC = 'path-legs-src';
+const ACTIVE_SRC = 'path-legs-active-src';
 const GLOW_LAYER = 'path-legs-glow';
 const PINNED_LAYER = 'path-legs-pinned';
 const DISCOVERED_LAYER = 'path-legs-discovered';
+const ACTIVE_GLOW_LAYER = 'path-legs-active-glow';
+const ACTIVE_DISCOVERED_LAYER = 'path-legs-active-discovered';
 const HIT_LAYER = 'path-legs-hit';
 const HOVER_GLOW_LAYER = 'path-legs-hover-glow';
 const HOVER_PINNED_LAYER = 'path-legs-hover-pinned';
@@ -29,8 +38,8 @@ const LEG_OBJECT_LABEL_LAYER = 'path-legs-object-labels';
 const LEG_MEANING_LABEL_LAYER = 'path-legs-meaning-labels';
 const OBJECT_LABEL_CHIP_DARK = 'path-legs-object-label-chip-dark';
 const OBJECT_LABEL_CHIP_LIGHT = 'path-legs-object-label-chip-light';
-const MEANING_LABEL_CHIP_DARK = 'path-legs-meaning-label-chip-dark';
-const MEANING_LABEL_CHIP_LIGHT = 'path-legs-meaning-label-chip-light';
+const MEANING_LABEL_CHIP_DARK = 'path-legs-meaning-label-chip-dark-v2';
+const MEANING_LABEL_CHIP_LIGHT = 'path-legs-meaning-label-chip-light-v2';
 const HOVER_ACTIVATE_DELAY_MS = 90;
 const HOVER_CLEAR_DELAY_MS = 140;
 
@@ -50,6 +59,8 @@ export interface PathLegVisibilityPolicy {
   visibleObjectIds?: string[];
   visibleObjectPaths?: string[];
   clusterAnchorByPath?: Record<string, [number, number]>;
+  stressedLegIds?: string[];
+  legCaptionById?: Record<string, string>;
 }
 
 function canAccessMapStyle(map: maplibregl.Map): boolean {
@@ -104,22 +115,52 @@ function artifactMatchExpression(artifactId: string): any {
 
 function glowOpacityExpression(dimmed = false): any {
   const base = ['case', ['boolean', ['get', 'isBottleneck'], false], ['*', ['get', 'glowOpacity'], 1.15], ['get', 'glowOpacity']];
-  return dimmed ? ['*', base, 0.14] : base;
+  return dimmed
+    ? ['case',
+      ['==', ['get', 'stressFocusLeg'], 1],
+      ['*', base, 1.9],
+      ['==', ['get', 'pathActive'], 1],
+      ['*', base, 1.15],
+      ['*', base, 0.14],
+    ]
+    : base;
 }
 
 function pinnedLineOpacityExpression(dimmed = false): any {
   const base = ['get', 'lineOpacity'];
-  return dimmed ? ['*', base, 0.18] : base;
+  return dimmed
+    ? ['case',
+      ['==', ['get', 'stressFocusLeg'], 1],
+      ['*', base, 1.28],
+      ['==', ['get', 'pathActive'], 1],
+      ['*', base, 1.05],
+      ['*', base, 0.18],
+    ]
+    : base;
 }
 
 function discoveredLineOpacityExpression(dimmed = false): any {
   const base = ['*', ['get', 'lineOpacity'], 0.82];
-  return dimmed ? ['*', base, 0.18] : base;
+  return dimmed
+    ? ['case',
+      ['==', ['get', 'stressFocusLeg'], 1],
+      ['*', base, 1.34],
+      ['==', ['get', 'pathActive'], 1],
+      ['*', base, 1.08],
+      ['*', base, 0.18],
+    ]
+    : base;
 }
 
 function anchorOpacityExpression(dimmed = false): any {
   const base = ['*', ['coalesce', ['get', 'anchorOpacity'], 0.24], ['coalesce', ['get', 'visibilityWeight'], 1]];
-  return dimmed ? ['*', base, 0.26] : base;
+  return dimmed
+    ? ['case',
+      ['==', ['get', 'pathActive'], 1],
+      ['*', base, 0.95],
+      ['*', base, 0.26],
+    ]
+    : base;
 }
 
 function bottleneckOpacityExpression(dimmed = false): any {
@@ -137,7 +178,15 @@ function directionOpacityExpression(dimmed = false): any {
     ],
     ['coalesce', ['get', 'visibilityWeight'], 1],
   ];
-  return dimmed ? ['*', base, 0.28] : base;
+  return dimmed
+    ? ['case',
+      ['==', ['get', 'stressFocusLeg'], 1],
+      ['*', base, 1.05],
+      ['==', ['get', 'pathActive'], 1],
+      ['*', base, 0.82],
+      ['*', base, 0.28],
+    ]
+    : base;
 }
 
 function objectIconOpacityExpression(dimmed = false): any {
@@ -166,38 +215,51 @@ function objectLabelOpacityExpression(dimmed = false): any {
   return dimmed ? ['*', base, 0.3] : base;
 }
 
+function mapLegMeaningPromotedExpr(): any {
+  return ['any', ['==', ['get', 'stressFocusLeg'], 1], ['==', ['get', 'meaningHighlight'], 1]];
+}
+
 function meaningLabelOpacityExpression(dimmed = false): any {
-  const base = [
-    '*',
-    ['case',
-      ['!=', ['get', 'meaningVisible'], 1],
-      0,
-      ['==', ['get', 'pathActive'], 1],
-      0.9,
-      ['==', ['get', 'focusMode'], 1],
-      0.28,
-      0.76,
-    ],
-    ['coalesce', ['get', 'visibilityWeight'], 1],
+  const inner = [
+    'case',
+    ['!=', ['get', 'meaningVisible'], 1],
+    0,
+    mapLegMeaningPromotedExpr(),
+    0.96,
+    ['==', ['get', 'pathActive'], 1],
+    0.9,
+    ['==', ['get', 'focusMode'], 1],
+    0.28,
+    0.76,
   ];
-  return dimmed ? ['*', base, 0.22] : base;
+  const base = ['*', inner, ['coalesce', ['get', 'visibilityWeight'], 1]];
+  return dimmed
+    ? ['case', mapLegMeaningPromotedExpr(), ['*', base, 0.88], ['*', base, 0.22]]
+    : base;
 }
 
 function meaningChipOpacityExpression(dimmed = false): any {
-  const base = [
-    '*',
-    ['case',
-      ['!=', ['get', 'meaningVisible'], 1],
-      0,
-      ['==', ['get', 'pathActive'], 1],
-      0.84,
-      ['==', ['get', 'focusMode'], 1],
-      0.2,
-      0.68,
-    ],
-    ['coalesce', ['get', 'visibilityWeight'], 1],
+  const inner = [
+    'case',
+    ['!=', ['get', 'meaningVisible'], 1],
+    0,
+    mapLegMeaningPromotedExpr(),
+    0.94,
+    ['==', ['get', 'pathActive'], 1],
+    0.84,
+    ['==', ['get', 'focusMode'], 1],
+    0.2,
+    0.68,
   ];
-  return dimmed ? ['*', base, 0.22] : base;
+  const base = ['*', inner, ['coalesce', ['get', 'visibilityWeight'], 1]];
+  return dimmed
+    ? [
+      'case',
+      mapLegMeaningPromotedExpr(),
+      ['*', base, 0.9],
+      ['*', base, 0.22],
+    ]
+    : base;
 }
 
 function legFilter(isPinned?: boolean): any {
@@ -240,8 +302,19 @@ function artifactLegStringList(leg: any, ...keys: string[]): string[] {
 
 function artifactLegNumber(leg: any, ...keys: string[]): number | null {
   const value = artifactLegField<unknown>(leg, ...keys);
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+/** Align with WorldMapPanel simulationLegFocus: numeric index, string index, else array position. */
+function resolvedArtifactLegIndex(leg: any, arrayIndex: number): number {
+  const fromField = artifactLegNumber(leg, 'index', 'Index');
+  if (fromField != null) return fromField;
+  return arrayIndex;
 }
 
 function toFixedSafe(value: number | undefined, digits = 2): string {
@@ -257,11 +330,255 @@ function escapeHtml(input: string): string {
     .replace(/'/g, '&#39;');
 }
 
+function titleizeUiToken(input: string): string {
+  const value = humanizeSlug(input);
+  if (!value) return '';
+  return value
+    .split(/\s+/g)
+    .filter(Boolean)
+    .map((word) => {
+      if (!/[a-z]/i.test(word)) return word;
+      if (word.slice(1) !== word.slice(1).toLowerCase()) return word;
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    })
+    .join(' ')
+    .trim();
+}
+
+function capitalizeUiSentence(input: string): string {
+  const value = String(input || '').trim();
+  if (!value) return '';
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function joinHumanList(items: string[]): string {
+  const clean = items.map((item) => String(item || '').trim()).filter(Boolean);
+  if (clean.length === 0) return '';
+  if (clean.length === 1) return clean[0];
+  if (clean.length === 2) return `${clean[0]} and ${clean[1]}`;
+  return `${clean.slice(0, -1).join(', ')}, and ${clean[clean.length - 1]}`;
+}
+
+function humanizeLegRef(value: string): string {
+  const ref = String(value || '').trim();
+  if (!ref) return '';
+  if (ref.startsWith('/')) return humanizeCanonicalPath(ref) || ref;
+  return titleizeUiToken(ref) || ref;
+}
+
+function humanizeDisplayChain(value: string): string {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  return raw
+    .split(/\s*→\s*/g)
+    .map((part) => titleizeUiToken(part) || part)
+    .join(' → ');
+}
+
+function extractCountryCode(canonicalPath?: string): string | null {
+  const path = String(canonicalPath || '').trim().toLowerCase();
+  if (!path.startsWith('/')) return null;
+  const parts = path.split('/').filter(Boolean);
+  if (parts.length < 2) return null;
+  const namespace = parts[0];
+  if (!['org', 'gov', 'market', 'loc', 'fac', 'deposit', 'community', 'zone'].includes(namespace)) return null;
+  let code = String(parts[1] || '').trim().toLowerCase();
+  if (!code) return null;
+  if (namespace === 'zone' && code.includes('-')) code = code.split('-')[0] || code;
+  if (!/^[a-z]{2}$/.test(code) || code === 'na') return null;
+  return code.toUpperCase();
+}
+
+function flagEmoji(countryCode?: string | null): string {
+  const code = String(countryCode || '').trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code)) return '';
+  return String.fromCodePoint(...Array.from(code).map((char) => 127397 + char.charCodeAt(0)));
+}
+
+function renderPopupChip(options: {
+  label: string;
+  value: string;
+  tone?: 'neutral' | 'info';
+  flagCode?: string | null;
+}): string {
+  const label = String(options.label || '').trim();
+  const value = String(options.value || '').trim();
+  if (!value) return '';
+  const tone = options.tone === 'info' ? 'info' : 'neutral';
+  const border = tone === 'info' ? 'rgba(59,130,246,0.22)' : 'rgba(148,163,184,0.22)';
+  const background = tone === 'info' ? 'rgba(59,130,246,0.10)' : 'rgba(255,255,255,0.04)';
+  const emoji = flagEmoji(options.flagCode);
+  const countryLabel = options.flagCode ? geoCodeToShortName(options.flagCode) : '';
+  const title = [label, countryLabel, value].filter(Boolean).join(': ');
+  return `
+    <div title="${escapeHtml(title)}" style="display:inline-flex;align-items:center;gap:8px;min-width:0;max-width:100%;padding:6px 10px;border-radius:999px;border:1px solid ${border};background:${background};box-sizing:border-box;">
+      <span style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:rgba(148,163,184,0.9);flex:0 0 auto;">${escapeHtml(label)}</span>
+      ${emoji ? `<span aria-hidden="true" style="font-size:12px;line-height:1;flex:0 0 auto;">${emoji}</span>` : ''}
+      <span style="font-size:11px;font-weight:700;line-height:1.2;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(value)}</span>
+    </div>
+  `;
+}
+
+function humanizeTraceRole(value: string): string {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return '';
+  switch (raw) {
+    case 'pinned_context':
+      return 'Pinned context';
+    case 'focus_path':
+      return 'Focused path';
+    default:
+      return titleizeUiToken(raw) || raw;
+  }
+}
+
+function humanizeDiscoveryReason(value: string): string {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return '';
+  switch (raw) {
+    case 'attached to lens scope':
+      return 'Included in the current route analysis';
+    case 'pinned context':
+      return 'Kept visible as pinned context';
+    default:
+      return titleizeUiToken(raw) || raw;
+  }
+}
+
+function humanizeGeometrySource(value: string): string {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return '';
+  switch (raw) {
+    case 'fragment':
+      return 'Approximate route';
+    case 'flow':
+      return 'Matched transport flow';
+    case 'static_flow':
+      return 'Matched mapped flow';
+    default:
+      return titleizeUiToken(raw) || raw;
+  }
+}
+
+function humanizeFlowMode(value: string): string {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return '';
+  switch (raw) {
+    case 'sea':
+      return 'Sea';
+    case 'ocean':
+      return 'Ocean';
+    case 'air':
+      return 'Air';
+    case 'rail':
+      return 'Rail';
+    case 'road':
+      return 'Road';
+    case 'pipeline':
+      return 'Pipeline';
+    case 'multimodal':
+      return 'Multimodal';
+    default:
+      return titleizeUiToken(raw) || raw;
+  }
+}
+
+function humanizeSpatialSemantic(value: string): string {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return '';
+  switch (raw) {
+    case 'cross_border':
+      return 'crosses a border';
+    case 'zone_bound':
+      return 'is bound to a mapped risk zone';
+    case 'via_zone_bound':
+      return 'passes through a mapped zone';
+    case 'flow_bound':
+      return 'is aligned to a mapped transport corridor';
+    default:
+      return humanizeSlug(raw).toLowerCase() || raw;
+  }
+}
+
+function humanizeDominantFactor(value: string): string {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return '';
+  switch (raw) {
+    case 'intermodal_mode':
+      return 'requires a mode transfer';
+    case 'affected_zone_pressure':
+      return 'feels pressure from an affected zone';
+    case 'zone_pressure':
+      return 'depends on a stressed zone';
+    case 'reroute_penalty':
+      return 'has limited rerouting options';
+    case 'fragility':
+      return 'is operationally fragile';
+    default:
+      return humanizeSlug(raw).toLowerCase() || raw;
+  }
+}
+
+function riskBandLabel(score: number): string {
+  if (!Number.isFinite(score)) return 'Unknown';
+  if (score >= 0.78) return 'Critical';
+  if (score >= 0.58) return 'High';
+  if (score >= 0.36) return 'Medium';
+  return 'Low';
+}
+
+function formatRecoveryTime(hours: number): string {
+  if (!Number.isFinite(hours) || hours < 0) return 'Unknown';
+  if (hours < 1) return '<1h';
+  if (hours < 24) return `${Math.round(hours)}h`;
+  const days = hours / 24;
+  return days >= 10 ? `${Math.round(days)}d` : `${days.toFixed(days >= 2 ? 0 : 1)}d`;
+}
+
+function buildLegSummary(args: {
+  stressCaption: string;
+  humanFlowMode: string;
+  humanSpatial: string[];
+  humanFactors: string[];
+  hasAffectedZones: boolean;
+  isBottleneck: boolean;
+  linkLabel: string;
+}): string {
+  const {
+    stressCaption,
+    humanFlowMode,
+    humanSpatial,
+    humanFactors,
+    hasAffectedZones,
+    isBottleneck,
+    linkLabel,
+  } = args;
+  if (stressCaption) {
+    const normalized = stressCaption.replace(/\n+/g, ' ').trim();
+    if (!normalized) return '';
+    return /[.!?]$/.test(normalized) ? normalized : `${normalized}.`;
+  }
+
+  const clauses: string[] = [];
+  if (humanFlowMode) clauses.push(`moves by ${humanFlowMode.toLowerCase()}`);
+  clauses.push(...humanSpatial.slice(0, 2));
+  clauses.push(...humanFactors.slice(0, 2));
+  if (hasAffectedZones) clauses.push('touches an affected zone');
+  if (isBottleneck) clauses.push('acts as a bottleneck');
+
+  if (clauses.length === 0) {
+    return linkLabel ? `This segment connects ${linkLabel}.` : 'This segment is part of the current route analysis.';
+  }
+  return `This segment ${joinHumanList(clauses)}.`;
+}
+
 function pathLegColor(stressScore: number, theme: ThemeMode): string {
-  if (stressScore >= 0.78) return theme === 'dark' ? '#e88a9d' : '#c2414f';
-  if (stressScore >= 0.58) return theme === 'dark' ? '#d8a247' : '#a16207';
-  if (stressScore >= 0.36) return theme === 'dark' ? '#67aee6' : '#3b82c6';
-  return theme === 'dark' ? '#6fc7d8' : '#1b7b84';
+  void stressScore;
+  return mapLayerColor('supply', theme);
+}
+
+function stressFocusColor(theme: ThemeMode): string {
+  return simulationStressColor(theme);
 }
 
 function legObjectLabel(obj: GeoObject): string {
@@ -272,7 +589,9 @@ function legMeaningLabel(
   productRef: string,
   flowMode: string,
   flowRefs: string[],
+  stressCaption?: string,
 ): string {
+  if (stressCaption) return stressCaption;
   const productLabel = productRef ? (humanizeCanonicalPath(productRef) || productRef) : '';
   const modeLabel = flowMode || '';
   const vesselishRef = flowRefs.find((ref) => /vessel|ship|tanker/i.test(ref)) || '';
@@ -426,7 +745,12 @@ function stylePathLegPopup(popup: maplibregl.Popup, theme: ThemeMode): void {
       ? '0 20px 48px rgba(2,6,23,0.58)'
       : '0 20px 48px rgba(15,23,42,0.16)';
     content.style.padding = '14px 16px';
+    content.style.maxWidth = '420px';
+    content.style.width = 'min(420px, calc(100vw - 56px))';
+    content.style.boxSizing = 'border-box';
+    content.style.overflow = 'hidden';
   }
+  root.style.maxWidth = '420px';
   if (tip) {
     tip.style.borderTopColor = background;
     tip.style.borderBottomColor = background;
@@ -445,8 +769,8 @@ function renderPathLegLabelChipImage(kind: 'object' | 'meaning', theme: ThemeMod
   content: [number, number, number, number];
 } {
   const pixelRatio = 2;
-  const width = kind === 'meaning' ? 128 : 112;
-  const height = kind === 'meaning' ? 46 : 42;
+  const width = kind === 'meaning' ? 280 : 112;
+  const height = kind === 'meaning' ? 52 : 42;
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -604,6 +928,7 @@ function buildViewportPathLegFeatureCollection(
     cellKey: string;
     dedupeKey: string;
     active: boolean;
+    stressFocus: boolean;
     stressScore: number;
   }> = [];
 
@@ -628,17 +953,21 @@ function buildViewportPathLegFeatureCollection(
     const dedupeHeight = zoom >= 8 ? 140 : zoom >= 6 ? 170 : 240;
     const cellKey = `${Math.floor(projected.x / cellWidth)}:${Math.floor(projected.y / cellHeight)}`;
     const dedupeKey = `${normalizeMeaningText(meaningText)}:${Math.floor(projected.x / dedupeWidth)}:${Math.floor(projected.y / dedupeHeight)}`;
+    const caption = String(props.stressCaption || '').trim();
+    const stressFocusProp = Number(props.meaningHighlight || 0) === 1 || Boolean(caption);
     meaningCandidates.push({
       feature,
       rect,
       cellKey,
       dedupeKey,
       active: Number(props.pathActive || 0) === 1,
+      stressFocus: stressFocusProp,
       stressScore: Number(props.stressScore || 0),
     });
   }
 
   meaningCandidates.sort((left, right) => {
+    if (left.stressFocus !== right.stressFocus) return Number(right.stressFocus) - Number(left.stressFocus);
     if (left.active !== right.active) return Number(right.active) - Number(left.active);
     return right.stressScore - left.stressScore;
   });
@@ -651,20 +980,23 @@ function buildViewportPathLegFeatureCollection(
     const props = (candidate.feature.properties || {}) as Record<string, any>;
     const suppressForObjectLabels = zoom >= 5.5;
     const suppressForMarkers = zoom >= 7.25;
-    const objectLabelPadding = zoom >= 8 ? 8 : zoom >= 6 ? 4 : 0;
-    const markerPadding = zoom >= 8 ? 8 : zoom >= 7 ? 3 : 0;
-    const meaningPadding = zoom >= 8 ? 10 : zoom >= 6 ? 6 : 2;
-    const collidesWithObjectLabel = suppressForObjectLabels
+    const objectLabelPadding = candidate.stressFocus ? 2 : zoom >= 8 ? 8 : zoom >= 6 ? 4 : 0;
+    const markerPadding = candidate.stressFocus ? 0 : zoom >= 8 ? 8 : zoom >= 7 ? 3 : 0;
+    const meaningPadding = candidate.stressFocus ? 2 : zoom >= 8 ? 10 : zoom >= 6 ? 6 : 2;
+    const collidesWithObjectLabel = suppressForObjectLabels && !candidate.stressFocus
       ? objectLabelRects.some((rect) => rectsOverlap(rect, candidate.rect, objectLabelPadding))
       : false;
-    const collidesWithMarker = suppressForMarkers
+    const collidesWithMarker = suppressForMarkers && !candidate.stressFocus
       ? markerRects.some((rect) => rectsOverlap(rect, candidate.rect, markerPadding))
       : false;
     const collidesWithMeaning = acceptedRects.some((rect) => rectsOverlap(rect, candidate.rect, meaningPadding));
-    const cellBudget = zoom >= 8 ? 1 : zoom >= 6.5 ? 2 : zoom >= 5 ? 4 : 7;
+    const cellBudget = candidate.stressFocus ? 3 : zoom >= 8 ? 1 : zoom >= 6.5 ? 2 : zoom >= 5 ? 4 : 7;
     const cellCount = usedCells.get(candidate.cellKey) || 0;
-    const duplicateMeaning = usedMeaningKeys.has(candidate.dedupeKey);
-    const visible = !collidesWithObjectLabel && !collidesWithMarker && !collidesWithMeaning && !duplicateMeaning && cellCount < cellBudget;
+    const duplicateMeaning = !candidate.stressFocus && usedMeaningKeys.has(candidate.dedupeKey);
+    // Simulation / stress / context legs: always show mid-leg captions (otherwise factory labels + dedupe hide them).
+    const visible = candidate.stressFocus
+      ? true
+      : !collidesWithObjectLabel && !collidesWithMarker && !collidesWithMeaning && !duplicateMeaning && cellCount < cellBudget;
     props.meaningVisible = visible ? 1 : 0;
     if (!visible) continue;
     acceptedRects.push(candidate.rect);
@@ -786,6 +1118,8 @@ export function usePathLegLayer(
   enabled: boolean,
   activeArtifactIds: string[] = [],
   visibilityPolicy?: PathLegVisibilityPolicy,
+  routeVisibility?: MapRouteVisibilitySelection,
+  simulationStressEnabled = false,
 ) {
   const [stats, setStats] = useState<PathLegLayerStats>({
     artifactCount: 0,
@@ -800,10 +1134,12 @@ export function usePathLegLayer(
   const hoverClearTimerRef = useRef<number | null>(null);
 
   const data = useMemo(() => {
-    const activeArtifactSet = new Set((activeArtifactIds || []).map((value) => String(value || '').trim()).filter(Boolean));
-    const hasActiveArtifacts = activeArtifactSet.size > 0;
-    const suppressedLegIds = new Set((visibilityPolicy?.suppressedLegIds || []).map((value) => String(value || '').trim()).filter(Boolean));
-    const revealedLegIds = new Set((visibilityPolicy?.revealedLegIds || []).map((value) => String(value || '').trim()).filter(Boolean));
+  const activeArtifactSet = new Set((activeArtifactIds || []).map((value) => String(value || '').trim()).filter(Boolean));
+  const hasActiveArtifacts = activeArtifactSet.size > 0;
+  const suppressedLegIds = new Set((visibilityPolicy?.suppressedLegIds || []).map((value) => String(value || '').trim()).filter(Boolean));
+  const revealedLegIds = new Set((visibilityPolicy?.revealedLegIds || []).map((value) => String(value || '').trim()).filter(Boolean));
+    const stressedLegIds = new Set((visibilityPolicy?.stressedLegIds || []).map((value) => String(value || '').trim()).filter(Boolean));
+    const legCaptionById = visibilityPolicy?.legCaptionById || {};
     const visibleObjectIds = new Set((visibilityPolicy?.visibleObjectIds || []).map((value) => String(value || '').trim()).filter(Boolean));
     const visibleObjectPaths = new Set((visibilityPolicy?.visibleObjectPaths || []).map((value) => String(value || '').trim()).filter(Boolean));
     const clusterAnchorByPath = visibilityPolicy?.clusterAnchorByPath || {};
@@ -834,14 +1170,16 @@ export function usePathLegLayer(
     const legObjectVisibility = new Map<string, number>();
     const legObjectArtifactIds = new Map<string, Set<string>>();
     for (const artifact of artifacts || []) {
+      if (!artifactMatchesRouteVisibility(artifact, routeVisibility)) continue;
       const artifactId = String(artifact.id || '').trim();
       const isNarrativeActive = !hasActiveArtifacts || activeArtifactSet.has(artifactId);
       const displayName = String(artifact.displayName || artifact.id || 'Supply path').trim();
       const legs = Array.isArray(artifact.payload?.legs) ? artifact.payload.legs : [];
       const bottleneckIndex = artifact.payload?.stress?.bottleneckLegIndex;
-      for (const leg of legs) {
-        const legIndex = artifactLegNumber(leg, 'index', 'Index');
-        if (legIndex == null) continue;
+      for (let legArrayIndex = 0; legArrayIndex < legs.length; legArrayIndex += 1) {
+        const leg = legs[legArrayIndex];
+        if (!legMatchesRouteVisibility(artifact, leg, routeVisibility)) continue;
+        const legIndex = resolvedArtifactLegIndex(leg, legArrayIndex);
         const legId = `${artifactId}:leg:${legIndex}`;
         const supplierRef = artifactLegString(leg, 'supplierRef', 'SupplierRef');
         const customerRef = artifactLegString(leg, 'customerRef', 'CustomerRef');
@@ -866,6 +1204,9 @@ export function usePathLegLayer(
         const localVisibilityWeight = suppressed
           ? 0
           : clamp(explicitlyRevealed ? Math.max(rawVisibilityWeight, 0.92) : rawVisibilityWeight, 0, 1);
+        const visibleStressRefs = refs.filter((ref) => visibleObjectPaths.has(ref));
+        const isStressContextLeg = visibleStressRefs.length >= 2
+          || ((supplierRef && visibleObjectPaths.has(supplierRef)) && (customerRef && visibleObjectPaths.has(customerRef)));
         for (const [refIndex, ref] of refs.entries()) {
           const object = objectByPath.get(ref);
           if (!object?.coordinates) continue;
@@ -918,10 +1259,12 @@ export function usePathLegLayer(
         if (isBound) boundLegCount += 1;
         const isBottleneck = typeof bottleneckIndex === 'number' && bottleneckIndex === legIndex;
         if (isBottleneck) bottleneckCount += 1;
+        const isStressFocusLeg = stressedLegIds.has(legId);
+        const stressCaption = String(legCaptionById[legId] || '').trim();
         const emphasis = isNarrativeActive ? 1 : hasActiveArtifacts ? 0.08 : 0.24;
-        const baseLineWidth = (1.35 + stressScore * 2.25 + (isBottleneck ? 0.7 : 0)) * (isNarrativeActive ? 1 : hasActiveArtifacts ? 0.52 : 0.74);
-        const baseLineOpacity = clamp((0.17 + bindingConfidence * 0.26 + stressScore * 0.18) * emphasis * localVisibilityWeight, 0, 0.62);
-        const baseGlowOpacity = clamp((0.028 + stressScore * 0.08) * (isNarrativeActive ? 1 : hasActiveArtifacts ? 0.08 : 0.2) * localVisibilityWeight, 0, 0.11);
+        const baseLineWidth = (1.35 + stressScore * 2.25 + (isBottleneck ? 0.7 : 0)) * (isStressFocusLeg ? 1.46 : isNarrativeActive ? 1 : hasActiveArtifacts ? 0.52 : 0.74);
+        const baseLineOpacity = clamp((0.17 + bindingConfidence * 0.26 + stressScore * 0.18) * (isStressFocusLeg ? 1.75 : emphasis) * localVisibilityWeight, 0, isStressFocusLeg ? 0.96 : 0.62);
+        const baseGlowOpacity = clamp((0.028 + stressScore * 0.08) * (isStressFocusLeg ? 1.9 : isNarrativeActive ? 1 : hasActiveArtifacts ? 0.08 : 0.2) * localVisibilityWeight, 0, isStressFocusLeg ? 0.22 : 0.11);
 
         features.push({
           type: 'Feature',
@@ -960,21 +1303,50 @@ export function usePathLegLayer(
             recoveryLatencyHours: Number(stressPayload?.recoveryLatencyHours ?? stressPayload?.RecoveryLatencyHrs) || 0,
             bindingConfidence,
             isNarrativeActive,
-            color: pathLegColor(stressScore, theme),
+            pathActive: isNarrativeActive ? 1 : 0,
+            focusMode: hasActiveArtifacts ? 1 : 0,
+            color: isStressFocusLeg ? stressFocusColor(theme) : pathLegColor(stressScore, theme),
             lineWidth: baseLineWidth,
             lineOpacity: baseLineOpacity,
             glowOpacity: baseGlowOpacity,
             isBottleneck,
             visibilityWeight: localVisibilityWeight,
             artifactKey: artifactKeyForIds([artifactId]),
+            stressCaption,
+            stressFocusLeg: isStressFocusLeg ? 1 : 0,
+            stressContextLeg: isStressContextLeg ? 1 : 0,
           },
         } as GeoJSON.Feature);
 
         const meaningPoint = midpoint(anchoredCoords);
-        const meaningLabel = legMeaningLabel(
+        let meaningLabel = legMeaningLabel(
           artifactLegString(leg, 'productRef', 'ProductRef'),
           String(flowMode || '').trim(),
           flowRefs,
+          stressCaption,
+        );
+        if (!meaningLabel && (isStressFocusLeg || isStressContextLeg)) {
+          const factorStr = dominantFactors.slice(0, 2).filter(Boolean).join(' · ');
+          const stressStr = stressScore > 0 ? `stress ${stressScore.toFixed(2)}` : '';
+          const parts = [String(stressCaption || '').trim(), factorStr, stressStr].filter(Boolean);
+          meaningLabel = parts.length > 0 ? parts.join(' · ') : 'Simulation stress';
+        }
+        const meaningHighlight =
+          (simulationStressEnabled && explicitlyRevealed)
+          || isStressFocusLeg
+          || isStressContextLeg
+          || Boolean(String(stressCaption || '').trim())
+          ? 1
+          : 0;
+        if (!meaningLabel && meaningHighlight) {
+          const pr = artifactLegString(leg, 'productRef', 'ProductRef');
+          if (pr) meaningLabel = humanizeCanonicalPath(pr) || pr;
+          else if (stressScore > 0) meaningLabel = `stress ${stressScore.toFixed(2)}`;
+          else meaningLabel = displayName.length > 0 ? displayName.slice(0, 48) : `Leg ${legIndex}`;
+        }
+        const meaningVisibilityWeight = Math.max(
+          localVisibilityWeight,
+          meaningHighlight ? 1 : 0,
         );
         if (meaningPoint && meaningLabel) {
           features.push({
@@ -989,12 +1361,16 @@ export function usePathLegLayer(
               artifactId,
               legIndex,
               meaningText: meaningLabel,
-              color: pathLegColor(stressScore, theme),
-              pathActive: isNarrativeActive ? 1 : 0,
+              color: isStressFocusLeg ? stressFocusColor(theme) : pathLegColor(stressScore, theme),
+              pathActive: isNarrativeActive || isStressFocusLeg || isStressContextLeg ? 1 : 0,
               focusMode: hasActiveArtifacts ? 1 : 0,
               stressScore,
-              visibilityWeight: localVisibilityWeight,
+              visibilityWeight: meaningVisibilityWeight,
               artifactKey: artifactKeyForIds([artifactId]),
+              stressFocusLeg: isStressFocusLeg ? 1 : 0,
+              stressContextLeg: isStressContextLeg ? 1 : 0,
+              stressCaption,
+              meaningHighlight,
             },
           } as GeoJSON.Feature);
         }
@@ -1018,7 +1394,7 @@ export function usePathLegLayer(
                 dominantFactors,
                 bindingConfidence,
                 isNarrativeActive,
-                color: pathLegColor(Math.max(stressScore, 0.6), theme),
+                color: isStressFocusLeg ? stressFocusColor(theme) : pathLegColor(Math.max(stressScore, 0.6), theme),
                 circleOpacity: (isNarrativeActive ? 0.74 : hasActiveArtifacts ? 0.08 : 0.22) * localVisibilityWeight,
                 visibilityWeight: localVisibilityWeight,
                 artifactKey: artifactKeyForIds([artifactId]),
@@ -1052,7 +1428,7 @@ export function usePathLegLayer(
         bottleneckCount,
       } satisfies PathLegLayerStats,
     };
-  }, [activeArtifactIds, artifacts, objects, theme, visibilityPolicy]);
+  }, [activeArtifactIds, artifacts, objects, routeVisibility, simulationStressEnabled, theme, visibilityPolicy]);
 
   useEffect(() => {
     setStats(data.stats);
@@ -1067,11 +1443,28 @@ export function usePathLegLayer(
     void ensureMarkerImages(map, data.markerObjects, theme);
     ensurePathLegLabelChipImages(map, theme);
     const viewportFeatureCollection = buildViewportPathLegFeatureCollection(data.featureCollection, map);
+    const activeFeatureCollection: GeoJSON.FeatureCollection = {
+      type: 'FeatureCollection',
+      features: simulationStressEnabled
+        ? (viewportFeatureCollection.features || []).filter((feature) => {
+          const props = (feature.properties || {}) as Record<string, any>;
+          return feature.geometry?.type === 'LineString'
+            && String(props.kind || '').trim() === 'leg'
+            && (Number(props.stressFocusLeg || 0) === 1 || Number(props.stressContextLeg || 0) === 1);
+        })
+        : [],
+    };
 
     if (!map.getSource(SRC)) {
       map.addSource(SRC, {
         type: 'geojson',
         data: viewportFeatureCollection as any,
+      });
+    }
+    if (!map.getSource(ACTIVE_SRC)) {
+      map.addSource(ACTIVE_SRC, {
+        type: 'geojson',
+        data: activeFeatureCollection as any,
       });
     }
 
@@ -1138,6 +1531,51 @@ export function usePathLegLayer(
             ['literal', [1.6, 2.2]],
             ['literal', [3.1, 1.8]],
           ],
+        },
+      });
+    }
+
+    if (!map.getLayer(ACTIVE_GLOW_LAYER)) {
+      map.addLayer({
+        id: ACTIVE_GLOW_LAYER,
+        type: 'line',
+        source: ACTIVE_SRC,
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+        },
+        paint: {
+          'line-color': [
+            'case',
+            ['==', ['get', 'stressFocusLeg'], 1],
+            theme === 'dark' ? '#ffe1e1' : '#ffd7dc',
+            theme === 'dark' ? '#ffd1d7' : '#ffc0c9',
+          ],
+          'line-width': ['+', ['get', 'lineWidth'], ['case', ['==', ['get', 'stressFocusLeg'], 1], 7.2, 5.8]],
+          'line-opacity': ['case', ['==', ['get', 'stressFocusLeg'], 1], 0.98, 0.88],
+          'line-blur': 1.9,
+        },
+      });
+    }
+
+    if (!map.getLayer(ACTIVE_DISCOVERED_LAYER)) {
+      map.addLayer({
+        id: ACTIVE_DISCOVERED_LAYER,
+        type: 'line',
+        source: ACTIVE_SRC,
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+        },
+        paint: {
+          'line-color': [
+            'case',
+            ['==', ['get', 'stressFocusLeg'], 1],
+            theme === 'dark' ? '#ff9aa5' : '#df6a78',
+            theme === 'dark' ? '#ffb4bd' : '#ef7d89',
+          ],
+          'line-width': ['+', ['get', 'lineWidth'], ['case', ['==', ['get', 'stressFocusLeg'], 1], 3.2, 2.4]],
+          'line-opacity': ['case', ['==', ['get', 'stressFocusLeg'], 1], 1, 0.92],
         },
       });
     }
@@ -1496,11 +1934,13 @@ export function usePathLegLayer(
           'text-font': [...MAP_TEXT_FONT_STACK],
           'text-size': [
             'interpolate', ['linear'], ['zoom'],
+            2, 11,
+            3, 10.8,
             4, 10,
             6, 10.5,
             8, 11,
           ],
-          'text-max-width': 12,
+          'text-max-width': 22,
           'text-offset': [0, 0],
           'text-anchor': 'center',
           'text-allow-overlap': true,
@@ -1510,6 +1950,8 @@ export function usePathLegLayer(
           'icon-opacity': meaningChipOpacityExpression(),
           'text-color': [
             'case',
+            mapLegMeaningPromotedExpr(),
+            theme === 'dark' ? '#fecaca' : '#b91c1c',
             ['==', ['get', 'pathActive'], 1],
             theme === 'dark' ? '#f2e7da' : 'rgba(124,45,18,0.86)',
             theme === 'dark' ? '#dccdbb' : 'rgba(120,53,15,0.74)',
@@ -1517,6 +1959,8 @@ export function usePathLegLayer(
           'text-halo-color': theme === 'dark' ? 'rgba(14,11,8,0.86)' : 'rgba(255,249,242,0.92)',
           'text-halo-width': [
             'case',
+            mapLegMeaningPromotedExpr(),
+            0.75,
             ['==', ['get', 'pathActive'], 1],
             0.64,
             0.5,
@@ -1544,11 +1988,13 @@ export function usePathLegLayer(
           'text-font': [...MAP_TEXT_FONT_STACK],
           'text-size': [
             'interpolate', ['linear'], ['zoom'],
+            2, 11,
+            3, 10.8,
             4, 10,
             6, 10.5,
             8, 11,
           ],
-          'text-max-width': 12,
+          'text-max-width': 22,
           'text-offset': [0, 0],
           'text-anchor': 'center',
           'text-allow-overlap': true,
@@ -1559,6 +2005,8 @@ export function usePathLegLayer(
           'icon-opacity': ['*', meaningChipOpacityExpression(), 1.1],
           'text-color': [
             'case',
+            mapLegMeaningPromotedExpr(),
+            theme === 'dark' ? '#fecaca' : '#b91c1c',
             ['==', ['get', 'pathActive'], 1],
             theme === 'dark' ? '#f2e7da' : 'rgba(124,45,18,0.86)',
             theme === 'dark' ? '#dccdbb' : 'rgba(120,53,15,0.74)',
@@ -1566,6 +2014,8 @@ export function usePathLegLayer(
           'text-halo-color': theme === 'dark' ? 'rgba(14,11,8,0.86)' : 'rgba(255,249,242,0.92)',
           'text-halo-width': [
             'case',
+            mapLegMeaningPromotedExpr(),
+            0.78,
             ['==', ['get', 'pathActive'], 1],
             0.68,
             0.56,
@@ -1578,14 +2028,23 @@ export function usePathLegLayer(
 
     const src = map.getSource(SRC) as maplibregl.GeoJSONSource | undefined;
     src?.setData(viewportFeatureCollection as any);
+    const activeSrc = map.getSource(ACTIVE_SRC) as maplibregl.GeoJSONSource | undefined;
+    activeSrc?.setData(activeFeatureCollection as any);
 
     const visible = (enabled || activeArtifactIds.length > 0) && data.stats.legCount > 0;
+    const activeFocusVisible = visible && activeFeatureCollection.features.length > 0;
     for (const layer of [GLOW_LAYER, PINNED_LAYER, DISCOVERED_LAYER, HIT_LAYER, LEG_OBJECT_ANCHOR_LAYER, BOTTLENECK_LAYER, LEG_DIRECTION_LAYER, LEG_OBJECT_LAYER, LEG_OBJECT_LABEL_LAYER, LEG_MEANING_LABEL_LAYER]) {
       if (map.getLayer(layer)) {
         map.setLayoutProperty(layer, 'visibility', visible ? 'visible' : 'none');
       }
     }
-  }, [map, isReady, styleEpoch, enabled, theme, data, activeArtifactIds]);
+    for (const layer of [ACTIVE_GLOW_LAYER, ACTIVE_DISCOVERED_LAYER]) {
+      if (map.getLayer(layer)) {
+        map.setLayoutProperty(layer, 'visibility', activeFocusVisible ? 'visible' : 'none');
+        map.moveLayer(layer);
+      }
+    }
+  }, [map, isReady, styleEpoch, enabled, theme, data, activeArtifactIds, simulationStressEnabled]);
 
   useEffect(() => {
     if (!map || !isReady || !canAccessMapStyle(map)) return;
@@ -1593,7 +2052,7 @@ export function usePathLegLayer(
     const activeHoverId = sceneVisible ? String(hoveredArtifactId || '').trim() : '';
     const hasHover = Boolean(activeHoverId);
 
-    const lineOpacityMode = hasHover;
+    const lineOpacityMode = hasHover || activeArtifactIds.length > 0;
     if (map.getLayer(GLOW_LAYER)) map.setPaintProperty(GLOW_LAYER, 'line-opacity', glowOpacityExpression(lineOpacityMode));
     if (map.getLayer(PINNED_LAYER)) map.setPaintProperty(PINNED_LAYER, 'line-opacity', pinnedLineOpacityExpression(lineOpacityMode));
     if (map.getLayer(DISCOVERED_LAYER)) map.setPaintProperty(DISCOVERED_LAYER, 'line-opacity', discoveredLineOpacityExpression(lineOpacityMode));
@@ -1605,6 +2064,12 @@ export function usePathLegLayer(
     if (map.getLayer(LEG_MEANING_LABEL_LAYER)) {
       map.setPaintProperty(LEG_MEANING_LABEL_LAYER, 'icon-opacity', meaningChipOpacityExpression(lineOpacityMode));
       map.setPaintProperty(LEG_MEANING_LABEL_LAYER, 'text-opacity', meaningLabelOpacityExpression(lineOpacityMode));
+    }
+    if (map.getLayer(ACTIVE_GLOW_LAYER)) {
+      map.moveLayer(ACTIVE_GLOW_LAYER);
+    }
+    if (map.getLayer(ACTIVE_DISCOVERED_LAYER)) {
+      map.moveLayer(ACTIVE_DISCOVERED_LAYER);
     }
 
     const hoverLayers: Array<{ id: string; filter: any }> = [
@@ -1724,35 +2189,135 @@ export function usePathLegLayer(
       const zoneRefs = parseList(props.zoneRefs);
       const affectedZoneRefs = parseList(props.affectedZoneRefs);
       const spatialSemantics = parseList(props.spatialSemantics);
+      const stressCaption = String(props.stressCaption || '').trim();
       const discoveryReason = String(props.discoveryReason || '').trim();
       const traceRole = String(props.traceRole || '').trim();
       const discoverySource = String(props.discoverySource || '').trim();
+      const supplierRef = String(props.supplierRef || '').trim();
+      const customerRef = String(props.customerRef || '').trim();
+      const supplierLabel = supplierRef ? (humanizeCanonicalPath(supplierRef) || supplierRef) : '';
+      const customerLabel = customerRef ? (humanizeCanonicalPath(customerRef) || customerRef) : '';
+      const linkLabel = supplierLabel && customerLabel ? `${supplierLabel} → ${customerLabel}` : '';
+      const productRef = String(props.productRef || '').trim();
+      const productLabel = productRef ? (humanizeCanonicalPath(productRef) || productRef) : '';
+      const supplierCountryCode = extractCountryCode(supplierRef);
+      const customerCountryCode = extractCountryCode(customerRef);
+      const humanFlowMode = humanizeFlowMode(String(props.flowMode || '').trim());
+      const humanSpatial = Array.from(new Set(spatialSemantics.map(humanizeSpatialSemantic).filter(Boolean)));
+      const humanFactors = Array.from(new Set(dominantFactors.map(humanizeDominantFactor).filter(Boolean)));
+      const humanZones = Array.from(new Set([...zoneRefs, ...affectedZoneRefs].map(humanizeLegRef).filter(Boolean)));
+      const humanFlows = Array.from(new Set(flowRefs.map(humanizeLegRef).filter(Boolean)));
+      const humanDiscoveryReason = humanizeDiscoveryReason(discoveryReason);
+      const humanTraceRole = humanizeTraceRole(traceRole);
+      const humanGeometrySource = humanizeGeometrySource(String(props.geometrySource || '').trim());
+      const displayTitle = humanizeDisplayChain(String(props.displayName || 'Supply path'));
+      const headerChips = [
+        renderPopupChip({ label: 'From', value: supplierLabel, flagCode: supplierCountryCode }),
+        renderPopupChip({ label: 'Product', value: productLabel, tone: 'info' }),
+        renderPopupChip({ label: 'To', value: customerLabel, flagCode: customerCountryCode }),
+      ].filter(Boolean).join('');
+      const summary = buildLegSummary({
+        stressCaption,
+        humanFlowMode,
+        humanSpatial,
+        humanFactors,
+        hasAffectedZones: affectedZoneRefs.length > 0,
+        isBottleneck: Boolean(props.isBottleneck),
+        linkLabel,
+      });
+      const signalItems = Array.from(new Set([
+        ...humanSpatial.map(capitalizeUiSentence),
+        ...(humanFlowMode ? [`Moves by ${humanFlowMode}`] : []),
+        ...humanFactors.map(capitalizeUiSentence),
+        ...(props.isBottleneck ? ['Bottleneck segment'] : []),
+      ])).slice(0, 4);
+      const confidencePct = Number(props.bindingConfidence) * 100;
+      const metricItems = [
+        { label: 'Risk', value: riskBandLabel(Number(props.stressScore)) },
+        { label: 'Confidence', value: `${toFixedSafe(confidencePct, 0)}%` },
+        { label: 'Recovery', value: formatRecoveryTime(Number(props.recoveryLatencyHours)) },
+      ];
+      const legNumber = Number.isFinite(Number(props.legIndex)) ? String(Number(props.legIndex) + 1) : String(props.legIndex || '').trim();
+      const bodyTextColor = theme === 'dark' ? 'rgba(255,255,255,0.94)' : 'rgba(15,23,42,0.9)';
+      const mutedTextColor = theme === 'dark' ? 'rgba(255,255,255,0.7)' : 'rgba(51,65,85,0.74)';
+      const chipBg = theme === 'dark' ? 'rgba(15,23,42,0.28)' : 'rgba(255,255,255,0.88)';
+      const panelBg = theme === 'dark' ? 'rgba(15,23,42,0.18)' : 'rgba(248,250,252,0.88)';
+      const panelBorder = theme === 'dark' ? 'rgba(148,163,184,0.16)' : 'rgba(148,163,184,0.22)';
+      const contextRows: string[] = [];
+      if (!headerChips && linkLabel) {
+        contextRows.push(`<div style="font-size:11px;line-height:1.45;"><strong style="color:${mutedTextColor};">Route</strong><br><span style="display:block;word-break:break-word;">${escapeHtml(linkLabel)}</span></div>`);
+      }
+      if (signalItems.length > 0) {
+        contextRows.push(`<div style="font-size:11px;line-height:1.45;"><strong style="color:${mutedTextColor};">Signals</strong><br>${escapeHtml(signalItems.join(' • '))}</div>`);
+      }
+      if (humanZones.length > 0) {
+        contextRows.push(`<div style="font-size:11px;line-height:1.45;"><strong style="color:${mutedTextColor};">Zones</strong><br>${escapeHtml(humanZones.slice(0, 3).join(' • '))}</div>`);
+      }
+      const technicalRows: string[] = [];
+      if (humanDiscoveryReason) {
+        technicalRows.push(`<div style="font-size:11px;line-height:1.45;"><strong>Included because:</strong> ${escapeHtml(humanDiscoveryReason)}</div>`);
+      } else if (discoverySource) {
+        technicalRows.push(`<div style="font-size:11px;line-height:1.45;"><strong>Source:</strong> ${escapeHtml(titleizeUiToken(discoverySource) || discoverySource)}</div>`);
+      }
+      if (humanGeometrySource) {
+        technicalRows.push(`<div style="font-size:11px;line-height:1.45;"><strong>Geometry:</strong> ${escapeHtml(humanGeometrySource)}${props.snappedToFlow ? ' • snapped to flow' : ''}</div>`);
+      }
+      if (humanTraceRole) {
+        technicalRows.push(`<div style="font-size:11px;line-height:1.45;"><strong>Trace role:</strong> ${escapeHtml(humanTraceRole)}</div>`);
+      }
+      if (humanFlows.length > 0) {
+        technicalRows.push(`<div style="font-size:11px;line-height:1.45;"><strong>Mapped flows:</strong> ${escapeHtml(humanFlows.slice(0, 3).join(' • '))}</div>`);
+      }
+      if (flowRefs.length > 0) {
+        technicalRows.push(`<div style="font-size:11px;line-height:1.45;"><strong>Flow refs:</strong> ${escapeHtml(flowRefs.slice(0, 3).join(', '))}</div>`);
+      }
+      if (zoneRefs.length > 0) {
+        technicalRows.push(`<div style="font-size:11px;line-height:1.45;"><strong>Zone refs:</strong> ${escapeHtml(zoneRefs.slice(0, 3).join(', '))}</div>`);
+      }
+      if (affectedZoneRefs.length > 0) {
+        technicalRows.push(`<div style="font-size:11px;line-height:1.45;"><strong>Affected zone refs:</strong> ${escapeHtml(affectedZoneRefs.slice(0, 3).join(', '))}</div>`);
+      }
+      if (dominantFactors.length > 0) {
+        technicalRows.push(`<div style="font-size:11px;line-height:1.45;"><strong>Factors:</strong> ${escapeHtml(dominantFactors.join(', '))}</div>`);
+      }
+      if (spatialSemantics.length > 0) {
+        technicalRows.push(`<div style="font-size:11px;line-height:1.45;"><strong>Spatial semantics:</strong> ${escapeHtml(spatialSemantics.join(', '))}</div>`);
+      }
 
       const html = `
-        <div style="display:flex;flex-direction:column;gap:6px;min-width:240px;max-width:320px;">
-          <div style="font-size:12px;font-weight:800;">${escapeHtml(String(props.displayName || 'Supply path'))}</div>
-          <div style="font-size:11px;opacity:0.78;">${props.isPinned ? 'Pinned path' : 'Discovered path'} • Leg ${escapeHtml(String(props.legIndex ?? ''))}${props.isBottleneck ? ' • bottleneck' : ''}</div>
-          <div style="font-size:11px;display:flex;flex-wrap:wrap;gap:6px;">
-            <span>stress ${escapeHtml(toFixedSafe(Number(props.stressScore), 2))}</span>
-            <span>bind ${escapeHtml(toFixedSafe(Number(props.bindingConfidence) * 100, 0))}%</span>
-            <span>recovery ${escapeHtml(toFixedSafe(Number(props.recoveryLatencyHours), 0))}h</span>
+        <div style="display:flex;flex-direction:column;gap:12px;width:100%;max-width:100%;box-sizing:border-box;word-break:normal;overflow-wrap:anywhere;">
+          <div style="display:flex;flex-direction:column;gap:4px;">
+            ${headerChips ? `<div style="display:flex;flex-wrap:wrap;gap:8px;max-width:100%;min-width:0;">${headerChips}</div>` : ''}
+            ${!headerChips ? `<div style="font-size:13px;font-weight:800;line-height:1.4;word-break:break-word;">${escapeHtml(displayTitle || String(props.displayName || 'Supply path'))}</div>` : ''}
+            <div style="font-size:11px;color:${mutedTextColor};">${props.isPinned ? 'Pinned route' : 'Discovered route'} • Leg ${escapeHtml(legNumber)}${props.isBottleneck ? ' • bottleneck' : ''}</div>
           </div>
-          ${traceRole ? `<div style="font-size:11px;"><strong>Trace role:</strong> ${escapeHtml(traceRole.replace(/_/g, ' '))}</div>` : ''}
-          ${discoveryReason ? `<div style="font-size:11px;"><strong>Why shown:</strong> ${escapeHtml(discoveryReason)}</div>` : ''}
-          ${!discoveryReason && discoverySource ? `<div style="font-size:11px;"><strong>Source:</strong> ${escapeHtml(discoverySource)}</div>` : ''}
-          ${typeof props.flowMode === 'string' && props.flowMode ? `<div style="font-size:11px;"><strong>Mode:</strong> ${escapeHtml(String(props.flowMode))}${props.flowGeometryId ? ` • ${escapeHtml(String(props.flowGeometryId))}` : ''}</div>` : ''}
-          ${typeof props.geometrySource === 'string' && props.geometrySource ? `<div style="font-size:11px;"><strong>Geometry:</strong> ${escapeHtml(String(props.geometrySource))}${props.snappedToFlow ? ' • snapped' : ''}</div>` : ''}
-          ${spatialSemantics.length > 0 ? `<div style="font-size:11px;"><strong>Spatial:</strong> ${escapeHtml(spatialSemantics.join(', '))}</div>` : ''}
-          ${flowRefs.length > 0 ? `<div style="font-size:11px;"><strong>Flows:</strong> ${escapeHtml(flowRefs.join(', '))}</div>` : ''}
-          ${zoneRefs.length > 0 ? `<div style="font-size:11px;"><strong>Zones:</strong> ${escapeHtml(zoneRefs.join(', '))}</div>` : ''}
-          ${affectedZoneRefs.length > 0 ? `<div style="font-size:11px;"><strong>Affected:</strong> ${escapeHtml(affectedZoneRefs.join(', '))}</div>` : ''}
-          ${dominantFactors.length > 0 ? `<div style="font-size:11px;"><strong>Factors:</strong> ${escapeHtml(dominantFactors.join(', '))}</div>` : ''}
+          <div style="font-size:12px;line-height:1.55;color:${bodyTextColor};">${escapeHtml(summary)}</div>
+          <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;">
+            ${metricItems.map((item) => `
+              <div style="padding:8px 10px;border:1px solid ${panelBorder};border-radius:10px;background:${chipBg};min-width:0;">
+                <div style="font-size:10px;letter-spacing:0.04em;text-transform:uppercase;color:${mutedTextColor};">${escapeHtml(item.label)}</div>
+                <div style="font-size:12px;font-weight:700;line-height:1.35;">${escapeHtml(item.value)}</div>
+              </div>
+            `).join('')}
+          </div>
+          ${contextRows.length > 0 ? `<div style="display:flex;flex-direction:column;gap:8px;padding:9px 10px;border-radius:12px;background:${panelBg};border:1px solid ${panelBorder};">${contextRows.join('')}</div>` : ''}
+          ${technicalRows.length > 0 ? `
+            <details style="margin-top:2px;">
+              <summary style="cursor:pointer;font-size:11px;font-weight:600;color:${mutedTextColor};user-select:none;">Technical details</summary>
+              <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px;padding-top:8px;border-top:1px solid ${panelBorder};">
+                ${technicalRows.join('')}
+                <div style="font-size:11px;line-height:1.45;"><strong>Raw stress:</strong> ${escapeHtml(toFixedSafe(Number(props.stressScore), 2))}</div>
+                ${props.flowGeometryId ? `<div style="font-size:11px;line-height:1.45;"><strong>Flow ID:</strong> ${escapeHtml(String(props.flowGeometryId))}</div>` : ''}
+              </div>
+            </details>
+          ` : ''}
         </div>
       `;
       popupRef.current = new maplibregl.Popup({
         closeButton: false,
         closeOnClick: false,
         offset: 12,
+        maxWidth: '420px',
       })
         .setLngLat(event.lngLat)
         .setHTML(html)

@@ -3,7 +3,6 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const DEFAULT_FEEDS_PATH = "temp-repos/worldmonitor/src/config/feeds.ts";
 const DEFAULT_TIMEOUT_MS = 12000;
 
 const stopWords = new Set([
@@ -50,7 +49,7 @@ const expandedFeeds = [
 
 function parseArgs(argv) {
   const out = {
-    feedsPath: DEFAULT_FEEDS_PATH,
+    feedsPath: String(process.env.RSS_PROBE_FEEDS_PATH || "").trim(),
     outPath: "",
     timeoutMs: DEFAULT_TIMEOUT_MS,
     limit: 20,
@@ -233,6 +232,12 @@ function recommendFallback(feed) {
 
 async function main() {
   const args = parseArgs(process.argv);
+  if (!args.feedsPath) {
+    process.stderr.write(
+      "Missing feeds.ts: set RSS_PROBE_FEEDS_PATH or pass --feeds <path> (worldmonitor is not a repo submodule).\n",
+    );
+    process.exit(1);
+  }
   const absFeedsPath = path.resolve(args.feedsPath);
   const ts = fs.readFileSync(absFeedsPath, "utf8");
   let feeds = parseIntelFeeds(ts);

@@ -35,6 +35,19 @@ func TestValidationPolicy_ControlsAllowsCommunitySource(t *testing.T) {
 	}
 }
 
+func TestValidationPolicy_OwnsAllowsCommunitySource(t *testing.T) {
+	p := &ValidationPolicy{}
+
+	valid, _, _ := p.validateEdgeDirection(
+		horizonmodels.DependencyTypeOwns,
+		horizonmodels.FragmentTypeCommunity,
+		horizonmodels.FragmentTypeOrganization,
+	)
+	if !valid {
+		t.Fatalf("expected OWNS COMMUNITY -> ORGANIZATION to be valid")
+	}
+}
+
 func TestValidationPolicy_ProductMarketUsesTradedInAndProgramUsesParticipatesIn(t *testing.T) {
 	p := &ValidationPolicy{}
 

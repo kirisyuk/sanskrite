@@ -334,11 +334,23 @@ func CanonicalizeEdge(edgeType DependencyType, sourceType, targetType FragmentTy
 		return DependencyTypeLocatedIn, true, true, "canonicalize: GEO_REGION OWNS ORGANIZATION -> ORGANIZATION LOCATED_IN GEO_REGION"
 	}
 
-	// OWNS(COMMUNITY → ORGANIZATION) usually indicates informal control, not legal ownership.
-	if edgeType == DependencyTypeOwns &&
-		sourceType == FragmentTypeCommunity &&
-		targetType == FragmentTypeOrganization {
-		return DependencyTypeControls, false, true, "canonicalize: COMMUNITY OWNS ORGANIZATION -> COMMUNITY CONTROLS ORGANIZATION"
+	// Non-placement relations from GEO_REGION to concrete entities are often extraction inversions.
+	// Best-effort: rewrite them as entity LOCATED_IN geo.
+	if (edgeType == DependencyTypeMemberOf || edgeType == DependencyTypeHasSubgroup || edgeType == DependencyTypeOwns) &&
+		sourceType == FragmentTypeGeoRegion &&
+		(targetType == FragmentTypeOrganization || targetType == FragmentTypeFacility ||
+			targetType == FragmentTypeCommunity || targetType == FragmentTypePerson ||
+			targetType == FragmentTypeDeposit || targetType == FragmentTypeProgram) {
+		return DependencyTypeLocatedIn, true, true, "canonicalize: GEO_REGION social/ownership inversion -> ENTITY LOCATED_IN GEO_REGION"
+	}
+
+	// Symmetric placement rescue when an entity points at a GEO_REGION with a non-placement social/ownership edge.
+	if (edgeType == DependencyTypeMemberOf || edgeType == DependencyTypeHasSubgroup || edgeType == DependencyTypeOwns) &&
+		targetType == FragmentTypeGeoRegion &&
+		(sourceType == FragmentTypeOrganization || sourceType == FragmentTypeFacility ||
+			sourceType == FragmentTypeCommunity || sourceType == FragmentTypePerson ||
+			sourceType == FragmentTypeDeposit || sourceType == FragmentTypeProgram) {
+		return DependencyTypeLocatedIn, false, true, "canonicalize: ENTITY social/ownership edge to GEO_REGION -> ENTITY LOCATED_IN GEO_REGION"
 	}
 
 	// EXTRACTS_FROM is strict by ontology: FACILITY -> DEPOSIT.

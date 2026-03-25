@@ -330,7 +330,7 @@ func newImporter(
 func main() {
 	var (
 		projectID      = flag.String("project-id", "", "GCP project ID (required)")
-		inputPath      = flag.String("input", "../temp-repos/worldmonitor/data/horizon/worldmonitor-export.json", "Path to HorizonMonitor export JSON")
+		inputPath      = flag.String("input", "", "Path to HorizonMonitor export JSON (required when -import-static or -import-sources)")
 		apply          = flag.Bool("apply", false, "Apply changes to Firestore")
 		extendTaxonomy = flag.Bool("extend-taxonomy", true, "Extend horizon_taxonomy/v1 with HorizonMonitor event/signal vocab")
 		importStatic   = flag.Bool("import-static", true, "Import static HorizonMonitor objects into horizon fragments")
@@ -352,6 +352,9 @@ func main() {
 
 	if strings.TrimSpace(*projectID) == "" {
 		log.Fatal("-project-id is required")
+	}
+	if (*importStatic || *importSources) && strings.TrimSpace(*inputPath) == "" {
+		log.Fatal("-input is required when -import-static or -import-sources is set")
 	}
 	if *sourceKind != "rss" && *sourceKind != "horizon_monitor_feed" {
 		log.Fatalf("unsupported -source-kind: %s (allowed: rss, horizon_monitor_feed)", *sourceKind)

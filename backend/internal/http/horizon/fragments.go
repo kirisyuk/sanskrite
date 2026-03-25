@@ -1053,8 +1053,11 @@ func (h *HorizonHandlers) RefreshFragment(w http.ResponseWriter, r *http.Request
 			CreatedAt: time.Now().UTC(),
 			UpdatedAt: time.Now().UTC(),
 			State: map[string]interface{}{
-				"targetCanonicalPath": fragment.CanonicalPath,
-				"currentState":        string(models.ScoutingJobStatePending),
+				"targetCanonicalPath":           fragment.CanonicalPath,
+				"currentState":                  string(models.ScoutingJobStatePending),
+				"ignoreFreshnessForUserRequest": true,
+				"forceDeepScout":                true,
+				"triggerOrigin":                 "api_manual",
 			},
 		},
 		TargetCanonicalPath: fragment.CanonicalPath,

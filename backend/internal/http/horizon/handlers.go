@@ -533,6 +533,9 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 		case "attention":
 			h.GetLensAttention(w, r)
 			return
+		case "simulations":
+			h.HandleLensSimulationRoutes(w, r)
+			return
 		default:
 			http.Error(w, "Unknown subpath", http.StatusNotFound)
 			return

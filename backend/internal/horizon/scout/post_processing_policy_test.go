@@ -76,24 +76,25 @@ func TestPostProcessingPolicy_ShouldRun_Tier2(t *testing.T) {
 	}
 }
 
-func TestPostProcessingPolicy_StepCriticDisabledForDomainPeer(t *testing.T) {
+func TestPostProcessingPolicy_DomainPeerStillAllowsSubstrateEnrichment(t *testing.T) {
 	p := &PostProcessingPolicy{
 		PipelineTier:           0,
 		HasDomainExpansionPeer: true,
-		DomainModes:            []string{taxonomy.DomainModeSupplyChain},
+		DomainModes:            []string{taxonomy.DomainModeGovernance},
 	}
-	if p.ShouldRun(StepCritic) {
-		t.Error("StepCritic should be disabled when HasDomainExpansionPeer is true")
-	}
-	for _, step := range []PostProcessingStep{StepSourcePlanning, StepResearch, StepReValidation, StepMetrics} {
-		if p.ShouldRun(step) {
-			t.Errorf("step %d should be disabled when HasDomainExpansionPeer is true", step)
+	for _, step := range []PostProcessingStep{
+		StepSourcePlanning,
+		StepResearch,
+		StepCritic,
+		StepReValidation,
+		StepMetrics,
+	} {
+		if !p.ShouldRun(step) {
+			t.Errorf("step %d should stay enabled for substrate enrichment even when HasDomainExpansionPeer is true", step)
 		}
 	}
-	// Without domain peer, tier 0 should allow critic
-	p2 := &PostProcessingPolicy{PipelineTier: 0, DomainModes: []string{taxonomy.DomainModeGeneral}}
-	if !p2.ShouldRun(StepCritic) {
-		t.Error("StepCritic should run for tier 0 without domain peer")
+	if p.CanSkipPlanning() {
+		t.Error("domain peer alone should not force planning skip for tier 0 substrate jobs")
 	}
 }
 
@@ -128,10 +129,10 @@ func TestPostProcessingPolicy_RelationChildOptInOverridesDomainPeer(t *testing.T
 func TestPostProcessingPolicy_MarketTargetAllowsRelationChildrenInDomainExpansion(t *testing.T) {
 	p := &PostProcessingPolicy{
 		PipelineTier:           0,
-		RecursionDepth:        0,
-		MaxRecursionDepth:     2,
+		RecursionDepth:         0,
+		MaxRecursionDepth:      2,
 		HasDomainExpansionPeer: true,
-		TargetIsMarket:        true,
+		TargetIsMarket:         true,
 	}
 	if !p.ShouldRun(StepRelationChildScheduling) {
 		t.Error("market target in domain expansion should allow relation children (participants, sub-markets)")
@@ -142,10 +143,10 @@ func TestPostProcessingPolicy_MarketAtMaxDepthGetsOneExtraHop(t *testing.T) {
 	// recursionDepth=1, maxRecursionDepth=1: normally blocked, but market target gets one extra hop.
 	p := &PostProcessingPolicy{
 		PipelineTier:           0,
-		RecursionDepth:        1,
-		MaxRecursionDepth:     1,
+		RecursionDepth:         1,
+		MaxRecursionDepth:      1,
 		HasDomainExpansionPeer: true,
-		TargetIsMarket:        true,
+		TargetIsMarket:         true,
 	}
 	if !p.ShouldRun(StepRelationChildScheduling) {
 		t.Error("market at max depth in domain expansion should get one extra hop for participants/sub-markets")
@@ -155,7 +156,7 @@ func TestPostProcessingPolicy_MarketAtMaxDepthGetsOneExtraHop(t *testing.T) {
 func TestPostProcessingPolicy_DomainContractBlocksAllChildScheduling(t *testing.T) {
 	// Domain contracts: execute only within their internal logic, don't spawn entity jobs.
 	p := &PostProcessingPolicy{
-		PipelineTier:          0,
+		PipelineTier:         0,
 		RecursionDepth:       0,
 		MaxRecursionDepth:    2,
 		IsDomainExpansionJob: true,
@@ -317,5 +318,17 @@ func TestPostProcessingPolicy_CanSkipPlanning_BlockedByLowCoverage(t *testing.T)
 	}
 	if p.CanSkipPlanning() {
 		t.Fatal("expected planning skip to be blocked with low evidence coverage")
+	}
+}
+
+func TestPostProcessingPolicy_CanSkipPlanning_DomainPeerDoesNotOverrideTierRules(t *testing.T) {
+	p := &PostProcessingPolicy{
+		PipelineTier:           0,
+		HasDomainExpansionPeer: true,
+		CriticalOpenCount:      0,
+		EvidenceCoverage:       1.0,
+	}
+	if p.CanSkipPlanning() {
+		t.Fatal("expected planning to remain enabled for tier0 job even when domain peer exists")
 	}
 }

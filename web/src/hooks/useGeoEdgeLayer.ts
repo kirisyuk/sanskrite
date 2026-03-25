@@ -12,6 +12,12 @@ import type { MaterializedArtifact } from '../components/SupplyChainOverlay';
 import { buildPointFeature, ensureMarkerImages, GEO_MARKER_LAYER_ANCHOR } from './useGeoMarkerLayer';
 import { MAP_TEXT_FONT_STACK } from './useMapInstance';
 import { humanizeCanonicalPath } from '../lib/uiUtils';
+import { mapLayerColor } from '../lib/mapRenderPolicy';
+import {
+  artifactMatchesRouteVisibility,
+  legMatchesRouteVisibility,
+  type MapRouteVisibilitySelection,
+} from '../lib/mapRouteVisibility';
 
 const SRC = 'geo-edges';
 const ENDPOINT_SRC = 'geo-edge-endpoints';
@@ -232,11 +238,6 @@ const ENDPOINT_LABEL_CHAR_WIDTH_PX = 6.4;
 const ENDPOINT_LABEL_MAX_WIDTH_PX = 220;
 const ENDPOINT_SUMMARY_MIN_CLUSTER_SIZE = 3;
 const ENDPOINT_SUMMARY_OFFSET_Y_PX = 18;
-const DIRECT_LEGEND_COLOR = '#60a5fa';
-const CONTEXT_LEGEND_COLOR = '#2dd4bf';
-const SUPPLY_LEGEND_COLOR = '#f59e0b';
-const PROPAGATION_LEGEND_COLOR = '#94a3b8';
-
 function sanitizeOverlayToken(value?: string): string {
   const normalized = String(value || '').trim();
   if (!normalized) return '';
@@ -284,22 +285,7 @@ function primaryRiskTag(pathOverlay?: SupplyChainPathRiskOverlay | null, legOver
 }
 
 function supplyMechanismColor(theme: ThemeMode, kind: EdgeVisualKind, mechanism?: string): string {
-  const normalized = sanitizeOverlayToken(mechanism).toLowerCase();
-  if (normalized.includes('route') || normalized.includes('bottleneck') || normalized.includes('reroute')) {
-    return theme === 'dark' ? '#fb923c' : '#c2410c';
-  }
-  if (normalized.includes('inventory') || normalized.includes('lead_time') || normalized.includes('lead time')) {
-    return theme === 'dark' ? '#fbbf24' : '#b45309';
-  }
-  if (normalized.includes('substitut') || normalized.includes('sole_source') || normalized.includes('sole source')) {
-    return theme === 'dark' ? '#fb7185' : '#be123c';
-  }
-  if (normalized.includes('customs') || normalized.includes('sanction') || normalized.includes('export') || normalized.includes('control')) {
-    return theme === 'dark' ? '#93c5fd' : '#2563eb';
-  }
-  if (normalized.includes('service')) {
-    return theme === 'dark' ? '#5eead4' : '#0f766e';
-  }
+  void mechanism;
   return supplyStrokeColor(theme, kind);
 }
 
@@ -330,20 +316,20 @@ function artifactLegNumber(leg: any, ...keys: string[]): number | null {
   return value;
 }
 
-function directStrokeColor(): string {
-  return DIRECT_LEGEND_COLOR;
+function directStrokeColor(theme: ThemeMode): string {
+  return mapLayerColor('direct', theme);
 }
 
-function contextStrokeColor(): string {
-  return CONTEXT_LEGEND_COLOR;
+function contextStrokeColor(theme: ThemeMode): string {
+  return mapLayerColor('context', theme);
 }
 
-function supplyLegendColor(): string {
-  return SUPPLY_LEGEND_COLOR;
+function supplyLegendColor(theme: ThemeMode): string {
+  return mapLayerColor('supply', theme);
 }
 
-function propagationLegendColor(): string {
-  return PROPAGATION_LEGEND_COLOR;
+function propagationLegendColor(theme: ThemeMode): string {
+  return mapLayerColor('propagation', theme);
 }
 
 function endpointChipImageId(theme: ThemeMode): string {
@@ -737,11 +723,11 @@ function relationStrokeColor(theme: ThemeMode, family: EdgeFamily, semanticDirec
   void theme;
   void family;
   void semanticDirection;
-  return emphasize ? directStrokeColor() : contextStrokeColor();
+  return emphasize ? directStrokeColor(theme) : contextStrokeColor(theme);
 }
 
 function directRelationLineColor(theme: ThemeMode): string {
-  return theme === 'dark' ? '#8faed8' : '#5d83b8';
+  return directStrokeColor(theme);
 }
 
 function buildDirectRelationVisual(
@@ -1218,18 +1204,16 @@ function concaveCurveToAxis(
 function supplyStrokeColor(theme: ThemeMode, kind: EdgeVisualKind): string {
   void theme;
   void kind;
-  return supplyLegendColor();
+  return supplyLegendColor(theme);
 }
 
 function primaryStrokeColor(theme: ThemeMode): string {
-  void theme;
-  return directStrokeColor();
+  return directStrokeColor(theme);
 }
 
 function propagationStrokeColor(theme: ThemeMode, kind: EdgeVisualKind): string {
-  void theme;
   void kind;
-  return propagationLegendColor();
+  return propagationLegendColor(theme);
 }
 
 function isGeoLocCanonicalPath(value?: string): boolean {
@@ -2374,6 +2358,7 @@ function buildSelectedBushGroups(
 function buildSelectedBushConnectorFeatures(
   group: BushGroup,
   corridorFeatures: GeoJSON.Feature[],
+  theme: ThemeMode,
 ): GeoJSON.Feature[] {
   const sample = strongestFeatureForKeys(
     corridorFeatures,
@@ -2382,7 +2367,7 @@ function buildSelectedBushConnectorFeatures(
   if (!sample || group.entries.length === 0) return [];
 
   const channel = String(sample.properties?.channel || '').trim();
-  const color = String(sample.properties?.color || '').trim() || supplyLegendColor();
+  const color = String(sample.properties?.color || '').trim() || supplyLegendColor(theme);
   const kind = String(sample.properties?.kind || 'primary').trim();
   const hop = Number(sample.properties?.hop) || 1;
   const renderPriority = Number(sample.properties?.renderPriority) || 20;
@@ -2772,6 +2757,7 @@ function buildSupplyPathFeatures(
   objectByPath: Map<string, TraceObjectInfo>,
   theme: ThemeMode,
   focusObject?: Pick<GeoObject, 'canonicalPath' | 'coordinates'> | null,
+  routeVisibility?: MapRouteVisibilitySelection,
 ): {
   features: GeoJSON.Feature[];
   visiblePathRefs: Set<string>;
@@ -2820,10 +2806,12 @@ function buildSupplyPathFeatures(
   const byRouteKey = new Map<string, CandidateRoute>();
 
   for (const artifact of pathArtifacts) {
+    if (!artifactMatchesRouteVisibility(artifact, routeVisibility)) continue;
     const legs = Array.isArray(artifact.payload?.legs) ? artifact.payload.legs : [];
     const multiLegPath = legs.length > 1;
     const pathRiskOverlay = artifact.riskOverlay || null;
     for (const leg of legs) {
+      if (!legMatchesRouteVisibility(artifact, leg, routeVisibility)) continue;
       const supplierRef = artifactLegString(leg, 'supplierRef', 'SupplierRef');
       const customerRef = artifactLegString(leg, 'customerRef', 'CustomerRef');
       const productRef = artifactLegString(leg, 'productRef', 'ProductRef') || String(artifact.productAxis || '').trim();
@@ -4459,6 +4447,7 @@ export function useGeoEdgeLayer(
   theme: ThemeMode,
   hops: number = MAX_HOPS,
   lensId?: string,
+  routeVisibility?: MapRouteVisibilitySelection,
 ) {
   const [edgesLoading, setEdgesLoading] = useState(false);
   const [edgesCount, setEdgesCount] = useState(0);
@@ -4698,6 +4687,7 @@ export function useGeoEdgeLayer(
         const serverCoords = res?.graph?.coordinates ?? {};
         const fragments = res?.graph?.fragments ?? [];
         const pathArtifacts = Array.isArray(res?.supplyChains?.chains) ? (res.supplyChains.chains as MaterializedArtifact[]) : [];
+        const visiblePathArtifacts = pathArtifacts.filter((artifact) => artifactMatchesRouteVisibility(artifact, routeVisibility));
         const objectIds = new Set(currentObjects.map((obj) => obj.id));
         const objectById = new Map<string, TraceObjectInfo>(currentObjects.map((obj) => [obj.id, obj] as const));
         const objectByPath = new Map<string, TraceObjectInfo>(
@@ -4749,7 +4739,7 @@ export function useGeoEdgeLayer(
           features: supplyPathFeatures,
           visiblePathRefs,
           coveredPairs: supplyCoveredPairs,
-        } = buildSupplyPathFeatures(pathArtifacts, coordsByPath, objectByPath, theme, selectedObject);
+        } = buildSupplyPathFeatures(visiblePathArtifacts, coordsByPath, objectByPath, theme, selectedObject, routeVisibility);
         const propagationFeatures = buildSimplePropagationFeatures(selectedObject.id, res?.propagation || null, idToCoords, objectById, theme)
           .filter((feature) => {
             const sourceId = String(feature.properties?.sourceId || '').trim();
@@ -4856,7 +4846,7 @@ export function useGeoEdgeLayer(
           buildSelectedCorridorFieldFeatures(group.entries, group.id, theme),
         );
         const bushConnectorFeatures = bushGroups.flatMap((group) =>
-          buildSelectedBushConnectorFeatures(group, bushConnectorSeedFeatures),
+          buildSelectedBushConnectorFeatures(group, bushConnectorSeedFeatures, theme),
         );
         const mutedObjectIds = new Set<string>();
         for (const group of bushGroups) {
@@ -4918,7 +4908,7 @@ export function useGeoEdgeLayer(
           res?.explain || null,
           directRelations,
           contextRelations,
-          pathArtifacts,
+          visiblePathArtifacts,
           visibleLineCount,
           res?.propagation || null,
           selectedObject,
@@ -5017,7 +5007,7 @@ export function useGeoEdgeLayer(
       } catch { /* handlers may not be attached */ }
       removeLayers();
     };
-  }, [selectedObject?.id, hops, map, isReady, styleEpoch, theme, lensId]);
+  }, [selectedObject?.id, hops, map, isReady, styleEpoch, theme, lensId, routeVisibility]);
 
   return {
     edgesLoading,

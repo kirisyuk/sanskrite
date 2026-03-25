@@ -248,7 +248,7 @@ var builtInAllowedMarketDomains = setOf(
 	"transportation", "agriculture", "defense", "education",
 	"media", "entertainment", "hospitality", "retail",
 	"automotive", "aerospace", "mining", "oil-gas",
-	"pharmaceuticals", "chemicals", "construction",
+	"pharmaceuticals", "chemicals", "construction", "conglomerates",
 )
 
 var builtInAllowedLifecycleStages = setOf(

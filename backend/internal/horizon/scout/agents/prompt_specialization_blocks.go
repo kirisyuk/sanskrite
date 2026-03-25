@@ -185,6 +185,9 @@ func buildObjectTypeTaskSpecializationBlockWithHints(canonicalPath string, fragm
 		b.WriteString("- Prioritize canonical product taxonomy, then upstream/downstream transformations (TRANSFORMS_INTO), direct assembly steps (ASSEMBLES_INTO), and actor links.\n")
 	case entity_semantics.EntityTypeMarket:
 		b.WriteString("- Prioritize market hierarchy (HAS_MARKET_SEGMENT), key players (PARTICIPATES_IN), and concentration/sizing metrics.\n")
+	case entity_semantics.EntityTypeGeoRegion:
+		b.WriteString("- GEO anchor: treat THIS fragment as the semantic target for placement. Discover entities in the region, then emit entity -> LOCATED_IN/OPERATES_IN -> THIS GEO using explicit source fields when needed.\n")
+		b.WriteString("- Avoid expressing regional presence via OWNS, MEMBER_OF, HAS_SUBGROUP, or other social/governance edge types.\n")
 	case entity_semantics.EntityTypeCommunity, entity_semantics.EntityTypeCommunityDynasty, entity_semantics.EntityTypeCommunityTribe:
 		b.WriteString("- Prioritize community type, subgroup hierarchy (HAS_SUBGROUP), channels (OPERATES_VIA), and formal affiliations (AFFILIATED_WITH).\n")
 	case entity_semantics.EntityTypeDeposit:

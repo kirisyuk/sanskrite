@@ -177,13 +177,36 @@ func ResolveEdgeDirectionAutoFix(
 			Reason:     "canonicalize: GEO_REGION OWNS ORGANIZATION -> ORGANIZATION LOCATED_IN GEO_REGION",
 			Confidence: 0.95,
 		}, true
-	case edgeType == horizonmodels.DependencyTypeOwns &&
-		sourceType == horizonmodels.FragmentTypeCommunity &&
-		targetType == horizonmodels.FragmentTypeOrganization:
+	case (edgeType == horizonmodels.DependencyTypeMemberOf ||
+		edgeType == horizonmodels.DependencyTypeHasSubgroup ||
+		edgeType == horizonmodels.DependencyTypeOwns) &&
+		sourceType == horizonmodels.FragmentTypeGeoRegion &&
+		(targetType == horizonmodels.FragmentTypeOrganization ||
+			targetType == horizonmodels.FragmentTypeFacility ||
+			targetType == horizonmodels.FragmentTypeCommunity ||
+			targetType == horizonmodels.FragmentTypePerson ||
+			targetType == horizonmodels.FragmentTypeDeposit ||
+			targetType == horizonmodels.FragmentTypeProgram):
 		return EdgeDirectionAutoFix{
-			NewType:    horizonmodels.DependencyTypeControls,
+			NewType:    horizonmodels.DependencyTypeLocatedIn,
+			ShouldSwap: true,
+			Reason:     "canonicalize: GEO_REGION social/ownership inversion -> ENTITY LOCATED_IN GEO_REGION",
+			Confidence: 0.95,
+		}, true
+	case (edgeType == horizonmodels.DependencyTypeMemberOf ||
+		edgeType == horizonmodels.DependencyTypeHasSubgroup ||
+		edgeType == horizonmodels.DependencyTypeOwns) &&
+		targetType == horizonmodels.FragmentTypeGeoRegion &&
+		(sourceType == horizonmodels.FragmentTypeOrganization ||
+			sourceType == horizonmodels.FragmentTypeFacility ||
+			sourceType == horizonmodels.FragmentTypeCommunity ||
+			sourceType == horizonmodels.FragmentTypePerson ||
+			sourceType == horizonmodels.FragmentTypeDeposit ||
+			sourceType == horizonmodels.FragmentTypeProgram):
+		return EdgeDirectionAutoFix{
+			NewType:    horizonmodels.DependencyTypeLocatedIn,
 			ShouldSwap: false,
-			Reason:     "canonicalize: COMMUNITY OWNS ORGANIZATION -> COMMUNITY CONTROLS ORGANIZATION",
+			Reason:     "canonicalize: ENTITY social/ownership edge to GEO_REGION -> ENTITY LOCATED_IN GEO_REGION",
 			Confidence: 0.95,
 		}, true
 	case edgeType == horizonmodels.DependencyTypeFounded &&

@@ -212,17 +212,20 @@ func (h *HorizonHandlers) ScopeScoutLensQuery(w http.ResponseWriter, r *http.Req
 			}
 		}
 		state := map[string]interface{}{
-			"query":               q,
-			"targetCanonicalPath": targetCanonicalPath,
-			"lensId":              lens.ID,
-			"currentState":        string(models.ScoutingJobStatePending),
-			"scoutingStrategy":    string(models.ScoutingStrategySnapshot),
-			"recursionDepth":      0.0,
-			"maxRecursionDepth":   0.0,
-			"trigger":             trigger,
-			"uiScoutingMode":      scoutingMode,
-			"correlationId":       correlationID,
-			"deferredScopeAdd":    true,
+			"query":                         q,
+			"targetCanonicalPath":           targetCanonicalPath,
+			"lensId":                        lens.ID,
+			"currentState":                  string(models.ScoutingJobStatePending),
+			"scoutingStrategy":              string(models.ScoutingStrategySnapshot),
+			"recursionDepth":                0.0,
+			"maxRecursionDepth":             0.0,
+			"trigger":                       trigger,
+			"triggerOrigin":                 "api_manual",
+			"uiScoutingMode":                scoutingMode,
+			"correlationId":                 correlationID,
+			"deferredScopeAdd":              true,
+			"ignoreFreshnessForUserRequest": true,
+			"forceDeepScout":                true,
 		}
 		if scoutingMode == taxonomy.DomainModeSupplyChain || scoutingMode == taxonomy.DomainModeGovernance {
 			state["domainModes"] = []string{scoutingMode}
@@ -232,7 +235,6 @@ func (h *HorizonHandlers) ScopeScoutLensQuery(w http.ResponseWriter, r *http.Req
 			if len(hotPathCanonicalPaths) > 0 {
 				state["hotPathCanonicalPaths"] = hotPathCanonicalPaths
 			}
-			state["ignoreFreshnessForUserRequest"] = directedExploration.IgnoreFreshness
 			state["legacyDirectedExplorationDeprecated"] = true
 			state["legacyDirectedExplorationReason"] = "prefer_one_hop_downstream_for_org_fac_downstream"
 		}

@@ -1731,6 +1731,15 @@
       ]
     },
     {
+      "collectionGroup": "horizon_simulation_runs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tenantId", "order": "ASCENDING" },
+        { "fieldPath": "request.lensId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "horizon_simulation_worlds",
       "queryScope": "COLLECTION",
       "fields": [

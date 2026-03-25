@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -132,9 +134,16 @@ func TestNormalizeStatus(t *testing.T) {
 }
 
 func TestResolveFeedsPath(t *testing.T) {
-	p := resolveFeedsPath("")
-	if !strings.Contains(p, "worldmonitor") {
-		t.Fatalf("expected default worldmonitor path, got %q", p)
+	if p := resolveFeedsPath(""); p != "" {
+		t.Fatalf("expected empty for empty input, got %q", p)
+	}
+	tmp := filepath.Join(t.TempDir(), "feeds.ts")
+	if err := os.WriteFile(tmp, []byte("export const INTEL_SOURCES: Feed[] = [];"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Clean(tmp)
+	if p := resolveFeedsPath(tmp); p != want {
+		t.Fatalf("resolveFeedsPath(abs) got %q want %q", p, want)
 	}
 }
 

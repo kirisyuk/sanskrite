@@ -1,11 +1,14 @@
 package horizon
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
+	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 )
@@ -62,7 +65,7 @@ func (h *HorizonHandlers) HandleSimulationRoutes(w http.ResponseWriter, r *http.
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}
-		if !simulationAccessibleToTenant(run, authInfo.TenantID) {
+		if !h.simulationAccessibleToTenant(r.Context(), run, authInfo.TenantID) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -75,7 +78,16 @@ func (h *HorizonHandlers) HandleSimulationRoutes(w http.ResponseWriter, r *http.
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		artifact, err := h.service.Simulation().GetBundle(r.Context(), strings.TrimSpace(authInfo.TenantID), runID)
+		run, err := h.service.Simulation().GetRun(r.Context(), runID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		if !h.simulationAccessibleToTenant(r.Context(), run, authInfo.TenantID) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		artifact, err := h.service.Simulation().GetBundle(r.Context(), strings.TrimSpace(run.TenantID), runID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -86,7 +98,16 @@ func (h *HorizonHandlers) HandleSimulationRoutes(w http.ResponseWriter, r *http.
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		bundle, artifact, err := h.service.Simulation().GetBundleView(r.Context(), strings.TrimSpace(authInfo.TenantID), runID)
+		run, err := h.service.Simulation().GetRun(r.Context(), runID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		if !h.simulationAccessibleToTenant(r.Context(), run, authInfo.TenantID) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		bundle, artifact, err := h.service.Simulation().GetBundleView(r.Context(), strings.TrimSpace(run.TenantID), runID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -102,7 +123,16 @@ func (h *HorizonHandlers) HandleSimulationRoutes(w http.ResponseWriter, r *http.
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		bundle, artifact, err := h.service.Simulation().GetBundleView(r.Context(), strings.TrimSpace(authInfo.TenantID), runID)
+		run, err := h.service.Simulation().GetRun(r.Context(), runID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		if !h.simulationAccessibleToTenant(r.Context(), run, authInfo.TenantID) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		bundle, artifact, err := h.service.Simulation().GetBundleView(r.Context(), strings.TrimSpace(run.TenantID), runID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -116,12 +146,89 @@ func (h *HorizonHandlers) HandleSimulationRoutes(w http.ResponseWriter, r *http.
 			"filters":    filters.toMap(),
 			"overlays":   overlays,
 		})
+	case "explain":
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		run, err := h.service.Simulation().GetRun(r.Context(), runID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		if !h.simulationAccessibleToTenant(r.Context(), run, authInfo.TenantID) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if h.genAIHandler == nil {
+			http.Error(w, "genai handler is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		var req simulationExplanationRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		req.OverlayID = strings.TrimSpace(req.OverlayID)
+		req.Kind = strings.TrimSpace(req.Kind)
+		req.MatchedArtifactIDs = splitQueryCSV(strings.Join(req.MatchedArtifactIDs, ","))
+		if req.OverlayID == "" {
+			http.Error(w, "overlayId is required", http.StatusBadRequest)
+			return
+		}
+		bundle, artifact, err := h.service.Simulation().GetBundleView(r.Context(), strings.TrimSpace(run.TenantID), runID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		overlayContext, err := buildSimulationExplanationContext(bundle, req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		prompt := buildSimulationExplanationPrompt(run, bundle, overlayContext, req)
+		schema := simulationExplanationSchema()
+		resp, err := h.genAIHandler.GenerateDirect(r.Context(), gen_combined.GenAIRequest{
+			Model:             "gemini-3-flash-preview",
+			SystemInstruction: simulationExplanationSystemInstruction(),
+			Prompt:            prompt,
+			Temperature:       0.15,
+			MaxOutputTokens:   1600,
+			StrictJSONEnabled: true,
+			JSONSchema:        schema,
+		})
+		if err != nil {
+			http.Error(w, fmt.Sprintf("failed to generate explanation: %v", err), http.StatusInternalServerError)
+			return
+		}
+		var explanation simulationExplanationPayload
+		if err := json.Unmarshal([]byte(resp.Content), &explanation); err != nil {
+			http.Error(w, fmt.Sprintf("failed to parse explanation: %v", err), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"runId":       runID,
+			"artifactId":  strings.TrimSpace(artifact.ID),
+			"kind":        "simulation_explanation",
+			"overlayId":   overlayContext.ItemID,
+			"overlayKind": overlayContext.Kind,
+			"explanation": explanation,
+		})
 	case "worlds":
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		worlds, err := h.service.Simulation().ListWorlds(r.Context(), strings.TrimSpace(authInfo.TenantID), runID)
+		run, err := h.service.Simulation().GetRun(r.Context(), runID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		if !h.simulationAccessibleToTenant(r.Context(), run, authInfo.TenantID) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		worlds, err := h.service.Simulation().ListWorlds(r.Context(), strings.TrimSpace(run.TenantID), runID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -132,7 +239,16 @@ func (h *HorizonHandlers) HandleSimulationRoutes(w http.ResponseWriter, r *http.
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		trace, err := h.service.Simulation().GetTrace(r.Context(), strings.TrimSpace(authInfo.TenantID), runID)
+		run, err := h.service.Simulation().GetRun(r.Context(), runID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		if !h.simulationAccessibleToTenant(r.Context(), run, authInfo.TenantID) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		trace, err := h.service.Simulation().GetTrace(r.Context(), strings.TrimSpace(run.TenantID), runID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -166,11 +282,30 @@ func (h *HorizonHandlers) createSimulation(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-func simulationAccessibleToTenant(run *horizonmodels.SimulationRun, tenantID string) bool {
+func (h *HorizonHandlers) simulationAccessibleToTenant(ctx context.Context, run *horizonmodels.SimulationRun, tenantID string) bool {
 	if run == nil {
 		return false
 	}
-	return strings.TrimSpace(run.TenantID) == strings.TrimSpace(tenantID)
+	runTenantID := strings.TrimSpace(run.TenantID)
+	tenantID = strings.TrimSpace(tenantID)
+	if runTenantID == tenantID {
+		return true
+	}
+	if runTenantID != "system" && runTenantID != "global" {
+		return false
+	}
+	lensID := strings.TrimSpace(run.Request.LensID)
+	if lensID == "" {
+		lensID = strings.TrimSpace(run.BaselineRefs.LensID)
+	}
+	if lensID == "" || h.service == nil || h.service.Lens() == nil {
+		return false
+	}
+	lens, err := h.service.Lens().GetLens(ctx, lensID)
+	if err != nil || lens == nil {
+		return false
+	}
+	return strings.TrimSpace(lens.TenantID) == tenantID
 }
 
 type simulationOverlayFilters struct {
@@ -518,4 +653,243 @@ func containsFold(values []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+type simulationExplanationRequest struct {
+	OverlayID          string   `json:"overlayId"`
+	Kind               string   `json:"kind,omitempty"`
+	MatchedArtifactIDs []string `json:"matchedArtifactIds,omitempty"`
+}
+
+type simulationExplanationPayload struct {
+	Title              string                            `json:"title"`
+	Summary            string                            `json:"summary"`
+	StressNarrative    []string                          `json:"stressNarrative"`
+	AffectedObjects    []string                          `json:"affectedObjects"`
+	AffectedLinks      []string                          `json:"affectedLinks"`
+	CascadeRisks       []string                          `json:"cascadeRisks"`
+	RoleImplications   []simulationExplanationRoleImpact `json:"roleImplications"`
+	RecommendedActions []string                          `json:"recommendedActions"`
+	KeyMetrics         []simulationExplanationMetric     `json:"keyMetrics"`
+}
+
+type simulationExplanationRoleImpact struct {
+	Role        string `json:"role"`
+	Implication string `json:"implication"`
+}
+
+type simulationExplanationMetric struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
+type simulationExplanationContext struct {
+	Kind         string
+	ItemID       string
+	Item         map[string]any
+	PathChains   []map[string]any
+	Cascades     []map[string]any
+	RoleReadouts []map[string]any
+}
+
+func buildSimulationExplanationContext(bundle *horizonmodels.SimulationBundle, req simulationExplanationRequest) (*simulationExplanationContext, error) {
+	if bundle == nil || len(bundle.ResultOverlays) == 0 {
+		return nil, fmt.Errorf("simulation result overlays are not available")
+	}
+	kinds := []string{"shoulders", "products", "pathChains", "cascades"}
+	if req.Kind != "" {
+		kinds = []string{req.Kind}
+	}
+	var selected map[string]any
+	selectedKind := ""
+	for _, kind := range kinds {
+		for _, item := range toMapSlice(bundle.ResultOverlays[kind]) {
+			if strings.EqualFold(simStringField(item, "id"), req.OverlayID) {
+				selected = item
+				selectedKind = kind
+				break
+			}
+		}
+		if selected != nil {
+			break
+		}
+	}
+	if selected == nil {
+		return nil, fmt.Errorf("overlay %q not found", req.OverlayID)
+	}
+	context := &simulationExplanationContext{
+		Kind:   selectedKind,
+		ItemID: simStringField(selected, "id"),
+		Item:   selected,
+	}
+	targetRefs := simStringSliceField(selected, "targetRefs")
+	productPath := simStringField(selected, "productPath")
+	targetCountryCode := simStringField(selected, "targetCountryCode")
+	for _, item := range toMapSlice(bundle.ResultOverlays["pathChains"]) {
+		if overlayRelationMatches(item, req.OverlayID, targetRefs, productPath, targetCountryCode) {
+			context.PathChains = append(context.PathChains, item)
+		}
+	}
+	for _, item := range toMapSlice(bundle.ResultOverlays["cascades"]) {
+		if overlayRelationMatches(item, req.OverlayID, targetRefs, productPath, targetCountryCode) {
+			context.Cascades = append(context.Cascades, item)
+		}
+	}
+	for _, item := range toMapSlice(bundle.ResultOverlays["roles"]) {
+		if roleTargetsMatch(item, append([]string{req.OverlayID}, targetRefs...)) {
+			context.RoleReadouts = append(context.RoleReadouts, item)
+		}
+	}
+	return context, nil
+}
+
+func overlayRelationMatches(item map[string]any, overlayID string, targetRefs []string, productPath string, targetCountryCode string) bool {
+	if item == nil {
+		return false
+	}
+	if strings.EqualFold(simStringField(item, "id"), overlayID) {
+		return true
+	}
+	if strings.EqualFold(simStringField(item, "sourceId"), overlayID) || strings.EqualFold(simStringField(item, "targetId"), overlayID) {
+		return true
+	}
+	if anyFoldIntersect(simStringSliceField(item, "targetRefs"), targetRefs) {
+		return true
+	}
+	if productPath != "" && strings.EqualFold(simStringField(item, "productPath"), productPath) {
+		return true
+	}
+	if targetCountryCode != "" && strings.EqualFold(simStringField(item, "targetCountryCode"), targetCountryCode) {
+		return true
+	}
+	for _, signalRef := range simStringSliceField(item, "signalRefs") {
+		if strings.EqualFold(signalRef, overlayID) {
+			return true
+		}
+	}
+	return false
+}
+
+func simulationExplanationSystemInstruction() string {
+	return strings.TrimSpace(`
+You explain one selected simulation stress-factor.
+You must use only the provided runtime facts. Do not invent new actors, routes, products, or metrics.
+Your job is to convert trace-backed simulation facts into a concise business explanation in the same discipline-first style as the runtime:
+- stress driver
+- affected objects and links
+- cascade risks
+- role implications
+- recommended actions
+Return STRICT JSON only matching the schema.
+`)
+}
+
+func buildSimulationExplanationPrompt(run *horizonmodels.SimulationRun, bundle *horizonmodels.SimulationBundle, ctx *simulationExplanationContext, req simulationExplanationRequest) string {
+	payload := map[string]any{
+		"run": map[string]any{
+			"id":          strings.TrimSpace(run.ID),
+			"question":    strings.TrimSpace(run.Request.Question),
+			"lensId":      strings.TrimSpace(run.Request.LensID),
+			"status":      strings.TrimSpace(run.Status),
+			"domainModes": run.Request.DomainModes,
+		},
+		"selectedOverlay":    ctx.Item,
+		"matchedArtifactIds": req.MatchedArtifactIDs,
+		"relatedPathChains":  ctx.PathChains,
+		"relatedCascades":    ctx.Cascades,
+		"relatedRoles":       ctx.RoleReadouts,
+		"runSummary":         bundle.RunSummary,
+		"sensitivity":        bundle.Sensitivity,
+		"disciplinedSignals": bundle.DisciplinedSignals,
+		"functionExposures":  bundle.FunctionExposures,
+		"decisionDemands":    bundle.DecisionDemands,
+		"monitoringSignals":  bundle.MonitoringSignals,
+		"actorReactions":     bundle.ActorReactions,
+		"mechanismChains":    bundle.MechanismChains,
+		"protocolSummary":    bundle.ProtocolSummary,
+		"transactionSummary": bundle.TransactionSummary,
+	}
+	raw, _ := json.MarshalIndent(payload, "", "  ")
+	return strings.TrimSpace(`
+Explain the selected simulation stress-factor for a business operator.
+
+Rules:
+1. Explain only the selected factor and directly related cascades and roles.
+2. Use the same logic as the simulation runtime:
+   - route/shoulder/product/path-chain stress
+   - dominant mechanisms and transaction/protocol pressure
+   - function and role implications
+3. Do not generalize beyond the supplied facts.
+4. Keep the explanation concrete and executive-readable.
+5. "Affected links" must describe visible stressed connections, not abstract policy.
+6. "Key metrics" must come from the supplied facts and be rendered as short label/value strings.
+
+FACTS:
+` + string(raw))
+}
+
+func simulationExplanationSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"title":   map[string]any{"type": "string"},
+			"summary": map[string]any{"type": "string"},
+			"stressNarrative": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+			},
+			"affectedObjects": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+			},
+			"affectedLinks": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+			},
+			"cascadeRisks": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+			},
+			"roleImplications": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type":                 "object",
+					"additionalProperties": false,
+					"properties": map[string]any{
+						"role":        map[string]any{"type": "string"},
+						"implication": map[string]any{"type": "string"},
+					},
+					"required": []string{"role", "implication"},
+				},
+			},
+			"recommendedActions": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+			},
+			"keyMetrics": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type":                 "object",
+					"additionalProperties": false,
+					"properties": map[string]any{
+						"label": map[string]any{"type": "string"},
+						"value": map[string]any{"type": "string"},
+					},
+					"required": []string{"label", "value"},
+				},
+			},
+		},
+		"required": []string{
+			"title",
+			"summary",
+			"stressNarrative",
+			"affectedObjects",
+			"affectedLinks",
+			"cascadeRisks",
+			"roleImplications",
+			"recommendedActions",
+			"keyMetrics",
+		},
+	}
 }
