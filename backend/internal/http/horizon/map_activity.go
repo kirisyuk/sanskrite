@@ -8,6 +8,7 @@ import (
 	"time"
 
 	mapactivity "github.com/igorkirisyuk/sanskrite/internal/horizon/mapactivity"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/workscope"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 )
 
@@ -126,10 +127,7 @@ func (h *HorizonHandlers) collectLensCountries(r *http.Request, lensID string) m
 			}
 		}
 	}
-	addPathCountries(lens.Scope)
-	for _, arr := range lens.ResolvedQueries {
-		addPathCountries(arr)
-	}
+	addPathCountries(workscope.LensCountryHintPaths(lens))
 	return out
 }
 

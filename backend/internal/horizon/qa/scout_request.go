@@ -42,6 +42,10 @@ func (b *QAScoutRequestBuilder) Build(
 			SeedHints:           []string{hint},
 			RecommendedFacets:   report.RecommendedFacets,
 			Strategy:            string(horizonmodels.ScoutingStrategySnapshot),
+			WorkScopeRefs: horizonmodels.SimulationBaselineRefs{
+				LensID:     lensID,
+				ScopePaths: []string{hint},
+			},
 		})
 	}
 	return params

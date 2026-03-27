@@ -11,9 +11,9 @@ import (
 	"time"
 
 	appcache "github.com/igorkirisyuk/sanskrite/internal/cache"
-	horizonlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/workscope"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	redis "github.com/redis/go-redis/v9"
 )
@@ -191,7 +191,7 @@ func (h *HorizonHandlers) SearchSupplyChains(w http.ResponseWriter, r *http.Requ
 			"directional": directedCount,
 			"clipped":     clippedCount,
 		},
-		"riskOverlay": buildSupplyChainLensRiskOverlay(artifactsFromSearchResults(results)),
+		"riskOverlay":    buildSupplyChainLensRiskOverlay(artifactsFromSearchResults(results)),
 		"linkageSummary": linkageSummary,
 		"cache": map[string]interface{}{
 			"hit":    false,
@@ -273,11 +273,11 @@ func (h *HorizonHandlers) GetSupplyChainsByNode(w http.ResponseWriter, r *http.R
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"path":     canonicalPath,
-		"tenantId": tenantID,
-		"chains":   artifacts,
-		"total":    len(artifacts),
-		"families": countSupplyChainFamilies(artifacts),
+		"path":        canonicalPath,
+		"tenantId":    tenantID,
+		"chains":      artifacts,
+		"total":       len(artifacts),
+		"families":    countSupplyChainFamilies(artifacts),
 		"riskOverlay": buildSupplyChainLensRiskOverlay(artifacts),
 	})
 }
@@ -925,7 +925,7 @@ func buildSupplyChainLensContext(lens *horizonmodels.Lens) supplyChainLensContex
 	if lens == nil {
 		return out
 	}
-	out.NodeRefs = mergeUniqueStrings(out.NodeRefs, collectLensScopeNodeRefs(lens))
+	out.NodeRefs = mergeUniqueStrings(out.NodeRefs, workscope.LensSupplyChainNodeRefs(lens))
 	for artKey, ref := range lens.ScopeArtifacts {
 		if strings.TrimSpace(artKey) != "" {
 			out.ArtifactKeys = append(out.ArtifactKeys, artKey)
@@ -937,40 +937,6 @@ func buildSupplyChainLensContext(lens *horizonmodels.Lens) supplyChainLensContex
 	}
 	sort.Strings(out.ArtifactKeys)
 	return out
-}
-
-func collectLensScopeNodeRefs(lens *horizonmodels.Lens) []string {
-	if lens == nil {
-		return nil
-	}
-	refs := make([]string, 0, len(lens.Scope)+len(lens.ScopeFragments))
-	for _, entry := range lens.Scope {
-		entry = strings.TrimSpace(entry)
-		if entry == "" {
-			continue
-		}
-		switch {
-		case strings.HasPrefix(entry, "/query/"):
-			if lens.ResolvedQueries != nil {
-				refs = mergeUniqueStrings(refs, lens.ResolvedQueries[entry])
-			}
-		case strings.HasPrefix(entry, horizonlens.ArtifactScopePrefix):
-			continue
-		case strings.HasPrefix(entry, "/domain/"):
-			continue
-		case strings.HasPrefix(entry, "/"):
-			refs = mergeUniqueStrings(refs, []string{entry})
-		}
-	}
-	for canonicalPath := range lens.ScopeFragments {
-		refs = mergeUniqueStrings(refs, []string{canonicalPath})
-	}
-	if lens.ResolvedQueries != nil {
-		for _, paths := range lens.ResolvedQueries {
-			refs = mergeUniqueStrings(refs, paths)
-		}
-	}
-	return refs
 }
 
 func scoreSupplyChainOverlap(artifact *horizonmodels.MaterializedArtifact, ctx supplyChainLensContext) (float64, []string) {

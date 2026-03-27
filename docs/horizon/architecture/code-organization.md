@@ -20,6 +20,7 @@
 | `domain/` | Доменный режим / контракты исполнения, связанные с Scout |
 | `propagation/` | Распространение метрик и сигналов по графу |
 | `lens/` | Сервис линз, подписки, пересчёты |
+| `workscope/` | WorkScope: единый фокус работы, резолв в materialized IDs, общие пути линзы (симуляция, метрики, HTTP, карта). Архитектура: [workscope.md](workscope.md) |
 | `watch/`, `watchdog/`, `watchruntime/` | Watch-таргеты, дог-фон, runtime-снимки страниц |
 | `policy/` | Политики, enforcement executor, валидация рёбер |
 | `pathbuilder/`, `pathbinding/`, `pathstress/` | Сборка supply-chain путей, привязки, стресс-пути |

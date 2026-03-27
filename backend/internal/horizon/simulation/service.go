@@ -17,6 +17,7 @@ import (
 	horizonprop "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/simscope"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/workscope"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 )
@@ -125,8 +126,7 @@ func (s *Service) CreateRun(ctx context.Context, tenantID, projectID string, req
 		lens, _ = s.lenses.Get(ctx, strings.TrimSpace(req.LensID))
 	}
 	recognition := sanitizeSimulationDocumentMap(BuildInputRecognition(req, lens, baselineRefs))
-	operationalPreview := s.buildOperationalPreview(ctx, tenantID, req, baselineRefs, recognition)
-	signal, preview := s.buildBaselineSignalAndPreview(ctx, tenantID, req, baselineRefs, recognition, operationalPreview)
+	_, signal, preview := s.BuildSimulationBaseline(ctx, tenantID, projectID, req, baselineRefs, recognition)
 	preview = sanitizeSimulationDocumentMap(preview)
 	if s.logger != nil {
 		_, hasHydration := preview["operationalHydration"]
@@ -283,7 +283,7 @@ func (s *Service) buildBaselineRefs(ctx context.Context, tenantID string, req *h
 		if err != nil {
 			return refs, err
 		}
-		scopePaths = append(scopePaths, collectLensScopePaths(lens)...)
+		scopePaths = append(scopePaths, workscope.LensWorkbenchScopePaths(lens)...)
 		for key, ref := range lens.ScopeArtifacts {
 			artifactKeys = append(artifactKeys, key)
 			scopePaths = append(scopePaths,
@@ -293,7 +293,7 @@ func (s *Service) buildBaselineRefs(ctx context.Context, tenantID string, req *h
 			)
 			scopePaths = append(scopePaths, ref.NodeRefs...)
 		}
-		if arts, err := s.materialized.ListByLens(ctx, refs.LensID, 200); err == nil {
+		if arts, err := s.materialized.ListByLens(ctx, refs.LensID, workscope.MaterializedListByLensLimitSimulation); err == nil {
 			for _, art := range arts {
 				artifactKeys = append(artifactKeys, art.CanonicalKey)
 				scopePaths = append(scopePaths,
@@ -368,191 +368,6 @@ func (s *Service) buildBaselineRefs(ctx context.Context, tenantID string, req *h
 		refs.ArtifactKeys,
 	)
 	return refs, nil
-}
-
-func collectLensScopePaths(lens *horizonmodels.Lens) []string {
-	if lens == nil {
-		return nil
-	}
-	out := make([]string, 0, len(lens.Scope)+32)
-	out = append(out, lens.Scope...)
-	for _, path := range extractLensDeferredScopePaths(lens) {
-		out = append(out, path)
-	}
-	for _, path := range extractLensViewDirectivePaths(lens) {
-		out = append(out, path)
-	}
-	for _, path := range extractLensSupplyChainAnchors(lens) {
-		out = append(out, path)
-	}
-	for _, path := range compactStrings(lens.ExposurePaths) {
-		out = append(out, path)
-	}
-	return compactStringsPreserveOrder(out)
-}
-
-func extractLensDeferredScopePaths(lens *horizonmodels.Lens) []string {
-	if lens == nil || len(lens.ViewConfig) == 0 {
-		return nil
-	}
-	return compactStringsPreserveOrder(stringSliceFromAny(lens.ViewConfig["deferredScopePaths"]))
-}
-
-func extractLensViewDirectivePaths(lens *horizonmodels.Lens) []string {
-	if lens == nil || len(lens.ViewConfig) == 0 {
-		return nil
-	}
-	return compactStringsPreserveOrder(collectViewDirectivePathsRecursive(lens.ViewConfig))
-}
-
-func extractLensSupplyChainAnchors(lens *horizonmodels.Lens) []string {
-	if lens == nil {
-		return nil
-	}
-	paths := make([]string, 0, 32)
-	for _, query := range lens.DomainQueries {
-		if query.SupplyChainExecutionPlan != nil {
-			for _, item := range query.SupplyChainExecutionPlan.Queries {
-				if isCanonicalScopePath(item.Anchor) {
-					paths = append(paths, strings.TrimSpace(item.Anchor))
-				}
-				for _, anchor := range compactStringsPreserveOrder(item.Anchors) {
-					if isCanonicalScopePath(anchor) {
-						paths = append(paths, anchor)
-					}
-				}
-			}
-			for _, overlay := range query.SupplyChainExecutionPlan.OverlayQueries {
-				for _, anchor := range compactStringsPreserveOrder(overlay.Anchors) {
-					if isCanonicalScopePath(anchor) {
-						paths = append(paths, anchor)
-					}
-				}
-			}
-		}
-		for _, entity := range compactStringsPreserveOrder(query.FirstOrderEntities) {
-			if isCanonicalScopePath(entity) {
-				paths = append(paths, entity)
-			}
-		}
-	}
-	return compactStringsPreserveOrder(paths)
-}
-
-func collectViewDirectivePathsRecursive(raw map[string]any) []string {
-	if len(raw) == 0 {
-		return nil
-	}
-	paths := make([]string, 0, 32)
-	for key, value := range raw {
-		switch strings.TrimSpace(strings.ToLower(key)) {
-		case "focusnodepaths":
-			paths = append(paths, stringSliceFromAny(value)...)
-		case "highlightpaths":
-			if items, ok := value.([]any); ok {
-				for _, item := range items {
-					nodeMap := mapValue(item)
-					paths = append(paths, stringSliceFromAny(nodeMap["nodePaths"])...)
-					paths = append(paths, stringSliceFromAny(nodeMap["NodePaths"])...)
-				}
-			}
-		case "researchplan":
-			researchPlan := mapValue(value)
-			paths = append(paths, stringSliceFromAny(researchPlan["missingNodes"])...)
-			paths = append(paths, stringSliceFromAny(researchPlan["MissingNodes"])...)
-			if missingEdges, ok := researchPlan["missingEdges"].([]any); ok {
-				for _, rawEdge := range missingEdges {
-					item := mapValue(rawEdge)
-					paths = append(paths, firstNonEmpty(anyString(item["fromPath"]), anyString(item["FromPath"])))
-					paths = append(paths, firstNonEmpty(anyString(item["toPath"]), anyString(item["ToPath"])))
-				}
-			}
-			if missingEdges, ok := researchPlan["MissingEdges"].([]any); ok {
-				for _, rawEdge := range missingEdges {
-					item := mapValue(rawEdge)
-					paths = append(paths, firstNonEmpty(anyString(item["fromPath"]), anyString(item["FromPath"])))
-					paths = append(paths, firstNonEmpty(anyString(item["toPath"]), anyString(item["ToPath"])))
-				}
-			}
-		}
-		switch typed := value.(type) {
-		case map[string]any:
-			paths = append(paths, collectViewDirectivePathsRecursive(typed)...)
-		case []any:
-			for _, item := range typed {
-				if nested := mapValue(item); len(nested) > 0 {
-					paths = append(paths, collectViewDirectivePathsRecursive(nested)...)
-				}
-			}
-		}
-	}
-	filtered := make([]string, 0, len(paths))
-	for _, path := range compactStringsPreserveOrder(paths) {
-		if isCanonicalScopePath(path) {
-			filtered = append(filtered, path)
-		}
-	}
-	return filtered
-}
-
-func stringSliceFromAny(raw any) []string {
-	switch typed := raw.(type) {
-	case []string:
-		return compactStringsPreserveOrder(typed)
-	case []any:
-		out := make([]string, 0, len(typed))
-		for _, item := range typed {
-			if value := anyString(item); value != "" {
-				out = append(out, value)
-			}
-		}
-		return compactStringsPreserveOrder(out)
-	default:
-		return nil
-	}
-}
-
-func mapValue(raw any) map[string]any {
-	switch typed := raw.(type) {
-	case map[string]any:
-		return typed
-	default:
-		return nil
-	}
-}
-
-func compactStringsPreserveOrder(values []string) []string {
-	if len(values) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(values))
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	return out
-}
-
-func anyString(raw any) string {
-	switch typed := raw.(type) {
-	case string:
-		return strings.TrimSpace(typed)
-	default:
-		return ""
-	}
-}
-
-func isCanonicalScopePath(value string) bool {
-	value = strings.TrimSpace(value)
-	return strings.HasPrefix(value, "/")
 }
 
 func (s *Service) buildBaselineSignalAndPreview(ctx context.Context, tenantID string, req *horizonmodels.SimulationRunRequest, refs horizonmodels.SimulationBaselineRefs, recognition map[string]any, overlay map[string]any) (*horizonmodels.SignalDescriptor, map[string]any) {
@@ -807,42 +622,9 @@ func (s *Service) collectBaselineArtifacts(ctx context.Context, refs horizonmode
 	if s.materialized == nil {
 		return nil
 	}
-	out := make([]*horizonmodels.MaterializedArtifact, 0, 64)
-	seen := map[string]struct{}{}
-	appendArtifact := func(artifact *horizonmodels.MaterializedArtifact) {
-		if artifact == nil {
-			return
-		}
-		key := strings.TrimSpace(artifact.ID)
-		if key == "" {
-			key = strings.TrimSpace(artifact.CanonicalKey)
-		}
-		if key == "" {
-			return
-		}
-		if _, ok := seen[key]; ok {
-			return
-		}
-		seen[key] = struct{}{}
-		out = append(out, artifact)
-	}
-	if strings.TrimSpace(refs.LensID) != "" {
-		if artifacts, err := s.materialized.ListByLens(ctx, strings.TrimSpace(refs.LensID), 256); err == nil {
-			for _, artifact := range artifacts {
-				appendArtifact(artifact)
-			}
-		}
-	}
-	for _, artifactID := range compactStrings(refs.ArtifactIDs) {
-		artifact, err := s.materialized.Get(ctx, artifactID)
-		if err == nil {
-			appendArtifact(artifact)
-		}
-	}
-	if len(profile.FocusRefs) == 0 && len(profile.DomainProductTokens) == 0 {
-		return out
-	}
-	return simscope.FilterArtifacts(out, profile)
+	ws := workscope.FromBaselineRefs("", "", refs)
+	resolved, _ := workscope.NewResolver(s.materialized).Resolve(ctx, ws)
+	return workscope.CollectMaterializedArtifacts(ctx, s.materialized, resolved, profile)
 }
 
 func buildArtifactShoulderPreview(input map[string]*artifactShoulderAggregate) []map[string]any {

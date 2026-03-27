@@ -12,6 +12,7 @@ import (
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/workscope"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 )
 
@@ -1561,12 +1562,15 @@ func (s *Service) resolveProjectIDForSubject(ctx context.Context, subject *horiz
 }
 
 func buildRiskJobDedupKey(subject *horizonmodels.WatchSubject, trigger *horizonmodels.WatchTrigger, projectID, polarity string) string {
+	scopeDigest := workscope.WatchScopeIntentDigest(subject)
 	return strings.Join([]string{
 		"risk_job_dedup",
+		workscope.WatchPolicyVersion,
 		strings.TrimSpace(subject.TenantID),
 		strings.TrimSpace(projectID),
 		strings.TrimSpace(subject.LensID),
 		strings.TrimSpace(subject.AnchorCanonicalPath),
+		"scopeDigest:" + scopeDigest,
 		"semantic:" + buildWatchActionSemanticKey(trigger),
 		strings.TrimSpace(polarity),
 	}, "|")

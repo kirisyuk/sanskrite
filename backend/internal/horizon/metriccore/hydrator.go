@@ -14,6 +14,7 @@ import (
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/simscope"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/workscope"
 )
 
 const (
@@ -137,10 +138,11 @@ type OperationalLeg struct {
 }
 
 type OperationalHydrator struct {
-	fragments    *horizonrepo.HorizonFragmentsRepository
-	materialized *horizonrepo.MaterializedArtifactsRepository
-	genai        GenAIClient
-	logger       *log.Logger
+	fragments     *horizonrepo.HorizonFragmentsRepository
+	materialized  *horizonrepo.MaterializedArtifactsRepository
+	genai         GenAIClient
+	logger        *log.Logger
+	scopeResolver *workscope.Resolver
 }
 
 func NewOperationalHydrator(fragments *horizonrepo.HorizonFragmentsRepository, materialized *horizonrepo.MaterializedArtifactsRepository, genai GenAIClient, logger *log.Logger) *OperationalHydrator {
@@ -148,10 +150,11 @@ func NewOperationalHydrator(fragments *horizonrepo.HorizonFragmentsRepository, m
 		logger = log.Default()
 	}
 	return &OperationalHydrator{
-		fragments:    fragments,
-		materialized: materialized,
-		genai:        genai,
-		logger:       logger,
+		fragments:     fragments,
+		materialized:  materialized,
+		genai:         genai,
+		logger:        logger,
+		scopeResolver: workscope.NewResolver(materialized),
 	}
 }
 
@@ -194,9 +197,16 @@ func (h *OperationalHydrator) Hydrate(ctx context.Context, req OperationalHydrat
 		return nil, nil
 	}
 	now := time.Now().UTC()
-	profile := simscope.BuildProfile(strings.TrimSpace(req.Question), nil, req.BaselineRefs, req.Recognition)
-	artifacts := h.collectArtifacts(ctx, req.BaselineRefs, profile)
-	targets := h.collectTargets(ctx, req.TenantID, req.Recognition, artifacts, req.BaselineRefs.ScopePaths, profile, now)
+	ws := workscope.FromBaselineRefs(req.TenantID, "", req.BaselineRefs)
+	if strings.TrimSpace(ws.Refs.LensID) == "" && strings.TrimSpace(req.LensID) != "" {
+		ws.Refs.LensID = strings.TrimSpace(req.LensID)
+		ws = workscope.Normalize(ws)
+	}
+	resolved, _ := h.scopeResolver.Resolve(ctx, ws)
+	refsNorm := workscope.ToBaselineRefs(ws)
+	profile := simscope.BuildProfile(strings.TrimSpace(req.Question), nil, refsNorm, req.Recognition)
+	artifacts := h.collectArtifactsFromResolved(ctx, resolved, profile)
+	targets := h.collectTargets(ctx, req.TenantID, req.Recognition, artifacts, refsNorm.ScopePaths, profile, now)
 	missingCount := 0
 	toRefresh := make([]targetBinding, 0, len(targets))
 	for i := range targets {
@@ -210,7 +220,7 @@ func (h *OperationalHydrator) Hydrate(ctx context.Context, req OperationalHydrat
 	if len(toRefresh) > 0 && h.genai != nil {
 		refreshed, err := h.refreshTargets(ctx, req, toRefresh[:min(len(toRefresh), maxOperationalRefreshTargets)], now)
 		if err != nil && h.logger != nil {
-			h.logger.Printf("[metriccore] operational refresh warning lens=%s err=%v", strings.TrimSpace(req.LensID), err)
+			h.logger.Printf("[metriccore] operational refresh warning lens=%s err=%v", strings.TrimSpace(req.BaselineRefs.LensID), err)
 		}
 		for _, update := range refreshed {
 			updates = append(updates, update.Update)
@@ -305,149 +315,6 @@ func (h *OperationalHydrator) Hydrate(ctx context.Context, req OperationalHydrat
 	summary.DegradedTargetRefs = compactStrings(summary.DegradedTargetRefs)
 	snapshot.Summary = summary
 	return snapshot, nil
-}
-
-type targetBinding struct {
-	fragment       *horizonmodels.HorizonFragment
-	class          string
-	whyInScope     string
-	requirements   []MetricRequirement
-	refreshReasons []string
-	priorityScore  float64
-}
-
-type refreshedTarget struct {
-	Ref      string
-	Fragment *horizonmodels.HorizonFragment
-	Update   OperationalTargetUpdate
-}
-
-func (h *OperationalHydrator) collectArtifacts(ctx context.Context, refs horizonmodels.SimulationBaselineRefs, profile simscope.Profile) []*horizonmodels.MaterializedArtifact {
-	out := make([]*horizonmodels.MaterializedArtifact, 0, 64)
-	seen := map[string]struct{}{}
-	appendArtifact := func(artifact *horizonmodels.MaterializedArtifact) {
-		if artifact == nil {
-			return
-		}
-		key := strings.TrimSpace(artifact.ID)
-		if key == "" {
-			key = strings.TrimSpace(artifact.CanonicalKey)
-		}
-		if key == "" {
-			return
-		}
-		if _, ok := seen[key]; ok {
-			return
-		}
-		seen[key] = struct{}{}
-		out = append(out, artifact)
-	}
-	if strings.TrimSpace(refs.LensID) != "" {
-		if artifacts, err := h.materialized.ListByLens(ctx, strings.TrimSpace(refs.LensID), 256); err == nil {
-			for _, artifact := range artifacts {
-				appendArtifact(artifact)
-			}
-		}
-	}
-	for _, artifactID := range compactStrings(refs.ArtifactIDs) {
-		artifact, err := h.materialized.Get(ctx, artifactID)
-		if err == nil {
-			appendArtifact(artifact)
-		}
-	}
-	if len(profile.FocusRefs) == 0 && len(profile.DomainProductTokens) == 0 {
-		return out
-	}
-	return simscope.FilterArtifacts(out, profile)
-}
-
-func (h *OperationalHydrator) collectTargets(ctx context.Context, tenantID string, recognition map[string]any, artifacts []*horizonmodels.MaterializedArtifact, scopePaths []string, profile simscope.Profile, now time.Time) []targetBinding {
-	candidates := make(map[string]*targetBinding)
-	addCandidate := func(ref string, why string, score float64) {
-		ref = strings.TrimSpace(ref)
-		if ref == "" || !strings.HasPrefix(ref, "/") {
-			return
-		}
-		if simscope.PathRelevanceScore(ref, "", profile) < 0.85 {
-			return
-		}
-		entry := candidates[ref]
-		if entry == nil {
-			fragment, err := h.fragments.GetByCanonicalPathForTenant(ctx, tenantID, ref)
-			if err != nil || fragment == nil {
-				return
-			}
-			class, requirements := inferOperationalTargetContract(fragment)
-			if class == "" || len(requirements) == 0 {
-				return
-			}
-			entry = &targetBinding{
-				fragment:       fragment,
-				class:          class,
-				whyInScope:     strings.TrimSpace(why),
-				requirements:   requirements,
-				refreshReasons: EvaluateRefreshReasonsForFragment(fragment, requirements, now, DefaultRefreshPolicy()),
-				priorityScore:  targetClassPriority(class),
-			}
-			candidates[ref] = entry
-		} else if why != "" {
-			entry.whyInScope = mergeWhyInScope(entry.whyInScope, why)
-		}
-		entry.priorityScore += score
-	}
-	for _, object := range recognitionObjectCandidates(recognition) {
-		ref := strings.TrimSpace(object.Path)
-		if ref == "" {
-			continue
-		}
-		addCandidate(ref, "recognition "+strings.TrimSpace(object.Kind), 4.5+object.Score*recognitionKindPriority(object.Kind))
-	}
-	for _, path := range compactStrings(scopePaths) {
-		addCandidate(path, "scope path", 0.8)
-	}
-	for _, artifact := range artifacts {
-		if artifact == nil || artifact.Kind != horizonmodels.MaterializedKindSupplyChainPath {
-			continue
-		}
-		horizonmodels.PopulateMaterializedArtifactIndexes(artifact)
-		for _, ref := range compactStrings(append(append(append(append([]string{}, artifact.NodeRefs...), artifact.GeoRefs...), artifact.ZoneRefs...), artifact.AffectedZoneRefs...)) {
-			addCandidate(ref, "materialized path context", 0.45)
-		}
-		legs, err := horizonmodels.GetSupplyChainPathLegs(artifact)
-		if err != nil {
-			continue
-		}
-		for _, leg := range legs {
-			for _, ref := range compactStrings(append(append(append([]string{}, leg.TransportViaRefs...), leg.GeoRefs...), append(leg.ZoneRefs, leg.AffectedZoneRefs...)...)) {
-				addCandidate(ref, "path leg constraint ref", 1.3)
-			}
-		}
-	}
-	type ranked struct {
-		ref    string
-		target targetBinding
-	}
-	rankedTargets := make([]ranked, 0, len(candidates))
-	for ref, binding := range candidates {
-		if binding == nil {
-			continue
-		}
-		rankedTargets = append(rankedTargets, ranked{ref: ref, target: *binding})
-	}
-	sort.Slice(rankedTargets, func(i, j int) bool {
-		if rankedTargets[i].target.priorityScore == rankedTargets[j].target.priorityScore {
-			if len(rankedTargets[i].target.refreshReasons) == len(rankedTargets[j].target.refreshReasons) {
-				return rankedTargets[i].ref < rankedTargets[j].ref
-			}
-			return len(rankedTargets[i].target.refreshReasons) > len(rankedTargets[j].target.refreshReasons)
-		}
-		return rankedTargets[i].target.priorityScore > rankedTargets[j].target.priorityScore
-	})
-	out := make([]targetBinding, 0, min(len(rankedTargets), 16))
-	for _, item := range rankedTargets[:min(len(rankedTargets), 16)] {
-		out = append(out, item.target)
-	}
-	return out
 }
 
 func inferOperationalTargetContract(fragment *horizonmodels.HorizonFragment) (string, []MetricRequirement) {
@@ -699,7 +566,7 @@ func (h *OperationalHydrator) refreshTargetBatch(ctx context.Context, req Operat
 	envelope, err := parseGroundedHydrationEnvelope(content)
 	if err != nil {
 		if h.logger != nil {
-			h.logger.Printf("[metriccore] operational refresh raw_response lens=%s targets=%d snippet=%q", strings.TrimSpace(req.LensID), len(payload), truncateForLog(content, 1200))
+			h.logger.Printf("[metriccore] operational refresh raw_response lens=%s targets=%d snippet=%q", strings.TrimSpace(req.BaselineRefs.LensID), len(payload), truncateForLog(content, 1200))
 		}
 		return nil, fmt.Errorf("decode operational hydration: %w", err)
 	}

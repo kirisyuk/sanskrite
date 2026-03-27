@@ -15,6 +15,7 @@ import (
 	horizonpolicy "github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/workscope"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
@@ -474,8 +475,8 @@ func (h *HorizonHandlers) ListFragments(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Получаем все HorizonFragment из scope
-	fragments, err := h.service.Fragments().ListByCanonicalPaths(r.Context(), lens.Scope)
+	// Unified lens-derived path set (query expansion, view directives, exposure, etc.)
+	fragments, err := h.service.Fragments().ListByCanonicalPaths(r.Context(), workscope.LensWorkbenchScopePaths(lens))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -572,37 +573,8 @@ func (h *HorizonHandlers) listGeoObjectsForLens(
 		return nil, fmt.Errorf("lens not found: %w", err)
 	}
 
-	// --- Resolve scope paths (same pattern as cockpit) ---
-	rawScope := append([]string(nil), lens.Scope...)
-	scopePaths := make([]string, 0, len(rawScope)+8)
-	seen := map[string]struct{}{}
-	for _, s := range rawScope {
-		s = strings.TrimSpace(s)
-		if s == "" {
-			continue
-		}
-		if strings.HasPrefix(s, "/query/") && lens.ResolvedQueries != nil {
-			if resolved := lens.ResolvedQueries[s]; len(resolved) > 0 {
-				for _, rp := range resolved {
-					rp = strings.TrimSpace(rp)
-					if rp == "" {
-						continue
-					}
-					if _, ok := seen[rp]; ok {
-						continue
-					}
-					seen[rp] = struct{}{}
-					scopePaths = append(scopePaths, rp)
-				}
-				continue
-			}
-		}
-		if _, ok := seen[s]; ok {
-			continue
-		}
-		seen[s] = struct{}{}
-		scopePaths = append(scopePaths, s)
-	}
+	// --- Resolve scope paths (shared with workscope for lens map / WorkScope parity) ---
+	scopePaths := workscope.LensScopePathsWithResolvedQueries(lens)
 
 	// Canonicalize via resolver (best-effort).
 	resolvedScope := make([]string, 0, len(scopePaths))
@@ -646,54 +618,13 @@ func (h *HorizonHandlers) listGeoObjectsForLens(
 		return nil, fmt.Errorf("scope fragments: %w", err)
 	}
 
-	scopeIDs := make(map[string]struct{}, len(scopeFragments))
-	for _, f := range scopeFragments {
-		if f != nil && f.ID != "" {
-			scopeIDs[f.ID] = struct{}{}
-		}
-	}
-
-	// --- Collect 1-hop neighbor IDs via edges ---
-	edgesRepo := h.service.Edges()
-	neighborIDs := make(map[string]struct{}, 64)
-	for _, f := range scopeFragments {
-		if f == nil || f.ID == "" {
-			continue
-		}
-		outgoing, _ := edgesRepo.ListBySource(ctx, "global", f.ID, nil, 200)
-		for _, e := range outgoing {
-			if e == nil {
-				continue
-			}
-			tid := strings.TrimSpace(e.TargetFragmentID)
-			if tid != "" {
-				if _, inScope := scopeIDs[tid]; !inScope {
-					neighborIDs[tid] = struct{}{}
-				}
-			}
-		}
-		incoming, _ := edgesRepo.ListByTarget(ctx, "global", f.ID, nil, 200)
-		for _, e := range incoming {
-			if e == nil {
-				continue
-			}
-			sid := strings.TrimSpace(e.SourceFragmentID)
-			if sid != "" {
-				if _, inScope := scopeIDs[sid]; !inScope {
-					neighborIDs[sid] = struct{}{}
-				}
-			}
-		}
-	}
+	// --- Collect 1-hop neighbor IDs via edges (shared with workscope) ---
+	neighborIDList := workscope.CollectMapOneHopNeighborFragmentIDs(ctx, "global", scopeFragments, h.service.Edges())
 
 	// --- Batch-fetch neighbor fragments ---
 	var neighborFragments []*models.HorizonFragment
-	if len(neighborIDs) > 0 {
-		ids := make([]string, 0, len(neighborIDs))
-		for id := range neighborIDs {
-			ids = append(ids, id)
-		}
-		nbMap, err := h.service.Fragments().GetMany(ctx, ids)
+	if len(neighborIDList) > 0 {
+		nbMap, err := h.service.Fragments().GetMany(ctx, neighborIDList)
 		if err != nil {
 			log.Printf("listGeoObjectsForLens: GetMany neighbors error: %v", err)
 		} else {

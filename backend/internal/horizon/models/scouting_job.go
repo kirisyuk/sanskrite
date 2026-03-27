@@ -87,4 +87,6 @@ type ScoutingJobParams struct {
 	SeedHints           []string `json:"seedHints,omitempty"`
 	RecommendedFacets   []string `json:"recommendedFacets,omitempty"`
 	Strategy            string   `json:"strategy"`
+	// WorkScopeRefs optional explicit focus (simulation baseline ref shape). Merged with lens, target path, and seed hints by workscope.FromScoutingJobParams.
+	WorkScopeRefs SimulationBaselineRefs `json:"workScopeRefs,omitempty" firestore:"workScopeRefs,omitempty"`
 }
