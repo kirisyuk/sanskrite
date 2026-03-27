@@ -557,67 +557,7 @@ func extractionDomainRelationCatalogOverrideBlock(domainModes []string) string {
 - If evidence maps to another relation family, record uncertainty in reason and do NOT emit that edge.`, strings.Join(allowed, ", "))
 }
 
-const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends on target (use this for suppliers, contractors, infrastructure).
-     Example: If Panasonic supplies Tesla battery cells, for Tesla (source) -> Panasonic (target) use DEPENDS_ON (NOT SUPPLIES_TO).
-     For actor↔actor dependencies (ORG/FACILITY/PROGRAM/COMMUNITY/PERSON), include qualifiers.source_role=dependent and qualifiers.target_role=dependency (or supplier/provider).
-   - SUPPLIES_TO: source supplies goods/services to target (supplier -> customer/consumer).
-     Source MUST be ORGANIZATION or FACILITY or PRODUCT.
-     Target MUST be ORGANIZATION or FACILITY.
-     MARKET MUST NOT be source or target for SUPPLIES_TO.
-     For ORG/FACILITY -> ORG/FACILITY supply links, include qualifiers.source_role=supplier and qualifiers.target_role=customer.
-     For PRODUCT -> ORG/FACILITY input-flow links, add source_role=input_product and target_role=consumer when known.
-   - LOCATED_IN: source is located in target (target MUST be GEO_REGION).
-   - OPERATES_IN: source operates in target (source MUST be ORGANIZATION or PERSON, target MUST be GEO_REGION or FACILITY or DEPOSIT).
-   - REGULATES: source regulates target (source MUST be ORGANIZATION — only orgs can regulate).
-     JURISDICTION RULE: use REGULATES only for domestic regulatory oversight within the regulator's own jurisdiction. For sanctions, trade restrictions, or extra-territorial enforcement use CONTROLS_ACCESS or IMPOSES_CONDITION.
-   - OWNS: source owns target (source MUST be ORGANIZATION, PERSON, or COMMUNITY when the community is the real owner, e.g. dynasty/tribe/family network).
-     Direction is strict: owner -> owned entity.
-     If evidence says THIS FRAGMENT is owned by X, keep relationType=OWNS and set explicit sourceCanonicalPath/sourceType/sourceName = X, with targetCanonicalPath = THIS FRAGMENT.
-     Never output reversed OWNS (THIS FRAGMENT -> its owner).
-   - SUBSIDIARY_OF: source is owned/controlled by target (target can be ORGANIZATION, PERSON, or COMMUNITY; will be normalized to OWNS in graph).
-   - CONTROLS: source controls target (non-equity/indirect control: voting control, state control, contractual control).
-     Do NOT use CONTROLS for external audit/certification/inspection oversight; use ASSURES with qualifiers.assurance_type.
-   - MANAGES: source manages target (formal authority: CEO/executive/director/operator).
-   - EMPLOYED_BY: source (PERSON) is employed by target (ORGANIZATION).
-   - BOARD_MEMBER_OF: source (PERSON) is a board member of target (ORGANIZATION).
-   - FOUNDED: source (PERSON or ORGANIZATION) founded target (ORGANIZATION or PROGRAM or COMMUNITY).
-   - INVESTS_IN: source (ORGANIZATION or PERSON) invests in target (ORGANIZATION/PROGRAM/PRODUCT).
-     Direction is strict: investor -> investee.
-     If THIS FRAGMENT is the investee (e.g., "invested in by X"), set explicit sourceCanonicalPath/sourceType/sourceName = X and targetCanonicalPath = THIS FRAGMENT.
-   - PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY or DEPOSIT, target MUST be PRODUCT).
-   - For input products: SUPPLIES_TO(product->org/fac) is allowed.
-   - TRANSFORMS_INTO: upstream PRODUCT -> downstream PRODUCT (value-chain transformation / processing).
-     Direction is strict: source MUST be the raw/earlier-stage product, target MUST be the refined/later-stage product.
-     Example: copper-ore TRANSFORMS_INTO copper-concentrate (NEVER the reverse). iron-ore TRANSFORMS_INTO iron-pellet (NEVER the reverse).
-   - ASSEMBLES_INTO: component/subassembly PRODUCT -> assembled downstream PRODUCT.
-     Use for nearest assembly steps such as tire -> vehicle, battery-pack -> electric-vehicle, display-module -> smartphone-line.
-   - USED_IN: operational input PRODUCT -> downstream PRODUCT where the source is functionally used but not transformed into the target and not assembled as a component.
-     Use for strong input semantics such as helium -> MRI-scanner. Do NOT use as a generic fallback for weak dependency.
-   - EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT.
-   - If THIS FRAGMENT is DEPOSIT and evidence says "X extracts from this deposit" or "X depends on this deposit":
-     use explicit sourceCanonicalPath/sourceType/sourceName for X and keep targetCanonicalPath = THIS FRAGMENT.
-   - Rare exception: if evidence clearly names an upstream resource source and the extracting/processing facility is unknown, DEPOSIT -> ORGANIZATION|FACILITY via SUPPLIES_TO is allowed as a temporary shortcut.
-     Use this sparingly, prefer EXTRACTS_FROM/PRODUCES/SUPPLIES_TO through facility stages whenever known, and mark such shortcuts as lower-confidence.
-   - ASSURES: source (ORGANIZATION) provides independent assurance to target (ORGANIZATION/FACILITY/PROGRAM). Add qualifiers.assurance_type: audit | certification | regulatory | inspection.
-     If THIS FRAGMENT is audited/certified/inspected by X, keep relationType=ASSURES and set explicit sourceCanonicalPath/sourceType/sourceName = X, with targetCanonicalPath = THIS FRAGMENT.
-   - AUDITED_BY is legacy input only. Do NOT emit it; convert to ASSURES and preserve semantics (auditor -> audited entity).
-   - PARTNERS_WITH: partnership/collaboration (symmetric; still output as source->target).
-   - COMPETES_WITH: competitor relationship (direction is not important, still output as source->target).
-   - INFLUENCES: source influences target (soft power; avoid for formal authority/ownership).
-   - PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY/COMMUNITY/PROGRAM/PERSON -> MARKET).
-   - TRADED_IN: product is traded or price-discovered in a market (canonical direction: PRODUCT -> MARKET).
-   - For ORGANIZATION ↔ MARKET pairs, relationType MUST be PARTICIPATES_IN (direction: ORGANIZATION -> MARKET).
-     Exception: GOV entities (/gov/...) may use REGULATES (domestic oversight only), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES toward MARKET targets.
-     Use qualifiers.marketRole ("leader"/"dominant") + market_share metrics for leadership semantics.
-   - HAS_MARKET_SEGMENT: parent market -> segment (child path = parent path + one segment).
-   - ADMINISTERS: government/body administers subordinate GOV, PROGRAM, GEO_REGION, FACILITY, or DEPOSIT.
-   - OPERATES_VIA: COMMUNITY/ORGANIZATION -> MEDIA_CHANNEL.
-   - MEMBER_OF: PERSON -> COMMUNITY.
-   - AFFILIATED_WITH: COMMUNITY/PERSON -> ORGANIZATION.
-   - RELATIVE_OF, RELATED_TO: person-person relationships only.
-   - RENAMED_TO, REBRANDED_TO, LEGAL_SUCCESSOR_OF, MERGED_INTO, SPUN_OFF_FROM, ACQUIRED_BY: ORG lifecycle events.
-   - CONTROLS_ACCESS, IMPOSES_CONDITION, GATEKEEPS_DECISION, USES_MECHANISM, APPLIES_TO: strategic overlay.
-   - HAS_SUBGROUP: COMMUNITY parent -> narrower community subgroup.
+const extractionGeneralRelationRulesTemplate = `%s
 
    ROLE-FIRST DIRECTION CONTRACT (CRITICAL for ORG<->ORG):
    - Do NOT assume source = THIS FRAGMENT for OWNS / INVESTS_IN / ASSURES / CONTROLS.
@@ -644,7 +584,12 @@ const extractionGeneralRelationRulesTemplate = `   - DEPENDS_ON: source depends 
    - metrics: ownership_percent, investment_amount, annual_volume, throughput_share, reroute_* etc.`
 
 func extractionGeneralRelationRulesBlock() string {
-	return fmt.Sprintf(extractionGeneralRelationRulesTemplate, edgesemantics.EdgeDirectionValidationRulesForPrompt(), entity_semantics.PromptRelationTargetTypesPipeList())
+	return fmt.Sprintf(
+		extractionGeneralRelationRulesTemplate,
+		indentPromptBlock(generatedGeneralRelationTaxonomyBlock(), "   "),
+		edgesemantics.EdgeDirectionValidationRulesForPrompt(),
+		entity_semantics.PromptRelationTargetTypesPipeList(),
+	)
 }
 
 func buildExtractionRelationsRulesBlock(domainModes []string) string {

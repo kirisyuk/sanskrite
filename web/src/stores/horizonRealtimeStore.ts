@@ -67,6 +67,7 @@ export interface HorizonEdgeState {
 export interface HorizonArtifactState {
   id: string;
   lensId?: string;
+  pathStatus?: string;
   canonicalKey?: string;
   displayName?: string;
   anchorSupplier?: string;

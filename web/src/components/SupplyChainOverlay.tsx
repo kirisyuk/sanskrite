@@ -11,6 +11,7 @@ export interface MaterializedArtifact {
   id: string;
   lensId?: string;
   kind: string;
+  pathStatus?: 'validated' | 'hypothesis' | string;
   riskOverlay?: SupplyChainPathRiskOverlay;
   canonicalKey?: string;
   displayName?: string;

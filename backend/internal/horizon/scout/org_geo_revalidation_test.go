@@ -91,3 +91,29 @@ func TestShouldAcceptOrgGeoResult_AcceptsSpecificPlaceMatchFromNameHint(t *testi
 		t.Fatal("expected specific place result to be accepted")
 	}
 }
+
+func TestShouldAcceptOrgGeoResult_AcceptsStrongNameSpecificCountryMatch(t *testing.T) {
+	fragment := &models.HorizonFragment{
+		Type:          models.FragmentTypeOrganization,
+		CanonicalPath: "/org/cn/envision-group",
+		Labels: map[string]string{
+			"en": "Envision Group",
+		},
+	}
+
+	if !shouldAcceptOrgGeoResult(fragment, "Envision Group, China", "Shanghai, China", "", "cn", "cn") {
+		t.Fatal("expected strong-name country query to be accepted")
+	}
+}
+
+func TestIsWeakGeoResolveQuery_RejectsGenericSingleTokenHints(t *testing.T) {
+	if !isWeakGeoResolveQuery("Launch, CN") {
+		t.Fatal("expected generic launch query to be weak")
+	}
+	if !isWeakGeoResolveQuery("PDF, Myanmar") {
+		t.Fatal("expected acronym query to be weak")
+	}
+	if isWeakGeoResolveQuery("Envision Group, China") {
+		t.Fatal("expected specific organization query to remain allowed")
+	}
+}

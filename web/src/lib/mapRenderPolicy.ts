@@ -5,23 +5,23 @@ export type MapLayerTone = 'direct' | 'context' | 'supply' | 'propagation' | 'si
 const MAP_LAYER_PALETTE: Record<MapLayerTone, { dark: string; light: string }> = {
   direct: {
     dark: '#60a5fa',
-    light: '#2563eb',
+    light: '#3b82f6',
   },
   context: {
-    dark: '#2dd4bf',
-    light: '#0d9488',
+    dark: '#c084fc',
+    light: '#a855f7',
   },
   supply: {
-    dark: '#fb923c',
-    light: '#c2410c',
+    dark: '#2dd4bf',
+    light: '#14b8a6',
   },
   propagation: {
     dark: '#94a3b8',
     light: '#64748b',
   },
   simulation_stress: {
-    dark: '#fca5a5',
-    light: '#e88b94',
+    dark: '#f87171',
+    light: '#dc2626',
   },
 };
 

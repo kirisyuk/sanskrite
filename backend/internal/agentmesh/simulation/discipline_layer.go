@@ -161,6 +161,7 @@ func buildMonitoringSignals(run *horizonmodels.SimulationRun, disciplinedSignals
 		})
 	}
 	out = append(out, scopeDerivedMonitoringOverlay(run)...)
+	out = append(out, operationalMonitoringOverlay(run)...)
 	out = append(out, scenarioMonitoringOverlay(run)...)
 	return dedupeMonitoringSignals(out)
 }
@@ -175,6 +176,7 @@ func buildRoleReadouts(run *horizonmodels.SimulationRun, disciplinedSignals, fun
 		}
 		out[spec.ID] = readout
 	}
+	applyOperationalRoleOverlay(run, out)
 	applyScenarioRoleOverlay(run, out)
 	return out
 }
@@ -686,6 +688,73 @@ func scenarioMonitoringOverlay(run *horizonmodels.SimulationRun) []map[string]an
 	}
 }
 
+func operationalMonitoringOverlay(run *horizonmodels.SimulationRun) []map[string]any {
+	if run == nil {
+		return nil
+	}
+	out := make([]map[string]any, 0, 6)
+	safety := metricFloat(run.BaselinePreview, "operational_product_safety_enforcement_max")
+	counterfeit := metricFloat(run.BaselinePreview, "operational_counterfeit_seizure_pressure_max")
+	recall := metricFloat(run.BaselinePreview, "operational_recall_exposure_max")
+	leakage := metricFloat(run.BaselinePreview, "operational_informal_channel_leakage_max")
+	trustGap := 0.0
+	if v := metricFloat(run.BaselinePreview, "operational_consumer_trust_min"); v > 0 {
+		trustGap = clamp01(1 - v)
+	}
+	screening := metricFloat(run.BaselinePreview, "operational_screening_intensity_max")
+	customsDelay := clamp01(metricFloat(run.BaselinePreview, "operational_customs_delay_max") / 96.0)
+
+	if safety >= 0.35 || counterfeit >= 0.35 || recall >= 0.25 {
+		out = append(out, map[string]any{
+			"id":          "product_safety_enforcement",
+			"title":       "Product safety enforcement",
+			"cadence":     "weekly",
+			"kind":        "compliance_kpi",
+			"score":       round3(maxFloat(safety, maxFloat(counterfeit, recall))),
+			"disciplines": []string{"trade_compliance", "policy_compliance", "product_program"},
+			"functions":   []string{"compliance", "regulatory", "product"},
+			"why":         "Product-safety enforcement, seizure pressure, or recall exposure is materially affecting continuity and assortment risk.",
+		})
+	}
+	if leakage >= 0.35 {
+		out = append(out, map[string]any{
+			"id":          "informal_channel_leakage",
+			"title":       "Informal channel leakage",
+			"cadence":     "weekly",
+			"kind":        "market_kpi",
+			"score":       round3(leakage),
+			"disciplines": []string{"market_demand", "trade_compliance"},
+			"functions":   []string{"commercial", "regulatory", "compliance"},
+			"why":         "Grey-market absorption is large enough to distort effective availability, brand control, and enforcement load.",
+		})
+	}
+	if trustGap >= 0.25 {
+		out = append(out, map[string]any{
+			"id":          "consumer_trust_erosion",
+			"title":       "Consumer trust erosion",
+			"cadence":     "weekly",
+			"kind":        "market_kpi",
+			"score":       round3(trustGap),
+			"disciplines": []string{"market_demand", "investor_reputation"},
+			"functions":   []string{"commercial", "communications", "product"},
+			"why":         "Consumer trust is soft enough that inspection, seizure, or safety signals can change demand before core supply collapses.",
+		})
+	}
+	if screening >= 0.45 || customsDelay >= 0.45 {
+		out = append(out, map[string]any{
+			"id":          "customs_screening_burden",
+			"title":       "Customs screening burden",
+			"cadence":     "weekly",
+			"kind":        "logistics_kpi",
+			"score":       round3(maxFloat(screening, customsDelay)),
+			"disciplines": []string{"trade_compliance", "supply_operations"},
+			"functions":   []string{"compliance", "logistics", "procurement"},
+			"why":         "Screening intensity and customs delay are part of the operating path, not just paperwork around it.",
+		})
+	}
+	return out
+}
+
 func dedupeMonitoringSignals(items []map[string]any) []map[string]any {
 	seen := map[string]struct{}{}
 	out := make([]map[string]any, 0, len(items))
@@ -775,6 +844,14 @@ func filterMonitoringSignals(items []map[string]any, functions, disciplines []st
 			out = append(out, item)
 		}
 	}
+	sort.Slice(out, func(i, j int) bool {
+		li := floatValue(out[i], "score", 0)
+		lj := floatValue(out[j], "score", 0)
+		if li == lj {
+			return stringValue(out[i], "id") < stringValue(out[j], "id")
+		}
+		return li > lj
+	})
 	return out
 }
 
@@ -853,6 +930,37 @@ func applyScenarioRoleOverlay(run *horizonmodels.SimulationRun, roleReadouts map
 		appendRoleSummary(roleReadouts, "coo", "Operations should read this as a manifest-and-allocation problem, not just as a generic trade risk.")
 		appendRoleSummary(roleReadouts, "pr_lead", "External communications have to follow actual license, screening, and manifest decisions or the story will outrun the operating reality.")
 		appendRoleSummary(roleReadouts, "compliance_lead", "Compliance is now part of the operating critical path because screening, licensing, and exemptions directly change delivery sequence.")
+	}
+}
+
+func applyOperationalRoleOverlay(run *horizonmodels.SimulationRun, roleReadouts map[string]any) {
+	if len(roleReadouts) == 0 || run == nil {
+		return
+	}
+	safety := metricFloat(run.BaselinePreview, "operational_product_safety_enforcement_max")
+	counterfeit := metricFloat(run.BaselinePreview, "operational_counterfeit_seizure_pressure_max")
+	recall := metricFloat(run.BaselinePreview, "operational_recall_exposure_max")
+	leakage := metricFloat(run.BaselinePreview, "operational_informal_channel_leakage_max")
+	trustGap := 0.0
+	if v := metricFloat(run.BaselinePreview, "operational_consumer_trust_min"); v > 0 {
+		trustGap = clamp01(1 - v)
+	}
+	screening := metricFloat(run.BaselinePreview, "operational_screening_intensity_max")
+	customsDelay := clamp01(metricFloat(run.BaselinePreview, "operational_customs_delay_max") / 96.0)
+
+	if safety >= 0.35 || counterfeit >= 0.35 || recall >= 0.25 {
+		appendRoleSummary(roleReadouts, "compliance_lead", "Product-safety, seizure, and recall pressure are part of the operating path here, not a post-market afterthought.")
+		appendRoleSummary(roleReadouts, "coo", "Safety enforcement changes effective availability because inspections and seizures can remove stock even when upstream supply still exists.")
+	}
+	if leakage >= 0.35 {
+		appendRoleSummary(roleReadouts, "coo", "Grey-market leakage should be read as an effective supply drain and control failure, not just as side-channel demand.")
+		appendRoleSummary(roleReadouts, "cfo", "Informal-channel leakage can erode mix quality and margin even if headline import flow stays alive.")
+	}
+	if trustGap >= 0.25 || recall >= 0.25 {
+		appendRoleSummary(roleReadouts, "pr_lead", "Consumer trust can deteriorate before core supply collapses, so messaging has to follow real safety, inspection, and recall conditions.")
+	}
+	if screening >= 0.45 || customsDelay >= 0.45 {
+		appendRoleSummary(roleReadouts, "compliance_lead", "Customs screening now acts like a live queue on the execution path, so document quality and triage speed directly change flow.")
 	}
 }
 

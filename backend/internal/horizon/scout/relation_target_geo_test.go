@@ -85,11 +85,12 @@ func TestBestEffortEnrichRelationTargetGeo_OrganizationUsesCanonicalCountryAndGe
 	engine := &ScoutEngine{
 		geocodingClient: &fakeGeocodingClient{
 			results: map[string]*coreontology.GeocodingResult{
-				"Bahri Chemicals, SA": {
+				"Bahri Chemicals, Saudi Arabia": {
 					Lat:              24.7136,
 					Lon:              46.6753,
 					FormattedAddress: "Riyadh, Saudi Arabia",
 					PlaceID:          "google-place-bahri-chemicals",
+					Provider:         coreontology.GeocodingProviderGoogle,
 				},
 			},
 		},
@@ -110,6 +111,12 @@ func TestBestEffortEnrichRelationTargetGeo_OrganizationUsesCanonicalCountryAndGe
 	}
 	if target.Coordinates.Lat != 24.7136 || target.Coordinates.Lon != 46.6753 {
 		t.Fatalf("unexpected coordinates: %+v", target.Coordinates)
+	}
+	if len(engine.geocodingClient.(*fakeGeocodingClient).calls) == 0 || engine.geocodingClient.(*fakeGeocodingClient).calls[0] != "Bahri Chemicals, Saudi Arabia" {
+		t.Fatalf("expected org revalidation query, got %#v", engine.geocodingClient.(*fakeGeocodingClient).calls)
+	}
+	if target.Qualifiers == nil || target.Qualifiers["geoResolveTrace"] == nil {
+		t.Fatalf("expected geoResolveTrace to be recorded")
 	}
 }
 

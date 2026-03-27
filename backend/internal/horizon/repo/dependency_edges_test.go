@@ -65,25 +65,69 @@ func TestApplyProductRelationDictionarySwapsCanonicalQualifiers(t *testing.T) {
 	}
 }
 
+func TestApplyProductRelationDictionary_SkipsNonProductEndpoints(t *testing.T) {
+	ctx := context.Background()
+	dict := productdict.NewRuntime(nil)
+	if err := dict.SyncTransformPairWrite(
+		ctx,
+		"global",
+		"/product/raw/mineral/extraction/iron-ore",
+		"/product/finished/chemical/refining/iron-pellet",
+		"transformation",
+		true,
+	); err != nil {
+		t.Fatalf("SyncTransformPairWrite() error = %v", err)
+	}
+
+	repo := (&DependencyEdgesRepository{}).WithProductDictionary(dict)
+	edge := &models.DependencyEdge{
+		TenantID:         "global",
+		SourceFragmentID: "org-a",
+		TargetFragmentID: "org-b",
+		Type:             models.DependencyTypeTransformsInto,
+	}
+
+	sourcePath, targetPath, swapped := repo.applyProductRelationDictionary(
+		ctx,
+		edge,
+		string(models.FragmentTypeOrganization),
+		string(models.FragmentTypeProduct),
+		"/org/us/example-miner",
+		"/product/raw/mineral/extraction/iron-ore",
+	)
+	if swapped {
+		t.Fatal("expected swapped=false for non-product endpoints")
+	}
+	if sourcePath != "/org/us/example-miner" || targetPath != "/product/raw/mineral/extraction/iron-ore" {
+		t.Fatalf("unexpected paths after no-op normalization: %q -> %q", sourcePath, targetPath)
+	}
+	if edge.Type != models.DependencyTypeTransformsInto {
+		t.Fatalf("edge type changed unexpectedly: %s", edge.Type)
+	}
+	if len(edge.Qualifiers) != 0 {
+		t.Fatalf("expected no qualifiers to be added for non-product endpoints, got %v", edge.Qualifiers)
+	}
+}
+
 func TestMergeEdgeForIdempotentUpsertOverwritesCanonicalRelationQualifiers(t *testing.T) {
 	dst := &models.DependencyEdge{
 		Qualifiers: map[string]interface{}{
-			"sourceCanonicalPath":                 "/product/finished/chemical/refining/niobium-oxide",
-			"targetCanonicalPath":                 "/product/raw/mineral/extraction/niobium-ore",
-			"productRelationKind":                 "transformation",
+			"sourceCanonicalPath":                   "/product/finished/chemical/refining/niobium-oxide",
+			"targetCanonicalPath":                   "/product/raw/mineral/extraction/niobium-ore",
+			"productRelationKind":                   "transformation",
 			"normalizedByProductRelationDictionary": false,
-			"repairSource":                        "old",
-			"repairSourceMode":                    "legacy",
+			"repairSource":                          "old",
+			"repairSourceMode":                      "legacy",
 		},
 	}
 	src := &models.DependencyEdge{
 		Qualifiers: map[string]interface{}{
-			"sourceCanonicalPath":                 "/product/raw/mineral/extraction/niobium-ore",
-			"targetCanonicalPath":                 "/product/finished/chemical/refining/niobium-oxide",
-			"productRelationKind":                 "transformation",
+			"sourceCanonicalPath":                   "/product/raw/mineral/extraction/niobium-ore",
+			"targetCanonicalPath":                   "/product/finished/chemical/refining/niobium-oxide",
+			"productRelationKind":                   "transformation",
 			"normalizedByProductRelationDictionary": true,
-			"repairSource":                        "tool:horizon_repair_supply_chain_product_relations",
-			"repairSourceMode":                    "dictionary",
+			"repairSource":                          "tool:horizon_repair_supply_chain_product_relations",
+			"repairSourceMode":                      "dictionary",
 		},
 	}
 

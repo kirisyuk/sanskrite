@@ -102,11 +102,38 @@ const formatDate = (value?: string): string => {
   }).format(new Date(ts));
 };
 
+const formatPriorityLabel = (value?: string): string => {
+  const label = String(value || '').trim().toLowerCase();
+  if (!label) return 'Watch';
+  return label.charAt(0).toUpperCase() + label.slice(1);
+};
+
 type RouteMatcher = {
   artifact: MaterializedArtifact;
   refs: Set<string>;
   countries: Set<string>;
   products: Set<string>;
+};
+
+type MatchedArtifactSelection = {
+  artifactId: string;
+  status: 'validated' | 'hypothesis';
+};
+
+type OverlayMatchMeta = {
+  matchedArtifactIds: string[];
+  validatedArtifactIds: string[];
+  hypothesisArtifactIds: string[];
+};
+
+const inferArtifactPathStatus = (artifact: MaterializedArtifact): 'validated' | 'hypothesis' => {
+  const explicit = String(artifact.pathStatus || '').trim().toLowerCase();
+  if (explicit === 'hypothesis') return 'hypothesis';
+  if (explicit === 'validated') return 'validated';
+  if (artifact.isConfirmedPath) return 'validated';
+  const sufficiency = String(artifact.sufficiencyStatus || artifact.payload?.sufficiency?.status || '').trim().toLowerCase();
+  if (sufficiency === 'validated') return 'validated';
+  return 'hypothesis';
 };
 
 const overlayMatchCount = (item: HorizonSimulationOverlayItem, matcher: RouteMatcher): number => {
@@ -129,13 +156,14 @@ const overlayMatchCount = (item: HorizonSimulationOverlayItem, matcher: RouteMat
   return score;
 };
 
-const matchedArtifactIdsForOverlay = (item: HorizonSimulationOverlayItem, routeMatchers: RouteMatcher[]): string[] => {
+const matchedArtifactsForOverlay = (item: HorizonSimulationOverlayItem, routeMatchers: RouteMatcher[]): MatchedArtifactSelection[] => {
   const ranked = routeMatchers
     .map((matcher) => {
       const directWeight = overlayMatchCount(item, matcher);
       const stressWeight = typeof matcher.artifact.pathStressScore === 'number' ? matcher.artifact.pathStressScore : 0;
       return {
         artifactId: String(matcher.artifact.id || '').trim(),
+        status: inferArtifactPathStatus(matcher.artifact),
         directWeight,
         stressWeight,
       };
@@ -146,11 +174,20 @@ const matchedArtifactIdsForOverlay = (item: HorizonSimulationOverlayItem, routeM
   if (ranked.length === 0) return [];
 
   const bestDirectWeight = ranked[0]?.directWeight || 0;
-  const minimumDirectWeight = Math.max(1, bestDirectWeight - 1);
+  const kind = String(item.kind || '').trim();
+  const cap =
+    kind === 'path_chain' || kind === 'derived_cascade'
+      ? 6
+      : kind === 'regional_shoulder' || kind === 'product_family'
+        ? 8
+        : 8;
   return ranked
-    .filter((entry) => entry.directWeight >= minimumDirectWeight)
-    .slice(0, 16)
-    .map((entry) => entry.artifactId);
+    .filter((entry) => entry.directWeight === bestDirectWeight)
+    .slice(0, cap)
+    .map((entry) => ({
+      artifactId: entry.artifactId,
+      status: entry.status,
+    }));
 };
 
 interface SimulationMapOverlayPanelProps {
@@ -168,7 +205,11 @@ export interface SimulationMapOverlaySelection {
   activeOverlayIds: string[];
   activeItems: HorizonSimulationOverlayItem[];
   matchedArtifactIds: string[];
+  validatedArtifactIds: string[];
+  hypothesisArtifactIds: string[];
   matchedArtifactIdsByOverlay: Record<string, string[]>;
+  validatedArtifactIdsByOverlay: Record<string, string[]>;
+  hypothesisArtifactIdsByOverlay: Record<string, string[]>;
   targetRefs: string[];
   targetCountryCodes: string[];
   productPaths: string[];
@@ -304,7 +345,7 @@ export function SimulationMapOverlayPanel({
   }, [backendFilters, selectedRunId]);
 
   const matchMap = React.useMemo(() => {
-    const byOverlayId = new Map<string, string[]>();
+    const byOverlayId = new Map<string, OverlayMatchMeta>();
     const overlayLists: HorizonSimulationOverlayItem[] = [
       ...rawOverlays.shoulders,
       ...rawOverlays.products,
@@ -314,7 +355,12 @@ export function SimulationMapOverlayPanel({
     for (const item of overlayLists) {
       const overlayId = String(item.id || '').trim();
       if (!overlayId) continue;
-      byOverlayId.set(overlayId, matchedArtifactIdsForOverlay(item, routeMatchers));
+      const matches = matchedArtifactsForOverlay(item, routeMatchers);
+      byOverlayId.set(overlayId, {
+        matchedArtifactIds: matches.map((entry) => entry.artifactId),
+        validatedArtifactIds: matches.filter((entry) => entry.status === 'validated').map((entry) => entry.artifactId),
+        hypothesisArtifactIds: matches.filter((entry) => entry.status === 'hypothesis').map((entry) => entry.artifactId),
+      });
     }
     return byOverlayId;
   }, [rawOverlays, routeMatchers]);
@@ -322,7 +368,7 @@ export function SimulationMapOverlayPanel({
   const filteredOverlays = React.useMemo<HorizonSimulationResultOverlays>(() => {
     const filterItems = (items: HorizonSimulationOverlayItem[]) => {
       const base = mappedOnly
-        ? items.filter((item) => (matchMap.get(String(item.id || '').trim()) || []).length > 0)
+        ? items.filter((item) => (matchMap.get(String(item.id || '').trim())?.matchedArtifactIds || []).length > 0)
         : items;
       return base;
     };
@@ -340,7 +386,7 @@ export function SimulationMapOverlayPanel({
           ...(targets.pathChains || []),
           ...(targets.cascades || []),
         ];
-        return allTargets.some((target) => (matchMap.get(String(target || '').trim()) || []).length > 0);
+        return allTargets.some((target) => (matchMap.get(String(target || '').trim())?.matchedArtifactIds || []).length > 0);
       }),
     };
   }, [mappedOnly, matchMap, rawOverlays]);
@@ -353,7 +399,7 @@ export function SimulationMapOverlayPanel({
   React.useEffect(() => {
     const next = new Set<string>();
     for (const overlayId of activeOverlayIds) {
-      for (const artifactId of matchMap.get(String(overlayId || '').trim()) || []) {
+      for (const artifactId of matchMap.get(String(overlayId || '').trim())?.matchedArtifactIds || []) {
         next.add(artifactId);
       }
     }
@@ -397,13 +443,22 @@ export function SimulationMapOverlayPanel({
 
   const activeSelection = React.useMemo<SimulationMapOverlaySelection>(() => {
     const matchedArtifactSet = new Set<string>();
+    const validatedArtifactSet = new Set<string>();
+    const hypothesisArtifactSet = new Set<string>();
     const targetRefSet = new Set<string>();
     const targetCountrySet = new Set<string>();
     const productPathSet = new Set<string>();
     for (const item of activeOverlayItems) {
       const overlayId = String(item.id || '').trim();
-      for (const artifactId of matchMap.get(overlayId) || []) {
+      const matchMeta = matchMap.get(overlayId);
+      for (const artifactId of matchMeta?.matchedArtifactIds || []) {
         if (artifactId) matchedArtifactSet.add(artifactId);
+      }
+      for (const artifactId of matchMeta?.validatedArtifactIds || []) {
+        if (artifactId) validatedArtifactSet.add(artifactId);
+      }
+      for (const artifactId of matchMeta?.hypothesisArtifactIds || []) {
+        if (artifactId) hypothesisArtifactSet.add(artifactId);
       }
       for (const ref of item.targetRefs || []) {
         const trimmed = String(ref || '').trim();
@@ -420,10 +475,24 @@ export function SimulationMapOverlayPanel({
       activeOverlayIds: [...activeOverlayIds],
       activeItems: activeOverlayItems,
       matchedArtifactIds: Array.from(matchedArtifactSet),
+      validatedArtifactIds: Array.from(validatedArtifactSet),
+      hypothesisArtifactIds: Array.from(hypothesisArtifactSet),
       matchedArtifactIdsByOverlay: Object.fromEntries(
         activeOverlayItems.map((item) => {
           const overlayId = String(item.id || '').trim();
-          return [overlayId, overlayId ? [...(matchMap.get(overlayId) || [])] : []];
+          return [overlayId, overlayId ? [...(matchMap.get(overlayId)?.matchedArtifactIds || [])] : []];
+        }),
+      ),
+      validatedArtifactIdsByOverlay: Object.fromEntries(
+        activeOverlayItems.map((item) => {
+          const overlayId = String(item.id || '').trim();
+          return [overlayId, overlayId ? [...(matchMap.get(overlayId)?.validatedArtifactIds || [])] : []];
+        }),
+      ),
+      hypothesisArtifactIdsByOverlay: Object.fromEntries(
+        activeOverlayItems.map((item) => {
+          const overlayId = String(item.id || '').trim();
+          return [overlayId, overlayId ? [...(matchMap.get(overlayId)?.hypothesisArtifactIds || [])] : []];
         }),
       ),
       targetRefs: Array.from(targetRefSet),
@@ -457,9 +526,18 @@ export function SimulationMapOverlayPanel({
       ) : (
         items.map((item, index) => {
           const overlayId = String(item.id || `${title}-${index}`).trim();
-          const matchedArtifacts = matchMap.get(overlayId) || [];
+          const matchMeta = matchMap.get(overlayId) || { matchedArtifactIds: [], validatedArtifactIds: [], hypothesisArtifactIds: [] };
+          const matchedArtifacts = matchMeta.matchedArtifactIds;
           const active = activeOverlayIds.includes(overlayId);
           const activeMatchCount = matchedArtifacts.filter((artifactId) => selectedRouteArtifactIdSet.has(artifactId)).length;
+          const validatedVisibleCount = matchMeta.validatedArtifactIds.length;
+          const hypothesisVisibleCount = matchMeta.hypothesisArtifactIds.length;
+          const supportingPathCount = Number.isFinite(Number(item.supportingPathCount)) ? Number(item.supportingPathCount) : 0;
+          const visibleRouteCount = matchedArtifacts.length;
+          const priorityScore = typeof item.priorityScore === 'number' ? item.priorityScore : (typeof item.score === 'number' ? item.score : 0);
+          const priorityLabel = formatPriorityLabel(item.priorityLabel);
+          const maxStress = typeof item.maxStress === 'number' ? item.maxStress : null;
+          const executionScore = typeof item.executionScore === 'number' ? item.executionScore : null;
           return (
             <button
               key={overlayId}
@@ -478,16 +556,33 @@ export function SimulationMapOverlayPanel({
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }}>
                 <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)' }}>{item.title || overlayId}</div>
-                <div style={{ fontSize: 11, fontWeight: 900, color: '#ef4444' }}>{(typeof item.score === 'number' ? item.score : 0).toFixed(2)}</div>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                  <div style={{ fontSize: 11, fontWeight: 900, color: '#ef4444' }}>{priorityScore.toFixed(2)}</div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-secondary-strong)', textTransform: 'uppercase' }}>{priorityLabel}</div>
+                </div>
               </div>
               {item.explanation ? (
                 <div style={{ fontSize: 11, lineHeight: 1.4, color: 'var(--text-secondary)' }}>{item.explanation}</div>
               ) : null}
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 11, color: 'var(--text-secondary-strong)' }}>
                 {item.riskCategory ? <span>{item.riskCategory}</span> : null}
-                <span>{matchedArtifacts.length} routes</span>
+                {supportingPathCount > 0 ? <span>{supportingPathCount} supporting paths</span> : null}
+                <span>{visibleRouteCount} visible routes</span>
+                {validatedVisibleCount > 0 ? <span>{validatedVisibleCount} validated</span> : null}
+                {hypothesisVisibleCount > 0 ? <span>{hypothesisVisibleCount} inferred</span> : null}
                 {active ? <span>{activeMatchCount} active</span> : null}
               </div>
+              {(maxStress !== null || executionScore !== null) ? (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                  {maxStress !== null ? <span>max stress {maxStress.toFixed(3)}</span> : null}
+                  {executionScore !== null ? <span>execution {executionScore.toFixed(2)}</span> : null}
+                </div>
+              ) : null}
+              {item.attentionFocus ? (
+                <div style={{ fontSize: 11, lineHeight: 1.4, color: 'var(--text-secondary-strong)' }}>
+                  <span style={{ fontWeight: 800, color: 'var(--text-heading)' }}>Watch:</span> {item.attentionFocus}
+                </div>
+              ) : null}
               {(item.dominantMechanisms || []).length > 0 ? (
                 <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
                   {(item.dominantMechanisms || []).slice(0, 4).join(', ')}

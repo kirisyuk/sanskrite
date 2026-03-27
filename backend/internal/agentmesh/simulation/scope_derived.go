@@ -128,6 +128,7 @@ func scopeDerivedShoulders(run *horizonmodels.SimulationRun) []scopeDerivedShoul
 	}
 	primaryGeo := recognitionPrimaryGeo(run)
 	previewSignals := scopeDerivedShoulderSignals(run)
+	allowScopePathFallback := len(previewSignals) == 0
 	type bucket struct {
 		code       string
 		facilities []string
@@ -160,6 +161,9 @@ func scopeDerivedShoulders(run *horizonmodels.SimulationRun) []scopeDerivedShoul
 		}
 		entry := buckets[code]
 		if entry == nil {
+			if !allowScopePathFallback {
+				continue
+			}
 			entry = &bucket{code: code}
 			buckets[code] = entry
 		}
@@ -216,11 +220,17 @@ func scopeDerivedProducts(run *horizonmodels.SimulationRun) []scopeDerivedProduc
 	seen := map[string]struct{}{}
 	items := make([]item, 0, 8)
 	for path, signal := range previewSignals {
+		if !scopeIsOperationalProductPath(path) {
+			continue
+		}
 		seen[path] = struct{}{}
 		items = append(items, item{path: path, score: signal.Score, pathCount: signal.PathCount, maxStress: signal.MaxStress})
 	}
 	for _, path := range scopePaths(run) {
 		if !strings.HasPrefix(path, "/product/") {
+			continue
+		}
+		if !scopeIsOperationalProductPath(path) {
 			continue
 		}
 		if _, ok := seen[path]; ok {
@@ -339,14 +349,9 @@ func scopePaths(run *horizonmodels.SimulationRun) []string {
 
 func recognitionPrimaryGeo(run *horizonmodels.SimulationRun) string {
 	for _, object := range recognitionObjectCandidates(mapValue(run.Recognition)["objectCandidates"]) {
-		if strings.EqualFold(firstString(object, "kind"), "geo") {
-			path := strings.TrimSpace(firstString(object, "path"))
-			if strings.HasPrefix(path, "/loc/") {
-				parts := strings.Split(strings.Trim(path, "/"), "/")
-				if len(parts) >= 2 {
-					return strings.ToLower(strings.TrimSpace(parts[1]))
-				}
-			}
+		path := strings.TrimSpace(firstString(object, "path"))
+		if code := scopeCountryCodeFromPath(path); code != "" {
+			return code
 		}
 	}
 	return ""
@@ -366,6 +371,8 @@ func derivedShoulderScore(path string) float64 {
 func derivedProductScore(path string) float64 {
 	score := 0.0
 	switch {
+	case strings.Contains(path, "toy"), strings.Contains(path, "action-figure"), strings.Contains(path, "board-game"), strings.Contains(path, "construction-toy"), strings.Contains(path, "doll"):
+		score += 1.75
 	case strings.Contains(path, "telemetry"), strings.Contains(path, "electronic"):
 		score += 1.9
 	case strings.Contains(path, "well-completion"):
@@ -388,6 +395,46 @@ func derivedProductScore(path string) float64 {
 		score += 0.10
 	}
 	return score
+}
+
+func scopeIsOperationalProductPath(path string) bool {
+	path = strings.ToLower(strings.TrimSpace(path))
+	switch {
+	case path == "":
+		return false
+	case strings.Contains(path, "transshipment"),
+		strings.Contains(path, "intermodal"),
+		strings.Contains(path, "logistics"),
+		strings.Contains(path, "warehouse"),
+		strings.Contains(path, "distribution"),
+		strings.Contains(path, "clearance"),
+		strings.Contains(path, "forwarding"):
+		return false
+	default:
+		return true
+	}
+}
+
+func scopeCountryCodeFromPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	switch parts[0] {
+	case "loc", "fac", "org", "market", "gov":
+		return strings.ToLower(strings.TrimSpace(parts[1]))
+	case "domain":
+		for i := 1; i < len(parts)-1; i++ {
+			if parts[i] == "geo" && len(strings.TrimSpace(parts[i+1])) == 2 {
+				return strings.ToLower(strings.TrimSpace(parts[i+1]))
+			}
+		}
+	}
+	return ""
 }
 
 func scopeCountryName(code string) string {

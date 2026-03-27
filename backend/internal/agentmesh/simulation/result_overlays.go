@@ -18,7 +18,7 @@ func buildResultOverlays(
 ) map[string]any {
 	shoulders := buildShoulderResultOverlays(run, actorReactions, protocolSummary, transactionSummary, monitoringSignals)
 	products := buildProductResultOverlays(run, actorReactions, protocolSummary, transactionSummary, monitoringSignals)
-	pathChains := buildPathChainResultOverlays(shoulders, products, protocolSummary, transactionSummary)
+	pathChains := buildPathChainResultOverlays(run, shoulders, products, protocolSummary, transactionSummary)
 	cascades := buildCascadeResultOverlays(shoulders, products, protocolSummary, transactionSummary)
 	roles := buildRoleResultOverlays(roleReadouts, shoulders, products, pathChains, cascades)
 	if len(shoulders) == 0 && len(products) == 0 && len(pathChains) == 0 && len(cascades) == 0 && len(roles) == 0 {
@@ -46,29 +46,34 @@ func buildShoulderResultOverlays(
 	for _, shoulder := range scopeDerivedShoulders(run) {
 		monitoringID := "shoulder_load_" + shoulder.CountryCode
 		reaction := reactionByClass[shoulder.AgentClass]
-		score := overlayNormalizedRisk(shoulder.Severity)
 		actions := overlayDominantActions(reaction)
 		functions := []string{"logistics", "procurement", "operations"}
 		disciplines := []string{"supply_operations", "trade_compliance"}
 		category := overlayRiskCategory(actions, functions, disciplines)
+		executionScore := overlayExecutionPressure(actions, protocolSummary, transactionSummary, disciplines)
 		overlays = append(overlays, map[string]any{
-			"id":                 monitoringID,
-			"title":              shoulder.CountryName + " shoulder",
-			"kind":               "regional_shoulder",
-			"targetRefs":         compactStrings(shoulder.OriginRefs),
-			"targetCountryCode":  shoulder.CountryCode,
-			"score":              round3(score),
-			"riskCategory":       category,
-			"dominantMechanisms": overlayMechanisms(actions, protocolSummary, transactionSummary, functions, disciplines),
-			"recommendedActions": overlayRecommendedActions(actions),
-			"functions":          functions,
-			"disciplines":        disciplines,
-			"pathCount":          shoulder.PathCount,
-			"maxStress":          round3(shoulder.MaxStress),
-			"signalRefs":         compactStrings([]string{monitoringID}),
-			"explanation":        shoulderOverlayExplanation(shoulder, actions, monitoringByID[monitoringID]),
+			"id":                  monitoringID,
+			"title":               shoulder.CountryName + " shoulder",
+			"kind":                "regional_shoulder",
+			"targetRefs":          compactStrings(shoulder.OriginRefs),
+			"targetCountryCode":   shoulder.CountryCode,
+			"riskCategory":        category,
+			"dominantMechanisms":  overlayMechanisms(actions, protocolSummary, transactionSummary, functions, disciplines),
+			"recommendedActions":  overlayRecommendedActions(actions),
+			"functions":           functions,
+			"disciplines":         disciplines,
+			"pathCount":           shoulder.PathCount,
+			"supportingPathCount": shoulder.PathCount,
+			"maxStress":           round3(shoulder.MaxStress),
+			"stressScore":         round3(clamp01(shoulder.MaxStress)),
+			"executionScore":      round3(executionScore),
+			"severityRaw":         round3(shoulder.Severity),
+			"signalRefs":          compactStrings([]string{monitoringID}),
+			"explanation":         shoulderOverlayExplanation(shoulder, actions, monitoringByID[monitoringID]),
+			"attentionFocus":      shoulderAttentionFocus(shoulder, actions),
 		})
 	}
+	applyOverlayPriorityScores(overlays)
 	sortOverlayItems(overlays)
 	return overlays
 }
@@ -86,29 +91,34 @@ func buildProductResultOverlays(
 	for _, product := range scopeDerivedProducts(run) {
 		productID := "product_availability_" + scopeSafeSlug(scopeLastPathSegment(product.ProductPath))
 		reaction := reactionByClass[product.AgentClass]
-		score := overlayNormalizedRisk(product.Severity)
 		actions := overlayDominantActions(reaction)
 		functions := []string{"product", "operations", "procurement"}
 		disciplines := []string{"product_program", "supply_operations"}
 		category := overlayRiskCategory(actions, functions, disciplines)
+		executionScore := overlayExecutionPressure(actions, protocolSummary, transactionSummary, disciplines)
 		overlays = append(overlays, map[string]any{
-			"id":                 productID,
-			"title":              titleWords(product.ProductName),
-			"kind":               "product_family",
-			"productPath":        product.ProductPath,
-			"targetRefs":         compactStrings(product.OriginRefs),
-			"score":              round3(score),
-			"riskCategory":       category,
-			"dominantMechanisms": overlayMechanisms(actions, protocolSummary, transactionSummary, functions, disciplines),
-			"recommendedActions": overlayRecommendedActions(actions),
-			"functions":          functions,
-			"disciplines":        disciplines,
-			"pathCount":          product.PathCount,
-			"maxStress":          round3(product.MaxStress),
-			"signalRefs":         compactStrings([]string{productID}),
-			"explanation":        productOverlayExplanation(product, actions, monitoringByID[productID]),
+			"id":                  productID,
+			"title":               titleWords(product.ProductName),
+			"kind":                "product_family",
+			"productPath":         product.ProductPath,
+			"targetRefs":          compactStrings(product.OriginRefs),
+			"riskCategory":        category,
+			"dominantMechanisms":  overlayMechanisms(actions, protocolSummary, transactionSummary, functions, disciplines),
+			"recommendedActions":  overlayRecommendedActions(actions),
+			"functions":           functions,
+			"disciplines":         disciplines,
+			"pathCount":           product.PathCount,
+			"supportingPathCount": product.PathCount,
+			"maxStress":           round3(product.MaxStress),
+			"stressScore":         round3(clamp01(product.MaxStress)),
+			"executionScore":      round3(executionScore),
+			"severityRaw":         round3(product.Severity),
+			"signalRefs":          compactStrings([]string{productID}),
+			"explanation":         productOverlayExplanation(product, actions, monitoringByID[productID]),
+			"attentionFocus":      productAttentionFocus(product, actions),
 		})
 	}
+	applyOverlayPriorityScores(overlays)
 	sortOverlayItems(overlays)
 	return overlays
 }
@@ -127,6 +137,10 @@ func buildCascadeResultOverlays(
 	out := make([]map[string]any, 0, min(len(shoulders)*len(products), 6))
 	for _, shoulder := range shoulders[:min(len(shoulders), 3)] {
 		for _, product := range products[:min(len(products), 2)] {
+			supportingPathCount := min(
+				int(floatValue(shoulder, "supportingPathCount", floatValue(shoulder, "pathCount", 0))),
+				int(floatValue(product, "supportingPathCount", floatValue(product, "pathCount", 0))),
+			)
 			score := round3(clamp01((floatValue(shoulder, "score", 0) + floatValue(product, "score", 0)) / 2))
 			if score < 0.4 {
 				continue
@@ -136,21 +150,27 @@ func buildCascadeResultOverlays(
 				affectedRoles = append(affectedRoles, "pr_lead")
 			}
 			out = append(out, map[string]any{
-				"id":            stringValue(shoulder, "id") + "__" + stringValue(product, "id"),
-				"kind":          "derived_cascade",
-				"sourceId":      stringValue(shoulder, "id"),
-				"sourceTitle":   stringValue(shoulder, "title"),
-				"targetId":      stringValue(product, "id"),
-				"targetTitle":   stringValue(product, "title"),
-				"score":         score,
-				"riskCategory":  "shoulder_to_product_cascade",
-				"affectedRoles": compactStrings(affectedRoles),
+				"id":                  stringValue(shoulder, "id") + "__" + stringValue(product, "id"),
+				"kind":                "derived_cascade",
+				"sourceId":            stringValue(shoulder, "id"),
+				"sourceTitle":         stringValue(shoulder, "title"),
+				"targetId":            stringValue(product, "id"),
+				"targetTitle":         stringValue(product, "title"),
+				"score":               score,
+				"riskCategory":        "shoulder_to_product_cascade",
+				"affectedRoles":       compactStrings(affectedRoles),
+				"supportingPathCount": supportingPathCount,
 				"explanation": fmt.Sprintf(
 					"Pressure on %s is likely to cascade into %s through %s and %s.",
 					stringValue(shoulder, "title"),
 					stringValue(product, "title"),
 					strings.Join(protocols, ", "),
 					strings.Join(transactions, ", "),
+				),
+				"attentionFocus": fmt.Sprintf(
+					"Watch whether %s starts forcing priority changes or customer slippage in %s.",
+					stringValue(shoulder, "title"),
+					stringValue(product, "title"),
 				),
 			})
 		}
@@ -160,6 +180,7 @@ func buildCascadeResultOverlays(
 }
 
 func buildPathChainResultOverlays(
+	run *horizonmodels.SimulationRun,
 	shoulders []map[string]any,
 	products []map[string]any,
 	protocolSummary []map[string]any,
@@ -168,29 +189,57 @@ func buildPathChainResultOverlays(
 	if len(shoulders) == 0 || len(products) == 0 {
 		return nil
 	}
+	artifactChains := artifactChainIndex(run)
 	protocols := topProtocolTypes(protocolSummary, 3)
 	transactions := topTransactionTypes(transactionSummary, 3)
 	out := make([]map[string]any, 0, min(len(shoulders)*len(products), 6))
 	for _, shoulder := range shoulders[:min(len(shoulders), 3)] {
 		for _, product := range products[:min(len(products), 2)] {
-			score := round3(clamp01((floatValue(shoulder, "score", 0) + floatValue(product, "score", 0)) / 2))
-			if score < 0.4 {
+			chainSignal, hasChainSignal := artifactChains[pathChainKey(stringValue(shoulder, "targetCountryCode"), stringValue(product, "productPath"))]
+			if len(artifactChains) > 0 && !hasChainSignal {
 				continue
 			}
+			supportingPathCount := min(
+				int(floatValue(shoulder, "supportingPathCount", floatValue(shoulder, "pathCount", 0))),
+				int(floatValue(product, "supportingPathCount", floatValue(product, "pathCount", 0))),
+			)
 			targetRefs := compactStrings(append(stringSliceAny(shoulder["targetRefs"]), stringSliceAny(product["targetRefs"])...))
+			stressScore := round3(maxFloat(floatValue(shoulder, "stressScore", 0), floatValue(product, "stressScore", 0)))
+			coverageScore := 0.0
+			if hasChainSignal {
+				if chainSignal.PathCount > 0 {
+					supportingPathCount = chainSignal.PathCount
+				}
+				if len(chainSignal.Refs) > 0 {
+					targetRefs = compactStrings(chainSignal.Refs)
+				}
+				stressScore = round3(maxFloat(stressScore, chainSignal.MaxStress))
+				coverageScore = chainSignal.Score
+			}
+			executionScore := round3(maxFloat(floatValue(shoulder, "executionScore", 0), floatValue(product, "executionScore", 0)))
+			score := round3(clamp01((floatValue(shoulder, "score", 0) + floatValue(product, "score", 0)) / 2))
+			if score < 0.4 && !hasChainSignal {
+				continue
+			}
 			out = append(out, map[string]any{
-				"id":                 "path_chain_" + stringValue(shoulder, "id") + "__" + stringValue(product, "id"),
-				"title":              stringValue(shoulder, "title") + " -> " + stringValue(product, "title"),
-				"kind":               "path_chain",
-				"score":              score,
-				"riskCategory":       "path_chain_stress",
-				"functions":          compactStrings(append(stringSliceAny(shoulder["functions"]), stringSliceAny(product["functions"])...)),
-				"disciplines":        compactStrings(append(stringSliceAny(shoulder["disciplines"]), stringSliceAny(product["disciplines"])...)),
-				"targetRefs":         targetRefs,
-				"dominantMechanisms": compactStrings(append(append(protocols, transactions...), append(stringSliceAny(shoulder["dominantMechanisms"]), stringSliceAny(product["dominantMechanisms"])...)...)),
-				"recommendedActions": compactNarrativeLines(append(stringSliceAny(shoulder["recommendedActions"]), stringSliceAny(product["recommendedActions"])...)),
-				"sourceId":           stringValue(shoulder, "id"),
-				"targetId":           stringValue(product, "id"),
+				"id":                  "path_chain_" + stringValue(shoulder, "id") + "__" + stringValue(product, "id"),
+				"title":               stringValue(shoulder, "title") + " -> " + stringValue(product, "title"),
+				"kind":                "path_chain",
+				"score":               score,
+				"riskCategory":        "path_chain_stress",
+				"functions":           compactStrings(append(stringSliceAny(shoulder["functions"]), stringSliceAny(product["functions"])...)),
+				"disciplines":         compactStrings(append(stringSliceAny(shoulder["disciplines"]), stringSliceAny(product["disciplines"])...)),
+				"targetRefs":          targetRefs,
+				"supportingPathCount": supportingPathCount,
+				"stressScore":         stressScore,
+				"severityRaw":         round3(coverageScore),
+				"executionScore":      executionScore,
+				"sourcePriorityScore": round3(floatValue(shoulder, "priorityScore", floatValue(shoulder, "score", 0))),
+				"targetPriorityScore": round3(floatValue(product, "priorityScore", floatValue(product, "score", 0))),
+				"dominantMechanisms":  compactStrings(append(append(protocols, transactions...), append(stringSliceAny(shoulder["dominantMechanisms"]), stringSliceAny(product["dominantMechanisms"])...)...)),
+				"recommendedActions":  compactNarrativeLines(append(stringSliceAny(shoulder["recommendedActions"]), stringSliceAny(product["recommendedActions"])...)),
+				"sourceId":            stringValue(shoulder, "id"),
+				"targetId":            stringValue(product, "id"),
 				"explanation": fmt.Sprintf(
 					"%s and %s form an active chain under pressure through %s and %s.",
 					stringValue(shoulder, "title"),
@@ -198,9 +247,15 @@ func buildPathChainResultOverlays(
 					strings.Join(protocols, ", "),
 					strings.Join(transactions, ", "),
 				),
+				"attentionFocus": fmt.Sprintf(
+					"Watch whether %s can keep %s supplied without routing, allocation, and inventory drifting apart.",
+					stringValue(shoulder, "title"),
+					stringValue(product, "title"),
+				),
 			})
 		}
 	}
+	applyPathChainPriorityScores(out)
 	sortOverlayItems(out)
 	return out[:min(len(out), 6)]
 }
@@ -273,18 +328,41 @@ func monitoringSignalIndex(items []map[string]any) map[string]map[string]any {
 	return out
 }
 
-func overlayNormalizedRisk(value float64) float64 {
-	if value <= 0 {
-		return 0
-	}
-	return clamp01(value / 2.0)
-}
-
 func overlayDominantActions(reaction map[string]any) []string {
 	if len(reaction) == 0 {
 		return nil
 	}
 	return stringSliceAny(reaction["dominantActions"])
+}
+
+func overlayExecutionPressure(actions []string, protocolSummary, transactionSummary []map[string]any, disciplines []string) float64 {
+	score := 0.0
+	if hasAnyFold(actions, []string{
+		string(horizonmodels.SimulationActionAllocateCapacity),
+		string(horizonmodels.SimulationActionReserveInventory),
+		string(horizonmodels.SimulationActionReprioritizeFlow),
+	}) {
+		score += 0.38
+	}
+	if hasAnyFold(actions, []string{
+		string(horizonmodels.SimulationActionRerouteShipment),
+		string(horizonmodels.SimulationActionSwitchSupplier),
+		string(horizonmodels.SimulationActionExpediteShipment),
+	}) {
+		score += 0.34
+	}
+	if hasAnyFold(actions, []string{
+		string(horizonmodels.SimulationActionRequestExemption),
+		string(horizonmodels.SimulationActionIssueStatement),
+	}) {
+		score += 0.18
+	}
+	if hasAnyFold(disciplines, []string{"trade_compliance", "policy_compliance"}) {
+		score += 0.12
+	}
+	score += 0.05 * float64(min(len(topProtocolTypes(protocolSummary, 3)), 3))
+	score += 0.04 * float64(min(len(topTransactionTypes(transactionSummary, 3)), 3))
+	return clamp01(score)
 }
 
 func overlayRiskCategory(actions, functions, disciplines []string) string {
@@ -394,6 +472,38 @@ func productOverlayExplanation(product scopeDerivedProduct, actions []string, mo
 	)
 }
 
+func shoulderAttentionFocus(shoulder scopeDerivedShoulder, actions []string) string {
+	focus := []string{
+		fmt.Sprintf("Watch how many active paths still depend on %s.", shoulder.CountryName),
+	}
+	if hasAnyFold(actions, []string{string(horizonmodels.SimulationActionRerouteShipment), string(horizonmodels.SimulationActionSwitchSupplier)}) {
+		focus = append(focus, "Reroute volume is already a live signal here.")
+	}
+	if hasAnyFold(actions, []string{string(horizonmodels.SimulationActionRequestExemption), string(horizonmodels.SimulationActionIssueStatement)}) {
+		focus = append(focus, "Review and exception handling are part of the execution path.")
+	}
+	if hasAnyFold(actions, []string{string(horizonmodels.SimulationActionAllocateCapacity), string(horizonmodels.SimulationActionReserveInventory)}) {
+		focus = append(focus, "Capacity and inventory are already being protected around this shoulder.")
+	}
+	return strings.Join(compactNarrativeLines(focus), " ")
+}
+
+func productAttentionFocus(product scopeDerivedProduct, actions []string) string {
+	focus := []string{
+		fmt.Sprintf("Watch whether %s starts forcing promise or schedule changes.", titleWords(product.ProductName)),
+	}
+	if hasAnyFold(actions, []string{string(horizonmodels.SimulationActionReserveInventory)}) {
+		focus = append(focus, "Reservation pressure is already visible.")
+	}
+	if hasAnyFold(actions, []string{string(horizonmodels.SimulationActionReprioritizeFlow)}) {
+		focus = append(focus, "This family is already being reprioritized against other demand.")
+	}
+	if hasAnyFold(actions, []string{string(horizonmodels.SimulationActionAllocateCapacity)}) {
+		focus = append(focus, "Capacity protection is part of the active response.")
+	}
+	return strings.Join(compactNarrativeLines(focus), " ")
+}
+
 func filterOverlayTargetsForRole(items []map[string]any, functions, disciplines []string) []string {
 	out := make([]string, 0, len(items))
 	for _, item := range items {
@@ -414,6 +524,42 @@ func filterCascadeTargetsForRole(items []map[string]any, roleID string) []string
 	return compactStrings(out)
 }
 
+type artifactChainSignal struct {
+	CountryCode string
+	ProductPath string
+	PathCount   int
+	Score       float64
+	MaxStress   float64
+	Refs        []string
+}
+
+func artifactChainIndex(run *horizonmodels.SimulationRun) map[string]artifactChainSignal {
+	out := map[string]artifactChainSignal{}
+	if run == nil {
+		return out
+	}
+	for _, raw := range mapSlice(scopeAnySlice(run.BaselinePreview["artifactChains"])) {
+		code := strings.ToLower(strings.TrimSpace(firstString(raw, "countryCode")))
+		path := strings.TrimSpace(firstString(raw, "path"))
+		if code == "" || path == "" {
+			continue
+		}
+		out[pathChainKey(code, path)] = artifactChainSignal{
+			CountryCode: code,
+			ProductPath: path,
+			PathCount:   int(floatValue(raw, "pathCount", 0)),
+			Score:       floatValue(raw, "riskScore", 0),
+			MaxStress:   floatValue(raw, "maxStress", 0),
+			Refs:        stringSliceAny(raw["refs"]),
+		}
+	}
+	return out
+}
+
+func pathChainKey(countryCode, productPath string) string {
+	return strings.ToLower(strings.TrimSpace(countryCode)) + "::" + strings.TrimSpace(productPath)
+}
+
 func sortOverlayItems(items []map[string]any) {
 	sort.Slice(items, func(i, j int) bool {
 		li := floatValue(items[i], "score", 0)
@@ -423,4 +569,74 @@ func sortOverlayItems(items []map[string]any) {
 		}
 		return li > lj
 	})
+}
+
+func applyOverlayPriorityScores(items []map[string]any) {
+	if len(items) == 0 {
+		return
+	}
+	maxSeverity := 0.0
+	maxPathCount := 0.0
+	for _, item := range items {
+		maxSeverity = maxFloat(maxSeverity, floatValue(item, "severityRaw", 0))
+		maxPathCount = maxFloat(maxPathCount, floatValue(item, "supportingPathCount", floatValue(item, "pathCount", 0)))
+	}
+	if maxSeverity <= 0 {
+		maxSeverity = 1
+	}
+	if maxPathCount <= 0 {
+		maxPathCount = 1
+	}
+	for _, item := range items {
+		stressScore := clamp01(floatValue(item, "stressScore", floatValue(item, "maxStress", 0)))
+		coverageScore := clamp01(floatValue(item, "supportingPathCount", floatValue(item, "pathCount", 0)) / maxPathCount)
+		executionScore := clamp01(floatValue(item, "executionScore", 0))
+		severityScore := clamp01(floatValue(item, "severityRaw", 0) / maxSeverity)
+		priorityScore := round3(clamp01(stressScore*0.36 + coverageScore*0.28 + executionScore*0.18 + severityScore*0.18))
+		item["stressScore"] = round3(stressScore)
+		item["coverageScore"] = round3(coverageScore)
+		item["severityScore"] = round3(severityScore)
+		item["priorityScore"] = priorityScore
+		item["score"] = priorityScore
+		item["priorityLabel"] = overlayPriorityLabel(priorityScore)
+	}
+}
+
+func applyPathChainPriorityScores(items []map[string]any) {
+	if len(items) == 0 {
+		return
+	}
+	maxPathCount := 0.0
+	for _, item := range items {
+		maxPathCount = maxFloat(maxPathCount, floatValue(item, "supportingPathCount", floatValue(item, "pathCount", 0)))
+	}
+	if maxPathCount <= 0 {
+		maxPathCount = 1
+	}
+	for _, item := range items {
+		stressScore := clamp01(floatValue(item, "stressScore", floatValue(item, "maxStress", 0)))
+		coverageScore := clamp01(floatValue(item, "supportingPathCount", floatValue(item, "pathCount", 0)) / maxPathCount)
+		executionScore := clamp01(floatValue(item, "executionScore", 0))
+		sourceScore := clamp01(floatValue(item, "sourcePriorityScore", 0))
+		targetScore := clamp01(floatValue(item, "targetPriorityScore", 0))
+		priorityScore := round3(clamp01(stressScore*0.28 + coverageScore*0.20 + executionScore*0.18 + sourceScore*0.18 + targetScore*0.16))
+		item["stressScore"] = round3(stressScore)
+		item["coverageScore"] = round3(coverageScore)
+		item["priorityScore"] = priorityScore
+		item["score"] = priorityScore
+		item["priorityLabel"] = overlayPriorityLabel(priorityScore)
+	}
+}
+
+func overlayPriorityLabel(score float64) string {
+	switch {
+	case score >= 0.82:
+		return "critical"
+	case score >= 0.64:
+		return "high"
+	case score >= 0.42:
+		return "medium"
+	default:
+		return "watch"
+	}
 }

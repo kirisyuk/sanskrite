@@ -2,9 +2,10 @@ import { useRef, useState, useEffect, useContext, useCallback } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { ThemeContext } from '../components/ThemeProvider';
+import { MAP_TEXT_FONT_STACK } from '../lib/mapTypography';
 
 export const MAP_GLYPHS_URL = 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf';
-export const MAP_TEXT_FONT_STACK = ['Open Sans Regular', 'Arial Unicode MS Regular'] as const;
+export { MAP_TEXT_FONT_STACK };
 
 function buildCartoStyle(theme: 'dark' | 'light'): maplibregl.StyleSpecification {
   const isDark = theme === 'dark';

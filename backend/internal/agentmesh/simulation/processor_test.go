@@ -1,6 +1,7 @@
 package simulation
 
 import (
+	"strings"
 	"testing"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
@@ -223,6 +224,80 @@ func TestBuildDisciplineBundlePartsProduceRoleAddressableOutput(t *testing.T) {
 	}
 }
 
+func TestOperationalMonitoringAndRoleOverlaySurfaceSafetyLeakageSignals(t *testing.T) {
+	run := &horizonmodels.SimulationRun{
+		Request: horizonmodels.SimulationRunRequest{
+			Question: "Toy imports into Kazakhstan face tighter customs scrutiny, child-safety enforcement, informal-market leakage, and pressure on China-to-Kazakhstan corridors.",
+			Signal:   &horizonmodels.SimulationShock{Axis: horizonmodels.AxisLogisticsCapacity},
+		},
+		Recognition: map[string]any{
+			"primaryAxis": horizonmodels.AxisLogisticsCapacity,
+			"objectCandidates": []map[string]any{
+				{"path": "/domain/v1/supply-chain/geo/kz/product/toys", "kind": "domain", "score": 1.0},
+				{"path": "/loc/kz", "kind": "geo", "score": 0.9},
+			},
+		},
+		BaselinePreview: map[string]any{
+			"operational_product_safety_enforcement_max":   0.92,
+			"operational_counterfeit_seizure_pressure_max": 0.61,
+			"operational_recall_exposure_max":              0.43,
+			"operational_informal_channel_leakage_max":     0.62,
+			"operational_consumer_trust_min":               0.48,
+			"operational_screening_intensity_max":          0.88,
+			"operational_customs_delay_max":                96.0,
+		},
+	}
+	disciplines := []map[string]any{
+		{"id": "trade_compliance", "title": "Trade controls and sanctions compliance", "score": 0.7, "primaryMetrics": []string{"policy_pressure"}, "functions": []string{"compliance"}},
+		{"id": "policy_compliance", "title": "Policy and compliance", "score": 0.65, "primaryMetrics": []string{"policy_pressure"}, "functions": []string{"regulatory"}},
+		{"id": "market_demand", "title": "Market and demand", "score": 0.58, "primaryMetrics": []string{"price_pressure"}, "functions": []string{"commercial"}},
+		{"id": "investor_reputation", "title": "Investor and reputation", "score": 0.52, "primaryMetrics": []string{"narrative_volatility"}, "functions": []string{"communications"}},
+		{"id": "supply_operations", "title": "Supply and operations", "score": 0.66, "primaryMetrics": []string{"supply_stress"}, "functions": []string{"operations"}},
+		{"id": "product_program", "title": "Product and program mix", "score": 0.55, "primaryMetrics": []string{"risk_score"}, "functions": []string{"product"}},
+	}
+	functions := []map[string]any{
+		{"function": "compliance", "score": 0.7, "primaryMetrics": []string{"policy_pressure"}},
+		{"function": "regulatory", "score": 0.66, "primaryMetrics": []string{"policy_pressure"}},
+		{"function": "commercial", "score": 0.6, "primaryMetrics": []string{"price_pressure"}},
+		{"function": "communications", "score": 0.57, "primaryMetrics": []string{"narrative_volatility"}},
+		{"function": "operations", "score": 0.68, "primaryMetrics": []string{"supply_stress"}},
+		{"function": "product", "score": 0.61, "primaryMetrics": []string{"risk_score"}},
+		{"function": "logistics", "score": 0.64, "primaryMetrics": []string{"supply_stress"}},
+		{"function": "procurement", "score": 0.65, "primaryMetrics": []string{"risk_score"}},
+		{"function": "finance", "score": 0.49, "primaryMetrics": []string{"price_pressure"}},
+	}
+	monitoring := buildMonitoringSignals(run, disciplines, functions, map[string]float64{
+		"price_pressure":       0.72,
+		"risk_score":           0.62,
+		"policy_pressure":      0.60,
+		"narrative_volatility": 0.53,
+	}, map[string]float64{"price_pressure": 0.1})
+	ids := map[string]struct{}{}
+	for _, item := range monitoring {
+		ids[stringValue(item, "id")] = struct{}{}
+	}
+	for _, want := range []string{"product_safety_enforcement", "informal_channel_leakage", "consumer_trust_erosion", "customs_screening_burden"} {
+		if _, ok := ids[want]; !ok {
+			t.Fatalf("expected monitoring signal %q in %#v", want, monitoring)
+		}
+	}
+	decisions := []map[string]any{
+		{"id": "capacity_and_routing_control", "title": "Capacity and routing control", "score": 0.6, "functions": []string{"operations", "logistics", "procurement"}, "disciplines": []string{"supply_operations", "product_program"}, "recommendedActions": []string{"Protect priority lanes."}},
+		{"id": "counterparty_screening_and_license_triage", "title": "Counterparty screening and license triage", "score": 0.58, "functions": []string{"compliance", "regulatory", "procurement"}, "disciplines": []string{"trade_compliance"}, "recommendedActions": []string{"Triage the review queue."}},
+		{"id": "stakeholder_narrative_alignment", "title": "Stakeholder narrative alignment", "score": 0.55, "functions": []string{"communications", "regulatory"}, "disciplines": []string{"investor_reputation", "policy_compliance"}, "recommendedActions": []string{"Keep the safety line factual."}},
+	}
+	roles := buildRoleReadouts(run, disciplines, functions, decisions, monitoring)
+	if !containsFold(stringSliceAny(mapValue(roles["compliance_lead"])["weeklyMonitoring"]), "Product safety enforcement") {
+		t.Fatalf("expected compliance readout to monitor product safety, got %#v", roles["compliance_lead"])
+	}
+	if !containsFold(stringSliceAny(mapValue(roles["pr_lead"])["weeklyMonitoring"]), "Consumer trust erosion") {
+		t.Fatalf("expected PR readout to monitor consumer trust erosion, got %#v", roles["pr_lead"])
+	}
+	if !strings.Contains(strings.ToLower(strings.Join(stringSliceAny(mapValue(roles["coo"])["summary"]), " ")), "grey-market leakage") {
+		t.Fatalf("expected COO summary to mention grey-market leakage, got %#v", roles["coo"])
+	}
+}
+
 func TestGenericActionPlanUsesPathMetricsForDerivedActors(t *testing.T) {
 	run := &horizonmodels.SimulationRun{
 		Request: horizonmodels.SimulationRunRequest{
@@ -441,5 +516,17 @@ func TestBuildResultOverlaysProvidesFrontEndRenderableTargets(t *testing.T) {
 	targets := mapValue(roleOverlays[0]["targets"])
 	if len(stringSliceAny(targets["shoulders"])) == 0 || len(stringSliceAny(targets["products"])) == 0 || len(stringSliceAny(targets["pathChains"])) == 0 {
 		t.Fatalf("expected role overlay to target shoulder and product overlays, got %#v", targets)
+	}
+	if floatValue(shoulders[0], "score", 0) <= 0 || floatValue(shoulders[0], "score", 0) > 1 {
+		t.Fatalf("expected normalized shoulder score, got %#v", shoulders[0])
+	}
+	if len(shoulders) > 1 && floatValue(shoulders[0], "score", 0) == floatValue(shoulders[1], "score", 0) {
+		t.Fatalf("expected shoulder overlays to be rankable, got %#v", shoulders)
+	}
+	if floatValue(products[0], "score", 0) <= 0 || floatValue(products[0], "score", 0) > 1 {
+		t.Fatalf("expected normalized product score, got %#v", products[0])
+	}
+	if len(products) > 1 && floatValue(products[0], "score", 0) == floatValue(products[1], "score", 0) {
+		t.Fatalf("expected product overlays to be rankable, got %#v", products)
 	}
 }

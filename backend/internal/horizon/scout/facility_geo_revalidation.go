@@ -52,100 +52,159 @@ func RevalidateFacilityGeo(
 	result.PreviousISO2 = firstNonEmptyUpper(currentISO2, pathISO2)
 
 	var lastErr error
+	var bestGeo *coreontology.GeocodingResult
+	var bestResolvedISO2 string
+	var bestAttempt *geoResolveAttempt
+	attempts := make([]geoResolveAttempt, 0, len(queries))
 	for _, query := range queries {
+		if isWeakGeoResolveQuery(query) {
+			attempts = append(attempts, geoResolveAttempt{
+				Query:   query,
+				Outcome: "rejected",
+				Reason:  "weak_query",
+			})
+			continue
+		}
 		geo, err := geocodingClient.Geocode(ctx, query)
 		if err != nil {
 			lastErr = err
+			attempts = append(attempts, geoResolveAttempt{
+				Query:   query,
+				Outcome: "error",
+				Reason:  formatGeoResolveErr(err),
+			})
 			continue
 		}
 		if geo == nil {
+			attempts = append(attempts, geoResolveAttempt{
+				Query:   query,
+				Outcome: "miss",
+				Reason:  "no_result",
+			})
 			continue
 		}
 		resolvedISO2 := inferCountryISO2FromFormattedAddress(geo.FormattedAddress)
 		if resolvedISO2 == "" {
+			attempts = append(attempts, geoResolveAttempt{
+				Query:            query,
+				Provider:         strings.TrimSpace(geo.Provider),
+				Outcome:          "rejected",
+				Reason:           "missing_resolved_country",
+				FormattedAddress: strings.TrimSpace(geo.FormattedAddress),
+			})
 			continue
 		}
-		if !shouldAcceptFacilityGeoResult(fragment, query, geo.FormattedAddress, currentISO2, pathISO2, resolvedISO2) {
+		score, acceptReason := scoreFacilityGeoResult(fragment, query, geo.FormattedAddress, currentISO2, pathISO2, resolvedISO2)
+		if score <= 0 {
+			attempts = append(attempts, geoResolveAttempt{
+				Query:            query,
+				Provider:         strings.TrimSpace(geo.Provider),
+				Outcome:          "rejected",
+				Reason:           acceptReason,
+				ResolvedISO2:     resolvedISO2,
+				FormattedAddress: strings.TrimSpace(geo.FormattedAddress),
+			})
 			continue
 		}
-
-		if fragment.HomeLocation == nil {
-			fragment.HomeLocation = &models.Location{}
-		}
-		if fragment.HomeLocation.ISO3166_1 == nil || !strings.EqualFold(strings.TrimSpace(*fragment.HomeLocation.ISO3166_1), resolvedISO2) {
-			v := resolvedISO2
-			fragment.HomeLocation.ISO3166_1 = &v
-			result.ChangedISO2 = true
-		}
-		if place := facilityPlaceNameHint(fragment); place != "" && shouldUpgradePlaceName(fragment.HomeLocation.Name, place) {
-			fragment.HomeLocation.Name = place
-			result.ChangedLocationName = true
-		}
-		if models.IsRealGeoCoordinate(geo.Lat, geo.Lon) {
-			result.ChangedCoordinates = henrich.ApplyResolvedCoordinates(fragment, geo.Lat, geo.Lon)
-		}
-		if fragment.Identifiers == nil {
-			fragment.Identifiers = map[string]string{}
-		}
-		henrich.RecordGeoCoordinatesAttribution(fragment, henrich.GeoCoordinatesAttribution{
-			Method:           "geocoding_revalidate",
-			Provider:         strings.TrimSpace(geo.Provider),
+		candidate := geoResolveAttempt{
 			Query:            query,
+			Provider:         strings.TrimSpace(geo.Provider),
+			Outcome:          "candidate",
+			Reason:           acceptReason,
+			ResolvedISO2:     resolvedISO2,
 			FormattedAddress: strings.TrimSpace(geo.FormattedAddress),
-			PlaceID:          strings.TrimSpace(geo.PlaceID),
-			CountryAlpha2:    resolvedISO2,
-		})
-		fragment.Identifiers["geoVerifiedCountryAlpha2"] = strings.ToUpper(resolvedISO2)
-		if strings.TrimSpace(geo.PlaceID) != "" {
-			fragment.Identifiers["geoVerifiedPlaceId"] = strings.TrimSpace(geo.PlaceID)
+			Score:            score,
 		}
-		fragment.Identifiers["geoVerifiedMethod"] = "geocoding"
-		if provider := strings.TrimSpace(geo.Provider); provider != "" {
-			fragment.Identifiers["geoVerifiedProvider"] = provider
+		attempts = append(attempts, candidate)
+		if bestAttempt == nil || candidate.Score > bestAttempt.Score {
+			copyCandidate := candidate
+			bestAttempt = &copyCandidate
+			bestGeo = geo
+			bestResolvedISO2 = resolvedISO2
 		}
-		if formatted := strings.TrimSpace(geo.FormattedAddress); formatted != "" {
-			fragment.Identifiers["geoVerifiedFormattedAddress"] = formatted
-		}
-		fragment.Identifiers["geoVerifiedQuery"] = query
-
-		if upgradedPath, ok := canonical.InferFacilityCanonicalPathFromGeo(fragment); ok {
-			fragment.CanonicalPath = upgradedPath
-			if parts, err := taxonomy.ParseCanonicalPathParts(upgradedPath); err == nil && parts != nil {
-				fragment.CanonicalParts = parts
-			}
-			result.ChangedPath = true
-		}
-
-		result.Applied = result.ChangedISO2 || result.ChangedPath || result.ChangedCoordinates || result.ChangedLocationName
-		result.ResolvedISO2 = strings.ToUpper(resolvedISO2)
-		result.Query = query
-		result.FormattedAddress = strings.TrimSpace(geo.FormattedAddress)
-		result.Provider = strings.TrimSpace(geo.Provider)
-		switch {
-		case result.ChangedISO2 && result.ChangedPath && result.ChangedCoordinates:
-			result.Reason = "facility country, coordinates, and canonical path revalidated via geocoding"
-		case result.ChangedCoordinates && result.ChangedLocationName:
-			result.Reason = "facility coordinates and place name revalidated via geocoding"
-		case result.ChangedLocationName:
-			result.Reason = "facility place name revalidated via geocoding"
-		case result.ChangedISO2 && result.ChangedPath:
-			result.Reason = "facility country and canonical path revalidated via geocoding"
-		case result.ChangedCoordinates && result.ChangedISO2:
-			result.Reason = "facility country and coordinates revalidated via geocoding"
-		case result.ChangedCoordinates && result.ChangedPath:
-			result.Reason = "facility coordinates and canonical path revalidated via geocoding"
-		case result.ChangedISO2:
-			result.Reason = "facility country revalidated via geocoding"
-		case result.ChangedCoordinates:
-			result.Reason = "facility coordinates revalidated via geocoding"
-		case result.ChangedPath:
-			result.Reason = "facility canonical path upgraded after geocoding verification"
-		default:
-			result.Reason = "facility geography confirmed via geocoding"
-		}
-		return result, nil
 	}
-	return result, lastErr
+	if bestGeo == nil || bestAttempt == nil {
+		recordGeoResolveTrace(fragment, "facility_revalidate", attempts, nil)
+		return result, lastErr
+	}
+
+	if fragment.HomeLocation == nil {
+		fragment.HomeLocation = &models.Location{}
+	}
+	if fragment.HomeLocation.ISO3166_1 == nil || !strings.EqualFold(strings.TrimSpace(*fragment.HomeLocation.ISO3166_1), bestResolvedISO2) {
+		v := bestResolvedISO2
+		fragment.HomeLocation.ISO3166_1 = &v
+		result.ChangedISO2 = true
+	}
+	if place := facilityPlaceNameHint(fragment); place != "" && shouldUpgradePlaceName(fragment.HomeLocation.Name, place) {
+		fragment.HomeLocation.Name = place
+		result.ChangedLocationName = true
+	}
+	if models.IsRealGeoCoordinate(bestGeo.Lat, bestGeo.Lon) {
+		result.ChangedCoordinates = henrich.ApplyResolvedCoordinates(fragment, bestGeo.Lat, bestGeo.Lon)
+	}
+	if fragment.Identifiers == nil {
+		fragment.Identifiers = map[string]string{}
+	}
+	henrich.RecordGeoCoordinatesAttribution(fragment, henrich.GeoCoordinatesAttribution{
+		Method:           "geocoding_revalidate",
+		Provider:         strings.TrimSpace(bestGeo.Provider),
+		Query:            bestAttempt.Query,
+		FormattedAddress: strings.TrimSpace(bestGeo.FormattedAddress),
+		PlaceID:          strings.TrimSpace(bestGeo.PlaceID),
+		CountryAlpha2:    bestResolvedISO2,
+	})
+	fragment.Identifiers["geoVerifiedCountryAlpha2"] = strings.ToUpper(bestResolvedISO2)
+	if strings.TrimSpace(bestGeo.PlaceID) != "" {
+		fragment.Identifiers["geoVerifiedPlaceId"] = strings.TrimSpace(bestGeo.PlaceID)
+	}
+	fragment.Identifiers["geoVerifiedMethod"] = "geocoding"
+	if provider := strings.TrimSpace(bestGeo.Provider); provider != "" {
+		fragment.Identifiers["geoVerifiedProvider"] = provider
+	}
+	if formatted := strings.TrimSpace(bestGeo.FormattedAddress); formatted != "" {
+		fragment.Identifiers["geoVerifiedFormattedAddress"] = formatted
+	}
+	fragment.Identifiers["geoVerifiedQuery"] = bestAttempt.Query
+
+	if upgradedPath, ok := canonical.InferFacilityCanonicalPathFromGeo(fragment); ok {
+		fragment.CanonicalPath = upgradedPath
+		if parts, err := taxonomy.ParseCanonicalPathParts(upgradedPath); err == nil && parts != nil {
+			fragment.CanonicalParts = parts
+		}
+		result.ChangedPath = true
+	}
+
+	result.Applied = result.ChangedISO2 || result.ChangedPath || result.ChangedCoordinates || result.ChangedLocationName
+	result.ResolvedISO2 = strings.ToUpper(bestResolvedISO2)
+	result.Query = bestAttempt.Query
+	result.FormattedAddress = strings.TrimSpace(bestGeo.FormattedAddress)
+	result.Provider = strings.TrimSpace(bestGeo.Provider)
+	result.Reason = bestAttempt.Reason
+	recordGeoResolveTrace(fragment, "facility_revalidate", attempts, bestAttempt)
+	switch {
+	case result.ChangedISO2 && result.ChangedPath && result.ChangedCoordinates:
+		result.Reason = "facility country, coordinates, and canonical path revalidated via geocoding"
+	case result.ChangedCoordinates && result.ChangedLocationName:
+		result.Reason = "facility coordinates and place name revalidated via geocoding"
+	case result.ChangedLocationName:
+		result.Reason = "facility place name revalidated via geocoding"
+	case result.ChangedISO2 && result.ChangedPath:
+		result.Reason = "facility country and canonical path revalidated via geocoding"
+	case result.ChangedCoordinates && result.ChangedISO2:
+		result.Reason = "facility country and coordinates revalidated via geocoding"
+	case result.ChangedCoordinates && result.ChangedPath:
+		result.Reason = "facility coordinates and canonical path revalidated via geocoding"
+	case result.ChangedISO2:
+		result.Reason = "facility country revalidated via geocoding"
+	case result.ChangedCoordinates:
+		result.Reason = "facility coordinates revalidated via geocoding"
+	case result.ChangedPath:
+		result.Reason = "facility canonical path upgraded after geocoding verification"
+	default:
+		result.Reason = "facility geography confirmed via geocoding"
+	}
+	return result, nil
 }
 
 func facilityGeoValidationQueries(fragment *models.HorizonFragment) []string {
@@ -164,6 +223,9 @@ func facilityGeoValidationQueries(fragment *models.HorizonFragment) []string {
 			return
 		}
 		if !addressvalidate.IsPlausibleAddress(addr) {
+			return
+		}
+		if isWeakGeoResolveQuery(addr) {
 			return
 		}
 		seen[key] = struct{}{}
@@ -234,41 +296,97 @@ func shouldAcceptFacilityGeoResult(
 	pathISO2 string,
 	resolvedISO2 string,
 ) bool {
+	score, _ := scoreFacilityGeoResult(fragment, query, formattedAddress, currentISO2, pathISO2, resolvedISO2)
+	return score > 0
+}
+
+func scoreFacilityGeoResult(
+	fragment *models.HorizonFragment,
+	query string,
+	formattedAddress string,
+	currentISO2 string,
+	pathISO2 string,
+	resolvedISO2 string,
+) (int, string) {
 	resolvedISO2 = strings.ToLower(strings.TrimSpace(resolvedISO2))
 	if resolvedISO2 == "" || !taxonomy.IsISO2CountryCode(resolvedISO2) {
-		return false
+		return 0, "missing_or_invalid_country"
 	}
 
 	currentISO2 = strings.ToLower(strings.TrimSpace(currentISO2))
 	pathISO2 = strings.ToLower(strings.TrimSpace(pathISO2))
 	query = strings.TrimSpace(query)
 	formattedAddress = strings.TrimSpace(formattedAddress)
+	if isWeakGeoResolveQuery(query) {
+		return 0, "weak_query"
+	}
 	place := facilityPlaceHint(fragment)
 	queryHasPlace := place != "" && containsNormalizedGeoPhrase(query, place)
 	formattedHasPlace := place != "" && containsNormalizedGeoPhrase(formattedAddress, place)
 	compositeQuery := strings.Count(query, ",") >= 1
+	specificResult := strings.Count(formattedAddress, ",") >= 1
+	score := 0
+	reasons := make([]string, 0, 5)
 
 	// If a non-NA canonical path already agrees with the result, accept it as verification.
 	if pathISO2 != "" && pathISO2 != "na" && pathISO2 == resolvedISO2 {
-		return place != "" && queryHasPlace
+		score += 40
+		reasons = append(reasons, "path_country_match")
+		if place != "" {
+			if !queryHasPlace {
+				return 0, "path_country_match_without_place_query"
+			}
+			score += 20
+			reasons = append(reasons, "query_place_match")
+			if formattedHasPlace {
+				score += 25
+				reasons = append(reasons, "formatted_place_match")
+			}
+			return score, geoResolveScoreReason(reasons...)
+		}
+		if facilityAllowsPlainNameGeocode(fragment) && specificResult {
+			score += 20
+			reasons = append(reasons, "high_signal_plain_name")
+			return score, geoResolveScoreReason(reasons...)
+		}
+		return 0, "path_country_match_without_place_support"
 	}
 
 	// For /fac/na, matching the current country alone is not evidence: current ISO may itself be wrong.
 	if currentISO2 != "" && currentISO2 == resolvedISO2 {
-		return place != "" && queryHasPlace && formattedHasPlace
+		score += 20
+		reasons = append(reasons, "current_country_match")
+		if place != "" && queryHasPlace && formattedHasPlace {
+			score += 40
+			reasons = append(reasons, "query_place_match", "formatted_place_match")
+			return score, geoResolveScoreReason(reasons...)
+		}
+		return 0, "current_country_match_without_place_support"
 	}
 
 	// Override a conflicting country only when the query/result both support the place hint.
 	if place != "" && queryHasPlace && formattedHasPlace {
-		return true
+		score += 70
+		reasons = append(reasons, "place_override_match")
+		return score, geoResolveScoreReason(reasons...)
 	}
 
 	// For /fac/na and empty country, a composite query is enough to accept the result.
 	if currentISO2 == "" && (pathISO2 == "" || pathISO2 == "na") && compositeQuery {
-		return true
+		score += 15
+		reasons = append(reasons, "unknown_country_composite_query")
+		if specificResult {
+			score += 10
+			reasons = append(reasons, "specific_result")
+		}
+		if place != "" && formattedHasPlace {
+			score += 15
+			reasons = append(reasons, "formatted_place_match")
+		}
+		return score, geoResolveScoreReason(reasons...)
 	}
 
-	return false
+	return 0, "insufficient_place_or_country_support"
 }
 
 func facilityPlaceHint(fragment *models.HorizonFragment) string {
@@ -276,11 +394,14 @@ func facilityPlaceHint(fragment *models.HorizonFragment) string {
 		return ""
 	}
 	if fragment.HomeLocation != nil {
-		if place := strings.TrimSpace(fragment.HomeLocation.Name); place != "" {
+		if place := strings.TrimSpace(fragment.HomeLocation.Name); place != "" && !isWeakGeoResolveQuery(place) {
 			return normalizeGeoPhrase(place)
 		}
 	}
 	for _, hint := range henrich.InferPlaceHintCandidates(fragment) {
+		if isWeakGeoResolveQuery(hint) {
+			continue
+		}
 		if normalized := normalizeGeoPhrase(hint); normalized != "" {
 			return normalized
 		}
@@ -297,7 +418,7 @@ func facilityPlaceNameHint(fragment *models.HorizonFragment) string {
 	best := ""
 	for _, hint := range henrich.InferPlaceHintCandidates(fragment) {
 		hint = strings.TrimSpace(hint)
-		if hint == "" {
+		if hint == "" || isWeakGeoResolveQuery(hint) {
 			continue
 		}
 		if best == "" || len(strings.Fields(hint)) > len(strings.Fields(best)) || len(hint) > len(best) {

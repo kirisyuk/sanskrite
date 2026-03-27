@@ -187,6 +187,10 @@ func (r *DependencyEdgesRepository) applyProductRelationDictionary(
 	if r == nil || r.productDictionary == nil || edge == nil {
 		return sourcePath, targetPath, false
 	}
+	if models.FragmentType(strings.TrimSpace(sourceType)) != models.FragmentTypeProduct ||
+		models.FragmentType(strings.TrimSpace(targetType)) != models.FragmentTypeProduct {
+		return sourcePath, targetPath, false
+	}
 	resolution, err := r.productDictionary.ResolveProductRelationForTenant(
 		ctx,
 		firstNonEmptyString(strings.TrimSpace(edge.TenantID), "global"),

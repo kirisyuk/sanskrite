@@ -12,9 +12,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/metriccore"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonprop "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/simscope"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 )
@@ -44,6 +46,7 @@ type Service struct {
 	propagation  *horizonprop.PropagationEngine
 	profiles     *horizonprop.ProfileLookup
 	submitter    AgentMeshTaskSubmitter
+	operational  *metriccore.OperationalHydrator
 	publisher    Publisher
 	logger       *log.Logger
 }
@@ -62,6 +65,7 @@ type Dependencies struct {
 	PropagationEngine        *horizonprop.PropagationEngine
 	PropagationProfileLookup *horizonprop.ProfileLookup
 	Submitter                AgentMeshTaskSubmitter
+	OperationalHydrator      *metriccore.OperationalHydrator
 	Publisher                Publisher
 	Logger                   *log.Logger
 }
@@ -93,6 +97,7 @@ func NewService(deps Dependencies) (*Service, error) {
 		propagation:  deps.PropagationEngine,
 		profiles:     deps.PropagationProfileLookup,
 		submitter:    deps.Submitter,
+		operational:  deps.OperationalHydrator,
 		publisher:    deps.Publisher,
 		logger:       deps.Logger,
 	}, nil
@@ -120,8 +125,13 @@ func (s *Service) CreateRun(ctx context.Context, tenantID, projectID string, req
 		lens, _ = s.lenses.Get(ctx, strings.TrimSpace(req.LensID))
 	}
 	recognition := sanitizeSimulationDocumentMap(BuildInputRecognition(req, lens, baselineRefs))
-	signal, preview := s.buildBaselineSignalAndPreview(ctx, tenantID, req, baselineRefs, recognition)
+	operationalPreview := s.buildOperationalPreview(ctx, tenantID, req, baselineRefs, recognition)
+	signal, preview := s.buildBaselineSignalAndPreview(ctx, tenantID, req, baselineRefs, recognition, operationalPreview)
 	preview = sanitizeSimulationDocumentMap(preview)
+	if s.logger != nil {
+		_, hasHydration := preview["operationalHydration"]
+		s.logger.Printf("[horizon.simulation] create_run_preview lens=%s run_question=%q has_operational=%t preview_keys=%d", strings.TrimSpace(req.LensID), strings.TrimSpace(req.Question), hasHydration, len(preview))
+	}
 	now := time.Now().UTC()
 	run := &horizonmodels.SimulationRun{
 		TenantID:        tenantID,
@@ -545,9 +555,9 @@ func isCanonicalScopePath(value string) bool {
 	return strings.HasPrefix(value, "/")
 }
 
-func (s *Service) buildBaselineSignalAndPreview(ctx context.Context, tenantID string, req *horizonmodels.SimulationRunRequest, refs horizonmodels.SimulationBaselineRefs, recognition map[string]any) (*horizonmodels.SignalDescriptor, map[string]any) {
+func (s *Service) buildBaselineSignalAndPreview(ctx context.Context, tenantID string, req *horizonmodels.SimulationRunRequest, refs horizonmodels.SimulationBaselineRefs, recognition map[string]any, overlay map[string]any) (*horizonmodels.SignalDescriptor, map[string]any) {
 	signal := signalFromRequest(req, refs.ScopePaths, recognition)
-	artifactPreview := s.buildArtifactPathPreview(ctx, refs, recognition)
+	artifactPreview := mergeSimulationPreview(s.buildArtifactPathPreview(ctx, refs, recognition), overlay)
 	if signal == nil {
 		return nil, artifactPreview
 	}
@@ -581,6 +591,68 @@ func (s *Service) buildBaselineSignalAndPreview(ctx context.Context, tenantID st
 	}, artifactPreview)
 }
 
+func (s *Service) buildOperationalPreview(ctx context.Context, tenantID string, req *horizonmodels.SimulationRunRequest, refs horizonmodels.SimulationBaselineRefs, recognition map[string]any) map[string]any {
+	if req == nil {
+		return map[string]any{
+			"operationalHydration": map[string]any{
+				"status": "skipped",
+				"reason": "request_nil",
+			},
+		}
+	}
+	if s.operational == nil {
+		if s.logger != nil {
+			s.logger.Printf("[horizon.simulation] operational hydration unavailable lens=%s reason=hydrator_nil", strings.TrimSpace(req.LensID))
+		}
+		return map[string]any{
+			"operationalHydration": map[string]any{
+				"status": "unavailable",
+				"reason": "hydrator_nil",
+			},
+		}
+	}
+	snapshot, err := s.operational.Hydrate(ctx, metriccore.OperationalHydrationRequest{
+		TenantID:     tenantID,
+		LensID:       strings.TrimSpace(req.LensID),
+		Question:     strings.TrimSpace(req.Question),
+		Recognition:  recognition,
+		DomainModes:  append([]string(nil), req.DomainModes...),
+		BaselineRefs: refs,
+	})
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Printf("[horizon.simulation] operational hydration failed lens=%s err=%v", strings.TrimSpace(req.LensID), err)
+		}
+		return map[string]any{
+			"operationalHydration": map[string]any{
+				"status": "failed",
+				"error":  err.Error(),
+			},
+		}
+	}
+	if snapshot == nil {
+		if s.logger != nil {
+			s.logger.Printf("[horizon.simulation] operational hydration empty lens=%s", strings.TrimSpace(req.LensID))
+		}
+		return map[string]any{
+			"operationalHydration": map[string]any{
+				"status": "empty",
+			},
+		}
+	}
+	preview := metriccore.SnapshotPreviewOverlay(snapshot)
+	preview["operationalHydration"] = map[string]any{
+		"status":               "ready",
+		"targetCount":          snapshot.Summary.TargetCount,
+		"refreshedTargetCount": snapshot.Summary.RefreshedTargetCount,
+		"generatedAt":          snapshot.GeneratedAt,
+	}
+	if s.logger != nil {
+		s.logger.Printf("[horizon.simulation] operational hydration ready lens=%s targets=%d refreshed=%d missing=%d blockage=%.3f screening=%.3f", strings.TrimSpace(req.LensID), snapshot.Summary.TargetCount, snapshot.Summary.RefreshedTargetCount, snapshot.Summary.MissingMetricCount, snapshot.Summary.BlockageMax, snapshot.Summary.ScreeningIntensityMax)
+	}
+	return preview
+}
+
 type artifactShoulderAggregate struct {
 	code      string
 	refs      []string
@@ -596,8 +668,18 @@ type artifactProductAggregate struct {
 	maxStress float64
 }
 
+type artifactChainAggregate struct {
+	code      string
+	path      string
+	refs      []string
+	pathCount int
+	score     float64
+	maxStress float64
+}
+
 func (s *Service) buildArtifactPathPreview(ctx context.Context, refs horizonmodels.SimulationBaselineRefs, recognition map[string]any) map[string]any {
-	artifacts := s.collectBaselineArtifacts(ctx, refs)
+	profile := simscope.BuildProfile(stringValue(recognition, "query"), nil, refs, recognition)
+	artifacts := s.collectBaselineArtifacts(ctx, refs, profile)
 	if len(artifacts) == 0 {
 		return nil
 	}
@@ -605,6 +687,7 @@ func (s *Service) buildArtifactPathPreview(ctx context.Context, refs horizonmode
 	primaryGeo := recognitionPrimaryGeoCode(recognition)
 	shoulders := map[string]*artifactShoulderAggregate{}
 	products := map[string]*artifactProductAggregate{}
+	chains := map[string]*artifactChainAggregate{}
 	pathCount := 0
 	stressedCount := 0
 	legCountTotal := 0
@@ -659,6 +742,7 @@ func (s *Service) buildArtifactPathPreview(ctx context.Context, refs horizonmode
 			}
 		}
 
+		shoulderRefs := artifactShoulderRefs(artifact)
 		for _, code := range artifactShoulderCountries(artifact, primaryGeo) {
 			entry := shoulders[code]
 			if entry == nil {
@@ -668,9 +752,22 @@ func (s *Service) buildArtifactPathPreview(ctx context.Context, refs horizonmode
 			entry.pathCount++
 			entry.score += pathRiskScore
 			entry.maxStress = maxFloat(entry.maxStress, stressScore)
-			entry.refs = append(entry.refs, artifact.NodeRefs...)
+			entry.refs = append(entry.refs, shoulderRefs...)
 			if entry.score > shoulderRiskMax {
 				shoulderRiskMax = entry.score
+			}
+			if productAxis != "" {
+				chainKey := code + "::" + productAxis
+				chain := chains[chainKey]
+				if chain == nil {
+					chain = &artifactChainAggregate{code: code, path: productAxis}
+					chains[chainKey] = chain
+				}
+				chain.pathCount++
+				chain.score += pathRiskScore
+				chain.maxStress = maxFloat(chain.maxStress, stressScore)
+				chain.refs = append(chain.refs, shoulderRefs...)
+				chain.refs = append(chain.refs, productAxis)
 			}
 		}
 	}
@@ -688,15 +785,25 @@ func (s *Service) buildArtifactPathPreview(ctx context.Context, refs horizonmode
 		"artifact_product_risk_max":     round3(productRiskMax),
 		"artifact_shoulder_risk_max":    round3(shoulderRiskMax),
 	}
+	shoulderPreview := buildArtifactShoulderPreview(shoulders)
+	allowedShoulders := map[string]struct{}{}
+	for _, item := range shoulderPreview {
+		code := strings.ToLower(strings.TrimSpace(stringValue(item, "code")))
+		if code == "" {
+			continue
+		}
+		allowedShoulders[code] = struct{}{}
+	}
 
 	return map[string]any{
 		"metrics":              metrics,
-		"artifactTopShoulders": buildArtifactShoulderPreview(shoulders),
+		"artifactTopShoulders": shoulderPreview,
 		"artifactTopProducts":  buildArtifactProductPreview(products),
+		"artifactChains":       buildArtifactChainPreview(chains, allowedShoulders),
 	}
 }
 
-func (s *Service) collectBaselineArtifacts(ctx context.Context, refs horizonmodels.SimulationBaselineRefs) []*horizonmodels.MaterializedArtifact {
+func (s *Service) collectBaselineArtifacts(ctx context.Context, refs horizonmodels.SimulationBaselineRefs, profile simscope.Profile) []*horizonmodels.MaterializedArtifact {
 	if s.materialized == nil {
 		return nil
 	}
@@ -732,7 +839,10 @@ func (s *Service) collectBaselineArtifacts(ctx context.Context, refs horizonmode
 			appendArtifact(artifact)
 		}
 	}
-	return out
+	if len(profile.FocusRefs) == 0 && len(profile.DomainProductTokens) == 0 {
+		return out
+	}
+	return simscope.FilterArtifacts(out, profile)
 }
 
 func buildArtifactShoulderPreview(input map[string]*artifactShoulderAggregate) []map[string]any {
@@ -750,6 +860,7 @@ func buildArtifactShoulderPreview(input map[string]*artifactShoulderAggregate) [
 		}
 		return items[i].score > items[j].score
 	})
+	items = filterManagementRelevantShoulders(items)
 	out := make([]map[string]any, 0, min(len(items), 6))
 	for _, entry := range items[:min(len(items), 6)] {
 		out = append(out, map[string]any{
@@ -762,6 +873,28 @@ func buildArtifactShoulderPreview(input map[string]*artifactShoulderAggregate) [
 		})
 	}
 	return out
+}
+
+func filterManagementRelevantShoulders(items []*artifactShoulderAggregate) []*artifactShoulderAggregate {
+	if len(items) <= 1 {
+		return items
+	}
+	leaderPathCount := max(items[0].pathCount, 1)
+	leaderScore := maxFloat(items[0].score, 1)
+	const minRelativeShare = 0.08
+	filtered := make([]*artifactShoulderAggregate, 0, len(items))
+	filtered = append(filtered, items[0])
+	for _, item := range items[1:] {
+		if item == nil || item.pathCount < 2 {
+			continue
+		}
+		coverageShare := float64(item.pathCount) / float64(leaderPathCount)
+		severityShare := item.score / leaderScore
+		if coverageShare >= minRelativeShare || severityShare >= minRelativeShare || item.maxStress >= 0.58 {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
 }
 
 func buildArtifactProductPreview(input map[string]*artifactProductAggregate) []map[string]any {
@@ -791,6 +924,45 @@ func buildArtifactProductPreview(input map[string]*artifactProductAggregate) []m
 	return out
 }
 
+func buildArtifactChainPreview(input map[string]*artifactChainAggregate, allowedCountries map[string]struct{}) []map[string]any {
+	items := make([]*artifactChainAggregate, 0, len(input))
+	for _, entry := range input {
+		if entry == nil || entry.pathCount == 0 {
+			continue
+		}
+		if len(allowedCountries) > 0 {
+			if _, ok := allowedCountries[strings.ToLower(strings.TrimSpace(entry.code))]; !ok {
+				continue
+			}
+		}
+		entry.refs = compactStringsPreserveOrder(entry.refs)
+		items = append(items, entry)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].score == items[j].score {
+			if items[i].code == items[j].code {
+				return items[i].path < items[j].path
+			}
+			return items[i].code < items[j].code
+		}
+		return items[i].score > items[j].score
+	})
+	out := make([]map[string]any, 0, min(len(items), 12))
+	for _, entry := range items[:min(len(items), 12)] {
+		out = append(out, map[string]any{
+			"countryCode": entry.code,
+			"countryName": countryNameFromCode(entry.code),
+			"path":        entry.path,
+			"name":        strings.ReplaceAll(lastPathSegment(entry.path), "-", " "),
+			"pathCount":   entry.pathCount,
+			"riskScore":   round3(entry.score),
+			"maxStress":   round3(entry.maxStress),
+			"refs":        traceSlice(entry.refs, 6),
+		})
+	}
+	return out
+}
+
 func artifactRiskScore(artifact *horizonmodels.MaterializedArtifact) float64 {
 	if artifact == nil {
 		return 0
@@ -807,7 +979,7 @@ func artifactShoulderCountries(artifact *horizonmodels.MaterializedArtifact, pri
 	}
 	seen := map[string]struct{}{}
 	out := make([]string, 0, 4)
-	for _, ref := range compactStringsPreserveOrder(artifact.NodeRefs) {
+	for _, ref := range artifactShoulderRefs(artifact) {
 		code := countryCodeFromPath(ref)
 		if code == "" || code == primaryGeo {
 			continue
@@ -822,11 +994,34 @@ func artifactShoulderCountries(artifact *horizonmodels.MaterializedArtifact, pri
 	return out
 }
 
+func artifactShoulderRefs(artifact *horizonmodels.MaterializedArtifact) []string {
+	if artifact == nil {
+		return nil
+	}
+	refs := make([]string, 0, 12)
+	refs = append(refs,
+		strings.TrimSpace(artifact.AnchorSupplier),
+		strings.TrimSpace(artifact.AnchorCustomer),
+	)
+	if legs, err := horizonmodels.GetSupplyChainPathLegs(artifact); err == nil && len(legs) > 0 {
+		for _, leg := range legs {
+			refs = append(refs,
+				strings.TrimSpace(leg.SupplierRef),
+				strings.TrimSpace(leg.CustomerRef),
+			)
+		}
+	}
+	if len(compactStringsPreserveOrder(refs)) == 0 {
+		refs = append(refs, artifact.NodeRefs...)
+	}
+	return compactStringsPreserveOrder(refs)
+}
+
 func recognitionPrimaryGeoCode(recognition map[string]any) string {
 	for _, raw := range mapSlice(recognition["objectCandidates"]) {
 		path := strings.TrimSpace(stringValue(raw, "path"))
-		if strings.HasPrefix(path, "/loc/") {
-			return countryCodeFromPath(path)
+		if code := countryCodeFromPath(path); code != "" {
+			return code
 		}
 	}
 	return ""
@@ -840,6 +1035,13 @@ func countryCodeFromPath(path string) string {
 	switch parts[0] {
 	case "loc", "fac", "org", "market", "gov":
 		return strings.ToLower(strings.TrimSpace(parts[1]))
+	case "domain":
+		for i := 1; i < len(parts)-1; i++ {
+			if parts[i] == "geo" && len(strings.TrimSpace(parts[i+1])) == 2 {
+				return strings.ToLower(strings.TrimSpace(parts[i+1]))
+			}
+		}
+		return ""
 	default:
 		return ""
 	}

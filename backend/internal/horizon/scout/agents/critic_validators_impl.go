@@ -100,6 +100,333 @@ func checkSupplyChainInvariants(chains []SupplyChain, workingProductScope []stri
 	return gaps
 }
 
+func checkGovernanceInvariants(relations []DiscoveredRelation) []string {
+	var gaps []string
+	if len(relations) == 0 {
+		return gaps
+	}
+
+	type ownershipEdgeState struct {
+		parents              int
+		hasShareOrPercent    bool
+		hasBeneficialOrHuman bool
+	}
+
+	ownershipByTarget := map[string]*ownershipEdgeState{}
+	controlByPair := map[string]struct{}{}
+	communitySupport := map[string]bool{}
+	communitiesSeen := map[string]struct{}{}
+	hasAnyOwnership := false
+	hasBeneficialLayer := false
+
+	for _, rel := range relations {
+		rt := strings.ToUpper(strings.TrimSpace(rel.RelationType))
+		src := strings.TrimSpace(rel.SourceCanonicalPath)
+		tgt := strings.TrimSpace(rel.TargetCanonicalPath)
+		pairKey := src + "->" + tgt
+
+		switch rt {
+		case "CONTROLS":
+			controlByPair[pairKey] = struct{}{}
+			if readQualifierString(rel.Qualifiers, "control_type", "controlType") == "" &&
+				readQualifierString(rel.Qualifiers, "mechanism") == "" {
+				gaps = append(gaps, "governance_invariant: CONTROLS edge missing control_type or mechanism")
+			}
+		case "OWNS", "SUBSIDIARY_OF":
+			hasAnyOwnership = true
+			state := ownershipByTarget[tgt]
+			if state == nil {
+				state = &ownershipEdgeState{}
+				ownershipByTarget[tgt] = state
+			}
+			state.parents++
+			shareType := strings.ToLower(readQualifierString(rel.Qualifiers, "share_type", "shareType"))
+			ownershipPct, hasOwnershipPct := readMetricOrQualifierNumber(rel, "ownership_percent")
+			votingPct, hasVotingPct := readMetricOrQualifierNumber(rel, "voting_rights_percent")
+			if shareType != "" || hasOwnershipPct {
+				state.hasShareOrPercent = true
+			}
+			if shareType == "beneficial" || shareType == "indirect" || strings.HasPrefix(src, "/person/") || strings.HasPrefix(src, "/community/") {
+				state.hasBeneficialOrHuman = true
+				hasBeneficialLayer = true
+			}
+			if !hasOwnershipPct && shareType == "" {
+				gaps = append(gaps, "governance_invariant: ownership edge missing ownership_percent or share_type")
+			}
+			if hasOwnershipPct && hasVotingPct && absFloat(ownershipPct-votingPct) > 10.0 {
+				if _, ok := controlByPair[pairKey]; !ok {
+					gaps = append(gaps, "governance_invariant: voting-rights diverge from equity without matching CONTROLS edge")
+				}
+			}
+		case "HAS_SUBGROUP", "MEMBER_OF", "AFFILIATED_WITH", "OPERATES_VIA":
+			for _, p := range []string{src, tgt} {
+				if strings.HasPrefix(p, "/community/") {
+					communitySupport[p] = true
+				}
+			}
+		}
+
+		for _, p := range []string{src, tgt} {
+			if strings.HasPrefix(p, "/community/") {
+				communitiesSeen[p] = struct{}{}
+			}
+		}
+	}
+
+	for _, state := range ownershipByTarget {
+		if state.parents > 1 && !state.hasShareOrPercent {
+			gaps = append(gaps, "governance_invariant: multiple upstream owners without ownership percentages or share types")
+		}
+	}
+	if hasAnyOwnership && !hasBeneficialLayer {
+		gaps = append(gaps, "governance_invariant: ownership graph lacks beneficial-owner, person, or community lineage layer")
+	}
+	for cp := range communitiesSeen {
+		if !communitySupport[cp] {
+			gaps = append(gaps, "governance_invariant: community control node lacks lineage or affiliation support edges")
+		}
+	}
+
+	return dedupInvariantGaps(gaps)
+}
+
+func checkPolicyImpactInvariants(relations []DiscoveredRelation) []string {
+	var gaps []string
+	if len(relations) == 0 {
+		return gaps
+	}
+
+	hasSource := false
+	hasDecision := false
+	hasMechanism := false
+	hasGeo := false
+	hasAffected := false
+	hasTransmission := false
+
+	adj := map[string][]string{}
+	seeds := map[string]struct{}{}
+	policyRelevant := false
+
+	for _, rel := range relations {
+		rt := strings.ToUpper(strings.TrimSpace(rel.RelationType))
+		src := strings.TrimSpace(rel.SourceCanonicalPath)
+		tgt := strings.TrimSpace(rel.TargetCanonicalPath)
+		if src == "" || tgt == "" {
+			continue
+		}
+		switch rt {
+		case "REGULATES", "CONTROLS_ACCESS", "IMPOSES_CONDITION", "GATEKEEPS_DECISION", "USES_MECHANISM", "APPLIES_TO", "IN_GEO_SCOPE", "AFFECTS", "ADMINISTERS", "OPERATES_VIA", "AFFILIATED_WITH", "HAS_SUBGROUP", "MEMBER_OF":
+			policyRelevant = true
+		default:
+			continue
+		}
+		if strings.HasPrefix(src, "/gov/") || strings.HasPrefix(src, "/org/") || strings.HasPrefix(src, "/community/") || strings.HasPrefix(src, "/program/") {
+			hasSource = true
+			seeds[src] = struct{}{}
+		}
+		if strings.HasPrefix(src, "/decision/") {
+			hasDecision = true
+		}
+		if strings.HasPrefix(src, "/mechanism/") {
+			hasMechanism = true
+		}
+		if strings.HasPrefix(tgt, "/decision/") {
+			hasDecision = true
+		}
+		if strings.HasPrefix(tgt, "/mechanism/") {
+			hasMechanism = true
+		}
+		if strings.HasPrefix(tgt, "/loc/") {
+			hasGeo = true
+		}
+		if strings.HasPrefix(src, "/loc/") {
+			hasGeo = true
+		}
+		if hasPolicyAffectedPath(tgt) {
+			hasAffected = true
+		}
+		if isPolicyTransmissionEdge(rt) || strings.HasPrefix(tgt, "/community/") || strings.HasPrefix(tgt, "/media/") || strings.HasPrefix(tgt, "/program/") {
+			hasTransmission = true
+		}
+		adj[src] = append(adj[src], tgt)
+
+		switch rt {
+		case "CONTROLS_ACCESS":
+			if readQualifierString(rel.Qualifiers, "type", "channel_type", "channelType") == "" {
+				gaps = append(gaps, "policy_impact_invariant: CONTROLS_ACCESS edge missing type/channel qualifier")
+			}
+		case "IMPOSES_CONDITION":
+			if readQualifierString(rel.Qualifiers, "type") == "" || readQualifierString(rel.Qualifiers, "impact") == "" {
+				gaps = append(gaps, "policy_impact_invariant: IMPOSES_CONDITION edge missing type or impact qualifier")
+			}
+		case "IN_GEO_SCOPE":
+			if readQualifierString(rel.Qualifiers, "scope_basis", "scopeBasis") == "" {
+				gaps = append(gaps, "policy_impact_invariant: IN_GEO_SCOPE edge missing scope_basis")
+			}
+		}
+	}
+
+	if !policyRelevant {
+		return dedupInvariantGaps(gaps)
+	}
+	if !hasSource {
+		gaps = append(gaps, "policy_impact_invariant: graph lacks explicit policy source or gatekeeper layer")
+	}
+	if !hasDecision {
+		gaps = append(gaps, "policy_impact_invariant: graph lacks decision-point layer")
+	}
+	if !hasMechanism {
+		gaps = append(gaps, "policy_impact_invariant: graph lacks mechanism layer")
+	}
+	if !hasGeo {
+		gaps = append(gaps, "policy_impact_invariant: graph lacks geo-scope layer")
+	}
+	if !hasAffected {
+		gaps = append(gaps, "policy_impact_invariant: graph lacks affected exposure targets")
+	}
+	if !hasTransmission {
+		gaps = append(gaps, "policy_impact_invariant: graph lacks transmission/response layer (community, program, or media tail)")
+	}
+
+	if len(seeds) > 0 {
+		seen := map[string]struct{}{}
+		queue := make([]string, 0, len(seeds))
+		for seed := range seeds {
+			seen[seed] = struct{}{}
+			queue = append(queue, seed)
+		}
+		for len(queue) > 0 {
+			u := queue[0]
+			queue = queue[1:]
+			for _, v := range adj[u] {
+				if _, ok := seen[v]; ok {
+					continue
+				}
+				seen[v] = struct{}{}
+				queue = append(queue, v)
+			}
+		}
+		for node := range collectPolicyCriticalNodes(relations) {
+			if _, ok := seen[node]; !ok {
+				gaps = append(gaps, "policy_impact_invariant: orphan policy node is not reachable from any source/gatekeeper layer")
+				break
+			}
+		}
+	}
+
+	return dedupInvariantGaps(gaps)
+}
+
+func collectPolicyCriticalNodes(relations []DiscoveredRelation) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, rel := range relations {
+		for _, p := range []string{strings.TrimSpace(rel.SourceCanonicalPath), strings.TrimSpace(rel.TargetCanonicalPath)} {
+			switch {
+			case strings.HasPrefix(p, "/decision/"),
+				strings.HasPrefix(p, "/mechanism/"),
+				strings.HasPrefix(p, "/community/"),
+				strings.HasPrefix(p, "/program/"),
+				strings.HasPrefix(p, "/media/"),
+				strings.HasPrefix(p, "/loc/"):
+				if p != "" {
+					out[p] = struct{}{}
+				}
+			}
+		}
+	}
+	return out
+}
+
+func hasPolicyAffectedPath(p string) bool {
+	p = strings.TrimSpace(p)
+	return strings.HasPrefix(p, "/org/") ||
+		strings.HasPrefix(p, "/fac/") ||
+		strings.HasPrefix(p, "/market/") ||
+		strings.HasPrefix(p, "/product/") ||
+		strings.HasPrefix(p, "/community/") ||
+		strings.HasPrefix(p, "/program/") ||
+		strings.HasPrefix(p, "/media/") ||
+		strings.HasPrefix(p, "/loc/")
+}
+
+func isPolicyTransmissionEdge(rt string) bool {
+	switch rt {
+	case "AFFECTS", "OPERATES_VIA", "AFFILIATED_WITH", "HAS_SUBGROUP", "MEMBER_OF":
+		return true
+	default:
+		return false
+	}
+}
+
+func readQualifierString(qualifiers map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		v, ok := qualifiers[key]
+		if !ok || v == nil {
+			continue
+		}
+		if s := strings.TrimSpace(fmt.Sprint(v)); s != "" && s != "<nil>" {
+			return s
+		}
+	}
+	return ""
+}
+
+func readMetricOrQualifierNumber(rel DiscoveredRelation, key string) (float64, bool) {
+	if rel.Metrics != nil {
+		if mv, ok := rel.Metrics[key]; ok {
+			if mv.Value != 0 {
+				return mv.Value, true
+			}
+		}
+	}
+	if rel.Qualifiers != nil {
+		if raw, ok := rel.Qualifiers[key]; ok && raw != nil {
+			switch v := raw.(type) {
+			case float64:
+				return v, true
+			case float32:
+				return float64(v), true
+			case int:
+				return float64(v), true
+			case int64:
+				return float64(v), true
+			case string:
+				if parsed, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(v, "%")), 64); err == nil {
+					return parsed, true
+				}
+			}
+		}
+	}
+	return 0, false
+}
+
+func absFloat(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func dedupInvariantGaps(gaps []string) []string {
+	if len(gaps) == 0 {
+		return gaps
+	}
+	seen := make(map[string]struct{}, len(gaps))
+	out := make([]string, 0, len(gaps))
+	for _, gap := range gaps {
+		k := strings.TrimSpace(strings.ToLower(gap))
+		if k == "" {
+			continue
+		}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, gap)
+	}
+	return out
+}
+
 func checkScopedSupplyChainSemantics(ch SupplyChain, scopeSet map[string]struct{}) []string {
 	var gaps []string
 	chainProducts := make(map[string]struct{})

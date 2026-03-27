@@ -337,11 +337,11 @@ For MECHANISM:
    - Every mechanism must be used by someone and apply to something
 
 STRATEGIC EDGE TYPE VALIDATION:
-- CONTROLS_ACCESS: source = DECISION_POINT/ORG/GOV/COMMUNITY, target = ORG/FACILITY/PRODUCT/MARKET/PROGRAM
-- IMPOSES_CONDITION: source = ORG/GOV/COMMUNITY/DECISION_POINT, target = ORG/FACILITY/PRODUCT
-- GATEKEEPS_DECISION: source = ORG/GOV/COMMUNITY/PERSON, target = DECISION_POINT
+- CONTROLS_ACCESS: source = DECISION_POINT/ORG/GOV/COMMUNITY/PROGRAM, target = ORG/FACILITY/PRODUCT/MARKET/PROGRAM/COMMUNITY
+- IMPOSES_CONDITION: source = MECHANISM/ORG/GOV/COMMUNITY/PROGRAM/DECISION_POINT, target = ORG/FACILITY/PRODUCT/MARKET/PROGRAM/COMMUNITY
+- GATEKEEPS_DECISION: source = ORG/GOV/COMMUNITY/PROGRAM/PERSON, target = DECISION_POINT
 - USES_MECHANISM: source = DECISION_POINT/ORG/GOV/COMMUNITY/PROGRAM, target = MECHANISM (MUST be /mechanism/...)
-- APPLIES_TO: source = MECHANISM, target = ORG/FACILITY/PRODUCT/MARKET
+- APPLIES_TO: source = MECHANISM, target = ORG/FACILITY/PRODUCT/MARKET/COMMUNITY/PROGRAM
 
 CRITICAL: USES_MECHANISM target MUST be /mechanism/... (never /decision/...)
 
@@ -698,14 +698,14 @@ TASK: Compare the extracted data with the source content and identify any confli
 	    - Orphan mechanisms (no incoming or outgoing edges) are HIGH SEVERITY conflicts.
 
 	  - For strategic relations (CONTROLS_ACCESS, IMPOSES_CONDITION, USES_MECHANISM, APPLIES_TO, GATEKEEPS_DECISION):
-	    - CONTROLS_ACCESS: source MUST be DECISION_POINT or ORGANIZATION/GOV; target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM.
+	    - CONTROLS_ACCESS: source MUST be DECISION_POINT or ORGANIZATION/GOV/COMMUNITY/PROGRAM; target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM/COMMUNITY.
 	      - Qualifiers MUST include 'type' (block|enable|delay|monitor). Missing qualifiers = MEDIUM severity conflict.
 	    - IMPOSES_CONDITION: qualifiers MUST include 'type' (cost|compliance|technical) and 'impact'.
-	    - GATEKEEPS_DECISION: source MUST be ORGANIZATION/GOV/COMMUNITY/PERSON; target MUST be DECISION_POINT.
+	    - GATEKEEPS_DECISION: source MUST be ORGANIZATION/GOV/COMMUNITY/PROGRAM/PERSON; target MUST be DECISION_POINT.
 	      - When asking for gatekeeper, ALWAYS request EXPLICIT SOURCE (sourceCanonicalPath) in missingInfo.
 	    - USES_MECHANISM: source MUST be DECISION_POINT/ORGANIZATION/GOV/COMMUNITY/PROGRAM; target MUST be MECHANISM.
 	      - When asking for mechanism user (from MECHANISM fragment), ALWAYS request EXPLICIT SOURCE in missingInfo.
-	    - APPLIES_TO: source MUST be MECHANISM; target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET.
+	    - APPLIES_TO: source MUST be MECHANISM; target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/COMMUNITY/PROGRAM.
 
 Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), supplyChainBlock, graphContextBlock, sourceContent, specBlock, businessRulesBlock, profileBlock, objectTypeTaskBlock, canonicalValidationBlock, taxonomy.MechanismSlugExamplesString(), relevanceGateBlock)
 }

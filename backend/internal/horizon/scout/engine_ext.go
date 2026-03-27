@@ -1666,6 +1666,10 @@ func (e *ScoutEngine) bestEffortEnrichRelationTargetGeo(ctx context.Context, fra
 			if result, err := RevalidateFacilityGeo(ctx, fragment, e.geocodingClient); err == nil && result.Applied {
 				updated = true
 			}
+		} else if fragment.Type == models.FragmentTypeOrganization {
+			if result, err := RevalidateOrgGeo(ctx, fragment, e.geocodingClient); err == nil && result.Applied {
+				updated = true
+			}
 		} else if e.bestEffortGeocodeRelationTargetCandidates(ctx, fragment, parent) {
 			updated = true
 		}

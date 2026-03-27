@@ -200,6 +200,72 @@ func TestCheckSupplyChainInvariants_ValidatesScopedCandidatesAndObservations(t *
 	}
 }
 
+func TestCheckGovernanceInvariants_FlagsThinOwnershipAndMissingControlEvidence(t *testing.T) {
+	gaps := checkGovernanceInvariants([]DiscoveredRelation{
+		{
+			SourceCanonicalPath: "/org/ae/holdco-a",
+			TargetCanonicalPath: "/org/ae/thin-opco",
+			RelationType:        "OWNS",
+		},
+		{
+			SourceCanonicalPath: "/org/ae/holdco-b",
+			TargetCanonicalPath: "/org/ae/thin-opco",
+			RelationType:        "OWNS",
+		},
+		{
+			SourceCanonicalPath: "/org/ae/holdco-a",
+			TargetCanonicalPath: "/org/ae/opco",
+			RelationType:        "CONTROLS",
+		},
+		{
+			SourceCanonicalPath: "/community/ae/dynasty/al-maktoum",
+			TargetCanonicalPath: "/org/ae/opco",
+			RelationType:        "OWNS",
+			Qualifiers:          map[string]interface{}{"share_type": "beneficial"},
+		},
+	})
+	joined := strings.Join(gaps, "\n")
+	for _, want := range []string{
+		"governance_invariant: multiple upstream owners without ownership percentages or share types",
+		"governance_invariant: CONTROLS edge missing control_type or mechanism",
+		"governance_invariant: community control node lacks lineage or affiliation support edges",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected governance invariant %q, got %v", want, gaps)
+		}
+	}
+}
+
+func TestCheckPolicyImpactInvariants_FlagsMissingLayersAndQualifiers(t *testing.T) {
+	gaps := checkPolicyImpactInvariants([]DiscoveredRelation{
+		{
+			SourceCanonicalPath: "/gov/ae/ministry-of-finance",
+			TargetCanonicalPath: "/decision/taxation/raise-corporate-tax",
+			RelationType:        "GATEKEEPS_DECISION",
+		},
+		{
+			SourceCanonicalPath: "/decision/taxation/raise-corporate-tax",
+			TargetCanonicalPath: "/mechanism/regulatory/corporate-tax-increase",
+			RelationType:        "USES_MECHANISM",
+		},
+		{
+			SourceCanonicalPath: "/mechanism/regulatory/corporate-tax-increase",
+			TargetCanonicalPath: "/org/ae/difc-opco",
+			RelationType:        "IMPOSES_CONDITION",
+		},
+	})
+	joined := strings.Join(gaps, "\n")
+	for _, want := range []string{
+		"policy_impact_invariant: IMPOSES_CONDITION edge missing type or impact qualifier",
+		"policy_impact_invariant: graph lacks geo-scope layer",
+		"policy_impact_invariant: graph lacks transmission/response layer (community, program, or media tail)",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected policy invariant %q, got %v", want, gaps)
+		}
+	}
+}
+
 func TestCriticPipeline_Validate_governanceMode(t *testing.T) {
 	runner := (&CriticAgent{}).CriticPipeline()
 	ctx := context.Background()
@@ -215,6 +281,53 @@ func TestCriticPipeline_Validate_governanceMode(t *testing.T) {
 	}
 	if !result.IsValid {
 		t.Errorf("expected isValid=true")
+	}
+}
+
+func TestCriticPipeline_Validate_governanceModeAddsDeterministicInvariantGaps(t *testing.T) {
+	runner := (&CriticAgent{}).CriticPipeline()
+	ctx := context.Background()
+	input := CriticValidatorInput{
+		Fragment: &models.HorizonFragment{CanonicalPath: "/org/ae/opco", Type: models.FragmentTypeOrganization},
+		Relations: []DiscoveredRelation{
+			{SourceCanonicalPath: "/org/ae/holdco-a", TargetCanonicalPath: "/org/ae/opco", RelationType: "OWNS"},
+			{SourceCanonicalPath: "/org/ae/holdco-b", TargetCanonicalPath: "/org/ae/opco", RelationType: "OWNS"},
+		},
+	}
+
+	result, err := runner.Validate(ctx, input, []string{taxonomy.DomainModeGovernance})
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if result == nil || result.IsValid {
+		t.Fatalf("expected invalid result due to deterministic governance gaps, got %+v", result)
+	}
+	if !strings.Contains(strings.Join(result.MissingInfo, "\n"), "governance_invariant") {
+		t.Fatalf("expected governance invariant gaps, got %v", result.MissingInfo)
+	}
+}
+
+func TestCriticPipeline_Validate_policyImpactModeAddsDeterministicInvariantGaps(t *testing.T) {
+	runner := (&CriticAgent{}).CriticPipeline()
+	ctx := context.Background()
+	input := CriticValidatorInput{
+		Fragment: &models.HorizonFragment{CanonicalPath: "/gov/ae/ministry-of-finance", Type: models.FragmentTypeOrganization},
+		Relations: []DiscoveredRelation{
+			{SourceCanonicalPath: "/gov/ae/ministry-of-finance", TargetCanonicalPath: "/decision/taxation/raise-corporate-tax", RelationType: "GATEKEEPS_DECISION"},
+			{SourceCanonicalPath: "/decision/taxation/raise-corporate-tax", TargetCanonicalPath: "/mechanism/regulatory/corporate-tax-increase", RelationType: "USES_MECHANISM"},
+			{SourceCanonicalPath: "/mechanism/regulatory/corporate-tax-increase", TargetCanonicalPath: "/org/ae/difc-opco", RelationType: "AFFECTS"},
+		},
+	}
+
+	result, err := runner.Validate(ctx, input, []string{taxonomy.DomainModePolicyImpact})
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if result == nil || result.IsValid {
+		t.Fatalf("expected invalid result due to deterministic policy gaps, got %+v", result)
+	}
+	if !strings.Contains(strings.Join(result.MissingInfo, "\n"), "policy_impact_invariant") {
+		t.Fatalf("expected policy invariant gaps, got %v", result.MissingInfo)
 	}
 }
 

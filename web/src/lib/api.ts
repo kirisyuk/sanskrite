@@ -132,6 +132,8 @@ export interface HorizonSimulationOverlayItem {
   title?: string;
   kind?: string;
   score?: number;
+  priorityScore?: number;
+  priorityLabel?: string;
   riskCategory?: string;
   explanation?: string;
   functions?: string[];
@@ -139,6 +141,13 @@ export interface HorizonSimulationOverlayItem {
   targetRefs?: string[];
   targetCountryCode?: string;
   productPath?: string;
+  supportingPathCount?: number;
+  stressScore?: number;
+  coverageScore?: number;
+  executionScore?: number;
+  severityScore?: number;
+  maxStress?: number;
+  attentionFocus?: string;
   signalRefs?: string[];
   dominantMechanisms?: string[];
   recommendedActions?: string[];

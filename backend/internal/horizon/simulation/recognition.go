@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/simscope"
 )
 
 type recognitionAxisCandidate struct {
@@ -25,6 +26,7 @@ func BuildInputRecognition(req *horizonmodels.SimulationRunRequest, lens *horizo
 	corpus := recognitionCorpus(req, lens, refs)
 	axisCandidates := recognizeAxes(req, lens, corpus)
 	objects := recognizeObjects(req, lens, refs, corpus)
+	objects = simscope.FilterRecognitionObjects(objects, simscope.BuildProfile(question, lens, refs, nil), 12)
 	volume := recognizeVolume(lens, refs, objects)
 	out := map[string]any{
 		"query":            question,
@@ -354,6 +356,9 @@ func looksSectorNetwork(query string) bool {
 	query = strings.TrimSpace(strings.ToLower(query))
 	if query == "" {
 		return false
+	}
+	if strings.Contains(query, "industry") && strings.Contains(query, "supply chain") && (strings.Contains(query, "whole") || strings.Contains(query, "entire") || strings.Contains(query, "full")) {
+		return true
 	}
 	for _, token := range []string{
 		"whole industry",

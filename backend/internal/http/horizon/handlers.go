@@ -39,6 +39,7 @@ type HorizonHandlers struct {
 	completeSubstrateCanvas   *CompleteSubstrateCanvas
 	recoverMetricsCanvas      *RecoverMetricsCanvas
 	oneHopDownstreamService   *horizonsupplychain.OneHopDownstreamService
+	candidateChainService     *horizonsupplychain.CandidateChainCompletionService
 	productDictionary         *horizonproductdict.Runtime
 
 	// Lens Q&A (Analysis view)
@@ -173,6 +174,11 @@ func (h *HorizonHandlers) WithRecoverMetricsCanvas(c *RecoverMetricsCanvas) *Hor
 
 func (h *HorizonHandlers) WithOneHopDownstreamService(svc *horizonsupplychain.OneHopDownstreamService) *HorizonHandlers {
 	h.oneHopDownstreamService = svc
+	return h
+}
+
+func (h *HorizonHandlers) WithCandidateChainCompletionService(svc *horizonsupplychain.CandidateChainCompletionService) *HorizonHandlers {
+	h.candidateChainService = svc
 	return h
 }
 
@@ -535,6 +541,9 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 			return
 		case "simulations":
 			h.HandleLensSimulationRoutes(w, r)
+			return
+		case "candidate-chains":
+			h.HandleLensCandidateChainRoutes(w, r)
 			return
 		default:
 			http.Error(w, "Unknown subpath", http.StatusNotFound)

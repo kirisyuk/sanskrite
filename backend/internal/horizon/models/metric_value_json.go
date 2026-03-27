@@ -57,6 +57,8 @@ func (m *MetricValue) UnmarshalJSON(data []byte) error {
 		ErrorMargin *ErrorMargin `json:"errorMargin"`
 		Confidence  any          `json:"confidence"`
 		ObservedAt  any          `json:"observedAt"`
+		FreshUntil  any          `json:"freshUntil"`
+		SourceKind  *string      `json:"sourceKind"`
 		Provenance  Provenance   `json:"provenance"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -91,12 +93,19 @@ func (m *MetricValue) UnmarshalJSON(data []byte) error {
 	} else if raw.Provenance.ObservedAt != nil && !raw.Provenance.ObservedAt.IsZero() {
 		obs = raw.Provenance.ObservedAt.UTC()
 	}
+	var freshUntil *time.Time
+	if t, ok := parseLooseTime(raw.FreshUntil); ok {
+		tt := t.UTC()
+		freshUntil = &tt
+	}
 
 	m.Value = val
 	m.Unit = raw.Unit
 	m.ErrorMargin = raw.ErrorMargin
 	m.Confidence = conf
 	m.ObservedAt = obs
+	m.FreshUntil = freshUntil
+	m.SourceKind = raw.SourceKind
 	m.Provenance = raw.Provenance
 	return nil
 }

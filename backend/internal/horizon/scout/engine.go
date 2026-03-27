@@ -17,6 +17,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/metriccore"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
@@ -423,9 +424,9 @@ const (
 	personMissingInfoLimit  = 8
 	// RuntimeContractMetricsRefresh:
 	// recompute metrics only when missing, stale, or low-confidence.
-	metricsMaxAge              = 30 * 24 * time.Hour
-	metricsMinConfidence       = 0.60
-	metricsFutureSkewTolerance = 24 * time.Hour
+	metricsMaxAge              = metriccore.DefaultMetricsMaxAge
+	metricsMinConfidence       = metriccore.DefaultMetricsMinConfidence
+	metricsFutureSkewTolerance = metriccore.DefaultFutureSkewTolerance
 )
 
 func truncateWithHeadTail(text string, limit int) string {
@@ -616,39 +617,16 @@ func canonicalPathsEquivalentForRetarget(a string, b string) bool {
 // RuntimeContractMetricsRefresh:
 // evaluate whether metric recomputation is required for required metric paths.
 func evaluateMetricsRefreshContractReasons(fragment *models.HorizonFragment, requiredPaths []string, now time.Time) []string {
-	if fragment == nil {
-		return []string{"fragment_nil"}
-	}
-	if fragment.State == nil {
-		return []string{"state_missing"}
-	}
-	reasons := make([]string, 0)
-	for _, path := range requiredPaths {
-		path = strings.TrimSpace(path)
-		if path == "" {
-			continue
-		}
-		mv, ok := fragment.State[path]
-		if !ok {
-			reasons = append(reasons, "missing:"+path)
-			continue
-		}
-		if mv.Confidence < metricsMinConfidence {
-			reasons = append(reasons, "low_confidence:"+path)
-			continue
-		}
-		observedAt := metricObservedAt(mv)
-		if observedAt.IsZero() {
-			reasons = append(reasons, "stale:"+path)
-			continue
-		}
-		age := now.Sub(observedAt)
-		if age > metricsMaxAge || observedAt.After(now.Add(metricsFutureSkewTolerance)) {
-			reasons = append(reasons, "stale:"+path)
-			continue
-		}
-	}
-	return reasons
+	return metriccore.EvaluateRefreshReasonsForFragment(
+		fragment,
+		metriccore.RequirementSet(requiredPaths, metricsMaxAge, metricsMinConfidence),
+		now,
+		metriccore.RefreshPolicy{
+			DefaultMaxAge:        metricsMaxAge,
+			DefaultMinConfidence: metricsMinConfidence,
+			FutureSkewTolerance:  metricsFutureSkewTolerance,
+		},
+	)
 }
 
 // recordDeterministicRedirect records a redirect that becomes immediately stable.

@@ -77,6 +77,32 @@ func (p *CriticPipelineRunner) Validate(ctx context.Context, input CriticValidat
 			}
 		}
 	}
+	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeGovernance) {
+		invariantGaps := checkGovernanceInvariants(input.Relations)
+		if len(invariantGaps) > 0 {
+			if result == nil {
+				result = &ValidationResult{IsValid: true, Confidence: 1.0, MissingInfo: []string{}, Conflicts: []ValidationConflict{}}
+			}
+			result.MissingInfo = append(result.MissingInfo, invariantGaps...)
+			result.IsValid = false
+			if result.Confidence > 0.6 {
+				result.Confidence = 0.6
+			}
+		}
+	}
+	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModePolicyImpact) {
+		invariantGaps := checkPolicyImpactInvariants(input.Relations)
+		if len(invariantGaps) > 0 {
+			if result == nil {
+				result = &ValidationResult{IsValid: true, Confidence: 1.0, MissingInfo: []string{}, Conflicts: []ValidationConflict{}}
+			}
+			result.MissingInfo = append(result.MissingInfo, invariantGaps...)
+			result.IsValid = false
+			if result.Confidence > 0.6 {
+				result.Confidence = 0.6
+			}
+		}
+	}
 
 	return result, nil
 }

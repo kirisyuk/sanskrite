@@ -83,3 +83,27 @@ export function artifactMatchesRouteVisibility(
   const legs = Array.isArray(artifact?.payload?.legs) ? artifact!.payload!.legs! : [];
   return legs.some((leg) => legMatchesRouteVisibility(artifact, leg, normalized));
 }
+
+function readArtifactLegField<T = unknown>(leg: any, ...keys: string[]): T | undefined {
+  for (const key of keys) {
+    if (leg && leg[key] != null) return leg[key] as T;
+  }
+  return undefined;
+}
+
+function artifactLegIndexFromFields(leg: any, ...keys: string[]): number | null {
+  const value = readArtifactLegField<unknown>(leg, ...keys);
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+/** Same leg segment id as path legs / geo supply routes / simulation focus (`artifactId:leg:n`). */
+export function resolvedArtifactLegIndex(leg: any, arrayIndex: number): number {
+  const fromField = artifactLegIndexFromFields(leg, 'index', 'Index');
+  if (fromField != null) return fromField;
+  return arrayIndex;
+}

@@ -194,12 +194,33 @@ func (p *Processor) processWorldBootstrap(ctx context.Context, rt *runtime.Servi
 	bindingSeed := clamp01(metricFloat(run.BaselinePreview, "artifact_binding_avg"))
 	shoulderRiskSeed := clamp01(metricFloat(run.BaselinePreview, "artifact_shoulder_risk_max") / 2.0)
 	productRiskSeed := clamp01(metricFloat(run.BaselinePreview, "artifact_product_risk_max") / 2.0)
+	operationalBlockageSeed := clamp01(metricFloat(run.BaselinePreview, "operational_blockage_max"))
+	operationalTransitDelaySeed := clamp01(metricFloat(run.BaselinePreview, "operational_transit_delay_max") / 168.0)
+	operationalScreeningSeed := clamp01(metricFloat(run.BaselinePreview, "operational_screening_intensity_max"))
+	operationalCustomsSeed := clamp01(metricFloat(run.BaselinePreview, "operational_customs_delay_max") / 96.0)
+	operationalRerouteSeed := clamp01((metricFloat(run.BaselinePreview, "operational_reroute_cost_max") - 1) / 2.0)
+	operationalProductSafetySeed := clamp01(metricFloat(run.BaselinePreview, "operational_product_safety_enforcement_max"))
+	operationalCounterfeitSeed := clamp01(metricFloat(run.BaselinePreview, "operational_counterfeit_seizure_pressure_max"))
+	operationalRecallSeed := clamp01(metricFloat(run.BaselinePreview, "operational_recall_exposure_max"))
+	operationalInformalLeakageSeed := clamp01(metricFloat(run.BaselinePreview, "operational_informal_channel_leakage_max"))
+	operationalConsumerTrustDeficit := 0.0
+	if v := metricFloat(run.BaselinePreview, "operational_consumer_trust_min"); v > 0 {
+		operationalConsumerTrustDeficit = 1 - clamp01(v)
+	}
+	operationalInsuranceDeficit := 0.0
+	if v := metricFloat(run.BaselinePreview, "operational_insurance_availability_min"); v > 0 {
+		operationalInsuranceDeficit = 1 - clamp01(v)
+	}
+	operationalSettlementDeficit := 0.0
+	if v := metricFloat(run.BaselinePreview, "operational_settlement_reliability_min"); v > 0 {
+		operationalSettlementDeficit = 1 - clamp01(v)
+	}
 	state := metricState{
-		risk:      clamp01(metricFloat(run.BaselinePreview, "nodes_updated")/20.0 + pathStressSeed*0.22 + recoverySeed*0.08 + (1-bindingSeed)*0.06),
-		price:     clamp01(0.15 + clamp01(metricFloat(run.BaselinePreview, "paths_traced")/50.0) + pathStressSeed*0.22 + productRiskSeed*0.08),
-		narrative: 0.2,
-		policy:    clamp01(0.1 + (1-bindingSeed)*0.05),
-		supply:    clamp01(metricFloat(run.BaselinePreview, "nodes_updated")/20.0 + 0.1 + pathStressSeed*0.3 + recoverySeed*0.14 + shoulderRiskSeed*0.1),
+		risk:      clamp01(metricFloat(run.BaselinePreview, "nodes_updated")/20.0 + pathStressSeed*0.22 + recoverySeed*0.08 + (1-bindingSeed)*0.06 + operationalBlockageSeed*0.10 + operationalTransitDelaySeed*0.05 + operationalSettlementDeficit*0.04 + operationalProductSafetySeed*0.08 + operationalCounterfeitSeed*0.07 + operationalRecallSeed*0.08 + operationalConsumerTrustDeficit*0.05),
+		price:     clamp01(0.15 + clamp01(metricFloat(run.BaselinePreview, "paths_traced")/50.0) + pathStressSeed*0.22 + productRiskSeed*0.08 + operationalRerouteSeed*0.10 + operationalInsuranceDeficit*0.05 + operationalInformalLeakageSeed*0.05 + operationalCounterfeitSeed*0.03),
+		narrative: clamp01(0.2 + operationalConsumerTrustDeficit*0.20 + operationalRecallSeed*0.12 + operationalProductSafetySeed*0.08 + operationalInformalLeakageSeed*0.10),
+		policy:    clamp01(0.1 + (1-bindingSeed)*0.05 + operationalScreeningSeed*0.12 + operationalCustomsSeed*0.06 + operationalProductSafetySeed*0.12 + operationalCounterfeitSeed*0.10 + operationalInformalLeakageSeed*0.04),
+		supply:    clamp01(metricFloat(run.BaselinePreview, "nodes_updated")/20.0 + 0.1 + pathStressSeed*0.3 + recoverySeed*0.14 + shoulderRiskSeed*0.1 + operationalBlockageSeed*0.16 + operationalTransitDelaySeed*0.08 + operationalInformalLeakageSeed*0.04),
 	}
 	axis := runAxis(run)
 	variant := worldVariant(world)
@@ -212,17 +233,30 @@ func (p *Processor) processWorldBootstrap(ctx context.Context, rt *runtime.Servi
 	}
 	world.AgentState = map[string]any{"agents": len(agents)}
 	world.MarketState = map[string]any{
-		"pricePressure":        state.price,
-		"supplyStress":         state.supply,
-		"pathStressScore":      pathStressSeed,
-		"bindingConfidence":    bindingSeed,
-		"recoveryLatencyHours": metricFloat(run.BaselinePreview, "artifact_recovery_latency_max"),
-		"productRiskScore":     productRiskSeed,
-		"shoulderLoadScore":    shoulderRiskSeed,
+		"pricePressure":         state.price,
+		"supplyStress":          state.supply,
+		"pathStressScore":       pathStressSeed,
+		"bindingConfidence":     bindingSeed,
+		"recoveryLatencyHours":  metricFloat(run.BaselinePreview, "artifact_recovery_latency_max"),
+		"productRiskScore":      productRiskSeed,
+		"shoulderLoadScore":     shoulderRiskSeed,
+		"operationalBlockage":   operationalBlockageSeed,
+		"operationalDelay":      operationalTransitDelaySeed,
+		"operationalReroute":    operationalRerouteSeed,
+		"productSafetyPressure": operationalProductSafetySeed,
+		"counterfeitPressure":   operationalCounterfeitSeed,
+		"informalLeakage":       operationalInformalLeakageSeed,
+		"consumerTrustGap":      operationalConsumerTrustDeficit,
 	}
 	world.InstitutionState = map[string]any{
-		"policyPressure":    state.policy,
-		"stressedPathCount": metricFloat(run.BaselinePreview, "artifact_stressed_paths"),
+		"policyPressure":           state.policy,
+		"stressedPathCount":        metricFloat(run.BaselinePreview, "artifact_stressed_paths"),
+		"screeningIntensity":       operationalScreeningSeed,
+		"customsDelayPressure":     operationalCustomsSeed,
+		"settlementReliabilityGap": operationalSettlementDeficit,
+		"productSafetyPressure":    operationalProductSafetySeed,
+		"counterfeitPressure":      operationalCounterfeitSeed,
+		"recallExposure":           operationalRecallSeed,
 	}
 	ensureWorldMailboxes(world, agents)
 
@@ -1811,6 +1845,17 @@ func genericPopulationClasses(run *horizonmodels.SimulationRun) []string {
 	if kinds["gov"] {
 		classes = append(classes, "regional_official")
 	}
+	if metricFloat(run.BaselinePreview, "operational_product_safety_enforcement_max") >= 0.35 ||
+		metricFloat(run.BaselinePreview, "operational_counterfeit_seizure_pressure_max") >= 0.35 ||
+		metricFloat(run.BaselinePreview, "operational_recall_exposure_max") >= 0.25 {
+		classes = append(classes, "consumer", "media", "regulator", "procurement_compliance_lead")
+	}
+	if metricFloat(run.BaselinePreview, "operational_informal_channel_leakage_max") >= 0.35 {
+		classes = append(classes, "consumer", "market_intelligence_analyst", "pr_agent")
+	}
+	if v := metricFloat(run.BaselinePreview, "operational_consumer_trust_min"); v > 0 && v < 0.7 {
+		classes = append(classes, "consumer", "media", "pr_agent")
+	}
 	return compactStrings(classes)
 }
 
@@ -2031,9 +2076,14 @@ func genericActionPlan(run *horizonmodels.SimulationRun, world *horizonmodels.Si
 	recoveryNorm := clamp01(metricFloat(world.MarketState, "recoveryLatencyHours") / 96.0)
 	productRisk := metricFloat(world.MarketState, "productRiskScore")
 	shoulderLoad := metricFloat(world.MarketState, "shoulderLoadScore")
+	productSafetyPressure := metricFloat(world.MarketState, "productSafetyPressure")
+	counterfeitPressure := metricFloat(world.MarketState, "counterfeitPressure")
+	informalLeakage := metricFloat(world.MarketState, "informalLeakage")
+	consumerTrustGap := metricFloat(world.MarketState, "consumerTrustGap")
+	recallExposure := metricFloat(world.InstitutionState, "recallExposure")
 	policyPressure := metricFloat(world.InstitutionState, "policyPressure")
 	stress := mapFloat(agent.BeliefState, "stress", 0.35)
-	pressure := clamp01((price + supply + pathStress + bindingDeficit + recoveryNorm + productRisk + shoulderLoad + policyPressure + stress) / 9.0)
+	pressure := clamp01((price + supply + pathStress + bindingDeficit + recoveryNorm + productRisk + shoulderLoad + policyPressure + stress + productSafetyPressure + counterfeitPressure + informalLeakage + consumerTrustGap + recallExposure) / 14.0)
 	baseDelta := round3(clamp(0.035+pressure*0.05, 0.035, 0.11))
 
 	choose := func(actionType string, delta float64) (string, float64, []string) {

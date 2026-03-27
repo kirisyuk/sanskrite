@@ -616,6 +616,12 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 - NEVER use "/discovered/*" (not allowed)
 - canonicalPath MUST match expected prefix for targetType; if unsure, still output your best stable canonicalPath
 `
+	productCanonicalizationBlock := generalResearchProductCanonicalizationBlock()
+	nameHistoryBlock := generalResearchNameHistoryBlock()
+	relationDirectionBlock := generatedResearchRelationDirectionRulesBlock()
+	relationSchemaBlock := generatedDiscoveredRelationSchemaBlock(targetTypeEnum)
+	explicitSourceBlock := generatedExplicitSourceRulesBlock()
+	roleQualifierBlock := generatedRoleQualifierRulesBlock()
 
 	return fmt.Sprintf(`You are a research agent. Your task is to find missing information about the provided fragment using your search capabilities.
 
@@ -651,26 +657,7 @@ Return a JSON object with fields:
 
 %s
 
-Product Canonicalization:
-- If you can resolve a more specific product name/path, update fragment.canonicalPath.
-- Prefer /product/{category}/{type}/{stage}/{slug} consistently.
-- For services, use category=service and map service domain/subdomain into {type}/{stage}.
-- If the current path is flat or acronym-like, expand to the full product name and ensure relations use the updated canonical path.
-- Examples: rice -> /product/raw/agricultural/extraction/rice; salt -> /product/raw/mineral/extraction/salt; swad (Indian savory snack) -> /product/finished/agricultural/processing/swad; processed/finished goods -> /product/finished/mechanical/assembly/{slug}.
-- Product/material naming rules (CRITICAL):
-  - Use SINGULAR nouns by default (e.g., "silicon wafer", "battery cell", "lithium carbonate"), not plurals.
-  - Use plural ONLY when plural is the natural/standard product term in industry terminology (avoid invented plurals).
-  - Do NOT include a company/brand name in product names/paths unless it is clearly the official and commonly used product name.
-    - Example: "IBM watsonx" should only be used if sources consistently use that full official name; otherwise use "watsonx".
-
-Name History (ORG/PERSON - for rebrands, renames, formerly-known-as):
-If you discover that the entity has former names, previous brand names, or was renamed/rebranded:
-- Output fragment.nameHistory as an array of objects: { "name": "Former Name", "kind": "short|legal|brand|aka", "validFrom": "YYYY-MM-DD", "validTo": "YYYY-MM-DD" }
-- Kind values: "short" (former short/trade name), "legal" (former legal/official name), "brand" (former brand), "aka" (alias/nickname)
-- validFrom/validTo are OPTIONAL (use when you know dates; omit if unknown)
-- Example: Tinkoff Bank rebranded to T-Bank → { "name": "Tinkoff Bank", "kind": "short", "validTo": "2024-06-01" }
-- Search for: "X formerly known as", "X renamed", "X rebrand", "X previous name"
-- Do NOT include the current name in nameHistory.
+%s
 
 %s
 
@@ -682,145 +669,7 @@ OUTPUT BUDGET RULES (CRITICAL):
 - Keep fragment.description SHORT (max 500 chars). Prefer omitting description entirely if it risks truncating JSON.
 - If you cannot fit everything, prioritize answering the missingInfo questions and producing VALID JSON with closed braces.
 
-RELATION DIRECTION RULES (STRICT):
-Use ROLE-FIRST semantics for direction:
-- For directed ORG<->ORG relations (OWNS, SUBSIDIARY_OF, INVESTS_IN, ASSURES, CONTROLS), determine source by semantic role first (owner/investor/assurer/controller), not by CURRENT FRAGMENT.
-- If CURRENT FRAGMENT is the semantic target, sourceCanonicalPath/sourceType/sourceName is REQUIRED.
-- For STRATEGIC edge types, use EXPLICIT SOURCE (sourceCanonicalPath) when THIS FRAGMENT would be wrong as source.
-Choose relationType to match the CORRECT semantic direction:
-
-=== PHASE 1 RELATIONS ===
-- DEPENDS_ON: source depends on target (use for suppliers, contractors, infrastructure dependencies).
-  Example: If CRRC supplies trains for the Astana LRT project, Astana/CTS may DEPEND_ON CRRC.
--  Clarification: use when the source requires the target to operate or deliver outcomes.
--  Do NOT use when the source is the supplier and the target is the customer (use SUPPLIES_TO).
--  For actor↔actor dependencies (ORG/FACILITY/PROGRAM/COMMUNITY/PERSON), include qualifiers.source_role=dependent and qualifiers.target_role=dependency (or supplier/provider).
-- SUPPLIES_TO: source supplies goods/services to target (use for customers/recipients).
--  Clarification: commercial flow from supplier -> customer/recipient; not ownership or control.
--  Source MUST be ORGANIZATION or FACILITY or PRODUCT.
--  Target MUST be ORGANIZATION or FACILITY.
--  MARKET MUST NOT be source or target for SUPPLIES_TO.
--  For ORG/FACILITY -> ORG/FACILITY supply links, include qualifiers.source_role=supplier and qualifiers.target_role=customer.
-- LOCATED_IN: source is located in target (target MUST be GEO_REGION).
--  Clarification: physical/geographic location only (HQ, plant site, office presence).
-- OPERATES_IN: source operates in target (source MUST be ORGANIZATION or PERSON, target MUST be GEO_REGION or FACILITY or DEPOSIT).
--  Clarification: operational activity or facility operation; not just a registered address.
--  MARKET MUST NOT be source for OPERATES_IN.
-- REGULATES: source regulates target (source MUST be ORGANIZATION — only orgs can regulate).
-   JURISDICTION RULE: REGULATES means ongoing domestic regulatory oversight within the regulator's own jurisdiction (e.g., SEC regulates US-listed companies, BaFin regulates German banks).
-   Do NOT use REGULATES for sanctions, trade restrictions, or extra-territorial enforcement against foreign entities. For those, use CONTROLS_ACCESS or IMPOSES_CONDITION instead.
-   Example: US Treasury OFAC → Iranian company = CONTROLS_ACCESS (sanctions), NOT REGULATES.
-- OWNS: source owns target (source MUST be ORGANIZATION or PERSON - only orgs/persons can own).
-  Clarification: ownership flows from the higher/parent entity to the lower/subordinate entity in the corporate hierarchy.
-  Use OWNS only when the source is the true owner/controller of the target (parent → subsidiary, owner → asset).
-  CRITICAL: NEVER output OWNS where targetType=PERSON.
-  CRITICAL: NEVER output OWNS where sourceType=FACILITY/PRODUCT/DEPOSIT.
-    Facilities/products/deposits do not own organizations.
-  CRITICAL: If evidence says THIS FRAGMENT is owned by X, DO NOT invert semantics and DO NOT output THIS FRAGMENT as owner.
-    Keep relationType=OWNS and set explicit sourceCanonicalPath/sourceType/sourceName = X, with targetCanonicalPath = THIS FRAGMENT.
-  CRITICAL: NEVER output OWNS from ORGANIZATION to COMMUNITY if target canonicalPath is /community/{geo}/dynasty/{slug} or /community/{geo}/tribe/{slug}.
-    Dynasties and tribes own organizations, not the reverse. For "THIS FRAGMENT is owned by dynasty/tribe", set explicit sourceCanonicalPath to the dynasty/tribe and targetCanonicalPath to THIS FRAGMENT.
-  Use OWNS ONLY for equity ownership/control relationships (shareholder, stake, holding company, ultimate beneficial owner).
-  Do NOT use OWNS for roles/employment/management like CEO, director, founder, chairman; use INFLUENCES if relevant, or omit the relation.
-- SUBSIDIARY_OF: source is owned/controlled by target (target can be ORGANIZATION or PERSON; will be normalized to OWNS in graph).
--  Clarification: inverse of OWNS (child -> parent). Use only when evidence explicitly describes the child->parent relation.
-- CONTROLS: source controls target (non-equity/indirect control: voting control, state control, contractual control). Use when control is explicit but ownership is unclear.
--  Clarification: control flows from controller to controlled entity (controller → controlled). Authority without clear equity ownership (e.g., state control, voting rights, contractual control).
--  Do NOT use CONTROLS for external audit/certification/inspection oversight; use ASSURES with qualifiers.assurance_type.
-- MANAGES: source manages target (formal authority: CEO/executive/director/operator). Do NOT use for informal influence.
--  Clarification: formal management authority or operational responsibility, not ownership.
-- EMPLOYED_BY: source (PERSON) is employed by target (ORGANIZATION). Do NOT use for board-only or founder-only relationships.
-- BOARD_MEMBER_OF: source (PERSON) is a board member of target (ORGANIZATION).
-- FOUNDED: source (PERSON or ORGANIZATION) founded target (ORGANIZATION, PROGRAM, or COMMUNITY). Not ownership.
--  Clarification: historical origin event; does NOT imply ongoing ownership or control.
-- INVESTS_IN: source (ORGANIZATION or PERSON) invests in target (ORGANIZATION/PROGRAM/PRODUCT). Not supply-chain.
--  Clarification: funding/minority stake; do not use unless investment is explicit.
--  Direction is strict: investor -> investee.
--  If THIS FRAGMENT is invested in by X, set explicit sourceCanonicalPath/sourceType/sourceName = X and keep targetCanonicalPath = THIS FRAGMENT.
-- PARTNERS_WITH: partnership/collaboration (symmetric; direction is not important but still output as source->target).
--  Clarification: peer collaboration (joint venture, MoU, alliance). Not ownership or supply-chain.
-- PRODUCES: source produces target (source MUST be ORGANIZATION or FACILITY or DEPOSIT, target MUST be PRODUCT).
-  For PRODUCT -> PRODUCT value-chain steps, use TRANSFORMS_INTO for processing/refining, ASSEMBLES_INTO for nearest assembly steps, and USED_IN for strong operational input semantics (NOT PRODUCES).
--  Clarification: manufacturer/producer -> product output.
-- TRANSFORMS_INTO: upstream raw/earlier-stage PRODUCT -> downstream refined/later-stage PRODUCT.
-  Direction is strict and MUST follow the value chain: extraction → refining → smelting → processing → manufacturing → assembly.
-  Example: copper-ore TRANSFORMS_INTO copper-concentrate TRANSFORMS_INTO copper-anode (NEVER reversed).
-  Source = raw input material. Target = processed output material.
-- ASSEMBLES_INTO: component/subassembly PRODUCT -> downstream assembled PRODUCT.
-  Example: battery-pack ASSEMBLES_INTO electric-vehicle. display-module ASSEMBLES_INTO smartphone-line.
-- USED_IN: operational input PRODUCT -> downstream PRODUCT where the source is functionally required but does not become the target and is not the assembled component.
-  Example: helium USED_IN MRI-scanner.
-- EXTRACTS_FROM: source (FACILITY) extracts from target (DEPOSIT). Use for mines/oil fields/ore bodies.
--  Clarification: extraction relationship (facility/mine -> resource deposit).
-- ASSURES: source (ORGANIZATION) provides independent assurance to target (ORG/FACILITY/PROGRAM). Add qualifiers.assurance_type: audit|certification|regulatory|inspection.
--  If THIS FRAGMENT is audited/certified/inspected by X, keep relationType=ASSURES and set explicit sourceCanonicalPath/sourceType/sourceName = X, with targetCanonicalPath = THIS FRAGMENT.
-- AUDITED_BY is legacy inverse form. Do NOT emit it; express the same fact via ASSURES with direction assurer -> assuree.
-- COMPETES_WITH: market rivalry/competition (symmetric); not collaboration or supply.
-- INFLUENCES: soft power, pressure, or indirect impact; do NOT use for formal authority (REGULATES) or ownership/control (OWNS/CONTROLS).
-  Source MAY be PERSON. Target MAY be MARKET or SPHERE (SPHERE links are treated as weaker evidence).
-- RENAMED_TO: organization legal rename (source MUST be ORGANIZATION, target MUST be ORGANIZATION).
-- REBRANDED_TO: organization brand rename/repositioning (source MUST be ORGANIZATION, target MUST be ORGANIZATION).
-- LEGAL_SUCCESSOR_OF: legal succession between organizations (source MUST be ORGANIZATION, target MUST be ORGANIZATION).
-- MERGED_INTO: source organization merged into target organization.
-- SPUN_OFF_FROM: source organization spun off from target organization.
-- ACQUIRED_BY: source organization acquired by target organization.
-- PARTICIPATES_IN: entity participates in a market (canonical direction: ORG/FACILITY/COMMUNITY/PROGRAM/PERSON -> MARKET).
-  Clarification: entity is an active market participant (player).
-  - If THIS FRAGMENT is MARKET, you may still emit PARTICIPATES_IN relations to player entities; backend will reverse the edge direction.
-  - Put market share in relation.metrics["market_share_percent"] (unit="percent") when known.
-- TRADED_IN: product is traded or price-discovered in a market (canonical direction: PRODUCT -> MARKET).
-  Use this only for product↔market trading or pricing context. Do NOT use PARTICIPATES_IN for PRODUCT -> MARKET.
-- For ORGANIZATION ↔ MARKET pairs, use PARTICIPATES_IN (ORG -> MARKET).
-  Exception: GOV entities (/gov/...) may use REGULATES (domestic regulatory oversight only), CONTROLS_ACCESS (sanctions, restrictions), or INFLUENCES toward MARKET targets.
-  Never use OPERATES_IN, DEPENDS_ON, or other non-market types between regular ORGANIZATION and MARKET.
-  If leadership is known, keep relationType=PARTICIPATES_IN and set qualifiers.marketRole = "leader" | "dominant" (plus market_share metric when available).
-
-=== PHASE 2 STRATEGIC RELATIONS (may require EXPLICIT SOURCE) ===
-These edge types have strict direction rules. Use sourceCanonicalPath when THIS FRAGMENT is NOT the correct semantic source.
-
-- GATEKEEPS_DECISION: source MUST be ORG/GOV/COMMUNITY/PERSON, target MUST be DECISION_POINT
-  *** CRITICAL: If THIS FRAGMENT is DECISION_POINT ***:
-    When answering "Who gatekeeps this decision?", you MUST use explicit source:
-    - sourceCanonicalPath = gatekeeper path (e.g., /gov/sa/sama)
-    - sourceType = ORGANIZATION (or GOV/COMMUNITY)
-    - sourceName = gatekeeper name
-    - targetCanonicalPath = THIS FRAGMENT's path (the decision point being gatekept)
-    - targetType = DECISION_POINT
-    DO NOT output DECISION_POINT as source for GATEKEEPS_DECISION - this is semantically wrong!
-
-- USES_MECHANISM: source MUST be DECISION_POINT/ORG/GOV/COMMUNITY/PROGRAM, target MUST be MECHANISM (/mechanism/...)
-  *** CRITICAL: If THIS FRAGMENT is MECHANISM ***:
-    When answering "Who uses this mechanism?", you MUST use explicit source:
-    - sourceCanonicalPath = user path (e.g., /gov/sa/sama or /decision/...)
-    - targetCanonicalPath = THIS FRAGMENT's path (the mechanism being used)
-  If THIS FRAGMENT is DECISION_POINT:
-    When answering "What mechanism does this decision use?":
-    - No sourceCanonicalPath needed (THIS FRAGMENT is correct source)
-    - targetCanonicalPath = mechanism path
-
-- APPLIES_TO: source MUST be MECHANISM, target MUST be entity (ORG/FACILITY/PRODUCT/MARKET)
-  *** CRITICAL: If THIS FRAGMENT is ORG/FACILITY/PRODUCT/MARKET ***:
-    When answering "What mechanism applies to this entity?", you MUST use explicit source:
-    - sourceCanonicalPath = mechanism path
-    - targetCanonicalPath = THIS FRAGMENT's path
-  If THIS FRAGMENT is MECHANISM:
-    - No sourceCanonicalPath needed
-    - targetCanonicalPath = affected entity path
-
-- CONTROLS_ACCESS: source MUST be DECISION_POINT/ORG/GOV/COMMUNITY, target MUST be entity
-  If THIS FRAGMENT is the controlled entity:
-    - Use explicit sourceCanonicalPath = controller path
-    - targetCanonicalPath = THIS FRAGMENT's path
-
-- IMPOSES_CONDITION: source MUST be ORG/GOV/COMMUNITY/DECISION_POINT, target MUST be entity
-  If THIS FRAGMENT is the affected entity:
-    - Use explicit sourceCanonicalPath = imposer path
-    - targetCanonicalPath = THIS FRAGMENT's path
-
 %s
-- ORGANIZATION ↔ MARKET: PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES (domestic oversight only), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES.
-- Domain is config, not a graph node: targetCanonicalPath MUST NOT start with /domain/.
-  DOMAIN targets are allowed only for DOMAIN scaffold relations (FOCUSES_ON, INVOLVES_ACTOR, IN_GEO_SCOPE, ABOUT, RELATED_DOMAIN, BROADENS_TO, NARROWS_TO, AFFECTS, DEPENDS_ON with DOMAIN source).
 
 DEPENDS_ON FACETS (qualifiers for granular dependency analysis):
 When outputting DEPENDS_ON relations, you SHOULD add a "facet" qualifier to specify the nature of dependency:
@@ -852,130 +701,11 @@ When you see a dependency on a platform (e.g., "uses Telegram", "operates via Wh
   2. OPERATES_VIA edges from source to the specific channels
   3. If specific channels unknown, create a DEPENDS_ON with facet="communication" and note in reason that specific channels need resolution
 
-DiscoveredRelation Schema:
-{
-  "sourceCanonicalPath": "string (OPTIONAL - see EXPLICIT SOURCE RULES below)",
-  "sourceType": "string (OPTIONAL - required when sourceCanonicalPath is set)",
-  "sourceName": "string (OPTIONAL - required when sourceCanonicalPath is set)",
-  "targetName": "string",
-  "targetLegalName": "string",
-  "targetShortName": "string",
-  "targetType": %s,
-  "relationType": %s,
-  "reason": "string",
-  "confidence": 0.0,
-  "targetCanonicalPath": "string, REQUIRED",
-  "validFrom": "YYYY-MM-DD (optional)",
-  "validTo": "YYYY-MM-DD (optional)",
-  "qualifiers": { "edgeModality": "actual|projected|historical|potential", "eventId": "/event/{slug}" },
-  "metrics": { "ownership_percent": { "value": 45.0, "unit": "percent", "confidence": 0.9, "observedAt": "YYYY-MM-DD", "provenance": {"sourceIds":["..."], "method":"extracted"} } }
-}
+%s
 
-EXPLICIT SOURCE RULES (CRITICAL for strict direction semantics):
-Do not assume edges originate FROM THIS FRAGMENT.
-For direction-sensitive relations, infer semantic source from roles first.
-When semantic source is not THIS FRAGMENT, you MUST use explicit sourceCanonicalPath.
+%s
 
-WHEN TO USE sourceCanonicalPath (MANDATORY):
-
-1. OWNS: source MUST be the owner, target MUST be the owned entity.
-   - If THIS FRAGMENT is owned by X (e.g., "Who owns this org?"):
-     - Set sourceCanonicalPath = X's path (the owner)
-     - Set sourceType/sourceName for X
-     - Set targetCanonicalPath = THIS FRAGMENT's canonicalPath
-     - Set relationType = OWNS
-   - Never output reversed OWNS like THIS FRAGMENT -> owner.
-
-1b. INVESTS_IN: source MUST be investor, target MUST be investee.
-   - If THIS FRAGMENT is invested in by X:
-     - Set sourceCanonicalPath = X's path (the investor)
-     - Set sourceType/sourceName for X
-     - Set targetCanonicalPath = THIS FRAGMENT's canonicalPath
-     - Set relationType = INVESTS_IN
-   - Never output reversed INVESTS_IN like THIS FRAGMENT -> investor.
-
-2. GATEKEEPS_DECISION: source MUST be ORG/GOV/COMMUNITY, target MUST be DECISION_POINT
-   - If THIS FRAGMENT is DECISION_POINT and you are answering "Who gatekeeps this decision?":
-     - Set sourceCanonicalPath = gatekeeper's path (e.g., /gov/sa/sama)
-     - Set sourceType = ORGANIZATION or GOV
-     - Set sourceName = gatekeeper's name
-     - Set targetCanonicalPath = THIS FRAGMENT's canonicalPath (the decision point)
-     - Set targetType = DECISION_POINT
-   - Examples: { "sourceCanonicalPath": "/gov/sa/sama", "targetCanonicalPath": "/decision/islamic-finance/grant-banking-license", "relationType": "GATEKEEPS_DECISION" }; { "sourceCanonicalPath": "/gov/us/bis", "targetCanonicalPath": "/decision/export-control/approve-euv-export", "relationType": "GATEKEEPS_DECISION" }
-
-3. USES_MECHANISM: source MUST be DECISION_POINT/ORG/GOV/COMMUNITY, target MUST be MECHANISM
-   - If THIS FRAGMENT is MECHANISM and you are answering "Who uses this mechanism?":
-     - Set sourceCanonicalPath = user's path
-     - Set targetCanonicalPath = THIS FRAGMENT's canonicalPath (the mechanism)
-   - If THIS FRAGMENT is DECISION_POINT and you are answering "What mechanism does this decision use?":
-     - Do NOT set sourceCanonicalPath (default = THIS FRAGMENT is correct)
-     - Set targetCanonicalPath = mechanism path
-
-4. APPLIES_TO: source MUST be MECHANISM, target MUST be entity
-   - If THIS FRAGMENT is MECHANISM and you are answering "What does this mechanism apply to?":
-     - Do NOT set sourceCanonicalPath (default = THIS FRAGMENT is correct)
-     - Set targetCanonicalPath = affected entity path
-   - If THIS FRAGMENT is an ORG/FACILITY and you are answering "What mechanism applies to this entity?":
-     - Set sourceCanonicalPath = mechanism's path
-     - Set targetCanonicalPath = THIS FRAGMENT's canonicalPath
-
-5. CONTROLS_ACCESS / IMPOSES_CONDITION:
-   - If THIS FRAGMENT is the controlled/affected entity:
-     - Set sourceCanonicalPath = controller's path
-     - Set targetCanonicalPath = THIS FRAGMENT's canonicalPath
-
-6. CONTROLS: source MUST be ORG/PERSON/COMMUNITY. PRODUCT cannot be source.
-   - If THIS FRAGMENT is PRODUCT and you find "controlled by X" or "X controls this product":
-     - Set sourceCanonicalPath = X's path (the gov/org)
-     - Set targetCanonicalPath = THIS FRAGMENT's canonicalPath (the product)
-
-7. ADMINISTERS: source MUST be ORGANIZATION or GEO_REGION (superior), target MUST be ORG/PROGRAM/GEO_REGION/FACILITY/DEPOSIT. FACILITY/DEPOSIT cannot be source. /org/ cannot administer /gov/.
-   - FACILITY cannot be source. If THIS FRAGMENT is FACILITY and you find "administered by X":
-     - Set sourceCanonicalPath = X's path (the ministry/gov)
-     - Set targetCanonicalPath = THIS FRAGMENT's canonicalPath (the facility)
-   - DEPOSIT cannot be source. If THIS FRAGMENT is DEPOSIT and you find "administered by X":
-     - Set sourceCanonicalPath = X's path (the ministry/gov)
-     - Set targetCanonicalPath = THIS FRAGMENT's canonicalPath (the deposit)
-   - /org/ (company) cannot administer /gov/ (government). Gov bodies administer companies, not vice versa.
-     - If you find "ministry X administers company Y": source=X (/gov/...), target=Y (/org/...)
-     - Never output /org/... as source when target is /gov/...
-   - If THIS FRAGMENT is /gov/... or /org/... and you find "administers subordinate Y":
-     - Do NOT set sourceCanonicalPath (THIS FRAGMENT is correct source)
-     - Set targetCanonicalPath = Y's path (subordinate gov/org/program/facility/deposit)
-
-8. DEPOSIT in supply-chain edges (critical direction handling):
-   - DEPOSIT is usually a resource/location node, not a supplier actor for SUPPLIES_TO.
-   - If THIS FRAGMENT is DEPOSIT and evidence says "facility X extracts from this deposit":
-     - Set sourceCanonicalPath = X facility path
-     - Set sourceType = FACILITY
-     - Set targetCanonicalPath = THIS FRAGMENT's canonicalPath
-     - Set relationType = EXTRACTS_FROM
-   - If THIS FRAGMENT is DEPOSIT and evidence says "organization/facility X relies on this deposit":
-     - Set sourceCanonicalPath = X path
-     - Set targetCanonicalPath = THIS FRAGMENT's canonicalPath
-     - Set relationType = DEPENDS_ON
-   - Rare exception: if the evidence identifies an upstream resource source but the extracting/processing facility is unknown, you MAY emit DEPOSIT -> ORGANIZATION|FACILITY with relationType SUPPLIES_TO as a temporary shortcut.
-     Use this rarely, keep confidence conservative, and prefer explicit FACILITY -> PRODUCT -> ORG/FAC chains whenever available.
-
-WHEN NOT TO USE sourceCanonicalPath:
-- For most Phase 1 relations (DEPENDS_ON, SUPPLIES_TO, LOCATED_IN, etc.) the default "FROM THIS FRAGMENT" is correct.
-- Exception: use explicit sourceCanonicalPath for OWNS/INVESTS_IN/ASSURES/CONTROLS whenever THIS FRAGMENT is the semantic target.
-- When the semantic direction naturally flows FROM THIS FRAGMENT TO target.
-
-ROLE QUALIFIERS (REQUIRED for directed ORG<->ORG):
-- For OWNS / SUBSIDIARY_OF / INVESTS_IN / ASSURES / CONTROLS between ORGANIZATION nodes, include:
-  qualifiers.source_role and qualifiers.target_role.
-- For directional actor↔actor DEPENDS_ON / SUPPLIES_TO, include source_role/target_role as well.
-- Allowed examples:
-  - OWNS: owner -> owned_entity
-  - SUBSIDIARY_OF: subsidiary -> parent_owner
-  - INVESTS_IN: investor -> investee
-  - ASSURES: assurer -> assuree
-  - CONTROLS: controller -> controlled_entity
-  - DEPENDS_ON: dependent -> dependency
-  - SUPPLIES_TO: supplier -> customer
-
-CRITICAL: Always verify that the resulting edge direction matches EDGE DIRECTION VALIDATION RULES below.
+%s
 
 %s
 
@@ -986,7 +716,29 @@ METRIC VALUE FORMAT (IMPORTANT):
 - observedAt MUST be ISO8601 (\"YYYY-MM-DD\" or RFC3339)
 
 Ensure the "fragment" JSON adheres to the fragment schema for the fields you are updating.
-Return ONLY valid JSON. Do not include markdown code fences.`, string(fragmentJSON), chainBlock, focusBlock, existingEntitiesBlock, researchPreferExistingEntitiesBlock(), decompositionBlock, domainBlock, specBlock, businessRulesBlock, profileBlock, questions, nameRulesBlock, objectTypeTaskBlock, coreBusinessTaxonomyBlock, objectQualifierContractBlock, edgesemantics.EdgeDirectionValidationRulesForPrompt(), targetTypeEnum, edgesemantics.AllEdgeTypesForPrompt(), canonicalRulesBlock)
+Return ONLY valid JSON. Do not include markdown code fences.`,
+		string(fragmentJSON),
+		chainBlock,
+		focusBlock,
+		existingEntitiesBlock,
+		researchPreferExistingEntitiesBlock(),
+		decompositionBlock,
+		domainBlock,
+		specBlock,
+		businessRulesBlock,
+		profileBlock,
+		questions,
+		canonicalRulesBlock,
+		productCanonicalizationBlock,
+		nameHistoryBlock,
+		joinPromptBlocks(nameRulesBlock, objectTypeTaskBlock),
+		joinPromptBlocks(coreBusinessTaxonomyBlock, objectQualifierContractBlock),
+		relationDirectionBlock,
+		relationSchemaBlock,
+		explicitSourceBlock,
+		roleQualifierBlock,
+		edgesemantics.EdgeDirectionValidationRulesForPrompt(),
+	)
 }
 
 func hasChokepointRelevantSphere(spherePaths []string) bool {

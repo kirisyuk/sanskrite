@@ -28,7 +28,12 @@ import type { GeoMarkerSelection } from '../hooks/useGeoMarkerLayer';
 import { humanizeCanonicalPath, humanizeSlug } from '../lib/uiUtils';
 import { useHorizonRealtimeStore } from '../stores/horizonRealtimeStore';
 import { mapLayerColor } from '../lib/mapRenderPolicy';
-import { artifactMatchesRouteVisibility, type MapRouteVisibilitySelection } from '../lib/mapRouteVisibility';
+import {
+  artifactMatchesRouteVisibility,
+  resolvedArtifactLegIndex,
+  type MapRouteVisibilitySelection,
+} from '../lib/mapRouteVisibility';
+import { objectIdsWithMarkerEndpointCaption } from '../lib/markerPresentationPolicy';
 
 export interface WorldMapPanelProps {
   scope?: { lensId: string };
@@ -749,6 +754,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [directedExploreSubmitting, setDirectedExploreSubmitting] = React.useState<DirectedExploreDirection | null>(null);
   const [directedExploreError, setDirectedExploreError] = React.useState<string | null>(null);
   const [searchHighlightedObjectId, setSearchHighlightedObjectId] = React.useState<string | null>(null);
+  const [hoveredMapObjectId, setHoveredMapObjectId] = React.useState<string | null>(null);
   const [stackSelection, setStackSelection] = React.useState<MapObjectStackSelection | null>(null);
   const [zoneActivityById, setZoneActivityById] = React.useState<Record<string, ZoneActivityItem>>({});
   const [flowActivityById, setFlowActivityById] = React.useState<Record<string, FlowActivityItem>>({});
@@ -836,6 +842,19 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     artifactIds: selectedRouteArtifactIds,
     productRefs: selectedProductGroupKeys,
   }), [selectedProductGroupKeys, selectedRouteArtifactIds]);
+  const [simulationStressLegState, setSimulationStressLegState] = React.useState<{
+    legIds: string[];
+    legCaptionById: Record<string, string>;
+  }>({ legIds: [], legCaptionById: {} });
+  const simulationEdgeStressSelection = React.useMemo(
+    () => ({
+      enabled: (simulationSelection?.activeItems?.length || 0) > 0,
+      artifactIds: simulationSelection?.matchedArtifactIds || [],
+      legIds: simulationStressLegState.legIds,
+      legCaptionById: simulationStressLegState.legCaptionById,
+    }),
+    [simulationSelection, simulationStressLegState],
+  );
 
   const {
     edgesLoading,
@@ -849,6 +868,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     highlightedGatewayObjectIds,
     activeNarrativeKey,
     setActiveNarrativeKey,
+    mapInteractionSpotlightObjectIds,
   } = useGeoEdgeLayer(
     map,
     isReady,
@@ -859,6 +879,9 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     hops,
     scope?.lensId,
     routeVisibilitySelection,
+    simulationEdgeStressSelection,
+    Boolean(simulationEdgeStressSelection.enabled && pathLegsEnabled),
+    hoveredMapObjectId,
   );
   const mapObjects = React.useMemo(
     () => (discoveredObjects.length > 0 ? [...filteredObjects, ...discoveredObjects] : filteredObjects),
@@ -1067,6 +1090,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     const visibleObjectIds = new Set<string>();
     const stressedLegIds = new Set<string>();
     const legCaptionById: Record<string, string> = {};
+    const hypothesisArtifactIdSet = new Set((simulationSelection?.hypothesisArtifactIds || []).map((value) => String(value || '').trim()).filter(Boolean));
     const objectIdByPath = new Map<string, string>();
     for (const object of pathOverlayObjects) {
       const canonicalPath = String(object?.canonicalPath || '').trim();
@@ -1081,6 +1105,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
       const artifactId = String(artifact?.id || '').trim();
       if (!artifactId) continue;
       const legs = Array.isArray(artifact?.payload?.legs) ? artifact.payload.legs : [];
+      const isHypothesisArtifact = hypothesisArtifactIdSet.has(artifactId);
       const matchedLegs: Array<{
         legIndex: number;
         refs: string[];
@@ -1095,19 +1120,36 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
         overlayTitles: string[];
       }>();
       legs.forEach((leg: any, index: number) => {
-        const legIndex = Number.isFinite(Number(leg?.index)) ? Number(leg.index) : index;
-        const supplierRef = String(leg?.supplierRef || '').trim();
-        const customerRef = String(leg?.customerRef || '').trim();
+        const legIndex = resolvedArtifactLegIndex(leg, index);
+        const supplierRef = String(leg?.supplierRef || leg?.SupplierRef || leg?.supplier_ref || '').trim();
+        const customerRef = String(leg?.customerRef || leg?.CustomerRef || leg?.customer_ref || '').trim();
+        const productRefRaw = String(leg?.productRef || leg?.ProductRef || leg?.product_ref || '').trim();
+        const transportViaRaw = Array.isArray(leg?.transportViaRefs) ? leg.transportViaRefs
+          : Array.isArray(leg?.TransportViaRefs) ? leg.TransportViaRefs
+          : Array.isArray(leg?.transport_via_refs) ? leg.transport_via_refs
+          : [];
+        const flowRefsRaw = Array.isArray(leg?.flowRefs) ? leg.flowRefs
+          : Array.isArray(leg?.FlowRefs) ? leg.FlowRefs
+          : Array.isArray(leg?.flow_refs) ? leg.flow_refs
+          : [];
+        const zoneRefsRaw = Array.isArray(leg?.zoneRefs) ? leg.zoneRefs
+          : Array.isArray(leg?.ZoneRefs) ? leg.ZoneRefs
+          : Array.isArray(leg?.zone_refs) ? leg.zone_refs
+          : [];
+        const affectedZoneRefsRaw = Array.isArray(leg?.affectedZoneRefs) ? leg.affectedZoneRefs
+          : Array.isArray(leg?.AffectedZoneRefs) ? leg.AffectedZoneRefs
+          : Array.isArray(leg?.affected_zone_refs) ? leg.affected_zone_refs
+          : [];
         const refs = [
           supplierRef,
           customerRef,
-          String(leg?.productRef || '').trim(),
-          ...((Array.isArray(leg?.transportViaRefs) ? leg.transportViaRefs : []).map((value: unknown) => String(value || '').trim())),
-          ...((Array.isArray(leg?.flowRefs) ? leg.flowRefs : []).map((value: unknown) => String(value || '').trim())),
-          ...((Array.isArray(leg?.zoneRefs) ? leg.zoneRefs : []).map((value: unknown) => String(value || '').trim())),
-          ...((Array.isArray(leg?.affectedZoneRefs) ? leg.affectedZoneRefs : []).map((value: unknown) => String(value || '').trim())),
+          productRefRaw,
+          ...(transportViaRaw.map((value: unknown) => String(value || '').trim())),
+          ...(flowRefsRaw.map((value: unknown) => String(value || '').trim())),
+          ...(zoneRefsRaw.map((value: unknown) => String(value || '').trim())),
+          ...(affectedZoneRefsRaw.map((value: unknown) => String(value || '').trim())),
         ].filter(Boolean);
-        const productRef = String(leg?.productRef || '').trim();
+        const productRef = productRefRaw;
         const countries = refs.map(normalizeCountryFromCanonicalPath).filter(Boolean);
         const productHit = productRef ? simulationFocusedPathRefs.has(productRef) : false;
         const refHit = refs.some((ref) => simulationFocusedPathRefs.has(ref));
@@ -1144,10 +1186,17 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
         });
       });
       if (matchedLegs.length === 0) continue;
-      const minLegIndex = Math.min(...matchedLegs.map((entry) => entry.legIndex));
-      const maxLegIndex = Math.max(...matchedLegs.map((entry) => entry.legIndex));
       const artifactStressTitles = compactNonEmptyStrings(matchedLegs.flatMap((entry) => entry.overlayTitles)).slice(0, 2);
-      for (let legIndex = minLegIndex; legIndex <= maxLegIndex; legIndex += 1) {
+      const legIndexesToReveal = isHypothesisArtifact
+        ? Array.from(new Set(matchedLegs.map((entry) => entry.legIndex))).sort((a, b) => a - b)
+        : (() => {
+            const minLegIndex = Math.min(...matchedLegs.map((entry) => entry.legIndex));
+            const maxLegIndex = Math.max(...matchedLegs.map((entry) => entry.legIndex));
+            const out: number[] = [];
+            for (let legIndex = minLegIndex; legIndex <= maxLegIndex; legIndex += 1) out.push(legIndex);
+            return out;
+          })();
+      for (const legIndex of legIndexesToReveal) {
         const detail = legDetails.get(legIndex);
         if (!detail) continue;
         const legId = `${artifactId}:leg:${legIndex}`;
@@ -1162,7 +1211,8 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
         const sourceLabel = detail.supplierRef ? (humanizeCanonicalPath(detail.supplierRef) || detail.supplierRef) : '';
         const targetLabel = detail.customerRef ? (humanizeCanonicalPath(detail.customerRef) || detail.customerRef) : '';
         const linkLabel = sourceLabel && targetLabel ? `${sourceLabel} -> ${targetLabel}` : sourceLabel || targetLabel;
-        const captionParts = [stressTitle, linkLabel].filter(Boolean);
+        const statusLabel = isHypothesisArtifact ? 'Inferred route' : 'Validated path';
+        const captionParts = [stressTitle, statusLabel, linkLabel].filter(Boolean);
         if (captionParts.length > 0) legCaptionById[legId] = captionParts.join('\n');
       }
     }
@@ -1174,6 +1224,20 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
       legCaptionById,
     };
   }, [activePathArtifacts, pathOverlayObjects, simulationFocusedCountryCodes, simulationFocusedPathRefs, simulationSelection]);
+  React.useEffect(() => {
+    setSimulationStressLegState((prev) => {
+      const nextIds = simulationLegFocus.stressedLegIds;
+      const nextCaptions = simulationLegFocus.legCaptionById;
+      const idsMatch = prev.legIds.length === nextIds.length && prev.legIds.every((id, i) => id === nextIds[i]);
+      const captionKeysPrev = Object.keys(prev.legCaptionById);
+      const captionKeysNext = Object.keys(nextCaptions);
+      const captionsMatch =
+        captionKeysPrev.length === captionKeysNext.length
+        && captionKeysNext.every((key) => prev.legCaptionById[key] === nextCaptions[key]);
+      if (idsMatch && captionsMatch) return prev;
+      return { legIds: nextIds, legCaptionById: nextCaptions };
+    });
+  }, [simulationLegFocus.stressedLegIds, simulationLegFocus.legCaptionById]);
   const simulationFocusedObjectIds = React.useMemo(() => {
     if (simulationLegFocus.visibleObjectIds.length > 0) return simulationLegFocus.visibleObjectIds;
     if ((simulationSelection?.activeItems?.length || 0) === 0 || (simulationFocusedPathRefs.size === 0 && simulationFocusedCountryCodes.size === 0)) return [] as string[];
@@ -1197,6 +1261,14 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     [simulationFocusedObjectIds],
   );
   const simulationStressEnabled = (simulationSelection?.activeItems?.length || 0) > 0;
+  const simulationValidatedArtifactIds = React.useMemo(
+    () => simulationSelection?.validatedArtifactIds || [],
+    [simulationSelection],
+  );
+  const simulationHypothesisArtifactIds = React.useMemo(
+    () => simulationSelection?.hypothesisArtifactIds || [],
+    [simulationSelection],
+  );
   const primarySimulationOverlay = React.useMemo<HorizonSimulationOverlayItem | null>(() => {
     const items = simulationSelection?.activeItems || [];
     if (items.length === 0) return null;
@@ -1723,6 +1795,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
           ...(current || { id: key, kind: 'SUPPLY_CHAIN_PATH' }),
           id: key,
           lensId: raw?.lensId || current?.lensId,
+          pathStatus: raw?.pathStatus || current?.pathStatus,
           canonicalKey: raw?.canonicalKey || current?.canonicalKey,
           displayName: raw?.displayName || current?.displayName,
           anchorSupplier: raw?.anchorSupplier || current?.anchorSupplier,
@@ -2509,21 +2582,6 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     window.location.assign('/horizon');
   }, [scopeDialogCreatedLensId, scopeDialogProjectId]);
 
-  const markerLayerOptions = React.useMemo(
-    () => ({
-      extraInteractiveLayers: [...GEO_EDGE_INTERACTIVE_LAYERS],
-      suppressClearOnClusterClick: Boolean(selectedObject),
-      highlightedObjects: [
-        ...(selectedObject?.id ? [{ id: selectedObject.id, role: 'selected' as const }] : []),
-        ...Array.from(forcedRouteEndpointObjectIds).map((id) => ({ id, role: 'gateway' as const })),
-        ...highlightedGatewayObjectIds.map((id) => ({ id, role: 'gateway' as const })),
-        ...Array.from(simulationFocusedObjectIdSet).map((id) => ({ id, role: 'gateway' as const })),
-        ...(searchHighlightedObjectId ? [{ id: searchHighlightedObjectId, role: 'search' as const }] : []),
-      ],
-      mutedObjectIds: effectiveMutedObjectIds,
-    }),
-    [effectiveMutedObjectIds, forcedRouteEndpointObjectIds, highlightedGatewayObjectIds, searchHighlightedObjectId, selectedObject, simulationFocusedObjectIdSet],
-  );
   const pathLegClusterState = usePathLegClusterLayer(
     map,
     isReady,
@@ -2546,7 +2604,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
         if (!artifactId) continue;
         const legs = Array.isArray(artifact?.payload?.legs) ? artifact.payload.legs : [];
         legs.forEach((leg: any, index: number) => {
-          const legIndex = Number.isFinite(Number(leg?.index)) ? Number(leg.index) : index;
+          const legIndex = resolvedArtifactLegIndex(leg, index);
           const legId = `${artifactId}:leg:${legIndex}`;
           if (!simulationLegFocus.revealedLegIds.includes(legId)) suppressed.add(legId);
         });
@@ -2562,12 +2620,50 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
       visibleObjectIds: compactStringList([...(base?.visibleObjectIds || []), ...simulationLegFocus.visibleObjectIds]),
       visibleObjectPaths: compactStringList([...(base?.visibleObjectPaths || []), ...simulationLegFocus.visibleObjectPaths]),
       stressedLegIds: compactStringList([...(base?.stressedLegIds || []), ...simulationLegFocus.stressedLegIds]),
+      validatedArtifactIds: compactStringList([...(base?.validatedArtifactIds || []), ...simulationValidatedArtifactIds]),
+      hypothesisArtifactIds: compactStringList([...(base?.hypothesisArtifactIds || []), ...simulationHypothesisArtifactIds]),
       legCaptionById: {
         ...(base?.legCaptionById || {}),
         ...(simulationLegFocus.legCaptionById || {}),
       },
     };
-  }, [activePathArtifacts, pathLegClusterState.visibilityPolicy, simulationLegFocus]);
+  }, [activePathArtifacts, pathLegClusterState.visibilityPolicy, simulationHypothesisArtifactIds, simulationLegFocus, simulationValidatedArtifactIds]);
+  const worldMapHighlightedMarkers = React.useMemo(
+    () => [
+      ...(selectedObject?.id ? [{ id: selectedObject.id, role: 'selected' as const }] : []),
+      ...Array.from(forcedRouteEndpointObjectIds).map((id) => ({ id, role: 'gateway' as const })),
+      ...highlightedGatewayObjectIds.map((id) => ({ id, role: 'gateway' as const })),
+      ...Array.from(simulationFocusedObjectIdSet).map((id) => ({ id, role: 'gateway' as const })),
+      ...(searchHighlightedObjectId ? [{ id: searchHighlightedObjectId, role: 'search' as const }] : []),
+    ],
+    [
+      forcedRouteEndpointObjectIds,
+      highlightedGatewayObjectIds,
+      searchHighlightedObjectId,
+      selectedObject?.id,
+      simulationFocusedObjectIdSet,
+    ],
+  );
+  const pathLegDeferEndpointLabelObjectIds = React.useMemo(
+    () => objectIdsWithMarkerEndpointCaption(worldMapHighlightedMarkers),
+    [worldMapHighlightedMarkers],
+  );
+  const markerLayerOptions = React.useMemo(
+    () => ({
+      extraInteractiveLayers: [...GEO_EDGE_INTERACTIVE_LAYERS],
+      suppressClearOnClusterClick: Boolean(selectedObject),
+      highlightedObjects: worldMapHighlightedMarkers,
+      mutedObjectIds: effectiveMutedObjectIds,
+      mapInteractionSpotlightObjectIds,
+      onMapObjectHover: setHoveredMapObjectId,
+    }),
+    [
+      effectiveMutedObjectIds,
+      mapInteractionSpotlightObjectIds,
+      selectedObject,
+      worldMapHighlightedMarkers,
+    ],
+  );
   const baseMarkerObjects = React.useMemo(() => {
     const candidatesById = new Map<string, GeoObject>();
     for (const object of [...visibleMapObjects, ...forcedRouteEndpointObjects]) {
@@ -2596,6 +2692,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     effectivePathLegVisibilityPolicy,
     routeVisibilitySelection,
     simulationStressEnabled,
+    pathLegDeferEndpointLabelObjectIds,
   );
   useVesselLayer(map, isReady, styleEpoch, vesselsEnabled, theme);
 

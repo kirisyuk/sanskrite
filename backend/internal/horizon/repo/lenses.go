@@ -450,6 +450,27 @@ func (r *LensesRepository) UpsertScopeArtifact(ctx context.Context, lensID, artK
 	return err
 }
 
+// RemoveScopeArtifact removes a single key from lens scopeArtifacts map.
+func (r *LensesRepository) RemoveScopeArtifact(ctx context.Context, lensID, artKey string) error {
+	if lensID == "" || artKey == "" {
+		return ErrInvalidDocument
+	}
+	lens, err := r.Get(ctx, lensID)
+	if err != nil {
+		return err
+	}
+	key := sanitizeFirestoreKey(artKey)
+	if lens.ScopeArtifacts == nil {
+		return nil
+	}
+	delete(lens.ScopeArtifacts, key)
+	_, err = r.col.Doc(lensID).Set(ctx, map[string]interface{}{
+		"scopeArtifacts": lens.ScopeArtifacts,
+		"updatedAt":      time.Now().UTC(),
+	}, firestore.MergeAll)
+	return err
+}
+
 // sanitizeFirestoreKey replaces dots in keys (Firestore uses dots as path separators in field paths).
 func sanitizeFirestoreKey(key string) string {
 	return strings.ReplaceAll(strings.TrimSpace(key), ".", "_")

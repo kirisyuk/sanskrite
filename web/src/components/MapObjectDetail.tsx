@@ -69,6 +69,16 @@ function familyAccent(family: string, isDark: boolean): string {
   return mapFamilyAccentColor(family, isDark ? 'dark' : 'light');
 }
 
+function translucentAccent(color: string, opacity: number): string {
+  const normalized = String(color || '').trim();
+  const hex = normalized.startsWith('#') ? normalized.slice(1) : normalized;
+  if (!/^[0-9a-f]{6}$/i.test(hex)) return color;
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${opacity})`;
+}
+
 function sectionCardStyle(isDark: boolean): React.CSSProperties {
   return {
     padding: '12px 13px',
@@ -407,6 +417,27 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
     setIsCollapsed(autoCompact);
   }, [autoCompact, object.id]);
 
+  /** Collapsing unmounts Route exposure blocks without firing mouseleave; clear map focus hooks. */
+  React.useEffect(() => {
+    if (!isCollapsed) return;
+    onNarrativeHover(null);
+    onSupplyRouteHover?.([]);
+  }, [isCollapsed, onNarrativeHover, onSupplyRouteHover]);
+
+  /** Hiding Route exposure via accordion unmounts the same blocks without mouseleave. */
+  React.useEffect(() => {
+    if (openSections.routes) return;
+    onSupplyRouteHover?.([]);
+    const supplyKeys = new Set(
+      (traceSummary?.supplyGroups || [])
+        .map((group) => String(group.narrativeKey || '').trim())
+        .filter(Boolean),
+    );
+    if (activeNarrativeKey && supplyKeys.has(activeNarrativeKey)) {
+      onNarrativeHover(null);
+    }
+  }, [activeNarrativeKey, onNarrativeHover, onSupplyRouteHover, openSections.routes, traceSummary?.supplyGroups]);
+
   React.useEffect(() => {
     setOpenSections({
       routes: Boolean(traceSummary?.supplyGroups?.length),
@@ -501,6 +532,8 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
   ];
 
   const hasEvidence = driverItems.length > 0 || topMetrics.length > 0 || topMechanisms.length > 0 || traceSummary?.propagationEdgeCount;
+  const supplyAccent = mapLayerColor('supply', isDark ? 'dark' : 'light');
+  const routeBadgeBackground = translucentAccent(supplyAccent, isDark ? 0.16 : 0.12);
 
   const toggleSection = (key: SectionKey) => {
     setOpenSections((current) => ({ ...current, [key]: !current[key] }));
@@ -794,14 +827,14 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
                         onNarrativeHover(null);
                         onSupplyRouteHover?.([]);
                       }}
-                      style={narrativeBlockStyle(isDark, activeNarrativeKey === group.narrativeKey, mapLayerColor('supply', isDark ? 'dark' : 'light'))}
+                      style={narrativeBlockStyle(isDark, activeNarrativeKey === group.narrativeKey, supplyAccent)}
                     >
                       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
                         <div style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: 12, fontWeight: 780, color: mapLayerColor('supply', isDark ? 'dark' : 'light') }}>
+                          <div style={{ fontSize: 12, fontWeight: 780, color: supplyAccent }}>
                             {group.productLabel}
                           </div>
-                          <div style={{ marginTop: 2, fontSize: 10, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: isDark ? 'rgba(253,230,138,0.82)' : 'rgba(146,64,14,0.76)' }}>
+                          <div style={{ marginTop: 2, fontSize: 10, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: supplyAccent }}>
                             {directionLabel(group.direction)}
                           </div>
                           <div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.5, color: 'var(--text-secondary-strong)' }}>
@@ -809,7 +842,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
                           </div>
                         </div>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, justifyContent: 'flex-end' }}>
-                          <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(245,158,11,0.14)' : 'rgba(245,158,11,0.10)' }}>
+                          <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: routeBadgeBackground }}>
                             {pluralize(group.routeCount, 'route')}
                           </span>
                           {group.stressedRouteCount > 0 && (

@@ -221,7 +221,7 @@ func (a *IntentDecomposerAgent) buildPromptWithOptions(targetCanonicalPath strin
 
 	isSupplyChainMode := taxonomy.HasDomainMode(opts.DomainModes, taxonomy.DomainModeSupplyChain)
 	relationEnum := edgesemantics.AllEdgeTypesForPrompt()
-	relationRulesBlock := relationRulesBlockGeneral
+	relationRulesBlock := generatedIntentDecomposerRelationRulesBlock(opts.DomainModes)
 	validationSuffix := validationSuffixGeneral
 	dependsOnBlock := `DEPENDS_ON FACETS (qualifiers for more granular dependency analysis):
 When outputting DEPENDS_ON relations, you MAY add a "facet" qualifier to specify the nature of dependency:
@@ -239,7 +239,6 @@ Example: { "relationType": "DEPENDS_ON", "qualifiers": { "facet": "communication
 `
 	if isSupplyChainMode {
 		relationEnum = taxonomy.SupplyChainEdgeTypesForPrompt()
-		relationRulesBlock = relationRulesBlockSupplyChain
 		validationSuffix = validationSuffixSupplyChain
 		dependsOnBlock = `SUPPLY CHAIN: Do NOT use DEPENDS_ON. Use PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, EXTRACTS_FROM, PARTICIPATES_IN for supply chain links. Use TRADED_IN only for explicit product↔market trading context, not for operational flow.
 `
@@ -358,87 +357,6 @@ RULES:
 }
 
 const (
-	relationRulesBlockGeneral = `RELATION DIRECTION RULES (STRICT):
-Each relation is a directed edge FROM TARGET (source) TO targetCanonicalPath (target).
-Choose relationType to match this direction:
-- DEPENDS_ON: source depends on target (use for suppliers, contractors, inputs, infrastructure dependencies).
-- SUPPLIES_TO: source supplies goods/services to target (supplier -> customer/consumer).
-  Source MUST be ORGANIZATION or FACILITY or PRODUCT.
-  Target MUST be ORGANIZATION or FACILITY.
-  MARKET MUST NOT be source or target for SUPPLIES_TO.
-- LOCATED_IN / OPERATES_IN: source located/operates in GEO target.
-  OPERATES_IN source MUST be ORGANIZATION or PERSON.
-  MARKET MUST NOT be source for OPERATES_IN.
-- OWNS: source owns target.
-  Direction is strict: owner -> owned entity.
-  In this decomposition prompt, SOURCE is fixed to TARGET; therefore emit OWNS only for entities that TARGET itself owns.
-  Do NOT emit OWNS to describe who owns TARGET (that would reverse direction).
-  CRITICAL: NEVER output OWNS where targetType=PERSON.
-  CRITICAL: NEVER output OWNS from ORGANIZATION to COMMUNITY if target canonicalPath is /community/{geo}/dynasty/{slug} or /community/{geo}/tribe/{slug}.
-    Dynasties and tribes own organizations, not the reverse.
-  Use OWNS ONLY for equity ownership/control relationships (shareholder, stake, holding company, ultimate beneficial owner).
-  Do NOT use OWNS for roles/employment/management like CEO, director, founder, chairman; use INFLUENCES if relevant, or omit the relation.
-- SUBSIDIARY_OF: source is owned/controlled by target (target can be ORGANIZATION or PERSON; will be normalized to OWNS in graph).
-- CONTROLS: source controls target (non-equity/indirect control: voting control, state control, contractual control). Use when control is explicit but ownership is unclear.
-- MANAGES: source manages target (formal authority: CEO/executive/director/operator). Do NOT use for informal influence.
-- EMPLOYED_BY: source (PERSON) is employed by target (ORGANIZATION). Do NOT use for board-only or founder-only relationships.
-- BOARD_MEMBER_OF: source (PERSON) is a board member of target (ORGANIZATION).
-- FOUNDED: source (PERSON or ORGANIZATION) founded target (ORGANIZATION or PROGRAM). Not ownership.
-- INVESTS_IN: source (ORGANIZATION or PERSON) invests in target (ORGANIZATION/PROGRAM/PRODUCT). Not supply-chain.
-  In this decomposition prompt, SOURCE is fixed to TARGET; therefore emit INVESTS_IN only when TARGET invests in others.
-  Do NOT use INVESTS_IN here to represent incoming investors into TARGET.
-- PARTNERS_WITH: partnership/collaboration (symmetric; direction is not important but still output as source->target).
-- PRODUCES: source produces target (source MUST be ORGANIZATION/FACILITY/DEPOSIT; target is a PRODUCT).
-  For PRODUCT -> PRODUCT value-chain steps, use TRANSFORMS_INTO for processing/refining, ASSEMBLES_INTO for direct component/subassembly -> assembled-product steps, and USED_IN for strong operational input semantics (NOT PRODUCES).
-- REGULATES: source regulates target (domestic jurisdictional oversight only; source is typically a government/agency org regulating entities within its jurisdiction). For sanctions or extra-territorial restrictions use CONTROLS_ACCESS.
-- COMPETES_WITH / INFLUENCES: as labeled.
-- RENAMED_TO: organization legal rename (ORG -> ORG).
-- REBRANDED_TO: organization brand rename/repositioning (ORG -> ORG).
-- LEGAL_SUCCESSOR_OF: legal succession between organizations (ORG -> ORG).
-- MERGED_INTO: source organization merged into target organization.
-- SPUN_OFF_FROM: source organization spun off from target organization.
-- ACQUIRED_BY: source organization acquired by target organization.
-- GATEKEEPS_DECISION: source (ORG/GOV/COMMUNITY) gatekeeps target (DECISION_POINT).
-- ASSURES: source (ORGANIZATION) provides independent assurance to target (ORG/FACILITY/PROGRAM). Add qualifiers.assurance_type: audit | certification | regulatory | inspection.
-  Direction: assurer → assuree. E.g. audit firm ASSURES org, certifier ASSURES org.
-- AUDITED_BY is legacy inverse form; do NOT emit it. Use ASSURES with canonical direction.
-- OPERATES_VIA: source uses target channel/platform for communication/operations.
-  Direction: COMMUNITY/ORGANIZATION → MEDIA_CHANNEL
-  Example: /community/ru/criminal/kazan-dealers OPERATES_VIA /media/telegram/kazan-zakaz
-- MEMBER_OF: person is a member of a community (not employment).
-  Direction: PERSON → COMMUNITY
-  Example: /person/john-doe MEMBER_OF /community/global/professional/osint-researchers
-- AFFILIATED_WITH: community or person has affiliation with a formal organization.
-  Direction: COMMUNITY/PERSON → ORGANIZATION
-  Example: /community/ae/trade/hawala-network AFFILIATED_WITH /org/ae/exchange-house
-- HAS_SUBGROUP: community hierarchy (parent group → child/narrower group).
-  Used for dynasties, tribes, clans, professional networks with internal structure.
-  Direction: broader community → narrower sub-community/branch/clan.
-  Examples:
-    /community/sa/dynasty/house-of-saud HAS_SUBGROUP /community/sa/dynasty/sudairi-seven
-    /community/af/tribe/pashtun HAS_SUBGROUP /community/af/tribe/durrani
-    /community/kz/tribe/senior-zhuz HAS_SUBGROUP /community/kz/tribe/uysun
-`
-
-	relationRulesBlockSupplyChain = `RELATION DIRECTION RULES (STRICT — supply-chain contract only):
-Each relation is a directed edge FROM TARGET (source) TO targetCanonicalPath (target).
-Use ONLY these relation types (canonical): PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN, PARTICIPATES_IN, HAS_MARKET_SEGMENT.
-Do NOT use DEPENDS_ON, PARTNERS_WITH, COMPETES_WITH, SUBSIDIARY_OF, OWNS, INVESTS_IN, or other non-supply-chain types.
-- PRODUCES: source MUST be ORGANIZATION|FACILITY|DEPOSIT, target MUST be PRODUCT.
-- SUPPLIES_TO: source MUST be ORGANIZATION|FACILITY|PRODUCT, target MUST be ORGANIZATION|FACILITY.
-- TRANSFORMS_INTO: source MUST be PRODUCT, target MUST be PRODUCT (upstream -> downstream).
-- ASSEMBLES_INTO: source MUST be PRODUCT, target MUST be PRODUCT (component/subassembly -> assembled downstream product).
-- USED_IN: source MUST be PRODUCT, target MUST be PRODUCT (strong operational input, not transformation, not assembly).
-- EXTRACTS_FROM: source MUST be FACILITY, target MUST be DEPOSIT.
-- LOCATED_IN: target MUST be GEO_REGION.
-- OPERATES_IN: source MUST be ORGANIZATION|PERSON, target MUST be GEO_REGION|FACILITY|DEPOSIT.
-- PARTICIPATES_IN: source MUST be ORGANIZATION|FACILITY|COMMUNITY|PROGRAM|PERSON, target MUST be MARKET.
-- HAS_MARKET_SEGMENT: source MUST be MARKET, target MUST be MARKET (parent -> child segment).
-- MARKET source guard in supply_chain:
-  MARKET may emit only PARTICIPATES_IN / HAS_MARKET_SEGMENT (plus DOMAIN scaffold when source is /domain/...).
-  Never emit PRODUCES/SUPPLIES_TO/TRANSFORMS_INTO/ASSEMBLES_INTO/USED_IN/EXTRACTS_FROM/OPERATES_IN from MARKET.
-`
-
 	validationSuffixGeneral = `  - ORGANIZATION ↔ MARKET: PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES (domestic oversight), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES.
   - For PRODUCT -> PRODUCT steps, use TRANSFORMS_INTO for processing/refining, ASSEMBLES_INTO for direct assembly, and USED_IN for strong operational input semantics (not PRODUCES).
 `

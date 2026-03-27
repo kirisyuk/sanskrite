@@ -18,6 +18,8 @@ type MetricValue struct {
 	ErrorMargin *ErrorMargin `json:"errorMargin,omitempty" firestore:"errorMargin,omitempty"`
 	Confidence  float64      `json:"confidence" firestore:"confidence"` // 0..1
 	ObservedAt  time.Time    `json:"observedAt" firestore:"observedAt"`
+	FreshUntil  *time.Time   `json:"freshUntil,omitempty" firestore:"freshUntil,omitempty"`
+	SourceKind  *string      `json:"sourceKind,omitempty" firestore:"sourceKind,omitempty"`
 	Provenance  Provenance   `json:"provenance" firestore:"provenance"`
 }
 
@@ -42,9 +44,9 @@ type locationJSON struct {
 	ISO6709       *string `json:"iso6709,omitempty"`
 	ISO3166_1     *string `json:"iso3166_1,omitempty"`
 	ISO3166_2     *string `json:"iso3166_2,omitempty"`
-	Country       *string `json:"country,omitempty"`        // LLM alias
-	CountryCode   *string `json:"countryCode,omitempty"`    // LLM alias
-	CountryAlpha2 *string `json:"countryAlpha2,omitempty"`  // ontology extractor style
+	Country       *string `json:"country,omitempty"`       // LLM alias
+	CountryCode   *string `json:"countryCode,omitempty"`   // LLM alias
+	CountryAlpha2 *string `json:"countryAlpha2,omitempty"` // ontology extractor style
 }
 
 // UnmarshalJSON accepts both canonical fields and common LLM aliases (country, countryCode, countryAlpha2).

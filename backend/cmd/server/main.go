@@ -67,6 +67,7 @@ import (
 	horizoninterp "github.com/igorkirisyuk/sanskrite/internal/horizon/interpretation"
 	horizonlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	horizonmechanismdict "github.com/igorkirisyuk/sanskrite/internal/horizon/mechanismdict"
+	horizonmetriccore "github.com/igorkirisyuk/sanskrite/internal/horizon/metriccore"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonpathbuilder "github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
 	horizonpolicy "github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
@@ -2468,6 +2469,7 @@ func main() {
 			propagationEngine.WithCriticalPathDetector(criticalPathDetector)
 
 			horizonService.SetPropagationEngine(propagationEngine)
+			operationalMetricHydrator := horizonmetriccore.NewOperationalHydrator(horizonFragmentsRepo, horizonMaterializedArtifactsRepo, genaiClient, logger)
 			simulationService, err := horizonsimulation.NewService(horizonsimulation.Dependencies{
 				RunsRepo:                 horizonSimulationRunsRepo,
 				WorldsRepo:               horizonSimulationWorldsRepo,
@@ -2482,6 +2484,7 @@ func main() {
 				PropagationEngine:        propagationEngine,
 				PropagationProfileLookup: propagationProfileLookup,
 				Submitter:                horizonSimulationSubmitter,
+				OperationalHydrator:      operationalMetricHydrator,
 				Logger:                   logger,
 				Publisher: func(ctx context.Context, eventType string, tenantID string, payload any) error {
 					if pub == nil {
@@ -2952,6 +2955,10 @@ func main() {
 					return pub.PublishJSON(ctx, realtime.EventType(eventType), tenantID, payload)
 				},
 			})
+			candidateChainCompletionService := horizonsupplychain.NewCandidateChainCompletionService(horizonsupplychain.CandidateChainCompletionDeps{
+				LensesRepo:       horizonLensesRepo,
+				MaterializedRepo: horizonMaterializedArtifactsRepo,
+			})
 
 			// Create HTTP handlers
 			horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService).
@@ -2959,6 +2966,7 @@ func main() {
 				WithMergeFragmentsRepo(horizonFragmentsMergeRepo).
 				WithMaterializedArtifactsRepo(horizonMaterializedArtifactsRepo).
 				WithOneHopDownstreamService(oneHopDownstreamService).
+				WithCandidateChainCompletionService(candidateChainCompletionService).
 				WithProductDictionary(productDictionary).
 				WithDocumentsRepo(docsRepo).
 				WithUsersRepo(s.users).

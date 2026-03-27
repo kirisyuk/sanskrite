@@ -223,76 +223,8 @@ func DefaultTaxonomyRules() *TaxonomyRules {
 				},
 			},
 		},
-		EdgeDirection: EdgeDirectionRulesLLM{
-			Rules: []EdgeDirectionRuleLLM{
-				{EdgeType: "EMPLOYED_BY", Direction: "PERSON → ORGANIZATION", ValidSource: []string{"PERSON"}, ValidTarget: []string{"ORGANIZATION"}},
-				{EdgeType: "BOARD_MEMBER_OF", Direction: "PERSON → ORGANIZATION", ValidSource: []string{"PERSON"}, ValidTarget: []string{"ORGANIZATION"}},
-				{EdgeType: "KEY_PERSON", Direction: "PERSON → ORGANIZATION", ValidSource: []string{"PERSON"}, ValidTarget: []string{"ORGANIZATION"}},
-				{EdgeType: "FOUNDED", Direction: "PERSON|ORG → ORGANIZATION|PROGRAM", ValidSource: []string{"PERSON", "ORGANIZATION"}, ValidTarget: []string{"ORGANIZATION", "PROGRAM"}},
-				// COMMUNITY can also be an owner/controller (e.g., dynasty, tribe, family network).
-				{EdgeType: "OWNS", Direction: "ORG|PERSON|COMMUNITY → ORG|FACILITY|PRODUCT|DEPOSIT", ValidSource: []string{"ORGANIZATION", "PERSON", "COMMUNITY"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT", "DEPOSIT"}},
-				// COMMUNITY can also be an actor (e.g., dynasty) that controls organizations/facilities.
-				{EdgeType: "CONTROLS", Direction: "ORG|PERSON|COMMUNITY → ORG|FACILITY|PRODUCT", ValidSource: []string{"ORGANIZATION", "PERSON", "COMMUNITY"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT"}},
-				{EdgeType: "REGULATES", Direction: "ORGANIZATION → *", ValidSource: []string{"ORGANIZATION"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT", "GEO_REGION", "MARKET"}},
-				// PROGRAM can also be located in a GEO region (e.g., incubator/government program operating in a city).
-				{EdgeType: "LOCATED_IN", Direction: "* → GEO_REGION", ValidSource: []string{"FACILITY", "ORGANIZATION", "PERSON", "PRODUCT", "PROGRAM", "GEO_REGION", "DEPOSIT", "COMMUNITY", "AFFECTED_ZONE"}, ValidTarget: []string{"GEO_REGION"}},
-				{EdgeType: "OPERATES_IN", Direction: "ORGANIZATION|PERSON → GEO_REGION|FACILITY|DEPOSIT", ValidSource: []string{"ORGANIZATION", "PERSON"}, ValidTarget: []string{"GEO_REGION", "FACILITY", "DEPOSIT"}},
-				{EdgeType: "SUPPLIES_TO", Direction: "ORG|FACILITY|PRODUCT → ORG|FACILITY", ValidSource: []string{"ORGANIZATION", "FACILITY", "PRODUCT"}, ValidTarget: []string{"ORGANIZATION", "FACILITY"}},
-				{EdgeType: "PRODUCES", Direction: "ORG|FACILITY|DEPOSIT → PRODUCT", ValidSource: []string{"ORGANIZATION", "FACILITY", "DEPOSIT"}, ValidTarget: []string{"PRODUCT"}},
-				{EdgeType: "INVESTS_IN", Direction: "ORG|PERSON → ORG|PROGRAM|PRODUCT", ValidSource: []string{"ORGANIZATION", "PERSON"}, ValidTarget: []string{"ORGANIZATION", "PROGRAM", "PRODUCT"}},
-				// PROGRAM can participate in markets (e.g., government programs active in a sector/segment).
-				// GOV entities (/gov/...) may also use REGULATES/CONTROLS_ACCESS/INFLUENCES toward MARKET.
-				{EdgeType: "PARTICIPATES_IN", Direction: "ORG|FACILITY|COMMUNITY|PROGRAM → MARKET", ValidSource: []string{"ORGANIZATION", "FACILITY", "COMMUNITY", "PROGRAM"}, ValidTarget: []string{"MARKET"}},
-				{EdgeType: "TRADED_IN", Direction: "PRODUCT → MARKET", ValidSource: []string{"PRODUCT"}, ValidTarget: []string{"MARKET"}},
-				{EdgeType: "DOMINATES", Direction: "ORG|FACILITY|COMMUNITY → MARKET", ValidSource: []string{"ORGANIZATION", "FACILITY", "COMMUNITY"}, ValidTarget: []string{"MARKET"}},
-				{EdgeType: "HAS_MARKET_SEGMENT", Direction: "MARKET → MARKET", ValidSource: []string{"MARKET"}, ValidTarget: []string{"MARKET"}},
-				{EdgeType: "ADMINISTERS", Direction: "ORGANIZATION|GEO_REGION → ORGANIZATION|PROGRAM|GEO_REGION|FACILITY|DEPOSIT", ValidSource: []string{"ORGANIZATION", "GEO_REGION"}, ValidTarget: []string{"ORGANIZATION", "PROGRAM", "GEO_REGION", "FACILITY", "DEPOSIT"}, Description: "Government hierarchy"},
-				{EdgeType: "EXTRACTS_FROM", Direction: "FACILITY → DEPOSIT", ValidSource: []string{"FACILITY"}, ValidTarget: []string{"DEPOSIT"}},
-				{EdgeType: "MEMBER_OF", Direction: "PERSON → COMMUNITY", ValidSource: []string{"PERSON"}, ValidTarget: []string{"COMMUNITY"}},
-				{EdgeType: "HAS_SUBGROUP", Direction: "COMMUNITY → COMMUNITY", ValidSource: []string{"COMMUNITY"}, ValidTarget: []string{"COMMUNITY"}},
-				{EdgeType: "OPERATES_VIA", Direction: "COMMUNITY|ORG → MEDIA_CHANNEL", ValidSource: []string{"COMMUNITY", "ORGANIZATION"}, ValidTarget: []string{"MEDIA_CHANNEL"}},
-				{EdgeType: "AFFILIATED_WITH", Direction: "COMMUNITY|PERSON → ORGANIZATION", ValidSource: []string{"COMMUNITY", "PERSON"}, ValidTarget: []string{"ORGANIZATION"}},
-
-				// --- DOMAIN edges (knowledge contracts) ---
-				// Domain → Entity/Domain (generic “focus” link).
-				{EdgeType: "FOCUSES_ON", Direction: "DOMAIN → *", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DOMAIN", "ORGANIZATION", "PERSON", "MARKET", "PRODUCT", "PROGRAM", "FACILITY", "GEO_REGION", "COMMUNITY", "MEDIA_CHANNEL", "DEPOSIT"}},
-				// Domain → Actor (principal entities involved in a domain).
-				{EdgeType: "INVOLVES_ACTOR", Direction: "DOMAIN → ORG|PERSON|COMMUNITY", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"ORGANIZATION", "PERSON", "COMMUNITY"}},
-				// Domain/policy source → Geo scope.
-				{EdgeType: "IN_GEO_SCOPE", Direction: "DOMAIN|DECISION_POINT|MECHANISM|ORG|PROGRAM|MARKET → GEO_REGION", ValidSource: []string{"DOMAIN", "DECISION_POINT", "MECHANISM", "ORGANIZATION", "PROGRAM", "MARKET"}, ValidTarget: []string{"GEO_REGION"}},
-				// Domain → About (topic/subject matter).
-				{EdgeType: "ABOUT", Direction: "DOMAIN → *", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DOMAIN", "ORGANIZATION", "PERSON", "MARKET", "PRODUCT", "PROGRAM", "FACILITY", "GEO_REGION", "COMMUNITY", "MEDIA_CHANNEL", "DEPOSIT"}},
-				// Domain → Domain (contract relationships).
-				{EdgeType: "RELATED_DOMAIN", Direction: "DOMAIN → DOMAIN", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DOMAIN"}},
-				{EdgeType: "BROADENS_TO", Direction: "DOMAIN → DOMAIN", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DOMAIN"}},
-				{EdgeType: "NARROWS_TO", Direction: "DOMAIN → DOMAIN", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DOMAIN"}},
-				{EdgeType: "AFFECTS", Direction: "DOMAIN|AFFECTED_ZONE|MECHANISM|ORG|PROGRAM|COMMUNITY|MARKET → DOMAIN|FACILITY|ORGANIZATION|GEO_REGION|PRODUCT|PROGRAM|COMMUNITY|MEDIA_CHANNEL|MARKET", ValidSource: []string{"DOMAIN", "AFFECTED_ZONE", "MECHANISM", "ORGANIZATION", "PROGRAM", "COMMUNITY", "MARKET"}, ValidTarget: []string{"DOMAIN", "FACILITY", "ORGANIZATION", "GEO_REGION", "PRODUCT", "PROGRAM", "COMMUNITY", "MEDIA_CHANNEL", "MARKET"}},
-				{EdgeType: "TRIGGERED_BY", Direction: "AFFECTED_ZONE → EVENT", ValidSource: []string{"AFFECTED_ZONE"}, ValidTarget: []string{"EVENT"}},
-				// DEPENDS_ON is broadly used; allow DOMAIN and existing entity usage.
-				{EdgeType: "DEPENDS_ON", Direction: "* → *", ValidSource: []string{"DOMAIN", "ORGANIZATION", "PERSON", "MARKET", "PRODUCT", "PROGRAM", "FACILITY", "GEO_REGION", "COMMUNITY", "MEDIA_CHANNEL", "DEPOSIT"}, ValidTarget: []string{"DOMAIN", "ORGANIZATION", "PERSON", "MARKET", "PRODUCT", "PROGRAM", "FACILITY", "GEO_REGION", "COMMUNITY", "MEDIA_CHANNEL", "DEPOSIT"}},
-
-				// --- STRATEGIC DECISION LAYER edges ---
-				// SURFACES: domain crystallizes/surfaces decision points and mechanisms during Phase 2 strategic overlay.
-				{EdgeType: "SURFACES", Direction: "DOMAIN → DECISION_POINT|MECHANISM", ValidSource: []string{"DOMAIN"}, ValidTarget: []string{"DECISION_POINT", "MECHANISM"}, Description: "Domain surfaces strategic decision points"},
-				// CONTROLS_ACCESS: strategic gatekeeping (block/enable/delay/monitor).
-				// Source: DECISION_POINT or GOV/ORG/COMMUNITY (gatekeeper). Target: entity being controlled.
-				{EdgeType: "CONTROLS_ACCESS", Direction: "DECISION_POINT|ORG|COMMUNITY|PROGRAM → ORG|FACILITY|PRODUCT|MARKET|PROGRAM|COMMUNITY", ValidSource: []string{"DECISION_POINT", "ORGANIZATION", "COMMUNITY", "PROGRAM"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET", "PROGRAM", "COMMUNITY"}, Description: "Strategic gatekeeping relation"},
-				// IMPOSES_CONDITION: soft power / compliance requirements.
-				{EdgeType: "IMPOSES_CONDITION", Direction: "MECHANISM|ORG|DECISION_POINT|COMMUNITY|PROGRAM → ORG|FACILITY|PRODUCT|MARKET|PROGRAM|COMMUNITY", ValidSource: []string{"MECHANISM", "ORGANIZATION", "DECISION_POINT", "COMMUNITY", "PROGRAM"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET", "PROGRAM", "COMMUNITY"}, Description: "Imposing rules/costs/compliance"},
-				// GATEKEEPS_DECISION: actor controls a strategic decision point.
-				{EdgeType: "GATEKEEPS_DECISION", Direction: "ORG|COMMUNITY|PROGRAM|PERSON → DECISION_POINT", ValidSource: []string{"ORGANIZATION", "COMMUNITY", "PROGRAM", "PERSON"}, ValidTarget: []string{"DECISION_POINT"}, Description: "Actor gatekeeps a strategic decision"},
-				// USES_MECHANISM: agent possesses/uses a control mechanism.
-				{EdgeType: "USES_MECHANISM", Direction: "DECISION_POINT|ORG|COMMUNITY|PROGRAM → MECHANISM", ValidSource: []string{"DECISION_POINT", "ORGANIZATION", "COMMUNITY", "PROGRAM"}, ValidTarget: []string{"MECHANISM"}, Description: "Agent uses control mechanism"},
-				// APPLIES_TO: mechanism scope.
-				{EdgeType: "APPLIES_TO", Direction: "MECHANISM → ORG|FACILITY|PRODUCT|MARKET|COMMUNITY|PROGRAM", ValidSource: []string{"MECHANISM"}, ValidTarget: []string{"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET", "COMMUNITY", "PROGRAM"}, Description: "Mechanism applies to entity"},
-			},
-		},
-		SymmetricEdges: []string{
-			"COMPETES_WITH",
-			"PARTNERS_WITH",
-			"RELATIVE_OF",
-			"RELATED_TO",
-		},
+		EdgeDirection: EdgeDirectionRulesLLM{},
+		SymmetricEdges: nil,
 	}
 	// Keep prompt contract aligned with runtime edge semantics source-of-truth.
 	tr.EdgeDirection.Rules = buildEdgeDirectionRulesFromSemantics()

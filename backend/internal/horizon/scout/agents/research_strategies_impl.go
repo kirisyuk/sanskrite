@@ -2005,23 +2005,7 @@ func generalResearchNameHistoryBlock() string {
 }
 
 func generalResearchExplicitSourceRulesBlock() string {
-	return `EXPLICIT SOURCE RULES (CRITICAL for strict direction semantics):
-- Use ROLE-FIRST direction for OWNS/SUBSIDIARY_OF/INVESTS_IN/ASSURES/CONTROLS (ORG<->ORG): source is defined by semantic role, not by CURRENT FRAGMENT.
-- Use sourceCanonicalPath/sourceType/sourceName when semantic source is different.
-- OWNS: direction is owner -> owned entity. If THIS FRAGMENT is owned by X, set sourceCanonicalPath/sourceType/sourceName = X and keep targetCanonicalPath = THIS FRAGMENT.
-- Never emit reversed OWNS (THIS FRAGMENT -> its owner).
-- INVESTS_IN: direction is investor -> investee. If THIS FRAGMENT is invested in by X, set sourceCanonicalPath/sourceType/sourceName = X and keep targetCanonicalPath = THIS FRAGMENT.
-- Never emit reversed INVESTS_IN (THIS FRAGMENT -> its investor).
-- GATEKEEPS_DECISION: source must be gatekeeper (ORG/GOV/COMMUNITY), target is DECISION_POINT.
-- USES_MECHANISM: source is decision/org/gov/community/program, target is MECHANISM.
-- APPLIES_TO: source is MECHANISM, target is affected entity.
-- CONTROLS_ACCESS / IMPOSES_CONDITION: source is controller/imposer, target is affected entity.
-- For actor↔actor DEPENDS_ON and ORG/FACILITY SUPPLIES_TO, include qualifiers.source_role/target_role (dependent->dependency, supplier->customer).
-- For phase-1 business edges (DEPENDS_ON, SUPPLIES_TO, LOCATED_IN, etc.), keep default source unless evidence explicitly requires otherwise.
-- GEO_REGION exception: when CURRENT FRAGMENT is /loc/... and you discover an organization, community, deposit, program, facility, or person that is in this region, that discovered entity is usually the SOURCE and CURRENT FRAGMENT is the TARGET via LOCATED_IN/OPERATES_IN.
-- For GEO_REGION tasks, never express regional presence as CURRENT FRAGMENT -> entity with OWNS, MEMBER_OF, HAS_SUBGROUP, or similar social/governance edges.
-- Exception: for OWNS/INVESTS_IN/ASSURES/CONTROLS, use explicit source whenever THIS FRAGMENT is the semantic target.
-- For directed ORG->ORG edges above, include qualifiers.source_role and qualifiers.target_role.`
+	return generatedExplicitSourceRulesBlock()
 }
 
 func buildResearchDecompositionGuidanceBlock(fragment *models.HorizonFragment, hints []DecompositionHint, originalQuery string) string {
@@ -2847,7 +2831,7 @@ Use ONLY these relation types: %s.
 Do NOT use DOMINATES, COMPETES_WITH, or other non-market types.
 STRICT DIRECTION/TYPING RULES (MANDATORY):
 - PARTICIPATES_IN direction is participant -> market.
-  - source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM/PERSON.
+  - source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM.
   - target MUST be MARKET and targetCanonicalPath MUST start with /market/.
   - targetCanonicalPath MUST NOT start with /domain/.
   - For ORGANIZATION ↔ MARKET pairs, use PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES (domestic oversight), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES.
@@ -2984,7 +2968,7 @@ STRICT DIRECTION/TYPING RULES (MANDATORY):
   IN_GEO_SCOPE scope_owner->geo_scope,
   AFFECTS impact_source->affected_entity.
 - PARTICIPATES_IN direction is participant -> market.
-  - source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM/PERSON.
+  - source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM.
   - target MUST be MARKET and targetCanonicalPath MUST start with /market/.
   - For ORGANIZATION ↔ MARKET pairs, use PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES (domestic oversight), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES.
   - When CURRENT FRAGMENT is MARKET, use explicit sourceCanonicalPath/sourceType/sourceName for participant -> THIS MARKET.
@@ -3070,7 +3054,7 @@ Use ONLY these relation types: %s.
 Do NOT use generic relation types outside this list.
 STRICT DIRECTION/TYPING RULES (MANDATORY):
 - Domain is config, not a graph node: targetCanonicalPath MUST NOT start with /domain/.
-- PARTICIPATES_IN direction is participant -> market. source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM/PERSON. target MUST be MARKET.
+- PARTICIPATES_IN direction is participant -> market. source MUST be ORGANIZATION/FACILITY/COMMUNITY/PROGRAM. target MUST be MARKET.
 - TRADED_IN direction is PRODUCT -> MARKET for traded commodity/product exposure.
 - OWNS direction is owner -> owned.
 - SUBSIDIARY_OF direction is subsidiary -> parent.
