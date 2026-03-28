@@ -8,11 +8,12 @@ import { useSearchParams } from 'react-router-dom';
 import { ModalWithHeader } from './ModalWithHeader';
 import { ThemeContext } from './ThemeProvider';
 import { api, type DirectedSupplyChainExplorationRequest } from '../lib/api';
-import { LensCanvasDetails } from './LensCanvasDetails';
+import { LensCanvasHome } from './LensCanvasHome';
 import { LensCanvasCockpit } from './LensCanvasCockpit';
 import { LensCanvasProgress } from './LensCanvasProgress';
 import { LensAssembly } from './LensAssembly';
 import { HorizonWatchLensSurface } from './HorizonWatchLensSurface';
+import { HorizonLoading } from './HorizonLoading';
 import { WorldMapPanel } from './WorldMapPanel';
 import { QAPanel } from './QAPanel';
 import { HorizonRealtimeCallouts } from './HorizonRealtimeCallouts';
@@ -20,6 +21,8 @@ import { HorizonDrawers, HorizonPanelType } from './HorizonDrawers';
 import type { HorizonNodeData } from './HorizonGraphNodeTypes';
 import type { AssembleLensRequest } from '../features/horizon/components/hook/AssembleLensRequest';
 import type { ScoutingMode } from '../features/horizon/lib/scoutingMode';
+import { useHorizonRealtimeStore } from '../stores/horizonRealtimeStore';
+import { buildHotPathProgressView, filterHorizonProgressEvents } from './horizonProgressUtils';
 
 /** Lens view modes: Graph | Map | Analysis (plan §1). Graph persists when switching. */
 export type LensViewMode = 'graph' | 'map' | 'analysis' | 'brief';
@@ -29,7 +32,7 @@ export interface LensCanvasProps {
   lensId: string | null;
   projectId?: string | null;
   /** @deprecated Use lensView for graph/map/analysis. Kept for backward compat with initialViewMode. */
-  initialViewMode?: 'assembly' | 'details' | 'cockpit' | 'progress';
+  initialViewMode?: 'assembly' | 'home' | 'cockpit' | 'progress';
   /** Initial lens view (Graph | Map | Analysis). Synced with URL ?view= */
   initialLensView?: LensViewMode;
   showInputInProgress?: boolean;
@@ -77,15 +80,16 @@ type LensCanvasSnapshot = {
   scoutingJobs: any[];
 };
 
-// Keep the last fetched lens payload in memory so incidental remounts or refreshes
-// do not blank the entire canvas with a blocking loader.
+// Keep the last fetched lens payload in memory for same-lens refreshes.
+// When switching lenses we intentionally clear the visible snapshot first,
+// so the user sees the standard loading state instead of stale Home content.
 const lensSnapshotCache = new Map<string, LensCanvasSnapshot>();
 
 export const LensCanvas: React.FC<LensCanvasProps> = ({
   isOpen,
   lensId,
   projectId,
-  initialViewMode = 'details',
+  initialViewMode = 'home',
   initialLensView,
   showInputInProgress = false,
   onAssemble,
@@ -104,8 +108,9 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   const [loading, setLoading] = React.useState(false);
   const [loadingJobs, setLoadingJobs] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [viewMode, setViewMode] = React.useState<'assembly' | 'details' | 'cockpit' | 'progress'>(initialViewMode);
+  const [viewMode, setViewMode] = React.useState<'assembly' | 'home' | 'cockpit' | 'progress'>(initialViewMode);
   const [searchParams, setSearchParams] = useSearchParams();
+  const realtimeEvents = useHorizonRealtimeStore((s) => s.events);
 
   // Lens view: Graph | Map | Analysis. Synced with URL ?view=graph|map|analysis
   const lensViewFromUrl = searchParams.get('view') as LensViewMode | null;
@@ -165,6 +170,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   const [qaHighlightNodeIds, setQaHighlightNodeIds] = React.useState<string[]>([]);
   const [qaHighlightEdgeIds, setQaHighlightEdgeIds] = React.useState<string[]>([]);
   const [qaOpenTrigger, setQaOpenTrigger] = React.useState(0);
+  const visibleLensIdRef = React.useRef<string | null>(null);
 
   // Toolbar container for Cockpit
   // NOTE: Cockpit toolbar is rendered as an overlay inside the graph canvas.
@@ -188,8 +194,49 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
     setViewMode(initialViewMode);
   }, [initialViewMode]);
 
-  // Default UX: when a lens is selected, show Cockpit by default.
-  // When no lens is selected, fall back to Progress.
+  const assemblyFatalError = React.useMemo(() => {
+    const fatal = assemblyStatus?.fatalError;
+    if (!fatal || typeof fatal !== 'object') return null;
+    const message = String(fatal?.message || '').trim();
+    if (!message) return null;
+    return {
+      title: 'Fatal pipeline error',
+      message,
+      code: String(fatal?.code || '').trim() || undefined,
+      phase: String(fatal?.phase || '').trim() || undefined,
+    };
+  }, [assemblyStatus]);
+
+  const progressEvents = React.useMemo(() => filterHorizonProgressEvents(realtimeEvents || [], {
+    lensId,
+    projectId,
+    isCreatingLens,
+    preflightActive: !!preflight?.active,
+    activeCreateCorrelationId,
+    activeCreateSessionId,
+  }), [realtimeEvents, lensId, projectId, isCreatingLens, preflight?.active, activeCreateCorrelationId, activeCreateSessionId]);
+
+  const hotPathProgressView = React.useMemo(() => buildHotPathProgressView(progressEvents), [progressEvents]);
+  const assemblyStageValue = String((assemblyStatus as any)?.stage || assemblyStatus?.phase || '').trim().toLowerCase();
+  const assemblyStatusValue = String(assemblyStatus?.status || '').trim().toLowerCase();
+  const hasActiveAssembly = Boolean(
+    (assemblyStatusValue && assemblyStatusValue !== 'ready')
+    || (assemblyStageValue && assemblyStageValue !== 'ready' && assemblyStageValue !== 'failed'),
+  );
+  const showHomeTab = Boolean(projectId || lensId || lens);
+  const showProgressTab = Boolean(
+    preflight?.active
+    || isCreatingLens
+    || fatalError
+    || assemblyFatalError
+    || hasActiveAssembly
+    || progressEvents.length > 0
+    || hotPathProgressView,
+  );
+
+  // Default UX:
+  // - new/empty lens starts from Home
+  // - existing lenses keep prior behavior unless an explicit mode was requested
   const prevLensIdRef = React.useRef<string | null>(null);
   React.useEffect(() => {
     const prev = prevLensIdRef.current;
@@ -206,30 +253,37 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
     setQaHighlightEdgeIds([]);
 
     if (!lensId) {
-      setViewMode('progress');
+      setViewMode('home');
     } else {
-      // When a lens is created from a query, HorizonPage keeps initialViewMode='progress'
-      // so the user stays in the progress feed. Respect that choice and do not auto-switch.
-      if (initialViewMode === 'progress') {
+      if (initialViewMode === 'progress' && showProgressTab) {
         setViewMode('progress');
       } else if (initialViewMode === 'assembly') {
         setViewMode('assembly');
+      } else if (initialViewMode === 'home') {
+        setViewMode('home');
       } else {
         setViewMode('cockpit');
       }
     }
-  }, [lensId, initialViewMode]);
+  }, [lensId, initialViewMode, showProgressTab]);
 
-  // If no lens is selected and user tries to switch to lens-bound modes, switch back to progress.
+  // If no lens is selected and user tries to switch to lens-bound modes, switch back to Home.
   React.useEffect(() => {
-    if (!lensId && !lens && (viewMode === 'assembly' || viewMode === 'details' || viewMode === 'cockpit')) {
-      setViewMode('progress');
+    if (!lensId && !lens && (viewMode === 'assembly' || viewMode === 'home' || viewMode === 'cockpit')) {
+      setViewMode('home');
     }
   }, [lensId, lens, viewMode]);
+
+  React.useEffect(() => {
+    if (viewMode === 'progress' && !showProgressTab) {
+      setViewMode(showHomeTab ? 'home' : 'progress');
+    }
+  }, [viewMode, showProgressTab, showHomeTab]);
 
   // Load lens data when lensId changes
   React.useEffect(() => {
     if (!isOpen || !lensId) {
+      visibleLensIdRef.current = null;
       setLens(null);
       setAssemblyStatus(null);
       setScoutingJobs([]);
@@ -238,13 +292,20 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
     }
 
     const loadLens = async () => {
-      const cached = lensSnapshotCache.get(lensId);
-      if (cached) {
-        setLens(cached.lens);
-        setAssemblyStatus(cached.assemblyStatus);
-        setScoutingJobs(cached.scoutingJobs || []);
+      const isLensSwitch = visibleLensIdRef.current !== lensId;
+      if (isLensSwitch) {
+        setLens(null);
+        setAssemblyStatus(null);
+        setScoutingJobs([]);
+      } else {
+        const cached = lensSnapshotCache.get(lensId);
+        if (cached) {
+          setLens(cached.lens);
+          setAssemblyStatus(cached.assemblyStatus);
+          setScoutingJobs(cached.scoutingJobs || []);
+        }
       }
-      setLoading(!cached);
+      setLoading(true);
       setError(null);
       try {
         const [lensData, assemblyData, jobsData] = await Promise.all([
@@ -255,10 +316,11 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
         setLens(lensData);
         setAssemblyStatus(assemblyData);
         setScoutingJobs(jobsData.jobs || []);
+        visibleLensIdRef.current = lensId;
         if (initialViewMode !== 'progress') {
           const scopeSize = Array.isArray(lensData?.scope) ? lensData.scope.length : 0;
           if (scopeSize === 0) {
-            setViewMode('assembly');
+            setViewMode('home');
           }
         }
         lensSnapshotCache.set(lensId, {
@@ -362,7 +424,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
         { correlationId, sessionId }
       );
 
-      // Keep local lens snapshot in sync so Details/Scope reflects the change immediately.
+      // Keep local lens snapshot in sync so Home/Scope reflects the change immediately.
       if (res?.lens) {
         setLens(res.lens);
         lensSnapshotCache.set(lensId, {
@@ -417,19 +479,6 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
     return 'Lens';
   };
 
-  const assemblyFatalError = React.useMemo(() => {
-    const fatal = assemblyStatus?.fatalError;
-    if (!fatal || typeof fatal !== 'object') return null;
-    const message = String(fatal?.message || '').trim();
-    if (!message) return null;
-    return {
-      title: 'Fatal pipeline error',
-      message,
-      code: String(fatal?.code || '').trim() || undefined,
-      phase: String(fatal?.phase || '').trim() || undefined,
-    };
-  }, [assemblyStatus]);
-
   return (
     <ModalWithHeader
       title={getTitle()}
@@ -460,8 +509,40 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
             pointerEvents: 'auto',
           }}
         >
-          {(lensId || lens) && (
+          {showHomeTab && (
             <>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={viewMode === 'home'}
+                aria-controls="lens-home-panel"
+                onClick={() => setViewMode('home')}
+                onMouseEnter={(event) => handleTabMouseEnter(event, viewMode === 'home')}
+                onMouseLeave={(event) => handleTabMouseLeave(event, viewMode === 'home')}
+                title="Home"
+                style={{
+                  border: 'none',
+                  background: viewMode === 'home' ? tabActiveBackground : 'transparent',
+                  color: 'var(--text-heading)',
+                  borderRadius: 10,
+                  padding: '6px 8px',
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+                  <path d="M3 10.5 12 3l9 7.5" />
+                  <path d="M5.5 9.5V21h13V9.5" />
+                  <path d="M9.5 21v-6h5v6" />
+                </svg>
+              </button>
+            </>
+          )}
+          {(lensId || lens) ? (
+            <>
+              <div style={{ width: 1, height: 16, background: 'var(--border-subtle)', margin: '0 4px' }} />
               {/* Graph | Map | Analysis — plan §1. Graph persists when switching. */}
               <button
                 type="button"
@@ -563,128 +644,53 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
               >
                 Lens Brief
               </button>
-              <div style={{ width: 1, height: 16, background: 'var(--border-subtle)', margin: '0 4px' }} />
-              <button
-                type="button"
-                role="tab"
-                aria-selected={viewMode === 'details'}
-                aria-controls="lens-details-panel"
-                onClick={() => setViewMode('details')}
-                onMouseEnter={(event) => handleTabMouseEnter(event, viewMode === 'details')}
-                onMouseLeave={(event) => handleTabMouseLeave(event, viewMode === 'details')}
-                title="Details"
-                style={{
-                  border: 'none',
-                  background: viewMode === 'details' ? tabActiveBackground : 'transparent',
-                  color: 'var(--text-heading)',
-                  borderRadius: 10,
-                  padding: '6px 8px',
-                  cursor: 'pointer',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
-                  <circle cx="12" cy="12" r="10" />
-                  <path d="M12 16v-4" />
-                  <path d="M12 8h.01" />
-                </svg>
-              </button>
             </>
-          )}
-          <button
-            type="button"
-            role="tab"
-            aria-selected={viewMode === 'progress'}
-            aria-controls="lens-progress-panel"
-            onClick={() => setViewMode('progress')}
-            onMouseEnter={(event) => handleTabMouseEnter(event, viewMode === 'progress')}
-            onMouseLeave={(event) => handleTabMouseLeave(event, viewMode === 'progress')}
-            title="Progress"
-            style={{
-              border: 'none',
-              background: viewMode === 'progress' ? tabActiveBackground : 'transparent',
-              color: 'var(--text-heading)',
-              borderRadius: 10,
-              padding: '6px 8px',
-              cursor: 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
-              <path d="M9 6h12" />
-              <path d="M9 12h12" />
-              <path d="M9 18h12" />
-              <path d="M3.5 6l1.5 1.5L7.5 5" />
-              <path d="M3.5 12l1.5 1.5L7.5 11" />
-            </svg>
-          </button>
+          ) : null}
+          {showProgressTab ? (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewMode === 'progress'}
+              aria-controls="lens-progress-panel"
+              onClick={() => setViewMode('progress')}
+              onMouseEnter={(event) => handleTabMouseEnter(event, viewMode === 'progress')}
+              onMouseLeave={(event) => handleTabMouseLeave(event, viewMode === 'progress')}
+              title="Progress"
+              style={{
+                border: 'none',
+                background: viewMode === 'progress' ? tabActiveBackground : 'transparent',
+                color: 'var(--text-heading)',
+                borderRadius: 10,
+                padding: '6px 8px',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+                <path d="M9 6h12" />
+                <path d="M9 12h12" />
+                <path d="M9 18h12" />
+                <path d="M3.5 6l1.5 1.5L7.5 5" />
+                <path d="M3.5 12l1.5 1.5L7.5 11" />
+              </svg>
+            </button>
+          ) : null}
         </div>
 
         <div 
-          className={(viewMode === 'assembly' || viewMode === 'cockpit' || viewMode === 'progress' || viewMode === 'details') ? '' : 'space-y-6 py-2'} 
+          className={(viewMode === 'assembly' || viewMode === 'cockpit' || viewMode === 'progress' || viewMode === 'home') ? '' : 'space-y-6 py-2'} 
           style={{ 
             display: 'flex', 
             flexDirection: 'column', 
-            flex: (viewMode === 'assembly' || viewMode === 'cockpit' || viewMode === 'progress' || viewMode === 'details') ? 1 : 'none',
-            minHeight: (viewMode === 'assembly' || viewMode === 'cockpit' || viewMode === 'progress' || viewMode === 'details') ? 0 : 'auto',
-            overflow: (viewMode === 'assembly' || viewMode === 'cockpit' || viewMode === 'progress' || viewMode === 'details') ? 'hidden' : 'visible',
+            flex: (viewMode === 'assembly' || viewMode === 'cockpit' || viewMode === 'progress' || viewMode === 'home') ? 1 : 'none',
+            minHeight: (viewMode === 'assembly' || viewMode === 'cockpit' || viewMode === 'progress' || viewMode === 'home') ? 0 : 'auto',
+            overflow: (viewMode === 'assembly' || viewMode === 'cockpit' || viewMode === 'progress' || viewMode === 'home') ? 'hidden' : 'visible',
           }}
         >
-          {loading && !lens ? (
-            <div
-              style={{
-                flex: 1,
-                minHeight: 0,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: 24,
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  gap: 10,
-                  padding: '16px 20px',
-                  borderRadius: 16,
-                  border: '1px solid var(--border-subtle)',
-                  background: 'var(--bg-elevated)',
-                  boxShadow: '0 12px 40px rgba(0,0,0,0.18)',
-                  minWidth: 220,
-                }}
-              >
-                <style>{`
-                  @keyframes horizon-dot-bounce {
-                    0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
-                    40% { transform: translateY(-6px); opacity: 1; }
-                  }
-                `}</style>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  {[0, 1, 2].map((i) => (
-                    <div
-                      key={i}
-                      style={{
-                        width: 10,
-                        height: 10,
-                        borderRadius: 999,
-                        background: 'var(--accent-primary, #3B82F6)',
-                        animation: 'horizon-dot-bounce 1.1s infinite ease-in-out',
-                        animationDelay: `${i * 0.14}s`,
-                      }}
-                    />
-                  ))}
-                </div>
-                <div style={{ fontSize: 12, fontWeight: 650, color: 'var(--text-secondary-strong)' }}>
-                  Loading lens…
-                </div>
-              </div>
-            </div>
+          {loading && !lens && !!lensId ? (
+            <HorizonLoading label="Loading lens..." />
           ) : error && !lens ? (
           <div className="flex items-center justify-center py-8">
             <div className="text-xs text-center" style={{ color: '#f87171' }}>
@@ -697,7 +703,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
               <LensCanvasProgress 
                 lensId={lensId} 
                 projectId={projectId || lens?.projectId} 
-                showInput={showInputInProgress}
+                showInput={false}
                 onAssemble={onAssemble}
                 isCreatingLens={isCreatingLens}
                 activeCreateCorrelationId={activeCreateCorrelationId}
@@ -724,9 +730,21 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                 />
               </div>
             )}
-            {viewMode === 'details' && lens && (
-              <LensCanvasDetails
+            {viewMode === 'home' && (lens || projectId) && (
+              <LensCanvasHome
                 lens={lens}
+                projectId={projectId || lens?.projectId}
+                showInput={showInputInProgress}
+                onAssemble={onAssemble}
+                onOpenGraph={() => {
+                  setLensView('graph');
+                  setViewMode('cockpit');
+                }}
+                onOpenMap={() => {
+                  setLensView('map');
+                  setViewMode('cockpit');
+                }}
+                isCreatingLens={isCreatingLens}
                 assemblyStatus={assemblyStatus}
                 scoutingJobs={scoutingJobs}
                 loadingJobs={loadingJobs}
@@ -829,57 +847,8 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
               </div>
             </>
             )}
-            {viewMode !== 'progress' && !lens && (
-              <div
-                style={{
-                  flex: 1,
-                  minHeight: 0,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: 24,
-                }}
-              >
-                <div
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    gap: 10,
-                    padding: '16px 20px',
-                    borderRadius: 16,
-                    border: '1px solid var(--border-subtle)',
-                    background: 'var(--bg-elevated)',
-                    boxShadow: '0 12px 40px rgba(0,0,0,0.18)',
-                    minWidth: 220,
-                  }}
-                >
-                  <style>{`
-                    @keyframes horizon-dot-bounce {
-                      0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
-                      40% { transform: translateY(-6px); opacity: 1; }
-                    }
-                  `}</style>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    {[0, 1, 2].map((i) => (
-                      <div
-                        key={i}
-                        style={{
-                          width: 10,
-                          height: 10,
-                          borderRadius: 999,
-                          background: 'var(--accent-primary, #3B82F6)',
-                          animation: 'horizon-dot-bounce 1.1s infinite ease-in-out',
-                          animationDelay: `${i * 0.14}s`,
-                        }}
-                      />
-                    ))}
-                  </div>
-                  <div style={{ fontSize: 12, fontWeight: 650, color: 'var(--text-secondary-strong)' }}>
-                    Loading lens…
-                  </div>
-                </div>
-              </div>
+            {viewMode !== 'progress' && !lens && !!lensId && (
+              <HorizonLoading label="Loading lens..." />
             )}
           </>
         )}

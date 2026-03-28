@@ -15,6 +15,7 @@ import { MapObjectDetail } from './MapObjectDetail';
 import { MapObjectStackPanel } from './MapObjectStackPanel';
 import { SimulationExplanationOverlay, type SimulationExplanationOverlayState } from './SimulationExplanationOverlay';
 import { SimulationMapOverlayPanel, type SimulationMapOverlaySelection } from './SimulationMapOverlayPanel';
+import { LensBottomPaletteShell, LensBottomPaletteTrigger, buildLensBottomPaletteChrome } from './LensBottomPalette';
 import { STATIC_ZONE_DATA, deriveZoneTypeCounts, type StaticZoneFeature, type StaticZoneType } from '../lib/staticZones';
 import {
   STATIC_TRANSPORT_FLOW_DATA,
@@ -803,26 +804,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   );
 
   const mapSearchPaletteChrome = React.useMemo(
-    () => ({
-      triggerBorder: searchOpen
-        ? (isDark ? '1px solid rgba(96,165,250,0.55)' : '1px solid rgba(37,99,235,0.50)')
-        : (isDark ? '1px solid rgba(255,255,255,0.16)' : '1px solid rgba(15,23,42,0.12)'),
-      triggerBackground: searchOpen
-        ? (isDark ? 'rgba(59,130,246,0.22)' : 'rgba(59,130,246,0.14)')
-        : (isDark ? 'rgba(6,10,18,0.72)' : 'rgba(255,255,255,0.86)'),
-      triggerShadow: isDark ? 'drop-shadow(0 16px 40px rgba(0,0,0,0.55))' : 'drop-shadow(0 16px 40px rgba(0,0,0,0.18))',
-      triggerOutline: searchOpen
-        ? (isDark ? 'inset 0 0 0 1px rgba(125,211,252,0.18)' : 'inset 0 0 0 1px rgba(59,130,246,0.10)')
-        : (isDark ? 'inset 0 0 0 1px rgba(255,255,255,0.05)' : 'inset 0 0 0 1px rgba(255,255,255,0.55)'),
-      overlayBackground: isDark ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.4)',
-      panelBackground: 'var(--bg-elevated)',
-      panelBorder: '1px solid var(--border-subtle)',
-      panelShadow: isDark ? '0 20px 60px rgba(0,0,0,0.6)' : '0 20px 60px rgba(0,0,0,0.2)',
-      activeItemBackground: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
-      hoverItemBackground: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
-      activeItemBorder: 'var(--accent-primary, #3B82F6)',
-      subtleSurface: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
-    }),
+    () => buildLensBottomPaletteChrome(isDark ? 'dark' : 'light', searchOpen),
     [isDark, searchOpen],
   );
 
@@ -2328,6 +2310,18 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     setShowAnchorBSuggestions(false);
   }, []);
 
+  const openSearchPalette = React.useCallback(() => {
+    setSearchOpen(true);
+  }, []);
+
+  const toggleSearchPalette = React.useCallback(() => {
+    if (searchOpen) {
+      closeSearchPalette();
+      return;
+    }
+    openSearchPalette();
+  }, [closeSearchPalette, openSearchPalette, searchOpen]);
+
   const closeMapDockOverlays = React.useCallback(() => {
     setActiveDockPanel(null);
   }, []);
@@ -2365,6 +2359,13 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      const key = String(event.key || '').toLowerCase();
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && key === 'k') {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleSearchPalette();
+        return;
+      }
       if (event.key !== 'Escape') return;
       if (scopeDialogOpen && !scopeDialogSubmitting) {
         event.preventDefault();
@@ -2398,6 +2399,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     scopeDialogOpen,
     scopeDialogSubmitting,
     searchOpen,
+    toggleSearchPalette,
   ]);
 
   const openScopeDialog = React.useCallback((result: SupplyChainSearchResult | null) => {
@@ -4103,94 +4105,30 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
           </div>
         </div>
 
-        <button
-          type="button"
-          aria-label="Search map objects or supply links"
-          onClick={() => {
-            setSearchOpen((value) => !value);
-            if (searchOpen) {
-              setSearchQuery('');
-              setSupplySearchError(null);
-            }
-          }}
-          title={searchOpen ? 'Close map search' : 'Find object or supply chain'}
-          style={{
-            position: 'absolute',
-            left: '50%',
-            bottom: 10,
-            transform: 'translateX(-50%)',
-            width: 44,
-            height: 44,
-            borderRadius: 999,
-            border: mapSearchPaletteChrome.triggerBorder,
-            background: mapSearchPaletteChrome.triggerBackground,
-            color: 'var(--text-heading)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            cursor: 'pointer',
-            filter: mapSearchPaletteChrome.triggerShadow,
-            boxShadow: mapSearchPaletteChrome.triggerOutline,
-            backdropFilter: 'blur(8px)',
-            transition: 'background-color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease',
-            zIndex: 4,
-          }}
+        <LensBottomPaletteTrigger
+          open={searchOpen}
+          onClick={() => toggleSearchPalette()}
+          title={searchOpen ? 'Close map search (Ctrl+K)' : 'Find object or supply chain (Ctrl+K)'}
+          ariaLabel={searchOpen ? 'Close map search palette' : 'Open map search palette'}
+          chrome={mapSearchPaletteChrome}
+          bottom={10}
+          zIndex={4}
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <circle cx="11" cy="11" r="7" />
             <path d="m20 20-3.5-3.5" />
           </svg>
-        </button>
+        </LensBottomPaletteTrigger>
 
-        {searchOpen && (
-          <>
-            <div
-              onClick={() => {
-                setSearchOpen(false);
-                setSearchQuery('');
-              }}
-              style={{
-                position: 'absolute',
-                inset: 0,
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'flex-end',
-                paddingBottom: 72,
-                background: mapSearchPaletteChrome.overlayBackground,
-                backdropFilter: 'blur(4px)',
-                animation: 'horizon-map-search-backdrop-in 0.12s ease-out',
-                zIndex: 24,
-              }}
-            >
-              <div
-                onClick={(event) => event.stopPropagation()}
-                style={{
-                  width: 520,
-                  maxWidth: '90vw',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  background: mapSearchPaletteChrome.panelBackground,
-                  border: mapSearchPaletteChrome.panelBorder,
-                  borderRadius: 16,
-                  boxShadow: mapSearchPaletteChrome.panelShadow,
-                  overflow: 'visible',
-                  color: 'var(--text-heading)',
-                  animation: 'horizon-map-search-rise 0.2s cubic-bezier(0.2, 0.9, 0.2, 1)',
-                  transformOrigin: '50% 100%',
-                }}
-              >
-                <style>{`
-                  @keyframes horizon-map-search-backdrop-in {
-                    from { opacity: 0; }
-                    to { opacity: 1; }
-                  }
-                  @keyframes horizon-map-search-rise {
-                    from { opacity: 0; transform: translateY(14px) scale(0.98); }
-                    to { opacity: 1; transform: scale(1) translateY(0); }
-                  }
-                `}</style>
-
+        <LensBottomPaletteShell
+          open={searchOpen}
+          onBackdropClick={closeSearchPalette}
+          chrome={mapSearchPaletteChrome}
+          width={520}
+          maxWidth="90vw"
+          paddingBottom={72}
+          zIndex={24}
+        >
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     {(['objects', 'supply-links'] as const).map((mode) => {
@@ -4585,10 +4523,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
                     </>
                   )}
                 </div>
-              </div>
-            </div>
-          </>
-        )}
+        </LensBottomPaletteShell>
 
         <div style={{
           position: 'absolute', left: 10, bottom: 10, padding: '6px 10px', borderRadius: 8,
@@ -4602,6 +4537,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
           {zonesEnabled ? ` | Zones: ${visibleStaticZonesCount}` : ''}
           {flowsEnabled ? ` | Flows: ${visibleTransportFlowsCount}` : ''}
           {pathLegsEnabled ? ` | Path legs: ${pathLegStats.legCount}` : ''}
+          {routeCatalog.length > 0 ? ' | Dotted route: path exists, exact geometry unknown' : ''}
           {vesselsEnabled ? ' | Vessels (AIS)' : ''}
         </div>
 

@@ -4,22 +4,52 @@
 
 В Horizon одновременно существуют несколько «объёмов внимания»: сырой `lens.Scope`, разрешённые query-пути, view/deferred пути, exposure, материализованные артефакты по линзе, соседи на карте, operational-метрики и симуляция. Раньше похожая логика дублировалась в HTTP-handlers, симуляции и гидраторе, что давало расхождения (один экран видел один набор узлов, другой — другой).
 
-**WorkScope** и пакет `backend/internal/horizon/workscope/` вводят **одну каноническую модель фокуса работы** и **общие правила развёртывания линзы в пути и идентификаторы**, чтобы слои согласованно отвечали на вопрос: «что сейчас в работе для этого tenant/project/lens?».
+**WorkScope** и пакет `backend/internal/horizon/workscope/` вводят **одну каноническую модель фокуса работы** и **общие правила развёртывания линзы в пути и идентификаторы**, чтобы слои согласованно отвечали на вопрос: «какой кусок мира сейчас в работе?». Конкретное действие над этим объёмом теперь должно выражаться отдельным `ExecutionIntent`, а не смешиваться с самим scope.
 
-## Два уровня: тип WorkScope и «пути линзы»
+## Три уровня: WorkScope, ExecutionIntent и «пути линзы»
 
-### 1. `WorkScope` (вход пайплайна)
+### 1. `WorkScope` (стабильный scope-контракт)
 
-Структура **`WorkScope`** — универсальный вход для стадий обогащения графа, материализованных путей, operational-гидрации, распространения сигналов и симуляции.
+Структура **`WorkScope`** — стабильный контракт world-slice для стадий обогащения графа, материализованных путей, operational-гидрации, распространения сигналов и симуляции.
 
 - **`TenantID` / `ProjectID`** — контекст исполнения.
 - **`Refs`** — по смыслу совпадает с **`SimulationBaselineRefs`**: `LensID`, `ScopePaths`, `FragmentIDs`, `FragmentPaths`, `EdgeIDs`, `FactIDs`, ключи/ID артефактов, `SnapshotDigest`.
+- **`Intent`** — только scope semantics: `scopeKind` и boundary/expansion policy. Не ad-hoc действие.
 
 Операции **`Normalize`** и **`Merge`** задают детерминированное приведение: обрезка строк, удаление пустых, дедупликация, сортировка слайсов — чтобы **digest/идемпотентность** и сравнение объёмов были стабильными.
 
 Пакет также даёт **`FromBaselineRefs` / `ToBaselineRefs`** для совместимости с API и хранилищем.
 
-### 2. Разрешение в рабочий набор: `Resolver` и `ResolvedWorkSet`
+### 2. `ExecutionIntent` и `WorkRequest`
+
+Отдельно от стабильного scope теперь существует **`ExecutionIntent`**:
+
+- какой action нужен сейчас
+- какие слои запрошены явно
+- как проектировать результат
+- какой freshness/mutation режим допустим
+
+А **`WorkRequest = WorkScope + ExecutionIntent`** становится универсальным входом для planner/runtime.
+
+Для линзового enrichment это теперь важно ещё и как **runtime policy**, а не только как модель:
+
+- `persist_world_keep_scope` — мир можно дообогатить, но lens scope не расширяется автоматически
+- `persist_world_scope_refs_only` — в scope можно вернуть только те canonical paths, которые явно вошли в request scope
+- `persist_world_expand_scope` — разрешено legacy-style auto expansion
+
+Эта policy сериализуется в job state и затем принудительно соблюдается scout/runtime, чтобы graph enrichment не расширял линзу побочным эффектом.
+
+## Единый принцип расширения линзы
+
+Явное пользовательское расширение `lens.Scope` должно идти только по одному параметрическому пути:
+
+- один контракт explicit scope expansion
+- один сервисный entrypoint
+- разные UI сценарии отличаются только тем, какие canonical paths они подают и каким лимитом explicit adds пользуются
+
+В текущем коде этот принцип выражен через `LensService.ExpandScope(...)`: он добавляет только явно запрошенные canonical paths и не смешивает explicit scope growth с graph enrichment. Любые новые user-facing flows должны компилироваться в тот же контракт, а не вводить отдельную ветку “тут scope добавляем сразу, тут deferred, тут частично”.
+
+### 3. Разрешение в рабочий набор: `Resolver` и `ResolvedWorkSet`
 
 **`Resolver`** (над репозиторием материализованных артефактов) раскрывает `WorkScope` в **`ResolvedWorkSet`**: явные ID артефактов из refs плюс, при заданном `LensID`, выборка **`ListByLens`** с **единым лимитом** из констант пакета (см. ниже). Поведение согласовано с operational hydrator: ошибки `ListByLens` не отменяют явно переданные ID.
 
@@ -50,7 +80,8 @@
 
 ## Кто потребляет
 
-- **Operational metric core / hydrator** — строит цели гидрации из разрешённого scope.
+- **Materialized paths / route overlays** — структурные supply-chain paths и их logistics overlays должны быть отдельными execution layers (`materialized_paths` → `route_overlays`), чтобы route alternatives переиспользовались ниже по стеку.
+- **Operational metric core / hydrator** — строит цели гидрации из разрешённого scope и использует уже материализованный route-overlay layer.
 - **Simulation** — baseline и семена через те же пути линзы и те же правила резолва артефактов.
 - **Scout / Watch** — сбор `WorkScope` из задач и watch-субъектов; ключи идемпотентности опираются на нормализованный scope и digest, где применимо.
 - **HTTP (`internal/http/horizon`)** — фрагменты по линзе, гео-объекты, supply-chain контекст, map activity используют перечисленные хелперы вместо копий логики.
@@ -69,3 +100,5 @@
 ## Связь с operational metrics
 
 Направление «симуляция и гидрация делят один metric core» зафиксировано в [operational-metric-hydration-and-simulation-early-warning.md](operational-metric-hydration-and-simulation-early-warning.md). WorkScope — **конкретный слой общей scope-resolution логики**, о которой там говорится: без дублирования путей линзы и без второго независимого `ListByLens` в симуляции и метриках.
+
+Следующий шаг развития этого слоя и явное разделение kernel-layer contracts зафиксированы в [core-layer-contracts-and-workscope-v2.md](core-layer-contracts-and-workscope-v2.md).

@@ -37,6 +37,7 @@ import {
 } from '../stores/horizonRealtimeStore';
 import { getDomainRegionLabel, getScopeGeoLabel, humanizeCanonicalPath, normalizeCanonicalPath } from '../lib/uiUtils';
 import { isSphereCanonicalPath, isSphereEntity, isSphereType } from '../lib/horizonSphere';
+import { LensBottomPaletteShell, LensBottomPaletteTrigger, buildLensBottomPaletteChrome } from './LensBottomPalette';
 import {
   layoutExpansionWithGroups,
   layoutFullGraph,
@@ -4937,6 +4938,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               : pathStress?.recoveryLatencyHours,
           pathBindingConfidence: typeof leg?.bindingConfidence === 'number' ? leg.bindingConfidence : undefined,
           pathFlowRefs: leg?.flowRefs || [],
+          pathRouteOverlays: Array.isArray((leg as any)?.routeOverlays) ? (leg as any).routeOverlays : [],
+          pathRouteVariantKey: String(leg?.routeVariantKey || '').trim() || undefined,
+          pathTransportViaRefs: leg?.transportViaRefs || [],
+          pathRouteGeometrySource: String(leg?.routeGeometrySource || '').trim() || undefined,
+          pathMode: String(leg?.mode || '').trim() || undefined,
           pathZoneRefs: leg?.zoneRefs || [],
           pathAffectedZoneRefs: leg?.affectedZoneRefs || [],
           pathSpatialSemantics: leg?.spatialSemantics || [],
@@ -15028,6 +15034,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     transition: 'background 0.15s ease, border-color 0.15s ease',
   });
 
+  const graphPaletteTriggerChrome = React.useMemo(
+    () => buildLensBottomPaletteChrome(theme === 'dark' ? 'dark' : 'light', addNodeOpen),
+    [addNodeOpen, theme],
+  );
+
   const actionsOverlayContent = (
     <div
       onClick={(e) => { if (e.target === e.currentTarget) setActionsOverlayOpen(false); }}
@@ -17259,51 +17270,25 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
         {/* Bottom-center quick trigger for Search/Add command palette — hidden when graph empty */}
         {!graphEmpty && (
-        <div
-          style={{
-            position: 'absolute',
-            left: '50%',
-            bottom: 14,
-            transform: 'translateX(-50%)',
-            zIndex: 220,
-            pointerEvents: 'none',
+        <LensBottomPaletteTrigger
+          open={addNodeOpen}
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            toggleCommandPalette();
           }}
+          disabled={!lensId}
+          title={addNodeOpen ? 'Close search / add (Ctrl+K)' : 'Find or add node (Ctrl+K)'}
+          ariaLabel={addNodeOpen ? 'Close search and add palette' : 'Open search and add palette'}
+          chrome={graphPaletteTriggerChrome}
+          bottom={14}
+          zIndex={220}
         >
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              e.preventDefault();
-              toggleCommandPalette();
-            }}
-            disabled={!lensId}
-            title={addNodeOpen ? 'Close search / add (Ctrl+K)' : 'Find or add node (Ctrl+K)'}
-            aria-label={addNodeOpen ? 'Close search and add palette' : 'Open search and add palette'}
-            style={{
-              pointerEvents: 'auto',
-              width: 44,
-              height: 44,
-              borderRadius: 999,
-              border: addNodeOpen
-                ? (theme === 'dark' ? '1px solid rgba(96,165,250,0.55)' : '1px solid rgba(37,99,235,0.50)')
-                : '1px solid var(--border-subtle)',
-              background: addNodeOpen
-                ? (theme === 'dark' ? 'rgba(59,130,246,0.22)' : 'rgba(59,130,246,0.14)')
-                : (theme === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.80)'),
-              color: 'var(--text-heading)',
-              cursor: !lensId ? 'not-allowed' : 'pointer',
-              opacity: !lensId ? 0.5 : 1,
-              filter: theme === 'dark' ? 'drop-shadow(0 16px 40px rgba(0,0,0,0.55))' : 'drop-shadow(0 16px 40px rgba(0,0,0,0.18))',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              backdropFilter: 'blur(8px)',
-              transition: 'background-color 0.18s ease, border-color 0.18s ease',
-            }}
-          >
-            {Icons.Plus}
-          </button>
-        </div>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" />
+              <path d="m20 20-3.5-3.5" />
+            </svg>
+        </LensBottomPaletteTrigger>
         )}
 
         {/* Perf-mode edge info (avoids heavy edge relabel/restyling) */}
@@ -17768,33 +17753,16 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       </div>
 
       {/* Search / Add Command Palette Overlay */}
-      {addNodeOpen && (
-        <div
-          style={{
-            position: 'absolute',
-            inset: 0,
-            zIndex: 260,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'flex-end',
-            paddingBottom: 72,
-            background: theme === 'dark' ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.4)',
-            backdropFilter: 'blur(4px)',
-            animation: 'horizon-command-backdrop-in 0.12s ease-out',
-          }}
-          onClick={() => closeAddNode()}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: 8,
-              marginBottom: 8,
-            }}
-          >
+      <LensBottomPaletteShell
+        open={addNodeOpen}
+        onBackdropClick={closeAddNode}
+        chrome={graphPaletteTriggerChrome}
+        width={520}
+        maxWidth="90vw"
+        paddingBottom={72}
+        zIndex={260}
+        topContent={
+          <>
             {graphIntentLoading && !graphIntentPlan && (
               <>
                 <style>{`
@@ -17865,34 +17833,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 </button>
               </div>
             )}
-          </div>
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              width: 520,
-              maxWidth: '90vw',
-              display: 'flex',
-              flexDirection: 'column',
-              background: theme === 'dark' ? 'var(--bg-elevated)' : 'var(--bg-elevated)',
-              border: '1px solid var(--border-subtle)',
-              borderRadius: 16,
-              boxShadow: theme === 'dark' ? '0 20px 60px rgba(0,0,0,0.6)' : '0 20px 60px rgba(0,0,0,0.2)',
-              overflow: 'hidden',
-              animation: 'horizon-command-rise 0.2s cubic-bezier(0.2, 0.9, 0.2, 1)',
-              transformOrigin: '50% 100%',
-            }}
-          >
-            <style>{`
-              @keyframes horizon-command-backdrop-in {
-                from { opacity: 0; }
-                to { opacity: 1; }
-              }
-              @keyframes horizon-command-rise {
-                from { opacity: 0; transform: translateY(14px) scale(0.98); }
-                to { opacity: 1; transform: scale(1) translateY(0); }
-              }
-            `}</style>
-
+          </>
+        }
+      >
             <div style={{ display: 'flex', alignItems: 'center', padding: '14px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
               <div style={{ marginRight: 12, color: 'var(--text-secondary-strong)', display: 'flex' }}>
                 {Icons.Search}
@@ -18241,9 +18184,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                 </div>
               </div>
             </div>
-          </div>
-        </div>
-      )}
+      </LensBottomPaletteShell>
 
 
       {/* Policy Impact Modeler Overlay */}

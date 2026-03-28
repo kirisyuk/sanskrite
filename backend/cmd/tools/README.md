@@ -10,6 +10,7 @@
 - [Нормализация данных](#нормализация-данных)
 - [Заполнение индексов](#заполнение-индексов)
 - [Проверка консистентности](#проверка-консистентности)
+- [Геометрия supply-chain маршрутов](#геометрия-supply-chain-маршрутов)
 - [Дополнительные утилиты](#дополнительные-утилиты)
 
 ---
@@ -1069,6 +1070,60 @@ go run ./cmd/tools/horizon_deduplicate_fragments --project=etigram --dry-run=fal
 - `--start-after` - начать после указанного Firestore document ID
 - `--cursor-file` - файл для сохранения/загрузки курсора
 - `--save-cursor-every-pages` - периодичность сохранения курсора
+
+## Геометрия supply-chain маршрутов
+
+### `horizon_backfill_supply_link_routes`
+
+**Назначение:** чинит route variants у `SUPPLY_LINK`, обогащает `SUPPLY_CHAIN_PATH` legs реальной геометрией там, где она известна, и уводит unresolved маршруты в candidate queue вместо псевдо-линий.
+
+**Что делает:**
+1. Сканирует `horizon_fragments` типа `SUPPLY_LINK` и нормализует distinct route variants из:
+   - текущих `transportViaRefs`
+   - `qualifiers.routeVariants`
+   - `horizon_route_observations`
+2. Сканирует `horizon_materialized_artifacts` вида `SUPPLY_CHAIN_PATH` и для каждого leg:
+   - восстанавливает `routeVariantKey`
+   - пытается разрешить route geometry по слоям доверия:
+     - `horizon_route_geometry_profiles`
+     - curated flow catalog (`flowRefs`)
+     - `HorizonMonitor.Route` у route-like facilities / chokepoints
+     - если ничего нет, оставляет `fragmentary_waypoint_sequence`
+3. При `--apply` пишет unresolved legs в `horizon_route_geometry_candidates`, чтобы их можно было вручную довыверить и потом завести в profile dictionary.
+
+**Использование (dry-run):**
+```bash
+go run ./cmd/tools/horizon_backfill_supply_link_routes \
+  --project=etigram \
+  --tenant=global \
+  --page-size=50 \
+  --limit=200
+```
+
+**Применить:**
+```bash
+go run ./cmd/tools/horizon_backfill_supply_link_routes \
+  --project=etigram \
+  --tenant=global \
+  --page-size=50 \
+  --apply
+```
+
+**Флаги:**
+- `--project` - GCP project ID (по умолчанию env или `etigram`)
+- `--tenant` (default: `global`) - tenant id
+- `--page-size` (default: `100`) - размер страницы Firestore scan
+- `--limit` (default: `0`) - максимум документов каждого прохода (`0` = all)
+- `--start-after` - resume cursor по document id
+- `--sleep-per-page-ms` (default: `100`) - пауза между страницами
+- `--candidate-report` - записать unresolved route aggregates в JSON report
+- `--candidate-report-limit` (default: `1000`) - максимум aggregates в JSON report
+- `--candidate-report-every-pages` (default: `0`) - писать checkpoint JSON report каждые `N` страниц artifact scan (`0` = только финальная запись)
+- `--apply` - реально писать updates/candidates; без него tool работает как dry-run
+
+**Для долгих full-runs:** полезно запускать с `--candidate-report` и `--candidate-report-every-pages=10`, чтобы получать промежуточный snapshot unresolved routes до завершения полного scan.
+
+---
 
 ### Обработка ошибок
 

@@ -32,6 +32,7 @@ import {
   resolvedArtifactLegIndex,
   type MapRouteVisibilitySelection,
 } from '../lib/mapRouteVisibility';
+import { STATIC_TRANSPORT_FLOW_DATA, type TransportFlowFeature } from '../lib/staticTransportFlows';
 
 const SRC = 'geo-edges';
 const ENDPOINT_SRC = 'geo-edge-endpoints';
@@ -496,6 +497,19 @@ function artifactLegStringList(leg: any, ...keys: string[]): string[] {
   const value = artifactLegField<unknown>(leg, ...keys);
   if (!Array.isArray(value)) return [];
   return value.map((item) => sanitizeOverlayToken(String(item || ''))).filter(Boolean);
+}
+
+function artifactLegCoordinateList(leg: any, ...keys: string[]): [number, number][] {
+  const value = artifactLegField<unknown>(leg, ...keys);
+  if (!Array.isArray(value)) return [];
+  const coords: [number, number][] = [];
+  for (const item of value) {
+    const lat = Number((item as any)?.lat);
+    const lon = Number((item as any)?.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    coords.push([lon, lat]);
+  }
+  return dedupeSequentialPoints(coords);
 }
 
 function directStrokeColor(theme: ThemeMode): string {
@@ -1241,6 +1255,83 @@ function dedupeSequentialPoints(points: [number, number][]): [number, number][] 
     out.push([lon, lat]);
   }
   return out;
+}
+
+function distanceSq(a: [number, number], b: [number, number]): number {
+  const dx = a[0] - b[0];
+  const dy = a[1] - b[1];
+  return dx * dx + dy * dy;
+}
+
+function orientLineForEndpoints(line: [number, number][], start: [number, number], end: [number, number]): [number, number][] {
+  if (line.length < 2) return line;
+  const first = line[0];
+  const last = line[line.length - 1];
+  const direct = distanceSq(start, first) + distanceSq(end, last);
+  const reverse = distanceSq(start, last) + distanceSq(end, first);
+  return reverse < direct ? [...line].reverse() : line;
+}
+
+const MAX_FLOW_ENDPOINT_CONNECT_KM = 420;
+
+function maybeConnectEndpoints(line: [number, number][], fallback: [number, number][]): [number, number][] | null {
+  if (line.length < 2 || fallback.length < 2) return line;
+  const start = fallback[0];
+  const end = fallback[fallback.length - 1];
+  const oriented = orientLineForEndpoints(line, start, end);
+  const startGapKm = approximateDistanceKm(start[0], start[1], oriented[0][0], oriented[0][1]);
+  const endGapKm = approximateDistanceKm(end[0], end[1], oriented[oriented.length - 1][0], oriented[oriented.length - 1][1]);
+  if (startGapKm > MAX_FLOW_ENDPOINT_CONNECT_KM || endGapKm > MAX_FLOW_ENDPOINT_CONNECT_KM) {
+    return null;
+  }
+  const out = [...oriented];
+  if (distanceSq(start, out[0]) > 1e-7) out.unshift(start);
+  if (distanceSq(end, out[out.length - 1]) > 1e-7) out.push(end);
+  return dedupeSequentialPoints(out);
+}
+
+function lineOptionsFromFeature(feature: TransportFlowFeature | undefined): [number, number][][] {
+  const geometry = feature?.geometry;
+  if (!geometry) return [];
+  if (geometry.type === 'LineString') return [dedupeSequentialPoints((geometry.coordinates || []) as [number, number][])];
+  if (geometry.type === 'MultiLineString') {
+    return ((geometry.coordinates || []) as [number, number][][]).map((line) => dedupeSequentialPoints(line));
+  }
+  return [];
+}
+
+function selectFlowGeometry(
+  flowRefs: string[],
+  fallbackCoords: [number, number][],
+  flowById: Map<string, TransportFlowFeature>,
+): { coords: [number, number][]; geometrySource: 'flow' | 'fragment' } {
+  if (fallbackCoords.length < 2) return { coords: fallbackCoords, geometrySource: 'fragment' };
+  if (flowRefs.length === 0) {
+    return { coords: fallbackCoords, geometrySource: 'fragment' };
+  }
+  const start = fallbackCoords[0];
+  const end = fallbackCoords[fallbackCoords.length - 1];
+  let best: { coords: [number, number][]; score: number } | null = null;
+  for (const ref of flowRefs) {
+    const feature = flowById.get(ref);
+    for (const option of lineOptionsFromFeature(feature)) {
+      if (option.length < 2) continue;
+      const oriented = orientLineForEndpoints(option, start, end);
+      const score = distanceSq(start, oriented[0]) + distanceSq(end, oriented[oriented.length - 1]);
+      const connected = maybeConnectEndpoints(oriented, fallbackCoords);
+      if (!connected || connected.length < 2) continue;
+      if (!best || score < best.score) {
+        best = { coords: connected, score };
+      }
+    }
+  }
+  if (best) return { coords: best.coords, geometrySource: 'flow' };
+  return { coords: fallbackCoords, geometrySource: 'fragment' };
+}
+
+function isApproximateRouteGeometrySource(value: string): boolean {
+  const raw = String(value || '').trim().toLowerCase();
+  return raw === 'fragmentary_waypoint_sequence' || raw === 'partial_segment_geometry';
 }
 
 function roundCoord(value: number, digits = 6): number {
@@ -3036,6 +3127,7 @@ function buildSupplyPathFeatures(
     score: number;
     labelText: string;
     criticality: number;
+    geometrySource: 'exact' | 'flow' | 'fragment';
     primaryMechanism?: string;
     riskTag?: string;
     stressFocus: boolean;
@@ -3064,6 +3156,11 @@ function buildSupplyPathFeatures(
 
   const byRouteKey = new Map<string, CandidateRoute>();
   const stressEnabled = Boolean(simulationStressSelection?.enabled);
+  const flowById = new Map<string, TransportFlowFeature>();
+  for (const feature of STATIC_TRANSPORT_FLOW_DATA.features || []) {
+    const id = String(feature?.id || '').trim();
+    if (id) flowById.set(id, feature);
+  }
   const stressedArtifactIds = new Set(
     (simulationStressSelection?.artifactIds || []).map((value) => String(value || '').trim()).filter(Boolean),
   );
@@ -3102,13 +3199,23 @@ function buildSupplyPathFeatures(
       ));
 
       const transportViaRefs = artifactLegStringList(leg, 'transportViaRefs', 'TransportViaRefs');
+      const routeVariantKey = artifactLegString(leg, 'routeVariantKey', 'RouteVariantKey') || transportViaRefs.join('|') || 'direct';
       const refs = [supplierRef, ...transportViaRefs, customerRef];
-      const coordinates = dedupeSequentialPoints(
+      const fallbackCoordinates = dedupeSequentialPoints(
         refs
           .map((ref) => coordsByPath.get(ref))
           .filter((point): point is { lon: number; lat: number } => Boolean(point))
           .map((point) => [point.lon, point.lat] as [number, number]),
       );
+      const explicitCoordinates = artifactLegCoordinateList(leg, 'routeCoordinates', 'RouteCoordinates');
+      const flowRefs = artifactLegStringList(leg, 'flowRefs', 'FlowRefs');
+      const routeGeometrySource = artifactLegString(leg, 'routeGeometrySource', 'RouteGeometrySource');
+      const explicitGeometrySource: 'exact' | 'fragment' = isApproximateRouteGeometrySource(routeGeometrySource) ? 'fragment' : 'exact';
+      const selectedGeometry = explicitCoordinates.length >= 2
+        ? { coords: explicitCoordinates, geometrySource: explicitGeometrySource }
+        : selectFlowGeometry(flowRefs, fallbackCoordinates, flowById);
+      const coordinates = selectedGeometry.coords;
+      const routeGeometryKind = selectedGeometry.geometrySource;
       if (coordinates.length < 2) continue;
 
       const directDistanceKm = approximateDistanceKm(
@@ -3117,11 +3224,11 @@ function buildSupplyPathFeatures(
         coordinates[coordinates.length - 1][0],
         coordinates[coordinates.length - 1][1],
       );
-      const routeKey = `${stablePairKey(supplierRef, customerRef)}::${productRef}`;
+      const routeKey = `${stablePairKey(supplierRef, customerRef)}::${productRef}::${routeVariantKey}`;
       const score =
         Math.min(directDistanceKm, 5000) * 0.07
         + transportViaRefs.length * 24
-        + (artifactLegStringList(leg, 'flowRefs', 'FlowRefs').length > 0 ? 18 : 0)
+        + (flowRefs.length > 0 ? 18 : 0)
         + (artifactLegStringList(leg, 'zoneRefs', 'ZoneRefs').length > 0 ? 10 : 0)
         + (artifactLegStringList(leg, 'affectedZoneRefs', 'AffectedZoneRefs').length > 0 ? 10 : 0)
         + (multiLegPath ? 22 : 0)
@@ -3140,15 +3247,12 @@ function buildSupplyPathFeatures(
         supplierRef,
         customerRef,
         transportViaRefs,
-        coordinates: stitchSupplyRouteCoordinates(
-          [coordinates[0], coordinates[coordinates.length - 1]],
-          `supply:${routeKey}`,
-          directDistanceKm >= 1200 ? 3 : directDistanceKm >= 250 ? 2 : 1,
-        ),
+        coordinates: dedupeSequentialPoints(coordinates),
         directDistanceKm,
         score,
         labelText: buildSupplyLabelText(artifact, productRef, supplierRef, customerRef, transportViaRefs, objectByPath, focusObject, riskTag),
         criticality,
+        geometrySource: routeGeometryKind,
         primaryMechanism,
         riskTag,
         stressFocus,
@@ -3224,6 +3328,8 @@ function buildSupplyPathFeatures(
         riskTag: route.riskTag || '',
         stressFocusRoute: stressFocus ? 1 : 0,
         criticality: route.criticality,
+        geometrySource: route.geometrySource,
+        approximateGeometry: route.geometrySource === 'fragment' ? 1 : 0,
         renderPriority: (kind === 'primary' ? 28 : kind === 'indirect' ? 24 : 20) + (stressFocus ? 12 : 0),
         baseOpacity: clamp(visual.baseOpacity + opacityBoost + (stressFocus ? 0.12 : 0), 0.16, 0.9),
         baseWidth: clamp(visual.baseWidth * widthMultiplier * (stressFocus ? 1.18 : 1), 0.96, 5.2),
@@ -4284,7 +4390,12 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
           0.84,
         ],
       ]),
-      'line-dasharray': ['literal', [1, 0]],
+      'line-dasharray': [
+        'case',
+        ['==', ['get', 'approximateGeometry'], 1],
+        ['literal', [0.7, 2.5]],
+        ['literal', [1, 0]],
+      ],
     },
   });
 
@@ -4402,7 +4513,12 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': ['get', 'color'],
-      'line-dasharray': ['literal', [1.4, 1.9]],
+      'line-dasharray': [
+        'case',
+        ['==', ['get', 'approximateGeometry'], 1],
+        ['literal', [0.8, 2.2]],
+        ['literal', [1.4, 1.9]],
+      ],
       'line-width': [
         'case',
         ['boolean', ['feature-state', 'active'], false],
@@ -4529,6 +4645,8 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
       ]),
       'line-dasharray': [
         'case',
+        ['==', ['get', 'approximateGeometry'], 1],
+        ['literal', [0.7, 2.4]],
         ['==', ['get', 'channel'], 'propagation'],
         ['literal', [1.2, 1.6]],
         ['literal', [1, 0]],
@@ -4576,6 +4694,8 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
       ]),
       'line-dasharray': [
         'case',
+        ['==', ['get', 'approximateGeometry'], 1],
+        ['literal', [0.7, 2.4]],
         ['==', ['get', 'channel'], 'propagation'],
         ['literal', [1.2, 1.6]],
         ['literal', [1, 0]],

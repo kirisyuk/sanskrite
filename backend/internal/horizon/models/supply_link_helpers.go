@@ -3,9 +3,17 @@ package models
 import (
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
+
+type SupplyLinkRouteVariant struct {
+	VariantKey       string   `json:"variantKey,omitempty" firestore:"variantKey,omitempty"`
+	TransportViaRefs []string `json:"transportViaRefs,omitempty" firestore:"transportViaRefs,omitempty"`
+	VesselType       string   `json:"vesselType,omitempty" firestore:"vesselType,omitempty"`
+	Confidence       float64  `json:"confidence,omitempty" firestore:"confidence,omitempty"`
+}
 
 // BuildSupplyLinkCanonicalPath generates a canonical path for a SupplyLink fragment.
 // Format: /supply-link/{tenant}/{supplier-slug}/{product-slug}/{customer-slug}
@@ -26,6 +34,160 @@ func BuildSupplyLinkCanonicalPath(tenantID string, supplierRef, productRef, cust
 	customerSlug := buildSupplyLinkEndpointToken("end-consumer", customerRef)
 
 	return fmt.Sprintf("/supply-link/%s/%s/%s/%s", tenantID, supplierSlug, productSlug, customerSlug), nil
+}
+
+func NormalizeTransportViaRefs(refs []string) []string {
+	seen := make(map[string]struct{}, len(refs))
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		if _, ok := seen[ref]; ok {
+			continue
+		}
+		seen[ref] = struct{}{}
+		out = append(out, ref)
+	}
+	return out
+}
+
+func BuildSupplyLinkRouteVariantKey(transportViaRefs []string) string {
+	normalized := NormalizeTransportViaRefs(transportViaRefs)
+	if len(normalized) == 0 {
+		return "direct"
+	}
+	return "via-" + shortPathHash(strings.Join(normalized, "\n"))
+}
+
+func NewSupplyLinkRouteVariant(transportViaRefs []string, vesselType string, confidence float64) SupplyLinkRouteVariant {
+	normalized := NormalizeTransportViaRefs(transportViaRefs)
+	if confidence < 0 {
+		confidence = 0
+	}
+	return SupplyLinkRouteVariant{
+		VariantKey:       BuildSupplyLinkRouteVariantKey(normalized),
+		TransportViaRefs: normalized,
+		VesselType:       strings.TrimSpace(vesselType),
+		Confidence:       confidence,
+	}
+}
+
+func ExtractSupplyLinkRouteVariants(
+	qualifiers map[string]interface{},
+	legacyTransportViaRefs []string,
+	legacyVesselType string,
+	legacyConfidence float64,
+) []SupplyLinkRouteVariant {
+	raw := interface{}(nil)
+	if qualifiers != nil {
+		raw = qualifiers["routeVariants"]
+	}
+	decoded := decodeSupplyLinkRouteVariants(raw)
+	if len(decoded) == 0 {
+		return []SupplyLinkRouteVariant{
+			NewSupplyLinkRouteVariant(legacyTransportViaRefs, legacyVesselType, legacyConfidence),
+		}
+	}
+	for idx := range decoded {
+		decoded[idx] = NormalizeSupplyLinkRouteVariant(decoded[idx])
+	}
+	return MergeSupplyLinkRouteVariants(nil, decoded)
+}
+
+func MergeSupplyLinkRouteVariants(existing, incoming []SupplyLinkRouteVariant) []SupplyLinkRouteVariant {
+	if len(existing) == 0 && len(incoming) == 0 {
+		return nil
+	}
+	merged := make(map[string]SupplyLinkRouteVariant, len(existing)+len(incoming))
+	order := make([]string, 0, len(existing)+len(incoming))
+	apply := func(items []SupplyLinkRouteVariant) {
+		for _, item := range items {
+			item = NormalizeSupplyLinkRouteVariant(item)
+			if strings.TrimSpace(item.VariantKey) == "" {
+				continue
+			}
+			if current, ok := merged[item.VariantKey]; ok {
+				if item.Confidence > current.Confidence {
+					current.Confidence = item.Confidence
+				}
+				if strings.TrimSpace(current.VesselType) == "" {
+					current.VesselType = strings.TrimSpace(item.VesselType)
+				}
+				if len(current.TransportViaRefs) == 0 && len(item.TransportViaRefs) > 0 {
+					current.TransportViaRefs = append([]string(nil), item.TransportViaRefs...)
+				}
+				merged[item.VariantKey] = current
+				continue
+			}
+			merged[item.VariantKey] = item
+			order = append(order, item.VariantKey)
+		}
+	}
+	apply(existing)
+	apply(incoming)
+	out := make([]SupplyLinkRouteVariant, 0, len(order))
+	for _, key := range order {
+		out = append(out, merged[key])
+	}
+	return out
+}
+
+func PrimarySupplyLinkRouteVariant(variants []SupplyLinkRouteVariant) *SupplyLinkRouteVariant {
+	if len(variants) == 0 {
+		return nil
+	}
+	bestIdx := 0
+	for idx := 1; idx < len(variants); idx++ {
+		if variants[idx].Confidence > variants[bestIdx].Confidence {
+			bestIdx = idx
+			continue
+		}
+		if variants[idx].Confidence == variants[bestIdx].Confidence && len(variants[idx].TransportViaRefs) > len(variants[bestIdx].TransportViaRefs) {
+			bestIdx = idx
+		}
+	}
+	best := NormalizeSupplyLinkRouteVariant(variants[bestIdx])
+	return &best
+}
+
+func NormalizeSupplyLinkRouteVariant(variant SupplyLinkRouteVariant) SupplyLinkRouteVariant {
+	variant.TransportViaRefs = NormalizeTransportViaRefs(variant.TransportViaRefs)
+	variant.VesselType = strings.TrimSpace(variant.VesselType)
+	if strings.TrimSpace(variant.VariantKey) == "" {
+		variant.VariantKey = BuildSupplyLinkRouteVariantKey(variant.TransportViaRefs)
+	}
+	return variant
+}
+
+func decodeSupplyLinkRouteVariants(raw interface{}) []SupplyLinkRouteVariant {
+	if raw == nil {
+		return nil
+	}
+	switch value := raw.(type) {
+	case []SupplyLinkRouteVariant:
+		out := make([]SupplyLinkRouteVariant, 0, len(value))
+		for _, item := range value {
+			out = append(out, NormalizeSupplyLinkRouteVariant(item))
+		}
+		return out
+	case []map[string]interface{}, []interface{}:
+		payload, err := json.Marshal(value)
+		if err != nil {
+			return nil
+		}
+		var out []SupplyLinkRouteVariant
+		if err := json.Unmarshal(payload, &out); err != nil {
+			return nil
+		}
+		for idx := range out {
+			out[idx] = NormalizeSupplyLinkRouteVariant(out[idx])
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func buildSupplyLinkEndpointToken(fallback string, ref *string) string {

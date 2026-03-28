@@ -67,6 +67,9 @@ func TestPathToMaterializedPayload_IncludesViaNodesAndLegs(t *testing.T) {
 	if len(legs[0].TransportViaNodeIndices) == 0 {
 		t.Fatal("expected transportViaNodeIndices on leg")
 	}
+	if legs[0].RouteVariantKey == "" {
+		t.Fatal("expected routeVariantKey on leg")
+	}
 	if len(legs[0].FlowRefs) == 0 {
 		t.Fatal("expected flow bindings on leg")
 	}
@@ -142,5 +145,75 @@ func TestPathToMaterializedPayload_PreservesOptionalVesselType(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected vesselType qualifier on logistics edge")
+	}
+}
+
+func TestPrepareMaterializedPathArtifactsBatch_GroupsRouteVariantsByStructuralKey(t *testing.T) {
+	builder := NewSupplyChainPathBuilder(nil, nil, nil)
+	paths := []*SupplyChainPath{
+		{
+			Segments: []PathSegment{{
+				SupplierRef:             "/org/us/supplier",
+				ProductRef:              "/product/mining/iron-ore",
+				CustomerRef:             "/org/io/customer",
+				SupplyLinkCanonicalPath: "/supply-link/global/supplier/product/customer",
+				RouteVariantKey:         "via-suez",
+				TransportViaRefs:        []string{"/fac/eg/suez-terminal"},
+				Confidence:              0.81,
+			}},
+		},
+		{
+			Segments: []PathSegment{{
+				SupplierRef:             "/org/us/supplier",
+				ProductRef:              "/product/mining/iron-ore",
+				CustomerRef:             "/org/io/customer",
+				SupplyLinkCanonicalPath: "/supply-link/global/supplier/product/customer",
+				RouteVariantKey:         "via-cape",
+				TransportViaRefs:        []string{"/fac/za/cape-of-good-hope-terminal"},
+				Confidence:              0.79,
+			}},
+		},
+	}
+	canonicalKey := BuildStructuralCanonicalKey("global", paths[0].Segments)
+	artifacts, keys, err := builder.PrepareMaterializedPathArtifactsBatch(
+		context.Background(),
+		paths,
+		"global",
+		"lens-1",
+		[]string{canonicalKey, canonicalKey},
+	)
+	if err != nil {
+		t.Fatalf("PrepareMaterializedPathArtifactsBatch() error = %v", err)
+	}
+	if len(artifacts) != 1 {
+		t.Fatalf("artifacts=%d, want 1", len(artifacts))
+	}
+	if len(keys) != 1 || keys[0] != canonicalKey {
+		t.Fatalf("keys=%v, want [%s]", keys, canonicalKey)
+	}
+	parsed, err := models.ParseSupplyChainPathPayload(artifacts[0].Payload)
+	if err != nil {
+		t.Fatalf("ParseSupplyChainPathPayload() error = %v", err)
+	}
+	if len(parsed.Legs) != 1 {
+		t.Fatalf("legs=%d, want 1 structural leg", len(parsed.Legs))
+	}
+	if len(parsed.Legs[0].RouteOverlays) != 2 {
+		t.Fatalf("routeOverlays=%d, want 2", len(parsed.Legs[0].RouteOverlays))
+	}
+}
+
+func TestSupplyChainPathBuilder_MaterializationStageNamesIncludeRouteOverlays(t *testing.T) {
+	builder := NewSupplyChainPathBuilder(nil, nil, nil)
+	stageNames := builder.MaterializationStageNames()
+	found := false
+	for _, stage := range stageNames {
+		if stage == string(SupplyChainMaterializationStageRouteOverlays) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("stages=%v, want route_overlays", stageNames)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	hlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/workscope"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -23,6 +24,7 @@ type scopeScoutLensNodeRequest struct {
 	// Optional: enables specialized scout/research modules (e.g., ["management","products_and_services"])
 	Specialties []string                              `json:"specialties,omitempty"`
 	Exploration *scopeScoutDirectedExplorationRequest `json:"exploration,omitempty"`
+	ScopePolicy string                                `json:"scopePolicy,omitempty"`
 }
 
 type scopeScoutLensNodeResponse struct {
@@ -51,6 +53,17 @@ func specialtiesForScopeScoutMode(mode string) []string {
 		return []string{taxonomy.SpecialtyManagement, taxonomy.SpecialtyEquity}
 	default:
 		return nil
+	}
+}
+
+func normalizeLensScopePolicy(raw string, def string) string {
+	switch strings.TrimSpace(raw) {
+	case workscope.MutationModePersistWorldKeepScope,
+		workscope.MutationModePersistWorldScopeRefsOnly,
+		workscope.MutationModePersistWorldExpandScope:
+		return strings.TrimSpace(raw)
+	default:
+		return def
 	}
 }
 
@@ -136,23 +149,6 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Ensure scope contains this canonical path for node-scoped requests regardless of runtime branch.
-	scopeAdded := false
-	{
-		seen := map[string]struct{}{}
-		for _, p := range lens.Scope {
-			p = strings.TrimSpace(p)
-			if p == "" {
-				continue
-			}
-			seen[p] = struct{}{}
-		}
-		if _, ok := seen[targetCanonicalPath]; !ok {
-			lens.Scope = append(lens.Scope, targetCanonicalPath)
-			scopeAdded = true
-		}
-	}
-
 	// Attach realtime ctx (best-effort)
 	ctx := rtctx.With(r.Context(), rtctx.Context{
 		TenantID:      authInfo.TenantID,
@@ -161,6 +157,17 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 		CorrelationID: correlationID,
 		SessionID:     sessionID,
 	})
+	expansion, err := h.service.Lens().ExpandScope(ctx, lens, hlens.ScopeExpansionRequest{
+		LensID:         lens.ID,
+		CanonicalPaths: []string{targetCanonicalPath},
+		MaxAdds:        1,
+		Reason:         "scope_scout",
+	})
+	if err != nil {
+		http.Error(w, "Failed to expand lens scope", http.StatusInternalServerError)
+		return
+	}
+	scopeAdded := expansion.ScopeChanged
 
 	if shouldRouteDirectedExplorationToOneHop(targetCanonicalPath, directedExploration) {
 		if h.oneHopDownstreamService == nil || h.scoutingJobsRepo == nil {
@@ -172,9 +179,6 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 		if err != nil {
 			http.Error(w, "Failed to enqueue one-hop downstream job: "+strings.TrimSpace(err.Error()), http.StatusServiceUnavailable)
 			return
-		}
-		if scopeAdded {
-			_ = h.service.Lens().UpdateLens(hlens.WithSkipScouting(ctx), lens)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Correlation-Id", correlationID)
@@ -253,6 +257,11 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 			"forceDeepScout":                true,
 			"relationChildSchedulingOptIn":  true, // User explicitly requested hop depth — allow relation children regardless of domain expansion
 		}
+		request := workscope.NewLensGraphEnrichmentRequest(
+			workscope.FromLensStrictWorkScope(lens.TenantID, lens.ProjectID, lens.ID, []string{targetCanonicalPath}),
+			normalizeLensScopePolicy(body.ScopePolicy, workscope.MutationModePersistWorldKeepScope),
+		)
+		state = workscope.ApplyRequestToState(state, request)
 		if scoutingMode == taxonomy.DomainModeSupplyChain || scoutingMode == taxonomy.DomainModeGovernance {
 			state["domainModes"] = []string{scoutingMode}
 		}
@@ -312,14 +321,6 @@ func (h *HorizonHandlers) ScopeScoutLensNode(w http.ResponseWriter, r *http.Requ
 			})
 			return
 		}
-	}
-
-	// Persist updated scope (and manage subscriptions) best-effort.
-	// If scope didn't change, we still return success (idempotent).
-	if scopeAdded {
-		// ScopeScout already enqueues the exact target job above; suppress auto-scout side effects
-		// from generic scope update logic to avoid scheduling unrelated scope nodes.
-		_ = h.service.Lens().UpdateLens(hlens.WithSkipScouting(ctx), lens)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -121,10 +121,19 @@ func CollectMapOneHopNeighborFragmentIDs(ctx context.Context, edgeTenantID strin
 // FromLensMapWorkScope builds a WorkScope from canonical paths that represent the lens map substrate
 // (after query expansion + path canonicalization). LensID keeps artifact/hydration list-by-lens behavior.
 func FromLensMapWorkScope(tenantID, projectID, lensID string, canonicalScopePaths []string) WorkScope {
-	return Normalize(FromBaselineRefs(strings.TrimSpace(tenantID), strings.TrimSpace(projectID), horizonmodels.SimulationBaselineRefs{
+	scope := FromBaselineRefs(strings.TrimSpace(tenantID), strings.TrimSpace(projectID), horizonmodels.SimulationBaselineRefs{
 		LensID:     strings.TrimSpace(lensID),
 		ScopePaths: append([]string(nil), canonicalScopePaths...),
-	}))
+	})
+	scope.Intent = WorkScopeIntent{
+		ScopeKind: ScopeKindLensMap,
+		Expansion: WorkScopeExpansionPolicy{
+			Mode:               "map_neighbors",
+			NeighborHops:       1,
+			AllowDeferredPaths: true,
+		},
+	}
+	return Normalize(scope)
 }
 
 // MergeMapNeighborWorkScope unions map 1-hop neighbor paths and fragment IDs into an existing scope.
@@ -134,6 +143,24 @@ func MergeMapNeighborWorkScope(base WorkScope, neighborCanonicalPaths []string, 
 		ScopePaths:  neighborCanonicalPaths,
 		FragmentIDs: neighborFragmentIDs,
 	}))
+}
+
+// RequestFromLensMapScope builds the default inspect request for a map-shaped lens scope.
+func RequestFromLensMapScope(scope WorkScope) WorkRequest {
+	scope = Normalize(scope)
+	return NormalizeRequest(WorkRequest{
+		Scope: scope,
+		Intent: ExecutionIntent{
+			EntryPoint: EntryPointLens,
+			Action:     ActionInspect,
+			Projection: WorkScopeProjectionPolicy{
+				Mode:                     "scope_plus_neighbors",
+				IncludeResolvedNeighbors: true,
+			},
+			MutationMode:  defaultMutationModeForAction(ActionInspect),
+			FreshnessMode: defaultFreshnessModeForAction(ActionInspect),
+		},
+	})
 }
 
 // ResolveLensMapWorkScope builds the effective work scope for “lens as on the map”: canonical paths plus

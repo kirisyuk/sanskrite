@@ -643,7 +643,7 @@ export function useGeoMarkerLayer(
         source: HIGHLIGHT_SRC,
         filter: [
           'all',
-          ['==', '$type', 'Point'],
+          ['==', ['geometry-type'], 'Point'],
           ['==', ['coalesce', ['get', 'showLabel'], 0], 1],
           ['==', ['get', 'labelAnchor'], physicalAnchor],
         ],

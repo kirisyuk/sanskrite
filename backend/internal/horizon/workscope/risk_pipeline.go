@@ -4,7 +4,7 @@ package workscope
 // WorkScope → resolve → layers pipeline as simulation and watch, without introducing a parallel ontology.
 //
 // Future implementations should: Resolve scope → optional scout/graph enrich → materialized paths as needed →
-// OperationalHydrator → optional propagation.SimulateSignalFromSeeds → alert rules.
+// route overlays → OperationalHydrator → optional propagation.SimulateSignalFromSeeds → alert rules.
 type RiskMonitorPipeline struct {
 	Scope WorkScope
 }
@@ -16,12 +16,18 @@ func NewRiskMonitorPipeline(s WorkScope) RiskMonitorPipeline {
 
 // StageNames documents the intended orchestration order for risk monitoring jobs.
 func (RiskMonitorPipeline) StageNames() []string {
-	return []string{
-		"resolve",
-		"graph_enrich",
-		"materialized_paths",
-		"operational_hydrate",
-		"signal_propagation",
-		"risk_rules",
+	layers := []ExecutionLayer{
+		ExecutionLayerResolve,
+		ExecutionLayerGraphEnrich,
+		ExecutionLayerMaterializedPaths,
+		ExecutionLayerRouteOverlays,
+		ExecutionLayerOperationalHydrate,
+		ExecutionLayerSignalPropagation,
+		ExecutionLayerRiskRules,
 	}
+	out := make([]string, 0, len(layers))
+	for _, layer := range layers {
+		out = append(out, string(layer))
+	}
+	return out
 }

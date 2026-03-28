@@ -37,7 +37,37 @@ func FromWatchSubject(subject *horizonmodels.WatchSubject) WorkScope {
 		}
 		refs.ScopePaths = append(refs.ScopePaths, compactWatchPaths(subject.UniversePaths)...)
 	}
-	return Normalize(FromBaselineRefs(strings.TrimSpace(subject.TenantID), strings.TrimSpace(subject.ProjectID), refs))
+	scope := FromBaselineRefs(strings.TrimSpace(subject.TenantID), strings.TrimSpace(subject.ProjectID), refs)
+	scope.Intent = WorkScopeIntent{
+		ScopeKind: ScopeKindWatchSubject,
+		Expansion: WorkScopeExpansionPolicy{
+			Mode: "watch_runtime",
+		},
+	}
+	return Normalize(scope)
+}
+
+// RequestFromWatchSubject builds the default watch-time action request over a normalized watch scope.
+func RequestFromWatchSubject(subject *horizonmodels.WatchSubject) WorkRequest {
+	scope := FromWatchSubject(subject)
+	domainModes := []string(nil)
+	if subject != nil {
+		domainModes = append(domainModes, subject.DomainModes...)
+	}
+	return NormalizeRequest(WorkRequest{
+		Scope: scope,
+		Intent: ExecutionIntent{
+			EntryPoint:  EntryPointWatch,
+			Action:      ActionDeriveRisk,
+			DomainModes: domainModes,
+			Projection: WorkScopeProjectionPolicy{
+				Mode:                   "scope_plus_propagated",
+				IncludePropagatedReach: true,
+			},
+			MutationMode:  defaultMutationModeForAction(ActionDeriveRisk),
+			FreshnessMode: defaultFreshnessModeForAction(ActionDeriveRisk),
+		},
+	})
 }
 
 func compactWatchPaths(paths []string) []string {

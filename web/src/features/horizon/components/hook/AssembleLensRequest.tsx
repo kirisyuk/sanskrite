@@ -16,6 +16,9 @@ interface AssembleLensRequestProps {
   onAssemble: (request: AssembleLensRequest) => void;
   disabled?: boolean;
   pinnedBottom?: boolean;
+  placeholderOverride?: string;
+  hideProjectIndicator?: boolean;
+  hideSuggestions?: boolean;
 }
 
 /** Lens mode determines the focus of scouting and research agents */
@@ -99,6 +102,9 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
   onAssemble, 
   disabled = false,
   pinnedBottom = false,
+  placeholderOverride,
+  hideProjectIndicator = false,
+  hideSuggestions = false,
 }) => {
   const { theme } = React.useContext(ThemeContext);
   const currentProject = useProjectsStore((s) => s.currentProject);
@@ -562,7 +568,7 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
   return (
     <div style={containerStyle}>
       {/* Project indicator */}
-      {currentProject && currentProject.id === projectId && (
+      {!hideProjectIndicator && currentProject && currentProject.id === projectId && (
         <div
           style={{
             marginBottom: 12,
@@ -575,7 +581,7 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
             gap: 6,
           }}
         >
-          <span style={{ color: 'var(--text-tertiary)' }}>In</span>
+          <span style={{ color: 'var(--text-tertiary)' }}>You're in</span>
           <span style={{ fontWeight: 500, color: 'var(--text-heading)' }}>
             {currentProject.displayName || 'Untitled'}
           </span>
@@ -648,7 +654,15 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
                 type="text"
                 value={inputValue}
                 onChange={handleInputChange}
-                placeholder={activeSelections.length === 0 ? (entryMode === 'product' ? 'Search products by canonical name or synonym' : placeholder) : ''}
+                placeholder={
+                  activeSelections.length === 0
+                    ? (
+                        entryMode === 'product'
+                          ? 'Search products by canonical name or synonym'
+                          : (String(placeholderOverride || '').trim() || placeholder)
+                      )
+                    : ''
+                }
                 style={queryInputStyle}
                 disabled={disabled}
                 onFocus={() => {
@@ -972,7 +986,7 @@ const AssembleLensRequestComponent: React.FC<AssembleLensRequestProps> = ({
       )}
 
       {/* Suggestions (only when centered) */}
-      {!pinnedBottom && entryMode === 'freeform' && !hasSelectedObjects && (
+      {!pinnedBottom && !hideSuggestions && entryMode === 'freeform' && !hasSelectedObjects && (
         <div style={{ 
           marginTop: 16, 
           fontSize: 13, 

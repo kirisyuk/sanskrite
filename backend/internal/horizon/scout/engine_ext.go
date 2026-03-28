@@ -4128,7 +4128,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 					if artifact != nil {
 						if lensID := strings.TrimSpace(job.LensID); lensID != "" && artifact.CanonicalKey != "" {
 							scopePath := fmt.Sprintf("/artifact/%s", artifact.CanonicalKey)
-							e.bestEffortDeferredScopeAdd(ctx, lensID, scopePath)
+							e.bestEffortDeferredScopeAddForJob(ctx, job, lensID, scopePath)
 						}
 						if dm == taxonomy.DomainModeGovernance {
 							recordGovernanceArtifactState(job, artifact, contractType)
@@ -5993,7 +5993,7 @@ func (e *ScoutEngine) processRelationsInternal(
 		// This must happen after contract gates, otherwise out-of-contract relations can leak nodes into scope.
 		if targetFragment != nil && lensIDForCascade != "" &&
 			shouldAutoAddRelationTargetToScope(targetPath, targetType, relationAllowedForScopeAdd) {
-			e.bestEffortDeferredScopeAdd(ctx, lensIDForCascade, strings.TrimSpace(targetPath))
+			e.bestEffortDeferredScopeAddForJob(ctx, job, lensIDForCascade, strings.TrimSpace(targetPath))
 		}
 
 		// 3. Materialize edge (centralized path).
@@ -7137,21 +7137,6 @@ func (e *ScoutEngine) enrichRouteFacilityGeoContext(ctx context.Context, fragmen
 	transportRefs = appendUniqueTrim(nil, transportRefs...)
 	regionPaths = appendUniqueTrim(nil, regionPaths...)
 
-	routeCoords := make([]models.HorizonMonitorCoordinates, 0, len(transportRefs)+1)
-	routeSeen := map[string]struct{}{}
-	appendCoord := func(c *models.Coordinates) {
-		if !models.HasRealGeoCoordinates(c) {
-			return
-		}
-		key := routeCoordKey(c.Lat, c.Lon)
-		if _, ok := routeSeen[key]; ok {
-			return
-		}
-		routeSeen[key] = struct{}{}
-		routeCoords = append(routeCoords, models.HorizonMonitorCoordinates{Lat: c.Lat, Lon: c.Lon})
-	}
-	appendCoord(fragment.Coordinates)
-
 	for _, ref := range transportRefs {
 		ref = strings.TrimSpace(ref)
 		if ref == "" {
@@ -7168,7 +7153,6 @@ func (e *ScoutEngine) enrichRouteFacilityGeoContext(ctx context.Context, fragmen
 						_ = e.fragmentsRepo.Update(ctx, waypoint)
 					}
 				}
-				appendCoord(waypoint.Coordinates)
 				if waypoint.HomeLocation != nil && waypoint.HomeLocation.ISO3166_1 != nil {
 					cc := strings.ToLower(strings.TrimSpace(*waypoint.HomeLocation.ISO3166_1))
 					if cc != "" && cc != "na" {
@@ -7177,12 +7161,6 @@ func (e *ScoutEngine) enrichRouteFacilityGeoContext(ctx context.Context, fragmen
 				}
 			}
 			continue
-		}
-		if e.geocodingClient != nil {
-			if geo, err := e.geocodingClient.Geocode(ctx, ref); err == nil && geo != nil &&
-				models.IsRealGeoCoordinate(geo.Lat, geo.Lon) {
-				appendCoord(&models.Coordinates{Lat: geo.Lat, Lon: geo.Lon})
-			}
 		}
 	}
 
@@ -7203,7 +7181,12 @@ func (e *ScoutEngine) enrichRouteFacilityGeoContext(ctx context.Context, fragmen
 		wm = fragment.HorizonMonitor
 		changed = true
 	}
-	if len(routeCoords) > 0 {
+	resolvedRoute := pathbuilder.ResolveSupplyChainRouteGeometryDetailed(ctx, e.fragmentsRepo, transportRefs)
+	if len(resolvedRoute.Coordinates) >= 2 && strings.TrimSpace(resolvedRoute.Source) != "fragmentary_waypoint_sequence" {
+		routeCoords := make([]models.HorizonMonitorCoordinates, 0, len(resolvedRoute.Coordinates))
+		for _, c := range resolvedRoute.Coordinates {
+			routeCoords = append(routeCoords, models.HorizonMonitorCoordinates{Lat: c.Lat, Lon: c.Lon})
+		}
 		nextRouteKeys := make([]string, 0, len(routeCoords))
 		prevRouteKeys := make([]string, 0, len(wm.Route))
 		for _, c := range routeCoords {
@@ -7234,8 +7217,8 @@ func (e *ScoutEngine) enrichRouteFacilityGeoContext(ctx context.Context, fragmen
 			changed = true
 		}
 	}
-	if len(routeCoords) > 0 && !models.HasRealGeoCoordinates(fragment.Coordinates) {
-		fragment.Coordinates = &models.Coordinates{Lat: routeCoords[0].Lat, Lon: routeCoords[0].Lon}
+	if len(resolvedRoute.Coordinates) > 0 && strings.TrimSpace(resolvedRoute.Source) != "fragmentary_waypoint_sequence" && !models.HasRealGeoCoordinates(fragment.Coordinates) {
+		fragment.Coordinates = &models.Coordinates{Lat: resolvedRoute.Coordinates[0].Lat, Lon: resolvedRoute.Coordinates[0].Lon}
 		changed = true
 	}
 	if changed {
@@ -7380,6 +7363,16 @@ func mergeSupplyLinkQualifiers(existing, incoming map[string]interface{}) map[st
 		if k == "" {
 			continue
 		}
+		if k == "routeVariants" {
+			mergedVariants := models.MergeSupplyLinkRouteVariants(
+				models.ExtractSupplyLinkRouteVariants(out, nil, "", 0),
+				models.ExtractSupplyLinkRouteVariants(map[string]interface{}{"routeVariants": v}, nil, "", 0),
+			)
+			if len(mergedVariants) > 0 {
+				out[k] = mergedVariants
+				continue
+			}
+		}
 		if k == "flow_edge_contract" {
 			// Keep prior context and append new warnings/gaps when possible.
 			if oldMap, okOld := out[k].(map[string]interface{}); okOld {
@@ -7485,7 +7478,7 @@ func buildSegmentsFromParsed(parsed *ParsedChainResult, pathRewrites map[string]
 		if supplier == "" || product == "" || customer == "" {
 			continue
 		}
-		linkRef := segmentRefs[buildSupplyLinkSegmentLookupKey(supplier, product, customer)]
+		linkRef := segmentRefs[buildSupplyLinkSegmentLookupKey(supplier, product, customer, seg.TransportViaRefs)]
 		viaRefs := make([]string, 0, len(seg.TransportViaRefs))
 		for _, via := range seg.TransportViaRefs {
 			via = strings.TrimSpace(via)
@@ -7518,6 +7511,7 @@ func buildSegmentsFromParsed(parsed *ParsedChainResult, pathRewrites map[string]
 		segments = append(segments, pathbuilder.PathSegment{
 			SupplyLinkID:            strings.TrimSpace(linkRef.ID),
 			SupplyLinkCanonicalPath: strings.TrimSpace(linkRef.CanonicalPath),
+			RouteVariantKey:         models.BuildSupplyLinkRouteVariantKey(viaRefs),
 			SupplyLinkTenantID:      strings.TrimSpace(linkRef.TenantID),
 			SupplierRef:             supplier,
 			ProductRef:              product,
@@ -7535,11 +7529,12 @@ func buildSegmentsFromParsed(parsed *ParsedChainResult, pathRewrites map[string]
 	return segments
 }
 
-func buildSupplyLinkSegmentLookupKey(supplier, product, customer string) string {
+func buildSupplyLinkSegmentLookupKey(supplier, product, customer string, viaRefs []string) string {
 	return strings.Join([]string{
 		strings.TrimSpace(supplier),
 		strings.TrimSpace(product),
 		strings.TrimSpace(customer),
+		models.BuildSupplyLinkRouteVariantKey(viaRefs),
 	}, "|")
 }
 
@@ -9198,7 +9193,7 @@ func (e *ScoutEngine) processSupplyChains(
 			}
 			e.bestEffortEnrichRelationTargetGeo(ctx, frag, sourceFragment, "scout_supply_chain", job.ID)
 			if lensID != "" && isScopeEligibleEntityType(frag.Type) {
-				e.bestEffortDeferredScopeAdd(ctx, lensID, frag.CanonicalPath)
+				e.bestEffortDeferredScopeAddForJob(ctx, job, lensID, frag.CanonicalPath)
 			}
 			createdFrags++
 			if createdFrags <= previewLimit {
@@ -9214,7 +9209,7 @@ func (e *ScoutEngine) processSupplyChains(
 		}
 		e.bestEffortEnrichRelationTargetGeo(ctx, existing, sourceFragment, "scout_supply_chain", job.ID)
 		if lensID != "" && isScopeEligibleEntityType(existing.Type) {
-			e.bestEffortDeferredScopeAdd(ctx, lensID, existing.CanonicalPath)
+			e.bestEffortDeferredScopeAddForJob(ctx, job, lensID, existing.CanonicalPath)
 		}
 
 		if existing.Labels == nil {
@@ -9960,10 +9955,6 @@ func (e *ScoutEngine) processSupplyChains(
 		if rp, ok := pathRewrites[customer]; ok && rp != "" {
 			customer = strings.TrimSpace(rp)
 		}
-		segmentLookupKey := buildSupplyLinkSegmentLookupKey(supplier, product, customer)
-		if cached := e.getSupplyLinkRefCached(ctx, segmentLookupKey); cached != nil && strings.TrimSpace(cached.CanonicalPath) != "" {
-			materializedSegmentRefs[segmentLookupKey] = *cached
-		}
 		supplierRef := supplier
 		customerRef := customer
 		productRef := product
@@ -9976,6 +9967,13 @@ func (e *ScoutEngine) processSupplyChains(
 			if via != "" {
 				transportViaRefs = append(transportViaRefs, via)
 			}
+		}
+		segmentLookupKey := buildSupplyLinkSegmentLookupKey(supplier, product, customer, transportViaRefs)
+		if cached := e.getSupplyLinkRefCached(ctx, segmentLookupKey); cached != nil && strings.TrimSpace(cached.CanonicalPath) != "" {
+			materializedSegmentRefs[segmentLookupKey] = *cached
+		}
+		routeVariants := []models.SupplyLinkRouteVariant{
+			models.NewSupplyLinkRouteVariant(transportViaRefs, effectiveVesselType(seg, nil), seg.Confidence),
 		}
 		slFrag := &models.HorizonFragment{
 			Type:             models.FragmentTypeSupplyLink,
@@ -9992,6 +9990,7 @@ func (e *ScoutEngine) processSupplyChains(
 		slFrag.Qualifiers = map[string]interface{}{
 			"fromSupplyChain": true,
 			"segmentClass":    seg.SegmentClass,
+			"routeVariants":   routeVariants,
 		}
 		if seg.FlowEdgeContract != nil {
 			q := map[string]interface{}{
@@ -10074,14 +10073,22 @@ func (e *ScoutEngine) processSupplyChains(
 				existing.State["confidence"] = models.MetricValue{Value: seg.Confidence, Confidence: 0.8}
 				changed = true
 			}
-			mergedVia := mergeUniqueStrings(existing.TransportViaRefs, slFrag.TransportViaRefs)
-			if !slicesEqual(mergedVia, existing.TransportViaRefs) {
-				existing.TransportViaRefs = mergedVia
-				changed = true
-			}
+			existingVariants := models.ExtractSupplyLinkRouteVariants(existing.Qualifiers, existing.TransportViaRefs, effectiveVesselType(seg, existing), existingConf)
+			incomingVariants := models.ExtractSupplyLinkRouteVariants(slFrag.Qualifiers, slFrag.TransportViaRefs, effectiveVesselType(seg, slFrag), seg.Confidence)
+			mergedVariants := models.MergeSupplyLinkRouteVariants(existingVariants, incomingVariants)
 			mergedQualifiers := mergeSupplyLinkQualifiers(existing.Qualifiers, slFrag.Qualifiers)
+			if len(mergedVariants) > 0 {
+				if mergedQualifiers == nil {
+					mergedQualifiers = map[string]interface{}{}
+				}
+				mergedQualifiers["routeVariants"] = mergedVariants
+			}
 			if !equalInterfaceMaps(existing.Qualifiers, mergedQualifiers) {
 				existing.Qualifiers = mergedQualifiers
+				changed = true
+			}
+			if primary := models.PrimarySupplyLinkRouteVariant(mergedVariants); primary != nil && !slicesEqual(existing.TransportViaRefs, primary.TransportViaRefs) {
+				existing.TransportViaRefs = append([]string(nil), primary.TransportViaRefs...)
 				changed = true
 			}
 			mergedSources := mergeUniqueStrings(existing.Provenance.SourceIDs, slFrag.Provenance.SourceIDs)

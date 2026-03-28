@@ -1,6 +1,9 @@
 import React from 'react';
 import { api } from '../lib/api';
-import { getDomainRegionLabel, getScopeGeoLabel, humanizeCanonicalPath, preferDisplayLabel } from '../lib/uiUtils';
+import { geoCodeToDisplayName, getDomainRegionLabel, getScopeGeoLabel, humanizeCanonicalPath, preferDisplayLabel } from '../lib/uiUtils';
+import { formatHorizonFragmentType, getHorizonNodeVisualType, getNodeColors, HorizonNodeIcon } from './HorizonGraphNodeTypes';
+import AssembleLensRequestComponent, { type AssembleLensRequest } from '../features/horizon/components/hook/AssembleLensRequest';
+import { useProjectsStore } from '../stores/projectsStore';
 
 function pruneMapToMax<K, V>(m: Map<K, V>, maxSize: number) {
   if (maxSize <= 0) {
@@ -19,8 +22,14 @@ function boundedMapSet<K, V>(m: Map<K, V>, key: K, value: V, maxSize: number) {
   pruneMapToMax(m, maxSize);
 }
 
-export interface LensCanvasDetailsProps {
-  lens: any;
+export interface LensCanvasHomeProps {
+  lens?: any | null;
+  projectId?: string | null;
+  showInput?: boolean;
+  onAssemble?: (request: AssembleLensRequest) => void;
+  onOpenGraph?: () => void;
+  onOpenMap?: () => void;
+  isCreatingLens?: boolean;
   assemblyStatus: any;
   scoutingJobs: any[];
   loadingJobs: boolean;
@@ -28,14 +37,43 @@ export interface LensCanvasDetailsProps {
   onUpdateScope?: (nextScope: string[]) => Promise<void>;
 }
 
-export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
+export const LensCanvasHome: React.FC<LensCanvasHomeProps> = ({
   lens,
+  projectId,
+  showInput = false,
+  onAssemble,
+  onOpenGraph,
+  onOpenMap,
+  isCreatingLens = false,
   assemblyStatus,
   scoutingJobs,
   loadingJobs,
   onRefreshJobs,
   onUpdateScope,
 }) => {
+  const currentProject = useProjectsStore((s) => s.currentProject);
+  const formatFragmentTypeLabel = (value?: string, canonicalPath?: string, label?: string) => {
+    const raw = String(value || '').trim();
+    if (raw) {
+      return formatHorizonFragmentType(raw, canonicalPath, label);
+    }
+    const path = String(canonicalPath || '').trim().toLowerCase();
+    if (path.startsWith('/org/')) return 'Organization';
+    if (path.startsWith('/gov/')) return 'Government';
+    if (path.startsWith('/fac/')) return 'Facility';
+    if (path.startsWith('/loc/')) return 'Location';
+    if (path.startsWith('/product/')) return 'Product';
+    if (path.startsWith('/market/')) return 'Market';
+    if (path.startsWith('/community/')) return 'Community';
+    if (path.startsWith('/person/')) return 'Person';
+    if (path.startsWith('/program/')) return 'Program';
+    if (path.startsWith('/deposit/')) return 'Deposit';
+    if (path.startsWith('/zone/')) return 'Affected Zone';
+    if (path.startsWith('/domain/')) return 'Domain';
+    if (path.startsWith('/query/')) return 'Query';
+    if (path.startsWith('/artifact/')) return 'Artifact';
+    return label ? 'Object' : 'Unknown';
+  };
   const isSupplyChainContractType = (value?: string) => /^(supply-chain|value-chain)$/i.test(String(value || '').trim());
   const getSupplyChainGraphBuildModeLabel = (value?: string) => {
     const mode = String(value || '').trim().toLowerCase();
@@ -67,7 +105,6 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
   const scopeSuggestCacheRef = React.useRef<Map<string, SearchEntity[]>>(new Map());
   const [newsLoading, setNewsLoading] = React.useState(false);
   const [newsError, setNewsError] = React.useState<string | null>(null);
-
   const scope: string[] = Array.isArray(lens?.scope) ? lens.scope : [];
   const scopeFragments: Record<string, string> = (lens?.scopeFragments && typeof lens.scopeFragments === 'object') ? lens.scopeFragments : {};
   const scopeArtifacts: Record<string, {
@@ -359,42 +396,6 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
     }
   }, [scope, scopeFragments]);
 
-  const Card: React.FC<{ title: string; subtitle?: string; children: React.ReactNode; right?: React.ReactNode }> = ({ title, subtitle, children, right }) => (
-    <div
-      style={{
-        borderRadius: 16,
-        border: '1px solid var(--border-subtle)',
-        background: 'var(--bg-elevated)',
-        boxShadow: '0 10px 30px rgba(0,0,0,0.10)',
-        overflow: 'hidden',
-      }}
-    >
-      <div
-        style={{
-          padding: '14px 16px',
-          borderBottom: '1px solid var(--border-subtle)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 12,
-        }}
-      >
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)', letterSpacing: 0.2 }}>
-            {title}
-          </div>
-          {subtitle && (
-            <div style={{ marginTop: 2, fontSize: 11, color: 'var(--text-secondary-strong)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {subtitle}
-            </div>
-          )}
-        </div>
-        {right}
-      </div>
-      <div style={{ padding: '14px 16px' }}>{children}</div>
-    </div>
-  );
-
   const Pill: React.FC<{ text: string; tone?: 'neutral' | 'success' | 'danger' | 'amber' }> = ({ text, tone = 'neutral' }) => {
     const styles =
       tone === 'success'
@@ -423,106 +424,485 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
     );
   };
 
+  const SummaryChip: React.FC<{
+    label: string;
+    type?: string;
+    canonicalPath?: string;
+    facilityKind?: string | null;
+  }> = ({ label, type, canonicalPath, facilityKind }) => {
+    const visualType = getHorizonNodeVisualType(type, canonicalPath, label, facilityKind);
+    const colors = getNodeColors(visualType, 'dark');
+    return (
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '4px 10px',
+          borderRadius: 999,
+          border: `1px solid ${colors.border}`,
+          background: colors.bg,
+          color: colors.text,
+          fontSize: 12,
+          fontWeight: 650,
+          lineHeight: 1.2,
+          whiteSpace: 'nowrap',
+        }}
+      >
+        <HorizonNodeIcon type={visualType} color={colors.accent} size={12} />
+        <span>{label}</span>
+      </span>
+    );
+  };
+
   const mono: React.CSSProperties = {
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
   };
 
+  const CollapseSection: React.FC<{
+    title: string;
+    subtitle?: string;
+    defaultOpen?: boolean;
+    children: React.ReactNode;
+    right?: React.ReactNode;
+  }> = ({ title, subtitle, defaultOpen = false, children, right }) => (
+    <details
+      open={defaultOpen}
+      style={{
+        borderRadius: 14,
+        border: '1px solid var(--border-subtle)',
+        background: 'var(--bg-elevated)',
+        overflow: 'hidden',
+      }}
+    >
+      <summary
+        style={{
+          listStyle: 'none',
+          cursor: 'pointer',
+          padding: '14px 16px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text-heading)' }}>{title}</div>
+          {subtitle ? (
+            <div style={{ marginTop: 4, fontSize: 12, color: 'var(--text-secondary-strong)' }}>{subtitle}</div>
+          ) : null}
+        </div>
+        {right}
+      </summary>
+      <div style={{ padding: '0 16px 16px 16px', borderTop: '1px solid var(--border-subtle)' }}>{children}</div>
+    </details>
+  );
+
+  const assemblyStage = String((assemblyStatus as any)?.stage || assemblyStatus?.phase || '').trim();
+  const artifactEntries = Object.entries(scopeArtifacts);
+  const uniqueNodeRefs = new Set<string>();
+  const uniqueFlowRefs = new Set<string>();
+  const uniqueZoneRefs = new Set<string>();
+  const kindCounts = new Map<string, number>();
+  for (const [, artifact] of artifactEntries) {
+    const kind = String(artifact?.kind || 'artifact').trim() || 'artifact';
+    kindCounts.set(kind, (kindCounts.get(kind) || 0) + 1);
+    for (const ref of artifact?.nodeRefs || []) {
+      const value = String(ref || '').trim();
+      if (value) uniqueNodeRefs.add(value);
+    }
+    for (const ref of artifact?.flowRefs || []) {
+      const value = String(ref || '').trim();
+      if (value) uniqueFlowRefs.add(value);
+    }
+    for (const ref of [...(artifact?.zoneRefs || []), ...(artifact?.affectedZoneRefs || [])]) {
+      const value = String(ref || '').trim();
+      if (value) uniqueZoneRefs.add(value);
+    }
+  }
+  const workscopeKinds = Array.from(kindCounts.entries()).sort((a, b) => b[1] - a[1]);
+  const supplyPathCount = artifactEntries.filter(([, artifact]) => String(artifact?.kind || '').trim().toUpperCase() === 'SUPPLY_CHAIN_PATH').length;
+  const recentJobs = scoutingJobs.slice(0, 8);
+  const showCommandPalette = Boolean(showInput && projectId && onAssemble);
+  const homeCommandPlaceholder = totalObjects > 0 || artifactEntries.length > 0
+    ? 'What would you like to extend or explore next?'
+    : undefined;
+  const showHomeViewActions = Boolean((totalObjects > 0 || artifactEntries.length > 0) && (onOpenGraph || onOpenMap));
+  const projectDisplayName = (
+    (currentProject?.id && projectId && currentProject.id === projectId ? currentProject.displayName : '')
+    || String(lens?.projectName || '').trim()
+    || String(currentProject?.displayName || '').trim()
+    || String(projectId || '').trim()
+  );
+  const hasHomeSummary = Boolean(
+    String(lens?.name || '').trim()
+    || String(lens?.id || '').trim()
+    || totalObjects > 0
+    || artifactEntries.length > 0
+    || String(assemblyStage || '').trim()
+    || scoutingJobs.length > 0,
+  );
+  const domainCanonicalPaths = new Set(
+    domains
+      .map((domain: any) => String(domain?.canonicalPath || '').trim())
+      .filter(Boolean),
+  );
+  const scopeObjectItems: Array<{
+    id: string;
+    label: string;
+    sublabel?: string;
+    badges: Array<{
+      text: string;
+      tone?: 'neutral' | 'success' | 'danger' | 'amber';
+      kind?: 'nodeType';
+      objectType?: string;
+      canonicalPath?: string;
+      objectLabel?: string;
+    }>;
+  }> = [
+    ...intents.map((entry: any, idx: number) => ({
+      id: `intent-${entry?.id || idx}`,
+      label: String(entry?.question || 'Intent').trim() || 'Intent',
+      sublabel: undefined,
+      badges: [{ text: 'INTENT', tone: entry?.status === 'answered' ? 'success' : 'neutral' }],
+    })),
+    ...domains.map((domain: any, idx: number) => {
+      const path = String(domain?.canonicalPath || '').trim();
+      const contractType = String(domain?.contractType || 'DOMAIN').trim();
+      const regionLabel = getDomainRegionLabel(path);
+      const modeLabel = isSupplyChainContractType(contractType) ? getSupplyChainGraphBuildModeLabel(domain?.supplyChainExecutionPlan?.graphBuildMode) : '';
+      return {
+        id: `domain-${path || idx}`,
+        label: String(domain?.title || domain?.description || humanizeCanonicalPath(path) || contractType).trim(),
+        sublabel: path || undefined,
+        badges: [
+          { text: contractType, tone: 'amber' as const },
+          ...(regionLabel ? [{ text: regionLabel, tone: 'amber' as const }] : []),
+          ...(modeLabel ? [{ text: modeLabel, tone: 'success' as const }] : []),
+        ],
+      };
+    }),
+    ...scope
+      .filter((entry: string) => {
+        const path = String(entry || '').trim();
+        if (!path) return false;
+        if (domainCanonicalPaths.has(path)) return false;
+        return true;
+      })
+      .map((entry: string, index: number) => {
+      const path = (entry || '').trim();
+      const isQuery = path.startsWith('/query/');
+      const isArtifact = path.startsWith('/artifact/');
+      const resolved = scopeResolved[path];
+      const artifactKey = path.replace(/^\/artifact\//, '');
+      const artifact = scopeArtifacts[artifactKey];
+      const label = isArtifact
+        ? String(artifact?.displayName || humanizeCanonicalPath(path) || path).trim()
+        : isQuery
+          ? String(path.replace(/^\/query\//, '') || path).trim()
+          : String(resolved?.name || humanizeCanonicalPath(path) || path).trim();
+      const typeLabel = isArtifact
+        ? String(artifact?.kind || 'ARTIFACT').trim().replace(/_/g, ' ')
+        : isQuery
+          ? 'Query'
+          : formatFragmentTypeLabel(resolved?.type, path, label);
+      const badges = isArtifact
+        ? [
+            { text: typeLabel, tone: 'amber' as const },
+            ...(artifact?.status ? [{ text: String(artifact.status), tone: artifact.status === 'validated' ? 'success' as const : 'neutral' as const }] : []),
+          ]
+        : [{
+            text: typeLabel,
+            kind: 'nodeType' as const,
+            objectType: resolved?.type,
+            canonicalPath: path,
+            objectLabel: label,
+          }];
+      return {
+        id: `scope-${path}-${index}`,
+        label,
+        sublabel: path || undefined,
+        badges,
+      };
+      }),
+  ];
+
+  const scopedEntities = scopeObjectItems
+    .filter((item) => item.badges.some((badge) => badge.kind === 'nodeType'))
+    .map((item) => ({
+      label: item.label,
+      type: String(item.badges.find((badge) => badge.kind === 'nodeType')?.objectType || '').trim(),
+      canonicalPath: String(item.badges.find((badge) => badge.kind === 'nodeType')?.canonicalPath || '').trim(),
+    }));
+
+  const entityItems = scopedEntities
+    .filter((item) => {
+      const path = item.canonicalPath.toLowerCase();
+      return path.startsWith('/org/') || path.startsWith('/gov/') || path.startsWith('/fac/') || path.startsWith('/person/');
+    })
+    .filter((item, index, arr) => arr.findIndex((candidate) => candidate.label === item.label && candidate.canonicalPath === item.canonicalPath) === index)
+    .slice(0, 6);
+  const productItems = scopedEntities
+    .filter((item) => item.canonicalPath.toLowerCase().startsWith('/product/'))
+    .filter((item, index, arr) => arr.findIndex((candidate) => candidate.label === item.label && candidate.canonicalPath === item.canonicalPath) === index)
+    .slice(0, 6);
+  const marketItems = scopedEntities
+    .filter((item) => item.canonicalPath.toLowerCase().startsWith('/market/'))
+    .filter((item, index, arr) => arr.findIndex((candidate) => candidate.label === item.label && candidate.canonicalPath === item.canonicalPath) === index)
+    .slice(0, 4);
+  const countryItems: Array<{ code: string; label: string }> = Array.from(new Map<string, string>([
+    ...scope
+      .map((entry) => {
+        const path = String(entry || '').trim().toLowerCase();
+        const parts = path.split('/').filter(Boolean);
+        if (parts.length >= 2 && ['org', 'gov', 'fac', 'market', 'community', 'loc'].includes(parts[0])) {
+          const code = String(parts[1] || '').trim().toLowerCase();
+          if (/^[a-z]{2}$/.test(code)) return [code, geoCodeToDisplayName(code)] as const;
+        }
+        return null;
+      })
+      .filter((value): value is readonly [string, string] => Boolean(value)),
+    ...domains.flatMap((domain: any) => {
+      const path = String(domain?.canonicalPath || '').trim().toLowerCase();
+      const parts = path.split('/').filter(Boolean);
+      const out: Array<readonly [string, string]> = [];
+      for (let i = 0; i + 1 < parts.length; i += 1) {
+        if (parts[i] === 'geo') {
+          const token = String(parts[i + 1] || '').trim();
+          for (const piece of token.split('-')) {
+            const cc = piece.toLowerCase();
+            if (/^[a-z]{2}$/.test(cc)) out.push([cc, geoCodeToDisplayName(cc)] as const);
+          }
+        }
+      }
+      return out;
+    }),
+  ]).entries())
+    .map(([code, label]) => ({ code, label }))
+    .slice(0, 8);
+  const centerHomeStack = Boolean(showCommandPalette || hasHomeSummary);
+
   return (
-    <div style={{ padding: '16px 18px', width: '100%', height: '100%', overflow: 'auto' }}>
-      <style>{`
-        .horizon-details-grid {
-          display: grid;
-          gap: 14px;
-          grid-template-columns: repeat(3, minmax(280px, 1fr));
-          grid-template-areas:
-            "scope scope scope"
-            "news news news"
-            "info assembly config"
-            "jobs jobs jobs";
-          align-items: start;
-        }
-        @media (max-width: 980px) {
-          .horizon-details-grid { grid-template-columns: 1fr; }
-          .horizon-details-grid { grid-template-areas: "scope" "news" "info" "assembly" "config" "jobs"; }
-        }
-      `}</style>
-
-      <div className="horizon-details-grid" style={{ minHeight: 0 }}>
-        <div style={{ gridArea: 'info' }}>
-          <Card
-            title="Information"
-            subtitle={lens?.id ? `Lens ID: ${String(lens.id)}` : undefined}
-            right={
-              <Pill
-                text={String(lens?.status || 'UNKNOWN')}
-                tone={String(lens?.status || '').toUpperCase() === 'ACTIVE' ? 'success' : 'neutral'}
-              />
-            }
-          >
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-                <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>Created</div>
-                <div style={{ fontSize: 12, color: 'var(--text-heading)', fontWeight: 650 }}>
-                  {lens?.createdAt ? new Date(lens.createdAt).toLocaleDateString() : '—'}
-                </div>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-                <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>Updated</div>
-                <div style={{ fontSize: 12, color: 'var(--text-heading)', fontWeight: 650 }}>
-                  {lens?.updatedAt ? new Date(lens.updatedAt).toLocaleDateString() : '—'}
-                </div>
-              </div>
-              {lens?.lastResolved && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>Last resolved</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-heading)', fontWeight: 650 }}>
-                    {new Date(lens.lastResolved).toLocaleString()}
+    <div style={{ padding: '82px 18px 18px 18px', width: '100%', height: '100%', overflow: 'auto' }}>
+      <div
+        style={{
+          width: '100%',
+          maxWidth: 760,
+          minHeight: '100%',
+          margin: '0 auto',
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: centerHomeStack ? 'center' : 'flex-start',
+          gap: 14,
+        }}
+      >
+        {(hasHomeSummary || showCommandPalette) ? (
+          <div style={{ width: '100%', maxWidth: 760, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {hasHomeSummary ? (
+              <div style={{ width: '100%', paddingLeft: 24, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start', textAlign: 'left' }}>
+                {projectDisplayName ? (
+                  <div
+                    style={{
+                      fontSize: 15,
+                      lineHeight: 1.4,
+                      color: 'var(--text-heading)',
+                      fontWeight: 650,
+                    }}
+                  >
+                    {projectDisplayName} project
                   </div>
+                ) : null}
+                <div style={{ width: '100%', maxWidth: 640, display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-start' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 13, lineHeight: 1.45, color: 'var(--text-secondary-strong)', fontWeight: 600 }}>
+                      Topic:
+                    </span>
+                    <span style={{ fontSize: 14, lineHeight: 1.45, color: 'var(--text-tertiary)', fontWeight: 430 }}>
+                      {String(lens?.name || 'Lens').trim() || 'Lens'}
+                    </span>
+                    <span style={{ fontSize: 13, lineHeight: 1.45, color: 'var(--text-secondary-strong)', fontWeight: 600 }}>
+                      , this lens is
+                    </span>
+                    <Pill
+                      text={String(lens?.status || 'UNKNOWN')}
+                      tone={String(lens?.status || '').toUpperCase() === 'ACTIVE' ? 'success' : 'neutral'}
+                    />
+                  </div>
+                  <div style={{ width: '100%', borderTop: '1px solid var(--border-subtle)' }} />
                 </div>
-              )}
-            </div>
-          </Card>
-        </div>
+                <div style={{ display: 'flex', width: '100%', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
+                  {entityItems.length > 0 ? (
+                    <div style={{ maxWidth: 640, fontSize: 13, lineHeight: 1.55, color: 'var(--text-secondary-strong)', fontWeight: 450 }}>
+                      <span>This lens focuses on the following entities: </span>
+                      <span style={{ display: 'inline-flex', flexWrap: 'wrap', justifyContent: 'flex-start', gap: 6, verticalAlign: 'middle' }}>
+                        {entityItems.map((item) => (
+                          <SummaryChip
+                            key={`entity-${item.canonicalPath || item.label}`}
+                            label={item.label}
+                            type={item.type}
+                            canonicalPath={item.canonicalPath}
+                          />
+                        ))}
+                      </span>
+                    </div>
+                  ) : null}
+                  {productItems.length > 0 ? (
+                    <div style={{ maxWidth: 640, fontSize: 13, lineHeight: 1.55, color: 'var(--text-secondary-strong)', fontWeight: 450 }}>
+                      <span>Products in focus: </span>
+                      <span style={{ display: 'inline-flex', flexWrap: 'wrap', justifyContent: 'flex-start', gap: 6, verticalAlign: 'middle' }}>
+                        {productItems.map((item) => (
+                          <SummaryChip
+                            key={`product-${item.canonicalPath || item.label}`}
+                            label={item.label}
+                            type="PRODUCT"
+                            canonicalPath={item.canonicalPath}
+                          />
+                        ))}
+                      </span>
+                    </div>
+                  ) : null}
+                  {marketItems.length > 0 ? (
+                    <div style={{ maxWidth: 640, fontSize: 13, lineHeight: 1.55, color: 'var(--text-secondary-strong)', fontWeight: 450 }}>
+                      <span>Markets covered: </span>
+                      <span style={{ display: 'inline-flex', flexWrap: 'wrap', justifyContent: 'flex-start', gap: 6, verticalAlign: 'middle' }}>
+                        {marketItems.map((item) => (
+                          <SummaryChip
+                            key={`market-${item.canonicalPath || item.label}`}
+                            label={item.label}
+                            type="MARKET"
+                            canonicalPath={item.canonicalPath}
+                          />
+                        ))}
+                      </span>
+                    </div>
+                  ) : null}
+                  {countryItems.length > 0 ? (
+                    <div style={{ maxWidth: 640, fontSize: 13, lineHeight: 1.55, color: 'var(--text-secondary-strong)', fontWeight: 450 }}>
+                      <span>Countries covered: </span>
+                      <span style={{ display: 'inline-flex', flexWrap: 'wrap', justifyContent: 'flex-start', gap: 6, verticalAlign: 'middle' }}>
+                        {countryItems.map((country) => (
+                          <SummaryChip
+                            key={`country-${country.code}`}
+                            label={country.label}
+                            type="LOCATION"
+                            canonicalPath={`/loc/${country.code}`}
+                          />
+                        ))}
+                      </span>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
 
-        <div style={{ gridArea: 'news' }}>
-          <Card
-            title="News & ontology facts"
-            subtitle="Fetch recent news via search grounding, create events and 12-axis signals for scope entities."
-            right={
-              <button
-                type="button"
-                onClick={() => void handleLoadNews()}
-                disabled={newsLoading}
-                style={{
-                  padding: '8px 10px',
-                  borderRadius: 12,
-                  border: '1px solid var(--border-subtle)',
-                  background: 'transparent',
-                  color: 'var(--text-heading)',
-                  fontSize: 12,
-                  fontWeight: 800,
-                  cursor: newsLoading ? 'not-allowed' : 'pointer',
-                  opacity: newsLoading ? 0.55 : 1,
-                }}
-              >
-                {newsLoading ? 'Loading…' : 'Load news for scope'}
-              </button>
-            }
-          >
-            {newsError && (
-              <div style={{ fontSize: 12, color: '#f87171', marginBottom: 8 }}>{newsError}</div>
-            )}
+            {showCommandPalette ? (
+              <div style={{ width: '100%' }}>
+                <AssembleLensRequestComponent
+                  projectId={projectId!}
+                  onAssemble={onAssemble!}
+                  disabled={isCreatingLens}
+                  pinnedBottom={false}
+                  placeholderOverride={homeCommandPlaceholder}
+                  hideProjectIndicator={true}
+                  hideSuggestions={showHomeViewActions}
+                />
+              </div>
+            ) : null}
+
+            {showHomeViewActions ? (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, flexWrap: 'wrap' }}>
+                {onOpenGraph ? (
+                  <button
+                    type="button"
+                    onClick={onOpenGraph}
+                    style={{
+                      height: 34,
+                      padding: '0 14px',
+                      borderRadius: 10,
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--white-06)',
+                      color: 'var(--text-secondary-strong)',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Graph View
+                  </button>
+                ) : null}
+                {onOpenMap ? (
+                  <button
+                    type="button"
+                    onClick={onOpenMap}
+                    style={{
+                      height: 34,
+                      padding: '0 14px',
+                      borderRadius: 10,
+                      border: '1px solid var(--border-subtle)',
+                      background: 'var(--white-06)',
+                      color: 'var(--text-secondary-strong)',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    View on Map
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* Hidden temporarily for readability of the Home tab. Keep the sections in code for debug/operator work. */}
+        {false ? (
+          <>
+            <CollapseSection
+              title="Workscope reach"
+              subtitle="How far the current materialized substrate already reaches."
+              right={supplyPathCount > 0 ? <Pill text={`${supplyPathCount} supply paths`} tone="success" /> : undefined}
+            >
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }}>
+                <div style={{ padding: '10px 12px', borderRadius: 12, border: '1px solid var(--border-subtle)', background: 'var(--white-06)' }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>Artifacts</div>
+                  <div style={{ marginTop: 4, fontSize: 16, fontWeight: 800, color: 'var(--text-heading)' }}>{artifactEntries.length}</div>
+                </div>
+                <div style={{ padding: '10px 12px', borderRadius: 12, border: '1px solid var(--border-subtle)', background: 'var(--white-06)' }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>Entities reached</div>
+                  <div style={{ marginTop: 4, fontSize: 16, fontWeight: 800, color: 'var(--text-heading)' }}>{uniqueNodeRefs.size}</div>
+                </div>
+                <div style={{ padding: '10px 12px', borderRadius: 12, border: '1px solid var(--border-subtle)', background: 'var(--white-06)' }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>Flows</div>
+                  <div style={{ marginTop: 4, fontSize: 16, fontWeight: 800, color: 'var(--text-heading)' }}>{uniqueFlowRefs.size}</div>
+                </div>
+                <div style={{ padding: '10px 12px', borderRadius: 12, border: '1px solid var(--border-subtle)', background: 'var(--white-06)' }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>Zones</div>
+                  <div style={{ marginTop: 4, fontSize: 16, fontWeight: 800, color: 'var(--text-heading)' }}>{uniqueZoneRefs.size}</div>
+                </div>
+              </div>
+              {workscopeKinds.length > 0 ? (
+                <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {workscopeKinds.slice(0, 6).map(([kind, count]) => (
+                    <Pill key={kind} text={`${kind.replace(/_/g, ' ')} · ${count}`} tone="amber" />
+                  ))}
+                </div>
+              ) : null}
+            </CollapseSection>
+
+            <CollapseSection
+              title="Technical description"
+              subtitle="Collapsed by default for debug and operator work."
+            >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>
-              Uses Gemini search grounding. Creates ontology facts (events), extracts 12-axis signals, propagates to graph.
+              Contains scope editing, manual grounding, assembly details, raw configuration and recent scouting jobs.
             </div>
-          </Card>
-        </div>
 
-        <div style={{ gridArea: 'scope', minHeight: 0 }}>
-          <Card
-            title={`Objects (${totalObjects})`}
-            subtitle='Scope anchors, intents, domain contracts. Add scope by path ("/…") or query ("/query/…").'
-          >
+            <details style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, overflow: 'hidden' }}>
+              <summary style={{ padding: '10px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 750, color: 'var(--text-heading)' }}>
+                Scope editor
+              </summary>
+              <div style={{ padding: '12px', borderTop: '1px solid var(--border-subtle)' }}>
             {/* Edit controls (not scrollable) */}
             <div
               ref={scopeSuggestRef}
@@ -891,21 +1271,47 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
           ) : (
             <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>No objects defined</div>
           )}
-        </Card>
-        </div>
+              </div>
+            </details>
 
-        {assemblyStatus && (
-          <div style={{ gridArea: 'assembly' }}>
-            <Card
-              title="Assembly status"
-              subtitle="Shows the current state of lens materialization."
-              right={
-                <Pill
-                  text={String(assemblyStatus?.status || 'unknown')}
-                  tone={String(assemblyStatus?.status || '') === 'ready' ? 'success' : 'neutral'}
-                />
-              }
-            >
+            <details style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, overflow: 'hidden' }}>
+              <summary style={{ padding: '10px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 750, color: 'var(--text-heading)' }}>
+                Live signals
+              </summary>
+              <div style={{ padding: '12px', borderTop: '1px solid var(--border-subtle)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>
+                    Fetch recent news and ontology facts for current scope.
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleLoadNews()}
+                    disabled={newsLoading}
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: 12,
+                      border: '1px solid var(--border-subtle)',
+                      background: 'transparent',
+                      color: 'var(--text-heading)',
+                      fontSize: 12,
+                      fontWeight: 800,
+                      cursor: newsLoading ? 'not-allowed' : 'pointer',
+                      opacity: newsLoading ? 0.55 : 1,
+                    }}
+                  >
+                    {newsLoading ? 'Loading…' : 'Load news for scope'}
+                  </button>
+                </div>
+                {newsError ? <div style={{ fontSize: 12, color: '#f87171' }}>{newsError}</div> : null}
+              </div>
+            </details>
+
+            {assemblyStatus ? (
+              <details style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, overflow: 'hidden' }}>
+                <summary style={{ padding: '10px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 750, color: 'var(--text-heading)' }}>
+                  Assembly status
+                </summary>
+                <div style={{ padding: '12px', borderTop: '1px solid var(--border-subtle)' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
                   <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>Stage</div>
@@ -935,14 +1341,17 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
                   </div>
                 )}
               </div>
-            </Card>
-          </div>
-        )}
+                </div>
+              </details>
+            ) : null}
 
-        {(lens?.viewConfig && Object.keys(lens.viewConfig).length > 0) || (lens?.alertConfig && Object.keys(lens.alertConfig).length > 0) ? (
-          <div style={{ gridArea: 'config', minHeight: 0 }}>
-            <Card title="Configuration" subtitle="Advanced settings (JSON).">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 240, overflowY: 'auto' }}>
+            {(lens?.viewConfig && Object.keys(lens.viewConfig).length > 0) || (lens?.alertConfig && Object.keys(lens.alertConfig).length > 0) ? (
+              <details style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, overflow: 'hidden' }}>
+                <summary style={{ padding: '10px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 750, color: 'var(--text-heading)' }}>
+                  Configuration
+                </summary>
+                <div style={{ padding: '12px', borderTop: '1px solid var(--border-subtle)' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 240, overflowY: 'auto' }}>
                 {lens?.viewConfig && Object.keys(lens.viewConfig).length > 0 && (
                   <details style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, overflow: 'hidden' }}>
                     <summary style={{ padding: '10px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 750, color: 'var(--text-heading)' }}>
@@ -967,43 +1376,43 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
                     </div>
                   </details>
                 )}
-              </div>
-            </Card>
-          </div>
-        ) : null}
+                  </div>
+                </div>
+              </details>
+            ) : null}
 
-        <div style={{ gridArea: 'jobs', minHeight: 0 }}>
-          <Card
-            title={`Scouting jobs (${scoutingJobs.length})`}
-            subtitle="Recent scope scouting tasks for this lens."
-            right={
-              <button
-                type="button"
-                onClick={onRefreshJobs}
-                disabled={loadingJobs}
-                style={{
-                  padding: '8px 10px',
-                  borderRadius: 12,
-                  border: '1px solid var(--border-subtle)',
-                  background: 'transparent',
-                  color: 'var(--text-heading)',
-                  fontSize: 12,
-                  fontWeight: 800,
-                  cursor: loadingJobs ? 'not-allowed' : 'pointer',
-                  opacity: loadingJobs ? 0.55 : 1,
-                }}
-              >
-                {loadingJobs ? 'Loading…' : 'Refresh'}
-              </button>
-            }
-          >
+            <details style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, overflow: 'hidden' }}>
+              <summary style={{ padding: '10px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 750, color: 'var(--text-heading)' }}>
+                Recent scouting jobs ({scoutingJobs.length})
+              </summary>
+              <div style={{ padding: '12px', borderTop: '1px solid var(--border-subtle)' }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+                  <button
+                    type="button"
+                    onClick={onRefreshJobs}
+                    disabled={loadingJobs}
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: 12,
+                      border: '1px solid var(--border-subtle)',
+                      background: 'transparent',
+                      color: 'var(--text-heading)',
+                      fontSize: 12,
+                      fontWeight: 800,
+                      cursor: loadingJobs ? 'not-allowed' : 'pointer',
+                      opacity: loadingJobs ? 0.55 : 1,
+                    }}
+                  >
+                    {loadingJobs ? 'Loading…' : 'Refresh'}
+                  </button>
+                </div>
             {scoutingJobs.length > 0 ? (
               <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, overflow: 'hidden', maxHeight: 260 }}>
                 <div style={{ maxHeight: 260, overflowY: 'auto' }}>
-                  {scoutingJobs.map((job: any, idx: number) => {
+                  {recentJobs.map((job: any, idx: number) => {
                     const status = String(job?.status || '').toUpperCase();
                     const tone = status === 'VERIFIED' || status === 'COMPLETED' ? 'success' : (status === 'FAILED' || status === 'ERROR' ? 'danger' : 'neutral');
-                    const showDivider = idx !== scoutingJobs.length - 1;
+                    const showDivider = idx !== recentJobs.length - 1;
                     return (
                       <div key={job.id} style={{ padding: '10px 12px', borderBottom: showDivider ? '1px solid var(--border-subtle)' : 'none' }}>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
@@ -1027,8 +1436,12 @@ export const LensCanvasDetails: React.FC<LensCanvasDetailsProps> = ({
             ) : (
               <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)' }}>No scouting jobs found</div>
             )}
-          </Card>
-        </div>
+              </div>
+            </details>
+          </div>
+            </CollapseSection>
+          </>
+        ) : null}
       </div>
     </div>
   );

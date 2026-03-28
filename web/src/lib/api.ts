@@ -244,6 +244,48 @@ export interface HorizonSimulationExplanationResponse {
   explanation: HorizonSimulationExplanationPayload;
 }
 
+export interface HorizonHotPathPhase {
+  phase?: string;
+  id: string;
+  title: string;
+  status: string;
+  summary?: string;
+  startedAt?: string;
+  endedAt?: string;
+  durationMs?: number;
+  details?: Record<string, any>;
+  artifacts?: Record<string, any>;
+  metricsRefreshed?: number;
+  simulationRunId?: string;
+}
+
+export interface HorizonHotPathInquiryResponse {
+  mode: string;
+  status: string;
+  cached?: boolean;
+  lensReused?: boolean;
+  questionRunId?: string;
+  interactionId?: string;
+  expiresAt?: string;
+  phases?: HorizonHotPathPhase[];
+  stages?: Array<{
+    id: string;
+    title: string;
+    status: string;
+    detail?: string;
+    startedAt?: string;
+    endedAt?: string;
+  }>;
+  simulation?: {
+    runId?: string;
+    status?: string;
+    reused?: boolean;
+    createdAt?: string;
+    finishedAt?: string;
+  };
+  primaryReadout?: Record<string, any>;
+}
+
 export interface HorizonSimulationRunSummary {
   id: string;
   status: string;
@@ -2076,6 +2118,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       decompositionHints?: string[];
     };
     lens: HorizonLensRecord;
+    hotPath?: HorizonHotPathInquiryResponse;
   }> {
     try {
       const headers: Record<string, string> = {};

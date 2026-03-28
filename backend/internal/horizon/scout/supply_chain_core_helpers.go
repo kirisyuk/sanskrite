@@ -132,7 +132,7 @@ func normalizeSupplyLinkSegment(seg *SupplyLinkSegment) *SupplyLinkSegment {
 	out.CustomerRef = strings.TrimSpace(out.CustomerRef)
 	out.SupplierFacilityRef = strings.TrimSpace(out.SupplierFacilityRef)
 	out.CustomerFacilityRef = strings.TrimSpace(out.CustomerFacilityRef)
-	out.TransportViaRefs = compactPathList(out.TransportViaRefs)
+	out.TransportViaRefs = models.NormalizeTransportViaRefs(compactPathList(out.TransportViaRefs))
 	if out.SupplierRef == "" || out.ProductRef == "" || out.CustomerRef == "" {
 		return nil
 	}
@@ -190,6 +190,7 @@ func supplyLinkSegmentDedupKey(seg *SupplyLinkSegment) string {
 		strings.TrimSpace(seg.SupplierFacilityRef),
 		strings.TrimSpace(seg.CustomerFacilityRef),
 		strings.TrimSpace(seg.SegmentClass),
+		models.BuildSupplyLinkRouteVariantKey(seg.TransportViaRefs),
 	}, "|")
 }
 

@@ -120,6 +120,7 @@ type supplyChainQueryLink struct {
 	Key                     string
 	SupplyLinkID            string
 	SupplyLinkCanonicalPath string
+	RouteVariantKey         string
 	SupplyLinkTenantID      string
 	SupplierRef             string
 	ProductRef              string
@@ -254,23 +255,24 @@ func (e *SupplyChainQueryEngine) snapshotFromLinks(links []*models.HorizonFragme
 		ProductUpstream:   make(map[string]map[string]struct{}),
 	}
 	for _, raw := range links {
-		link := normalizeSupplyChainQueryLink(raw)
-		if link == nil {
-			continue
-		}
-		snapshot.Links = append(snapshot.Links, link)
-		snapshot.ByProduct[link.ProductRef] = append(snapshot.ByProduct[link.ProductRef], link)
-		for _, key := range link.SupplierKeys {
-			snapshot.BySupplier[key] = append(snapshot.BySupplier[key], link)
-		}
-		for _, key := range link.CustomerKeys {
-			snapshot.ByCustomer[key] = append(snapshot.ByCustomer[key], link)
+		for _, link := range normalizeSupplyChainQueryLinks(raw) {
+			if link == nil {
+				continue
+			}
+			snapshot.Links = append(snapshot.Links, link)
+			snapshot.ByProduct[link.ProductRef] = append(snapshot.ByProduct[link.ProductRef], link)
+			for _, key := range link.SupplierKeys {
+				snapshot.BySupplier[key] = append(snapshot.BySupplier[key], link)
+			}
+			for _, key := range link.CustomerKeys {
+				snapshot.ByCustomer[key] = append(snapshot.ByCustomer[key], link)
+			}
 		}
 	}
 	return snapshot
 }
 
-func normalizeSupplyChainQueryLink(raw *models.HorizonFragment) *supplyChainQueryLink {
+func normalizeSupplyChainQueryLinks(raw *models.HorizonFragment) []*supplyChainQueryLink {
 	if raw == nil || raw.Type != models.FragmentTypeSupplyLink || raw.ProductRef == nil {
 		return nil
 	}
@@ -330,29 +332,35 @@ func normalizeSupplyChainQueryLink(raw *models.HorizonFragment) *supplyChainQuer
 	if !supplysemantics.IsMaterializableSegmentClass(segmentClass) {
 		return nil
 	}
-
-	return &supplyChainQueryLink{
-		Key:                     models.GetSupplyLinkKey(raw),
-		SupplyLinkID:            strings.TrimSpace(raw.ID),
-		SupplyLinkCanonicalPath: strings.TrimSpace(raw.CanonicalPath),
-		SupplyLinkTenantID:      strings.TrimSpace(raw.TenantID),
-		SupplierRef:             supplierRef,
-		ProductRef:              productRef,
-		CustomerRef:             customerRef,
-		SupplierFacilityRef:     supplierFacilityRef,
-		CustomerFacilityRef:     customerFacilityRef,
-		TransportViaRefs:        transportViaRefs,
-		VesselType:              extractVesselTypeQualifier(raw.Qualifiers),
-		SegmentClass:            segmentClass,
-		Confidence:              confidence,
-		TenantID:                strings.TrimSpace(raw.TenantID),
-		IsTenantSpecific:        strings.TrimSpace(raw.TenantID) != "" && strings.TrimSpace(raw.TenantID) != "global",
-		Metrics:                 metrics,
-		ValidFrom:               raw.ValidFrom,
-		ValidTo:                 raw.ValidTo,
-		SupplierKeys:            buildSupplyChainEndpointKeys(supplierRef, supplierFacilityRef),
-		CustomerKeys:            buildSupplyChainEndpointKeys(customerRef, customerFacilityRef),
+	routeVariants := models.ExtractSupplyLinkRouteVariants(raw.Qualifiers, transportViaRefs, extractVesselTypeQualifier(raw.Qualifiers), confidence)
+	out := make([]*supplyChainQueryLink, 0, len(routeVariants))
+	for _, variant := range routeVariants {
+		variant = models.NormalizeSupplyLinkRouteVariant(variant)
+		out = append(out, &supplyChainQueryLink{
+			Key:                     models.GetSupplyLinkKey(raw) + "|" + strings.TrimSpace(variant.VariantKey),
+			SupplyLinkID:            strings.TrimSpace(raw.ID),
+			SupplyLinkCanonicalPath: strings.TrimSpace(raw.CanonicalPath),
+			RouteVariantKey:         strings.TrimSpace(variant.VariantKey),
+			SupplyLinkTenantID:      strings.TrimSpace(raw.TenantID),
+			SupplierRef:             supplierRef,
+			ProductRef:              productRef,
+			CustomerRef:             customerRef,
+			SupplierFacilityRef:     supplierFacilityRef,
+			CustomerFacilityRef:     customerFacilityRef,
+			TransportViaRefs:        append([]string(nil), variant.TransportViaRefs...),
+			VesselType:              strings.TrimSpace(variant.VesselType),
+			SegmentClass:            segmentClass,
+			Confidence:              confidence,
+			TenantID:                strings.TrimSpace(raw.TenantID),
+			IsTenantSpecific:        strings.TrimSpace(raw.TenantID) != "" && strings.TrimSpace(raw.TenantID) != "global",
+			Metrics:                 metrics,
+			ValidFrom:               raw.ValidFrom,
+			ValidTo:                 raw.ValidTo,
+			SupplierKeys:            buildSupplyChainEndpointKeys(supplierRef, supplierFacilityRef),
+			CustomerKeys:            buildSupplyChainEndpointKeys(customerRef, customerFacilityRef),
+		})
 	}
+	return out
 }
 
 func buildSupplyChainEndpointKeys(primary string, facility *string) []string {
@@ -860,6 +868,7 @@ func queryLinkToPathSegment(link *supplyChainQueryLink) PathSegment {
 	return PathSegment{
 		SupplyLinkID:            link.SupplyLinkID,
 		SupplyLinkCanonicalPath: link.SupplyLinkCanonicalPath,
+		RouteVariantKey:         link.RouteVariantKey,
 		SupplyLinkTenantID:      link.SupplyLinkTenantID,
 		SupplierRef:             link.SupplierRef,
 		ProductRef:              link.ProductRef,
@@ -907,7 +916,7 @@ func appendCandidatePath(
 	}
 	keyParts := make([]string, 0, len(segments))
 	for _, segment := range segments {
-		keyParts = append(keyParts, strings.TrimSpace(segment.SupplyLinkCanonicalPath))
+		keyParts = append(keyParts, strings.TrimSpace(segment.SupplyLinkCanonicalPath)+"#"+strings.TrimSpace(segment.RouteVariantKey))
 	}
 	key := strings.Join(keyParts, "->")
 	if _, ok := seen[key]; ok {

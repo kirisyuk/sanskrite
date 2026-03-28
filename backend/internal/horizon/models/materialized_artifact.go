@@ -482,29 +482,57 @@ type SupplyChainPathEdge struct {
 // SupplyChainPathLeg describes one ordered operational leg of a path, enriched
 // with spatial bindings to routes, curated zones, and dynamic affected zones.
 type SupplyChainPathLeg struct {
-	Index                   int                   `json:"index"`
-	SupplierRef             string                `json:"supplierRef,omitempty"`
-	CustomerRef             string                `json:"customerRef,omitempty"`
-	ProductRef              string                `json:"productRef,omitempty"`
-	SupplyLinkCanonicalPath string                `json:"supplyLinkCanonicalPath,omitempty"`
-	SupplyLinkID            string                `json:"supplyLinkId,omitempty"`
-	SupplyLinkTenantID      string                `json:"supplyLinkTenantId,omitempty"`
-	SupplierNodeIndex       *int                  `json:"supplierNodeIndex,omitempty"`
-	CustomerNodeIndex       *int                  `json:"customerNodeIndex,omitempty"`
-	ProductNodeIndex        *int                  `json:"productNodeIndex,omitempty"`
-	TransportViaRefs        []string              `json:"transportViaRefs,omitempty"`
-	TransportViaNodeIndices []int                 `json:"transportViaNodeIndices,omitempty"`
-	VesselType              string                `json:"vesselType,omitempty"`
-	Mode                    string                `json:"mode,omitempty"`
-	GeoRefs                 []string              `json:"geoRefs,omitempty"`
-	FlowRefs                []string              `json:"flowRefs,omitempty"`
-	AlternateFlowRefs       []string              `json:"alternateFlowRefs,omitempty"`
-	ZoneRefs                []string              `json:"zoneRefs,omitempty"`
-	AffectedZoneRefs        []string              `json:"affectedZoneRefs,omitempty"`
-	SpatialSemantics        []string              `json:"spatialSemantics,omitempty"`
-	BindingConfidence       float64               `json:"bindingConfidence,omitempty"`
-	SegmentConfidence       float64               `json:"segmentConfidence,omitempty"`
-	Stress                  *SupplyChainLegStress `json:"stress,omitempty"`
+	Index                   int                       `json:"index"`
+	SupplierRef             string                    `json:"supplierRef,omitempty"`
+	CustomerRef             string                    `json:"customerRef,omitempty"`
+	ProductRef              string                    `json:"productRef,omitempty"`
+	SupplyLinkCanonicalPath string                    `json:"supplyLinkCanonicalPath,omitempty"`
+	SupplyLinkID            string                    `json:"supplyLinkId,omitempty"`
+	SupplyLinkTenantID      string                    `json:"supplyLinkTenantId,omitempty"`
+	RouteVariantKey         string                    `json:"routeVariantKey,omitempty"`
+	SupplierNodeIndex       *int                      `json:"supplierNodeIndex,omitempty"`
+	CustomerNodeIndex       *int                      `json:"customerNodeIndex,omitempty"`
+	ProductNodeIndex        *int                      `json:"productNodeIndex,omitempty"`
+	TransportViaRefs        []string                  `json:"transportViaRefs,omitempty"`
+	TransportViaNodeIndices []int                     `json:"transportViaNodeIndices,omitempty"`
+	RouteCoordinates        []Coordinates             `json:"routeCoordinates,omitempty"`
+	RouteGeometrySource     string                    `json:"routeGeometrySource,omitempty"`
+	VesselType              string                    `json:"vesselType,omitempty"`
+	Mode                    string                    `json:"mode,omitempty"`
+	GeoRefs                 []string                  `json:"geoRefs,omitempty"`
+	FlowRefs                []string                  `json:"flowRefs,omitempty"`
+	AlternateFlowRefs       []string                  `json:"alternateFlowRefs,omitempty"`
+	ZoneRefs                []string                  `json:"zoneRefs,omitempty"`
+	AffectedZoneRefs        []string                  `json:"affectedZoneRefs,omitempty"`
+	SpatialSemantics        []string                  `json:"spatialSemantics,omitempty"`
+	RouteOverlays           []SupplyChainRouteOverlay `json:"routeOverlays,omitempty"`
+	BindingConfidence       float64                   `json:"bindingConfidence,omitempty"`
+	SegmentConfidence       float64                   `json:"segmentConfidence,omitempty"`
+	Stress                  *SupplyChainLegStress     `json:"stress,omitempty"`
+}
+
+// SupplyChainRouteOverlay describes one logistics overlay variant for a structural leg.
+// Multiple overlays may exist for the same materialized leg without changing the structural path.
+type SupplyChainRouteOverlay struct {
+	OverlayKey            string        `json:"overlayKey,omitempty"`
+	RouteVariantKey       string        `json:"routeVariantKey,omitempty"`
+	RouteProfileKey       string        `json:"routeProfileKey,omitempty"`
+	OrderedRefs           []string      `json:"orderedRefs,omitempty"`
+	TransportViaRefs      []string      `json:"transportViaRefs,omitempty"`
+	RouteCoordinates      []Coordinates `json:"routeCoordinates,omitempty"`
+	RouteGeometrySource   string        `json:"routeGeometrySource,omitempty"`
+	Mode                  string        `json:"mode,omitempty"`
+	FlowRefs              []string      `json:"flowRefs,omitempty"`
+	AlternateFlowRefs     []string      `json:"alternateFlowRefs,omitempty"`
+	GeoRefs               []string      `json:"geoRefs,omitempty"`
+	ZoneRefs              []string      `json:"zoneRefs,omitempty"`
+	AffectedZoneRefs      []string      `json:"affectedZoneRefs,omitempty"`
+	SpatialSemantics      []string      `json:"spatialSemantics,omitempty"`
+	VesselType            string        `json:"vesselType,omitempty"`
+	BindingConfidence     float64       `json:"bindingConfidence,omitempty"`
+	SegmentConfidence     float64       `json:"segmentConfidence,omitempty"`
+	EndpointBindingPolicy string        `json:"endpointBindingPolicy,omitempty"`
+	Status                string        `json:"status,omitempty"`
 }
 
 // SupplyChainLegStress captures structural stress on a single path leg.
@@ -656,6 +684,11 @@ func validateSupplyChainPathPayload(payload map[string]interface{}) error {
 			for _, viaIdx := range leg.TransportViaNodeIndices {
 				if viaIdx < 0 || viaIdx >= len(decodedNodes) {
 					return fmt.Errorf("payload leg[%d] has out-of-range transportViaNodeIndex", i)
+				}
+			}
+			for coordIdx, coord := range leg.RouteCoordinates {
+				if !IsRealGeoCoordinate(coord.Lat, coord.Lon) {
+					return fmt.Errorf("payload leg[%d] routeCoordinates[%d] must contain real geo coordinates", i, coordIdx)
 				}
 			}
 		}

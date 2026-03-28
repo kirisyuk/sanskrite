@@ -160,6 +160,38 @@ func TestTraceWithSnapshot_FiltersByActorEndpoints(t *testing.T) {
 	}
 }
 
+func TestSnapshotFromLinks_ExplodesRouteVariants(t *testing.T) {
+	engine := NewSupplyChainQueryEngine(nil, nil)
+	frag := testSupplyLinkFragment(
+		"s1",
+		"/supply-link/global/a/enzyme/b",
+		"/org/us/company-a",
+		"/product/chemical/enzyme/industrial/enzyme-a",
+		"/org/us/company-b",
+	)
+	frag.Qualifiers = map[string]interface{}{
+		"routeVariants": []map[string]interface{}{
+			{
+				"variantKey":       "via-suez",
+				"transportViaRefs": []string{"/fac/eg/suez-terminal"},
+				"confidence":       0.81,
+			},
+			{
+				"variantKey":       "via-cape",
+				"transportViaRefs": []string{"/fac/za/cape-of-good-hope-terminal"},
+				"confidence":       0.79,
+			},
+		},
+	}
+	snapshot := engine.snapshotFromLinks([]*models.HorizonFragment{frag})
+	if len(snapshot.Links) != 2 {
+		t.Fatalf("links=%d, want 2 route variants", len(snapshot.Links))
+	}
+	if snapshot.Links[0].RouteVariantKey == snapshot.Links[1].RouteVariantKey {
+		t.Fatalf("route variant keys should differ: %+v", snapshot.Links)
+	}
+}
+
 func testSupplyLinkFragment(id string, canonicalPath string, supplierRef string, productRef string, customerRef string) *models.HorizonFragment {
 	return &models.HorizonFragment{
 		ID:            id,

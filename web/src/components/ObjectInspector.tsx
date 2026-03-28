@@ -7,6 +7,7 @@ import { HorizonNodeIcon, getNodeColors, formatHorizonFragmentType, getMetricCol
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { humanizeCanonicalPath, preferDisplayLabel } from '../lib/uiUtils';
+import { describeRouteOverlay, readLegRouteOverlays, selectPrimaryLegRouteOverlay } from '../lib/supplyRouteOverlays';
 import { HorizonOnDemandDependencyResolverModal, type HorizonOnDemandContext } from './HorizonOnDemandDependencyResolverModal';
 import { RISK_SEGMENTS, RiskSegmentIcon, segmentForMetricBaseKey } from '../lib/riskShield';
 
@@ -1438,6 +1439,19 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
     const pathVesselType = String(src?.pathVesselType || src?.pathQualifiers?.vesselType || '').trim();
     const dominantFactors = readStringArray(src?.pathDominantFactors);
     const flowRefs = readStringArray(src?.pathFlowRefs);
+    const routeOverlays = readLegRouteOverlays({
+      routeOverlays: src?.pathRouteOverlays || [],
+      routeVariantKey: src?.pathRouteVariantKey,
+      transportViaRefs: src?.pathTransportViaRefs,
+      routeGeometrySource: src?.pathRouteGeometrySource,
+      mode: src?.pathMode,
+      flowRefs: src?.pathFlowRefs,
+      zoneRefs: src?.pathZoneRefs,
+      affectedZoneRefs: src?.pathAffectedZoneRefs,
+      spatialSemantics: src?.pathSpatialSemantics,
+      vesselType: pathVesselType,
+      bindingConfidence: src?.pathBindingConfidence,
+    });
     const zoneRefs = readStringArray(src?.pathZoneRefs);
     const affectedZoneRefs = readStringArray(src?.pathAffectedZoneRefs);
     const spatialSemantics = readStringArray(src?.pathSpatialSemantics);
@@ -1454,6 +1468,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       !!pathVesselType ||
       !!src?.pathSufficiencyStatus ||
       flowRefs.length > 0 ||
+      routeOverlays.length > 0 ||
       zoneRefs.length > 0 ||
       affectedZoneRefs.length > 0 ||
       spatialSemantics.length > 0;
@@ -1486,6 +1501,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       pathBottleneck: Boolean(src?.pathBottleneck),
       dominantFactors,
       flowRefs,
+      routeOverlays,
       zoneRefs,
       affectedZoneRefs,
       spatialSemantics,
@@ -1914,6 +1930,29 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                   v={
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                       {edgePathLegMeta.flowRefs.map((item) => <Chip key={item}>{item}</Chip>)}
+                    </div>
+                  }
+                />
+              )}
+              {edgePathLegMeta.routeOverlays.length > 0 && (
+                <KV
+                  k="Route overlays"
+                  v={
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {(() => {
+                        const primary = selectPrimaryLegRouteOverlay(edgePathLegMeta.routeOverlays);
+                        return edgePathLegMeta.routeOverlays.map((overlay) => {
+                        const label = describeRouteOverlay(overlay) || overlay.routeGeometrySource || overlay.routeVariantKey || overlay.overlayKey;
+                        return (
+                          <div key={overlay.overlayKey} style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                            <Chip tone={primary?.overlayKey === overlay.overlayKey ? 'info' : undefined}>
+                              {primary?.overlayKey === overlay.overlayKey ? `primary: ${label}` : label}
+                            </Chip>
+                            {overlay.routeVariantKey ? <Chip>{overlay.routeVariantKey}</Chip> : null}
+                          </div>
+                        );
+                        });
+                      })()}
                     </div>
                   }
                 />

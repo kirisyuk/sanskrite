@@ -1012,13 +1012,13 @@ func filterDiscoveredRelationsByDomainModesWithDomainAnchorAndLog(sourceFragment
 			}
 			continue
 		}
-		if sourceIsSupplyChainMode && (dt == models.DependencyTypeOwns || dt == models.DependencyTypeControls) {
+		if sourceIsSupplyChainMode && allowSupplyChainOverlayRelationByPath(sourcePath, strings.TrimSpace(rel.SourceCanonicalPath), strings.TrimSpace(rel.TargetCanonicalPath), dt) {
 			srcPath := strings.TrimSpace(rel.SourceCanonicalPath)
 			if srcPath == "" {
 				srcPath = sourcePath
 			}
 			dstPath := strings.TrimSpace(rel.TargetCanonicalPath)
-			if allowSupplyChainOwnershipOrControlByPath(srcPath, dstPath) {
+			if allowSupplyChainOverlayByPath(srcPath, dstPath, dt) {
 				rel.RelationType = normalized
 				out = append(out, rel)
 				continue
@@ -1047,17 +1047,40 @@ func filterDiscoveredRelationsByDomainModesWithDomainAnchorAndLog(sourceFragment
 }
 
 func allowSupplyChainOwnershipOrControlByPath(sourcePath, targetPath string) bool {
+	return allowSupplyChainOverlayByPath(sourcePath, targetPath, models.DependencyTypeOwns) ||
+		allowSupplyChainOverlayByPath(sourcePath, targetPath, models.DependencyTypeControls)
+}
+
+func allowSupplyChainOverlayRelationByPath(defaultSourcePath, explicitSourcePath, targetPath string, relationType models.DependencyType) bool {
+	srcPath := strings.TrimSpace(explicitSourcePath)
+	if srcPath == "" {
+		srcPath = strings.TrimSpace(defaultSourcePath)
+	}
+	return allowSupplyChainOverlayByPath(srcPath, strings.TrimSpace(targetPath), relationType)
+}
+
+func allowSupplyChainOverlayByPath(sourcePath, targetPath string, relationType models.DependencyType) bool {
 	sourcePath = strings.TrimSpace(sourcePath)
 	targetPath = strings.TrimSpace(targetPath)
 	if sourcePath == "" || targetPath == "" {
 		return false
 	}
-	sourceOk := strings.HasPrefix(sourcePath, "/org/") || strings.HasPrefix(sourcePath, "/gov/")
-	if !sourceOk {
+	relationType = models.DependencyType(strings.TrimSpace(taxonomy.NormalizeRelationType(string(relationType))))
+	sourceIsController := strings.HasPrefix(sourcePath, "/org/") || strings.HasPrefix(sourcePath, "/gov/")
+	targetIsOperational := strings.HasPrefix(targetPath, "/org/") || strings.HasPrefix(targetPath, "/fac/") || strings.HasPrefix(targetPath, "/deposit/")
+	switch relationType {
+	case models.DependencyTypeOwns, models.DependencyTypeControls:
+		return sourceIsController && targetIsOperational
+	case models.DependencyTypeAdministers:
+		targetIsAdministered := targetIsOperational || strings.HasPrefix(targetPath, "/program/") || strings.HasPrefix(targetPath, "/gov/")
+		return sourceIsController && targetIsAdministered
+	case models.DependencyTypeSubsidiaryOf:
+		sourceIsSubsidiary := strings.HasPrefix(sourcePath, "/org/") || strings.HasPrefix(sourcePath, "/gov/")
+		targetIsParent := strings.HasPrefix(targetPath, "/org/") || strings.HasPrefix(targetPath, "/gov/")
+		return sourceIsSubsidiary && targetIsParent
+	default:
 		return false
 	}
-	targetOk := strings.HasPrefix(targetPath, "/org/") || strings.HasPrefix(targetPath, "/fac/") || strings.HasPrefix(targetPath, "/deposit/")
-	return targetOk
 }
 
 // filterEmptySupplyChains removes chains that have no nodes (LLM returned
@@ -2205,6 +2228,23 @@ func (e *ScoutEngine) bestEffortDeferredScopeAdd(ctx context.Context, lensID, ca
 		"path":   canonicalPath,
 		"count":  res.DeferredScopeAddCount,
 	})
+}
+
+func (e *ScoutEngine) bestEffortDeferredScopeAddForJob(ctx context.Context, job *models.ScoutingJob, lensID, canonicalPath string) {
+	if !jobAllowsDeferredScopeAdd(job, canonicalPath) {
+		trace.Log(ctx, "scope", "scope.deferred_add.blocked_by_workscope", map[string]any{
+			"lensId": lensID,
+			"path":   strings.TrimSpace(canonicalPath),
+			"jobId": func() string {
+				if job == nil {
+					return ""
+				}
+				return strings.TrimSpace(job.ID)
+			}(),
+		})
+		return
+	}
+	e.bestEffortDeferredScopeAdd(ctx, lensID, canonicalPath)
 }
 
 // isScopeEligibleEntityType returns true for entity types that should be auto-added
@@ -5857,7 +5897,7 @@ SKIP_METRICS:
 	if lensID != "" && e.lensesRepo != nil && e.fragmentsRepo != nil {
 		effectiveCP := strings.TrimSpace(existingFragment.CanonicalPath)
 		if effectiveCP != "" {
-			e.bestEffortDeferredScopeAdd(ctx, lensID, effectiveCP)
+			e.bestEffortDeferredScopeAddForJob(ctx, job, lensID, effectiveCP)
 		}
 		e.bestEffortRemoveOrphanScopePaths(ctx, lensID)
 	}

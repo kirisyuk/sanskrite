@@ -6,7 +6,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
-func TestNormalizeAndDedupSupplyLinkSegments_MergesDuplicates(t *testing.T) {
+func TestNormalizeAndDedupSupplyLinkSegments_PreservesDistinctRouteVariants(t *testing.T) {
 	segments := normalizeAndDedupSupplyLinkSegments([]*SupplyLinkSegment{
 		{
 			SupplierRef:      "/fac/jp/a",
@@ -31,6 +31,42 @@ func TestNormalizeAndDedupSupplyLinkSegments_MergesDuplicates(t *testing.T) {
 			},
 		},
 	})
+	if len(segments) != 2 {
+		t.Fatalf("segments=%d, want 2", len(segments))
+	}
+	if got := len(segments[0].TransportViaRefs); got != 1 {
+		t.Fatalf("first route via=%v, want 1 exact via ref", segments[0].TransportViaRefs)
+	}
+	if got := len(segments[1].TransportViaRefs); got != 2 {
+		t.Fatalf("second route via=%v, want preserved ordered variant", segments[1].TransportViaRefs)
+	}
+}
+
+func TestNormalizeAndDedupSupplyLinkSegments_MergesExactDuplicates(t *testing.T) {
+	segments := normalizeAndDedupSupplyLinkSegments([]*SupplyLinkSegment{
+		{
+			SupplierRef:      "/fac/jp/a",
+			ProductRef:       "/product/component/electronic/assembly/ev-battery-cell",
+			CustomerRef:      "/org/us/tesla",
+			TransportViaRefs: []string{"/fac/us/port-long-beach"},
+			SegmentClass:     "external_product_flow",
+			Confidence:       0.6,
+			State: map[string]models.MetricValue{
+				"volume": {Value: 10},
+			},
+		},
+		{
+			SupplierRef:      "/fac/jp/a",
+			ProductRef:       "/product/component/electronic/assembly/ev-battery-cell",
+			CustomerRef:      "/org/us/tesla",
+			TransportViaRefs: []string{"/fac/us/port-long-beach"},
+			SegmentClass:     "external_product_flow",
+			Confidence:       0.9,
+			State: map[string]models.MetricValue{
+				"share": {Value: 0.4},
+			},
+		},
+	})
 	if len(segments) != 1 {
 		t.Fatalf("segments=%d, want 1", len(segments))
 	}
@@ -38,8 +74,8 @@ func TestNormalizeAndDedupSupplyLinkSegments_MergesDuplicates(t *testing.T) {
 	if seg.Confidence != 0.9 {
 		t.Fatalf("confidence=%v, want 0.9", seg.Confidence)
 	}
-	if len(seg.TransportViaRefs) != 2 {
-		t.Fatalf("transportViaRefs=%v, want 2 unique refs", seg.TransportViaRefs)
+	if len(seg.TransportViaRefs) != 1 {
+		t.Fatalf("transportViaRefs=%v, want exact single route", seg.TransportViaRefs)
 	}
 	if _, ok := seg.State["volume"]; !ok {
 		t.Fatalf("expected merged volume metric")

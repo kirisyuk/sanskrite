@@ -8,10 +8,12 @@ import (
 
 	"github.com/google/uuid"
 	horizondomain "github.com/igorkirisyuk/sanskrite/internal/horizon/domain"
+	hlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/workscope"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
@@ -29,6 +31,7 @@ type scopeScoutFullRequest struct {
 	MaxRecursionDepth *int     `json:"maxRecursionDepth,omitempty"`
 	Mode              string   `json:"mode,omitempty"`
 	Specialties       []string `json:"specialties,omitempty"`
+	ScopePolicy       string   `json:"scopePolicy,omitempty"`
 }
 
 type scopeScoutFullResponse struct {
@@ -149,6 +152,16 @@ func (h *HorizonHandlers) ScopeScoutLensFull(w http.ResponseWriter, r *http.Requ
 	if len(deferredScopePaths) > maxAnchors {
 		deferredScopePaths = deferredScopePaths[:maxAnchors]
 	}
+	expansion, err := h.service.Lens().ExpandScope(ctx, lens, hlens.ScopeExpansionRequest{
+		LensID:         lens.ID,
+		CanonicalPaths: deferredScopePaths,
+		MaxAdds:        scopeScoutFullFirstFiveForGraph,
+		Reason:         "scope_scout_full",
+	})
+	if err != nil {
+		http.Error(w, "Failed to expand lens scope", http.StatusInternalServerError)
+		return
+	}
 
 	scoutingMode := normalizeScopeScoutMode(body.Mode)
 	mergedSpecialties := append([]string(nil), body.Specialties...)
@@ -178,6 +191,10 @@ func (h *HorizonHandlers) ScopeScoutLensFull(w http.ResponseWriter, r *http.Requ
 	}
 	viewConfig["maxRecursionDepth"] = maxRecursionDepth
 	executionPlan := scout.BuildExecutionPlanContract(viewConfig, domainModes, specialties)
+	request := workscope.NewLensGraphEnrichmentRequest(
+		workscope.FromLensStrictWorkScope(lens.TenantID, lens.ProjectID, lens.ID, deferredScopePaths),
+		normalizeLensScopePolicy(body.ScopePolicy, workscope.MutationModePersistWorldKeepScope),
+	)
 
 	jobIDs := make([]string, 0, len(deferredScopePaths))
 	activeScoutJobs := map[string]string{}
@@ -256,6 +273,7 @@ func (h *HorizonHandlers) ScopeScoutLensFull(w http.ResponseWriter, r *http.Requ
 			state["supplyChainExpandEnabled"] = true
 			state["supplyChainExpandMaxNodes"] = 5.0
 		}
+		state = workscope.ApplyRequestToState(state, request)
 		scout.ApplyExecutionPlanToState(state, executionPlan)
 
 		scoutingJob := &models.ScoutingJob{
@@ -297,14 +315,7 @@ func (h *HorizonHandlers) ScopeScoutLensFull(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	firstFiveForGraph := deferredScopePaths
-	if len(firstFiveForGraph) > scopeScoutFullFirstFiveForGraph {
-		firstFiveForGraph = firstFiveForGraph[:scopeScoutFullFirstFiveForGraph]
-	}
-
-	if len(firstFiveForGraph) > 0 && h.service.Lens() != nil {
-		_, _ = h.service.Lens().AddScopePathsAutoLimited(ctx, lensID, firstFiveForGraph, models.MaxAutoScopeAddsPerLens)
-	}
+	firstFiveForGraph := append([]string(nil), expansion.AppliedPaths...)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Correlation-Id", correlationID)

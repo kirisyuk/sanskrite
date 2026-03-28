@@ -132,6 +132,8 @@ type PathSegment struct {
 	SupplyLinkID string
 	// Stable canonical path of the originating SupplyLink fragment.
 	SupplyLinkCanonicalPath string
+	// RouteVariantKey distinguishes distinct observed route variants for one coarse supply-link.
+	RouteVariantKey string
 	// TenantID of the originating SupplyLink fragment.
 	SupplyLinkTenantID string
 	// Supplier organization/facility/deposit canonical path
@@ -174,6 +176,38 @@ type SupplyChainPath struct {
 	// Build metadata
 	BuildMode string
 	MaxDepth  int
+}
+
+// SupplyChainMaterializationStage names the reusable sub-stages that turn a structural path into a persisted artifact.
+type SupplyChainMaterializationStage string
+
+const (
+	SupplyChainMaterializationStageTopology      SupplyChainMaterializationStage = "materialized_path_topology"
+	SupplyChainMaterializationStageRouteOverlays SupplyChainMaterializationStage = "route_overlays"
+	SupplyChainMaterializationStageStress        SupplyChainMaterializationStage = "path_stress"
+	SupplyChainMaterializationStageSufficiency   SupplyChainMaterializationStage = "path_sufficiency"
+	SupplyChainMaterializationStageArtifact      SupplyChainMaterializationStage = "artifact_projection"
+)
+
+// SupplyChainMaterializationDraft is the reusable handoff between structural path materialization and persistence.
+type SupplyChainMaterializationDraft struct {
+	Nodes          []models.SupplyChainPathNode
+	Edges          []models.SupplyChainPathEdge
+	Legs           []models.SupplyChainPathLeg
+	Stress         *models.SupplyChainPathStress
+	Sufficiency    *models.SupplyChainPathSufficiency
+	BindingSummary models.SupplyChainPathBindingSummary
+}
+
+// MaterializationStageNames documents the preferred sub-stage order inside structural path materialization.
+func (SupplyChainPathBuilder) MaterializationStageNames() []string {
+	return []string{
+		string(SupplyChainMaterializationStageTopology),
+		string(SupplyChainMaterializationStageRouteOverlays),
+		string(SupplyChainMaterializationStageStress),
+		string(SupplyChainMaterializationStageSufficiency),
+		string(SupplyChainMaterializationStageArtifact),
+	}
 }
 
 // BuildUpstreamPaths builds supply chain paths upstream from a given customer.
@@ -798,6 +832,167 @@ func mergeStringSlices(a, b []string) []string {
 	return merged
 }
 
+// BuildMaterializationDraft projects a structural SupplyChainPath into the reusable draft shared by
+// artifact persistence, rebuilds, previews, and route-overlay aggregation.
+func (b *SupplyChainPathBuilder) BuildMaterializationDraft(ctx context.Context, path *SupplyChainPath) *SupplyChainMaterializationDraft {
+	if path == nil {
+		return nil
+	}
+	nodes, edges, legs, stress := b.pathToMaterializedPayload(ctx, path)
+	sufficiency := b.evaluatePathSufficiency(ctx, path, legs)
+	payload := models.BuildSupplyChainPathPayloadDetailed(nodes, edges, legs, stress, sufficiency, path.Family, buildSupplyChainArtifactNotes(path, legs, stress))
+	parsedPayload, _ := models.ParseSupplyChainPathPayload(payload)
+	return &SupplyChainMaterializationDraft{
+		Nodes:          nodes,
+		Edges:          edges,
+		Legs:           legs,
+		Stress:         stress,
+		Sufficiency:    sufficiency,
+		BindingSummary: models.SummarizeSupplyChainPathBindings(parsedPayload),
+	}
+}
+
+func buildMaterializedArtifactFromDraft(
+	path *SupplyChainPath,
+	draft *SupplyChainMaterializationDraft,
+	tenantID string,
+	lensID string,
+	canonicalKey string,
+) *models.MaterializedArtifact {
+	if path == nil || draft == nil || canonicalKey == "" {
+		return nil
+	}
+	payload := models.BuildSupplyChainPathPayloadDetailed(
+		draft.Nodes,
+		draft.Edges,
+		draft.Legs,
+		draft.Stress,
+		draft.Sufficiency,
+		path.Family,
+		buildSupplyChainArtifactNotes(path, draft.Legs, draft.Stress),
+	)
+	displayName := buildChainDisplayName(path.Segments)
+	labels := buildChainLabels(path.Segments)
+	artifact := &models.MaterializedArtifact{
+		TenantID:         tenantID,
+		LensID:           strings.TrimSpace(lensID),
+		Kind:             models.MaterializedKindSupplyChainPath,
+		CanonicalKey:     canonicalKey,
+		Payload:          payload,
+		PathStatus:       models.EffectivePathStatusFromSufficiency(draft.Sufficiency),
+		DisplayName:      displayName,
+		Labels:           labels,
+		NodeRefs:         collectNodeRefs(path.Segments),
+		GeoRefs:          draft.BindingSummary.GeoRefs,
+		FlowRefs:         draft.BindingSummary.FlowRefs,
+		ZoneRefs:         draft.BindingSummary.ZoneRefs,
+		AffectedZoneRefs: draft.BindingSummary.AffectedZoneRefs,
+		AnchorSupplier:   strings.TrimSpace(labels["anchorSupplier"]),
+		AnchorCustomer:   strings.TrimSpace(labels["anchorCustomer"]),
+		ProductAxis:      strings.TrimSpace(labels["productAxis"]),
+	}
+	models.PopulateMaterializedArtifactIndexes(artifact)
+	return artifact
+}
+
+func mergeMaterializedPathArtifacts(existing, incoming *models.MaterializedArtifact) (*models.MaterializedArtifact, error) {
+	if incoming == nil {
+		return existing, nil
+	}
+	if existing == nil {
+		return incoming, nil
+	}
+	merged := *incoming
+	merged.Payload = models.MergePayloads(existing.Payload, incoming.Payload)
+	merged.NodeRefs = mergeStringSlices(existing.NodeRefs, incoming.NodeRefs)
+	merged.ID = existing.ID
+	merged.CreatedAt = existing.CreatedAt
+	merged.CreatedBy = existing.CreatedBy
+	if existing.PathStatus == "validated" && models.PayloadNodesChanged(existing.Payload, merged.Payload) {
+		merged.PathStatus = "hypothesis"
+	} else if existing.PathStatus != "" {
+		merged.PathStatus = existing.PathStatus
+	}
+	if parsedMerged, perr := models.ParseSupplyChainPathPayload(merged.Payload); perr == nil && parsedMerged != nil && parsedMerged.Sufficiency != nil {
+		merged.PathStatus = models.EffectivePathStatusFromSufficiency(parsedMerged.Sufficiency)
+	}
+	models.PopulateMaterializedArtifactIndexes(&merged)
+	if err := merged.Validate(); err != nil {
+		return nil, fmt.Errorf("validation error after merge: %w", err)
+	}
+	return &merged, nil
+}
+
+// PrepareMaterializedPathArtifactsBatch turns one or more structural paths into unique artifacts keyed by
+// structural canonical key. Distinct route variants for the same structural path are merged into one artifact payload.
+func (b *SupplyChainPathBuilder) PrepareMaterializedPathArtifactsBatch(
+	ctx context.Context,
+	paths []*SupplyChainPath,
+	tenantID string,
+	lensID string,
+	canonicalKeys []string,
+) ([]*models.MaterializedArtifact, []string, error) {
+	if len(paths) == 0 || len(canonicalKeys) == 0 {
+		return nil, nil, nil
+	}
+	if len(paths) != len(canonicalKeys) {
+		return nil, nil, fmt.Errorf("paths and canonicalKeys must have same length")
+	}
+	existingMap := map[string]*models.MaterializedArtifact{}
+	if b != nil && b.artifactsRepo != nil {
+		batchExisting, err := b.artifactsRepo.BatchGetByCanonicalKeys(ctx, tenantID, models.MaterializedKindSupplyChainPath, canonicalKeys)
+		if err != nil {
+			return nil, nil, fmt.Errorf("batch get failed: %w", err)
+		}
+		existingMap = batchExisting
+	}
+	orderedKeys := make([]string, 0, len(canonicalKeys))
+	artifactsByKey := make(map[string]*models.MaterializedArtifact, len(canonicalKeys))
+	for i, path := range paths {
+		if path == nil {
+			continue
+		}
+		key := strings.TrimSpace(canonicalKeys[i])
+		if key == "" {
+			continue
+		}
+		draft := b.BuildMaterializationDraft(ctx, path)
+		artifact := buildMaterializedArtifactFromDraft(path, draft, tenantID, lensID, key)
+		if artifact == nil {
+			continue
+		}
+		if current := artifactsByKey[key]; current != nil {
+			merged, err := mergeMaterializedPathArtifacts(current, artifact)
+			if err != nil {
+				return nil, nil, err
+			}
+			artifactsByKey[key] = merged
+			continue
+		}
+		if existing := existingMap[key]; existing != nil {
+			merged, err := mergeMaterializedPathArtifacts(existing, artifact)
+			if err != nil {
+				return nil, nil, err
+			}
+			artifact = merged
+		}
+		artifactsByKey[key] = artifact
+		orderedKeys = append(orderedKeys, key)
+	}
+	artifacts := make([]*models.MaterializedArtifact, 0, len(orderedKeys))
+	for _, key := range orderedKeys {
+		artifact := artifactsByKey[key]
+		if artifact == nil {
+			continue
+		}
+		if err := artifact.Validate(); err != nil {
+			return nil, nil, fmt.Errorf("validation error: %w", err)
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	return artifacts, orderedKeys, nil
+}
+
 // MaterializePath saves a SupplyChainPath as a MaterializedArtifact.
 // If an artifact with the same canonical key already exists, payloads are merged (union of nodes/edges).
 func (b *SupplyChainPathBuilder) MaterializePath(
@@ -813,67 +1008,19 @@ func (b *SupplyChainPathBuilder) MaterializePath(
 	if canonicalKey == "" {
 		return "", fmt.Errorf("canonicalKey is required")
 	}
-
-	nodes, edges, legs, stress := b.pathToMaterializedPayload(ctx, path)
-
-	sufficiency := b.evaluatePathSufficiency(ctx, path, legs)
-	payload := models.BuildSupplyChainPathPayloadDetailed(nodes, edges, legs, stress, sufficiency, path.Family, buildSupplyChainArtifactNotes(path, legs, stress))
-
-	displayName := buildChainDisplayName(path.Segments)
-	labels := buildChainLabels(path.Segments)
-	nodeRefs := collectNodeRefs(path.Segments)
-	parsedPayload, _ := models.ParseSupplyChainPathPayload(payload)
-	bindingSummary := models.SummarizeSupplyChainPathBindings(parsedPayload)
-
-	artifact := &models.MaterializedArtifact{
-		TenantID:         tenantID,
-		LensID:           strings.TrimSpace(lensID),
-		Kind:             models.MaterializedKindSupplyChainPath,
-		CanonicalKey:     canonicalKey,
-		Payload:          payload,
-		PathStatus:       models.EffectivePathStatusFromSufficiency(sufficiency),
-		DisplayName:      displayName,
-		Labels:           labels,
-		NodeRefs:         nodeRefs,
-		GeoRefs:          bindingSummary.GeoRefs,
-		FlowRefs:         bindingSummary.FlowRefs,
-		ZoneRefs:         bindingSummary.ZoneRefs,
-		AffectedZoneRefs: bindingSummary.AffectedZoneRefs,
-		AnchorSupplier:   strings.TrimSpace(labels["anchorSupplier"]),
-		AnchorCustomer:   strings.TrimSpace(labels["anchorCustomer"]),
-		ProductAxis:      strings.TrimSpace(labels["productAxis"]),
+	draft := b.BuildMaterializationDraft(ctx, path)
+	artifact := buildMaterializedArtifactFromDraft(path, draft, tenantID, lensID, canonicalKey)
+	if artifact == nil {
+		return "", fmt.Errorf("failed to build artifact draft")
 	}
-	models.PopulateMaterializedArtifactIndexes(artifact)
 
 	// Check if artifact already exists — merge instead of overwrite
 	existing, err := b.artifactsRepo.GetByCanonicalKey(ctx, tenantID, models.MaterializedKindSupplyChainPath, canonicalKey)
 	if err == nil && existing != nil {
-		merged := models.MergePayloads(existing.Payload, artifact.Payload)
-		artifact.Payload = merged
-		artifact.NodeRefs = mergeStringSlices(existing.NodeRefs, artifact.NodeRefs)
-		artifact.ID = existing.ID
-		artifact.CreatedAt = existing.CreatedAt
-		artifact.CreatedBy = existing.CreatedBy
-
-		// Downgrade validated status if new nodes appeared
-		if existing.PathStatus == "validated" && models.PayloadNodesChanged(existing.Payload, merged) {
-			artifact.PathStatus = "hypothesis"
-		} else if existing.PathStatus != "" {
-			artifact.PathStatus = existing.PathStatus
+		artifact, err = mergeMaterializedPathArtifacts(existing, artifact)
+		if err != nil {
+			return "", err
 		}
-
-		// Regenerate display from merged data
-		artifact.DisplayName = displayName
-		artifact.Labels = labels
-		if parsedMerged, perr := models.ParseSupplyChainPathPayload(artifact.Payload); perr == nil && parsedMerged != nil && parsedMerged.Sufficiency != nil {
-			artifact.PathStatus = models.EffectivePathStatusFromSufficiency(parsedMerged.Sufficiency)
-		}
-		models.PopulateMaterializedArtifactIndexes(artifact)
-
-		if err := artifact.Validate(); err != nil {
-			return "", fmt.Errorf("validation error after merge: %w", err)
-		}
-
 		if err := b.artifactsRepo.Update(ctx, artifact); err != nil {
 			return "", fmt.Errorf("failed to update artifact: %w", err)
 		}
@@ -904,79 +1051,28 @@ func (b *SupplyChainPathBuilder) MaterializePathsBatch(
 	if b.artifactsRepo == nil || len(paths) == 0 || len(canonicalKeys) == 0 {
 		return nil, nil
 	}
-	if len(paths) != len(canonicalKeys) {
-		return nil, fmt.Errorf("paths and canonicalKeys must have same length")
-	}
-	existingMap, err := b.artifactsRepo.BatchGetByCanonicalKeys(ctx, tenantID, models.MaterializedKindSupplyChainPath, canonicalKeys)
+	artifacts, artifactKeys, err := b.PrepareMaterializedPathArtifactsBatch(ctx, paths, tenantID, lensID, canonicalKeys)
 	if err != nil {
-		return nil, fmt.Errorf("batch get failed: %w", err)
-	}
-	artifacts := make([]*models.MaterializedArtifact, 0, len(paths))
-	for i, path := range paths {
-		if path == nil {
-			continue
-		}
-		key := canonicalKeys[i]
-		if key == "" {
-			continue
-		}
-		nodes, edges, legs, stress := b.pathToMaterializedPayload(ctx, path)
-		sufficiency := b.evaluatePathSufficiency(ctx, path, legs)
-		payload := models.BuildSupplyChainPathPayloadDetailed(nodes, edges, legs, stress, sufficiency, path.Family, buildSupplyChainArtifactNotes(path, legs, stress))
-		displayName := buildChainDisplayName(path.Segments)
-		labels := buildChainLabels(path.Segments)
-		nodeRefs := collectNodeRefs(path.Segments)
-		parsedPayload, _ := models.ParseSupplyChainPathPayload(payload)
-		bindingSummary := models.SummarizeSupplyChainPathBindings(parsedPayload)
-		artifact := &models.MaterializedArtifact{
-			TenantID:         tenantID,
-			LensID:           strings.TrimSpace(lensID),
-			Kind:             models.MaterializedKindSupplyChainPath,
-			CanonicalKey:     key,
-			Payload:          payload,
-			PathStatus:       models.EffectivePathStatusFromSufficiency(sufficiency),
-			DisplayName:      displayName,
-			Labels:           labels,
-			NodeRefs:         nodeRefs,
-			GeoRefs:          bindingSummary.GeoRefs,
-			FlowRefs:         bindingSummary.FlowRefs,
-			ZoneRefs:         bindingSummary.ZoneRefs,
-			AffectedZoneRefs: bindingSummary.AffectedZoneRefs,
-			AnchorSupplier:   strings.TrimSpace(labels["anchorSupplier"]),
-			AnchorCustomer:   strings.TrimSpace(labels["anchorCustomer"]),
-			ProductAxis:      strings.TrimSpace(labels["productAxis"]),
-		}
-		models.PopulateMaterializedArtifactIndexes(artifact)
-		if existing := existingMap[key]; existing != nil {
-			merged := models.MergePayloads(existing.Payload, artifact.Payload)
-			artifact.Payload = merged
-			artifact.NodeRefs = mergeStringSlices(existing.NodeRefs, artifact.NodeRefs)
-			artifact.ID = existing.ID
-			artifact.CreatedAt = existing.CreatedAt
-			artifact.CreatedBy = existing.CreatedBy
-			if existing.PathStatus == "validated" && models.PayloadNodesChanged(existing.Payload, merged) {
-				artifact.PathStatus = "hypothesis"
-			} else if existing.PathStatus != "" {
-				artifact.PathStatus = existing.PathStatus
-			}
-			artifact.DisplayName = displayName
-			artifact.Labels = labels
-			if parsedMerged, perr := models.ParseSupplyChainPathPayload(artifact.Payload); perr == nil && parsedMerged != nil && parsedMerged.Sufficiency != nil {
-				artifact.PathStatus = models.EffectivePathStatusFromSufficiency(parsedMerged.Sufficiency)
-			}
-		}
-		models.PopulateMaterializedArtifactIndexes(artifact)
-		artifacts = append(artifacts, artifact)
+		return nil, err
 	}
 	if len(artifacts) == 0 {
 		return nil, nil
 	}
-	for _, a := range artifacts {
-		if err := a.Validate(); err != nil {
-			return nil, fmt.Errorf("validation error: %w", err)
+	ids, err := b.artifactsRepo.BatchUpsert(ctx, artifacts)
+	if err != nil {
+		return nil, err
+	}
+	idsByKey := make(map[string]string, len(artifactKeys))
+	for idx, key := range artifactKeys {
+		if idx < len(ids) {
+			idsByKey[key] = ids[idx]
 		}
 	}
-	return b.artifactsRepo.BatchUpsert(ctx, artifacts)
+	out := make([]string, 0, len(canonicalKeys))
+	for _, key := range canonicalKeys {
+		out = append(out, idsByKey[strings.TrimSpace(key)])
+	}
+	return out, nil
 }
 
 // FindChainsByNodeRef finds all MaterializedArtifacts (supply chain paths) where the given
@@ -1207,6 +1303,33 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 			TransportViaRefs:  segment.TransportViaRefs,
 			SegmentConfidence: segment.Confidence,
 		})
+		resolvedRoute := ResolveSupplyChainRouteGeometryDetailed(
+			ctx,
+			b.fragmentsRepo,
+			append(append([]string{segment.SupplierRef}, segment.TransportViaRefs...), segment.CustomerRef),
+		)
+		orderedRouteRefs := models.NormalizeOrderedRouteRefs(
+			append(append([]string{segment.SupplierRef}, segment.TransportViaRefs...), segment.CustomerRef),
+		)
+		primaryOverlay := models.SupplyChainRouteOverlay{
+			RouteVariantKey:     strings.TrimSpace(firstNonEmpty(segment.RouteVariantKey, models.BuildSupplyLinkRouteVariantKey(segment.TransportViaRefs))),
+			RouteProfileKey:     strings.TrimSpace(models.BuildRouteGeometryProfileKey(orderedRouteRefs)),
+			OrderedRefs:         append([]string(nil), orderedRouteRefs...),
+			TransportViaRefs:    append([]string(nil), segment.TransportViaRefs...),
+			RouteCoordinates:    append([]models.Coordinates(nil), resolvedRoute.Coordinates...),
+			RouteGeometrySource: strings.TrimSpace(resolvedRoute.Source),
+			Mode:                binding.Mode,
+			FlowRefs:            uniqueSortedStrings(append(append([]string(nil), binding.FlowRefs...), resolvedRoute.FlowRefs...)),
+			AlternateFlowRefs:   append([]string(nil), binding.AlternateFlowRefs...),
+			GeoRefs:             append([]string(nil), binding.GeoRefs...),
+			ZoneRefs:            append([]string(nil), binding.ZoneRefs...),
+			AffectedZoneRefs:    append([]string(nil), binding.AffectedZoneRefs...),
+			SpatialSemantics:    append([]string(nil), binding.SpatialSemantics...),
+			VesselType:          strings.TrimSpace(segment.VesselType),
+			BindingConfidence:   binding.BindingConfidence,
+			SegmentConfidence:   segment.Confidence,
+			Status:              "primary",
+		}
 		leg := models.SupplyChainPathLeg{
 			Index:                   i,
 			SupplierRef:             segment.SupplierRef,
@@ -1215,15 +1338,19 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 			SupplyLinkCanonicalPath: strings.TrimSpace(segment.SupplyLinkCanonicalPath),
 			SupplyLinkID:            strings.TrimSpace(segment.SupplyLinkID),
 			SupplyLinkTenantID:      strings.TrimSpace(firstNonEmpty(segment.SupplyLinkTenantID, segment.TenantID)),
+			RouteVariantKey:         strings.TrimSpace(firstNonEmpty(segment.RouteVariantKey, models.BuildSupplyLinkRouteVariantKey(segment.TransportViaRefs))),
 			TransportViaRefs:        append([]string(nil), segment.TransportViaRefs...),
+			RouteCoordinates:        append([]models.Coordinates(nil), resolvedRoute.Coordinates...),
+			RouteGeometrySource:     strings.TrimSpace(resolvedRoute.Source),
 			VesselType:              strings.TrimSpace(segment.VesselType),
 			Mode:                    binding.Mode,
 			GeoRefs:                 append([]string(nil), binding.GeoRefs...),
-			FlowRefs:                append([]string(nil), binding.FlowRefs...),
+			FlowRefs:                uniqueSortedStrings(append(append([]string(nil), binding.FlowRefs...), resolvedRoute.FlowRefs...)),
 			AlternateFlowRefs:       append([]string(nil), binding.AlternateFlowRefs...),
 			ZoneRefs:                append([]string(nil), binding.ZoneRefs...),
 			AffectedZoneRefs:        append([]string(nil), binding.AffectedZoneRefs...),
 			SpatialSemantics:        append([]string(nil), binding.SpatialSemantics...),
+			RouteOverlays:           []models.SupplyChainRouteOverlay{primaryOverlay},
 			BindingConfidence:       binding.BindingConfidence,
 			SegmentConfidence:       segment.Confidence,
 		}
@@ -1370,6 +1497,12 @@ func buildPathEdgeQualifiers(segment PathSegment, leg models.SupplyChainPathLeg,
 	}
 	if strings.TrimSpace(leg.Mode) != "" {
 		qualifiers[models.QualifierRouteMode] = strings.TrimSpace(leg.Mode)
+	}
+	if strings.TrimSpace(leg.RouteVariantKey) != "" {
+		qualifiers["route_variant_key"] = strings.TrimSpace(leg.RouteVariantKey)
+	}
+	if strings.TrimSpace(leg.RouteGeometrySource) != "" {
+		qualifiers["route_geometry_source"] = strings.TrimSpace(leg.RouteGeometrySource)
 	}
 	if len(leg.GeoRefs) > 0 {
 		qualifiers[models.QualifierGeoRefs] = append([]string(nil), leg.GeoRefs...)

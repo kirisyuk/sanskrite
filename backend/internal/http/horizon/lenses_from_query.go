@@ -311,7 +311,9 @@ type createLensFromQueryRequest struct {
 	// Mode controls whether to immediately start scouting/researching after lens creation.
 	// - just_open: create lens + scope, but suppress initial scouting job creation (best-effort)
 	// - research_first: create lens and start jobs (domains first, then anchors)
-	Mode              string                   `json:"mode,omitempty"` // just_open|research_first
+	// - hot_path: adapt the existing supply-chain hot-path runtime, reuse/create a hot-path lens,
+	//   wait briefly for readiness, and run a primary simulation-backed answer when possible
+	Mode              string                   `json:"mode,omitempty"` // just_open|research_first|hot_path
 	ScoutingMode      string                   `json:"scoutingMode,omitempty"`
 	IntentOverride    *agents.IntentResolution `json:"intent,omitempty"` // Optional: edited intent from preflight UI
 	MaxRecursionDepth *int                     `json:"maxRecursionDepth,omitempty"`
@@ -325,8 +327,9 @@ type createLensFromQueryRequest struct {
 }
 
 type createLensFromQueryResponse struct {
-	Intent *agents.IntentResolution `json:"intent"`
-	Lens   *models.Lens             `json:"lens"`
+	Intent  *agents.IntentResolution `json:"intent"`
+	Lens    *models.Lens             `json:"lens"`
+	HotPath *hotPathInquiryResponse  `json:"hotPath,omitempty"`
 }
 
 // CreateLensFromQuery resolves a natural language query into intent and creates a Lens with:
@@ -381,10 +384,7 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		http.Error(w, "query or intent is required", http.StatusBadRequest)
 		return
 	}
-	requestedMode := strings.ToLower(strings.TrimSpace(req.Mode))
-	if requestedMode == "" {
-		requestedMode = "research_first"
-	}
+	requestedMode := normalizeCreateLensFromQueryMode(req.Mode)
 
 	// Correlation/session IDs (optional, but recommended for realtime UX).
 	correlationID := strings.TrimSpace(r.Header.Get("X-Correlation-Id"))
@@ -418,6 +418,23 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		"requestedMetricsN": len(req.RequestedMetrics),
 		"prefetchScopeN":    len(req.PrefetchScope),
 	})
+
+	if requestedMode == createLensFromQueryModeHotPath {
+		if cached, cachedLens, interactionID, err := h.findCachedHotPathInteraction(ctx, authInfo.TenantID, req.ProjectID, req.Query); err == nil && cached != nil && cachedLens != nil {
+			if cached.HotPath != nil && isTerminalHotPathStatus(cached.HotPath.Status) {
+				cached.HotPath.Cached = true
+				cached.HotPath.InteractionID = interactionID
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("X-Correlation-Id", correlationID)
+				_ = json.NewEncoder(w).Encode(createLensFromQueryResponse{
+					Intent:  cached.Intent,
+					Lens:    cachedLens,
+					HotPath: cached.HotPath,
+				})
+				return
+			}
+		}
+	}
 
 	if requestedMode != "just_open" {
 		ready, reason, message := h.scoutExecutionAvailability()
@@ -491,6 +508,14 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	if requestedMode == createLensFromQueryModeHotPath {
+		if !intentSupportsHotPath(intent) {
+			http.Error(w, "hot_path mode currently requires a supply-chain execution plan", http.StatusBadRequest)
+			return
+		}
+		intent = forceIntentHotPathOnly(intent)
 	}
 
 	// Best-effort: if anchors already exist in our graph, fill anchor.name from the stored English label.
@@ -751,6 +776,11 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 		lens.Intents = intents
 	}
 
+	if requestedMode == createLensFromQueryModeHotPath {
+		executionPlan := buildHotPathExecutionPlanContract(lens.DomainModes, taxonomy.NormalizeSpecialties(mergedSpecialties))
+		markLensHotPathRuntime(lens, executionPlan)
+	}
+
 	trace.Log(ctx, "lens_create", "lens.built", map[string]any{
 		"tenantId":  lens.TenantID,
 		"projectId": lens.ProjectID,
@@ -770,44 +800,60 @@ func (h *HorizonHandlers) CreateLensFromQuery(w http.ResponseWriter, r *http.Req
 	// Mode semantics:
 	// - just_open: create lens without creating initial scouting jobs (best-effort)
 	// - research_first: normal behavior (jobs created for scope + deferred anchors/first-order entities)
+	// - hot_path: force existing hot-path-only supply-chain execution and run a primary answer flow
 	mode := requestedMode
 	createCtx := ctx
-	if mode == "just_open" {
+	if mode == createLensFromQueryModeJustOpen {
 		createCtx = hlens.WithSkipScouting(createCtx)
 	}
 
-	lensID, err := h.service.Lens().CreateLens(createCtx, lens)
-	if err != nil {
-		trace.Log(ctx, "lens_create", "lens.create.error", map[string]any{
+	lensReused := false
+	if mode == createLensFromQueryModeHotPath {
+		if reusableLens, rerr := h.findReusableHotPathLens(ctx, authInfo.TenantID, req.ProjectID, req.Query); rerr == nil && reusableLens != nil {
+			lens = reusableLens
+			lensReused = true
+		}
+	}
+	if !lensReused {
+		lensID, err := h.service.Lens().CreateLens(createCtx, lens)
+		if err != nil {
+			trace.Log(ctx, "lens_create", "lens.create.error", map[string]any{
+				"tenantId":  lens.TenantID,
+				"projectId": lens.ProjectID,
+				"error":     err.Error(),
+			})
+			if pub := h.service.RealtimePublisher(); pub != nil {
+				_ = pub.PublishJSON(ctx, realtime.EventType("horizon.assembly.failed"), authInfo.TenantID, map[string]interface{}{
+					"tenantId":      authInfo.TenantID,
+					"projectId":     req.ProjectID,
+					"phase":         "decomposition",
+					"error":         err.Error(),
+					"correlationId": correlationID,
+					"sessionId":     sessionID,
+				})
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		lens.ID = lensID
+		trace.Log(ctx, "lens_create", "lens.create.ok", map[string]any{
 			"tenantId":  lens.TenantID,
 			"projectId": lens.ProjectID,
-			"error":     err.Error(),
+			"lensId":    lensID,
+			"scopeN":    len(lens.Scope),
 		})
-		if pub := h.service.RealtimePublisher(); pub != nil {
-			_ = pub.PublishJSON(ctx, realtime.EventType("horizon.assembly.failed"), authInfo.TenantID, map[string]interface{}{
-				"tenantId":      authInfo.TenantID,
-				"projectId":     req.ProjectID,
-				"phase":         "decomposition",
-				"error":         err.Error(),
-				"correlationId": correlationID,
-				"sessionId":     sessionID,
-			})
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
 	}
-	lens.ID = lensID
-	trace.Log(ctx, "lens_create", "lens.create.ok", map[string]any{
-		"tenantId":  lens.TenantID,
-		"projectId": lens.ProjectID,
-		"lensId":    lensID,
-		"scopeN":    len(lens.Scope),
-	})
+
+	var hotPath *hotPathInquiryResponse
+	if mode == createLensFromQueryModeHotPath {
+		hotPath, _ = h.runHotPathInquiry(ctx, authInfo.TenantID, req.ProjectID, req.Query, lens, intent, lensReused)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Correlation-Id", correlationID)
 	_ = json.NewEncoder(w).Encode(createLensFromQueryResponse{
-		Intent: intent,
-		Lens:   lens,
+		Intent:  intent,
+		Lens:    lens,
+		HotPath: hotPath,
 	})
 }

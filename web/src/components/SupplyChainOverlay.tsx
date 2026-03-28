@@ -88,13 +88,38 @@ export interface MaterializedArtifact {
       supplierRef?: string;
       customerRef?: string;
       productRef?: string;
+      routeVariantKey?: string;
+      mode?: string;
       transportViaRefs?: string[];
+      routeCoordinates?: Array<{ lat: number; lon: number }>;
+      routeGeometrySource?: string;
       vesselType?: string;
       flowRefs?: string[];
       alternateFlowRefs?: string[];
       zoneRefs?: string[];
       affectedZoneRefs?: string[];
       spatialSemantics?: string[];
+      routeOverlays?: Array<{
+        overlayKey?: string;
+        routeVariantKey?: string;
+        routeProfileKey?: string;
+        orderedRefs?: string[];
+        transportViaRefs?: string[];
+        routeCoordinates?: Array<{ lat: number; lon: number }>;
+        routeGeometrySource?: string;
+        mode?: string;
+        flowRefs?: string[];
+        alternateFlowRefs?: string[];
+        geoRefs?: string[];
+        zoneRefs?: string[];
+        affectedZoneRefs?: string[];
+        spatialSemantics?: string[];
+        vesselType?: string;
+        bindingConfidence?: number;
+        segmentConfidence?: number;
+        endpointBindingPolicy?: string;
+        status?: string;
+      }>;
       bindingConfidence?: number;
       stress?: {
         fragility?: number;

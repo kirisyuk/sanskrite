@@ -1,6 +1,7 @@
 package models
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -815,6 +816,107 @@ func TestReplaceCanonicalPathInArtifact_SupplyChainPath(t *testing.T) {
 	}
 	if len(parsed.Legs[0].AffectedZoneRefs) != 1 || parsed.Legs[0].AffectedZoneRefs[0] != newPath {
 		t.Fatalf("leg affectedZoneRefs=%v, want %q", parsed.Legs[0].AffectedZoneRefs, newPath)
+	}
+}
+
+func TestParseSupplyChainPathPayload_NormalizesRouteOverlays(t *testing.T) {
+	payload := BuildSupplyChainPathPayloadDetailed(
+		[]SupplyChainPathNode{
+			{Type: "org", Ref: "/org/us/supplier"},
+			{Type: "fac", Ref: "/fac/ae/jebel-ali-port"},
+			{Type: "fac", Ref: "/fac/za/cape-of-good-hope-terminal"},
+			{Type: "org", Ref: "/org/io/customer"},
+		},
+		nil,
+		[]SupplyChainPathLeg{
+			{
+				Index:                   0,
+				SupplierRef:             "/org/us/supplier",
+				CustomerRef:             "/org/io/customer",
+				ProductRef:              "/product/mining/iron-ore",
+				SupplyLinkCanonicalPath: "/supply-link/global/supplier/product/customer",
+				RouteVariantKey:         "via-hormuz",
+				TransportViaRefs:        []string{"/fac/ae/jebel-ali-port"},
+				RouteGeometrySource:     "curated_flow_catalog",
+				FlowRefs:                []string{"sea_gulf_diego_garcia_mainline"},
+				BindingConfidence:       0.9,
+			},
+			{
+				Index:                   0,
+				SupplierRef:             "/org/us/supplier",
+				CustomerRef:             "/org/io/customer",
+				ProductRef:              "/product/mining/iron-ore",
+				SupplyLinkCanonicalPath: "/supply-link/global/supplier/product/customer",
+				RouteVariantKey:         "via-cape",
+				TransportViaRefs:        []string{"/fac/za/cape-of-good-hope-terminal"},
+				RouteGeometrySource:     "composed_route_segments",
+				FlowRefs:                []string{"sea_gulf_rotterdam_via_cape"},
+				BindingConfidence:       0.72,
+			},
+		},
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	parsed, err := ParseSupplyChainPathPayload(payload)
+	if err != nil {
+		t.Fatalf("ParseSupplyChainPathPayload() error = %v", err)
+	}
+	if len(parsed.Legs) != 1 {
+		t.Fatalf("legs=%d, want 1 structural leg after overlay normalization", len(parsed.Legs))
+	}
+	leg := parsed.Legs[0]
+	if len(leg.RouteOverlays) != 2 {
+		t.Fatalf("routeOverlays=%d, want 2", len(leg.RouteOverlays))
+	}
+	if strings.TrimSpace(leg.RouteVariantKey) == "" {
+		t.Fatal("primary routeVariantKey must be derived and non-empty")
+	}
+	if len(leg.TransportViaRefs) != 1 || leg.TransportViaRefs[0] != "/fac/ae/jebel-ali-port" {
+		t.Fatalf("primary transportViaRefs=%v, want jebel ali", leg.TransportViaRefs)
+	}
+	if len(leg.FlowRefs) != 2 {
+		t.Fatalf("leg flowRefs=%v, want both overlay flow refs", leg.FlowRefs)
+	}
+}
+
+func TestSelectSupplyChainRouteOverlays_PrefersViableAlternate(t *testing.T) {
+	leg := SupplyChainPathLeg{
+		SupplierRef: "/org/us/supplier",
+		CustomerRef: "/org/io/customer",
+		ProductRef:  "/product/mining/iron-ore",
+		RouteOverlays: []SupplyChainRouteOverlay{
+			{
+				RouteVariantKey:     "via-hormuz",
+				TransportViaRefs:    []string{"/fac/sea/strait-of-hormuz-terminal"},
+				RouteGeometrySource: "curated_flow_catalog",
+				FlowRefs:            []string{"sea_us_gulf_diego_via_hormuz"},
+				BindingConfidence:   0.9,
+				Status:              "primary",
+			},
+			{
+				RouteVariantKey:     "via-cape",
+				TransportViaRefs:    []string{"/fac/za/cape-of-good-hope-terminal"},
+				RouteGeometrySource: "composed_route_segments",
+				FlowRefs:            []string{"sea_us_gulf_diego_via_cape"},
+				BindingConfidence:   0.82,
+			},
+		},
+	}
+	selection := SelectSupplyChainRouteOverlays(leg, SupplyChainRouteOverlayConstraints{
+		BlockedFlowRefs: []string{"sea_us_gulf_diego_via_hormuz"},
+	})
+	if selection.Primary == nil {
+		t.Fatal("expected viable primary overlay")
+	}
+	wantVariant := BuildSupplyLinkRouteVariantKey([]string{"/fac/za/cape-of-good-hope-terminal"})
+	if got := selection.Primary.RouteVariantKey; got != wantVariant {
+		t.Fatalf("primary=%q, want %q", got, wantVariant)
+	}
+	if len(selection.Viable) != 1 || len(selection.Blocked) != 1 {
+		t.Fatalf("viable=%d blocked=%d, want 1/1", len(selection.Viable), len(selection.Blocked))
 	}
 }
 

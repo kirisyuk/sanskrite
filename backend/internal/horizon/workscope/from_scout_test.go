@@ -27,4 +27,11 @@ func TestFromScoutingJobParams_mergesLensTargetSeeds(t *testing.T) {
 	if len(got.Refs.FragmentPaths) != 1 || got.Refs.FragmentPaths[0] != "/product/c" {
 		t.Fatalf("fragment paths %v", got.Refs.FragmentPaths)
 	}
+	if got.Intent.ScopeKind != ScopeKindScoutJob {
+		t.Fatalf("intent %+v", got.Intent)
+	}
+	req := RequestFromScoutingJobParams(p)
+	if req.Intent.EntryPoint != EntryPointScout || req.Intent.Action != ActionEnrichGraph {
+		t.Fatalf("request intent %+v", req.Intent)
+	}
 }

@@ -13,6 +13,14 @@ func TestNormalize_dedupAndSort(t *testing.T) {
 			LensID:     " L1 ",
 			ScopePaths: []string{" /b ", "/a", "/b", ""},
 		},
+		Intent: WorkScopeIntent{
+			ScopeKind: ScopeKindLensMap,
+			Expansion: WorkScopeExpansionPolicy{
+				Mode:               " map_neighbors ",
+				NeighborHops:       1,
+				AllowDeferredPaths: true,
+			},
+		},
 	}
 	got := Normalize(s)
 	if got.TenantID != "t1" {
@@ -30,6 +38,12 @@ func TestNormalize_dedupAndSort(t *testing.T) {
 			t.Fatalf("scope paths: got %v want %v", got.Refs.ScopePaths, want)
 		}
 	}
+	if got.Intent.ScopeKind != ScopeKindLensMap {
+		t.Fatalf("scope kind not normalized: %+v", got.Intent)
+	}
+	if got.Intent.Expansion.Mode != "map_neighbors" || got.Intent.Expansion.NeighborHops != 1 || !got.Intent.Expansion.AllowDeferredPaths {
+		t.Fatalf("expansion not normalized: %+v", got.Intent.Expansion)
+	}
 }
 
 func TestMerge_unionAndPreferFirstContext(t *testing.T) {
@@ -40,6 +54,9 @@ func TestMerge_unionAndPreferFirstContext(t *testing.T) {
 			LensID:     "L1",
 			ScopePaths: []string{"/x"},
 		},
+		Intent: WorkScopeIntent{
+			ScopeKind: ScopeKindLensStrict,
+		},
 	}
 	b := WorkScope{
 		TenantID:  "",
@@ -48,6 +65,12 @@ func TestMerge_unionAndPreferFirstContext(t *testing.T) {
 			LensID:      "",
 			ScopePaths:  []string{"/y", "/x"},
 			FragmentIDs: []string{"f1"},
+		},
+		Intent: WorkScopeIntent{
+			Expansion: WorkScopeExpansionPolicy{
+				Mode:         "map_neighbors",
+				NeighborHops: 1,
+			},
 		},
 	}
 	got := Merge(a, b)
@@ -62,6 +85,12 @@ func TestMerge_unionAndPreferFirstContext(t *testing.T) {
 	}
 	if len(got.Refs.FragmentIDs) != 1 || got.Refs.FragmentIDs[0] != "f1" {
 		t.Fatalf("fragment ids: %v", got.Refs.FragmentIDs)
+	}
+	if got.Intent.ScopeKind != ScopeKindLensStrict {
+		t.Fatalf("intent context lost: %+v", got.Intent)
+	}
+	if got.Intent.Expansion.NeighborHops != 1 {
+		t.Fatalf("expansion not merged: %+v", got.Intent.Expansion)
 	}
 }
 

@@ -459,10 +459,10 @@ type HorizonFragmentsRepository struct {
 	// Used on fragment delete to avoid stale search hits.
 	vertexSearchDelete func(ctx context.Context, fragmentID string) error
 
-	redisCache           *redis.Client
-	productDictionary    *productdict.Runtime
-	mechanismDictionary  *mechanismdict.Runtime
-	govDictionary        *govdict.Runtime
+	redisCache          *redis.Client
+	productDictionary   *productdict.Runtime
+	mechanismDictionary *mechanismdict.Runtime
+	govDictionary       *govdict.Runtime
 }
 
 // NewHorizonFragmentsRepository создает новый репозиторий
@@ -473,6 +473,13 @@ func NewHorizonFragmentsRepository(db *firestore.Client) *HorizonFragmentsReposi
 		db:            db,
 		versionsRepo:  NewHorizonFragmentVersionsRepository(db),
 	}
+}
+
+func (r *HorizonFragmentsRepository) Firestore() *firestore.Client {
+	if r == nil {
+		return nil
+	}
+	return r.db
 }
 
 // WithStorage настраивает GCS хранилище для экспорта фрагментов

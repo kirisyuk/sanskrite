@@ -98,6 +98,20 @@ function artifactLegStringList(leg: any, ...keys: string[]): string[] {
   return value.map((item) => String(item || '').trim()).filter(Boolean);
 }
 
+function artifactLegCoordinateList(leg: any, ...keys: string[]): [number, number][] {
+  const value = artifactLegField<unknown>(leg, ...keys);
+  if (!Array.isArray(value)) return [];
+  return dedupeCoords(
+    value
+      .map((item) => {
+        const lat = Number((item as any)?.lat);
+        const lon = Number((item as any)?.lon);
+        return Number.isFinite(lat) && Number.isFinite(lon) ? [lon, lat] as [number, number] : null;
+      })
+      .filter((item): item is [number, number] => Boolean(item)),
+  );
+}
+
 function artifactLegNumber(leg: any, ...keys: string[]): number | null {
   const value = artifactLegField<unknown>(leg, ...keys);
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -130,6 +144,16 @@ function distanceSq(a: [number, number], b: [number, number]): number {
   return dx * dx + dy * dy;
 }
 
+function approximateDistanceKm(lon1: number, lat1: number, lon2: number, lat2: number): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2
+    + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 function orientLineForEndpoints(line: [number, number][], start: [number, number], end: [number, number]): [number, number][] {
   if (line.length < 2) return line;
   const first = line[0];
@@ -139,11 +163,18 @@ function orientLineForEndpoints(line: [number, number][], start: [number, number
   return reverse < direct ? [...line].reverse() : line;
 }
 
-function maybeConnectEndpoints(line: [number, number][], fallback: [number, number][]): [number, number][] {
+const MAX_FLOW_ENDPOINT_CONNECT_KM = 420;
+
+function maybeConnectEndpoints(line: [number, number][], fallback: [number, number][]): [number, number][] | null {
   if (line.length < 2 || fallback.length < 2) return line;
   const start = fallback[0];
   const end = fallback[fallback.length - 1];
   const oriented = orientLineForEndpoints(line, start, end);
+  const startGapKm = approximateDistanceKm(start[0], start[1], oriented[0][0], oriented[0][1]);
+  const endGapKm = approximateDistanceKm(end[0], end[1], oriented[oriented.length - 1][0], oriented[oriented.length - 1][1]);
+  if (startGapKm > MAX_FLOW_ENDPOINT_CONNECT_KM || endGapKm > MAX_FLOW_ENDPOINT_CONNECT_KM) {
+    return null;
+  }
   const out = [...oriented];
   if (distanceSq(start, out[0]) > 1e-7) out.unshift(start);
   if (distanceSq(end, out[out.length - 1]) > 1e-7) out.push(end);
@@ -166,6 +197,9 @@ function selectFlowGeometry(
   flowById: Map<string, TransportFlowFeature>,
 ): [number, number][] {
   if (fallbackCoords.length < 2) return fallbackCoords;
+  if (flowRefs.length === 0) {
+    return fallbackCoords;
+  }
   const start = fallbackCoords[0];
   const end = fallbackCoords[fallbackCoords.length - 1];
   let best: { coords: [number, number][]; score: number } | null = null;
@@ -175,15 +209,18 @@ function selectFlowGeometry(
       if (option.length < 2) continue;
       const oriented = orientLineForEndpoints(option, start, end);
       const score = distanceSq(start, oriented[0]) + distanceSq(end, oriented[oriented.length - 1]);
+      const connected = maybeConnectEndpoints(oriented, fallbackCoords);
+      if (!connected || connected.length < 2) continue;
       if (!best || score < best.score) {
         best = {
-          coords: maybeConnectEndpoints(oriented, fallbackCoords),
+          coords: connected,
           score,
         };
       }
     }
   }
-  return best ? best.coords : fallbackCoords;
+  if (best) return best.coords;
+  return fallbackCoords;
 }
 
 function boundsFromCoords(coords: [number, number][]): [number, number, number, number] {
@@ -458,9 +495,13 @@ export function usePathLegClusterLayer(
             .filter((value): value is { lon: number; lat: number } => Boolean(value))
             .map((value) => [value.lon, value.lat] as [number, number]),
         );
-        if (fallbackCoords.length < 2) continue;
+        const explicitCoords = artifactLegCoordinateList(leg, 'routeCoordinates', 'RouteCoordinates');
+        const baseCoords = explicitCoords.length >= 2 ? explicitCoords : fallbackCoords;
+        if (baseCoords.length < 2) continue;
         const flowRefs = artifactLegStringList(leg, 'flowRefs', 'FlowRefs');
-        const coords = selectFlowGeometry(flowRefs, fallbackCoords, flowById);
+        const routeGeometrySource = artifactLegString(leg, 'routeGeometrySource', 'RouteGeometrySource');
+        const coords = explicitCoords.length >= 2 ? explicitCoords : selectFlowGeometry(flowRefs, fallbackCoords, flowById);
+        if (explicitCoords.length < 2 && flowRefs.length === 0 && routeGeometrySource === 'fragmentary_waypoint_sequence') continue;
         if (coords.length < 2) continue;
 
         const sourceObject = objectByPath.get(sourceRef);

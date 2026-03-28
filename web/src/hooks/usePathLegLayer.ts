@@ -18,6 +18,12 @@ import {
   resolvedArtifactLegIndex,
   type MapRouteVisibilitySelection,
 } from '../lib/mapRouteVisibility';
+import {
+  describeRouteOverlay,
+  humanizeRouteGeometrySource as humanizeOverlayGeometrySource,
+  readLegRouteOverlays,
+  selectPrimaryLegRouteOverlay,
+} from '../lib/supplyRouteOverlays';
 import { GEO_EDGE_SUPPLY_LABEL_LAYER_ID } from './useGeoEdgeLayer';
 
 const SRC = 'path-legs-src';
@@ -350,6 +356,20 @@ function artifactLegStringList(leg: any, ...keys: string[]): string[] {
   return value.map((item) => String(item || '').trim()).filter(Boolean);
 }
 
+function artifactLegCoordinateList(leg: any, ...keys: string[]): [number, number][] {
+  const value = artifactLegField<unknown>(leg, ...keys);
+  if (!Array.isArray(value)) return [];
+  return dedupeCoords(
+    value
+      .map((item) => {
+        const lat = Number((item as any)?.lat);
+        const lon = Number((item as any)?.lon);
+        return Number.isFinite(lat) && Number.isFinite(lon) ? [lon, lat] as [number, number] : null;
+      })
+      .filter((item): item is [number, number] => Boolean(item)),
+  );
+}
+
 function toFixedSafe(value: number | undefined, digits = 2): string {
   return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : 'n/a';
 }
@@ -478,19 +498,9 @@ function humanizeDiscoveryReason(value: string): string {
   }
 }
 
-function humanizeGeometrySource(value: string): string {
+function isApproximateLegGeometrySource(value: string): boolean {
   const raw = String(value || '').trim().toLowerCase();
-  if (!raw) return '';
-  switch (raw) {
-    case 'fragment':
-      return 'Approximate route';
-    case 'flow':
-      return 'Matched transport flow';
-    case 'static_flow':
-      return 'Matched mapped flow';
-    default:
-      return titleizeUiToken(raw) || raw;
-  }
+  return raw === 'fragmentary_waypoint_sequence' || raw === 'partial_segment_geometry';
 }
 
 function humanizeFlowMode(value: string): string {
@@ -645,19 +655,16 @@ function legObjectLabel(obj: GeoObject): string {
 
 function legMeaningLabel(
   productRef: string,
-  flowMode: string,
-  flowRefs: string[],
+  overlayDescription: string,
   stressCaption?: string,
 ): string {
   if (stressCaption) return stressCaption;
   const productLabel = productRef ? (humanizeCanonicalPath(productRef) || productRef) : '';
-  const modeLabel = flowMode || '';
-  const vesselishRef = flowRefs.find((ref) => /vessel|ship|tanker/i.test(ref)) || '';
-  const vesselLabel = vesselishRef ? humanizeCanonicalPath(vesselishRef) || vesselishRef : '';
-  const parts = [productLabel, modeLabel, vesselLabel].filter(Boolean);
+  const detailLabel = String(overlayDescription || '').trim();
+  const parts = [productLabel, detailLabel].filter(Boolean);
   if (parts.length === 0) return '';
   if (parts.length === 1) return parts[0];
-  return `${parts[0]}\n${parts.slice(1).join(' • ')}`;
+  return `${parts[0]}\n${parts[1]}`;
 }
 
 function pointAlongLine(
@@ -1108,6 +1115,16 @@ function distanceSq(a: [number, number], b: [number, number]): number {
   return dx * dx + dy * dy;
 }
 
+function approximateDistanceKm(lon1: number, lat1: number, lon2: number, lat2: number): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2
+    + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 function orientLineForEndpoints(line: [number, number][], start: [number, number], end: [number, number]): [number, number][] {
   if (line.length < 2) return line;
   const first = line[0];
@@ -1117,11 +1134,18 @@ function orientLineForEndpoints(line: [number, number][], start: [number, number
   return reverse < direct ? [...line].reverse() : line;
 }
 
-function maybeConnectEndpoints(line: [number, number][], fallback: [number, number][]): [number, number][] {
+const MAX_FLOW_ENDPOINT_CONNECT_KM = 420;
+
+function maybeConnectEndpoints(line: [number, number][], fallback: [number, number][]): [number, number][] | null {
   if (line.length < 2 || fallback.length < 2) return line;
   const start = fallback[0];
   const end = fallback[fallback.length - 1];
   const oriented = orientLineForEndpoints(line, start, end);
+  const startGapKm = approximateDistanceKm(start[0], start[1], oriented[0][0], oriented[0][1]);
+  const endGapKm = approximateDistanceKm(end[0], end[1], oriented[oriented.length - 1][0], oriented[oriented.length - 1][1]);
+  if (startGapKm > MAX_FLOW_ENDPOINT_CONNECT_KM || endGapKm > MAX_FLOW_ENDPOINT_CONNECT_KM) {
+    return null;
+  }
   const out = [...oriented];
   if (distanceSq(start, out[0]) > 1e-7) {
     out.unshift(start);
@@ -1155,6 +1179,13 @@ function selectFlowGeometry(
   if (fallbackCoords.length < 2) {
     return { coords: fallbackCoords, geometrySource: 'fragment', snapped: false };
   }
+  if (flowRefs.length === 0) {
+    return {
+      coords: fallbackCoords,
+      geometrySource: 'fragment',
+      snapped: false,
+    };
+  }
   const start = fallbackCoords[0];
   const end = fallbackCoords[fallbackCoords.length - 1];
   let best: { coords: [number, number][]; score: number; flowId: string; flowMode?: string } | null = null;
@@ -1165,9 +1196,11 @@ function selectFlowGeometry(
       if (option.length < 2) continue;
       const oriented = orientLineForEndpoints(option, start, end);
       const score = distanceSq(start, oriented[0]) + distanceSq(end, oriented[oriented.length - 1]);
+      const connected = maybeConnectEndpoints(oriented, fallbackCoords);
+      if (!connected || connected.length < 2) continue;
       if (!best || score < best.score) {
         best = {
-          coords: maybeConnectEndpoints(oriented, fallbackCoords),
+          coords: connected,
           score,
           flowId: ref,
           flowMode: feature?.properties?.flowMode ? String(feature.properties.flowMode) : undefined,
@@ -1177,7 +1210,11 @@ function selectFlowGeometry(
   }
 
   if (!best) {
-    return { coords: fallbackCoords, geometrySource: 'fragment', snapped: false };
+    return {
+      coords: fallbackCoords,
+      geometrySource: 'fragment',
+      snapped: false,
+    };
   }
   return {
     coords: best.coords,
@@ -1265,11 +1302,16 @@ export function usePathLegLayer(
         if (!legMatchesRouteVisibility(artifact, leg, routeVisibility)) continue;
         const legIndex = resolvedArtifactLegIndex(leg, legArrayIndex);
         const legId = `${artifactId}:leg:${legIndex}`;
-        const supplierRef = artifactLegString(leg, 'supplierRef', 'SupplierRef');
-        const customerRef = artifactLegString(leg, 'customerRef', 'CustomerRef');
-        const refs = [
+      const supplierRef = artifactLegString(leg, 'supplierRef', 'SupplierRef');
+      const customerRef = artifactLegString(leg, 'customerRef', 'CustomerRef');
+      const routeOverlays = readLegRouteOverlays(leg);
+      const primaryOverlay = selectPrimaryLegRouteOverlay(routeOverlays);
+      const transportViaRefs = primaryOverlay?.transportViaRefs?.length
+        ? primaryOverlay.transportViaRefs
+        : artifactLegStringList(leg, 'transportViaRefs', 'TransportViaRefs');
+      const refs = [
           supplierRef,
-          ...artifactLegStringList(leg, 'transportViaRefs', 'TransportViaRefs'),
+          ...transportViaRefs,
           customerRef,
         ].filter(Boolean);
         const fallbackCoords = dedupeCoords(
@@ -1278,8 +1320,25 @@ export function usePathLegLayer(
             .filter((point): point is { lon: number; lat: number } => Boolean(point))
             .map((point) => [point.lon, point.lat] as [number, number]),
         );
-        const flowRefs = artifactLegStringList(leg, 'flowRefs', 'FlowRefs');
-        const { coords, flowId, flowMode, geometrySource, snapped } = selectFlowGeometry(flowRefs, fallbackCoords, flowById);
+        const explicitCoords = primaryOverlay?.routeCoordinates?.length
+          ? primaryOverlay.routeCoordinates.map((item) => [item.lon, item.lat] as [number, number])
+          : artifactLegCoordinateList(leg, 'routeCoordinates', 'RouteCoordinates');
+        const flowRefs = primaryOverlay?.flowRefs?.length
+          ? primaryOverlay.flowRefs
+          : artifactLegStringList(leg, 'flowRefs', 'FlowRefs');
+        const routeGeometrySource = primaryOverlay?.routeGeometrySource
+          || artifactLegString(leg, 'routeGeometrySource', 'RouteGeometrySource');
+        const overlayMode = primaryOverlay?.mode || artifactLegString(leg, 'mode', 'Mode');
+        const { coords, flowId, flowMode, geometrySource, snapped } = explicitCoords.length >= 2
+          ? {
+            coords: explicitCoords,
+            flowId: '',
+            flowMode: overlayMode,
+            geometrySource: isApproximateLegGeometrySource(routeGeometrySource) ? 'fragment' : 'explicit_leg_geometry',
+            snapped: false,
+          }
+          : selectFlowGeometry(flowRefs, fallbackCoords, flowById);
+        if (explicitCoords.length < 2 && flowRefs.length === 0 && routeGeometrySource === 'fragmentary_waypoint_sequence') continue;
         const anchoredCoords = applyClusterAnchorsToCoords(coords, supplierRef, customerRef, clusterAnchorByPath);
         if (anchoredCoords.length < 2) continue;
         legCount += 1;
@@ -1381,8 +1440,12 @@ export function usePathLegLayer(
             productRef: artifactLegString(leg, 'productRef', 'ProductRef'),
             flowRefs,
             flowGeometryId: flowId || '',
-            flowMode: flowMode || '',
+            flowMode: flowMode || overlayMode || '',
             geometrySource,
+            routeOverlayLabel: describeRouteOverlay(primaryOverlay),
+            routeOverlaySource: routeGeometrySource,
+            routeOverlayVariantKey: primaryOverlay?.routeVariantKey || '',
+            routeOverlayCount: routeOverlays.length,
             snappedToFlow: snapped,
             zoneRefs,
             affectedZoneRefs,
@@ -1419,10 +1482,12 @@ export function usePathLegLayer(
         } as GeoJSON.Feature);
 
         const meaningPoint = midpoint(anchoredCoords);
+        const overlayDescription = describeRouteOverlay(primaryOverlay)
+          || humanizeOverlayGeometrySource(routeGeometrySource)
+          || humanizeFlowMode(String(flowMode || overlayMode || '').trim());
         let meaningLabel = legMeaningLabel(
           artifactLegString(leg, 'productRef', 'ProductRef'),
-          String(flowMode || '').trim(),
-          flowRefs,
+          overlayDescription,
           stressCaption,
         );
         if (!meaningLabel && (isStressFocusLeg || isStressContextLeg)) {
@@ -1607,6 +1672,8 @@ export function usePathLegLayer(
           'line-opacity': pinnedLineOpacityExpression(),
           'line-dasharray': [
             'case',
+            ['==', ['get', 'geometrySource'], 'fragment'],
+            ['literal', [0.6, 2.4]],
             ['<', ['get', 'bindingConfidence'], 0.38],
             ['literal', [1.6, 1.6]],
             ['<', ['get', 'bindingConfidence'], 0.62],
@@ -1633,6 +1700,8 @@ export function usePathLegLayer(
           'line-opacity': discoveredLineOpacityExpression(),
           'line-dasharray': [
             'case',
+            ['==', ['get', 'geometrySource'], 'fragment'],
+            ['literal', [0.6, 2.8]],
             ['<', ['get', 'bindingConfidence'], 0.38],
             ['literal', [0.9, 2.6]],
             ['<', ['get', 'bindingConfidence'], 0.62],
@@ -1686,6 +1755,8 @@ export function usePathLegLayer(
           'line-opacity': ['case', ['==', ['get', 'stressFocusLeg'], 1], ['case', ['==', ['get', 'isHypothesisPath'], 1], STRESS_ACTIVE_HYPOTHESIS_CORE_OPACITY, STRESS_ACTIVE_CORE_OPACITY], STRESS_ACTIVE_CONTEXT_OPACITY],
           'line-dasharray': [
             'case',
+            ['==', ['get', 'geometrySource'], 'fragment'],
+            ['literal', [0.8, 2.1]],
             ['==', ['get', 'isHypothesisPath'], 1],
             ['literal', [1.6, 1.4]],
             ['literal', [1, 0]],
@@ -1747,6 +1818,8 @@ export function usePathLegLayer(
           'line-opacity': ['*', ['get', 'lineOpacity'], 1.26],
           'line-dasharray': [
             'case',
+            ['==', ['get', 'geometrySource'], 'fragment'],
+            ['literal', [0.6, 2.4]],
             ['<', ['get', 'bindingConfidence'], 0.38],
             ['literal', [1.6, 1.6]],
             ['<', ['get', 'bindingConfidence'], 0.62],
@@ -1774,6 +1847,8 @@ export function usePathLegLayer(
           'line-opacity': ['*', discoveredLineOpacityExpression(), 1.28],
           'line-dasharray': [
             'case',
+            ['==', ['get', 'geometrySource'], 'fragment'],
+            ['literal', [0.6, 2.8]],
             ['<', ['get', 'bindingConfidence'], 0.38],
             ['literal', [0.9, 2.6]],
             ['<', ['get', 'bindingConfidence'], 0.62],
@@ -2290,7 +2365,7 @@ export function usePathLegLayer(
       const humanFlows = Array.from(new Set(flowRefs.map(humanizeLegRef).filter(Boolean)));
       const humanDiscoveryReason = humanizeDiscoveryReason(discoveryReason);
       const humanTraceRole = humanizeTraceRole(traceRole);
-      const humanGeometrySource = humanizeGeometrySource(String(props.geometrySource || '').trim());
+      const humanGeometrySource = humanizeOverlayGeometrySource(String(props.geometrySource || '').trim());
       const displayTitle = humanizeDisplayChain(String(props.displayName || 'Supply path'));
       const headerChips = [
         renderPopupChip({ label: 'From', value: supplierLabel, flagCode: supplierCountryCode }),

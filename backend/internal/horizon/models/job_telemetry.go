@@ -3,19 +3,34 @@ package models
 import "time"
 
 type JobTelemetry struct {
-	ID          string           `json:"id" firestore:"id"`
-	TenantID    string           `json:"tenantId" firestore:"tenantId"`
-	ProjectID   string           `json:"projectId" firestore:"projectId"`
-	LensID      string           `json:"lensId" firestore:"lensId"`
-	JobID       string           `json:"jobId" firestore:"jobId"`
-	JobType     string           `json:"jobType" firestore:"jobType"`
-	Trigger     string           `json:"trigger" firestore:"trigger"`
-	StartedAt   time.Time        `json:"startedAt" firestore:"startedAt"`
-	CompletedAt *time.Time       `json:"completedAt,omitempty" firestore:"completedAt,omitempty"`
-	DurationMs  int64            `json:"durationMs" firestore:"durationMs"`
-	Status      string           `json:"status" firestore:"status"`
-	Groups      []TelemetryGroup `json:"groups" firestore:"groups"`
-	Rollup      TelemetryRollup  `json:"rollup" firestore:"rollup"`
+	ID          string                `json:"id" firestore:"id"`
+	TenantID    string                `json:"tenantId" firestore:"tenantId"`
+	ProjectID   string                `json:"projectId" firestore:"projectId"`
+	LensID      string                `json:"lensId" firestore:"lensId"`
+	JobID       string                `json:"jobId" firestore:"jobId"`
+	JobType     string                `json:"jobType" firestore:"jobType"`
+	Trigger     string                `json:"trigger" firestore:"trigger"`
+	StartedAt   time.Time             `json:"startedAt" firestore:"startedAt"`
+	CompletedAt *time.Time            `json:"completedAt,omitempty" firestore:"completedAt,omitempty"`
+	DurationMs  int64                 `json:"durationMs" firestore:"durationMs"`
+	Status      string                `json:"status" firestore:"status"`
+	Groups      []TelemetryGroup      `json:"groups" firestore:"groups"`
+	PhaseEvents []TelemetryPhaseEvent `json:"phaseEvents,omitempty" firestore:"phaseEvents,omitempty"`
+	Rollup      TelemetryRollup       `json:"rollup" firestore:"rollup"`
+}
+
+type TelemetryPhaseEvent struct {
+	Phase            string         `json:"phase" firestore:"phase"`
+	Title            string         `json:"title,omitempty" firestore:"title,omitempty"`
+	Step             string         `json:"step,omitempty" firestore:"step,omitempty"`
+	Status           string         `json:"status" firestore:"status"`
+	StartedAt        time.Time      `json:"startedAt" firestore:"startedAt"`
+	EndedAt          *time.Time     `json:"endedAt,omitempty" firestore:"endedAt,omitempty"`
+	DurationMs       int64          `json:"durationMs,omitempty" firestore:"durationMs,omitempty"`
+	Details          map[string]any `json:"details,omitempty" firestore:"details,omitempty"`
+	Artifacts        map[string]any `json:"artifacts,omitempty" firestore:"artifacts,omitempty"`
+	MetricsRefreshed int            `json:"metricsRefreshed,omitempty" firestore:"metricsRefreshed,omitempty"`
+	SimulationRunID  string         `json:"simulationRunId,omitempty" firestore:"simulationRunId,omitempty"`
 }
 
 type TelemetryGroup struct {

@@ -1,0 +1,582 @@
+{
+  "type": "FeatureCollection",
+  "meta": {
+    "schema": "transport-flows.v1",
+    "version": 1,
+    "updatedAt": "2026-03-28T06:50:00Z",
+    "notes": "Manually curated real-world route geometries for Horizon supply-chain rendering"
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "id": "sea_gulf_singapore_mainline",
+      "properties": {
+        "flowMode": "sea",
+        "flowSubType": "energy_container_mainline",
+        "name": "Persian Gulf-Singapore Mainline",
+        "priority": 5,
+        "minZoom": 3,
+        "maxZoom": 10,
+        "tags": ["gulf", "hormuz", "malacca", "singapore"],
+        "sources": ["manual-curation-v2"],
+        "status": "active"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [50.04, 26.65],
+          [56.30, 26.58],
+          [58.90, 24.80],
+          [63.00, 20.50],
+          [68.40, 14.20],
+          [73.60, 8.40],
+          [78.90, 5.80],
+          [84.60, 5.60],
+          [90.50, 5.50],
+          [95.20, 5.60],
+          [97.80, 7.80],
+          [99.20, 8.60],
+          [100.40, 5.10],
+          [102.40, 2.80],
+          [103.855, 1.266]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "sea_singapore_diego_garcia_mainline",
+      "properties": {
+        "flowMode": "sea",
+        "flowSubType": "island_resupply_mainline",
+        "name": "Singapore-Diego Garcia Mainline",
+        "priority": 5,
+        "minZoom": 3,
+        "maxZoom": 10,
+        "tags": ["singapore", "malacca", "indian-ocean", "diego-garcia"],
+        "sources": ["manual-curation-v2"],
+        "status": "active"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [103.855, 1.266],
+          [103.30, 1.20],
+          [102.20, 1.90],
+          [100.90, 3.40],
+          [99.80, 5.20],
+          [98.40, 7.10],
+          [95.40, 8.20],
+          [92.30, 7.10],
+          [88.10, 5.00],
+          [83.60, 2.00],
+          [79.30, -1.20],
+          [75.40, -4.30],
+          [73.30, -6.20],
+          [72.411, -7.313]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "sea_gulf_diego_garcia_mainline",
+      "properties": {
+        "flowMode": "sea",
+        "flowSubType": "energy_military_mainline",
+        "name": "Persian Gulf-Diego Garcia Mainline",
+        "priority": 5,
+        "minZoom": 3,
+        "maxZoom": 10,
+        "tags": ["gulf", "hormuz", "indian-ocean", "diego-garcia"],
+        "sources": ["manual-curation-v2"],
+        "status": "active"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [55.10, 25.30],
+          [56.30, 26.58],
+          [59.20, 24.20],
+          [63.60, 19.00],
+          [68.10, 13.20],
+          [73.40, 8.80],
+          [79.50, 5.80],
+          [77.40, 2.60],
+          [75.30, -1.40],
+          [73.80, -4.90],
+          [72.411, -7.313]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "sea_gulf_east_china_mainline",
+      "properties": {
+        "flowMode": "sea",
+        "flowSubType": "energy_container_mainline",
+        "name": "Persian Gulf-East China Mainline",
+        "priority": 5,
+        "minZoom": 3,
+        "maxZoom": 10,
+        "tags": ["gulf", "hormuz", "malacca", "china", "shanghai"],
+        "sources": ["manual-curation-v2"],
+        "status": "active"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [50.04, 26.65],
+          [56.30, 26.58],
+          [58.90, 24.80],
+          [63.00, 20.50],
+          [68.40, 14.20],
+          [73.60, 8.40],
+          [78.90, 5.80],
+          [84.60, 5.60],
+          [90.50, 5.50],
+          [95.20, 5.60],
+          [97.80, 7.80],
+          [100.40, 5.10],
+          [103.60, 2.20],
+          [107.80, 6.00],
+          [110.70, 11.00],
+          [113.80, 16.50],
+          [118.60, 22.80],
+          [121.30, 28.20],
+          [122.067, 30.617]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "sea_jebel_ali_singapore_mainline",
+      "properties": {
+        "flowMode": "sea",
+        "flowSubType": "energy_container_mainline",
+        "name": "Jebel Ali-Singapore Mainline",
+        "priority": 5,
+        "minZoom": 3,
+        "maxZoom": 10,
+        "tags": ["jebel-ali", "hormuz", "malacca", "singapore"],
+        "sources": ["manual-curation-v2"],
+        "status": "active"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [55.06, 25.01],
+          [56.30, 26.58],
+          [58.90, 24.80],
+          [63.00, 20.50],
+          [68.40, 14.20],
+          [73.60, 8.40],
+          [78.90, 5.80],
+          [84.60, 5.60],
+          [90.50, 5.50],
+          [95.20, 5.60],
+          [97.80, 7.80],
+          [99.20, 8.60],
+          [100.40, 5.10],
+          [102.40, 2.80],
+          [103.855, 1.266]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "sea_ras_tanura_singapore_mainline",
+      "properties": {
+        "flowMode": "sea",
+        "flowSubType": "energy_container_mainline",
+        "name": "Ras Tanura-Singapore Mainline",
+        "priority": 5,
+        "minZoom": 3,
+        "maxZoom": 10,
+        "tags": ["ras-tanura", "hormuz", "malacca", "singapore"],
+        "sources": ["manual-curation-v2"],
+        "status": "active"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [50.04, 26.65],
+          [56.30, 26.58],
+          [58.90, 24.80],
+          [63.00, 20.50],
+          [68.40, 14.20],
+          [73.60, 8.40],
+          [78.90, 5.80],
+          [84.60, 5.60],
+          [90.50, 5.50],
+          [95.20, 5.60],
+          [97.80, 7.80],
+          [99.20, 8.60],
+          [100.40, 5.10],
+          [102.40, 2.80],
+          [103.855, 1.266]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "sea_yokosuka_singapore_mainline",
+      "properties": {
+        "flowMode": "sea",
+        "flowSubType": "naval_logistics_mainline",
+        "name": "Yokosuka-Singapore Mainline",
+        "priority": 5,
+        "minZoom": 3,
+        "maxZoom": 10,
+        "tags": ["yokosuka", "japan", "south-china-sea", "singapore"],
+        "sources": ["manual-curation-v2"],
+        "status": "active"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [139.67, 35.28],
+          [136.00, 33.80],
+          [132.50, 31.50],
+          [129.50, 29.00],
+          [126.00, 26.00],
+          [122.00, 23.00],
+          [120.00, 20.50],
+          [118.00, 17.00],
+          [114.50, 13.50],
+          [111.00, 9.80],
+          [107.50, 6.50],
+          [104.50, 3.50],
+          [103.855, 1.266]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "sea_norway_us_east_coast_mainline",
+      "properties": {
+        "flowMode": "sea",
+        "flowSubType": "atlantic_mainline",
+        "name": "Norway-US East Coast Mainline",
+        "priority": 4,
+        "minZoom": 3,
+        "maxZoom": 10,
+        "tags": ["norway", "north-atlantic", "norfolk", "east-coast"],
+        "sources": ["manual-curation-v2"],
+        "status": "active"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [10.48, 59.42],
+          [5.20, 58.40],
+          [1.00, 57.20],
+          [-4.50, 54.20],
+          [-8.50, 50.20],
+          [-18.00, 45.00],
+          [-29.00, 41.00],
+          [-41.00, 38.00],
+          [-54.00, 36.50],
+          [-66.00, 36.60],
+          [-76.33, 36.95]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "sea_norway_us_gulf_mainline",
+      "properties": {
+        "flowMode": "sea",
+        "flowSubType": "atlantic_energy_mainline",
+        "name": "Norway-US Gulf Mainline",
+        "priority": 4,
+        "minZoom": 3,
+        "maxZoom": 10,
+        "tags": ["norway", "north-atlantic", "houston", "gulf-of-mexico"],
+        "sources": ["manual-curation-v2"],
+        "status": "active"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [5.02, 60.81],
+          [-0.50, 58.80],
+          [-7.50, 54.50],
+          [-17.00, 48.00],
+          [-31.00, 41.50],
+          [-48.00, 33.50],
+          [-63.00, 24.00],
+          [-76.00, 22.50],
+          [-85.00, 24.00],
+          [-91.00, 26.50],
+          [-95.01, 29.73]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "sea_brazil_shanghai_via_cape",
+      "properties": {
+        "flowMode": "sea",
+        "flowSubType": "bulk_cape_mainline",
+        "name": "Brazil-Shanghai via Cape",
+        "priority": 4,
+        "minZoom": 2,
+        "maxZoom": 10,
+        "tags": ["brazil", "cape", "malacca", "shanghai", "bulk"],
+        "sources": ["manual-curation-v2"],
+        "status": "active"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [-44.37, -2.56],
+          [-35.00, -8.00],
+          [-20.00, -16.00],
+          [-2.00, -24.00],
+          [18.40, -33.90],
+          [31.00, -28.00],
+          [43.00, -20.00],
+          [57.00, -10.00],
+          [72.00, -1.00],
+          [85.00, 4.50],
+          [95.00, 6.00],
+          [101.00, 4.00],
+          [108.00, 7.00],
+          [114.00, 14.00],
+          [119.00, 22.00],
+          [122.067, 30.617]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "rail_carajas_efc_ponta_da_madeira",
+      "properties": {
+        "flowMode": "rail",
+        "flowSubType": "mining_export_corridor",
+        "name": "Carajas Railway-Ponta da Madeira",
+        "priority": 4,
+        "minZoom": 4,
+        "maxZoom": 11,
+        "tags": ["carajas", "rail", "vale", "ponta-da-madeira"],
+        "sources": ["manual-curation-v2"],
+        "status": "active"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [-50.177514, -6.054627],
+          [-49.15, -5.35],
+          [-47.50, -4.95],
+          [-46.20, -4.05],
+          [-45.38, -3.67],
+          [-44.45, -2.80],
+          [-44.379141, -2.566523]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "land_port_of_shanghai_baowu_dri",
+      "properties": {
+        "flowMode": "land",
+        "flowSubType": "port_access_corridor",
+        "name": "Port of Shanghai-Baowu DRI Access",
+        "priority": 3,
+        "minZoom": 5,
+        "maxZoom": 12,
+        "tags": ["shanghai", "port", "dri", "baowu"],
+        "sources": ["manual-curation-v2"],
+        "status": "active"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [122.063382, 30.626595],
+          [121.90, 30.75],
+          [121.72, 30.93],
+          [121.58, 31.08],
+          [121.473701, 31.230416]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "land_daqing_fushun_refining_corridor",
+      "properties": {
+        "flowMode": "land",
+        "flowSubType": "petrochemical_corridor",
+        "name": "Daqing-Fushun Refining Corridor",
+        "priority": 3,
+        "minZoom": 4,
+        "maxZoom": 11,
+        "tags": ["daqing", "fushun", "crude", "refining"],
+        "sources": ["manual-curation-v2"],
+        "status": "active"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [125.103070, 46.587580],
+          [126.534967, 45.803775],
+          [125.323542, 43.817084],
+          [123.431472, 41.805699],
+          [123.885191, 41.873078]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "sea_us_gulf_jebel_ali_via_suez",
+      "properties": {
+        "flowMode": "sea",
+        "flowSubType": "energy_suez_mainline",
+        "name": "US Gulf-Jebel Ali via Suez",
+        "priority": 4,
+        "minZoom": 2,
+        "maxZoom": 10,
+        "tags": ["us-gulf", "suez", "jebel-ali", "energy"],
+        "sources": ["manual-curation-v2"],
+        "status": "active"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [-95.01, 29.73],
+          [-89.00, 27.00],
+          [-82.00, 25.20],
+          [-72.00, 28.00],
+          [-57.00, 33.00],
+          [-38.00, 36.00],
+          [-14.00, 36.00],
+          [0.00, 36.00],
+          [14.00, 35.20],
+          [28.00, 31.00],
+          [32.35, 30.75],
+          [39.00, 21.00],
+          [43.50, 13.20],
+          [50.00, 12.50],
+          [58.00, 17.50],
+          [60.50, 24.00],
+          [56.30, 26.58],
+          [55.06, 25.01]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "sea_us_gulf_diego_via_malacca",
+      "properties": {
+        "flowMode": "sea",
+        "flowSubType": "energy_pacific_mainline",
+        "name": "US Gulf-Diego Garcia via Malacca",
+        "priority": 4,
+        "minZoom": 2,
+        "maxZoom": 10,
+        "tags": ["us-gulf", "panama", "malacca", "diego-garcia"],
+        "sources": ["manual-curation-v2"],
+        "status": "active"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [-95.01, 29.73],
+          [-88.00, 25.50],
+          [-82.00, 22.00],
+          [-78.00, 16.50],
+          [-79.50, 9.50],
+          [-79.68, 9.10],
+          [-95.00, 12.00],
+          [-115.00, 16.00],
+          [-135.00, 18.00],
+          [-155.00, 17.00],
+          [-175.00, 13.00],
+          [165.00, 10.00],
+          [145.00, 8.00],
+          [125.00, 7.00],
+          [108.00, 6.00],
+          [101.00, 4.50],
+          [90.00, 2.00],
+          [79.00, -2.00],
+          [74.00, -5.00],
+          [72.411, -7.313]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "sea_gulf_rotterdam_via_suez",
+      "properties": {
+        "flowMode": "sea",
+        "flowSubType": "energy_bulk_mainline",
+        "name": "Persian Gulf-Rotterdam via Suez",
+        "priority": 5,
+        "minZoom": 2,
+        "maxZoom": 10,
+        "tags": ["gulf", "hormuz", "suez", "rotterdam", "europe"],
+        "sources": ["manual-curation-v2"],
+        "status": "active"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [50.04, 26.65],
+          [56.30, 26.58],
+          [58.90, 24.80],
+          [61.00, 18.50],
+          [49.40, 13.20],
+          [43.45, 12.65],
+          [41.10, 15.20],
+          [38.80, 20.80],
+          [35.10, 26.70],
+          [32.55, 29.80],
+          [32.35, 30.75],
+          [29.50, 33.50],
+          [18.60, 36.10],
+          [5.60, 36.00],
+          [-6.20, 43.80],
+          [-1.60, 49.80],
+          [2.50, 51.20],
+          [4.2867, 51.885]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "sea_gulf_rotterdam_via_cape",
+      "properties": {
+        "flowMode": "sea",
+        "flowSubType": "energy_bulk_diversion",
+        "name": "Persian Gulf-Rotterdam via Cape of Good Hope",
+        "priority": 4,
+        "minZoom": 2,
+        "maxZoom": 9,
+        "tags": ["gulf", "hormuz", "cape", "rotterdam", "diversion"],
+        "sources": ["manual-curation-v2"],
+        "status": "active"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [50.04, 26.65],
+          [56.30, 26.58],
+          [58.90, 24.80],
+          [61.00, 18.50],
+          [65.00, 9.50],
+          [60.00, -2.50],
+          [47.50, -14.00],
+          [33.00, -24.50],
+          [18.50, -34.35],
+          [12.40, -28.50],
+          [3.80, -15.00],
+          [-4.60, -2.50],
+          [-16.00, 12.50],
+          [-12.80, 31.00],
+          [-6.20, 43.80],
+          [-1.60, 49.80],
+          [2.50, 51.20],
+          [4.2867, 51.885]
+        ]
+      }
+    }
+  ]
+}

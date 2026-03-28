@@ -1,4 +1,5 @@
 import rawFlows from '../data/transportFlows.v1.json';
+import curatedFlows from '../data/transportFlows.curated.v1.json';
 
 export type TransportFlowMode =
   | 'sea'
@@ -68,7 +69,33 @@ export const TRANSPORT_FLOW_MODE_LABELS: Record<TransportFlowMode, string> = {
   internet_cable: 'Internet cables',
 };
 
-export const STATIC_TRANSPORT_FLOW_DATA: TransportFlowsCollection = rawFlows as TransportFlowsCollection;
+function mergeTransportFlows(
+  base: TransportFlowsCollection,
+  overlay: TransportFlowsCollection,
+): TransportFlowsCollection {
+  const byId = new Map<string, TransportFlowFeature>();
+  for (const feature of base.features || []) {
+    const id = String(feature?.id || '').trim();
+    if (id) byId.set(id, feature);
+  }
+  for (const feature of overlay.features || []) {
+    const id = String(feature?.id || '').trim();
+    if (id) byId.set(id, feature);
+  }
+  return {
+    ...(base as TransportFlowsCollection),
+    meta: {
+      ...(base.meta || {}),
+      ...(overlay.meta || {}),
+    },
+    features: Array.from(byId.values()),
+  };
+}
+
+export const STATIC_TRANSPORT_FLOW_DATA: TransportFlowsCollection = mergeTransportFlows(
+  rawFlows as TransportFlowsCollection,
+  curatedFlows as TransportFlowsCollection,
+);
 
 export function deriveTransportFlowModeCounts(features: TransportFlowFeature[]): TransportFlowModeCount[] {
   const counts = new Map<TransportFlowMode, number>();

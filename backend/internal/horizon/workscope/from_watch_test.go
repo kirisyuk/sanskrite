@@ -22,6 +22,16 @@ func TestFromWatchSubject_lensUniverse(t *testing.T) {
 	if len(got.Refs.ScopePaths) != 3 {
 		t.Fatalf("paths %v", got.Refs.ScopePaths)
 	}
+	if got.Intent.ScopeKind != ScopeKindWatchSubject {
+		t.Fatalf("intent %+v", got.Intent)
+	}
+	req := RequestFromWatchSubject(s)
+	if req.Intent.EntryPoint != EntryPointWatch || req.Intent.Action != ActionDeriveRisk {
+		t.Fatalf("request intent %+v", req.Intent)
+	}
+	if !req.Intent.Projection.IncludePropagatedReach {
+		t.Fatalf("expected propagated projection policy")
+	}
 }
 
 func TestWatchScopeIntentDigest_stable(t *testing.T) {

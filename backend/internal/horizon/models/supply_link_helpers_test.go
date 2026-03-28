@@ -258,6 +258,49 @@ func TestValidateSupplyLinkFields(t *testing.T) {
 	}
 }
 
+func TestBuildSupplyLinkRouteVariantKey(t *testing.T) {
+	first := BuildSupplyLinkRouteVariantKey([]string{
+		"/fac/sea/strait-of-hormuz-terminal",
+		"/fac/eg/suez-terminal",
+	})
+	second := BuildSupplyLinkRouteVariantKey([]string{
+		"/fac/sea/strait-of-hormuz-terminal",
+		"/fac/eg/suez-terminal",
+	})
+	other := BuildSupplyLinkRouteVariantKey([]string{
+		"/fac/za/cape-of-good-hope-terminal",
+	})
+	if first == "" || first == "direct" {
+		t.Fatalf("expected hashed via variant key, got %q", first)
+	}
+	if first != second {
+		t.Fatalf("expected stable variant key, got %q and %q", first, second)
+	}
+	if first == other {
+		t.Fatalf("expected different variant keys for different via sequences")
+	}
+}
+
+func TestMergeSupplyLinkRouteVariants_PreservesDistinctRoutes(t *testing.T) {
+	left := []SupplyLinkRouteVariant{
+		NewSupplyLinkRouteVariant([]string{"/fac/eg/suez-terminal"}, "", 0.72),
+	}
+	right := []SupplyLinkRouteVariant{
+		NewSupplyLinkRouteVariant([]string{"/fac/za/cape-of-good-hope-terminal"}, "", 0.81),
+	}
+	merged := MergeSupplyLinkRouteVariants(left, right)
+	if len(merged) != 2 {
+		t.Fatalf("variants=%d, want 2", len(merged))
+	}
+	primary := PrimarySupplyLinkRouteVariant(merged)
+	if primary == nil {
+		t.Fatal("expected primary variant")
+	}
+	if len(primary.TransportViaRefs) != 1 || primary.TransportViaRefs[0] != "/fac/za/cape-of-good-hope-terminal" {
+		t.Fatalf("primary via=%v, want cape route", primary.TransportViaRefs)
+	}
+}
+
 func TestIsSupplyLink(t *testing.T) {
 	tests := []struct {
 		name     string

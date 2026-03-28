@@ -9,7 +9,7 @@
 В новой архитектуре мы отказались от альтернативного потока (`SupplyChainGapAnalyzer` и `RefineDirectives`) в пользу единого, строго типизированного потока `Domain Expansion`. Вся логика построения цепочек поставок централизована.
 
 ```
-Planning → Extraction (skip) → Critic (skip) → Research → Materialize → Policy
+Planning → Extraction (skip) → Critic (skip) → Research → Materialized Paths → Route Overlays → Policy / Metrics / Simulation
 ```
 
 ### Фаза Research (plan mode)
@@ -80,12 +80,23 @@ Planning → Extraction (skip) → Critic (skip) → Research → Materialize �
 
 ---
 
-## Фаза Materialize
+## Фазы после графа
+
+### Materialized Paths
 
 - `processSupplyChains` — парсит отфильтрованные chains → создаёт Fragments, Edges, SupplyLinks
 - `runSupplyChainExpandPhase` — optional 1-hop expand (low confidence / gapHints / productFilter)
 - `runSupplyChainStage2Overlays` — regulatory/market/decision_points по анкерам
-- Данные собираются в `Engine.collectGraph` (в `domain/engine.go`), который также проверяет соответствие артефактов `expectedRelationsForContractType` и `expectedEntitiesForContractType` (fail-safe проверка на этапе чтения).
+- structural path identity остаётся route-agnostic: canonical key строится по supplier/product/customer
+- structural duplicates должны схлопываться до одного materialized artifact
+
+### Route Overlays
+
+- logistics overlay является отдельной стадией над structural path, а не частью product graph truth
+- один materialized path может иметь несколько `routeOverlays`
+- overlays собираются из ordered route fragments / `transportViaRefs` / route geometry profile / flow refs
+- альтернативные маршруты (`Hormuz`, `Suez`, `Cape`, `air bridge`, `pipeline fallback`) должны агрегироваться в тот же structural artifact, если graph path тот же
+- downstream layers (`operational_hydrate`, `signal_propagation`, `simulation`) должны читать именно overlay layer, а не переизобретать route semantics локально
 
 ## Логирование и UI (Telemetry & Realtime)
 

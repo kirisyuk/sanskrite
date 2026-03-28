@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	hlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/workscope"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -20,6 +22,7 @@ type scopeScoutLensQueryRequest struct {
 	// Optional: enables specialized scout/research modules (e.g., ["management","products_and_services"])
 	Specialties []string                              `json:"specialties,omitempty"`
 	Exploration *scopeScoutDirectedExplorationRequest `json:"exploration,omitempty"`
+	ScopePolicy string                                `json:"scopePolicy,omitempty"`
 }
 
 type scopeScoutLensQueryResponse struct {
@@ -138,6 +141,17 @@ func (h *HorizonHandlers) ScopeScoutLensQuery(w http.ResponseWriter, r *http.Req
 		http.Error(w, "directed exploration anchor must be org/gov/fac/product/deposit", http.StatusBadRequest)
 		return
 	}
+	expansion, err := h.service.Lens().ExpandScope(ctx, lens, hlens.ScopeExpansionRequest{
+		LensID:         lens.ID,
+		CanonicalPaths: []string{targetCanonicalPath},
+		MaxAdds:        1,
+		Reason:         "scope_scout_query",
+	})
+	if err != nil {
+		http.Error(w, "Failed to expand lens scope", http.StatusInternalServerError)
+		return
+	}
+	scopeAdded := expansion.ScopeChanged
 
 	if shouldRouteDirectedExplorationToOneHop(targetCanonicalPath, directedExploration) {
 		if h.oneHopDownstreamService == nil || h.scoutingJobsRepo == nil {
@@ -168,18 +182,15 @@ func (h *HorizonHandlers) ScopeScoutLensQuery(w http.ResponseWriter, r *http.Req
 		w.Header().Set("X-Correlation-Id", correlationID)
 		_ = json.NewEncoder(w).Encode(scopeScoutLensQueryResponse{
 			JobID:      jobID,
-			ScopeAdded: false,
+			ScopeAdded: scopeAdded,
 			Target:     strings.TrimSpace(opts.AnchorRef),
 			Lens:       lens,
 		})
 		return
 	}
 
-	// Deferred scope: do NOT add to scope here. Scope is added only when Scout creates the fragment (max 5 per lens).
-	scopeAdded := false
-
 	// Create scouting job (maxRecursionDepth=0: add as a single node, no automatic relationship expansion).
-	// Job has deferredScopeAdd=true so scope is added on success.
+	// Explicit scope growth is already handled above via the single lens scope expansion path.
 	jobID := ""
 	if h.service.ScoutingJobs() != nil {
 		now := time.Now().UTC()
@@ -227,6 +238,11 @@ func (h *HorizonHandlers) ScopeScoutLensQuery(w http.ResponseWriter, r *http.Req
 			"ignoreFreshnessForUserRequest": true,
 			"forceDeepScout":                true,
 		}
+		request := workscope.NewLensGraphEnrichmentRequest(
+			workscope.FromLensStrictWorkScope(lens.TenantID, lens.ProjectID, lens.ID, []string{targetCanonicalPath}),
+			normalizeLensScopePolicy(body.ScopePolicy, workscope.MutationModePersistWorldKeepScope),
+		)
+		state = workscope.ApplyRequestToState(state, request)
 		if scoutingMode == taxonomy.DomainModeSupplyChain || scoutingMode == taxonomy.DomainModeGovernance {
 			state["domainModes"] = []string{scoutingMode}
 		}

@@ -20,4 +20,14 @@ func TestNewRiskMonitorPipeline_normalizes(t *testing.T) {
 	if len(names) < 4 {
 		t.Fatalf("stages %v", names)
 	}
+	foundRouteOverlays := false
+	for _, name := range names {
+		if name == string(ExecutionLayerRouteOverlays) {
+			foundRouteOverlays = true
+			break
+		}
+	}
+	if !foundRouteOverlays {
+		t.Fatalf("stages %v do not include route_overlays", names)
+	}
 }

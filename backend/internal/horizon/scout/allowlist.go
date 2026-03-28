@@ -81,8 +81,8 @@ func IsAllowedSupplyChainRuntimeRelation(sourcePath, targetPath string, relation
 	if IsSupplyChainEdgeType(string(relationType)) {
 		return true
 	}
-	if relationType == models.DependencyTypeOwns || relationType == models.DependencyTypeControls {
-		return allowSupplyChainOwnershipOrControlByPath(sourcePath, targetPath)
+	if allowSupplyChainOverlayByPath(sourcePath, targetPath, relationType) {
+		return true
 	}
 	if strings.HasPrefix(sourcePath, "/domain/") && IsDomainScaffoldRelationType(relationType) {
 		return true

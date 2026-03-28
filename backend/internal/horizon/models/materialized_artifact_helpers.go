@@ -3,6 +3,7 @@ package models
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -149,6 +150,458 @@ func decodeSupplyChainPathLegs(raw interface{}) ([]SupplyChainPathLeg, error) {
 	default:
 		return nil, fmt.Errorf("payload 'legs' must be an array")
 	}
+}
+
+func orderedRouteRefsForLeg(supplierRef string, transportViaRefs []string, customerRef string) []string {
+	refs := make([]string, 0, len(transportViaRefs)+2)
+	if strings.TrimSpace(supplierRef) != "" {
+		refs = append(refs, strings.TrimSpace(supplierRef))
+	}
+	for _, ref := range transportViaRefs {
+		if strings.TrimSpace(ref) != "" {
+			refs = append(refs, strings.TrimSpace(ref))
+		}
+	}
+	if strings.TrimSpace(customerRef) != "" {
+		refs = append(refs, strings.TrimSpace(customerRef))
+	}
+	return NormalizeOrderedRouteRefs(refs)
+}
+
+func inferRouteOverlayEndpointBindingPolicy(supplierRef, customerRef string, transportViaRefs []string) string {
+	isExactRef := func(ref string) bool {
+		ref = strings.TrimSpace(ref)
+		switch {
+		case strings.HasPrefix(ref, "/fac/"),
+			strings.HasPrefix(ref, "/deposit/"),
+			strings.HasPrefix(ref, "/loc/"),
+			strings.HasPrefix(ref, "/zone/"),
+			strings.HasPrefix(ref, "/track/"):
+			return true
+		default:
+			return false
+		}
+	}
+	if isExactRef(supplierRef) && isExactRef(customerRef) {
+		allExact := true
+		for _, ref := range transportViaRefs {
+			if !isExactRef(ref) {
+				allExact = false
+				break
+			}
+		}
+		if allExact {
+			return "exact_refs"
+		}
+	}
+	if len(transportViaRefs) > 0 {
+		return "anchored_via_refs"
+	}
+	return "approx_endpoint_binding"
+}
+
+func routeOverlayQualityRank(source string) int {
+	switch strings.TrimSpace(source) {
+	case "route_geometry_profile", "curated_flow_catalog":
+		return 5
+	case "composed_route_segments":
+		return 4
+	case "facility_route_overlay":
+		return 3
+	case "partial_segment_geometry":
+		return 2
+	case "fragmentary_waypoint_sequence":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func buildSupplyChainRouteOverlayKey(overlay SupplyChainRouteOverlay) string {
+	if key := strings.TrimSpace(overlay.OverlayKey); key != "" {
+		return key
+	}
+	if key := strings.TrimSpace(overlay.RouteVariantKey); key != "" {
+		return "variant:" + key
+	}
+	if key := strings.TrimSpace(overlay.RouteProfileKey); key != "" {
+		return "profile:" + key
+	}
+	refs := NormalizeOrderedRouteRefs(overlay.OrderedRefs)
+	if len(refs) > 0 {
+		return "refs:" + BuildRouteGeometryProfileKey(refs)
+	}
+	if len(overlay.TransportViaRefs) > 0 {
+		return "via:" + BuildSupplyLinkRouteVariantKey(overlay.TransportViaRefs)
+	}
+	parts := []string{
+		strings.TrimSpace(overlay.Mode),
+		strings.TrimSpace(overlay.RouteGeometrySource),
+		strings.TrimSpace(overlay.VesselType),
+	}
+	key := strings.Trim(strings.Join(parts, "|"), "|")
+	if key == "" {
+		return ""
+	}
+	return "overlay:" + key
+}
+
+func normalizeSupplyChainRouteOverlay(overlay SupplyChainRouteOverlay, leg SupplyChainPathLeg) SupplyChainRouteOverlay {
+	overlay.TransportViaRefs = uniqueTrimmedStrings(firstNonEmptyStringSlice(overlay.TransportViaRefs, leg.TransportViaRefs))
+	overlay.OrderedRefs = NormalizeOrderedRouteRefs(firstNonEmptyStringSlice(overlay.OrderedRefs, orderedRouteRefsForLeg(leg.SupplierRef, overlay.TransportViaRefs, leg.CustomerRef)))
+	if len(overlay.TransportViaRefs) > 0 || strings.TrimSpace(overlay.RouteVariantKey) == "" {
+		overlay.RouteVariantKey = strings.TrimSpace(BuildSupplyLinkRouteVariantKey(overlay.TransportViaRefs))
+	}
+	if len(overlay.OrderedRefs) > 0 {
+		overlay.RouteProfileKey = strings.TrimSpace(BuildRouteGeometryProfileKey(overlay.OrderedRefs))
+	}
+	overlay.RouteGeometrySource = strings.TrimSpace(firstNonEmpty(overlay.RouteGeometrySource, leg.RouteGeometrySource))
+	overlay.Mode = strings.TrimSpace(firstNonEmpty(overlay.Mode, leg.Mode))
+	overlay.FlowRefs = uniqueTrimmedStrings(overlay.FlowRefs)
+	overlay.AlternateFlowRefs = uniqueTrimmedStrings(overlay.AlternateFlowRefs)
+	overlay.GeoRefs = uniqueTrimmedStrings(overlay.GeoRefs)
+	overlay.ZoneRefs = uniqueTrimmedStrings(overlay.ZoneRefs)
+	overlay.AffectedZoneRefs = uniqueTrimmedStrings(overlay.AffectedZoneRefs)
+	overlay.SpatialSemantics = uniqueTrimmedStrings(overlay.SpatialSemantics)
+	overlay.VesselType = strings.TrimSpace(firstNonEmpty(overlay.VesselType, leg.VesselType))
+	overlay.EndpointBindingPolicy = strings.TrimSpace(firstNonEmpty(
+		overlay.EndpointBindingPolicy,
+		inferRouteOverlayEndpointBindingPolicy(leg.SupplierRef, leg.CustomerRef, overlay.TransportViaRefs),
+	))
+	if strings.TrimSpace(overlay.Status) == "" {
+		overlay.Status = "alternate"
+	}
+	overlay.OverlayKey = buildSupplyChainRouteOverlayKey(SupplyChainRouteOverlay{
+		RouteVariantKey:     overlay.RouteVariantKey,
+		RouteProfileKey:     overlay.RouteProfileKey,
+		OrderedRefs:         overlay.OrderedRefs,
+		TransportViaRefs:    overlay.TransportViaRefs,
+		Mode:                overlay.Mode,
+		RouteGeometrySource: overlay.RouteGeometrySource,
+		VesselType:          overlay.VesselType,
+	})
+	return overlay
+}
+
+func firstNonEmptyStringSlice(values ...[]string) []string {
+	for _, value := range values {
+		if len(value) > 0 {
+			return value
+		}
+	}
+	return nil
+}
+
+func synthesizeLegacyRouteOverlay(leg SupplyChainPathLeg) *SupplyChainRouteOverlay {
+	if strings.TrimSpace(leg.RouteVariantKey) == "" &&
+		len(leg.TransportViaRefs) == 0 &&
+		len(leg.RouteCoordinates) == 0 &&
+		strings.TrimSpace(leg.RouteGeometrySource) == "" &&
+		strings.TrimSpace(leg.Mode) == "" &&
+		len(leg.FlowRefs) == 0 &&
+		len(leg.ZoneRefs) == 0 &&
+		len(leg.AffectedZoneRefs) == 0 &&
+		len(leg.SpatialSemantics) == 0 &&
+		strings.TrimSpace(leg.VesselType) == "" {
+		return nil
+	}
+	overlay := normalizeSupplyChainRouteOverlay(SupplyChainRouteOverlay{
+		RouteVariantKey:     strings.TrimSpace(leg.RouteVariantKey),
+		RouteProfileKey:     BuildRouteGeometryProfileKey(orderedRouteRefsForLeg(leg.SupplierRef, leg.TransportViaRefs, leg.CustomerRef)),
+		OrderedRefs:         orderedRouteRefsForLeg(leg.SupplierRef, leg.TransportViaRefs, leg.CustomerRef),
+		TransportViaRefs:    append([]string(nil), leg.TransportViaRefs...),
+		RouteCoordinates:    append([]Coordinates(nil), leg.RouteCoordinates...),
+		RouteGeometrySource: strings.TrimSpace(leg.RouteGeometrySource),
+		Mode:                strings.TrimSpace(leg.Mode),
+		FlowRefs:            append([]string(nil), leg.FlowRefs...),
+		AlternateFlowRefs:   append([]string(nil), leg.AlternateFlowRefs...),
+		GeoRefs:             append([]string(nil), leg.GeoRefs...),
+		ZoneRefs:            append([]string(nil), leg.ZoneRefs...),
+		AffectedZoneRefs:    append([]string(nil), leg.AffectedZoneRefs...),
+		SpatialSemantics:    append([]string(nil), leg.SpatialSemantics...),
+		VesselType:          strings.TrimSpace(leg.VesselType),
+		BindingConfidence:   leg.BindingConfidence,
+		SegmentConfidence:   leg.SegmentConfidence,
+		Status:              "primary",
+	}, leg)
+	return &overlay
+}
+
+func selectPrimarySupplyChainRouteOverlay(overlays []SupplyChainRouteOverlay) int {
+	if len(overlays) == 0 {
+		return -1
+	}
+	bestIdx := 0
+	bestScore := -1.0
+	for idx, overlay := range overlays {
+		score := overlay.BindingConfidence*10 + overlay.SegmentConfidence*4
+		score += float64(routeOverlayQualityRank(overlay.RouteGeometrySource)) * 3
+		score += float64(len(overlay.FlowRefs)) * 0.6
+		if len(overlay.RouteCoordinates) >= 2 {
+			score += 0.8
+		}
+		if strings.TrimSpace(overlay.Status) == "primary" {
+			score += 1.5
+		}
+		if score > bestScore {
+			bestScore = score
+			bestIdx = idx
+		}
+	}
+	return bestIdx
+}
+
+// SupplyChainRouteOverlayConstraints describes route conditions that make one overlay viable and another blocked.
+// This is the reusable selection contract for risk, simulation, QA, and on-demand route reasoning.
+type SupplyChainRouteOverlayConstraints struct {
+	BlockedFlowRefs         []string
+	BlockedZoneRefs         []string
+	BlockedAffectedZoneRefs []string
+	BlockedGeoRefs          []string
+	BlockedModes            []string
+}
+
+// SupplyChainRouteOverlaySelection groups overlays by whether they remain usable under the supplied constraints.
+type SupplyChainRouteOverlaySelection struct {
+	Primary *SupplyChainRouteOverlay
+	Viable  []SupplyChainRouteOverlay
+	Blocked []SupplyChainRouteOverlay
+}
+
+func routeOverlayBlockedByConstraints(overlay SupplyChainRouteOverlay, constraints SupplyChainRouteOverlayConstraints) bool {
+	intersects := func(left, right []string) bool {
+		if len(left) == 0 || len(right) == 0 {
+			return false
+		}
+		seen := make(map[string]struct{}, len(right))
+		for _, item := range right {
+			item = strings.TrimSpace(item)
+			if item != "" {
+				seen[item] = struct{}{}
+			}
+		}
+		for _, item := range left {
+			item = strings.TrimSpace(item)
+			if item == "" {
+				continue
+			}
+			if _, ok := seen[item]; ok {
+				return true
+			}
+		}
+		return false
+	}
+	if intersects(overlay.FlowRefs, constraints.BlockedFlowRefs) {
+		return true
+	}
+	if intersects(overlay.ZoneRefs, constraints.BlockedZoneRefs) {
+		return true
+	}
+	if intersects(overlay.AffectedZoneRefs, constraints.BlockedAffectedZoneRefs) {
+		return true
+	}
+	if intersects(overlay.GeoRefs, constraints.BlockedGeoRefs) {
+		return true
+	}
+	for _, mode := range constraints.BlockedModes {
+		if strings.TrimSpace(mode) != "" && strings.EqualFold(strings.TrimSpace(overlay.Mode), strings.TrimSpace(mode)) {
+			return true
+		}
+	}
+	return false
+}
+
+// SelectSupplyChainRouteOverlays evaluates a leg's route overlays against route constraints and returns
+// viable/blocked alternatives plus the preferred viable overlay when one exists.
+func SelectSupplyChainRouteOverlays(leg SupplyChainPathLeg, constraints SupplyChainRouteOverlayConstraints) SupplyChainRouteOverlaySelection {
+	normalizeSupplyChainPathLegRouteOverlays(&leg)
+	selection := SupplyChainRouteOverlaySelection{
+		Viable:  make([]SupplyChainRouteOverlay, 0, len(leg.RouteOverlays)),
+		Blocked: make([]SupplyChainRouteOverlay, 0, len(leg.RouteOverlays)),
+	}
+	for _, overlay := range leg.RouteOverlays {
+		if routeOverlayBlockedByConstraints(overlay, constraints) {
+			selection.Blocked = append(selection.Blocked, overlay)
+			continue
+		}
+		selection.Viable = append(selection.Viable, overlay)
+	}
+	if idx := selectPrimarySupplyChainRouteOverlay(selection.Viable); idx >= 0 && idx < len(selection.Viable) {
+		primary := selection.Viable[idx]
+		selection.Primary = &primary
+	}
+	return selection
+}
+
+func normalizeSupplyChainPathLegRouteOverlays(leg *SupplyChainPathLeg) {
+	if leg == nil {
+		return
+	}
+	overlays := make([]SupplyChainRouteOverlay, 0, len(leg.RouteOverlays)+1)
+	indexByKey := make(map[string]int, len(leg.RouteOverlays)+1)
+	appendOverlay := func(overlay SupplyChainRouteOverlay) {
+		overlay = normalizeSupplyChainRouteOverlay(overlay, *leg)
+		if strings.TrimSpace(overlay.OverlayKey) == "" {
+			return
+		}
+		if idx, ok := indexByKey[overlay.OverlayKey]; ok {
+			current := overlays[idx]
+			current.OrderedRefs = NormalizeOrderedRouteRefs(firstNonEmptyStringSlice(current.OrderedRefs, overlay.OrderedRefs))
+			current.TransportViaRefs = mergeUniqueStrings(current.TransportViaRefs, overlay.TransportViaRefs)
+			if len(current.RouteCoordinates) == 0 && len(overlay.RouteCoordinates) > 0 {
+				current.RouteCoordinates = append([]Coordinates(nil), overlay.RouteCoordinates...)
+			}
+			if strings.TrimSpace(current.RouteGeometrySource) == "" {
+				current.RouteGeometrySource = strings.TrimSpace(overlay.RouteGeometrySource)
+			}
+			if strings.TrimSpace(current.Mode) == "" {
+				current.Mode = strings.TrimSpace(overlay.Mode)
+			}
+			current.FlowRefs = mergeUniqueStrings(current.FlowRefs, overlay.FlowRefs)
+			current.AlternateFlowRefs = mergeUniqueStrings(current.AlternateFlowRefs, overlay.AlternateFlowRefs)
+			current.GeoRefs = mergeUniqueStrings(current.GeoRefs, overlay.GeoRefs)
+			current.ZoneRefs = mergeUniqueStrings(current.ZoneRefs, overlay.ZoneRefs)
+			current.AffectedZoneRefs = mergeUniqueStrings(current.AffectedZoneRefs, overlay.AffectedZoneRefs)
+			current.SpatialSemantics = mergeUniqueStrings(current.SpatialSemantics, overlay.SpatialSemantics)
+			if strings.TrimSpace(current.VesselType) == "" {
+				current.VesselType = strings.TrimSpace(overlay.VesselType)
+			}
+			if current.BindingConfidence <= 0 && overlay.BindingConfidence > 0 {
+				current.BindingConfidence = overlay.BindingConfidence
+			}
+			if current.SegmentConfidence <= 0 && overlay.SegmentConfidence > 0 {
+				current.SegmentConfidence = overlay.SegmentConfidence
+			}
+			if strings.TrimSpace(current.EndpointBindingPolicy) == "" {
+				current.EndpointBindingPolicy = strings.TrimSpace(overlay.EndpointBindingPolicy)
+			}
+			if strings.TrimSpace(current.Status) == "" {
+				current.Status = strings.TrimSpace(overlay.Status)
+			}
+			overlays[idx] = normalizeSupplyChainRouteOverlay(current, *leg)
+			return
+		}
+		indexByKey[overlay.OverlayKey] = len(overlays)
+		overlays = append(overlays, overlay)
+	}
+	if legacy := synthesizeLegacyRouteOverlay(*leg); legacy != nil {
+		appendOverlay(*legacy)
+	}
+	for _, overlay := range leg.RouteOverlays {
+		appendOverlay(overlay)
+	}
+	primaryIdx := selectPrimarySupplyChainRouteOverlay(overlays)
+	for idx := range overlays {
+		if idx == primaryIdx {
+			overlays[idx].Status = "primary"
+		} else if strings.TrimSpace(overlays[idx].Status) == "" || strings.TrimSpace(overlays[idx].Status) == "primary" {
+			overlays[idx].Status = "alternate"
+		}
+	}
+	leg.RouteOverlays = overlays
+	if primaryIdx >= 0 {
+		primary := overlays[primaryIdx]
+		leg.RouteVariantKey = strings.TrimSpace(primary.RouteVariantKey)
+		leg.TransportViaRefs = append([]string(nil), primary.TransportViaRefs...)
+		leg.RouteCoordinates = append([]Coordinates(nil), primary.RouteCoordinates...)
+		leg.RouteGeometrySource = strings.TrimSpace(primary.RouteGeometrySource)
+		leg.VesselType = strings.TrimSpace(primary.VesselType)
+		leg.Mode = strings.TrimSpace(firstNonEmpty(primary.Mode, leg.Mode))
+	}
+	leg.FlowRefs = nil
+	leg.AlternateFlowRefs = nil
+	leg.GeoRefs = nil
+	leg.ZoneRefs = nil
+	leg.AffectedZoneRefs = nil
+	leg.SpatialSemantics = nil
+	for _, overlay := range overlays {
+		leg.FlowRefs = mergeUniqueStrings(leg.FlowRefs, overlay.FlowRefs)
+		leg.AlternateFlowRefs = mergeUniqueStrings(leg.AlternateFlowRefs, overlay.AlternateFlowRefs)
+		leg.GeoRefs = mergeUniqueStrings(leg.GeoRefs, overlay.GeoRefs)
+		leg.ZoneRefs = mergeUniqueStrings(leg.ZoneRefs, overlay.ZoneRefs)
+		leg.AffectedZoneRefs = mergeUniqueStrings(leg.AffectedZoneRefs, overlay.AffectedZoneRefs)
+		leg.SpatialSemantics = mergeUniqueStrings(leg.SpatialSemantics, overlay.SpatialSemantics)
+		if leg.BindingConfidence <= 0 && overlay.BindingConfidence > 0 {
+			leg.BindingConfidence = overlay.BindingConfidence
+		}
+		if leg.SegmentConfidence <= 0 && overlay.SegmentConfidence > 0 {
+			leg.SegmentConfidence = overlay.SegmentConfidence
+		}
+	}
+}
+
+func normalizeParsedSupplyChainPathLegs(legs []SupplyChainPathLeg) []SupplyChainPathLeg {
+	if len(legs) == 0 {
+		return legs
+	}
+	merged := mergePathLegs(legs, nil)
+	for idx := range merged {
+		normalizeSupplyChainPathLegRouteOverlays(&merged[idx])
+	}
+	return merged
+}
+
+func rawSupplyChainPathLegMaps(raw interface{}) []map[string]interface{} {
+	switch value := raw.(type) {
+	case []map[string]interface{}:
+		return value
+	case []interface{}:
+		out := make([]map[string]interface{}, 0, len(value))
+		for _, item := range value {
+			legMap, ok := item.(map[string]interface{})
+			if !ok {
+				return nil
+			}
+			out = append(out, legMap)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func rawSupplyChainPathLegHasExplicitRouteOverlays(leg map[string]interface{}) bool {
+	if len(leg) == 0 {
+		return false
+	}
+	if _, ok := leg["routeOverlays"]; ok {
+		return true
+	}
+	if _, ok := leg["RouteOverlays"]; ok {
+		return true
+	}
+	return false
+}
+
+func supplyChainPathPayloadAlreadyNormalized(payload map[string]interface{}) bool {
+	if len(payload) == 0 {
+		return false
+	}
+	rawLegsValue, ok := payload["legs"]
+	if !ok {
+		rawLegsValue = payload["Legs"]
+	}
+	if rawLegsValue == nil {
+		return false
+	}
+	rawLegs, err := decodeSupplyChainPathLegs(rawLegsValue)
+	if err != nil || len(rawLegs) == 0 {
+		return false
+	}
+	normalizedLegs := normalizeParsedSupplyChainPathLegs(append([]SupplyChainPathLeg(nil), rawLegs...))
+	if len(rawLegs) != len(normalizedLegs) {
+		return false
+	}
+	rawLegMaps := rawSupplyChainPathLegMaps(rawLegsValue)
+	if len(rawLegMaps) != len(rawLegs) {
+		return false
+	}
+	for _, legMap := range rawLegMaps {
+		if !rawSupplyChainPathLegHasExplicitRouteOverlays(legMap) {
+			return false
+		}
+	}
+	return true
 }
 
 func decodeStringSlice(raw interface{}) ([]string, error) {
@@ -402,6 +855,9 @@ func BuildSupplyChainPathPayloadWithSufficiency(nodes []SupplyChainPathNode, edg
 }
 
 func BuildSupplyChainPathPayloadDetailed(nodes []SupplyChainPathNode, edges []SupplyChainPathEdge, legs []SupplyChainPathLeg, stress *SupplyChainPathStress, sufficiency *SupplyChainPathSufficiency, family *SupplyChainPathFamily, notes map[string]interface{}) map[string]interface{} {
+	if len(legs) > 0 {
+		legs = normalizeParsedSupplyChainPathLegs(append([]SupplyChainPathLeg(nil), legs...))
+	}
 	payload := map[string]interface{}{
 		"v":     1,
 		"nodes": nodes,
@@ -662,7 +1118,7 @@ func ParseSupplyChainPathPayload(payload map[string]interface{}) (*SupplyChainPa
 		if err != nil {
 			return nil, err
 		}
-		legs = parsedLegs
+		legs = normalizeParsedSupplyChainPathLegs(parsedLegs)
 	}
 
 	var stress *SupplyChainPathStress
@@ -1156,6 +1612,11 @@ func buildLegacyLegFromOperationalEdges(parsed *SupplyChainPathPayload, canonica
 
 		if edge.Type == "SUPPLY_LINK" {
 			productFlowFound = true
+			if edge.Qualifiers != nil && strings.TrimSpace(leg.RouteVariantKey) == "" {
+				if raw, ok := edge.Qualifiers["route_variant_key"].(string); ok {
+					leg.RouteVariantKey = strings.TrimSpace(raw)
+				}
+			}
 			if edge.From >= 0 && edge.From < len(parsed.Nodes) {
 				leg.SupplierRef = strings.TrimSpace(parsed.Nodes[edge.From].Ref)
 				idx := edge.From
@@ -1212,6 +1673,9 @@ func buildLegacyLegFromOperationalEdges(parsed *SupplyChainPathPayload, canonica
 	}
 	if leg.SupplierRef == "" || leg.CustomerRef == "" || leg.ProductRef == "" {
 		return nil
+	}
+	if strings.TrimSpace(leg.RouteVariantKey) == "" {
+		leg.RouteVariantKey = BuildSupplyLinkRouteVariantKey(leg.TransportViaRefs)
 	}
 	return leg
 }
@@ -1350,6 +1814,43 @@ func GetSupplyChainPathLegs(artifact *MaterializedArtifact) ([]SupplyChainPathLe
 	}
 
 	return parsed.Legs, nil
+}
+
+// NormalizeSupplyChainPathRouteOverlays rewrites a SUPPLY_CHAIN_PATH artifact payload so that
+// each structural leg carries explicit routeOverlays and legacy route fields are synchronized
+// from the selected primary overlay. Returns true when payload changed.
+func NormalizeSupplyChainPathRouteOverlays(artifact *MaterializedArtifact) (bool, error) {
+	if artifact == nil {
+		return false, fmt.Errorf("artifact is nil")
+	}
+	if artifact.Kind != MaterializedKindSupplyChainPath {
+		return false, nil
+	}
+	if supplyChainPathPayloadAlreadyNormalized(artifact.Payload) {
+		return false, nil
+	}
+	parsed, err := ParseSupplyChainPathPayload(artifact.Payload)
+	if err != nil {
+		return false, err
+	}
+	if parsed == nil {
+		return false, nil
+	}
+	normalizedPayload := BuildSupplyChainPathPayloadDetailed(
+		parsed.Nodes,
+		parsed.Edges,
+		parsed.Legs,
+		parsed.Stress,
+		parsed.Sufficiency,
+		parsed.Family,
+		parsed.Notes,
+	)
+	if reflect.DeepEqual(artifact.Payload, normalizedPayload) {
+		return false, nil
+	}
+	artifact.Payload = normalizedPayload
+	PopulateMaterializedArtifactIndexes(artifact)
+	return true, nil
 }
 
 type SupplyChainPathBindingSummary struct {
@@ -1910,6 +2411,8 @@ func mergePathEdges(existing, incoming []SupplyChainPathEdge) []SupplyChainPathE
 
 func mergePathLegs(existing, incoming []SupplyChainPathLeg) []SupplyChainPathLeg {
 	type legKey struct {
+		Index    int
+		LinkPath string
 		Supplier string
 		Customer string
 		Product  string
@@ -1919,6 +2422,8 @@ func mergePathLegs(existing, incoming []SupplyChainPathLeg) []SupplyChainPathLeg
 	appendIfNew := func(legs []SupplyChainPathLeg) {
 		for _, leg := range legs {
 			k := legKey{
+				Index:    leg.Index,
+				LinkPath: strings.TrimSpace(leg.SupplyLinkCanonicalPath),
 				Supplier: strings.TrimSpace(leg.SupplierRef),
 				Customer: strings.TrimSpace(leg.CustomerRef),
 				Product:  strings.TrimSpace(leg.ProductRef),
@@ -2002,6 +2507,9 @@ func mergeSupplyChainPathLeg(existing, incoming SupplyChainPathLeg) SupplyChainP
 	if strings.TrimSpace(existing.SupplyLinkTenantID) == "" {
 		existing.SupplyLinkTenantID = strings.TrimSpace(incoming.SupplyLinkTenantID)
 	}
+	if strings.TrimSpace(existing.RouteVariantKey) == "" {
+		existing.RouteVariantKey = strings.TrimSpace(incoming.RouteVariantKey)
+	}
 	if existing.SupplierNodeIndex == nil && incoming.SupplierNodeIndex != nil {
 		idx := *incoming.SupplierNodeIndex
 		existing.SupplierNodeIndex = &idx
@@ -2020,12 +2528,19 @@ func mergeSupplyChainPathLeg(existing, incoming SupplyChainPathLeg) SupplyChainP
 	if len(existing.TransportViaRefs) == 0 && len(incoming.TransportViaRefs) > 0 {
 		existing.TransportViaRefs = append([]string(nil), incoming.TransportViaRefs...)
 	}
+	if len(existing.RouteCoordinates) == 0 && len(incoming.RouteCoordinates) > 0 {
+		existing.RouteCoordinates = append([]Coordinates(nil), incoming.RouteCoordinates...)
+	}
+	if strings.TrimSpace(existing.RouteGeometrySource) == "" {
+		existing.RouteGeometrySource = strings.TrimSpace(incoming.RouteGeometrySource)
+	}
 	if strings.TrimSpace(existing.VesselType) == "" {
 		existing.VesselType = strings.TrimSpace(incoming.VesselType)
 	}
 	if strings.TrimSpace(existing.Mode) == "" {
 		existing.Mode = strings.TrimSpace(incoming.Mode)
 	}
+	existing.RouteOverlays = mergeSupplyChainRouteOverlays(existing.RouteOverlays, incoming.RouteOverlays, existing, incoming)
 	existing.GeoRefs = mergeUniqueStrings(existing.GeoRefs, incoming.GeoRefs)
 	existing.FlowRefs = mergeUniqueStrings(existing.FlowRefs, incoming.FlowRefs)
 	existing.AlternateFlowRefs = mergeUniqueStrings(existing.AlternateFlowRefs, incoming.AlternateFlowRefs)
@@ -2041,7 +2556,71 @@ func mergeSupplyChainPathLeg(existing, incoming SupplyChainPathLeg) SupplyChainP
 	if existing.Stress == nil && incoming.Stress != nil {
 		existing.Stress = incoming.Stress
 	}
+	normalizeSupplyChainPathLegRouteOverlays(&existing)
 	return existing
+}
+
+func mergeSupplyChainRouteOverlays(existingOverlays, incomingOverlays []SupplyChainRouteOverlay, existingLeg, incomingLeg SupplyChainPathLeg) []SupplyChainRouteOverlay {
+	out := make([]SupplyChainRouteOverlay, 0, len(existingOverlays)+len(incomingOverlays)+2)
+	indexByKey := make(map[string]int, len(existingOverlays)+len(incomingOverlays)+2)
+	appendOverlay := func(overlay SupplyChainRouteOverlay, leg SupplyChainPathLeg) {
+		overlay = normalizeSupplyChainRouteOverlay(overlay, leg)
+		if strings.TrimSpace(overlay.OverlayKey) == "" {
+			return
+		}
+		if idx, ok := indexByKey[overlay.OverlayKey]; ok {
+			current := out[idx]
+			current.TransportViaRefs = mergeUniqueStrings(current.TransportViaRefs, overlay.TransportViaRefs)
+			current.OrderedRefs = NormalizeOrderedRouteRefs(firstNonEmptyStringSlice(current.OrderedRefs, overlay.OrderedRefs))
+			if len(current.RouteCoordinates) == 0 && len(overlay.RouteCoordinates) > 0 {
+				current.RouteCoordinates = append([]Coordinates(nil), overlay.RouteCoordinates...)
+			}
+			if strings.TrimSpace(current.RouteGeometrySource) == "" {
+				current.RouteGeometrySource = strings.TrimSpace(overlay.RouteGeometrySource)
+			}
+			if strings.TrimSpace(current.Mode) == "" {
+				current.Mode = strings.TrimSpace(overlay.Mode)
+			}
+			current.FlowRefs = mergeUniqueStrings(current.FlowRefs, overlay.FlowRefs)
+			current.AlternateFlowRefs = mergeUniqueStrings(current.AlternateFlowRefs, overlay.AlternateFlowRefs)
+			current.GeoRefs = mergeUniqueStrings(current.GeoRefs, overlay.GeoRefs)
+			current.ZoneRefs = mergeUniqueStrings(current.ZoneRefs, overlay.ZoneRefs)
+			current.AffectedZoneRefs = mergeUniqueStrings(current.AffectedZoneRefs, overlay.AffectedZoneRefs)
+			current.SpatialSemantics = mergeUniqueStrings(current.SpatialSemantics, overlay.SpatialSemantics)
+			if strings.TrimSpace(current.VesselType) == "" {
+				current.VesselType = strings.TrimSpace(overlay.VesselType)
+			}
+			if current.BindingConfidence <= 0 && overlay.BindingConfidence > 0 {
+				current.BindingConfidence = overlay.BindingConfidence
+			}
+			if current.SegmentConfidence <= 0 && overlay.SegmentConfidence > 0 {
+				current.SegmentConfidence = overlay.SegmentConfidence
+			}
+			if strings.TrimSpace(current.EndpointBindingPolicy) == "" {
+				current.EndpointBindingPolicy = strings.TrimSpace(overlay.EndpointBindingPolicy)
+			}
+			if strings.TrimSpace(current.Status) == "" {
+				current.Status = strings.TrimSpace(overlay.Status)
+			}
+			out[idx] = normalizeSupplyChainRouteOverlay(current, leg)
+			return
+		}
+		indexByKey[overlay.OverlayKey] = len(out)
+		out = append(out, overlay)
+	}
+	if legacy := synthesizeLegacyRouteOverlay(existingLeg); legacy != nil {
+		appendOverlay(*legacy, existingLeg)
+	}
+	for _, overlay := range existingOverlays {
+		appendOverlay(overlay, existingLeg)
+	}
+	if legacy := synthesizeLegacyRouteOverlay(incomingLeg); legacy != nil {
+		appendOverlay(*legacy, incomingLeg)
+	}
+	for _, overlay := range incomingOverlays {
+		appendOverlay(overlay, incomingLeg)
+	}
+	return out
 }
 
 func mergePathSufficiency(existing, incoming *SupplyChainPathSufficiency) *SupplyChainPathSufficiency {
@@ -2389,6 +2968,29 @@ func ReplaceCanonicalPathInArtifact(artifact *MaterializedArtifact, oldPath, new
 				if strings.TrimSpace(parsed.Legs[i].SupplyLinkCanonicalPath) == oldPath {
 					parsed.Legs[i].SupplyLinkCanonicalPath = newPath
 					changed = true
+				}
+				for overlayIdx := range parsed.Legs[i].RouteOverlays {
+					if replacePathInStringSlice(parsed.Legs[i].RouteOverlays[overlayIdx].OrderedRefs, oldPath, newPath) {
+						changed = true
+					}
+					if replacePathInStringSlice(parsed.Legs[i].RouteOverlays[overlayIdx].TransportViaRefs, oldPath, newPath) {
+						changed = true
+					}
+					if replacePathInStringSlice(parsed.Legs[i].RouteOverlays[overlayIdx].FlowRefs, oldPath, newPath) {
+						changed = true
+					}
+					if replacePathInStringSlice(parsed.Legs[i].RouteOverlays[overlayIdx].AlternateFlowRefs, oldPath, newPath) {
+						changed = true
+					}
+					if replacePathInStringSlice(parsed.Legs[i].RouteOverlays[overlayIdx].GeoRefs, oldPath, newPath) {
+						changed = true
+					}
+					if replacePathInStringSlice(parsed.Legs[i].RouteOverlays[overlayIdx].ZoneRefs, oldPath, newPath) {
+						changed = true
+					}
+					if replacePathInStringSlice(parsed.Legs[i].RouteOverlays[overlayIdx].AffectedZoneRefs, oldPath, newPath) {
+						changed = true
+					}
 				}
 			}
 			artifact.Payload = BuildSupplyChainPathPayloadDetailed(parsed.Nodes, parsed.Edges, parsed.Legs, parsed.Stress, parsed.Sufficiency, parsed.Family, parsed.Notes)

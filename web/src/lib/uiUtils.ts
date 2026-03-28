@@ -207,8 +207,8 @@ function humanizeDomainCanonicalPath(path: string): string {
   return `${base} — ${label}`;
 }
 
-/** Short real names for geo/region codes (ISO2 + regional buckets). Used for domain path display. */
-const GEO_CODE_TO_SHORT_NAME: Record<string, string> = {
+/** Display names for geo/region codes (ISO2 + regional buckets). */
+const GEO_CODE_TO_DISPLAY_NAME: Record<string, string> = {
   // ISO2 countries (common)
   br: 'Brazil', us: 'USA', gb: 'UK', de: 'Germany', fr: 'France', cn: 'China', jp: 'Japan', in: 'India',
   ru: 'Russia', kz: 'Kazakhstan', sa: 'Saudi Arabia', ae: 'UAE', eg: 'Egypt', tr: 'Turkey', my: 'Malaysia',
@@ -218,6 +218,7 @@ const GEO_CODE_TO_SHORT_NAME: Record<string, string> = {
   se: 'Sweden', no: 'Norway', fi: 'Finland', dk: 'Denmark', ch: 'Switzerland', at: 'Austria', be: 'Belgium',
   ie: 'Ireland', il: 'Israel', qa: 'Qatar', kw: 'Kuwait', bh: 'Bahrain', om: 'Oman', pk: 'Pakistan',
   th: 'Thailand', vn: 'Vietnam', ph: 'Philippines', hk: 'Hong Kong', ua: 'Ukraine', cz: 'Czechia',
+  io: 'British Indian Ocean Territory',
   ro: 'Romania', hu: 'Hungary', gr: 'Greece',
   // Regional buckets (from backend)
   mena: 'MENA', emea: 'EMEA', apac: 'APAC', latam: 'Latam', na: 'North America', gcc: 'GCC',
@@ -225,11 +226,16 @@ const GEO_CODE_TO_SHORT_NAME: Record<string, string> = {
   ssa: 'Sub-Saharan Africa', usmca: 'USMCA', nafta: 'NAFTA', global: 'Global',
 };
 
-/** Returns short real name for a geo code (ISO2 or regional). */
-export function geoCodeToShortName(code: string): string {
+/** Returns display name for a geo code (ISO2 or regional). */
+export function geoCodeToDisplayName(code: string): string {
   const c = String(code || '').trim().toLowerCase();
   if (!c) return '';
-  return GEO_CODE_TO_SHORT_NAME[c] || titleCaseWords(c) || c.toUpperCase();
+  return GEO_CODE_TO_DISPLAY_NAME[c] || titleCaseWords(c) || c.toUpperCase();
+}
+
+/** Backward-compatible alias. Prefer geoCodeToDisplayName for new UI code. */
+export function geoCodeToShortName(code: string): string {
+  return geoCodeToDisplayName(code);
 }
 
 /** Extracts geo codes from domain path and returns first region label for display. */
@@ -352,6 +358,15 @@ export function humanizeCanonicalPath(path?: string): string {
   if (p.startsWith('/domain/v1/')) {
     const d = humanizeDomainCanonicalPath(p);
     if (d) return d;
+  }
+  const parts = p.split('/').filter(Boolean);
+  if (parts.length === 2) {
+    const ns = String(parts[0] || '').toLowerCase();
+    const geoCode = String(parts[1] || '').trim().toLowerCase();
+    if (['loc', 'gov', 'market', 'community'].includes(ns) && geoCode.length === 2) {
+      const geoName = geoCodeToShortName(geoCode);
+      if (geoName) return geoName;
+    }
   }
   const seg = p.split('/').filter(Boolean).pop() || '';
   const human = humanizeSlug(seg);

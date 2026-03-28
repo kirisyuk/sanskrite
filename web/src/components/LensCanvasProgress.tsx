@@ -2,6 +2,7 @@ import React from 'react';
 import { useHorizonRealtimeStore } from '../stores/horizonRealtimeStore';
 import { humanizeCanonicalPath } from '../lib/uiUtils';
 import AssembleLensRequestComponent, { AssembleLensRequest } from '../features/horizon/components/hook/AssembleLensRequest';
+import { buildHotPathProgressView, filterHorizonProgressEvents } from './horizonProgressUtils';
 
 export interface LensCanvasProgressProps {
   lensId: string | null;
@@ -48,6 +49,28 @@ const formatEdgeType = (type: string) => {
 };
 
 const isSupplyChainContractType = (value?: string) => /^(supply-chain|value-chain)$/i.test(String(value || '').trim());
+
+const formatElapsed = (ms?: number) => {
+  if (!ms || !Number.isFinite(ms) || ms <= 0) return '—';
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
+  return `${(ms / 60_000).toFixed(1)} min`;
+};
+
+const phaseStatusTone = (status?: string) => {
+  switch (String(status || '').trim().toLowerCase()) {
+    case 'completed':
+      return { border: 'rgba(46, 204, 113, 0.35)', bg: 'rgba(46, 204, 113, 0.08)', text: '#2ECC71' };
+    case 'running':
+      return { border: 'rgba(59, 130, 246, 0.35)', bg: 'rgba(59, 130, 246, 0.10)', text: '#60A5FA' };
+    case 'pending':
+      return { border: 'rgba(234, 179, 8, 0.35)', bg: 'rgba(234, 179, 8, 0.10)', text: '#FBBF24' };
+    case 'failed':
+      return { border: 'rgba(239, 68, 68, 0.4)', bg: 'rgba(239, 68, 68, 0.10)', text: '#F87171' };
+    default:
+      return { border: 'var(--border-subtle)', bg: 'var(--bg-elevated)', text: 'var(--text-secondary-strong)' };
+  }
+};
 
 const getIcon = (icon?: string) => {
   switch (icon) {
@@ -131,6 +154,7 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
 
   const [preflightExpanded, setPreflightExpanded] = React.useState<boolean>(true);
   const [domainDetailsOpen, setDomainDetailsOpen] = React.useState<Record<string, boolean>>({});
+  const [phaseDetailsOpen, setPhaseDetailsOpen] = React.useState<Record<string, boolean>>({});
 
   React.useEffect(() => {
     if (preflightActive) {
@@ -141,6 +165,10 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
       setDomainDetailsOpen({});
     }
   }, [preflightActive]);
+
+  React.useEffect(() => {
+    setPhaseDetailsOpen({});
+  }, [lensId, projectId, activeCreateCorrelationId, activeCreateSessionId]);
 
   const selectedCounts = React.useMemo(() => {
     if (!preflightActive || !preflight) return { domains: 0, anchors: 0 };
@@ -235,48 +263,14 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
   // Filter events by lensId and projectId
   // Show events that match the lensId/projectId
   // If filtering by lensId, only show events with matching lensId (or no lensId if projectId matches)
-  const filteredEvents = React.useMemo(() => {
-    const base = (events || []).filter((ev) => {
-      // If filtering by projectId, event must match projectId (or have no projectId)
-      if (projectId) {
-        if (ev.projectId && ev.projectId !== projectId) {
-          return false;
-        }
-      }
-      // If filtering by lensId, event must match lensId
-      if (lensId) {
-        if (ev.lensId && ev.lensId !== lensId) {
-          return false;
-        }
-        // If we're filtering by lensId, don't show events without lensId
-        if (!ev.lensId) {
-          return false;
-        }
-      }
-      return true;
-    });
-
-    // New Lens is an "ultimate" user intent: do not show unrelated background jobs.
-    // If no lens is selected:
-    // - when NOT creating: show no events at all (keep the creation UX clean)
-    // - when creating: show only events belonging to this creation attempt (correlation/session ID)
-    if (!lensId) {
-      if (!isCreatingLens && !preflightActive) return [];
-      const cid = String(activeCreateCorrelationId || '').trim();
-      const sid = String(activeCreateSessionId || '').trim();
-      if (!cid && !sid) return [];
-      return base.filter((ev) => {
-        const d: any = (ev as any)?.data;
-        const evCid = typeof d?.correlationId === 'string' ? String(d.correlationId).trim() : '';
-        const evSid = typeof d?.sessionId === 'string' ? String(d.sessionId).trim() : '';
-        if (cid && evCid && evCid === cid) return true;
-        if (sid && evSid && evSid === sid) return true;
-        return false;
-      });
-    }
-
-    return base;
-  }, [events, lensId, projectId, isCreatingLens, preflightActive, activeCreateCorrelationId, activeCreateSessionId]);
+  const filteredEvents = React.useMemo(() => filterHorizonProgressEvents(events || [], {
+    lensId,
+    projectId,
+    isCreatingLens,
+    preflightActive,
+    activeCreateCorrelationId,
+    activeCreateSessionId,
+  }), [events, lensId, projectId, isCreatingLens, preflightActive, activeCreateCorrelationId, activeCreateSessionId]);
 
   const streamFatalError = React.useMemo(() => {
     const failed = [...filteredEvents].reverse().find((ev) => {
@@ -304,6 +298,8 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
       undefined;
     return { title, message, code, phase };
   }, [filteredEvents]);
+
+  const hotPathProgressView = React.useMemo(() => buildHotPathProgressView(filteredEvents), [filteredEvents]);
 
   const fatalAlert = fatalError || streamFatalError;
   const hasFatalAlert = !!fatalAlert;
@@ -1024,20 +1020,20 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
                 Save log
               </button>
             </div>
-            {/* Timeline line */}
-            <div
-              style={{
-                position: 'absolute',
-                left: 11, // Center of the icon (24px width -> 12px center).
-                top: 4,
-                bottom: 20, // Don't go all the way down
-                width: 2,
-                background: 'var(--border-subtle)',
-                zIndex: 0,
-              }}
-            />
+            {!hotPathProgressView && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: 11,
+                  top: 4,
+                  bottom: 20,
+                  width: 2,
+                  background: 'var(--border-subtle)',
+                  zIndex: 0,
+                }}
+              />
+            )}
 
-            {/* Initial Loading State */}
             {filteredEvents.length === 0 && isCreatingLens && !hasFatalAlert && (
               <div
                 style={{
@@ -1080,7 +1076,152 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
               </div>
             )}
 
-            {filteredEvents.map((ev) => {
+            {hotPathProgressView ? (
+              <div style={{ display: 'grid', gap: 12 }}>
+                {hotPathProgressView.phases.map((phase) => {
+                  const tone = phaseStatusTone(phase.status);
+                  const detailKey = `${hotPathProgressView.questionRunId || 'latest'}:${phase.id}`;
+                  const open = !!phaseDetailsOpen[detailKey];
+                  const detailEntries = Object.entries(phase.details || {}).filter(([, value]) => {
+                    if (value == null) return false;
+                    if (Array.isArray(value)) return value.length > 0;
+                    if (typeof value === 'string') return value.trim().length > 0;
+                    if (typeof value === 'object') return Object.keys(value || {}).length > 0;
+                    return true;
+                  });
+                  const artifactEntries = Object.entries(phase.artifacts || {}).filter(([, value]) => {
+                    if (value == null) return false;
+                    if (Array.isArray(value)) return value.length > 0;
+                    if (typeof value === 'string') return value.trim().length > 0;
+                    if (typeof value === 'object') return Object.keys(value || {}).length > 0;
+                    return true;
+                  });
+                  return (
+                    <div
+                      key={phase.id}
+                      style={{
+                        border: `1px solid ${tone.border}`,
+                        background: tone.bg,
+                        borderRadius: 14,
+                        padding: 14,
+                        boxShadow: '0 10px 24px rgba(0,0,0,0.10)',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                            <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text-primary)' }}>
+                              {phase.title}
+                            </div>
+                            <div
+                              style={{
+                                borderRadius: 999,
+                                padding: '2px 8px',
+                                fontSize: 10,
+                                fontWeight: 800,
+                                letterSpacing: 0.4,
+                                textTransform: 'uppercase',
+                                color: tone.text,
+                                border: `1px solid ${tone.border}`,
+                              }}
+                            >
+                              {phase.status}
+                            </div>
+                          </div>
+                          {!!phase.summary && (
+                            <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                              {phase.summary}
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'monospace' }}>
+                            {formatElapsed(phase.durationMs)}
+                          </div>
+                          {phase.endedAt && (
+                            <div style={{ marginTop: 2, fontSize: 10, color: 'var(--text-tertiary)', fontFamily: 'monospace' }}>
+                              {new Date(phase.endedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        {phase.metricsRefreshed > 0 && (
+                          <span style={{ fontSize: 11, borderRadius: 999, padding: '4px 8px', background: 'rgba(59,130,246,0.10)', border: '1px solid rgba(59,130,246,0.20)', color: 'var(--text-secondary-strong)' }}>
+                            {phase.metricsRefreshed} metrics refreshed
+                          </span>
+                        )}
+                        {phase.simulationRunId && (
+                          <span style={{ fontSize: 11, borderRadius: 999, padding: '4px 8px', background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-subtle)', color: 'var(--text-secondary-strong)', fontFamily: 'monospace' }}>
+                            run {phase.simulationRunId.slice(0, 10)}
+                          </span>
+                        )}
+                      </div>
+
+                      {(detailEntries.length > 0 || artifactEntries.length > 0) && (
+                        <div style={{ marginTop: 12 }}>
+                          <button
+                            type="button"
+                            onClick={() => setPhaseDetailsOpen((prev) => ({ ...(prev || {}), [detailKey]: !open }))}
+                            style={{
+                              border: '1px solid var(--border-subtle)',
+                              background: 'transparent',
+                              color: 'var(--text-secondary-strong)',
+                              borderRadius: 10,
+                              padding: '7px 10px',
+                              fontSize: 12,
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {open ? 'Collapse details' : 'Show details'}
+                          </button>
+                          {open && (
+                            <div style={{ marginTop: 12, display: 'grid', gap: 12 }}>
+                              {detailEntries.length > 0 && (
+                                <div style={{ display: 'grid', gap: 6 }}>
+                                  <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                                    Details
+                                  </div>
+                                  {detailEntries.map(([key, value]) => (
+                                    <div key={key} style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                                      <span style={{ fontWeight: 700, color: 'var(--text-secondary-strong)' }}>{key}:</span>{' '}
+                                      {Array.isArray(value)
+                                        ? value.join(', ')
+                                        : typeof value === 'object'
+                                          ? JSON.stringify(value)
+                                          : String(value)}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              {artifactEntries.length > 0 && (
+                                <div style={{ display: 'grid', gap: 6 }}>
+                                  <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                                    Provenance
+                                  </div>
+                                  {artifactEntries.map(([key, value]) => (
+                                    <div key={key} style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                                      <span style={{ fontWeight: 700, color: 'var(--text-secondary-strong)' }}>{key}:</span>{' '}
+                                      {Array.isArray(value)
+                                        ? value.join(', ')
+                                        : typeof value === 'object'
+                                          ? JSON.stringify(value)
+                                          : String(value)}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : filteredEvents.map((ev) => {
               const isEdge = ev.icon === 'edge' || ev.type === 'horizon.graph.edge.upserted';
               const isInitializing = ev.type === 'horizon.intent.initializing';
               let title = ev.humanReadable?.title || ev.text;

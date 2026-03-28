@@ -248,6 +248,92 @@ func TestFilterDiscoveredRelationsByDomainModes_SupplyChainControlsAllowedForRel
 	}
 }
 
+func TestFilterDiscoveredRelationsByDomainModes_SupplyChainAdministersAllowedForRelevantPaths(t *testing.T) {
+	govFrag := &models.HorizonFragment{CanonicalPath: "/gov/us/department-of-the-navy"}
+	in := []agents.DiscoveredRelation{
+		{
+			RelationType:        "ADMINISTERS",
+			TargetCanonicalPath: "/gov/us/navy",
+		},
+		{
+			RelationType:        "ADMINISTERS",
+			TargetCanonicalPath: "/fac/us/norfolk-naval-shipyard",
+		},
+		{
+			RelationType:        "ADMINISTERS",
+			TargetCanonicalPath: "/market/us/defense/naval-systems",
+		},
+	}
+
+	out := filterDiscoveredRelationsByDomainModesWithDomainAnchor(govFrag, in, []string{taxonomy.DomainModeSupplyChain})
+	if len(out) != 2 {
+		t.Fatalf("expected 2 supply-relevant ADMINISTERS relations, got %d", len(out))
+	}
+	for _, r := range out {
+		if r.RelationType != "ADMINISTERS" {
+			t.Fatalf("expected ADMINISTERS relation, got %s", r.RelationType)
+		}
+		if r.TargetCanonicalPath == "/market/us/defense/naval-systems" {
+			t.Fatalf("market target must not pass supply-chain ADMINISTERS predicate")
+		}
+	}
+}
+
+func TestFilterDiscoveredRelationsByDomainModes_SupplyChainSubsidiaryOfAllowedForRelevantPaths(t *testing.T) {
+	orgFrag := &models.HorizonFragment{CanonicalPath: "/org/jp/toyota-industries"}
+	in := []agents.DiscoveredRelation{
+		{
+			RelationType:        "SUBSIDIARY_OF",
+			TargetCanonicalPath: "/org/jp/toyota-group",
+		},
+		{
+			RelationType:        "SUBSIDIARY_OF",
+			TargetCanonicalPath: "/gov/jp/ministry-of-economy-trade-and-industry",
+		},
+		{
+			RelationType:        "SUBSIDIARY_OF",
+			TargetCanonicalPath: "/market/jp/automotive/oem",
+		},
+	}
+
+	out := filterDiscoveredRelationsByDomainModesWithDomainAnchor(orgFrag, in, []string{taxonomy.DomainModeSupplyChain})
+	if len(out) != 2 {
+		t.Fatalf("expected 2 supply-relevant SUBSIDIARY_OF relations, got %d", len(out))
+	}
+	for _, r := range out {
+		if r.RelationType != "SUBSIDIARY_OF" {
+			t.Fatalf("expected SUBSIDIARY_OF relation, got %s", r.RelationType)
+		}
+		if r.TargetCanonicalPath == "/market/jp/automotive/oem" {
+			t.Fatalf("market target must not pass supply-chain SUBSIDIARY_OF predicate")
+		}
+	}
+}
+
+func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantAdministersAndSubsidiaryOf(t *testing.T) {
+	if !IsAllowedSupplyChainRuntimeRelation(
+		"/gov/us/department-of-the-navy",
+		"/gov/us/navy",
+		models.DependencyTypeAdministers,
+	) {
+		t.Fatal("supply-chain runtime gate must allow ADMINISTERS for relevant governance overlays")
+	}
+	if !IsAllowedSupplyChainPersistRelation(
+		"/org/jp/toyota-industries",
+		"/org/jp/toyota-group",
+		models.DependencyTypeSubsidiaryOf,
+	) {
+		t.Fatal("supply-chain persist gate must allow SUBSIDIARY_OF for relevant ownership overlays")
+	}
+	if IsAllowedSupplyChainRuntimeRelation(
+		"/gov/us/department-of-the-navy",
+		"/market/us/defense/naval-systems",
+		models.DependencyTypeAdministers,
+	) {
+		t.Fatal("market target must remain out of contract for supply-chain ADMINISTERS")
+	}
+}
+
 func TestFilterDomainRelations_GovernanceAllowsFacilityTargets(t *testing.T) {
 	in := []agents.DiscoveredRelation{{
 		RelationType:        "OWNS",

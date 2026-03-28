@@ -24,5 +24,29 @@ func FromScoutingJobParams(p *horizonmodels.ScoutingJobParams) WorkScope {
 			refs.ScopePaths = append(refs.ScopePaths, s)
 		}
 	}
-	return Normalize(FromBaselineRefs(strings.TrimSpace(p.TenantID), strings.TrimSpace(p.ProjectID), refs))
+	scope := FromBaselineRefs(strings.TrimSpace(p.TenantID), strings.TrimSpace(p.ProjectID), refs)
+	scope.Intent = WorkScopeIntent{
+		ScopeKind: ScopeKindScoutJob,
+		Expansion: WorkScopeExpansionPolicy{
+			Mode: "scout_enrichment",
+		},
+	}
+	return Normalize(scope)
+}
+
+// RequestFromScoutingJobParams builds the default graph-enrichment request over a scout scope.
+func RequestFromScoutingJobParams(p *horizonmodels.ScoutingJobParams) WorkRequest {
+	scope := FromScoutingJobParams(p)
+	return NormalizeRequest(WorkRequest{
+		Scope: scope,
+		Intent: ExecutionIntent{
+			EntryPoint: EntryPointScout,
+			Action:     ActionEnrichGraph,
+			Projection: WorkScopeProjectionPolicy{
+				Mode: "scope_only",
+			},
+			MutationMode:  defaultMutationModeForAction(ActionEnrichGraph),
+			FreshnessMode: defaultFreshnessModeForAction(ActionEnrichGraph),
+		},
+	})
 }

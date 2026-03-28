@@ -1,6 +1,6 @@
 import React from 'react';
 
-export const HorizonLoading: React.FC = () => {
+export const HorizonLoading: React.FC<{ label?: string }> = ({ label = 'Loading project...' }) => {
   return (
     <div
       style={{
@@ -47,9 +47,7 @@ export const HorizonLoading: React.FC = () => {
             />
           ))}
         </div>
-        <div style={{ fontSize: 12, fontWeight: 650, color: 'var(--text-secondary-strong)' }}>
-          Loading project...
-        </div>
+        <div style={{ fontSize: 12, fontWeight: 650, color: 'var(--text-secondary-strong)' }}>{label}</div>
       </div>
     </div>
   );

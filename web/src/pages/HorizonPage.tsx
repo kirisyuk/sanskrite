@@ -96,7 +96,7 @@ const HorizonPage: React.FC = () => {
   const resetRealtime = useHorizonRealtimeStore((s) => s.reset);
   const resetEvents = useHorizonRealtimeStore((s) => s.resetEvents);
   const [lensStarted, setLensStarted] = React.useState(false);
-  const [preferredLensCanvasMode, setPreferredLensCanvasMode] = React.useState<'assembly' | 'cockpit' | 'progress'>('progress');
+  const [preferredLensCanvasMode, setPreferredLensCanvasMode] = React.useState<'assembly' | 'home' | 'cockpit' | 'progress'>('home');
   const [isCreatingLens, setIsCreatingLens] = React.useState(false);
   const [activeCreateCorrelationId, setActiveCreateCorrelationId] = React.useState<string | null>(null);
   const [activeCreateSessionId, setActiveCreateSessionId] = React.useState<string | null>(null);
@@ -318,7 +318,7 @@ const HorizonPage: React.FC = () => {
   
   const handleResetChat = React.useCallback(() => {
     setCurrentProject(null);
-    setPreferredLensCanvasMode('progress');
+    setPreferredLensCanvasMode('home');
     setSelectedLensId(null);
     setShowWorldMap(false);
     saveHorizonState(null, null);
@@ -338,7 +338,7 @@ const HorizonPage: React.FC = () => {
     const project = horizonProjects.find((item) => item.id === projectId);
     if (!project) return;
     setCurrentProject(project);
-    setPreferredLensCanvasMode('progress');
+    setPreferredLensCanvasMode('home');
     setSelectedLensId(null);
     setShowWorldMap(false);
     setCreateFatalError(null);
@@ -478,7 +478,7 @@ const HorizonPage: React.FC = () => {
         );
 
         if (lens?.id) {
-          setPreferredLensCanvasMode('cockpit');
+          setPreferredLensCanvasMode('home');
           setSelectedLensId(lens.id);
           window.dispatchEvent(new CustomEvent('horizon:lens-created', {
             detail: { lensId: lens.id, projectId: request.projectId },
@@ -677,7 +677,7 @@ const HorizonPage: React.FC = () => {
 
       if (result?.lens?.id) {
         setPreferredLensCanvasMode('progress');
-        // Select the newly created lens so Cockpit/Details tabs become available,
+        // Select the newly created lens so Home/Graph/Map tabs become available,
         // but keep the user in Progress while the pipeline is running (lensStarted=true).
         setSelectedLensId(result.lens.id);
 
@@ -778,7 +778,7 @@ const HorizonPage: React.FC = () => {
         projectId={currentProject?.id || null}
         onSelectLens={(lensId) => {
           setShowWorldMap(false);
-          setPreferredLensCanvasMode('cockpit');
+          setPreferredLensCanvasMode('home');
           setSelectedLensId(lensId);
           // User explicitly chose to open a lens: stop treating this as an in-progress creation feed.
           setLensStarted(false);
@@ -795,7 +795,7 @@ const HorizonPage: React.FC = () => {
         onOpenWorldMap={() => {
           navigate('/horizon');
           setShowWorldMap(true);
-          setPreferredLensCanvasMode('progress');
+          setPreferredLensCanvasMode('home');
           setLensStarted(false);
           setActiveCreateCorrelationId(null);
           setActiveCreateSessionId(null);
@@ -811,7 +811,7 @@ const HorizonPage: React.FC = () => {
           setActiveCreateCorrelationId(null);
           setActiveCreateSessionId(null);
           setCreateFatalError(null);
-          setPreferredLensCanvasMode('progress');
+          setPreferredLensCanvasMode('home');
         }}
       />
 
@@ -858,13 +858,13 @@ const HorizonPage: React.FC = () => {
           ) : showWorldMap ? (
             <WorldMapPanel />
           ) : currentProject ? (
-            /* Lens Canvas overlay - show Progress view for both project and lens selection */
+            /* Lens Canvas overlay - Home is the default entry point; Progress appears only when runtime exists */
             <LensCanvas
               isOpen={true}
               lensId={selectedLensId}
               projectId={currentProject.id}
               isAdmin={isAdmin}
-              initialViewMode={lensStarted ? 'progress' : (selectedLensId ? preferredLensCanvasMode : 'progress')}
+              initialViewMode={lensStarted ? 'progress' : (selectedLensId ? preferredLensCanvasMode : 'home')}
               showInputInProgress={true}
               onAssemble={handleAssembleLens}
               // Keep Progress "active" after lens creation until user explicitly opens the lens.
@@ -901,7 +901,7 @@ const HorizonPage: React.FC = () => {
               onClose={() => {
                 // Only close lens if one is selected, otherwise just reset state
                 if (selectedLensId) {
-                  setPreferredLensCanvasMode('progress');
+                  setPreferredLensCanvasMode('home');
                   setSelectedLensId(null);
                 }
                 setLensStarted(false);
