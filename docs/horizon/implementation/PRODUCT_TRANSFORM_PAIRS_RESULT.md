@@ -1,7 +1,7 @@
 # Product Transform Pairs Result
 
 Date: 2026-03-22
-Project: `etigram`
+Project: `nv-horizon`
 Tenant: `global`
 Collection: `horizon_product_transform_pairs`
 Tool: [main.go](/Users/kirisyuk/cursor/sanskrite/backend/cmd/tools/horizon_mine_product_transforms/main.go)

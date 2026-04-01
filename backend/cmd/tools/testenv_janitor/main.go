@@ -309,7 +309,7 @@ func parseConfig() (*config, error) {
 
 	purgePubSub := flag.Bool("purge-pubsub", true, "Purge Pub/Sub backlog by seeking subscriptions to now")
 	pubSubSubscriptions := flag.String("pubsub-subscriptions", strings.TrimSpace(os.Getenv("JANITOR_PUBSUB_SUBSCRIPTIONS")), "Comma-separated Pub/Sub subscriptions to purge")
-	pubSubPrefixes := flag.String("pubsub-prefixes", firstNonEmpty(strings.TrimSpace(os.Getenv("JANITOR_PUBSUB_PREFIXES")), "etigram.,source.poll,ground.refresh,chat.ontology.process,document.process"), "Subscription name prefixes used when pubsub-subscriptions is empty")
+	pubSubPrefixes := flag.String("pubsub-prefixes", firstNonEmpty(strings.TrimSpace(os.Getenv("JANITOR_PUBSUB_PREFIXES")), "nv-horizon.,source.poll,ground.refresh,chat.ontology.process,document.process"), "Subscription name prefixes used when pubsub-subscriptions is empty")
 
 	cleanBigQuery := flag.Bool("clean-bigquery", false, "Clean BigQuery tables")
 	bigQueryProject := flag.String("bigquery-project", firstNonEmpty(strings.TrimSpace(os.Getenv("BIGQUERY_PROJECT_ID")), defaultProject), "BigQuery project ID")
@@ -1294,13 +1294,13 @@ func resolveGCSBuckets(projectID, raw string) []string {
 	candidates := []string{
 		strings.TrimSpace(os.Getenv("CORE_DOCS_BUCKET")),
 		strings.TrimSpace(os.Getenv("RAG_DOCUMENTS_BUCKET")),
-		firstNonEmpty(strings.TrimSpace(os.Getenv("ETIGRAM_FRAGMENTS_BUCKET")), strings.TrimSpace(os.Getenv("HORIZON_FRAGMENTS_BUCKET"))),
+		firstNonEmpty(strings.TrimSpace(os.Getenv("NV_HORIZON_FRAGMENTS_BUCKET")), strings.TrimSpace(os.Getenv("HORIZON_FRAGMENTS_BUCKET"))),
 	}
 	if projectID != "" {
 		candidates = append(candidates,
 			projectID+"-core-docs",
 			projectID+"-rag-documents",
-			projectID+"-etigram-fragments",
+			projectID+"-nv-horizon-fragments",
 		)
 	}
 	out := make([]string, 0, len(candidates))
@@ -1326,7 +1326,7 @@ func resolveVertexStores(raw string) []string {
 	}
 	candidates := []string{
 		strings.TrimSpace(os.Getenv("VERTEX_SEARCH_DATA_STORE_ID")),
-		strings.TrimSpace(os.Getenv("VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID")),
+		strings.TrimSpace(os.Getenv("VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID")),
 		strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID")),
 	}
 	out := make([]string, 0, len(candidates))
@@ -1351,9 +1351,9 @@ func resolveCloudTaskQueues(raw string) []string {
 		return parseCSVSlice(raw)
 	}
 	candidates := []string{
-		firstNonEmpty(strings.TrimSpace(os.Getenv("CLOUD_TASKS_SCOUT_QUEUE")), "etigram-scout"),
-		firstNonEmpty(strings.TrimSpace(os.Getenv("CLOUD_TASKS_RISK_QUEUE")), "etigram-risk"),
-		firstNonEmpty(strings.TrimSpace(os.Getenv("CLOUD_TASKS_PROFILE_QUEUE")), "etigram-profile-refresh"),
+		firstNonEmpty(strings.TrimSpace(os.Getenv("CLOUD_TASKS_SCOUT_QUEUE")), "nv-horizon-scout"),
+		firstNonEmpty(strings.TrimSpace(os.Getenv("CLOUD_TASKS_RISK_QUEUE")), "nv-horizon-risk"),
+		firstNonEmpty(strings.TrimSpace(os.Getenv("CLOUD_TASKS_PROFILE_QUEUE")), "nv-horizon-profile-refresh"),
 	}
 	out := make([]string, 0, len(candidates))
 	seen := map[string]struct{}{}

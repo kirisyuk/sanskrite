@@ -47,6 +47,23 @@ func (h *HorizonHandlers) GetLensAttention(w http.ResponseWriter, r *http.Reques
 	}
 	if len(parts) > 2 {
 		switch strings.TrimSpace(parts[2]) {
+		case "wide-risk":
+			observer, oerr := h.watchRuntime.WideRiskObserver(r.Context(), authInfo.TenantID, lensID, 24)
+			if oerr != nil {
+				http.Error(w, fmt.Sprintf("failed to build wide risk observer: %v", oerr), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, http.StatusOK, observer)
+			return
+		case "daily-digest":
+			persist := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("persist")), "true") || strings.TrimSpace(r.URL.Query().Get("persist")) == "1"
+			digest, derr := h.watchRuntime.BuildLensMonitoringDigest(r.Context(), authInfo.TenantID, lensID, persist)
+			if derr != nil {
+				http.Error(w, fmt.Sprintf("failed to build lens digest: %v", derr), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, http.StatusOK, digest)
+			return
 		case "subjects":
 			writeJSON(w, http.StatusOK, map[string]any{
 				"lensId":      view.LensID,

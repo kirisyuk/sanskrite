@@ -114,6 +114,32 @@ func TestRoundTripBaselineRefs(t *testing.T) {
 	}
 }
 
+func TestDefaultRequestForScope_lensResearchUsesLensEntryPoint(t *testing.T) {
+	scope := WorkScope{
+		TenantID: "t1",
+		Refs: horizonmodels.SimulationBaselineRefs{
+			LensID:     "L1",
+			ScopePaths: []string{"/org/a"},
+		},
+		Intent: WorkScopeIntent{
+			ScopeKind: ScopeKindLensResearch,
+			Expansion: WorkScopeExpansionPolicy{
+				Mode: "lens_research",
+			},
+		},
+	}
+	request := DefaultRequestForScope(scope)
+	if request.Intent.EntryPoint != EntryPointLens {
+		t.Fatalf("entry point: %q", request.Intent.EntryPoint)
+	}
+	if request.Intent.Action != ActionInspect {
+		t.Fatalf("action: %q", request.Intent.Action)
+	}
+	if request.Intent.Projection.Mode != ProjectionModeScopeOnly {
+		t.Fatalf("projection: %+v", request.Intent.Projection)
+	}
+}
+
 func TestMerge_equivalentOrderIndependentDigest(t *testing.T) {
 	x := FromBaselineRefs("t", "", horizonmodels.SimulationBaselineRefs{
 		ScopePaths: []string{"/a", "/b"},

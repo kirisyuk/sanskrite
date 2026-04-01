@@ -11,6 +11,7 @@ type MaterializedKind string
 
 const (
 	MaterializedKindSupplyChainPath                  MaterializedKind = "SUPPLY_CHAIN_PATH"
+	MaterializedKindServiceChainPath                 MaterializedKind = "SERVICE_CHAIN_PATH"
 	MaterializedKindSupplyChainAssemblyGraph         MaterializedKind = "SUPPLY_CHAIN_ASSEMBLY_GRAPH"
 	MaterializedKindRegulatoryImpactMap              MaterializedKind = "REGULATORY_IMPACT_MAP"
 	MaterializedKindRegulatoryImpactTransmissionPath MaterializedKind = "REGULATORY_IMPACT_TRANSMISSION_PATH"
@@ -25,7 +26,7 @@ const (
 // Valid checks if the MaterializedKind is valid.
 func (k MaterializedKind) Valid() bool {
 	switch k {
-	case MaterializedKindSupplyChainPath, MaterializedKindSupplyChainAssemblyGraph,
+	case MaterializedKindSupplyChainPath, MaterializedKindServiceChainPath, MaterializedKindSupplyChainAssemblyGraph,
 		MaterializedKindRegulatoryImpactMap, MaterializedKindRegulatoryImpactTransmissionPath,
 		MaterializedKindRegulatoryTimeline, MaterializedKindRegulatoryCascadeMap,
 		MaterializedKindRegulatoryImpactScenario,
@@ -164,9 +165,9 @@ func (a *MaterializedArtifact) Validate() error {
 
 	// Kind-specific payload validation
 	switch a.Kind {
-	case MaterializedKindSupplyChainPath:
+	case MaterializedKindSupplyChainPath, MaterializedKindServiceChainPath:
 		if err := validateSupplyChainPathPayload(a.Payload); err != nil {
-			return fmt.Errorf("invalid SUPPLY_CHAIN_PATH payload: %w", err)
+			return fmt.Errorf("invalid %s payload: %w", string(a.Kind), err)
 		}
 	case MaterializedKindSupplyChainAssemblyGraph:
 		if err := validateSupplyChainAssemblyGraphPayload(a.Payload); err != nil {

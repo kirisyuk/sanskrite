@@ -13,7 +13,7 @@ import (
 )
 
 func main() {
-	projectID := flag.String("project", "etigram", "GCP project id")
+	projectID := flag.String("project", "nv-horizon", "GCP project id")
 	tenantID := flag.String("tenant", "global", "tenant id")
 	zonesArg := flag.String("zones", "", "comma-separated canonical zone paths")
 	limit := flag.Int("limit", 1500, "max supply links to inspect")

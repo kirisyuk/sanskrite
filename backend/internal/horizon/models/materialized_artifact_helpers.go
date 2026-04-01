@@ -1327,8 +1327,8 @@ func ParseSupplyChainAssemblyGraphPayload(payload map[string]interface{}) (*Supp
 // resolver is optional; when provided it may resolve canonical path -> (id, tenantId, ok).
 func RepairSupplyChainPathLinkage(artifact *MaterializedArtifact, resolver func(string) (string, string, bool)) (SupplyChainLinkageSummary, error) {
 	summary := SupplyChainLinkageSummary{}
-	if artifact == nil || artifact.Kind != MaterializedKindSupplyChainPath {
-		return summary, fmt.Errorf("artifact kind is not SUPPLY_CHAIN_PATH")
+	if artifact == nil || (artifact.Kind != MaterializedKindSupplyChainPath && artifact.Kind != MaterializedKindServiceChainPath) {
+		return summary, fmt.Errorf("artifact kind is not SUPPLY_CHAIN_PATH or SERVICE_CHAIN_PATH")
 	}
 
 	parsed, err := ParseSupplyChainPathPayload(artifact.Payload)
@@ -1770,8 +1770,8 @@ func GetSupplyChainPathNodes(artifact *MaterializedArtifact) ([]SupplyChainPathN
 	if artifact == nil {
 		return nil, fmt.Errorf("artifact is nil")
 	}
-	if artifact.Kind != MaterializedKindSupplyChainPath {
-		return nil, fmt.Errorf("artifact kind is not SUPPLY_CHAIN_PATH")
+	if artifact.Kind != MaterializedKindSupplyChainPath && artifact.Kind != MaterializedKindServiceChainPath {
+		return nil, fmt.Errorf("artifact kind is not SUPPLY_CHAIN_PATH or SERVICE_CHAIN_PATH")
 	}
 
 	parsed, err := ParseSupplyChainPathPayload(artifact.Payload)
@@ -1787,8 +1787,8 @@ func GetSupplyChainPathEdges(artifact *MaterializedArtifact) ([]SupplyChainPathE
 	if artifact == nil {
 		return nil, fmt.Errorf("artifact is nil")
 	}
-	if artifact.Kind != MaterializedKindSupplyChainPath {
-		return nil, fmt.Errorf("artifact kind is not SUPPLY_CHAIN_PATH")
+	if artifact.Kind != MaterializedKindSupplyChainPath && artifact.Kind != MaterializedKindServiceChainPath {
+		return nil, fmt.Errorf("artifact kind is not SUPPLY_CHAIN_PATH or SERVICE_CHAIN_PATH")
 	}
 
 	parsed, err := ParseSupplyChainPathPayload(artifact.Payload)
@@ -1804,8 +1804,8 @@ func GetSupplyChainPathLegs(artifact *MaterializedArtifact) ([]SupplyChainPathLe
 	if artifact == nil {
 		return nil, fmt.Errorf("artifact is nil")
 	}
-	if artifact.Kind != MaterializedKindSupplyChainPath {
-		return nil, fmt.Errorf("artifact kind is not SUPPLY_CHAIN_PATH")
+	if artifact.Kind != MaterializedKindSupplyChainPath && artifact.Kind != MaterializedKindServiceChainPath {
+		return nil, fmt.Errorf("artifact kind is not SUPPLY_CHAIN_PATH or SERVICE_CHAIN_PATH")
 	}
 
 	parsed, err := ParseSupplyChainPathPayload(artifact.Payload)
@@ -1823,7 +1823,7 @@ func NormalizeSupplyChainPathRouteOverlays(artifact *MaterializedArtifact) (bool
 	if artifact == nil {
 		return false, fmt.Errorf("artifact is nil")
 	}
-	if artifact.Kind != MaterializedKindSupplyChainPath {
+	if artifact.Kind != MaterializedKindSupplyChainPath && artifact.Kind != MaterializedKindServiceChainPath {
 		return false, nil
 	}
 	if supplyChainPathPayloadAlreadyNormalized(artifact.Payload) {
@@ -1902,7 +1902,7 @@ func PopulateMaterializedArtifactIndexes(artifact *MaterializedArtifact) {
 	zoneRefs := uniqueTrimmedStrings(artifact.ZoneRefs)
 	affectedZoneRefs := uniqueTrimmedStrings(artifact.AffectedZoneRefs)
 	switch artifact.Kind {
-	case MaterializedKindSupplyChainPath:
+	case MaterializedKindSupplyChainPath, MaterializedKindServiceChainPath:
 		if parsed, err := ParseSupplyChainPathPayload(artifact.Payload); err == nil && parsed != nil {
 			summary := SummarizeSupplyChainPathBindings(parsed)
 			nodeRefs = collectParsedNodeRefs(parsed)
@@ -2147,7 +2147,7 @@ func (a *MaterializedArtifact) GenerateVectorText() string {
 	}
 
 	switch a.Kind {
-	case MaterializedKindSupplyChainPath:
+	case MaterializedKindSupplyChainPath, MaterializedKindServiceChainPath:
 		if a.Payload != nil {
 			parsed, err := ParseSupplyChainPathPayload(a.Payload)
 			if err == nil && parsed != nil {
@@ -2915,7 +2915,7 @@ func ReplaceCanonicalPathInArtifact(artifact *MaterializedArtifact, oldPath, new
 		return changed
 	}
 	switch artifact.Kind {
-	case MaterializedKindSupplyChainPath:
+	case MaterializedKindSupplyChainPath, MaterializedKindServiceChainPath:
 		parsed, err := ParseSupplyChainPathPayload(artifact.Payload)
 		if err == nil && parsed != nil {
 			for i := range parsed.Nodes {

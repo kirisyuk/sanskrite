@@ -18,6 +18,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
 	hrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	hscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 )
 
 type supplyLinkSnapshot struct {
@@ -35,7 +36,7 @@ type routeCandidateAggregate struct {
 }
 
 func main() {
-	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	tenantID := flag.String("tenant", "global", "tenant id")
 	pageSize := flag.Int("page-size", 100, "page size")
 	limit := flag.Int("limit", 0, "max docs to process (0 = all)")
@@ -63,6 +64,7 @@ func main() {
 	artifactsRepo := hrepo.NewMaterializedArtifactsRepository(db)
 
 	linkScanned, linkChanged, linkApplied := 0, 0, 0
+	routeObsChanged, routeObsApplied := 0, 0
 	artifactScanned, artifactChanged, artifactApplied := 0, 0, 0
 	candidateDetected, candidateApplied := 0, 0
 	errorsCount := 0
@@ -118,8 +120,25 @@ func main() {
 				if obs == nil {
 					continue
 				}
+				normalizedViaRefs := hscout.InferTransportViaRefsFromEvidence(
+					obs.TransportViaRefs,
+					hscout.CollectLooseStringEvidence(obs.Qualifiers)...,
+				)
+				if !reflect.DeepEqual(obs.TransportViaRefs, normalizedViaRefs) {
+					obs.TransportViaRefs = append([]string(nil), normalizedViaRefs...)
+					obs.UpdatedAt = time.Now().UTC()
+					routeObsChanged++
+					if *apply && strings.TrimSpace(obs.ID) != "" {
+						if _, err := db.Collection("horizon_route_observations").Doc(strings.TrimSpace(obs.ID)).Set(ctx, obs); err != nil {
+							errorsCount++
+							log.Printf("route observation update failed id=%s path=%s err=%v", obs.ID, obs.SupplyLinkCanonicalPath, err)
+							continue
+						}
+						routeObsApplied++
+					}
+				}
 				variants = models.MergeSupplyLinkRouteVariants(variants, []models.SupplyLinkRouteVariant{
-					models.NewSupplyLinkRouteVariant(obs.TransportViaRefs, extractVesselType(obs.Qualifiers), routeObservationConfidence(obs)),
+					models.NewSupplyLinkRouteVariant(normalizedViaRefs, extractVesselType(obs.Qualifiers), routeObservationConfidence(obs)),
 				})
 			}
 			if len(variants) > 0 {
@@ -148,7 +167,7 @@ func main() {
 				linkApplied++
 			}
 		}
-		log.Printf("supply-link page complete: scanned=%d changed=%d applied=%d lastDoc=%s", linkScanned, linkChanged, linkApplied, lastDocID)
+		log.Printf("supply-link page complete: scanned=%d changed=%d applied=%d routeObsChanged=%d routeObsApplied=%d lastDoc=%s", linkScanned, linkChanged, linkApplied, routeObsChanged, routeObsApplied, lastDocID)
 		if *limit > 0 && linkScanned >= *limit {
 			break
 		}
@@ -198,10 +217,21 @@ func main() {
 				if len(variantRefs) == 0 {
 					if primary := models.PrimarySupplyLinkRouteVariant(variantsBySupplyLink[strings.TrimSpace(leg.SupplyLinkCanonicalPath)]); primary != nil {
 						variantRefs = append([]string(nil), primary.TransportViaRefs...)
-						leg.TransportViaRefs = append([]string(nil), primary.TransportViaRefs...)
-						changed = true
 					}
 				}
+				normalizedViaRefs := pathbuilder.NormalizeLegTransportViaRefs(
+					ctx,
+					fragmentsRepo,
+					leg.SupplierRef,
+					variantRefs,
+					leg.CustomerRef,
+				)
+				normalizedViaRefs = pathbuilder.PruneAbstractNetworkViaRefs(leg.Mode, leg.FlowRefs, normalizedViaRefs)
+				if !reflect.DeepEqual(leg.TransportViaRefs, normalizedViaRefs) {
+					leg.TransportViaRefs = append([]string(nil), normalizedViaRefs...)
+					changed = true
+				}
+				variantRefs = append([]string(nil), normalizedViaRefs...)
 				nextVariantKey := strings.TrimSpace(firstNonEmpty(leg.RouteVariantKey, models.BuildSupplyLinkRouteVariantKey(variantRefs)))
 				if strings.TrimSpace(leg.RouteVariantKey) != nextVariantKey {
 					leg.RouteVariantKey = nextVariantKey
@@ -315,12 +345,14 @@ func main() {
 	}
 
 	log.Printf(
-		"supply_link_route_backfill summary: project=%s tenant=%s supply_links_scanned=%d supply_links_changed=%d supply_links_applied=%d artifacts_scanned=%d artifacts_changed=%d artifacts_applied=%d route_candidates_detected=%d route_candidates_applied=%d geometry_sources=%s errors=%d lastDoc=%s apply=%v",
+		"supply_link_route_backfill summary: project=%s tenant=%s supply_links_scanned=%d supply_links_changed=%d supply_links_applied=%d route_obs_changed=%d route_obs_applied=%d artifacts_scanned=%d artifacts_changed=%d artifacts_applied=%d route_candidates_detected=%d route_candidates_applied=%d geometry_sources=%s errors=%d lastDoc=%s apply=%v",
 		strings.TrimSpace(*projectID),
 		strings.TrimSpace(*tenantID),
 		linkScanned,
 		linkChanged,
 		linkApplied,
+		routeObsChanged,
+		routeObsApplied,
 		artifactScanned,
 		artifactChanged,
 		artifactApplied,

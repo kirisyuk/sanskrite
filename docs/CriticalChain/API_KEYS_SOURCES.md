@@ -75,13 +75,13 @@
 | **Ключ** | **Не требуется** — BigQuery public dataset. Оплата только за запросы (1 TB/мес бесплатно). |
 | **GCP** | Нужен проект GCP с включённым BigQuery. |
 
-### Настройка GDELT в Etigram
+### Настройка GDELT в Horizon
 
-1. **BigQuery API** — включён в проекте `etigram`.
+1. **BigQuery API** — включён в проекте `nv-horizon`.
 2. **GCP_PROJECT_ID** — задаётся при деплое Cloud Run (`scripts/deploy`). Fallback: `GOOGLE_CLOUD_PROJECT` (автоматически в Cloud Run).
 3. **Проверка доступа:**
    ```bash
-   bq query --project_id=etigram --use_legacy_sql=false \
+   bq query --project_id=nv-horizon --use_legacy_sql=false \
      "SELECT COUNT(*) FROM \`gdelt-bq.gdeltv2.events\` WHERE SQLDATE >= 20260301 LIMIT 1"
    ```
 

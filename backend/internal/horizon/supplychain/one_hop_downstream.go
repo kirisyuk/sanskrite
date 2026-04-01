@@ -21,7 +21,7 @@ import (
 const (
 	JobUseCaseOneHopDownstream = "supply_chain_one_hop_downstream"
 
-	defaultMaxBranchesPerProduct = 6
+	defaultMaxBranchesPerProduct = 12
 	maxPromptArtifacts           = 6
 	maxPromptFacilities          = 12
 	maxPromptProducts            = 24
@@ -158,8 +158,8 @@ func NormalizeOptions(opts OneHopDownstreamOptions) OneHopDownstreamOptions {
 	if opts.MaxBranchesPerProduct <= 0 {
 		opts.MaxBranchesPerProduct = defaultMaxBranchesPerProduct
 	}
-	if opts.MaxBranchesPerProduct > 16 {
-		opts.MaxBranchesPerProduct = 16
+	if opts.MaxBranchesPerProduct > 24 {
+		opts.MaxBranchesPerProduct = 24
 	}
 	return opts
 }
@@ -999,7 +999,7 @@ func (s *OneHopDownstreamService) buildPrompt(anchor *horizonmodels.HorizonFragm
 	b.WriteString("- no service/logistics/document nodes as products\n")
 	b.WriteString("- no raw-material-to-final-product jumps like ore -> vehicle\n")
 	b.WriteString("- class/subclass is not synonymy and not nearest downstream unless it is the immediate assembled product class\n")
-	b.WriteString("Direct operational usage is allowed when it is a specific nearest product/product dependency. Example allowed: helium -> MRI scanner. Example not allowed: helium -> healthcare industry.\n")
+	b.WriteString("Direct operational usage is allowed when it is a specific nearest product/product dependency grounded in a concrete industrial or institutional consuming facility. Examples allowed: helium -> MRI scanner, helium -> semiconductor lithography tool, industrial gas -> wafer-fab process input. Examples not allowed: helium -> healthcare industry, industrial gas -> electronics sector.\n")
 	b.WriteString("Direct nearest assembly into a final product is allowed when there is no meaningful intermediate product stage. Examples allowed: tire -> vehicle, battery-pack -> electric-vehicle, display-module -> smartphone. Examples not allowed: steel-sheet -> vehicle, ore -> vehicle.\n")
 	b.WriteString("Products must stay at a stable abstraction level. Use product classes, not serial instances or specific traded units.\n")
 	b.WriteString("For each step, explain why it is the nearest step and why you did not choose a broader or farther target.\n")

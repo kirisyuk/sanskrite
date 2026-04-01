@@ -42,7 +42,7 @@ type osrmResponse struct {
 }
 
 func main() {
-	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	tenantID := flag.String("tenant", "global", "tenant id")
 	reportPath := flag.String("report", "", "path to unresolved route aggregate JSON report")
 	limit := flag.Int("limit", 0, "max candidate aggregates to process (0 = all)")

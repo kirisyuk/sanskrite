@@ -20,7 +20,7 @@ The model layer is optional and replaceable.
 ## Services
 
 ### Event Gate
-- Cloud Run service: `etigram-event-gate`
+- Cloud Run service: `nv-horizon-event-gate`
 - endpoint: `POST /v1/event-gate/assess`
 - purpose:
   - `real_event`
@@ -31,7 +31,7 @@ The model layer is optional and replaceable.
   - `noise`
 
 ### Entity Extract
-- Cloud Run service: `etigram-entity-extract`
+- Cloud Run service: `nv-horizon-entity-extract`
 - endpoint: `POST /v1/entity-extract/extract`
 - purpose:
   - extract domain entities from text

@@ -7,9 +7,9 @@
 ## Создаваемые ресурсы
 
 ### 1. Cloud Run Services (4 сервиса)
-- `etigram-api` - основной backend API
-- `etigram-ws` - WebSocket broker для realtime событий
-- `etigram-telegram` - Telegram сервис
+- `nv-horizon-api` - основной backend API
+- `nv-horizon-ws` - WebSocket broker для realtime событий
+- `nv-horizon-telegram` - Telegram сервис
 - `verified-proxy` - прокси для verified URL анализа
 
 ### 2. Pub/Sub Topics (33 топика)
@@ -25,42 +25,42 @@
 - Interaction: `interaction.created`, `interaction.updated`
 - Verified: `verified.stream`
 
-**Aggregated топики (для etigram-ws):**
-- `etigram.genai.streams`
-- `etigram.discovery.events`
-- `etigram.artifact.events`
-- `etigram.interaction.events`
-- `etigram.analysis.events`
-- `etigram.verified.streams`
-- `etigram.horizon.events`
-- `etigram.operations.events`
+**Aggregated топики (для nv-horizon-ws):**
+- `nv_horizon.genai.streams`
+- `nv_horizon.discovery.events`
+- `nv_horizon.artifact.events`
+- `nv_horizon.interaction.events`
+- `nv_horizon.analysis.events`
+- `nv_horizon.verified.streams`
+- `nv_horizon.horizon.events`
+- `nv_horizon.operations.events`
 - `source.poll`
 
 ### 3. Pub/Sub Subscriptions (14 подписок)
-- Подписки для etigram-ws (aggregated топиков): `<topic>-ws-broker` (9 подписок)
+- Подписки для nv-horizon-ws (aggregated топиков): `<topic>-ws-broker` (9 подписок)
 - Worker подписки: `source.poll.worker`, `source.poll.due.worker`, `ground.refresh.worker`, и др.
 
 ### 4. Cloud Storage Buckets (3 основных)
-- `etigram-core-docs` - для хранения core документов
-- `etigram-rag-documents` - для хранения RAG документов
-- `etigram-etigram-fragments` - для хранения Etigram Horizon fragments (ДОБАВЛЕНО)
-- `etigram-web-static` - опционально (создается только если `CREATE_WEB_STATIC_BUCKET=1`)
+- `nv-horizon-core-docs` - для хранения core документов
+- `nv-horizon-rag-documents` - для хранения RAG документов
+- `nv-horizon-fragments` - для хранения Horizon Horizon fragments (ДОБАВЛЕНО)
+- `nv-horizon-web-static` - опционально (создается только если `CREATE_WEB_STATIC_BUCKET=1`)
 
 **Примечание:** Другие buckets (для Vertex AI Search импорта, системные) создаются автоматически и не требуют явного создания.
 
 ### 5. Cloud Tasks Queues (3 очереди)
-- `etigram-scout` - для Scout jobs (maxConcurrentDispatches=50)
-- `etigram-profile-refresh` - для обновления профилей Etigram fragments (maxConcurrentDispatches=1000)
-- `etigram-risk` - для Risk jobs
+- `nv-horizon-scout` - для Scout jobs (maxConcurrentDispatches=50)
+- `nv-horizon-profile-refresh` - для обновления профилей Horizon fragments (maxConcurrentDispatches=1000)
+- `nv-horizon-risk` - для Risk jobs
 
 ### 6. Cloud Scheduler Jobs (4 jobs)
-- `etigram-source-poller` - опрос источников каждые 5 минут
-- `etigram-artifact-scheduler` - проверка запланированных обновлений артефактов каждый час
+- `nv-horizon-source-poller` - опрос источников каждые 5 минут
+- `nv-horizon-artifact-scheduler` - проверка запланированных обновлений артефактов каждый час
 - `subscription-billing-daily` - ежедневный биллинг подписок в 02:00 UTC (ДОБАВЛЕНО)
-- `etigram-watchdog` - опциональный watchdog для Etigram Horizon (только с флагом `--etigram-watchdog`)
+- `nv-horizon-watchdog` - опциональный watchdog для Horizon (Nordic Vision) Horizon (только с флагом `--nv-horizon-watchdog`)
 
 ### 7. Redis Instance (1 instance)
-- `etigram-redis` - Memorystore Redis для кеширования
+- `nv-horizon-redis` - Memorystore Redis для кеширования
 
 ### 8. Service Accounts (1 основной)
 - `backend@<PROJECT_ID>.iam.gserviceaccount.com` - основной service account для backend сервисов
@@ -86,16 +86,16 @@
 
 ## Что было добавлено в последнем обновлении
 
-1. ✅ **Cloud Tasks Queue `etigram-profile-refresh`** - для обновления профилей Etigram fragments
+1. ✅ **Cloud Tasks Queue `nv-horizon-profile-refresh`** - для обновления профилей Horizon fragments
 2. ✅ **Cloud Scheduler Job `subscription-billing-daily`** - для ежедневного биллинга
-3. ✅ **GCS Bucket `etigram-etigram-fragments`** - для хранения Etigram Horizon fragments
+3. ✅ **GCS Bucket `nv-horizon-fragments`** - для хранения Horizon Horizon fragments
 4. ✅ **Pub/Sub топики** - `genai.stream.error`, `genai.stream.tool_call`, `genai.stream.tool_result`, `interaction.created`, `interaction.updated`
 5. ✅ **Pub/Sub подписки** - для interaction топиков
 
 ## Элементы, которые создаются автоматически (не требуют добавления)
 
 - Buckets для Vertex AI Search импорта (`1031480025965_*`)
-- Системные buckets (`cloud-ai-platform-*`, `run-sources-*`, `etigram_cloudbuild`)
+- Системные buckets (`cloud-ai-platform-*`, `run-sources-*`, `nv_horizon_cloudbuild`)
 - Системные Service Accounts (Compute Engine default, Firebase admin SDK)
 - VPC Network `default` (создается автоматически при первом использовании)
 - Worker подписки Pub/Sub (создаются автоматически в коде)

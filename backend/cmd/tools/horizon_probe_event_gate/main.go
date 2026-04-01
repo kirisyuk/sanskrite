@@ -42,7 +42,7 @@ type llmAssessment struct {
 
 func main() {
 	var (
-		projectID    = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+		projectID    = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 		eventGateURL = flag.String("event-gate-url", strings.TrimSpace(os.Getenv("EVENT_GATE_SERVICE_URL")), "event gate base URL")
 		useLLM       = flag.Bool("llm", true, "run episodic LLM adjudication for escalated docs")
 		stdinJSONL   = flag.Bool("stdin-jsonl", false, "read probe docs as JSONL from stdin instead of built-in samples")

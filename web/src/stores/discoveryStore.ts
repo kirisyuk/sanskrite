@@ -14,7 +14,7 @@ let listenersAttached = false; // Track if event listeners are already attached
 let projectsStoreUnsubscribe: (() => void) | null = null; // Store unsubscribe function to prevent memory leaks
 let windowEventListeners: { visibilitychange: () => void; online: () => void } | null = null; // Store listeners for cleanup
 let lastSubscribedProjectId: string | undefined = undefined; // Track last subscribed projectId to restore on reconnect
-// WebSocket broker URL: VITE_WS_BASE_URL or derived from VITE_API_BASE_URL
+// WebSocket broker: VITE_WS_* or default Cloud Run WS (see lib/gcpBackend.ts)
 
 type SubscriptionWaiter = {
   timeoutId: number;

@@ -14,6 +14,7 @@ func TestDomainModePromptRelationSetsMatchUSOTAllowlist(t *testing.T) {
 		csv  string
 	}{
 		{mode: taxonomy.DomainModeSupplyChain, csv: taxonomy.SupplyChainEdgeTypesString()},
+		{mode: taxonomy.DomainModeServiceChain, csv: taxonomy.ServiceChainEdgeTypesString()},
 		{mode: taxonomy.DomainModeGovernance, csv: taxonomy.GovernanceEdgeTypesString()},
 		{mode: taxonomy.DomainModeAssurance, csv: taxonomy.AssuranceEdgeTypesString()},
 		{mode: taxonomy.DomainModeMarket, csv: taxonomy.MarketEdgeTypesString()},

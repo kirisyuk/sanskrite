@@ -610,6 +610,9 @@ func BuildLastSegmentAddressCandidates(f *hmodels.HorizonFragment) []string {
 	if _, ok := GeoRelevantTypes[f.Type]; !ok {
 		return nil
 	}
+	if f.Type == hmodels.FragmentTypeMarket {
+		return nil
+	}
 	cp := strings.TrimSpace(f.CanonicalPath)
 	if cp == "" {
 		return nil
@@ -834,7 +837,10 @@ func isGenericGeoNoiseToken(token string) bool {
 		"center", "centre", "centers", "centres", "network", "networks", "hub", "hubs", "bank", "company", "co",
 		"corp", "corporation", "group", "holding", "holdings", "limited", "ltd", "llc", "plc", "pjsc", "sa", "as",
 		"spa", "ag", "gmbh", "bv", "nv", "inc", "industries", "industry", "electronic", "electronics", "circuit",
-		"fulfillment", "distribution", "logistics", "general", "production", "processing":
+		"fulfillment", "distribution", "logistics", "general", "production", "processing", "manufacturing",
+		"showroom", "warehouse", "warehousing", "depot", "storage", "retail", "consumer", "industrial",
+		"automotive", "personal", "care", "commercial", "operations", "sales", "border", "crossing",
+		"checkpoint", "post", "supermarket", "hypermarket", "store", "shop", "outlet":
 		return true
 	default:
 		return false

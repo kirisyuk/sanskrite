@@ -35,13 +35,13 @@ func (r *OntologySignalFactsRepo) GetSignal(ctx context.Context, signalID string
 
 func descriptorFromSignalFact(f *coremodels.OntologyFact) *horizonmodels.SignalDescriptor {
 	s := &horizonmodels.SignalDescriptor{
-		ID:         strings.TrimSpace(f.ID),
-		Amplitude:  clamp01(parseSignalTagFloat(f.Tags, "signal_amplitude:", f.Confidence)),
-		Confidence: clamp01(f.Confidence),
-		CreatedAt:  f.CreatedAt,
-		ObservedAt: f.UpdatedAt,
-		SeedPaths:  append([]string{}, f.CanonicalPaths...),
-		ActorPaths: append([]string{}, f.ActorPaths...),
+		ID:          strings.TrimSpace(f.ID),
+		Amplitude:   clamp01(parseSignalTagFloat(f.Tags, "signal_amplitude:", f.Confidence)),
+		Confidence:  clamp01(f.Confidence),
+		CreatedAt:   f.CreatedAt,
+		ObservedAt:  f.UpdatedAt,
+		SeedPaths:   append([]string{}, f.CanonicalPaths...),
+		ActorPaths:  append([]string{}, f.ActorPaths...),
 		SpherePaths: append([]string{}, f.SpherePaths...),
 		Constraints: horizonmodels.SignalConstraints{
 			Impact:               clamp01(parseSignalTagFloat(f.Tags, "signal_impact:", -1)),
@@ -90,6 +90,10 @@ func descriptorFromSignalFact(f *coremodels.OntologyFact) *horizonmodels.SignalD
 		s.Constraints.Timeframe = horizonmodels.SignalTimeHorizonShortTerm
 	}
 	return s
+}
+
+func DescriptorFromSignalFact(f *coremodels.OntologyFact) *horizonmodels.SignalDescriptor {
+	return descriptorFromSignalFact(f)
 }
 
 func normalizeSignalAxisAlias(axis, mechanism string) (string, string) {

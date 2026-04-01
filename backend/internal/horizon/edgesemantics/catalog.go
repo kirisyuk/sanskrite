@@ -97,6 +97,11 @@ func supplyChainAllowlistFromTaxonomy() []models.DependencyType {
 	return allowlistFromTaxonomy(taxonomy.SupplyChainEdgeTypes)
 }
 
+// serviceChainAllowlistFromTaxonomy derives allowlist from taxonomy.ServiceChainEdgeTypes.
+func serviceChainAllowlistFromTaxonomy() []models.DependencyType {
+	return allowlistFromTaxonomy(taxonomy.ServiceChainEdgeTypes)
+}
+
 // policyImpactAllowlistFromTaxonomy derives allowlist from taxonomy.PolicyImpactEdgeTypes.
 func policyImpactAllowlistFromTaxonomy() []models.DependencyType {
 	return allowlistFromTaxonomy(taxonomy.PolicyImpactEdgeTypes)
@@ -115,6 +120,8 @@ func allowlistFromTaxonomy(types []string) []models.DependencyType {
 var domainModeAllowlists = map[string][]models.DependencyType{
 	// Supply chain: set in init() from taxonomy.SupplyChainEdgeTypes (single source of truth).
 	taxonomy.DomainModeSupplyChain: nil,
+	// Service chain: set in init() from taxonomy.ServiceChainEdgeTypes.
+	taxonomy.DomainModeServiceChain: nil,
 	taxonomy.DomainModeGovernance: {
 		models.DependencyTypeOwns,
 		models.DependencyTypeSubsidiaryOf,
@@ -166,6 +173,7 @@ var domainModeAllowlists = map[string][]models.DependencyType{
 
 func init() {
 	domainModeAllowlists[taxonomy.DomainModeSupplyChain] = supplyChainAllowlistFromTaxonomy()
+	domainModeAllowlists[taxonomy.DomainModeServiceChain] = serviceChainAllowlistFromTaxonomy()
 	domainModeAllowlists[taxonomy.DomainModePolicyImpact] = policyImpactAllowlistFromTaxonomy()
 }
 

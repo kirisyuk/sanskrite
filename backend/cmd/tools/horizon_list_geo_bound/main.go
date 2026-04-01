@@ -11,7 +11,7 @@ import (
 	hrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 )
 
-var projectID = flag.String("project", "etigram", "GCP project ID")
+var projectID = flag.String("project", "nv-horizon", "GCP project ID")
 
 func main() {
 	flag.Parse()

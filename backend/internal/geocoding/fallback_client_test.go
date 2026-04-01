@@ -20,8 +20,8 @@ func (m *mockGeoClient) Geocode(_ context.Context, _ string) (*ontology.Geocodin
 }
 
 func TestFallbackClient_PrimaryHit(t *testing.T) {
-	primary := &mockGeoClient{result: &ontology.GeocodingResult{Lat: 55.7, Lon: 37.6, FormattedAddress: "Moscow"}}
-	fallback := &mockGeoClient{result: &ontology.GeocodingResult{Lat: 55.8, Lon: 37.7, FormattedAddress: "Moscow Google"}}
+	primary := &mockGeoClient{result: &ontology.GeocodingResult{Lat: 55.7, Lon: 37.6, FormattedAddress: "Moscow", Provider: ontology.GeocodingProviderGoogle}}
+	fallback := &mockGeoClient{result: &ontology.GeocodingResult{Lat: 55.8, Lon: 37.7, FormattedAddress: "Moscow OSM", Provider: ontology.GeocodingProviderNominatim}}
 
 	c := NewFallbackClient(primary, fallback, nil)
 	r, err := c.Geocode(context.Background(), "Moscow, Russia")
@@ -31,8 +31,8 @@ func TestFallbackClient_PrimaryHit(t *testing.T) {
 	if r.FormattedAddress != "Moscow" {
 		t.Errorf("expected primary result, got %q", r.FormattedAddress)
 	}
-	if r.Provider != ontology.GeocodingProviderNominatim {
-		t.Errorf("expected primary provider=%q, got %q", ontology.GeocodingProviderNominatim, r.Provider)
+	if r.Provider != ontology.GeocodingProviderGoogle {
+		t.Errorf("expected primary provider=%q, got %q", ontology.GeocodingProviderGoogle, r.Provider)
 	}
 	if primary.calls != 1 {
 		t.Errorf("expected 1 primary call, got %d", primary.calls)
@@ -44,18 +44,18 @@ func TestFallbackClient_PrimaryHit(t *testing.T) {
 
 func TestFallbackClient_PrimaryMiss(t *testing.T) {
 	primary := &mockGeoClient{result: nil}
-	fallback := &mockGeoClient{result: &ontology.GeocodingResult{Lat: 55.8, Lon: 37.7, FormattedAddress: "Moscow Google"}}
+	fallback := &mockGeoClient{result: &ontology.GeocodingResult{Lat: 55.8, Lon: 37.7, FormattedAddress: "Moscow OSM", Provider: ontology.GeocodingProviderNominatim}}
 
 	c := NewFallbackClient(primary, fallback, nil)
 	r, err := c.Geocode(context.Background(), "Moscow, Russia")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if r.FormattedAddress != "Moscow Google" {
+	if r.FormattedAddress != "Moscow OSM" {
 		t.Errorf("expected fallback result, got %q", r.FormattedAddress)
 	}
-	if r.Provider != ontology.GeocodingProviderGoogle {
-		t.Errorf("expected fallback provider=%q, got %q", ontology.GeocodingProviderGoogle, r.Provider)
+	if r.Provider != ontology.GeocodingProviderNominatim {
+		t.Errorf("expected fallback provider=%q, got %q", ontology.GeocodingProviderNominatim, r.Provider)
 	}
 	if primary.calls != 1 || fallback.calls != 1 {
 		t.Errorf("expected 1+1 calls, got %d+%d", primary.calls, fallback.calls)
@@ -63,15 +63,15 @@ func TestFallbackClient_PrimaryMiss(t *testing.T) {
 }
 
 func TestFallbackClient_PrimaryError(t *testing.T) {
-	primary := &mockGeoClient{err: errors.New("nominatim timeout")}
-	fallback := &mockGeoClient{result: &ontology.GeocodingResult{Lat: 55.8, Lon: 37.7, FormattedAddress: "Moscow Google"}}
+	primary := &mockGeoClient{err: errors.New("google timeout")}
+	fallback := &mockGeoClient{result: &ontology.GeocodingResult{Lat: 55.8, Lon: 37.7, FormattedAddress: "Moscow OSM", Provider: ontology.GeocodingProviderNominatim}}
 
 	c := NewFallbackClient(primary, fallback, nil)
 	r, err := c.Geocode(context.Background(), "Moscow, Russia")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if r.FormattedAddress != "Moscow Google" {
+	if r.FormattedAddress != "Moscow OSM" {
 		t.Errorf("expected fallback result, got %q", r.FormattedAddress)
 	}
 }

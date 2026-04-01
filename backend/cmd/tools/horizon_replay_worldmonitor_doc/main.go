@@ -26,7 +26,7 @@ import (
 
 func main() {
 	var (
-		projectID       = flag.String("project", "etigram", "GCP project id")
+		projectID       = flag.String("project", "nv-horizon", "GCP project id")
 		tenantID        = flag.String("tenant", "global", "tenant id")
 		sourceID        = flag.String("source", "manual-worldmonitor-replay", "logical source id")
 		title           = flag.String("title", "", "document title")

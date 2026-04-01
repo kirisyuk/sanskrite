@@ -856,6 +856,20 @@ func getJobDomainModes(job *models.ScoutingJob) []string {
 	return nil
 }
 
+func jobUsesServiceChain(job *models.ScoutingJob) bool {
+	return taxonomy.HasDomainMode(getJobDomainModes(job), taxonomy.DomainModeServiceChain)
+}
+
+func (e *ScoutEngine) activeChainPathBuilder(job *models.ScoutingJob) *pathbuilder.SupplyChainPathBuilder {
+	if e == nil {
+		return nil
+	}
+	if jobUsesServiceChain(job) && e.serviceChainPathBuilder != nil {
+		return e.serviceChainPathBuilder
+	}
+	return e.supplyChainPathBuilder
+}
+
 func parseStateString(v interface{}) string {
 	if v == nil {
 		return ""
@@ -1932,6 +1946,9 @@ func getSupplyChainExecutionPlanFromJobState(job *models.ScoutingJob, domainCano
 		if p := decodeSupplyChainExecutionPlan(m["supplyChainExecutionPlan"]); p != nil {
 			return p
 		}
+		if p := decodeSupplyChainExecutionPlan(m["serviceChainExecutionPlan"]); p != nil {
+			return p
+		}
 		return decodeSupplyChainExecutionPlan(m["SupplyChainExecutionPlan"])
 	}
 	getCanonicalPathFromMap := func(m map[string]interface{}) string {
@@ -1963,7 +1980,7 @@ func getSupplyChainExecutionPlanFromJobState(job *models.ScoutingJob, domainCano
 	switch t := raw.(type) {
 	case []agents.DomainResolution:
 		for _, d := range t {
-			if found := tryMatch(d.CanonicalPath, d.SupplyChainExecutionPlan); found != nil {
+			if found := tryMatch(d.CanonicalPath, firstNonNilSupplyChainPlan(d.SupplyChainExecutionPlan, d.ServiceChainExecutionPlan)); found != nil {
 				return found
 			}
 		}
@@ -1976,7 +1993,7 @@ func getSupplyChainExecutionPlanFromJobState(job *models.ScoutingJob, domainCano
 	case []interface{}:
 		for _, it := range t {
 			if d, ok := it.(agents.DomainResolution); ok {
-				if found := tryMatch(d.CanonicalPath, d.SupplyChainExecutionPlan); found != nil {
+				if found := tryMatch(d.CanonicalPath, firstNonNilSupplyChainPlan(d.SupplyChainExecutionPlan, d.ServiceChainExecutionPlan)); found != nil {
 					return found
 				}
 				continue
@@ -1991,6 +2008,15 @@ func getSupplyChainExecutionPlanFromJobState(job *models.ScoutingJob, domainCano
 		}
 	}
 	return bySignature
+}
+
+func firstNonNilSupplyChainPlan(plans ...*agents.SupplyChainExecutionPlan) *agents.SupplyChainExecutionPlan {
+	for _, plan := range plans {
+		if plan != nil {
+			return plan
+		}
+	}
+	return nil
 }
 
 // expandSupplyChainQueriesWithOrgs expands product/market-anchored queries to org/fac-anchored.
@@ -2939,7 +2965,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		earlyContractType, _ = parseDomainPathFacets(domainCP)
 	}
 	earlySupplyChainPlan := getSupplyChainExecutionPlanFromJobState(job, domainCP)
-	isSupplyChainFastPath := agents.IsSupplyChainContractType(earlyContractType) && earlySupplyChainPlan != nil && len(earlySupplyChainPlan.Queries) > 0
+	isSupplyChainFastPath := agents.IsOperationalChainContractType(earlyContractType) && earlySupplyChainPlan != nil && len(earlySupplyChainPlan.Queries) > 0
 
 	internalFirstContext := ""
 	domainFastPathApplied := false
@@ -3112,7 +3138,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 	var domainResearchChains []agents.SupplyChain
 	var domainGroundingEvidence *ai.GroundingEvidence
 	researchStageActive := false
-	supplyChainRefineContinuation := agents.IsSupplyChainContractType(contractType) && isSupplyChainRefineContinuationJob(job)
+	supplyChainRefineContinuation := agents.IsOperationalChainContractType(contractType) && isSupplyChainRefineContinuationJob(job)
 	if domainFastPathApplied {
 		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageResearch, true, "domain_base_research_skip_fast_path")
 	} else if supplyChainRefineContinuation {
@@ -3122,7 +3148,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		researchStageActive = true
 	}
 	supplyChainPlan := getSupplyChainExecutionPlanFromJobState(job, domainCP)
-	usePlanMode := agents.IsSupplyChainContractType(contractType) && supplyChainPlan != nil && len(supplyChainPlan.Queries) > 0
+	usePlanMode := agents.IsOperationalChainContractType(contractType) && supplyChainPlan != nil && len(supplyChainPlan.Queries) > 0
 	graphBuildMode := supplyChainGraphBuildMode(supplyChainPlan, job)
 	hotPathOnlySupplyChain := usePlanMode && graphBuildMode == agents.SupplyChainGraphBuildModeHotPathOnly
 	fastFirstSupplyChain := usePlanMode && (hotPathOnlySupplyChain || isFastFirstSupplyChainJob(job)) && !supplyChainRefineContinuation
@@ -3140,8 +3166,8 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 			job.State["supplyChainFastFirstMaxAnchorHops"] = 1
 			job.State["supplyChainSkipRecursiveStep4"] = true
 			job.State["supplyChainStopAfterFirstIncremental"] = true
-			job.State["supplyChainFastFirstMaxOrgsPerDepth"] = 8
-			job.State["supplyChainFastFirstMaxFacsPerDepth"] = 18
+			job.State["supplyChainFastFirstMaxOrgsPerDepth"] = 12
+			job.State["supplyChainFastFirstMaxFacsPerDepth"] = 30
 		}
 		queries := supplyChainPlan.Queries
 		if job != nil && HasExecutionPlanContractState(job.State) {
@@ -4035,7 +4061,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 		e.pipelineStageSkip(ctx, job, pipelineRuntimeName, stageDomainSupplyChains, false, "domain_supply_chain_materialization_skip_no_chains")
 	}
 
-	if agents.IsSupplyChainContractType(contractType) {
+	if agents.IsOperationalChainContractType(contractType) {
 		switch {
 		case fastFirstSupplyChain && !refineContinuation:
 			if err := e.runSupplyChainFastAssembly(ctx, job, frag, domainCP, supplyChainPlan); err != nil {
@@ -5017,7 +5043,8 @@ func (e *ScoutEngine) processRelationsInternal(
 		}
 	}
 	domainModes := taxonomy.NormalizeDomainModes(getJobDomainModes(job))
-	isSupplyChainMode := taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain)
+	isSupplyChainMode := taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) ||
+		taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeServiceChain)
 	if !isSupplyChainMode {
 		isSupplyChainMode = taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain)
 	}
@@ -8546,6 +8573,10 @@ func (e *ScoutEngine) runSupplyChainFastFirstHotPath(ctx context.Context, job *m
 	if e == nil || e.researchAgent == nil || len(queries) == 0 {
 		return nil
 	}
+	chainMode := taxonomy.DomainModeSupplyChain
+	if jobUsesServiceChain(job) {
+		chainMode = taxonomy.DomainModeServiceChain
+	}
 	_, domainFacets := parseDomainPathFacets(strings.TrimSpace(firstNonEmpty(
 		strings.TrimSpace(job.TargetCanonicalPath),
 		strings.TrimSpace(parseStateString(job.State["targetCanonicalPath"])),
@@ -8571,7 +8602,7 @@ func (e *ScoutEngine) runSupplyChainFastFirstHotPath(ctx context.Context, job *m
 	chains := make([]agents.SupplyChain, 0, 32)
 	for idx, query := range hotQueries {
 		query = applyDirectedExplorationQueryAugment(query, job)
-		prePlan, preErr := e.researchAgent.EnrichSupplyChainPreHotPath(ctx, query)
+		prePlan, preErr := enrichOperationalChainPreHotPath(ctx, e.researchAgent, chainMode, query)
 		if preErr != nil {
 			scLog(ctx, e, job, "warn", fmt.Sprintf("[SupplyChainPreHotPath] query[%d] failed: %v", idx, preErr))
 		} else if prePlan != nil {
@@ -8591,7 +8622,7 @@ func (e *ScoutEngine) runSupplyChainFastFirstHotPath(ctx context.Context, job *m
 				}
 			}
 			variant = applyDirectedExplorationQueryAugment(variant, job)
-			queryChains, err := e.researchAgent.EnrichSupplyChainHotPath(ctx, variant, prePlan)
+			queryChains, err := enrichOperationalChainHotPath(ctx, e.researchAgent, chainMode, variant, prePlan)
 			if err != nil {
 				scLog(ctx, e, job, "warn", fmt.Sprintf("[SupplyChainHotPath] query[%d] variant[%d] failed: %v", idx, variantIdx, err))
 				continue
@@ -8599,7 +8630,7 @@ func (e *ScoutEngine) runSupplyChainFastFirstHotPath(ctx context.Context, job *m
 			queryChains = filterSupplyChainsByPlanFilters(queryChains, variant.ProductFilter, variant.GeoFilter)
 			queryChains = filterSupplyChainsByAnchorScope(queryChains, variant, prePlan, targetGeoFilters)
 			if len(queryChains) > 0 && directedExplorationWantsCapabilityPass(job) {
-				if capabilityBundle, capErr := e.researchAgent.EnrichSupplyChainHotPathCapabilities(ctx, variant, queryChains, prePlan); capErr != nil {
+				if capabilityBundle, capErr := enrichOperationalChainHotPathCapabilities(ctx, e.researchAgent, chainMode, variant, queryChains, prePlan); capErr != nil {
 					scLog(ctx, e, job, "warn", fmt.Sprintf("[SupplyChainHotPathCapability] query[%d] variant[%d] failed: %v", idx, variantIdx, capErr))
 				} else if capabilityBundle != nil {
 					queryChains = applyScopedObservationBundleToSupplyChains(queryChains, capabilityBundle)
@@ -8631,6 +8662,42 @@ func (e *ScoutEngine) runSupplyChainFastFirstHotPath(ctx context.Context, job *m
 		chains = chains[:20]
 	}
 	return chains
+}
+
+func enrichOperationalChainPreHotPath(ctx context.Context, agent *agents.ResearchAgent, mode string, query agents.SupplyChainQuery) (*agents.SupplyChainPreHotPathPlan, error) {
+	if agent == nil {
+		return nil, nil
+	}
+	switch strings.TrimSpace(strings.ToLower(mode)) {
+	case taxonomy.DomainModeServiceChain:
+		return agent.EnrichServiceChainPreHotPath(ctx, query)
+	default:
+		return agent.EnrichSupplyChainPreHotPath(ctx, query)
+	}
+}
+
+func enrichOperationalChainHotPath(ctx context.Context, agent *agents.ResearchAgent, mode string, query agents.SupplyChainQuery, prePlan *agents.SupplyChainPreHotPathPlan) ([]agents.SupplyChain, error) {
+	if agent == nil {
+		return nil, nil
+	}
+	switch strings.TrimSpace(strings.ToLower(mode)) {
+	case taxonomy.DomainModeServiceChain:
+		return agent.EnrichServiceChainHotPath(ctx, query, prePlan)
+	default:
+		return agent.EnrichSupplyChainHotPath(ctx, query, prePlan)
+	}
+}
+
+func enrichOperationalChainHotPathCapabilities(ctx context.Context, agent *agents.ResearchAgent, mode string, query agents.SupplyChainQuery, chains []agents.SupplyChain, prePlan *agents.SupplyChainPreHotPathPlan) (*agents.SupplyChainScopedObservations, error) {
+	if agent == nil {
+		return nil, nil
+	}
+	switch strings.TrimSpace(strings.ToLower(mode)) {
+	case taxonomy.DomainModeServiceChain:
+		return agent.EnrichServiceChainHotPathCapabilities(ctx, query, chains, prePlan)
+	default:
+		return agent.EnrichSupplyChainHotPathCapabilities(ctx, query, chains, prePlan)
+	}
 }
 
 func deriveSupplyChainHotPathVariants(query agents.SupplyChainQuery, prePlan *agents.SupplyChainPreHotPathPlan) []agents.SupplyChainQuery {
@@ -10138,7 +10205,8 @@ func (e *ScoutEngine) processSupplyChains(
 	// Directed exploration should favor fast first materialization for live graph/map updates.
 	// Deferred rebuild is useful for background quality improvement, but it is too expensive for
 	// interactive hot-path runs and can trigger unrelated AI fallbacks.
-	if supplyLinksCreated > 0 && e.supplyChainPathBuilder != nil && !isDirectedSupplyChainExplorationJob(job) {
+	activePathBuilder := e.activeChainPathBuilder(job)
+	if supplyLinksCreated > 0 && activePathBuilder != nil && !isDirectedSupplyChainExplorationJob(job) {
 		if job.State == nil {
 			job.State = make(map[string]interface{})
 		}
@@ -10157,7 +10225,7 @@ func (e *ScoutEngine) processSupplyChains(
 	// Batches create/update for efficiency (BatchGetByCanonicalKeys + BatchUpsert).
 	materializedPathsCount := 0
 	directPathArtifactKeys := make([]string, 0, len(chains))
-	if e.supplyChainPathBuilder != nil && len(chains) > 0 {
+	if activePathBuilder != nil && len(chains) > 0 {
 		maxDepth := parseStateInt(job.State["maxRecursionDepth"], 2)
 		if maxDepth <= 0 {
 			maxDepth = 6
@@ -10185,7 +10253,11 @@ func (e *ScoutEngine) processSupplyChains(
 			if scope != nil {
 				input.WorkingProductScope = dedupStrings(scope.CanonicalProductRefs())
 			}
-			if vr, err := e.criticAgent.CriticPipeline().Validate(ctx, input, []string{taxonomy.DomainModeSupplyChain}); err == nil && vr != nil && vr.IsValid && len(vr.MissingInfo) == 0 {
+			validationMode := taxonomy.DomainModeSupplyChain
+			if jobUsesServiceChain(job) {
+				validationMode = taxonomy.DomainModeServiceChain
+			}
+			if vr, err := e.criticAgent.CriticPipeline().Validate(ctx, input, []string{validationMode}); err == nil && vr != nil && vr.IsValid && len(vr.MissingInfo) == 0 {
 				criticPassed = true
 			}
 		}
@@ -10251,7 +10323,7 @@ func (e *ScoutEngine) processSupplyChains(
 
 		existingChainsByKey := map[string]*models.MaterializedArtifact{}
 		if len(canonicalKeysForReuse) > 0 {
-			if batchExisting, err := e.supplyChainPathBuilder.BatchGetChainsByCanonicalKeys(ctx, tenantID, canonicalKeysForReuse); err == nil {
+			if batchExisting, err := activePathBuilder.BatchGetChainsByCanonicalKeys(ctx, tenantID, canonicalKeysForReuse); err == nil {
 				existingChainsByKey = batchExisting
 			}
 		}
@@ -10305,14 +10377,14 @@ func (e *ScoutEngine) processSupplyChains(
 			e.logLine(ctx, job, "info", fmt.Sprintf("[ChainReuse] MERGE summary merged=%d stage=%s samples=[%s]",
 				chainReuseMerged, materializationStage, strings.Join(mergeSamples, " | ")))
 		}
-		if len(pathsToMaterialize) > 0 && e.supplyChainPathBuilder != nil {
+		if len(pathsToMaterialize) > 0 && activePathBuilder != nil {
 			familyCandidates := make([]supplyChainFamilyCandidate, 0, len(pathsToMaterialize))
 			currentRound := parseStateInt(job.State["supplyChainFamilyCoResearchRound"], 0)
 			for i, path := range pathsToMaterialize {
 				if path == nil {
 					continue
 				}
-				sufficiencyPreview, previewErr := e.supplyChainPathBuilder.PreviewSufficiency(ctx, path)
+				sufficiencyPreview, previewErr := activePathBuilder.PreviewSufficiency(ctx, path)
 				if previewErr != nil {
 					e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainFamily] preview failed key=%s err=%v", keysToMaterialize[i], previewErr))
 					continue
@@ -10326,7 +10398,7 @@ func (e *ScoutEngine) processSupplyChains(
 			familyBatches = buildSupplyChainFamilyBatches(tenantID, currentRound, familyCandidates)
 		}
 		if len(pathsToMaterialize) > 0 {
-			ids, err := e.supplyChainPathBuilder.MaterializePathsBatch(ctx, pathsToMaterialize, tenantID, lensID, keysToMaterialize)
+			ids, err := activePathBuilder.MaterializePathsBatch(ctx, pathsToMaterialize, tenantID, lensID, keysToMaterialize)
 			if err != nil {
 				e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainMaterialize] batch failed: %v", err))
 			} else {
@@ -10342,12 +10414,12 @@ func (e *ScoutEngine) processSupplyChains(
 					}
 					e.logLine(ctx, job, "info", fmt.Sprintf("[SupplyChainMaterialize] Materialized supply path %d with %d %s", i+1, segmentCount, segmentLabel))
 					if criticPassed && canonicalKey != "" {
-						if updErr := e.supplyChainPathBuilder.UpdatePathStatus(ctx, tenantID, canonicalKey, "validated"); updErr != nil {
+						if updErr := activePathBuilder.UpdatePathStatus(ctx, tenantID, canonicalKey, "validated"); updErr != nil {
 							e.logLine(ctx, job, "warn", fmt.Sprintf("[SupplyChainMaterialize] PathStatus update failed key=%s err=%v", canonicalKey, updErr))
 						}
 					}
 					if strings.TrimSpace(lensID) != "" && e.lensesRepo != nil && id != "" {
-						art, artErr := e.supplyChainPathBuilder.GetChainByCanonicalKey(ctx, tenantID, canonicalKey)
+						art, artErr := activePathBuilder.GetChainByCanonicalKey(ctx, tenantID, canonicalKey)
 						if artErr == nil && art != nil {
 							if addArtifactToLensScope(ctx, e.lensesRepo, lensID, art) {
 								chainReuseScopeAdded++
@@ -11708,6 +11780,24 @@ func supplyChainMatchesProductFilter(path string, productFilters []string) bool 
 	return false
 }
 
+func downstreamTraversalProductFilters(productFilters []string, depth int) []string {
+	if depth <= 0 {
+		return productFilters
+	}
+	return nil
+}
+
+func shouldKeepDownstreamProducedProduct(path string, productFilters []string, depth int) bool {
+	if depth > 0 {
+		return true
+	}
+	return supplyChainMatchesProductFilter(path, productFilters)
+}
+
+func filterDownstreamChainsForTraversal(chains []agents.SupplyChain, productFilters []string, geoFilters []string, depth int) []agents.SupplyChain {
+	return filterSupplyChainsByPlanFilters(chains, downstreamTraversalProductFilters(productFilters, depth), geoFilters)
+}
+
 func supplyChainNodeMatchesGeoFilter(path string, geoFilters []string) bool {
 	if len(geoFilters) == 0 {
 		return true
@@ -11861,9 +11951,6 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 		}
 		return chains
 	}
-	nodeMatchesProductFilter := func(cp string) bool {
-		return supplyChainMatchesProductFilter(cp, productFilters)
-	}
 	buildStep1Chains := func(depthFacs []string) []agents.SupplyChain {
 		chains := make([]agents.SupplyChain, 0, len(depthFacs))
 		seen := map[string]struct{}{}
@@ -11960,7 +12047,7 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 		return chains
 	}
 	materializeStage := func(stage string, depth int, direction string, chains []agents.SupplyChain) {
-		chains = filterSupplyChainsByPlanFilters(chains, productFilters, geoFilters)
+		chains = filterDownstreamChainsForTraversal(chains, productFilters, geoFilters, depth)
 		if len(chains) == 0 {
 			return
 		}
@@ -12012,7 +12099,8 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 	orgQueue := append([]string{}, anchorOrgs...)
 
 	for depth := 0; depth < maxDepth; depth++ {
-		stepCtx := agents.WithSupplyChainStepPromptContext(ctx, e.buildSupplyChainStepPromptContext(ctx, job, depth, "downstream", productFilters, geoFilters))
+		stepProductFilters := downstreamTraversalProductFilters(productFilters, depth)
+		stepCtx := agents.WithSupplyChainStepPromptContext(ctx, e.buildSupplyChainStepPromptContext(ctx, job, depth, "downstream", stepProductFilters, geoFilters))
 		maxOrgsPerDepth := supplyChainFastFirstIntLimit(job, "supplyChainFastFirstMaxOrgsPerDepth", agents.ScUnwindMaxOrgsPerDepth)
 		maxFacsPerDepth := supplyChainFastFirstIntLimit(job, "supplyChainFastFirstMaxFacsPerDepth", agents.ScUnwindMaxFacsPerDepth)
 		skipRecursiveStep4 := parseStateBool(job.State["supplyChainSkipRecursiveStep4"], false)
@@ -12149,7 +12237,7 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 				if pp == "" || !strings.HasPrefix(pp, "/product/") {
 					continue
 				}
-				if !nodeMatchesProductFilter(pp) {
+				if !shouldKeepDownstreamProducedProduct(pp, productFilters, depth) {
 					continue
 				}
 				if _, ok := visited[pp]; !ok {
@@ -12314,7 +12402,7 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 
 	scLog(ctx, e, job, "info", fmt.Sprintf("[SCUnwind] complete: totalSegments=%d visited=%d", len(allSegments), len(visited)))
 
-	return filterSupplyChainsByPlanFilters(buildChains(allSegments), productFilters, geoFilters)
+	return filterSupplyChainsByPlanFilters(buildChains(allSegments), nil, geoFilters)
 }
 
 // runSupplyChainUpstreamUnwinding implements step-by-step UPSTREAM unwinding:

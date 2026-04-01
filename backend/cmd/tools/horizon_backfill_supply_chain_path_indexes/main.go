@@ -28,7 +28,7 @@ type snapshot struct {
 }
 
 func main() {
-	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	tenantID := flag.String("tenant", "global", "tenant id")
 	pageSize := flag.Int("page-size", 200, "page size")
 	limit := flag.Int("limit", 0, "max docs to process (0 = all)")

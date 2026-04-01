@@ -43,12 +43,12 @@ func parseAllowedOrigins() []string {
 	return []string{
 		"http://localhost:5173",
 		"http://localhost:3000",
-		"https://etigram.pro",
-		"https://www.etigram.pro",
-		"https://*.etigram.pro",
-		"https://etigram.one",
-		"https://www.etigram.one",
-		"https://*.etigram.one",
+		"https://nordicvision.io",
+		"https://www.nordicvision.io",
+		"https://*.nordicvision.io",
+		"https://horizon.nordicvision.io",
+		"https://www.horizon.nordicvision.io",
+		"https://*.horizon.nordicvision.io",
 	}
 }
 
@@ -83,7 +83,7 @@ func VerifiedProxy(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		// Subdomain wildcard entries like "*.etigram.one"
+		// Subdomain wildcard entries like "*.horizon.nordicvision.io"
 		if allowOrigin == "" {
 			u, err := url.Parse(origin)
 			if err == nil {

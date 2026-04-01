@@ -10,41 +10,41 @@
 
 ```bash
 # Backend API
-gcloud run services describe etigram-api --region us-central1
+gcloud run services describe nv-horizon-api --region us-central1
 
 # Telegram Service
-gcloud run services describe etigram-telegram --region us-central1
+gcloud run services describe nv-horizon-telegram --region us-central1
 
 # На какой ревизии трафик?
-gcloud run services describe etigram-api --region us-central1 \
+gcloud run services describe nv-horizon-api --region us-central1 \
   --format="value(status.traffic[0].revisionName)"
 
 # Список всех ревизий
-gcloud run revisions list --service etigram-api --region us-central1
+gcloud run revisions list --service nv-horizon-api --region us-central1
 ```
 
 ### Проверить логи
 
 ```bash
 # Последние 50 строк
-gcloud run services logs read etigram-api --region us-central1 --limit 50
+gcloud run services logs read nv-horizon-api --region us-central1 --limit 50
 
 # Follow в реальном времени
-gcloud run services logs tail etigram-api --region us-central1
+gcloud run services logs tail nv-horizon-api --region us-central1
 
 # Только ошибки
-gcloud run services logs read etigram-api --region us-central1 --limit 50 --log-filter="severity>=ERROR"
+gcloud run services logs read nv-horizon-api --region us-central1 --limit 50 --log-filter="severity>=ERROR"
 ```
 
 ### Проверить конфигурацию
 
 ```bash
 # Env vars
-gcloud run services describe etigram-api --region us-central1 \
+gcloud run services describe nv-horizon-api --region us-central1 \
   --format="value(spec.template.spec.containers[0].env)"
 
 # Secrets binding
-gcloud run services describe etigram-api --region us-central1 \
+gcloud run services describe nv-horizon-api --region us-central1 \
   --format="value(spec.template.spec.containers[0].env)" | grep -i secret
 
 # IAM политики service account
@@ -128,14 +128,14 @@ gcloud projects add-iam-policy-binding $(gcloud config get-value project) \
 **Диагностика**:
 ```bash
 # Проверить env vars
-gcloud run services describe etigram-api --region us-central1 \
+gcloud run services describe nv-horizon-api --region us-central1 \
   --format="value(spec.template.spec.containers[0].env)" | grep PROJECT
 ```
 
 **Решение**:
 ```bash
 # Update с явным указанием обоих env vars
-gcloud run services update etigram-api --region us-central1 \
+gcloud run services update nv-horizon-api --region us-central1 \
   --set-env-vars "GCP_PROJECT_ID=$(gcloud config get-value project),GOOGLE_CLOUD_PROJECT=$(gcloud config get-value project)"
 ```
 
@@ -148,20 +148,20 @@ gcloud run services update etigram-api --region us-central1 \
 **Диагностика**:
 ```bash
 # Проверить на какой ревизии трафик
-gcloud run services describe etigram-api --region us-central1 \
+gcloud run services describe nv-horizon-api --region us-central1 \
   --format="value(status.traffic[0].revisionName)"
 
 # Сравнить с последней ревизией
-gcloud run revisions list --service etigram-api --region us-central1 --limit 3
+gcloud run revisions list --service nv-horizon-api --region us-central1 --limit 3
 ```
 
 **Решение**:
 ```bash
 # Принудительно переключить трафик
-gcloud run services update-traffic etigram-api --region us-central1 --to-latest
+gcloud run services update-traffic nv-horizon-api --region us-central1 --to-latest
 
 # Проверить
-curl "$(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')/healthz"
+curl "$(gcloud run services describe nv-horizon-api --region us-central1 --format='value(status.url)')/healthz"
 ```
 
 ---
@@ -220,7 +220,7 @@ VITE_FIREBASE_STORAGE_BUCKET=your_project.appspot.com
 VITE_FIREBASE_MESSAGING_SENDER_ID=your_sender_id
 VITE_FIREBASE_APP_ID=your_app_id
 
-VITE_API_BASE_URL=https://etigram-api-xxxx.run.app
+VITE_API_BASE_URL=https://nv-horizon-api-xxxx.run.app
 EOF
 
 # Restart dev server
@@ -236,18 +236,18 @@ cd web && npm run dev
 **Диагностика**:
 ```bash
 # Проверить FRONTEND_ORIGIN env var
-gcloud run services describe etigram-api --region us-central1 \
+gcloud run services describe nv-horizon-api --region us-central1 \
   --format="value(spec.template.spec.containers[0].env)" | grep FRONTEND_ORIGIN
 ```
 
 **Решение**:
 ```bash
 # Update CORS origin
-gcloud run services update etigram-api --region us-central1 \
+gcloud run services update nv-horizon-api --region us-central1 \
   --update-env-vars "FRONTEND_ORIGIN=http://localhost:5173"
 
 # Для production
-gcloud run services update etigram-api --region us-central1 \
+gcloud run services update nv-horizon-api --region us-central1 \
   --update-env-vars "FRONTEND_ORIGIN=https://your-domain.com"
 ```
 
@@ -318,7 +318,7 @@ gcloud firestore indexes composite list
 
 ```bash
 # Полный health check всех сервисов
-for svc in etigram-api etigram-telegram; do
+for svc in nv-horizon-api nv-horizon-telegram; do
   URL=$(gcloud run services describe $svc --region us-central1 --format='value(status.url)' 2>/dev/null)
   if [[ -n "$URL" ]]; then
     echo "$svc: $URL"
@@ -327,8 +327,8 @@ for svc in etigram-api etigram-telegram; do
 done
 
 # Получить все URLs
-echo "API: $(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')"
-echo "TG: $(gcloud run services describe etigram-telegram --region us-central1 --format='value(status.url)')"
+echo "API: $(gcloud run services describe nv-horizon-api --region us-central1 --format='value(status.url)')"
+echo "TG: $(gcloud run services describe nv-horizon-telegram --region us-central1 --format='value(status.url)')"
 echo "Web: gs://$(gcloud config get-value project)-web-static"
 
 # Проверить что все секреты созданы
@@ -358,15 +358,15 @@ done
 
 ```bash
 # 1. Посмотреть предыдущие ревизии
-gcloud run revisions list --service etigram-api --region us-central1 --limit 5
+gcloud run revisions list --service nv-horizon-api --region us-central1 --limit 5
 
-# 2. Откат на конкретную ревизию (например, etigram-api-00006)
-gcloud run services update-traffic etigram-api \
+# 2. Откат на конкретную ревизию (например, nv-horizon-api-00006)
+gcloud run services update-traffic nv-horizon-api \
   --region us-central1 \
-  --to-revisions etigram-api-00006=100
+  --to-revisions nv-horizon-api-00006=100
 
 # 3. Проверить
-curl "$(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')/healthz"
+curl "$(gcloud run services describe nv-horizon-api --region us-central1 --format='value(status.url)')/healthz"
 ```
 
 ### Полная переустановка инфраструктуры
@@ -375,8 +375,8 @@ curl "$(gcloud run services describe etigram-api --region us-central1 --format='
 # ⚠️ ВНИМАНИЕ: Это удалит все данные!
 
 # 1. Удалить сервисы
-gcloud run services delete etigram-api --region us-central1 --quiet
-gcloud run services delete etigram-telegram --region us-central1 --quiet
+gcloud run services delete nv-horizon-api --region us-central1 --quiet
+gcloud run services delete nv-horizon-telegram --region us-central1 --quiet
 
 # 2. Удалить топики
 for topic in discovery.status discovery.profile discovery.answer discovery.project; do

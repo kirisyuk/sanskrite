@@ -12,8 +12,9 @@ import type {
   HorizonWatchSnapshot,
   HorizonWatchScenarioWorkspace,
 } from '../types/horizonWatch';
+import { resolveApiBaseUrl } from './gcpBackend';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
+const API_BASE_URL = resolveApiBaseUrl();
 
 export interface SupplyChainOverlayMechanism {
   key: string;
@@ -125,6 +126,53 @@ export interface SupplyChainArtifactResponse {
   kind: string;
   riskOverlay?: SupplyChainPathRiskOverlay;
   [key: string]: any;
+}
+
+export interface HorizonLensReportArtifactResponse {
+  artifactId: string;
+  shareToken: string;
+  shareUrl: string;
+  projectShareUrl: string;
+  expiresAt: string;
+  filename: string;
+  projectId: string;
+  lensId: string;
+  materializedKind: string;
+}
+
+export interface HorizonLensChatHit {
+  id: string;
+  title: string;
+  kind: string;
+  score: number;
+  uri?: string;
+  canonicalPaths?: string[];
+  questionHints?: string[];
+}
+
+export interface HorizonLensChatMessage {
+  id: string;
+  kind: string;
+  content: string;
+  createdAt: string;
+  sectionId?: string;
+  summary?: string;
+  model?: string;
+  replyTo?: string;
+  subkind?: string;
+  searchQueries?: string[];
+  sources?: string[];
+  author?: { participantId: string; kind: string; displayName?: string };
+}
+
+export interface HorizonLensChatResponse {
+  threadId: string;
+  answer: string;
+  hits?: HorizonLensChatHit[];
+  highlightedPaths?: string[];
+  warnings?: string[];
+  userMessage?: HorizonLensChatMessage;
+  assistantMessage?: HorizonLensChatMessage;
 }
 
 export interface HorizonSimulationOverlayItem {
@@ -631,7 +679,7 @@ class ApiClient {
 
   async getProjectInteractions(projectId: string): Promise<{ id: string; kind: string; content: string; createdAt: string; sectionId?: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; evaluations?: Record<string, any>; metadata?: { pinned?: boolean }; originalMessageId?: string; subkind?: string; contentSanitized?: string; relations?: Array<{ type: string; targetId: string }>; language?: string; systemInstructionApplied?: string; generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean }; highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] }; coreDocIds?: string[] }[]> {
     const response = await this.client.get<{ items: { id: string; kind: string; content: string; createdAt: string; sectionId?: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; evaluations?: Record<string, any>; metadata?: { pinned?: boolean }; originalMessageId?: string; subkind?: string; contentSanitized?: string; relations?: Array<{ type: string; targetId: string }>; language?: string; systemInstructionApplied?: string; generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean }; highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] }; coreDocIds?: string[] }[] }>(`/api/v1/projects/${projectId}/interactions`);
-    return response.data.items;
+    return Array.isArray(response.data?.items) ? response.data.items : [];
   }
 
   async createProjectInteraction(projectId: string, data: { kind: 'user'|'assistant'|'system'|'note'|'section_start'|'section_end'|'action'|'research'|'ontology'; content: string; sectionId?: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; originalMessageId?: string; subkind?: string; contentSanitized?: string; relations?: Array<{ type: string; targetId: string }>; language?: string; systemInstructionApplied?: string; generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean }; highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] }; roles?: Array<{ role: string; confidence: number; rationale: string }>; industries?: Array<{ industry: string; confidence: number; rationale: string }>; evaluations?: Record<string, any>; coreDocIds?: string[]; metadata?: { pinned?: boolean }; researchQuery?: string; researchProgress?: { stage: 'planning'|'searching'|'generating'; status: 'in_progress'|'completed'; subQueries?: string[]; sourcesCount?: number }; subQueries?: string[]; researchSources?: Array<{ title: string; url: string; score?: number }>; ontologyEntityId?: string }): Promise<{ id: string }> {
@@ -1331,8 +1379,10 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }
 
   // --- Artifact Templates ---
-  async listArtifactTemplates(category?: string): Promise<any[]> {
-    const params = category ? { category } : {};
+  async listArtifactTemplates(category?: string, options?: { graphSourceKind?: string }): Promise<any[]> {
+    const params: Record<string, string> = {};
+    if (category) params.category = category;
+    if (options?.graphSourceKind) params.graphSourceKind = options.graphSourceKind;
     const res = await this.client.get(`/api/v1/artifact-templates`, { params });
     return res.data as any[];
   }
@@ -1385,6 +1435,23 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     sectionCustomizations?: Record<string, any>;
   }): Promise<{ id: string }> {
     const res = await this.client.post(`/api/v1/artifact-templates/from-artifact`, request);
+    return res.data;
+  }
+
+  async createArtifactFromTemplate(projectId: string, request: {
+    templateId: string;
+    filename: string;
+    userRequest?: string;
+    preferredLanguage?: string;
+    contextSources?: any;
+    graphSources?: Array<{ kind: string; lensId?: string; reportType?: string; templateId?: string }>;
+    sourceInteractionId?: string;
+    autoGenerate?: boolean;
+    generationMode?: 'auto' | 'interactive';
+    maxOutputTokens?: number;
+    thinkingBudget?: number;
+  }): Promise<{ artifact: any; session?: any; generationError?: string | null }> {
+    const res = await this.client.post(`/api/v1/projects/${projectId}/artifacts/from-template`, request);
     return res.data;
   }
 
@@ -2075,6 +2142,50 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       return response.data;
     } catch (error: any) {
       console.error(`[API] preflightHorizonLensFromQuery error:`, error);
+      throw error;
+    }
+  }
+
+  // Horizon - Existing lens follow-up preflight (resolve intent with current lens context; no writes)
+  async preflightHorizonLensFollowUp(
+    lensId: string,
+    input: {
+      query: string;
+    },
+    options?: { correlationId?: string; sessionId?: string }
+  ): Promise<{
+    intent: {
+      title?: string;
+      focus?: string;
+      spherePaths?: string[];
+      keywords?: string[];
+      domains?: Array<{
+        canonicalPath: string;
+        contractType?: string;
+        title?: string;
+        description?: string;
+        supplyChainExecutionPlan?: {
+          graphBuildMode?: string;
+          queries?: Array<{
+            direction?: string;
+          }>;
+        };
+        firstOrderEntities?: string[];
+        confidence?: number;
+        reason?: string;
+      }>;
+      anchors?: Array<{ canonicalPath: string; type?: string; name?: string; confidence?: number; reason?: string }>;
+      decompositionHints?: string[];
+    };
+  }> {
+    try {
+      const headers: Record<string, string> = {};
+      if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
+      if (options?.sessionId) headers['X-Session-Id'] = options.sessionId;
+      const response = await this.client.post(`/api/horizon/lenses/${lensId}/follow-up-preflight`, input, { headers });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] preflightHorizonLensFollowUp error:`, error);
       throw error;
     }
   }
@@ -4086,6 +4197,28 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       return response.data;
     } catch (error: any) {
       console.error(`[API] deleteHorizonLensArtifacts error:`, error);
+      throw error;
+    }
+  }
+
+  async postHorizonLensChat(lensId: string, message: string): Promise<HorizonLensChatResponse> {
+    try {
+      const response = await this.client.post<HorizonLensChatResponse>(`/api/horizon/lenses/${lensId}/chat`, {
+        message: message.trim(),
+      });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] postHorizonLensChat error:`, error);
+      throw error;
+    }
+  }
+
+  async createHorizonLensReportArtifact(lensId: string): Promise<HorizonLensReportArtifactResponse> {
+    try {
+      const response = await this.client.post(`/api/horizon/lenses/${lensId}/report-artifact`);
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] createHorizonLensReportArtifact error:`, error);
       throw error;
     }
   }

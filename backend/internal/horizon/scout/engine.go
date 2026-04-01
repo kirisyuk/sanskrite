@@ -17,6 +17,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/lensresearch"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/metriccore"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
@@ -991,7 +992,8 @@ func filterDiscoveredRelationsByDomainModesWithDomainAnchorAndLog(sourceFragment
 	}
 	sourceIsDomain := strings.HasPrefix(sourcePath, "/domain/")
 	sourceIsMarket := strings.HasPrefix(sourcePath, "/market/")
-	sourceIsSupplyChainMode := taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain)
+	sourceIsSupplyChainMode := taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) ||
+		taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeServiceChain)
 	out := make([]agents.DiscoveredRelation, 0, len(in))
 	dropped := make([]string, 0, len(in))
 	for _, rel := range in {
@@ -1068,9 +1070,81 @@ func allowSupplyChainOverlayByPath(sourcePath, targetPath string, relationType m
 	relationType = models.DependencyType(strings.TrimSpace(taxonomy.NormalizeRelationType(string(relationType))))
 	sourceIsController := strings.HasPrefix(sourcePath, "/org/") || strings.HasPrefix(sourcePath, "/gov/")
 	targetIsOperational := strings.HasPrefix(targetPath, "/org/") || strings.HasPrefix(targetPath, "/fac/") || strings.HasPrefix(targetPath, "/deposit/")
+	targetIsManaged := targetIsOperational || strings.HasPrefix(targetPath, "/program/")
+	sourceOperatesViaChannel := sourceIsController ||
+		strings.HasPrefix(sourcePath, "/community/") ||
+		strings.HasPrefix(sourcePath, "/mechanism/")
+	targetOperatesViaChannel := strings.HasPrefix(targetPath, "/media/") ||
+		strings.HasPrefix(targetPath, "/mechanism/")
+	sourceIsInfluence := sourceIsController ||
+		strings.HasPrefix(sourcePath, "/person/") ||
+		strings.HasPrefix(sourcePath, "/loc/") ||
+		strings.HasPrefix(sourcePath, "/geo/") ||
+		strings.HasPrefix(sourcePath, "/region/") ||
+		strings.HasPrefix(sourcePath, "/zone/") ||
+		strings.HasPrefix(sourcePath, "/fac/") ||
+		strings.HasPrefix(sourcePath, "/product/") ||
+		strings.HasPrefix(sourcePath, "/program/") ||
+		strings.HasPrefix(sourcePath, "/community/")
+	targetIsInfluence := targetIsOperational ||
+		strings.HasPrefix(targetPath, "/loc/") ||
+		strings.HasPrefix(targetPath, "/geo/") ||
+		strings.HasPrefix(targetPath, "/region/") ||
+		strings.HasPrefix(targetPath, "/product/") ||
+		strings.HasPrefix(targetPath, "/program/") ||
+		strings.HasPrefix(targetPath, "/market/") ||
+		strings.HasPrefix(targetPath, "/sphere/") ||
+		strings.HasPrefix(targetPath, "/event/")
+	sourceIsDecisionGatekeeper := sourceIsController ||
+		strings.HasPrefix(sourcePath, "/community/") ||
+		strings.HasPrefix(sourcePath, "/person/") ||
+		strings.HasPrefix(sourcePath, "/program/")
+	sourceUsesMechanism := strings.HasPrefix(sourcePath, "/decision/") ||
+		sourceIsController ||
+		strings.HasPrefix(sourcePath, "/community/") ||
+		strings.HasPrefix(sourcePath, "/program/")
+	targetIsMechanism := strings.HasPrefix(targetPath, "/mechanism/")
+	sourceIsConditionImposer := strings.HasPrefix(sourcePath, "/mechanism/") ||
+		sourceUsesMechanism
+	targetIsPolicyEntity := targetIsOperational ||
+		strings.HasPrefix(targetPath, "/product/") ||
+		strings.HasPrefix(targetPath, "/market/") ||
+		strings.HasPrefix(targetPath, "/program/") ||
+		strings.HasPrefix(targetPath, "/community/")
+	sourceIsImpact := sourceIsController ||
+		strings.HasPrefix(sourcePath, "/program/") ||
+		strings.HasPrefix(sourcePath, "/decision/") ||
+		strings.HasPrefix(sourcePath, "/mechanism/") ||
+		strings.HasPrefix(sourcePath, "/zone/") ||
+		strings.HasPrefix(sourcePath, "/community/") ||
+		strings.HasPrefix(sourcePath, "/media/") ||
+		strings.HasPrefix(sourcePath, "/market/")
+	targetIsAffected := targetIsOperational ||
+		strings.HasPrefix(targetPath, "/market/") ||
+		strings.HasPrefix(targetPath, "/program/") ||
+		strings.HasPrefix(targetPath, "/product/") ||
+		strings.HasPrefix(targetPath, "/loc/") ||
+		strings.HasPrefix(targetPath, "/geo/") ||
+		strings.HasPrefix(targetPath, "/region/")
 	switch relationType {
 	case models.DependencyTypeOwns, models.DependencyTypeControls:
 		return sourceIsController && targetIsOperational
+	case models.DependencyTypeManages:
+		return sourceIsController && targetIsManaged
+	case models.DependencyTypeOperatesVia:
+		return sourceOperatesViaChannel && targetOperatesViaChannel
+	case models.DependencyTypeInfluences:
+		return sourceIsInfluence && targetIsInfluence
+	case models.DependencyTypeGatekeepsDecision:
+		return sourceIsDecisionGatekeeper && strings.HasPrefix(targetPath, "/decision/")
+	case models.DependencyTypeUsesMechanism:
+		return sourceUsesMechanism && targetIsMechanism
+	case models.DependencyTypeRegulates:
+		return sourceIsController && targetIsPolicyEntity
+	case models.DependencyTypeControlsAccess:
+		return sourceUsesMechanism && targetIsPolicyEntity
+	case models.DependencyTypeImposesCondition:
+		return sourceIsConditionImposer && targetIsPolicyEntity
 	case models.DependencyTypeAdministers:
 		targetIsAdministered := targetIsOperational || strings.HasPrefix(targetPath, "/program/") || strings.HasPrefix(targetPath, "/gov/")
 		return sourceIsController && targetIsAdministered
@@ -1078,6 +1152,8 @@ func allowSupplyChainOverlayByPath(sourcePath, targetPath string, relationType m
 		sourceIsSubsidiary := strings.HasPrefix(sourcePath, "/org/") || strings.HasPrefix(sourcePath, "/gov/")
 		targetIsParent := strings.HasPrefix(targetPath, "/org/") || strings.HasPrefix(targetPath, "/gov/")
 		return sourceIsSubsidiary && targetIsParent
+	case models.DependencyTypeAffects:
+		return sourceIsImpact && targetIsAffected
 	default:
 		return false
 	}
@@ -2168,7 +2244,8 @@ type ScoutEngine struct {
 	domainAnswersRepo *repo.DomainAnswerSnapshotsRepository // Optional: persisted DomainAnswerSnapshot artifacts
 
 	// Supply chain path materialization
-	supplyChainPathBuilder *pathbuilder.SupplyChainPathBuilder // Optional: MaterializePath from parsed chains
+	supplyChainPathBuilder  *pathbuilder.SupplyChainPathBuilder // Optional: MaterializePath from parsed chains
+	serviceChainPathBuilder *pathbuilder.SupplyChainPathBuilder // Optional: MaterializePath from parsed service chains
 
 	// Domain relations graph materialization (governance, regulatory, ecosystem)
 	domainArtifactBuilder *pathbuilder.DomainArtifactBuilder
@@ -2185,7 +2262,17 @@ type ScoutEngine struct {
 	// Transactional outbox dispatcher state (per job).
 	scoutOutboxMu       sync.Mutex
 	scoutOutboxInFlight map[string]struct{}
+
+	// Internal answer-plane warmup triggered only after graph readiness.
+	// The warmer compiles a prepared Vertex/GCS substrate from already-built graph knowledge.
+	internalKnowledgeWarmup internalKnowledgeWarmupPort
 }
+
+type internalKnowledgeWarmupPort interface {
+	EnqueueLensWarmup(ctx context.Context, tenantID, projectID, lensID, reason string)
+}
+
+const lensResearchMaterializedListLimit = 2048
 
 // bestEffortDeferredScopeAdd adds a scope entry using the managed scope policy.
 // Domains are always allowed in scope, artifacts use their own budget, and
@@ -2247,6 +2334,15 @@ func (e *ScoutEngine) bestEffortDeferredScopeAddForJob(ctx context.Context, job 
 	e.bestEffortDeferredScopeAdd(ctx, lensID, canonicalPath)
 }
 
+func (e *ScoutEngine) bestEffortMergeLensResearchObjects(ctx context.Context, lensID string, refs map[string]models.LensResearchObjectRef) {
+	if e == nil || e.lensesRepo == nil || lensID == "" || len(refs) == 0 {
+		return
+	}
+	if err := e.lensesRepo.MergeResearchObjects(ctx, lensID, refs); err != nil {
+		fmt.Printf("[ScoutEngine] merge lens research objects failed lensId=%s err=%v\n", lensID, err)
+	}
+}
+
 // isScopeEligibleEntityType returns true for entity types that should be auto-added
 // to the lens scope when discovered by the pipeline. Excludes small/auxiliary types
 // (SPHERE, TRACK, EVENT, SUPPLY_LINK) to keep the scope meaningful.
@@ -2273,7 +2369,7 @@ func isScopeEligibleEntityType(ft models.FragmentType) bool {
 // based on the primary domain mode.
 func (e *ScoutEngine) runDomainHolisticResearch(ctx context.Context, input agents.HolisticResearchInput) (*agents.ResearchStrategyOutput, error) {
 	switch input.DomainMode {
-	case taxonomy.DomainModeSupplyChain:
+	case taxonomy.DomainModeSupplyChain, taxonomy.DomainModeServiceChain:
 		return e.researchAgent.EnrichHolisticSupplyChain(ctx, input)
 	case taxonomy.DomainModeGovernance:
 		return e.researchAgent.EnrichHolisticGovernance(ctx, input)
@@ -2473,6 +2569,11 @@ func (e *ScoutEngine) bestEffortRewriteLensScope(ctx context.Context, tenantID, 
 					}
 					lens.ResolvedQueries[queryAddr] = out
 				}
+			}
+		}
+		if lens.ResearchObjects != nil {
+			if lensresearch.ReplaceResearchObjectCanonicalPath(lens.ResearchObjects, fromPath, toPath) {
+				changed = true
 			}
 		}
 
@@ -2946,6 +3047,11 @@ func (e *ScoutEngine) WithSupplyChainPathBuilder(b *pathbuilder.SupplyChainPathB
 	return e
 }
 
+func (e *ScoutEngine) WithServiceChainPathBuilder(b *pathbuilder.SupplyChainPathBuilder) *ScoutEngine {
+	e.serviceChainPathBuilder = b
+	return e
+}
+
 func (e *ScoutEngine) WithWorkingProductScopesRepository(r *repo.WorkingProductScopesRepository) *ScoutEngine {
 	e.workingProductScopesRepo = r
 	return e
@@ -2979,6 +3085,15 @@ func (e *ScoutEngine) WithDerivedRiskProfilesRepository(r *repo.DerivedRiskProfi
 // WithDomainArtifactBuilder sets the builder for domain relation graph materialization.
 func (e *ScoutEngine) WithDomainArtifactBuilder(b *pathbuilder.DomainArtifactBuilder) *ScoutEngine {
 	e.domainArtifactBuilder = b
+	return e
+}
+
+// WithInternalKnowledgeWarmup wires the prepared answer-substrate warmer.
+// It is intentionally separate from raw fragment/edge/artifact Vertex sync:
+// raw sync keeps the base graph searchable, while warmup compiles answer-oriented capsules
+// only after the lens graph is actually ready for serving.
+func (e *ScoutEngine) WithInternalKnowledgeWarmup(warmer internalKnowledgeWarmupPort) *ScoutEngine {
+	e.internalKnowledgeWarmup = warmer
 	return e
 }
 
@@ -3029,6 +3144,7 @@ func (e *ScoutEngine) persistLensArtifactsFromJobState(ctx context.Context, job 
 	}
 
 	fragsByID, _ := e.fragmentsRepo.GetMany(ctx, fragIDs)
+	fragmentArtifacts := make([]*models.LensArtifact, 0, len(fragIDs))
 	for _, fid := range fragIDs {
 		f := fragsByID[strings.TrimSpace(fid)]
 		if f == nil || strings.TrimSpace(f.ID) == "" || strings.TrimSpace(f.CanonicalPath) == "" {
@@ -3047,11 +3163,13 @@ func (e *ScoutEngine) persistLensArtifactsFromJobState(ctx context.Context, job 
 			strings.TrimSpace(job.ID),
 			displayLabel,
 		)
+		fragmentArtifacts = append(fragmentArtifacts, artifact)
 		if _, err := e.lensArtifactsRepo.UpsertFragment(ctx, artifact); err != nil {
 			fmt.Printf("[ScoutEngine] persistLensArtifacts: UpsertFragment failed lensId=%s path=%s err=%v\n",
 				lensID, strings.TrimSpace(f.CanonicalPath), err)
 		}
 	}
+	e.bestEffortMergeLensResearchObjects(ctx, lensID, lensresearch.BuildFromLensArtifacts(fragmentArtifacts))
 
 	// 2) Edges
 	edgeIDs := make([]string, 0, 128)
@@ -3116,6 +3234,12 @@ func (e *ScoutEngine) persistLensArtifactsFromJobState(ctx context.Context, job 
 		if _, err := e.lensArtifactsRepo.UpsertEdge(ctx, artifact); err != nil {
 			fmt.Printf("[ScoutEngine] persistLensArtifacts: UpsertEdge failed lensId=%s edgeId=%s err=%v\n",
 				lensID, strings.TrimSpace(ed.ID), err)
+		}
+	}
+
+	if e.planner != nil && e.planner.materializedRepo != nil {
+		if artifacts, err := e.planner.materializedRepo.ListByLens(ctx, lensID, lensResearchMaterializedListLimit); err == nil {
+			e.bestEffortMergeLensResearchObjects(ctx, lensID, lensresearch.BuildFromMaterializedArtifacts(artifacts))
 		}
 	}
 }
@@ -3248,6 +3372,18 @@ func (e *ScoutEngine) FinalizePipelineRunForceFailed(ctx context.Context, job *m
 	})
 }
 
+// ReconcileLensAssemblyCompletion re-runs the assembly completion barrier for a lens.
+// This is used by admin/recovery paths when a root job was repaired out of band and the
+// normal on-complete hook did not get a chance to advance the lens to assembly.ready.
+func (e *ScoutEngine) ReconcileLensAssemblyCompletion(ctx context.Context, tenantID, projectID, lensID string) {
+	if e == nil {
+		return
+	}
+	reconcileCtx, cancel := e.durableRuntimeContext(ctx, 2*time.Minute)
+	defer cancel()
+	e.checkAndPublishAssemblyCompletion(reconcileCtx, tenantID, projectID, lensID)
+}
+
 func (e *ScoutEngine) finalizePipelinePassIfNeeded(
 	ctx context.Context,
 	job *models.ScoutingJob,
@@ -3330,12 +3466,34 @@ func (e *ScoutEngine) runPipelinePass(
 	return nil
 }
 
+func (e *ScoutEngine) durableRuntimeContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	base := context.Background()
+	if rc, ok := rtctx.Get(ctx); ok {
+		if strings.TrimSpace(rc.TenantID) != "" || strings.TrimSpace(rc.ProjectID) != "" || strings.TrimSpace(rc.LensID) != "" || strings.TrimSpace(rc.CorrelationID) != "" || strings.TrimSpace(rc.SessionID) != "" {
+			base = rtctx.With(base, rc)
+		}
+	}
+	if timeout <= 0 {
+		return base, func() {}
+	}
+	return context.WithTimeout(base, timeout)
+}
+
 func (e *ScoutEngine) transition(ctx context.Context, job *models.ScoutingJob, newState models.ScoutingJobState, progress float64, hint string) error {
 	if e == nil || job == nil {
 		return nil
 	}
+	persistCtx := ctx
+	cancel := func() {}
+	if ctx == nil || ctx.Err() != nil || newState == models.ScoutingJobStateVerified || newState == models.ScoutingJobStateRejected || newState == models.ScoutingJobStateFailed {
+		// Terminal transitions must survive request/execution deadline expiry.
+		// Otherwise the job can finish materialization work, fail to persist the terminal state,
+		// and keep the lens forever away from assembly.ready / internal knowledge warmup.
+		persistCtx, cancel = e.durableRuntimeContext(ctx, 2*time.Minute)
+	}
+	defer cancel()
 	if e.workflow != nil {
-		if err := e.workflow.TransitionState(ctx, job.ID, newState); err != nil {
+		if err := e.workflow.TransitionState(persistCtx, job.ID, newState); err != nil {
 			return err
 		}
 	}
@@ -3377,7 +3535,7 @@ func (e *ScoutEngine) transition(ctx context.Context, job *models.ScoutingJob, n
 	if strings.TrimSpace(job.TargetCanonicalPath) != "" {
 		evt["targetCanonicalPath"] = strings.TrimSpace(job.TargetCanonicalPath)
 	}
-	e.publish(ctx, realtime.EventType("horizon.scout.job.state"), evt)
+	e.publish(persistCtx, realtime.EventType("horizon.scout.job.state"), evt)
 	return nil
 }
 
@@ -4434,7 +4592,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 		if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/org/na/") || isLegacyOrgPath(strings.TrimSpace(job.TargetCanonicalPath)) {
 			validationResult.MissingInfo = append(validationResult.MissingInfo,
-				fmt.Sprintf("What is the country of origin / primary jurisdiction for %s? Prefer /org/{iso2}/{slug} canonical path. If unknown, keep /org/na/...", job.TargetCanonicalPath),
+				fmt.Sprintf("What is the country of origin / primary jurisdiction for %s? Prefer /org/{iso2}/{slug} canonical path. Use /org/na/... ONLY as an exceptional last-resort when neither context nor the organization name provides a defensible ISO2/jurisdiction clue.", job.TargetCanonicalPath),
 			)
 		}
 		// Add specialty-specific research prompts when internal sources are empty (Critic is not run in this branch).
@@ -6693,6 +6851,13 @@ func (e *ScoutEngine) checkAndPublishAssemblyCompletion(ctx context.Context, ten
 		})
 
 		e.runIntraGraphInference(ctx, tenantID, projectID, lensID)
+
+		// Warm the internal answer substrate only after graph readiness.
+		// Doing this from raw fragment/edge/artifact writes would thrash Vertex/GCS during graph churn
+		// and would compile unstable capsules before supply-chain assembly/refine/intra-graph complete.
+		if e.internalKnowledgeWarmup != nil {
+			e.internalKnowledgeWarmup.EnqueueLensWarmup(ctx, tenantID, projectID, lensID, "assembly_ready")
+		}
 
 		e.publish(ctx, realtime.EventType("horizon.assembly.ready"), map[string]interface{}{
 			"tenantId":        tenantID,

@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	project := flag.String("project", "etigram", "GCP project id")
+	project := flag.String("project", "nv-horizon", "GCP project id")
 	pathsArg := flag.String("paths", "", "comma-separated canonical paths")
 	clear := flag.Bool("clear", false, "delete matching metrics instead of expiring them")
 	sourceKind := flag.String("source-kind", "grounded_search", "only touch metrics with this source kind")

@@ -27,7 +27,7 @@ type worldsEnvelope struct {
 }
 
 func main() {
-	apiBase := flag.String("api-base", firstNonEmpty(os.Getenv("HORIZON_API_BASE_URL"), "https://etigram-api-onq73n4gpa-uc.a.run.app"), "Horizon API base URL")
+	apiBase := flag.String("api-base", firstNonEmpty(os.Getenv("HORIZON_API_BASE_URL"), "https://nv-horizon-api-onq73n4gpa-uc.a.run.app"), "Horizon API base URL")
 	functionsKey := flag.String("functions-key", firstNonEmpty(os.Getenv("HORIZON_FUNCTIONS_KEY"), "codex"), "x-functions-key for internal auth")
 	lensID := flag.String("lens", "", "lens id")
 	question := flag.String("question", "", "simulation question")

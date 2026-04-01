@@ -96,11 +96,11 @@ Artifact bucket:
 
 Queue:
 
-- `etigram-agentmesh`
+- `nv-horizon-agentmesh`
 
 Cloud Run service:
 
-- `etigram-agentmesh`
+- `nv-horizon-agentmesh`
 
 ## Built-In Mesh Agents
 

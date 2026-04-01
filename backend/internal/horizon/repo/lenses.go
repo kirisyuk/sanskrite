@@ -10,6 +10,7 @@ import (
 
 	"cloud.google.com/go/firestore"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/lensresearch"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
@@ -469,6 +470,42 @@ func (r *LensesRepository) RemoveScopeArtifact(ctx context.Context, lensID, artK
 		"updatedAt":      time.Now().UTC(),
 	}, firestore.MergeAll)
 	return err
+}
+
+// MergeResearchObjects merges recovered research object refs into lens.researchObjects without duplicates.
+func (r *LensesRepository) MergeResearchObjects(ctx context.Context, lensID string, incoming map[string]models.LensResearchObjectRef) error {
+	if lensID == "" {
+		return ErrInvalidDocument
+	}
+	if len(incoming) == 0 {
+		return nil
+	}
+	if r == nil || r.db == nil {
+		return ErrInvalidDocument
+	}
+	docRef := r.col.Doc(lensID)
+	return r.db.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		snap, err := tx.Get(docRef)
+		if err != nil {
+			return err
+		}
+		if !snap.Exists() {
+			return ErrLensNotFound
+		}
+
+		var lens models.Lens
+		if err := snap.DataTo(&lens); err != nil {
+			return err
+		}
+		merged := lensresearch.MergeResearchObjects(lens.ResearchObjects, incoming)
+		if len(merged) == 0 {
+			return nil
+		}
+		return tx.Set(docRef, map[string]interface{}{
+			"researchObjects": merged,
+			"updatedAt":       time.Now().UTC(),
+		}, firestore.MergeAll)
+	})
 }
 
 // sanitizeFirestoreKey replaces dots in keys (Firestore uses dots as path separators in field paths).

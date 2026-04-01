@@ -311,7 +311,7 @@ def download_gcs_model(gcs_uri: str) -> str:
     return local_path
 
 
-app = FastAPI(title="Etigram Event Gate", version="1.0.0")
+app = FastAPI(title="Horizon Event Gate", version="1.0.0")
 model_backend = os.getenv("MODEL_BACKEND", "rules").strip().lower()
 model_path = os.getenv("MODEL_PATH", "").strip()
 model_gcs_uri = os.getenv("MODEL_GCS_URI", "").strip()

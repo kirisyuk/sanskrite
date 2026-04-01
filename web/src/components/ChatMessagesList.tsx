@@ -450,7 +450,7 @@ export const ChatMessagesList: React.FC<ChatMessagesListProps> = ({
                                     background:
                                       'linear-gradient(90deg, transparent, var(--white-06), transparent)',
                                     animation:
-                                      'etg-shimmer 2s infinite',
+                                      'nv-shimmer 2s infinite',
                                   }}
                                 />
                               </div>

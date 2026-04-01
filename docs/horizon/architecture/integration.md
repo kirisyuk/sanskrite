@@ -242,7 +242,7 @@ if entity := findEntityByCanonicalPath(path); entity != nil {
 - `horizon.lens.updated` — обновление метрик Lens
 
 **Routing**:
-- Все `horizon.*` события маршрутизируются в отдельный Pub/Sub топик `etigram.horizon.events`.
+- Все `horizon.*` события маршрутизируются в отдельный Pub/Sub топик `nv_horizon.horizon.events`.
 - Для WS delivery требуется `projectId` в payload (WS клиенты подписываются по projectId).
 - `tenantId` используется как security namespace (коннекты bucket'ятся по tenant).
 

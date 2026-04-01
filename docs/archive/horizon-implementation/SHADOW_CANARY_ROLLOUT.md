@@ -7,9 +7,9 @@
 
 ## 1) Пререквизиты
 
-- `gcloud` авторизован на нужный проект (`etigram`) и регион (`us-central1`).
+- `gcloud` авторизован на нужный проект (`nv-horizon`) и регион (`us-central1`).
 - Установлен `jq`.
-- Candidate revision уже задеплоен и доступен в Cloud Run (`etigram-api-xxxxx-yyy`).
+- Candidate revision уже задеплоен и доступен в Cloud Run (`nv-horizon-api-xxxxx-yyy`).
 - Для candidate включены runtime flags нового контура (включая shadow compare режим, если требуется конкретным запуском).
 
 ## 2) Shadow replay gate-check (без переключения трафика)
@@ -18,9 +18,9 @@
 
 ```bash
 scripts/horizon_shadow_replay.sh \
-  --project etigram \
+  --project nv-horizon \
   --region us-central1 \
-  --service etigram-api \
+  --service nv-horizon-api \
   --freshness 6h \
   --output-json /tmp/horizon-shadow-report.json
 ```
@@ -29,9 +29,9 @@ scripts/horizon_shadow_replay.sh \
 
 ```bash
 scripts/horizon_shadow_replay.sh \
-  --project etigram \
+  --project nv-horizon \
   --region us-central1 \
-  --service etigram-api \
+  --service nv-horizon-api \
   --freshness 6h \
   --baseline-json /tmp/horizon-baseline.json \
   --enforce
@@ -72,11 +72,11 @@ scripts/horizon_shadow_replay.sh \
 
 ```bash
 scripts/horizon_canary_rollout.sh \
-  --project etigram \
+  --project nv-horizon \
   --region us-central1 \
-  --service etigram-api \
-  --candidate-revision etigram-api-01234-abc \
-  --stable-revision etigram-api-01233-def \
+  --service nv-horizon-api \
+  --candidate-revision nv-horizon-api-01234-abc \
+  --stable-revision nv-horizon-api-01233-def \
   --freshness 30m \
   --hold-minutes 10 \
   --baseline-json /tmp/horizon-baseline.json \
@@ -94,10 +94,10 @@ Dry-run (без изменения трафика):
 
 ```bash
 scripts/horizon_canary_rollout.sh \
-  --project etigram \
+  --project nv-horizon \
   --region us-central1 \
-  --service etigram-api \
-  --candidate-revision etigram-api-01234-abc \
+  --service nv-horizon-api \
+  --candidate-revision nv-horizon-api-01234-abc \
   --dry-run
 ```
 

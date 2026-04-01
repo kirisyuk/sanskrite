@@ -146,7 +146,7 @@ func (c *Client) CreateSubscription(ctx context.Context, planID string, returnUR
 		PlanID:    planID,
 		StartTime: &startTimeJSON,
 		ApplicationContext: &paypal.ApplicationContext{
-			BrandName:          "ETIGRAM",
+			BrandName:          "Horizon",
 			Locale:             getPayPalLocale(), // Default to en-US, can be configured
 			ShippingPreference: paypal.ShippingPreferenceNoShipping,
 			UserAction:         paypal.UserActionSubscribeNow,

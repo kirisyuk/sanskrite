@@ -22,7 +22,7 @@ Adapters use environment variables or Secret Manager. When a key is missing, the
 echo -n "your-eia-key" | gcloud secrets create EIA_API_KEY --data-file=-
 ```
 
-Configure Cloud Run `etigram-api` to access these secrets via environment or Secret Manager integration.
+Configure Cloud Run `nv-horizon-api` to access these secrets via environment or Secret Manager integration.
 
 ## Firestore Collections
 

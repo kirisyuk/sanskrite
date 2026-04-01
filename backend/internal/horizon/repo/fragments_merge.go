@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/lensresearch"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
@@ -470,6 +471,11 @@ func (r *FragmentsMergeRepository) rewriteLensScopePathsForPaths(ctx context.Con
 						lens.ResolvedQueries[queryAddr] = normalizeAndSortStrings(resolvedPaths)
 						changed = true
 					}
+				}
+			}
+			if lens.ResearchObjects != nil {
+				if lensresearch.ReplaceResearchObjectCanonicalPath(lens.ResearchObjects, fromPath, target) {
+					changed = true
 				}
 			}
 		}

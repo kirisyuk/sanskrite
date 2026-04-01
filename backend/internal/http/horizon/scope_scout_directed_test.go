@@ -68,14 +68,26 @@ func TestShouldRouteDirectedExplorationToOneHop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !shouldRouteDirectedExplorationToOneHop("/org/acme", cfg) {
-		t.Fatal("expected org downstream exploration to reroute to one-hop")
+	if shouldRouteDirectedExplorationToOneHop("/org/acme", cfg) {
+		t.Fatal("full downstream exploration must stay on recursive runtime")
 	}
-	if !shouldRouteDirectedExplorationToOneHop("/fac/acme-plant", cfg) {
-		t.Fatal("expected fac downstream exploration to reroute to one-hop")
+	if shouldRouteDirectedExplorationToOneHop("/fac/acme-plant", cfg) {
+		t.Fatal("facility downstream exploration without hotPathOnly must stay recursive")
 	}
 	if shouldRouteDirectedExplorationToOneHop("/product/alumina", cfg) {
 		t.Fatal("product anchor must not reroute to one-hop")
+	}
+	hotPathOnly, err := normalizeDirectedExploration(&scopeScoutDirectedExplorationRequest{
+		DomainMode:   "supply_chain",
+		Direction:    "downstream",
+		RenderTarget: "graph",
+		HotPathOnly:  true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected hot-path-only error: %v", err)
+	}
+	if !shouldRouteDirectedExplorationToOneHop("/org/acme", hotPathOnly) {
+		t.Fatal("hot-path-only downstream exploration should reroute to one-hop")
 	}
 	upstream, err := normalizeDirectedExploration(&scopeScoutDirectedExplorationRequest{
 		DomainMode:   "supply_chain",

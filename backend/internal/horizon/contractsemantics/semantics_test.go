@@ -72,6 +72,38 @@ func TestSupplyChainContractDoesNotLeakOverlayOnlyEdges(t *testing.T) {
 	}
 }
 
+func TestServiceChainContractAllowsOperationalDependencyAndAccessEdges(t *testing.T) {
+	profile := ProfileForDomainMode(taxonomy.DomainModeServiceChain)
+	for _, required := range []models.DependencyType{
+		models.DependencyTypeDependsOn,
+		models.DependencyTypeControlsAccess,
+		models.DependencyTypeOperatesVia,
+		models.DependencyTypeSuppliesTo,
+	} {
+		if !ModeAllowsEdge(taxonomy.DomainModeServiceChain, required) {
+			t.Fatalf("service_chain must allow %s", required)
+		}
+	}
+	for _, forbidden := range []models.DependencyType{
+		models.DependencyTypeRegulates,
+		models.DependencyTypeInfluences,
+		models.DependencyTypePartnersWith,
+	} {
+		if ModeAllowsEdge(taxonomy.DomainModeServiceChain, forbidden) {
+			t.Fatalf("service_chain must not allow %s", forbidden)
+		}
+	}
+	if len(profile.PathCarriedEdges) == 0 {
+		t.Fatal("expected path-carried edges for service_chain")
+	}
+	if len(profile.OverlayEdges) == 0 {
+		t.Fatal("expected overlay edges for service_chain")
+	}
+	if len(profile.InterpretiveEdges) == 0 {
+		t.Fatal("expected interpretive edges for service_chain")
+	}
+}
+
 func TestGovernanceAndPolicyRemainOverlayContracts(t *testing.T) {
 	for _, mode := range []string{taxonomy.DomainModeGovernance, taxonomy.DomainModeAssurance, taxonomy.DomainModePolicyImpact, taxonomy.DomainModeStrategic} {
 		profile := ProfileForDomainMode(mode)

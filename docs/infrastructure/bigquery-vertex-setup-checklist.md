@@ -15,7 +15,7 @@
    - ✅ `gemini_api_key_test` - существует в Secret Manager
 
 3. **BigQuery:**
-   - ✅ Dataset `etigram_documents` существует
+   - ✅ Dataset `nv_horizon_documents` существует
    - ✅ Таблица `documents_metadata` существует
    - ✅ Таблица `core_docs_metadata` существует ✅ (создано)
    - ✅ View `documents_full` существует
@@ -27,7 +27,7 @@
    - ✅ `gcs-connection` существует (для Object Tables) ✅ (создано)
 
 5. **GCS Buckets:**
-   - ✅ `etigram-rag-documents` существует
+   - ✅ `nv-horizon-rag-documents` существует
    - ✅ `sanskrite-core-docs` существует
 
 6. **Service Account права:**
@@ -44,7 +44,7 @@
    ```bash
    # Для автоматического экспорта RAG documents из Firestore в BigQuery
    firebase ext:install firebase/firestore-bigquery-export \
-     --project=etigram \
+     --project=nv-horizon \
      --params=scripts/firestore-bigquery-config.json
    
    # Для CoreDocs (нужно создать отдельный конфиг)
@@ -65,13 +65,13 @@
 ```bash
 # Обязательные
 GCP_PROJECT_ID=sanskrite
-GOOGLE_CLOUD_PROJECT=etigram
+GOOGLE_CLOUD_PROJECT=nv-horizon
 GEMINI_API_KEY=<из Secret Manager>
 
 # Опциональные (есть значения по умолчанию)
-BIGQUERY_DATASET_ID=etigram_documents  # по умолчанию
+BIGQUERY_DATASET_ID=nv_horizon_documents  # по умолчанию
 VERTEX_LOCATION=us-central1              # по умолчанию
-RAG_DOCUMENTS_BUCKET=etigram-rag-documents
+RAG_DOCUMENTS_BUCKET=nv-horizon-rag-documents
 CORE_DOCS_BUCKET=sanskrite-core-docs
 ```
 
@@ -80,14 +80,14 @@ CORE_DOCS_BUCKET=sanskrite-core-docs
 1. **Проверить доступ к BigQuery:**
    ```bash
    bq query --use_legacy_sql=false \
-     "SELECT COUNT(*) as count FROM \`etigram.etigram_documents.documents_metadata\`"
+     "SELECT COUNT(*) as count FROM \`nv-horizon.nv_horizon_documents.documents_metadata\`"
    ```
 
 2. **Проверить доступ к Vertex AI:**
    ```bash
    # Проверить через API
    curl -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-     "https://us-central1-aiplatform.googleapis.com/v1/projects/etigram/locations/us-central1/models"
+     "https://us-central1-aiplatform.googleapis.com/v1/projects/nv-horizon/locations/us-central1/models"
    ```
 
 3. **Проверить доступ к секретам:**

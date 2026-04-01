@@ -88,6 +88,23 @@ func (e *SupplyChainQueryEngine) TraceByProduct(
 	productRef string,
 	opts SupplyChainQueryOptions,
 ) (*SupplyChainTraceResult, error) {
+	return e.traceByProduct(ctx, productRef, opts, true)
+}
+
+func (e *SupplyChainQueryEngine) TraceByProductFast(
+	ctx context.Context,
+	productRef string,
+	opts SupplyChainQueryOptions,
+) (*SupplyChainTraceResult, error) {
+	return e.traceByProduct(ctx, productRef, opts, false)
+}
+
+func (e *SupplyChainQueryEngine) traceByProduct(
+	ctx context.Context,
+	productRef string,
+	opts SupplyChainQueryOptions,
+	annotate bool,
+) (*SupplyChainTraceResult, error) {
 	productRef = canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(productRef))
 	if productRef == "" {
 		return nil, fmt.Errorf("productRef is required")
@@ -101,7 +118,7 @@ func (e *SupplyChainQueryEngine) TraceByProduct(
 	if err != nil {
 		return nil, err
 	}
-	return e.traceWithSnapshot(ctx, snapshot, productRef, closure, opts)
+	return e.traceWithSnapshot(ctx, snapshot, productRef, closure, opts, annotate)
 }
 
 func (e *SupplyChainQueryEngine) TraceBetweenActors(
@@ -111,9 +128,30 @@ func (e *SupplyChainQueryEngine) TraceBetweenActors(
 	productRef string,
 	opts SupplyChainQueryOptions,
 ) (*SupplyChainTraceResult, error) {
+	return e.traceBetweenActors(ctx, supplierRef, customerRef, productRef, opts, true)
+}
+
+func (e *SupplyChainQueryEngine) TraceBetweenActorsFast(
+	ctx context.Context,
+	supplierRef string,
+	customerRef string,
+	productRef string,
+	opts SupplyChainQueryOptions,
+) (*SupplyChainTraceResult, error) {
+	return e.traceBetweenActors(ctx, supplierRef, customerRef, productRef, opts, false)
+}
+
+func (e *SupplyChainQueryEngine) traceBetweenActors(
+	ctx context.Context,
+	supplierRef string,
+	customerRef string,
+	productRef string,
+	opts SupplyChainQueryOptions,
+	annotate bool,
+) (*SupplyChainTraceResult, error) {
 	opts.SupplierRef = supplierRef
 	opts.CustomerRef = customerRef
-	return e.TraceByProduct(ctx, productRef, opts)
+	return e.traceByProduct(ctx, productRef, opts, annotate)
 }
 
 type supplyChainQueryLink struct {
@@ -618,13 +656,16 @@ func (e *SupplyChainQueryEngine) traceWithSnapshot(
 	queryProductRef string,
 	closure map[string]struct{},
 	opts SupplyChainQueryOptions,
+	annotate bool,
 ) (*SupplyChainTraceResult, error) {
 	if snapshot == nil {
 		return &SupplyChainTraceResult{}, nil
 	}
 	candidates := e.filterCandidateLinks(snapshot, closure, opts)
 	paths := e.buildCandidatePaths(candidates, snapshot, opts)
-	e.annotatePaths(ctx, paths)
+	if annotate {
+		e.annotatePaths(ctx, paths)
+	}
 	families := buildSupplyChainQueryFamilies(paths)
 	return &SupplyChainTraceResult{
 		TenantID:         opts.TenantID,

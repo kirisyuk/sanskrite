@@ -19,7 +19,7 @@ import (
 func main(){
   sourceID:=flag.String("source","","source id")
   tenantID:=flag.String("tenant","global","tenant id")
-  projectID:=flag.String("project","etigram","project id")
+  projectID:=flag.String("project","nv-horizon","project id")
   flag.Parse()
   if *sourceID=="" { log.Fatal("--source is required") }
   ctx:=context.Background()

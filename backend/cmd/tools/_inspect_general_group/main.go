@@ -8,7 +8,7 @@ import (
   "github.com/igorkirisyuk/sanskrite/internal/gcp"
   h "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
-func main(){ctx:=context.Background(); project:="etigram"; if len(os.Args)>1 {project=os.Args[1]}
+func main(){ctx:=context.Background(); project:="nv-horizon"; if len(os.Args)>1 {project=os.Args[1]}
  fs,err:=gcp.NewFirestoreClient(ctx, project); if err!=nil {panic(err)}; defer fs.Close()
  docs,err:=fs.Client().Collection("horizon_fragments").Where("canonicalPath","==","/fac/na/general-production").Documents(ctx).GetAll(); if err!=nil {panic(err)}
  type row struct{ID,Label,Legal,Short,Home,ISO string}

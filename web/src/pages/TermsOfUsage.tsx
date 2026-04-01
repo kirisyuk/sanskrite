@@ -423,7 +423,7 @@ export default function TermsOfUsage() {
             Astana, Dostyk, 16<br />
             Talan Towers<br />
             Republic of Kazakhstan<br />
-            Email: hi@etigram.pro
+            Email: igor@nordicvision.org
           </p>
         </section>
 

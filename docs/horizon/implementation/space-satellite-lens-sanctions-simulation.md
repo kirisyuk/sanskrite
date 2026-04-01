@@ -3,7 +3,7 @@
 ## Lens
 
 - `lensId`: `UQPGaI89O3Mr2WQSMYXS`
-- tenant: `igor@etigram.pro`
+- tenant: `igor@nordicvision.org`
 - name: `China Aerospace Science and Technology Corporation`
 - mode: existing global lens, no manual graph seeding on first pass
 

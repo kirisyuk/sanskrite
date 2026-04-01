@@ -14,12 +14,12 @@ API_DIR="$ROOT_DIR/backend"
 
 TARGET_WEB=1
 TARGET_API=1
-TARGET_ETIGRAM_WS=0
+TARGET_NV_HORIZON_WS=0
 TARGET_VERIFIED_PROXY=0
 TARGET_CHECK_INFRA=0
-TARGET_SETUP_ETIGRAM_INFRA=0
-TARGET_ETIGRAM_WATCHDOG=0
-TARGET_ETIGRAM_WATCHDOG_ONLY=0
+TARGET_SETUP_NV_HORIZON_INFRA=0
+TARGET_NV_HORIZON_WATCHDOG=0
+TARGET_NV_HORIZON_WATCHDOG_ONLY=0
 TARGET_CLEANUP_REVISIONS=0
 TARGET_EVENT_GATE=0
 TARGET_ENTITY_EXTRACT=0
@@ -45,7 +45,7 @@ AGENTMESH_KMS_KEY="${AGENTMESH_KMS_KEY:-agentmesh-agent-card}"
 SECRET_ADMIN_JOB_TOKEN="admin_job_token"
 
 usage() {
-  echo "Usage: scripts/deploy [--web] [--api] [--py] [--event-gate] [--entity-extract] [--etigram-ws] [--verified-proxy] [--agentmesh] [--check-infra] [--etigram-watchdog] [--etigram-watchdog-only] [--cleanup-revisions]"
+  echo "Usage: scripts/deploy [--web] [--api] [--py] [--event-gate] [--entity-extract] [--nv-horizon-ws|--ws] [--verified-proxy] [--agentmesh] [--check-infra|--infra] [--nv-horizon-watchdog] [--nv-horizon-watchdog-only] [--cleanup-revisions]"
   echo "If none specified, deploy web+api. REGION env var supported (default: us-central1)."
   echo ""
   echo "Flags:"
@@ -54,12 +54,12 @@ usage() {
   echo "  --py            Deploy Telegram service only (skips infra checks)"
   echo "  --event-gate    Deploy event gate NLP service only (skips infra checks)"
   echo "  --entity-extract Deploy entity extraction NLP service only (skips infra checks)"
-  echo "  --etigram-ws    Deploy WS broker only (skips infra checks)"
+  echo "  --nv-horizon-ws / --ws  Deploy WS broker only (skips infra; sets up Pub/Sub for broker)"
   echo "  --verified-proxy Deploy verified-proxy only (skips infra checks)"
   echo "  --agentmesh     Deploy AgentMesh service and its dedicated infrastructure"
-  echo "  --check-infra   Run infrastructure checks only (no deployments)"
-  echo "  --etigram-watchdog Ensure Cloud Scheduler job for Etigram Watchdog (calls API cron endpoint)"
-  echo "  --etigram-watchdog-only Only ensure Etigram Watchdog infra/job/env (no API build/deploy)"
+  echo "  --check-infra / --infra  Provision APIs, SA, buckets, Pub/Sub, tasks, indexes (no Cloud Run build)"
+  echo "  --nv-horizon-watchdog Ensure Cloud Scheduler job for Horizon Watchdog (calls API cron endpoint)"
+  echo "  --nv-horizon-watchdog-only Only ensure Horizon Watchdog infra/job/env (no API build/deploy)"
   echo "  --api-criticalchain Ensure CriticalChain infra (Pub/Sub topic, Scheduler job for 6h pipeline)"
   echo "  --cleanup-revisions Clean up old Cloud Run revisions (keeps last 10 per service, manual operation)"
 }
@@ -72,14 +72,14 @@ while [[ $# -gt 0 ]]; do
     --py) TARGET_WEB=0; TARGET_API=0; TARGET_PY=1; TARGET_CHECK_INFRA=0 ;;
     --event-gate) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_EVENT_GATE=1; TARGET_CHECK_INFRA=0 ;;
     --entity-extract) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ENTITY_EXTRACT=1; TARGET_CHECK_INFRA=0 ;;
-    --etigram-ws) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ETIGRAM_WS=1; TARGET_CHECK_INFRA=0; TARGET_SETUP_ETIGRAM_INFRA=1 ;;
-    --verified-proxy) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ETIGRAM_WS=0; TARGET_VERIFIED_PROXY=1; TARGET_CHECK_INFRA=0 ;;
-    --agentmesh) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ETIGRAM_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_EVENT_GATE=0; TARGET_ENTITY_EXTRACT=0; TARGET_AGENTMESH=1; TARGET_CHECK_INFRA=0 ;;
-    --check-infra) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ETIGRAM_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=1 ;;
-    --etigram-watchdog) TARGET_ETIGRAM_WATCHDOG=1 ;;
-    --etigram-watchdog-only) TARGET_ETIGRAM_WATCHDOG=1; TARGET_ETIGRAM_WATCHDOG_ONLY=1; TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ETIGRAM_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=0 ;;
+    --nv-horizon-ws|--ws) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_NV_HORIZON_WS=1; TARGET_CHECK_INFRA=0; TARGET_SETUP_NV_HORIZON_INFRA=1 ;;
+    --verified-proxy) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_NV_HORIZON_WS=0; TARGET_VERIFIED_PROXY=1; TARGET_CHECK_INFRA=0 ;;
+    --agentmesh) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_NV_HORIZON_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_EVENT_GATE=0; TARGET_ENTITY_EXTRACT=0; TARGET_AGENTMESH=1; TARGET_CHECK_INFRA=0 ;;
+    --check-infra|--infra) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_NV_HORIZON_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=1 ;;
+    --nv-horizon-watchdog) TARGET_NV_HORIZON_WATCHDOG=1 ;;
+    --nv-horizon-watchdog-only) TARGET_NV_HORIZON_WATCHDOG=1; TARGET_NV_HORIZON_WATCHDOG_ONLY=1; TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_NV_HORIZON_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=0 ;;
     --api-criticalchain) TARGET_CRITICALCHAIN_INFRA=1; TARGET_CHECK_INFRA=1 ;;
-    --cleanup-revisions) TARGET_CLEANUP_REVISIONS=1; TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_ETIGRAM_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=0 ;;
+    --cleanup-revisions) TARGET_CLEANUP_REVISIONS=1; TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_NV_HORIZON_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=0 ;;
     -h|--help) usage; exit 0 ;;
     *) echo -e "${YELLOW}Unknown arg: $1${NC}"; usage; exit 1 ;;
   esac
@@ -98,20 +98,12 @@ require() {
 require gcloud
 ## gsutil not required; use gcloud storage to avoid Python dependency
 
-# Get Firebase Project ID from env, with safe defaults.
-# IMPORTANT: for API-only deploys, auth tokens should usually match the active GCP project.
-# Reading web/.firebaserc here can accidentally bind API auth to a different Firebase project.
-FIREBASE_PROJECT_ID="${FIREBASE_PROJECT_ID:-}"
-if [[ -z "$FIREBASE_PROJECT_ID" ]]; then
-  if [[ "$TARGET_API" -eq 1 && "$TARGET_WEB" -eq 0 ]]; then
-    FIREBASE_PROJECT_ID="$PROJECT_ID"
-  elif [[ -f "$WEB_DIR/.firebaserc" ]]; then
-    FIREBASE_PROJECT_ID=$(grep -o '"default": "[^"]*' "$WEB_DIR/.firebaserc" | cut -d'"' -f4 || echo "")
-  fi
-fi
-if [[ -z "$FIREBASE_PROJECT_ID" ]]; then
-  FIREBASE_PROJECT_ID="$PROJECT_ID"
-fi
+# Firebase / Auth project for the web build and backend FRONTEND_ORIGINS must match the GCP
+# project you deploy to (same Firestore, same Cloud Run). Do not infer from web/.firebaserc —
+# that file is only the Firebase CLI default and can point at a different project than
+# `gcloud config get-value project`, which produced wrong VITE_* API URLs vs Firebase before.
+# Override explicitly if you truly use a separate Firebase project: FIREBASE_PROJECT_ID=...
+FIREBASE_PROJECT_ID="${FIREBASE_PROJECT_ID:-$PROJECT_ID}"
 echo -e "${BLUE}Firebase Project ID:${NC} $FIREBASE_PROJECT_ID"
 
 deploy_web() {
@@ -125,33 +117,33 @@ deploy_web() {
     exit 1
   fi
   
-  # Try to resolve WS broker URL for Vite env (etigram-ws)
+  # Try to resolve WS broker URL for Vite env (nv-horizon-ws)
   local API_BASE_URL="${VITE_API_BASE_URL:-}"
   if [[ -z "$API_BASE_URL" ]]; then
-    if gcloud run services describe etigram-api --region "$REGION" >/dev/null 2>&1; then
-      API_BASE_URL=$(gcloud run services describe etigram-api --region "$REGION" --format='value(status.url)')
-      echo -e "${GREEN}[web] Found etigram-api URL:${NC} $API_BASE_URL"
+    if gcloud run services describe nv-horizon-api --region "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
+      API_BASE_URL=$(gcloud run services describe nv-horizon-api --region "$REGION" --project "$PROJECT_ID" --format='value(status.url)')
+      echo -e "${GREEN}[web] Found nv-horizon-api URL:${NC} $API_BASE_URL"
     else
-      echo -e "${YELLOW}[web] API service (etigram-api) not found (will use default from env if set)${NC}"
+      echo -e "${YELLOW}[web] API service (nv-horizon-api) not found (will use default from env if set)${NC}"
     fi
   fi
 
-  # Try to resolve WS broker URL for Vite env (etigram-ws)
+  # Try to resolve WS broker URL for Vite env (nv-horizon-ws)
   local WS_URL="${WS_URL:-}"
   if [[ -z "$WS_URL" ]]; then
-    if gcloud run services describe etigram-ws --region "$REGION" >/dev/null 2>&1; then
-      WS_URL=$(gcloud run services describe etigram-ws --region "$REGION" --format='value(status.url)')
-      echo -e "${GREEN}[web] Found etigram-ws URL:${NC} $WS_URL"
+    if gcloud run services describe nv-horizon-ws --region "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
+      WS_URL=$(gcloud run services describe nv-horizon-ws --region "$REGION" --project "$PROJECT_ID" --format='value(status.url)')
+      echo -e "${GREEN}[web] Found nv-horizon-ws URL:${NC} $WS_URL"
     else
-      echo -e "${YELLOW}[web] WS broker (etigram-ws) not found (will use default from env if set)${NC}"
+      echo -e "${YELLOW}[web] WS broker (nv-horizon-ws) not found (will use default from env if set)${NC}"
     fi
   fi
   
   # Try to resolve verified-proxy URL for Vite env
   local VERIFIED_PROXY_URL="${VERIFIED_PROXY_URL:-}"
   if [[ -z "$VERIFIED_PROXY_URL" ]]; then
-    if gcloud run services describe verified-proxy --region "$REGION" >/dev/null 2>&1; then
-      VERIFIED_PROXY_URL=$(gcloud run services describe verified-proxy --region "$REGION" --format='value(status.url)')
+    if gcloud run services describe verified-proxy --region "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
+      VERIFIED_PROXY_URL=$(gcloud run services describe verified-proxy --region "$REGION" --project "$PROJECT_ID" --format='value(status.url)')
       echo -e "${GREEN}[web] Found verified-proxy URL:${NC} $VERIFIED_PROXY_URL"
     else
       echo -e "${YELLOW}[web] verified-proxy service not found (will use default from env if set)${NC}"
@@ -175,7 +167,7 @@ deploy_web() {
   # Build with environment variables
   echo -e "${BLUE}[web] Building Vite app...${NC}"
   local build_env_vars=()
-  # Firebase config for etigram (created via firebase apps:create WEB)
+  # Firebase config for nv-horizon (created via firebase apps:create WEB)
   if [[ -n "$API_BASE_URL" ]]; then
     build_env_vars+=("VITE_API_BASE_URL=$API_BASE_URL")
     echo -e "${BLUE}[web] Using API base URL for build:${NC} $API_BASE_URL"
@@ -183,9 +175,27 @@ deploy_web() {
   build_env_vars+=("VITE_FIREBASE_PROJECT_ID=$FIREBASE_PROJECT_ID")
   build_env_vars+=("VITE_FIREBASE_AUTH_DOMAIN=${FIREBASE_PROJECT_ID}.firebaseapp.com")
   build_env_vars+=("VITE_FIREBASE_STORAGE_BUCKET=${FIREBASE_PROJECT_ID}.firebasestorage.app")
-  build_env_vars+=("VITE_FIREBASE_API_KEY=AIzaSyAJDpTQvYQJPpTFCN9droNmUoWZNJ0JUc0")
-  build_env_vars+=("VITE_FIREBASE_MESSAGING_SENDER_ID=844185759625")
-  build_env_vars+=("VITE_FIREBASE_APP_ID=1:844185759625:web:fa13be4a45bc39da397b58")
+  local fb_sdk="$WEB_DIR/firebase.sdkconfig.web.json"
+  local fb_api_key="" fb_app_id="" fb_sender_id=""
+  if [[ -f "$fb_sdk" ]]; then
+    local sdk_pid
+    sdk_pid=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1],encoding='utf-8')).get('projectId',''))" "$fb_sdk" 2>/dev/null || true)
+    if [[ -n "$sdk_pid" && "$sdk_pid" != "$FIREBASE_PROJECT_ID" ]]; then
+      echo -e "${YELLOW}[web] firebase.sdkconfig.web.json projectId ($sdk_pid) != FIREBASE_PROJECT_ID ($FIREBASE_PROJECT_ID). Regenerate: firebase apps:sdkconfig WEB --project $FIREBASE_PROJECT_ID${NC}"
+    fi
+    fb_api_key=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1],encoding='utf-8')).get('apiKey',''))" "$fb_sdk" 2>/dev/null || true)
+    fb_app_id=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1],encoding='utf-8')).get('appId',''))" "$fb_sdk" 2>/dev/null || true)
+    fb_sender_id=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1],encoding='utf-8')).get('messagingSenderId',''))" "$fb_sdk" 2>/dev/null || true)
+  fi
+  if [[ -z "$fb_app_id" ]]; then
+    echo -e "${YELLOW}[web] firebase.sdkconfig.web.json missing or incomplete; using legacy embedded Firebase app ids${NC}"
+    fb_api_key="AIzaSyAJDpTQvYQJPpTFCN9droNmUoWZNJ0JUc0"
+    fb_sender_id="844185759625"
+    fb_app_id="1:844185759625:web:fa13be4a45bc39da397b58"
+  fi
+  build_env_vars+=("VITE_FIREBASE_API_KEY=$fb_api_key")
+  build_env_vars+=("VITE_FIREBASE_MESSAGING_SENDER_ID=$fb_sender_id")
+  build_env_vars+=("VITE_FIREBASE_APP_ID=$fb_app_id")
   if [[ -n "$WS_URL" ]]; then
     build_env_vars+=("VITE_WS_BROKER_URL=$WS_URL")
     echo -e "${BLUE}[web] Using WS broker URL for build:${NC} $WS_URL"
@@ -275,6 +285,7 @@ setup_infrastructure() {
   enable_api redis.googleapis.com
   enable_api vpcaccess.googleapis.com
   enable_api compute.googleapis.com
+  enable_api artifactregistry.googleapis.com
 
   # Best-effort: ensure Google-managed service identities for Vertex services exist.
   # Some IAM bindings fail in fresh projects until these identities are provisioned.
@@ -305,6 +316,23 @@ setup_infrastructure() {
       echo -e "${RED}[infra] Failed to create Firestore (default) database${NC}" >&2
       echo -e "${YELLOW}[infra] Create manually:${NC} gcloud firestore databases create --project=${PROJECT_ID} --database='(default)' --location=${FIRESTORE_LOCATION} --type=firestore-native" >&2
       exit 1
+    fi
+  fi
+
+  # Docker repository for gcloud builds submit / Kaniko pushes (Cloud Run images).
+  echo -e "${BLUE}[infra] Ensuring Artifact Registry repo cloud-run-source-deploy...${NC}"
+  if gcloud artifacts repositories describe cloud-run-source-deploy --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    echo -e "${GREEN}[infra] Artifact Registry repo exists:${NC} ${REGION}-docker.pkg.dev/.../cloud-run-source-deploy"
+  else
+    if gcloud artifacts repositories create cloud-run-source-deploy \
+      --repository-format=docker \
+      --location="$REGION" \
+      --project="$PROJECT_ID" \
+      --description="Cloud Run deploy images" \
+      --quiet >/dev/null 2>&1; then
+      echo -e "${GREEN}[infra] Created Artifact Registry repo:${NC} cloud-run-source-deploy"
+    else
+      echo -e "${YELLOW}[infra] Warning: could not create cloud-run-source-deploy repo (check artifactregistry API / permissions)${NC}"
     fi
   fi
   
@@ -372,9 +400,9 @@ setup_infrastructure() {
   fi
 
   # 3.2 Ensure Cloud Tasks queue for Scout exists and is configured (managed retries).
-  # NOTE: Queue name "etigram-scout" may be temporarily unavailable after deletion.
-  local scout_queue="${CLOUD_TASKS_SCOUT_QUEUE:-etigram-scout}"
-  local scout_background_queue="${CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE:-etigram-scout-bg}"
+  # NOTE: Queue name "nv-horizon-scout" may be temporarily unavailable after deletion.
+  local scout_queue="${CLOUD_TASKS_SCOUT_QUEUE:-nv-horizon-scout}"
+  local scout_background_queue="${CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE:-nv-horizon-scout-bg}"
   if gcloud tasks queues describe "$scout_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${GREEN}[infra] Cloud Tasks queue exists:${NC} $scout_queue"
   else
@@ -412,7 +440,7 @@ setup_infrastructure() {
   echo -e "${GREEN}[infra] ✓${NC} Configured Cloud Tasks background queue $scout_background_queue"
 
   # 3.3 Ensure Cloud Tasks queue for per-source polling exists and is configured.
-  local source_queue="${CLOUD_TASKS_SOURCE_QUEUE:-etigram-source-poll}"
+  local source_queue="${CLOUD_TASKS_SOURCE_QUEUE:-nv-horizon-source-poll}"
   if gcloud tasks queues describe "$source_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${GREEN}[infra] Cloud Tasks queue exists:${NC} $source_queue"
   else
@@ -432,7 +460,7 @@ setup_infrastructure() {
   echo -e "${GREEN}[infra] ✓${NC} Configured Cloud Tasks queue $source_queue (maxConcurrentDispatches=25)"
 
   # 3.4.1 Ensure Cloud Tasks queue for Profile refresh exists
-  local profile_queue="${CLOUD_TASKS_PROFILE_QUEUE:-etigram-profile-refresh}"
+  local profile_queue="${CLOUD_TASKS_PROFILE_QUEUE:-nv-horizon-profile-refresh}"
   if gcloud tasks queues describe "$profile_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${GREEN}[infra] Cloud Tasks queue exists:${NC} $profile_queue"
   else
@@ -453,7 +481,7 @@ setup_infrastructure() {
   echo -e "${GREEN}[infra] ✓${NC} Configured Cloud Tasks queue $profile_queue (maxConcurrentDispatches=1000)"
 
   # 3.4.2 Ensure Cloud Tasks queue for Risk pipeline exists
-  local risk_queue="${CLOUD_TASKS_RISK_QUEUE:-etigram-risk}"
+  local risk_queue="${CLOUD_TASKS_RISK_QUEUE:-nv-horizon-risk}"
   if gcloud tasks queues describe "$risk_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${GREEN}[infra] Cloud Tasks queue exists:${NC} $risk_queue"
   else
@@ -491,13 +519,13 @@ setup_infrastructure() {
     echo -e "${GREEN}[infra] Created RAG documents bucket:${NC} gs://${rag_docs_bucket}"
   fi
   
-  # 3.6.1 Ensure GCS bucket for Etigram fragments exists
-  local etigram_fragments_bucket="${PROJECT_ID}-etigram-fragments"
-  if gcloud storage buckets describe "gs://${etigram_fragments_bucket}" >/dev/null 2>&1; then
-    echo -e "${GREEN}[infra] Etigram fragments bucket exists:${NC} gs://${etigram_fragments_bucket}"
+  # 3.6.1 Ensure GCS bucket for Horizon fragments exists
+  local nv_horizon_fragments_bucket="${PROJECT_ID}-nv-horizon-fragments"
+  if gcloud storage buckets describe "gs://${nv_horizon_fragments_bucket}" >/dev/null 2>&1; then
+    echo -e "${GREEN}[infra] Horizon fragments bucket exists:${NC} gs://${nv_horizon_fragments_bucket}"
   else
-    gcloud storage buckets create "gs://${etigram_fragments_bucket}" --location=US --uniform-bucket-level-access
-    echo -e "${GREEN}[infra] Created Etigram fragments bucket:${NC} gs://${etigram_fragments_bucket}"
+    gcloud storage buckets create "gs://${nv_horizon_fragments_bucket}" --location=US --uniform-bucket-level-access
+    echo -e "${GREEN}[infra] Created Horizon fragments bucket:${NC} gs://${nv_horizon_fragments_bucket}"
   fi
   
   # 3.6.2 Ensure GCS bucket for web static files exists (optional, may be created by Firebase Hosting)
@@ -609,7 +637,7 @@ setup_infrastructure() {
 
     if gcloud iam service-accounts describe "$VERTEX_AI_SA" --project="$PROJECT_ID" >/dev/null 2>&1; then
       grant_bucket_viewer_access "$rag_docs_bucket" "$VERTEX_AI_SA" "Vertex AI SA"
-      grant_bucket_viewer_access "$etigram_fragments_bucket" "$VERTEX_AI_SA" "Vertex AI SA"
+      grant_bucket_viewer_access "$nv_horizon_fragments_bucket" "$VERTEX_AI_SA" "Vertex AI SA"
     else
       echo -e "${YELLOW}[infra] Warning: Vertex AI service account not found yet (skip bucket IAM for now)${NC}"
       echo -e "${YELLOW}[infra] Retry check-infra later after Vertex services fully provision${NC}"
@@ -617,7 +645,7 @@ setup_infrastructure() {
 
     if gcloud iam service-accounts describe "$DISCOVERY_ENGINE_SA" --project="$PROJECT_ID" >/dev/null 2>&1; then
       grant_bucket_viewer_access "$rag_docs_bucket" "$DISCOVERY_ENGINE_SA" "Discovery Engine SA"
-      grant_bucket_viewer_access "$etigram_fragments_bucket" "$DISCOVERY_ENGINE_SA" "Discovery Engine SA"
+      grant_bucket_viewer_access "$nv_horizon_fragments_bucket" "$DISCOVERY_ENGINE_SA" "Discovery Engine SA"
       # Discovery Engine import jobs can request temporary bucket creation in the project.
       # Without storage.buckets.create, imports fail with PERMISSION_DENIED.
       gcloud projects add-iam-policy-binding "$PROJECT_ID" \
@@ -653,8 +681,10 @@ setup_infrastructure() {
   local datastore_id=""
   local rag_datastore_id="rag-documents-store"
   local rag_datastore_display_name="${VERTEX_SEARCH_DATA_STORE_DISPLAY_NAME:-RAG Documents Store}"
-  local etigram_fragments_datastore_id="${VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID:-etigram-fragments-store}"
-  local etigram_fragments_display_name="${VERTEX_SEARCH_ETIGRAM_DATA_STORE_DISPLAY_NAME:-Etigram Fragments Store}"
+  local nv_horizon_fragments_datastore_id="${VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID:-nv-horizon-fragments-store}"
+  local nv_horizon_fragments_display_name="${VERTEX_SEARCH_NV_HORIZON_DATA_STORE_DISPLAY_NAME:-Horizon Fragments Store}"
+  local nv_horizon_edges_datastore_id="${VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_ID:-nv-horizon-edges-store}"
+  local nv_horizon_edges_display_name="${VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_DISPLAY_NAME:-Horizon Edges Store}"
   local discovery_base_url="https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/collections/default_collection/dataStores"
   local access_token
   access_token=$(gcloud auth print-access-token --project="$PROJECT_ID" 2>/dev/null || echo "")
@@ -716,7 +746,8 @@ setup_infrastructure() {
   if ensure_vertex_datastore "$rag_datastore_id" "$rag_datastore_display_name"; then
     datastore_id="$rag_datastore_id"
   fi
-  ensure_vertex_datastore "$etigram_fragments_datastore_id" "$etigram_fragments_display_name" || true
+  ensure_vertex_datastore "$nv_horizon_fragments_datastore_id" "$nv_horizon_fragments_display_name" || true
+  ensure_vertex_datastore "$nv_horizon_edges_datastore_id" "$nv_horizon_edges_display_name" || true
 
   # Import documents from GCS into RAG Data Store (best-effort).
   if [[ -n "$datastore_id" && -n "$access_token" ]]; then
@@ -748,17 +779,17 @@ setup_infrastructure() {
     fi
   fi
   
-  # Update Cloud Run service with Data Store ID if we have one
+  # Update Cloud Run service with Data Store IDs if RAG store resolved (other IDs always have defaults).
   if [[ -n "$datastore_id" ]]; then
-    echo -e "${BLUE}[infra] Updating Cloud Run service with Data Store ID...${NC}"
-    if gcloud run services describe etigram-api --region="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
-      gcloud run services update etigram-api --region="$REGION" --project="$PROJECT_ID" \
-        --update-env-vars "VERTEX_SEARCH_DATA_STORE_ID=$datastore_id" \
+    echo -e "${BLUE}[infra] Updating Cloud Run service with Vertex Search Data Store IDs...${NC}"
+    if gcloud run services describe nv-horizon-api --region="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+      gcloud run services update nv-horizon-api --region="$REGION" --project="$PROJECT_ID" \
+        --update-env-vars "VERTEX_SEARCH_DATA_STORE_ID=$datastore_id,VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID=$nv_horizon_fragments_datastore_id,VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_ID=$nv_horizon_edges_datastore_id" \
         --quiet >/dev/null 2>&1 && \
-        echo -e "${GREEN}[infra] Updated Cloud Run service with VERTEX_SEARCH_DATA_STORE_ID=$datastore_id${NC}" || \
+        echo -e "${GREEN}[infra] Updated Cloud Run: VERTEX_SEARCH_DATA_STORE_ID=$datastore_id VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID=$nv_horizon_fragments_datastore_id VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_ID=$nv_horizon_edges_datastore_id${NC}" || \
         echo -e "${YELLOW}[infra] Warning: Failed to update Cloud Run service (may need manual update)${NC}"
     else
-      echo -e "${YELLOW}[infra] Cloud Run service not found, set manually: VERTEX_SEARCH_DATA_STORE_ID=$datastore_id${NC}"
+      echo -e "${YELLOW}[infra] Cloud Run service not found; on first API deploy set:${NC} VERTEX_SEARCH_DATA_STORE_ID=$datastore_id VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID=$nv_horizon_fragments_datastore_id VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_ID=$nv_horizon_edges_datastore_id"
     fi
     
     # Optional: Create Cloud Scheduler job for automatic sync (if enabled)
@@ -921,7 +952,7 @@ setup_infrastructure() {
   
   # 3.9 Setup Redis (Memorystore)
   echo -e "${BLUE}[infra] Setting up Redis (Memorystore)...${NC}"
-  local redis_instance="etigram-redis"
+  local redis_instance="nv-horizon-redis"
   local redis_tier="BASIC"
   local redis_size="1"
   # Use lowercase value expected by gcloud: redis_7_0
@@ -935,14 +966,14 @@ setup_infrastructure() {
     echo -e "${BLUE}[infra] Redis host:${NC} $redis_host:$redis_port"
     
     # Update Cloud Run services with Redis connection info if they exist
-    if gcloud run services describe etigram-api --region="$REGION" >/dev/null 2>&1; then
-      gcloud run services update etigram-api --region="$REGION" \
+    if gcloud run services describe nv-horizon-api --region="$REGION" >/dev/null 2>&1; then
+      gcloud run services update nv-horizon-api --region="$REGION" \
         --update-env-vars "REDIS_HOST=$redis_host,REDIS_PORT=$redis_port,REDIS_ADDR=$redis_host:$redis_port" \
         --quiet >/dev/null 2>&1 && \
-        echo -e "${GREEN}[infra] Updated etigram-api with Redis connection info${NC}" || \
-        echo -e "${YELLOW}[infra] Warning: Failed to update etigram-api with Redis info${NC}"
+        echo -e "${GREEN}[infra] Updated nv-horizon-api with Redis connection info${NC}" || \
+        echo -e "${YELLOW}[infra] Warning: Failed to update nv-horizon-api with Redis info${NC}"
     fi
-    # Note: etigram-ws does NOT use Redis, so skip Redis env vars update
+    # Note: nv-horizon-ws does NOT use Redis, so skip Redis env vars update
   else
     echo -e "${BLUE}[infra] Creating Redis instance (this may take 10-20 minutes)...${NC}"
     
@@ -1031,14 +1062,14 @@ setup_infrastructure() {
         echo -e "${BLUE}[infra] Redis host:${NC} $redis_host:$redis_port"
         
         # Update Cloud Run API service с новыми env (VPC не используем)
-        if gcloud run services describe etigram-api --region="$REGION" >/dev/null 2>&1; then
-          gcloud run services update etigram-api --region="$REGION" \
+        if gcloud run services describe nv-horizon-api --region="$REGION" >/dev/null 2>&1; then
+          gcloud run services update nv-horizon-api --region="$REGION" \
             --update-env-vars "REDIS_HOST=$redis_host,REDIS_PORT=$redis_port,REDIS_ADDR=$redis_host:$redis_port" \
             --quiet >/dev/null 2>&1 && \
-            echo -e "${GREEN}[infra] Updated etigram-api with Redis connection info${NC}" || \
-            echo -e "${YELLOW}[infra] Warning: Failed to update etigram-api (may need manual update)${NC}"
+            echo -e "${GREEN}[infra] Updated nv-horizon-api with Redis connection info${NC}" || \
+            echo -e "${YELLOW}[infra] Warning: Failed to update nv-horizon-api (may need manual update)${NC}"
         fi
-        # Note: etigram-ws does NOT use Redis, so no VPC connector needed
+        # Note: nv-horizon-ws does NOT use Redis, so no VPC connector needed
         
         echo -e "${GREEN}[infra] Redis setup completed successfully${NC}"
         echo -e "${BLUE}[infra] Connection string:${NC} $redis_host:$redis_port"
@@ -1080,17 +1111,17 @@ setup_infrastructure() {
     fi
   done
 
-  # 4.1 Ensure aggregated topics used by etigram-ws exist (Etigram realtime depends on etigram.horizon.events)
-  echo -e "${BLUE}[infra] Ensuring Pub/Sub aggregated topics for etigram-ws...${NC}"
+  # 4.1 Ensure aggregated topics used by nv-horizon-ws exist (Horizon realtime depends on nv_horizon.horizon.events)
+  echo -e "${BLUE}[infra] Ensuring Pub/Sub aggregated topics for nv-horizon-ws...${NC}"
   agg_topics=(
-    "etigram.genai.streams"
-    "etigram.discovery.events"
-    "etigram.artifact.events"
-    "etigram.interaction.events"
-    "etigram.analysis.events"
-    "etigram.verified.streams"
-    "etigram.horizon.events"
-    "etigram.operations.events"
+    "nv_horizon.genai.streams"
+    "nv_horizon.discovery.events"
+    "nv_horizon.artifact.events"
+    "nv_horizon.interaction.events"
+    "nv_horizon.analysis.events"
+    "nv_horizon.verified.streams"
+    "nv_horizon.horizon.events"
+    "nv_horizon.operations.events"
   )
   for topic in "${agg_topics[@]}"; do
     if ! gcloud pubsub topics describe "$topic" --project="$PROJECT_ID" >/dev/null 2>&1; then
@@ -1101,8 +1132,8 @@ setup_infrastructure() {
     fi
   done
 
-  # 4.2 Ensure etigram-ws subscriptions exist for aggregated topics (Subscriber uses <topic>-ws-broker)
-  echo -e "${BLUE}[infra] Ensuring Pub/Sub subscriptions for etigram-ws...${NC}"
+  # 4.2 Ensure nv-horizon-ws subscriptions exist for aggregated topics (Subscriber uses <topic>-ws-broker)
+  echo -e "${BLUE}[infra] Ensuring Pub/Sub subscriptions for nv-horizon-ws...${NC}"
   for topic in "${agg_topics[@]}"; do
     sub_id="${topic}-ws-broker"
     if gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" >/dev/null 2>&1; then
@@ -1132,8 +1163,8 @@ setup_infrastructure() {
   echo -e "${BLUE}[infra] Ensuring Pub/Sub worker subscriptions...${NC}"
   local worker_subs=(
     "ground.refresh:ground.refresh.worker"
-    "etigram.operations.events:etigram.operations.events.worker"
-    "etigram.artifact.events:etigram.artifact.events.document-processor.worker"
+    "nv_horizon.operations.events:nv_horizon.operations.events.worker"
+    "nv_horizon.artifact.events:nv_horizon.artifact.events.document-processor.worker"
     "chat.ontology.process:chat.ontology.process.worker"
   )
   for pair in "${worker_subs[@]}"; do
@@ -1152,11 +1183,11 @@ setup_infrastructure() {
     fi
   done
 
-  # 5. Ensure Cloud Scheduler jobs when deploying API OR when explicitly asked (e.g. --etigram-watchdog-only, --api-criticalchain)
-  if [[ "$TARGET_API" -eq 1 || "${TARGET_ETIGRAM_WATCHDOG:-0}" -eq 1 || "${TARGET_CRITICALCHAIN_INFRA:-0}" -eq 1 ]]; then
+  # 5. Ensure Cloud Scheduler jobs when deploying API OR when explicitly asked (e.g. --nv-horizon-watchdog-only, --api-criticalchain)
+  if [[ "$TARGET_API" -eq 1 || "${TARGET_NV_HORIZON_WATCHDOG:-0}" -eq 1 || "${TARGET_CRITICALCHAIN_INFRA:-0}" -eq 1 ]]; then
     echo -e "${BLUE}[infra] Ensuring Cloud Scheduler jobs (optional)...${NC}"
     if gcloud services list --enabled --filter="config.name: cloudscheduler.googleapis.com" --format="value(config.name)" | grep -q cloudscheduler.googleapis.com; then
-      SVC_URL=$(gcloud run services describe etigram-api --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
+      SVC_URL=$(gcloud run services describe nv-horizon-api --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
       
       if [[ -n "$SVC_URL" ]]; then
         # Resolve the stable admin job token from Secret Manager (single source of truth).
@@ -1168,7 +1199,7 @@ setup_infrastructure() {
         fi
 
         # 5a. Source coordinator job
-        JOB_NAME="etigram-source-poller"
+        JOB_NAME="nv-horizon-source-poller"
         # Create or update a job that calls admin source coordination with header X-Job-Token
         if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
           gcloud scheduler jobs update http "$JOB_NAME" \
@@ -1196,7 +1227,7 @@ setup_infrastructure() {
         echo -e "${GREEN}[infra] ✓${NC} Source coordinator scheduler job ensured"
         
         # 5b. Artifact scheduler job (checks for scheduled artifact updates)
-        JOB_NAME="etigram-artifact-scheduler"
+        JOB_NAME="nv-horizon-artifact-scheduler"
         # Schedule: every hour at minute 0 (e.g., 00:00, 01:00, 02:00, ...)
         # This checks all artifacts and triggers updates for those with daily/weekly schedules
         if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
@@ -1245,20 +1276,20 @@ setup_infrastructure() {
         fi
         echo -e "${GREEN}[infra] ✓${NC} Subscription billing scheduler job ensured (runs daily at 02:00 UTC)"
 
-        # 5d. Etigram Watchdog job (optional; enabled via --etigram-watchdog)
-        if [[ "${TARGET_ETIGRAM_WATCHDOG}" -eq 1 ]]; then
+        # 5d. Horizon Watchdog job (optional; enabled via --nv-horizon-watchdog)
+        if [[ "${TARGET_NV_HORIZON_WATCHDOG}" -eq 1 ]]; then
           echo -e "${BLUE}[infra] Ensuring Horizon Watchdog scheduler job...${NC}"
 
           # Ensure API env vars aligned with Cloud Scheduler mode
           # (disable any internal ticker if introduced later; keep knobs explicit)
-          gcloud run services update etigram-api --region "$REGION" \
-            --update-env-vars "ENABLE_ETIGRAM_WATCHDOG=1,DISABLE_ETIGRAM_WATCHDOG_TICKER=true,ETIGRAM_WATCHDOG_CRON_LIMIT=200,ETIGRAM_WATCHDOG_CRON_LOCK_TTL=9m" \
+          gcloud run services update nv-horizon-api --region "$REGION" \
+            --update-env-vars "ENABLE_NV_HORIZON_WATCHDOG=1,DISABLE_NV_HORIZON_WATCHDOG_TICKER=true,NV_HORIZON_WATCHDOG_CRON_LIMIT=200,NV_HORIZON_WATCHDOG_CRON_LOCK_TTL=9m" \
             --quiet || true
 
-          JOB_NAME="etigram-watchdog"
-          WATCHDOG_LIMIT="${ETIGRAM_WATCHDOG_CRON_LIMIT:-200}"
-          WATCHDOG_SCHEDULE="${ETIGRAM_WATCHDOG_CRON_SCHEDULE:-*/5 * * * *}"
-          WATCHDOG_URI="$SVC_URL/api/v1/admin/etigram/watchdog/run?limit=$WATCHDOG_LIMIT"
+          JOB_NAME="nv-horizon-watchdog"
+          WATCHDOG_LIMIT="${NV_HORIZON_WATCHDOG_CRON_LIMIT:-200}"
+          WATCHDOG_SCHEDULE="${NV_HORIZON_WATCHDOG_CRON_SCHEDULE:-*/5 * * * *}"
+          WATCHDOG_URI="$SVC_URL/api/v1/admin/nv_horizon/watchdog/run?limit=$WATCHDOG_LIMIT"
 
           if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
             gcloud scheduler jobs update http "$JOB_NAME" \
@@ -1283,7 +1314,7 @@ setup_infrastructure() {
               --attempt-deadline=540s \
               --quiet || true
           fi
-          echo -e "${GREEN}[infra] ✓${NC} Etigram Watchdog scheduler job ensured ($WATCHDOG_SCHEDULE)"
+          echo -e "${GREEN}[infra] ✓${NC} Horizon Watchdog scheduler job ensured ($WATCHDOG_SCHEDULE)"
         fi
 
         # 5e. CriticalChain pipeline job (every 6 hours)
@@ -1396,51 +1427,58 @@ deploy_api() {
   }
   echo -e "${GREEN}[api] Go build successful locally${NC}"
 
-  # Ensure Etigram fragments dedicated bucket exists (even on --api deploys that skip infra).
-  local etigram_fragments_bucket="${ETIGRAM_FRAGMENTS_BUCKET:-${PROJECT_ID}-etigram-fragments}"
-  if gcloud storage buckets describe "gs://${etigram_fragments_bucket}" --project="$PROJECT_ID" >/dev/null 2>&1; then
-    echo -e "${GREEN}[api] Etigram fragments bucket exists:${NC} gs://${etigram_fragments_bucket}"
+  # Ensure Horizon fragments dedicated bucket exists (even on --api deploys that skip infra).
+  local nv_horizon_fragments_bucket="${NV_HORIZON_FRAGMENTS_BUCKET:-${PROJECT_ID}-nv-horizon-fragments}"
+  if gcloud storage buckets describe "gs://${nv_horizon_fragments_bucket}" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    echo -e "${GREEN}[api] Horizon fragments bucket exists:${NC} gs://${nv_horizon_fragments_bucket}"
   else
-    echo -e "${BLUE}[api] Creating Etigram fragments bucket:${NC} gs://${etigram_fragments_bucket}"
-    gcloud storage buckets create "gs://${etigram_fragments_bucket}" --location=US --uniform-bucket-level-access --project="$PROJECT_ID" || true
+    echo -e "${BLUE}[api] Creating Horizon fragments bucket:${NC} gs://${nv_horizon_fragments_bucket}"
+    gcloud storage buckets create "gs://${nv_horizon_fragments_bucket}" --location=US --uniform-bucket-level-access --project="$PROJECT_ID" || true
   fi
 
-  # Ensure dedicated Vertex AI Search Data Store for Etigram fragments exists (store isolation; no filters).
-  local etigram_fragments_datastore="${VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID:-etigram-fragments-store}"
+  # Ensure dedicated Vertex AI Search Data Stores for Horizon fragments and edges (store isolation; no filters).
+  local nv_horizon_fragments_datastore="${VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID:-nv-horizon-fragments-store}"
+  local nv_horizon_edges_datastore="${VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_ID:-nv-horizon-edges-store}"
   local access_token
   access_token=$(gcloud auth print-access-token --project="$PROJECT_ID" 2>/dev/null || true)
   if [[ -n "$access_token" ]]; then
-    local ds_get_url="https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/collections/default_collection/dataStores/${etigram_fragments_datastore}"
-    local ds_create_url="https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/collections/default_collection/dataStores?dataStoreId=${etigram_fragments_datastore}"
-    local ds_http
-    ds_http=$(curl -sS -o /dev/null -w "%{http_code}" \
-      -H "Authorization: Bearer ${access_token}" \
-      -H "X-Goog-User-Project: ${PROJECT_ID}" \
-      "$ds_get_url" 2>/dev/null || echo "000")
-    if [[ "$ds_http" == "200" ]]; then
-      echo -e "${GREEN}[api] Etigram fragments Data Store exists:${NC} ${etigram_fragments_datastore}"
-    else
-      echo -e "${BLUE}[api] Creating Etigram fragments Data Store:${NC} ${etigram_fragments_datastore}"
+    ensure_horizon_vertex_store() {
+      local ds_id="$1"
+      local display_name="$2"
+      local ds_get_url="https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/collections/default_collection/dataStores/${ds_id}"
+      local ds_create_url="https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/collections/default_collection/dataStores?dataStoreId=${ds_id}"
+      local ds_http
+      ds_http=$(curl -sS -o /dev/null -w "%{http_code}" \
+        -H "Authorization: Bearer ${access_token}" \
+        -H "X-Goog-User-Project: ${PROJECT_ID}" \
+        "$ds_get_url" 2>/dev/null || echo "000")
+      if [[ "$ds_http" == "200" ]]; then
+        echo -e "${GREEN}[api] Horizon Vertex Data Store exists:${NC} ${ds_id}"
+        return 0
+      fi
+      echo -e "${BLUE}[api] Creating Horizon Vertex Data Store:${NC} ${ds_id}"
       curl -sS -X POST \
         -H "Authorization: Bearer ${access_token}" \
         -H "X-Goog-User-Project: ${PROJECT_ID}" \
         -H "Content-Type: application/json" \
         "$ds_create_url" \
         -d "{
-          \"displayName\": \"Etigram Fragments Store\",
+          \"displayName\": \"${display_name}\",
           \"industryVertical\": \"GENERIC\",
           \"solutionTypes\": [\"SOLUTION_TYPE_SEARCH\"],
           \"contentConfig\": \"CONTENT_REQUIRED\"
         }" >/dev/null 2>&1 || true
-    fi
+    }
+    ensure_horizon_vertex_store "$nv_horizon_fragments_datastore" "Horizon Fragments Store"
+    ensure_horizon_vertex_store "$nv_horizon_edges_datastore" "Horizon Edges Store"
   else
-    echo -e "${YELLOW}[api] Warning: cannot ensure Etigram fragments Data Store (no access token).${NC}"
+    echo -e "${YELLOW}[api] Warning: cannot ensure Horizon Vertex Data Stores (no access token).${NC}"
   fi
 
   # Ensure Cloud Tasks queue exists even for --api-only deploys (managed Scout execution).
   # NOTE: default queue is v2 to avoid the "recently deleted queue" lockout.
-  local scout_queue="${CLOUD_TASKS_SCOUT_QUEUE:-etigram-scout}"
-  local scout_background_queue="${CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE:-etigram-scout-bg}"
+  local scout_queue="${CLOUD_TASKS_SCOUT_QUEUE:-nv-horizon-scout}"
+  local scout_background_queue="${CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE:-nv-horizon-scout-bg}"
   if ! gcloud tasks queues describe "$scout_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${BLUE}[api] Creating Cloud Tasks queue:${NC} $scout_queue"
     gcloud tasks queues create "$scout_queue" --location="$REGION" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
@@ -1471,7 +1509,7 @@ deploy_api() {
     --quiet >/dev/null 2>&1 || true
 
   # Ensure Cloud Tasks queue exists for per-source polling execution.
-  local source_queue="${CLOUD_TASKS_SOURCE_QUEUE:-etigram-source-poll}"
+  local source_queue="${CLOUD_TASKS_SOURCE_QUEUE:-nv-horizon-source-poll}"
   if ! gcloud tasks queues describe "$source_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${BLUE}[api] Creating Cloud Tasks queue:${NC} $source_queue"
     gcloud tasks queues create "$source_queue" --location="$REGION" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
@@ -1488,7 +1526,7 @@ deploy_api() {
     --quiet >/dev/null 2>&1 || true
 
   # Ensure Cloud Tasks queue exists for risk pipeline as well.
-  local risk_queue="${CLOUD_TASKS_RISK_QUEUE:-etigram-risk}"
+  local risk_queue="${CLOUD_TASKS_RISK_QUEUE:-nv-horizon-risk}"
   if ! gcloud tasks queues describe "$risk_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${BLUE}[api] Creating Cloud Tasks queue:${NC} $risk_queue"
     gcloud tasks queues create "$risk_queue" --location="$REGION" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
@@ -1543,11 +1581,26 @@ deploy_api() {
 
   # Clean up any local binaries before Cloud Build (they're not needed, built in Docker)
   echo -e "${BLUE}[api] Cleaning up local build artifacts...${NC}"
-  (cd "$API_DIR" && rm -f server verified-proxy etigram-ws main test-agent-orchestrator cmd/*/server cmd/*/verified-proxy cmd/*/etigram-ws cmd/*/main 2>/dev/null || true)
-  (cd "$API_DIR" && rm -f etigram_* add_* check_* check-* seed_* migrate_* inspect_* purge_* geonames_* loc_* watchdog_* test_* test-* sync-* reindex-* update-* clear_* run_* find_* gemini_* openai_* 2>/dev/null || true)
+  (cd "$API_DIR" && rm -f server verified-proxy nv-horizon-ws main test-agent-orchestrator cmd/*/server cmd/*/verified-proxy cmd/*/nv-horizon-ws cmd/*/main 2>/dev/null || true)
+  (cd "$API_DIR" && rm -f nv_horizon_* add_* check_* check-* seed_* migrate_* inspect_* purge_* geonames_* loc_* watchdog_* test_* test-* sync-* reindex-* update-* clear_* run_* find_* gemini_* openai_* 2>/dev/null || true)
+
+  echo -e "${BLUE}[api] Ensuring Artifact Registry repo (cloud-run-source-deploy)...${NC}"
+  gcloud services enable artifactregistry.googleapis.com --project="$PROJECT_ID" >/dev/null 2>&1 || true
+  if ! gcloud artifacts repositories describe cloud-run-source-deploy --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    gcloud artifacts repositories create cloud-run-source-deploy \
+      --repository-format=docker \
+      --location="$REGION" \
+      --project="$PROJECT_ID" \
+      --description="Cloud Run deploy images" \
+      --quiet >/dev/null 2>&1 || {
+      echo -e "${RED}[api] Failed to create Artifact Registry repo cloud-run-source-deploy${NC}" >&2
+      exit 1
+    }
+    echo -e "${GREEN}[api] Created Artifact Registry repo:${NC} cloud-run-source-deploy"
+  fi
 
   echo -e "${BLUE}[api] Building container image (Artifact Registry)...${NC}"
-  local service="etigram-api"
+  local service="nv-horizon-api"
   local image="us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/$service:$(date +%s)"
 
   # PayPal secrets (optional - PayPal integration will be disabled if not set)
@@ -1604,7 +1657,7 @@ deploy_api() {
   # Check if Redis exists and get connection info
   local redis_host=""
   local redis_port="6379"
-  local redis_instance="etigram-redis"
+  local redis_instance="nv-horizon-redis"
   if gcloud redis instances describe "$redis_instance" --region="$REGION" >/dev/null 2>&1; then
     redis_host=$(gcloud redis instances describe "$redis_instance" --region="$REGION" --format='value(host)' 2>/dev/null || echo "")
     redis_port=$(gcloud redis instances describe "$redis_instance" --region="$REGION" --format='value(port)' 2>/dev/null || echo "6379")
@@ -1612,7 +1665,7 @@ deploy_api() {
   
   # Get Telegram service URL if it exists
   local telegram_url=""
-  local telegram_service="etigram-telegram"
+  local telegram_service="nv-horizon-telegram"
   if gcloud run services describe "$telegram_service" --region="$REGION" >/dev/null 2>&1; then
     telegram_url=$(gcloud run services describe "$telegram_service" --region="$REGION" --format='value(status.url)' 2>/dev/null || echo "")
     if [[ -n "$telegram_url" ]]; then
@@ -1621,7 +1674,7 @@ deploy_api() {
   fi
 
   local event_gate_url="${EVENT_GATE_SERVICE_URL:-}"
-  local event_gate_service="etigram-event-gate"
+  local event_gate_service="nv-horizon-event-gate"
   if [[ -z "$event_gate_url" ]] && gcloud run services describe "$event_gate_service" --region="$REGION" >/dev/null 2>&1; then
     event_gate_url=$(gcloud run services describe "$event_gate_service" --region="$REGION" --format='value(status.url)' 2>/dev/null || echo "")
   fi
@@ -1630,7 +1683,7 @@ deploy_api() {
   fi
 
   local entity_extract_url="${ENTITY_EXTRACT_SERVICE_URL:-}"
-  local entity_extract_service="etigram-entity-extract"
+  local entity_extract_service="nv-horizon-entity-extract"
   if [[ -z "$entity_extract_url" ]] && gcloud run services describe "$entity_extract_service" --region="$REGION" >/dev/null 2>&1; then
     entity_extract_url=$(gcloud run services describe "$entity_extract_service" --region="$REGION" --format='value(status.url)' 2>/dev/null || echo "")
   fi
@@ -1638,7 +1691,7 @@ deploy_api() {
     echo -e "${BLUE}[api] Found Entity Extract service:${NC} $entity_extract_url"
   fi
   local agentmesh_url="${AGENTMESH_PUBLIC_BASE_URL:-}"
-  local agentmesh_service="etigram-agentmesh"
+  local agentmesh_service="nv-horizon-agentmesh"
   if [[ -z "$agentmesh_url" ]] && gcloud run services describe "$agentmesh_service" --region="$REGION" >/dev/null 2>&1; then
     agentmesh_url=$(gcloud run services describe "$agentmesh_service" --region="$REGION" --format='value(status.url)' 2>/dev/null || echo "")
   fi
@@ -1668,22 +1721,21 @@ deploy_api() {
   [[ -z "$resolved_event_gate_mode" ]] && resolved_event_gate_mode="shadow"
   [[ -z "$resolved_entity_extract_mode" ]] && resolved_entity_extract_mode="shadow"
 
-  local enable_etigram_watchdog="${ENABLE_ETIGRAM_WATCHDOG:-0}"
-  if [[ "${TARGET_ETIGRAM_WATCHDOG:-0}" -eq 1 ]]; then
-    enable_etigram_watchdog="1"
+  local enable_nv_horizon_watchdog="${ENABLE_NV_HORIZON_WATCHDOG:-0}"
+  if [[ "${TARGET_NV_HORIZON_WATCHDOG:-0}" -eq 1 ]]; then
+    enable_nv_horizon_watchdog="1"
   fi
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://etigram.pro|https://www.etigram.pro|https://*.etigram.pro|https://etigram.one|https://www.etigram.one|https://*.etigram.one|https://etigram.web.app|https://etigram.firebaseapp.com|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,ENABLE_CLOUD_TASKS_RISK=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE=${scout_background_queue},CLOUD_TASKS_SCOUT_BACKGROUND_DELAY=${CLOUD_TASKS_SCOUT_BACKGROUND_DELAY:-15s},CLOUD_TASKS_RISK_QUEUE=${risk_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_ETIGRAM_WATCHDOG=${enable_etigram_watchdog},PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://etigram.one/subscription/success,PAYPAL_CANCEL_URL=https://etigram.one/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h,GEONAMES_USERNAME=${GEONAMES_USERNAME:-kirisyuk}"
-  # Etigram Fragments: dedicated bucket + dedicated Vertex AI Search Data Store
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://nordicvision.io|https://www.nordicvision.io|https://*.nordicvision.io|https://horizon.nordicvision.io|https://www.horizon.nordicvision.io|https://*.horizon.nordicvision.io|https://${FIREBASE_PROJECT_ID}.web.app|https://${FIREBASE_PROJECT_ID}.firebaseapp.com|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},VERTEX_SEARCH_INTERNAL_KNOWLEDGE_STORE_ID=${VERTEX_SEARCH_INTERNAL_KNOWLEDGE_STORE_ID:-${vertex_search_ds_id}},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,ENABLE_CLOUD_TASKS_RISK=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE=${scout_background_queue},CLOUD_TASKS_SCOUT_BACKGROUND_DELAY=${CLOUD_TASKS_SCOUT_BACKGROUND_DELAY:-15s},CLOUD_TASKS_RISK_QUEUE=${risk_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_NV_HORIZON_WATCHDOG=${enable_nv_horizon_watchdog},PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://horizon.nordicvision.io/subscription/success,PAYPAL_CANCEL_URL=https://horizon.nordicvision.io/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h,GEONAMES_USERNAME=${GEONAMES_USERNAME:-kirisyuk}"
+  # Horizon Fragments: dedicated bucket + dedicated Vertex AI Search Data Stores (fragments + edges IDs set above).
   # Store isolation is used instead of filters (filters on structData.* are not supported in our current schema).
-  local etigram_fragments_bucket="${ETIGRAM_FRAGMENTS_BUCKET:-${PROJECT_ID}-etigram-fragments}"
-  local etigram_fragments_datastore="${VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID:-etigram-fragments-store}"
-  env_vars="$env_vars,ETIGRAM_FRAGMENTS_BUCKET=${etigram_fragments_bucket},VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID=${etigram_fragments_datastore}"
+  local nv_horizon_fragments_bucket="${NV_HORIZON_FRAGMENTS_BUCKET:-${PROJECT_ID}-nv-horizon-fragments}"
+  env_vars="$env_vars,NV_HORIZON_FRAGMENTS_BUCKET=${nv_horizon_fragments_bucket},VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID=${nv_horizon_fragments_datastore},VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_ID=${nv_horizon_edges_datastore}"
 
   # NOTE: ADMIN_JOB_TOKEN is provided via Secret Manager (see --set-secrets) to avoid rotation/desync.
 
-  # If deploying Etigram Watchdog scheduler mode, keep related env vars in sync (also replaced by deploy).
-  if [[ "${TARGET_ETIGRAM_WATCHDOG:-0}" -eq 1 ]]; then
-    env_vars="$env_vars,DISABLE_ETIGRAM_WATCHDOG_TICKER=true,ETIGRAM_WATCHDOG_CRON_LIMIT=${ETIGRAM_WATCHDOG_CRON_LIMIT:-200},ETIGRAM_WATCHDOG_CRON_LOCK_TTL=${ETIGRAM_WATCHDOG_CRON_LOCK_TTL:-9m}"
+  # If deploying Horizon Watchdog scheduler mode, keep related env vars in sync (also replaced by deploy).
+  if [[ "${TARGET_NV_HORIZON_WATCHDOG:-0}" -eq 1 ]]; then
+    env_vars="$env_vars,DISABLE_NV_HORIZON_WATCHDOG_TICKER=true,NV_HORIZON_WATCHDOG_CRON_LIMIT=${NV_HORIZON_WATCHDOG_CRON_LIMIT:-200},NV_HORIZON_WATCHDOG_CRON_LOCK_TTL=${NV_HORIZON_WATCHDOG_CRON_LOCK_TTL:-9m}"
   fi
   
   # Add Redis env vars if available (REDIS_HOST/PORT for cache package, REDIS_ADDR for legacy applicability_evaluator)
@@ -1706,7 +1758,7 @@ deploy_api() {
     env_vars="$env_vars,ENTITY_EXTRACT_SERVICE_URL=$entity_extract_url,ENTITY_EXTRACT_MODE=${resolved_entity_extract_mode}"
   fi
   if [[ -n "$agentmesh_url" ]]; then
-    env_vars="$env_vars,AGENTMESH_PUBLIC_BASE_URL=$agentmesh_url,AGENTMESH_TASK_TARGET_URL=${agentmesh_url}/api/v1/internal/tasks/agentmesh/run,AGENTMESH_TASKS_LOCATION=${AGENTMESH_TASKS_LOCATION:-$REGION},AGENTMESH_TASKS_QUEUE=${AGENTMESH_TASKS_QUEUE:-etigram-agentmesh},AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,AGENTMESH_TASKS_OIDC_AUDIENCE=$agentmesh_url,AGENTMESH_TASKS_DISABLE_OIDC=${AGENTMESH_TASKS_DISABLE_OIDC:-1},AGENTMESH_ARTIFACT_BUCKET=${PROJECT_ID}-agentmesh-artifacts"
+    env_vars="$env_vars,AGENTMESH_PUBLIC_BASE_URL=$agentmesh_url,AGENTMESH_TASK_TARGET_URL=${agentmesh_url}/api/v1/internal/tasks/agentmesh/run,AGENTMESH_TASKS_LOCATION=${AGENTMESH_TASKS_LOCATION:-$REGION},AGENTMESH_TASKS_QUEUE=${AGENTMESH_TASKS_QUEUE:-nv-horizon-agentmesh},AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,AGENTMESH_TASKS_OIDC_AUDIENCE=$agentmesh_url,AGENTMESH_TASKS_DISABLE_OIDC=${AGENTMESH_TASKS_DISABLE_OIDC:-1},AGENTMESH_ARTIFACT_BUCKET=${PROJECT_ID}-agentmesh-artifacts"
   fi
 
   local api_cpu="${API_CLOUD_RUN_CPU:-2}"
@@ -1753,25 +1805,54 @@ deploy_api() {
   echo -e "${GREEN}[api] Deployed successfully${NC}"
   echo -e "${BLUE}[api] URL:${NC} $API_URL"
 
+  # First deploy may not know the final service URL ahead of time, so sync
+  # self-referential Cloud Tasks and AgentMesh env vars after Cloud Run assigns it.
+  local post_deploy_env_vars=()
+  if [[ -n "$API_URL" ]]; then
+    post_deploy_env_vars+=("CLOUD_TASKS_TARGET_BASE_URL=$API_URL")
+    post_deploy_env_vars+=("CLOUD_TASKS_OIDC_AUDIENCE=$API_URL")
+  fi
+  if [[ -n "$agentmesh_url" ]]; then
+    post_deploy_env_vars+=("AGENTMESH_PUBLIC_BASE_URL=$agentmesh_url")
+    post_deploy_env_vars+=("AGENTMESH_TASK_TARGET_URL=${agentmesh_url}/api/v1/internal/tasks/agentmesh/run")
+    post_deploy_env_vars+=("AGENTMESH_TASKS_LOCATION=${AGENTMESH_TASKS_LOCATION:-$REGION}")
+    post_deploy_env_vars+=("AGENTMESH_TASKS_QUEUE=${AGENTMESH_TASKS_QUEUE:-nv-horizon-agentmesh}")
+    post_deploy_env_vars+=("AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND")
+    post_deploy_env_vars+=("AGENTMESH_TASKS_OIDC_AUDIENCE=$agentmesh_url")
+    post_deploy_env_vars+=("AGENTMESH_TASKS_DISABLE_OIDC=${AGENTMESH_TASKS_DISABLE_OIDC:-1}")
+    post_deploy_env_vars+=("AGENTMESH_ARTIFACT_BUCKET=${PROJECT_ID}-agentmesh-artifacts")
+  fi
+  if [[ ${#post_deploy_env_vars[@]} -gt 0 ]]; then
+    local post_deploy_env_csv
+    post_deploy_env_csv=$(IFS=,; echo "${post_deploy_env_vars[*]}")
+    echo -e "${BLUE}[api] Syncing runtime URLs after deploy...${NC}"
+    gcloud run services update "$service" \
+      --region "$REGION" \
+      --project "$PROJECT_ID" \
+      --update-env-vars "$post_deploy_env_csv" \
+      --quiet >/dev/null 2>&1 || \
+      echo -e "${YELLOW}[api] Warning: failed to sync runtime URLs after deploy${NC}"
+  fi
+
   # Best-effort: keep Cloud Scheduler job headers in sync with Secret Manager admin job token.
   local admin_token
   admin_token=$(gcloud secrets versions access latest --secret="$SECRET_ADMIN_JOB_TOKEN" 2>/dev/null || true)
   if [[ -z "$admin_token" ]]; then
     admin_token=$(openssl rand -hex 12 2>/dev/null || echo dev-admin-token)
   fi
-  if gcloud scheduler jobs describe "etigram-watchdog" --location="$REGION" >/dev/null 2>&1; then
-    gcloud scheduler jobs update http "etigram-watchdog" \
+  if gcloud scheduler jobs describe "nv-horizon-watchdog" --location="$REGION" >/dev/null 2>&1; then
+    gcloud scheduler jobs update http "nv-horizon-watchdog" \
       --location="$REGION" \
       --update-headers="X-Job-Token=$admin_token" \
       --quiet >/dev/null 2>&1 || true
-    echo -e "${GREEN}[api] ✓${NC} Updated Cloud Scheduler header for etigram-watchdog"
+    echo -e "${GREEN}[api] ✓${NC} Updated Cloud Scheduler header for nv-horizon-watchdog"
   fi
-  if gcloud scheduler jobs describe "etigram-source-poller" --location="$REGION" >/dev/null 2>&1; then
-    gcloud scheduler jobs update http "etigram-source-poller" \
+  if gcloud scheduler jobs describe "nv-horizon-source-poller" --location="$REGION" >/dev/null 2>&1; then
+    gcloud scheduler jobs update http "nv-horizon-source-poller" \
       --location="$REGION" \
       --update-headers="X-Job-Token=$admin_token" \
       --quiet >/dev/null 2>&1 || true
-    echo -e "${GREEN}[api] ✓${NC} Updated Cloud Scheduler header for etigram-source-poller"
+    echo -e "${GREEN}[api] ✓${NC} Updated Cloud Scheduler header for nv-horizon-source-poller"
   fi
 }
 
@@ -1789,7 +1870,7 @@ deploy_verified_proxy() {
   # Get backend URL and functions key
   local backend_url="${API_URL:-}"
   if [[ -z "$backend_url" ]]; then
-    backend_url=$(gcloud run services describe etigram-api --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
+    backend_url=$(gcloud run services describe nv-horizon-api --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
   fi
   
   if [[ -z "$backend_url" ]]; then
@@ -1808,7 +1889,7 @@ deploy_verified_proxy() {
   # Support FRONTEND_ORIGINS (comma-separated) or FRONTEND_ORIGIN (single)
   local allowed_origins="${FRONTEND_ORIGINS:-}"
   if [[ -z "$allowed_origins" ]]; then
-    local single_origin="${FRONTEND_ORIGIN:-https://etigram.pro}"
+    local single_origin="${FRONTEND_ORIGIN:-https://nordicvision.io}"
     # Add localhost if not already in the list
     if [[ "$single_origin" != *"localhost"* ]]; then
       allowed_origins="${single_origin},http://localhost:5173"
@@ -1882,23 +1963,38 @@ deploy_verified_proxy() {
   fi
 }
 
-deploy_etigram_ws() {
-  echo -e "${BLUE}[etigram-ws] Building image...${NC}"
-  local service="etigram-ws"
-  local image="us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/etigram-ws:latest"
+deploy_nv_horizon_ws() {
+  echo -e "${BLUE}[nv-horizon-ws] Ensuring Artifact Registry repo (cloud-run-source-deploy)...${NC}"
+  gcloud services enable artifactregistry.googleapis.com --project="$PROJECT_ID" >/dev/null 2>&1 || true
+  if ! gcloud artifacts repositories describe cloud-run-source-deploy --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    gcloud artifacts repositories create cloud-run-source-deploy \
+      --repository-format=docker \
+      --location="$REGION" \
+      --project="$PROJECT_ID" \
+      --description="Cloud Run deploy images" \
+      --quiet >/dev/null 2>&1 || {
+      echo -e "${RED}[nv-horizon-ws] Failed to create Artifact Registry repo cloud-run-source-deploy${NC}" >&2
+      exit 1
+    }
+    echo -e "${GREEN}[nv-horizon-ws] Created Artifact Registry repo:${NC} cloud-run-source-deploy"
+  fi
+
+  echo -e "${BLUE}[nv-horizon-ws] Building image...${NC}"
+  local service="nv-horizon-ws"
+  local image="us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/nv-horizon-ws:latest"
 
   gcloud builds submit "$API_DIR" \
-    --config="$API_DIR/cloudbuild.etigram-ws.yaml" \
+    --config="$API_DIR/cloudbuild.nv-horizon-ws.yaml" \
     --project "$PROJECT_ID" \
     --quiet
 
   if [[ "$FIREBASE_PROJECT_ID" != "$PROJECT_ID" ]]; then
-    echo -e "${YELLOW}[etigram-ws] FIREBASE_PROJECT_ID ($FIREBASE_PROJECT_ID) differs from project ($PROJECT_ID). Forcing FIREBASE_AUTH_PROJECT_ID=$PROJECT_ID.${NC}"
+    echo -e "${YELLOW}[nv-horizon-ws] FIREBASE_PROJECT_ID ($FIREBASE_PROJECT_ID) differs from project ($PROJECT_ID). Forcing FIREBASE_AUTH_PROJECT_ID=$PROJECT_ID.${NC}"
   fi
-  # etigram-ws must verify tokens issued by the active project for this deployment.
+  # nv-horizon-ws must verify tokens issued by the active project for this deployment.
   local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$PROJECT_ID"
 
-  echo -e "${BLUE}[etigram-ws] Deploying to Cloud Run...${NC}"
+  echo -e "${BLUE}[nv-horizon-ws] Deploying to Cloud Run...${NC}"
   gcloud run deploy "$service" \
     --image "$image" \
     --region "$REGION" \
@@ -1916,14 +2012,14 @@ deploy_etigram_ws() {
 
   gcloud run services update-traffic "$service" --region "$REGION" --to-latest --quiet
 
-  ETIGRAM_WS_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
-  echo -e "${GREEN}[etigram-ws] Deployed successfully${NC}"
-  echo -e "${BLUE}[etigram-ws] URL:${NC} $ETIGRAM_WS_URL"
+  NV_HORIZON_WS_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
+  echo -e "${GREEN}[nv-horizon-ws] Deployed successfully${NC}"
+  echo -e "${BLUE}[nv-horizon-ws] URL:${NC} $NV_HORIZON_WS_URL"
 }
 
 deploy_py() {
   echo -e "${BLUE}[py] Deploying Telegram service to Cloud Run...${NC}"
-  local service="etigram-telegram"
+  local service="nv-horizon-telegram"
   local SRC_DIR="$ROOT_DIR/python/telegram_service"
   gcloud run deploy "$service" \
     --source "$SRC_DIR" \
@@ -1947,9 +2043,9 @@ deploy_py() {
   
   # Update backend with TELEGRAM_SERVICE_URL if we have it (only if API was not just deployed)
   # If API was deployed, TELEGRAM_SERVICE_URL is already set in env_vars during deploy
-  if [[ -n "$TG_URL" ]] && [[ "$TARGET_API" -eq 0 ]] && gcloud run services describe etigram-api --region "$REGION" >/dev/null 2>&1; then
+  if [[ -n "$TG_URL" ]] && [[ "$TARGET_API" -eq 0 ]] && gcloud run services describe nv-horizon-api --region "$REGION" >/dev/null 2>&1; then
     echo -e "${BLUE}[api] Updating existing backend with TELEGRAM_SERVICE_URL=$TG_URL...${NC}"
-    gcloud run services update etigram-api \
+    gcloud run services update nv-horizon-api \
       --region "$REGION" \
       --update-env-vars "TELEGRAM_SERVICE_URL=$TG_URL" \
       --quiet || {
@@ -1987,7 +2083,7 @@ deploy_python_cloud_run_service() {
 
 deploy_event_gate() {
   echo -e "${BLUE}[event-gate] Deploying Event Gate NLP service to Cloud Run...${NC}"
-  local service="etigram-event-gate"
+  local service="nv-horizon-event-gate"
   local SRC_DIR="$ROOT_DIR/python/event_gate_service"
   local local_model="$SRC_DIR/model/event_gate.joblib"
   local model_backend="${EVENT_GATE_MODEL_BACKEND:-rules}"
@@ -2002,12 +2098,12 @@ deploy_event_gate() {
   EVENT_GATE_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
   echo -e "${GREEN}[event-gate] Deployed successfully${NC}"
   echo -e "${BLUE}[event-gate] URL:${NC} $EVENT_GATE_URL"
-  if [[ -n "$EVENT_GATE_URL" ]] && [[ "$TARGET_API" -eq 0 ]] && gcloud run services describe etigram-api --region "$REGION" >/dev/null 2>&1; then
+  if [[ -n "$EVENT_GATE_URL" ]] && [[ "$TARGET_API" -eq 0 ]] && gcloud run services describe nv-horizon-api --region "$REGION" >/dev/null 2>&1; then
     local current_event_gate_mode=""
-    current_event_gate_mode=$(gcloud run services describe etigram-api --region "$REGION" --format='json(spec.template.spec.containers[0].env)' 2>/dev/null | python3 -c 'import json,sys; env=json.load(sys.stdin); print(next((item.get("value","") for item in env if item.get("name")=="EVENT_GATE_MODE"), ""))' 2>/dev/null || echo "")
+    current_event_gate_mode=$(gcloud run services describe nv-horizon-api --region "$REGION" --format='json(spec.template.spec.containers[0].env)' 2>/dev/null | python3 -c 'import json,sys; env=json.load(sys.stdin); print(next((item.get("value","") for item in env if item.get("name")=="EVENT_GATE_MODE"), ""))' 2>/dev/null || echo "")
     [[ -z "$current_event_gate_mode" ]] && current_event_gate_mode="${EVENT_GATE_MODE:-shadow}"
     echo -e "${BLUE}[api] Updating existing backend with EVENT_GATE_SERVICE_URL=${EVENT_GATE_URL}${NC}"
-    gcloud run services update etigram-api \
+    gcloud run services update nv-horizon-api \
       --region "$REGION" \
       --update-env-vars "EVENT_GATE_SERVICE_URL=$EVENT_GATE_URL,EVENT_GATE_MODE=${EVENT_GATE_MODE:-$current_event_gate_mode}" \
       --quiet || {
@@ -2018,19 +2114,19 @@ deploy_event_gate() {
 
 deploy_entity_extract() {
   echo -e "${BLUE}[entity-extract] Deploying Entity Extract NLP service to Cloud Run...${NC}"
-  local service="etigram-entity-extract"
+  local service="nv-horizon-entity-extract"
   local SRC_DIR="$ROOT_DIR/python/entity_extract_service"
   local env_vars="MODEL_BACKEND=${ENTITY_EXTRACT_MODEL_BACKEND:-rules},GLINER_MODEL_NAME=${ENTITY_EXTRACT_GLINER_MODEL_NAME:-},LABEL_SCHEMA_VERSION=${ENTITY_EXTRACT_LABEL_SCHEMA_VERSION:-v1}"
   deploy_python_cloud_run_service "$service" "$SRC_DIR" 0 3 1 768Mi "$env_vars"
   ENTITY_EXTRACT_URL=$(gcloud run services describe "$service" --region "$REGION" --format='value(status.url)')
   echo -e "${GREEN}[entity-extract] Deployed successfully${NC}"
   echo -e "${BLUE}[entity-extract] URL:${NC} $ENTITY_EXTRACT_URL"
-  if [[ -n "$ENTITY_EXTRACT_URL" ]] && [[ "$TARGET_API" -eq 0 ]] && gcloud run services describe etigram-api --region "$REGION" >/dev/null 2>&1; then
+  if [[ -n "$ENTITY_EXTRACT_URL" ]] && [[ "$TARGET_API" -eq 0 ]] && gcloud run services describe nv-horizon-api --region "$REGION" >/dev/null 2>&1; then
     local current_entity_extract_mode=""
-    current_entity_extract_mode=$(gcloud run services describe etigram-api --region "$REGION" --format='json(spec.template.spec.containers[0].env)' 2>/dev/null | python3 -c 'import json,sys; env=json.load(sys.stdin); print(next((item.get("value","") for item in env if item.get("name")=="ENTITY_EXTRACT_MODE"), ""))' 2>/dev/null || echo "")
+    current_entity_extract_mode=$(gcloud run services describe nv-horizon-api --region "$REGION" --format='json(spec.template.spec.containers[0].env)' 2>/dev/null | python3 -c 'import json,sys; env=json.load(sys.stdin); print(next((item.get("value","") for item in env if item.get("name")=="ENTITY_EXTRACT_MODE"), ""))' 2>/dev/null || echo "")
     [[ -z "$current_entity_extract_mode" ]] && current_entity_extract_mode="${ENTITY_EXTRACT_MODE:-shadow}"
     echo -e "${BLUE}[api] Updating existing backend with ENTITY_EXTRACT_SERVICE_URL=${ENTITY_EXTRACT_URL}${NC}"
-    gcloud run services update etigram-api \
+    gcloud run services update nv-horizon-api \
       --region "$REGION" \
       --update-env-vars "ENTITY_EXTRACT_SERVICE_URL=$ENTITY_EXTRACT_URL,ENTITY_EXTRACT_MODE=${ENTITY_EXTRACT_MODE:-$current_entity_extract_mode}" \
       --quiet || {
@@ -2041,6 +2137,18 @@ deploy_entity_extract() {
 
 create_indexes() {
   echo -e "${BLUE}[firestore] Creating composite indexes (idempotent)...${NC}"
+  local sync_script="$ROOT_DIR/scripts/sync-firestore-indexes.py"
+  if [[ -f "$sync_script" ]]; then
+    echo -e "${BLUE}[firestore] Syncing composite indexes from web/firestore.indexes.json via gcloud...${NC}"
+    if python3 "$sync_script" --project "$PROJECT_ID" --database="(default)" --apply; then
+      echo -e "${GREEN}[firestore] ✓${NC} JSON-defined composite indexes submitted"
+    else
+      echo -e "${YELLOW}[firestore] Warning: JSON-defined composite index sync reported failures${NC}"
+    fi
+  else
+    echo -e "${YELLOW}[firestore] Warning: sync script not found at $sync_script${NC}"
+  fi
+
   # Projects: tenantId + view + lastInteractionAt desc
   gcloud firestore indexes composite create --async \
     --collection-group=core_projects \
@@ -2272,36 +2380,83 @@ create_indexes() {
       echo -e "${YELLOW}     --database=\"(default)\" --project=$PROJECT_ID"
     fi
   fi
+
+  # Vector index for horizon_fragments.vectorEmbedding (same dimension as rag_chunks)
+  echo -e "${BLUE}[firestore] Ensuring vector index for horizon_fragments.vectorEmbedding...${NC}"
+  local has_hf_vector=false
+  if command -v jq >/dev/null 2>&1; then
+    local hf_count
+    hf_count=$(gcloud firestore indexes composite list --project="$PROJECT_ID" --format=json 2>/dev/null | jq '[.[] | select(.fields[]?.vectorConfig != null and (.name | contains("horizon_fragments")))] | length' 2>/dev/null || echo "0")
+    if [ "$hf_count" -gt 0 ] 2>/dev/null; then
+      has_hf_vector=true
+    fi
+  fi
+  if [ "$has_hf_vector" = true ]; then
+    echo -e "${GREEN}  ✓${NC} Vector index already exists for horizon_fragments.vectorEmbedding"
+  else
+    if gcloud firestore indexes composite create --async \
+      --collection-group=horizon_fragments \
+      --query-scope=COLLECTION \
+      --field-config='field-path=vectorEmbedding,vector-config={"dimension":"1536", "flat": "{}"}' \
+      --database="(default)" \
+      --project="$PROJECT_ID" \
+      --quiet 2>/dev/null; then
+      echo -e "${GREEN}  ✓${NC} Submitted horizon_fragments vector index (propagation may take minutes)"
+    else
+      echo -e "${YELLOW}  ⚠${NC} horizon_fragments vector index not created (may already exist or need retry)"
+    fi
+  fi
   
-  # Deploy firestore rules and indexes via Firebase CLI
-  # Note: Vector indexes are created separately via gcloud (see above)
+  # Deploy firestore rules and composite indexes via Firebase CLI.
+  # Vector fieldOverrides in firestore.indexes.json break `firebase deploy` (CLI schema); vectors are via gcloud above.
   echo -e "${BLUE}[firestore] Deploying rules and indexes (firestore)...${NC}"
-  if [[ -f "$WEB_DIR/firestore.indexes.json" ]] && [[ -f "$API_DIR/firestore.rules" ]]; then
+  if [[ -f "$WEB_DIR/firestore.indexes.json" ]] && [[ -f "$WEB_DIR/firestore.rules" ]]; then
     if command -v firebase >/dev/null 2>&1 && [[ -f "$WEB_DIR/firebase.json" ]]; then
       cd "$WEB_DIR"
-      if firebase deploy --only firestore --project "$PROJECT_ID" --non-interactive --force 2>/dev/null; then
-        echo -e "${GREEN}  ✓${NC} Firestore rules and indexes deployed via Firebase CLI"
-        cd "$ROOT_DIR"
+      local rules_ok=0
+      if firebase deploy --only firestore:rules --project "$PROJECT_ID" --non-interactive --force 2>/dev/null; then
+        echo -e "${GREEN}  ✓${NC} Firestore rules deployed via Firebase CLI"
+        rules_ok=1
       else
-        cd "$ROOT_DIR"
-        echo -e "${YELLOW}  ⚠${NC} Firebase CLI deploy failed (this is normal if indexes already exist)"
-        echo -e "${BLUE}  To deploy manually:${NC} cd web && firebase deploy --only firestore --project $PROJECT_ID"
+        echo -e "${YELLOW}  ⚠${NC} Firebase rules deploy failed"
+      fi
+      local indexes_ok=0
+      if command -v jq >/dev/null 2>&1; then
+        local idx_bak idx_tmp
+        idx_bak=$(mktemp)
+        idx_tmp=$(mktemp)
+        cp firestore.indexes.json "$idx_bak"
+        jq 'del(.fieldOverrides)' firestore.indexes.json > "$idx_tmp" && cp "$idx_tmp" firestore.indexes.json
+        if firebase deploy --only firestore:indexes --project "$PROJECT_ID" --non-interactive --force 2>/dev/null; then
+          echo -e "${GREEN}  ✓${NC} Firestore composite indexes deployed via Firebase CLI (vector overrides omitted; use gcloud for vectors)"
+          indexes_ok=1
+        else
+          echo -e "${YELLOW}  ⚠${NC} Firebase indexes deploy failed or partial (idempotent re-run is safe)"
+        fi
+        mv "$idx_bak" firestore.indexes.json
+        rm -f "$idx_tmp"
+      else
+        echo -e "${YELLOW}  ⚠${NC} jq not installed; skipping Firebase index deploy (install jq or deploy indexes manually)"
+      fi
+      cd "$ROOT_DIR"
+      if [[ "$rules_ok" -eq 0 ]]; then
+        echo -e "${BLUE}  Retry:${NC} cd web && firebase deploy --only firestore:rules --project $PROJECT_ID"
       fi
     else
       echo -e "${YELLOW}  ⚠${NC} Firebase CLI not found or firebase.json missing"
       echo -e "${YELLOW}  ⚠${NC} Deploy manually: cd web && firebase deploy --only firestore --project $PROJECT_ID"
     fi
-    echo -e "${BLUE}  Rules:${NC} $API_DIR/firestore.rules"
+    echo -e "${BLUE}  Rules:${NC} $WEB_DIR/firestore.rules"
     echo -e "${BLUE}  Indexes:${NC} $WEB_DIR/firestore.indexes.json"
   else
-    [[ ! -f "$API_DIR/firestore.rules" ]] && echo -e "${YELLOW}  ⚠${NC} firestore.rules not found at $API_DIR/firestore.rules"
+    [[ ! -f "$WEB_DIR/firestore.rules" ]] && echo -e "${YELLOW}  ⚠${NC} firestore.rules not found at $WEB_DIR/firestore.rules"
     [[ ! -f "$WEB_DIR/firestore.indexes.json" ]] && echo -e "${YELLOW}  ⚠${NC} firestore.indexes.json not found at $WEB_DIR/firestore.indexes.json"
   fi
 
   # Verify meta_analyses indexes presence (best-effort)
   echo -e "${BLUE}[firestore] Verifying meta_analyses composite indexes...${NC}"
   local meta_list_json
-  if meta_list_json=$(gcloud firestore indexes composite list --collection-group=meta_analyses --format=json 2>/dev/null); then
+  if meta_list_json=$(gcloud firestore indexes composite list --filter='COLLECTION_GROUP:meta_analyses' --project="$PROJECT_ID" --format=json 2>/dev/null); then
     local has_proj
     local has_user
     has_proj=$(echo "$meta_list_json" | grep -c '"projectId"' || true)
@@ -2497,16 +2652,19 @@ setup_agentmesh_infrastructure() {
   for role in \
     roles/datastore.user \
     roles/aiplatform.user \
+    roles/discoveryengine.user \
     roles/secretmanager.secretAccessor \
     roles/storage.objectAdmin \
     roles/logging.logWriter \
     roles/cloudtasks.enqueuer \
     roles/cloudkms.signerVerifier; do
-    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    if ! gcloud projects add-iam-policy-binding "$PROJECT_ID" \
       --member="serviceAccount:$SA_AGENTMESH" \
       --role="$role" \
       --condition=None \
-      --quiet >/dev/null 2>&1 || true
+      --quiet >/dev/null 2>&1; then
+      echo -e "${YELLOW}[agentmesh] Warning: IAM bind failed or redundant:${NC} $role (check permissions / policy)"
+    fi
   done
 
   if ! gcloud kms keyrings describe "$AGENTMESH_KMS_KEYRING" --location "$AGENTMESH_KMS_LOCATION" --project "$PROJECT_ID" >/dev/null 2>&1; then
@@ -2537,7 +2695,7 @@ setup_agentmesh_infrastructure() {
     echo -e "${GREEN}[agentmesh] Created bucket:${NC} $bucket"
   fi
 
-  local queue="${AGENTMESH_TASKS_QUEUE:-etigram-agentmesh}"
+  local queue="${AGENTMESH_TASKS_QUEUE:-nv-horizon-agentmesh}"
   if ! gcloud tasks queues describe "$queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     gcloud tasks queues create "$queue" --location="$REGION" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
     echo -e "${GREEN}[agentmesh] Created Cloud Tasks queue:${NC} $queue"
@@ -2558,8 +2716,23 @@ setup_agentmesh_infrastructure() {
 }
 
 deploy_agentmesh() {
+  echo -e "${BLUE}[agentmesh] Ensuring Artifact Registry repo (cloud-run-source-deploy)...${NC}"
+  gcloud services enable artifactregistry.googleapis.com --project="$PROJECT_ID" >/dev/null 2>&1 || true
+  if ! gcloud artifacts repositories describe cloud-run-source-deploy --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    gcloud artifacts repositories create cloud-run-source-deploy \
+      --repository-format=docker \
+      --location="$REGION" \
+      --project="$PROJECT_ID" \
+      --description="Cloud Run deploy images" \
+      --quiet >/dev/null 2>&1 || {
+      echo -e "${RED}[agentmesh] Failed to create Artifact Registry repo cloud-run-source-deploy${NC}" >&2
+      exit 1
+    }
+    echo -e "${GREEN}[agentmesh] Created Artifact Registry repo:${NC} cloud-run-source-deploy"
+  fi
+
   echo -e "${BLUE}[agentmesh] Building container image...${NC}"
-  local service="etigram-agentmesh"
+  local service="nv-horizon-agentmesh"
   local image_tag
   image_tag=$(date +%s)
   local image="us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/${service}:${image_tag}"
@@ -2592,7 +2765,9 @@ deploy_agentmesh() {
   if [[ -n "$public_base_url" ]]; then
     target_url="${public_base_url}/api/v1/internal/tasks/agentmesh/run"
   fi
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,AGENTMESH_VERTEX_LOCATION=${AGENTMESH_VERTEX_LOCATION:-global},AGENTMESH_VERTEX_REASONING_ENGINE=${AGENTMESH_REASONING_ENGINE},AGENTMESH_PUBLIC_BASE_URL=${public_base_url},AGENTMESH_TASK_TARGET_URL=${target_url},AGENTMESH_TASKS_LOCATION=${AGENTMESH_TASKS_LOCATION:-$REGION},AGENTMESH_TASKS_QUEUE=${AGENTMESH_TASKS_QUEUE:-etigram-agentmesh},AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,AGENTMESH_TASKS_OIDC_AUDIENCE=${oidc_audience},AGENTMESH_TASKS_DISABLE_OIDC=${AGENTMESH_TASKS_DISABLE_OIDC:-1},AGENTMESH_ALLOW_UNAUTH_INTERNAL_TASKS=${AGENTMESH_ALLOW_UNAUTH_INTERNAL_TASKS:-1},AGENTMESH_RUNTIME_LEASE_OWNER=${AGENTMESH_RUNTIME_LEASE_OWNER:-${service}},AGENTMESH_ARTIFACT_BUCKET=${PROJECT_ID}-agentmesh-artifacts,AGENTMESH_AGENT_CARD_KMS_KEY_VERSION=${AGENTMESH_AGENT_CARD_KMS_KEY_VERSION},AGENTMESH_AGENT_CARD_KEY_ID=${AGENTMESH_AGENT_CARD_KMS_KEY_VERSION},AGENTMESH_MODEL_FLASH=${AGENTMESH_MODEL_FLASH:-gemini-3-flash-preview},AGENTMESH_MODEL_PRO=${AGENTMESH_MODEL_PRO:-gemini-3-pro-preview},VERTEX_SEARCH_DATA_STORE_ID=${VERTEX_SEARCH_DATA_STORE_ID:-rag-documents-store},AGENTMESH_VERTEX_SESSION_TTL=${AGENTMESH_VERTEX_SESSION_TTL:-86400s}"
+  # Reasoning Engine is created in AGENTMESH_VERTEX_LOCATION or REGION (see ensure_agentmesh_reasoning_engine); keep defaults aligned.
+  local agentmesh_vertex_loc="${AGENTMESH_VERTEX_LOCATION:-$REGION}"
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,AGENTMESH_VERTEX_LOCATION=${agentmesh_vertex_loc},AGENTMESH_VERTEX_REASONING_ENGINE=${AGENTMESH_REASONING_ENGINE},AGENTMESH_PUBLIC_BASE_URL=${public_base_url},AGENTMESH_TASK_TARGET_URL=${target_url},AGENTMESH_TASKS_LOCATION=${AGENTMESH_TASKS_LOCATION:-$REGION},AGENTMESH_TASKS_QUEUE=${AGENTMESH_TASKS_QUEUE:-nv-horizon-agentmesh},AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,AGENTMESH_TASKS_OIDC_AUDIENCE=${oidc_audience},AGENTMESH_TASKS_DISABLE_OIDC=${AGENTMESH_TASKS_DISABLE_OIDC:-1},AGENTMESH_ALLOW_UNAUTH_INTERNAL_TASKS=${AGENTMESH_ALLOW_UNAUTH_INTERNAL_TASKS:-1},AGENTMESH_RUNTIME_LEASE_OWNER=${AGENTMESH_RUNTIME_LEASE_OWNER:-${service}},AGENTMESH_ARTIFACT_BUCKET=${PROJECT_ID}-agentmesh-artifacts,AGENTMESH_AGENT_CARD_KMS_KEY_VERSION=${AGENTMESH_AGENT_CARD_KMS_KEY_VERSION},AGENTMESH_AGENT_CARD_KEY_ID=${AGENTMESH_AGENT_CARD_KMS_KEY_VERSION},AGENTMESH_MODEL_FLASH=${AGENTMESH_MODEL_FLASH:-gemini-3-flash-preview},AGENTMESH_MODEL_PRO=${AGENTMESH_MODEL_PRO:-gemini-3-pro-preview},VERTEX_SEARCH_DATA_STORE_ID=${VERTEX_SEARCH_DATA_STORE_ID:-rag-documents-store},AGENTMESH_VERTEX_SESSION_TTL=${AGENTMESH_VERTEX_SESSION_TTL:-86400s}"
 
   echo -e "${BLUE}[agentmesh] Deploying to Cloud Run...${NC}"
   gcloud run deploy "$service" \
@@ -2619,6 +2794,13 @@ deploy_agentmesh() {
     --role="roles/run.invoker" \
     --project "$PROJECT_ID" \
     --quiet >/dev/null 2>&1 || true
+  # Cloud Tasks (and API) call AgentMesh with OIDC from backend@ — must be allowed to invoke.
+  gcloud run services add-iam-policy-binding "$service" \
+    --region "$REGION" \
+    --member="serviceAccount:$SA_BACKEND" \
+    --role="roles/run.invoker" \
+    --project "$PROJECT_ID" \
+    --quiet >/dev/null 2>&1 || true
 
   gcloud run services update "$service" \
     --region "$REGION" \
@@ -2630,7 +2812,7 @@ deploy_agentmesh() {
 
 # Setup infrastructure only on full deploy or explicit check.
 # Individual service deploys (--api, --ws, --verified-proxy, --py) usually skip infra checks for speed,
-# BUT some flags (e.g. --etigram-watchdog) require infra steps (Cloud Scheduler jobs, env vars).
+# BUT some flags (e.g. --nv-horizon-watchdog) require infra steps (Cloud Scheduler jobs, env vars).
 if [[ "$TARGET_CHECK_INFRA" -eq 1 ]]; then
   setup_infrastructure
   create_indexes
@@ -2638,29 +2820,29 @@ if [[ "$TARGET_CHECK_INFRA" -eq 1 ]]; then
   exit 0
 elif [[ "$TARGET_AGENTMESH" -eq 1 ]]; then
   setup_agentmesh_infrastructure
-elif [[ "$TARGET_ETIGRAM_WATCHDOG" -eq 1 ]]; then
+elif [[ "$TARGET_NV_HORIZON_WATCHDOG" -eq 1 ]]; then
   # Minimal infra needed for watchdog Cloud Scheduler job creation/update.
   setup_infrastructure
 elif [[ "$TARGET_WEB" -eq 1 && "$TARGET_API" -eq 1 && "$TARGET_PY" -eq 0 && "$TARGET_VERIFIED_PROXY" -eq 0 ]]; then
   # Full deploy: run infrastructure checks
   setup_infrastructure
-elif [[ "$TARGET_SETUP_ETIGRAM_INFRA" -eq 1 ]]; then
-  # Deploy etigram-ws: ensure Pub/Sub topics and subscriptions exist
-  # Call the same setup function but only for etigram-ws infrastructure
-  echo -e "${BLUE}[infra] Setting up infrastructure for etigram-ws...${NC}"
+elif [[ "$TARGET_SETUP_NV_HORIZON_INFRA" -eq 1 ]]; then
+  # Deploy nv-horizon-ws: ensure Pub/Sub topics and subscriptions exist
+  # Call the same setup function but only for nv-horizon-ws infrastructure
+  echo -e "${BLUE}[infra] Setting up infrastructure for nv-horizon-ws...${NC}"
   # Ensure aggregated topics and subscriptions (reuse logic from setup_infrastructure)
   agg_topics=(
-    "etigram.genai.streams"
-    "etigram.discovery.events"
-    "etigram.artifact.events"
-    "etigram.interaction.events"
-    "etigram.analysis.events"
-    "etigram.verified.streams"
-    "etigram.horizon.events"
-    "etigram.operations.events"
+    "nv_horizon.genai.streams"
+    "nv_horizon.discovery.events"
+    "nv_horizon.artifact.events"
+    "nv_horizon.interaction.events"
+    "nv_horizon.analysis.events"
+    "nv_horizon.verified.streams"
+    "nv_horizon.horizon.events"
+    "nv_horizon.operations.events"
   )
   # 4.1 Ensure aggregated topics
-  echo -e "${BLUE}[infra] Ensuring Pub/Sub aggregated topics for etigram-ws...${NC}"
+  echo -e "${BLUE}[infra] Ensuring Pub/Sub aggregated topics for nv-horizon-ws...${NC}"
   for topic in "${agg_topics[@]}"; do
     if ! gcloud pubsub topics describe "$topic" --project="$PROJECT_ID" >/dev/null 2>&1; then
       gcloud pubsub topics create "$topic" --project="$PROJECT_ID" --quiet || true
@@ -2669,8 +2851,8 @@ elif [[ "$TARGET_SETUP_ETIGRAM_INFRA" -eq 1 ]]; then
       echo -e "${GREEN}  ✓${NC} $topic exists"
     fi
   done
-  # 4.2 Ensure etigram-ws subscriptions
-  echo -e "${BLUE}[infra] Ensuring Pub/Sub subscriptions for etigram-ws...${NC}"
+  # 4.2 Ensure nv-horizon-ws subscriptions
+  echo -e "${BLUE}[infra] Ensuring Pub/Sub subscriptions for nv-horizon-ws...${NC}"
   for topic in "${agg_topics[@]}"; do
     sub_id="${topic}-ws-broker"
     if gcloud pubsub subscriptions describe "$sub_id" --project="$PROJECT_ID" >/dev/null 2>&1; then
@@ -2700,8 +2882,8 @@ if [[ "$TARGET_API" -eq 1 ]]; then
   deploy_api
 fi
 
-if [[ "$TARGET_ETIGRAM_WS" -eq 1 ]]; then
-  deploy_etigram_ws
+if [[ "$TARGET_NV_HORIZON_WS" -eq 1 ]]; then
+  deploy_nv_horizon_ws
 fi
 
 if [[ "$TARGET_VERIFIED_PROXY" -eq 1 ]]; then
@@ -2745,9 +2927,9 @@ if [[ "$TARGET_CLEANUP_REVISIONS" -eq 1 ]]; then
   echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}"
   
   # Clean up revisions for all services (keep last 10 per service)
-  services=("etigram-api" "etigram-telegram" "etigram-event-gate" "etigram-entity-extract" "etigram-ws" "verified-proxy")
+  services=("nv-horizon-api" "nv-horizon-telegram" "nv-horizon-event-gate" "nv-horizon-entity-extract" "nv-horizon-ws" "verified-proxy")
   if [[ "$TARGET_AGENTMESH" -eq 1 ]]; then
-    services+=("etigram-agentmesh")
+    services+=("nv-horizon-agentmesh")
   fi
   for service in "${services[@]}"; do
     if gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
@@ -2773,8 +2955,8 @@ fi
 if [[ "$TARGET_VERIFIED_PROXY" -eq 1 ]] && [[ -n "${VERIFIED_PROXY_URL:-}" ]]; then
   echo -e "${BLUE}Verified Proxy:${NC} $VERIFIED_PROXY_URL"
 fi
-if [[ "$TARGET_ETIGRAM_WS" -eq 1 ]] && [[ -n "${ETIGRAM_WS_URL:-}" ]]; then
-  echo -e "${BLUE}WS Broker:${NC} $ETIGRAM_WS_URL"
+if [[ "$TARGET_NV_HORIZON_WS" -eq 1 ]] && [[ -n "${NV_HORIZON_WS_URL:-}" ]]; then
+  echo -e "${BLUE}WS Broker:${NC} $NV_HORIZON_WS_URL"
 fi
 if [[ "$TARGET_PY" -eq 1 ]] && [[ -n "${TG_URL:-}" ]]; then
   echo -e "${BLUE}Telegram Service:${NC} $TG_URL"

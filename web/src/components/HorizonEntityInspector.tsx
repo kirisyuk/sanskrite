@@ -11,7 +11,7 @@ import { describeRouteOverlay, readLegRouteOverlays, selectPrimaryLegRouteOverla
 import { HorizonOnDemandDependencyResolverModal, type HorizonOnDemandContext } from './HorizonOnDemandDependencyResolverModal';
 import { RISK_SEGMENTS, RiskSegmentIcon, segmentForMetricBaseKey } from '../lib/riskShield';
 
-interface ObjectInspectorProps {
+interface HorizonEntityInspectorProps {
   nodeId: string | null;
   nodeData: HorizonNodeData | null;
   edgeId: string | null;
@@ -19,7 +19,7 @@ interface ObjectInspectorProps {
   lensId: string | null;
 }
 
-export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
+export const HorizonEntityInspector: React.FC<HorizonEntityInspectorProps> = ({
   nodeId,
   nodeData,
   edgeId,
@@ -213,28 +213,32 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
       setLoading(true);
       setError(null);
       try {
-        // Use fragmentId from nodeData, or fallback to nodeId if fragmentId is not available
-        const fragmentId = nodeData?.fragmentId || nodeId;
-        
-        if (!fragmentId) {
+        const fragmentId = String(nodeData?.fragmentId || '').trim();
+        const canonicalPath = String(nodeData?.canonicalPath || '').trim();
+
+        if (fragmentId) {
+          const fragmentData = await api.getHorizonFragment(fragmentId);
+          setFragment(fragmentData);
+          return;
+        }
+
+        if (canonicalPath && canonicalPath.startsWith('/')) {
+          const fragmentData = await api.getHorizonFragmentByPath(canonicalPath);
+          setFragment(fragmentData);
+          return;
+        }
+
+        const fallbackNodeId = String(nodeId || '').trim();
+        if (!fallbackNodeId) {
           setError('Fragment ID is missing');
           setLoading(false);
           return;
         }
-        
-        // Load fragment by ID first.
-        // Fallback: if graph node IDs are canonical paths (or fragmentId is missing), try loading by path.
-        try {
-          const fragmentData = await api.getHorizonFragment(fragmentId);
-          setFragment(fragmentData);
-        } catch (e1: any) {
-          const cp = String(nodeData?.canonicalPath || '').trim();
-          if (!cp || !cp.startsWith('/')) throw e1;
-          const fragmentData = await api.getHorizonFragmentByPath(cp);
-          setFragment(fragmentData);
-        }
+
+        const fragmentData = await api.getHorizonFragment(fallbackNodeId);
+        setFragment(fragmentData);
       } catch (err: any) {
-        console.error('[ObjectInspector] Failed to load data', err);
+        console.error('[HorizonEntityInspector] Failed to load data', err);
         setError(err.response?.data?.error || err.message || 'Failed to load data');
       } finally {
         setLoading(false);
@@ -367,7 +371,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
         setNodeExplainText(text);
       }
     } catch (err: any) {
-      console.error('[ObjectInspector] Explain node failed', err);
+      console.error('[HorizonEntityInspector] Explain node failed', err);
       setNodeExplainError(err.response?.data?.error || err.message || 'Failed to explain node');
     } finally {
       setNodeExplainLoading(false);
@@ -425,7 +429,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
             setEdge(edgeDataFromApi);
           } catch (err) {
             // If API call fails, use the data from edgeData
-            console.warn('[ObjectInspector] Failed to load edge from API, using provided data', err);
+            console.warn('[HorizonEntityInspector] Failed to load edge from API, using provided data', err);
             loadedEdge = edgeData;
             setEdge(edgeData);
           }
@@ -445,7 +449,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
             const sourceFrag = await api.getHorizonFragment(sourceId);
             setSourceFragment(sourceFrag);
           } catch (err) {
-            console.warn('[ObjectInspector] Failed to load source fragment', err);
+            console.warn('[HorizonEntityInspector] Failed to load source fragment', err);
             setSourceFragment(null);
           }
         } else {
@@ -457,14 +461,14 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
             const targetFrag = await api.getHorizonFragment(targetId);
             setTargetFragment(targetFrag);
           } catch (err) {
-            console.warn('[ObjectInspector] Failed to load target fragment', err);
+            console.warn('[HorizonEntityInspector] Failed to load target fragment', err);
             setTargetFragment(null);
           }
         } else {
           setTargetFragment(null);
         }
       } catch (err: any) {
-        console.error('[ObjectInspector] Failed to load edge data', err);
+        console.error('[HorizonEntityInspector] Failed to load edge data', err);
         setError(err.response?.data?.error || err.message || 'Failed to load edge data');
       } finally {
         setLoading(false);
@@ -602,7 +606,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
         }
       }
     } catch (err: any) {
-      console.error('[ObjectInspector] Explain edge failed', err);
+      console.error('[HorizonEntityInspector] Explain edge failed', err);
       setEdgeExplainError(err.response?.data?.error || err.message || 'Failed to explain edge');
     } finally {
       setEdgeExplainLoading(false);
@@ -654,7 +658,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
         expand(fragmentId);
       }
     } catch (err: any) {
-      console.error('[ObjectInspector] Product IO materialization failed', err);
+      console.error('[HorizonEntityInspector] Product IO materialization failed', err);
       setProductIOError(err.response?.data?.error || err.message || 'Failed to materialize Product IO');
     } finally {
       setProductIOLoading(false);
@@ -3437,7 +3441,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                         setOnDemandCtx(ctx);
                         setOnDemandOpen(true);
                       } catch (e) {
-                        console.warn('[ObjectInspector] failed to open on-demand resolver', e);
+                        console.warn('[HorizonEntityInspector] failed to open on-demand resolver', e);
                       }
                     };
 
@@ -3557,7 +3561,7 @@ export const ObjectInspector: React.FC<ObjectInspectorProps> = ({
                       techCopyTimeoutRef.current = null;
                     }, 1200);
                   } catch (e) {
-                    console.warn('[ObjectInspector] tech copy failed', e);
+                    console.warn('[HorizonEntityInspector] tech copy failed', e);
                     setTechCopyState('idle');
                   }
                 }}

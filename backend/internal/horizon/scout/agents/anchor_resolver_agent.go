@@ -110,7 +110,8 @@ func buildAnchorResolverPrompt(query string, domains []DomainResolution) string 
 - Examples:
   - "Ibrahim Al Rashid Social Development Bank" → anchors:
     - PERSON: /person/ibrahim-al-rashid
-    - ORGANIZATION: /org/{iso2|na}/social-development-bank
+    - ORGANIZATION: /org/{iso2}/social-development-bank
+    - If jurisdiction is still genuinely unknowable after checking context and the name itself, /org/na/social-development-bank is the exceptional last-resort fallback
   - "Apple and Microsoft cloud partnership" → anchors:
     - ORGANIZATION: /org/us/apple-inc
     - ORGANIZATION: /org/us/microsoft-corp

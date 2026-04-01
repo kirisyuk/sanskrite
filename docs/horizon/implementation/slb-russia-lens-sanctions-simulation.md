@@ -4,7 +4,7 @@
 
 - `lensId`: `l8dOd17uKYYTKD0CI9hy`
 - name: `Slb`
-- tenant: `igor@etigram.pro`
+- tenant: `igor@nordicvision.org`
 - project: `DRGeH8tCC0EIoRpLlv3D`
 
 ## Goal

@@ -1,7 +1,7 @@
 # Ignore build artifacts and service binaries
 /server
 /verified-proxy
-/etigram-ws
+/nv_horizon_ws
 /main
 *.exe
 *.dll

@@ -74,6 +74,7 @@ type SupplyChainPathBuilder struct {
 	fragmentsRepo *repo.HorizonFragmentsRepository
 	edgesRepo     *repo.DependencyEdgesRepository
 	artifactsRepo *repo.MaterializedArtifactsRepository
+	artifactKind  models.MaterializedKind
 	cache         *pathBuilderCache
 }
 
@@ -87,6 +88,7 @@ func NewSupplyChainPathBuilder(
 		fragmentsRepo: fragmentsRepo,
 		edgesRepo:     edgesRepo,
 		artifactsRepo: artifactsRepo,
+		artifactKind:  models.MaterializedKindSupplyChainPath,
 		cache:         newPathBuilderCache(5 * time.Minute),
 	}
 }
@@ -95,6 +97,23 @@ func NewSupplyChainPathBuilder(
 func (b *SupplyChainPathBuilder) WithCacheTTL(ttl time.Duration) *SupplyChainPathBuilder {
 	b.cache = newPathBuilderCache(ttl)
 	return b
+}
+
+func (b *SupplyChainPathBuilder) WithArtifactKind(kind models.MaterializedKind) *SupplyChainPathBuilder {
+	if b == nil {
+		return b
+	}
+	if kind.Valid() {
+		b.artifactKind = kind
+	}
+	return b
+}
+
+func (b *SupplyChainPathBuilder) materializedKind() models.MaterializedKind {
+	if b != nil && b.artifactKind.Valid() {
+		return b.artifactKind
+	}
+	return models.MaterializedKindSupplyChainPath
 }
 
 // BuildPathOptions configures path building behavior.
@@ -840,7 +859,7 @@ func (b *SupplyChainPathBuilder) BuildMaterializationDraft(ctx context.Context, 
 	}
 	nodes, edges, legs, stress := b.pathToMaterializedPayload(ctx, path)
 	sufficiency := b.evaluatePathSufficiency(ctx, path, legs)
-	payload := models.BuildSupplyChainPathPayloadDetailed(nodes, edges, legs, stress, sufficiency, path.Family, buildSupplyChainArtifactNotes(path, legs, stress))
+	payload := models.BuildSupplyChainPathPayloadDetailed(nodes, edges, legs, stress, sufficiency, path.Family, buildOperationalChainArtifactNotes(path, legs, stress, b.materializedKind()))
 	parsedPayload, _ := models.ParseSupplyChainPathPayload(payload)
 	return &SupplyChainMaterializationDraft{
 		Nodes:          nodes,
@@ -858,6 +877,7 @@ func buildMaterializedArtifactFromDraft(
 	tenantID string,
 	lensID string,
 	canonicalKey string,
+	kind models.MaterializedKind,
 ) *models.MaterializedArtifact {
 	if path == nil || draft == nil || canonicalKey == "" {
 		return nil
@@ -869,14 +889,14 @@ func buildMaterializedArtifactFromDraft(
 		draft.Stress,
 		draft.Sufficiency,
 		path.Family,
-		buildSupplyChainArtifactNotes(path, draft.Legs, draft.Stress),
+		buildOperationalChainArtifactNotes(path, draft.Legs, draft.Stress, kind),
 	)
 	displayName := buildChainDisplayName(path.Segments)
 	labels := buildChainLabels(path.Segments)
 	artifact := &models.MaterializedArtifact{
 		TenantID:         tenantID,
 		LensID:           strings.TrimSpace(lensID),
-		Kind:             models.MaterializedKindSupplyChainPath,
+		Kind:             kind,
 		CanonicalKey:     canonicalKey,
 		Payload:          payload,
 		PathStatus:       models.EffectivePathStatusFromSufficiency(draft.Sufficiency),
@@ -918,7 +938,7 @@ func mergeMaterializedPathArtifacts(existing, incoming *models.MaterializedArtif
 	}
 	models.PopulateMaterializedArtifactIndexes(&merged)
 	if err := merged.Validate(); err != nil {
-		return nil, fmt.Errorf("validation error after merge: %w", err)
+		return nil, wrapSupplyChainArtifactValidationError(existing.CanonicalKey, nil, fmt.Errorf("validation error after merge: %w", err))
 	}
 	return &merged, nil
 }
@@ -940,7 +960,7 @@ func (b *SupplyChainPathBuilder) PrepareMaterializedPathArtifactsBatch(
 	}
 	existingMap := map[string]*models.MaterializedArtifact{}
 	if b != nil && b.artifactsRepo != nil {
-		batchExisting, err := b.artifactsRepo.BatchGetByCanonicalKeys(ctx, tenantID, models.MaterializedKindSupplyChainPath, canonicalKeys)
+		batchExisting, err := b.artifactsRepo.BatchGetByCanonicalKeys(ctx, tenantID, b.materializedKind(), canonicalKeys)
 		if err != nil {
 			return nil, nil, fmt.Errorf("batch get failed: %w", err)
 		}
@@ -956,8 +976,11 @@ func (b *SupplyChainPathBuilder) PrepareMaterializedPathArtifactsBatch(
 		if key == "" {
 			continue
 		}
+		if err := validatePathSegmentsForMaterialization(key, path); err != nil {
+			return nil, nil, err
+		}
 		draft := b.BuildMaterializationDraft(ctx, path)
-		artifact := buildMaterializedArtifactFromDraft(path, draft, tenantID, lensID, key)
+		artifact := buildMaterializedArtifactFromDraft(path, draft, tenantID, lensID, key, b.materializedKind())
 		if artifact == nil {
 			continue
 		}
@@ -986,7 +1009,7 @@ func (b *SupplyChainPathBuilder) PrepareMaterializedPathArtifactsBatch(
 			continue
 		}
 		if err := artifact.Validate(); err != nil {
-			return nil, nil, fmt.Errorf("validation error: %w", err)
+			return nil, nil, wrapSupplyChainArtifactValidationError(key, nil, fmt.Errorf("validation error: %w", err))
 		}
 		artifacts = append(artifacts, artifact)
 	}
@@ -1008,14 +1031,17 @@ func (b *SupplyChainPathBuilder) MaterializePath(
 	if canonicalKey == "" {
 		return "", fmt.Errorf("canonicalKey is required")
 	}
+	if err := validatePathSegmentsForMaterialization(canonicalKey, path); err != nil {
+		return "", err
+	}
 	draft := b.BuildMaterializationDraft(ctx, path)
-	artifact := buildMaterializedArtifactFromDraft(path, draft, tenantID, lensID, canonicalKey)
+	artifact := buildMaterializedArtifactFromDraft(path, draft, tenantID, lensID, canonicalKey, b.materializedKind())
 	if artifact == nil {
 		return "", fmt.Errorf("failed to build artifact draft")
 	}
 
 	// Check if artifact already exists — merge instead of overwrite
-	existing, err := b.artifactsRepo.GetByCanonicalKey(ctx, tenantID, models.MaterializedKindSupplyChainPath, canonicalKey)
+	existing, err := b.artifactsRepo.GetByCanonicalKey(ctx, tenantID, b.materializedKind(), canonicalKey)
 	if err == nil && existing != nil {
 		artifact, err = mergeMaterializedPathArtifacts(existing, artifact)
 		if err != nil {
@@ -1028,7 +1054,7 @@ func (b *SupplyChainPathBuilder) MaterializePath(
 	}
 
 	if err := artifact.Validate(); err != nil {
-		return "", fmt.Errorf("validation error: %w", err)
+		return "", wrapSupplyChainArtifactValidationError(canonicalKey, path, fmt.Errorf("validation error: %w", err))
 	}
 
 	id, err := b.artifactsRepo.Create(ctx, artifact)
@@ -1037,6 +1063,70 @@ func (b *SupplyChainPathBuilder) MaterializePath(
 	}
 
 	return id, nil
+}
+
+func validatePathSegmentsForMaterialization(canonicalKey string, path *SupplyChainPath) error {
+	if path == nil {
+		return nil
+	}
+	unresolved := unresolvedSupplyLinkSegments(path)
+	if len(unresolved) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"validation error key=%s unresolved supply-link refs=%s",
+		strings.TrimSpace(canonicalKey),
+		strings.Join(unresolved, "; "),
+	)
+}
+
+func unresolvedSupplyLinkSegments(path *SupplyChainPath) []string {
+	if path == nil || len(path.Segments) == 0 {
+		return nil
+	}
+	const maxSamples = 3
+	out := make([]string, 0, maxSamples)
+	for idx, segment := range path.Segments {
+		if strings.TrimSpace(segment.SupplyLinkCanonicalPath) != "" {
+			continue
+		}
+		if strings.TrimSpace(segment.SupplierRef) == "" &&
+			strings.TrimSpace(segment.ProductRef) == "" &&
+			strings.TrimSpace(segment.CustomerRef) == "" {
+			continue
+		}
+		viaSummary := "-"
+		if len(segment.TransportViaRefs) > 0 {
+			viaSummary = strings.Join(segment.TransportViaRefs, ",")
+		}
+		out = append(out, fmt.Sprintf(
+			"leg[%d]=%s -> %s -> %s via=%s",
+			idx,
+			strings.TrimSpace(segment.SupplierRef),
+			strings.TrimSpace(segment.ProductRef),
+			strings.TrimSpace(segment.CustomerRef),
+			viaSummary,
+		))
+		if len(out) >= maxSamples {
+			break
+		}
+	}
+	return out
+}
+
+func wrapSupplyChainArtifactValidationError(canonicalKey string, path *SupplyChainPath, err error) error {
+	if err == nil {
+		return nil
+	}
+	details := unresolvedSupplyLinkSegments(path)
+	if len(details) == 0 {
+		return fmt.Errorf("key=%s: %w", strings.TrimSpace(canonicalKey), err)
+	}
+	return fmt.Errorf("key=%s unresolved supply-link refs=%s: %w",
+		strings.TrimSpace(canonicalKey),
+		strings.Join(details, "; "),
+		err,
+	)
 }
 
 // MaterializePathsBatch saves multiple SupplyChainPaths as MaterializedArtifacts in a single batch.
@@ -1081,7 +1171,7 @@ func (b *SupplyChainPathBuilder) FindChainsByNodeRef(ctx context.Context, tenant
 	if b.artifactsRepo == nil {
 		return nil, nil
 	}
-	return b.artifactsRepo.FindByNodeRef(ctx, tenantID, nodeRef, models.MaterializedKindSupplyChainPath)
+	return b.artifactsRepo.FindByNodeRef(ctx, tenantID, nodeRef, b.materializedKind())
 }
 
 // GetChainByCanonicalKey returns a MaterializedArtifact by its structural canonical key.
@@ -1090,7 +1180,7 @@ func (b *SupplyChainPathBuilder) GetChainByCanonicalKey(ctx context.Context, ten
 	if b.artifactsRepo == nil {
 		return nil, nil
 	}
-	return b.artifactsRepo.GetByCanonicalKey(ctx, tenantID, models.MaterializedKindSupplyChainPath, canonicalKey)
+	return b.artifactsRepo.GetByCanonicalKey(ctx, tenantID, b.materializedKind(), canonicalKey)
 }
 
 // BatchGetChainsByCanonicalKeys returns existing supply-chain artifacts by structural canonical key.
@@ -1098,7 +1188,7 @@ func (b *SupplyChainPathBuilder) BatchGetChainsByCanonicalKeys(ctx context.Conte
 	if b.artifactsRepo == nil || len(canonicalKeys) == 0 {
 		return map[string]*models.MaterializedArtifact{}, nil
 	}
-	return b.artifactsRepo.BatchGetByCanonicalKeys(ctx, tenantID, models.MaterializedKindSupplyChainPath, canonicalKeys)
+	return b.artifactsRepo.BatchGetByCanonicalKeys(ctx, tenantID, b.materializedKind(), canonicalKeys)
 }
 
 // RebuildFromSupplyLinks rebuilds an existing MaterializedArtifact by re-traversing SupplyLinks
@@ -1138,7 +1228,7 @@ func (b *SupplyChainPathBuilder) RebuildFromSupplyLinks(ctx context.Context, art
 	rebuildPath.BuildMode = "rebuild_from_supply_links"
 	rebuildPath.MaxDepth = maxDepth
 	sufficiency := b.evaluatePathSufficiency(ctx, bestPath, legs)
-	newPayload := models.BuildSupplyChainPathPayloadDetailed(nodes, edges, legs, stress, sufficiency, rebuildPath.Family, buildSupplyChainArtifactNotes(&rebuildPath, legs, stress))
+	newPayload := models.BuildSupplyChainPathPayloadDetailed(nodes, edges, legs, stress, sufficiency, rebuildPath.Family, buildOperationalChainArtifactNotes(&rebuildPath, legs, stress, artifact.Kind))
 
 	merged := models.MergePayloads(artifact.Payload, newPayload)
 	newNodeRefs := collectNodeRefs(bestPath.Segments)
@@ -1168,7 +1258,7 @@ func (b *SupplyChainPathBuilder) UpdatePathStatus(
 	if canonicalKey == "" || pathStatus == "" {
 		return fmt.Errorf("canonicalKey and pathStatus are required")
 	}
-	existing, err := b.artifactsRepo.GetByCanonicalKey(ctx, tenantID, models.MaterializedKindSupplyChainPath, canonicalKey)
+	existing, err := b.artifactsRepo.GetByCanonicalKey(ctx, tenantID, b.materializedKind(), canonicalKey)
 	if err != nil || existing == nil {
 		return fmt.Errorf("artifact not found: %w", err)
 	}
@@ -1204,11 +1294,12 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 	var nodes []models.SupplyChainPathNode
 	var edges []models.SupplyChainPathEdge
 	var legs []models.SupplyChainPathLeg
+	segments := collapseAbstractNetworkSegments(path.Segments)
 
 	nodeIndexMap := make(map[string]int) // canonicalPath -> index
 
 	// Build nodes array and index map
-	for _, segment := range path.Segments {
+	for _, segment := range segments {
 		if !supplysemantics.IsMaterializableSegmentClass(segment.SegmentClass) {
 			continue
 		}
@@ -1279,7 +1370,7 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 	stressEval := pathstress.NewEvaluator()
 
 	// Build edges array
-	for i, segment := range path.Segments {
+	for i, segment := range segments {
 		if !supplysemantics.IsMaterializableSegmentClass(segment.SegmentClass) {
 			continue
 		}
@@ -1296,31 +1387,45 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 			customerIdx = nodeIndexMap[segment.CustomerRef]
 		}
 
+		normalizedViaRefs := NormalizeLegTransportViaRefs(
+			ctx,
+			b.fragmentsRepo,
+			segment.SupplierRef,
+			segment.TransportViaRefs,
+			segment.CustomerRef,
+		)
 		binding := binder.BindSegment(ctx, pathbinding.SegmentInput{
 			SupplierRef:       segment.SupplierRef,
 			CustomerRef:       segment.CustomerRef,
 			ProductRef:        segment.ProductRef,
-			TransportViaRefs:  segment.TransportViaRefs,
+			TransportViaRefs:  normalizedViaRefs,
 			SegmentConfidence: segment.Confidence,
 		})
+		normalizedViaRefs = PruneAbstractNetworkViaRefs(binding.Mode, binding.FlowRefs, normalizedViaRefs)
 		resolvedRoute := ResolveSupplyChainRouteGeometryDetailed(
 			ctx,
 			b.fragmentsRepo,
-			append(append([]string{segment.SupplierRef}, segment.TransportViaRefs...), segment.CustomerRef),
+			append(append([]string{segment.SupplierRef}, normalizedViaRefs...), segment.CustomerRef),
+		)
+		primaryFlowRefs, alternateFlowRefs := selectPrimaryAndAlternateFlowRefs(
+			binding.FlowRefs,
+			binding.AlternateFlowRefs,
+			resolvedRoute.FlowRefs,
+			binding.Mode,
 		)
 		orderedRouteRefs := models.NormalizeOrderedRouteRefs(
-			append(append([]string{segment.SupplierRef}, segment.TransportViaRefs...), segment.CustomerRef),
+			append(append([]string{segment.SupplierRef}, normalizedViaRefs...), segment.CustomerRef),
 		)
 		primaryOverlay := models.SupplyChainRouteOverlay{
-			RouteVariantKey:     strings.TrimSpace(firstNonEmpty(segment.RouteVariantKey, models.BuildSupplyLinkRouteVariantKey(segment.TransportViaRefs))),
+			RouteVariantKey:     strings.TrimSpace(firstNonEmpty(segment.RouteVariantKey, models.BuildSupplyLinkRouteVariantKey(normalizedViaRefs))),
 			RouteProfileKey:     strings.TrimSpace(models.BuildRouteGeometryProfileKey(orderedRouteRefs)),
 			OrderedRefs:         append([]string(nil), orderedRouteRefs...),
-			TransportViaRefs:    append([]string(nil), segment.TransportViaRefs...),
+			TransportViaRefs:    append([]string(nil), normalizedViaRefs...),
 			RouteCoordinates:    append([]models.Coordinates(nil), resolvedRoute.Coordinates...),
 			RouteGeometrySource: strings.TrimSpace(resolvedRoute.Source),
 			Mode:                binding.Mode,
-			FlowRefs:            uniqueSortedStrings(append(append([]string(nil), binding.FlowRefs...), resolvedRoute.FlowRefs...)),
-			AlternateFlowRefs:   append([]string(nil), binding.AlternateFlowRefs...),
+			FlowRefs:            append([]string(nil), primaryFlowRefs...),
+			AlternateFlowRefs:   append([]string(nil), alternateFlowRefs...),
 			GeoRefs:             append([]string(nil), binding.GeoRefs...),
 			ZoneRefs:            append([]string(nil), binding.ZoneRefs...),
 			AffectedZoneRefs:    append([]string(nil), binding.AffectedZoneRefs...),
@@ -1338,15 +1443,15 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 			SupplyLinkCanonicalPath: strings.TrimSpace(segment.SupplyLinkCanonicalPath),
 			SupplyLinkID:            strings.TrimSpace(segment.SupplyLinkID),
 			SupplyLinkTenantID:      strings.TrimSpace(firstNonEmpty(segment.SupplyLinkTenantID, segment.TenantID)),
-			RouteVariantKey:         strings.TrimSpace(firstNonEmpty(segment.RouteVariantKey, models.BuildSupplyLinkRouteVariantKey(segment.TransportViaRefs))),
-			TransportViaRefs:        append([]string(nil), segment.TransportViaRefs...),
+			RouteVariantKey:         strings.TrimSpace(firstNonEmpty(segment.RouteVariantKey, models.BuildSupplyLinkRouteVariantKey(normalizedViaRefs))),
+			TransportViaRefs:        append([]string(nil), normalizedViaRefs...),
 			RouteCoordinates:        append([]models.Coordinates(nil), resolvedRoute.Coordinates...),
 			RouteGeometrySource:     strings.TrimSpace(resolvedRoute.Source),
 			VesselType:              strings.TrimSpace(segment.VesselType),
 			Mode:                    binding.Mode,
 			GeoRefs:                 append([]string(nil), binding.GeoRefs...),
-			FlowRefs:                uniqueSortedStrings(append(append([]string(nil), binding.FlowRefs...), resolvedRoute.FlowRefs...)),
-			AlternateFlowRefs:       append([]string(nil), binding.AlternateFlowRefs...),
+			FlowRefs:                append([]string(nil), primaryFlowRefs...),
+			AlternateFlowRefs:       append([]string(nil), alternateFlowRefs...),
 			ZoneRefs:                append([]string(nil), binding.ZoneRefs...),
 			AffectedZoneRefs:        append([]string(nil), binding.AffectedZoneRefs...),
 			SpatialSemantics:        append([]string(nil), binding.SpatialSemantics...),
@@ -1445,8 +1550,8 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 		}
 
 		// Add ontological edge between products if this is not the last segment
-		if i < len(path.Segments)-1 {
-			nextSegment := path.Segments[i+1]
+		if i < len(segments)-1 {
+			nextSegment := segments[i+1]
 			currentProductIdx := productIdx
 			nextProductIdx := nodeIndexMap[nextSegment.ProductRef]
 
@@ -1594,8 +1699,83 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+func selectPrimaryAndAlternateFlowRefs(bindingFlowRefs, bindingAlternateFlowRefs, resolvedFlowRefs []string, mode string) ([]string, []string) {
+	primary := prioritizeFlowRefsByMode(uniqueTrimmedStringsPreserveOrder(resolvedFlowRefs), mode)
+	if len(primary) == 0 {
+		return prioritizeFlowRefsByMode(uniqueTrimmedStringsPreserveOrder(bindingFlowRefs), mode), uniqueTrimmedStringsPreserveOrder(bindingAlternateFlowRefs)
+	}
+	alternate := append([]string(nil), bindingAlternateFlowRefs...)
+	for _, ref := range bindingFlowRefs {
+		ref = strings.TrimSpace(ref)
+		if ref == "" || stringSliceContains(primary, ref) {
+			continue
+		}
+		alternate = append(alternate, ref)
+	}
+	return primary, uniqueTrimmedStringsPreserveOrder(alternate)
+}
+
+func stringSliceContains(items []string, needle string) bool {
+	needle = strings.TrimSpace(needle)
+	if needle == "" {
+		return false
+	}
+	for _, item := range items {
+		if strings.TrimSpace(item) == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueTrimmedStringsPreserveOrder(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func prioritizeFlowRefsByMode(values []string, mode string) []string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" || len(values) < 2 {
+		return values
+	}
+	prefix := mode + "_"
+	preferred := make([]string, 0, len(values))
+	other := make([]string, 0, len(values))
+	for _, value := range values {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), prefix) {
+			preferred = append(preferred, value)
+			continue
+		}
+		other = append(other, value)
+	}
+	if len(preferred) == 0 {
+		return values
+	}
+	return append(preferred, other...)
+}
+
 func buildSupplyChainArtifactNotes(path *SupplyChainPath, legs []models.SupplyChainPathLeg, stress *models.SupplyChainPathStress) map[string]interface{} {
-	profile := contractsemantics.ProfileForDomainMode("supply_chain")
+	return buildOperationalChainArtifactNotes(path, legs, stress, models.MaterializedKindSupplyChainPath)
+}
+
+func buildOperationalChainArtifactNotes(path *SupplyChainPath, legs []models.SupplyChainPathLeg, stress *models.SupplyChainPathStress, kind models.MaterializedKind) map[string]interface{} {
+	mode := "supply_chain"
+	if kind == models.MaterializedKindServiceChainPath {
+		mode = "service_chain"
+	}
+	profile := contractsemantics.ProfileForDomainMode(mode)
 	notes := map[string]interface{}{
 		"buildMode":          path.BuildMode,
 		"maxDepth":           fmt.Sprintf("%d", path.MaxDepth),
@@ -1605,7 +1785,8 @@ func buildSupplyChainArtifactNotes(path *SupplyChainPath, legs []models.SupplyCh
 		"pathCarriedEdges":   dependencyTypesToStrings(profile.PathCarriedEdges),
 		"overlayEdges":       dependencyTypesToStrings(profile.OverlayEdges),
 		"complementaryModes": append([]string(nil), profile.ComplementaryModes...),
-		"artifactKind":       string(models.MaterializedKindSupplyChainPath),
+		"artifactKind":       string(kind),
+		"domainMode":         mode,
 		"legCount":           len(legs),
 	}
 	if stress != nil {

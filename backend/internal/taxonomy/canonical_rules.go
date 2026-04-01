@@ -88,7 +88,7 @@ func CompositeGeoDescriptionForPrompts() string {
 // Single source of truth for ISO2, composite, regional in all canonical path prompts.
 // Use in "geo: ..." or "iso2: ..." clauses.
 func ISO2GeoDescriptionForPrompts() string {
-	return fmt.Sprintf("ISO3166-1 alpha2 lowercase (exactly 2 letters, e.g. us, sa, kz), %s, na, int, or regional (%s)", CompositeGeoDescriptionForPrompts(), strings.Join(RegionalGeoTokenList(), ", "))
+	return fmt.Sprintf("ISO3166-1 alpha2 lowercase (exactly 2 letters, e.g. us, sa, kz), %s, int, or regional (%s). Use na ONLY as an exceptional last-resort placeholder when the specific path contract explicitly allows it and neither the source/query context nor the entity/facility name or label provides a defensible jurisdiction clue", CompositeGeoDescriptionForPrompts(), strings.Join(RegionalGeoTokenList(), ", "))
 }
 
 // MechanismSlugExamples returns canonical mechanism slug examples for prompts.
@@ -261,17 +261,17 @@ func GraphIntentCanonicalPathRulesPrompt() string {
 	sb.WriteString("Every node MUST have canonicalPathHint in the exact format below. No other formats allowed.\n\n")
 	sb.WriteString("Forbidden namespaces/forms: /policy/*, /geo/*, /economy/*, /society/*, /org/gov/*.\n\n")
 	sb.WriteString("- GOVERNMENT_AGENCY: /gov/{iso2}/{slug}. Example: /gov/ro/ministry-of-finance, /gov/us/department-of-state\n")
-	sb.WriteString(fmt.Sprintf("  geo: %s. EU/ASEAN bodies use eu/asean\n\n", iso2Desc))
+	sb.WriteString(fmt.Sprintf("  geo: %s. EU/ASEAN bodies use eu/asean. Use /gov/na/{slug} ONLY as an exceptional last-resort when neither context nor the agency name provides a defensible jurisdiction clue.\n\n", iso2Desc))
 	sb.WriteString("- GEO_REGION: /loc/{cc}[/{level1}[/{level2}]]. Country-only: /loc/{cc}. Example: /loc/ro (Romania), /loc/us/ca/san-francisco\n")
 	sb.WriteString(fmt.Sprintf("  cc: %s. level1/level2 are optional slugs\n\n", iso2Desc))
 	sb.WriteString("- DOMAIN: /domain/v1/{contractType}/{facetKey}/{facetValue}... or /domain/v1/other/{custom-slug}/geo/{cc}\n")
 	sb.WriteString(fmt.Sprintf("  contractType (allowlist): %s\n", domainTypes))
 	sb.WriteString("  Examples: /domain/v1/regulatory-impact/geo/ro/framework/investment, /domain/v1/policy-and-regulation/geo/ro, /domain/v1/other/foreign-investment-framework/geo/ro\n\n")
 	sb.WriteString("- ORGANIZATION: /org/{geo}/{slug}. Example: /org/us/tesla, /org/ro/invest-romania\n")
-	sb.WriteString(fmt.Sprintf("  geo: %s. Do NOT include legal form in slug.\n\n", iso2Desc))
+	sb.WriteString(fmt.Sprintf("  geo: %s. Do NOT include legal form in slug. Use /org/na/{slug} ONLY as an exceptional last-resort when neither context nor the organization name provides a defensible jurisdiction clue.\n\n", iso2Desc))
 	sb.WriteString("- PRODUCT: /product/{category}/{type}/{stage}/{slug}. Example: /product/raw/mineral/refining/lithium-carbonate\n")
 	sb.WriteString("  For services, use category=service and map service domain/subdomain into {type}/{stage}.\n\n")
-	sb.WriteString(fmt.Sprintf("- FACILITY: /fac/{geo}/{facilitySlug}. geo: %s. facilityKind: %s. Use only concrete facilities; do NOT invent synthetic /fac/*-general-production placeholders. /fac/na is last-resort only after checking facility/site/place clues in the name and source. Example: /fac/ma/bouskoura-plant, /fac/tw/fab-21\n\n", iso2Desc, FacilityKindsForPrompts()))
+	sb.WriteString(fmt.Sprintf("- FACILITY: /fac/{geo}/{facilitySlug}. geo: %s. facilityKind: %s. Use only concrete facilities; do NOT invent synthetic /fac/*-general-production placeholders. /fac/na is an exceptional last-resort only after checking facility/site/place clues in the name, source, and surrounding context. Example: /fac/ma/bouskoura-plant, /fac/tw/fab-21\n\n", iso2Desc, FacilityKindsForPrompts()))
 	sb.WriteString("- PERSON: /person/{slug}. Example: /person/elon-musk\n\n")
 	sb.WriteString(fmt.Sprintf("- MARKET: L1 /market/{geo}/{domain}, L2 /market/{geo}/{domain}/{vertical}, L3+ parent+one segment. NEVER repeat a segment. geo: %s. Examples: %s. HAS_MARKET_SEGMENT: child = parent + one segment.\n\n", iso2Desc, MarketExamplePathsString()))
 	sb.WriteString("- COMMUNITY: /community/{geo}/{type}/{slug}. type: trade|activist|professional|dynasty|tribe|interest|representatives|industry-association|key-community. Example: /community/ro/interest/investors-association, /community/eu/industry-association/steel-producers\n\n")

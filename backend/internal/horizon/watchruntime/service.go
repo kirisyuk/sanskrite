@@ -10,10 +10,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/focusobject"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/workscope"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
+	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
 const (
@@ -72,12 +74,15 @@ type Service struct {
 	decisionsRepo                *horizonrepo.ArbitrationDecisionsRepository
 	watchBriefsRepo              *horizonrepo.WatchBriefsRepository
 	watchFeedEntriesRepo         *horizonrepo.WatchFeedEntriesRepository
+	portfoliosRepo               *horizonrepo.WatchPortfoliosRepository
+	digestsRepo                  *horizonrepo.WatchDigestsRepository
 	lensesRepo                   *horizonrepo.LensesRepository
 	lensArtifactsRepo            *horizonrepo.LensArtifactsRepository
 	materializedArtifactsRepo    *horizonrepo.MaterializedArtifactsRepository
 	macroAgentPoliciesRepo       *horizonrepo.MacroAgentPoliciesRepository
 	fragmentsRepo                *horizonrepo.HorizonFragmentsRepository
 	edgesRepo                    *horizonrepo.DependencyEdgesRepository
+	factsRepo                    *corerepo.OntologyFactsRepository
 	riskJobsRepo                 *horizonrepo.RiskJobsRepository
 	scoutingJobsRepo             *horizonrepo.ScoutingJobsRepository
 	wakeHook                     SubjectWakeHook
@@ -104,12 +109,16 @@ type SyncReport struct {
 }
 
 type SubjectDetail struct {
-	Subject      *horizonmodels.WatchSubject       `json:"subject"`
-	Configs      []*horizonmodels.ScopeAgentConfig `json:"configs,omitempty"`
-	Runs         []*horizonmodels.ScopeAgentRun    `json:"runs,omitempty"`
-	Triggers     []*horizonmodels.WatchTrigger     `json:"triggers,omitempty"`
-	RiskJobs     []*horizonmodels.RiskJob          `json:"riskJobs,omitempty"`
-	ScoutingJobs []*horizonmodels.ScoutingJob      `json:"scoutingJobs,omitempty"`
+	Subject            *horizonmodels.WatchSubject       `json:"subject"`
+	Configs            []*horizonmodels.ScopeAgentConfig `json:"configs,omitempty"`
+	Runs               []*horizonmodels.ScopeAgentRun    `json:"runs,omitempty"`
+	Triggers           []*horizonmodels.WatchTrigger     `json:"triggers,omitempty"`
+	RiskJobs           []*horizonmodels.RiskJob          `json:"riskJobs,omitempty"`
+	ScoutingJobs       []*horizonmodels.ScoutingJob      `json:"scoutingJobs,omitempty"`
+	FocusSnapshot      *focusobject.Snapshot             `json:"focusSnapshot,omitempty"`
+	MonitoringSnapshot *SubjectMonitoringSnapshot        `json:"monitoringSnapshot,omitempty"`
+	FocusSnapshotError string                            `json:"focusSnapshotError,omitempty"`
+	ExecutionCoverage  map[string]any                    `json:"executionCoverage,omitempty"`
 }
 
 type TriggerDecision struct {
@@ -169,6 +178,14 @@ func (s *Service) WithMaterializedArtifactsRepository(repo *horizonrepo.Material
 	return s
 }
 
+func (s *Service) WithFactsRepository(repo *corerepo.OntologyFactsRepository) *Service {
+	if s == nil {
+		return s
+	}
+	s.factsRepo = repo
+	return s
+}
+
 func (s *Service) WithMacroAgentPoliciesRepository(repo *horizonrepo.MacroAgentPoliciesRepository) *Service {
 	if s == nil {
 		return s
@@ -206,6 +223,22 @@ func (s *Service) WithWatchFeedEntriesRepository(repo *horizonrepo.WatchFeedEntr
 		return s
 	}
 	s.watchFeedEntriesRepo = repo
+	return s
+}
+
+func (s *Service) WithWatchPortfoliosRepository(repo *horizonrepo.WatchPortfoliosRepository) *Service {
+	if s == nil {
+		return s
+	}
+	s.portfoliosRepo = repo
+	return s
+}
+
+func (s *Service) WithWatchDigestsRepository(repo *horizonrepo.WatchDigestsRepository) *Service {
+	if s == nil {
+		return s
+	}
+	s.digestsRepo = repo
 	return s
 }
 
@@ -253,6 +286,10 @@ func (s *Service) EnsureSubjectForTarget(ctx context.Context, target *horizonmod
 	if s == nil || s.subjectsRepo == nil || target == nil {
 		return nil, horizonrepo.ErrInvalidDocument
 	}
+	existing := s.findOverlappingTargetSubject(ctx, target)
+	if isFocusTarget(target) || isFocusSubject(existing) {
+		return s.ensureFocusSubjectForTarget(ctx, target, existing)
+	}
 	kind := horizonmodels.WatchSubjectKindExplicitTarget
 	runtimeMode := horizonmodels.WatchSubjectRuntimeCombined
 	sourceMode := horizonmodels.WatchSubjectSourceHybrid
@@ -261,8 +298,20 @@ func (s *Service) EnsureSubjectForTarget(ctx context.Context, target *horizonmod
 		runtimeMode = horizonmodels.WatchSubjectRuntimeCustomFragment
 		sourceMode = horizonmodels.WatchSubjectSourceFacts
 	}
+	if existing != nil {
+		switch existing.SubjectKind {
+		case horizonmodels.WatchSubjectKindFragment:
+			kind = horizonmodels.WatchSubjectKindFragment
+			runtimeMode = horizonmodels.WatchSubjectRuntimeCustomFragment
+			sourceMode = horizonmodels.WatchSubjectSourceFacts
+		case horizonmodels.WatchSubjectKindExplicitTarget:
+			kind = horizonmodels.WatchSubjectKindExplicitTarget
+			runtimeMode = horizonmodels.WatchSubjectRuntimeCombined
+			sourceMode = horizonmodels.WatchSubjectSourceHybrid
+		}
+	}
 	subject := &horizonmodels.WatchSubject{
-		ID:                  strings.TrimSpace(target.SubjectID),
+		ID:                  strings.TrimSpace(firstNonEmpty(target.SubjectID, subjectIDOrEmpty(existing))),
 		TenantID:            strings.TrimSpace(firstNonEmpty(target.TenantID, "global")),
 		PackID:              strings.TrimSpace(target.PackID),
 		UserID:              strings.TrimSpace(target.UserID),
@@ -281,7 +330,7 @@ func (s *Service) EnsureSubjectForTarget(ctx context.Context, target *horizonmod
 		Roles:               normalizeRoles(target.Roles),
 		Priority:            normalizedPriority(target.Priority),
 		LensBindings:        s.collectLensBindings(ctx, target.TenantID, target.FragmentID, target.CanonicalPath),
-		UniversePaths:       compactUnique([]string{strings.TrimSpace(target.CanonicalPath)}),
+		UniversePaths:       compactUnique(append(existingUniversePaths(existing), strings.TrimSpace(target.CanonicalPath))),
 		Metadata: map[string]any{
 			"kind":           strings.TrimSpace(target.Kind),
 			"watchTargetId":  strings.TrimSpace(target.ID),
@@ -628,6 +677,17 @@ func (s *Service) SubjectDetail(ctx context.Context, subjectID string, limit int
 			}
 		}
 	}
+	if coverage := executionCoverageMetadata(subject.Metadata); len(coverage) > 0 {
+		detail.ExecutionCoverage = coverage
+	}
+	if isFocusSubject(subject) {
+		if snapshot, ferr := s.buildFocusSnapshotFromSubject(ctx, subject); ferr == nil {
+			detail.FocusSnapshot = snapshot
+		} else {
+			detail.FocusSnapshotError = ferr.Error()
+		}
+	}
+	detail.MonitoringSnapshot = s.buildSubjectMonitoringSnapshot(ctx, detail)
 	return detail, nil
 }
 
@@ -954,6 +1014,9 @@ func (s *Service) AssessTrigger(subject *horizonmodels.WatchSubject, trigger *ho
 	}
 	if parseBool(trigger.Metadata["scoutCompletion"]) {
 		return TriggerDecision{Decision: horizonmodels.WatchTriggerDecisionWarmOnly, Reason: "scout_completion_observed", DirectMatch: directMatch}
+	}
+	if trigger.TriggerType != horizonmodels.WatchTriggerManual && subjectExecutionCoveredByOwner(subject, trigger) {
+		return TriggerDecision{Decision: horizonmodels.WatchTriggerDecisionWarmOnly, Reason: "covered_by_owner_subject", DirectMatch: directMatch}
 	}
 	if trigger.SignalStrength < 0.20 {
 		return TriggerDecision{Decision: horizonmodels.WatchTriggerDecisionWarmOnly, Reason: "weak_signal", DirectMatch: directMatch}

@@ -322,10 +322,14 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 				SegmentClass: classification.Class,
 				Confidence:   chain.Confidence,
 			}
-			for _, pth := range chain.TransportVia {
+			explicitViaRefs, routeEvidenceTexts := collectSegmentRouteEvidence(chain, srcPath, prodPath, dstPath)
+			seg.TransportViaRefs = inferTransportViaRefsFromEvidence(explicitViaRefs, routeEvidenceTexts...)
+			for _, pth := range seg.TransportViaRefs {
 				pth = strings.TrimSpace(pth)
-				if pth != "" && strings.HasPrefix(pth, "/fac/") {
-					seg.TransportViaRefs = append(seg.TransportViaRefs, pth)
+				if pth != "" && result.Fragments[pth] == nil {
+					if frag := p.createTransportFacilityFragment(pth); frag != nil {
+						result.Fragments[pth] = frag
+					}
 				}
 			}
 			// Extract segmentMetrics for this segment (fromNodeIndex=i, toNodeIndex=i+2, productIndex=i+1)

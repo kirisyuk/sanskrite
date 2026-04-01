@@ -26,8 +26,8 @@ type lensRow struct {
 
 func main() {
 	ctx := context.Background()
-	projectID := firstNonEmpty(os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram")
-	tenantID := firstNonEmpty(os.Getenv("HORIZON_AUDIT_TENANT"), "igor@etigram.pro")
+	projectID := firstNonEmpty(os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon")
+	tenantID := firstNonEmpty(os.Getenv("HORIZON_AUDIT_TENANT"), "igor@nordicvision.org")
 	outPath := firstNonEmpty(os.Getenv("HORIZON_AUDIT_OUT"), "/Users/kirisyuk/cursor/sanskrite/docs/horizon/implementation/latest-lens-recognition-audit.md")
 	client, err := firestore.NewClient(ctx, projectID)
 	if err != nil {

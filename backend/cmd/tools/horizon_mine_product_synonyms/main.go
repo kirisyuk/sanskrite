@@ -32,7 +32,7 @@ var toolProductDictRuntime *productdict.Runtime
 // use their own prompts, review criteria, and collection.
 var (
 	mode              = flag.String("mode", "report", "Mode: report, pairs, pair-decisions, repair-supply-links, apply, or dedup-backfill")
-	projectID         = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project ID")
+	projectID         = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project ID")
 	tenantID          = flag.String("tenant", "global", "Tenant ID")
 	pageSize          = flag.Int("page-size", 500, "Firestore page size")
 	pageTimeout       = flag.Int("page-timeout-s", 90, "Per-page timeout in seconds (0 disables)")

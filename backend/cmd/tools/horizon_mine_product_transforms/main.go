@@ -28,7 +28,7 @@ import (
 
 var (
 	mode            = flag.String("mode", "report", "Mode: report|backfill-relation-kind|dedup-backfill")
-	projectID       = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project ID")
+	projectID       = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project ID")
 	tenantID        = flag.String("tenant", "global", "Tenant ID")
 	reportInPath    = flag.String("report-in", "", "Optional existing transform review report JSON to load instead of rescanning the database")
 	outputPath      = flag.String("out", "", "Optional path to write full JSON report")

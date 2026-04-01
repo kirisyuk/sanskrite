@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	var projectID = flag.String("project", "etigram", "GCP project id")
+	var projectID = flag.String("project", "nv-horizon", "GCP project id")
 	flag.Parse()
 
 	ctx := context.Background()

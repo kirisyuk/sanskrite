@@ -22,13 +22,13 @@ WITH product_mentions AS (
     o.uri,
     -- Используем ML для поиска упоминаний продукта
     ML.GENERATE_TEXT(
-      MODEL `etigram.etigram_documents.gemini_model`,
-      (SELECT data FROM `etigram.etigram_documents.documents_object_table` o2 
+      MODEL `nv-horizon.nv_horizon_documents.gemini_model`,
+      (SELECT data FROM `nv-horizon.nv_horizon_documents.documents_object_table` o2 
        WHERE o2.uri = REPLACE(m.storagePath, 'gs://', '')),
       STRUCT('Does this document mention product X? Answer yes or no.' AS prompt)
     ) AS mentions_product
-  FROM `etigram.etigram_documents.documents_metadata` m
-  LEFT JOIN `etigram.etigram_documents.documents_object_table` o
+  FROM `nv-horizon.nv_horizon_documents.documents_metadata` m
+  LEFT JOIN `nv-horizon.nv_horizon_documents.documents_object_table` o
     ON o.uri = REPLACE(m.storagePath, 'gs://', '')
   WHERE m.createdAt >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 YEAR)
 ),
@@ -58,8 +58,8 @@ WITH json_docs AS (
     m.projectId,
     m.createdAt,
     j.data as json_content
-  FROM `etigram.etigram_documents.core_docs_metadata` m
-  JOIN `etigram.etigram_documents.core_docs_json_table` j
+  FROM `nv-horizon.nv_horizon_documents.core_docs_metadata` m
+  JOIN `nv-horizon.nv_horizon_documents.core_docs_json_table` j
     ON j.uri = REPLACE(m.storagePath, 'gs://', '')
   WHERE m.contentType = 'application/json'
     AND m.filename LIKE '%decisions.json'
@@ -93,7 +93,7 @@ WITH text_docs AS (
     m.filename,
     m.extractedText as content,
     'text' as source_type
-  FROM `etigram.etigram_documents.core_docs_metadata` m
+  FROM `nv-horizon.nv_horizon_documents.core_docs_metadata` m
   WHERE m.contentType LIKE 'text/%'
     AND m.extractedText IS NOT NULL
 ),
@@ -104,8 +104,8 @@ json_decisions AS (
     m.filename,
     JSON_EXTRACT_SCALAR(j.data, '$.decisions[0].description') as content,
     'json' as source_type
-  FROM `etigram.etigram_documents.core_docs_metadata` m
-  JOIN `etigram.etigram_documents.core_docs_json_table` j
+  FROM `nv-horizon.nv_horizon_documents.core_docs_metadata` m
+  JOIN `nv-horizon.nv_horizon_documents.core_docs_json_table` j
     ON j.uri = REPLACE(m.storagePath, 'gs://', '')
   WHERE m.contentType = 'application/json'
     AND m.filename LIKE '%decisions.json'
@@ -137,11 +137,11 @@ WITH security_analysis AS (
     m.title,
     m.storagePath,
     ML.GENERATE_TEXT(
-      MODEL `etigram.etigram_documents.gemini_model`,
+      MODEL `nv-horizon.nv_horizon_documents.gemini_model`,
       CONCAT('Document: ', COALESCE(m.extractedText, '')),
       STRUCT('Does this document discuss security issues or vulnerabilities? Answer: yes or no, and briefly explain why.' AS prompt)
     ) AS security_check
-  FROM `etigram.etigram_documents.core_docs_metadata` m
+  FROM `nv-horizon.nv_horizon_documents.core_docs_metadata` m
   WHERE m.extractedText IS NOT NULL
     AND LENGTH(m.extractedText) > 100
 )
@@ -166,7 +166,7 @@ WITH monthly_stats AS (
     COUNT(*) as doc_count,
     COUNT(DISTINCT tenantId) as unique_tenants,
     AVG(sizeBytes) as avg_size
-  FROM `etigram.etigram_documents.documents_metadata`
+  FROM `nv-horizon.nv_horizon_documents.documents_metadata`
   WHERE createdAt >= DATE_SUB(CURRENT_DATE(), INTERVAL 6 MONTH)
   GROUP BY month, documentType
 ),
@@ -195,11 +195,11 @@ WITH extracted_data AS (
     m.id,
     m.filename,
     ML.GENERATE_TEXT(
-      MODEL `etigram.etigram_documents.gemini_model`,
+      MODEL `nv-horizon.nv_horizon_documents.gemini_model`,
       CONCAT('Extract structured data from this document:\n', m.extractedText),
       STRUCT('Extract: dates (YYYY-MM-DD format), person names, monetary amounts. Return as JSON: {"dates": [...], "names": [...], "amounts": [...]}' AS prompt)
     ) AS extracted_json
-  FROM `etigram.etigram_documents.core_docs_metadata` m
+  FROM `nv-horizon.nv_horizon_documents.core_docs_metadata` m
   WHERE m.projectId = 'project-x'
     AND m.extractedText IS NOT NULL
 )
@@ -276,7 +276,7 @@ SELECT
   COUNT(DISTINCT tenantId) as unique_tenants,
   MIN(createdAt) as oldest_doc,
   MAX(createdAt) as newest_doc
-FROM `etigram.etigram_documents.documents_metadata`
+FROM `nv-horizon.nv_horizon_documents.documents_metadata`
 GROUP BY documentType
 ORDER BY total_count DESC
 LIMIT 100
@@ -288,7 +288,7 @@ LIMIT 100
 **Система сгенерирует:**
 ```sql
 -- AI поймет, что это невозможно, и вернет пустой результат или ошибку
-SELECT * FROM `etigram.etigram_documents.documents_metadata`
+SELECT * FROM `nv-horizon.nv_horizon_documents.documents_metadata`
 WHERE 1 = 0
 LIMIT 100
 ```
@@ -303,11 +303,11 @@ SELECT
   m.id,
   m.title,
   ML.GENERATE_TEXT(
-    MODEL `etigram.etigram_documents.gemini_model`,
+    MODEL `nv-horizon.nv_horizon_documents.gemini_model`,
     m.extractedText,
     STRUCT('Does this document mention Martians or Mars? Answer yes or no.' AS prompt)
   ) AS mentions_mars
-FROM `etigram.etigram_documents.core_docs_metadata` m
+FROM `nv-horizon.nv_horizon_documents.core_docs_metadata` m
 WHERE m.extractedText IS NOT NULL
 LIMIT 100
 ```
@@ -319,7 +319,7 @@ LIMIT 100
 ```sql
 WITH product_docs AS (
   SELECT m.*, 'product_mention' as source
-  FROM `etigram.etigram_documents.documents_metadata` m
+  FROM `nv-horizon.nv_horizon_documents.documents_metadata` m
   WHERE m.extractedText LIKE '%product X%' OR m.title LIKE '%product X%'
 ),
 json_decisions AS (
@@ -327,8 +327,8 @@ json_decisions AS (
     m.*,
     JSON_EXTRACT_SCALAR(j.data, '$.decisions[0].title') as decision_title,
     'json_decision' as source
-  FROM `etigram.etigram_documents.core_docs_metadata` m
-  JOIN `etigram.etigram_documents.core_docs_json_table` j
+  FROM `nv-horizon.nv_horizon_documents.core_docs_metadata` m
+  JOIN `nv-horizon.nv_horizon_documents.core_docs_json_table` j
     ON j.uri = REPLACE(m.storagePath, 'gs://', '')
   WHERE m.contentType = 'application/json'
 ),

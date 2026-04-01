@@ -44,6 +44,7 @@ type ComposedProfile struct {
 
 var executionOrder = map[string]int{
 	taxonomy.DomainModeSupplyChain:  10,
+	taxonomy.DomainModeServiceChain: 15,
 	taxonomy.DomainModeGovernance:   20,
 	taxonomy.DomainModeAssurance:    30,
 	taxonomy.DomainModeMarket:       40,
@@ -107,6 +108,40 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 			ArtifactKinds: []models.MaterializedKind{models.MaterializedKindSupplyChainPath},
 			Description:   "Operational product flow and transformation paths.",
 		}
+	case taxonomy.DomainModeServiceChain:
+		return DomainModeProfile{
+			Mode:            mode,
+			PrimaryLayer:    GraphLayerPathCarried,
+			AllowedEntities: allowedEntities,
+			AllowedEdges:    allowedEdges,
+			PathCarriedEdges: []models.DependencyType{
+				models.DependencyTypeProduces,
+				models.DependencyTypeSuppliesTo,
+				models.DependencyTypeTransformsInto,
+				models.DependencyTypeAssemblesInto,
+				models.DependencyTypeUsedIn,
+			},
+			OverlayEdges: []models.DependencyType{
+				models.DependencyTypeControlsAccess,
+				models.DependencyTypeOperatesVia,
+				models.DependencyTypeLocatedIn,
+				models.DependencyTypeOperatesIn,
+				models.DependencyTypeParticipatesIn,
+				models.DependencyTypeHasMarketSegment,
+			},
+			InterpretiveEdges: []models.DependencyType{
+				models.DependencyTypeDependsOn,
+			},
+			ComplementaryModes: []string{
+				taxonomy.DomainModeGovernance,
+				taxonomy.DomainModeAssurance,
+				taxonomy.DomainModeMarket,
+				taxonomy.DomainModePolicyImpact,
+				taxonomy.DomainModeStrategic,
+			},
+			ArtifactKinds: []models.MaterializedKind{models.MaterializedKindServiceChainPath},
+			Description:   "Operational service delivery and capability access paths.",
+		}
 	case taxonomy.DomainModeGovernance:
 		return DomainModeProfile{
 			Mode:            mode,
@@ -116,6 +151,7 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 			OverlayEdges:    allowedEdges,
 			ComplementaryModes: []string{
 				taxonomy.DomainModeSupplyChain,
+				taxonomy.DomainModeServiceChain,
 				taxonomy.DomainModePolicyImpact,
 				taxonomy.DomainModeMarket,
 			},
@@ -129,7 +165,7 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 			AllowedEntities:    allowedEntities,
 			AllowedEdges:       allowedEdges,
 			OverlayEdges:       allowedEdges,
-			ComplementaryModes: []string{taxonomy.DomainModeSupplyChain, taxonomy.DomainModeGovernance, taxonomy.DomainModePolicyImpact},
+			ComplementaryModes: []string{taxonomy.DomainModeSupplyChain, taxonomy.DomainModeServiceChain, taxonomy.DomainModeGovernance, taxonomy.DomainModePolicyImpact},
 			Description:        "Audit, certification, and regulatory oversight overlays.",
 		}
 	case taxonomy.DomainModeMarket:
@@ -141,6 +177,7 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 			OverlayEdges:    allowedEdges,
 			ComplementaryModes: []string{
 				taxonomy.DomainModeSupplyChain,
+				taxonomy.DomainModeServiceChain,
 				taxonomy.DomainModePolicyImpact,
 				taxonomy.DomainModeEcosystem,
 			},
@@ -184,6 +221,7 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 			},
 			ComplementaryModes: []string{
 				taxonomy.DomainModeSupplyChain,
+				taxonomy.DomainModeServiceChain,
 				taxonomy.DomainModeGovernance,
 				taxonomy.DomainModeMarket,
 				taxonomy.DomainModeStrategic,
@@ -200,6 +238,7 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 			ComplementaryModes: []string{
 				taxonomy.DomainModePolicyImpact,
 				taxonomy.DomainModeSupplyChain,
+				taxonomy.DomainModeServiceChain,
 				taxonomy.DomainModeGovernance,
 			},
 			Description: "Access control and strategic decision overlays.",
@@ -233,7 +272,7 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 				models.DependencyTypeCompetesWith,
 			},
 			ArtifactKinds:      []models.MaterializedKind{models.MaterializedKindEcosystemMap},
-			ComplementaryModes: []string{taxonomy.DomainModeSupplyChain, taxonomy.DomainModeGovernance, taxonomy.DomainModeMarket, taxonomy.DomainModePolicyImpact},
+			ComplementaryModes: []string{taxonomy.DomainModeSupplyChain, taxonomy.DomainModeServiceChain, taxonomy.DomainModeGovernance, taxonomy.DomainModeMarket, taxonomy.DomainModePolicyImpact},
 			Description:        "Interpretive ecosystem context over operational graph.",
 		}
 	default:

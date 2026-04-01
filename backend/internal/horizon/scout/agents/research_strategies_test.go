@@ -97,6 +97,28 @@ func TestSupplyChainPreHotPathPrompt_AlwaysSoftSteering(t *testing.T) {
 	}
 }
 
+func TestServiceChainPreHotPathPrompt_UsesServiceSpecificSteering(t *testing.T) {
+	a := NewResearchAgent(nil)
+	prompt := a.buildServiceChainPreHotPathPrompt(SupplyChainQuery{
+		Anchor:        "/org/us/google-cloud",
+		AnchorType:    "org",
+		Direction:     "downstream",
+		Depth:         4,
+		ProductFilter: []string{"cloud compute", "managed kubernetes"},
+	})
+	for _, want := range []string{
+		"service-chain pre-hot-path decomposition agent",
+		"service_delivery_network|managed_service_access|field_service_aftermarket|digital_infrastructure|generic_service_chain",
+		"regions, data centers, landing stations, IXPs, network hubs, colocation, power/network dependencies, and downstream enterprise exposure",
+		"managed-service operator, reseller/channel partner, downstream customer site, and authorization / approved-vendor / service-contract gates",
+		"candidateProductFamilies: more concrete product families or service/capability families worth prioritizing",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("service pre-hot-path prompt missing %q", want)
+		}
+	}
+}
+
 func TestSupplyChainHotPathCapabilityPrompt_StaysTopologyStable(t *testing.T) {
 	a := NewResearchAgent(nil)
 	prompt := a.buildSupplyChainHotPathCapabilityPrompt(
@@ -138,6 +160,52 @@ func TestSupplyChainHotPathCapabilityPrompt_StaysTopologyStable(t *testing.T) {
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("capability prompt missing %q", want)
+		}
+	}
+}
+
+func TestServiceChainEnrichmentPrompt_UsesServiceSpecificChainLanguage(t *testing.T) {
+	a := NewResearchAgent(nil)
+	input := ResearchStrategyInput{
+		Fragment:    &models.HorizonFragment{CanonicalPath: "/org/us/google-cloud"},
+		MissingInfo: []string{"Find delivery facilities and downstream enterprise exposure"},
+	}
+	prompt := a.buildServiceChainEnrichmentPrompt(input)
+	for _, want := range []string{
+		"Enrich the entity for SERVICE CHAIN context",
+		"SERVICE CHAIN RULES",
+		"Service/capability nodes still use /product/service/... canonical product paths",
+		"org->fac->service->fac->org trees",
+		"authorization, approved-vendor, service-contract, identity/access, licensing, settlement, or insurance gates must stay in observations/qualifiers",
+		"SERVICE CHAIN METRICS",
+		"availability_slo",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("service enrichment prompt missing %q", want)
+		}
+	}
+}
+
+func TestServiceChainHotPathPrompt_UsesServiceSpecificOperationalTargets(t *testing.T) {
+	a := NewResearchAgent(nil)
+	prompt := a.buildServiceChainHotPathPrompt(SupplyChainQuery{
+		Anchor:        "/org/us/google-cloud",
+		AnchorType:    "org",
+		Direction:     "both",
+		Depth:         4,
+		ProductFilter: []string{"cloud compute"},
+		GeoFilter:     []string{"us"},
+	}, nil)
+	for _, want := range []string{
+		"Produce the first high-value service-chain graph quickly.",
+		"provider/delivery site -> service capability -> relay/control site -> recipient facility/customer site -> recipient org",
+		"identity / authorization / licensing / settlement / insurance / approved-vendor control points",
+		"Do not stop at org -> service -> org if a more operational chain is available.",
+		"REUSABLE SERVICE CAPABILITY METRICS",
+		"vendor_lock_in_score",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("service hot path prompt missing %q", want)
 		}
 	}
 }

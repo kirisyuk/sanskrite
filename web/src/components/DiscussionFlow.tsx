@@ -673,49 +673,49 @@ User requirement: you should create your answer in ${langName} language. Use Eng
           {/* Frame skeleton */}
           <div className="space-y-2">
             <div style={{ height: 10, width: '40%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
-              <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+              <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'nv-shimmer 2s infinite' }} />
             </div>
             <div style={{ height: 14, borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
-              <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+              <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'nv-shimmer 2s infinite' }} />
             </div>
             <div style={{ height: 14, width: '90%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
-              <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+              <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'nv-shimmer 2s infinite' }} />
             </div>
           </div>
           {/* Confidence skeleton */}
           <div className="space-y-2">
             <div style={{ height: 10, width: '30%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
-              <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+              <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'nv-shimmer 2s infinite' }} />
             </div>
             <div style={{ height: 12, width: '20%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
-              <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+              <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'nv-shimmer 2s infinite' }} />
             </div>
           </div>
           {/* Blind Spots skeleton */}
           <div className="space-y-2">
             <div style={{ height: 10, width: '35%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
-              <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+              <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'nv-shimmer 2s infinite' }} />
             </div>
             <div className="flex items-center gap-2">
               <div style={{ width: 12, height: 12, borderRadius: 2, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
-                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'nv-shimmer 2s infinite' }} />
               </div>
               <div style={{ height: 14, flex: 1, borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
-                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'nv-shimmer 2s infinite' }} />
               </div>
               <div style={{ width: 16, height: 16, borderRadius: 2, background: 'var(--white-06)', position: 'relative', overflow: 'hidden', flexShrink: 0 }}>
-                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'nv-shimmer 2s infinite' }} />
               </div>
             </div>
             <div className="flex items-center gap-2">
               <div style={{ width: 12, height: 12, borderRadius: 2, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
-                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'nv-shimmer 2s infinite' }} />
               </div>
               <div style={{ height: 14, flex: 1, width: '85%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
-                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'nv-shimmer 2s infinite' }} />
               </div>
               <div style={{ width: 16, height: 16, borderRadius: 2, background: 'var(--white-06)', position: 'relative', overflow: 'hidden', flexShrink: 0 }}>
-                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'nv-shimmer 2s infinite' }} />
               </div>
             </div>
           </div>
@@ -723,14 +723,14 @@ User requirement: you should create your answer in ${langName} language. Use Eng
           {analysis?.frameShiftRecommendations && analysis.frameShiftRecommendations.length > 0 && (
           <div className="space-y-2">
             <div style={{ height: 10, width: '40%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
-              <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+              <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'nv-shimmer 2s infinite' }} />
             </div>
             <div className="flex items-start gap-2">
               <div style={{ width: 12, height: 12, borderRadius: 2, background: 'var(--white-06)', position: 'relative', overflow: 'hidden', marginTop: 2 }}>
-                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'nv-shimmer 2s infinite' }} />
               </div>
               <div style={{ height: 14, flex: 1, width: '80%', borderRadius: 4, background: 'var(--white-06)', position: 'relative', overflow: 'hidden' }}>
-                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'etg-shimmer 2s infinite' }} />
+                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, var(--white-20), transparent)', animation: 'nv-shimmer 2s infinite' }} />
               </div>
             </div>
           </div>

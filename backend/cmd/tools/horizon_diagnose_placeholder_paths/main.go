@@ -20,7 +20,7 @@ type kv struct {Key string; Count int}
 
 func main() {
  ctx:=context.Background()
- project:=flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project")
+ project:=flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project")
  tenant:=flag.String("tenant","global","tenant")
  top:=flag.Int("top",20,"top classes")
  samplesN:=flag.Int("samples",8,"samples per class")

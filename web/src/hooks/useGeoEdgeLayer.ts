@@ -27,6 +27,10 @@ import {
 import { humanizeCanonicalPath } from '../lib/uiUtils';
 import { mapLayerColor, simulationStressColor } from '../lib/mapRenderPolicy';
 import {
+  planCaptionDensity,
+  readPublishedLegCaptionPlan,
+} from '../lib/logisticsCaptionPlanner';
+import {
   artifactMatchesRouteVisibility,
   legMatchesRouteVisibility,
   resolvedArtifactLegIndex,
@@ -59,8 +63,15 @@ const SUPPLY_LABEL_CHIP_LIGHT = 'geo-edge-supply-chip-light';
 const MAX_HOPS = 3;
 const EDGE_HOVER_PEEK_SRC = 'geo-edge-endpoint-peek';
 const EDGE_HOVER_PEEK_LAYER = 'geo-edge-endpoint-peek-sym';
+const PATH_LEG_LABELS_UPDATED_EVENT = 'horizon.path-leg-labels.updated';
+const STANDARD_MAP_OBJECT_CAPTIONS_ONLY = true;
 
 type EdgeFeaturePeerMeta = { id: string | number; corridorId: string };
+type NarrativeFocusMeta = {
+  corridorIds: string[];
+  objectIds: string[];
+  featureId: string | number | null;
+};
 
 type CorridorConnectIndex = Map<string, Set<string>>;
 
@@ -125,7 +136,7 @@ function spotlightObjectIdsForMarker(corridorConnects: CorridorConnectIndex, obj
 }
 
 function clearEdgePeerDimStates(map: maplibregl.Map, meta: EdgeFeaturePeerMeta[]): void {
-  if (!map.getSource(SRC)) return;
+  if (!safeGetSource(map, SRC)) return;
   for (const { id } of meta) {
     try {
       map.setFeatureState({ source: SRC, id }, { edgePeerDim: false, markerIncident: false });
@@ -144,7 +155,7 @@ function applyEdgePeerDimStates(
     markerIncidentHighlight: boolean;
   },
 ): void {
-  if (!map.getSource(SRC)) return;
+  if (!safeGetSource(map, SRC)) return;
   const { brightCorridors, hoveredFeatureId, markerIncidentHighlight } = opts;
   for (const { id, corridorId } of meta) {
     const isHoveredEdge = hoveredFeatureId != null && id === hoveredFeatureId;
@@ -187,8 +198,8 @@ async function refreshEdgeHoverPeekLayer(
   endpointObjectIds: string[],
   objectsById: Map<string, GeoObject>,
 ): Promise<void> {
-  const markerSrc = map.getSource(GEO_MARKER_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
-  const peekSrc = map.getSource(EDGE_HOVER_PEEK_SRC) as maplibregl.GeoJSONSource | undefined;
+  const markerSrc = safeGetSource<maplibregl.GeoJSONSource>(map, GEO_MARKER_SOURCE_ID);
+  const peekSrc = safeGetSource<maplibregl.GeoJSONSource>(map, EDGE_HOVER_PEEK_SRC);
   if (!markerSrc || !peekSrc) return;
   const features: GeoJSON.Feature[] = [];
   for (const oid of endpointObjectIds) {
@@ -210,7 +221,7 @@ async function refreshEdgeHoverPeekLayer(
       continue;
     }
     const pt = buildPointFeature(obj, theme, false) as GeoJSON.Feature<GeoJSON.Point>;
-    (pt.properties as Record<string, unknown>).showLabel = 1;
+    (pt.properties as Record<string, unknown>).showLabel = 0;
     (pt.properties as Record<string, unknown>).opacity = 1;
     features.push(pt);
   }
@@ -218,7 +229,7 @@ async function refreshEdgeHoverPeekLayer(
 }
 
 function clearEdgeHoverPeekLayer(map: maplibregl.Map): void {
-  const peekSrc = map.getSource(EDGE_HOVER_PEEK_SRC) as maplibregl.GeoJSONSource | undefined;
+  const peekSrc = safeGetSource<maplibregl.GeoJSONSource>(map, EDGE_HOVER_PEEK_SRC);
   if (peekSrc) peekSrc.setData({ type: 'FeatureCollection', features: [] });
 }
 
@@ -510,6 +521,74 @@ function artifactLegCoordinateList(leg: any, ...keys: string[]): [number, number
     coords.push([lon, lat]);
   }
   return dedupeSequentialPoints(coords);
+}
+
+function isAbstractRailNetworkRef(ref: string): boolean {
+  const normalized = String(ref || '').trim().toLowerCase();
+  return (
+    normalized.endsWith('-rail-network') ||
+    normalized.includes('/rail-network') ||
+    normalized.endsWith('-distribution-network') ||
+    normalized.includes('/distribution-network')
+  );
+}
+
+function uniqueLegStrings(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
+}
+
+function collapseAbstractRailNetworkLegs(legs: any[]): any[] {
+  const out: any[] = [];
+  for (let idx = 0; idx < legs.length; idx += 1) {
+    const current = legs[idx];
+    const currentCustomer = artifactLegString(current, 'customerRef', 'CustomerRef');
+    if (idx + 1 < legs.length && isAbstractRailNetworkRef(currentCustomer)) {
+      const next = legs[idx + 1];
+      const nextSupplier = artifactLegString(next, 'supplierRef', 'SupplierRef');
+      const sameProduct = artifactLegString(current, 'productRef', 'ProductRef') === artifactLegString(next, 'productRef', 'ProductRef');
+      if (currentCustomer && currentCustomer === nextSupplier && sameProduct) {
+        out.push({
+          ...current,
+          customerRef: artifactLegString(next, 'customerRef', 'CustomerRef'),
+          CustomerRef: artifactLegString(next, 'customerRef', 'CustomerRef'),
+          transportViaRefs: uniqueLegStrings([
+            ...artifactLegStringList(current, 'transportViaRefs', 'TransportViaRefs'),
+            ...artifactLegStringList(next, 'transportViaRefs', 'TransportViaRefs'),
+          ].filter((ref) => !isAbstractRailNetworkRef(ref))),
+          TransportViaRefs: uniqueLegStrings([
+            ...artifactLegStringList(current, 'transportViaRefs', 'TransportViaRefs'),
+            ...artifactLegStringList(next, 'transportViaRefs', 'TransportViaRefs'),
+          ].filter((ref) => !isAbstractRailNetworkRef(ref))),
+          flowRefs: uniqueLegStrings([
+            ...artifactLegStringList(current, 'flowRefs', 'FlowRefs'),
+            ...artifactLegStringList(next, 'flowRefs', 'FlowRefs'),
+          ]),
+          FlowRefs: uniqueLegStrings([
+            ...artifactLegStringList(current, 'flowRefs', 'FlowRefs'),
+            ...artifactLegStringList(next, 'flowRefs', 'FlowRefs'),
+          ]),
+          alternateFlowRefs: uniqueLegStrings([
+            ...artifactLegStringList(current, 'alternateFlowRefs', 'AlternateFlowRefs'),
+            ...artifactLegStringList(next, 'alternateFlowRefs', 'AlternateFlowRefs'),
+          ]),
+          AlternateFlowRefs: uniqueLegStrings([
+            ...artifactLegStringList(current, 'alternateFlowRefs', 'AlternateFlowRefs'),
+            ...artifactLegStringList(next, 'alternateFlowRefs', 'AlternateFlowRefs'),
+          ]),
+          routeCoordinates: [],
+          RouteCoordinates: [],
+          routeGeometrySource: '',
+          RouteGeometrySource: '',
+          mode: artifactLegString(current, 'mode', 'Mode') || artifactLegString(next, 'mode', 'Mode'),
+          Mode: artifactLegString(current, 'mode', 'Mode') || artifactLegString(next, 'mode', 'Mode'),
+        });
+        idx += 1;
+        continue;
+      }
+    }
+    out.push(current);
+  }
+  return out;
 }
 
 function directStrokeColor(theme: ThemeMode): string {
@@ -1332,6 +1411,16 @@ function selectFlowGeometry(
 function isApproximateRouteGeometrySource(value: string): boolean {
   const raw = String(value || '').trim().toLowerCase();
   return raw === 'fragmentary_waypoint_sequence' || raw === 'partial_segment_geometry';
+}
+
+function shouldPreferFlowGeometry(
+  explicitCoordinates: [number, number][],
+  flowRefs: string[],
+  routeGeometrySource: string,
+): boolean {
+  return explicitCoordinates.length >= 2
+    && flowRefs.length > 0
+    && isApproximateRouteGeometrySource(routeGeometrySource);
 }
 
 function roundCoord(value: number, digits = 6): number {
@@ -3095,6 +3184,166 @@ function canAccessMapStyle(map: maplibregl.Map): boolean {
   }
 }
 
+function safeGetSource<T extends maplibregl.Source = maplibregl.Source>(
+  map: maplibregl.Map,
+  sourceId: string,
+): T | undefined {
+  if (!canAccessMapStyle(map)) return undefined;
+  try {
+    return map.getSource(sourceId) as T | undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function safeGetLayer(
+  map: maplibregl.Map,
+  layerId: string,
+): maplibregl.StyleLayer | undefined {
+  if (!canAccessMapStyle(map)) return undefined;
+  try {
+    return map.getLayer(layerId);
+  } catch {
+    return undefined;
+  }
+}
+
+type SupplyLabelCandidate = {
+  id: string;
+  feature: GeoJSON.Feature;
+  rect: ScreenRect;
+  projected: { x: number; y: number };
+  labelText: string;
+  productRef: string;
+  labelPriority: number;
+  stressFocus: boolean;
+};
+
+function labelWidthPx(text: string, maxWidth: number): number {
+  const longestLine = String(text || '')
+    .split('\n')
+    .reduce((max, line) => Math.max(max, line.trim().length), 0);
+  return Math.max(44, Math.min(maxWidth, longestLine * 6.2 + 18));
+}
+
+function supplyLabelRect(point: { x: number; y: number }, text: string): ScreenRect {
+  const lines = Math.max(1, String(text || '').split('\n').filter(Boolean).length);
+  const width = labelWidthPx(text, 210);
+  const height = lines > 1 ? 42 : 24;
+  return {
+    left: point.x - width / 2,
+    right: point.x + width / 2,
+    top: point.y - height / 2,
+    bottom: point.y + height / 2,
+  };
+}
+
+function buildViewportEdgeFeatureCollection(
+  featureCollection: GeoJSON.FeatureCollection,
+  map: maplibregl.Map,
+  theme: ThemeMode,
+  simulationStressSelection?: GeoEdgeSimulationStressSelection,
+): GeoJSON.FeatureCollection {
+  const stressed = applySimulationStressToFeatureCollection(featureCollection, theme, simulationStressSelection);
+  const features = (stressed.features || []).map((feature) => ({
+    ...feature,
+    geometry: feature.geometry ? JSON.parse(JSON.stringify(feature.geometry)) : feature.geometry,
+    properties: { ...(feature.properties || {}) },
+  })) as GeoJSON.Feature[];
+
+  const pathLegPlan = readPublishedLegCaptionPlan(map as Record<string, any>);
+  const pathLegRects = pathLegPlan?.occupiedRects || [];
+  const zoom = map.getZoom();
+  const supplyCandidates: SupplyLabelCandidate[] = [];
+
+  for (const feature of features) {
+    const props = (feature.properties || {}) as Record<string, any>;
+    const isSupplyLabel = String(props.kind || '').trim() === 'label' && String(props.channel || '').trim() === 'supply_path';
+    if (!isSupplyLabel || feature.geometry?.type !== 'Point') continue;
+    const coords = (feature.geometry as GeoJSON.Point).coordinates as [number, number];
+    const projected = map.project({ lng: coords[0], lat: coords[1] });
+    const labelText = String(props.labelText || '').trim();
+    if (!labelText) {
+      props.supplyLabelVisible = 0;
+      continue;
+    }
+    supplyCandidates.push({
+      id: feature.id != null ? String(feature.id) : `${coords[0]}:${coords[1]}:${labelText}`,
+      feature,
+      rect: supplyLabelRect(projected, labelText),
+      projected,
+      labelText,
+      productRef: String(props.productRef || '').trim(),
+      labelPriority: Number(props.labelPriority || 0),
+      stressFocus: Number(props.stressFocusRoute || 0) === 1,
+    });
+  }
+
+  const routeCaptionPlan = planCaptionDensity({
+    zoom,
+    candidates: supplyCandidates.map((candidate) => ({
+      id: candidate.id,
+      family: 'route',
+      productRef: candidate.productRef,
+      x: candidate.projected.x,
+      y: candidate.projected.y,
+      width: candidate.rect.right - candidate.rect.left,
+      height: candidate.rect.bottom - candidate.rect.top,
+      active: candidate.labelPriority >= 1000,
+      stressScore: candidate.stressFocus ? 1 : 0,
+      priority: candidate.labelPriority + (candidate.stressFocus ? 1000 : 0),
+    })),
+    blockedRects: pathLegRects,
+    buildAggregateRect: (center, label) => supplyLabelRect(center, label),
+    blockedPadding: 8,
+    itemPadding: 4,
+    aggregatePadding: 4,
+  });
+
+  const candidateById = new Map(supplyCandidates.map((candidate) => [candidate.id, candidate] as const));
+  const aggregateFeatures: GeoJSON.Feature[] = routeCaptionPlan.aggregates.map((aggregate) => {
+    const members = aggregate.entryIds
+      .map((entryId) => candidateById.get(entryId))
+      .filter((candidate): candidate is SupplyLabelCandidate => Boolean(candidate));
+    const primary = [...members].sort((left, right) => {
+      if (left.labelPriority !== right.labelPriority) return right.labelPriority - left.labelPriority;
+      return Number(right.stressFocus) - Number(left.stressFocus);
+    })[0];
+    const primaryProps = ((primary?.feature.properties || {}) as Record<string, any>);
+    const lngLat = map.unproject({ x: aggregate.x, y: aggregate.y } as maplibregl.PointLike);
+    return {
+      type: 'Feature',
+      id: `supply-aggregate:${aggregate.entryIds[0]}:${aggregate.productRefs.slice(0, 3).join('|')}`,
+      geometry: {
+        type: 'Point',
+        coordinates: [lngLat.lng, lngLat.lat],
+      },
+      properties: {
+        ...primaryProps,
+        kind: 'label',
+        channel: 'supply_path',
+        labelText: aggregate.label,
+        productRef: aggregate.productRefs[0] || '',
+        aggregateProductRefs: aggregate.productRefs,
+        aggregateProductCount: aggregate.productRefs.length,
+        aggregateLegCount: aggregate.entryIds.length,
+        supplyLabelVisible: 1,
+        labelPriority: Math.max(Number(primaryProps.labelPriority || 0), 1200) + aggregate.entryIds.length * 4,
+      },
+    } as GeoJSON.Feature;
+  });
+
+  for (const candidate of supplyCandidates) {
+    const props = (candidate.feature.properties || {}) as Record<string, any>;
+    props.supplyLabelVisible = routeCaptionPlan.visibleEntryIds.has(candidate.id) ? 1 : 0;
+  }
+
+  return {
+    type: 'FeatureCollection',
+    features: [...features, ...aggregateFeatures],
+  };
+}
+
 function buildSupplyPathFeatures(
   pathArtifacts: MaterializedArtifact[],
   coordsByPath: Map<string, { lon: number; lat: number }>,
@@ -3171,7 +3420,8 @@ function buildSupplyPathFeatures(
   for (const artifact of pathArtifacts) {
     if (!artifactMatchesRouteVisibility(artifact, routeVisibility)) continue;
     const artifactId = String(artifact.id || '').trim();
-    const legs = Array.isArray(artifact.payload?.legs) ? artifact.payload.legs : [];
+    const legsPayload = Array.isArray(artifact.payload?.legs) ? artifact.payload.legs : [];
+    const legs = collapseAbstractRailNetworkLegs(legsPayload);
     const multiLegPath = legs.length > 1;
     const pathRiskOverlay = artifact.riskOverlay || null;
     for (let legArrayIndex = 0; legArrayIndex < legs.length; legArrayIndex += 1) {
@@ -3211,7 +3461,8 @@ function buildSupplyPathFeatures(
       const flowRefs = artifactLegStringList(leg, 'flowRefs', 'FlowRefs');
       const routeGeometrySource = artifactLegString(leg, 'routeGeometrySource', 'RouteGeometrySource');
       const explicitGeometrySource: 'exact' | 'fragment' = isApproximateRouteGeometrySource(routeGeometrySource) ? 'fragment' : 'exact';
-      const selectedGeometry = explicitCoordinates.length >= 2
+      const preferFlowGeometry = shouldPreferFlowGeometry(explicitCoordinates, flowRefs, routeGeometrySource);
+      const selectedGeometry = !preferFlowGeometry && explicitCoordinates.length >= 2
         ? { coords: explicitCoordinates, geometrySource: explicitGeometrySource }
         : selectFlowGeometry(flowRefs, fallbackCoordinates, flowById);
       const coordinates = selectedGeometry.coords;
@@ -3351,6 +3602,7 @@ function buildSupplyPathFeatures(
           corridorId: corridorId || `supply-route:${lineId}`,
           featureRole,
           narrativeKey: route.narrativeKey,
+          productRef: route.productRef,
           labelText: normalizedLabelText,
           labelColor: color,
           stressFocusRoute: stressFocus ? 1 : 0,
@@ -3499,6 +3751,7 @@ function buildSupplyPathFeatures(
           corridorId: trunkId,
           featureRole: 'overview',
           narrativeKey: group[0]?.narrativeKey || trunkId,
+          productRef: group[0]?.productRef || '',
           labelText: buildSupplyBundleLabelText(group.length, group[0], objectByPath),
           labelColor: trunkColor,
           stressFocusRoute: groupStressFocus ? 1 : 0,
@@ -4108,12 +4361,41 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
   const peerDimOpacity: maplibregl.ExpressionSpecification = [
     'case',
     ['boolean', ['feature-state', 'edgePeerDim'], false],
-    0.012,
+    0.36,
     1,
   ];
-  const withPeerDim = (inner: maplibregl.ExpressionSpecification): maplibregl.ExpressionSpecification => (
-    ['*', peerDimOpacity, inner]
-  );
+  const multiplyExpressions = (
+    left: maplibregl.ExpressionSpecification,
+    right: maplibregl.ExpressionSpecification,
+  ): maplibregl.ExpressionSpecification => ['*', left, right];
+  const withPeerDim = (inner: maplibregl.ExpressionSpecification): maplibregl.ExpressionSpecification => {
+    const parts = inner as unknown[];
+    if (Array.isArray(inner) && parts[0] === 'interpolate' && Array.isArray(parts[2]) && (parts[2] as unknown[])[0] === 'zoom') {
+      return [
+        'interpolate',
+        parts[1],
+        parts[2],
+        ...parts.slice(3).map((part, index) => (
+          index % 2 === 0
+            ? part
+            : multiplyExpressions(peerDimOpacity, part as maplibregl.ExpressionSpecification)
+        )),
+      ] as unknown as maplibregl.ExpressionSpecification;
+    }
+    if (Array.isArray(inner) && parts[0] === 'step' && Array.isArray(parts[1]) && (parts[1] as unknown[])[0] === 'zoom') {
+      return [
+        'step',
+        parts[1],
+        multiplyExpressions(peerDimOpacity, parts[2] as maplibregl.ExpressionSpecification),
+        ...parts.slice(3).map((part, index) => (
+          index % 2 === 0
+            ? part
+            : multiplyExpressions(peerDimOpacity, part as maplibregl.ExpressionSpecification)
+        )),
+      ] as unknown as maplibregl.ExpressionSpecification;
+    }
+    return multiplyExpressions(peerDimOpacity, inner);
+  };
   map.addLayer({
     id: CORRIDOR_FIELD_LAYER,
     type: 'fill',
@@ -4129,7 +4411,7 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
         13, ['*', ['coalesce', ['get', 'fillOpacity'], 0.02], 1.18],
       ]),
     },
-  }, map.getLayer(GEO_MARKER_LAYER_ANCHOR) ? GEO_MARKER_LAYER_ANCHOR : undefined);
+  }, safeGetLayer(map, GEO_MARKER_LAYER_ANCHOR) ? GEO_MARKER_LAYER_ANCHOR : undefined);
 
   map.addLayer({
     id: CORRIDOR_FIELD_ACCENT_LAYER,
@@ -4146,7 +4428,7 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
         13, ['*', ['coalesce', ['get', 'accentOpacity'], 0.012], 1.18],
       ]),
     },
-  }, map.getLayer(GEO_MARKER_LAYER_ANCHOR) ? GEO_MARKER_LAYER_ANCHOR : undefined);
+  }, safeGetLayer(map, GEO_MARKER_LAYER_ANCHOR) ? GEO_MARKER_LAYER_ANCHOR : undefined);
 
   map.addLayer({
     id: GLOW_LAYER,
@@ -4755,6 +5037,7 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
       'all',
       ['==', ['get', 'kind'], 'label'],
       ['==', ['get', 'channel'], 'supply_path'],
+      ['==', ['coalesce', ['get', 'supplyLabelVisible'], 1], 1],
     ],
     layout: {
       'symbol-sort-key': ['coalesce', ['get', 'labelPriority'], 0],
@@ -4790,10 +5073,10 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
     },
   });
 
-  if (!map.getSource(EDGE_HOVER_PEEK_SRC)) {
+  if (!safeGetSource(map, EDGE_HOVER_PEEK_SRC)) {
     map.addSource(EDGE_HOVER_PEEK_SRC, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   }
-  if (!map.getLayer(EDGE_HOVER_PEEK_LAYER)) {
+  if (!safeGetLayer(map, EDGE_HOVER_PEEK_LAYER)) {
     map.addLayer({
       id: EDGE_HOVER_PEEK_LAYER,
       type: 'symbol',
@@ -4814,140 +5097,142 @@ function addEdgeLayers(map: maplibregl.Map, theme: ThemeMode): void {
     });
   }
 
-  map.addLayer({
-    id: ENDPOINT_CONNECTOR_LAYER,
-    type: 'line',
-    source: ENDPOINT_SRC,
-    filter: ['==', ['get', 'kind'], 'endpoint-connector'],
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: {
-      'line-color': theme === 'dark' ? 'rgba(148,163,184,0.44)' : 'rgba(100,116,139,0.36)',
-      'line-width': [
-        'interpolate', ['linear'], ['zoom'],
-        4, 0.9,
-        8, 1.1,
-        10, 1.25,
-      ],
-      'line-opacity': [
-        'interpolate', ['linear'], ['zoom'],
-        4, 0.44,
-        8, 0.52,
-        10, 0.6,
-      ],
-      'line-dasharray': ['literal', [1.2, 1.6]],
-    },
-  });
+  if (!STANDARD_MAP_OBJECT_CAPTIONS_ONLY) {
+    map.addLayer({
+      id: ENDPOINT_CONNECTOR_LAYER,
+      type: 'line',
+      source: ENDPOINT_SRC,
+      filter: ['==', ['get', 'kind'], 'endpoint-connector'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-color': theme === 'dark' ? 'rgba(148,163,184,0.44)' : 'rgba(100,116,139,0.36)',
+        'line-width': [
+          'interpolate', ['linear'], ['zoom'],
+          4, 0.9,
+          8, 1.1,
+          10, 1.25,
+        ],
+        'line-opacity': [
+          'interpolate', ['linear'], ['zoom'],
+          4, 0.44,
+          8, 0.52,
+          10, 0.6,
+        ],
+        'line-dasharray': ['literal', [1.2, 1.6]],
+      },
+    });
 
-  map.addLayer({
-    id: ENDPOINT_POINTS_LAYER,
-    type: 'symbol',
-    source: ENDPOINT_SRC,
-    filter: ['==', ['get', 'kind'], 'endpoint-marker'],
-    layout: {
-      'icon-image': ['get', 'iconKey'],
-      'icon-size': 1,
-      'icon-allow-overlap': true,
-      'icon-ignore-placement': true,
-    },
-    paint: {
-      'icon-opacity': 0.96,
-    },
-  });
+    map.addLayer({
+      id: ENDPOINT_POINTS_LAYER,
+      type: 'symbol',
+      source: ENDPOINT_SRC,
+      filter: ['==', ['get', 'kind'], 'endpoint-marker'],
+      layout: {
+        'icon-image': ['get', 'iconKey'],
+        'icon-size': 1,
+        'icon-allow-overlap': true,
+        'icon-ignore-placement': true,
+      },
+      paint: {
+        'icon-opacity': 0.96,
+      },
+    });
 
-  map.addLayer({
-    id: ENDPOINT_LABEL_LAYER,
-    type: 'symbol',
-    source: ENDPOINT_SRC,
-    filter: ['match', ['get', 'kind'], ['endpoint-label', 'endpoint-summary'], true, false],
-    layout: {
-      'symbol-sort-key': ['get', 'labelPriority'],
-      'icon-image': endpointChipImageId(theme),
-      'icon-anchor': 'center',
-      'icon-allow-overlap': true,
-      'icon-ignore-placement': true,
-      'icon-text-fit': 'both',
-      'icon-text-fit-padding': [...MAP_CONTEXT_CHIP_FIT_PADDING_STANDARD],
-      'text-field': ['get', 'endpointLabel'],
-      'text-font': mapCaptionTextFont(),
-      'text-size': [
-        'interpolate', ['linear'], ['zoom'],
-        4, ['case', ['==', ['get', 'labelStrong'], 1], 11.5, 10.5],
-        6, ['case', ['==', ['get', 'labelStrong'], 1], 12.25, 11],
-        8, ['case', ['==', ['get', 'labelStrong'], 1], 13, 11.5],
-        10, ['case', ['==', ['get', 'labelStrong'], 1], 13.5, 12],
-      ],
-      'text-variable-anchor': ['literal', ['right', 'left', 'top-right', 'bottom-right', 'top', 'bottom']],
-      'text-radial-offset': [
-        'case',
-        ['==', ['get', 'labelStrong'], 1],
-        1.45,
-        1.28,
-      ],
-      'text-allow-overlap': true,
-      'text-ignore-placement': true,
-    },
-    paint: {
-      'icon-opacity': [
-        'interpolate', ['linear'], ['zoom'],
-        4,
-        [
+    map.addLayer({
+      id: ENDPOINT_LABEL_LAYER,
+      type: 'symbol',
+      source: ENDPOINT_SRC,
+      filter: ['match', ['get', 'kind'], ['endpoint-label', 'endpoint-summary'], true, false],
+      layout: {
+        'symbol-sort-key': ['get', 'labelPriority'],
+        'icon-image': endpointChipImageId(theme),
+        'icon-anchor': 'center',
+        'icon-allow-overlap': true,
+        'icon-ignore-placement': true,
+        'icon-text-fit': 'both',
+        'icon-text-fit-padding': [...MAP_CONTEXT_CHIP_FIT_PADDING_STANDARD],
+        'text-field': ['get', 'endpointLabel'],
+        'text-font': mapCaptionTextFont(),
+        'text-size': [
+          'interpolate', ['linear'], ['zoom'],
+          4, ['case', ['==', ['get', 'labelStrong'], 1], 11.5, 10.5],
+          6, ['case', ['==', ['get', 'labelStrong'], 1], 12.25, 11],
+          8, ['case', ['==', ['get', 'labelStrong'], 1], 13, 11.5],
+          10, ['case', ['==', ['get', 'labelStrong'], 1], 13.5, 12],
+        ],
+        'text-variable-anchor': ['literal', ['right', 'left', 'top-right', 'bottom-right', 'top', 'bottom']],
+        'text-radial-offset': [
+          'case',
+          ['==', ['get', 'labelStrong'], 1],
+          1.45,
+          1.28,
+        ],
+        'text-allow-overlap': true,
+        'text-ignore-placement': true,
+      },
+      paint: {
+        'icon-opacity': [
+          'interpolate', ['linear'], ['zoom'],
+          4,
+          [
+            'case',
+            ['boolean', ['feature-state', 'active'], false],
+            0.98,
+            ['==', ['get', 'labelChip'], 1],
+            ['case', ['==', ['get', 'labelStrong'], 1], 0.9, 0.74],
+            0,
+          ],
+          6.5,
+          [
+            'case',
+            ['boolean', ['feature-state', 'active'], false],
+            0.98,
+            ['==', ['get', 'labelChip'], 1],
+            ['case', ['==', ['get', 'labelStrong'], 1], 0.96, 0.84],
+            0,
+          ],
+          9,
+          [
+            'case',
+            ['boolean', ['feature-state', 'active'], false],
+            0.98,
+            ['==', ['get', 'labelChip'], 1],
+            ['case', ['==', ['get', 'labelStrong'], 1], 0.99, 0.92],
+            0,
+          ],
+        ],
+        'text-color': [
           'case',
           ['boolean', ['feature-state', 'active'], false],
-          0.98,
-          ['==', ['get', 'labelChip'], 1],
-          ['case', ['==', ['get', 'labelStrong'], 1], 0.9, 0.74],
-          0,
+          theme === 'dark' ? '#ffffff' : 'rgba(2,6,23,0.98)',
+          ['==', ['get', 'labelStrong'], 1],
+          theme === 'dark' ? '#f8fafc' : 'rgba(2,6,23,0.96)',
+          ['==', ['get', 'labelSubdued'], 1],
+          theme === 'dark' ? 'rgba(241,245,249,0.88)' : 'rgba(15,23,42,0.82)',
+          theme === 'dark' ? '#f8fafc' : 'rgba(2,6,23,0.96)',
         ],
-        6.5,
-        [
+        'text-halo-color': theme === 'dark' ? 'rgba(2,6,23,0.98)' : 'rgba(255,255,255,0.98)',
+        'text-halo-width': [
           'case',
           ['boolean', ['feature-state', 'active'], false],
-          0.98,
+          2,
+          ['==', ['get', 'labelStrong'], 1],
+          1.7,
           ['==', ['get', 'labelChip'], 1],
-          ['case', ['==', ['get', 'labelStrong'], 1], 0.96, 0.84],
-          0,
+          1.4,
+          1.1,
         ],
-        9,
-        [
+        'text-opacity': [
           'case',
           ['boolean', ['feature-state', 'active'], false],
-          0.98,
-          ['==', ['get', 'labelChip'], 1],
-          ['case', ['==', ['get', 'labelStrong'], 1], 0.99, 0.92],
+          1,
+          ['==', ['get', 'labelVisible'], 1],
+          ['case', ['==', ['get', 'labelSubdued'], 1], 0.84, ['==', ['get', 'labelStrong'], 1], 1, 0.94],
           0,
         ],
-      ],
-      'text-color': [
-        'case',
-        ['boolean', ['feature-state', 'active'], false],
-        theme === 'dark' ? '#ffffff' : 'rgba(2,6,23,0.98)',
-        ['==', ['get', 'labelStrong'], 1],
-        theme === 'dark' ? '#f8fafc' : 'rgba(2,6,23,0.96)',
-        ['==', ['get', 'labelSubdued'], 1],
-        theme === 'dark' ? 'rgba(241,245,249,0.88)' : 'rgba(15,23,42,0.82)',
-        theme === 'dark' ? '#f8fafc' : 'rgba(2,6,23,0.96)',
-      ],
-      'text-halo-color': theme === 'dark' ? 'rgba(2,6,23,0.98)' : 'rgba(255,255,255,0.98)',
-      'text-halo-width': [
-        'case',
-        ['boolean', ['feature-state', 'active'], false],
-        2,
-        ['==', ['get', 'labelStrong'], 1],
-        1.7,
-        ['==', ['get', 'labelChip'], 1],
-        1.4,
-        1.1,
-      ],
-      'text-opacity': [
-        'case',
-        ['boolean', ['feature-state', 'active'], false],
-        1,
-        ['==', ['get', 'labelVisible'], 1],
-        ['case', ['==', ['get', 'labelSubdued'], 1], 0.84, ['==', ['get', 'labelStrong'], 1], 1, 0.94],
-        0,
-      ],
-    },
-  });
+      },
+    });
+  }
 }
 
 export function useGeoEdgeLayer(
@@ -4983,6 +5268,7 @@ export function useGeoEdgeLayer(
   const objectsRef = useRef(objects);
   const featureIdsByNarrativeKeyRef = useRef<Map<string, Array<string | number>>>(new Map());
   const endpointMarkerIdsByNarrativeKeyRef = useRef<Map<string, Array<string | number>>>(new Map());
+  const narrativeFocusMetaRef = useRef<Map<string, NarrativeFocusMeta>>(new Map());
   const endpointRenderStateRef = useRef<EndpointRenderState | null>(null);
   const baseEdgeFeatureCollectionRef = useRef<GeoJSON.FeatureCollection>({ type: 'FeatureCollection', features: [] });
   const activeNarrativeFeatureIdsRef = useRef<Array<string | number>>([]);
@@ -5015,17 +5301,16 @@ export function useGeoEdgeLayer(
 
   useEffect(() => {
     if (!map || !selectedObject || !canAccessMapStyle(map)) return;
-    const src = map.getSource(SRC) as maplibregl.GeoJSONSource | undefined;
+    const src = safeGetSource<maplibregl.GeoJSONSource>(map, SRC);
     if (!src) return;
     const baseFeatureCollection = baseEdgeFeatureCollectionRef.current;
     if (!baseFeatureCollection?.features?.length) return;
-    src.setData(
-      applySimulationStressToFeatureCollection(
-        baseFeatureCollection,
-        theme,
-        simulationStressSelectionRef.current,
-      ) as any,
-    );
+    src.setData(buildViewportEdgeFeatureCollection(
+      baseFeatureCollection,
+      map,
+      theme,
+      simulationStressSelectionRef.current,
+    ) as any);
     // setData drops all feature-state on this source; re-apply narrative + hover highlights.
     setFeatureNarrativeEpoch((value) => value + 1);
     const hoverId = hoveredEdgeFeatureIdRef.current;
@@ -5044,13 +5329,13 @@ export function useGeoEdgeLayer(
   }, [map, selectedObject?.id, simulationStressSelection, styleEpoch, theme]);
 
   useEffect(() => {
-    if (!map || !selectedObject || !canAccessMapStyle(map) || !map.getSource(SRC)) return;
+    if (!map || !selectedObject || !safeGetSource(map, SRC)) return;
     try {
       for (const id of activeNarrativeFeatureIdsRef.current) {
         map.setFeatureState({ source: SRC, id }, { active: false });
       }
       for (const id of activeNarrativeEndpointIdsRef.current) {
-        if (map.getSource(ENDPOINT_SRC)) {
+        if (safeGetSource(map, ENDPOINT_SRC)) {
           map.setFeatureState({ source: ENDPOINT_SRC, id }, { active: false });
         }
       }
@@ -5064,7 +5349,7 @@ export function useGeoEdgeLayer(
       activeNarrativeFeatureIdsRef.current = featureIds;
       const endpointIds = endpointMarkerIdsByNarrativeKeyRef.current.get(activeNarrativeKey) || [];
       for (const id of endpointIds) {
-        if (map.getSource(ENDPOINT_SRC)) {
+        if (safeGetSource(map, ENDPOINT_SRC)) {
           map.setFeatureState({ source: ENDPOINT_SRC, id }, { active: true });
         }
       }
@@ -5076,11 +5361,65 @@ export function useGeoEdgeLayer(
   }, [activeNarrativeKey, featureNarrativeEpoch, map, selectedObject?.id, styleEpoch]);
 
   useEffect(() => {
+    if (!map || !selectedObject || !safeGetSource(map, SRC)) return;
+    if (edgePointerHoverActiveRef.current) return;
+    const peerMeta = edgeFeaturePeerMetaRef.current;
+    if (!peerMeta.length) return;
+    const selectedNarrativeKey = String(panelNarrativeKey || '').trim();
+    if (!selectedNarrativeKey) {
+      const markerHoveredId = markerHoveredObjectIdRef.current;
+      if (markerHoveredId) {
+        const bright = brightCorridorsForObject(corridorConnectsRef.current, markerHoveredId);
+        const opts = { brightCorridors: bright, hoveredFeatureId: null as string | number | null, markerIncidentHighlight: true };
+        applyEdgePeerDimStates(map, peerMeta, opts);
+        lastPeerDimApplyRef.current = opts;
+        setMapInteractionSpotlightObjectIds(spotlightObjectIdsForMarker(corridorConnectsRef.current, markerHoveredId));
+        return;
+      }
+      clearEdgePeerDimStates(map, peerMeta);
+      lastPeerDimApplyRef.current = null;
+      setMapInteractionSpotlightObjectIds(null);
+      clearEdgeHoverPeekLayer(map);
+      return;
+    }
+    const focusMeta = narrativeFocusMetaRef.current.get(selectedNarrativeKey);
+    if (!focusMeta) return;
+    const opts = {
+      brightCorridors: new Set(focusMeta.corridorIds),
+      hoveredFeatureId: focusMeta.featureId,
+      markerIncidentHighlight: false,
+    };
+    applyEdgePeerDimStates(map, peerMeta, opts);
+    lastPeerDimApplyRef.current = opts;
+    const spotlightObjectIds = focusMeta.objectIds.length > 0 ? focusMeta.objectIds : null;
+    setMapInteractionSpotlightObjectIds(spotlightObjectIds);
+    if (spotlightObjectIds && spotlightObjectIds.length > 0) {
+      const objectsById = new Map(objectsRef.current.map((object) => [object.id, object] as const));
+      void refreshEdgeHoverPeekLayer(map, theme, spotlightObjectIds, objectsById);
+    } else {
+      clearEdgeHoverPeekLayer(map);
+    }
+  }, [featureNarrativeEpoch, map, markerHoveredObjectId, panelNarrativeKey, selectedObject?.id, styleEpoch, theme]);
+
+  useEffect(() => {
     if (!map || !selectedObject || !canAccessMapStyle(map)) return;
+
+    const refreshEdgeLabels = () => {
+      const src = safeGetSource<maplibregl.GeoJSONSource>(map, SRC);
+      const baseFeatureCollection = baseEdgeFeatureCollectionRef.current;
+      if (!src || !baseFeatureCollection?.features?.length) return;
+      src.setData(buildViewportEdgeFeatureCollection(
+        baseFeatureCollection,
+        map,
+        theme,
+        simulationStressSelectionRef.current,
+      ) as any);
+      setFeatureNarrativeEpoch((value) => value + 1);
+    };
 
     const refreshEndpointLabels = () => {
       const renderState = endpointRenderStateRef.current;
-      const endpointSrc = map.getSource(ENDPOINT_SRC) as maplibregl.GeoJSONSource | undefined;
+      const endpointSrc = safeGetSource<maplibregl.GeoJSONSource>(map, ENDPOINT_SRC);
       if (!renderState || !endpointSrc) return;
       const nextPlacedEntries = renderState.sourceEntries.length > 0
         ? spreadEndpointEntries(map, renderState.sourceEntries)
@@ -5095,12 +5434,19 @@ export function useGeoEdgeLayer(
     };
 
     refreshEndpointLabels();
+    refreshEdgeLabels();
     map.on('zoomend', refreshEndpointLabels);
     map.on('moveend', refreshEndpointLabels);
+    map.on('zoomend', refreshEdgeLabels);
+    map.on('moveend', refreshEdgeLabels);
+    map.on(PATH_LEG_LABELS_UPDATED_EVENT, refreshEdgeLabels);
     return () => {
       try {
         map.off('zoomend', refreshEndpointLabels);
         map.off('moveend', refreshEndpointLabels);
+        map.off('zoomend', refreshEdgeLabels);
+        map.off('moveend', refreshEdgeLabels);
+        map.off(PATH_LEG_LABELS_UPDATED_EVENT, refreshEdgeLabels);
       } catch {
         /* handler may already be detached */
       }
@@ -5113,7 +5459,7 @@ export function useGeoEdgeLayer(
 
     const applyMarkerHoverPeerDimOrClear = () => {
       const meta = edgeFeaturePeerMetaRef.current;
-      if (!meta.length || !canAccessMapStyle(map) || !map.getSource(SRC)) return;
+      if (!meta.length || !safeGetSource(map, SRC)) return;
       const mh = markerHoveredObjectIdRef.current;
       if (mh) {
         const bright = brightCorridorsForObject(corridorConnectsRef.current, mh);
@@ -5131,7 +5477,7 @@ export function useGeoEdgeLayer(
     const resetEdgePointerInteraction = () => {
       if (hoveredEdgeId != null) {
         try {
-          if (canAccessMapStyle(map) && map.getSource(SRC)) {
+          if (safeGetSource(map, SRC)) {
             map.setFeatureState({ source: SRC, id: hoveredEdgeId }, { hover: false });
           }
         } catch { /* source removed during style transition */ }
@@ -5149,24 +5495,24 @@ export function useGeoEdgeLayer(
       resetEdgePointerInteraction();
       clearEdgeHoverPeekLayer(map);
       try {
-        if (map.getLayer(EDGE_HOVER_PEEK_LAYER)) map.removeLayer(EDGE_HOVER_PEEK_LAYER);
-        if (map.getSource(EDGE_HOVER_PEEK_SRC)) map.removeSource(EDGE_HOVER_PEEK_SRC);
-        if (map.getLayer(ENDPOINT_LABEL_LAYER)) map.removeLayer(ENDPOINT_LABEL_LAYER);
-        if (map.getLayer(ENDPOINT_POINTS_LAYER)) map.removeLayer(ENDPOINT_POINTS_LAYER);
-        if (map.getLayer(ENDPOINT_CONNECTOR_LAYER)) map.removeLayer(ENDPOINT_CONNECTOR_LAYER);
-        if (map.getLayer(SUPPLY_LABEL_LAYER)) map.removeLayer(SUPPLY_LABEL_LAYER);
-        if (map.getLayer(CORRIDOR_FIELD_ACCENT_LAYER)) map.removeLayer(CORRIDOR_FIELD_ACCENT_LAYER);
-        if (map.getLayer(CORRIDOR_FIELD_LAYER)) map.removeLayer(CORRIDOR_FIELD_LAYER);
-        if (map.getLayer(LABEL_LAYER)) map.removeLayer(LABEL_LAYER);
-        if (map.getLayer(SUPPLY_HOP_1_LAYER)) map.removeLayer(SUPPLY_HOP_1_LAYER);
-        if (map.getLayer(SUPPLY_HOP_2_LAYER)) map.removeLayer(SUPPLY_HOP_2_LAYER);
-        if (map.getLayer(SUPPLY_HOP_3_LAYER)) map.removeLayer(SUPPLY_HOP_3_LAYER);
-        if (map.getLayer(HOP_1_LAYER)) map.removeLayer(HOP_1_LAYER);
-        if (map.getLayer(HOP_2_LAYER)) map.removeLayer(HOP_2_LAYER);
-        if (map.getLayer(HOP_3_LAYER)) map.removeLayer(HOP_3_LAYER);
-        if (map.getLayer(GLOW_LAYER)) map.removeLayer(GLOW_LAYER);
-        if (map.getSource(ENDPOINT_SRC)) map.removeSource(ENDPOINT_SRC);
-        if (map.getSource(SRC)) map.removeSource(SRC);
+        if (safeGetLayer(map, EDGE_HOVER_PEEK_LAYER)) map.removeLayer(EDGE_HOVER_PEEK_LAYER);
+        if (safeGetSource(map, EDGE_HOVER_PEEK_SRC)) map.removeSource(EDGE_HOVER_PEEK_SRC);
+        if (safeGetLayer(map, ENDPOINT_LABEL_LAYER)) map.removeLayer(ENDPOINT_LABEL_LAYER);
+        if (safeGetLayer(map, ENDPOINT_POINTS_LAYER)) map.removeLayer(ENDPOINT_POINTS_LAYER);
+        if (safeGetLayer(map, ENDPOINT_CONNECTOR_LAYER)) map.removeLayer(ENDPOINT_CONNECTOR_LAYER);
+        if (safeGetLayer(map, SUPPLY_LABEL_LAYER)) map.removeLayer(SUPPLY_LABEL_LAYER);
+        if (safeGetLayer(map, CORRIDOR_FIELD_ACCENT_LAYER)) map.removeLayer(CORRIDOR_FIELD_ACCENT_LAYER);
+        if (safeGetLayer(map, CORRIDOR_FIELD_LAYER)) map.removeLayer(CORRIDOR_FIELD_LAYER);
+        if (safeGetLayer(map, LABEL_LAYER)) map.removeLayer(LABEL_LAYER);
+        if (safeGetLayer(map, SUPPLY_HOP_1_LAYER)) map.removeLayer(SUPPLY_HOP_1_LAYER);
+        if (safeGetLayer(map, SUPPLY_HOP_2_LAYER)) map.removeLayer(SUPPLY_HOP_2_LAYER);
+        if (safeGetLayer(map, SUPPLY_HOP_3_LAYER)) map.removeLayer(SUPPLY_HOP_3_LAYER);
+        if (safeGetLayer(map, HOP_1_LAYER)) map.removeLayer(HOP_1_LAYER);
+        if (safeGetLayer(map, HOP_2_LAYER)) map.removeLayer(HOP_2_LAYER);
+        if (safeGetLayer(map, HOP_3_LAYER)) map.removeLayer(HOP_3_LAYER);
+        if (safeGetLayer(map, GLOW_LAYER)) map.removeLayer(GLOW_LAYER);
+        if (safeGetSource(map, ENDPOINT_SRC)) map.removeSource(ENDPOINT_SRC);
+        if (safeGetSource(map, SRC)) map.removeSource(SRC);
       } catch { /* disposed */ }
     };
 
@@ -5176,7 +5522,7 @@ export function useGeoEdgeLayer(
       if (hoveredEdgeId === feature.id) return;
       if (hoveredEdgeId != null) {
         try {
-          if (canAccessMapStyle(map) && map.getSource(SRC)) {
+          if (safeGetSource(map, SRC)) {
             map.setFeatureState({ source: SRC, id: hoveredEdgeId }, { hover: false });
           }
         } catch { /* source removed during style transition */ }
@@ -5191,7 +5537,7 @@ export function useGeoEdgeLayer(
       }
       const endpointIds = collectEdgeHoverEndpointObjectIds(props, pathToObjectId);
       const meta = edgeFeaturePeerMetaRef.current;
-      if (meta.length && canAccessMapStyle(map) && map.getSource(SRC)) {
+      if (meta.length && safeGetSource(map, SRC)) {
         const opts = {
           brightCorridors,
           hoveredFeatureId: feature.id as string | number,
@@ -5203,7 +5549,7 @@ export function useGeoEdgeLayer(
       setMapInteractionSpotlightObjectIds(endpointIds);
       edgePointerHoverActiveRef.current = true;
       try {
-        if (canAccessMapStyle(map) && map.getSource(SRC)) {
+        if (safeGetSource(map, SRC)) {
           map.setFeatureState({ source: SRC, id: feature.id }, { hover: true });
           hoveredEdgeId = feature.id;
           hoveredEdgeFeatureIdRef.current = feature.id;
@@ -5220,12 +5566,18 @@ export function useGeoEdgeLayer(
       resetEdgePointerInteraction();
     };
 
+    const handleEdgeClick = (event: maplibregl.MapMouseEvent & { features?: maplibregl.MapGeoJSONFeature[] }) => {
+      const feature = event.features?.[0];
+      const nextNarrativeKey = String(feature?.properties?.narrativeKey || '').trim();
+      setPanelNarrativeKey((current) => current === nextNarrativeKey ? null : (nextNarrativeKey || null));
+    };
+
     const bringEndpointLayersToFront = () => {
       try {
-        if (map.getLayer(ENDPOINT_CONNECTOR_LAYER)) map.moveLayer(ENDPOINT_CONNECTOR_LAYER);
-        if (map.getLayer(ENDPOINT_POINTS_LAYER)) map.moveLayer(ENDPOINT_POINTS_LAYER);
-        if (map.getLayer(ENDPOINT_LABEL_LAYER)) map.moveLayer(ENDPOINT_LABEL_LAYER);
-        if (map.getLayer(EDGE_HOVER_PEEK_LAYER)) map.moveLayer(EDGE_HOVER_PEEK_LAYER);
+        if (safeGetLayer(map, ENDPOINT_CONNECTOR_LAYER)) map.moveLayer(ENDPOINT_CONNECTOR_LAYER);
+        if (safeGetLayer(map, ENDPOINT_POINTS_LAYER)) map.moveLayer(ENDPOINT_POINTS_LAYER);
+        if (safeGetLayer(map, ENDPOINT_LABEL_LAYER)) map.moveLayer(ENDPOINT_LABEL_LAYER);
+        if (safeGetLayer(map, EDGE_HOVER_PEEK_LAYER)) map.moveLayer(EDGE_HOVER_PEEK_LAYER);
       } catch { /* style/layers may be mid-transition */ }
     };
 
@@ -5244,6 +5596,7 @@ export function useGeoEdgeLayer(
       setHoveredNarrativeKey(null);
       featureIdsByNarrativeKeyRef.current = new Map();
       endpointMarkerIdsByNarrativeKeyRef.current = new Map();
+      narrativeFocusMetaRef.current = new Map();
       endpointRenderStateRef.current = null;
       activeNarrativeFeatureIdsRef.current = [];
       activeNarrativeEndpointIdsRef.current = [];
@@ -5284,6 +5637,7 @@ export function useGeoEdgeLayer(
     setHoveredNarrativeKey(null);
     featureIdsByNarrativeKeyRef.current = new Map();
     endpointMarkerIdsByNarrativeKeyRef.current = new Map();
+    narrativeFocusMetaRef.current = new Map();
     endpointRenderStateRef.current = null;
     activeNarrativeFeatureIdsRef.current = [];
     activeNarrativeEndpointIdsRef.current = [];
@@ -5509,13 +5863,33 @@ export function useGeoEdgeLayer(
         const featureIdsByNarrativeKey = new Map<string, Array<string | number>>();
         const endpointMarkerIdsByNarrativeKey = new Map<string, Array<string | number>>();
         const narrativeKeysByEndpointKey = new Map<string, string[]>();
+        const narrativeFocusMeta = new Map<string, { corridorIds: Set<string>; objectIds: Set<string>; featureId: string | number | null }>();
+        const pathToObjectId = new Map<string, string>();
+        for (const object of visibleObjectById.values()) {
+          const canonicalPath = String(object.canonicalPath || '').trim();
+          const objectId = String(object.id || '').trim();
+          if (canonicalPath && objectId) pathToObjectId.set(canonicalPath, objectId);
+        }
         for (const feature of allFeatures) {
-          const narrativeKey = String(feature.properties?.narrativeKey || '').trim();
+          const props = (feature.properties || {}) as Record<string, unknown>;
+          const narrativeKey = String(props.narrativeKey || '').trim();
           if (narrativeKey) {
             if (feature.id != null) {
               if (!featureIdsByNarrativeKey.has(narrativeKey)) featureIdsByNarrativeKey.set(narrativeKey, []);
               featureIdsByNarrativeKey.get(narrativeKey)!.push(feature.id);
             }
+            const focusMeta = narrativeFocusMeta.get(narrativeKey) || {
+              corridorIds: new Set<string>(),
+              objectIds: new Set<string>(),
+              featureId: feature.id ?? null,
+            };
+            const corridorId = String(props.corridorId || '').trim();
+            if (corridorId) focusMeta.corridorIds.add(corridorId);
+            for (const objectId of collectEdgeHoverEndpointObjectIds(props, pathToObjectId)) {
+              focusMeta.objectIds.add(objectId);
+            }
+            if (focusMeta.featureId == null && feature.id != null) focusMeta.featureId = feature.id;
+            narrativeFocusMeta.set(narrativeKey, focusMeta);
             for (const endpointKey of featureBadgeEndpointRefs(feature)) {
               if (!endpointKey) continue;
               if (!narrativeKeysByEndpointKey.has(endpointKey)) narrativeKeysByEndpointKey.set(endpointKey, []);
@@ -5524,6 +5898,13 @@ export function useGeoEdgeLayer(
           }
         }
         featureIdsByNarrativeKeyRef.current = featureIdsByNarrativeKey;
+        narrativeFocusMetaRef.current = new Map(
+          Array.from(narrativeFocusMeta.entries()).map(([key, value]) => [key, {
+            corridorIds: Array.from(value.corridorIds),
+            objectIds: Array.from(value.objectIds),
+            featureId: value.featureId,
+          } satisfies NarrativeFocusMeta] as const),
+        );
         for (const [endpointKey, keys] of narrativeKeysByEndpointKey.entries()) {
           const markerId = endpointMarkerFeatureId(endpointKey);
           const labelId = endpointLabelFeatureId(endpointKey);
@@ -5591,8 +5972,9 @@ export function useGeoEdgeLayer(
         ensureSupplyLabelChipImage(map, theme);
         map.addSource(SRC, {
           type: 'geojson',
-          data: applySimulationStressToFeatureCollection(
+          data: buildViewportEdgeFeatureCollection(
             baseEdgeFeatureCollection,
+            map,
             theme,
             simulationStressSelectionRef.current,
           ) as any,
@@ -5609,6 +5991,12 @@ export function useGeoEdgeLayer(
         map.on('mousemove', SUPPLY_HOP_1_LAYER, handleEdgeHover);
         map.on('mousemove', SUPPLY_HOP_2_LAYER, handleEdgeHover);
         map.on('mousemove', SUPPLY_HOP_3_LAYER, handleEdgeHover);
+        map.on('click', HOP_1_LAYER, handleEdgeClick);
+        map.on('click', HOP_2_LAYER, handleEdgeClick);
+        map.on('click', HOP_3_LAYER, handleEdgeClick);
+        map.on('click', SUPPLY_HOP_1_LAYER, handleEdgeClick);
+        map.on('click', SUPPLY_HOP_2_LAYER, handleEdgeClick);
+        map.on('click', SUPPLY_HOP_3_LAYER, handleEdgeClick);
         map.on('mouseleave', HOP_1_LAYER, handleEdgeLeave);
         map.on('mouseleave', HOP_2_LAYER, handleEdgeLeave);
         map.on('mouseleave', HOP_3_LAYER, handleEdgeLeave);
@@ -5632,6 +6020,7 @@ export function useGeoEdgeLayer(
           setHoveredNarrativeKey(null);
           featureIdsByNarrativeKeyRef.current = new Map();
           endpointMarkerIdsByNarrativeKeyRef.current = new Map();
+          narrativeFocusMetaRef.current = new Map();
           endpointRenderStateRef.current = null;
           activeNarrativeFeatureIdsRef.current = [];
           activeNarrativeEndpointIdsRef.current = [];
@@ -5648,6 +6037,12 @@ export function useGeoEdgeLayer(
         map.off('mousemove', SUPPLY_HOP_1_LAYER, handleEdgeHover);
         map.off('mousemove', SUPPLY_HOP_2_LAYER, handleEdgeHover);
         map.off('mousemove', SUPPLY_HOP_3_LAYER, handleEdgeHover);
+        map.off('click', HOP_1_LAYER, handleEdgeClick);
+        map.off('click', HOP_2_LAYER, handleEdgeClick);
+        map.off('click', HOP_3_LAYER, handleEdgeClick);
+        map.off('click', SUPPLY_HOP_1_LAYER, handleEdgeClick);
+        map.off('click', SUPPLY_HOP_2_LAYER, handleEdgeClick);
+        map.off('click', SUPPLY_HOP_3_LAYER, handleEdgeClick);
         map.off('mouseleave', HOP_1_LAYER, handleEdgeLeave);
         map.off('mouseleave', HOP_2_LAYER, handleEdgeLeave);
         map.off('mouseleave', HOP_3_LAYER, handleEdgeLeave);
@@ -5670,7 +6065,7 @@ export function useGeoEdgeLayer(
   ]);
 
   useEffect(() => {
-    if (!map || !selectedObject || !canAccessMapStyle(map) || !map.getSource(SRC)) return;
+    if (!map || !selectedObject || !safeGetSource(map, SRC)) return;
     if (edgePointerHoverActiveRef.current) return;
     const meta = edgeFeaturePeerMetaRef.current;
     if (!meta.length) return;

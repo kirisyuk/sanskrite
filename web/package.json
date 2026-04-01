@@ -4,10 +4,11 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "npm run env:sync && vite",
+    "env:sync": "bash scripts/sync-env-from-gcloud.sh",
     "gen:schemas": "cd ../backend && go run ./internal/tools/schemagen",
     "gen:types": "node scripts/generate-types.mjs",
-    "build": "npm run gen:schemas && npm run gen:types && tsc -b && vite build",
+    "build": "npm run env:sync && npm run gen:schemas && npm run gen:types && tsc -b && vite build",
     "build:ci": "tsc -b && vite build",
     "deploy": "npm run build && firebase deploy --only hosting",
     "deploy:only": "firebase deploy --only hosting",

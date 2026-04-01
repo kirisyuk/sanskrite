@@ -130,7 +130,7 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
       const btn = document.getElementById('btn-artifacts');
       if (!btn) return;
       if (st === 'done') {
-        btn.classList.add('etg-glow-blue');
+        btn.classList.add('nv-glow-blue');
       }
     } catch {}
   }, [lastAnalysisStatus, currentProjectId]);
@@ -1116,7 +1116,7 @@ const UnfoldRequestComponent: React.FC<UnfoldRequestProps> = ({ onSubmit, onClea
                 type="button"
                 aria-label={t('unfold.request.analysisStatus.dismissAriaLabel', { defaultValue: 'Dismiss status' })}
                 title={t('unfold.request.analysisStatus.dismissTitle', { defaultValue: 'Dismiss' })}
-                onClick={() => { setAnalysisDismissTs(tsVal || Date.now()); try { const btn = document.getElementById('btn-artifacts'); if (btn) btn.classList.remove('etg-glow-blue'); } catch {} }}
+                onClick={() => { setAnalysisDismissTs(tsVal || Date.now()); try { const btn = document.getElementById('btn-artifacts'); if (btn) btn.classList.remove('nv-glow-blue'); } catch {} }}
                 className="rounded"
                 style={{ background: 'transparent', color: '#60a5fa' }}
               >

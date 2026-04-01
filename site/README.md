@@ -26,17 +26,17 @@ cd /Users/kirisyuk/cursor/sanskrite/site
 firebase deploy --only hosting:marketing
 ```
 
-## Привязка к Firebase project `etigram`
+## Привязка к Firebase project `nv-horizon`
 
 Внешний сайт настроен как отдельный Hosting site внутри того же Firebase project,
 что и платформа.
 
-- Firebase project: `etigram`
+- Firebase project: `nv-horizon`
 - Hosting target для внешнего сайта: `marketing`
-- Предполагаемый Hosting site id: `etigram-site`
+- Предполагаемый Hosting site id: `nv-horizon-site`
 
 Текущая платформа в `/Users/kirisyuk/cursor/sanskrite/web` продолжает
-деплоиться в существующий Hosting site `etigram`, поэтому конфиг в `site/`
+деплоиться в существующий Hosting site `nv-horizon`, поэтому конфиг в `site/`
 не должен её перезаписывать.
 
 ## One-time setup
@@ -45,7 +45,7 @@ firebase deploy --only hosting:marketing
 
 ```bash
 firebase login --reauth
-firebase hosting:sites:create etigram-site --project etigram
+firebase hosting:sites:create nv-horizon-site --project nv-horizon
 ```
 
 После этого деплой внешнего сайта:

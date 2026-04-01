@@ -57,16 +57,41 @@ func (v *SupplyChainValidator) Validate(ctx context.Context, input CriticValidat
 	return result, nil
 }
 
+// ServiceChainValidator validates service delivery chains and related edges.
+type ServiceChainValidator struct {
+	agent *CriticAgent
+}
+
+func (v *ServiceChainValidator) DomainMode() string { return taxonomy.DomainModeServiceChain }
+
+func (v *ServiceChainValidator) Validate(ctx context.Context, input CriticValidatorInput) (*ValidationResult, error) {
+	if v.agent == nil {
+		return nil, nil
+	}
+	prompt := v.agent.buildServiceChainValidationPrompt(input)
+	result, err := v.agent.runValidationPrompt(ctx, prompt)
+	if err != nil || result == nil {
+		return result, err
+	}
+	invariantGaps := checkServiceChainInvariants(input.SupplyChains, input.WorkingProductScope)
+	if len(invariantGaps) > 0 {
+		if result.MissingInfo == nil {
+			result.MissingInfo = []string{}
+		}
+		result.MissingInfo = append(result.MissingInfo, invariantGaps...)
+		result.IsValid = false
+		if result.Confidence > 0.5 {
+			result.Confidence = 0.5
+		}
+	}
+	return result, nil
+}
+
 // checkSupplyChainInvariants runs deterministic checks: time overlap, unit normalization, flow conservation, allocation consistency (plan 8.1).
 // Returns missingInfo items for failed invariants.
 func checkSupplyChainInvariants(chains []SupplyChain, workingProductScope []string) []string {
 	var gaps []string
-	scopeSet := make(map[string]struct{}, len(workingProductScope))
-	for _, productRef := range workingProductScope {
-		if productRef = strings.TrimSpace(productRef); productRef != "" {
-			scopeSet[productRef] = struct{}{}
-		}
-	}
+	scopeSet := buildOperationalScopeSet(workingProductScope)
 	for _, ch := range chains {
 		// Time overlap: adjacent segment metrics should have overlapping periods (plan 8.1)
 		for i := 0; i < len(ch.SegmentMetrics)-1; i++ {
@@ -97,7 +122,39 @@ func checkSupplyChainInvariants(chains []SupplyChain, workingProductScope []stri
 		}
 		gaps = append(gaps, checkScopedSupplyChainSemantics(ch, scopeSet)...)
 	}
-	return gaps
+	return dedupInvariantGaps(gaps)
+}
+
+// checkServiceChainInvariants runs deterministic checks for service delivery chains.
+// Service chains intentionally do not inherit supply-only mass/volume conservation rules.
+func checkServiceChainInvariants(chains []SupplyChain, workingCapabilityScope []string) []string {
+	var gaps []string
+	scopeSet := buildOperationalScopeSet(workingCapabilityScope)
+	for _, ch := range chains {
+		hasProductNode := false
+		hasServiceCapabilityNode := false
+		for _, node := range ch.Nodes {
+			cp := strings.TrimSpace(node.CanonicalPath)
+			if strings.HasPrefix(cp, "/product/") {
+				hasProductNode = true
+			}
+			if strings.HasPrefix(cp, "/product/service/") {
+				hasServiceCapabilityNode = true
+			}
+		}
+		if hasProductNode && !hasServiceCapabilityNode {
+			gaps = append(gaps, "service_chain_invariant: chain lacks explicit /product/service capability path")
+		}
+		for i := 0; i < len(ch.SegmentMetrics)-1; i++ {
+			m1, m2 := ch.SegmentMetrics[i], ch.SegmentMetrics[i+1]
+			if !segmentPeriodsOverlap(&m1, &m2) {
+				gaps = append(gaps, "service_chain_invariant: adjacent segment periods do not overlap")
+			}
+		}
+		gaps = append(gaps, checkScopedServiceChainSemantics(ch, scopeSet)...)
+		gaps = append(gaps, checkServiceChainObservationMetrics(ch)...)
+	}
+	return dedupInvariantGaps(gaps)
 }
 
 func checkGovernanceInvariants(relations []DiscoveredRelation) []string {
@@ -427,6 +484,16 @@ func dedupInvariantGaps(gaps []string) []string {
 	return out
 }
 
+func buildOperationalScopeSet(values []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			out[value] = struct{}{}
+		}
+	}
+	return out
+}
+
 func checkScopedSupplyChainSemantics(ch SupplyChain, scopeSet map[string]struct{}) []string {
 	var gaps []string
 	chainProducts := make(map[string]struct{})
@@ -493,6 +560,211 @@ func checkScopedSupplyChainSemantics(ch SupplyChain, scopeSet map[string]struct{
 	}
 
 	return gaps
+}
+
+func checkScopedServiceChainSemantics(ch SupplyChain, scopeSet map[string]struct{}) []string {
+	var gaps []string
+	chainCapabilities := make(map[string]struct{})
+	for _, node := range ch.Nodes {
+		cp := strings.TrimSpace(node.CanonicalPath)
+		if strings.HasPrefix(cp, "/product/") {
+			chainCapabilities[cp] = struct{}{}
+		}
+	}
+
+	candidateSeen := make(map[string]struct{})
+	for _, candidate := range ch.ProductCandidates {
+		ref := strings.TrimSpace(candidate.CanonicalPath)
+		if ref == "" {
+			continue
+		}
+		if _, ok := candidateSeen[ref]; ok {
+			gaps = append(gaps, "service_chain_invariant: duplicate productCandidate canonicalPath in same chain")
+			continue
+		}
+		candidateSeen[ref] = struct{}{}
+		if _, ok := chainCapabilities[ref]; ok {
+			gaps = append(gaps, "service_chain_invariant: productCandidate duplicates an already materialized capability in the chain")
+		}
+		if _, ok := scopeSet[ref]; ok {
+			gaps = append(gaps, "service_chain_invariant: productCandidate duplicates an existing working capability scope entry")
+		}
+	}
+
+	for _, obs := range ch.CarrierProductObservations {
+		if strings.TrimSpace(obs.CarrierRef) == "" || strings.TrimSpace(obs.ProductRef) == "" {
+			gaps = append(gaps, "service_chain_invariant: carrierProductObservation requires carrierRef and productRef")
+			continue
+		}
+		if !scopeOrChainContains(chainCapabilities, scopeSet, obs.ProductRef) {
+			gaps = append(gaps, "service_chain_invariant: carrierProductObservation productRef must be present in chain or working capability scope")
+		}
+	}
+	for _, obs := range ch.LinkObservations {
+		if strings.TrimSpace(obs.ProductRef) == "" {
+			gaps = append(gaps, "service_chain_invariant: linkObservation requires productRef")
+			continue
+		}
+		if !scopeOrChainContains(chainCapabilities, scopeSet, obs.ProductRef) {
+			gaps = append(gaps, "service_chain_invariant: linkObservation productRef must be present in chain or working capability scope")
+		}
+	}
+	for _, obs := range ch.RouteObservations {
+		if strings.TrimSpace(obs.ProductRef) == "" && len(obs.TransportVia) == 0 && !hasServiceControlQualifier(obs.Qualifiers) {
+			gaps = append(gaps, "service_chain_invariant: routeObservation requires productRef, transportVia, or explicit control-path qualifier")
+			continue
+		}
+		if productRef := strings.TrimSpace(obs.ProductRef); productRef != "" && !scopeOrChainContains(chainCapabilities, scopeSet, productRef) {
+			gaps = append(gaps, "service_chain_invariant: routeObservation productRef must be present in chain or working capability scope")
+		}
+	}
+
+	return gaps
+}
+
+func scopeOrChainContains(chainSet map[string]struct{}, scopeSet map[string]struct{}, ref string) bool {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return false
+	}
+	if _, ok := chainSet[ref]; ok {
+		return true
+	}
+	_, ok := scopeSet[ref]
+	return ok
+}
+
+func hasServiceControlQualifier(qualifiers map[string]interface{}) bool {
+	for _, key := range []string{
+		"auth_required",
+		"approved_vendor_only",
+		"service_contract_required",
+		"region_lock_in",
+		"export_license_required",
+		"sanctions_touchpoint",
+		"dual_use_flag",
+	} {
+		if _, ok := qualifiers[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func checkServiceChainObservationMetrics(ch SupplyChain) []string {
+	var gaps []string
+	for _, obs := range ch.CarrierProductObservations {
+		gaps = append(gaps, validateServiceMetricMap(obs.Metrics)...)
+		gaps = append(gaps, validateServiceQualifierMap(obs.Qualifiers)...)
+	}
+	for _, obs := range ch.LinkObservations {
+		gaps = append(gaps, validateServiceMetricMap(obs.Metrics)...)
+		gaps = append(gaps, validateServiceQualifierMap(obs.Qualifiers)...)
+	}
+	for _, obs := range ch.RouteObservations {
+		gaps = append(gaps, validateServiceQualifierMap(obs.Qualifiers)...)
+	}
+	return gaps
+}
+
+func validateServiceMetricMap(metrics map[string]interface{}) []string {
+	if len(metrics) == 0 {
+		return nil
+	}
+	type metricRule struct {
+		min float64
+		max float64
+	}
+	rules := map[string]metricRule{
+		"availability_slo":            {min: 0, max: 1},
+		"vendor_lock_in_score":        {min: 0, max: 1},
+		"p95_latency_ms":              {min: 0},
+		"failover_time_minutes":       {min: 0},
+		"recovery_time_hours":         {min: 0},
+		"support_response_time_hours": {min: 0},
+	}
+	var gaps []string
+	for key, rule := range rules {
+		value, ok := extractObservationMetricNumber(metrics[key])
+		if !ok {
+			continue
+		}
+		if value < rule.min || (rule.max > 0 && value > rule.max) {
+			gaps = append(gaps, fmt.Sprintf("service_chain_invariant: metric %s out of allowed range", key))
+		}
+	}
+	return gaps
+}
+
+func validateServiceQualifierMap(qualifiers map[string]interface{}) []string {
+	if len(qualifiers) == 0 {
+		return nil
+	}
+	boolishKeys := []string{"auth_required", "approved_vendor_only", "service_contract_required", "export_license_required", "dual_use_flag"}
+	var gaps []string
+	for _, key := range boolishKeys {
+		if raw, ok := qualifiers[key]; ok && raw != nil {
+			if _, parsed := parseBoolishObservation(raw); !parsed {
+				gaps = append(gaps, fmt.Sprintf("service_chain_invariant: qualifier %s must be boolean-like", key))
+			}
+		}
+	}
+	if raw, ok := qualifiers["region_lock_in"]; ok && raw != nil {
+		switch v := raw.(type) {
+		case bool:
+		case string:
+			if strings.TrimSpace(v) == "" {
+				gaps = append(gaps, "service_chain_invariant: qualifier region_lock_in must not be empty")
+			}
+		default:
+			gaps = append(gaps, "service_chain_invariant: qualifier region_lock_in must be boolean-like or a non-empty string")
+		}
+	}
+	return gaps
+}
+
+func extractObservationMetricNumber(raw interface{}) (float64, bool) {
+	switch value := raw.(type) {
+	case float64:
+		return value, true
+	case float32:
+		return float64(value), true
+	case int:
+		return float64(value), true
+	case int64:
+		return float64(value), true
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(value, "%")), 64)
+		return parsed, err == nil
+	case map[string]interface{}:
+		if inner, ok := value["value"]; ok {
+			return extractObservationMetricNumber(inner)
+		}
+	}
+	return 0, false
+}
+
+func parseBoolishObservation(raw interface{}) (bool, bool) {
+	switch v := raw.(type) {
+	case bool:
+		return v, true
+	case string:
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "true", "yes", "1", "required":
+			return true, true
+		case "false", "no", "0", "not_required", "not required":
+			return false, true
+		}
+	case int:
+		if v == 0 || v == 1 {
+			return v == 1, true
+		}
+	case float64:
+		if v == 0 || v == 1 {
+			return v == 1, true
+		}
+	}
+	return false, false
 }
 
 // segmentPeriodsOverlap returns true if m1 and m2 have overlapping time periods, or if we cannot determine (fail-open).

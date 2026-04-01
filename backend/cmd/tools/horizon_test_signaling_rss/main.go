@@ -8,7 +8,7 @@
 //
 // Usage:
 //
-//	GCP_PROJECT_ID=etigram go run ./cmd/tools/horizon_test_signaling_rss/
+//	GCP_PROJECT_ID=nv-horizon go run ./cmd/tools/horizon_test_signaling_rss/
 package main
 
 import (

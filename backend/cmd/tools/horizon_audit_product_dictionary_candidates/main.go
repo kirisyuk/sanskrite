@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	projectID   = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	projectID   = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	tenantID    = flag.String("tenant", "global", "tenant id")
 	pageSize    = flag.Int("page-size", 250, "Firestore page size")
 	sampleLimit = flag.Int("sample-limit", 20, "max samples to print per collection")

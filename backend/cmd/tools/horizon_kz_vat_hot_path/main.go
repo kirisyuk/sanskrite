@@ -49,9 +49,9 @@ type seedSummary struct {
 }
 
 func main() {
-	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	edgeTenant := flag.String("edge-tenant", "system", "tenant for horizon_dependency_edges")
-	apiBase := flag.String("api-base", firstNonEmpty(os.Getenv("HORIZON_API_BASE_URL"), "https://etigram-api-onq73n4gpa-uc.a.run.app"), "Horizon API base URL")
+	apiBase := flag.String("api-base", firstNonEmpty(os.Getenv("HORIZON_API_BASE_URL"), "https://nv-horizon-api-onq73n4gpa-uc.a.run.app"), "Horizon API base URL")
 	functionsKey := flag.String("functions-key", firstNonEmpty(os.Getenv("HORIZON_FUNCTIONS_KEY"), "codex"), "x-functions-key for internal auth")
 	seed := flag.Bool("seed", true, "seed or update the canonical hot path into Firestore")
 	run := flag.Bool("run", true, "launch the simulation pack after seeding")

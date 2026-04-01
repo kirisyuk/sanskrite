@@ -219,7 +219,8 @@ func (a *IntentDecomposerAgent) buildPromptWithOptions(targetCanonicalPath strin
 		decompositionBlock += "Use PRODUCES (producer→product) or SUPPLIES_TO (supplier→customer flow). Output concrete /org/ and /fac/ paths only. Do NOT use DEPENDS_ON.\n\n"
 	}
 
-	isSupplyChainMode := taxonomy.HasDomainMode(opts.DomainModes, taxonomy.DomainModeSupplyChain)
+	isSupplyChainMode := taxonomy.HasDomainMode(opts.DomainModes, taxonomy.DomainModeSupplyChain) ||
+		taxonomy.HasDomainMode(opts.DomainModes, taxonomy.DomainModeServiceChain)
 	relationEnum := edgesemantics.AllEdgeTypesForPrompt()
 	relationRulesBlock := generatedIntentDecomposerRelationRulesBlock(opts.DomainModes)
 	validationSuffix := validationSuffixGeneral

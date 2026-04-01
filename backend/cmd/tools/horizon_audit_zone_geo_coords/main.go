@@ -25,7 +25,7 @@ import (
 )
 
 var (
-	projectID = flag.String("project", "etigram", "GCP project ID")
+	projectID = flag.String("project", "nv-horizon", "GCP project ID")
 	limit     = flag.Int("limit", 0, "Max zones to audit (0 = all)")
 	apply     = flag.Bool("apply", false, "Apply coordinate fixes to Firestore")
 	dryRun    = flag.Bool("dry-run", true, "Dry-run only (default: true)")
@@ -61,7 +61,7 @@ func main() {
 	gnAdapter := geonames.NewAdapter(gnBase)
 	gnCached := geonames.NewCachedClient(gnAdapter, externalCache, geonames.CacheOptionsFromEnv())
 
-	// Geocoding: Nominatim (primary) + Google (fallback). Load Google key from env or Secret Manager.
+	// Geocoding: Google (primary) + Nominatim (fallback). Load Google key from env or Secret Manager.
 	proj := strings.TrimSpace(*projectID)
 	if key := gcp.GetEnvOrSecret(ctx, proj, "GOOGLE_MAPS_API_KEY", "google_maps_api_key"); key != "" && os.Getenv("GOOGLE_MAPS_API_KEY") == "" {
 		os.Setenv("GOOGLE_MAPS_API_KEY", key)
@@ -72,8 +72,8 @@ func main() {
 	if gcBase := httphandlers.GetGoogleGeocodingClientFromEnv(); gcBase != nil {
 		gcAdapter := geocoding.NewAdapter(gcBase)
 		gcCached := geocoding.NewCachedClientWithService(gcAdapter, externalCache, geocoding.CacheOptionsFromEnv(), coreontology.GeocodingProviderGoogle)
-		geocodingClient = geocoding.NewFallbackClient(nomCached, gcCached, log.Default())
-		log.Printf("Geocoding: Nominatim (primary) + Google (fallback)")
+		geocodingClient = geocoding.NewFallbackClient(gcCached, nomCached, log.Default())
+		log.Printf("Geocoding: Google (primary) + Nominatim (fallback)")
 	} else {
 		geocodingClient = nomCached
 		log.Printf("Geocoding: Nominatim only (GOOGLE_MAPS_API_KEY not in env/Secret Manager)")

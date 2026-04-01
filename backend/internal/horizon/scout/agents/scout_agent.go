@@ -506,7 +506,8 @@ func extractionAllowedRelationTypesByDomainModes(domainModes []string) []string 
 	// Supply-chain mode allows OWNS/CONTROLS for supply-relevant ownership/control links
 	// (ORG/GOV -> ORG/FAC/DEPOSIT). We include both in generation guardrails
 	// and enforce exact path predicate during phase-A filtering.
-	if taxonomy.HasDomainMode(specific, taxonomy.DomainModeSupplyChain) {
+	if taxonomy.HasDomainMode(specific, taxonomy.DomainModeSupplyChain) ||
+		taxonomy.HasDomainMode(specific, taxonomy.DomainModeServiceChain) {
 		hasOwns := false
 		hasControls := false
 		for _, t := range allowed {
@@ -605,7 +606,8 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
 	b.WriteString("   - Never emit a relation outside this set.\n")
 	b.WriteString("   - Domain is config, not a graph node: targetCanonicalPath MUST NOT start with /domain/.\n")
 
-	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) {
+	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) ||
+		taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeServiceChain) {
 		b.WriteString(`   SUPPLY CHAIN MODE (operational edges only):
    - Do NOT use DEPENDS_ON for supply links. Use PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, EXTRACTS_FROM.
    - Operational type matrix (hard contract):

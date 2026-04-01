@@ -450,6 +450,7 @@ var domainContractTypes = map[string]struct{}{
 	"trade-flow":      {},
 	"sourcing-map":    {},
 	"procurement-map": {},
+	"service-chain":   {},
 
 	// Risk / geopolitics
 	"risk-assessment":     {},
@@ -555,7 +556,7 @@ var domainContractTypeCategories = []struct {
 	Label string
 	Types []string
 }{
-	{"SUPPLY CHAIN / INDUSTRY", []string{"supply-chain", "value-chain", "logistics-flow", "trade-flow", "sourcing-map", "procurement-map"}},
+	{"SUPPLY CHAIN / INDUSTRY", []string{"supply-chain", "value-chain", "logistics-flow", "trade-flow", "sourcing-map", "procurement-map", "service-chain"}},
 	{"RISK / GEOPOLITICS", []string{"risk-assessment", "geopolitical-risk", "bilateral-relations", "sanctions-exposure", "conflict-dynamics", "affected-zone"}},
 	{"MARKETS / OPPORTUNITY", []string{"market-opportunity", "competitive-landscape", "geographic-concentration", "market-entry", "market-sizing", "demand-forecast", "pricing-dynamics"}},
 	{"INVESTMENT / FINANCE", []string{"investment-thesis", "funding-landscape", "exit-strategy", "valuation-drivers", "portfolio-exposure"}},

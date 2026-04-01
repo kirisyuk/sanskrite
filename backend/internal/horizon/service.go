@@ -236,6 +236,14 @@ func (s *HorizonService) AIExecutor() *ai.AITaskExecutor {
 	return s.deps.AIExecutor
 }
 
+// VertexSearchClient returns the configured Vertex AI Search client, if available.
+func (s *HorizonService) VertexSearchClient() *ai.VertexAISearchClient {
+	if s == nil {
+		return nil
+	}
+	return s.deps.VertexSearchClient
+}
+
 // ScoutingJobs возвращает ScoutingJobsRepository
 func (s *HorizonService) ScoutingJobs() *repo.ScoutingJobsRepository {
 	return s.scoutingJobsRepo
@@ -370,7 +378,7 @@ func (s *HorizonService) SearchFragments(ctx context.Context, query string, limi
 			log.Printf("[SearchFragments] Loaded %d fragment hits from node datastore", len(vertexFragments))
 		}
 
-		edgeDS := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_ETIGRAM_EDGE_DATA_STORE_ID"))
+		edgeDS := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_ID"))
 		if edgeDS == "" {
 			edgeDS = strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_EDGES_DATA_STORE_ID"))
 		}

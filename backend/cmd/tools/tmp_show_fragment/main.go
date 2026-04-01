@@ -13,7 +13,7 @@ func main(){
   flag.Parse()
   if *path=="" { log.Fatal("--path required") }
   ctx:=context.Background()
-  c,err:=gcp.NewFirestoreClient(ctx,"etigram"); if err!=nil { log.Fatal(err)}
+  c,err:=gcp.NewFirestoreClient(ctx,"nv-horizon"); if err!=nil { log.Fatal(err)}
   defer c.Close()
   r:=repo.NewHorizonFragmentsRepository(c.Client())
   f,err:=r.GetByCanonicalPath(ctx,*path); if err!=nil { log.Fatal(err)}

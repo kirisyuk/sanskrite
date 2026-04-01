@@ -684,7 +684,7 @@ func main() {
 	}
 
 	bucketName := firstNonEmpty(
-		strings.TrimSpace(os.Getenv("ETIGRAM_FRAGMENTS_BUCKET")),
+		strings.TrimSpace(os.Getenv("NV_HORIZON_FRAGMENTS_BUCKET")),
 		strings.TrimSpace(os.Getenv("HORIZON_FRAGMENTS_BUCKET")),
 	)
 	if bucketName == "" {
@@ -2817,8 +2817,8 @@ SUMMARY:
 
 func defaultHorizonFragmentsBucket(projectID string) string {
 	projectID = strings.TrimSpace(projectID)
-	if strings.EqualFold(projectID, "etigram") {
-		return "etigram-horizon-fragments"
+	if strings.EqualFold(projectID, "nv-horizon") {
+		return "nv-horizon-fragments"
 	}
 	return fmt.Sprintf("%s-horizon-fragments", projectID)
 }

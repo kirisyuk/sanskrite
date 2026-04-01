@@ -3,4 +3,4 @@ Allow: /
 Allow: /terms
 Allow: /privacy
 
-Sitemap: https://etigram.one/sitemap.xml
+Sitemap: https://horizon.nordicvision.io/sitemap.xml

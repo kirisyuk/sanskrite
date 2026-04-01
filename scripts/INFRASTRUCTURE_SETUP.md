@@ -4,11 +4,11 @@
 
 ## GCP проект
 
-**Проект по умолчанию:** `etigram` (имя: etigram)
+**Проект по умолчанию:** `nv-horizon` (имя: nv-horizon)
 
 Перед развёртыванием убедитесь, что gcloud настроен на нужный проект:
 ```bash
-gcloud config set project etigram
+gcloud config set project nv-horizon
 ```
 
 ## Скрипты
@@ -27,16 +27,16 @@ gcloud config set project etigram
   - Agent топики: `agent.update`
   - Interaction топики: `interaction.created`, `interaction.updated`
   - Verified топики: `verified.stream`
-  - Aggregated топики: `etigram.*` (9 топиков)
+  - Aggregated топики: `nv-horizon.*` (9 топиков)
 
 - **Pub/Sub подписки** (11 подписок):
-  - Подписки для etigram-ws (aggregated топиков): `<topic>-ws-broker` (9 подписок)
+  - Подписки для nv-horizon-ws (aggregated топиков): `<topic>-ws-broker` (9 подписок)
 
 - **Cloud Scheduler Jobs** (4 jobs):
-  - `etigram-source-poller` - опрос источников каждые 5 минут
-  - `etigram-artifact-scheduler` - проверка запланированных обновлений артефактов каждый час
+  - `nv-horizon-source-poller` - опрос источников каждые 5 минут
+  - `nv-horizon-artifact-scheduler` - проверка запланированных обновлений артефактов каждый час
   - `subscription-billing-daily` - ежедневный биллинг подписок в 02:00 UTC
-  - `etigram-watchdog` - опциональный watchdog для Etigram Horizon (только с флагом `--etigram-watchdog`)
+  - `nv-horizon-watchdog` - опциональный watchdog для Horizon (Nordic Vision) Horizon (только с флагом `--nv-horizon-watchdog`)
 
 ### 2. `scripts/create-secrets.sh` - Создание секретов
 
@@ -121,7 +121,7 @@ python3 /tmp/check_infrastructure.py
 ## Дополнительные скрипты
 
 - `scripts/setup-interaction-topics.sh` - создание топиков для interaction событий (интегрировано в deploy)
-- `scripts/setup-etigram-pubsub.sh` - создание топиков для Etigram (интегрировано в deploy)
+- `scripts/setup-nv-horizon-pubsub.sh` - создание топиков для Horizon (Nordic Vision) (интегрировано в deploy)
 - `scripts/create-vertex-search-datastore.sh` - создание Vertex AI Search Data Store (rag-documents-store)
 - `scripts/ensure-vertex-ai-sa-bucket-access.sh` - выдача Vertex AI SA доступа к RAG bucket (если deploy не смог — SA создаётся при первом использовании Vertex AI)
 

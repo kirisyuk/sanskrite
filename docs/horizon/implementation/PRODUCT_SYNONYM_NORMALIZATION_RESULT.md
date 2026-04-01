@@ -1,7 +1,7 @@
 # Product Synonym Normalization Result
 
 Date: 2026-03-22
-Project: `etigram`
+Project: `nv-horizon`
 Tenant: `global`
 
 ## Scope

@@ -12,12 +12,12 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # Configuration
-API_URL="${API_URL:-$(gcloud run services describe etigram-api --region=us-central1 --project=etigram --format='value(status.url)' 2>/dev/null || echo "")}"
+API_URL="${API_URL:-$(gcloud run services describe nv-horizon-api --region=us-central1 --project=nv-horizon --format='value(status.url)' 2>/dev/null || echo "")}"
 TEST_QUERY="${TEST_QUERY:-latest news about AI}"
 
 if [[ -z "$API_URL" ]]; then
-    echo -e "${RED}Error: API_URL not set and etigram-api Cloud Run service not found${NC}"
-    echo -e "${YELLOW}Set API_URL environment variable or deploy etigram-api first${NC}"
+    echo -e "${RED}Error: API_URL not set and nv-horizon-api Cloud Run service not found${NC}"
+    echo -e "${YELLOW}Set API_URL environment variable or deploy nv-horizon-api first${NC}"
     exit 1
 fi
 
@@ -200,7 +200,7 @@ echo ""
 # Test 4: Verify Tavily key is accessible in Cloud Run
 echo -e "${BLUE}[Test 4] Verifying Tavily secret in Cloud Run...${NC}"
 if command -v gcloud >/dev/null 2>&1; then
-    SECRET_CHECK=$(gcloud run services describe etigram-api --region=us-central1 \
+    SECRET_CHECK=$(gcloud run services describe nv-horizon-api --region=us-central1 \
         --format="value(spec.template.spec.containers[0].env)" 2>/dev/null | grep -o "TAVILY_API_KEY" || echo "")
     
     if [[ -n "$SECRET_CHECK" ]]; then

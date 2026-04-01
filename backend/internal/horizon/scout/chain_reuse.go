@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/lensresearch"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
@@ -218,6 +219,7 @@ func addArtifactToLensScope(
 		}
 	}
 	_ = lensesRepo.UpsertScopeArtifact(ctx, lensID, artKey, ref)
+	_ = lensesRepo.MergeResearchObjects(ctx, lensID, lensresearch.BuildFromMaterializedArtifacts([]*models.MaterializedArtifact{artifact}))
 	return addedToScope
 }
 

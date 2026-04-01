@@ -17,7 +17,7 @@ func pretty(v interface{}) string {
 func main() {
 	ctx := context.Background()
 	project := os.Getenv("GCP_PROJECT_ID")
-	if project == "" { project = "etigram" }
+	if project == "" { project = "nv-horizon" }
 	job := "MHQjrZ2a1bB2NIbILYAh"
 	c, err := firestore.NewClient(ctx, project)
 	if err != nil { panic(err) }

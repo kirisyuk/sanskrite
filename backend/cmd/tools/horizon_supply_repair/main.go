@@ -24,7 +24,7 @@ import (
 const toolName = "tool:horizon_supply_repair"
 
 var (
-	projectID              = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	projectID              = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	tenantID               = flag.String("tenant", "global", "tenant id")
 	mode                   = flag.String("mode", "audit", "mode: audit | repair | run-batches | search | top-anchors | query-products | query-facility")
 	timeoutHours           = flag.Int("timeout-hours", 24, "context timeout in hours")

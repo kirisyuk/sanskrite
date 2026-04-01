@@ -97,6 +97,18 @@ func TestEnrichCoordinatesFromGeocoding_MarketIsGeoRelevant(t *testing.T) {
 	}
 }
 
+func TestBuildLastSegmentAddressCandidates_MarketSkipsSectorSlugs(t *testing.T) {
+	frag := &hmodels.HorizonFragment{
+		Type:          hmodels.FragmentTypeMarket,
+		CanonicalPath: "/market/om/industrial/automotive",
+	}
+
+	candidates := BuildLastSegmentAddressCandidates(frag)
+	if len(candidates) != 0 {
+		t.Fatalf("expected market sector slug to skip last-segment candidates, got %#v", candidates)
+	}
+}
+
 func TestBuildAddressFromFragment_FacilityUsesParentCountry(t *testing.T) {
 	frag := &hmodels.HorizonFragment{
 		Type:          hmodels.FragmentTypeFacility,

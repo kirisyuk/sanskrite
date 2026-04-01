@@ -77,6 +77,19 @@ func (p *CriticPipelineRunner) Validate(ctx context.Context, input CriticValidat
 			}
 		}
 	}
+	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeServiceChain) {
+		invariantGaps := checkServiceChainInvariants(input.SupplyChains, input.WorkingProductScope)
+		if len(invariantGaps) > 0 {
+			if result == nil {
+				result = &ValidationResult{IsValid: true, Confidence: 1.0, MissingInfo: []string{}, Conflicts: []ValidationConflict{}}
+			}
+			result.MissingInfo = append(result.MissingInfo, invariantGaps...)
+			result.IsValid = false
+			if result.Confidence > 0.5 {
+				result.Confidence = 0.5
+			}
+		}
+	}
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeGovernance) {
 		invariantGaps := checkGovernanceInvariants(input.Relations)
 		if len(invariantGaps) > 0 {
@@ -205,6 +218,8 @@ func (p *CriticPipelineRunner) validatorsForModes(modes []string) []CriticValida
 		switch m {
 		case taxonomy.DomainModeSupplyChain:
 			out = append(out, &SupplyChainValidator{agent: p.agent})
+		case taxonomy.DomainModeServiceChain:
+			out = append(out, &ServiceChainValidator{agent: p.agent})
 		case taxonomy.DomainModeGovernance:
 			out = append(out, &GovernanceValidator{agent: p.agent})
 		case taxonomy.DomainModeAssurance:

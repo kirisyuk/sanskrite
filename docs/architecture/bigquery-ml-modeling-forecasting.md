@@ -51,7 +51,7 @@ BigQuery позволяет создавать и обучать модели м
 
 ```sql
 -- Исторические данные о запасах (из нашей системы или внешних источников)
-CREATE OR REPLACE TABLE `etigram.etigram_documents.inventory_history` AS
+CREATE OR REPLACE TABLE `nv-horizon.nv_horizon_documents.inventory_history` AS
 SELECT 
   objectId,
   date,
@@ -59,7 +59,7 @@ SELECT
   sales_volume,
   orders_placed,
   seasonality_factor
-FROM `etigram.etigram_documents.inventory_data`
+FROM `nv-horizon.nv_horizon_documents.inventory_data`
 WHERE objectId = 'object-N'
 ORDER BY date
 ```
@@ -69,7 +69,7 @@ ORDER BY date
 #### Вариант A: ARIMA_PLUS (для временных рядов)
 
 ```sql
-CREATE OR REPLACE MODEL `etigram.etigram_documents.inventory_forecast_model`
+CREATE OR REPLACE MODEL `nv-horizon.nv_horizon_documents.inventory_forecast_model`
 OPTIONS(
   model_type='ARIMA_PLUS',
   time_series_timestamp_col='date',
@@ -84,14 +84,14 @@ SELECT
   objectId,
   date,
   inventory_level
-FROM `etigram.etigram_documents.inventory_history`
+FROM `nv-horizon.nv_horizon_documents.inventory_history`
 WHERE objectId = 'object-N'
 ```
 
 #### Вариант B: Linear Regression (с дополнительными факторами)
 
 ```sql
-CREATE OR REPLACE MODEL `etigram.etigram_documents.inventory_regression_model`
+CREATE OR REPLACE MODEL `nv-horizon.nv_horizon_documents.inventory_regression_model`
 OPTIONS(
   model_type='LINEAR_REG',
   input_label_cols=['inventory_level']
@@ -103,7 +103,7 @@ SELECT
   seasonality_factor,
   EXTRACT(DAYOFWEEK FROM date) as day_of_week,
   EXTRACT(MONTH FROM date) as month
-FROM `etigram.etigram_documents.inventory_history`
+FROM `nv-horizon.nv_horizon_documents.inventory_history`
 WHERE objectId = 'object-N'
 ```
 
@@ -119,7 +119,7 @@ SELECT
   prediction_interval_upper_bound,
   confidence_level
 FROM ML.FORECAST(
-  MODEL `etigram.etigram_documents.inventory_forecast_model`,
+  MODEL `nv-horizon.nv_horizon_documents.inventory_forecast_model`,
   STRUCT(180 AS horizon, 0.95 AS confidence_level)
 )
 WHERE time_series_id = 'object-N'
@@ -134,7 +134,7 @@ SELECT
   prediction_interval_lower_bound,
   prediction_interval_upper_bound
 FROM ML.PREDICT(
-  MODEL `etigram.etigram_documents.inventory_regression_model`,
+  MODEL `nv-horizon.nv_horizon_documents.inventory_regression_model`,
   (
     SELECT 
       sales_volume,
@@ -158,9 +158,9 @@ SELECT
   mean_absolute_percentage_error,
   r2_score
 FROM ML.EVALUATE(
-  MODEL `etigram.etigram_documents.inventory_forecast_model`,
+  MODEL `nv-horizon.nv_horizon_documents.inventory_forecast_model`,
   (
-    SELECT * FROM `etigram.etigram_documents.inventory_history`
+    SELECT * FROM `nv-horizon.nv_horizon_documents.inventory_history`
     WHERE objectId = 'object-N'
     AND date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
   )
@@ -178,11 +178,11 @@ FROM ML.EVALUATE(
 ```sql
 -- 1. Проверяет, есть ли модель
 SELECT model_name 
-FROM `etigram.etigram_documents.INFORMATION_SCHEMA.MODELS`
+FROM `nv-horizon.nv_horizon_documents.INFORMATION_SCHEMA.MODELS`
 WHERE model_name = 'inventory_forecast_model'
 
 -- 2. Если модели нет, создает её
-CREATE OR REPLACE MODEL `etigram.etigram_documents.inventory_forecast_model`
+CREATE OR REPLACE MODEL `nv-horizon.nv_horizon_documents.inventory_forecast_model`
 OPTIONS(
   model_type='ARIMA_PLUS',
   time_series_timestamp_col='date',
@@ -191,7 +191,7 @@ OPTIONS(
   horizon=180
 ) AS
 SELECT objectId, date, inventory_level
-FROM `etigram.etigram_documents.inventory_history`
+FROM `nv-horizon.nv_horizon_documents.inventory_history`
 WHERE objectId = 'object-N'
 
 -- 3. Делает прогноз
@@ -201,7 +201,7 @@ SELECT
   prediction_interval_lower_bound,
   prediction_interval_upper_bound
 FROM ML.FORECAST(
-  MODEL `etigram.etigram_documents.inventory_forecast_model`,
+  MODEL `nv-horizon.nv_horizon_documents.inventory_forecast_model`,
   STRUCT(180 AS horizon, 0.95 AS confidence_level)
 )
 WHERE time_series_id = 'object-N'
@@ -216,8 +216,8 @@ ORDER BY forecast_timestamp
 
 ```sql
 -- Создание Remote Model для Vertex AI
-CREATE OR REPLACE MODEL `etigram.etigram_documents.advanced_forecast_model`
-REMOTE WITH CONNECTION `etigram.us.vertex-ai-connection`
+CREATE OR REPLACE MODEL `nv-horizon.nv_horizon_documents.advanced_forecast_model`
+REMOTE WITH CONNECTION `nv-horizon.us.vertex-ai-connection`
 OPTIONS (
   remote_service_type = 'CLOUD_AI_LARGE_LANGUAGE_MODEL_V1'
 )
@@ -225,7 +225,7 @@ OPTIONS (
 -- Использование для анализа и прогнозирования
 SELECT 
   ML.GENERATE_TEXT(
-    MODEL `etigram.etigram_documents.advanced_forecast_model`,
+    MODEL `nv-horizon.nv_horizon_documents.advanced_forecast_model`,
     CONCAT('Analyze inventory trends and predict:', historical_data),
     STRUCT('Generate forecast for next 6 months' AS prompt)
   ) AS forecast_analysis
@@ -258,12 +258,12 @@ SELECT * FROM ensemble
 
 ```sql
 -- Переобучение модели на новых данных
-CREATE OR REPLACE MODEL `etigram.etigram_documents.inventory_forecast_model`
+CREATE OR REPLACE MODEL `nv-horizon.nv_horizon_documents.inventory_forecast_model`
 OPTIONS(
   model_type='ARIMA_PLUS',
   ...
 ) AS
-SELECT * FROM `etigram.etigram_documents.inventory_history`
+SELECT * FROM `nv-horizon.nv_horizon_documents.inventory_history`
 WHERE date >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 YEAR)  -- последний год данных
 ```
 
@@ -275,7 +275,7 @@ WHERE date >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 YEAR)  -- последний �
 
 ```sql
 -- AI генерирует:
-CREATE OR REPLACE MODEL `etigram.etigram_documents.documents_forecast_model`
+CREATE OR REPLACE MODEL `nv-horizon.nv_horizon_documents.documents_forecast_model`
 OPTIONS(
   model_type='ARIMA_PLUS',
   time_series_timestamp_col='date',
@@ -285,14 +285,14 @@ OPTIONS(
 SELECT 
   DATE(createdAt) as date,
   COUNT(*) as doc_count
-FROM `etigram.etigram_documents.core_docs_metadata`
+FROM `nv-horizon.nv_horizon_documents.core_docs_metadata`
 WHERE projectId = 'project-X'
 GROUP BY date
 ORDER BY date
 
 -- Прогноз
 SELECT * FROM ML.FORECAST(
-  MODEL `etigram.etigram_documents.documents_forecast_model`,
+  MODEL `nv-horizon.nv_horizon_documents.documents_forecast_model`,
   STRUCT(30 AS horizon)
 )
 ```
@@ -303,7 +303,7 @@ SELECT * FROM ML.FORECAST(
 
 ```sql
 -- AI генерирует модель на основе исторических данных активности
-CREATE OR REPLACE MODEL `etigram.etigram_documents.activity_forecast_model`
+CREATE OR REPLACE MODEL `nv-horizon.nv_horizon_documents.activity_forecast_model`
 OPTIONS(model_type='ARIMA_PLUS', ...) AS
 SELECT date, activity_count FROM activity_history
 

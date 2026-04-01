@@ -1,0 +1,370 @@
+{
+  "focus": {
+    "anchorCanonicalPath": "/org/no/equinor",
+    "displayLabel": "Equinor",
+    "relatedCanonicalPaths": [
+      "/market/eu/energy/natural-gas"
+    ],
+    "domainModes": [
+      "energy",
+      "supply_chain"
+    ],
+    "queryOverrides": [
+      "Equinor Hormuz EU gas market supply disruption"
+    ],
+    "universeDepth": 2,
+    "lookbackHours": 48,
+    "maxImpactedEntities": 8,
+    "maxPropagationHops": 6
+  },
+  "fragments": [
+    {
+      "id": "frag-equinor",
+      "tenantId": "global",
+      "canonicalPath": "/org/no/equinor",
+      "type": "ORGANIZATION",
+      "entityPath": "/Organization/Corporation",
+      "status": "active",
+      "state": {},
+      "metadata": {
+        "createdAt": "2026-03-25T00:00:00Z",
+        "lastUpdatedAt": "2026-03-25T00:00:00Z",
+        "lastVerifiedAt": "2026-03-25T00:00:00Z",
+        "lastFactsSeenAt": "2026-03-25T00:00:00Z",
+        "lastFactsAppliedAt": "2026-03-25T00:00:00Z",
+        "sourceFrameId": "",
+        "epistemicStatus": "verified"
+      },
+      "governance": {
+        "owner": "SYSTEM",
+        "status": "ACTIVE"
+      },
+      "labels": {
+        "en": "Equinor"
+      }
+    },
+    {
+      "id": "frag-qatargas",
+      "tenantId": "global",
+      "canonicalPath": "/org/qa/qatargas",
+      "type": "ORGANIZATION",
+      "entityPath": "/Organization/Corporation",
+      "status": "active",
+      "state": {},
+      "metadata": {
+        "createdAt": "2026-03-25T00:00:00Z",
+        "lastUpdatedAt": "2026-03-25T00:00:00Z",
+        "lastVerifiedAt": "2026-03-25T00:00:00Z",
+        "lastFactsSeenAt": "2026-03-25T00:00:00Z",
+        "lastFactsAppliedAt": "2026-03-25T00:00:00Z",
+        "sourceFrameId": "",
+        "epistemicStatus": "verified"
+      },
+      "governance": {
+        "owner": "SYSTEM",
+        "status": "ACTIVE"
+      },
+      "labels": {
+        "en": "Qatargas"
+      }
+    },
+    {
+      "id": "frag-eu-gas-market",
+      "tenantId": "global",
+      "canonicalPath": "/market/eu/energy/natural-gas",
+      "type": "MARKET",
+      "entityPath": "/Market/Energy",
+      "status": "active",
+      "state": {},
+      "metadata": {
+        "createdAt": "2026-03-25T00:00:00Z",
+        "lastUpdatedAt": "2026-03-25T00:00:00Z",
+        "lastVerifiedAt": "2026-03-25T00:00:00Z",
+        "lastFactsSeenAt": "2026-03-25T00:00:00Z",
+        "lastFactsAppliedAt": "2026-03-25T00:00:00Z",
+        "sourceFrameId": "",
+        "epistemicStatus": "verified"
+      },
+      "governance": {
+        "owner": "SYSTEM",
+        "status": "ACTIVE"
+      },
+      "labels": {
+        "en": "EU Gas Market"
+      }
+    },
+    {
+      "id": "frag-hormuz",
+      "tenantId": "global",
+      "canonicalPath": "/zone/sea/logistics/strait-of-hormuz",
+      "type": "AFFECTED_ZONE",
+      "entityPath": "/Zone/Affected",
+      "status": "active",
+      "geoFeatureType": "strait",
+      "tags": [
+        "chokepoint"
+      ],
+      "state": {},
+      "metadata": {
+        "createdAt": "2026-03-25T00:00:00Z",
+        "lastUpdatedAt": "2026-03-25T00:00:00Z",
+        "lastVerifiedAt": "2026-03-25T00:00:00Z",
+        "lastFactsSeenAt": "2026-03-25T00:00:00Z",
+        "lastFactsAppliedAt": "2026-03-25T00:00:00Z",
+        "sourceFrameId": "",
+        "epistemicStatus": "verified"
+      },
+      "governance": {
+        "owner": "SYSTEM",
+        "status": "ACTIVE"
+      },
+      "labels": {
+        "en": "Strait of Hormuz"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-qatargas-market",
+      "tenantId": "global",
+      "sourceFragmentId": "frag-qatargas",
+      "targetFragmentId": "frag-eu-gas-market",
+      "type": "SUPPLIES_TO",
+      "properties": {
+        "criticality": 0.91,
+        "amplification": 1.0,
+        "latencyHours": 48
+      },
+      "provenance": {
+        "sourceType": "fixture"
+      },
+      "metadata": {
+        "sourceFrameId": "fixture",
+        "createdAt": "2026-03-25T00:00:00Z",
+        "lastUpdatedAt": "2026-03-25T00:00:00Z"
+      }
+    },
+    {
+      "id": "edge-equinor-market",
+      "tenantId": "global",
+      "sourceFragmentId": "frag-equinor",
+      "targetFragmentId": "frag-eu-gas-market",
+      "type": "SUPPLIES_TO",
+      "properties": {
+        "criticality": 0.84,
+        "amplification": 0.96,
+        "latencyHours": 36
+      },
+      "provenance": {
+        "sourceType": "fixture"
+      },
+      "metadata": {
+        "sourceFrameId": "fixture",
+        "createdAt": "2026-03-25T00:00:00Z",
+        "lastUpdatedAt": "2026-03-25T00:00:00Z"
+      }
+    },
+    {
+      "id": "edge-qatargas-hormuz",
+      "tenantId": "global",
+      "sourceFragmentId": "frag-qatargas",
+      "targetFragmentId": "frag-hormuz",
+      "type": "DEPENDS_ON",
+      "properties": {
+        "criticality": 0.95,
+        "amplification": 1.0,
+        "latencyHours": 12
+      },
+      "provenance": {
+        "sourceType": "fixture"
+      },
+      "metadata": {
+        "sourceFrameId": "fixture",
+        "createdAt": "2026-03-25T00:00:00Z",
+        "lastUpdatedAt": "2026-03-25T00:00:00Z"
+      }
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "artifact-qatargas-eu-lng",
+      "tenantId": "global",
+      "kind": "SUPPLY_CHAIN_PATH",
+      "canonicalKey": "/artifact/supply-chain/global/qatargas-eu-lng",
+      "payload": {
+        "v": 1,
+        "nodes": [],
+        "edges": [],
+        "legs": [
+          {
+            "index": 0,
+            "supplierRef": "/org/qa/qatargas",
+            "customerRef": "/market/eu/energy/natural-gas",
+            "productRef": "/product/energy/natural-gas",
+            "transportViaRefs": [
+              "/zone/sea/logistics/strait-of-hormuz"
+            ],
+            "affectedZoneRefs": [
+              "/zone/sea/logistics/strait-of-hormuz"
+            ],
+            "bindingConfidence": 0.91,
+            "segmentConfidence": 0.88,
+            "stress": {
+              "fragility": 0.82,
+              "rerouteability": 0.21,
+              "zonePressure": 0.94,
+              "affectedZonePressure": 0.95,
+              "recoveryLatencyHours": 168,
+              "stressScore": 0.91,
+              "dominantFactors": [
+                "chokepoint_transit",
+                "maritime_route_dependency"
+              ]
+            }
+          }
+        ]
+      },
+      "createdAt": "2026-03-25T00:00:00Z",
+      "updatedAt": "2026-03-30T08:00:00Z",
+      "status": "active",
+      "displayName": "Qatargas -> EU Gas Market",
+      "nodeRefs": [
+        "/org/qa/qatargas",
+        "/market/eu/energy/natural-gas"
+      ],
+      "zoneRefs": [
+        "/zone/sea/logistics/strait-of-hormuz"
+      ],
+      "affectedZoneRefs": [
+        "/zone/sea/logistics/strait-of-hormuz"
+      ],
+      "anchorSupplier": "/org/qa/qatargas",
+      "anchorCustomer": "/market/eu/energy/natural-gas",
+      "productAxis": "/product/energy/natural-gas",
+      "legCount": 1,
+      "bindingScore": 0.91,
+      "pathStressScore": 0.91,
+      "bottleneckLegIndex": 0,
+      "recoveryLatencyHours": 168
+    },
+    {
+      "id": "artifact-equinor-eu-gas",
+      "tenantId": "global",
+      "kind": "SUPPLY_CHAIN_PATH",
+      "canonicalKey": "/artifact/supply-chain/global/equinor-eu-gas",
+      "payload": {
+        "v": 1,
+        "nodes": [],
+        "edges": [],
+        "legs": [
+          {
+            "index": 0,
+            "supplierRef": "/org/no/equinor",
+            "customerRef": "/market/eu/energy/natural-gas",
+            "productRef": "/product/energy/natural-gas",
+            "transportViaRefs": [
+              "/flow/pipeline/north-sea-eu"
+            ],
+            "bindingConfidence": 0.89,
+            "segmentConfidence": 0.84,
+            "stress": {
+              "fragility": 0.34,
+              "rerouteability": 0.72,
+              "zonePressure": 0.18,
+              "affectedZonePressure": 0.05,
+              "recoveryLatencyHours": 36,
+              "stressScore": 0.24,
+              "dominantFactors": [
+                "pipeline_rerouteability"
+              ]
+            }
+          }
+        ]
+      },
+      "createdAt": "2026-03-25T00:00:00Z",
+      "updatedAt": "2026-03-30T08:00:00Z",
+      "status": "active",
+      "displayName": "Equinor -> EU Gas Market",
+      "nodeRefs": [
+        "/org/no/equinor",
+        "/market/eu/energy/natural-gas"
+      ],
+      "flowRefs": [
+        "/flow/pipeline/north-sea-eu"
+      ],
+      "anchorSupplier": "/org/no/equinor",
+      "anchorCustomer": "/market/eu/energy/natural-gas",
+      "productAxis": "/product/energy/natural-gas",
+      "legCount": 1,
+      "bindingScore": 0.89,
+      "pathStressScore": 0.24,
+      "bottleneckLegIndex": 0,
+      "recoveryLatencyHours": 36
+    }
+  ],
+  "facts": [
+    {
+      "id": "fact-hormuz",
+      "tenantId": "global",
+      "version": 1,
+      "createdAt": "2026-03-30T07:00:00Z",
+      "updatedAt": "2026-03-30T07:00:00Z",
+      "createdBy": "fixture",
+      "updatedBy": "fixture",
+      "labels": {
+        "en": "Hormuz transit risk"
+      },
+      "status": "active",
+      "canonicalPaths": [
+        "/zone/sea/logistics/strait-of-hormuz"
+      ],
+      "kind": "event",
+      "type": "risk:logistics_capacity",
+      "title": "Hormuz transit disruption tightens LNG export routes",
+      "summary": "Escalating transit risk in the Strait of Hormuz threatens Gulf LNG shipments into Europe and can tighten the EU gas market.",
+      "confidence": 0.91,
+      "occurredAt": "2026-03-30T06:00:00Z",
+      "observedAt": "2026-03-30T07:00:00Z",
+      "sourceIds": [
+        "wm-hormuz"
+      ],
+      "sourceRefs": [
+        {
+          "sourceId": "wm-hormuz",
+          "sourceType": "rss"
+        }
+      ]
+    }
+  ],
+  "signals": [
+    {
+      "id": "signal-hormuz",
+      "factId": "fact-hormuz",
+      "createdAt": "2026-03-30T07:05:00Z",
+      "axis": "logistics/capacity",
+      "mechanism": "chokepoint_disruption",
+      "amplitude": 0.82,
+      "polarity": "risk",
+      "seedPaths": [
+        "/zone/sea/logistics/strait-of-hormuz"
+      ],
+      "locationPath": "/zone/sea/logistics/strait-of-hormuz",
+      "constraints": {
+        "timeHorizon": "short_term",
+        "modality": "disruption",
+        "likelihood": 0.88,
+        "impact": 0.87,
+        "escalationLevel": "warning",
+        "escalationConfidence": 0.84
+      },
+      "confidence": 0.9,
+      "sourceRefs": [
+        "wm-hormuz"
+      ],
+      "observedAt": "2026-03-30T07:00:00Z",
+      "chainRefs": [
+        "/artifact/supply-chain/global/qatargas-eu-lng"
+      ]
+    }
+  ]
+}

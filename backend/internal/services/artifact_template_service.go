@@ -66,6 +66,7 @@ func (s *ArtifactTemplateService) ListAvailableTemplates(
 	ctx context.Context,
 	tenantID string,
 	category *string,
+	graphSourceKind *string,
 ) ([]*models.ArtifactTemplate, error) {
 	result := make([]*models.ArtifactTemplate, 0)
 
@@ -76,12 +77,12 @@ func (s *ArtifactTemplateService) ListAvailableTemplates(
 	} else {
 		systemTemplates = templates.ListSystemTemplates()
 	}
-	result = append(result, systemTemplates...)
+	result = append(result, filterTemplatesByGraphSourceKind(systemTemplates, graphSourceKind)...)
 
 	// 2. Public (community) templates
 	publicTemplates, err := s.repo.ListPublic(ctx, category, 0)
 	if err == nil {
-		result = append(result, publicTemplates...)
+		result = append(result, filterTemplatesByGraphSourceKind(publicTemplates, graphSourceKind)...)
 	}
 
 	// 3. Tenant-specific templates
@@ -99,13 +100,65 @@ func (s *ArtifactTemplateService) ListAvailableTemplates(
 					filtered = append(filtered, t)
 				}
 			}
-			result = append(result, filtered...)
+			result = append(result, filterTemplatesByGraphSourceKind(filtered, graphSourceKind)...)
 		} else {
-			result = append(result, tenantTemplates...)
+			result = append(result, filterTemplatesByGraphSourceKind(tenantTemplates, graphSourceKind)...)
 		}
 	}
 
 	return result, nil
+}
+
+func filterTemplatesByGraphSourceKind(items []*models.ArtifactTemplate, graphSourceKind *string) []*models.ArtifactTemplate {
+	if len(items) == 0 {
+		return items
+	}
+	kind := strings.TrimSpace(firstNonEmptyString(graphSourceKind))
+	if kind == "" {
+		return items
+	}
+	out := make([]*models.ArtifactTemplate, 0, len(items))
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		if templateSupportsGraphSourceKind(item, kind) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func templateSupportsGraphSourceKind(template *models.ArtifactTemplate, kind string) bool {
+	if template == nil {
+		return false
+	}
+	if len(template.GraphSourceKinds) == 0 {
+		return false
+	}
+	needle := strings.TrimSpace(kind)
+	if needle == "" {
+		return true
+	}
+	for _, item := range template.GraphSourceKinds {
+		if strings.EqualFold(strings.TrimSpace(item), needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func firstNonEmptyString(values ...*string) string {
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		text := strings.TrimSpace(*value)
+		if text != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 // CreateCustomTemplate creates a new custom template

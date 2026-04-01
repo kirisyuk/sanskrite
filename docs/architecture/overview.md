@@ -67,5 +67,5 @@ See also: `architecture/backend/overview.md`, `architecture/frontend/overview.md
 ### Branding
 
 - Internal project codename: `Sanskrite` (technical name used in code and repos).
-- External branding: `Etigram` (`etigram.one`).
-- UI uses Etigram branding; technical docs and directories may still reference `Sanskrite`.
+- External branding: `Horizon` (`horizon.nordicvision.io`).
+- UI uses Horizon branding; technical docs and directories may still reference `Sanskrite`.

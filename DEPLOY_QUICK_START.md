@@ -14,7 +14,7 @@ echo "YOUR_REAL_KEY" | gcloud secrets versions add anthropic_api_key --data-file
 echo "YOUR_REAL_KEY" | gcloud secrets versions add grok_api_key --data-file=-
 
 # 3. Проверить что всё работает
-curl "$(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')/healthz"
+curl "$(gcloud run services describe nv-horizon-api --region us-central1 --format='value(status.url)')/healthz"
 ```
 
 ---
@@ -41,13 +41,13 @@ wsl bash scripts/deploy --py
 
 ```bash
 # ✓ Трафик на последней ревизии?
-gcloud run services describe etigram-api --region us-central1 --format="value(status.traffic[0].revisionName)"
+gcloud run services describe nv-horizon-api --region us-central1 --format="value(status.traffic[0].revisionName)"
 
 # ✓ Есть ошибки в логах?
-gcloud run services logs read etigram-api --region us-central1 --limit 20
+gcloud run services logs read nv-horizon-api --region us-central1 --limit 20
 
 # ✓ Health check OK?
-curl "$(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')/healthz"
+curl "$(gcloud run services describe nv-horizon-api --region us-central1 --format='value(status.url)')/healthz"
 ```
 
 ---
@@ -69,7 +69,7 @@ curl "$(gcloud run services describe etigram-api --region us-central1 --format='
 
 ```bash
 # Откат на предыдущую ревизию
-gcloud run revisions list --service etigram-api --region us-central1 --limit 5
-gcloud run services update-traffic etigram-api --region us-central1 --to-revisions REVISION_NAME=100
+gcloud run revisions list --service nv-horizon-api --region us-central1 --limit 5
+gcloud run services update-traffic nv-horizon-api --region us-central1 --to-revisions REVISION_NAME=100
 ```
 

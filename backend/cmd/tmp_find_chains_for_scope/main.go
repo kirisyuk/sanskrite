@@ -8,7 +8,7 @@ import (
   horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 func main(){
- ctx:=context.Background(); c,err:=firestore.NewClient(ctx,"etigram"); if err!=nil { panic(err) }; defer c.Close()
+ ctx:=context.Background(); c,err:=firestore.NewClient(ctx,"nv-horizon"); if err!=nil { panic(err) }; defer c.Close()
  ar:=horizonrepo.NewMaterializedArtifactsRepository(c)
  paths:=[]string{"/fac/be/zeebrugge-lng-terminal","/fac/gb/south-hook-lng-terminal","/loc/qa","/market/global/energy/lng","/org/qa/qatarenergy","/product/raw/hydrocarbon/liquefaction/lng"}
  seen:=map[string]bool{}

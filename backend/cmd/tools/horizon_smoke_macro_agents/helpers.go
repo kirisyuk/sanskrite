@@ -61,7 +61,7 @@ func initAIExecutor(ctx context.Context, projectID string) *ai.AITaskExecutor {
 func resolveVertexDataStoreID() string {
 	for _, value := range []string{
 		os.Getenv("VERTEX_SEARCH_DATA_STORE_ID"),
-		os.Getenv("VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID"),
+		os.Getenv("VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID"),
 		os.Getenv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID"),
 	} {
 		if trimmed := strings.TrimSpace(value); trimmed != "" {

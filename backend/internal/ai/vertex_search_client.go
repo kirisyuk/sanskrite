@@ -39,6 +39,14 @@ type VertexAISearchClient struct {
 	tokenSource oauth2.TokenSource // Для OAuth2 аутентификации
 }
 
+type DataStoreInfo struct {
+	Name             string   `json:"name"`
+	DisplayName      string   `json:"displayName"`
+	IndustryVertical string   `json:"industryVertical"`
+	SolutionTypes    []string `json:"solutionTypes,omitempty"`
+	ContentConfig    string   `json:"contentConfig,omitempty"`
+}
+
 // WithDataStore returns a shallow-cloned client targeting a different Data Store ID.
 // It reuses the same auth (API key / ADC token source) and HTTP client.
 func (c *VertexAISearchClient) WithDataStore(dataStoreID string) *VertexAISearchClient {
@@ -135,6 +143,11 @@ type SearchDocument struct {
 	StructData        map[string]interface{} `json:"structData,omitempty"`
 	DerivedStructData map[string]interface{} `json:"derivedStructData,omitempty"` // Автоматически генерируемые данные из GCS
 	JSONData          string                 `json:"jsonData,omitempty"`
+}
+
+type ListDocumentsResponse struct {
+	Documents     []SearchDocument `json:"documents"`
+	NextPageToken string           `json:"nextPageToken,omitempty"`
 }
 
 // Search выполняет поиск по документам в Vertex AI Search
@@ -295,6 +308,135 @@ func getMapKeys(m map[string]interface{}) []string {
 // IsConfigured проверяет, настроен ли клиент
 func (c *VertexAISearchClient) IsConfigured() bool {
 	return c.projectID != "" && c.location != "" && c.dataStoreID != "" && (c.apiKey != "" || c.tokenSource != nil)
+}
+
+func (c *VertexAISearchClient) EnsureDataStore(ctx context.Context, displayName string) (*DataStoreInfo, error) {
+	if c.projectID == "" || c.location == "" || c.dataStoreID == "" {
+		return nil, fmt.Errorf("vertex AI search not configured: project, location, or dataStoreID missing")
+	}
+	info, statusCode, err := c.getDataStore(ctx)
+	if err == nil && statusCode == http.StatusOK {
+		return info, nil
+	}
+	if err != nil && statusCode != http.StatusNotFound {
+		return nil, err
+	}
+
+	endpoint := fmt.Sprintf(
+		"https://discoveryengine.googleapis.com/v1beta/projects/%s/locations/%s/collections/default_collection/dataStores?dataStoreId=%s",
+		c.projectID,
+		c.location,
+		url.QueryEscape(c.dataStoreID),
+	)
+	if strings.TrimSpace(displayName) == "" {
+		displayName = c.dataStoreID
+	}
+	bodyJSON, err := json.Marshal(map[string]interface{}{
+		"displayName":      strings.TrimSpace(displayName),
+		"industryVertical": "GENERIC",
+		"solutionTypes":    []string{"SOLUTION_TYPE_SEARCH"},
+		"contentConfig":    "CONTENT_REQUIRED",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal datastore create body: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(bodyJSON))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create datastore request: %w", err)
+	}
+	if err := c.applyAuthHeaders(req); err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Goog-User-Project", c.projectID)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute datastore create request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read datastore create response: %w", err)
+	}
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusConflict:
+		info, _, err := c.getDataStore(ctx)
+		return info, err
+	default:
+		return nil, fmt.Errorf("vertex AI search datastore create API error %d: %s", resp.StatusCode, string(body))
+	}
+
+	var op struct {
+		Done     bool                   `json:"done"`
+		Response map[string]interface{} `json:"response"`
+	}
+	if err := json.Unmarshal(body, &op); err == nil && op.Response != nil {
+		info := &DataStoreInfo{}
+		raw, _ := json.Marshal(op.Response)
+		if err := json.Unmarshal(raw, info); err == nil && strings.TrimSpace(info.Name) != "" {
+			return info, nil
+		}
+	}
+	info, _, err = c.getDataStore(ctx)
+	return info, err
+}
+
+func (c *VertexAISearchClient) getDataStore(ctx context.Context) (*DataStoreInfo, int, error) {
+	endpoint := fmt.Sprintf(
+		"https://discoveryengine.googleapis.com/v1beta/projects/%s/locations/%s/collections/default_collection/dataStores/%s",
+		c.projectID,
+		c.location,
+		url.PathEscape(c.dataStoreID),
+	)
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to create datastore get request: %w", err)
+	}
+	if err := c.applyAuthHeaders(req); err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("X-Goog-User-Project", c.projectID)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to execute datastore get request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("failed to read datastore get response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusNotFound {
+			return nil, resp.StatusCode, fmt.Errorf("datastore %s not found", c.dataStoreID)
+		}
+		return nil, resp.StatusCode, fmt.Errorf("vertex AI search datastore get API error %d: %s", resp.StatusCode, string(body))
+	}
+	var info DataStoreInfo
+	if err := json.Unmarshal(body, &info); err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("failed to unmarshal datastore response: %w", err)
+	}
+	return &info, resp.StatusCode, nil
+}
+
+func (c *VertexAISearchClient) applyAuthHeaders(req *http.Request) error {
+	if c.apiKey != "" {
+		req.Header.Set("x-goog-api-key", c.apiKey)
+		return nil
+	}
+	if c.tokenSource != nil {
+		token, err := c.tokenSource.Token()
+		if err != nil {
+			return fmt.Errorf("failed to get OAuth2 token: %w", err)
+		}
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.AccessToken))
+		return nil
+	}
+	return fmt.Errorf("authentication required: either API key or Application Default Credentials")
 }
 
 // ImportDocumentsRequest параметры для импорта документов
@@ -671,4 +813,47 @@ func (c *VertexAISearchClient) CheckOperationStatus(ctx context.Context, operati
 	}
 
 	return &status, nil
+}
+
+func (c *VertexAISearchClient) ListDocuments(ctx context.Context, pageSize int) (*ListDocumentsResponse, error) {
+	if c.projectID == "" || c.location == "" || c.dataStoreID == "" {
+		return nil, fmt.Errorf("vertex AI search not configured: project, location, or dataStoreID missing")
+	}
+	if pageSize <= 0 {
+		pageSize = 10
+	}
+	endpoint := fmt.Sprintf(
+		"https://discoveryengine.googleapis.com/v1beta/projects/%s/locations/%s/collections/default_collection/dataStores/%s/branches/default_branch/documents?pageSize=%d",
+		c.projectID,
+		c.location,
+		url.PathEscape(c.dataStoreID),
+		pageSize,
+	)
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create list documents request: %w", err)
+	}
+	if err := c.applyAuthHeaders(req); err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Goog-User-Project", c.projectID)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute list documents request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read list documents response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("vertex AI search list documents API error %d: %s", resp.StatusCode, string(body))
+	}
+	var out ListDocumentsResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal list documents response: %w", err)
+	}
+	return &out, nil
 }

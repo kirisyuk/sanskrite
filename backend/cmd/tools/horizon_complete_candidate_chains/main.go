@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	lensID := flag.String("lens", "l8dOd17uKYYTKD0CI9hy", "lens id")
 	maxArtifacts := flag.Int("max-artifacts-per-chain", 4, "max source artifacts to merge into one candidate chain")
 	maxCandidates := flag.Int("max-candidates", 8, "max candidate chains to create/update")

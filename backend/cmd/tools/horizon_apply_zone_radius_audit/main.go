@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	projectID = flag.String("project", "etigram", "GCP project ID")
+	projectID = flag.String("project", "nv-horizon", "GCP project ID")
 	inPath    = flag.String("in", "audit_zones_full.jsonl", "Input JSONL from horizon_audit_zone_radii")
 	apply     = flag.Bool("apply", false, "Apply changes to Firestore (default: dry-run)")
 	dryRun    = flag.Bool("dry-run", true, "Dry-run only, do not write (default: true)")

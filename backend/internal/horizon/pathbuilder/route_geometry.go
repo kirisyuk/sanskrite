@@ -38,6 +38,7 @@ func ResolveSupplyChainRouteGeometryDetailed(
 	if err != nil {
 		return ResolvedRouteGeometry{}
 	}
+	cleanRefs = normalizeMaritimeOrderedRefs(cleanRefs, fragsByPath)
 
 	if resolved := resolveRouteGeometryProfile(ctx, fragmentsRepo, cleanRefs); len(resolved.Coordinates) >= 2 {
 		return resolved

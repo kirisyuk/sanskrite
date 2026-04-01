@@ -32,7 +32,7 @@ func main() {
 	// Override Firebase Auth Project ID if specified
 	firebaseProjectID := getEnv("FIREBASE_AUTH_PROJECT_ID", projectID)
 	if firebaseProjectID != projectID {
-		log.Printf("FIREBASE_AUTH_PROJECT_ID=%q differs from GCP project %q; overriding to %q for etigram-ws token verification", firebaseProjectID, projectID, projectID)
+		log.Printf("FIREBASE_AUTH_PROJECT_ID=%q differs from GCP project %q; overriding to %q for nv-horizon-ws token verification", firebaseProjectID, projectID, projectID)
 		firebaseProjectID = projectID
 	}
 	log.Printf("Initializing Firebase App with ProjectID: %s (GCP_PROJECT_ID: %s)", firebaseProjectID, projectID)
@@ -47,7 +47,7 @@ func main() {
 		log.Fatalf("firestore init: %v", err)
 	}
 
-	logger := log.New(os.Stdout, "[etigram-ws] ", log.LstdFlags|log.Lshortfile)
+	logger := log.New(os.Stdout, "[nv-horizon-ws] ", log.LstdFlags|log.Lshortfile)
 	users := repo.NewUsersRepository(fs.Client())
 
 	// Hub
@@ -111,7 +111,7 @@ func main() {
 	_ = sub.Start(ctx, realtime.AggregatedTopics...)
 
 	srv := &http.Server{Addr: ":" + addr, Handler: http.DefaultServeMux, ReadHeaderTimeout: 5 * time.Second}
-	log.Printf("etigram-ws listening on :%s", addr)
+	log.Printf("nv-horizon-ws listening on :%s", addr)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}

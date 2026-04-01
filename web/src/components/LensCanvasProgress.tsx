@@ -10,6 +10,7 @@ export interface LensCanvasProgressProps {
   showInput?: boolean;
   onAssemble?: (request: AssembleLensRequest) => void;
   isCreatingLens?: boolean;
+  isStartingFollowUp?: boolean;
   /** When creating a new lens (lensId=null), filter progress events to only those matching this creation attempt. */
   activeCreateCorrelationId?: string | null;
   activeCreateSessionId?: string | null;
@@ -140,6 +141,7 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
   showInput = false,
   onAssemble,
   isCreatingLens = false,
+  isStartingFollowUp = false,
   activeCreateCorrelationId = null,
   activeCreateSessionId = null,
   preflight = null,
@@ -342,7 +344,7 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
 
   const hasEvents = filteredEvents.length > 0;
   // Shift input to bottom if we have events or creation is in progress
-  const isContentActive = hasEvents || isCreatingLens || preflightActive;
+  const isContentActive = hasEvents || isCreatingLens || isStartingFollowUp || preflightActive;
   const handleSaveLog = React.useCallback(() => {
     if (!filteredEvents.length) return;
     const lines = filteredEvents.map((ev) => {
@@ -1034,7 +1036,7 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
               />
             )}
 
-            {filteredEvents.length === 0 && isCreatingLens && !hasFatalAlert && (
+            {filteredEvents.length === 0 && (isCreatingLens || isStartingFollowUp) && !hasFatalAlert && (
               <div
                 style={{
                   position: 'relative',
@@ -1067,10 +1069,10 @@ export const LensCanvasProgress: React.FC<LensCanvasProgressProps> = ({
                 </div>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 600, color: 'var(--text-heading)', fontSize: 13, lineHeight: '20px' }}>
-                    Preparing your analysis...
+                    {isStartingFollowUp && !isCreatingLens ? 'Starting follow-up research...' : 'Preparing your analysis...'}
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'monospace' }}>
-                    Request submitted
+                    {isStartingFollowUp && !isCreatingLens ? 'Job submitted' : 'Request submitted'}
                   </div>
                 </div>
               </div>

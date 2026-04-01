@@ -16,11 +16,18 @@ import { HorizonWatchLensSurface } from './HorizonWatchLensSurface';
 import { HorizonLoading } from './HorizonLoading';
 import { WorldMapPanel } from './WorldMapPanel';
 import { QAPanel } from './QAPanel';
+import { LensChatDockPlaceholder, type LensChatMapFocus } from './LensChatDockPlaceholder';
 import { HorizonRealtimeCallouts } from './HorizonRealtimeCallouts';
-import { HorizonDrawers, HorizonPanelType } from './HorizonDrawers';
+import { HorizonDrawers, HorizonPanelType, type MapDrawerPanelType } from './HorizonDrawers';
+import { ScoutIntentModal, type ScoutIntentResolution } from './ScoutIntentModal';
 import type { HorizonNodeData } from './HorizonGraphNodeTypes';
 import type { AssembleLensRequest } from '../features/horizon/components/hook/AssembleLensRequest';
-import type { ScoutingMode } from '../features/horizon/lib/scoutingMode';
+import type { MapObjectInspectorPayload } from './MapObjectDetail';
+import {
+  defaultScoutingModeForIntent,
+  specialtiesForScoutingMode,
+  type ScoutingMode,
+} from '../features/horizon/lib/scoutingMode';
 import { useHorizonRealtimeStore } from '../stores/horizonRealtimeStore';
 import { buildHotPathProgressView, filterHorizonProgressEvents } from './horizonProgressUtils';
 
@@ -31,6 +38,7 @@ export interface LensCanvasProps {
   isOpen: boolean;
   lensId: string | null;
   projectId?: string | null;
+  sidebarOpen?: boolean;
   /** @deprecated Use lensView for graph/map/analysis. Kept for backward compat with initialViewMode. */
   initialViewMode?: 'assembly' | 'home' | 'cockpit' | 'progress';
   /** Initial lens view (Graph | Map | Analysis). Synced with URL ?view= */
@@ -85,10 +93,31 @@ type LensCanvasSnapshot = {
 // so the user sees the standard loading state instead of stale Home content.
 const lensSnapshotCache = new Map<string, LensCanvasSnapshot>();
 
+function resolveDirectedSupplyChainDirection(intent: ScoutIntentResolution | null, rawQuery: string): 'upstream' | 'downstream' | 'both' {
+  const domains = Array.isArray(intent?.domains) ? intent.domains : [];
+  for (const domain of domains as any[]) {
+    const contractType = String(domain?.contractType || '').trim().toLowerCase();
+    if (contractType !== 'supply-chain' && contractType !== 'value-chain') continue;
+    const queries = Array.isArray(domain?.supplyChainExecutionPlan?.queries) ? domain.supplyChainExecutionPlan.queries : [];
+    for (const query of queries) {
+      const direction = String(query?.direction || '').trim().toLowerCase();
+      if (direction === 'upstream' || direction === 'downstream' || direction === 'both') return direction;
+    }
+  }
+
+  const q = String(rawQuery || '').trim().toLowerCase();
+  const bothHints = ['supply chain', 'value chain', 'цепоч', 'цепочка поставок', 'value-chain'];
+  if (bothHints.some((token) => q.includes(token))) return 'both';
+  const upstreamHints = ['upstream', 'supplier', 'suppliers', 'sourcing', 'source', 'sources', 'input', 'inputs', 'raw material', 'raw materials', 'кто поставляет', 'поставщик', 'поставщики', 'сырье', 'сырьё', 'источник', 'источники', 'снабж'];
+  if (upstreamHints.some((token) => q.includes(token))) return 'upstream';
+  return 'downstream';
+}
+
 export const LensCanvas: React.FC<LensCanvasProps> = ({
   isOpen,
   lensId,
   projectId,
+  sidebarOpen = true,
   initialViewMode = 'home',
   initialLensView,
   showInputInProgress = false,
@@ -109,8 +138,20 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   const [loadingJobs, setLoadingJobs] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [viewMode, setViewMode] = React.useState<'assembly' | 'home' | 'cockpit' | 'progress'>(initialViewMode);
+  const [followUpModalOpen, setFollowUpModalOpen] = React.useState(false);
+  const [followUpQuery, setFollowUpQuery] = React.useState('');
+  const [followUpIntent, setFollowUpIntent] = React.useState<ScoutIntentResolution | null>(null);
+  const [followUpIntentLoading, setFollowUpIntentLoading] = React.useState(false);
+  const [followUpIntentError, setFollowUpIntentError] = React.useState<string | null>(null);
+  const [followUpRunLoading, setFollowUpRunLoading] = React.useState(false);
+  const [followUpMode, setFollowUpMode] = React.useState<ScoutingMode>('general');
+  const [followUpModeTouched, setFollowUpModeTouched] = React.useState(false);
+  const [followUpHotPathOnly, setFollowUpHotPathOnly] = React.useState(false);
+  const [followUpDirection, setFollowUpDirection] = React.useState<'upstream' | 'downstream' | 'both'>('downstream');
+  const [followUpProgressActive, setFollowUpProgressActive] = React.useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const realtimeEvents = useHorizonRealtimeStore((s) => s.events);
+  const followUpPrefetchScopeRef = React.useRef<string[]>([]);
 
   // Lens view: Graph | Map | Analysis. Synced with URL ?view=graph|map|analysis
   const lensViewFromUrl = searchParams.get('view') as LensViewMode | null;
@@ -126,6 +167,8 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   const mapModeActive = viewMode === 'cockpit' && lensView === 'map';
   const analysisModeActive = viewMode === 'cockpit' && lensView === 'analysis';
   const briefModeActive = viewMode === 'cockpit' && lensView === 'brief';
+  const activeLensId = lensId || lens?.id || null;
+  const activeProjectId = projectId || lens?.projectId || null;
   const tabActiveBackground = 'var(--white-10)';
   const tabHoverBackground = theme === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(15,23,42,0.06)';
 
@@ -167,10 +210,53 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   const [selectedNodeData, setSelectedNodeData] = React.useState<HorizonNodeData | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = React.useState<string | null>(null);
   const [selectedEdgeData, setSelectedEdgeData] = React.useState<any | null>(null);
+  const [mapInspectorState, setMapInspectorState] = React.useState<MapObjectInspectorPayload | null>(null);
+  const [activeMapDrawerPanel, setActiveMapDrawerPanel] = React.useState<MapDrawerPanelType | null>(null);
+  const [mapDrawerHost, setMapDrawerHost] = React.useState<HTMLDivElement | null>(null);
   const [qaHighlightNodeIds, setQaHighlightNodeIds] = React.useState<string[]>([]);
   const [qaHighlightEdgeIds, setQaHighlightEdgeIds] = React.useState<string[]>([]);
   const [qaOpenTrigger, setQaOpenTrigger] = React.useState(0);
+  const [chatDockOpen, setChatDockOpen] = React.useState(false);
+  const [chatMapFocus, setChatMapFocus] = React.useState<LensChatMapFocus | null>(null);
   const visibleLensIdRef = React.useRef<string | null>(null);
+  const mapDrawerTitle = activeMapDrawerPanel === 'view'
+    ? 'View'
+    : activeMapDrawerPanel === 'simulation'
+      ? 'Simulation'
+      : activeMapDrawerPanel === 'export-tools'
+        ? 'Export / Tools'
+        : null;
+  const handleMapInspectorStateChange = React.useCallback((nextState: MapObjectInspectorPayload | null) => {
+    setMapInspectorState(nextState);
+    if (nextState) {
+      setActiveMapDrawerPanel(null);
+      setSelectedNodeId(null);
+      setSelectedNodeData(null);
+      setSelectedEdgeId(null);
+      setSelectedEdgeData(null);
+      setPanelType('object-inspector');
+    } else if (panelType === 'object-inspector' && !selectedNodeId && !selectedEdgeId) {
+      setPanelType(null);
+    }
+  }, [panelType, selectedEdgeId, selectedNodeId]);
+  const handleMapDrawerPanelChange = React.useCallback((nextPanel: MapDrawerPanelType | null) => {
+    setActiveMapDrawerPanel(nextPanel);
+    if (nextPanel) {
+      setMapInspectorState(null);
+      setSelectedNodeId(null);
+      setSelectedNodeData(null);
+      setSelectedEdgeId(null);
+      setSelectedEdgeData(null);
+      setPanelType('map-drawer');
+    } else if (panelType === 'map-drawer') {
+      setPanelType(null);
+    }
+  }, [panelType]);
+
+  React.useEffect(() => {
+    setChatDockOpen(false);
+    setChatMapFocus(null);
+  }, [activeLensId]);
 
   // Toolbar container for Cockpit
   // NOTE: Cockpit toolbar is rendered as an overlay inside the graph canvas.
@@ -193,6 +279,13 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
   React.useEffect(() => {
     setViewMode(initialViewMode);
   }, [initialViewMode]);
+
+  const handleOpenDocuments = React.useCallback(() => {
+    if (!activeLensId) return;
+    setViewMode('cockpit');
+    setPanelType('documents');
+    setActiveMapDrawerPanel(null);
+  }, [activeLensId]);
 
   const assemblyFatalError = React.useMemo(() => {
     const fatal = assemblyStatus?.fatalError;
@@ -223,10 +316,27 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
     (assemblyStatusValue && assemblyStatusValue !== 'ready')
     || (assemblyStageValue && assemblyStageValue !== 'ready' && assemblyStageValue !== 'failed'),
   );
+  const hasActiveScoutingJob = React.useMemo(
+    () => scoutingJobs.some((job: any) => {
+      const status = String(job?.status || '').trim().toLowerCase();
+      if (status === 'pending' || status === 'running') return true;
+      const currentState = String(job?.currentState || '').trim().toLowerCase();
+      return (
+        currentState === 'pending'
+        || currentState === 'planning'
+        || currentState === 'execution'
+        || currentState === 'extraction'
+        || currentState === 'validation'
+        || currentState === 'resolution'
+      );
+    }),
+    [scoutingJobs],
+  );
   const showHomeTab = Boolean(projectId || lensId || lens);
   const showProgressTab = Boolean(
     preflight?.active
     || isCreatingLens
+    || followUpProgressActive
     || fatalError
     || assemblyFatalError
     || hasActiveAssembly
@@ -245,12 +355,26 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
 
     // Reset selection state between lenses for cleaner UX
     setPanelType(null);
+    setActiveMapDrawerPanel(null);
     setSelectedNodeId(null);
     setSelectedNodeData(null);
     setSelectedEdgeId(null);
     setSelectedEdgeData(null);
+    setMapInspectorState(null);
     setQaHighlightNodeIds([]);
     setQaHighlightEdgeIds([]);
+    setFollowUpModalOpen(false);
+    setFollowUpQuery('');
+    setFollowUpIntent(null);
+    setFollowUpIntentLoading(false);
+    setFollowUpIntentError(null);
+    setFollowUpRunLoading(false);
+    setFollowUpMode('general');
+    setFollowUpModeTouched(false);
+    setFollowUpHotPathOnly(false);
+    setFollowUpDirection('downstream');
+    setFollowUpProgressActive(false);
+    followUpPrefetchScopeRef.current = [];
 
     if (!lensId) {
       setViewMode('home');
@@ -279,6 +403,33 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
       setViewMode(showHomeTab ? 'home' : 'progress');
     }
   }, [viewMode, showProgressTab, showHomeTab]);
+
+  React.useEffect(() => {
+    if (!followUpProgressActive) return;
+    if (
+      preflight?.active
+      || isCreatingLens
+      || fatalError
+      || assemblyFatalError
+      || hasActiveAssembly
+      || hasActiveScoutingJob
+      || progressEvents.length > 0
+      || hotPathProgressView
+    ) {
+      return;
+    }
+    setFollowUpProgressActive(false);
+  }, [
+    assemblyFatalError,
+    fatalError,
+    followUpProgressActive,
+    hasActiveAssembly,
+    hasActiveScoutingJob,
+    hotPathProgressView,
+    isCreatingLens,
+    preflight?.active,
+    progressEvents.length,
+  ]);
 
   // Load lens data when lensId changes
   React.useEffect(() => {
@@ -353,6 +504,31 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
     }
   }, [lensId]);
 
+  const genCorrelationId = React.useCallback(() => {
+    if (globalThis.crypto && 'randomUUID' in globalThis.crypto) {
+      return (globalThis.crypto as any).randomUUID();
+    }
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }, []);
+
+  const refreshLensSnapshot = React.useCallback(async () => {
+    if (!lensId) return null;
+    const [lensData, assemblyData, jobsData] = await Promise.all([
+      api.getHorizonLens(lensId),
+      api.getHorizonLensAssemblyStatus(lensId).catch(() => null),
+      api.listHorizonScoutingJobs(lensId, { limit: 50 }).catch(() => ({ jobs: [], total: 0 })),
+    ]);
+    setLens(lensData);
+    setAssemblyStatus(assemblyData);
+    setScoutingJobs(jobsData.jobs || []);
+    lensSnapshotCache.set(lensId, {
+      lens: lensData,
+      assemblyStatus: assemblyData,
+      scoutingJobs: jobsData.jobs || [],
+    });
+    return lensData;
+  }, [lensId]);
+
   const updateLensScope = React.useCallback(
     async (nextScope: string[]) => {
       if (!lensId || !lens) return;
@@ -393,6 +569,188 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
     },
     [lensId, lens]
   );
+
+  const closeFollowUpModal = React.useCallback(() => {
+    setFollowUpModalOpen(false);
+    setFollowUpQuery('');
+    setFollowUpIntent(null);
+    setFollowUpIntentLoading(false);
+    setFollowUpIntentError(null);
+    setFollowUpRunLoading(false);
+    setFollowUpMode('general');
+    setFollowUpModeTouched(false);
+    setFollowUpHotPathOnly(false);
+    setFollowUpDirection('downstream');
+    followUpPrefetchScopeRef.current = [];
+  }, []);
+
+  React.useEffect(() => {
+    if (!followUpModalOpen || !lensId || !followUpQuery.trim()) return;
+    let alive = true;
+    const correlationId = genCorrelationId();
+    const sessionId = (window as any).__horizonSessionId || correlationId;
+    (window as any).__horizonSessionId = sessionId;
+
+    setFollowUpIntentLoading(true);
+    setFollowUpIntentError(null);
+    setFollowUpIntent(null);
+
+    (async () => {
+      try {
+        const res = await api.preflightHorizonLensFollowUp(
+          lensId,
+          { query: followUpQuery.trim() },
+          { correlationId, sessionId },
+        );
+        if (!alive) return;
+        const nextIntent = (res?.intent || null) as ScoutIntentResolution | null;
+        setFollowUpIntent(nextIntent);
+        setFollowUpDirection(resolveDirectedSupplyChainDirection(nextIntent, followUpQuery));
+        if (!followUpModeTouched && nextIntent) {
+          setFollowUpMode(defaultScoutingModeForIntent(nextIntent));
+        }
+        setFollowUpIntentError(null);
+      } catch (e: any) {
+        if (!alive) return;
+        const msg = e?.response?.data?.error || e?.message || 'Failed to resolve intent';
+        setFollowUpIntentError(String(msg));
+        setFollowUpIntent(null);
+      } finally {
+        if (alive) setFollowUpIntentLoading(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [followUpModalOpen, followUpModeTouched, followUpQuery, genCorrelationId, lensId]);
+
+  const followUpHasSupplyChainContract = React.useMemo(() => {
+    const domains = Array.isArray(followUpIntent?.domains) ? followUpIntent.domains : [];
+    return domains.some((domain: any) => {
+      const contractType = String(domain?.contractType || '').trim().toLowerCase();
+      return contractType === 'supply-chain' || contractType === 'value-chain';
+    });
+  }, [followUpIntent]);
+
+  const openFollowUpModal = React.useCallback((query: string, prefetchScope?: string[]) => {
+    const q = String(query || '').trim();
+    if (!q) return;
+    followUpPrefetchScopeRef.current = Array.from(new Set((prefetchScope || []).map((value) => String(value || '').trim()).filter(Boolean)));
+    setFollowUpQuery(q);
+    setFollowUpIntent(null);
+    setFollowUpIntentLoading(false);
+    setFollowUpIntentError(null);
+    setFollowUpRunLoading(false);
+    setFollowUpMode('general');
+    setFollowUpModeTouched(false);
+    setFollowUpHotPathOnly(false);
+    setFollowUpDirection('downstream');
+    setFollowUpModalOpen(true);
+  }, []);
+
+  const runFollowUpFromModal = React.useCallback(async () => {
+    if (!lensId || !lens) return;
+    const q = String(followUpQuery || '').trim();
+    if (!q) return;
+
+    setFollowUpRunLoading(true);
+    setFollowUpIntentError(null);
+    try {
+      const prefetchScope = followUpPrefetchScopeRef.current;
+      if (prefetchScope.length > 0) {
+        const currentScope = Array.isArray(lens?.scope) ? lens.scope : [];
+        const nextScope = Array.from(new Set([...currentScope, ...prefetchScope].map((value) => String(value || '').trim()).filter(Boolean)));
+        if (nextScope.length !== currentScope.length) {
+          await updateLensScope(nextScope);
+        }
+      }
+
+      const correlationId = genCorrelationId();
+      const sessionId = (window as any).__horizonSessionId || correlationId;
+      (window as any).__horizonSessionId = sessionId;
+
+      if (followUpMode === 'supply_chain' && followUpHotPathOnly && followUpHasSupplyChainContract && followUpDirection !== 'both') {
+        await api.scopeScoutHorizonLensQuery(
+          lensId,
+          {
+            query: q,
+            mode: 'supply_chain',
+            specialties: specialtiesForScoutingMode('supply_chain'),
+            exploration: {
+              domainMode: 'supply_chain',
+              direction: followUpDirection === 'upstream' ? 'upstream' : 'downstream',
+              hotPathOnly: true,
+              renderTarget: 'graph',
+              ignoreFreshness: true,
+            },
+          },
+          { correlationId, sessionId },
+        );
+      } else {
+        await api.scopeScoutHorizonLensFull(
+          lensId,
+          {
+            query: q,
+            mode: followUpMode,
+            specialties: specialtiesForScoutingMode(followUpMode),
+          },
+          { correlationId, sessionId },
+        );
+      }
+
+      closeFollowUpModal();
+      setFollowUpProgressActive(true);
+      setViewMode('progress');
+      await refreshLensSnapshot();
+    } catch (e: any) {
+      const msg = e?.response?.data?.error || e?.message || 'Failed to start follow-up research';
+      setFollowUpIntentError(String(msg));
+    } finally {
+      setFollowUpRunLoading(false);
+    }
+  }, [
+    closeFollowUpModal,
+    followUpDirection,
+    followUpHasSupplyChainContract,
+    followUpHotPathOnly,
+    followUpMode,
+    followUpQuery,
+    genCorrelationId,
+    lens,
+    lensId,
+    refreshLensSnapshot,
+    updateLensScope,
+  ]);
+
+  const handleHomeAssemble = React.useCallback(async (request: AssembleLensRequest) => {
+    if (!lensId || !lens) {
+      await onAssemble?.(request);
+      return;
+    }
+
+    const q = String(request.query || '').trim();
+    const prefetchScope = Array.from(
+      new Set(
+        (request.prefetchScope || [])
+          .map((value) => String(value || '').trim())
+          .filter(Boolean),
+      ),
+    );
+    if (!q && prefetchScope.length === 0) return;
+
+    if (!q) {
+      const currentScope = Array.isArray(lens?.scope) ? lens.scope : [];
+      const nextScope = Array.from(new Set([...currentScope, ...prefetchScope].map((value) => String(value || '').trim()).filter(Boolean)));
+      if (nextScope.length !== currentScope.length) {
+        await updateLensScope(nextScope);
+        await refreshLensSnapshot();
+      }
+      return;
+    }
+
+    openFollowUpModal(q, prefetchScope);
+  }, [lens, lensId, onAssemble, openFollowUpModal, refreshLensSnapshot, updateLensScope]);
 
   const handleScopeScout = React.useCallback(
     async (input: {
@@ -644,6 +1002,29 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
               >
                 Lens Brief
               </button>
+              <div style={{ width: 1, height: 16, background: 'var(--border-subtle)', margin: '0 4px' }} />
+              <button
+                type="button"
+                onClick={handleOpenDocuments}
+                disabled={!activeLensId}
+                title="Open lens documents"
+                style={{
+                  border: '1px solid var(--border-subtle)',
+                  background: panelType === 'documents' ? tabActiveBackground : 'rgba(236, 179, 56, 0.16)',
+                  color: 'var(--text-heading)',
+                  borderRadius: 10,
+                  padding: '6px 10px',
+                  cursor: !activeLensId ? 'not-allowed' : 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  opacity: !activeLensId ? 0.55 : 1,
+                }}
+              >
+                Documents
+              </button>
             </>
           ) : null}
           {showProgressTab ? (
@@ -706,6 +1087,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                 showInput={false}
                 onAssemble={onAssemble}
                 isCreatingLens={isCreatingLens}
+                isStartingFollowUp={followUpProgressActive}
                 activeCreateCorrelationId={activeCreateCorrelationId}
                 activeCreateSessionId={activeCreateSessionId}
                 preflight={preflight}
@@ -735,7 +1117,7 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                 lens={lens}
                 projectId={projectId || lens?.projectId}
                 showInput={showInputInProgress}
-                onAssemble={onAssemble}
+                onAssemble={lens ? handleHomeAssemble : onAssemble}
                 onOpenGraph={() => {
                   setLensView('graph');
                   setViewMode('cockpit');
@@ -744,115 +1126,202 @@ export const LensCanvas: React.FC<LensCanvasProps> = ({
                   setLensView('map');
                   setViewMode('cockpit');
                 }}
+                onOpenDocuments={activeLensId ? handleOpenDocuments : undefined}
                 isCreatingLens={isCreatingLens}
                 assemblyStatus={assemblyStatus}
                 scoutingJobs={scoutingJobs}
                 loadingJobs={loadingJobs}
                 onRefreshJobs={loadScoutingJobs}
-            onUpdateScope={updateLensScope}
+                onUpdateScope={updateLensScope}
               />
             )}
             {viewMode === 'cockpit' && lens && (
               <>
-                {/* Map — render only when active to avoid loading map until needed */}
-                {lensView === 'map' && (
-                  <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                    <WorldMapPanel scope={lensId ? { lensId } : undefined} />
-                  </div>
-                )}
-                {/* Analysis — Q&A (plan §10) */}
-                {lensView === 'analysis' && (
-                  <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                    <QAPanel
-                      lensId={lensId!}
-                      projectId={lens?.projectId ?? projectId ?? undefined}
-                      onHighlightNodes={setQaHighlightNodeIds}
-                      onHighlightEdges={setQaHighlightEdgeIds}
-                      onHighlightTracePaths={(_paths) => {
-                        /* Trace paths: could pan/zoom to path; keep for future */
-                      }}
-                      externalOpenTrigger={qaOpenTrigger}
-                    />
-                  </div>
-                )}
-                {lensView === 'brief' && lensId && (
+                <div
+                  style={{
+                    flex: 1,
+                    minHeight: 0,
+                    display: 'flex',
+                    flexDirection: 'row',
+                    gap: 0,
+                    width: '100%',
+                    height: '100%',
+                  }}
+                >
                   <div
-                    id="lens-brief-panel"
-                    style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+                    style={{
+                      flex: 1,
+                      minHeight: 0,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      minWidth: 0,
+                      position: 'relative',
+                    }}
                   >
-                    <HorizonWatchLensSurface
-                      lensId={lensId}
-                      projectName={lens?.name || lens?.projectName || projectId || null}
-                      onOpenWorldMap={() => setLensView('map')}
-                      isAdmin={isAdmin}
-                    />
+                    {/* Map — render only when active to avoid loading map until needed */}
+                    {lensView === 'map' && (
+                      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                        <WorldMapPanel
+                          scope={lensId ? { lensId } : undefined}
+                          onOpenDocuments={activeLensId ? handleOpenDocuments : null}
+                          chatMapFocus={chatMapFocus}
+                          onClearChatMapFocus={() => setChatMapFocus(null)}
+                          onMapInspectorStateChange={handleMapInspectorStateChange}
+                          activeMapDrawerPanel={activeMapDrawerPanel}
+                          onMapDrawerPanelChange={handleMapDrawerPanelChange}
+                          mapDrawerHost={mapDrawerHost}
+                        />
+                      </div>
+                    )}
+                    {/* Analysis — Q&A (plan §10) */}
+                    {lensView === 'analysis' && (
+                      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                        <QAPanel
+                          lensId={lensId!}
+                          projectId={lens?.projectId ?? projectId ?? undefined}
+                          onHighlightNodes={setQaHighlightNodeIds}
+                          onHighlightEdges={setQaHighlightEdgeIds}
+                          onHighlightTracePaths={(_paths) => {
+                            /* Trace paths: could pan/zoom to path; keep for future */
+                          }}
+                          externalOpenTrigger={qaOpenTrigger}
+                        />
+                      </div>
+                    )}
+                    {lensView === 'brief' && lensId && (
+                      <div
+                        id="lens-brief-panel"
+                        style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+                      >
+                        <HorizonWatchLensSurface
+                          lensId={lensId}
+                          projectName={lens?.name || lens?.projectName || projectId || null}
+                          onOpenWorldMap={() => setLensView('map')}
+                          isAdmin={isAdmin}
+                        />
+                      </div>
+                    )}
+                    {/* Graph — persists when switching (plan §1). Hidden but mounted when Map/Analysis active. */}
+                    <div
+                      style={{
+                        flex: 1,
+                        minHeight: 0,
+                        display: lensView === 'graph' ? 'flex' : 'none',
+                        flexDirection: 'column',
+                        width: '100%',
+                        height: '100%',
+                      }}
+                    >
+                      <LensCanvasCockpit
+                        lensId={lensId}
+                        projectId={lens.projectId ?? projectId}
+                        qaHighlightNodeIds={qaHighlightNodeIds.length > 0 ? qaHighlightNodeIds : undefined}
+                        qaHighlightEdgeIds={qaHighlightEdgeIds.length > 0 ? qaHighlightEdgeIds : undefined}
+                        onScopeScout={handleScopeScout}
+                        inspectorActive={panelType === 'object-inspector'}
+                        onToggleInspector={() => setPanelType(panelType === 'object-inspector' ? null : 'object-inspector')}
+                        onNodeSelect={(nodeId, nodeData) => {
+                          if (import.meta.env.DEV) console.log('[LensCanvas] onNodeSelect', { nodeId, hasNodeData: !!nodeData });
+                          setMapInspectorState(null);
+                          setActiveMapDrawerPanel(null);
+                          setSelectedNodeId(nodeId);
+                          setSelectedNodeData(nodeData);
+                          // Clear edge selection when node is selected
+                          setSelectedEdgeId(null);
+                          setSelectedEdgeData(null);
+                        }}
+                        onEdgeSelect={(edgeId, edgeData) => {
+                          if (import.meta.env.DEV) console.log('[LensCanvas] onEdgeSelect', { edgeId, hasEdgeData: !!edgeData, edgeData });
+                          setMapInspectorState(null);
+                          setActiveMapDrawerPanel(null);
+                          setSelectedEdgeId(edgeId);
+                          setSelectedEdgeData(edgeData);
+                          // Clear node selection when edge is selected
+                          setSelectedNodeId(null);
+                          setSelectedNodeData(null);
+                        }}
+                      />
+                    </div>
                   </div>
-                )}
-                {/* Graph — persists when switching (plan §1). Hidden but mounted when Map/Analysis active. */}
-                <div style={{ 
-                  flex: 1, 
-                  minHeight: 0, 
-                  display: lensView === 'graph' ? 'flex' : 'none',
-                  flexDirection: 'row',
-                  gap: 0,
-                  width: '100%', 
-                  height: '100%' 
-                }}>
-                  <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', minWidth: 0, position: 'relative' }}>
-                    <LensCanvasCockpit
+
+                  {/* Right drawer */}
+                  <HorizonDrawers
+                    panelType={panelType}
+                    isMobile={isMobile}
+                    drawerWidth={drawerWidth}
+                    setDrawerWidth={setDrawerWidth}
+                    closeAllPanels={() => {
+                      mapInspectorState?.onClose();
+                      setMapInspectorState(null);
+                      setActiveMapDrawerPanel(null);
+                      setPanelType(null);
+                    }}
+                    getPanelVisibilityStyles={(visible: boolean) => ({
+                      display: visible ? 'block' : 'none',
+                      opacity: visible ? 1 : 0,
+                      transition: 'opacity 0.2s ease-in-out',
+                    })}
+                    projectId={activeProjectId}
                     lensId={lensId}
-                    projectId={lens.projectId ?? projectId}
-                    qaHighlightNodeIds={qaHighlightNodeIds.length > 0 ? qaHighlightNodeIds : undefined}
-                    qaHighlightEdgeIds={qaHighlightEdgeIds.length > 0 ? qaHighlightEdgeIds : undefined}
-                    onScopeScout={handleScopeScout}
-                    inspectorActive={panelType === 'object-inspector'}
-                    onToggleInspector={() => setPanelType(panelType === 'object-inspector' ? null : 'object-inspector')}
-                    onNodeSelect={(nodeId, nodeData) => {
-                      if (import.meta.env.DEV) console.log('[LensCanvas] onNodeSelect', { nodeId, hasNodeData: !!nodeData });
-                      setSelectedNodeId(nodeId);
-                      setSelectedNodeData(nodeData);
-                      // Clear edge selection when node is selected
-                      setSelectedEdgeId(null);
-                      setSelectedEdgeData(null);
-                    }}
-                    onEdgeSelect={(edgeId, edgeData) => {
-                      if (import.meta.env.DEV) console.log('[LensCanvas] onEdgeSelect', { edgeId, hasEdgeData: !!edgeData, edgeData });
-                      setSelectedEdgeId(edgeId);
-                      setSelectedEdgeData(edgeData);
-                      // Clear node selection when edge is selected
-                      setSelectedNodeId(null);
-                      setSelectedNodeData(null);
-                    }}
+                    lensName={lens?.name || null}
+                    selectedNodeId={selectedNodeId}
+                    selectedNodeData={selectedNodeData}
+                    selectedEdgeId={selectedEdgeId}
+                    selectedEdgeData={selectedEdgeData}
+                    mapInspectorState={mapInspectorState}
+                    mapDrawerTitle={mapDrawerTitle}
+                    setMapDrawerHost={setMapDrawerHost}
                   />
                 </div>
-
-                {/* Right drawer */}
-                <HorizonDrawers
-                  panelType={panelType}
-                  isMobile={isMobile}
-                  drawerWidth={drawerWidth}
-                  setDrawerWidth={setDrawerWidth}
-                  closeAllPanels={() => setPanelType(null)}
-                  getPanelVisibilityStyles={(visible: boolean) => ({
-                    display: visible ? 'block' : 'none',
-                    opacity: visible ? 1 : 0,
-                    transition: 'opacity 0.2s ease-in-out',
-                  })}
-                  lensId={lensId}
-                  selectedNodeId={selectedNodeId}
-                  selectedNodeData={selectedNodeData}
-                  selectedEdgeId={selectedEdgeId}
-                  selectedEdgeData={selectedEdgeData}
-                />
-              </div>
-            </>
+              </>
             )}
             {viewMode !== 'progress' && !lens && !!lensId && (
               <HorizonLoading label="Loading lens..." />
             )}
           </>
         )}
+        {activeLensId && viewMode !== 'progress' ? (
+          <LensChatDockPlaceholder
+            isOpen={chatDockOpen}
+            onOpen={() => setChatDockOpen(true)}
+            onClose={() => setChatDockOpen(false)}
+            isMobile={isMobile}
+            sidebarOpen={sidebarOpen}
+            lensId={activeLensId}
+            projectId={activeProjectId}
+            lensName={lens?.name || null}
+            activeMapFocusSourceId={chatMapFocus?.sourceMessageId || null}
+            onShowOnMap={(focus) => {
+              setChatMapFocus(focus);
+              setLensView('map');
+              setViewMode('cockpit');
+            }}
+            onClearMapFocus={() => setChatMapFocus(null)}
+          />
+        ) : null}
       </div>
+      <ScoutIntentModal
+        visible={followUpModalOpen}
+        query={followUpQuery}
+        intent={followUpIntent}
+        intentLoading={followUpIntentLoading}
+        intentError={followUpIntentError}
+        runLoading={followUpRunLoading}
+        progressLog={[]}
+        mode={followUpMode}
+        showHotPathOption={followUpHasSupplyChainContract}
+        hotPathOnly={followUpHotPathOnly}
+        onHotPathOnlyChange={setFollowUpHotPathOnly}
+        supplyChainDirection={followUpDirection}
+        onSupplyChainDirectionChange={setFollowUpDirection}
+        onModeChange={(mode) => {
+          setFollowUpMode(mode);
+          setFollowUpModeTouched(true);
+        }}
+        onClose={closeFollowUpModal}
+        onRunScout={() => void runFollowUpFromModal()}
+        theme={theme as 'light' | 'dark'}
+      />
       </div>
     </ModalWithHeader>
   );

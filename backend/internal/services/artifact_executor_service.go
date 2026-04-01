@@ -97,12 +97,14 @@ func (s *ArtifactExecutorService) GenerateSection(
 	systemInstruction := s.buildSystemInstruction(req.GenerationSettings.SystemPrompt, req.GenerationSettings.PreferredLanguage)
 
 	// Prepare GenAI request
+	maxOutputTokens, thinkingBudget := resolveGenerationBudgets(req.GenerationSettings)
 	genReq := gen_combined.GenAIRequest{
 		Model:             req.Model,
 		Prompt:            prompt,
 		SystemInstruction: systemInstruction,
 		Temperature:       0.7,
-		MaxOutputTokens:   8192,
+		MaxOutputTokens:   maxOutputTokens,
+		ThinkingBudget:    thinkingBudget,
 	}
 
 	// Execute generation
@@ -158,11 +160,13 @@ func (s *ArtifactExecutorService) GenerateSectionStreaming(
 	systemInstruction := s.buildSystemInstruction(req.GenerationSettings.SystemPrompt, req.GenerationSettings.PreferredLanguage)
 
 	// Prepare options for streaming
+	maxOutputTokens, thinkingBudget := resolveGenerationBudgets(req.GenerationSettings)
 	opts := gen_combined.Options{
 		ModelOverride:     req.Model,
 		SystemInstruction: systemInstruction,
 		Temperature:       0.7,
-		MaxOutputTokens:   8192,
+		MaxOutputTokens:   maxOutputTokens,
+		ThinkingBudget:    thinkingBudget,
 	}
 
 	// Accumulate content
@@ -422,6 +426,40 @@ func (s *ArtifactExecutorService) buildSectionPrompt(
 			}
 			builder.WriteString("\n")
 		}
+
+		if len(context.GraphContexts) > 0 {
+			builder.WriteString("**Graph-Native Evidence:**\n\n")
+			for _, graphCtx := range context.GraphContexts {
+				builder.WriteString(fmt.Sprintf("### %s\n\n", firstNonEmptyGraph(graphCtx.Subject, "Graph context")))
+				if graphCtx.Summary != "" {
+					builder.WriteString(graphCtx.Summary)
+					builder.WriteString("\n\n")
+				}
+				if sectionCtx, ok := graphCtx.Sections[section.ID]; ok {
+					builder.WriteString(fmt.Sprintf("**Section Evidence Pack: %s**\n\n", sectionCtx.Title))
+					if sectionCtx.Description != "" {
+						builder.WriteString("Description: ")
+						builder.WriteString(sectionCtx.Description)
+						builder.WriteString("\n\n")
+					}
+					if sectionCtx.Prompt != "" {
+						builder.WriteString("Reference prompt: ")
+						builder.WriteString(sectionCtx.Prompt)
+						builder.WriteString("\n\n")
+					}
+					if sectionCtx.DeterministicDraft != "" {
+						builder.WriteString("Deterministic draft:\n")
+						builder.WriteString(sectionCtx.DeterministicDraft)
+						builder.WriteString("\n\n")
+					}
+					if sectionCtx.FactsJSON != "" {
+						builder.WriteString("Facts JSON:\n```json\n")
+						builder.WriteString(sectionCtx.FactsJSON)
+						builder.WriteString("\n```\n\n")
+					}
+				}
+			}
+		}
 	}
 
 	builder.WriteString("---\n\n")
@@ -552,7 +590,8 @@ func (s *ArtifactExecutorService) AssembleDocument(
 		Prompt:            builder.String(),
 		SystemInstruction: systemInstruction,
 		Temperature:       0.5,
-		MaxOutputTokens:   8192,
+		MaxOutputTokens:   firstPositiveInt(config.GenerationSettings.MaxOutputTokens, 8192),
+		ThinkingBudget:    config.GenerationSettings.ThinkingBudget,
 	}
 
 	resp, err := s.genaiClient.GenAIGenerate(ctx, genReq)
@@ -635,6 +674,27 @@ func (s *ArtifactExecutorService) determineProvider(modelName string) string {
 	}
 
 	return "unknown"
+}
+
+func resolveGenerationBudgets(settings models.GenerationSettings) (int, *int) {
+	return firstPositiveInt(settings.MaxOutputTokens, 32768), settings.ThinkingBudget
+}
+
+func firstPositiveInt(value *int, fallback int) int {
+	if value != nil && *value > 0 {
+		return *value
+	}
+	return fallback
+}
+
+func firstNonEmptyGraph(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // Helper function to parse JSON

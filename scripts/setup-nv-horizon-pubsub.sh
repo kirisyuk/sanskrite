@@ -1,5 +1,5 @@
 #!/bin/bash
-# Скрипт настройки Pub/Sub топиков для Etigram
+# Скрипт настройки Pub/Sub топиков для Horizon (Nordic Vision)
 
 set -e
 
@@ -9,23 +9,23 @@ if [ -z "$PROJECT_ID" ]; then
   exit 1
 fi
 
-echo "=== Настройка Pub/Sub топиков для Etigram ==="
+echo "=== Настройка Pub/Sub топиков для Horizon (Nordic Vision) ==="
 echo "Проект: $PROJECT_ID"
 echo ""
 
-# Service account that publishes/subscribes (API + etigram-ws usually share it)
+# Service account that publishes/subscribes (API + nv-horizon-ws usually share it)
 SA="${PUBSUB_SERVICE_ACCOUNT:-backend@${PROJECT_ID}.iam.gserviceaccount.com}"
 
-# Агрегированные топики (используются системой realtime / etigram-ws broker)
+# Агрегированные топики (используются системой realtime / nv-horizon-ws broker)
 TOPICS=(
-  "etigram.genai.streams"
-  "etigram.discovery.events"
-  "etigram.artifact.events"
-  "etigram.interaction.events"
-  "etigram.analysis.events"
-  "etigram.verified.streams"
-  "etigram.horizon.events"
-  "etigram.operations.events"
+  "nv_horizon.genai.streams"
+  "nv_horizon.discovery.events"
+  "nv_horizon.artifact.events"
+  "nv_horizon.interaction.events"
+  "nv_horizon.analysis.events"
+  "nv_horizon.verified.streams"
+  "nv_horizon.horizon.events"
+  "nv_horizon.operations.events"
   "source.poll"
 )
 
@@ -48,7 +48,7 @@ for topic in "${TOPICS[@]}"; do
 done
 
 echo ""
-echo "=== Настройка подписок для etigram-ws ==="
+echo "=== Настройка подписок для nv-horizon-ws ==="
 echo "Subscriber создает подписки автоматически, но для надежности фиксируем их здесь (idempotent)."
 echo ""
 

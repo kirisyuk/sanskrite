@@ -813,9 +813,17 @@ type ArtifactContextSources struct {
 		From string `json:"from" firestore:"from"` // interaction/message ID
 		To   string `json:"to" firestore:"to"`     // interaction/message ID
 	} `json:"conversationRange,omitempty" firestore:"conversationRange,omitempty"`
-	Documents      []string `json:"documents,omitempty" firestore:"documents,omitempty"`           // CoreDoc IDs
-	SearchQuery    *string  `json:"searchQuery,omitempty" firestore:"searchQuery,omitempty"`       // search query for grounding
-	PinnedMessages []string `json:"pinnedMessages,omitempty" firestore:"pinnedMessages,omitempty"` // interaction IDs
+	Documents      []string                     `json:"documents,omitempty" firestore:"documents,omitempty"`           // CoreDoc IDs
+	SearchQuery    *string                      `json:"searchQuery,omitempty" firestore:"searchQuery,omitempty"`       // search query for grounding
+	PinnedMessages []string                     `json:"pinnedMessages,omitempty" firestore:"pinnedMessages,omitempty"` // interaction IDs
+	GraphSources   []ArtifactGraphContextSource `json:"graphSources,omitempty" firestore:"graphSources,omitempty"`     // graph-native context sources
+}
+
+type ArtifactGraphContextSource struct {
+	Kind       string  `json:"kind" firestore:"kind"`                                 // e.g. "lens_supply_chain_report"
+	LensID     *string `json:"lensId,omitempty" firestore:"lensId,omitempty"`         // horizon lens ID
+	ReportType *string `json:"reportType,omitempty" firestore:"reportType,omitempty"` // optional report flavor
+	TemplateID *string `json:"templateId,omitempty" firestore:"templateId,omitempty"` // optional system template ID
 }
 
 // ArtifactAutoUpdate defines auto-update behavior
@@ -879,12 +887,24 @@ type ArtifactContextSnapshot struct {
 		From string `json:"from" firestore:"from"`
 		To   string `json:"to" firestore:"to"`
 	} `json:"conversationRange,omitempty" firestore:"conversationRange,omitempty"`
-	Documents         []string `json:"documents" firestore:"documents"` // document IDs
-	SearchQuery       *string  `json:"searchQuery,omitempty" firestore:"searchQuery,omitempty"`
-	PinnedMessages    []string `json:"pinnedMessages" firestore:"pinnedMessages"`                           // interaction IDs
-	MessageCount      int      `json:"messageCount" firestore:"messageCount"`                               // number of messages in range
-	DocumentTitles    []string `json:"documentTitles" firestore:"documentTitles"`                           // titles of documents used
-	SearchResultCount *int     `json:"searchResultCount,omitempty" firestore:"searchResultCount,omitempty"` // number of search results
+	Documents         []string                       `json:"documents" firestore:"documents"` // document IDs
+	SearchQuery       *string                        `json:"searchQuery,omitempty" firestore:"searchQuery,omitempty"`
+	PinnedMessages    []string                       `json:"pinnedMessages" firestore:"pinnedMessages"`                           // interaction IDs
+	GraphSources      []ArtifactGraphContextSnapshot `json:"graphSources,omitempty" firestore:"graphSources,omitempty"`           // graph-native context used
+	MessageCount      int                            `json:"messageCount" firestore:"messageCount"`                               // number of messages in range
+	DocumentTitles    []string                       `json:"documentTitles" firestore:"documentTitles"`                           // titles of documents used
+	SearchResultCount *int                           `json:"searchResultCount,omitempty" firestore:"searchResultCount,omitempty"` // number of search results
+}
+
+type ArtifactGraphContextSnapshot struct {
+	Kind          string   `json:"kind" firestore:"kind"`
+	LensID        *string  `json:"lensId,omitempty" firestore:"lensId,omitempty"`
+	ReportType    *string  `json:"reportType,omitempty" firestore:"reportType,omitempty"`
+	Subject       *string  `json:"subject,omitempty" firestore:"subject,omitempty"`
+	SectionIDs    []string `json:"sectionIds,omitempty" firestore:"sectionIds,omitempty"`
+	VisiblePaths  *int     `json:"visiblePaths,omitempty" firestore:"visiblePaths,omitempty"`
+	VisibleHubs   *int     `json:"visibleHubs,omitempty" firestore:"visibleHubs,omitempty"`
+	VisibleChains *int     `json:"visibleChains,omitempty" firestore:"visibleChains,omitempty"`
 }
 
 // ArtifactGenerationMeta contains metadata about the generation process
@@ -913,6 +933,8 @@ type GenerationSettings struct {
 	Tone                     *string `json:"tone,omitempty" firestore:"tone,omitempty"`                                         // "formal", "casual", "technical", "executive"
 	Audience                 *string `json:"audience,omitempty" firestore:"audience,omitempty"`                                 // "technical", "executive", "general"
 	DetailLevel              *string `json:"detailLevel,omitempty" firestore:"detailLevel,omitempty"`                           // "brief", "moderate", "detailed"
+	MaxOutputTokens          *int    `json:"maxOutputTokens,omitempty" firestore:"maxOutputTokens,omitempty"`
+	ThinkingBudget           *int    `json:"thinkingBudget,omitempty" firestore:"thinkingBudget,omitempty"`
 }
 
 // PromptVersion tracks changes to section prompts
@@ -942,6 +964,7 @@ type ArtifactTemplate struct {
 	Category                     string            `json:"category" firestore:"category"`         // "business", "technical", "legal", "research"
 	Type                         string            `json:"type" firestore:"type"`                 // "system" | "community" | "custom"
 	TemplateType                 string            `json:"templateType" firestore:"templateType"` // "perspective" | "document" | other types
+	GraphSourceKinds             []string          `json:"graphSourceKinds,omitempty" firestore:"graphSourceKinds,omitempty"`
 	RecommendedFormat            string            `json:"recommendedFormat" firestore:"recommendedFormat"`
 	RecommendedFocus             string            `json:"recommendedFocus" firestore:"recommendedFocus"`
 	RecommendedOrchestratorModel string            `json:"recommendedOrchestratorModel" firestore:"recommendedOrchestratorModel"`

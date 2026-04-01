@@ -19,7 +19,7 @@ import (
 
 func main() {
 	var (
-		projectID = flag.String("project", "etigram", "GCP project id")
+		projectID = flag.String("project", "nv-horizon", "GCP project id")
 		tenantID  = flag.String("tenant", "global", "tenant id")
 		limit     = flag.Int("limit", 2000, "max affected zones to scan")
 		apply     = flag.Bool("apply", false, "apply repair actions")
@@ -70,15 +70,15 @@ func main() {
 	if vertexLocation == "" {
 		vertexLocation = "global"
 	}
-	vertexStore := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID"))
+	vertexStore := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID"))
 	if vertexStore == "" {
 		vertexStore = strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID"))
 	}
 	if vertexStore == "" {
-		vertexStore = strings.TrimSpace(gcp.GetEnvOrSecret(ctx, project, "VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID", "vertex_search_etigram_data_store_id"))
+		vertexStore = strings.TrimSpace(gcp.GetEnvOrSecret(ctx, project, "VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID", "vertex_search_nv_horizon_data_store_id"))
 	}
 	if vertexStore == "" {
-		vertexStore = "etigram-fragments-store"
+		vertexStore = "nv-horizon-fragments-store"
 	}
 	vertexClient = ai.NewVertexAISearchClient(vertexProject, vertexLocation, vertexStore, "")
 

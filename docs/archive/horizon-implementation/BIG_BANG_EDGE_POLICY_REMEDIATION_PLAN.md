@@ -53,7 +53,7 @@
 
 ### 3.2.1 Расширить ValidSourceTypes/ValidTargetTypes для легитимных пар (false-positive reject'ы)
 
-Ряд пар вызывают reject не из-за семантической ошибки, а из-за слишком узких policy-списков. По данным GCP-телеметрии (etigram, 2026-02-11) — это стабильные high-volume reject'ы для связей, которые осмысленны в реальном мире:
+Ряд пар вызывают reject не из-за семантической ошибки, а из-за слишком узких policy-списков. По данным GCP-телеметрии (nv-horizon, 2026-02-11) — это стабильные high-volume reject'ы для связей, которые осмысленны в реальном мире:
 
 | Edge Type | Расширение | Обоснование |
 |-----------|-----------|-------------|
@@ -317,7 +317,7 @@ Fix: добавить explicit whitelist rule в `expectedPathPrefix()`:
 
 ## Appendix A. GCP-телеметрия (baseline snapshot, 2026-02-11)
 
-Данные из `etigram` Cloud Logging. Использованы как основа для формирования retag rules (3.3), quarantine patterns (3.4) и policy expansion list (3.2.1).
+Данные из `nv-horizon` Cloud Logging. Использованы как основа для формирования retag rules (3.3), quarantine patterns (3.4) и policy expansion list (3.2.1).
 
 ### Top reject patterns (by frequency, ~10 min window)
 
@@ -343,13 +343,13 @@ Fix: добавить explicit whitelist rule в `expectedPathPrefix()`:
 
 ```bash
 # All non-blocking reject warnings
-gcloud logging read 'textPayload=~"ValidationPolicy would reject"' --project=etigram --limit=100 --freshness=7d
+gcloud logging read 'textPayload=~"ValidationPolicy would reject"' --project=nv-horizon --limit=100 --freshness=7d
 
 # Missing direction policy
-gcloud logging read 'textPayload=~"missing direction policy"' --project=etigram --limit=50 --freshness=7d
+gcloud logging read 'textPayload=~"missing direction policy"' --project=nv-horizon --limit=50 --freshness=7d
 
 # Penalties and reversals
-gcloud logging read 'textPayload=~"PENALTY" OR textPayload=~"REVERSING"' --project=etigram --limit=50 --freshness=7d
+gcloud logging read 'textPayload=~"PENALTY" OR textPayload=~"REVERSING"' --project=nv-horizon --limit=50 --freshness=7d
 ```
 
 ### Dual-registry evidence

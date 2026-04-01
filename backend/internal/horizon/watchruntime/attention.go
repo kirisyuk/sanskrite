@@ -35,6 +35,7 @@ type LensAttentionSubject struct {
 	LastTrigger         *horizonmodels.WatchTrigger  `json:"lastTrigger,omitempty"`
 	PromotedProposalIDs []string                     `json:"promotedProposalIds,omitempty"`
 	CoverageGaps        []string                     `json:"coverageGaps,omitempty"`
+	FocusSummary        map[string]any               `json:"focusSummary,omitempty"`
 }
 
 type LensAttentionFeedEntry struct {
@@ -131,6 +132,17 @@ func (s *Service) buildLensAttentionSubject(detail *SubjectDetail) (*LensAttenti
 	}
 	if len(detail.Runs) > 0 {
 		view.LastRun = detail.Runs[0]
+	}
+	if detail.FocusSnapshot != nil {
+		view.FocusSummary = map[string]any{
+			"riskPressure":        detail.FocusSnapshot.Position.RiskPressure,
+			"opportunityPressure": detail.FocusSnapshot.Position.OpportunityPressure,
+			"artifactExposure":    detail.FocusSnapshot.Position.ArtifactExposure,
+			"endpointCount":       len(detail.FocusSnapshot.EndpointHits),
+			"clusterCount":        len(detail.FocusSnapshot.AffinityClusters),
+			"pathExposureCount":   len(detail.FocusSnapshot.PathExposures),
+			"todayMentions":       len(detail.FocusSnapshot.TodayMentions),
+		}
 	}
 	if len(detail.Triggers) > 0 {
 		view.LastTrigger = detail.Triggers[0]

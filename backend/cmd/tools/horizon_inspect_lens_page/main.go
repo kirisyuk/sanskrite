@@ -117,7 +117,7 @@ type attentionFeedItem struct {
 func main() {
 	ctx := context.Background()
 
-	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), "etigram"), "GCP project id")
+	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), "nv-horizon"), "GCP project id")
 	tenantID := flag.String("tenant", "global", "tenant id")
 	lensID := flag.String("lens-id", "", "lens id to inspect")
 	freshness := flag.Duration("freshness", 30*24*time.Hour, "freshness window when auto-selecting latest lens")

@@ -18,7 +18,7 @@ import (
 
 func main() {
 	var (
-		projectID     = flag.String("project", "etigram", "GCP project id")
+		projectID     = flag.String("project", "nv-horizon", "GCP project id")
 		tenantID      = flag.String("tenant", "global", "tenant id")
 		limit         = flag.Int("limit", 10, "max recommendations to list")
 		reconcile     = flag.Bool("reconcile", false, "reconcile live recommendations before listing")
@@ -28,10 +28,10 @@ func main() {
 		userID        = flag.String("user", "system-smoke", "user id used for approve flow")
 		enqueueLive   = flag.Bool("enqueue-live", false, "attach real Cloud Tasks enqueue hook to scouting job creation")
 		tasksLocation = flag.String("tasks-location", "us-central1", "Cloud Tasks location")
-		tasksQueue    = flag.String("tasks-queue", "etigram-scout", "Cloud Tasks scout queue")
-		tasksTarget   = flag.String("tasks-target-url", "https://etigram-api-onq73n4gpa-uc.a.run.app/api/v1/internal/tasks/scout/run", "Cloud Tasks target URL")
-		tasksSA       = flag.String("tasks-service-account", "backend@etigram.iam.gserviceaccount.com", "OIDC service account for Cloud Tasks")
-		tasksAudience = flag.String("tasks-audience", "https://etigram-api-onq73n4gpa-uc.a.run.app", "OIDC audience for Cloud Tasks")
+		tasksQueue    = flag.String("tasks-queue", "nv-horizon-scout", "Cloud Tasks scout queue")
+		tasksTarget   = flag.String("tasks-target-url", "https://nv-horizon-api-onq73n4gpa-uc.a.run.app/api/v1/internal/tasks/scout/run", "Cloud Tasks target URL")
+		tasksSA       = flag.String("tasks-service-account", "backend@nv-horizon.iam.gserviceaccount.com", "OIDC service account for Cloud Tasks")
+		tasksAudience = flag.String("tasks-audience", "https://nv-horizon-api-onq73n4gpa-uc.a.run.app", "OIDC audience for Cloud Tasks")
 	)
 	flag.Parse()
 

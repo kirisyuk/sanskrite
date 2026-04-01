@@ -58,7 +58,7 @@ func main() {
 
 func parseOptions() toolOptions {
 	var opts toolOptions
-	flag.StringVar(&opts.ProjectID, "project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	flag.StringVar(&opts.ProjectID, "project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	flag.StringVar(&opts.TenantID, "tenant", "global", "tenant id")
 	flag.StringVar(&opts.CanonicalPath, "canonical-path", "/org/us/tesla", "anchor canonical path")
 	flag.StringVar(&opts.CanonicalContains, "canonical-contains", "", "substring filter for canonical paths when scanning candidates")

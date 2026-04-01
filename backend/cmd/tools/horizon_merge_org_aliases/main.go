@@ -44,7 +44,7 @@ func slugify(s string) string {
 
 func main() {
 	var (
-		projectID     = flag.String("project", getenvDefault("GCP_PROJECT", "etigram"), "GCP project id")
+		projectID     = flag.String("project", getenvDefault("GCP_PROJECT", "nv-horizon"), "GCP project id")
 		apply         = flag.Bool("apply", false, "Apply changes (default: dry-run only)")
 		dryRun        = flag.Bool("dry-run", false, "Force dry-run even if --apply is provided")
 		limit         = flag.Int("limit", 0, "Max number of org fragments to process (0 = no limit)")
@@ -352,7 +352,7 @@ func getenvDefault(k, def string) string {
 }
 
 func getSecret(name string) string {
-	cmd := exec.Command("gcloud", "secrets", "versions", "access", "latest", "--secret", name, "--project", getenvDefault("GCP_PROJECT", "etigram"))
+	cmd := exec.Command("gcloud", "secrets", "versions", "access", "latest", "--secret", name, "--project", getenvDefault("GCP_PROJECT", "nv-horizon"))
 	out, err := cmd.Output()
 	if err != nil {
 		return ""

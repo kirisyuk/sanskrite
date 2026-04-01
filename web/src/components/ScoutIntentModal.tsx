@@ -59,10 +59,35 @@ function isSupplyChainContractType(value?: string): boolean {
   return /^(supply-chain|value-chain)$/i.test(String(value || '').trim());
 }
 
+function titleCaseWords(value: string): string {
+  return String(value || '')
+    .trim()
+    .split(/\s+/g)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+function humanizeContractType(value?: string): string {
+  const contractType = String(value || '').trim().toLowerCase();
+  if (!contractType) return 'Domain';
+  if (contractType === 'supply-chain') return 'Supply chain';
+  if (contractType === 'value-chain') return 'Value chain';
+  return titleCaseWords(contractType.replace(/[-_]+/g, ' '));
+}
+
 function getSupplyChainGraphBuildModeLabel(value?: string): string {
   const mode = String(value || '').trim().toLowerCase();
   if (mode === 'hot_path_only') return 'Execution mode: Hot path only';
   if (mode === 'hot_path_plus_graph') return 'Execution mode: Hot path + graph';
+  return '';
+}
+
+function getSupplyChainDirectionLabel(direction?: string): string {
+  const value = String(direction || '').trim().toLowerCase();
+  if (value === 'upstream') return 'Direction: Upstream';
+  if (value === 'downstream') return 'Direction: Downstream';
+  if (value === 'both') return 'Direction: Both';
   return '';
 }
 
@@ -89,6 +114,26 @@ export function ScoutIntentModal({
 
   const hasIntent = intent && (intent.anchors?.length || intent.domains?.length || intent.focus);
   const canRun = hasIntent && !runLoading;
+  const resolvedDomainTypes = Array.from(
+    new Set(
+      (intent?.domains || [])
+        .map((domain) => humanizeContractType(domain?.contractType))
+        .filter(Boolean),
+    ),
+  );
+  const runBehaviorLabel = (() => {
+    if (mode === 'supply_chain') {
+      if (hotPathOnly && supplyChainDirection !== 'both') {
+        return `Supply-chain hot path ${supplyChainDirection}`;
+      }
+      if (supplyChainDirection === 'both') {
+        return 'Supply-chain full graph expansion';
+      }
+      return `Supply-chain directed expansion (${supplyChainDirection})`;
+    }
+    if (mode === 'governance') return 'Governance expansion';
+    return 'General graph expansion';
+  })();
 
   return (
     <div
@@ -319,6 +364,36 @@ export function ScoutIntentModal({
                 </div>
               )}
 
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary-strong)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                  Run Behavior
+                </div>
+                <div style={{ display: 'grid', gap: 8 }}>
+                  <div style={{ fontSize: 13, color: 'var(--text-heading)' }}>{runBehaviorLabel}</div>
+                  {resolvedDomainTypes.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {resolvedDomainTypes.map((label) => (
+                        <span
+                          key={label}
+                          style={{
+                            fontSize: 10,
+                            padding: '3px 8px',
+                            borderRadius: 999,
+                            border: '1px solid var(--border-subtle)',
+                            background: theme === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
+                            color: 'var(--text-secondary-strong)',
+                            fontWeight: 700,
+                            letterSpacing: 0.2,
+                          }}
+                        >
+                          Resolved: {label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary-strong)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.4 }}>
                 Resolved Intent
               </div>
@@ -359,7 +434,11 @@ export function ScoutIntentModal({
                   <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 6 }}>Domains ({intent.domains.length})</div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     {intent.domains.map((d, i) => {
+                      const contractTypeLabel = humanizeContractType(d.contractType);
                       const graphBuildModeLabel = isSupplyChainContractType(d.contractType) ? getSupplyChainGraphBuildModeLabel(d.supplyChainExecutionPlan?.graphBuildMode) : '';
+                      const directionLabel = isSupplyChainContractType(d.contractType)
+                        ? getSupplyChainDirectionLabel(d.supplyChainExecutionPlan?.queries?.[0]?.direction)
+                        : '';
                       return (
                         <div
                           key={i}
@@ -372,17 +451,75 @@ export function ScoutIntentModal({
                           }}
                         >
                           <div style={{ fontWeight: 600, color: 'var(--text-heading)', marginBottom: 2 }}>
-                            {d.title || d.contractType || humanizePath(d.canonicalPath)}
+                            {d.title || contractTypeLabel || humanizePath(d.canonicalPath)}
+                          </div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                            <span
+                              style={{
+                                fontSize: 10,
+                                padding: '3px 8px',
+                                borderRadius: 999,
+                                border: '1px solid var(--border-subtle)',
+                                background: theme === 'dark' ? 'rgba(59,130,246,0.14)' : 'rgba(59,130,246,0.10)',
+                                color: 'var(--text-heading)',
+                                fontWeight: 700,
+                                letterSpacing: 0.2,
+                              }}
+                            >
+                              Type: {contractTypeLabel}
+                            </span>
+                            {directionLabel && (
+                              <span
+                                style={{
+                                  fontSize: 10,
+                                  padding: '3px 8px',
+                                  borderRadius: 999,
+                                  border: '1px solid var(--border-subtle)',
+                                  background: theme === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
+                                  color: 'var(--text-secondary-strong)',
+                                  fontWeight: 700,
+                                  letterSpacing: 0.2,
+                                }}
+                              >
+                                {directionLabel}
+                              </span>
+                            )}
+                            {graphBuildModeLabel && (
+                              <span
+                                style={{
+                                  fontSize: 10,
+                                  padding: '3px 8px',
+                                  borderRadius: 999,
+                                  border: '1px solid var(--border-subtle)',
+                                  background: theme === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
+                                  color: 'var(--text-secondary-strong)',
+                                  fontWeight: 700,
+                                  letterSpacing: 0.2,
+                                }}
+                              >
+                                {graphBuildModeLabel}
+                              </span>
+                            )}
                           </div>
                           {d.description && (
                             <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>{d.description}</div>
                           )}
-                          {graphBuildModeLabel && (
-                            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>{graphBuildModeLabel}</div>
-                          )}
                           {d.firstOrderEntities && d.firstOrderEntities.length > 0 && (
                             <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginTop: 4 }}>
                               +{d.firstOrderEntities.length} first-order entities
+                            </div>
+                          )}
+                          {d.canonicalPath && (
+                            <div
+                              style={{
+                                fontSize: 10,
+                                color: 'var(--text-tertiary)',
+                                marginTop: 6,
+                                fontFamily: 'monospace',
+                                wordBreak: 'break-all',
+                              }}
+                            >
+                              {d.canonicalPath}
                             </div>
                           )}
                         </div>

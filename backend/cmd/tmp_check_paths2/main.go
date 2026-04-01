@@ -6,7 +6,7 @@ import (
 )
 func main(){
   ctx:=context.Background()
-  fs,err:=gcp.NewFirestoreClient(ctx,"etigram"); if err!=nil { panic(err) }
+  fs,err:=gcp.NewFirestoreClient(ctx,"nv-horizon"); if err!=nil { panic(err) }
   defer fs.Close(); db:=fs.Client()
   q:=db.Collection("horizon_materialized_artifacts").Where("tenantId","==","global").Where("kind","==","SUPPLY_CHAIN_PATH").Where("lensId","==","Pa5qjiSQDeZyKqCnrlEb")
   docs,err:=q.Documents(ctx).GetAll(); if err!=nil { panic(err) }

@@ -23,7 +23,7 @@ type dupRow struct {
 
 func main() {
 	ctx := context.Background()
-	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	tenantID := flag.String("tenant", "global", "tenant id")
 	prefix := flag.String("prefix", "", "canonical path prefix filter")
 	limit := flag.Int("limit", 25, "top duplicate paths to print")

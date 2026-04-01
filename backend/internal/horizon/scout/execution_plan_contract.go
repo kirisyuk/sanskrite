@@ -49,6 +49,7 @@ func defaultExecutionPlanContract(domainModes, specialties []string) ExecutionPl
 	modes := taxonomy.NormalizeDomainModes(domainModes)
 	specs := taxonomy.NormalizeSpecialties(specialties)
 	supplyChainMode := taxonomy.HasDomainMode(modes, taxonomy.DomainModeSupplyChain) ||
+		taxonomy.HasDomainMode(modes, taxonomy.DomainModeServiceChain) ||
 		taxonomy.HasSpecialty(specs, taxonomy.SpecialtySupplyChain)
 
 	p := ExecutionPlanContract{

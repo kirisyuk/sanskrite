@@ -20,7 +20,7 @@ import (
 
 func main() {
 	ctx := context.Background()
-	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	tenantID := flag.String("tenant", "", "tenant id; defaults to job tenant or global")
 	jobID := flag.String("job", "", "scouting job id to inspect")
 	artifactKey := flag.String("artifact-key", "", "assembly artifact canonical key")

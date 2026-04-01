@@ -1,0 +1,440 @@
+{
+  "focus": {
+    "anchorCanonicalPath": "/org/us/acme-batteries",
+    "displayLabel": "Acme Batteries",
+    "relatedCanonicalPaths": [
+      "/fac/us/acme-nevada-gigafactory"
+    ],
+    "domainModes": [
+      "supply_chain",
+      "battery"
+    ],
+    "queryOverrides": [
+      "Acme Batteries battery supply chain Nevada Europe"
+    ],
+    "universeDepth": 2,
+    "lookbackHours": 36,
+    "maxImpactedEntities": 6,
+    "maxPropagationHops": 5
+  },
+  "fragments": [
+    {
+      "id": "frag-acme-org",
+      "tenantId": "global",
+      "canonicalPath": "/org/us/acme-batteries",
+      "type": "ORGANIZATION",
+      "entityPath": "/Organization/Corporation",
+      "status": "active",
+      "state": {},
+      "metadata": {
+        "createdAt": "2026-03-25T00:00:00Z",
+        "lastUpdatedAt": "2026-03-25T00:00:00Z",
+        "lastVerifiedAt": "2026-03-25T00:00:00Z",
+        "lastFactsSeenAt": "2026-03-25T00:00:00Z",
+        "lastFactsAppliedAt": "2026-03-25T00:00:00Z",
+        "sourceFrameId": "",
+        "epistemicStatus": "verified"
+      },
+      "governance": {
+        "owner": "SYSTEM",
+        "status": "ACTIVE"
+      },
+      "labels": {
+        "en": "Acme Batteries"
+      }
+    },
+    {
+      "id": "frag-acme-fac",
+      "tenantId": "global",
+      "canonicalPath": "/fac/us/acme-nevada-gigafactory",
+      "type": "FACILITY",
+      "entityPath": "/Facility/Industrial",
+      "status": "active",
+      "state": {},
+      "metadata": {
+        "createdAt": "2026-03-25T00:00:00Z",
+        "lastUpdatedAt": "2026-03-25T00:00:00Z",
+        "lastVerifiedAt": "2026-03-25T00:00:00Z",
+        "lastFactsSeenAt": "2026-03-25T00:00:00Z",
+        "lastFactsAppliedAt": "2026-03-25T00:00:00Z",
+        "sourceFrameId": "",
+        "epistemicStatus": "verified"
+      },
+      "governance": {
+        "owner": "SYSTEM",
+        "status": "ACTIVE"
+      },
+      "labels": {
+        "en": "Acme Nevada Gigafactory"
+      }
+    },
+    {
+      "id": "frag-andes-lithium",
+      "tenantId": "global",
+      "canonicalPath": "/org/cl/andes-lithium",
+      "type": "ORGANIZATION",
+      "entityPath": "/Organization/Corporation",
+      "status": "active",
+      "state": {},
+      "metadata": {
+        "createdAt": "2026-03-25T00:00:00Z",
+        "lastUpdatedAt": "2026-03-25T00:00:00Z",
+        "lastVerifiedAt": "2026-03-25T00:00:00Z",
+        "lastFactsSeenAt": "2026-03-25T00:00:00Z",
+        "lastFactsAppliedAt": "2026-03-25T00:00:00Z",
+        "sourceFrameId": "",
+        "epistemicStatus": "verified"
+      },
+      "governance": {
+        "owner": "SYSTEM",
+        "status": "ACTIVE"
+      },
+      "labels": {
+        "en": "Andes Lithium"
+      }
+    },
+    {
+      "id": "frag-euro-mobility",
+      "tenantId": "global",
+      "canonicalPath": "/org/de/euro-mobility",
+      "type": "ORGANIZATION",
+      "entityPath": "/Organization/Corporation",
+      "status": "active",
+      "state": {},
+      "metadata": {
+        "createdAt": "2026-03-25T00:00:00Z",
+        "lastUpdatedAt": "2026-03-25T00:00:00Z",
+        "lastVerifiedAt": "2026-03-25T00:00:00Z",
+        "lastFactsSeenAt": "2026-03-25T00:00:00Z",
+        "lastFactsAppliedAt": "2026-03-25T00:00:00Z",
+        "sourceFrameId": "",
+        "epistemicStatus": "verified"
+      },
+      "governance": {
+        "owner": "SYSTEM",
+        "status": "ACTIVE"
+      },
+      "labels": {
+        "en": "Euro Mobility"
+      }
+    },
+    {
+      "id": "frag-citybus-fleet",
+      "tenantId": "global",
+      "canonicalPath": "/org/fr/citybus-fleet",
+      "type": "ORGANIZATION",
+      "entityPath": "/Organization/Corporation",
+      "status": "active",
+      "state": {},
+      "metadata": {
+        "createdAt": "2026-03-25T00:00:00Z",
+        "lastUpdatedAt": "2026-03-25T00:00:00Z",
+        "lastVerifiedAt": "2026-03-25T00:00:00Z",
+        "lastFactsSeenAt": "2026-03-25T00:00:00Z",
+        "lastFactsAppliedAt": "2026-03-25T00:00:00Z",
+        "sourceFrameId": "",
+        "epistemicStatus": "verified"
+      },
+      "governance": {
+        "owner": "SYSTEM",
+        "status": "ACTIVE"
+      },
+      "labels": {
+        "en": "CityBus Fleet"
+      }
+    },
+    {
+      "id": "frag-bab-el-mandeb",
+      "tenantId": "global",
+      "canonicalPath": "/zone/sea/logistics/bab-el-mandeb",
+      "type": "AFFECTED_ZONE",
+      "entityPath": "/Zone/Affected",
+      "status": "active",
+      "state": {},
+      "metadata": {
+        "createdAt": "2026-03-25T00:00:00Z",
+        "lastUpdatedAt": "2026-03-25T00:00:00Z",
+        "lastVerifiedAt": "2026-03-25T00:00:00Z",
+        "lastFactsSeenAt": "2026-03-25T00:00:00Z",
+        "lastFactsAppliedAt": "2026-03-25T00:00:00Z",
+        "sourceFrameId": "",
+        "epistemicStatus": "verified"
+      },
+      "governance": {
+        "owner": "SYSTEM",
+        "status": "ACTIVE"
+      },
+      "labels": {
+        "en": "Bab el-Mandeb"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-owns-factory",
+      "tenantId": "global",
+      "sourceFragmentId": "frag-acme-org",
+      "targetFragmentId": "frag-acme-fac",
+      "type": "OWNS",
+      "properties": {
+        "criticality": 0.8,
+        "amplification": 1.0,
+        "latencyHours": 2
+      },
+      "provenance": {
+        "sourceType": "fixture"
+      },
+      "metadata": {
+        "sourceFrameId": "fixture",
+        "createdAt": "2026-03-25T00:00:00Z",
+        "lastUpdatedAt": "2026-03-25T00:00:00Z"
+      }
+    },
+    {
+      "id": "edge-supplier-to-factory",
+      "tenantId": "global",
+      "sourceFragmentId": "frag-andes-lithium",
+      "targetFragmentId": "frag-acme-fac",
+      "type": "SUPPLIES_TO",
+      "properties": {
+        "criticality": 0.92,
+        "amplification": 1.0,
+        "latencyHours": 24
+      },
+      "provenance": {
+        "sourceType": "fixture"
+      },
+      "metadata": {
+        "sourceFrameId": "fixture",
+        "createdAt": "2026-03-25T00:00:00Z",
+        "lastUpdatedAt": "2026-03-25T00:00:00Z"
+      }
+    },
+    {
+      "id": "edge-factory-to-customer",
+      "tenantId": "global",
+      "sourceFragmentId": "frag-acme-fac",
+      "targetFragmentId": "frag-euro-mobility",
+      "type": "SUPPLIES_TO",
+      "properties": {
+        "criticality": 0.85,
+        "amplification": 1.0,
+        "latencyHours": 24
+      },
+      "provenance": {
+        "sourceType": "fixture"
+      },
+      "metadata": {
+        "sourceFrameId": "fixture",
+        "createdAt": "2026-03-25T00:00:00Z",
+        "lastUpdatedAt": "2026-03-25T00:00:00Z"
+      }
+    },
+    {
+      "id": "edge-customer-to-fleet",
+      "tenantId": "global",
+      "sourceFragmentId": "frag-euro-mobility",
+      "targetFragmentId": "frag-citybus-fleet",
+      "type": "SUPPLIES_TO",
+      "properties": {
+        "criticality": 0.58,
+        "amplification": 0.88,
+        "latencyHours": 48
+      },
+      "provenance": {
+        "sourceType": "fixture"
+      },
+      "metadata": {
+        "sourceFrameId": "fixture",
+        "createdAt": "2026-03-25T00:00:00Z",
+        "lastUpdatedAt": "2026-03-25T00:00:00Z"
+      }
+    },
+    {
+      "id": "edge-factory-depends-zone",
+      "tenantId": "global",
+      "sourceFragmentId": "frag-acme-fac",
+      "targetFragmentId": "frag-bab-el-mandeb",
+      "type": "DEPENDS_ON",
+      "properties": {
+        "criticality": 0.7,
+        "amplification": 0.9,
+        "latencyHours": 36
+      },
+      "provenance": {
+        "sourceType": "fixture"
+      },
+      "metadata": {
+        "sourceFrameId": "fixture",
+        "createdAt": "2026-03-25T00:00:00Z",
+        "lastUpdatedAt": "2026-03-25T00:00:00Z"
+      }
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "artifact-acme-lfp-europe",
+      "tenantId": "global",
+      "kind": "SUPPLY_CHAIN_PATH",
+      "canonicalKey": "/artifact/supply-chain/global/acme-lfp-europe",
+      "payload": {
+        "v": 1,
+        "nodes": [],
+        "edges": [],
+        "legs": []
+      },
+      "createdAt": "2026-03-25T00:00:00Z",
+      "updatedAt": "2026-03-30T08:00:00Z",
+      "status": "active",
+      "displayName": "Andes Lithium -> Acme Batteries -> Euro Mobility",
+      "nodeRefs": [
+        "/org/cl/andes-lithium",
+        "/fac/us/acme-nevada-gigafactory",
+        "/org/us/acme-batteries",
+        "/org/de/euro-mobility",
+        "/org/fr/citybus-fleet"
+      ],
+      "geoRefs": [
+        "/loc/cl",
+        "/loc/us",
+        "/loc/de"
+      ],
+      "zoneRefs": [
+        "/zone/sea/logistics/bab-el-mandeb"
+      ],
+      "affectedZoneRefs": [
+        "/zone/sea/logistics/bab-el-mandeb"
+      ],
+      "anchorSupplier": "/org/cl/andes-lithium",
+      "anchorCustomer": "/org/de/euro-mobility",
+      "productAxis": "/product/battery/lfp-battery-pack",
+      "legCount": 4,
+      "bindingScore": 0.74,
+      "pathStressScore": 0.71,
+      "bottleneckLegIndex": 1,
+      "recoveryLatencyHours": 120
+    }
+  ],
+  "facts": [
+    {
+      "id": "fact-red-sea",
+      "tenantId": "global",
+      "version": 1,
+      "createdAt": "2026-03-30T07:30:00Z",
+      "updatedAt": "2026-03-30T07:30:00Z",
+      "createdBy": "fixture",
+      "updatedBy": "fixture",
+      "labels": {
+        "en": "Red Sea disruption"
+      },
+      "status": "active",
+      "canonicalPaths": [
+        "/zone/sea/logistics/bab-el-mandeb"
+      ],
+      "kind": "event",
+      "type": "risk:logistics_capacity",
+      "title": "Red Sea transit disruption intensifies",
+      "summary": "Shipping disruption around Bab el-Mandeb raises transit uncertainty for battery supply routes into Europe.",
+      "confidence": 0.89,
+      "occurredAt": "2026-03-30T06:00:00Z",
+      "observedAt": "2026-03-30T07:30:00Z",
+      "sourceIds": [
+        "wm-red-sea"
+      ],
+      "sourceRefs": [
+        {
+          "sourceId": "wm-red-sea",
+          "sourceType": "rss"
+        }
+      ]
+    },
+    {
+      "id": "fact-tax-credit",
+      "tenantId": "global",
+      "version": 1,
+      "createdAt": "2026-03-30T05:00:00Z",
+      "updatedAt": "2026-03-30T05:00:00Z",
+      "createdBy": "fixture",
+      "updatedBy": "fixture",
+      "labels": {
+        "en": "Domestic manufacturing support"
+      },
+      "status": "active",
+      "canonicalPaths": [
+        "/org/us/acme-batteries"
+      ],
+      "kind": "event",
+      "type": "opportunity:policy_support",
+      "title": "Domestic manufacturing support expands",
+      "summary": "Expanded manufacturing support improves local battery production economics for qualified facilities.",
+      "confidence": 0.77,
+      "occurredAt": "2026-03-30T04:00:00Z",
+      "observedAt": "2026-03-30T05:00:00Z",
+      "sourceIds": [
+        "wm-us-policy"
+      ],
+      "sourceRefs": [
+        {
+          "sourceId": "wm-us-policy",
+          "sourceType": "gov"
+        }
+      ]
+    }
+  ],
+  "signals": [
+    {
+      "id": "signal-red-sea",
+      "factId": "fact-red-sea",
+      "createdAt": "2026-03-30T07:35:00Z",
+      "axis": "logistics_capacity",
+      "mechanism": "shipping_disruption",
+      "amplitude": 0.84,
+      "polarity": "risk",
+      "seedPaths": [
+        "/zone/sea/logistics/bab-el-mandeb"
+      ],
+      "locationPath": "/zone/sea/logistics/bab-el-mandeb",
+      "constraints": {
+        "timeHorizon": "short_term",
+        "modality": "disruption",
+        "likelihood": 0.91,
+        "impact": 0.88,
+        "escalationLevel": "warning",
+        "escalationConfidence": 0.83
+      },
+      "confidence": 0.9,
+      "sourceRefs": [
+        "wm-red-sea"
+      ],
+      "observedAt": "2026-03-30T07:30:00Z",
+      "chainRefs": [
+        "/artifact/supply-chain/global/acme-lfp-europe"
+      ]
+    },
+    {
+      "id": "signal-tax-credit",
+      "factId": "fact-tax-credit",
+      "createdAt": "2026-03-30T05:05:00Z",
+      "axis": "industrial_policy",
+      "mechanism": "manufacturing_support",
+      "amplitude": 0.58,
+      "polarity": "opportunity",
+      "seedPaths": [
+        "/org/us/acme-batteries"
+      ],
+      "constraints": {
+        "timeHorizon": "medium_term",
+        "modality": "confirmed",
+        "likelihood": 0.73,
+        "impact": 0.69,
+        "escalationLevel": "watch",
+        "escalationConfidence": 0.7
+      },
+      "confidence": 0.78,
+      "sourceRefs": [
+        "wm-us-policy"
+      ],
+      "observedAt": "2026-03-30T05:00:00Z"
+    }
+  ]
+}

@@ -26,7 +26,7 @@ import (
 
 func main() {
 	var (
-		projectID       = flag.String("project", getenvDefault("GCP_PROJECT", "etigram"), "GCP project id")
+		projectID       = flag.String("project", getenvDefault("GCP_PROJECT", "nv-horizon"), "GCP project id")
 		bucket          = flag.String("bucket", "", "GCS bucket for horizon fragments (default: ${PROJECT_ID}-horizon-fragments)")
 		tenantID        = flag.String("tenant", "global", "TenantID for Horizon fragments (normally 'global')")
 		limit           = flag.Int("limit", 0, "Max number of fragments to export (0 = no limit)")
@@ -46,7 +46,7 @@ func main() {
 	defer cancel()
 
 	if *bucket == "" {
-		*bucket = firstNonEmpty(os.Getenv("ETIGRAM_FRAGMENTS_BUCKET"), os.Getenv("HORIZON_FRAGMENTS_BUCKET"))
+		*bucket = firstNonEmpty(os.Getenv("NV_HORIZON_FRAGMENTS_BUCKET"), os.Getenv("HORIZON_FRAGMENTS_BUCKET"))
 	}
 	if *bucket == "" {
 		*bucket = defaultHorizonFragmentsBucket(*projectID)
@@ -285,8 +285,8 @@ func firstNonEmpty(values ...string) string {
 
 func defaultHorizonFragmentsBucket(projectID string) string {
 	projectID = strings.TrimSpace(projectID)
-	if strings.EqualFold(projectID, "etigram") {
-		return "etigram-horizon-fragments"
+	if strings.EqualFold(projectID, "nv-horizon") {
+		return "nv-horizon-fragments"
 	}
 	return fmt.Sprintf("%s-horizon-fragments", projectID)
 }

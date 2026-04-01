@@ -327,7 +327,7 @@ const ThinkingPlaceholder = React.memo<{
             inset: 0,
             background:
               'linear-gradient(90deg, transparent, var(--white-20), transparent)',
-            animation: 'etg-shimmer 2s infinite',
+            animation: 'nv-shimmer 2s infinite',
           }}
         />
       </div>
@@ -347,7 +347,7 @@ const ThinkingPlaceholder = React.memo<{
             inset: 0,
             background:
               'linear-gradient(90deg, transparent, var(--white-20), transparent)',
-            animation: 'etg-shimmer 2s infinite',
+            animation: 'nv-shimmer 2s infinite',
           }}
         />
       </div>

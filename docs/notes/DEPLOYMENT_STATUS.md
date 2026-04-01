@@ -150,8 +150,8 @@ git commit -m "Update types from backend models"
    - `discovery.project`
 
 4. **Cloud Run Services**:
-   - `etigram-api` (backend)
-   - `etigram-telegram` (Telegram service)
+   - `nv-horizon-api` (backend)
+   - `nv-horizon-telegram` (Telegram service)
 
 5. **Cloud Storage**:
    - `gs://PROJECT_ID-web-static` (frontend статика)
@@ -164,15 +164,15 @@ git commit -m "Update types from backend models"
 
 ```bash
 # 1. Проверить что трафик на последней ревизии
-gcloud run services describe etigram-api --region us-central1 \
+gcloud run services describe nv-horizon-api --region us-central1 \
   --format="value(status.traffic[0].revisionName)"
 
 # 2. Health check backend
-API_URL=$(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')
+API_URL=$(gcloud run services describe nv-horizon-api --region us-central1 --format='value(status.url)')
 curl "$API_URL/healthz"
 
 # 3. Проверить логи на ошибки
-gcloud run services logs read etigram-api --region us-central1 --limit 20
+gcloud run services logs read nv-horizon-api --region us-central1 --limit 20
 
 # 4. Проверить frontend (открыть в браузере)
 echo "Frontend: gs://$(gcloud config get-value project)-web-static/index.html"

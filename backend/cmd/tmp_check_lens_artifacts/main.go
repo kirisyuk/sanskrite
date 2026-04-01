@@ -8,7 +8,7 @@ import (
 )
 func main(){
   ctx:=context.Background()
-  c,err:=firestore.NewClient(ctx,"etigram")
+  c,err:=firestore.NewClient(ctx,"nv-horizon")
   if err!=nil { panic(err) }
   defer c.Close()
   lr:=horizonrepo.NewLensesRepository(c)

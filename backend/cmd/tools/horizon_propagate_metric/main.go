@@ -21,7 +21,7 @@ import (
 
 func main() {
 	var (
-		projectID     = flag.String("project", "etigram", "GCP project id")
+		projectID     = flag.String("project", "nv-horizon", "GCP project id")
 		canonicalPath = flag.String("path", "/org/byd", "canonical path to propagate from (e.g., /org/byd)")
 		metricName    = flag.String("metric", "/metric/risk/supply_chain_criticality", "metric name to change")
 		delta         = flag.Float64("delta", 0.1, "delta to apply to the source metric before propagation")

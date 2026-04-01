@@ -17,7 +17,7 @@ import (
 
 func main() {
 	ctx := context.Background()
-	projectID := flag.String("project", firstNonEmptyString(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	projectID := flag.String("project", firstNonEmptyString(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	tenantID := flag.String("tenant", "global", "tenant id")
 	zonesArg := flag.String("zones", "", "comma-separated canonical zone paths")
 	supplyLimit := flag.Int("supply-limit", 4000, "max supply links to inspect for dynamic affectedZoneRefs")

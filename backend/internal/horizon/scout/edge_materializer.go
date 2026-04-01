@@ -236,7 +236,8 @@ func (e *ScoutEngine) materializeRelationEdge(
 	dstPathActual := resolvePathByID(edgeTargetID)
 	canonFromEdgeType := ""
 	canonReason := ""
-	isSupplyChainMode := taxonomy.HasDomainMode(getJobDomainModes(job), taxonomy.DomainModeSupplyChain)
+	isSupplyChainMode := taxonomy.HasDomainMode(getJobDomainModes(job), taxonomy.DomainModeSupplyChain) ||
+		taxonomy.HasDomainMode(getJobDomainModes(job), taxonomy.DomainModeServiceChain)
 	canon := policy.ApplyEdgeCanonicalizationPolicy(policy.EdgeCanonicalizationInput{
 		EdgeType:          edgeType,
 		SourceType:        srcTypeActual,

@@ -42,7 +42,7 @@ func NormalizeOrderedRouteRefs(refs []string) []string {
 	out := make([]string, 0, len(refs))
 	prev := ""
 	for _, ref := range refs {
-		ref = strings.TrimSpace(ref)
+		ref = canonicalizeTransportViaRef(ref)
 		if ref == "" || ref == prev {
 			continue
 		}

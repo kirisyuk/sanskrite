@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	projectID := flag.String("project", "etigram", "GCP project id")
+	projectID := flag.String("project", "nv-horizon", "GCP project id")
 	jobID := flag.String("job", "", "root scout job id")
 	flag.Parse()
 

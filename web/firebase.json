@@ -1,6 +1,6 @@
 {
   "hosting": {
-    "site": "etigram",
+    "site": "nv-horizon-test",
     "public": "dist",
     "ignore": [
       "firebase.json",

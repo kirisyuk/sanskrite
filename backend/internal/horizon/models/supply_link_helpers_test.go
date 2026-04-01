@@ -281,6 +281,52 @@ func TestBuildSupplyLinkRouteVariantKey(t *testing.T) {
 	}
 }
 
+func TestNormalizeTransportViaRefs_CanonicalizesKnownAliases(t *testing.T) {
+	got := NormalizeTransportViaRefs([]string{
+		"/fac/ae/jebel-ali-terminal",
+		"/fac/ae/jebel-ali-port",
+		"/fac/eg/suez-canal",
+		"/fac/om/port-of-sohar",
+		"/fac/sea/strait-of-malacca",
+	})
+	want := []string{
+		"/fac/ae/jebel-ali-port",
+		"/fac/eg/suez-terminal",
+		"/fac/om/sohar-port",
+		"/fac/int/strait-of-malacca",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("via=%v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("via=%v, want %v", got, want)
+		}
+	}
+}
+
+func TestNormalizeOrderedRouteRefs_CanonicalizesKnownAliases(t *testing.T) {
+	got := NormalizeOrderedRouteRefs([]string{
+		"/fac/jp/hiroshima-plant",
+		"/fac/ae/jebel-ali-terminal",
+		"/fac/om/port-of-sohar",
+		"/fac/om/sohar-port",
+	})
+	want := []string{
+		"/fac/jp/hiroshima-plant",
+		"/fac/ae/jebel-ali-port",
+		"/fac/om/sohar-port",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("refs=%v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("refs=%v, want %v", got, want)
+		}
+	}
+}
+
 func TestMergeSupplyLinkRouteVariants_PreservesDistinctRoutes(t *testing.T) {
 	left := []SupplyLinkRouteVariant{
 		NewSupplyLinkRouteVariant([]string{"/fac/eg/suez-terminal"}, "", 0.72),

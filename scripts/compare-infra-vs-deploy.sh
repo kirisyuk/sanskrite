@@ -24,9 +24,9 @@ DEPLOY_TOPICS=(
   artifact.generation.completed artifact.generation.error
   analysis.status agent.update
   interaction.created interaction.updated verified.stream
-  etigram.genai.streams etigram.discovery.events etigram.artifact.events
-  etigram.interaction.events etigram.analysis.events etigram.verified.streams
-  etigram.horizon.events etigram.operations.events source.poll
+  nv_horizon.genai.streams nv_horizon.discovery.events nv_horizon.artifact.events
+  nv_horizon.interaction.events nv_horizon.analysis.events nv_horizon.verified.streams
+  nv_horizon.horizon.events nv_horizon.operations.events source.poll
 )
 
 echo "--- Pub/Sub Topics (есть в GCP, нет в deploy) ---"
@@ -41,13 +41,13 @@ done
 [[ -z "$INFRA_TOPICS" ]] && echo "  (нет топиков или ошибка доступа)"
 
 # --- Pub/Sub Subscriptions ---
-# Deploy создаёт: etigram-ws (agg_topics), worker subs.
+# Deploy создаёт: nv-horizon-ws (agg_topics), worker subs.
 DEPLOY_SUBS=(
-  "etigram.genai.streams-ws-broker" "etigram.discovery.events-ws-broker" "etigram.artifact.events-ws-broker"
-  "etigram.interaction.events-ws-broker" "etigram.analysis.events-ws-broker" "etigram.verified.streams-ws-broker"
-  "etigram.horizon.events-ws-broker" "etigram.operations.events-ws-broker" "source.poll-ws-broker"
+  "nv_horizon.genai.streams-ws-broker" "nv_horizon.discovery.events-ws-broker" "nv_horizon.artifact.events-ws-broker"
+  "nv_horizon.interaction.events-ws-broker" "nv_horizon.analysis.events-ws-broker" "nv_horizon.verified.streams-ws-broker"
+  "nv_horizon.horizon.events-ws-broker" "nv_horizon.operations.events-ws-broker" "source.poll-ws-broker"
   "source.poll.worker" "source.poll.due.worker" "ground.refresh.worker"
-  "etigram.operations.events.worker" "etigram.artifact.events.document-processor.worker"
+  "nv_horizon.operations.events.worker" "nv_horizon.artifact.events.document-processor.worker"
   "chat.ontology.process.worker"
 )
 
@@ -88,7 +88,7 @@ done
 
 # --- Cloud Tasks Queues: deploy creates ---
 DEPLOY_QUEUES=(
-  etigram-scout etigram-profile-refresh etigram-risk
+  nv-horizon-scout nv-horizon-profile-refresh nv-horizon-risk
 )
 
 echo ""
@@ -106,7 +106,7 @@ done
 DEPLOY_BUCKETS=(
   "${PROJECT_ID}-core-docs"
   "${PROJECT_ID}-rag-documents"
-  "${PROJECT_ID}-etigram-fragments"
+  "${PROJECT_ID}-nv-horizon-fragments"
   "${PROJECT_ID}-web-static"  # only if CREATE_WEB_STATIC_BUCKET=1
 )
 
@@ -128,8 +128,8 @@ done
 
 # --- Cloud Scheduler Jobs: deploy creates ---
 DEPLOY_JOBS=(
-  etigram-source-poller etigram-artifact-scheduler subscription-billing-daily
-  etigram-watchdog  # only with --etigram-watchdog
+  nv-horizon-source-poller nv-horizon-artifact-scheduler subscription-billing-daily
+  nv-horizon-watchdog  # only with --nv-horizon-watchdog
 )
 
 echo ""
@@ -145,7 +145,7 @@ done
 
 # --- Cloud Run Services: deploy creates ---
 DEPLOY_SERVICES=(
-  etigram-api etigram-ws verified-proxy etigram-telegram
+  nv-horizon-api nv-horizon-ws verified-proxy nv-horizon-telegram
 )
 
 echo ""

@@ -23,7 +23,7 @@ import (
 func main() {
 	ctx := context.Background()
 
-	projectID := flag.String("project", "etigram", "GCP project id")
+	projectID := flag.String("project", "nv-horizon", "GCP project id")
 	tenantID := flag.String("tenant", "global", "tenant id")
 	jobProjectID := flag.String("job-project", "codex-supply-chain-assembly", "job project id")
 	targetDomain := flag.String("domain", "/domain/v1/supply-chain/geo/cn/product/smartphone", "target domain canonical path")
@@ -35,10 +35,10 @@ func main() {
 	productFilter := flag.String("product-filter", "smartphone,battery-pack,application-processor,display-module", "comma-separated product filters")
 	geoFilter := flag.String("geo-filter", "cn,tw,kr,jp", "comma-separated geo filters")
 	queueLocation := flag.String("queue-location", "us-central1", "Cloud Tasks location")
-	queueName := flag.String("queue", "etigram-scout", "Cloud Tasks queue name")
-	targetURL := flag.String("target-url", "https://etigram-api-onq73n4gpa-uc.a.run.app/api/v1/internal/tasks/scout/run", "Cloud Tasks target URL")
-	oidcServiceAccount := flag.String("oidc-service-account", "backend@etigram.iam.gserviceaccount.com", "OIDC service account email")
-	oidcAudience := flag.String("oidc-audience", "https://etigram-api-onq73n4gpa-uc.a.run.app", "OIDC audience")
+	queueName := flag.String("queue", "nv-horizon-scout", "Cloud Tasks queue name")
+	targetURL := flag.String("target-url", "https://nv-horizon-api-onq73n4gpa-uc.a.run.app/api/v1/internal/tasks/scout/run", "Cloud Tasks target URL")
+	oidcServiceAccount := flag.String("oidc-service-account", "backend@nv-horizon.iam.gserviceaccount.com", "OIDC service account email")
+	oidcAudience := flag.String("oidc-audience", "https://nv-horizon-api-onq73n4gpa-uc.a.run.app", "OIDC audience")
 	flag.Parse()
 
 	fsClient, err := firestore.NewClient(ctx, strings.TrimSpace(*projectID))

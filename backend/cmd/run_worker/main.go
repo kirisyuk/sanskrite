@@ -140,7 +140,7 @@ func main() {
 	}
 	queue := strings.TrimSpace(os.Getenv("CLOUD_TASKS_SOURCE_QUEUE"))
 	if queue == "" {
-		queue = "etigram-source-poll"
+		queue = "nv-horizon-source-poll"
 	}
 	location := strings.TrimSpace(os.Getenv("CLOUD_TASKS_LOCATION"))
 	if location == "" {

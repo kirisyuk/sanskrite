@@ -1,4 +1,4 @@
-## Etigram Web UI Design Principles
+## Horizon Web UI Design Principles
 
 This document captures the current design system and principles implemented in the web application. It describes layout structure, typography, color tokens, components (buttons, inputs, tabs, modals), overlays, and responsive behavior, with guidance for building new UI consistently.
 
@@ -191,7 +191,7 @@ Active tab:
 
 - Tailwind config is minimal; tokens and global utilities live in `src/index.css`.
 - Icons and charts in light theme get explicit tokenized `color`/`stroke` overrides to maintain contrast.
-- Skeleton loaders use a global `etg-shimmer` animation with light-theme adjustments.
+- Skeleton loaders use a global `nv-shimmer` animation with light-theme adjustments.
 
 ## Checklist for New Components
 

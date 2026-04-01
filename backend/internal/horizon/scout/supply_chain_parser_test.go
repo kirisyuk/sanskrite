@@ -2,6 +2,7 @@ package scout
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -254,6 +255,53 @@ func TestParseSupplyChains_SuppliesToEdgeWithoutTransportStillHasDirectionalQual
 	}
 	if got, _ := suppliesEdge.Qualifiers["product_ref"].(string); got != "/product/raw/minerals/iron-ore" {
 		t.Fatalf("product_ref=%q, want /product/raw/minerals/iron-ore", got)
+	}
+}
+
+func TestParseSupplyChains_InfersTransportViaRefsFromRouteObservationCaption(t *testing.T) {
+	parser := NewSupplyChainParser()
+	chains := []agents.SupplyChain{
+		{
+			Confidence: 0.9,
+			Reason:     "Breakfast cereal is routed into Oman through regional maritime distribution.",
+			RouteObservations: []agents.RouteObservation{
+				{
+					SupplierRef: "/fac/ae/nestle-dubai-factory",
+					ProductRef:  "/product/food/breakfast-cereal",
+					CustomerRef: "/fac/om/lulu-distribution-center-barka",
+					Qualifiers: map[string]interface{}{
+						"caption": "Breakfast Cereal Sea via Jebel Ali Port, Suez Canal, and Sohar Port",
+					},
+				},
+			},
+			Nodes: []agents.SupplyChainNode{
+				{CanonicalPath: "/fac/ae/nestle-dubai-factory", Type: "FACILITY", Name: "Nestle Dubai Factory"},
+				{CanonicalPath: "/product/food/breakfast-cereal", Type: "PRODUCT", Name: "Breakfast Cereal"},
+				{CanonicalPath: "/fac/om/lulu-distribution-center-barka", Type: "FACILITY", Name: "Lulu Distribution Center Barka"},
+			},
+		},
+	}
+
+	result, err := parser.ParseSupplyChains(chains, "/fac/ae/nestle-dubai-factory")
+	if err != nil {
+		t.Fatalf("ParseSupplyChains() error = %v", err)
+	}
+	if len(result.SupplyLinkSegments) != 1 {
+		t.Fatalf("segments=%d, want 1", len(result.SupplyLinkSegments))
+	}
+	got := result.SupplyLinkSegments[0].TransportViaRefs
+	want := []string{
+		"/fac/ae/jebel-ali-port",
+		"/fac/eg/suez-terminal",
+		"/fac/om/sohar-port",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("transportViaRefs=%v, want %v", got, want)
+	}
+	for _, ref := range want {
+		if result.Fragments[ref] == nil {
+			t.Fatalf("expected inferred transport fragment for %s", ref)
+		}
 	}
 }
 

@@ -505,14 +505,29 @@ export function SimulationMapOverlayPanel({
     onSelectionChange?.(activeSelection);
   }, [activeSelection, onSelectionChange]);
 
-  const cardStyle: React.CSSProperties = {
+  const shellButtonStyle = (accent = false): React.CSSProperties => ({
     borderRadius: 12,
+    border: accent
+      ? (isDark ? '1px solid rgba(102,153,153,0.28)' : '1px solid rgba(102,153,153,0.22)')
+      : '1px solid var(--border-subtle)',
+    background: accent
+      ? (isDark ? 'rgba(102,153,153,0.12)' : 'rgba(102,153,153,0.08)')
+      : 'rgba(255,255,255,0.02)',
+    color: 'var(--text-heading)',
+    padding: '8px 10px',
+    fontSize: 11,
+    fontWeight: 700,
+    cursor: 'pointer',
+  });
+
+  const cardStyle: React.CSSProperties = {
+    borderRadius: 14,
     border: '1px solid var(--border-subtle)',
-    background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.015)',
-    padding: '10px 12px',
+    background: isDark ? 'rgba(255,255,255,0.024)' : 'rgba(15,23,42,0.024)',
+    padding: '11px 12px',
     display: 'flex',
     flexDirection: 'column',
-    gap: 6,
+    gap: 7,
   };
 
   const renderOverlayItems = (title: string, items: HorizonSimulationOverlayItem[]) => (
@@ -548,16 +563,16 @@ export function SimulationMapOverlayPanel({
                 width: '100%',
                 textAlign: 'left',
                 cursor: 'pointer',
-                border: active ? '1px solid rgba(37,99,235,0.45)' : cardStyle.border,
+                border: active ? (isDark ? '1px solid rgba(102,153,153,0.34)' : '1px solid rgba(102,153,153,0.24)') : cardStyle.border,
                 background: active
-                  ? (isDark ? 'rgba(59,130,246,0.14)' : 'rgba(59,130,246,0.08)')
+                  ? (isDark ? 'rgba(102,153,153,0.12)' : 'rgba(102,153,153,0.08)')
                   : cardStyle.background,
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }}>
                 <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)' }}>{item.title || overlayId}</div>
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
-                  <div style={{ fontSize: 11, fontWeight: 900, color: '#ef4444' }}>{priorityScore.toFixed(2)}</div>
+                  <div style={{ fontSize: 11, fontWeight: 900, color: isDark ? '#cbd5e1' : '#334155' }}>{priorityScore.toFixed(2)}</div>
                   <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-secondary-strong)', textTransform: 'uppercase' }}>{priorityLabel}</div>
                 </div>
               </div>
@@ -624,10 +639,10 @@ export function SimulationMapOverlayPanel({
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 'min(62vh, 680px)', overflowY: 'auto', paddingRight: 2 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 'min(68vh, 720px)', overflowY: 'auto', paddingRight: 2 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
         <div>
-          <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-heading)' }}>Simulation stress</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-heading)' }}>Simulation stress</div>
           <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
             Lens ID: {lensId || 'none'}
           </div>
@@ -638,16 +653,7 @@ export function SimulationMapOverlayPanel({
         <button
           type="button"
           onClick={() => setRefreshNonce((value) => value + 1)}
-          style={{
-            borderRadius: 10,
-            border: '1px solid var(--border-subtle)',
-            background: 'transparent',
-            color: 'var(--text-secondary-strong)',
-            padding: '7px 10px',
-            fontSize: 11,
-            fontWeight: 700,
-            cursor: 'pointer',
-          }}
+          style={shellButtonStyle(false)}
         >
           Refresh
         </button>
@@ -659,9 +665,9 @@ export function SimulationMapOverlayPanel({
           value={selectedRunId}
           onChange={(event) => setSelectedRunId(String(event.target.value || '').trim())}
           style={{
-            borderRadius: 10,
+            borderRadius: 12,
             border: '1px solid var(--border-subtle)',
-            background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+            background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(15,23,42,0.024)',
             color: 'var(--text-heading)',
             padding: '9px 11px',
             fontSize: 12,
@@ -690,9 +696,13 @@ export function SimulationMapOverlayPanel({
               type="button"
               onClick={() => setKindEnabled((current) => ({ ...current, [key]: !current[key] }))}
               style={{
-                borderRadius: 10,
-                border: active ? '1px solid rgba(14,165,233,0.35)' : '1px solid var(--border-subtle)',
-                background: active ? (isDark ? 'rgba(14,165,233,0.16)' : 'rgba(14,165,233,0.10)') : 'transparent',
+                borderRadius: 12,
+                border: active
+                  ? (isDark ? '1px solid rgba(102,153,153,0.30)' : '1px solid rgba(102,153,153,0.22)')
+                  : '1px solid var(--border-subtle)',
+                background: active
+                  ? (isDark ? 'rgba(102,153,153,0.14)' : 'rgba(102,153,153,0.08)')
+                  : 'transparent',
                 color: 'var(--text-heading)',
                 padding: '7px 8px',
                 fontSize: 11,
@@ -712,9 +722,9 @@ export function SimulationMapOverlayPanel({
         onChange={(event) => setQuery(event.target.value)}
         placeholder="Search simulation overlays"
         style={{
-          borderRadius: 10,
+          borderRadius: 12,
           border: '1px solid var(--border-subtle)',
-          background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+          background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(15,23,42,0.024)',
           color: 'var(--text-heading)',
           padding: '9px 11px',
           fontSize: 12,
@@ -727,9 +737,9 @@ export function SimulationMapOverlayPanel({
           onChange={(event) => setFunctionsInput(event.target.value)}
           placeholder="Functions"
           style={{
-            borderRadius: 10,
+            borderRadius: 12,
             border: '1px solid var(--border-subtle)',
-            background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+            background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(15,23,42,0.024)',
             color: 'var(--text-heading)',
             padding: '8px 10px',
             fontSize: 11,
@@ -740,9 +750,9 @@ export function SimulationMapOverlayPanel({
           onChange={(event) => setDisciplinesInput(event.target.value)}
           placeholder="Disciplines"
           style={{
-            borderRadius: 10,
+            borderRadius: 12,
             border: '1px solid var(--border-subtle)',
-            background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+            background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(15,23,42,0.024)',
             color: 'var(--text-heading)',
             padding: '8px 10px',
             fontSize: 11,
@@ -753,9 +763,9 @@ export function SimulationMapOverlayPanel({
           onChange={(event) => setRolesInput(event.target.value)}
           placeholder="Roles"
           style={{
-            borderRadius: 10,
+            borderRadius: 12,
             border: '1px solid var(--border-subtle)',
-            background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+            background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(15,23,42,0.024)',
             color: 'var(--text-heading)',
             padding: '8px 10px',
             fontSize: 11,
@@ -766,9 +776,9 @@ export function SimulationMapOverlayPanel({
           onChange={(event) => setCategoriesInput(event.target.value)}
           placeholder="Categories"
           style={{
-            borderRadius: 10,
+            borderRadius: 12,
             border: '1px solid var(--border-subtle)',
-            background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+            background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(15,23,42,0.024)',
             color: 'var(--text-heading)',
             padding: '8px 10px',
             fontSize: 11,
@@ -786,14 +796,9 @@ export function SimulationMapOverlayPanel({
           onClick={() => setActiveOverlayIds([])}
           disabled={activeOverlayIds.length === 0}
           style={{
+            ...shellButtonStyle(false),
             marginLeft: 'auto',
-            borderRadius: 10,
-            border: '1px solid var(--border-subtle)',
-            background: 'transparent',
             color: activeOverlayIds.length > 0 ? 'var(--text-secondary-strong)' : 'var(--text-secondary)',
-            padding: '7px 10px',
-            fontSize: 11,
-            fontWeight: 700,
             cursor: activeOverlayIds.length > 0 ? 'pointer' : 'not-allowed',
             opacity: activeOverlayIds.length > 0 ? 1 : 0.55,
           }}

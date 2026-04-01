@@ -112,11 +112,11 @@ const (
 // Unwind entity caps to keep LLM calls ~50–60 per direction (target ~600 total for both).
 // Without caps, geometric expansion can reach 6000+ calls.
 const (
-	ScUnwindMaxOrgsPerDepth          = 30
-	ScUnwindMaxChildOrgsRecurse      = 20
-	ScUnwindMaxFacsPerDepth          = 45
-	ScUnwindMaxProductsPerDepth      = 60
-	ScUnwindMaxRecipientFacsPerDepth = 45
+	ScUnwindMaxOrgsPerDepth          = 40
+	ScUnwindMaxChildOrgsRecurse      = 30
+	ScUnwindMaxFacsPerDepth          = 72
+	ScUnwindMaxProductsPerDepth      = 120
+	ScUnwindMaxRecipientFacsPerDepth = 96
 	ScUnwindMaxChildOrgRecurseLevels = 1
 )
 
@@ -181,7 +181,7 @@ func supplyChainPromptContextBlock(ctx context.Context) string {
 	if len(lines) == 0 {
 		return ""
 	}
-	return "INTENT CONTEXT (strict):\n" + strings.Join(lines, "\n") + "\n- Keep results tightly aligned with this context.\n- Prefer in-geo entities/facilities first; include cross-border actors only with direct, explicit evidence.\n- If geoFilters are present, prioritize nodes in those countries/regions and only keep external actors that directly connect to filtered nodes.\n- If productFilters are present, prioritize only matching products/materials/spare parts and their direct transformations.\n- If workingProductScope is present, treat it as the canonical product set already in scope: extend it only when evidence is strong, and do not duplicate aliases or equivalent product entries.\n- Do NOT emit placeholder orgs like /org/na/na.\n"
+	return "INTENT CONTEXT (strict):\n" + strings.Join(lines, "\n") + "\n- Keep results tightly aligned with this context.\n- Prefer in-geo entities/facilities first; include cross-border actors only with direct, explicit evidence.\n- If geoFilters are present, prioritize nodes in those countries/regions and only keep external actors that directly connect to filtered nodes.\n- If productFilters are present, prioritize only matching products/materials/spare parts and their direct transformations, assemblies, or industrial/institutional consuming facilities.\n- If workingProductScope is present, treat it as the canonical product set already in scope: extend it only when evidence is strong, and do not duplicate aliases or equivalent product entries.\n- Do NOT emit placeholder orgs like /org/na/na.\n"
 }
 
 // ---------------------------------------------------------------------------
@@ -287,13 +287,21 @@ func (a *ResearchAgent) FindRecipientFacsForProducts(ctx context.Context, produc
 	return runBatchesParallel(ctx, productPaths, scStepBatchProducts, a.findRecipientFacsForProductsBatch)
 }
 
-func (a *ResearchAgent) findRecipientFacsForProductsBatch(ctx context.Context, productPaths []string) ([]ProductRecipientResult, error) {
+func buildRecipientFacsForProductsPrompt(ctx context.Context, productPaths []string) string {
 	list := quotedList(productPaths)
 	contextBlock := supplyChainPromptContextBlock(ctx)
-	prompt := fmt.Sprintf(`You are a supply chain research agent. For each product below, find ALL facilities that use this product as INPUT for their own production (manufacturing, processing, assembly, refining).
+	return fmt.Sprintf(`You are a supply chain research agent. For each product below, find ALL facilities that use this product as INPUT or critical operational consumable for their own production, processing, assembly, refining, or industrial operation.
 
-Include: facilities that transform, process, or assemble this product into something else — the direct next link in the supply chain.
-Exclude: pure distributors, retailers, and end consumers.
+Include:
+- facilities that transform, process, or assemble this product into something else
+- facilities that directly consume this product as a strong operational input in manufacturing or equipment/process operation, even when the product is not transformed into a new sellable product class
+- industrial and institutional consuming facilities such as semiconductor fabs, foundries, smelters, glass plants, chemical plants, hospitals, welding shops, or other concrete operating facilities when the product is a real production/process consumable
+
+Exclude:
+- pure distributors, traders, retailers, and generic end-market labels
+- households or abstract end consumers
+- broad industries like "healthcare industry" or "electronics sector" when a concrete receiving facility is not supported
+
 Exception: when the flow is cross-border, sanctions-sensitive, customs-sensitive, or route-sensitive, include operational relay facilities that materially gate the next step of the product flow: bonded warehouses, customs terminals, seaport terminals, inland terminals, transshipment depots, and service depots.
 
 Products:
@@ -312,7 +320,10 @@ Return ONLY valid JSON array:
   }
 ]
 No markdown. One entry per input product.`, list, contextBlock, scFacPathRulesPrompt())
+}
 
+func (a *ResearchAgent) findRecipientFacsForProductsBatch(ctx context.Context, productPaths []string) ([]ProductRecipientResult, error) {
+	prompt := buildRecipientFacsForProductsPrompt(ctx, productPaths)
 	raw, err := a.runStepPrompt(ctx, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("step3 product→fac: %w", err)

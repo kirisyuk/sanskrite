@@ -24,7 +24,7 @@ import (
 )
 
 func getSecret(secretName string) string {
-	cmd := exec.Command("gcloud", "secrets", "versions", "access", "latest", "--secret="+secretName, "--project=etigram")
+	cmd := exec.Command("gcloud", "secrets", "versions", "access", "latest", "--secret="+secretName, "--project=nv-horizon")
 	out, err := cmd.Output()
 	if err != nil {
 		log.Printf("WARN: failed to fetch secret %s: %v", secretName, err)
@@ -43,7 +43,7 @@ func firstNonEmpty(values ...string) string {
 }
 
 func main() {
-	projectID := flag.String("project", "etigram", "GCP project / Firestore project")
+	projectID := flag.String("project", "nv-horizon", "GCP project / Firestore project")
 	jobID := flag.String("job", "", "Scouting job ID to execute locally")
 	flag.Parse()
 

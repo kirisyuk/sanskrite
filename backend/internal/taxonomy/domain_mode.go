@@ -6,6 +6,7 @@ import "strings"
 // Source of truth: intent-resolved domains (contract types) and steering profile mapping.
 const (
 	DomainModeSupplyChain  = "supply_chain"
+	DomainModeServiceChain = "service_chain"
 	DomainModeGovernance   = "governance"
 	DomainModeAssurance    = "assurance"
 	DomainModeMarket       = "market"
@@ -32,7 +33,7 @@ func NormalizeDomainModes(in []string) []string {
 			continue
 		}
 		switch s {
-		case DomainModeSupplyChain, DomainModeGovernance, DomainModeAssurance, DomainModeMarket, DomainModeStrategic, DomainModePolicyImpact, DomainModeEcosystem, DomainModeGeneral:
+		case DomainModeSupplyChain, DomainModeServiceChain, DomainModeGovernance, DomainModeAssurance, DomainModeMarket, DomainModeStrategic, DomainModePolicyImpact, DomainModeEcosystem, DomainModeGeneral:
 			if _, ok := seen[s]; !ok {
 				seen[s] = struct{}{}
 				out = append(out, s)
@@ -51,18 +52,22 @@ func NormalizeDomainModes(in []string) []string {
 }
 
 var domainModeSynonyms = map[string]string{
-	"supply_chain":  DomainModeSupplyChain,
-	"supply-chain":  DomainModeSupplyChain,
-	"governance":    DomainModeGovernance,
-	"assurance":     DomainModeAssurance,
-	"audit":         DomainModeAssurance,
-	"market":        DomainModeMarket,
-	"strategic":     DomainModeStrategic,
-	"policy_impact": DomainModePolicyImpact,
-	"policy-impact": DomainModePolicyImpact,
-	"general":       DomainModeGeneral,
-	"ecosystem":     DomainModeEcosystem,
-	"equity":        DomainModeGovernance, // specialty equity -> governance mode
+	"supply_chain":             DomainModeSupplyChain,
+	"supply-chain":             DomainModeSupplyChain,
+	"service_chain":            DomainModeServiceChain,
+	"service-chain":            DomainModeServiceChain,
+	"service_delivery_network": DomainModeServiceChain,
+	"service-delivery-network": DomainModeServiceChain,
+	"governance":               DomainModeGovernance,
+	"assurance":                DomainModeAssurance,
+	"audit":                    DomainModeAssurance,
+	"market":                   DomainModeMarket,
+	"strategic":                DomainModeStrategic,
+	"policy_impact":            DomainModePolicyImpact,
+	"policy-impact":            DomainModePolicyImpact,
+	"general":                  DomainModeGeneral,
+	"ecosystem":                DomainModeEcosystem,
+	"equity":                   DomainModeGovernance, // specialty equity -> governance mode
 }
 
 // EntityTypesForDomainMode returns the entity types string for Research/Critic prompts.
@@ -71,6 +76,8 @@ func EntityTypesForDomainMode(mode string) string {
 	switch strings.TrimSpace(strings.ToLower(mode)) {
 	case DomainModeSupplyChain:
 		return "FACILITY (primary actor for supplies/produces), ORGANIZATION (OWNS, LOCATED_IN — supply flow endpoints are FACILITY), PRODUCT, GEO_REGION, DEPOSIT, COMMUNITY (informal trade), PROGRAM (procurement)"
+	case DomainModeServiceChain:
+		return "FACILITY (service delivery site, data center, repair depot, network hub), ORGANIZATION (provider, reseller, managed-service operator), PRODUCT (including /product/service/... capabilities), MARKET, GEO_REGION, COMMUNITY (informal operators), PROGRAM (service contracts, procurement)"
 	case DomainModeGovernance:
 		return "ORGANIZATION (including /gov/ government bodies), FACILITY, DEPOSIT, PERSON, COMMUNITY (dynasty/tribe can OWNS), PROGRAM (ADMINISTERS target), MEDIA_CHANNEL (community control/mobilization channel)"
 	case DomainModeAssurance:
@@ -94,6 +101,8 @@ func EntityActorTypesForDomainMode(mode string) string {
 	switch strings.TrimSpace(strings.ToLower(mode)) {
 	case DomainModeSupplyChain:
 		return "ORGANIZATION, FACILITY, COMMUNITY (informal trade), PROGRAM (procurement)"
+	case DomainModeServiceChain:
+		return "ORGANIZATION, FACILITY, COMMUNITY (informal operators), PROGRAM (service contracts, procurement)"
 	case DomainModeGovernance:
 		return "ORGANIZATION, PERSON, COMMUNITY (dynasty/tribe)"
 	case DomainModeAssurance:
@@ -121,9 +130,24 @@ var SupplyChainEdgeTypes = []string{
 	"HAS_MARKET_SEGMENT",
 }
 
+// ServiceChainEdgeTypes is the allowlist for service_chain mode.
+// Keep this tighter than ecosystem/governance, but broad enough to express
+// concrete service delivery dependencies and access/control gates.
+var ServiceChainEdgeTypes = []string{
+	"PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "USED_IN",
+	"DEPENDS_ON", "CONTROLS_ACCESS", "OPERATES_VIA",
+	"LOCATED_IN", "OPERATES_IN", "PARTICIPATES_IN",
+	"HAS_MARKET_SEGMENT",
+}
+
 // SupplyChainEdgeTypesString returns comma-separated list for prompts. Derives from SupplyChainEdgeTypes.
 func SupplyChainEdgeTypesString() string {
 	return strings.Join(SupplyChainEdgeTypes, ", ")
+}
+
+// ServiceChainEdgeTypesString returns comma-separated list for prompts. Derives from ServiceChainEdgeTypes.
+func ServiceChainEdgeTypesString() string {
+	return strings.Join(ServiceChainEdgeTypes, ", ")
 }
 
 // SupplyChainEdgeTypesForPrompt returns prompt enum string for supply-chain-only schemas:
@@ -252,6 +276,8 @@ func AllowedEntityTypesForDomainMode(mode string) []string {
 	switch strings.TrimSpace(strings.ToLower(mode)) {
 	case DomainModeSupplyChain:
 		return []string{"ORGANIZATION", "FACILITY", "PRODUCT", "GEO_REGION", "DEPOSIT", "COMMUNITY", "PROGRAM"}
+	case DomainModeServiceChain:
+		return []string{"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET", "GEO_REGION", "COMMUNITY", "PROGRAM"}
 	case DomainModeGovernance:
 		return []string{"ORGANIZATION", "FACILITY", "DEPOSIT", "PERSON", "COMMUNITY", "PROGRAM", "MEDIA_CHANNEL"}
 	case DomainModeAssurance:
@@ -274,6 +300,8 @@ func AllowedEdgeTypesForDomainMode(mode string) []string {
 	switch strings.TrimSpace(strings.ToLower(mode)) {
 	case DomainModeSupplyChain:
 		return SupplyChainEdgeTypes
+	case DomainModeServiceChain:
+		return ServiceChainEdgeTypes
 	case DomainModeGovernance:
 		return GovernanceEdgeTypes
 	case DomainModeAssurance:

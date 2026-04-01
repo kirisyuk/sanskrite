@@ -159,8 +159,13 @@ func (s *ArtifactOrchestratorService) GenerateSection(
 		model = *req.ModelOverride
 	}
 
+	contextSources := artifact.ArtifactConfig.ContextSources
+	if section.ContextOverride != nil {
+		contextSources = *section.ContextOverride
+	}
+
 	// Gather context
-	gatheredContext, err := s.contextSvc.GatherContext(ctx, artifact.TenantID, req.ProjectID, artifact.ArtifactConfig.ContextSources)
+	gatheredContext, err := s.contextSvc.GatherContext(ctx, artifact.TenantID, req.ProjectID, contextSources)
 	if err != nil {
 		// Log but don't fail - generation can proceed without context
 		fmt.Printf("Warning: failed to gather context: %v\n", err)

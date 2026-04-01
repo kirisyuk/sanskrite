@@ -17,7 +17,7 @@ import (
 )
 
 var (
-	projectID   = flag.String("project", "etigram", "GCP project ID")
+	projectID   = flag.String("project", "nv-horizon", "GCP project ID")
 	limit       = flag.Int("limit", 100, "Max zones to audit (0 = all)")
 	model       = flag.String("model", "gemini-2.5-flash-lite", "LLM model (e.g. gemini-2.5-flash-lite, gemini-3-flash-preview, gpt-5-nano, grok-4-1-fast-non-reasoning)")
 	outPath     = flag.String("out", "", "Output JSONL file (default: stdout)")

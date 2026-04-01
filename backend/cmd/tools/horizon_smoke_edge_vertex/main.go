@@ -64,11 +64,11 @@ type vertexFragmentHit struct {
 
 func main() {
 	var (
-		projectID   = flag.String("project", getenv("GCP_PROJECT", "etigram"), "GCP project")
-		bucket      = flag.String("bucket", firstNonEmpty(os.Getenv("ETIGRAM_FRAGMENTS_BUCKET"), os.Getenv("HORIZON_FRAGMENTS_BUCKET"), "etigram-etigram-fragments"), "GCS bucket for horizon exports")
+		projectID   = flag.String("project", getenv("GCP_PROJECT", "nv-horizon"), "GCP project")
+		bucket      = flag.String("bucket", firstNonEmpty(os.Getenv("NV_HORIZON_FRAGMENTS_BUCKET"), os.Getenv("HORIZON_FRAGMENTS_BUCKET"), "nv-horizon-fragments"), "GCS bucket for horizon exports")
 		vertexLoc   = flag.String("vertex-location", getenv("VERTEX_SEARCH_LOCATION", "global"), "Vertex AI Search location")
-		nodeStore   = flag.String("node-store", firstNonEmpty(os.Getenv("VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID"), os.Getenv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID"), "etigram-fragments-store"), "Vertex node datastore")
-		edgeStore   = flag.String("edge-store", firstNonEmpty(os.Getenv("VERTEX_SEARCH_ETIGRAM_EDGE_DATA_STORE_ID"), os.Getenv("VERTEX_SEARCH_HORIZON_EDGES_DATA_STORE_ID"), "etigram-edges-store"), "Vertex edge datastore")
+		nodeStore   = flag.String("node-store", firstNonEmpty(os.Getenv("VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID"), os.Getenv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID"), "nv-horizon-fragments-store"), "Vertex node datastore")
+		edgeStore   = flag.String("edge-store", firstNonEmpty(os.Getenv("VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_ID"), os.Getenv("VERTEX_SEARCH_HORIZON_EDGES_DATA_STORE_ID"), "nv-horizon-edges-store"), "Vertex edge datastore")
 		pathsFlag   = flag.String("paths", "/zone/qa/military_conflict/ras-laffan,/zone/sea/military_conflict/bab-el-mandeb,/zone/ca/infrastructure_disruption/port-of-vancouver", "Comma-separated canonical paths to anchor smoke edges")
 		queriesFlag = flag.String("queries", "qatar helium lng mri,bab el mandeb red sea closure shipping,port of vancouver dockworkers strike maritime capacity", "Comma-separated smoke search queries")
 		limitPer    = flag.Int("limit-per-anchor", 8, "Max source/target edges per anchor fragment")

@@ -31,11 +31,11 @@ void cleanupLegacyAppRuntime();
 const translations = {
   en: {
     locale: "en",
-    pageTitle: "Etigram",
-    "pageTitle.platform": "Horizon Decision Fabric | Etigram",
-    "pageTitle.agent-mesh": "Horizon Agent Horde | Etigram",
+    pageTitle: "Horizon",
+    "pageTitle.platform": "Horizon Decision Fabric | Horizon",
+    "pageTitle.agent-mesh": "Horizon Agent Horde | Horizon",
     metaDescription:
-      "Etigram is a strategic intelligence firm focused on geopolitical risk review, deep monitoring, and scenario planning.",
+      "Horizon is a strategic intelligence firm focused on geopolitical risk review, deep monitoring, and scenario planning.",
     "metaDescription.platform":
       "Horizon Decision Fabric structures objects, dependencies, signals, and operating cases into decision-ready context.",
     "metaDescription.agent-mesh":
@@ -53,10 +53,10 @@ const translations = {
     "hero.eyebrow": "Strategic intelligence for exposed operating environments",
     "hero.title": "Measured intelligence for geopolitical exposure.",
     "hero.text":
-      "Etigram provides concise geopolitical review, deep monitoring, and scenario planning for organizations exposed to policy shifts, regional instability, and strategic dependencies.",
+      "Horizon provides concise geopolitical review, deep monitoring, and scenario planning for organizations exposed to policy shifts, regional instability, and strategic dependencies.",
     "hero.cta": "View Services",
     "intro.label": "Company",
-    "intro.title": "Etigram structures geopolitical complexity into decision-ready briefs.",
+    "intro.title": "Horizon structures geopolitical complexity into decision-ready briefs.",
     "intro.paragraph1":
       "We produce restrained intelligence outputs for management teams that require signal, sequence, and consequence without presentation noise.",
     "intro.paragraph2":
@@ -81,7 +81,7 @@ const translations = {
     "platforms.label": "Platforms",
     "platforms.title": "Two platform layers.",
     "platforms.text":
-      "Etigram is structured around a decision surface for exposed operations and a separate simulation layer for scenario requests and real-world response.",
+      "Horizon is structured around a decision surface for exposed operations and a separate simulation layer for scenario requests and real-world response.",
     "platforms.fabric.title": "Horizon Decision Fabric",
     "platforms.fabric.subtitle": "Structured intelligence surface",
     "platforms.fabric.text":
@@ -227,14 +227,14 @@ const translations = {
     "agentMeshPage.summary.text":
       "Agent Horde is designed to simulate plausible institutional and market response paths without reducing complex reaction to a single forecast.",
     "agentMeshPage.summary.cta": "Learn More About Access",
-    "footer.label": "Etigram",
+    "footer.label": "Horizon",
     "footer.title": "Decision Factory",
     "footer.note": "Strategic intelligence, monitoring, and scenario work.",
     "footer.location.title": "Location",
     "footer.location.line1": "Dostyk, 16",
     "footer.location.line2": "Astana, Kazakhstan",
     "footer.contact.title": "Contact",
-    "footer.contact.line1": "hi@etigram.pro",
+    "footer.contact.line1": "igor@nordicvision.org",
     "footer.availability.title": "Availability",
     "footer.availability.line1": "Meetings by request",
     "footer.availability.line2": "Additional details coming soon",
@@ -245,11 +245,11 @@ const translations = {
   },
   ru: {
     locale: "ru",
-    pageTitle: "Etigram",
-    "pageTitle.platform": "Horizon Decision Fabric | Etigram",
-    "pageTitle.agent-mesh": "Horizon Agent Horde | Etigram",
+    pageTitle: "Horizon",
+    "pageTitle.platform": "Horizon Decision Fabric | Horizon",
+    "pageTitle.agent-mesh": "Horizon Agent Horde | Horizon",
     metaDescription:
-      "Etigram — компания стратегической аналитики, которая помогает видеть геополитические риски, отслеживать изменения и готовить рабочие сценарии.",
+      "Horizon — компания стратегической аналитики, которая помогает видеть геополитические риски, отслеживать изменения и готовить рабочие сценарии.",
     "metaDescription.platform":
       "Horizon Decision Fabric структурирует объекты, зависимости, сигналы и операционные кейсы в рабочий контур для принятия решений.",
     "metaDescription.agent-mesh":
@@ -267,10 +267,10 @@ const translations = {
     "hero.eyebrow": "Стратегическая аналитика для уязвимой операционной среды",
     "hero.title": "Спокойная аналитика для сложной геополитической среды.",
     "hero.text":
-      "Etigram помогает командам видеть, как политические решения, региональная нестабильность и стратегические зависимости превращаются в операционный риск.",
+      "Horizon помогает командам видеть, как политические решения, региональная нестабильность и стратегические зависимости превращаются в операционный риск.",
     "hero.cta": "Смотреть сервисы",
     "intro.label": "Компания",
-    "intro.title": "Etigram превращает геополитическую сложность в рабочий контекст для решений.",
+    "intro.title": "Horizon превращает геополитическую сложность в рабочий контекст для решений.",
     "intro.paragraph1":
       "Мы делаем сдержанные аналитические материалы для команд, которым важны сигнал, причинно-следственная цепочка и возможные последствия, а не шум вокруг них.",
     "intro.paragraph2":
@@ -295,7 +295,7 @@ const translations = {
     "platforms.label": "Платформы",
     "platforms.title": "Две платформенные линии.",
     "platforms.text":
-      "Etigram построен вокруг рабочей аналитической поверхности для уязвимой операционной среды и отдельного слоя моделирования для сценарных запросов и реакции реального мира.",
+      "Horizon построен вокруг рабочей аналитической поверхности для уязвимой операционной среды и отдельного слоя моделирования для сценарных запросов и реакции реального мира.",
     "platforms.fabric.title": "Horizon Decision Fabric",
     "platforms.fabric.subtitle": "Структурированная аналитическая поверхность",
     "platforms.fabric.text":
@@ -438,14 +438,14 @@ const translations = {
     "agentMeshPage.summary.text":
       "Agent Horde спроектирован так, чтобы моделировать правдоподобные институциональные и рыночные траектории реакции, не сводя сложность к одному прогнозу.",
     "agentMeshPage.summary.cta": "Узнать про доступ",
-    "footer.label": "Etigram",
+    "footer.label": "Horizon",
     "footer.title": "Decision Factory",
     "footer.note": "Стратегическая аналитика, мониторинг и сценарная работа.",
     "footer.location.title": "Адрес",
     "footer.location.line1": "Dostyk, 16",
     "footer.location.line2": "Astana, Kazakhstan",
     "footer.contact.title": "Контакты",
-    "footer.contact.line1": "hi@etigram.pro",
+    "footer.contact.line1": "igor@nordicvision.org",
     "footer.availability.title": "Доступность",
     "footer.availability.line1": "Встречи по запросу",
     "footer.availability.line2": "Дополнительные детали будут добавлены позже",
@@ -456,11 +456,11 @@ const translations = {
   },
   kz: {
     locale: "kk",
-    pageTitle: "Etigram",
-    "pageTitle.platform": "Horizon Decision Fabric | Etigram",
-    "pageTitle.agent-mesh": "Horizon Agent Horde | Etigram",
+    pageTitle: "Horizon",
+    "pageTitle.platform": "Horizon Decision Fabric | Horizon",
+    "pageTitle.agent-mesh": "Horizon Agent Horde | Horizon",
     metaDescription:
-      "Etigram геосаяси тәуекелдерді көруге, өзгерістерді бақылауға және жұмыс сценарийлерін дайындауға көмектесетін стратегиялық талдау компаниясы.",
+      "Horizon геосаяси тәуекелдерді көруге, өзгерістерді бақылауға және жұмыс сценарийлерін дайындауға көмектесетін стратегиялық талдау компаниясы.",
     "metaDescription.platform":
       "Horizon Decision Fabric объектілерді, тәуелділіктерді, сигналдарды және операциялық кейстерді шешімге дайын контекстке біріктіреді.",
     "metaDescription.agent-mesh":
@@ -478,10 +478,10 @@ const translations = {
     "hero.eyebrow": "Осал операциялық ортаға арналған стратегиялық талдау",
     "hero.title": "Күрделі геосаяси ортаға арналған байыпты талдау.",
     "hero.text":
-      "Etigram командаларға саяси өзгерістер, өңірлік тұрақсыздық және стратегиялық тәуелділіктер операциялық тәуекелге қалай айналатынын түсінуге көмектеседі.",
+      "Horizon командаларға саяси өзгерістер, өңірлік тұрақсыздық және стратегиялық тәуелділіктер операциялық тәуекелге қалай айналатынын түсінуге көмектеседі.",
     "hero.cta": "Қызметтерді көру",
     "intro.label": "Компания",
-    "intro.title": "Etigram геосаяси күрделілікті шешім қабылдауға қажет жұмыс контексіне айналдырады.",
+    "intro.title": "Horizon геосаяси күрделілікті шешім қабылдауға қажет жұмыс контексіне айналдырады.",
     "intro.paragraph1":
       "Біз басқарушы командаларға артық әшекейсіз, тек сигналды, себеп-салдарды және ықтимал нәтижені көрсететін ұстамды аналитикалық материалдар дайындаймыз.",
     "intro.paragraph2":
@@ -506,7 +506,7 @@ const translations = {
     "platforms.label": "Платформалар",
     "platforms.title": "Екі платформалық қабат.",
     "platforms.text":
-      "Etigram осал операциялық ортаға арналған аналитикалық бет пен сценарийлік сұраулар мен нақты әлем реакциясын модельдейтін бөлек қабаттың айналасында құрылған.",
+      "Horizon осал операциялық ортаға арналған аналитикалық бет пен сценарийлік сұраулар мен нақты әлем реакциясын модельдейтін бөлек қабаттың айналасында құрылған.",
     "platforms.fabric.title": "Horizon Decision Fabric",
     "platforms.fabric.subtitle": "Құрылымдалған аналитикалық бет",
     "platforms.fabric.text":
@@ -648,14 +648,14 @@ const translations = {
     "agentMeshPage.summary.text":
       "Agent Horde күрделі реакцияны бір ғана болжамға түсірмей, институционалдық және нарықтық жауаптың шынайы траекторияларын модельдеуге арналған.",
     "agentMeshPage.summary.cta": "Қолжетімділік туралы білу",
-    "footer.label": "Etigram",
+    "footer.label": "Horizon",
     "footer.title": "Decision Factory",
     "footer.note": "Стратегиялық талдау, мониторинг және сценарийлік жұмыс.",
     "footer.location.title": "Мекенжай",
     "footer.location.line1": "Dostyk, 16",
     "footer.location.line2": "Astana, Kazakhstan",
     "footer.contact.title": "Байланыс",
-    "footer.contact.line1": "hi@etigram.pro",
+    "footer.contact.line1": "igor@nordicvision.org",
     "footer.availability.title": "Қолжетімділік",
     "footer.availability.line1": "Кездесулер сұраныс бойынша",
     "footer.availability.line2": "Қосымша мәліметтер кейінірек қосылады",

@@ -21,7 +21,7 @@ type artifactMetricRow struct {
 }
 
 func main() {
-	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	lensID := flag.String("lens", "l8dOd17uKYYTKD0CI9hy", "lens id")
 	limit := flag.Int("limit", 0, "max artifacts to backfill (0 = all relevant)")
 	minRisk := flag.Float64("min-risk", 0, "minimum derived risk score")

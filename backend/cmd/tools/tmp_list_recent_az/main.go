@@ -34,7 +34,7 @@ func qstr(f *models.HorizonFragment, key string) string {
 
 func main() {
   ctx := context.Background()
-  db, err := firestore.NewClient(ctx, "etigram")
+  db, err := firestore.NewClient(ctx, "nv-horizon")
   if err != nil {
     panic(err)
   }

@@ -511,7 +511,7 @@ func main() {
 		projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
 	}
 	if projectID == "" {
-		projectID = "etigram"
+		projectID = "nv-horizon"
 	}
 	location := os.Getenv("VERTEX_LOCATION")
 	if location == "" {

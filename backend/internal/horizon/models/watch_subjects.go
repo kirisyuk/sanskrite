@@ -10,6 +10,7 @@ type WatchSubjectKind string
 
 const (
 	WatchSubjectKindFragment       WatchSubjectKind = "fragment"
+	WatchSubjectKindFocusObject    WatchSubjectKind = "focus_object"
 	WatchSubjectKindLensUniverse   WatchSubjectKind = "lens_universe"
 	WatchSubjectKindExplicitTarget WatchSubjectKind = "explicit_target"
 	WatchSubjectKindAffectedZone   WatchSubjectKind = "affected_zone"
@@ -39,6 +40,7 @@ type WatchSubjectRuntimeMode string
 
 const (
 	WatchSubjectRuntimeCustomFragment WatchSubjectRuntimeMode = "custom_fragment"
+	WatchSubjectRuntimeFocusRuntime   WatchSubjectRuntimeMode = "focus_runtime"
 	WatchSubjectRuntimeGeneralized    WatchSubjectRuntimeMode = "generalized_watch"
 	WatchSubjectRuntimeRiskOnly       WatchSubjectRuntimeMode = "risk_only"
 	WatchSubjectRuntimeScoutOnly      WatchSubjectRuntimeMode = "scout_only"
@@ -87,7 +89,7 @@ func (s *WatchSubject) Validate() error {
 		return fmt.Errorf("displayLabel is required")
 	}
 	switch s.SubjectKind {
-	case WatchSubjectKindFragment, WatchSubjectKindLensUniverse, WatchSubjectKindExplicitTarget,
+	case WatchSubjectKindFragment, WatchSubjectKindFocusObject, WatchSubjectKindLensUniverse, WatchSubjectKindExplicitTarget,
 		WatchSubjectKindAffectedZone, WatchSubjectKindPathOverlay, WatchSubjectKindMarket, WatchSubjectKindGeography:
 	default:
 		return fmt.Errorf("invalid subjectKind")
@@ -103,7 +105,7 @@ func (s *WatchSubject) Validate() error {
 		return fmt.Errorf("invalid sourceMode")
 	}
 	switch s.RuntimeMode {
-	case WatchSubjectRuntimeCustomFragment, WatchSubjectRuntimeGeneralized, WatchSubjectRuntimeRiskOnly, WatchSubjectRuntimeScoutOnly, WatchSubjectRuntimeCombined:
+	case WatchSubjectRuntimeCustomFragment, WatchSubjectRuntimeFocusRuntime, WatchSubjectRuntimeGeneralized, WatchSubjectRuntimeRiskOnly, WatchSubjectRuntimeScoutOnly, WatchSubjectRuntimeCombined:
 	default:
 		return fmt.Errorf("invalid runtimeMode")
 	}

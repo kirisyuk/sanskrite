@@ -268,7 +268,7 @@ func (e *ScoutEngine) RunDomainContract(ctx context.Context, in pipeline.Contrac
 }
 
 func shouldBypassDomainAnswerAssembly(job *models.ScoutingJob, contract *horizondomain.Contract) bool {
-	if job == nil || contract == nil || !agents.IsSupplyChainContractType(contract.ContractType) {
+	if job == nil || contract == nil || !agents.IsOperationalChainContractType(contract.ContractType) {
 		return false
 	}
 	plan := getSupplyChainExecutionPlanFromJobState(job, contract.CanonicalPath)

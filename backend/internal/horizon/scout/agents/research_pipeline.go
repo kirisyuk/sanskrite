@@ -88,6 +88,8 @@ func (p *ResearchPipelineRunner) strategiesForModes(modes []string) []ResearchSt
 		switch m {
 		case taxonomy.DomainModeSupplyChain:
 			list = append(list, &SupplyChainResearchStrategy{agent: p.agent})
+		case taxonomy.DomainModeServiceChain:
+			list = append(list, &ServiceChainResearchStrategy{agent: p.agent})
 		case taxonomy.DomainModeGovernance:
 			list = append(list, &GovernanceResearchStrategy{agent: p.agent})
 		case taxonomy.DomainModeAssurance:

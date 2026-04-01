@@ -9,7 +9,7 @@ import (
 )
 
 // FallbackClient tries the primary geocoder first, falls back to secondary on miss/error.
-// Designed for Nominatim (free) as primary and Google Geocoding (paid) as fallback.
+// Runtime is wired with Google Geocoding as primary and Nominatim as fallback.
 type FallbackClient struct {
 	primary  ontology.GeocodingClientInterface
 	fallback ontology.GeocodingClientInterface
@@ -35,7 +35,7 @@ func NewFallbackClient(primary, fallback ontology.GeocodingClientInterface, logg
 func (c *FallbackClient) Geocode(ctx context.Context, address string) (*ontology.GeocodingResult, error) {
 	result, err := c.primary.Geocode(ctx, address)
 	if err == nil && result != nil {
-		ensureGeocodingProvider(result, ontology.GeocodingProviderNominatim)
+		ensureGeocodingProvider(result, ontology.GeocodingProviderGoogle)
 		return result, nil
 	}
 
@@ -47,7 +47,7 @@ func (c *FallbackClient) Geocode(ctx context.Context, address string) (*ontology
 	if err != nil || result == nil {
 		return result, err
 	}
-	ensureGeocodingProvider(result, ontology.GeocodingProviderGoogle)
+	ensureGeocodingProvider(result, ontology.GeocodingProviderNominatim)
 	return result, nil
 }
 

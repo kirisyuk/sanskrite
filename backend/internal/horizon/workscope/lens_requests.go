@@ -35,6 +35,22 @@ func FromLensStrictWorkScope(tenantID, projectID, lensID string, canonicalScopeP
 	return Normalize(scope)
 }
 
+// FromLensResearchWorkScope builds a wide lens scope from persisted research object refs.
+func FromLensResearchWorkScope(tenantID, projectID, lensID string, canonicalScopePaths []string) WorkScope {
+	scope := FromBaselineRefs(strings.TrimSpace(tenantID), strings.TrimSpace(projectID), horizonmodels.SimulationBaselineRefs{
+		LensID:     strings.TrimSpace(lensID),
+		ScopePaths: append([]string(nil), canonicalScopePaths...),
+	})
+	scope.Intent = WorkScopeIntent{
+		ScopeKind: ScopeKindLensResearch,
+		Expansion: WorkScopeExpansionPolicy{
+			Mode:               "lens_research",
+			AllowDeferredPaths: true,
+		},
+	}
+	return Normalize(scope)
+}
+
 // NewLensGraphEnrichmentRequest builds a graph-enrichment request over a strict lens scope.
 // mutationMode controls whether discovered entities may expand the lens scope at runtime.
 func NewLensGraphEnrichmentRequest(scope WorkScope, mutationMode string) WorkRequest {

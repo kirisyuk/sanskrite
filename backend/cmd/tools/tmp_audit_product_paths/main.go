@@ -13,7 +13,7 @@ import (
 )
 
 var (
-	projectID = flag.String("project", "etigram", "GCP project ID")
+	projectID = flag.String("project", "nv-horizon", "GCP project ID")
 	pathsCSV  = flag.String("paths", "", "Comma-separated canonical paths to audit")
 )
 

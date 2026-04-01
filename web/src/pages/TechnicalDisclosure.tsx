@@ -26,13 +26,13 @@ type DisclosureContent = {
 const content: Record<DisclosureLocale, DisclosureContent> = {
   en: {
     title: 'Technical Disclosure',
-    metaTitle: 'Technical Disclosure - Etigram',
+    metaTitle: 'Technical Disclosure - Horizon',
     metaDescription:
-      'Technical disclosure for the Etigram platform covering proprietary technology, AI-assisted analytical outputs, governance, oversight, and transparency controls.',
+      'Technical disclosure for the Horizon platform covering proprietary technology, AI-assisted analytical outputs, governance, oversight, and transparency controls.',
     lastUpdatedLabel: 'Last Updated:',
     lastUpdatedValue: 'March 16, 2026',
     intro: [
-      'This Technical Disclosure explains how the Etigram platform operates at a high level for authorized users, clients, counterparties, and reviewers.',
+      'This Technical Disclosure explains how the Horizon platform operates at a high level for authorized users, clients, counterparties, and reviewers.',
       'The platform is built on proprietary workflows, data structures, and analytical interfaces. It also uses external and internal AI components to assist with certain analytical inferences, summaries, prioritization steps, and scenario-oriented outputs.',
       'This document is intended to support transparency expectations reflected in Regulation (EU) 2024/1689 (EU AI Act) and the current artificial intelligence governance framework of the Republic of Kazakhstan. It is not, by itself, a conformity assessment, legal classification, or regulatory filing.',
     ],
@@ -40,15 +40,15 @@ const content: Record<DisclosureLocale, DisclosureContent> = {
       {
         heading: '1. Scope and Intended Use',
         paragraphs: [
-          'Etigram is a restricted-access analytical platform intended for professional users and approved organizations operating in geopolitically exposed, operationally sensitive, or dependency-heavy environments.',
+          'Horizon is a restricted-access analytical platform intended for professional users and approved organizations operating in geopolitically exposed, operationally sensitive, or dependency-heavy environments.',
           'Its intended use is to support structured intelligence work, mapping of exposure, monitoring of entities and events, relationship analysis, and scenario preparation. It is not offered as a general-purpose public chatbot or as a consumer-facing automated decision service.',
         ],
       },
       {
         heading: '2. Nature of the Technology Stack',
         paragraphs: [
-          'The platform relies on proprietary software components, internal orchestration logic, custom ontologies, analytical workflows, visualization layers, and controlled data-processing pipelines developed or configured by Etigram.',
-          'Certain platform capabilities may call external AI or machine learning services, but the overall working environment, interface logic, workflow control, and analytical assembly remain proprietary to Etigram.',
+          'The platform relies on proprietary software components, internal orchestration logic, custom ontologies, analytical workflows, visualization layers, and controlled data-processing pipelines developed or configured by Horizon.',
+          'Certain platform capabilities may call external AI or machine learning services, but the overall working environment, interface logic, workflow control, and analytical assembly remain proprietary to Horizon.',
         ],
         bullets: [
           'proprietary data modeling and entity structures',
@@ -74,7 +74,7 @@ const content: Record<DisclosureLocale, DisclosureContent> = {
       {
         heading: '4. Human Oversight and Decision Responsibility',
         paragraphs: [
-          'Etigram is designed as a human-supervised working environment. The platform is intended to assist analysts, operators, and decision-makers, not to substitute for accountable human review.',
+          'Horizon is designed as a human-supervised working environment. The platform is intended to assist analysts, operators, and decision-makers, not to substitute for accountable human review.',
           'Users and client teams remain responsible for validating evidence, interpreting outputs, deciding whether an output is fit for use, and determining whether further escalation, corroboration, or professional review is required.',
         ],
         bullets: [
@@ -87,7 +87,7 @@ const content: Record<DisclosureLocale, DisclosureContent> = {
         heading: '5. Output Characteristics and Limitations',
         paragraphs: [
           'Platform outputs may contain uncertainty, assumptions, inferred relationships, or incomplete context. Some outputs are generated probabilistically through AI components and may reflect gaps in source data, model limitations, or ambiguous evidence.',
-          'Users should expect that certain outputs require corroboration, source checking, and contextual judgment. Etigram does not represent that every output is exhaustive, error-free, or suitable for direct operational execution without review.',
+          'Users should expect that certain outputs require corroboration, source checking, and contextual judgment. Horizon does not represent that every output is exhaustive, error-free, or suitable for direct operational execution without review.',
         ],
       },
       {
@@ -106,14 +106,14 @@ const content: Record<DisclosureLocale, DisclosureContent> = {
       {
         heading: '7. Third-Party AI and Service Providers',
         paragraphs: [
-          'Some functions may depend on third-party cloud, authentication, storage, mapping, search, or AI providers. These providers are used as infrastructure or component services within a broader Etigram-controlled workflow.',
-          'When third-party AI is used, Etigram seeks to limit exposure of sensitive information, apply controlled integration patterns, and maintain review responsibility within the platform’s governed operating model. Provider-side terms and data-handling practices may still apply.',
+          'Some functions may depend on third-party cloud, authentication, storage, mapping, search, or AI providers. These providers are used as infrastructure or component services within a broader Horizon-controlled workflow.',
+          'When third-party AI is used, Horizon seeks to limit exposure of sensitive information, apply controlled integration patterns, and maintain review responsibility within the platform’s governed operating model. Provider-side terms and data-handling practices may still apply.',
         ],
       },
       {
         heading: '8. Risk Management, Testing, and Operational Controls',
         paragraphs: [
-          'Etigram applies operational controls intended to reduce foreseeable misuse, unreliable output propagation, unauthorized access, and workflow drift. These measures may include restricted access, role controls, model and provider configuration controls, testing, monitoring, and staged deployment practices.',
+          'Horizon applies operational controls intended to reduce foreseeable misuse, unreliable output propagation, unauthorized access, and workflow drift. These measures may include restricted access, role controls, model and provider configuration controls, testing, monitoring, and staged deployment practices.',
           'No AI-enabled platform can guarantee complete absence of error, bias, outage, hallucination, or misuse. Controls reduce risk; they do not eliminate it.',
         ],
         bullets: [
@@ -168,17 +168,17 @@ const content: Record<DisclosureLocale, DisclosureContent> = {
     ],
     contactTitle: 'Contact',
     contactText:
-      'Questions regarding this disclosure, governance posture, or deployment-specific use constraints may be directed to hi@etigram.pro.',
+      'Questions regarding this disclosure, governance posture, or deployment-specific use constraints may be directed to igor@nordicvision.org.',
   },
   ru: {
     title: 'Technical Disclosure',
-    metaTitle: 'Technical Disclosure - Etigram',
+    metaTitle: 'Technical Disclosure - Horizon',
     metaDescription:
-      'Техническое раскрытие по платформе Etigram: проприетарные технологии, ИИ-поддержка аналитических выводов, контроль, надзор и прозрачность.',
+      'Техническое раскрытие по платформе Horizon: проприетарные технологии, ИИ-поддержка аналитических выводов, контроль, надзор и прозрачность.',
     lastUpdatedLabel: 'Последнее обновление:',
     lastUpdatedValue: '16 марта 2026',
     intro: [
-      'Этот документ объясняет на высоком уровне, как устроена платформа Etigram, для авторизованных пользователей, клиентов, контрагентов и проверяющих сторон.',
+      'Этот документ объясняет на высоком уровне, как устроена платформа Horizon, для авторизованных пользователей, клиентов, контрагентов и проверяющих сторон.',
       'Платформа построена на проприетарных рабочих контурах, структурах данных и аналитических интерфейсах. Одновременно она использует внутренние и внешние ИИ-компоненты для формирования отдельных аналитических предположений, сводок, приоритизации и сценарных заготовок.',
       'Документ подготовлен в целях прозрачности с учетом ожиданий Regulation (EU) 2024/1689 (EU AI Act) и действующей рамки регулирования искусственного интеллекта в Республике Казахстан. Сам по себе он не является заключением о соответствии, юридической классификацией или регуляторной регистрацией.',
     ],
@@ -186,15 +186,15 @@ const content: Record<DisclosureLocale, DisclosureContent> = {
       {
         heading: '1. Область применения и назначение',
         paragraphs: [
-          'Etigram представляет собой платформу с ограниченным доступом для профессиональных пользователей и одобренных организаций, работающих в геополитически чувствительной, операционно уязвимой или зависимой среде.',
+          'Horizon представляет собой платформу с ограниченным доступом для профессиональных пользователей и одобренных организаций, работающих в геополитически чувствительной, операционно уязвимой или зависимой среде.',
           'Ее назначение — поддержка структурированной аналитики, картирования экспозиции, мониторинга сущностей и событий, анализа связей и подготовки сценариев. Это не публичный массовый чат-бот и не потребительский сервис автоматического принятия решений.',
         ],
       },
       {
         heading: '2. Характер технологического стека',
         paragraphs: [
-          'Платформа опирается на проприетарные программные компоненты, внутреннюю логику оркестрации, собственные онтологии, аналитические рабочие контуры, визуальные слои и управляемые пайплайны обработки данных, разработанные или сконфигурированные Etigram.',
-          'Отдельные функции могут вызывать внешние ИИ- или ML-сервисы, однако сама рабочая среда, логика интерфейса, управление процессом и аналитическая сборка остаются проприетарными компонентами Etigram.',
+          'Платформа опирается на проприетарные программные компоненты, внутреннюю логику оркестрации, собственные онтологии, аналитические рабочие контуры, визуальные слои и управляемые пайплайны обработки данных, разработанные или сконфигурированные Horizon.',
+          'Отдельные функции могут вызывать внешние ИИ- или ML-сервисы, однако сама рабочая среда, логика интерфейса, управление процессом и аналитическая сборка остаются проприетарными компонентами Horizon.',
         ],
         bullets: [
           'проприетарное моделирование данных и сущностей',
@@ -220,7 +220,7 @@ const content: Record<DisclosureLocale, DisclosureContent> = {
       {
         heading: '4. Human oversight и ответственность за решения',
         paragraphs: [
-          'Etigram спроектирован как рабочая среда под контролем человека. Платформа должна помогать аналитикам, операторам и decision-makers, а не подменять ответственный человеческий review.',
+          'Horizon спроектирован как рабочая среда под контролем человека. Платформа должна помогать аналитикам, операторам и decision-makers, а не подменять ответственный человеческий review.',
           'Пользователи и клиентские команды сохраняют ответственность за проверку фактуры, интерпретацию результата, решение о пригодности output к использованию и определение необходимости дополнительной верификации, эскалации или профессионального заключения.',
         ],
         bullets: [
@@ -233,7 +233,7 @@ const content: Record<DisclosureLocale, DisclosureContent> = {
         heading: '5. Свойства outputs и ограничения',
         paragraphs: [
           'Результаты платформы могут содержать неопределенность, предположения, выводы по косвенным признакам и неполный контекст. Часть результатов формируется вероятностно через ИИ-компоненты и может отражать пробелы в исходных данных, ограничения моделей или неоднозначность evidence.',
-          'Пользователь должен исходить из того, что отдельные outputs требуют сверки с источниками, дополнительной валидации и контекстного суждения. Etigram не заявляет, что каждый результат является исчерпывающим, безошибочным или пригодным для прямого операционного исполнения без review.',
+          'Пользователь должен исходить из того, что отдельные outputs требуют сверки с источниками, дополнительной валидации и контекстного суждения. Horizon не заявляет, что каждый результат является исчерпывающим, безошибочным или пригодным для прямого операционного исполнения без review.',
         ],
       },
       {
@@ -252,14 +252,14 @@ const content: Record<DisclosureLocale, DisclosureContent> = {
       {
         heading: '7. Сторонние ИИ- и сервис-провайдеры',
         paragraphs: [
-          'Отдельные функции могут зависеть от сторонних облачных, аутентификационных, storage-, mapping-, search- или AI-провайдеров. Эти провайдеры используются как инфраструктурные или компонентные сервисы внутри более широкого управляемого контура Etigram.',
-          'Когда применяется сторонний ИИ, Etigram стремится ограничивать передачу чувствительной информации, использовать контролируемые схемы интеграции и сохранять ответственность за review внутри управляемой модели платформы. При этом собственные условия и практики таких провайдеров также могут применяться.',
+          'Отдельные функции могут зависеть от сторонних облачных, аутентификационных, storage-, mapping-, search- или AI-провайдеров. Эти провайдеры используются как инфраструктурные или компонентные сервисы внутри более широкого управляемого контура Horizon.',
+          'Когда применяется сторонний ИИ, Horizon стремится ограничивать передачу чувствительной информации, использовать контролируемые схемы интеграции и сохранять ответственность за review внутри управляемой модели платформы. При этом собственные условия и практики таких провайдеров также могут применяться.',
         ],
       },
       {
         heading: '8. Risk management, тестирование и операционные контроли',
         paragraphs: [
-          'Etigram применяет операционные меры, направленные на снижение предсказуемого misuse, распространения ненадежных outputs, несанкционированного доступа и дрейфа рабочих контуров. Такие меры могут включать ограничение доступа, ролевые контроли, управление конфигурациями моделей и провайдеров, тестирование, мониторинг и staged deployment.',
+          'Horizon применяет операционные меры, направленные на снижение предсказуемого misuse, распространения ненадежных outputs, несанкционированного доступа и дрейфа рабочих контуров. Такие меры могут включать ограничение доступа, ролевые контроли, управление конфигурациями моделей и провайдеров, тестирование, мониторинг и staged deployment.',
           'Ни одна AI-enabled платформа не может гарантировать полное отсутствие ошибки, bias, outage, hallucination или misuse. Контроли снижают риск, но не устраняют его полностью.',
         ],
         bullets: [
@@ -314,17 +314,17 @@ const content: Record<DisclosureLocale, DisclosureContent> = {
     ],
     contactTitle: 'Контакт',
     contactText:
-      'Вопросы по этому disclosure, governance-подходу или ограничениям конкретного deployment могут направляться на hi@etigram.pro.',
+      'Вопросы по этому disclosure, governance-подходу или ограничениям конкретного deployment могут направляться на igor@nordicvision.org.',
   },
   kz: {
     title: 'Technical Disclosure',
-    metaTitle: 'Technical Disclosure - Etigram',
+    metaTitle: 'Technical Disclosure - Horizon',
     metaDescription:
-      'Etigram платформасы бойынша техникалық ашып көрсету: проприетарлық технологиялар, ИИ көмегімен жасалатын аналитикалық тұжырымдар, бақылау және ашықтық.',
+      'Horizon платформасы бойынша техникалық ашып көрсету: проприетарлық технологиялар, ИИ көмегімен жасалатын аналитикалық тұжырымдар, бақылау және ашықтық.',
     lastUpdatedLabel: 'Соңғы жаңарту:',
     lastUpdatedValue: '2026 жылғы 16 наурыз',
     intro: [
-      'Бұл Technical Disclosure құжаты Etigram платформасының жоғары деңгейдегі жұмыс логикасын авторизацияланған пайдаланушыларға, клиенттерге, контрагенттерге және шолушы тараптарға түсіндіреді.',
+      'Бұл Technical Disclosure құжаты Horizon платформасының жоғары деңгейдегі жұмыс логикасын авторизацияланған пайдаланушыларға, клиенттерге, контрагенттерге және шолушы тараптарға түсіндіреді.',
       'Платформа проприетарлық жұмыс контурларына, деректер құрылымдарына және аналитикалық интерфейстерге сүйенеді. Сонымен бірге ол жекелеген аналитикалық қорытындыларды, қысқаша мазмұндарды, басымдық беруді және сценарийлік нобайларды құрастыру үшін ішкі және сыртқы ИИ компоненттерін пайдаланады.',
       'Бұл құжат ашықтық мақсатында Regulation (EU) 2024/1689 (EU AI Act) талаптарындағы күтулерге және Қазақстан Республикасындағы жасанды интеллектті реттеудің қолданыстағы шеңберіне жақындатылып дайындалды. Ол өздігінен сәйкестік туралы қорытынды, заңдық жіктеу немесе реттеуші тіркеу болып табылмайды.',
     ],
@@ -332,15 +332,15 @@ const content: Record<DisclosureLocale, DisclosureContent> = {
       {
         heading: '1. Қолданылу аясы және мақсаты',
         paragraphs: [
-          'Etigram — геосаяси сезімтал, операциялық тұрғыда осал немесе тәуелділігі жоғары ортада жұмыс істейтін кәсіби пайдаланушылар мен мақұлданған ұйымдарға арналған шектеулі қолжетімді аналитикалық платформа.',
+          'Horizon — геосаяси сезімтал, операциялық тұрғыда осал немесе тәуелділігі жоғары ортада жұмыс істейтін кәсіби пайдаланушылар мен мақұлданған ұйымдарға арналған шектеулі қолжетімді аналитикалық платформа.',
           'Оның мақсаты — құрылымдалған intelligence жұмысына, экспозицияны картаға түсіруге, субъектілер мен оқиғаларды мониторингтеуге, байланыстарды талдауға және сценарий дайындауға қолдау көрсету. Бұл жаппай ашық чат-бот та, тұтынушыға арналған автоматтандырылған шешім сервисі де емес.',
         ],
       },
       {
         heading: '2. Технологиялық стек сипаты',
         paragraphs: [
-          'Платформа Etigram әзірлеген немесе баптаған проприетарлық бағдарламалық компоненттерге, ішкі orchestration логикасына, меншікті онтологияларға, аналитикалық жұмыс контурларына, визуал қабаттарға және бақыланатын деректер өңдеу pipeline-дарына сүйенеді.',
-          'Кейбір функциялар сыртқы ИИ немесе ML сервистерін шақыра алады, бірақ жұмыс ортасының өзі, интерфейс логикасы, процесс басқаруы және аналитикалық жинақтау Etigram-ның проприетарлық қабаттары болып қалады.',
+          'Платформа Horizon әзірлеген немесе баптаған проприетарлық бағдарламалық компоненттерге, ішкі orchestration логикасына, меншікті онтологияларға, аналитикалық жұмыс контурларына, визуал қабаттарға және бақыланатын деректер өңдеу pipeline-дарына сүйенеді.',
+          'Кейбір функциялар сыртқы ИИ немесе ML сервистерін шақыра алады, бірақ жұмыс ортасының өзі, интерфейс логикасы, процесс басқаруы және аналитикалық жинақтау Horizon-ның проприетарлық қабаттары болып қалады.',
         ],
         bullets: [
           'проприетарлық деректер модельдеуі мен entity құрылымдары',
@@ -366,7 +366,7 @@ const content: Record<DisclosureLocale, DisclosureContent> = {
       {
         heading: '4. Human oversight және шешім үшін жауапкершілік',
         paragraphs: [
-          'Etigram адам бақылауындағы жұмыс ортасы ретінде жасалған. Платформа талдаушыларға, операторларға және decision-makers тобына көмектесуге тиіс, бірақ жауапты адамдық review-ді алмастырмайды.',
+          'Horizon адам бақылауындағы жұмыс ортасы ретінде жасалған. Платформа талдаушыларға, операторларға және decision-makers тобына көмектесуге тиіс, бірақ жауапты адамдық review-ді алмастырмайды.',
           'Пайдаланушылар мен клиенттік командалар evidence-ті тексеруге, нәтижені түсіндіруге, output-тың қолдануға жарамдылығын бағалауға және қосымша верификация, escalation немесе кәсіби қорытынды қажет пе екенін анықтауға жауапты болып қалады.',
         ],
         bullets: [
@@ -379,7 +379,7 @@ const content: Record<DisclosureLocale, DisclosureContent> = {
         heading: '5. Output сипаты және шектеулері',
         paragraphs: [
           'Платформа нәтижелері белгісіздік, болжам, жанама белгілерге негізделген inference және толық емес контекст қамтуы мүмкін. Нәтижелердің бір бөлігі ИИ компоненттері арқылы ықтималдық негізінде жасалады және source data кемшіліктерін, model limitations немесе ambiguity-ді көрсетуі мүмкін.',
-          'Пайдаланушы кейбір output-тар source check, қосымша validation және контекстік judgment талап ететінін ескеруі тиіс. Etigram әрбір нәтиже толық, қатесіз немесе review-сіз тікелей операциялық орындауға жарамды деп мәлімдемейді.',
+          'Пайдаланушы кейбір output-тар source check, қосымша validation және контекстік judgment талап ететінін ескеруі тиіс. Horizon әрбір нәтиже толық, қатесіз немесе review-сіз тікелей операциялық орындауға жарамды деп мәлімдемейді.',
         ],
       },
       {
@@ -398,14 +398,14 @@ const content: Record<DisclosureLocale, DisclosureContent> = {
       {
         heading: '7. Үшінші тарап ИИ және service provider-лер',
         paragraphs: [
-          'Кейбір функциялар cloud, authentication, storage, mapping, search немесе AI provider-лерге тәуелді болуы мүмкін. Олар Etigram бақылайтын кеңірек жұмыс контурының ішінде инфрақұрылымдық немесе компоненттік сервис ретінде қолданылады.',
-          'Үшінші тарап ИИ қолданылғанда, Etigram сезімтал ақпараттың берілуін шектеуге, бақыланатын integration схемаларын қолдануға және review жауапкершілігін платформаның басқарылатын моделінде ұстауға тырысады. Дегенмен, мұндай provider-лердің өз шарттары мен data handling тәжірибелері де қолданыла алады.',
+          'Кейбір функциялар cloud, authentication, storage, mapping, search немесе AI provider-лерге тәуелді болуы мүмкін. Олар Horizon бақылайтын кеңірек жұмыс контурының ішінде инфрақұрылымдық немесе компоненттік сервис ретінде қолданылады.',
+          'Үшінші тарап ИИ қолданылғанда, Horizon сезімтал ақпараттың берілуін шектеуге, бақыланатын integration схемаларын қолдануға және review жауапкершілігін платформаның басқарылатын моделінде ұстауға тырысады. Дегенмен, мұндай provider-лердің өз шарттары мен data handling тәжірибелері де қолданыла алады.',
         ],
       },
       {
         heading: '8. Risk management, тестілеу және операциялық бақылаулар',
         paragraphs: [
-          'Etigram болжанатын misuse-ті, сенімсіз output-тардың таралуын, рұқсатсыз қолжетімділікті және workflow drift-ті азайтуға бағытталған операциялық бақылауларды қолданады. Оларға шектеулі қолжетімділік, рөлдік бақылаулар, model/provider configuration management, testing, monitoring және staged deployment кіруі мүмкін.',
+          'Horizon болжанатын misuse-ті, сенімсіз output-тардың таралуын, рұқсатсыз қолжетімділікті және workflow drift-ті азайтуға бағытталған операциялық бақылауларды қолданады. Оларға шектеулі қолжетімділік, рөлдік бақылаулар, model/provider configuration management, testing, monitoring және staged deployment кіруі мүмкін.',
           'ИИ қосылған ешбір платформа error, bias, outage, hallucination немесе misuse толық болмайды деп кепілдік бере алмайды. Бақылаулар тәуекелді азайтады, бірақ оны толық жоймайды.',
         ],
         bullets: [
@@ -460,7 +460,7 @@ const content: Record<DisclosureLocale, DisclosureContent> = {
     ],
     contactTitle: 'Байланыс',
     contactText:
-      'Осы disclosure, governance тәсілі немесе нақты deployment шектеулері бойынша сұрақтарды hi@etigram.pro мекенжайына жіберуге болады.',
+      'Осы disclosure, governance тәсілі немесе нақты deployment шектеулері бойынша сұрақтарды igor@nordicvision.org мекенжайына жіберуге болады.',
   },
 };
 

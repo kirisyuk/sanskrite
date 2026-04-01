@@ -88,7 +88,7 @@ func (h *WaitlistHandler) Check(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Hardcoded admin check
-	if strings.EqualFold(email, "igor@etigram.pro") {
+	if strings.EqualFold(email, "igor@nordicvision.org") {
 		WriteJSON(w, http.StatusOK, map[string]any{
 			"found": true, 
 			"status": "approved",

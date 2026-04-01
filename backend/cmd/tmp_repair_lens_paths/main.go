@@ -40,7 +40,7 @@ func addArtifactToLensScope(ctx context.Context, lensesRepo *horizonrepo.LensesR
 
 func main(){
   ctx:=context.Background()
-  c,err:=firestore.NewClient(ctx,"etigram")
+  c,err:=firestore.NewClient(ctx,"nv-horizon")
   if err!=nil { panic(err) }
   defer c.Close()
   logPath := "/Users/kirisyuk/Downloads/horizon-log-Pa5qjiSQDeZyKqCnrlEb-2026-03-08T14-02-27-657Z.txt"

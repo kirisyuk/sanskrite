@@ -40,7 +40,7 @@ type legView struct {
 }
 
 func main() {
-	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	lensID := flag.String("lens", "l8dOd17uKYYTKD0CI9hy", "lens id")
 	country := flag.String("country", "", "country code filter, e.g. kz")
 	product := flag.String("product", "", "product slug substring, e.g. drill-bits")

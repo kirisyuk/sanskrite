@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/discovery"
+	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon"
 	horizonproductdict "github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	horizonprop "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
@@ -26,6 +27,8 @@ type HorizonHandlers struct {
 	profilesHandler           *ProfilesHandler
 	docsRepo                  *corerepo.DocumentsRepository
 	usersRepo                 *corerepo.UsersRepository
+	coreDocsRepo              *corerepo.CoreDocsRepo
+	shareTokensRepo           *corerepo.ShareTokensRepository
 	interactions              *corerepo.InteractionsRepository
 	factsRepo                 *corerepo.OntologyFactsRepository
 	exposurePathsRepo         *horizonrepo.ExposurePathsRepository
@@ -41,6 +44,7 @@ type HorizonHandlers struct {
 	oneHopDownstreamService   *horizonsupplychain.OneHopDownstreamService
 	candidateChainService     *horizonsupplychain.CandidateChainCompletionService
 	productDictionary         *horizonproductdict.Runtime
+	gcsClient                 *gcp.GCSClient
 
 	// Lens Q&A (Analysis view)
 	qaEngine                *horizonqa.Engine
@@ -89,6 +93,11 @@ func (h *HorizonHandlers) WithProductDictionary(dict *horizonproductdict.Runtime
 	return h
 }
 
+func (h *HorizonHandlers) WithGCSClient(client *gcp.GCSClient) *HorizonHandlers {
+	h.gcsClient = client
+	return h
+}
+
 // WithInteractionsRepo wires InteractionsRepository for persisting Horizon-side artifacts (e.g., graph queries).
 func (h *HorizonHandlers) WithInteractionsRepo(interactions *corerepo.InteractionsRepository) *HorizonHandlers {
 	h.interactions = interactions
@@ -104,6 +113,16 @@ func (h *HorizonHandlers) WithDocumentsRepo(docs *corerepo.DocumentsRepository) 
 // WithUsersRepo wires Core UsersRepository for Human-in-the-Loop admin gating.
 func (h *HorizonHandlers) WithUsersRepo(users *corerepo.UsersRepository) *HorizonHandlers {
 	h.usersRepo = users
+	return h
+}
+
+func (h *HorizonHandlers) WithCoreDocsRepo(coreDocs *corerepo.CoreDocsRepo) *HorizonHandlers {
+	h.coreDocsRepo = coreDocs
+	return h
+}
+
+func (h *HorizonHandlers) WithShareTokensRepo(shareTokens *corerepo.ShareTokensRepository) *HorizonHandlers {
+	h.shareTokensRepo = shareTokens
 	return h
 }
 
@@ -289,6 +308,10 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 	mux.Handle("/api/horizon/watch/scenarios/contracts/", authMiddleware(http.HandlerFunc(h.GetWatchScenarioDetail)))
 	mux.Handle("/api/horizon/watch/subjects", authMiddleware(http.HandlerFunc(h.HandleWatchSubjectsRoot)))
 	mux.Handle("/api/horizon/watch/subjects/", authMiddleware(http.HandlerFunc(h.HandleWatchSubjectDetail)))
+	mux.Handle("/api/horizon/watch/portfolios", authMiddleware(http.HandlerFunc(h.HandleWatchPortfoliosRoot)))
+	mux.Handle("/api/horizon/watch/portfolios/", authMiddleware(http.HandlerFunc(h.HandleWatchPortfolioDetail)))
+	mux.Handle("/api/horizon/watch/digests", authMiddleware(http.HandlerFunc(h.HandleWatchDigestsRoot)))
+	mux.Handle("/api/horizon/watch/digests/", authMiddleware(http.HandlerFunc(h.HandleWatchDigestDetail)))
 	mux.Handle("/api/horizon/watch/triggers", authMiddleware(http.HandlerFunc(h.ListWatchTriggers)))
 	mux.Handle("/api/horizon/watch/triggers/replay", authMiddleware(http.HandlerFunc(h.ReplayWatchTrigger)))
 	mux.Handle("/api/horizon/watch/sync", authMiddleware(http.HandlerFunc(h.SyncWatchRuntime)))
@@ -452,11 +475,17 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 		case "recalculate":
 			h.RecalculateLens(w, r)
 			return
+		case "report-artifact":
+			h.CreateLensSupplyChainReportArtifact(w, r)
+			return
 		case "transfer":
 			h.TransferLens(w, r)
 			return
 		case "scope-scout":
 			h.ScopeScoutLensNode(w, r)
+			return
+		case "follow-up-preflight":
+			h.LensFollowUpPreflight(w, r)
 			return
 		case "scope-scout-query":
 			h.ScopeScoutLensQuery(w, r)
@@ -487,6 +516,21 @@ func (h *HorizonHandlers) HandleLensRoutes(w http.ResponseWriter, r *http.Reques
 			return
 		case "qa":
 			h.LensQA(w, r)
+			return
+		case "chat":
+			h.LensChat(w, r)
+			return
+		case "console":
+			if len(pathParts) < 3 {
+				http.Error(w, "Console action is required", http.StatusBadRequest)
+				return
+			}
+			switch strings.TrimSpace(pathParts[2]) {
+			case "run":
+				h.LensConsoleRun(w, r)
+			default:
+				http.Error(w, "Unknown console action", http.StatusNotFound)
+			}
 			return
 		case "telemetry":
 			h.HandleTelemetryRoutes(w, r)

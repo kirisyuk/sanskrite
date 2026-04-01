@@ -115,7 +115,10 @@ func isWeakGeoResolveToken(token string) bool {
 	case "plant", "factory", "facility", "facilities", "field", "launch", "power", "campus", "center", "centre",
 		"station", "terminal", "site", "network", "group", "company", "industries", "industry", "service", "services",
 		"ministry", "department", "authority", "bureau", "office", "national", "people", "peoples", "defence", "defense",
-		"production", "processing", "general", "pdf", "hub", "hubs", "chemical", "chemicals":
+		"production", "processing", "manufacturing", "general", "pdf", "hub", "hubs", "chemical", "chemicals",
+		"showroom", "warehouse", "warehousing", "depot", "storage", "logistics", "distribution", "retail",
+		"consumer", "industrial", "automotive", "personal", "care", "commercial", "operations", "sales",
+		"border", "crossing", "checkpoint", "post", "supermarket", "hypermarket", "store", "shop", "outlet":
 		return true
 	default:
 		return false

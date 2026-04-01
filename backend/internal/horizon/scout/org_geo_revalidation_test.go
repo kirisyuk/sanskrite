@@ -64,6 +64,20 @@ func TestShouldAcceptOrgGeoResult_RejectsCountryOnlyMatchWithoutPlace(t *testing
 	}
 }
 
+func TestShouldAcceptOrgGeoResult_RejectsCountryOnlyMatchWhenCountryHintComesFromName(t *testing.T) {
+	fragment := &models.HorizonFragment{
+		Type:          models.FragmentTypeOrganization,
+		CanonicalPath: "/org/kz/intertop-kazakhstan",
+		Labels: map[string]string{
+			"en": "Intertop Kazakhstan",
+		},
+	}
+
+	if shouldAcceptOrgGeoResult(fragment, "Intertop Kazakhstan, Kazakhstan", "Kazakhstan", "", "kz", "kz") {
+		t.Fatal("expected country-only result to be rejected for org name ending with country")
+	}
+}
+
 func TestShouldAcceptOrgGeoResult_AcceptsDeterministicSpecificMatch(t *testing.T) {
 	fragment := &models.HorizonFragment{
 		Type:          models.FragmentTypeOrganization,

@@ -53,6 +53,8 @@ type DomainResolution struct {
 	Reason             string              `json:"reason" firestore:"reason"`
 	// SupplyChainExecutionPlan is populated when contractType is in supply-chain group.
 	SupplyChainExecutionPlan *SupplyChainExecutionPlan `json:"supplyChainExecutionPlan,omitempty" firestore:"supplyChainExecutionPlan,omitempty"`
+	// ServiceChainExecutionPlan is populated when contractType is in service-chain group.
+	ServiceChainExecutionPlan *SupplyChainExecutionPlan `json:"serviceChainExecutionPlan,omitempty" firestore:"serviceChainExecutionPlan,omitempty"`
 	// RegulatoryImpactExecutionPlan is populated when contractType is policy-impact or regulatory-impact.
 	RegulatoryImpactExecutionPlan *RegulatoryImpactExecutionPlan `json:"regulatoryImpactExecutionPlan,omitempty" firestore:"regulatoryImpactExecutionPlan,omitempty"`
 	// GovernanceExecutionPlan is populated when contractType is ownership-structure or control-map.
@@ -695,7 +697,7 @@ ANCHOR TAXONOMY
 - ALL path segments MUST be lowercase slugs (hyphens, no spaces).
 %s
 
-ORGANIZATION: /org/{iso2|na}/{slug} (e.g., /org/sa/saudi-aramco). GOV bodies: /gov/{iso2|na}/{slug}.
+ORGANIZATION: /org/{geo}/{slug} (e.g., /org/sa/saudi-aramco). GOV bodies: /gov/{geo}/{slug}. Use concrete evidence-backed geo whenever possible. /org/na/{slug} or /gov/na/{slug} is allowed ONLY as an exceptional last-resort when neither context nor the entity name provides a defensible jurisdiction clue.
 FACILITY: /fac/{geo}/{facilitySlug}. geo like org/gov (ISO2, na, or regional). /fac/na is LAST-RESORT ONLY after checking facility name, site/city mention, operator context, and source text for geography. If the name contains a clear place clue, infer the ISO2 instead of using na.
 GEO_REGION: /loc/{countryAlpha2}[/{level1}[/{level2}]] — omit unknown trailing levels. Country-only: /loc/{cc}. Regional: /loc/gcc.
 PRODUCT: /product/{category}/{type}/{stage}/{slug} — category: raw|component|finished|service. For services, use category=service and map service domain/subdomain into {type}/{stage}.
@@ -726,6 +728,9 @@ var contractTypeAliases = map[string]string{
 	"trade-flow":      "supply-chain",
 	"sourcing-map":    "supply-chain",
 	"procurement-map": "supply-chain",
+	// Service chain aliases -> service-chain
+	"service-delivery-network": "service-chain",
+	"capability-chain":         "service-chain",
 	// Risk aliases -> geopolitical-risk
 	"risk-assessment":   "geopolitical-risk",
 	"conflict-dynamics": "geopolitical-risk",
@@ -771,6 +776,14 @@ func IsSupplyChainContractType(contractType string) bool {
 		return true
 	}
 	return false
+}
+
+func IsServiceChainContractType(contractType string) bool {
+	return normalizeContractTypeAlias(contractType) == "service-chain"
+}
+
+func IsOperationalChainContractType(contractType string) bool {
+	return IsSupplyChainContractType(contractType) || IsServiceChainContractType(contractType)
 }
 
 // IsPolicyImpactContractType returns true if contractType is in the policy/regulatory impact group.
@@ -828,6 +841,8 @@ func inferIntentScenarioProfile(query string, domains []DomainResolution) intent
 	for _, d := range domains {
 		switch normalizeContractTypeAlias(d.ContractType) {
 		case "supply-chain", "value-chain":
+			p.supply = true
+		case "service-chain":
 			p.supply = true
 		case "affected-zone", "geopolitical-risk", "bilateral-relations", "sanctions-exposure":
 			p.affectedZone = true
@@ -929,35 +944,38 @@ func applySupplyChainPlanQualityRule(domains []DomainResolution, anchors []struc
 	}
 	for i := range domains {
 		d := &domains[i]
-		if d.SupplyChainExecutionPlan == nil || len(d.SupplyChainExecutionPlan.Queries) == 0 {
-			continue
-		}
-		queries := d.SupplyChainExecutionPlan.Queries
-		if len(queries) <= maxSupplyChainQueriesPerPlan {
-			continue
-		}
-		// Prioritize: queries whose anchor(s) are in firstOrderEntities first, then by order.
-		anchorInSet := func(q *SupplyChainQuery) bool {
-			if cp := strings.TrimSpace(q.Anchor); cp != "" {
-				if _, ok := firstOrderSet[cp]; ok {
-					return true
+		plans := []*SupplyChainExecutionPlan{d.SupplyChainExecutionPlan, d.ServiceChainExecutionPlan}
+		for _, plan := range plans {
+			if plan == nil || len(plan.Queries) == 0 {
+				continue
+			}
+			queries := plan.Queries
+			if len(queries) <= maxSupplyChainQueriesPerPlan {
+				continue
+			}
+			// Prioritize: queries whose anchor(s) are in firstOrderEntities first, then by order.
+			anchorInSet := func(q *SupplyChainQuery) bool {
+				if cp := strings.TrimSpace(q.Anchor); cp != "" {
+					if _, ok := firstOrderSet[cp]; ok {
+						return true
+					}
 				}
-			}
-			for _, cp := range q.Anchors {
-				if _, ok := firstOrderSet[strings.TrimSpace(cp)]; ok {
-					return true
+				for _, cp := range q.Anchors {
+					if _, ok := firstOrderSet[strings.TrimSpace(cp)]; ok {
+						return true
+					}
 				}
+				return false
 			}
-			return false
+			sort.Slice(queries, func(a, b int) bool {
+				inA, inB := anchorInSet(&queries[a]), anchorInSet(&queries[b])
+				if inA != inB {
+					return inA
+				}
+				return a < b
+			})
+			plan.Queries = queries[:maxSupplyChainQueriesPerPlan]
 		}
-		sort.Slice(queries, func(a, b int) bool {
-			inA, inB := anchorInSet(&queries[a]), anchorInSet(&queries[b])
-			if inA != inB {
-				return inA
-			}
-			return a < b
-		})
-		d.SupplyChainExecutionPlan.Queries = queries[:maxSupplyChainQueriesPerPlan]
 	}
 }
 
@@ -976,7 +994,7 @@ func applyIntentResolutionQualityRules(query string, out *IntentResolution) {
 		d := &out.Domains[i]
 		d.ContractType = normalizeContractTypeAlias(d.ContractType)
 		switch {
-		case IsSupplyChainContractType(d.ContractType):
+		case IsSupplyChainContractType(d.ContractType), IsServiceChainContractType(d.ContractType):
 			applySupplyChainDomainQuality(query, d, out.Anchors, profile)
 		case IsPolicyImpactContractType(d.ContractType):
 			applyPolicyImpactDomainQuality(query, d, out.Anchors, profile)
@@ -995,7 +1013,7 @@ func prioritizeIntentDomains(domains []DomainResolution, profile intentScenarioP
 	score := func(d DomainResolution) int {
 		ct := normalizeContractTypeAlias(d.ContractType)
 		switch {
-		case profile.supply && (ct == "supply-chain" || ct == "value-chain"):
+		case profile.supply && (ct == "supply-chain" || ct == "value-chain" || ct == "service-chain"):
 			return 100
 		case profile.policy && (ct == "policy-impact" || ct == "regulatory-impact"):
 			return 95
@@ -1034,28 +1052,32 @@ func applySupplyChainDomainQuality(
 	if d == nil {
 		return
 	}
+	planRef := &d.SupplyChainExecutionPlan
+	if IsServiceChainContractType(d.ContractType) {
+		planRef = &d.ServiceChainExecutionPlan
+	}
 	d.Projections = dedupStrings(append(d.Projections,
 		"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET", "GEO_REGION", "DEPOSIT"), 12)
 	d.FirstOrderEntities = normalizeCanonicalPathsList(append(d.FirstOrderEntities,
 		collectIntentAnchorPathsByPrefix(anchors, "/org/", "/fac/", "/deposit/", "/market/", "/loc/")...), 16)
-	if d.SupplyChainExecutionPlan == nil || len(d.SupplyChainExecutionPlan.Queries) == 0 {
+	if *planRef == nil || len((*planRef).Queries) == 0 {
 		if plan := synthesizeSupplyChainExecutionPlan(query, d, anchors, profile); plan != nil {
-			d.SupplyChainExecutionPlan = plan
+			*planRef = plan
 		}
 	} else {
-		d.SupplyChainExecutionPlan.GraphBuildMode = normalizeSupplyChainGraphBuildMode(d.SupplyChainExecutionPlan.GraphBuildMode)
-		for i := range d.SupplyChainExecutionPlan.Queries {
-			if d.SupplyChainExecutionPlan.Queries[i].Depth <= 0 {
-				d.SupplyChainExecutionPlan.Queries[i].Depth = 4
+		(*planRef).GraphBuildMode = normalizeSupplyChainGraphBuildMode((*planRef).GraphBuildMode)
+		for i := range (*planRef).Queries {
+			if (*planRef).Queries[i].Depth <= 0 {
+				(*planRef).Queries[i].Depth = 4
 			}
-			if strings.TrimSpace(d.SupplyChainExecutionPlan.Queries[i].Direction) == "" {
-				d.SupplyChainExecutionPlan.Queries[i].Direction = inferSupplyChainDirection(query)
+			if strings.TrimSpace((*planRef).Queries[i].Direction) == "" {
+				(*planRef).Queries[i].Direction = inferSupplyChainDirection(query)
 			}
 		}
-		if profile.routeSensitive && len(d.SupplyChainExecutionPlan.OverlayQueries) == 0 {
+		if profile.routeSensitive && len((*planRef).OverlayQueries) == 0 {
 			overlayAnchors := collectIntentAnchorPathsByPrefix(anchors, "/org/", "/fac/", "/market/")
 			if len(overlayAnchors) > 0 {
-				d.SupplyChainExecutionPlan.OverlayQueries = []SupplyChainOverlayQuery{{
+				(*planRef).OverlayQueries = []SupplyChainOverlayQuery{{
 					Type:    "market",
 					Anchors: overlayAnchors[:minInt(len(overlayAnchors), 6)],
 					Scope:   "both",
@@ -1063,8 +1085,8 @@ func applySupplyChainDomainQuality(
 			}
 		}
 	}
-	if d.SupplyChainExecutionPlan != nil {
-		d.SupplyChainExecutionPlan.GraphBuildMode = normalizeSupplyChainGraphBuildMode(d.SupplyChainExecutionPlan.GraphBuildMode)
+	if *planRef != nil {
+		(*planRef).GraphBuildMode = normalizeSupplyChainGraphBuildMode((*planRef).GraphBuildMode)
 	}
 }
 
@@ -1571,6 +1593,8 @@ func baseDomainTitle(contractType string) string {
 	// Supply chain / industry
 	case "supply-chain":
 		return "Supply chain"
+	case "service-chain":
+		return "Service chain"
 	case "value-chain":
 		return "Value chain"
 	case "logistics-flow":
@@ -1843,6 +1867,8 @@ func buildDomainDescriptionForIntent(contractType string, title string) string {
 	// Supply chain / industry
 	case "supply-chain", "value-chain":
 		return fmt.Sprintf("Expand %s into first-order entities and relationships across the supply chain: actors, facilities, products/materials, markets, regulators, and key dependencies.", ttl)
+	case "service-chain":
+		return fmt.Sprintf("Expand %s into first-order entities and relationships across the service delivery lifecycle: providers, delivery facilities, service capabilities, dependencies, control gates, and downstream recipients.", ttl)
 	case "logistics-flow", "trade-flow":
 		return fmt.Sprintf("Expand %s into first-order entities: logistics corridors, ports, warehouses, transport links, trade routes, and bottlenecks.", ttl)
 	case "sourcing-map", "procurement-map":
@@ -2300,7 +2326,8 @@ RULES:
   - Examples:
     - "Ibrahim Al Rashid Social Development Bank" → anchors:
       - PERSON: /person/ibrahim-al-rashid
-      - ORGANIZATION: /org/{iso2|na}/social-development-bank
+      - ORGANIZATION: /org/{iso2}/social-development-bank
+      - If jurisdiction is still genuinely unknowable after checking context and the name itself, /org/na/social-development-bank is the exceptional last-resort fallback
     - "Apple and Microsoft cloud partnership" → anchors:
       - ORGANIZATION: /org/us/apple-inc
       - ORGANIZATION: /org/us/microsoft-corp

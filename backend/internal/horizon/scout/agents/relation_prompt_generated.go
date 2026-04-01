@@ -528,7 +528,8 @@ func generatedDiscoveredRelationSchemaBlock(targetTypeEnum string) string {
 func generatedIntentDecomposerRelationRulesBlock(domainModes []string) string {
 	domainModes = taxonomy.NormalizeDomainModes(domainModes)
 	allowlist := edgesemantics.EdgeAllowlistByDomainModes(domainModes)
-	isSupplyChain := taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain)
+	isSupplyChain := taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) ||
+		taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeServiceChain)
 
 	filtered := make([]models.DependencyType, 0)
 	for _, dt := range orderedPromptEdgeTypes(false) {

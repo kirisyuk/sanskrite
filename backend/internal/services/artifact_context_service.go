@@ -13,6 +13,7 @@ import (
 type ArtifactContextService struct {
 	interactionsRepo *repo.InteractionsRepository
 	coreDocsRepo     *repo.CoreDocsRepo
+	graphBuilder     ArtifactGraphContextBuilder
 }
 
 // NewArtifactContextService creates a new context service
@@ -26,12 +27,18 @@ func NewArtifactContextService(
 	}
 }
 
+func (s *ArtifactContextService) WithGraphContextBuilder(builder ArtifactGraphContextBuilder) *ArtifactContextService {
+	s.graphBuilder = builder
+	return s
+}
+
 // GatheredContext contains all gathered context for generation
 type GatheredContext struct {
 	ConversationText string
 	DocumentTexts    []DocumentContext
 	SearchResults    []SearchResult
 	PinnedMessages   []string
+	GraphContexts    []GraphContext
 	TotalTokens      int
 	ContextSnapshot  models.ArtifactContextSnapshot
 }
@@ -50,6 +57,31 @@ type SearchResult struct {
 	Relevance float64
 }
 
+type GraphSectionContext struct {
+	ID                 string
+	Title              string
+	Description        string
+	Prompt             string
+	DeterministicDraft string
+	FactsJSON          string
+}
+
+type GraphContext struct {
+	Kind          string
+	LensID        *string
+	ReportType    *string
+	Subject       string
+	Summary       string
+	VisiblePaths  *int
+	VisibleHubs   *int
+	VisibleChains *int
+	Sections      map[string]GraphSectionContext
+}
+
+type ArtifactGraphContextBuilder interface {
+	Build(ctx context.Context, tenantID string, projectID string, source models.ArtifactGraphContextSource) (*GraphContext, error)
+}
+
 // GatherContext collects context from all specified sources
 func (s *ArtifactContextService) GatherContext(
 	ctx context.Context,
@@ -61,6 +93,7 @@ func (s *ArtifactContextService) GatherContext(
 		DocumentTexts:  make([]DocumentContext, 0),
 		SearchResults:  make([]SearchResult, 0),
 		PinnedMessages: make([]string, 0),
+		GraphContexts:  make([]GraphContext, 0),
 	}
 
 	// 1. Gather conversation context
@@ -101,7 +134,16 @@ func (s *ArtifactContextService) GatherContext(
 		result.PinnedMessages = pinnedTexts
 	}
 
-	// 5. Calculate total tokens (approximate)
+	// 5. Gather graph-native context
+	if len(sources.GraphSources) > 0 && s.graphBuilder != nil {
+		graphContexts, err := s.gatherGraphContexts(ctx, tenantID, projectID, sources.GraphSources)
+		if err != nil {
+			return nil, fmt.Errorf("failed to gather graph context: %w", err)
+		}
+		result.GraphContexts = graphContexts
+	}
+
+	// 6. Calculate total tokens (approximate)
 	totalChars := len(result.ConversationText)
 	for _, doc := range result.DocumentTexts {
 		totalChars += len(doc.Text)
@@ -112,9 +154,15 @@ func (s *ArtifactContextService) GatherContext(
 	for _, pm := range result.PinnedMessages {
 		totalChars += len(pm)
 	}
+	for _, gc := range result.GraphContexts {
+		totalChars += len(gc.Subject) + len(gc.Summary)
+		for _, section := range gc.Sections {
+			totalChars += len(section.Title) + len(section.Description) + len(section.Prompt) + len(section.DeterministicDraft) + len(section.FactsJSON)
+		}
+	}
 	result.TotalTokens = totalChars / 4 // Approximate
 
-	// 6. Create context snapshot
+	// 7. Create context snapshot
 	result.ContextSnapshot = s.createSnapshot(sources, result)
 
 	return result, nil
@@ -246,6 +294,26 @@ func (s *ArtifactContextService) gatherPinnedMessages(
 	return texts, nil
 }
 
+func (s *ArtifactContextService) gatherGraphContexts(
+	ctx context.Context,
+	tenantID string,
+	projectID string,
+	sources []models.ArtifactGraphContextSource,
+) ([]GraphContext, error) {
+	out := make([]GraphContext, 0, len(sources))
+	for _, source := range sources {
+		item, err := s.graphBuilder.Build(ctx, tenantID, projectID, source)
+		if err != nil {
+			return nil, err
+		}
+		if item == nil {
+			continue
+		}
+		out = append(out, *item)
+	}
+	return out, nil
+}
+
 // createSnapshot creates a context snapshot for versioning
 func (s *ArtifactContextService) createSnapshot(
 	sources models.ArtifactContextSources,
@@ -254,6 +322,7 @@ func (s *ArtifactContextService) createSnapshot(
 	snapshot := models.ArtifactContextSnapshot{
 		Documents:      sources.Documents,
 		PinnedMessages: sources.PinnedMessages,
+		GraphSources:   make([]models.ArtifactGraphContextSnapshot, 0),
 		MessageCount:   0,
 		DocumentTitles: make([]string, 0),
 	}
@@ -279,8 +348,32 @@ func (s *ArtifactContextService) createSnapshot(
 	for _, doc := range gathered.DocumentTexts {
 		snapshot.DocumentTitles = append(snapshot.DocumentTitles, doc.Title)
 	}
+	for _, graphCtx := range gathered.GraphContexts {
+		sectionIDs := make([]string, 0, len(graphCtx.Sections))
+		for id := range graphCtx.Sections {
+			sectionIDs = append(sectionIDs, id)
+		}
+		snapshot.GraphSources = append(snapshot.GraphSources, models.ArtifactGraphContextSnapshot{
+			Kind:          graphCtx.Kind,
+			LensID:        graphCtx.LensID,
+			ReportType:    graphCtx.ReportType,
+			Subject:       stringPtrOrNil(graphCtx.Subject),
+			SectionIDs:    sectionIDs,
+			VisiblePaths:  graphCtx.VisiblePaths,
+			VisibleHubs:   graphCtx.VisibleHubs,
+			VisibleChains: graphCtx.VisibleChains,
+		})
+	}
 
 	return snapshot
+}
+
+func stringPtrOrNil(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 // OptimizeForModel trims context to fit within model limits

@@ -111,7 +111,7 @@ Click "Terms of Usage" or "Privacy Notice" links in the bottom bar to view docum
 Astana, Dostyk, 16  
 Talan Towers  
 Republic of Kazakhstan  
-Email: hi@etigram.pro
+Email: igor@nordicvision.org
 
 ## Children's Safety Features
 

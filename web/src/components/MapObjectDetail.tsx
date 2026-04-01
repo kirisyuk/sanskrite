@@ -6,11 +6,12 @@ import type { SupplyChainObjectRiskOverlay, SupplyChainOverlayMechanism, SupplyC
 import { geoCodeToShortName, humanizeCanonicalPath } from '../lib/uiUtils';
 import { mapFamilyAccentColor, mapLayerColor } from '../lib/mapRenderPolicy';
 
-interface MapObjectDetailProps {
+export interface MapObjectDetailProps {
   object: GeoObject;
   isDark: boolean;
   paletteTheme: 'dark' | 'light';
   topOffset?: number;
+  layout?: 'overlay' | 'panel';
   edgesLoading: boolean;
   edgesCount: number;
   visibleEdgesCount: number;
@@ -27,7 +28,10 @@ interface MapObjectDetailProps {
   onClose: () => void;
 }
 
+export type MapObjectInspectorPayload = Omit<MapObjectDetailProps, 'isDark' | 'paletteTheme' | 'topOffset' | 'layout'>;
+
 type SectionKey = 'routes' | 'context' | 'evidence';
+type DetailLayoutMode = 'overlay' | 'panel';
 
 function formatFacilityKind(value?: string): string {
   return String(value || '')
@@ -79,7 +83,16 @@ function translucentAccent(color: string, opacity: number): string {
   return `rgba(${r}, ${g}, ${b}, ${opacity})`;
 }
 
-function sectionCardStyle(isDark: boolean): React.CSSProperties {
+function sectionCardStyle(isDark: boolean, layout: DetailLayoutMode = 'overlay'): React.CSSProperties {
+  if (layout === 'panel') {
+    return {
+      padding: '14px',
+      borderRadius: 16,
+      background: isDark ? 'rgba(255, 255, 255, 0.026)' : 'rgba(15, 23, 42, 0.028)',
+      border: '1px solid var(--border-subtle)',
+      boxShadow: isDark ? 'inset 0 1px 0 rgba(255,255,255,0.03)' : 'inset 0 1px 0 rgba(255,255,255,0.7)',
+    };
+  }
   return {
     padding: '12px 13px',
     borderRadius: 14,
@@ -248,7 +261,31 @@ function buildDriverItems(
   return items.slice(0, 2);
 }
 
-function narrativeBlockStyle(isDark: boolean, isActive: boolean, accent: string): React.CSSProperties {
+function consoleAccent(isDark: boolean): string {
+  return isDark ? '#7da6a6' : '#5f8b8b';
+}
+
+function narrativeBlockStyle(
+  isDark: boolean,
+  isActive: boolean,
+  accent: string,
+  layout: DetailLayoutMode = 'overlay',
+): React.CSSProperties {
+  if (layout === 'panel') {
+    return {
+      padding: '11px 12px',
+      borderRadius: 14,
+      background: isActive
+        ? (isDark ? 'rgba(125, 166, 166, 0.12)' : 'rgba(95, 139, 139, 0.08)')
+        : (isDark ? 'rgba(255, 255, 255, 0.024)' : 'rgba(15, 23, 42, 0.024)'),
+      border: isActive
+        ? `1px solid ${translucentAccent(accent, isDark ? 0.48 : 0.28)}`
+        : '1px solid var(--border-subtle)',
+      boxShadow: 'none',
+      transition: 'background 140ms ease, border-color 140ms ease',
+      cursor: 'pointer',
+    };
+  }
   return {
     padding: '10px 11px',
     borderRadius: 12,
@@ -273,9 +310,9 @@ function loadingPlaceholderStyle(isDark: boolean, width: string, height: number)
   };
 }
 
-const LoadingBusinessState: React.FC<{ isDark: boolean }> = ({ isDark }) => (
+const LoadingBusinessState: React.FC<{ isDark: boolean; layout?: DetailLayoutMode }> = ({ isDark, layout = 'overlay' }) => (
   <div
-    style={sectionCardStyle(isDark)}
+    style={sectionCardStyle(isDark, layout)}
     aria-live="polite"
     aria-busy="true"
   >
@@ -315,13 +352,14 @@ const LoadingBusinessState: React.FC<{ isDark: boolean }> = ({ isDark }) => (
 
 const AccordionSection: React.FC<{
   isDark: boolean;
+  layout?: DetailLayoutMode;
   title: string;
   subtitle?: string;
   open: boolean;
   onToggle: () => void;
   children: React.ReactNode;
-}> = ({ isDark, title, subtitle, open, onToggle, children }) => (
-  <div style={sectionCardStyle(isDark)}>
+}> = ({ isDark, layout = 'overlay', title, subtitle, open, onToggle, children }) => (
+  <div style={sectionCardStyle(isDark, layout)}>
     <button
       type="button"
       onClick={onToggle}
@@ -357,8 +395,12 @@ const AccordionSection: React.FC<{
           minWidth: 58,
           padding: '5px 10px',
           borderRadius: 999,
-          background: isDark ? 'rgba(148,163,184,0.12)' : 'rgba(15,23,42,0.05)',
-          border: isDark ? '1px solid rgba(148,163,184,0.16)' : '1px solid rgba(15,23,42,0.08)',
+          background: layout === 'panel'
+            ? (isDark ? 'rgba(255,255,255,0.04)' : 'rgba(15,23,42,0.04)')
+            : (isDark ? 'rgba(148,163,184,0.12)' : 'rgba(15,23,42,0.05)'),
+          border: layout === 'panel'
+            ? '1px solid var(--border-subtle)'
+            : (isDark ? '1px solid rgba(148,163,184,0.16)' : '1px solid rgba(15,23,42,0.08)'),
           fontSize: 10,
           fontWeight: 800,
           letterSpacing: '0.04em',
@@ -379,6 +421,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
   isDark,
   paletteTheme,
   topOffset = 10,
+  layout = 'overlay',
   edgesLoading,
   edgesCount,
   visibleEdgesCount,
@@ -392,7 +435,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
   directedExploreError = null,
   directedExploreDisabledReason,
   onDirectedExplore,
-  onClose,
+  onClose: _onClose,
 }) => {
   const [viewport, setViewport] = React.useState(() => ({
     width: typeof window === 'undefined' ? 1440 : window.innerWidth,
@@ -447,7 +490,10 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
   }, [object.id, traceSummary?.supplyGroups?.length]);
 
   const visualType = getHorizonNodeVisualType(object.type, object.canonicalPath, object.label, object.facilityKind);
+  const inline = layout === 'panel';
   const accent = getNodeColors(visualType || object.type, paletteTheme).accent;
+  const panelAccent = consoleAccent(isDark);
+  const displayAccent = inline ? panelAccent : accent;
   const facilityKindLabel = formatFacilityKind(object.facilityKind);
   const typeLabel = object.type === 'FACILITY' && facilityKindLabel
     ? `Facility (${facilityKindLabel})`
@@ -532,7 +578,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
   ];
 
   const hasEvidence = driverItems.length > 0 || topMetrics.length > 0 || topMechanisms.length > 0 || traceSummary?.propagationEdgeCount;
-  const supplyAccent = mapLayerColor('supply', isDark ? 'dark' : 'light');
+  const supplyAccent = inline ? panelAccent : mapLayerColor('supply', isDark ? 'dark' : 'light');
   const routeBadgeBackground = translucentAccent(supplyAccent, isDark ? 0.16 : 0.12);
 
   const toggleSection = (key: SectionKey) => {
@@ -542,25 +588,31 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
   return (
     <div
       style={{
-        position: 'absolute',
-        left: 10,
-        top: topOffset,
-        width: overlayWidth,
-        maxWidth: overlayMaxWidth,
-        maxHeight: `calc(100% - ${topOffset + 10}px)`,
+        position: inline ? 'relative' : 'absolute',
+        left: inline ? 'auto' : 10,
+        top: inline ? 'auto' : topOffset,
+        width: inline ? '100%' : overlayWidth,
+        maxWidth: inline ? '100%' : overlayMaxWidth,
+        maxHeight: inline ? 'none' : `calc(100% - ${topOffset + 10}px)`,
         overflow: 'auto',
         zIndex: 20,
-        borderRadius: 20,
-        background: isDark
-          ? 'linear-gradient(180deg, rgba(6,18,31,0.97) 0%, rgba(3,12,22,0.96) 100%)'
-          : 'linear-gradient(180deg, rgba(255,255,255,0.985) 0%, rgba(245,248,252,0.97) 100%)',
-        border: isDark ? '1px solid rgba(148,163,184,0.22)' : '1px solid rgba(15,23,42,0.14)',
-        boxShadow: isDark ? '0 18px 44px rgba(0,0,0,0.44)' : '0 16px 40px rgba(15,23,42,0.16)',
-        backdropFilter: 'blur(18px)',
+        borderRadius: inline ? 18 : 20,
+        background: inline
+          ? 'color-mix(in srgb, var(--bg-elevated) 94%, black 6%)'
+          : (isDark
+            ? 'linear-gradient(180deg, rgba(6,18,31,0.97) 0%, rgba(3,12,22,0.96) 100%)'
+            : 'linear-gradient(180deg, rgba(255,255,255,0.985) 0%, rgba(245,248,252,0.97) 100%)'),
+        border: inline
+          ? '1px solid var(--border-subtle)'
+          : (isDark ? '1px solid rgba(148,163,184,0.22)' : '1px solid rgba(15,23,42,0.14)'),
+        boxShadow: inline
+          ? 'none'
+          : (isDark ? '0 18px 44px rgba(0,0,0,0.44)' : '0 16px 40px rgba(15,23,42,0.16)'),
+        backdropFilter: inline ? 'blur(12px)' : 'blur(18px)',
         color: 'var(--text-heading)',
       }}
     >
-      <div style={{ position: 'absolute', inset: 0, width: 3, background: accent }} />
+      {!inline && <div style={{ position: 'absolute', inset: 0, width: 3, background: accent }} />}
 
       <button
         type="button"
@@ -569,49 +621,35 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
         style={{
           position: 'absolute',
           top: 10,
-          right: 38,
+          right: 10,
           width: 24,
           height: 24,
           borderRadius: 999,
-          border: 'none',
           cursor: 'pointer',
           display: 'grid',
           placeItems: 'center',
           fontSize: 15,
           lineHeight: 1,
           color: isDark ? 'rgba(226,232,240,0.88)' : 'rgba(15,23,42,0.74)',
-          background: isDark ? 'rgba(148,163,184,0.12)' : 'rgba(15,23,42,0.06)',
+          background: inline
+            ? (isDark ? 'rgba(255,255,255,0.05)' : 'rgba(15,23,42,0.05)')
+            : (isDark ? 'rgba(148,163,184,0.12)' : 'rgba(15,23,42,0.06)'),
+          border: inline ? '1px solid var(--border-subtle)' : 'none',
         }}
       >
         {isCollapsed ? '+' : '−'}
       </button>
 
-      <button
-        type="button"
-        onClick={onClose}
-        aria-label="Collapse asset brief"
-        title="Collapse asset brief"
+      <div
         style={{
-          position: 'absolute',
-          top: 10,
-          right: 10,
-          width: 24,
-          height: 24,
-          borderRadius: 999,
-          border: 'none',
-          cursor: 'pointer',
-          display: 'grid',
-          placeItems: 'center',
-          fontSize: 15,
-          lineHeight: 1,
-          color: isDark ? 'rgba(226,232,240,0.88)' : 'rgba(15,23,42,0.74)',
-          background: isDark ? 'rgba(148,163,184,0.12)' : 'rgba(15,23,42,0.06)',
+          padding: inline
+            ? (autoCompact ? '14px 40px 16px 14px' : '16px 40px 18px 16px')
+            : (autoCompact ? '12px 44px 12px 14px' : '14px 44px 14px 14px'),
+          display: 'flex',
+          flexDirection: 'column',
+          gap: inline ? 14 : 12,
         }}
       >
-        ×
-      </button>
-
-      <div style={{ padding: autoCompact ? '12px 44px 12px 14px' : '14px 44px 14px 14px', display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
           <div
             style={{
@@ -622,14 +660,27 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
               height: autoCompact ? 28 : 32,
               borderRadius: 999,
               flexShrink: 0,
-              background: isDark ? 'rgba(148,163,184,0.12)' : 'rgba(15,23,42,0.05)',
-              border: isDark ? '1px solid rgba(148,163,184,0.16)' : '1px solid rgba(15,23,42,0.08)',
+              background: inline
+                ? (isDark ? 'rgba(125,166,166,0.12)' : 'rgba(95,139,139,0.10)')
+                : (isDark ? 'rgba(148,163,184,0.12)' : 'rgba(15,23,42,0.05)'),
+              border: inline
+                ? `1px solid ${translucentAccent(panelAccent, isDark ? 0.34 : 0.18)}`
+                : (isDark ? '1px solid rgba(148,163,184,0.16)' : '1px solid rgba(15,23,42,0.08)'),
             }}
           >
-            <HorizonNodeIcon type={visualType || object.type} color={accent} size={15} />
+            <HorizonNodeIcon type={visualType || object.type} color={displayAccent} size={15} />
           </div>
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ marginBottom: 3, fontSize: 10, fontWeight: 700, letterSpacing: '0.11em', textTransform: 'uppercase', color: accent }}>
+            <div
+              style={{
+                marginBottom: 3,
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: '0.11em',
+                textTransform: 'uppercase',
+                color: inline ? 'var(--text-secondary-strong)' : accent,
+              }}
+            >
               {typeLabel}
             </div>
             <div style={{ fontSize: autoCompact ? 16 : 19, lineHeight: 1.12, fontWeight: 780, letterSpacing: '-0.02em' }}>
@@ -645,10 +696,14 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
 
         <div
           style={{
-            padding: '9px 11px',
-            borderRadius: 12,
-            background: isDark ? 'rgba(148,163,184,0.08)' : 'rgba(15,23,42,0.035)',
-            border: isDark ? '1px solid rgba(148,163,184,0.12)' : '1px solid rgba(15,23,42,0.06)',
+            padding: inline ? '10px 12px' : '9px 11px',
+            borderRadius: inline ? 14 : 12,
+            background: inline
+              ? (isDark ? 'rgba(255,255,255,0.026)' : 'rgba(15,23,42,0.028)')
+              : (isDark ? 'rgba(148,163,184,0.08)' : 'rgba(15,23,42,0.035)'),
+            border: inline
+              ? '1px solid var(--border-subtle)'
+              : (isDark ? '1px solid rgba(148,163,184,0.12)' : '1px solid rgba(15,23,42,0.06)'),
             fontSize: 11,
             lineHeight: 1.5,
             color: 'var(--text-secondary-strong)',
@@ -659,11 +714,11 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
 
         {isCollapsed ? null : (
           isDetailLoading ? (
-            <LoadingBusinessState isDark={isDark} />
+            <LoadingBusinessState isDark={isDark} layout={layout} />
           ) : (
           <>
-            <div style={sectionCardStyle(isDark)}>
-              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: accent }}>
+            <div style={sectionCardStyle(isDark, layout)}>
+              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: inline ? 'var(--text-secondary-strong)' : accent }}>
                 Business snapshot
               </div>
               <div style={{ marginTop: 7, fontSize: 13, lineHeight: 1.55, fontWeight: 650 }}>
@@ -672,7 +727,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
               {whyItems.length > 0 && (
                 <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {whyItems.map((item) => (
-                    <div key={`${item.title}:${item.body}`} style={{ paddingLeft: 10, borderLeft: `2px solid ${accent}` }}>
+                    <div key={`${item.title}:${item.body}`} style={{ paddingLeft: 10, borderLeft: `2px solid ${displayAccent}` }}>
                       <div style={{ fontSize: 11, fontWeight: 750 }}>{item.title}</div>
                       <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.5, color: 'var(--text-secondary-strong)' }}>
                         {item.body}
@@ -683,7 +738,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
               )}
             </div>
 
-            <div style={sectionCardStyle(isDark)}>
+            <div style={sectionCardStyle(isDark, layout)}>
               <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
                 Impact
               </div>
@@ -694,14 +749,28 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
                     style={{
                       padding: '10px 10px 9px',
                       borderRadius: 12,
-                      background: isDark ? 'rgba(15,23,42,0.34)' : 'rgba(255,255,255,0.7)',
-                      border: isDark ? '1px solid rgba(148,163,184,0.12)' : '1px solid rgba(15,23,42,0.06)',
+                      background: inline
+                        ? (isDark ? 'rgba(255,255,255,0.026)' : 'rgba(15,23,42,0.024)')
+                        : (isDark ? 'rgba(15,23,42,0.34)' : 'rgba(255,255,255,0.7)'),
+                      border: inline
+                        ? '1px solid var(--border-subtle)'
+                        : (isDark ? '1px solid rgba(148,163,184,0.12)' : '1px solid rgba(15,23,42,0.06)'),
                     }}
                   >
                     <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
                       {item.label}
                     </div>
-                    <div style={{ marginTop: 6, fontSize: 15, lineHeight: 1.15, fontWeight: 780, color: item.accentColor }}>
+                    <div
+                      style={{
+                        marginTop: 6,
+                        fontSize: 15,
+                        lineHeight: 1.15,
+                        fontWeight: 780,
+                        color: inline
+                          ? (item.label === 'Route exposure' ? panelAccent : 'var(--text-heading)')
+                          : item.accentColor,
+                      }}
+                    >
                       {item.value}
                     </div>
                     <div style={{ marginTop: 6, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
@@ -712,7 +781,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
               </div>
             </div>
 
-            <div style={sectionCardStyle(isDark)}>
+            <div style={sectionCardStyle(isDark, layout)}>
               <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
                 Suggested next checks
               </div>
@@ -724,7 +793,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
                         width: 7,
                         height: 7,
                         borderRadius: 999,
-                        background: accent,
+                        background: displayAccent,
                         marginTop: 5,
                         flexShrink: 0,
                       }}
@@ -766,10 +835,16 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
                             textAlign: 'left',
                             padding: '10px 10px 9px',
                             borderRadius: 10,
-                            border: '1px solid rgba(96,165,250,0.18)',
+                            border: inline
+                              ? `1px solid ${active ? translucentAccent(panelAccent, isDark ? 0.4 : 0.24) : 'var(--border-subtle)'}`
+                              : '1px solid rgba(96,165,250,0.18)',
                             background: active
-                              ? (isDark ? 'rgba(59,130,246,0.18)' : 'rgba(59,130,246,0.10)')
-                              : (isDark ? 'rgba(148,163,184,0.06)' : 'rgba(15,23,42,0.025)'),
+                              ? (inline
+                                ? (isDark ? 'rgba(125,166,166,0.12)' : 'rgba(95,139,139,0.08)')
+                                : (isDark ? 'rgba(59,130,246,0.18)' : 'rgba(59,130,246,0.10)'))
+                              : (inline
+                                ? (isDark ? 'rgba(255,255,255,0.024)' : 'rgba(15,23,42,0.024)')
+                                : (isDark ? 'rgba(148,163,184,0.06)' : 'rgba(15,23,42,0.025)')),
                             color: 'var(--text-heading)',
                             cursor: disabled ? 'not-allowed' : 'pointer',
                             opacity: disabled ? 0.55 : 1,
@@ -813,6 +888,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
             {traceSummary?.supplyGroups?.length ? (
               <AccordionSection
                 isDark={isDark}
+                layout={layout}
                 title="Route exposure"
                 subtitle={`${pluralize(traceSummary.supplyGroups.length, 'product lane')} linked to this asset`}
                 open={openSections.routes}
@@ -827,14 +903,14 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
                         onNarrativeHover(null);
                         onSupplyRouteHover?.([]);
                       }}
-                      style={narrativeBlockStyle(isDark, activeNarrativeKey === group.narrativeKey, supplyAccent)}
+                      style={narrativeBlockStyle(isDark, activeNarrativeKey === group.narrativeKey, supplyAccent, layout)}
                     >
                       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
                         <div style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: 12, fontWeight: 780, color: supplyAccent }}>
+                          <div style={{ fontSize: 12, fontWeight: 780, color: inline ? 'var(--text-heading)' : supplyAccent }}>
                             {group.productLabel}
                           </div>
-                          <div style={{ marginTop: 2, fontSize: 10, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: supplyAccent }}>
+                          <div style={{ marginTop: 2, fontSize: 10, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: inline ? 'var(--text-secondary-strong)' : supplyAccent }}>
                             {directionLabel(group.direction)}
                           </div>
                           <div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.5, color: 'var(--text-secondary-strong)' }}>
@@ -846,12 +922,30 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
                             {pluralize(group.routeCount, 'route')}
                           </span>
                           {group.stressedRouteCount > 0 && (
-                            <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(248,113,113,0.16)' : 'rgba(239,68,68,0.10)' }}>
+                            <span
+                              style={{
+                                fontSize: 10,
+                                padding: '3px 7px',
+                                borderRadius: 999,
+                                background: inline
+                                  ? (isDark ? 'rgba(255,255,255,0.05)' : 'rgba(15,23,42,0.05)')
+                                  : (isDark ? 'rgba(248,113,113,0.16)' : 'rgba(239,68,68,0.10)'),
+                              }}
+                            >
                               {pluralize(group.stressedRouteCount, 'stressed route')}
                             </span>
                           )}
                           {group.hasBottleneck && (
-                            <span style={{ fontSize: 10, padding: '3px 7px', borderRadius: 999, background: isDark ? 'rgba(251,146,60,0.16)' : 'rgba(249,115,22,0.10)' }}>
+                            <span
+                              style={{
+                                fontSize: 10,
+                                padding: '3px 7px',
+                                borderRadius: 999,
+                                background: inline
+                                  ? (isDark ? 'rgba(255,255,255,0.05)' : 'rgba(15,23,42,0.05)')
+                                  : (isDark ? 'rgba(251,146,60,0.16)' : 'rgba(249,115,22,0.10)'),
+                              }}
+                            >
                               Bottleneck
                             </span>
                           )}
@@ -873,11 +967,11 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
                               style={{
                                 paddingLeft: 10,
                                 borderLeft: routeActive
-                                  ? (isDark ? '2px solid rgba(251, 191, 36, 0.95)' : '2px solid rgba(180, 83, 9, 0.9)')
-                                  : (isDark ? '2px solid rgba(245, 158, 11, 0.4)' : '2px solid rgba(180, 83, 9, 0.28)'),
+                                  ? `2px solid ${translucentAccent(displayAccent, isDark ? 0.9 : 0.7)}`
+                                  : `2px solid ${translucentAccent(displayAccent, isDark ? 0.4 : 0.24)}`,
                                 borderRadius: 8,
                                 background: routeActive
-                                  ? (isDark ? 'rgba(251, 191, 36, 0.10)' : 'rgba(245, 158, 11, 0.09)')
+                                  ? translucentAccent(displayAccent, isDark ? 0.1 : 0.08)
                                   : 'transparent',
                                 transition: 'background 140ms ease, border-color 140ms ease',
                               }}
@@ -912,6 +1006,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
             {contextItems.length ? (
               <AccordionSection
                 isDark={isDark}
+                layout={layout}
                 title="Business context"
                 subtitle={`${pluralize(contextItems.length, 'linked node')} with business meaning in the current view`}
                 open={openSections.context}
@@ -923,7 +1018,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
                       key={relation.edgeId || `${relation.relatedFragmentId}:${relation.type}`}
                       onMouseEnter={() => onNarrativeHover(relation.narrativeKey)}
                       onMouseLeave={() => onNarrativeHover(null)}
-                      style={narrativeBlockStyle(isDark, activeNarrativeKey === relation.narrativeKey, familyAccent(relation.family, isDark))}
+                      style={narrativeBlockStyle(isDark, activeNarrativeKey === relation.narrativeKey, familyAccent(relation.family, isDark), layout)}
                     >
                       <div style={{ display: 'flex', gap: 10 }}>
                         <div style={{ width: 8, flexShrink: 0, borderRadius: 999, background: familyAccent(relation.family, isDark) }} />
@@ -949,6 +1044,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
             {hasEvidence ? (
               <AccordionSection
                 isDark={isDark}
+                layout={layout}
                 title="Analyst evidence"
                 subtitle="Technical drivers stay here by default so the main brief stays business-first"
                 open={openSections.evidence}
@@ -956,7 +1052,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
               >
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {driverItems.map((item) => (
-                    <div key={`${item.title}:${item.body}`} style={{ paddingLeft: 10, borderLeft: `2px solid ${accent}` }}>
+                    <div key={`${item.title}:${item.body}`} style={{ paddingLeft: 10, borderLeft: `2px solid ${displayAccent}` }}>
                       <div style={{ fontSize: 11, fontWeight: 750 }}>{item.title}</div>
                       <div style={{ marginTop: 3, fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
                         {item.body}
@@ -988,7 +1084,7 @@ export const MapObjectDetail: React.FC<MapObjectDetailProps> = ({
                       onMouseEnter={() => onNarrativeHover('propagation:overview')}
                       onMouseLeave={() => onNarrativeHover(null)}
                       style={{
-                        ...narrativeBlockStyle(isDark, activeNarrativeKey === 'propagation:overview', isDark ? '#94a3b8' : '#64748b'),
+                        ...narrativeBlockStyle(isDark, activeNarrativeKey === 'propagation:overview', isDark ? '#94a3b8' : '#64748b', layout),
                         cursor: 'pointer',
                       }}
                     >

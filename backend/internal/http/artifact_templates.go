@@ -33,8 +33,13 @@ func (h *ArtifactTemplatesHandler) ListTemplates(w http.ResponseWriter, r *http.
 	if category != "" {
 		categoryPtr = &category
 	}
+	graphSourceKind := r.URL.Query().Get("graphSourceKind")
+	var graphSourceKindPtr *string
+	if strings.TrimSpace(graphSourceKind) != "" {
+		graphSourceKindPtr = &graphSourceKind
+	}
 
-	templates, err := h.service.ListAvailableTemplates(r.Context(), auth.TenantID, categoryPtr)
+	templates, err := h.service.ListAvailableTemplates(r.Context(), auth.TenantID, categoryPtr, graphSourceKindPtr)
 	if err != nil {
 		WriteInternalError(w, "Failed to list templates")
 		return

@@ -13,7 +13,7 @@ import (
 )
 
 var (
-	projectID = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	projectID = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	tenantID  = flag.String("tenant", "global", "tenant id")
 	query     = flag.String("q", "", "search query")
 	limit     = flag.Int("limit", 20, "max number of paths to print")

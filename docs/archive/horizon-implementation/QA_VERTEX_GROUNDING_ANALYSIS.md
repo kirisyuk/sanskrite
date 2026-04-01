@@ -13,9 +13,9 @@
 
 В ответе Vertex: `"semanticState": "DISABLED"` — семантический поиск отключён для этого datastore или запроса. Используется только keyword/BM25. Длинный вопрос ("How would a 5% VAT increase in Indonesia affect battery costs? alternative supplier") может плохо матчиться с индексом.
 
-### 2. Смешанный индекс etigram-fragments-store
+### 2. Смешанный индекс nv-horizon-fragments-store
 
-В `etigram-fragments-store` лежат:
+В `nv-horizon-fragments-store` лежат:
 - **horizon_fragments** — `type: "horizon_fragment"`, id = Firestore doc ID, путь `global/horizon_fragments/{id}.json`
 - **supply_chain_artifacts** — `kind: "SUPPLY_CHAIN_PATH"`, id типа `4E3If71ou5fw6dueZWdm`, путь `global/supply_chain_artifacts/{id}.json`
 

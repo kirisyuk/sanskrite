@@ -85,14 +85,17 @@ func RevalidateFacilityGeo(
 		}
 		resolvedISO2 := inferCountryISO2FromFormattedAddress(geo.FormattedAddress)
 		if resolvedISO2 == "" {
-			attempts = append(attempts, geoResolveAttempt{
-				Query:            query,
-				Provider:         strings.TrimSpace(geo.Provider),
-				Outcome:          "rejected",
-				Reason:           "missing_resolved_country",
-				FormattedAddress: strings.TrimSpace(geo.FormattedAddress),
-			})
-			continue
+			resolvedISO2 = inferredFacilityISO2FromStrongProviderHit(fragment, query, geo, currentISO2, pathISO2)
+			if resolvedISO2 == "" {
+				attempts = append(attempts, geoResolveAttempt{
+					Query:            query,
+					Provider:         strings.TrimSpace(geo.Provider),
+					Outcome:          "rejected",
+					Reason:           "missing_resolved_country",
+					FormattedAddress: strings.TrimSpace(geo.FormattedAddress),
+				})
+				continue
+			}
 		}
 		score, acceptReason := scoreFacilityGeoResult(fragment, query, geo.FormattedAddress, currentISO2, pathISO2, resolvedISO2)
 		if score <= 0 {
@@ -211,6 +214,7 @@ func facilityGeoValidationQueries(fragment *models.HorizonFragment) []string {
 	if fragment == nil || fragment.Type != models.FragmentTypeFacility {
 		return nil
 	}
+	requireStrongName := facilityHasStrongGeoResolvableName(fragment)
 	seen := map[string]struct{}{}
 	out := make([]string, 0, 12)
 	add := func(raw string) {
@@ -222,10 +226,13 @@ func facilityGeoValidationQueries(fragment *models.HorizonFragment) []string {
 		if _, ok := seen[key]; ok {
 			return
 		}
-		if !addressvalidate.IsPlausibleAddress(addr) {
+		if !addressvalidate.IsPlausibleAddress(addr) && !facilityQueryHasStrongEntityName(fragment, addr) && !(facilityAllowsPlainNameGeocode(fragment) && strings.EqualFold(addr, strings.TrimSpace(raw))) {
 			return
 		}
 		if isWeakGeoResolveQuery(addr) {
+			return
+		}
+		if requireStrongName && !facilityQueryHasStrongEntityName(fragment, addr) {
 			return
 		}
 		seen[key] = struct{}{}
@@ -325,6 +332,7 @@ func scoreFacilityGeoResult(
 	formattedHasPlace := place != "" && containsNormalizedGeoPhrase(formattedAddress, place)
 	compositeQuery := strings.Count(query, ",") >= 1
 	specificResult := strings.Count(formattedAddress, ",") >= 1
+	strongNameHint := facilityQueryHasStrongEntityName(fragment, query)
 	score := 0
 	reasons := make([]string, 0, 5)
 
@@ -341,7 +349,18 @@ func scoreFacilityGeoResult(
 			if formattedHasPlace {
 				score += 25
 				reasons = append(reasons, "formatted_place_match")
+				return score, geoResolveScoreReason(reasons...)
 			}
+			if strongNameHint && facilityFormattedAddressLooksSpecific(formattedAddress, resolvedISO2) {
+				score += 25
+				reasons = append(reasons, "strong_name_query", "specific_result")
+				return score, geoResolveScoreReason(reasons...)
+			}
+			return 0, "path_country_match_without_place_support"
+		}
+		if strongNameHint && facilityFormattedAddressLooksSpecific(formattedAddress, resolvedISO2) {
+			score += 25
+			reasons = append(reasons, "strong_name_query", "specific_result")
 			return score, geoResolveScoreReason(reasons...)
 		}
 		if facilityAllowsPlainNameGeocode(fragment) && specificResult {
@@ -359,6 +378,16 @@ func scoreFacilityGeoResult(
 		if place != "" && queryHasPlace && formattedHasPlace {
 			score += 40
 			reasons = append(reasons, "query_place_match", "formatted_place_match")
+			return score, geoResolveScoreReason(reasons...)
+		}
+		if place != "" && queryHasPlace && strongNameHint && facilityFormattedAddressLooksSpecific(formattedAddress, resolvedISO2) {
+			score += 20
+			reasons = append(reasons, "query_place_match", "strong_name_query", "specific_result")
+			return score, geoResolveScoreReason(reasons...)
+		}
+		if strongNameHint && facilityFormattedAddressLooksSpecific(formattedAddress, resolvedISO2) {
+			score += 20
+			reasons = append(reasons, "strong_name_query", "specific_result")
 			return score, geoResolveScoreReason(reasons...)
 		}
 		return 0, "current_country_match_without_place_support"
@@ -383,6 +412,11 @@ func scoreFacilityGeoResult(
 			score += 15
 			reasons = append(reasons, "formatted_place_match")
 		}
+		return score, geoResolveScoreReason(reasons...)
+	}
+	if currentISO2 == "" && (pathISO2 == "" || pathISO2 == "na") && strongNameHint && facilityFormattedAddressLooksSpecific(formattedAddress, resolvedISO2) {
+		score += 30
+		reasons = append(reasons, "unknown_country_strong_name", "specific_result")
 		return score, geoResolveScoreReason(reasons...)
 	}
 
@@ -428,11 +462,104 @@ func facilityPlaceNameHint(fragment *models.HorizonFragment) string {
 	return best
 }
 
+func facilityFormattedAddressLooksSpecific(formattedAddress string, resolvedISO2 string) bool {
+	formatted := normalizeGeoPhrase(formattedAddress)
+	if formatted == "" {
+		return false
+	}
+	country := normalizeGeoPhrase(countryNameByISO2(resolvedISO2))
+	if country != "" && (formatted == country || strings.HasPrefix(formatted, country+" ")) {
+		return false
+	}
+	if !strings.Contains(formatted, " ") {
+		return false
+	}
+	return strings.Count(formattedAddress, ",") >= 1
+}
+
+func inferredFacilityISO2FromStrongProviderHit(
+	fragment *models.HorizonFragment,
+	query string,
+	geo *coreontology.GeocodingResult,
+	currentISO2 string,
+	pathISO2 string,
+) string {
+	if geo == nil || !strings.EqualFold(strings.TrimSpace(geo.Provider), coreontology.GeocodingProviderGoogle) {
+		return ""
+	}
+	query = strings.TrimSpace(query)
+	formattedAddress := strings.TrimSpace(geo.FormattedAddress)
+	formattedAddress = strings.TrimSpace(formattedAddress)
+	if query == "" || formattedAddress == "" {
+		return ""
+	}
+	pathISO2 = strings.ToLower(strings.TrimSpace(pathISO2))
+	currentISO2 = strings.ToLower(strings.TrimSpace(currentISO2))
+	place := facilityPlaceHint(fragment)
+	queryHasPlace := place != "" && containsNormalizedGeoPhrase(query, place)
+	formattedHasPlace := place != "" && containsNormalizedGeoPhrase(formattedAddress, place)
+	strongNameHint := facilityQueryHasStrongEntityName(fragment, query)
+	if !strongNameHint {
+		return ""
+	}
+	if pathISO2 != "" && pathISO2 != "na" {
+		switch {
+		case facilityFormattedAddressLooksSpecific(formattedAddress, pathISO2):
+			return strings.ToUpper(pathISO2)
+		case queryHasPlace && formattedHasPlace && len(strings.Fields(normalizeGeoPhrase(formattedAddress))) >= 2:
+			return strings.ToUpper(pathISO2)
+		}
+	}
+	if currentISO2 != "" && currentISO2 != "na" && queryHasPlace && formattedHasPlace && len(strings.Fields(normalizeGeoPhrase(formattedAddress))) >= 2 {
+		return strings.ToUpper(currentISO2)
+	}
+	return ""
+}
+
+func facilityQueryHasStrongEntityName(fragment *models.HorizonFragment, query string) bool {
+	for _, candidate := range collectFacilityNameCandidates(fragment) {
+		if !facilityNameLooksGeoResolvable(candidate) {
+			continue
+		}
+		if containsNormalizedGeoPhrase(query, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func facilityHasStrongGeoResolvableName(fragment *models.HorizonFragment) bool {
+	for _, candidate := range collectFacilityNameCandidates(fragment) {
+		if facilityNameLooksGeoResolvable(candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func facilityNameLooksGeoResolvable(raw string) bool {
+	tokens := strings.Fields(normalizeGeoPhrase(raw))
+	if len(tokens) == 0 {
+		return false
+	}
+	signal := 0
+	for _, token := range tokens {
+		if len(token) <= 2 || isWeakGeoResolveToken(token) {
+			continue
+		}
+		signal++
+	}
+	return signal >= 2 || (signal == 1 && len(tokens) >= 2)
+}
+
 func shouldUpgradePlaceName(current string, candidate string) bool {
 	cur := normalizeGeoPhrase(current)
 	next := normalizeGeoPhrase(candidate)
 	if next == "" || cur == next {
 		return false
+	}
+	if cur != "" && isWeakGeoResolveQuery(cur) && !isWeakGeoResolveQuery(next) {
+		return true
 	}
 	if cur == "" {
 		return true
@@ -493,7 +620,10 @@ func trimTrailingFacilityGeoNoise(tokens []string) []string {
 		switch trimmed[len(trimmed)-1] {
 		case "plant", "factory", "facility", "facilities", "terminal", "terminals", "site", "station", "stations",
 			"center", "centre", "centers", "centres", "network", "networks", "hub", "hubs", "electronic", "electronics", "circuit",
-			"fulfillment", "distribution", "logistics", "general", "production", "processing":
+			"fulfillment", "distribution", "logistics", "general", "production", "processing", "manufacturing",
+			"showroom", "warehouse", "warehousing", "depot", "storage", "retail", "consumer", "industrial",
+			"automotive", "personal", "care", "commercial", "operations", "sales", "border", "crossing",
+			"checkpoint", "post", "supermarket", "hypermarket", "store", "shop", "outlet":
 			trimmed = trimmed[:len(trimmed)-1]
 		default:
 			return trimmed

@@ -89,7 +89,7 @@ export default function Homepage() {
 
           <a
             className="homepage-landing__external-link"
-            href="https://etigram.com/platform.html"
+            href="https://nv-horizon.com/platform.html"
             target="_blank"
             rel="noreferrer"
           >

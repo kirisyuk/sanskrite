@@ -1,14 +1,15 @@
 {
   "projects": {
-    "default": "etigram"
+    "default": "nv-horizon-test"
   },
   "targets": {
-    "etigram": {
+    "nv-horizon-test": {
       "hosting": {
         "marketing": [
-          "etigram-site"
+          "nv-horizon-test"
         ]
       }
     }
-  }
+  },
+  "etags": {}
 }

@@ -32,7 +32,7 @@ type legRow struct {
 }
 
 func main() {
-	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	tenantID := flag.String("tenant", "global", "tenant id")
 	lensID := flag.String("lens-id", "", "lens id")
 	lensName := flag.String("lens-name", "", "exact or partial lens name")
@@ -106,7 +106,7 @@ func main() {
 			orderedRefs := append(append([]string{strings.TrimSpace(leg.SupplierRef)}, leg.TransportViaRefs...), strings.TrimSpace(leg.CustomerRef))
 			resolved := pathbuilder.ResolveSupplyChainRouteGeometryDetailed(ctx, fragmentsRepo, orderedRefs)
 			nextSource := strings.TrimSpace(resolved.Source)
-			nextFlowRefs := appendUniqueStrings(leg.FlowRefs, resolved.FlowRefs...)
+			nextFlowRefs, nextAlternateFlowRefs := rewriteLegFlowRefs(leg.FlowRefs, leg.AlternateFlowRefs, resolved.FlowRefs)
 			if len(resolved.Coordinates) >= 2 {
 				if !routeCoordinatesEqual(leg.RouteCoordinates, resolved.Coordinates) || strings.TrimSpace(leg.RouteGeometrySource) != nextSource {
 					leg.RouteCoordinates = append([]models.Coordinates(nil), resolved.Coordinates...)
@@ -118,6 +118,11 @@ func main() {
 				leg.FlowRefs = nextFlowRefs
 				artifactChanged = true
 			}
+			if !stringSlicesEqual(leg.AlternateFlowRefs, nextAlternateFlowRefs) {
+				leg.AlternateFlowRefs = nextAlternateFlowRefs
+				artifactChanged = true
+			}
+			artifactChanged = rewritePrimaryOverlays(leg, resolved, nextFlowRefs, nextAlternateFlowRefs, nextSource) || artifactChanged
 		}
 		if artifactChanged {
 			changedArtifacts++
@@ -355,6 +360,120 @@ func appendUniqueStrings(base []string, extra ...string) []string {
 		}
 		seen[value] = struct{}{}
 		out = append(out, value)
+	}
+	return out
+}
+
+func rewriteLegFlowRefs(current []string, currentAlternate []string, resolved []string) ([]string, []string) {
+	primary := appendUniqueStrings(nil, resolved...)
+	if len(primary) == 0 {
+		primary = appendUniqueStrings(nil, current...)
+	}
+	alternate := appendUniqueStrings(nil, currentAlternate...)
+	for _, value := range current {
+		value = strings.TrimSpace(value)
+		if value == "" || stringSliceContains(primary, value) {
+			continue
+		}
+		alternate = appendUniqueStrings(alternate, value)
+	}
+	for _, value := range resolved {
+		value = strings.TrimSpace(value)
+		if value == "" || stringSliceContains(primary, value) {
+			continue
+		}
+		alternate = appendUniqueStrings(alternate, value)
+	}
+	return primary, removeStringSliceValues(alternate, primary...)
+}
+
+func rewritePrimaryOverlays(
+	leg *models.SupplyChainPathLeg,
+	resolved pathbuilder.ResolvedRouteGeometry,
+	flowRefs []string,
+	alternateFlowRefs []string,
+	source string,
+) bool {
+	if leg == nil || len(leg.RouteOverlays) == 0 {
+		return false
+	}
+	changed := false
+	updatedAny := false
+	for idx := range leg.RouteOverlays {
+		overlay := &leg.RouteOverlays[idx]
+		if len(leg.RouteOverlays) > 1 && strings.TrimSpace(overlay.Status) != "primary" {
+			continue
+		}
+		if len(resolved.Coordinates) >= 2 && (!routeCoordinatesEqual(overlay.RouteCoordinates, resolved.Coordinates) || strings.TrimSpace(overlay.RouteGeometrySource) != source) {
+			overlay.RouteCoordinates = append([]models.Coordinates(nil), resolved.Coordinates...)
+			overlay.RouteGeometrySource = source
+			changed = true
+		}
+		if !stringSlicesEqual(overlay.FlowRefs, flowRefs) {
+			overlay.FlowRefs = append([]string(nil), flowRefs...)
+			changed = true
+		}
+		if !stringSlicesEqual(overlay.AlternateFlowRefs, alternateFlowRefs) {
+			overlay.AlternateFlowRefs = append([]string(nil), alternateFlowRefs...)
+			changed = true
+		}
+		updatedAny = true
+	}
+	if updatedAny || len(leg.RouteOverlays) == 0 {
+		return changed
+	}
+	overlay := &leg.RouteOverlays[0]
+	if len(resolved.Coordinates) >= 2 && (!routeCoordinatesEqual(overlay.RouteCoordinates, resolved.Coordinates) || strings.TrimSpace(overlay.RouteGeometrySource) != source) {
+		overlay.RouteCoordinates = append([]models.Coordinates(nil), resolved.Coordinates...)
+		overlay.RouteGeometrySource = source
+		changed = true
+	}
+	if !stringSlicesEqual(overlay.FlowRefs, flowRefs) {
+		overlay.FlowRefs = append([]string(nil), flowRefs...)
+		changed = true
+	}
+	if !stringSlicesEqual(overlay.AlternateFlowRefs, alternateFlowRefs) {
+		overlay.AlternateFlowRefs = append([]string(nil), alternateFlowRefs...)
+		changed = true
+	}
+	return changed
+}
+
+func stringSliceContains(values []string, needle string) bool {
+	needle = strings.TrimSpace(needle)
+	if needle == "" {
+		return false
+	}
+	for _, value := range values {
+		if strings.TrimSpace(value) == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func removeStringSliceValues(values []string, remove ...string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	blocked := make(map[string]struct{}, len(remove))
+	for _, value := range remove {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		blocked[value] = struct{}{}
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := blocked[value]; ok {
+			continue
+		}
+		out = appendUniqueStrings(out, value)
 	}
 	return out
 }

@@ -33,7 +33,7 @@ export function applyEditHighlight(
 
   // Escape HTML и обернуть в span с highlight стилем
   const escapedMid = mid.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const span = `<span class="etg-edit-hl" style="background: rgba(255, 230, 150, 0.6); padding: 0 2px; border-radius: 3px;">${escapedMid}</span>`;
+  const span = `<span class="nv-edit-hl" style="background: rgba(255, 230, 150, 0.6); padding: 0 2px; border-radius: 3px;">${escapedMid}</span>`;
 
   return pre + span + post;
 }

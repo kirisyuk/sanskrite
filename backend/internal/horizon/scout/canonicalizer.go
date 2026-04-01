@@ -1036,7 +1036,7 @@ RULES:
 - %s
 - canonicalPath slug MUST be derived from shortName (base name only, no legal form).
 - Intangible-but-real actors (alliances, coalitions, unions, regulators, ministries, agencies, associations) are ORGANIZATION.
-- Government bodies MUST use /gov/{iso2|na}/{slug} (iso2 = jurisdiction). Other orgs use /org/{iso2|na}/{slug} (base name only, no legal form).
+- Government bodies MUST use /gov/{geo}/{slug} (geo = jurisdiction). Other orgs use /org/{geo}/{slug} (base name only, no legal form). Use /gov/na/{slug} or /org/na/{slug} ONLY as an exceptional last-resort when neither context nor the entity name provides a defensible jurisdiction clue.
 - GOV HIERARCHY: Government bodies form administrative hierarchies:
   - government → ministry → department → agency/authority/regulator
   - GovTypes: government, ministry, department, agency, authority, regulator, committee, service, bureau, office, council, commission
@@ -1044,8 +1044,8 @@ RULES:
   - Example: "Saudi FDA" → /gov/sa/sfda (type: authority), parent would be /gov/sa/ministry-of-health
   - Use these namespaces:
   - ORGANIZATION:
-    - /org/{iso2|na}/{lowercase-slug} (companies, NGOs, etc.; base name only, no legal form)
-    - /gov/{iso2|na}/{lowercase-slug} (ministries, regulators, agencies, state bodies)
+    - /org/{geo}/{lowercase-slug} (companies, NGOs, etc.; base name only, no legal form; /org/na only as exceptional last-resort)
+    - /gov/{geo}/{lowercase-slug} (ministries, regulators, agencies, state bodies; /gov/na only as exceptional last-resort)
   - PERSON: /person/{lowercase-slug}
   - PRODUCT: MUST use hierarchical structure /product/{category}/{type}/{stage}/{slug}
     - category: "raw" | "component" | "finished" | "service"

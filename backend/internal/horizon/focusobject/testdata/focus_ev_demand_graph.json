@@ -1,0 +1,247 @@
+{
+  "focus": {
+    "anchorCanonicalPath": "/org/cl/andes-lithium",
+    "displayLabel": "Andes Lithium",
+    "relatedCanonicalPaths": [
+      "/org/pl/baltic-cathodes",
+      "/market/eu/transport/electric-vehicles"
+    ],
+    "domainModes": [
+      "battery",
+      "demand"
+    ],
+    "queryOverrides": [
+      "EU EV demand Andes Lithium cathodes battery chain"
+    ],
+    "universeDepth": 3,
+    "lookbackHours": 48,
+    "maxImpactedEntities": 8,
+    "maxPropagationHops": 5
+  },
+  "fragments": [
+    {
+      "id": "frag-andes-lithium",
+      "tenantId": "global",
+      "canonicalPath": "/org/cl/andes-lithium",
+      "type": "ORGANIZATION",
+      "entityPath": "/Organization/Corporation",
+      "status": "active",
+      "labels": {
+        "en": "Andes Lithium"
+      }
+    },
+    {
+      "id": "frag-baltic-cathodes",
+      "tenantId": "global",
+      "canonicalPath": "/org/pl/baltic-cathodes",
+      "type": "ORGANIZATION",
+      "entityPath": "/Organization/Corporation",
+      "status": "active",
+      "labels": {
+        "en": "Baltic Cathodes"
+      }
+    },
+    {
+      "id": "frag-baltic-cell-plant",
+      "tenantId": "global",
+      "canonicalPath": "/fac/pl/baltic-cell-plant",
+      "type": "FACILITY",
+      "entityPath": "/Facility/Industrial",
+      "status": "active",
+      "labels": {
+        "en": "Baltic Cell Plant"
+      }
+    },
+    {
+      "id": "frag-euro-mobility",
+      "tenantId": "global",
+      "canonicalPath": "/org/de/euro-mobility",
+      "type": "ORGANIZATION",
+      "entityPath": "/Organization/Corporation",
+      "status": "active",
+      "labels": {
+        "en": "Euro Mobility"
+      }
+    },
+    {
+      "id": "frag-eu-ev-market",
+      "tenantId": "global",
+      "canonicalPath": "/market/eu/transport/electric-vehicles",
+      "type": "MARKET",
+      "entityPath": "/Market/Transport",
+      "status": "active",
+      "marketDomain": "transport",
+      "marketVertical": "electric-vehicles",
+      "labels": {
+        "en": "EU EV Market"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-euro-market",
+      "tenantId": "global",
+      "sourceFragmentId": "frag-euro-mobility",
+      "targetFragmentId": "frag-eu-ev-market",
+      "type": "HAS_MARKET_SEGMENT",
+      "properties": {
+        "criticality": 0.96,
+        "amplification": 1.18,
+        "latencyHours": 24
+      },
+      "provenance": {
+        "sourceType": "fixture"
+      }
+    },
+    {
+      "id": "edge-plant-euro",
+      "tenantId": "global",
+      "sourceFragmentId": "frag-baltic-cell-plant",
+      "targetFragmentId": "frag-euro-mobility",
+      "type": "SUPPLIES_TO",
+      "properties": {
+        "criticality": 0.98,
+        "amplification": 1.14,
+        "latencyHours": 36
+      },
+      "provenance": {
+        "sourceType": "fixture"
+      }
+    },
+    {
+      "id": "edge-cathodes-plant",
+      "tenantId": "global",
+      "sourceFragmentId": "frag-baltic-cathodes",
+      "targetFragmentId": "frag-baltic-cell-plant",
+      "type": "SUPPLIES_TO",
+      "properties": {
+        "criticality": 0.96,
+        "amplification": 1.14,
+        "latencyHours": 48
+      },
+      "provenance": {
+        "sourceType": "fixture"
+      }
+    },
+    {
+      "id": "edge-andes-cathodes",
+      "tenantId": "global",
+      "sourceFragmentId": "frag-andes-lithium",
+      "targetFragmentId": "frag-baltic-cathodes",
+      "type": "SUPPLIES_TO",
+      "properties": {
+        "criticality": 0.98,
+        "amplification": 1.20,
+        "latencyHours": 120
+      },
+      "provenance": {
+        "sourceType": "fixture"
+      }
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "artifact-andes-ev-chain",
+      "tenantId": "global",
+      "kind": "SUPPLY_CHAIN_PATH",
+      "canonicalKey": "/artifact/supply-chain/global/andes-eu-ev-chain",
+      "payload": {
+        "v": 1,
+        "nodes": [],
+        "edges": [],
+        "legs": [
+          {
+            "index": 0,
+            "supplierRef": "/org/cl/andes-lithium",
+            "customerRef": "/org/pl/baltic-cathodes",
+            "productRef": "/product/materials/battery-grade-lithium",
+            "bindingConfidence": 0.88,
+            "segmentConfidence": 0.84,
+            "stress": {
+              "fragility": 0.36,
+              "rerouteability": 0.62,
+              "zonePressure": 0.22,
+              "affectedZonePressure": 0.18,
+              "recoveryLatencyHours": 72,
+              "stressScore": 0.34
+            }
+          },
+          {
+            "index": 1,
+            "supplierRef": "/org/pl/baltic-cathodes",
+            "customerRef": "/fac/pl/baltic-cell-plant",
+            "productRef": "/product/component/battery-cathodes",
+            "bindingConfidence": 0.86,
+            "segmentConfidence": 0.83,
+            "stress": {
+              "fragility": 0.41,
+              "rerouteability": 0.55,
+              "zonePressure": 0.18,
+              "affectedZonePressure": 0.16,
+              "recoveryLatencyHours": 96,
+              "stressScore": 0.37
+            }
+          },
+          {
+            "index": 2,
+            "supplierRef": "/fac/pl/baltic-cell-plant",
+            "customerRef": "/org/de/euro-mobility",
+            "productRef": "/product/component/ev-battery-cells",
+            "bindingConfidence": 0.89,
+            "segmentConfidence": 0.86,
+            "stress": {
+              "fragility": 0.44,
+              "rerouteability": 0.48,
+              "zonePressure": 0.20,
+              "affectedZonePressure": 0.18,
+              "recoveryLatencyHours": 84,
+              "stressScore": 0.39
+            }
+          }
+        ]
+      },
+      "displayName": "Andes Lithium -> Baltic Cathodes -> Baltic Cell Plant -> Euro Mobility",
+      "nodeRefs": [
+        "/org/cl/andes-lithium",
+        "/org/pl/baltic-cathodes",
+        "/fac/pl/baltic-cell-plant",
+        "/org/de/euro-mobility"
+      ],
+      "anchorSupplier": "/org/cl/andes-lithium",
+      "anchorCustomer": "/org/de/euro-mobility",
+      "productAxis": "/product/component/ev-battery-cells",
+      "legCount": 3,
+      "bindingScore": 0.87,
+      "pathStressScore": 0.39,
+      "bottleneckLegIndex": 2,
+      "recoveryLatencyHours": 84
+    }
+  ],
+  "signals": [
+    {
+      "id": "signal-ev-demand-surge",
+      "axis": "physical_flow/demand",
+      "mechanism": "ev_demand_surge",
+      "amplitude": 0.98,
+      "polarity": "opportunity",
+      "seedPaths": [
+        "/market/eu/transport/electric-vehicles"
+      ],
+      "confidence": 1.0,
+      "observedAt": "2026-03-31T06:30:00Z",
+      "constraints": {
+        "timeHorizon": "short_term",
+        "modality": "confirmed",
+        "scope": "primary",
+        "impact": 0.82,
+        "escalationLevel": "warning"
+      },
+      "sourceRefs": [
+        "fixture:ev-demand"
+      ],
+      "chainRefs": [
+        "/artifact/supply-chain/global/andes-eu-ev-chain"
+      ]
+    }
+  ]
+}

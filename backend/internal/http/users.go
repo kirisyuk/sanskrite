@@ -112,7 +112,7 @@ func (h *UsersHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 
 	// Enforce waitlist: user must be approved
 	// Best-effort: if waitlist repo accessible from context
-	isHardcodedAdmin := strings.EqualFold(req.Email, "igor@etigram.pro")
+	isHardcodedAdmin := strings.EqualFold(req.Email, "igor@nordicvision.org")
 	
 	if !isHardcodedAdmin {
 		if uraw := r.Context().Value(waitlistRepoKey{}); uraw != nil {

@@ -1,8 +1,13 @@
 import React, { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ObjectInspector } from './ObjectInspector';
+import { HorizonEntityInspector } from './HorizonEntityInspector';
+import { MapObjectDetail, type MapObjectInspectorPayload } from './MapObjectDetail';
+import { LensDocumentsPanel } from './LensDocumentsPanel';
+import { ThemeContext } from './ThemeProvider';
 
-export type HorizonPanelType = 'object-inspector' | null;
+export type MapDrawerPanelType = 'view' | 'simulation' | 'export-tools';
+
+export type HorizonPanelType = 'object-inspector' | 'documents' | 'map-drawer' | null;
 
 interface HorizonDrawersProps {
   panelType: HorizonPanelType;
@@ -12,11 +17,16 @@ interface HorizonDrawersProps {
   closeAllPanels: () => void;
   getPanelVisibilityStyles: (visible: boolean) => React.CSSProperties;
   // Object Inspector props
+  projectId?: string | null;
   lensId?: string | null;
+  lensName?: string | null;
   selectedNodeId: string | null;
   selectedNodeData: any;
   selectedEdgeId: string | null;
   selectedEdgeData: any;
+  mapInspectorState?: MapObjectInspectorPayload | null;
+  mapDrawerTitle?: string | null;
+  setMapDrawerHost?: ((el: HTMLDivElement | null) => void) | null;
 }
 
 export const HorizonDrawers: React.FC<HorizonDrawersProps> = ({
@@ -26,13 +36,19 @@ export const HorizonDrawers: React.FC<HorizonDrawersProps> = ({
   setDrawerWidth,
   closeAllPanels,
   getPanelVisibilityStyles,
+  projectId,
   lensId,
+  lensName,
   selectedNodeId,
   selectedNodeData,
   selectedEdgeId,
   selectedEdgeData,
+  mapInspectorState = null,
+  mapDrawerTitle = null,
+  setMapDrawerHost = null,
 }) => {
   const { t } = useTranslation();
+  const { theme } = React.useContext(ThemeContext);
   const drawerRef = useRef<HTMLDivElement>(null);
 
   // Sync drawer width when resized natively
@@ -194,8 +210,12 @@ export const HorizonDrawers: React.FC<HorizonDrawersProps> = ({
                     style={{ color: 'var(--text-heading)' }}
                   >
                     {panelType === 'object-inspector'
-                      ? 'Object Inspector'
-                      : 'Horizon'}
+                      ? (mapInspectorState?.object ? 'Object' : 'Object Inspector')
+                      : panelType === 'documents'
+                        ? 'Lens Documents'
+                        : panelType === 'map-drawer'
+                          ? (mapDrawerTitle || 'Map Panel')
+                        : 'Horizon'}
                   </h3>
                 </div>
                 
@@ -247,12 +267,42 @@ export const HorizonDrawers: React.FC<HorizonDrawersProps> = ({
                 {/* Object Inspector Panel */}
                 {panelType === 'object-inspector' && (
                   <div style={getPanelVisibilityStyles(true)}>
-                    <ObjectInspector
-                      nodeId={selectedNodeId}
-                      nodeData={selectedNodeData}
-                      edgeId={selectedEdgeId}
-                      edgeData={selectedEdgeData}
+                    {mapInspectorState?.object ? (
+                      <MapObjectDetail
+                        {...mapInspectorState}
+                        isDark={theme === 'dark'}
+                        paletteTheme={theme === 'dark' ? 'dark' : 'light'}
+                        layout="panel"
+                      />
+                    ) : (
+                      <HorizonEntityInspector
+                        nodeId={selectedNodeId}
+                        nodeData={selectedNodeData}
+                        edgeId={selectedEdgeId}
+                        edgeData={selectedEdgeData}
+                        lensId={lensId || null}
+                      />
+                    )}
+                  </div>
+                )}
+                {panelType === 'documents' && (
+                  <div style={getPanelVisibilityStyles(true)}>
+                    <LensDocumentsPanel
+                      projectId={projectId || null}
                       lensId={lensId || null}
+                      lensName={lensName || null}
+                    />
+                  </div>
+                )}
+                {panelType === 'map-drawer' && (
+                  <div style={getPanelVisibilityStyles(true)}>
+                    <div
+                      ref={setMapDrawerHost || undefined}
+                      style={{
+                        minHeight: 0,
+                        display: 'flex',
+                        flexDirection: 'column',
+                      }}
                     />
                   </div>
                 )}
@@ -264,4 +314,3 @@ export const HorizonDrawers: React.FC<HorizonDrawersProps> = ({
     </>
   );
 };
-

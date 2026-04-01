@@ -1,6 +1,6 @@
 # Latest Lens Recognition Audit
 
-- tenant: `igor@etigram.pro`
+- tenant: `igor@nordicvision.org`
 - generatedAt: `2026-03-24T05:12:57Z`
 - lensesAudited: `8`
 

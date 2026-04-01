@@ -1,13 +1,12 @@
 package scout
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
-func TestSupplyChainStrictValidatorRejectsDistributionFacilityProducingPhysicalGoods(t *testing.T) {
+func TestSupplyChainStrictValidatorAllowsDistributionFacilityProducingPhysicalGoods(t *testing.T) {
 	validator := NewSupplyChainStrictValidator()
 	edge := &ChainEdge{
 		SourceCanonicalPath: "/fac/kz/almaty-distribution-center",
@@ -29,11 +28,8 @@ func TestSupplyChainStrictValidatorRejectsDistributionFacilityProducingPhysicalG
 	}
 
 	err := validator.ValidateEdgeAgainstFragments(edge, source, target, "job-1", 0)
-	if err == nil {
-		t.Fatal("expected validation error")
-	}
-	if got := err.Error(); got == "" || !containsAll(got, "produces_source_facility_non_producing_role", "/fac/kz/almaty-distribution-center") {
-		t.Fatalf("unexpected error: %v", err)
+	if err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
 	}
 }
 
@@ -63,7 +59,7 @@ func TestSupplyChainStrictValidatorAllowsDistributionFacilityProducingService(t 
 	}
 }
 
-func TestSupplyChainStrictValidatorRejectsWarehouseByInference(t *testing.T) {
+func TestSupplyChainStrictValidatorAllowsWarehouseByInference(t *testing.T) {
 	validator := NewSupplyChainStrictValidator()
 	edge := &ChainEdge{
 		SourceCanonicalPath: "/fac/kz/almaty-distribution-center",
@@ -81,8 +77,8 @@ func TestSupplyChainStrictValidatorRejectsWarehouseByInference(t *testing.T) {
 		Type:          models.FragmentTypeProduct,
 	}
 
-	if err := validator.ValidateEdgeAgainstFragments(edge, source, target, "job-1", 0); err == nil {
-		t.Fatal("expected validation error")
+	if err := validator.ValidateEdgeAgainstFragments(edge, source, target, "job-1", 0); err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
 	}
 }
 
@@ -110,13 +106,4 @@ func TestSupplyChainStrictValidatorAllowsManufacturingFacilityProducingPhysicalG
 	if err := validator.ValidateEdgeAgainstFragments(edge, source, target, "job-1", 0); err != nil {
 		t.Fatalf("unexpected validation error: %v", err)
 	}
-}
-
-func containsAll(haystack string, needles ...string) bool {
-	for _, needle := range needles {
-		if !strings.Contains(haystack, needle) {
-			return false
-		}
-	}
-	return true
 }

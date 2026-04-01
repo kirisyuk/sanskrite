@@ -78,14 +78,17 @@ func RevalidateOrgGeo(
 		}
 		resolvedISO2 := strings.ToLower(strings.TrimSpace(inferCountryISO2FromFormattedAddress(geo.FormattedAddress)))
 		if resolvedISO2 == "" || !taxonomy.IsISO2CountryCode(resolvedISO2) {
-			attempts = append(attempts, geoResolveAttempt{
-				Query:            query,
-				Provider:         strings.TrimSpace(geo.Provider),
-				Outcome:          "rejected",
-				Reason:           "missing_resolved_country",
-				FormattedAddress: strings.TrimSpace(geo.FormattedAddress),
-			})
-			continue
+			resolvedISO2 = inferredOrgISO2FromStrongProviderHit(fragment, query, geo, currentISO2, pathISO2)
+			if resolvedISO2 == "" || !taxonomy.IsISO2CountryCode(resolvedISO2) {
+				attempts = append(attempts, geoResolveAttempt{
+					Query:            query,
+					Provider:         strings.TrimSpace(geo.Provider),
+					Outcome:          "rejected",
+					Reason:           "missing_resolved_country",
+					FormattedAddress: strings.TrimSpace(geo.FormattedAddress),
+				})
+				continue
+			}
 		}
 		score, acceptReason := scoreOrgGeoResult(fragment, query, geo.FormattedAddress, currentISO2, pathISO2, resolvedISO2)
 		if score <= 0 {
@@ -232,6 +235,7 @@ func orgGeoValidationQueries(fragment *models.HorizonFragment) []string {
 	if fragment == nil {
 		return nil
 	}
+	requireStrongName := orgHasStrongGeoResolvableName(fragment)
 	seen := map[string]struct{}{}
 	out := make([]string, 0, 12)
 	add := func(raw string) {
@@ -249,23 +253,41 @@ func orgGeoValidationQueries(fragment *models.HorizonFragment) []string {
 		if isWeakGeoResolveQuery(addr) {
 			return
 		}
+		if requireStrongName && !orgQueryHasStrongEntityName(fragment, addr) {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, addr)
+	}
+	addForced := func(raw string) {
+		addr := strings.TrimSpace(raw)
+		if addr == "" {
+			return
+		}
+		key := strings.ToLower(addr)
+		if _, ok := seen[key]; ok {
+			return
+		}
 		seen[key] = struct{}{}
 		out = append(out, addr)
 	}
 
 	for _, query := range orgDeterministicGeoQueries(fragment) {
-		add(query)
+		addForced(query)
 	}
 
 	names := orgRevalidationNameCandidates(fragment)
-	placeHints := orgPlaceHints(fragment)
+	currentISO2Hint := inferOrgISO2(fragment)
+	pathISO2Hint := orgPathISO2(fragment.CanonicalPath)
+	resolvedISO2Hint := ""
+	placeHints := filterCountryLikeGeoHints(orgPlaceHints(fragment), pathISO2Hint, currentISO2Hint, resolvedISO2Hint)
 	geoHints := make([]string, 0, 3)
-	if currentISO2 := inferOrgISO2(fragment); currentISO2 != "" {
+	if currentISO2 := currentISO2Hint; currentISO2 != "" {
 		if country := countryNameByISO2(currentISO2); country != "" {
 			geoHints = append(geoHints, country)
 		}
 	}
-	if pathISO2 := orgPathISO2(fragment.CanonicalPath); pathISO2 != "" && pathISO2 != "na" {
+	if pathISO2 := pathISO2Hint; pathISO2 != "" && pathISO2 != "na" {
 		if country := countryNameByISO2(pathISO2); country != "" {
 			geoHints = append(geoHints, country)
 		}
@@ -371,7 +393,7 @@ func scoreOrgGeoResult(
 	specificResult := orgFormattedAddressLooksSpecific(formattedAddress, resolvedISO2)
 	deterministicHint := orgIsDeterministicGeoQuery(fragment, query)
 	strongNameHint := orgQueryHasStrongEntityName(fragment, query)
-	placeHints := orgPlaceHints(fragment)
+	placeHints := filterCountryLikeGeoHints(orgPlaceHints(fragment), pathISO2, currentISO2, resolvedISO2)
 	queryHasPlace := anyGeoPhraseMatch(query, placeHints)
 	formattedHasPlace := anyGeoPhraseMatch(formattedAddress, placeHints)
 	labelISO2 := strings.ToLower(strings.TrimSpace(inferISO2FromLabel(orgRevalidationName(fragment), fragment)))
@@ -595,12 +617,90 @@ func orgFormattedAddressLooksSpecific(formattedAddress string, resolvedISO2 stri
 	return strings.Count(formattedAddress, ",") >= 1
 }
 
+func filterCountryLikeGeoHints(hints []string, isoCandidates ...string) []string {
+	if len(hints) == 0 {
+		return nil
+	}
+	blocked := make(map[string]struct{})
+	for _, iso := range isoCandidates {
+		iso = strings.ToLower(strings.TrimSpace(iso))
+		if iso == "" || iso == "na" {
+			continue
+		}
+		blocked[iso] = struct{}{}
+		if country := normalizeGeoPhrase(countryNameByISO2(iso)); country != "" {
+			blocked[country] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(hints))
+	for _, hint := range hints {
+		normalized := normalizeGeoPhrase(hint)
+		if normalized == "" {
+			continue
+		}
+		if _, ok := blocked[normalized]; ok {
+			continue
+		}
+		out = append(out, hint)
+	}
+	return out
+}
+
+func inferredOrgISO2FromStrongProviderHit(
+	fragment *models.HorizonFragment,
+	query string,
+	geo *coreontology.GeocodingResult,
+	currentISO2 string,
+	pathISO2 string,
+) string {
+	if geo == nil || !strings.EqualFold(strings.TrimSpace(geo.Provider), coreontology.GeocodingProviderGoogle) {
+		return ""
+	}
+	query = strings.TrimSpace(query)
+	formattedAddress := strings.TrimSpace(geo.FormattedAddress)
+	formattedAddress = strings.TrimSpace(formattedAddress)
+	if query == "" || formattedAddress == "" {
+		return ""
+	}
+	pathISO2 = strings.ToLower(strings.TrimSpace(pathISO2))
+	currentISO2 = strings.ToLower(strings.TrimSpace(currentISO2))
+	placeHints := orgPlaceHints(fragment)
+	queryHasPlace := anyGeoPhraseMatch(query, placeHints)
+	formattedHasPlace := anyGeoPhraseMatch(formattedAddress, placeHints)
+	deterministicHint := orgIsDeterministicGeoQuery(fragment, query)
+	strongNameHint := orgQueryHasStrongEntityName(fragment, query)
+	if !deterministicHint && !strongNameHint {
+		return ""
+	}
+	if pathISO2 != "" && pathISO2 != "na" {
+		switch {
+		case orgFormattedAddressLooksSpecific(formattedAddress, pathISO2):
+			return pathISO2
+		case queryHasPlace && formattedHasPlace && len(strings.Fields(normalizeGeoPhrase(formattedAddress))) >= 2:
+			return pathISO2
+		}
+	}
+	if currentISO2 != "" && currentISO2 != "na" && queryHasPlace && formattedHasPlace && len(strings.Fields(normalizeGeoPhrase(formattedAddress))) >= 2 {
+		return currentISO2
+	}
+	return ""
+}
+
 func orgQueryHasStrongEntityName(fragment *models.HorizonFragment, query string) bool {
 	for _, candidate := range orgRevalidationNameCandidates(fragment) {
 		if !orgNameLooksGeoResolvable(candidate) {
 			continue
 		}
 		if containsNormalizedGeoPhrase(query, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func orgHasStrongGeoResolvableName(fragment *models.HorizonFragment) bool {
+	for _, candidate := range orgRevalidationNameCandidates(fragment) {
+		if orgNameLooksGeoResolvable(candidate) {
 			return true
 		}
 	}

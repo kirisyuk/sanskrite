@@ -999,7 +999,7 @@ Context:
 - Canonical path format:
   - org: /org/{iso2}/{slug}
   - gov: /gov/{iso2_or_composite}/{slug}
-- The geo token "na" means "unknown jurisdiction". It is allowed, but we want to infer a better ISO token when possible.
+- The geo token "na" means "unknown jurisdiction". It is allowed ONLY as an exceptional last-resort when neither context nor the entity name provides a defensible jurisdiction clue, and we want to infer a better ISO token when possible.
 
 Task:
 - Infer the correct geo token for this fragment.

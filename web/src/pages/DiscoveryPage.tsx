@@ -343,8 +343,8 @@ const DiscoveryPage: React.FC = () => {
         try {
           const btn = document.getElementById('btn-artifacts');
           if (btn) {
-            btn.classList.add('etg-glow');
-            window.setTimeout(() => btn.classList.remove('etg-glow'), 1400);
+            btn.classList.add('nv-glow');
+            window.setTimeout(() => btn.classList.remove('nv-glow'), 1400);
           }
         } catch {}
       }
@@ -2130,7 +2130,7 @@ const DiscoveryPage: React.FC = () => {
                                         inset: 0,
                                         background:
                                           'linear-gradient(90deg, transparent, var(--white-20), transparent)',
-                                        animation: 'etg-shimmer 2s infinite',
+                                        animation: 'nv-shimmer 2s infinite',
                                       }}
                                     />
                         </div>
@@ -2150,7 +2150,7 @@ const DiscoveryPage: React.FC = () => {
                                         inset: 0,
                                         background:
                                           'linear-gradient(90deg, transparent, var(--white-20), transparent)',
-                                        animation: 'etg-shimmer 2s infinite',
+                                        animation: 'nv-shimmer 2s infinite',
                                       }}
                                     />
                         </div>
@@ -2170,7 +2170,7 @@ const DiscoveryPage: React.FC = () => {
                                         inset: 0,
                                         background:
                                           'linear-gradient(90deg, transparent, var(--white-20), transparent)',
-                                        animation: 'etg-shimmer 2s infinite',
+                                        animation: 'nv-shimmer 2s infinite',
                                       }}
                                     />
                         </div>
@@ -2190,7 +2190,7 @@ const DiscoveryPage: React.FC = () => {
                                         inset: 0,
                                         background:
                                           'linear-gradient(90deg, transparent, var(--white-20), transparent)',
-                                        animation: 'etg-shimmer 2s infinite',
+                                        animation: 'nv-shimmer 2s infinite',
                                       }}
                                     />
                         </div>
@@ -3544,7 +3544,7 @@ Return ONLY JSON, no markdown, no code fences, no explanations.`;
                                   inset: 0,
                                   background:
                                     'linear-gradient(90deg, transparent, var(--white-20), transparent)',
-                                  animation: 'etg-shimmer 2s infinite',
+                                  animation: 'nv-shimmer 2s infinite',
                                 }}
                               />
                   </div>
@@ -3564,7 +3564,7 @@ Return ONLY JSON, no markdown, no code fences, no explanations.`;
                                   inset: 0,
                                   background:
                                     'linear-gradient(90deg, transparent, var(--white-20), transparent)',
-                                  animation: 'etg-shimmer 2s infinite',
+                                  animation: 'nv-shimmer 2s infinite',
                                 }}
                               />
                   </div>
@@ -3584,7 +3584,7 @@ Return ONLY JSON, no markdown, no code fences, no explanations.`;
                                   inset: 0,
                                   background:
                                     'linear-gradient(90deg, transparent, var(--white-20), transparent)',
-                                  animation: 'etg-shimmer 2s infinite',
+                                  animation: 'nv-shimmer 2s infinite',
                                 }}
                               />
                   </div>
@@ -3604,7 +3604,7 @@ Return ONLY JSON, no markdown, no code fences, no explanations.`;
                                   inset: 0,
                                   background:
                                     'linear-gradient(90deg, transparent, var(--white-20), transparent)',
-                                  animation: 'etg-shimmer 2s infinite',
+                                  animation: 'nv-shimmer 2s infinite',
                                 }}
                               />
                   </div>

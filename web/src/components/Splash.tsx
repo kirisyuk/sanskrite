@@ -1,7 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import lightLogo from '../assets/etigram-light-theme.png';
-import darkLogo from '../assets/etigram-dark-theme.png';
+import lightLogo from '../assets/nv-horizon-light-theme.png';
+import darkLogo from '../assets/nv-horizon-dark-theme.png';
 import { ThemeContext } from './ThemeProvider';
 
 type Props = { onSubmit: (query: string) => void };
@@ -22,7 +22,7 @@ export default function Splash({ onSubmit }: Props) {
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-white text-slate-900 dark:bg-slate-900 dark:text-slate-100 p-6">
-      <img src={theme === 'dark' ? darkLogo : lightLogo} alt="Etigram" className="h-3 w-auto mb-6" />
+      <img src={theme === 'dark' ? darkLogo : lightLogo} alt="Horizon" className="h-3 w-auto mb-6" />
       <form
         className="w-full max-w-xl"
         onSubmit={(e) => {

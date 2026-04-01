@@ -196,7 +196,7 @@ class GLiNERBackend:
         return EntityExtractionResult(entities=dedupe_entities(entities), raw={"backend": "gliner", "model": self.model_name})
 
 
-app = FastAPI(title="Etigram Entity Extract", version="1.0.0")
+app = FastAPI(title="Horizon Entity Extract", version="1.0.0")
 backend_name = os.getenv("MODEL_BACKEND", "rules").strip().lower()
 gliner_name = os.getenv("GLINER_MODEL_NAME", "").strip()
 gliner_backend = GLiNERBackend(gliner_name) if backend_name == "gliner" else None

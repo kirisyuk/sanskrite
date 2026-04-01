@@ -21,7 +21,7 @@
 
 ```sql
 -- Создаем функцию для анализа документов
-CREATE OR REPLACE FUNCTION `etigram.etigram_documents.analyze_document`(
+CREATE OR REPLACE FUNCTION `nv-horizon.nv_horizon_documents.analyze_document`(
   gcs_uri STRING,
   prompt STRING
 )
@@ -45,7 +45,7 @@ WITH document_content AS (
     -- Здесь будет вызов Vertex AI для чтения и анализа
     -- Пока используем storagePath как ссылку
     m.storagePath as content_uri
-  FROM `etigram.etigram_documents.documents_metadata` m
+  FROM `nv-horizon.nv_horizon_documents.documents_metadata` m
   WHERE m.status = 'processed'
 )
 SELECT 
@@ -83,11 +83,11 @@ LIMIT 10
 
 ```bash
 # Интерактивная установка
-firebase ext:install firebase/firestore-bigquery-export --project=etigram
+firebase ext:install firebase/firestore-bigquery-export --project=nv-horizon
 
 # Параметры:
 # - Collection: rag_documents
-# - Dataset: etigram_documents  
+# - Dataset: nv_horizon_documents  
 # - Table: documents_metadata
 # - Location: US
 ```

@@ -38,7 +38,7 @@ export const RightPanelButtons: React.FC<RightPanelButtonsProps> = ({
       // Special handling for artifacts button
       try {
         const btn = document.getElementById('btn-artifacts');
-        if (btn) btn.classList.remove('etg-glow-blue');
+        if (btn) btn.classList.remove('nv-glow-blue');
       } catch {}
     }
     

@@ -236,7 +236,7 @@ func resolveVertexDataStoreID(ctx context.Context, projectID string) string {
 	if s := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_DATA_STORE_ID")); s != "" {
 		return s
 	}
-	if s := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID")); s != "" {
+	if s := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID")); s != "" {
 		return s
 	}
 	return strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID"))
@@ -252,7 +252,7 @@ func runDemo(ctx context.Context, question string) {
 		proj = os.Getenv("GOOGLE_CLOUD_PROJECT")
 	}
 	if proj == "" {
-		proj = "etigram"
+		proj = "nv-horizon"
 	}
 	exec := initAIExecutor(ctx, proj)
 	if exec == nil {

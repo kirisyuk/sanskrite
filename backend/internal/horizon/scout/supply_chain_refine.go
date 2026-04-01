@@ -65,7 +65,8 @@ func (e *ScoutEngine) runSupplyChainAssemblyStage(
 	}
 	e.pipelineStageBegin(ctx, job, pipelineName, stage, true, stage)
 
-	if e.supplyChainPathBuilder == nil || e.fragmentsRepo == nil || e.edgesRepo == nil {
+	activeBuilder := e.activeChainPathBuilder(job)
+	if activeBuilder == nil || e.fragmentsRepo == nil || e.edgesRepo == nil {
 		summary := buildSupplyChainAssemblyState(job, nil, "empty", "no_materialized_supply_links", stage)
 		job.State["supplyChainAssembly"] = summary
 		e.pipelineStageSkip(ctx, job, pipelineName, stage, true, "no_materialized_supply_links")
@@ -83,7 +84,7 @@ func (e *ScoutEngine) runSupplyChainAssemblyStage(
 	}
 
 	rawNodeRefs, rawNodeLabels, rawEdges, frontiers := collectSupplyChainAssemblyRawGraph(job)
-	builder := pathbuilder.NewSupplyChainAssemblyBuilder(e.fragmentsRepo, e.edgesRepo, e.supplyChainPathBuilder)
+	builder := pathbuilder.NewSupplyChainAssemblyBuilder(e.fragmentsRepo, e.edgesRepo, activeBuilder)
 	if e.canonicalPathResolver != nil {
 		builder = builder.WithProductDictionary(e.canonicalPathResolver.productDictionary)
 	}
@@ -641,7 +642,8 @@ func isSupplyChainRefineContinuationJob(job *models.ScoutingJob) bool {
 }
 
 func isSupplyChainDomainJob(job *models.ScoutingJob) bool {
-	return taxonomy.HasDomainMode(getJobDomainModes(job), taxonomy.DomainModeSupplyChain)
+	return taxonomy.HasDomainMode(getJobDomainModes(job), taxonomy.DomainModeSupplyChain) ||
+		taxonomy.HasDomainMode(getJobDomainModes(job), taxonomy.DomainModeServiceChain)
 }
 
 func isFastFirstSupplyChainJob(job *models.ScoutingJob) bool {
@@ -651,14 +653,14 @@ func isFastFirstSupplyChainJob(job *models.ScoutingJob) bool {
 	contractTypes := contractTypesFromDomainsRaw(job.State["domains"])
 	if len(contractTypes) == 0 {
 		targetCT, _ := parseDomainPathFacets(strings.TrimSpace(job.TargetCanonicalPath))
-		if agents.IsSupplyChainContractType(targetCT) {
+		if agents.IsOperationalChainContractType(targetCT) {
 			return true
 		}
 		return isSupplyChainDomainJob(job)
 	}
 	hasSupplyChain := false
 	for _, contractType := range contractTypes {
-		if agents.IsSupplyChainContractType(contractType) {
+		if agents.IsOperationalChainContractType(contractType) {
 			hasSupplyChain = true
 			continue
 		}

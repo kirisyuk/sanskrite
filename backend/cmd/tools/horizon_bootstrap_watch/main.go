@@ -44,7 +44,7 @@ func main() {
 	flag.Parse()
 
 	if strings.TrimSpace(*project) == "" {
-		*project = "etigram"
+		*project = "nv-horizon"
 	}
 
 	fsClient, err := gcp.NewFirestoreClient(ctx, *project)

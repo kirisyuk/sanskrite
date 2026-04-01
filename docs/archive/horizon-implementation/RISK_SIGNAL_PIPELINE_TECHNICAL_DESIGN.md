@@ -217,7 +217,7 @@ Forbidden:
 
 Dedicated queue:
 
-`CLOUD_TASKS_RISK_QUEUE` (default `etigram-risk`)
+`CLOUD_TASKS_RISK_QUEUE` (default `nv-horizon-risk`)
 
 Initial config:
 

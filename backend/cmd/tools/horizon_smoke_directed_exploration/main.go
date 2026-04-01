@@ -34,7 +34,7 @@ type scenarioAttemptResult struct {
 }
 
 func main() {
-	projectID := flag.String("project", "etigram", "GCP / Firestore project id")
+	projectID := flag.String("project", "nv-horizon", "GCP / Firestore project id")
 	jobProjectID := flag.String("job-project", "codex-directed-exploration-smoke", "Lens/project id used for smoke lenses")
 	attempts := flag.Int("attempts", 3, "Max anchors to try per scenario")
 	sampleLimit := flag.Int("sample-limit", 12, "How many anchors to sample per kind")

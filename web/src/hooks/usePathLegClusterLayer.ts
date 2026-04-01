@@ -112,6 +112,66 @@ function artifactLegCoordinateList(leg: any, ...keys: string[]): [number, number
   );
 }
 
+function isAbstractRailNetworkRef(ref: string): boolean {
+  const normalized = String(ref || '').trim().toLowerCase();
+  return (
+    normalized.endsWith('-rail-network') ||
+    normalized.includes('/rail-network') ||
+    normalized.endsWith('-distribution-network') ||
+    normalized.includes('/distribution-network')
+  );
+}
+
+function uniqueLegStrings(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
+}
+
+function collapseAbstractRailNetworkLegs(legs: any[]): any[] {
+  const out: any[] = [];
+  for (let idx = 0; idx < legs.length; idx += 1) {
+    const current = legs[idx];
+    const currentCustomer = artifactLegString(current, 'customerRef', 'CustomerRef');
+    if (idx + 1 < legs.length && isAbstractRailNetworkRef(currentCustomer)) {
+      const next = legs[idx + 1];
+      const nextSupplier = artifactLegString(next, 'supplierRef', 'SupplierRef');
+      const sameProduct = artifactLegString(current, 'productRef', 'ProductRef') === artifactLegString(next, 'productRef', 'ProductRef');
+      if (currentCustomer && currentCustomer === nextSupplier && sameProduct) {
+        out.push({
+          ...current,
+          customerRef: artifactLegString(next, 'customerRef', 'CustomerRef'),
+          CustomerRef: artifactLegString(next, 'customerRef', 'CustomerRef'),
+          transportViaRefs: uniqueLegStrings([
+            ...artifactLegStringList(current, 'transportViaRefs', 'TransportViaRefs'),
+            ...artifactLegStringList(next, 'transportViaRefs', 'TransportViaRefs'),
+          ].filter((ref) => !isAbstractRailNetworkRef(ref))),
+          TransportViaRefs: uniqueLegStrings([
+            ...artifactLegStringList(current, 'transportViaRefs', 'TransportViaRefs'),
+            ...artifactLegStringList(next, 'transportViaRefs', 'TransportViaRefs'),
+          ].filter((ref) => !isAbstractRailNetworkRef(ref))),
+          flowRefs: uniqueLegStrings([
+            ...artifactLegStringList(current, 'flowRefs', 'FlowRefs'),
+            ...artifactLegStringList(next, 'flowRefs', 'FlowRefs'),
+          ]),
+          FlowRefs: uniqueLegStrings([
+            ...artifactLegStringList(current, 'flowRefs', 'FlowRefs'),
+            ...artifactLegStringList(next, 'flowRefs', 'FlowRefs'),
+          ]),
+          routeCoordinates: [],
+          RouteCoordinates: [],
+          routeGeometrySource: '',
+          RouteGeometrySource: '',
+          mode: artifactLegString(current, 'mode', 'Mode') || artifactLegString(next, 'mode', 'Mode'),
+          Mode: artifactLegString(current, 'mode', 'Mode') || artifactLegString(next, 'mode', 'Mode'),
+        });
+        idx += 1;
+        continue;
+      }
+    }
+    out.push(current);
+  }
+  return out;
+}
+
 function artifactLegNumber(leg: any, ...keys: string[]): number | null {
   const value = artifactLegField<unknown>(leg, ...keys);
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -221,6 +281,21 @@ function selectFlowGeometry(
   }
   if (best) return best.coords;
   return fallbackCoords;
+}
+
+function isApproximateRouteGeometrySource(value: string): boolean {
+  const raw = String(value || '').trim().toLowerCase();
+  return raw === 'fragmentary_waypoint_sequence' || raw === 'partial_segment_geometry';
+}
+
+function shouldPreferFlowGeometry(
+  explicitCoords: [number, number][],
+  flowRefs: string[],
+  routeGeometrySource: string,
+): boolean {
+  return explicitCoords.length >= 2
+    && flowRefs.length > 0
+    && isApproximateRouteGeometrySource(routeGeometrySource);
 }
 
 function boundsFromCoords(coords: [number, number][]): [number, number, number, number] {
@@ -480,9 +555,10 @@ export function usePathLegClusterLayer(
       const artifactFamilyId = String(artifact.familyId || artifact.payload?.family?.id || '').trim();
       const artifactFocus = activeArtifactSet.has(artifactId) || (artifactFamilyId && focusFamilyIds.has(artifactFamilyId));
       const legsPayload = Array.isArray(artifact.payload?.legs) ? artifact.payload.legs : [];
+      const legsSource = collapseAbstractRailNetworkLegs(legsPayload);
 
-      for (let legArrayIndex = 0; legArrayIndex < legsPayload.length; legArrayIndex += 1) {
-        const leg = legsPayload[legArrayIndex];
+      for (let legArrayIndex = 0; legArrayIndex < legsSource.length; legArrayIndex += 1) {
+        const leg = legsSource[legArrayIndex];
         const legIndex = resolvedArtifactLegIndex(leg, legArrayIndex);
         const sourceRef = artifactLegString(leg, 'supplierRef', 'SupplierRef');
         const targetRef = artifactLegString(leg, 'customerRef', 'CustomerRef');
@@ -500,7 +576,10 @@ export function usePathLegClusterLayer(
         if (baseCoords.length < 2) continue;
         const flowRefs = artifactLegStringList(leg, 'flowRefs', 'FlowRefs');
         const routeGeometrySource = artifactLegString(leg, 'routeGeometrySource', 'RouteGeometrySource');
-        const coords = explicitCoords.length >= 2 ? explicitCoords : selectFlowGeometry(flowRefs, fallbackCoords, flowById);
+        const preferFlowGeometry = shouldPreferFlowGeometry(explicitCoords, flowRefs, routeGeometrySource);
+        const coords = !preferFlowGeometry && explicitCoords.length >= 2
+          ? explicitCoords
+          : selectFlowGeometry(flowRefs, fallbackCoords, flowById);
         if (explicitCoords.length < 2 && flowRefs.length === 0 && routeGeometrySource === 'fragmentary_waypoint_sequence') continue;
         if (coords.length < 2) continue;
 
@@ -599,7 +678,6 @@ export function usePathLegClusterLayer(
     }
 
     const zoom = cameraSnapshot.zoom;
-    const hasFocusedArtifacts = activeArtifactIds.length > 0;
     const viewport = new maplibregl.LngLatBounds(
       [cameraSnapshot.west, cameraSnapshot.south],
       [cameraSnapshot.east, cameraSnapshot.north],
@@ -612,9 +690,7 @@ export function usePathLegClusterLayer(
       0.24,
       1,
     );
-    const rawVisibilityWeight = hasFocusedArtifacts
-      ? clamp(rawVisibilityBase * 0.74, 0.18, 0.72)
-      : rawVisibilityBase;
+    const rawVisibilityWeight = rawVisibilityBase;
 
     const clusterAnchorByPath: Record<string, [number, number]> = {};
     for (const [canonicalPath, membership] of markerClusters.membershipByCanonicalPath.entries()) {

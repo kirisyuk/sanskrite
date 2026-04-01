@@ -13,7 +13,7 @@
 cd backend
 
 # Deploy to Cloud Run (using existing Dockerfile)
-gcloud run deploy etigram-api \
+gcloud run deploy nv-horizon-api \
   --source . \
   --region us-central1 \
   --platform managed \
@@ -53,7 +53,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "=== Deploying Backend to Cloud Run ===" -ForegroundColor Green
-gcloud run deploy etigram-api `
+gcloud run deploy nv-horizon-api `
   --source . `
   --region us-central1 `
   --platform managed `
@@ -91,7 +91,7 @@ Write-Host "=== Deployment Complete! ===" -ForegroundColor Green
 
 ### 1. Check Backend Logs
 ```bash
-gcloud logs read --project=etigram --service=etigram-api --limit=100
+gcloud logs read --project=nv-horizon --service=nv-horizon-api --limit=100
 ```
 
 ### 2. Test Discovery Flow
@@ -123,12 +123,12 @@ orchestrator: loaded N sources for project XXX
 ### Backend
 ```bash
 # List revisions
-gcloud run revisions list --service=etigram-api --region=us-central1
+gcloud run revisions list --service=nv-horizon-api --region=us-central1
 
 # Rollback to previous revision
-gcloud run services update-traffic etigram-api \
+gcloud run services update-traffic nv-horizon-api \
   --region=us-central1 \
-  --to-revisions=etigram-api-00039-xxx=100
+  --to-revisions=nv-horizon-api-00039-xxx=100
 ```
 
 ### Frontend
@@ -147,7 +147,7 @@ FIRESTORE_EMULATOR_HOST= (not set for production)
 
 Check with:
 ```bash
-gcloud run services describe etigram-api --region=us-central1 --format='value(spec.template.spec.containers[0].env)'
+gcloud run services describe nv-horizon-api --region=us-central1 --format='value(spec.template.spec.containers[0].env)'
 ```
 
 ## Monitoring
@@ -155,15 +155,15 @@ gcloud run services describe etigram-api --region=us-central1 --format='value(sp
 ### Check Service Health
 ```bash
 # Backend
-curl "https://etigram-api-<hash>-uc.a.run.app/healthz"
+curl "https://nv-horizon-api-<hash>-uc.a.run.app/healthz"
 
 # Check WebSocket
-wscat -c wss://etigram-api-<hash>-uc.a.run.app/ws?token=YOUR_TOKEN
+wscat -c wss://nv-horizon-api-<hash>-uc.a.run.app/ws?token=YOUR_TOKEN
 ```
 
 ### View Real-time Logs
 ```bash
-gcloud logs tail --project=etigram --resource-type=cloud_run_revision
+gcloud logs tail --project=nv-horizon --resource-type=cloud_run_revision
 ```
 
 

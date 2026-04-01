@@ -12,6 +12,7 @@ type ScopeKind string
 const (
 	ScopeKindLensStrict         ScopeKind = "lens_strict"
 	ScopeKindLensMap            ScopeKind = "lens_map"
+	ScopeKindLensResearch       ScopeKind = "lens_research"
 	ScopeKindWatchSubject       ScopeKind = "watch_subject"
 	ScopeKindScoutJob           ScopeKind = "scout_job"
 	ScopeKindSimulationBaseline ScopeKind = "simulation_baseline"
@@ -300,7 +301,7 @@ func defaultEntryPointForScope(kind ScopeKind) EntryPoint {
 		return EntryPointSimulation
 	case ScopeKindAdHoc:
 		return EntryPointAdHoc
-	case ScopeKindLensStrict, ScopeKindLensMap:
+	case ScopeKindLensStrict, ScopeKindLensMap, ScopeKindLensResearch:
 		return EntryPointLens
 	default:
 		return EntryPointAPI

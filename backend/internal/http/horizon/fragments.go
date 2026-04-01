@@ -562,7 +562,8 @@ func (h *HorizonHandlers) ListGeoObjects(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// listGeoObjectsForLens returns geo-bound fragments for a lens: scope members + 1-hop neighbors.
+// listGeoObjectsForLens returns geo-bound fragments for a lens research universe:
+// the current workbench/core scope plus persisted researchObjects for the lens.
 func (h *HorizonHandlers) listGeoObjectsForLens(
 	ctx context.Context,
 	lensID string,
@@ -573,70 +574,65 @@ func (h *HorizonHandlers) listGeoObjectsForLens(
 		return nil, fmt.Errorf("lens not found: %w", err)
 	}
 
-	// --- Resolve scope paths (shared with workscope for lens map / WorkScope parity) ---
-	scopePaths := workscope.LensScopePathsWithResolvedQueries(lens)
-
-	// Canonicalize via resolver (best-effort).
-	resolvedScope := make([]string, 0, len(scopePaths))
-	if se := h.service.Scout(); se != nil {
-		if resolver := se.CanonicalPathResolver(); resolver != nil {
-			for _, p := range scopePaths {
-				ft := scout.InferFragmentTypeFromCanonicalPath(p)
-				if ft == "" {
-					ft = models.FragmentTypeOrganization
-				}
-				if rr, rerr := resolver.Resolve(ctx, p, ft); rerr == nil && rr != nil && strings.TrimSpace(rr.CanonicalPath) != "" {
-					resolvedScope = append(resolvedScope, strings.TrimSpace(rr.CanonicalPath))
-				} else {
-					resolvedScope = append(resolvedScope, p)
+	resolveLensPaths := func(paths []string) []string {
+		if len(paths) == 0 {
+			return nil
+		}
+		resolved := make([]string, 0, len(paths))
+		if se := h.service.Scout(); se != nil {
+			if resolver := se.CanonicalPathResolver(); resolver != nil {
+				for _, p := range paths {
+					ft := scout.InferFragmentTypeFromCanonicalPath(p)
+					if ft == "" {
+						ft = models.FragmentTypeOrganization
+					}
+					if rr, rerr := resolver.Resolve(ctx, p, ft); rerr == nil && rr != nil && strings.TrimSpace(rr.CanonicalPath) != "" {
+						resolved = append(resolved, strings.TrimSpace(rr.CanonicalPath))
+					} else {
+						resolved = append(resolved, p)
+					}
 				}
 			}
 		}
-	}
-	if len(resolvedScope) == 0 {
-		resolvedScope = scopePaths
+		if len(resolved) == 0 {
+			resolved = append(resolved, paths...)
+		}
+		seen := map[string]struct{}{}
+		out := make([]string, 0, len(resolved))
+		for _, p := range resolved {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if _, ok := seen[p]; ok {
+				continue
+			}
+			seen[p] = struct{}{}
+			out = append(out, p)
+		}
+		return out
 	}
 
-	// Dedupe.
-	seen2 := map[string]struct{}{}
-	outScope := make([]string, 0, len(resolvedScope))
-	for _, p := range resolvedScope {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		if _, ok := seen2[p]; ok {
-			continue
-		}
-		seen2[p] = struct{}{}
-		outScope = append(outScope, p)
+	coreScopePaths := resolveLensPaths(workscope.LensWorkbenchScopePaths(lens))
+	universePaths := resolveLensPaths(workscope.LensResearchUniversePaths(lens))
+	if len(universePaths) == 0 {
+		universePaths = append(universePaths, coreScopePaths...)
 	}
 
-	// --- Fetch scope fragments ---
-	scopeFragments, err := h.service.Fragments().ListByCanonicalPaths(ctx, outScope)
+	coreScopeSet := make(map[string]struct{}, len(coreScopePaths))
+	for _, p := range coreScopePaths {
+		coreScopeSet[p] = struct{}{}
+	}
+
+	// --- Fetch universe fragments ---
+	universeFragments, err := h.service.Fragments().ListByCanonicalPaths(ctx, universePaths)
 	if err != nil {
-		return nil, fmt.Errorf("scope fragments: %w", err)
-	}
-
-	// --- Collect 1-hop neighbor IDs via edges (shared with workscope) ---
-	neighborIDList := workscope.CollectMapOneHopNeighborFragmentIDs(ctx, "global", scopeFragments, h.service.Edges())
-
-	// --- Batch-fetch neighbor fragments ---
-	var neighborFragments []*models.HorizonFragment
-	if len(neighborIDList) > 0 {
-		nbMap, err := h.service.Fragments().GetMany(ctx, neighborIDList)
-		if err != nil {
-			log.Printf("listGeoObjectsForLens: GetMany neighbors error: %v", err)
-		} else {
-			for _, f := range nbMap {
-				neighborFragments = append(neighborFragments, f)
-			}
-		}
+		return nil, fmt.Errorf("research universe fragments: %w", err)
 	}
 
 	// --- Build response items with coordinate resolution ---
-	items := make([]geoObjectResponseItem, 0, len(scopeFragments)+len(neighborFragments))
-	addFragment := func(f *models.HorizonFragment, inScope bool) {
+	items := make([]geoObjectResponseItem, 0, len(universeFragments))
+	addFragment := func(f *models.HorizonFragment) {
 		if f == nil {
 			return
 		}
@@ -665,16 +661,14 @@ func (h *HorizonHandlers) listGeoObjectsForLens(
 		} else {
 			return
 		}
+		_, inScope := coreScopeSet[strings.TrimSpace(f.CanonicalPath)]
 		if item, ok := fragmentToGeoItem(f, inScope); ok {
 			items = append(items, item)
 		}
 	}
 
-	for _, f := range scopeFragments {
-		addFragment(f, true)
-	}
-	for _, f := range neighborFragments {
-		addFragment(f, false)
+	for _, f := range universeFragments {
+		addFragment(f)
 	}
 
 	return items, nil

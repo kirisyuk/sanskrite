@@ -18,7 +18,7 @@ import (
 )
 
 var (
-	projectID         = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	projectID         = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	tenantID          = flag.String("tenant", "global", "tenant id")
 	lensID            = flag.String("lens-id", "", "optional lens id filter")
 	artifactKeyPrefix = flag.String("artifact-key-prefix", "", "optional artifact canonical key prefix filter")

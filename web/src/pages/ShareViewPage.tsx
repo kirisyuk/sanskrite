@@ -1,5 +1,5 @@
 import React from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -8,11 +8,12 @@ import ChatMessage from '../components/ChatMessage';
 import { api } from '../lib/api';
 import { useTranslation } from 'react-i18next';
 import { ThemeContext } from '../components/ThemeProvider';
-import logoDarkTheme from '../assets/etigram-dark-theme.png';
-import logoLightTheme from '../assets/etigram-light-theme.png';
+import logoDarkTheme from '../assets/nv-horizon-dark-theme.png';
+import logoLightTheme from '../assets/nv-horizon-light-theme.png';
 
 export default function ShareViewPage() {
   const { token } = useParams<{ token: string }>();
+  const [searchParams] = useSearchParams();
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [data, setData] = React.useState<any | null>(null);
@@ -20,8 +21,13 @@ export default function ShareViewPage() {
   const [documentsLoading, setDocumentsLoading] = React.useState(false);
   const [viewingDoc, setViewingDoc] = React.useState<string | null>(null);
   const [docContent, setDocContent] = React.useState<string | null>(null);
+  const autoOpenedDocRef = React.useRef<string | null>(null);
   const { theme } = React.useContext(ThemeContext);
   const { t } = useTranslation();
+  const requestedDocId = React.useMemo(() => {
+    const raw = searchParams.get('doc');
+    return raw && raw.trim() ? raw.trim() : null;
+  }, [searchParams]);
 
   React.useEffect(() => {
     let mounted = true;
@@ -151,6 +157,14 @@ export default function ShareViewPage() {
       console.error('Failed to load document:', e);
     }
   };
+
+  React.useEffect(() => {
+    if (!token || !requestedDocId || documentsLoading) return;
+    if (autoOpenedDocRef.current === requestedDocId || viewingDoc === requestedDocId) return;
+    if (documents.length > 0 && !documents.some((doc) => doc.id === requestedDocId)) return;
+    autoOpenedDocRef.current = requestedDocId;
+    void handleViewDoc(requestedDocId);
+  }, [token, requestedDocId, documents, documentsLoading, viewingDoc]);
 
   const handleDownloadDoc = async (docId: string, filename: string) => {
     if (!token) return;
@@ -697,7 +711,7 @@ export default function ShareViewPage() {
                   {/* Dark theme logo */}
                   <img
                     src={logoDarkTheme}
-                    alt="etigram.one"
+                    alt="horizon.nordicvision.io"
                     className="h-4 w-auto"
                     style={{
                       display: theme === 'dark' ? 'block' : 'none',
@@ -708,7 +722,7 @@ export default function ShareViewPage() {
                   {/* Light theme logo */}
                   <img
                     src={logoLightTheme}
-                    alt="etigram.one"
+                    alt="horizon.nordicvision.io"
                     className="h-4 w-auto"
                     style={{
                       display: theme === 'light' ? 'block' : 'none',

@@ -203,6 +203,80 @@ func strategyCapabilityMetricWhitelistBlock() string {
 `
 }
 
+func strategyServiceChainMetricsVocabularyBlock() string {
+	return `SERVICE CHAIN METRICS (use ONLY concrete operational units when evidence exists):
+capacity: requests_per_second | gbps | racks | mw | tenants | seats | sites | tickets_per_month | units_per_year
+share: percent (0-100) | ratio (0-1)
+latency: milliseconds | seconds | minutes | days
+availability: ratio (0-1) | percent (0-100)
+recovery: minutes | hours | days
+throughput: requests_per_second | gbps | tickets_per_month | units_per_year
+utilization: ratio (0-1) | percent (0-100)
+
+Prefer service-specific metrics when supported by evidence:
+- availability_slo
+- p95_latency_ms
+- provisioning_time_days
+- failover_time_minutes
+- recovery_time_hours
+- support_response_time_hours
+- incident_rate
+- capacity_headroom
+- tenant_concentration
+- auth_success_ratio
+
+Control / gate qualifiers to prefer when evidence exists:
+- auth_required
+- approved_vendor_only
+- service_contract_required
+- region_lock_in
+- identity_provider_required
+- export_license_required
+- sanctions_touchpoint
+- dual_use_flag
+`
+}
+
+func strategyServiceCapabilityMetricWhitelistBlock() string {
+	return `REUSABLE SERVICE CAPABILITY METRICS (provider × capability baseline):
+- When evidence exists, carrierProductObservations are EXPECTED, not optional.
+- Use carrierProductObservations for reusable provider×capability baseline facts that can apply across many customer links.
+- Prefer these reusable metric keys when supported by evidence:
+  - installed_capacity
+  - available_capacity
+  - capacity_headroom
+  - p95_latency_ms
+  - availability_slo
+  - failover_time_minutes
+  - recovery_time_hours
+  - provisioning_time_days
+  - support_response_time_hours
+  - support_coverage_ratio
+  - tenant_concentration
+  - auth_success_ratio
+  - region_lock_in
+  - vendor_lock_in_score
+  - service_criticality
+- Example:
+  {
+    "carrierRef": "/fac/us/us-west4-data-center",
+    "productRef": "/product/service/cloud/compute/virtual-machines",
+    "metrics": {
+      "available_capacity": { "value": 12000, "unit": "tenants", "confidence": 0.71 },
+      "availability_slo": { "value": 0.999, "unit": "ratio", "confidence": 0.84 },
+      "p95_latency_ms": { "value": 42, "unit": "milliseconds", "confidence": 0.58 }
+    },
+    "qualifiers": {
+      "carrierProductRole": "regional_provider",
+      "region_lock_in": true
+    },
+    "confidence": 0.74
+  }
+- Do NOT place reusable baseline metrics in linkObservations unless they are explicitly customer-, destination-, or contract-specific.
+- If evidence is only link-specific, put it in linkObservations. If evidence is only route-specific or control-path-specific, put it in routeObservations.
+`
+}
+
 func strategyMetricValueFormatBlock() string {
 	return `METRIC VALUE FORMAT (STRICT):
 - For fragment.state and relations[].metrics, each metric entry MUST be either:
@@ -282,6 +356,40 @@ const supplyChainMandatoryBlock = `MANDATORY — SUPPLY CHAIN RULES (NO EXCEPTIO
 - Product: one per type in path. No duplicates. No "Freight" or "delivery" as product unless that IS the facility's service.
 - If you cannot satisfy these rules, omit the relation. Do NOT output invalid links.`
 
+const serviceChainOperationalModelBlock = `CRITICAL — Service chain operational model (org→fac→service→fac→org):
+1. Full chain: ORGANIZATION → delivery FACILITIES / service sites → SERVICE/CAPABILITY nodes → recipient FACILITIES / customer sites → their ORGANIZATIONS.
+2. Service/capability nodes still use /product/service/... canonical product paths. Do not invent a parallel service identity namespace in prompts.
+3. Chain nodes use their real types: /org/ for organizations, /fac/ for delivery sites / data centers / repair depots / network hubs, /product/service/... for delivered capabilities.
+4. When a concrete delivery facility is unknown or not separable, ORG → PRODUCES → /product/service/... is allowed as a fallback for the provider-level capability.
+5. Keep one capability per node. Do not duplicate the same service node for control-plane, support, or route details.
+6. Physical delivery sites, network hubs, repair depots, bonded warehouses, terminals, ports, and customs relay points may appear as facilities or in transportVia when they materially gate delivery.
+7. Non-service-carrying control points (authorization, identity/access, licensing, settlement, insurer approval, approved-vendor gate, service contract gate) must NOT become fake service nodes. Capture them via observations/qualifiers or concrete actor relations when grounded.
+8. Prefer concrete operational facilities over abstract business-unit prose. A service chain should tell where capability is created, routed, controlled, or delivered.
+9. Support / aftermarket / managed-service branches are valid when they materially affect the delivered capability path, but they must not crowd out the main delivery path.
+10. Use only PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN for topology; use observations / qualifiers for service-control gates.`
+
+const serviceChainProductGranularityBlock = `SERVICE / CAPABILITY GRANULARITY:
+- Service nodes MUST use canonical /product/service/... paths. The service identity still lives inside the canonical product plane.
+- Prefer capability families or operational service lines over marketing package names or contract nicknames.
+- Good examples: cloud compute, colocation, managed SOC, spare-parts maintenance, field-service support, satellite connectivity, payment acquiring.
+- Bad examples: generic "operations", vague "digital transformation", one-off contract titles, raw ticket numbers, or internal workstream names.
+- When in doubt: prefer the concrete capability a downstream customer actually receives or depends on.`
+
+const serviceChainSpecialScenariosBlock = `SPECIAL SERVICE SCENARIOS:
+- Digital infrastructure / cloud: explicitly look for provider regions, data centers, colocation sites, power/network dependencies, landing stations, exchange points, and downstream enterprise/customer exposure.
+- Field service / aftermarket: think in terms of parts manufacturing, authorized suppliers, repair depots, service hubs, outage support teams, and customer plant/site recipients.
+- Managed service / reseller channel: separate core provider, managed-service operator, reseller/distributor, and final service-consuming customer when evidence supports it.
+- Network / telecom / connectivity: include concrete backbone hubs, cable landing stations, IXPs, spectrum or access-control gates, and last-mile delivery sites when they materially gate delivery.
+- Service authorization / approved-vendor cases: treat authorization, approved-vendor status, service contracts, or identity/access gates as control overlays or observations, not fake product nodes.`
+
+const serviceChainMandatoryBlock = `MANDATORY — SERVICE CHAIN RULES (NO EXCEPTIONS):
+- Preferred chain model: org → fac → /product/service/... → fac → org. Organizations at the ends, delivery sites in the middle, service/capability nodes between actors.
+- Fallback model (only when concrete delivery facility is unknown or not separable): org → /product/service/...
+- Nodes: /org/ for organizations, /fac/ for service delivery sites, /product/ for canonical capability/service paths.
+- Edge types: PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN.
+- One capability per node. Do not turn authorization, licensing, settlement, identity, insurance, or vendor-approval gates into service nodes.
+- If you cannot satisfy these rules, omit the relation. Do NOT output invalid links.`
+
 func strategySupplyChainsJSONContractBlock() string {
 	return `SUPPLY CHAINS JSON CONTRACT (STRICT):
 - "supplyChains" MUST be an array of objects.
@@ -336,6 +444,51 @@ func strategySupplyChainsJSONContractBlock() string {
 }`
 }
 
+func strategyServiceChainsJSONContractBlock() string {
+	return `SERVICE CHAINS JSON CONTRACT (STRICT):
+- "supplyChains" remains the payload field for compatibility, but each chain represents a SERVICE / CAPABILITY path.
+- Each chain object MUST have:
+  - "nodes": REQUIRED array of objects (NOT string and NOT shorthand)
+  - "confidence": REQUIRED number in 0..1
+  - "reason": REQUIRED short evidence string
+  - "transportVia": OPTIONAL array of facility canonical paths (/fac/...)
+  - "segmentMetrics": OPTIONAL array of { fromNodeIndex, toNodeIndex, productIndex, volume: { value, unit, confidence }, share, period, confidence }
+  - "productCandidates": OPTIONAL array of { canonicalPath?, name, reason, confidence } for genuinely new service/capability scope additions only
+  - "carrierProductObservations": EXPECTED when evidence supports reusable provider×capability facts; array of { carrierRef, productRef, metrics?, qualifiers?, confidence, observedAt? }
+  - "linkObservations": OPTIONAL array of { supplierRef?, customerRef?, productRef, metrics?, qualifiers?, confidence, observedAt? }
+  - "routeObservations": OPTIONAL array of { supplierRef?, customerRef?, productRef?, transportVia?, vesselType?, qualifiers?, confidence, observedAt? }
+- Node object schema (each nodes[i]):
+  - "canonicalPath": REQUIRED string
+  - "name": REQUIRED string
+  - "type": REQUIRED enum: ORGANIZATION|FACILITY|PRODUCT|DEPOSIT
+  - "facilityType": OPTIONAL service/delivery role: ` + taxonomy.FacilityRolesForPrompts() + `
+  - "facilityKind": OPTIONAL physical type: ` + taxonomy.FacilityKindsForPrompts() + `
+  - "position": OPTIONAL (upstream|midstream|downstream)
+  - "role": OPTIONAL string
+- Service/capability nodes MUST use canonical /product/service/... paths when the node is a service.
+- transportVia is valid not only for freight but also for operational relay sites that materially gate service delivery.
+- carrierProductObservations must be reusable provider×capability facts; linkObservations must be customer/destination specific; routeObservations must be transport/path/control-point specific.
+- For gate-controlled service flows, do not leave control points implicit. Capture them either as:
+  - concrete facilities in transportVia / routeObservations when they are physical sites (data center, landing station, depot, customs terminal, service hub), or
+  - concrete actor relations / observations when they are organizations or authorities (identity provider, licensing authority, trade-credit insurer, service-authorization gate, approved-vendor gate).
+- INVALID shape example: "nodes": "Provider -> Service -> Customer"
+- VALID shape example (org→fac→service→fac→org):
+{
+  "supplyChains": [{
+    "nodes": [
+      { "canonicalPath": "/org/us/google-cloud", "name": "Google Cloud", "type": "ORGANIZATION" },
+      { "canonicalPath": "/fac/us/us-west4-data-center", "name": "Bay Area Data Center", "type": "FACILITY", "facilityType": "operations", "facilityKind": "data_center", "position": "upstream" },
+      { "canonicalPath": "/product/service/cloud/compute/virtual-machines", "name": "Cloud compute", "type": "PRODUCT" },
+      { "canonicalPath": "/fac/us/customer-colo-bay-area", "name": "Customer colocation site", "type": "FACILITY", "facilityType": "operations", "facilityKind": "colocation", "position": "downstream" },
+      { "canonicalPath": "/org/us/example-enterprise", "name": "Example Enterprise", "type": "ORGANIZATION" }
+    ],
+    "confidence": 0.85,
+    "reason": "Provider-region and customer deployment evidence.",
+    "transportVia": ["/fac/us/san-jose-network-hub"]
+  }]
+}`
+}
+
 // SupplyChainResearchStrategy enriches for supply chain only (PRODUCES, SUPPLIES_TO, etc.).
 type SupplyChainResearchStrategy struct {
 	agent *ResearchAgent
@@ -348,6 +501,27 @@ func (s *SupplyChainResearchStrategy) Enrich(ctx context.Context, input Research
 		return nil, fmt.Errorf("supply-chain strategy is not configured")
 	}
 	prompt := s.agent.buildSupplyChainEnrichmentPrompt(input)
+	out, err := s.agent.runResearchPrompt(ctx, prompt, input.Fragment)
+	if err != nil || out == nil {
+		return nil, err
+	}
+	out.Relations, _ = FilterDomainRelations(ctx, s.DomainMode(), out.Relations)
+	out.SupplyChains, _ = FilterDomainChains(ctx, s.DomainMode(), out.SupplyChains)
+	return out, nil
+}
+
+// ServiceChainResearchStrategy enriches service delivery lifecycle chains.
+type ServiceChainResearchStrategy struct {
+	agent *ResearchAgent
+}
+
+func (s *ServiceChainResearchStrategy) DomainMode() string { return taxonomy.DomainModeServiceChain }
+
+func (s *ServiceChainResearchStrategy) Enrich(ctx context.Context, input ResearchStrategyInput) (*ResearchStrategyOutput, error) {
+	if s.agent == nil || s.agent.executor == nil {
+		return nil, fmt.Errorf("service-chain strategy is not configured")
+	}
+	prompt := s.agent.buildServiceChainEnrichmentPrompt(input)
 	out, err := s.agent.runResearchPrompt(ctx, prompt, input.Fragment)
 	if err != nil || out == nil {
 		return nil, err
@@ -2151,18 +2325,71 @@ func isValidMetricValueJSON(raw interface{}) bool {
 
 // buildSupplyChainEnrichmentPrompt builds a prompt for supply-chain enrichment (value chains, logistics, extractive).
 func (a *ResearchAgent) buildSupplyChainEnrichmentPrompt(input ResearchStrategyInput) string {
+	return a.buildOperationalChainEnrichmentPrompt(taxonomy.DomainModeSupplyChain, input)
+}
+
+func (a *ResearchAgent) buildServiceChainEnrichmentPrompt(input ResearchStrategyInput) string {
+	return a.buildOperationalChainEnrichmentPrompt(taxonomy.DomainModeServiceChain, input)
+}
+
+func (a *ResearchAgent) buildOperationalChainEnrichmentPrompt(mode string, input ResearchStrategyInput) string {
 	frag := input.Fragment
 	if frag == nil {
 		frag = &models.HorizonFragment{}
 	}
+	mode = normalizeOperationalChainMode(mode)
 	fragmentJSON, _ := json.MarshalIndent(frag, "", "  ")
 	questions := strings.Join(input.MissingInfo, "\n- ")
+	title := "SUPPLY CHAIN"
+	mandatoryBlock := supplyChainMandatoryBlock
+	operationalModelBlock := supplyChainOperationalModelBlock
+	specialScenariosBlock := supplyChainSpecialScenariosBlock
+	productGranularityBlock := supplyChainProductGranularityBlock
+	edgeTypes := taxonomy.SupplyChainEdgeTypesString()
+	entityTypes := taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain)
+	jsonContractBlock := strategySupplyChainsJSONContractBlock()
+	metricsBlock := strategySupplyChainMetricsVocabularyBlock()
+	capabilityMetricsBlock := strategyCapabilityMetricWhitelistBlock()
+	findBlock := `WHAT TO FIND (org→fac→product→fac→org trees, 1-to-many at each level):
+1. From ORG: ALL child organizations (subsidiaries, controlled, partners) AND all its own facilities. One org → many orgs + many facs. Output /org/ and /fac/ paths.
+2. From FAC: ALL products/services THIS facility creates directly. One fac → many products. NOT products of related or parent companies. Output /product/ paths.
+3. From PRODUCT: ALL org-recipients (orgs that receive this product via their facilities). One product → many recipients. Output /org/ paths.
+4. Chains: one chain per leaf path. Preferred pattern: org→fac→product→fac→org. Nodes alternate actor→product→actor; actor nodes use their real types (/org/, /fac/, /deposit/), not forced /fac/.
+   transportVia is expected for cross-border, maritime, pipeline, chokepoint, rail, or otherwise route-sensitive legs when a plausible route is inferable.
+5. Extractive: EXTRACTS_FROM (FACILITY→DEPOSIT). If CURRENT FRAGMENT is DEPOSIT: incoming edges with sourceCanonicalPath.
+   Rare exception: if the extracting/processing facility is unknown but the downstream recipient is clear, a DEPOSIT→ORG/FAC SUPPLIES_TO shortcut is acceptable as lower-confidence placeholder evidence. Prefer explicit facility stages whenever known.`
+	if mode == taxonomy.DomainModeServiceChain {
+		title = "SERVICE CHAIN"
+		mandatoryBlock = serviceChainMandatoryBlock
+		operationalModelBlock = serviceChainOperationalModelBlock
+		specialScenariosBlock = serviceChainSpecialScenariosBlock
+		productGranularityBlock = serviceChainProductGranularityBlock
+		edgeTypes = taxonomy.ServiceChainEdgeTypesString()
+		entityTypes = taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeServiceChain)
+		jsonContractBlock = strategyServiceChainsJSONContractBlock()
+		metricsBlock = strategyServiceChainMetricsVocabularyBlock()
+		capabilityMetricsBlock = strategyServiceCapabilityMetricWhitelistBlock()
+		findBlock = `WHAT TO FIND (org->fac->service->fac->org trees, 1-to-many at each level):
+1. From ORG: ALL child operators, managed-service units, resellers, channel partners, and service delivery facilities. One org -> many orgs + many facs. Output /org/ and /fac/ paths.
+2. From FAC: ALL services/capabilities THIS facility delivers directly. Use canonical /product/service/... paths when the node is a service capability. One fac -> many service nodes.
+3. From SERVICE/CAPABILITY: ALL recipient facilities, customer sites, tenants, enterprise users, or downstream operators that receive or depend on it. Output /fac/ and /org/ paths.
+4. Chains: one chain per leaf path. Preferred pattern: org->fac->service->fac->org. Nodes still alternate actor->product(service)->actor; actor nodes use their real types (/org/, /fac/), not forced /fac/.
+   transportVia is valid for operational relay sites, network hubs, landing stations, depots, terminals, or other concrete facilities that materially gate delivery.
+5. Control gates: authorization, approved-vendor, service-contract, identity/access, licensing, settlement, or insurance gates must stay in observations/qualifiers or concrete actor relations, not fake service nodes.`
+	}
 	if questions == "" {
-		if frag != nil && strings.HasPrefix(strings.TrimSpace(frag.CanonicalPath), "/org/") {
+		switch {
+		case mode == taxonomy.DomainModeServiceChain && frag != nil && strings.HasPrefix(strings.TrimSpace(frag.CanonicalPath), "/org/"):
+			questions = "Find ALL child operators, managed-service units, resellers, partners, and service delivery facilities. One org -> many orgs + many facs. Format: JSON."
+		case mode == taxonomy.DomainModeServiceChain && frag != nil && strings.HasPrefix(strings.TrimSpace(frag.CanonicalPath), "/fac/"):
+			questions = "Find ALL services/capabilities that THIS facility delivers directly. One fac -> many service capabilities. Do NOT list unrelated parent-company offerings. Format: JSON."
+		case mode == taxonomy.DomainModeServiceChain:
+			questions = "Build org->fac->service->fac->org trees (1-to-many at each level): (1) From org: ALL child operators + ALL delivery facilities. (2) From fac: ALL services/capabilities THIS site delivers. (3) From service: ALL recipient sites/orgs. Format: JSON."
+		case frag != nil && strings.HasPrefix(strings.TrimSpace(frag.CanonicalPath), "/org/"):
 			questions = "Find ALL child organizations (subsidiaries, controlled, partners) AND ALL own facilities. One org → many child orgs + many facs. Format: JSON."
-		} else if frag != nil && strings.HasPrefix(strings.TrimSpace(frag.CanonicalPath), "/fac/") {
+		case frag != nil && strings.HasPrefix(strings.TrimSpace(frag.CanonicalPath), "/fac/"):
 			questions = "Find ALL products/services that THIS facility creates directly. One fac → many products. Do NOT list products of related or parent companies. Format: JSON."
-		} else {
+		default:
 			questions = "Build org→fac→product→fac→org trees (1-to-many at each level): (1) From org: ALL child orgs + ALL facilities. (2) From fac: ALL products THIS fac produces. (3) From product: ALL org-recipients. Format: JSON."
 		}
 	}
@@ -2170,7 +2397,7 @@ func (a *ResearchAgent) buildSupplyChainEnrichmentPrompt(input ResearchStrategyI
 	chainBlock := buildResearchChainContextBlock(input.ChainContext)
 	existingEntitiesBlock := buildResearchExistingEntitiesBlock(input.ExistingEntities)
 	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
-	return fmt.Sprintf(`You are a research agent. Enrich the entity for SUPPLY CHAIN context. Build coherent chains.
+	return fmt.Sprintf(`You are a research agent. Enrich the entity for %s context. Build coherent operational chains.
 
 %s
 
@@ -2181,10 +2408,10 @@ func (a *ResearchAgent) buildSupplyChainEnrichmentPrompt(input ResearchStrategyI
 %s
 
 Use ONLY these relation types (canonical): %s.
-Do NOT use RELATED_TO, AFFILIATED_WITH, PARTNERS_WITH, OWNS, COMPETES_WITH, or other non-supply-chain types.
+Do NOT use RELATED_TO, AFFILIATED_WITH, PARTNERS_WITH, OWNS, COMPETES_WITH, or other non-operational-chain types.
 %s
 
-ENTITY TYPES in supply chain: %s. Use correct targetType for each relation.
+ENTITY TYPES in %s: %s. Use correct targetType for each relation.
 
 CANONICAL PATH RULES (targetCanonicalPath MUST follow; supplyChains nodes too):
 %s
@@ -2195,14 +2422,7 @@ CANONICAL PATH RULES (targetCanonicalPath MUST follow; supplyChains nodes too):
 %s
 %s
 
-WHAT TO FIND (org→fac→product→fac→org trees, 1-to-many at each level):
-1. From ORG: ALL child organizations (subsidiaries, controlled, partners) AND all its own facilities. One org → many orgs + many facs. Output /org/ and /fac/ paths.
-2. From FAC: ALL products/services THIS facility creates directly. One fac → many products. NOT products of related or parent companies. Output /product/ paths.
-3. From PRODUCT: ALL org-recipients (orgs that receive this product via their facilities). One product → many recipients. Output /org/ paths.
-4. Chains: one chain per leaf path. Preferred pattern: org→fac→product→fac→org. Nodes alternate actor→product→actor; actor nodes use their real types (/org/, /fac/, /deposit/), not forced /fac/.
-   transportVia is expected for cross-border, maritime, pipeline, chokepoint, rail, or otherwise route-sensitive legs when a plausible route is inferable.
-5. Extractive: EXTRACTS_FROM (FACILITY→DEPOSIT). If CURRENT FRAGMENT is DEPOSIT: incoming edges with sourceCanonicalPath.
-   Rare exception: if the extracting/processing facility is unknown but the downstream recipient is clear, a DEPOSIT→ORG/FAC SUPPLIES_TO shortcut is acceptable as lower-confidence placeholder evidence. Prefer explicit facility stages whenever known.
+%s
 
 INTEGRATION_TYPE qualifier (for SUPPLIES_TO): When the relationship nature is clear, add qualifiers.integration_type:
 - "vertical": supplier is owned/controlled by the same parent (e.g., BYD subsidiaries supplying BYD)
@@ -2233,22 +2453,30 @@ For SUPPLIES_TO: add qualifiers.transport_via when transport route is known or r
 
 %s
 
-Return ONLY valid JSON. No markdown.`, supplyChainMandatoryBlock, supplyChainOperationalModelBlock, supplyChainSpecialScenariosBlock, supplyChainProductGranularityBlock, taxonomy.SupplyChainEdgeTypesString(), GovEntityRelationRulesBlock(), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), chainBlock, geoContext, existingEntitiesBlock, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, string(fragmentJSON), questions, strategySupplyChainMetricsVocabularyBlock(), strategyCapabilityMetricWhitelistBlock(), strategyMetricValueFormatBlock(), strategySupplyChainsJSONContractBlock())
+Return ONLY valid JSON. No markdown.`, title, mandatoryBlock, operationalModelBlock, specialScenariosBlock, productGranularityBlock, edgeTypes, GovEntityRelationRulesBlock(), strings.ToLower(title), entityTypes, taxonomy.ExtendedCanonicalPathRulesPrompt(), chainBlock, geoContext, existingEntitiesBlock, researchPreferExistingEntitiesBlock(), objectQualifierContractBlock, findBlock, string(fragmentJSON), questions, metricsBlock, capabilityMetricsBlock, strategyMetricValueFormatBlock(), jsonContractBlock)
 }
 
 // EnrichSupplyChainFull runs anchor-centric full supply chain query (Plan mode).
 // Input: SupplyChainQuery (anchor, direction, depth, filters). No fragment.
 // Output: SupplyChains with nodes, segmentMetrics, alternatives. Called directly, not via ResearchPipeline.
 func (a *ResearchAgent) EnrichSupplyChainFull(ctx context.Context, query SupplyChainQuery) ([]SupplyChain, error) {
+	return a.enrichOperationalChainFull(ctx, query, taxonomy.DomainModeSupplyChain)
+}
+
+func (a *ResearchAgent) EnrichServiceChainFull(ctx context.Context, query SupplyChainQuery) ([]SupplyChain, error) {
+	return a.enrichOperationalChainFull(ctx, query, taxonomy.DomainModeServiceChain)
+}
+
+func (a *ResearchAgent) enrichOperationalChainFull(ctx context.Context, query SupplyChainQuery, mode string) ([]SupplyChain, error) {
 	if a == nil || a.executor == nil {
 		return nil, fmt.Errorf("research agent executor not configured")
 	}
-	prompt := a.buildSupplyChainFullQueryPrompt(query)
+	prompt := a.buildOperationalChainFullQueryPrompt(mode, query)
 	out, err := a.runResearchPrompt(ctx, prompt, nil)
 	if err != nil || out == nil {
 		return nil, err
 	}
-	filteredChains, _ := FilterDomainChains(ctx, taxonomy.DomainModeSupplyChain, out.SupplyChains)
+	filteredChains, _ := FilterDomainChains(ctx, normalizeOperationalChainMode(mode), out.SupplyChains)
 	return filteredChains, nil
 }
 
@@ -2256,10 +2484,18 @@ func (a *ResearchAgent) EnrichSupplyChainFull(ctx context.Context, query SupplyC
 // helps the hot-path query focus on the right operational branches without
 // acting as a hard filter.
 func (a *ResearchAgent) EnrichSupplyChainPreHotPath(ctx context.Context, query SupplyChainQuery) (*SupplyChainPreHotPathPlan, error) {
+	return a.enrichOperationalChainPreHotPath(ctx, query, taxonomy.DomainModeSupplyChain)
+}
+
+func (a *ResearchAgent) EnrichServiceChainPreHotPath(ctx context.Context, query SupplyChainQuery) (*SupplyChainPreHotPathPlan, error) {
+	return a.enrichOperationalChainPreHotPath(ctx, query, taxonomy.DomainModeServiceChain)
+}
+
+func (a *ResearchAgent) enrichOperationalChainPreHotPath(ctx context.Context, query SupplyChainQuery, mode string) (*SupplyChainPreHotPathPlan, error) {
 	if a == nil || a.executor == nil {
 		return nil, fmt.Errorf("research agent executor not configured")
 	}
-	prompt := a.buildSupplyChainPreHotPathPrompt(query)
+	prompt := a.buildOperationalChainPreHotPathPrompt(mode, query)
 	out, err := a.runSupplyChainPreHotPathPrompt(ctx, prompt, researchPromptOptions{
 		PreferredModel:   "vertex-gemini-3-flash-preview",
 		MinContextWindow: 8000,
@@ -2275,10 +2511,18 @@ func (a *ResearchAgent) EnrichSupplyChainPreHotPath(ctx context.Context, query S
 // EnrichSupplyChainHotPath runs a denser first-pass supply chain query for fast-first runtime.
 // It prefers a stronger grounded model and asks for multiple concrete branches in one response.
 func (a *ResearchAgent) EnrichSupplyChainHotPath(ctx context.Context, query SupplyChainQuery, prePlan *SupplyChainPreHotPathPlan) ([]SupplyChain, error) {
+	return a.enrichOperationalChainHotPath(ctx, query, prePlan, taxonomy.DomainModeSupplyChain)
+}
+
+func (a *ResearchAgent) EnrichServiceChainHotPath(ctx context.Context, query SupplyChainQuery, prePlan *SupplyChainPreHotPathPlan) ([]SupplyChain, error) {
+	return a.enrichOperationalChainHotPath(ctx, query, prePlan, taxonomy.DomainModeServiceChain)
+}
+
+func (a *ResearchAgent) enrichOperationalChainHotPath(ctx context.Context, query SupplyChainQuery, prePlan *SupplyChainPreHotPathPlan, mode string) ([]SupplyChain, error) {
 	if a == nil || a.executor == nil {
 		return nil, fmt.Errorf("research agent executor not configured")
 	}
-	prompt := a.buildSupplyChainHotPathPrompt(query, prePlan)
+	prompt := a.buildOperationalChainHotPathPrompt(mode, query, prePlan)
 	out, err := a.runResearchPromptWithOptions(ctx, prompt, nil, researchPromptOptions{
 		PreferredModel:   "vertex-gemini-2.5-pro",
 		MinContextWindow: 16000,
@@ -2288,20 +2532,28 @@ func (a *ResearchAgent) EnrichSupplyChainHotPath(ctx context.Context, query Supp
 	if err != nil || out == nil {
 		return nil, err
 	}
-	filteredChains, _ := FilterDomainChains(ctx, taxonomy.DomainModeSupplyChain, out.SupplyChains)
+	filteredChains, _ := FilterDomainChains(ctx, normalizeOperationalChainMode(mode), out.SupplyChains)
 	return filteredChains, nil
 }
 
 // EnrichSupplyChainHotPathCapabilities enriches already-discovered hot-path chains with reusable actor×product observations.
 // It must not expand topology; it should only add scoped observations and candidates when evidence supports them.
 func (a *ResearchAgent) EnrichSupplyChainHotPathCapabilities(ctx context.Context, query SupplyChainQuery, chains []SupplyChain, prePlan *SupplyChainPreHotPathPlan) (*SupplyChainScopedObservations, error) {
+	return a.enrichOperationalChainHotPathCapabilities(ctx, query, chains, prePlan, taxonomy.DomainModeSupplyChain)
+}
+
+func (a *ResearchAgent) EnrichServiceChainHotPathCapabilities(ctx context.Context, query SupplyChainQuery, chains []SupplyChain, prePlan *SupplyChainPreHotPathPlan) (*SupplyChainScopedObservations, error) {
+	return a.enrichOperationalChainHotPathCapabilities(ctx, query, chains, prePlan, taxonomy.DomainModeServiceChain)
+}
+
+func (a *ResearchAgent) enrichOperationalChainHotPathCapabilities(ctx context.Context, query SupplyChainQuery, chains []SupplyChain, prePlan *SupplyChainPreHotPathPlan, mode string) (*SupplyChainScopedObservations, error) {
 	if a == nil || a.executor == nil {
 		return nil, fmt.Errorf("research agent executor not configured")
 	}
 	if len(chains) == 0 {
 		return nil, nil
 	}
-	prompt := a.buildSupplyChainHotPathCapabilityPrompt(query, chains, prePlan)
+	prompt := a.buildOperationalChainHotPathCapabilityPrompt(mode, query, chains, prePlan)
 	out, err := a.runSupplyChainScopedObservationPrompt(ctx, prompt, researchPromptOptions{
 		PreferredModel:   "vertex-gemini-3-flash-preview",
 		MinContextWindow: 8000,
@@ -2315,20 +2567,45 @@ func (a *ResearchAgent) EnrichSupplyChainHotPathCapabilities(ctx context.Context
 }
 
 func (a *ResearchAgent) buildSupplyChainPreHotPathPrompt(query SupplyChainQuery) string {
+	return a.buildOperationalChainPreHotPathPrompt(taxonomy.DomainModeSupplyChain, query)
+}
+
+func (a *ResearchAgent) buildServiceChainPreHotPathPrompt(query SupplyChainQuery) string {
+	return a.buildOperationalChainPreHotPathPrompt(taxonomy.DomainModeServiceChain, query)
+}
+
+func (a *ResearchAgent) buildOperationalChainPreHotPathPrompt(mode string, query SupplyChainQuery) string {
 	queryJSON, _ := json.MarshalIndent(query, "", "  ")
-	return fmt.Sprintf(`You are a supply-chain pre-hot-path decomposition agent.
+	mode = normalizeOperationalChainMode(mode)
+	title := "supply-chain"
+	outputStrategy := "commodity_corridor|oem_aftermarket|industrial_components|retail_distribution|generic_supply_chain"
+	softRulesBlock := `- For OEM/service/spare-parts cases, think in terms of parts manufacturing, authorized suppliers, repair centers, service depots, installed-base support, customer plants, outage/maintenance support.
+- For commodity corridor cases, think in terms of mines/wells/plants, terminals, ports, refineries, processors, chokepoints, and destination facilities.
+- For sanctions-/customs-/export-control-sensitive cases, think separately about physical relay hubs, customs/bonded gates, screening/licensing/settlement/insurance gates, and alternative relay geographies.`
+	if mode == taxonomy.DomainModeServiceChain {
+		title = "service-chain"
+		outputStrategy = "service_delivery_network|managed_service_access|field_service_aftermarket|digital_infrastructure|generic_service_chain"
+		softRulesBlock = `- For digital infrastructure / cloud / network cases, think in terms of regions, data centers, landing stations, IXPs, network hubs, colocation, power/network dependencies, and downstream enterprise exposure.
+- For field-service / aftermarket cases, think in terms of spare-parts manufacturing, authorized suppliers, repair centers, service depots, outage support, and customer plant/site recipients.
+- For managed-service / reseller cases, think separately about core provider, managed-service operator, reseller/channel partner, downstream customer site, and authorization / approved-vendor / service-contract gates.`
+	}
+	chainLabel := "supply chains"
+	if mode == taxonomy.DomainModeServiceChain {
+		chainLabel = "service chains"
+	}
+	return fmt.Sprintf(`You are a %s pre-hot-path decomposition agent.
 
 TASK:
-- This stage runs BEFORE hot-path graph construction for every supply-chain job.
-- Do NOT build supply chains here.
+- This stage runs BEFORE hot-path graph construction for every %s job.
+- Do NOT build %s here.
 - Do NOT hard-constrain the next search.
 - Return ONLY a lightweight steering plan that helps the hot path ask better questions.
 - If the query is already concrete and dense, keep the plan short and minimal.
-- If the query is broad, OEM-like, spare-parts/service heavy, or otherwise ambiguous, decompose it into likely operational branches without forcing them.
+- If the query is broad, service-heavy, route-sensitive, or otherwise ambiguous, decompose it into likely operational branches without forcing them.
 
 WHAT TO RETURN:
 - candidateAnchorTerms: concrete org/facility/brand/subsidiary aliases or operational anchor names worth retrying if the original anchor is too broad
-- candidateProductFamilies: more concrete product families or operational sub-families worth prioritizing
+- candidateProductFamilies: more concrete product families or service/capability families worth prioritizing
 - candidateOperationalAnchorClasses: likely node classes to look for first
 - candidateFlowArchetypes: likely topology shapes for this domain
 - candidateTransitHubTerms: likely transshipment, customs, bonded, depot, inland-terminal, or relay hub terms worth retrying
@@ -2336,21 +2613,19 @@ WHAT TO RETURN:
 - candidateRouteGeographies: likely relay geographies or corridor countries worth checking before concluding the route is single-hub
 - searchFocus: concise retrieval foci for the next hot-path prompt
 - preferredEvidence: source/evidence classes to trust first
-- derivedProductFilters: up to 3 concrete product filter strings that MAY be used for a focused retry if the first hot-path pass is too broad
+- derivedProductFilters: up to 3 concrete product/service filter strings that MAY be used for a focused retry if the first hot-path pass is too broad
 
 SOFT-STEERING RULES:
 - This plan is guidance only. It must NEVER act as a hard filter.
 - Do not suppress the original query intent.
 - Prefer concrete operational decomposition over abstract business prose.
 - For broad company anchors, include high-signal operational aliases, business units, country subsidiaries, depot/operator names, or common abbreviations when they materially improve retrieval.
-- For OEM/service/spare-parts cases, think in terms of parts manufacturing, authorized suppliers, repair centers, service depots, installed-base support, customer plants, outage/maintenance support.
-- For commodity corridor cases, think in terms of mines/wells/plants, terminals, ports, refineries, processors, chokepoints, and destination facilities.
-- For sanctions-/customs-/export-control-sensitive cases, think separately about physical relay hubs, customs/bonded gates, screening/licensing/settlement/insurance gates, and alternative relay geographies.
+%s
 
 OUTPUT:
 Return ONLY valid JSON:
 {
-  "strategy": "commodity_corridor|oem_aftermarket|industrial_components|retail_distribution|generic_supply_chain",
+  "strategy": "%s",
   "strategyReason": "short explanation",
   "candidateAnchorTerms": ["..."],
   "candidateProductFamilies": ["..."],
@@ -2368,11 +2643,19 @@ Return ONLY valid JSON:
 QUERY:
 %s
 
-No markdown.`, string(queryJSON))
+No markdown.`, title, title, chainLabel, softRulesBlock, outputStrategy, string(queryJSON))
 }
 
 // buildSupplyChainFullQueryPrompt builds anchor-centric prompt. Model: trees from org → fac → product → fac → org (recursion).
 func (a *ResearchAgent) buildSupplyChainFullQueryPrompt(query SupplyChainQuery) string {
+	return a.buildOperationalChainFullQueryPrompt(taxonomy.DomainModeSupplyChain, query)
+}
+
+func (a *ResearchAgent) buildServiceChainFullQueryPrompt(query SupplyChainQuery) string {
+	return a.buildOperationalChainFullQueryPrompt(taxonomy.DomainModeServiceChain, query)
+}
+
+func (a *ResearchAgent) buildOperationalChainFullQueryPrompt(mode string, query SupplyChainQuery) string {
 	var anchorDesc string
 	if len(query.Anchors) > 0 {
 		trimmed := make([]string, 0, len(query.Anchors))
@@ -2398,6 +2681,7 @@ func (a *ResearchAgent) buildSupplyChainFullQueryPrompt(query SupplyChainQuery) 
 	if geoFilter != "" {
 		filters += ", geoFilter=[" + geoFilter + "]"
 	}
+	mode = normalizeOperationalChainMode(mode)
 
 	taskBlock := `TASK: Build supply chain trees (1-to-many at each level). Depth: ` + fmt.Sprintf("%d", depth) + ` hops. ` + anchorDesc + filters + `
 
@@ -2419,8 +2703,50 @@ ROUTE / GATE DISCIPLINE:
 - For cross-border, rerouted, sanctions-sensitive, customs-sensitive, or import-controlled flows, actively look for more than one credible relay hub when the route is known to fork or reroute.
 - Physical relay nodes belong in transportVia and routeObservations.
 - Non-product-carrying gates (screening, licensing, settlement, trade-credit insurance, service authorization) must not be invented as product nodes; capture them in linkObservations / routeObservations qualifiers or canonical relations when they are concrete actors.`
+	title := "supply chain"
+	mandatoryBlock := supplyChainMandatoryBlock
+	operationalModelBlock := supplyChainOperationalModelBlock
+	specialScenariosBlock := supplyChainSpecialScenariosBlock
+	productGranularityBlock := supplyChainProductGranularityBlock
+	edgeTypes := taxonomy.SupplyChainEdgeTypesString()
+	entityTypes := taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain)
+	jsonContractBlock := strategySupplyChainsJSONContractBlock()
+	metricsBlock := strategySupplyChainMetricsVocabularyBlock()
+	capabilityMetricsBlock := strategyCapabilityMetricWhitelistBlock()
+	if mode == taxonomy.DomainModeServiceChain {
+		title = "service chain"
+		mandatoryBlock = serviceChainMandatoryBlock
+		operationalModelBlock = serviceChainOperationalModelBlock
+		specialScenariosBlock = serviceChainSpecialScenariosBlock
+		productGranularityBlock = serviceChainProductGranularityBlock
+		edgeTypes = taxonomy.ServiceChainEdgeTypesString()
+		entityTypes = taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeServiceChain)
+		jsonContractBlock = strategyServiceChainsJSONContractBlock()
+		metricsBlock = strategyServiceChainMetricsVocabularyBlock()
+		capabilityMetricsBlock = strategyServiceCapabilityMetricWhitelistBlock()
+		taskBlock = `TASK: Build service delivery / capability access trees (1-to-many at each level). Depth: ` + fmt.Sprintf("%d", depth) + ` hops. ` + anchorDesc + filters + `
 
-	return fmt.Sprintf(`You are a supply chain research agent.
+ANCHOR HANDLING:
+- If anchorType=org: start from the provider/operator organization and expand its delivery facilities, service capabilities, downstream customer sites, and recipient organizations.
+- If anchorType=fac: start from the facility and expand its direct service/capability outputs, upstream support inputs, downstream recipient sites, and the organizations around it.
+- If anchorType=product: start from the /product/service/... capability and trace concrete providers, delivery sites, customer sites, relay hubs, and downstream organizations.
+- If anchorType=deposit: deposits are rare in service-chain mode; only use them when a concrete physical resource site materially gates the service delivery path.
+
+TREE STRUCTURE (each step fans out 1→many):
+Step 1 — ORG → [child operators, facilities]: For each org anchor, find ALL service operators under it (subsidiaries, controlled units, resellers, managed-service units) AND its delivery facilities. One org may have many child orgs and many facilities.
+Step 2 — FAC → [service capabilities]: For each facility, find ALL services/capabilities THIS site delivers directly. Use canonical /product/service/... paths when the node is a service capability.
+Step 3 — SERVICE/CAPABILITY → [recipient facs → orgs]: For each service node, find ALL facilities or customer sites that receive/consume it, and their parent organizations. One capability may go to many recipients.
+Step 4 — Recurse: From each recipient org (back to Step 1) until depth reached.
+
+OUTPUT ONE CHAIN PER LEAF PATH. If provider A has site F1 and F2, and F1 delivers service S1 and S2, output separate chains: A→F1→S1→..., A→F1→S2→..., A→F2→... etc.
+
+ROUTE / GATE DISCIPLINE:
+- For cross-border, regulated, authorization-sensitive, or route-sensitive service delivery, actively look for more than one credible relay hub or delivery/control path when the topology forks.
+- Physical relay nodes belong in transportVia and routeObservations.
+- Non-service-carrying gates (authorization, identity/access, licensing, settlement, insurer approval, approved-vendor status, service-contract gates) must not be invented as service nodes; capture them in linkObservations / routeObservations qualifiers or canonical relations when they are concrete actors.`
+	}
+
+	return fmt.Sprintf(`You are a %s research agent.
 
 %s
 
@@ -2454,11 +2780,21 @@ OUTPUT: JSON with "supplyChains" array. Each chain:
 - confidence, reason.
 
 Return ONLY valid JSON: { "supplyChains": [ { "nodes": [...], "segmentMetrics": [...], "confidence", "reason" } ] }
-No markdown.`, supplyChainMandatoryBlock, supplyChainOperationalModelBlock, supplyChainSpecialScenariosBlock, supplyChainProductGranularityBlock, taskBlock, taxonomy.SupplyChainEdgeTypesString(), taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), strategySupplyChainMetricsVocabularyBlock(), strategyCapabilityMetricWhitelistBlock(), strategySupplyChainsJSONContractBlock())
+No markdown.`, title, mandatoryBlock, operationalModelBlock, specialScenariosBlock, productGranularityBlock, taskBlock, edgeTypes, entityTypes, taxonomy.ExtendedCanonicalPathRulesPrompt(), researchPreferExistingEntitiesBlock(), metricsBlock, capabilityMetricsBlock, jsonContractBlock)
 }
 
 func (a *ResearchAgent) buildSupplyChainHotPathPrompt(query SupplyChainQuery, prePlan *SupplyChainPreHotPathPlan) string {
-	base := a.buildSupplyChainFullQueryPrompt(query)
+	return a.buildOperationalChainHotPathPrompt(taxonomy.DomainModeSupplyChain, query, prePlan)
+}
+
+func (a *ResearchAgent) buildServiceChainHotPathPrompt(query SupplyChainQuery, prePlan *SupplyChainPreHotPathPlan) string {
+	return a.buildOperationalChainHotPathPrompt(taxonomy.DomainModeServiceChain, query, prePlan)
+}
+
+func (a *ResearchAgent) buildOperationalChainHotPathPrompt(mode string, query SupplyChainQuery, prePlan *SupplyChainPreHotPathPlan) string {
+	base := a.buildOperationalChainFullQueryPrompt(mode, query)
+	mode = normalizeOperationalChainMode(mode)
+	capabilityMetricsBlock := strategyCapabilityMetricWhitelistBlock()
 	chainTarget := "6-20"
 	if strings.EqualFold(strings.TrimSpace(query.AnchorType), "product") {
 		chainTarget = "3-8"
@@ -2486,6 +2822,30 @@ func (a *ResearchAgent) buildSupplyChainHotPathPrompt(query SupplyChainQuery, pr
 - When evidence points to a target geography or inbound destination, prioritize chains that enter, terminate in, or materially support that geography. De-prioritize branches that stay entirely outside the subject path and target geography.
 - Do not stop at org -> product -> org if a more operational chain is available. Actor-only skeletons are incomplete unless the anchor itself is inherently actor-only.
 - Keep taxonomy strict. Never invent invalid canonical path families or placeholder nodes.`, chainTarget)
+	if mode == taxonomy.DomainModeServiceChain {
+		capabilityMetricsBlock = strategyServiceCapabilityMetricWhitelistBlock()
+		hotPathBlock = fmt.Sprintf(`HOT PATH OBJECTIVE:
+- Produce the first high-value service-chain graph quickly.
+- Prefer a dense first pass over exhaustive recursion.
+- Return multiple concrete branches in ONE response. Target %s chains when evidence supports it; do not stop after a single obvious chain.
+- Mixed anchors are valid. Anchors may be organizations, facilities, service capability paths, or a mix.
+- Prefer concrete operational nodes: data centers, delivery sites, repair depots, landing stations, network hubs, bonded/customs terminals, ports, field-service hubs, customer sites, and colocation facilities when they materially gate delivery.
+- For each main branch, try to return a full operational slice: provider/delivery site -> service capability -> relay/control site -> recipient facility/customer site -> recipient org.
+- If there are multiple credible relay hubs, control paths, or delivery variants, return them as distinct branches or distinct routeObservations instead of silently collapsing to one route.
+- Explicitly separate the main delivered capability path from support/logistics/infrastructure branches. Support branches are useful, but must not crowd out the main service-delivery path.
+- Include transportVia when a relay site or chokepoint is known. Include alternatives when a customer/capability pair has plausible substitute providers or alternate delivery geographies.
+- For regulated, sanctions-sensitive, customs-sensitive, vendor-approval-sensitive, or authorization-sensitive flows, explicitly search not only for the main route but also for:
+  - relay hubs,
+  - bonded / customs / inland-terminal gates,
+  - identity / authorization / licensing / settlement / insurance / approved-vendor control points,
+  - alternative delivery geographies.
+- When evidence supports reusable provider×capability baseline facts, include carrierProductObservations in the same response. Do not leave reusable baseline metrics implicit.
+- Prefer branches that maximize first-pass decision value: main capabilities, main providers, main relay/control nodes, main customer-site exposures, and main substitute branches.
+- When the query is subject-scoped around a named provider, facility, tenant, or operator, keep the graph centered on that subject. Do NOT return parallel industry chains unless they are direct dependencies, substitute branches, or clearly route-supporting branches for the anchored subject path.
+- When evidence points to a target geography, customer footprint, or delivery region, prioritize chains that enter, terminate in, or materially support that geography.
+- Do not stop at org -> service -> org if a more operational chain is available. Actor-only skeletons are incomplete unless the anchor itself is inherently actor-only.
+- Keep taxonomy strict. Never invent invalid canonical path families or placeholder nodes.`, chainTarget)
+	}
 	if strings.EqualFold(strings.TrimSpace(query.AnchorType), "product") {
 		hotPathBlock += `
 - Product-anchored hot path must stay selective. Prioritize the highest-confidence upstream manufacturers, specialized suppliers, and operational facilities first instead of broad industry sweeps.`
@@ -2496,16 +2856,24 @@ func (a *ResearchAgent) buildSupplyChainHotPathPrompt(query SupplyChainQuery, pr
 			steeringBlock = "\n\nPRE-HOT-PATH STEERING (soft guidance, not hard filters):\n" +
 				"- Use this to decide which operational branches to prioritize first.\n" +
 				"- Do NOT ignore relevant branches just because they are not named here.\n" +
-				"- If strategy suggests OEM/service topology, explicitly seek service depots, repair centers, authorized suppliers, installed-base support nodes, and customer plant/site recipients.\n" +
-				"- If strategy suggests commodity corridor topology, explicitly seek production facilities, terminals, ports, chokepoints, processors, and destination facilities.\n" +
+				"- If strategy suggests service topology, explicitly seek service depots, repair centers, delivery facilities, network hubs, authorized suppliers, installed-base support nodes, and customer plant/site recipients.\n" +
+				"- If strategy suggests commodity corridor or physical relay topology, explicitly seek production facilities, terminals, ports, chokepoints, processors, and destination facilities.\n" +
 				"- If steering includes transit hubs, gate terms, or route geographies, treat them as high-signal retry terms for relay hubs and control points.\n" +
 				string(b)
 		}
 	}
-	return base + "\n\n" + hotPathBlock + steeringBlock + "\n\n" + strategyCapabilityMetricWhitelistBlock()
+	return base + "\n\n" + hotPathBlock + steeringBlock + "\n\n" + capabilityMetricsBlock
 }
 
 func (a *ResearchAgent) buildSupplyChainHotPathCapabilityPrompt(query SupplyChainQuery, chains []SupplyChain, prePlan *SupplyChainPreHotPathPlan) string {
+	return a.buildOperationalChainHotPathCapabilityPrompt(taxonomy.DomainModeSupplyChain, query, chains, prePlan)
+}
+
+func (a *ResearchAgent) buildServiceChainHotPathCapabilityPrompt(query SupplyChainQuery, chains []SupplyChain, prePlan *SupplyChainPreHotPathPlan) string {
+	return a.buildOperationalChainHotPathCapabilityPrompt(taxonomy.DomainModeServiceChain, query, chains, prePlan)
+}
+
+func (a *ResearchAgent) buildOperationalChainHotPathCapabilityPrompt(mode string, query SupplyChainQuery, chains []SupplyChain, prePlan *SupplyChainPreHotPathPlan) string {
 	type capabilityPair struct {
 		CarrierRef         string   `json:"carrierRef"`
 		CarrierName        string   `json:"carrierName,omitempty"`
@@ -2541,12 +2909,25 @@ func (a *ResearchAgent) buildSupplyChainHotPathCapabilityPrompt(query SupplyChai
 			prePlanJSON = string(b)
 		}
 	}
-	return fmt.Sprintf(`You are a supply chain capability enrichment agent.
+	mode = normalizeOperationalChainMode(mode)
+	title := "supply chain capability enrichment"
+	intro := `- The graph skeleton below is already accepted as the current hot-path supply chain result.`
+	scopeLine := `- Your job is ONLY to add scoped supply-chain evidence, with emphasis on reusable carrier×product capability baseline facts.`
+	controlLine := `- When the current chains are cross-border, sanctions-sensitive, import-constrained, export-control-sensitive, or customs-sensitive, prefer adding linkObservations / routeObservations for customs_clearance_days, inventory_cover_days_at_destination, regulatory_fit, switch_time_days, export_license_required, sanctions_touchpoint, approved_vendor_only, service_contract_required, and dual_use_flag whenever evidence exists.`
+	whitelistBlock := strings.TrimSpace(strategyCapabilityMetricWhitelistBlock())
+	if mode == taxonomy.DomainModeServiceChain {
+		title = "service chain capability enrichment"
+		intro = `- The graph skeleton below is already accepted as the current hot-path service-chain result.`
+		scopeLine = `- Your job is ONLY to add scoped service-chain evidence, with emphasis on reusable provider×capability baseline facts.`
+		controlLine = `- When the current chains are cross-border, regulated, authorization-sensitive, vendor-approval-sensitive, or customs-sensitive, prefer adding linkObservations / routeObservations for availability_slo, p95_latency_ms, failover_time_minutes, recovery_time_hours, support_response_time_hours, auth_required, approved_vendor_only, service_contract_required, region_lock_in, export_license_required, sanctions_touchpoint, and dual_use_flag whenever evidence exists.`
+		whitelistBlock = strings.TrimSpace(strategyServiceCapabilityMetricWhitelistBlock())
+	}
+	return fmt.Sprintf(`You are a %s agent.
 
 TASK:
-- The graph skeleton below is already accepted as the current hot-path supply chain result.
+%s
 - Do NOT create new topology. Do NOT add or remove graph entities.
-- Your job is ONLY to add scoped supply-chain evidence, with emphasis on reusable carrier×product capability baseline facts.
+- %s
 - Return ONLY scoped observation arrays:
   - carrierProductObservations
   - linkObservations when a fact is clearly customer/destination specific
@@ -2567,7 +2948,7 @@ STRICT RULES:
 - carrierProductObservations are practically required when evidence exists for reusable actor×product facts in the current chains.
 - Keep one product per link/leg. Do NOT smear multi-product truth across a single link.
 - Do NOT restate route-specific or customer-specific facts as reusable capability baseline.
-- When the current chains are cross-border, sanctions-sensitive, import-constrained, export-control-sensitive, or customs-sensitive, prefer adding linkObservations / routeObservations for customs_clearance_days, inventory_cover_days_at_destination, regulatory_fit, switch_time_days, export_license_required, sanctions_touchpoint, approved_vendor_only, service_contract_required, and dual_use_flag whenever evidence exists.
+- %s
 - If relay hubs or control points are known but are not part of the current topology, surface them in routeObservations / linkObservations rather than dropping them.
 - Prefer concrete reusable metric keys only from this whitelist:
 %s
@@ -2583,10 +2964,23 @@ OUTPUT:
   }
 - Do NOT return supplyChains or nodes in this pass.
 - No markdown.`,
+		title,
+		intro,
+		scopeLine,
 		string(workingProductsJSON),
 		string(pairsJSON),
 		prePlanJSON,
-		strings.TrimSpace(strategyCapabilityMetricWhitelistBlock()))
+		controlLine,
+		whitelistBlock)
+}
+
+func normalizeOperationalChainMode(mode string) string {
+	switch strings.TrimSpace(strings.ToLower(mode)) {
+	case taxonomy.DomainModeServiceChain:
+		return taxonomy.DomainModeServiceChain
+	default:
+		return taxonomy.DomainModeSupplyChain
+	}
 }
 
 func collectProductRefsFromSupplyChains(chains []SupplyChain) []string {

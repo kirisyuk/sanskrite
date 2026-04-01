@@ -614,7 +614,7 @@ const resources = {
           assistant: 'assistant',
           agent: 'agent',
           footer: {
-            tagline: 'etigram.one — cognitive environment that turns discussions into actions.',
+            tagline: 'horizon.nordicvision.io — cognitive environment that turns discussions into actions.',
           },
         },
         horizon: {
@@ -1391,7 +1391,7 @@ const resources = {
           assistant: 'ассистент',
           agent: 'агент',
           footer: {
-            tagline: 'etigram.one — когнитивная среда, превращающая дискуссии в действия.',
+            tagline: 'horizon.nordicvision.io — когнитивная среда, превращающая дискуссии в действия.',
           },
         },
         horizon: {
@@ -1962,7 +1962,7 @@ const resources = {
           assistant: 'Assistent',
           agent: 'Agent',
           footer: {
-            tagline: 'etigram.one — kognitive Umgebung, die Diskussionen in Aktionen verwandelt.',
+            tagline: 'horizon.nordicvision.io — kognitive Umgebung, die Diskussionen in Aktionen verwandelt.',
           },
         },
         startup: {
@@ -2535,7 +2535,7 @@ const resources = {
           assistant: 'asistente',
           agent: 'agente',
           footer: {
-            tagline: 'etigram.one — entorno cognitivo que convierte las discusiones en acciones.',
+            tagline: 'horizon.nordicvision.io — entorno cognitivo que convierte las discusiones en acciones.',
           },
         },
         startup: {
@@ -3233,7 +3233,7 @@ const resources = {
           assistant: 'көмекші',
           agent: 'агент',
           footer: {
-            tagline: 'etigram.one — талқылауларды іс-әрекеттерге айналдыратын когнитивті орта.',
+            tagline: 'horizon.nordicvision.io — талқылауларды іс-әрекеттерге айналдыратын когнитивті орта.',
           },
         },
         horizon: {

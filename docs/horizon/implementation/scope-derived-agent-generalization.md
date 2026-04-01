@@ -1,7 +1,7 @@
 # Scope-Derived Agent Generalization
 
 - generatedAt: `2026-03-24`
-- runtime revision: `etigram-agentmesh-00061-8jx`
+- runtime revision: `nv-horizon-agentmesh-00061-8jx`
 
 ## Goal
 

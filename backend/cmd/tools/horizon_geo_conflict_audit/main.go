@@ -55,7 +55,7 @@ type kv struct {
 
 func main() {
 	ctx := context.Background()
-	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	tenantID := flag.String("tenant", "global", "tenant id")
 	limit := flag.Int("limit", 300, "max fragments to probe")
 	sampleN := flag.Int("samples", 12, "samples")
@@ -174,7 +174,7 @@ func combinedGeoClient(cacheRepo *coreRepo.ExternalDataCacheRepository, mode str
 	case "nominatim":
 		return nominatimClient
 	default:
-		return geocoding.NewFallbackClient(nominatimClient, googleClient, nil)
+		return geocoding.NewFallbackClient(googleClient, nominatimClient, nil)
 	}
 }
 

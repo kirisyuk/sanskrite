@@ -15,7 +15,7 @@ import (
 )
 
 func main() {
-	projectID := flag.String("project", "etigram", "GCP / Firestore project id")
+	projectID := flag.String("project", "nv-horizon", "GCP / Firestore project id")
 	kindsRaw := flag.String("kinds", "org,gov,fac,product,deposit", "Comma-separated anchor kinds")
 	limit := flag.Int("limit", 8, "Max samples per kind")
 	flag.Parse()

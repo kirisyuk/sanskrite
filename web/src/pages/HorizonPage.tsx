@@ -10,6 +10,7 @@ import { SettingsModal } from '../components/SettingsModal';
 import { AccountModal } from '../components/AccountModal';
 import { LensCanvas } from '../components/LensCanvas';
 import { WorldMapPanel } from '../components/WorldMapPanel';
+import { HorizonDrawers, type HorizonPanelType, type MapDrawerPanelType } from '../components/HorizonDrawers';
 import AssembleLensRequestComponent, { AssembleLensRequest } from '../features/horizon/components/hook/AssembleLensRequest';
 import { api } from '../lib/api';
 import { useHorizonRealtimeStore } from '../stores/horizonRealtimeStore';
@@ -19,6 +20,7 @@ import { HorizonLoading } from '../components/HorizonLoading';
 import { HorizonEmptyState } from '../components/HorizonEmptyState';
 import { HorizonWatchSurface } from '../components/HorizonWatchSurface';
 import { HorizonWatchLensSurface } from '../components/HorizonWatchLensSurface';
+import type { MapObjectInspectorPayload } from '../components/MapObjectDetail';
 
 type HorizonFatalPipelineError = {
   title: string;
@@ -46,7 +48,30 @@ const HorizonPage: React.FC = () => {
   const [showSettings, setShowSettings] = React.useState(false);
   const [showAccount, setShowAccount] = React.useState(false);
   const [showWorldMap, setShowWorldMap] = React.useState(false);
+  const [worldMapPanelType, setWorldMapPanelType] = React.useState<HorizonPanelType>(null);
+  const [worldMapDrawerWidth, setWorldMapDrawerWidth] = React.useState(400);
+  const [worldMapInspectorState, setWorldMapInspectorState] = React.useState<MapObjectInspectorPayload | null>(null);
+  const [worldMapDrawerPanel, setWorldMapDrawerPanel] = React.useState<MapDrawerPanelType | null>(null);
+  const [worldMapDrawerHost, setWorldMapDrawerHost] = React.useState<HTMLDivElement | null>(null);
   const isWatchRoute = location.pathname === '/horizon/watch';
+  const worldMapDrawerTitle = worldMapDrawerPanel === 'view'
+    ? 'View'
+    : worldMapDrawerPanel === 'simulation'
+      ? 'Simulation'
+      : worldMapDrawerPanel === 'export-tools'
+        ? 'Export / Tools'
+        : null;
+
+  const handleWorldMapInspectorStateChange = React.useCallback((nextState: MapObjectInspectorPayload | null) => {
+    setWorldMapInspectorState(nextState);
+    setWorldMapDrawerPanel(null);
+    setWorldMapPanelType(nextState ? 'object-inspector' : null);
+  }, []);
+  const handleWorldMapDrawerPanelChange = React.useCallback((nextPanel: MapDrawerPanelType | null) => {
+    setWorldMapDrawerPanel(nextPanel);
+    setWorldMapInspectorState(null);
+    setWorldMapPanelType(nextPanel ? 'map-drawer' : null);
+  }, []);
   
   // Load saved Horizon state from localStorage
   const getSavedHorizonState = React.useCallback(() => {
@@ -856,13 +881,50 @@ const HorizonPage: React.FC = () => {
               />
             )
           ) : showWorldMap ? (
-            <WorldMapPanel />
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', minWidth: 0 }}>
+              <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <WorldMapPanel
+                  onMapInspectorStateChange={handleWorldMapInspectorStateChange}
+                  activeMapDrawerPanel={worldMapDrawerPanel}
+                  onMapDrawerPanelChange={handleWorldMapDrawerPanelChange}
+                  mapDrawerHost={worldMapDrawerHost}
+                />
+              </div>
+              <HorizonDrawers
+                panelType={worldMapPanelType}
+                isMobile={isMobile}
+                drawerWidth={worldMapDrawerWidth}
+                setDrawerWidth={setWorldMapDrawerWidth}
+                closeAllPanels={() => {
+                  worldMapInspectorState?.onClose();
+                  setWorldMapPanelType(null);
+                  setWorldMapInspectorState(null);
+                  setWorldMapDrawerPanel(null);
+                }}
+                getPanelVisibilityStyles={(visible: boolean) => ({
+                  display: visible ? 'block' : 'none',
+                  opacity: visible ? 1 : 0,
+                  transition: 'opacity 0.2s ease-in-out',
+                })}
+                projectId={currentProject?.id || null}
+                lensId={null}
+                lensName={null}
+                selectedNodeId={null}
+                selectedNodeData={null}
+                selectedEdgeId={null}
+                selectedEdgeData={null}
+                mapInspectorState={worldMapInspectorState}
+                mapDrawerTitle={worldMapDrawerTitle}
+                setMapDrawerHost={setWorldMapDrawerHost}
+              />
+            </div>
           ) : currentProject ? (
             /* Lens Canvas overlay - Home is the default entry point; Progress appears only when runtime exists */
             <LensCanvas
               isOpen={true}
               lensId={selectedLensId}
               projectId={currentProject.id}
+              sidebarOpen={sidebarOpen}
               isAdmin={isAdmin}
               initialViewMode={lensStarted ? 'progress' : (selectedLensId ? preferredLensCanvasMode : 'home')}
               showInputInProgress={true}

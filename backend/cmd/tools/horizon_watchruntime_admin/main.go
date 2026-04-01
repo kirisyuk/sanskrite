@@ -17,7 +17,7 @@ import (
 
 func main() {
 	var (
-		projectID   = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+		projectID   = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 		tenantID    = flag.String("tenant", "global", "tenant id")
 		mode        = flag.String("mode", "sync", "mode: sync|explain-subject|explain-trigger|replay-trigger|emit-anchor-trigger|upsert-macro-policy|compile-macro-policies|lens-attention|cleanup-legacy|metrics")
 		projectRef  = flag.String("project-ref", "", "macro policy project id")

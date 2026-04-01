@@ -1,5 +1,5 @@
 === Horizon marketSegments scan ===
-project=etigram tenant=global pageSize=500 includeIndexPaths=false onlyOrgFacility=true maxDocs=0
+project=nv-horizon tenant=global pageSize=500 includeIndexPaths=false onlyOrgFacility=true maxDocs=0
 scanned=38484
 fragments_with_any_segments=9448
 fragments_with_marketSegments=9448

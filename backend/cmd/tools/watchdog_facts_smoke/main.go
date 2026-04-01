@@ -30,7 +30,7 @@ func main() {
 	flag.Parse()
 
 	if *projectID == "" {
-		*projectID = "etigram"
+		*projectID = "nv-horizon"
 	}
 
 	fsClient, err := gcp.NewFirestoreClient(ctx, *projectID)

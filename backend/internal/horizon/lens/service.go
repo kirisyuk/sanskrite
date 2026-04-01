@@ -862,12 +862,17 @@ type LensService struct {
 	canonicalPathResolver *scout.CanonicalPathResolver    // Optional: for early canonicalization and deduplication
 
 	// Optional cleanup repos for cascade delete (best-effort, non-critical)
-	lensItemsRepo     *repo.LensItemsRepository
-	exposurePathsRepo *repo.ExposurePathsRepository
-	materializedRepo  *repo.MaterializedArtifactsRepository
-	lensArtifactsRepo *repo.LensArtifactsRepository
-	spendLedger       *repo.HorizonSpendLedger
-	agentJobsRepo     AgentJobsDeleter // interface for deleting agent jobs by ID
+	lensItemsRepo           *repo.LensItemsRepository
+	exposurePathsRepo       *repo.ExposurePathsRepository
+	materializedRepo        *repo.MaterializedArtifactsRepository
+	lensArtifactsRepo       *repo.LensArtifactsRepository
+	spendLedger             *repo.HorizonSpendLedger
+	agentJobsRepo           AgentJobsDeleter // interface for deleting agent jobs by ID
+	internalKnowledgeWarmup internalKnowledgeWarmupPort
+}
+
+type internalKnowledgeWarmupPort interface {
+	EnqueueLensWarmup(ctx context.Context, tenantID, projectID, lensID, reason string)
 }
 
 // NewLensService создает новый Lens Service
@@ -909,6 +914,11 @@ func (s *LensService) WithLensArtifactsRepo(repo *repo.LensArtifactsRepository) 
 // WithCanonicalPathResolver sets the canonical path resolver for early canonicalization and deduplication.
 func (s *LensService) WithCanonicalPathResolver(resolver *scout.CanonicalPathResolver) *LensService {
 	s.canonicalPathResolver = resolver
+	return s
+}
+
+func (s *LensService) WithInternalKnowledgeWarmup(warmer internalKnowledgeWarmupPort) *LensService {
+	s.internalKnowledgeWarmup = warmer
 	return s
 }
 
@@ -1112,6 +1122,7 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 	}
 	domainModes := taxonomy.NormalizeDomainModes(effectiveDomainModesForLens(lens))
 	supplyChainMode := taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) ||
+		taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeServiceChain) ||
 		taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain)
 	executionPlan := scout.BuildExecutionPlanContract(lens.ViewConfig, domainModes, specialties)
 	plannerBudgetExhausted := false
@@ -1996,6 +2007,9 @@ func (s *LensService) CreateLens(ctx context.Context, lens *models.Lens) (string
 			"completedAt":     time.Now().UTC().Format(time.RFC3339Nano),
 		}
 		_ = s.lensesRepo.Update(ctx, lens)
+		if s.internalKnowledgeWarmup != nil {
+			s.internalKnowledgeWarmup.EnqueueLensWarmup(ctx, lens.TenantID, lens.ProjectID, lensID, "assembly_ready_no_scout_jobs")
+		}
 		s.publish(ctx, realtime.EventType("horizon.assembly.ready"), map[string]interface{}{
 			"tenantId":        lens.TenantID,
 			"projectId":       lens.ProjectID,
@@ -2033,6 +2047,9 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 	if lens.ResolvedQueries == nil {
 		lens.ResolvedQueries = make(map[string][]string)
 	}
+	if lens.ResearchObjects == nil {
+		lens.ResearchObjects = make(map[string]models.LensResearchObjectRef)
+	}
 	// Копируем существующий кэш из oldLens
 	if oldLens.ScopeFragments != nil {
 		for k, v := range oldLens.ScopeFragments {
@@ -2042,6 +2059,11 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 	if oldLens.ResolvedQueries != nil {
 		for k, v := range oldLens.ResolvedQueries {
 			lens.ResolvedQueries[k] = v
+		}
+	}
+	if oldLens.ResearchObjects != nil {
+		for k, v := range oldLens.ResearchObjects {
+			lens.ResearchObjects[k] = v
 		}
 	}
 
@@ -2270,6 +2292,7 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 	}
 	domainModes := taxonomy.NormalizeDomainModes(effectiveDomainModesForLens(lens))
 	supplyChainMode := taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) ||
+		taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeServiceChain) ||
 		taxonomy.HasSpecialty(specialties, taxonomy.SpecialtySupplyChain)
 	executionPlan := scout.BuildExecutionPlanContract(lens.ViewConfig, domainModes, specialties)
 	plannerBudgetExhausted := false
@@ -2572,6 +2595,13 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 			"maxRootJobsApplied": executionPlan.MaxRootJobs,
 			"op":                 "update_lens",
 		})
+	}
+	if len(allNewStaticPaths) > 0 && rootJobsScheduled == 0 && s.internalKnowledgeWarmup != nil {
+		// When scope expands but all additions resolve from fresh internal graph state, Scout+ may not
+		// emit a new assembly completion edge. Warm the prepared substrate here so serving stays aligned
+		// with the widened lens universe. Follow-up iterations should evolve this into delta-only warming
+		// over the newly added scope slice, not full rebuilds.
+		s.internalKnowledgeWarmup.EnqueueLensWarmup(ctx, lens.TenantID, lens.ProjectID, lens.ID, "scope_delta_no_scout_jobs")
 	}
 	if s.watchSubjectHook != nil {
 		s.watchSubjectHook(ctx, lens.ID)

@@ -7,15 +7,16 @@ import (
 )
 
 type curatedRouteProfile struct {
-	ID                  string
-	FlowRefs            []string
-	Coordinates         []models.Coordinates
-	RequiredTokens      []string
-	PreferredTokens     []string
-	OriginAnchor        models.Coordinates
-	OriginRadiusKm      float64
-	DestinationAnchor   models.Coordinates
-	DestinationRadiusKm float64
+	ID                          string
+	FlowRefs                    []string
+	Coordinates                 []models.Coordinates
+	RequiredTokens              []string
+	PreferredTokens             []string
+	SingleEndedMinPreferredHits float64
+	OriginAnchor                models.Coordinates
+	OriginRadiusKm              float64
+	DestinationAnchor           models.Coordinates
+	DestinationRadiusKm         float64
 }
 
 func resolveCuratedRouteGeometry(
@@ -140,7 +141,33 @@ func scoreCuratedRouteProfile(
 	if preferredHits == 0 && len(profile.PreferredTokens) > 0 {
 		return 0, false, false
 	}
-	return preferredHits*20 + 40, false, true
+	if startOK {
+		if preferredHits < profile.SingleEndedMinPreferredHits {
+			return 0, false, false
+		}
+		directOrigin := routeDistanceKm(start, profile.OriginAnchor)
+		directDestination := routeDistanceKm(start, profile.DestinationAnchor)
+		if directOrigin <= profile.OriginRadiusKm {
+			return preferredHits*20 + 60 - directOrigin/250, false, true
+		}
+		if directDestination <= profile.DestinationRadiusKm {
+			return preferredHits*20 + 60 - directDestination/250, true, true
+		}
+	}
+	if endOK {
+		if preferredHits < profile.SingleEndedMinPreferredHits {
+			return 0, false, false
+		}
+		directOrigin := routeDistanceKm(end, profile.OriginAnchor)
+		directDestination := routeDistanceKm(end, profile.DestinationAnchor)
+		if directDestination <= profile.DestinationRadiusKm {
+			return preferredHits*20 + 60 - directDestination/250, false, true
+		}
+		if directOrigin <= profile.OriginRadiusKm {
+			return preferredHits*20 + 60 - directOrigin/250, true, true
+		}
+	}
+	return 0, false, false
 }
 
 func resolveRouteEndpoint(ref string, fragsByPath map[string]*models.HorizonFragment) (models.Coordinates, bool) {
@@ -407,34 +434,48 @@ func curatedRouteProfiles() []*curatedRouteProfile {
 			},
 		},
 		{
-			ID:                  "sea_us_gulf_jebel_ali_via_suez",
-			FlowRefs:            []string{"sea_us_gulf_jebel_ali_via_suez"},
-			RequiredTokens:      []string{"jebel"},
-			PreferredTokens:     []string{"houston", "baytown", "port", "arthur", "suez", "gulf"},
-			OriginAnchor:        coord(29.73, -95.01),
-			OriginRadiusKm:      500,
-			DestinationAnchor:   coord(25.01, 55.06),
-			DestinationRadiusKm: 400,
-			Coordinates: []models.Coordinates{
-				coord(29.73, -95.01),
-				coord(27.00, -89.00),
-				coord(25.20, -82.00),
-				coord(28.00, -72.00),
-				coord(33.00, -57.00),
-				coord(36.00, -38.00),
-				coord(36.00, -14.00),
-				coord(36.00, 0.00),
-				coord(35.20, 14.00),
-				coord(31.00, 28.00),
-				coord(30.75, 32.35),
-				coord(21.00, 39.00),
-				coord(13.20, 43.50),
-				coord(12.50, 50.00),
-				coord(17.50, 58.00),
-				coord(24.00, 60.50),
-				coord(26.58, 56.30),
-				coord(25.01, 55.06),
-			},
+			ID:                  "sea_hamburg_suez_via_gibraltar",
+			FlowRefs:            []string{"sea_hamburg_suez_via_gibraltar"},
+			RequiredTokens:      []string{"hamburg", "suez"},
+			PreferredTokens:     []string{"europe", "north", "germany", "gibraltar"},
+			OriginAnchor:        coord(53.509430, 9.965477),
+			OriginRadiusKm:      220,
+			DestinationAnchor:   coord(29.966790, 32.549828),
+			DestinationRadiusKm: 220,
+			Coordinates: composeCatalogCoordinates(
+				maritimeHamburgToGibraltarIngress(),
+				maritimeGibraltarToSuezTrunk(),
+			),
+		},
+		{
+			ID:                  "sea_felixstowe_suez_via_gibraltar",
+			FlowRefs:            []string{"sea_felixstowe_suez_via_gibraltar"},
+			RequiredTokens:      []string{"felixstowe", "suez"},
+			PreferredTokens:     []string{"europe", "uk", "britain", "gibraltar"},
+			OriginAnchor:        coord(51.955696, 1.312976),
+			OriginRadiusKm:      180,
+			DestinationAnchor:   coord(29.966790, 32.549828),
+			DestinationRadiusKm: 220,
+			Coordinates: composeCatalogCoordinates(
+				maritimeFelixstoweToGibraltarIngress(),
+				maritimeGibraltarToSuezTrunk(),
+			),
+		},
+		{
+			ID:                          "sea_us_gulf_jebel_ali_via_suez",
+			FlowRefs:                    []string{"sea_us_gulf_jebel_ali_via_suez"},
+			RequiredTokens:              []string{"jebel"},
+			PreferredTokens:             []string{"houston", "baytown", "port", "arthur", "suez", "gulf"},
+			SingleEndedMinPreferredHits: 2,
+			OriginAnchor:                coord(29.73, -95.01),
+			OriginRadiusKm:              500,
+			DestinationAnchor:           coord(25.01, 55.06),
+			DestinationRadiusKm:         400,
+			Coordinates: composeCatalogCoordinates(
+				maritimeUSGulfToSuezAtlantic(),
+				maritimeSuezToHormuzTrunk(),
+				maritimeHormuzToJebelAliFeeder(),
+			),
 		},
 		{
 			ID:                  "sea_us_gulf_diego_via_malacca",
@@ -557,26 +598,10 @@ func curatedRouteProfiles() []*curatedRouteProfile {
 			OriginRadiusKm:      1800,
 			DestinationAnchor:   coord(51.885, 4.2867),
 			DestinationRadiusKm: 1200,
-			Coordinates: []models.Coordinates{
-				coord(26.65, 50.04),
-				coord(26.58, 56.30),
-				coord(24.80, 58.90),
-				coord(18.50, 61.00),
-				coord(13.20, 49.40),
-				coord(12.65, 43.45),
-				coord(15.20, 41.10),
-				coord(20.80, 38.80),
-				coord(26.70, 35.10),
-				coord(29.80, 32.55),
-				coord(30.75, 32.35),
-				coord(33.50, 29.50),
-				coord(36.10, 18.60),
-				coord(36.00, 5.60),
-				coord(43.80, -6.20),
-				coord(49.80, -1.60),
-				coord(51.20, 2.50),
-				coord(51.885, 4.2867),
-			},
+			Coordinates: composeCatalogCoordinates(
+				maritimeGulfToSuezMainline(),
+				maritimeSuezToRotterdamAtlantic(),
+			),
 		},
 		{
 			ID:                  "sea_gulf_rotterdam_via_cape",
@@ -608,6 +633,481 @@ func curatedRouteProfiles() []*curatedRouteProfile {
 				coord(51.885, 4.2867),
 			},
 		},
+		{
+			ID:                  "sea_jebel_ali_sohar_feeder",
+			FlowRefs:            []string{"sea_jebel_ali_sohar_feeder"},
+			RequiredTokens:      []string{"jebel", "sohar"},
+			PreferredTokens:     []string{"dubai", "oman", "gulf", "hormuz"},
+			OriginAnchor:        coord(25.074282, 55.188539),
+			OriginRadiusKm:      220,
+			DestinationAnchor:   coord(24.484851, 56.612114),
+			DestinationRadiusKm: 180,
+			Coordinates: composeCatalogCoordinates(
+				reverseCatalogCoordinates(maritimeHormuzToJebelAliFeeder()),
+				maritimeHormuzToSoharFeeder(),
+			),
+		},
+		{
+			ID:                  "sea_suez_jebel_ali_mainline",
+			FlowRefs:            []string{"sea_suez_jebel_ali_mainline"},
+			RequiredTokens:      []string{"suez", "jebel"},
+			PreferredTokens:     []string{"red", "arabian", "dubai", "hormuz"},
+			OriginAnchor:        coord(29.966790, 32.549828),
+			OriginRadiusKm:      220,
+			DestinationAnchor:   coord(25.074282, 55.188539),
+			DestinationRadiusKm: 220,
+			Coordinates: composeCatalogCoordinates(
+				maritimeSuezToHormuzTrunk(),
+				maritimeHormuzToJebelAliFeeder(),
+			),
+		},
+		{
+			ID:                  "sea_suez_sohar_mainline",
+			FlowRefs:            []string{"sea_suez_sohar_mainline"},
+			RequiredTokens:      []string{"suez", "sohar"},
+			PreferredTokens:     []string{"oman", "red", "arabian", "hormuz"},
+			OriginAnchor:        coord(29.966790, 32.549828),
+			OriginRadiusKm:      220,
+			DestinationAnchor:   coord(24.484851, 56.612114),
+			DestinationRadiusKm: 240,
+			Coordinates: composeCatalogCoordinates(
+				maritimeSuezToHormuzTrunk(),
+				maritimeHormuzToSoharFeeder(),
+			),
+		},
+		{
+			ID:                  "sea_hamburg_sohar_via_suez",
+			FlowRefs:            []string{"sea_hamburg_sohar_via_suez"},
+			RequiredTokens:      []string{"hamburg", "sohar"},
+			PreferredTokens:     []string{"suez", "europe", "north", "germany"},
+			OriginAnchor:        coord(53.509430, 9.965477),
+			OriginRadiusKm:      220,
+			DestinationAnchor:   coord(24.484851, 56.612114),
+			DestinationRadiusKm: 240,
+			Coordinates: composeCatalogCoordinates(
+				maritimeHamburgToGibraltarIngress(),
+				maritimeGibraltarToSuezTrunk(),
+				maritimeSuezToHormuzTrunk(),
+				maritimeHormuzToSoharFeeder(),
+			),
+		},
+		{
+			ID:                  "sea_felixstowe_sohar_via_suez",
+			FlowRefs:            []string{"sea_felixstowe_sohar_via_suez"},
+			RequiredTokens:      []string{"felixstowe", "sohar"},
+			PreferredTokens:     []string{"suez", "europe", "uk", "britain"},
+			OriginAnchor:        coord(51.955696, 1.312976),
+			OriginRadiusKm:      180,
+			DestinationAnchor:   coord(24.484851, 56.612114),
+			DestinationRadiusKm: 240,
+			Coordinates: composeCatalogCoordinates(
+				maritimeFelixstoweToGibraltarIngress(),
+				maritimeGibraltarToSuezTrunk(),
+				maritimeSuezToHormuzTrunk(),
+				maritimeHormuzToSoharFeeder(),
+			),
+		},
+		{
+			ID:                  "sea_belawan_singapore_feeder",
+			FlowRefs:            []string{"sea_belawan_singapore_feeder"},
+			RequiredTokens:      []string{"belawan", "singapore"},
+			PreferredTokens:     []string{"sumatra", "medan", "indonesia"},
+			OriginAnchor:        coord(3.784722, 98.694722),
+			OriginRadiusKm:      220,
+			DestinationAnchor:   coord(1.266, 103.855),
+			DestinationRadiusKm: 220,
+			Coordinates:         maritimeBelawanToSingaporeFeeder(),
+		},
+		{
+			ID:                  "sea_tanjung_priok_singapore_feeder",
+			FlowRefs:            []string{"sea_tanjung_priok_singapore_feeder"},
+			RequiredTokens:      []string{"tanjung", "priok", "singapore"},
+			PreferredTokens:     []string{"jakarta", "indonesia", "java"},
+			OriginAnchor:        coord(-6.104444, 106.880556),
+			OriginRadiusKm:      220,
+			DestinationAnchor:   coord(1.266, 103.855),
+			DestinationRadiusKm: 220,
+			Coordinates:         maritimeTanjungPriokToSingaporeFeeder(),
+		},
+		{
+			ID:                  "sea_ho_chi_minh_singapore_feeder",
+			FlowRefs:            []string{"sea_ho_chi_minh_singapore_feeder"},
+			RequiredTokens:      []string{"minh", "singapore"},
+			PreferredTokens:     []string{"vietnam", "chi", "ho", "saigon"},
+			OriginAnchor:        coord(10.823099, 106.629664),
+			OriginRadiusKm:      260,
+			DestinationAnchor:   coord(1.266, 103.855),
+			DestinationRadiusKm: 220,
+			Coordinates:         maritimeHoChiMinhToSingaporeFeeder(),
+		},
+		{
+			ID:                  "sea_singapore_marseille_via_suez",
+			FlowRefs:            []string{"sea_singapore_marseille_via_suez"},
+			RequiredTokens:      []string{"singapore", "marseille"},
+			PreferredTokens:     []string{"suez", "mediterranean", "france"},
+			OriginAnchor:        coord(1.266, 103.855),
+			OriginRadiusKm:      220,
+			DestinationAnchor:   coord(43.296482, 5.369780),
+			DestinationRadiusKm: 260,
+			Coordinates: composeCatalogCoordinates(
+				reverseCatalogCoordinates(maritimeSingaporeToMalaccaFeeder()),
+				maritimeMalaccaToHormuzTrunk(),
+				reverseCatalogCoordinates(maritimeSuezToHormuzTrunk()),
+				maritimeSuezToMarseilleMed(),
+			),
+		},
+		{
+			ID:                  "sea_singapore_genoa_via_suez",
+			FlowRefs:            []string{"sea_singapore_genoa_via_suez"},
+			RequiredTokens:      []string{"singapore", "genoa"},
+			PreferredTokens:     []string{"suez", "mediterranean", "italy"},
+			OriginAnchor:        coord(1.266, 103.855),
+			OriginRadiusKm:      220,
+			DestinationAnchor:   coord(44.404833, 8.917847),
+			DestinationRadiusKm: 260,
+			Coordinates: composeCatalogCoordinates(
+				reverseCatalogCoordinates(maritimeSingaporeToMalaccaFeeder()),
+				maritimeMalaccaToHormuzTrunk(),
+				reverseCatalogCoordinates(maritimeSuezToHormuzTrunk()),
+				maritimeSuezToGenoaMed(),
+			),
+		},
+		{
+			ID:                  "sea_singapore_rotterdam_via_suez",
+			FlowRefs:            []string{"sea_singapore_rotterdam_via_suez"},
+			RequiredTokens:      []string{"singapore", "rotterdam"},
+			PreferredTokens:     []string{"suez", "gibraltar", "europe", "netherlands"},
+			OriginAnchor:        coord(1.266, 103.855),
+			OriginRadiusKm:      220,
+			DestinationAnchor:   coord(51.885, 4.2867),
+			DestinationRadiusKm: 260,
+			Coordinates: composeCatalogCoordinates(
+				reverseCatalogCoordinates(maritimeSingaporeToMalaccaFeeder()),
+				maritimeMalaccaToHormuzTrunk(),
+				reverseCatalogCoordinates(maritimeSuezToHormuzTrunk()),
+				maritimeSuezToRotterdamAtlantic(),
+			),
+		},
+		{
+			ID:                  "sea_shanghai_malacca_mainline",
+			FlowRefs:            []string{"sea_shanghai_malacca_mainline"},
+			RequiredTokens:      []string{"shanghai", "malacca"},
+			PreferredTokens:     []string{"china", "port", "east", "asia"},
+			OriginAnchor:        coord(30.626595, 122.063382),
+			OriginRadiusKm:      180,
+			DestinationAnchor:   coord(5.100000, 100.400000),
+			DestinationRadiusKm: 500,
+			Coordinates:         maritimeShanghaiToMalaccaMainline(),
+		},
+		{
+			ID:                  "sea_yokohama_malacca_mainline",
+			FlowRefs:            []string{"sea_yokohama_malacca_mainline"},
+			RequiredTokens:      []string{"yokohama", "malacca"},
+			PreferredTokens:     []string{"japan", "port", "east", "asia"},
+			OriginAnchor:        coord(35.450000, 139.646111),
+			OriginRadiusKm:      180,
+			DestinationAnchor:   coord(5.100000, 100.400000),
+			DestinationRadiusKm: 500,
+			Coordinates:         maritimeYokohamaToMalaccaMainline(),
+		},
+		{
+			ID:                  "sea_malacca_jebel_ali_mainline",
+			FlowRefs:            []string{"sea_malacca_jebel_ali_mainline"},
+			RequiredTokens:      []string{"malacca", "jebel"},
+			PreferredTokens:     []string{"arabian", "dubai", "oman", "hormuz"},
+			OriginAnchor:        coord(5.100000, 100.400000),
+			OriginRadiusKm:      500,
+			DestinationAnchor:   coord(25.074282, 55.188539),
+			DestinationRadiusKm: 220,
+			Coordinates: composeCatalogCoordinates(
+				maritimeMalaccaToHormuzTrunk(),
+				maritimeHormuzToJebelAliFeeder(),
+			),
+		},
+		{
+			ID:                  "sea_shanghai_sohar_via_malacca",
+			FlowRefs:            []string{"sea_shanghai_sohar_via_malacca"},
+			RequiredTokens:      []string{"shanghai", "sohar"},
+			PreferredTokens:     []string{"malacca", "china", "port", "oman"},
+			OriginAnchor:        coord(30.626595, 122.063382),
+			OriginRadiusKm:      180,
+			DestinationAnchor:   coord(24.484851, 56.612114),
+			DestinationRadiusKm: 240,
+			Coordinates: composeCatalogCoordinates(
+				maritimeShanghaiToMalaccaMainline(),
+				maritimeMalaccaToHormuzTrunk(),
+				maritimeHormuzToSoharFeeder(),
+			),
+		},
+		{
+			ID:                  "sea_yokohama_sohar_via_malacca",
+			FlowRefs:            []string{"sea_yokohama_sohar_via_malacca"},
+			RequiredTokens:      []string{"yokohama", "sohar"},
+			PreferredTokens:     []string{"malacca", "japan", "port", "oman"},
+			OriginAnchor:        coord(35.450000, 139.646111),
+			OriginRadiusKm:      180,
+			DestinationAnchor:   coord(24.484851, 56.612114),
+			DestinationRadiusKm: 240,
+			Coordinates: composeCatalogCoordinates(
+				maritimeYokohamaToMalaccaMainline(),
+				maritimeMalaccaToHormuzTrunk(),
+				maritimeHormuzToSoharFeeder(),
+			),
+		},
+		{
+			ID:                  "sea_malacca_sohar_mainline",
+			FlowRefs:            []string{"sea_malacca_sohar_mainline"},
+			RequiredTokens:      []string{"malacca", "sohar"},
+			PreferredTokens:     []string{"japan", "china", "shanghai", "yokohama", "oman"},
+			OriginAnchor:        coord(5.10, 100.40),
+			OriginRadiusKm:      500,
+			DestinationAnchor:   coord(24.484851, 56.612114),
+			DestinationRadiusKm: 240,
+			Coordinates: composeCatalogCoordinates(
+				maritimeMalaccaToHormuzTrunk(),
+				maritimeHormuzToSoharFeeder(),
+			),
+		},
+	}
+}
+
+func composeCatalogCoordinates(segments ...[]models.Coordinates) []models.Coordinates {
+	out := make([]models.Coordinates, 0, 32)
+	for _, segment := range segments {
+		for _, point := range segment {
+			if len(out) > 0 {
+				prev := out[len(out)-1]
+				if absRouteDelta(prev.Lat-point.Lat) < 1e-7 && absRouteDelta(prev.Lon-point.Lon) < 1e-7 {
+					continue
+				}
+			}
+			out = append(out, point)
+		}
+	}
+	if len(out) < 2 {
+		return nil
+	}
+	return out
+}
+
+func reverseCatalogCoordinates(coords []models.Coordinates) []models.Coordinates {
+	if len(coords) == 0 {
+		return nil
+	}
+	out := make([]models.Coordinates, 0, len(coords))
+	for idx := len(coords) - 1; idx >= 0; idx-- {
+		out = append(out, coords[idx])
+	}
+	return out
+}
+
+func absRouteDelta(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func maritimeHamburgToGibraltarIngress() []models.Coordinates {
+	return []models.Coordinates{
+		coord(53.509430, 9.965477),
+		coord(52.50, 4.50),
+		coord(50.90, 0.50),
+		coord(43.80, -6.20),
+	}
+}
+
+func maritimeFelixstoweToGibraltarIngress() []models.Coordinates {
+	return []models.Coordinates{
+		coord(51.955696, 1.312976),
+		coord(50.90, 0.50),
+		coord(43.80, -6.20),
+	}
+}
+
+func maritimeGibraltarToSuezTrunk() []models.Coordinates {
+	return []models.Coordinates{
+		coord(43.80, -6.20),
+		coord(36.00, 5.60),
+		coord(33.50, 29.50),
+		coord(30.75, 32.35),
+	}
+}
+
+func maritimeSuezToRotterdamAtlantic() []models.Coordinates {
+	return []models.Coordinates{
+		coord(30.75, 32.35),
+		coord(33.50, 29.50),
+		coord(36.10, 18.60),
+		coord(36.00, 5.60),
+		coord(43.80, -6.20),
+		coord(49.80, -1.60),
+		coord(51.20, 2.50),
+		coord(51.885, 4.2867),
+	}
+}
+
+func maritimeUSGulfToSuezAtlantic() []models.Coordinates {
+	return []models.Coordinates{
+		coord(29.73, -95.01),
+		coord(27.00, -89.00),
+		coord(25.20, -82.00),
+		coord(28.00, -72.00),
+		coord(33.00, -57.00),
+		coord(36.00, -38.00),
+		coord(36.00, -14.00),
+		coord(36.00, 0.00),
+		coord(35.20, 14.00),
+		coord(31.00, 28.00),
+		coord(30.75, 32.35),
+	}
+}
+
+func maritimeGulfToSuezMainline() []models.Coordinates {
+	return []models.Coordinates{
+		coord(26.65, 50.04),
+		coord(26.58, 56.30),
+		coord(24.80, 58.90),
+		coord(18.50, 61.00),
+		coord(13.20, 49.40),
+		coord(12.65, 43.45),
+		coord(15.20, 41.10),
+		coord(20.80, 38.80),
+		coord(26.70, 35.10),
+		coord(29.80, 32.55),
+		coord(30.75, 32.35),
+	}
+}
+
+func maritimeSuezToHormuzTrunk() []models.Coordinates {
+	return []models.Coordinates{
+		coord(29.966790, 32.549828),
+		coord(27.90, 34.50),
+		coord(22.00, 38.00),
+		coord(15.20, 41.10),
+		coord(12.65, 43.45),
+		coord(13.20, 49.40),
+		coord(18.50, 61.00),
+		coord(26.58, 56.30),
+	}
+}
+
+func maritimeHormuzToJebelAliFeeder() []models.Coordinates {
+	return []models.Coordinates{
+		coord(26.58, 56.30),
+		coord(25.60, 55.85),
+		coord(25.074282, 55.188539),
+	}
+}
+
+func maritimeHormuzToSoharFeeder() []models.Coordinates {
+	return []models.Coordinates{
+		coord(26.58, 56.30),
+		coord(25.80, 56.95),
+		coord(24.484851, 56.612114),
+	}
+}
+
+func maritimeSingaporeToMalaccaFeeder() []models.Coordinates {
+	return []models.Coordinates{
+		coord(1.266, 103.855),
+		coord(2.80, 102.40),
+		coord(5.10, 100.40),
+	}
+}
+
+func maritimeBelawanToSingaporeFeeder() []models.Coordinates {
+	return []models.Coordinates{
+		coord(3.784722, 98.694722),
+		coord(4.20, 99.30),
+		coord(3.20, 101.10),
+		coord(1.266, 103.855),
+	}
+}
+
+func maritimeTanjungPriokToSingaporeFeeder() []models.Coordinates {
+	return []models.Coordinates{
+		coord(-6.104444, 106.880556),
+		coord(-3.20, 106.10),
+		coord(-0.20, 104.80),
+		coord(1.266, 103.855),
+	}
+}
+
+func maritimeHoChiMinhToSingaporeFeeder() []models.Coordinates {
+	return []models.Coordinates{
+		coord(10.823099, 106.629664),
+		coord(8.30, 106.60),
+		coord(5.10, 105.40),
+		coord(2.40, 104.20),
+		coord(1.266, 103.855),
+	}
+}
+
+func maritimeShanghaiToMalaccaMainline() []models.Coordinates {
+	return []models.Coordinates{
+		coord(30.626595, 122.063382),
+		coord(28.20, 121.30),
+		coord(22.80, 118.60),
+		coord(16.50, 113.80),
+		coord(11.00, 110.70),
+		coord(6.00, 107.80),
+		coord(2.20, 103.60),
+		coord(5.10, 100.40),
+	}
+}
+
+func maritimeYokohamaToMalaccaMainline() []models.Coordinates {
+	return []models.Coordinates{
+		coord(35.450000, 139.646111),
+		coord(32.00, 134.20),
+		coord(28.00, 128.60),
+		coord(22.50, 123.00),
+		coord(15.50, 116.50),
+		coord(9.80, 109.20),
+		coord(3.20, 102.80),
+		coord(5.10, 100.40),
+	}
+}
+
+func maritimeSuezToMarseilleMed() []models.Coordinates {
+	return []models.Coordinates{
+		coord(30.75, 32.35),
+		coord(31.80, 29.80),
+		coord(33.30, 24.00),
+		coord(35.00, 18.20),
+		coord(37.40, 12.70),
+		coord(40.20, 8.20),
+		coord(43.296482, 5.369780),
+	}
+}
+
+func maritimeSuezToGenoaMed() []models.Coordinates {
+	return []models.Coordinates{
+		coord(30.75, 32.35),
+		coord(31.80, 29.80),
+		coord(33.30, 24.00),
+		coord(35.00, 18.20),
+		coord(37.80, 14.00),
+		coord(40.30, 11.80),
+		coord(42.70, 10.10),
+		coord(44.404833, 8.917847),
+	}
+}
+
+func maritimeMalaccaToHormuzTrunk() []models.Coordinates {
+	return []models.Coordinates{
+		coord(5.10, 100.40),
+		coord(7.80, 97.80),
+		coord(5.60, 95.20),
+		coord(5.50, 90.50),
+		coord(5.60, 84.60),
+		coord(5.80, 78.90),
+		coord(8.40, 73.60),
+		coord(14.20, 68.40),
+		coord(20.50, 63.00),
+		coord(24.80, 58.90),
+		coord(26.58, 56.30),
 	}
 }
 

@@ -13,6 +13,7 @@ interface MapFilterPanelProps {
   isDark: boolean;
   paletteTheme: 'dark' | 'light';
   floating?: boolean;
+  presentation?: 'overlay' | 'drawer';
   typeCounts: TypeCount[];
   zoneTypeCounts: ZoneTypeCount[];
   flowModeCounts: TransportFlowModeCount[];
@@ -87,7 +88,31 @@ function detectDatePreset(dateFrom: string, dateTo: string, today: Date): DatePr
   return 'custom';
 }
 
-function panelSurface(isDark: boolean, floating = false): React.CSSProperties {
+function panelSurface(
+  isDark: boolean,
+  floating = false,
+  presentation: 'overlay' | 'drawer' = 'overlay',
+): React.CSSProperties {
+  if (presentation === 'drawer') {
+    return {
+      position: 'relative',
+      right: undefined,
+      top: undefined,
+      width: '100%',
+      maxHeight: 'none',
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'visible',
+      padding: 0,
+      borderRadius: 0,
+      background: 'transparent',
+      border: 'none',
+      boxShadow: 'none',
+      backdropFilter: 'none',
+      color: 'var(--text-heading)',
+      fontSize: 11,
+    };
+  }
   return {
     position: floating ? 'relative' : 'absolute',
     right: floating ? undefined : 10,
@@ -390,6 +415,7 @@ export const MapFilterPanel: React.FC<MapFilterPanelProps> = ({
   isDark,
   paletteTheme,
   floating = false,
+  presentation = 'overlay',
   typeCounts,
   zoneTypeCounts,
   flowModeCounts,
@@ -536,7 +562,7 @@ export const MapFilterPanel: React.FC<MapFilterPanelProps> = ({
   }
 
   return (
-    <div style={panelSurface(isDark, floating)}>
+    <div style={panelSurface(isDark, floating, presentation)}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
         <div>
           <div style={{ fontWeight: 700, fontSize: 14, letterSpacing: '-0.01em' }}>View controls</div>

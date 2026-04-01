@@ -29,6 +29,7 @@ export interface LensCanvasHomeProps {
   onAssemble?: (request: AssembleLensRequest) => void;
   onOpenGraph?: () => void;
   onOpenMap?: () => void;
+  onOpenDocuments?: () => void;
   isCreatingLens?: boolean;
   assemblyStatus: any;
   scoutingJobs: any[];
@@ -44,6 +45,7 @@ export const LensCanvasHome: React.FC<LensCanvasHomeProps> = ({
   onAssemble,
   onOpenGraph,
   onOpenMap,
+  onOpenDocuments,
   isCreatingLens = false,
   assemblyStatus,
   scoutingJobs,
@@ -527,7 +529,7 @@ export const LensCanvasHome: React.FC<LensCanvasHomeProps> = ({
   const homeCommandPlaceholder = totalObjects > 0 || artifactEntries.length > 0
     ? 'What would you like to extend or explore next?'
     : undefined;
-  const showHomeViewActions = Boolean((totalObjects > 0 || artifactEntries.length > 0) && (onOpenGraph || onOpenMap));
+  const showHomeViewActions = Boolean((totalObjects > 0 || artifactEntries.length > 0) && (onOpenGraph || onOpenMap || onOpenDocuments));
   const projectDisplayName = (
     (currentProject?.id && projectId && currentProject.id === projectId ? currentProject.displayName : '')
     || String(lens?.projectName || '').trim()
@@ -847,6 +849,25 @@ export const LensCanvasHome: React.FC<LensCanvasHomeProps> = ({
                     }}
                   >
                     View on Map
+                  </button>
+                ) : null}
+                {onOpenDocuments ? (
+                  <button
+                    type="button"
+                    onClick={onOpenDocuments}
+                    style={{
+                      height: 34,
+                      padding: '0 14px',
+                      borderRadius: 10,
+                      border: '1px solid var(--border-subtle)',
+                      background: 'rgba(236, 179, 56, 0.16)',
+                      color: 'var(--text-heading)',
+                      fontSize: 12,
+                      fontWeight: 800,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Documents
                   </button>
                 ) : null}
               </div>

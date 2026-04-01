@@ -121,7 +121,7 @@ func collectMechanismGovPathCandidates(a *horizonmodels.MaterializedArtifact) []
 				add(n.Ref)
 			}
 		}
-	case horizonmodels.MaterializedKindSupplyChainPath:
+	case horizonmodels.MaterializedKindSupplyChainPath, horizonmodels.MaterializedKindServiceChainPath:
 		if parsed, err := horizonmodels.ParseSupplyChainPathPayload(a.Payload); err == nil && parsed != nil {
 			for _, n := range parsed.Nodes {
 				add(n.Ref)

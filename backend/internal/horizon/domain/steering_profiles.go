@@ -11,6 +11,7 @@ type SteeringProfileName string
 const (
 	SteeringProfileGeneral                 SteeringProfileName = "general"
 	SteeringProfileSupplyChain             SteeringProfileName = "supply_chain"
+	SteeringProfileServiceChain            SteeringProfileName = "service_chain"
 	SteeringProfileRegulatoryExposure      SteeringProfileName = "regulatory_exposure"
 	SteeringProfileCompetitiveLandscape    SteeringProfileName = "competitive_landscape"
 	SteeringProfileGeographicConcentration SteeringProfileName = "geographic_concentration"
@@ -30,6 +31,7 @@ var profileByContractType = map[string]SteeringProfileName{
 	"trade-flow":      SteeringProfileSupplyChain,
 	"sourcing-map":    SteeringProfileSupplyChain,
 	"procurement-map": SteeringProfileSupplyChain,
+	"service-chain":   SteeringProfileServiceChain,
 
 	// Risk / geopolitics / regulatory
 	"risk-assessment":         SteeringProfileRegulatoryExposure,
@@ -62,7 +64,7 @@ var profileByContractType = map[string]SteeringProfileName{
 	"valuation-drivers":   SteeringProfileInvestmentFinance,
 	"portfolio-exposure":  SteeringProfileInvestmentFinance,
 	"ownership-structure": SteeringProfileInvestmentFinance,
-	"control-map":        SteeringProfileInvestmentFinance,
+	"control-map":         SteeringProfileInvestmentFinance,
 	"equity":              SteeringProfileInvestmentFinance,
 
 	// Technology / innovation
@@ -110,6 +112,7 @@ func SteeringProfileForContractType(contractType string) SteeringProfileName {
 var profileToDomainMode = map[SteeringProfileName]string{
 	SteeringProfileGeneral:                 taxonomy.DomainModeGeneral,
 	SteeringProfileSupplyChain:             taxonomy.DomainModeSupplyChain,
+	SteeringProfileServiceChain:            taxonomy.DomainModeServiceChain,
 	SteeringProfileRegulatoryExposure:      taxonomy.DomainModeStrategic,
 	SteeringProfileCompetitiveLandscape:    taxonomy.DomainModeMarket,
 	SteeringProfileGeographicConcentration: taxonomy.DomainModeMarket,

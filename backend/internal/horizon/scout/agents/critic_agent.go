@@ -129,9 +129,14 @@ func RuleBasedQuickValidation(
 
 	missing := entity_semantics.EvaluateMissingInfoRules(fragment, relTypes, rules, domainModes, targetPath, entity_semantics.EvaluateModeFull)
 
-	// Supply chain invariants (deterministic checks)
+	// Operational-chain invariants (deterministic checks)
+	workingScope := collectWorkingProductScopeFromChains(supplyChains)
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) {
-		invariantGaps := checkSupplyChainInvariants(supplyChains, collectWorkingProductScopeFromChains(supplyChains))
+		invariantGaps := checkSupplyChainInvariants(supplyChains, workingScope)
+		missing = append(missing, invariantGaps...)
+	}
+	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeServiceChain) {
+		invariantGaps := checkServiceChainInvariants(supplyChains, workingScope)
 		missing = append(missing, invariantGaps...)
 	}
 

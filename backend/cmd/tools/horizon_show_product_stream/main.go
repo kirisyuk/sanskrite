@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	projectID   = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	projectID   = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	tenantID    = flag.String("tenant", "global", "tenant id")
 	seedPath    = flag.String("seed", "", "seed product canonical path")
 	direction   = flag.String("direction", "downstream", "stream direction: downstream|upstream")

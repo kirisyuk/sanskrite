@@ -65,7 +65,7 @@ type lensCandidate struct {
 func main() {
 	ctx := context.Background()
 
-	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	tenantID := flag.String("tenant", "global", "tenant id")
 	lensID := flag.String("lens-id", "", "exact lens id")
 	lensQuery := flag.String("lens-query", "asml", "lens substring when -lens-id is empty")

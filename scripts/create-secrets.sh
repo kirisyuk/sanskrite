@@ -82,7 +82,7 @@ create_secret "deepseek_api_key" "sk-1f5a3c35e08242318626291d6f159407" "DeepSeek
 create_secret "grok_api_key" "xai-m5h9agnP6VoZ5OHyNfieWVzTt7OoBg74VpelcYt7EILkwxMSVfGrKFnS9piGqQeIo4iXLfgP4OgSgisj" "Grok API key (lowercase)"
 create_secret "openai_api_key" "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" "OpenAI API key (lowercase)"
 create_secret "vertex_api_key" "AIzaSyD5fKVHm_AGY6bms4XermWRRxX6d6TDsAc" "Vertex AI API key (lowercase)"
-create_secret "gemini_api_key" "AIzaSyCkL-8aj2MthiEaelAMT1Ka_jDd5xQ8CJo" "Gemini API key"
+create_secret "gemini_api_key" "AIzaSyC9a8Pz64PzbFZyB17JhJ6P2z_rEVXse_Y" "Gemini API key"
 create_secret "tavily_api_key" "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" "Tavily API key"
 
 # Telegram secrets
@@ -98,6 +98,7 @@ create_secret "paypal_webhook_id" "8UY853924Y084640C" "PayPal Webhook ID"
 
 # Google services
 create_secret "google-custom-search-api-key" "AIzaSyDCI4Bem_dS_wVhUI1XhhoOdfC892-sZMY" "Google Custom Search API Key"
+create_secret "google_maps_api_key" "AIzaSyCbLEwy4KGKxyummUfrwoIbC9aNdpD7vuQ" "Google Maps Geocoding API Key"
 # Note: google-custom-search-cx secret doesn't exist in GCP, skipping
 
 # Other services

@@ -24,7 +24,7 @@ import (
 const repairToolName = "tool:horizon_repair_supply_chain_product_relations"
 
 var (
-	projectID       = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	projectID       = flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	tenantID        = flag.String("tenant", "global", "tenant id")
 	apply           = flag.Bool("apply", false, "apply writes")
 	limit           = flag.Int("limit", 0, "max edges and artifacts to scan per source (0 = unlimited)")

@@ -2,12 +2,12 @@
 set -euo pipefail
 
 # Скрипт для проверки и тестирования Vertex AI Search
-# Использование: ./scripts/test-vertex-search.sh [-p|--project etigram]
+# Использование: ./scripts/test-vertex-search.sh [-p|--project nv-horizon]
 
-PROJECT="etigram"
+PROJECT="nv-horizon"
 DATA_STORE_ID="rag-documents-store"
 LOCATION="global"
-BUCKET="etigram-rag-documents"
+BUCKET="nv-horizon-rag-documents"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

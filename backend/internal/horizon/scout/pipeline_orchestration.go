@@ -889,6 +889,12 @@ func (e *ScoutEngine) finalizePipelineRun(ctx context.Context, job *models.Scout
 	if isTerminalScoutJob(job) {
 		return nil
 	}
+	// Finalization must be durable even if the execution context has already hit its deadline.
+	// Without this, the job can complete the expensive graph/materialization work, fail while
+	// persisting terminal state, and block assembly.ready plus substrate warmup forever.
+	finalizeCtx, cancel := e.durableRuntimeContext(ctx, 2*time.Minute)
+	defer cancel()
+	ctx = finalizeCtx
 	if job.State == nil {
 		job.State = map[string]interface{}{}
 	}

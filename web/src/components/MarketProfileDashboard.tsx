@@ -927,7 +927,7 @@ export const MarketProfileDashboard: React.FC<MarketProfileDashboardProps> = ({ 
           })}
         </div>
         <div style={{ color: 'var(--text-secondary)' }}>
-          AI-assisted document. Underlying methodology is proprietary to Etigram Horizon.{' '}
+          AI-assisted document. Underlying methodology is proprietary to Horizon Horizon.{' '}
           <a
             href="/terms"
             target="_blank"

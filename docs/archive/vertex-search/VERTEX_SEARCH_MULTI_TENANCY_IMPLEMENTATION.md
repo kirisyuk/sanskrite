@@ -24,7 +24,7 @@ tenantFilter := fmt.Sprintf("tenantId:\"%s\" OR tenantId:\"global\"", auth.Tenan
 
 **Что делает**:
 1. Создает Cloud Function для автоматического импорта при изменении GCS
-2. Настраивает триггер на bucket `etigram-rag-documents`
+2. Настраивает триггер на bucket `nv-horizon-rag-documents`
 3. Выполняет начальную полную синхронизацию
 4. Настраивает incremental sync для новых документов
 
@@ -59,7 +59,7 @@ doc := &models.Document{
 
 ### Хранение документов в GCS
 ```
-gs://etigram-rag-documents/
+gs://nv-horizon-rag-documents/
   ├── tenant1@example.com/
   │   ├── project:abc/
   │   │   ├── doc1.txt
@@ -184,7 +184,7 @@ err := docsRepo.Upsert(ctx, globalDoc)
 ```bash
 gcloud functions logs read vertex-search-sync-trigger \
   --region=us-central1 \
-  --project=etigram \
+  --project=nv-horizon \
   --limit=50
 ```
 
@@ -192,7 +192,7 @@ gcloud functions logs read vertex-search-sync-trigger \
 ```bash
 gcloud discovery-engine operations list \
   --location=global \
-  --project=etigram \
+  --project=nv-horizon \
   --filter="metadata.operationType=IMPORT"
 ```
 

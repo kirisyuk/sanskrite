@@ -25,6 +25,34 @@ func LensWorkbenchScopePaths(lens *horizonmodels.Lens) []string {
 	return lensCompactStringsPreserveOrder(out)
 }
 
+// LensResearchObjectPaths returns the persisted wide object set recovered for the lens.
+// This is the exact stored researchObjects surface, filtered to canonical path-like refs.
+func LensResearchObjectPaths(lens *horizonmodels.Lens) []string {
+	if lens == nil || len(lens.ResearchObjects) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(lens.ResearchObjects))
+	for key, item := range lens.ResearchObjects {
+		path := lensFirstNonEmpty(item.CanonicalPath, key)
+		if lensIsResearchObjectPath(path) {
+			keys = append(keys, strings.TrimSpace(path))
+		}
+	}
+	sort.Strings(keys)
+	return lensCompactStringsPreserveOrder(keys)
+}
+
+// LensResearchUniversePaths returns the broadest lens-local path set available without graph traversal:
+// current workbench scope plus persisted research object refs.
+func LensResearchUniversePaths(lens *horizonmodels.Lens) []string {
+	if lens == nil {
+		return nil
+	}
+	out := LensWorkbenchScopePaths(lens)
+	out = append(out, LensResearchObjectPaths(lens)...)
+	return lensCompactStringsPreserveOrder(out)
+}
+
 // LensCountryHintPaths merges workbench paths with every path from ResolvedQueries values (parity with map activity).
 func LensCountryHintPaths(lens *horizonmodels.Lens) []string {
 	if lens == nil {
@@ -273,6 +301,22 @@ func lensAnyString(raw any) string {
 
 func lensIsCanonicalScopePath(value string) bool {
 	return strings.HasPrefix(strings.TrimSpace(value), "/")
+}
+
+func lensIsResearchObjectPath(value string) bool {
+	value = strings.TrimSpace(value)
+	if !lensIsCanonicalScopePath(value) {
+		return false
+	}
+	switch {
+	case strings.HasPrefix(value, horizonmodels.QueryScopePrefix),
+		strings.HasPrefix(value, horizonmodels.DomainScopePrefix),
+		strings.HasPrefix(value, horizonmodels.ArtifactScopePrefix),
+		strings.HasPrefix(value, "/exposure/"):
+		return false
+	default:
+		return true
+	}
 }
 
 func lensFirstNonEmpty(values ...string) string {

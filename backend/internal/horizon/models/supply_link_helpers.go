@@ -8,6 +8,15 @@ import (
 	"strings"
 )
 
+var canonicalTransportViaRefAliases = map[string]string{
+	"/fac/ae/jebel-ali-terminal":      "/fac/ae/jebel-ali-port",
+	"/fac/ae/jebel-ali-port-terminal": "/fac/ae/jebel-ali-port",
+	"/fac/eg/suez-canal":              "/fac/eg/suez-terminal",
+	"/fac/om/port-of-sohar":           "/fac/om/sohar-port",
+	"/fac/sg/singapore-port":          "/fac/sg/port-of-singapore",
+	"/fac/sea/strait-of-malacca":      "/fac/int/strait-of-malacca",
+}
+
 type SupplyLinkRouteVariant struct {
 	VariantKey       string   `json:"variantKey,omitempty" firestore:"variantKey,omitempty"`
 	TransportViaRefs []string `json:"transportViaRefs,omitempty" firestore:"transportViaRefs,omitempty"`
@@ -40,7 +49,7 @@ func NormalizeTransportViaRefs(refs []string) []string {
 	seen := make(map[string]struct{}, len(refs))
 	out := make([]string, 0, len(refs))
 	for _, ref := range refs {
-		ref = strings.TrimSpace(ref)
+		ref = canonicalizeTransportViaRef(ref)
 		if ref == "" {
 			continue
 		}
@@ -51,6 +60,17 @@ func NormalizeTransportViaRefs(refs []string) []string {
 		out = append(out, ref)
 	}
 	return out
+}
+
+func canonicalizeTransportViaRef(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ""
+	}
+	if canonical, ok := canonicalTransportViaRefAliases[ref]; ok {
+		return canonical
+	}
+	return ref
 }
 
 func BuildSupplyLinkRouteVariantKey(transportViaRefs []string) string {

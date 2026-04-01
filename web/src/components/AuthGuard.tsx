@@ -2,8 +2,8 @@ import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../contexts/AuthContext';
 import { AuthLoading } from './AuthLoading';
-import lightLogo from '../assets/etigram-light-theme.png';
-import darkLogo from '../assets/etigram-dark-theme.png';
+import lightLogo from '../assets/nv-horizon-light-theme.png';
+import darkLogo from '../assets/nv-horizon-dark-theme.png';
 import { ThemeContext } from './ThemeProvider';
 import { getAuthErrorMessage } from '../lib/authErrorMessage';
 
@@ -123,7 +123,7 @@ const AuthGuard: React.FC<AuthGuardProps> = ({ children }) => {
         <div className="auth-container">
         <div className="auth-card">
           <div className="text-center mb-8">
-            <img src={theme === 'dark' ? darkLogo : lightLogo} alt="etigram.one" className="auth-logo" />
+            <img src={theme === 'dark' ? darkLogo : lightLogo} alt="horizon.nordicvision.io" className="auth-logo" />
             <h1 className="auth-title">{getTitle()}</h1>
             <p className="auth-subtitle">
               {currentView === 'login' && ''}

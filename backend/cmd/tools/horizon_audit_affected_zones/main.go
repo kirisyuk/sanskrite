@@ -75,7 +75,7 @@ func addExample(store map[string][]example, key string, ex example, limit int) {
 
 func main() {
 	var (
-		projectID  = flag.String("project", "etigram", "GCP project id")
+		projectID  = flag.String("project", "nv-horizon", "GCP project id")
 		tenantID   = flag.String("tenant", "global", "tenant id")
 		limit      = flag.Int("limit", 5000, "max affected zones to scan")
 		activeOnly = flag.Bool("active-only", false, "count only active zones")

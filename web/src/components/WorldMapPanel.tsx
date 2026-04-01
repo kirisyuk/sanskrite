@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import maplibregl from 'maplibre-gl';
 import { useMapInstance } from '../hooks/useMapInstance';
 import { useGeoObjects, type GeoObject } from '../hooks/useGeoObjects';
@@ -7,15 +8,24 @@ import { useGeoZoneLayer } from '../hooks/useGeoZoneLayer';
 import { useGeoEdgeLayer, GEO_EDGE_INTERACTIVE_LAYERS } from '../hooks/useGeoEdgeLayer';
 import { useStaticZoneLayer } from '../hooks/useStaticZoneLayer';
 import { useTransportFlowLayer } from '../hooks/useTransportFlowLayer';
-import { usePathLegLayer, type PathLegVisibilityPolicy } from '../hooks/usePathLegLayer';
+import {
+  PATH_LEG_LABELS_UPDATED_EVENT,
+  PATH_LEG_INTERACTIVE_LAYERS,
+  PATH_LEG_OBJECT_LAYER_ID,
+  usePathLegLayer,
+  type PathLegVisibilityPolicy,
+} from '../hooks/usePathLegLayer';
 import { usePathLegClusterLayer } from '../hooks/usePathLegClusterLayer';
 import { useVesselLayer, vesselsApiAvailable as isVesselsApiAvailable } from '../hooks/useVesselLayer';
 import { MapFilterPanel } from './MapFilterPanel';
-import { MapObjectDetail } from './MapObjectDetail';
+import { HorizonNodeIcon, getHorizonNodeVisualType, getNodeColors } from './HorizonGraphNodeTypes';
 import { MapObjectStackPanel } from './MapObjectStackPanel';
+import type { MapObjectInspectorPayload } from './MapObjectDetail';
+import type { MapDrawerPanelType } from './HorizonDrawers';
 import { SimulationExplanationOverlay, type SimulationExplanationOverlayState } from './SimulationExplanationOverlay';
 import { SimulationMapOverlayPanel, type SimulationMapOverlaySelection } from './SimulationMapOverlayPanel';
 import { LensBottomPaletteShell, LensBottomPaletteTrigger, buildLensBottomPaletteChrome } from './LensBottomPalette';
+import type { LensChatMapFocus } from './LensChatDockPlaceholder';
 import { STATIC_ZONE_DATA, deriveZoneTypeCounts, type StaticZoneFeature, type StaticZoneType } from '../lib/staticZones';
 import {
   STATIC_TRANSPORT_FLOW_DATA,
@@ -35,9 +45,17 @@ import {
   type MapRouteVisibilitySelection,
 } from '../lib/mapRouteVisibility';
 import { objectIdsWithMarkerEndpointCaption } from '../lib/markerPresentationPolicy';
+import { buildDenseCaptionGroups } from '../lib/mapDenseCaptionGroups';
 
 export interface WorldMapPanelProps {
   scope?: { lensId: string };
+  onOpenDocuments?: (() => void) | null;
+  chatMapFocus?: LensChatMapFocus | null;
+  onClearChatMapFocus?: (() => void) | null;
+  onMapInspectorStateChange?: ((state: MapObjectInspectorPayload | null) => void) | null;
+  activeMapDrawerPanel?: MapDrawerPanelType | null;
+  onMapDrawerPanelChange?: ((panel: MapDrawerPanelType | null) => void) | null;
+  mapDrawerHost?: HTMLDivElement | null;
 }
 
 type MapActivityPayload = Awaited<ReturnType<typeof api.getHorizonMapActivity>>;
@@ -78,6 +96,14 @@ type ProductStageFacet = {
   routeCount: number;
 };
 type SimulationExplanationCache = Record<string, SimulationExplanationOverlayState>;
+type DenseCaptionOverlayGroup = {
+  id: string;
+  x: number;
+  y: number;
+  label: string;
+  totalCount: number;
+  visibleObjects: GeoObject[];
+};
 
 const normalizeCountryFromCanonicalPath = (value: string): string => {
   const match = String(value || '').trim().toLowerCase().match(/^\/(?:fac|org|loc|gov|deposit|market|product)\/([a-z]{2})(?:\/|$)/);
@@ -113,7 +139,8 @@ const normalizeSupplyAnchorEntities = (entities: HorizonSearchEntity[]): Horizon
 type SupplyChainSearchResult = Awaited<ReturnType<typeof api.searchSupplyChains>>['results'][number];
 type ScopeTargetMode = 'new' | 'existing';
 type DirectedExploreDirection = 'upstream' | 'downstream';
-type DockPanel = 'view' | 'simulation' | 'routes' | 'products' | 'export' | null;
+type DockPanel = 'filter' | null;
+type FilterOverlayMode = 'products' | 'routes';
 
 const AFFECTED_ZONE_FRESHNESS_WINDOWS: AffectedZoneFreshnessWindow[] = [14, 30, 90, 180];
 const PRODUCT_STAGE_ORDER = [
@@ -256,6 +283,20 @@ function isAffectedZoneRenderable(
 
 function getSearchObjectTitle(obj: GeoObject): string {
   return String(obj.label || '').trim() || humanizeCanonicalPath(obj.canonicalPath) || obj.canonicalPath;
+}
+
+function compareMapObjectsForDenseCaption(left: GeoObject, right: GeoObject): number {
+  const scopeDelta = Number(right.inScope !== false) - Number(left.inScope !== false);
+  if (scopeDelta !== 0) return scopeDelta;
+  return getSearchObjectTitle(left).localeCompare(getSearchObjectTitle(right));
+}
+
+function denseCaptionObjectAccent(object: GeoObject, theme: 'dark' | 'light'): { accent: string; visualType: string } {
+  const visualType = getHorizonNodeVisualType(object.type, object.canonicalPath, object.label, object.facilityKind) || object.type;
+  return {
+    visualType,
+    accent: getNodeColors(visualType, theme).accent,
+  };
 }
 
 function getSearchObjectSubtitle(obj: GeoObject): string {
@@ -427,6 +468,31 @@ function mapDockControlButtonStyle(isDark: boolean, active: boolean, accent: str
   };
 }
 
+function mapDockRailButtonStyle(isDark: boolean, active: boolean): React.CSSProperties {
+  return {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    border: active
+      ? 'none'
+      : (isDark ? '1px solid rgba(255,255,255,0.1)' : '1px solid rgba(15,23,42,0.1)'),
+    background: active
+      ? '#669999'
+      : (isDark ? 'rgba(8, 14, 22, 0.92)' : 'rgba(255,255,255,0.95)'),
+    color: active ? '#fff' : 'var(--text-heading)',
+    boxShadow: active
+      ? '0 10px 22px rgba(0, 0, 0, 0.28)'
+      : (isDark ? '0 10px 24px rgba(0,0,0,0.24)' : '0 10px 24px rgba(15,23,42,0.08)'),
+    backdropFilter: 'blur(12px)',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    transition: 'border-color 160ms ease, background-color 160ms ease, color 160ms ease, transform 160ms ease',
+    transform: active ? 'translateY(1px)' : 'translateY(0)',
+  };
+}
+
 function mapDockOverlayCardStyle(isDark: boolean, width: number): React.CSSProperties {
   return {
     width,
@@ -437,6 +503,96 @@ function mapDockOverlayCardStyle(isDark: boolean, width: number): React.CSSPrope
     boxShadow: isDark ? '0 22px 60px rgba(0,0,0,0.42)' : '0 22px 60px rgba(15,23,42,0.14)',
     backdropFilter: 'blur(18px)',
     overflow: 'hidden',
+  };
+}
+
+function mapDrawerPanelShellStyle(isDark: boolean): React.CSSProperties {
+  return {
+    width: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+    padding: '4px 2px 10px 0',
+    color: 'var(--text-heading)',
+  };
+}
+
+function mapDrawerPanelLeadStyle(isDark: boolean): React.CSSProperties {
+  return {
+    borderRadius: '16px 16px 16px 8px',
+    border: '1px solid var(--border-subtle)',
+    background: isDark
+      ? 'rgba(255,255,255,0.025)'
+      : 'rgba(15,23,42,0.028)',
+    padding: '12px 14px',
+    display: 'grid',
+    gap: 6,
+  };
+}
+
+function mapDrawerSectionStyle(
+  isDark: boolean,
+  tone: 'default' | 'muted' | 'accent' | 'danger' = 'default',
+): React.CSSProperties {
+  const toneMap = {
+    default: {
+      background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(15,23,42,0.03)',
+      border: '1px solid var(--border-subtle)',
+    },
+    muted: {
+      background: isDark ? 'rgba(255,255,255,0.018)' : 'rgba(15,23,42,0.022)',
+      border: '1px solid var(--border-subtle)',
+    },
+    accent: {
+      background: isDark ? 'rgba(102,153,153,0.10)' : 'rgba(102,153,153,0.08)',
+      border: isDark ? '1px solid rgba(102,153,153,0.24)' : '1px solid rgba(102,153,153,0.18)',
+    },
+    danger: {
+      background: isDark ? 'rgba(239,68,68,0.10)' : 'rgba(239,68,68,0.06)',
+      border: isDark ? '1px solid rgba(239,68,68,0.22)' : '1px solid rgba(239,68,68,0.16)',
+    },
+  } as const;
+  return {
+    borderRadius: 16,
+    padding: '12px 14px',
+    display: 'grid',
+    gap: 10,
+    ...toneMap[tone],
+  };
+}
+
+function mapDrawerMetricCardStyle(isDark: boolean): React.CSSProperties {
+  return {
+    padding: '10px 11px',
+    borderRadius: 14,
+    background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(15,23,42,0.024)',
+    border: '1px solid var(--border-subtle)',
+  };
+}
+
+function mapDrawerActionButtonStyle(
+  isDark: boolean,
+  variant: 'default' | 'accent' = 'default',
+  disabled = false,
+): React.CSSProperties {
+  const accent = variant === 'accent';
+  return {
+    width: '100%',
+    borderRadius: 14,
+    border: accent
+      ? (isDark ? '1px solid rgba(102,153,153,0.28)' : '1px solid rgba(102,153,153,0.22)')
+      : '1px solid var(--border-subtle)',
+    background: accent
+      ? (isDark ? 'rgba(102,153,153,0.14)' : 'rgba(102,153,153,0.10)')
+      : (isDark ? 'rgba(255,255,255,0.022)' : 'rgba(15,23,42,0.024)'),
+    color: disabled ? 'var(--text-secondary)' : 'var(--text-heading)',
+    padding: '10px 12px',
+    fontSize: 12,
+    fontWeight: 700,
+    letterSpacing: '0.01em',
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? 0.62 : 1,
+    transition: 'background-color 160ms ease, border-color 160ms ease, opacity 160ms ease',
   };
 }
 
@@ -605,6 +761,28 @@ function collectArtifactSupplyLinkRefs(artifacts: MaterializedArtifact[]): strin
   return refs;
 }
 
+function collectArtifactChatFocusRefs(artifact: MaterializedArtifact | null | undefined): string[] {
+  const seen = new Set<string>();
+  const refs: string[] = [];
+  const push = (value: unknown) => {
+    const ref = String(value || '').trim();
+    if (!ref || !ref.startsWith('/') || seen.has(ref)) return;
+    seen.add(ref);
+    refs.push(ref);
+  };
+  if (!artifact) return refs;
+  push(artifact.anchorSupplier);
+  push(artifact.anchorCustomer);
+  push(artifact.productAxis);
+  for (const ref of artifact.nodeRefs || []) push(ref);
+  for (const ref of artifact.flowRefs || []) push(ref);
+  for (const ref of artifact.zoneRefs || []) push(ref);
+  for (const ref of artifact.affectedZoneRefs || []) push(ref);
+  for (const ref of collectArtifactPathRefs([artifact])) push(ref);
+  for (const ref of collectArtifactSupplyLinkRefs([artifact])) push(ref);
+  return refs;
+}
+
 function collectVisibleGraphRelations(
   selectionExportData: any,
   objects: GeoObject[],
@@ -686,7 +864,16 @@ function collectVisibleGraphRelations(
   return out;
 }
 
-export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
+export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({
+  scope,
+  onOpenDocuments = null,
+  chatMapFocus = null,
+  onClearChatMapFocus = null,
+  onMapInspectorStateChange = null,
+  activeMapDrawerPanel = null,
+  onMapDrawerPanelChange = null,
+  mapDrawerHost = null,
+}) => {
   const overlayTopOffset = scope?.lensId ? 58 : 10;
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const { map, isReady, styleEpoch, theme } = useMapInstance(containerRef);
@@ -736,6 +923,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [pathLegsEnabled, setPathLegsEnabled] = React.useState(Boolean(scope?.lensId));
   const [pathLegClusteringEnabled, setPathLegClusteringEnabled] = React.useState(Boolean(scope?.lensId));
   const [activeDockPanel, setActiveDockPanel] = React.useState<DockPanel>(null);
+  const [filterOverlayMode, setFilterOverlayMode] = React.useState<FilterOverlayMode>('products');
   const [routeSearchQuery, setRouteSearchQuery] = React.useState('');
   const [productSearchQuery, setProductSearchQuery] = React.useState('');
   const [simulationSelection, setSimulationSelection] = React.useState<SimulationMapOverlaySelection | null>(null);
@@ -743,6 +931,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [activeProductStages, setActiveProductStages] = React.useState<Set<string> | null>(null);
   const [selectedProductGroupKeys, setSelectedProductGroupKeys] = React.useState<string[]>([]);
   const [selectedRouteArtifactIds, setSelectedRouteArtifactIds] = React.useState<string[]>([]);
+  const [focusedRouteArtifactIds, setFocusedRouteArtifactIds] = React.useState<string[]>([]);
   const [hoveredRouteArtifactIds, setHoveredRouteArtifactIds] = React.useState<string[]>([]);
   const [activeFlowModes, setActiveFlowModes] = React.useState<Set<TransportFlowMode> | null>(null);
   const [affectedZoneFreshnessDays, setAffectedZoneFreshnessDays] = React.useState<AffectedZoneFreshnessWindow>(30);
@@ -751,12 +940,14 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [hops, setHops] = React.useState(3);
   const vesselsApiAvailable = isVesselsApiAvailable();
   const [selectedObject, setSelectedObject] = React.useState<GeoObject | null>(null);
-  const [selectedObjectOverlayCollapsed, setSelectedObjectOverlayCollapsed] = React.useState(false);
   const [directedExploreSubmitting, setDirectedExploreSubmitting] = React.useState<DirectedExploreDirection | null>(null);
   const [directedExploreError, setDirectedExploreError] = React.useState<string | null>(null);
   const [searchHighlightedObjectId, setSearchHighlightedObjectId] = React.useState<string | null>(null);
   const [hoveredMapObjectId, setHoveredMapObjectId] = React.useState<string | null>(null);
   const [stackSelection, setStackSelection] = React.useState<MapObjectStackSelection | null>(null);
+  const [denseCaptionGroups, setDenseCaptionGroups] = React.useState<DenseCaptionOverlayGroup[]>([]);
+  const [expandedDenseCaptionGroupId, setExpandedDenseCaptionGroupId] = React.useState<string | null>(null);
+  const [suppressedDenseCaptionObjectIds, setSuppressedDenseCaptionObjectIds] = React.useState<string[]>([]);
   const [zoneActivityById, setZoneActivityById] = React.useState<Record<string, ZoneActivityItem>>({});
   const [flowActivityById, setFlowActivityById] = React.useState<Record<string, FlowActivityItem>>({});
   const [pathArtifacts, setPathArtifacts] = React.useState<MaterializedArtifact[]>([]);
@@ -765,7 +956,6 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const identifyJobs = useHorizonRealtimeStore((s) => s.identifyJobs);
   const completeSubstrateJobs = useHorizonRealtimeStore((s) => s.completeSubstrateJobs);
   const recoverMetricsJobs = useHorizonRealtimeStore((s) => s.recoverMetricsJobs);
-  const [toolsMenuOpen, setToolsMenuOpen] = React.useState(false);
   const [completeSubstrateSubmitting, setCompleteSubstrateSubmitting] = React.useState(false);
   const [completeSubstrateError, setCompleteSubstrateError] = React.useState<string | null>(null);
   const [completeSubstrateJobId, setCompleteSubstrateJobId] = React.useState<string | null>(null);
@@ -779,7 +969,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const [identifyJobId, setIdentifyJobId] = React.useState<string | null>(null);
   const [dismissedIdentifyOverlayKey, setDismissedIdentifyOverlayKey] = React.useState<string | null>(null);
   const stackSelectionRef = React.useRef<MapObjectStackSelection | null>(null);
-  const routeSelectionVisibleRef = React.useRef(false);
+  const appliedChatMapFocusRef = React.useRef<string | null>(null);
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
   const scopeDialogBackdropRef = React.useRef<HTMLDivElement | null>(null);
   const scopeLensRef = React.useRef(scope?.lensId || '');
@@ -820,6 +1010,10 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     Boolean(scope?.lensId),
   );
   const showMapPreparingOverlay = !isReady || (loading && allObjects.length === 0);
+  const chatFocusPathSet = React.useMemo(
+    () => new Set((chatMapFocus?.canonicalPaths || []).map((value) => String(value || '').trim()).filter(Boolean)),
+    [chatMapFocus],
+  );
   const routeVisibilitySelection = React.useMemo<MapRouteVisibilitySelection>(() => ({
     artifactIds: selectedRouteArtifactIds,
     productRefs: selectedProductGroupKeys,
@@ -875,6 +1069,14 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
       isAffectedZoneRenderable(obj, affectedZoneFreshnessDays, showArchivedAffectedZones, nowTs),
     );
   }, [affectedZoneFreshnessDays, mapObjects, showArchivedAffectedZones]);
+  const chatFocusedObjects = React.useMemo(
+    () => visibleMapObjects.filter((object) => chatFocusPathSet.has(String(object?.canonicalPath || '').trim())),
+    [chatFocusPathSet, visibleMapObjects],
+  );
+  const chatFocusedObjectIdSet = React.useMemo(
+    () => new Set(chatFocusedObjects.map((object) => String(object?.id || '').trim()).filter(Boolean)),
+    [chatFocusedObjects],
+  );
   const affectedZoneVisibility = React.useMemo(() => {
     const nowTs = Date.now();
     let total = 0;
@@ -929,19 +1131,33 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     () => new Set(selectedRouteArtifactIds.map((value) => String(value || '').trim()).filter(Boolean)),
     [selectedRouteArtifactIds],
   );
+  const focusedRouteArtifactIdSetBase = React.useMemo(
+    () => new Set(focusedRouteArtifactIds.map((value) => String(value || '').trim()).filter(Boolean)),
+    [focusedRouteArtifactIds],
+  );
+  const chatFocusedArtifacts = React.useMemo(
+    () => routeCatalog.filter((artifact) => collectArtifactChatFocusRefs(artifact).some((ref) => chatFocusPathSet.has(ref))),
+    [chatFocusPathSet, routeCatalog],
+  );
+  const chatFocusedArtifactIdSet = React.useMemo(
+    () => new Set(chatFocusedArtifacts.map((artifact) => String(artifact?.id || '').trim()).filter(Boolean)),
+    [chatFocusedArtifacts],
+  );
+  const chatFocusRouteEmphasisVisible = Boolean(chatMapFocus && chatFocusedArtifactIdSet.size > 0);
+  const effectiveFocusedRouteArtifactIdSet = React.useMemo(() => {
+    const next = new Set<string>(focusedRouteArtifactIdSetBase);
+    for (const artifactId of chatFocusedArtifactIdSet) next.add(artifactId);
+    return next;
+  }, [chatFocusedArtifactIdSet, focusedRouteArtifactIdSetBase]);
   const hoveredRouteArtifactIdSet = React.useMemo(
     () => new Set(hoveredRouteArtifactIds.map((value) => String(value || '').trim()).filter(Boolean)),
     [hoveredRouteArtifactIds],
   );
   const focusedRouteArtifactIdSet = React.useMemo(() => {
-    const next = new Set<string>(selectedRouteArtifactIdSet);
+    const next = new Set<string>(effectiveFocusedRouteArtifactIdSet);
     for (const artifactId of hoveredRouteArtifactIdSet) next.add(artifactId);
     return next;
-  }, [hoveredRouteArtifactIdSet, selectedRouteArtifactIdSet]);
-  const selectedRouteArtifacts = React.useMemo(
-    () => routeCatalog.filter((artifact) => selectedRouteArtifactIdSet.has(String(artifact?.id || '').trim())),
-    [routeCatalog, selectedRouteArtifactIdSet],
-  );
+  }, [effectiveFocusedRouteArtifactIdSet, hoveredRouteArtifactIdSet]);
   const focusedRouteArtifacts = React.useMemo(
     () => routeCatalog.filter((artifact) => focusedRouteArtifactIdSet.has(String(artifact?.id || '').trim())),
     [focusedRouteArtifactIdSet, routeCatalog],
@@ -950,7 +1166,6 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     () => new Set(collectArtifactTerminalPathRefs(focusedRouteArtifacts)),
     [focusedRouteArtifacts],
   );
-  const routeSelectionVisible = selectedRouteArtifactIdSet.size > 0;
   const routeEmphasisVisible = focusedRouteArtifactIdSet.size > 0;
   const focusedSupplyArtifactIds = React.useMemo(() => {
     if (focusedRouteArtifactIdSet.size > 0) return Array.from(focusedRouteArtifactIdSet);
@@ -961,8 +1176,14 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     }
     const manualArtifactId = String((activeManualChain?.artifact as MaterializedArtifact | undefined)?.id || '').trim();
     if (manualArtifactId) out.add(manualArtifactId);
+    if (selectedObject?.id) {
+      for (const artifact of relatedPathArtifacts) {
+        const artifactId = String(artifact?.id || '').trim();
+        if (artifactId) out.add(artifactId);
+      }
+    }
     return Array.from(out);
-  }, [activeManualChain, activeSupplyArtifactIds, focusedRouteArtifactIdSet]);
+  }, [activeManualChain, activeSupplyArtifactIds, focusedRouteArtifactIdSet, relatedPathArtifacts, selectedObject?.id]);
   const activePathArtifacts = React.useMemo(() => {
     if (!pathLegsEnabled && !supplyNarrativeLegsVisible && !routeEmphasisVisible) return [] as MaterializedArtifact[];
     const merged = new Map<string, MaterializedArtifact>();
@@ -973,9 +1194,23 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
       merged.set(key, artifact!);
     };
     if (pathLegsEnabled) {
-      for (const artifact of pathArtifacts) register(artifact);
-      for (const artifact of relatedPathArtifacts) register(artifact);
-      for (const artifact of manualPathArtifacts) register(artifact);
+      const shouldKeepForChatFocus = (artifact: MaterializedArtifact | null | undefined) => {
+        if (!chatFocusRouteEmphasisVisible) return true;
+        const artifactId = String(artifact?.id || '').trim();
+        return artifactId ? chatFocusedArtifactIdSet.has(artifactId) : false;
+      };
+      for (const artifact of pathArtifacts) {
+        if (!shouldKeepForChatFocus(artifact)) continue;
+        register(artifact);
+      }
+      for (const artifact of relatedPathArtifacts) {
+        if (!shouldKeepForChatFocus(artifact)) continue;
+        register(artifact);
+      }
+      for (const artifact of manualPathArtifacts) {
+        if (!shouldKeepForChatFocus(artifact)) continue;
+        register(artifact);
+      }
     } else {
       for (const artifact of relatedPathArtifacts) {
         const artifactId = String(artifact?.id || '').trim();
@@ -991,7 +1226,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
       }
     }
     return Array.from(merged.values());
-  }, [activeSupplyArtifactIds, manualPathArtifacts, pathArtifacts, pathLegsEnabled, relatedPathArtifacts, routeCatalog, routeEmphasisVisible, routeVisibilitySelection, focusedRouteArtifactIdSet, supplyNarrativeLegsVisible]);
+  }, [activeSupplyArtifactIds, chatFocusRouteEmphasisVisible, chatFocusedArtifactIdSet, manualPathArtifacts, pathArtifacts, pathLegsEnabled, relatedPathArtifacts, routeCatalog, routeEmphasisVisible, routeVisibilitySelection, focusedRouteArtifactIdSet, supplyNarrativeLegsVisible]);
   const clusterProjectionEnabled = pathLegClusteringEnabled && (pathLegsEnabled || supplyNarrativeLegsVisible || routeEmphasisVisible);
   const activePathRefs = React.useMemo(() => collectArtifactPathRefs(activePathArtifacts), [activePathArtifacts]);
   const preferredOverlayObjectPaths = React.useMemo(() => {
@@ -1036,6 +1271,29 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     () => new Set(forcedRouteEndpointObjects.map((object) => String(object?.id || '').trim()).filter(Boolean)),
     [forcedRouteEndpointObjects],
   );
+  /** All leg endpoint path refs (supplier / via / customer) on focused routes — not only terminals. */
+  const focusedRouteLegParticipantPathSet = React.useMemo(
+    () =>
+      new Set(
+        collectArtifactPathRefs(focusedRouteArtifacts)
+          .map((ref) => String(ref || '').trim())
+          .filter(Boolean),
+      ),
+    [focusedRouteArtifacts],
+  );
+  const forcedRouteLegParticipantObjectIds = React.useMemo(() => {
+    if (!routeEmphasisVisible || focusedRouteLegParticipantPathSet.size === 0) return new Set<string>();
+    const ids = new Set<string>();
+    const consider = (object: GeoObject | null | undefined) => {
+      const cp = String(object?.canonicalPath || '').trim();
+      const oid = String(object?.id || '').trim();
+      if (!oid || !cp || !focusedRouteLegParticipantPathSet.has(cp)) return;
+      ids.add(oid);
+    };
+    for (const object of pathOverlayObjects) consider(object);
+    for (const object of visibleMapObjects) consider(object);
+    return ids;
+  }, [focusedRouteLegParticipantPathSet, pathOverlayObjects, routeEmphasisVisible, visibleMapObjects]);
   const simulationFocusedPathRefs = React.useMemo(
     () =>
       new Set(
@@ -1316,16 +1574,24 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     simulationStressEnabled,
   ]);
   const effectiveMutedObjectIds = React.useMemo(() => {
-    if (!routeEmphasisVisible) return mutedObjectIds;
+    if (!routeEmphasisVisible && !chatMapFocus && !selectedObject?.id && !activeNarrativeKey) return mutedObjectIds;
+    const edgeFocusedObjectIds = activeNarrativeKey
+      ? (mapInteractionSpotlightObjectIds || [])
+      : highlightedGatewayObjectIds;
     const protectedIds = new Set<string>([
-      ...highlightedGatewayObjectIds,
+      ...edgeFocusedObjectIds,
       ...Array.from(forcedRouteEndpointObjectIds),
+      ...Array.from(forcedRouteLegParticipantObjectIds),
       ...Array.from(simulationFocusedObjectIdSet),
+      ...Array.from(chatFocusedObjectIdSet),
       ...(selectedObject?.id ? [selectedObject.id] : []),
       ...(searchHighlightedObjectId ? [searchHighlightedObjectId] : []),
     ]);
     const next = new Set<string>(mutedObjectIds);
-    for (const object of visibleMapObjects) {
+    const muteCandidates = routeEmphasisVisible
+      ? [...visibleMapObjects, ...pathOverlayObjects]
+      : visibleMapObjects;
+    for (const object of muteCandidates) {
       const objectId = String(object?.id || '').trim();
       if (!objectId || protectedIds.has(objectId)) continue;
       next.add(objectId);
@@ -1333,14 +1599,30 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     return Array.from(next);
   }, [
     forcedRouteEndpointObjectIds,
+    forcedRouteLegParticipantObjectIds,
+    chatFocusedObjectIdSet,
     highlightedGatewayObjectIds,
+    mapInteractionSpotlightObjectIds,
     mutedObjectIds,
     routeEmphasisVisible,
+    activeNarrativeKey,
+    chatMapFocus,
+    pathOverlayObjects,
     searchHighlightedObjectId,
     selectedObject,
     simulationFocusedObjectIdSet,
     visibleMapObjects,
   ]);
+  const effectiveMapInteractionSpotlightObjectIds = React.useMemo(() => {
+    const next = new Set<string>((mapInteractionSpotlightObjectIds || []).map((id) => String(id || '').trim()).filter(Boolean));
+    if (chatMapFocus) {
+      for (const id of chatFocusedObjectIdSet) next.add(id);
+      for (const id of forcedRouteEndpointObjectIds) next.add(id);
+      for (const id of highlightedGatewayObjectIds) next.add(id);
+      if (selectedObject?.id) next.add(String(selectedObject.id).trim());
+    }
+    return next.size > 0 ? Array.from(next) : null;
+  }, [chatFocusedObjectIdSet, chatMapFocus, forcedRouteEndpointObjectIds, highlightedGatewayObjectIds, mapInteractionSpotlightObjectIds, selectedObject?.id]);
   const routeSearchQueryTrim = routeSearchQuery.trim().toLowerCase();
   const filteredRouteCatalog = React.useMemo(() => {
     const items = routeSearchQueryTrim
@@ -1435,11 +1717,12 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   const productStageFacets = productOverlayData.stageFacets;
   const productRouteGroups = productOverlayData.visibleGroups;
   const productRouteGroupsByKey = productOverlayData.allGroupsByKey;
-  const viewOverlayOpen = activeDockPanel === 'view';
-  const simulationOverlayOpen = activeDockPanel === 'simulation';
-  const routesOverlayOpen = activeDockPanel === 'routes';
-  const productsOverlayOpen = activeDockPanel === 'products';
-  const exportOverlayOpen = activeDockPanel === 'export';
+  const viewOverlayOpen = activeMapDrawerPanel === 'view';
+  const simulationOverlayOpen = activeMapDrawerPanel === 'simulation';
+  const exportToolsOverlayOpen = activeMapDrawerPanel === 'export-tools';
+  const filterOverlayOpen = activeDockPanel === 'filter';
+  const routesOverlayOpen = filterOverlayOpen && filterOverlayMode === 'routes';
+  const productsOverlayOpen = filterOverlayOpen && filterOverlayMode === 'products';
   const allStaticZones = STATIC_ZONE_DATA.features;
   const zoneTypeCounts = React.useMemo(() => deriveZoneTypeCounts(allStaticZones), [allStaticZones]);
   const filteredStaticZones = React.useMemo(() => {
@@ -1730,7 +2013,6 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   React.useEffect(() => {
     setPathLegsEnabled(Boolean(scope?.lensId));
     setPathLegClusteringEnabled(Boolean(scope?.lensId));
-    setToolsMenuOpen(false);
     setCompleteSubstrateError(null);
     setCompleteSubstrateJobId(null);
     setRecoverMetricsError(null);
@@ -1878,16 +2160,11 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     () => new Set(selectedProductGroupKeys.map((value) => String(value || '').trim().toLowerCase()).filter(Boolean)),
     [selectedProductGroupKeys],
   );
-  React.useEffect(() => {
-    if (routeSelectionVisible && !routeSelectionVisibleRef.current) {
-      setPathLegClusteringEnabled(false);
-    }
-    routeSelectionVisibleRef.current = routeSelectionVisible;
-  }, [routeSelectionVisible]);
+  const routeFilterActive = selectedRouteArtifactIdSet.size > 0 || selectedProductGroupKeySet.size > 0;
 
   React.useEffect(() => {
     if (simulationOverlayOpen) return;
-    setSelectedRouteArtifactIds([]);
+    setFocusedRouteArtifactIds([]);
     setSimulationSelection(null);
   }, [simulationOverlayOpen]);
 
@@ -1932,35 +2209,39 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     stackSelectionRef.current?.clearTransient?.();
   }, []);
 
+  const selectObjectFromMapInteraction = React.useCallback((object: GeoObject | null) => {
+    clearStackSelection();
+    setFocusedRouteArtifactIds([]);
+    setHoveredRouteArtifactIds([]);
+    setActiveNarrativeKey(null);
+    setSearchHighlightedObjectId(null);
+    setSelectedObject(object);
+  }, [clearStackSelection, setActiveNarrativeKey]);
+
   const handleMarkerSelection = React.useCallback((selection: GeoMarkerSelection) => {
     if (selection.kind === 'clear') {
-      clearStackSelection();
-      setSearchHighlightedObjectId(null);
-      setSelectedObjectOverlayCollapsed(false);
-      setSelectedObject(null);
+      selectObjectFromMapInteraction(null);
       return;
     }
 
     if (selection.kind === 'object') {
-      clearStackSelection();
-      setSearchHighlightedObjectId(null);
-      setSelectedObjectOverlayCollapsed(false);
-      setSelectedObject(selection.object);
+      selectObjectFromMapInteraction(selection.object);
       return;
     }
 
     clearStackSelection();
+    setFocusedRouteArtifactIds([]);
+    setHoveredRouteArtifactIds([]);
+    setActiveNarrativeKey(null);
     setSearchHighlightedObjectId(null);
-    setSelectedObjectOverlayCollapsed(false);
     setSelectedObject(null);
     setStackSelection(selection);
-  }, [clearStackSelection]);
+  }, [clearStackSelection, selectObjectFromMapInteraction, setActiveNarrativeKey]);
 
   React.useEffect(() => {
     if (!selectedObject) return;
     if (visibleMapObjects.some((obj) => obj.id === selectedObject.id)) return;
     setSearchHighlightedObjectId((current) => (current === selectedObject.id ? null : current));
-    setSelectedObjectOverlayCollapsed(false);
     setSelectedObject(null);
   }, [selectedObject, visibleMapObjects]);
 
@@ -1975,6 +2256,25 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     const timer = window.setTimeout(() => searchInputRef.current?.focus(), 0);
     return () => window.clearTimeout(timer);
   }, [searchOpen]);
+
+  React.useEffect(() => {
+    if (!expandedDenseCaptionGroupId) return;
+    if (denseCaptionGroups.some((group) => group.id === expandedDenseCaptionGroupId)) return;
+    setExpandedDenseCaptionGroupId(null);
+  }, [denseCaptionGroups, expandedDenseCaptionGroupId]);
+
+  React.useEffect(() => {
+    if (!expandedDenseCaptionGroupId) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('[data-dense-caption-overlay="true"]')) return;
+      setExpandedDenseCaptionGroupId(null);
+    };
+    document.addEventListener('pointerdown', handlePointerDown, true);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown, true);
+    };
+  }, [expandedDenseCaptionGroupId]);
 
   React.useEffect(() => {
     setSearchActiveIndex(0);
@@ -2114,13 +2414,60 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
       });
     }
 
-    clearStackSelection();
+    selectObjectFromMapInteraction(object);
     setSearchHighlightedObjectId(object.id);
-    setSelectedObjectOverlayCollapsed(false);
-    setSelectedObject(object);
     setSearchOpen(false);
     setSearchQuery('');
-  }, [clearStackSelection, map]);
+  }, [map, selectObjectFromMapInteraction]);
+
+  const focusObjectsOnMap = React.useCallback((objects: GeoObject[]) => {
+    const focusable = objects.filter((object) =>
+      Number.isFinite(object?.coordinates?.lat) && Number.isFinite(object?.coordinates?.lon),
+    );
+    if (!map || focusable.length === 0) return false;
+    if (focusable.length === 1) {
+      focusObjectOnMap(focusable[0]);
+      return true;
+    }
+    const bounds = new maplibregl.LngLatBounds();
+    for (const object of focusable) {
+      bounds.extend([Number(object.coordinates!.lon), Number(object.coordinates!.lat)]);
+    }
+    if (bounds.isEmpty()) return false;
+    map.fitBounds(bounds, {
+      padding: { top: 120, right: 120, bottom: 140, left: 120 },
+      duration: 900,
+      essential: true,
+    });
+    selectObjectFromMapInteraction(focusable[0]);
+    setSearchOpen(false);
+    setSearchQuery('');
+    return true;
+  }, [focusObjectOnMap, map, selectObjectFromMapInteraction]);
+
+  React.useEffect(() => {
+    const sourceId = String(chatMapFocus?.sourceMessageId || '').trim();
+    if (!sourceId) {
+      appliedChatMapFocusRef.current = null;
+      return;
+    }
+    const focusKey = [
+      sourceId,
+      chatFocusedObjects.map((object) => String(object?.id || '').trim()).join('|'),
+      Array.from(chatFocusedArtifactIdSet).join('|'),
+    ].join('::');
+    if (appliedChatMapFocusRef.current === focusKey) return;
+    if (chatFocusedObjects.length > 0) {
+      if (focusObjectsOnMap(chatFocusedObjects)) {
+        appliedChatMapFocusRef.current = focusKey;
+        return;
+      }
+    }
+    if (chatFocusedArtifactIdSet.size > 0) {
+      setPathLegsEnabled(true);
+      appliedChatMapFocusRef.current = focusKey;
+    }
+  }, [chatFocusedArtifactIdSet, chatFocusedObjects, chatMapFocus, focusObjectsOnMap]);
 
   const handleDirectedExplore = React.useCallback(
     async (direction: DirectedExploreDirection) => {
@@ -2172,13 +2519,60 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     [scope?.lensId, selectedObject],
   );
 
+  const mapInspectorState = React.useMemo<MapObjectInspectorPayload | null>(() => {
+    if (!selectedObject) return null;
+    return {
+      object: selectedObject,
+      edgesLoading,
+      edgesCount,
+      visibleEdgesCount,
+      traceSummary,
+      activeNarrativeKey,
+      onNarrativeHover: setActiveNarrativeKey,
+      activeSupplyRouteIds: hoveredRouteArtifactIds,
+      onSupplyRouteHover: setHoveredRouteArtifactIds,
+      directedExploreSupported: Boolean(scope?.lensId) && isDirectedExplorationCanonicalPath(selectedObject?.canonicalPath),
+      directedExploreBusy: directedExploreSubmitting,
+      directedExploreError,
+      directedExploreDisabledReason:
+        !scope?.lensId
+          ? 'Open the map inside a lens to run directed exploration.'
+          : !isDirectedExplorationCanonicalPath(selectedObject?.canonicalPath)
+            ? 'This object type is not supported for directed supply-chain exploration.'
+            : undefined,
+      onDirectedExplore: (direction) => {
+        void handleDirectedExplore(direction);
+      },
+      onClose: () => {
+        setActiveNarrativeKey(null);
+        selectObjectFromMapInteraction(null);
+      },
+    };
+  }, [
+    activeNarrativeKey,
+    directedExploreError,
+    directedExploreSubmitting,
+    edgesCount,
+    edgesLoading,
+    handleDirectedExplore,
+    hoveredRouteArtifactIds,
+    scope?.lensId,
+    selectObjectFromMapInteraction,
+    selectedObject,
+    traceSummary,
+    visibleEdgesCount,
+  ]);
+
+  React.useEffect(() => {
+    onMapInspectorStateChange?.(mapInspectorState);
+  }, [mapInspectorState, onMapInspectorStateChange]);
+
   const handleCompleteSubstrate = React.useCallback(async () => {
     if (!scope?.lensId || completeSubstrateRunning || completeSubstrateSubmitting) return;
     try {
       setCompleteSubstrateSubmitting(true);
       setCompleteSubstrateError(null);
       setDismissedCompleteSubstrateOverlayKey(null);
-      setToolsMenuOpen(false);
       const response = await api.completeSubstrateForLens(scope.lensId, {
         ...toolScopePayload,
         maxCompletions: 80,
@@ -2208,7 +2602,6 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
       setRecoverMetricsSubmitting(true);
       setRecoverMetricsError(null);
       setDismissedRecoverMetricsOverlayKey(null);
-      setToolsMenuOpen(false);
       const response = await api.recoverMetricsForLens(scope.lensId, {
         ...toolScopePayload,
         maxRecoveries: 80,
@@ -2238,7 +2631,6 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
       setIdentifySubmitting(true);
       setIdentifyError(null);
       setDismissedIdentifyOverlayKey(null);
-      setToolsMenuOpen(false);
       const response = await api.identifyStressesForLens(scope.lensId, {
         ...toolScopePayload,
         maxFindings: 120,
@@ -2324,7 +2716,8 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
 
   const closeMapDockOverlays = React.useCallback(() => {
     setActiveDockPanel(null);
-  }, []);
+    onMapDrawerPanelChange?.(null);
+  }, [onMapDrawerPanelChange]);
 
   const handleSearchKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Escape') {
@@ -2631,20 +3024,33 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     };
   }, [activePathArtifacts, pathLegClusterState.visibilityPolicy, simulationHypothesisArtifactIds, simulationLegFocus, simulationValidatedArtifactIds]);
   const worldMapHighlightedMarkers = React.useMemo(
-    () => [
-      ...(selectedObject?.id ? [{ id: selectedObject.id, role: 'selected' as const }] : []),
-      ...Array.from(forcedRouteEndpointObjectIds).map((id) => ({ id, role: 'gateway' as const })),
-      ...highlightedGatewayObjectIds.map((id) => ({ id, role: 'gateway' as const })),
-      ...Array.from(simulationFocusedObjectIdSet).map((id) => ({ id, role: 'gateway' as const })),
-      ...(searchHighlightedObjectId ? [{ id: searchHighlightedObjectId, role: 'search' as const }] : []),
-    ],
+    () => {
+      const narrativeGatewayIds = activeNarrativeKey
+        ? (mapInteractionSpotlightObjectIds || [])
+        : highlightedGatewayObjectIds;
+      return [
+        ...(selectedObject?.id ? [{ id: selectedObject.id, role: 'selected' as const }] : []),
+        ...Array.from(chatFocusedObjectIdSet).map((id) => ({ id, role: 'search' as const })),
+        ...Array.from(forcedRouteEndpointObjectIds).map((id) => ({ id, role: 'gateway' as const })),
+        ...narrativeGatewayIds.map((id) => ({ id, role: 'gateway' as const })),
+        ...Array.from(simulationFocusedObjectIdSet).map((id) => ({ id, role: 'gateway' as const })),
+        ...(searchHighlightedObjectId ? [{ id: searchHighlightedObjectId, role: 'search' as const }] : []),
+      ];
+    },
     [
+      activeNarrativeKey,
+      chatFocusedObjectIdSet,
       forcedRouteEndpointObjectIds,
       highlightedGatewayObjectIds,
+      mapInteractionSpotlightObjectIds,
       searchHighlightedObjectId,
       selectedObject?.id,
       simulationFocusedObjectIdSet,
     ],
+  );
+  const worldMapHighlightedMarkerIdSet = React.useMemo(
+    () => new Set(worldMapHighlightedMarkers.map((item) => String(item.id || '').trim()).filter(Boolean)),
+    [worldMapHighlightedMarkers],
   );
   const pathLegDeferEndpointLabelObjectIds = React.useMemo(
     () => objectIdsWithMarkerEndpointCaption(worldMapHighlightedMarkers),
@@ -2652,32 +3058,46 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
   );
   const markerLayerOptions = React.useMemo(
     () => ({
-      extraInteractiveLayers: [...GEO_EDGE_INTERACTIVE_LAYERS],
+      extraInteractiveLayers: [...GEO_EDGE_INTERACTIVE_LAYERS, ...PATH_LEG_INTERACTIVE_LAYERS],
       suppressClearOnClusterClick: Boolean(selectedObject),
       highlightedObjects: worldMapHighlightedMarkers,
       mutedObjectIds: effectiveMutedObjectIds,
-      mapInteractionSpotlightObjectIds,
+      mapInteractionSpotlightObjectIds: effectiveMapInteractionSpotlightObjectIds,
       onMapObjectHover: setHoveredMapObjectId,
     }),
     [
       effectiveMutedObjectIds,
-      mapInteractionSpotlightObjectIds,
+      effectiveMapInteractionSpotlightObjectIds,
       selectedObject,
       worldMapHighlightedMarkers,
     ],
   );
+  const pathLegInteractionHandlers = React.useMemo(() => ({
+    onSelectedArtifactIdsChange: setFocusedRouteArtifactIds,
+    onSelectObject: selectObjectFromMapInteraction,
+  }), [selectObjectFromMapInteraction]);
   const baseMarkerObjects = React.useMemo(() => {
     const candidatesById = new Map<string, GeoObject>();
-    for (const object of [...visibleMapObjects, ...forcedRouteEndpointObjects]) {
+    const nowTs = Date.now();
+    for (const object of [...visibleMapObjects, ...pathOverlayObjects, ...forcedRouteEndpointObjects]) {
+      if (!object) continue;
+      if (object.type === 'AFFECTED_ZONE' && !isAffectedZoneRenderable(object, affectedZoneFreshnessDays, showArchivedAffectedZones, nowTs)) continue;
       const key = String(object?.id || object?.canonicalPath || '').trim();
       if (!key || candidatesById.has(key)) continue;
       candidatesById.set(key, object);
     }
     return Array.from(candidatesById.values());
   }, [
+    affectedZoneFreshnessDays,
     forcedRouteEndpointObjects,
+    pathOverlayObjects,
+    showArchivedAffectedZones,
     visibleMapObjects,
   ]);
+  const suppressedDenseCaptionObjectIdSet = React.useMemo(
+    () => new Set(suppressedDenseCaptionObjectIds.map((value) => String(value || '').trim()).filter(Boolean)),
+    [suppressedDenseCaptionObjectIds],
+  );
   useGeoMarkerLayer(map, isReady, styleEpoch, baseMarkerObjects, theme, handleMarkerSelection, markerLayerOptions);
   useGeoZoneLayer(map, isReady, styleEpoch, visibleMapObjects, theme);
   useStaticZoneLayer(map, isReady, styleEpoch, filteredStaticZones, theme, zonesEnabled, zoneActivityById, visibleMapObjects);
@@ -2695,7 +3115,144 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
     routeVisibilitySelection,
     simulationStressEnabled,
     pathLegDeferEndpointLabelObjectIds,
+    suppressedDenseCaptionObjectIdSet,
+    pathLegInteractionHandlers,
   );
+  const denseCaptionObjectById = React.useMemo(() => {
+    const byId = new Map<string, GeoObject>();
+    for (const object of [...pathOverlayObjects, ...visibleMapObjects, ...forcedRouteEndpointObjects]) {
+      const objectId = String(object?.id || '').trim();
+      if (objectId && !byId.has(objectId)) byId.set(objectId, object);
+    }
+    return byId;
+  }, [forcedRouteEndpointObjects, pathOverlayObjects, visibleMapObjects]);
+
+  React.useEffect(() => {
+    if (!map || !isReady || !scope?.lensId || !pathLegsEnabled) {
+      setDenseCaptionGroups((current) => (current.length === 0 ? current : []));
+      setSuppressedDenseCaptionObjectIds((current) => (current.length === 0 ? current : []));
+      return;
+    }
+
+    let cancelled = false;
+    let rafId = 0;
+    const sync = () => {
+      if (cancelled || !map) return;
+      try {
+        if (!map.getLayer(PATH_LEG_OBJECT_LAYER_ID)) {
+          setDenseCaptionGroups((current) => (current.length === 0 ? current : []));
+          setSuppressedDenseCaptionObjectIds((current) => (current.length === 0 ? current : []));
+          return;
+        }
+        const canvas = map.getCanvas();
+        const width = Math.max(1, Math.round(canvas.clientWidth || 0));
+        const height = Math.max(1, Math.round(canvas.clientHeight || 0));
+        const features = map.queryRenderedFeatures(
+          [[0, 0], [width, height]],
+          { layers: [PATH_LEG_OBJECT_LAYER_ID] },
+        ) as maplibregl.MapGeoJSONFeature[];
+        const joinDistancePx = map.getZoom() >= 9.5 ? 68 : map.getZoom() >= 7.5 ? 60 : 54;
+        const entryByObjectId = new Map<string, { id: string; x: number; y: number; priority: number }>();
+        for (const feature of features) {
+          if (feature.geometry?.type !== 'Point') continue;
+          const objectId = String(feature.properties?.objectId || '').trim();
+          if (!objectId || worldMapHighlightedMarkerIdSet.has(objectId) || !denseCaptionObjectById.has(objectId)) continue;
+          const geometryPoint = feature.geometry as GeoJSON.Point;
+          const coordinates = geometryPoint.coordinates as [number, number];
+          const projected = map.project({ lng: coordinates[0], lat: coordinates[1] });
+          if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y)) continue;
+          const priority = Number(feature.properties?.labelPriority || 0);
+          const current = entryByObjectId.get(objectId);
+          if (!current || priority > current.priority) {
+            entryByObjectId.set(objectId, {
+              id: objectId,
+              x: projected.x,
+              y: projected.y,
+              priority,
+            });
+          }
+        }
+        const grouped = buildDenseCaptionGroups(
+          Array.from(entryByObjectId.values()),
+          {
+            joinDistancePx,
+            minGroupSize: 4,
+            maxSpanXPx: joinDistancePx * 2.9,
+            maxSpanYPx: joinDistancePx * 2.25,
+          },
+        );
+        const nextGroups = grouped
+          .map((group) => {
+            const objects = group.memberIds
+              .map((objectId) => denseCaptionObjectById.get(objectId))
+              .filter((object): object is GeoObject => Boolean(object))
+              .sort(compareMapObjectsForDenseCaption);
+            if (objects.length < 4) return null;
+            const primaryLabel = getSearchObjectTitle(objects[0]);
+            const moreCount = Math.max(0, objects.length - 1);
+            return {
+              id: group.id,
+              x: group.x,
+              y: group.y,
+              totalCount: objects.length,
+              visibleObjects: objects,
+              label: moreCount > 0 ? `${primaryLabel} +${moreCount} more` : primaryLabel,
+            } satisfies DenseCaptionOverlayGroup;
+          })
+          .filter((group): group is DenseCaptionOverlayGroup => Boolean(group));
+        const nextObjectIds = Array.from(new Set(
+          grouped
+            .flatMap((group) => group.memberIds)
+            .map((objectId) => String(objectId || '').trim())
+            .filter((objectId) => objectId && denseCaptionObjectById.has(objectId)),
+        ));
+        setDenseCaptionGroups((current) => {
+          if (
+            current.length === nextGroups.length
+            && current.every((group, index) =>
+              group.id === nextGroups[index].id
+              && group.label === nextGroups[index].label
+              && group.totalCount === nextGroups[index].totalCount
+              && Math.abs(group.x - nextGroups[index].x) < 0.5
+              && Math.abs(group.y - nextGroups[index].y) < 0.5
+              && group.visibleObjects.length === nextGroups[index].visibleObjects.length
+              && group.visibleObjects.every((object, objectIndex) => object.id === nextGroups[index].visibleObjects[objectIndex]?.id)
+            )
+          ) {
+            return current;
+          }
+          return nextGroups;
+        });
+        setSuppressedDenseCaptionObjectIds((current) => {
+          if (current.length === nextObjectIds.length && current.every((id, index) => id === nextObjectIds[index])) return current;
+          return nextObjectIds;
+        });
+      } catch {
+        if (cancelled) return;
+        setDenseCaptionGroups((current) => (current.length === 0 ? current : []));
+        setSuppressedDenseCaptionObjectIds((current) => (current.length === 0 ? current : []));
+      }
+    };
+    const scheduleSync = () => {
+      if (rafId) window.cancelAnimationFrame(rafId);
+      rafId = window.requestAnimationFrame(sync);
+    };
+    scheduleSync();
+    map.on('move', scheduleSync);
+    map.on('zoom', scheduleSync);
+    map.on('resize', scheduleSync);
+    map.on('idle', scheduleSync);
+    map.on(PATH_LEG_LABELS_UPDATED_EVENT, scheduleSync);
+    return () => {
+      cancelled = true;
+      if (rafId) window.cancelAnimationFrame(rafId);
+      map.off('move', scheduleSync);
+      map.off('zoom', scheduleSync);
+      map.off('resize', scheduleSync);
+      map.off('idle', scheduleSync);
+      map.off(PATH_LEG_LABELS_UPDATED_EVENT, scheduleSync);
+    };
+  }, [denseCaptionObjectById, isReady, map, pathLegsEnabled, scope?.lensId, styleEpoch, worldMapHighlightedMarkerIdSet]);
   useVesselLayer(map, isReady, styleEpoch, vesselsEnabled, theme);
 
   const handleToggleType = React.useCallback((type: string) => {
@@ -2821,9 +3378,8 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
             right: 12,
             zIndex: 24,
             display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'flex-end',
-            gap: 8,
+            alignItems: 'flex-start',
+            gap: 10,
             pointerEvents: 'none',
             userSelect: 'none',
           }}
@@ -2831,1116 +3387,280 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
           <div style={{ position: 'relative', pointerEvents: 'auto' }}>
             <button
               type="button"
-              title={viewOverlayOpen ? 'Hide view controls' : 'Show view controls'}
-              aria-label={viewOverlayOpen ? 'Hide view controls' : 'Show view controls'}
+              title={filterOverlayOpen ? 'Hide route filters' : 'Show route filters'}
+              aria-label={filterOverlayOpen ? 'Hide route filters' : 'Show route filters'}
               onClick={() => {
-                setActiveDockPanel((current) => (current === 'view' ? null : 'view'));
+                setActiveDockPanel((current) => (current === 'filter' ? null : 'filter'));
               }}
-              style={mapDockControlButtonStyle(isDark, viewOverlayOpen, isDark ? '#7dd3fc' : '#0284c7')}
+              style={mapDockControlButtonStyle(isDark, filterOverlayOpen, isDark ? '#fbbf24' : '#d97706')}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <line x1="4" y1="6" x2="20" y2="6" />
-                <line x1="7" y1="12" x2="17" y2="12" />
-                <line x1="10" y1="18" x2="14" y2="18" />
+                <path d="M4 6h16" />
+                <path d="M7 12h10" />
+                <path d="M10 18h4" />
               </svg>
-              <span>View</span>
+              <span>Filter</span>
             </button>
-            {viewOverlayOpen && (
-              <div style={{ position: 'absolute', top: 0, right: 'calc(100% + 10px)' }}>
-                <div style={{ ...mapDockOverlayCardStyle(isDark, 336), padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {filterOverlayOpen && (
+              <div style={{ position: 'absolute', top: 'calc(100% + 10px)', right: 0 }}>
+                <div style={{ ...mapDockOverlayCardStyle(isDark, 392), padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
                     <div>
-                      <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-heading)' }}>View controls</div>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-heading)' }}>Filter</div>
                       <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                        Manage visibility, network depth and operational windows.
+                        Work on the currently visible route graph, not on a separate drawer scope.
                       </div>
                     </div>
                     <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
-                      {visibleMapObjects.length} visible
+                      {routeCatalog.length} visible routes
                     </div>
                   </div>
 
                   <div
                     style={{
-                      borderRadius: 12,
-                      border: '1px solid var(--border-subtle)',
-                      background: mapSearchPaletteChrome.subtleSurface,
-                      padding: '10px 12px',
                       display: 'grid',
                       gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
                       gap: 8,
                     }}
                   >
-                    {[
-                      { label: 'Objects', value: `${visibleMapObjects.length}`, note: filterActive ? `${filteredObjects.length}/${allObjects.length} in scope` : 'Current view' },
-                      { label: 'Route lines', value: pathLegsEnabled ? `${pathLegStats.legCount}` : 'Off', note: pathLegsEnabled ? (pathLegClusteringEnabled ? 'clustered when possible' : 'expanded') : 'Hidden' },
-                      { label: 'Zones', value: zonesEnabled ? `${affectedZoneVisibility.visible}` : 'Off', note: zonesEnabled ? `${affectedZoneVisibility.total} tracked` : 'Not shown' },
-                      { label: 'Flows', value: flowsEnabled ? `${visibleTransportFlowsCount}` : 'Off', note: flowsEnabled ? 'Transport corridors visible' : 'Not shown' },
-                    ].map((item) => (
-                      <div
-                        key={item.label}
-                        style={{
-                          padding: '8px 9px',
-                          borderRadius: 10,
-                          background: isDark ? 'rgba(15,23,42,0.34)' : 'rgba(255,255,255,0.72)',
-                          border: isDark ? '1px solid rgba(148,163,184,0.12)' : '1px solid rgba(15,23,42,0.06)',
-                        }}
-                      >
-                        <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
-                          {item.label}
-                        </div>
-                        <div style={{ marginTop: 5, fontSize: 15, fontWeight: 800, color: 'var(--text-heading)' }}>{item.value}</div>
-                        <div style={{ marginTop: 4, fontSize: 10, lineHeight: 1.4, color: 'var(--text-secondary-strong)' }}>{item.note}</div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <MapFilterPanel
-                    floating
-                    isDark={isDark}
-                    paletteTheme={theme}
-                    typeCounts={typeCounts}
-                    zoneTypeCounts={zoneTypeCounts}
-                    flowModeCounts={flowModeCounts}
-                    activeTypes={activeTypes}
-                    activeZoneTypes={activeZoneTypes}
-                    activeFlowModes={activeFlowModes}
-                    zonesEnabled={zonesEnabled}
-                    flowsEnabled={flowsEnabled}
-                    pathLegsEnabled={pathLegsEnabled}
-                    pathLegClusteringEnabled={pathLegClusteringEnabled}
-                    pathLegCount={pathLegStats.legCount}
-                    vesselsEnabled={vesselsEnabled}
-                    vesselsApiAvailable={vesselsApiAvailable}
-                    dateFrom={dateFrom}
-                    dateTo={dateTo}
-                    hops={hops}
-                    loadingData={loading}
-                    onSetDateFrom={setDateFrom}
-                    onSetDateTo={setDateTo}
-                    onSetHops={setHops}
-                    onToggleType={handleToggleType}
-                    onToggleZoneType={handleToggleZoneType}
-                    onToggleFlowMode={handleToggleFlowMode}
-                    onToggleZonesEnabled={() => setZonesEnabled((v) => !v)}
-                    onToggleFlowsEnabled={() => setFlowsEnabled((v) => !v)}
-                    onTogglePathLegsEnabled={() => setPathLegsEnabled((v) => !v)}
-                    onTogglePathLegClusteringEnabled={() => setPathLegClusteringEnabled((v) => !v)}
-                    onToggleVesselsEnabled={() => setVesselsEnabled((v) => !v)}
-                    onSelectAll={() => setActiveTypes(null)}
-                    onSelectNone={() => setActiveTypes(new Set())}
-                    onSelectAllZoneTypes={() => setActiveZoneTypes(null)}
-                    onSelectNoneZoneTypes={() => setActiveZoneTypes(new Set())}
-                    onSelectAllFlowModes={() => setActiveFlowModes(null)}
-                    onSelectNoneFlowModes={() => setActiveFlowModes(new Set())}
-                  />
-
-                  <div
-                    style={{
-                      borderRadius: 12,
-                      border: '1px solid var(--border-subtle)',
-                      background: mapSearchPaletteChrome.subtleSurface,
-                      padding: '10px 12px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 10,
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }}>
-                      <div>
-                        <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)' }}>Affected zones window</div>
-                        <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                          {showArchivedAffectedZones ? 'Showing the full affected-zone set' : `Showing zones since ${affectedZoneCutoffLabel}`}
-                        </div>
-                      </div>
-                      <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
-                        {affectedZoneVisibility.visible}/{affectedZoneVisibility.total}
-                      </div>
-                    </div>
-
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      {AFFECTED_ZONE_FRESHNESS_WINDOWS.map((days) => {
-                        const active = affectedZoneFreshnessDays === days;
-                        return (
-                          <button
-                            key={days}
-                            type="button"
-                            onClick={() => setAffectedZoneFreshnessDays(days)}
-                            disabled={showArchivedAffectedZones}
-                            style={{
-                              border: active ? '1px solid rgba(245,158,11,0.45)' : '1px solid var(--border-subtle)',
-                              background: active
-                                ? (isDark ? 'rgba(245,158,11,0.14)' : 'rgba(245,158,11,0.12)')
-                                : 'transparent',
-                              color: active ? (isDark ? '#fde68a' : '#92400e') : 'var(--text-secondary-strong)',
-                              padding: '5px 9px',
-                              borderRadius: 999,
-                              fontSize: 11,
-                              fontWeight: 700,
-                              cursor: showArchivedAffectedZones ? 'default' : 'pointer',
-                              opacity: showArchivedAffectedZones ? 0.42 : 1,
-                            }}
-                          >
-                            {days}d
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => setShowArchivedAffectedZones((value) => !value)}
-                      style={{
-                        alignSelf: 'flex-start',
-                        border: showArchivedAffectedZones ? '1px solid rgba(148,163,184,0.32)' : '1px solid rgba(239,68,68,0.28)',
-                        background: showArchivedAffectedZones
-                          ? (isDark ? 'rgba(148,163,184,0.14)' : 'rgba(148,163,184,0.1)')
-                          : (isDark ? 'rgba(239,68,68,0.12)' : 'rgba(239,68,68,0.08)'),
-                        color: showArchivedAffectedZones ? 'var(--text-secondary-strong)' : (isDark ? '#fca5a5' : '#991b1b'),
-                        padding: '7px 10px',
-                        borderRadius: 10,
-                        fontSize: 11,
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      {showArchivedAffectedZones ? 'Use freshness window' : 'Show archived too'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div style={{ position: 'relative', pointerEvents: 'auto' }}>
-            <button
-              type="button"
-              title={simulationOverlayOpen ? 'Hide simulation overlays' : 'Show simulation overlays'}
-              aria-label={simulationOverlayOpen ? 'Hide simulation overlays' : 'Show simulation overlays'}
-              onClick={() => {
-                setActiveDockPanel((current) => (current === 'simulation' ? null : 'simulation'));
-              }}
-              style={mapDockControlButtonStyle(isDark, simulationOverlayOpen, isDark ? '#c084fc' : '#7c3aed')}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M5 19V9" />
-                <path d="M12 19V5" />
-                <path d="M19 19v-7" />
-              </svg>
-              <span>Simulation</span>
-            </button>
-            {simulationOverlayOpen && (
-              <div style={{ position: 'absolute', top: 0, right: 'calc(100% + 10px)' }}>
-                <div style={{ ...mapDockOverlayCardStyle(isDark, 352), padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  <SimulationMapOverlayPanel
-                    lensId={scope?.lensId || null}
-                    routeCatalog={routeCatalog}
-                    selectedRouteArtifactIds={selectedRouteArtifactIds}
-                    onChangeSelectedRouteArtifactIds={setSelectedRouteArtifactIds}
-                    onSelectionChange={setSimulationSelection}
-                    isDark={isDark}
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div style={{ position: 'relative', pointerEvents: 'auto' }}>
-            <button
-              type="button"
-              title={routesOverlayOpen ? 'Hide supply routes' : 'Supply routes'}
-              aria-label={routesOverlayOpen ? 'Hide supply routes' : 'Supply routes'}
-              onClick={() => {
-                setActiveDockPanel((current) => (current === 'routes' ? null : 'routes'));
-              }}
-              style={mapDockControlButtonStyle(isDark, routesOverlayOpen, mapLayerColor('supply', theme))}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M4 7h11" />
-                <path d="M4 12h16" />
-                <path d="M4 17h9" />
-                <circle cx="18" cy="7" r="2" />
-                <circle cx="18" cy="17" r="2" />
-              </svg>
-              <span>Routes</span>
-            </button>
-            {routesOverlayOpen && (
-              <div style={{ position: 'absolute', top: 0, right: 'calc(100% + 10px)' }}>
-                <div style={{ ...mapDockOverlayCardStyle(isDark, 340), padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
-                    <div>
-                      <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-heading)' }}>Supply Routes</div>
-                      <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                        Search loaded routes and highlight selected paths.
-                      </div>
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
-                      {selectedRouteArtifactIdSet.size > 0 ? `${selectedRouteArtifactIdSet.size} selected` : `${routeCatalog.length} loaded`}
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <input
-                      type="search"
-                      value={routeSearchQuery}
-                      onChange={(event) => setRouteSearchQuery(event.target.value)}
-                      placeholder="Search routes, anchors, products"
-                      style={{
-                        flex: 1,
-                        borderRadius: 10,
-                        border: '1px solid var(--border-subtle)',
-                        background: mapSearchPaletteChrome.subtleSurface,
-                        color: 'var(--text-heading)',
-                        padding: '9px 11px',
-                        fontSize: 12,
-                      }}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedProductGroupKeys([]);
-                        setSelectedRouteArtifactIds([]);
-                      }}
-                      disabled={selectedRouteArtifactIdSet.size === 0}
-                      style={{
-                        borderRadius: 10,
-                        border: '1px solid var(--border-subtle)',
-                        background: 'transparent',
-                        color: selectedRouteArtifactIdSet.size > 0 ? 'var(--text-secondary-strong)' : 'var(--text-secondary)',
-                        padding: '9px 10px',
-                        fontSize: 11,
-                        fontWeight: 700,
-                        cursor: selectedRouteArtifactIdSet.size > 0 ? 'pointer' : 'not-allowed',
-                        opacity: selectedRouteArtifactIdSet.size > 0 ? 1 : 0.55,
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      Clear selected
-                    </button>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                    <span>{filteredRouteCatalog.length} shown</span>
-                    <span>•</span>
-                    <span>{routeSelectionVisible ? 'Only selected routes are visible' : 'All loaded routes are active'}</span>
-                  </div>
-
-                  <div
-                    style={{
-                      borderRadius: 12,
-                      border: '1px solid var(--border-subtle)',
-                      background: mapSearchPaletteChrome.subtleSurface,
-                      padding: '10px 12px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: 12,
-                    }}
-                  >
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-heading)' }}>Cluster route lines</div>
-                      <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                        {routeSelectionVisible
-                          ? 'Auto-disabled when route selection appeared. You can still switch it back here.'
-                          : 'Use the same clustering mode as in Filters.'}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setPathLegClusteringEnabled((value) => !value)}
-                      style={{
-                        borderRadius: 999,
-                        border: pathLegClusteringEnabled ? '1px solid rgba(14,165,233,0.32)' : '1px solid var(--border-subtle)',
-                        background: pathLegClusteringEnabled
-                          ? (isDark ? 'rgba(14,165,233,0.16)' : 'rgba(14,165,233,0.10)')
-                          : 'transparent',
-                        color: pathLegClusteringEnabled ? (isDark ? '#bae6fd' : '#075985') : 'var(--text-secondary-strong)',
-                        padding: '6px 10px',
-                        fontSize: 11,
-                        fontWeight: 800,
-                        cursor: 'pointer',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {pathLegClusteringEnabled ? 'On' : 'Off'}
-                    </button>
-                  </div>
-
-                  <div style={{ maxHeight: 420, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, paddingRight: 2 }}>
-                    {filteredRouteCatalog.length === 0 && (
-                      <div style={{ borderRadius: 12, border: '1px solid var(--border-subtle)', background: mapSearchPaletteChrome.subtleSurface, padding: '12px 14px', fontSize: 12, color: 'var(--text-secondary-strong)' }}>
-                        No loaded routes match this search.
-                      </div>
-                    )}
-                    {filteredRouteCatalog.map((artifact) => {
-                      const artifactId = String(artifact.id || '').trim();
-                      const selected = selectedRouteArtifactIdSet.has(artifactId);
-                      const products = artifactRouteProducts(artifact);
+                    {([
+                      { key: 'products', label: 'By products' },
+                      { key: 'routes', label: 'By routes' },
+                    ] as const).map((item) => {
+                      const active = filterOverlayMode === item.key;
                       return (
                         <button
-                          key={artifactId}
+                          key={item.key}
                           type="button"
                           onClick={() => {
-                            setSelectedProductGroupKeys([]);
-                            setSelectedRouteArtifactIds((current) => {
-                              const currentSet = new Set(current.map((value) => String(value || '').trim()).filter(Boolean));
-                              if (currentSet.has(artifactId)) currentSet.delete(artifactId);
-                              else currentSet.add(artifactId);
-                              return Array.from(currentSet);
-                            });
+                            setFilterOverlayMode(item.key);
+                            setActiveDockPanel('filter');
                           }}
                           style={{
-                            width: '100%',
-                            textAlign: 'left',
                             borderRadius: 12,
-                            border: selected ? `1px solid ${mapSearchPaletteChrome.activeItemBorder}` : '1px solid var(--border-subtle)',
-                            background: selected ? mapSearchPaletteChrome.activeItemBackground : mapSearchPaletteChrome.subtleSurface,
-                            color: 'var(--text-heading)',
-                            padding: '11px 12px',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: 6,
+                            border: active ? '1px solid rgba(251,191,36,0.34)' : '1px solid var(--border-subtle)',
+                            background: active
+                              ? (isDark ? 'rgba(251,191,36,0.12)' : 'rgba(245,158,11,0.10)')
+                              : mapSearchPaletteChrome.subtleSurface,
+                            color: active ? '#fbbf24' : 'var(--text-secondary-strong)',
+                            padding: '10px 12px',
+                            fontSize: 12,
+                            fontWeight: 800,
                             cursor: 'pointer',
                           }}
                         >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)' }}>
-                                {artifactRouteTitle(artifact)}
-                              </div>
-                              <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                                {artifactRouteSubtitle(artifact)}
-                              </div>
-                            </div>
-                            <div
-                              style={{
-                                minWidth: 18,
-                                height: 18,
-                                borderRadius: 999,
-                                border: selected ? `1px solid ${mapSearchPaletteChrome.activeItemBorder}` : '1px solid var(--border-subtle)',
-                                background: selected ? mapSearchPaletteChrome.activeItemBackground : 'transparent',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                fontSize: 10,
-                                fontWeight: 900,
-                                color: selected ? 'var(--text-heading)' : 'transparent',
-                              }}
-                            >
-                              ✓
-                            </div>
-                          </div>
-                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                            <span>{artifact.legCount || (Array.isArray(artifact.payload?.legs) ? artifact.payload!.legs!.length : 0)} legs</span>
-                            {typeof artifact.pathStressScore === 'number' && artifact.pathStressScore > 0 && (
-                              <span>stress {artifact.pathStressScore.toFixed(2)}</span>
-                            )}
-                            {artifact.isPinned && <span>Pinned</span>}
-                          </div>
-                          {products.length > 0 && (
-                            <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                              {products.join(', ')}
-                            </div>
-                          )}
+                          {item.label}
                         </button>
                       );
                     })}
                   </div>
-                </div>
-              </div>
-            )}
-          </div>
 
-          <div style={{ position: 'relative', pointerEvents: 'auto', order: 4 }}>
-            <button
-              type="button"
-              title={
-                !scope?.lensId
-                  ? 'Open a Horizon lens to use supply-chain tools'
-                  : 'Supply-chain tools for visible objects and routes'
-              }
-              aria-label="Tools"
-              onClick={() => {
-                if (!scope?.lensId) return;
-                setToolsMenuOpen((current) => !current);
-              }}
-              disabled={!scope?.lensId}
-              style={{
-                ...mapDockControlButtonStyle(
-                  isDark,
-                  toolsMenuOpen
-                    || completeSubstrateRunning
-                    || completeSubstrateSubmitting
-                    || recoverMetricsRunning
-                    || recoverMetricsSubmitting
-                    || identifyRunning
-                    || identifySubmitting,
-                  isDark ? '#f97316' : '#c2410c',
-                ),
-                opacity: !scope?.lensId ? 0.72 : 1,
-                cursor: !scope?.lensId ? 'not-allowed' : 'pointer',
-              }}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" />
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82L4.21 7.2a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-              </svg>
-              <span>Tools</span>
-            </button>
-            {toolsMenuOpen && scope?.lensId && (
-              <div style={{ position: 'absolute', top: 'calc(100% + 10px)', right: 0 }}>
-                <div style={{ ...mapDockOverlayCardStyle(isDark, 272), padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <button
-                    type="button"
-                    onClick={() => { void handleCompleteSubstrate(); }}
-                    disabled={completeSubstrateRunning || completeSubstrateSubmitting}
-                    style={{
-                      width: '100%',
-                      borderRadius: 12,
-                      border: '1px solid var(--border-subtle)',
-                      background: mapSearchPaletteChrome.subtleSurface,
-                      color: 'var(--text-heading)',
-                      padding: '10px 12px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: 10,
-                      cursor: completeSubstrateRunning || completeSubstrateSubmitting ? 'not-allowed' : 'pointer',
-                      opacity: completeSubstrateRunning || completeSubstrateSubmitting ? 0.72 : 1,
-                    }}
-                  >
-                    <span style={{ fontSize: 13, fontWeight: 700 }}>Complete Links</span>
-                    <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                      {completeSubstrateSubmitting || completeSubstrateRunning ? 'Running…' : 'Materialize routes'}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { void handleRecoverMetrics(); }}
-                    disabled={recoverMetricsRunning || recoverMetricsSubmitting}
-                    style={{
-                      width: '100%',
-                      borderRadius: 12,
-                      border: '1px solid var(--border-subtle)',
-                      background: mapSearchPaletteChrome.subtleSurface,
-                      color: 'var(--text-heading)',
-                      padding: '10px 12px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: 10,
-                      cursor: recoverMetricsRunning || recoverMetricsSubmitting ? 'not-allowed' : 'pointer',
-                      opacity: recoverMetricsRunning || recoverMetricsSubmitting ? 0.72 : 1,
-                    }}
-                  >
-                    <span style={{ fontSize: 13, fontWeight: 700 }}>Recover Metrics</span>
-                    <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                      {recoverMetricsSubmitting || recoverMetricsRunning ? 'Running…' : 'Fill route metrics'}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { void handleIdentifyStresses(); }}
-                    disabled={identifyRunning || identifySubmitting}
-                    style={{
-                      width: '100%',
-                      borderRadius: 12,
-                      border: '1px solid var(--border-subtle)',
-                      background: mapSearchPaletteChrome.subtleSurface,
-                      color: 'var(--text-heading)',
-                      padding: '10px 12px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: 10,
-                      cursor: identifyRunning || identifySubmitting ? 'not-allowed' : 'pointer',
-                      opacity: identifyRunning || identifySubmitting ? 0.72 : 1,
-                    }}
-                  >
-                    <span style={{ fontSize: 13, fontWeight: 700 }}>Identify Stresses</span>
-                    <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                      {identifySubmitting || identifyRunning ? 'Running…' : 'Apply risk metrics'}
-                    </span>
-                  </button>
-                </div>
-              </div>
-            )}
-            {completeSubstrateOverlayVisible && (
-              <div style={{ position: 'absolute', top: toolsMenuOpen ? 'calc(100% + 136px)' : 'calc(100% + 10px)', right: 0 }}>
-                <div style={{ ...mapDockOverlayCardStyle(isDark, 332), padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
-                    <div>
-                      <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-heading)' }}>Link Completion</div>
-                      <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                        {latestCompleteSubstrateJob
-                          ? `State: ${String(latestCompleteSubstrateJob.state || 'started').replace(/_/g, ' ')}`
-                          : 'Launch failed'}
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
-                        {latestCompleteSubstrateJob?.jobId ? latestCompleteSubstrateJob.jobId.slice(0, 8) : 'local'}
-                      </div>
-                      <button
-                        type="button"
-                        aria-label="Close link completion overlay"
-                        title="Close"
-                        onClick={() => {
-                          if (!completeSubstrateOverlayKey) return;
-                          setDismissedCompleteSubstrateOverlayKey(completeSubstrateOverlayKey);
-                        }}
-                        style={{
-                          width: 24,
-                          height: 24,
-                          borderRadius: 999,
-                          border: '1px solid var(--border-subtle)',
-                          background: mapSearchPaletteChrome.subtleSurface,
-                          color: 'var(--text-secondary-strong)',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          cursor: 'pointer',
-                          fontSize: 14,
-                          fontWeight: 900,
-                          lineHeight: 1,
-                          padding: 0,
-                        }}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      borderRadius: 12,
-                      border: '1px solid var(--border-subtle)',
-                      background: mapSearchPaletteChrome.subtleSurface,
-                      padding: '10px 12px',
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-                      gap: 8,
-                    }}
-                  >
-                    {[
-                      { label: 'Visible nodes', value: `${latestCompleteSubstrateJob?.acceptedNodes ?? identifyVisibleNodeRefs.length}` },
-                      { label: 'Visible routes', value: `${latestCompleteSubstrateJob?.acceptedArtifacts ?? identifyVisibleArtifactKeys.length}` },
-                      { label: 'Relations', value: `${latestCompleteSubstrateJob?.acceptedRelations ?? identifyVisibleRelations.length}` },
-                      { label: 'Supply links', value: `${latestCompleteSubstrateJob?.acceptedSupplyLinks ?? identifyVisibleSupplyLinkRefs.length}` },
-                      { label: 'Created', value: `${latestCompleteSubstrateJob?.artifactsCreated ?? 0}` },
-                      { label: 'Updated', value: `${latestCompleteSubstrateJob?.artifactsUpdated ?? 0}` },
-                    ].map((metric) => (
-                      <div
-                        key={metric.label}
-                        style={{
-                          minWidth: 0,
-                          borderRadius: 10,
-                          border: '1px solid var(--border-subtle)',
-                          background: 'rgba(255,255,255,0.02)',
-                          padding: '8px 10px',
-                        }}
-                      >
-                        <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-secondary-strong)' }}>
-                          {metric.label}
+                  {routesOverlayOpen ? (
+                    <>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                        <div>
+                          <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-heading)' }}>Supply Routes</div>
+                          <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                            Search loaded routes and highlight selected paths.
+                          </div>
                         </div>
-                        <div style={{ marginTop: 6, fontSize: 20, fontWeight: 800, color: 'var(--text-heading)' }}>
-                          {metric.value}
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
+                          {selectedRouteArtifactIdSet.size > 0 ? `${selectedRouteArtifactIdSet.size} selected` : `${routeCatalog.length} loaded`}
                         </div>
                       </div>
-                    ))}
-                  </div>
 
-                  <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', display: 'grid', gap: 3 }}>
-                    <div>Completed links: {latestCompleteSubstrateJob?.completedLinks?.length ?? 0}</div>
-                    <div>Touched paths: {latestCompleteSubstrateJob?.artifactKeys?.length ?? 0}</div>
-                    {latestCompleteSubstrateJob?.requiresRefetch && (
-                      <div>Refreshing routes on completion…</div>
-                    )}
-                  </div>
-
-                  {completeSubstrateErrorLines.length > 0 && (
-                    <div
-                      style={{
-                        borderRadius: 10,
-                        border: '1px solid rgba(239,68,68,0.45)',
-                        background: 'rgba(127,29,29,0.3)',
-                        padding: '10px 12px',
-                        fontSize: 12,
-                        color: '#fecaca',
-                        display: 'grid',
-                        gap: 6,
-                      }}
-                    >
-                      {completeSubstrateErrorLines.map((line) => (
-                        <div key={line}>{line}</div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-            {recoverMetricsOverlayVisible && (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: completeSubstrateOverlayVisible
-                    ? (toolsMenuOpen ? 'calc(100% + 500px)' : 'calc(100% + 374px)')
-                    : (toolsMenuOpen ? 'calc(100% + 184px)' : 'calc(100% + 10px)'),
-                  right: 0,
-                }}
-              >
-                <div style={{ ...mapDockOverlayCardStyle(isDark, 332), padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
-                    <div>
-                      <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-heading)' }}>Metric Recovery</div>
-                      <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                        {latestRecoverMetricsJob
-                          ? `State: ${String(latestRecoverMetricsJob.state || 'started').replace(/_/g, ' ')}`
-                          : 'Launch failed'}
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
-                        {latestRecoverMetricsJob?.jobId ? latestRecoverMetricsJob.jobId.slice(0, 8) : 'local'}
-                      </div>
-                      <button
-                        type="button"
-                        aria-label="Close metric recovery overlay"
-                        title="Close"
-                        onClick={() => {
-                          if (!recoverMetricsOverlayKey) return;
-                          setDismissedRecoverMetricsOverlayKey(recoverMetricsOverlayKey);
-                        }}
-                        style={{
-                          width: 24,
-                          height: 24,
-                          borderRadius: 999,
-                          border: '1px solid var(--border-subtle)',
-                          background: mapSearchPaletteChrome.subtleSurface,
-                          color: 'var(--text-secondary-strong)',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          cursor: 'pointer',
-                          fontSize: 14,
-                          fontWeight: 900,
-                          lineHeight: 1,
-                          padding: 0,
-                        }}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      borderRadius: 12,
-                      border: '1px solid var(--border-subtle)',
-                      background: mapSearchPaletteChrome.subtleSurface,
-                      padding: '10px 12px',
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-                      gap: 8,
-                    }}
-                  >
-                    {[
-                      { label: 'Visible nodes', value: `${latestRecoverMetricsJob?.acceptedNodes ?? identifyVisibleNodeRefs.length}` },
-                      { label: 'Visible routes', value: `${latestRecoverMetricsJob?.acceptedArtifacts ?? identifyVisibleArtifactKeys.length}` },
-                      { label: 'Relations', value: `${latestRecoverMetricsJob?.acceptedRelations ?? identifyVisibleRelations.length}` },
-                      { label: 'Supply links', value: `${latestRecoverMetricsJob?.acceptedSupplyLinks ?? identifyVisibleSupplyLinkRefs.length}` },
-                      { label: 'Updated', value: `${latestRecoverMetricsJob?.artifactsUpdated ?? 0}` },
-                      { label: 'Recovered', value: `${latestRecoverMetricsJob?.recoveredLinks?.length ?? 0}` },
-                    ].map((metric) => (
-                      <div
-                        key={metric.label}
-                        style={{
-                          minWidth: 0,
-                          borderRadius: 10,
-                          border: '1px solid var(--border-subtle)',
-                          background: 'rgba(255,255,255,0.02)',
-                          padding: '8px 10px',
-                        }}
-                      >
-                        <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-secondary-strong)' }}>
-                          {metric.label}
-                        </div>
-                        <div style={{ marginTop: 6, fontSize: 20, fontWeight: 800, color: 'var(--text-heading)' }}>
-                          {metric.value}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', display: 'grid', gap: 3 }}>
-                    <div>Recovered links: {latestRecoverMetricsJob?.recoveredLinks?.length ?? 0}</div>
-                    <div>Touched paths: {latestRecoverMetricsJob?.touchedArtifactKeys?.length ?? 0}</div>
-                    <div>Touched nodes: {latestRecoverMetricsJob?.touchedNodeRefs?.length ?? 0}</div>
-                    {latestRecoverMetricsJob?.requiresRefetch && (
-                      <div>Refreshing routes on completion…</div>
-                    )}
-                  </div>
-
-                  {recoverMetricsErrorLines.length > 0 && (
-                    <div
-                      style={{
-                        borderRadius: 10,
-                        border: '1px solid rgba(239,68,68,0.45)',
-                        background: 'rgba(127,29,29,0.3)',
-                        padding: '10px 12px',
-                        fontSize: 12,
-                        color: '#fecaca',
-                        display: 'grid',
-                        gap: 6,
-                      }}
-                    >
-                      {recoverMetricsErrorLines.map((line) => (
-                        <div key={line}>{line}</div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-            {identifyOverlayVisible && (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: recoverMetricsOverlayVisible
-                    ? (toolsMenuOpen ? 'calc(100% + 864px)' : 'calc(100% + 738px)')
-                    : completeSubstrateOverlayVisible
-                      ? (toolsMenuOpen ? 'calc(100% + 500px)' : 'calc(100% + 374px)')
-                      : (toolsMenuOpen ? 'calc(100% + 184px)' : 'calc(100% + 10px)'),
-                  right: 0,
-                }}
-              >
-                <div style={{ ...mapDockOverlayCardStyle(isDark, 332), padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
-                    <div>
-                      <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-heading)' }}>Stress Job</div>
-                      <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                        {latestIdentifyJob
-                          ? `State: ${String(latestIdentifyJob.state || 'started').replace(/_/g, ' ')}`
-                          : 'Launch failed'}
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
-                        {latestIdentifyJob?.jobId ? latestIdentifyJob.jobId.slice(0, 8) : 'local'}
-                      </div>
-                      <button
-                        type="button"
-                        aria-label="Close stress job overlay"
-                        title="Close"
-                        onClick={() => {
-                          if (!identifyOverlayKey) return;
-                          setDismissedIdentifyOverlayKey(identifyOverlayKey);
-                        }}
-                        style={{
-                          width: 24,
-                          height: 24,
-                          borderRadius: 999,
-                          border: '1px solid var(--border-subtle)',
-                          background: mapSearchPaletteChrome.subtleSurface,
-                          color: 'var(--text-secondary-strong)',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          cursor: 'pointer',
-                          fontSize: 14,
-                          fontWeight: 900,
-                          lineHeight: 1,
-                          padding: 0,
-                        }}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      borderRadius: 12,
-                      border: '1px solid var(--border-subtle)',
-                      background: mapSearchPaletteChrome.subtleSurface,
-                      padding: '10px 12px',
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-                      gap: 8,
-                    }}
-                  >
-                    {[
-                      { label: 'Visible nodes', value: `${latestIdentifyJob?.acceptedNodes ?? identifyVisibleNodeRefs.length}` },
-                      { label: 'Visible routes', value: `${latestIdentifyJob?.acceptedArtifacts ?? identifyVisibleArtifactKeys.length}` },
-                      { label: 'Relations', value: `${latestIdentifyJob?.acceptedRelations ?? identifyVisibleRelations.length}` },
-                      { label: 'Findings', value: `${latestIdentifyJob?.findingsApplied ?? 0}` },
-                      { label: 'Events', value: `${latestIdentifyJob?.eventsPersisted ?? 0}` },
-                      { label: 'Supply links', value: `${latestIdentifyJob?.supplyLinksUpdated ?? latestIdentifyJob?.acceptedSupplyLinks ?? identifyVisibleSupplyLinkRefs.length}` },
-                      { label: 'Zones', value: `${latestIdentifyJob?.affectedZonesCreated ?? 0}` },
-                    ].map((item) => (
-                      <div
-                        key={item.label}
-                        style={{
-                          padding: '8px 9px',
-                          borderRadius: 10,
-                          background: isDark ? 'rgba(15,23,42,0.34)' : 'rgba(255,255,255,0.72)',
-                          border: isDark ? '1px solid rgba(148,163,184,0.12)' : '1px solid rgba(15,23,42,0.06)',
-                        }}
-                      >
-                        <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
-                          {item.label}
-                        </div>
-                        <div style={{ marginTop: 5, fontSize: 15, fontWeight: 800, color: 'var(--text-heading)' }}>{item.value}</div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                    <div>
-                      Touched paths: {latestIdentifyJob?.artifactsUpdated ?? latestIdentifyJob?.touchedArtifactKeys?.length ?? 0}
-                    </div>
-                    <div>
-                      Touched nodes: {latestIdentifyJob?.touchedNodeRefs?.length ?? 0}
-                    </div>
-                    <div>
-                      Propagation: {latestIdentifyJob?.state === 'propagating'
-                        ? 'running'
-                        : latestIdentifyJob?.state === 'completed'
-                          ? 'completed'
-                          : latestIdentifyJob?.state === 'partial_success'
-                            ? 'partial success'
-                            : latestIdentifyJob?.state === 'failed'
-                              ? 'failed'
-                              : 'pending'}
-                    </div>
-                    {typeof latestIdentifyJob?.propagationErrors === 'number' && latestIdentifyJob.propagationErrors > 0 && (
-                      <div>Propagation errors: {latestIdentifyJob.propagationErrors}</div>
-                    )}
-                    {latestIdentifyJob?.requiresRefetch && (
-                      <div>Overlay refresh requested for large route delta.</div>
-                    )}
-                  </div>
-
-                  {identifyTouchedRouteLabels.length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
-                        Touched Routes
-                      </div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                        {identifyTouchedRouteLabels.map((label) => (
-                          <span
-                            key={label}
-                            style={{
-                              borderRadius: 999,
-                              border: '1px solid var(--border-subtle)',
-                              background: mapSearchPaletteChrome.subtleSurface,
-                              padding: '5px 8px',
-                              fontSize: 11,
-                              color: 'var(--text-heading)',
-                            }}
-                          >
-                            {label}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {identifyTouchedSupplyLinkLabels.length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
-                        Supply Links
-                      </div>
-                      <div style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--text-secondary-strong)' }}>
-                        {identifyTouchedSupplyLinkLabels.join(' • ')}
-                      </div>
-                    </div>
-                  )}
-
-                  {identifyTouchedNodeLabels.length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
-                        Nodes
-                      </div>
-                      <div style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--text-secondary-strong)' }}>
-                        {identifyTouchedNodeLabels.join(' • ')}
-                      </div>
-                    </div>
-                  )}
-
-                  {identifyErrorLines.length > 0 && (
-                    <div style={{ borderRadius: 10, border: '1px solid rgba(239,68,68,0.28)', background: isDark ? 'rgba(127,29,29,0.26)' : 'rgba(254,226,226,0.82)', padding: '10px 11px', fontSize: 11, lineHeight: 1.45, color: isDark ? '#fecaca' : '#991b1b' }}>
-                      {identifyErrorLines.join(' • ')}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div style={{ position: 'relative', pointerEvents: 'auto', order: 3 }}>
-            <button
-              type="button"
-              title={exportOverlayOpen ? 'Hide export options' : 'Export current view'}
-              aria-label={exportOverlayOpen ? 'Hide export options' : 'Export current view'}
-              onClick={() => {
-                setActiveDockPanel((current) => (current === 'export' ? null : 'export'));
-              }}
-              style={mapDockControlButtonStyle(isDark, exportOverlayOpen, isDark ? '#fbbf24' : '#d97706')}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M12 3v12" />
-                <path d="m7 10 5 5 5-5" />
-                <path d="M5 21h14" />
-              </svg>
-              <span>Export</span>
-            </button>
-            {exportOverlayOpen && (
-              <div style={{ position: 'absolute', top: 0, right: 'calc(100% + 10px)' }}>
-                <div style={{ ...mapDockOverlayCardStyle(isDark, 332), padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
-                    <div>
-                      <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-heading)' }}>Export</div>
-                      <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                        Download the current selected asset and loaded graph as JSON snapshots.
-                      </div>
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
-                      {selectedObject ? 'Selection ready' : 'Select an asset'}
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      borderRadius: 12,
-                      border: '1px solid var(--border-subtle)',
-                      background: mapSearchPaletteChrome.subtleSurface,
-                      padding: '10px 12px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 6,
-                    }}
-                  >
-                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-heading)' }}>
-                      {selectedObject ? getSearchObjectTitle(selectedObject) : 'No asset selected'}
-                    </div>
-                    <div style={{ fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
-                      {selectedObject
-                        ? 'Exports two files: the selected asset trace and the loaded map graph with active filters and overlays.'
-                        : 'Pick an asset on the map to unlock export.'}
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={handleExportJson}
-                    disabled={!selectedObject || !selectionExportData || edgesLoading}
-                    title={!selectedObject ? 'Select an asset to export JSON files' : 'Download selection and loaded-graph JSON files'}
-                    style={{
-                      borderRadius: 12,
-                      border: (!selectedObject || !selectionExportData || edgesLoading)
-                        ? '1px solid var(--border-subtle)'
-                        : `1px solid ${mapSearchPaletteChrome.activeItemBorder}`,
-                      background: (!selectedObject || !selectionExportData || edgesLoading)
-                        ? (isDark ? 'rgba(15,23,42,0.74)' : 'rgba(255,255,255,0.86)')
-                        : mapSearchPaletteChrome.activeItemBackground,
-                      color: (!selectedObject || !selectionExportData || edgesLoading)
-                        ? 'var(--text-secondary-strong)'
-                        : 'var(--text-heading)',
-                      padding: '10px 12px',
-                      fontSize: 12,
-                      fontWeight: 800,
-                      letterSpacing: '0.02em',
-                      cursor: (!selectedObject || !selectionExportData || edgesLoading) ? 'not-allowed' : 'pointer',
-                      backdropFilter: 'blur(12px)',
-                    }}
-                  >
-                    {edgesLoading && selectedObject ? 'Preparing JSON...' : 'Download JSON snapshot'}
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div style={{ position: 'relative', pointerEvents: 'auto', order: 2 }}>
-            <button
-              type="button"
-              title={productsOverlayOpen ? 'Hide product route groups' : 'Select routes by product'}
-              aria-label={productsOverlayOpen ? 'Hide product route groups' : 'Select routes by product'}
-              onClick={() => {
-                setActiveDockPanel((current) => {
-                  if (current === 'products') {
-                    resetProductsPanelState();
-                    return null;
-                  }
-                  return 'products';
-                });
-              }}
-              style={mapDockControlButtonStyle(isDark, productsOverlayOpen, isDark ? '#34d399' : '#0f766e')}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M12 3 4 7l8 4 8-4-8-4Z" />
-                <path d="m4 12 8 4 8-4" />
-                <path d="m4 17 8 4 8-4" />
-              </svg>
-              <span>Products</span>
-            </button>
-            {productsOverlayOpen && (
-              <div style={{ position: 'absolute', top: 0, right: 'calc(100% + 10px)' }}>
-                <div style={{ ...mapDockOverlayCardStyle(isDark, 380), padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
-                    <div>
-                      <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-heading)' }}>Route Products</div>
-                      <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                        Select or clear all loaded routes grouped under a product.
-                      </div>
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
-                      {productRouteGroups.length} groups
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                    <button
-                      type="button"
-                      onClick={() => setActiveProductStages(null)}
-                      style={{
-                        borderRadius: 999,
-                        border: !activeProductStages || activeProductStages.size === 0
-                          ? `1px solid ${mapSearchPaletteChrome.activeItemBorder}`
-                          : '1px solid var(--border-subtle)',
-                        background: !activeProductStages || activeProductStages.size === 0
-                          ? mapSearchPaletteChrome.activeItemBackground
-                          : mapSearchPaletteChrome.subtleSurface,
-                        color: 'var(--text-heading)',
-                        padding: '7px 10px',
-                        fontSize: 11,
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      All stages
-                    </button>
-                    {productStageFacets.map((facet) => {
-                      const active = Boolean(activeProductStages?.has(facet.key));
-                      return (
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <input
+                          type="search"
+                          value={routeSearchQuery}
+                          onChange={(event) => setRouteSearchQuery(event.target.value)}
+                          placeholder="Search routes, anchors, products"
+                          style={{
+                            flex: 1,
+                            borderRadius: 10,
+                            border: '1px solid var(--border-subtle)',
+                            background: mapSearchPaletteChrome.subtleSurface,
+                            color: 'var(--text-heading)',
+                            padding: '9px 11px',
+                            fontSize: 12,
+                          }}
+                        />
                         <button
-                          key={facet.key}
                           type="button"
                           onClick={() => {
-                            setActiveProductStages((current) => {
-                              const next = new Set(Array.from(current || []));
-                              if (next.has(facet.key)) next.delete(facet.key);
-                              else next.add(facet.key);
-                              return next.size > 0 ? next : null;
-                            });
+                            setSelectedProductGroupKeys([]);
+                            setSelectedRouteArtifactIds([]);
                           }}
+                          disabled={selectedRouteArtifactIdSet.size === 0}
+                          style={{
+                            borderRadius: 10,
+                            border: '1px solid var(--border-subtle)',
+                            background: 'transparent',
+                            color: selectedRouteArtifactIdSet.size > 0 ? 'var(--text-secondary-strong)' : 'var(--text-secondary)',
+                            padding: '9px 10px',
+                            fontSize: 11,
+                            fontWeight: 700,
+                            cursor: selectedRouteArtifactIdSet.size > 0 ? 'pointer' : 'not-allowed',
+                            opacity: selectedRouteArtifactIdSet.size > 0 ? 1 : 0.55,
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          Clear selected
+                        </button>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                        <span>{filteredRouteCatalog.length} shown</span>
+                        <span>•</span>
+                        <span>{routeFilterActive ? 'Only filtered routes are visible' : 'All loaded routes are active'}</span>
+                      </div>
+
+                      <div
+                        style={{
+                          borderRadius: 12,
+                          border: '1px solid var(--border-subtle)',
+                          background: mapSearchPaletteChrome.subtleSurface,
+                          padding: '10px 12px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: 12,
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-heading)' }}>Cluster route lines</div>
+                          <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                            {routeFilterActive
+                              ? 'Filtering no longer changes clustering behavior. The standard map clustering still applies.'
+                              : 'Use the same clustering mode as in Filters.'}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setPathLegClusteringEnabled((value) => !value)}
                           style={{
                             borderRadius: 999,
-                            border: active
+                            border: pathLegClusteringEnabled ? '1px solid rgba(14,165,233,0.32)' : '1px solid var(--border-subtle)',
+                            background: pathLegClusteringEnabled
+                              ? (isDark ? 'rgba(14,165,233,0.16)' : 'rgba(14,165,233,0.10)')
+                              : 'transparent',
+                            color: pathLegClusteringEnabled ? (isDark ? '#bae6fd' : '#075985') : 'var(--text-secondary-strong)',
+                            padding: '6px 10px',
+                            fontSize: 11,
+                            fontWeight: 800,
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {pathLegClusteringEnabled ? 'On' : 'Off'}
+                        </button>
+                      </div>
+
+                      <div style={{ maxHeight: 420, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, paddingRight: 2 }}>
+                        {filteredRouteCatalog.length === 0 && (
+                          <div style={{ borderRadius: 12, border: '1px solid var(--border-subtle)', background: mapSearchPaletteChrome.subtleSurface, padding: '12px 14px', fontSize: 12, color: 'var(--text-secondary-strong)' }}>
+                            No loaded routes match this search.
+                          </div>
+                        )}
+                        {filteredRouteCatalog.map((artifact) => {
+                          const artifactId = String(artifact.id || '').trim();
+                          const selected = selectedRouteArtifactIdSet.has(artifactId);
+                          const products = artifactRouteProducts(artifact);
+                          return (
+                            <button
+                              key={artifactId}
+                              type="button"
+                              onClick={() => {
+                                setSelectedProductGroupKeys([]);
+                                setSelectedRouteArtifactIds((current) => {
+                                  const currentSet = new Set(current.map((value) => String(value || '').trim()).filter(Boolean));
+                                  if (currentSet.has(artifactId)) currentSet.delete(artifactId);
+                                  else currentSet.add(artifactId);
+                                  return Array.from(currentSet);
+                                });
+                              }}
+                              style={{
+                                width: '100%',
+                                textAlign: 'left',
+                                borderRadius: 12,
+                                border: selected ? `1px solid ${mapSearchPaletteChrome.activeItemBorder}` : '1px solid var(--border-subtle)',
+                                background: selected ? mapSearchPaletteChrome.activeItemBackground : mapSearchPaletteChrome.subtleSurface,
+                                color: 'var(--text-heading)',
+                                padding: '11px 12px',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 6,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+                                <div style={{ minWidth: 0 }}>
+                                  <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)' }}>
+                                    {artifactRouteTitle(artifact)}
+                                  </div>
+                                  <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                                    {artifactRouteSubtitle(artifact)}
+                                  </div>
+                                </div>
+                                <div
+                                  style={{
+                                    minWidth: 18,
+                                    height: 18,
+                                    borderRadius: 999,
+                                    border: selected ? `1px solid ${mapSearchPaletteChrome.activeItemBorder}` : '1px solid var(--border-subtle)',
+                                    background: selected ? mapSearchPaletteChrome.activeItemBackground : 'transparent',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontSize: 10,
+                                    fontWeight: 900,
+                                    color: selected ? 'var(--text-heading)' : 'transparent',
+                                  }}
+                                >
+                                  ✓
+                                </div>
+                              </div>
+                              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                                <span>{artifact.legCount || (Array.isArray(artifact.payload?.legs) ? artifact.payload!.legs!.length : 0)} legs</span>
+                                {typeof artifact.pathStressScore === 'number' && artifact.pathStressScore > 0 && (
+                                  <span>stress {artifact.pathStressScore.toFixed(2)}</span>
+                                )}
+                                {artifact.isPinned && <span>Pinned</span>}
+                              </div>
+                              {products.length > 0 && (
+                                <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                                  {products.join(', ')}
+                                </div>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                        <div>
+                          <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-heading)' }}>Route Products</div>
+                          <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                            Select or clear all loaded routes grouped under a product.
+                          </div>
+                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
+                          {productRouteGroups.length} groups
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                        <button
+                          type="button"
+                          onClick={() => setActiveProductStages(null)}
+                          style={{
+                            borderRadius: 999,
+                            border: !activeProductStages || activeProductStages.size === 0
                               ? `1px solid ${mapSearchPaletteChrome.activeItemBorder}`
                               : '1px solid var(--border-subtle)',
-                            background: active
+                            background: !activeProductStages || activeProductStages.size === 0
                               ? mapSearchPaletteChrome.activeItemBackground
                               : mapSearchPaletteChrome.subtleSurface,
                             color: 'var(--text-heading)',
@@ -3950,158 +3670,559 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
                             cursor: 'pointer',
                           }}
                         >
-                          {facet.label} · {facet.routeCount}
+                          All stages
                         </button>
-                      );
-                    })}
-                  </div>
-
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <input
-                      type="search"
-                      value={productSearchQuery}
-                      onChange={(event) => setProductSearchQuery(event.target.value)}
-                      placeholder="Search products"
-                      style={{
-                        flex: 1,
-                        borderRadius: 10,
-                        border: '1px solid var(--border-subtle)',
-                        background: mapSearchPaletteChrome.subtleSurface,
-                        color: 'var(--text-heading)',
-                        padding: '9px 11px',
-                        fontSize: 12,
-                      }}
-                    />
-                    <button
-                      type="button"
-                      onClick={resetProductsPanelState}
-                      disabled={
-                        selectedRouteArtifactIdSet.size === 0
-                        && (!activeProductStages || activeProductStages.size === 0)
-                        && !productSearchQueryTrim
-                      }
-                      style={{
-                        borderRadius: 10,
-                        border: '1px solid var(--border-subtle)',
-                        background: 'transparent',
-                        color:
-                          selectedRouteArtifactIdSet.size > 0 || (activeProductStages && activeProductStages.size > 0) || productSearchQueryTrim
-                            ? 'var(--text-secondary-strong)'
-                            : 'var(--text-secondary)',
-                        padding: '9px 10px',
-                        fontSize: 11,
-                        fontWeight: 700,
-                        cursor:
-                          selectedRouteArtifactIdSet.size > 0 || (activeProductStages && activeProductStages.size > 0) || productSearchQueryTrim
-                            ? 'pointer'
-                            : 'not-allowed',
-                        opacity:
-                          selectedRouteArtifactIdSet.size > 0 || (activeProductStages && activeProductStages.size > 0) || productSearchQueryTrim
-                            ? 1
-                            : 0.55,
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      Reset
-                    </button>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                    <span>{productRouteGroups.length} shown</span>
-                    <span>•</span>
-                    <span>{activeProductStages && activeProductStages.size > 0 ? `${activeProductStages.size} stages active` : 'All stages'}</span>
-                    <span>•</span>
-                    <span>{selectedRouteArtifactIdSet.size > 0 ? `${selectedRouteArtifactIdSet.size} routes selected` : 'No route filter applied'}</span>
-                  </div>
-
-                  <div style={{ maxHeight: 420, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, paddingRight: 2 }}>
-                    {productRouteGroups.length === 0 && (
-                      <div style={{ borderRadius: 12, border: '1px solid var(--border-subtle)', background: mapSearchPaletteChrome.subtleSurface, padding: '12px 14px', fontSize: 12, color: 'var(--text-secondary-strong)' }}>
-                        No loaded product groups match this search.
-                      </div>
-                    )}
-                    {productRouteGroups.map((group) => {
-                      const selectedCount = group.artifactIds.filter((artifactId) => selectedRouteArtifactIdSet.has(artifactId)).length;
-                      const allSelected = selectedCount > 0 && selectedCount === group.artifactIds.length;
-                      const partiallySelected = selectedCount > 0 && !allSelected;
-                      const groupKey = String(group.key || '').trim().toLowerCase();
-                      const groupFilterActive = selectedProductGroupKeySet.has(groupKey);
-                      return (
-                        <button
-                          key={group.key}
-                          type="button"
-                          onClick={() => {
-                            setSelectedProductGroupKeys((current) => {
-                              const next = new Set(current.map((value) => String(value || '').trim().toLowerCase()).filter(Boolean));
-                              if (groupFilterActive) next.delete(groupKey);
-                              else next.add(groupKey);
-                              return Array.from(next);
-                            });
-                            setSelectedRouteArtifactIds((current) => {
-                              const next = new Set(current.map((value) => String(value || '').trim()).filter(Boolean));
-                              if (allSelected) {
-                                for (const artifactId of group.artifactIds) next.delete(artifactId);
-                              } else {
-                                for (const artifactId of group.artifactIds) next.add(artifactId);
-                              }
-                              return Array.from(next);
-                            });
-                          }}
-                          style={{
-                            width: '100%',
-                            textAlign: 'left',
-                            borderRadius: 12,
-                            border: allSelected || partiallySelected || groupFilterActive ? `1px solid ${mapSearchPaletteChrome.activeItemBorder}` : '1px solid var(--border-subtle)',
-                            background: allSelected || partiallySelected || groupFilterActive ? mapSearchPaletteChrome.activeItemBackground : mapSearchPaletteChrome.subtleSurface,
-                            color: 'var(--text-heading)',
-                            padding: '11px 12px',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: 6,
-                            cursor: 'pointer',
-                          }}
-                        >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)' }}>
-                                {group.label}
-                              </div>
-                              <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                                {group.stageLabel} • {group.routeCount} routes
-                                {group.pinnedCount > 0 ? ` • ${group.pinnedCount} pinned` : ''}
-                                {selectedCount > 0 ? ` • ${selectedCount} selected` : ''}
-                              </div>
-                            </div>
-                            <div
+                        {productStageFacets.map((facet) => {
+                          const active = Boolean(activeProductStages?.has(facet.key));
+                          return (
+                            <button
+                              key={facet.key}
+                              type="button"
+                              onClick={() => {
+                                setActiveProductStages((current) => {
+                                  const next = new Set(Array.from(current || []));
+                                  if (next.has(facet.key)) next.delete(facet.key);
+                                  else next.add(facet.key);
+                                  return next.size > 0 ? next : null;
+                                });
+                              }}
                               style={{
-                                minWidth: 18,
-                                height: 18,
                                 borderRadius: 999,
-                                border: allSelected || partiallySelected ? `1px solid ${mapSearchPaletteChrome.activeItemBorder}` : '1px solid var(--border-subtle)',
-                                background: allSelected || partiallySelected ? mapSearchPaletteChrome.activeItemBackground : 'transparent',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                fontSize: 10,
-                                fontWeight: 900,
-                                color: allSelected || partiallySelected ? 'var(--text-heading)' : 'transparent',
+                                border: active
+                                  ? `1px solid ${mapSearchPaletteChrome.activeItemBorder}`
+                                  : '1px solid var(--border-subtle)',
+                                background: active
+                                  ? mapSearchPaletteChrome.activeItemBackground
+                                  : mapSearchPaletteChrome.subtleSurface,
+                                color: 'var(--text-heading)',
+                                padding: '7px 10px',
+                                fontSize: 11,
+                                fontWeight: 700,
+                                cursor: 'pointer',
                               }}
                             >
-                              {allSelected ? '✓' : partiallySelected ? '•' : '✓'}
-                            </div>
-                          </div>
-                          {group.topRoutes.length > 0 && (
-                            <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
-                              {group.topRoutes.join(' • ')}
-                            </div>
-                          )}
+                              {facet.label} · {facet.routeCount}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <input
+                          type="search"
+                          value={productSearchQuery}
+                          onChange={(event) => setProductSearchQuery(event.target.value)}
+                          placeholder="Search products"
+                          style={{
+                            flex: 1,
+                            borderRadius: 10,
+                            border: '1px solid var(--border-subtle)',
+                            background: mapSearchPaletteChrome.subtleSurface,
+                            color: 'var(--text-heading)',
+                            padding: '9px 11px',
+                            fontSize: 12,
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={resetProductsPanelState}
+                          disabled={
+                            selectedRouteArtifactIdSet.size === 0
+                            && (!activeProductStages || activeProductStages.size === 0)
+                            && !productSearchQueryTrim
+                          }
+                          style={{
+                            borderRadius: 10,
+                            border: '1px solid var(--border-subtle)',
+                            background: 'transparent',
+                            color:
+                              selectedRouteArtifactIdSet.size > 0 || (activeProductStages && activeProductStages.size > 0) || productSearchQueryTrim
+                                ? 'var(--text-secondary-strong)'
+                                : 'var(--text-secondary)',
+                            padding: '9px 10px',
+                            fontSize: 11,
+                            fontWeight: 700,
+                            cursor:
+                              selectedRouteArtifactIdSet.size > 0 || (activeProductStages && activeProductStages.size > 0) || productSearchQueryTrim
+                                ? 'pointer'
+                                : 'not-allowed',
+                            opacity:
+                              selectedRouteArtifactIdSet.size > 0 || (activeProductStages && activeProductStages.size > 0) || productSearchQueryTrim
+                                ? 1
+                                : 0.55,
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          Reset
                         </button>
-                      );
-                    })}
-                  </div>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                        <span>{productRouteGroups.length} shown</span>
+                        <span>•</span>
+                        <span>{activeProductStages && activeProductStages.size > 0 ? `${activeProductStages.size} stages active` : 'All stages'}</span>
+                        <span>•</span>
+                        <span>{selectedRouteArtifactIdSet.size > 0 ? `${selectedRouteArtifactIdSet.size} routes selected` : 'No route filter applied'}</span>
+                      </div>
+
+                      <div style={{ maxHeight: 420, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, paddingRight: 2 }}>
+                        {productRouteGroups.length === 0 && (
+                          <div style={{ borderRadius: 12, border: '1px solid var(--border-subtle)', background: mapSearchPaletteChrome.subtleSurface, padding: '12px 14px', fontSize: 12, color: 'var(--text-secondary-strong)' }}>
+                            No loaded product groups match this search.
+                          </div>
+                        )}
+                        {productRouteGroups.map((group) => {
+                          const selectedCount = group.artifactIds.filter((artifactId) => selectedRouteArtifactIdSet.has(artifactId)).length;
+                          const allSelected = selectedCount > 0 && selectedCount === group.artifactIds.length;
+                          const partiallySelected = selectedCount > 0 && !allSelected;
+                          const groupKey = String(group.key || '').trim().toLowerCase();
+                          const groupFilterActive = selectedProductGroupKeySet.has(groupKey);
+                          return (
+                            <button
+                              key={group.key}
+                              type="button"
+                              onClick={() => {
+                                setSelectedProductGroupKeys((current) => {
+                                  const next = new Set(current.map((value) => String(value || '').trim().toLowerCase()).filter(Boolean));
+                                  if (groupFilterActive) next.delete(groupKey);
+                                  else next.add(groupKey);
+                                  return Array.from(next);
+                                });
+                                setSelectedRouteArtifactIds((current) => {
+                                  const next = new Set(current.map((value) => String(value || '').trim()).filter(Boolean));
+                                  if (allSelected) {
+                                    for (const artifactId of group.artifactIds) next.delete(artifactId);
+                                  } else {
+                                    for (const artifactId of group.artifactIds) next.add(artifactId);
+                                  }
+                                  return Array.from(next);
+                                });
+                              }}
+                              style={{
+                                width: '100%',
+                                textAlign: 'left',
+                                borderRadius: 12,
+                                border: allSelected || partiallySelected || groupFilterActive ? `1px solid ${mapSearchPaletteChrome.activeItemBorder}` : '1px solid var(--border-subtle)',
+                                background: allSelected || partiallySelected || groupFilterActive ? mapSearchPaletteChrome.activeItemBackground : mapSearchPaletteChrome.subtleSurface,
+                                color: 'var(--text-heading)',
+                                padding: '11px 12px',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 6,
+                                cursor: 'pointer',
+                              }}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+                                <div style={{ minWidth: 0 }}>
+                                  <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-heading)' }}>
+                                    {group.label}
+                                  </div>
+                                  <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                                    {group.stageLabel} • {group.routeCount} routes
+                                    {group.pinnedCount > 0 ? ` • ${group.pinnedCount} pinned` : ''}
+                                    {selectedCount > 0 ? ` • ${selectedCount} selected` : ''}
+                                  </div>
+                                </div>
+                                <div
+                                  style={{
+                                    minWidth: 18,
+                                    height: 18,
+                                    borderRadius: 999,
+                                    border: allSelected || partiallySelected ? `1px solid ${mapSearchPaletteChrome.activeItemBorder}` : '1px solid var(--border-subtle)',
+                                    background: allSelected || partiallySelected ? mapSearchPaletteChrome.activeItemBackground : 'transparent',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontSize: 10,
+                                    fontWeight: 900,
+                                    color: allSelected || partiallySelected ? 'var(--text-heading)' : 'transparent',
+                                  }}
+                                >
+                                  {allSelected ? '✓' : partiallySelected ? '•' : '✓'}
+                                </div>
+                              </div>
+                              {group.topRoutes.length > 0 && (
+                                <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                                  {group.topRoutes.join(' • ')}
+                                </div>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             )}
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, pointerEvents: 'auto' }}>
+            <div style={{ position: 'relative' }}>
+              <button
+                type="button"
+                title={viewOverlayOpen ? 'Hide view controls' : 'Show view controls'}
+                aria-label={viewOverlayOpen ? 'Hide view controls' : 'Show view controls'}
+                onClick={() => {
+                  onMapDrawerPanelChange?.(activeMapDrawerPanel === 'view' ? null : 'view');
+                }}
+                style={mapDockRailButtonStyle(isDark, viewOverlayOpen)}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <line x1="4" y1="6" x2="20" y2="6" />
+                  <line x1="7" y1="12" x2="17" y2="12" />
+                  <line x1="10" y1="18" x2="14" y2="18" />
+                </svg>
+              </button>
+              {viewOverlayOpen && mapDrawerHost ? createPortal(
+                <div style={mapDrawerPanelShellStyle(isDark)}>
+                    <div style={mapDrawerPanelLeadStyle(isDark)}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-heading)' }}>
+                        Manage visibility, network depth and operational windows for the current map view.
+                      </div>
+                      <div style={{ fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                        Changes here affect only what is currently rendered in the map and route graph.
+                      </div>
+                    </div>
+
+                    <div
+                      style={mapDrawerSectionStyle(isDark, 'muted')}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline' }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-heading)' }}>Current view</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)', whiteSpace: 'nowrap' }}>
+                          {visibleMapObjects.length} visible
+                        </div>
+                      </div>
+                      <div
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                          gap: 8,
+                        }}
+                      >
+                      {[
+                        { label: 'Objects', value: `${visibleMapObjects.length}`, note: filterActive ? `${filteredObjects.length}/${allObjects.length} in scope` : 'Current view' },
+                        { label: 'Route lines', value: pathLegsEnabled ? `${pathLegStats.legCount}` : 'Off', note: pathLegsEnabled ? (pathLegClusteringEnabled ? 'clustered when possible' : 'expanded') : 'Hidden' },
+                        { label: 'Zones', value: zonesEnabled ? `${affectedZoneVisibility.visible}` : 'Off', note: zonesEnabled ? `${affectedZoneVisibility.total} tracked` : 'Not shown' },
+                        { label: 'Flows', value: flowsEnabled ? `${visibleTransportFlowsCount}` : 'Off', note: flowsEnabled ? 'Transport corridors visible' : 'Not shown' },
+                      ].map((item) => (
+                        <div
+                          key={item.label}
+                          style={mapDrawerMetricCardStyle(isDark)}
+                        >
+                          <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
+                            {item.label}
+                          </div>
+                          <div style={{ marginTop: 5, fontSize: 15, fontWeight: 800, color: 'var(--text-heading)' }}>{item.value}</div>
+                          <div style={{ marginTop: 4, fontSize: 10, lineHeight: 1.4, color: 'var(--text-secondary-strong)' }}>{item.note}</div>
+                        </div>
+                      ))}
+                      </div>
+                    </div>
+
+                    <div style={mapDrawerSectionStyle(isDark, 'default')}>
+                      <MapFilterPanel
+                        floating
+                        presentation="drawer"
+                        isDark={isDark}
+                        paletteTheme={theme}
+                        typeCounts={typeCounts}
+                        zoneTypeCounts={zoneTypeCounts}
+                        flowModeCounts={flowModeCounts}
+                        activeTypes={activeTypes}
+                        activeZoneTypes={activeZoneTypes}
+                        activeFlowModes={activeFlowModes}
+                        zonesEnabled={zonesEnabled}
+                        flowsEnabled={flowsEnabled}
+                        pathLegsEnabled={pathLegsEnabled}
+                        pathLegClusteringEnabled={pathLegClusteringEnabled}
+                        pathLegCount={pathLegStats.legCount}
+                        vesselsEnabled={vesselsEnabled}
+                        vesselsApiAvailable={vesselsApiAvailable}
+                        dateFrom={dateFrom}
+                        dateTo={dateTo}
+                        hops={hops}
+                        loadingData={loading}
+                        onSetDateFrom={setDateFrom}
+                        onSetDateTo={setDateTo}
+                        onSetHops={setHops}
+                        onToggleType={handleToggleType}
+                        onToggleZoneType={handleToggleZoneType}
+                        onToggleFlowMode={handleToggleFlowMode}
+                        onToggleZonesEnabled={() => setZonesEnabled((v) => !v)}
+                        onToggleFlowsEnabled={() => setFlowsEnabled((v) => !v)}
+                        onTogglePathLegsEnabled={() => setPathLegsEnabled((v) => !v)}
+                        onTogglePathLegClusteringEnabled={() => setPathLegClusteringEnabled((v) => !v)}
+                        onToggleVesselsEnabled={() => setVesselsEnabled((v) => !v)}
+                        onSelectAll={() => setActiveTypes(null)}
+                        onSelectNone={() => setActiveTypes(new Set())}
+                        onSelectAllZoneTypes={() => setActiveZoneTypes(null)}
+                        onSelectNoneZoneTypes={() => setActiveZoneTypes(new Set())}
+                        onSelectAllFlowModes={() => setActiveFlowModes(null)}
+                        onSelectNoneFlowModes={() => setActiveFlowModes(new Set())}
+                      />
+                    </div>
+                </div>,
+                mapDrawerHost,
+              ) : null}
+            </div>
+
+            <div style={{ position: 'relative' }}>
+              <button
+                type="button"
+                title={simulationOverlayOpen ? 'Hide simulation overlays' : 'Show simulation overlays'}
+                aria-label={simulationOverlayOpen ? 'Hide simulation overlays' : 'Show simulation overlays'}
+                onClick={() => {
+                  onMapDrawerPanelChange?.(activeMapDrawerPanel === 'simulation' ? null : 'simulation');
+                }}
+                style={mapDockRailButtonStyle(isDark, simulationOverlayOpen)}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M5 19V9" />
+                  <path d="M12 19V5" />
+                  <path d="M19 19v-7" />
+                </svg>
+              </button>
+              {simulationOverlayOpen && mapDrawerHost ? createPortal(
+                <div style={mapDrawerPanelShellStyle(isDark)}>
+                  <div style={mapDrawerPanelLeadStyle(isDark)}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-heading)' }}>
+                      Explore simulation overlays against the currently visible route graph.
+                    </div>
+                    <div style={{ fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                      Activate overlays to project stress hypotheses directly onto the map without leaving the current lens.
+                    </div>
+                  </div>
+                  <div style={mapDrawerSectionStyle(isDark, 'default')}>
+                  <SimulationMapOverlayPanel
+                    lensId={scope?.lensId || null}
+                    routeCatalog={routeCatalog}
+                    selectedRouteArtifactIds={focusedRouteArtifactIds}
+                    onChangeSelectedRouteArtifactIds={setFocusedRouteArtifactIds}
+                    onSelectionChange={setSimulationSelection}
+                    isDark={isDark}
+                  />
+                  </div>
+                </div>,
+                mapDrawerHost,
+              ) : null}
+            </div>
+
+            <div style={{ position: 'relative' }}>
+              <button
+                type="button"
+                title={exportToolsOverlayOpen ? 'Hide export and tools' : 'Show export and tools'}
+                aria-label={exportToolsOverlayOpen ? 'Hide export and tools' : 'Show export and tools'}
+                onClick={() => {
+                  onMapDrawerPanelChange?.(activeMapDrawerPanel === 'export-tools' ? null : 'export-tools');
+                }}
+                style={mapDockRailButtonStyle(isDark, exportToolsOverlayOpen)}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M12 3v8" />
+                  <path d="m8 8 4 4 4-4" />
+                  <path d="M4 17h16" />
+                  <path d="M7 21h10" />
+                </svg>
+              </button>
+              {exportToolsOverlayOpen && mapDrawerHost ? createPortal(
+                <div
+                  style={{
+                    ...mapDrawerPanelShellStyle(isDark),
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 12,
+                  }}
+                >
+                    <div style={mapDrawerPanelLeadStyle(isDark)}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-heading)' }}>
+                        Export the current map state or run maintenance jobs on the visible route graph.
+                      </div>
+                      <div style={{ fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                        {selectedObject ? `Current asset: ${getSearchObjectTitle(selectedObject)}` : 'Pick an asset on the map to unlock selection export.'}
+                      </div>
+                    </div>
+
+                    <div style={mapDrawerSectionStyle(isDark, 'default')}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-heading)' }}>Export</div>
+                      <div style={{ fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                        Download a JSON snapshot for the active object selection and the graph data already loaded into the map.
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleExportJson}
+                        disabled={!selectedObject || !selectionExportData || edgesLoading}
+                        title={!selectedObject ? 'Select an asset to export JSON files' : 'Download selection and loaded-graph JSON files'}
+                        style={mapDrawerActionButtonStyle(
+                          isDark,
+                          'default',
+                          !selectedObject || !selectionExportData || edgesLoading,
+                        )}
+                      >
+                        {edgesLoading && selectedObject ? 'Preparing JSON...' : 'Download JSON snapshot'}
+                      </button>
+                      {scope?.lensId && onOpenDocuments ? (
+                        <button
+                          type="button"
+                          onClick={onOpenDocuments}
+                          style={mapDrawerActionButtonStyle(isDark, 'accent')}
+                        >
+                          Documents
+                        </button>
+                      ) : null}
+                    </div>
+
+                    <div style={mapDrawerSectionStyle(isDark, 'muted')}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-heading)' }}>Tools</div>
+                      <div style={{ fontSize: 11, lineHeight: 1.45, color: 'var(--text-secondary-strong)' }}>
+                        {!scope?.lensId
+                          ? 'Open a Horizon lens to run supply-chain tools.'
+                          : 'Run supply-chain maintenance jobs over the currently visible map graph.'}
+                      </div>
+                      {([
+                        {
+                          key: 'complete',
+                          label: 'Complete Links',
+                          desc: completeSubstrateSubmitting || completeSubstrateRunning ? 'Running…' : 'Materialize routes',
+                          disabled: !scope?.lensId || completeSubstrateRunning || completeSubstrateSubmitting,
+                          onClick: () => { void handleCompleteSubstrate(); },
+                        },
+                        {
+                          key: 'recover',
+                          label: 'Recover Metrics',
+                          desc: recoverMetricsSubmitting || recoverMetricsRunning ? 'Running…' : 'Fill route metrics',
+                          disabled: !scope?.lensId || recoverMetricsRunning || recoverMetricsSubmitting,
+                          onClick: () => { void handleRecoverMetrics(); },
+                        },
+                        {
+                          key: 'identify',
+                          label: 'Identify Stresses',
+                          desc: identifySubmitting || identifyRunning ? 'Running…' : 'Apply risk metrics',
+                          disabled: !scope?.lensId || identifyRunning || identifySubmitting,
+                          onClick: () => { void handleIdentifyStresses(); },
+                        },
+                      ]).map((action) => (
+                        <button
+                          key={action.key}
+                          type="button"
+                          onClick={action.onClick}
+                          disabled={action.disabled}
+                          style={{
+                            ...mapDrawerActionButtonStyle(isDark, 'default', action.disabled),
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: 10,
+                          }}
+                        >
+                          <span style={{ fontSize: 13, fontWeight: 700 }}>{action.label}</span>
+                          <span style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>{action.desc}</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {completeSubstrateOverlayVisible && (
+                      <div style={mapDrawerSectionStyle(isDark, completeSubstrateErrorLines.length > 0 ? 'danger' : 'accent')}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+                          <div>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-heading)' }}>Link Completion</div>
+                            <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                              {latestCompleteSubstrateJob ? `State: ${String(latestCompleteSubstrateJob.state || 'started').replace(/_/g, ' ')}` : 'Launch failed'}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!completeSubstrateOverlayKey) return;
+                              setDismissedCompleteSubstrateOverlayKey(completeSubstrateOverlayKey);
+                            }}
+                            style={{ width: 22, height: 22, borderRadius: 999, border: '1px solid var(--border-subtle)', background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer', padding: 0 }}
+                          >
+                            ×
+                          </button>
+                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                          Visible nodes {latestCompleteSubstrateJob?.acceptedNodes ?? identifyVisibleNodeRefs.length} • Visible routes {latestCompleteSubstrateJob?.acceptedArtifacts ?? identifyVisibleArtifactKeys.length} • Created {latestCompleteSubstrateJob?.artifactsCreated ?? 0} • Updated {latestCompleteSubstrateJob?.artifactsUpdated ?? 0}
+                        </div>
+                        {completeSubstrateErrorLines.length > 0 && (
+                          <div style={{ fontSize: 11, lineHeight: 1.45, color: isDark ? '#fecaca' : '#991b1b' }}>
+                            {completeSubstrateErrorLines.join(' • ')}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {recoverMetricsOverlayVisible && (
+                      <div style={mapDrawerSectionStyle(isDark, recoverMetricsErrorLines.length > 0 ? 'danger' : 'accent')}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+                          <div>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-heading)' }}>Metric Recovery</div>
+                            <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                              {latestRecoverMetricsJob ? `State: ${String(latestRecoverMetricsJob.state || 'started').replace(/_/g, ' ')}` : 'Launch failed'}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!recoverMetricsOverlayKey) return;
+                              setDismissedRecoverMetricsOverlayKey(recoverMetricsOverlayKey);
+                            }}
+                            style={{ width: 22, height: 22, borderRadius: 999, border: '1px solid var(--border-subtle)', background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer', padding: 0 }}
+                          >
+                            ×
+                          </button>
+                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                          Visible nodes {latestRecoverMetricsJob?.acceptedNodes ?? identifyVisibleNodeRefs.length} • Visible routes {latestRecoverMetricsJob?.acceptedArtifacts ?? identifyVisibleArtifactKeys.length} • Updated {latestRecoverMetricsJob?.artifactsUpdated ?? 0} • Recovered {latestRecoverMetricsJob?.recoveredLinks?.length ?? 0}
+                        </div>
+                        {recoverMetricsErrorLines.length > 0 && (
+                          <div style={{ fontSize: 11, lineHeight: 1.45, color: isDark ? '#fecaca' : '#991b1b' }}>
+                            {recoverMetricsErrorLines.join(' • ')}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {identifyOverlayVisible && (
+                      <div style={mapDrawerSectionStyle(isDark, identifyErrorLines.length > 0 ? 'danger' : 'accent')}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+                          <div>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-heading)' }}>Stress Job</div>
+                            <div style={{ marginTop: 3, fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                              {latestIdentifyJob ? `State: ${String(latestIdentifyJob.state || 'started').replace(/_/g, ' ')}` : 'Launch failed'}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!identifyOverlayKey) return;
+                              setDismissedIdentifyOverlayKey(identifyOverlayKey);
+                            }}
+                            style={{ width: 22, height: 22, borderRadius: 999, border: '1px solid var(--border-subtle)', background: 'transparent', color: 'var(--text-secondary-strong)', cursor: 'pointer', padding: 0 }}
+                          >
+                            ×
+                          </button>
+                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                          Visible nodes {latestIdentifyJob?.acceptedNodes ?? identifyVisibleNodeRefs.length} • Visible routes {latestIdentifyJob?.acceptedArtifacts ?? identifyVisibleArtifactKeys.length} • Findings {latestIdentifyJob?.findingsApplied ?? 0} • Events {latestIdentifyJob?.eventsPersisted ?? 0}
+                        </div>
+                        {identifyTouchedRouteLabels.length > 0 && (
+                          <div style={{ fontSize: 11, color: 'var(--text-secondary-strong)' }}>
+                            Touched routes: {identifyTouchedRouteLabels.join(' • ')}
+                          </div>
+                        )}
+                        {identifyErrorLines.length > 0 && (
+                          <div style={{ fontSize: 11, lineHeight: 1.45, color: isDark ? '#fecaca' : '#991b1b' }}>
+                            {identifyErrorLines.join(' • ')}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                </div>,
+                mapDrawerHost,
+              ) : null}
+            </div>
           </div>
         </div>
 
@@ -4541,6 +4662,225 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
           {vesselsEnabled ? ' | Vessels (AIS)' : ''}
         </div>
 
+        {chatMapFocus && (chatFocusedObjects.length > 0 || chatFocusedArtifactIdSet.size > 0) && (
+          <div
+            style={{
+              position: 'absolute',
+              left: 10,
+              top: Math.max(12, overlayTopOffset - 54),
+              zIndex: 19,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '10px 12px',
+              borderRadius: 14,
+              backdropFilter: 'blur(14px)',
+              background: isDark ? 'rgba(6,18,31,0.86)' : 'rgba(255,255,255,0.92)',
+              border: isDark ? '1px solid rgba(102,153,153,0.24)' : '1px solid rgba(15,23,42,0.08)',
+              boxShadow: isDark ? '0 12px 32px rgba(0,0,0,0.3)' : '0 12px 28px rgba(15,23,42,0.12)',
+              color: 'var(--text-heading)',
+              maxWidth: 340,
+            }}
+          >
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.09em', textTransform: 'uppercase', color: 'var(--text-secondary-strong)' }}>
+                Chat Focus
+              </div>
+              <div style={{ marginTop: 3, fontSize: 12, color: 'var(--text-secondary-strong)' }}>
+                {chatFocusedObjects.length > 0 ? `${chatFocusedObjects.length} map objects` : '0 map objects'}
+                {chatFocusedArtifactIdSet.size > 0 ? ` • ${chatFocusedArtifactIdSet.size} routes` : ''}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => onClearChatMapFocus?.()}
+              style={{
+                borderRadius: 999,
+                border: '1px solid var(--border-subtle)',
+                background: 'transparent',
+                color: 'var(--text-secondary-strong)',
+                padding: '7px 10px',
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Clear
+            </button>
+          </div>
+        )}
+
+        {denseCaptionGroups.map((group) => {
+          const isExpanded = expandedDenseCaptionGroupId === group.id;
+          const chipLeft = Math.max(12, Math.min(group.x, (map?.getCanvas().clientWidth || 0) - 12));
+          const chipTop = Math.max(18, group.y - 18);
+          const chipBorder = isExpanded
+            ? (isDark ? '1.5px solid rgba(245,158,11,0.78)' : '1.5px solid rgba(217,119,6,0.52)')
+            : (isDark ? '1.5px solid rgba(245,158,11,0.58)' : '1.5px solid rgba(217,119,6,0.38)');
+          const chipShadow = isExpanded
+            ? (isDark ? '0 0 0 1px rgba(245,158,11,0.16), 0 10px 24px rgba(0,0,0,0.28)' : '0 0 0 1px rgba(245,158,11,0.12), 0 10px 24px rgba(15,23,42,0.1)')
+            : (isDark ? '0 0 0 1px rgba(245,158,11,0.1), 0 10px 24px rgba(0,0,0,0.28)' : '0 0 0 1px rgba(245,158,11,0.08), 0 10px 24px rgba(15,23,42,0.1)');
+          return (
+            <div
+              key={group.id}
+              style={{
+                position: 'absolute',
+                left: chipLeft,
+                top: chipTop,
+                zIndex: 21,
+                transform: 'translate(-50%, -100%)',
+                pointerEvents: 'auto',
+              }}
+              data-dense-caption-overlay="true"
+            >
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setExpandedDenseCaptionGroupId((current) => current === group.id ? null : group.id);
+                }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  maxWidth: 248,
+                  padding: '6px 10px',
+                  borderRadius: 999,
+                  border: chipBorder,
+                  background: isDark ? 'rgba(6,14,22,0.84)' : 'rgba(255,255,255,0.88)',
+                  color: 'var(--text-heading)',
+                  boxShadow: chipShadow,
+                  backdropFilter: 'blur(10px)',
+                  cursor: 'pointer',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  lineHeight: 1.25,
+                  textAlign: 'left',
+                }}
+              >
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {group.label}
+                </span>
+              </button>
+
+              {isExpanded && (
+                <div
+                  style={{
+                    marginTop: 6,
+                    width: 292,
+                    maxWidth: 'min(calc(100vw - 24px), 292px)',
+                    maxHeight: 280,
+                    overflowY: 'auto',
+                    padding: 8,
+                    borderRadius: 16,
+                    border: isDark ? '1px solid rgba(255,255,255,0.08)' : '1px solid rgba(15,23,42,0.08)',
+                    background: isDark ? 'rgba(5,14,24,0.88)' : 'rgba(255,255,255,0.9)',
+                    boxShadow: isDark ? '0 18px 42px rgba(0,0,0,0.32)' : '0 18px 38px rgba(15,23,42,0.12)',
+                    backdropFilter: 'blur(18px)',
+                    overflowX: 'hidden',
+                  }}
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <div
+                    style={{
+                      marginBottom: 8,
+                      padding: '2px 4px 0',
+                      display: 'flex',
+                      alignItems: 'baseline',
+                      justifyContent: 'space-between',
+                      gap: 10,
+                    }}
+                  >
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-heading)' }}>
+                      {group.totalCount} objects
+                    </div>
+                    <div style={{ fontSize: 10, color: 'var(--text-secondary-strong)' }}>
+                      Tap to focus
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+                      gap: 6,
+                    }}
+                  >
+                    {group.visibleObjects.map((object) => {
+                      const { accent, visualType } = denseCaptionObjectAccent(object, theme);
+                      return (
+                        <button
+                          key={object.id}
+                          type="button"
+                          onClick={() => {
+                            setExpandedDenseCaptionGroupId(null);
+                            selectObjectFromMapInteraction(object);
+                          }}
+                          title={getSearchObjectTitle(object)}
+                          style={{
+                            width: '100%',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            minWidth: 0,
+                            padding: '5px 7px',
+                            borderRadius: 10,
+                            border: isDark ? '1px solid rgba(255,255,255,0.06)' : '1px solid rgba(15,23,42,0.06)',
+                            background: isDark ? 'rgba(255,255,255,0.035)' : 'rgba(15,23,42,0.03)',
+                            color: 'var(--text-heading)',
+                            cursor: 'pointer',
+                            textAlign: 'left',
+                            transition: 'background-color 140ms ease, border-color 140ms ease, transform 140ms ease',
+                          }}
+                          onMouseEnter={(event) => {
+                            event.currentTarget.style.background = isDark ? `${accent}20` : `${accent}14`;
+                            event.currentTarget.style.borderColor = isDark ? `${accent}44` : `${accent}2e`;
+                          }}
+                          onMouseLeave={(event) => {
+                            event.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.035)' : 'rgba(15,23,42,0.03)';
+                            event.currentTarget.style.borderColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,23,42,0.06)';
+                          }}
+                        >
+                          <span
+                            style={{
+                              width: 18,
+                              height: 18,
+                              borderRadius: 999,
+                              flexShrink: 0,
+                              display: 'grid',
+                              placeItems: 'center',
+                              background: isDark ? `${accent}14` : `${accent}12`,
+                              border: `1px solid ${isDark ? `${accent}40` : `${accent}24`}`,
+                            }}
+                          >
+                            <HorizonNodeIcon type={visualType} color={accent} size={10} />
+                          </span>
+                          <span style={{ minWidth: 0, flex: 1 }}>
+                            <span
+                              style={{
+                                display: 'block',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                fontSize: 11,
+                                fontWeight: 600,
+                                lineHeight: 1.2,
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {getSearchObjectTitle(object)}
+                            </span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+
         {stackSelection && (
           <MapObjectStackPanel
             objects={stackSelection.objects}
@@ -4551,10 +4891,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
             onClose={clearStackSelection}
             onShowFan={stackSelection.canSpiderfy ? stackSelection.spiderfy : undefined}
             onSelectObject={(object) => {
-              clearStackSelection();
-              setSearchHighlightedObjectId(null);
-              setSelectedObjectOverlayCollapsed(false);
-              setSelectedObject(object);
+              selectObjectFromMapInteraction(object);
             }}
           />
         )}
@@ -5069,67 +5406,6 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({ scope }) => {
             state={primarySimulationExplanationState}
             additionalSelectedCount={Math.max(0, (simulationSelection?.activeItems?.length || 0) - 1)}
           />
-        )}
-
-        {selectedObject && !stackSelection && (
-          selectedObjectOverlayCollapsed ? (
-            <div
-              style={{
-                position: 'absolute',
-                left: 10,
-                top: overlayTopOffset,
-                zIndex: 20,
-                pointerEvents: 'auto',
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => setSelectedObjectOverlayCollapsed(false)}
-                title={`Show ${getSearchObjectTitle(selectedObject)}`}
-                aria-label={`Show ${getSearchObjectTitle(selectedObject)}`}
-                style={mapDockButtonStyle(isDark, true, isDark ? '#60a5fa' : '#2563eb')}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M8 6h8" />
-                  <path d="M8 12h8" />
-                  <path d="M8 18h8" />
-                  <path d="m13 4 5 8-5 8" />
-                </svg>
-              </button>
-            </div>
-          ) : (
-          <MapObjectDetail
-            object={selectedObject}
-            isDark={isDark}
-            paletteTheme={theme}
-            topOffset={overlayTopOffset}
-            edgesLoading={edgesLoading}
-            edgesCount={edgesCount}
-            visibleEdgesCount={visibleEdgesCount}
-            traceSummary={traceSummary}
-            activeNarrativeKey={activeNarrativeKey}
-            onNarrativeHover={setActiveNarrativeKey}
-            activeSupplyRouteIds={hoveredRouteArtifactIds}
-            onSupplyRouteHover={setHoveredRouteArtifactIds}
-            directedExploreSupported={Boolean(scope?.lensId) && isDirectedExplorationCanonicalPath(selectedObject?.canonicalPath)}
-            directedExploreBusy={directedExploreSubmitting}
-            directedExploreError={directedExploreError}
-            directedExploreDisabledReason={
-              !scope?.lensId
-                ? 'Open the map inside a lens to run directed exploration.'
-                : !isDirectedExplorationCanonicalPath(selectedObject?.canonicalPath)
-                  ? 'This object type is not supported for directed supply-chain exploration.'
-                  : undefined
-            }
-            onDirectedExplore={(direction) => {
-              void handleDirectedExplore(direction);
-            }}
-            onClose={() => {
-              setActiveNarrativeKey(null);
-              setSelectedObjectOverlayCollapsed(true);
-            }}
-          />
-          )
         )}
 
         {selectedObject && !stackSelection && (

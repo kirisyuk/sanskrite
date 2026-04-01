@@ -35,6 +35,7 @@ func TestComposableValidationPrompts_DoNotContainDeprecatedTypes(t *testing.T) {
 	}{
 		{"Core", agent.buildCoreValidationPrompt},
 		{"SupplyChain", agent.buildSupplyChainValidationPrompt},
+		{"ServiceChain", agent.buildServiceChainValidationPrompt},
 		{"Governance", agent.buildGovernanceValidationPrompt},
 		{"Market", agent.buildMarketValidationPrompt},
 		{"PolicyImpact", agent.buildPolicyImpactValidationPrompt},
@@ -70,6 +71,7 @@ func TestComposableValidationPrompts_ContainStrictOutputSchema(t *testing.T) {
 	}{
 		{"Core", agent.buildCoreValidationPrompt},
 		{"SupplyChain", agent.buildSupplyChainValidationPrompt},
+		{"ServiceChain", agent.buildServiceChainValidationPrompt},
 		{"Governance", agent.buildGovernanceValidationPrompt},
 		{"Market", agent.buildMarketValidationPrompt},
 		{"PolicyImpact", agent.buildPolicyImpactValidationPrompt},
@@ -123,6 +125,26 @@ func TestSupplyChainValidationPrompt_IncludesWorkingProductScopeRules(t *testing
 	}
 	if !strings.Contains(prompt, "productCandidates must be genuinely new scope additions") {
 		t.Fatalf("prompt must include candidate scope rule")
+	}
+}
+
+func TestServiceChainValidationPrompt_UsesServiceCapabilityScopeLanguage(t *testing.T) {
+	agent := NewCriticAgent(nil)
+	prompt := agent.buildServiceChainValidationPrompt(CriticValidatorInput{
+		Fragment:            &models.HorizonFragment{CanonicalPath: "/org/us/google-cloud", Type: models.FragmentTypeOrganization},
+		WorkingProductScope: []string{"/product/service/cloud/compute/virtual-machines"},
+	})
+	for _, want := range []string{
+		"You are a Critic validator for SERVICE CHAIN mode.",
+		"WORKING SERVICE/CAPABILITY SCOPE",
+		"productCandidates must be genuinely new service/capability scope additions",
+		"provider + capability evidence",
+		"availability_slo, latency, failover/recovery, auth_required, approved_vendor_only, service_contract_required, region_lock_in",
+		"org→fac→service→fac→org coverage",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("service validation prompt missing %q", want)
+		}
 	}
 }
 
@@ -197,6 +219,55 @@ func TestCheckSupplyChainInvariants_ValidatesScopedCandidatesAndObservations(t *
 	}
 	if !strings.Contains(joined, "linkObservation productRef") {
 		t.Fatalf("gaps must mention linkObservation scope mismatch, got %v", gaps)
+	}
+}
+
+func TestCheckServiceChainInvariants_ValidatesCapabilityScopeAndMetricRanges(t *testing.T) {
+	gaps := checkServiceChainInvariants([]SupplyChain{
+		{
+			Nodes: []SupplyChainNode{
+				{CanonicalPath: "/org/us/google-cloud", Type: "ORGANIZATION"},
+				{CanonicalPath: "/product/cloud/compute/virtual-machines", Type: "PRODUCT"},
+				{CanonicalPath: "/fac/us/us-east4", Type: "FACILITY"},
+			},
+			ProductCandidates: []ProductCandidate{
+				{CanonicalPath: "/product/service/cloud/compute/virtual-machines", Name: "GCE VM", Confidence: 0.92},
+				{CanonicalPath: "/product/service/cloud/compute/virtual-machines", Name: "GCE VM", Confidence: 0.92},
+			},
+			CarrierProductObservations: []CarrierProductObservation{
+				{
+					CarrierRef: "/org/us/google-cloud",
+					ProductRef: "/product/service/cloud/compute/virtual-machines",
+					Metrics: map[string]interface{}{
+						"availability_slo": map[string]interface{}{"value": 1.4, "unit": "ratio"},
+					},
+					Qualifiers: map[string]interface{}{
+						"auth_required": "sometimes",
+					},
+				},
+			},
+			RouteObservations: []RouteObservation{
+				{
+					Qualifiers: map[string]interface{}{
+						"service_contract_required": true,
+					},
+				},
+			},
+		},
+	}, []string{"/product/service/cloud/compute/virtual-machines"})
+	if len(gaps) == 0 {
+		t.Fatal("expected invariant gaps")
+	}
+	joined := strings.Join(gaps, "\n")
+	for _, want := range []string{
+		"lacks explicit /product/service capability path",
+		"duplicate productCandidate",
+		"metric availability_slo out of allowed range",
+		"qualifier auth_required must be boolean-like",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("gaps must mention %q, got %v", want, gaps)
+		}
 	}
 }
 

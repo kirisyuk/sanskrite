@@ -1,4 +1,4 @@
-## Etigram Frontend Architecture Principles
+## Horizon Frontend Architecture Principles
 
 This document outlines the architectural principles that guide the web frontend. It reflects the current implementation and provides guidance for evolving the codebase. Any Azure-specific details are treated as replaceable integration points.
 
@@ -35,7 +35,7 @@ Principles:
 
 ## Data Access Layer
 
-- `services/api.ts` encapsulates REST calls via a typed `EtigramAPI` wrapper around Axios.
+- `services/api.ts` encapsulates REST calls via a typed `HorizonAPI` wrapper around Axios.
 - All HTTP logic (headers, retries, error normalization) lives inside the API client. Components do not set headers directly.
 - DTOs and entities are typed via `src/types/*`. Prefer importing types from the API layer to avoid duplication.
 - Base URL is derived from `VITE_API_URL`; auth and tenant headers are injected by interceptors. These integration points are replaceable.
@@ -47,7 +47,7 @@ Principles:
 
 ## Async Orchestration and Hooks
 
-- React Query is used for data fetching hooks (`useEtigramApi.ts` integrates `useQuery`/`useMutation`).
+- React Query is used for data fetching hooks (`useHorizonApi.ts` integrates `useQuery`/`useMutation`).
 - Custom hooks encapsulate non-trivial flows and real-time behavior:
   - WebSockets: `useNotificationsWebSocket`, `useConsoleWebSocket`, `useDiscoveryWebSocket`, etc.
   - Auth: `useAuth` bridges Firebase auth to `useUserStore` and gates the app in `App.tsx`.
@@ -122,11 +122,11 @@ Principles:
 The following integration points are intentionally abstracted and can be replaced without changing component code:
 
 - Auth provider: `firebase.ts` encapsulates initialization and exposes safe handles; `useAuth` adapts to `useUserStore`.
-- API backend: `EtigramAPI` encapsulates base URL, headers, and endpoint shapes; swapping the backend means updating this client.
+- API backend: `HorizonAPI` encapsulates base URL, headers, and endpoint shapes; swapping the backend means updating this client.
 - WebSocket negotiation: API client provides negotiate endpoints; fallbacks read from env.
 
 Migration guidance:
-- Introduce new backend endpoints inside `EtigramAPI`; adapt DTOs and normalization there.
+- Introduce new backend endpoints inside `HorizonAPI`; adapt DTOs and normalization there.
 - Keep stores and hooks stable by preserving their public signatures and semantics.
 
 ## Example Patterns
@@ -163,7 +163,7 @@ setSocketUrl(url || null);
 ## Checklist for New Features
 
 - State: Add or extend a focused store; define clear actions and selectors.
-- Data: Add API methods to `EtigramAPI` and wrap in a `useQuery`/`useMutation` hook.
+- Data: Add API methods to `HorizonAPI` and wrap in a `useQuery`/`useMutation` hook.
 - UI: Compose small components; rely on tokens and utility classes.
 - Real-time: Consider WS subscribe/update flows; ensure idempotency.
 - Errors: Normalize in API; show contextual feedback in UI.

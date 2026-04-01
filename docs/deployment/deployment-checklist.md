@@ -99,32 +99,32 @@ bash scripts/deploy --py
 
 ```bash
 # Backend
-gcloud run services describe etigram-api --region us-central1 \
+gcloud run services describe nv-horizon-api --region us-central1 \
   --format="value(status.traffic[0].revisionName)"
 
 # Если не последняя - принудительно переключить
-gcloud run services update-traffic etigram-api --region us-central1 --to-latest
+gcloud run services update-traffic nv-horizon-api --region us-central1 --to-latest
 ```
 
 ### 2. Проверить логи на ошибки
 
 ```bash
 # Последние 50 строк логов backend
-gcloud run services logs read etigram-api --region us-central1 --limit 50
+gcloud run services logs read nv-horizon-api --region us-central1 --limit 50
 
 # Следить за логами в реальном времени
-gcloud run services logs tail etigram-api --region us-central1
+gcloud run services logs tail nv-horizon-api --region us-central1
 ```
 
 ### 3. Health Check
 
 ```bash
 # Backend API
-API_URL=$(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')
+API_URL=$(gcloud run services describe nv-horizon-api --region us-central1 --format='value(status.url)')
 curl "$API_URL/healthz"
 
 # Telegram Service
-TG_URL=$(gcloud run services describe etigram-telegram --region us-central1 --format='value(status.url)')
+TG_URL=$(gcloud run services describe nv-horizon-telegram --region us-central1 --format='value(status.url)')
 curl $TG_URL/health
 ```
 
@@ -189,7 +189,7 @@ gcloud projects add-iam-policy-binding $(gcloud config get-value project) \
 **Решение**:
 ```bash
 # 1. Принудительно переключить трафик
-gcloud run services update-traffic etigram-api --region us-central1 --to-latest
+gcloud run services update-traffic nv-horizon-api --region us-central1 --to-latest
 
 # 2. Очистить кэш браузера или Hard Refresh (Ctrl+Shift+R)
 ```
@@ -227,7 +227,7 @@ wsl bash scripts/deploy
 |-----------|--------|--------|
 | GCP Secrets | `lowercase_underscore` | `vertex_api_key` |
 | Env Vars (код) | `UPPERCASE_UNDERSCORE` | `GEMINI_API_KEY` |
-| Cloud Run Services | `lowercase-dash` | `etigram-api` |
+| Cloud Run Services | `lowercase-dash` | `nv-horizon-api` |
 | Pub/Sub Topics | `lowercase.dot` | `discovery.status` |
 | Firestore Collections | `lowercase_underscore` | `core_projects` |
 | Service Accounts | `name@project.iam.gserviceaccount.com` | `backend@sanskrite.iam.gserviceaccount.com` |
@@ -272,17 +272,17 @@ wsl bash scripts/deploy
 
 ```bash
 # Проверить статус сервиса
-gcloud run services describe etigram-api --region us-central1
+gcloud run services describe nv-horizon-api --region us-central1
 
 # Посмотреть все ревизии
-gcloud run revisions list --service etigram-api --region us-central1
+gcloud run revisions list --service nv-horizon-api --region us-central1
 
 # Посмотреть env vars текущего сервиса
-gcloud run services describe etigram-api --region us-central1 \
+gcloud run services describe nv-horizon-api --region us-central1 \
   --format="value(spec.template.spec.containers[0].env)"
 
 # Посмотреть привязанные секреты
-gcloud run services describe etigram-api --region us-central1 \
+gcloud run services describe nv-horizon-api --region us-central1 \
   --format="value(spec.template.spec.containers[0].env)"
 
 # Проверить IAM роли service account
@@ -317,15 +317,15 @@ gcloud pubsub topics list
 
 ```bash
 # 1. Посмотреть предыдущую ревизию
-gcloud run revisions list --service etigram-api --region us-central1 --limit 5
+gcloud run revisions list --service nv-horizon-api --region us-central1 --limit 5
 
-# 2. Переключить трафик на предыдущую (например, etigram-api-00006)
-gcloud run services update-traffic etigram-api \
+# 2. Переключить трафик на предыдущую (например, nv-horizon-api-00006)
+gcloud run services update-traffic nv-horizon-api \
   --region us-central1 \
-  --to-revisions etigram-api-00006=100
+  --to-revisions nv-horizon-api-00006=100
 
 # 3. Проверить что откатились
-curl "$(gcloud run services describe etigram-api --region us-central1 --format='value(status.url)')/healthz"
+curl "$(gcloud run services describe nv-horizon-api --region us-central1 --format='value(status.url)')/healthz"
 ```
 
 ---

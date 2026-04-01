@@ -71,6 +71,10 @@ type Lens struct {
 	// Populated when scope contains /artifact/ entries (supply chains, governance chains, etc.).
 	// Serves as both a cache for graph loading and a registry for frontend to enumerate chains.
 	ScopeArtifacts map[string]ScopeArtifactRef `json:"scopeArtifacts,omitempty" firestore:"scopeArtifacts,omitempty"`
+
+	// ResearchObjects accumulates object refs discovered during lens research, even when they
+	// never entered the explicit lens scope. Dedup is by canonical path key at merge time.
+	ResearchObjects map[string]LensResearchObjectRef `json:"researchObjects,omitempty" firestore:"researchObjects,omitempty"`
 }
 
 // ScopeArtifactRef caches metadata for a MaterializedArtifact referenced from lens scope.
@@ -92,6 +96,15 @@ type ScopeArtifactRef struct {
 	PathStressScore    float64  `json:"pathStressScore,omitempty" firestore:"pathStressScore,omitempty"`
 	BottleneckLegIndex int      `json:"bottleneckLegIndex,omitempty" firestore:"bottleneckLegIndex,omitempty"`
 	RecoveryLatencyHrs float64  `json:"recoveryLatencyHours,omitempty" firestore:"recoveryLatencyHours,omitempty"`
+}
+
+// LensResearchObjectRef tracks a discovered object related to the lens research universe.
+type LensResearchObjectRef struct {
+	CanonicalPath   string     `json:"canonicalPath" firestore:"canonicalPath"`
+	SourceKinds     []string   `json:"sourceKinds,omitempty" firestore:"sourceKinds,omitempty"`
+	LastSourceJobID string     `json:"lastSourceJobId,omitempty" firestore:"lastSourceJobId,omitempty"`
+	FirstSeenAt     *time.Time `json:"firstSeenAt,omitempty" firestore:"firstSeenAt,omitempty"`
+	LastSeenAt      *time.Time `json:"lastSeenAt,omitempty" firestore:"lastSeenAt,omitempty"`
 }
 
 // LensIntent is a living question the user wants to answer within the lens.

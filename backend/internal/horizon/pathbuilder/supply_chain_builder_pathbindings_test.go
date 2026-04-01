@@ -2,6 +2,7 @@ package pathbuilder
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
@@ -78,6 +79,130 @@ func TestPathToMaterializedPayload_IncludesViaNodesAndLegs(t *testing.T) {
 	}
 	if legs[0].Stress == nil || legs[0].Stress.StressScore <= 0 {
 		t.Fatal("expected leg stress")
+	}
+}
+
+func TestSelectPrimaryAndAlternateFlowRefs_PrefersResolvedGeometryFlows(t *testing.T) {
+	primary, alternate := selectPrimaryAndAlternateFlowRefs(
+		[]string{"sea_us_gulf_jebel_ali_via_suez"},
+		[]string{"legacy_guess"},
+		[]string{"sea_jebel_ali_sohar_feeder"},
+		"sea",
+	)
+	if len(primary) != 1 || primary[0] != "sea_jebel_ali_sohar_feeder" {
+		t.Fatalf("primary=%v, want resolved geometry flow", primary)
+	}
+	if len(alternate) != 2 {
+		t.Fatalf("alternate=%v, want both legacy alternatives", alternate)
+	}
+}
+
+func TestSelectPrimaryAndAlternateFlowRefs_PrefersSeaLabelOverLandWhenModeIsSea(t *testing.T) {
+	primary, alternate := selectPrimaryAndAlternateFlowRefs(
+		nil,
+		nil,
+		[]string{"land_port_of_shanghai_baowu_dri", "sea_shanghai_sohar_via_malacca"},
+		"sea",
+	)
+	if len(primary) != 2 || primary[0] != "sea_shanghai_sohar_via_malacca" {
+		t.Fatalf("primary=%v, want sea flow first", primary)
+	}
+	if len(alternate) != 0 {
+		t.Fatalf("alternate=%v, want empty", alternate)
+	}
+}
+
+func TestPruneAbstractNetworkViaRefs_DropsSyntheticRailNetworkWhenRailFlowExists(t *testing.T) {
+	got := PruneAbstractNetworkViaRefs(
+		"rail",
+		[]string{"rail_russia_europe"},
+		[]string{"/fac/ru/rzd-rail-network", "/fac/kz/dostyk-rail-terminal"},
+	)
+	want := []string{"/fac/kz/dostyk-rail-terminal"}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("via=%v, want %v", got, want)
+	}
+}
+
+func TestPruneAbstractNetworkViaRefs_DropsSyntheticRailNetworkWithoutRailBinding(t *testing.T) {
+	got := PruneAbstractNetworkViaRefs(
+		"",
+		nil,
+		[]string{"/fac/kz/ktz-rail-network", "/fac/kz/taraz-rail-terminal"},
+	)
+	want := []string{"/fac/kz/taraz-rail-terminal"}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("via=%v, want %v", got, want)
+	}
+}
+
+func TestPruneAbstractNetworkViaRefs_DropsSyntheticDistributionNetwork(t *testing.T) {
+	got := PruneAbstractNetworkViaRefs(
+		"rail",
+		[]string{"rail_russia_europe"},
+		[]string{"/fac/ru/phosagro-region-distribution-network", "/fac/ru-kz/iletsk-rail-crossing"},
+	)
+	want := []string{"/fac/ru-kz/iletsk-rail-crossing"}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("via=%v, want %v", got, want)
+	}
+}
+
+func TestCollapseAbstractNetworkSegments_MergesSyntheticRailNetworkHop(t *testing.T) {
+	segments := collapseAbstractNetworkSegments([]PathSegment{
+		{
+			SupplierRef: "/fac/ru/balakovo-apatit-plant",
+			ProductRef:  "/product/chemical/fertilizer/ammonium-sulphate",
+			CustomerRef: "/fac/ru/rzd-rail-network",
+			Confidence:  0.8,
+		},
+		{
+			SupplierRef: "/fac/ru/rzd-rail-network",
+			ProductRef:  "/product/chemical/fertilizer/ammonium-sulphate",
+			CustomerRef: "/fac/kz/phosagro-kazakhstan-astana-dc",
+			TransportViaRefs: []string{
+				"/fac/kz/dostyk-rail-terminal",
+			},
+			Confidence: 0.7,
+		},
+	})
+	if len(segments) != 1 {
+		t.Fatalf("segments=%d, want 1", len(segments))
+	}
+	if segments[0].SupplierRef != "/fac/ru/balakovo-apatit-plant" || segments[0].CustomerRef != "/fac/kz/phosagro-kazakhstan-astana-dc" {
+		t.Fatalf("merged segment=%+v", segments[0])
+	}
+	if len(segments[0].TransportViaRefs) != 1 || segments[0].TransportViaRefs[0] != "/fac/kz/dostyk-rail-terminal" {
+		t.Fatalf("merged via=%v", segments[0].TransportViaRefs)
+	}
+}
+
+func TestCollapseAbstractNetworkSegments_MergesSyntheticDistributionNetworkHop(t *testing.T) {
+	segments := collapseAbstractNetworkSegments([]PathSegment{
+		{
+			SupplierRef: "/fac/ru/balakovo-apatit-plant",
+			ProductRef:  "/product/chemical/fertilizer/ammonium-sulphate",
+			CustomerRef: "/fac/ru/phosagro-region-distribution-network",
+			Confidence:  0.8,
+		},
+		{
+			SupplierRef: "/fac/ru/phosagro-region-distribution-network",
+			ProductRef:  "/product/chemical/fertilizer/ammonium-sulphate",
+			CustomerRef: "/fac/kz/astana-agrochemical-hub",
+			TransportViaRefs: []string{
+				"/fac/ru-kz/iletsk-rail-crossing",
+			},
+			Confidence: 0.7,
+		},
+	})
+	if len(segments) != 1 {
+		t.Fatalf("segments=%d, want 1", len(segments))
+	}
+	if segments[0].SupplierRef != "/fac/ru/balakovo-apatit-plant" || segments[0].CustomerRef != "/fac/kz/astana-agrochemical-hub" {
+		t.Fatalf("merged segment=%+v", segments[0])
+	}
+	if len(segments[0].TransportViaRefs) != 1 || segments[0].TransportViaRefs[0] != "/fac/ru-kz/iletsk-rail-crossing" {
+		t.Fatalf("merged via=%v", segments[0].TransportViaRefs)
 	}
 }
 
@@ -215,5 +340,38 @@ func TestSupplyChainPathBuilder_MaterializationStageNamesIncludeRouteOverlays(t 
 	}
 	if !found {
 		t.Fatalf("stages=%v, want route_overlays", stageNames)
+	}
+}
+
+func TestPrepareMaterializedPathArtifactsBatch_ReportsUnresolvedSupplyLinkRefs(t *testing.T) {
+	builder := NewSupplyChainPathBuilder(nil, nil, nil)
+	_, _, err := builder.PrepareMaterializedPathArtifactsBatch(
+		context.Background(),
+		[]*SupplyChainPath{{
+			Segments: []PathSegment{{
+				SupplierRef: "/org/kz/damu-entrepreneurship-development-fund",
+				ProductRef:  "/product/finished/consumer/footwear",
+				CustomerRef: "/market/kz/retail/footwear",
+			}},
+			Confidence: 0.74,
+			BuildMode:  "test",
+			MaxDepth:   2,
+		}},
+		"global",
+		"lens-test",
+		[]string{"/supply-chain/global/damu-footwear"},
+	)
+	if err == nil {
+		t.Fatal("expected unresolved supply-link validation error")
+	}
+	errText := err.Error()
+	if !strings.Contains(errText, "key=/supply-chain/global/damu-footwear") {
+		t.Fatalf("error=%q, want canonical key", errText)
+	}
+	if !strings.Contains(errText, "unresolved supply-link refs=") {
+		t.Fatalf("error=%q, want unresolved supply-link details", errText)
+	}
+	if !strings.Contains(errText, "/org/kz/damu-entrepreneurship-development-fund -> /product/finished/consumer/footwear -> /market/kz/retail/footwear") {
+		t.Fatalf("error=%q, want segment triple", errText)
 	}
 }

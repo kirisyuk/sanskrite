@@ -88,6 +88,8 @@ func TestBuildPromptContainsStrictContract(t *testing.T) {
 		"Allowed step kinds ONLY: pass_through, transformation, assembly",
 		"ore -> vehicle",
 		"tire -> vehicle",
+		"semiconductor lithography tool",
+		"industrial or institutional consuming facility",
 		"Return EXACTLY one strict JSON object",
 		"whyNearestStep",
 		"whyNotBroaderStep",

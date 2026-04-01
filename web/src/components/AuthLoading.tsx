@@ -9,8 +9,8 @@ const START_MESSAGES = [
   'Thinking differently...',
   'Not agreeing. Thinking.',
   'Beyond yes or no',
-  'This is Etigram',
-  'etigram.one',
+  'This is Horizon',
+  'horizon.nordicvision.io',
   'Pushing boundaries',
   'That one',
   'Questions you haven\'t thought of.',
@@ -31,10 +31,10 @@ export const AuthLoading: React.FC<AuthLoadingProps> = ({ message = 'Signing you
   
   // Render message with special formatting
   const renderMessage = () => {
-    if (randomMessage === 'etigram.one') {
+    if (randomMessage === 'horizon.nordicvision.io') {
       return (
         <>
-          etigram<span style={{ color: '#20b2aa' }}>.</span>one
+          horizon<span style={{ color: '#20b2aa' }}>.</span>nordicvision.io
         </>
       );
     }

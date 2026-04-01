@@ -6,6 +6,7 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 import maplibregl from 'maplibre-gl';
+import { resolveApiBaseUrl } from '../lib/gcpBackend';
 
 const SRC = 'vessels-src';
 const LAYER = 'vessels-layer';
@@ -27,8 +28,7 @@ const env = (import.meta as unknown as { env: Record<string, string> }).env ?? {
 function getApiUrl(): string {
   const custom = env.VITE_VESSEL_API_URL;
   if (custom) return custom;
-  const base = env.VITE_API_BASE_URL || 'http://localhost:8080';
-  return `${base.replace(/\/$/, '')}/api/v1/vessels/bbox`;
+  return `${resolveApiBaseUrl()}/api/v1/vessels/bbox`;
 }
 
 function isBackendProxy(): boolean {

@@ -1,6 +1,6 @@
 {
   "collectionGroupId": "rag_documents",
-  "datasetId": "etigram_documents",
+  "datasetId": "nv_horizon_documents",
   "tableId": "documents_metadata",
   "location": "US",
   "useNewSchema": true,

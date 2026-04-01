@@ -52,7 +52,7 @@ type lensCandidate struct {
 func main() {
 	ctx := context.Background()
 
-	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	tenantID := flag.String("tenant", "all", "tenant id or all")
 	lensID := flag.String("lens-id", "", "exact lens id")
 	lensQuery := flag.String("lens-query", "asml", "substring used to auto-select lens when -lens-id is empty")
@@ -293,7 +293,7 @@ func buildAIServices(ctx context.Context, projectID string, modelManager *ai.AIM
 			logger.Printf("Vertex AI init skipped: %v", err)
 		} else {
 			if ds := strings.TrimSpace(firstNonEmpty(
-				os.Getenv("VERTEX_SEARCH_ETIGRAM_DATA_STORE_ID"),
+				os.Getenv("VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID"),
 				os.Getenv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID"),
 			)); ds != "" {
 				vertexService = vertexService.WithDataStore(ds)

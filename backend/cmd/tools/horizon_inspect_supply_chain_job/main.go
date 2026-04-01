@@ -132,7 +132,7 @@ type inspectionReport struct {
 func main() {
 	ctx := context.Background()
 
-	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	jobID := flag.String("job", "", "scouting job id")
 	jsonOut := flag.Bool("json", true, "emit json")
 	flag.Parse()

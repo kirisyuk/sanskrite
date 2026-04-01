@@ -11,7 +11,7 @@ import (
 func qstr(m map[string]interface{}, key string) string { if m==nil {return ""}; if v,ok:=m[key]; ok && v!=nil { return strings.TrimSpace(fmt.Sprintf("%v", v))}; return "" }
 func metric(state map[string]models.MetricValue, key string) float64 { if v,ok:=state[key]; ok { return v.Value }; return 0 }
 func main(){
- ctx:=context.Background(); fs,err:=firestore.NewClient(ctx,"etigram"); if err!=nil { panic(err)}; defer fs.Close()
+ ctx:=context.Background(); fs,err:=firestore.NewClient(ctx,"nv-horizon"); if err!=nil { panic(err)}; defer fs.Close()
  docs,err:=fs.Collection("horizon_fragments").Where("tenantId","==","global").Where("type","==", string(models.FragmentTypeAffectedZone)).Documents(ctx).GetAll(); if err!=nil { panic(err)}
  cutoff:=time.Now().UTC().Add(-6*time.Hour)
  type row struct{Path,Title,URL,GeoPrecision,Cond,Reason,SourceCC,Updated,Status string; Hype float64}

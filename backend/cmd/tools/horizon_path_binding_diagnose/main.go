@@ -44,7 +44,7 @@ type bindEngine struct {
 
 func main() {
 	ctx := context.Background()
-	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "etigram"), "GCP project id")
+	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
 	tenantID := flag.String("tenant", "global", "tenant id")
 	limit := flag.Int("limit", 1200, "max supply links to inspect")
 	samples := flag.Int("samples", 8, "sample count per bucket")

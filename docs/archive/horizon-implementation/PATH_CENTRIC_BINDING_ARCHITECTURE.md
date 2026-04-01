@@ -174,7 +174,7 @@ The correct sequence is:
 
 Use the diagnostic tool:
 
-`go run ./cmd/tools/horizon_path_binding_diagnose --project=etigram --tenant=global --limit=8000 --samples=3`
+`go run ./cmd/tools/horizon_path_binding_diagnose --project=nv-horizon --tenant=global --limit=8000 --samples=3`
 
 What it measures:
 - `flow_bound`

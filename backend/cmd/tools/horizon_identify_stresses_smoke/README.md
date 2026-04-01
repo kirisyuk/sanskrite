@@ -12,9 +12,9 @@ Typical usage:
 
 ```bash
 cd backend
-go run ./cmd/tools/horizon_identify_stresses_smoke -project etigram -tenant all -list
-go run ./cmd/tools/horizon_identify_stresses_smoke -project etigram -tenant 'igor@etigram.pro' -lens-id BakrpGUDgGR0wGF8tJXZ -apply=false
-go run ./cmd/tools/horizon_identify_stresses_smoke -project etigram -tenant 'igor@etigram.pro' -lens-id BakrpGUDgGR0wGF8tJXZ -apply=true
+go run ./cmd/tools/horizon_identify_stresses_smoke -project nv-horizon -tenant all -list
+go run ./cmd/tools/horizon_identify_stresses_smoke -project nv-horizon -tenant 'igor@nordicvision.org' -lens-id BakrpGUDgGR0wGF8tJXZ -apply=false
+go run ./cmd/tools/horizon_identify_stresses_smoke -project nv-horizon -tenant 'igor@nordicvision.org' -lens-id BakrpGUDgGR0wGF8tJXZ -apply=true
 ```
 
 Artifacts are written under `backend/tmp/identify_stresses_smoke_<lens>_<timestamp>/`:

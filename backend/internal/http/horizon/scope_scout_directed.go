@@ -109,12 +109,16 @@ func shouldRouteDirectedExplorationToOneHop(targetCanonicalPath string, cfg *hor
 	if cfg == nil {
 		return false
 	}
-	// Public downstream ORG/FAC exploration should converge on the canonical one-hop runtime.
-	// Legacy directed exploration remains only as a compatibility path for upstream and non-ORG/FAC cases.
+	// Only explicit hot-path-only downstream requests should collapse to one-hop.
+	// Full directed exploration must stay on the recursive runtime so the graph can
+	// continue through consumer branches and longer downstream cascades.
 	if strings.TrimSpace(strings.ToLower(cfg.DomainMode)) != taxonomy.DomainModeSupplyChain {
 		return false
 	}
 	if strings.TrimSpace(strings.ToLower(cfg.Direction)) != "downstream" {
+		return false
+	}
+	if !cfg.HotPathOnly {
 		return false
 	}
 	return isAllowedOneHopSupplyChainAnchorPath(targetCanonicalPath)

@@ -334,6 +334,113 @@ func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantAdministersAndSubsidi
 	}
 }
 
+func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantManagesAndAffects(t *testing.T) {
+	if !IsAllowedSupplyChainRuntimeRelation(
+		"/org/kz/damu-entrepreneurship-development-fund",
+		"/program/kz/business-roadmap-2025",
+		models.DependencyTypeManages,
+	) {
+		t.Fatal("supply-chain runtime gate must allow MANAGES for org->program overlays")
+	}
+	if !IsAllowedSupplyChainPersistRelation(
+		"/org/kz/damu-entrepreneurship-development-fund",
+		"/market/kz/logistics/cross-border-trade",
+		models.DependencyTypeAffects,
+	) {
+		t.Fatal("supply-chain persist gate must allow AFFECTS for org->market overlays")
+	}
+	if IsAllowedSupplyChainRuntimeRelation(
+		"/product/finished/consumer/footwear",
+		"/market/kz/logistics/cross-border-trade",
+		models.DependencyTypeAffects,
+	) {
+		t.Fatal("product source must remain out of contract for supply-chain AFFECTS overlays")
+	}
+}
+
+func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantPolicyImpactOverlays(t *testing.T) {
+	cases := []struct {
+		name   string
+		source string
+		target string
+		typ    models.DependencyType
+	}{
+		{
+			name:   "influences program to market pricing",
+			source: "/program/kz/digital-footwear-labeling",
+			target: "/market/kz/retail/apparel/footwear/pricing",
+			typ:    models.DependencyTypeInfluences,
+		},
+		{
+			name:   "gatekeeps decision gov to decision",
+			source: "/gov/kz/ministry-of-industry-and-construction",
+			target: "/decision/trade/mandatory-labeling-enforcement",
+			typ:    models.DependencyTypeGatekeepsDecision,
+		},
+		{
+			name:   "uses mechanism decision to mechanism",
+			source: "/decision/trade/mandatory-labeling-enforcement",
+			target: "/mechanism/regulatory/compulsory-data-matrix-marking",
+			typ:    models.DependencyTypeUsesMechanism,
+		},
+		{
+			name:   "regulates gov to market",
+			source: "/gov/kz/ministry-of-industry-and-construction",
+			target: "/market/kz/retail/footwear",
+			typ:    models.DependencyTypeRegulates,
+		},
+		{
+			name:   "imposes condition mechanism to market",
+			source: "/mechanism/technological/is-mtt-traceability-system",
+			target: "/market/kz/retail/footwear",
+			typ:    models.DependencyTypeImposesCondition,
+		},
+		{
+			name:   "controls access org to market",
+			source: "/org/kz/kazakhtelecom",
+			target: "/market/kz/retail/footwear",
+			typ:    models.DependencyTypeControlsAccess,
+		},
+		{
+			name:   "operates via mechanism to mechanism",
+			source: "/mechanism/technological/is-mtt-traceability-system",
+			target: "/mechanism/regulatory/compulsory-data-matrix-marking",
+			typ:    models.DependencyTypeOperatesVia,
+		},
+	}
+
+	for _, tc := range cases {
+		if !IsAllowedSupplyChainRuntimeRelation(tc.source, tc.target, tc.typ) {
+			t.Fatalf("%s: runtime gate rejected %s -> %s (%s)", tc.name, tc.source, tc.target, tc.typ)
+		}
+		if !IsAllowedSupplyChainPersistRelation(tc.source, tc.target, tc.typ) {
+			t.Fatalf("%s: persist gate rejected %s -> %s (%s)", tc.name, tc.source, tc.target, tc.typ)
+		}
+	}
+
+	if IsAllowedSupplyChainRuntimeRelation(
+		"/product/finished/consumer/footwear",
+		"/decision/trade/mandatory-labeling-enforcement",
+		models.DependencyTypeGatekeepsDecision,
+	) {
+		t.Fatal("product source must remain out of contract for GATEKEEPS_DECISION")
+	}
+	if IsAllowedSupplyChainRuntimeRelation(
+		"/decision/trade/mandatory-labeling-enforcement",
+		"/market/kz/retail/footwear",
+		models.DependencyTypeUsesMechanism,
+	) {
+		t.Fatal("USES_MECHANISM must still require a mechanism target")
+	}
+	if IsAllowedSupplyChainRuntimeRelation(
+		"/product/finished/consumer/footwear",
+		"/mechanism/regulatory/compulsory-data-matrix-marking",
+		models.DependencyTypeOperatesVia,
+	) {
+		t.Fatal("OPERATES_VIA must still reject product sources")
+	}
+}
+
 func TestFilterDomainRelations_GovernanceAllowsFacilityTargets(t *testing.T) {
 	in := []agents.DiscoveredRelation{{
 		RelationType:        "OWNS",

@@ -11,13 +11,16 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/services"
 )
 
 // ArtifactsHandler manages CRUD for artifacts (CoreDoc with docType = dynamic_artifact)
 type ArtifactsHandler struct {
-	coreDocs *repo.CoreDocsRepo
-	storage  StorageClient
-	bucket   string
+	coreDocs     *repo.CoreDocsRepo
+	storage      StorageClient
+	bucket       string
+	templates    *services.ArtifactTemplateService
+	orchestrator *services.ArtifactOrchestratorService
 }
 
 func NewArtifactsHandler(core *repo.CoreDocsRepo) *ArtifactsHandler {
@@ -28,6 +31,16 @@ func NewArtifactsHandler(core *repo.CoreDocsRepo) *ArtifactsHandler {
 func (h *ArtifactsHandler) WithStorage(storage StorageClient, bucket string) *ArtifactsHandler {
 	h.storage = storage
 	h.bucket = bucket
+	return h
+}
+
+func (h *ArtifactsHandler) WithTemplateService(service *services.ArtifactTemplateService) *ArtifactsHandler {
+	h.templates = service
+	return h
+}
+
+func (h *ArtifactsHandler) WithOrchestrator(orchestrator *services.ArtifactOrchestratorService) *ArtifactsHandler {
+	h.orchestrator = orchestrator
 	return h
 }
 
@@ -191,6 +204,180 @@ func (h *ArtifactsHandler) CreateArtifact(w http.ResponseWriter, r *http.Request
 	WriteJSON(w, http.StatusCreated, map[string]string{"id": id})
 }
 
+// CreateArtifactFromTemplate creates a dynamic artifact from a template and optional graph context.
+// POST /api/v1/projects/:projectId/artifacts/from-template
+func (h *ArtifactsHandler) CreateArtifactFromTemplate(w http.ResponseWriter, r *http.Request) {
+	auth := GetAuthInfo(r.Context())
+	if auth == nil {
+		WriteUnauthorized(w, "Authentication required")
+		return
+	}
+	if h.templates == nil {
+		WriteInternalError(w, "Template service not configured")
+		return
+	}
+
+	path := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(path) < 6 {
+		WriteBadRequest(w, "INVALID_PATH", "Project ID required")
+		return
+	}
+	projectID := path[3]
+
+	var req struct {
+		TemplateID          string                              `json:"templateId"`
+		Filename            string                              `json:"filename"`
+		UserRequest         *string                             `json:"userRequest,omitempty"`
+		PreferredLanguage   *string                             `json:"preferredLanguage,omitempty"`
+		ContextSources      *models.ArtifactContextSources      `json:"contextSources,omitempty"`
+		GraphSources        []models.ArtifactGraphContextSource `json:"graphSources,omitempty"`
+		SourceInteractionID *string                             `json:"sourceInteractionId,omitempty"`
+		AutoGenerate        bool                                `json:"autoGenerate"`
+		GenerationMode      string                              `json:"generationMode,omitempty"`
+		MaxOutputTokens     *int                                `json:"maxOutputTokens,omitempty"`
+		ThinkingBudget      *int                                `json:"thinkingBudget,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteBadRequest(w, "INVALID_JSON", "Invalid request body")
+		return
+	}
+	if strings.TrimSpace(req.TemplateID) == "" {
+		WriteBadRequest(w, "MISSING_FIELD", "Template ID is required")
+		return
+	}
+
+	template, err := h.templates.GetTemplate(r.Context(), strings.TrimSpace(req.TemplateID), &auth.TenantID)
+	if err != nil || template == nil {
+		WriteNotFound(w, "Template not found")
+		return
+	}
+
+	contextSources := models.ArtifactContextSources{}
+	if req.ContextSources != nil {
+		contextSources = *req.ContextSources
+	}
+	if len(req.GraphSources) > 0 {
+		contextSources.GraphSources = req.GraphSources
+	}
+
+	if len(template.GraphSourceKinds) > 0 {
+		if !templateMatchesGraphSources(template, contextSources.GraphSources) {
+			WriteBadRequest(w, "TEMPLATE_CONTEXT_MISMATCH", "Template is not compatible with the provided graph sources")
+			return
+		}
+	}
+
+	preferredLanguage := "en"
+	if req.PreferredLanguage != nil && strings.TrimSpace(*req.PreferredLanguage) != "" {
+		preferredLanguage = strings.TrimSpace(*req.PreferredLanguage)
+	}
+	systemPrompt := strings.TrimSpace(firstTemplatePrompt(template.SystemPrompts, preferredLanguage))
+	if systemPrompt == "" {
+		systemPrompt = "You are a helpful assistant."
+	}
+
+	defaultModel := strings.TrimSpace(template.RecommendedSectionModel)
+	if defaultModel == "" {
+		defaultModel = "gemini-fast"
+	}
+	orchestratorModel := strings.TrimSpace(template.RecommendedOrchestratorModel)
+	if orchestratorModel == "" {
+		orchestratorModel = defaultModel
+	}
+
+	structure := make([]models.ArtifactSection, 0, len(template.DefaultStructure))
+	for _, section := range template.DefaultStructure {
+		description := strings.TrimSpace(section.Description)
+		prompt := strings.TrimSpace(section.PromptTemplate)
+		structure = append(structure, models.ArtifactSection{
+			ID:                section.ID,
+			Title:             section.Title,
+			Order:             section.Order,
+			Prompt:            prompt,
+			Description:       stringPtrIfNotEmpty(description),
+			Required:          section.Required,
+			Editable:          section.Editable,
+			AutoUpdateEnabled: false,
+			DependsOn:         append([]string(nil), section.DependsOn...),
+		})
+	}
+
+	filename := strings.TrimSpace(req.Filename)
+	if filename == "" {
+		filename = strings.TrimSpace(template.Name)
+	}
+	if filename == "" {
+		filename = "Dynamic Document"
+	}
+
+	now := time.Now().UTC()
+	docType := "dynamic_artifact"
+	artifact := &models.CoreDoc{
+		TenantID:    auth.TenantID,
+		ProjectID:   projectID,
+		Filename:    filename,
+		ContentType: "text/markdown",
+		DocType:     &docType,
+		ArtifactConfig: &models.ArtifactConfig{
+			Format:            firstNonEmptyValue(template.RecommendedFormat, "report"),
+			Focus:             firstNonEmptyValue(template.RecommendedFocus, "executive"),
+			OrchestratorModel: orchestratorModel,
+			DefaultModel:      defaultModel,
+			ReviewPrompt:      "Review and refine for clarity, consistency, and completeness.",
+			Structure:         structure,
+			ContextSources:    contextSources,
+			AutoUpdateEnabled: false,
+			VersionsRetained:  10,
+			Versions:          []models.ArtifactVersion{},
+			StructureGeneration: &models.StructureGenerationConfig{
+				Mode:           "template",
+				SourceTemplate: stringPtrIfNotEmpty(template.ID),
+				GeneratedAt:    &now,
+				UserModified:   false,
+			},
+			GenerationSettings: models.GenerationSettings{
+				PreferredLanguage: preferredLanguage,
+				SystemPrompt:      systemPrompt,
+				MaxOutputTokens:   req.MaxOutputTokens,
+				ThinkingBudget:    req.ThinkingBudget,
+			},
+			UserRequest:         req.UserRequest,
+			SourceInteractionID: req.SourceInteractionID,
+		},
+	}
+
+	id, err := h.coreDocs.Create(r.Context(), artifact)
+	if err != nil {
+		WriteInternalError(w, "Failed to create artifact")
+		return
+	}
+	artifact.ID = id
+
+	var session *models.GenerationSession
+	var generationError string
+	if req.AutoGenerate && h.orchestrator != nil {
+		mode := strings.TrimSpace(req.GenerationMode)
+		if mode != "interactive" {
+			mode = "auto"
+		}
+		session, err = h.orchestrator.StartGeneration(r.Context(), services.StartGenerationRequest{
+			ArtifactID: id,
+			Mode:       mode,
+			TenantID:   auth.TenantID,
+			ProjectID:  projectID,
+		})
+		if err != nil {
+			generationError = err.Error()
+		}
+	}
+
+	WriteJSON(w, http.StatusCreated, map[string]any{
+		"artifact":        artifact,
+		"session":         session,
+		"generationError": stringPtrIfNotEmpty(generationError),
+	})
+}
+
 // ListArtifacts lists artifacts for a project
 // GET /api/v1/projects/:projectId/artifacts
 func (h *ArtifactsHandler) ListArtifacts(w http.ResponseWriter, r *http.Request) {
@@ -218,6 +405,66 @@ func (h *ArtifactsHandler) ListArtifacts(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	WriteJSON(w, http.StatusOK, out)
+}
+
+func stringPtrIfNotEmpty(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func firstTemplatePrompt(prompts map[string]string, preferredLanguage string) string {
+	if len(prompts) == 0 {
+		return ""
+	}
+	if prompt := strings.TrimSpace(prompts[strings.ToLower(strings.TrimSpace(preferredLanguage))]); prompt != "" {
+		return prompt
+	}
+	if prompt := strings.TrimSpace(prompts["en"]); prompt != "" {
+		return prompt
+	}
+	for _, prompt := range prompts {
+		if strings.TrimSpace(prompt) != "" {
+			return strings.TrimSpace(prompt)
+		}
+	}
+	return ""
+}
+
+func templateMatchesGraphSources(template *models.ArtifactTemplate, sources []models.ArtifactGraphContextSource) bool {
+	if template == nil {
+		return false
+	}
+	if len(template.GraphSourceKinds) == 0 {
+		return true
+	}
+	if len(sources) == 0 {
+		return false
+	}
+	for _, source := range sources {
+		kind := strings.TrimSpace(source.Kind)
+		if kind == "" {
+			continue
+		}
+		for _, allowed := range template.GraphSourceKinds {
+			if strings.EqualFold(strings.TrimSpace(allowed), kind) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func firstNonEmptyValue(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // GetArtifact returns an artifact by ID

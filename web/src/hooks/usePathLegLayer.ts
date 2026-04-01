@@ -24,6 +24,11 @@ import {
   readLegRouteOverlays,
   selectPrimaryLegRouteOverlay,
 } from '../lib/supplyRouteOverlays';
+import {
+  planCaptionDensity,
+  publishLegCaptionPlan,
+  type LogisticsCaptionPlan,
+} from '../lib/logisticsCaptionPlanner';
 import { GEO_EDGE_SUPPLY_LABEL_LAYER_ID } from './useGeoEdgeLayer';
 
 const SRC = 'path-legs-src';
@@ -53,6 +58,11 @@ const OBJECT_LABEL_CHIP_DARK = 'path-legs-object-label-chip-dark';
 const OBJECT_LABEL_CHIP_LIGHT = 'path-legs-object-label-chip-light';
 const MEANING_LABEL_CHIP_DARK = 'path-legs-meaning-label-chip-dark-v3';
 const MEANING_LABEL_CHIP_LIGHT = 'path-legs-meaning-label-chip-light-v3';
+export const PATH_LEG_LABELS_UPDATED_EVENT = 'horizon.path-leg-labels.updated';
+export const PATH_LEG_MEANING_LABEL_LAYER_ID = LEG_MEANING_LABEL_LAYER;
+export const PATH_LEG_OBJECT_LAYER_ID = LEG_OBJECT_LAYER;
+export const PATH_LEG_INTERACTIVE_LAYERS = [HIT_LAYER, LEG_OBJECT_LAYER, HOVER_OBJECT_LAYER] as const;
+const STANDARD_MAP_OBJECT_CAPTIONS_ONLY = true;
 const HOVER_ACTIVATE_DELAY_MS = 90;
 const HOVER_CLEAR_DELAY_MS = 140;
 const STRESS_FOCUS_WIDTH_MULTIPLIER = 1.02;
@@ -93,11 +103,25 @@ export interface PathLegVisibilityPolicy {
   hypothesisArtifactIds?: string[];
 }
 
+export interface PathLegInteractionHandlers {
+  onHoveredArtifactIdsChange?: (artifactIds: string[]) => void;
+  onSelectedArtifactIdsChange?: (artifactIds: string[]) => void;
+  onSelectObject?: (object: GeoObject) => void;
+}
+
 function canAccessMapStyle(map: maplibregl.Map): boolean {
   try {
     return Boolean((map as unknown as { style?: unknown }).style);
   } catch {
     return false;
+  }
+}
+
+function firePathLegLabelsUpdated(map: maplibregl.Map): void {
+  try {
+    (map as maplibregl.Map & { fire?: (type: string) => void }).fire?.(PATH_LEG_LABELS_UPDATED_EVENT);
+  } catch {
+    /* ignore custom event dispatch failures */
   }
 }
 
@@ -159,6 +183,21 @@ function artifactMatchExpression(artifactId: string): any {
   return ['>=', ['index-of', `|${artifactId}|`, ['coalesce', ['get', 'artifactKey'], '']], 0];
 }
 
+const INACTIVE_PATH_ARTIFACT_EMPHASIS = 0.34;
+const INACTIVE_PATH_ARTIFACT_GLOW_EMPHASIS = 0.32;
+const INACTIVE_PATH_ARTIFACT_WIDTH_MULTIPLIER = 0.68;
+const INACTIVE_PATH_ARTIFACT_MIN_VISIBILITY_WEIGHT = 0.44;
+const INACTIVE_PATH_ARTIFACT_MIN_LINE_OPACITY = 0.08;
+const INACTIVE_PATH_ARTIFACT_MIN_GLOW_OPACITY = 0.024;
+const DIMMED_PATH_LEG_GLOW_MULTIPLIER = 0.52;
+const DIMMED_PATH_LEG_LINE_MULTIPLIER = 0.58;
+const DIMMED_PATH_LEG_ANCHOR_MULTIPLIER = 0.56;
+const DIMMED_PATH_LEG_BOTTLENECK_MULTIPLIER = 0.54;
+const DIMMED_PATH_LEG_DIRECTION_MULTIPLIER = 0.52;
+const DIMMED_PATH_LEG_OBJECT_MULTIPLIER = 0.58;
+const DIMMED_PATH_LEG_LABEL_MULTIPLIER = 0.56;
+const DIMMED_PATH_LEG_MEANING_MULTIPLIER = 0.5;
+
 function glowOpacityExpression(dimmed = false): any {
   const base = ['case', ['boolean', ['get', 'isBottleneck'], false], ['*', ['get', 'glowOpacity'], 1.15], ['get', 'glowOpacity']];
   return dimmed
@@ -167,7 +206,7 @@ function glowOpacityExpression(dimmed = false): any {
       ['*', base, 1.9],
       ['==', ['get', 'pathActive'], 1],
       ['*', base, 1.15],
-      ['*', base, 0.14],
+      ['*', base, DIMMED_PATH_LEG_GLOW_MULTIPLIER],
     ]
     : base;
 }
@@ -180,7 +219,7 @@ function pinnedLineOpacityExpression(dimmed = false): any {
       ['*', base, 1.28],
       ['==', ['get', 'pathActive'], 1],
       ['*', base, 1.05],
-      ['*', base, 0.18],
+      ['*', base, DIMMED_PATH_LEG_LINE_MULTIPLIER],
     ]
     : base;
 }
@@ -193,7 +232,7 @@ function discoveredLineOpacityExpression(dimmed = false): any {
       ['*', base, 1.34],
       ['==', ['get', 'pathActive'], 1],
       ['*', base, 1.08],
-      ['*', base, 0.18],
+      ['*', base, DIMMED_PATH_LEG_LINE_MULTIPLIER],
     ]
     : base;
 }
@@ -204,14 +243,14 @@ function anchorOpacityExpression(dimmed = false): any {
     ? ['case',
       ['==', ['get', 'pathActive'], 1],
       ['*', base, 0.95],
-      ['*', base, 0.26],
+      ['*', base, DIMMED_PATH_LEG_ANCHOR_MULTIPLIER],
     ]
     : base;
 }
 
 function bottleneckOpacityExpression(dimmed = false): any {
   const base = ['*', ['coalesce', ['get', 'circleOpacity'], 0.9], ['coalesce', ['get', 'visibilityWeight'], 1]];
-  return dimmed ? ['*', base, 0.24] : base;
+  return dimmed ? ['*', base, DIMMED_PATH_LEG_BOTTLENECK_MULTIPLIER] : base;
 }
 
 function directionOpacityExpression(dimmed = false): any {
@@ -230,7 +269,7 @@ function directionOpacityExpression(dimmed = false): any {
       ['*', base, 1.05],
       ['==', ['get', 'pathActive'], 1],
       ['*', base, 0.82],
-      ['*', base, 0.28],
+      ['*', base, DIMMED_PATH_LEG_DIRECTION_MULTIPLIER],
     ]
     : base;
 }
@@ -255,7 +294,7 @@ function objectIconOpacityExpression(dimmed = false): any {
     ],
     ['coalesce', ['get', 'visibilityWeight'], 1],
   ];
-  return dimmed ? ['*', base, 0.34] : base;
+  return dimmed ? ['*', base, DIMMED_PATH_LEG_OBJECT_MULTIPLIER] : base;
 }
 
 function objectLabelOpacityExpression(dimmed = false): any {
@@ -268,7 +307,7 @@ function objectLabelOpacityExpression(dimmed = false): any {
     ],
     ['coalesce', ['get', 'visibilityWeight'], 1],
   ];
-  return dimmed ? ['*', base, 0.3] : base;
+  return dimmed ? ['*', base, DIMMED_PATH_LEG_LABEL_MULTIPLIER] : base;
 }
 
 function mapLegMeaningPromotedExpr(): any {
@@ -290,7 +329,7 @@ function meaningLabelOpacityExpression(dimmed = false): any {
   ];
   const base = ['*', inner, ['coalesce', ['get', 'visibilityWeight'], 1]];
   return dimmed
-    ? ['case', mapLegMeaningPromotedExpr(), ['*', base, 0.88], ['*', base, 0.22]]
+    ? ['case', mapLegMeaningPromotedExpr(), ['*', base, 0.9], ['*', base, DIMMED_PATH_LEG_MEANING_MULTIPLIER]]
     : base;
 }
 
@@ -313,7 +352,7 @@ function meaningChipOpacityExpression(dimmed = false): any {
       'case',
       mapLegMeaningPromotedExpr(),
       ['*', base, 0.9],
-      ['*', base, 0.22],
+      ['*', base, DIMMED_PATH_LEG_MEANING_MULTIPLIER],
     ]
     : base;
 }
@@ -368,6 +407,76 @@ function artifactLegCoordinateList(leg: any, ...keys: string[]): [number, number
       })
       .filter((item): item is [number, number] => Boolean(item)),
   );
+}
+
+function isAbstractRailNetworkRef(ref: string): boolean {
+  const normalized = String(ref || '').trim().toLowerCase();
+  return (
+    normalized.endsWith('-rail-network') ||
+    normalized.includes('/rail-network') ||
+    normalized.endsWith('-distribution-network') ||
+    normalized.includes('/distribution-network')
+  );
+}
+
+function uniqueLegStrings(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
+}
+
+function collapseAbstractRailNetworkLegs(legs: any[]): any[] {
+  const out: any[] = [];
+  for (let idx = 0; idx < legs.length; idx += 1) {
+    const current = legs[idx];
+    const currentCustomer = artifactLegString(current, 'customerRef', 'CustomerRef');
+    if (idx + 1 < legs.length && isAbstractRailNetworkRef(currentCustomer)) {
+      const next = legs[idx + 1];
+      const nextSupplier = artifactLegString(next, 'supplierRef', 'SupplierRef');
+      const sameProduct = artifactLegString(current, 'productRef', 'ProductRef') === artifactLegString(next, 'productRef', 'ProductRef');
+      if (currentCustomer && currentCustomer === nextSupplier && sameProduct) {
+        out.push({
+          ...current,
+          customerRef: artifactLegString(next, 'customerRef', 'CustomerRef'),
+          CustomerRef: artifactLegString(next, 'customerRef', 'CustomerRef'),
+          transportViaRefs: uniqueLegStrings([
+            ...artifactLegStringList(current, 'transportViaRefs', 'TransportViaRefs'),
+            ...artifactLegStringList(next, 'transportViaRefs', 'TransportViaRefs'),
+          ].filter((ref) => !isAbstractRailNetworkRef(ref))),
+          TransportViaRefs: uniqueLegStrings([
+            ...artifactLegStringList(current, 'transportViaRefs', 'TransportViaRefs'),
+            ...artifactLegStringList(next, 'transportViaRefs', 'TransportViaRefs'),
+          ].filter((ref) => !isAbstractRailNetworkRef(ref))),
+          flowRefs: uniqueLegStrings([
+            ...artifactLegStringList(current, 'flowRefs', 'FlowRefs'),
+            ...artifactLegStringList(next, 'flowRefs', 'FlowRefs'),
+          ]),
+          FlowRefs: uniqueLegStrings([
+            ...artifactLegStringList(current, 'flowRefs', 'FlowRefs'),
+            ...artifactLegStringList(next, 'flowRefs', 'FlowRefs'),
+          ]),
+          alternateFlowRefs: uniqueLegStrings([
+            ...artifactLegStringList(current, 'alternateFlowRefs', 'AlternateFlowRefs'),
+            ...artifactLegStringList(next, 'alternateFlowRefs', 'AlternateFlowRefs'),
+          ]),
+          AlternateFlowRefs: uniqueLegStrings([
+            ...artifactLegStringList(current, 'alternateFlowRefs', 'AlternateFlowRefs'),
+            ...artifactLegStringList(next, 'alternateFlowRefs', 'AlternateFlowRefs'),
+          ]),
+          routeCoordinates: [],
+          RouteCoordinates: [],
+          routeGeometrySource: '',
+          RouteGeometrySource: '',
+          mode: artifactLegString(current, 'mode', 'Mode') || artifactLegString(next, 'mode', 'Mode'),
+          Mode: artifactLegString(current, 'mode', 'Mode') || artifactLegString(next, 'mode', 'Mode'),
+          routeOverlays: [],
+          RouteOverlays: [],
+        });
+        idx += 1;
+        continue;
+      }
+    }
+    out.push(current);
+  }
+  return out;
 }
 
 function toFixedSafe(value: number | undefined, digits = 2): string {
@@ -501,6 +610,16 @@ function humanizeDiscoveryReason(value: string): string {
 function isApproximateLegGeometrySource(value: string): boolean {
   const raw = String(value || '').trim().toLowerCase();
   return raw === 'fragmentary_waypoint_sequence' || raw === 'partial_segment_geometry';
+}
+
+function shouldPreferFlowGeometry(
+  explicitCoords: [number, number][],
+  flowRefs: string[],
+  routeGeometrySource: string,
+): boolean {
+  return explicitCoords.length >= 2
+    && flowRefs.length > 0
+    && isApproximateLegGeometrySource(routeGeometrySource);
 }
 
 function humanizeFlowMode(value: string): string {
@@ -741,6 +860,20 @@ type ScreenRect = {
   bottom: number;
 };
 
+type MeaningCandidate = {
+  id: string;
+  feature: GeoJSON.Feature;
+  rect: ScreenRect;
+  cellKey: string;
+  dedupeKey: string;
+  active: boolean;
+  stressFocus: boolean;
+  stressScore: number;
+  projected: { x: number; y: number };
+  productRef: string;
+  artifactIds: string[];
+};
+
 function rectsOverlap(a: ScreenRect, b: ScreenRect, padding = 0): boolean {
   return !(
     a.right + padding < b.left
@@ -791,6 +924,82 @@ function legMeaningLabelRect(point: { x: number; y: number }, text: string): Scr
 
 function normalizeMeaningText(value: string): string {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function artifactIdsFromArtifactKey(value: unknown): string[] {
+  return String(value || '')
+    .split('|')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function buildMeaningAggregateCandidates(
+  candidates: MeaningCandidate[],
+  plan: LogisticsCaptionPlan,
+  map: maplibregl.Map,
+): MeaningCandidate[] {
+  const syntheticCandidates: MeaningCandidate[] = [];
+  const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate] as const));
+
+  for (const cluster of plan.aggregates) {
+    const group = cluster.entryIds
+      .map((entryId) => candidateById.get(entryId))
+      .filter((candidate): candidate is MeaningCandidate => Boolean(candidate));
+    if (group.length === 0) continue;
+    const lngLat = map.unproject({ x: cluster.x, y: cluster.y } as maplibregl.PointLike);
+    const aggregateRect = legMeaningLabelRect({ x: cluster.x, y: cluster.y }, cluster.label);
+    const artifactIds = Array.from(new Set(group.flatMap((candidate) => candidate.artifactIds))).filter(Boolean);
+    const primary = [...group].sort((left, right) => {
+      if (left.active !== right.active) return Number(right.active) - Number(left.active);
+      return right.stressScore - left.stressScore;
+    })[0];
+    const primaryProps = ((primary?.feature.properties || {}) as Record<string, any>);
+    const featureId = `meaning-aggregate:${cluster.entryIds[0]}:${cluster.productRefs.slice(0, 3).join('|')}`;
+    const aggregateFeature: GeoJSON.Feature = {
+      type: 'Feature',
+      id: featureId,
+      geometry: {
+        type: 'Point',
+        coordinates: [lngLat.lng, lngLat.lat],
+      },
+      properties: {
+        ...primaryProps,
+        kind: 'leg-meaning',
+        meaningText: cluster.label,
+        artifactId: artifactIds[0] || String(primaryProps.artifactId || '').trim(),
+        artifactKey: artifactKeyForIds(artifactIds),
+        productRef: cluster.productRefs[0] || '',
+        aggregateProductRefs: cluster.productRefs,
+        aggregateProductCount: cluster.productRefs.length,
+        aggregateLegCount: group.length,
+        isMeaningAggregate: 1,
+        stressFocusLeg: 0,
+        stressContextLeg: 0,
+        stressCaption: '',
+        meaningHighlight: 0,
+        pathActive: cluster.active ? 1 : 0,
+        stressScore: cluster.stressScore,
+        visibilityWeight: 1,
+      },
+    };
+
+    syntheticCandidates.push({
+      id: featureId,
+      feature: aggregateFeature,
+      rect: aggregateRect,
+      cellKey: primary.cellKey,
+      dedupeKey: `aggregate:${normalizeMeaningText(cluster.label)}:${cluster.entryIds[0]}`,
+      active: cluster.active,
+      stressFocus: false,
+      stressScore: cluster.stressScore,
+      projected: { x: cluster.x, y: cluster.y },
+      productRef: cluster.productRefs[0] || '',
+      artifactIds,
+    });
+    (aggregateFeature.properties as Record<string, any>).aggregateEntryIds = cluster.entryIds;
+  }
+
+  return syntheticCandidates;
 }
 
 function stylePathLegPopup(popup: maplibregl.Popup, theme: ThemeMode): void {
@@ -902,7 +1111,7 @@ function ensurePathLegLabelChipImages(map: maplibregl.Map, theme: ThemeMode): vo
 function buildViewportPathLegFeatureCollection(
   featureCollection: GeoJSON.FeatureCollection,
   map: maplibregl.Map,
-): GeoJSON.FeatureCollection {
+): { featureCollection: GeoJSON.FeatureCollection; captionPlan: LogisticsCaptionPlan } {
   const features = (featureCollection.features || []).map((feature) => ({
     ...feature,
     geometry: feature.geometry ? JSON.parse(JSON.stringify(feature.geometry)) : feature.geometry,
@@ -1009,15 +1218,7 @@ function buildViewportPathLegFeatureCollection(
 
   const markerRects: ScreenRect[] = [];
   const objectLabelRects: ScreenRect[] = [];
-  const meaningCandidates: Array<{
-    feature: GeoJSON.Feature;
-    rect: ScreenRect;
-    cellKey: string;
-    dedupeKey: string;
-    active: boolean;
-    stressFocus: boolean;
-    stressScore: number;
-  }> = [];
+  const meaningCandidates: MeaningCandidate[] = [];
 
   for (const feature of features) {
     if (feature.geometry?.type !== 'Point') continue;
@@ -1043,6 +1244,7 @@ function buildViewportPathLegFeatureCollection(
     const caption = String(props.stressCaption || '').trim();
     const stressFocusProp = Number(props.meaningHighlight || 0) === 1 || Boolean(caption);
     meaningCandidates.push({
+      id: feature.id != null ? String(feature.id) : dedupeKey,
       feature,
       rect,
       cellKey,
@@ -1050,10 +1252,14 @@ function buildViewportPathLegFeatureCollection(
       active: Number(props.pathActive || 0) === 1,
       stressFocus: stressFocusProp,
       stressScore: Number(props.stressScore || 0),
+      projected,
+      productRef: String(props.productRef || '').trim(),
+      artifactIds: artifactIdsFromArtifactKey(props.artifactKey),
     });
   }
 
-  meaningCandidates.sort((left, right) => {
+  const visibilityCandidates = [...meaningCandidates];
+  visibilityCandidates.sort((left, right) => {
     if (left.stressFocus !== right.stressFocus) return Number(right.stressFocus) - Number(left.stressFocus);
     if (left.active !== right.active) return Number(right.active) - Number(left.active);
     return right.stressScore - left.stressScore;
@@ -1062,8 +1268,9 @@ function buildViewportPathLegFeatureCollection(
   const acceptedRects: ScreenRect[] = [];
   const usedCells = new Map<string, number>();
   const usedMeaningKeys = new Set<string>();
+  const acceptedMeaningCandidates: MeaningCandidate[] = [];
 
-  for (const candidate of meaningCandidates) {
+  for (const candidate of visibilityCandidates) {
     const props = (candidate.feature.properties || {}) as Record<string, any>;
     const suppressForObjectLabels = zoom >= 5.5;
     const suppressForMarkers = zoom >= 7.25;
@@ -1089,11 +1296,46 @@ function buildViewportPathLegFeatureCollection(
     acceptedRects.push(candidate.rect);
     usedCells.set(candidate.cellKey, cellCount + 1);
     usedMeaningKeys.add(candidate.dedupeKey);
+    acceptedMeaningCandidates.push(candidate);
+  }
+
+  const meaningCaptionPlan = planCaptionDensity({
+    zoom,
+    candidates: acceptedMeaningCandidates.map((candidate) => ({
+      id: candidate.id,
+      family: 'leg',
+      productRef: candidate.stressFocus ? '' : candidate.productRef,
+      x: candidate.projected.x,
+      y: candidate.projected.y,
+      width: candidate.rect.right - candidate.rect.left,
+      height: candidate.rect.bottom - candidate.rect.top,
+      active: candidate.active,
+      stressScore: candidate.stressScore,
+      priority: (candidate.stressFocus ? 10_000 : 0) + (candidate.active ? 1_000 : 0) + candidate.stressScore,
+    })),
+    buildAggregateRect: (center, label) => legMeaningLabelRect(center, label),
+    blockedPadding: 0,
+    itemPadding: zoom >= 7 ? 10 : 6,
+    aggregatePadding: zoom >= 7 ? 10 : 6,
+  });
+
+  for (const candidate of acceptedMeaningCandidates) {
+    const props = (candidate.feature.properties || {}) as Record<string, any>;
+    props.meaningVisible = meaningCaptionPlan.visibleEntryIds.has(candidate.id) ? 1 : 0;
+  }
+
+  const syntheticCandidates = buildMeaningAggregateCandidates(acceptedMeaningCandidates, meaningCaptionPlan, map);
+  for (const candidate of syntheticCandidates) {
+    const props = (candidate.feature.properties || {}) as Record<string, any>;
+    props.meaningVisible = 1;
   }
 
   return {
-    type: 'FeatureCollection',
-    features: [...features, ...anchorFeatures],
+    featureCollection: {
+      type: 'FeatureCollection',
+      features: [...features, ...syntheticCandidates.map((candidate) => candidate.feature), ...anchorFeatures],
+    },
+    captionPlan: meaningCaptionPlan,
   };
 }
 
@@ -1239,6 +1481,9 @@ export function usePathLegLayer(
   simulationStressEnabled = false,
   /** Marker layer already shows a name for these object ids; hide path-leg endpoint object chips for them. */
   deferEndpointObjectLabelToMarkerIds?: ReadonlySet<string>,
+  /** HTML overlay owns the endpoint caption for these object ids; keep icon, suppress only text label. */
+  suppressEndpointObjectLabelIds?: ReadonlySet<string>,
+  interactionHandlers?: PathLegInteractionHandlers,
 ) {
   const [stats, setStats] = useState<PathLegLayerStats>({
     artifactCount: 0,
@@ -1295,7 +1540,8 @@ export function usePathLegLayer(
       const artifactId = String(artifact.id || '').trim();
       const isNarrativeActive = !hasActiveArtifacts || activeArtifactSet.has(artifactId);
       const displayName = String(artifact.displayName || artifact.id || 'Supply path').trim();
-      const legs = Array.isArray(artifact.payload?.legs) ? artifact.payload.legs : [];
+      const legsPayload = Array.isArray(artifact.payload?.legs) ? artifact.payload.legs : [];
+      const legs = collapseAbstractRailNetworkLegs(legsPayload);
       const bottleneckIndex = artifact.payload?.stress?.bottleneckLegIndex;
       for (let legArrayIndex = 0; legArrayIndex < legs.length; legArrayIndex += 1) {
         const leg = legs[legArrayIndex];
@@ -1329,7 +1575,8 @@ export function usePathLegLayer(
         const routeGeometrySource = primaryOverlay?.routeGeometrySource
           || artifactLegString(leg, 'routeGeometrySource', 'RouteGeometrySource');
         const overlayMode = primaryOverlay?.mode || artifactLegString(leg, 'mode', 'Mode');
-        const { coords, flowId, flowMode, geometrySource, snapped } = explicitCoords.length >= 2
+        const preferFlowGeometry = shouldPreferFlowGeometry(explicitCoords, flowRefs, routeGeometrySource);
+        const { coords, flowId, flowMode, geometrySource, snapped } = !preferFlowGeometry && explicitCoords.length >= 2
           ? {
             coords: explicitCoords,
             flowId: '',
@@ -1347,6 +1594,10 @@ export function usePathLegLayer(
         const localVisibilityWeight = suppressed
           ? 0
           : clamp(explicitlyRevealed ? Math.max(rawVisibilityWeight, 0.92) : rawVisibilityWeight, 0, 1);
+        const inactiveArtifactContext = hasActiveArtifacts && !isNarrativeActive;
+        const renderedVisibilityWeight = inactiveArtifactContext
+          ? Math.max(localVisibilityWeight, INACTIVE_PATH_ARTIFACT_MIN_VISIBILITY_WEIGHT)
+          : localVisibilityWeight;
         const simulationHotLeg = simulationStressEnabled && (explicitlyRevealed || stressedLegIds.has(legId));
         const visibleStressRefs = refs.filter((ref) => visibleObjectPaths.has(ref));
         const isStressContextLeg = visibleStressRefs.length >= 2
@@ -1358,11 +1609,17 @@ export function usePathLegLayer(
           if (!object?.coordinates) continue;
           const featureKey = object.id || ref;
           const role = refIndex === 0 ? 'supplier' : refIndex === refs.length - 1 ? 'customer' : 'via';
+          if (role === 'via' && preferFlowGeometry && flowMode === 'rail') continue;
           const forcedEndpointVisible = hasActiveArtifacts && isNarrativeActive && (role === 'supplier' || role === 'customer');
           const endpointCaptionForced = simulationHotLeg && (role === 'supplier' || role === 'customer');
           const nextPriority = forcedEndpointVisible ? 108 : role === 'supplier' || role === 'customer' ? 96 : 88;
           const objectNaturallyVisible = visibleObjectIds.has(object.id) || visibleObjectPaths.has(object.canonicalPath);
-          const objectVisibilityWeight = objectNaturallyVisible || forcedEndpointVisible || endpointCaptionForced ? localVisibilityWeight : 0;
+          const objectVisibleInLegLayer = hasActiveArtifacts
+            ? (isNarrativeActive && (objectNaturallyVisible || forcedEndpointVisible || endpointCaptionForced))
+            : (objectNaturallyVisible || forcedEndpointVisible || endpointCaptionForced);
+          const objectVisibilityWeight = objectVisibleInLegLayer
+            ? renderedVisibilityWeight
+            : 0;
           const existing = legObjectFeatures.get(featureKey);
           if (!legObjectArtifactIds.has(featureKey)) legObjectArtifactIds.set(featureKey, new Set<string>());
           legObjectArtifactIds.get(featureKey)!.add(artifactId);
@@ -1409,16 +1666,16 @@ export function usePathLegLayer(
         const isStressFocusLeg = stressedLegIds.has(legId)
           || (simulationStressEnabled && explicitlyRevealed);
         const stressCaption = String(legCaptionById[legId] || '').trim();
-        const emphasis = isNarrativeActive ? 1 : hasActiveArtifacts ? 0.08 : 0.24;
-        const baseLineWidth = (1.35 + stressScore * 2.25 + (isBottleneck ? 0.7 : 0)) * (isStressFocusLeg ? STRESS_FOCUS_WIDTH_MULTIPLIER : isNarrativeActive ? 1 : hasActiveArtifacts ? 0.52 : 0.74);
+        const emphasis = isNarrativeActive ? 1 : hasActiveArtifacts ? INACTIVE_PATH_ARTIFACT_EMPHASIS : 0.24;
+        const baseLineWidth = (1.35 + stressScore * 2.25 + (isBottleneck ? 0.7 : 0)) * (isStressFocusLeg ? STRESS_FOCUS_WIDTH_MULTIPLIER : isNarrativeActive ? 1 : hasActiveArtifacts ? INACTIVE_PATH_ARTIFACT_WIDTH_MULTIPLIER : 0.74);
         const baseLineOpacity = clamp(
-          (0.17 + bindingConfidence * 0.26 + stressScore * 0.18) * (isStressFocusLeg ? STRESS_FOCUS_OPACITY_MULTIPLIER : emphasis) * localVisibilityWeight,
-          0,
+          (0.17 + bindingConfidence * 0.26 + stressScore * 0.18) * (isStressFocusLeg ? STRESS_FOCUS_OPACITY_MULTIPLIER : emphasis) * renderedVisibilityWeight,
+          inactiveArtifactContext ? INACTIVE_PATH_ARTIFACT_MIN_LINE_OPACITY : 0,
           isStressFocusLeg ? STRESS_FOCUS_OPACITY_CAP : 0.62,
         );
         const baseGlowOpacity = clamp(
-          (0.028 + stressScore * 0.08) * (isStressFocusLeg ? STRESS_FOCUS_GLOW_MULTIPLIER : isNarrativeActive ? 1 : hasActiveArtifacts ? 0.08 : 0.2) * localVisibilityWeight,
-          0,
+          (0.028 + stressScore * 0.08) * (isStressFocusLeg ? STRESS_FOCUS_GLOW_MULTIPLIER : isNarrativeActive ? 1 : hasActiveArtifacts ? INACTIVE_PATH_ARTIFACT_GLOW_EMPHASIS : 0.2) * renderedVisibilityWeight,
+          inactiveArtifactContext ? INACTIVE_PATH_ARTIFACT_MIN_GLOW_OPACITY : 0,
           isStressFocusLeg ? STRESS_FOCUS_GLOW_CAP : 0.11,
         );
 
@@ -1481,7 +1738,8 @@ export function usePathLegLayer(
           },
         } as GeoJSON.Feature);
 
-        const meaningPoint = midpoint(anchoredCoords);
+        const meaningPlacement = pointAlongLine(anchoredCoords, 0.5);
+        const meaningPoint = meaningPlacement?.point || null;
         const overlayDescription = describeRouteOverlay(primaryOverlay)
           || humanizeOverlayGeometrySource(routeGeometrySource)
           || humanizeFlowMode(String(flowMode || overlayMode || '').trim());
@@ -1525,7 +1783,9 @@ export function usePathLegLayer(
               kind: 'leg-meaning',
               artifactId,
               legIndex,
+              productRef: artifactLegString(leg, 'productRef', 'ProductRef'),
               meaningText: meaningLabel,
+              meaningBearing: meaningPlacement?.bearing ?? 0,
               color: isStressFocusLeg ? stressFocusColor(theme) : pathLegColor(stressScore, theme),
               pathActive: isNarrativeActive || isStressFocusLeg || isStressContextLeg ? 1 : 0,
               focusMode: hasActiveArtifacts ? 1 : 0,
@@ -1563,8 +1823,8 @@ export function usePathLegLayer(
                 bindingConfidence,
                 isNarrativeActive,
                 color: isStressFocusLeg ? stressFocusColor(theme) : pathLegColor(Math.max(stressScore, 0.6), theme),
-                circleOpacity: (isNarrativeActive ? 0.74 : hasActiveArtifacts ? 0.08 : 0.22) * localVisibilityWeight,
-                visibilityWeight: localVisibilityWeight,
+                circleOpacity: (isNarrativeActive ? 0.74 : hasActiveArtifacts ? 0.34 : 0.22) * renderedVisibilityWeight,
+                visibilityWeight: renderedVisibilityWeight,
                 artifactKey: artifactKeyForIds([artifactId]),
               },
             } as GeoJSON.Feature);
@@ -1581,6 +1841,9 @@ export function usePathLegLayer(
         vw = 0;
       }
       props.visibilityWeight = vw;
+      if (STANDARD_MAP_OBJECT_CAPTIONS_ONLY || (oid && suppressEndpointObjectLabelIds?.has(oid))) {
+        props.labelText = '';
+      }
       const artifactIds = Array.from(legObjectArtifactIds.get(featureKey) || []);
       props.artifactIds = artifactIds;
       props.artifactKey = artifactKeyForIds(artifactIds);
@@ -1601,7 +1864,7 @@ export function usePathLegLayer(
         bottleneckCount,
       } satisfies PathLegLayerStats,
     };
-  }, [activeArtifactIds, artifacts, deferEndpointObjectLabelToMarkerIds, objects, routeVisibility, simulationStressEnabled, theme, visibilityPolicy]);
+  }, [activeArtifactIds, artifacts, deferEndpointObjectLabelToMarkerIds, objects, routeVisibility, simulationStressEnabled, suppressEndpointObjectLabelIds, theme, visibilityPolicy]);
 
   useEffect(() => {
     setStats(data.stats);
@@ -1615,7 +1878,16 @@ export function usePathLegLayer(
     if (!map || !isReady || !canAccessMapStyle(map)) return;
     void ensureMarkerImages(map, data.markerObjects, theme);
     ensurePathLegLabelChipImages(map, theme);
-    const viewportFeatureCollection = buildViewportPathLegFeatureCollection(data.featureCollection, map);
+    const {
+      featureCollection: viewportFeatureCollection,
+      captionPlan: meaningCaptionPlan,
+    } = buildViewportPathLegFeatureCollection(data.featureCollection, map);
+    publishLegCaptionPlan(map as Record<string, any>, enabled ? meaningCaptionPlan : {
+      visibleEntryIds: new Set<string>(),
+      hiddenEntryIds: new Set<string>(),
+      occupiedRects: [],
+      aggregates: [],
+    });
     const activeFeatureCollection: GeoJSON.FeatureCollection = {
       type: 'FeatureCollection',
       features: simulationStressEnabled
@@ -2175,6 +2447,7 @@ export function usePathLegLayer(
 
     const src = map.getSource(SRC) as maplibregl.GeoJSONSource | undefined;
     src?.setData(viewportFeatureCollection as any);
+    if (src) firePathLegLabelsUpdated(map);
     const activeSrc = map.getSource(ACTIVE_SRC) as maplibregl.GeoJSONSource | undefined;
     activeSrc?.setData(activeFeatureCollection as any);
 
@@ -2252,7 +2525,18 @@ export function usePathLegLayer(
     const refreshViewportLabels = () => {
       const src = map.getSource(SRC) as maplibregl.GeoJSONSource | undefined;
       if (!src) return;
-      src.setData(buildViewportPathLegFeatureCollection(data.featureCollection, map) as any);
+      const {
+        featureCollection: viewportFeatureCollection,
+        captionPlan: meaningCaptionPlan,
+      } = buildViewportPathLegFeatureCollection(data.featureCollection, map);
+      publishLegCaptionPlan(map as Record<string, any>, enabled ? meaningCaptionPlan : {
+        visibleEntryIds: new Set<string>(),
+        hiddenEntryIds: new Set<string>(),
+        occupiedRects: [],
+        aggregates: [],
+      });
+      src.setData(viewportFeatureCollection as any);
+      firePathLegLabelsUpdated(map);
     };
     refreshViewportLabels();
     map.on('zoomend', refreshViewportLabels);
@@ -2265,6 +2549,11 @@ export function usePathLegLayer(
 
   useEffect(() => {
     if (!map || !isReady || !canAccessMapStyle(map)) return;
+    const objectById = new Map(
+      data.markerObjects
+        .map((object) => [String(object?.id || '').trim(), object] as const)
+        .filter(([objectId, object]) => Boolean(objectId) && Boolean(object)),
+    );
     const clearHoverIntentTimer = () => {
       if (hoverIntentTimerRef.current != null) {
         window.clearTimeout(hoverIntentTimerRef.current);
@@ -2321,9 +2610,11 @@ export function usePathLegLayer(
       const feature = event.features?.[0];
       const props = (feature?.properties || {}) as Record<string, any>;
       if (!feature || props.kind !== 'leg') return;
+      const selectedArtifactId = String(props.artifactId || '').trim();
       clearHoverIntentTimer();
       clearHoverClearTimer();
-      commitHover(String(props.artifactId || '').trim() || null);
+      commitHover(selectedArtifactId || null);
+      interactionHandlers?.onSelectedArtifactIdsChange?.(selectedArtifactId ? [selectedArtifactId] : []);
       popupRef.current?.remove();
       const parseList = (value: unknown): string[] => {
         if (Array.isArray(value)) return value.map((item) => String(item || '').trim()).filter(Boolean);
@@ -2480,11 +2771,25 @@ export function usePathLegLayer(
         .addTo(map);
       stylePathLegPopup(popupRef.current, theme);
     };
+    const onObjectClick = (event: maplibregl.MapLayerMouseEvent) => {
+      const feature = event.features?.[0];
+      const objectId = String(feature?.properties?.objectId || '').trim();
+      if (!objectId) return;
+      const object = objectById.get(objectId);
+      if (!object) return;
+      interactionHandlers?.onSelectObject?.(object);
+    };
 
     map.on('mouseenter', HIT_LAYER, onEnter);
     map.on('mousemove', HIT_LAYER, onHover);
     map.on('mouseleave', HIT_LAYER, onLeave);
     map.on('click', HIT_LAYER, onClick);
+    map.on('mouseenter', LEG_OBJECT_LAYER, onEnter);
+    map.on('mouseleave', LEG_OBJECT_LAYER, onLeave);
+    map.on('click', LEG_OBJECT_LAYER, onObjectClick);
+    map.on('mouseenter', HOVER_OBJECT_LAYER, onEnter);
+    map.on('mouseleave', HOVER_OBJECT_LAYER, onLeave);
+    map.on('click', HOVER_OBJECT_LAYER, onObjectClick);
     return () => {
       clearHoverIntentTimer();
       clearHoverClearTimer();
@@ -2492,10 +2797,16 @@ export function usePathLegLayer(
       map.off('mousemove', HIT_LAYER, onHover);
       map.off('mouseleave', HIT_LAYER, onLeave);
       map.off('click', HIT_LAYER, onClick);
+      map.off('mouseenter', LEG_OBJECT_LAYER, onEnter);
+      map.off('mouseleave', LEG_OBJECT_LAYER, onLeave);
+      map.off('click', LEG_OBJECT_LAYER, onObjectClick);
+      map.off('mouseenter', HOVER_OBJECT_LAYER, onEnter);
+      map.off('mouseleave', HOVER_OBJECT_LAYER, onLeave);
+      map.off('click', HOVER_OBJECT_LAYER, onObjectClick);
       popupRef.current?.remove();
       popupRef.current = null;
     };
-  }, [map, isReady, styleEpoch, theme]);
+  }, [data.markerObjects, interactionHandlers, map, isReady, styleEpoch, theme]);
 
   return stats;
 }

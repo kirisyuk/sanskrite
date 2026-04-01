@@ -166,6 +166,7 @@ func persistScopedObservationsFromChains(ctx context.Context, e *ScoutEngine, jo
 				continue
 			}
 			productRef := strings.TrimSpace(obs.ProductRef)
+			transportViaRefs := normalizeRouteObservationViaRefs(obs)
 			qualifiers := cloneInterfaceMapForPersistence(obs.Qualifiers)
 			if qualifiers == nil {
 				qualifiers = map[string]interface{}{}
@@ -177,7 +178,7 @@ func persistScopedObservationsFromChains(ctx context.Context, e *ScoutEngine, jo
 				TenantID:                tenantIDFromJob(job),
 				SupplyLinkCanonicalPath: scopedObservationSupplyLinkKey(obs.SupplierRef, obs.CustomerRef, productRef),
 				ProductRef:              productRef,
-				TransportViaRefs:        dedupStrings(obs.TransportVia),
+				TransportViaRefs:        transportViaRefs,
 				Qualifiers:              qualifiers,
 				SourceIDs:               sourceIDs,
 				ObservedAt:              parseObservedAtOrNow(obs.ObservedAt),

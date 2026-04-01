@@ -15,7 +15,7 @@
 
 ## Контекст
 
-По live-audit на `2026-03-07` для реальных RSS потоков и реального Vertex datastore `etigram-fragments-store` были подтверждены три класса проблем:
+По live-audit на `2026-03-07` для реальных RSS потоков и реального Vertex datastore `nv-horizon-fragments-store` были подтверждены три класса проблем:
 
 1. Generic news RSS без явной risk semantics слишком легко деградировал в `risk:temporal_anomaly`.
 2. Semantic seeding без axis-aware фильтрации выбирал текстово близкие, но business-слабо полезные узлы:
@@ -1097,9 +1097,9 @@ Policy:
 Примеры:
 ```bash
 cd backend
-go run ./cmd/tools/horizon_backfill_graph_heuristics --project=etigram --mode=all --page-size=250 --limit=1000
-go run ./cmd/tools/horizon_backfill_graph_heuristics --project=etigram --mode=fragments --path-prefix=/loc/sea --limit=500 --apply
-go run ./cmd/tools/horizon_backfill_graph_heuristics --project=etigram --mode=edges --path-prefix=/fac/ir --limit=1000 --apply
+go run ./cmd/tools/horizon_backfill_graph_heuristics --project=nv-horizon --mode=all --page-size=250 --limit=1000
+go run ./cmd/tools/horizon_backfill_graph_heuristics --project=nv-horizon --mode=fragments --path-prefix=/loc/sea --limit=500 --apply
+go run ./cmd/tools/horizon_backfill_graph_heuristics --project=nv-horizon --mode=edges --path-prefix=/fac/ir --limit=1000 --apply
 ```
 
 Live results on `2026-03-07`:

@@ -168,7 +168,7 @@ func main() {
 	if !*skipGeocoding {
 		nomRaw := geocoding.NominatimOptionsFromEnv()
 		nomCached := geocoding.NewCachedClientWithService(nomRaw, externalCacheRepo, geocoding.CacheOptionsFromEnv(), coreontology.GeocodingProviderNominatim)
-		log.Printf("Nominatim geocoding client enabled (primary, free OSM-based)")
+		log.Printf("Nominatim geocoding client enabled (fallback, free OSM-based)")
 
 		var googleClient coreontology.GeocodingClientInterface
 		gcBase := httphandlers.GetGoogleGeocodingClientFromEnv()
@@ -176,11 +176,11 @@ func main() {
 			gcAdapter := geocoding.NewAdapter(gcBase)
 			geocodingCounter = &countingGeocoding{base: gcAdapter}
 			googleClient = geocoding.NewCachedClientWithService(geocodingCounter, externalCacheRepo, geocoding.CacheOptionsFromEnv(), coreontology.GeocodingProviderGoogle)
-			log.Printf("Google Geocoding client enabled (fallback for Nominatim misses)")
+			log.Printf("Google Geocoding client enabled (primary)")
 		} else {
 			log.Printf("Google Geocoding disabled: GOOGLE_MAPS_API_KEY not set (Nominatim-only mode)")
 		}
-		geocodingClient = geocoding.NewFallbackClient(nomCached, googleClient, log.Default())
+		geocodingClient = geocoding.NewFallbackClient(googleClient, nomCached, log.Default())
 	}
 
 	// Wikidata client (for external KB-ID based coordinate enrichment).

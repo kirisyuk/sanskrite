@@ -98,6 +98,14 @@ Return ONLY valid JSON.`, graphBlock, string(fragmentJSON), string(relationsJSON
 }
 
 func (a *CriticAgent) buildSupplyChainValidationPrompt(input CriticValidatorInput) string {
+	return a.buildOperationalChainValidationPrompt(input, taxonomy.DomainModeSupplyChain)
+}
+
+func (a *CriticAgent) buildServiceChainValidationPrompt(input CriticValidatorInput) string {
+	return a.buildOperationalChainValidationPrompt(input, taxonomy.DomainModeServiceChain)
+}
+
+func (a *CriticAgent) buildOperationalChainValidationPrompt(input CriticValidatorInput, mode string) string {
 	fragmentJSON, _ := json.MarshalIndent(input.Fragment, "", "  ")
 	relationsJSON, _ := json.MarshalIndent(input.Relations, "", "  ")
 	chainsJSON, _ := json.MarshalIndent(input.SupplyChains, "", "  ")
@@ -106,7 +114,24 @@ func (a *CriticAgent) buildSupplyChainValidationPrompt(input CriticValidatorInpu
 	if strings.TrimSpace(input.GraphContext) != "" {
 		graphBlock = "GRAPH CONTEXT:\n" + strings.TrimSpace(input.GraphContext) + "\n\n"
 	}
-	return fmt.Sprintf(`You are a Critic validator for SUPPLY CHAIN mode.
+	mode = strings.TrimSpace(strings.ToLower(mode))
+	title := "SUPPLY CHAIN"
+	workingScopeLabel := "WORKING PRODUCT SCOPE"
+	scopeRule := "productCandidates must be genuinely new scope additions, not duplicates or aliases of products already in workingProductScope or nodes[];"
+	capabilityRule := "when a chain has concrete carrier + product evidence and reusable baseline metrics are evidenced or strongly implied, missing carrierProductObservations must be reported as a capability-evidence gap."
+	qualifierRule := "transmission/logistics qualifiers quality for supply dependencies when present (facet, throughput_share, capacity_constraint, reroute_* best-effort);"
+	topologyRule := "supplyChains node alternation actor→product and facility transformation hops;"
+	coverageRule := "org→fac→product→fac→org tree coverage (child orgs, facilities, products, org-recipients);"
+	if mode == taxonomy.DomainModeServiceChain {
+		title = "SERVICE CHAIN"
+		workingScopeLabel = "WORKING SERVICE/CAPABILITY SCOPE"
+		scopeRule = "productCandidates must be genuinely new service/capability scope additions, not duplicates or aliases of capabilities already in workingProductScope or nodes[];"
+		capabilityRule = "when a chain has concrete provider + capability evidence and reusable baseline metrics are evidenced or strongly implied, missing carrierProductObservations must be reported as a capability-evidence gap."
+		qualifierRule = "delivery/control qualifiers quality when present (availability_slo, latency, failover/recovery, auth_required, approved_vendor_only, service_contract_required, region_lock_in, reroute_* best-effort);"
+		topologyRule = "service-chain node alternation actor→capability and delivery/control-site hops;"
+		coverageRule = "org→fac→service→fac→org coverage (providers, delivery sites, capability nodes, recipient sites, recipient orgs);"
+	}
+	return fmt.Sprintf(`You are a Critic validator for %s mode.
 
 Allowed relation types: %s.
 Allowed actor types: %s.
@@ -120,10 +145,10 @@ FRAGMENT:
 RELATIONS:
 %s
 
-WORKING PRODUCT SCOPE:
+%s:
 %s
 
-SUPPLY CHAINS:
+OPERATIONAL CHAINS:
 %s
 
 Validate:
@@ -133,18 +158,18 @@ Validate:
    - DEPENDS_ON is consumer-side dependency;
    - SUPPLIES_TO is supplier-side flow;
    - avoid contradictory duplicates unless source evidence explicitly supports both directions;
-4. transmission/logistics qualifiers quality for supply dependencies when present (facet, throughput_share, capacity_constraint, reroute_* best-effort);
-5. supplyChains node alternation actor→product and facility transformation hops;
-6. org→fac→product→fac→org tree coverage (child orgs, facilities, products, org-recipients);
+4. %s
+5. %s
+6. %s
 7. qualifier quality (confidence, source hints, transport qualifiers when applicable);
-8. productCandidates must be genuinely new scope additions, not duplicates or aliases of products already in workingProductScope or nodes[];
+8. %s
 9. carrierProductObservations must stay reusable actor×product facts, linkObservations must stay customer/destination-specific, routeObservations must stay transport/path-specific;
 10. do not smear multi-product truth into one SupplyLink. Each link and path leg must stay one-product.
-11. when a chain has concrete carrier + product evidence and reusable baseline metrics are evidenced or strongly implied, missing carrierProductObservations must be reported as a capability-evidence gap.
+11. %s
 
 %s
 
-Return ONLY valid JSON.`, taxonomy.SupplyChainEdgeTypesString(), taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeSupplyChain), taxonomy.ExtendedCanonicalPathRulesPrompt(), graphBlock, string(fragmentJSON), string(relationsJSON), string(scopeJSON), string(chainsJSON), criticValidationOutputSchema)
+Return ONLY valid JSON.`, title, relationTypesPromptForDomainMode(mode), taxonomy.EntityActorTypesForDomainMode(mode), taxonomy.ExtendedCanonicalPathRulesPrompt(), graphBlock, string(fragmentJSON), string(relationsJSON), workingScopeLabel, string(scopeJSON), string(chainsJSON), qualifierRule, topologyRule, coverageRule, scopeRule, capabilityRule, criticValidationOutputSchema)
 }
 
 func (a *CriticAgent) buildGovernanceValidationPrompt(input CriticValidatorInput) string {
@@ -255,38 +280,64 @@ Validate:
 	for _, m := range domainModes {
 		m = strings.TrimSpace(strings.ToLower(m))
 		switch m {
-		case taxonomy.DomainModeSupplyChain:
+		case taxonomy.DomainModeSupplyChain, taxonomy.DomainModeServiceChain:
 			chainsJSON, _ := json.MarshalIndent(input.SupplyChains, "", "  ")
 			scopeJSON, _ := json.MarshalIndent(input.WorkingProductScope, "", "  ")
-			sections = append(sections, fmt.Sprintf(`== SUPPLY CHAIN VALIDATION ==
+			title := "SUPPLY CHAIN"
+			modeForPrompt := taxonomy.DomainModeSupplyChain
+			scopeLabel := "WORKING PRODUCT SCOPE"
+			scopeRule := "productCandidates must be genuinely new scope additions, not duplicates or aliases of workingProductScope or nodes[];"
+			capabilityRule := "when reusable actor×product metrics are evidenced, missing carrierProductObservations is a gap and should be called out explicitly."
+			qualifierRule := "transmission/logistics qualifiers quality when present;"
+			topologyRule := "supplyChains node alternation actor→product and facility transformation hops;"
+			coverageRule := "org→fac→product→fac→org tree coverage (child orgs, facilities, products, org-recipients);"
+			if m == taxonomy.DomainModeServiceChain {
+				title = "SERVICE CHAIN"
+				modeForPrompt = taxonomy.DomainModeServiceChain
+				scopeLabel = "WORKING SERVICE/CAPABILITY SCOPE"
+				scopeRule = "productCandidates must be genuinely new service/capability scope additions, not duplicates or aliases of workingProductScope or nodes[];"
+				capabilityRule = "when reusable provider×capability metrics are evidenced, missing carrierProductObservations is a gap and should be called out explicitly."
+				qualifierRule = "delivery/control qualifiers quality when present (availability_slo, latency, failover/recovery, auth_required, approved_vendor_only, service_contract_required, region_lock_in, reroute_* best-effort);"
+				topologyRule = "service-chain node alternation actor→capability and delivery/control-site hops;"
+				coverageRule = "org→fac→service→fac→org coverage (providers, delivery sites, capability nodes, recipient sites, recipient orgs);"
+			}
+			sections = append(sections, fmt.Sprintf(`== %s VALIDATION ==
 Allowed relation types: %s.
 Allowed actor types: %s.
 Canonical path rules:
 %s
 
-WORKING PRODUCT SCOPE:
+%s:
 %s
 
-SUPPLY CHAINS:
+OPERATIONAL CHAINS:
 %s
 
 Validate:
 1. chain continuity and direction consistency;
 2. relation taxonomy compliance (type-direction-entity compatibility) and canonical path shape;
 3. DEPENDS_ON vs SUPPLIES_TO semantics;
-4. transmission/logistics qualifiers quality when present;
-5. supplyChains node alternation actor→product and facility transformation hops;
-6. org→fac→product→fac→org tree coverage (child orgs, facilities, products, org-recipients);
+4. %s
+5. %s
+6. %s
 7. qualifier quality (confidence, source hints, transport qualifiers when applicable);
-8. productCandidates must be genuinely new scope additions, not duplicates or aliases of workingProductScope or nodes[];
+8. %s
 9. carrierProductObservations vs linkObservations vs routeObservations must remain correctly scoped;
 10. do not merge multi-product truth into one SupplyLink or one path leg;
-11. when reusable actor×product metrics are evidenced, missing carrierProductObservations is a gap and should be called out explicitly.`,
-				taxonomy.SupplyChainEdgeTypesString(),
-				taxonomy.EntityActorTypesForDomainMode(taxonomy.DomainModeSupplyChain),
+				11. %s`,
+				title,
+				relationTypesPromptForDomainMode(modeForPrompt),
+				taxonomy.EntityActorTypesForDomainMode(modeForPrompt),
 				taxonomy.ExtendedCanonicalPathRulesPrompt(),
+				scopeLabel,
 				string(scopeJSON),
-				string(chainsJSON)))
+				string(chainsJSON),
+				qualifierRule,
+				topologyRule,
+				coverageRule,
+				scopeRule,
+				capabilityRule,
+			))
 
 		case taxonomy.DomainModeGovernance:
 			sections = append(sections, fmt.Sprintf(`== GOVERNANCE VALIDATION ==

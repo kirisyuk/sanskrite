@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # Скрипт для конвертации документов из .txt в JSONL и импорта в Vertex AI Search
-# Использование: ./scripts/import-documents-to-vertex-search.sh [-p|--project etigram]
+# Использование: ./scripts/import-documents-to-vertex-search.sh [-p|--project nv-horizon]
 
-PROJECT="etigram"
+PROJECT="nv-horizon"
 DATA_STORE_ID="rag-documents-store"
 LOCATION="global"
 SOURCE_BUCKET=""

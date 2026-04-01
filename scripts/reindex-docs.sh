@@ -19,7 +19,7 @@ elif [[ "$DRY_RUN" != "--dry-run" && -n "$DRY_RUN" ]]; then
   exit 1
 fi
 
-GCP_PROJECT=$(gcloud config get-value project 2>/dev/null || echo "etigram")
+GCP_PROJECT=$(gcloud config get-value project 2>/dev/null || echo "nv-horizon")
 if [[ -z "$GCP_PROJECT" || "$GCP_PROJECT" == "(unset)" ]]; then
   echo "Error: GCP project is not set. Run: gcloud config set project <ID>"
   exit 1
@@ -41,7 +41,7 @@ export OPENAI_API_KEY="${OPENAI_API_KEY:-$(gcloud secrets versions access latest
 export GEMINI_API_KEY="${GEMINI_API_KEY:-$(gcloud secrets versions access latest --secret="gemini_api_key" --project="$GCP_PROJECT" 2>/dev/null || echo "")}"
 export VERTEX_SEARCH_LOCATION="${VERTEX_SEARCH_LOCATION:-global}"
 export VERTEX_SEARCH_DATA_STORE_ID="${VERTEX_SEARCH_DATA_STORE_ID:-rag-documents-store}"
-export RAG_DOCUMENTS_BUCKET="${RAG_DOCUMENTS_BUCKET:-etigram-rag-documents}"
+export RAG_DOCUMENTS_BUCKET="${RAG_DOCUMENTS_BUCKET:-nv-horizon-rag-documents}"
 
 if [[ -z "$OPENAI_API_KEY" ]]; then
   echo "Error: OPENAI_API_KEY not set and could not retrieve from GCP Secret Manager"

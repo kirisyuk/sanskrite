@@ -12,16 +12,21 @@ import (
 )
 
 type createWatchTargetRequest struct {
-	Kind           string   `json:"kind"`
-	Label          string   `json:"label"`
-	CanonicalPath  string   `json:"canonicalPath"`
-	FragmentID     string   `json:"fragmentId,omitempty"`
-	InterestTitle  string   `json:"interestTitle,omitempty"`
-	InterestQuery  string   `json:"interestQuery,omitempty"`
-	QueryOverrides []string `json:"queryOverrides,omitempty"`
-	DomainModes    []string `json:"domainModes,omitempty"`
-	Roles          []string `json:"roles,omitempty"`
-	Priority       int      `json:"priority,omitempty"`
+	Kind                  string   `json:"kind"`
+	Label                 string   `json:"label"`
+	CanonicalPath         string   `json:"canonicalPath"`
+	FragmentID            string   `json:"fragmentId,omitempty"`
+	InterestTitle         string   `json:"interestTitle,omitempty"`
+	InterestQuery         string   `json:"interestQuery,omitempty"`
+	QueryOverrides        []string `json:"queryOverrides,omitempty"`
+	DomainModes           []string `json:"domainModes,omitempty"`
+	Roles                 []string `json:"roles,omitempty"`
+	Priority              int      `json:"priority,omitempty"`
+	RelatedCanonicalPaths []string `json:"relatedCanonicalPaths,omitempty"`
+	UniverseDepth         int      `json:"universeDepth,omitempty"`
+	LookbackHours         int      `json:"lookbackHours,omitempty"`
+	MaxImpactedEntities   int      `json:"maxImpactedEntities,omitempty"`
+	MaxPropagationHops    int      `json:"maxPropagationHops,omitempty"`
 }
 
 type searchWatchRequest struct {
@@ -310,6 +315,23 @@ func (h *HorizonHandlers) CreateWatchTarget(w http.ResponseWriter, r *http.Reque
 		Source:         "api_manual",
 		Status:         string(horizonmodels.WatchTargetStatusActive),
 	}
+	if len(compactStrings(req.RelatedCanonicalPaths)) > 0 || req.UniverseDepth > 0 || req.LookbackHours > 0 || req.MaxImpactedEntities > 0 || req.MaxPropagationHops > 0 {
+		if target.Metadata == nil {
+			target.Metadata = map[string]any{}
+		}
+		target.Metadata["focusObject"] = map[string]any{
+			"anchorCanonicalPath":   strings.TrimSpace(req.CanonicalPath),
+			"displayLabel":          strings.TrimSpace(req.Label),
+			"relatedCanonicalPaths": compactStrings(req.RelatedCanonicalPaths),
+			"universeDepth":         req.UniverseDepth,
+			"lookbackHours":         req.LookbackHours,
+			"maxImpactedEntities":   req.MaxImpactedEntities,
+			"maxPropagationHops":    req.MaxPropagationHops,
+		}
+	}
+	if target.Kind == "" && target.Metadata != nil && target.Metadata["focusObject"] != nil {
+		target.Kind = string(horizonmodels.WatchSubjectKindFocusObject)
+	}
 	if target.Kind == "" {
 		target.Kind = inferWatchKind(target.CanonicalPath)
 	}
@@ -319,6 +341,26 @@ func (h *HorizonHandlers) CreateWatchTarget(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)
+}
+
+func compactStrings(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(in))
+	for _, item := range in {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	return out
 }
 
 func (h *HorizonHandlers) GetWatchPage(w http.ResponseWriter, r *http.Request) {

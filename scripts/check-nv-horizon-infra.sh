@@ -1,5 +1,5 @@
 #!/bin/bash
-# Скрипт проверки инфраструктуры GCP для Etigram
+# Скрипт проверки инфраструктуры GCP для Horizon (Nordic Vision)
 
 set -e
 
@@ -9,7 +9,7 @@ if [ -z "$PROJECT_ID" ]; then
   exit 1
 fi
 
-echo "=== Проверка инфраструктуры Etigram для проекта: $PROJECT_ID ==="
+echo "=== Проверка инфраструктуры Horizon для проекта: $PROJECT_ID ==="
 echo ""
 
 # Цвета для вывода
@@ -48,7 +48,7 @@ if echo "$BUCKETS" | grep -q "core-docs\|rag-documents"; then
     check "Bucket существует: $bucket"
   done
 else
-  warn "Не найдены buckets для Etigram (core-docs или rag-documents)"
+  warn "Не найдены buckets для Horizon (Nordic Vision) (core-docs или rag-documents)"
 fi
 
 echo ""
@@ -62,6 +62,8 @@ fi
 
 # Проверка Data Store (через REST API, т.к. gcloud discovery-engine может быть недоступен)
 DATA_STORE_ID="${VERTEX_SEARCH_DATA_STORE_ID:-rag-documents-store}"
+FRAGMENTS_DS_ID="${VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID:-nv-horizon-fragments-store}"
+EDGES_DS_ID="${VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_ID:-nv-horizon-edges-store}"
 LOCATION="${VERTEX_SEARCH_LOCATION:-global}"
 ACCESS_TOKEN="$(gcloud auth print-access-token 2>/dev/null || true)"
 if [ -z "$ACCESS_TOKEN" ]; then
@@ -84,13 +86,23 @@ else
     else
       warn "Data Store не найден: $DATA_STORE_ID (проверьте в Gen App Builder → Data Stores)"
     fi
+    if grep -q "/dataStores/$FRAGMENTS_DS_ID\"" "$RESP_FILE"; then
+      check "Data Store (Horizon fragments) существует: $FRAGMENTS_DS_ID"
+    else
+      warn "Data Store не найден: $FRAGMENTS_DS_ID (запустите scripts/deploy --infra или --api)"
+    fi
+    if grep -q "/dataStores/$EDGES_DS_ID\"" "$RESP_FILE"; then
+      check "Data Store (Horizon edges) существует: $EDGES_DS_ID"
+    else
+      warn "Data Store не найден: $EDGES_DS_ID (запустите scripts/deploy --infra или --api)"
+    fi
   fi
 fi
 
 echo ""
 echo "4. Проверка Pub/Sub топиков..."
 # Проверка основных топиков (агрегированные создаются автоматически)
-REQUIRED_TOPICS=("source.poll" "etigram.operations.events" "etigram.interaction.events" "etigram.horizon.events")
+REQUIRED_TOPICS=("source.poll" "nv_horizon.operations.events" "nv_horizon.interaction.events" "nv_horizon.horizon.events")
 for topic in "${REQUIRED_TOPICS[@]}"; do
   if gcloud pubsub topics describe "$topic" --format="value(name)" 2>/dev/null | grep -q "$topic"; then
     check "Топик существует: $topic"
@@ -100,14 +112,14 @@ for topic in "${REQUIRED_TOPICS[@]}"; do
 done
 
 echo ""
-echo "4.1 Проверка Pub/Sub подписок для etigram-ws..."
+echo "4.1 Проверка Pub/Sub подписок для nv-horizon-ws..."
 # Подписка имеет фиксированный нейминг: <topic>-ws-broker
-REQUIRED_SUBS=("etigram.horizon.events-ws-broker")
+REQUIRED_SUBS=("nv_horizon.horizon.events-ws-broker")
 for sub in "${REQUIRED_SUBS[@]}"; do
   if gcloud pubsub subscriptions describe "$sub" --format="value(name)" 2>/dev/null | grep -q "$sub"; then
     check "Подписка существует: $sub"
   else
-    warn "Подписка не найдена: $sub (создайте: scripts/setup-etigram-pubsub.sh)"
+    warn "Подписка не найдена: $sub (создайте: scripts/setup-nv-horizon-pubsub.sh)"
   fi
 done
 
@@ -145,7 +157,7 @@ fi
 
 echo ""
 echo "7. Проверка переменных окружения Cloud Run..."
-SERVICE="etigram-api"
+SERVICE="nv-horizon-api"
 REGION="us-central1"
 if gcloud run services describe "$SERVICE" --region="$REGION" --format="value(metadata.name)" 2>/dev/null | grep -q "$SERVICE"; then
   check "Cloud Run сервис существует: $SERVICE"
@@ -167,10 +179,10 @@ fi
 echo ""
 echo "8. Проверка Firestore Security Rules..."
 if [ -f "backend/firestore.rules" ]; then
-  if grep -q "etigram\|horizon" backend/firestore.rules; then
-    check "Правила для Etigram найдены в firestore.rules"
+  if grep -q "nv-horizon\|horizon" backend/firestore.rules; then
+    check "Правила для Horizon (Nordic Vision) найдены в firestore.rules"
   else
-    warn "Правила для Etigram не найдены в firestore.rules (добавьте правила для коллекций horizon_*)"
+    warn "Правила для Horizon (Nordic Vision) не найдены в firestore.rules (добавьте правила для коллекций horizon_*)"
   fi
 else
   warn "Файл firestore.rules не найден"
@@ -180,10 +192,10 @@ echo ""
 echo "9. Проверка Firestore индексов..."
 if [ -f "web/firestore.indexes.json" ]; then
   if grep -q "horizon_fragments\|horizon_lenses\|horizon_dependency_edges\|horizon_frames\|horizon_watchdog_configs" web/firestore.indexes.json; then
-    check "Индексы для Etigram найдены в firestore.indexes.json"
+    check "Индексы для Horizon (Nordic Vision) найдены в firestore.indexes.json"
     echo "   Разверните индексы: firebase deploy --only firestore:indexes"
   else
-    warn "Индексы для Etigram не найдены в firestore.indexes.json"
+    warn "Индексы для Horizon (Nordic Vision) не найдены в firestore.indexes.json"
   fi
 else
   warn "Файл firestore.indexes.json не найден"
