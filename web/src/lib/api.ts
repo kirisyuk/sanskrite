@@ -1,11 +1,17 @@
 import axios, { AxiosInstance } from 'axios';
-import type { HorizonLensRecord, HorizonLensViewConfig } from '../types/horizonView';
+import type {
+  HorizonLensRecord,
+  HorizonLensViewConfig,
+} from '../types/horizonView';
 import { auth } from './firebase';
 import type { User, Project, DataSource } from '../types';
 import type { AnalyzeRequest, AnalyzeResponse } from '../types/stance';
 import type { ScoutingMode } from '../features/horizon/lib/scoutingMode';
 import type {
   HorizonWatchBrief,
+  HorizonMonitoringDigest,
+  HorizonWatchPortfolio,
+  HorizonWatchPortfolioView,
   HorizonWatchPageSnapshot,
   HorizonWatchPreferences,
   HorizonWatchSearchResult,
@@ -242,7 +248,9 @@ export interface HorizonSimulationBundleViewResponse {
 }
 
 export interface HorizonSimulationOverlayFilters {
-  kinds?: Array<'shoulders' | 'products' | 'pathChains' | 'cascades' | 'roles' | string>;
+  kinds?: Array<
+    'shoulders' | 'products' | 'pathChains' | 'cascades' | 'roles' | string
+  >;
   functions?: string[];
   disciplines?: string[];
   roles?: string[];
@@ -452,15 +460,22 @@ class ApiClient {
     this.client.interceptors.response.use(
       (response) => {
         // On successful response, mark server as available
-        import('../stores/serverStatusStore').then(({ useServerStatusStore }) => {
-          useServerStatusStore.getState().setServerAvailable();
-        }).catch(() => {});
+        import('../stores/serverStatusStore')
+          .then(({ useServerStatusStore }) => {
+            useServerStatusStore.getState().setServerAvailable();
+          })
+          .catch(() => {});
         return response;
       },
       (error) => {
         // Ignore user-initiated cancellations (typeahead AbortController, route changes, etc.)
         // Otherwise we incorrectly flip the global "server unavailable" banner during normal UX.
-        if (axios.isCancel(error) || error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError' || error?.name === 'AbortError') {
+        if (
+          axios.isCancel(error) ||
+          error?.code === 'ERR_CANCELED' ||
+          error?.name === 'CanceledError' ||
+          error?.name === 'AbortError'
+        ) {
           return Promise.reject(error);
         }
 
@@ -469,43 +484,96 @@ class ApiClient {
         // Check if it's a network error (CORS, server down, etc.)
         if (!error.response) {
           // Network error - no response from server
-          import('../stores/serverStatusStore').then(({ useServerStatusStore }) => {
-            useServerStatusStore.getState().setServerUnavailable('Server is temporarily unavailable. Please try again later.');
-          }).catch(() => {});
+          import('../stores/serverStatusStore')
+            .then(({ useServerStatusStore }) => {
+              useServerStatusStore
+                .getState()
+                .setServerUnavailable(
+                  'Server is temporarily unavailable. Please try again later.',
+                );
+            })
+            .catch(() => {});
         } else if (error.response.status >= 500) {
           // Best-effort endpoints (autocomplete/prefetch) shouldn't mark the whole server as unavailable.
-          if (url.includes('/api/horizon/entities/search') || url.includes('/api/horizon/products/prefetch') || url.includes('/api/horizon/products/producers')) {
+          if (
+            url.includes('/api/horizon/entities/search') ||
+            url.includes('/api/horizon/products/prefetch') ||
+            url.includes('/api/horizon/products/producers')
+          ) {
             return Promise.reject(error);
           }
           // Server error (5xx)
-          import('../stores/serverStatusStore').then(({ useServerStatusStore }) => {
-            useServerStatusStore.getState().setServerUnavailable('Server error. Please try again later.');
-          }).catch(() => {});
+          import('../stores/serverStatusStore')
+            .then(({ useServerStatusStore }) => {
+              useServerStatusStore
+                .getState()
+                .setServerUnavailable('Server error. Please try again later.');
+            })
+            .catch(() => {});
         }
         return Promise.reject(error);
-      }
+      },
     );
   }
 
   // Waitlist
-  async waitlistJoin(data: { email: string; note?: string }): Promise<{ ok: boolean }> {
-    const response = await this.client.post<{ ok: boolean }>(`/api/v1/waitlist`, data);
+  async waitlistJoin(data: {
+    email: string;
+    note?: string;
+  }): Promise<{ ok: boolean }> {
+    const response = await this.client.post<{ ok: boolean }>(
+      `/api/v1/waitlist`,
+      data,
+    );
     return response.data;
   }
 
-  async waitlistCheck(email: string): Promise<{ found: boolean; status?: string }> {
-    const response = await this.client.get<{ found: boolean; status?: string }>(`/api/v1/waitlist`, { params: { email } });
+  async waitlistCheck(
+    email: string,
+  ): Promise<{ found: boolean; status?: string }> {
+    const response = await this.client.get<{ found: boolean; status?: string }>(
+      `/api/v1/waitlist`,
+      { params: { email } },
+    );
     return response.data;
   }
 
-  async waitlistList(status?: 'pending' | 'approved' | 'rejected'): Promise<Array<{ id: string; email: string; status: string; note?: string; invitedBy?: string; createdAt: string; updatedAt: string }>> {
+  async waitlistList(
+    status?: 'pending' | 'approved' | 'rejected',
+  ): Promise<
+    Array<{
+      id: string;
+      email: string;
+      status: string;
+      note?: string;
+      invitedBy?: string;
+      createdAt: string;
+      updatedAt: string;
+    }>
+  > {
     const params = status ? { status } : {};
-    const response = await this.client.get<{ items: Array<{ id: string; email: string; status: string; note?: string; invitedBy?: string; createdAt: string; updatedAt: string }> | null | undefined }>(`/api/v1/waitlist/list`, { params });
+    const response = await this.client.get<{
+      items:
+        | Array<{
+            id: string;
+            email: string;
+            status: string;
+            note?: string;
+            invitedBy?: string;
+            createdAt: string;
+            updatedAt: string;
+          }>
+        | null
+        | undefined;
+    }>(`/api/v1/waitlist/list`, { params });
     return Array.isArray(response.data?.items) ? response.data.items : [];
   }
 
   async waitlistApprove(email: string): Promise<{ ok: boolean }> {
-    const response = await this.client.post<{ ok: boolean }>(`/api/v1/waitlist/approve`, { email });
+    const response = await this.client.post<{ ok: boolean }>(
+      `/api/v1/waitlist/approve`,
+      { email },
+    );
     return response.data;
   }
 
@@ -528,15 +596,31 @@ class ApiClient {
     rates?: Record<string, number>;
     tenantId: string;
   }> {
-    const response = await this.client.get(`/api/v1/admin/horizon/telemetry`, { params });
+    const response = await this.client.get(`/api/v1/admin/horizon/telemetry`, {
+      params,
+    });
     return response.data;
   }
 
-  async getHorizonExternalServicesTelemetry(params?: { limit?: number }): Promise<{
-    services: Record<string, { hit: number; miss: number; error: number; calls: number; hitRate: number }>;
+  async getHorizonExternalServicesTelemetry(params?: {
+    limit?: number;
+  }): Promise<{
+    services: Record<
+      string,
+      {
+        hit: number;
+        miss: number;
+        error: number;
+        calls: number;
+        hitRate: number;
+      }
+    >;
     tenantId: string;
   }> {
-    const response = await this.client.get(`/api/v1/admin/horizon/telemetry/external-services`, { params: params || {} });
+    const response = await this.client.get(
+      `/api/v1/admin/horizon/telemetry/external-services`,
+      { params: params || {} },
+    );
     return response.data;
   }
 
@@ -557,7 +641,10 @@ class ApiClient {
   }
 
   async updateUser(userId: string, data: Partial<User>): Promise<User> {
-    const response = await this.client.put<User>(`/api/v1/users/${userId}`, data);
+    const response = await this.client.put<User>(
+      `/api/v1/users/${userId}`,
+      data,
+    );
     return response.data;
   }
 
@@ -573,17 +660,27 @@ class ApiClient {
 
   async listProjects(view?: string): Promise<Project[]> {
     const params = view ? { view } : {};
-    const response = await this.client.get<Project[]>('/api/v1/projects', { params });
+    const response = await this.client.get<Project[]>('/api/v1/projects', {
+      params,
+    });
     return response.data;
   }
 
   async getProject(projectId: string): Promise<Project> {
-    const response = await this.client.get<Project>(`/api/v1/projects/${projectId}`);
+    const response = await this.client.get<Project>(
+      `/api/v1/projects/${projectId}`,
+    );
     return response.data;
   }
 
-  async updateProject(projectId: string, data: Partial<Project>): Promise<Project> {
-    const response = await this.client.put<Project>(`/api/v1/projects/${projectId}`, data);
+  async updateProject(
+    projectId: string,
+    data: Partial<Project>,
+  ): Promise<Project> {
+    const response = await this.client.put<Project>(
+      `/api/v1/projects/${projectId}`,
+      data,
+    );
     return response.data;
   }
 
@@ -604,45 +701,82 @@ class ApiClient {
     };
     correlationId?: string;
   }): Promise<{ correlationId: string }> {
-    console.log('[API] Sending discovery request:', { ...data, queryText: data.queryText.substring(0, 50) + '...' });
-    const response = await this.client.post<{ correlationId: string }>('/api/v1/sources-discovery/execute', data);
+    console.log('[API] Sending discovery request:', {
+      ...data,
+      queryText: data.queryText.substring(0, 50) + '...',
+    });
+    const response = await this.client.post<{ correlationId: string }>(
+      '/api/v1/sources-discovery/execute',
+      data,
+    );
     console.log('[API] Discovery response:', response.data);
     return response.data;
   }
 
   async getProjectSources(projectId: string): Promise<DataSource[]> {
-    const response = await this.client.get<DataSource[]>(`/api/v1/projects/${projectId}/datasources`);
+    const response = await this.client.get<DataSource[]>(
+      `/api/v1/projects/${projectId}/datasources`,
+    );
     return response.data;
   }
 
-  async attachSource(projectId: string, sourceId: string, status?: string): Promise<{ id: string }> {
-    const response = await this.client.post<{ id: string }>(`/api/v1/projects/${projectId}/sources`, {
-      sourceId,
-      status,
-    });
+  async attachSource(
+    projectId: string,
+    sourceId: string,
+    status?: string,
+  ): Promise<{ id: string }> {
+    const response = await this.client.post<{ id: string }>(
+      `/api/v1/projects/${projectId}/sources`,
+      {
+        sourceId,
+        status,
+      },
+    );
     return response.data;
   }
 
-  async detachSource(projectId: string, sourceId: string): Promise<{ success: boolean }> {
-    const response = await this.client.delete<{ success: boolean }>(`/api/v1/projects/${projectId}/sources/${sourceId}`);
+  async detachSource(
+    projectId: string,
+    sourceId: string,
+  ): Promise<{ success: boolean }> {
+    const response = await this.client.delete<{ success: boolean }>(
+      `/api/v1/projects/${projectId}/sources/${sourceId}`,
+    );
     return response.data;
   }
 
-  async updateSourceProjectStatus(projectId: string, sourceId: string, status: 'active' | 'paused'): Promise<{ id: string; status: string }> {
-    const response = await this.client.patch<{ id: string; status: string }>(`/api/v1/projects/${projectId}/sources/${sourceId}/status`, {
-      status,
-    });
+  async updateSourceProjectStatus(
+    projectId: string,
+    sourceId: string,
+    status: 'active' | 'paused',
+  ): Promise<{ id: string; status: string }> {
+    const response = await this.client.patch<{ id: string; status: string }>(
+      `/api/v1/projects/${projectId}/sources/${sourceId}/status`,
+      {
+        status,
+      },
+    );
     return response.data;
   }
 
   async getSourceDocuments(sourceId: string, limit?: number): Promise<any[]> {
     const params = limit ? `?limit=${limit}` : '';
-    const response = await this.client.get<any[]>(`/api/v1/sources/${sourceId}/documents${params}`);
+    const response = await this.client.get<any[]>(
+      `/api/v1/sources/${sourceId}/documents${params}`,
+    );
     return response.data;
   }
 
-  async previewTelegramChannel(channel: string): Promise<{ channel: string; count: number; messages: any[] }> {
-    const response = await this.client.get<{ channel: string; count: number; messages: any[] }>(`/api/v1/sources/preview/telegram?channel=${encodeURIComponent(channel)}`);
+  async previewTelegramChannel(
+    channel: string,
+  ): Promise<{ channel: string; count: number; messages: any[] }> {
+    const response = await this.client.get<{
+      channel: string;
+      count: number;
+      messages: any[];
+    }>(
+      `/api/v1/sources/preview/telegram?channel=${encodeURIComponent(channel)}`,
+    );
     return response.data;
   }
 
@@ -650,10 +784,14 @@ class ApiClient {
    * Trigger ingest for a specific source
    * POST /api/v1/sources/{id}/ingest
    */
-  async ingestSource(sourceId: string): Promise<{ queued: boolean; sourceId: string; kind: string }> {
-    const response = await this.client.post<{ queued: boolean; sourceId: string; kind: string }>(
-      `/api/v1/sources/${sourceId}/ingest`
-    );
+  async ingestSource(
+    sourceId: string,
+  ): Promise<{ queued: boolean; sourceId: string; kind: string }> {
+    const response = await this.client.post<{
+      queued: boolean;
+      sourceId: string;
+      kind: string;
+    }>(`/api/v1/sources/${sourceId}/ingest`);
     return response.data;
   }
 
@@ -661,34 +799,223 @@ class ApiClient {
    * Reprocess documents with status "embedded" for a source
    * POST /api/v1/sources/{id}/reprocess
    */
-  async reprocessSource(sourceId: string): Promise<{ queued: boolean; sourceId: string; count: number; message: string }> {
-    const response = await this.client.post<{ queued: boolean; sourceId: string; count: number; message: string }>(
-      `/api/v1/sources/${sourceId}/reprocess`
-    );
+  async reprocessSource(
+    sourceId: string,
+  ): Promise<{
+    queued: boolean;
+    sourceId: string;
+    count: number;
+    message: string;
+  }> {
+    const response = await this.client.post<{
+      queued: boolean;
+      sourceId: string;
+      count: number;
+      message: string;
+    }>(`/api/v1/sources/${sourceId}/reprocess`);
     return response.data;
   }
 
-  async getSourceIngestHistory(sourceId: string, limit?: number): Promise<{ sourceId: string; history: any[]; count: number }> {
+  async getSourceIngestHistory(
+    sourceId: string,
+    limit?: number,
+  ): Promise<{ sourceId: string; history: any[]; count: number }> {
     const params = limit ? { limit } : {};
-    const response = await this.client.get<{ sourceId: string; history: any[]; count: number }>(
-      `/api/v1/sources/${sourceId}/ingest-history`,
-      { params }
-    );
+    const response = await this.client.get<{
+      sourceId: string;
+      history: any[];
+      count: number;
+    }>(`/api/v1/sources/${sourceId}/ingest-history`, { params });
     return response.data;
   }
 
-  async getProjectInteractions(projectId: string): Promise<{ id: string; kind: string; content: string; createdAt: string; sectionId?: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; evaluations?: Record<string, any>; metadata?: { pinned?: boolean }; originalMessageId?: string; subkind?: string; contentSanitized?: string; relations?: Array<{ type: string; targetId: string }>; language?: string; systemInstructionApplied?: string; generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean }; highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] }; coreDocIds?: string[] }[]> {
-    const response = await this.client.get<{ items: { id: string; kind: string; content: string; createdAt: string; sectionId?: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; evaluations?: Record<string, any>; metadata?: { pinned?: boolean }; originalMessageId?: string; subkind?: string; contentSanitized?: string; relations?: Array<{ type: string; targetId: string }>; language?: string; systemInstructionApplied?: string; generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean }; highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] }; coreDocIds?: string[] }[] }>(`/api/v1/projects/${projectId}/interactions`);
+  async getProjectInteractions(
+    projectId: string,
+  ): Promise<
+    {
+      id: string;
+      kind: string;
+      content: string;
+      createdAt: string;
+      sectionId?: string;
+      summary?: string;
+      model?: string;
+      usage?: {
+        promptTokens?: number;
+        outputTokens?: number;
+        totalTokens?: number;
+        reasoningTokens?: number;
+        toolUsePromptTokens?: number;
+      };
+      author?: { participantId: string; kind: string; displayName?: string };
+      recipients?: string[];
+      replyTo?: string;
+      agentProfile?: {
+        provider: string;
+        model: string;
+        version?: string;
+        capabilities?: Record<string, boolean>;
+        params?: Record<string, any>;
+      };
+      evaluations?: Record<string, any>;
+      metadata?: { pinned?: boolean };
+      originalMessageId?: string;
+      subkind?: string;
+      contentSanitized?: string;
+      relations?: Array<{ type: string; targetId: string }>;
+      language?: string;
+      systemInstructionApplied?: string;
+      generationParams?: {
+        temperature?: number;
+        maxOutputTokens?: number;
+        groundingEnabled?: boolean;
+      };
+      highRisk?: {
+        level: string;
+        score: number;
+        rationale?: string;
+        triggers?: string[];
+      };
+      coreDocIds?: string[];
+    }[]
+  > {
+    const response = await this.client.get<{
+      items: {
+        id: string;
+        kind: string;
+        content: string;
+        createdAt: string;
+        sectionId?: string;
+        summary?: string;
+        model?: string;
+        usage?: {
+          promptTokens?: number;
+          outputTokens?: number;
+          totalTokens?: number;
+          reasoningTokens?: number;
+          toolUsePromptTokens?: number;
+        };
+        author?: { participantId: string; kind: string; displayName?: string };
+        recipients?: string[];
+        replyTo?: string;
+        agentProfile?: {
+          provider: string;
+          model: string;
+          version?: string;
+          capabilities?: Record<string, boolean>;
+          params?: Record<string, any>;
+        };
+        evaluations?: Record<string, any>;
+        metadata?: { pinned?: boolean };
+        originalMessageId?: string;
+        subkind?: string;
+        contentSanitized?: string;
+        relations?: Array<{ type: string; targetId: string }>;
+        language?: string;
+        systemInstructionApplied?: string;
+        generationParams?: {
+          temperature?: number;
+          maxOutputTokens?: number;
+          groundingEnabled?: boolean;
+        };
+        highRisk?: {
+          level: string;
+          score: number;
+          rationale?: string;
+          triggers?: string[];
+        };
+        coreDocIds?: string[];
+      }[];
+    }>(`/api/v1/projects/${projectId}/interactions`);
     return Array.isArray(response.data?.items) ? response.data.items : [];
   }
 
-  async createProjectInteraction(projectId: string, data: { kind: 'user'|'assistant'|'system'|'note'|'section_start'|'section_end'|'action'|'research'|'ontology'; content: string; sectionId?: string; summary?: string; model?: string; usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number }; author?: { participantId: string; kind: string; displayName?: string }; recipients?: string[]; replyTo?: string; agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> }; originalMessageId?: string; subkind?: string; contentSanitized?: string; relations?: Array<{ type: string; targetId: string }>; language?: string; systemInstructionApplied?: string; generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean }; highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] }; roles?: Array<{ role: string; confidence: number; rationale: string }>; industries?: Array<{ industry: string; confidence: number; rationale: string }>; evaluations?: Record<string, any>; coreDocIds?: string[]; metadata?: { pinned?: boolean }; researchQuery?: string; researchProgress?: { stage: 'planning'|'searching'|'generating'; status: 'in_progress'|'completed'; subQueries?: string[]; sourcesCount?: number }; subQueries?: string[]; researchSources?: Array<{ title: string; url: string; score?: number }>; ontologyEntityId?: string }): Promise<{ id: string }> {
-    const response = await this.client.post<{ id: string }>(`/api/v1/projects/${projectId}/interactions`, data);
+  async createProjectInteraction(
+    projectId: string,
+    data: {
+      kind:
+        | 'user'
+        | 'assistant'
+        | 'system'
+        | 'note'
+        | 'section_start'
+        | 'section_end'
+        | 'action'
+        | 'research'
+        | 'ontology';
+      content: string;
+      sectionId?: string;
+      summary?: string;
+      model?: string;
+      usage?: {
+        promptTokens?: number;
+        outputTokens?: number;
+        totalTokens?: number;
+        reasoningTokens?: number;
+        toolUsePromptTokens?: number;
+      };
+      author?: { participantId: string; kind: string; displayName?: string };
+      recipients?: string[];
+      replyTo?: string;
+      agentProfile?: {
+        provider: string;
+        model: string;
+        version?: string;
+        capabilities?: Record<string, boolean>;
+        params?: Record<string, any>;
+      };
+      originalMessageId?: string;
+      subkind?: string;
+      contentSanitized?: string;
+      relations?: Array<{ type: string; targetId: string }>;
+      language?: string;
+      systemInstructionApplied?: string;
+      generationParams?: {
+        temperature?: number;
+        maxOutputTokens?: number;
+        groundingEnabled?: boolean;
+      };
+      highRisk?: {
+        level: string;
+        score: number;
+        rationale?: string;
+        triggers?: string[];
+      };
+      roles?: Array<{ role: string; confidence: number; rationale: string }>;
+      industries?: Array<{
+        industry: string;
+        confidence: number;
+        rationale: string;
+      }>;
+      evaluations?: Record<string, any>;
+      coreDocIds?: string[];
+      metadata?: { pinned?: boolean };
+      researchQuery?: string;
+      researchProgress?: {
+        stage: 'planning' | 'searching' | 'generating';
+        status: 'in_progress' | 'completed';
+        subQueries?: string[];
+        sourcesCount?: number;
+      };
+      subQueries?: string[];
+      researchSources?: Array<{ title: string; url: string; score?: number }>;
+      ontologyEntityId?: string;
+    },
+  ): Promise<{ id: string }> {
+    const response = await this.client.post<{ id: string }>(
+      `/api/v1/projects/${projectId}/interactions`,
+      data,
+    );
     return response.data;
   }
 
-  async deleteProjectInteraction(projectId: string, interactionId: string): Promise<{ success: boolean }> {
-    const response = await this.client.delete<{ success: boolean }>(`/api/v1/projects/${projectId}/interactions/${interactionId}`);
+  async deleteProjectInteraction(
+    projectId: string,
+    interactionId: string,
+  ): Promise<{ success: boolean }> {
+    const response = await this.client.delete<{ success: boolean }>(
+      `/api/v1/projects/${projectId}/interactions/${interactionId}`,
+    );
     return response.data;
   }
 
@@ -696,85 +1023,157 @@ class ApiClient {
     projectId: string,
     interactionId: string,
     data: Partial<{
-      kind: 'user'|'assistant'|'system'|'note'|'section_start'|'section_end'|'action'|'ontology';
+      kind:
+        | 'user'
+        | 'assistant'
+        | 'system'
+        | 'note'
+        | 'section_start'
+        | 'section_end'
+        | 'action'
+        | 'ontology';
       content: string;
       summary?: string;
       model?: string;
-      usage?: { promptTokens?: number; outputTokens?: number; totalTokens?: number; reasoningTokens?: number; toolUsePromptTokens?: number };
+      usage?: {
+        promptTokens?: number;
+        outputTokens?: number;
+        totalTokens?: number;
+        reasoningTokens?: number;
+        toolUsePromptTokens?: number;
+      };
       subkind?: string;
       ontologyEntityId?: string;
       contentSanitized?: string;
       author?: { participantId: string; kind: string; displayName?: string };
       recipients?: string[];
       replyTo?: string;
-      agentProfile?: { provider: string; model: string; version?: string; capabilities?: Record<string, boolean>; params?: Record<string, any> };
+      agentProfile?: {
+        provider: string;
+        model: string;
+        version?: string;
+        capabilities?: Record<string, boolean>;
+        params?: Record<string, any>;
+      };
       evaluations?: Record<string, any>;
       metadata?: { pinned?: boolean; notes?: string[] };
       relations?: Array<{ type: string; targetId: string }>;
       language?: string;
       systemInstructionApplied?: string;
-      generationParams?: { temperature?: number; maxOutputTokens?: number; groundingEnabled?: boolean };
-      highRisk?: { level: string; score: number; rationale?: string; triggers?: string[] };
+      generationParams?: {
+        temperature?: number;
+        maxOutputTokens?: number;
+        groundingEnabled?: boolean;
+      };
+      highRisk?: {
+        level: string;
+        score: number;
+        rationale?: string;
+        triggers?: string[];
+      };
       roles?: Array<{ role: string; confidence: number; rationale: string }>;
-      industries?: Array<{ industry: string; confidence: number; rationale: string }>;
+      industries?: Array<{
+        industry: string;
+        confidence: number;
+        rationale: string;
+      }>;
       originalMessageId?: string;
       coreDocIds?: string[];
-    }>
+    }>,
   ): Promise<{ success: boolean }> {
-    const response = await this.client.patch<{ success: boolean }>(`/api/v1/projects/${projectId}/interactions/${interactionId}`, data);
+    const response = await this.client.patch<{ success: boolean }>(
+      `/api/v1/projects/${projectId}/interactions/${interactionId}`,
+      data,
+    );
     return response.data;
   }
 
-  async sendChatMessage(projectId: string, message: string, language?: string): Promise<{ answer: string }> {
-    const response = await this.client.post<{ answer: string }>(`/api/v1/projects/${projectId}/chat`, { message, language });
+  async sendChatMessage(
+    projectId: string,
+    message: string,
+    language?: string,
+  ): Promise<{ answer: string }> {
+    const response = await this.client.post<{ answer: string }>(
+      `/api/v1/projects/${projectId}/chat`,
+      { message, language },
+    );
     return response.data;
   }
 
   // --- Meta analysis ---
-  async metaAnalyze(projectId: string, data: AnalyzeRequest): Promise<AnalyzeResponse> {
-    const res = await this.client.post<AnalyzeResponse>(`/api/v1/projects/${projectId}/meta:analyze`, data);
+  async metaAnalyze(
+    projectId: string,
+    data: AnalyzeRequest,
+  ): Promise<AnalyzeResponse> {
+    const res = await this.client.post<AnalyzeResponse>(
+      `/api/v1/projects/${projectId}/meta:analyze`,
+      data,
+    );
     return res.data;
   }
 
   async metaListEvents(projectId: string): Promise<any[]> {
-    const res = await this.client.get<any[]>(`/api/v1/projects/${projectId}/meta/events`);
+    const res = await this.client.get<any[]>(
+      `/api/v1/projects/${projectId}/meta/events`,
+    );
     return res.data as any[];
   }
 
   async metaGetAggregate(projectId: string): Promise<any> {
-    const res = await this.client.get<any>(`/api/v1/projects/${projectId}/meta/aggregate`);
+    const res = await this.client.get<any>(
+      `/api/v1/projects/${projectId}/meta/aggregate`,
+    );
     return res.data;
   }
 
   // GenAI
-  async aiStructured(params: { prompt: string; minCapabilityScore?: number; maxOutputSize?: number }): Promise<{ ok: boolean; result: any }>{
-    const res = await this.client.post<{ ok: boolean; result: any }>(`/api/v1/ai/structured`, {
-      prompt: params.prompt,
-      minCapabilityScore: params.minCapabilityScore ?? 8,
-      maxOutputSize: params.maxOutputSize ?? 8192,
-    });
+  async aiStructured(params: {
+    prompt: string;
+    minCapabilityScore?: number;
+    maxOutputSize?: number;
+  }): Promise<{ ok: boolean; result: any }> {
+    const res = await this.client.post<{ ok: boolean; result: any }>(
+      `/api/v1/ai/structured`,
+      {
+        prompt: params.prompt,
+        minCapabilityScore: params.minCapabilityScore ?? 8,
+        maxOutputSize: params.maxOutputSize ?? 8192,
+      },
+    );
     return res.data;
   }
 
-  async genaiGenerate(data: {
+  async genaiGenerate(
+    data: {
+      model: string;
+      prompt: string;
+      messages?: Array<{
+        role: 'user' | 'assistant' | 'system' | 'note';
+        text: string;
+      }>;
+      systemInstruction?: string;
+      temperature?: number;
+      maxOutputTokens?: number;
+      webSearchEnabled?: boolean;
+      toolCallingEnabled?: boolean;
+      researchEnabled?: boolean;
+      strictJSONEnabled?: boolean;
+      jsonSchema?: any;
+      tools?: Array<{ name: string; description?: string; parameters: any }>;
+      toolChoice?: 'auto' | 'required';
+      parallelToolCalls?: boolean;
+      projectId?: string;
+      streamId?: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<{
+    content?: string;
     model: string;
-    prompt: string;
-    messages?: Array<{ role: 'user'|'assistant'|'system'|'note'; text: string }>;
-    systemInstruction?: string;
-    temperature?: number;
-    maxOutputTokens?: number;
-    webSearchEnabled?: boolean;
-    toolCallingEnabled?: boolean;
-    researchEnabled?: boolean;
-    strictJSONEnabled?: boolean;
-    jsonSchema?: any;
-    tools?: Array<{ name: string; description?: string; parameters: any }>;
-    toolChoice?: 'auto'|'required';
-    parallelToolCalls?: boolean;
-    projectId?: string;
-    streamId?: string;
-  }, signal?: AbortSignal): Promise<{ content?: string; model: string; usage?: { promptTokens: number; outputTokens: number; totalTokens: number }; sources?: string[]; attributions?: Array<{ title?: string; url?: string }>; rawJSON?: string; }>
-  {
+    usage?: { promptTokens: number; outputTokens: number; totalTokens: number };
+    sources?: string[];
+    attributions?: Array<{ title?: string; url?: string }>;
+    rawJSON?: string;
+  }> {
     const body: any = {
       model: data.model,
       prompt: data.prompt,
@@ -816,7 +1215,14 @@ class ApiClient {
       maxOutputTokens?: number;
       systemInstruction?: string;
     };
-  }): Promise<{ ok: boolean; model: string; usage: { promptTokens: number; outputTokens: number; totalTokens: number }; validJson: boolean; json: any; raw: string; }> {
+  }): Promise<{
+    ok: boolean;
+    model: string;
+    usage: { promptTokens: number; outputTokens: number; totalTokens: number };
+    validJson: boolean;
+    json: any;
+    raw: string;
+  }> {
     const response = await this.client.post(`/api/v1/genai/adhoc-json`, data);
     return response.data;
   }
@@ -836,7 +1242,10 @@ class ApiClient {
     jsonSchema?: any;
     options?: any;
   }) {
-    const response = await this.client.post(`/api/v1/genai/complete-json`, data);
+    const response = await this.client.post(
+      `/api/v1/genai/complete-json`,
+      data,
+    );
     return response.data;
   }
 
@@ -845,42 +1254,79 @@ class ApiClient {
     tools: Array<{ name: string; description?: string; parameters: any }>;
     options?: any;
   }) {
-    const response = await this.client.post(`/api/v1/genai/complete-with-tools`, data);
+    const response = await this.client.post(
+      `/api/v1/genai/complete-with-tools`,
+      data,
+    );
     return response.data;
   }
 
   // --- Share (public access) ---
-  async shareCreate(projectId: string, expiresAtISO?: string): Promise<{ shareToken: string; expiresAt: string; url: string }> {
-    const res = await this.client.post(`/api/v1/projects/${projectId}/share`, expiresAtISO ? { expiresAt: expiresAtISO } : {});
+  async shareCreate(
+    projectId: string,
+    expiresAtISO?: string,
+  ): Promise<{ shareToken: string; expiresAt: string; url: string }> {
+    const res = await this.client.post(
+      `/api/v1/projects/${projectId}/share`,
+      expiresAtISO ? { expiresAt: expiresAtISO } : {},
+    );
     return res.data as any;
   }
 
-  async shareRevoke(projectId: string, token: string): Promise<{ success: boolean }> {
-    const res = await this.client.delete(`/api/v1/projects/${projectId}/share/${token}`);
+  async shareRevoke(
+    projectId: string,
+    token: string,
+  ): Promise<{ success: boolean }> {
+    const res = await this.client.delete(
+      `/api/v1/projects/${projectId}/share/${token}`,
+    );
     return res.data as any;
   }
 
   async shareGetPublic(token: string): Promise<{
     v: '1';
-    share: { tokenId: string; isActive: boolean; expiresAt: string; createdAt: string };
-    project: { id: string; displayName: string; description?: string|null; createdAt?: string };
+    share: {
+      tokenId: string;
+      isActive: boolean;
+      expiresAt: string;
+      createdAt: string;
+    };
+    project: {
+      id: string;
+      displayName: string;
+      description?: string | null;
+      createdAt?: string;
+    };
     interactions: Array<{
       id: string;
-      kind: 'user'|'assistant';
+      kind: 'user' | 'assistant';
       subkind?: string;
       replyTo?: string;
       content?: string;
       contentSanitized?: string;
-      graphData?: { chartTitle: string; chartType?: 'line'|'bar'|'area'|'stackedBar'|'stackedArea'|'composed'; table: (string|number)[][]; sources: string[] };
+      graphData?: {
+        chartTitle: string;
+        chartType?:
+          | 'line'
+          | 'bar'
+          | 'area'
+          | 'stackedBar'
+          | 'stackedArea'
+          | 'composed';
+        table: (string | number)[][];
+        sources: string[];
+      };
       searchQueries?: string[];
       sources?: string[];
       createdAt: string;
-      author?: { kind: 'human'|'ai'; displayName?: string };
+      author?: { kind: 'human' | 'ai'; displayName?: string };
       metadata?: { pinned?: boolean; notes?: string[] };
     }>;
     paging?: { nextCursor?: string; limit?: number };
   }> {
-    const res = await axios.get(`${API_BASE_URL}/api/v1/public/share/${encodeURIComponent(token)}`);
+    const res = await axios.get(
+      `${API_BASE_URL}/api/v1/public/share/${encodeURIComponent(token)}`,
+    );
     return res.data as any;
   }
 
@@ -896,11 +1342,16 @@ class ApiClient {
       updatedAt: string;
     }>;
   }> {
-    const res = await axios.get(`${API_BASE_URL}/api/v1/public/share/${encodeURIComponent(token)}/docs`);
+    const res = await axios.get(
+      `${API_BASE_URL}/api/v1/public/share/${encodeURIComponent(token)}/docs`,
+    );
     return res.data as any;
   }
 
-  async shareGetDoc(token: string, docId: string): Promise<{
+  async shareGetDoc(
+    token: string,
+    docId: string,
+  ): Promise<{
     id: string;
     filename: string;
     contentType: string;
@@ -911,31 +1362,45 @@ class ApiClient {
     createdAt: string;
     updatedAt: string;
   }> {
-    const res = await axios.get(`${API_BASE_URL}/api/v1/public/share/${encodeURIComponent(token)}/docs/${encodeURIComponent(docId)}`);
+    const res = await axios.get(
+      `${API_BASE_URL}/api/v1/public/share/${encodeURIComponent(token)}/docs/${encodeURIComponent(docId)}`,
+    );
     return res.data as any;
   }
 
   async shareDownloadDoc(token: string, docId: string): Promise<Blob> {
-    const res = await axios.get(`${API_BASE_URL}/api/v1/public/share/${encodeURIComponent(token)}/docs/${encodeURIComponent(docId)}/download`, {
-      responseType: 'blob',
-    });
+    const res = await axios.get(
+      `${API_BASE_URL}/api/v1/public/share/${encodeURIComponent(token)}/docs/${encodeURIComponent(docId)}/download`,
+      {
+        responseType: 'blob',
+      },
+    );
     return res.data;
   }
 
   async shareExportDocToWord(token: string, docId: string): Promise<Blob> {
-    const res = await axios.post(`${API_BASE_URL}/api/v1/public/share/${encodeURIComponent(token)}/docs/${encodeURIComponent(docId)}/export`, {}, {
-      responseType: 'blob',
-    });
+    const res = await axios.post(
+      `${API_BASE_URL}/api/v1/public/share/${encodeURIComponent(token)}/docs/${encodeURIComponent(docId)}/export`,
+      {},
+      {
+        responseType: 'blob',
+      },
+    );
     return res.data;
   }
 
   // --- Verified URL Analysis ---
-  async verifiedCreate(url: string, model?: string): Promise<{ code: string; url: string; status: string }> {
+  async verifiedCreate(
+    url: string,
+    model?: string,
+  ): Promise<{ code: string; url: string; status: string }> {
     // Use proxy endpoint (Cloud Function) instead of direct backend call
     // The proxy adds x-functions-key header for system authentication
     const proxyUrl = import.meta.env.VITE_VERIFIED_PROXY_URL;
     if (!proxyUrl) {
-      throw new Error('VITE_VERIFIED_PROXY_URL is not configured. Please set it in environment variables.');
+      throw new Error(
+        'VITE_VERIFIED_PROXY_URL is not configured. Please set it in environment variables.',
+      );
     }
     const payload: { url: string; model?: string } = { url };
     if (model) {
@@ -959,7 +1424,9 @@ class ApiClient {
     createdAt: string;
     updatedAt: string;
   }> {
-    const res = await axios.get(`${API_BASE_URL}/api/v1/public/verified/${encodeURIComponent(code)}`);
+    const res = await axios.get(
+      `${API_BASE_URL}/api/v1/public/verified/${encodeURIComponent(code)}`,
+    );
     return res.data as any;
   }
 
@@ -973,43 +1440,81 @@ class ApiClient {
     language?: string;
     ingestedAt: string;
   }> {
-    const res = await axios.get(`${API_BASE_URL}/api/v1/public/documents/${encodeURIComponent(documentId)}`);
+    const res = await axios.get(
+      `${API_BASE_URL}/api/v1/public/documents/${encodeURIComponent(documentId)}`,
+    );
     return res.data as any;
   }
 
   // --- Analysis: Entities ---
-  async analyzeEntities(projectId: string, prompt?: string): Promise<{ queued: boolean }> {
-    const res = await this.client.post(`/api/v1/projects/${projectId}/analyze/entities`, { prompt: prompt || '' });
+  async analyzeEntities(
+    projectId: string,
+    prompt?: string,
+  ): Promise<{ queued: boolean }> {
+    const res = await this.client.post(
+      `/api/v1/projects/${projectId}/analyze/entities`,
+      { prompt: prompt || '' },
+    );
     return res.data as any;
   }
 
   // --- Analysis: Facts/Events/Metrics/Decisions ---
-  async analyzeFacts(projectId: string, prompt?: string): Promise<{ queued: boolean }> {
-    const res = await this.client.post(`/api/v1/projects/${projectId}/analyze/facts`, { prompt: prompt || '' });
+  async analyzeFacts(
+    projectId: string,
+    prompt?: string,
+  ): Promise<{ queued: boolean }> {
+    const res = await this.client.post(
+      `/api/v1/projects/${projectId}/analyze/facts`,
+      { prompt: prompt || '' },
+    );
     return res.data as any;
   }
-  async analyzeEvents(projectId: string, prompt?: string): Promise<{ queued: boolean }> {
-    const res = await this.client.post(`/api/v1/projects/${projectId}/analyze/events`, { prompt: prompt || '' });
+  async analyzeEvents(
+    projectId: string,
+    prompt?: string,
+  ): Promise<{ queued: boolean }> {
+    const res = await this.client.post(
+      `/api/v1/projects/${projectId}/analyze/events`,
+      { prompt: prompt || '' },
+    );
     return res.data as any;
   }
-  async analyzeMetrics(projectId: string, prompt?: string): Promise<{ queued: boolean }> {
-    const res = await this.client.post(`/api/v1/projects/${projectId}/analyze/metrics`, { prompt: prompt || '' });
+  async analyzeMetrics(
+    projectId: string,
+    prompt?: string,
+  ): Promise<{ queued: boolean }> {
+    const res = await this.client.post(
+      `/api/v1/projects/${projectId}/analyze/metrics`,
+      { prompt: prompt || '' },
+    );
     return res.data as any;
   }
-  async analyzeDecisions(projectId: string, prompt?: string): Promise<{ queued: boolean }> {
-    const res = await this.client.post(`/api/v1/projects/${projectId}/analyze/decisions`, { prompt: prompt || '' });
+  async analyzeDecisions(
+    projectId: string,
+    prompt?: string,
+  ): Promise<{ queued: boolean }> {
+    const res = await this.client.post(
+      `/api/v1/projects/${projectId}/analyze/decisions`,
+      { prompt: prompt || '' },
+    );
     return res.data as any;
   }
 
-  async genaiStream(data: {
-    prompt: string;
-    tools?: Array<{ name: string; description?: string; parameters: any }>;
-    options?: any;
-    messages?: Array<{ role: 'user'|'assistant'|'system'|'note'; text: string }>;
-    projectId?: string;
-    streamId?: string;
-    researchEnabled?: boolean;
-  }, signal?: AbortSignal) {
+  async genaiStream(
+    data: {
+      prompt: string;
+      tools?: Array<{ name: string; description?: string; parameters: any }>;
+      options?: any;
+      messages?: Array<{
+        role: 'user' | 'assistant' | 'system' | 'note';
+        text: string;
+      }>;
+      projectId?: string;
+      streamId?: string;
+      researchEnabled?: boolean;
+    },
+    signal?: AbortSignal,
+  ) {
     // Extract researchEnabled from options if present and add to top level
     const body: any = { ...data };
     if (data.options?.researchEnabled !== undefined) {
@@ -1024,18 +1529,44 @@ class ApiClient {
 
   // --- Core Docs (project attachments) ---
   async docsList(projectId: string, excludeDocumentType?: string) {
-    const params = excludeDocumentType ? `?excludeDocumentType=${encodeURIComponent(excludeDocumentType)}` : '';
-    const res = await this.client.get(`/api/v1/projects/${projectId}/docs${params}`);
+    const params = excludeDocumentType
+      ? `?excludeDocumentType=${encodeURIComponent(excludeDocumentType)}`
+      : '';
+    const res = await this.client.get(
+      `/api/v1/projects/${projectId}/docs${params}`,
+    );
     return res.data as any[];
   }
 
-  async docsCreateFromText(projectId: string, data: { filename: string; contentType: string; text: string; description?: string }) {
-    const res = await this.client.post(`/api/v1/projects/${projectId}/docs/from-text`, data);
+  async docsCreateFromText(
+    projectId: string,
+    data: {
+      filename: string;
+      contentType: string;
+      text: string;
+      description?: string;
+    },
+  ) {
+    const res = await this.client.post(
+      `/api/v1/projects/${projectId}/docs/from-text`,
+      data,
+    );
     return res.data as any;
   }
 
-  async docsCreate(projectId: string, data: { filename: string; contentType: string; description?: string; extractedText?: string }) {
-    const res = await this.client.post(`/api/v1/projects/${projectId}/docs`, data);
+  async docsCreate(
+    projectId: string,
+    data: {
+      filename: string;
+      contentType: string;
+      description?: string;
+      extractedText?: string;
+    },
+  ) {
+    const res = await this.client.post(
+      `/api/v1/projects/${projectId}/docs`,
+      data,
+    );
     return res.data as any;
   }
 
@@ -1043,46 +1574,79 @@ class ApiClient {
     const form = new FormData();
     form.append('file', file);
     if (description) form.append('description', description);
-    const res = await this.client.post(`/api/v1/projects/${projectId}/docs/upload`, form, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    const res = await this.client.post(
+      `/api/v1/projects/${projectId}/docs/upload`,
+      form,
+      {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      },
+    );
     return res.data as any;
   }
 
   async docsParse(projectId: string, docId: string) {
-    const res = await this.client.post(`/api/v1/projects/${projectId}/docs/${docId}/parse`);
+    const res = await this.client.post(
+      `/api/v1/projects/${projectId}/docs/${docId}/parse`,
+    );
     return res.data as any;
   }
 
   async docsDelete(projectId: string, docId: string) {
-    const res = await this.client.delete(`/api/v1/projects/${projectId}/docs/${docId}`);
+    const res = await this.client.delete(
+      `/api/v1/projects/${projectId}/docs/${docId}`,
+    );
     return res.data as any;
   }
 
-  async docsUpdate(projectId: string, docId: string, data: { filename?: string; description?: string }) {
+  async docsUpdate(
+    projectId: string,
+    docId: string,
+    data: { filename?: string; description?: string },
+  ) {
     // Encode docId to handle special characters like colons (e.g., Firestore version suffixes)
     const encodedDocId = encodeURIComponent(docId);
-    const res = await this.client.patch(`/api/v1/projects/${projectId}/docs/${encodedDocId}`, data);
+    const res = await this.client.patch(
+      `/api/v1/projects/${projectId}/docs/${encodedDocId}`,
+      data,
+    );
     return res.data as any;
   }
 
-  async docsCheckIndexStatus(projectId: string, docId: string): Promise<{ indexed: boolean; reason?: string; error?: string }> {
-    const res = await this.client.get(`/api/v1/projects/${projectId}/docs/${docId}/index-status`);
+  async docsCheckIndexStatus(
+    projectId: string,
+    docId: string,
+  ): Promise<{ indexed: boolean; reason?: string; error?: string }> {
+    const res = await this.client.get(
+      `/api/v1/projects/${projectId}/docs/${docId}/index-status`,
+    );
     return res.data as { indexed: boolean; reason?: string; error?: string };
   }
 
-  async docsCheckBigQueryStatus(projectId: string, docId: string): Promise<{ available: boolean; reason?: string; error?: string }> {
-    const res = await this.client.get(`/api/v1/projects/${projectId}/docs/${docId}/bigquery-status`);
+  async docsCheckBigQueryStatus(
+    projectId: string,
+    docId: string,
+  ): Promise<{ available: boolean; reason?: string; error?: string }> {
+    const res = await this.client.get(
+      `/api/v1/projects/${projectId}/docs/${docId}/bigquery-status`,
+    );
     return res.data as { available: boolean; reason?: string; error?: string };
   }
 
-  async docsCheckVertexSearchAvailability(projectId: string, docId: string): Promise<{ available: boolean; reason?: string; error?: string }> {
-    const res = await this.client.get(`/api/v1/projects/${projectId}/docs/${docId}/vertex-search-availability`);
+  async docsCheckVertexSearchAvailability(
+    projectId: string,
+    docId: string,
+  ): Promise<{ available: boolean; reason?: string; error?: string }> {
+    const res = await this.client.get(
+      `/api/v1/projects/${projectId}/docs/${docId}/vertex-search-availability`,
+    );
     return res.data as { available: boolean; reason?: string; error?: string };
   }
 
   // Prepare mode: Stage 1 - Analyze documents and generate commands
-  async prepareAnalyze(projectId: string, userQuery: string): Promise<{
+  async prepareAnalyze(
+    projectId: string,
+    userQuery: string,
+  ): Promise<{
     commands: Array<{
       action: string;
       documentId: string;
@@ -1092,23 +1656,33 @@ class ApiClient {
     }>;
     summary: string;
   }> {
-    const response = await this.client.post(`/api/v1/projects/${projectId}/prepare/analyze`, {
-      userQuery,
-    });
+    const response = await this.client.post(
+      `/api/v1/projects/${projectId}/prepare/analyze`,
+      {
+        userQuery,
+      },
+    );
     return response.data;
   }
 
   // Prepare mode: Stage 2 - Apply modifications to a document
-  async prepareApply(projectId: string, documentId: string, prompt: string): Promise<{
+  async prepareApply(
+    projectId: string,
+    documentId: string,
+    prompt: string,
+  ): Promise<{
     success: boolean;
     message: string;
     documentId?: string;
     error?: string;
   }> {
-    const response = await this.client.post(`/api/v1/projects/${projectId}/prepare/apply`, {
-      documentId,
-      prompt,
-    });
+    const response = await this.client.post(
+      `/api/v1/projects/${projectId}/prepare/apply`,
+      {
+        documentId,
+        prompt,
+      },
+    );
     return response.data;
   }
 
@@ -1121,7 +1695,9 @@ class ApiClient {
   }> {
     console.log(`[API] getBigQuerySchema called: projectId=${projectId}`);
     try {
-      const res = await this.client.get(`/api/v1/projects/${projectId}/analytics/schema`);
+      const res = await this.client.get(
+        `/api/v1/projects/${projectId}/analytics/schema`,
+      );
       console.log(`[API] getBigQuerySchema response:`, res.data);
       return res.data;
     } catch (error: any) {
@@ -1130,15 +1706,20 @@ class ApiClient {
     }
   }
 
-  async generateSQL(projectId: string, query: string): Promise<{
+  async generateSQL(
+    projectId: string,
+    query: string,
+  ): Promise<{
     sql: string;
     explanation?: string;
   }> {
-    console.log(`[API] generateSQL called: projectId=${projectId}, query=${query}`);
+    console.log(
+      `[API] generateSQL called: projectId=${projectId}, query=${query}`,
+    );
     try {
       // Get schema info first
       const schemaData = await this.getBigQuerySchema(projectId);
-      
+
       // Build prompt for SQL generation
       const filterInstructions = `\n\nCRITICAL FILTERING REQUIREMENTS:
 - ALWAYS filter by tenantId = '${schemaData.tenantID}' when querying core_docs_metadata or documents_metadata tables
@@ -1187,7 +1768,8 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       const genaiResponse = await this.genaiGenerate({
         model: 'gemini_quality',
         prompt,
-        systemInstruction: 'You are a BigQuery SQL expert. Generate only valid SQL queries without any explanations or markdown formatting. Handle complex queries with multiple CTEs, JOINs, and subqueries. Always optimize for performance by using appropriate filters and limits.',
+        systemInstruction:
+          'You are a BigQuery SQL expert. Generate only valid SQL queries without any explanations or markdown formatting. Handle complex queries with multiple CTEs, JOINs, and subqueries. Always optimize for performance by using appropriate filters and limits.',
         temperature: 0.1,
         maxOutputTokens: 4096,
         webSearchEnabled: false,
@@ -1196,9 +1778,12 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       });
 
       let sqlQuery = (genaiResponse.content || '').trim();
-      
+
       // Clean SQL: remove markdown code blocks and trailing backticks
-      sqlQuery = sqlQuery.replace(/^```sql\s*/i, '').replace(/^```\s*/, '').replace(/\s*```\s*$/, '');
+      sqlQuery = sqlQuery
+        .replace(/^```sql\s*/i, '')
+        .replace(/^```\s*/, '')
+        .replace(/\s*```\s*$/, '');
       sqlQuery = sqlQuery.replace(/`+$/, ''); // Remove trailing backticks
       sqlQuery = sqlQuery.trim();
 
@@ -1219,8 +1804,10 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
         console.warn(`[API] Failed to generate explanation:`, explanationError);
       }
 
-      console.log(`[API] generateSQL completed: sqlLength=${sqlQuery.length}, hasExplanation=${!!explanation}`);
-      
+      console.log(
+        `[API] generateSQL completed: sqlLength=${sqlQuery.length}, hasExplanation=${!!explanation}`,
+      );
+
       return {
         sql: sqlQuery,
         explanation: explanation || undefined,
@@ -1231,19 +1818,29 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
-  async executeSQL(projectId: string, sql: string, maxResults?: number): Promise<{
+  async executeSQL(
+    projectId: string,
+    sql: string,
+    maxResults?: number,
+  ): Promise<{
     results: Array<Record<string, any>>;
     rowCount: number;
     error?: string;
   }> {
-    console.log(`[API] executeSQL called: projectId=${projectId}, sqlLength=${sql.length}, maxResults=${maxResults}`);
+    console.log(
+      `[API] executeSQL called: projectId=${projectId}, sqlLength=${sql.length}, maxResults=${maxResults}`,
+    );
     try {
-      const res = await this.client.post(`/api/v1/projects/${projectId}/analytics/execute-sql`, {
-        sql,
-        maxResults,
-      }, {
-        timeout: 300000, // 5 minutes
-      });
+      const res = await this.client.post(
+        `/api/v1/projects/${projectId}/analytics/execute-sql`,
+        {
+          sql,
+          maxResults,
+        },
+        {
+          timeout: 300000, // 5 minutes
+        },
+      );
       console.log(`[API] executeSQL response:`, res.data);
       console.log(`[API] executeSQL response has error:`, !!res.data?.error);
       return res.data;
@@ -1252,12 +1849,20 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       return {
         results: [],
         rowCount: 0,
-        error: error.response?.data?.error || error.response?.data?.message || error.message || 'Unknown error',
+        error:
+          error.response?.data?.error ||
+          error.response?.data?.message ||
+          error.message ||
+          'Unknown error',
       };
     }
   }
 
-  async queryBigQuery(projectId: string, query: string, maxResults?: number): Promise<{
+  async queryBigQuery(
+    projectId: string,
+    query: string,
+    maxResults?: number,
+  ): Promise<{
     sql: string;
     results: Array<Record<string, any>>;
     rowCount: number;
@@ -1265,25 +1870,37 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     error?: string;
     errorHistory?: string[];
   }> {
-    console.log(`[API] queryBigQuery called: projectId=${projectId}, query=${query}, maxResults=${maxResults}`);
+    console.log(
+      `[API] queryBigQuery called: projectId=${projectId}, query=${query}, maxResults=${maxResults}`,
+    );
     try {
       // Set timeout to 5 minutes for BigQuery queries (they can take time)
-      const res = await Promise.race([
-        this.client.post(`/api/v1/projects/${projectId}/analytics/query`, {
-          query,
-          maxResults,
-        }, {
-          timeout: 300000, // 5 minutes
-        }),
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Request timeout after 5 minutes')), 300000)
-        )
-      ]) as any;
-      
+      const res = (await Promise.race([
+        this.client.post(
+          `/api/v1/projects/${projectId}/analytics/query`,
+          {
+            query,
+            maxResults,
+          },
+          {
+            timeout: 300000, // 5 minutes
+          },
+        ),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error('Request timeout after 5 minutes')),
+            300000,
+          ),
+        ),
+      ])) as any;
+
       console.log(`[API] queryBigQuery response:`, res.data);
       console.log(`[API] queryBigQuery response has error:`, !!res.data?.error);
       if (res.data?.errorHistory && res.data.errorHistory.length > 0) {
-        console.log(`[API] queryBigQuery error history:`, res.data.errorHistory);
+        console.log(
+          `[API] queryBigQuery error history:`,
+          res.data.errorHistory,
+        );
       }
       return res.data;
     } catch (error: any) {
@@ -1299,25 +1916,37 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
         sql: '',
         results: [],
         rowCount: 0,
-        error: error.response?.data?.error || error.response?.data?.message || error.message || 'Unknown error',
+        error:
+          error.response?.data?.error ||
+          error.response?.data?.message ||
+          error.message ||
+          'Unknown error',
       };
     }
   }
 
   async docsDownload(projectId: string, docId: string): Promise<Blob> {
     try {
-      const res = await this.client.get(`/api/v1/projects/${projectId}/docs/${docId}/download`, { responseType: 'blob' });
+      const res = await this.client.get(
+        `/api/v1/projects/${projectId}/docs/${docId}/download`,
+        { responseType: 'blob' },
+      );
       return res.data as Blob;
     } catch (e: any) {
       // Fallback: if server returns 400 NO_STORAGE, fetch doc and synthesize blob from extractedText
       const status = e?.response?.status;
       if (status === 400) {
         try {
-          const meta = await this.client.get(`/api/v1/projects/${projectId}/docs`);
+          const meta = await this.client.get(
+            `/api/v1/projects/${projectId}/docs`,
+          );
           const arr = (meta.data as any[]) || [];
-          const found = arr.find((d: any) => d && (d.id === docId));
+          const found = arr.find((d: any) => d && d.id === docId);
           if (found && typeof found.extractedText === 'string') {
-            const ct = typeof found.contentType === 'string' && found.contentType ? found.contentType : 'application/octet-stream';
+            const ct =
+              typeof found.contentType === 'string' && found.contentType
+                ? found.contentType
+                : 'application/octet-stream';
             return new Blob([found.extractedText], { type: ct });
           }
         } catch {}
@@ -1327,49 +1956,97 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }
 
   async docsExportToDocx(projectId: string, docId: string): Promise<Blob> {
-    const res = await this.client.post(`/api/v1/projects/${projectId}/docs/${docId}/export`, {}, { responseType: 'blob' });
+    const res = await this.client.post(
+      `/api/v1/projects/${projectId}/docs/${docId}/export`,
+      {},
+      { responseType: 'blob' },
+    );
     return res.data as Blob;
   }
 
   // Project Scenarios
-  async scenariosList(projectId: string, parentId?: string | null): Promise<import('../types/projectScenario').ProjectScenario[]> {
+  async scenariosList(
+    projectId: string,
+    parentId?: string | null,
+  ): Promise<import('../types/projectScenario').ProjectScenario[]> {
     // If parentId is null or undefined, load all scenarios (backend will return all)
     // If parentId is specified, backend will filter by parentId
-    const params = parentId !== null && parentId !== undefined ? `?parentId=${encodeURIComponent(parentId)}` : '';
-    const res = await this.client.get(`/api/v1/projects/${projectId}/scenarios${params}`);
+    const params =
+      parentId !== null && parentId !== undefined
+        ? `?parentId=${encodeURIComponent(parentId)}`
+        : '';
+    const res = await this.client.get(
+      `/api/v1/projects/${projectId}/scenarios${params}`,
+    );
     return res.data as import('../types/projectScenario').ProjectScenario[];
   }
 
-  async scenarioGet(projectId: string, scenarioId: string): Promise<import('../types/projectScenario').ProjectScenario> {
-    const res = await this.client.get(`/api/v1/projects/${projectId}/scenarios/${scenarioId}`);
+  async scenarioGet(
+    projectId: string,
+    scenarioId: string,
+  ): Promise<import('../types/projectScenario').ProjectScenario> {
+    const res = await this.client.get(
+      `/api/v1/projects/${projectId}/scenarios/${scenarioId}`,
+    );
     return res.data as import('../types/projectScenario').ProjectScenario;
   }
 
-  async scenarioCreate(projectId: string, data: import('../types/projectScenario').CreateProjectScenarioRequest): Promise<import('../types/projectScenario').ProjectScenario> {
-    const res = await this.client.post(`/api/v1/projects/${projectId}/scenarios`, data);
+  async scenarioCreate(
+    projectId: string,
+    data: import('../types/projectScenario').CreateProjectScenarioRequest,
+  ): Promise<import('../types/projectScenario').ProjectScenario> {
+    const res = await this.client.post(
+      `/api/v1/projects/${projectId}/scenarios`,
+      data,
+    );
     return res.data as import('../types/projectScenario').ProjectScenario;
   }
 
-  async scenarioUpdate(projectId: string, scenarioId: string, data: import('../types/projectScenario').UpdateProjectScenarioRequest): Promise<import('../types/projectScenario').ProjectScenario> {
-    const res = await this.client.put(`/api/v1/projects/${projectId}/scenarios/${scenarioId}`, data);
+  async scenarioUpdate(
+    projectId: string,
+    scenarioId: string,
+    data: import('../types/projectScenario').UpdateProjectScenarioRequest,
+  ): Promise<import('../types/projectScenario').ProjectScenario> {
+    const res = await this.client.put(
+      `/api/v1/projects/${projectId}/scenarios/${scenarioId}`,
+      data,
+    );
     return res.data as import('../types/projectScenario').ProjectScenario;
   }
 
-  async scenarioDelete(projectId: string, scenarioId: string): Promise<{ success: boolean; message: string }> {
-    const res = await this.client.delete(`/api/v1/projects/${projectId}/scenarios/${scenarioId}`);
+  async scenarioDelete(
+    projectId: string,
+    scenarioId: string,
+  ): Promise<{ success: boolean; message: string }> {
+    const res = await this.client.delete(
+      `/api/v1/projects/${projectId}/scenarios/${scenarioId}`,
+    );
     return res.data as { success: boolean; message: string };
   }
 
-  async suggestChatTitles(messages: Array<{ role: 'user'|'assistant'|'system'|'note'; text: string }>, language?: string): Promise<string[]> {
-    const transcript = messages.map(m => `- ${m.role}: ${m.text}`).join('\n');
-    const lang = (language || (localStorage.getItem('preferredLanguage') || 'EN')).toLowerCase();
+  async suggestChatTitles(
+    messages: Array<{
+      role: 'user' | 'assistant' | 'system' | 'note';
+      text: string;
+    }>,
+    language?: string,
+  ): Promise<string[]> {
+    const transcript = messages.map((m) => `- ${m.role}: ${m.text}`).join('\n');
+    const lang = (
+      language ||
+      localStorage.getItem('preferredLanguage') ||
+      'EN'
+    ).toLowerCase();
     const prompt = `User requirement: you should create your answer in ${lang} language. Use English or other languages inline only if you use well-known and accepted in target language terms.\n\nYou are naming a chat based on its conversation.\n\nTranscript (most recent last):\n${transcript}\n\nTask: Propose 3 concise, specific, non-generic titles that reflect the supposed user's intent behind the conversation. Each <= 35 characters. Titles must: (1) reflect the user's specific interest in the topic overall based on the user's own requests; (2) present distinct viewpoints/angles on the user's context (not duplicates, different perspectives).\nReturn strictly JSON only, no markdown/code fences, matching this shape: { "titles": ["title1", "title2", "title3"] }.`;
     try {
-      const res = await this.client.post<{ ok: boolean; result: any }>(`/api/v1/ai/structured`, {
-        prompt,
-        minCapabilityScore: 6,
-        maxOutputSize: 512,
-      });
+      const res = await this.client.post<{ ok: boolean; result: any }>(
+        `/api/v1/ai/structured`,
+        {
+          prompt,
+          minCapabilityScore: 6,
+          maxOutputSize: 512,
+        },
+      );
       const obj = res.data?.result;
       const arr = Array.isArray(obj?.titles) ? obj.titles : [];
       return arr.filter((x: any) => typeof x === 'string');
@@ -1379,16 +2056,22 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }
 
   // --- Artifact Templates ---
-  async listArtifactTemplates(category?: string, options?: { graphSourceKind?: string }): Promise<any[]> {
+  async listArtifactTemplates(
+    category?: string,
+    options?: { graphSourceKind?: string },
+  ): Promise<any[]> {
     const params: Record<string, string> = {};
     if (category) params.category = category;
-    if (options?.graphSourceKind) params.graphSourceKind = options.graphSourceKind;
+    if (options?.graphSourceKind)
+      params.graphSourceKind = options.graphSourceKind;
     const res = await this.client.get(`/api/v1/artifact-templates`, { params });
     return res.data as any[];
   }
 
   async getArtifactTemplate(templateId: string): Promise<any> {
-    const res = await this.client.get(`/api/v1/artifact-templates/${templateId}`);
+    const res = await this.client.get(
+      `/api/v1/artifact-templates/${templateId}`,
+    );
     return res.data;
   }
 
@@ -1397,18 +2080,32 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     return res.data;
   }
 
-  async updateArtifactTemplate(templateId: string, template: any): Promise<{ success: boolean }> {
-    const res = await this.client.put(`/api/v1/artifact-templates/${templateId}`, template);
+  async updateArtifactTemplate(
+    templateId: string,
+    template: any,
+  ): Promise<{ success: boolean }> {
+    const res = await this.client.put(
+      `/api/v1/artifact-templates/${templateId}`,
+      template,
+    );
     return res.data;
   }
 
-  async deleteArtifactTemplate(templateId: string): Promise<{ success: boolean }> {
-    const res = await this.client.delete(`/api/v1/artifact-templates/${templateId}`);
+  async deleteArtifactTemplate(
+    templateId: string,
+  ): Promise<{ success: boolean }> {
+    const res = await this.client.delete(
+      `/api/v1/artifact-templates/${templateId}`,
+    );
     return res.data;
   }
 
-  async publishArtifactTemplate(templateId: string): Promise<{ success: boolean }> {
-    const res = await this.client.post(`/api/v1/artifact-templates/${templateId}/publish`);
+  async publishArtifactTemplate(
+    templateId: string,
+  ): Promise<{ success: boolean }> {
+    const res = await this.client.post(
+      `/api/v1/artifact-templates/${templateId}/publish`,
+    );
     return res.data;
   }
 
@@ -1419,7 +2116,10 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     detailLevel: string;
     language: string;
   }): Promise<{ sections: any[] }> {
-    const res = await this.client.post(`/api/v1/artifact-templates/generate-structure`, requirements);
+    const res = await this.client.post(
+      `/api/v1/artifact-templates/generate-structure`,
+      requirements,
+    );
     return res.data;
   }
 
@@ -1434,30 +2134,55 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     visibility?: 'private' | 'team' | 'public';
     sectionCustomizations?: Record<string, any>;
   }): Promise<{ id: string }> {
-    const res = await this.client.post(`/api/v1/artifact-templates/from-artifact`, request);
+    const res = await this.client.post(
+      `/api/v1/artifact-templates/from-artifact`,
+      request,
+    );
     return res.data;
   }
 
-  async createArtifactFromTemplate(projectId: string, request: {
-    templateId: string;
-    filename: string;
-    userRequest?: string;
-    preferredLanguage?: string;
-    contextSources?: any;
-    graphSources?: Array<{ kind: string; lensId?: string; reportType?: string; templateId?: string }>;
-    sourceInteractionId?: string;
-    autoGenerate?: boolean;
-    generationMode?: 'auto' | 'interactive';
-    maxOutputTokens?: number;
-    thinkingBudget?: number;
-  }): Promise<{ artifact: any; session?: any; generationError?: string | null }> {
-    const res = await this.client.post(`/api/v1/projects/${projectId}/artifacts/from-template`, request);
+  async createArtifactFromTemplate(
+    projectId: string,
+    request: {
+      templateId: string;
+      filename: string;
+      userRequest?: string;
+      preferredLanguage?: string;
+      contextSources?: any;
+      graphSources?: Array<{
+        kind: string;
+        lensId?: string;
+        reportType?: string;
+        templateId?: string;
+      }>;
+      sourceInteractionId?: string;
+      autoGenerate?: boolean;
+      generationMode?: 'auto' | 'interactive';
+      maxOutputTokens?: number;
+      thinkingBudget?: number;
+    },
+  ): Promise<{
+    artifact: any;
+    session?: any;
+    generationError?: string | null;
+  }> {
+    const res = await this.client.post(
+      `/api/v1/projects/${projectId}/artifacts/from-template`,
+      request,
+    );
     return res.data;
   }
 
   // --- Artifact Generation ---
-  async startArtifactGeneration(artifactId: string, mode: 'auto' | 'interactive', projectId: string): Promise<any> {
-    const res = await this.client.post(`/api/v1/artifacts/${artifactId}/generate`, { mode, projectId });
+  async startArtifactGeneration(
+    artifactId: string,
+    mode: 'auto' | 'interactive',
+    projectId: string,
+  ): Promise<any> {
+    const res = await this.client.post(
+      `/api/v1/artifacts/${artifactId}/generate`,
+      { mode, projectId },
+    );
     return res.data;
   }
 
@@ -1467,14 +2192,17 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     sessionId: string,
     projectId: string,
     promptOverride?: string,
-    modelOverride?: string
+    modelOverride?: string,
   ): Promise<any> {
-    const res = await this.client.post(`/api/v1/artifacts/${artifactId}/sections/${sectionId}/generate`, {
-      sessionId,
-      projectId,
-      promptOverride,
-      modelOverride,
-    });
+    const res = await this.client.post(
+      `/api/v1/artifacts/${artifactId}/sections/${sectionId}/generate`,
+      {
+        sessionId,
+        projectId,
+        promptOverride,
+        modelOverride,
+      },
+    );
     return res.data;
   }
 
@@ -1484,39 +2212,64 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     sessionId: string,
     projectId: string,
     newPrompt: string,
-    model?: string
+    model?: string,
   ): Promise<any> {
-    const res = await this.client.post(`/api/v1/artifacts/${artifactId}/sections/${sectionId}/regenerate`, {
-      sessionId,
-      projectId,
-      newPrompt,
-      model,
-    });
+    const res = await this.client.post(
+      `/api/v1/artifacts/${artifactId}/sections/${sectionId}/regenerate`,
+      {
+        sessionId,
+        projectId,
+        newPrompt,
+        model,
+      },
+    );
     return res.data;
   }
 
-  async assembleArtifactDocument(artifactId: string, sessionId: string): Promise<{ content: string }> {
-    const res = await this.client.post(`/api/v1/artifacts/${artifactId}/assemble`, { sessionId });
+  async assembleArtifactDocument(
+    artifactId: string,
+    sessionId: string,
+  ): Promise<{ content: string }> {
+    const res = await this.client.post(
+      `/api/v1/artifacts/${artifactId}/assemble`,
+      { sessionId },
+    );
     return res.data;
   }
 
-  async saveArtifactVersion(artifactId: string, sessionId: string, trigger: 'manual' | 'auto' | 'scheduled' = 'manual'): Promise<any> {
-    const res = await this.client.post(`/api/v1/artifacts/${artifactId}/versions`, { sessionId, trigger });
+  async saveArtifactVersion(
+    artifactId: string,
+    sessionId: string,
+    trigger: 'manual' | 'auto' | 'scheduled' = 'manual',
+  ): Promise<any> {
+    const res = await this.client.post(
+      `/api/v1/artifacts/${artifactId}/versions`,
+      { sessionId, trigger },
+    );
     return res.data;
   }
 
-  async restoreArtifactVersion(artifactId: string, versionId: string): Promise<{ success: boolean }> {
-    const res = await this.client.post(`/api/v1/artifacts/${artifactId}/versions/${versionId}/restore`);
+  async restoreArtifactVersion(
+    artifactId: string,
+    versionId: string,
+  ): Promise<{ success: boolean }> {
+    const res = await this.client.post(
+      `/api/v1/artifacts/${artifactId}/versions/${versionId}/restore`,
+    );
     return res.data;
   }
 
   async getGenerationSession(sessionId: string): Promise<any> {
-    const res = await this.client.get(`/api/v1/generation-sessions/${sessionId}`);
+    const res = await this.client.get(
+      `/api/v1/generation-sessions/${sessionId}`,
+    );
     return res.data;
   }
 
   async cancelGeneration(sessionId: string): Promise<{ success: boolean }> {
-    const res = await this.client.post(`/api/v1/generation-sessions/${sessionId}/cancel`);
+    const res = await this.client.post(
+      `/api/v1/generation-sessions/${sessionId}/cancel`,
+    );
     return res.data;
   }
 
@@ -1532,19 +2285,26 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   /**
    * Create Agent Job
    */
-  async createAgentJob(projectId: string, request: {
-    agentId: string;
-    task: {
-      userQuery: string;
-      planMode?: string;
-      [key: string]: any;
-    };
-    autoMode?: boolean;
-    title?: string;
-  }): Promise<{ job: any }> {
-    const res = await this.client.post(`/api/v1/projects/${projectId}/agent-jobs`, request, {
-      timeout: 30000, // 30 seconds for job creation
-    });
+  async createAgentJob(
+    projectId: string,
+    request: {
+      agentId: string;
+      task: {
+        userQuery: string;
+        planMode?: string;
+        [key: string]: any;
+      };
+      autoMode?: boolean;
+      title?: string;
+    },
+  ): Promise<{ job: any }> {
+    const res = await this.client.post(
+      `/api/v1/projects/${projectId}/agent-jobs`,
+      request,
+      {
+        timeout: 30000, // 30 seconds for job creation
+      },
+    );
     return res.data;
   }
 
@@ -1552,19 +2312,29 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
    * Execute Agent Job
    */
   async executeAgentJob(projectId: string, jobId: string): Promise<void> {
-    await this.client.post(`/api/v1/projects/${projectId}/agent-jobs/${jobId}/execute`, {}, {
-      timeout: 10000, // 10 seconds for execution start (actual execution is async)
-    });
+    await this.client.post(
+      `/api/v1/projects/${projectId}/agent-jobs/${jobId}/execute`,
+      {},
+      {
+        timeout: 10000, // 10 seconds for execution start (actual execution is async)
+      },
+    );
   }
 
   /**
    * List Agent Jobs for a project
    */
-  async listAgentJobs(projectId: string, options?: { status?: string; limit?: number }): Promise<{ jobs: any[]; count: number }> {
+  async listAgentJobs(
+    projectId: string,
+    options?: { status?: string; limit?: number },
+  ): Promise<{ jobs: any[]; count: number }> {
     const params: any = {};
     if (options?.status) params.status = options.status;
     if (options?.limit) params.limit = options.limit;
-    const res = await this.client.get(`/api/v1/projects/${projectId}/agent-jobs`, { params });
+    const res = await this.client.get(
+      `/api/v1/projects/${projectId}/agent-jobs`,
+      { params },
+    );
     return res.data;
   }
 
@@ -1573,43 +2343,60 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
    * Returns full job details including steps, task, goal, etc.
    */
   async getAgentJob(projectId: string, jobId: string): Promise<{ job: any }> {
-    const res = await this.client.get(`/api/v1/projects/${projectId}/agent-jobs/${jobId}`);
+    const res = await this.client.get(
+      `/api/v1/projects/${projectId}/agent-jobs/${jobId}`,
+    );
     return res.data;
   }
 
   /**
    * Update Agent Job (e.g., to update title)
    */
-  async updateAgentJob(projectId: string, jobId: string, updates: { title?: string }): Promise<void> {
-    await this.client.patch(`/api/v1/projects/${projectId}/agent-jobs/${jobId}`, updates);
+  async updateAgentJob(
+    projectId: string,
+    jobId: string,
+    updates: { title?: string },
+  ): Promise<void> {
+    await this.client.patch(
+      `/api/v1/projects/${projectId}/agent-jobs/${jobId}`,
+      updates,
+    );
   }
 
   /**
    * Pause Agent Job
    */
   async pauseAgentJob(projectId: string, jobId: string): Promise<void> {
-    await this.client.post(`/api/v1/projects/${projectId}/agent-jobs/${jobId}/pause`);
+    await this.client.post(
+      `/api/v1/projects/${projectId}/agent-jobs/${jobId}/pause`,
+    );
   }
 
   /**
    * Resume Agent Job
    */
   async resumeAgentJob(projectId: string, jobId: string): Promise<void> {
-    await this.client.post(`/api/v1/projects/${projectId}/agent-jobs/${jobId}/resume`);
+    await this.client.post(
+      `/api/v1/projects/${projectId}/agent-jobs/${jobId}/resume`,
+    );
   }
 
   /**
    * Cancel Agent Job (stop execution)
    */
   async cancelAgentJob(projectId: string, jobId: string): Promise<void> {
-    await this.client.post(`/api/v1/projects/${projectId}/agent-jobs/${jobId}/cancel`);
+    await this.client.post(
+      `/api/v1/projects/${projectId}/agent-jobs/${jobId}/cancel`,
+    );
   }
 
   /**
    * Delete Agent Job
    */
   async deleteAgentJob(projectId: string, jobId: string): Promise<void> {
-    await this.client.delete(`/api/v1/projects/${projectId}/agent-jobs/${jobId}`);
+    await this.client.delete(
+      `/api/v1/projects/${projectId}/agent-jobs/${jobId}`,
+    );
   }
 
   /**
@@ -1619,12 +2406,16 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
    */
   async executeDataAgent(
     projectId: string,
-    task: import('../types/agents').DataAgentTask
+    task: import('../types/agents').DataAgentTask,
   ): Promise<import('../types/agents').AgentExecutionResponse> {
     // Agents can take a long time (several minutes), so set a long timeout
-    const res = await this.client.post(`/api/v1/projects/${projectId}/agents/data/execute`, task, {
-      timeout: 600000, // 10 minutes
-    });
+    const res = await this.client.post(
+      `/api/v1/projects/${projectId}/agents/data/execute`,
+      task,
+      {
+        timeout: 600000, // 10 minutes
+      },
+    );
     return res.data;
   }
 
@@ -1635,12 +2426,16 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
    */
   async executeEntitiesAgent(
     projectId: string,
-    task: import('../types/agents').EntitiesAgentTask
+    task: import('../types/agents').EntitiesAgentTask,
   ): Promise<import('../types/agents').AgentExecutionResponse> {
     // Agents can take a long time (several minutes), so set a long timeout
-    const res = await this.client.post(`/api/v1/projects/${projectId}/agents/entities/execute`, task, {
-      timeout: 600000, // 10 minutes
-    });
+    const res = await this.client.post(
+      `/api/v1/projects/${projectId}/agents/entities/execute`,
+      task,
+      {
+        timeout: 600000, // 10 minutes
+      },
+    );
     return res.data;
   }
 
@@ -1653,31 +2448,45 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   async executeAgent(
     projectId: string,
     agentId: string,
-    task: import('../types/agents').AgentTask
+    task: import('../types/agents').AgentTask,
   ): Promise<import('../types/agents').AgentExecutionResponse> {
     // Agents can take a long time (several minutes), so set a long timeout
-    const res = await this.client.post(`/api/v1/projects/${projectId}/agents/${agentId}/execute`, task, {
-      timeout: 600000, // 10 minutes
-    });
+    const res = await this.client.post(
+      `/api/v1/projects/${projectId}/agents/${agentId}/execute`,
+      task,
+      {
+        timeout: 600000, // 10 minutes
+      },
+    );
     return res.data;
   }
 
   // Usage metrics
-  async getUsage(params?: { startDate?: string; endDate?: string; granularity?: '1d' | '7d' | '30d' }): Promise<{
-    byModel: Record<string, {
-      count: number;
-      inputTokens: number;
-      outputTokens: number;
-      totalTokens: number;
-      costUSD: number;
-    }>;
-    dailyTotals: Record<string, {
-      inputTokens: number;
-      outputTokens: number;
-      totalTokens: number;
-      costUSD: number;
-      count: number;
-    }>;
+  async getUsage(params?: {
+    startDate?: string;
+    endDate?: string;
+    granularity?: '1d' | '7d' | '30d';
+  }): Promise<{
+    byModel: Record<
+      string,
+      {
+        count: number;
+        inputTokens: number;
+        outputTokens: number;
+        totalTokens: number;
+        costUSD: number;
+      }
+    >;
+    dailyTotals: Record<
+      string,
+      {
+        inputTokens: number;
+        outputTokens: number;
+        totalTokens: number;
+        costUSD: number;
+        count: number;
+      }
+    >;
     tokenCategories?: {
       premiumTokens: {
         inputTokens: number;
@@ -1766,21 +2575,26 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }
 
   // Vouchers (admin only)
-  async listVouchers(params?: { tier?: 'pro' | 'max'; isActive?: boolean }): Promise<Array<{
-    id: string;
-    code: string;
-    tier: 'pro' | 'max';
-    validFrom: string;
-    validTo?: string;
-    durationMonths: number;
-    maxUses?: number;
-    usedCount: number;
-    isActive: boolean;
-    createdBy: string;
-    note?: string;
-    createdAt: string;
-    updatedAt: string;
-  }>> {
+  async listVouchers(params?: {
+    tier?: 'pro' | 'max';
+    isActive?: boolean;
+  }): Promise<
+    Array<{
+      id: string;
+      code: string;
+      tier: 'pro' | 'max';
+      validFrom: string;
+      validTo?: string;
+      durationMonths: number;
+      maxUses?: number;
+      usedCount: number;
+      isActive: boolean;
+      createdBy: string;
+      note?: string;
+      createdAt: string;
+      updatedAt: string;
+    }>
+  > {
     const res = await this.client.get(`/api/v1/vouchers`, { params });
     return res.data;
   }
@@ -1832,15 +2646,18 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     return res.data;
   }
 
-  async updateVoucher(voucherId: string, data: {
-    tier?: 'pro' | 'max';
-    validFrom?: string;
-    validTo?: string;
-    durationMonths?: number;
-    maxUses?: number;
-    isActive?: boolean;
-    note?: string;
-  }): Promise<{
+  async updateVoucher(
+    voucherId: string,
+    data: {
+      tier?: 'pro' | 'max';
+      validFrom?: string;
+      validTo?: string;
+      durationMonths?: number;
+      maxUses?: number;
+      isActive?: boolean;
+      note?: string;
+    },
+  ): Promise<{
     id: string;
     code: string;
     tier: 'pro' | 'max';
@@ -1910,12 +2727,16 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     createdAt: string;
     updatedAt: string;
   }> {
-    const res = await this.client.post(`/api/v1/subscriptions/voucher`, { code });
+    const res = await this.client.post(`/api/v1/subscriptions/voucher`, {
+      code,
+    });
     return res.data;
   }
 
   // PayPal
-  async createPayPalSubscription(tier: 'pro' | 'max'): Promise<{ approvalUrl: string; subscriptionId: string }> {
+  async createPayPalSubscription(
+    tier: 'pro' | 'max',
+  ): Promise<{ approvalUrl: string; subscriptionId: string }> {
     const res = await this.client.post(`/api/v1/paypal/subscription`, { tier });
     return res.data;
   }
@@ -1941,7 +2762,9 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     createdAt: string;
     updatedAt: string;
   }> {
-    const res = await this.client.post(`/api/v1/paypal/subscription/execute`, { subscriptionId });
+    const res = await this.client.post(`/api/v1/paypal/subscription/execute`, {
+      subscriptionId,
+    });
     return res.data;
   }
 
@@ -1970,10 +2793,17 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     return res.data;
   }
 
-  async getScenarioData(projectId: string, scenarioId: string): Promise<Array<import('../types/scenarioData').ScenarioData>> {
-    console.log(`[API] getScenarioData called: projectId=${projectId}, scenarioId=${scenarioId}`);
+  async getScenarioData(
+    projectId: string,
+    scenarioId: string,
+  ): Promise<Array<import('../types/scenarioData').ScenarioData>> {
+    console.log(
+      `[API] getScenarioData called: projectId=${projectId}, scenarioId=${scenarioId}`,
+    );
     try {
-      const res = await this.client.get(`/api/v1/projects/${projectId}/scenarios/${scenarioId}/data`);
+      const res = await this.client.get(
+        `/api/v1/projects/${projectId}/scenarios/${scenarioId}/data`,
+      );
       console.log(`[API] getScenarioData response:`, res.data);
       return res.data || [];
     } catch (error: any) {
@@ -1982,10 +2812,19 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
-  async createScenarioData(projectId: string, scenarioId: string, data: import('../types/scenarioData').ScenarioData): Promise<import('../types/scenarioData').ScenarioData> {
-    console.log(`[API] createScenarioData called: projectId=${projectId}, scenarioId=${scenarioId}`);
+  async createScenarioData(
+    projectId: string,
+    scenarioId: string,
+    data: import('../types/scenarioData').ScenarioData,
+  ): Promise<import('../types/scenarioData').ScenarioData> {
+    console.log(
+      `[API] createScenarioData called: projectId=${projectId}, scenarioId=${scenarioId}`,
+    );
     try {
-      const res = await this.client.post(`/api/v1/projects/${projectId}/scenarios/${scenarioId}/data`, data);
+      const res = await this.client.post(
+        `/api/v1/projects/${projectId}/scenarios/${scenarioId}/data`,
+        data,
+      );
       console.log(`[API] createScenarioData response:`, res.data);
       return res.data;
     } catch (error: any) {
@@ -1994,10 +2833,18 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
-  async deleteScenarioData(projectId: string, scenarioId: string, dataId: string): Promise<{ success: boolean; message: string }> {
-    console.log(`[API] deleteScenarioData called: projectId=${projectId}, scenarioId=${scenarioId}, dataId=${dataId}`);
+  async deleteScenarioData(
+    projectId: string,
+    scenarioId: string,
+    dataId: string,
+  ): Promise<{ success: boolean; message: string }> {
+    console.log(
+      `[API] deleteScenarioData called: projectId=${projectId}, scenarioId=${scenarioId}, dataId=${dataId}`,
+    );
     try {
-      const res = await this.client.delete(`/api/v1/projects/${projectId}/scenarios/${scenarioId}/data/${dataId}`);
+      const res = await this.client.delete(
+        `/api/v1/projects/${projectId}/scenarios/${scenarioId}/data/${dataId}`,
+      );
       console.log(`[API] deleteScenarioData response:`, res.data);
       return res.data;
     } catch (error: any) {
@@ -2007,7 +2854,11 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }
 
   // Horizon - Entity Search
-  async searchHorizonEntities(query: string, limit: number = 10, signal?: AbortSignal): Promise<{
+  async searchHorizonEntities(
+    query: string,
+    limit: number = 10,
+    signal?: AbortSignal,
+  ): Promise<{
     entities: Array<{
       id: string;
       canonicalPath: string;
@@ -2023,12 +2874,16 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     query: string;
   }> {
     try {
-      const response = await this.client.post('/api/horizon/entities/search', {
-        query,
-        limit,
-      }, {
-        signal,
-      });
+      const response = await this.client.post(
+        '/api/horizon/entities/search',
+        {
+          query,
+          limit,
+        },
+        {
+          signal,
+        },
+      );
       return response.data;
     } catch (error: any) {
       if (error.name === 'AbortError' || error.code === 'ERR_CANCELED') {
@@ -2040,20 +2895,30 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }
 
   // Horizon - Lenses
-  async createHorizonLens(input: {
-    projectId: string;
-    name: string;
-    scope: string[];
-    viewConfig?: HorizonLensViewConfig;
-    alertConfig?: Record<string, any>;
-    status?: string;
-  }, options?: { correlationId?: string; sessionId?: string; skipScouting?: boolean }): Promise<HorizonLensRecord> {
+  async createHorizonLens(
+    input: {
+      projectId: string;
+      name: string;
+      scope: string[];
+      viewConfig?: HorizonLensViewConfig;
+      alertConfig?: Record<string, any>;
+      status?: string;
+    },
+    options?: {
+      correlationId?: string;
+      sessionId?: string;
+      skipScouting?: boolean;
+    },
+  ): Promise<HorizonLensRecord> {
     try {
       const headers: Record<string, string> = {};
-      if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
+      if (options?.correlationId)
+        headers['X-Correlation-Id'] = options.correlationId;
       if (options?.sessionId) headers['X-Session-Id'] = options.sessionId;
       if (options?.skipScouting) headers['X-Horizon-Skip-Scouting'] = 'true';
-      const response = await this.client.post('/api/horizon/lenses', input, { headers });
+      const response = await this.client.post('/api/horizon/lenses', input, {
+        headers,
+      });
       return response.data;
     } catch (error: any) {
       console.error(`[API] createHorizonLens error:`, error);
@@ -2068,7 +2933,13 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       focus: string;
       spherePaths: string[];
       keywords: string[];
-      anchors: Array<{ canonicalPath: string; type?: string; name?: string; confidence?: number; reason?: string }>;
+      anchors: Array<{
+        canonicalPath: string;
+        type?: string;
+        name?: string;
+        confidence?: number;
+        reason?: string;
+      }>;
       domains?: Array<{
         canonicalPath: string;
         contractType?: string;
@@ -2082,7 +2953,10 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     };
   }> {
     try {
-      const response = await this.client.post('/api/horizon/intent/resolve', input);
+      const response = await this.client.post(
+        '/api/horizon/intent/resolve',
+        input,
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] resolveHorizonIntent error:`, error);
@@ -2098,7 +2972,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       mode?: ScoutingMode;
       specialties?: string[];
     },
-    options?: { correlationId?: string; sessionId?: string }
+    options?: { correlationId?: string; sessionId?: string },
   ): Promise<{
     intent: {
       title: string;
@@ -2118,7 +2992,13 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
         confidence?: number;
         reason?: string;
       }>;
-      anchors: Array<{ canonicalPath: string; type?: string; name?: string; confidence?: number; reason?: string }>;
+      anchors: Array<{
+        canonicalPath: string;
+        type?: string;
+        name?: string;
+        confidence?: number;
+        reason?: string;
+      }>;
       decompositionHints?: string[];
     };
     recommendation: {
@@ -2136,9 +3016,14 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }> {
     try {
       const headers: Record<string, string> = {};
-      if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
+      if (options?.correlationId)
+        headers['X-Correlation-Id'] = options.correlationId;
       if (options?.sessionId) headers['X-Session-Id'] = options.sessionId;
-      const response = await this.client.post('/api/horizon/lenses/preflight', input, { headers });
+      const response = await this.client.post(
+        '/api/horizon/lenses/preflight',
+        input,
+        { headers },
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] preflightHorizonLensFromQuery error:`, error);
@@ -2152,7 +3037,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     input: {
       query: string;
     },
-    options?: { correlationId?: string; sessionId?: string }
+    options?: { correlationId?: string; sessionId?: string },
   ): Promise<{
     intent: {
       title?: string;
@@ -2174,15 +3059,26 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
         confidence?: number;
         reason?: string;
       }>;
-      anchors?: Array<{ canonicalPath: string; type?: string; name?: string; confidence?: number; reason?: string }>;
+      anchors?: Array<{
+        canonicalPath: string;
+        type?: string;
+        name?: string;
+        confidence?: number;
+        reason?: string;
+      }>;
       decompositionHints?: string[];
     };
   }> {
     try {
       const headers: Record<string, string> = {};
-      if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
+      if (options?.correlationId)
+        headers['X-Correlation-Id'] = options.correlationId;
       if (options?.sessionId) headers['X-Session-Id'] = options.sessionId;
-      const response = await this.client.post(`/api/horizon/lenses/${lensId}/follow-up-preflight`, input, { headers });
+      const response = await this.client.post(
+        `/api/horizon/lenses/${lensId}/follow-up-preflight`,
+        input,
+        { headers },
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] preflightHorizonLensFollowUp error:`, error);
@@ -2205,7 +3101,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       specialties?: string[];
       status?: string;
     },
-    options?: { correlationId?: string; sessionId?: string }
+    options?: { correlationId?: string; sessionId?: string },
   ): Promise<{
     intent: {
       title: string;
@@ -2225,7 +3121,13 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
         confidence?: number;
         reason?: string;
       }>;
-      anchors: Array<{ canonicalPath: string; type?: string; name?: string; confidence?: number; reason?: string }>;
+      anchors: Array<{
+        canonicalPath: string;
+        type?: string;
+        name?: string;
+        confidence?: number;
+        reason?: string;
+      }>;
       decompositionHints?: string[];
     };
     lens: HorizonLensRecord;
@@ -2233,9 +3135,14 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }> {
     try {
       const headers: Record<string, string> = {};
-      if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
+      if (options?.correlationId)
+        headers['X-Correlation-Id'] = options.correlationId;
       if (options?.sessionId) headers['X-Session-Id'] = options.sessionId;
-      const response = await this.client.post('/api/horizon/lenses/from-query', input, { headers });
+      const response = await this.client.post(
+        '/api/horizon/lenses/from-query',
+        input,
+        { headers },
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] createHorizonLensFromQuery error:`, error);
@@ -2243,7 +3150,10 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
-  async listHorizonLenses(projectId: string, options?: { status?: string; limit?: number }): Promise<{
+  async listHorizonLenses(
+    projectId: string,
+    options?: { status?: string; limit?: number },
+  ): Promise<{
     lenses: HorizonLensRecord[];
     total: number;
   }> {
@@ -2280,27 +3190,47 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     limit?: number;
     scope?: 'tenant' | 'global' | 'all';
   }): Promise<{ items: any[]; scope?: string }> {
-    const response = await this.client.get('/api/horizon/recommendations', { params });
+    const response = await this.client.get('/api/horizon/recommendations', {
+      params,
+    });
     return response.data;
   }
 
   async getStrategicRecommendation(id: string): Promise<any> {
-    const response = await this.client.get(`/api/horizon/recommendations/${encodeURIComponent(id)}`);
+    const response = await this.client.get(
+      `/api/horizon/recommendations/${encodeURIComponent(id)}`,
+    );
     return response.data;
   }
 
-  async getStrategicRecommendationsCount(params?: { scope?: 'tenant' | 'global' | 'all' }): Promise<{ count: number; tenantCount?: number; globalCount?: number; scope?: string }> {
-    const response = await this.client.get('/api/horizon/recommendations/count', { params });
+  async getStrategicRecommendationsCount(params?: {
+    scope?: 'tenant' | 'global' | 'all';
+  }): Promise<{
+    count: number;
+    tenantCount?: number;
+    globalCount?: number;
+    scope?: string;
+  }> {
+    const response = await this.client.get(
+      '/api/horizon/recommendations/count',
+      { params },
+    );
     return response.data;
   }
 
   async approveStrategicRecommendation(id: string): Promise<any> {
-    const response = await this.client.post(`/api/horizon/recommendations/${encodeURIComponent(id)}/approve`, {});
+    const response = await this.client.post(
+      `/api/horizon/recommendations/${encodeURIComponent(id)}/approve`,
+      {},
+    );
     return response.data;
   }
 
   async dismissStrategicRecommendation(id: string): Promise<any> {
-    const response = await this.client.post(`/api/horizon/recommendations/${encodeURIComponent(id)}/dismiss`, {});
+    const response = await this.client.post(
+      `/api/horizon/recommendations/${encodeURIComponent(id)}/dismiss`,
+      {},
+    );
     return response.data;
   }
 
@@ -2319,14 +3249,23 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       resolvedQueries?: Record<string, string[]>;
       lastResolved?: string;
     },
-    options?: { skipScouting?: boolean; correlationId?: string; sessionId?: string }
+    options?: {
+      skipScouting?: boolean;
+      correlationId?: string;
+      sessionId?: string;
+    },
   ): Promise<HorizonLensRecord> {
     try {
       const headers: Record<string, string> = {};
-      if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
+      if (options?.correlationId)
+        headers['X-Correlation-Id'] = options.correlationId;
       if (options?.sessionId) headers['X-Session-Id'] = options.sessionId;
       if (options?.skipScouting) headers['X-Horizon-Skip-Scouting'] = '1';
-      const response = await this.client.put(`/api/horizon/lenses/${lensId}`, data, { headers });
+      const response = await this.client.put(
+        `/api/horizon/lenses/${lensId}`,
+        data,
+        { headers },
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] updateHorizonLens error:`, error);
@@ -2339,7 +3278,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       query: string;
       limit?: number;
     },
-    signal?: AbortSignal
+    signal?: AbortSignal,
   ): Promise<HorizonProductPrefetchResponse> {
     const response = await this.client.get('/api/horizon/products/prefetch', {
       params,
@@ -2355,7 +3294,10 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     hops?: number;
     limitPerHop?: number;
   }): Promise<HorizonProductStreamResponse> {
-    const response = await this.client.post('/api/horizon/products/stream', input);
+    const response = await this.client.post(
+      '/api/horizon/products/stream',
+      input,
+    );
     return response.data;
   }
 
@@ -2364,7 +3306,10 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     productRef?: string;
     limit?: number;
   }): Promise<HorizonProductProducersResponse> {
-    const response = await this.client.post('/api/horizon/products/producers', input);
+    const response = await this.client.post(
+      '/api/horizon/products/producers',
+      input,
+    );
     return response.data;
   }
 
@@ -2384,7 +3329,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
    */
   async transferHorizonLens(
     lensId: string,
-    targetProjectId: string
+    targetProjectId: string,
   ): Promise<{
     id: string;
     tenantId: string;
@@ -2396,7 +3341,10 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     updatedAt: string;
   }> {
     try {
-      const response = await this.client.post(`/api/horizon/lenses/${lensId}/transfer`, { targetProjectId });
+      const response = await this.client.post(
+        `/api/horizon/lenses/${lensId}/transfer`,
+        { targetProjectId },
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] transferHorizonLens error:`, error);
@@ -2418,7 +3366,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       specialties?: string[];
       exploration?: DirectedSupplyChainExplorationRequest;
     },
-    options?: { correlationId?: string; sessionId?: string }
+    options?: { correlationId?: string; sessionId?: string },
   ): Promise<{
     jobId: string;
     scopeAdded: boolean;
@@ -2427,9 +3375,14 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }> {
     try {
       const headers: Record<string, string> = {};
-      if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
+      if (options?.correlationId)
+        headers['X-Correlation-Id'] = options.correlationId;
       if (options?.sessionId) headers['X-Session-Id'] = options.sessionId;
-      const response = await this.client.post(`/api/horizon/lenses/${lensId}/scope-scout`, input, { headers });
+      const response = await this.client.post(
+        `/api/horizon/lenses/${lensId}/scope-scout`,
+        input,
+        { headers },
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] scopeScoutHorizonLensNode error:`, error);
@@ -2449,7 +3402,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       specialties?: string[];
       exploration?: DirectedSupplyChainExplorationRequest;
     },
-    options?: { correlationId?: string; sessionId?: string }
+    options?: { correlationId?: string; sessionId?: string },
   ): Promise<{
     jobId: string;
     scopeAdded: boolean;
@@ -2458,9 +3411,14 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }> {
     try {
       const headers: Record<string, string> = {};
-      if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
+      if (options?.correlationId)
+        headers['X-Correlation-Id'] = options.correlationId;
       if (options?.sessionId) headers['X-Session-Id'] = options.sessionId;
-      const response = await this.client.post(`/api/horizon/lenses/${lensId}/scope-scout-query`, input, { headers });
+      const response = await this.client.post(
+        `/api/horizon/lenses/${lensId}/scope-scout-query`,
+        input,
+        { headers },
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] scopeScoutHorizonLensQuery error:`, error);
@@ -2475,8 +3433,14 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
    */
   async scopeScoutHorizonLensFull(
     lensId: string,
-    input: { query: string; maxAnchors?: number; maxRecursionDepth?: number; mode?: ScoutingMode; specialties?: string[] },
-    options?: { correlationId?: string; sessionId?: string }
+    input: {
+      query: string;
+      maxAnchors?: number;
+      maxRecursionDepth?: number;
+      mode?: ScoutingMode;
+      specialties?: string[];
+    },
+    options?: { correlationId?: string; sessionId?: string },
   ): Promise<{
     jobIds: string[];
     canonicalPaths: string[];
@@ -2485,9 +3449,14 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }> {
     try {
       const headers: Record<string, string> = {};
-      if (options?.correlationId) headers['X-Correlation-Id'] = options.correlationId;
+      if (options?.correlationId)
+        headers['X-Correlation-Id'] = options.correlationId;
       if (options?.sessionId) headers['X-Session-Id'] = options.sessionId;
-      const response = await this.client.post(`/api/horizon/lenses/${lensId}/scope-scout-full`, input, { headers });
+      const response = await this.client.post(
+        `/api/horizon/lenses/${lensId}/scope-scout-full`,
+        input,
+        { headers },
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] scopeScoutHorizonLensFull error:`, error);
@@ -2505,10 +3474,20 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       projectId?: string;
       question: string;
       graph: {
-        nodes: Array<{ id: string; label?: string; type?: string; canonicalPath?: string }>;
-        edges?: Array<{ from: string; to: string; type?: string; label?: string }>;
+        nodes: Array<{
+          id: string;
+          label?: string;
+          type?: string;
+          canonicalPath?: string;
+        }>;
+        edges?: Array<{
+          from: string;
+          to: string;
+          type?: string;
+          label?: string;
+        }>;
       };
-    }
+    },
   ): Promise<{
     interactionId: string;
     projectId: string;
@@ -2516,14 +3495,23 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     question: string;
     answer: string;
     relevantNodeIds: string[];
-    findings?: Array<{ nodeId: string; title: string; eventDate: string; source: string; url: string }>;
+    findings?: Array<{
+      nodeId: string;
+      title: string;
+      eventDate: string;
+      source: string;
+      url: string;
+    }>;
     model?: string;
     searchQueries?: string[];
     sources?: string[];
     timestamp: string;
   }> {
     try {
-      const response = await this.client.post(`/api/horizon/lenses/${lensId}/graph-query`, input);
+      const response = await this.client.post(
+        `/api/horizon/lenses/${lensId}/graph-query`,
+        input,
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] queryHorizonGraph error:`, error);
@@ -2540,10 +3528,9 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     input: import('../types/graphIntent').GraphIntentPlanRequest,
   ): Promise<import('../types/graphIntent').GraphIntentPlanResponse> {
     try {
-      const response = await this.client.post<import('../types/graphIntent').GraphIntentPlanResponse>(
-        `/api/horizon/lenses/${lensId}/graph-intent/plan`,
-        input,
-      );
+      const response = await this.client.post<
+        import('../types/graphIntent').GraphIntentPlanResponse
+      >(`/api/horizon/lenses/${lensId}/graph-intent/plan`, input);
       return response.data;
     } catch (error: any) {
       console.error(`[API] planHorizonGraphIntent error:`, error);
@@ -2561,14 +3548,14 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     options?: { confirm?: boolean },
   ): Promise<import('../types/graphIntent').GraphIntentApplyResponse> {
     try {
-      const response = await this.client.post<import('../types/graphIntent').GraphIntentApplyResponse>(
-        `/api/horizon/lenses/${lensId}/graph-intent/apply`,
-        input,
-        {
-          params: options?.confirm ? { confirm: 'true' } : undefined,
-          headers: options?.confirm ? { 'X-Graph-Intent-Confirm': 'true' } : undefined,
-        },
-      );
+      const response = await this.client.post<
+        import('../types/graphIntent').GraphIntentApplyResponse
+      >(`/api/horizon/lenses/${lensId}/graph-intent/apply`, input, {
+        params: options?.confirm ? { confirm: 'true' } : undefined,
+        headers: options?.confirm
+          ? { 'X-Graph-Intent-Confirm': 'true' }
+          : undefined,
+      });
       return response.data;
     } catch (error: any) {
       console.error(`[API] applyHorizonGraphIntent error:`, error);
@@ -2585,10 +3572,9 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     input: import('../types/graphIntent').GraphIntentApplyRequest,
   ): Promise<import('../types/graphIntent').GraphIntentApplyResponse> {
     try {
-      const response = await this.client.post<import('../types/graphIntent').GraphIntentApplyResponse>(
-        `/api/horizon/lenses/${lensId}/graph-intent/dry-run`,
-        input,
-      );
+      const response = await this.client.post<
+        import('../types/graphIntent').GraphIntentApplyResponse
+      >(`/api/horizon/lenses/${lensId}/graph-intent/dry-run`, input);
       return response.data;
     } catch (error: any) {
       console.error(`[API] dryRunHorizonGraphIntent error:`, error);
@@ -2612,7 +3598,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       maxNodes?: number;
       maxEdges?: number;
       maxSeeds?: number;
-    }
+    },
   ): Promise<{
     lensId: string;
     seedFragmentIds: string[];
@@ -2622,7 +3608,13 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       label: string;
       type?: string;
       canonicalPath?: string;
-      lane: 'authority' | 'decision' | 'mechanism' | 'impact' | 'intermediary' | string;
+      lane:
+        | 'authority'
+        | 'decision'
+        | 'mechanism'
+        | 'impact'
+        | 'intermediary'
+        | string;
       depth: number;
       seed?: boolean;
     }>;
@@ -2726,7 +3718,10 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     warnings?: string[];
   }> {
     try {
-      const response = await this.client.post(`/api/horizon/lenses/${lensId}/control-corridor`, input || {});
+      const response = await this.client.post(
+        `/api/horizon/lenses/${lensId}/control-corridor`,
+        input || {},
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] queryHorizonControlCorridor error:`, error);
@@ -2742,7 +3737,12 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     phases: {
       decomposition: { status: string; nodes: number };
       cacheHit: { status: string; nodes: number };
-      scouting: { status: string; completed: number; total: number; logs: string[] };
+      scouting: {
+        status: string;
+        completed: number;
+        total: number;
+        logs: string[];
+      };
       ready: { status: string };
     };
     graph: {
@@ -2757,7 +3757,9 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     };
   }> {
     try {
-      const response = await this.client.get(`/api/horizon/lenses/${lensId}/assembly-status`);
+      const response = await this.client.get(
+        `/api/horizon/lenses/${lensId}/assembly-status`,
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] getHorizonLensAssemblyStatus error:`, error);
@@ -2765,7 +3767,10 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
-  async listHorizonScoutingJobs(lensId: string, options?: { status?: string; limit?: number }): Promise<{
+  async listHorizonScoutingJobs(
+    lensId: string,
+    options?: { status?: string; limit?: number },
+  ): Promise<{
     jobs: Array<{
       id: string;
       status: string;
@@ -2783,7 +3788,9 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       if (options?.limit) {
         params.limit = options.limit.toString();
       }
-      const response = await this.client.get('/api/horizon/scout/jobs', { params });
+      const response = await this.client.get('/api/horizon/scout/jobs', {
+        params,
+      });
       return response.data;
     } catch (error: any) {
       console.error(`[API] listHorizonScoutingJobs error:`, error);
@@ -2792,9 +3799,13 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }
 
   // --- Horizon LensItems ---
-  async getLensItems(lensId: string): Promise<import('../types/lensItem').LensItem[]> {
+  async getLensItems(
+    lensId: string,
+  ): Promise<import('../types/lensItem').LensItem[]> {
     try {
-      const response = await this.client.get<{ items: import('../types/lensItem').LensItem[] }>(`/api/horizon/lenses/${lensId}/items`);
+      const response = await this.client.get<{
+        items: import('../types/lensItem').LensItem[];
+      }>(`/api/horizon/lenses/${lensId}/items`);
       return response.data.items;
     } catch (error: any) {
       console.error(`[API] getLensItems error:`, error);
@@ -2802,9 +3813,15 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
-  async createLensItem(lensId: string, data: Partial<import('../types/lensItem').LensItem>): Promise<{ id: string }> {
+  async createLensItem(
+    lensId: string,
+    data: Partial<import('../types/lensItem').LensItem>,
+  ): Promise<{ id: string }> {
     try {
-      const response = await this.client.post<{ id: string }>(`/api/horizon/lenses/${lensId}/items`, data);
+      const response = await this.client.post<{ id: string }>(
+        `/api/horizon/lenses/${lensId}/items`,
+        data,
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] createLensItem error:`, {
@@ -2816,9 +3833,16 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
-  async updateLensItem(lensId: string, itemId: string, data: Partial<import('../types/lensItem').LensItem>): Promise<{ success: boolean }> {
+  async updateLensItem(
+    lensId: string,
+    itemId: string,
+    data: Partial<import('../types/lensItem').LensItem>,
+  ): Promise<{ success: boolean }> {
     try {
-      const response = await this.client.patch<{ success: boolean }>(`/api/horizon/lenses/${lensId}/items/${itemId}`, data);
+      const response = await this.client.patch<{ success: boolean }>(
+        `/api/horizon/lenses/${lensId}/items/${itemId}`,
+        data,
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] updateLensItem error:`, error);
@@ -2826,9 +3850,14 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
-  async deleteLensItem(lensId: string, itemId: string): Promise<{ success: boolean }> {
+  async deleteLensItem(
+    lensId: string,
+    itemId: string,
+  ): Promise<{ success: boolean }> {
     try {
-      const response = await this.client.delete<{ success: boolean }>(`/api/horizon/lenses/${lensId}/items/${itemId}`);
+      const response = await this.client.delete<{ success: boolean }>(
+        `/api/horizon/lenses/${lensId}/items/${itemId}`,
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] deleteLensItem error:`, error);
@@ -2837,9 +3866,15 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }
 
   // --- Horizon Fragments ---
-  async getHorizonFragment(fragmentId: string, signal?: AbortSignal): Promise<any> {
+  async getHorizonFragment(
+    fragmentId: string,
+    signal?: AbortSignal,
+  ): Promise<any> {
     try {
-      const response = await this.client.get(`/api/horizon/fragments/${fragmentId}`, { signal });
+      const response = await this.client.get(
+        `/api/horizon/fragments/${fragmentId}`,
+        { signal },
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] getHorizonFragment error:`, error);
@@ -2872,9 +3907,12 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     riskOverlay?: SupplyChainLensRiskOverlay;
   }> {
     try {
-      const response = await this.client.get('/api/horizon/supply-chains/by-lens', {
-        params: { lensId },
-      });
+      const response = await this.client.get(
+        '/api/horizon/supply-chains/by-lens',
+        {
+          params: { lensId },
+        },
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] getSupplyChainsByLens error:`, error);
@@ -2926,7 +3964,10 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     cache?: { hit?: boolean; key?: string; ttlSec?: number };
   }> {
     try {
-      const response = await this.client.post('/api/horizon/supply-chains/search', input);
+      const response = await this.client.post(
+        '/api/horizon/supply-chains/search',
+        input,
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] searchSupplyChains error:`, error);
@@ -2940,7 +3981,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
    */
   async getOntologyFactsByCanonicalPath(
     canonicalPath: string,
-    options?: { kind?: string; limit?: number }
+    options?: { kind?: string; limit?: number },
   ): Promise<{
     canonicalPath: string;
     canonicalPathCurrentName: string;
@@ -2961,7 +4002,10 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     const params: Record<string, string | number> = { canonicalPath };
     if (options?.kind) params.kind = options.kind;
     if (options?.limit) params.limit = options.limit;
-    const response = await this.client.get('/api/horizon/ontology-facts/by-canonical-path', { params });
+    const response = await this.client.get(
+      '/api/horizon/ontology-facts/by-canonical-path',
+      { params },
+    );
     return response.data;
   }
 
@@ -3020,12 +4064,15 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       const params: Record<string, string> = {};
       if (options?.limit !== undefined) params.limit = String(options.limit);
       if (options?.pathPrefix) params.pathPrefix = options.pathPrefix;
-      if (options?.onlyLoc !== undefined) params.onlyLoc = options.onlyLoc ? '1' : '0';
+      if (options?.onlyLoc !== undefined)
+        params.onlyLoc = options.onlyLoc ? '1' : '0';
       if (options?.types?.length) params.types = options.types.join(',');
       if (options?.createdAfter) params.createdAfter = options.createdAfter;
       if (options?.createdBefore) params.createdBefore = options.createdBefore;
       if (options?.lensId) params.lensId = options.lensId;
-      const response = await this.client.get('/api/horizon/geo-objects', { params });
+      const response = await this.client.get('/api/horizon/geo-objects', {
+        params,
+      });
       return response.data;
     } catch (error: any) {
       console.error(`[API] listHorizonGeoObjects error:`, error);
@@ -3065,12 +4112,15 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     requestedCount: number;
   }> {
     try {
-      const response = await this.client.post('/api/horizon/geo-objects/by-paths', {
-        canonicalPaths: options.canonicalPaths,
-        types: options.types,
-        createdAfter: options.createdAfter,
-        createdBefore: options.createdBefore,
-      });
+      const response = await this.client.post(
+        '/api/horizon/geo-objects/by-paths',
+        {
+          canonicalPaths: options.canonicalPaths,
+          types: options.types,
+          createdAfter: options.createdAfter,
+          createdBefore: options.createdBefore,
+        },
+      );
       return response.data;
     } catch (error: any) {
       console.error('[API] listHorizonGeoObjectsByPaths error:', error);
@@ -3128,10 +4178,15 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     try {
       const params: Record<string, string> = {};
       if (options?.lensId) params.lensId = options.lensId;
-      if (typeof options?.minHype === 'number' && Number.isFinite(options.minHype)) {
+      if (
+        typeof options?.minHype === 'number' &&
+        Number.isFinite(options.minHype)
+      ) {
         params.minHype = String(options.minHype);
       }
-      const response = await this.client.get('/api/horizon/map-activity', { params });
+      const response = await this.client.get('/api/horizon/map-activity', {
+        params,
+      });
       return response.data;
     } catch (error: any) {
       console.error(`[API] getHorizonMapActivity error:`, error);
@@ -3139,9 +4194,13 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
-  async deleteHorizonFragment(fragmentId: string): Promise<{ ok: boolean; fragmentId: string }> {
+  async deleteHorizonFragment(
+    fragmentId: string,
+  ): Promise<{ ok: boolean; fragmentId: string }> {
     try {
-      const response = await this.client.delete(`/api/horizon/fragments/${fragmentId}`);
+      const response = await this.client.delete(
+        `/api/horizon/fragments/${fragmentId}`,
+      );
       if (response?.data && typeof response.data === 'object') {
         return response.data as { ok: boolean; fragmentId: string };
       }
@@ -3155,15 +4214,30 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   // --- Horizon Product IO (Hypothesis workflow, v1 PRODUCT-only) ---
   async extractProductIO(
     fragmentId: string,
-    body?: { direction?: 'produces' | 'consumes' | 'both'; hint?: string; lang?: string }
+    body?: {
+      direction?: 'produces' | 'consumes' | 'both';
+      hint?: string;
+      lang?: string;
+    },
   ): Promise<{
     fragmentId: string;
     direction: string;
-    produces: Array<{ productName: string; confidence: number; reason?: string }>;
-    consumes: Array<{ productName: string; confidence: number; reason?: string }>;
+    produces: Array<{
+      productName: string;
+      confidence: number;
+      reason?: string;
+    }>;
+    consumes: Array<{
+      productName: string;
+      confidence: number;
+      reason?: string;
+    }>;
   }> {
     try {
-      const response = await this.client.post(`/api/horizon/fragments/${fragmentId}/product-io:extract`, body || {});
+      const response = await this.client.post(
+        `/api/horizon/fragments/${fragmentId}/product-io:extract`,
+        body || {},
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] extractProductIO error:`, error);
@@ -3175,16 +4249,27 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     lensId: string,
     body: {
       objectiveFragmentId: string;
-      produces: Array<{ productName: string; confidence: number; reason?: string }>;
-      consumes: Array<{ productName: string; confidence: number; reason?: string }>;
-    }
+      produces: Array<{
+        productName: string;
+        confidence: number;
+        reason?: string;
+      }>;
+      consumes: Array<{
+        productName: string;
+        confidence: number;
+        reason?: string;
+      }>;
+    },
   ): Promise<{
     lensId: string;
     objectiveFragmentId: string;
     delta: { fragmentsUpserted: any[]; edgesUpserted: any[] };
   }> {
     try {
-      const response = await this.client.post(`/api/horizon/lenses/${lensId}/product-io:apply`, body);
+      const response = await this.client.post(
+        `/api/horizon/lenses/${lensId}/product-io:apply`,
+        body,
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] applyProductIO error:`, error);
@@ -3200,7 +4285,9 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     enriched: boolean;
   }> {
     try {
-      const response = await this.client.post(`/api/horizon/fragments/${fragmentId}/ensure-entity`);
+      const response = await this.client.post(
+        `/api/horizon/fragments/${fragmentId}/ensure-entity`,
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] ensureFragmentEntity error:`, error);
@@ -3211,7 +4298,9 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   // Get Entity linked to fragment
   async getFragmentEntity(fragmentId: string): Promise<any> {
     try {
-      const response = await this.client.get(`/api/horizon/fragments/${fragmentId}/entity`);
+      const response = await this.client.get(
+        `/api/horizon/fragments/${fragmentId}/entity`,
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] getFragmentEntity error:`, error);
@@ -3220,14 +4309,21 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }
 
   // Enrich Entity linked to fragment (force refresh if force=true)
-  async enrichFragmentEntity(fragmentId: string, force: boolean = false): Promise<{
+  async enrichFragmentEntity(
+    fragmentId: string,
+    force: boolean = false,
+  ): Promise<{
     entityId: string;
     entity: any;
     enriched: boolean;
   }> {
     try {
       const params = force ? { force: '1' } : {};
-      const response = await this.client.post(`/api/horizon/fragments/${fragmentId}/enrich-entity`, null, { params });
+      const response = await this.client.post(
+        `/api/horizon/fragments/${fragmentId}/enrich-entity`,
+        null,
+        { params },
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] enrichFragmentEntity error:`, error);
@@ -3246,26 +4342,32 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }): Promise<{
     jobId: string;
     tenantId: string;
-    newsByPath: Record<string, Array<{
-      factId: string;
-      title: string;
-      summary?: string;
-      occurredAt?: string;
-      sourceUrl?: string;
-      canonicalPath: string;
-      canonicalNames?: string[];
-      spherePaths?: string[];
-      polarity?: string;
-      impactLevel?: string;
-      eventType?: string;
-    }>>;
+    newsByPath: Record<
+      string,
+      Array<{
+        factId: string;
+        title: string;
+        summary?: string;
+        occurredAt?: string;
+        sourceUrl?: string;
+        canonicalPath: string;
+        canonicalNames?: string[];
+        spherePaths?: string[];
+        polarity?: string;
+        impactLevel?: string;
+        eventType?: string;
+      }>
+    >;
     eventsCreated: number;
     signalsProcessed: number;
   }> {
-    const response = await this.client.post('/api/horizon/canvas/news-by-fragments', {
-      fragments: params.fragments,
-      daysBack: params.daysBack ?? 7,
-    });
+    const response = await this.client.post(
+      '/api/horizon/canvas/news-by-fragments',
+      {
+        fragments: params.fragments,
+        daysBack: params.daysBack ?? 7,
+      },
+    );
     return response.data;
   }
 
@@ -3299,18 +4401,21 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     startedAt: string;
     streamChannel: 'realtime';
   }> {
-    const response = await this.client.post(`/api/horizon/lenses/${lensId}/identify-stresses`, {
-      scopeMode: params.scopeMode ?? 'visible_set',
-      selectedCanonicalPath: params.selectedCanonicalPath,
-      visibleNodeRefs: params.visibleNodeRefs ?? [],
-      visibleArtifactKeys: params.visibleArtifactKeys ?? [],
-      visibleSupplyLinkRefs: params.visibleSupplyLinkRefs ?? [],
-      visibleRelations: params.visibleRelations ?? [],
-      clientViewId: params.clientViewId,
-      maxNodes: params.maxNodes,
-      maxArtifacts: params.maxArtifacts,
-      maxFindings: params.maxFindings,
-    });
+    const response = await this.client.post(
+      `/api/horizon/lenses/${lensId}/identify-stresses`,
+      {
+        scopeMode: params.scopeMode ?? 'visible_set',
+        selectedCanonicalPath: params.selectedCanonicalPath,
+        visibleNodeRefs: params.visibleNodeRefs ?? [],
+        visibleArtifactKeys: params.visibleArtifactKeys ?? [],
+        visibleSupplyLinkRefs: params.visibleSupplyLinkRefs ?? [],
+        visibleRelations: params.visibleRelations ?? [],
+        clientViewId: params.clientViewId,
+        maxNodes: params.maxNodes,
+        maxArtifacts: params.maxArtifacts,
+        maxFindings: params.maxFindings,
+      },
+    );
     return response.data;
   }
 
@@ -3344,18 +4449,21 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     startedAt: string;
     streamChannel: 'realtime';
   }> {
-    const response = await this.client.post(`/api/horizon/lenses/${lensId}/complete-substrate`, {
-      scopeMode: params.scopeMode ?? 'visible_set',
-      selectedCanonicalPath: params.selectedCanonicalPath,
-      visibleNodeRefs: params.visibleNodeRefs ?? [],
-      visibleArtifactKeys: params.visibleArtifactKeys ?? [],
-      visibleSupplyLinkRefs: params.visibleSupplyLinkRefs ?? [],
-      visibleRelations: params.visibleRelations ?? [],
-      clientViewId: params.clientViewId,
-      maxNodes: params.maxNodes,
-      maxArtifacts: params.maxArtifacts,
-      maxCompletions: params.maxCompletions,
-    });
+    const response = await this.client.post(
+      `/api/horizon/lenses/${lensId}/complete-substrate`,
+      {
+        scopeMode: params.scopeMode ?? 'visible_set',
+        selectedCanonicalPath: params.selectedCanonicalPath,
+        visibleNodeRefs: params.visibleNodeRefs ?? [],
+        visibleArtifactKeys: params.visibleArtifactKeys ?? [],
+        visibleSupplyLinkRefs: params.visibleSupplyLinkRefs ?? [],
+        visibleRelations: params.visibleRelations ?? [],
+        clientViewId: params.clientViewId,
+        maxNodes: params.maxNodes,
+        maxArtifacts: params.maxArtifacts,
+        maxCompletions: params.maxCompletions,
+      },
+    );
     return response.data;
   }
 
@@ -3389,18 +4497,21 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     startedAt: string;
     streamChannel: 'realtime';
   }> {
-    const response = await this.client.post(`/api/horizon/lenses/${lensId}/recover-metrics`, {
-      scopeMode: params.scopeMode ?? 'visible_set',
-      selectedCanonicalPath: params.selectedCanonicalPath,
-      visibleNodeRefs: params.visibleNodeRefs ?? [],
-      visibleArtifactKeys: params.visibleArtifactKeys ?? [],
-      visibleSupplyLinkRefs: params.visibleSupplyLinkRefs ?? [],
-      visibleRelations: params.visibleRelations ?? [],
-      clientViewId: params.clientViewId,
-      maxNodes: params.maxNodes,
-      maxArtifacts: params.maxArtifacts,
-      maxRecoveries: params.maxRecoveries,
-    });
+    const response = await this.client.post(
+      `/api/horizon/lenses/${lensId}/recover-metrics`,
+      {
+        scopeMode: params.scopeMode ?? 'visible_set',
+        selectedCanonicalPath: params.selectedCanonicalPath,
+        visibleNodeRefs: params.visibleNodeRefs ?? [],
+        visibleArtifactKeys: params.visibleArtifactKeys ?? [],
+        visibleSupplyLinkRefs: params.visibleSupplyLinkRefs ?? [],
+        visibleRelations: params.visibleRelations ?? [],
+        clientViewId: params.clientViewId,
+        maxNodes: params.maxNodes,
+        maxArtifacts: params.maxArtifacts,
+        maxRecoveries: params.maxRecoveries,
+      },
+    );
     return response.data;
   }
 
@@ -3419,7 +4530,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   async getHorizonAIExplanation(
     targetType: 'edge' | 'node',
     targetId: string,
-    options?: { lang?: string }
+    options?: { lang?: string },
   ): Promise<{
     targetType: 'edge' | 'node';
     targetId: string;
@@ -3429,9 +4540,12 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     docId: string;
   }> {
     const lang = options?.lang || 'en';
-    const response = await this.client.get(`/api/horizon/ai-explanations/${targetType}/${encodeURIComponent(targetId)}`, {
-      params: { lang },
-    });
+    const response = await this.client.get(
+      `/api/horizon/ai-explanations/${targetType}/${encodeURIComponent(targetId)}`,
+      {
+        params: { lang },
+      },
+    );
     return response.data;
   }
 
@@ -3448,12 +4562,22 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       targetFragmentId?: string;
       attrs?: Record<string, any>;
     },
-    options?: { lang?: string }
-  ): Promise<{ ok: boolean; targetType: string; targetId: string; language: string; docId: string }> {
+    options?: { lang?: string },
+  ): Promise<{
+    ok: boolean;
+    targetType: string;
+    targetId: string;
+    language: string;
+    docId: string;
+  }> {
     const lang = options?.lang || data.language || 'en';
-    const response = await this.client.put(`/api/horizon/ai-explanations/${targetType}/${encodeURIComponent(targetId)}`, data, {
-      params: { lang },
-    });
+    const response = await this.client.put(
+      `/api/horizon/ai-explanations/${targetType}/${encodeURIComponent(targetId)}`,
+      data,
+      {
+        params: { lang },
+      },
+    );
     return response.data;
   }
 
@@ -3486,10 +4610,13 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
         latencyHours?: number;
       };
       qualifiers?: Record<string, any>;
-    }
+    },
   ): Promise<any> {
     try {
-      const response = await this.client.put(`/api/horizon/edges/${edgeId}`, updates);
+      const response = await this.client.put(
+        `/api/horizon/edges/${edgeId}`,
+        updates,
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] updateHorizonEdge error:`, error);
@@ -3513,7 +4640,10 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     data: { type?: string; swap?: boolean },
   ): Promise<any> {
     try {
-      const response = await this.client.post(`/api/horizon/edges/${edgeId}/hitl`, data || {});
+      const response = await this.client.post(
+        `/api/horizon/edges/${edgeId}/hitl`,
+        data || {},
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] humanInTheLoopUpdateHorizonEdge error:`, error);
@@ -3522,7 +4652,10 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }
 
   // --- Horizon Rollup & Metrics ---
-  async getFragmentRollup(fragmentId: string, kind: string = 'risk'): Promise<{
+  async getFragmentRollup(
+    fragmentId: string,
+    kind: string = 'risk',
+  ): Promise<{
     fragmentId: string;
     canonicalPath: string;
     metricKind: string;
@@ -3543,9 +4676,12 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     };
   }> {
     try {
-      const response = await this.client.get(`/api/horizon/rollup/${fragmentId}`, {
-        params: { kind },
-      });
+      const response = await this.client.get(
+        `/api/horizon/rollup/${fragmentId}`,
+        {
+          params: { kind },
+        },
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] getFragmentRollup error:`, error);
@@ -3553,7 +4689,10 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
-  async getFragmentExplain(fragmentId: string, kind: string = 'risk'): Promise<{
+  async getFragmentExplain(
+    fragmentId: string,
+    kind: string = 'risk',
+  ): Promise<{
     topContributors: Array<{
       signalId: string;
       signalType: string;
@@ -3565,9 +4704,12 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     rulesApplied: string[];
   }> {
     try {
-      const response = await this.client.get(`/api/horizon/rollup/${fragmentId}/explain`, {
-        params: { kind },
-      });
+      const response = await this.client.get(
+        `/api/horizon/rollup/${fragmentId}/explain`,
+        {
+          params: { kind },
+        },
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] getFragmentExplain error:`, error);
@@ -3578,7 +4720,9 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   // --- Horizon Fragment Profiles ---
   async getFragmentProfile(fragmentId: string): Promise<any> {
     try {
-      const response = await this.client.get(`/api/horizon/fragments/${fragmentId}/profile`);
+      const response = await this.client.get(
+        `/api/horizon/fragments/${fragmentId}/profile`,
+      );
       return response.data;
     } catch (error: any) {
       if (error?.response?.status === 404) {
@@ -3589,9 +4733,13 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
-  async deleteFragmentProfile(fragmentId: string): Promise<{ ok: boolean; fragmentId: string; deletedCount?: number }> {
+  async deleteFragmentProfile(
+    fragmentId: string,
+  ): Promise<{ ok: boolean; fragmentId: string; deletedCount?: number }> {
     try {
-      const response = await this.client.delete(`/api/horizon/fragments/${fragmentId}/profile`);
+      const response = await this.client.delete(
+        `/api/horizon/fragments/${fragmentId}/profile`,
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] deleteFragmentProfile error:`, error);
@@ -3599,7 +4747,10 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
-  async refreshFragmentProfile(fragmentId: string, force: boolean = false): Promise<{
+  async refreshFragmentProfile(
+    fragmentId: string,
+    force: boolean = false,
+  ): Promise<{
     profileId: string;
     fragmentId: string;
     created: boolean;
@@ -3608,7 +4759,10 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     sectionsCount: number;
   }> {
     try {
-      const response = await this.client.post(`/api/horizon/fragments/${fragmentId}/profile/refresh`, { force });
+      const response = await this.client.post(
+        `/api/horizon/fragments/${fragmentId}/profile/refresh`,
+        { force },
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] refreshFragmentProfile error:`, error);
@@ -3640,7 +4794,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       lensId?: string;
       // Optional request abort.
       signal?: AbortSignal;
-    }
+    },
   ): Promise<{
     edges: any[];
     total: number;
@@ -3650,7 +4804,9 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   }> {
     try {
       const direction = options?.direction || 'both';
-      const edgeTypes = Array.isArray(options?.edgeTypes) ? options!.edgeTypes : [];
+      const edgeTypes = Array.isArray(options?.edgeTypes)
+        ? options!.edgeTypes
+        : [];
       const params: any = {
         direction,
       };
@@ -3662,11 +4818,20 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       if (options?.includeUnindexed) params.includeUnindexed = '1';
       if (options?.includeCounts) params.includeCounts = '1';
       if (options?.includeCoordinates) params.includeCoordinates = '1';
-      if (typeof options?.hops === 'number' && options.hops >= 1 && options.hops <= 5) params.hops = String(options.hops);
-      if (typeof options?.maxNeighbors === 'number' && options.maxNeighbors > 0) params.maxNeighbors = String(options.maxNeighbors);
-      if (typeof options?.maxEdges === 'number' && options.maxEdges > 0) params.maxEdges = String(options.maxEdges);
-      if (typeof options?.maxPerType === 'number' && options.maxPerType > 0) params.maxPerType = String(options.maxPerType);
-      if (typeof options?.limit === 'number' && options.limit > 0) params.limit = String(options.limit);
+      if (
+        typeof options?.hops === 'number' &&
+        options.hops >= 1 &&
+        options.hops <= 5
+      )
+        params.hops = String(options.hops);
+      if (typeof options?.maxNeighbors === 'number' && options.maxNeighbors > 0)
+        params.maxNeighbors = String(options.maxNeighbors);
+      if (typeof options?.maxEdges === 'number' && options.maxEdges > 0)
+        params.maxEdges = String(options.maxEdges);
+      if (typeof options?.maxPerType === 'number' && options.maxPerType > 0)
+        params.maxPerType = String(options.maxPerType);
+      if (typeof options?.limit === 'number' && options.limit > 0)
+        params.limit = String(options.limit);
       if (options?.semantic) params.semantic = options.semantic;
 
       const headers: any = {};
@@ -3676,11 +4841,14 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
         headers['X-Lens-Id'] = options.lensId;
       }
 
-      const response = await this.client.get(`/api/horizon/fragments/${fragmentId}/dependencies`, {
-        params,
-        headers,
-        signal: options?.signal,
-      });
+      const response = await this.client.get(
+        `/api/horizon/fragments/${fragmentId}/dependencies`,
+        {
+          params,
+          headers,
+          signal: options?.signal,
+        },
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] getFragmentDependencies error:`, error);
@@ -3796,11 +4964,20 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       if (options?.includeUnindexed) params.includeUnindexed = '1';
       if (options?.includeCounts) params.includeCounts = '1';
       if (options?.includeCoordinates) params.includeCoordinates = '1';
-      if (typeof options?.hops === 'number' && options.hops >= 1 && options.hops <= 5) params.hops = String(options.hops);
-      if (typeof options?.maxNeighbors === 'number' && options.maxNeighbors > 0) params.maxNeighbors = String(options.maxNeighbors);
-      if (typeof options?.maxEdges === 'number' && options.maxEdges > 0) params.maxEdges = String(options.maxEdges);
-      if (typeof options?.maxPerType === 'number' && options.maxPerType > 0) params.maxPerType = String(options.maxPerType);
-      if (typeof options?.limit === 'number' && options.limit > 0) params.limit = String(options.limit);
+      if (
+        typeof options?.hops === 'number' &&
+        options.hops >= 1 &&
+        options.hops <= 5
+      )
+        params.hops = String(options.hops);
+      if (typeof options?.maxNeighbors === 'number' && options.maxNeighbors > 0)
+        params.maxNeighbors = String(options.maxNeighbors);
+      if (typeof options?.maxEdges === 'number' && options.maxEdges > 0)
+        params.maxEdges = String(options.maxEdges);
+      if (typeof options?.maxPerType === 'number' && options.maxPerType > 0)
+        params.maxPerType = String(options.maxPerType);
+      if (typeof options?.limit === 'number' && options.limit > 0)
+        params.limit = String(options.limit);
       if (options?.semantic) params.semantic = options.semantic;
 
       const headers: any = {};
@@ -3809,11 +4986,14 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
         headers['X-Lens-Id'] = options.lensId;
       }
 
-      const response = await this.client.get(`/api/horizon/fragments/${fragmentId}/trace`, {
-        params,
-        headers,
-        signal: options?.signal,
-      });
+      const response = await this.client.get(
+        `/api/horizon/fragments/${fragmentId}/trace`,
+        {
+          params,
+          headers,
+          signal: options?.signal,
+        },
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] getFragmentTrace error:`, error);
@@ -3844,7 +5024,9 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     };
   }> {
     try {
-      const response = await this.client.get(`/api/horizon/lenses/${lensId}/cockpit`);
+      const response = await this.client.get(
+        `/api/horizon/lenses/${lensId}/cockpit`,
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] getHorizonLensCockpit error:`, error);
@@ -3859,7 +5041,9 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     metrics: Record<string, number>;
   }> {
     try {
-      const response = await this.client.post(`/api/horizon/lenses/${lensId}/recalculate`);
+      const response = await this.client.post(
+        `/api/horizon/lenses/${lensId}/recalculate`,
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] recalculateHorizonLensMetrics error:`, error);
@@ -3886,8 +5070,13 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     return response.data;
   }
 
-  async searchHorizonWatchTargets(query: string, limit = 8): Promise<HorizonWatchSearchResult[]> {
-    const response = await this.client.post<{ results: HorizonWatchSearchResult[] }>('/api/horizon/watch/search', {
+  async searchHorizonWatchTargets(
+    query: string,
+    limit = 8,
+  ): Promise<HorizonWatchSearchResult[]> {
+    const response = await this.client.post<{
+      results: HorizonWatchSearchResult[];
+    }>('/api/horizon/watch/search', {
       query,
       limit,
     });
@@ -3925,12 +5114,19 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     lensId: string;
     timeHorizon?: string;
   }): Promise<HorizonWatchPageSnapshot> {
-    const response = await this.client.post('/api/horizon/watch/page/refresh', input);
+    const response = await this.client.post(
+      '/api/horizon/watch/page/refresh',
+      input,
+    );
     return response.data;
   }
 
-  async deleteHorizonWatchTarget(targetId: string): Promise<{ deleted: boolean; id: string }> {
-    const response = await this.client.delete(`/api/horizon/watch/targets/${targetId}`);
+  async deleteHorizonWatchTarget(
+    targetId: string,
+  ): Promise<{ deleted: boolean; id: string }> {
+    const response = await this.client.delete(
+      `/api/horizon/watch/targets/${targetId}`,
+    );
     return response.data;
   }
 
@@ -3942,12 +5138,17 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     onlyTrustedSources?: boolean;
     filters?: Record<string, any>;
   }): Promise<HorizonWatchPreferences> {
-    const response = await this.client.put('/api/horizon/watch/preferences', data);
+    const response = await this.client.put(
+      '/api/horizon/watch/preferences',
+      data,
+    );
     return response.data;
   }
 
   async getHorizonWatchBrief(briefId: string): Promise<HorizonWatchBrief> {
-    const response = await this.client.get(`/api/horizon/watch/briefs/${briefId}`);
+    const response = await this.client.get(
+      `/api/horizon/watch/briefs/${briefId}`,
+    );
     return response.data;
   }
 
@@ -3957,7 +5158,9 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     evidence: any[];
     generatedAt: string;
   }> {
-    const response = await this.client.get(`/api/horizon/watch/briefs/${briefId}/evidence`);
+    const response = await this.client.get(
+      `/api/horizon/watch/briefs/${briefId}/evidence`,
+    );
     return response.data;
   }
 
@@ -3967,7 +5170,9 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     canonicalPaths: string[];
     topAffectedTargets: string[];
   }> {
-    const response = await this.client.get(`/api/horizon/watch/briefs/${briefId}/paths`);
+    const response = await this.client.get(
+      `/api/horizon/watch/briefs/${briefId}/paths`,
+    );
     return response.data;
   }
 
@@ -3976,7 +5181,9 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     targetId: string;
     sources: string[];
   }> {
-    const response = await this.client.get(`/api/horizon/watch/briefs/${briefId}/sources`);
+    const response = await this.client.get(
+      `/api/horizon/watch/briefs/${briefId}/sources`,
+    );
     return response.data;
   }
 
@@ -3985,27 +5192,40 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     lensId?: string | null;
     timeHorizon?: string;
   }): Promise<HorizonWatchScenarioWorkspace> {
-    const response = await this.client.get('/api/horizon/watch/scenarios/workspace', {
-      params: {
-        mode: params?.mode,
-        lensId: params?.lensId || undefined,
-        timeHorizon: params?.timeHorizon,
+    const response = await this.client.get(
+      '/api/horizon/watch/scenarios/workspace',
+      {
+        params: {
+          mode: params?.mode,
+          lensId: params?.lensId || undefined,
+          timeHorizon: params?.timeHorizon,
+        },
       },
-    });
+    );
     return response.data;
   }
 
   async getHorizonWatchScenarioContractDetail(
     contractId: string,
-    params?: { mode?: 'global' | 'my_watch' | 'combined'; lensId?: string | null; timeHorizon?: string }
-  ): Promise<{ workspace: HorizonWatchScenarioWorkspace; contract: import('../types/horizonWatch').HorizonWatchScenarioPreset }> {
-    const response = await this.client.get(`/api/horizon/watch/scenarios/contracts/${encodeURIComponent(contractId)}`, {
-      params: {
-        mode: params?.mode,
-        lensId: params?.lensId || undefined,
-        timeHorizon: params?.timeHorizon,
+    params?: {
+      mode?: 'global' | 'my_watch' | 'combined';
+      lensId?: string | null;
+      timeHorizon?: string;
+    },
+  ): Promise<{
+    workspace: HorizonWatchScenarioWorkspace;
+    contract: import('../types/horizonWatch').HorizonWatchScenarioPreset;
+  }> {
+    const response = await this.client.get(
+      `/api/horizon/watch/scenarios/contracts/${encodeURIComponent(contractId)}`,
+      {
+        params: {
+          mode: params?.mode,
+          lensId: params?.lensId || undefined,
+          timeHorizon: params?.timeHorizon,
+        },
       },
-    });
+    );
     return response.data;
   }
 
@@ -4016,14 +5236,56 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     contractIds?: string[];
   }): Promise<{
     workspace: HorizonWatchScenarioWorkspace;
-    branches: Array<{ contract: import('../types/horizonWatch').HorizonWatchScenarioPreset; result?: any; error?: string }>;
+    branches: Array<{
+      contract: import('../types/horizonWatch').HorizonWatchScenarioPreset;
+      result?: any;
+      error?: string;
+    }>;
   }> {
-    const response = await this.client.post('/api/horizon/watch/scenarios/compare', input || {});
+    const response = await this.client.post(
+      '/api/horizon/watch/scenarios/compare',
+      input || {},
+    );
     return response.data;
   }
 
-  async getHorizonLensAttention(lensId: string): Promise<import('../types/horizonWatch').HorizonWatchLensAttention> {
-    const response = await this.client.get(`/api/horizon/lenses/${lensId}/attention`);
+  async getHorizonLensAttention(
+    lensId: string,
+  ): Promise<import('../types/horizonWatch').HorizonWatchLensAttention> {
+    const response = await this.client.get(
+      `/api/horizon/lenses/${lensId}/attention`,
+    );
+    return response.data;
+  }
+
+  async getHorizonWatchPortfolios(): Promise<HorizonWatchPortfolio[]> {
+    const response = await this.client.get<{
+      portfolios?: HorizonWatchPortfolio[];
+    }>('/api/horizon/watch/portfolios');
+    return Array.isArray(response.data?.portfolios)
+      ? response.data.portfolios
+      : [];
+  }
+
+  async getHorizonWatchPortfolio(
+    portfolioId: string,
+  ): Promise<HorizonWatchPortfolioView> {
+    const response = await this.client.get(
+      `/api/horizon/watch/portfolios/${encodeURIComponent(portfolioId)}`,
+    );
+    return response.data;
+  }
+
+  async getHorizonWatchPortfolioDigest(
+    portfolioId: string,
+    persist = false,
+  ): Promise<HorizonMonitoringDigest> {
+    const response = await this.client.get(
+      `/api/horizon/watch/portfolios/${encodeURIComponent(portfolioId)}/digest`,
+      {
+        params: persist ? { persist: '1' } : undefined,
+      },
+    );
     return response.data;
   }
 
@@ -4097,14 +5359,27 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     domainMetrics?: Array<{
       fragmentId: string;
       canonicalPath?: string;
-      accumulated?: Array<{ axis: string; amplitude: number; polarity?: string; hopCount?: number }>;
-      metrics: Array<{ metricPath: string; value: number; unit?: string; confidence?: number }>;
+      accumulated?: Array<{
+        axis: string;
+        amplitude: number;
+        polarity?: string;
+        hopCount?: number;
+      }>;
+      metrics: Array<{
+        metricPath: string;
+        value: number;
+        unit?: string;
+        confidence?: number;
+      }>;
       persisted: boolean;
     }>;
     propagationStats?: Record<string, number>;
   }> {
     try {
-      const response = await this.client.post('/api/horizon/scenarios/run', input || {});
+      const response = await this.client.post(
+        '/api/horizon/scenarios/run',
+        input || {},
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] runHorizonScenario error:`, error);
@@ -4119,7 +5394,10 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
    */
   async listHorizonLensArtifacts(
     lensId: string,
-    options?: { type?: 'fragment' | 'edge' | 'FRAGMENT' | 'EDGE'; limit?: number }
+    options?: {
+      type?: 'fragment' | 'edge' | 'FRAGMENT' | 'EDGE';
+      limit?: number;
+    },
   ): Promise<{
     artifacts: any[];
     totalCount: number;
@@ -4131,7 +5409,10 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       const params: Record<string, string> = {};
       if (options?.type) params.type = String(options.type).toUpperCase();
       if (options?.limit) params.limit = options.limit.toString();
-      const response = await this.client.get(`/api/horizon/lenses/${lensId}/artifacts`, { params });
+      const response = await this.client.get(
+        `/api/horizon/lenses/${lensId}/artifacts`,
+        { params },
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] listHorizonLensArtifacts error:`, error);
@@ -4152,7 +5433,9 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     lastUpdated?: string | null;
   }> {
     try {
-      const response = await this.client.get(`/api/horizon/lenses/${lensId}/artifacts/stats`);
+      const response = await this.client.get(
+        `/api/horizon/lenses/${lensId}/artifacts/stats`,
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] getHorizonLensArtifactStats error:`, error);
@@ -4166,7 +5449,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
    */
   async getHorizonLensArtifactContext(
     lensId: string,
-    options?: { page?: number; pageSize?: number }
+    options?: { page?: number; pageSize?: number },
   ): Promise<{
     fragments: any[];
     edges: any[];
@@ -4178,8 +5461,12 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     try {
       const params: Record<string, string> = {};
       if (options?.page !== undefined) params.page = options.page.toString();
-      if (options?.pageSize !== undefined) params.pageSize = options.pageSize.toString();
-      const response = await this.client.get(`/api/horizon/lenses/${lensId}/artifacts/context`, { params });
+      if (options?.pageSize !== undefined)
+        params.pageSize = options.pageSize.toString();
+      const response = await this.client.get(
+        `/api/horizon/lenses/${lensId}/artifacts/context`,
+        { params },
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] getHorizonLensArtifactContext error:`, error);
@@ -4191,9 +5478,13 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
    * Delete all artifacts for a lens
    * DELETE /api/horizon/lenses/{lensId}/artifacts
    */
-  async deleteHorizonLensArtifacts(lensId: string): Promise<{ message: string; lensId: string }> {
+  async deleteHorizonLensArtifacts(
+    lensId: string,
+  ): Promise<{ message: string; lensId: string }> {
     try {
-      const response = await this.client.delete(`/api/horizon/lenses/${lensId}/artifacts`);
+      const response = await this.client.delete(
+        `/api/horizon/lenses/${lensId}/artifacts`,
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] deleteHorizonLensArtifacts error:`, error);
@@ -4201,11 +5492,17 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
-  async postHorizonLensChat(lensId: string, message: string): Promise<HorizonLensChatResponse> {
+  async postHorizonLensChat(
+    lensId: string,
+    message: string,
+  ): Promise<HorizonLensChatResponse> {
     try {
-      const response = await this.client.post<HorizonLensChatResponse>(`/api/horizon/lenses/${lensId}/chat`, {
-        message: message.trim(),
-      });
+      const response = await this.client.post<HorizonLensChatResponse>(
+        `/api/horizon/lenses/${lensId}/chat`,
+        {
+          message: message.trim(),
+        },
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] postHorizonLensChat error:`, error);
@@ -4213,9 +5510,13 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
-  async createHorizonLensReportArtifact(lensId: string): Promise<HorizonLensReportArtifactResponse> {
+  async createHorizonLensReportArtifact(
+    lensId: string,
+  ): Promise<HorizonLensReportArtifactResponse> {
     try {
-      const response = await this.client.post(`/api/horizon/lenses/${lensId}/report-artifact`);
+      const response = await this.client.post(
+        `/api/horizon/lenses/${lensId}/report-artifact`,
+      );
       return response.data;
     } catch (error: any) {
       console.error(`[API] createHorizonLensReportArtifact error:`, error);
@@ -4231,15 +5532,40 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     lensId: string,
     question: string,
     callbacks: {
-      onStatus?: (data: { status: string; sessionId?: string; error?: string }) => void;
-      onHighlights?: (data: { highlightedNodeIds?: string[]; highlightedEdgeIds?: string[]; tracePaths?: unknown[] }) => void;
+      onStatus?: (data: {
+        status: string;
+        sessionId?: string;
+        error?: string;
+      }) => void;
+      onHighlights?: (data: {
+        highlightedNodeIds?: string[];
+        highlightedEdgeIds?: string[];
+        tracePaths?: unknown[];
+      }) => void;
       onAnswerChunk?: (data: { text: string }) => void;
       onAnswerComplete?: (data: Record<string, unknown>) => void;
-      onSufficiencyReport?: (data: { score: number; sufficient: boolean; gaps: Array<{ description: string; whyItMatters?: string }>; recommendedFacets?: string[] }) => void;
+      onSufficiencyReport?: (data: {
+        score: number;
+        sufficient: boolean;
+        gaps: Array<{ description: string; whyItMatters?: string }>;
+        recommendedFacets?: string[];
+      }) => void;
       onScoutStarted?: (data: { jobId: string }) => void;
-      onScoutProgress?: (data: { jobId: string; state?: string; progress?: number }) => void;
-      onScoutComplete?: (data: { jobId: string; newFragments?: number }) => void;
-      onSignalFillReport?: (data: { filledCount: number; failedCount: number; totalSignals: number; sources: Array<{ url: string; title: string }> }) => void;
+      onScoutProgress?: (data: {
+        jobId: string;
+        state?: string;
+        progress?: number;
+      }) => void;
+      onScoutComplete?: (data: {
+        jobId: string;
+        newFragments?: number;
+      }) => void;
+      onSignalFillReport?: (data: {
+        filledCount: number;
+        failedCount: number;
+        totalSignals: number;
+        sources: Array<{ url: string; title: string }>;
+      }) => void;
       onError?: (err: Error) => void;
     },
     signal?: AbortSignal,
@@ -4254,11 +5580,16 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ question: question.trim(), ...(options?.autoScout != null ? { autoScout: options.autoScout } : {}) }),
+      body: JSON.stringify({
+        question: question.trim(),
+        ...(options?.autoScout != null ? { autoScout: options.autoScout } : {}),
+      }),
       signal,
     });
     if (!res.ok) {
-      const err = new Error(res.statusText || `QA request failed: ${res.status}`);
+      const err = new Error(
+        res.statusText || `QA request failed: ${res.status}`,
+      );
       callbacks.onError?.(err);
       throw err;
     }
@@ -4285,14 +5616,22 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
             try {
               const data = JSON.parse(line.slice(6)) as Record<string, unknown>;
               if (currentEvent === 'status') callbacks.onStatus?.(data as any);
-              else if (currentEvent === 'highlights') callbacks.onHighlights?.(data as any);
-              else if (currentEvent === 'answer_chunk') callbacks.onAnswerChunk?.(data as any);
-              else if (currentEvent === 'answer_complete') callbacks.onAnswerComplete?.(data);
-              else if (currentEvent === 'sufficiency_report') callbacks.onSufficiencyReport?.(data as any);
-              else if (currentEvent === 'scout_started') callbacks.onScoutStarted?.(data as any);
-              else if (currentEvent === 'scout_progress') callbacks.onScoutProgress?.(data as any);
-              else if (currentEvent === 'scout_complete') callbacks.onScoutComplete?.(data as any);
-              else if (currentEvent === 'signal_fill_report') callbacks.onSignalFillReport?.(data as any);
+              else if (currentEvent === 'highlights')
+                callbacks.onHighlights?.(data as any);
+              else if (currentEvent === 'answer_chunk')
+                callbacks.onAnswerChunk?.(data as any);
+              else if (currentEvent === 'answer_complete')
+                callbacks.onAnswerComplete?.(data);
+              else if (currentEvent === 'sufficiency_report')
+                callbacks.onSufficiencyReport?.(data as any);
+              else if (currentEvent === 'scout_started')
+                callbacks.onScoutStarted?.(data as any);
+              else if (currentEvent === 'scout_progress')
+                callbacks.onScoutProgress?.(data as any);
+              else if (currentEvent === 'scout_complete')
+                callbacks.onScoutComplete?.(data as any);
+              else if (currentEvent === 'signal_fill_report')
+                callbacks.onSignalFillReport?.(data as any);
             } catch {
               // ignore parse errors
             }
@@ -4305,17 +5644,26 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     }
   }
 
-  async getHorizonSimulationBundleView(runId: string): Promise<HorizonSimulationBundleViewResponse> {
-    const response = await this.client.get<HorizonSimulationBundleViewResponse>(`/api/horizon/simulations/${encodeURIComponent(runId)}/bundle-view`);
+  async getHorizonSimulationBundleView(
+    runId: string,
+  ): Promise<HorizonSimulationBundleViewResponse> {
+    const response = await this.client.get<HorizonSimulationBundleViewResponse>(
+      `/api/horizon/simulations/${encodeURIComponent(runId)}/bundle-view`,
+    );
     return response.data;
   }
 
   async listHorizonSimulationRuns(): Promise<HorizonSimulationRunsResponse> {
-    const response = await this.client.get<HorizonSimulationRunsResponse>('/api/horizon/simulations');
+    const response = await this.client.get<HorizonSimulationRunsResponse>(
+      '/api/horizon/simulations',
+    );
     return response.data;
   }
 
-  async listHorizonSimulationRunsForLens(lensId: string, limit = 25): Promise<HorizonSimulationRunsResponse> {
+  async listHorizonSimulationRunsForLens(
+    lensId: string,
+    limit = 25,
+  ): Promise<HorizonSimulationRunsResponse> {
     const response = await this.client.get<HorizonSimulationRunsResponse>(
       `/api/horizon/lenses/${encodeURIComponent(lensId)}/simulations`,
       { params: { limit: String(limit) } },
@@ -4323,14 +5671,18 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     return response.data;
   }
 
-  async getLatestHorizonSimulationRunForLens(lensId: string): Promise<HorizonSimulationRunSummary> {
+  async getLatestHorizonSimulationRunForLens(
+    lensId: string,
+  ): Promise<HorizonSimulationRunSummary> {
     const response = await this.client.get<HorizonSimulationRunSummary>(
       `/api/horizon/lenses/${encodeURIComponent(lensId)}/simulations/latest`,
     );
     return response.data;
   }
 
-  async getLatestHorizonSimulationBundleViewForLens(lensId: string): Promise<HorizonSimulationBundleViewResponse> {
+  async getLatestHorizonSimulationBundleViewForLens(
+    lensId: string,
+  ): Promise<HorizonSimulationBundleViewResponse> {
     const response = await this.client.get<HorizonSimulationBundleViewResponse>(
       `/api/horizon/lenses/${encodeURIComponent(lensId)}/simulations/latest/bundle-view`,
     );
@@ -4343,7 +5695,8 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   ): Promise<HorizonSimulationOverlaysResponse> {
     const params: Record<string, string> = {};
     const appendCSV = (key: string, values?: string[]) => {
-      if (Array.isArray(values) && values.length > 0) params[key] = values.join(',');
+      if (Array.isArray(values) && values.length > 0)
+        params[key] = values.join(',');
     };
     appendCSV('kinds', filters?.kinds as string[] | undefined);
     appendCSV('functions', filters?.functions);
@@ -4352,7 +5705,8 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     appendCSV('targets', filters?.targets);
     appendCSV('ids', filters?.ids);
     appendCSV('categories', filters?.categories);
-    if (typeof filters?.minScore === 'number') params.minScore = String(filters.minScore);
+    if (typeof filters?.minScore === 'number')
+      params.minScore = String(filters.minScore);
     if (filters?.q?.trim()) params.q = filters.q.trim();
     const response = await this.client.get<HorizonSimulationOverlaysResponse>(
       `/api/horizon/lenses/${encodeURIComponent(lensId)}/simulations/latest/overlays`,
@@ -4367,7 +5721,8 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
   ): Promise<HorizonSimulationOverlaysResponse> {
     const params: Record<string, string> = {};
     const appendCSV = (key: string, values?: string[]) => {
-      if (Array.isArray(values) && values.length > 0) params[key] = values.join(',');
+      if (Array.isArray(values) && values.length > 0)
+        params[key] = values.join(',');
     };
     appendCSV('kinds', filters?.kinds as string[] | undefined);
     appendCSV('functions', filters?.functions);
@@ -4376,7 +5731,8 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     appendCSV('targets', filters?.targets);
     appendCSV('ids', filters?.ids);
     appendCSV('categories', filters?.categories);
-    if (typeof filters?.minScore === 'number') params.minScore = String(filters.minScore);
+    if (typeof filters?.minScore === 'number')
+      params.minScore = String(filters.minScore);
     if (filters?.q?.trim()) params.q = filters.q.trim();
     const response = await this.client.get<HorizonSimulationOverlaysResponse>(
       `/api/horizon/simulations/${encodeURIComponent(runId)}/overlays`,
@@ -4387,12 +5743,17 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
 
   async explainHorizonSimulationOverlay(
     runId: string,
-    payload: { overlayId: string; kind?: string; matchedArtifactIds?: string[] },
+    payload: {
+      overlayId: string;
+      kind?: string;
+      matchedArtifactIds?: string[];
+    },
   ): Promise<HorizonSimulationExplanationResponse> {
-    const response = await this.client.post<HorizonSimulationExplanationResponse>(
-      `/api/horizon/simulations/${encodeURIComponent(runId)}/explain`,
-      payload,
-    );
+    const response =
+      await this.client.post<HorizonSimulationExplanationResponse>(
+        `/api/horizon/simulations/${encodeURIComponent(runId)}/explain`,
+        payload,
+      );
     return response.data;
   }
 }

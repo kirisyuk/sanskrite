@@ -15,6 +15,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/analytical"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/workscope"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
@@ -193,9 +194,12 @@ func (h *HorizonHandlers) LensChat(w http.ResponseWriter, r *http.Request) {
 
 func (h *HorizonHandlers) answerLensChat(ctx context.Context, lens *horizonmodels.Lens, message string, history []lensChatTurn) (string, []lensChatInternalHit, []string, []string) {
 	warnings := make([]string, 0, 4)
+	analyticalIntent := classifyLensChatAnalyticalIntent(message)
+	analyticalHits, analyticalDocs, analyticalPaths, analyticalWarnings := h.loadLensChatAnalyticalEvidence(ctx, lens, message, analyticalIntent)
+	warnings = append(warnings, analyticalWarnings...)
 	warmState := lensChatWarmState(lens)
-	status := strings.ToLower(strings.TrimSpace(asStringAny(warmState["status"])))
-	warmedReady := status == "ready"
+	requiredTemperature := lensChatRequiredTemperature(message, analyticalIntent)
+	warmedReady := lensChatTemperatureReady(warmState, requiredTemperature)
 	storeID := strings.TrimSpace(asStringAny(warmState["answerStore"]))
 	corpusID := strings.TrimSpace(asStringAny(warmState["corpusId"]))
 	scopePaths := lensChatScopePaths(lens)
@@ -207,10 +211,13 @@ func (h *HorizonHandlers) answerLensChat(ctx context.Context, lens *horizonmodel
 		searchClient = searchClient.WithDataStore(storeID)
 	}
 	if !warmedReady {
+		if h != nil && h.service != nil && h.service.Lens() != nil {
+			_ = h.service.Lens().RequestInternalKnowledgeWarmup(ctx, strings.TrimSpace(lens.ID), "lens_chat_"+requiredTemperature+"_demand")
+		}
 		if lensAssemblyReadyLocal(lens) {
-			warnings = append(warnings, "lens internal knowledge is still warming; answer uses matching prepared system knowledge")
+			warnings = append(warnings, fmt.Sprintf("lens internal knowledge is still warming to %s; answer uses matching prepared system knowledge", requiredTemperature))
 		} else {
-			warnings = append(warnings, "lens internal knowledge is not warmed yet; answer uses matching prepared system knowledge")
+			warnings = append(warnings, fmt.Sprintf("lens internal knowledge is not warmed to %s yet; answer uses matching prepared system knowledge", requiredTemperature))
 		}
 	}
 
@@ -226,7 +233,8 @@ func (h *HorizonHandlers) answerLensChat(ctx context.Context, lens *horizonmodel
 	evidenceDocs, evidenceWarnings := loadLensChatPreparedEvidenceDocs(ctx, h.gcsClient, lensHits, defaultLensChatEvidenceDocLimit)
 	warnings = append(warnings, evidenceWarnings...)
 
-	hits := append([]lensChatInternalHit(nil), lensHits...)
+	hits := mergeLensChatHits(append([]lensChatInternalHit(nil), analyticalHits...), lensHits, defaultLensChatHitLimit+defaultLensChatGlobalHitLimit)
+	evidenceDocs = mergeLensChatPreparedEvidenceDocs(analyticalDocs, evidenceDocs, defaultLensChatEvidenceDocLimit+defaultLensChatGlobalHitLimit)
 	if warmedReady && lensChatNeedsGlobalFallback(message, hits, evidenceDocs) {
 		globalHits, globalWarnings := searchLensChatInternalKnowledge(ctx, searchClient, lensChatSearchSpec{
 			Question:          message,
@@ -239,17 +247,19 @@ func (h *HorizonHandlers) answerLensChat(ctx context.Context, lens *horizonmodel
 		hits = mergeLensChatHits(hits, globalHits, defaultLensChatHitLimit+defaultLensChatGlobalHitLimit)
 		evidenceDocs, evidenceWarnings = loadLensChatPreparedEvidenceDocs(ctx, h.gcsClient, hits, defaultLensChatEvidenceDocLimit)
 		warnings = append(warnings, evidenceWarnings...)
+		evidenceDocs = mergeLensChatPreparedEvidenceDocs(analyticalDocs, evidenceDocs, defaultLensChatEvidenceDocLimit+defaultLensChatGlobalHitLimit)
 		if len(globalHits) > 0 {
 			warnings = append(warnings, "answer was widened beyond the current lens corpus to use matching prepared system knowledge")
 		}
 	}
 	highlightedPaths := collectLensChatEvidencePaths(hits, evidenceDocs, 32)
+	highlightedPaths = limitStringsLocal(filterCanonicalPathsLocal(append(highlightedPaths, analyticalPaths...)), 32)
 	if len(hits) == 0 || len(evidenceDocs) == 0 {
 		answer := "I could not find enough grounded internal knowledge for this question."
 		if !warmedReady {
-			answer = "Internal knowledge is not ready for this lens yet. Ask again after warmup completes."
+			answer = fmt.Sprintf("Internal knowledge for this question class is not ready at %s temperature yet. Ask again after warmup completes.", requiredTemperature)
 			if lensAssemblyReadyLocal(lens) {
-				answer = "Internal knowledge for this lens is still warming. Ask again in a moment."
+				answer = fmt.Sprintf("Internal knowledge for this lens is still warming to %s. Ask again in a moment.", requiredTemperature)
 			}
 		} else if corpusID != "" {
 			answer = "I could not find enough grounded internal knowledge for this question in the current lens or matching prepared system knowledge."
@@ -519,6 +529,11 @@ func lensChatScopePaths(lens *horizonmodels.Lens) []string {
 }
 
 func lensChatNeedsGlobalFallback(question string, hits []lensChatInternalHit, evidenceDocs []lensChatPreparedEvidenceDoc) bool {
+	for _, doc := range evidenceDocs {
+		if strings.HasPrefix(strings.TrimSpace(doc.Kind), "analytical_") {
+			return false
+		}
+	}
 	if len(hits) == 0 || len(evidenceDocs) == 0 {
 		return true
 	}
@@ -536,6 +551,174 @@ func lensChatNeedsGlobalFallback(question string, hits []lensChatInternalHit, ev
 		return true
 	}
 	return len(evidenceDocs) < 3
+}
+
+func classifyLensChatAnalyticalIntent(question string) string {
+	q := strings.ToLower(strings.TrimSpace(question))
+	switch {
+	case q == "":
+		return ""
+	case strings.Contains(q, "what happens if"), strings.Contains(q, "impact if"), strings.Contains(q, "disruption impact"), strings.Contains(q, "что будет если"), strings.Contains(q, "влияние сбоя"), strings.Contains(q, "impact of disruption"):
+		return "scenario"
+	case strings.Contains(q, "weak point"), strings.Contains(q, "bottleneck"), strings.Contains(q, "critical dependenc"), strings.Contains(q, "single point of failure"), strings.Contains(q, "fragility"), strings.Contains(q, "chokepoint"), strings.Contains(q, "critical path"), strings.Contains(q, "узк"), strings.Contains(q, "слаб"), strings.Contains(q, "зависимост"), strings.Contains(q, "хрупк"), strings.Contains(q, "бутылоч"):
+		return "baseline_risk"
+	default:
+		return ""
+	}
+}
+
+func (h *HorizonHandlers) loadLensChatAnalyticalEvidence(ctx context.Context, lens *horizonmodels.Lens, message, intent string) ([]lensChatInternalHit, []lensChatPreparedEvidenceDoc, []string, []string) {
+	if h == nil || lens == nil || intent == "" {
+		return nil, nil, nil, nil
+	}
+	hits := make([]lensChatInternalHit, 0, 8)
+	docs := make([]lensChatPreparedEvidenceDoc, 0, 8)
+	paths := make([]string, 0, 24)
+	warnings := make([]string, 0, 4)
+
+	if h.analyticalPrimitivesRepo != nil && h.analyticalAggregatesRepo != nil {
+		scopePaths := lensChatScopePaths(lens)
+		aggregate, err := analytical.EnsureLensAggregate(ctx, h.analyticalPrimitivesRepo, h.analyticalAggregatesRepo, h.materializedArtifactsRepo, lens, scopePaths, time.Now().UTC())
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("analytical lens aggregate refresh failed: %v", err))
+		} else if aggregate != nil {
+			hits = append(hits, lensChatHitFromAggregate(aggregate, 1.2))
+			docs = append(docs, lensChatDocFromAggregate(aggregate))
+			paths = append(paths, aggregate.BasisRefs...)
+			paths = append(paths, aggregate.ProductRefs...)
+			paths = append(paths, aggregate.NodeRefs...)
+			paths = append(paths, aggregate.RouteRefs...)
+			paths = append(paths, aggregate.AffectedRefs...)
+			primitives, err := h.analyticalPrimitivesRepo.ListByIDs(ctx, limitStringsLocal(aggregate.DerivedPrimitiveIDs, 8))
+			if err != nil {
+				warnings = append(warnings, fmt.Sprintf("analytical primitive load failed: %v", err))
+			} else {
+				for _, primitive := range primitives {
+					if primitive == nil {
+						continue
+					}
+					hits = append(hits, lensChatHitFromPrimitive(primitive, 0.95))
+					docs = append(docs, lensChatDocFromPrimitive(primitive))
+					paths = append(paths, primitive.BasisRefs...)
+					paths = append(paths, primitive.ProductRefs...)
+					paths = append(paths, primitive.NodeRefs...)
+					paths = append(paths, primitive.RouteRefs...)
+					paths = append(paths, primitive.AffectedRefs...)
+				}
+			}
+		}
+	}
+
+	if intent == "scenario" && h.service != nil && h.service.Simulation() != nil {
+		run, err := h.service.Simulation().GetLatestRunByLens(ctx, strings.TrimSpace(lens.TenantID), strings.TrimSpace(lens.ID))
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("latest simulation lookup failed: %v", err))
+		} else if run != nil {
+			aggregate, err := h.service.Simulation().EnsureScenarioAggregate(ctx, strings.TrimSpace(lens.TenantID), strings.TrimSpace(run.ID))
+			if err != nil {
+				warnings = append(warnings, fmt.Sprintf("scenario aggregate refresh failed: %v", err))
+			} else if aggregate != nil {
+				hits = append(hits, lensChatHitFromAggregate(aggregate, 1.35))
+				docs = append(docs, lensChatDocFromAggregate(aggregate))
+				paths = append(paths, aggregate.BasisRefs...)
+				paths = append(paths, aggregate.ProductRefs...)
+				paths = append(paths, aggregate.AffectedRefs...)
+			}
+		}
+	}
+
+	return mergeLensChatHits(nil, hits, 12), mergeLensChatPreparedEvidenceDocs(nil, docs, 12), limitStringsLocal(filterCanonicalPathsLocal(paths), 32), uniqueStringsLocal(warnings)
+}
+
+func lensChatHitFromAggregate(aggregate *horizonmodels.AnalyticalAggregate, boost float64) lensChatInternalHit {
+	paths := uniqueStringsLocal(append(append([]string{aggregate.ScopeRef, aggregate.SubjectRef}, aggregate.BasisRefs...), append(append(append(aggregate.ProductRefs, aggregate.NodeRefs...), aggregate.RouteRefs...), aggregate.AffectedRefs...)...))
+	return lensChatInternalHit{
+		ID:    strings.TrimSpace(aggregate.ID),
+		Title: lensChatFirstNonEmptyString(strings.TrimSpace(aggregate.AggregateType), "analytical aggregate"),
+		Kind:  "analytical_aggregate",
+		URI:   "analytical://aggregate/" + strings.TrimSpace(aggregate.ID),
+		Score: aggregate.SeverityScore * boost,
+		StructData: map[string]any{
+			"type":           "analytical_aggregate",
+			"title":          lensChatFirstNonEmptyString(strings.TrimSpace(aggregate.AggregateType), "analytical aggregate"),
+			"canonicalPaths": paths,
+			"questionHints": []string{
+				"weak points",
+				"bottlenecks",
+				"critical dependencies",
+			},
+		},
+	}
+}
+
+func lensChatHitFromPrimitive(primitive *horizonmodels.AnalyticalPrimitive, boost float64) lensChatInternalHit {
+	paths := uniqueStringsLocal(append(append([]string{primitive.ScopeRef, primitive.SubjectRef}, primitive.BasisRefs...), append(append(append(primitive.ProductRefs, primitive.NodeRefs...), primitive.RouteRefs...), primitive.AffectedRefs...)...))
+	return lensChatInternalHit{
+		ID:    strings.TrimSpace(primitive.ID),
+		Title: lensChatFirstNonEmptyString(strings.TrimSpace(primitive.PrimitiveType), "analytical primitive"),
+		Kind:  "analytical_primitive",
+		URI:   "analytical://primitive/" + strings.TrimSpace(primitive.ID),
+		Score: primitive.SeverityScore * boost,
+		StructData: map[string]any{
+			"type":           "analytical_primitive",
+			"title":          lensChatFirstNonEmptyString(strings.TrimSpace(primitive.PrimitiveType), "analytical primitive"),
+			"canonicalPaths": paths,
+			"questionHints": []string{
+				"weak points",
+				"risk concentration",
+				"dependency analysis",
+			},
+		},
+	}
+}
+
+func lensChatDocFromAggregate(aggregate *horizonmodels.AnalyticalAggregate) lensChatPreparedEvidenceDoc {
+	return lensChatPreparedEvidenceDoc{
+		ID:             strings.TrimSpace(aggregate.ID),
+		Kind:           "analytical_aggregate",
+		Title:          lensChatFirstNonEmptyString(strings.TrimSpace(aggregate.AggregateType), "analytical aggregate"),
+		Content:        strings.TrimSpace(aggregate.GenerateVectorText()),
+		URI:            "analytical://aggregate/" + strings.TrimSpace(aggregate.ID),
+		CanonicalPaths: uniqueStringsLocal(append(append([]string{aggregate.ScopeRef, aggregate.SubjectRef}, aggregate.BasisRefs...), append(append(append(aggregate.ProductRefs, aggregate.NodeRefs...), aggregate.RouteRefs...), aggregate.AffectedRefs...)...)),
+	}
+}
+
+func lensChatDocFromPrimitive(primitive *horizonmodels.AnalyticalPrimitive) lensChatPreparedEvidenceDoc {
+	return lensChatPreparedEvidenceDoc{
+		ID:             strings.TrimSpace(primitive.ID),
+		Kind:           "analytical_primitive",
+		Title:          lensChatFirstNonEmptyString(strings.TrimSpace(primitive.PrimitiveType), "analytical primitive"),
+		Content:        strings.TrimSpace(primitive.GenerateVectorText()),
+		URI:            "analytical://primitive/" + strings.TrimSpace(primitive.ID),
+		CanonicalPaths: uniqueStringsLocal(append(append([]string{primitive.ScopeRef, primitive.SubjectRef}, primitive.BasisRefs...), append(append(append(primitive.ProductRefs, primitive.NodeRefs...), primitive.RouteRefs...), primitive.AffectedRefs...)...)),
+	}
+}
+
+func mergeLensChatPreparedEvidenceDocs(base, extra []lensChatPreparedEvidenceDoc, limit int) []lensChatPreparedEvidenceDoc {
+	if limit <= 0 {
+		limit = defaultLensChatEvidenceDocLimit
+	}
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	out := make([]lensChatPreparedEvidenceDoc, 0, minIntLocal(limit, len(base)+len(extra)))
+	appendDocs := func(items []lensChatPreparedEvidenceDoc) {
+		for _, item := range items {
+			if len(out) >= limit {
+				return
+			}
+			key := strings.TrimSpace(lensChatFirstNonEmptyString(item.ID, item.Title, item.URI))
+			if key == "" {
+				continue
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, item)
+		}
+	}
+	appendDocs(base)
+	appendDocs(extra)
+	return out
 }
 
 func loadLensChatPreparedEvidenceDocs(ctx context.Context, gcsClient interface {
@@ -707,6 +890,66 @@ func lensChatWarmState(lens *horizonmodels.Lens) map[string]any {
 		return out
 	}
 	return map[string]any{}
+}
+
+func lensChatRequiredTemperature(question, analyticalIntent string) string {
+	q := strings.ToLower(strings.TrimSpace(question))
+	switch analyticalIntent {
+	case "baseline_risk", "scenario":
+		return "hot"
+	}
+	switch {
+	case strings.Contains(q, "who supplies"), strings.Contains(q, "supplier"), strings.Contains(q, "постав"), strings.Contains(q, "route"), strings.Contains(q, "маршрут"), strings.Contains(q, "via"), strings.Contains(q, "corridor"):
+		return "warm"
+	case strings.Contains(q, "what exists"), strings.Contains(q, "who is"), strings.Contains(q, "что есть"):
+		return "hot"
+	default:
+		return "warm"
+	}
+}
+
+func lensChatTemperatureReady(state map[string]any, temperature string) bool {
+	temperature = strings.ToLower(strings.TrimSpace(temperature))
+	if temperature == "" {
+		return strings.EqualFold(strings.TrimSpace(asStringAny(state["status"])), "ready")
+	}
+	if strings.EqualFold(strings.TrimSpace(asStringAny(state["status"])), "ready") {
+		return true
+	}
+	if _, ok := parseLensChatRFC3339(state[temperature+"ReadyAt"]); ok {
+		return true
+	}
+	for _, available := range stringSliceAny(state["availableTemperatures"]) {
+		if lensChatTemperatureRank(available) >= lensChatTemperatureRank(temperature) {
+			return true
+		}
+	}
+	return false
+}
+
+func lensChatTemperatureRank(temperature string) int {
+	switch strings.ToLower(strings.TrimSpace(temperature)) {
+	case "hot":
+		return 1
+	case "warm":
+		return 2
+	case "full":
+		return 3
+	default:
+		return 0
+	}
+}
+
+func parseLensChatRFC3339(value any) (time.Time, bool) {
+	raw := strings.TrimSpace(asStringAny(value))
+	if raw == "" {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed, true
 }
 
 func lensAssemblyReadyLocal(lens *horizonmodels.Lens) bool {
@@ -898,6 +1141,16 @@ func rerankLensChatHits(question string, hits []lensChatInternalHit, scopeRefs [
 
 func kindWeightLocal(kind string, logisticsQuery bool) float64 {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "analytical_aggregate":
+		if logisticsQuery {
+			return 24
+		}
+		return 28
+	case "analytical_primitive":
+		if logisticsQuery {
+			return 18
+		}
+		return 22
 	case "corridor":
 		if logisticsQuery {
 			return 24

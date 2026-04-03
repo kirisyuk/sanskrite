@@ -47,7 +47,7 @@ func repairRuntimeSupplyChainDomainNamespacePath(path string) string {
 		return p
 	}
 	contractType := strings.ToLower(strings.TrimSpace(parts[2]))
-	if contractType != "supply-chain" && contractType != "value-chain" {
+	if contractType != "supply-chain" && contractType != "value-chain" && contractType != "service-chain" {
 		return p
 	}
 	rest := parts[3:]

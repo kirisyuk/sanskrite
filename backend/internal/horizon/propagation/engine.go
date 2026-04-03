@@ -923,6 +923,9 @@ func (e *PropagationEngine) updateFragmentMetric(ctx context.Context, fragment *
 
 // publishPropagationEvents публикует события распространения
 func (e *PropagationEngine) publishPropagationEvents(ctx context.Context, sourceFragmentID string, affectedFragments map[string]bool, affectedLenses map[string]bool) {
+	if e == nil || e.realtime == nil {
+		return
+	}
 	// IMPORTANT: Even though fragments are mostly global, realtime delivery must be scoped to the
 	// requesting tenant/project/lens (security + UX). We take routing context from rtctx when available.
 	rc, _ := rtctx.Get(ctx)

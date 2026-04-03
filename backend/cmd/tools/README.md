@@ -657,9 +657,12 @@ go run ./cmd/tools/horizon_propagate_metric \
 
 **Флаги:**
 - `--project` (default: "nv-horizon") - GCP project ID
+- `--tenant` (default: "global") - Tenant ID
 - `--path` (required) - canonical path фрагмента
 - `--metric` (required) - имя метрики для изменения
 - `--delta` (default: 0.1) - изменение значения метрики
+- `--realtime` (default: true) - публиковать realtime/PubSub события
+- `--refresh-analytical` (default: true) - после propagation обновить fragment-backed analytical primitives и связанные aggregates
 
 ---
 

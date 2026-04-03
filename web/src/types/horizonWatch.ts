@@ -92,6 +92,134 @@ export interface HorizonWatchMonitoringSnapshot {
   topAffectedTargets?: string[];
 }
 
+export interface HorizonWatchMaterialSignalBundle {
+  id: string;
+  headline: string;
+  summary?: string;
+  canonicalPaths?: string[];
+  sourceRefs?: string[];
+  signalIds?: string[];
+  axes?: string[];
+  polarities?: string[];
+  signalCount: number;
+  latestObserved?: string;
+}
+
+export interface HorizonWatchMaterialSignalSubstrate {
+  bundles: HorizonWatchMaterialSignalBundle[];
+  signalCount: number;
+  sourceCount: number;
+  coverageScore: number;
+  latestObserved?: string;
+}
+
+export interface HorizonWatchSubjectMonitoringSnapshot {
+  subjectId: string;
+  subjectKind: string;
+  displayLabel: string;
+  anchorCanonicalPath: string;
+  currentPosition?: Record<string, any>;
+  directSignals?: any[];
+  propagatedExposure?: any[];
+  artifactExposure?: any[];
+  sourceCoverage?: Record<string, any>;
+  threats?: any[];
+  tailwinds?: any[];
+  openQuestions?: string[];
+  recommendedEscalation?: string;
+  materialSubstrate: HorizonWatchMaterialSignalSubstrate;
+  generatedAt: string;
+}
+
+export interface HorizonWideRiskObserverPoint {
+  id: string;
+  ownerSubjectId?: string;
+  subjectId: string;
+  canonicalPath: string;
+  label: string;
+  headline: string;
+  summary?: string;
+  hotness: number;
+  confidence: number;
+  riskPosture?: string;
+  why?: string;
+  affectedSubjects?: string[];
+  backingIds?: string[];
+  generatedAt?: string;
+}
+
+export interface HorizonMonitoringDigest {
+  id: string;
+  tenantId: string;
+  scopeType: string;
+  scopeId: string;
+  scopeLabel?: string;
+  dateKey: string;
+  windowStart: string;
+  windowEnd: string;
+  headline: string;
+  summary?: string;
+  riskPosture?: string;
+  priorityPoints?: Array<Record<string, any>>;
+  affectedSubjects?: string[];
+  coverageGaps?: string[];
+  signalCount: number;
+  sourceCount: number;
+  subjectCount: number;
+  metadata?: Record<string, any>;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface HorizonWatchPortfolioEntry {
+  id: string;
+  entryType: string;
+  label: string;
+  canonicalPath?: string;
+  subjectId?: string;
+  sourceTenantId?: string;
+  sourceLensId?: string;
+  relatedCanonicalPaths?: string[];
+  autoEnsureFocus?: boolean;
+  metadata?: Record<string, any>;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface HorizonWatchPortfolio {
+  id: string;
+  tenantId: string;
+  userId?: string;
+  name: string;
+  kind: string;
+  description?: string;
+  status: string;
+  entries?: HorizonWatchPortfolioEntry[];
+  metadata?: Record<string, any>;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface HorizonWatchPortfolioEntryView {
+  entryId: string;
+  entryType: string;
+  label: string;
+  canonicalPath?: string;
+  sourceTenantId?: string;
+  subjectId?: string;
+  monitoringSnapshot?: HorizonWatchSubjectMonitoringSnapshot | null;
+  resolutionError?: string;
+}
+
+export interface HorizonWatchPortfolioView {
+  portfolio: HorizonWatchPortfolio;
+  entries: HorizonWatchPortfolioEntryView[];
+  priorityPoints: HorizonWideRiskObserverPoint[];
+  materialSubstrate: HorizonWatchMaterialSignalSubstrate;
+  coverageGaps?: string[];
+  generatedAt: string;
+}
+
 export interface HorizonWatchLensAttentionSubject {
   subjectId: string;
   subjectKind: string;

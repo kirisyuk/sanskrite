@@ -27,6 +27,87 @@
 | Signaling Pipeline | ◑ | **Уже в проде по частям:** `POST /api/horizon/events:inject`, `POST /api/horizon/events:extract-signals`, `POST /api/horizon/canvas/news-by-fragments`, `scout/signal_pipeline.go` + risk jobs / propagation. Scout по-прежнему не «создаёт сигналы» как отдельный продуктовый поток. Полный автономный pipeline «rss → events → 12-axis → propagation» как в плане — **не сведён**; план: `docs/archive/horizon-implementation/SIGNALING_PIPELINE_IMPLEMENTATION_PLAN.md`. |
 | Fractal Hierarchy & Scale-Invariant Contracts | ◑ | Sphere taxonomy (L1/L2/L3+), SpherePaths, ResolutionHint, ParentPath — реализованы. Zoom, Metric Composition, Edge Projection — отложены. Units deprecated. Chokepoint transit amplification — реализовано. |
 | Operational Metric Hydration & Simulation Early Warning | ◑ | Единый metric-core для watch/source/on-demand/simulation уже частично проведен в runtime; simulation preflight уже использует shared hydration, но management slice, cross-lens early warning и полное operational write-back ещё нужно дожимать. Архитектурный контракт и backlog: `docs/horizon/architecture/operational-metric-hydration-and-simulation-early-warning.md`. |
+| Service-chain materialization contours | ◑ | Базовый substrate уже есть: `SERVICE_CHAIN_PATH`, shared path materialization, service-specific prompts/invariants/observations. Этого достаточно для текущей связности графа. Отдельное разделение juridical / physical / logical contours пока сознательно НЕ делаем до отдельного design pass. |
+
+## Отдельный track: service-chain materialization contours
+
+Это отдельная дизайн-задача, а не немедленный implementation task.
+
+Текущее решение в коде:
+1. `service_chain` уже имеет отдельный contract type и artifact kind `SERVICE_CHAIN_PATH`.
+2. Materialization идёт через shared operational path substrate, а не через полностью отдельный service-only builder.
+3. Service-specific semantics уже существуют на уровне prompt/validation:
+   - provider×capability baseline facts через `carrierProductObservations`
+   - destination/customer-specific facts через `linkObservations`
+   - transport/path/control-point facts через `routeObservations`
+4. Для текущей связности графа этого достаточно. То есть на данном этапе система уже может держать operational continuity service delivery path без немедленного дальнейшего дробления materialization model.
+
+### Почему это нужно вынести в отдельный дизайн
+
+Риск не в отсутствии materialization как таковой, а в преждевременном смешении разных контуров в одном payload/edge vocabulary.
+
+Для service delivery потенциально есть как минимум три разных контура:
+1. **Physical contour**: датацентры, landing stations, service depots, field hubs, relay facilities, логистические узлы, physical chokepoints.
+2. **Logical contour**: capability path, control plane, auth/access gates, routing/control dependencies, failover topology, service exposure path.
+3. **Juridical / contractual contour**: лицензии, approved-vendor status, service contract gates, settlement/insurance approvals, regulatory authorization, export-control touchpoints.
+
+Если начать materialize-ить всё это как один неразделённый path-class слишком рано, есть риск:
+1. смешать “сервис реально течёт через X” и “без юридического допуска через Y сервис не может быть оказан”;
+2. смешать physical relay site и logical control gate как равные по природе узлы;
+3. получить path stress / criticality semantics, которые плохо интерпретируются и начинают считать несопоставимые leg types как одно и то же;
+4. повредить explainability: пользователю будет трудно понять, речь о физической доставке, о control path, или о contractual gate.
+
+### Принятое временное правило
+
+До отдельного design pass действуют такие ограничения:
+1. **Ничего не дробим на отдельные artifact families только ради формальной чистоты.**
+2. **Текущий `SERVICE_CHAIN_PATH` считаем достаточным substrate для graph connectivity.**
+3. **Контуры различаем семантически, но не разрываем storage/runtime substrate преждевременно.**
+4. **Если факт не должен становиться service node, он остаётся observation/qualifier/relation, а не принудительно materialized path segment.**
+
+Практически это означает:
+1. physical relay nodes можно продолжать выражать через `transportVia` и `routeObservations`;
+2. provider×capability baseline facts продолжают идти через `carrierProductObservations`;
+3. customer/destination-specific delivery facts продолжают идти через `linkObservations`;
+4. non-service-carrying gates не должны автоматически превращаться в service capability nodes.
+
+### Что НЕ делать сейчас
+
+Пока не делаем:
+1. отдельные artifact kinds для `physical_service_path`, `logical_service_path`, `juridical_service_path`;
+2. отдельные stress engines под каждый contour;
+3. независимый builder/runtime plane только для service topology variants;
+4. автоматическое принудительное превращение licensing/auth/approval facts в path nodes;
+5. принудительное обогащение `service_chain` логистической семантикой там, где речь идёт о logical или contractual dependency.
+
+### Когда к этому возвращаться
+
+Возвращаться к этому треку имеет смысл только если появится хотя бы один из следующих симптомов:
+1. `SERVICE_CHAIN_PATH` начинает системно смешивать physical and control-path explanations в одном ответе;
+2. stress / criticality scoring для service chains становится трудно интерпретируемым;
+3. analysts начинают регулярно путать “delivery path” и “authorization/contract path”;
+4. для Lens Console automation понадобятся deterministic primitives, которые должны явно знать, какой contour они модифицируют.
+
+### Будущий design pass: вопросы к проработке
+
+Когда этот трек будет активирован, отдельно ответить минимум на следующие вопросы:
+1. Что является unit of truth для service materialization:
+   - delivered capability path
+   - control path
+   - legal/contractual enablement path
+   - или composable bundle поверх одного shared chain
+2. Где проходит граница между node materialization и observation-only representation.
+3. Какие qualifiers/metrics относятся к contour-specific semantics, а какие являются общими.
+4. Нужны ли отдельные artifact kinds, или достаточно одного `SERVICE_CHAIN_PATH` с typed sublayers.
+5. Как не разрушить explainability и current graph coherence при введении contour-aware runtime.
+
+### Definition of done для отдельного design pass
+
+Этот track можно считать готовым только когда будут зафиксированы:
+1. явная модель physical / logical / juridical contours;
+2. правила, что materialize-ится как node/edge, а что остаётся observation/qualifier;
+3. invariants и stress semantics по каждому contour;
+4. migration story без ломки текущего `SERVICE_CHAIN_PATH` и без деградации graph connectivity.
 
 ## Отдельный хвост: расследование кривых existingArtifact bindings
 

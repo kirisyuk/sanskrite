@@ -99,10 +99,24 @@ func RewriteNodeArtifacts(
 		if draft == nil {
 			continue
 		}
-		artifactChanged := !legsEqualForRewrite(parsed.Legs, draft.Legs) || !edgesEqualForRewrite(parsed.Edges, draft.Edges) || !nodesEqualForRewrite(parsed.Nodes, draft.Nodes)
+		mergedLegs, mergedStress, mergedSufficiency, ok := mergeRewrittenArtifactPayload(parsed, draft)
+		if !ok {
+			if out != nil {
+				fmt.Fprintf(out, "artifact=%s lens=%s skipped=leg_shape_changed current_legs=%d rebuilt_legs=%d\n",
+					strings.TrimSpace(artifact.CanonicalKey),
+					strings.TrimSpace(artifact.LensID),
+					len(parsed.Legs),
+					len(draft.Legs),
+				)
+			}
+			continue
+		}
+		artifactChanged := !legsEqualForRewrite(parsed.Legs, mergedLegs) ||
+			fmt.Sprintf("%v", parsed.Stress) != fmt.Sprintf("%v", mergedStress) ||
+			fmt.Sprintf("%v", parsed.Sufficiency) != fmt.Sprintf("%v", mergedSufficiency)
 		if out != nil {
-			for idx := range draft.Legs {
-				leg := &draft.Legs[idx]
+			for idx := range mergedLegs {
+				leg := &mergedLegs[idx]
 				fmt.Fprintf(out, "artifact=%s lens=%s leg=%d source=%s coords=%d via=%s\n",
 					strings.TrimSpace(artifact.CanonicalKey),
 					strings.TrimSpace(artifact.LensID),
@@ -127,12 +141,12 @@ func RewriteNodeArtifacts(
 			result.Changed++
 			if apply {
 				artifact.Payload = models.BuildSupplyChainPathPayloadDetailed(
-					draft.Nodes,
-					draft.Edges,
-					draft.Legs,
-					draft.Stress,
-					draft.Sufficiency,
-					path.Family,
+					parsed.Nodes,
+					parsed.Edges,
+					mergedLegs,
+					mergedStress,
+					mergedSufficiency,
+					parsed.Family,
 					parsed.Notes,
 				)
 				if err := artifactsRepo.Update(ctx, artifact); err != nil {
@@ -186,6 +200,82 @@ func rebuildPathFromLegs(parsed *models.SupplyChainPathPayload) *pathbuilder.Sup
 		Segments: segments,
 		Family:   parsed.Family,
 	}
+}
+
+func mergeRewrittenArtifactPayload(
+	parsed *models.SupplyChainPathPayload,
+	draft *pathbuilder.SupplyChainMaterializationDraft,
+) ([]models.SupplyChainPathLeg, *models.SupplyChainPathStress, *models.SupplyChainPathSufficiency, bool) {
+	if parsed == nil || draft == nil {
+		return nil, nil, nil, false
+	}
+	if len(parsed.Legs) != len(draft.Legs) {
+		return nil, nil, nil, false
+	}
+	merged := make([]models.SupplyChainPathLeg, len(parsed.Legs))
+	for idx := range parsed.Legs {
+		next, ok := mergeRewrittenLeg(parsed.Legs[idx], draft.Legs[idx])
+		if !ok {
+			return nil, nil, nil, false
+		}
+		merged[idx] = next
+	}
+	return merged, draft.Stress, draft.Sufficiency, true
+}
+
+func mergeRewrittenLeg(current models.SupplyChainPathLeg, rebuilt models.SupplyChainPathLeg) (models.SupplyChainPathLeg, bool) {
+	if !sameLegIdentity(current, rebuilt) {
+		return models.SupplyChainPathLeg{}, false
+	}
+	current.TransportViaRefs = append([]string(nil), rebuilt.TransportViaRefs...)
+	if !intSlicesEqual(current.TransportViaNodeIndices, rebuilt.TransportViaNodeIndices) {
+		current.TransportViaNodeIndices = append([]int(nil), rebuilt.TransportViaNodeIndices...)
+	}
+	current.RouteCoordinates = append([]models.Coordinates(nil), rebuilt.RouteCoordinates...)
+	current.RouteGeometrySource = strings.TrimSpace(rebuilt.RouteGeometrySource)
+	if strings.TrimSpace(rebuilt.VesselType) != "" || len(current.RouteCoordinates) > 0 {
+		current.VesselType = strings.TrimSpace(rebuilt.VesselType)
+	}
+	current.Mode = strings.TrimSpace(rebuilt.Mode)
+	current.GeoRefs = append([]string(nil), rebuilt.GeoRefs...)
+	flowRefs, alternateFlowRefs := rewriteLegFlowRefs(current.FlowRefs, current.AlternateFlowRefs, rebuilt.FlowRefs)
+	current.FlowRefs = flowRefs
+	current.AlternateFlowRefs = alternateFlowRefs
+	current.ZoneRefs = append([]string(nil), rebuilt.ZoneRefs...)
+	current.AffectedZoneRefs = append([]string(nil), rebuilt.AffectedZoneRefs...)
+	current.SpatialSemantics = append([]string(nil), rebuilt.SpatialSemantics...)
+	current.BindingConfidence = rebuilt.BindingConfidence
+	if rebuilt.SegmentConfidence > 0 {
+		current.SegmentConfidence = rebuilt.SegmentConfidence
+	}
+	if len(current.RouteOverlays) > 0 || len(rebuilt.RouteOverlays) > 0 {
+		_ = rewritePrimaryOverlays(&current, pathbuilder.ResolvedRouteGeometry{
+			Coordinates: append([]models.Coordinates(nil), rebuilt.RouteCoordinates...),
+			FlowRefs:    append([]string(nil), rebuilt.FlowRefs...),
+			Source:      strings.TrimSpace(rebuilt.RouteGeometrySource),
+		}, rebuilt.FlowRefs, rebuilt.AlternateFlowRefs, strings.TrimSpace(rebuilt.RouteGeometrySource))
+	}
+	return current, true
+}
+
+func sameLegIdentity(left, right models.SupplyChainPathLeg) bool {
+	return strings.TrimSpace(left.SupplierRef) == strings.TrimSpace(right.SupplierRef) &&
+		strings.TrimSpace(left.CustomerRef) == strings.TrimSpace(right.CustomerRef) &&
+		strings.TrimSpace(left.ProductRef) == strings.TrimSpace(right.ProductRef) &&
+		strings.TrimSpace(left.SupplyLinkCanonicalPath) == strings.TrimSpace(right.SupplyLinkCanonicalPath) &&
+		strings.TrimSpace(left.RouteVariantKey) == strings.TrimSpace(right.RouteVariantKey)
+}
+
+func intSlicesEqual(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for idx := range a {
+		if a[idx] != b[idx] {
+			return false
+		}
+	}
+	return true
 }
 
 func legsEqualForRewrite(left, right []models.SupplyChainPathLeg) bool {

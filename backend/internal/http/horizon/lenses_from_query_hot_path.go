@@ -343,12 +343,14 @@ func hotPathArtifactScopeCount(lens *horizonmodels.Lens) int {
 	}
 	count := 0
 	for _, entry := range lens.Scope {
-		if strings.HasPrefix(strings.TrimSpace(strings.ToLower(entry)), "/artifact/supply-chain/") {
+		normalized := strings.TrimSpace(strings.ToLower(entry))
+		if strings.HasPrefix(normalized, "/artifact/supply-chain/") || strings.HasPrefix(normalized, "/artifact/service-chain/") {
 			count++
 		}
 	}
 	for _, ref := range lens.ScopeArtifacts {
-		if strings.EqualFold(strings.TrimSpace(ref.Kind), string(horizonmodels.MaterializedKindSupplyChainPath)) {
+		if strings.EqualFold(strings.TrimSpace(ref.Kind), string(horizonmodels.MaterializedKindSupplyChainPath)) ||
+			strings.EqualFold(strings.TrimSpace(ref.Kind), string(horizonmodels.MaterializedKindServiceChainPath)) {
 			count++
 		}
 	}
@@ -390,10 +392,13 @@ func intentSupportsHotPath(intent *agents.IntentResolution) bool {
 	for _, domain := range intent.Domains {
 		cp := strings.TrimSpace(strings.ToLower(domain.CanonicalPath))
 		ct := strings.TrimSpace(strings.ToLower(domain.ContractType))
-		if strings.Contains(cp, "/supply-chain/") || ct == "supply-chain" || ct == "value-chain" {
+		if strings.Contains(cp, "/supply-chain/") || strings.Contains(cp, "/service-chain/") || ct == "supply-chain" || ct == "value-chain" || ct == "service-chain" {
 			return true
 		}
 		if domain.SupplyChainExecutionPlan != nil && len(domain.SupplyChainExecutionPlan.Queries) > 0 {
+			return true
+		}
+		if domain.ServiceChainExecutionPlan != nil && len(domain.ServiceChainExecutionPlan.Queries) > 0 {
 			return true
 		}
 	}
@@ -415,11 +420,20 @@ func forceIntentHotPathOnly(in *agents.IntentResolution) *agents.IntentResolutio
 			planCopy := *domain.SupplyChainExecutionPlan
 			planCopy.GraphBuildMode = agents.SupplyChainGraphBuildModeHotPathOnly
 			copyDomain.SupplyChainExecutionPlan = &planCopy
+		} else if domain.ServiceChainExecutionPlan != nil {
+			planCopy := *domain.ServiceChainExecutionPlan
+			planCopy.GraphBuildMode = agents.SupplyChainGraphBuildModeHotPathOnly
+			copyDomain.ServiceChainExecutionPlan = &planCopy
 		} else {
 			cp := strings.TrimSpace(strings.ToLower(domain.CanonicalPath))
 			ct := strings.TrimSpace(strings.ToLower(domain.ContractType))
 			if strings.Contains(cp, "/supply-chain/") || ct == "supply-chain" || ct == "value-chain" {
 				copyDomain.SupplyChainExecutionPlan = &agents.SupplyChainExecutionPlan{
+					GraphBuildMode: agents.SupplyChainGraphBuildModeHotPathOnly,
+				}
+			}
+			if strings.Contains(cp, "/service-chain/") || ct == "service-chain" {
+				copyDomain.ServiceChainExecutionPlan = &agents.SupplyChainExecutionPlan{
 					GraphBuildMode: agents.SupplyChainGraphBuildModeHotPathOnly,
 				}
 			}

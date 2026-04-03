@@ -7,33 +7,39 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/analytical"
 	hmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	hrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/workscope"
 )
 
 type PreparedSubstrate struct {
-	CorpusID   string
-	Lens       *hmodels.Lens
-	Question   string
-	ScopePaths []string
-	Fragments  map[string]*hmodels.HorizonFragment
-	Artifacts  map[string]*hmodels.MaterializedArtifact
-	Routes     []RouteSummary
-	Objects    []ObjectSummary
-	Relations  []RelationSummary
-	Products   []ProductSummary
-	Gaps       []GapSummary
-	Docs       []PreparedCorpusDoc
+	CorpusID      string
+	Lens          *hmodels.Lens
+	Question      string
+	ScopePaths    []string
+	Fragments     map[string]*hmodels.HorizonFragment
+	Artifacts     map[string]*hmodels.MaterializedArtifact
+	Routes        []RouteSummary
+	Objects       []ObjectSummary
+	Relations     []RelationSummary
+	Products      []ProductSummary
+	Gaps          []GapSummary
+	Analytical    []*hmodels.AnalyticalPrimitive
+	Aggregates    []*hmodels.AnalyticalAggregate
+	SignalLanding []*hmodels.SignalLandingSummary
+	Docs          []PreparedCorpusDoc
 }
 
 type PreparedCorpusDoc struct {
-	ID         string
-	Title      string
-	Kind       string
-	Content    string
-	StructData map[string]any
+	ID          string
+	Title       string
+	Kind        string
+	Temperature string
+	Content     string
+	StructData  map[string]any
 }
 
 type RouteSummary struct {
@@ -93,20 +99,35 @@ type corridorSummary struct {
 }
 
 type Builder struct {
-	fragments     *hrepo.HorizonFragmentsRepository
-	artifacts     *hrepo.MaterializedArtifactsRepository
-	lensArtifacts *hrepo.LensArtifactsRepository
+	fragments              *hrepo.HorizonFragmentsRepository
+	artifacts              *hrepo.MaterializedArtifactsRepository
+	lensArtifacts          *hrepo.LensArtifactsRepository
+	analyticalPrimitives   *hrepo.AnalyticalPrimitivesRepository
+	analyticalAggregates   *hrepo.AnalyticalAggregatesRepository
+	signalLandingSummaries *hrepo.SignalLandingSummariesRepository
 }
+
+const (
+	PreparedTemperatureHot  = "hot"
+	PreparedTemperatureWarm = "warm"
+	PreparedTemperatureFull = "full"
+)
 
 func NewBuilder(
 	fragments *hrepo.HorizonFragmentsRepository,
 	artifacts *hrepo.MaterializedArtifactsRepository,
 	lensArtifacts *hrepo.LensArtifactsRepository,
+	analyticalPrimitives *hrepo.AnalyticalPrimitivesRepository,
+	analyticalAggregates *hrepo.AnalyticalAggregatesRepository,
+	signalLandingSummaries *hrepo.SignalLandingSummariesRepository,
 ) *Builder {
 	return &Builder{
-		fragments:     fragments,
-		artifacts:     artifacts,
-		lensArtifacts: lensArtifacts,
+		fragments:              fragments,
+		artifacts:              artifacts,
+		lensArtifacts:          lensArtifacts,
+		analyticalPrimitives:   analyticalPrimitives,
+		analyticalAggregates:   analyticalAggregates,
+		signalLandingSummaries: signalLandingSummaries,
 	}
 }
 
@@ -130,10 +151,12 @@ func (b *Builder) BuildForLens(ctx context.Context, lens *hmodels.Lens, question
 
 	artifactMap := make(map[string]*hmodels.MaterializedArtifact, len(artifacts))
 	pathRefs := make(map[string]struct{}, len(scopePaths)+128)
+	analyticalScopeRefs := make(map[string]struct{}, len(scopePaths)+len(artifacts)+128)
 	for _, path := range scopePaths {
 		if isPreparedCanonicalPath(path) {
 			pathRefs[path] = struct{}{}
 		}
+		addNonEmptyPath(analyticalScopeRefs, path)
 	}
 	for _, lensArtifact := range lensArtifacts {
 		if lensArtifact == nil {
@@ -142,14 +165,19 @@ func (b *Builder) BuildForLens(ctx context.Context, lens *hmodels.Lens, question
 		addNonEmptyPath(pathRefs, lensArtifact.CanonicalPath)
 		addNonEmptyPath(pathRefs, lensArtifact.SourcePath)
 		addNonEmptyPath(pathRefs, lensArtifact.TargetPath)
+		addNonEmptyPath(analyticalScopeRefs, lensArtifact.CanonicalPath)
+		addNonEmptyPath(analyticalScopeRefs, lensArtifact.SourcePath)
+		addNonEmptyPath(analyticalScopeRefs, lensArtifact.TargetPath)
 	}
 	for _, artifact := range artifacts {
 		if artifact == nil || strings.TrimSpace(artifact.ID) == "" {
 			continue
 		}
 		artifactMap[artifact.ID] = artifact
+		addNonEmptyPath(analyticalScopeRefs, artifact.CanonicalKey)
 		for _, ref := range compactUnique(append(append(append(append([]string{}, artifact.NodeRefs...), artifact.GeoRefs...), artifact.ZoneRefs...), artifact.AffectedZoneRefs...)) {
 			addNonEmptyPath(pathRefs, ref)
+			addNonEmptyPath(analyticalScopeRefs, ref)
 		}
 		parsed, err := hmodels.ParseSupplyChainPathPayload(artifact.Payload)
 		if err != nil || parsed == nil {
@@ -158,6 +186,7 @@ func (b *Builder) BuildForLens(ctx context.Context, lens *hmodels.Lens, question
 		for _, leg := range parsed.Legs {
 			for _, ref := range compactUnique(append([]string{leg.SupplierRef, leg.CustomerRef, leg.ProductRef, leg.SupplyLinkCanonicalPath}, leg.TransportViaRefs...)) {
 				addNonEmptyPath(pathRefs, ref)
+				addNonEmptyPath(analyticalScopeRefs, ref)
 			}
 		}
 	}
@@ -171,19 +200,74 @@ func (b *Builder) BuildForLens(ctx context.Context, lens *hmodels.Lens, question
 	objectScores := objectScoresForPreparedScope(mapKeys(pathRefs), routes, relations, artifactMap)
 	objects := summarizePreparedObjects(fragmentsByPath, objectScores, 120)
 	products := summarizeProducts(artifactMap)
+	analyticalItems := []*hmodels.AnalyticalPrimitive(nil)
+	if b.analyticalPrimitives != nil {
+		analyticalItems, _ = b.analyticalPrimitives.ListByScopeRefs(ctx, strings.TrimSpace(lens.TenantID), mapKeys(analyticalScopeRefs), 240)
+	}
+	aggregateItems := []*hmodels.AnalyticalAggregate(nil)
+	if b.analyticalAggregates != nil {
+		if b.analyticalPrimitives != nil {
+			if lensAggregate, err := analytical.EnsureLensAggregate(ctx, b.analyticalPrimitives, b.analyticalAggregates, nil, lens, mapKeys(analyticalScopeRefs), time.Now().UTC()); err == nil && lensAggregate != nil {
+				aggregateItems = append(aggregateItems, lensAggregate)
+			}
+		}
+		if stored, _ := b.analyticalAggregates.ListByLens(ctx, strings.TrimSpace(lens.TenantID), strings.TrimSpace(lens.ID), 40); len(stored) > 0 {
+			seen := make(map[string]struct{}, len(aggregateItems))
+			for _, item := range aggregateItems {
+				if item != nil && strings.TrimSpace(item.ID) != "" {
+					seen[strings.TrimSpace(item.ID)] = struct{}{}
+				}
+			}
+			for _, item := range stored {
+				if item == nil || strings.TrimSpace(item.ID) == "" {
+					continue
+				}
+				if _, ok := seen[strings.TrimSpace(item.ID)]; ok {
+					continue
+				}
+				seen[strings.TrimSpace(item.ID)] = struct{}{}
+				aggregateItems = append(aggregateItems, item)
+			}
+		}
+		if stored, _ := b.analyticalAggregates.ListByScopeRefs(ctx, strings.TrimSpace(lens.TenantID), mapKeys(analyticalScopeRefs), 80); len(stored) > 0 {
+			seen := make(map[string]struct{}, len(aggregateItems))
+			for _, item := range aggregateItems {
+				if item != nil && strings.TrimSpace(item.ID) != "" {
+					seen[strings.TrimSpace(item.ID)] = struct{}{}
+				}
+			}
+			for _, item := range stored {
+				if item == nil || strings.TrimSpace(item.ID) == "" {
+					continue
+				}
+				if _, ok := seen[strings.TrimSpace(item.ID)]; ok {
+					continue
+				}
+				seen[strings.TrimSpace(item.ID)] = struct{}{}
+				aggregateItems = append(aggregateItems, item)
+			}
+		}
+	}
+	landingSummaries := []*hmodels.SignalLandingSummary(nil)
+	if b.signalLandingSummaries != nil {
+		landingSummaries, _ = b.signalLandingSummaries.ListByScopeRefs(ctx, strings.TrimSpace(lens.TenantID), mapKeys(analyticalScopeRefs), 80)
+	}
 
 	sub := &PreparedSubstrate{
-		CorpusID:   resolveCorpusID(lens, question),
-		Lens:       lens,
-		Question:   resolvePreparedQuestion(lens, question),
-		ScopePaths: scopePaths,
-		Fragments:  fragmentsByPath,
-		Artifacts:  artifactMap,
-		Routes:     routes,
-		Objects:    objects,
-		Relations:  relations,
-		Products:   products,
-		Gaps:       detectPreparedGaps(artifactMap, relations),
+		CorpusID:      resolveCorpusID(lens, question),
+		Lens:          lens,
+		Question:      resolvePreparedQuestion(lens, question),
+		ScopePaths:    scopePaths,
+		Fragments:     fragmentsByPath,
+		Artifacts:     artifactMap,
+		Routes:        routes,
+		Objects:       objects,
+		Relations:     relations,
+		Products:      products,
+		Gaps:          detectPreparedGaps(artifactMap, relations),
+		Analytical:    analyticalItems,
+		Aggregates:    aggregateItems,
+		SignalLanding: landingSummaries,
 	}
 	sub.Docs = buildPreparedCorpusDocs(sub)
 	return sub, nil
@@ -207,6 +291,45 @@ func PreparedSubstrateHash(sub *PreparedSubstrate) string {
 	}
 	sort.Strings(rows)
 	return shortHash(strings.Join(rows, "\n"))
+}
+
+func PreparedSubstrateHashForTemperature(sub *PreparedSubstrate, temperature string) string {
+	if sub == nil {
+		return ""
+	}
+	rows := make([]string, 0, len(sub.Docs))
+	for _, doc := range FilterPreparedDocsUpToTemperature(sub.Docs, temperature) {
+		rows = append(rows, doc.ID+"|"+doc.Kind+"|"+doc.Temperature+"|"+doc.Title+"|"+doc.Content)
+	}
+	sort.Strings(rows)
+	return shortHash(strings.Join(rows, "\n"))
+}
+
+func FilterPreparedDocsUpToTemperature(docs []PreparedCorpusDoc, temperature string) []PreparedCorpusDoc {
+	if len(docs) == 0 {
+		return nil
+	}
+	maxRank := preparedTemperatureRank(temperature)
+	out := make([]PreparedCorpusDoc, 0, len(docs))
+	for _, doc := range docs {
+		if preparedTemperatureRank(doc.Temperature) <= maxRank {
+			out = append(out, doc)
+		}
+	}
+	return out
+}
+
+func preparedTemperatureRank(temperature string) int {
+	switch strings.ToLower(strings.TrimSpace(temperature)) {
+	case PreparedTemperatureHot:
+		return 1
+	case PreparedTemperatureWarm:
+		return 2
+	case PreparedTemperatureFull:
+		return 3
+	default:
+		return 3
+	}
 }
 
 func preparedScopePaths(lens *hmodels.Lens) []string {
@@ -478,13 +601,14 @@ func buildPreparedCorpusDocs(sub *PreparedSubstrate) []PreparedCorpusDoc {
 	docs := make([]PreparedCorpusDoc, 0, 128)
 	corridors := summarizeCorridors(sub.Routes)
 	hints := preparedQuestionHints(sub)
-	addDoc := func(id, title, kind, content string, refs []string, extra map[string]any) {
+	addDocWithTemperature := func(id, title, kind, temperature, content string, refs []string, extra map[string]any) {
 		if strings.TrimSpace(content) == "" {
 			return
 		}
 		structData := map[string]any{
 			"type":           "internal_knowledge_capsule",
 			"kind":           kind,
+			"temperature":    firstNonEmpty(strings.TrimSpace(temperature), PreparedTemperatureFull),
 			"title":          title,
 			"corpusId":       sub.CorpusID,
 			"lensId":         firstNonEmpty(strings.TrimSpace(sub.Lens.ID)),
@@ -497,38 +621,43 @@ func buildPreparedCorpusDocs(sub *PreparedSubstrate) []PreparedCorpusDoc {
 			structData[k] = v
 		}
 		docs = append(docs, PreparedCorpusDoc{
-			ID:         stableDocID(sub.CorpusID, kind, id),
-			Title:      title,
-			Kind:       kind,
-			Content:    strings.TrimSpace(content),
-			StructData: structData,
+			ID:          stableDocID(sub.CorpusID, kind, id),
+			Title:       title,
+			Kind:        kind,
+			Temperature: firstNonEmpty(strings.TrimSpace(temperature), PreparedTemperatureFull),
+			Content:     strings.TrimSpace(content),
+			StructData:  structData,
 		})
 	}
-	addDoc("overview", firstNonEmpty(sub.Lens.Name, sub.Question), "overview", buildPreparedOverviewDoc(sub, corridors), collectOverviewRefs(sub), map[string]any{
+	addDocWithTemperature("overview", firstNonEmpty(sub.Lens.Name, sub.Question), "overview", PreparedTemperatureHot, buildPreparedOverviewDoc(sub, corridors), collectOverviewRefs(sub), map[string]any{
 		"routeCount":    len(sub.Routes),
 		"productCount":  len(sub.Products),
 		"objectCount":   len(sub.Objects),
 		"relationCount": len(sub.Relations),
 		"gapCount":      len(sub.Gaps),
 	})
-	addDoc("dossier", firstNonEmpty(sub.Lens.Name, sub.Question)+" dossier", "dossier", buildPreparedDossierDoc(sub, corridors), collectOverviewRefs(sub), map[string]any{
+	addDocWithTemperature("dossier", firstNonEmpty(sub.Lens.Name, sub.Question)+" dossier", "dossier", PreparedTemperatureHot, buildPreparedDossierDoc(sub, corridors), collectOverviewRefs(sub), map[string]any{
 		"routeCount":    len(sub.Routes),
 		"productCount":  len(sub.Products),
 		"objectCount":   len(sub.Objects),
 		"relationCount": len(sub.Relations),
 		"gapCount":      len(sub.Gaps),
 	})
-	addDoc("products", firstNonEmpty(sub.Lens.Name, sub.Question)+" products", "products", buildPreparedProductsDoc(sub), topProductRefs(sub.Products, 40), map[string]any{
+	addDocWithTemperature("products", firstNonEmpty(sub.Lens.Name, sub.Question)+" products", "products", PreparedTemperatureHot, buildPreparedProductsDoc(sub), topProductRefs(sub.Products, 40), map[string]any{
 		"productCount": len(sub.Products),
 	})
-	addDoc("gaps", firstNonEmpty(sub.Lens.Name, sub.Question)+" gaps", "gaps", buildPreparedGapDoc(sub), collectOverviewRefs(sub), map[string]any{
+	addDocWithTemperature("gaps", firstNonEmpty(sub.Lens.Name, sub.Question)+" gaps", "gaps", PreparedTemperatureHot, buildPreparedGapDoc(sub), collectOverviewRefs(sub), map[string]any{
 		"gapCount": len(sub.Gaps),
 	})
 	for i, corridor := range corridors {
 		if i >= 24 {
 			break
 		}
-		addDoc(corridor.ID, buildCorridorTitle(corridor), "corridor", buildCorridorDoc(corridor), compactUnique(append([]string{corridor.SupplierRef, corridor.CustomerRef, corridor.ProductRef}, corridor.TransportViaRefs...)), map[string]any{
+		temperature := PreparedTemperatureWarm
+		if i < 12 {
+			temperature = PreparedTemperatureHot
+		}
+		addDocWithTemperature(corridor.ID, buildCorridorTitle(corridor), "corridor", temperature, buildCorridorDoc(corridor), compactUnique(append([]string{corridor.SupplierRef, corridor.CustomerRef, corridor.ProductRef}, corridor.TransportViaRefs...)), map[string]any{
 			"routeCount": corridor.RouteCount,
 			"modes":      corridor.Modes,
 		})
@@ -537,7 +666,7 @@ func buildPreparedCorpusDocs(sub *PreparedSubstrate) []PreparedCorpusDoc {
 		if i >= 24 {
 			break
 		}
-		addDoc(firstNonEmpty(relation.EdgeID, fmt.Sprintf("%s-%s-%s", relation.EdgeType, relation.SourcePath, relation.TargetPath)), buildRelationTitle(relation), "relation", buildRelationDoc(relation), compactUnique([]string{relation.SourcePath, relation.TargetPath}), map[string]any{
+		addDocWithTemperature(firstNonEmpty(relation.EdgeID, fmt.Sprintf("%s-%s-%s", relation.EdgeType, relation.SourcePath, relation.TargetPath)), buildRelationTitle(relation), "relation", PreparedTemperatureWarm, buildRelationDoc(relation), compactUnique([]string{relation.SourcePath, relation.TargetPath}), map[string]any{
 			"edgeType": relation.EdgeType,
 			"score":    relation.Score,
 		})
@@ -547,7 +676,11 @@ func buildPreparedCorpusDocs(sub *PreparedSubstrate) []PreparedCorpusDoc {
 			break
 		}
 		fragment := sub.Fragments[object.CanonicalPath]
-		addDoc(object.CanonicalPath, firstNonEmpty(object.DisplayName, object.CanonicalPath), "object", buildObjectDoc(fragment), []string{object.CanonicalPath}, map[string]any{
+		temperature := PreparedTemperatureWarm
+		if i < 12 {
+			temperature = PreparedTemperatureHot
+		}
+		addDocWithTemperature(object.CanonicalPath, firstNonEmpty(object.DisplayName, object.CanonicalPath), "object", temperature, buildObjectDoc(fragment), []string{object.CanonicalPath}, map[string]any{
 			"fragmentType": object.Type,
 		})
 	}
@@ -555,7 +688,11 @@ func buildPreparedCorpusDocs(sub *PreparedSubstrate) []PreparedCorpusDoc {
 		if i >= 16 {
 			break
 		}
-		addDoc(firstNonEmpty(artifact.CanonicalKey, artifact.ID), firstNonEmpty(artifact.DisplayName, artifact.CanonicalKey), "route_artifact", buildRouteArtifactDoc(artifact), compactUnique(append(append([]string{}, artifact.NodeRefs...), artifact.GeoRefs...)), map[string]any{
+		temperature := PreparedTemperatureFull
+		if i < 8 {
+			temperature = PreparedTemperatureWarm
+		}
+		addDocWithTemperature(firstNonEmpty(artifact.CanonicalKey, artifact.ID), firstNonEmpty(artifact.DisplayName, artifact.CanonicalKey), "route_artifact", temperature, buildRouteArtifactDoc(artifact), compactUnique(append(append([]string{}, artifact.NodeRefs...), artifact.GeoRefs...)), map[string]any{
 			"artifactKind":   string(artifact.Kind),
 			"pathStatus":     artifact.PathStatus,
 			"artifactKey":    artifact.CanonicalKey,
@@ -563,6 +700,79 @@ func buildPreparedCorpusDocs(sub *PreparedSubstrate) []PreparedCorpusDoc {
 			"anchorCustomer": artifact.AnchorCustomer,
 			"productAxis":    artifact.ProductAxis,
 		})
+	}
+	for i, primitive := range sub.Analytical {
+		if i >= 24 || primitive == nil {
+			break
+		}
+		temperature := PreparedTemperatureWarm
+		if i < 12 {
+			temperature = PreparedTemperatureHot
+		}
+		addDocWithTemperature(firstNonEmpty(primitive.ID, fmt.Sprintf("%s-%s", primitive.PrimitiveType, primitive.ScopeRef)),
+			firstNonEmpty(primitive.PrimitiveType, "analytical primitive"),
+			"analytical_primitive",
+			temperature,
+			primitive.GenerateVectorText(),
+			compactUnique(append(append(append([]string{primitive.ScopeRef, primitive.SubjectRef}, primitive.ProductRefs...), primitive.NodeRefs...), append(append(primitive.RouteRefs, primitive.ZoneRefs...), primitive.AffectedRefs...)...)),
+			map[string]any{
+				"primitiveType": primitive.PrimitiveType,
+				"scopeType":     primitive.ScopeType,
+				"severity":      primitive.SeverityScore,
+				"severityBand":  primitive.SeverityBand,
+				"layer":         primitive.Layer,
+				"sourceClass":   primitive.SourceClass,
+			},
+		)
+	}
+	for i, aggregate := range sub.Aggregates {
+		if i >= 24 || aggregate == nil {
+			break
+		}
+		temperature := PreparedTemperatureWarm
+		if strings.EqualFold(strings.TrimSpace(aggregate.ScopeType), "lens") || strings.EqualFold(strings.TrimSpace(aggregate.ScopeType), "watch_subject") || i < 12 {
+			temperature = PreparedTemperatureHot
+		}
+		addDocWithTemperature(
+			firstNonEmpty(aggregate.ID, fmt.Sprintf("%s-%s", aggregate.AggregateType, aggregate.ScopeRef)),
+			firstNonEmpty(aggregate.AggregateType, "analytical aggregate"),
+			"analytical_aggregate",
+			temperature,
+			aggregate.GenerateVectorText(),
+			compactUnique(append(append(append([]string{aggregate.ScopeRef, aggregate.SubjectRef}, aggregate.ProductRefs...), aggregate.NodeRefs...), append(append(aggregate.RouteRefs, aggregate.ZoneRefs...), aggregate.AffectedRefs...)...)),
+			map[string]any{
+				"aggregateType":   aggregate.AggregateType,
+				"scopeType":       aggregate.ScopeType,
+				"severity":        aggregate.SeverityScore,
+				"severityBand":    aggregate.SeverityBand,
+				"watchSubjectIds": append([]string(nil), aggregate.WatchSubjectIDs...),
+				"lensRefs":        append([]string(nil), aggregate.LensRefs...),
+			},
+		)
+	}
+	for i, summary := range sub.SignalLanding {
+		if i >= 24 || summary == nil {
+			break
+		}
+		temperature := PreparedTemperatureHot
+		if i >= 12 {
+			temperature = PreparedTemperatureWarm
+		}
+		addDocWithTemperature(
+			firstNonEmpty(summary.ID, fmt.Sprintf("%s-%d", summary.ScopeRef, i)),
+			firstNonEmpty(buildSignalLandingTitle(summary), "signal landing summary"),
+			"signal_landing_summary",
+			temperature,
+			buildSignalLandingDoc(summary),
+			compactUnique(append(append(append([]string{summary.ScopeRef}, summary.TopConfirmedRefs...), summary.TopInferredRefs...), append(summary.AffectedZoneRefs, append(summary.Products, append(summary.Routes, summary.Facilities...)...)...)...)),
+			map[string]any{
+				"scopeRef":           summary.ScopeRef,
+				"missingPreciseZone": summary.MissingPreciseZone,
+				"confirmedCount":     len(summary.TopConfirmedRefs),
+				"inferredCount":      len(summary.TopInferredRefs),
+				"affectedZoneCount":  len(summary.AffectedZoneRefs),
+			},
+		)
 	}
 	return docs
 }
@@ -780,6 +990,67 @@ func buildPreparedGapDoc(sub *PreparedSubstrate) string {
 		fmt.Fprintf(&b, "- %s: %s\n", gap.Code, gap.Details)
 	}
 	return strings.TrimSpace(b.String())
+}
+
+func buildSignalLandingTitle(summary *hmodels.SignalLandingSummary) string {
+	if summary == nil {
+		return "signal landing summary"
+	}
+	if len(summary.AffectedZoneRefs) > 0 {
+		return "Signal landing around " + summary.AffectedZoneRefs[0]
+	}
+	if len(summary.TopConfirmedRefs) > 0 {
+		return "Signal landing around " + summary.TopConfirmedRefs[0]
+	}
+	return "Signal landing for " + strings.TrimSpace(summary.ScopeRef)
+}
+
+func buildSignalLandingDoc(summary *hmodels.SignalLandingSummary) string {
+	if summary == nil {
+		return ""
+	}
+	lines := []string{
+		fmt.Sprintf("Scope: %s", strings.TrimSpace(summary.ScopeRef)),
+	}
+	if len(summary.TopClaims) > 0 {
+		lines = append(lines, "Claims: "+strings.Join(firstNStrings(summary.TopClaims, 6), "; "))
+	}
+	if len(summary.TopConfirmedRefs) > 0 {
+		lines = append(lines, "Confirmed landed refs: "+strings.Join(firstNStrings(summary.TopConfirmedRefs, 8), ", "))
+	}
+	if len(summary.TopInferredRefs) > 0 {
+		lines = append(lines, "Inferred landed refs: "+strings.Join(firstNStrings(summary.TopInferredRefs, 8), ", "))
+	}
+	if len(summary.AffectedZoneRefs) > 0 {
+		lines = append(lines, "Affected zones: "+strings.Join(firstNStrings(summary.AffectedZoneRefs, 6), ", "))
+	}
+	if len(summary.Products) > 0 {
+		lines = append(lines, "Products: "+strings.Join(firstNStrings(summary.Products, 8), ", "))
+	}
+	if len(summary.Routes) > 0 {
+		lines = append(lines, "Routes and chokepoints: "+strings.Join(firstNStrings(summary.Routes, 8), ", "))
+	}
+	if len(summary.Facilities) > 0 {
+		lines = append(lines, "Facilities: "+strings.Join(firstNStrings(summary.Facilities, 8), ", "))
+	}
+	if len(summary.TopMissingCandidates) > 0 {
+		lines = append(lines, "Missing anchors: "+strings.Join(firstNStrings(summary.TopMissingCandidates, 6), ", "))
+	}
+	if summary.MissingPreciseZone {
+		lines = append(lines, "Data gap: precise affected zone is still missing.")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func firstNStrings(values []string, limit int) []string {
+	if limit <= 0 || len(values) == 0 {
+		return nil
+	}
+	values = compactUnique(values)
+	if len(values) <= limit {
+		return append([]string(nil), values...)
+	}
+	return append([]string(nil), values[:limit]...)
 }
 
 func buildCorridorTitle(c corridorSummary) string {

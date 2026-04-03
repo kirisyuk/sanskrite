@@ -84,6 +84,7 @@ func main() {
 		fragmentsRepo,
 		edgesRepo,
 	).WithMaterializedArtifactsRepository(materializedArtifactsRepo).
+		WithSignalLandingSummariesRepository(horizonrepo.NewSignalLandingSummariesRepository(db)).
 		WithMacroAgentPoliciesRepository(macroPoliciesRepo)
 
 	if err := ensureBootstrapProject(ctx, usersRepo, projectsRepo); err != nil {

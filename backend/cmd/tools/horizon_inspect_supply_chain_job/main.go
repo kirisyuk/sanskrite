@@ -101,32 +101,32 @@ type pathArtifactSummary struct {
 }
 
 type inspectionReport struct {
-	JobID                 string                      `json:"jobId"`
-	ProjectID             string                      `json:"projectId"`
-	TenantID              string                      `json:"tenantId"`
-	Status                string                      `json:"status"`
-	CurrentState          string                      `json:"currentState"`
-	TargetCanonicalPath   string                      `json:"targetCanonicalPath"`
-	GraphBuildMode        string                      `json:"graphBuildMode,omitempty"`
-	SupplyChainSummary    map[string]interface{}      `json:"supplyChainSummary,omitempty"`
-	SupplyChainMaterialization map[string]interface{} `json:"supplyChainMaterialization,omitempty"`
-	SupplyChainAssembly   map[string]interface{}      `json:"supplyChainAssembly,omitempty"`
-	WorkingProductScope   workingProductScopeSummary  `json:"workingProductScope"`
-	CapabilityObsCount    int                         `json:"capabilityObservationCount"`
-	SupplyLinkObsCount    int                         `json:"supplyLinkObservationCount"`
-	RouteObsCount         int                         `json:"routeObservationCount"`
-	CapabilityMetrics     metricSummary               `json:"capabilityMetrics"`
-	SupplyLinkMetrics     metricSummary               `json:"supplyLinkMetrics"`
-	RouteQualifierKeys    []string                    `json:"routeQualifierKeys,omitempty"`
-	SupplyLinkFragments   []supplyLinkFragmentSummary `json:"supplyLinkFragments,omitempty"`
-	CapabilityProfiles    []capabilityProfileSummary  `json:"capabilityProfiles,omitempty"`
-	DerivedRiskProfiles   []derivedRiskSummary        `json:"derivedRiskProfiles,omitempty"`
-	AssemblyArtifactKey   string                      `json:"assemblyArtifactKey,omitempty"`
-	AssemblyDerivedPathsN int                         `json:"assemblyDerivedPathsCount"`
-	AssemblyOpenGaps      []string                    `json:"assemblyOpenGaps,omitempty"`
-	PathArtifacts         []pathArtifactSummary       `json:"pathArtifacts,omitempty"`
-	Assessment            map[string]interface{}      `json:"assessment,omitempty"`
-	GeneratedAt           string                      `json:"generatedAt"`
+	JobID                      string                      `json:"jobId"`
+	ProjectID                  string                      `json:"projectId"`
+	TenantID                   string                      `json:"tenantId"`
+	Status                     string                      `json:"status"`
+	CurrentState               string                      `json:"currentState"`
+	TargetCanonicalPath        string                      `json:"targetCanonicalPath"`
+	GraphBuildMode             string                      `json:"graphBuildMode,omitempty"`
+	SupplyChainSummary         map[string]interface{}      `json:"supplyChainSummary,omitempty"`
+	SupplyChainMaterialization map[string]interface{}      `json:"supplyChainMaterialization,omitempty"`
+	SupplyChainAssembly        map[string]interface{}      `json:"supplyChainAssembly,omitempty"`
+	WorkingProductScope        workingProductScopeSummary  `json:"workingProductScope"`
+	CapabilityObsCount         int                         `json:"capabilityObservationCount"`
+	SupplyLinkObsCount         int                         `json:"supplyLinkObservationCount"`
+	RouteObsCount              int                         `json:"routeObservationCount"`
+	CapabilityMetrics          metricSummary               `json:"capabilityMetrics"`
+	SupplyLinkMetrics          metricSummary               `json:"supplyLinkMetrics"`
+	RouteQualifierKeys         []string                    `json:"routeQualifierKeys,omitempty"`
+	SupplyLinkFragments        []supplyLinkFragmentSummary `json:"supplyLinkFragments,omitempty"`
+	CapabilityProfiles         []capabilityProfileSummary  `json:"capabilityProfiles,omitempty"`
+	DerivedRiskProfiles        []derivedRiskSummary        `json:"derivedRiskProfiles,omitempty"`
+	AssemblyArtifactKey        string                      `json:"assemblyArtifactKey,omitempty"`
+	AssemblyDerivedPathsN      int                         `json:"assemblyDerivedPathsCount"`
+	AssemblyOpenGaps           []string                    `json:"assemblyOpenGaps,omitempty"`
+	PathArtifacts              []pathArtifactSummary       `json:"pathArtifacts,omitempty"`
+	Assessment                 map[string]interface{}      `json:"assessment,omitempty"`
+	GeneratedAt                string                      `json:"generatedAt"`
 }
 
 func main() {
@@ -161,17 +161,17 @@ func main() {
 	}
 
 	report := inspectionReport{
-		JobID:               strings.TrimSpace(job.ID),
-		ProjectID:           strings.TrimSpace(job.ProjectID),
-		TenantID:            strings.TrimSpace(firstNonEmpty(job.TenantID, "global")),
-		Status:              strings.TrimSpace(string(job.Status)),
-		CurrentState:        strings.TrimSpace(firstNonEmpty(string(job.CurrentState), asString(job.State["currentState"]))),
-		TargetCanonicalPath: strings.TrimSpace(job.TargetCanonicalPath),
-		GraphBuildMode:      strings.TrimSpace(asString(job.State["supplyChainGraphBuildMode"])),
-		SupplyChainSummary:  normalizeMap(job.State["supplyChainSummary"]),
+		JobID:                      strings.TrimSpace(job.ID),
+		ProjectID:                  strings.TrimSpace(job.ProjectID),
+		TenantID:                   strings.TrimSpace(firstNonEmpty(job.TenantID, "global")),
+		Status:                     strings.TrimSpace(string(job.Status)),
+		CurrentState:               strings.TrimSpace(firstNonEmpty(string(job.CurrentState), asString(job.State["currentState"]))),
+		TargetCanonicalPath:        strings.TrimSpace(job.TargetCanonicalPath),
+		GraphBuildMode:             strings.TrimSpace(asString(job.State["supplyChainGraphBuildMode"])),
+		SupplyChainSummary:         normalizeMap(job.State["supplyChainSummary"]),
 		SupplyChainMaterialization: normalizeMap(job.State["supplyChainMaterialization"]),
-		SupplyChainAssembly: normalizeMap(job.State["supplyChainAssembly"]),
-		GeneratedAt:         time.Now().UTC().Format(time.RFC3339),
+		SupplyChainAssembly:        normalizeMap(job.State["supplyChainAssembly"]),
+		GeneratedAt:                time.Now().UTC().Format(time.RFC3339),
 	}
 
 	scope, _ := workingScopesRepo.GetByJobID(ctx, strings.TrimSpace(job.ID))
@@ -222,7 +222,7 @@ func main() {
 
 	capabilityProfiles := make([]capabilityProfileSummary, 0, len(capabilityKeys))
 	for _, key := range capabilityKeys {
-		profile, err := capabilityProfilesRepo.Get(ctx, key.CarrierRef, key.ProductRef)
+		profile, err := capabilityProfilesRepo.Get(ctx, report.TenantID, key.CarrierRef, key.ProductRef)
 		if err != nil || profile == nil {
 			continue
 		}
@@ -432,16 +432,16 @@ func summarizeWorkingProductScope(scope *hmodels.WorkingProductScope) workingPro
 			out.PartialCoverageN++
 		}
 		out.Entries = append(out.Entries, map[string]interface{}{
-			"productRef":             ref,
-			"primaryOperationalRef":  strings.TrimSpace(entry.PrimaryOperationalRef),
-			"equivalentProductRefs":  append([]string(nil), entry.EquivalentProductRefs...),
-			"seedRefs":               append([]string(nil), entry.SeedRefs...),
-			"status":                 string(entry.Status),
-			"coverageStatus":         strings.TrimSpace(entry.CoverageStatus),
-			"aliases":                append([]string(nil), entry.Aliases...),
-			"sourceKinds":            append([]string(nil), entry.SourceKinds...),
-			"discoveryReasons":       append([]string(nil), entry.DiscoveryReasons...),
-			"confidence":             entry.Confidence,
+			"productRef":            ref,
+			"primaryOperationalRef": strings.TrimSpace(entry.PrimaryOperationalRef),
+			"equivalentProductRefs": append([]string(nil), entry.EquivalentProductRefs...),
+			"seedRefs":              append([]string(nil), entry.SeedRefs...),
+			"status":                string(entry.Status),
+			"coverageStatus":        strings.TrimSpace(entry.CoverageStatus),
+			"aliases":               append([]string(nil), entry.Aliases...),
+			"sourceKinds":           append([]string(nil), entry.SourceKinds...),
+			"discoveryReasons":      append([]string(nil), entry.DiscoveryReasons...),
+			"confidence":            entry.Confidence,
 		})
 	}
 	sort.Strings(out.CanonicalRefs)

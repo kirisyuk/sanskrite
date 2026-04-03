@@ -19,6 +19,7 @@
 
 - **[Обзор архитектуры](architecture/overview.md)** — высокоуровневая архитектура системы и интеграция с Sanskrite
 - **[Supply Chain Canonical Control Plane](architecture/supply-chain-canonical-control-plane.md)** — обязательный верхнеуровневый документ про canonical products, synonyms, transforms/assembly pairs и candidate queues; его нужно читать перед работой с supply-chain кодом
+- **[Signal Landing Plane](architecture/signal-landing-plane.md)** — первый слой long pipeline: event/signal -> impact claims -> landed refs -> missing anchors -> flash/hot warmup
 - **[Компоненты системы](architecture/components.md)** — детальное описание компонентов (Scout Engine, Propagation Engine, Watchdog, Lens Subsystem)
 - **[Модель данных](architecture/data-model.md)** — структуры данных, схемы Firestore, связи с существующими моделями
 - **[Интеграция](architecture/integration.md)** — интеграция с существующими компонентами Sanskrite
@@ -29,6 +30,7 @@
 
 ### Рабочие процессы
 
+- **[Статус Signal Landing и Analytical Runtime (2026-04-03)](implementation/signal-landing-and-analytical-runtime-status-2026-04-03.md)** — большой handoff-документ: что хотели, что уже реализовано, что подтверждено живыми сценариями, что ещё нужно довести до live prod-grade
 - **[Workflow Scout](workflows/scout-workflow.md)** — процесс сбора и верификации данных агентом Scout
 
 ### UX и пользовательские сценарии

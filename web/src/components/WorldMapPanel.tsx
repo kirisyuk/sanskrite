@@ -20,6 +20,7 @@ import { useVesselLayer, vesselsApiAvailable as isVesselsApiAvailable } from '..
 import { MapFilterPanel } from './MapFilterPanel';
 import { HorizonNodeIcon, getHorizonNodeVisualType, getNodeColors } from './HorizonGraphNodeTypes';
 import { MapObjectStackPanel } from './MapObjectStackPanel';
+import { MapDependencyTreeView } from './MapDependencyTreeView';
 import type { MapObjectInspectorPayload } from './MapObjectDetail';
 import type { MapDrawerPanelType } from './HorizonDrawers';
 import { SimulationExplanationOverlay, type SimulationExplanationOverlayState } from './SimulationExplanationOverlay';
@@ -141,6 +142,7 @@ type ScopeTargetMode = 'new' | 'existing';
 type DirectedExploreDirection = 'upstream' | 'downstream';
 type DockPanel = 'filter' | null;
 type FilterOverlayMode = 'products' | 'routes';
+type MapSurfaceMode = 'map' | 'dependency-tree';
 
 const AFFECTED_ZONE_FRESHNESS_WINDOWS: AffectedZoneFreshnessWindow[] = [14, 30, 90, 180];
 const PRODUCT_STAGE_ORDER = [
@@ -465,6 +467,44 @@ function mapDockControlButtonStyle(isDark: boolean, active: boolean, accent: str
     letterSpacing: '0.01em',
     transition: 'transform 160ms ease, border-color 160ms ease, background-color 160ms ease, color 160ms ease',
     transform: active ? 'translateY(1px)' : 'translateY(0)',
+  };
+}
+
+function mapSurfaceToggleShellStyle(isDark: boolean): React.CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: 6,
+    borderRadius: 16,
+    border: isDark ? '1px solid rgba(255,255,255,0.12)' : '1px solid rgba(15,23,42,0.10)',
+    background: isDark ? 'rgba(5,11,17,0.88)' : 'rgba(255,255,255,0.94)',
+    boxShadow: isDark ? '0 14px 32px rgba(0,0,0,0.28)' : '0 14px 32px rgba(15,23,42,0.10)',
+    backdropFilter: 'blur(14px)',
+  };
+}
+
+function mapSurfaceToggleButtonStyle(
+  isDark: boolean,
+  active: boolean,
+): React.CSSProperties {
+  return {
+    minWidth: 148,
+    height: 38,
+    padding: '0 14px',
+    borderRadius: 12,
+    border: active
+      ? '1px solid rgba(102,153,153,0.32)'
+      : '1px solid transparent',
+    background: active
+      ? (isDark ? 'rgba(102,153,153,0.18)' : 'rgba(102,153,153,0.10)')
+      : 'transparent',
+    color: active ? '#669999' : 'var(--text-secondary-strong)',
+    fontSize: 12,
+    fontWeight: 800,
+    letterSpacing: '0.01em',
+    cursor: 'pointer',
+    transition: 'background-color 160ms ease, color 160ms ease, border-color 160ms ease',
   };
 }
 
@@ -940,6 +980,7 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({
   const [hops, setHops] = React.useState(3);
   const vesselsApiAvailable = isVesselsApiAvailable();
   const [selectedObject, setSelectedObject] = React.useState<GeoObject | null>(null);
+  const [surfaceMode, setSurfaceMode] = React.useState<MapSurfaceMode>('map');
   const [directedExploreSubmitting, setDirectedExploreSubmitting] = React.useState<DirectedExploreDirection | null>(null);
   const [directedExploreError, setDirectedExploreError] = React.useState<string | null>(null);
   const [searchHighlightedObjectId, setSearchHighlightedObjectId] = React.useState<string | null>(null);
@@ -1717,6 +1758,16 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({
   const productStageFacets = productOverlayData.stageFacets;
   const productRouteGroups = productOverlayData.visibleGroups;
   const productRouteGroupsByKey = productOverlayData.allGroupsByKey;
+  const dependencyTreeAvailable = Boolean(
+    selectedObject
+    && !edgesLoading
+    && (
+      (selectionExportData?.directRelations?.length || 0) > 0
+      || (selectionExportData?.contextRelations?.length || 0) > 0
+      || (traceSummary?.propagationEdgeCount || 0) > 0
+      || (traceSummary?.supplyPathCount || 0) > 0
+    ),
+  );
   const viewOverlayOpen = activeMapDrawerPanel === 'view';
   const simulationOverlayOpen = activeMapDrawerPanel === 'simulation';
   const exportToolsOverlayOpen = activeMapDrawerPanel === 'export-tools';
@@ -2009,6 +2060,22 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({
     visibleMapObjects,
     zonesEnabled,
   ]);
+
+  React.useEffect(() => {
+    if (dependencyTreeAvailable) return;
+    setSurfaceMode('map');
+  }, [dependencyTreeAvailable]);
+
+  React.useEffect(() => {
+    if (surfaceMode !== 'map' || !map) return;
+    window.requestAnimationFrame(() => {
+      try {
+        map.resize();
+      } catch {
+        /* keep surface switching resilient */
+      }
+    });
+  }, [map, surfaceMode]);
 
   React.useEffect(() => {
     setPathLegsEnabled(Boolean(scope?.lensId));
@@ -3369,6 +3436,46 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({
           <div style={{ position: 'absolute', left: 10, right: 10, bottom: 10, padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(253,164,175,0.45)', backgroundColor: 'rgba(127,29,29,0.35)', color: '#fecdd3', fontSize: 12 }}>
             {error}
           </div>
+        )}
+
+        {dependencyTreeAvailable && (
+          <div
+            style={{
+              position: 'absolute',
+              top: Math.max(12, overlayTopOffset),
+              left: '50%',
+              transform: 'translateX(-50%)',
+              zIndex: 25,
+              pointerEvents: 'auto',
+            }}
+          >
+            <div style={mapSurfaceToggleShellStyle(isDark)}>
+              <button
+                type="button"
+                onClick={() => setSurfaceMode('map')}
+                style={mapSurfaceToggleButtonStyle(isDark, surfaceMode === 'map')}
+              >
+                View on Map
+              </button>
+              <button
+                type="button"
+                onClick={() => setSurfaceMode('dependency-tree')}
+                style={mapSurfaceToggleButtonStyle(isDark, surfaceMode === 'dependency-tree')}
+              >
+                View as Dependency Tree
+              </button>
+            </div>
+          </div>
+        )}
+
+        {dependencyTreeAvailable && surfaceMode === 'dependency-tree' && selectedObject && (
+          <MapDependencyTreeView
+            isDark={isDark}
+            selectedObject={selectedObject}
+            objects={mapObjects}
+            selectionExportData={selectionExportData}
+            traceSummary={traceSummary}
+          />
         )}
 
         <div

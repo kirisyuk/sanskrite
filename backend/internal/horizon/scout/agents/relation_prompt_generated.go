@@ -571,6 +571,18 @@ func generatedIntentDecomposerRelationRulesBlock(domainModes []string) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// PromptIntentDecomposerRelationRulesBlock exposes the shared relation-direction contract
+// used by intent decomposition so other planners can reuse the exact same prompt block.
+func PromptIntentDecomposerRelationRulesBlock(domainModes []string) string {
+	return generatedIntentDecomposerRelationRulesBlock(domainModes)
+}
+
+// PromptRelationTypesForDomainMode exposes the shared relation allowlist prompt string
+// used by composable Research/Critic flows.
+func PromptRelationTypesForDomainMode(mode string) string {
+	return relationTypesPromptForDomainMode(mode)
+}
+
 func promptFragmentTypes(types []models.FragmentType) string {
 	if len(types) == 0 {
 		return "*"

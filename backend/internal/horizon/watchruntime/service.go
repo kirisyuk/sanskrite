@@ -79,6 +79,7 @@ type Service struct {
 	lensesRepo                   *horizonrepo.LensesRepository
 	lensArtifactsRepo            *horizonrepo.LensArtifactsRepository
 	materializedArtifactsRepo    *horizonrepo.MaterializedArtifactsRepository
+	signalLandingSummariesRepo   *horizonrepo.SignalLandingSummariesRepository
 	macroAgentPoliciesRepo       *horizonrepo.MacroAgentPoliciesRepository
 	fragmentsRepo                *horizonrepo.HorizonFragmentsRepository
 	edgesRepo                    *horizonrepo.DependencyEdgesRepository
@@ -183,6 +184,14 @@ func (s *Service) WithFactsRepository(repo *corerepo.OntologyFactsRepository) *S
 		return s
 	}
 	s.factsRepo = repo
+	return s
+}
+
+func (s *Service) WithSignalLandingSummariesRepository(repo *horizonrepo.SignalLandingSummariesRepository) *Service {
+	if s == nil {
+		return s
+	}
+	s.signalLandingSummariesRepo = repo
 	return s
 }
 

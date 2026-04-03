@@ -14,6 +14,7 @@ import (
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	signalsys "github.com/igorkirisyuk/sanskrite/internal/horizon/signal"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/signallanding"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
@@ -30,6 +31,7 @@ type SignalPipeline struct {
 	propagationEngine    *propagation.PropagationEngine
 	profileLookup        *propagation.ProfileLookup
 	factsRepo            *corerepo.OntologyFactsRepository
+	signalLanding        *signallanding.Service
 	waveThrottleWindow   time.Duration
 
 	mu          sync.Mutex
@@ -64,6 +66,14 @@ func (p *SignalPipeline) WithEscalationLLM(aiExecutor *ai.AITaskExecutor) *Signa
 	return p
 }
 
+func (p *SignalPipeline) WithSignalLanding(service *signallanding.Service) *SignalPipeline {
+	if p == nil {
+		return p
+	}
+	p.signalLanding = service
+	return p
+}
+
 // ProcessEvent processes an event through the signal pipeline.
 // This should be called after an event OntologyFact is created.
 func (p *SignalPipeline) ProcessEvent(ctx context.Context, event *coremodels.OntologyFact) error {
@@ -84,6 +94,12 @@ func (p *SignalPipeline) ProcessEvent(ctx context.Context, event *coremodels.Ont
 	if len(signalDescriptors) == 0 {
 		log.Printf("%s no signals extracted eventId=%s", signalsys.LogPipeline, strings.TrimSpace(event.ID))
 		return nil // No signals extracted
+	}
+
+	if p.signalLanding != nil {
+		if _, lerr := p.signalLanding.LandEvent(ctx, event, signalDescriptors); lerr != nil {
+			log.Printf("%s landing failed eventId=%s err=%v", signalsys.LogPipeline, strings.TrimSpace(event.ID), lerr)
+		}
 	}
 
 	existingKeys := p.loadExistingSignalKeysForEvent(ctx, event)

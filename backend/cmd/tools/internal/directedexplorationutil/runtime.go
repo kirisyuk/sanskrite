@@ -123,6 +123,12 @@ func NewLocalRuntime(ctx context.Context, projectID string) (*LocalRuntime, erro
 	supplyLinkObsRepo := horizonrepo.NewSupplyLinkObservationsRepository(fsClient)
 	routeObsRepo := horizonrepo.NewRouteObservationsRepository(fsClient)
 	derivedRiskProfilesRepo := horizonrepo.NewDerivedRiskProfilesRepository(fsClient)
+	analyticalPrimitivesRepo := horizonrepo.NewAnalyticalPrimitivesRepository(fsClient)
+	analyticalAggregatesRepo := horizonrepo.NewAnalyticalAggregatesRepository(fsClient)
+	refScopeProjectionsRepo := horizonrepo.NewRefScopeProjectionsRepository(fsClient)
+	pathFamilyProjectionsRepo := horizonrepo.NewPathFamilyProjectionsRepository(fsClient)
+	compiledWatchSubjectsRepo := horizonrepo.NewCompiledWatchSubjectsRepository(fsClient)
+	watchSubjectsRepo := horizonrepo.NewWatchSubjectsRepository(fsClient)
 
 	agentJobsRepo := corerepo.NewAgentJobsRepository(fsClient)
 	scoutingJobsRepo := horizonrepo.NewScoutingJobsRepository(agentJobsRepo)
@@ -163,7 +169,19 @@ func NewLocalRuntime(ctx context.Context, projectID string) (*LocalRuntime, erro
 		WithSupplyLinkObservationsRepository(supplyLinkObsRepo).
 		WithRouteObservationsRepository(routeObsRepo).
 		WithDerivedRiskProfilesRepository(derivedRiskProfilesRepo).
-		WithSupplyChainPathBuilder(horizonpathbuilder.NewSupplyChainPathBuilder(fragmentsRepo, edgesRepo, materializedArtifactsRepo)).
+		WithAnalyticalPrimitivesRepository(analyticalPrimitivesRepo).
+		WithAnalyticalAggregatesRepository(analyticalAggregatesRepo).
+		WithRefScopeProjectionsRepository(refScopeProjectionsRepo).
+		WithPathFamilyProjectionsRepository(pathFamilyProjectionsRepo).
+		WithCompiledWatchSubjectsRepository(compiledWatchSubjectsRepo).
+		WithWatchSubjectsRepo(watchSubjectsRepo).
+		WithSupplyChainPathBuilder(horizonpathbuilder.NewSupplyChainPathBuilder(fragmentsRepo, edgesRepo, materializedArtifactsRepo).
+			WithAnalyticalPrimitivesRepository(analyticalPrimitivesRepo).
+			WithAnalyticalAggregatesRepository(analyticalAggregatesRepo).
+			WithRefScopeProjectionsRepository(refScopeProjectionsRepo).
+			WithPathFamilyProjectionsRepository(pathFamilyProjectionsRepo).
+			WithCompiledWatchSubjectsRepository(compiledWatchSubjectsRepo).
+			WithWatchSubjectsRepository(watchSubjectsRepo)).
 		WithDomainArtifactBuilder(horizonpathbuilder.NewDomainArtifactBuilder(fragmentsRepo, edgesRepo, materializedArtifactsRepo))
 
 	return &LocalRuntime{

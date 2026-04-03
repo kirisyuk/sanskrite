@@ -612,6 +612,14 @@ USER QUERY:
         ],
         "overlayQueries": [{ "type": "regulatory", "anchors": [], "scope": "orgs" }]
       },
+      "serviceChainExecutionPlan": {
+        "graphBuildMode": "hot_path_plus_graph",
+        "queries": [
+          { "anchor": "/org/us/google-cloud", "anchorType": "org", "direction": "both", "depth": 4, "productFilter": ["cloud-region-service"], "geoFilter": ["us"], "reason": "provider anchor" },
+          { "anchor": "/fac/us/google-cloud-us-central1", "anchorType": "fac", "direction": "both", "depth": 4, "productFilter": ["compute-service"], "geoFilter": ["us"], "reason": "delivery facility anchor" }
+        ],
+        "overlayQueries": [{ "type": "market", "anchors": [], "scope": "both" }]
+      },
       "regulatoryImpactExecutionPlan": {
         "queries": [
           { "instrument": "/mechanism/tax/vat-rate", "jurisdiction": "tr", "parameters": {"rate_from": "18%%", "rate_to": "20%%"}, "impactScope": "sector-specific", "depth": 4, "sectorFilter": ["energy"], "reason": "..." }
@@ -660,7 +668,7 @@ DOMAIN RULES
   Examples: /domain/v1/ecosystem-mapping/geo/my/industry/energy, /domain/v1/bilateral-relations/geo/sa-ye
 - facetKey MUST be one of: geo, topic, subject, project, asset, material, product, commodity, crop, goods, item, application, sector, industry, market, regulation, framework, time
 - contractType MUST be one of (prefer canonical types; aliases accepted but auto-normalized):
-  SUPPLY CHAIN: supply-chain, value-chain (aliases, avoid if possible: logistics-flow, trade-flow, sourcing-map, procurement-map)
+  OPERATIONAL CHAINS: supply-chain, service-chain, value-chain (aliases, avoid if possible: logistics-flow, trade-flow, sourcing-map, procurement-map; service aliases: service-delivery-network, capability-chain)
   RISK/GEOPOLITICS: geopolitical-risk, bilateral-relations, sanctions-exposure, affected-zone (aliases: risk-assessment, conflict-dynamics)
   MARKETS: market-opportunity, competitive-landscape, geographic-concentration (aliases: market-entry, market-sizing → market-opportunity; demand-forecast, pricing-dynamics → competitive-landscape)
   INVESTMENT: investment-thesis, portfolio-exposure (aliases: funding-landscape, exit-strategy, valuation-drivers → investment-thesis)
@@ -673,7 +681,9 @@ DOMAIN RULES
   INDUSTRY: industry-analysis
   FALLBACK: other (only if none above fit): /domain/v1/other/{custom-slug}/...
 - SUPPLY CHAIN PLAN: When contractType is supply-chain or value-chain, you MUST include supplyChainExecutionPlan with 1-10 queries. CRITICAL: The FIRST queries must go FROM ORGANIZATIONS (as producers/suppliers for downstream, or as consumers for upstream). Supply chains are actor-centric: org→product→org. direction: use "upstream" when the query asks about suppliers, raw materials, inputs, "who supplies X", "where does X get its materials", sourcing; use "downstream" when asking about customers, buyers, "who buys X", distribution; use "both" for full chain mapping. For upstream: anchors are the CONSUMER orgs (e.g. Coca-Cola for "who supplies Coca-Cola"). For downstream: anchors are PRODUCER orgs. Organization-focused supply-chain intents are valid: keep the organization in anchors / supplyChainExecutionPlan, and if canonicalPath must encode it, use facet form like /domain/v1/supply-chain/geo/us/subject/apple-inc. Do NOT emit /domain/v1/supply-chain/org/us/apple-inc/... . For product+geo queries (e.g. "Thai rice supply chain"): contractType MUST be supply-chain, facets MUST include geo and product or material. anchorType MUST be org. Use anchors (or anchors array) with canonical /org/... paths. Each query: anchor (single) or anchors (array), anchorType (org|product|deposit), direction (upstream|downstream|both), depth (3-6), productFilter/geoFilter from facets, reason. overlayQueries (Stage 2) optional. graphBuildMode MUST be "hot_path_only" for fast, hot-path-first answers when only the primary chain is needed, and "hot_path_plus_graph" when the system should continue with broader graph completion; default to "hot_path_plus_graph" when unsure.
+- SERVICE CHAIN PLAN: When contractType is service-chain, you MUST include serviceChainExecutionPlan with 1-10 queries. Treat service-chain as a distinct operational contract for service delivery lifecycle, not as value analysis. The FIRST queries should prefer provider organizations or concrete delivery facilities. Focus on provider→capability→facility/control-gate→recipient paths, not profit pools or margin capture. Use direction "upstream" for dependencies, control gates, required providers, support vendors, or access prerequisites; "downstream" for customers, tenants, recipients, and exposed services; "both" for full delivery mapping. Use canonical /org/... or /fac/... anchors when possible. Each query: anchor (single) or anchors (array), anchorType (org|fac|product), direction (upstream|downstream|both), depth (3-6), productFilter/geoFilter from facets, reason. overlayQueries optional. graphBuildMode MUST be "hot_path_only" or "hot_path_plus_graph"; default to "hot_path_plus_graph" when unsure.
 - ROUTE-SENSITIVE SUPPLY CHAIN: If the query mentions chokepoints, shipping routes, sea lanes, ports, terminals, pipelines, carriers, rerouting, "through/via", LNG/LPG shipping, or "from production to end-users", structure the intent for path execution. Include 3-8 anchors when evidence exists across these roles: producer org, upstream deposit/field, export facility, chokepoint/route geo, import terminal or market hub, downstream industrial consumer.
+- SERVICE VS VALUE CHAIN: Use service-chain for service delivery topology, dependencies, access/control gates, service facilities, coverage, and downstream recipients. Use value-chain for economic value creation/capture, profit pools, bargaining power, and margin structure. Do not substitute one for the other.
 - REGULATORY IMPACT PLAN: When contractType is policy-impact or regulatory-impact, you MUST include regulatoryImpactExecutionPlan with 1-5 queries. Each query: instrument (canonical path /mechanism/... or /program/...), jurisdiction (ISO2), parameters (rate_from, rate_to, effective_date when applicable), impactScope (economy-wide|sector-specific|entity-specific), depth (3-5), sectorFilter from facets, reason.
 - POLICY / REGULATORY TRANSMISSION: If the query asks what happens when a tax, tariff, VAT, CBAM-like cost, export control, sanctions measure, subsidy, capital rule, customs rule, licensing requirement, or compliance burden changes, include both the policy side and the exposed operational side. Do not return only the regulator/mechanism anchor.
 	- GOVERNANCE PLAN: When contractType is ownership-structure or control-map, you MUST include governanceExecutionPlan with 1-5 queries. Each query: target (canonical path /org/... or /gov/... or /community/... for dynasty/tribe/family ownership), targetType (org|gov|person|community), direction (upward|downward|both), depth (3-6), includeBoard (true/false), geoFilter, reason.
@@ -825,6 +835,8 @@ const maxSupplyChainQueriesPerPlan = 10
 
 type intentScenarioProfile struct {
 	supply         bool
+	service        bool
+	value          bool
 	routeSensitive bool
 	affectedZone   bool
 	policy         bool
@@ -840,10 +852,12 @@ func inferIntentScenarioProfile(query string, domains []DomainResolution) intent
 	p := intentScenarioProfile{}
 	for _, d := range domains {
 		switch normalizeContractTypeAlias(d.ContractType) {
-		case "supply-chain", "value-chain":
+		case "supply-chain":
 			p.supply = true
+		case "value-chain":
+			p.value = true
 		case "service-chain":
-			p.supply = true
+			p.service = true
 		case "affected-zone", "geopolitical-risk", "bilateral-relations", "sanctions-exposure":
 			p.affectedZone = true
 		case "policy-impact", "regulatory-impact":
@@ -858,8 +872,14 @@ func inferIntentScenarioProfile(query string, domains []DomainResolution) intent
 			p.sector = true
 		}
 	}
-	if containsAnyIntentToken(text, "supply chain", "value chain", "downstream", "upstream", "industrial end-users", "industrial consumers", "producers", "receiving terminal", "export terminal") {
+	if containsAnyIntentToken(text, "supply chain", "downstream", "upstream", "industrial end-users", "industrial consumers", "producers", "receiving terminal", "export terminal", "raw materials", "buyers", "who buys", "who supplies", "distribution") {
 		p.supply = true
+	}
+	if containsAnyIntentToken(text, "value chain", "margin pool", "profit pool", "value capture", "value creation", "rent capture", "bargaining power", "commoditized layer", "margin leakage") {
+		p.value = true
+	}
+	if containsAnyIntentToken(text, "service chain", "service delivery", "service-delivery", "capability chain", "delivery lifecycle", "managed service", "service dependency", "support contract", "support response", "authorization gate", "access control gate", "control plane", "service outage", "service exposure", "cloud region", "data center service", "field service", "aftermarket service", "delivery path") {
+		p.service = true
 	}
 	if containsAnyIntentToken(text, "route", "shipping", "sea lane", "pipeline", "port", "terminal", "carrier", "strait", "canal", "reroute", "transit", "through ", "via ", "crossing", "lng", "lpg", "container") {
 		p.routeSensitive = true
@@ -892,7 +912,7 @@ func (p intentScenarioProfile) anchorCap() int {
 	switch {
 	case p.routeSensitive || p.affectedZone || p.policy || p.marketInfra || p.investment:
 		return 8
-	case p.supply || p.sector || p.ecosystem || p.governance:
+	case p.supply || p.service || p.value || p.sector || p.ecosystem || p.governance:
 		return 6
 	default:
 		return 5
@@ -903,7 +923,7 @@ func (p intentScenarioProfile) domainCap() int {
 	switch {
 	case p.routeSensitive || p.policy || p.affectedZone || p.investment || p.marketInfra:
 		return 5
-	case p.supply || p.sector || p.ecosystem || p.governance:
+	case p.supply || p.service || p.value || p.sector || p.ecosystem || p.governance:
 		return 4
 	default:
 		return 3
@@ -994,8 +1014,10 @@ func applyIntentResolutionQualityRules(query string, out *IntentResolution) {
 		d := &out.Domains[i]
 		d.ContractType = normalizeContractTypeAlias(d.ContractType)
 		switch {
-		case IsSupplyChainContractType(d.ContractType), IsServiceChainContractType(d.ContractType):
+		case IsSupplyChainContractType(d.ContractType):
 			applySupplyChainDomainQuality(query, d, out.Anchors, profile)
+		case IsServiceChainContractType(d.ContractType):
+			applyServiceChainDomainQuality(query, d, out.Anchors, profile)
 		case IsPolicyImpactContractType(d.ContractType):
 			applyPolicyImpactDomainQuality(query, d, out.Anchors, profile)
 		case IsGovernanceContractType(d.ContractType):
@@ -1013,8 +1035,14 @@ func prioritizeIntentDomains(domains []DomainResolution, profile intentScenarioP
 	score := func(d DomainResolution) int {
 		ct := normalizeContractTypeAlias(d.ContractType)
 		switch {
-		case profile.supply && (ct == "supply-chain" || ct == "value-chain" || ct == "service-chain"):
+		case profile.service && ct == "service-chain":
 			return 100
+		case profile.value && ct == "value-chain":
+			return 99
+		case profile.supply && ct == "supply-chain":
+			return 98
+		case (profile.service || profile.value || profile.supply) && IsOperationalChainContractType(ct):
+			return 97
 		case profile.policy && (ct == "policy-impact" || ct == "regulatory-impact"):
 			return 95
 		case profile.governance && (ct == "ownership-structure" || ct == "control-map"):
@@ -1052,32 +1080,28 @@ func applySupplyChainDomainQuality(
 	if d == nil {
 		return
 	}
-	planRef := &d.SupplyChainExecutionPlan
-	if IsServiceChainContractType(d.ContractType) {
-		planRef = &d.ServiceChainExecutionPlan
-	}
 	d.Projections = dedupStrings(append(d.Projections,
 		"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET", "GEO_REGION", "DEPOSIT"), 12)
 	d.FirstOrderEntities = normalizeCanonicalPathsList(append(d.FirstOrderEntities,
 		collectIntentAnchorPathsByPrefix(anchors, "/org/", "/fac/", "/deposit/", "/market/", "/loc/")...), 16)
-	if *planRef == nil || len((*planRef).Queries) == 0 {
+	if d.SupplyChainExecutionPlan == nil || len(d.SupplyChainExecutionPlan.Queries) == 0 {
 		if plan := synthesizeSupplyChainExecutionPlan(query, d, anchors, profile); plan != nil {
-			*planRef = plan
+			d.SupplyChainExecutionPlan = plan
 		}
 	} else {
-		(*planRef).GraphBuildMode = normalizeSupplyChainGraphBuildMode((*planRef).GraphBuildMode)
-		for i := range (*planRef).Queries {
-			if (*planRef).Queries[i].Depth <= 0 {
-				(*planRef).Queries[i].Depth = 4
+		d.SupplyChainExecutionPlan.GraphBuildMode = normalizeSupplyChainGraphBuildMode(d.SupplyChainExecutionPlan.GraphBuildMode)
+		for i := range d.SupplyChainExecutionPlan.Queries {
+			if d.SupplyChainExecutionPlan.Queries[i].Depth <= 0 {
+				d.SupplyChainExecutionPlan.Queries[i].Depth = 4
 			}
-			if strings.TrimSpace((*planRef).Queries[i].Direction) == "" {
-				(*planRef).Queries[i].Direction = inferSupplyChainDirection(query)
+			if strings.TrimSpace(d.SupplyChainExecutionPlan.Queries[i].Direction) == "" {
+				d.SupplyChainExecutionPlan.Queries[i].Direction = inferOperationalChainDirection(query, false)
 			}
 		}
-		if profile.routeSensitive && len((*planRef).OverlayQueries) == 0 {
+		if profile.routeSensitive && len(d.SupplyChainExecutionPlan.OverlayQueries) == 0 {
 			overlayAnchors := collectIntentAnchorPathsByPrefix(anchors, "/org/", "/fac/", "/market/")
 			if len(overlayAnchors) > 0 {
-				(*planRef).OverlayQueries = []SupplyChainOverlayQuery{{
+				d.SupplyChainExecutionPlan.OverlayQueries = []SupplyChainOverlayQuery{{
 					Type:    "market",
 					Anchors: overlayAnchors[:minInt(len(overlayAnchors), 6)],
 					Scope:   "both",
@@ -1085,8 +1109,57 @@ func applySupplyChainDomainQuality(
 			}
 		}
 	}
-	if *planRef != nil {
-		(*planRef).GraphBuildMode = normalizeSupplyChainGraphBuildMode((*planRef).GraphBuildMode)
+	if d.SupplyChainExecutionPlan != nil {
+		d.SupplyChainExecutionPlan.GraphBuildMode = normalizeSupplyChainGraphBuildMode(d.SupplyChainExecutionPlan.GraphBuildMode)
+	}
+}
+
+func applyServiceChainDomainQuality(
+	query string,
+	d *DomainResolution,
+	anchors []struct {
+		CanonicalPath string  `json:"canonicalPath"`
+		Type          string  `json:"type"`
+		Name          string  `json:"name,omitempty"`
+		Confidence    float64 `json:"confidence"`
+		Reason        string  `json:"reason"`
+	},
+	profile intentScenarioProfile,
+) {
+	if d == nil {
+		return
+	}
+	d.Projections = dedupStrings(append(d.Projections,
+		"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET", "GEO_REGION", "PROGRAM", "GOV"), 12)
+	d.FirstOrderEntities = normalizeCanonicalPathsList(append(d.FirstOrderEntities,
+		collectIntentAnchorPathsByPrefix(anchors, "/org/", "/fac/", "/product/", "/market/", "/program/", "/gov/", "/loc/")...), 16)
+	if d.ServiceChainExecutionPlan == nil || len(d.ServiceChainExecutionPlan.Queries) == 0 {
+		if plan := synthesizeServiceChainExecutionPlan(query, d, anchors, profile); plan != nil {
+			d.ServiceChainExecutionPlan = plan
+		}
+	} else {
+		d.ServiceChainExecutionPlan.GraphBuildMode = normalizeSupplyChainGraphBuildMode(d.ServiceChainExecutionPlan.GraphBuildMode)
+		for i := range d.ServiceChainExecutionPlan.Queries {
+			if d.ServiceChainExecutionPlan.Queries[i].Depth <= 0 {
+				d.ServiceChainExecutionPlan.Queries[i].Depth = 4
+			}
+			if strings.TrimSpace(d.ServiceChainExecutionPlan.Queries[i].Direction) == "" {
+				d.ServiceChainExecutionPlan.Queries[i].Direction = inferOperationalChainDirection(query, true)
+			}
+		}
+		if (profile.routeSensitive || profile.service) && len(d.ServiceChainExecutionPlan.OverlayQueries) == 0 {
+			overlayAnchors := collectIntentAnchorPathsByPrefix(anchors, "/org/", "/fac/", "/market/")
+			if len(overlayAnchors) > 0 {
+				d.ServiceChainExecutionPlan.OverlayQueries = []SupplyChainOverlayQuery{{
+					Type:    "market",
+					Anchors: overlayAnchors[:minInt(len(overlayAnchors), 6)],
+					Scope:   "both",
+				}}
+			}
+		}
+	}
+	if d.ServiceChainExecutionPlan != nil {
+		d.ServiceChainExecutionPlan.GraphBuildMode = normalizeSupplyChainGraphBuildMode(d.ServiceChainExecutionPlan.GraphBuildMode)
 	}
 }
 
@@ -1217,8 +1290,16 @@ func collectIntentAnchorPathsByPrefix(
 	return dedupStrings(out, len(out))
 }
 
-func inferSupplyChainDirection(query string) string {
+func inferOperationalChainDirection(query string, serviceMode bool) string {
 	text := strings.ToLower(strings.TrimSpace(query))
+	if serviceMode {
+		switch {
+		case containsAnyIntentToken(text, "depends on", "dependency", "dependencies", "upstream provider", "control gate", "access gate", "authorization", "service contract", "support vendor", "identity provider", "network provider"):
+			return "upstream"
+		case containsAnyIntentToken(text, "customer", "customers", "tenant", "tenants", "recipient", "recipients", "served by", "service exposure", "end-user", "user-facing", "delivery to"):
+			return "downstream"
+		}
+	}
 	switch {
 	case containsAnyIntentToken(text, "supplier", "suppliers", "inputs", "source from", "sourcing", "where does", "upstream"):
 		return "upstream"
@@ -1227,6 +1308,10 @@ func inferSupplyChainDirection(query string) string {
 	default:
 		return "both"
 	}
+}
+
+func inferSupplyChainDirection(query string) string {
+	return inferOperationalChainDirection(query, false)
 }
 
 func synthesizeSupplyChainExecutionPlan(
@@ -1251,7 +1336,7 @@ func synthesizeSupplyChainExecutionPlan(
 	for _, cp := range anchorPaths {
 		q := SupplyChainQuery{
 			Anchor:        cp,
-			Direction:     inferSupplyChainDirection(query),
+			Direction:     inferOperationalChainDirection(query, false),
 			Depth:         4,
 			ProductFilter: productFilter,
 			GeoFilter:     geoFilter,
@@ -1285,6 +1370,72 @@ func synthesizeSupplyChainExecutionPlan(
 		Queries:        queries,
 	}
 	if profile.routeSensitive {
+		overlayAnchors := collectIntentAnchorPathsByPrefix(anchors, "/org/", "/fac/", "/market/")
+		if len(overlayAnchors) > 0 {
+			plan.OverlayQueries = []SupplyChainOverlayQuery{{
+				Type:    "market",
+				Anchors: overlayAnchors[:minInt(len(overlayAnchors), 6)],
+				Scope:   "both",
+			}}
+		}
+	}
+	return plan
+}
+
+func synthesizeServiceChainExecutionPlan(
+	query string,
+	d *DomainResolution,
+	anchors []struct {
+		CanonicalPath string  `json:"canonicalPath"`
+		Type          string  `json:"type"`
+		Name          string  `json:"name,omitempty"`
+		Confidence    float64 `json:"confidence"`
+		Reason        string  `json:"reason"`
+	},
+	profile intentScenarioProfile,
+) *SupplyChainExecutionPlan {
+	anchorPaths := collectIntentAnchorPathsByPrefix(anchors, "/org/", "/fac/", "/product/")
+	if len(anchorPaths) == 0 {
+		return nil
+	}
+	productFilter := domainFacetValues(d, "product", "application", "market", "sector", "industry")
+	geoFilter := domainFacetValues(d, "geo")
+	queries := make([]SupplyChainQuery, 0, minInt(len(anchorPaths), 4))
+	for _, cp := range anchorPaths {
+		q := SupplyChainQuery{
+			Anchor:        cp,
+			Direction:     inferOperationalChainDirection(query, true),
+			Depth:         4,
+			ProductFilter: productFilter,
+			GeoFilter:     geoFilter,
+			Reason:        "deterministic fallback from intent anchors and service-delivery facets",
+		}
+		switch {
+		case strings.HasPrefix(cp, "/org/"):
+			q.AnchorType = "org"
+		case strings.HasPrefix(cp, "/fac/"):
+			q.AnchorType = "fac"
+		case strings.HasPrefix(cp, "/product/"):
+			q.AnchorType = "product"
+		default:
+			continue
+		}
+		if profile.routeSensitive {
+			q.Depth = 5
+		}
+		queries = append(queries, q)
+		if len(queries) >= 4 {
+			break
+		}
+	}
+	if len(queries) == 0 {
+		return nil
+	}
+	plan := &SupplyChainExecutionPlan{
+		GraphBuildMode: SupplyChainGraphBuildModeHotPathPlusGraph,
+		Queries:        queries,
+	}
+	if profile.routeSensitive || profile.service {
 		overlayAnchors := collectIntentAnchorPathsByPrefix(anchors, "/org/", "/fac/", "/market/")
 		if len(overlayAnchors) > 0 {
 			plan.OverlayQueries = []SupplyChainOverlayQuery{{
@@ -2225,6 +2376,13 @@ OUTPUT JSON SCHEMA:
           { "anchor": "/org/de/bmw", "anchorType": "org", "direction": "upstream", "depth": 4, "productFilter": ["ev-batteries"], "geoFilter": ["de", "cn"], "reason": "..." }
         ],
         "overlayQueries": [{ "type": "regulatory", "anchors": [], "scope": "orgs" }]
+      },
+      "serviceChainExecutionPlan": {
+        "graphBuildMode": "hot_path_plus_graph",
+        "queries": [
+          { "anchor": "/org/us/google-cloud", "anchorType": "org", "direction": "both", "depth": 4, "productFilter": ["cloud-service"], "geoFilter": ["us"], "reason": "..." }
+        ],
+        "overlayQueries": [{ "type": "market", "anchors": [], "scope": "both" }]
       }
     }
   ],
@@ -2252,7 +2410,8 @@ RULES:
 - focus MUST be in English (translate from the user query when needed). Keep it short and reusable.
 - keywords SHOULD be in English when possible (translate), but can include raw tokens like handles.
 - spherePaths MUST be canonical under /sphere/... (if unsure, use /sphere/other).
-- For supply-chain domains, include supplyChainExecutionPlan. graphBuildMode MUST be "hot_path_only" for hot-path-only execution and "hot_path_plus_graph" for broader graph completion. Default to "hot_path_plus_graph" when unsure.
+- For supply-chain or value-chain domains, include supplyChainExecutionPlan. graphBuildMode MUST be "hot_path_only" for hot-path-only execution and "hot_path_plus_graph" for broader graph completion. Default to "hot_path_plus_graph" when unsure.
+- For service-chain domains, include serviceChainExecutionPlan. Use it for service delivery topology, dependencies, access/control gates, and downstream recipients. Do not use value-chain when the user is asking about service delivery reality.
 
 - DOMAINS (CRITICAL):
   - A DOMAIN is an executable knowledge contract: “what the user wants to know about the world” and how to structure exploration.
@@ -2279,8 +2438,8 @@ RULES:
       /market/global/technology/semiconductors
       /market/kz/industrial/agriculture
   - contractType MUST be one of (choose the BEST fit):
-    SUPPLY CHAIN / INDUSTRY:
-      supply-chain, value-chain, logistics-flow, trade-flow, sourcing-map, procurement-map
+    OPERATIONAL CHAINS:
+      supply-chain, service-chain, value-chain, logistics-flow, trade-flow, sourcing-map, procurement-map, service-delivery-network, capability-chain
     RISK / GEOPOLITICS:
       risk-assessment, geopolitical-risk, bilateral-relations, sanctions-exposure, conflict-dynamics, affected-zone
     MARKETS / OPPORTUNITY:
@@ -2594,7 +2753,7 @@ func repairSupplyChainDomainNamespacePath(path string) string {
 		return p
 	}
 	contractType := strings.ToLower(strings.TrimSpace(parts[2]))
-	if contractType != "supply-chain" && contractType != "value-chain" {
+	if contractType != "supply-chain" && contractType != "value-chain" && contractType != "service-chain" {
 		return p
 	}
 	rest := parts[3:]

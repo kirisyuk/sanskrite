@@ -585,6 +585,8 @@ func buildDomainTitle(contractType string, canonicalPath string, facets map[stri
 		// Supply chain / industry
 		case "supply-chain":
 			base = "Supply chain"
+		case "service-chain":
+			base = "Service chain"
 		case "value-chain":
 			base = "Value chain"
 		case "logistics-flow":

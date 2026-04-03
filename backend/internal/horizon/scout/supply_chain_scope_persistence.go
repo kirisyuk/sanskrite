@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/analytical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 )
@@ -74,7 +75,7 @@ func persistSupplyChainScopeArtifacts(ctx context.Context, e *ScoutEngine, job *
 	supplierRef := strings.TrimSpace(seg.SupplierRef)
 	var capabilityProfile *models.CapabilityProfile
 	if e.capabilityProfilesRepo != nil && supplierRef != "" && strings.TrimSpace(seg.ProductRef) != "" {
-		existingProfile, _ := e.capabilityProfilesRepo.Get(ctx, supplierRef, strings.TrimSpace(seg.ProductRef))
+		existingProfile, _ := e.capabilityProfilesRepo.Get(ctx, strings.TrimSpace(frag.TenantID), supplierRef, strings.TrimSpace(seg.ProductRef))
 		metrics, _ := extractCapabilityMetricsFromSupplyLink(frag, seg)
 		qualifiers := buildCapabilityQualifiersFromSupplyLink(frag, seg)
 		capabilityProfile = mergeCapabilityProfileObservation(existingProfile, strings.TrimSpace(frag.TenantID), supplierRef, strings.TrimSpace(seg.ProductRef), metrics, qualifiers)
@@ -97,6 +98,79 @@ func persistSupplyChainScopeArtifacts(ctx context.Context, e *ScoutEngine, job *
 		rollup := computeSupplyLinkRiskRollup(frag, seg, capabilityProfile)
 		for _, profile := range buildDerivedRiskProfiles(frag, seg, rollup) {
 			_ = e.derivedRiskProfilesRepo.Upsert(ctx, profile)
+		}
+	}
+	if e.analyticalPrimitivesRepo != nil {
+		rollup := computeSupplyLinkRiskRollup(frag, seg, capabilityProfile)
+		persisted := make([]*models.AnalyticalPrimitive, 0, 8)
+		for _, primitive := range analytical.BuildSupplyLinkPrimitives(analytical.SupplyLinkPrimitiveInput{
+			TenantID:            strings.TrimSpace(frag.TenantID),
+			ScopeRef:            strings.TrimSpace(frag.CanonicalPath),
+			ProductRef:          strings.TrimSpace(seg.ProductRef),
+			SupplierRef:         strings.TrimSpace(seg.SupplierRef),
+			CustomerRef:         strings.TrimSpace(seg.CustomerRef),
+			TransportViaRefs:    append([]string(nil), seg.TransportViaRefs...),
+			Criticality:         rollup.Criticality,
+			CoverageStatus:      rollup.CoverageStatus,
+			GateStatus:          rollup.GateStatus,
+			Summary:             rollup.Summary,
+			PrimaryMechanism:    rollup.PrimaryMechanism.Key,
+			PrimaryMetricKey:    rollup.PrimaryMetricKey,
+			RouteFragility:      rollup.RouteFragility,
+			RouteRerouteability: rollup.RouteRerouteability,
+			MechanismScores:     cloneFloatMapForPersistence(rollup.MechanismScores),
+			MechanismSummaries:  cloneStringMapForPersistence(rollup.MechanismSummaries),
+			EffectiveMetrics:    cloneMetricValuesForPersistence(rollup.EffectiveMetrics),
+			SourceIDs:           sourceIDs,
+			ComputedAt:          now,
+		}) {
+			if err := e.analyticalPrimitivesRepo.Upsert(ctx, primitive); err == nil {
+				persisted = append(persisted, primitive)
+			}
+		}
+		if len(persisted) > 0 && e.analyticalAggregatesRepo != nil {
+			_, _ = analytical.PersistScopeAggregates(ctx, e.analyticalAggregatesRepo, analytical.AggregateScopeInput{
+				TenantID:     strings.TrimSpace(frag.TenantID),
+				ScopeType:    "supply_link",
+				ScopeRef:     strings.TrimSpace(frag.CanonicalPath),
+				Layer:        "baseline",
+				SourceClass:  "pipeline",
+				SubjectRef:   strings.TrimSpace(firstNonEmpty(seg.SupplierRef, seg.ProductRef, seg.CustomerRef)),
+				RefreshClass: "immediate",
+				Primitives:   persisted,
+				ComputedAt:   now,
+			})
+		}
+		if len(persisted) > 0 && e.refScopeProjectionsRepo != nil {
+			for _, ref := range changedRefsForAnalyticalPrimitives(persisted) {
+				_ = analytical.UpsertRefScopeProjection(ctx, e.refScopeProjectionsRepo, analytical.RefScopeProjectionInput{
+					TenantID:           strings.TrimSpace(frag.TenantID),
+					Ref:                ref,
+					AggregateScopeRefs: []string{strings.TrimSpace(frag.CanonicalPath)},
+				})
+			}
+		}
+		if len(persisted) > 0 && e.analyticalAggregatesRepo != nil && e.watchSubjectsRepo != nil {
+			_ = analytical.RefreshWatchSubjectAggregates(
+				ctx,
+				e.analyticalPrimitivesRepo,
+				e.analyticalAggregatesRepo,
+				e.watchSubjectsRepo,
+				strings.TrimSpace(frag.TenantID),
+				changedRefsForAnalyticalPrimitives(persisted),
+				now,
+			)
+			subjects, _ := analytical.ListImpactedWatchSubjects(ctx, e.watchSubjectsRepo, strings.TrimSpace(frag.TenantID), changedRefsForAnalyticalPrimitives(persisted))
+			for _, subject := range subjects {
+				_, _ = analytical.PersistCompiledWatchSubject(
+					ctx,
+					e.compiledWatchRepo,
+					e.refScopeProjectionsRepo,
+					subject,
+					nil,
+					[]string{strings.TrimSpace(frag.CanonicalPath)},
+				)
+			}
 		}
 	}
 	if updatedScope := markWorkingProductCoverage(job, strings.TrimSpace(seg.ProductRef), "partial", models.WorkingProductStatusConfirmed); updatedScope != nil {
@@ -133,7 +207,7 @@ func persistScopedObservationsFromChains(ctx context.Context, e *ScoutEngine, jo
 				})
 			}
 			if e.capabilityProfilesRepo != nil {
-				existing, _ := e.capabilityProfilesRepo.Get(ctx, carrierRef, productRef)
+				existing, _ := e.capabilityProfilesRepo.Get(ctx, tenantIDFromJob(job), carrierRef, productRef)
 				profile := mergeCapabilityProfileObservation(existing, tenantIDFromJob(job), carrierRef, productRef, metrics, qualifiers)
 				if profile != nil {
 					_ = e.capabilityProfilesRepo.Upsert(ctx, profile)
@@ -224,6 +298,48 @@ func cloneInterfaceMapForPersistence(in map[string]interface{}) map[string]inter
 		out[key] = value
 	}
 	return out
+}
+
+func cloneFloatMapForPersistence(in map[string]float64) map[string]float64 {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]float64, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneStringMapForPersistence(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func changedRefsForAnalyticalPrimitives(primitives []*models.AnalyticalPrimitive) []string {
+	if len(primitives) == 0 {
+		return nil
+	}
+	refs := make([]string, 0, len(primitives)*8)
+	for _, primitive := range primitives {
+		if primitive == nil {
+			continue
+		}
+		refs = append(refs, strings.TrimSpace(primitive.ScopeRef))
+		refs = append(refs, primitive.BasisRefs...)
+		refs = append(refs, primitive.ProductRefs...)
+		refs = append(refs, primitive.NodeRefs...)
+		refs = append(refs, primitive.RouteRefs...)
+		refs = append(refs, primitive.ZoneRefs...)
+		refs = append(refs, primitive.AffectedRefs...)
+	}
+	return dedupStrings(refs)
 }
 
 func effectiveVesselType(_ *SupplyLinkSegment, frag *models.HorizonFragment) string {

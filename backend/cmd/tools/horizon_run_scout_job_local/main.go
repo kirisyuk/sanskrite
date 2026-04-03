@@ -104,6 +104,12 @@ func main() {
 	supplyLinkObsRepo := repo.NewSupplyLinkObservationsRepository(fsClient)
 	routeObsRepo := repo.NewRouteObservationsRepository(fsClient)
 	derivedRiskProfilesRepo := repo.NewDerivedRiskProfilesRepository(fsClient)
+	analyticalPrimitivesRepo := repo.NewAnalyticalPrimitivesRepository(fsClient)
+	analyticalAggregatesRepo := repo.NewAnalyticalAggregatesRepository(fsClient)
+	refScopeProjectionsRepo := repo.NewRefScopeProjectionsRepository(fsClient)
+	pathFamilyProjectionsRepo := repo.NewPathFamilyProjectionsRepository(fsClient)
+	compiledWatchSubjectsRepo := repo.NewCompiledWatchSubjectsRepository(fsClient)
+	watchSubjectsRepo := repo.NewWatchSubjectsRepository(fsClient)
 
 	agentJobsRepo := corerepo.NewAgentJobsRepository(fsClient)
 	scoutingJobsRepo := repo.NewScoutingJobsRepository(agentJobsRepo)
@@ -144,7 +150,19 @@ func main() {
 		WithSupplyLinkObservationsRepository(supplyLinkObsRepo).
 		WithRouteObservationsRepository(routeObsRepo).
 		WithDerivedRiskProfilesRepository(derivedRiskProfilesRepo).
-		WithSupplyChainPathBuilder(horizonpathbuilder.NewSupplyChainPathBuilder(fragmentsRepo, edgesRepo, materializedArtifactsRepo)).
+		WithAnalyticalPrimitivesRepository(analyticalPrimitivesRepo).
+		WithAnalyticalAggregatesRepository(analyticalAggregatesRepo).
+		WithRefScopeProjectionsRepository(refScopeProjectionsRepo).
+		WithPathFamilyProjectionsRepository(pathFamilyProjectionsRepo).
+		WithCompiledWatchSubjectsRepository(compiledWatchSubjectsRepo).
+		WithWatchSubjectsRepo(watchSubjectsRepo).
+		WithSupplyChainPathBuilder(horizonpathbuilder.NewSupplyChainPathBuilder(fragmentsRepo, edgesRepo, materializedArtifactsRepo).
+			WithAnalyticalPrimitivesRepository(analyticalPrimitivesRepo).
+			WithAnalyticalAggregatesRepository(analyticalAggregatesRepo).
+			WithRefScopeProjectionsRepository(refScopeProjectionsRepo).
+			WithPathFamilyProjectionsRepository(pathFamilyProjectionsRepo).
+			WithCompiledWatchSubjectsRepository(compiledWatchSubjectsRepo).
+			WithWatchSubjectsRepository(watchSubjectsRepo)).
 		WithDomainArtifactBuilder(horizonpathbuilder.NewDomainArtifactBuilder(fragmentsRepo, edgesRepo, materializedArtifactsRepo))
 
 	job, err := scoutingJobsRepo.Get(ctx, strings.TrimSpace(*jobID))

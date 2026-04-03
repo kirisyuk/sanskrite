@@ -135,7 +135,6 @@ func (h *HorizonHandlers) SearchSupplyChains(w http.ResponseWriter, r *http.Requ
 		}
 		if summary.Changed {
 			linkageSummary["repairedAtReadTime"]++
-			_ = h.materializedArtifactsRepo.Update(r.Context(), &artifactCopy)
 		} else {
 			linkageSummary["fullyLinked"]++
 		}

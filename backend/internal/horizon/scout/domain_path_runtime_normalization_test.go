@@ -16,6 +16,15 @@ func TestNormalizeRuntimeDomainCanonicalPath_RepairsSupplyChainNamespacePath(t *
 	}
 }
 
+func TestNormalizeRuntimeDomainCanonicalPath_RepairsServiceChainNamespacePath(t *testing.T) {
+	in := "/domain/v1/service-chain/org/us/google-cloud/product/cloud-service"
+	got := NormalizeRuntimeDomainCanonicalPath(in)
+	want := "/domain/v1/service-chain/geo/us/product/cloud-service/subject/google-cloud"
+	if got != want {
+		t.Fatalf("NormalizeRuntimeDomainCanonicalPath() = %q, want %q", got, want)
+	}
+}
+
 func TestNormalizeRuntimeDomainCanonicalPath_TrimsIncompleteFacet(t *testing.T) {
 	in := "/domain/v1/supply-chain/geo/de/product"
 	got := NormalizeRuntimeDomainCanonicalPath(in)

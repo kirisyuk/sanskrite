@@ -507,26 +507,26 @@ func normalizeSupplyChainPathLegRouteOverlays(leg *SupplyChainPathLeg) {
 		leg.RouteGeometrySource = strings.TrimSpace(primary.RouteGeometrySource)
 		leg.VesselType = strings.TrimSpace(primary.VesselType)
 		leg.Mode = strings.TrimSpace(firstNonEmpty(primary.Mode, leg.Mode))
+		leg.FlowRefs = append([]string(nil), primary.FlowRefs...)
+		leg.GeoRefs = append([]string(nil), primary.GeoRefs...)
+		leg.ZoneRefs = append([]string(nil), primary.ZoneRefs...)
+		leg.AffectedZoneRefs = append([]string(nil), primary.AffectedZoneRefs...)
+		leg.SpatialSemantics = append([]string(nil), primary.SpatialSemantics...)
+		if leg.BindingConfidence <= 0 && primary.BindingConfidence > 0 {
+			leg.BindingConfidence = primary.BindingConfidence
+		}
+		if leg.SegmentConfidence <= 0 && primary.SegmentConfidence > 0 {
+			leg.SegmentConfidence = primary.SegmentConfidence
+		}
 	}
-	leg.FlowRefs = nil
 	leg.AlternateFlowRefs = nil
-	leg.GeoRefs = nil
-	leg.ZoneRefs = nil
-	leg.AffectedZoneRefs = nil
-	leg.SpatialSemantics = nil
-	for _, overlay := range overlays {
-		leg.FlowRefs = mergeUniqueStrings(leg.FlowRefs, overlay.FlowRefs)
+	for idx, overlay := range overlays {
+		if idx == primaryIdx {
+			leg.AlternateFlowRefs = mergeUniqueStrings(leg.AlternateFlowRefs, overlay.AlternateFlowRefs)
+			continue
+		}
+		leg.AlternateFlowRefs = mergeUniqueStrings(leg.AlternateFlowRefs, overlay.FlowRefs)
 		leg.AlternateFlowRefs = mergeUniqueStrings(leg.AlternateFlowRefs, overlay.AlternateFlowRefs)
-		leg.GeoRefs = mergeUniqueStrings(leg.GeoRefs, overlay.GeoRefs)
-		leg.ZoneRefs = mergeUniqueStrings(leg.ZoneRefs, overlay.ZoneRefs)
-		leg.AffectedZoneRefs = mergeUniqueStrings(leg.AffectedZoneRefs, overlay.AffectedZoneRefs)
-		leg.SpatialSemantics = mergeUniqueStrings(leg.SpatialSemantics, overlay.SpatialSemantics)
-		if leg.BindingConfidence <= 0 && overlay.BindingConfidence > 0 {
-			leg.BindingConfidence = overlay.BindingConfidence
-		}
-		if leg.SegmentConfidence <= 0 && overlay.SegmentConfidence > 0 {
-			leg.SegmentConfidence = overlay.SegmentConfidence
-		}
 	}
 }
 
@@ -1826,9 +1826,6 @@ func NormalizeSupplyChainPathRouteOverlays(artifact *MaterializedArtifact) (bool
 	if artifact.Kind != MaterializedKindSupplyChainPath && artifact.Kind != MaterializedKindServiceChainPath {
 		return false, nil
 	}
-	if supplyChainPathPayloadAlreadyNormalized(artifact.Payload) {
-		return false, nil
-	}
 	parsed, err := ParseSupplyChainPathPayload(artifact.Payload)
 	if err != nil {
 		return false, err
@@ -2541,12 +2538,24 @@ func mergeSupplyChainPathLeg(existing, incoming SupplyChainPathLeg) SupplyChainP
 		existing.Mode = strings.TrimSpace(incoming.Mode)
 	}
 	existing.RouteOverlays = mergeSupplyChainRouteOverlays(existing.RouteOverlays, incoming.RouteOverlays, existing, incoming)
-	existing.GeoRefs = mergeUniqueStrings(existing.GeoRefs, incoming.GeoRefs)
-	existing.FlowRefs = mergeUniqueStrings(existing.FlowRefs, incoming.FlowRefs)
-	existing.AlternateFlowRefs = mergeUniqueStrings(existing.AlternateFlowRefs, incoming.AlternateFlowRefs)
-	existing.ZoneRefs = mergeUniqueStrings(existing.ZoneRefs, incoming.ZoneRefs)
-	existing.AffectedZoneRefs = mergeUniqueStrings(existing.AffectedZoneRefs, incoming.AffectedZoneRefs)
-	existing.SpatialSemantics = mergeUniqueStrings(existing.SpatialSemantics, incoming.SpatialSemantics)
+	if len(existing.GeoRefs) == 0 && len(incoming.GeoRefs) > 0 {
+		existing.GeoRefs = append([]string(nil), incoming.GeoRefs...)
+	}
+	if len(existing.FlowRefs) == 0 && len(incoming.FlowRefs) > 0 {
+		existing.FlowRefs = append([]string(nil), incoming.FlowRefs...)
+	}
+	if len(existing.AlternateFlowRefs) == 0 && len(incoming.AlternateFlowRefs) > 0 {
+		existing.AlternateFlowRefs = append([]string(nil), incoming.AlternateFlowRefs...)
+	}
+	if len(existing.ZoneRefs) == 0 && len(incoming.ZoneRefs) > 0 {
+		existing.ZoneRefs = append([]string(nil), incoming.ZoneRefs...)
+	}
+	if len(existing.AffectedZoneRefs) == 0 && len(incoming.AffectedZoneRefs) > 0 {
+		existing.AffectedZoneRefs = append([]string(nil), incoming.AffectedZoneRefs...)
+	}
+	if len(existing.SpatialSemantics) == 0 && len(incoming.SpatialSemantics) > 0 {
+		existing.SpatialSemantics = append([]string(nil), incoming.SpatialSemantics...)
+	}
 	if existing.BindingConfidence <= 0 && incoming.BindingConfidence > 0 {
 		existing.BindingConfidence = incoming.BindingConfidence
 	}

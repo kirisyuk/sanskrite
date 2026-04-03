@@ -58,6 +58,7 @@ import (
 	criticalchain "github.com/igorkirisyuk/sanskrite/internal/criticalchain"
 	criticalchainpipeline "github.com/igorkirisyuk/sanskrite/internal/criticalchain/pipeline"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon"
+	horizonanalytical "github.com/igorkirisyuk/sanskrite/internal/horizon/analytical"
 	horizoncriticalpath "github.com/igorkirisyuk/sanskrite/internal/horizon/critical_path"
 	horizonenrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	horizonfeedback "github.com/igorkirisyuk/sanskrite/internal/horizon/feedback"
@@ -84,6 +85,7 @@ import (
 	horizonscopeagent "github.com/igorkirisyuk/sanskrite/internal/horizon/scopeagent"
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	horizonagents "github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	horizonsignallanding "github.com/igorkirisyuk/sanskrite/internal/horizon/signallanding"
 	horizonsignals "github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
 	horizonsimulation "github.com/igorkirisyuk/sanskrite/internal/horizon/simulation"
 	horizonsupplychain "github.com/igorkirisyuk/sanskrite/internal/horizon/supplychain"
@@ -1411,6 +1413,11 @@ func main() {
 		horizonSupplyLinkObsRepo := horizonrepo.NewSupplyLinkObservationsRepository(fsClient.Client())
 		horizonRouteObsRepo := horizonrepo.NewRouteObservationsRepository(fsClient.Client())
 		horizonDerivedRiskProfilesRepo := horizonrepo.NewDerivedRiskProfilesRepository(fsClient.Client())
+		horizonAnalyticalPrimitivesRepo := horizonrepo.NewAnalyticalPrimitivesRepository(fsClient.Client())
+		horizonAnalyticalAggregatesRepo := horizonrepo.NewAnalyticalAggregatesRepository(fsClient.Client())
+		horizonRefScopeProjectionsRepo := horizonrepo.NewRefScopeProjectionsRepository(fsClient.Client())
+		horizonPathFamilyProjectionsRepo := horizonrepo.NewPathFamilyProjectionsRepository(fsClient.Client())
+		horizonCompiledWatchSubjectsRepo := horizonrepo.NewCompiledWatchSubjectsRepository(fsClient.Client())
 		horizonJobTelemetryRepo := horizonrepo.NewJobTelemetryRepository(fsClient.Client())
 		riskJobsRepo = horizonrepo.NewRiskJobsRepository(fsClient.Client())
 		horizonFragmentVersionsRepo := horizonrepo.NewHorizonFragmentVersionsRepository(fsClient.Client())
@@ -1928,6 +1935,7 @@ func main() {
 			).WithScopeAgentRunsRepository(horizonScopeAgentRunsRepo).
 				WithMaterializedArtifactsRepository(horizonMaterializedArtifactsRepo).
 				WithFactsRepository(ontologyFactsRepo).
+				WithSignalLandingSummariesRepository(horizonrepo.NewSignalLandingSummariesRepository(fsClient.Client())).
 				WithWatchPortfoliosRepository(horizonWatchPortfoliosRepo).
 				WithWatchDigestsRepository(horizonWatchDigestsRepo).
 				WithMacroAgentPoliciesRepository(horizonMacroAgentPoliciesRepo).
@@ -2258,6 +2266,29 @@ func main() {
 				logger.Printf("WARNING: propagation profile lookup initialization fallback: %v", err)
 			}
 			propagationEngine.WithProfileLookup(propagationProfileLookup)
+			var analyticalProjectionService *horizonanalytical.ProjectionService
+			if horizonRefScopeProjectionsRepo != nil && horizonAnalyticalAggregatesRepo != nil {
+				analyticalProjectionService = horizonanalytical.NewProjectionService(
+					horizonRefScopeProjectionsRepo,
+					horizonPathFamilyProjectionsRepo,
+					horizonCompiledWatchSubjectsRepo,
+					horizonWatchSubjectsRepo,
+					horizonAnalyticalAggregatesRepo,
+				)
+				if redisClient != nil {
+					analyticalProjectionService.WithRedis(redisClient)
+					horizonanalytical.NewRuntimeWorker(analyticalProjectionService, horizonanalytical.RuntimeRefreshDeps{
+						FragmentsRepo:     horizonFragmentsRepo,
+						LensesRepo:        horizonLensesRepo,
+						MaterializedRepo:  horizonMaterializedArtifactsRepo,
+						WatchSubjectsRepo: horizonWatchSubjectsRepo,
+						PrimitivesRepo:    horizonAnalyticalPrimitivesRepo,
+						AggregatesRepo:    horizonAnalyticalAggregatesRepo,
+						ProjectionService: analyticalProjectionService,
+						RedisClient:       redisClient,
+					}).WithLogger(logger).Start(context.Background())
+				}
+			}
 			horizonService.SetWatchService(watchService)
 			wmVertexSearch := vertexSearchClient
 			if wmVertexSearch != nil {
@@ -2277,6 +2308,44 @@ func main() {
 				).WithTelemetryRepo(horizonTelemetryRepo).
 					WithRealtimePublisher(pub).
 					WithStrategicRecommendations(strategicRecommendationsService).
+					WithSignalLanding(
+						horizonsignallanding.NewService(
+							horizonrepo.NewSignalLandingSessionsRepository(fsClient.Client()),
+							horizonrepo.NewSignalImpactClaimsRepository(fsClient.Client()),
+							horizonrepo.NewSignalLandingHitsRepository(fsClient.Client()),
+							horizonrepo.NewSignalLandingSummariesRepository(fsClient.Client()),
+							horizonrepo.NewSignalMissingAnchorCandidatesRepository(fsClient.Client()),
+							horizonFragmentsRepo,
+						).WithMaterializedRepo(horizonMaterializedArtifactsRepo).
+							WithProductDictionary(productDictionary),
+					).
+					WithImpactWarmupHook(func(ctx context.Context, tenantID string, refs []string, reason string) error {
+						if strings.TrimSpace(tenantID) == "" {
+							tenantID = "global"
+						}
+						if strings.TrimSpace(reason) == "" {
+							reason = "watch_signal_landing_delta"
+						}
+						lensIDs := map[string]struct{}{}
+						for _, ref := range refs {
+							projection, err := horizonRefScopeProjectionsRepo.Get(ctx, strings.TrimSpace(tenantID), strings.TrimSpace(ref))
+							if err != nil || projection == nil {
+								continue
+							}
+							for _, lensID := range projection.LensIDs {
+								lensID = strings.TrimSpace(lensID)
+								if lensID != "" {
+									lensIDs[lensID] = struct{}{}
+								}
+							}
+						}
+						for lensID := range lensIDs {
+							if err := lensService.RequestInternalKnowledgeWarmup(ctx, lensID, strings.TrimSpace(reason)); err != nil {
+								logger.Printf("impact warmup enqueue failed lens=%s reason=%s err=%v", lensID, reason, err)
+							}
+						}
+						return nil
+					}).
 					WithWatchTriggerHook(func(ctx context.Context, tenantID, canonicalPath string, triggerType horizonmodels.WatchTriggerType, reason string, signalStrength, confidence float64, metadata map[string]any) error {
 						_, err := watchRuntimeService.EmitTriggerByAnchor(ctx, tenantID, canonicalPath, triggerType, reason, signalStrength, confidence, metadata)
 						return err
@@ -2458,6 +2527,24 @@ func main() {
 			interpProcessor.Start(context.Background(), 30*time.Second, 20)
 			propagationEngine.WithFragmentChangedHook(func(ctx context.Context, fragmentID string) {
 				_ = interpDispatcher.EvaluateAndEnqueue(ctx, fragmentID)
+				if redisClient == nil || analyticalProjectionService == nil {
+					return
+				}
+				fragmentID = strings.TrimSpace(fragmentID)
+				if fragmentID == "" {
+					return
+				}
+				frag, err := horizonFragmentsRepo.Get(ctx, fragmentID)
+				if err != nil || frag == nil || strings.TrimSpace(frag.CanonicalPath) == "" {
+					return
+				}
+				tenantID := strings.TrimSpace(frag.TenantID)
+				if tenantID == "" {
+					tenantID = "global"
+				}
+				if err := horizonanalytical.EnqueueChangedRefs(ctx, redisClient, tenantID, []string{strings.TrimSpace(frag.CanonicalPath)}, 10*time.Minute); err != nil {
+					logger.Printf("[AnalyticalRuntime] enqueue changed ref failed fragmentId=%s canonicalPath=%s err=%v", fragmentID, strings.TrimSpace(frag.CanonicalPath), err)
+				}
 			})
 
 			// Wire Policy Architecture for semantic propagation
@@ -2500,6 +2587,7 @@ func main() {
 				AgentsRepo:               horizonSimulationAgentsRepo,
 				EventsRepo:               horizonSimulationEventsRepo,
 				ArtifactsRepo:            horizonSimulationArtifactsRepo,
+				AnalyticalAggregatesRepo: horizonAnalyticalAggregatesRepo,
 				FragmentsRepo:            horizonFragmentsRepo,
 				EdgesRepo:                horizonEdgesRepo,
 				LensesRepo:               horizonLensesRepo,
@@ -2624,7 +2712,11 @@ func main() {
 				WithCapabilityObservationsRepository(horizonCapabilityObsRepo).
 				WithSupplyLinkObservationsRepository(horizonSupplyLinkObsRepo).
 				WithRouteObservationsRepository(horizonRouteObsRepo).
-				WithDerivedRiskProfilesRepository(horizonDerivedRiskProfilesRepo)
+				WithDerivedRiskProfilesRepository(horizonDerivedRiskProfilesRepo).
+				WithAnalyticalPrimitivesRepository(horizonAnalyticalPrimitivesRepo).
+				WithRefScopeProjectionsRepository(horizonRefScopeProjectionsRepo).
+				WithPathFamilyProjectionsRepository(horizonPathFamilyProjectionsRepo).
+				WithCompiledWatchSubjectsRepository(horizonCompiledWatchSubjectsRepo)
 			// Build GeoNames client with telemetry (adapter -> telemetry -> cache). Only when horizon block runs.
 			if geonamesClient != nil && horizonTelemetryRepo != nil {
 				gnBase := geonames.NewAdapter(geonamesClient)
@@ -2734,14 +2826,26 @@ func main() {
 					horizonFragmentsRepo,
 					horizonEdgesRepo,
 					horizonMaterializedArtifactsRepo,
-				)
+				).
+					WithAnalyticalPrimitivesRepository(horizonAnalyticalPrimitivesRepo).
+					WithAnalyticalAggregatesRepository(horizonAnalyticalAggregatesRepo).
+					WithRefScopeProjectionsRepository(horizonRefScopeProjectionsRepo).
+					WithPathFamilyProjectionsRepository(horizonPathFamilyProjectionsRepo).
+					WithCompiledWatchSubjectsRepository(horizonCompiledWatchSubjectsRepo).
+					WithWatchSubjectsRepository(horizonWatchSubjectsRepo)
 				scoutEngine.WithSupplyChainPathBuilder(supplyChainPathBuilder)
 				scoutEngine.WithServiceChainPathBuilder(
 					horizonpathbuilder.NewSupplyChainPathBuilder(
 						horizonFragmentsRepo,
 						horizonEdgesRepo,
 						horizonMaterializedArtifactsRepo,
-					).WithArtifactKind(horizonmodels.MaterializedKindServiceChainPath),
+					).WithArtifactKind(horizonmodels.MaterializedKindServiceChainPath).
+						WithAnalyticalPrimitivesRepository(horizonAnalyticalPrimitivesRepo).
+						WithAnalyticalAggregatesRepository(horizonAnalyticalAggregatesRepo).
+						WithRefScopeProjectionsRepository(horizonRefScopeProjectionsRepo).
+						WithPathFamilyProjectionsRepository(horizonPathFamilyProjectionsRepo).
+						WithCompiledWatchSubjectsRepository(horizonCompiledWatchSubjectsRepo).
+						WithWatchSubjectsRepository(horizonWatchSubjectsRepo),
 				)
 				domainArtifactBuilder := horizonpathbuilder.NewDomainArtifactBuilder(
 					horizonFragmentsRepo,
@@ -2754,6 +2858,8 @@ func main() {
 				canonicalPathResolver.WithGeoNamesClient(geonamesClientForHorizon)
 			}
 			scoutEngine.WithCanonicalPathResolver(canonicalPathResolver)
+			scoutEngine.WithAnalyticalAggregatesRepository(horizonAnalyticalAggregatesRepo)
+			scoutEngine.WithWatchSubjectsRepo(horizonWatchSubjectsRepo)
 			// Wire LensesRepository for updating lens ViewConfig on assembly completion
 			scoutEngine.WithLensesRepository(horizonLensesRepo)
 			// Wire ExposurePathsRepository for strict external applicability gating.
@@ -2769,6 +2875,9 @@ func main() {
 					horizonFragmentsRepo,
 					horizonMaterializedArtifactsRepo,
 					horizonLensArtifactsRepo,
+					horizonAnalyticalPrimitivesRepo,
+					horizonAnalyticalAggregatesRepo,
+					horizonrepo.NewSignalLandingSummariesRepository(fsClient.Client()),
 				)
 				internalKnowledgeWarmup := horizoninternalknowledge.NewWarmupService(
 					horizoninternalknowledge.WarmupConfig{
@@ -3027,6 +3136,8 @@ func main() {
 				WithLensItemsHandler(horizonLensItemsHandler).
 				WithMergeFragmentsRepo(horizonFragmentsMergeRepo).
 				WithMaterializedArtifactsRepo(horizonMaterializedArtifactsRepo).
+				WithAnalyticalPrimitivesRepo(horizonAnalyticalPrimitivesRepo).
+				WithAnalyticalAggregatesRepo(horizonAnalyticalAggregatesRepo).
 				WithCoreDocsRepo(coreDocsRepo).
 				WithGCSClient(gcsClient).
 				WithOneHopDownstreamService(oneHopDownstreamService).
@@ -3071,6 +3182,21 @@ func main() {
 					propagationProfileLookup,
 					ontologyFactsRepo,
 				).WithEscalationLLM(aiExec)
+				signalLandingService := horizonsignallanding.NewService(
+					horizonrepo.NewSignalLandingSessionsRepository(fsClient.Client()),
+					horizonrepo.NewSignalImpactClaimsRepository(fsClient.Client()),
+					horizonrepo.NewSignalLandingHitsRepository(fsClient.Client()),
+					horizonrepo.NewSignalLandingSummariesRepository(fsClient.Client()),
+					horizonrepo.NewSignalMissingAnchorCandidatesRepository(fsClient.Client()),
+					horizonFragmentsRepo,
+				).WithMaterializedRepo(horizonMaterializedArtifactsRepo).
+					WithProductDictionary(productDictionary)
+				if vertexSearchClient != nil && vertexSearchClient.IsConfigured() {
+					if horizonDS := getEnvWithAlt("VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID", "VERTEX_SEARCH_HORIZON_DATA_STORE_ID", ""); horizonDS != "" {
+						signalLandingService = signalLandingService.WithVertexSearch(vertexSearchClient.WithDataStore(horizonDS))
+					}
+				}
+				signalPipeline = signalPipeline.WithSignalLanding(signalLandingService)
 				signalPipelineForQA = signalPipeline
 				horizonHandlers = horizonHandlers.WithSignalPipeline(signalPipeline)
 
@@ -3109,19 +3235,20 @@ func main() {
 					logger.Printf("News-by-fragments canvas initialized (Gemini search grounding)")
 
 					identifyStressesCanvas := horizonhttp.NewIdentifyStressesCanvas(horizonhttp.IdentifyStressesCanvasConfig{
-						Exec:                   exec,
-						FactsRepo:              ontologyFactsRepo,
-						DataSourcesRepo:        s.dsrcs,
-						FragmentsRepo:          horizonFragmentsRepo,
-						EdgesRepo:              horizonEdgesRepo,
-						MaterializedRepo:       horizonMaterializedArtifactsRepo,
-						LensesRepo:             horizonLensesRepo,
-						SignalPipeline:         signalPipeline,
-						CapabilityProfilesRepo: horizonCapabilityProfilesRepo,
-						CapabilityObsRepo:      horizonCapabilityObsRepo,
-						SupplyLinkObsRepo:      horizonSupplyLinkObsRepo,
-						RouteObsRepo:           horizonRouteObsRepo,
-						DerivedRiskRepo:        horizonDerivedRiskProfilesRepo,
+						Exec:                     exec,
+						FactsRepo:                ontologyFactsRepo,
+						DataSourcesRepo:          s.dsrcs,
+						FragmentsRepo:            horizonFragmentsRepo,
+						EdgesRepo:                horizonEdgesRepo,
+						MaterializedRepo:         horizonMaterializedArtifactsRepo,
+						LensesRepo:               horizonLensesRepo,
+						SignalPipeline:           signalPipeline,
+						CapabilityProfilesRepo:   horizonCapabilityProfilesRepo,
+						CapabilityObsRepo:        horizonCapabilityObsRepo,
+						SupplyLinkObsRepo:        horizonSupplyLinkObsRepo,
+						RouteObsRepo:             horizonRouteObsRepo,
+						DerivedRiskRepo:          horizonDerivedRiskProfilesRepo,
+						AnalyticalPrimitivesRepo: horizonAnalyticalPrimitivesRepo,
 						Publisher: func(ctx context.Context, eventType string, tenantID string, payload interface{}) error {
 							return pub.PublishJSON(ctx, realtime.EventType(eventType), tenantID, payload)
 						},
@@ -3145,16 +3272,17 @@ func main() {
 					logger.Printf("Complete-substrate backend initialized")
 
 					recoverMetricsCanvas := horizonhttp.NewRecoverMetricsCanvas(horizonhttp.RecoverMetricsCanvasConfig{
-						Exec:                   exec,
-						FragmentsRepo:          horizonFragmentsRepo,
-						EdgesRepo:              horizonEdgesRepo,
-						MaterializedRepo:       horizonMaterializedArtifactsRepo,
-						LensesRepo:             horizonLensesRepo,
-						CapabilityProfilesRepo: horizonCapabilityProfilesRepo,
-						CapabilityObsRepo:      horizonCapabilityObsRepo,
-						SupplyLinkObsRepo:      horizonSupplyLinkObsRepo,
-						RouteObsRepo:           horizonRouteObsRepo,
-						DerivedRiskRepo:        horizonDerivedRiskProfilesRepo,
+						Exec:                     exec,
+						FragmentsRepo:            horizonFragmentsRepo,
+						EdgesRepo:                horizonEdgesRepo,
+						MaterializedRepo:         horizonMaterializedArtifactsRepo,
+						LensesRepo:               horizonLensesRepo,
+						CapabilityProfilesRepo:   horizonCapabilityProfilesRepo,
+						CapabilityObsRepo:        horizonCapabilityObsRepo,
+						SupplyLinkObsRepo:        horizonSupplyLinkObsRepo,
+						RouteObsRepo:             horizonRouteObsRepo,
+						DerivedRiskRepo:          horizonDerivedRiskProfilesRepo,
+						AnalyticalPrimitivesRepo: horizonAnalyticalPrimitivesRepo,
 						Publisher: func(ctx context.Context, eventType string, tenantID string, payload interface{}) error {
 							return pub.PublishJSON(ctx, realtime.EventType(eventType), tenantID, payload)
 						},

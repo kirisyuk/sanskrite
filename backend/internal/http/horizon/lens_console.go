@@ -387,8 +387,7 @@ func (h *HorizonHandlers) lensConsoleResearch(ctx context.Context, lens *horizon
 		history, _ = h.loadLensChatHistory(ctx, strings.TrimSpace(lens.ProjectID), lensChatThreadID(lens.ID), "", defaultLensChatHistoryTurns)
 	}
 	warmState := lensChatWarmState(lens)
-	status := strings.ToLower(strings.TrimSpace(asStringAny(warmState["status"])))
-	warmedReady := status == "ready"
+	warmedReady := lensChatTemperatureReady(warmState, lensChatRequiredTemperature(query, classifyLensChatAnalyticalIntent(query)))
 	corpusID := strings.TrimSpace(asStringAny(warmState["corpusId"]))
 	storeID := strings.TrimSpace(asStringAny(warmState["answerStore"]))
 	scopePaths := lensChatScopePaths(lens)

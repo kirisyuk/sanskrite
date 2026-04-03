@@ -922,6 +922,22 @@ func (s *LensService) WithInternalKnowledgeWarmup(warmer internalKnowledgeWarmup
 	return s
 }
 
+func (s *LensService) RequestInternalKnowledgeWarmup(ctx context.Context, lensID, reason string) error {
+	if s == nil || s.lensesRepo == nil || s.internalKnowledgeWarmup == nil {
+		return nil
+	}
+	lensID = strings.TrimSpace(lensID)
+	if lensID == "" {
+		return fmt.Errorf("lensID is required")
+	}
+	lens, err := s.lensesRepo.Get(ctx, lensID)
+	if err != nil || lens == nil {
+		return err
+	}
+	s.internalKnowledgeWarmup.EnqueueLensWarmup(ctx, strings.TrimSpace(lens.TenantID), strings.TrimSpace(lens.ProjectID), lensID, strings.TrimSpace(reason))
+	return nil
+}
+
 // AgentJobsDeleter abstracts agent_jobs deletion for cascade cleanup.
 // This avoids importing the full AgentJobsRepository into the horizon/lens package.
 type AgentJobsDeleter interface {

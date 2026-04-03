@@ -15,10 +15,13 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 	prov "github.com/igorkirisyuk/sanskrite/internal/discovery/providers"
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
+	horizonanalytical "github.com/igorkirisyuk/sanskrite/internal/horizon/analytical"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonpropagation "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonrecommendations "github.com/igorkirisyuk/sanskrite/internal/horizon/recommendations"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	horizonsignallanding "github.com/igorkirisyuk/sanskrite/internal/horizon/signallanding"
+	horizonwatchruntime "github.com/igorkirisyuk/sanskrite/internal/horizon/watchruntime"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
@@ -26,17 +29,18 @@ import (
 
 func main() {
 	var (
-		projectID       = flag.String("project", "nv-horizon", "GCP project id")
-		tenantID        = flag.String("tenant", "global", "tenant id")
-		sourceID        = flag.String("source", "manual-worldmonitor-replay", "logical source id")
-		title           = flag.String("title", "", "document title")
-		summary         = flag.String("summary", "", "document summary/body")
-		url             = flag.String("url", "", "source url")
-		published       = flag.String("published", "", "RFC3339 or 2006-01-02 publication time")
-		country         = flag.String("country", "", "ISO2 country code")
-		lat             = flag.Float64("lat", 0, "latitude")
-		lon             = flag.Float64("lon", 0, "longitude")
-		skipPropagation = flag.Bool("skip-propagation", true, "skip signal propagation to focus on event/zone creation")
+		projectID         = flag.String("project", "nv-horizon", "GCP project id")
+		tenantID          = flag.String("tenant", "global", "tenant id")
+		sourceID          = flag.String("source", "manual-worldmonitor-replay", "logical source id")
+		title             = flag.String("title", "", "document title")
+		summary           = flag.String("summary", "", "document summary/body")
+		url               = flag.String("url", "", "source url")
+		published         = flag.String("published", "", "RFC3339 or 2006-01-02 publication time")
+		country           = flag.String("country", "", "ISO2 country code")
+		lat               = flag.Float64("lat", 0, "latitude")
+		lon               = flag.Float64("lon", 0, "longitude")
+		skipPropagation   = flag.Bool("skip-propagation", true, "skip signal propagation to focus on event/zone creation")
+		refreshAnalytical = flag.Bool("refresh-analytical", true, "refresh bounded analytical substrate for changed refs after replay")
 	)
 	flag.Parse()
 
@@ -64,10 +68,36 @@ func main() {
 	versionsRepo := horizonrepo.NewHorizonFragmentVersionsRepository(fsClient.Client())
 	lensesRepo := horizonrepo.NewLensesRepository(fsClient.Client())
 	profilesRepo := horizonrepo.NewPropagationProfilesRepository(fsClient.Client())
+	watchSubjectsRepo := horizonrepo.NewWatchSubjectsRepository(fsClient.Client())
+	watchTriggersRepo := horizonrepo.NewWatchTriggersRepository(fsClient.Client())
+	watchTargetsRepo := horizonrepo.NewWatchTargetsRepository(fsClient.Client())
+	watchdogRepo := horizonrepo.NewWatchdogConfigsRepository(fsClient.Client())
+	scopeAgentConfigsRepo := horizonrepo.NewScopeAgentConfigsRepository(fsClient.Client())
+	lensArtifactsRepo := horizonrepo.NewLensArtifactsRepository(fsClient.Client())
+	macroPoliciesRepo := horizonrepo.NewMacroAgentPoliciesRepository(fsClient.Client())
+	materializedArtifactsRepo := horizonrepo.NewMaterializedArtifactsRepository(fsClient.Client())
+	refScopeRepo := horizonrepo.NewRefScopeProjectionsRepository(fsClient.Client())
+	pathFamilyRepo := horizonrepo.NewPathFamilyProjectionsRepository(fsClient.Client())
+	compiledWatchRepo := horizonrepo.NewCompiledWatchSubjectsRepository(fsClient.Client())
+	analyticalPrimitivesRepo := horizonrepo.NewAnalyticalPrimitivesRepository(fsClient.Client())
+	analyticalAggregatesRepo := horizonrepo.NewAnalyticalAggregatesRepository(fsClient.Client())
 	strategicRecommendationsRepo := horizonrepo.NewStrategicRecommendationsRepository(fsClient.Client())
 	scoutingJobsRepo := horizonrepo.NewScoutingJobsRepository(agentJobsRepo)
 	modelManager := ai.NewAIModelManager()
 	exec := newTaskExecutor(ctx, strings.TrimSpace(*projectID), modelManager)
+	watchRuntimeService := horizonwatchruntime.NewService(
+		watchSubjectsRepo,
+		watchTriggersRepo,
+		watchTargetsRepo,
+		watchdogRepo,
+		scopeAgentConfigsRepo,
+		lensesRepo,
+		lensArtifactsRepo,
+		fragmentsRepo,
+		edgesRepo,
+	).WithMaterializedArtifactsRepository(materializedArtifactsRepo).
+		WithSignalLandingSummariesRepository(horizonrepo.NewSignalLandingSummariesRepository(fsClient.Client())).
+		WithMacroAgentPoliciesRepository(macroPoliciesRepo)
 	strategicRecommendationsService := horizonrecommendations.NewService(
 		strategicRecommendationsRepo,
 		fragmentsRepo,
@@ -101,7 +131,21 @@ func main() {
 		propagationEngine,
 		profileLookup,
 		logger,
-	).WithStrategicRecommendations(strategicRecommendationsService)
+	).WithStrategicRecommendations(strategicRecommendationsService).
+		WithSignalLanding(
+			horizonsignallanding.NewService(
+				horizonrepo.NewSignalLandingSessionsRepository(fsClient.Client()),
+				horizonrepo.NewSignalImpactClaimsRepository(fsClient.Client()),
+				horizonrepo.NewSignalLandingHitsRepository(fsClient.Client()),
+				horizonrepo.NewSignalLandingSummariesRepository(fsClient.Client()),
+				horizonrepo.NewSignalMissingAnchorCandidatesRepository(fsClient.Client()),
+				fragmentsRepo,
+			).WithMaterializedRepo(materializedArtifactsRepo),
+		).
+		WithWatchTriggerHook(func(ctx context.Context, tenantID, canonicalPath string, triggerType horizonmodels.WatchTriggerType, reason string, signalStrength, confidence float64, metadata map[string]any) error {
+			_, err := watchRuntimeService.EmitTriggerByAnchor(ctx, tenantID, canonicalPath, triggerType, reason, signalStrength, confidence, metadata)
+			return err
+		})
 
 	now := time.Now().UTC()
 	publishedAt := now
@@ -169,6 +213,7 @@ func main() {
 	cutoff := now.Add(-15 * time.Minute)
 	found := 0
 	recent := make([]*horizonmodels.HorizonFragment, 0, 12)
+	changedRefs := make([]string, 0, 24)
 	for _, frag := range items {
 		if frag == nil || frag.Type != horizonmodels.FragmentTypeAffectedZone || frag.UpdatedAt.Before(cutoff) {
 			continue
@@ -180,6 +225,7 @@ func main() {
 			continue
 		}
 		found++
+		changedRefs = append(changedRefs, strings.TrimSpace(frag.CanonicalPath))
 		fmt.Printf("zone=%s updated=%s geo=%s cond=%s hype=%0.2f coords=%s\n",
 			strings.TrimSpace(frag.CanonicalPath),
 			frag.UpdatedAt.UTC().Format(time.RFC3339),
@@ -201,10 +247,54 @@ func main() {
 			if err != nil || target == nil {
 				continue
 			}
+			changedRefs = append(changedRefs, strings.TrimSpace(target.CanonicalPath))
 			fmt.Printf("  affects=%s (%s)\n", strings.TrimSpace(target.CanonicalPath), target.Type)
 		}
 	}
+	changedRefs = compactStrings(changedRefs)
 	fmt.Printf("matched_zones=%d\n", found)
+	if len(changedRefs) > 0 {
+		fmt.Printf("changed_refs=%s\n", strings.Join(changedRefs, ","))
+	}
+	if *refreshAnalytical && len(changedRefs) > 0 {
+		projectionService := horizonanalytical.NewProjectionService(
+			refScopeRepo,
+			pathFamilyRepo,
+			compiledWatchRepo,
+			watchSubjectsRepo,
+			analyticalAggregatesRepo,
+		)
+		delta, err := projectionService.ResolveAffectedScopes(ctx, strings.TrimSpace(firstNonEmpty(*tenantID, "global")), changedRefs)
+		if err != nil {
+			log.Fatalf("resolve affected scopes failed: %v", err)
+		}
+		refreshResult, err := horizonanalytical.RefreshForDelta(ctx, horizonanalytical.RuntimeRefreshDeps{
+			FragmentsRepo:     fragmentsRepo,
+			LensesRepo:        lensesRepo,
+			MaterializedRepo:  materializedArtifactsRepo,
+			WatchSubjectsRepo: watchSubjectsRepo,
+			PrimitivesRepo:    analyticalPrimitivesRepo,
+			AggregatesRepo:    analyticalAggregatesRepo,
+			ProjectionService: projectionService,
+		}, delta, time.Now().UTC())
+		if err != nil {
+			log.Fatalf("refresh analytical delta failed: %v", err)
+		}
+		fmt.Printf("affected_lenses=%d\n", len(delta.LensIDs))
+		fmt.Printf("affected_watch_subjects=%d\n", len(delta.WatchSubjectIDs))
+		fmt.Printf("affected_path_families=%d\n", len(delta.PathFamilyIDs))
+		fmt.Printf("updated_primitives=%d\n", refreshResult.UpdatedPrimitiveCount)
+		fmt.Printf("updated_fragment_scopes=%d\n", len(refreshResult.UpdatedFragmentScopes))
+		fmt.Printf("updated_lenses=%d\n", len(refreshResult.UpdatedLensIDs))
+		fmt.Printf("updated_watch_subjects=%d\n", len(refreshResult.UpdatedWatchSubjectIDs))
+		for _, subjectID := range refreshResult.UpdatedWatchSubjectIDs {
+			triggers, err := watchTriggersRepo.ListBySubject(ctx, strings.TrimSpace(subjectID), 5)
+			if err != nil {
+				continue
+			}
+			fmt.Printf("watch_subject=%s recent_triggers=%d\n", strings.TrimSpace(subjectID), len(triggers))
+		}
+	}
 	pendingCount, err := strategicRecommendationsRepo.CountPendingByTenant(ctx, strings.TrimSpace(firstNonEmpty(*tenantID, "global")))
 	if err != nil {
 		logger.Printf("pending recommendations count failed: %v", err)
@@ -270,6 +360,27 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func compactStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func shortHash(s string) string {

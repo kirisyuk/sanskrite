@@ -26,12 +26,14 @@ import (
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	gen_gemini "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon"
+	horizonanalytical "github.com/igorkirisyuk/sanskrite/internal/horizon/analytical"
 	horizoninternalknowledge "github.com/igorkirisyuk/sanskrite/internal/horizon/internalknowledge"
 	horizonlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonpathbuilder "github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonagents "github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	horizonworkscope "github.com/igorkirisyuk/sanskrite/internal/horizon/workscope"
 	corehttp "github.com/igorkirisyuk/sanskrite/internal/http"
 	horizonhttp "github.com/igorkirisyuk/sanskrite/internal/http/horizon"
 	realtime "github.com/igorkirisyuk/sanskrite/internal/realtime"
@@ -138,6 +140,8 @@ type smokeRuntime struct {
 	scoutingJobsRepo          *horizonrepo.ScoutingJobsRepository
 	materializedArtifactsRepo *horizonrepo.MaterializedArtifactsRepository
 	domainAnswersRepo         *horizonrepo.DomainAnswerSnapshotsRepository
+	analyticalPrimitivesRepo  *horizonrepo.AnalyticalPrimitivesRepository
+	analyticalAggregatesRepo  *horizonrepo.AnalyticalAggregatesRepository
 
 	horizonService *horizon.HorizonService
 	lensService    *horizonlens.LensService
@@ -145,12 +149,12 @@ type smokeRuntime struct {
 }
 
 type lensChatOrchestrationPlan struct {
-	Intent          string                           `json:"intent"`
-	ObjectQueries   []string                         `json:"objectQueries"`
-	InspectPaths    []string                         `json:"inspectPaths"`
-	ArtifactSearches []lensChatArtifactSearchPlan    `json:"artifactSearches"`
-	ShouldUseTrace  bool                             `json:"shouldUseTrace"`
-	ResponseFocus   []string                         `json:"responseFocus"`
+	Intent           string                       `json:"intent"`
+	ObjectQueries    []string                     `json:"objectQueries"`
+	InspectPaths     []string                     `json:"inspectPaths"`
+	ArtifactSearches []lensChatArtifactSearchPlan `json:"artifactSearches"`
+	ShouldUseTrace   bool                         `json:"shouldUseTrace"`
+	ResponseFocus    []string                     `json:"responseFocus"`
 }
 
 type lensChatArtifactSearchPlan struct {
@@ -159,11 +163,11 @@ type lensChatArtifactSearchPlan struct {
 }
 
 type artifactPolicyCandidate struct {
-	Path       string
-	Kind       string
-	Source     string
-	IsFocal    bool
-	BaseScore  int
+	Path      string
+	Kind      string
+	Source    string
+	IsFocal   bool
+	BaseScore int
 }
 
 type internalKnowledgeQueryOptions struct {
@@ -385,6 +389,8 @@ func newSmokeRuntime(ctx context.Context, projectID string) (*smokeRuntime, erro
 	scoutingJobsRepo := horizonrepo.NewScoutingJobsRepository(agentJobsRepo)
 	materializedArtifactsRepo := horizonrepo.NewMaterializedArtifactsRepository(db)
 	domainAnswersRepo := horizonrepo.NewDomainAnswerSnapshotsRepository(db)
+	analyticalPrimitivesRepo := horizonrepo.NewAnalyticalPrimitivesRepository(db)
+	analyticalAggregatesRepo := horizonrepo.NewAnalyticalAggregatesRepository(db)
 	framesRepo := horizonrepo.NewFramesRepository(db)
 	edgesRepo := horizonrepo.NewDependencyEdgesRepository(db)
 	fragmentVersionsRepo := horizonrepo.NewHorizonFragmentVersionsRepository(db)
@@ -438,6 +444,9 @@ func newSmokeRuntime(ctx context.Context, projectID string) (*smokeRuntime, erro
 		fragmentsRepo,
 		materializedArtifactsRepo,
 		lensArtifactsRepo,
+		analyticalPrimitivesRepo,
+		analyticalAggregatesRepo,
+		horizonrepo.NewSignalLandingSummariesRepository(fsClient.Client()),
 	)
 	supplyChainQueryEngine := horizonpathbuilder.NewSupplyChainQueryEngine(
 		fragmentsRepo,
@@ -470,6 +479,8 @@ func newSmokeRuntime(ctx context.Context, projectID string) (*smokeRuntime, erro
 		scoutingJobsRepo:          scoutingJobsRepo,
 		materializedArtifactsRepo: materializedArtifactsRepo,
 		domainAnswersRepo:         domainAnswersRepo,
+		analyticalPrimitivesRepo:  analyticalPrimitivesRepo,
+		analyticalAggregatesRepo:  analyticalAggregatesRepo,
 		horizonService:            horizonService,
 		lensService:               lensService,
 		handlers:                  handlers,
@@ -679,14 +690,14 @@ func runLensChatSmoke(ctx context.Context, rt *smokeRuntime, lens *horizonmodels
 	defer cancel()
 
 	report := smokeReport{
-		ProjectID:      rt.projectID,
-		TenantID:       strings.TrimSpace(lens.TenantID),
-		LensID:         strings.TrimSpace(lens.ID),
-		LensName:       strings.TrimSpace(lens.Name),
-		Model:          strings.TrimSpace(cfg.model),
-		Prompt:         prompt,
-		AllowWrite:     cfg.allowWrite,
-		StartedAt:      startedAt.Format(time.RFC3339Nano),
+		ProjectID:  rt.projectID,
+		TenantID:   strings.TrimSpace(lens.TenantID),
+		LensID:     strings.TrimSpace(lens.ID),
+		LensName:   strings.TrimSpace(lens.Name),
+		Model:      strings.TrimSpace(cfg.model),
+		Prompt:     prompt,
+		AllowWrite: cfg.allowWrite,
+		StartedAt:  startedAt.Format(time.RFC3339Nano),
 	}
 
 	finalAnswer, err := runLensChatOrchestrated(reqCtx, rt, exec, prompt, strings.TrimSpace(cfg.model))
@@ -707,6 +718,9 @@ func runLensChatOrchestrated(ctx context.Context, rt *smokeRuntime, exec *lensCh
 	})
 	if err != nil {
 		return "", err
+	}
+	if analyticalShortcutReady(internalReport) {
+		return strings.TrimSpace(asString(internalReport["answer"])), nil
 	}
 
 	plan, planRecord, err := planLensChatOrchestration(ctx, rt, exec.lens, prompt, internalReport, model)
@@ -998,8 +1012,8 @@ func synthesizeLensChatAnswer(ctx context.Context, rt *smokeRuntime, lens *horiz
 	started := time.Now()
 	prompt := buildLensChatSynthesisPrompt(lens, question, internalReport, plan, searchReports, inspectReport, artifactReports, preflightReport)
 	resp, err := rt.combinedClient.Generate(ctx, prompt, nil, gen_combined.Options{
-		ModelOverride: firstNonEmpty(strings.TrimSpace(model), defaultModel),
-		Temperature:   0.1,
+		ModelOverride:   firstNonEmpty(strings.TrimSpace(model), defaultModel),
+		Temperature:     0.1,
 		MaxOutputTokens: 2400,
 		SystemInstruction: strings.TrimSpace(`
 You are the response synthesizer for Horizon lens chat.
@@ -1153,6 +1167,23 @@ func buildToolDeclarations() []gen_gemini.Tool {
 					"message": map[string]interface{}{"type": "string"},
 				},
 				"required": []string{"message"},
+			},
+		},
+		{
+			Name:        "call_lens_console_handler",
+			Description: "Invoke the live Horizon lens-console broker in-process with tenant auth, using the same request/response path as the product console functional-call surface.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"tool": map[string]interface{}{"type": "string"},
+					"input": map[string]interface{}{
+						"type":                 "object",
+						"additionalProperties": true,
+					},
+					"confirm":       map[string]interface{}{"type": "boolean"},
+					"publishEvents": map[string]interface{}{"type": "boolean"},
+				},
+				"required": []string{"tool"},
 			},
 		},
 		{
@@ -1311,6 +1342,7 @@ func (e *lensChatToolExecutor) IsAllowed(name string) bool {
 		"search_internal_knowledge",
 		"answer_internal_knowledge",
 		"call_lens_chat_handler",
+		"call_lens_console_handler",
 		"search_objects",
 		"get_objects_by_paths",
 		"fast_trace_supply_chain",
@@ -1360,6 +1392,8 @@ func (e *lensChatToolExecutor) execute(ctx context.Context, name string, args js
 		return e.answerInternalKnowledge(ctx, args)
 	case "call_lens_chat_handler":
 		return e.callLensChatHandler(ctx, args)
+	case "call_lens_console_handler":
+		return e.callLensConsoleHandler(ctx, args)
 	case "search_objects":
 		return e.searchObjects(ctx, args)
 	case "get_objects_by_paths":
@@ -1490,6 +1524,40 @@ func (e *lensChatToolExecutor) callLensChatHandler(ctx context.Context, args jso
 	return marshalToolResult(out)
 }
 
+func (e *lensChatToolExecutor) callLensConsoleHandler(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+	var req struct {
+		Tool          string                 `json:"tool"`
+		Input         map[string]interface{} `json:"input,omitempty"`
+		Confirm       bool                   `json:"confirm,omitempty"`
+		PublishEvents *bool                  `json:"publishEvents,omitempty"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return nil, fmt.Errorf("decode args: %w", err)
+	}
+	req.Tool = strings.TrimSpace(req.Tool)
+	if req.Tool == "" {
+		return nil, fmt.Errorf("tool is required")
+	}
+	if req.Input == nil {
+		req.Input = map[string]interface{}{}
+	}
+	if e.rt == nil || e.rt.handlers == nil {
+		return nil, fmt.Errorf("horizon handlers are unavailable")
+	}
+	path := fmt.Sprintf("/api/horizon/lenses/%s/console/run", strings.TrimSpace(e.lens.ID))
+	httpReq := e.rt.newAuthedJSONRequest(ctx, e.auth, http.MethodPost, path, map[string]interface{}{
+		"tool":          req.Tool,
+		"input":         req.Input,
+		"confirm":       req.Confirm,
+		"publishEvents": req.PublishEvents,
+	})
+	var out map[string]interface{}
+	if err := e.rt.invokeJSON(ctx, e.rt.handlers.LensConsoleRun, httpReq, &out); err != nil {
+		return nil, err
+	}
+	return marshalToolResult(out)
+}
+
 func (e *lensChatToolExecutor) prepareInternalKnowledgeAnswer(ctx context.Context, question string, limit int, opts internalKnowledgeQueryOptions) (map[string]interface{}, error) {
 	question = strings.TrimSpace(question)
 	if question == "" {
@@ -1516,12 +1584,16 @@ func (e *lensChatToolExecutor) prepareInternalKnowledgeAnswer(ctx context.Contex
 	}
 	searchClient := e.rt.vertexSearch.WithDataStore(storeID)
 	hits, warnings := searchPreparedInternalKnowledge(ctx, searchClient, question, corpusID, limit)
+	analyticalHits, analyticalDocs, analyticalPaths, analyticalWarnings := e.loadAnalyticalEvidence(ctx, question)
+	warnings = append(warnings, analyticalWarnings...)
 	var evidenceDocs []preparedEvidenceDoc
 	if opts.HydrateEvidence || opts.Synthesize {
 		var evidenceWarnings []string
 		evidenceDocs, evidenceWarnings = loadPreparedEvidenceDocs(ctx, e.rt.gcs, hits, defaultMaxEvidenceDocs)
 		warnings = append(warnings, evidenceWarnings...)
 	}
+	hits = mergeInternalKnowledgeHits(analyticalHits, hits, maxInt(limit, defaultMaxPreparedHits))
+	evidenceDocs = mergePreparedEvidenceDocs(analyticalDocs, evidenceDocs, defaultMaxEvidenceDocs)
 
 	response := map[string]interface{}{
 		"available":                true,
@@ -1531,25 +1603,31 @@ func (e *lensChatToolExecutor) prepareInternalKnowledgeAnswer(ctx context.Contex
 		"hitCount":                 len(hits),
 		"preparedCorpus":           preparedCorpus,
 		"hits":                     summarizeInternalKnowledgeHits(hits, limit),
-		"highlightedPaths":         collectEvidenceCanonicalPaths(hits, evidenceDocs, 32),
+		"highlightedPaths":         limitStrings(uniqueStrings(append(collectEvidenceCanonicalPaths(hits, evidenceDocs, 32), analyticalPaths...)), 32),
 		"warnings":                 uniqueStrings(warnings),
 		"warmState":                compactJSONValueFromAny(warmState),
 	}
 	if len(evidenceDocs) > 0 {
 		response["evidenceDocs"] = summarizeEvidenceDocs(evidenceDocs, defaultMaxEvidenceDocs)
 	}
+	if shortcutAnswer, ok := buildAnalyticalShortcutAnswer(question, hits, evidenceDocs); ok {
+		response["answer"] = shortcutAnswer
+		response["analyticalShortcut"] = true
+	}
 	if opts.Synthesize {
 		vertexModel := e.rt.vertexModel
 		if vertexModel != nil {
 			vertexModel = vertexModel.WithDataStore(storeID)
 		}
-		text, grounding, err := synthesizePreparedInternalKnowledgeAnswer(ctx, vertexModel, e.lens, question, hits, evidenceDocs)
-		if err != nil {
-			response["answerError"] = err.Error()
-		} else {
-			response["answer"] = strings.TrimSpace(text)
-			if grounding != nil {
-				response["grounding"] = compactJSONValueFromAny(grounding)
+		if !asBool(response["analyticalShortcut"]) {
+			text, grounding, err := synthesizePreparedInternalKnowledgeAnswer(ctx, vertexModel, e.lens, question, hits, evidenceDocs)
+			if err != nil {
+				response["answerError"] = err.Error()
+			} else {
+				response["answer"] = strings.TrimSpace(text)
+				if grounding != nil {
+					response["grounding"] = compactJSONValueFromAny(grounding)
+				}
 			}
 		}
 	}
@@ -1571,6 +1649,45 @@ func (e *lensChatToolExecutor) internalKnowledgeWarmState() map[string]interface
 		return map[string]interface{}{}
 	}
 	return viewConfigMapValue(e.lens.ViewConfig, "internalKnowledge")
+}
+
+func (e *lensChatToolExecutor) loadAnalyticalEvidence(ctx context.Context, question string) ([]internalKnowledgeHit, []preparedEvidenceDoc, []string, []string) {
+	intent := classifyInternalKnowledgeIntent(question)
+	if e == nil || e.rt == nil || intent == "" || e.rt.analyticalPrimitivesRepo == nil || e.rt.analyticalAggregatesRepo == nil {
+		return nil, nil, nil, nil
+	}
+	scopePaths := limitStrings(horizonworkscope.LensWorkbenchScopePaths(e.lens), 48)
+	aggregate, err := horizonanalytical.EnsureLensAggregate(ctx, e.rt.analyticalPrimitivesRepo, e.rt.analyticalAggregatesRepo, e.rt.materializedArtifactsRepo, e.lens, scopePaths, time.Now().UTC())
+	if err != nil {
+		return nil, nil, nil, []string{fmt.Sprintf("analytical aggregate refresh failed: %v", err)}
+	}
+	if aggregate == nil {
+		return nil, nil, nil, nil
+	}
+	hits := []internalKnowledgeHit{internalHitFromAggregate(aggregate, 1.25)}
+	docs := []preparedEvidenceDoc{preparedDocFromAggregate(aggregate)}
+	paths := append([]string{}, aggregate.BasisRefs...)
+	paths = append(paths, aggregate.ProductRefs...)
+	paths = append(paths, aggregate.NodeRefs...)
+	paths = append(paths, aggregate.RouteRefs...)
+	paths = append(paths, aggregate.AffectedRefs...)
+	primitives, err := e.rt.analyticalPrimitivesRepo.ListByIDs(ctx, limitStrings(aggregate.DerivedPrimitiveIDs, 8))
+	if err != nil {
+		return hits, docs, limitStrings(uniqueStrings(paths), 32), []string{fmt.Sprintf("analytical primitive load failed: %v", err)}
+	}
+	for _, primitive := range primitives {
+		if primitive == nil {
+			continue
+		}
+		hits = append(hits, internalHitFromPrimitive(primitive, 0.95))
+		docs = append(docs, preparedDocFromPrimitive(primitive))
+		paths = append(paths, primitive.BasisRefs...)
+		paths = append(paths, primitive.ProductRefs...)
+		paths = append(paths, primitive.NodeRefs...)
+		paths = append(paths, primitive.RouteRefs...)
+		paths = append(paths, primitive.AffectedRefs...)
+	}
+	return mergeInternalKnowledgeHits(nil, hits, 10), mergePreparedEvidenceDocs(nil, docs, defaultMaxEvidenceDocs), limitStrings(uniqueStrings(paths), 32), nil
 }
 
 func (e *lensChatToolExecutor) searchObjects(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
@@ -2751,6 +2868,169 @@ func totalArtifactResults(reports []map[string]interface{}) int {
 	return total
 }
 
+func classifyInternalKnowledgeIntent(question string) string {
+	q := strings.ToLower(strings.TrimSpace(question))
+	switch {
+	case q == "":
+		return ""
+	case strings.Contains(q, "what happens if"), strings.Contains(q, "impact if"), strings.Contains(q, "disruption impact"), strings.Contains(q, "что будет если"), strings.Contains(q, "влияние сбоя"), strings.Contains(q, "impact of disruption"):
+		return "scenario"
+	case strings.Contains(q, "weak point"), strings.Contains(q, "bottleneck"), strings.Contains(q, "critical dependenc"), strings.Contains(q, "single point of failure"), strings.Contains(q, "fragility"), strings.Contains(q, "chokepoint"), strings.Contains(q, "узк"), strings.Contains(q, "слаб"), strings.Contains(q, "зависимост"), strings.Contains(q, "хрупк"), strings.Contains(q, "бутылоч"):
+		return "baseline_risk"
+	default:
+		return ""
+	}
+}
+
+func internalHitFromAggregate(aggregate *horizonmodels.AnalyticalAggregate, boost float64) internalKnowledgeHit {
+	paths := uniqueStrings(append(append([]string{aggregate.ScopeRef, aggregate.SubjectRef}, aggregate.BasisRefs...), append(append(append(aggregate.ProductRefs, aggregate.NodeRefs...), aggregate.RouteRefs...), aggregate.AffectedRefs...)...))
+	return internalKnowledgeHit{
+		ID:    strings.TrimSpace(aggregate.ID),
+		Title: firstNonEmpty(strings.TrimSpace(aggregate.AggregateType), "analytical aggregate"),
+		Kind:  "analytical_aggregate",
+		URI:   "analytical://aggregate/" + strings.TrimSpace(aggregate.ID),
+		Score: aggregate.SeverityScore * boost,
+		StructData: map[string]any{
+			"type":           "analytical_aggregate",
+			"title":          firstNonEmpty(strings.TrimSpace(aggregate.AggregateType), "analytical aggregate"),
+			"canonicalPaths": paths,
+		},
+	}
+}
+
+func internalHitFromPrimitive(primitive *horizonmodels.AnalyticalPrimitive, boost float64) internalKnowledgeHit {
+	paths := uniqueStrings(append(append([]string{primitive.ScopeRef, primitive.SubjectRef}, primitive.BasisRefs...), append(append(append(primitive.ProductRefs, primitive.NodeRefs...), primitive.RouteRefs...), primitive.AffectedRefs...)...))
+	return internalKnowledgeHit{
+		ID:    strings.TrimSpace(primitive.ID),
+		Title: firstNonEmpty(strings.TrimSpace(primitive.PrimitiveType), "analytical primitive"),
+		Kind:  "analytical_primitive",
+		URI:   "analytical://primitive/" + strings.TrimSpace(primitive.ID),
+		Score: primitive.SeverityScore * boost,
+		StructData: map[string]any{
+			"type":           "analytical_primitive",
+			"title":          firstNonEmpty(strings.TrimSpace(primitive.PrimitiveType), "analytical primitive"),
+			"canonicalPaths": paths,
+		},
+	}
+}
+
+func preparedDocFromAggregate(aggregate *horizonmodels.AnalyticalAggregate) preparedEvidenceDoc {
+	return preparedEvidenceDoc{
+		ID:             strings.TrimSpace(aggregate.ID),
+		Kind:           "analytical_aggregate",
+		Title:          firstNonEmpty(strings.TrimSpace(aggregate.AggregateType), "analytical aggregate"),
+		Content:        strings.TrimSpace(aggregate.GenerateVectorText()),
+		URI:            "analytical://aggregate/" + strings.TrimSpace(aggregate.ID),
+		CanonicalPaths: uniqueStrings(append(append([]string{aggregate.ScopeRef, aggregate.SubjectRef}, aggregate.BasisRefs...), append(append(append(aggregate.ProductRefs, aggregate.NodeRefs...), aggregate.RouteRefs...), aggregate.AffectedRefs...)...)),
+	}
+}
+
+func preparedDocFromPrimitive(primitive *horizonmodels.AnalyticalPrimitive) preparedEvidenceDoc {
+	return preparedEvidenceDoc{
+		ID:             strings.TrimSpace(primitive.ID),
+		Kind:           "analytical_primitive",
+		Title:          firstNonEmpty(strings.TrimSpace(primitive.PrimitiveType), "analytical primitive"),
+		Content:        strings.TrimSpace(primitive.GenerateVectorText()),
+		URI:            "analytical://primitive/" + strings.TrimSpace(primitive.ID),
+		CanonicalPaths: uniqueStrings(append(append([]string{primitive.ScopeRef, primitive.SubjectRef}, primitive.BasisRefs...), append(append(append(primitive.ProductRefs, primitive.NodeRefs...), primitive.RouteRefs...), primitive.AffectedRefs...)...)),
+	}
+}
+
+func mergePreparedEvidenceDocs(base, extra []preparedEvidenceDoc, limit int) []preparedEvidenceDoc {
+	if limit <= 0 {
+		limit = defaultMaxEvidenceDocs
+	}
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	out := make([]preparedEvidenceDoc, 0, minInt(limit, len(base)+len(extra)))
+	appendDocs := func(items []preparedEvidenceDoc) {
+		for _, item := range items {
+			if len(out) >= limit {
+				return
+			}
+			key := strings.TrimSpace(firstNonEmpty(item.ID, item.Title, item.URI))
+			if key == "" {
+				continue
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, item)
+		}
+	}
+	appendDocs(base)
+	appendDocs(extra)
+	return out
+}
+
+func buildAnalyticalShortcutAnswer(question string, hits []internalKnowledgeHit, docs []preparedEvidenceDoc) (string, bool) {
+	if classifyInternalKnowledgeIntent(question) == "" {
+		return "", false
+	}
+	var aggregateDoc preparedEvidenceDoc
+	primitives := make([]preparedEvidenceDoc, 0, 4)
+	for _, doc := range docs {
+		switch strings.TrimSpace(doc.Kind) {
+		case "analytical_aggregate":
+			if aggregateDoc.ID == "" {
+				aggregateDoc = doc
+			}
+		case "analytical_primitive":
+			primitives = append(primitives, doc)
+		}
+	}
+	if aggregateDoc.ID == "" {
+		return "", false
+	}
+	lines := make([]string, 0, 8)
+	if isMostlyCyrillic(question) {
+		lines = append(lines, "Главные слабые места по прогретому аналитическому слою:")
+	} else {
+		lines = append(lines, "Main weak points from the warmed analytical layer:")
+	}
+	if explanation := extractAnalyticalField(aggregateDoc.Content, "Explanation:"); explanation != "" {
+		lines = append(lines, "- "+explanation)
+	}
+	for _, doc := range primitives {
+		if len(lines) >= 4 {
+			break
+		}
+		label := strings.TrimSpace(doc.Title)
+		explanation := extractAnalyticalField(doc.Content, "Explanation:")
+		if explanation == "" {
+			explanation = label
+		} else if label != "" {
+			explanation = label + ": " + explanation
+		}
+		if strings.TrimSpace(explanation) == "" {
+			continue
+		}
+		lines = append(lines, "- "+strings.TrimSpace(explanation))
+	}
+	if paths := collectEvidenceCanonicalPaths(hits, docs, 8); len(paths) > 0 {
+		if isMostlyCyrillic(question) {
+			lines = append(lines, "Ключевые узлы: "+strings.Join(limitStrings(paths, 6), ", "))
+		} else {
+			lines = append(lines, "Key refs: "+strings.Join(limitStrings(paths, 6), ", "))
+		}
+	}
+	return strings.Join(lines, "\n"), len(lines) > 1
+}
+
+func extractAnalyticalField(content, prefix string) string {
+	for _, line := range strings.Split(strings.TrimSpace(content), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		}
+	}
+	return ""
+}
+
+func analyticalShortcutReady(report map[string]interface{}) bool {
+	return asBool(report["analyticalShortcut"]) && strings.TrimSpace(asString(report["answer"])) != ""
+}
+
 func fallbackInternalAnswer(report map[string]interface{}) string {
 	if answer := strings.TrimSpace(asString(report["answer"])); answer != "" {
 		return answer
@@ -3346,4 +3626,31 @@ func valueOrEmpty(v *string) string {
 		return ""
 	}
 	return strings.TrimSpace(*v)
+}
+
+func asBool(v interface{}) bool {
+	switch typed := v.(type) {
+	case bool:
+		return typed
+	case string:
+		typed = strings.TrimSpace(strings.ToLower(typed))
+		return typed == "true" || typed == "1" || typed == "yes"
+	default:
+		return false
+	}
+}
+
+func isMostlyCyrillic(value string) bool {
+	cyrillic := 0
+	total := 0
+	for _, r := range value {
+		if r == ' ' || r == '\n' || r == '\t' {
+			continue
+		}
+		total++
+		if r >= 0x0400 && r <= 0x04FF {
+			cyrillic++
+		}
+	}
+	return total > 0 && cyrillic*2 >= total
 }

@@ -49,7 +49,7 @@ func enrichSupplyLinkFragmentWithOperationalRisk(
 	if frag == nil || seg == nil {
 		return nil
 	}
-	capability := loadCapabilityProfileForSegment(ctx, engine, seg, capabilityCache)
+	capability := loadCapabilityProfileForSegment(ctx, engine, strings.TrimSpace(frag.TenantID), seg, capabilityCache)
 	rollup := computeSupplyLinkRiskRollup(frag, seg, capability)
 	applySupplyLinkRiskRollup(frag, rollup)
 	return capability
@@ -58,6 +58,7 @@ func enrichSupplyLinkFragmentWithOperationalRisk(
 func loadCapabilityProfileForSegment(
 	ctx context.Context,
 	engine *ScoutEngine,
+	tenantID string,
 	seg *SupplyLinkSegment,
 	cache map[string]*models.CapabilityProfile,
 ) *models.CapabilityProfile {
@@ -69,13 +70,13 @@ func loadCapabilityProfileForSegment(
 	if carrierRef == "" || productRef == "" {
 		return nil
 	}
-	cacheKey := carrierRef + "|" + productRef
+	cacheKey := strings.TrimSpace(tenantID) + "|" + carrierRef + "|" + productRef
 	if cache != nil {
 		if cached, ok := cache[cacheKey]; ok {
 			return cached
 		}
 	}
-	profile, err := engine.capabilityProfilesRepo.Get(ctx, carrierRef, productRef)
+	profile, err := engine.capabilityProfilesRepo.Get(ctx, strings.TrimSpace(tenantID), carrierRef, productRef)
 	if err != nil {
 		return nil
 	}

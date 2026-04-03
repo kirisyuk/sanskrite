@@ -328,6 +328,192 @@ func TestPrepareMaterializedPathArtifactsBatch_GroupsRouteVariantsByStructuralKe
 	}
 }
 
+func TestBuildStructuralCanonicalKey_DiffersForDifferentIntermediateStructure(t *testing.T) {
+	first := []PathSegment{
+		{
+			SupplierRef:             "/fac/vn/binh-tan-factory",
+			ProductRef:              "/product/finished/mechanical/assembly/footwear",
+			CustomerRef:             "/fac/be/nike-european-logistics-center",
+			SupplyLinkCanonicalPath: "/supply-link/global/binh-tan/footwear/nike-elc",
+		},
+		{
+			SupplierRef:             "/org/nl/nike-european-operations-netherlands",
+			ProductRef:              "/product/finished/mechanical/assembly/footwear",
+			CustomerRef:             "/fac/kz/almaty-airport-terminal",
+			SupplyLinkCanonicalPath: "/supply-link/global/nike-europe-ops/footwear/almaty-airport-terminal",
+		},
+	}
+	second := []PathSegment{
+		{
+			SupplierRef:             "/fac/vn/binh-tan-factory",
+			ProductRef:              "/product/finished/mechanical/assembly/footwear",
+			CustomerRef:             "/fac/de/frankfurt-airport",
+			SupplyLinkCanonicalPath: "/supply-link/global/binh-tan/footwear/frankfurt-airport",
+		},
+		{
+			SupplierRef:             "/org/de/adidas",
+			ProductRef:              "/product/finished/mechanical/assembly/footwear",
+			CustomerRef:             "/fac/kz/almaty-airport-terminal",
+			SupplyLinkCanonicalPath: "/supply-link/global/adidas/footwear/almaty-airport-terminal",
+		},
+	}
+	firstKey := BuildStructuralCanonicalKey("global", first)
+	secondKey := BuildStructuralCanonicalKey("global", second)
+	if firstKey == "" || secondKey == "" {
+		t.Fatalf("expected non-empty keys, got %q and %q", firstKey, secondKey)
+	}
+	if firstKey == secondKey {
+		t.Fatalf("expected distinct keys for different intermediate structure, got %q", firstKey)
+	}
+}
+
+func TestMergeMaterializedPathArtifacts_ReplacesMismatchedLegacyPayload(t *testing.T) {
+	builder := NewSupplyChainPathBuilder(nil, nil, nil)
+	firstPath := &SupplyChainPath{
+		Segments: []PathSegment{
+			{
+				SupplierRef:             "/fac/vn/binh-tan-factory",
+				ProductRef:              "/product/finished/mechanical/assembly/footwear",
+				CustomerRef:             "/fac/be/nike-european-logistics-center",
+				SupplyLinkCanonicalPath: "/supply-link/global/binh-tan/footwear/nike-elc",
+			},
+			{
+				SupplierRef:             "/org/nl/nike-european-operations-netherlands",
+				ProductRef:              "/product/finished/mechanical/assembly/footwear",
+				CustomerRef:             "/fac/kz/almaty-airport-terminal",
+				SupplyLinkCanonicalPath: "/supply-link/global/nike-europe-ops/footwear/almaty-airport-terminal",
+			},
+		},
+	}
+	secondPath := &SupplyChainPath{
+		Segments: []PathSegment{
+			{
+				SupplierRef:             "/fac/vn/binh-tan-factory",
+				ProductRef:              "/product/finished/mechanical/assembly/footwear",
+				CustomerRef:             "/fac/de/frankfurt-airport",
+				SupplyLinkCanonicalPath: "/supply-link/global/binh-tan/footwear/frankfurt-airport",
+			},
+			{
+				SupplierRef:             "/org/de/adidas",
+				ProductRef:              "/product/finished/mechanical/assembly/footwear",
+				CustomerRef:             "/fac/kz/almaty-airport-terminal",
+				SupplyLinkCanonicalPath: "/supply-link/global/adidas/footwear/almaty-airport-terminal",
+			},
+		},
+	}
+	key := "/supply-chain/global/fac_vn_binh-tan-factory/product_finished_mechanical_assembly_footwear/fac_kz_almaty-airport-terminal"
+	existing := buildMaterializedArtifactFromDraft(firstPath, builder.BuildMaterializationDraft(context.Background(), firstPath), "global", "lens-1", key, builder.materializedKind())
+	incoming := buildMaterializedArtifactFromDraft(secondPath, builder.BuildMaterializationDraft(context.Background(), secondPath), "global", "lens-1", key, builder.materializedKind())
+	merged, err := mergeMaterializedPathArtifacts(existing, incoming)
+	if err != nil {
+		t.Fatalf("mergeMaterializedPathArtifacts() error = %v", err)
+	}
+	parsed, err := models.ParseSupplyChainPathPayload(merged.Payload)
+	if err != nil {
+		t.Fatalf("ParseSupplyChainPathPayload() error = %v", err)
+	}
+	if len(parsed.Legs) != 2 {
+		t.Fatalf("legs=%d, want incoming replacement shape", len(parsed.Legs))
+	}
+	if parsed.Legs[0].SupplyLinkCanonicalPath != "/supply-link/global/binh-tan/footwear/frankfurt-airport" {
+		t.Fatalf("first leg=%q, want incoming replacement", parsed.Legs[0].SupplyLinkCanonicalPath)
+	}
+}
+
+func TestMergeMaterializedPathArtifacts_PreservesExistingLensID(t *testing.T) {
+	builder := NewSupplyChainPathBuilder(nil, nil, nil)
+	path := &SupplyChainPath{
+		Segments: []PathSegment{
+			{
+				SupplierRef:             "/fac/cn/dongguan-factory",
+				ProductRef:              "/product/finished/mechanical/assembly/footwear",
+				CustomerRef:             "/fac/kz/khorgos-gateway-terminal",
+				SupplyLinkCanonicalPath: "/supply-link/global/dongguan/footwear/khorgos-gateway-terminal",
+			},
+		},
+	}
+	key := BuildStructuralCanonicalKey("global", path.Segments)
+	existing := buildMaterializedArtifactFromDraft(path, builder.BuildMaterializationDraft(context.Background(), path), "global", "lens-existing", key, builder.materializedKind())
+	incoming := buildMaterializedArtifactFromDraft(path, builder.BuildMaterializationDraft(context.Background(), path), "global", "lens-incoming", key, builder.materializedKind())
+	merged, err := mergeMaterializedPathArtifacts(existing, incoming)
+	if err != nil {
+		t.Fatalf("mergeMaterializedPathArtifacts() error = %v", err)
+	}
+	if got := strings.TrimSpace(merged.LensID); got != "lens-existing" {
+		t.Fatalf("lensID=%q, want existing lens id preserved", got)
+	}
+}
+
+func TestSelectArtifactRebuildPath_PrefersAnchorMatchingPath(t *testing.T) {
+	artifact := &models.MaterializedArtifact{
+		AnchorSupplier: "/fac/vn/binh-tan-factory",
+		AnchorCustomer: "/fac/kz/almaty-airport-terminal",
+		ProductAxis:    "/product/finished/mechanical/assembly/footwear",
+		Payload: models.BuildSupplyChainPathPayloadDetailed(
+			nil,
+			nil,
+			[]models.SupplyChainPathLeg{
+				{
+					Index:       0,
+					SupplierRef: "/fac/vn/binh-tan-factory",
+					ProductRef:  "/product/finished/mechanical/assembly/footwear",
+					CustomerRef: "/fac/be/nike-european-logistics-center",
+				},
+				{
+					Index:       1,
+					SupplierRef: "/org/nl/nike-european-operations-netherlands",
+					ProductRef:  "/product/finished/mechanical/assembly/footwear",
+					CustomerRef: "/fac/kz/almaty-airport-terminal",
+				},
+			},
+			nil,
+			nil,
+			nil,
+			nil,
+		),
+	}
+	paths := []*SupplyChainPath{
+		{
+			Confidence: 0.95,
+			Segments: []PathSegment{
+				{
+					SupplierRef: "/fac/de/adidas-cdc-rieste",
+					ProductRef:  "/product/finished/mechanical/assembly/footwear",
+					CustomerRef: "/fac/de/frankfurt-airport",
+				},
+				{
+					SupplierRef: "/org/de/adidas",
+					ProductRef:  "/product/finished/mechanical/assembly/footwear",
+					CustomerRef: "/fac/kz/almaty-airport-terminal",
+				},
+			},
+		},
+		{
+			Confidence: 0.81,
+			Segments: []PathSegment{
+				{
+					SupplierRef: "/fac/vn/binh-tan-factory",
+					ProductRef:  "/product/finished/mechanical/assembly/footwear",
+					CustomerRef: "/fac/be/nike-european-logistics-center",
+				},
+				{
+					SupplierRef: "/org/nl/nike-european-operations-netherlands",
+					ProductRef:  "/product/finished/mechanical/assembly/footwear",
+					CustomerRef: "/fac/kz/almaty-airport-terminal",
+				},
+			},
+		},
+	}
+
+	selected := selectArtifactRebuildPath(artifact, paths, "/fac/kz/almaty-airport-terminal")
+	if selected == nil {
+		t.Fatal("expected selected path")
+	}
+	if selected.Segments[0].SupplierRef != "/fac/vn/binh-tan-factory" {
+		t.Fatalf("selected supplier=%q, want anchor-matching path", selected.Segments[0].SupplierRef)
+	}
+}
+
 func TestSupplyChainPathBuilder_MaterializationStageNamesIncludeRouteOverlays(t *testing.T) {
 	builder := NewSupplyChainPathBuilder(nil, nil, nil)
 	stageNames := builder.MaterializationStageNames()

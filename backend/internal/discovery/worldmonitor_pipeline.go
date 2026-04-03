@@ -27,6 +27,7 @@ import (
 	horizonpropagation "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonrecommendations "github.com/igorkirisyuk/sanskrite/internal/horizon/recommendations"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	horizonsignallanding "github.com/igorkirisyuk/sanskrite/internal/horizon/signallanding"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
@@ -542,6 +543,8 @@ type HorizonMonitorPipeline struct {
 	realtimePublisher        *realtime.Publisher
 	vertexSearch             *ai.VertexAISearchClient
 	strategicRecommendations *horizonrecommendations.Service
+	signalLanding            *horizonsignallanding.Service
+	impactWarmupHook         func(context.Context, string, []string, string) error
 	watchTriggerHook         func(context.Context, string, string, horizonmodels.WatchTriggerType, string, float64, float64, map[string]any) error
 	exec                     *ai.AITaskExecutor
 	mapActivityEngine        *mapactivity.Engine
@@ -651,6 +654,22 @@ func (p *HorizonMonitorPipeline) WithWatchTriggerHook(hook func(context.Context,
 	return p
 }
 
+func (p *HorizonMonitorPipeline) WithSignalLanding(service *horizonsignallanding.Service) *HorizonMonitorPipeline {
+	if p == nil {
+		return p
+	}
+	p.signalLanding = service
+	return p
+}
+
+func (p *HorizonMonitorPipeline) WithImpactWarmupHook(hook func(context.Context, string, []string, string) error) *HorizonMonitorPipeline {
+	if p == nil {
+		return p
+	}
+	p.impactWarmupHook = hook
+	return p
+}
+
 func (p *HorizonMonitorPipeline) WithEventGate(mode discoverynlp.Mode, gate discoverynlp.EventGate) *HorizonMonitorPipeline {
 	if p == nil {
 		return p
@@ -738,12 +757,21 @@ func (p *HorizonMonitorPipeline) ProcessDocuments(ctx context.Context, tenantID 
 				if shouldSuppressHeuristicSignalPropagation(event) || (!forceConcrete && articleAssessment != nil && !articleAssessment.IsEvent && !articleAssessment.ShouldOnlySignal && !articleAssessment.ShouldWarmExisting) {
 					qualityCounters.signalSuppressedTotal++
 				}
-				if signal := p.buildSignalDescriptor(eventFact, event); signal != nil && (forceConcrete || articleAssessment == nil || articleAssessment.IsEvent || articleAssessment.ShouldOnlySignal || articleAssessment.ShouldWarmExisting) {
-					audit, err := p.upsertAndPropagateSignal(ctx, tenantID, ds.ID, signal, eventFact)
-					signalAudit = audit
-					signalCounters.observe(audit)
-					if err != nil {
-						p.logf("horizon monitor pipeline: signal propagation failed source=%s signal=%s: %v", ds.ID, signal.ID, err)
+				if signal := p.buildSignalDescriptor(eventFact, event); signal != nil {
+					if p.signalLanding != nil {
+						if landingResult, err := p.signalLanding.LandEvent(ctx, eventFact, []*horizonmodels.SignalDescriptor{signal}); err != nil {
+							p.logf("horizon monitor pipeline: signal landing failed source=%s signal=%s: %v", ds.ID, signal.ID, err)
+						} else {
+							p.maybeEnqueueWarmup(ctx, tenantID, landingResult)
+						}
+					}
+					if forceConcrete || articleAssessment == nil || articleAssessment.IsEvent || articleAssessment.ShouldOnlySignal || articleAssessment.ShouldWarmExisting {
+						audit, err := p.upsertAndPropagateSignal(ctx, tenantID, ds.ID, signal, eventFact)
+						signalAudit = audit
+						signalCounters.observe(audit)
+						if err != nil {
+							p.logf("horizon monitor pipeline: signal propagation failed source=%s signal=%s: %v", ds.ID, signal.ID, err)
+						}
 					}
 				}
 			}
@@ -906,12 +934,21 @@ func (p *HorizonMonitorPipeline) ProcessFeedEvents(ctx context.Context, tenantID
 				if shouldSuppressHeuristicSignalPropagation(event) || (!forceConcrete && articleAssessment != nil && !articleAssessment.IsEvent && !articleAssessment.ShouldOnlySignal && !articleAssessment.ShouldWarmExisting) {
 					qualityCounters.signalSuppressedTotal++
 				}
-				if signal := p.buildSignalDescriptor(eventFact, event); signal != nil && (forceConcrete || articleAssessment == nil || articleAssessment.IsEvent || articleAssessment.ShouldOnlySignal || articleAssessment.ShouldWarmExisting) {
-					audit, err := p.upsertAndPropagateSignal(ctx, tenantID, ds.ID, signal, eventFact)
-					signalAudit = audit
-					signalCounters.observe(audit)
-					if err != nil {
-						p.logf("horizon monitor pipeline: signal propagation failed source=%s signal=%s: %v", ds.ID, signal.ID, err)
+				if signal := p.buildSignalDescriptor(eventFact, event); signal != nil {
+					if p.signalLanding != nil {
+						if landingResult, err := p.signalLanding.LandEvent(ctx, eventFact, []*horizonmodels.SignalDescriptor{signal}); err != nil {
+							p.logf("horizon monitor pipeline: signal landing failed source=%s signal=%s: %v", ds.ID, signal.ID, err)
+						} else {
+							p.maybeEnqueueWarmup(ctx, tenantID, landingResult)
+						}
+					}
+					if forceConcrete || articleAssessment == nil || articleAssessment.IsEvent || articleAssessment.ShouldOnlySignal || articleAssessment.ShouldWarmExisting {
+						audit, err := p.upsertAndPropagateSignal(ctx, tenantID, ds.ID, signal, eventFact)
+						signalAudit = audit
+						signalCounters.observe(audit)
+						if err != nil {
+							p.logf("horizon monitor pipeline: signal propagation failed source=%s signal=%s: %v", ds.ID, signal.ID, err)
+						}
 					}
 				}
 			}
@@ -2727,6 +2764,36 @@ func horizonMonitorSignalFact(signal *horizonmodels.SignalDescriptor, tenantID, 
 	}
 }
 
+func (p *HorizonMonitorPipeline) maybeEnqueueWarmup(ctx context.Context, tenantID string, result *horizonsignallanding.Result) {
+	if p == nil || p.impactWarmupHook == nil || result == nil {
+		return
+	}
+	refs := make([]string, 0, len(result.Hits)+len(result.Summaries)*2)
+	for _, hit := range result.Hits {
+		if hit == nil {
+			continue
+		}
+		refs = append(refs, strings.TrimSpace(hit.CanonicalRef))
+	}
+	for _, summary := range result.Summaries {
+		if summary == nil {
+			continue
+		}
+		refs = append(refs, strings.TrimSpace(summary.ScopeRef))
+		refs = append(refs, summary.AffectedZoneRefs...)
+	}
+	refs = uniqueStrings(refs)
+	if len(refs) == 0 {
+		return
+	}
+	if strings.TrimSpace(tenantID) == "" {
+		tenantID = "global"
+	}
+	if err := p.impactWarmupHook(ctx, strings.TrimSpace(tenantID), refs, "watch_signal_landing_delta"); err != nil {
+		p.logf("horizon monitor pipeline: impact warmup enqueue failed tenant=%s refs=%d err=%v", tenantID, len(refs), err)
+	}
+}
+
 func (p *HorizonMonitorPipeline) upsertNewsClassificationFact(
 	ctx context.Context,
 	tenantID, sourceID string,
@@ -4499,24 +4566,35 @@ func (p *HorizonMonitorPipeline) emitWatchRuntimeSignals(
 	event *horizonMonitorFeedEvent,
 	audit *horizonMonitorSignalFlowAudit,
 ) {
-	if p == nil || p.watchTriggerHook == nil || zone == nil || zone.Type != horizonmodels.FragmentTypeAffectedZone {
+	if p == nil || p.watchTriggerHook == nil {
 		return
 	}
 	tenantID = strings.TrimSpace(firstNonEmptyString(tenantID, "global"))
-	anchor := strings.TrimSpace(zone.CanonicalPath)
-	if anchor == "" {
+	anchors := p.watchTriggerAnchorsForZone(ctx, tenantID, zone)
+	if len(anchors) == 0 {
+		anchors = watchTriggerAnchorsForEventFallback(event)
+	}
+	if len(anchors) == 0 {
 		return
 	}
-	baseMeta := map[string]any{
-		"zoneFragmentId": strings.TrimSpace(zone.ID),
-		"zoneType":       string(zone.Type),
+	baseMeta := map[string]any{}
+	if zone != nil {
+		baseMeta["zoneFragmentId"] = strings.TrimSpace(zone.ID)
+		baseMeta["zoneType"] = string(zone.Type)
 	}
 	if event != nil {
 		baseMeta["eventTitle"] = strings.TrimSpace(event.Title)
 		baseMeta["eventSourceId"] = strings.TrimSpace(event.SourceID)
 		baseMeta["severity"] = strings.TrimSpace(event.Severity)
+		baseMeta["eventCountryCode"] = strings.ToUpper(strings.TrimSpace(event.CountryCode))
 	}
-	_ = p.watchTriggerHook(ctx, tenantID, anchor, horizonmodels.WatchTriggerAffectedZoneChanged, "affected zone updated by monitor pipeline", 0.85, 0.90, baseMeta)
+	for _, anchor := range anchors {
+		meta := mergeStringAnyMaps(baseMeta, map[string]any{
+			"watchAnchor":     anchor,
+			"watchAnchorType": watchAnchorType(zone, event, anchor),
+		})
+		_ = p.watchTriggerHook(ctx, tenantID, anchor, horizonmodels.WatchTriggerAffectedZoneChanged, "affected zone updated by monitor pipeline", 0.85, 0.90, meta)
+	}
 	if audit == nil {
 		return
 	}
@@ -4532,9 +4610,95 @@ func (p *HorizonMonitorPipeline) emitWatchRuntimeSignals(
 		"nonObviousEndpoints":  audit.NonObviousEndpoints,
 		"escalationLevel":      strings.TrimSpace(audit.EscalationLevel),
 	})
-	_ = p.watchTriggerHook(ctx, tenantID, anchor, horizonmodels.WatchTriggerSignalDetected, "signal propagated from horizon monitor pipeline", 0.90, 0.85, signalMeta)
-	if audit.PropagationTried && audit.SeedCount > 0 && audit.RemoteEndpoints == 0 && audit.BusinessPathFamilies == 0 {
-		_ = p.watchTriggerHook(ctx, tenantID, anchor, horizonmodels.WatchTriggerPropagationGap, "propagation gap after signal propagation", 0.70, 0.80, signalMeta)
+	for _, anchor := range anchors {
+		meta := mergeStringAnyMaps(signalMeta, map[string]any{
+			"watchAnchor":     anchor,
+			"watchAnchorType": watchAnchorType(zone, event, anchor),
+		})
+		_ = p.watchTriggerHook(ctx, tenantID, anchor, horizonmodels.WatchTriggerSignalDetected, "signal propagated from horizon monitor pipeline", 0.90, 0.85, meta)
+		if audit.PropagationTried && audit.SeedCount > 0 && audit.RemoteEndpoints == 0 && audit.BusinessPathFamilies == 0 {
+			_ = p.watchTriggerHook(ctx, tenantID, anchor, horizonmodels.WatchTriggerPropagationGap, "propagation gap after signal propagation", 0.70, 0.80, meta)
+		}
+	}
+}
+
+func (p *HorizonMonitorPipeline) watchTriggerAnchorsForZone(ctx context.Context, tenantID string, zone *horizonmodels.HorizonFragment) []string {
+	if zone == nil || zone.Type != horizonmodels.FragmentTypeAffectedZone {
+		return nil
+	}
+	anchors := make([]string, 0, 12)
+	seen := make(map[string]struct{}, 12)
+	add := func(path string) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return
+		}
+		if _, ok := seen[path]; ok {
+			return
+		}
+		seen[path] = struct{}{}
+		anchors = append(anchors, path)
+	}
+	add(zone.CanonicalPath)
+	add(zone.ParentPath)
+	add(zone.ParentGovPath)
+	add(zone.ParentMarketPath)
+	add(zone.EntityPath)
+	add(zone.AffiliatedOrgPath)
+	for _, path := range zone.SpherePaths {
+		add(path)
+	}
+	if p.edgesRepo != nil && strings.TrimSpace(zone.ID) != "" {
+		edgeType := horizonmodels.DependencyTypeAffects
+		if edges, err := p.edgesRepo.ListBySource(ctx, tenantID, strings.TrimSpace(zone.ID), &edgeType, 12); err == nil {
+			for _, edge := range edges {
+				if edge == nil || strings.TrimSpace(edge.TargetFragmentID) == "" || p.fragmentsRepo == nil {
+					continue
+				}
+				target, targetErr := p.fragmentsRepo.Get(ctx, strings.TrimSpace(edge.TargetFragmentID))
+				if targetErr != nil || target == nil {
+					continue
+				}
+				add(target.CanonicalPath)
+				add(target.ParentPath)
+				add(target.EntityPath)
+			}
+		}
+	}
+	return anchors
+}
+
+func watchTriggerAnchorsForEventFallback(event *horizonMonitorFeedEvent) []string {
+	if event == nil {
+		return nil
+	}
+	cc := strings.ToLower(strings.TrimSpace(event.CountryCode))
+	if len(cc) != 2 {
+		return nil
+	}
+	return []string{"/loc/" + cc}
+}
+
+func watchAnchorType(zone *horizonmodels.HorizonFragment, event *horizonMonitorFeedEvent, anchor string) string {
+	anchor = strings.TrimSpace(anchor)
+	if anchor == "" {
+		return ""
+	}
+	if zone == nil {
+		if event != nil && strings.EqualFold(anchor, "/loc/"+strings.TrimSpace(event.CountryCode)) {
+			return "event_country"
+		}
+		return "event_fallback"
+	}
+	switch anchor {
+	case strings.TrimSpace(zone.CanonicalPath):
+		return "affected_zone"
+	case strings.TrimSpace(zone.ParentPath), strings.TrimSpace(zone.ParentGovPath), strings.TrimSpace(zone.ParentMarketPath):
+		return "zone_parent"
+	case strings.TrimSpace(zone.EntityPath), strings.TrimSpace(zone.AffiliatedOrgPath):
+		return "zone_entity"
+	default:
+		return "affected_target"
 	}
 }
 

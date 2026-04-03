@@ -25,45 +25,45 @@ import (
 )
 
 const (
-	propagationAnalysisTimeout   = 180 * time.Second
+	propagationAnalysisTimeout    = 180 * time.Second
 	interpretationAnalysisTimeout = 75 * time.Second
-	perNodeInterpretationTimeout = 25 * time.Second
+	perNodeInterpretationTimeout  = 25 * time.Second
 )
 
 type toolRuntime struct {
-	fsClient           *gcp.FirestoreClient
-	db                 *firestore.Client
-	opts               toolOptions
-	aiExec             *ai.AITaskExecutor
-	fragmentsRepo      *horizonrepo.HorizonFragmentsRepository
-	targetsRepo        *horizonrepo.WatchTargetsRepository
-	subjectsRepo       *horizonrepo.WatchSubjectsRepository
-	triggersRepo       *horizonrepo.WatchTriggersRepository
-	watchdogRepo       *horizonrepo.WatchdogConfigsRepository
-	scopeConfigsRepo   *horizonrepo.ScopeAgentConfigsRepository
-	scopeStatesRepo    *horizonrepo.ScopeAgentStatesRepository
-	scopeRunsRepo      *horizonrepo.ScopeAgentRunsRepository
-	proposalsRepo      *horizonrepo.AgentProposalsRepository
-	decisionsRepo      *horizonrepo.ArbitrationDecisionsRepository
-	briefsRepo         *horizonrepo.WatchBriefsRepository
-	feedRepo           *horizonrepo.WatchFeedEntriesRepository
-	lensesRepo         *horizonrepo.LensesRepository
-	lensArtifactsRepo  *horizonrepo.LensArtifactsRepository
-	edgesRepo          *horizonrepo.DependencyEdgesRepository
-	materializedRepo   *horizonrepo.MaterializedArtifactsRepository
-	riskJobsRepo       *horizonrepo.RiskJobsRepository
-	macroPoliciesRepo  *horizonrepo.MacroAgentPoliciesRepository
-	scoutingJobsRepo   *horizonrepo.ScoutingJobsRepository
-	agentJobsRepo      *corerepo.AgentJobsRepository
-	factsRepo          *corerepo.OntologyFactsRepository
-	dataSourcesRepo    *corerepo.DataSourcesRepository
-	propagationEngine  *horizonprop.PropagationEngine
-	profileLookup      *horizonprop.ProfileLookup
-	interpreter        *horizoninterp.Interpreter
-	leafEvidence       *horizonqa.LeafEvidenceCollector
-	seedInjector       *horizonsignal.SeedInjector
-	scopeAgentService  *horizonscopeagent.Service
-	watchRuntime       *horizonwatchruntime.Service
+	fsClient          *gcp.FirestoreClient
+	db                *firestore.Client
+	opts              toolOptions
+	aiExec            *ai.AITaskExecutor
+	fragmentsRepo     *horizonrepo.HorizonFragmentsRepository
+	targetsRepo       *horizonrepo.WatchTargetsRepository
+	subjectsRepo      *horizonrepo.WatchSubjectsRepository
+	triggersRepo      *horizonrepo.WatchTriggersRepository
+	watchdogRepo      *horizonrepo.WatchdogConfigsRepository
+	scopeConfigsRepo  *horizonrepo.ScopeAgentConfigsRepository
+	scopeStatesRepo   *horizonrepo.ScopeAgentStatesRepository
+	scopeRunsRepo     *horizonrepo.ScopeAgentRunsRepository
+	proposalsRepo     *horizonrepo.AgentProposalsRepository
+	decisionsRepo     *horizonrepo.ArbitrationDecisionsRepository
+	briefsRepo        *horizonrepo.WatchBriefsRepository
+	feedRepo          *horizonrepo.WatchFeedEntriesRepository
+	lensesRepo        *horizonrepo.LensesRepository
+	lensArtifactsRepo *horizonrepo.LensArtifactsRepository
+	edgesRepo         *horizonrepo.DependencyEdgesRepository
+	materializedRepo  *horizonrepo.MaterializedArtifactsRepository
+	riskJobsRepo      *horizonrepo.RiskJobsRepository
+	macroPoliciesRepo *horizonrepo.MacroAgentPoliciesRepository
+	scoutingJobsRepo  *horizonrepo.ScoutingJobsRepository
+	agentJobsRepo     *corerepo.AgentJobsRepository
+	factsRepo         *corerepo.OntologyFactsRepository
+	dataSourcesRepo   *corerepo.DataSourcesRepository
+	propagationEngine *horizonprop.PropagationEngine
+	profileLookup     *horizonprop.ProfileLookup
+	interpreter       *horizoninterp.Interpreter
+	leafEvidence      *horizonqa.LeafEvidenceCollector
+	seedInjector      *horizonsignal.SeedInjector
+	scopeAgentService *horizonscopeagent.Service
+	watchRuntime      *horizonwatchruntime.Service
 }
 
 func newToolRuntime(ctx context.Context, opts toolOptions) (*toolRuntime, error) {
@@ -153,6 +153,7 @@ func newToolRuntime(ctx context.Context, opts toolOptions) (*toolRuntime, error)
 		rt.edgesRepo,
 	).WithScopeAgentRunsRepository(rt.scopeRunsRepo).
 		WithMaterializedArtifactsRepository(rt.materializedRepo).
+		WithSignalLandingSummariesRepository(horizonrepo.NewSignalLandingSummariesRepository(rt.db)).
 		WithMacroAgentPoliciesRepository(rt.macroPoliciesRepo).
 		WithAgentProposalsRepository(rt.proposalsRepo).
 		WithArbitrationDecisionsRepository(rt.decisionsRepo).

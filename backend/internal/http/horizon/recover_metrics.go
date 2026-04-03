@@ -115,33 +115,35 @@ type MetricRecoveryEstimate struct {
 }
 
 type RecoverMetricsCanvas struct {
-	exec                   *ai.AITaskExecutor
-	fragmentsRepo          *horizonrepo.HorizonFragmentsRepository
-	edgesRepo              *horizonrepo.DependencyEdgesRepository
-	materializedRepo       *horizonrepo.MaterializedArtifactsRepository
-	lensesRepo             *horizonrepo.LensesRepository
-	capabilityProfilesRepo *horizonrepo.CapabilityProfilesRepository
-	capabilityObsRepo      *horizonrepo.CapabilityObservationsRepository
-	supplyLinkObsRepo      *horizonrepo.SupplyLinkObservationsRepository
-	routeObsRepo           *horizonrepo.RouteObservationsRepository
-	derivedRiskRepo        *horizonrepo.DerivedRiskProfilesRepository
-	publisher              func(ctx context.Context, eventType string, tenantID string, payload interface{}) error
-	logger                 *log.Logger
+	exec                     *ai.AITaskExecutor
+	fragmentsRepo            *horizonrepo.HorizonFragmentsRepository
+	edgesRepo                *horizonrepo.DependencyEdgesRepository
+	materializedRepo         *horizonrepo.MaterializedArtifactsRepository
+	lensesRepo               *horizonrepo.LensesRepository
+	capabilityProfilesRepo   *horizonrepo.CapabilityProfilesRepository
+	capabilityObsRepo        *horizonrepo.CapabilityObservationsRepository
+	supplyLinkObsRepo        *horizonrepo.SupplyLinkObservationsRepository
+	routeObsRepo             *horizonrepo.RouteObservationsRepository
+	derivedRiskRepo          *horizonrepo.DerivedRiskProfilesRepository
+	analyticalPrimitivesRepo *horizonrepo.AnalyticalPrimitivesRepository
+	publisher                func(ctx context.Context, eventType string, tenantID string, payload interface{}) error
+	logger                   *log.Logger
 }
 
 type RecoverMetricsCanvasConfig struct {
-	Exec                   *ai.AITaskExecutor
-	FragmentsRepo          *horizonrepo.HorizonFragmentsRepository
-	EdgesRepo              *horizonrepo.DependencyEdgesRepository
-	MaterializedRepo       *horizonrepo.MaterializedArtifactsRepository
-	LensesRepo             *horizonrepo.LensesRepository
-	CapabilityProfilesRepo *horizonrepo.CapabilityProfilesRepository
-	CapabilityObsRepo      *horizonrepo.CapabilityObservationsRepository
-	SupplyLinkObsRepo      *horizonrepo.SupplyLinkObservationsRepository
-	RouteObsRepo           *horizonrepo.RouteObservationsRepository
-	DerivedRiskRepo        *horizonrepo.DerivedRiskProfilesRepository
-	Publisher              func(ctx context.Context, eventType string, tenantID string, payload interface{}) error
-	Logger                 *log.Logger
+	Exec                     *ai.AITaskExecutor
+	FragmentsRepo            *horizonrepo.HorizonFragmentsRepository
+	EdgesRepo                *horizonrepo.DependencyEdgesRepository
+	MaterializedRepo         *horizonrepo.MaterializedArtifactsRepository
+	LensesRepo               *horizonrepo.LensesRepository
+	CapabilityProfilesRepo   *horizonrepo.CapabilityProfilesRepository
+	CapabilityObsRepo        *horizonrepo.CapabilityObservationsRepository
+	SupplyLinkObsRepo        *horizonrepo.SupplyLinkObservationsRepository
+	RouteObsRepo             *horizonrepo.RouteObservationsRepository
+	DerivedRiskRepo          *horizonrepo.DerivedRiskProfilesRepository
+	AnalyticalPrimitivesRepo *horizonrepo.AnalyticalPrimitivesRepository
+	Publisher                func(ctx context.Context, eventType string, tenantID string, payload interface{}) error
+	Logger                   *log.Logger
 }
 
 type recoverMetricsBatchResult struct {
@@ -154,18 +156,19 @@ type recoverMetricsBatchResult struct {
 
 func NewRecoverMetricsCanvas(cfg RecoverMetricsCanvasConfig) *RecoverMetricsCanvas {
 	return &RecoverMetricsCanvas{
-		exec:                   cfg.Exec,
-		fragmentsRepo:          cfg.FragmentsRepo,
-		edgesRepo:              cfg.EdgesRepo,
-		materializedRepo:       cfg.MaterializedRepo,
-		lensesRepo:             cfg.LensesRepo,
-		capabilityProfilesRepo: cfg.CapabilityProfilesRepo,
-		capabilityObsRepo:      cfg.CapabilityObsRepo,
-		supplyLinkObsRepo:      cfg.SupplyLinkObsRepo,
-		routeObsRepo:           cfg.RouteObsRepo,
-		derivedRiskRepo:        cfg.DerivedRiskRepo,
-		publisher:              cfg.Publisher,
-		logger:                 cfg.Logger,
+		exec:                     cfg.Exec,
+		fragmentsRepo:            cfg.FragmentsRepo,
+		edgesRepo:                cfg.EdgesRepo,
+		materializedRepo:         cfg.MaterializedRepo,
+		lensesRepo:               cfg.LensesRepo,
+		capabilityProfilesRepo:   cfg.CapabilityProfilesRepo,
+		capabilityObsRepo:        cfg.CapabilityObsRepo,
+		supplyLinkObsRepo:        cfg.SupplyLinkObsRepo,
+		routeObsRepo:             cfg.RouteObsRepo,
+		derivedRiskRepo:          cfg.DerivedRiskRepo,
+		analyticalPrimitivesRepo: cfg.AnalyticalPrimitivesRepo,
+		publisher:                cfg.Publisher,
+		logger:                   cfg.Logger,
 	}
 }
 
@@ -1308,11 +1311,7 @@ func (c *RecoverMetricsCanvas) applyRecoveryToArtifact(ctx context.Context, tena
 	copyArtifact.PathStressScore = summary.PathStressScore
 	copyArtifact.BottleneckLeg = summary.BottleneckLegIndex
 	helper := &IdentifyStressesCanvas{
-		routeObsRepo:           c.routeObsRepo,
-		supplyLinkObsRepo:      c.supplyLinkObsRepo,
-		capabilityObsRepo:      c.capabilityObsRepo,
-		capabilityProfilesRepo: c.capabilityProfilesRepo,
-		derivedRiskRepo:        c.derivedRiskRepo,
+		analyticalPrimitivesRepo: c.analyticalPrimitivesRepo,
 	}
 	_, _ = helper.persistObservationArtifacts(ctx, tenantID, &copyArtifact, StressFinding{ProductRef: recovery.ProductRef}, sourceIDs, now)
 	return &copyArtifact, nil

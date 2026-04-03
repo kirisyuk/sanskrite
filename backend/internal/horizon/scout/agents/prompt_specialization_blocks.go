@@ -221,6 +221,12 @@ func GovEntityRelationRulesBlock() string {
 `
 }
 
+// PromptGovEntityRelationRulesBlock exposes the shared GOV-vs-ORG relation prompt rules
+// so external planners can stay aligned with the composable Scout prompt layer.
+func PromptGovEntityRelationRulesBlock() string {
+	return GovEntityRelationRulesBlock()
+}
+
 func buildCoreBusinessTaxonomyBlock() string {
 	domainContract := graphenrich.SupportedMarketDomainsForPrompt()
 	verticalHints := graphenrich.DomainVerticalHintsForPrompt()
@@ -241,4 +247,10 @@ func buildCoreBusinessTaxonomyBlock() string {
 - COMMUNITY:
   - communityType, communityPlatforms, communityEstimatedSize, affiliatedOrgPath
   - hierarchy via HAS_SUBGROUP (broader -> narrower), channels via OPERATES_VIA, market links via PARTICIPATES_IN`
+}
+
+// PromptCoreBusinessTaxonomyBlock exposes the shared business taxonomy contract
+// used by Scout extraction/research prompts.
+func PromptCoreBusinessTaxonomyBlock() string {
+	return buildCoreBusinessTaxonomyBlock()
 }

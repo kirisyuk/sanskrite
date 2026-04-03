@@ -32,6 +32,7 @@ func TestTraceWithSnapshot_ExactProductChain(t *testing.T) {
 		"/product/chemical/enzyme/industrial/enzyme-a",
 		map[string]struct{}{"/product/chemical/enzyme/industrial/enzyme-a": {}},
 		DefaultSupplyChainQueryOptions(),
+		false,
 	)
 	if err != nil {
 		t.Fatalf("traceWithSnapshot() error = %v", err)
@@ -89,6 +90,7 @@ func TestTraceWithSnapshot_DownstreamTransformChain(t *testing.T) {
 			"/product/finished/medical/assembly/enzyme-patch": {},
 		},
 		opts,
+		false,
 	)
 	if err != nil {
 		t.Fatalf("traceWithSnapshot() error = %v", err)
@@ -142,6 +144,7 @@ func TestTraceWithSnapshot_FiltersByActorEndpoints(t *testing.T) {
 		"/product/chemical/enzyme/industrial/enzyme-a",
 		map[string]struct{}{"/product/chemical/enzyme/industrial/enzyme-a": {}},
 		opts,
+		false,
 	)
 	if err != nil {
 		t.Fatalf("traceWithSnapshot() error = %v", err)

@@ -172,6 +172,7 @@ func main() {
 		fragmentsRepo,
 		edgesRepo,
 	).WithMaterializedArtifactsRepository(materializedRepo).
+		WithSignalLandingSummariesRepository(horizonrepo.NewSignalLandingSummariesRepository(db)).
 		WithMacroAgentPoliciesRepository(horizonrepo.NewMacroAgentPoliciesRepository(db)).
 		WithAgentProposalsRepository(horizonrepo.NewAgentProposalsRepository(db)).
 		WithArbitrationDecisionsRepository(horizonrepo.NewArbitrationDecisionsRepository(db)).

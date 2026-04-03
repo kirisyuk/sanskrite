@@ -29,9 +29,11 @@ import (
 	prov "github.com/igorkirisyuk/sanskrite/internal/discovery/providers"
 	"github.com/igorkirisyuk/sanskrite/internal/domain"
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
+	horizonproductdict "github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	horizonpropagation "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
+	horizonsignallanding "github.com/igorkirisyuk/sanskrite/internal/horizon/signallanding"
 	horizonsignals "github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/ontology"
@@ -43,15 +45,15 @@ const (
 )
 
 var (
-	projectID  = flag.String("project", os.Getenv("GCP_PROJECT_ID"), "GCP project ID")
-	feedURL    = flag.String("feed-url", "", "RSS feed URL (e.g. https://news.ycombinator.com/rss)")
-	sourceID   = flag.String("source", "", "DataSource ID (reads RSS URL from Firestore)")
-	docsLimit   = flag.Int("docs-limit", 5, "Max documents to extract per run (0 = all)")
-	eventsLimit = flag.Int("events-limit", 20, "Max events to process for signals (0 = all)")
-	eventsOnly     = flag.Bool("events-only", false, "Skip RSS fetch and extraction; only process existing events from ontology_facts")
-	simulate       = flag.Bool("simulate", false, "Simulate propagation (no persistence to fragments)")
-	verbose        = flag.Bool("verbose", false, "Verbose logging")
-	vertexStoreID  = flag.String("vertex-store", "", "Vertex AI Search horizon datastore ID (env: VERTEX_SEARCH_HORIZON_DATA_STORE_ID)")
+	projectID     = flag.String("project", os.Getenv("GCP_PROJECT_ID"), "GCP project ID")
+	feedURL       = flag.String("feed-url", "", "RSS feed URL (e.g. https://news.ycombinator.com/rss)")
+	sourceID      = flag.String("source", "", "DataSource ID (reads RSS URL from Firestore)")
+	docsLimit     = flag.Int("docs-limit", 5, "Max documents to extract per run (0 = all)")
+	eventsLimit   = flag.Int("events-limit", 20, "Max events to process for signals (0 = all)")
+	eventsOnly    = flag.Bool("events-only", false, "Skip RSS fetch and extraction; only process existing events from ontology_facts")
+	simulate      = flag.Bool("simulate", false, "Simulate propagation (no persistence to fragments)")
+	verbose       = flag.Bool("verbose", false, "Verbose logging")
+	vertexStoreID = flag.String("vertex-store", "", "Vertex AI Search horizon datastore ID (env: VERTEX_SEARCH_HORIZON_DATA_STORE_ID)")
 )
 
 func main() {
@@ -202,6 +204,7 @@ func main() {
 	propagationEngine := horizonpropagation.NewPropagationEngine(
 		horizonFragmentsRepo, versionsRepo, horizonEdgesRepo, lensesRepo, nil,
 	).WithProfileLookup(profileLookup)
+	productDictionary := horizonproductdict.NewRuntime(fs)
 
 	signalExtractor := horizonsignals.NewSignalExtractor(nil, exec)
 	applicability := horizonsignals.NewExternalApplicabilityEvaluator().
@@ -215,12 +218,13 @@ func main() {
 	if horizonDS == "" {
 		horizonDS = strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID"))
 	}
+	var vertexClient *ai.VertexAISearchClient
 	if horizonDS != "" {
 		vertexLoc := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_LOCATION"))
 		if vertexLoc == "" {
 			vertexLoc = "global"
 		}
-		vertexClient := ai.NewVertexAISearchClient(strings.TrimSpace(*projectID), vertexLoc, horizonDS, "")
+		vertexClient = ai.NewVertexAISearchClient(strings.TrimSpace(*projectID), vertexLoc, horizonDS, "")
 		if vertexClient.IsConfigured() {
 			seedInjector = seedInjector.WithVertexSearch(vertexClient)
 			logger.Printf("Vertex AI Search semantic resolution enabled (horizon datastore=%s)", horizonDS)
@@ -230,6 +234,18 @@ func main() {
 	signalPipeline := horizonscout.NewSignalPipeline(
 		signalExtractor, seedInjector, propagationEngine, profileLookup, ontologyFactsRepo,
 	).WithEscalationLLM(exec)
+	signalLandingService := horizonsignallanding.NewService(
+		horizonrepo.NewSignalLandingSessionsRepository(fs),
+		horizonrepo.NewSignalImpactClaimsRepository(fs),
+		horizonrepo.NewSignalLandingHitsRepository(fs),
+		horizonrepo.NewSignalLandingSummariesRepository(fs),
+		horizonrepo.NewSignalMissingAnchorCandidatesRepository(fs),
+		horizonFragmentsRepo,
+	).WithProductDictionary(productDictionary)
+	if vertexClient != nil && vertexClient.IsConfigured() {
+		signalLandingService = signalLandingService.WithVertexSearch(vertexClient)
+	}
+	signalPipeline = signalPipeline.WithSignalLanding(signalLandingService)
 
 	// Step 5: Process each event
 	fmt.Println("\n=== RSS-first pipeline trace ===")

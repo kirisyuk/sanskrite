@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/analytical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/metriccore"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonprop "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
@@ -39,6 +40,7 @@ type Service struct {
 	agents       *horizonrepo.SimulationAgentsRepository
 	events       *horizonrepo.SimulationEventsRepository
 	artifacts    *horizonrepo.SimulationArtifactsRepository
+	aggregates   *horizonrepo.AnalyticalAggregatesRepository
 	fragments    *horizonrepo.HorizonFragmentsRepository
 	edges        *horizonrepo.DependencyEdgesRepository
 	lenses       *horizonrepo.LensesRepository
@@ -58,6 +60,7 @@ type Dependencies struct {
 	AgentsRepo               *horizonrepo.SimulationAgentsRepository
 	EventsRepo               *horizonrepo.SimulationEventsRepository
 	ArtifactsRepo            *horizonrepo.SimulationArtifactsRepository
+	AnalyticalAggregatesRepo *horizonrepo.AnalyticalAggregatesRepository
 	FragmentsRepo            *horizonrepo.HorizonFragmentsRepository
 	EdgesRepo                *horizonrepo.DependencyEdgesRepository
 	LensesRepo               *horizonrepo.LensesRepository
@@ -90,6 +93,7 @@ func NewService(deps Dependencies) (*Service, error) {
 		agents:       deps.AgentsRepo,
 		events:       deps.EventsRepo,
 		artifacts:    deps.ArtifactsRepo,
+		aggregates:   deps.AnalyticalAggregatesRepo,
 		fragments:    deps.FragmentsRepo,
 		edges:        deps.EdgesRepo,
 		lenses:       deps.LensesRepo,
@@ -230,6 +234,35 @@ func (s *Service) GetBundleView(ctx context.Context, tenantID, runID string) (*h
 		return nil, artifact, err
 	}
 	return bundle, artifact, nil
+}
+
+func (s *Service) EnsureScenarioAggregate(ctx context.Context, tenantID, runID string) (*horizonmodels.AnalyticalAggregate, error) {
+	if s == nil || s.aggregates == nil {
+		return nil, nil
+	}
+	run, err := s.runs.Get(ctx, runID)
+	if err != nil || run == nil {
+		return nil, err
+	}
+	if tenantID == "" {
+		tenantID = run.TenantID
+	}
+	existing, err := s.aggregates.ListByScopeRefs(ctx, strings.TrimSpace(tenantID), []string{strings.TrimSpace(runID)}, 8)
+	if err == nil {
+		for _, item := range existing {
+			if item == nil || !strings.EqualFold(strings.TrimSpace(item.AggregateType), "disruption_impact_summary") {
+				continue
+			}
+			if item.StaleAt == nil || item.StaleAt.After(time.Now().UTC()) {
+				return item, nil
+			}
+		}
+	}
+	bundle, _, err := s.GetBundleView(ctx, strings.TrimSpace(tenantID), runID)
+	if err != nil {
+		bundle = nil
+	}
+	return analytical.PersistSimulationRunAggregate(ctx, s.aggregates, run, bundle, time.Now().UTC())
 }
 
 func (s *Service) GetTrace(ctx context.Context, tenantID, runID string) (map[string]any, error) {

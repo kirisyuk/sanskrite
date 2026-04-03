@@ -11,6 +11,8 @@ import (
 
 	"cloud.google.com/go/firestore"
 
+	"github.com/igorkirisyuk/sanskrite/internal/cache"
+	horizonanalytical "github.com/igorkirisyuk/sanskrite/internal/horizon/analytical"
 	horizoncriticalpath "github.com/igorkirisyuk/sanskrite/internal/horizon/critical_path"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonpolicy "github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
@@ -21,10 +23,19 @@ import (
 
 func main() {
 	var (
-		projectID     = flag.String("project", "nv-horizon", "GCP project id")
-		canonicalPath = flag.String("path", "/org/byd", "canonical path to propagate from (e.g., /org/byd)")
-		metricName    = flag.String("metric", "/metric/risk/supply_chain_criticality", "metric name to change")
-		delta         = flag.Float64("delta", 0.1, "delta to apply to the source metric before propagation")
+		projectID         = flag.String("project", "nv-horizon", "GCP project id")
+		tenantID          = flag.String("tenant", "global", "Tenant id")
+		canonicalPath     = flag.String("path", "/org/byd", "canonical path to propagate from (e.g., /org/byd)")
+		metricName        = flag.String("metric", "/metric/risk/supply_chain_criticality", "metric name to change")
+		delta             = flag.Float64("delta", 0.1, "delta to apply to the source metric before propagation")
+		enableRealtime    = flag.Bool("realtime", true, "Publish propagation events to realtime Pub/Sub")
+		refreshAnalytical = flag.Bool("refresh-analytical", true, "Persist fragment-backed analytical primitives and refresh impacted aggregates")
+		hotOnly           = flag.Bool("hot-only", true, "Use projection-backed hot-path analytical refresh")
+		skipCorpus        = flag.Bool("skip-corpus", true, "Do not trigger corpus rebuild side effects")
+		skipSimulation    = flag.Bool("skip-simulation", true, "Do not trigger scenario simulation side effects")
+		projectionSource  = flag.String("projection-source", "firestore", "Projection source: redis|firestore")
+		coalescingWindow  = flag.Duration("coalescing-window", 2*time.Second, "Dirty ref coalescing window")
+		analyticalTimeout = flag.Duration("analytical-timeout", 45*time.Second, "Timeout for analytical refresh after propagation")
 	)
 	flag.Parse()
 
@@ -36,17 +47,26 @@ func main() {
 	}
 	defer fs.Close()
 
-	// Real-time publisher (Pub/Sub) for propagation events
-	pub, err := realtime.NewPublisher(ctx, strings.TrimSpace(*projectID))
-	if err != nil {
-		log.Fatalf("realtime publisher init failed: %v", err)
+	var pub *realtime.Publisher
+	if *enableRealtime {
+		pub, err = realtime.NewPublisher(ctx, strings.TrimSpace(*projectID))
+		if err != nil {
+			log.Fatalf("realtime publisher init failed: %v", err)
+		}
 	}
 
 	frRepo := horizonrepo.NewHorizonFragmentsRepository(fs)
 	versionsRepo := horizonrepo.NewHorizonFragmentVersionsRepository(fs)
 	edgesRepo := horizonrepo.NewDependencyEdgesRepository(fs)
 	lensesRepo := horizonrepo.NewLensesRepository(fs)
+	watchSubjectsRepo := horizonrepo.NewWatchSubjectsRepository(fs)
 	propagationRulesRepo := horizonrepo.NewPropagationPoliciesRepository(fs)
+	analyticalPrimitivesRepo := horizonrepo.NewAnalyticalPrimitivesRepository(fs)
+	analyticalAggregatesRepo := horizonrepo.NewAnalyticalAggregatesRepository(fs)
+	materializedArtifactsRepo := horizonrepo.NewMaterializedArtifactsRepository(fs)
+	refScopeProjectionsRepo := horizonrepo.NewRefScopeProjectionsRepository(fs)
+	pathFamilyProjectionsRepo := horizonrepo.NewPathFamilyProjectionsRepository(fs)
+	compiledWatchSubjectsRepo := horizonrepo.NewCompiledWatchSubjectsRepository(fs)
 
 	// Policy infrastructure
 	telemetryWriter := horizonpolicy.NewFirestoreTelemetryWriter(fs)
@@ -125,8 +145,123 @@ func main() {
 		}
 	}
 
+	if *refreshAnalytical {
+		changedRefs := make([]string, 0, len(res.AffectedFragments)+1)
+		changedRefs = append(changedRefs, strings.TrimSpace(frag.CanonicalPath))
+		for _, affectedFragmentID := range res.AffectedFragments {
+			affectedFragmentID = strings.TrimSpace(affectedFragmentID)
+			if affectedFragmentID == "" {
+				continue
+			}
+			affected, err := frRepo.Get(ctx, affectedFragmentID)
+			if err != nil || affected == nil || strings.TrimSpace(affected.CanonicalPath) == "" {
+				continue
+			}
+			changedRefs = append(changedRefs, strings.TrimSpace(affected.CanonicalPath))
+		}
+		projectionService := horizonanalytical.NewProjectionService(
+			refScopeProjectionsRepo,
+			pathFamilyProjectionsRepo,
+			compiledWatchSubjectsRepo,
+			watchSubjectsRepo,
+			analyticalAggregatesRepo,
+		)
+		redisEnabled := false
+		if strings.EqualFold(strings.TrimSpace(*projectionSource), "redis") {
+			redisClient := cache.NewRedisClient()
+			if redisClient != nil {
+				pingCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+				pingErr := redisClient.Ping(pingCtx).Err()
+				cancel()
+				if pingErr != nil {
+					log.Printf("Redis unavailable at %s: %v; falling back to firestore projection path", redisClient.Options().Addr, pingErr)
+				} else {
+					redisEnabled = true
+					projectionService.WithRedis(redisClient)
+					_ = horizonanalytical.EnqueueChangedRefs(ctx, redisClient, strings.TrimSpace(firstNonEmpty(*tenantID, frag.TenantID, "global")), changedRefs, *coalescingWindow+2*time.Minute)
+					if *coalescingWindow > 0 {
+						time.Sleep(*coalescingWindow)
+					}
+					if drained, drainErr := horizonanalytical.DrainChangedRefs(ctx, redisClient, strings.TrimSpace(firstNonEmpty(*tenantID, frag.TenantID, "global"))); drainErr == nil && len(drained) > 0 {
+						changedRefs = drained
+					}
+				}
+			}
+		}
+		refreshCtx, cancel := context.WithTimeout(ctx, *analyticalTimeout)
+		defer cancel()
+		deltaState, err := projectionService.ResolveAffectedScopes(refreshCtx, strings.TrimSpace(firstNonEmpty(*tenantID, frag.TenantID, "global")), changedRefs)
+		if err != nil {
+			log.Fatalf("projection resolve failed: %v", err)
+		}
+		var refreshResult *horizonanalytical.RuntimeRefreshResult
+		if *hotOnly {
+			refreshResult, err = horizonanalytical.RefreshForDelta(refreshCtx, horizonanalytical.RuntimeRefreshDeps{
+				FragmentsRepo:     frRepo,
+				LensesRepo:        lensesRepo,
+				MaterializedRepo:  materializedArtifactsRepo,
+				WatchSubjectsRepo: watchSubjectsRepo,
+				PrimitivesRepo:    analyticalPrimitivesRepo,
+				AggregatesRepo:    analyticalAggregatesRepo,
+				ProjectionService: projectionService,
+			}, deltaState, time.Now().UTC())
+		} else {
+			legacyResult, legacyErr := horizonanalytical.RefreshKnowledgeForRefs(
+				refreshCtx,
+				frRepo,
+				lensesRepo,
+				materializedArtifactsRepo,
+				watchSubjectsRepo,
+				analyticalPrimitivesRepo,
+				analyticalAggregatesRepo,
+				strings.TrimSpace(firstNonEmpty(*tenantID, frag.TenantID, "global")),
+				changedRefs,
+				time.Now().UTC(),
+			)
+			err = legacyErr
+			if legacyResult != nil {
+				refreshResult = &horizonanalytical.RuntimeRefreshResult{
+					Delta:                  deltaState,
+					UpdatedPrimitiveCount:  legacyResult.UpdatedPrimitiveCount,
+					UpdatedFragmentScopes:  legacyResult.UpdatedFragmentScopes,
+					UpdatedLensIDs:         legacyResult.UpdatedLensIDs,
+					UpdatedWatchSubjectIDs: legacyResult.UpdatedWatchSubjectIDs,
+				}
+			}
+		}
+		if err != nil {
+			log.Fatalf("analytical refresh failed: %v", err)
+		}
+		if refreshResult != nil {
+			log.Printf(
+				"Analytical refresh: refs=%d fragmentScopes=%d lenses=%d watchSubjects=%d primitivesUpserted=%d hotOnly=%t redisEnabled=%t skipCorpus=%t skipSimulation=%t",
+				len(refreshResult.Delta.ChangedRefs),
+				len(refreshResult.UpdatedFragmentScopes),
+				len(refreshResult.UpdatedLensIDs),
+				len(refreshResult.UpdatedWatchSubjectIDs),
+				refreshResult.UpdatedPrimitiveCount,
+				*hotOnly,
+				redisEnabled,
+				*skipCorpus,
+				*skipSimulation,
+			)
+			if len(refreshResult.UpdatedLensIDs) > 0 {
+				log.Printf("Analytical lens refresh ids=%v", refreshResult.UpdatedLensIDs)
+			}
+			if len(refreshResult.UpdatedFragmentScopes) > 0 {
+				log.Printf("Analytical fragment refresh refs=%v", refreshResult.UpdatedFragmentScopes)
+			}
+		}
+	}
+
 	fmt.Println("OK")
 }
 
-
-
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}

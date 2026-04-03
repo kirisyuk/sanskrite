@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/analytical"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathbinding"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathstress"
@@ -27,11 +28,11 @@ import (
 )
 
 const (
-	defaultIdentifyStressesMaxNodes      = 40
-	defaultIdentifyStressesMaxArtifacts  = 25
-	defaultIdentifyStressesMaxFindings   = 120
-	defaultIdentifyStressesMaxRelations  = 240
-	identifyStressesBatchSize            = 12
+	defaultIdentifyStressesMaxNodes     = 40
+	defaultIdentifyStressesMaxArtifacts = 25
+	defaultIdentifyStressesMaxFindings  = 120
+	defaultIdentifyStressesMaxRelations = 240
+	identifyStressesBatchSize           = 12
 )
 
 var (
@@ -186,58 +187,61 @@ type IdentifyStressesDebugResult struct {
 }
 
 type IdentifyStressesCanvas struct {
-	exec                   *ai.AITaskExecutor
-	factsRepo              *corerepo.OntologyFactsRepository
-	dataSourcesRepo        *corerepo.DataSourcesRepository
-	fragmentsRepo          *horizonrepo.HorizonFragmentsRepository
-	edgesRepo              *horizonrepo.DependencyEdgesRepository
-	materializedRepo       *horizonrepo.MaterializedArtifactsRepository
-	lensesRepo             *horizonrepo.LensesRepository
-	signalPipeline         *horizonscout.SignalPipeline
-	capabilityProfilesRepo *horizonrepo.CapabilityProfilesRepository
-	capabilityObsRepo      *horizonrepo.CapabilityObservationsRepository
-	supplyLinkObsRepo      *horizonrepo.SupplyLinkObservationsRepository
-	routeObsRepo           *horizonrepo.RouteObservationsRepository
-	derivedRiskRepo        *horizonrepo.DerivedRiskProfilesRepository
-	publisher              func(ctx context.Context, eventType string, tenantID string, payload interface{}) error
-	logger                 *log.Logger
+	exec                     *ai.AITaskExecutor
+	factsRepo                *corerepo.OntologyFactsRepository
+	dataSourcesRepo          *corerepo.DataSourcesRepository
+	fragmentsRepo            *horizonrepo.HorizonFragmentsRepository
+	edgesRepo                *horizonrepo.DependencyEdgesRepository
+	materializedRepo         *horizonrepo.MaterializedArtifactsRepository
+	lensesRepo               *horizonrepo.LensesRepository
+	signalPipeline           *horizonscout.SignalPipeline
+	capabilityProfilesRepo   *horizonrepo.CapabilityProfilesRepository
+	capabilityObsRepo        *horizonrepo.CapabilityObservationsRepository
+	supplyLinkObsRepo        *horizonrepo.SupplyLinkObservationsRepository
+	routeObsRepo             *horizonrepo.RouteObservationsRepository
+	derivedRiskRepo          *horizonrepo.DerivedRiskProfilesRepository
+	analyticalPrimitivesRepo *horizonrepo.AnalyticalPrimitivesRepository
+	publisher                func(ctx context.Context, eventType string, tenantID string, payload interface{}) error
+	logger                   *log.Logger
 }
 
 type IdentifyStressesCanvasConfig struct {
-	Exec                   *ai.AITaskExecutor
-	FactsRepo              *corerepo.OntologyFactsRepository
-	DataSourcesRepo        *corerepo.DataSourcesRepository
-	FragmentsRepo          *horizonrepo.HorizonFragmentsRepository
-	EdgesRepo              *horizonrepo.DependencyEdgesRepository
-	MaterializedRepo       *horizonrepo.MaterializedArtifactsRepository
-	LensesRepo             *horizonrepo.LensesRepository
-	SignalPipeline         *horizonscout.SignalPipeline
-	CapabilityProfilesRepo *horizonrepo.CapabilityProfilesRepository
-	CapabilityObsRepo      *horizonrepo.CapabilityObservationsRepository
-	SupplyLinkObsRepo      *horizonrepo.SupplyLinkObservationsRepository
-	RouteObsRepo           *horizonrepo.RouteObservationsRepository
-	DerivedRiskRepo        *horizonrepo.DerivedRiskProfilesRepository
-	Publisher              func(ctx context.Context, eventType string, tenantID string, payload interface{}) error
-	Logger                 *log.Logger
+	Exec                     *ai.AITaskExecutor
+	FactsRepo                *corerepo.OntologyFactsRepository
+	DataSourcesRepo          *corerepo.DataSourcesRepository
+	FragmentsRepo            *horizonrepo.HorizonFragmentsRepository
+	EdgesRepo                *horizonrepo.DependencyEdgesRepository
+	MaterializedRepo         *horizonrepo.MaterializedArtifactsRepository
+	LensesRepo               *horizonrepo.LensesRepository
+	SignalPipeline           *horizonscout.SignalPipeline
+	CapabilityProfilesRepo   *horizonrepo.CapabilityProfilesRepository
+	CapabilityObsRepo        *horizonrepo.CapabilityObservationsRepository
+	SupplyLinkObsRepo        *horizonrepo.SupplyLinkObservationsRepository
+	RouteObsRepo             *horizonrepo.RouteObservationsRepository
+	DerivedRiskRepo          *horizonrepo.DerivedRiskProfilesRepository
+	AnalyticalPrimitivesRepo *horizonrepo.AnalyticalPrimitivesRepository
+	Publisher                func(ctx context.Context, eventType string, tenantID string, payload interface{}) error
+	Logger                   *log.Logger
 }
 
 func NewIdentifyStressesCanvas(cfg IdentifyStressesCanvasConfig) *IdentifyStressesCanvas {
 	return &IdentifyStressesCanvas{
-		exec:                   cfg.Exec,
-		factsRepo:              cfg.FactsRepo,
-		dataSourcesRepo:        cfg.DataSourcesRepo,
-		fragmentsRepo:          cfg.FragmentsRepo,
-		edgesRepo:              cfg.EdgesRepo,
-		materializedRepo:       cfg.MaterializedRepo,
-		lensesRepo:             cfg.LensesRepo,
-		signalPipeline:         cfg.SignalPipeline,
-		capabilityProfilesRepo: cfg.CapabilityProfilesRepo,
-		capabilityObsRepo:      cfg.CapabilityObsRepo,
-		supplyLinkObsRepo:      cfg.SupplyLinkObsRepo,
-		routeObsRepo:           cfg.RouteObsRepo,
-		derivedRiskRepo:        cfg.DerivedRiskRepo,
-		publisher:              cfg.Publisher,
-		logger:                 cfg.Logger,
+		exec:                     cfg.Exec,
+		factsRepo:                cfg.FactsRepo,
+		dataSourcesRepo:          cfg.DataSourcesRepo,
+		fragmentsRepo:            cfg.FragmentsRepo,
+		edgesRepo:                cfg.EdgesRepo,
+		materializedRepo:         cfg.MaterializedRepo,
+		lensesRepo:               cfg.LensesRepo,
+		signalPipeline:           cfg.SignalPipeline,
+		capabilityProfilesRepo:   cfg.CapabilityProfilesRepo,
+		capabilityObsRepo:        cfg.CapabilityObsRepo,
+		supplyLinkObsRepo:        cfg.SupplyLinkObsRepo,
+		routeObsRepo:             cfg.RouteObsRepo,
+		derivedRiskRepo:          cfg.DerivedRiskRepo,
+		analyticalPrimitivesRepo: cfg.AnalyticalPrimitivesRepo,
+		publisher:                cfg.Publisher,
+		logger:                   cfg.Logger,
 	}
 }
 
@@ -2067,163 +2071,22 @@ func (c *IdentifyStressesCanvas) applyFindingToArtifact(ctx context.Context, ten
 }
 
 func (c *IdentifyStressesCanvas) persistObservationArtifacts(ctx context.Context, tenantID string, artifact *horizonmodels.MaterializedArtifact, finding StressFinding, evidenceIDs []string, now time.Time) ([]string, []string) {
-	if artifact == nil {
+	if artifact == nil || c == nil || c.analyticalPrimitivesRepo == nil {
 		return nil, nil
 	}
-	parsed, err := horizonmodels.ParseSupplyChainPathPayload(artifact.Payload)
-	if err != nil || parsed == nil {
-		return nil, nil
-	}
-	routeObsIDs := []string{}
-	supplyObsIDs := []string{}
-	if c.routeObsRepo != nil {
-		if parsed.Stress != nil {
-			pathObs := &horizonmodels.RouteObservation{
-				TenantID:        tenantID,
-				PathArtifactKey: strings.TrimPrefix(strings.TrimSpace(artifact.CanonicalKey), "/"),
-				ProductRef:      strings.TrimSpace(artifact.ProductAxis),
-				Metrics: map[string]horizonmodels.MetricValue{
-					"route_fragility":        makeDerivedMetric(parsed.Stress.Fragility, now, evidenceIDs),
-					"route_rerouteability":   makeDerivedMetric(parsed.Stress.Rerouteability, now, evidenceIDs),
-					"path_zone_pressure":     makeDerivedMetric(parsed.Stress.ZonePressure, now, evidenceIDs),
-					"path_affected_pressure": makeDerivedMetric(parsed.Stress.AffectedZonePressure, now, evidenceIDs),
-					"recovery_latency_hours": makeDerivedMetric(parsed.Stress.RecoveryLatencyHrs, now, evidenceIDs),
-					"path_stress_score":      makeDerivedMetric(parsed.Stress.PathScore, now, evidenceIDs),
-					"binding_confidence":     makeDerivedMetric(artifact.BindingScore, now, evidenceIDs),
-				},
-				Qualifiers: map[string]interface{}{
-					"geoRefs":          append([]string(nil), artifact.GeoRefs...),
-					"flowRefs":         append([]string(nil), artifact.FlowRefs...),
-					"zoneRefs":         append([]string(nil), artifact.ZoneRefs...),
-					"affectedZoneRefs": append([]string(nil), artifact.AffectedZoneRefs...),
-					"bottleneck":       parsed.Stress.BottleneckLegIndex,
-					"dominantFactors":  append([]string(nil), parsed.Stress.DominantFactors...),
-				},
-				SourceIDs:  append([]string(nil), evidenceIDs...),
-				ObservedAt: now,
-			}
-			if id, err := c.routeObsRepo.Create(ctx, pathObs); err == nil && id != "" {
-				routeObsIDs = append(routeObsIDs, id)
-			}
+	primitiveIDs := []string{}
+	for _, primitive := range analytical.BuildPathPrimitivesFromArtifact(artifact, evidenceIDs, "interactive_stress", now) {
+		if primitive == nil {
+			continue
 		}
-		for _, leg := range parsed.Legs {
-			if leg.Stress == nil {
-				continue
-			}
-			legIndex := leg.Index
-			legObs := &horizonmodels.RouteObservation{
-				TenantID:                tenantID,
-				SupplyLinkCanonicalPath: strings.TrimSpace(leg.SupplyLinkCanonicalPath),
-				PathArtifactKey:         strings.TrimPrefix(strings.TrimSpace(artifact.CanonicalKey), "/"),
-				LegIndex:                &legIndex,
-				ProductRef:              strings.TrimSpace(leg.ProductRef),
-				TransportViaRefs:        append([]string(nil), leg.TransportViaRefs...),
-				Metrics: map[string]horizonmodels.MetricValue{
-					"binding_confidence":     makeDerivedMetric(leg.BindingConfidence, now, evidenceIDs),
-					"segment_confidence":     makeDerivedMetric(leg.SegmentConfidence, now, evidenceIDs),
-					"route_fragility":        makeDerivedMetric(leg.Stress.Fragility, now, evidenceIDs),
-					"route_rerouteability":   makeDerivedMetric(leg.Stress.Rerouteability, now, evidenceIDs),
-					"path_zone_pressure":     makeDerivedMetric(leg.Stress.ZonePressure, now, evidenceIDs),
-					"path_affected_pressure": makeDerivedMetric(leg.Stress.AffectedZonePressure, now, evidenceIDs),
-					"recovery_latency_hours": makeDerivedMetric(leg.Stress.RecoveryLatencyHrs, now, evidenceIDs),
-					"path_stress_score":      makeDerivedMetric(leg.Stress.StressScore, now, evidenceIDs),
-				},
-				Qualifiers: map[string]interface{}{
-					"mode":              leg.Mode,
-					"geoRefs":           append([]string(nil), leg.GeoRefs...),
-					"flowRefs":          append([]string(nil), leg.FlowRefs...),
-					"alternateFlowRefs": append([]string(nil), leg.AlternateFlowRefs...),
-					"zoneRefs":          append([]string(nil), leg.ZoneRefs...),
-					"affectedZoneRefs":  append([]string(nil), leg.AffectedZoneRefs...),
-					"spatialSemantics":  append([]string(nil), leg.SpatialSemantics...),
-					"vesselType":        leg.VesselType,
-					"dominantFactors":   append([]string(nil), leg.Stress.DominantFactors...),
-				},
-				SourceIDs:  append([]string(nil), evidenceIDs...),
-				ObservedAt: now,
-			}
-			if id, err := c.routeObsRepo.Create(ctx, legObs); err == nil && id != "" {
-				routeObsIDs = append(routeObsIDs, id)
-			}
+		if finding.ProductRef != "" && len(primitive.ProductRefs) == 0 {
+			primitive.ProductRefs = []string{strings.TrimSpace(finding.ProductRef)}
+		}
+		if err := c.analyticalPrimitivesRepo.Upsert(ctx, primitive); err == nil && strings.TrimSpace(primitive.ID) != "" {
+			primitiveIDs = append(primitiveIDs, strings.TrimSpace(primitive.ID))
 		}
 	}
-
-	if c.supplyLinkObsRepo != nil || c.capabilityObsRepo != nil || c.capabilityProfilesRepo != nil || c.derivedRiskRepo != nil {
-		for _, edge := range parsed.Edges {
-			if strings.TrimSpace(edge.SupplyLinkCanonicalPath) == "" {
-				continue
-			}
-			if c.supplyLinkObsRepo != nil {
-				obs := &horizonmodels.SupplyLinkObservation{
-					TenantID:                tenantID,
-					SupplyLinkCanonicalPath: strings.TrimSpace(edge.SupplyLinkCanonicalPath),
-					ProductRef:              strings.TrimSpace(firstNonEmptyString(edge.ProductRef, finding.ProductRef)),
-					Metrics:                 cloneMetricMap(edge.Metrics),
-					Qualifiers:              cloneInterfaceMap(edge.Qualifiers),
-					SourceIDs:               append([]string(nil), evidenceIDs...),
-					ObservedAt:              now,
-				}
-				if id, err := c.supplyLinkObsRepo.Create(ctx, obs); err == nil && id != "" {
-					supplyObsIDs = append(supplyObsIDs, id)
-				}
-			}
-			productRef := strings.TrimSpace(firstNonEmptyString(edge.ProductRef, finding.ProductRef))
-			supplierRef, _ := parsedEdgeEndpointRefs(parsed, edge)
-			if c.capabilityObsRepo != nil && supplierRef != "" && productRef != "" {
-				obs := &horizonmodels.CapabilityObservation{
-					TenantID:   tenantID,
-					CarrierRef: supplierRef,
-					ProductRef: productRef,
-					Metrics:    selectMetricKeys(cloneMetricMap(edge.Metrics), identifyCapabilityMetricKeys),
-					Qualifiers: cloneInterfaceMap(edge.Qualifiers),
-					SourceIDs:  append([]string(nil), evidenceIDs...),
-					ObservedAt: now,
-				}
-				if id, err := c.capabilityObsRepo.Create(ctx, obs); err == nil && id != "" {
-					supplyObsIDs = append(supplyObsIDs, id)
-				}
-			}
-			if c.capabilityProfilesRepo != nil && supplierRef != "" && productRef != "" {
-				profile, _ := c.capabilityProfilesRepo.Get(ctx, supplierRef, productRef)
-				if profile == nil {
-					profile = &horizonmodels.CapabilityProfile{TenantID: tenantID, CarrierRef: supplierRef, ProductRef: productRef}
-				}
-				if profile.Metrics == nil {
-					profile.Metrics = map[string]horizonmodels.MetricValue{}
-				}
-				for key, metric := range selectMetricKeys(cloneMetricMap(edge.Metrics), identifyCapabilityMetricKeys) {
-					profile.Metrics[key] = metric
-				}
-				if profile.Qualifiers == nil {
-					profile.Qualifiers = map[string]interface{}{}
-				}
-				for key, value := range cloneInterfaceMap(edge.Qualifiers) {
-					profile.Qualifiers[key] = value
-				}
-				profile.CoverageStatus = computeCoverageStatus(profile.Metrics)
-				profile.LastObservedAt = now
-				profile.LastRolledUpAt = now
-				_ = c.capabilityProfilesRepo.Upsert(ctx, profile)
-			}
-			if c.derivedRiskRepo != nil {
-				scopeRef := strings.TrimSpace(edge.SupplyLinkCanonicalPath)
-				if scopeRef == "" {
-					scopeRef = strings.TrimSpace(artifact.CanonicalKey)
-				}
-				profile := &horizonmodels.DerivedRiskProfile{
-					TenantID:        tenantID,
-					ScopeRef:        scopeRef,
-					ProductRef:      productRef,
-					ProfileType:     "supply_link_risk",
-					Metrics:         selectMetricKeys(cloneMetricMap(edge.Metrics), identifyPrimaryScalarMetrics),
-					Qualifiers:      cloneInterfaceMap(edge.Qualifiers),
-					EvidenceFactIDs: append([]string(nil), evidenceIDs...),
-				}
-				_ = c.derivedRiskRepo.Upsert(ctx, profile)
-			}
-		}
-	}
-	return uniqueStrings(routeObsIDs), uniqueStrings(supplyObsIDs)
+	return uniqueStrings(primitiveIDs), nil
 }
 
 func (c *IdentifyStressesCanvas) syncLensScopeArtifact(ctx context.Context, lens *horizonmodels.Lens, artifact *horizonmodels.MaterializedArtifact) error {

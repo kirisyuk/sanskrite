@@ -1,6 +1,9 @@
 package agents
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestApplyIntentResolutionQualityRules_SynthesizesSupplyPlan(t *testing.T) {
 	out := IntentResolution{
@@ -72,6 +75,44 @@ func TestSynthesizeSupplyChainExecutionPlan_IncludesFacilityAnchors(t *testing.T
 	}
 }
 
+func TestApplyIntentResolutionQualityRules_SynthesizesServicePlan(t *testing.T) {
+	out := IntentResolution{
+		Domains: []DomainResolution{{
+			CanonicalPath: "/domain/v1/service-chain/geo/us/subject/google-cloud",
+			ContractType:  "service-chain",
+			Facets:        map[string][]string{"geo": {"us"}, "subject": {"google-cloud"}, "product": {"cloud-service"}},
+		}},
+		Anchors: []struct {
+			CanonicalPath string  `json:"canonicalPath"`
+			Type          string  `json:"type"`
+			Name          string  `json:"name,omitempty"`
+			Confidence    float64 `json:"confidence"`
+			Reason        string  `json:"reason"`
+		}{
+			{CanonicalPath: "/org/us/google-cloud", Type: "ORGANIZATION", Confidence: 0.9},
+			{CanonicalPath: "/fac/us/google-cloud-us-central1", Type: "FACILITY", Confidence: 0.8},
+			{CanonicalPath: "/deposit/us/random-fuel-source", Type: "DEPOSIT", Confidence: 0.7},
+		},
+	}
+	applyIntentResolutionQualityRules("Map the Google Cloud service chain for us-central1 including dependencies and downstream recipients", &out)
+	if out.Domains[0].ServiceChainExecutionPlan == nil || len(out.Domains[0].ServiceChainExecutionPlan.Queries) == 0 {
+		t.Fatalf("expected synthesized service chain plan")
+	}
+	if out.Domains[0].SupplyChainExecutionPlan != nil {
+		t.Fatalf("service-chain domain must not receive supplyChainExecutionPlan")
+	}
+	for _, q := range out.Domains[0].ServiceChainExecutionPlan.Queries {
+		if q.AnchorType == "deposit" {
+			t.Fatalf("service-chain plan must not include deposit anchors: %#v", out.Domains[0].ServiceChainExecutionPlan.Queries)
+		}
+	}
+	for _, entity := range out.Domains[0].FirstOrderEntities {
+		if strings.HasPrefix(entity, "/deposit/") {
+			t.Fatalf("service-chain firstOrderEntities must not include deposit anchors: %#v", out.Domains[0].FirstOrderEntities)
+		}
+	}
+}
+
 func TestApplyIntentResolutionQualityRules_SynthesizesRegulatoryPlan(t *testing.T) {
 	out := IntentResolution{
 		Domains: []DomainResolution{{
@@ -103,6 +144,60 @@ func TestInferIntentScenarioProfile_ExpandsCapsForTransmissionScenarios(t *testi
 	}
 }
 
+func TestInferIntentScenarioProfile_DistinguishesServiceAndValueSignals(t *testing.T) {
+	serviceProfile := inferIntentScenarioProfile("Map the service chain for Google Cloud data center services in the Gulf, including control gates and downstream recipients", nil)
+	if !serviceProfile.service {
+		t.Fatalf("expected service profile, got %+v", serviceProfile)
+	}
+	if serviceProfile.value {
+		t.Fatalf("did not expect value signal in service query: %+v", serviceProfile)
+	}
+
+	valueProfile := inferIntentScenarioProfile("Map the cloud infrastructure value chain, profit pools, and bargaining power", nil)
+	if !valueProfile.value {
+		t.Fatalf("expected value profile, got %+v", valueProfile)
+	}
+	if valueProfile.service {
+		t.Fatalf("did not expect service signal in value query: %+v", valueProfile)
+	}
+}
+
+func TestPrioritizeIntentDomains_PrefersServiceChainForServiceSignals(t *testing.T) {
+	profile := inferIntentScenarioProfile("Map the service chain for Google Cloud data center services in the Gulf, including control gates and downstream recipients", nil)
+	domains := prioritizeIntentDomains([]DomainResolution{
+		{ContractType: "value-chain", CanonicalPath: "/domain/v1/value-chain/subject/google-cloud"},
+		{ContractType: "supply-chain", CanonicalPath: "/domain/v1/supply-chain/subject/google-cloud"},
+		{ContractType: "service-chain", CanonicalPath: "/domain/v1/service-chain/subject/google-cloud"},
+	}, profile)
+	if got := normalizeContractTypeAlias(domains[0].ContractType); got != "service-chain" {
+		t.Fatalf("expected service-chain to rank first, got %q", got)
+	}
+}
+
+func TestPrioritizeIntentDomains_PrefersValueChainForValueSignals(t *testing.T) {
+	profile := inferIntentScenarioProfile("Analyze the cloud value chain, profit pools, and value capture across providers and channel partners", nil)
+	domains := prioritizeIntentDomains([]DomainResolution{
+		{ContractType: "service-chain", CanonicalPath: "/domain/v1/service-chain/subject/google-cloud"},
+		{ContractType: "supply-chain", CanonicalPath: "/domain/v1/supply-chain/subject/google-cloud"},
+		{ContractType: "value-chain", CanonicalPath: "/domain/v1/value-chain/subject/google-cloud"},
+	}, profile)
+	if got := normalizeContractTypeAlias(domains[0].ContractType); got != "value-chain" {
+		t.Fatalf("expected value-chain to rank first, got %q", got)
+	}
+}
+
+func TestIntentResolverPrompts_IncludeServiceChainContract(t *testing.T) {
+	unified := buildUnifiedIntentPrompt("Map the Google Cloud service chain in the Gulf", nil)
+	if !strings.Contains(unified, "service-chain") || !strings.Contains(unified, "serviceChainExecutionPlan") {
+		t.Fatalf("unified prompt must teach service-chain explicitly")
+	}
+
+	agentPrompt := (&IntentResolverAgent{}).buildPrompt("Map the Google Cloud service chain in the Gulf", nil)
+	if !strings.Contains(agentPrompt, "service-chain") || !strings.Contains(agentPrompt, "serviceChainExecutionPlan") {
+		t.Fatalf("agent prompt must teach service-chain explicitly")
+	}
+}
+
 func TestRepairSupplyChainDomainNamespacePath_RewritesOrgNamespaceIntoFacets(t *testing.T) {
 	got := repairSupplyChainDomainNamespacePath("/domain/v1/supply-chain/org/us/apple-inc/product/macbook")
 	want := "/domain/v1/supply-chain/geo/us/subject/apple-inc/product/macbook"
@@ -115,6 +210,14 @@ func TestRepairSupplyChainDomainNamespacePath_LeavesNonSupplyChainDomainsUntouch
 	in := "/domain/v1/policy-impact/org/us/apple-inc"
 	if got := repairSupplyChainDomainNamespacePath(in); got != in {
 		t.Fatalf("repairSupplyChainDomainNamespacePath() = %q, want %q", got, in)
+	}
+}
+
+func TestRepairSupplyChainDomainNamespacePath_RepairsServiceChainDomains(t *testing.T) {
+	got := repairSupplyChainDomainNamespacePath("/domain/v1/service-chain/org/us/google-cloud/product/cloud-service")
+	want := "/domain/v1/service-chain/geo/us/subject/google-cloud/product/cloud-service"
+	if got != want {
+		t.Fatalf("repairSupplyChainDomainNamespacePath() = %q, want %q", got, want)
 	}
 }
 

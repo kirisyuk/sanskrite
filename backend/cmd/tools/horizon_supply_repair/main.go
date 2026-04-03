@@ -237,7 +237,10 @@ func main() {
 		resolvedPathByIn: make(map[string]string, 4096),
 		edgeExistsCache:  make(map[string]bool, 4096),
 	}
-	r.pathBuilder = pathbuilder.NewSupplyChainPathBuilder(r.fragmentsRepo, r.edgesRepo, r.artifactsRepo)
+	r.pathBuilder = pathbuilder.NewSupplyChainPathBuilder(r.fragmentsRepo, r.edgesRepo, r.artifactsRepo).
+		WithAnalyticalPrimitivesRepository(repo.NewAnalyticalPrimitivesRepository(db)).
+		WithAnalyticalAggregatesRepository(repo.NewAnalyticalAggregatesRepository(db)).
+		WithWatchSubjectsRepository(repo.NewWatchSubjectsRepository(db))
 	r.pathResolver = scout.NewCanonicalPathResolver(r.fragmentsRepo, nil, scout.NewOrgDeduplicator(r.fragmentsRepo, nil))
 
 	focusRefs, err := r.resolveFocusRefs(normalizeCSVPaths(*focusRefsCSV), *expandOwnedFacilities)

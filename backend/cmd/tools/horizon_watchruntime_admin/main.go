@@ -61,6 +61,7 @@ func main() {
 		horizonrepo.NewDependencyEdgesRepository(db),
 	).WithScopeAgentRunsRepository(horizonrepo.NewScopeAgentRunsRepository(db)).
 		WithMaterializedArtifactsRepository(horizonrepo.NewMaterializedArtifactsRepository(db)).
+		WithSignalLandingSummariesRepository(horizonrepo.NewSignalLandingSummariesRepository(db)).
 		WithMacroAgentPoliciesRepository(macroPoliciesRepo).
 		WithAgentProposalsRepository(horizonrepo.NewAgentProposalsRepository(db)).
 		WithArbitrationDecisionsRepository(horizonrepo.NewArbitrationDecisionsRepository(db)).

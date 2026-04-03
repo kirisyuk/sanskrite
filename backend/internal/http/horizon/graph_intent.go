@@ -16,10 +16,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
+	horizondomain "github.com/igorkirisyuk/sanskrite/internal/horizon/domain"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/merge"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	horizonnaming "github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
+	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
+	horizonagents "github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -335,6 +339,7 @@ func (h *HorizonHandlers) generateGraphIntentPlan(ctx context.Context, lens *hor
 	nodeTypeDescriptions := taxonomy.GraphIntentNodeTypeDescriptions(allowedNodeTypes)
 	relationTypeDescriptions := taxonomy.GraphIntentRelationTypeDescriptions(allowedRelations)
 	groupingKindDescriptions := taxonomy.GraphIntentGroupingKindDescriptions(allowedGroupingKinds)
+	sharedPromptBlock, activeDomainModes := buildGraphIntentSharedPromptBlocks(snapshot)
 	schema := horizonmodels.GraphIntentPlanResponseSchemaDraft07()
 	schemaJSON, _ := json.Marshal(schema)
 	snapshotJSON, _ := json.Marshal(snapshot)
@@ -371,6 +376,8 @@ Rules:
 - Keep output compact and executable.
 - Forbidden path forms (never use): /policy/*, /geo/*, /economy/*, /society/*, /org/gov/*.
 - CRITICAL: Every node (create.nodes, groupings.entities) MUST have tempId and canonicalPathHint. Edges use fromTempId/toTempId for new nodes, fromNodeId/toNodeId for existing snapshot nodes.
+- CRITICAL: DOMAIN canonicalPathHint MUST follow the shared domain contract syntax /domain/v1/{contractType}/{facetKey}/{facetValue}... with even key/value facets only.
+- CRITICAL: PRODUCT canonicalPathHint must represent canonical product identity. Do not invent scenario-specific product slugs when the scenario belongs in a DOMAIN or label/title.
 - DELETE: Use delete.nodeIds to remove obsolete nodes. Use delete.edgeIds to remove specific edges. Node deletion cascades to its edges.
 - MERGE: For "merge duplicates" or "remove duplicates, keep one" use merge block. Set merge.primaryNodeId to the canonical node (from snapshot), merge.duplicateNodeIds to the duplicates. The system will: reassign edges from duplicates to primary (with dedup), optionally merge fragment data (Labels, State, merged_paths), then delete duplicates. Prefer merge over update+delete for duplicate consolidation.
 `) + "\n\n" + taxonomy.GraphIntentCanonicalPathRulesPrompt()
@@ -433,6 +440,9 @@ Request:
 
 %s
 
+Shared composable prompt contracts reused from the pipeline:
+%s
+
 Graph snapshot JSON:
 %s
 
@@ -446,7 +456,7 @@ Full JSON schema (draft-07):
 %s
 
 Return exactly one JSON object. No markdown, no code fences. Just the raw JSON.
-`, time.Now().UTC().Format(time.RFC3339), horizonmodels.GraphIntentVersionV1, horizonmodels.GraphIntentExecutionLanguageEN, lens.ID, lens.ProjectID, req.RawQuery, req.QueryLanguage, req.Options.AllowSearchGrounding, req.Options.AllowInternalGrounding, req.Options.MaxNewNodes, req.Options.MaxNewEdges, groupingKindDescriptions, nodeTypeDescriptions, relationTypeDescriptions, string(snapshotJSON), exampleOutput, exampleMergeOutput, string(schemaJSON)))
+`, time.Now().UTC().Format(time.RFC3339), horizonmodels.GraphIntentVersionV1, horizonmodels.GraphIntentExecutionLanguageEN, lens.ID, lens.ProjectID, req.RawQuery, req.QueryLanguage, req.Options.AllowSearchGrounding, req.Options.AllowInternalGrounding, req.Options.MaxNewNodes, req.Options.MaxNewEdges, groupingKindDescriptions, nodeTypeDescriptions, relationTypeDescriptions, sharedPromptBlock, string(snapshotJSON), exampleOutput, exampleMergeOutput, string(schemaJSON)))
 
 	llmReq := gen_combined.GenAIRequest{
 		Model:             "", // Model Manager picks via MinCapabilityScore=7
@@ -470,6 +480,7 @@ Return exactly one JSON object. No markdown, no code fences. Just the raw JSON.
 		"systemInstructionChars": len(systemInstruction),
 		"schemaChars":            len(schemaJSON),
 		"snapshotChars":          len(snapshotJSON),
+		"activeDomainModes":      activeDomainModes,
 	})
 	llmStarted := time.Now()
 
@@ -540,6 +551,7 @@ Return exactly one JSON object. No markdown, no code fences. Just the raw JSON.
 		return nil, fmt.Errorf("planner JSON parse failed: %w", err)
 	}
 	normalizeGraphIntentPlanLoose(&plan)
+	h.repairGraphIntentPlanWithResolvers(ctx, lens, snapshot, strings.TrimSpace(req.RawQuery), &plan)
 	if err := plan.NormalizeAndValidate(); err != nil {
 		log.Printf("[GraphIntent] plan.validation_failed lensId=%s err=%v contentPreview=%s", lens.ID, err, contentPreview)
 		trace.Log(ctx, "graph_intent", "plan.validation_failed", map[string]any{
@@ -564,6 +576,78 @@ Return exactly one JSON object. No markdown, no code fences. Just the raw JSON.
 		plan.RequiresConfirmation = true
 	}
 	return &plan, nil
+}
+
+func buildGraphIntentSharedPromptBlocks(snapshot horizonmodels.GraphIntentSnapshot) (string, []string) {
+	activeDomainModes := graphIntentActiveDomainModes(snapshot)
+	blocks := []string{
+		"NAME NORMALIZATION CONTRACT:\n" + strings.TrimSpace(horizonnaming.PromptEntityNameNormalizationRules()),
+		"ANCHOR / DISPLAY NAMING CONTRACT:\n" + strings.TrimSpace(horizonnaming.PromptAnchorNameRules()),
+		"DOMAIN CONTRACT TYPES (shared with domain resolver):\n" + strings.TrimSpace(taxonomy.DomainContractTypesPromptForLLM()),
+		"MARKET / DECOMPOSITION CONTRACT:\n" + strings.TrimSpace(taxonomy.MarketGeographyAndDecompositionPromptBlock()),
+		"BUSINESS TAXONOMY CONTRACT:\n" + strings.TrimSpace(horizonagents.PromptCoreBusinessTaxonomyBlock()),
+		"GOV VS ORG RELATION CONTRACT:\n" + strings.TrimSpace(horizonagents.PromptGovEntityRelationRulesBlock()),
+		"EXTENDED CANONICAL PATH RULES:\n" + strings.TrimSpace(taxonomy.ExtendedCanonicalPathRulesPrompt()),
+		"BUSINESS TAG CONTRACT:\n" + strings.TrimSpace(taxonomy.BusinessTagRulesPrompt()),
+	}
+	if len(activeDomainModes) > 0 {
+		modeLines := make([]string, 0, len(activeDomainModes))
+		for _, mode := range activeDomainModes {
+			mode = strings.TrimSpace(mode)
+			if mode == "" {
+				continue
+			}
+			relationTypes := strings.TrimSpace(graphIntentAllowedRelationTypesForMode(mode))
+			entityTypes := strings.TrimSpace(taxonomy.EntityTypesForDomainMode(mode))
+			modeLines = append(modeLines, fmt.Sprintf("- %s\n  entityTypes: %s\n  relationTypes: %s", mode, entityTypes, relationTypes))
+		}
+		if len(modeLines) > 0 {
+			blocks = append(blocks, "ACTIVE DOMAIN MODES (inferred from visible domain scaffold):\n"+strings.Join(modeLines, "\n"))
+		}
+	}
+	blocks = append(blocks, "RELATION DIRECTION CONTRACT (shared with intent decomposition):\n"+strings.TrimSpace(horizonagents.PromptIntentDecomposerRelationRulesBlock(activeDomainModes)))
+	return strings.Join(blocks, "\n\n"), activeDomainModes
+}
+
+func graphIntentAllowedRelationTypesForMode(mode string) string {
+	shared := strings.Split(strings.TrimSpace(horizonagents.PromptRelationTypesForDomainMode(mode)), ",")
+	out := make([]string, 0, len(shared))
+	seen := map[string]struct{}{}
+	for _, rel := range shared {
+		rel = strings.ToUpper(strings.TrimSpace(rel))
+		if rel == "" || !horizonmodels.IsGraphIntentRelationTypeAllowed(rel) {
+			continue
+		}
+		if _, ok := seen[rel]; ok {
+			continue
+		}
+		seen[rel] = struct{}{}
+		out = append(out, rel)
+	}
+	if len(out) == 0 {
+		return strings.Join(horizonmodels.GraphIntentAllowedRelationTypesSorted(), ", ")
+	}
+	return strings.Join(out, ", ")
+}
+
+func graphIntentActiveDomainModes(snapshot horizonmodels.GraphIntentSnapshot) []string {
+	contractTypes := make([]string, 0, len(snapshot.Nodes))
+	for _, node := range snapshot.Nodes {
+		cp := strings.TrimSpace(node.CanonicalPath)
+		if !strings.HasPrefix(cp, "/domain/v1/") {
+			continue
+		}
+		parts := strings.Split(strings.Trim(cp, "/"), "/")
+		if len(parts) < 3 {
+			continue
+		}
+		contractTypes = append(contractTypes, strings.TrimSpace(parts[2]))
+	}
+	modes := horizondomain.DomainModesForContractTypes(contractTypes)
+	if len(modes) == 0 {
+		return []string{taxonomy.DomainModeGeneral}
+	}
+	return modes
 }
 
 func inferGraphIntentClass(plan *horizonmodels.GraphIntentPlanResponse) string {
@@ -765,16 +849,459 @@ func normalizeGraphIntentPlanLoose(plan *horizonmodels.GraphIntentPlanResponse) 
 	plan.Explanations = appendUniqueStrings(nil, plan.Explanations...)
 }
 
+func (h *HorizonHandlers) repairGraphIntentPlanWithResolvers(ctx context.Context, lens *horizonmodels.Lens, snapshot horizonmodels.GraphIntentSnapshot, rawQuery string, plan *horizonmodels.GraphIntentPlanResponse) {
+	if h == nil || lens == nil || plan == nil {
+		return
+	}
+	index := newGraphIntentSnapshotIndex(snapshot)
+	productPathsByRef := map[string]string{}
+	nodeRefsByID := map[string]graphIntentNodeRef{}
+
+	repairNode := func(scope string, spec *horizonmodels.GraphIntentNodeSpec) {
+		if spec == nil {
+			return
+		}
+		resolvedPath, warning := h.resolveGraphIntentNodeCanonicalPathHint(ctx, lens, index, rawQuery, spec.Type, spec.Label, spec.CanonicalPathHint)
+		if strings.TrimSpace(resolvedPath) != "" && strings.TrimSpace(resolvedPath) != strings.TrimSpace(spec.CanonicalPathHint) {
+			plan.Warnings = appendUniqueStrings(plan.Warnings, fmt.Sprintf("%s canonicalPathHint normalized: %s -> %s", scope, strings.TrimSpace(spec.CanonicalPathHint), strings.TrimSpace(resolvedPath)))
+			spec.CanonicalPathHint = strings.TrimSpace(resolvedPath)
+		}
+		if strings.TrimSpace(warning) != "" {
+			plan.Warnings = appendUniqueStrings(plan.Warnings, warning)
+		}
+		refInfo := graphIntentNodeRef{
+			CanonicalPath: strings.TrimSpace(spec.CanonicalPathHint),
+			Type:          strings.ToUpper(strings.TrimSpace(spec.Type)),
+		}
+		if tempID := strings.TrimSpace(spec.TempID); tempID != "" {
+			nodeRefsByID[tempID] = refInfo
+		}
+		if strings.EqualFold(strings.TrimSpace(spec.Type), string(horizonmodels.FragmentTypeProduct)) {
+			ref := strings.TrimSpace(firstNonEmptyGraphIntent(spec.TempID, spec.CanonicalPathHint))
+			if ref != "" && strings.HasPrefix(strings.TrimSpace(spec.CanonicalPathHint), "/product/") {
+				productPathsByRef[ref] = strings.TrimSpace(spec.CanonicalPathHint)
+			}
+		}
+	}
+
+	for gi := range plan.Create.Groupings {
+		grouping := &plan.Create.Groupings[gi]
+		for ni := range grouping.Entities {
+			repairNode(fmt.Sprintf("create.groupings[%d].entities[%d]", gi, ni), &grouping.Entities[ni])
+		}
+	}
+	for ni := range plan.Create.Nodes {
+		repairNode(fmt.Sprintf("create.nodes[%d]", ni), &plan.Create.Nodes[ni])
+	}
+
+	for _, node := range snapshot.Nodes {
+		cp := strings.TrimSpace(node.CanonicalPath)
+		refInfo := graphIntentNodeRef{
+			CanonicalPath: cp,
+			Type:          strings.ToUpper(strings.TrimSpace(node.Type)),
+		}
+		if nodeID := strings.TrimSpace(node.NodeID); nodeID != "" {
+			nodeRefsByID[nodeID] = refInfo
+		}
+		if fragmentID := strings.TrimSpace(node.FragmentID); fragmentID != "" {
+			nodeRefsByID[fragmentID] = refInfo
+		}
+		if cp == "" || !strings.HasPrefix(cp, "/product/") {
+			continue
+		}
+		if nodeID := strings.TrimSpace(node.NodeID); nodeID != "" {
+			productPathsByRef[nodeID] = cp
+		}
+		if fragmentID := strings.TrimSpace(node.FragmentID); fragmentID != "" {
+			productPathsByRef[fragmentID] = cp
+		}
+	}
+
+	repairEdge := func(scope string, spec *horizonmodels.GraphIntentEdgeSpec) {
+		if spec == nil {
+			return
+		}
+		sourceRef := graphIntentEdgeEndpointRef(spec.FromTempID, spec.FromNodeID, nodeRefsByID)
+		targetRef := graphIntentEdgeEndpointRef(spec.ToTempID, spec.ToNodeID, nodeRefsByID)
+		if normalizedRelation, warning := graphIntentNormalizeUnsupportedRelation(spec.RelationType, sourceRef, targetRef); normalizedRelation != "" && normalizedRelation != strings.TrimSpace(spec.RelationType) {
+			plan.Warnings = appendUniqueStrings(plan.Warnings, fmt.Sprintf("%s relationType normalized: %s -> %s", scope, strings.TrimSpace(spec.RelationType), normalizedRelation))
+			if warning != "" {
+				plan.Warnings = appendUniqueStrings(plan.Warnings, warning)
+			}
+			spec.RelationType = normalizedRelation
+		}
+		if h.productDictionary == nil {
+			return
+		}
+		sourcePath, okSrc := graphIntentEdgeEndpointPath(spec.FromTempID, spec.FromNodeID, productPathsByRef)
+		targetPath, okDst := graphIntentEdgeEndpointPath(spec.ToTempID, spec.ToNodeID, productPathsByRef)
+		if !okSrc || !okDst {
+			return
+		}
+		resolution, err := h.productDictionary.ResolveProductRelationForTenant(ctx, strings.TrimSpace(lens.TenantID), sourcePath, targetPath)
+		if err != nil || !resolution.Known {
+			return
+		}
+		normalizedRelation := string(resolution.EdgeType)
+		if normalizedRelation != "" && normalizedRelation != strings.TrimSpace(spec.RelationType) {
+			plan.Warnings = appendUniqueStrings(plan.Warnings, fmt.Sprintf("%s relationType normalized: %s -> %s", scope, strings.TrimSpace(spec.RelationType), normalizedRelation))
+			spec.RelationType = normalizedRelation
+		}
+		if resolution.Swapped {
+			spec.FromTempID, spec.ToTempID = spec.ToTempID, spec.FromTempID
+			spec.FromNodeID, spec.ToNodeID = spec.ToNodeID, spec.FromNodeID
+			spec.Direction = "forward"
+			plan.Warnings = appendUniqueStrings(plan.Warnings, fmt.Sprintf("%s product relation endpoints reordered to canonical upstream/downstream orientation", scope))
+		}
+	}
+
+	for gi := range plan.Create.Groupings {
+		grouping := &plan.Create.Groupings[gi]
+		for ei := range grouping.Relations {
+			repairEdge(fmt.Sprintf("create.groupings[%d].relations[%d]", gi, ei), &grouping.Relations[ei])
+		}
+	}
+	for ei := range plan.Create.Edges {
+		repairEdge(fmt.Sprintf("create.edges[%d]", ei), &plan.Create.Edges[ei])
+	}
+}
+
+type graphIntentNodeRef struct {
+	CanonicalPath string
+	Type          string
+}
+
+func graphIntentEdgeEndpointRef(tempID string, nodeID string, refs map[string]graphIntentNodeRef) graphIntentNodeRef {
+	if ref, ok := refs[strings.TrimSpace(tempID)]; ok {
+		return ref
+	}
+	if ref, ok := refs[strings.TrimSpace(nodeID)]; ok {
+		return ref
+	}
+	return graphIntentNodeRef{}
+}
+
+func graphIntentNormalizeUnsupportedRelation(relationType string, sourceRef graphIntentNodeRef, targetRef graphIntentNodeRef) (string, string) {
+	relationType = strings.ToUpper(strings.TrimSpace(relationType))
+	if relationType == "" || horizonmodels.IsGraphIntentRelationTypeAllowed(relationType) {
+		return relationType, ""
+	}
+	sourceType := strings.ToUpper(strings.TrimSpace(sourceRef.Type))
+	targetType := strings.ToUpper(strings.TrimSpace(targetRef.Type))
+	switch relationType {
+	case string(horizonmodels.DependencyTypeUsedIn):
+		if sourceType == string(horizonmodels.FragmentTypeProduct) && (targetType == string(horizonmodels.FragmentTypeOrganization) || targetType == string(horizonmodels.FragmentTypeFacility)) {
+			return string(horizonmodels.DependencyTypeSuppliesTo), "mapped USED_IN to SUPPLIES_TO for product -> actor graph-intent edge"
+		}
+		if sourceType == string(horizonmodels.FragmentTypeProduct) && targetType == string(horizonmodels.FragmentTypeProduct) {
+			return string(horizonmodels.DependencyTypeAssemblesInto), "mapped USED_IN to ASSEMBLES_INTO for product -> product graph-intent edge"
+		}
+	}
+	return relationType, ""
+}
+
+type graphIntentSnapshotIndex struct {
+	byNodeID             map[string]horizonmodels.GraphIntentSnapshotNode
+	byFragmentID         map[string]horizonmodels.GraphIntentSnapshotNode
+	byCanonicalPath      map[string]horizonmodels.GraphIntentSnapshotNode
+	canonicalByLookupKey map[string]string
+}
+
+func newGraphIntentSnapshotIndex(snapshot horizonmodels.GraphIntentSnapshot) graphIntentSnapshotIndex {
+	out := graphIntentSnapshotIndex{
+		byNodeID:             map[string]horizonmodels.GraphIntentSnapshotNode{},
+		byFragmentID:         map[string]horizonmodels.GraphIntentSnapshotNode{},
+		byCanonicalPath:      map[string]horizonmodels.GraphIntentSnapshotNode{},
+		canonicalByLookupKey: map[string]string{},
+	}
+	for _, node := range snapshot.Nodes {
+		if nodeID := strings.TrimSpace(node.NodeID); nodeID != "" {
+			out.byNodeID[nodeID] = node
+		}
+		if fragmentID := strings.TrimSpace(node.FragmentID); fragmentID != "" {
+			out.byFragmentID[fragmentID] = node
+		}
+		if canonicalPath := strings.TrimSpace(node.CanonicalPath); canonicalPath != "" {
+			out.byCanonicalPath[canonicalPath] = node
+		}
+		key := graphIntentLookupKey(node.Type, node.Label)
+		if key != "" && strings.TrimSpace(node.CanonicalPath) != "" {
+			out.canonicalByLookupKey[key] = strings.TrimSpace(node.CanonicalPath)
+		}
+	}
+	return out
+}
+
+func (h *HorizonHandlers) resolveGraphIntentNodeCanonicalPathHint(ctx context.Context, lens *horizonmodels.Lens, index graphIntentSnapshotIndex, rawQuery string, nodeType string, label string, hint string) (string, string) {
+	nodeType = strings.ToUpper(strings.TrimSpace(nodeType))
+	label = strings.TrimSpace(label)
+	hint = strings.TrimSpace(hint)
+	fragmentType := horizonmodels.MapGraphIntentNodeTypeToFragmentType(nodeType, hint)
+
+	if strings.EqualFold(nodeType, string(horizonmodels.FragmentTypeProduct)) || fragmentType == horizonmodels.FragmentTypeProduct {
+		return h.resolveGraphIntentProductPathHint(ctx, lens, label, hint)
+	}
+	if strings.EqualFold(nodeType, string(horizonmodels.FragmentTypeDomain)) || fragmentType == horizonmodels.FragmentTypeDomain {
+		return h.resolveGraphIntentDomainPathHint(ctx, lens, rawQuery, label, hint)
+	}
+	if key := graphIntentLookupKey(nodeType, label); key != "" {
+		if canonicalPath := strings.TrimSpace(index.canonicalByLookupKey[key]); canonicalPath != "" {
+			return canonicalPath, ""
+		}
+	}
+	if hint != "" && taxonomy.ValidateCanonicalPath(hint) == nil {
+		return hint, ""
+	}
+	if h == nil || h.service == nil || h.service.Fragments() == nil || label == "" {
+		return hint, ""
+	}
+	if exact, err := h.service.Fragments().FindByLabelForTenant(ctx, strings.TrimSpace(lens.TenantID), "en", label, fragmentType); err == nil {
+		if canonicalPath := graphIntentPickMatchingFragmentPath(exact, fragmentType); canonicalPath != "" {
+			return canonicalPath, ""
+		}
+	}
+	if prefix, err := h.service.Fragments().SearchPrefixForTenant(ctx, strings.TrimSpace(lens.TenantID), label, 8); err == nil {
+		if canonicalPath := graphIntentPickMatchingFragmentPath(prefix, fragmentType); canonicalPath != "" {
+			return canonicalPath, ""
+		}
+	}
+	if semantic, err := h.service.SearchFragments(ctx, label, 8); err == nil {
+		if canonicalPath := graphIntentPickMatchingFragmentPath(semantic, fragmentType); canonicalPath != "" {
+			return canonicalPath, ""
+		}
+	}
+	return hint, ""
+}
+
+func (h *HorizonHandlers) resolveGraphIntentProductPathHint(ctx context.Context, lens *horizonmodels.Lens, label string, hint string) (string, string) {
+	label = strings.TrimSpace(label)
+	hint = strings.TrimSpace(hint)
+	tenantID := ""
+	if lens != nil {
+		tenantID = strings.TrimSpace(lens.TenantID)
+	}
+
+	if h != nil && h.productDictionary != nil && hint != "" && strings.HasPrefix(hint, "/product/") {
+		if canonicalPath, matched, err := h.productDictionary.CanonicalizeProductPathForTenant(ctx, tenantID, hint); err == nil && strings.TrimSpace(canonicalPath) != "" {
+			if matched || taxonomy.ValidateCanonicalPath(canonicalPath) == nil {
+				return strings.TrimSpace(canonicalPath), ""
+			}
+		}
+	}
+
+	queries := graphIntentProductQueries(label, hint)
+	if h != nil && h.productDictionary != nil && h.service != nil && h.service.Fragments() != nil {
+		for _, query := range queries {
+			suggestions, err := h.findProductPrefetchSuggestions(ctx, tenantID, query, 6)
+			if err != nil || len(suggestions) == 0 {
+				continue
+			}
+			for _, suggestion := range suggestions {
+				canonicalPath := strings.TrimSpace(suggestion.CanonicalPath)
+				if canonicalPath == "" || taxonomy.ValidateCanonicalPath(canonicalPath) != nil {
+					continue
+				}
+				return canonicalPath, ""
+			}
+		}
+	}
+
+	canonicalizer := horizonscout.NewProductCanonicalizer()
+	for _, query := range queries {
+		if query == "" {
+			continue
+		}
+		result, err := canonicalizer.CanonicalizeProduct(ctx, query)
+		if err != nil || result == nil {
+			continue
+		}
+		canonicalPath := strings.TrimSpace(result.CanonicalPath)
+		if canonicalPath == "" || taxonomy.ValidateCanonicalPath(canonicalPath) != nil {
+			continue
+		}
+		if h != nil && h.productDictionary != nil {
+			if rewritten, matched, err := h.productDictionary.CanonicalizeProductPathForTenant(ctx, tenantID, canonicalPath); err == nil && strings.TrimSpace(rewritten) != "" {
+				if matched || taxonomy.ValidateCanonicalPath(rewritten) == nil {
+					return strings.TrimSpace(rewritten), ""
+				}
+			}
+		}
+		return canonicalPath, fmt.Sprintf("product canonicalPathHint inferred from label %q via deterministic product canonicalizer", query)
+	}
+
+	return hint, ""
+}
+
+func (h *HorizonHandlers) resolveGraphIntentDomainPathHint(ctx context.Context, lens *horizonmodels.Lens, rawQuery string, label string, hint string) (string, string) {
+	label = strings.TrimSpace(label)
+	hint = strings.TrimSpace(hint)
+	rawQuery = strings.TrimSpace(rawQuery)
+
+	if hint != "" && strings.HasPrefix(strings.ToLower(hint), "/domain/") {
+		normalized := strings.TrimSpace(horizonscout.NormalizeRuntimeDomainCanonicalPath(hint))
+		if normalized != "" && taxonomy.ValidateCanonicalPath(normalized) == nil {
+			if normalized != hint {
+				return normalized, fmt.Sprintf("domain canonicalPathHint normalized via runtime domain canonicalizer: %s -> %s", hint, normalized)
+			}
+			return normalized, ""
+		}
+	}
+	if hint != "" && taxonomy.ValidateCanonicalPath(hint) == nil {
+		return hint, ""
+	}
+
+	if h == nil || h.service == nil || h.service.AIExecutor() == nil {
+		return hint, ""
+	}
+
+	existingDomains := append([]string{}, h.collectNearbyDomainPaths(ctx, lens)...)
+	existingDomains = append(existingDomains, h.collectExistingDomainPathsForProject(ctx, "", "")...)
+	queries := graphIntentDomainQueries(rawQuery, label, hint)
+	resolver := horizonagents.NewDomainResolverAgent(h.service.AIExecutor())
+	for _, query := range queries {
+		if query == "" {
+			continue
+		}
+		result, err := resolver.ResolveWithContext(ctx, query, existingDomains)
+		if err != nil || result == nil {
+			continue
+		}
+		for _, domain := range result.Domains {
+			canonicalPath := strings.TrimSpace(horizonscout.NormalizeRuntimeDomainCanonicalPath(domain.CanonicalPath))
+			if canonicalPath == "" || taxonomy.ValidateCanonicalPath(canonicalPath) != nil {
+				continue
+			}
+			return canonicalPath, fmt.Sprintf("domain canonicalPathHint inferred from query %q via shared domain resolver", query)
+		}
+	}
+
+	return hint, ""
+}
+
+func graphIntentDomainQueries(rawQuery string, label string, hint string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 4)
+	appendQuery := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	appendQuery(rawQuery)
+	appendQuery(label)
+	appendQuery(strings.ReplaceAll(domainLeafSlugFromCanonicalPath(hint), "-", " "))
+	appendQuery(humanizeDomainPath(hint))
+	return out
+}
+
+func domainLeafSlugFromCanonicalPath(path string) string {
+	path = strings.TrimSpace(path)
+	if !strings.HasPrefix(path, "/domain/") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 4 {
+		return ""
+	}
+	return strings.TrimSpace(parts[len(parts)-1])
+}
+
+func humanizeDomainPath(path string) string {
+	path = strings.TrimSpace(path)
+	if !strings.HasPrefix(path, "/domain/") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 4 {
+		return ""
+	}
+	return strings.ReplaceAll(strings.Join(parts[3:], " "), "-", " ")
+}
+
+func graphIntentProductQueries(label string, hint string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 6)
+	appendQuery := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	appendQuery(label)
+	appendQuery(strings.ReplaceAll(productLeafSlugFromCanonicalPath(hint), "-", " "))
+	appendQuery(humanizeProductPath(hint))
+	appendQuery(strings.TrimPrefix(strings.TrimSpace(hint), "/product/"))
+	return out
+}
+
+func productLeafSlugFromCanonicalPath(path string) string {
+	path = strings.TrimSpace(path)
+	if !strings.HasPrefix(path, "/product/") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(parts[len(parts)-1])
+}
+
+func graphIntentPickMatchingFragmentPath(fragments []*horizonmodels.HorizonFragment, fragmentType horizonmodels.FragmentType) string {
+	for _, frag := range fragments {
+		if frag == nil {
+			continue
+		}
+		if fragmentType != "" && frag.Type != fragmentType {
+			continue
+		}
+		canonicalPath := strings.TrimSpace(frag.CanonicalPath)
+		if canonicalPath == "" || taxonomy.ValidateCanonicalPath(canonicalPath) != nil {
+			continue
+		}
+		return canonicalPath
+	}
+	return ""
+}
+
+func graphIntentLookupKey(nodeType string, label string) string {
+	nodeType = strings.ToUpper(strings.TrimSpace(nodeType))
+	label = strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(label)), " "))
+	if nodeType == "" || label == "" {
+		return ""
+	}
+	return nodeType + "::" + label
+}
+
+func graphIntentEdgeEndpointPath(tempID string, nodeID string, productPathsByRef map[string]string) (string, bool) {
+	if canonicalPath := strings.TrimSpace(productPathsByRef[strings.TrimSpace(tempID)]); canonicalPath != "" {
+		return canonicalPath, true
+	}
+	if canonicalPath := strings.TrimSpace(productPathsByRef[strings.TrimSpace(nodeID)]); canonicalPath != "" {
+		return canonicalPath, true
+	}
+	return "", false
+}
+
 type graphIntentApplyExecutor struct {
 	handler *HorizonHandlers
 	ctx     context.Context
 	lens    *horizonmodels.Lens
 	dryRun  bool
 
-	fragmentsRepo  *repo.HorizonFragmentsRepository
-	edgesRepo      *repo.DependencyEdgesRepository
-	lensItemsRepo  *repo.LensItemsRepository
-	lensesRepo     *repo.LensesRepository
+	fragmentsRepo      *repo.HorizonFragmentsRepository
+	edgesRepo          *repo.DependencyEdgesRepository
+	lensItemsRepo      *repo.LensItemsRepository
+	lensesRepo         *repo.LensesRepository
 	mergeFragmentsRepo *repo.FragmentsMergeRepository
 
 	knownFragmentRefs map[string]string

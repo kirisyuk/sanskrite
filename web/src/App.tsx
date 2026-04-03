@@ -1,7 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import './i18n';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { BrowserRouter as Router, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
+import {
+  BrowserRouter as Router,
+  Routes,
+  Route,
+  useLocation,
+  useNavigate,
+} from 'react-router-dom';
 import { ThemeProvider } from './components/ThemeProvider';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import AuthGuard from './components/AuthGuard';
@@ -33,7 +39,9 @@ import CriticalChainPage from './pages/CriticalChainPage';
 function AppContent() {
   const location = useLocation();
   const navigate = useNavigate();
-  const [showModal, setShowModal] = useState<'terms' | 'privacy' | 'technical-disclosure' | null>(null);
+  const [showModal, setShowModal] = useState<
+    'terms' | 'privacy' | 'technical-disclosure' | null
+  >(null);
   const { user, loading } = useAuth();
   const showAdminModal = useUIStore((s) => s.showAdminModal);
   const setShowAdminModal = useUIStore((s) => s.setShowAdminModal);
@@ -44,7 +52,7 @@ function AppContent() {
     location.pathname === '/terms' ||
     location.pathname === '/privacy' ||
     location.pathname === '/technical-disclosure';
-  
+
   // Determine which page to show
   const isUnfold = new URLSearchParams(location.search).get('app') === 'unfold';
 
@@ -56,12 +64,16 @@ function AppContent() {
     location.pathname.startsWith('/criticalchain');
 
   const isPrintRoute = location.pathname.startsWith('/horizon/print/');
-  
+
   // Handle modal from query parameter
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const modal = params.get('modal');
-    if (modal === 'terms' || modal === 'privacy' || modal === 'technical-disclosure') {
+    if (
+      modal === 'terms' ||
+      modal === 'privacy' ||
+      modal === 'technical-disclosure'
+    ) {
       setShowModal(modal);
     } else {
       setShowModal(null);
@@ -105,35 +117,171 @@ function AppContent() {
         {!isPrintRoute && <ServerUnavailableBanner />}
         <div
           className="content-area"
-          style={lockContentAreaScroll && !isPrintRoute ? { overflowY: 'hidden' } : undefined}
+          style={
+            lockContentAreaScroll && !isPrintRoute
+              ? { overflowY: 'hidden' }
+              : undefined
+          }
         >
           <Routes>
             <Route path="/shared/:token" element={<ShareViewPage />} />
             <Route path="/verified" element={<VerifiedPage />} />
             <Route path="/verified/:code" element={<VerifiedViewPage />} />
-            <Route path="/horizon/print/market/:fragmentId" element={<AuthGuard><HorizonMarketProfilePrintPage /></AuthGuard>} />
-            <Route path="/horizon/print/org/:fragmentId" element={<AuthGuard><HorizonOrgProfilePrintPage /></AuthGuard>} />
-            <Route path="/horizon/print/gov/:fragmentId" element={<AuthGuard><HorizonGovProfilePrintPage /></AuthGuard>} />
-            <Route path="/horizon/print/dynasty/:fragmentId" element={<AuthGuard><HorizonDynastyProfilePrintPage /></AuthGuard>} />
-            <Route path="/horizon/print/tribe/:fragmentId" element={<AuthGuard><HorizonTribeProfilePrintPage /></AuthGuard>} />
-            <Route path="/horizon/print/program/:fragmentId" element={<AuthGuard><HorizonProgramProfilePrintPage /></AuthGuard>} />
+            <Route
+              path="/horizon/print/market/:fragmentId"
+              element={
+                <AuthGuard>
+                  <HorizonMarketProfilePrintPage />
+                </AuthGuard>
+              }
+            />
+            <Route
+              path="/horizon/print/org/:fragmentId"
+              element={
+                <AuthGuard>
+                  <HorizonOrgProfilePrintPage />
+                </AuthGuard>
+              }
+            />
+            <Route
+              path="/horizon/print/gov/:fragmentId"
+              element={
+                <AuthGuard>
+                  <HorizonGovProfilePrintPage />
+                </AuthGuard>
+              }
+            />
+            <Route
+              path="/horizon/print/dynasty/:fragmentId"
+              element={
+                <AuthGuard>
+                  <HorizonDynastyProfilePrintPage />
+                </AuthGuard>
+              }
+            />
+            <Route
+              path="/horizon/print/tribe/:fragmentId"
+              element={
+                <AuthGuard>
+                  <HorizonTribeProfilePrintPage />
+                </AuthGuard>
+              }
+            />
+            <Route
+              path="/horizon/print/program/:fragmentId"
+              element={
+                <AuthGuard>
+                  <HorizonProgramProfilePrintPage />
+                </AuthGuard>
+              }
+            />
             <Route path="/criticalchain" element={<CriticalChainPage />} />
-            <Route path="/horizon" element={<AuthGuard><HorizonPage /></AuthGuard>} />
-            <Route path="/horizon/watch" element={<AuthGuard><HorizonPage /></AuthGuard>} />
-            <Route path="/" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (user ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />))} />
-            <Route path="/platform" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (user ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />))} />
-            <Route path="/terms" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />)} />
-            <Route path="/privacy" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />)} />
-            <Route path="/technical-disclosure" element={isUnfold ? (<AuthGuard><DiscoveryPage /></AuthGuard>) : (<Homepage />)} />
+            <Route
+              path="/horizon"
+              element={
+                <AuthGuard>
+                  <HorizonPage />
+                </AuthGuard>
+              }
+            />
+            <Route
+              path="/horizon/portfolio"
+              element={
+                <AuthGuard>
+                  <HorizonPage />
+                </AuthGuard>
+              }
+            />
+            <Route
+              path="/horizon/watch"
+              element={
+                <AuthGuard>
+                  <HorizonPage />
+                </AuthGuard>
+              }
+            />
+            <Route
+              path="/"
+              element={
+                isUnfold ? (
+                  <AuthGuard>
+                    <DiscoveryPage />
+                  </AuthGuard>
+                ) : user ? (
+                  <AuthGuard>
+                    <DiscoveryPage />
+                  </AuthGuard>
+                ) : (
+                  <Homepage />
+                )
+              }
+            />
+            <Route
+              path="/platform"
+              element={
+                isUnfold ? (
+                  <AuthGuard>
+                    <DiscoveryPage />
+                  </AuthGuard>
+                ) : user ? (
+                  <AuthGuard>
+                    <DiscoveryPage />
+                  </AuthGuard>
+                ) : (
+                  <Homepage />
+                )
+              }
+            />
+            <Route
+              path="/terms"
+              element={
+                isUnfold ? (
+                  <AuthGuard>
+                    <DiscoveryPage />
+                  </AuthGuard>
+                ) : (
+                  <Homepage />
+                )
+              }
+            />
+            <Route
+              path="/privacy"
+              element={
+                isUnfold ? (
+                  <AuthGuard>
+                    <DiscoveryPage />
+                  </AuthGuard>
+                ) : (
+                  <Homepage />
+                )
+              }
+            />
+            <Route
+              path="/technical-disclosure"
+              element={
+                isUnfold ? (
+                  <AuthGuard>
+                    <DiscoveryPage />
+                  </AuthGuard>
+                ) : (
+                  <Homepage />
+                )
+              }
+            />
           </Routes>
         </div>
         {!isPrintRoute && <BottomBar />}
-        
+
         {/* Modal overlay */}
-        {showModal && <LegalModal type={showModal} onClose={handleCloseModal} />}
+        {showModal && (
+          <LegalModal type={showModal} onClose={handleCloseModal} />
+        )}
         {/* Admin modal: open from TopBar, sidebar, or Horizon Modeler */}
         {showAdminModal && isAdmin && (
-          <AdminModal isOpen={showAdminModal} onClose={() => setShowAdminModal(false)} />
+          <AdminModal
+            isOpen={showAdminModal}
+            onClose={() => setShowAdminModal(false)}
+          />
         )}
         <StrategicRecommendationsInbox />
       </div>
@@ -145,7 +293,7 @@ const queryClient = new QueryClient();
 
 export default function App() {
   const firebaseError = getFirebaseInitError();
-  
+
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>

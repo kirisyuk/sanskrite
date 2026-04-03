@@ -37,6 +37,8 @@ type HorizonHandlers struct {
 	signalPipeline            *horizonscout.SignalPipeline
 	mergeFragmentsRepo        *horizonrepo.FragmentsMergeRepository
 	materializedArtifactsRepo *horizonrepo.MaterializedArtifactsRepository
+	analyticalPrimitivesRepo  *horizonrepo.AnalyticalPrimitivesRepository
+	analyticalAggregatesRepo  *horizonrepo.AnalyticalAggregatesRepository
 	newsByFragmentsCanvas     *discovery.NewsByFragmentsCanvas
 	identifyStressesCanvas    *IdentifyStressesCanvas
 	completeSubstrateCanvas   *CompleteSubstrateCanvas
@@ -164,6 +166,16 @@ func (h *HorizonHandlers) WithMergeFragmentsRepo(r *horizonrepo.FragmentsMergeRe
 // WithMaterializedArtifactsRepo wires MaterializedArtifactsRepository for supply chains by-node endpoint.
 func (h *HorizonHandlers) WithMaterializedArtifactsRepo(r *horizonrepo.MaterializedArtifactsRepository) *HorizonHandlers {
 	h.materializedArtifactsRepo = r
+	return h
+}
+
+func (h *HorizonHandlers) WithAnalyticalPrimitivesRepo(r *horizonrepo.AnalyticalPrimitivesRepository) *HorizonHandlers {
+	h.analyticalPrimitivesRepo = r
+	return h
+}
+
+func (h *HorizonHandlers) WithAnalyticalAggregatesRepo(r *horizonrepo.AnalyticalAggregatesRepository) *HorizonHandlers {
+	h.analyticalAggregatesRepo = r
 	return h
 }
 

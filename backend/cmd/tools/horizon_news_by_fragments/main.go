@@ -29,9 +29,11 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/discovery"
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	horizonproductdict "github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	horizonpropagation "github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
+	horizonsignallanding "github.com/igorkirisyuk/sanskrite/internal/horizon/signallanding"
 	horizonsignals "github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
 )
@@ -137,6 +139,7 @@ func main() {
 		propagationEngine := horizonpropagation.NewPropagationEngine(
 			fragmentsRepo, versionsRepo, horizonEdgesRepo, lensesRepo, nil,
 		).WithProfileLookup(profileLookup)
+		productDictionary := horizonproductdict.NewRuntime(fs)
 		signalExtractor := horizonsignals.NewSignalExtractor(nil, exec)
 		applicability := horizonsignals.NewExternalApplicabilityEvaluator().
 			WithFragmentsRepo(fragmentsRepo).
@@ -144,19 +147,33 @@ func main() {
 		seedInjector := horizonsignals.NewSeedInjector(fragmentsRepo, horizonEdgesRepo).
 			WithApplicabilityEvaluator(applicability)
 		vertexDS := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID"))
+		var vertexClient *ai.VertexAISearchClient
 		if vertexDS != "" {
 			vertexLoc := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_LOCATION"))
 			if vertexLoc == "" {
 				vertexLoc = "global"
 			}
-			vertexClient := ai.NewVertexAISearchClient(strings.TrimSpace(*projectID), vertexLoc, vertexDS, "")
+			vertexClient = ai.NewVertexAISearchClient(strings.TrimSpace(*projectID), vertexLoc, vertexDS, "")
 			if vertexClient.IsConfigured() {
 				seedInjector = seedInjector.WithVertexSearch(vertexClient)
 			}
 		}
-		signalPipeline = horizonscout.NewSignalPipeline(
+		typedSignalPipeline := horizonscout.NewSignalPipeline(
 			signalExtractor, seedInjector, propagationEngine, profileLookup, ontologyFactsRepo,
 		).WithEscalationLLM(exec)
+		signalLandingService := horizonsignallanding.NewService(
+			horizonrepo.NewSignalLandingSessionsRepository(fs),
+			horizonrepo.NewSignalImpactClaimsRepository(fs),
+			horizonrepo.NewSignalLandingHitsRepository(fs),
+			horizonrepo.NewSignalLandingSummariesRepository(fs),
+			horizonrepo.NewSignalMissingAnchorCandidatesRepository(fs),
+			fragmentsRepo,
+		).WithProductDictionary(productDictionary)
+		if vertexClient != nil && vertexClient.IsConfigured() {
+			signalLandingService = signalLandingService.WithVertexSearch(vertexClient)
+		}
+		typedSignalPipeline = typedSignalPipeline.WithSignalLanding(signalLandingService)
+		signalPipeline = typedSignalPipeline
 		logger.Printf("SignalPipeline wired (12-axis + propagation)")
 	} else {
 		logger.Printf("SignalPipeline skipped (-skip-signals)")

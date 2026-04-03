@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/analytical"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/qa"
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
@@ -181,6 +182,7 @@ func (h *HorizonHandlers) LensQA(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	artifactSummaries = append(artifactSummaries, h.loadLensQAAggregateSummaries(r.Context(), lens, question)...)
 
 	// Create QASession
 	sessionID := uuid.New().String()
@@ -507,7 +509,7 @@ func (h *HorizonHandlers) LensQA(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	
+
 	// LOGGING FOR DEBUGGING: Log the context prompt
 	log.Printf("%s [DEBUG] Context Prompt (truncated): %q", qaLogPrefix, truncateForLog(contextPrompt, 1000))
 
@@ -567,6 +569,25 @@ func (h *HorizonHandlers) LensQA(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeSSE(w, "answer_complete", answer)
+}
+
+func (h *HorizonHandlers) loadLensQAAggregateSummaries(ctx context.Context, lens *horizonmodels.Lens, question string) []string {
+	if h == nil || lens == nil || h.analyticalPrimitivesRepo == nil || h.analyticalAggregatesRepo == nil {
+		return nil
+	}
+	scopePaths := lensChatScopePaths(lens)
+	out := make([]string, 0, 4)
+	if aggregate, err := analytical.EnsureLensAggregate(ctx, h.analyticalPrimitivesRepo, h.analyticalAggregatesRepo, h.materializedArtifactsRepo, lens, scopePaths, time.Now().UTC()); err == nil && aggregate != nil && strings.TrimSpace(aggregate.Explanation) != "" {
+		out = append(out, "Analytical weak points: "+strings.TrimSpace(aggregate.Explanation))
+	}
+	if classifyLensChatAnalyticalIntent(question) == "scenario" && h.service != nil && h.service.Simulation() != nil {
+		if run, err := h.service.Simulation().GetLatestRunByLens(ctx, strings.TrimSpace(lens.TenantID), strings.TrimSpace(lens.ID)); err == nil && run != nil {
+			if aggregate, err := h.service.Simulation().EnsureScenarioAggregate(ctx, strings.TrimSpace(lens.TenantID), strings.TrimSpace(run.ID)); err == nil && aggregate != nil && strings.TrimSpace(aggregate.Explanation) != "" {
+				out = append(out, "Scenario disruption impact: "+strings.TrimSpace(aggregate.Explanation))
+			}
+		}
+	}
+	return uniqueStringsLocal(out)
 }
 
 // runAutoScout creates scouting jobs for unresolved seed hints, waits for

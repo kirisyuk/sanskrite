@@ -67,16 +67,17 @@ func NewCapabilityProfilesRepository(db *firestore.Client) *CapabilityProfilesRe
 	return &CapabilityProfilesRepository{col: db.Collection("horizon_capability_profiles")}
 }
 
-func (r *CapabilityProfilesRepository) Get(ctx context.Context, carrierRef, productRef string) (*models.CapabilityProfile, error) {
+func (r *CapabilityProfilesRepository) Get(ctx context.Context, tenantID, carrierRef, productRef string) (*models.CapabilityProfile, error) {
 	if r == nil || r.col == nil {
 		return nil, fmt.Errorf("capability profiles repo not configured")
 	}
+	tenantID = strings.TrimSpace(tenantID)
 	carrierRef = strings.TrimSpace(carrierRef)
 	productRef = strings.TrimSpace(productRef)
-	if carrierRef == "" || productRef == "" {
+	if tenantID == "" || carrierRef == "" || productRef == "" {
 		return nil, ErrInvalidDocument
 	}
-	doc, err := r.col.Doc(capabilityProfileDocID(carrierRef, productRef)).Get(ctx)
+	doc, err := r.col.Doc(capabilityProfileDocID(tenantID, carrierRef, productRef)).Get(ctx)
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
 			return nil, nil
@@ -99,7 +100,8 @@ func (r *CapabilityProfilesRepository) Upsert(ctx context.Context, profile *mode
 	}
 	profile.CarrierRef = strings.TrimSpace(profile.CarrierRef)
 	profile.ProductRef = strings.TrimSpace(profile.ProductRef)
-	if profile.CarrierRef == "" || profile.ProductRef == "" {
+	profile.TenantID = strings.TrimSpace(profile.TenantID)
+	if profile.TenantID == "" || profile.CarrierRef == "" || profile.ProductRef == "" {
 		return ErrInvalidDocument
 	}
 	now := time.Now().UTC()
@@ -107,7 +109,7 @@ func (r *CapabilityProfilesRepository) Upsert(ctx context.Context, profile *mode
 		profile.CreatedAt = now
 	}
 	profile.UpdatedAt = now
-	_, err := r.col.Doc(capabilityProfileDocID(profile.CarrierRef, profile.ProductRef)).Set(ctx, profile)
+	_, err := r.col.Doc(capabilityProfileDocID(profile.TenantID, profile.CarrierRef, profile.ProductRef)).Set(ctx, profile)
 	return err
 }
 
@@ -375,6 +377,7 @@ func (r *DerivedRiskProfilesRepository) Upsert(ctx context.Context, profile *mod
 	}
 	profile.UpdatedAt = now
 	docID := strings.Join([]string{
+		strings.ReplaceAll(strings.TrimSpace(profile.TenantID), "/", "_"),
 		strings.ReplaceAll(profile.ScopeRef, "/", "_"),
 		strings.ReplaceAll(profile.ProductRef, "/", "_"),
 		profile.ProfileType,
@@ -383,8 +386,9 @@ func (r *DerivedRiskProfilesRepository) Upsert(ctx context.Context, profile *mod
 	return err
 }
 
-func capabilityProfileDocID(carrierRef, productRef string) string {
+func capabilityProfileDocID(tenantID, carrierRef, productRef string) string {
 	return strings.Join([]string{
+		strings.ReplaceAll(strings.TrimSpace(tenantID), "/", "_"),
 		strings.ReplaceAll(strings.TrimSpace(carrierRef), "/", "_"),
 		strings.ReplaceAll(strings.TrimSpace(productRef), "/", "_"),
 	}, "__")

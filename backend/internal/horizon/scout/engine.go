@@ -2190,6 +2190,12 @@ type ScoutEngine struct {
 	supplyLinkObsRepo        *repo.SupplyLinkObservationsRepository
 	routeObsRepo             *repo.RouteObservationsRepository
 	derivedRiskProfilesRepo  *repo.DerivedRiskProfilesRepository
+	analyticalPrimitivesRepo *repo.AnalyticalPrimitivesRepository
+	analyticalAggregatesRepo *repo.AnalyticalAggregatesRepository
+	refScopeProjectionsRepo  *repo.RefScopeProjectionsRepository
+	pathFamilyProjectionsRepo *repo.PathFamilyProjectionsRepository
+	compiledWatchRepo        *repo.CompiledWatchSubjectsRepository
+	watchSubjectsRepo        *repo.WatchSubjectsRepository
 	cascadeVisitedRepo       *repo.CascadeVisitedRepository
 	cascadeEntityRegistry    *repo.CascadeEntityRegistryRepository
 	lensesRepo               *repo.LensesRepository // Optional: for updating lens ViewConfig on assembly completion
@@ -3079,6 +3085,36 @@ func (e *ScoutEngine) WithRouteObservationsRepository(r *repo.RouteObservationsR
 
 func (e *ScoutEngine) WithDerivedRiskProfilesRepository(r *repo.DerivedRiskProfilesRepository) *ScoutEngine {
 	e.derivedRiskProfilesRepo = r
+	return e
+}
+
+func (e *ScoutEngine) WithAnalyticalPrimitivesRepository(r *repo.AnalyticalPrimitivesRepository) *ScoutEngine {
+	e.analyticalPrimitivesRepo = r
+	return e
+}
+
+func (e *ScoutEngine) WithAnalyticalAggregatesRepository(r *repo.AnalyticalAggregatesRepository) *ScoutEngine {
+	e.analyticalAggregatesRepo = r
+	return e
+}
+
+func (e *ScoutEngine) WithRefScopeProjectionsRepository(r *repo.RefScopeProjectionsRepository) *ScoutEngine {
+	e.refScopeProjectionsRepo = r
+	return e
+}
+
+func (e *ScoutEngine) WithPathFamilyProjectionsRepository(r *repo.PathFamilyProjectionsRepository) *ScoutEngine {
+	e.pathFamilyProjectionsRepo = r
+	return e
+}
+
+func (e *ScoutEngine) WithCompiledWatchSubjectsRepository(r *repo.CompiledWatchSubjectsRepository) *ScoutEngine {
+	e.compiledWatchRepo = r
+	return e
+}
+
+func (e *ScoutEngine) WithWatchSubjectsRepo(r *repo.WatchSubjectsRepository) *ScoutEngine {
+	e.watchSubjectsRepo = r
 	return e
 }
 

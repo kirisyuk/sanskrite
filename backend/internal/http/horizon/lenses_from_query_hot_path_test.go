@@ -38,6 +38,13 @@ func TestForceIntentHotPathOnly(t *testing.T) {
 				},
 			},
 			{
+				CanonicalPath: "/domain/v1/service-chain/geo/us/subject/google-cloud",
+				ContractType:  "service-chain",
+				ServiceChainExecutionPlan: &agents.SupplyChainExecutionPlan{
+					GraphBuildMode: agents.SupplyChainGraphBuildModeHotPathPlusGraph,
+				},
+			},
+			{
 				CanonicalPath: "/domain/v1/regulatory-impact/geo/qa/subject/lng",
 				ContractType:  "regulatory-impact",
 			},
@@ -50,7 +57,10 @@ func TestForceIntentHotPathOnly(t *testing.T) {
 	if got := out.Domains[0].SupplyChainExecutionPlan.GraphBuildMode; got != agents.SupplyChainGraphBuildModeHotPathOnly {
 		t.Fatalf("supply chain graphBuildMode = %q, want %q", got, agents.SupplyChainGraphBuildModeHotPathOnly)
 	}
-	if out.Domains[1].SupplyChainExecutionPlan != nil {
+	if got := out.Domains[1].ServiceChainExecutionPlan.GraphBuildMode; got != agents.SupplyChainGraphBuildModeHotPathOnly {
+		t.Fatalf("service chain graphBuildMode = %q, want %q", got, agents.SupplyChainGraphBuildModeHotPathOnly)
+	}
+	if out.Domains[2].SupplyChainExecutionPlan != nil || out.Domains[2].ServiceChainExecutionPlan != nil {
 		t.Fatal("non-supply-chain domain must not receive a synthetic supply-chain plan")
 	}
 }
@@ -91,17 +101,34 @@ func TestHotPathArtifactScopeCount(t *testing.T) {
 	lens := &horizonmodels.Lens{
 		Scope: []string{
 			"/artifact/supply-chain/global/a",
+			"/artifact/service-chain/global/b",
 			"/org/example",
 		},
 		ScopeArtifacts: map[string]horizonmodels.ScopeArtifactRef{
-			"/artifact/supply-chain/global/b": {Kind: string(horizonmodels.MaterializedKindSupplyChainPath)},
-			"/artifact/other/global/c":        {Kind: "OTHER"},
+			"/artifact/supply-chain/global/c":  {Kind: string(horizonmodels.MaterializedKindSupplyChainPath)},
+			"/artifact/service-chain/global/d": {Kind: string(horizonmodels.MaterializedKindServiceChainPath)},
+			"/artifact/other/global/e":         {Kind: "OTHER"},
 		},
 	}
-	if got := hotPathArtifactScopeCount(lens); got != 2 {
-		t.Fatalf("hotPathArtifactScopeCount() = %d, want 2", got)
+	if got := hotPathArtifactScopeCount(lens); got != 4 {
+		t.Fatalf("hotPathArtifactScopeCount() = %d, want 4", got)
 	}
 	if got := hotPathArtifactScopeCount(&horizonmodels.Lens{ViewConfig: map[string]any{"artifactScopeAddCount": float64(3)}}); got != 3 {
 		t.Fatalf("hotPathArtifactScopeCount(viewConfig) = %d, want 3", got)
+	}
+}
+
+func TestIntentSupportsHotPath_ServiceChain(t *testing.T) {
+	intent := &agents.IntentResolution{
+		Domains: []agents.DomainResolution{{
+			CanonicalPath: "/domain/v1/service-chain/geo/us/subject/google-cloud",
+			ContractType:  "service-chain",
+			ServiceChainExecutionPlan: &agents.SupplyChainExecutionPlan{
+				Queries: []agents.SupplyChainQuery{{Anchor: "/org/us/google-cloud", AnchorType: "org", Direction: "both", Depth: 4}},
+			},
+		}},
+	}
+	if !intentSupportsHotPath(intent) {
+		t.Fatal("expected service-chain intent to support hot path")
 	}
 }

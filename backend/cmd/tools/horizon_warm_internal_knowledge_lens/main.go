@@ -22,6 +22,7 @@ func main() {
 		projectID      string
 		lensID         string
 		reason         string
+		targetTemp     string
 		answerBucket   string
 		answerStoreID  string
 		vertexLocation string
@@ -32,6 +33,7 @@ func main() {
 	flag.StringVar(&projectID, "project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon-test"), "GCP project id")
 	flag.StringVar(&lensID, "lens-id", "", "lens id to warm")
 	flag.StringVar(&reason, "reason", "manual_trigger", "warmup reason")
+	flag.StringVar(&targetTemp, "target-temperature", "full", "wait target temperature: hot|warm|full")
 	flag.StringVar(&answerBucket, "answer-bucket", firstNonEmpty(os.Getenv("RAG_DOCUMENTS_BUCKET"), ""), "GCS bucket for prepared answer docs")
 	flag.StringVar(&answerStoreID, "answer-store", firstNonEmpty(os.Getenv("VERTEX_SEARCH_INTERNAL_KNOWLEDGE_STORE_ID"), os.Getenv("VERTEX_SEARCH_DATA_STORE_ID"), ""), "Vertex datastore for prepared answer substrate")
 	flag.StringVar(&vertexLocation, "vertex-location", firstNonEmpty(os.Getenv("VERTEX_SEARCH_LOCATION"), "global"), "Vertex location")
@@ -44,6 +46,7 @@ func main() {
 	answerBucket = strings.TrimSpace(answerBucket)
 	answerStoreID = strings.TrimSpace(answerStoreID)
 	vertexLocation = strings.TrimSpace(vertexLocation)
+	targetTemp = strings.ToLower(strings.TrimSpace(targetTemp))
 
 	if lensID == "" {
 		log.Fatal("--lens-id is required")
@@ -77,6 +80,9 @@ func main() {
 	fragmentsRepo := hrepo.NewHorizonFragmentsRepository(fs.Client())
 	materializedRepo := hrepo.NewMaterializedArtifactsRepository(fs.Client())
 	lensArtifactsRepo := hrepo.NewLensArtifactsRepository(fs.Client())
+	analyticalPrimitivesRepo := hrepo.NewAnalyticalPrimitivesRepository(fs.Client())
+	analyticalAggregatesRepo := hrepo.NewAnalyticalAggregatesRepository(fs.Client())
+	signalLandingSummariesRepo := hrepo.NewSignalLandingSummariesRepository(fs.Client())
 
 	lens, err := lensesRepo.Get(ctx, lensID)
 	if err != nil {
@@ -87,6 +93,9 @@ func main() {
 		fragmentsRepo,
 		materializedRepo,
 		lensArtifactsRepo,
+		analyticalPrimitivesRepo,
+		analyticalAggregatesRepo,
+		signalLandingSummariesRepo,
 	)
 	warmer := hinternalknowledge.NewWarmupService(
 		hinternalknowledge.WarmupConfig{
@@ -103,6 +112,7 @@ func main() {
 
 	fmt.Printf("warming lens=%s name=%q bucket=%s store=%s\n", lens.ID, strings.TrimSpace(lens.Name), answerBucket, answerStoreID)
 	printState("before", lens)
+	requestedAt := time.Now().UTC()
 	warmer.EnqueueLensWarmup(ctx, strings.TrimSpace(lens.TenantID), strings.TrimSpace(lens.ProjectID), lens.ID, strings.TrimSpace(reason))
 
 	ticker := time.NewTicker(pollInterval)
@@ -128,11 +138,17 @@ func main() {
 			status := strings.TrimSpace(anyString(state["status"]))
 			switch status {
 			case "ready":
-				printState("ready", fresh)
-				return
+				if targetTemperatureReadySince(state, targetTemp, requestedAt) {
+					printState("ready", fresh)
+					return
+				}
 			case "failed":
 				printState("failed", fresh)
 				log.Fatalf("internal knowledge warmup failed")
+			}
+			if targetTemperatureReadySince(state, targetTemp, requestedAt) {
+				printState("target-ready", fresh)
+				return
 			}
 		}
 	}
@@ -171,6 +187,76 @@ func anyString(value any) string {
 		return ""
 	}
 	return strings.TrimSpace(fmt.Sprintf("%v", value))
+}
+
+func targetTemperatureReadySince(state map[string]any, target string, requestedAt time.Time) bool {
+	target = strings.ToLower(strings.TrimSpace(target))
+	status := strings.ToLower(strings.TrimSpace(anyString(state["status"])))
+	if status == "failed" {
+		return false
+	}
+	if target == "" || target == "full" {
+		if !strings.EqualFold(status, "ready") {
+			return false
+		}
+		if completedAt, ok := parseStateTime(state["completedAt"]); ok {
+			return !completedAt.Before(requestedAt)
+		}
+		return false
+	}
+	if readyAt, ok := parseStateTime(state[target+"ReadyAt"]); ok {
+		return !readyAt.Before(requestedAt)
+	}
+	if strings.EqualFold(status, "ready") {
+		if completedAt, ok := parseStateTime(state["completedAt"]); ok {
+			return !completedAt.Before(requestedAt) && availableTemperatureAtLeast(state, target)
+		}
+	}
+	return false
+}
+
+func temperatureRank(value string) int {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "hot":
+		return 1
+	case "warm":
+		return 2
+	case "full":
+		return 3
+	default:
+		return 0
+	}
+}
+
+func availableTemperatureAtLeast(state map[string]any, target string) bool {
+	available := state["availableTemperatures"]
+	switch typed := available.(type) {
+	case []any:
+		for _, item := range typed {
+			if temperatureRank(anyString(item)) >= temperatureRank(target) {
+				return true
+			}
+		}
+	case []string:
+		for _, item := range typed {
+			if temperatureRank(item) >= temperatureRank(target) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func parseStateTime(value any) (time.Time, bool) {
+	raw := strings.TrimSpace(anyString(value))
+	if raw == "" {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed.UTC(), true
 }
 
 func firstNonEmpty(values ...string) string {

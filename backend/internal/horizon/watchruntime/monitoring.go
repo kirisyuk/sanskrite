@@ -99,12 +99,17 @@ func (s *Service) buildSubjectMonitoringSnapshot(ctx context.Context, detail *Su
 	paths := subjectMonitoringPaths(subject, detail.FocusSnapshot)
 	facts := s.collectFocusFacts(ctx, strings.TrimSpace(firstNonEmpty(subject.TenantID, "global")), paths, 72)
 	substrate := buildMaterialSignalSubstrate(facts, 10)
+	landingSummaries := s.collectLandingSummaries(ctx, strings.TrimSpace(firstNonEmpty(subject.TenantID, "global")), paths, 24)
 	sourceCoverage := map[string]any{
-		"signalCount":    substrate.SignalCount,
-		"sourceCount":    substrate.SourceCount,
-		"coverageScore":  substrate.CoverageScore,
-		"bundleCount":    len(substrate.Bundles),
-		"latestObserved": substrate.LatestObserved,
+		"signalCount":         substrate.SignalCount,
+		"sourceCount":         substrate.SourceCount,
+		"coverageScore":       substrate.CoverageScore,
+		"bundleCount":         len(substrate.Bundles),
+		"latestObserved":      substrate.LatestObserved,
+		"landingSummaryCount": len(landingSummaries),
+		"landedRefCount":      landingRefCount(landingSummaries),
+		"affectedZoneCount":   landingAffectedZoneCount(landingSummaries),
+		"missingPreciseZone":  anyLandingMissingPreciseZone(landingSummaries),
 	}
 	out := &SubjectMonitoringSnapshot{
 		SubjectID:           strings.TrimSpace(subject.ID),
@@ -150,6 +155,15 @@ func (s *Service) buildSubjectMonitoringSnapshot(ctx context.Context, detail *Su
 				ObservedAt: brief.UpdatedAt,
 			})
 		}
+	}
+	out.OpenQuestions = compactUnique(append(out.OpenQuestions, landingOpenQuestions(landingSummaries)...))
+	if out.CurrentPosition == nil {
+		out.CurrentPosition = map[string]any{}
+	}
+	if len(landingSummaries) > 0 {
+		out.CurrentPosition["landingSummaryCount"] = len(landingSummaries)
+		out.CurrentPosition["landingAffectedZones"] = firstNStrings(landingAffectedZones(landingSummaries), 6)
+		out.CurrentPosition["landingConfirmedRefs"] = firstNStrings(landingConfirmedRefs(landingSummaries), 8)
 	}
 	out.RecommendedEscalation = recommendedEscalationForSnapshot(out, detail)
 	return out
@@ -295,6 +309,96 @@ func buildMaterialSignalSubstrate(facts []*coremodels.OntologyFact, limit int) M
 		CoverageScore:  minFloat(1, coverageScore),
 		LatestObserved: latestObserved,
 	}
+}
+
+func (s *Service) collectLandingSummaries(ctx context.Context, tenantID string, paths []string, limit int) []*horizonmodels.SignalLandingSummary {
+	if s == nil || s.signalLandingSummariesRepo == nil || len(paths) == 0 {
+		return nil
+	}
+	items, err := s.signalLandingSummariesRepo.ListByScopeRefs(ctx, strings.TrimSpace(firstNonEmpty(tenantID, "global")), compactUnique(paths), maxInt(limit, 24))
+	if err != nil {
+		return nil
+	}
+	return items
+}
+
+func landingRefCount(items []*horizonmodels.SignalLandingSummary) int {
+	refs := map[string]struct{}{}
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		for _, ref := range append(append([]string{}, item.TopConfirmedRefs...), item.TopInferredRefs...) {
+			ref = strings.TrimSpace(ref)
+			if ref == "" {
+				continue
+			}
+			refs[ref] = struct{}{}
+		}
+	}
+	return len(refs)
+}
+
+func landingAffectedZoneCount(items []*horizonmodels.SignalLandingSummary) int {
+	return len(landingAffectedZones(items))
+}
+
+func anyLandingMissingPreciseZone(items []*horizonmodels.SignalLandingSummary) bool {
+	for _, item := range items {
+		if item != nil && item.MissingPreciseZone {
+			return true
+		}
+	}
+	return false
+}
+
+func landingOpenQuestions(items []*horizonmodels.SignalLandingSummary) []string {
+	out := []string{}
+	if anyLandingMissingPreciseZone(items) {
+		out = append(out, "A precise affected zone is still missing for at least one active disruption signal.")
+	}
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		for _, missing := range firstNStrings(item.TopMissingCandidates, 4) {
+			out = append(out, "Resolve missing anchor: "+strings.TrimSpace(missing))
+		}
+	}
+	return compactUnique(out)
+}
+
+func landingAffectedZones(items []*horizonmodels.SignalLandingSummary) []string {
+	out := []string{}
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		out = append(out, item.AffectedZoneRefs...)
+	}
+	return compactUnique(out)
+}
+
+func landingConfirmedRefs(items []*horizonmodels.SignalLandingSummary) []string {
+	out := []string{}
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		out = append(out, item.TopConfirmedRefs...)
+	}
+	return compactUnique(out)
+}
+
+func firstNStrings(values []string, limit int) []string {
+	if limit <= 0 || len(values) == 0 {
+		return nil
+	}
+	values = compactUnique(values)
+	if len(values) <= limit {
+		return append([]string(nil), values...)
+	}
+	return append([]string(nil), values[:limit]...)
 }
 
 func materialBundleKey(fact *coremodels.OntologyFact) string {

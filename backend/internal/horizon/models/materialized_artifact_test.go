@@ -877,8 +877,11 @@ func TestParseSupplyChainPathPayload_NormalizesRouteOverlays(t *testing.T) {
 	if len(leg.TransportViaRefs) != 1 || leg.TransportViaRefs[0] != "/fac/ae/jebel-ali-port" {
 		t.Fatalf("primary transportViaRefs=%v, want jebel ali", leg.TransportViaRefs)
 	}
-	if len(leg.FlowRefs) != 2 {
-		t.Fatalf("leg flowRefs=%v, want both overlay flow refs", leg.FlowRefs)
+	if len(leg.FlowRefs) != 1 || leg.FlowRefs[0] != "sea_gulf_diego_garcia_mainline" {
+		t.Fatalf("leg flowRefs=%v, want primary overlay flow refs only", leg.FlowRefs)
+	}
+	if len(leg.AlternateFlowRefs) != 1 || leg.AlternateFlowRefs[0] != "sea_gulf_rotterdam_via_cape" {
+		t.Fatalf("leg alternateFlowRefs=%v, want alternate overlay flow refs", leg.AlternateFlowRefs)
 	}
 }
 
