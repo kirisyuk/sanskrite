@@ -310,6 +310,7 @@ done_when:  критерий завершения
 
 Skill library lives in `skills/`. Before working in these areas, read the matching `SKILL.md` first:
 
+- `skills/docx-export/SKILL.md` для создания Word/DOCX документов и отправки файлом в Telegram
 - `skills/context-hygiene/SKILL.md` for bloated sessions, `/compact`, handoffs, fresh-session rules, and durable memory flush
 - `skills/natural-task-routing/SKILL.md` for reminders, "check later", "tomorrow morning", "keep watching this", and translating fuzzy timing into durable automation
 - `skills/scheduled-deliverables/SKILL.md` for scheduled briefs, forecast updates, doc/pdf outputs, and template-driven deliverables
