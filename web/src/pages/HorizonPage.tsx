@@ -1,8 +1,6 @@
 import React from 'react';
-import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { ThemeContext } from '../components/ThemeProvider';
 import { SidebarPanel } from '../components/SidebarPanel';
 import { useProjectsStore } from '../stores/projectsStore';
 import { useUIStore } from '../stores/uiStore';
@@ -23,11 +21,10 @@ import { useHorizonRealtimeStore } from '../stores/horizonRealtimeStore';
 import { useWebSocketConnection } from '../hooks/useWebSocketConnection';
 import { useIsAdmin } from '../hooks/useIsAdmin';
 import { HorizonLoading } from '../components/HorizonLoading';
-import { HorizonEmptyState } from '../components/HorizonEmptyState';
 import { HorizonPortfolioSurface } from '../components/HorizonPortfolioSurface';
-import { HorizonWatchSurface } from '../components/HorizonWatchSurface';
-import { HorizonWatchLensSurface } from '../components/HorizonWatchLensSurface';
 import type { MapObjectInspectorPayload } from '../components/MapObjectDetail';
+import { HorizonHomeWorkspace } from '../components/HorizonHomeWorkspace';
+import type { LensChatMapFocus } from '../components/LensChatDockPlaceholder';
 
 type HorizonFatalPipelineError = {
   title: string;
@@ -38,11 +35,9 @@ type HorizonFatalPipelineError = {
 };
 
 const HorizonPage: React.FC = () => {
-  const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
   const { currentUser } = useAuth();
-  const { theme } = React.useContext(ThemeContext);
   const projects = useProjectsStore((s) => s.projects);
   const projectsLoading = useProjectsStore((s) => s.loading);
   const fetchProjects = useProjectsStore((s) => s.fetchProjects);
@@ -60,6 +55,7 @@ const HorizonPage: React.FC = () => {
   const [worldMapDrawerWidth, setWorldMapDrawerWidth] = React.useState(400);
   const [worldMapInspectorState, setWorldMapInspectorState] =
     React.useState<MapObjectInspectorPayload | null>(null);
+  const [homeMapFocus, setHomeMapFocus] = React.useState<LensChatMapFocus | null>(null);
   const [worldMapDrawerPanel, setWorldMapDrawerPanel] =
     React.useState<MapDrawerPanelType | null>(null);
   const [worldMapDrawerHost, setWorldMapDrawerHost] =
@@ -292,6 +288,11 @@ const HorizonPage: React.FC = () => {
     setSelectedLensId,
   ]);
 
+  React.useEffect(() => {
+    if (!isWatchRoute) return;
+    navigate('/horizon', { replace: true });
+  }, [isWatchRoute, navigate]);
+
   // Track previous project ID to detect project changes
   const prevProjectIdRef = React.useRef<string | null>(null);
 
@@ -441,34 +442,6 @@ const HorizonPage: React.FC = () => {
     saveHorizonState(null, null);
     setCreateFatalError(null);
   }, [setCurrentProject, setSelectedLensId, saveHorizonState]);
-
-  const handleCreateProject = React.useCallback(() => {
-    window.dispatchEvent(new CustomEvent('horizon:create-project'));
-  }, []);
-
-  const horizonProjects = React.useMemo(
-    () => projects.filter((project) => project.projectType === 'horizon'),
-    [projects],
-  );
-
-  const handleSelectExistingProject = React.useCallback(
-    (projectId: string) => {
-      const project = horizonProjects.find((item) => item.id === projectId);
-      if (!project) return;
-      setCurrentProject(project);
-      setPreferredLensCanvasMode('home');
-      setSelectedLensId(null);
-      setShowWorldMap(false);
-      setCreateFatalError(null);
-    },
-    [
-      horizonProjects,
-      setCurrentProject,
-      setSelectedLensId,
-      setShowWorldMap,
-      setCreateFatalError,
-    ],
-  );
 
   const handleCloseAllModals = React.useCallback(() => {
     setShowSettings(false);
@@ -1010,6 +983,7 @@ const HorizonPage: React.FC = () => {
         onSelectLens={(lensId) => {
           navigate('/horizon');
           setShowWorldMap(false);
+          setHomeMapFocus(null);
           setPreferredLensCanvasMode('home');
           setSelectedLensId(lensId);
           // User explicitly chose to open a lens: stop treating this as an in-progress creation feed.
@@ -1019,34 +993,44 @@ const HorizonPage: React.FC = () => {
           setCreateFatalError(null);
         }}
         selectedLensId={selectedLensId}
+        onOpenHome={() => {
+          navigate('/horizon');
+          setShowWorldMap(false);
+          setHomeMapFocus(null);
+          setSelectedLensId(null);
+          setLensStarted(false);
+          setActiveCreateCorrelationId(null);
+          setActiveCreateSessionId(null);
+          setCreateFatalError(null);
+          setPreferredLensCanvasMode('home');
+        }}
+        isHomeActive={!isPortfolioRoute && !selectedLensId && !showWorldMap}
         onOpenPortfolio={() => {
           navigate('/horizon/portfolio');
           setShowWorldMap(false);
+          setHomeMapFocus(null);
           setLensStarted(false);
           setActiveCreateCorrelationId(null);
           setActiveCreateSessionId(null);
           setCreateFatalError(null);
         }}
         isPortfolioActive={isPortfolioRoute}
-        onOpenWatch={() => {
-          setShowWorldMap(false);
-          navigate('/horizon/watch');
-        }}
-        isWatchActive={isWatchRoute}
         onOpenWorldMap={() => {
           navigate('/horizon');
           setShowWorldMap(true);
+          setHomeMapFocus(null);
           setPreferredLensCanvasMode('home');
           setLensStarted(false);
           setActiveCreateCorrelationId(null);
           setActiveCreateSessionId(null);
           setCreateFatalError(null);
         }}
-        isWorldMapActive={showWorldMap && !isWatchRoute && !isPortfolioRoute}
+        isWorldMapActive={showWorldMap && !isPortfolioRoute}
         onNewLens={() => {
           if (!currentProject) return;
           navigate('/horizon');
           setShowWorldMap(false);
+          setHomeMapFocus(null);
           setSelectedLensId(null);
           setLensStarted(false);
           resetEvents();
@@ -1080,35 +1064,11 @@ const HorizonPage: React.FC = () => {
           {isPortfolioRoute ? (
             <HorizonPortfolioSurface
               projectName={currentProject?.displayName || null}
-              onOpenWatch={() => {
-                navigate('/horizon/watch');
-                setShowWorldMap(false);
-              }}
               onOpenWorldMap={() => {
                 navigate('/horizon');
                 setShowWorldMap(true);
               }}
             />
-          ) : isWatchRoute ? (
-            currentProject && selectedLensId ? (
-              <HorizonWatchLensSurface
-                lensId={selectedLensId}
-                projectName={currentProject?.displayName || null}
-                onOpenWorldMap={() => {
-                  navigate('/horizon');
-                  setShowWorldMap(true);
-                }}
-              />
-            ) : (
-              <HorizonWatchSurface
-                lensId={currentProject ? selectedLensId : null}
-                projectName={currentProject?.displayName || null}
-                onOpenWorldMap={() => {
-                  navigate('/horizon');
-                  setShowWorldMap(true);
-                }}
-              />
-            )
           ) : showWorldMap ? (
             <div
               style={{ flex: 1, minHeight: 0, display: 'flex', minWidth: 0 }}
@@ -1157,7 +1117,7 @@ const HorizonPage: React.FC = () => {
                 setMapDrawerHost={setWorldMapDrawerHost}
               />
             </div>
-          ) : currentProject ? (
+          ) : currentProject && selectedLensId ? (
             /* Lens Canvas overlay - Home is the default entry point; Progress appears only when runtime exists */
             <LensCanvas
               isOpen={true}
@@ -1223,14 +1183,84 @@ const HorizonPage: React.FC = () => {
           ) : projectsLoading || !hasRestoredProject ? (
             <HorizonLoading />
           ) : (
-            <HorizonEmptyState
-              onCreateProject={handleCreateProject}
-              existingProjects={horizonProjects.map((project) => ({
-                id: project.id,
-                displayName: project.displayName,
-              }))}
-              onSelectProject={handleSelectExistingProject}
-            />
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 16, minWidth: 0 }}>
+              <div
+                style={{
+                  flex: homeMapFocus?.canonicalPaths?.length ? '0 0 54%' : 1,
+                  minWidth: 0,
+                  display: 'flex',
+                }}
+              >
+                <HorizonHomeWorkspace
+                  currentProjectId={currentProject?.id || null}
+                  onOpenLens={(lensId) => {
+                    navigate('/horizon');
+                    setSelectedLensId(lensId);
+                    setPreferredLensCanvasMode('home');
+                    setHomeMapFocus(null);
+                    setShowWorldMap(false);
+                  }}
+                  onMapFocusChange={setHomeMapFocus}
+                />
+              </div>
+              {homeMapFocus?.canonicalPaths?.length ? (
+                <div
+                  style={{
+                    flex: '0 0 46%',
+                    minWidth: 0,
+                    minHeight: 0,
+                    display: 'flex',
+                    position: 'relative',
+                  }}
+                >
+                  <div
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      minHeight: 0,
+                      display: 'flex',
+                      flexDirection: 'column',
+                    }}
+                  >
+                    <WorldMapPanel
+                      chatMapFocus={homeMapFocus}
+                      onClearChatMapFocus={() => setHomeMapFocus(null)}
+                      onMapInspectorStateChange={handleWorldMapInspectorStateChange}
+                      activeMapDrawerPanel={worldMapDrawerPanel}
+                      onMapDrawerPanelChange={handleWorldMapDrawerPanelChange}
+                      mapDrawerHost={worldMapDrawerHost}
+                    />
+                  </div>
+                  <HorizonDrawers
+                    panelType={worldMapPanelType}
+                    isMobile={isMobile}
+                    drawerWidth={worldMapDrawerWidth}
+                    setDrawerWidth={setWorldMapDrawerWidth}
+                    closeAllPanels={() => {
+                      worldMapInspectorState?.onClose();
+                      setWorldMapPanelType(null);
+                      setWorldMapInspectorState(null);
+                      setWorldMapDrawerPanel(null);
+                    }}
+                    getPanelVisibilityStyles={(visible: boolean) => ({
+                      display: visible ? 'block' : 'none',
+                      opacity: visible ? 1 : 0,
+                      transition: 'opacity 0.2s ease-in-out',
+                    })}
+                    projectId={currentProject?.id || null}
+                    lensId={null}
+                    lensName={null}
+                    selectedNodeId={null}
+                    selectedNodeData={null}
+                    selectedEdgeId={null}
+                    selectedEdgeData={null}
+                    mapInspectorState={worldMapInspectorState}
+                    mapDrawerTitle={worldMapDrawerTitle}
+                    setMapDrawerHost={setWorldMapDrawerHost}
+                  />
+                </div>
+              ) : null}
+            </div>
           )}
         </div>
       </div>

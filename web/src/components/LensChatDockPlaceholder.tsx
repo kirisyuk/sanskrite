@@ -303,8 +303,8 @@ export const LensChatDockPlaceholder: React.FC<LensChatDockPlaceholderProps> = (
           <button
             type="button"
             onClick={onOpen}
-            aria-label="Open lens console"
-            title="Open lens console"
+            aria-label="Open lens chat"
+            title="Open lens chat"
             style={TOGGLE_BUTTON_STYLE}
           >
             <MessageIcon />
@@ -355,7 +355,7 @@ export const LensChatDockPlaceholder: React.FC<LensChatDockPlaceholderProps> = (
           >
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-heading)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
-                Lens Console
+                Lens Chat
               </div>
               <div style={{ fontSize: 12, color: 'var(--text-secondary-strong)', marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {lensName ? `Attached to ${lensName}` : 'Attached to current lens'}
@@ -364,8 +364,8 @@ export const LensChatDockPlaceholder: React.FC<LensChatDockPlaceholderProps> = (
             <button
               type="button"
               onClick={onClose}
-              aria-label="Close lens console"
-              title="Close lens console"
+              aria-label="Close lens chat"
+              title="Close lens chat"
               style={TOGGLE_BUTTON_STYLE}
             >
               <ChevronLeftIcon />
@@ -422,7 +422,7 @@ export const LensChatDockPlaceholder: React.FC<LensChatDockPlaceholderProps> = (
             ) : null}
 
             {isLoadingHistory ? (
-              <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Loading lens console…</div>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Loading lens chat…</div>
             ) : null}
 
             {messages.map((message) => {

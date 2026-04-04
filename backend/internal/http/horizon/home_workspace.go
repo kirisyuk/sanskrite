@@ -1,0 +1,500 @@
+package horizon
+
+import (
+	"context"
+	"crypto/sha1"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"sort"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/analytical"
+	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
+)
+
+type homeWorkspaceRunRequest struct {
+	Query string `json:"query"`
+}
+
+type homeWorkspaceEntity struct {
+	ID            string   `json:"id,omitempty"`
+	Name          string   `json:"name"`
+	CanonicalPath string   `json:"canonicalPath"`
+	Type          string   `json:"type,omitempty"`
+	Description   string   `json:"description,omitempty"`
+	Location      string   `json:"location,omitempty"`
+	Industry      string   `json:"industry,omitempty"`
+	RelatedPaths  []string `json:"relatedPaths,omitempty"`
+	Selected      bool     `json:"selected"`
+}
+
+type homeWorkspaceRunResponse struct {
+	RunID             string                `json:"runId"`
+	Query             string                `json:"query"`
+	Answer            string                `json:"answer"`
+	Hits              []map[string]any      `json:"hits,omitempty"`
+	HighlightedPaths  []string              `json:"highlightedPaths,omitempty"`
+	EventCorePaths    []string              `json:"eventCorePaths,omitempty"`
+	HaloPaths         []string              `json:"haloPaths,omitempty"`
+	AffectedZoneRefs  []string              `json:"affectedZoneRefs,omitempty"`
+	Entities          []homeWorkspaceEntity `json:"entities,omitempty"`
+	SuggestedLensName string                `json:"suggestedLensName,omitempty"`
+	SuggestedLensScope []string             `json:"suggestedLensScope,omitempty"`
+	Warnings          []string              `json:"warnings,omitempty"`
+}
+
+func (h *HorizonHandlers) HomeWorkspaceRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	authInfo, err := requireAuth(r)
+	if err != nil {
+		_ = httputil.WriteUnauthorized(w, err.Error())
+		return
+	}
+	if h.service == nil || h.genAIHandler == nil {
+		_ = httputil.WriteInternalError(w, "Horizon home workspace is not configured")
+		return
+	}
+	var req homeWorkspaceRunRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		_ = httputil.WriteBadRequest(w, "INVALID_JSON", "Failed to parse body")
+		return
+	}
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
+		_ = httputil.WriteBadRequest(w, "INVALID_QUERY", "query is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+
+	entities, scopeRefs, entityWarnings := h.resolveHomeWorkspaceEntities(ctx, query)
+	answer, hits, highlightedPaths, eventCorePaths, haloPaths, affectedZoneRefs, warnings := h.answerHomeWorkspace(ctx, strings.TrimSpace(authInfo.TenantID), query, scopeRefs, entities)
+	warnings = append(entityWarnings, warnings...)
+
+	_ = httputil.WriteJSON(w, http.StatusOK, homeWorkspaceRunResponse{
+		RunID:              homeWorkspaceRunID(query, scopeRefs),
+		Query:              query,
+		Answer:             answer,
+		Hits:               summarizeLensChatHits(hits, defaultLensChatHitLimit),
+		HighlightedPaths:   highlightedPaths,
+		EventCorePaths:     eventCorePaths,
+		HaloPaths:          haloPaths,
+		AffectedZoneRefs:   affectedZoneRefs,
+		Entities:           entities,
+		SuggestedLensName:  buildHomeWorkspaceLensName(query, entities),
+		SuggestedLensScope: buildHomeWorkspaceLensScope(scopeRefs, highlightedPaths, eventCorePaths, haloPaths),
+		Warnings:           uniqueStringsLocal(warnings),
+	})
+}
+
+func (h *HorizonHandlers) answerHomeWorkspace(ctx context.Context, tenantID, query string, scopeRefs []string, entities []homeWorkspaceEntity) (string, []lensChatInternalHit, []string, []string, []string, []string, []string) {
+	warnings := make([]string, 0, 6)
+	intent := classifyLensChatAnalyticalIntent(query)
+	client := h.service.VertexSearchClient()
+	if client == nil {
+		return "Home workspace search is unavailable right now.", nil, nil, nil, nil, nil, []string{"vertex search client is not configured"}
+	}
+
+	signalHits, signalDocs, signalEventCore, signalHalo, affectedZones, signalWarnings := h.loadHomeWorkspaceSignalEvidence(ctx, tenantID, query, scopeRefs)
+	warnings = append(warnings, signalWarnings...)
+
+	analyticalHits, analyticalDocs, analyticalPaths, analyticalWarnings := h.loadHomeWorkspaceAnalyticalEvidence(ctx, tenantID, query, scopeRefs)
+	warnings = append(warnings, analyticalWarnings...)
+
+	searchHits, searchWarnings := searchLensChatInternalKnowledge(ctx, client, lensChatSearchSpec{
+		Question:  query,
+		Limit:     defaultLensChatHitLimit,
+		ScopeRefs: scopeRefs,
+	})
+	warnings = append(warnings, searchWarnings...)
+	searchDocs, evidenceWarnings := loadLensChatPreparedEvidenceDocs(ctx, h.gcsClient, searchHits, defaultLensChatEvidenceDocLimit)
+	warnings = append(warnings, evidenceWarnings...)
+
+	hits := mergeLensChatHits(mergeLensChatHits(nil, signalHits, 12), analyticalHits, 12)
+	hits = mergeLensChatHits(hits, searchHits, defaultLensChatHitLimit+defaultLensChatGlobalHitLimit)
+	evidenceDocs := mergeLensChatPreparedEvidenceDocs(signalDocs, analyticalDocs, 12)
+	evidenceDocs = mergeLensChatPreparedEvidenceDocs(evidenceDocs, searchDocs, defaultLensChatEvidenceDocLimit+defaultLensChatGlobalHitLimit)
+
+	eventCorePaths := limitStringsLocal(filterCanonicalPathsLocal(signalEventCore), 24)
+	haloPaths := limitStringsLocal(filterCanonicalPathsLocal(append(signalHalo, analyticalPaths...)), 32)
+	highlightedPaths := collectLensChatEvidencePaths(hits, evidenceDocs, 32)
+	highlightedPaths = limitStringsLocal(filterCanonicalPathsLocal(append(scopeRefs, append(highlightedPaths, append(eventCorePaths, haloPaths...)...)...)), 40)
+	affectedZoneRefs := limitStringsLocal(filterCanonicalPathsLocal(affectedZones), 12)
+
+	if len(hits) == 0 || len(evidenceDocs) == 0 {
+		answer := "I could not find enough grounded internal knowledge for this question yet."
+		if intent == "current_signal" {
+			answer = "I could not find enough fresh grounded signal-aware knowledge for this question yet."
+		}
+		return answer, hits, highlightedPaths, eventCorePaths, haloPaths, affectedZoneRefs, uniqueStringsLocal(warnings)
+	}
+
+	prompt := buildHomeWorkspaceSynthesisPrompt(query, entities, hits, evidenceDocs, highlightedPaths, eventCorePaths, haloPaths, affectedZoneRefs)
+	genResp, err := h.genAIHandler.GenerateDirect(ctx, gen_combined.GenAIRequest{
+		Model:             lensChatModel,
+		Prompt:            prompt,
+		SystemInstruction: homeWorkspaceSystemInstruction(),
+		MaxOutputTokens:   1400,
+		Temperature:       0.15,
+	})
+	if err != nil {
+		warnings = append(warnings, fmt.Sprintf("final synthesis failed: %v", err))
+		return fallbackLensChatAnswer(hits, evidenceDocs, highlightedPaths), hits, highlightedPaths, eventCorePaths, haloPaths, affectedZoneRefs, uniqueStringsLocal(warnings)
+	}
+	answer := strings.TrimSpace(genResp.Content)
+	if answer == "" {
+		answer = fallbackLensChatAnswer(hits, evidenceDocs, highlightedPaths)
+		warnings = append(warnings, "final synthesis returned empty content")
+	}
+	answer = rewriteCanonicalPathsForDisplay(answer, hits)
+	return answer, hits, highlightedPaths, eventCorePaths, haloPaths, affectedZoneRefs, uniqueStringsLocal(warnings)
+}
+
+func (h *HorizonHandlers) resolveHomeWorkspaceEntities(ctx context.Context, query string) ([]homeWorkspaceEntity, []string, []string) {
+	scopeRefs := limitStringsLocal(filterCanonicalPathsLocal(extractCanonicalPathsFromText(query)), 16)
+	warnings := make([]string, 0, 2)
+	if h == nil || h.service == nil {
+		return nil, scopeRefs, warnings
+	}
+	fragments, err := h.service.SearchFragments(ctx, query, 8)
+	if err != nil {
+		warnings = append(warnings, fmt.Sprintf("entity search failed: %v", err))
+		return nil, scopeRefs, warnings
+	}
+	out := make([]homeWorkspaceEntity, 0, len(fragments))
+	seen := map[string]struct{}{}
+	for _, fragment := range fragments {
+		if fragment == nil {
+			continue
+		}
+		canonicalPath := strings.TrimSpace(fragment.CanonicalPath)
+		if canonicalPath == "" {
+			continue
+		}
+		if _, ok := seen[canonicalPath]; ok {
+			continue
+		}
+		seen[canonicalPath] = struct{}{}
+		scopeRefs = append(scopeRefs, canonicalPath)
+		out = append(out, homeWorkspaceEntity{
+			ID:            strings.TrimSpace(fragment.ID),
+			Name:          buildHomeWorkspaceEntityName(fragment),
+			CanonicalPath: canonicalPath,
+			Type:          strings.TrimSpace(string(fragment.Type)),
+			Description:   strings.TrimSpace(fragment.Description),
+			Location:      buildHomeWorkspaceEntityLocation(fragment),
+			Industry:      buildHomeWorkspaceEntityIndustry(fragment),
+			Selected:      true,
+		})
+	}
+	return out, limitStringsLocal(filterCanonicalPathsLocal(scopeRefs), 20), warnings
+}
+
+func (h *HorizonHandlers) loadHomeWorkspaceSignalEvidence(ctx context.Context, tenantID, query string, scopeRefs []string) ([]lensChatInternalHit, []lensChatPreparedEvidenceDoc, []string, []string, []string, []string) {
+	if h == nil || h.signalLandingSummariesRepo == nil {
+		return nil, nil, nil, nil, nil, nil
+	}
+	summaries := make([]*horizonmodels.SignalLandingSummary, 0, 8)
+	warnings := make([]string, 0, 4)
+	if len(scopeRefs) > 0 {
+		byScope, err := h.signalLandingSummariesRepo.ListByScopeRefs(ctx, tenantID, scopeRefs, 12)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("signal landing summary load failed: %v", err))
+		} else {
+			summaries = append(summaries, byScope...)
+		}
+	}
+	recent, err := h.signalLandingSummariesRepo.ListRecent(ctx, tenantID, 20)
+	if err != nil {
+		warnings = append(warnings, fmt.Sprintf("recent signal landing load failed: %v", err))
+	} else {
+		summaries = append(summaries, homeWorkspaceRankSignalSummaries(query, recent, 4)...)
+	}
+	if tenantID != "global" {
+		globalRecent, err := h.signalLandingSummariesRepo.ListRecent(ctx, "global", 20)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("recent global signal landing load failed: %v", err))
+		} else {
+			summaries = append(summaries, homeWorkspaceRankSignalSummaries(query, globalRecent, 4)...)
+		}
+	}
+	seen := map[string]struct{}{}
+	hits := make([]lensChatInternalHit, 0, 6)
+	docs := make([]lensChatPreparedEvidenceDoc, 0, 6)
+	eventCore := make([]string, 0, 24)
+	halo := make([]string, 0, 24)
+	affectedZones := make([]string, 0, 12)
+	for _, summary := range summaries {
+		if summary == nil {
+			continue
+		}
+		key := strings.TrimSpace(summary.ID)
+		if key == "" {
+			key = strings.TrimSpace(summary.ScopeRef)
+		}
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		hits = append(hits, lensChatHitFromSignalLandingSummary(summary, 1.45))
+		docs = append(docs, lensChatDocFromSignalLandingSummary(summary))
+		eventCore = append(eventCore, signalLandingSummaryEventCoreRefs(summary)...)
+		halo = append(halo, signalLandingSummaryHaloRefs(summary)...)
+		affectedZones = append(affectedZones, summary.AffectedZoneRefs...)
+		if len(hits) >= 4 {
+			break
+		}
+	}
+	return hits, docs, limitStringsLocal(filterCanonicalPathsLocal(eventCore), 24), limitStringsLocal(filterCanonicalPathsLocal(halo), 24), limitStringsLocal(filterCanonicalPathsLocal(affectedZones), 12), warnings
+}
+
+func (h *HorizonHandlers) loadHomeWorkspaceAnalyticalEvidence(ctx context.Context, tenantID, query string, scopeRefs []string) ([]lensChatInternalHit, []lensChatPreparedEvidenceDoc, []string, []string) {
+	if h == nil || h.analyticalPrimitivesRepo == nil || len(scopeRefs) == 0 {
+		return nil, nil, nil, nil
+	}
+	warnings := make([]string, 0, 4)
+	primitives, err := h.analyticalPrimitivesRepo.ListByImpactedRefs(ctx, tenantID, scopeRefs, 240)
+	if err != nil {
+		return nil, nil, nil, []string{fmt.Sprintf("analytical primitive load failed: %v", err)}
+	}
+	if len(primitives) == 0 {
+		return nil, nil, nil, nil
+	}
+	hits := make([]lensChatInternalHit, 0, 8)
+	docs := make([]lensChatPreparedEvidenceDoc, 0, 8)
+	paths := make([]string, 0, 32)
+	aggregateInput := analytical.AggregateScopeInput{
+		TenantID:     tenantID,
+		ScopeType:    "home_workspace",
+		ScopeRef:     homeWorkspaceRunID(query, scopeRefs),
+		Layer:        "baseline",
+		SourceClass:  "home_workspace_query",
+		SubjectRef:   query,
+		RefreshClass: "on_read",
+		Primitives:   primitives,
+		ComputedAt:   time.Now().UTC(),
+	}
+	for _, aggregate := range analytical.BuildScopeAggregates(aggregateInput) {
+		if aggregate == nil {
+			continue
+		}
+		hits = append(hits, lensChatHitFromAggregate(aggregate, 1.25))
+		docs = append(docs, lensChatDocFromAggregate(aggregate))
+		paths = append(paths, aggregate.BasisRefs...)
+		paths = append(paths, aggregate.ProductRefs...)
+		paths = append(paths, aggregate.NodeRefs...)
+		paths = append(paths, aggregate.RouteRefs...)
+		paths = append(paths, aggregate.AffectedRefs...)
+	}
+	for _, primitive := range primitives {
+		if primitive == nil {
+			continue
+		}
+		hits = append(hits, lensChatHitFromPrimitive(primitive, 0.95))
+		docs = append(docs, lensChatDocFromPrimitive(primitive))
+		paths = append(paths, primitive.BasisRefs...)
+		paths = append(paths, primitive.ProductRefs...)
+		paths = append(paths, primitive.NodeRefs...)
+		paths = append(paths, primitive.RouteRefs...)
+		paths = append(paths, primitive.AffectedRefs...)
+		if len(docs) >= 8 {
+			break
+		}
+	}
+	return mergeLensChatHits(nil, hits, 10), mergeLensChatPreparedEvidenceDocs(nil, docs, 10), limitStringsLocal(filterCanonicalPathsLocal(paths), 32), warnings
+}
+
+func buildHomeWorkspaceSynthesisPrompt(query string, entities []homeWorkspaceEntity, hits []lensChatInternalHit, evidenceDocs []lensChatPreparedEvidenceDoc, highlightedPaths, eventCorePaths, haloPaths, affectedZoneRefs []string) string {
+	var b strings.Builder
+	b.WriteString("Home workspace question: ")
+	b.WriteString(strings.TrimSpace(query))
+	b.WriteString("\n\n")
+	if len(entities) > 0 {
+		b.WriteString("Resolved entities:\n")
+		for _, entity := range entities {
+			b.WriteString("- ")
+			b.WriteString(entity.Name)
+			if entity.Type != "" {
+				b.WriteString(" (")
+				b.WriteString(entity.Type)
+				b.WriteString(")")
+			}
+			if entity.CanonicalPath != "" {
+				b.WriteString(" ")
+				b.WriteString(entity.CanonicalPath)
+			}
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+	if len(eventCorePaths) > 0 {
+		b.WriteString("Event core refs:\n")
+		b.WriteString(strings.Join(eventCorePaths, "\n"))
+		b.WriteString("\n\n")
+	}
+	if len(haloPaths) > 0 {
+		b.WriteString("Impact halo refs:\n")
+		b.WriteString(strings.Join(limitStringsLocal(haloPaths, 16), "\n"))
+		b.WriteString("\n\n")
+	}
+	if len(affectedZoneRefs) > 0 {
+		b.WriteString("Affected zones:\n")
+		b.WriteString(strings.Join(affectedZoneRefs, "\n"))
+		b.WriteString("\n\n")
+	}
+	b.WriteString("Grounded internal hits:\n")
+	for i, hit := range hits {
+		if i >= 12 {
+			break
+		}
+		b.WriteString(fmt.Sprintf("- kind=%s title=%s score=%.3f", lensChatFirstNonEmptyString(hit.Kind, "unknown"), lensChatFirstNonEmptyString(hit.Title, hit.ID), hit.Score))
+		paths := limitStringsLocal(stringSliceAny(hit.StructData["canonicalPaths"]), 6)
+		if len(paths) > 0 {
+			b.WriteString(" paths=")
+			b.WriteString(strings.Join(paths, ", "))
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("\nPrepared evidence pack:\n")
+	b.WriteString(renderLensChatPreparedEvidenceDocs(evidenceDocs))
+	if len(highlightedPaths) > 0 {
+		b.WriteString("\nCandidate canonical paths:\n")
+		b.WriteString(strings.Join(highlightedPaths, "\n"))
+		b.WriteString("\n")
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func homeWorkspaceSystemInstruction() string {
+	return strings.TrimSpace(`
+You are Horizon Home Workspace.
+Use only the provided grounded internal context. Do not use web knowledge. Do not invent missing facts.
+Answer in the same language as the user's question.
+Use human-readable names in prose. Do not expose canonical paths like /org/... or /fac/... unless the user explicitly asks for canonical identifiers.
+
+Return a concise workspace-style answer:
+1. Direct answer first.
+2. If fresh signal landing evidence exists, answer from event-core first, then impact halo, then broader structural background.
+3. Name the key objects, zones, products, routes, facilities, and chokepoints if they appear in the grounded evidence.
+4. For current-event questions, prioritize what changed right now over older background.
+5. End with explicit uncertainty only if the grounded context is incomplete.
+`)
+}
+
+func homeWorkspaceRankSignalSummaries(query string, summaries []*horizonmodels.SignalLandingSummary, limit int) []*horizonmodels.SignalLandingSummary {
+	if len(summaries) == 0 || limit <= 0 {
+		return nil
+	}
+	queryTokens := normalizedTokenSetLocal(query)
+	type scored struct {
+		summary *horizonmodels.SignalLandingSummary
+		score   float64
+	}
+	scoredItems := make([]scored, 0, len(summaries))
+	for _, summary := range summaries {
+		if summary == nil {
+			continue
+		}
+		combined := strings.Join(append(append(append([]string{}, summary.TopClaims...), summary.TopConfirmedRefs...), append(summary.Products, append(summary.Routes, summary.AffectedZoneRefs...)...)...), " ")
+		score := 6.0*tokenOverlapScoreLocal(queryTokens, normalizedTokenSetLocal(combined)) + lensChatSignalSummaryBoost(summary)
+		scoredItems = append(scoredItems, scored{summary: summary, score: score})
+	}
+	sort.Slice(scoredItems, func(i, j int) bool {
+		if scoredItems[i].score == scoredItems[j].score {
+			return scoredItems[i].summary.UpdatedAt.After(scoredItems[j].summary.UpdatedAt)
+		}
+		return scoredItems[i].score > scoredItems[j].score
+	})
+	out := make([]*horizonmodels.SignalLandingSummary, 0, minIntLocal(limit, len(scoredItems)))
+	for _, item := range scoredItems {
+		if item.summary == nil || item.score <= 0 {
+			continue
+		}
+		out = append(out, item.summary)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func buildHomeWorkspaceEntityName(fragment *horizonmodels.HorizonFragment) string {
+	if fragment == nil {
+		return ""
+	}
+	if fragment.Labels != nil {
+		if value := strings.TrimSpace(fragment.Labels["en"]); value != "" {
+			return value
+		}
+	}
+	if fragment.Identifiers != nil {
+		for _, key := range []string{"shortName", "legalName", "displayName", "name"} {
+			if value := strings.TrimSpace(fragment.Identifiers[key]); value != "" {
+				return value
+			}
+		}
+	}
+	return humanizeCanonicalPath(strings.TrimSpace(fragment.CanonicalPath))
+}
+
+func buildHomeWorkspaceEntityLocation(fragment *horizonmodels.HorizonFragment) string {
+	if fragment == nil || fragment.HomeLocation == nil || fragment.HomeLocation.ISO3166_1 == nil {
+		return ""
+	}
+	return strings.TrimSpace(*fragment.HomeLocation.ISO3166_1)
+}
+
+func buildHomeWorkspaceEntityIndustry(fragment *horizonmodels.HorizonFragment) string {
+	if fragment == nil || len(fragment.IndustryPaths) == 0 {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(fragment.IndustryPaths[0], "/"), "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(parts[len(parts)-1])
+}
+
+func buildHomeWorkspaceLensName(query string, entities []homeWorkspaceEntity) string {
+	if len(entities) > 0 {
+		if len(entities) == 1 {
+			return strings.TrimSpace(entities[0].Name)
+		}
+		return strings.TrimSpace(entities[0].Name + " workspace")
+	}
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "Home workspace lens"
+	}
+	if utf8.RuneCountInString(query) > 72 {
+		query = lensChatCompactText(query, 72)
+	}
+	return query
+}
+
+func buildHomeWorkspaceLensScope(scopeRefs, highlightedPaths, eventCorePaths, haloPaths []string) []string {
+	scope := make([]string, 0, 24)
+	scope = append(scope, eventCorePaths...)
+	scope = append(scope, haloPaths...)
+	scope = append(scope, highlightedPaths...)
+	scope = append(scope, scopeRefs...)
+	return limitStringsLocal(filterCanonicalPathsLocal(scope), 24)
+}
+
+func homeWorkspaceRunID(query string, scopeRefs []string) string {
+	sum := sha1.Sum([]byte(strings.TrimSpace(query) + "::" + strings.Join(scopeRefs, "|")))
+	return "home_" + hex.EncodeToString(sum[:])[:20]
+}

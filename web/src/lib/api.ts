@@ -181,6 +181,33 @@ export interface HorizonLensChatResponse {
   assistantMessage?: HorizonLensChatMessage;
 }
 
+export interface HorizonHomeWorkspaceEntity {
+  id?: string;
+  name: string;
+  canonicalPath: string;
+  type?: string;
+  description?: string;
+  location?: string;
+  industry?: string;
+  relatedPaths?: string[];
+  selected?: boolean;
+}
+
+export interface HorizonHomeWorkspaceRunResponse {
+  runId: string;
+  query: string;
+  answer: string;
+  hits?: HorizonLensChatHit[];
+  highlightedPaths?: string[];
+  eventCorePaths?: string[];
+  haloPaths?: string[];
+  affectedZoneRefs?: string[];
+  entities?: HorizonHomeWorkspaceEntity[];
+  suggestedLensName?: string;
+  suggestedLensScope?: string[];
+  warnings?: string[];
+}
+
 export interface HorizonSimulationOverlayItem {
   id?: string;
   title?: string;
@@ -5289,6 +5316,30 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     return response.data;
   }
 
+  async upsertHorizonWatchPortfolio(input: {
+    id?: string;
+    name: string;
+    kind?: string;
+    description?: string;
+    status?: string;
+    entries?: Array<{
+      id?: string;
+      entryType?: string;
+      label: string;
+      canonicalPath?: string;
+      subjectId?: string;
+      sourceTenantId?: string;
+      sourceLensId?: string;
+      relatedCanonicalPaths?: string[];
+      autoEnsureFocus?: boolean;
+      metadata?: Record<string, any>;
+    }>;
+    metadata?: Record<string, any>;
+  }): Promise<HorizonWatchPortfolioView> {
+    const response = await this.client.post('/api/horizon/watch/portfolios', input);
+    return response.data;
+  }
+
   async runHorizonScenario(input: {
     scenarioId?: string;
     contractType?: string;
@@ -5506,6 +5557,23 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       return response.data;
     } catch (error: any) {
       console.error(`[API] postHorizonLensChat error:`, error);
+      throw error;
+    }
+  }
+
+  async runHorizonHomeWorkspace(
+    query: string,
+  ): Promise<HorizonHomeWorkspaceRunResponse> {
+    try {
+      const response = await this.client.post<HorizonHomeWorkspaceRunResponse>(
+        '/api/horizon/home/workspace/run',
+        {
+          query: query.trim(),
+        },
+      );
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] runHorizonHomeWorkspace error:`, error);
       throw error;
     }
   }

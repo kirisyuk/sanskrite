@@ -54,6 +54,8 @@ interface SidebarPanelProps {
   selectedLensId?: string | null;
   onNewLens?: () => void; // Optional: callback for creating new lens
   onProjectSelected?: () => void;
+  onOpenHome?: () => void;
+  isHomeActive?: boolean;
   onOpenPortfolio?: () => void;
   isPortfolioActive?: boolean;
   onOpenWatch?: () => void;
@@ -489,6 +491,8 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   selectedLensId,
   onNewLens,
   onProjectSelected,
+  onOpenHome,
+  isHomeActive,
   onOpenPortfolio,
   isPortfolioActive,
   onOpenWatch,
@@ -739,7 +743,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
   ]);
 
   const hasHorizonSurfaceNav = Boolean(
-    isHorizonMode && (onOpenPortfolio || onOpenWatch || onOpenWorldMap),
+    isHorizonMode && (onOpenHome || onOpenPortfolio || onOpenWatch || onOpenWorldMap),
   );
 
   const renderHorizonSurfaceNavButton = (
@@ -815,6 +819,22 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
 
     return (
       <>
+        {renderHorizonSurfaceNavButton(
+          'Home',
+          Boolean(isHomeActive),
+          onOpenHome,
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <path d="M3 11.5 12 4l9 7.5" />
+            <path d="M5.5 10.5V20h13V10.5" />
+          </svg>,
+        )}
         {renderHorizonSurfaceNavButton(
           'Portfolio',
           Boolean(isPortfolioActive),

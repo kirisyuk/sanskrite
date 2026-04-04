@@ -20,6 +20,7 @@
 - **[Обзор архитектуры](architecture/overview.md)** — высокоуровневая архитектура системы и интеграция с Sanskrite
 - **[Supply Chain Canonical Control Plane](architecture/supply-chain-canonical-control-plane.md)** — обязательный верхнеуровневый документ про canonical products, synonyms, transforms/assembly pairs и candidate queues; его нужно читать перед работой с supply-chain кодом
 - **[Signal Landing Plane](architecture/signal-landing-plane.md)** — первый слой long pipeline: event/signal -> impact claims -> landed refs -> missing anchors -> flash/hot warmup
+- **[Home Workspace Runtime](architecture/home-workspace-runtime.md)** — новый Home-first entry surface: question -> landed signal/context -> explanation + map + actions -> promote to lens/watch/portfolio
 - **[Компоненты системы](architecture/components.md)** — детальное описание компонентов (Scout Engine, Propagation Engine, Watchdog, Lens Subsystem)
 - **[Модель данных](architecture/data-model.md)** — структуры данных, схемы Firestore, связи с существующими моделями
 - **[Интеграция](architecture/integration.md)** — интеграция с существующими компонентами Sanskrite

@@ -286,6 +286,7 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 	// Lens creation from NL query (resolve intent -> create lens)
 	mux.Handle("/api/horizon/lenses/from-query", authMiddleware(http.HandlerFunc(h.CreateLensFromQuery)))
 	mux.Handle("/api/horizon/lenses/", authMiddleware(http.HandlerFunc(h.HandleLensRoutes)))
+	mux.Handle("/api/horizon/home/workspace/run", authMiddleware(http.HandlerFunc(h.HomeWorkspaceRun)))
 
 	// Fragment endpoints
 	mux.Handle("/api/horizon/fragments", authMiddleware(http.HandlerFunc(h.HandleFragmentsRoot)))
