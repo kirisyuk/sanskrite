@@ -853,6 +853,47 @@ Affected zone — это именно карта территории встря
 
 На момент этого обновления новый PSA Redis ещё в `CREATING`, поэтому финальное переключение API на него и повторная live-проверка Redis hot path остаются последним незавершённым блоком.
 
+### Финальный статус Redis fix
+
+Блок дожат полностью.
+
+Что оказалось корневой причиной на самом деле:
+
+1. старый Redis был в `DIRECT_PEERING`, что само по себе было плохой базой для Cloud Run;
+2. новый PSA Redis поднялся корректно, но Cloud Run subnet `nv-horizon-run` использовала диапазон `10.20.0.0/26`;
+3. default VPC firewall rule `default-allow-internal` пропускала только `10.128.0.0/9`;
+4. из-за этого даже новый PSA Redis формально был жив, но traffic из Cloud Run subnet до него timeout'ился.
+
+Что сделано:
+
+- создан новый Redis instance:
+  - `nv-horizon-redis-psa`
+  - `connectMode=PRIVATE_SERVICE_ACCESS`
+  - host `10.26.0.3`
+- API переведён на новый Redis host
+- создан явный firewall rule:
+  - `nv-horizon-run-allow-internal`
+  - source range `10.20.0.0/26`
+  - allow `tcp,udp,icmp`
+- после этого выпущена новая live revision:
+  - `nv-horizon-api-00080-pgs`
+
+Что подтверждено live:
+
+- healthcheck зелёный
+- на старте revision `00080` Redis инициализируется без `i/o timeout`
+- повторный live lens-chat запрос проходит без новых `redis: connection pool ... i/o timeout` логов
+- BigQuery остаётся clean и работает с `nv_horizon_test_documents`
+
+Итог:
+
+- `Redis connectivity for live hot path` закрыт
+- `BigQuery noise cleanup` закрыт
+- штатный deploy script уже направлен в правильную сторону:
+  - PSA Redis как default infra target
+  - выделенная Cloud Run subnet
+  - явный `BIGQUERY_DATASET_ID`
+
 ### Полезные live сущности
 
 - API URL:
