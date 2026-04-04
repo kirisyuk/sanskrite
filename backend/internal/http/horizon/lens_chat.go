@@ -413,9 +413,11 @@ Use recent conversation context only to resolve references and follow-up questio
 
 Return a concise operator-style answer:
 1. Direct answer first.
+1a. If fresh signal_landing_summary or recent signal-aware evidence is present, answer from event-core first, then impact halo, then broader structural background.
 2. Name the key objects and their roles.
 3. Mention suppliers, routes, products, ports, facilities, and relationships if they appear in the grounded evidence pack.
 4. Prefer explicit objects and route legs over generic summaries.
+4a. For questions about current disruptions or what changed right now, do not let older structural background override fresher signal-aware evidence.
 5. End with explicit uncertainty only if the grounded context is incomplete.
 `)
 }
@@ -530,7 +532,8 @@ func lensChatScopePaths(lens *horizonmodels.Lens) []string {
 
 func lensChatNeedsGlobalFallback(question string, hits []lensChatInternalHit, evidenceDocs []lensChatPreparedEvidenceDoc) bool {
 	for _, doc := range evidenceDocs {
-		if strings.HasPrefix(strings.TrimSpace(doc.Kind), "analytical_") {
+		kind := strings.TrimSpace(doc.Kind)
+		if strings.HasPrefix(kind, "analytical_") || kind == "signal_landing_summary" {
 			return false
 		}
 	}
@@ -558,6 +561,8 @@ func classifyLensChatAnalyticalIntent(question string) string {
 	switch {
 	case q == "":
 		return ""
+	case strings.Contains(q, "right now"), strings.Contains(q, "currently"), strings.Contains(q, "current disruption"), strings.Contains(q, "what disruptions"), strings.Contains(q, "what changed"), strings.Contains(q, "affecting "), strings.Contains(q, "сейчас"), strings.Contains(q, "прямо сейчас"), strings.Contains(q, "какие сбои"), strings.Contains(q, "что изменилось"):
+		return "current_signal"
 	case strings.Contains(q, "what happens if"), strings.Contains(q, "impact if"), strings.Contains(q, "disruption impact"), strings.Contains(q, "что будет если"), strings.Contains(q, "влияние сбоя"), strings.Contains(q, "impact of disruption"):
 		return "scenario"
 	case strings.Contains(q, "weak point"), strings.Contains(q, "bottleneck"), strings.Contains(q, "critical dependenc"), strings.Contains(q, "single point of failure"), strings.Contains(q, "fragility"), strings.Contains(q, "chokepoint"), strings.Contains(q, "critical path"), strings.Contains(q, "узк"), strings.Contains(q, "слаб"), strings.Contains(q, "зависимост"), strings.Contains(q, "хрупк"), strings.Contains(q, "бутылоч"):
@@ -575,9 +580,26 @@ func (h *HorizonHandlers) loadLensChatAnalyticalEvidence(ctx context.Context, le
 	docs := make([]lensChatPreparedEvidenceDoc, 0, 8)
 	paths := make([]string, 0, 24)
 	warnings := make([]string, 0, 4)
+	scopePaths := lensChatScopePaths(lens)
+
+	if h.signalLandingSummariesRepo != nil && (intent == "current_signal" || intent == "scenario") {
+		summaries, err := h.signalLandingSummariesRepo.ListByScopeRefs(ctx, strings.TrimSpace(lens.TenantID), scopePaths, 12)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("signal landing summary load failed: %v", err))
+		} else {
+			for i, summary := range summaries {
+				if i >= 4 || summary == nil {
+					break
+				}
+				hits = append(hits, lensChatHitFromSignalLandingSummary(summary, 1.45))
+				docs = append(docs, lensChatDocFromSignalLandingSummary(summary))
+				paths = append(paths, signalLandingSummaryEventCoreRefs(summary)...)
+				paths = append(paths, signalLandingSummaryHaloRefs(summary)...)
+			}
+		}
+	}
 
 	if h.analyticalPrimitivesRepo != nil && h.analyticalAggregatesRepo != nil {
-		scopePaths := lensChatScopePaths(lens)
 		aggregate, err := analytical.EnsureLensAggregate(ctx, h.analyticalPrimitivesRepo, h.analyticalAggregatesRepo, h.materializedArtifactsRepo, lens, scopePaths, time.Now().UTC())
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("analytical lens aggregate refresh failed: %v", err))
@@ -672,6 +694,27 @@ func lensChatHitFromPrimitive(primitive *horizonmodels.AnalyticalPrimitive, boos
 	}
 }
 
+func lensChatHitFromSignalLandingSummary(summary *horizonmodels.SignalLandingSummary, boost float64) lensChatInternalHit {
+	paths := uniqueStringsLocal(append(signalLandingSummaryEventCoreRefs(summary), signalLandingSummaryHaloRefs(summary)...))
+	return lensChatInternalHit{
+		ID:    strings.TrimSpace(summary.ID),
+		Title: buildLensChatSignalLandingTitle(summary),
+		Kind:  "signal_landing_summary",
+		URI:   "signal-landing://summary/" + strings.TrimSpace(summary.ID),
+		Score: lensChatSignalSummaryBoost(summary) * boost,
+		StructData: map[string]any{
+			"type":           "signal_landing_summary",
+			"title":          buildLensChatSignalLandingTitle(summary),
+			"canonicalPaths": paths,
+			"questionHints":  append([]string(nil), summary.TopClaims...),
+			"eventCoreRefs":  signalLandingSummaryEventCoreRefs(summary),
+			"haloRefs":       signalLandingSummaryHaloRefs(summary),
+			"updatedAt":      summary.UpdatedAt.Format(time.RFC3339Nano),
+			"freshnessClass": lensChatSignalFreshnessClass(summary.UpdatedAt),
+		},
+	}
+}
+
 func lensChatDocFromAggregate(aggregate *horizonmodels.AnalyticalAggregate) lensChatPreparedEvidenceDoc {
 	return lensChatPreparedEvidenceDoc{
 		ID:             strings.TrimSpace(aggregate.ID),
@@ -692,6 +735,105 @@ func lensChatDocFromPrimitive(primitive *horizonmodels.AnalyticalPrimitive) lens
 		URI:            "analytical://primitive/" + strings.TrimSpace(primitive.ID),
 		CanonicalPaths: uniqueStringsLocal(append(append([]string{primitive.ScopeRef, primitive.SubjectRef}, primitive.BasisRefs...), append(append(append(primitive.ProductRefs, primitive.NodeRefs...), primitive.RouteRefs...), primitive.AffectedRefs...)...)),
 	}
+}
+
+func lensChatDocFromSignalLandingSummary(summary *horizonmodels.SignalLandingSummary) lensChatPreparedEvidenceDoc {
+	return lensChatPreparedEvidenceDoc{
+		ID:             strings.TrimSpace(summary.ID),
+		Kind:           "signal_landing_summary",
+		Title:          buildLensChatSignalLandingTitle(summary),
+		Content:        buildLensChatSignalLandingDoc(summary),
+		URI:            "signal-landing://summary/" + strings.TrimSpace(summary.ID),
+		CanonicalPaths: uniqueStringsLocal(append(signalLandingSummaryEventCoreRefs(summary), signalLandingSummaryHaloRefs(summary)...)),
+	}
+}
+
+func buildLensChatSignalLandingTitle(summary *horizonmodels.SignalLandingSummary) string {
+	if summary == nil {
+		return "signal landing summary"
+	}
+	if len(summary.AffectedZoneRefs) > 0 {
+		return "Fresh signal around " + summary.AffectedZoneRefs[0]
+	}
+	if len(summary.TopConfirmedRefs) > 0 {
+		return "Fresh signal around " + summary.TopConfirmedRefs[0]
+	}
+	return "Fresh signal for " + strings.TrimSpace(summary.ScopeRef)
+}
+
+func buildLensChatSignalLandingDoc(summary *horizonmodels.SignalLandingSummary) string {
+	if summary == nil {
+		return ""
+	}
+	lines := []string{
+		"Fresh signal landing summary",
+		"Scope: " + strings.TrimSpace(summary.ScopeRef),
+	}
+	if !summary.UpdatedAt.IsZero() {
+		lines = append(lines, "Updated at: "+summary.UpdatedAt.UTC().Format(time.RFC3339))
+	}
+	if core := signalLandingSummaryEventCoreRefs(summary); len(core) > 0 {
+		lines = append(lines, "Event core: "+strings.Join(limitStringsLocal(core, 8), ", "))
+	}
+	if halo := signalLandingSummaryHaloRefs(summary); len(halo) > 0 {
+		lines = append(lines, "Impact halo: "+strings.Join(limitStringsLocal(halo, 10), ", "))
+	}
+	if len(summary.TopClaims) > 0 {
+		lines = append(lines, "Claims: "+strings.Join(limitStringsLocal(summary.TopClaims, 6), "; "))
+	}
+	if len(summary.TopMissingCandidates) > 0 {
+		lines = append(lines, "Missing anchors: "+strings.Join(limitStringsLocal(summary.TopMissingCandidates, 6), ", "))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func signalLandingSummaryEventCoreRefs(summary *horizonmodels.SignalLandingSummary) []string {
+	if summary == nil {
+		return nil
+	}
+	return uniqueStringsLocal(append(append([]string{summary.ScopeRef}, summary.TopConfirmedRefs...), append(summary.TopInferredRefs, summary.AffectedZoneRefs...)...))
+}
+
+func signalLandingSummaryHaloRefs(summary *horizonmodels.SignalLandingSummary) []string {
+	if summary == nil {
+		return nil
+	}
+	return uniqueStringsLocal(append(summary.Products, append(append(summary.Routes, summary.Facilities...), summary.Chokepoints...)...))
+}
+
+func lensChatSignalFreshnessClass(updatedAt time.Time) string {
+	if updatedAt.IsZero() {
+		return "stale"
+	}
+	age := time.Since(updatedAt.UTC())
+	switch {
+	case age <= 2*time.Hour:
+		return "flash"
+	case age <= 24*time.Hour:
+		return "hot"
+	case age <= 7*24*time.Hour:
+		return "warm"
+	default:
+		return "stale"
+	}
+}
+
+func lensChatSignalSummaryBoost(summary *horizonmodels.SignalLandingSummary) float64 {
+	if summary == nil {
+		return 1
+	}
+	boost := 1.0
+	switch lensChatSignalFreshnessClass(summary.UpdatedAt) {
+	case "flash":
+		boost += 0.45
+	case "hot":
+		boost += 0.3
+	case "warm":
+		boost += 0.15
+	}
+	boost += 0.03 * float64(len(summary.TopConfirmedRefs))
+	boost += 0.02 * float64(len(summary.Products)+len(summary.Routes)+len(summary.Facilities)+len(summary.Chokepoints))
+	return boost
 }
 
 func mergeLensChatPreparedEvidenceDocs(base, extra []lensChatPreparedEvidenceDoc, limit int) []lensChatPreparedEvidenceDoc {
@@ -895,7 +1037,7 @@ func lensChatWarmState(lens *horizonmodels.Lens) map[string]any {
 func lensChatRequiredTemperature(question, analyticalIntent string) string {
 	q := strings.ToLower(strings.TrimSpace(question))
 	switch analyticalIntent {
-	case "baseline_risk", "scenario":
+	case "baseline_risk", "scenario", "current_signal":
 		return "hot"
 	}
 	switch {
@@ -991,6 +1133,9 @@ func buildLensChatQueryVariants(question string, history []lensChatTurn, corpusI
 	joined := strings.ToLower(strings.Join(base, " "))
 	if strings.Contains(joined, "supply") || strings.Contains(joined, "route") || strings.Contains(joined, "logistics") {
 		base = append(base, "products suppliers customers routes logistics")
+	}
+	if intent := classifyLensChatAnalyticalIntent(question); intent == "current_signal" || intent == "scenario" {
+		base = append(base, "current disruptions fresh signal event impact affected routes products chokepoints")
 	}
 	return uniqueStringsLocal(base)
 }
@@ -1105,7 +1250,9 @@ func rerankLensChatHits(question string, hits []lensChatInternalHit, scopeRefs [
 	}
 	queryTokens := normalizedTokenSetLocal(question)
 	logisticsQuery := strings.Contains(strings.ToLower(question), "supply") || strings.Contains(strings.ToLower(question), "route") || strings.Contains(strings.ToLower(question), "logistics")
+	currentSignalQuery := classifyLensChatAnalyticalIntent(question) == "current_signal"
 	scopeRefSet := normalizedTokenSetLocal(strings.Join(scopeRefs, " "))
+	signalContext := buildLensChatSignalContext(hits)
 	type scoredHit struct {
 		hit   lensChatInternalHit
 		score float64
@@ -1113,13 +1260,31 @@ func rerankLensChatHits(question string, hits []lensChatInternalHit, scopeRefs [
 	scored := make([]scoredHit, 0, len(hits))
 	for _, hit := range hits {
 		score := hit.Score * 100
+		pathTokens := normalizedTokenSetLocal(strings.Join(stringSliceAny(hit.StructData["canonicalPaths"]), " "))
 		score += kindWeightLocal(hit.Kind, logisticsQuery)
 		score += 4.0 * tokenOverlapScoreLocal(queryTokens, normalizedTokenSetLocal(lensChatFirstNonEmptyString(hit.Title, asStringAny(hit.StructData["title"]))))
-		score += 2.0 * tokenOverlapScoreLocal(queryTokens, normalizedTokenSetLocal(strings.Join(stringSliceAny(hit.StructData["canonicalPaths"]), " ")))
+		score += 2.0 * tokenOverlapScoreLocal(queryTokens, pathTokens)
 		score += 1.5 * tokenOverlapScoreLocal(queryTokens, normalizedTokenSetLocal(strings.Join(stringSliceAny(hit.StructData["questionHints"]), " ")))
-		score += 2.5 * tokenOverlapScoreLocal(scopeRefSet, normalizedTokenSetLocal(strings.Join(stringSliceAny(hit.StructData["canonicalPaths"]), " ")))
+		score += 2.5 * tokenOverlapScoreLocal(scopeRefSet, pathTokens)
 		if preferredCorpusID != "" && strings.TrimSpace(asStringAny(hit.StructData["corpusId"])) == preferredCorpusID {
 			score += 18
+		}
+		if currentSignalQuery {
+			eventCoreOverlap := tokenOverlapScoreLocal(signalContext.eventCoreTokens, pathTokens)
+			haloOverlap := tokenOverlapScoreLocal(signalContext.haloTokens, pathTokens)
+			score += lensChatSignalRecencyScore(hit.StructData["updatedAt"])
+			score += 5.5 * eventCoreOverlap
+			score += 3.25 * haloOverlap
+			switch strings.ToLower(strings.TrimSpace(hit.Kind)) {
+			case "signal_landing_summary":
+				score += 42
+			case "analytical_aggregate", "analytical_primitive":
+				score += 20
+			case "overview", "dossier":
+				if eventCoreOverlap == 0 && haloOverlap == 0 {
+					score -= 18
+				}
+			}
 		}
 		scored = append(scored, scoredHit{hit: hit, score: score})
 	}
@@ -1141,6 +1306,11 @@ func rerankLensChatHits(question string, hits []lensChatInternalHit, scopeRefs [
 
 func kindWeightLocal(kind string, logisticsQuery bool) float64 {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "signal_landing_summary":
+		if logisticsQuery {
+			return 28
+		}
+		return 34
 	case "analytical_aggregate":
 		if logisticsQuery {
 			return 24
@@ -1175,6 +1345,51 @@ func kindWeightLocal(kind string, logisticsQuery bool) float64 {
 		return 8
 	default:
 		return 0
+	}
+}
+
+type lensChatSignalContext struct {
+	eventCoreTokens map[string]struct{}
+	haloTokens      map[string]struct{}
+}
+
+func buildLensChatSignalContext(hits []lensChatInternalHit) lensChatSignalContext {
+	ctx := lensChatSignalContext{
+		eventCoreTokens: map[string]struct{}{},
+		haloTokens:      map[string]struct{}{},
+	}
+	for _, hit := range hits {
+		if strings.TrimSpace(hit.Kind) != "signal_landing_summary" {
+			continue
+		}
+		addNormalizedTokensLocal(ctx.eventCoreTokens, strings.Join(stringSliceAny(hit.StructData["eventCoreRefs"]), " "))
+		addNormalizedTokensLocal(ctx.eventCoreTokens, strings.Join(stringSliceAny(hit.StructData["canonicalPaths"]), " "))
+		addNormalizedTokensLocal(ctx.haloTokens, strings.Join(stringSliceAny(hit.StructData["haloRefs"]), " "))
+	}
+	return ctx
+}
+
+func lensChatSignalRecencyScore(value any) float64 {
+	parsed, ok := parseLensChatRFC3339(value)
+	if !ok {
+		return 0
+	}
+	age := time.Since(parsed.UTC())
+	switch {
+	case age <= 2*time.Hour:
+		return 26
+	case age <= 24*time.Hour:
+		return 18
+	case age <= 7*24*time.Hour:
+		return 8
+	default:
+		return 0
+	}
+}
+
+func addNormalizedTokensLocal(dst map[string]struct{}, value string) {
+	for token := range normalizedTokenSetLocal(value) {
+		dst[token] = struct{}{}
 	}
 }
 

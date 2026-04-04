@@ -3189,6 +3189,7 @@ func main() {
 				WithMaterializedArtifactsRepo(horizonMaterializedArtifactsRepo).
 				WithAnalyticalPrimitivesRepo(horizonAnalyticalPrimitivesRepo).
 				WithAnalyticalAggregatesRepo(horizonAnalyticalAggregatesRepo).
+				WithSignalLandingSummariesRepo(horizonrepo.NewSignalLandingSummariesRepository(fsClient.Client())).
 				WithCoreDocsRepo(coreDocsRepo).
 				WithGCSClient(gcsClient).
 				WithOneHopDownstreamService(oneHopDownstreamService).

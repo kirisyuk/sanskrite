@@ -39,6 +39,7 @@ type HorizonHandlers struct {
 	materializedArtifactsRepo *horizonrepo.MaterializedArtifactsRepository
 	analyticalPrimitivesRepo  *horizonrepo.AnalyticalPrimitivesRepository
 	analyticalAggregatesRepo  *horizonrepo.AnalyticalAggregatesRepository
+	signalLandingSummariesRepo *horizonrepo.SignalLandingSummariesRepository
 	newsByFragmentsCanvas     *discovery.NewsByFragmentsCanvas
 	identifyStressesCanvas    *IdentifyStressesCanvas
 	completeSubstrateCanvas   *CompleteSubstrateCanvas
@@ -176,6 +177,11 @@ func (h *HorizonHandlers) WithAnalyticalPrimitivesRepo(r *horizonrepo.Analytical
 
 func (h *HorizonHandlers) WithAnalyticalAggregatesRepo(r *horizonrepo.AnalyticalAggregatesRepository) *HorizonHandlers {
 	h.analyticalAggregatesRepo = r
+	return h
+}
+
+func (h *HorizonHandlers) WithSignalLandingSummariesRepo(r *horizonrepo.SignalLandingSummariesRepository) *HorizonHandlers {
+	h.signalLandingSummariesRepo = r
 	return h
 }
 

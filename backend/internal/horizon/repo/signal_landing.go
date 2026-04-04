@@ -305,36 +305,50 @@ func (r *SignalLandingSummariesRepository) ListByScopeRefs(ctx context.Context, 
 	}
 	tenantID = strings.TrimSpace(tenantID)
 	scopeRefs = compactUniqueSignalLandingStrings(scopeRefs)
-	if tenantID == "" || len(scopeRefs) == 0 {
+	if len(scopeRefs) == 0 {
 		return nil, nil
+	}
+	if tenantID == "" {
+		tenantID = "global"
 	}
 	if limit <= 0 {
 		limit = 100
 	}
+	tenantOrder := []string{tenantID}
+	if tenantID != "global" {
+		tenantOrder = append(tenantOrder, "global")
+	}
 	out := make([]*models.SignalLandingSummary, 0, minSignalLanding(limit, len(scopeRefs)))
-	for start := 0; start < len(scopeRefs) && len(out) < limit; start += 10 {
-		end := start + 10
-		if end > len(scopeRefs) {
-			end = len(scopeRefs)
-		}
-		docs, err := r.col.
-			Where("tenantId", "==", tenantID).
-			Where("scopeRef", "in", scopeRefs[start:end]).
-			Limit(limit - len(out)).
-			Documents(ctx).
-			GetAll()
-		if err != nil {
-			return nil, err
-		}
-		for _, doc := range docs {
-			var summary models.SignalLandingSummary
-			if err := doc.DataTo(&summary); err != nil {
-				continue
+	seen := make(map[string]struct{}, limit)
+	for _, scopedTenantID := range tenantOrder {
+		for start := 0; start < len(scopeRefs) && len(out) < limit; start += 10 {
+			end := start + 10
+			if end > len(scopeRefs) {
+				end = len(scopeRefs)
 			}
-			if summary.ID == "" {
-				summary.ID = doc.Ref.ID
+			docs, err := r.col.
+				Where("tenantId", "==", scopedTenantID).
+				Where("scopeRef", "in", scopeRefs[start:end]).
+				Limit(limit - len(out)).
+				Documents(ctx).
+				GetAll()
+			if err != nil {
+				return nil, err
 			}
-			out = append(out, &summary)
+			for _, doc := range docs {
+				var summary models.SignalLandingSummary
+				if err := doc.DataTo(&summary); err != nil {
+					continue
+				}
+				if summary.ID == "" {
+					summary.ID = doc.Ref.ID
+				}
+				if _, exists := seen[summary.ScopeRef]; exists {
+					continue
+				}
+				seen[summary.ScopeRef] = struct{}{}
+				out = append(out, &summary)
+			}
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {

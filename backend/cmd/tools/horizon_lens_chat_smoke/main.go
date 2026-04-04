@@ -142,6 +142,7 @@ type smokeRuntime struct {
 	domainAnswersRepo         *horizonrepo.DomainAnswerSnapshotsRepository
 	analyticalPrimitivesRepo  *horizonrepo.AnalyticalPrimitivesRepository
 	analyticalAggregatesRepo  *horizonrepo.AnalyticalAggregatesRepository
+	signalLandingSummariesRepo *horizonrepo.SignalLandingSummariesRepository
 
 	horizonService *horizon.HorizonService
 	lensService    *horizonlens.LensService
@@ -391,6 +392,7 @@ func newSmokeRuntime(ctx context.Context, projectID string) (*smokeRuntime, erro
 	domainAnswersRepo := horizonrepo.NewDomainAnswerSnapshotsRepository(db)
 	analyticalPrimitivesRepo := horizonrepo.NewAnalyticalPrimitivesRepository(db)
 	analyticalAggregatesRepo := horizonrepo.NewAnalyticalAggregatesRepository(db)
+	signalLandingSummariesRepo := horizonrepo.NewSignalLandingSummariesRepository(fsClient.Client())
 	framesRepo := horizonrepo.NewFramesRepository(db)
 	edgesRepo := horizonrepo.NewDependencyEdgesRepository(db)
 	fragmentVersionsRepo := horizonrepo.NewHorizonFragmentVersionsRepository(db)
@@ -439,14 +441,15 @@ func newSmokeRuntime(ctx context.Context, projectID string) (*smokeRuntime, erro
 		WithGCSClient(gcsClient).
 		WithInteractionsRepo(interactionsRepo).
 		WithLensItemsHandler(lensItemsHandler).
-		WithMaterializedArtifactsRepo(materializedArtifactsRepo)
+		WithMaterializedArtifactsRepo(materializedArtifactsRepo).
+		WithSignalLandingSummariesRepo(signalLandingSummariesRepo)
 	internalKnowledgeBuilder := horizoninternalknowledge.NewBuilder(
 		fragmentsRepo,
 		materializedArtifactsRepo,
 		lensArtifactsRepo,
 		analyticalPrimitivesRepo,
 		analyticalAggregatesRepo,
-		horizonrepo.NewSignalLandingSummariesRepository(fsClient.Client()),
+		signalLandingSummariesRepo,
 	)
 	supplyChainQueryEngine := horizonpathbuilder.NewSupplyChainQueryEngine(
 		fragmentsRepo,
@@ -481,6 +484,7 @@ func newSmokeRuntime(ctx context.Context, projectID string) (*smokeRuntime, erro
 		domainAnswersRepo:         domainAnswersRepo,
 		analyticalPrimitivesRepo:  analyticalPrimitivesRepo,
 		analyticalAggregatesRepo:  analyticalAggregatesRepo,
+		signalLandingSummariesRepo: signalLandingSummariesRepo,
 		horizonService:            horizonService,
 		lensService:               lensService,
 		handlers:                  handlers,
@@ -1653,27 +1657,53 @@ func (e *lensChatToolExecutor) internalKnowledgeWarmState() map[string]interface
 
 func (e *lensChatToolExecutor) loadAnalyticalEvidence(ctx context.Context, question string) ([]internalKnowledgeHit, []preparedEvidenceDoc, []string, []string) {
 	intent := classifyInternalKnowledgeIntent(question)
-	if e == nil || e.rt == nil || intent == "" || e.rt.analyticalPrimitivesRepo == nil || e.rt.analyticalAggregatesRepo == nil {
+	if e == nil || e.rt == nil || intent == "" {
 		return nil, nil, nil, nil
 	}
 	scopePaths := limitStrings(horizonworkscope.LensWorkbenchScopePaths(e.lens), 48)
+	hits := make([]internalKnowledgeHit, 0, 10)
+	docs := make([]preparedEvidenceDoc, 0, 10)
+	paths := make([]string, 0, 32)
+	warnings := make([]string, 0, 4)
+
+	if e.rt.signalLandingSummariesRepo != nil && (intent == "current_signal" || intent == "scenario") {
+		summaries, err := e.rt.signalLandingSummariesRepo.ListByScopeRefs(ctx, strings.TrimSpace(e.lens.TenantID), scopePaths, 12)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("signal landing summary load failed: %v", err))
+		} else {
+			for i, summary := range summaries {
+				if i >= 4 || summary == nil {
+					break
+				}
+				hits = append(hits, internalHitFromSignalLandingSummary(summary, 1.45))
+				docs = append(docs, preparedDocFromSignalLandingSummary(summary))
+				paths = append(paths, signalLandingSummaryEventCoreRefsLocal(summary)...)
+				paths = append(paths, signalLandingSummaryHaloRefsLocal(summary)...)
+			}
+		}
+	}
+	if e.rt.analyticalPrimitivesRepo == nil || e.rt.analyticalAggregatesRepo == nil {
+		return mergeInternalKnowledgeHits(nil, hits, 10), mergePreparedEvidenceDocs(nil, docs, defaultMaxEvidenceDocs), limitStrings(uniqueStrings(paths), 32), warnings
+	}
 	aggregate, err := horizonanalytical.EnsureLensAggregate(ctx, e.rt.analyticalPrimitivesRepo, e.rt.analyticalAggregatesRepo, e.rt.materializedArtifactsRepo, e.lens, scopePaths, time.Now().UTC())
 	if err != nil {
-		return nil, nil, nil, []string{fmt.Sprintf("analytical aggregate refresh failed: %v", err)}
+		warnings = append(warnings, fmt.Sprintf("analytical aggregate refresh failed: %v", err))
+		return mergeInternalKnowledgeHits(nil, hits, 10), mergePreparedEvidenceDocs(nil, docs, defaultMaxEvidenceDocs), limitStrings(uniqueStrings(paths), 32), warnings
 	}
 	if aggregate == nil {
-		return nil, nil, nil, nil
+		return mergeInternalKnowledgeHits(nil, hits, 10), mergePreparedEvidenceDocs(nil, docs, defaultMaxEvidenceDocs), limitStrings(uniqueStrings(paths), 32), warnings
 	}
-	hits := []internalKnowledgeHit{internalHitFromAggregate(aggregate, 1.25)}
-	docs := []preparedEvidenceDoc{preparedDocFromAggregate(aggregate)}
-	paths := append([]string{}, aggregate.BasisRefs...)
+	hits = append(hits, internalHitFromAggregate(aggregate, 1.25))
+	docs = append(docs, preparedDocFromAggregate(aggregate))
+	paths = append(paths, aggregate.BasisRefs...)
 	paths = append(paths, aggregate.ProductRefs...)
 	paths = append(paths, aggregate.NodeRefs...)
 	paths = append(paths, aggregate.RouteRefs...)
 	paths = append(paths, aggregate.AffectedRefs...)
 	primitives, err := e.rt.analyticalPrimitivesRepo.ListByIDs(ctx, limitStrings(aggregate.DerivedPrimitiveIDs, 8))
 	if err != nil {
-		return hits, docs, limitStrings(uniqueStrings(paths), 32), []string{fmt.Sprintf("analytical primitive load failed: %v", err)}
+		warnings = append(warnings, fmt.Sprintf("analytical primitive load failed: %v", err))
+		return mergeInternalKnowledgeHits(nil, hits, 10), mergePreparedEvidenceDocs(nil, docs, defaultMaxEvidenceDocs), limitStrings(uniqueStrings(paths), 32), warnings
 	}
 	for _, primitive := range primitives {
 		if primitive == nil {
@@ -1687,7 +1717,7 @@ func (e *lensChatToolExecutor) loadAnalyticalEvidence(ctx context.Context, quest
 		paths = append(paths, primitive.RouteRefs...)
 		paths = append(paths, primitive.AffectedRefs...)
 	}
-	return mergeInternalKnowledgeHits(nil, hits, 10), mergePreparedEvidenceDocs(nil, docs, defaultMaxEvidenceDocs), limitStrings(uniqueStrings(paths), 32), nil
+	return mergeInternalKnowledgeHits(nil, hits, 10), mergePreparedEvidenceDocs(nil, docs, defaultMaxEvidenceDocs), limitStrings(uniqueStrings(paths), 32), warnings
 }
 
 func (e *lensChatToolExecutor) searchObjects(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
@@ -2526,10 +2556,12 @@ Prepared evidence pack:
 
 Return:
 1. A direct answer.
+1a. If the evidence includes a fresh signal landing summary, answer from event-core first, then impact halo, then broader structural background.
 2. Objects and how they are connected.
 3. Products and routes.
 4. Explicit gaps in internal knowledge.
 Be concrete. Prefer canonical objects, explicit corridors, explicit products, and explicit route legs that are present in the evidence pack.
+For questions about current disruptions or what changed right now, do not let older structural background override fresher signal-aware evidence.
 Do not claim a gap if the evidence pack already contains the route, relation, or object.
 `, firstNonEmpty(strings.TrimSpace(lens.Name), strings.TrimSpace(lens.ID)), question, strings.Join(hitTitles, "\n"), renderPreparedEvidenceDocs(evidenceDocs)))
 	task := &ai.AITask{
@@ -2873,6 +2905,8 @@ func classifyInternalKnowledgeIntent(question string) string {
 	switch {
 	case q == "":
 		return ""
+	case strings.Contains(q, "right now"), strings.Contains(q, "currently"), strings.Contains(q, "current disruption"), strings.Contains(q, "what disruptions"), strings.Contains(q, "what changed"), strings.Contains(q, "affecting "), strings.Contains(q, "сейчас"), strings.Contains(q, "прямо сейчас"), strings.Contains(q, "какие сбои"), strings.Contains(q, "что изменилось"):
+		return "current_signal"
 	case strings.Contains(q, "what happens if"), strings.Contains(q, "impact if"), strings.Contains(q, "disruption impact"), strings.Contains(q, "что будет если"), strings.Contains(q, "влияние сбоя"), strings.Contains(q, "impact of disruption"):
 		return "scenario"
 	case strings.Contains(q, "weak point"), strings.Contains(q, "bottleneck"), strings.Contains(q, "critical dependenc"), strings.Contains(q, "single point of failure"), strings.Contains(q, "fragility"), strings.Contains(q, "chokepoint"), strings.Contains(q, "узк"), strings.Contains(q, "слаб"), strings.Contains(q, "зависимост"), strings.Contains(q, "хрупк"), strings.Contains(q, "бутылоч"):
@@ -2914,6 +2948,27 @@ func internalHitFromPrimitive(primitive *horizonmodels.AnalyticalPrimitive, boos
 	}
 }
 
+func internalHitFromSignalLandingSummary(summary *horizonmodels.SignalLandingSummary, boost float64) internalKnowledgeHit {
+	paths := uniqueStrings(append(signalLandingSummaryEventCoreRefsLocal(summary), signalLandingSummaryHaloRefsLocal(summary)...))
+	return internalKnowledgeHit{
+		ID:    strings.TrimSpace(summary.ID),
+		Title: buildPreparedSignalLandingTitle(summary),
+		Kind:  "signal_landing_summary",
+		URI:   "signal-landing://summary/" + strings.TrimSpace(summary.ID),
+		Score: internalSignalSummaryBoost(summary) * boost,
+		StructData: map[string]any{
+			"type":           "signal_landing_summary",
+			"title":          buildPreparedSignalLandingTitle(summary),
+			"canonicalPaths": paths,
+			"questionHints":  append([]string(nil), summary.TopClaims...),
+			"eventCoreRefs":  signalLandingSummaryEventCoreRefsLocal(summary),
+			"haloRefs":       signalLandingSummaryHaloRefsLocal(summary),
+			"updatedAt":      summary.UpdatedAt.Format(time.RFC3339Nano),
+			"freshnessClass": internalSignalFreshnessClass(summary.UpdatedAt),
+		},
+	}
+}
+
 func preparedDocFromAggregate(aggregate *horizonmodels.AnalyticalAggregate) preparedEvidenceDoc {
 	return preparedEvidenceDoc{
 		ID:             strings.TrimSpace(aggregate.ID),
@@ -2934,6 +2989,105 @@ func preparedDocFromPrimitive(primitive *horizonmodels.AnalyticalPrimitive) prep
 		URI:            "analytical://primitive/" + strings.TrimSpace(primitive.ID),
 		CanonicalPaths: uniqueStrings(append(append([]string{primitive.ScopeRef, primitive.SubjectRef}, primitive.BasisRefs...), append(append(append(primitive.ProductRefs, primitive.NodeRefs...), primitive.RouteRefs...), primitive.AffectedRefs...)...)),
 	}
+}
+
+func preparedDocFromSignalLandingSummary(summary *horizonmodels.SignalLandingSummary) preparedEvidenceDoc {
+	return preparedEvidenceDoc{
+		ID:             strings.TrimSpace(summary.ID),
+		Kind:           "signal_landing_summary",
+		Title:          buildPreparedSignalLandingTitle(summary),
+		Content:        buildPreparedSignalLandingDoc(summary),
+		URI:            "signal-landing://summary/" + strings.TrimSpace(summary.ID),
+		CanonicalPaths: uniqueStrings(append(signalLandingSummaryEventCoreRefsLocal(summary), signalLandingSummaryHaloRefsLocal(summary)...)),
+	}
+}
+
+func buildPreparedSignalLandingTitle(summary *horizonmodels.SignalLandingSummary) string {
+	if summary == nil {
+		return "signal landing summary"
+	}
+	if len(summary.AffectedZoneRefs) > 0 {
+		return "Fresh signal around " + summary.AffectedZoneRefs[0]
+	}
+	if len(summary.TopConfirmedRefs) > 0 {
+		return "Fresh signal around " + summary.TopConfirmedRefs[0]
+	}
+	return "Fresh signal for " + strings.TrimSpace(summary.ScopeRef)
+}
+
+func buildPreparedSignalLandingDoc(summary *horizonmodels.SignalLandingSummary) string {
+	if summary == nil {
+		return ""
+	}
+	lines := []string{
+		"Fresh signal landing summary",
+		"Scope: " + strings.TrimSpace(summary.ScopeRef),
+	}
+	if !summary.UpdatedAt.IsZero() {
+		lines = append(lines, "Updated at: "+summary.UpdatedAt.UTC().Format(time.RFC3339))
+	}
+	if core := signalLandingSummaryEventCoreRefsLocal(summary); len(core) > 0 {
+		lines = append(lines, "Event core: "+strings.Join(limitStrings(core, 8), ", "))
+	}
+	if halo := signalLandingSummaryHaloRefsLocal(summary); len(halo) > 0 {
+		lines = append(lines, "Impact halo: "+strings.Join(limitStrings(halo, 10), ", "))
+	}
+	if len(summary.TopClaims) > 0 {
+		lines = append(lines, "Claims: "+strings.Join(limitStrings(summary.TopClaims, 6), "; "))
+	}
+	if len(summary.TopMissingCandidates) > 0 {
+		lines = append(lines, "Missing anchors: "+strings.Join(limitStrings(summary.TopMissingCandidates, 6), ", "))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func signalLandingSummaryEventCoreRefsLocal(summary *horizonmodels.SignalLandingSummary) []string {
+	if summary == nil {
+		return nil
+	}
+	return uniqueStrings(append(append([]string{summary.ScopeRef}, summary.TopConfirmedRefs...), append(summary.TopInferredRefs, summary.AffectedZoneRefs...)...))
+}
+
+func signalLandingSummaryHaloRefsLocal(summary *horizonmodels.SignalLandingSummary) []string {
+	if summary == nil {
+		return nil
+	}
+	return uniqueStrings(append(summary.Products, append(append(summary.Routes, summary.Facilities...), summary.Chokepoints...)...))
+}
+
+func internalSignalFreshnessClass(updatedAt time.Time) string {
+	if updatedAt.IsZero() {
+		return "stale"
+	}
+	age := time.Since(updatedAt.UTC())
+	switch {
+	case age <= 2*time.Hour:
+		return "flash"
+	case age <= 24*time.Hour:
+		return "hot"
+	case age <= 7*24*time.Hour:
+		return "warm"
+	default:
+		return "stale"
+	}
+}
+
+func internalSignalSummaryBoost(summary *horizonmodels.SignalLandingSummary) float64 {
+	if summary == nil {
+		return 1
+	}
+	boost := 1.0
+	switch internalSignalFreshnessClass(summary.UpdatedAt) {
+	case "flash":
+		boost += 0.45
+	case "hot":
+		boost += 0.3
+	case "warm":
+		boost += 0.15
+	}
+	boost += 0.03 * float64(len(summary.TopConfirmedRefs))
+	boost += 0.02 * float64(len(summary.Products)+len(summary.Routes)+len(summary.Facilities)+len(summary.Chokepoints))
+	return boost
 }
 
 func mergePreparedEvidenceDocs(base, extra []preparedEvidenceDoc, limit int) []preparedEvidenceDoc {
@@ -3167,6 +3321,9 @@ func buildPreparedQueryVariants(question, corpusID string) []string {
 	if strings.Contains(joined, "supply") || strings.Contains(joined, "logistics") || strings.Contains(joined, "route") {
 		base = append(base, "products routes suppliers customers transport via")
 	}
+	if intent := classifyInternalKnowledgeIntent(question); intent == "current_signal" || intent == "scenario" {
+		base = append(base, "current disruptions fresh signal event impact affected routes products chokepoints")
+	}
 	return uniqueStrings(base)
 }
 
@@ -3203,6 +3360,8 @@ func rerankPreparedInternalKnowledgeHits(question string, hits []internalKnowled
 	}
 	queryTokens := normalizedTokenSet(question)
 	logisticsQuery := strings.Contains(strings.ToLower(question), "supply") || strings.Contains(strings.ToLower(question), "logistics") || strings.Contains(strings.ToLower(question), "route")
+	currentSignalQuery := classifyInternalKnowledgeIntent(question) == "current_signal"
+	signalContext := buildPreparedSignalContext(hits)
 	type scored struct {
 		hit   internalKnowledgeHit
 		score float64
@@ -3211,10 +3370,28 @@ func rerankPreparedInternalKnowledgeHits(question string, hits []internalKnowled
 	for _, hit := range hits {
 		score := hit.Score * 100
 		kind := strings.TrimSpace(asString(hit.StructData["kind"]))
+		pathTokens := normalizedTokenSet(strings.Join(stringSlice(hit.StructData["canonicalPaths"]), " "))
 		score += preparedKindWeight(kind, logisticsQuery)
 		score += 4.0 * tokenOverlapScore(queryTokens, normalizedTokenSet(firstNonEmpty(hit.Title, asString(hit.StructData["title"]))))
-		score += 2.0 * tokenOverlapScore(queryTokens, normalizedTokenSet(strings.Join(stringSlice(hit.StructData["canonicalPaths"]), " ")))
+		score += 2.0 * tokenOverlapScore(queryTokens, pathTokens)
 		score += 1.5 * tokenOverlapScore(queryTokens, normalizedTokenSet(strings.Join(stringSlice(hit.StructData["questionHints"]), " ")))
+		if currentSignalQuery {
+			eventCoreOverlap := tokenOverlapScore(signalContext.eventCoreTokens, pathTokens)
+			haloOverlap := tokenOverlapScore(signalContext.haloTokens, pathTokens)
+			score += preparedSignalRecencyScore(hit.StructData["updatedAt"])
+			score += 5.5 * eventCoreOverlap
+			score += 3.25 * haloOverlap
+			switch kind {
+			case "signal_landing_summary":
+				score += 42
+			case "analytical_aggregate", "analytical_primitive":
+				score += 20
+			case "overview", "dossier":
+				if eventCoreOverlap == 0 && haloOverlap == 0 {
+					score -= 18
+				}
+			}
+		}
 		scoredHits = append(scoredHits, scored{hit: hit, score: score})
 	}
 	sort.Slice(scoredHits, func(i, j int) bool {
@@ -3235,6 +3412,11 @@ func rerankPreparedInternalKnowledgeHits(question string, hits []internalKnowled
 
 func preparedKindWeight(kind string, logisticsQuery bool) float64 {
 	switch strings.TrimSpace(strings.ToLower(kind)) {
+	case "signal_landing_summary":
+		if logisticsQuery {
+			return 28
+		}
+		return 34
 	case "corridor":
 		if logisticsQuery {
 			return 24
@@ -3259,6 +3441,55 @@ func preparedKindWeight(kind string, logisticsQuery bool) float64 {
 		return 8
 	default:
 		return 0
+	}
+}
+
+type preparedSignalContext struct {
+	eventCoreTokens map[string]struct{}
+	haloTokens      map[string]struct{}
+}
+
+func buildPreparedSignalContext(hits []internalKnowledgeHit) preparedSignalContext {
+	ctx := preparedSignalContext{
+		eventCoreTokens: map[string]struct{}{},
+		haloTokens:      map[string]struct{}{},
+	}
+	for _, hit := range hits {
+		if strings.TrimSpace(hit.Kind) != "signal_landing_summary" {
+			continue
+		}
+		addNormalizedTokens(ctx.eventCoreTokens, strings.Join(stringSlice(hit.StructData["eventCoreRefs"]), " "))
+		addNormalizedTokens(ctx.eventCoreTokens, strings.Join(stringSlice(hit.StructData["canonicalPaths"]), " "))
+		addNormalizedTokens(ctx.haloTokens, strings.Join(stringSlice(hit.StructData["haloRefs"]), " "))
+	}
+	return ctx
+}
+
+func preparedSignalRecencyScore(value interface{}) float64 {
+	raw := strings.TrimSpace(asString(value))
+	if raw == "" {
+		return 0
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return 0
+	}
+	age := time.Since(parsed.UTC())
+	switch {
+	case age <= 2*time.Hour:
+		return 26
+	case age <= 24*time.Hour:
+		return 18
+	case age <= 7*24*time.Hour:
+		return 8
+	default:
+		return 0
+	}
+}
+
+func addNormalizedTokens(dst map[string]struct{}, value string) {
+	for token := range normalizedTokenSet(value) {
+		dst[token] = struct{}{}
 	}
 }
 

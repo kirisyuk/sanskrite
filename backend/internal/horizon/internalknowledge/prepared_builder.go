@@ -764,13 +764,20 @@ func buildPreparedCorpusDocs(sub *PreparedSubstrate) []PreparedCorpusDoc {
 			"signal_landing_summary",
 			temperature,
 			buildSignalLandingDoc(summary),
-			compactUnique(append(append(append([]string{summary.ScopeRef}, summary.TopConfirmedRefs...), summary.TopInferredRefs...), append(summary.AffectedZoneRefs, append(summary.Products, append(summary.Routes, summary.Facilities...)...)...)...)),
+			signalLandingCanonicalRefs(summary),
 			map[string]any{
 				"scopeRef":           summary.ScopeRef,
 				"missingPreciseZone": summary.MissingPreciseZone,
 				"confirmedCount":     len(summary.TopConfirmedRefs),
 				"inferredCount":      len(summary.TopInferredRefs),
 				"affectedZoneCount":  len(summary.AffectedZoneRefs),
+				"updatedAt":          summary.UpdatedAt.Format(time.RFC3339Nano),
+				"eventCoreRefs":      signalLandingEventCoreRefs(summary),
+				"haloRefs":           signalLandingHaloRefs(summary),
+				"backgroundRefs":     compactUnique([]string{summary.ScopeRef}),
+				"topClaims":          append([]string(nil), summary.TopClaims...),
+				"chokepoints":        append([]string(nil), summary.Chokepoints...),
+				"freshnessClass":     signalLandingFreshnessClass(summary.UpdatedAt),
 			},
 		)
 	}
@@ -1012,6 +1019,15 @@ func buildSignalLandingDoc(summary *hmodels.SignalLandingSummary) string {
 	lines := []string{
 		fmt.Sprintf("Scope: %s", strings.TrimSpace(summary.ScopeRef)),
 	}
+	if !summary.UpdatedAt.IsZero() {
+		lines = append(lines, "Updated at: "+summary.UpdatedAt.UTC().Format(time.RFC3339))
+	}
+	if core := signalLandingEventCoreRefs(summary); len(core) > 0 {
+		lines = append(lines, "Event core: "+strings.Join(firstNStrings(core, 8), ", "))
+	}
+	if halo := signalLandingHaloRefs(summary); len(halo) > 0 {
+		lines = append(lines, "Impact halo: "+strings.Join(firstNStrings(halo, 10), ", "))
+	}
 	if len(summary.TopClaims) > 0 {
 		lines = append(lines, "Claims: "+strings.Join(firstNStrings(summary.TopClaims, 6), "; "))
 	}
@@ -1040,6 +1056,50 @@ func buildSignalLandingDoc(summary *hmodels.SignalLandingSummary) string {
 		lines = append(lines, "Data gap: precise affected zone is still missing.")
 	}
 	return strings.Join(lines, "\n")
+}
+
+func signalLandingCanonicalRefs(summary *hmodels.SignalLandingSummary) []string {
+	if summary == nil {
+		return nil
+	}
+	return compactUnique(append(
+		append(
+			append([]string{summary.ScopeRef}, summary.TopConfirmedRefs...),
+			summary.TopInferredRefs...,
+		),
+		append(summary.AffectedZoneRefs, append(summary.Products, append(append(summary.Routes, summary.Facilities...), summary.Chokepoints...)...)...)...,
+	))
+}
+
+func signalLandingEventCoreRefs(summary *hmodels.SignalLandingSummary) []string {
+	if summary == nil {
+		return nil
+	}
+	return compactUnique(append(append([]string{summary.ScopeRef}, summary.TopConfirmedRefs...), append(summary.TopInferredRefs, summary.AffectedZoneRefs...)...))
+}
+
+func signalLandingHaloRefs(summary *hmodels.SignalLandingSummary) []string {
+	if summary == nil {
+		return nil
+	}
+	return compactUnique(append(summary.Products, append(append(summary.Routes, summary.Facilities...), summary.Chokepoints...)...))
+}
+
+func signalLandingFreshnessClass(updatedAt time.Time) string {
+	if updatedAt.IsZero() {
+		return "stale"
+	}
+	age := time.Since(updatedAt.UTC())
+	switch {
+	case age <= 2*time.Hour:
+		return "flash"
+	case age <= 24*time.Hour:
+		return "hot"
+	case age <= 7*24*time.Hour:
+		return "warm"
+	default:
+		return "stale"
+	}
 }
 
 func firstNStrings(values []string, limit int) []string {

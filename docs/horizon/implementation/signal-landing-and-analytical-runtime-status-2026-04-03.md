@@ -885,6 +885,43 @@ Affected zone — это именно карта территории встря
 - повторный live lens-chat запрос проходит без новых `redis: connection pool ... i/o timeout` логов
 - BigQuery остаётся clean и работает с `nv_horizon_test_documents`
 
+### Event-Core / Halo Prioritization
+
+На этом проходе был добит следующий критичный дефект answer path:
+
+- Saudi scratch lens уже и раньше хорошо опирался на свежий `signal_landing_summary`;
+- rich Saudi oil lens (`pbOu4sMhN1mCB4SbkwEw`) всё ещё мог терять свежий Hormuz signal и уходить в старый structural background.
+
+Корневая причина оказалась не в landing и не в warmup, а в границе tenant:
+
+- live `signal_landing_summary` пишется в `global`;
+- rich lens находится в tenant `igor@nordicvision.org`;
+- answer path искал summaries только tenant-local и потому не видел свежий signal layer.
+
+Исправление:
+
+- `SignalLandingSummariesRepository.ListByScopeRefs(...)` теперь сначала читает tenant-local summaries, а затем делает bounded fallback в `global` для тех же `scopeRef`;
+- LensChat и локальный `horizon_lens_chat_smoke` уже используют этот же cross-tenant/global read path;
+- retrieval/synthesis политика усилена в пользу:
+  - `event-core`
+  - затем `impact halo`
+  - затем `structural background`
+
+Подтверждение:
+
+- Saudi scratch lens `/loc/sa` (`Kdn5G1AR4rfCkLwvQTse`) по вопросу
+  `What disruptions are affecting Saudi Arabia right now and why do they matter downstream?`
+  отвечает из fresh signal layer и прямо центрируется на `Strait of Hormuz`.
+- rich Saudi oil lens (`pbOu4sMhN1mCB4SbkwEw`) после cross-tenant fix начал включать
+  `signal-landing://summary/...` в реальные sources ответа;
+- сам rich ответ теперь начинается с свежего Hormuz-centered disruption narrative,
+  а не только с общего Saudi structural background.
+
+Это важный переход:
+
+- раньше fresh signal был виден в scratch/focused lenses, но терялся на богатых линзах;
+- теперь fresh landing начинает правильно поджимать rich substrate сверху.
+
 Итог:
 
 - `Redis connectivity for live hot path` закрыт
@@ -899,7 +936,7 @@ Affected zone — это именно карта территории встря
 - API URL:
   - `https://nv-horizon-api-vosmg5vzoa-uc.a.run.app`
 - serving revision at end of this session:
-  - `nv-horizon-api-00076-2jz`
+  - `nv-horizon-api-00082-596`
 - Saudi scratch lens:
   - `Kdn5G1AR4rfCkLwvQTse`
 - UAE + Saudi space lens:
@@ -912,10 +949,10 @@ Affected zone — это именно карта территории встря
 
 ### Последняя незавершённая операция
 
-Текущий незакрытый хвост уже не про ingest/landing, а про richer downstream usage:
+Текущий незакрытый хвост уже не про ingest/landing как таковой, а про richer downstream usage и domain depth:
 
-1. дождаться/добить running/ready state у новых `watch_signal_landing_delta` warmups;
-2. прогнать richer risk questions на awakened lenses;
+1. довести richer domain/product lenses так, чтобы свежий signal halo не упирался в product control plane gaps;
+2. прогнать richer risk questions на awakened lenses не только для geography, но и для domain/product focus;
 3. отдельно разобрать stale projection rebuild и persistent warm-state `DeadlineExceeded`.
 
 ## Короткий вывод
