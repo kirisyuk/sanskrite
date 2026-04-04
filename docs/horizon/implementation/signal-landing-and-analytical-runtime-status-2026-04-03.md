@@ -1071,3 +1071,124 @@ Affected zone — это именно карта территории встря
 
 - `signal landing` теперь является primary source of truth для precise affected zones;
 - старый heuristic zone path остаётся fallback only.
+
+## Update: 2026-04-04 — focused Gulf feed pack and Home disrupt flow
+
+Следующий проход был уже не про ядро, а про полный живой цикл:
+
+- чем именно кормим систему;
+- как это проходит через ingest и landing;
+- что появляется на карте как affected zones;
+- как это объясняется через `Home workspace`.
+
+Что было добавлено поверх уже работающего Gulf focus pack:
+
+- расширен feed-pack до `5` активных `rss + canvas_llm + ontology_fact` источников:
+  - `Gulf Crisis Canvas: Kinetic Locations`
+  - `Gulf Crisis Canvas: Logistics Cascade`
+  - `Gulf Crisis Canvas: Regional Strike Geography`
+  - `Gulf Crisis Canvas: Energy and Water Sites`
+  - `Gulf Crisis Canvas: Airspace and Urban Intercepts`
+- расширен watch focus на уже существующие canonical anchors:
+  - `Habshan Gas Complex`
+  - `Dubai International Airport`
+  - `Sohar Port`
+  - при сохранении уже seeded `Fujairah`, `Jebel Ali`, `Khalifa`, `Ras Laffan`, `Ras Tanura`, `Hormuz` и Gulf geographies.
+
+Важно:
+
+- это было сделано не в ядре;
+- Gulf-specific фокус остаётся в operational tool/runtime pack;
+- generic signal landing / watch / halo логика не была захардкожена под Залив.
+
+### Что подтверждено по feed ingestion
+
+Через live API и ingest-history подтверждено:
+
+- новые Gulf sources активны и доступны через `/api/v1/sources`;
+- у новых sources есть успешные ingests:
+  - `src_gulf_d0bfb16c924c25ce` (`Energy and Water Sites`) — `documentsProcessed=100`, `documentsCreated=100`
+  - `src_gulf_0577e3016e11612d` (`Airspace and Urban Intercepts`) — `documentsProcessed=100`, `documentsCreated=100`
+- scheduler по-прежнему активен:
+  - `nv-horizon-source-poller` — каждые `15m`
+  - `nv-horizon-canvas-global` — каждые `2h`
+
+Это означает, что целевой auto-refresh контур уже существует в штатном пайплайне:
+
+- focus sources -> poller
+- ingest -> canvas/global processing
+- signal landing
+- watch/impact warmup
+- home/lens answers
+
+### Что подтверждено по карте и affected zones
+
+Через `/api/horizon/geo-objects/by-paths` подтверждено, что ключевые зоны уже геопривязаны и готовы для карты:
+
+- `/zone/ae/military_conflict/fujairah`
+  - `lat=25.1122 lon=56.3575`
+- `/zone/ae/military_conflict/jebel-ali-port`
+  - `lat=25.0236111 lon=55.0402778`
+- `/zone/ae/military_conflict/dubai`
+  - `lat=25.2048493 lon=55.2707828`
+- `/zone/sea/military_conflict/strait-of-hormuz`
+  - `lat=26.5667 lon=56.25`
+
+То есть affected zones уже не просто textual refs, а реальные geo objects с координатами для world map.
+
+### Что подтверждено через Home workspace
+
+Live-вызов того же backend path, который использует Home:
+
+- `POST /api/horizon/home/workspace/run`
+
+Проверка вопросом:
+
+- `What disruptions are affecting the Gulf right now, including Fujairah, Jebel Ali, Abu Dhabi and the Strait of Hormuz, and what do they impact downstream?`
+
+Показала:
+
+- explanation уже собирается из fresh signal layer, а не только из старого background;
+- в ответе и hits surfaced:
+  - `Strait of Hormuz`
+  - `Port of Fujairah`
+  - `Jebel Ali Port`
+  - `Habshan Gas Complex`
+  - `ADNOC gas pipeline network`
+  - `Jebel Ali Power and Desalination Complex`
+  - `Fujairah F2/F3`
+  - downstream `natural gas`, `potable water`, `electricity`
+
+Отдельная проверка вторичных эффектов:
+
+- `If Gulf strikes continue around the UAE and Hormuz, which industries, products and supply chains are likely to feel the second-order impact beyond the obvious ports and oil sites?`
+
+Показала, что `halo` уже вытаскивает не только поверхностные объекты, но и второй порядок:
+
+- `desalination infrastructure`
+- `reverse-osmosis membranes`
+- `high-pressure pumps`
+- `electric submersible pumps`
+- `processed foods`
+- `personal care products`
+- `oilfield equipment`
+- corridors:
+  - `Jebel Ali -> Oman/Barka logistics`
+  - `Sohar freezone / Sohar port`
+  - routing pressure через `Hormuz` и соседние логистические контуры
+
+### Практический вывод этого шага
+
+Исходная задача теперь закрыта существенно лучше, чем в начале:
+
+- карта уже не ограничена `Hormuz + Riyadh`;
+- fresh Gulf signals приземляются в точечные zones вокруг `Fujairah`, `Dubai`, `Jebel Ali`, `Habshan` и соседних объектов;
+- Home runtime уже умеет объяснять не только “что горит”, но и:
+  - какие utilities и products под ударом,
+  - какие downstream facilities затронуты,
+  - какие вторичные supply-chain последствия включаются через halo.
+
+Что ещё остаётся хвостом:
+
+- не все новые source ingests немедленно видны как новые `SignalLandingSession` в top recent inspector; для части потока этот шаг ещё зависит от очереди `canvas/global` и скорости downstream materialization;
+- rich lens answers можно ещё дальше дожимать, но сам Home/disrupt path уже показывает нужную логическую связку `signal -> landing -> zones -> halo -> explanation`.

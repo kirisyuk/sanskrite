@@ -5,8 +5,8 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"flag"
-	neturl "net/url"
 	"log"
+	neturl "net/url"
 	"os"
 	"strings"
 	"time"
@@ -42,13 +42,13 @@ type sourceSpec struct {
 }
 
 type watchSpec struct {
-	Label  string
-	Path   string
-	Kind   hmodels.WatchSubjectKind
-	Query  string
-	Modes  []string
-	Roles  []string
-	Prio   int
+	Label string
+	Path  string
+	Kind  hmodels.WatchSubjectKind
+	Query string
+	Modes []string
+	Roles []string
+	Prio  int
 }
 
 func main() {
@@ -171,6 +171,34 @@ func buildSourceSpecs() []sourceSpec {
 			DisableLLM:  false,
 			Status:      "active",
 		},
+		{
+			Key:         "gulf-canvas-energy-water-sites",
+			DisplayName: "Gulf Crisis Canvas: Energy and Water Sites",
+			Kind:        coremodels.SourceKindRSS,
+			URL:         googleNewsQueryRSS(`("Habshan" OR Fujairah OR "Jebel Ali" OR "Ras Laffan" OR "Ras Tanura" OR "Mina al-Ahmadi" OR Bahrain OR Sitra OR Sohar OR Salalah OR Duqm) (desalination OR "potable water" OR refinery OR "gas complex" OR "oil terminal" OR pipeline OR power OR storage) (attack OR strike OR drone OR missile OR disruption OR fire OR closure)`),
+			Category:    "critical_infrastructure",
+			FeedType:    "gulf_canvas_energy_water_sites",
+			SignalType:  "risk:critical_infrastructure_disruption",
+			PollMinutes: defaultPollMins,
+			Processing:  coremodels.SourceProcessingModeCanvasLLM,
+			Output:      coremodels.SourceOutputModeOntologyFact,
+			DisableLLM:  false,
+			Status:      "active",
+		},
+		{
+			Key:         "gulf-canvas-airspace-and-urban-intercepts",
+			DisplayName: "Gulf Crisis Canvas: Airspace and Urban Intercepts",
+			Kind:        coremodels.SourceKindRSS,
+			URL:         googleNewsQueryRSS(`("Abu Dhabi" OR Dubai OR Doha OR Manama OR Kuwait OR Muscat OR Dammam OR Riyadh) (airspace OR airport OR drone OR missile OR interception OR blast OR strike) (closure OR disruption OR attack OR warning)`),
+			Category:    "conflict",
+			FeedType:    "gulf_canvas_airspace_urban_intercepts",
+			SignalType:  "risk:airspace_disruption",
+			PollMinutes: defaultPollMins,
+			Processing:  coremodels.SourceProcessingModeCanvasLLM,
+			Output:      coremodels.SourceOutputModeOntologyFact,
+			DisableLLM:  false,
+			Status:      "active",
+		},
 	}
 }
 
@@ -206,6 +234,9 @@ func buildWatchSpecs() []watchSpec {
 		{Label: "Jebel Ali Port", Path: "/fac/ae/jebel-ali-port", Kind: hmodels.WatchSubjectKindFragment, Query: "Jebel Ali port disruption under Gulf strikes and rerouting pressure", Modes: []string{"maritime", "transport", "supply_chain"}, Roles: []string{"monitor", "risk"}, Prio: 94},
 		{Label: "Jebel Ali Free Zone", Path: "/fac/ae/jebel-ali-free-zone", Kind: hmodels.WatchSubjectKindFragment, Query: "Jebel Ali logistics and free zone disruption under Gulf strikes", Modes: []string{"transport", "supply_chain"}, Roles: []string{"monitor", "risk"}, Prio: 92},
 		{Label: "Dubai Airport", Path: "/fac/ae/dubai-airport", Kind: hmodels.WatchSubjectKindFragment, Query: "Dubai airport and airspace disruption from Gulf conflict", Modes: []string{"transport", "conflict"}, Roles: []string{"monitor", "risk"}, Prio: 91},
+		{Label: "Dubai International Airport", Path: "/fac/ae/dubai-international-airport", Kind: hmodels.WatchSubjectKindFragment, Query: "Dubai International Airport strikes, airspace shutdowns and downstream logistics impact", Modes: []string{"transport", "conflict", "supply_chain"}, Roles: []string{"monitor", "risk"}, Prio: 93},
+		{Label: "Habshan Gas Complex", Path: "/fac/ae/habshan-gas-complex", Kind: hmodels.WatchSubjectKindFragment, Query: "Habshan gas complex strikes, gas flow disruption and downstream desalination and power exposure", Modes: []string{"energy", "conflict", "supply_chain"}, Roles: []string{"monitor", "risk"}, Prio: 96},
+		{Label: "Sohar Port", Path: "/fac/om/sohar-port", Kind: hmodels.WatchSubjectKindFragment, Query: "Sohar port congestion and rerouting under Gulf conflict spillover", Modes: []string{"maritime", "transport", "supply_chain"}, Roles: []string{"monitor", "risk"}, Prio: 88},
 		{Label: "Ras Laffan Gas Complex", Path: "/fac/qa/ras-laffan-gas-complex", Kind: hmodels.WatchSubjectKindFragment, Query: "Ras Laffan LNG and helium disruption under Gulf conflict", Modes: []string{"energy", "supply_chain", "conflict"}, Roles: []string{"monitor", "risk"}, Prio: 96},
 		{Label: "Ras Tanura Refinery", Path: "/fac/sa/ras-tanura-refinery", Kind: hmodels.WatchSubjectKindFragment, Query: "Ras Tanura export and refinery disruption under Gulf conflict", Modes: []string{"energy", "transport", "conflict"}, Roles: []string{"monitor", "risk"}, Prio: 95},
 	}
