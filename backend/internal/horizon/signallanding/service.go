@@ -95,6 +95,7 @@ func (s *Service) LandEvent(ctx context.Context, event *coremodels.OntologyFact,
 		DecompositionVersion: "v1",
 		GroundingVersion:     "v1",
 		ExpansionVersion:     "v1",
+		ActiveUntil:          time.Now().UTC().Add(72 * time.Hour),
 		CreatedAt:            time.Now().UTC(),
 		UpdatedAt:            time.Now().UTC(),
 	}
@@ -558,12 +559,12 @@ func (s *Service) ensureAffectedZoneForAnchor(ctx context.Context, session *hori
 			Tags:        []string{"affected-zone", "signal-landing", strings.ReplaceAll(conditionType, "_", "-")},
 			RadiusKm:    affectedZoneRadiusKm(geoPrecision),
 			Qualifiers: map[string]interface{}{
-				"conditionType":           conditionType,
-				"geoPrecision":            geoPrecision,
-				"signalLandingGenerated":  true,
-				"signalLandingSessionId":  strings.TrimSpace(session.ID),
-				"signalLandingAnchorRef":  anchorRef,
-				"signalLandingUpdatedAt":  now.Format(time.RFC3339),
+				"conditionType":            conditionType,
+				"geoPrecision":             geoPrecision,
+				"signalLandingGenerated":   true,
+				"signalLandingSessionId":   strings.TrimSpace(session.ID),
+				"signalLandingAnchorRef":   anchorRef,
+				"signalLandingUpdatedAt":   now.Format(time.RFC3339),
 				"requiresExplicitRecovery": true,
 			},
 			HomeLocation: cloneLocation(anchorFrag.HomeLocation),
@@ -628,12 +629,12 @@ func (s *Service) mergeSignalLandingZone(
 		zone.Qualifiers = map[string]interface{}{}
 	}
 	for key, value := range map[string]interface{}{
-		"conditionType":           conditionType,
-		"geoPrecision":            geoPrecision,
-		"signalLandingGenerated":  true,
-		"signalLandingSessionId":  strings.TrimSpace(session.ID),
-		"signalLandingAnchorRef":  anchorRef,
-		"signalLandingUpdatedAt":  now.Format(time.RFC3339),
+		"conditionType":            conditionType,
+		"geoPrecision":             geoPrecision,
+		"signalLandingGenerated":   true,
+		"signalLandingSessionId":   strings.TrimSpace(session.ID),
+		"signalLandingAnchorRef":   anchorRef,
+		"signalLandingUpdatedAt":   now.Format(time.RFC3339),
 		"requiresExplicitRecovery": true,
 	} {
 		if fmt.Sprintf("%v", zone.Qualifiers[key]) != fmt.Sprintf("%v", value) {
@@ -681,8 +682,8 @@ func (s *Service) ensureAffectedZoneEdges(ctx context.Context, zone, anchor *hor
 			},
 		},
 	})
-		if parent := affectedZoneLocatedInRef(anchor); parent != "" {
-			if parentFrag, err := s.fragmentsRepo.GetByCanonicalPath(ctx, parent); err == nil && parentFrag != nil && strings.TrimSpace(parentFrag.ID) != "" {
+	if parent := affectedZoneLocatedInRef(anchor); parent != "" {
+		if parentFrag, err := s.fragmentsRepo.GetByCanonicalPath(ctx, parent); err == nil && parentFrag != nil && strings.TrimSpace(parentFrag.ID) != "" {
 			_, _ = s.edgesRepo.Create(ctx, &horizonmodels.DependencyEdge{
 				SourceFragmentID: strings.TrimSpace(zone.ID),
 				TargetFragmentID: strings.TrimSpace(parentFrag.ID),

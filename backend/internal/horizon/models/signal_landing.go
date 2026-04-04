@@ -33,6 +33,7 @@ const (
 	SignalLandingMethodZoneAnchor       SignalLandingMethod = "zone_anchor"
 	SignalLandingMethodCountryAnchor    SignalLandingMethod = "country_anchor"
 	SignalLandingMethodMaterialized     SignalLandingMethod = "materialized_chain"
+	SignalLandingMethodRetroAttach      SignalLandingMethod = "retro_attach"
 )
 
 type SignalMissingCandidateKind string
@@ -58,6 +59,7 @@ type SignalLandingSession struct {
 	GroundingVersion     string                 `json:"groundingVersion,omitempty" firestore:"groundingVersion,omitempty"`
 	ExpansionVersion     string                 `json:"expansionVersion,omitempty" firestore:"expansionVersion,omitempty"`
 	CoverageSummary      map[string]interface{} `json:"coverageSummary,omitempty" firestore:"coverageSummary,omitempty"`
+	ActiveUntil          time.Time              `json:"activeUntil,omitempty" firestore:"activeUntil,omitempty"`
 	CreatedAt            time.Time              `json:"createdAt" firestore:"createdAt"`
 	UpdatedAt            time.Time              `json:"updatedAt" firestore:"updatedAt"`
 }
@@ -75,6 +77,7 @@ func (s *SignalLandingSession) Normalize() {
 	s.DecompositionVersion = strings.TrimSpace(s.DecompositionVersion)
 	s.GroundingVersion = strings.TrimSpace(s.GroundingVersion)
 	s.ExpansionVersion = strings.TrimSpace(s.ExpansionVersion)
+	s.CoverageSummary = compactLandingAnyMap(s.CoverageSummary)
 	if s.Status == "" {
 		s.Status = "active"
 	}
@@ -83,6 +86,15 @@ func (s *SignalLandingSession) Normalize() {
 	}
 	if s.UpdatedAt.IsZero() {
 		s.UpdatedAt = s.CreatedAt
+	}
+	if s.ActiveUntil.IsZero() {
+		base := s.UpdatedAt
+		if base.IsZero() {
+			base = s.CreatedAt
+		}
+		if !base.IsZero() {
+			s.ActiveUntil = base.Add(72 * time.Hour)
+		}
 	}
 }
 
@@ -187,7 +199,8 @@ func (h *SignalLandingHit) Normalize() {
 		SignalLandingMethodPathFamilyExpand,
 		SignalLandingMethodZoneAnchor,
 		SignalLandingMethodCountryAnchor,
-		SignalLandingMethodMaterialized:
+		SignalLandingMethodMaterialized,
+		SignalLandingMethodRetroAttach:
 	default:
 		h.LandingMethod = SignalLandingMethodExactCanonical
 	}
@@ -323,5 +336,23 @@ func compactUniqueLandingStrings(values []string) []string {
 		out = append(out, value)
 	}
 	sort.Strings(out)
+	return out
+}
+
+func compactLandingAnyMap(values map[string]interface{}) map[string]interface{} {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]interface{}, len(values))
+	for key, value := range values {
+		key = strings.TrimSpace(key)
+		if key == "" || value == nil {
+			continue
+		}
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
 	return out
 }

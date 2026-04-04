@@ -528,6 +528,7 @@ func main() {
 	var riskJobsRepo *horizonrepo.RiskJobsRepository
 	var horizonTelemetryRepo *horizonrepo.HorizonTelemetryRepository
 	var canvasIngester *discovery.CanvasIngester
+	var retroAttachWorker *horizonsignallanding.RetroAttachWorker
 	sourcesDocsRepo := repo.NewDocumentsRepository(fsClient.Client())
 	// Note: bqClient will be initialized later, BigQuery sync will be configured after initialization
 	sourcesHandler := httphandlers.NewSourcesHandler(repo.NewSourceProjectsRepository(fsClient.Client()), s.dsrcs, logger).WithDocuments(sourcesDocsRepo)
@@ -1379,6 +1380,11 @@ func main() {
 		horizonFragmentsRepo.WithOnUpsert(func(ctx context.Context, fragment *horizonmodels.HorizonFragment) {
 			runtimeReenrichFragment(ctx, fragment, horizonFragmentsRepo, horizonEdgesRepo)
 		})
+		horizonFragmentsRepo.WithOnUpsert(func(ctx context.Context, fragment *horizonmodels.HorizonFragment) {
+			if retroAttachWorker != nil && fragment != nil {
+				retroAttachWorker.EnqueueFragment(ctx, fragment, "fragment_upsert")
+			}
+		})
 		horizonEdgesRepo.WithOnUpsert(func(ctx context.Context, edge *horizonmodels.DependencyEdge) {
 			if edge == nil {
 				return
@@ -1391,6 +1397,18 @@ func main() {
 			if tgtID := strings.TrimSpace(edge.TargetFragmentID); tgtID != "" && tgtID != strings.TrimSpace(edge.SourceFragmentID) {
 				if tgt, err := horizonFragmentsRepo.Get(ctx, tgtID); err == nil && tgt != nil {
 					runtimeReenrichFragment(ctx, tgt, horizonFragmentsRepo, horizonEdgesRepo)
+				}
+			}
+			if retroAttachWorker != nil {
+				if srcID := strings.TrimSpace(edge.SourceFragmentID); srcID != "" {
+					if src, err := horizonFragmentsRepo.Get(ctx, srcID); err == nil && src != nil {
+						retroAttachWorker.EnqueueFragment(ctx, src, "edge_upsert_source")
+					}
+				}
+				if tgtID := strings.TrimSpace(edge.TargetFragmentID); tgtID != "" && tgtID != strings.TrimSpace(edge.SourceFragmentID) {
+					if tgt, err := horizonFragmentsRepo.Get(ctx, tgtID); err == nil && tgt != nil {
+						retroAttachWorker.EnqueueFragment(ctx, tgt, "edge_upsert_target")
+					}
 				}
 			}
 		})
@@ -2328,6 +2346,92 @@ func main() {
 					wmVertexSearch = wmVertexSearch.WithDataStore(ds)
 				}
 			}
+			enqueueImpactWarmup := func(ctx context.Context, tenantID string, refs []string, reason string) error {
+				if strings.TrimSpace(tenantID) == "" {
+					tenantID = "global"
+				}
+				if strings.TrimSpace(reason) == "" {
+					reason = "watch_signal_landing_delta"
+				}
+				normalizeWarmupRef := func(ref string) []string {
+					ref = strings.TrimSpace(ref)
+					if ref == "" {
+						return nil
+					}
+					out := []string{ref}
+					if strings.HasPrefix(ref, "/") {
+						return out
+					}
+					if len(ref) == 2 {
+						out = append(out, "/loc/"+strings.ToLower(ref))
+					}
+					return out
+				}
+				lensIDs := map[string]struct{}{}
+				projectionHits := 0
+				scopeFallbackHits := 0
+				for _, ref := range refs {
+					for _, candidateRef := range normalizeWarmupRef(ref) {
+						projections, err := horizonRefScopeProjectionsRepo.ListByRefAnyTenant(ctx, candidateRef, 128)
+						if err == nil {
+							for _, projection := range projections {
+								if projection == nil {
+									continue
+								}
+								for _, lensID := range projection.LensIDs {
+									lensID = strings.TrimSpace(lensID)
+									if lensID != "" {
+										projectionHits++
+										lensIDs[lensID] = struct{}{}
+									}
+								}
+							}
+						}
+						lensesByScope, err := horizonLensesRepo.FindByScopeAnyTenant(ctx, candidateRef, 64)
+						if err != nil {
+							continue
+						}
+						for _, lens := range lensesByScope {
+							if lens == nil {
+								continue
+							}
+							lensID := strings.TrimSpace(lens.ID)
+							if lensID == "" {
+								continue
+							}
+							scopeFallbackHits++
+							lensIDs[lensID] = struct{}{}
+						}
+					}
+				}
+				logger.Printf("impact warmup hook tenant=%s refs=%d matchedLenses=%d projectionHits=%d scopeFallbackHits=%d reason=%s", tenantID, len(refs), len(lensIDs), projectionHits, scopeFallbackHits, reason)
+				for lensID := range lensIDs {
+					if err := lensService.RequestInternalKnowledgeWarmup(ctx, lensID, strings.TrimSpace(reason)); err != nil {
+						logger.Printf("impact warmup enqueue failed lens=%s reason=%s err=%v", lensID, reason, err)
+					}
+				}
+				return nil
+			}
+
+			retroAttachQueueRepo := horizonrepo.NewSignalRetroAttachQueueRepository(fsClient.Client())
+			retroAttachWorker = horizonsignallanding.NewRetroAttachWorker(
+				retroAttachQueueRepo,
+				horizonFragmentsRepo,
+				horizonsignallanding.NewService(
+					horizonrepo.NewSignalLandingSessionsRepository(fsClient.Client()),
+					horizonrepo.NewSignalImpactClaimsRepository(fsClient.Client()),
+					horizonrepo.NewSignalLandingHitsRepository(fsClient.Client()),
+					horizonrepo.NewSignalLandingSummariesRepository(fsClient.Client()),
+					horizonrepo.NewSignalMissingAnchorCandidatesRepository(fsClient.Client()),
+					horizonFragmentsRepo,
+				).WithMaterializedRepo(horizonMaterializedArtifactsRepo).
+					WithEdgesRepo(horizonEdgesRepo).
+					WithProductDictionary(productDictionary),
+			).WithLogger(logger).WithWarmupHook(func(ctx context.Context, refs []string) error {
+				return enqueueImpactWarmup(ctx, "global", refs, "watch_signal_retro_attach")
+			})
+			retroAttachWorker.Start(context.Background())
+
 			orchestrator = orchestrator.WithHorizonMonitorPipeline(
 				discovery.NewHorizonMonitorPipeline(
 					ontologyFactsRepo,
@@ -2352,72 +2456,7 @@ func main() {
 							WithEdgesRepo(horizonEdgesRepo).
 							WithProductDictionary(productDictionary),
 					).
-					WithImpactWarmupHook(func(ctx context.Context, tenantID string, refs []string, reason string) error {
-						if strings.TrimSpace(tenantID) == "" {
-							tenantID = "global"
-						}
-						if strings.TrimSpace(reason) == "" {
-							reason = "watch_signal_landing_delta"
-						}
-						normalizeWarmupRef := func(ref string) []string {
-							ref = strings.TrimSpace(ref)
-							if ref == "" {
-								return nil
-							}
-							out := []string{ref}
-							if strings.HasPrefix(ref, "/") {
-								return out
-							}
-							if len(ref) == 2 {
-								out = append(out, "/loc/"+strings.ToLower(ref))
-							}
-							return out
-						}
-						lensIDs := map[string]struct{}{}
-						projectionHits := 0
-						scopeFallbackHits := 0
-						for _, ref := range refs {
-							for _, candidateRef := range normalizeWarmupRef(ref) {
-								projections, err := horizonRefScopeProjectionsRepo.ListByRefAnyTenant(ctx, candidateRef, 128)
-								if err == nil {
-									for _, projection := range projections {
-										if projection == nil {
-											continue
-										}
-										for _, lensID := range projection.LensIDs {
-											lensID = strings.TrimSpace(lensID)
-											if lensID != "" {
-												projectionHits++
-												lensIDs[lensID] = struct{}{}
-											}
-										}
-									}
-								}
-								lensesByScope, err := horizonLensesRepo.FindByScopeAnyTenant(ctx, candidateRef, 64)
-								if err != nil {
-									continue
-								}
-								for _, lens := range lensesByScope {
-									if lens == nil {
-										continue
-									}
-									lensID := strings.TrimSpace(lens.ID)
-									if lensID == "" {
-										continue
-									}
-									scopeFallbackHits++
-									lensIDs[lensID] = struct{}{}
-								}
-							}
-						}
-						logger.Printf("impact warmup hook tenant=%s refs=%d matchedLenses=%d projectionHits=%d scopeFallbackHits=%d reason=%s", tenantID, len(refs), len(lensIDs), projectionHits, scopeFallbackHits, reason)
-						for lensID := range lensIDs {
-							if err := lensService.RequestInternalKnowledgeWarmup(ctx, lensID, strings.TrimSpace(reason)); err != nil {
-								logger.Printf("impact warmup enqueue failed lens=%s reason=%s err=%v", lensID, reason, err)
-							}
-						}
-						return nil
-					}).
+					WithImpactWarmupHook(enqueueImpactWarmup).
 					WithWatchTriggerHook(func(ctx context.Context, tenantID, canonicalPath string, triggerType horizonmodels.WatchTriggerType, reason string, signalStrength, confidence float64, metadata map[string]any) error {
 						_, err := watchRuntimeService.EmitTriggerByAnchor(ctx, tenantID, canonicalPath, triggerType, reason, signalStrength, confidence, metadata)
 						return err

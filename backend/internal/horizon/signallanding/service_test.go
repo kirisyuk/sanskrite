@@ -151,3 +151,54 @@ func TestInferSignalLandingConditionTypePrefersMilitaryConflict(t *testing.T) {
 		t.Fatalf("expected military_conflict, got %q", got)
 	}
 }
+
+func TestSessionIsRetroAttachActiveUsesWindow(t *testing.T) {
+	now := time.Now().UTC()
+	session := &horizonmodels.SignalLandingSession{
+		ID:          "s1",
+		TenantID:    "global",
+		Status:      "active",
+		CreatedAt:   now.Add(-2 * time.Hour),
+		UpdatedAt:   now.Add(-30 * time.Minute),
+		ActiveUntil: now.Add(4 * time.Hour),
+	}
+	if !sessionIsRetroAttachActive(session, now) {
+		t.Fatalf("expected session to remain active")
+	}
+	session.ActiveUntil = now.Add(-1 * time.Minute)
+	if sessionIsRetroAttachActive(session, now) {
+		t.Fatalf("expected expired session to be inactive")
+	}
+}
+
+func TestRetroAttachScoreMatchesMissingCandidateAndCountry(t *testing.T) {
+	svc := &Service{}
+	ua := "UA"
+	fragment := &horizonmodels.HorizonFragment{
+		Type:          horizonmodels.FragmentTypeFacility,
+		CanonicalPath: "/fac/ua/port-of-odessa",
+		Labels:        map[string]string{"en": "Port of Odesa"},
+		HomeLocation:  &horizonmodels.Location{Name: "Odesa", ISO3166_1: &ua},
+	}
+	claim := &horizonmodels.SignalImpactClaim{
+		CountryHints:  []string{"/loc/ua"},
+		FacilityHints: []string{"Odesa port", "Black Sea port"},
+		ClaimLabels:   []string{"Drone attack around Odesa port"},
+	}
+	candidate := &horizonmodels.SignalMissingAnchorCandidate{
+		ID:          "cand1",
+		Label:       "Port of Odesa",
+		Status:      "open",
+		HintCountry: "/loc/ua",
+	}
+	score, reasons, resolved := svc.retroAttachScore(fragment, claim, []*horizonmodels.SignalMissingAnchorCandidate{candidate}, nil)
+	if score < 0.56 {
+		t.Fatalf("expected retro attach score to pass threshold, got %.3f", score)
+	}
+	if len(resolved) != 1 || resolved[0].ID != "cand1" {
+		t.Fatalf("expected missing candidate to resolve, got %+v", resolved)
+	}
+	if len(reasons) == 0 {
+		t.Fatalf("expected non-empty attach reasons")
+	}
+}
