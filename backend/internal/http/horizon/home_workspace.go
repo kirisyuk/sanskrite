@@ -215,30 +215,40 @@ func (h *HorizonHandlers) loadHomeWorkspaceSignalEvidence(ctx context.Context, t
 	if h == nil || h.signalLandingSummariesRepo == nil {
 		return nil, nil, nil, nil, nil, nil
 	}
-	summaries := make([]*horizonmodels.SignalLandingSummary, 0, 8)
+	candidates := make([]*horizonmodels.SignalLandingSummary, 0, 24)
 	warnings := make([]string, 0, 4)
 	if len(scopeRefs) > 0 {
 		byScope, err := h.signalLandingSummariesRepo.ListByScopeRefs(ctx, tenantID, scopeRefs, 12)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("signal landing summary load failed: %v", err))
 		} else {
-			summaries = append(summaries, byScope...)
+			candidates = append(candidates, byScope...)
 		}
 	}
 	recent, err := h.signalLandingSummariesRepo.ListRecent(ctx, tenantID, 20)
 	if err != nil {
 		warnings = append(warnings, fmt.Sprintf("recent signal landing load failed: %v", err))
 	} else {
-		summaries = append(summaries, homeWorkspaceRankSignalSummaries(query, recent, 4)...)
+		candidates = append(candidates, recent...)
 	}
 	if tenantID != "global" {
 		globalRecent, err := h.signalLandingSummariesRepo.ListRecent(ctx, "global", 20)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("recent global signal landing load failed: %v", err))
 		} else {
-			summaries = append(summaries, homeWorkspaceRankSignalSummaries(query, globalRecent, 4)...)
+			candidates = append(candidates, globalRecent...)
 		}
 	}
+	summaries := homeWorkspaceRankSignalSummaries(query, scopeRefs, candidates, 6)
+	queryTokens := normalizedTokenSetLocal(query)
+	scopeRefSet := make(map[string]struct{}, len(scopeRefs))
+	for _, ref := range scopeRefs {
+		ref = strings.TrimSpace(ref)
+		if ref != "" {
+			scopeRefSet[ref] = struct{}{}
+		}
+	}
+	scopeTokens := normalizedTokenSetLocal(homeWorkspaceHumanizedPathText(scopeRefs))
 	seen := map[string]struct{}{}
 	hits := make([]lensChatInternalHit, 0, 6)
 	docs := make([]lensChatPreparedEvidenceDoc, 0, 6)
@@ -260,7 +270,9 @@ func (h *HorizonHandlers) loadHomeWorkspaceSignalEvidence(ctx context.Context, t
 			continue
 		}
 		seen[key] = struct{}{}
-		hits = append(hits, lensChatHitFromSignalLandingSummary(summary, 1.45))
+		hit := lensChatHitFromSignalLandingSummary(summary, 1.45)
+		hit.Score = homeWorkspaceSignalSummaryScore(queryTokens, scopeTokens, scopeRefSet, summary)
+		hits = append(hits, hit)
 		docs = append(docs, lensChatDocFromSignalLandingSummary(summary))
 		eventCore = append(eventCore, signalLandingSummaryEventCoreRefs(summary)...)
 		halo = append(halo, signalLandingSummaryHaloRefs(summary)...)
@@ -519,22 +531,41 @@ func joinHumanListLocal(items []string) string {
 	}
 }
 
-func homeWorkspaceRankSignalSummaries(query string, summaries []*horizonmodels.SignalLandingSummary, limit int) []*horizonmodels.SignalLandingSummary {
+func homeWorkspaceRankSignalSummaries(query string, scopeRefs []string, summaries []*horizonmodels.SignalLandingSummary, limit int) []*horizonmodels.SignalLandingSummary {
 	if len(summaries) == 0 || limit <= 0 {
 		return nil
 	}
 	queryTokens := normalizedTokenSetLocal(query)
+	scopeRefSet := make(map[string]struct{}, len(scopeRefs))
+	for _, ref := range scopeRefs {
+		ref = strings.TrimSpace(ref)
+		if ref != "" {
+			scopeRefSet[ref] = struct{}{}
+		}
+	}
+	scopeTokens := normalizedTokenSetLocal(homeWorkspaceHumanizedPathText(scopeRefs))
 	type scored struct {
 		summary *horizonmodels.SignalLandingSummary
 		score   float64
 	}
 	scoredItems := make([]scored, 0, len(summaries))
+	seen := make(map[string]struct{}, len(summaries))
 	for _, summary := range summaries {
 		if summary == nil {
 			continue
 		}
-		combined := strings.Join(append(append(append([]string{}, summary.TopClaims...), summary.TopConfirmedRefs...), append(summary.Products, append(summary.Routes, summary.AffectedZoneRefs...)...)...), " ")
-		score := 6.0*tokenOverlapScoreLocal(queryTokens, normalizedTokenSetLocal(combined)) + lensChatSignalSummaryBoost(summary)
+		key := strings.TrimSpace(summary.ID)
+		if key == "" {
+			key = strings.TrimSpace(summary.ScopeRef)
+		}
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		score := homeWorkspaceSignalSummaryScore(queryTokens, scopeTokens, scopeRefSet, summary)
 		scoredItems = append(scoredItems, scored{summary: summary, score: score})
 	}
 	sort.Slice(scoredItems, func(i, j int) bool {
@@ -556,12 +587,42 @@ func homeWorkspaceRankSignalSummaries(query string, summaries []*horizonmodels.S
 	return out
 }
 
+func homeWorkspaceSignalSummaryScore(queryTokens, scopeTokens map[string]struct{}, scopeRefSet map[string]struct{}, summary *horizonmodels.SignalLandingSummary) float64 {
+	if summary == nil {
+		return 0
+	}
+	paths := uniqueStringsLocal(append(signalLandingSummaryEventCoreRefs(summary), signalLandingSummaryHaloRefs(summary)...))
+	combinedParts := append([]string{}, summary.TopClaims...)
+	combinedParts = append(combinedParts, summary.TopConfirmedRefs...)
+	combinedParts = append(combinedParts, summary.Products...)
+	combinedParts = append(combinedParts, summary.Routes...)
+	combinedParts = append(combinedParts, summary.AffectedZoneRefs...)
+	combinedParts = append(combinedParts, summary.Facilities...)
+	combinedParts = append(combinedParts, summary.Chokepoints...)
+	combinedTokens := normalizedTokenSetLocal(strings.Join(combinedParts, " "))
+	pathTokens := normalizedTokenSetLocal(homeWorkspaceHumanizedPathText(paths))
+	score := 6.0*tokenOverlapScoreLocal(queryTokens, combinedTokens) + lensChatSignalSummaryBoost(summary)
+	score += 3.5 * tokenOverlapScoreLocal(queryTokens, pathTokens)
+	score += 2.5 * tokenOverlapScoreLocal(scopeTokens, pathTokens)
+	scopeMatches := 0
+	for _, path := range paths {
+		if _, ok := scopeRefSet[path]; ok {
+			scopeMatches++
+		}
+	}
+	score += 4.0 * float64(minIntLocal(scopeMatches, 3))
+	if len(scopeRefSet) > 0 && scopeMatches == 0 && tokenOverlapCountLocal(scopeTokens, pathTokens) == 0 && tokenOverlapCountLocal(queryTokens, combinedTokens) == 0 {
+		score -= 4.5
+	}
+	return score
+}
+
 func filterHomeWorkspaceSearchHits(query string, hits []lensChatInternalHit, contextPaths []string, limit int) []lensChatInternalHit {
 	if len(hits) == 0 {
 		return nil
 	}
 	queryTokens := normalizedTokenSetLocal(query)
-	contextTokens := normalizedTokenSetLocal(strings.Join(contextPaths, " "))
+	contextTokens := normalizedTokenSetLocal(homeWorkspaceHumanizedPathText(contextPaths))
 	contextPathSet := make(map[string]struct{}, len(contextPaths))
 	for _, path := range contextPaths {
 		path = strings.TrimSpace(path)
@@ -576,10 +637,6 @@ func filterHomeWorkspaceSearchHits(query string, hits []lensChatInternalHit, con
 	scored := make([]scoredHit, 0, len(hits))
 	for _, hit := range hits {
 		kind := strings.ToLower(strings.TrimSpace(hit.Kind))
-		if kind == "signal_landing_summary" || kind == "analytical_aggregate" || kind == "analytical_primitive" {
-			scored = append(scored, scoredHit{hit: hit, score: 100})
-			continue
-		}
 		score := 0
 		paths := filterCanonicalPathsLocal(stringSliceAny(hit.StructData["canonicalPaths"]))
 		for _, path := range paths {
@@ -588,15 +645,34 @@ func filterHomeWorkspaceSearchHits(query string, hits []lensChatInternalHit, con
 				break
 			}
 		}
-		pathTokens := normalizedTokenSetLocal(strings.Join(paths, " "))
-		score += minIntLocal(3, tokenOverlapCountLocal(pathTokens, contextTokens))
-		score += minIntLocal(3, tokenOverlapCountLocal(pathTokens, queryTokens))
+		pathTokens := normalizedTokenSetLocal(homeWorkspaceHumanizedPathText(paths))
+		pathContextOverlap := tokenOverlapCountLocal(pathTokens, contextTokens)
+		pathQueryOverlap := tokenOverlapCountLocal(pathTokens, queryTokens)
+		score += minIntLocal(3, pathContextOverlap)
+		score += minIntLocal(3, pathQueryOverlap)
 		titleTokens := normalizedTokenSetLocal(strings.TrimSpace(hit.Title))
-		score += minIntLocal(2, tokenOverlapCountLocal(titleTokens, queryTokens))
+		titleQueryOverlap := tokenOverlapCountLocal(titleTokens, queryTokens)
+		score += minIntLocal(2, titleQueryOverlap)
 		hintsTokens := normalizedTokenSetLocal(strings.Join(stringSliceAny(hit.StructData["questionHints"]), " "))
-		score += minIntLocal(2, tokenOverlapCountLocal(hintsTokens, queryTokens))
+		hintsQueryOverlap := tokenOverlapCountLocal(hintsTokens, queryTokens)
+		score += minIntLocal(2, hintsQueryOverlap)
 		if strings.Contains(strings.ToLower(strings.TrimSpace(hit.Title)), "fresh signal") {
 			score += 2
+		}
+		switch kind {
+		case "signal_landing_summary":
+			if pathContextOverlap == 0 && pathQueryOverlap == 0 && titleQueryOverlap == 0 && hintsQueryOverlap == 0 {
+				continue
+			}
+			score += 2
+			if score < 5 {
+				continue
+			}
+		case "analytical_aggregate", "analytical_primitive":
+			score += 1
+			if score < 4 {
+				continue
+			}
 		}
 		if score >= 3 {
 			scored = append(scored, scoredHit{hit: hit, score: score})
@@ -676,6 +752,21 @@ func buildHomeWorkspaceEntityName(fragment *horizonmodels.HorizonFragment) strin
 		}
 	}
 	return humanizeCanonicalPath(strings.TrimSpace(fragment.CanonicalPath))
+}
+
+func homeWorkspaceHumanizedPathText(paths []string) string {
+	if len(paths) == 0 {
+		return ""
+	}
+	labels := make([]string, 0, len(paths))
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		labels = append(labels, humanizeCanonicalPath(path))
+	}
+	return strings.Join(labels, " ")
 }
 
 func buildHomeWorkspaceEntityLocation(fragment *horizonmodels.HorizonFragment) string {

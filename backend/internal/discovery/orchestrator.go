@@ -697,17 +697,15 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 		}
 		return err
 	}
-	if disableLLM && o.wmPipeline != nil {
+	if shouldRunRSSSignalPipeline(sourceDS) && o.wmPipeline != nil {
 		pipelineDS := sourceDS
 		if pipelineDS == nil {
 			mode := wmIngestModeDocumentFeed
-			disable := true
 			pipelineDS = &models.DataSource{
 				ID: sourceID,
 				Details: models.SourceDetails{
 					RSSURL:                   &feedURL,
 					HorizonMonitorIngestMode: &mode,
-					DisableLLMProcessing:     &disable,
 				},
 			}
 		}
@@ -766,6 +764,28 @@ func (o *Orchestrator) IngestRSS(ctx context.Context, tenantID, sourceID string,
 	}
 
 	return nil
+}
+
+func shouldRunRSSSignalPipeline(ds *models.DataSource) bool {
+	if ds == nil {
+		return false
+	}
+	if sourceDisablesLLMProcessing(ds) {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(models.SourceOutputModeValue(ds)), models.SourceOutputModeOntologyFact) {
+		return true
+	}
+	if ds.Details.HorizonMonitorFeedType != nil && strings.TrimSpace(*ds.Details.HorizonMonitorFeedType) != "" {
+		return true
+	}
+	if ds.Details.HorizonMonitorSignalType != nil && strings.TrimSpace(*ds.Details.HorizonMonitorSignalType) != "" {
+		return true
+	}
+	if ds.Details.HorizonMonitorCategory != nil && strings.TrimSpace(*ds.Details.HorizonMonitorCategory) != "" {
+		return true
+	}
+	return false
 }
 
 // IngestHorizonMonitorFeed ingests a Horizon Monitor feed snapshot (JSON or text) and maps it to normalized documents.

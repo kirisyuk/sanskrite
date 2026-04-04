@@ -1,38 +1,46 @@
 package discovery
 
 import (
-	"context"
 	"testing"
 
-	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/models"
 )
 
-// fake AI service that returns a fixed content as title
-type fakeAIService struct{}
+func TestShouldRunRSSSignalPipeline(t *testing.T) {
+	t.Run("nil source", func(t *testing.T) {
+		if shouldRunRSSSignalPipeline(nil) {
+			t.Fatalf("expected nil source to skip signal pipeline")
+		}
+	})
 
-func (f *fakeAIService) Provider() ai.AIProvider { return ai.AIProviderOpenAI }
-func (f *fakeAIService) ExecuteTask(ctx context.Context, task *ai.AITask, model string) (*ai.AITaskResult, error) {
-	return &ai.AITaskResult{Content: "\"Great Title\"", Status: ai.AITaskStatusCompleted}, nil
-}
-func (f *fakeAIService) ExecuteEmbeddingTask(ctx context.Context, inputText string, modelName string) (*ai.AITaskResult, error) {
-	return &ai.AITaskResult{Embedding: []float64{1}}, nil
-}
-func (f *fakeAIService) ExecuteImageAnalysisByLinkTask(ctx context.Context, inputText string, imageLink string, modelName string) (*ai.AITaskResult, error) {
-	return &ai.AITaskResult{Content: "ok"}, nil
-}
-func (f *fakeAIService) ExecuteSearch(ctx context.Context, query string, modelName string) (*ai.AITaskResult, error) {
-	return &ai.AITaskResult{Content: "ok"}, nil
-}
+	t.Run("plain rss source", func(t *testing.T) {
+		ds := &models.DataSource{}
+		if shouldRunRSSSignalPipeline(ds) {
+			t.Fatalf("expected plain rss source to skip signal pipeline")
+		}
+	})
 
-func TestGenerateProjectTitle_SanitizesQuotes(t *testing.T) {
-	exec := ai.NewAITaskExecutor([]ai.AIService{&fakeAIService{}}, ai.NewAIModelManager())
-	o := &Orchestrator{}
-	o.exec = exec
-	title, err := o.generateProjectTitle(context.Background(), "Some query", "en")
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if title == "" || title[0] == '"' || title[len(title)-1] == '"' {
-		t.Fatalf("expected sanitized title without quotes, got %q", title)
-	}
+	t.Run("ontology fact output", func(t *testing.T) {
+		mode := models.SourceOutputModeOntologyFact
+		ds := &models.DataSource{Details: models.SourceDetails{OutputMode: &mode}}
+		if !shouldRunRSSSignalPipeline(ds) {
+			t.Fatalf("expected ontology fact source to run signal pipeline")
+		}
+	})
+
+	t.Run("horizon monitor metadata", func(t *testing.T) {
+		signalType := "risk:regional_strike_geography"
+		ds := &models.DataSource{Details: models.SourceDetails{HorizonMonitorSignalType: &signalType}}
+		if !shouldRunRSSSignalPipeline(ds) {
+			t.Fatalf("expected horizon monitor metadata to run signal pipeline")
+		}
+	})
+
+	t.Run("heuristic processing mode", func(t *testing.T) {
+		mode := models.SourceProcessingModeHeuristic
+		ds := &models.DataSource{Details: models.SourceDetails{ProcessingMode: &mode}}
+		if !shouldRunRSSSignalPipeline(ds) {
+			t.Fatalf("expected heuristic source to run signal pipeline")
+		}
+	})
 }

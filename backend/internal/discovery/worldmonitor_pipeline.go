@@ -816,8 +816,16 @@ func (p *HorizonMonitorPipeline) ProcessDocuments(ctx context.Context, tenantID 
 		if landingZoneFragment != nil {
 			p.logf("horizon monitor pipeline: using signal landing zone source=%s ext=%s zone=%s", ds.ID, event.ExternalID, landingZoneFragment.CanonicalPath)
 		}
-		qualityCounters.observe(classification, firstNonNilAffectedZoneCandidate(landingZoneFragmentToCandidate(landingZoneFragment), zoneCandidate), nonEventFiltered)
 		zoneFragment := landingZoneFragment
+		if shouldPreferSpecificAffectedZoneCreation(zoneCandidate, landingZoneFragment) {
+			if specific, err := p.upsertAffectedZoneFragmentCandidate(ctx, tenantID, ds.ID, event, classification, zoneCandidate); err != nil {
+				p.logf("horizon monitor pipeline: failed to upsert more specific affected zone source=%s ext=%s candidate=%s: %v", ds.ID, event.ExternalID, strings.TrimSpace(zoneCandidate.CanonicalPath), err)
+			} else if specific != nil {
+				p.logf("horizon monitor pipeline: preferred specific affected zone source=%s ext=%s landing=%s override=%s", ds.ID, event.ExternalID, landingZoneFragment.CanonicalPath, specific.CanonicalPath)
+				zoneFragment = specific
+			}
+		}
+		qualityCounters.observe(classification, firstNonNilAffectedZoneCandidate(landingZoneFragmentToCandidate(zoneFragment), zoneCandidate), nonEventFiltered)
 		if zoneFragment == nil {
 			var err error
 			zoneFragment, err = p.upsertAffectedZoneFragmentCandidate(ctx, tenantID, ds.ID, event, classification, zoneCandidate)
@@ -1003,8 +1011,16 @@ func (p *HorizonMonitorPipeline) ProcessFeedEvents(ctx context.Context, tenantID
 		if landingZoneFragment != nil {
 			p.logf("horizon monitor pipeline: using signal landing zone source=%s ext=%s zone=%s", ds.ID, event.ExternalID, landingZoneFragment.CanonicalPath)
 		}
-		qualityCounters.observe(classification, firstNonNilAffectedZoneCandidate(landingZoneFragmentToCandidate(landingZoneFragment), zoneCandidate), nonEventFiltered)
 		zoneFragment := landingZoneFragment
+		if shouldPreferSpecificAffectedZoneCreation(zoneCandidate, landingZoneFragment) {
+			if specific, err := p.upsertAffectedZoneFragmentCandidate(ctx, tenantID, ds.ID, event, classification, zoneCandidate); err != nil {
+				p.logf("horizon monitor pipeline: failed to upsert more specific affected zone source=%s ext=%s candidate=%s: %v", ds.ID, event.ExternalID, strings.TrimSpace(zoneCandidate.CanonicalPath), err)
+			} else if specific != nil {
+				p.logf("horizon monitor pipeline: preferred specific affected zone source=%s ext=%s landing=%s override=%s", ds.ID, event.ExternalID, landingZoneFragment.CanonicalPath, specific.CanonicalPath)
+				zoneFragment = specific
+			}
+		}
+		qualityCounters.observe(classification, firstNonNilAffectedZoneCandidate(landingZoneFragmentToCandidate(zoneFragment), zoneCandidate), nonEventFiltered)
 		if zoneFragment == nil {
 			var err error
 			zoneFragment, err = p.upsertAffectedZoneFragmentCandidate(ctx, tenantID, ds.ID, event, classification, zoneCandidate)
@@ -8992,6 +9008,30 @@ var zoneHotspotCoords = map[string]geoPoint{
 	"kharkiv":                     {Lat: 49.9935, Lon: 36.2304, CountryCode: "UA"},
 	"kyiv":                        {Lat: 50.4501, Lon: 30.5234, CountryCode: "UA"},
 	"crimea":                      {Lat: 45.3453, Lon: 34.4992, CountryCode: "UA"},
+	"odesa":                       {Lat: 46.4825, Lon: 30.7233, CountryCode: "UA"},
+	"odessa":                      {Lat: 46.4825, Lon: 30.7233, CountryCode: "UA"},
+	"port of odesa":               {Lat: 46.4852, Lon: 30.7480, CountryCode: "UA"},
+	"port of odessa":              {Lat: 46.4852, Lon: 30.7480, CountryCode: "UA"},
+	"chornomorsk":                 {Lat: 46.3000, Lon: 30.6500, CountryCode: "UA"},
+	"chernomorsk":                 {Lat: 46.3000, Lon: 30.6500, CountryCode: "UA"},
+	"pivdennyi":                   {Lat: 46.6192, Lon: 31.1017, CountryCode: "UA"},
+	"yuzhny":                      {Lat: 46.6192, Lon: 31.1017, CountryCode: "UA"},
+	"mykolaiv":                    {Lat: 46.9750, Lon: 31.9946, CountryCode: "UA"},
+	"nikolaev":                    {Lat: 46.9750, Lon: 31.9946, CountryCode: "UA"},
+	"kherson":                     {Lat: 46.6354, Lon: 32.6169, CountryCode: "UA"},
+	"izmail":                      {Lat: 45.3493, Lon: 28.8383, CountryCode: "UA"},
+	"reni":                        {Lat: 45.4550, Lon: 28.2825, CountryCode: "UA"},
+	"sevastopol":                  {Lat: 44.6167, Lon: 33.5254, CountryCode: "UA"},
+	"kerch":                       {Lat: 45.3560, Lon: 36.4674, CountryCode: "UA"},
+	"kerch bridge":                {Lat: 45.2900, Lon: 36.4680, CountryCode: "UA"},
+	"novorossiysk":                {Lat: 44.7239, Lon: 37.7689, CountryCode: "RU"},
+	"novorossiysk seaport":        {Lat: 44.7253, Lon: 37.7936, CountryCode: "RU"},
+	"tuapse":                      {Lat: 44.0958, Lon: 39.0747, CountryCode: "RU"},
+	"taganrog":                    {Lat: 47.2362, Lon: 38.8969, CountryCode: "RU"},
+	"rostov":                      {Lat: 47.2357, Lon: 39.7015, CountryCode: "RU"},
+	"rostov on don":               {Lat: 47.2357, Lon: 39.7015, CountryCode: "RU"},
+	"rostov-on-don":               {Lat: 47.2357, Lon: 39.7015, CountryCode: "RU"},
+	"krasnodar":                   {Lat: 45.0355, Lon: 38.9753, CountryCode: "RU"},
 	"gaza":                        {Lat: 31.3547, Lon: 34.3088, CountryCode: "PS"},
 	"gaza strip":                  {Lat: 31.4000, Lon: 34.3500, CountryCode: "PS"},
 	"west bank":                   {Lat: 31.9500, Lon: 35.2500, CountryCode: "PS"},
