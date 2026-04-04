@@ -1204,6 +1204,35 @@ setup_infrastructure() {
             --quiet || true
         fi
         echo -e "${GREEN}[infra] ✓${NC} Source coordinator scheduler job ensured"
+
+        # 5a1. Global canvas ingest job (focused system canvas sources -> event/signal landing).
+        JOB_NAME="nv-horizon-canvas-global"
+        if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
+          gcloud scheduler jobs update http "$JOB_NAME" \
+            --location="$REGION" \
+            --schedule="0 */2 * * *" \
+            --uri="$SVC_URL/api/v1/internal/tasks/canvas/ingest" \
+            --http-method=POST \
+            --oidc-service-account-email="$SA_BACKEND" \
+            --oidc-token-audience="$SVC_URL" \
+            --headers="Content-Type=application/json" \
+            --message-body='{"tenantId":"global"}' \
+            --attempt-deadline=1800s \
+            --quiet || true
+        else
+          gcloud scheduler jobs create http "$JOB_NAME" \
+            --location="$REGION" \
+            --schedule="0 */2 * * *" \
+            --uri="$SVC_URL/api/v1/internal/tasks/canvas/ingest" \
+            --http-method=POST \
+            --oidc-service-account-email="$SA_BACKEND" \
+            --oidc-token-audience="$SVC_URL" \
+            --headers="Content-Type=application/json" \
+            --message-body='{"tenantId":"global"}' \
+            --attempt-deadline=1800s \
+            --quiet || true
+        fi
+        echo -e "${GREEN}[infra] ✓${NC} Global canvas ingest scheduler job ensured (every 2 hours)"
         
         # 5b. Artifact scheduler job (checks for scheduled artifact updates)
         JOB_NAME="nv-horizon-artifact-scheduler"

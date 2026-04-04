@@ -747,6 +747,7 @@ func (p *HorizonMonitorPipeline) ProcessDocuments(ctx context.Context, tenantID 
 			p.logf("horizon monitor pipeline: track upsert failed source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
 		}
 		var signalAudit *horizonMonitorSignalFlowAudit
+		var landingResult *horizonsignallanding.Result
 
 		if mode == wmIngestModeOntologyFact {
 			eventFact, err := p.upsertEventFact(ctx, tenantID, ds.ID, event)
@@ -759,9 +760,10 @@ func (p *HorizonMonitorPipeline) ProcessDocuments(ctx context.Context, tenantID 
 				}
 				if signal := p.buildSignalDescriptor(eventFact, event); signal != nil {
 					if p.signalLanding != nil {
-						if landingResult, err := p.signalLanding.LandEvent(ctx, eventFact, []*horizonmodels.SignalDescriptor{signal}); err != nil {
+						if result, err := p.signalLanding.LandEvent(ctx, eventFact, []*horizonmodels.SignalDescriptor{signal}); err != nil {
 							p.logf("horizon monitor pipeline: signal landing failed source=%s signal=%s: %v", ds.ID, signal.ID, err)
 						} else {
+							landingResult = result
 							p.maybeEnqueueWarmup(ctx, tenantID, landingResult)
 						}
 					}
@@ -810,10 +812,18 @@ func (p *HorizonMonitorPipeline) ProcessDocuments(ctx context.Context, tenantID 
 		if shouldForceConcreteIncidentHandling(event, classification, articleAssessment) || articleAssessment == nil || articleAssessment.ShouldCreateZone || articleAssessment.ShouldWarmExisting {
 			zoneCandidate = p.inferAffectedZoneCandidate(ctx, event, classification)
 		}
-		qualityCounters.observe(classification, zoneCandidate, nonEventFiltered)
-		zoneFragment, err := p.upsertAffectedZoneFragmentCandidate(ctx, tenantID, ds.ID, event, classification, zoneCandidate)
-		if err != nil {
-			p.logf("horizon monitor pipeline: failed to upsert affected zone source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
+		landingZoneFragment := p.resolveSignalLandingZoneFragment(ctx, landingResult)
+		if landingZoneFragment != nil {
+			p.logf("horizon monitor pipeline: using signal landing zone source=%s ext=%s zone=%s", ds.ID, event.ExternalID, landingZoneFragment.CanonicalPath)
+		}
+		qualityCounters.observe(classification, firstNonNilAffectedZoneCandidate(landingZoneFragmentToCandidate(landingZoneFragment), zoneCandidate), nonEventFiltered)
+		zoneFragment := landingZoneFragment
+		if zoneFragment == nil {
+			var err error
+			zoneFragment, err = p.upsertAffectedZoneFragmentCandidate(ctx, tenantID, ds.ID, event, classification, zoneCandidate)
+			if err != nil {
+				p.logf("horizon monitor pipeline: failed to upsert affected zone source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
+			}
 		}
 		p.maybeCreateStrategicGapRecommendation(ctx, tenantID, "", "", zoneFragment, event, signalAudit)
 		p.emitWatchRuntimeSignals(ctx, tenantID, zoneFragment, event, signalAudit)
@@ -925,6 +935,7 @@ func (p *HorizonMonitorPipeline) ProcessFeedEvents(ctx context.Context, tenantID
 			p.logf("horizon monitor pipeline: track upsert failed source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
 		}
 		var signalAudit *horizonMonitorSignalFlowAudit
+		var landingResult *horizonsignallanding.Result
 		if mode == wmIngestModeOntologyFact {
 			eventFact, err := p.upsertEventFact(ctx, tenantID, ds.ID, event)
 			if err != nil {
@@ -936,9 +947,10 @@ func (p *HorizonMonitorPipeline) ProcessFeedEvents(ctx context.Context, tenantID
 				}
 				if signal := p.buildSignalDescriptor(eventFact, event); signal != nil {
 					if p.signalLanding != nil {
-						if landingResult, err := p.signalLanding.LandEvent(ctx, eventFact, []*horizonmodels.SignalDescriptor{signal}); err != nil {
+						if result, err := p.signalLanding.LandEvent(ctx, eventFact, []*horizonmodels.SignalDescriptor{signal}); err != nil {
 							p.logf("horizon monitor pipeline: signal landing failed source=%s signal=%s: %v", ds.ID, signal.ID, err)
 						} else {
+							landingResult = result
 							p.maybeEnqueueWarmup(ctx, tenantID, landingResult)
 						}
 					}
@@ -987,10 +999,18 @@ func (p *HorizonMonitorPipeline) ProcessFeedEvents(ctx context.Context, tenantID
 		if shouldForceConcreteIncidentHandling(event, classification, articleAssessment) || articleAssessment == nil || articleAssessment.ShouldCreateZone || articleAssessment.ShouldWarmExisting {
 			zoneCandidate = p.inferAffectedZoneCandidate(ctx, event, classification)
 		}
-		qualityCounters.observe(classification, zoneCandidate, nonEventFiltered)
-		zoneFragment, err := p.upsertAffectedZoneFragmentCandidate(ctx, tenantID, ds.ID, event, classification, zoneCandidate)
-		if err != nil {
-			p.logf("horizon monitor pipeline: failed to upsert affected zone source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
+		landingZoneFragment := p.resolveSignalLandingZoneFragment(ctx, landingResult)
+		if landingZoneFragment != nil {
+			p.logf("horizon monitor pipeline: using signal landing zone source=%s ext=%s zone=%s", ds.ID, event.ExternalID, landingZoneFragment.CanonicalPath)
+		}
+		qualityCounters.observe(classification, firstNonNilAffectedZoneCandidate(landingZoneFragmentToCandidate(landingZoneFragment), zoneCandidate), nonEventFiltered)
+		zoneFragment := landingZoneFragment
+		if zoneFragment == nil {
+			var err error
+			zoneFragment, err = p.upsertAffectedZoneFragmentCandidate(ctx, tenantID, ds.ID, event, classification, zoneCandidate)
+			if err != nil {
+				p.logf("horizon monitor pipeline: failed to upsert affected zone source=%s ext=%s: %v", ds.ID, event.ExternalID, err)
+			}
 		}
 		p.maybeCreateStrategicGapRecommendation(ctx, tenantID, "", "", zoneFragment, event, signalAudit)
 		p.emitWatchRuntimeSignals(ctx, tenantID, zoneFragment, event, signalAudit)
@@ -3148,6 +3168,166 @@ func (p *HorizonMonitorPipeline) upsertAffectedZoneFragmentCandidate(
 	}
 	p.publishAffectedZoneUpsert(ctx, tenantID, existing, sourceID, "updated")
 	return existing, nil
+}
+
+func (p *HorizonMonitorPipeline) resolveSignalLandingZoneFragment(ctx context.Context, result *horizonsignallanding.Result) *horizonmodels.HorizonFragment {
+	if p == nil || p.fragmentsRepo == nil || result == nil {
+		return nil
+	}
+	for _, ref := range signalLandingZoneRefs(result) {
+		frag, err := p.fragmentsRepo.GetByCanonicalPath(ctx, ref)
+		if err == nil && frag != nil && frag.Type == horizonmodels.FragmentTypeAffectedZone {
+			return frag
+		}
+	}
+	return nil
+}
+
+func signalLandingZoneRefs(result *horizonsignallanding.Result) []string {
+	if result == nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, 8)
+	out := make([]string, 0, 8)
+	add := func(ref string) {
+		ref = strings.TrimSpace(ref)
+		if !strings.HasPrefix(ref, "/zone/") {
+			return
+		}
+		if _, ok := seen[ref]; ok {
+			return
+		}
+		seen[ref] = struct{}{}
+		out = append(out, ref)
+	}
+	for _, hit := range result.Hits {
+		if hit == nil {
+			continue
+		}
+		add(hit.CanonicalRef)
+	}
+	for _, summary := range result.Summaries {
+		if summary == nil {
+			continue
+		}
+		for _, ref := range summary.AffectedZoneRefs {
+			add(ref)
+		}
+	}
+	for _, claim := range result.Claims {
+		if claim == nil {
+			continue
+		}
+		for _, ref := range claim.AffectedZoneRefs {
+			add(ref)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		left := out[i]
+		right := out[j]
+		leftPriority := signalLandingZonePriority(left)
+		rightPriority := signalLandingZonePriority(right)
+		if leftPriority != rightPriority {
+			return leftPriority > rightPriority
+		}
+		leftSpecificity := strings.Count(left, "/")
+		rightSpecificity := strings.Count(right, "/")
+		if leftSpecificity == rightSpecificity {
+			if len(left) == len(right) {
+				return left > right
+			}
+			return len(left) > len(right)
+		}
+		return leftSpecificity > rightSpecificity
+	})
+	return out
+}
+
+func signalLandingZonePriority(ref string) int {
+	ref = strings.TrimSpace(ref)
+	if !strings.HasPrefix(ref, "/zone/") {
+		return 0
+	}
+	parts := strings.Split(strings.Trim(ref, "/"), "/")
+	if len(parts) < 4 {
+		return 0
+	}
+	geoCode := strings.ToUpper(strings.TrimSpace(parts[1]))
+	slug := normalizePhrase(parts[len(parts)-1])
+	countrySlug := normalizePhrase(countryNameFromCode(geoCode))
+	if slug != "" && slug == countrySlug {
+		return 1
+	}
+	if hasAnyKeyword(slug,
+		"port", "airport", "airbase", "terminal", "plant", "complex", "network",
+		"pipeline", "refinery", "field", "base", "station", "distribution",
+	) {
+		return 4
+	}
+	if strings.Count(parts[len(parts)-1], "-") >= 1 {
+		return 3
+	}
+	return 2
+}
+
+func landingZoneFragmentToCandidate(zone *horizonmodels.HorizonFragment) *affectedZoneCandidate {
+	if zone == nil || zone.Type != horizonmodels.FragmentTypeAffectedZone {
+		return nil
+	}
+	precision := strings.TrimSpace(asString(zone.Qualifiers["geoPrecision"]))
+	if precision == "" {
+		precision = "precise"
+	}
+	conditionType := strings.TrimSpace(asString(zone.Qualifiers["conditionType"]))
+	zoneType := strings.TrimSpace(asString(zone.Qualifiers["zoneType"]))
+	zoneSubType := strings.TrimSpace(asString(zone.Qualifiers["zoneSubType"]))
+	if zoneType == "" {
+		zoneType = firstNonEmptyString(conditionType, "affected_zone")
+	}
+	countryCode := strings.ToUpper(strings.TrimSpace(zone.GeoSlug))
+	if countryCode == "" {
+		countryCode = zoneCountryCodeFromPath(zone.CanonicalPath)
+	}
+	label := strings.TrimSpace(zone.Labels["en"])
+	if label == "" {
+		label = strings.TrimSpace(zone.Description)
+	}
+	return &affectedZoneCandidate{
+		CanonicalPath:  zone.CanonicalPath,
+		Label:          label,
+		ConditionType:  conditionType,
+		ZoneType:       zoneType,
+		ZoneSubType:    zoneSubType,
+		CountryCode:    countryCode,
+		RadiusKm:       zone.RadiusKm,
+		HasCoordinates: zone.HasCoordinates,
+		GeoPrecision:   precision,
+	}
+}
+
+func firstNonNilAffectedZoneCandidate(values ...*affectedZoneCandidate) *affectedZoneCandidate {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+func zoneCountryCodeFromPath(path string) string {
+	path = strings.TrimSpace(path)
+	if !strings.HasPrefix(path, "/zone/") {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	code := strings.ToUpper(strings.TrimSpace(parts[1]))
+	if len(code) > 3 {
+		return ""
+	}
+	return code
 }
 
 func (p *HorizonMonitorPipeline) upsertAffectedZoneGraphLinks(

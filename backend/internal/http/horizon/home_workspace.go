@@ -74,7 +74,7 @@ func (h *HorizonHandlers) HomeWorkspaceRun(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 55*time.Second)
 	defer cancel()
 
 	entities, scopeRefs, entityWarnings := h.resolveHomeWorkspaceEntities(ctx, query)
@@ -105,19 +105,22 @@ func (h *HorizonHandlers) answerHomeWorkspace(ctx context.Context, tenantID, que
 		return "Home workspace search is unavailable right now.", nil, nil, nil, nil, nil, []string{"vertex search client is not configured"}
 	}
 
-	signalHits, signalDocs, signalEventCore, signalHalo, affectedZones, signalWarnings := h.loadHomeWorkspaceSignalEvidence(ctx, tenantID, query, scopeRefs)
+	retrievalCtx, cancelRetrieval := context.WithTimeout(ctx, 32*time.Second)
+	defer cancelRetrieval()
+
+	signalHits, signalDocs, signalEventCore, signalHalo, affectedZones, signalWarnings := h.loadHomeWorkspaceSignalEvidence(retrievalCtx, tenantID, query, scopeRefs)
 	warnings = append(warnings, signalWarnings...)
 
-	analyticalHits, analyticalDocs, analyticalPaths, analyticalWarnings := h.loadHomeWorkspaceAnalyticalEvidence(ctx, tenantID, query, scopeRefs)
+	analyticalHits, analyticalDocs, analyticalPaths, analyticalWarnings := h.loadHomeWorkspaceAnalyticalEvidence(retrievalCtx, tenantID, query, scopeRefs)
 	warnings = append(warnings, analyticalWarnings...)
 
-	searchHits, searchWarnings := searchLensChatInternalKnowledge(ctx, client, lensChatSearchSpec{
+	searchHits, searchWarnings := searchLensChatInternalKnowledge(retrievalCtx, client, lensChatSearchSpec{
 		Question:  query,
 		Limit:     defaultLensChatHitLimit,
 		ScopeRefs: scopeRefs,
 	})
 	warnings = append(warnings, searchWarnings...)
-	searchDocs, evidenceWarnings := loadLensChatPreparedEvidenceDocs(ctx, h.gcsClient, searchHits, defaultLensChatEvidenceDocLimit)
+	searchDocs, evidenceWarnings := loadLensChatPreparedEvidenceDocs(retrievalCtx, h.gcsClient, searchHits, defaultLensChatEvidenceDocLimit)
 	warnings = append(warnings, evidenceWarnings...)
 
 	hits := mergeLensChatHits(mergeLensChatHits(nil, signalHits, 12), analyticalHits, 12)
@@ -140,7 +143,9 @@ func (h *HorizonHandlers) answerHomeWorkspace(ctx context.Context, tenantID, que
 	}
 
 	prompt := buildHomeWorkspaceSynthesisPrompt(query, entities, hits, evidenceDocs, highlightedPaths, eventCorePaths, haloPaths, affectedZoneRefs)
-	genResp, err := h.genAIHandler.GenerateDirect(ctx, gen_combined.GenAIRequest{
+	synthesisCtx, cancelSynthesis := context.WithTimeout(ctx, 14*time.Second)
+	defer cancelSynthesis()
+	genResp, err := h.genAIHandler.GenerateDirect(synthesisCtx, gen_combined.GenAIRequest{
 		Model:             lensChatModel,
 		Prompt:            prompt,
 		SystemInstruction: homeWorkspaceSystemInstruction(),
@@ -149,11 +154,11 @@ func (h *HorizonHandlers) answerHomeWorkspace(ctx context.Context, tenantID, que
 	})
 	if err != nil {
 		warnings = append(warnings, fmt.Sprintf("final synthesis failed: %v", err))
-		return fallbackLensChatAnswer(hits, evidenceDocs, highlightedPaths), hits, highlightedPaths, eventCorePaths, haloPaths, affectedZoneRefs, uniqueStringsLocal(warnings)
+		return fallbackHomeWorkspaceAnswer(query, entities, hits, eventCorePaths, haloPaths, affectedZoneRefs, highlightedPaths), hits, highlightedPaths, eventCorePaths, haloPaths, affectedZoneRefs, uniqueStringsLocal(warnings)
 	}
 	answer := strings.TrimSpace(genResp.Content)
 	if answer == "" {
-		answer = fallbackLensChatAnswer(hits, evidenceDocs, highlightedPaths)
+		answer = fallbackHomeWorkspaceAnswer(query, entities, hits, eventCorePaths, haloPaths, affectedZoneRefs, highlightedPaths)
 		warnings = append(warnings, "final synthesis returned empty content")
 	}
 	answer = rewriteCanonicalPathsForDisplay(answer, hits)
@@ -392,6 +397,120 @@ Return a concise workspace-style answer:
 4. For current-event questions, prioritize what changed right now over older background.
 5. End with explicit uncertainty only if the grounded context is incomplete.
 `)
+}
+
+func fallbackHomeWorkspaceAnswer(query string, entities []homeWorkspaceEntity, hits []lensChatInternalHit, eventCorePaths, haloPaths, affectedZoneRefs, highlightedPaths []string) string {
+	lines := make([]string, 0, 6)
+
+	if len(eventCorePaths) > 0 {
+		core := limitStringsLocal(eventCorePaths, 3)
+		labels := make([]string, 0, len(core))
+		for _, path := range core {
+			labels = append(labels, humanizeCanonicalPath(path))
+		}
+		lines = append(lines, "Fresh signal is centered on "+joinHumanListLocal(labels)+".")
+	}
+
+	if len(affectedZoneRefs) > 0 {
+		zones := limitStringsLocal(affectedZoneRefs, 3)
+		labels := make([]string, 0, len(zones))
+		for _, path := range zones {
+			labels = append(labels, humanizeCanonicalPath(path))
+		}
+		lines = append(lines, "Affected zones include "+joinHumanListLocal(labels)+".")
+	}
+
+	if len(haloPaths) > 0 {
+		halo := limitStringsLocal(haloPaths, 4)
+		labels := make([]string, 0, len(halo))
+		for _, path := range halo {
+			labels = append(labels, humanizeCanonicalPath(path))
+		}
+		lines = append(lines, "The immediate impact halo touches "+joinHumanListLocal(labels)+".")
+	}
+
+	if len(entities) > 0 {
+		names := make([]string, 0, minIntLocal(4, len(entities)))
+		for i, entity := range entities {
+			if i >= 4 {
+				break
+			}
+			name := strings.TrimSpace(entity.Name)
+			if name == "" {
+				name = humanizeCanonicalPath(entity.CanonicalPath)
+			}
+			if name != "" {
+				names = append(names, name)
+			}
+		}
+		if len(names) > 0 {
+			lines = append(lines, "Grounded objects in this workspace include "+joinHumanListLocal(names)+".")
+		}
+	}
+
+	if len(lines) == 0 && len(highlightedPaths) > 0 {
+		labels := make([]string, 0, minIntLocal(4, len(highlightedPaths)))
+		for i, path := range highlightedPaths {
+			if i >= 4 {
+				break
+			}
+			labels = append(labels, humanizeCanonicalPath(path))
+		}
+		if len(labels) > 0 {
+			lines = append(lines, "Grounded context was found around "+joinHumanListLocal(labels)+".")
+		}
+	}
+
+	if len(lines) == 0 && len(hits) > 0 {
+		top := make([]string, 0, minIntLocal(3, len(hits)))
+		for i, hit := range hits {
+			if i >= 3 {
+				break
+			}
+			label := strings.TrimSpace(hit.Title)
+			if label == "" {
+				label = strings.TrimSpace(hit.ID)
+			}
+			if label != "" {
+				top = append(top, label)
+			}
+		}
+		if len(top) > 0 {
+			lines = append(lines, "Grounded evidence was found around "+joinHumanListLocal(top)+".")
+		}
+	}
+
+	if len(lines) == 0 {
+		return "I found some grounded context for this workspace, but not enough structured evidence to produce a reliable explanation yet."
+	}
+	return strings.Join(lines, " ")
+}
+
+func joinHumanListLocal(items []string) string {
+	clean := make([]string, 0, len(items))
+	seen := map[string]struct{}{}
+	for _, item := range items {
+		value := strings.TrimSpace(item)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		clean = append(clean, value)
+	}
+	switch len(clean) {
+	case 0:
+		return ""
+	case 1:
+		return clean[0]
+	case 2:
+		return clean[0] + " and " + clean[1]
+	default:
+		return strings.Join(clean[:len(clean)-1], ", ") + ", and " + clean[len(clean)-1]
+	}
 }
 
 func homeWorkspaceRankSignalSummaries(query string, summaries []*horizonmodels.SignalLandingSummary, limit int) []*horizonmodels.SignalLandingSummary {

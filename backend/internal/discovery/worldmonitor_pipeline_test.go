@@ -9,6 +9,7 @@ import (
 	discoverynlp "github.com/igorkirisyuk/sanskrite/internal/discovery/nlp"
 	prov "github.com/igorkirisyuk/sanskrite/internal/discovery/providers"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	horizonsignallanding "github.com/igorkirisyuk/sanskrite/internal/horizon/signallanding"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 )
 
@@ -226,6 +227,58 @@ func TestHeuristicSignalSeedPaths_IncludeInternationalChokepoints(t *testing.T) 
 		if !strings.Contains(joined, want) {
 			t.Fatalf("expected chokepoint seed path %q in %v", want, paths)
 		}
+	}
+}
+
+func TestSignalLandingZoneRefsPrefersSpecificZones(t *testing.T) {
+	result := &horizonsignallanding.Result{
+		Claims: []*horizonmodels.SignalImpactClaim{
+			{AffectedZoneRefs: []string{"/zone/ae/military_conflict/united-arab-emirates"}},
+		},
+		Hits: []*horizonmodels.SignalLandingHit{
+			{CanonicalRef: "/zone/ae/military_conflict/jebel-ali-port"},
+			{CanonicalRef: "/zone/ae/military_conflict/dubai"},
+		},
+		Summaries: []*horizonmodels.SignalLandingSummary{
+			{AffectedZoneRefs: []string{"/zone/ae/military_conflict/dubai"}},
+		},
+	}
+	refs := signalLandingZoneRefs(result)
+	if len(refs) < 3 {
+		t.Fatalf("expected multiple zone refs, got %v", refs)
+	}
+	if refs[0] != "/zone/ae/military_conflict/jebel-ali-port" {
+		t.Fatalf("expected most specific zone first, got %v", refs)
+	}
+}
+
+func TestLandingZoneFragmentToCandidate(t *testing.T) {
+	frag := &horizonmodels.HorizonFragment{
+		CanonicalPath:  "/zone/ae/military_conflict/dubai",
+		Type:           horizonmodels.FragmentTypeAffectedZone,
+		GeoSlug:        "ae",
+		RadiusKm:       24,
+		HasCoordinates: true,
+		Labels:         map[string]string{"en": "Dubai (armed tension)"},
+		Qualifiers: map[string]interface{}{
+			"conditionType": "military_conflict",
+			"geoPrecision":  "precise",
+			"zoneType":      "military_conflict",
+			"zoneSubType":   "armed_tension",
+		},
+	}
+	candidate := landingZoneFragmentToCandidate(frag)
+	if candidate == nil {
+		t.Fatal("expected candidate from landing zone fragment")
+	}
+	if candidate.CanonicalPath != frag.CanonicalPath {
+		t.Fatalf("expected canonical path %s, got %s", frag.CanonicalPath, candidate.CanonicalPath)
+	}
+	if candidate.CountryCode != "AE" {
+		t.Fatalf("expected country AE, got %s", candidate.CountryCode)
+	}
+	if candidate.GeoPrecision != "precise" {
+		t.Fatalf("expected precise geo, got %s", candidate.GeoPrecision)
 	}
 }
 
@@ -1499,12 +1552,12 @@ func TestInferZoneConditionAndSubtypeScored_LaborStrikePortMapsToInfrastructure(
 
 func TestShouldPreferSpecificAffectedZoneCreation_ReplacesGenericOperationalSlug(t *testing.T) {
 	candidate := &affectedZoneCandidate{
-		CanonicalPath:   "/zone/ca/infrastructure_disruption/port-of-vancouver",
-		Label:           "Port of Vancouver",
-		GeoPrecision:    "entity_anchor",
-		CountryCode:     "CA",
-		CountryName:     "Canada",
-		GeoConfidence:   0.82,
+		CanonicalPath:        "/zone/ca/infrastructure_disruption/port-of-vancouver",
+		Label:                "Port of Vancouver",
+		GeoPrecision:         "entity_anchor",
+		CountryCode:          "CA",
+		CountryName:          "Canada",
+		GeoConfidence:        0.82,
 		ResolutionConfidence: 0.84,
 	}
 	existing := &horizonmodels.HorizonFragment{

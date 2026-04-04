@@ -131,6 +131,8 @@ const HorizonPage: React.FC = () => {
   >(() => {
     return getSavedHorizonState().lensId;
   });
+  const [showProjectLensCreator, setShowProjectLensCreator] =
+    React.useState(false);
 
   // Wrapper for setSelectedLensId that also saves to localStorage
   const setSelectedLensId = React.useCallback(
@@ -438,6 +440,7 @@ const HorizonPage: React.FC = () => {
     setCurrentProject(null);
     setPreferredLensCanvasMode('home');
     setSelectedLensId(null);
+    setShowProjectLensCreator(false);
     setShowWorldMap(false);
     saveHorizonState(null, null);
     setCreateFatalError(null);
@@ -984,6 +987,7 @@ const HorizonPage: React.FC = () => {
           navigate('/horizon');
           setShowWorldMap(false);
           setHomeMapFocus(null);
+          setShowProjectLensCreator(false);
           setPreferredLensCanvasMode('home');
           setSelectedLensId(lensId);
           // User explicitly chose to open a lens: stop treating this as an in-progress creation feed.
@@ -997,6 +1001,7 @@ const HorizonPage: React.FC = () => {
           navigate('/horizon');
           setShowWorldMap(false);
           setHomeMapFocus(null);
+          setShowProjectLensCreator(false);
           setSelectedLensId(null);
           setLensStarted(false);
           setActiveCreateCorrelationId(null);
@@ -1009,6 +1014,7 @@ const HorizonPage: React.FC = () => {
           navigate('/horizon/portfolio');
           setShowWorldMap(false);
           setHomeMapFocus(null);
+          setShowProjectLensCreator(false);
           setLensStarted(false);
           setActiveCreateCorrelationId(null);
           setActiveCreateSessionId(null);
@@ -1019,6 +1025,7 @@ const HorizonPage: React.FC = () => {
           navigate('/horizon');
           setShowWorldMap(true);
           setHomeMapFocus(null);
+          setShowProjectLensCreator(false);
           setPreferredLensCanvasMode('home');
           setLensStarted(false);
           setActiveCreateCorrelationId(null);
@@ -1032,6 +1039,7 @@ const HorizonPage: React.FC = () => {
           setShowWorldMap(false);
           setHomeMapFocus(null);
           setSelectedLensId(null);
+          setShowProjectLensCreator(true);
           setLensStarted(false);
           resetEvents();
           setActiveCreateCorrelationId(null);
@@ -1117,7 +1125,7 @@ const HorizonPage: React.FC = () => {
                 setMapDrawerHost={setWorldMapDrawerHost}
               />
             </div>
-          ) : currentProject && selectedLensId ? (
+          ) : currentProject && (selectedLensId || showProjectLensCreator) ? (
             /* Lens Canvas overlay - Home is the default entry point; Progress appears only when runtime exists */
             <LensCanvas
               isOpen={true}
@@ -1174,6 +1182,7 @@ const HorizonPage: React.FC = () => {
                   setPreferredLensCanvasMode('home');
                   setSelectedLensId(null);
                 }
+                setShowProjectLensCreator(false);
                 setLensStarted(false);
                 setActiveCreateCorrelationId(null);
                 setActiveCreateSessionId(null);
@@ -1196,6 +1205,7 @@ const HorizonPage: React.FC = () => {
                   onOpenLens={(lensId) => {
                     navigate('/horizon');
                     setSelectedLensId(lensId);
+                    setShowProjectLensCreator(false);
                     setPreferredLensCanvasMode('home');
                     setHomeMapFocus(null);
                     setShowWorldMap(false);

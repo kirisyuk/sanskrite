@@ -979,3 +979,95 @@ Affected zone — это именно карта территории встря
 - сделать risk-answer path analytical-first;
 - довести watch subject до полноценного focus-runtime;
 - улучшить landing ranking через structural importance + semantic grounding.
+
+## Update: 2026-04-04 — landing-first affected zones
+
+В ходе live-проверки Gulf crisis focus pack выяснилось следующее:
+
+- source-side broad heuristic contour уже практически не является главным источником шума:
+  - отдельный admin dry-run показал только `inactive` legacy heuristic sources;
+  - активных `global_system + heuristic` источников в текущем live-срезе не обнаружено.
+- реальный конфликт оставался внутри `HorizonMonitorPipeline`:
+  - `signal landing` уже materialize’ил precise affected zones;
+  - старый `inferAffectedZoneCandidate -> upsertAffectedZoneFragmentCandidate` path всё ещё мог параллельно строить зоны по своим правилам.
+
+Это было исправлено так:
+
+- `worldmonitor_pipeline` переведён в `landing-first` режим:
+  - если `signal landing` уже дал affected zone fragment, pipeline использует его как основной zone artifact;
+  - старый heuristic zone contour остаётся только fallback, когда precise zone из landing не получена.
+- добавлен приоритет точных зон над broad-country frame:
+  - `Jebel Ali Port`, `Fujairah`, `Dubai`, `DEWA network` и подобные узлы теперь должны подниматься выше `United Arab Emirates` в локальной зоне/halo логике.
+- добавлена live-диагностика:
+  - pipeline логирует `using signal landing zone ...`, чтобы по логам было видно, что используется именно новый path.
+
+Это важно концептуально:
+
+- мы не добавляли Gulf-specific hardcode в ядро;
+- мы усилили generic policy:
+  - `watch/focus pack` задаёт, что мониторить;
+  - `signal landing` задаёт, куда сел сигнал;
+  - `worldmonitor` больше не должен параллельно “рисовать свой мир”, если landing уже дал более точную географию.
+
+Локальная фиксация:
+
+- `go test ./backend/internal/discovery ./backend/cmd/tools/horizon_pause_heuristic_sources ./backend/cmd/server`
+- добавлен admin tool:
+  - `backend/cmd/tools/horizon_pause_heuristic_sources`
+  - он нужен для централизованного operational отключения `global_system + heuristic` sources, если они снова появятся.
+
+Текущий смысл этого шага:
+
+- основной контур карты и affected zones теперь должен опираться на:
+  - focus sources
+  - watch subjects
+  - signal landing
+  - halo expansion
+- а не на старую broad heuristic генерацию зон как primary path.
+
+### Live verification after deploy
+
+Финальная live ревизия:
+
+- `nv-horizon-api-00089-d74`
+
+Дополнительная проверка после выката:
+
+- `gcloud scheduler jobs run nv-horizon-source-poller`
+- `gcloud scheduler jobs run nv-horizon-canvas-global`
+- `go run ./backend/cmd/tools/horizon_inspect_signal_landing --project nv-horizon-test --tenant global --limit 4 --include-cycle`
+
+Что подтвердилось:
+
+- после выката появились новые `SignalLandingSession` уже на таймштампах около `14:28Z`:
+  - `sls_global-esu9h0ypmnbxak9ct0lv-...` from `src_gulf_a470f0b25ae8ced6`
+  - `sls_global-az7fanjkxdzlp2zrbhxp-...` from `src_gulf_8a33ca471c162d99`
+  - `sls_global-eog2lkxmasgxtrddd4br-...` from `src_gulf_467a07ad796e1803`
+- свежий live cycle теперь показывает:
+  - `landingCreatedAt: 2026-04-04T14:28:11Z`
+  - `landingDurationMs: 10442`
+  - `impactedRefCount: 34`
+  - `impactedLensCount: 4`
+- в impacted refs и summaries появились:
+  - `/zone/ae/military_conflict/habshan-gas-complex`
+  - `/zone/ae/military_conflict/jebel-ali-port`
+  - `/zone/ae/military_conflict/united-arab-emirates`
+  - `/zone/sea/military_conflict/strait-of-hormuz`
+  - downstream refs вокруг desalination, gas pipelines, ports, potable water, electricity, natural gas
+
+Это важно:
+
+- карта и focus-runtime уже питаются не только country-wide рамкой;
+- fresh signal layer порождает точечные зоны вокруг конкретных Gulf facilities и chokepoints;
+- halo/cascade продолжает автоматически подтягивать downstream facilities, products и routes.
+
+Дополнительная controlled replay-проверка тем же pipeline:
+
+- replay реальной AP-новости через `horizon_replay_worldmonitor_doc`
+- stdout лог показал:
+  - `horizon monitor pipeline: using signal landing zone ...`
+
+Это прямое подтверждение нового порядка:
+
+- `signal landing` теперь является primary source of truth для precise affected zones;
+- старый heuristic zone path остаётся fallback only.

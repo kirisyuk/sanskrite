@@ -910,21 +910,44 @@ func main() {
 		}
 
 		// Настраиваем автоматическую синхронизацию документов с Vertex AI Search.
-		// Передаём конкретный gs:// URI (не wildcard), чтобы не превышать лимит Discovery Engine (1000 файлов).
+		// Для news/source ingest используем общий batcher, иначе document_feed быстро упирается
+		// в Discovery Engine quota по количеству import requests в минуту.
 		if vertexSearchClient != nil && docsBucket != "" {
+			batchConfig := horizonrepo.DefaultVertexSyncBatcherConfig()
+			if v := strings.TrimSpace(getEnv("VERTEX_SYNC_MAX_BATCH_SIZE", "")); v != "" {
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					if n > 100 {
+						n = 100
+					}
+					batchConfig.MaxBatchSize = n
+				}
+			}
+			if v := strings.TrimSpace(getEnv("VERTEX_SYNC_MIN_BATCH_SIZE", "")); v != "" {
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					batchConfig.MinBatchSize = n
+				}
+			}
+			if v := strings.TrimSpace(getEnv("VERTEX_SYNC_FLUSH_INTERVAL_SEC", "")); v != "" {
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					batchConfig.FlushInterval = time.Duration(n) * time.Second
+				}
+			}
+			docVertexSyncBatcher := horizonrepo.NewVertexSyncBatcher(
+				func(ctx context.Context, uris []string) (string, error) {
+					return vertexSearchClient.ImportDocumentsFromURIs(ctx, uris, "INCREMENTAL", "content")
+				},
+				batchConfig,
+			)
 			docsRepo = docsRepo.WithVertexSearchSync(func(ctx context.Context, gcsURI string) (string, error) {
+				_ = ctx
 				if strings.TrimSpace(gcsURI) == "" {
 					return "", nil
 				}
-				operationName, err := vertexSearchClient.ImportDocumentsFromURIs(ctx, []string{gcsURI}, "INCREMENTAL", "content")
-				if err != nil {
-					logger.Printf("[VertexAISearch] Failed to trigger sync for %s: %v", gcsURI, err)
-					return "", err
-				}
-				logger.Printf("[VertexAISearch] Sync triggered: operation=%s", operationName)
-				return operationName, nil
+				docVertexSyncBatcher.Add(gcsURI)
+				return "queued", nil
 			})
-			logger.Printf("Vertex AI Search auto-sync enabled: documents will sync automatically after GCS upload")
+			logger.Printf("Vertex AI Search auto-sync enabled for documents: batched mode (maxBatch=%d minBatch=%d interval=%v)",
+				batchConfig.MaxBatchSize, batchConfig.MinBatchSize, batchConfig.FlushInterval)
 		}
 
 		// Start document processor worker (background)
@@ -2326,6 +2349,7 @@ func main() {
 							horizonrepo.NewSignalMissingAnchorCandidatesRepository(fsClient.Client()),
 							horizonFragmentsRepo,
 						).WithMaterializedRepo(horizonMaterializedArtifactsRepo).
+							WithEdgesRepo(horizonEdgesRepo).
 							WithProductDictionary(productDictionary),
 					).
 					WithImpactWarmupHook(func(ctx context.Context, tenantID string, refs []string, reason string) error {
@@ -3242,6 +3266,7 @@ func main() {
 					horizonrepo.NewSignalMissingAnchorCandidatesRepository(fsClient.Client()),
 					horizonFragmentsRepo,
 				).WithMaterializedRepo(horizonMaterializedArtifactsRepo).
+					WithEdgesRepo(horizonEdgesRepo).
 					WithProductDictionary(productDictionary)
 				if vertexSearchClient != nil && vertexSearchClient.IsConfigured() {
 					if horizonDS := getEnvWithAlt("VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID", "VERTEX_SEARCH_HORIZON_DATA_STORE_ID", ""); horizonDS != "" {

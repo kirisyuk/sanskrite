@@ -2,6 +2,7 @@ package signallanding
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -24,6 +25,7 @@ type Service struct {
 	summariesRepo    *horizonrepo.SignalLandingSummariesRepository
 	candidatesRepo   *horizonrepo.SignalMissingAnchorCandidatesRepository
 	fragmentsRepo    *horizonrepo.HorizonFragmentsRepository
+	edgesRepo        *horizonrepo.DependencyEdgesRepository
 	materializedRepo *horizonrepo.MaterializedArtifactsRepository
 	productDict      *horizonproductdict.Runtime
 	vertexSearch     *ai.VertexAISearchClient
@@ -57,6 +59,11 @@ func NewService(
 
 func (s *Service) WithMaterializedRepo(repo *horizonrepo.MaterializedArtifactsRepository) *Service {
 	s.materializedRepo = repo
+	return s
+}
+
+func (s *Service) WithEdgesRepo(repo *horizonrepo.DependencyEdgesRepository) *Service {
+	s.edgesRepo = repo
 	return s
 }
 
@@ -173,6 +180,13 @@ func (s *Service) LandEvent(ctx context.Context, event *coremodels.OntologyFact,
 }
 
 func (s *Service) buildClaim(session *horizonmodels.SignalLandingSession, event *coremodels.OntologyFact, signal *horizonmodels.SignalDescriptor, idx int, primaryText string) *horizonmodels.SignalImpactClaim {
+	locationHint := strings.TrimSpace(firstNonEmpty(signal.LocationPath, derefString(event.LocationPath)))
+	countryHints := []string{}
+	if strings.HasPrefix(locationHint, "/") {
+		countryHints = append(countryHints, locationHint)
+	} else if country := countryFromPath(locationHint); country != "" {
+		countryHints = append(countryHints, country)
+	}
 	labels := compactUniqueStrings(append([]string{}, signal.SeedNames...))
 	if len(labels) == 0 {
 		labels = compactUniqueStrings([]string{strings.TrimSpace(firstNonEmpty(event.Title, signal.Mechanism, signal.Axis))})
@@ -198,7 +212,7 @@ func (s *Service) buildClaim(session *horizonmodels.SignalLandingSession, event 
 		SourceEvidenceRefs: compactUniqueStrings(append(eventSourceDocumentRefs(event), signal.SourceRefs...)),
 		ClaimLabels:        labels,
 		ClaimAliases:       compactUniqueStrings(append([]string{}, signal.SeedNames...)),
-		CountryHints:       compactUniqueStrings([]string{countryFromPath(strings.TrimSpace(firstNonEmpty(signal.LocationPath, derefString(event.LocationPath))))}),
+		CountryHints:       compactUniqueStrings(countryHints),
 		ProductHints:       productHints,
 		RouteHints:         routeHints,
 		FacilityHints:      facilityHints,
@@ -226,7 +240,7 @@ func (s *Service) landClaim(ctx context.Context, session *horizonmodels.SignalLa
 
 	addHit := func(ref, why string, class horizonmodels.SignalLandingClass, method horizonmodels.SignalLandingMethod, confidence, importance float64, paths ...string) {
 		ref = strings.TrimSpace(ref)
-		if ref == "" {
+		if !isCanonicalLandingRef(ref) {
 			return
 		}
 		key := ref + "|" + string(class) + "|" + string(method)
@@ -327,6 +341,15 @@ func (s *Service) landClaim(ctx context.Context, session *horizonmodels.SignalLa
 		}
 	}
 
+	if s.fragmentsRepo != nil && claim.ZoneEligibility != horizonmodels.SignalZoneEligibilityForbidden {
+		for _, zoneRef := range s.expandAffectedZonesFromHits(ctx, session.TenantID, hits) {
+			addHit(zoneRef, "related affected zone resolved from landed geography or facility", horizonmodels.SignalLandingClassInferred, horizonmodels.SignalLandingMethodZoneAnchor, clamp01(claim.Confidence*0.85), maxFloat(0.5, claim.Severity*0.85), zoneRef)
+		}
+		for _, zoneRef := range s.materializeAffectedZonesFromHits(ctx, session, claim, hits) {
+			addHit(zoneRef, "fresh signal landing materialized a precise affected zone around the landed anchor", horizonmodels.SignalLandingClassInferred, horizonmodels.SignalLandingMethodZoneAnchor, clamp01(claim.Confidence*0.88), maxFloat(0.55, claim.Severity*0.9), zoneRef)
+		}
+	}
+
 	zoneHits := hitsWithPrefix(hits, "/zone/")
 	if claim.ZoneEligibility == horizonmodels.SignalZoneEligibilityRequired && len(zoneHits) == 0 {
 		claim.MissingPreciseZone = true
@@ -399,6 +422,516 @@ func (s *Service) landClaim(ctx context.Context, session *horizonmodels.SignalLa
 		candidate.Normalize()
 	}
 	return hits, dedupeCandidates(candidates)
+}
+
+func isCanonicalLandingRef(ref string) bool {
+	ref = strings.TrimSpace(ref)
+	return strings.HasPrefix(ref, "/")
+}
+
+func (s *Service) expandAffectedZonesFromHits(ctx context.Context, tenantID string, hits []*horizonmodels.SignalLandingHit) []string {
+	if s == nil || s.fragmentsRepo == nil || len(hits) == 0 {
+		return nil
+	}
+	out := make([]string, 0, 8)
+	seen := map[string]struct{}{}
+	for _, hit := range hits {
+		if hit == nil {
+			continue
+		}
+		ref := strings.TrimSpace(hit.CanonicalRef)
+		if ref == "" || strings.HasPrefix(ref, "/zone/") {
+			continue
+		}
+		for _, token := range s.zoneSearchTokensForRef(ctx, tenantID, ref) {
+			matches, err := s.fragmentsRepo.SearchPrefixForTenant(ctx, tenantID, token, 8)
+			if err != nil {
+				continue
+			}
+			for _, frag := range matches {
+				if frag == nil || frag.Type != horizonmodels.FragmentTypeAffectedZone {
+					continue
+				}
+				cp := strings.TrimSpace(frag.CanonicalPath)
+				if cp == "" {
+					continue
+				}
+				if _, ok := seen[cp]; ok {
+					continue
+				}
+				seen[cp] = struct{}{}
+				out = append(out, cp)
+			}
+		}
+	}
+	return compactUniqueStrings(out)
+}
+
+func (s *Service) materializeAffectedZonesFromHits(ctx context.Context, session *horizonmodels.SignalLandingSession, claim *horizonmodels.SignalImpactClaim, hits []*horizonmodels.SignalLandingHit) []string {
+	if s == nil || s.fragmentsRepo == nil || claim == nil || session == nil {
+		return nil
+	}
+	anchors := s.zoneMaterializationAnchors(hits)
+	if len(anchors) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(anchors))
+	for _, anchor := range anchors {
+		zoneRef, err := s.ensureAffectedZoneForAnchor(ctx, session, claim, anchor)
+		if err != nil || strings.TrimSpace(zoneRef) == "" {
+			continue
+		}
+		out = append(out, zoneRef)
+	}
+	return compactUniqueStrings(out)
+}
+
+func (s *Service) zoneMaterializationAnchors(hits []*horizonmodels.SignalLandingHit) []string {
+	primary := make([]string, 0, 6)
+	fallback := make([]string, 0, 6)
+	for _, hit := range hits {
+		if hit == nil {
+			continue
+		}
+		ref := strings.TrimSpace(hit.CanonicalRef)
+		if ref == "" || strings.HasPrefix(ref, "/zone/") {
+			continue
+		}
+		switch hit.RefKind {
+		case "geo", "facility", "route":
+		default:
+			continue
+		}
+		if hit.LandingClass == horizonmodels.SignalLandingClassConfirmed {
+			primary = append(primary, ref)
+			continue
+		}
+		fallback = append(fallback, ref)
+	}
+	if len(primary) > 0 {
+		return firstNStrings(compactUniqueStrings(primary), 8)
+	}
+	return firstNStrings(compactUniqueStrings(fallback), 6)
+}
+
+func (s *Service) ensureAffectedZoneForAnchor(ctx context.Context, session *horizonmodels.SignalLandingSession, claim *horizonmodels.SignalImpactClaim, anchorRef string) (string, error) {
+	anchorRef = strings.TrimSpace(anchorRef)
+	if anchorRef == "" || strings.HasPrefix(anchorRef, "/zone/") {
+		return "", nil
+	}
+	anchorFrag, err := s.fragmentsRepo.GetByCanonicalPathForTenant(ctx, strings.TrimSpace(session.TenantID), anchorRef)
+	if err != nil || anchorFrag == nil {
+		anchorFrag, err = s.fragmentsRepo.GetByCanonicalPath(ctx, anchorRef)
+		if err != nil || anchorFrag == nil {
+			return "", err
+		}
+	}
+
+	geoToken, slug, anchorLabel, geoPrecision := deriveAffectedZoneIdentity(anchorFrag)
+	if geoToken == "" || slug == "" {
+		return "", nil
+	}
+	conditionType := inferSignalLandingConditionType(claim)
+	if conditionType == "" {
+		return "", nil
+	}
+	zonePath := strings.TrimSpace("/zone/" + geoToken + "/" + conditionType + "/" + slug)
+	if zonePath == "" {
+		return "", nil
+	}
+
+	zone, err := s.fragmentsRepo.GetByCanonicalPath(ctx, zonePath)
+	if err != nil && !errors.Is(err, horizonrepo.ErrFragmentNotFound) {
+		return "", err
+	}
+	now := time.Now().UTC()
+	zoneLabel := affectedZoneDisplayLabel(anchorLabel, conditionType)
+	if zone == nil {
+		zone = &horizonmodels.HorizonFragment{
+			Type:          horizonmodels.FragmentTypeAffectedZone,
+			CanonicalPath: zonePath,
+			Labels: map[string]string{
+				"en": zoneLabel,
+			},
+			Description: affectedZoneDescription(anchorLabel, conditionType),
+			Status:      string(horizonmodels.FragmentStatusActive),
+			Tags:        []string{"affected-zone", "signal-landing", strings.ReplaceAll(conditionType, "_", "-")},
+			RadiusKm:    affectedZoneRadiusKm(geoPrecision),
+			Qualifiers: map[string]interface{}{
+				"conditionType":           conditionType,
+				"geoPrecision":            geoPrecision,
+				"signalLandingGenerated":  true,
+				"signalLandingSessionId":  strings.TrimSpace(session.ID),
+				"signalLandingAnchorRef":  anchorRef,
+				"signalLandingUpdatedAt":  now.Format(time.RFC3339),
+				"requiresExplicitRecovery": true,
+			},
+			HomeLocation: cloneLocation(anchorFrag.HomeLocation),
+			Coordinates:  cloneCoordinates(anchorFrag.Coordinates),
+			Metadata: horizonmodels.FragmentMetadata{
+				CreatedAt:       now,
+				LastUpdatedAt:   now,
+				LastVerifiedAt:  now,
+				EpistemicStatus: horizonmodels.EpistemicStatusLowConfidence,
+			},
+		}
+		if _, err := s.fragmentsRepo.Create(ctx, zone); err != nil {
+			return "", err
+		}
+		zone, err = s.fragmentsRepo.GetByCanonicalPath(ctx, zonePath)
+		if err != nil || zone == nil {
+			return zonePath, nil
+		}
+	} else if s.mergeSignalLandingZone(zone, session, anchorFrag, anchorRef, zoneLabel, conditionType, geoPrecision, now) {
+		if err := s.fragmentsRepo.Update(ctx, zone); err != nil {
+			return "", err
+		}
+	}
+
+	if zone != nil {
+		_ = s.ensureAffectedZoneEdges(ctx, zone, anchorFrag, claim, now)
+	}
+	return zonePath, nil
+}
+
+func (s *Service) mergeSignalLandingZone(
+	zone *horizonmodels.HorizonFragment,
+	session *horizonmodels.SignalLandingSession,
+	anchor *horizonmodels.HorizonFragment,
+	anchorRef, zoneLabel, conditionType, geoPrecision string,
+	now time.Time,
+) bool {
+	if zone == nil {
+		return false
+	}
+	changed := false
+	if zone.Type != horizonmodels.FragmentTypeAffectedZone {
+		zone.Type = horizonmodels.FragmentTypeAffectedZone
+		changed = true
+	}
+	if zone.Labels == nil {
+		zone.Labels = map[string]string{}
+	}
+	if strings.TrimSpace(zone.Labels["en"]) == "" {
+		zone.Labels["en"] = zoneLabel
+		changed = true
+	}
+	if strings.TrimSpace(zone.Description) == "" {
+		zone.Description = affectedZoneDescription(anchorLabelOrPath(anchor), conditionType)
+		changed = true
+	}
+	if zone.RadiusKm <= 0 {
+		zone.RadiusKm = affectedZoneRadiusKm(geoPrecision)
+		changed = true
+	}
+	if zone.Qualifiers == nil {
+		zone.Qualifiers = map[string]interface{}{}
+	}
+	for key, value := range map[string]interface{}{
+		"conditionType":           conditionType,
+		"geoPrecision":            geoPrecision,
+		"signalLandingGenerated":  true,
+		"signalLandingSessionId":  strings.TrimSpace(session.ID),
+		"signalLandingAnchorRef":  anchorRef,
+		"signalLandingUpdatedAt":  now.Format(time.RFC3339),
+		"requiresExplicitRecovery": true,
+	} {
+		if fmt.Sprintf("%v", zone.Qualifiers[key]) != fmt.Sprintf("%v", value) {
+			zone.Qualifiers[key] = value
+			changed = true
+		}
+	}
+	if zone.HomeLocation == nil && anchor != nil && anchor.HomeLocation != nil {
+		zone.HomeLocation = cloneLocation(anchor.HomeLocation)
+		changed = true
+	}
+	if zone.Coordinates == nil && anchor != nil && anchor.Coordinates != nil {
+		zone.Coordinates = cloneCoordinates(anchor.Coordinates)
+		changed = true
+	}
+	if zone.Metadata.LastUpdatedAt.Before(now) {
+		zone.Metadata.LastUpdatedAt = now
+		changed = true
+	}
+	return changed
+}
+
+func (s *Service) ensureAffectedZoneEdges(ctx context.Context, zone, anchor *horizonmodels.HorizonFragment, claim *horizonmodels.SignalImpactClaim, now time.Time) error {
+	if s == nil || s.edgesRepo == nil || zone == nil || anchor == nil || strings.TrimSpace(zone.ID) == "" || strings.TrimSpace(anchor.ID) == "" {
+		return nil
+	}
+	qualifiers := map[string]interface{}{
+		"source":                 "signal_landing",
+		"conditionType":          inferSignalLandingConditionType(claim),
+		"signalLandingGenerated": true,
+	}
+	_, _ = s.edgesRepo.Create(ctx, &horizonmodels.DependencyEdge{
+		SourceFragmentID: strings.TrimSpace(zone.ID),
+		TargetFragmentID: strings.TrimSpace(anchor.ID),
+		Type:             horizonmodels.DependencyTypeAffects,
+		Qualifiers:       qualifiers,
+		Properties: horizonmodels.EdgeProperties{
+			Criticality: 0.72,
+		},
+		Metrics: map[string]horizonmodels.MetricValue{
+			"fresh_signal_pressure": {
+				Value:      maxFloat(claim.Severity, 0.6),
+				Confidence: maxFloat(claim.Confidence, 0.7),
+				ObservedAt: now,
+			},
+		},
+	})
+		if parent := affectedZoneLocatedInRef(anchor); parent != "" {
+			if parentFrag, err := s.fragmentsRepo.GetByCanonicalPath(ctx, parent); err == nil && parentFrag != nil && strings.TrimSpace(parentFrag.ID) != "" {
+			_, _ = s.edgesRepo.Create(ctx, &horizonmodels.DependencyEdge{
+				SourceFragmentID: strings.TrimSpace(zone.ID),
+				TargetFragmentID: strings.TrimSpace(parentFrag.ID),
+				Type:             horizonmodels.DependencyTypeLocatedIn,
+				Qualifiers: map[string]interface{}{
+					"source":                 "signal_landing",
+					"signalLandingGenerated": true,
+				},
+			})
+		}
+	}
+	return nil
+}
+
+func (s *Service) zoneSearchTokensForRef(ctx context.Context, tenantID, ref string) []string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return nil
+	}
+	tokens := make([]string, 0, 6)
+	if frag, err := s.fragmentsRepo.GetByCanonicalPathForTenant(ctx, tenantID, ref); err == nil && frag != nil {
+		if label := strings.TrimSpace(firstNonEmpty(frag.Labels["en"], frag.CanonicalPath)); label != "" {
+			tokens = append(tokens, label)
+			tokens = append(tokens, firstNWords(label, 3))
+		}
+	}
+	parts := strings.Split(strings.Trim(ref, "/"), "/")
+	if len(parts) > 0 {
+		last := humanizeCanonicalToken(parts[len(parts)-1])
+		tokens = append(tokens, last)
+	}
+	if len(parts) > 1 {
+		lastTwo := humanizeCanonicalToken(parts[len(parts)-2] + " " + parts[len(parts)-1])
+		tokens = append(tokens, lastTwo)
+	}
+	return compactUniqueStrings(filterSearchableTokens(tokens))
+}
+
+func filterSearchableTokens(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || len(value) < 3 {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
+}
+
+func humanizeCanonicalToken(v string) string {
+	v = strings.TrimSpace(strings.ReplaceAll(v, "-", " "))
+	v = strings.TrimSpace(strings.ReplaceAll(v, "_", " "))
+	return v
+}
+
+func firstNWords(v string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	parts := strings.Fields(strings.TrimSpace(v))
+	if len(parts) == 0 {
+		return ""
+	}
+	if len(parts) > n {
+		parts = parts[:n]
+	}
+	return strings.Join(parts, " ")
+}
+
+func deriveAffectedZoneIdentity(anchor *horizonmodels.HorizonFragment) (geoToken, slug, label, geoPrecision string) {
+	if anchor == nil {
+		return "", "", "", ""
+	}
+	cp := strings.TrimSpace(anchor.CanonicalPath)
+	label = anchorLabelOrPath(anchor)
+	if strings.HasPrefix(cp, "/loc/") {
+		parts := strings.Split(strings.Trim(cp, "/"), "/")
+		if len(parts) >= 2 {
+			geoToken = strings.ToLower(strings.TrimSpace(parts[1]))
+		}
+		switch {
+		case len(parts) >= 4:
+			slug = normalizeCandidateLabel(parts[len(parts)-1])
+			geoPrecision = "city"
+		case len(parts) == 3:
+			slug = normalizeCandidateLabel(parts[len(parts)-1])
+			geoPrecision = "region"
+		case len(parts) == 2:
+			slug = normalizeCandidateLabel(label)
+			geoPrecision = "country"
+		}
+		return strings.Trim(geoToken, "/"), strings.Trim(slug, "/"), label, geoPrecision
+	}
+	if strings.HasPrefix(cp, "/fac/") {
+		parts := strings.Split(strings.Trim(cp, "/"), "/")
+		if len(parts) >= 2 {
+			geoToken = strings.ToLower(strings.TrimSpace(parts[1]))
+		}
+		if normalized := normalizeFacilityZoneSlug(label); normalized != "" {
+			slug = normalized
+		} else if len(parts) > 0 {
+			slug = normalizeCandidateLabel(parts[len(parts)-1])
+		}
+		geoPrecision = "facility"
+		return strings.Trim(geoToken, "/"), strings.Trim(slug, "/"), label, geoPrecision
+	}
+	return "", "", label, ""
+}
+
+func anchorLabelOrPath(anchor *horizonmodels.HorizonFragment) string {
+	if anchor == nil {
+		return ""
+	}
+	return strings.TrimSpace(firstNonEmpty(anchor.Labels["en"], anchor.CanonicalPath))
+}
+
+func normalizeFacilityZoneSlug(label string) string {
+	label = strings.ToLower(strings.TrimSpace(label))
+	label = strings.ReplaceAll(label, "&", " and ")
+	replacer := strings.NewReplacer(
+		"port of ", "",
+		"airport of ", "",
+		"international airport", " airport",
+		"international port", " port",
+		"oil terminal", " terminal",
+	)
+	label = replacer.Replace(label)
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return ""
+	}
+	if strings.Contains(label, " port") && !strings.HasSuffix(label, "port") {
+		label = strings.ReplaceAll(label, " port", "-port")
+	}
+	if strings.Contains(label, " airport") && !strings.HasSuffix(label, "airport") {
+		label = strings.ReplaceAll(label, " airport", "-airport")
+	}
+	if strings.Contains(label, " terminal") && !strings.HasSuffix(label, "terminal") {
+		label = strings.ReplaceAll(label, " terminal", "-terminal")
+	}
+	return normalizeCandidateLabel(label)
+}
+
+func inferSignalLandingConditionType(claim *horizonmodels.SignalImpactClaim) string {
+	if claim == nil {
+		return ""
+	}
+	text := strings.ToLower(strings.Join([]string{
+		strings.TrimSpace(claim.Axis),
+		strings.TrimSpace(claim.Mechanism),
+		strings.Join(claim.ClaimLabels, " "),
+		strings.Join(claim.SourceTextSpans, " "),
+	}, " "))
+	switch {
+	case containsAnySignalToken(text, "missile", "drone", "strike", "attack", "retaliat", "interception", "military", "rocket", "airstrike", "shelling"):
+		return "military_conflict"
+	case containsAnySignalToken(text, "outage", "shutdown", "disruption", "closure", "blocked", "blockade", "sabotage", "damage"):
+		return "infrastructure_disruption"
+	default:
+		if claim.ZoneEligibility == horizonmodels.SignalZoneEligibilityRequired {
+			return "military_conflict"
+		}
+		return "infrastructure_disruption"
+	}
+}
+
+func containsAnySignalToken(text string, tokens ...string) bool {
+	for _, token := range tokens {
+		if strings.Contains(text, strings.ToLower(strings.TrimSpace(token))) {
+			return true
+		}
+	}
+	return false
+}
+
+func affectedZoneDisplayLabel(label, conditionType string) string {
+	label = strings.TrimSpace(label)
+	switch conditionType {
+	case "military_conflict":
+		return firstNonEmpty(label+" (armed tension)", label)
+	case "infrastructure_disruption":
+		return firstNonEmpty(label+" (disruption zone)", label)
+	default:
+		return label
+	}
+}
+
+func affectedZoneDescription(label, conditionType string) string {
+	label = strings.TrimSpace(label)
+	switch conditionType {
+	case "military_conflict":
+		return firstNonEmpty("Fresh conflict signal projected around "+label+".", "Fresh conflict signal projected around landed anchors.")
+	case "infrastructure_disruption":
+		return firstNonEmpty("Fresh operational disruption signal projected around "+label+".", "Fresh disruption signal projected around landed anchors.")
+	default:
+		return "Fresh signal projected around landed anchors."
+	}
+}
+
+func affectedZoneRadiusKm(geoPrecision string) float64 {
+	switch strings.TrimSpace(geoPrecision) {
+	case "facility":
+		return 12
+	case "city":
+		return 22
+	case "region":
+		return 55
+	case "country":
+		return 180
+	default:
+		return 25
+	}
+}
+
+func affectedZoneLocatedInRef(anchor *horizonmodels.HorizonFragment) string {
+	if anchor == nil {
+		return ""
+	}
+	cp := strings.TrimSpace(anchor.CanonicalPath)
+	if strings.HasPrefix(cp, "/loc/") {
+		parts := strings.Split(strings.Trim(cp, "/"), "/")
+		if len(parts) >= 2 && len(parts[1]) == 2 {
+			return "/loc/" + strings.ToLower(strings.TrimSpace(parts[1]))
+		}
+	}
+	if strings.HasPrefix(cp, "/fac/") {
+		parts := strings.Split(strings.Trim(cp, "/"), "/")
+		if len(parts) >= 2 && len(parts[1]) == 2 {
+			return "/loc/" + strings.ToLower(strings.TrimSpace(parts[1]))
+		}
+	}
+	return ""
+}
+
+func cloneLocation(in *horizonmodels.Location) *horizonmodels.Location {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
+}
+
+func cloneCoordinates(in *horizonmodels.Coordinates) *horizonmodels.Coordinates {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
 }
 
 func (s *Service) resolveRefByVertex(ctx context.Context, query string) string {

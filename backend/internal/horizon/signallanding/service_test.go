@@ -117,3 +117,37 @@ func TestLandEventUsesExistingAffectedZoneWithoutMissingCandidate(t *testing.T) 
 func strptr(v string) *string {
 	return &v
 }
+
+func TestDeriveAffectedZoneIdentityFromLocation(t *testing.T) {
+	frag := &horizonmodels.HorizonFragment{
+		CanonicalPath: "/loc/ae/fujairah/fujairah",
+		Labels:        map[string]string{"en": "Fujairah"},
+	}
+	geo, slug, label, precision := deriveAffectedZoneIdentity(frag)
+	if geo != "ae" || slug != "fujairah" || label != "Fujairah" || precision != "city" {
+		t.Fatalf("unexpected identity geo=%q slug=%q label=%q precision=%q", geo, slug, label, precision)
+	}
+}
+
+func TestDeriveAffectedZoneIdentityFromFacility(t *testing.T) {
+	frag := &horizonmodels.HorizonFragment{
+		CanonicalPath: "/fac/ae/port-of-fujairah",
+		Labels:        map[string]string{"en": "Port of Fujairah"},
+	}
+	geo, slug, _, precision := deriveAffectedZoneIdentity(frag)
+	if geo != "ae" || slug != "fujairah" || precision != "facility" {
+		t.Fatalf("unexpected facility identity geo=%q slug=%q precision=%q", geo, slug, precision)
+	}
+}
+
+func TestInferSignalLandingConditionTypePrefersMilitaryConflict(t *testing.T) {
+	claim := &horizonmodels.SignalImpactClaim{
+		Axis:            "conflict/escalation",
+		Mechanism:       "missile_strike",
+		ClaimLabels:     []string{"Drone attack near Fujairah"},
+		SourceTextSpans: []string{"Missile and drone attack around port infrastructure."},
+	}
+	if got := inferSignalLandingConditionType(claim); got != "military_conflict" {
+		t.Fatalf("expected military_conflict, got %q", got)
+	}
+}
