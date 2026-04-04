@@ -934,8 +934,79 @@ func (s *LensService) RequestInternalKnowledgeWarmup(ctx context.Context, lensID
 	if err != nil || lens == nil {
 		return err
 	}
+	if lensInternalKnowledgeTemperatureReady(lens, lensDesiredWarmupTemperature(reason)) {
+		reason = "refresh:" + strings.TrimSpace(reason)
+	}
 	s.internalKnowledgeWarmup.EnqueueLensWarmup(ctx, strings.TrimSpace(lens.TenantID), strings.TrimSpace(lens.ProjectID), lensID, strings.TrimSpace(reason))
 	return nil
+}
+
+func lensDesiredWarmupTemperature(reason string) string {
+	reason = strings.ToLower(strings.TrimSpace(reason))
+	switch {
+	case strings.Contains(reason, "risk"), strings.Contains(reason, "weak"), strings.Contains(reason, "bottleneck"), strings.Contains(reason, "watch"), strings.Contains(reason, "fragment"):
+		return "hot"
+	case strings.Contains(reason, "supply"), strings.Contains(reason, "route"), strings.Contains(reason, "supplier"):
+		return "warm"
+	default:
+		return "full"
+	}
+}
+
+func lensInternalKnowledgeTemperatureReady(lens *models.Lens, temperature string) bool {
+	if lens == nil || lens.ViewConfig == nil {
+		return false
+	}
+	raw, ok := lens.ViewConfig["internalKnowledge"]
+	if !ok || raw == nil {
+		return false
+	}
+	state, ok := raw.(map[string]interface{})
+	if !ok {
+		return false
+	}
+	temperature = strings.ToLower(strings.TrimSpace(temperature))
+	if temperature == "" {
+		return strings.EqualFold(strings.TrimSpace(getStringFieldFromMap(state, "status")), "ready")
+	}
+	if strings.EqualFold(strings.TrimSpace(getStringFieldFromMap(state, "status")), "ready") {
+		return true
+	}
+	if value := getStringFieldFromMap(state, temperature+"ReadyAt"); value != "" {
+		if _, err := time.Parse(time.RFC3339Nano, value); err == nil {
+			return true
+		}
+	}
+	if rawTemps, ok := state["availableTemperatures"]; ok {
+		switch typed := rawTemps.(type) {
+		case []interface{}:
+			for _, item := range typed {
+				if lensWarmupTemperatureRank(fmt.Sprintf("%v", item)) >= lensWarmupTemperatureRank(temperature) {
+					return true
+				}
+			}
+		case []string:
+			for _, item := range typed {
+				if lensWarmupTemperatureRank(item) >= lensWarmupTemperatureRank(temperature) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func lensWarmupTemperatureRank(temperature string) int {
+	switch strings.ToLower(strings.TrimSpace(temperature)) {
+	case "hot":
+		return 1
+	case "warm":
+		return 2
+	case "full":
+		return 3
+	default:
+		return 0
+	}
 }
 
 // AgentJobsDeleter abstracts agent_jobs deletion for cascade cleanup.

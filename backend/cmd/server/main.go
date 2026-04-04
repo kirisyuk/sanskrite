@@ -640,8 +640,14 @@ func main() {
 		openaiAPIKey := os.Getenv("OPENAI_API_KEY")
 		genaiClient := gen_combined.NewClient(geminiClient, openaiAPIKey)
 
-		// Initialize BigQuery client and AI service
-		bigqueryDatasetID := getEnv("BIGQUERY_DATASET_ID", "nv_horizon_documents")
+		// Initialize BigQuery client and AI service.
+		// If dataset ID is explicitly configured, BigQuery is treated as required.
+		bigqueryDatasetID, bigqueryRequired := os.LookupEnv("BIGQUERY_DATASET_ID")
+		bigqueryDatasetID = strings.TrimSpace(bigqueryDatasetID)
+		if bigqueryDatasetID == "" {
+			bigqueryDatasetID = "nv_horizon_documents"
+			bigqueryRequired = false
+		}
 		if bq, err := gcp.NewBigQueryClient(ctx, projectID, bigqueryDatasetID, opts...); err == nil {
 			bqClient = bq
 			bigqueryAIService = services.NewBigQueryAIService(bqClient, genaiClient, logger)
@@ -657,6 +663,9 @@ func main() {
 			logger.Printf("BigQuery sync enabled for documents, core docs, sources, and ontology artifacts")
 			// Note: BigQuery client will be closed when server shuts down
 		} else {
+			if bigqueryRequired {
+				logger.Fatalf("BigQuery AI service required but unavailable: %v", err)
+			}
 			logger.Printf("BigQuery AI service disabled: %v", err)
 		}
 
@@ -2326,19 +2335,58 @@ func main() {
 						if strings.TrimSpace(reason) == "" {
 							reason = "watch_signal_landing_delta"
 						}
-						lensIDs := map[string]struct{}{}
-						for _, ref := range refs {
-							projection, err := horizonRefScopeProjectionsRepo.Get(ctx, strings.TrimSpace(tenantID), strings.TrimSpace(ref))
-							if err != nil || projection == nil {
-								continue
+						normalizeWarmupRef := func(ref string) []string {
+							ref = strings.TrimSpace(ref)
+							if ref == "" {
+								return nil
 							}
-							for _, lensID := range projection.LensIDs {
-								lensID = strings.TrimSpace(lensID)
-								if lensID != "" {
+							out := []string{ref}
+							if strings.HasPrefix(ref, "/") {
+								return out
+							}
+							if len(ref) == 2 {
+								out = append(out, "/loc/"+strings.ToLower(ref))
+							}
+							return out
+						}
+						lensIDs := map[string]struct{}{}
+						projectionHits := 0
+						scopeFallbackHits := 0
+						for _, ref := range refs {
+							for _, candidateRef := range normalizeWarmupRef(ref) {
+								projections, err := horizonRefScopeProjectionsRepo.ListByRefAnyTenant(ctx, candidateRef, 128)
+								if err == nil {
+									for _, projection := range projections {
+										if projection == nil {
+											continue
+										}
+										for _, lensID := range projection.LensIDs {
+											lensID = strings.TrimSpace(lensID)
+											if lensID != "" {
+												projectionHits++
+												lensIDs[lensID] = struct{}{}
+											}
+										}
+									}
+								}
+								lensesByScope, err := horizonLensesRepo.FindByScopeAnyTenant(ctx, candidateRef, 64)
+								if err != nil {
+									continue
+								}
+								for _, lens := range lensesByScope {
+									if lens == nil {
+										continue
+									}
+									lensID := strings.TrimSpace(lens.ID)
+									if lensID == "" {
+										continue
+									}
+									scopeFallbackHits++
 									lensIDs[lensID] = struct{}{}
 								}
 							}
 						}
+						logger.Printf("impact warmup hook tenant=%s refs=%d matchedLenses=%d projectionHits=%d scopeFallbackHits=%d reason=%s", tenantID, len(refs), len(lensIDs), projectionHits, scopeFallbackHits, reason)
 						for lensID := range lensIDs {
 							if err := lensService.RequestInternalKnowledgeWarmup(ctx, lensID, strings.TrimSpace(reason)); err != nil {
 								logger.Printf("impact warmup enqueue failed lens=%s reason=%s err=%v", lensID, reason, err)
@@ -2881,9 +2929,12 @@ func main() {
 				)
 				internalKnowledgeWarmup := horizoninternalknowledge.NewWarmupService(
 					horizoninternalknowledge.WarmupConfig{
-						ProjectID:     projectID,
-						AnswerBucket:  internalKnowledgeBucket,
-						AnswerStoreID: internalKnowledgeStoreID,
+						ProjectID:          projectID,
+						AnswerBucket:       internalKnowledgeBucket,
+						AnswerStoreID:      internalKnowledgeStoreID,
+						StatusWriteTimeout: 45 * time.Second,
+						ReconcileInterval:  5 * time.Minute,
+						ReconcileLimit:     24,
 					},
 					horizonLensesRepo,
 					internalKnowledgeBuilder,

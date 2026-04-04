@@ -2784,14 +2784,18 @@ func (p *HorizonMonitorPipeline) maybeEnqueueWarmup(ctx context.Context, tenantI
 	}
 	refs = uniqueStrings(refs)
 	if len(refs) == 0 {
+		p.logf("horizon monitor pipeline: impact warmup skipped tenant=%s reason=no_refs", tenantID)
 		return
 	}
 	if strings.TrimSpace(tenantID) == "" {
 		tenantID = "global"
 	}
+	p.logf("horizon monitor pipeline: impact warmup enqueue tenant=%s refs=%d", tenantID, len(refs))
 	if err := p.impactWarmupHook(ctx, strings.TrimSpace(tenantID), refs, "watch_signal_landing_delta"); err != nil {
 		p.logf("horizon monitor pipeline: impact warmup enqueue failed tenant=%s refs=%d err=%v", tenantID, len(refs), err)
+		return
 	}
+	p.logf("horizon monitor pipeline: impact warmup enqueued tenant=%s refs=%d", tenantID, len(refs))
 }
 
 func (p *HorizonMonitorPipeline) upsertNewsClassificationFact(

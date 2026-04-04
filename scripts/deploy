@@ -283,6 +283,7 @@ setup_infrastructure() {
   enable_api cloudtasks.googleapis.com
   enable_api cloudresourcemanager.googleapis.com
   enable_api redis.googleapis.com
+  enable_api servicenetworking.googleapis.com
   enable_api vpcaccess.googleapis.com
   enable_api compute.googleapis.com
   enable_api artifactregistry.googleapis.com
@@ -952,11 +953,41 @@ setup_infrastructure() {
   
   # 3.9 Setup Redis (Memorystore)
   echo -e "${BLUE}[infra] Setting up Redis (Memorystore)...${NC}"
-  local redis_instance="nv-horizon-redis"
+  local redis_instance="${REDIS_INSTANCE_NAME:-nv-horizon-redis-psa}"
   local redis_tier="BASIC"
   local redis_size="1"
   # Use lowercase value expected by gcloud: redis_7_0
   local redis_version="redis_7_0"
+  local redis_network="default"
+  local redis_psa_range="${REDIS_PSA_RANGE_NAME:-google-managed-services-default}"
+  local redis_psa_prefix="${REDIS_PSA_PREFIX_LENGTH:-16}"
+
+  if ! gcloud compute addresses describe "$redis_psa_range" --global --project "$PROJECT_ID" >/dev/null 2>&1; then
+    echo -e "${BLUE}[infra] Reserving PSA range for Redis:${NC} $redis_psa_range"
+    gcloud compute addresses create "$redis_psa_range" \
+      --global \
+      --purpose=VPC_PEERING \
+      --prefix-length="$redis_psa_prefix" \
+      --network="$redis_network" \
+      --project "$PROJECT_ID" \
+      --quiet || {
+        echo -e "${RED}[infra] Failed to reserve PSA range for Redis${NC}"
+        return
+      }
+  fi
+
+  if ! gcloud services vpc-peerings list --network="$redis_network" --project "$PROJECT_ID" 2>/dev/null | grep -q "servicenetworking-googleapis-com"; then
+    echo -e "${BLUE}[infra] Establishing private services access peering for Redis...${NC}"
+    gcloud services vpc-peerings connect \
+      --service=servicenetworking.googleapis.com \
+      --ranges="$redis_psa_range" \
+      --network="$redis_network" \
+      --project="$PROJECT_ID" \
+      >/dev/null || {
+        echo -e "${RED}[infra] Failed to establish private services access peering${NC}"
+        return
+      }
+  fi
   
   # Check if Redis instance already exists
   if gcloud redis instances describe "$redis_instance" --region="$REGION" >/dev/null 2>&1; then
@@ -976,67 +1007,15 @@ setup_infrastructure() {
     # Note: nv-horizon-ws does NOT use Redis, so skip Redis env vars update
   else
     echo -e "${BLUE}[infra] Creating Redis instance (this may take 10-20 minutes)...${NC}"
-    
-    # Ensure VPC network exists (use default if available, or create one)
-    local vpc_network="default"
-    if ! gcloud compute networks describe "$vpc_network" >/dev/null 2>&1; then
-      echo -e "${BLUE}[infra] Creating VPC network: $vpc_network${NC}"
-      gcloud compute networks create "$vpc_network" --subnet-mode=auto --quiet || {
-        echo -e "${YELLOW}[infra] Warning: Failed to create VPC network, using existing${NC}"
-        # Try to find an existing network
-        vpc_network=$(gcloud compute networks list --format='value(name)' --limit=1 2>/dev/null | head -1 || echo "default")
-        echo -e "${BLUE}[infra] Using VPC network: $vpc_network${NC}"
-      }
-    fi
-    
-    # Create Redis instance
-    # Note: Memorystore requires a specific IP range that doesn't conflict with VPC
-    # Try to find an available IP range by checking existing subnets
-    local redis_reserved_range=""
-    # Get all existing subnet ranges
-    local existing_ranges=$(gcloud compute networks subnets list --network="$vpc_network" --format='value(ipCidrRange)' 2>/dev/null || echo "")
-    
-    # Try different IP ranges until we find one that doesn't conflict
-    local candidate_ranges=("10.1.0.0/29" "10.2.0.0/29" "10.3.0.0/29" "10.4.0.0/29" "10.5.0.0/29")
-    redis_reserved_range=""
-    
-    for candidate in "${candidate_ranges[@]}"; do
-      local conflicts=false
-      for existing in $existing_ranges; do
-        # Simple check: if candidate range overlaps with existing (simplified check)
-        # In production, should use proper IP range calculation
-        if [[ -n "$existing" ]]; then
-          # Extract base IP from ranges (simplified - just check if they're different)
-          local candidate_base=$(echo "$candidate" | cut -d'/' -f1)
-          local existing_base=$(echo "$existing" | cut -d'/' -f1)
-          # If they're the same base network, might conflict
-          if [[ "$candidate_base" == "$existing_base" ]]; then
-            conflicts=true
-            break
-          fi
-        fi
-      done
-      if [[ "$conflicts" == false ]]; then
-        redis_reserved_range="$candidate"
-        break
-      fi
-    done
-    
-    # Fallback to first candidate if no non-conflicting range found
-    if [[ -z "$redis_reserved_range" ]]; then
-      redis_reserved_range="${candidate_ranges[0]}"
-      echo -e "${YELLOW}[infra] Warning: Could not verify IP range availability, using: $redis_reserved_range${NC}"
-      echo -e "${YELLOW}[infra] If creation fails due to IP conflict, manually specify a different range${NC}"
-    fi
-    
-    echo -e "${BLUE}[infra] Creating Redis instance with reserved IP range: $redis_reserved_range${NC}"
+    echo -e "${BLUE}[infra] Creating Redis instance with PRIVATE_SERVICE_ACCESS range:${NC} $redis_psa_range"
     if gcloud redis instances create "$redis_instance" \
       --region="$REGION" \
       --tier="$redis_tier" \
       --size="$redis_size" \
-      --network="projects/$PROJECT_ID/global/networks/$vpc_network" \
+      --network="projects/$PROJECT_ID/global/networks/$redis_network" \
       --redis-version="$redis_version" \
-      --reserved-ip-range="$redis_reserved_range" \
+      --connect-mode="private-service-access" \
+      --reserved-ip-range="$redis_psa_range" \
       --quiet; then
       echo -e "${GREEN}[infra] Redis instance created successfully${NC}"
       echo -e "${BLUE}[infra] Waiting for Redis to be ready (this may take a few minutes)...${NC}"
@@ -1720,12 +1699,14 @@ deploy_api() {
   local resolved_entity_extract_mode="${ENTITY_EXTRACT_MODE:-$existing_entity_extract_mode}"
   [[ -z "$resolved_event_gate_mode" ]] && resolved_event_gate_mode="shadow"
   [[ -z "$resolved_entity_extract_mode" ]] && resolved_entity_extract_mode="shadow"
+  local bigquery_dataset_id
+  bigquery_dataset_id=$(echo "${PROJECT_ID}_documents" | tr '-' '_')
 
   local enable_nv_horizon_watchdog="${ENABLE_NV_HORIZON_WATCHDOG:-0}"
   if [[ "${TARGET_NV_HORIZON_WATCHDOG:-0}" -eq 1 ]]; then
     enable_nv_horizon_watchdog="1"
   fi
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://nordicvision.io|https://www.nordicvision.io|https://*.nordicvision.io|https://horizon.nordicvision.io|https://www.horizon.nordicvision.io|https://*.horizon.nordicvision.io|https://${FIREBASE_PROJECT_ID}.web.app|https://${FIREBASE_PROJECT_ID}.firebaseapp.com|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},VERTEX_SEARCH_INTERNAL_KNOWLEDGE_STORE_ID=${VERTEX_SEARCH_INTERNAL_KNOWLEDGE_STORE_ID:-${vertex_search_ds_id}},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,ENABLE_CLOUD_TASKS_RISK=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE=${scout_background_queue},CLOUD_TASKS_SCOUT_BACKGROUND_DELAY=${CLOUD_TASKS_SCOUT_BACKGROUND_DELAY:-15s},CLOUD_TASKS_RISK_QUEUE=${risk_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_NV_HORIZON_WATCHDOG=${enable_nv_horizon_watchdog},PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://horizon.nordicvision.io/subscription/success,PAYPAL_CANCEL_URL=https://horizon.nordicvision.io/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h,GEONAMES_USERNAME=${GEONAMES_USERNAME:-kirisyuk}"
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://nordicvision.io|https://www.nordicvision.io|https://*.nordicvision.io|https://horizon.nordicvision.io|https://www.horizon.nordicvision.io|https://*.horizon.nordicvision.io|https://${FIREBASE_PROJECT_ID}.web.app|https://${FIREBASE_PROJECT_ID}.firebaseapp.com|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,BIGQUERY_DATASET_ID=${bigquery_dataset_id},VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},VERTEX_SEARCH_INTERNAL_KNOWLEDGE_STORE_ID=${VERTEX_SEARCH_INTERNAL_KNOWLEDGE_STORE_ID:-${vertex_search_ds_id}},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,ENABLE_CLOUD_TASKS_RISK=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE=${scout_background_queue},CLOUD_TASKS_SCOUT_BACKGROUND_DELAY=${CLOUD_TASKS_SCOUT_BACKGROUND_DELAY:-15s},CLOUD_TASKS_RISK_QUEUE=${risk_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_NV_HORIZON_WATCHDOG=${enable_nv_horizon_watchdog},PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://horizon.nordicvision.io/subscription/success,PAYPAL_CANCEL_URL=https://horizon.nordicvision.io/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h,GEONAMES_USERNAME=${GEONAMES_USERNAME:-kirisyuk}"
   # Horizon Fragments: dedicated bucket + dedicated Vertex AI Search Data Stores (fragments + edges IDs set above).
   # Store isolation is used instead of filters (filters on structData.* are not supported in our current schema).
   local nv_horizon_fragments_bucket="${NV_HORIZON_FRAGMENTS_BUCKET:-${PROJECT_ID}-nv-horizon-fragments}"
@@ -1766,12 +1747,29 @@ deploy_api() {
   local api_concurrency="${API_CLOUD_RUN_CONCURRENCY:-16}"
   local api_min_instances="${API_CLOUD_RUN_MIN_INSTANCES:-1}"
   local api_max_instances="${API_CLOUD_RUN_MAX_INSTANCES:-6}"
+  local api_vpc_network="${API_VPC_NETWORK:-default}"
+  local api_vpc_subnet="${API_VPC_SUBNET:-nv-horizon-run}"
+  local api_vpc_subnet_range="${API_VPC_SUBNET_RANGE:-10.20.0.0/26}"
+  local -a api_vpc_flags=(--clear-network --clear-vpc-connector)
+
+  if [[ -n "$redis_host" ]]; then
+    if ! gcloud compute networks subnets describe "$api_vpc_subnet" \
+      --region "$REGION" \
+      --project "$PROJECT_ID" >/dev/null 2>&1; then
+      echo -e "${BLUE}[api] Creating direct VPC subnet for Cloud Run:${NC} $api_vpc_subnet (${api_vpc_subnet_range})"
+      gcloud compute networks subnets create "$api_vpc_subnet" \
+        --region "$REGION" \
+        --project "$PROJECT_ID" \
+        --network "$api_vpc_network" \
+        --range "$api_vpc_subnet_range" \
+        --quiet
+    fi
+    api_vpc_flags=(--network="$api_vpc_network" --subnet="$api_vpc_subnet" --vpc-egress=private-ranges-only)
+  fi
 
   echo -e "${BLUE}[api] Runtime profile:${NC} cpu=${api_cpu} memory=${api_memory} concurrency=${api_concurrency} min=${api_min_instances} max=${api_max_instances}"
   
   echo -e "${BLUE}[api] Deploying to Cloud Run from image...${NC}"
-  # Direct VPC egress for Redis Memorystore access (private IP).
-  # --network/--subnet replaces the old --clear-vpc-connector approach.
   gcloud run deploy "$service" \
     --image "$image" \
     --region "$REGION" \
@@ -1785,9 +1783,7 @@ deploy_api() {
     --timeout=3600 \
     --set-env-vars "$env_vars" \
     --set-secrets "$paypal_secrets" \
-    --network=default \
-    --subnet=default \
-    --vpc-egress=private-ranges-only \
+    "${api_vpc_flags[@]}" \
     --project "$PROJECT_ID" \
     --quiet
 

@@ -3,11 +3,13 @@ package gcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	"cloud.google.com/go/bigquery"
 	"google.golang.org/api/option"
+	"google.golang.org/api/googleapi"
 )
 
 // BigQueryClient wraps BigQuery client
@@ -23,11 +25,16 @@ func NewBigQueryClient(ctx context.Context, projectID, datasetID string, opts ..
 	if err != nil {
 		return nil, err
 	}
-	return &BigQueryClient{
+	bq := &BigQueryClient{
 		client:    client,
 		projectID: projectID,
 		datasetID: datasetID,
-	}, nil
+	}
+	if err := bq.ValidateDataset(ctx); err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	return bq, nil
 }
 
 // Close closes the client
@@ -48,6 +55,21 @@ func (b *BigQueryClient) ProjectID() string {
 // DatasetID returns the dataset ID
 func (b *BigQueryClient) DatasetID() string {
 	return b.datasetID
+}
+
+// ValidateDataset ensures the configured dataset exists and is accessible.
+func (b *BigQueryClient) ValidateDataset(ctx context.Context) error {
+	if b == nil || b.client == nil {
+		return fmt.Errorf("bigquery client is not initialized")
+	}
+	_, err := b.client.Dataset(b.datasetID).Metadata(ctx)
+	if err == nil {
+		return nil
+	}
+	if isBigQueryNotFoundError(err) {
+		return fmt.Errorf("bigquery dataset %s.%s not found", b.projectID, b.datasetID)
+	}
+	return fmt.Errorf("bigquery dataset %s.%s is not accessible: %w", b.projectID, b.datasetID, err)
 }
 
 // ExecuteQuery executes SQL query and returns results
@@ -114,6 +136,18 @@ func isAlreadyExistsError(err error) bool {
 	return strings.Contains(errStr, "already exists") ||
 		strings.Contains(errStr, "Already Exists") ||
 		strings.Contains(errStr, "409")
+}
+
+func isBigQueryNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var gerr *googleapi.Error
+	if errors.As(err, &gerr) && gerr.Code == 404 {
+		return true
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "not found") || strings.Contains(errStr, "404")
 }
 
 // InsertRow inserts a single row into a BigQuery table

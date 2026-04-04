@@ -183,6 +183,47 @@ func (r *LensesRepository) Update(ctx context.Context, lens *models.Lens) error 
 	return err
 }
 
+// UpdateInternalKnowledgeState updates only the internalKnowledge view-config payload.
+// This avoids rewriting the entire lens document for warmup status transitions.
+func (r *LensesRepository) UpdateInternalKnowledgeState(ctx context.Context, lensID string, state map[string]any) error {
+	if lensID == "" {
+		return ErrInvalidDocument
+	}
+	if state == nil {
+		state = map[string]any{}
+	}
+	_, err := r.col.Doc(lensID).Update(ctx, []firestore.Update{
+		{Path: "viewConfig.internalKnowledge", Value: state},
+		{Path: "updatedAt", Value: time.Now().UTC()},
+	})
+	return err
+}
+
+// PatchInternalKnowledgeStateFields updates individual fields inside viewConfig.internalKnowledge
+// without replacing the whole payload. This is useful for low-cost queued/running transitions.
+func (r *LensesRepository) PatchInternalKnowledgeStateFields(ctx context.Context, lensID string, fields map[string]any) error {
+	if lensID == "" {
+		return ErrInvalidDocument
+	}
+	updates := make([]firestore.Update, 0, len(fields)+1)
+	for key, value := range fields {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		updates = append(updates, firestore.Update{
+			Path:  "viewConfig.internalKnowledge." + key,
+			Value: value,
+		})
+	}
+	updates = append(updates, firestore.Update{Path: "updatedAt", Value: time.Now().UTC()})
+	if len(updates) == 1 {
+		return nil
+	}
+	_, err := r.col.Doc(lensID).Update(ctx, updates)
+	return err
+}
+
 // Delete удаляет Lens
 func (r *LensesRepository) Delete(ctx context.Context, id string) error {
 	if id == "" {

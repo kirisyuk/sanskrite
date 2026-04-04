@@ -67,10 +67,18 @@ func (r *DocumentsRepository) WithBigQuerySync(bq *gcp.BigQueryClient) *Document
 	return r
 }
 
+func normalizeDocumentTenantSegment(tenantID string) string {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return "global"
+	}
+	return tenantID
+}
+
 // getObjectPath returns the GCS object path for a document
 func (r *DocumentsRepository) getObjectPath(d *models.Document) string {
 	// Format: {tenantId}/{sourceId}/{docId}.txt
-	return fmt.Sprintf("%s/%s/%s.txt", d.TenantID, d.SourceID, d.ID)
+	return fmt.Sprintf("%s/%s/%s.txt", normalizeDocumentTenantSegment(d.TenantID), d.SourceID, d.ID)
 }
 
 // getStoragePath returns the full gs:// path for a document
@@ -99,7 +107,7 @@ func (r *DocumentsRepository) uploadContent(ctx context.Context, d *models.Docum
 		contentType = d.ContentType
 	}
 	metadata := map[string]string{
-		"tenantId":   d.TenantID,
+		"tenantId":   normalizeDocumentTenantSegment(d.TenantID),
 		"sourceId":   d.SourceID,
 		"documentId": d.ID,
 		"title":      d.Title,
