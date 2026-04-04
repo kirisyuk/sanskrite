@@ -35,18 +35,18 @@ type homeWorkspaceEntity struct {
 }
 
 type homeWorkspaceRunResponse struct {
-	RunID             string                `json:"runId"`
-	Query             string                `json:"query"`
-	Answer            string                `json:"answer"`
-	Hits              []map[string]any      `json:"hits,omitempty"`
-	HighlightedPaths  []string              `json:"highlightedPaths,omitempty"`
-	EventCorePaths    []string              `json:"eventCorePaths,omitempty"`
-	HaloPaths         []string              `json:"haloPaths,omitempty"`
-	AffectedZoneRefs  []string              `json:"affectedZoneRefs,omitempty"`
-	Entities          []homeWorkspaceEntity `json:"entities,omitempty"`
-	SuggestedLensName string                `json:"suggestedLensName,omitempty"`
-	SuggestedLensScope []string             `json:"suggestedLensScope,omitempty"`
-	Warnings          []string              `json:"warnings,omitempty"`
+	RunID              string                `json:"runId"`
+	Query              string                `json:"query"`
+	Answer             string                `json:"answer"`
+	Hits               []map[string]any      `json:"hits,omitempty"`
+	HighlightedPaths   []string              `json:"highlightedPaths,omitempty"`
+	EventCorePaths     []string              `json:"eventCorePaths,omitempty"`
+	HaloPaths          []string              `json:"haloPaths,omitempty"`
+	AffectedZoneRefs   []string              `json:"affectedZoneRefs,omitempty"`
+	Entities           []homeWorkspaceEntity `json:"entities,omitempty"`
+	SuggestedLensName  string                `json:"suggestedLensName,omitempty"`
+	SuggestedLensScope []string              `json:"suggestedLensScope,omitempty"`
+	Warnings           []string              `json:"warnings,omitempty"`
 }
 
 func (h *HorizonHandlers) HomeWorkspaceRun(w http.ResponseWriter, r *http.Request) {
@@ -114,11 +114,14 @@ func (h *HorizonHandlers) answerHomeWorkspace(ctx context.Context, tenantID, que
 	analyticalHits, analyticalDocs, analyticalPaths, analyticalWarnings := h.loadHomeWorkspaceAnalyticalEvidence(retrievalCtx, tenantID, query, scopeRefs)
 	warnings = append(warnings, analyticalWarnings...)
 
+	relevanceContextPaths := limitStringsLocal(filterCanonicalPathsLocal(append(append([]string{}, scopeRefs...), append(signalEventCore, analyticalPaths...)...)), 48)
+
 	searchHits, searchWarnings := searchLensChatInternalKnowledge(retrievalCtx, client, lensChatSearchSpec{
 		Question:  query,
 		Limit:     defaultLensChatHitLimit,
 		ScopeRefs: scopeRefs,
 	})
+	searchHits = filterHomeWorkspaceSearchHits(query, searchHits, relevanceContextPaths, defaultLensChatHitLimit)
 	warnings = append(warnings, searchWarnings...)
 	searchDocs, evidenceWarnings := loadLensChatPreparedEvidenceDocs(retrievalCtx, h.gcsClient, searchHits, defaultLensChatEvidenceDocLimit)
 	warnings = append(warnings, evidenceWarnings...)
@@ -180,6 +183,9 @@ func (h *HorizonHandlers) resolveHomeWorkspaceEntities(ctx context.Context, quer
 	seen := map[string]struct{}{}
 	for _, fragment := range fragments {
 		if fragment == nil {
+			continue
+		}
+		if !homeWorkspaceEntityRelevant(query, fragment) {
 			continue
 		}
 		canonicalPath := strings.TrimSpace(fragment.CanonicalPath)
@@ -548,6 +554,109 @@ func homeWorkspaceRankSignalSummaries(query string, summaries []*horizonmodels.S
 		}
 	}
 	return out
+}
+
+func filterHomeWorkspaceSearchHits(query string, hits []lensChatInternalHit, contextPaths []string, limit int) []lensChatInternalHit {
+	if len(hits) == 0 {
+		return nil
+	}
+	queryTokens := normalizedTokenSetLocal(query)
+	contextTokens := normalizedTokenSetLocal(strings.Join(contextPaths, " "))
+	contextPathSet := make(map[string]struct{}, len(contextPaths))
+	for _, path := range contextPaths {
+		path = strings.TrimSpace(path)
+		if path != "" {
+			contextPathSet[path] = struct{}{}
+		}
+	}
+	type scoredHit struct {
+		hit   lensChatInternalHit
+		score int
+	}
+	scored := make([]scoredHit, 0, len(hits))
+	for _, hit := range hits {
+		kind := strings.ToLower(strings.TrimSpace(hit.Kind))
+		if kind == "signal_landing_summary" || kind == "analytical_aggregate" || kind == "analytical_primitive" {
+			scored = append(scored, scoredHit{hit: hit, score: 100})
+			continue
+		}
+		score := 0
+		paths := filterCanonicalPathsLocal(stringSliceAny(hit.StructData["canonicalPaths"]))
+		for _, path := range paths {
+			if _, ok := contextPathSet[path]; ok {
+				score += 4
+				break
+			}
+		}
+		pathTokens := normalizedTokenSetLocal(strings.Join(paths, " "))
+		score += minIntLocal(3, tokenOverlapCountLocal(pathTokens, contextTokens))
+		score += minIntLocal(3, tokenOverlapCountLocal(pathTokens, queryTokens))
+		titleTokens := normalizedTokenSetLocal(strings.TrimSpace(hit.Title))
+		score += minIntLocal(2, tokenOverlapCountLocal(titleTokens, queryTokens))
+		hintsTokens := normalizedTokenSetLocal(strings.Join(stringSliceAny(hit.StructData["questionHints"]), " "))
+		score += minIntLocal(2, tokenOverlapCountLocal(hintsTokens, queryTokens))
+		if strings.Contains(strings.ToLower(strings.TrimSpace(hit.Title)), "fresh signal") {
+			score += 2
+		}
+		if score >= 3 {
+			scored = append(scored, scoredHit{hit: hit, score: score})
+		}
+	}
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].score == scored[j].score {
+			return scored[i].hit.Score > scored[j].hit.Score
+		}
+		return scored[i].score > scored[j].score
+	})
+	out := make([]lensChatInternalHit, 0, minIntLocal(limit, len(scored)))
+	for _, item := range scored {
+		if len(out) >= limit {
+			break
+		}
+		out = append(out, item.hit)
+	}
+	return out
+}
+
+func homeWorkspaceEntityRelevant(query string, fragment *horizonmodels.HorizonFragment) bool {
+	if fragment == nil {
+		return false
+	}
+	canonicalPath := strings.TrimSpace(fragment.CanonicalPath)
+	if canonicalPath == "" {
+		return false
+	}
+	queryTokens := normalizedTokenSetLocal(query)
+	if len(queryTokens) == 0 {
+		return true
+	}
+	candidateTokens := normalizedTokenSetLocal(strings.Join([]string{
+		strings.TrimSpace(buildHomeWorkspaceEntityName(fragment)),
+		canonicalPath,
+		strings.TrimSpace(fragment.Description),
+	}, " "))
+	if tokenOverlapCountLocal(candidateTokens, queryTokens) >= 2 {
+		return true
+	}
+	typ := strings.ToUpper(strings.TrimSpace(string(fragment.Type)))
+	if (typ == "AFFECTED_ZONE" || typ == "FACILITY" || typ == "GEO_REGION" || typ == "PRODUCT" || typ == "ORGANIZATION") &&
+		tokenOverlapCountLocal(candidateTokens, queryTokens) >= 1 {
+		return true
+	}
+	return false
+}
+
+func tokenOverlapCountLocal(a, b map[string]struct{}) int {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	count := 0
+	for token := range a {
+		if _, ok := b[token]; ok {
+			count++
+		}
+	}
+	return count
 }
 
 func buildHomeWorkspaceEntityName(fragment *horizonmodels.HorizonFragment) string {
