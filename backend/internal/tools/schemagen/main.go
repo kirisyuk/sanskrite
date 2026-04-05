@@ -44,7 +44,7 @@ func writeSchema(path string, v any) error {
 }
 
 func main() {
-	outDir := flag.String("out", "../web/src/types/schemas", "output directory for JSON schemas")
+	outDir := flag.String("out", "../../../../web/src/types/schemas", "output directory for JSON schemas")
 	flag.Parse()
 
 	targets := []struct {

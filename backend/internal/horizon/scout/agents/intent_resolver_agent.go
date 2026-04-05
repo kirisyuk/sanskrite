@@ -1310,10 +1310,6 @@ func inferOperationalChainDirection(query string, serviceMode bool) string {
 	}
 }
 
-func inferSupplyChainDirection(query string) string {
-	return inferOperationalChainDirection(query, false)
-}
-
 func synthesizeSupplyChainExecutionPlan(
 	query string,
 	d *DomainResolution,

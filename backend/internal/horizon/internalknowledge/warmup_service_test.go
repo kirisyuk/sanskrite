@@ -1,6 +1,7 @@
 package internalknowledge
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -73,3 +74,41 @@ func TestShouldReconcileLensRejectsColdLensWithoutAssemblyOrWarmState(t *testing
 		t.Fatalf("expected cold lens to stay ineligible, got reason=%s", reason)
 	}
 }
+
+func TestFilterPreparedDocsAtTemperatureReturnsDeltaOnly(t *testing.T) {
+	docs := []PreparedCorpusDoc{
+		{ID: "hot-1", Temperature: PreparedTemperatureHot},
+		{ID: "warm-1", Temperature: PreparedTemperatureWarm},
+		{ID: "full-1", Temperature: PreparedTemperatureFull},
+		{ID: "warm-2", Temperature: PreparedTemperatureWarm},
+	}
+
+	got := filterPreparedDocsAtTemperature(docs, PreparedTemperatureWarm)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 warm docs, got %d", len(got))
+	}
+	if got[0].ID != "warm-1" || got[1].ID != "warm-2" {
+		t.Fatalf("unexpected warm docs order/content: %+v", got)
+	}
+
+	full := filterPreparedDocsAtTemperature(docs, PreparedTemperatureFull)
+	if len(full) != 1 || full[0].ID != "full-1" {
+		t.Fatalf("expected single full doc, got %+v", full)
+	}
+}
+
+func TestShouldDeferImportCompletion(t *testing.T) {
+	if !shouldDeferImportCompletion(context.DeadlineExceeded) {
+		t.Fatal("expected deadline exceeded to be deferrable")
+	}
+	if !shouldDeferImportCompletion(assertErr("vertex import timeout after 45m0s")) {
+		t.Fatal("expected vertex import timeout to be deferrable")
+	}
+	if shouldDeferImportCompletion(assertErr("vertex operation failed: 13 internal")) {
+		t.Fatal("did not expect real vertex failure to be deferrable")
+	}
+}
+
+type assertErr string
+
+func (e assertErr) Error() string { return string(e) }

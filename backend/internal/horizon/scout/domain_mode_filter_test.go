@@ -325,6 +325,13 @@ func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantAdministersAndSubsidi
 	) {
 		t.Fatal("supply-chain persist gate must allow SUBSIDIARY_OF for relevant ownership overlays")
 	}
+	if !IsAllowedSupplyChainRuntimeRelation(
+		"/program/ae/saber",
+		"/gov/ae/ministry-of-industry-and-advanced-technology",
+		models.DependencyTypeAdministers,
+	) {
+		t.Fatal("runtime gate must keep reversible PROGRAM -> GOV ADMINISTERS edges so canonicalization can swap them")
+	}
 	if IsAllowedSupplyChainRuntimeRelation(
 		"/gov/us/department-of-the-navy",
 		"/market/us/defense/naval-systems",
@@ -348,6 +355,13 @@ func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantManagesAndAffects(t *
 		models.DependencyTypeAffects,
 	) {
 		t.Fatal("supply-chain persist gate must allow AFFECTS for org->market overlays")
+	}
+	if !IsAllowedSupplyChainRuntimeRelation(
+		"/program/ae/saber",
+		"/community/global/professional/conformity-assessment-bodies",
+		models.DependencyTypeAffects,
+	) {
+		t.Fatal("supply-chain runtime gate must allow AFFECTS for program->community overlays")
 	}
 	if IsAllowedSupplyChainRuntimeRelation(
 		"/product/finished/consumer/footwear",
@@ -402,10 +416,46 @@ func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantPolicyImpactOverlays(
 			typ:    models.DependencyTypeControlsAccess,
 		},
 		{
+			name:   "in geo scope program to geo",
+			source: "/program/ae/saber",
+			target: "/loc/ae",
+			typ:    models.DependencyTypeInGeoScope,
+		},
+		{
 			name:   "operates via mechanism to mechanism",
 			source: "/mechanism/technological/is-mtt-traceability-system",
 			target: "/mechanism/regulatory/compulsory-data-matrix-marking",
 			typ:    models.DependencyTypeOperatesVia,
+		},
+		{
+			name:   "direct competitor overlay on organizations",
+			source: "/org/de/infineon-technologies",
+			target: "/org/nl/nxp-semiconductors",
+			typ:    models.DependencyTypeCompetesWith,
+		},
+		{
+			name:   "partnership overlay from org to program",
+			source: "/org/be/imec",
+			target: "/program/eu/european-chips-act",
+			typ:    models.DependencyTypePartnersWith,
+		},
+		{
+			name:   "operates via overlay from org to facility",
+			source: "/org/us/wolfspeed",
+			target: "/fac/de/ensdorf-fab",
+			typ:    models.DependencyTypeOperatesVia,
+		},
+		{
+			name:   "membership overlay from org to program",
+			source: "/org/eu/chips-joint-undertaking",
+			target: "/program/eu/european-chips-act",
+			typ:    models.DependencyTypeMemberOf,
+		},
+		{
+			name:   "investment overlay from gov to org",
+			source: "/gov/eu/european-commission",
+			target: "/org/de/infineon",
+			typ:    models.DependencyTypeInvestsIn,
 		},
 	}
 
@@ -537,14 +587,18 @@ func TestFilterDomainRelations_CommunitySpecificEdgesAllowedInInfluenceModes(t *
 }
 
 func TestFilterDiscoveredRelationsByDomainModes_SupplyChainDropsNonContractTypes(t *testing.T) {
-	// Contract isolation: PARTNERS_WITH, COMPETES_WITH, SUBSIDIARY_OF, ASSOCIATED_WITH
-	// must be dropped in supply-chain mode (not in SupplyChainEdgeTypes).
-	// PARTICIPATES_IN is in allowlist (market→org scaffold); SUPPLIES_TO passes; DEPENDS_ON excluded.
+	// Contract isolation: ASSOCIATED_WITH must be dropped in supply-chain mode.
+	// COMPETES_WITH, PARTNERS_WITH, OPERATES_VIA, MEMBER_OF, and INVESTS_IN are allowed as
+	// supply-chain overlays. SUBSIDIARY_OF may survive here via canonicalized ownership semantics,
+	// while PARTICIPATES_IN is in allowlist (market→org scaffold); SUPPLIES_TO passes; DEPENDS_ON excluded.
 	in := []agents.DiscoveredRelation{
 		{RelationType: "SUPPLIES_TO", TargetCanonicalPath: "/org/us/acme"},
-		{RelationType: "PARTNERS_WITH", TargetCanonicalPath: "/org/eu/partner"},
-		{RelationType: "COMPETES_WITH", TargetCanonicalPath: "/org/us/competitor"},
-		{RelationType: "SUBSIDIARY_OF", TargetCanonicalPath: "/org/us/parent"},
+		{RelationType: "PARTNERS_WITH", SourceCanonicalPath: "/org/tw/tsmc", TargetCanonicalPath: "/org/eu/partner"},
+		{RelationType: "COMPETES_WITH", SourceCanonicalPath: "/org/de/infineon-technologies", TargetCanonicalPath: "/org/us/competitor"},
+		{RelationType: "OPERATES_VIA", SourceCanonicalPath: "/org/us/wolfspeed", TargetCanonicalPath: "/fac/de/ops-site"},
+		{RelationType: "MEMBER_OF", SourceCanonicalPath: "/org/eu/chips-joint-undertaking", TargetCanonicalPath: "/program/eu/european-chips-act"},
+		{RelationType: "INVESTS_IN", SourceCanonicalPath: "/gov/eu/european-commission", TargetCanonicalPath: "/org/de/infineon"},
+		{RelationType: "SUBSIDIARY_OF", SourceCanonicalPath: "/org/us/sub", TargetCanonicalPath: "/org/us/parent"},
 		{RelationType: "ASSOCIATED_WITH", TargetCanonicalPath: "/org/uk/affiliate"},
 		{RelationType: "PARTICIPATES_IN", TargetCanonicalPath: "/market/global/electronics"},
 		{RelationType: "DEPENDS_ON", TargetCanonicalPath: "/org/cn/supplier"},
@@ -554,13 +608,13 @@ func TestFilterDiscoveredRelationsByDomainModes_SupplyChainDropsNonContractTypes
 	for _, r := range out {
 		types[r.RelationType] = true
 	}
-	if !types["SUPPLIES_TO"] || !types["PARTICIPATES_IN"] {
-		t.Fatalf("expected SUPPLIES_TO and PARTICIPATES_IN to pass, got %v", types)
+	if !types["SUPPLIES_TO"] || !types["PARTICIPATES_IN"] || !types["COMPETES_WITH"] || !types["PARTNERS_WITH"] || !types["OPERATES_VIA"] || !types["MEMBER_OF"] || !types["INVESTS_IN"] {
+		t.Fatalf("expected SUPPLIES_TO, PARTICIPATES_IN, COMPETES_WITH, PARTNERS_WITH, OPERATES_VIA, MEMBER_OF, and INVESTS_IN to pass, got %v", types)
 	}
 	if types["DEPENDS_ON"] {
 		t.Fatalf("DEPENDS_ON must be excluded in supply_chain; got %v", types)
 	}
-	for _, bad := range []string{"PARTNERS_WITH", "COMPETES_WITH", "SUBSIDIARY_OF", "ASSOCIATED_WITH"} {
+	for _, bad := range []string{"ASSOCIATED_WITH"} {
 		if types[bad] {
 			t.Fatalf("supply-chain filter must drop %s (out-of-contract)", bad)
 		}
@@ -573,7 +627,7 @@ func TestIsSupplyChainEdgeType(t *testing.T) {
 			t.Fatalf("IsSupplyChainEdgeType(%q) must be true", allowed)
 		}
 	}
-	for _, bad := range []string{"PARTNERS_WITH", "COMPETES_WITH", "SUBSIDIARY_OF", "ASSOCIATED_WITH", "INVESTS_IN", "DEPENDS_ON"} {
+	for _, bad := range []string{"SUBSIDIARY_OF", "ASSOCIATED_WITH", "DEPENDS_ON"} {
 		if IsSupplyChainEdgeType(bad) {
 			t.Fatalf("IsSupplyChainEdgeType(%q) must be false (out-of-contract)", bad)
 		}

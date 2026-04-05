@@ -121,13 +121,14 @@ func EntityActorTypesForDomainMode(mode string) string {
 }
 
 // SupplyChainEdgeTypes is the allowlist for supply_chain mode (filtering, gap analyzer).
-// Operational edges only; DEPENDS_ON excluded to avoid generic dependency proliferation.
+// Keep operational path-carried edges plus a small set of safe overlays useful for
+// supply-chain context. DEPENDS_ON stays excluded to avoid generic dependency proliferation.
 // CONSUMES removed: use SUPPLIES_TO(product→org) for input flow. Single source of truth.
 // Must stay in sync with edgesemantics.domainModeAllowlists[supply_chain].
 var SupplyChainEdgeTypes = []string{
 	"PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "USED_IN", "EXTRACTS_FROM",
 	"LOCATED_IN", "OPERATES_IN", "PARTICIPATES_IN",
-	"HAS_MARKET_SEGMENT",
+	"HAS_MARKET_SEGMENT", "COMPETES_WITH", "PARTNERS_WITH", "OPERATES_VIA", "MEMBER_OF", "INVESTS_IN",
 }
 
 // ServiceChainEdgeTypes is the allowlist for service_chain mode.

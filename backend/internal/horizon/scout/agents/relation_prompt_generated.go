@@ -555,7 +555,7 @@ func generatedIntentDecomposerRelationRulesBlock(domainModes []string) string {
 		b.WriteString(fmt.Sprintf("Allowed relationType values ONLY: %s.\n", strings.Join(names, ", ")))
 	}
 	if isSupplyChain {
-		b.WriteString("Do NOT use DEPENDS_ON, PARTNERS_WITH, COMPETES_WITH, SUBSIDIARY_OF, OWNS, INVESTS_IN, or other non-supply-chain types.\n")
+		b.WriteString("Do NOT use DEPENDS_ON, SUBSIDIARY_OF, OWNS, or other non-supply-chain types. COMPETES_WITH is allowed only for explicit direct competitor relationships. PARTNERS_WITH and OPERATES_VIA are allowed only for explicit operational/ecosystem overlays. INVESTS_IN and MEMBER_OF are allowed only for explicit institutional/structural overlays.\n")
 	} else {
 		b.WriteString("If TARGET is not the semantic source for OWNS / INVESTS_IN / ASSURES / CONTROLS / GATEKEEPS_DECISION / USES_MECHANISM / APPLIES_TO / CONTROLS_ACCESS / IMPOSES_CONDITION, omit the relation in decomposition.\n")
 	}

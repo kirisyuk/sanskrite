@@ -73,7 +73,7 @@ create_secret "DEEPSEEK_API_KEY_TEST" "sk-2d113e3584894dcc8ee697aa8879449f" "Dee
 create_secret "GROK_API_KEY" "xai-hWLAtWFqCn2j8YSynauB2i7P3NLxkwZmeyLKNltXVjzmprmXYIZsAW46fsO45e3300Lszbx7LO1Eh4W3" "Grok API key"
 create_secret "GROK_API_KEY_TEST" "xai-cHuyaGAjicYfxVWsm3kzpPcs0EA798HHFyoqb608yjVFUNGcf7dy1IVmwiEfR08hlfwdetsdl8P5UVuq" "Grok API key for testing"
 create_secret "OPENAI_API_KEY_TEST" "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" "OpenAI API key for testing"
-create_secret "VERTEX_API_KEY" "AIzaSyBRzAlY4OnhdsUUqMkA_ri26RyYIs_rRJo" "Vertex AI API key"
+create_secret "VERTEX_API_KEY" "AIzaSyC9rpenI1hb9ibFEqMDWHcx1a2rdxj7sn0" "Vertex/Gemini compatibility API key"
 create_secret "VERTEX_API_KEY_TEST" "AIzaSyCUYOjd9G0Wr82i1uPQ-WO2IFzkb4EkA1U" "Vertex AI API key for testing"
 
 # API Keys (lowercase versions)
@@ -81,8 +81,8 @@ create_secret "anthropic_api_key" "sk-ant-api03-C0iJLdnd3KN_pmyI4PagsKIOwZMMPBZy
 create_secret "deepseek_api_key" "sk-1f5a3c35e08242318626291d6f159407" "DeepSeek API key (lowercase)"
 create_secret "grok_api_key" "xai-m5h9agnP6VoZ5OHyNfieWVzTt7OoBg74VpelcYt7EILkwxMSVfGrKFnS9piGqQeIo4iXLfgP4OgSgisj" "Grok API key (lowercase)"
 create_secret "openai_api_key" "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" "OpenAI API key (lowercase)"
-create_secret "vertex_api_key" "AIzaSyD5fKVHm_AGY6bms4XermWRRxX6d6TDsAc" "Vertex AI API key (lowercase)"
-create_secret "gemini_api_key" "AIzaSyC9a8Pz64PzbFZyB17JhJ6P2z_rEVXse_Y" "Gemini API key"
+create_secret "vertex_api_key" "AIzaSyC9rpenI1hb9ibFEqMDWHcx1a2rdxj7sn0" "Vertex/Gemini compatibility API key (lowercase)"
+create_secret "gemini_api_key" "AIzaSyC9rpenI1hb9ibFEqMDWHcx1a2rdxj7sn0" "Gemini API key"
 create_secret "tavily_api_key" "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" "Tavily API key"
 
 # Telegram secrets
@@ -98,7 +98,8 @@ create_secret "paypal_webhook_id" "8UY853924Y084640C" "PayPal Webhook ID"
 
 # Google services
 create_secret "google-custom-search-api-key" "AIzaSyDCI4Bem_dS_wVhUI1XhhoOdfC892-sZMY" "Google Custom Search API Key"
-create_secret "google_maps_api_key" "AIzaSyCbLEwy4KGKxyummUfrwoIbC9aNdpD7vuQ" "Google Maps Geocoding API Key"
+# Keep the geocoding key out of this script so reruns do not overwrite a rotated secret.
+create_secret "google_maps_api_key" "${GOOGLE_MAPS_API_KEY:-}" "Google Maps Geocoding API Key"
 # Note: google-custom-search-cx secret doesn't exist in GCP, skipping
 
 # Other services

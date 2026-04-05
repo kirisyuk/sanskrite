@@ -1,6 +1,6 @@
 {
   "hosting": {
-    "site": "nv-horizon-test",
+    "site": "horde-horizon-test-20260405",
     "public": "dist",
     "ignore": [
       "firebase.json",

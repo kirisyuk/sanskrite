@@ -2,6 +2,7 @@
   "hosting": {
     "target": "marketing",
     "public": ".",
+    "cleanUrls": true,
     "ignore": [
       "firebase.json",
       ".firebaserc",

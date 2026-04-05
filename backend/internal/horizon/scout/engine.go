@@ -581,16 +581,6 @@ func missingInfoLimitForFragment(fragment *models.HorizonFragment) int {
 	return defaultMissingInfoLimit
 }
 
-func metricObservedAt(mv models.MetricValue) time.Time {
-	if !mv.ObservedAt.IsZero() {
-		return mv.ObservedAt
-	}
-	if mv.Provenance.ObservedAt != nil && !mv.Provenance.ObservedAt.IsZero() {
-		return *mv.Provenance.ObservedAt
-	}
-	return time.Time{}
-}
-
 // canonicalPathsEquivalentForRetarget compares canonical paths with domain-specific normalization.
 // For /domain/v1 paths, facet order is normalized before comparison to avoid retarget ping-pong.
 func canonicalPathsEquivalentForRetarget(a string, b string) bool {
@@ -1048,11 +1038,6 @@ func filterDiscoveredRelationsByDomainModesWithDomainAnchorAndLog(sourceFragment
 	return out, dropped
 }
 
-func allowSupplyChainOwnershipOrControlByPath(sourcePath, targetPath string) bool {
-	return allowSupplyChainOverlayByPath(sourcePath, targetPath, models.DependencyTypeOwns) ||
-		allowSupplyChainOverlayByPath(sourcePath, targetPath, models.DependencyTypeControls)
-}
-
 func allowSupplyChainOverlayRelationByPath(defaultSourcePath, explicitSourcePath, targetPath string, relationType models.DependencyType) bool {
 	srcPath := strings.TrimSpace(explicitSourcePath)
 	if srcPath == "" {
@@ -1075,7 +1060,44 @@ func allowSupplyChainOverlayByPath(sourcePath, targetPath string, relationType m
 		strings.HasPrefix(sourcePath, "/community/") ||
 		strings.HasPrefix(sourcePath, "/mechanism/")
 	targetOperatesViaChannel := strings.HasPrefix(targetPath, "/media/") ||
-		strings.HasPrefix(targetPath, "/mechanism/")
+		strings.HasPrefix(targetPath, "/mechanism/") ||
+		strings.HasPrefix(targetPath, "/fac/") ||
+		strings.HasPrefix(targetPath, "/program/")
+	sourceIsCompetitiveActor := strings.HasPrefix(sourcePath, "/org/") ||
+		strings.HasPrefix(sourcePath, "/fac/") ||
+		strings.HasPrefix(sourcePath, "/community/") ||
+		strings.HasPrefix(sourcePath, "/program/") ||
+		strings.HasPrefix(sourcePath, "/market/")
+	targetIsCompetitiveActor := strings.HasPrefix(targetPath, "/org/") ||
+		strings.HasPrefix(targetPath, "/fac/") ||
+		strings.HasPrefix(targetPath, "/community/") ||
+		strings.HasPrefix(targetPath, "/program/") ||
+		strings.HasPrefix(targetPath, "/market/")
+	sourceIsPartnerActor := strings.HasPrefix(sourcePath, "/org/") ||
+		strings.HasPrefix(sourcePath, "/gov/") ||
+		strings.HasPrefix(sourcePath, "/fac/") ||
+		strings.HasPrefix(sourcePath, "/community/") ||
+		strings.HasPrefix(sourcePath, "/program/")
+	targetIsPartnerActor := strings.HasPrefix(targetPath, "/org/") ||
+		strings.HasPrefix(targetPath, "/gov/") ||
+		strings.HasPrefix(targetPath, "/fac/") ||
+		strings.HasPrefix(targetPath, "/community/") ||
+		strings.HasPrefix(targetPath, "/program/")
+	sourceIsMemberActor := strings.HasPrefix(sourcePath, "/org/") ||
+		strings.HasPrefix(sourcePath, "/fac/") ||
+		strings.HasPrefix(sourcePath, "/person/") ||
+		strings.HasPrefix(sourcePath, "/community/") ||
+		strings.HasPrefix(sourcePath, "/program/")
+	targetIsMembershipContainer := strings.HasPrefix(targetPath, "/community/") ||
+		strings.HasPrefix(targetPath, "/program/") ||
+		strings.HasPrefix(targetPath, "/org/")
+	sourceIsInvestor := strings.HasPrefix(sourcePath, "/org/") ||
+		strings.HasPrefix(sourcePath, "/gov/") ||
+		strings.HasPrefix(sourcePath, "/program/") ||
+		strings.HasPrefix(sourcePath, "/community/")
+	targetIsInvestable := strings.HasPrefix(targetPath, "/org/") ||
+		strings.HasPrefix(targetPath, "/fac/") ||
+		strings.HasPrefix(targetPath, "/program/")
 	sourceIsInfluence := sourceIsController ||
 		strings.HasPrefix(sourcePath, "/person/") ||
 		strings.HasPrefix(sourcePath, "/loc/") ||
@@ -1111,6 +1133,15 @@ func allowSupplyChainOverlayByPath(sourcePath, targetPath string, relationType m
 		strings.HasPrefix(targetPath, "/market/") ||
 		strings.HasPrefix(targetPath, "/program/") ||
 		strings.HasPrefix(targetPath, "/community/")
+	sourceIsGeoScopeOwner := strings.HasPrefix(sourcePath, "/decision/") ||
+		strings.HasPrefix(sourcePath, "/mechanism/") ||
+		sourceIsController ||
+		strings.HasPrefix(sourcePath, "/program/") ||
+		strings.HasPrefix(sourcePath, "/market/")
+	targetIsGeoScope := strings.HasPrefix(targetPath, "/loc/") ||
+		strings.HasPrefix(targetPath, "/geo/") ||
+		strings.HasPrefix(targetPath, "/region/") ||
+		strings.HasPrefix(targetPath, "/zone/")
 	sourceIsImpact := sourceIsController ||
 		strings.HasPrefix(sourcePath, "/program/") ||
 		strings.HasPrefix(sourcePath, "/decision/") ||
@@ -1123,6 +1154,7 @@ func allowSupplyChainOverlayByPath(sourcePath, targetPath string, relationType m
 		strings.HasPrefix(targetPath, "/market/") ||
 		strings.HasPrefix(targetPath, "/program/") ||
 		strings.HasPrefix(targetPath, "/product/") ||
+		strings.HasPrefix(targetPath, "/community/") ||
 		strings.HasPrefix(targetPath, "/loc/") ||
 		strings.HasPrefix(targetPath, "/geo/") ||
 		strings.HasPrefix(targetPath, "/region/")
@@ -1131,8 +1163,16 @@ func allowSupplyChainOverlayByPath(sourcePath, targetPath string, relationType m
 		return sourceIsController && targetIsOperational
 	case models.DependencyTypeManages:
 		return sourceIsController && targetIsManaged
+	case models.DependencyTypeCompetesWith:
+		return sourceIsCompetitiveActor && targetIsCompetitiveActor
+	case models.DependencyTypePartnersWith:
+		return sourceIsPartnerActor && targetIsPartnerActor
 	case models.DependencyTypeOperatesVia:
 		return sourceOperatesViaChannel && targetOperatesViaChannel
+	case models.DependencyTypeMemberOf:
+		return sourceIsMemberActor && targetIsMembershipContainer
+	case models.DependencyTypeInvestsIn:
+		return sourceIsInvestor && targetIsInvestable
 	case models.DependencyTypeInfluences:
 		return sourceIsInfluence && targetIsInfluence
 	case models.DependencyTypeGatekeepsDecision:
@@ -1145,6 +1185,8 @@ func allowSupplyChainOverlayByPath(sourcePath, targetPath string, relationType m
 		return sourceUsesMechanism && targetIsPolicyEntity
 	case models.DependencyTypeImposesCondition:
 		return sourceIsConditionImposer && targetIsPolicyEntity
+	case models.DependencyTypeInGeoScope:
+		return sourceIsGeoScopeOwner && targetIsGeoScope
 	case models.DependencyTypeAdministers:
 		targetIsAdministered := targetIsOperational || strings.HasPrefix(targetPath, "/program/") || strings.HasPrefix(targetPath, "/gov/")
 		return sourceIsController && targetIsAdministered
@@ -2172,67 +2214,67 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 
 // ScoutEngine основной движок Scout для сбора и верификации данных
 type ScoutEngine struct {
-	planner                  *ScoutPlanner
-	executor                 *SourceExecutor
-	scoutAgent               *agents.ScoutAgent
-	criticAgent              *agents.CriticAgent
-	resolverAgent            *agents.ResolverAgent
-	researchAgent            *agents.ResearchAgent // New
-	frameBuilder             *FrameBuilder
-	workflow                 *ScoutWorkflow
-	fragmentsRepo            *repo.HorizonFragmentsRepository
-	framesRepo               *repo.FramesRepository
-	edgesRepo                *repo.DependencyEdgesRepository
-	scoutingJobsRepo         *repo.ScoutingJobsRepository
-	workingProductScopesRepo *repo.WorkingProductScopesRepository
-	capabilityProfilesRepo   *repo.CapabilityProfilesRepository
-	capabilityObsRepo        *repo.CapabilityObservationsRepository
-	supplyLinkObsRepo        *repo.SupplyLinkObservationsRepository
-	routeObsRepo             *repo.RouteObservationsRepository
-	derivedRiskProfilesRepo  *repo.DerivedRiskProfilesRepository
-	analyticalPrimitivesRepo *repo.AnalyticalPrimitivesRepository
-	analyticalAggregatesRepo *repo.AnalyticalAggregatesRepository
-	refScopeProjectionsRepo  *repo.RefScopeProjectionsRepository
+	planner                   *ScoutPlanner
+	executor                  *SourceExecutor
+	scoutAgent                *agents.ScoutAgent
+	criticAgent               *agents.CriticAgent
+	resolverAgent             *agents.ResolverAgent
+	researchAgent             *agents.ResearchAgent // New
+	frameBuilder              *FrameBuilder
+	workflow                  *ScoutWorkflow
+	fragmentsRepo             *repo.HorizonFragmentsRepository
+	framesRepo                *repo.FramesRepository
+	edgesRepo                 *repo.DependencyEdgesRepository
+	scoutingJobsRepo          *repo.ScoutingJobsRepository
+	workingProductScopesRepo  *repo.WorkingProductScopesRepository
+	capabilityProfilesRepo    *repo.CapabilityProfilesRepository
+	capabilityObsRepo         *repo.CapabilityObservationsRepository
+	supplyLinkObsRepo         *repo.SupplyLinkObservationsRepository
+	routeObsRepo              *repo.RouteObservationsRepository
+	derivedRiskProfilesRepo   *repo.DerivedRiskProfilesRepository
+	analyticalPrimitivesRepo  *repo.AnalyticalPrimitivesRepository
+	analyticalAggregatesRepo  *repo.AnalyticalAggregatesRepository
+	refScopeProjectionsRepo   *repo.RefScopeProjectionsRepository
 	pathFamilyProjectionsRepo *repo.PathFamilyProjectionsRepository
-	compiledWatchRepo        *repo.CompiledWatchSubjectsRepository
-	watchSubjectsRepo        *repo.WatchSubjectsRepository
-	cascadeVisitedRepo       *repo.CascadeVisitedRepository
-	cascadeEntityRegistry    *repo.CascadeEntityRegistryRepository
-	lensesRepo               *repo.LensesRepository // Optional: for updating lens ViewConfig on assembly completion
-	exposurePathsRepo        *repo.ExposurePathsRepository
-	realtime                 *realtime.Publisher
-	taxonomyClassifier       *TaxonomyClassifier
-	aiExecutor               *ai.AITaskExecutor
-	wikidataClient           coreontology.WikidataClientInterface  // Optional: shared for enrichment/dedup (no search by default)
-	geonamesClient           coreontology.GeoNamesClientInterface  // Optional: deterministic geo normalization/enrichment
-	geocodingClient          coreontology.GeocodingClientInterface // Optional: address-to-coordinates for org/facility/gov
-	openCorporatesClient     henrich.OpenCorporatesClientInterface // Optional: org enrichment with registry IDs
-	spendLedger              *repo.HorizonSpendLedger
-	budgetPolicy             BudgetPolicy
-	propagationTrigger       func(ctx context.Context, fragmentID string) error
-	signalPropagationEngine  *propagation.PropagationEngine
-	signalProfileLookup      *propagation.ProfileLookup
-	signalSynthesizer        *signals.Synthesizer              // Optional: for signal synthesis from facts
-	factsRepo                *corerepo.OntologyFactsRepository // Optional: for saving synthesized signals
-	factEmitter              *coreontology.FactEmitter         // Optional: unified fact emission (write + feed)
-	geoHierarchyBuilder      *GeoHierarchyBuilder              // Auto-creates geo hierarchy when cities are created
-	orgDeduplicator          *OrgDeduplicator                  // Deduplicates organizations by Wikidata/shortName
-	personDeduplicator       *PersonDeduplicator               // Deduplicates persons by name/phonetic match
-	preCreateValidator       *PreCreateValidator               // Validates fragments before creation
-	contractNormalizer       *ContractNormalizer               // Applies persist contract before materialization
-	orgHierarchyBuilder      *OrgHierarchyBuilder              // Auto-creates org parent hierarchy
-	marketHierarchyBuilder   *MarketHierarchyBuilder           // Auto-creates market hierarchy (segment-first when possible)
-	marketGeoHierarchy       *MarketGeoHierarchyBuilder        // Auto-creates market geo parent (regional -> global)
-	govHierarchyBuilder      *GovHierarchyBuilder              // Best-effort gov type inference + admin hierarchy helpers
-	productDeduplicator      *ProductDeduplicator              // Deduplicates products by Wikidata/CAS/formula
-	productHierarchyBuilder  *ProductHierarchyBuilder          // Auto-creates product value chain hierarchy
-	validationPolicy         *policy.PolicyExecutor            // Optional: unified validation policy for edges
-	canonizationPolicy       *policy.PolicyExecutor            // Optional: unified canonization policy for paths/types
-	canonicalPathResolver    *CanonicalPathResolver            // Unified canonicalization and deduplication service
-	missingInfoStatusRepo    *repo.MissingInfoStatusRepository // Tracks missingInfo attempts to prevent infinite loops
-	groundingResolver        *GroundingEvidenceResolver        // Resolves Vertex AI grounding evidence → real fragments from DB
-	telemetryRepo            *repo.HorizonTelemetryRepository  // Optional: grounding/risk counters
-	jobTelemetryRepo         *repo.JobTelemetryRepository      // Optional: per-job telemetry persistence
+	compiledWatchRepo         *repo.CompiledWatchSubjectsRepository
+	watchSubjectsRepo         *repo.WatchSubjectsRepository
+	cascadeVisitedRepo        *repo.CascadeVisitedRepository
+	cascadeEntityRegistry     *repo.CascadeEntityRegistryRepository
+	lensesRepo                *repo.LensesRepository // Optional: for updating lens ViewConfig on assembly completion
+	exposurePathsRepo         *repo.ExposurePathsRepository
+	realtime                  *realtime.Publisher
+	taxonomyClassifier        *TaxonomyClassifier
+	aiExecutor                *ai.AITaskExecutor
+	wikidataClient            coreontology.WikidataClientInterface  // Optional: shared for enrichment/dedup (no search by default)
+	geonamesClient            coreontology.GeoNamesClientInterface  // Optional: deterministic geo normalization/enrichment
+	geocodingClient           coreontology.GeocodingClientInterface // Optional: address-to-coordinates for org/facility/gov
+	openCorporatesClient      henrich.OpenCorporatesClientInterface // Optional: org enrichment with registry IDs
+	spendLedger               *repo.HorizonSpendLedger
+	budgetPolicy              BudgetPolicy
+	propagationTrigger        func(ctx context.Context, fragmentID string) error
+	signalPropagationEngine   *propagation.PropagationEngine
+	signalProfileLookup       *propagation.ProfileLookup
+	signalSynthesizer         *signals.Synthesizer              // Optional: for signal synthesis from facts
+	factsRepo                 *corerepo.OntologyFactsRepository // Optional: for saving synthesized signals
+	factEmitter               *coreontology.FactEmitter         // Optional: unified fact emission (write + feed)
+	geoHierarchyBuilder       *GeoHierarchyBuilder              // Auto-creates geo hierarchy when cities are created
+	orgDeduplicator           *OrgDeduplicator                  // Deduplicates organizations by Wikidata/shortName
+	personDeduplicator        *PersonDeduplicator               // Deduplicates persons by name/phonetic match
+	preCreateValidator        *PreCreateValidator               // Validates fragments before creation
+	contractNormalizer        *ContractNormalizer               // Applies persist contract before materialization
+	orgHierarchyBuilder       *OrgHierarchyBuilder              // Auto-creates org parent hierarchy
+	marketHierarchyBuilder    *MarketHierarchyBuilder           // Auto-creates market hierarchy (segment-first when possible)
+	marketGeoHierarchy        *MarketGeoHierarchyBuilder        // Auto-creates market geo parent (regional -> global)
+	govHierarchyBuilder       *GovHierarchyBuilder              // Best-effort gov type inference + admin hierarchy helpers
+	productDeduplicator       *ProductDeduplicator              // Deduplicates products by Wikidata/CAS/formula
+	productHierarchyBuilder   *ProductHierarchyBuilder          // Auto-creates product value chain hierarchy
+	validationPolicy          *policy.PolicyExecutor            // Optional: unified validation policy for edges
+	canonizationPolicy        *policy.PolicyExecutor            // Optional: unified canonization policy for paths/types
+	canonicalPathResolver     *CanonicalPathResolver            // Unified canonicalization and deduplication service
+	missingInfoStatusRepo     *repo.MissingInfoStatusRepository // Tracks missingInfo attempts to prevent infinite loops
+	groundingResolver         *GroundingEvidenceResolver        // Resolves Vertex AI grounding evidence → real fragments from DB
+	telemetryRepo             *repo.HorizonTelemetryRepository  // Optional: grounding/risk counters
+	jobTelemetryRepo          *repo.JobTelemetryRepository      // Optional: per-job telemetry persistence
 
 	// Policy enforcement (final validation step)
 	policyChecker          *policy.PolicyChecker              // Optional: validates job output before completion

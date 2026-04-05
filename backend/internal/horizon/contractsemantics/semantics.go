@@ -98,6 +98,11 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 				models.DependencyTypeParticipatesIn,
 				models.DependencyTypeTradedIn,
 				models.DependencyTypeHasMarketSegment,
+				models.DependencyTypeCompetesWith,
+				models.DependencyTypePartnersWith,
+				models.DependencyTypeOperatesVia,
+				models.DependencyTypeMemberOf,
+				models.DependencyTypeInvestsIn,
 			},
 			ComplementaryModes: []string{
 				taxonomy.DomainModeGovernance,

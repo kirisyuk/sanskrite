@@ -78,10 +78,17 @@ func IsAllowedSupplyChainRuntimeRelation(sourcePath, targetPath string, relation
 	if relationType == "" {
 		return false
 	}
+	switch relationType {
+	case models.DependencyTypeCompetesWith, models.DependencyTypePartnersWith, models.DependencyTypeOperatesVia, models.DependencyTypeMemberOf, models.DependencyTypeInvestsIn:
+		return allowSupplyChainOverlayByPath(sourcePath, targetPath, relationType)
+	}
 	if IsSupplyChainEdgeType(string(relationType)) {
 		return true
 	}
 	if allowSupplyChainOverlayByPath(sourcePath, targetPath, relationType) {
+		return true
+	}
+	if allowReversibleSupplyChainOverlayByPath(sourcePath, targetPath, relationType) {
 		return true
 	}
 	if strings.HasPrefix(sourcePath, "/domain/") && IsDomainScaffoldRelationType(relationType) {
@@ -97,4 +104,22 @@ func IsAllowedSupplyChainRuntimeRelation(sourcePath, targetPath string, relation
 // runtime relation contract, including scaffold exceptions from domain/market anchors.
 func IsAllowedSupplyChainPersistRelation(sourcePath, targetPath string, relationType models.DependencyType) bool {
 	return IsAllowedSupplyChainRuntimeRelation(sourcePath, targetPath, relationType)
+}
+
+func allowReversibleSupplyChainOverlayByPath(sourcePath, targetPath string, relationType models.DependencyType) bool {
+	switch relationType {
+	case models.DependencyTypeAdministers:
+	default:
+		return false
+	}
+	if !allowSupplyChainOverlayByPath(targetPath, sourcePath, relationType) {
+		return false
+	}
+	sourceType := InferFragmentTypeFromCanonicalPath(sourcePath)
+	targetType := InferFragmentTypeFromCanonicalPath(targetPath)
+	if sourceType == "" || targetType == "" {
+		return false
+	}
+	_, shouldReverse, _ := edgesemantics.ValidateEdgeDirection(relationType, sourceType, targetType)
+	return shouldReverse
 }

@@ -171,26 +171,3 @@ func init() {
 		}
 	}
 }
-
-func fragmentIdentifier(fragment *models.HorizonFragment, key string) string {
-	if fragment == nil || fragment.Identifiers == nil {
-		return ""
-	}
-	return strings.TrimSpace(fragment.Identifiers[key])
-}
-
-func fragmentLabel(fragment *models.HorizonFragment, key string) string {
-	if fragment == nil || fragment.Labels == nil {
-		return ""
-	}
-	return strings.TrimSpace(fragment.Labels[key])
-}
-
-func firstNonEmptyFacilityValue(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
-}

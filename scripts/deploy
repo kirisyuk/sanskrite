@@ -350,6 +350,8 @@ setup_infrastructure() {
   for role in \
     roles/datastore.user \
     roles/aiplatform.user \
+    roles/bigquery.jobUser \
+    roles/bigquery.dataEditor \
     roles/secretmanager.secretAccessor \
     roles/pubsub.admin \
     roles/pubsub.publisher \
@@ -366,6 +368,28 @@ setup_infrastructure() {
       --quiet >/dev/null 2>&1 || true
     echo -e "${GREEN}  ✓${NC} $role"
   done
+
+  # 2.1 Newer GCP projects may run Cloud Build under the default compute
+  # service account instead of the legacy Cloud Build service account.
+  # Without explicit storage/artifact/logging roles, `gcloud builds submit`
+  # fails while reading the uploaded source archive from the Cloud Build bucket.
+  local PROJECT_NUMBER=""
+  PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)" 2>/dev/null || true)
+  if [[ -n "$PROJECT_NUMBER" ]]; then
+    local SA_COMPUTE_DEFAULT="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+    echo -e "${BLUE}[infra] Ensuring Cloud Build execution roles for default compute SA...${NC}"
+    for role in \
+      roles/storage.admin \
+      roles/artifactregistry.writer \
+      roles/logging.logWriter; do
+      gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+        --member="serviceAccount:$SA_COMPUTE_DEFAULT" \
+        --role="$role" \
+        --condition=None \
+        --quiet >/dev/null 2>&1 || true
+      echo -e "${GREEN}  ✓${NC} ${role} -> ${SA_COMPUTE_DEFAULT}"
+    done
+  fi
   
   # 3. Ensure secrets exist (create if missing with placeholder)
   echo -e "${BLUE}[infra] Ensuring secrets exist...${NC}"
@@ -502,6 +526,26 @@ setup_infrastructure() {
     --quiet >/dev/null 2>&1 || true
   echo -e "${GREEN}[infra] ✓${NC} Configured Cloud Tasks queue $risk_queue (maxConcurrentDispatches=100)"
 
+  # 3.4.3 Ensure Cloud Tasks queue for Scope Agents exists
+  local scope_agent_queue="${CLOUD_TASKS_SCOPE_AGENT_QUEUE:-nv-horizon-scope-agents}"
+  if gcloud tasks queues describe "$scope_agent_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    echo -e "${GREEN}[infra] Cloud Tasks queue exists:${NC} $scope_agent_queue"
+  else
+    gcloud tasks queues create "$scope_agent_queue" --location="$REGION" --project="$PROJECT_ID" --quiet || true
+    echo -e "${GREEN}[infra] Created Cloud Tasks queue:${NC} $scope_agent_queue"
+  fi
+  gcloud tasks queues update "$scope_agent_queue" \
+    --location="$REGION" \
+    --project="$PROJECT_ID" \
+    --max-attempts=5 \
+    --min-backoff=10s \
+    --max-backoff=600s \
+    --max-retry-duration=3600s \
+    --max-dispatches-per-second="${CLOUD_TASKS_SCOPE_AGENT_MAX_DISPATCHES_PER_SECOND:-20}" \
+    --max-concurrent-dispatches="${CLOUD_TASKS_SCOPE_AGENT_MAX_CONCURRENT_DISPATCHES:-100}" \
+    --quiet >/dev/null 2>&1 || true
+  echo -e "${GREEN}[infra] ✓${NC} Configured Cloud Tasks queue $scope_agent_queue (maxConcurrentDispatches=${CLOUD_TASKS_SCOPE_AGENT_MAX_CONCURRENT_DISPATCHES:-100})"
+
   # 3.5 Ensure GCS bucket for core docs exists
   local docs_bucket="gs://${PROJECT_ID}-core-docs"
   if gcloud storage buckets describe "$docs_bucket" >/dev/null 2>&1; then
@@ -636,29 +680,22 @@ setup_infrastructure() {
       }
     }
 
-    if gcloud iam service-accounts describe "$VERTEX_AI_SA" --project="$PROJECT_ID" >/dev/null 2>&1; then
-      grant_bucket_viewer_access "$rag_docs_bucket" "$VERTEX_AI_SA" "Vertex AI SA"
-      grant_bucket_viewer_access "$nv_horizon_fragments_bucket" "$VERTEX_AI_SA" "Vertex AI SA"
-    else
-      echo -e "${YELLOW}[infra] Warning: Vertex AI service account not found yet (skip bucket IAM for now)${NC}"
-      echo -e "${YELLOW}[infra] Retry check-infra later after Vertex services fully provision${NC}"
-    fi
+    # Google-managed service agents are deterministic and may fail `gcloud iam
+    # service-accounts describe` even after service identity creation. Attempt
+    # the grants directly and warn only on actual binding failures.
+    grant_bucket_viewer_access "$rag_docs_bucket" "$VERTEX_AI_SA" "Vertex AI SA"
+    grant_bucket_viewer_access "$nv_horizon_fragments_bucket" "$VERTEX_AI_SA" "Vertex AI SA"
 
-    if gcloud iam service-accounts describe "$DISCOVERY_ENGINE_SA" --project="$PROJECT_ID" >/dev/null 2>&1; then
-      grant_bucket_viewer_access "$rag_docs_bucket" "$DISCOVERY_ENGINE_SA" "Discovery Engine SA"
-      grant_bucket_viewer_access "$nv_horizon_fragments_bucket" "$DISCOVERY_ENGINE_SA" "Discovery Engine SA"
-      # Discovery Engine import jobs can request temporary bucket creation in the project.
-      # Without storage.buckets.create, imports fail with PERMISSION_DENIED.
-      gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-        --member="serviceAccount:${DISCOVERY_ENGINE_SA}" \
-        --role="roles/storage.admin" \
-        --condition=None 2>/dev/null || {
-        echo -e "${YELLOW}[infra] Warning: Failed to grant roles/storage.admin to Discovery Engine SA${NC}"
-      }
-    else
-      echo -e "${YELLOW}[infra] Warning: Discovery Engine service account not found yet (skip bucket IAM for now)${NC}"
-      echo -e "${YELLOW}[infra] Retry check-infra later after Discovery Engine services fully provision${NC}"
-    fi
+    grant_bucket_viewer_access "$rag_docs_bucket" "$DISCOVERY_ENGINE_SA" "Discovery Engine SA"
+    grant_bucket_viewer_access "$nv_horizon_fragments_bucket" "$DISCOVERY_ENGINE_SA" "Discovery Engine SA"
+    # Discovery Engine import jobs can request temporary bucket creation in the project.
+    # Without storage.buckets.create, imports fail with PERMISSION_DENIED.
+    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+      --member="serviceAccount:${DISCOVERY_ENGINE_SA}" \
+      --role="roles/storage.admin" \
+      --condition=None 2>/dev/null || {
+      echo -e "${YELLOW}[infra] Warning: Failed to grant roles/storage.admin to Discovery Engine SA${NC}"
+    }
   else
     echo -e "${YELLOW}[infra] Warning: Could not determine project number, skipping Vertex/Discovery SA setup${NC}"
   fi
@@ -1066,6 +1103,33 @@ setup_infrastructure() {
       echo -e "${YELLOW}[infra] Create manually:${NC}"
       echo -e "${YELLOW}  gcloud redis instances create $redis_instance --region=$REGION --tier=$redis_tier --size=$redis_size --network=projects/$PROJECT_ID/global/networks/$vpc_network${NC}"
     fi
+  fi
+
+  local api_vpc_network="${API_VPC_NETWORK:-default}"
+  local api_vpc_subnet_range="${API_VPC_SUBNET_RANGE:-10.20.0.0/26}"
+  local api_internal_firewall_rule="${API_INTERNAL_FIREWALL_RULE:-nv-horizon-run-allow-internal}"
+  if [[ -n "$api_vpc_subnet_range" ]]; then
+    if gcloud compute firewall-rules describe "$api_internal_firewall_rule" --project "$PROJECT_ID" >/dev/null 2>&1; then
+      gcloud compute firewall-rules update "$api_internal_firewall_rule" \
+        --project "$PROJECT_ID" \
+        --network "$api_vpc_network" \
+        --allow tcp,udp,icmp \
+        --source-ranges "$api_vpc_subnet_range" \
+        --quiet >/dev/null 2>&1 || true
+      echo -e "${GREEN}[infra] Firewall rule exists:${NC} $api_internal_firewall_rule"
+    else
+      gcloud compute firewall-rules create "$api_internal_firewall_rule" \
+        --project "$PROJECT_ID" \
+        --network "$api_vpc_network" \
+        --direction INGRESS \
+        --priority 1000 \
+        --action ALLOW \
+        --rules tcp,udp,icmp \
+        --source-ranges "$api_vpc_subnet_range" \
+        --quiet >/dev/null 2>&1 || true
+      echo -e "${GREEN}[infra] Created firewall rule:${NC} $api_internal_firewall_rule"
+    fi
+    echo -e "${GREEN}[infra] ✓${NC} Ensured Cloud Run internal firewall access from $api_vpc_subnet_range on $api_vpc_network"
   fi
   
   # 4. Ensure Pub/Sub topics exist
@@ -1735,7 +1799,7 @@ deploy_api() {
   if [[ "${TARGET_NV_HORIZON_WATCHDOG:-0}" -eq 1 ]]; then
     enable_nv_horizon_watchdog="1"
   fi
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://nordicvision.io|https://www.nordicvision.io|https://*.nordicvision.io|https://horizon.nordicvision.io|https://www.horizon.nordicvision.io|https://*.horizon.nordicvision.io|https://${FIREBASE_PROJECT_ID}.web.app|https://${FIREBASE_PROJECT_ID}.firebaseapp.com|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,BIGQUERY_DATASET_ID=${bigquery_dataset_id},VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},VERTEX_SEARCH_INTERNAL_KNOWLEDGE_STORE_ID=${VERTEX_SEARCH_INTERNAL_KNOWLEDGE_STORE_ID:-${vertex_search_ds_id}},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,ENABLE_CLOUD_TASKS_RISK=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE=${scout_background_queue},CLOUD_TASKS_SCOUT_BACKGROUND_DELAY=${CLOUD_TASKS_SCOUT_BACKGROUND_DELAY:-15s},CLOUD_TASKS_RISK_QUEUE=${risk_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_NV_HORIZON_WATCHDOG=${enable_nv_horizon_watchdog},PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://horizon.nordicvision.io/subscription/success,PAYPAL_CANCEL_URL=https://horizon.nordicvision.io/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h,GEONAMES_USERNAME=${GEONAMES_USERNAME:-kirisyuk}"
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://nordicvision.io|https://www.nordicvision.io|https://*.nordicvision.io|https://horizon.nordicvision.io|https://www.horizon.nordicvision.io|https://*.horizon.nordicvision.io|https://horde.vision|https://www.horde.vision|https://*.horde.vision|https://horizon.horde.vision|https://${FIREBASE_PROJECT_ID}.web.app|https://${FIREBASE_PROJECT_ID}.firebaseapp.com|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,BIGQUERY_DATASET_ID=${bigquery_dataset_id},VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},VERTEX_SEARCH_INTERNAL_KNOWLEDGE_STORE_ID=${VERTEX_SEARCH_INTERNAL_KNOWLEDGE_STORE_ID:-${vertex_search_ds_id}},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,ENABLE_CLOUD_TASKS_RISK=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE=${scout_background_queue},CLOUD_TASKS_SCOUT_BACKGROUND_DELAY=${CLOUD_TASKS_SCOUT_BACKGROUND_DELAY:-15s},CLOUD_TASKS_RISK_QUEUE=${risk_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_NV_HORIZON_WATCHDOG=${enable_nv_horizon_watchdog},PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://horizon.horde.vision/subscription/success,PAYPAL_CANCEL_URL=https://horizon.horde.vision/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h,GEONAMES_USERNAME=${GEONAMES_USERNAME:-kirisyuk}"
   # Horizon Fragments: dedicated bucket + dedicated Vertex AI Search Data Stores (fragments + edges IDs set above).
   # Store isolation is used instead of filters (filters on structData.* are not supported in our current schema).
   local nv_horizon_fragments_bucket="${NV_HORIZON_FRAGMENTS_BUCKET:-${PROJECT_ID}-nv-horizon-fragments}"
@@ -2363,6 +2427,13 @@ create_indexes() {
     --field-config field-path=tenantId,order=ASCENDING \
     --field-config field-path=runId,order=ASCENDING \
     --field-config field-path=createdAt,order=ASCENDING \
+    --quiet || true
+
+  # Horizon signal landing summaries: tenant + scopeRef for scope-local Home/Lens retrieval.
+  gcloud firestore indexes composite create --async \
+    --collection-group=horizon_signal_landing_summaries \
+    --field-config field-path=tenantId,order=ASCENDING \
+    --field-config field-path=scopeRef,order=ASCENDING \
     --quiet || true
 
   # Vector index for rag_chunks.embedding (dimension=1536)

@@ -1,12 +1,12 @@
 {
   "projects": {
-    "default": "nv-horizon-test"
+    "default": "horde-horizon-test-20260405"
   },
   "targets": {
-    "nv-horizon-test": {
+    "horde-horizon-test-20260405": {
       "hosting": {
         "marketing": [
-          "nv-horizon-test"
+          "horde-horizon-marketing"
         ]
       }
     }

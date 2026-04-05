@@ -2408,7 +2408,7 @@ func (a *ResearchAgent) buildOperationalChainEnrichmentPrompt(mode string, input
 %s
 
 Use ONLY these relation types (canonical): %s.
-Do NOT use RELATED_TO, AFFILIATED_WITH, PARTNERS_WITH, OWNS, COMPETES_WITH, or other non-operational-chain types.
+Do NOT use RELATED_TO, AFFILIATED_WITH, OWNS, or other non-operational-chain types. COMPETES_WITH is allowed only for explicit direct competitor relationships. PARTNERS_WITH and OPERATES_VIA are allowed only for explicit operational/ecosystem overlays. INVESTS_IN and MEMBER_OF are allowed only for explicit institutional/structural overlays.
 %s
 
 ENTITY TYPES in %s: %s. Use correct targetType for each relation.
@@ -2651,10 +2651,6 @@ func (a *ResearchAgent) buildSupplyChainFullQueryPrompt(query SupplyChainQuery) 
 	return a.buildOperationalChainFullQueryPrompt(taxonomy.DomainModeSupplyChain, query)
 }
 
-func (a *ResearchAgent) buildServiceChainFullQueryPrompt(query SupplyChainQuery) string {
-	return a.buildOperationalChainFullQueryPrompt(taxonomy.DomainModeServiceChain, query)
-}
-
 func (a *ResearchAgent) buildOperationalChainFullQueryPrompt(mode string, query SupplyChainQuery) string {
 	var anchorDesc string
 	if len(query.Anchors) > 0 {
@@ -2867,10 +2863,6 @@ func (a *ResearchAgent) buildOperationalChainHotPathPrompt(mode string, query Su
 
 func (a *ResearchAgent) buildSupplyChainHotPathCapabilityPrompt(query SupplyChainQuery, chains []SupplyChain, prePlan *SupplyChainPreHotPathPlan) string {
 	return a.buildOperationalChainHotPathCapabilityPrompt(taxonomy.DomainModeSupplyChain, query, chains, prePlan)
-}
-
-func (a *ResearchAgent) buildServiceChainHotPathCapabilityPrompt(query SupplyChainQuery, chains []SupplyChain, prePlan *SupplyChainPreHotPathPlan) string {
-	return a.buildOperationalChainHotPathCapabilityPrompt(taxonomy.DomainModeServiceChain, query, chains, prePlan)
 }
 
 func (a *ResearchAgent) buildOperationalChainHotPathCapabilityPrompt(mode string, query SupplyChainQuery, chains []SupplyChain, prePlan *SupplyChainPreHotPathPlan) string {

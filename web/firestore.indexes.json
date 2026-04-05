@@ -3669,6 +3669,20 @@
           "order": "DESCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "horizon_signal_landing_summaries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "tenantId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "scopeRef",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ]
 }

@@ -25,6 +25,19 @@ const PANEL_STYLE: React.CSSProperties = {
   backdropFilter: 'blur(14px)',
 };
 
+const HOME_WORKSPACE_PLACEHOLDERS = [
+  'Ask what matters in a place and why.',
+  'Ask what matters somewhere and why.',
+  'Ask what is important in a place and why.',
+  'Ask what is important somewhere and why.',
+];
+
+function pickHomeWorkspacePlaceholder(): string {
+  if (HOME_WORKSPACE_PLACEHOLDERS.length === 0) return '';
+  const index = Math.floor(Math.random() * HOME_WORKSPACE_PLACEHOLDERS.length);
+  return HOME_WORKSPACE_PLACEHOLDERS[index] || HOME_WORKSPACE_PLACEHOLDERS[0];
+}
+
 function buildHomeMapFocus(result: HorizonHomeWorkspaceRunResponse | null): LensChatMapFocus | null {
   if (!result?.runId) return null;
   const set = new Set<string>();
@@ -268,6 +281,7 @@ export const HorizonHomeWorkspace: React.FC<HorizonHomeWorkspaceProps> = ({
   const updateProject = useProjectsStore((s) => s.updateProject);
   const setCurrentProject = useProjectsStore((s) => s.setCurrentProject);
   const [query, setQuery] = React.useState('');
+  const [placeholder, setPlaceholder] = React.useState(HOME_WORKSPACE_PLACEHOLDERS[0] || '');
   const [result, setResult] = React.useState<HorizonHomeWorkspaceRunResponse | null>(null);
   const [isRunning, setIsRunning] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -275,6 +289,10 @@ export const HorizonHomeWorkspace: React.FC<HorizonHomeWorkspaceProps> = ({
   const [creatingLens, setCreatingLens] = React.useState(false);
   const [watchStates, setWatchStates] = React.useState<Record<string, SaveState>>({});
   const [portfolioStates, setPortfolioStates] = React.useState<Record<string, SaveState>>({});
+
+  React.useEffect(() => {
+    setPlaceholder(pickHomeWorkspacePlaceholder());
+  }, []);
 
   React.useEffect(() => {
     const next = result?.suggestedLensScope && result.suggestedLensScope.length > 0
@@ -538,7 +556,7 @@ export const HorizonHomeWorkspace: React.FC<HorizonHomeWorkspaceProps> = ({
                   void runWorkspace();
                 }
               }}
-              placeholder="Ask about a disruption, weak point, dependency, route, product, company, or geography..."
+              placeholder={placeholder}
               style={{
                 flex: 1,
                 minHeight: 54,

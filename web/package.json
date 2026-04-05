@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "npm run env:sync && vite",
     "env:sync": "bash scripts/sync-env-from-gcloud.sh",
-    "gen:schemas": "cd ../backend && go run ./internal/tools/schemagen",
+    "gen:schemas": "cd ../backend/internal/tools/schemagen && go run .",
     "gen:types": "node scripts/generate-types.mjs",
     "build": "npm run env:sync && npm run gen:schemas && npm run gen:types && tsc -b && vite build",
     "build:ci": "tsc -b && vite build",

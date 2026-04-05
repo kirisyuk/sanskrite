@@ -1,1 +1,14 @@
-{"projects":{"default":"nv-horizon-test"}}
+{
+  "projects": {
+    "default": "horde-horizon-test-20260405"
+  },
+  "targets": {
+    "horde-horizon-test-20260405": {
+      "hosting": {
+        "platform": [
+          "horde-horizon-test-20260405"
+        ]
+      }
+    }
+  }
+}

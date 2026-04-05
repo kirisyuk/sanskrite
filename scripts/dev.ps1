@@ -30,7 +30,7 @@ Write-Host 'Dev processes launched.' -ForegroundColor Cyan
 
 if ($Schemas) {
   Write-Host 'Generating JSON Schemas...' -ForegroundColor Yellow
-  Push-Location (Join-Path $repo 'backend')
-  go run ./internal/tools/schemagen
+  Push-Location (Join-Path $repo 'backend/internal/tools/schemagen')
+  go run .
   Pop-Location
 }

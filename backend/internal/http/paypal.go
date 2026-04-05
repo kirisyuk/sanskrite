@@ -103,10 +103,10 @@ func (h *PayPalHandler) CreateSubscription(w http.ResponseWriter, r *http.Reques
 	returnURL := os.Getenv("PAYPAL_RETURN_URL")
 	cancelURL := os.Getenv("PAYPAL_CANCEL_URL")
 	if returnURL == "" {
-		returnURL = "https://horizon.nordicvision.io/subscription/success"
+		returnURL = "https://horizon.horde.vision/subscription/success"
 	}
 	if cancelURL == "" {
-		cancelURL = "https://horizon.nordicvision.io/subscription/cancel"
+		cancelURL = "https://horizon.horde.vision/subscription/cancel"
 	}
 
 	subscription, err := h.paypalClient.CreateSubscription(r.Context(), plan.ID, returnURL, cancelURL)

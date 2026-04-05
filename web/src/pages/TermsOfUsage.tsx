@@ -3,14 +3,14 @@ import { useEffect } from 'react';
 export default function TermsOfUsage() {
   // Update page title for SEO
   useEffect(() => {
-    document.title = 'Terms of Usage - Ideoma LLC';
+    document.title = 'Terms of Usage - Horde.Vision';
     const metaDescription = document.querySelector('meta[name="description"]');
     if (metaDescription) {
-      metaDescription.setAttribute('content', 'Terms of Usage for Ideoma LLC AI-powered platform. Read our terms and conditions.');
+      metaDescription.setAttribute('content', 'Terms of Usage for Horde.Vision and the Horizon platform. Read our terms and conditions.');
     } else {
       const meta = document.createElement('meta');
       meta.name = 'description';
-      meta.content = 'Terms of Usage for Ideoma LLC AI-powered platform. Read our terms and conditions.';
+      meta.content = 'Terms of Usage for Horde.Vision and the Horizon platform. Read our terms and conditions.';
       document.head.appendChild(meta);
     }
   }, []);
@@ -423,7 +423,7 @@ export default function TermsOfUsage() {
             Astana, Dostyk, 16<br />
             Talan Towers<br />
             Republic of Kazakhstan<br />
-            Email: igor@nordicvision.org
+            Email: hello@horde.vision
           </p>
         </section>
 

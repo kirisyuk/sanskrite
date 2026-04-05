@@ -26,7 +26,7 @@ type DisclosureContent = {
 const content: Record<DisclosureLocale, DisclosureContent> = {
   en: {
     title: 'Technical Disclosure',
-    metaTitle: 'Technical Disclosure - Horizon',
+    metaTitle: 'Technical Disclosure - Horde.Vision',
     metaDescription:
       'Technical disclosure for the Horizon platform covering proprietary technology, AI-assisted analytical outputs, governance, oversight, and transparency controls.',
     lastUpdatedLabel: 'Last Updated:',
@@ -168,11 +168,11 @@ const content: Record<DisclosureLocale, DisclosureContent> = {
     ],
     contactTitle: 'Contact',
     contactText:
-      'Questions regarding this disclosure, governance posture, or deployment-specific use constraints may be directed to igor@nordicvision.org.',
+      'Questions regarding this disclosure, governance posture, or deployment-specific use constraints may be directed to hello@horde.vision.',
   },
   ru: {
     title: 'Technical Disclosure',
-    metaTitle: 'Technical Disclosure - Horizon',
+    metaTitle: 'Technical Disclosure - Horde.Vision',
     metaDescription:
       'Техническое раскрытие по платформе Horizon: проприетарные технологии, ИИ-поддержка аналитических выводов, контроль, надзор и прозрачность.',
     lastUpdatedLabel: 'Последнее обновление:',
@@ -314,11 +314,11 @@ const content: Record<DisclosureLocale, DisclosureContent> = {
     ],
     contactTitle: 'Контакт',
     contactText:
-      'Вопросы по этому disclosure, governance-подходу или ограничениям конкретного deployment могут направляться на igor@nordicvision.org.',
+      'Вопросы по этому disclosure, governance-подходу или ограничениям конкретного deployment могут направляться на hello@horde.vision.',
   },
   kz: {
     title: 'Technical Disclosure',
-    metaTitle: 'Technical Disclosure - Horizon',
+    metaTitle: 'Technical Disclosure - Horde.Vision',
     metaDescription:
       'Horizon платформасы бойынша техникалық ашып көрсету: проприетарлық технологиялар, ИИ көмегімен жасалатын аналитикалық тұжырымдар, бақылау және ашықтық.',
     lastUpdatedLabel: 'Соңғы жаңарту:',
@@ -460,7 +460,7 @@ const content: Record<DisclosureLocale, DisclosureContent> = {
     ],
     contactTitle: 'Байланыс',
     contactText:
-      'Осы disclosure, governance тәсілі немесе нақты deployment шектеулері бойынша сұрақтарды igor@nordicvision.org мекенжайына жіберуге болады.',
+      'Осы disclosure, governance тәсілі немесе нақты deployment шектеулері бойынша сұрақтарды hello@horde.vision мекенжайына жіберуге болады.',
   },
 };
 

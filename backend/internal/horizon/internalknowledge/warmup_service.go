@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -26,6 +27,7 @@ const (
 	internalKnowledgeStateReady    = "ready"
 	internalKnowledgeStateFailed   = "failed"
 	internalKnowledgeRefreshPrefix = "refresh:"
+	pendingImportReason            = "pending_import_continue"
 )
 
 var internalKnowledgeTemperatureOrder = []string{
@@ -35,22 +37,22 @@ var internalKnowledgeTemperatureOrder = []string{
 }
 
 type WarmupConfig struct {
-	ProjectID                 string
-	AnswerBucket              string
-	AnswerStoreID             string
-	QueueSize                 int
-	UploadsPerSecond          float64
-	ImportsPerMinute          int
-	ProcessTimeout            time.Duration
-	ImportWaitTimeout         time.Duration
-	StatusWriteTimeout        time.Duration
-	LeaseTTL                  time.Duration
-	LeaseAcquireInterval      time.Duration
-	ReconcileInterval         time.Duration
-	ReconcileLimit            int
-	StaleQueuedAfter          time.Duration
-	StaleRunningAfter         time.Duration
-	RetryFailedAfter          time.Duration
+	ProjectID            string
+	AnswerBucket         string
+	AnswerStoreID        string
+	QueueSize            int
+	UploadsPerSecond     float64
+	ImportsPerMinute     int
+	ProcessTimeout       time.Duration
+	ImportWaitTimeout    time.Duration
+	StatusWriteTimeout   time.Duration
+	LeaseTTL             time.Duration
+	LeaseAcquireInterval time.Duration
+	ReconcileInterval    time.Duration
+	ReconcileLimit       int
+	StaleQueuedAfter     time.Duration
+	StaleRunningAfter    time.Duration
+	RetryFailedAfter     time.Duration
 }
 
 type WarmupRequest struct {
@@ -99,6 +101,9 @@ func NewWarmupService(
 	}
 	if cfg.StatusWriteTimeout <= 0 {
 		cfg.StatusWriteTimeout = 15 * time.Second
+	}
+	if cfg.ProcessTimeout < cfg.ImportWaitTimeout+15*time.Minute {
+		cfg.ProcessTimeout = cfg.ImportWaitTimeout + 15*time.Minute
 	}
 	if cfg.LeaseTTL <= 0 {
 		cfg.LeaseTTL = 45 * time.Minute
@@ -213,14 +218,14 @@ func (s *WarmupService) process(req WarmupRequest) {
 	if strings.EqualFold(strings.TrimSpace(asString(currentState["substrateHash"])), substrateHash) &&
 		strings.EqualFold(strings.TrimSpace(asString(currentState["status"])), internalKnowledgeStateReady) {
 		if err := s.updateLensWarmState(ctx, lens, map[string]any{
-			"status":         internalKnowledgeStateReady,
-			"scopeHash":      scopeHash,
-			"substrateHash":  substrateHash,
-			"corpusId":       corpusID,
-			"answerStore":    strings.TrimSpace(s.cfg.AnswerStoreID),
-			"docCount":       len(substrate.Docs),
-			"lastSkippedAt":  time.Now().UTC().Format(time.RFC3339Nano),
-			"lastReason":     firstNonEmpty(req.Reason, "assembly_ready"),
+			"status":        internalKnowledgeStateReady,
+			"scopeHash":     scopeHash,
+			"substrateHash": substrateHash,
+			"corpusId":      corpusID,
+			"answerStore":   strings.TrimSpace(s.cfg.AnswerStoreID),
+			"docCount":      len(substrate.Docs),
+			"lastSkippedAt": time.Now().UTC().Format(time.RFC3339Nano),
+			"lastReason":    firstNonEmpty(req.Reason, "assembly_ready"),
 		}); err != nil {
 			log.Printf("[InternalKnowledgeWarmup] failed to persist skip-ready state lens=%s err=%v", req.LensID, err)
 		}
@@ -228,15 +233,15 @@ func (s *WarmupService) process(req WarmupRequest) {
 	}
 
 	if err := s.updateLensWarmState(ctx, lens, map[string]any{
-		"runningAt":      time.Now().UTC().Format(time.RFC3339Nano),
-		"scopeHash":      scopeHash,
-		"substrateHash":  substrateHash,
-		"corpusId":       corpusID,
-		"answerStore":    strings.TrimSpace(s.cfg.AnswerStoreID),
-		"docCount":       len(substrate.Docs),
-		"projectId":      firstNonEmpty(req.ProjectID, s.cfg.ProjectID),
-		"tenantId":       firstNonEmpty(req.TenantID, lens.TenantID),
-		"lastReason":     warmupReasonCore(firstNonEmpty(req.Reason, "assembly_ready")),
+		"runningAt":     time.Now().UTC().Format(time.RFC3339Nano),
+		"scopeHash":     scopeHash,
+		"substrateHash": substrateHash,
+		"corpusId":      corpusID,
+		"answerStore":   strings.TrimSpace(s.cfg.AnswerStoreID),
+		"docCount":      len(substrate.Docs),
+		"projectId":     firstNonEmpty(req.ProjectID, s.cfg.ProjectID),
+		"tenantId":      firstNonEmpty(req.TenantID, lens.TenantID),
+		"lastReason":    warmupReasonCore(firstNonEmpty(req.Reason, "assembly_ready")),
 	}); err != nil {
 		log.Printf("[InternalKnowledgeWarmup] failed to persist running state lens=%s err=%v", req.LensID, err)
 	}
@@ -260,7 +265,10 @@ func (s *WarmupService) process(req WarmupRequest) {
 			if lensTemperatureReady(currentState, temperature) && strings.EqualFold(strings.TrimSpace(asString(currentState[temperature+"Hash"])), stageHash) {
 				continue
 			}
-			docs := FilterPreparedDocsUpToTemperature(substrate.Docs, temperature)
+			// Import only the docs introduced at this temperature. Earlier stages are
+			// already persisted, so re-importing hot+warm+full cumulatively just makes
+			// the slowest stage even slower.
+			docs := filterPreparedDocsAtTemperature(substrate.Docs, temperature)
 			if len(docs) == 0 {
 				continue
 			}
@@ -278,9 +286,9 @@ func (s *WarmupService) process(req WarmupRequest) {
 				return err
 			}
 			if persistErr := s.updateLensWarmState(ctx, lens, map[string]any{
-				"importOperation":     strings.TrimSpace(opName),
-				"lastReason":          warmupReasonCore(firstNonEmpty(req.Reason, "assembly_ready")),
-				"temperatureLevel":    strings.TrimSpace(temperature),
+				"importOperation":       strings.TrimSpace(opName),
+				"lastReason":            warmupReasonCore(firstNonEmpty(req.Reason, "assembly_ready")),
+				"temperatureLevel":      strings.TrimSpace(temperature),
 				"availableTemperatures": append([]string{}, append(lensAvailableTemperatures(currentState), temperature)...),
 			}); persistErr != nil {
 				log.Printf("[InternalKnowledgeWarmup] failed to persist stage-running state lens=%s stage=%s err=%v", req.LensID, temperature, persistErr)
@@ -289,6 +297,10 @@ func (s *WarmupService) process(req WarmupRequest) {
 				_ = s.updateLensWarmState(ctx, lens, map[string]any{"status": internalKnowledgeStateRunning})
 			}
 			if err := waitForImport(ctx, s.vertex.WithDataStore(s.cfg.AnswerStoreID), opName, s.cfg.ImportWaitTimeout); err != nil {
+				if shouldDeferImportCompletion(err) {
+					s.deferPendingImport(ctx, req, lens, currentState, temperature, opName, stageHash, len(stageSubstrate.Docs), err)
+					return nil
+				}
 				return err
 			}
 			currentState[temperature+"Hash"] = stageHash
@@ -296,13 +308,13 @@ func (s *WarmupService) process(req WarmupRequest) {
 			currentState["availableTemperatures"] = compactUnique(append(lensAvailableTemperatures(currentState), temperature))
 			currentState["temperatureLevel"] = strings.TrimSpace(temperature)
 			stageState := map[string]any{
-				"temperatureLevel":     strings.TrimSpace(temperature),
+				"temperatureLevel":      strings.TrimSpace(temperature),
 				"availableTemperatures": compactUnique(append(lensAvailableTemperatures(currentState), temperature)),
-				temperature + "Hash":   stageHash,
+				temperature + "Hash":    stageHash,
 				temperature + "ReadyAt": time.Now().UTC().Format(time.RFC3339Nano),
-				"docCount":             len(stageSubstrate.Docs),
-				"corpusId":             corpusID,
-				"answerStore":          strings.TrimSpace(s.cfg.AnswerStoreID),
+				"docCount":              len(stageSubstrate.Docs),
+				"corpusId":              corpusID,
+				"answerStore":           strings.TrimSpace(s.cfg.AnswerStoreID),
 			}
 			if !warmupPreservesReadyState(req.Reason) || strings.EqualFold(strings.TrimSpace(temperature), PreparedTemperatureFull) {
 				stageState["status"] = stageStatusForTemperature(temperature)
@@ -321,18 +333,18 @@ func (s *WarmupService) process(req WarmupRequest) {
 	// The stored scopeHash/corpusId state is intentionally persisted so the next iteration can
 	// compute the added scope delta and warm only the newly added slice of the lens substrate.
 	if err := s.updateLensWarmState(ctx, lens, map[string]any{
-		"status":              internalKnowledgeStateReady,
-		"completedAt":         time.Now().UTC().Format(time.RFC3339Nano),
-		"scopeHash":           scopeHash,
-		"substrateHash":       substrateHash,
-		"corpusId":            corpusID,
-		"answerStore":         strings.TrimSpace(s.cfg.AnswerStoreID),
-		"docCount":            len(substrate.Docs),
-		"temperatureLevel":    PreparedTemperatureFull,
+		"status":                internalKnowledgeStateReady,
+		"completedAt":           time.Now().UTC().Format(time.RFC3339Nano),
+		"scopeHash":             scopeHash,
+		"substrateHash":         substrateHash,
+		"corpusId":              corpusID,
+		"answerStore":           strings.TrimSpace(s.cfg.AnswerStoreID),
+		"docCount":              len(substrate.Docs),
+		"temperatureLevel":      PreparedTemperatureFull,
 		"availableTemperatures": []string{PreparedTemperatureHot, PreparedTemperatureWarm, PreparedTemperatureFull},
-		"importOperation": strings.TrimSpace(opName),
-		"lastError":      "",
-		"lastReason":     warmupReasonCore(firstNonEmpty(req.Reason, "assembly_ready")),
+		"importOperation":       strings.TrimSpace(opName),
+		"lastError":             "",
+		"lastReason":            warmupReasonCore(firstNonEmpty(req.Reason, "assembly_ready")),
 	}); err != nil {
 		log.Printf("[InternalKnowledgeWarmup] failed to persist ready state lens=%s err=%v", req.LensID, err)
 	}
@@ -374,6 +386,9 @@ func (s *WarmupService) reconcileRecentLenses() {
 			continue
 		}
 		if s.normalizeReconcileState(&lens) {
+			continue
+		}
+		if s.tryAdvancePendingImport(&lens) {
 			continue
 		}
 		reason, ok := s.shouldReconcileLens(&lens, now)
@@ -515,14 +530,36 @@ func (s *WarmupService) failLensWarmState(req WarmupRequest, lens *hmodels.Lens,
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.StatusWriteTimeout)
 	defer cancel()
 	_ = s.updateLensWarmState(ctx, lens, map[string]any{
-		"failedAt":    time.Now().UTC().Format(time.RFC3339Nano),
-		"lastError":   err.Error(),
-		"lastReason":  warmupReasonCore(firstNonEmpty(req.Reason, "assembly_ready")),
+		"failedAt":   time.Now().UTC().Format(time.RFC3339Nano),
+		"lastError":  err.Error(),
+		"lastReason": warmupReasonCore(firstNonEmpty(req.Reason, "assembly_ready")),
 	})
 	if !warmupPreservesReadyState(req.Reason) {
 		_ = s.updateLensWarmState(ctx, lens, map[string]any{
 			"status": internalKnowledgeStateFailed,
 		})
+	}
+}
+
+func (s *WarmupService) deferPendingImport(ctx context.Context, req WarmupRequest, lens *hmodels.Lens, currentState map[string]any, temperature, operation, stageHash string, docCount int, err error) {
+	if s == nil || lens == nil {
+		return
+	}
+	log.Printf("[InternalKnowledgeWarmup] lens=%s stage=%s awaiting import completion op=%s err=%v", req.LensID, temperature, operation, err)
+	available := compactUnique(append(lensAvailableTemperatures(currentState), temperature))
+	patch := map[string]any{
+		"status":                internalKnowledgeStateRunning,
+		"importOperation":       strings.TrimSpace(operation),
+		"temperatureLevel":      strings.TrimSpace(temperature),
+		"availableTemperatures": available,
+		"lastError":             err.Error(),
+		"lastReason":            warmupReasonCore(firstNonEmpty(req.Reason, "assembly_ready")),
+		"pendingStageHash":      strings.TrimSpace(stageHash),
+		"pendingStageDocCount":  docCount,
+		"pendingImportSince":    time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if err := s.updateLensWarmState(ctx, lens, patch); err != nil {
+		log.Printf("[InternalKnowledgeWarmup] failed to persist pending import state lens=%s stage=%s err=%v", req.LensID, temperature, err)
 	}
 }
 
@@ -533,10 +570,10 @@ func (s *WarmupService) persistQueuedState(req WarmupRequest) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.StatusWriteTimeout)
 	defer cancel()
 	patch := map[string]any{
-		"answerStore":          strings.TrimSpace(s.cfg.AnswerStoreID),
-		"lastReason":           warmupReasonCore(firstNonEmpty(req.Reason, "assembly_ready")),
-		"lastQueuedAt":         time.Now().UTC().Format(time.RFC3339Nano),
-		"desiredTemperature":   desiredTemperatureForReason(req.Reason),
+		"answerStore":        strings.TrimSpace(s.cfg.AnswerStoreID),
+		"lastReason":         warmupReasonCore(firstNonEmpty(req.Reason, "assembly_ready")),
+		"lastQueuedAt":       time.Now().UTC().Format(time.RFC3339Nano),
+		"desiredTemperature": desiredTemperatureForReason(req.Reason),
 	}
 	if !warmupPreservesReadyState(req.Reason) {
 		patch["status"] = internalKnowledgeStateQueued
@@ -611,6 +648,115 @@ func waitForImport(ctx context.Context, client *ai.VertexAISearchClient, operati
 	return fmt.Errorf("vertex import timeout after %s", timeout)
 }
 
+func shouldDeferImportCompletion(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "vertex import timeout")
+}
+
+func anyInt(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	case string:
+		var n int
+		fmt.Sscanf(strings.TrimSpace(typed), "%d", &n)
+		return n
+	default:
+		return 0
+	}
+}
+
+func filterPreparedDocsAtTemperature(docs []PreparedCorpusDoc, temperature string) []PreparedCorpusDoc {
+	if len(docs) == 0 {
+		return nil
+	}
+	targetRank := preparedTemperatureRank(temperature)
+	if targetRank == 0 {
+		return nil
+	}
+	out := make([]PreparedCorpusDoc, 0, len(docs))
+	for _, doc := range docs {
+		if preparedTemperatureRank(doc.Temperature) == targetRank {
+			out = append(out, doc)
+		}
+	}
+	return out
+}
+
+func (s *WarmupService) tryAdvancePendingImport(lens *hmodels.Lens) bool {
+	if s == nil || s.vertex == nil || s.lenses == nil || lens == nil {
+		return false
+	}
+	state := lensInternalKnowledgeState(lens)
+	if len(state) == 0 {
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(asString(state["status"])))
+	if status != internalKnowledgeStateRunning && status != internalKnowledgeStateQueued {
+		return false
+	}
+	operation := strings.TrimSpace(asString(state["importOperation"]))
+	temperature := strings.TrimSpace(asString(state["temperatureLevel"]))
+	stageHash := strings.TrimSpace(asString(state["pendingStageHash"]))
+	if operation == "" || temperature == "" || stageHash == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	checker := s.vertex.WithDataStore(strings.TrimSpace(s.cfg.AnswerStoreID))
+	statusResp, err := checker.CheckOperationStatus(ctx, operation)
+	if err != nil || statusResp == nil || !statusResp.Done {
+		return false
+	}
+	if statusResp.Error != nil && statusResp.Error.Code != 0 {
+		_ = s.updateLensWarmState(ctx, lens, map[string]any{
+			"status":    internalKnowledgeStateFailed,
+			"failedAt":  time.Now().UTC().Format(time.RFC3339Nano),
+			"lastError": fmt.Sprintf("vertex operation failed: %d %s", statusResp.Error.Code, statusResp.Error.Message),
+		})
+		return true
+	}
+	docCount := anyInt(state["pendingStageDocCount"])
+	available := compactUnique(append(lensAvailableTemperatures(state), temperature))
+	readyAt := time.Now().UTC().Format(time.RFC3339Nano)
+	stageState := map[string]any{
+		"temperatureLevel":      strings.TrimSpace(temperature),
+		"availableTemperatures": available,
+		temperature + "Hash":    stageHash,
+		temperature + "ReadyAt": readyAt,
+		"docCount":              docCount,
+		"lastError":             "",
+		"pendingStageHash":      "",
+		"pendingStageDocCount":  0,
+		"pendingImportSince":    "",
+	}
+	if strings.EqualFold(strings.TrimSpace(temperature), PreparedTemperatureFull) {
+		stageState["status"] = internalKnowledgeStateReady
+		stageState["completedAt"] = readyAt
+	} else {
+		stageState["status"] = internalKnowledgeStateRunning
+		stageState["runningAt"] = readyAt
+	}
+	if err := s.updateLensWarmState(ctx, lens, stageState); err != nil {
+		log.Printf("[InternalKnowledgeWarmup] failed to finalize pending import lens=%s stage=%s err=%v", lens.ID, temperature, err)
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(temperature), PreparedTemperatureFull) {
+		s.EnqueueLensWarmup(context.Background(), strings.TrimSpace(lens.TenantID), strings.TrimSpace(lens.ProjectID), strings.TrimSpace(lens.ID), pendingImportReason)
+	}
+	log.Printf("[InternalKnowledgeWarmup] finalized pending import lens=%s stage=%s op=%s", lens.ID, temperature, operation)
+	return true
+}
+
 func (s *WarmupService) withGlobalWarmupLease(ctx context.Context, lensID string, fn func() error) error {
 	if fn == nil {
 		return nil
@@ -650,13 +796,11 @@ func (s *WarmupService) withGlobalWarmupLease(ctx context.Context, lensID string
 		if err != nil {
 			return err
 		}
-		if err == nil {
-			snap, getErr := lockRef.Get(ctx)
-			if getErr == nil && snap.Exists() {
-				var current lockDoc
-				if dataErr := snap.DataTo(&current); dataErr == nil && current.Owner == lockOwner {
-					acquired = true
-				}
+		snap, getErr := lockRef.Get(ctx)
+		if getErr == nil && snap.Exists() {
+			var current lockDoc
+			if dataErr := snap.DataTo(&current); dataErr == nil && current.Owner == lockOwner {
+				acquired = true
 			}
 		}
 		if acquired {

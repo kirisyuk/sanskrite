@@ -1,11 +1,11 @@
 {
-  "projectId": "nv-horizon-test",
-  "appId": "1:561312073400:web:b3e7aac01f8d19e4ed964d",
-  "storageBucket": "nv-horizon-test.firebasestorage.app",
-  "apiKey": "AIzaSyBQmvhBcX6ORYmct9glz5xbloH2xfru-XM",
-  "authDomain": "nv-horizon-test.firebaseapp.com",
-  "messagingSenderId": "561312073400",
-  "measurementId": "G-QQ0Z00M33H",
-  "projectNumber": "561312073400",
+  "projectId": "horde-horizon-test-20260405",
+  "appId": "1:1048256709462:web:7d19b05f87e7b50460ccf7",
+  "storageBucket": "horde-horizon-test-20260405.firebasestorage.app",
+  "apiKey": "AIzaSyC02x2l32IabGMq0Q3rP2IhSvjFQyi4se4",
+  "authDomain": "horde-horizon-test-20260405.firebaseapp.com",
+  "messagingSenderId": "1048256709462",
+  "measurementId": "G-EVVGHYCS18",
+  "projectNumber": "1048256709462",
   "version": "2"
 }

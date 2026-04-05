@@ -10379,7 +10379,7 @@ func (e *ScoutEngine) processSupplyChains(
 			e.logLine(ctx, job, "info", fmt.Sprintf("[ChainReuse] MERGE summary merged=%d stage=%s samples=[%s]",
 				chainReuseMerged, materializationStage, strings.Join(mergeSamples, " | ")))
 		}
-		if len(pathsToMaterialize) > 0 && activePathBuilder != nil {
+		if len(pathsToMaterialize) > 0 {
 			familyCandidates := make([]supplyChainFamilyCandidate, 0, len(pathsToMaterialize))
 			currentRound := parseStateInt(job.State["supplyChainFamilyCoResearchRound"], 0)
 			for i, path := range pathsToMaterialize {

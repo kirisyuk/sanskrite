@@ -3,14 +3,14 @@ import { useEffect } from 'react';
 export default function PrivacyNotice() {
   // Update page title for SEO
   useEffect(() => {
-    document.title = 'Privacy Notice - Ideoma LLC';
+    document.title = 'Privacy Notice - Horde.Vision';
     const metaDescription = document.querySelector('meta[name="description"]');
     if (metaDescription) {
-      metaDescription.setAttribute('content', 'Privacy Notice for Ideoma LLC. Learn how we collect, use, and protect your personal data.');
+      metaDescription.setAttribute('content', 'Privacy Notice for Horde.Vision. Learn how we collect, use, and protect your personal data.');
     } else {
       const meta = document.createElement('meta');
       meta.name = 'description';
-      meta.content = 'Privacy Notice for Ideoma LLC. Learn how we collect, use, and protect your personal data.';
+      meta.content = 'Privacy Notice for Horde.Vision. Learn how we collect, use, and protect your personal data.';
       document.head.appendChild(meta);
     }
   }, []);
@@ -334,7 +334,7 @@ export default function PrivacyNotice() {
 
           <h3 className="text-14 font-semibold mb-2 mt-4" style={{ color: 'var(--text-heading)' }}>10.7 Exercise Your Rights</h3>
           <p>
-            To exercise any of these rights, please contact us at igor@nordicvision.org with your request. We will respond within the timeframe required by applicable law 
+            To exercise any of these rights, please contact us at hello@horde.vision with your request. We will respond within the timeframe required by applicable law 
             (typically within 30 days).
           </p>
           <p className="mt-2">
@@ -448,7 +448,7 @@ export default function PrivacyNotice() {
           </p>
           <ul className="list-disc ml-6 mt-2 space-y-1">
             <li><strong>Right to Review:</strong> Parents may access and review all personal information we have collected from their child by logging into their 
-            parent account or contacting us at igor@nordicvision.org;</li>
+            parent account or contacting us at hello@horde.vision;</li>
             <li><strong>Right to Delete:</strong> Parents may request deletion of their child's personal information at any time. We will delete data within 30 days, 
             subject to legal retention requirements. Note: We cannot delete data already transmitted to third-party AI providers;</li>
             <li><strong>Right to Refuse Further Collection:</strong> Parents may revoke consent and prevent further collection of their child's information by disabling 
@@ -458,7 +458,7 @@ export default function PrivacyNotice() {
             <li><strong>Notification Preferences:</strong> Parents can configure whether they receive notifications about detected concerning content.</li>
           </ul>
           <p className="mt-2">
-            To exercise these rights, Parents may use the parent dashboard or contact us at igor@nordicvision.org with the subject line "Children's Privacy Request."
+            To exercise these rights, Parents may use the parent dashboard or contact us at hello@horde.vision with the subject line "Children's Privacy Request."
           </p>
 
           <h3 className="text-14 font-semibold mb-2 mt-4" style={{ color: 'var(--text-heading)' }}>11.6 Automated Content Moderation and Safety</h3>
@@ -532,7 +532,7 @@ export default function PrivacyNotice() {
             child using the Service without proper parental consent, we will immediately terminate the account and delete associated data.
           </p>
           <p className="mt-2">
-            If you believe a child has provided us information without parental consent, please contact us immediately at igor@nordicvision.org.
+            If you believe a child has provided us information without parental consent, please contact us immediately at hello@horde.vision.
           </p>
 
           <h3 className="text-14 font-semibold mb-2 mt-4" style={{ color: 'var(--text-heading)' }}>11.12 Contact for Children's Privacy Questions</h3>
@@ -545,7 +545,7 @@ export default function PrivacyNotice() {
             Children's Privacy Inquiries<br />
             Astana, Dostyk, 16, Talan Towers<br />
             Republic of Kazakhstan<br />
-            Email: igor@nordicvision.org<br />
+            Email: hello@horde.vision<br />
             Subject Line: "Children's Privacy"
           </p>
         </section>
@@ -584,7 +584,7 @@ export default function PrivacyNotice() {
             Privacy Notice, which may constitute "sharing" under certain definitions.
           </p>
           <p className="mt-2">
-            To exercise your California privacy rights, contact us at igor@nordicvision.org. You may designate an authorized agent to make requests on your behalf, subject 
+            To exercise your California privacy rights, contact us at hello@horde.vision. You may designate an authorized agent to make requests on your behalf, subject 
             to verification requirements.
           </p>
         </section>
@@ -638,7 +638,7 @@ export default function PrivacyNotice() {
             Astana, Dostyk, 16<br />
             Talan Towers<br />
             Republic of Kazakhstan<br />
-            Email: igor@nordicvision.org
+            Email: hello@horde.vision
           </p>
           <p className="mt-2">
             We will respond to your inquiry within a reasonable timeframe, typically within 30 days as required by applicable law.

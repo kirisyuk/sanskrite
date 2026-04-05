@@ -814,6 +814,79 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
     );
   };
 
+  const renderSidebarSectionActionButton = (
+    label: string,
+    onClick: (() => void) | undefined,
+  ) => {
+    if (!onClick) return null;
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          onCloseAllModals?.();
+          onClick();
+          if (isMobile) onClose();
+        }}
+        style={{
+          width: '100%',
+          height: 32,
+          padding: '0 12px',
+          borderRadius: 10,
+          border: '1px solid var(--border-subtle)',
+          background: 'transparent',
+          color: 'var(--text-secondary-strong)',
+          fontSize: 12,
+          fontWeight: 700,
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+          justifyContent: 'center',
+        }}
+      >
+        {label}
+      </button>
+    );
+  };
+
+  const renderSidebarEmptyState = (
+    title: string,
+    description: string | null,
+  ) => {
+    return (
+      <div
+        style={{
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 14,
+          padding: 12,
+          background: 'rgba(255, 255, 255, 0.02)',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'flex-start',
+          gap: 10,
+        }}
+      >
+        <div
+          style={{
+            fontSize: 12,
+            color: 'var(--text-secondary-strong)',
+          }}
+        >
+          {title}
+        </div>
+        {description ? (
+          <div
+            style={{
+              fontSize: 11,
+              lineHeight: 1.45,
+              color: 'var(--text-tertiary-weak)',
+            }}
+          >
+            {description}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
   const renderHorizonSurfaceNav = (withDivider = true) => {
     if (!hasHorizonSurfaceNav) return null;
 
@@ -3164,32 +3237,15 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                 <button
                   type="button"
                   className="sidebar-icon-btn"
-                  title={
-                    currentMode === 'horizon'
-                      ? isDetailsView
-                        ? 'New Lens'
-                        : 'New Project'
-                      : 'New Chat'
-                  }
-                  aria-label={
-                    currentMode === 'horizon'
-                      ? isDetailsView
-                        ? 'New Lens'
-                        : 'New Project'
-                      : 'New Chat'
-                  }
+                  title="New Chat"
+                  aria-label="New Chat"
                   onClick={() => {
                     onCloseAllModals?.();
-                    if (currentMode === 'horizon') {
-                      if (isDetailsView && onNewLens) {
-                        onNewLens();
-                      } else {
-                        handleCreateHorizonProject();
-                      }
-                    } else {
-                      onResetChat();
-                    }
+                    onResetChat();
                     if (isMobile) onClose();
+                  }}
+                  style={{
+                    display: currentMode === 'horizon' ? 'none' : undefined,
                   }}
                 >
                   <svg
@@ -3949,13 +4005,24 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                       {isProjectsView ? (
                         <>
                           <div
-                            className="sidebar-section-title"
-                            style={{ marginBottom: 10 }}
+                            style={{
+                              marginBottom: 8,
+                            }}
                           >
-                            {isHorizonMode
-                              ? 'Projects'
-                              : t('unfold.sections.chats')}
+                            <div className="sidebar-section-title">
+                              {isHorizonMode
+                                ? 'Projects'
+                                : t('unfold.sections.chats')}
+                            </div>
                           </div>
+                          {isHorizonMode ? (
+                            <div style={{ marginBottom: 10 }}>
+                              {renderSidebarSectionActionButton(
+                                '+ New Project',
+                                handleCreateHorizonProject,
+                              )}
+                            </div>
+                          ) : null}
                           {projectsLoading && memoizedProjects.length === 0 ? (
                             <div
                               style={{
@@ -3968,16 +4035,21 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                                 : t('unfold.sections.loadingChats')}
                             </div>
                           ) : memoizedProjects.length === 0 ? (
-                            <div
-                              style={{
-                                fontSize: 12,
-                                color: 'var(--text-secondary-strong)',
-                              }}
-                            >
-                              {isHorizonMode
-                                ? 'No projects yet'
-                                : t('unfold.sections.noChatsYet')}
-                            </div>
+                            isHorizonMode ? (
+                              renderSidebarEmptyState(
+                                'No projects yet',
+                                null,
+                              )
+                            ) : (
+                              <div
+                                style={{
+                                  fontSize: 12,
+                                  color: 'var(--text-secondary-strong)',
+                                }}
+                              >
+                                {t('unfold.sections.noChatsYet')}
+                              </div>
+                            )
                           ) : (
                             <>
                               {pinnedProjects.length > 0 && (
@@ -4129,38 +4201,25 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                                   <path d="m21 21-4.3-4.3" />
                                 </svg>
                               </button>
-                              {isHorizonMode && onNewLens && (
-                                <button
-                                  type="button"
-                                  className="sidebar-icon-btn"
-                                  title="New lens"
-                                  onClick={() => onNewLens()}
-                                >
-                                  <svg
-                                    width="16"
-                                    height="16"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    strokeWidth="2.2"
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                  >
-                                    <path d="M12 5v14" />
-                                    <path d="M5 12h14" />
-                                  </svg>
-                                </button>
-                              )}
                             </div>
                           </div>
 
                           {isHorizonMode ? (
                             <>
                               <div
-                                className="sidebar-section-title"
-                                style={{ marginBottom: 8 }}
+                                style={{
+                                  marginBottom: 8,
+                                }}
                               >
-                                Lenses
+                                <div className="sidebar-section-title">
+                                  Lenses
+                                </div>
+                              </div>
+                              <div style={{ marginBottom: 8 }}>
+                                {renderSidebarSectionActionButton(
+                                  '+ New Lens',
+                                  onNewLens,
+                                )}
                               </div>
                               {lensesLoading ? (
                                 <div
@@ -4172,14 +4231,10 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                                   Loading lenses…
                                 </div>
                               ) : lenses.length === 0 ? (
-                                <div
-                                  style={{
-                                    fontSize: 12,
-                                    color: 'var(--text-secondary-strong)',
-                                  }}
-                                >
-                                  No lenses yet
-                                </div>
+                                renderSidebarEmptyState(
+                                  'No lenses yet',
+                                  'A lens is your structured point of view on a fragment of the global world.',
+                                )
                               ) : (
                                 <div
                                   style={{

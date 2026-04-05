@@ -28,6 +28,11 @@ func TestGeneratedIntentDecomposerRelationRulesBlock_RespectsSupplyChainAllowlis
 		models.DependencyTypeSuppliesTo,
 		models.DependencyTypeTransformsInto,
 		models.DependencyTypeHasMarketSegment,
+		models.DependencyTypeCompetesWith,
+		models.DependencyTypePartnersWith,
+		models.DependencyTypeOperatesVia,
+		models.DependencyTypeMemberOf,
+		models.DependencyTypeInvestsIn,
 	} {
 		if !strings.Contains(block, string(allowed)) {
 			t.Fatalf("expected supply-chain decomposer block to include %s", allowed)
@@ -35,7 +40,6 @@ func TestGeneratedIntentDecomposerRelationRulesBlock_RespectsSupplyChainAllowlis
 	}
 	for _, forbidden := range []models.DependencyType{
 		models.DependencyTypeOwns,
-		models.DependencyTypeInvestsIn,
 		models.DependencyTypeDependsOn,
 	} {
 		if strings.Contains(block, string(forbidden)+":") {

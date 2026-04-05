@@ -2982,6 +2982,7 @@ func main() {
 			internalKnowledgeStoreID := strings.TrimSpace(getEnv("VERTEX_SEARCH_INTERNAL_KNOWLEDGE_STORE_ID", getEnv("VERTEX_SEARCH_DATA_STORE_ID", "")))
 			internalKnowledgeBucket := strings.TrimSpace(getEnv("RAG_DOCUMENTS_BUCKET", ""))
 			if gcsClient != nil && vertexSearchClient != nil && internalKnowledgeBucket != "" && internalKnowledgeStoreID != "" {
+				internalKnowledgeImportWaitTimeout := getEnvDuration("INTERNAL_KNOWLEDGE_IMPORT_WAIT_TIMEOUT", 45*time.Minute)
 				internalKnowledgeBuilder := horizoninternalknowledge.NewBuilder(
 					horizonFragmentsRepo,
 					horizonMaterializedArtifactsRepo,
@@ -2995,6 +2996,7 @@ func main() {
 						ProjectID:          projectID,
 						AnswerBucket:       internalKnowledgeBucket,
 						AnswerStoreID:      internalKnowledgeStoreID,
+						ImportWaitTimeout:  internalKnowledgeImportWaitTimeout,
 						StatusWriteTimeout: 45 * time.Second,
 						ReconcileInterval:  5 * time.Minute,
 						ReconcileLimit:     24,
@@ -3007,7 +3009,7 @@ func main() {
 				)
 				scoutEngine.WithInternalKnowledgeWarmup(internalKnowledgeWarmup)
 				lensService.WithInternalKnowledgeWarmup(internalKnowledgeWarmup)
-				logger.Printf("Internal knowledge warmup enabled: bucket=%s store=%s", internalKnowledgeBucket, internalKnowledgeStoreID)
+				logger.Printf("Internal knowledge warmup enabled: bucket=%s store=%s importWaitTimeout=%s", internalKnowledgeBucket, internalKnowledgeStoreID, internalKnowledgeImportWaitTimeout)
 			} else {
 				logger.Printf("Internal knowledge warmup disabled: bucket=%q store=%q gcs=%t vertex=%t",
 					internalKnowledgeBucket,
@@ -5094,6 +5096,10 @@ func main() {
 				"https://horizon.nordicvision.io",
 				"https://www.horizon.nordicvision.io",
 				"https://*.horizon.nordicvision.io",
+				"https://horde.vision",
+				"https://www.horde.vision",
+				"https://*.horde.vision",
+				"https://horizon.horde.vision",
 			}
 			log.Printf("CORS: using default allowed origins: %v", allowedOrigins)
 		}

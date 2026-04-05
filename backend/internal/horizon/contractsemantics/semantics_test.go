@@ -70,6 +70,26 @@ func TestSupplyChainContractDoesNotLeakOverlayOnlyEdges(t *testing.T) {
 	if len(profile.PathCarriedEdges) == 0 {
 		t.Fatal("expected path-carried edges for supply_chain")
 	}
+	if !ModeAllowsEdge(taxonomy.DomainModeSupplyChain, models.DependencyTypeCompetesWith) {
+		t.Fatal("supply_chain must allow COMPETES_WITH as a graph overlay")
+	}
+	if !ModeAllowsEdge(taxonomy.DomainModeSupplyChain, models.DependencyTypePartnersWith) {
+		t.Fatal("supply_chain must allow PARTNERS_WITH as a graph overlay")
+	}
+	if !ModeAllowsEdge(taxonomy.DomainModeSupplyChain, models.DependencyTypeOperatesVia) {
+		t.Fatal("supply_chain must allow OPERATES_VIA as a graph overlay")
+	}
+	if !ModeAllowsEdge(taxonomy.DomainModeSupplyChain, models.DependencyTypeMemberOf) {
+		t.Fatal("supply_chain must allow MEMBER_OF as a graph overlay")
+	}
+	if !ModeAllowsEdge(taxonomy.DomainModeSupplyChain, models.DependencyTypeInvestsIn) {
+		t.Fatal("supply_chain must allow INVESTS_IN as a graph overlay")
+	}
+	for _, edge := range profile.PathCarriedEdges {
+		if edge == models.DependencyTypeCompetesWith || edge == models.DependencyTypePartnersWith || edge == models.DependencyTypeOperatesVia || edge == models.DependencyTypeMemberOf || edge == models.DependencyTypeInvestsIn {
+			t.Fatalf("%s must not become a path-carried supply edge", edge)
+		}
+	}
 }
 
 func TestServiceChainContractAllowsOperationalDependencyAndAccessEdges(t *testing.T) {
