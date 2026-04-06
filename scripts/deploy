@@ -820,14 +820,23 @@ setup_infrastructure() {
   # Update Cloud Run service with Data Store IDs if RAG store resolved (other IDs always have defaults).
   if [[ -n "$datastore_id" ]]; then
     echo -e "${BLUE}[infra] Updating Cloud Run service with Vertex Search Data Store IDs...${NC}"
+    local api_max_instances="${API_CLOUD_RUN_MAX_INSTANCES:-6}"
+    local vertex_import_topic="${VERTEX_IMPORT_INTENTS_TOPIC:-nv_horizon.vertex.imports}"
+    local vertex_import_sub="${VERTEX_IMPORT_INTENTS_SUBSCRIPTION:-nv_horizon.vertex.imports.worker}"
+    local vertex_import_dlq_topic="${VERTEX_IMPORT_INTENTS_DLQ_TOPIC:-nv_horizon.vertex.imports.dlq}"
+    local vertex_sync_base_imports_per_minute="${VERTEX_SYNC_BASE_IMPORTS_PER_MINUTE:-$(( api_max_instances > 0 ? api_max_instances * 2 : 6 ))}"
+    local vertex_sync_max_imports_per_minute="${VERTEX_SYNC_MAX_IMPORTS_PER_MINUTE:-$(( vertex_sync_base_imports_per_minute * 2 ))}"
+    local vertex_sync_base_inflight_imports="${VERTEX_SYNC_BASE_INFLIGHT_IMPORTS:-$(( api_max_instances > 0 ? api_max_instances : 2 ))}"
+    local vertex_sync_max_inflight_imports="${VERTEX_SYNC_MAX_INFLIGHT_IMPORTS:-$(( vertex_sync_base_inflight_imports + 4 ))}"
+    local vertex_sync_target_pending_lro="${VERTEX_SYNC_TARGET_PENDING_LRO:-$vertex_sync_base_inflight_imports}"
     if gcloud run services describe nv-horizon-api --region="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
       gcloud run services update nv-horizon-api --region="$REGION" --project="$PROJECT_ID" \
-        --update-env-vars "VERTEX_SEARCH_DATA_STORE_ID=$datastore_id,VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID=$nv_horizon_fragments_datastore_id,VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_ID=$nv_horizon_edges_datastore_id" \
+        --update-env-vars "VERTEX_SEARCH_DATA_STORE_ID=$datastore_id,VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID=$nv_horizon_fragments_datastore_id,VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_ID=$nv_horizon_edges_datastore_id,VERTEX_IMPORT_INTENTS_TOPIC=$vertex_import_topic,VERTEX_IMPORT_INTENTS_SUBSCRIPTION=$vertex_import_sub,VERTEX_IMPORT_INTENTS_DLQ_TOPIC=$vertex_import_dlq_topic,VERTEX_SYNC_BASE_IMPORTS_PER_MINUTE=$vertex_sync_base_imports_per_minute,VERTEX_SYNC_MAX_IMPORTS_PER_MINUTE=$vertex_sync_max_imports_per_minute,VERTEX_SYNC_BASE_INFLIGHT_IMPORTS=$vertex_sync_base_inflight_imports,VERTEX_SYNC_MAX_INFLIGHT_IMPORTS=$vertex_sync_max_inflight_imports,VERTEX_SYNC_TARGET_PENDING_LRO=$vertex_sync_target_pending_lro,VERTEX_SYNC_ENABLE_ADAPTIVE_THROTTLE=${VERTEX_SYNC_ENABLE_ADAPTIVE_THROTTLE:-1}" \
         --quiet >/dev/null 2>&1 && \
-        echo -e "${GREEN}[infra] Updated Cloud Run: VERTEX_SEARCH_DATA_STORE_ID=$datastore_id VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID=$nv_horizon_fragments_datastore_id VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_ID=$nv_horizon_edges_datastore_id${NC}" || \
+        echo -e "${GREEN}[infra] Updated Cloud Run with Vertex Search + durable import env${NC}" || \
         echo -e "${YELLOW}[infra] Warning: Failed to update Cloud Run service (may need manual update)${NC}"
     else
-      echo -e "${YELLOW}[infra] Cloud Run service not found; on first API deploy set:${NC} VERTEX_SEARCH_DATA_STORE_ID=$datastore_id VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID=$nv_horizon_fragments_datastore_id VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_ID=$nv_horizon_edges_datastore_id"
+      echo -e "${YELLOW}[infra] Cloud Run service not found; on first API deploy set durable Vertex env vars too${NC}"
     fi
     
     # Optional: Create Cloud Scheduler job for automatic sync (if enabled)
@@ -1226,6 +1235,60 @@ setup_infrastructure() {
     fi
   done
 
+  echo -e "${BLUE}[infra] Ensuring durable Vertex import Pub/Sub...${NC}"
+  local vertex_import_topic="${VERTEX_IMPORT_INTENTS_TOPIC:-nv_horizon.vertex.imports}"
+  local vertex_import_sub="${VERTEX_IMPORT_INTENTS_SUBSCRIPTION:-nv_horizon.vertex.imports.worker}"
+  local vertex_import_dlq_topic="${VERTEX_IMPORT_INTENTS_DLQ_TOPIC:-nv_horizon.vertex.imports.dlq}"
+  local project_number
+  project_number=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)" 2>/dev/null || true)
+  if ! gcloud pubsub topics describe "$vertex_import_topic" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    gcloud pubsub topics create "$vertex_import_topic" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
+    echo -e "${GREEN}  ✓${NC} Created topic: $vertex_import_topic"
+  else
+    echo -e "${GREEN}  ✓${NC} $vertex_import_topic exists"
+  fi
+  if ! gcloud pubsub topics describe "$vertex_import_dlq_topic" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    gcloud pubsub topics create "$vertex_import_dlq_topic" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
+    echo -e "${GREEN}  ✓${NC} Created topic: $vertex_import_dlq_topic"
+  else
+    echo -e "${GREEN}  ✓${NC} $vertex_import_dlq_topic exists"
+  fi
+  if [[ -n "$project_number" ]]; then
+    local pubsub_service_agent="service-${project_number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+    gcloud pubsub topics add-iam-policy-binding "$vertex_import_dlq_topic" \
+      --project="$PROJECT_ID" \
+      --member="serviceAccount:${pubsub_service_agent}" \
+      --role="roles/pubsub.publisher" \
+      --quiet >/dev/null 2>&1 || true
+    echo -e "${GREEN}  ✓${NC} Ensured DLQ publisher binding for Pub/Sub service agent"
+  fi
+  if gcloud pubsub subscriptions describe "$vertex_import_sub" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    gcloud pubsub subscriptions update "$vertex_import_sub" \
+      --project="$PROJECT_ID" \
+      --ack-deadline=60 \
+      --message-retention-duration=7d \
+      --dead-letter-topic="$vertex_import_dlq_topic" \
+      --max-delivery-attempts=20 \
+      --quiet >/dev/null 2>&1 || true
+    echo -e "${GREEN}  ✓${NC} $vertex_import_sub exists"
+  else
+    gcloud pubsub subscriptions create "$vertex_import_sub" \
+      --project="$PROJECT_ID" \
+      --topic="$vertex_import_topic" \
+      --ack-deadline=60 \
+      --message-retention-duration=7d \
+      --dead-letter-topic="$vertex_import_dlq_topic" \
+      --max-delivery-attempts=20 \
+      --quiet >/dev/null 2>&1 || \
+    gcloud pubsub subscriptions create "$vertex_import_sub" \
+      --project="$PROJECT_ID" \
+      --topic="$vertex_import_topic" \
+      --ack-deadline=60 \
+      --message-retention-duration=7d \
+      --quiet >/dev/null 2>&1 || true
+    echo -e "${GREEN}  ✓${NC} Created subscription: $vertex_import_sub"
+  fi
+
   # 5. Ensure Cloud Scheduler jobs when deploying API OR when explicitly asked (e.g. --nv-horizon-watchdog-only, --api-criticalchain)
   if [[ "$TARGET_API" -eq 1 || "${TARGET_NV_HORIZON_WATCHDOG:-0}" -eq 1 || "${TARGET_CRITICALCHAIN_INFRA:-0}" -eq 1 ]]; then
     echo -e "${BLUE}[infra] Ensuring Cloud Scheduler jobs (optional)...${NC}"
@@ -1297,6 +1360,34 @@ setup_infrastructure() {
             --quiet || true
         fi
         echo -e "${GREEN}[infra] ✓${NC} Global canvas ingest scheduler job ensured (every 2 hours)"
+
+        JOB_NAME="nv-horizon-lens-runtime-sync"
+        if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
+          gcloud scheduler jobs update http "$JOB_NAME" \
+            --location="$REGION" \
+            --schedule="15 */4 * * *" \
+            --uri="$SVC_URL/api/v1/admin/nv_horizon/lens_runtime/sync" \
+            --http-method=POST \
+            --oidc-service-account-email="$SA_BACKEND" \
+            --oidc-token-audience="$SVC_URL" \
+            --update-headers="X-Job-Token=$ADMIN_TOKEN,Content-Type=application/json" \
+            --message-body='{"includeGlobal":true,"limit":100}' \
+            --attempt-deadline=900s \
+            --quiet || true
+        else
+          gcloud scheduler jobs create http "$JOB_NAME" \
+            --location="$REGION" \
+            --schedule="15 */4 * * *" \
+            --uri="$SVC_URL/api/v1/admin/nv_horizon/lens_runtime/sync" \
+            --http-method=POST \
+            --oidc-service-account-email="$SA_BACKEND" \
+            --oidc-token-audience="$SVC_URL" \
+            --headers="X-Job-Token=$ADMIN_TOKEN,Content-Type=application/json" \
+            --message-body='{"includeGlobal":true,"limit":100}' \
+            --attempt-deadline=900s \
+            --quiet || true
+        fi
+        echo -e "${GREEN}[infra] ✓${NC} Lens runtime sync scheduler job ensured (every 4 hours)"
         
         # 5b. Artifact scheduler job (checks for scheduled artifact updates)
         JOB_NAME="nv-horizon-artifact-scheduler"
@@ -1780,12 +1871,14 @@ deploy_api() {
   local existing_nlp_env_json=""
   local existing_event_gate_mode=""
   local existing_entity_extract_mode=""
+  local existing_enable_nv_horizon_watchdog=""
   if gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
     existing_api_url=$(gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" --format='value(status.url)' 2>/dev/null || echo "")
     existing_nlp_env_json=$(gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" --format='json(spec.template.spec.containers[0].env)' 2>/dev/null || echo "")
     if [[ -n "$existing_nlp_env_json" ]]; then
       existing_event_gate_mode=$(printf '%s' "$existing_nlp_env_json" | python3 -c 'import json,sys; env=json.load(sys.stdin); print(next((item.get("value","") for item in env if item.get("name")=="EVENT_GATE_MODE"), ""))' 2>/dev/null || echo "")
       existing_entity_extract_mode=$(printf '%s' "$existing_nlp_env_json" | python3 -c 'import json,sys; env=json.load(sys.stdin); print(next((item.get("value","") for item in env if item.get("name")=="ENTITY_EXTRACT_MODE"), ""))' 2>/dev/null || echo "")
+      existing_enable_nv_horizon_watchdog=$(printf '%s' "$existing_nlp_env_json" | python3 -c 'import json,sys; env=json.load(sys.stdin); print(next((item.get("value","") for item in env if item.get("name")=="ENABLE_NV_HORIZON_WATCHDOG"), ""))' 2>/dev/null || echo "")
     fi
   fi
   local resolved_event_gate_mode="${EVENT_GATE_MODE:-$existing_event_gate_mode}"
@@ -1795,11 +1888,25 @@ deploy_api() {
   local bigquery_dataset_id
   bigquery_dataset_id=$(echo "${PROJECT_ID}_documents" | tr '-' '_')
 
-  local enable_nv_horizon_watchdog="${ENABLE_NV_HORIZON_WATCHDOG:-0}"
+  local enable_nv_horizon_watchdog="${ENABLE_NV_HORIZON_WATCHDOG:-$existing_enable_nv_horizon_watchdog}"
+  [[ -z "$enable_nv_horizon_watchdog" ]] && enable_nv_horizon_watchdog="0"
   if [[ "${TARGET_NV_HORIZON_WATCHDOG:-0}" -eq 1 ]]; then
     enable_nv_horizon_watchdog="1"
   fi
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://nordicvision.io|https://www.nordicvision.io|https://*.nordicvision.io|https://horizon.nordicvision.io|https://www.horizon.nordicvision.io|https://*.horizon.nordicvision.io|https://horde.vision|https://www.horde.vision|https://*.horde.vision|https://horizon.horde.vision|https://${FIREBASE_PROJECT_ID}.web.app|https://${FIREBASE_PROJECT_ID}.firebaseapp.com|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,BIGQUERY_DATASET_ID=${bigquery_dataset_id},VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},VERTEX_SEARCH_INTERNAL_KNOWLEDGE_STORE_ID=${VERTEX_SEARCH_INTERNAL_KNOWLEDGE_STORE_ID:-${vertex_search_ds_id}},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,ENABLE_CLOUD_TASKS_RISK=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE=${scout_background_queue},CLOUD_TASKS_SCOUT_BACKGROUND_DELAY=${CLOUD_TASKS_SCOUT_BACKGROUND_DELAY:-15s},CLOUD_TASKS_RISK_QUEUE=${risk_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_NV_HORIZON_WATCHDOG=${enable_nv_horizon_watchdog},PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://horizon.horde.vision/subscription/success,PAYPAL_CANCEL_URL=https://horizon.horde.vision/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h,GEONAMES_USERNAME=${GEONAMES_USERNAME:-kirisyuk}"
+  local api_cpu="${API_CLOUD_RUN_CPU:-2}"
+  local api_memory="${API_CLOUD_RUN_MEMORY:-2Gi}"
+  local api_concurrency="${API_CLOUD_RUN_CONCURRENCY:-16}"
+  local api_min_instances="${API_CLOUD_RUN_MIN_INSTANCES:-1}"
+  local api_max_instances="${API_CLOUD_RUN_MAX_INSTANCES:-6}"
+  local vertex_import_topic="${VERTEX_IMPORT_INTENTS_TOPIC:-nv_horizon.vertex.imports}"
+  local vertex_import_sub="${VERTEX_IMPORT_INTENTS_SUBSCRIPTION:-nv_horizon.vertex.imports.worker}"
+  local vertex_import_dlq_topic="${VERTEX_IMPORT_INTENTS_DLQ_TOPIC:-nv_horizon.vertex.imports.dlq}"
+  local vertex_sync_base_imports_per_minute="${VERTEX_SYNC_BASE_IMPORTS_PER_MINUTE:-$(( api_max_instances > 0 ? api_max_instances * 2 : 6 ))}"
+  local vertex_sync_max_imports_per_minute="${VERTEX_SYNC_MAX_IMPORTS_PER_MINUTE:-$(( vertex_sync_base_imports_per_minute * 2 ))}"
+  local vertex_sync_base_inflight_imports="${VERTEX_SYNC_BASE_INFLIGHT_IMPORTS:-$(( api_max_instances > 0 ? api_max_instances : 2 ))}"
+  local vertex_sync_max_inflight_imports="${VERTEX_SYNC_MAX_INFLIGHT_IMPORTS:-$(( vertex_sync_base_inflight_imports + 4 ))}"
+  local vertex_sync_target_pending_lro="${VERTEX_SYNC_TARGET_PENDING_LRO:-$vertex_sync_base_inflight_imports}"
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://nordicvision.io|https://www.nordicvision.io|https://*.nordicvision.io|https://horizon.nordicvision.io|https://www.horizon.nordicvision.io|https://*.horizon.nordicvision.io|https://horde.vision|https://www.horde.vision|https://*.horde.vision|https://horizon.horde.vision|https://${FIREBASE_PROJECT_ID}.web.app|https://${FIREBASE_PROJECT_ID}.firebaseapp.com|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,BIGQUERY_DATASET_ID=${bigquery_dataset_id},VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},VERTEX_SEARCH_INTERNAL_KNOWLEDGE_STORE_ID=${VERTEX_SEARCH_INTERNAL_KNOWLEDGE_STORE_ID:-${vertex_search_ds_id}},VERTEX_IMPORT_INTENTS_TOPIC=${vertex_import_topic},VERTEX_IMPORT_INTENTS_SUBSCRIPTION=${vertex_import_sub},VERTEX_IMPORT_INTENTS_DLQ_TOPIC=${vertex_import_dlq_topic},VERTEX_SYNC_BASE_IMPORTS_PER_MINUTE=${vertex_sync_base_imports_per_minute},VERTEX_SYNC_MAX_IMPORTS_PER_MINUTE=${vertex_sync_max_imports_per_minute},VERTEX_SYNC_BASE_INFLIGHT_IMPORTS=${vertex_sync_base_inflight_imports},VERTEX_SYNC_MAX_INFLIGHT_IMPORTS=${vertex_sync_max_inflight_imports},VERTEX_SYNC_TARGET_PENDING_LRO=${vertex_sync_target_pending_lro},VERTEX_SYNC_ENABLE_ADAPTIVE_THROTTLE=${VERTEX_SYNC_ENABLE_ADAPTIVE_THROTTLE:-1},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,ENABLE_CLOUD_TASKS_RISK=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE=${scout_background_queue},CLOUD_TASKS_SCOUT_BACKGROUND_DELAY=${CLOUD_TASKS_SCOUT_BACKGROUND_DELAY:-15s},CLOUD_TASKS_RISK_QUEUE=${risk_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_NV_HORIZON_WATCHDOG=${enable_nv_horizon_watchdog},PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://horizon.horde.vision/subscription/success,PAYPAL_CANCEL_URL=https://horizon.horde.vision/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h,GEONAMES_USERNAME=${GEONAMES_USERNAME:-kirisyuk}"
   # Horizon Fragments: dedicated bucket + dedicated Vertex AI Search Data Stores (fragments + edges IDs set above).
   # Store isolation is used instead of filters (filters on structData.* are not supported in our current schema).
   local nv_horizon_fragments_bucket="${NV_HORIZON_FRAGMENTS_BUCKET:-${PROJECT_ID}-nv-horizon-fragments}"
@@ -1835,11 +1942,6 @@ deploy_api() {
     env_vars="$env_vars,AGENTMESH_PUBLIC_BASE_URL=$agentmesh_url,AGENTMESH_TASK_TARGET_URL=${agentmesh_url}/api/v1/internal/tasks/agentmesh/run,AGENTMESH_TASKS_LOCATION=${AGENTMESH_TASKS_LOCATION:-$REGION},AGENTMESH_TASKS_QUEUE=${AGENTMESH_TASKS_QUEUE:-nv-horizon-agentmesh},AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,AGENTMESH_TASKS_OIDC_AUDIENCE=$agentmesh_url,AGENTMESH_TASKS_DISABLE_OIDC=${AGENTMESH_TASKS_DISABLE_OIDC:-1},AGENTMESH_ARTIFACT_BUCKET=${PROJECT_ID}-agentmesh-artifacts"
   fi
 
-  local api_cpu="${API_CLOUD_RUN_CPU:-2}"
-  local api_memory="${API_CLOUD_RUN_MEMORY:-2Gi}"
-  local api_concurrency="${API_CLOUD_RUN_CONCURRENCY:-16}"
-  local api_min_instances="${API_CLOUD_RUN_MIN_INSTANCES:-1}"
-  local api_max_instances="${API_CLOUD_RUN_MAX_INSTANCES:-6}"
   local api_vpc_network="${API_VPC_NETWORK:-default}"
   local api_vpc_subnet="${API_VPC_SUBNET:-nv-horizon-run}"
   local api_vpc_subnet_range="${API_VPC_SUBNET_RANGE:-10.20.0.0/26}"

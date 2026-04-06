@@ -16,11 +16,44 @@ type RSSProvider struct {
 	policy *bluemonday.Policy
 }
 
+const defaultRSSUserAgent = "Mozilla/5.0 (compatible; HorizonRSSBot/1.0; +https://horde.vision)"
+
+type rssHeaderTransport struct {
+	base http.RoundTripper
+}
+
+func (t *rssHeaderTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	cloned := req.Clone(req.Context())
+	if strings.TrimSpace(cloned.Header.Get("User-Agent")) == "" {
+		cloned.Header.Set("User-Agent", defaultRSSUserAgent)
+	}
+	if strings.TrimSpace(cloned.Header.Get("Accept")) == "" {
+		cloned.Header.Set("Accept", "application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.8")
+	}
+	if strings.TrimSpace(cloned.Header.Get("Accept-Language")) == "" {
+		cloned.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	}
+	if strings.TrimSpace(cloned.Header.Get("Cache-Control")) == "" {
+		cloned.Header.Set("Cache-Control", "no-cache")
+	}
+	return t.base.RoundTrip(cloned)
+}
+
 func NewRSSProvider() *RSSProvider {
 	fp := gofeed.NewParser()
-	fp.Client = &http.Client{Timeout: 20 * time.Second}
+	base := http.DefaultTransport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	client := &http.Client{
+		Timeout: 20 * time.Second,
+		Transport: &rssHeaderTransport{
+			base: base,
+		},
+	}
+	fp.Client = client
 	return &RSSProvider{
-		client: fp.Client,
+		client: client,
 		parser: fp,
 		policy: bluemonday.StrictPolicy(), // Strips all HTML tags, keeps only text
 	}
@@ -35,7 +68,7 @@ func (p *RSSProvider) Capability() Capability {
 func (p *RSSProvider) Ingest(ctx context.Context, tenantID string, sourceID string) ([]NormalizedDocument, error) {
 	// feed URL should be provided via Source config; in this minimal adapter assume sourceID is the URL
 	feedURL := sourceID
-	
+
 	// Use gofeed to parse the feed (handles RSS, Atom, JSON Feed)
 	feed, err := p.parser.ParseURLWithContext(feedURL, ctx)
 	if err != nil {
@@ -80,7 +113,7 @@ func (p *RSSProvider) Ingest(ctx context.Context, tenantID string, sourceID stri
 
 		// Construct external ID
 		extID := firstNonEmpty(it.GUID, it.Link, it.Title)
-		
+
 		// Determine document path
 		docPath := "rss/"
 		if feed.Link != "" {

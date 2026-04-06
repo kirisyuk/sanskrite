@@ -100,6 +100,42 @@ func (r *SignalLandingSessionsRepository) ListRecent(ctx context.Context, tenant
 	return out, nil
 }
 
+func (r *SignalLandingSessionsRepository) ListBySourceFactID(ctx context.Context, tenantID, sourceFactID string, limit int) ([]*models.SignalLandingSession, error) {
+	if r == nil || r.col == nil {
+		return nil, fmt.Errorf("signal landing sessions repo not configured")
+	}
+	sourceFactID = strings.TrimSpace(sourceFactID)
+	if sourceFactID == "" {
+		return nil, nil
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		tenantID = "global"
+	}
+	if limit <= 0 {
+		limit = 12
+	}
+	docs, err := r.col.Where("tenantId", "==", tenantID).Where("sourceFactId", "==", sourceFactID).Limit(limit).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*models.SignalLandingSession, 0, len(docs))
+	for _, doc := range docs {
+		var session models.SignalLandingSession
+		if err := doc.DataTo(&session); err != nil {
+			continue
+		}
+		if session.ID == "" {
+			session.ID = doc.Ref.ID
+		}
+		out = append(out, &session)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].UpdatedAt.After(out[j].UpdatedAt)
+	})
+	return out, nil
+}
+
 type SignalImpactClaimsRepository struct {
 	col *firestore.CollectionRef
 }

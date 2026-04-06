@@ -64,6 +64,9 @@ type Pipeline struct {
 	fragmentsRepo     *horizonrepo.HorizonFragmentsRepository
 	edgesRepo         *horizonrepo.DependencyEdgesRepository
 	exposurePathsRepo *horizonrepo.ExposurePathsRepository
+	landingSessions   *horizonrepo.SignalLandingSessionsRepository
+	landingHits       *horizonrepo.SignalLandingHitsRepository
+	landingSummaries  *horizonrepo.SignalLandingSummariesRepository
 
 	propagationEngine *horizonprop.PropagationEngine
 	profileLookup     *horizonprop.ProfileLookup
@@ -128,6 +131,17 @@ func (p *Pipeline) WithScoutingJobsRepo(scoutRepo *horizonrepo.ScoutingJobsRepos
 
 func (p *Pipeline) WithTelemetryRepo(telemetry *horizonrepo.HorizonTelemetryRepository) *Pipeline {
 	p.telemetry = telemetry
+	return p
+}
+
+func (p *Pipeline) WithSignalLandingRepos(
+	sessions *horizonrepo.SignalLandingSessionsRepository,
+	hits *horizonrepo.SignalLandingHitsRepository,
+	summaries *horizonrepo.SignalLandingSummariesRepository,
+) *Pipeline {
+	p.landingSessions = sessions
+	p.landingHits = hits
+	p.landingSummaries = summaries
 	return p
 }
 
@@ -477,6 +491,15 @@ func (p *Pipeline) stageApplicability(ctx context.Context, job *horizonmodels.Ri
 		WithEdgesRepo(p.edgesRepo)
 	if p.exposurePathsRepo != nil {
 		evaluator = evaluator.WithExposurePathsRepo(p.exposurePathsRepo)
+	}
+	if p.landingSessions != nil {
+		evaluator = evaluator.WithSignalLandingSessionsRepo(p.landingSessions)
+	}
+	if p.landingHits != nil {
+		evaluator = evaluator.WithSignalLandingHitsRepo(p.landingHits)
+	}
+	if p.landingSummaries != nil {
+		evaluator = evaluator.WithSignalLandingSummariesRepo(p.landingSummaries)
 	}
 
 	applicable := make([]string, 0, len(signalFacts))

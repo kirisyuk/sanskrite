@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"flag"
+	"fmt"
 	"log"
 	neturl "net/url"
 	"os"
@@ -72,6 +73,8 @@ func main() {
 	watchSubjectsRepo := hrepo.NewWatchSubjectsRepository(db)
 	compiledWatchRepo := hrepo.NewCompiledWatchSubjectsRepository(db)
 	fragmentsRepo := hrepo.NewHorizonFragmentsRepository(db)
+	scopeConfigsRepo := hrepo.NewScopeAgentConfigsRepository(db)
+	watchdogRepo := hrepo.NewWatchdogConfigsRepository(db)
 
 	createdSources := 0
 	updatedSources := 0
@@ -97,6 +100,10 @@ func main() {
 
 	createdWatch := 0
 	updatedWatch := 0
+	createdScopeConfigs := 0
+	updatedScopeConfigs := 0
+	createdWatchdogs := 0
+	updatedWatchdogs := 0
 	if *seedWatch {
 		if *apply {
 			if err := watchPacksRepo.Upsert(ctx, &hmodels.WatchPack{
@@ -110,7 +117,7 @@ func main() {
 			}
 		}
 		for _, spec := range buildWatchSpecs() {
-			changed, err := upsertWatch(ctx, watchSubjectsRepo, compiledWatchRepo, fragmentsRepo, spec, *apply)
+			subject, changed, err := upsertWatch(ctx, watchSubjectsRepo, compiledWatchRepo, fragmentsRepo, spec, *apply)
 			if err != nil {
 				log.Fatalf("seed watch %s failed: %v", spec.Path, err)
 			}
@@ -120,11 +127,37 @@ func main() {
 			if changed == "updated" {
 				updatedWatch++
 			}
+			scopeChanged, watchdogChanged, err := ensureRuntime(ctx, scopeConfigsRepo, watchdogRepo, subject, *apply)
+			if err != nil {
+				log.Fatalf("ensure runtime %s failed: %v", spec.Path, err)
+			}
+			if scopeChanged == "created" {
+				createdScopeConfigs++
+			}
+			if scopeChanged == "updated" {
+				updatedScopeConfigs++
+			}
+			if watchdogChanged == "created" {
+				createdWatchdogs++
+			}
+			if watchdogChanged == "updated" {
+				updatedWatchdogs++
+			}
 		}
 	}
 
-	log.Printf("gulf runtime seed complete: sources(created=%d updated=%d) watch(created=%d updated=%d) apply=%v",
-		createdSources, updatedSources, createdWatch, updatedWatch, *apply)
+	log.Printf(
+		"gulf runtime seed complete: sources(created=%d updated=%d) watch(created=%d updated=%d) scopeConfigs(created=%d updated=%d) watchdogs(created=%d updated=%d) apply=%v",
+		createdSources,
+		updatedSources,
+		createdWatch,
+		updatedWatch,
+		createdScopeConfigs,
+		updatedScopeConfigs,
+		createdWatchdogs,
+		updatedWatchdogs,
+		*apply,
+	)
 }
 
 func buildSourceSpecs() []sourceSpec {
@@ -276,6 +309,7 @@ func upsertSource(ctx context.Context, repo *corerepo.DataSourcesRepository, spe
 		UpdatedAt:   now,
 		FirstSeen:   now,
 		LastSeen:    now,
+		NextPollAt:  &now,
 		TrustLevel:  0.82,
 		SourceGeoFacets: []string{
 			"/loc/ae",
@@ -351,7 +385,7 @@ func upsertWatch(
 	fragmentsRepo *hrepo.HorizonFragmentsRepository,
 	spec watchSpec,
 	apply bool,
-) (string, error) {
+) (*hmodels.WatchSubject, string, error) {
 	subjectID := hrepo.BuildWatchSubjectID(globalTenant, "", "", watchPackID, watchBootstrap, spec.Kind, spec.Path)
 	subject, _ := subjectsRepo.Get(ctx, subjectID)
 	status := "created"
@@ -386,15 +420,15 @@ func upsertWatch(
 		subject.AnchorFragmentID = strings.TrimSpace(frag.ID)
 	}
 	if !apply {
-		return status, nil
+		return subject, status, nil
 	}
 	if err := subjectsRepo.Upsert(ctx, subject); err != nil {
-		return "", err
+		return nil, "", err
 	}
 	if _, err := analytical.PersistCompiledWatchSubject(ctx, compiledRepo, nil, subject, nil, []string{spec.Path}); err != nil {
-		return "", err
+		return nil, "", err
 	}
-	return status, nil
+	return subject, status, nil
 }
 
 func googleNewsQueryRSS(query string) string {
@@ -430,4 +464,206 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func ensureRuntime(
+	ctx context.Context,
+	scopeConfigsRepo *hrepo.ScopeAgentConfigsRepository,
+	watchdogRepo *hrepo.WatchdogConfigsRepository,
+	subject *hmodels.WatchSubject,
+	apply bool,
+) (string, string, error) {
+	if subject == nil {
+		return "", "", nil
+	}
+	scopeChanged, err := ensureScopeConfig(ctx, scopeConfigsRepo, subject, apply)
+	if err != nil {
+		return "", "", err
+	}
+	watchdogChanged, err := ensureWatchdog(ctx, watchdogRepo, subject, apply)
+	if err != nil {
+		return "", "", err
+	}
+	return scopeChanged, watchdogChanged, nil
+}
+
+func ensureScopeConfig(
+	ctx context.Context,
+	scopeConfigsRepo *hrepo.ScopeAgentConfigsRepository,
+	subject *hmodels.WatchSubject,
+	apply bool,
+) (string, error) {
+	if scopeConfigsRepo == nil || subject == nil || strings.TrimSpace(subject.ID) == "" {
+		return "", nil
+	}
+	existing, _ := scopeConfigsRepo.ListActiveBySubjectID(ctx, strings.TrimSpace(subject.TenantID), strings.TrimSpace(subject.ID))
+	status := "created"
+	if len(existing) > 0 {
+		status = "updated"
+	}
+	cfg := &hmodels.ScopeAgentConfig{
+		TenantID:           strings.TrimSpace(subject.TenantID),
+		PackID:             strings.TrimSpace(subject.PackID),
+		SubjectID:          strings.TrimSpace(subject.ID),
+		TargetFragmentID:   strings.TrimSpace(subject.AnchorFragmentID),
+		Name:               fmt.Sprintf("%s watch subject", strings.TrimSpace(subject.DisplayLabel)),
+		ScopeCanonicalPath: strings.TrimSpace(subject.AnchorCanonicalPath),
+		ScopeType:          scopeTypeForSubject(subject.SubjectKind),
+		DomainModes:        append([]string(nil), subject.DomainModes...),
+		Roles:              normalizeRoles(subject.Roles),
+		Priority:           normalizedPriority(subject.Priority),
+		Status:             string(hmodels.ScopeAgentStatusRunning),
+		ExpansionPolicy: map[string]any{
+			"focusMode":        focusModeForSubject(subject),
+			"watchUniverse":    true,
+			"universeSizeHint": len(subject.UniversePaths),
+			"bootstrap":        "gulf_crisis_runtime",
+		},
+		Schedule: map[string]any{
+			"debounceSeconds":    180,
+			"batchWindowSeconds": 180,
+		},
+		LLMPolicy: hmodels.LLMPolicy{
+			PrimaryModel:         "gemini-3-flash-preview",
+			EscalationModel:      "gemini-3-pro-preview",
+			PreferredVertexModel: "vertex-gemini-3-flash-preview",
+			FallbackModels:       []string{"gemini-3.1-flash-lite-preview", "gemini-2.5-flash", "gemini-2.5-pro"},
+			UseSearchGrounding:   true,
+			MaxBatchSize:         8,
+			BatchWindowSeconds:   180,
+		},
+		Metadata: map[string]any{
+			"watchSubjectId": subject.ID,
+			"subjectKind":    string(subject.SubjectKind),
+			"interestTitle":  strings.TrimSpace(subject.InterestTitle),
+			"interestQuery":  strings.TrimSpace(subject.InterestQuery),
+			"queryOverrides": compactStrings(append([]string(nil), subject.QueryOverrides...)),
+			"focusClass":     "gulf_crisis",
+			"bootstrap":      "horizon_seed_gulf_crisis_runtime",
+		},
+	}
+	if len(subject.PageFraming) > 0 {
+		cfg.Metadata["pageFraming"] = subject.PageFraming
+	}
+	if !apply {
+		return status, nil
+	}
+	if err := scopeConfigsRepo.Upsert(ctx, cfg); err != nil {
+		return "", err
+	}
+	return status, nil
+}
+
+func ensureWatchdog(
+	ctx context.Context,
+	watchdogRepo *hrepo.WatchdogConfigsRepository,
+	subject *hmodels.WatchSubject,
+	apply bool,
+) (string, error) {
+	if watchdogRepo == nil || subject == nil || strings.TrimSpace(subject.AnchorFragmentID) == "" {
+		return "", nil
+	}
+	now := time.Now().UTC()
+	lastScanAt := now.Add(-2 * time.Hour)
+	nextScanAt := now.Add(-1 * time.Minute)
+	cfg, err := watchdogRepo.GetByTargetFragmentID(ctx, strings.TrimSpace(subject.TenantID), strings.TrimSpace(subject.AnchorFragmentID))
+	status := "created"
+	if err == nil && cfg != nil {
+		status = "updated"
+	} else {
+		cfg = &hmodels.WatchdogConfig{
+			TenantID:         strings.TrimSpace(subject.TenantID),
+			TargetFragmentID: strings.TrimSpace(subject.AnchorFragmentID),
+		}
+	}
+	cfg.SubjectID = strings.TrimSpace(subject.ID)
+	cfg.InterestTitle = strings.TrimSpace(subject.InterestTitle)
+	cfg.InterestQuery = strings.TrimSpace(subject.InterestQuery)
+	cfg.QueryOverrides = compactStrings(append([]string(nil), subject.QueryOverrides...))
+	cfg.PageFraming = subject.PageFraming
+	cfg.ScanInterval = "PT1H"
+	cfg.TriggerThreshold = 0.10
+	cfg.Status = string(hmodels.WatchdogStatusRunning)
+	cfg.LastScanAt = &lastScanAt
+	cfg.NextScanAt = &nextScanAt
+	if !apply {
+		return status, nil
+	}
+	if status == "created" {
+		_, err = watchdogRepo.Create(ctx, cfg)
+	} else {
+		err = watchdogRepo.Update(ctx, cfg)
+	}
+	if err != nil {
+		return "", err
+	}
+	return status, nil
+}
+
+func scopeTypeForSubject(kind hmodels.WatchSubjectKind) string {
+	switch kind {
+	case hmodels.WatchSubjectKindLensUniverse:
+		return "lens_universe"
+	case hmodels.WatchSubjectKindPathOverlay:
+		return "path_overlay"
+	case hmodels.WatchSubjectKindFragment:
+		return "fragment"
+	case hmodels.WatchSubjectKindAffectedZone:
+		return "affected_zone"
+	case hmodels.WatchSubjectKindMarket:
+		return "market"
+	case hmodels.WatchSubjectKindGeography:
+		return "geography"
+	default:
+		return "watch_subject"
+	}
+}
+
+func focusModeForSubject(subject *hmodels.WatchSubject) string {
+	if subject == nil {
+		return "watch_subject"
+	}
+	switch subject.SubjectKind {
+	case hmodels.WatchSubjectKindLensUniverse:
+		return "lens_universe"
+	case hmodels.WatchSubjectKindPathOverlay:
+		return "artifact_overlay"
+	case hmodels.WatchSubjectKindMarket:
+		return "macro_market"
+	case hmodels.WatchSubjectKindGeography:
+		return "macro_country"
+	default:
+		return "watch_subject"
+	}
+}
+
+func normalizeRoles(values []string) []string {
+	if len(values) == 0 {
+		return []string{"monitor"}
+	}
+	return compactStrings(values)
+}
+
+func normalizedPriority(v int) int {
+	if v <= 0 {
+		return 50
+	}
+	return v
+}
+
+func compactStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }

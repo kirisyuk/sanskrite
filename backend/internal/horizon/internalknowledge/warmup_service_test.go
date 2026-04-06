@@ -5,7 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	hmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 func TestShouldReconcileLensAllowsStaleQueuedHotStateWithoutAssemblyReady(t *testing.T) {
@@ -106,6 +109,92 @@ func TestShouldDeferImportCompletion(t *testing.T) {
 	}
 	if shouldDeferImportCompletion(assertErr("vertex operation failed: 13 internal")) {
 		t.Fatal("did not expect real vertex failure to be deferrable")
+	}
+}
+
+func TestShouldRetryWarmStateWrite(t *testing.T) {
+	if !shouldRetryWarmStateWrite(context.DeadlineExceeded) {
+		t.Fatal("expected deadline exceeded to be retryable")
+	}
+	if !shouldRetryWarmStateWrite(grpcstatus.Error(codes.Unavailable, "firestore unavailable")) {
+		t.Fatal("expected grpc unavailable to be retryable")
+	}
+	if shouldRetryWarmStateWrite(assertErr("permission denied")) {
+		t.Fatal("did not expect permission errors to be retryable")
+	}
+}
+
+func TestPendingImportStillActiveTreatsFreshManagedBatchAsLive(t *testing.T) {
+	now := time.Date(2026, time.April, 6, 9, 0, 0, 0, time.UTC)
+	svc := &WarmupService{
+		cfg: WarmupConfig{
+			ImportWaitTimeout: 45 * time.Minute,
+			StaleRunningAfter: 45 * time.Minute,
+		},
+	}
+	lens := &hmodels.Lens{ID: "lens-1"}
+	state := map[string]any{
+		"importOperation":    "operations/import-1",
+		"pendingImportSince": now.Add(-20 * time.Minute).Format(time.RFC3339Nano),
+	}
+	status := &ai.OperationStatus{
+		Done: false,
+		Metadata: map[string]any{
+			"createTime":   now.Add(-22 * time.Minute).Format(time.RFC3339Nano),
+			"updateTime":   now.Add(-2 * time.Minute).Format(time.RFC3339Nano),
+			"successCount": 5,
+			"totalCount":   28,
+		},
+	}
+
+	if !svc.pendingImportStillActive(lens, state, status) {
+		t.Fatal("expected fresh managed batch import to be treated as active")
+	}
+}
+
+func TestPendingImportStillActiveAllowsRecoveryWhenManagedBatchLooksStalled(t *testing.T) {
+	now := time.Date(2026, time.April, 6, 9, 0, 0, 0, time.UTC)
+	svc := &WarmupService{
+		cfg: WarmupConfig{
+			ImportWaitTimeout: 30 * time.Minute,
+			StaleRunningAfter: 45 * time.Minute,
+		},
+	}
+	lens := &hmodels.Lens{ID: "lens-2"}
+	state := map[string]any{
+		"importOperation":    "operations/import-2",
+		"pendingImportSince": now.Add(-3 * time.Hour).Format(time.RFC3339Nano),
+	}
+	status := &ai.OperationStatus{
+		Done: false,
+		Metadata: map[string]any{
+			"createTime":   now.Add(-3 * time.Hour).Format(time.RFC3339Nano),
+			"updateTime":   now.Add(-3 * time.Hour).Format(time.RFC3339Nano),
+			"successCount": 5,
+			"totalCount":   28,
+		},
+	}
+
+	if svc.pendingImportStillActive(lens, state, status) {
+		t.Fatal("expected obviously stale managed batch to be eligible for recovery")
+	}
+}
+
+func TestParseVertexImportProgress(t *testing.T) {
+	now := time.Date(2026, time.April, 6, 9, 0, 0, 0, time.UTC)
+	progress := parseVertexImportProgress(&ai.OperationStatus{
+		Metadata: map[string]any{
+			"createTime":   now.Add(-10 * time.Minute).Format(time.RFC3339Nano),
+			"updateTime":   now.Add(-5 * time.Minute).Format(time.RFC3339Nano),
+			"successCount": "7",
+			"totalCount":   12,
+		},
+	})
+	if progress.SuccessCount != 7 || progress.TotalCount != 12 {
+		t.Fatalf("unexpected progress counts: %+v", progress)
+	}
+	if progress.CreateTime.IsZero() || progress.UpdateTime.IsZero() {
+		t.Fatalf("expected progress times to parse, got %+v", progress)
 	}
 }
 

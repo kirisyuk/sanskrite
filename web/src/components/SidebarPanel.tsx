@@ -4016,7 +4016,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                             </div>
                           </div>
                           {isHorizonMode ? (
-                            <div style={{ marginBottom: 10 }}>
+                            <div style={{ marginBottom: 14 }}>
                               {renderSidebarSectionActionButton(
                                 '+ New Project',
                                 handleCreateHorizonProject,
@@ -4136,6 +4136,10 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                                 className="sidebar-icon-btn"
                                 title="Back to projects"
                                 onClick={() => setSidebarMainTab('projects')}
+                                style={{
+                                  borderColor: 'var(--border-subtle)',
+                                  background: 'rgba(255, 255, 255, 0.04)',
+                                }}
                               >
                                 <svg
                                   width="16"
@@ -4153,7 +4157,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                               <div style={{ minWidth: 0 }}>
                                 <div
                                   style={{
-                                    fontSize: 12,
+                                    fontSize: 13,
                                     fontWeight: 800,
                                     color: 'var(--text-heading)',
                                     overflow: 'hidden',
@@ -4163,14 +4167,6 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                                 >
                                   {currentProject?.displayName ||
                                     'Untitled Project'}
-                                </div>
-                                <div
-                                  style={{
-                                    fontSize: 11,
-                                    color: 'var(--text-secondary-strong)',
-                                  }}
-                                >
-                                  {isHorizonMode ? 'Horizon' : 'Discovery'}
                                 </div>
                               </div>
                             </div>
@@ -4215,7 +4211,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
                                   Lenses
                                 </div>
                               </div>
-                              <div style={{ marginBottom: 8 }}>
+                              <div style={{ marginBottom: 12 }}>
                                 {renderSidebarSectionActionButton(
                                   '+ New Lens',
                                   onNewLens,

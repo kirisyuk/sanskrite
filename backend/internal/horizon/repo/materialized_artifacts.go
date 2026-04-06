@@ -30,6 +30,7 @@ type MaterializedArtifactsRepository struct {
 	bucket              string
 	useGCS              bool
 	uploadLimiter       *rate.Limiter
+	vertexImportEnqueue func(ctx context.Context, gcsURI string) error
 	vertexSyncBatcher   *VertexSyncBatcher
 	productDictionary   *productdict.Runtime
 	mechanismDictionary *mechanismdict.Runtime
@@ -58,6 +59,11 @@ func (r *MaterializedArtifactsRepository) WithStorage(storage *gcp.GCSClient, bu
 // WithVertexSyncBatcher configures batched Vertex AI Search sync for materialized artifacts.
 func (r *MaterializedArtifactsRepository) WithVertexSyncBatcher(batcher *VertexSyncBatcher) *MaterializedArtifactsRepository {
 	r.vertexSyncBatcher = batcher
+	return r
+}
+
+func (r *MaterializedArtifactsRepository) WithVertexImportEnqueue(enqueueFn func(ctx context.Context, gcsURI string) error) *MaterializedArtifactsRepository {
+	r.vertexImportEnqueue = enqueueFn
 	return r
 }
 
@@ -136,7 +142,14 @@ func (r *MaterializedArtifactsRepository) uploadToGCS(ctx context.Context, artif
 		return fmt.Errorf("failed to upload artifact to GCS: %w", err)
 	}
 
-	if r.vertexSyncBatcher != nil {
+	if r.vertexImportEnqueue != nil {
+		enqueueCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		err := r.vertexImportEnqueue(enqueueCtx, gcsURI)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("failed to enqueue artifact import intent: %w", err)
+		}
+	} else if r.vertexSyncBatcher != nil {
 		r.vertexSyncBatcher.Add(gcsURI)
 	}
 

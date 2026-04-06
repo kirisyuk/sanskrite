@@ -751,9 +751,11 @@ func (c *VertexAISearchClient) CheckDocumentStatus(ctx context.Context, document
 
 // OperationStatus represents the status of a long-running operation
 type OperationStatus struct {
-	Done   bool        `json:"done"`
-	Error  *Error      `json:"error,omitempty"`
-	Result interface{} `json:"response,omitempty"`
+	Name     string         `json:"name,omitempty"`
+	Done     bool           `json:"done"`
+	Error    *Error         `json:"error,omitempty"`
+	Result   interface{}    `json:"response,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 // Error represents an error in an operation

@@ -453,6 +453,8 @@ type HorizonFragmentsRepository struct {
 	// vertexSearchSync triggers Vertex AI Search import for specific GCS URIs.
 	// We pass the exact object URI to avoid Discovery Engine file expansion limits (max 1000 files per import).
 	vertexSearchSync func(ctx context.Context, gcsURI string) (operationName string, err error) // Sync trigger (legacy, single URI)
+	// vertexImportEnqueue publishes durable import intents to the shared Vertex import queue.
+	vertexImportEnqueue func(ctx context.Context, gcsURI string) error
 	// vertexSyncBatcher batches multiple URIs to reduce API quota usage
 	vertexSyncBatcher *VertexSyncBatcher
 	// vertexSearchDelete removes a single fragment document from Vertex AI Search index by document ID.
@@ -612,6 +614,12 @@ func (r *HorizonFragmentsRepository) WithVertexSearchSync(syncFn func(ctx contex
 	return r
 }
 
+// WithVertexImportEnqueue configures durable enqueue into the shared Vertex import pipeline.
+func (r *HorizonFragmentsRepository) WithVertexImportEnqueue(enqueueFn func(ctx context.Context, gcsURI string) error) *HorizonFragmentsRepository {
+	r.vertexImportEnqueue = enqueueFn
+	return r
+}
+
 // WithVertexSyncBatcher configures batched Vertex AI Search sync.
 // This is the preferred method as it batches multiple URIs into single API calls,
 // significantly reducing quota usage (quota is per-request, not per-document).
@@ -752,8 +760,14 @@ func (r *HorizonFragmentsRepository) uploadToGCS(ctx context.Context, fragment *
 
 	// Trigger Vertex sync (if not skipped)
 	if !skipSync {
-		// Prefer batcher over legacy single-URI sync
-		if r.vertexSyncBatcher != nil {
+		// Prefer durable queue over local batcher to preserve eventual indexing across restarts.
+		if r.vertexImportEnqueue != nil {
+			enqueueCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			if err := r.vertexImportEnqueue(enqueueCtx, gcsURI); err != nil {
+				log.Printf("[HorizonFragments] Vertex import enqueue failed for %s: %v", gcsURI, err)
+			}
+			cancel()
+		} else if r.vertexSyncBatcher != nil {
 			r.vertexSyncBatcher.Add(gcsURI)
 		} else if r.vertexSearchSync != nil {
 			// Legacy: single-URI sync (deprecated, high quota usage)

@@ -581,13 +581,12 @@ func (r *OntologyFactsRepository) exportToGCSAndSync(ctx context.Context, f *mod
 
 	if r.vertexSearchSync != nil {
 		gcsURI := r.getStoragePath(f)
-		go func(uri string) {
-			syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			if _, err := r.vertexSearchSync(syncCtx, uri); err != nil {
-				log.Printf("[OntologyFactsRepo] vertex sync failed: %v", err)
-			}
-		}(gcsURI)
+		syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, err := r.vertexSearchSync(syncCtx, gcsURI)
+		cancel()
+		if err != nil {
+			log.Printf("[OntologyFactsRepo] vertex sync failed: %v", err)
+		}
 	}
 	return nil
 }

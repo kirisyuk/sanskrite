@@ -73,6 +73,7 @@ type DependencyEdgesRepository struct {
 	bucket                      string
 	useGCS                      bool
 	uploadLimiter               *rate.Limiter
+	vertexImportEnqueue         func(ctx context.Context, gcsURI string) error
 	vertexSyncBatcher           *VertexSyncBatcher
 	vertexSearchDelete          func(ctx context.Context, edgeID string) error
 	productDictionary           *productdict.Runtime
@@ -138,6 +139,11 @@ func (r *DependencyEdgesRepository) WithStorage(storage *gcp.GCSClient, bucket s
 
 func (r *DependencyEdgesRepository) WithVertexSyncBatcher(batcher *VertexSyncBatcher) *DependencyEdgesRepository {
 	r.vertexSyncBatcher = batcher
+	return r
+}
+
+func (r *DependencyEdgesRepository) WithVertexImportEnqueue(enqueueFn func(ctx context.Context, gcsURI string) error) *DependencyEdgesRepository {
+	r.vertexImportEnqueue = enqueueFn
 	return r
 }
 
@@ -379,7 +385,14 @@ func (r *DependencyEdgesRepository) uploadToGCS(ctx context.Context, edge *model
 	if err := r.storage.UploadBytes(ctx, r.bucket, objectPath, jsonData, "application/json", metadata); err != nil {
 		return fmt.Errorf("failed to upload edge to GCS: %w", err)
 	}
-	if r.vertexSyncBatcher != nil {
+	if r.vertexImportEnqueue != nil {
+		enqueueCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		err := r.vertexImportEnqueue(enqueueCtx, gcsURI)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("failed to enqueue edge import intent: %w", err)
+		}
+	} else if r.vertexSyncBatcher != nil {
 		r.vertexSyncBatcher.Add(gcsURI)
 	}
 	return nil

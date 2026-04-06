@@ -68,6 +68,7 @@ import (
 	horizoninternalknowledge "github.com/igorkirisyuk/sanskrite/internal/horizon/internalknowledge"
 	horizoninterp "github.com/igorkirisyuk/sanskrite/internal/horizon/interpretation"
 	horizonlens "github.com/igorkirisyuk/sanskrite/internal/horizon/lens"
+	horizonlensruntime "github.com/igorkirisyuk/sanskrite/internal/horizon/lensruntime"
 	horizonmechanismdict "github.com/igorkirisyuk/sanskrite/internal/horizon/mechanismdict"
 	horizonmetriccore "github.com/igorkirisyuk/sanskrite/internal/horizon/metriccore"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
@@ -529,6 +530,7 @@ func main() {
 	var horizonTelemetryRepo *horizonrepo.HorizonTelemetryRepository
 	var canvasIngester *discovery.CanvasIngester
 	var retroAttachWorker *horizonsignallanding.RetroAttachWorker
+	var lensRuntimeService *horizonlensruntime.Service
 	sourcesDocsRepo := repo.NewDocumentsRepository(fsClient.Client())
 	// Note: bqClient will be initialized later, BigQuery sync will be configured after initialization
 	sourcesHandler := httphandlers.NewSourcesHandler(repo.NewSourceProjectsRepository(fsClient.Client()), s.dsrcs, logger).WithDocuments(sourcesDocsRepo)
@@ -910,45 +912,121 @@ func main() {
 			s.discoveryHandler = s.discoveryHandler.WithVertexSearch(vertexSearchClient)
 		}
 
-		// Настраиваем автоматическую синхронизацию документов с Vertex AI Search.
-		// Для news/source ingest используем общий batcher, иначе document_feed быстро упирается
-		// в Discovery Engine quota по количеству import requests в минуту.
-		if vertexSearchClient != nil && docsBucket != "" {
-			batchConfig := horizonrepo.DefaultVertexSyncBatcherConfig()
-			if v := strings.TrimSpace(getEnv("VERTEX_SYNC_MAX_BATCH_SIZE", "")); v != "" {
-				if n, err := strconv.Atoi(v); err == nil && n > 0 {
-					if n > 100 {
-						n = 100
-					}
-					batchConfig.MaxBatchSize = n
+		vertexBatchConfig := horizonrepo.DefaultVertexSyncBatcherConfig()
+		if n := getEnvInt("VERTEX_SYNC_MAX_BATCH_SIZE", 0); n > 0 {
+			if n > 100 {
+				n = 100
+			}
+			vertexBatchConfig.MaxBatchSize = n
+		}
+		if n := getEnvInt("VERTEX_SYNC_MIN_BATCH_SIZE", 0); n > 0 {
+			vertexBatchConfig.MinBatchSize = n
+		}
+		if n := getEnvInt("VERTEX_SYNC_FLUSH_INTERVAL_SEC", 0); n > 0 {
+			vertexBatchConfig.FlushInterval = time.Duration(n) * time.Second
+		}
+		vertexBudgetConfig := horizonrepo.DefaultVertexImportBudgetConfig()
+		vertexBudgetConfig.BaseImportsPerMinute = getEnvInt("VERTEX_SYNC_BASE_IMPORTS_PER_MINUTE", vertexBudgetConfig.BaseImportsPerMinute)
+		vertexBudgetConfig.MaxImportsPerMinute = getEnvInt("VERTEX_SYNC_MAX_IMPORTS_PER_MINUTE", vertexBudgetConfig.MaxImportsPerMinute)
+		vertexBudgetConfig.BaseInflightImports = getEnvInt("VERTEX_SYNC_BASE_INFLIGHT_IMPORTS", vertexBudgetConfig.BaseInflightImports)
+		vertexBudgetConfig.MaxInflightImports = getEnvInt("VERTEX_SYNC_MAX_INFLIGHT_IMPORTS", vertexBudgetConfig.MaxInflightImports)
+		vertexBudgetConfig.TargetPendingLRO = getEnvInt("VERTEX_SYNC_TARGET_PENDING_LRO", vertexBudgetConfig.TargetPendingLRO)
+		vertexBudgetConfig.Adaptive = parseEnvBool(getEnv("VERTEX_SYNC_ENABLE_ADAPTIVE_THROTTLE", "true"))
+		vertexBudgetConfig.OperationTimeout = getEnvDuration("VERTEX_SYNC_OPERATION_TIMEOUT", vertexBudgetConfig.OperationTimeout)
+		vertexBudgetConfig.LogInterval = getEnvDuration("VERTEX_SYNC_LOG_INTERVAL", vertexBudgetConfig.LogInterval)
+
+		vertexImportTopic := strings.TrimSpace(getEnv("VERTEX_IMPORT_INTENTS_TOPIC", horizonrepo.DefaultVertexImportIntentTopic))
+		vertexImportSubscription := strings.TrimSpace(getEnv("VERTEX_IMPORT_INTENTS_SUBSCRIPTION", horizonrepo.DefaultVertexImportIntentSubscription))
+		var vertexImportPublisher *horizonrepo.VertexImportPublisher
+		var vertexImportBudget *horizonrepo.VertexImportBudget
+		var vertexImportObjectExists horizonrepo.VertexImportObjectExists
+		if gcsClient != nil {
+			vertexImportObjectExists = func(ctx context.Context, uri string) (bool, error) {
+				parsed, err := url.Parse(strings.TrimSpace(uri))
+				if err != nil {
+					return false, fmt.Errorf("parse vertex import uri %q: %w", uri, err)
+				}
+				if !strings.EqualFold(parsed.Scheme, "gs") {
+					return true, nil
+				}
+				bucketName := strings.TrimSpace(parsed.Host)
+				objectPath := strings.TrimPrefix(strings.TrimSpace(parsed.Path), "/")
+				if bucketName == "" || objectPath == "" {
+					return false, fmt.Errorf("invalid gcs uri for vertex import: %q", uri)
+				}
+				return gcsClient.ObjectExists(ctx, bucketName, objectPath)
+			}
+		}
+		if vertexSearchClient != nil && pub != nil {
+			initCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			vertexImportPublisher, err = horizonrepo.NewVertexImportPublisher(initCtx, pub.Client(), vertexImportTopic, logger)
+			cancel()
+			if err != nil {
+				logger.Printf("WARNING: Vertex import publisher init failed: %v", err)
+			} else {
+				vertexImportBudget = horizonrepo.NewVertexImportBudget(vertexBudgetConfig)
+				vertexImportBudget.StartLogging(ctx, "vertex-import", logger)
+				worker, workerErr := horizonrepo.NewVertexImportWorker(
+					ctx,
+					pub.Client(),
+					vertexImportTopic,
+					vertexImportSubscription,
+					vertexSearchClient,
+					vertexImportBudget,
+					vertexBatchConfig,
+					logger,
+					vertexImportObjectExists,
+				)
+				if workerErr != nil {
+					logger.Printf("WARNING: Vertex import worker init failed: %v", workerErr)
+				} else {
+					go func() {
+						if err := worker.Start(ctx); err != nil {
+							logger.Printf("vertex import worker stopped: %v", err)
+						}
+					}()
+					logger.Printf("Vertex import worker enabled: topic=%s subscription=%s maxBatch=%d minBatch=%d interval=%v",
+						vertexImportTopic, vertexImportSubscription, vertexBatchConfig.MaxBatchSize, vertexBatchConfig.MinBatchSize, vertexBatchConfig.FlushInterval)
 				}
 			}
-			if v := strings.TrimSpace(getEnv("VERTEX_SYNC_MIN_BATCH_SIZE", "")); v != "" {
-				if n, err := strconv.Atoi(v); err == nil && n > 0 {
-					batchConfig.MinBatchSize = n
-				}
+		}
+
+		queueVertexIntent := func(ctx context.Context, storeID, dataSchema, source, tenantID, gcsURI string) (string, error) {
+			if vertexImportPublisher == nil {
+				return "", fmt.Errorf("vertex import publisher is not configured")
 			}
-			if v := strings.TrimSpace(getEnv("VERTEX_SYNC_FLUSH_INTERVAL_SEC", "")); v != "" {
-				if n, err := strconv.Atoi(v); err == nil && n > 0 {
-					batchConfig.FlushInterval = time.Duration(n) * time.Second
-				}
+			gcsURI = strings.TrimSpace(gcsURI)
+			storeID = strings.TrimSpace(storeID)
+			if gcsURI == "" || storeID == "" {
+				return "", nil
 			}
-			docVertexSyncBatcher := horizonrepo.NewVertexSyncBatcher(
-				func(ctx context.Context, uris []string) (string, error) {
-					return vertexSearchClient.ImportDocumentsFromURIs(ctx, uris, "INCREMENTAL", "content")
-				},
-				batchConfig,
-			)
+			intent := horizonrepo.VertexImportIntent{
+				TenantID:           strings.TrimSpace(tenantID),
+				Source:             strings.TrimSpace(source),
+				URI:                gcsURI,
+				DataStoreID:        storeID,
+				DataSchema:         dataSchema,
+				ReconciliationMode: "INCREMENTAL",
+			}
+			if err := vertexImportPublisher.PublishIntent(ctx, intent); err != nil {
+				return "", err
+			}
+			return "queued", nil
+		}
+
+		enqueueVertexIntent := func(storeID, dataSchema, source, tenantID string) func(context.Context, string) error {
+			return func(ctx context.Context, gcsURI string) error {
+				_, err := queueVertexIntent(ctx, storeID, dataSchema, source, tenantID, gcsURI)
+				return err
+			}
+		}
+
+		// Настраиваем автоматическую синхронизацию документов с Vertex AI Search через durable Pub/Sub queue.
+		if vertexImportPublisher != nil && docsBucket != "" && strings.TrimSpace(vertexSearchDataStoreID) != "" {
 			docsRepo = docsRepo.WithVertexSearchSync(func(ctx context.Context, gcsURI string) (string, error) {
-				_ = ctx
-				if strings.TrimSpace(gcsURI) == "" {
-					return "", nil
-				}
-				docVertexSyncBatcher.Add(gcsURI)
-				return "queued", nil
+				return queueVertexIntent(ctx, vertexSearchDataStoreID, "content", "documents", "", gcsURI)
 			})
-			logger.Printf("Vertex AI Search auto-sync enabled for documents: batched mode (maxBatch=%d minBatch=%d interval=%v)",
-				batchConfig.MaxBatchSize, batchConfig.MinBatchSize, batchConfig.FlushInterval)
+			logger.Printf("Vertex AI Search auto-sync enabled for documents: durable queue topic=%s store=%s", vertexImportTopic, vertexSearchDataStoreID)
 		}
 
 		// Start document processor worker (background)
@@ -1776,70 +1854,54 @@ func main() {
 			horizonFragmentsRepo.WithStorage(gcsClient, horizonFragmentsBucket)
 			horizonEdgesRepo.WithStorage(gcsClient, horizonFragmentsBucket)
 			if vertexSearchClient != nil {
-				// Use batched sync to avoid quota exhaustion (quota is per-request, not per-document).
-				// Defaults are intentionally conservative to avoid spamming ImportDocuments under high write rates.
-				batchConfig := horizonrepo.DefaultVertexSyncBatcherConfig()
-				// Optional tuning via env:
-				// - VERTEX_SYNC_MAX_BATCH_SIZE (int)
-				// - VERTEX_SYNC_MIN_BATCH_SIZE (int)
-				// - VERTEX_SYNC_FLUSH_INTERVAL_SEC (int)
-				if v := strings.TrimSpace(getEnv("VERTEX_SYNC_MAX_BATCH_SIZE", "")); v != "" {
-					if n, err := strconv.Atoi(v); err == nil && n > 0 {
-						// Discovery Engine hard limit: max 100 URIs per ImportDocuments request (dataSchema=document)
-						if n > 100 {
-							n = 100
-						}
-						batchConfig.MaxBatchSize = n
-					}
+				fragmentDataStoreID := strings.TrimSpace(getEnvWithAlt("VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID", "VERTEX_SEARCH_HORIZON_DATA_STORE_ID", ""))
+				if fragmentDataStoreID == "" {
+					fragmentDataStoreID = strings.TrimSpace(vertexSearchDataStoreID)
 				}
-				if v := strings.TrimSpace(getEnv("VERTEX_SYNC_MIN_BATCH_SIZE", "")); v != "" {
-					if n, err := strconv.Atoi(v); err == nil && n > 0 {
-						batchConfig.MinBatchSize = n
-					}
+				if vertexImportPublisher != nil && fragmentDataStoreID != "" {
+					horizonFragmentsRepo.WithVertexImportEnqueue(enqueueVertexIntent(fragmentDataStoreID, "document", "horizon_fragments", ""))
+				} else {
+					horizonVertexSyncBatcher = horizonrepo.NewVertexSyncBatcher(
+						func(ctx context.Context, uris []string) (string, error) {
+							if fragmentDataStoreID != "" {
+								return vertexSearchClient.WithDataStore(fragmentDataStoreID).ImportDocumentsFromURIs(ctx, uris, "INCREMENTAL", "document")
+							}
+							return vertexSearchClient.ImportDocumentsFromURIs(ctx, uris, "INCREMENTAL", "document")
+						},
+						vertexBatchConfig,
+					)
+					horizonFragmentsRepo.WithVertexSyncBatcher(horizonVertexSyncBatcher)
 				}
-				if v := strings.TrimSpace(getEnv("VERTEX_SYNC_FLUSH_INTERVAL_SEC", "")); v != "" {
-					if n, err := strconv.Atoi(v); err == nil && n > 0 {
-						batchConfig.FlushInterval = time.Duration(n) * time.Second
-					}
-				}
-				horizonVertexSyncBatcher = horizonrepo.NewVertexSyncBatcher(
-					func(ctx context.Context, uris []string) (string, error) {
-						// Prefer a dedicated datastore for horizon fragments (store isolation instead of filters).
-						if ds := getEnvWithAlt("VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID", "VERTEX_SEARCH_HORIZON_DATA_STORE_ID", ""); ds != "" {
-							return vertexSearchClient.WithDataStore(ds).ImportDocumentsFromURIs(ctx, uris, "INCREMENTAL", "document")
-						}
-						// Fallback: legacy behavior (shared datastore)
-						return vertexSearchClient.ImportDocumentsFromURIs(ctx, uris, "INCREMENTAL", "document")
-					},
-					batchConfig,
-				)
-				horizonFragmentsRepo.WithVertexSyncBatcher(horizonVertexSyncBatcher)
 				horizonFragmentsRepo.WithVertexSearchDelete(func(ctx context.Context, fragmentID string) error {
 					fragmentID = strings.TrimSpace(fragmentID)
 					if fragmentID == "" {
 						return nil
 					}
 					// Keep delete path aligned with import path: use dedicated Horizon datastore when configured.
-					if ds := getEnvWithAlt("VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID", "VERTEX_SEARCH_HORIZON_DATA_STORE_ID", ""); ds != "" {
-						return vertexSearchClient.WithDataStore(ds).DeleteDocument(ctx, fragmentID)
+					if fragmentDataStoreID != "" {
+						return vertexSearchClient.WithDataStore(fragmentDataStoreID).DeleteDocument(ctx, fragmentID)
 					}
 					return vertexSearchClient.DeleteDocument(ctx, fragmentID)
 				})
-				logger.Printf("Horizon Fragments: Vertex AI Search batched sync enabled (maxBatch=%d minBatch=%d interval=%v)",
-					batchConfig.MaxBatchSize, batchConfig.MinBatchSize, batchConfig.FlushInterval)
+				logger.Printf("Horizon Fragments: Vertex AI Search sync enabled store=%s durable=%t (maxBatch=%d minBatch=%d interval=%v)",
+					fragmentDataStoreID, vertexImportPublisher != nil, vertexBatchConfig.MaxBatchSize, vertexBatchConfig.MinBatchSize, vertexBatchConfig.FlushInterval)
 
 				edgeDataStoreID := strings.TrimSpace(getEnvWithAlt("VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_ID", "VERTEX_SEARCH_HORIZON_EDGES_DATA_STORE_ID", ""))
 				if edgeDataStoreID == "" && parseEnvBool(getEnv("VERTEX_SEARCH_ENABLE_EDGE_DOCS_IN_HORIZON_STORE", "false")) {
 					edgeDataStoreID = strings.TrimSpace(getEnvWithAlt("VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID", "VERTEX_SEARCH_HORIZON_DATA_STORE_ID", ""))
 				}
 				if edgeDataStoreID != "" {
-					edgeVertexSyncBatcher := horizonrepo.NewVertexSyncBatcher(
-						func(ctx context.Context, uris []string) (string, error) {
-							return vertexSearchClient.WithDataStore(edgeDataStoreID).ImportDocumentsFromURIs(ctx, uris, "INCREMENTAL", "document")
-						},
-						batchConfig,
-					)
-					horizonEdgesRepo.WithVertexSyncBatcher(edgeVertexSyncBatcher)
+					if vertexImportPublisher != nil {
+						horizonEdgesRepo.WithVertexImportEnqueue(enqueueVertexIntent(edgeDataStoreID, "document", "horizon_edges", ""))
+					} else {
+						edgeVertexSyncBatcher := horizonrepo.NewVertexSyncBatcher(
+							func(ctx context.Context, uris []string) (string, error) {
+								return vertexSearchClient.WithDataStore(edgeDataStoreID).ImportDocumentsFromURIs(ctx, uris, "INCREMENTAL", "document")
+							},
+							vertexBatchConfig,
+						)
+						horizonEdgesRepo.WithVertexSyncBatcher(edgeVertexSyncBatcher)
+					}
 					horizonEdgesRepo.WithVertexSearchDelete(func(ctx context.Context, edgeID string) error {
 						edgeID = strings.TrimSpace(edgeID)
 						if edgeID == "" {
@@ -1847,8 +1909,8 @@ func main() {
 						}
 						return vertexSearchClient.WithDataStore(edgeDataStoreID).DeleteDocument(ctx, edgeID)
 					})
-					logger.Printf("Horizon Edges: Vertex AI Search batched sync enabled datastore=%s (maxBatch=%d minBatch=%d interval=%v)",
-						edgeDataStoreID, batchConfig.MaxBatchSize, batchConfig.MinBatchSize, batchConfig.FlushInterval)
+					logger.Printf("Horizon Edges: Vertex AI Search sync enabled datastore=%s durable=%t (maxBatch=%d minBatch=%d interval=%v)",
+						edgeDataStoreID, vertexImportPublisher != nil, vertexBatchConfig.MaxBatchSize, vertexBatchConfig.MinBatchSize, vertexBatchConfig.FlushInterval)
 				} else {
 					logger.Printf("Horizon Edges: Vertex AI Search sync disabled (set VERTEX_SEARCH_HORIZON_EDGES_DATA_STORE_ID or VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_ID)")
 				}
@@ -1863,9 +1925,12 @@ func main() {
 					if strings.TrimSpace(gcsURI) == "" {
 						return "", nil
 					}
+					if vertexImportPublisher != nil && strings.TrimSpace(vertexSearchDataStoreID) != "" {
+						return queueVertexIntent(ctx, vertexSearchDataStoreID, "document", "ontology_facts", "global", gcsURI)
+					}
 					return vertexSearchClient.ImportDocumentsFromURIs(ctx, []string{gcsURI}, "INCREMENTAL", "document")
 				})
-				logger.Printf("Ontology facts: Vertex AI Search sync enabled")
+				logger.Printf("Ontology facts: Vertex AI Search sync enabled durable=%t", vertexImportPublisher != nil)
 			}
 		}
 
@@ -1971,6 +2036,9 @@ func main() {
 				})
 			}
 			horizonService.SetScopeAgentService(scopeAgentService)
+			signalLandingSessionsRepo := horizonrepo.NewSignalLandingSessionsRepository(fsClient.Client())
+			signalLandingHitsRepo := horizonrepo.NewSignalLandingHitsRepository(fsClient.Client())
+			signalLandingSummariesRepo := horizonrepo.NewSignalLandingSummariesRepository(fsClient.Client())
 
 			watchRuntimeService := horizonwatchruntime.NewService(
 				horizonWatchSubjectsRepo,
@@ -1985,7 +2053,7 @@ func main() {
 			).WithScopeAgentRunsRepository(horizonScopeAgentRunsRepo).
 				WithMaterializedArtifactsRepository(horizonMaterializedArtifactsRepo).
 				WithFactsRepository(ontologyFactsRepo).
-				WithSignalLandingSummariesRepository(horizonrepo.NewSignalLandingSummariesRepository(fsClient.Client())).
+				WithSignalLandingSummariesRepository(signalLandingSummariesRepo).
 				WithWatchPortfoliosRepository(horizonWatchPortfoliosRepo).
 				WithWatchDigestsRepository(horizonWatchDigestsRepo).
 				WithMacroAgentPoliciesRepository(horizonMacroAgentPoliciesRepo).
@@ -2009,6 +2077,15 @@ func main() {
 					return ids, nil
 				})
 			horizonService.SetWatchRuntimeService(watchRuntimeService)
+			lensRuntimeService = horizonlensruntime.NewService(
+				horizonLensesRepo,
+				horizonFragmentsRepo,
+				horizonMaterializedArtifactsRepo,
+				horizonWatchTargetsRepo,
+				s.dsrcs,
+				watchRuntimeService,
+				scopeAgentService,
+			)
 			scopeAgentService.WithAcceptedProposalHook(func(ctx context.Context, proposal *horizonmodels.AgentProposal) ([]string, error) {
 				if proposal == nil || strings.TrimSpace(proposal.ProposalType) != string(horizonmodels.AgentProposalTypeCoverageGap) {
 					return nil, nil
@@ -2274,7 +2351,13 @@ func main() {
 			horizonExposurePathsRepo := horizonrepo.NewExposurePathsRepository(fsClient.Client())
 			if gcsClient != nil && horizonFragmentsBucket != "" {
 				horizonMaterializedArtifactsRepo.WithStorage(gcsClient, horizonFragmentsBucket)
-				if horizonVertexSyncBatcher != nil {
+				artifactDataStoreID := strings.TrimSpace(getEnvWithAlt("VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID", "VERTEX_SEARCH_HORIZON_DATA_STORE_ID", ""))
+				if artifactDataStoreID == "" {
+					artifactDataStoreID = strings.TrimSpace(vertexSearchDataStoreID)
+				}
+				if vertexImportPublisher != nil && artifactDataStoreID != "" {
+					horizonMaterializedArtifactsRepo.WithVertexImportEnqueue(enqueueVertexIntent(artifactDataStoreID, "document", "horizon_materialized_artifacts", ""))
+				} else if horizonVertexSyncBatcher != nil {
 					horizonMaterializedArtifactsRepo.WithVertexSyncBatcher(horizonVertexSyncBatcher)
 				}
 			}
@@ -2771,7 +2854,8 @@ func main() {
 					riskCfg,
 				).WithFeedbackEmitter(feedbackEmitter).
 					WithScoutingJobsRepo(horizonScoutingJobsRepo).
-					WithTelemetryRepo(horizonTelemetryRepo)
+					WithTelemetryRepo(horizonTelemetryRepo).
+					WithSignalLandingRepos(signalLandingSessionsRepo, signalLandingHitsRepo, signalLandingSummariesRepo)
 			}
 			horizonFragmentsRepo.WithOnUpsert(func(ctx context.Context, fragment *horizonmodels.HorizonFragment) {
 				// Auto-seed appetite profiles when external scopes emerge (market/geo/org with segments).
@@ -3006,7 +3090,7 @@ func main() {
 					gcsClient,
 					vertexSearchClient,
 					horizonFragmentsRepo.Firestore(),
-				)
+				).WithImportBudget(vertexImportBudget)
 				scoutEngine.WithInternalKnowledgeWarmup(internalKnowledgeWarmup)
 				lensService.WithInternalKnowledgeWarmup(internalKnowledgeWarmup)
 				logger.Printf("Internal knowledge warmup enabled: bucket=%s store=%s importWaitTimeout=%s", internalKnowledgeBucket, internalKnowledgeStoreID, internalKnowledgeImportWaitTimeout)
@@ -3278,7 +3362,10 @@ func main() {
 				signalExtractor := horizonsignals.NewSignalExtractor(nil, aiExec)
 				applicability := horizonsignals.NewExternalApplicabilityEvaluator().
 					WithFragmentsRepo(horizonFragmentsRepo).
-					WithEdgesRepo(horizonEdgesRepo)
+					WithEdgesRepo(horizonEdgesRepo).
+					WithSignalLandingSessionsRepo(signalLandingSessionsRepo).
+					WithSignalLandingHitsRepo(signalLandingHitsRepo).
+					WithSignalLandingSummariesRepo(signalLandingSummariesRepo)
 				if horizonExposurePathsRepo != nil {
 					applicability = applicability.WithExposurePathsRepo(horizonExposurePathsRepo)
 				}
@@ -3300,10 +3387,10 @@ func main() {
 					ontologyFactsRepo,
 				).WithEscalationLLM(aiExec)
 				signalLandingService := horizonsignallanding.NewService(
-					horizonrepo.NewSignalLandingSessionsRepository(fsClient.Client()),
+					signalLandingSessionsRepo,
 					horizonrepo.NewSignalImpactClaimsRepository(fsClient.Client()),
-					horizonrepo.NewSignalLandingHitsRepository(fsClient.Client()),
-					horizonrepo.NewSignalLandingSummariesRepository(fsClient.Client()),
+					signalLandingHitsRepo,
+					signalLandingSummariesRepo,
 					horizonrepo.NewSignalMissingAnchorCandidatesRepository(fsClient.Client()),
 					horizonFragmentsRepo,
 				).WithMaterializedRepo(horizonMaterializedArtifactsRepo).
@@ -5132,6 +5219,45 @@ func main() {
 
 	// Attach admin route without Firebase auth, but with jobAuth
 	mux.Handle("/api/v1/admin/sources/coordinate", jobAuth(http.HandlerFunc(s.discoveryHandler.CoordinateSources)))
+	mux.Handle("/api/v1/admin/nv_horizon/lens_runtime/sync", jobAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if lensRuntimeService == nil {
+			http.Error(w, "lens runtime service not initialized", http.StatusServiceUnavailable)
+			return
+		}
+		var body struct {
+			TenantID      string `json:"tenantId"`
+			IncludeGlobal bool   `json:"includeGlobal"`
+			Limit         int    `json:"limit"`
+			LensID        string `json:"lensId"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		ctxRun, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+		defer cancel()
+		if strings.TrimSpace(body.LensID) != "" {
+			result, err := lensRuntimeService.SyncLens(ctxRun, strings.TrimSpace(body.LensID))
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(result)
+			return
+		}
+		report, err := lensRuntimeService.SyncAllActiveLenses(ctxRun, strings.TrimSpace(body.TenantID), body.IncludeGlobal, body.Limit)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(report)
+	})))
+	mux.Handle("/api/v1/admin/horizon/lens_runtime/sync", jobAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/api/v1/admin/nv_horizon/lens_runtime/sync", http.StatusPermanentRedirect)
+	})))
 
 	// Horizon Watchdog cron endpoint (Cloud Scheduler)
 	// POST /api/v1/admin/nv_horizon/watchdog/run?limit=200

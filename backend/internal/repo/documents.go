@@ -171,14 +171,14 @@ func (r *DocumentsRepository) Upsert(ctx context.Context, d *models.Document) er
 			d.StoragePath = storagePath
 			if r.vertexSearchSync != nil {
 				gcsURI := *storagePath
-				go func(uri string) {
-					syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer cancel()
-					operationName, err := r.vertexSearchSync(syncCtx, uri)
-					if err == nil && operationName != "" {
-						log.Printf("[DocumentsRepo] Vertex AI Search sync triggered: operation=%s", operationName)
-					}
-				}(gcsURI)
+				syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				operationName, err := r.vertexSearchSync(syncCtx, gcsURI)
+				cancel()
+				if err == nil && operationName != "" {
+					log.Printf("[DocumentsRepo] Vertex AI Search sync triggered: operation=%s", operationName)
+				} else if err != nil {
+					log.Printf("[DocumentsRepo] Vertex AI Search sync enqueue failed for %s: %v", gcsURI, err)
+				}
 			}
 		}
 	}
@@ -222,14 +222,14 @@ func (r *DocumentsRepository) Create(ctx context.Context, d *models.Document) (s
 			d.StoragePath = storagePath
 			if r.vertexSearchSync != nil {
 				gcsURI := *storagePath
-				go func(uri string) {
-					syncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer cancel()
-					operationName, err := r.vertexSearchSync(syncCtx, uri)
-					if err == nil && operationName != "" {
-						log.Printf("[DocumentsRepo] Vertex AI Search sync triggered: operation=%s", operationName)
-					}
-				}(gcsURI)
+				syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				operationName, err := r.vertexSearchSync(syncCtx, gcsURI)
+				cancel()
+				if err == nil && operationName != "" {
+					log.Printf("[DocumentsRepo] Vertex AI Search sync triggered: operation=%s", operationName)
+				} else if err != nil {
+					log.Printf("[DocumentsRepo] Vertex AI Search sync enqueue failed for %s: %v", gcsURI, err)
+				}
 			}
 		}
 	}

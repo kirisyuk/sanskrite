@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/lensresearch"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
@@ -125,6 +127,26 @@ func (r *LensesRepository) ListActive(ctx context.Context, tenantID string, limi
 	return lenses, nil
 }
 
+func (r *LensesRepository) ListAllActive(ctx context.Context, limit int) ([]*models.Lens, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	q := r.col.Where("status", "==", string(models.LensStatusActive)).OrderBy("updatedAt", firestore.Desc).Limit(limit)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+	var lenses []*models.Lens
+	for _, d := range docs {
+		var lens models.Lens
+		if err := d.DataTo(&lens); err != nil {
+			continue
+		}
+		lenses = append(lenses, &lens)
+	}
+	return lenses, nil
+}
+
 // FindByScope получает Lens, которые включают указанный canonicalPath в scope
 func (r *LensesRepository) FindByScope(ctx context.Context, tenantID, canonicalPath string, limit int) ([]*models.Lens, error) {
 	if limit <= 0 {
@@ -175,12 +197,93 @@ func (r *LensesRepository) Update(ctx context.Context, lens *models.Lens) error 
 	if err := lens.Validate(); err != nil {
 		return fmt.Errorf("validation error: %w", err)
 	}
+	if err := r.preserveStoredInternalKnowledgeState(ctx, lens); err != nil {
+		return err
+	}
 
 	now := time.Now().UTC()
 	lens.UpdatedAt = now
 
 	_, err := r.col.Doc(lens.ID).Set(ctx, lens)
 	return err
+}
+
+func (r *LensesRepository) preserveStoredInternalKnowledgeState(ctx context.Context, lens *models.Lens) error {
+	if r == nil || r.col == nil || lens == nil || strings.TrimSpace(lens.ID) == "" {
+		return nil
+	}
+	snap, err := r.col.Doc(lens.ID).Get(ctx)
+	if err != nil {
+		if grpcstatus.Code(err) == codes.NotFound {
+			return nil
+		}
+		return err
+	}
+	if !snap.Exists() {
+		return nil
+	}
+	var stored models.Lens
+	if err := snap.DataTo(&stored); err != nil {
+		return err
+	}
+	preserveExistingInternalKnowledgeState(lens, &stored)
+	return nil
+}
+
+func preserveExistingInternalKnowledgeState(lens, stored *models.Lens) {
+	if lens == nil || stored == nil {
+		return
+	}
+	existing := lensInternalKnowledgeViewState(stored.ViewConfig)
+	if len(existing) == 0 {
+		return
+	}
+	if lens.ViewConfig == nil {
+		lens.ViewConfig = map[string]interface{}{}
+	}
+	incoming := lensInternalKnowledgeViewState(lens.ViewConfig)
+	lens.ViewConfig["internalKnowledge"] = mergeInternalKnowledgeForLensUpdate(existing, incoming)
+}
+
+func lensInternalKnowledgeViewState(viewConfig map[string]interface{}) map[string]interface{} {
+	if viewConfig == nil {
+		return nil
+	}
+	raw, ok := viewConfig["internalKnowledge"]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch typed := raw.(type) {
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(typed))
+		for key, value := range typed {
+			out[key] = value
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func mergeInternalKnowledgeForLensUpdate(existing, incoming map[string]interface{}) map[string]interface{} {
+	if len(existing) == 0 && len(incoming) == 0 {
+		return nil
+	}
+	if len(existing) == 0 {
+		return incoming
+	}
+	// Full lens updates should not rewrite the internalKnowledge runtime state.
+	// Those mutations must go through UpdateInternalKnowledgeState/PatchInternalKnowledgeStateFields.
+	merged := make(map[string]interface{}, len(existing)+len(incoming))
+	for key, value := range existing {
+		merged[key] = value
+	}
+	for key, value := range incoming {
+		if _, exists := merged[key]; !exists {
+			merged[key] = value
+		}
+	}
+	return merged
 }
 
 // UpdateInternalKnowledgeState updates only the internalKnowledge view-config payload.

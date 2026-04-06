@@ -34,6 +34,9 @@ type ExternalApplicabilityEvaluator struct {
 	fragmentsRepo     *repo.HorizonFragmentsRepository
 	edgesRepo         *repo.DependencyEdgesRepository
 	exposurePathsRepo *repo.ExposurePathsRepository
+	sessionsRepo      *repo.SignalLandingSessionsRepository
+	hitsRepo          *repo.SignalLandingHitsRepository
+	summariesRepo     *repo.SignalLandingSummariesRepository
 
 	mu         sync.RWMutex
 	lensCached map[string]cachedExposureList
@@ -73,6 +76,21 @@ func (e *ExternalApplicabilityEvaluator) WithEdgesRepo(r *repo.DependencyEdgesRe
 
 func (e *ExternalApplicabilityEvaluator) WithExposurePathsRepo(r *repo.ExposurePathsRepository) *ExternalApplicabilityEvaluator {
 	e.exposurePathsRepo = r
+	return e
+}
+
+func (e *ExternalApplicabilityEvaluator) WithSignalLandingSessionsRepo(r *repo.SignalLandingSessionsRepository) *ExternalApplicabilityEvaluator {
+	e.sessionsRepo = r
+	return e
+}
+
+func (e *ExternalApplicabilityEvaluator) WithSignalLandingHitsRepo(r *repo.SignalLandingHitsRepository) *ExternalApplicabilityEvaluator {
+	e.hitsRepo = r
+	return e
+}
+
+func (e *ExternalApplicabilityEvaluator) WithSignalLandingSummariesRepo(r *repo.SignalLandingSummariesRepository) *ExternalApplicabilityEvaluator {
+	e.summariesRepo = r
 	return e
 }
 
@@ -178,6 +196,10 @@ func (e *ExternalApplicabilityEvaluator) hasQualifyingExposurePath(ctx context.C
 		}
 	}
 
+	if e.hasLandingProof(ctx, signal, fragment, tenantID) {
+		return true
+	}
+
 	if lensID := lensIDFromContext(ctx); lensID != "" && e.exposurePathsRepo != nil {
 		if e.hasExposureArtifactPath(ctx, tenantID, lensID, seedIDs, targetID) {
 			return true
@@ -191,6 +213,103 @@ func (e *ExternalApplicabilityEvaluator) hasQualifyingExposurePath(ctx context.C
 		}
 	}
 	return false
+}
+
+func (e *ExternalApplicabilityEvaluator) hasLandingProof(ctx context.Context, signal *horizonmodels.SignalDescriptor, fragment *horizonmodels.HorizonFragment, tenantID string) bool {
+	if e == nil || signal == nil || fragment == nil || e.sessionsRepo == nil {
+		return false
+	}
+	factID := strings.TrimSpace(signal.ID)
+	if factID == "" {
+		factID = strings.TrimSpace(signal.FactID)
+	}
+	if factID == "" {
+		return false
+	}
+	sessions, err := e.sessionsRepo.ListBySourceFactID(ctx, tenantID, factID, 8)
+	if err != nil || len(sessions) == 0 {
+		return false
+	}
+
+	targetPath := strings.TrimSpace(fragment.CanonicalPath)
+	sessionIDs := make(map[string]struct{}, len(sessions))
+	for _, session := range sessions {
+		if session == nil || strings.TrimSpace(session.ID) == "" {
+			continue
+		}
+		sessionIDs[strings.TrimSpace(session.ID)] = struct{}{}
+		if e.hitsRepo != nil {
+			hits, hitErr := e.hitsRepo.ListBySession(ctx, strings.TrimSpace(session.ID), 96)
+			if hitErr == nil {
+				for _, hit := range hits {
+					if hit == nil {
+						continue
+					}
+					if landingRefMatchesFragment(strings.TrimSpace(hit.CanonicalRef), fragment) {
+						return true
+					}
+				}
+			}
+		}
+	}
+
+	if e.summariesRepo == nil || targetPath == "" {
+		return false
+	}
+	summaries, err := e.summariesRepo.ListByScopeRefs(ctx, tenantID, []string{targetPath}, 8)
+	if err != nil {
+		return false
+	}
+	for _, summary := range summaries {
+		if summary == nil {
+			continue
+		}
+		if !summaryBelongsToSessions(summary, sessionIDs) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func summaryBelongsToSessions(summary *horizonmodels.SignalLandingSummary, sessionIDs map[string]struct{}) bool {
+	if summary == nil || len(sessionIDs) == 0 {
+		return false
+	}
+	for _, sessionID := range summary.SessionIDs {
+		if _, ok := sessionIDs[strings.TrimSpace(sessionID)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func landingRefMatchesFragment(ref string, fragment *horizonmodels.HorizonFragment) bool {
+	if fragment == nil {
+		return false
+	}
+	ref = strings.TrimSpace(ref)
+	targetPath := strings.TrimSpace(fragment.CanonicalPath)
+	if ref == "" || targetPath == "" {
+		return false
+	}
+	if equivalentLocationPaths(ref, targetPath) || ref == targetPath {
+		return true
+	}
+	targetCountry := countryFromFragment(fragment)
+	refCountry := countryFromPath(ref)
+	if targetCountry == "" || refCountry == "" {
+		return false
+	}
+	if targetCountry != refCountry {
+		return false
+	}
+	switch {
+	case strings.HasPrefix(targetPath, "/loc/"), strings.HasPrefix(targetPath, "/zone/"):
+		return strings.HasPrefix(ref, "/zone/") || strings.HasPrefix(ref, "/loc/")
+	default:
+		return false
+	}
 }
 
 func (e *ExternalApplicabilityEvaluator) resolveSeedIDs(ctx context.Context, signal *horizonmodels.SignalDescriptor) ([]string, string) {
