@@ -13,7 +13,9 @@ import (
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonproductdict "github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/zonegeo"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
+	"github.com/igorkirisyuk/sanskrite/internal/ontology"
 )
 
 var nonAlphaNumeric = regexp.MustCompile(`[^a-z0-9]+`)
@@ -29,6 +31,7 @@ type Service struct {
 	materializedRepo *horizonrepo.MaterializedArtifactsRepository
 	productDict      *horizonproductdict.Runtime
 	vertexSearch     *ai.VertexAISearchClient
+	geocoding        ontology.GeocodingClientInterface
 }
 
 type Result struct {
@@ -74,6 +77,11 @@ func (s *Service) WithProductDictionary(dict *horizonproductdict.Runtime) *Servi
 
 func (s *Service) WithVertexSearch(client *ai.VertexAISearchClient) *Service {
 	s.vertexSearch = client
+	return s
+}
+
+func (s *Service) WithGeocodingClient(client ontology.GeocodingClientInterface) *Service {
+	s.geocoding = client
 	return s
 }
 
@@ -576,6 +584,8 @@ func (s *Service) ensureAffectedZoneForAnchor(ctx context.Context, session *hori
 				EpistemicStatus: horizonmodels.EpistemicStatusLowConfidence,
 			},
 		}
+		applySignalLandingZoneActivity(zone, session, claim, now)
+		s.maybeHydrateAffectedZoneCoordinates(ctx, zone, anchorFrag)
 		if _, err := s.fragmentsRepo.Create(ctx, zone); err != nil {
 			return "", err
 		}
@@ -583,7 +593,7 @@ func (s *Service) ensureAffectedZoneForAnchor(ctx context.Context, session *hori
 		if err != nil || zone == nil {
 			return zonePath, nil
 		}
-	} else if s.mergeSignalLandingZone(zone, session, anchorFrag, anchorRef, zoneLabel, conditionType, geoPrecision, now) {
+	} else if s.mergeSignalLandingZone(ctx, zone, session, claim, anchorFrag, anchorRef, zoneLabel, conditionType, geoPrecision, now) {
 		if err := s.fragmentsRepo.Update(ctx, zone); err != nil {
 			return "", err
 		}
@@ -596,8 +606,10 @@ func (s *Service) ensureAffectedZoneForAnchor(ctx context.Context, session *hori
 }
 
 func (s *Service) mergeSignalLandingZone(
+	ctx context.Context,
 	zone *horizonmodels.HorizonFragment,
 	session *horizonmodels.SignalLandingSession,
+	claim *horizonmodels.SignalImpactClaim,
 	anchor *horizonmodels.HorizonFragment,
 	anchorRef, zoneLabel, conditionType, geoPrecision string,
 	now time.Time,
@@ -650,11 +662,87 @@ func (s *Service) mergeSignalLandingZone(
 		zone.Coordinates = cloneCoordinates(anchor.Coordinates)
 		changed = true
 	}
+	if s.maybeHydrateAffectedZoneCoordinates(ctx, zone, anchor) {
+		changed = true
+	}
+	beforeStatus := fmt.Sprintf("%v|%v|%v", zone.Qualifiers["hypeStatus"], zone.Qualifiers["hypeIndicator"], zone.Qualifiers["lastMatchedAt"])
+	beforeScore := 0.0
+	if mv, ok := zone.State[signalLandingZoneMetricHypeScore]; ok {
+		beforeScore = mv.Value
+	}
+	applySignalLandingZoneActivity(zone, session, claim, now)
+	if mv, ok := zone.State[signalLandingZoneMetricHypeScore]; ok && mv.Value != beforeScore {
+		changed = true
+	}
+	afterStatus := fmt.Sprintf("%v|%v|%v", zone.Qualifiers["hypeStatus"], zone.Qualifiers["hypeIndicator"], zone.Qualifiers["lastMatchedAt"])
+	if afterStatus != beforeStatus {
+		changed = true
+	}
 	if zone.Metadata.LastUpdatedAt.Before(now) {
 		zone.Metadata.LastUpdatedAt = now
 		changed = true
 	}
 	return changed
+}
+
+func (s *Service) BackfillAffectedZoneCoordinates(ctx context.Context, zone *horizonmodels.HorizonFragment) (bool, error) {
+	if s == nil || zone == nil || zone.Type != horizonmodels.FragmentTypeAffectedZone {
+		return false, nil
+	}
+	if zone.Coordinates != nil && horizonmodels.IsRealGeoCoordinate(zone.Coordinates.Lat, zone.Coordinates.Lon) {
+		return false, nil
+	}
+	var anchor *horizonmodels.HorizonFragment
+	if s.fragmentsRepo != nil {
+		if anchorRef := strings.TrimSpace(fmt.Sprint(zone.Qualifiers["signalLandingAnchorRef"])); anchorRef != "" {
+			frag, err := s.fragmentsRepo.GetByCanonicalPath(ctx, anchorRef)
+			if err == nil {
+				anchor = frag
+			}
+		}
+	}
+	return s.maybeHydrateAffectedZoneCoordinates(ctx, zone, anchor), nil
+}
+
+func (s *Service) maybeHydrateAffectedZoneCoordinates(ctx context.Context, zone, anchor *horizonmodels.HorizonFragment) bool {
+	if zone == nil {
+		return false
+	}
+	if zone.Coordinates != nil && horizonmodels.IsRealGeoCoordinate(zone.Coordinates.Lat, zone.Coordinates.Lon) {
+		if !zone.HasCoordinates {
+			zone.HasCoordinates = true
+			return true
+		}
+		return false
+	}
+	if anchor != nil && anchor.Coordinates != nil && horizonmodels.IsRealGeoCoordinate(anchor.Coordinates.Lat, anchor.Coordinates.Lon) {
+		place, countryCode, _ := zonegeo.DerivePlaceCountry(zone)
+		changed := zonegeo.ApplyCoordinates(zone, anchor.Coordinates.Lat, anchor.Coordinates.Lon, firstNonEmpty(place, anchorLabelOrPath(anchor)), countryCode)
+		if changed && zone.Metadata.LastUpdatedAt.Before(time.Now().UTC()) {
+			zone.Metadata.LastUpdatedAt = time.Now().UTC()
+		}
+		return changed
+	}
+	if s == nil || s.geocoding == nil {
+		return false
+	}
+	place, countryCode, geoPrecision := zonegeo.DerivePlaceCountry(zone)
+	if place == "" && anchor != nil {
+		place = anchorLabelOrPath(anchor)
+	}
+	queries := zonegeo.BuildGeocodeQueries(place, countryCode, geoPrecision, zone.CanonicalPath)
+	for _, query := range queries {
+		result, err := s.geocoding.Geocode(ctx, query)
+		if err != nil || result == nil || !horizonmodels.IsRealGeoCoordinate(result.Lat, result.Lon) {
+			continue
+		}
+		changed := zonegeo.ApplyCoordinates(zone, result.Lat, result.Lon, place, countryCode)
+		if changed && zone.Metadata.LastUpdatedAt.Before(time.Now().UTC()) {
+			zone.Metadata.LastUpdatedAt = time.Now().UTC()
+		}
+		return changed
+	}
+	return false
 }
 
 func (s *Service) ensureAffectedZoneEdges(ctx context.Context, zone, anchor *horizonmodels.HorizonFragment, claim *horizonmodels.SignalImpactClaim, now time.Time) error {

@@ -232,6 +232,20 @@ func buildSourceSpecs() []sourceSpec {
 			DisableLLM:  false,
 			Status:      "active",
 		},
+		{
+			Key:         "gulf-canvas-levant-strike-geography",
+			DisplayName: "Gulf Crisis Canvas: Levant Strike Geography",
+			Kind:        coremodels.SourceKindRSS,
+			URL:         googleNewsQueryRSS(`(Lebanon OR Beirut OR Sidon OR Tyre OR Tripoli OR Bekaa OR Hezbollah OR "south Lebanon") (missile OR rocket OR drone OR strike OR bombardment OR shelling OR interception) (attack OR blast OR airspace OR conflict)`),
+			Category:    "conflict",
+			FeedType:    "gulf_canvas_levant_strike_geography",
+			SignalType:  "risk:regional_strike_geography",
+			PollMinutes: defaultPollMins,
+			Processing:  coremodels.SourceProcessingModeCanvasLLM,
+			Output:      coremodels.SourceOutputModeOntologyFact,
+			DisableLLM:  false,
+			Status:      "active",
+		},
 	}
 }
 
@@ -262,6 +276,7 @@ func buildWatchSpecs() []watchSpec {
 		{Label: "Kuwait", Path: "/loc/kw", Kind: hmodels.WatchSubjectKindGeography, Query: "Kuwait airspace and Gulf conflict exposure", Modes: []string{"conflict", "transport"}, Roles: []string{"monitor", "risk"}, Prio: 89},
 		{Label: "Oman", Path: "/loc/om", Kind: hmodels.WatchSubjectKindGeography, Query: "Oman transit routes, Salalah and Duqm logistics under Gulf conflict pressure", Modes: []string{"conflict", "maritime", "transport"}, Roles: []string{"monitor", "risk"}, Prio: 89},
 		{Label: "Iran", Path: "/loc/ir", Kind: hmodels.WatchSubjectKindGeography, Query: "Iran strikes, retaliation and cascading Gulf exposure", Modes: []string{"conflict", "energy"}, Roles: []string{"monitor", "risk"}, Prio: 92},
+		{Label: "Lebanon", Path: "/loc/lb", Kind: hmodels.WatchSubjectKindGeography, Query: "Lebanon strikes, Hezbollah exchanges, port and airport disruption, spillover from Iran and regional escalation", Modes: []string{"conflict", "transport"}, Roles: []string{"monitor", "risk"}, Prio: 88},
 		{Label: "China Energy Exposure", Path: "/loc/cn", Kind: hmodels.WatchSubjectKindGeography, Query: "China energy, LNG, shipping and industrial exposure to Gulf strikes, Hormuz disruption and UAE logistics stress", Modes: []string{"energy", "maritime", "supply_chain"}, Roles: []string{"monitor", "risk"}, Prio: 84},
 		{Label: "Khalifa Port", Path: "/fac/ae/khalifa-port", Kind: hmodels.WatchSubjectKindFragment, Query: "Khalifa port strikes, disruption and downstream port rerouting", Modes: []string{"maritime", "transport", "supply_chain"}, Roles: []string{"monitor", "risk"}, Prio: 93},
 		{Label: "Port of Fujairah", Path: "/fac/ae/port-of-fujairah", Kind: hmodels.WatchSubjectKindFragment, Query: "Port of Fujairah strikes, oil terminal disruption, tanker rerouting and downstream infrastructure impact", Modes: []string{"maritime", "energy", "supply_chain"}, Roles: []string{"monitor", "risk"}, Prio: 98},
@@ -319,9 +334,10 @@ func upsertSource(ctx context.Context, repo *corerepo.DataSourcesRepository, spe
 			"/loc/kw",
 			"/loc/om",
 			"/loc/ir",
+			"/loc/lb",
 			"/loc/int/strait-of-hormuz",
 		},
-		SourceCategoryPaths: []string{"/source/conflict/gulf"},
+		SourceCategoryPaths: []string{"/source/conflict/gulf", "/source/conflict/levant"},
 		Details: coremodels.SourceDetails{
 			Category:                 strPtr(spec.Category),
 			HorizonMonitorCategory:   strPtr(spec.Category),

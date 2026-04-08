@@ -629,21 +629,21 @@ func buildPreparedCorpusDocs(sub *PreparedSubstrate) []PreparedCorpusDoc {
 			StructData:  structData,
 		})
 	}
-	addDocWithTemperature("overview", firstNonEmpty(sub.Lens.Name, sub.Question), "overview", PreparedTemperatureHot, buildPreparedOverviewDoc(sub, corridors), collectOverviewRefs(sub), map[string]any{
+	addDocWithTemperature("overview", firstNonEmpty(sub.Lens.Name, sub.Question), "overview", PreparedTemperatureHot, buildPreparedOverviewDoc(sub, corridors, sub.Fragments), collectOverviewRefs(sub), map[string]any{
 		"routeCount":    len(sub.Routes),
 		"productCount":  len(sub.Products),
 		"objectCount":   len(sub.Objects),
 		"relationCount": len(sub.Relations),
 		"gapCount":      len(sub.Gaps),
 	})
-	addDocWithTemperature("dossier", firstNonEmpty(sub.Lens.Name, sub.Question)+" dossier", "dossier", PreparedTemperatureHot, buildPreparedDossierDoc(sub, corridors), collectOverviewRefs(sub), map[string]any{
+	addDocWithTemperature("dossier", firstNonEmpty(sub.Lens.Name, sub.Question)+" dossier", "dossier", PreparedTemperatureHot, buildPreparedDossierDoc(sub, corridors, sub.Fragments), collectOverviewRefs(sub), map[string]any{
 		"routeCount":    len(sub.Routes),
 		"productCount":  len(sub.Products),
 		"objectCount":   len(sub.Objects),
 		"relationCount": len(sub.Relations),
 		"gapCount":      len(sub.Gaps),
 	})
-	addDocWithTemperature("products", firstNonEmpty(sub.Lens.Name, sub.Question)+" products", "products", PreparedTemperatureHot, buildPreparedProductsDoc(sub), topProductRefs(sub.Products, 40), map[string]any{
+	addDocWithTemperature("products", firstNonEmpty(sub.Lens.Name, sub.Question)+" products", "products", PreparedTemperatureHot, buildPreparedProductsDoc(sub, sub.Fragments), topProductRefs(sub.Products, 40), map[string]any{
 		"productCount": len(sub.Products),
 	})
 	addDocWithTemperature("gaps", firstNonEmpty(sub.Lens.Name, sub.Question)+" gaps", "gaps", PreparedTemperatureHot, buildPreparedGapDoc(sub), collectOverviewRefs(sub), map[string]any{
@@ -657,7 +657,7 @@ func buildPreparedCorpusDocs(sub *PreparedSubstrate) []PreparedCorpusDoc {
 		if i < 12 {
 			temperature = PreparedTemperatureHot
 		}
-		addDocWithTemperature(corridor.ID, buildCorridorTitle(corridor), "corridor", temperature, buildCorridorDoc(corridor), compactUnique(append([]string{corridor.SupplierRef, corridor.CustomerRef, corridor.ProductRef}, corridor.TransportViaRefs...)), map[string]any{
+		addDocWithTemperature(corridor.ID, buildCorridorTitle(corridor, sub.Fragments), "corridor", temperature, buildCorridorDoc(corridor, sub.Fragments), compactUnique(append([]string{corridor.SupplierRef, corridor.CustomerRef, corridor.ProductRef}, corridor.TransportViaRefs...)), map[string]any{
 			"routeCount": corridor.RouteCount,
 			"modes":      corridor.Modes,
 		})
@@ -692,7 +692,7 @@ func buildPreparedCorpusDocs(sub *PreparedSubstrate) []PreparedCorpusDoc {
 		if i < 8 {
 			temperature = PreparedTemperatureWarm
 		}
-		addDocWithTemperature(firstNonEmpty(artifact.CanonicalKey, artifact.ID), firstNonEmpty(artifact.DisplayName, artifact.CanonicalKey), "route_artifact", temperature, buildRouteArtifactDoc(artifact), compactUnique(append(append([]string{}, artifact.NodeRefs...), artifact.GeoRefs...)), map[string]any{
+		addDocWithTemperature(firstNonEmpty(artifact.CanonicalKey, artifact.ID), firstNonEmpty(artifact.DisplayName, artifact.CanonicalKey), "route_artifact", temperature, buildRouteArtifactDoc(artifact, sub.Fragments), artifactPreparedRefs(artifact), map[string]any{
 			"artifactKind":   string(artifact.Kind),
 			"pathStatus":     artifact.PathStatus,
 			"artifactKey":    artifact.CanonicalKey,
@@ -853,7 +853,7 @@ func summarizeCorridors(routes []RouteSummary) []corridorSummary {
 	return out
 }
 
-func buildPreparedOverviewDoc(sub *PreparedSubstrate, corridors []corridorSummary) string {
+func buildPreparedOverviewDoc(sub *PreparedSubstrate, corridors []corridorSummary, fragments map[string]*hmodels.HorizonFragment) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Question: %s\n", sub.Question)
 	if sub.Lens != nil {
@@ -886,7 +886,7 @@ func buildPreparedOverviewDoc(sub *PreparedSubstrate, corridors []corridorSummar
 			if i >= 20 {
 				break
 			}
-			fmt.Fprintf(&b, "- %s usedByRoutes=%d\n", product.ProductRef, product.UsedBy)
+			fmt.Fprintf(&b, "- %s usedByRoutes=%d\n", preparedPathSummary(product.ProductRef, fragments), product.UsedBy)
 		}
 	}
 	if len(corridors) > 0 {
@@ -896,11 +896,11 @@ func buildPreparedOverviewDoc(sub *PreparedSubstrate, corridors []corridorSummar
 				break
 			}
 			fmt.Fprintf(&b, "- %s -> %s product=%s routes=%d via=%s modes=%s\n",
-				firstNonEmpty(corridor.SupplierRef, "?"),
-				firstNonEmpty(corridor.CustomerRef, "?"),
-				firstNonEmpty(corridor.ProductRef, "?"),
+				preparedPathSummary(firstNonEmpty(corridor.SupplierRef, "?"), fragments),
+				preparedPathSummary(firstNonEmpty(corridor.CustomerRef, "?"), fragments),
+				preparedPathSummary(firstNonEmpty(corridor.ProductRef, "?"), fragments),
 				corridor.RouteCount,
-				strings.Join(corridor.TransportViaRefs, " | "),
+				strings.Join(preparedPathSummaries(corridor.TransportViaRefs, fragments), " | "),
 				strings.Join(corridor.Modes, ", "),
 			)
 		}
@@ -923,19 +923,19 @@ func buildPreparedOverviewDoc(sub *PreparedSubstrate, corridors []corridorSummar
 	return strings.TrimSpace(b.String())
 }
 
-func buildPreparedProductsDoc(sub *PreparedSubstrate) string {
+func buildPreparedProductsDoc(sub *PreparedSubstrate, fragments map[string]*hmodels.HorizonFragment) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Products for question: %s\n", sub.Question)
 	for i, product := range sub.Products {
 		if i >= 40 {
 			break
 		}
-		fmt.Fprintf(&b, "- %s usedByRoutes=%d\n", product.ProductRef, product.UsedBy)
+		fmt.Fprintf(&b, "- %s usedByRoutes=%d\n", preparedPathSummary(product.ProductRef, fragments), product.UsedBy)
 	}
 	return strings.TrimSpace(b.String())
 }
 
-func buildPreparedDossierDoc(sub *PreparedSubstrate, corridors []corridorSummary) string {
+func buildPreparedDossierDoc(sub *PreparedSubstrate, corridors []corridorSummary, fragments map[string]*hmodels.HorizonFragment) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Answer dossier for question: %s\n", sub.Question)
 	if sub.Lens != nil {
@@ -961,10 +961,10 @@ func buildPreparedDossierDoc(sub *PreparedSubstrate, corridors []corridorSummary
 			break
 		}
 		fmt.Fprintf(&b, "- %s -> %s product=%s via=%s modes=%s routes=%d\n",
-			firstNonEmpty(corridor.SupplierRef, "?"),
-			firstNonEmpty(corridor.CustomerRef, "?"),
-			firstNonEmpty(corridor.ProductRef, "?"),
-			strings.Join(corridor.TransportViaRefs, " | "),
+			preparedPathSummary(firstNonEmpty(corridor.SupplierRef, "?"), fragments),
+			preparedPathSummary(firstNonEmpty(corridor.CustomerRef, "?"), fragments),
+			preparedPathSummary(firstNonEmpty(corridor.ProductRef, "?"), fragments),
+			strings.Join(preparedPathSummaries(corridor.TransportViaRefs, fragments), " | "),
 			strings.Join(corridor.Modes, ", "),
 			corridor.RouteCount,
 		)
@@ -975,7 +975,7 @@ func buildPreparedDossierDoc(sub *PreparedSubstrate, corridors []corridorSummary
 			if i >= 12 {
 				break
 			}
-			fmt.Fprintf(&b, "- %s usedByRoutes=%d\n", product.ProductRef, product.UsedBy)
+			fmt.Fprintf(&b, "- %s usedByRoutes=%d\n", preparedPathSummary(product.ProductRef, fragments), product.UsedBy)
 		}
 	}
 	if len(sub.Gaps) > 0 {
@@ -1113,18 +1113,23 @@ func firstNStrings(values []string, limit int) []string {
 	return append([]string(nil), values[:limit]...)
 }
 
-func buildCorridorTitle(c corridorSummary) string {
-	return fmt.Sprintf("Corridor %s -> %s product %s", firstNonEmpty(c.SupplierRef, "?"), firstNonEmpty(c.CustomerRef, "?"), firstNonEmpty(c.ProductRef, "?"))
+func buildCorridorTitle(c corridorSummary, fragments map[string]*hmodels.HorizonFragment) string {
+	return fmt.Sprintf(
+		"Corridor %s -> %s product %s",
+		preparedPathTitle(firstNonEmpty(c.SupplierRef, "?"), fragments),
+		preparedPathTitle(firstNonEmpty(c.CustomerRef, "?"), fragments),
+		preparedPathTitle(firstNonEmpty(c.ProductRef, "?"), fragments),
+	)
 }
 
-func buildCorridorDoc(c corridorSummary) string {
+func buildCorridorDoc(c corridorSummary, fragments map[string]*hmodels.HorizonFragment) string {
 	return strings.TrimSpace(fmt.Sprintf(
 		"Supplier: %s\nCustomer: %s\nProduct: %s\nRoute count: %d\nTransport via: %s\nModes: %s\nMaterialized artifacts: %s",
-		firstNonEmpty(c.SupplierRef, "?"),
-		firstNonEmpty(c.CustomerRef, "?"),
-		firstNonEmpty(c.ProductRef, "?"),
+		preparedPathSummary(firstNonEmpty(c.SupplierRef, "?"), fragments),
+		preparedPathSummary(firstNonEmpty(c.CustomerRef, "?"), fragments),
+		preparedPathSummary(firstNonEmpty(c.ProductRef, "?"), fragments),
 		c.RouteCount,
-		strings.Join(c.TransportViaRefs, " | "),
+		strings.Join(preparedPathSummaries(c.TransportViaRefs, fragments), " | "),
 		strings.Join(c.Modes, ", "),
 		strings.Join(c.ArtifactKeys, ", "),
 	))
@@ -1167,7 +1172,7 @@ func buildObjectDoc(fragment *hmodels.HorizonFragment) string {
 	return strings.TrimSpace(b.String())
 }
 
-func buildRouteArtifactDoc(artifact *hmodels.MaterializedArtifact) string {
+func buildRouteArtifactDoc(artifact *hmodels.MaterializedArtifact, fragments map[string]*hmodels.HorizonFragment) string {
 	if artifact == nil {
 		return ""
 	}
@@ -1176,26 +1181,98 @@ func buildRouteArtifactDoc(artifact *hmodels.MaterializedArtifact) string {
 	fmt.Fprintf(&b, "Canonical key: %s\n", artifact.CanonicalKey)
 	fmt.Fprintf(&b, "Kind: %s\n", artifact.Kind)
 	fmt.Fprintf(&b, "Path status: %s\n", artifact.PathStatus)
+	if strings.TrimSpace(artifact.ProductAxis) != "" {
+		fmt.Fprintf(&b, "Product axis: %s\n", preparedPathSummary(artifact.ProductAxis, fragments))
+	}
 	if len(artifact.NodeRefs) > 0 {
-		fmt.Fprintf(&b, "Node refs: %s\n", strings.Join(compactUnique(artifact.NodeRefs), ", "))
+		fmt.Fprintf(&b, "Node refs: %s\n", strings.Join(preparedPathSummaries(compactUnique(artifact.NodeRefs), fragments), ", "))
 	}
 	if len(artifact.GeoRefs) > 0 {
-		fmt.Fprintf(&b, "Geo refs: %s\n", strings.Join(compactUnique(artifact.GeoRefs), ", "))
+		fmt.Fprintf(&b, "Geo refs: %s\n", strings.Join(preparedPathSummaries(compactUnique(artifact.GeoRefs), fragments), ", "))
 	}
 	parsed, err := hmodels.ParseSupplyChainPathPayload(artifact.Payload)
 	if err == nil && parsed != nil {
 		for _, leg := range parsed.Legs {
 			fmt.Fprintf(&b, "- leg: %s -> %s product=%s via=%s mode=%s supplyLink=%s\n",
-				firstNonEmpty(leg.SupplierRef, "?"),
-				firstNonEmpty(leg.CustomerRef, "?"),
-				firstNonEmpty(leg.ProductRef, "?"),
-				strings.Join(compactUnique(leg.TransportViaRefs), " | "),
+				preparedPathSummary(firstNonEmpty(leg.SupplierRef, "?"), fragments),
+				preparedPathSummary(firstNonEmpty(leg.CustomerRef, "?"), fragments),
+				preparedPathSummary(firstNonEmpty(leg.ProductRef, "?"), fragments),
+				strings.Join(preparedPathSummaries(compactUnique(leg.TransportViaRefs), fragments), " | "),
 				firstNonEmpty(leg.Mode, "unknown"),
-				firstNonEmpty(leg.SupplyLinkCanonicalPath, "-"),
+				preparedPathSummary(firstNonEmpty(leg.SupplyLinkCanonicalPath, "-"), fragments),
 			)
 		}
 	}
 	return strings.TrimSpace(b.String())
+}
+
+func artifactPreparedRefs(artifact *hmodels.MaterializedArtifact) []string {
+	if artifact == nil {
+		return nil
+	}
+	refs := compactUnique(append(
+		append(
+			append(
+				append(
+					append([]string{artifact.CanonicalKey, artifact.AnchorSupplier, artifact.AnchorCustomer, artifact.ProductAxis}, artifact.NodeRefs...),
+					artifact.GeoRefs...,
+				),
+				artifact.ZoneRefs...,
+			),
+			artifact.AffectedZoneRefs...,
+		),
+		artifact.FlowRefs...,
+	))
+	parsed, err := hmodels.ParseSupplyChainPathPayload(artifact.Payload)
+	if err != nil || parsed == nil {
+		return refs
+	}
+	for _, leg := range parsed.Legs {
+		refs = append(refs, leg.SupplierRef, leg.CustomerRef, leg.ProductRef, leg.SupplyLinkCanonicalPath)
+		refs = append(refs, leg.TransportViaRefs...)
+		refs = append(refs, leg.GeoRefs...)
+		refs = append(refs, leg.ZoneRefs...)
+		refs = append(refs, leg.AffectedZoneRefs...)
+		refs = append(refs, leg.FlowRefs...)
+	}
+	return compactUnique(refs)
+}
+
+func preparedPathSummary(path string, fragments map[string]*hmodels.HorizonFragment) string {
+	path = strings.TrimSpace(path)
+	if path == "" || path == "?" || path == "-" {
+		return path
+	}
+	if fragment := fragments[path]; fragment != nil {
+		if label := fragmentDisplayName(fragment); label != "" && label != path {
+			return fmt.Sprintf("%s (%s)", label, path)
+		}
+	}
+	return path
+}
+
+func preparedPathTitle(path string, fragments map[string]*hmodels.HorizonFragment) string {
+	path = strings.TrimSpace(path)
+	if path == "" || path == "?" || path == "-" {
+		return path
+	}
+	if fragment := fragments[path]; fragment != nil {
+		if label := fragmentDisplayName(fragment); label != "" {
+			return label
+		}
+	}
+	return path
+}
+
+func preparedPathSummaries(paths []string, fragments map[string]*hmodels.HorizonFragment) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(paths))
+	for _, path := range compactUnique(paths) {
+		out = append(out, preparedPathSummary(path, fragments))
+	}
+	return out
 }
 
 func collectOverviewRefs(sub *PreparedSubstrate) []string {

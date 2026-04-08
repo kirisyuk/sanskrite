@@ -1342,7 +1342,7 @@ setup_infrastructure() {
             --http-method=POST \
             --oidc-service-account-email="$SA_BACKEND" \
             --oidc-token-audience="$SVC_URL" \
-            --headers="Content-Type=application/json" \
+            --update-headers="Content-Type=application/json" \
             --message-body='{"tenantId":"global"}' \
             --attempt-deadline=1800s \
             --quiet || true

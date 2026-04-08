@@ -2497,6 +2497,25 @@ func main() {
 			}
 
 			retroAttachQueueRepo := horizonrepo.NewSignalRetroAttachQueueRepository(fsClient.Client())
+			var signalLandingGeocodingClient ontology.GeocodingClientInterface
+			{
+				var googleClient ontology.GeocodingClientInterface
+				if gcRaw := httphandlers.GetGoogleGeocodingClientFromEnv(); gcRaw != nil {
+					gcAdapter := geocoding.NewAdapter(gcRaw)
+					var gcBase ontology.GeocodingClientInterface = gcAdapter
+					if horizonTelemetryRepo != nil {
+						gcBase = horizontelemetry.NewGeocodingTelemetryWrapper(gcAdapter, horizonTelemetryRepo)
+					}
+					googleClient = geocoding.NewCachedClientWithService(gcBase, externalCacheRepo, geocoding.CacheOptionsFromEnv(), ontology.GeocodingProviderGoogle)
+				}
+				nomRaw := geocoding.NominatimOptionsFromEnv()
+				var nomBase ontology.GeocodingClientInterface = nomRaw
+				if horizonTelemetryRepo != nil {
+					nomBase = horizontelemetry.NewNominatimTelemetryWrapper(nomRaw, horizonTelemetryRepo)
+				}
+				nomCached := geocoding.NewCachedClientWithService(nomBase, externalCacheRepo, geocoding.CacheOptionsFromEnv(), ontology.GeocodingProviderNominatim)
+				signalLandingGeocodingClient = geocoding.NewFallbackClient(googleClient, nomCached, logger)
+			}
 			retroAttachWorker = horizonsignallanding.NewRetroAttachWorker(
 				retroAttachQueueRepo,
 				horizonFragmentsRepo,
@@ -2509,6 +2528,7 @@ func main() {
 					horizonFragmentsRepo,
 				).WithMaterializedRepo(horizonMaterializedArtifactsRepo).
 					WithEdgesRepo(horizonEdgesRepo).
+					WithGeocodingClient(signalLandingGeocodingClient).
 					WithProductDictionary(productDictionary),
 			).WithLogger(logger).WithWarmupHook(func(ctx context.Context, refs []string) error {
 				return enqueueImpactWarmup(ctx, "global", refs, "watch_signal_retro_attach")
@@ -2537,8 +2557,10 @@ func main() {
 							horizonFragmentsRepo,
 						).WithMaterializedRepo(horizonMaterializedArtifactsRepo).
 							WithEdgesRepo(horizonEdgesRepo).
+							WithGeocodingClient(signalLandingGeocodingClient).
 							WithProductDictionary(productDictionary),
 					).
+					WithGeocodingClient(signalLandingGeocodingClient).
 					WithImpactWarmupHook(enqueueImpactWarmup).
 					WithWatchTriggerHook(func(ctx context.Context, tenantID, canonicalPath string, triggerType horizonmodels.WatchTriggerType, reason string, signalStrength, confidence float64, metadata map[string]any) error {
 						_, err := watchRuntimeService.EmitTriggerByAnchor(ctx, tenantID, canonicalPath, triggerType, reason, signalStrength, confidence, metadata)
@@ -3395,6 +3417,7 @@ func main() {
 					horizonFragmentsRepo,
 				).WithMaterializedRepo(horizonMaterializedArtifactsRepo).
 					WithEdgesRepo(horizonEdgesRepo).
+					WithGeocodingClient(signalLandingGeocodingClient).
 					WithProductDictionary(productDictionary)
 				if vertexSearchClient != nil && vertexSearchClient.IsConfigured() {
 					if horizonDS := getEnvWithAlt("VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID", "VERTEX_SEARCH_HORIZON_DATA_STORE_ID", ""); horizonDS != "" {

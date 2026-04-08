@@ -14,7 +14,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
-	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/analytical"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/workscope"
@@ -85,8 +84,8 @@ func (h *HorizonHandlers) LensChat(w http.ResponseWriter, r *http.Request) {
 		_ = httputil.WriteInternalError(w, "Horizon service not configured")
 		return
 	}
-	if h.genAIHandler == nil {
-		_ = httputil.WriteInternalError(w, "GenAI handler not configured")
+	if h.service.AIExecutor() == nil {
+		_ = httputil.WriteInternalError(w, "AI executor not configured")
 		return
 	}
 	if h.interactions == nil {
@@ -152,8 +151,12 @@ func (h *HorizonHandlers) LensChat(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	history, historyWarnings := h.loadLensChatHistory(ctx, projectID, threadID, userID, defaultLensChatHistoryTurns)
-	answer, hits, highlightedPaths, warnings := h.answerLensChat(ctx, lens, message, history)
+	answer, hits, highlightedPaths, synthesisModel, warnings := h.answerLensChat(ctx, lens, message, history)
 	warnings = append(historyWarnings, warnings...)
+	assistantModel := lensChatModel
+	if strings.TrimSpace(synthesisModel) != "" {
+		assistantModel = strings.TrimSpace(synthesisModel)
+	}
 	assistantMessage := &corerepo.Interaction{
 		TenantID:  authInfo.TenantID,
 		ProjectID: projectID,
@@ -163,7 +166,7 @@ func (h *HorizonHandlers) LensChat(w http.ResponseWriter, r *http.Request) {
 		Summary:   lensChatNonEmptyPtr(lensChatTruncateString(answer, 220)),
 		SectionID: &threadID,
 		ReplyTo:   &userID,
-		Model:     lensChatStringPtr(lensChatModel),
+		Model:     lensChatStringPtr(assistantModel),
 		Author: &corerepo.ParticipantRef{
 			ParticipantID: "lens-chat",
 			Kind:          "ai",
@@ -192,7 +195,7 @@ func (h *HorizonHandlers) LensChat(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *HorizonHandlers) answerLensChat(ctx context.Context, lens *horizonmodels.Lens, message string, history []lensChatTurn) (string, []lensChatInternalHit, []string, []string) {
+func (h *HorizonHandlers) answerLensChat(ctx context.Context, lens *horizonmodels.Lens, message string, history []lensChatTurn) (string, []lensChatInternalHit, []string, string, []string) {
 	warnings := make([]string, 0, 4)
 	analyticalIntent := classifyLensChatAnalyticalIntent(message)
 	analyticalHits, analyticalDocs, analyticalPaths, analyticalWarnings := h.loadLensChatAnalyticalEvidence(ctx, lens, message, analyticalIntent)
@@ -205,7 +208,7 @@ func (h *HorizonHandlers) answerLensChat(ctx context.Context, lens *horizonmodel
 	scopePaths := lensChatScopePaths(lens)
 	searchClient := h.service.VertexSearchClient()
 	if searchClient == nil {
-		return "Internal knowledge search is unavailable for this lens right now.", nil, nil, []string{"vertex search client is not configured"}
+		return "Internal knowledge search is unavailable for this lens right now.", nil, nil, "", []string{"vertex search client is not configured"}
 	}
 	if storeID != "" {
 		searchClient = searchClient.WithDataStore(storeID)
@@ -264,30 +267,29 @@ func (h *HorizonHandlers) answerLensChat(ctx context.Context, lens *horizonmodel
 		} else if corpusID != "" {
 			answer = "I could not find enough grounded internal knowledge for this question in the current lens or matching prepared system knowledge."
 		}
-		return answer, hits, highlightedPaths, uniqueStringsLocal(warnings)
+		return answer, hits, highlightedPaths, "", uniqueStringsLocal(warnings)
 	}
 
 	prompt := buildLensChatSynthesisPrompt(lens, message, history, hits, evidenceDocs, highlightedPaths)
-	genResp, err := h.genAIHandler.GenerateDirect(ctx, gen_combined.GenAIRequest{
-		Model:             lensChatModel,
+	answer, modelUsed, err := h.executeFinalSynthesis(ctx, finalSynthesisSpec{
+		TenantID:          strings.TrimSpace(lens.TenantID),
+		ProjectID:         strings.TrimSpace(lens.ProjectID),
+		CascadeID:         strings.TrimSpace(lens.ID),
+		UseCase:           "horizon.lens_chat.final_synthesis",
 		Prompt:            prompt,
 		SystemInstruction: lensChatSystemInstruction(),
 		MaxOutputTokens:   1400,
-		Temperature:       0.15,
-		ProjectID:         strings.TrimSpace(lens.ProjectID),
 	})
 	if err != nil {
 		warnings = append(warnings, fmt.Sprintf("final synthesis failed: %v", err))
-		return fallbackLensChatAnswer(hits, evidenceDocs, highlightedPaths), hits, highlightedPaths, uniqueStringsLocal(warnings)
+		return fallbackLensChatAnswer(hits, evidenceDocs, highlightedPaths), hits, highlightedPaths, "", uniqueStringsLocal(warnings)
 	}
-
-	answer := strings.TrimSpace(genResp.Content)
 	if answer == "" {
 		answer = fallbackLensChatAnswer(hits, evidenceDocs, highlightedPaths)
 		warnings = append(warnings, "final synthesis returned empty content")
 	}
 	answer = rewriteCanonicalPathsForDisplay(answer, hits)
-	return answer, hits, highlightedPaths, uniqueStringsLocal(warnings)
+	return answer, hits, highlightedPaths, modelUsed, uniqueStringsLocal(warnings)
 }
 
 func lensChatFilteredCorpusID(warmedReady bool, corpusID string) string {
@@ -375,7 +377,16 @@ func buildLensChatSynthesisPrompt(lens *horizonmodels.Lens, question string, his
 	b.WriteString("Question: ")
 	b.WriteString(strings.TrimSpace(question))
 	b.WriteString("\n\n")
-	b.WriteString("Grounded internal hits:\n")
+	b.WriteString("Likely relevant internal documents:\n")
+	for i, hit := range hits {
+		if i >= 10 {
+			break
+		}
+		b.WriteString("- ")
+		b.WriteString(lensChatFirstNonEmptyString(hit.Title, hit.ID))
+		b.WriteString("\n")
+	}
+	b.WriteString("\nGrounded internal hits:\n")
 	for i, hit := range hits {
 		if i >= 12 {
 			break
@@ -400,6 +411,16 @@ func buildLensChatSynthesisPrompt(lens *horizonmodels.Lens, question string, his
 		b.WriteString(strings.Join(highlightedPaths, "\n"))
 		b.WriteString("\n")
 	}
+	b.WriteString("\nReturn:\n")
+	b.WriteString("1. A direct answer.\n")
+	b.WriteString("1a. If the evidence includes a fresh signal landing summary, answer from event-core first, then impact halo, then broader structural background.\n")
+	b.WriteString("2. Objects and how they are connected.\n")
+	b.WriteString("3. Products and routes.\n")
+	b.WriteString("4. Explicit gaps in grounded internal knowledge only if they still remain after considering the evidence pack.\n")
+	b.WriteString("Answer discipline:\n")
+	b.WriteString("- Be concrete. Prefer explicit objects, explicit corridors, explicit products, and explicit route legs that are present in the evidence pack.\n")
+	b.WriteString("- Preserve the narrowest grounded slice that answers the question. Do not broaden to a larger category if narrower grounded objects already answer it.\n")
+	b.WriteString("- Do not claim that information is missing if the evidence pack already contains the route, relation, object, product, or product-specific object that answers the question.\n")
 	return strings.TrimSpace(b.String())
 }
 
@@ -417,6 +438,8 @@ Return a concise operator-style answer:
 2. Name the key objects and their roles.
 3. Mention suppliers, routes, products, ports, facilities, and relationships if they appear in the grounded evidence pack.
 4. Prefer explicit objects and route legs over generic summaries.
+4b. If the user asks about a specific product, do not collapse the answer into a broader product family when grounded product-specific facilities, organizations, storages, growers, or routes are present.
+4c. Do not claim that product-specific information is missing when the grounded pack already contains explicit product-specific objects or paths.
 4a. For questions about current disruptions or what changed right now, do not let older structural background override fresher signal-aware evidence.
 5. End with explicit uncertainty only if the grounded context is incomplete.
 `)
@@ -1130,9 +1153,9 @@ func buildLensChatQueryVariants(question string, history []lensChatTurn, corpusI
 	}
 	base = append(base, corpusQueryVariantsLocal(corpusID)...)
 	base = append(base, lensChatScopeQueryVariants(scopeRefs)...)
-	joined := strings.ToLower(strings.Join(base, " "))
-	if strings.Contains(joined, "supply") || strings.Contains(joined, "route") || strings.Contains(joined, "logistics") {
+	if isLensChatLogisticsQuery(question) {
 		base = append(base, "products suppliers customers routes logistics")
+		base = append(base, "продукты поставщики покупатели маршруты логистика")
 	}
 	if intent := classifyLensChatAnalyticalIntent(question); intent == "current_signal" || intent == "scenario" {
 		base = append(base, "current disruptions fresh signal event impact affected routes products chokepoints")
@@ -1249,7 +1272,7 @@ func rerankLensChatHits(question string, hits []lensChatInternalHit, scopeRefs [
 		return nil
 	}
 	queryTokens := normalizedTokenSetLocal(question)
-	logisticsQuery := strings.Contains(strings.ToLower(question), "supply") || strings.Contains(strings.ToLower(question), "route") || strings.Contains(strings.ToLower(question), "logistics")
+	logisticsQuery := isLensChatLogisticsQuery(question)
 	currentSignalQuery := classifyLensChatAnalyticalIntent(question) == "current_signal"
 	scopeRefSet := normalizedTokenSetLocal(strings.Join(scopeRefs, " "))
 	signalContext := buildLensChatSignalContext(hits)
@@ -1345,6 +1368,28 @@ func kindWeightLocal(kind string, logisticsQuery bool) float64 {
 		return 8
 	default:
 		return 0
+	}
+}
+
+func isLensChatLogisticsQuery(question string) bool {
+	q := strings.ToLower(strings.TrimSpace(question))
+	switch {
+	case q == "":
+		return false
+	case strings.Contains(q, "supply"),
+		strings.Contains(q, "route"),
+		strings.Contains(q, "logistics"),
+		strings.Contains(q, "supplier"),
+		strings.Contains(q, "corridor"),
+		strings.Contains(q, "via"),
+		strings.Contains(q, "постав"),
+		strings.Contains(q, "маршрут"),
+		strings.Contains(q, "логист"),
+		strings.Contains(q, "коридор"),
+		strings.Contains(q, "через"):
+		return true
+	default:
+		return false
 	}
 }
 

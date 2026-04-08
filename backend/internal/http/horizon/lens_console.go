@@ -366,13 +366,16 @@ func (h *HorizonHandlers) lensConsoleAnswer(ctx context.Context, lens *horizonmo
 		history, historyWarnings = h.loadLensChatHistory(ctx, strings.TrimSpace(lens.ProjectID), threadID, "", defaultLensChatHistoryTurns)
 		warnings = append(warnings, historyWarnings...)
 	}
-	answer, hits, highlightedPaths, answerWarnings := h.answerLensChat(ctx, lens, query, history)
+	answer, hits, highlightedPaths, modelUsed, answerWarnings := h.answerLensChat(ctx, lens, query, history)
 	warnings = append(warnings, answerWarnings...)
+	if strings.TrimSpace(modelUsed) == "" {
+		modelUsed = lensChatModel
+	}
 	return map[string]any{
 		"answer":           answer,
 		"hits":             summarizeLensChatHits(hits, defaultLensChatHitLimit),
 		"highlightedPaths": highlightedPaths,
-		"model":            lensChatModel,
+		"model":            modelUsed,
 	}, uniqueStringsLocal(warnings), nil
 }
 

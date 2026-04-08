@@ -153,42 +153,6 @@ func (h *HorizonHandlers) ScopeScoutLensQuery(w http.ResponseWriter, r *http.Req
 	}
 	scopeAdded := expansion.ScopeChanged
 
-	if shouldRouteDirectedExplorationToOneHop(targetCanonicalPath, directedExploration) {
-		if h.oneHopDownstreamService == nil || h.scoutingJobsRepo == nil {
-			http.Error(w, "One-hop downstream service unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		opts := buildOneHopOptionsForDirectedExploration(targetCanonicalPath)
-		jobID, err := h.createOneHopJob(ctx, authInfo.UID, authInfo.TenantID, lens.ProjectID, lens.ID, opts)
-		if err != nil {
-			msg := "Failed to enqueue one-hop downstream job: " + strings.TrimSpace(err.Error())
-			h.publishAssemblyFatal(
-				ctx,
-				authInfo.TenantID,
-				lens.ProjectID,
-				lens.ID,
-				"scouting",
-				correlationID,
-				sessionID,
-				"one_hop_job_enqueue_failed",
-				msg,
-			)
-			writeFatalPipelineError(w, http.StatusServiceUnavailable, "one_hop_job_enqueue_failed", msg, "scouting", map[string]interface{}{
-				"targetCanonicalPath": strings.TrimSpace(opts.AnchorRef),
-			})
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("X-Correlation-Id", correlationID)
-		_ = json.NewEncoder(w).Encode(scopeScoutLensQueryResponse{
-			JobID:      jobID,
-			ScopeAdded: scopeAdded,
-			Target:     strings.TrimSpace(opts.AnchorRef),
-			Lens:       lens,
-		})
-		return
-	}
-
 	// Create scouting job (maxRecursionDepth=0: add as a single node, no automatic relationship expansion).
 	// Explicit scope growth is already handled above via the single lens scope expansion path.
 	jobID := ""
@@ -251,8 +215,6 @@ func (h *HorizonHandlers) ScopeScoutLensQuery(w http.ResponseWriter, r *http.Req
 			if len(hotPathCanonicalPaths) > 0 {
 				state["hotPathCanonicalPaths"] = hotPathCanonicalPaths
 			}
-			state["legacyDirectedExplorationDeprecated"] = true
-			state["legacyDirectedExplorationReason"] = "prefer_one_hop_downstream_for_org_fac_downstream"
 		}
 		if len(specialties) > 0 {
 			state["specialties"] = specialties

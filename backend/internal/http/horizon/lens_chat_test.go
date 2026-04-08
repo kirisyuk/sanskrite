@@ -1,8 +1,11 @@
 package horizon
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
 func TestClassifyLensChatAnalyticalIntentCurrentSignal(t *testing.T) {
@@ -58,5 +61,61 @@ func TestRerankLensChatHitsPrioritizesFreshSignalLandingForCurrentSignal(t *test
 	}
 	if ranked[0].ID != "signal" {
 		t.Fatalf("expected fresh signal hit first, got %q", ranked[0].ID)
+	}
+}
+
+func TestIsLensChatLogisticsQueryRecognizesRussianPrompt(t *testing.T) {
+	if !isLensChatLogisticsQuery("Какие маршруты поставок лука есть в Казахстане?") {
+		t.Fatal("expected russian supply-route question to be treated as logistics")
+	}
+	variants := buildLensChatQueryVariants("Какие маршруты поставок лука есть в Казахстане?", nil, "", nil)
+	joined := ""
+	for _, variant := range variants {
+		joined += variant + "\n"
+	}
+	if !strings.Contains(joined, "продукты поставщики покупатели маршруты логистика") {
+		t.Fatalf("expected russian logistics expansion in query variants, got %q", joined)
+	}
+}
+
+func TestLensChatSystemInstructionKeepsProductSpecificGroundingGuardrail(t *testing.T) {
+	instruction := lensChatSystemInstruction()
+	if !strings.Contains(instruction, "do not collapse the answer into a broader product family") {
+		t.Fatalf("expected product-specific anti-broadening guardrail, got %q", instruction)
+	}
+	if !strings.Contains(instruction, "Do not claim that product-specific information is missing") {
+		t.Fatalf("expected product-specific missing-data guardrail, got %q", instruction)
+	}
+}
+
+func TestBuildLensChatSynthesisPromptPreservesNarrowGroundedSlice(t *testing.T) {
+	prompt := buildLensChatSynthesisPrompt(
+		&models.Lens{ID: "lens-1", Name: "Kazakhstan vegetables"},
+		"Какие точки происхождения лука есть в Казахстане?",
+		nil,
+		[]lensChatInternalHit{{
+			ID:    "hit-1",
+			Title: "Assembly graph: vegetables (+12)",
+			Kind:  "route_artifact",
+			Score: 0.9,
+			StructData: map[string]any{
+				"canonicalPaths": []string{"/fac/kz/zhambyl-region-onion-farm", "/product/agricultural/crop/fresh/onions"},
+				"questionHints":  []string{"/product/finished/mechanical/assembly/onions"},
+			},
+		}},
+		[]lensChatPreparedEvidenceDoc{{
+			ID:             "doc-1",
+			Kind:           "route_artifact",
+			Title:          "Assembly graph: vegetables (+12)",
+			Content:        "Facilities: /fac/kz/zhambyl-region-onion-farm, /fac/kz/shengeldinsky-onion-storage",
+			CanonicalPaths: []string{"/fac/kz/zhambyl-region-onion-farm", "/fac/kz/shengeldinsky-onion-storage"},
+		}},
+		[]string{"/fac/kz/zhambyl-region-onion-farm", "/fac/kz/shengeldinsky-onion-storage"},
+	)
+	if !strings.Contains(prompt, "Preserve the narrowest grounded slice that answers the question") {
+		t.Fatalf("expected narrow-slice guardrail in prompt, got %q", prompt)
+	}
+	if !strings.Contains(prompt, "Do not claim that information is missing if the evidence pack already contains") {
+		t.Fatalf("expected anti-missing-data guardrail in prompt, got %q", prompt)
 	}
 }

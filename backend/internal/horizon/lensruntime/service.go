@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"log"
 	neturl "net/url"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -23,9 +26,11 @@ import (
 const (
 	defaultLensRuntimeOwner        = "horizon-lens-runtime@system.local"
 	defaultLensRuntimePollMinutes  = 60
+	minLensRuntimeGeographyTargets = 18
 	maxLensRuntimeTargetsPerLens   = 24
-	maxLensRuntimeGeoTerms         = 6
+	maxLensRuntimeGeoTerms         = 10
 	maxLensRuntimeQueryTerms       = 10
+	maxLensRuntimeArtifactsPerLens = 80
 	lensRuntimeDefaultSyncLimit    = 100
 	lensRuntimeTargetKindGeography = "geography"
 	lensRuntimeTargetKindFragment  = "fragment"
@@ -171,6 +176,7 @@ func (s *Service) SyncLens(ctx context.Context, lensID string) (*LensSyncResult,
 	if err != nil {
 		return nil, err
 	}
+	verbosef("sync lens=%s name=%q tenant=%s", lensID, strings.TrimSpace(lens.Name), strings.TrimSpace(lens.TenantID))
 	result := &LensSyncResult{
 		LensID:   lensID,
 		LensName: strings.TrimSpace(lens.Name),
@@ -183,17 +189,14 @@ func (s *Service) SyncLens(ctx context.Context, lensID string) (*LensSyncResult,
 		result.Errors = append(result.Errors, artifactsErr.Error())
 	}
 	allPaths := compactUniqueStrings(append(scopePaths, artifactRefs...))
+	verbosef("lens=%s scopePaths=%d artifactRefs=%d allPaths=%d", lensID, len(scopePaths), len(artifactRefs), len(allPaths))
 	result.ScopePaths = len(scopePaths)
 	result.CandidatePaths = len(allPaths)
 
-	if s.watchRuntime != nil {
-		if err := s.watchRuntime.SyncWatchSubjectsForLens(ctx, lensID); err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("sync lens universe: %v", err))
-		}
-	}
-
 	targetSpecs := s.buildWatchTargets(ctx, lens, scopePaths, allPaths)
+	verbosef("lens=%s targetSpecs=%d", lensID, len(targetSpecs))
 	for _, target := range targetSpecs {
+		verbosef("lens=%s ensure target=%s kind=%s", lensID, strings.TrimSpace(target.CanonicalPath), strings.TrimSpace(target.Kind))
 		status, subjectID, targetErr := s.ensureWatchTarget(ctx, lens, target)
 		if targetErr != nil {
 			result.Errors = append(result.Errors, targetErr.Error())
@@ -212,7 +215,9 @@ func (s *Service) SyncLens(ctx context.Context, lensID string) (*LensSyncResult,
 	}
 
 	sourceSpecs := s.buildSourceSpecs(ctx, lens, scopePaths, allPaths)
+	verbosef("lens=%s sourceSpecs=%d", lensID, len(sourceSpecs))
 	for _, spec := range sourceSpecs {
+		verbosef("lens=%s ensure source=%s", lensID, strings.TrimSpace(spec.DisplayName))
 		status, sourceErr := s.ensureDataSource(ctx, spec)
 		if sourceErr != nil {
 			result.Errors = append(result.Errors, sourceErr.Error())
@@ -259,40 +264,53 @@ func (s *Service) collectArtifactRefs(ctx context.Context, lens *horizonmodels.L
 		return nil, nil
 	}
 	refs := make([]string, 0, 64)
+	artifactKeys := make([]string, 0, len(lens.ScopeArtifacts)+len(lens.Scope))
+	var errs []string
+	for _, raw := range lens.Scope {
+		if key := normalizedArtifactCanonicalKey(raw); strings.HasPrefix(strings.TrimSpace(raw), "/artifact/") && key != "" {
+			artifactKeys = append(artifactKeys, key)
+		}
+	}
 	for key, ref := range lens.ScopeArtifacts {
+		artifactKeys = append(artifactKeys, normalizedArtifactCanonicalKey(key))
 		refs = append(refs, strings.TrimSpace(key), strings.TrimSpace(ref.AnchorSupplier), strings.TrimSpace(ref.AnchorCustomer))
 		refs = append(refs, ref.NodeRefs...)
 		refs = append(refs, ref.GeoRefs...)
 		refs = append(refs, ref.ZoneRefs...)
 		refs = append(refs, ref.AffectedZoneRefs...)
 	}
-	if s.materializedRepo == nil || strings.TrimSpace(lens.ID) == "" {
-		return compactUniqueStrings(expandMaritimeNeighborhoodRefs(refs)), nil
-	}
-	artifacts, err := s.materializedRepo.ListByLens(ctx, strings.TrimSpace(lens.ID), 64)
-	if err != nil {
-		return compactUniqueStrings(expandMaritimeNeighborhoodRefs(refs)), err
-	}
-	for _, artifact := range artifacts {
-		if artifact == nil {
+	for _, artifactKey := range compactUniqueStrings(artifactKeys) {
+		if artifactKey == "" || s.materializedRepo == nil {
 			continue
 		}
-		refs = append(refs,
-			strings.TrimSpace(artifact.AnchorSupplier),
-			strings.TrimSpace(artifact.AnchorCustomer),
-		)
-		refs = append(refs, artifact.NodeRefs...)
-		refs = append(refs, artifact.GeoRefs...)
-		refs = append(refs, artifact.ZoneRefs...)
-		refs = append(refs, artifact.AffectedZoneRefs...)
+		artifact, err := s.lookupMaterializedArtifact(ctx, strings.TrimSpace(lens.TenantID), artifactKey)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("load artifact %s: %v", artifactKey, err))
+			continue
+		}
+		refs = append(refs, collectMaterializedArtifactRefs(artifact)...)
 	}
-	return compactUniqueStrings(expandMaritimeNeighborhoodRefs(refs)), nil
+	if s.materializedRepo != nil {
+		if artifacts, err := s.materializedRepo.ListByLens(ctx, strings.TrimSpace(lens.ID), maxLensRuntimeArtifactsPerLens); err == nil {
+			for _, artifact := range artifacts {
+				refs = append(refs, collectMaterializedArtifactRefs(artifact)...)
+			}
+		} else {
+			errs = append(errs, fmt.Sprintf("list lens artifacts %s: %v", strings.TrimSpace(lens.ID), err))
+		}
+	}
+	refs = compactUniqueStrings(expandMaritimeNeighborhoodRefs(refs))
+	if len(errs) > 0 {
+		return refs, errors.New(strings.Join(errs, "; "))
+	}
+	return refs, nil
 }
 
 func (s *Service) buildWatchTargets(ctx context.Context, lens *horizonmodels.Lens, directScope []string, allPaths []string) []*horizonmodels.WatchTarget {
 	if lens == nil {
 		return nil
 	}
+	allPaths = augmentWithCountryFacetPaths(allPaths)
 	directSet := make(map[string]struct{}, len(directScope))
 	for _, path := range directScope {
 		path = strings.TrimSpace(path)
@@ -312,10 +330,17 @@ func (s *Service) buildWatchTargets(ctx context.Context, lens *horizonmodels.Len
 		if _, ok := directSet[path]; ok {
 			score += 35
 		}
+		score += maritimeNeighborhoodBonus(path)
 		frag := fragmentsByPath[path]
 		label := labelFromCanonicalPath(path)
+		if countryPath, countryLabel := countryFacetForPath(path); countryPath == path && countryLabel != "" {
+			label = countryLabel
+		}
 		if frag != nil {
 			label = strings.TrimSpace(firstNonEmpty(fragmentDisplayName(frag), label))
+			if countryPath, countryLabel := countryFacetForPath(path); countryPath == path && countryLabel != "" && len(strings.TrimSpace(label)) <= 3 {
+				label = countryLabel
+			}
 			if strings.TrimSpace(frag.ID) != "" {
 				score += 5
 			}
@@ -332,9 +357,36 @@ func (s *Service) buildWatchTargets(ctx context.Context, lens *horizonmodels.Len
 		}
 		return scored[i].Score > scored[j].Score
 	})
-	out := make([]*horizonmodels.WatchTarget, 0, minInt(len(scored), maxLensRuntimeTargetsPerLens))
-	packID := lensRuntimePackID(lens)
+	ordered := make([]geoInterest, 0, minInt(len(scored), maxLensRuntimeTargetsPerLens))
+	geographyNeeded := minInt(minLensRuntimeGeographyTargets, maxLensRuntimeTargetsPerLens)
 	for _, item := range scored {
+		if targetKindForPath(item.CanonicalPath) != lensRuntimeTargetKindGeography {
+			continue
+		}
+		ordered = append(ordered, item)
+		if len(ordered) >= geographyNeeded {
+			break
+		}
+	}
+	for _, item := range scored {
+		if len(ordered) >= maxLensRuntimeTargetsPerLens {
+			break
+		}
+		alreadyIncluded := false
+		for _, existing := range ordered {
+			if existing.CanonicalPath == item.CanonicalPath {
+				alreadyIncluded = true
+				break
+			}
+		}
+		if alreadyIncluded {
+			continue
+		}
+		ordered = append(ordered, item)
+	}
+	out := make([]*horizonmodels.WatchTarget, 0, len(ordered))
+	packID := lensRuntimePackID(lens)
+	for _, item := range ordered {
 		frag := fragmentsByPath[item.CanonicalPath]
 		target := &horizonmodels.WatchTarget{
 			TenantID:       strings.TrimSpace(firstNonEmpty(lens.TenantID, "global")),
@@ -382,8 +434,13 @@ func (s *Service) buildSourceSpecs(ctx context.Context, lens *horizonmodels.Lens
 	geoLabels := make([]string, 0, minInt(len(geoTerms), maxLensRuntimeGeoTerms))
 	geoFacets := make([]string, 0, minInt(len(geoTerms), maxLensRuntimeGeoTerms))
 	for _, item := range geoTerms {
-		if item.Label != "" && len(geoLabels) < maxLensRuntimeGeoTerms {
-			geoLabels = append(geoLabels, item.Label)
+		label := strings.TrimSpace(item.Label)
+		if countryPath, countryLabel := countryFacetForPath(item.CanonicalPath); countryPath == item.CanonicalPath && countryLabel != "" && len(label) <= 3 {
+			label = countryLabel
+		}
+		label = normalizeGeoQueryLabel(label)
+		if label != "" && len(geoLabels) < maxLensRuntimeGeoTerms {
+			geoLabels = append(geoLabels, label)
 		}
 		if item.CanonicalPath != "" && len(geoFacets) < maxLensRuntimeGeoTerms {
 			geoFacets = append(geoFacets, item.CanonicalPath)
@@ -421,7 +478,52 @@ func (s *Service) buildSourceSpecs(ctx context.Context, lens *horizonmodels.Lens
 			SourceFormatFacet: "canvas_rss",
 		})
 	}
+	out = append(out, buildStaticConflictFeedSpecs(geoFacets, geoLabels)...)
 	return out
+}
+
+func buildStaticConflictFeedSpecs(geoFacets []string, geoLabels []string) []sourceSpec {
+	if !needsMENAConflictFeeds(geoFacets, geoLabels) {
+		return nil
+	}
+	baseFacets := compactUniqueStrings(append([]string{
+		"/loc/int/strait-of-hormuz",
+		"/loc/int/suez-canal",
+		"/loc/int/red-sea",
+		"/loc/ly",
+		"/loc/eg",
+		"/loc/ir",
+		"/loc/kw",
+		"/loc/qa",
+		"/loc/sa",
+		"/loc/ae",
+	}, geoFacets...))
+	return []sourceSpec{
+		{
+			ID:                buildSourceID("system-bbc-middle-east-rss"),
+			DisplayName:       "System Conflict Feed: BBC Middle East",
+			URL:               "http://feeds.bbci.co.uk/news/world/middle_east/rss.xml",
+			CategoryPath:      "/source/lens-runtime/conflict",
+			Category:          "conflict",
+			FeedType:          "bbc-middle-east",
+			SignalType:        "risk:regional_conflict_monitoring",
+			GeoFacets:         baseFacets,
+			PrimaryGeoFacet:   firstNonEmpty(firstString(baseFacets), "/loc/int/strait-of-hormuz"),
+			SourceFormatFacet: "canvas_rss",
+		},
+		{
+			ID:                buildSourceID("system-aljazeera-world-rss"),
+			DisplayName:       "System Conflict Feed: Al Jazeera",
+			URL:               "https://www.aljazeera.com/xml/rss/all.xml",
+			CategoryPath:      "/source/lens-runtime/conflict",
+			Category:          "conflict",
+			FeedType:          "aljazeera-world",
+			SignalType:        "risk:regional_conflict_monitoring",
+			GeoFacets:         baseFacets,
+			PrimaryGeoFacet:   firstNonEmpty(firstString(baseFacets), "/loc/int/strait-of-hormuz"),
+			SourceFormatFacet: "canvas_rss",
+		},
+	}
 }
 
 func (s *Service) ensureWatchTarget(ctx context.Context, lens *horizonmodels.Lens, target *horizonmodels.WatchTarget) (string, string, error) {
@@ -451,6 +553,7 @@ func (s *Service) ensureWatchTarget(ctx context.Context, lens *horizonmodels.Len
 	if err := s.targetsRepo.Upsert(ctx, target); err != nil {
 		return "", "", fmt.Errorf("upsert watch target %s: %w", strings.TrimSpace(target.CanonicalPath), err)
 	}
+	verbosef("target upserted=%s status=%s", strings.TrimSpace(target.CanonicalPath), status)
 	subjectID := strings.TrimSpace(target.SubjectID)
 	if s.watchRuntime != nil {
 		subject, ensureErr := s.watchRuntime.EnsureSubjectForTarget(ctx, target)
@@ -461,12 +564,14 @@ func (s *Service) ensureWatchTarget(ctx context.Context, lens *horizonmodels.Len
 			subjectID = strings.TrimSpace(subject.ID)
 			target.SubjectID = subjectID
 			_ = s.targetsRepo.Upsert(ctx, target)
+			verbosef("target subject=%s anchor=%s", subjectID, strings.TrimSpace(target.CanonicalPath))
 		}
 	}
 	if s.scopeAgent != nil {
 		if _, ensureErr := s.scopeAgent.EnsureRuntimeForTarget(ctx, target); ensureErr != nil {
 			return "", "", fmt.Errorf("ensure runtime %s: %w", strings.TrimSpace(target.CanonicalPath), ensureErr)
 		}
+		verbosef("target runtime ready=%s", strings.TrimSpace(target.CanonicalPath))
 	}
 	return status, subjectID, nil
 }
@@ -531,6 +636,7 @@ func (s *Service) ensureDataSource(ctx context.Context, spec sourceSpec) (string
 	if err := s.dataSourcesRepo.Upsert(ctx, ds); err != nil {
 		return "", fmt.Errorf("upsert source %s: %w", strings.TrimSpace(spec.DisplayName), err)
 	}
+	verbosef("source upserted=%s status=%s", strings.TrimSpace(spec.DisplayName), status)
 	return status, nil
 }
 
@@ -550,6 +656,7 @@ func (s *Service) lookupFragments(ctx context.Context, paths []string) map[strin
 }
 
 func (s *Service) collectGeoTerms(ctx context.Context, directScope []string, allPaths []string) []geoInterest {
+	allPaths = augmentWithCountryFacetPaths(allPaths)
 	fragmentsByPath := s.lookupFragments(ctx, allPaths)
 	directSet := make(map[string]struct{}, len(directScope))
 	for _, path := range directScope {
@@ -561,28 +668,58 @@ func (s *Service) collectGeoTerms(ctx context.Context, directScope []string, all
 	grouped := map[string]geoInterest{}
 	for _, path := range allPaths {
 		path = strings.TrimSpace(path)
-		if !sourceRelevantCanonicalPath(path) {
-			continue
+		if sourceRelevantCanonicalPath(path) {
+			score := canonicalPathWatchScore(path)
+			if _, ok := directSet[path]; ok {
+				score += 30
+			}
+			score += maritimeNeighborhoodBonus(path)
+			if strings.HasPrefix(path, "/loc/") || strings.HasPrefix(path, "/zone/") {
+				score += 18
+			}
+			if strings.HasPrefix(path, "/loc/int/") || strings.HasPrefix(path, "/zone/int/") {
+				score += 8
+			}
+			if strings.HasPrefix(path, "/fac/") {
+				score -= 12
+			}
+			label := labelFromCanonicalPath(path)
+			if countryPath, countryLabel := countryFacetForPath(path); countryPath == path && countryLabel != "" {
+				label = countryLabel
+			}
+			if frag := fragmentsByPath[path]; frag != nil {
+				label = strings.TrimSpace(firstNonEmpty(fragmentDisplayName(frag), label))
+				if countryPath, countryLabel := countryFacetForPath(path); countryPath == path && countryLabel != "" && len(strings.TrimSpace(label)) <= 3 {
+					label = countryLabel
+				}
+				score += 5
+			}
+			if label != "" {
+				key := strings.ToLower(strings.TrimSpace(label))
+				current := grouped[key]
+				if current.Label == "" || score > current.Score {
+					grouped[key] = geoInterest{
+						CanonicalPath: path,
+						Label:         label,
+						Score:         score,
+					}
+				}
+			}
 		}
-		score := canonicalPathWatchScore(path)
-		if _, ok := directSet[path]; ok {
-			score += 30
-		}
-		label := labelFromCanonicalPath(path)
-		if frag := fragmentsByPath[path]; frag != nil {
-			label = strings.TrimSpace(firstNonEmpty(fragmentDisplayName(frag), label))
-			score += 5
-		}
-		if label == "" {
-			continue
-		}
-		key := strings.ToLower(strings.TrimSpace(label))
-		current := grouped[key]
-		if current.Label == "" || score > current.Score {
-			grouped[key] = geoInterest{
-				CanonicalPath: path,
-				Label:         label,
-				Score:         score,
+		if countryPath, countryLabel := countryFacetForPath(path); countryLabel != "" {
+			score := 62
+			if _, ok := directSet[path]; ok {
+				score += 18
+			}
+			score += maritimeNeighborhoodBonus(countryPath)
+			key := strings.ToLower(strings.TrimSpace(countryLabel))
+			current := grouped[key]
+			if current.Label == "" || score > current.Score {
+				grouped[key] = geoInterest{
+					CanonicalPath: countryPath,
+					Label:         countryLabel,
+					Score:         score,
+				}
 			}
 		}
 	}
@@ -710,6 +847,9 @@ func buildTemplatesForLens(lens *horizonmodels.Lens) []sourceTemplate {
 }
 
 func buildGoogleNewsQuery(geoLabels []string, terms []string) string {
+	for i := range geoLabels {
+		geoLabels[i] = normalizeGeoQueryLabel(geoLabels[i])
+	}
 	geoLabels = trimQueryTerms(geoLabels)
 	terms = trimQueryTerms(terms)
 	if len(geoLabels) == 0 && len(terms) == 0 {
@@ -858,18 +998,199 @@ func canonicalPathWatchScore(path string) int {
 func expandMaritimeNeighborhoodRefs(paths []string) []string {
 	out := append([]string(nil), paths...)
 	for _, path := range paths {
-		switch normalizePath(path) {
-		case "/loc/int/strait-of-hormuz", "/zone/int/military_conflict/strait-of-hormuz":
+		normalized := normalizePath(path)
+		switch {
+		case strings.Contains(normalized, "hormuz"):
+			out = append(out, "/loc/int/strait-of-hormuz", "/zone/int/military_conflict/strait-of-hormuz")
 			out = append(out, "/loc/ir", "/loc/qa", "/loc/kw", "/loc/ae", "/loc/om", "/loc/sa")
-		case "/loc/int/suez-canal", "/zone/int/military_conflict/suez-canal":
+		case strings.Contains(normalized, "suez"):
+			out = append(out, "/loc/int/suez-canal", "/zone/int/military_conflict/suez-canal")
 			out = append(out, "/loc/eg", "/loc/ly", "/loc/sa", "/loc/il", "/loc/jo", "/loc/sd")
-		case "/loc/int/red-sea", "/loc/int/bab-el-mandeb", "/zone/int/military_conflict/red-sea":
+		case strings.Contains(normalized, "red-sea"), strings.Contains(normalized, "bab-el-mandeb"):
+			out = append(out, "/loc/int/red-sea", "/zone/int/military_conflict/red-sea")
 			out = append(out, "/loc/ye", "/loc/dj", "/loc/er", "/loc/sa", "/loc/eg", "/loc/sd", "/loc/ly")
-		case "/loc/int/black-sea":
+		case strings.Contains(normalized, "black-sea"):
+			out = append(out, "/loc/int/black-sea")
 			out = append(out, "/loc/ua", "/loc/ru", "/loc/tr", "/loc/ro", "/loc/bg", "/loc/ge")
 		}
 	}
 	return out
+}
+
+func augmentWithCountryFacetPaths(paths []string) []string {
+	out := append([]string(nil), paths...)
+	for _, path := range paths {
+		countryPath, _ := countryFacetForPath(path)
+		if countryPath != "" {
+			out = append(out, countryPath)
+		}
+	}
+	return compactUniqueStrings(out)
+}
+
+func maritimeNeighborhoodBonus(path string) int {
+	switch normalizePath(path) {
+	case "/loc/int/strait-of-hormuz",
+		"/zone/int/military_conflict/strait-of-hormuz",
+		"/loc/int/suez-canal",
+		"/zone/int/military_conflict/suez-canal",
+		"/loc/int/red-sea",
+		"/zone/int/military_conflict/red-sea":
+		return 22
+	case "/loc/ir", "/loc/qa", "/loc/kw", "/loc/ae", "/loc/om", "/loc/sa",
+		"/loc/eg", "/loc/ye", "/loc/dj", "/loc/er", "/loc/sd":
+		return 16
+	case "/loc/ly":
+		return 24
+	default:
+		return 0
+	}
+}
+
+func normalizeGeoQueryLabel(label string) string {
+	switch strings.ToLower(strings.TrimSpace(label)) {
+	case "ae":
+		return "United Arab Emirates"
+	case "bh":
+		return "Bahrain"
+	case "dj":
+		return "Djibouti"
+	case "eg":
+		return "Egypt"
+	case "er":
+		return "Eritrea"
+	case "ir":
+		return "Iran"
+	case "kw":
+		return "Kuwait"
+	case "ly":
+		return "Libya"
+	case "om":
+		return "Oman"
+	case "qa":
+		return "Qatar"
+	case "sa":
+		return "Saudi Arabia"
+	case "sd":
+		return "Sudan"
+	case "ye":
+		return "Yemen"
+	default:
+		return strings.TrimSpace(label)
+	}
+}
+
+func needsMENAConflictFeeds(geoFacets []string, geoLabels []string) bool {
+	for _, facet := range geoFacets {
+		switch normalizePath(facet) {
+		case "/loc/int/strait-of-hormuz",
+			"/zone/int/military_conflict/strait-of-hormuz",
+			"/loc/int/suez-canal",
+			"/zone/int/military_conflict/suez-canal",
+			"/loc/int/red-sea",
+			"/zone/int/military_conflict/red-sea",
+			"/loc/ly",
+			"/loc/eg",
+			"/loc/ir",
+			"/loc/kw",
+			"/loc/qa",
+			"/loc/sa",
+			"/loc/ae",
+			"/loc/om",
+			"/loc/bh":
+			return true
+		}
+	}
+	for _, label := range geoLabels {
+		if containsAny(strings.ToLower(strings.TrimSpace(label)),
+			"hormuz", "suez", "red sea", "libya", "egypt", "iran", "kuwait", "qatar", "oman", "saudi", "emirates", "bahrain") {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) lookupMaterializedArtifact(ctx context.Context, tenantID, canonicalKey string) (*horizonmodels.MaterializedArtifact, error) {
+	if s == nil || s.materializedRepo == nil {
+		return nil, nil
+	}
+	tenantID = strings.TrimSpace(firstNonEmpty(tenantID, "global"))
+	canonicalKey = normalizedArtifactCanonicalKey(canonicalKey)
+	if canonicalKey == "" {
+		return nil, nil
+	}
+	artifact, err := s.materializedRepo.GetByCanonicalKeyAnyKind(ctx, tenantID, canonicalKey)
+	if err == nil && artifact != nil {
+		return artifact, nil
+	}
+	if tenantID != "global" {
+		if fallback, fallbackErr := s.materializedRepo.GetByCanonicalKeyAnyKind(ctx, "global", canonicalKey); fallbackErr == nil && fallback != nil {
+			return fallback, nil
+		}
+	}
+	return nil, err
+}
+
+func collectMaterializedArtifactRefs(artifact *horizonmodels.MaterializedArtifact) []string {
+	if artifact == nil {
+		return nil
+	}
+	refs := []string{
+		strings.TrimSpace(artifact.AnchorSupplier),
+		strings.TrimSpace(artifact.AnchorCustomer),
+	}
+	refs = append(refs, artifact.NodeRefs...)
+	refs = append(refs, artifact.GeoRefs...)
+	refs = append(refs, artifact.FlowRefs...)
+	refs = append(refs, artifact.ZoneRefs...)
+	refs = append(refs, artifact.AffectedZoneRefs...)
+
+	switch artifact.Kind {
+	case horizonmodels.MaterializedKindSupplyChainPath, horizonmodels.MaterializedKindServiceChainPath:
+		parsed, err := horizonmodels.ParseSupplyChainPathPayload(artifact.Payload)
+		if err != nil || parsed == nil {
+			return compactUniqueStrings(refs)
+		}
+		for _, leg := range parsed.Legs {
+			refs = append(refs,
+				strings.TrimSpace(leg.SupplierRef),
+				strings.TrimSpace(leg.CustomerRef),
+				strings.TrimSpace(leg.ProductRef),
+				strings.TrimSpace(leg.SupplyLinkCanonicalPath),
+			)
+			refs = append(refs, leg.TransportViaRefs...)
+			refs = append(refs, leg.GeoRefs...)
+			refs = append(refs, leg.FlowRefs...)
+			refs = append(refs, leg.AlternateFlowRefs...)
+			refs = append(refs, leg.ZoneRefs...)
+			refs = append(refs, leg.AffectedZoneRefs...)
+			for _, overlay := range leg.RouteOverlays {
+				refs = append(refs, overlay.OrderedRefs...)
+				refs = append(refs, overlay.TransportViaRefs...)
+				refs = append(refs, overlay.FlowRefs...)
+				refs = append(refs, overlay.AlternateFlowRefs...)
+				refs = append(refs, overlay.GeoRefs...)
+				refs = append(refs, overlay.ZoneRefs...)
+				refs = append(refs, overlay.AffectedZoneRefs...)
+			}
+		}
+	}
+
+	return compactUniqueStrings(refs)
+}
+
+func normalizedArtifactCanonicalKey(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if strings.HasPrefix(raw, "/artifact/") {
+		return "/" + strings.Trim(strings.TrimPrefix(raw, "/artifact/"), "/")
+	}
+	if strings.HasPrefix(raw, "/") {
+		return raw
+	}
+	return "/" + strings.Trim(raw, "/")
 }
 
 func normalizePath(path string) string {
@@ -878,6 +1199,83 @@ func normalizePath(path string) string {
 		path = strings.ReplaceAll(path, "//", "/")
 	}
 	return path
+}
+
+func countryFacetForPath(path string) (string, string) {
+	code := countryCodeFromPath(path)
+	if code == "" || code == "global" || code == "int" {
+		return "", ""
+	}
+	return "/loc/" + code, countryCodeLabel(code)
+}
+
+func countryCodeFromPath(path string) string {
+	parts := strings.Split(strings.Trim(strings.TrimSpace(path), "/"), "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	switch parts[0] {
+	case "org", "gov", "loc", "market", "community", "fac", "zone":
+		return strings.ToLower(strings.TrimSpace(parts[1]))
+	case "track":
+		if len(parts) >= 3 {
+			return strings.ToLower(strings.TrimSpace(parts[2]))
+		}
+	}
+	return ""
+}
+
+func countryCodeLabel(code string) string {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "ae":
+		return "United Arab Emirates"
+	case "au":
+		return "Australia"
+	case "be":
+		return "Belgium"
+	case "bh":
+		return "Bahrain"
+	case "cn":
+		return "China"
+	case "de":
+		return "Germany"
+	case "eg":
+		return "Egypt"
+	case "eu":
+		return "European Union"
+	case "gb", "uk":
+		return "United Kingdom"
+	case "in":
+		return "India"
+	case "ir":
+		return "Iran"
+	case "it":
+		return "Italy"
+	case "kw":
+		return "Kuwait"
+	case "kz":
+		return "Kazakhstan"
+	case "ly":
+		return "Libya"
+	case "nl":
+		return "Netherlands"
+	case "om":
+		return "Oman"
+	case "qa":
+		return "Qatar"
+	case "ru":
+		return "Russia"
+	case "sa":
+		return "Saudi Arabia"
+	case "tr":
+		return "Turkey"
+	case "ua":
+		return "Ukraine"
+	case "us":
+		return "United States"
+	default:
+		return strings.ToUpper(code)
+	}
 }
 
 func dedupeLenses(in []*horizonmodels.Lens) []*horizonmodels.Lens {
@@ -998,4 +1396,11 @@ func intPtr(v int) *int {
 
 func floatPtr(v float64) *float64 {
 	return &v
+}
+
+func verbosef(format string, args ...any) {
+	if strings.TrimSpace(os.Getenv("HORIZON_LENS_RUNTIME_VERBOSE")) == "" {
+		return
+	}
+	log.Printf("lensruntime: "+format, args...)
 }

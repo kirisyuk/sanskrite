@@ -12,7 +12,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/analytical"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
@@ -59,7 +58,7 @@ func (h *HorizonHandlers) HomeWorkspaceRun(w http.ResponseWriter, r *http.Reques
 		_ = httputil.WriteUnauthorized(w, err.Error())
 		return
 	}
-	if h.service == nil || h.genAIHandler == nil {
+	if h.service == nil || h.service.AIExecutor() == nil {
 		_ = httputil.WriteInternalError(w, "Horizon home workspace is not configured")
 		return
 	}
@@ -78,7 +77,7 @@ func (h *HorizonHandlers) HomeWorkspaceRun(w http.ResponseWriter, r *http.Reques
 	defer cancel()
 
 	entities, scopeRefs, entityWarnings := h.resolveHomeWorkspaceEntities(ctx, query)
-	answer, hits, highlightedPaths, eventCorePaths, haloPaths, affectedZoneRefs, warnings := h.answerHomeWorkspace(ctx, strings.TrimSpace(authInfo.TenantID), query, scopeRefs, entities)
+	answer, hits, highlightedPaths, eventCorePaths, haloPaths, affectedZoneRefs, _, warnings := h.answerHomeWorkspace(ctx, strings.TrimSpace(authInfo.TenantID), query, scopeRefs, entities)
 	warnings = append(entityWarnings, warnings...)
 
 	_ = httputil.WriteJSON(w, http.StatusOK, homeWorkspaceRunResponse{
@@ -97,12 +96,12 @@ func (h *HorizonHandlers) HomeWorkspaceRun(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-func (h *HorizonHandlers) answerHomeWorkspace(ctx context.Context, tenantID, query string, scopeRefs []string, entities []homeWorkspaceEntity) (string, []lensChatInternalHit, []string, []string, []string, []string, []string) {
+func (h *HorizonHandlers) answerHomeWorkspace(ctx context.Context, tenantID, query string, scopeRefs []string, entities []homeWorkspaceEntity) (string, []lensChatInternalHit, []string, []string, []string, []string, string, []string) {
 	warnings := make([]string, 0, 6)
 	intent := classifyLensChatAnalyticalIntent(query)
 	client := h.service.VertexSearchClient()
 	if client == nil {
-		return "Home workspace search is unavailable right now.", nil, nil, nil, nil, nil, []string{"vertex search client is not configured"}
+		return "Home workspace search is unavailable right now.", nil, nil, nil, nil, nil, "", []string{"vertex search client is not configured"}
 	}
 
 	retrievalCtx, cancelRetrieval := context.WithTimeout(ctx, 32*time.Second)
@@ -142,30 +141,31 @@ func (h *HorizonHandlers) answerHomeWorkspace(ctx context.Context, tenantID, que
 		if intent == "current_signal" {
 			answer = "I could not find enough fresh grounded signal-aware knowledge for this question yet."
 		}
-		return answer, hits, highlightedPaths, eventCorePaths, haloPaths, affectedZoneRefs, uniqueStringsLocal(warnings)
+		return answer, hits, highlightedPaths, eventCorePaths, haloPaths, affectedZoneRefs, "", uniqueStringsLocal(warnings)
 	}
 
 	prompt := buildHomeWorkspaceSynthesisPrompt(query, entities, hits, evidenceDocs, highlightedPaths, eventCorePaths, haloPaths, affectedZoneRefs)
 	synthesisCtx, cancelSynthesis := context.WithTimeout(ctx, 14*time.Second)
 	defer cancelSynthesis()
-	genResp, err := h.genAIHandler.GenerateDirect(synthesisCtx, gen_combined.GenAIRequest{
-		Model:             lensChatModel,
+	answer, modelUsed, err := h.executeFinalSynthesis(synthesisCtx, finalSynthesisSpec{
+		TenantID:          strings.TrimSpace(tenantID),
+		ProjectID:         "",
+		CascadeID:         homeWorkspaceRunID(query, scopeRefs),
+		UseCase:           "horizon.home_workspace.final_synthesis",
 		Prompt:            prompt,
 		SystemInstruction: homeWorkspaceSystemInstruction(),
 		MaxOutputTokens:   1400,
-		Temperature:       0.15,
 	})
 	if err != nil {
 		warnings = append(warnings, fmt.Sprintf("final synthesis failed: %v", err))
-		return fallbackHomeWorkspaceAnswer(query, entities, hits, eventCorePaths, haloPaths, affectedZoneRefs, highlightedPaths), hits, highlightedPaths, eventCorePaths, haloPaths, affectedZoneRefs, uniqueStringsLocal(warnings)
+		return fallbackHomeWorkspaceAnswer(query, entities, hits, eventCorePaths, haloPaths, affectedZoneRefs, highlightedPaths), hits, highlightedPaths, eventCorePaths, haloPaths, affectedZoneRefs, "", uniqueStringsLocal(warnings)
 	}
-	answer := strings.TrimSpace(genResp.Content)
 	if answer == "" {
 		answer = fallbackHomeWorkspaceAnswer(query, entities, hits, eventCorePaths, haloPaths, affectedZoneRefs, highlightedPaths)
 		warnings = append(warnings, "final synthesis returned empty content")
 	}
 	answer = rewriteCanonicalPathsForDisplay(answer, hits)
-	return answer, hits, highlightedPaths, eventCorePaths, haloPaths, affectedZoneRefs, uniqueStringsLocal(warnings)
+	return answer, hits, highlightedPaths, eventCorePaths, haloPaths, affectedZoneRefs, modelUsed, uniqueStringsLocal(warnings)
 }
 
 func (h *HorizonHandlers) resolveHomeWorkspaceEntities(ctx context.Context, query string) ([]homeWorkspaceEntity, []string, []string) {

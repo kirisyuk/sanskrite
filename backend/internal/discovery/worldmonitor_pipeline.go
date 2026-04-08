@@ -29,7 +29,9 @@ import (
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonsignallanding "github.com/igorkirisyuk/sanskrite/internal/horizon/signallanding"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/zonegeo"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
+	"github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
@@ -563,6 +565,7 @@ type HorizonMonitorPipeline struct {
 	entityExtractMode        discoverynlp.Mode
 	eventGate                discoverynlp.EventGate
 	entityExtractor          discoverynlp.EntityExtractor
+	geocodingClient          ontology.GeocodingClientInterface
 
 	mu            sync.Mutex
 	observations  []horizonMonitorSignalObservation
@@ -643,6 +646,14 @@ func (p *HorizonMonitorPipeline) WithStrategicRecommendations(service *horizonre
 		return p
 	}
 	p.strategicRecommendations = service
+	return p
+}
+
+func (p *HorizonMonitorPipeline) WithGeocodingClient(client ontology.GeocodingClientInterface) *HorizonMonitorPipeline {
+	if p == nil {
+		return p
+	}
+	p.geocodingClient = client
 	return p
 }
 
@@ -6086,6 +6097,9 @@ func inferAffectedZoneCandidateWithContext(ctx context.Context, p *HorizonMonito
 		label = firstNonEmptyString(countryName, strings.ToUpper(countryCode), "Affected Zone")
 	}
 	lat, lon, hasCoord, geoPrecision := inferAffectedZoneCoordinates(e, place, countryCode)
+	if resolvedLat, resolvedLon, resolvedPrecision, ok := geocodeAffectedZoneCoordinates(ctx, p, place, countryCode, geoPrecision); ok {
+		lat, lon, hasCoord, geoPrecision = resolvedLat, resolvedLon, true, resolvedPrecision
+	}
 	resolutionConfidence := affectedZoneResolutionConfidence(e, cls, place, countryCode, countryName, geoPrecision, conditionType, hasCoord, anchor)
 	if shouldPreferAffectedZoneAnchor(anchor, place, countryName, geoPrecision, hasCoord) {
 		place = firstNonEmptyString(anchor.Place, place)
@@ -6110,6 +6124,9 @@ func inferAffectedZoneCandidateWithContext(ctx context.Context, p *HorizonMonito
 				countryName = firstNonEmptyString(cn, countryName)
 			}
 			lat, lon, hasCoord, geoPrecision = inferAffectedZoneCoordinates(e, place, countryCode)
+			if resolvedLat, resolvedLon, resolvedPrecision, ok := geocodeAffectedZoneCoordinates(ctx, p, place, countryCode, geoPrecision); ok {
+				lat, lon, hasCoord, geoPrecision = resolvedLat, resolvedLon, true, resolvedPrecision
+			}
 			if hasCoord && geoPrecision == "precise" {
 				anchor = nil
 			}
@@ -7309,6 +7326,31 @@ func inferAffectedZoneCoordinates(e *horizonMonitorFeedEvent, place, countryCode
 		return lat, lon, true, "approximate_country"
 	}
 	return 0, 0, false, "none"
+}
+
+func geocodeAffectedZoneCoordinates(
+	ctx context.Context,
+	p *HorizonMonitorPipeline,
+	place, countryCode, currentPrecision string,
+) (float64, float64, string, bool) {
+	if p == nil || p.geocodingClient == nil {
+		return 0, 0, "", false
+	}
+	precision := strings.TrimSpace(strings.ToLower(currentPrecision))
+	if precision != "" && precision != "none" && precision != "approximate_country" {
+		return 0, 0, "", false
+	}
+	if !isPlausiblePlaceName(place) || looksLikeBadAffectedZonePlaceHint(place) {
+		return 0, 0, "", false
+	}
+	for _, query := range zonegeo.BuildGeocodeQueries(place, countryCode, currentPrecision, "") {
+		result, err := p.geocodingClient.Geocode(ctx, query)
+		if err != nil || result == nil || !horizonmodels.IsRealGeoCoordinate(result.Lat, result.Lon) {
+			continue
+		}
+		return result.Lat, result.Lon, zonegeo.PreferredGeocodePrecision(place, countryCode, currentPrecision), true
+	}
+	return 0, 0, "", false
 }
 
 func affectedZoneSourceHost(e *horizonMonitorFeedEvent) string {

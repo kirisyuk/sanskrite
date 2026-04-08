@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/lensresearch"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
@@ -249,6 +250,7 @@ func (e *ScoutEngine) publishDirectedExplorationMaterialized(ctx context.Context
 	edges := make([]edgePayload, 0, 64)
 	edgeSeen := make(map[string]struct{}, 128)
 	artifacts := make([]map[string]any, 0, len(chains))
+	researchRefs := make([]string, 0, 64)
 
 	for chainIdx, chain := range chains {
 		artifactNodes := make([]map[string]any, 0, len(chain.Nodes))
@@ -266,6 +268,7 @@ func (e *ScoutEngine) publishDirectedExplorationMaterialized(ctx context.Context
 					Type:          strings.TrimSpace(node.Type),
 				})
 			}
+			researchRefs = append(researchRefs, cp)
 			artifactNodes = append(artifactNodes, map[string]any{
 				"type": strings.TrimSpace(node.Type),
 				"ref":  cp,
@@ -331,6 +334,25 @@ func (e *ScoutEngine) publishDirectedExplorationMaterialized(ctx context.Context
 			},
 		})
 	}
+	if lensID := strings.TrimSpace(job.LensID); lensID != "" {
+		e.bestEffortMergeLensResearchObjects(
+			ctx,
+			lensID,
+			lensresearch.BuildFromCanonicalPaths(
+				researchRefs,
+				lensresearch.SourceKindMaterializedNodeRef,
+				time.Now().UTC(),
+				strings.TrimSpace(job.ID),
+			),
+		)
+		e.publish(ctx, realtime.EventType("horizon.lens.updated"), map[string]any{
+			"tenantId":  job.TenantID,
+			"projectId": job.ProjectID,
+			"lensId":    lensID,
+			"jobId":     strings.TrimSpace(job.ID),
+			"reason":    "directed_exploration_materialized",
+		})
+	}
 
 	e.publish(ctx, realtime.EventType("horizon.supply_chain.exploration.materialized"), map[string]any{
 		"tenantId":      job.TenantID,
@@ -345,6 +367,35 @@ func (e *ScoutEngine) publishDirectedExplorationMaterialized(ctx context.Context
 		"edges":         edges,
 		"artifacts":     artifacts,
 	})
+	for _, node := range nodes {
+		e.publish(ctx, realtime.EventType("horizon.graph.node.upserted"), map[string]any{
+			"tenantId":      job.TenantID,
+			"projectId":     job.ProjectID,
+			"lensId":        strings.TrimSpace(job.LensID),
+			"fragmentId":    "",
+			"canonicalPath": node.CanonicalPath,
+			"type":          node.Type,
+			"label":         node.Label,
+			"status":        "discovered",
+			"qualifiers": map[string]any{
+				"fromDirectedExploration": true,
+				"stage":                   stage,
+				"direction":               direction,
+			},
+		})
+	}
+	for _, edge := range edges {
+		e.publish(ctx, realtime.EventType("horizon.graph.edge.upserted"), map[string]any{
+			"tenantId":            job.TenantID,
+			"projectId":           job.ProjectID,
+			"lensId":              strings.TrimSpace(job.LensID),
+			"edgeId":              edge.EdgeID,
+			"sourceCanonicalPath": edge.SourceCanonicalPath,
+			"targetCanonicalPath": edge.TargetCanonicalPath,
+			"type":                edge.Type,
+			"qualifiers":          edge.Qualifiers,
+		})
+	}
 }
 
 func buildDirectedArtifactDisplayName(chain agents.SupplyChain) string {

@@ -312,6 +312,14 @@ func readZoneActivitySnapshot(f *models.HorizonFragment, now time.Time) (float64
 	hits1h := metricValue(f.State, "zone_hits_1h")
 	hits24h := metricValue(f.State, "zone_hits_24h")
 	lastMatchTS := metricValue(f.State, "zone_last_match_unix")
+	if score <= 0 && hits1h <= 0 && hits24h <= 0 && lastMatchTS <= 0 {
+		if fallbackScore, fallbackLast := fallbackSignalLandingZoneActivitySnapshot(f, now); fallbackScore > 0 {
+			score = fallbackScore
+			if fallbackLast != nil {
+				lastMatchTS = float64(fallbackLast.Unix())
+			}
+		}
+	}
 
 	updatedAt := f.Metadata.LastUpdatedAt.UTC()
 	if updatedAt.IsZero() {
@@ -337,6 +345,79 @@ func readZoneActivitySnapshot(f *models.HorizonFragment, now time.Time) (float64
 		lastMatchedAt = &t
 	}
 	return score, indicator, status, lastMatchedAt
+}
+
+func fallbackSignalLandingZoneActivitySnapshot(f *models.HorizonFragment, now time.Time) (float64, *time.Time) {
+	if f == nil || f.Type != models.FragmentTypeAffectedZone {
+		return 0, nil
+	}
+	if !fragmentQualifierBoolValue(f.Qualifiers, "signalLandingGenerated") {
+		return 0, nil
+	}
+	parseTS := func(raw interface{}) *time.Time {
+		value := strings.TrimSpace(asString(raw))
+		if value == "" {
+			return nil
+		}
+		parsed, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			return nil
+		}
+		t := parsed.UTC()
+		return &t
+	}
+	lastMatchedAt := parseTS(f.Qualifiers["lastMatchedAt"])
+	if lastMatchedAt == nil {
+		lastMatchedAt = parseTS(f.Qualifiers["signalLandingUpdatedAt"])
+	}
+	if lastMatchedAt == nil {
+		if !f.Metadata.LastUpdatedAt.IsZero() {
+			t := f.Metadata.LastUpdatedAt.UTC()
+			lastMatchedAt = &t
+		} else if !f.UpdatedAt.IsZero() {
+			t := f.UpdatedAt.UTC()
+			lastMatchedAt = &t
+		}
+	}
+	if lastMatchedAt == nil {
+		return 0, nil
+	}
+	conditionType := strings.ToLower(strings.TrimSpace(asString(f.Qualifiers["conditionType"])))
+	score := 32.0
+	switch conditionType {
+	case "military_conflict":
+		score = 64.0
+	case "infrastructure_disruption":
+		score = 48.0
+	case "cyber_disruption":
+		score = 36.0
+	}
+	age := now.Sub(lastMatchedAt.UTC())
+	switch {
+	case age > 14*24*time.Hour:
+		score *= 0.18
+	case age > 7*24*time.Hour:
+		score *= 0.34
+	case age > 72*time.Hour:
+		score *= 0.58
+	case age > 24*time.Hour:
+		score *= 0.78
+	}
+	return clamp(score, 0, 100), lastMatchedAt
+}
+
+func fragmentQualifierBoolValue(qualifiers map[string]interface{}, key string) bool {
+	if len(qualifiers) == 0 || strings.TrimSpace(key) == "" {
+		return false
+	}
+	switch v := qualifiers[key].(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), "true")
+	default:
+		return false
+	}
 }
 
 func metricValue(state map[string]models.MetricValue, key string) float64 {

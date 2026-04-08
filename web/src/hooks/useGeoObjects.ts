@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { api } from '../lib/api';
 import { useHorizonRealtimeStore } from '../stores/horizonRealtimeStore';
+import { shouldRefetchGeoObjectsForLensEvent } from './useGeoObjectEvents';
 
 export type GeoObject = {
   id: string;
@@ -54,6 +55,7 @@ export function useGeoObjects(
   const [allObjects, setAllObjects] = useState<GeoObject[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshVersion, setRefreshVersion] = useState(0);
   const horizonEvents = useHorizonRealtimeStore((s) => s.events);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -134,7 +136,7 @@ export function useGeoObjects(
       cancelled = true;
       clearTimeout(debounceRef.current);
     };
-  }, [canonicalPathsSource, filters.dateFrom, filters.dateTo, preferCanonicalPaths, scope?.lensId]);
+  }, [canonicalPathsSource, filters.dateFrom, filters.dateTo, preferCanonicalPaths, refreshVersion, scope?.lensId]);
 
   useEffect(() => {
     if (!Array.isArray(horizonEvents) || horizonEvents.length === 0) return;
@@ -217,6 +219,16 @@ export function useGeoObjects(
       return changed ? next : prev;
     });
   }, [horizonEvents]);
+
+  useEffect(() => {
+    if (!scope?.lensId) return;
+    if (!Array.isArray(horizonEvents) || horizonEvents.length === 0) return;
+    const latest = horizonEvents[horizonEvents.length - 1];
+    if (!latest) return;
+    if (shouldRefetchGeoObjectsForLensEvent(latest, scope.lensId)) {
+      setRefreshVersion((v) => v + 1);
+    }
+  }, [horizonEvents, scope?.lensId]);
 
   const typeCounts = useMemo(() => deriveTypeCounts(allObjects), [allObjects]);
 

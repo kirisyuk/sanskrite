@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
-	horizonsupplychain "github.com/igorkirisyuk/sanskrite/internal/horizon/supplychain"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
@@ -88,49 +87,3 @@ func isAllowedSupplyChainAnchorPath(canonicalPath string) bool {
 		strings.HasPrefix(cp, "/deposit/")
 }
 
-func isAllowedOneHopSupplyChainAnchorPath(canonicalPath string) bool {
-	cp := strings.TrimSpace(strings.ToLower(canonicalPath))
-	return strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/fac/")
-}
-
-func oneHopAnchorTypeForPath(canonicalPath string) string {
-	cp := strings.TrimSpace(strings.ToLower(canonicalPath))
-	switch {
-	case strings.HasPrefix(cp, "/org/"):
-		return "ORG"
-	case strings.HasPrefix(cp, "/fac/"):
-		return "FAC"
-	default:
-		return ""
-	}
-}
-
-func shouldRouteDirectedExplorationToOneHop(targetCanonicalPath string, cfg *horizonmodels.DirectedExplorationConfig) bool {
-	if cfg == nil {
-		return false
-	}
-	// Only explicit hot-path-only downstream requests should collapse to one-hop.
-	// Full directed exploration must stay on the recursive runtime so the graph can
-	// continue through consumer branches and longer downstream cascades.
-	if strings.TrimSpace(strings.ToLower(cfg.DomainMode)) != taxonomy.DomainModeSupplyChain {
-		return false
-	}
-	if strings.TrimSpace(strings.ToLower(cfg.Direction)) != "downstream" {
-		return false
-	}
-	if !cfg.HotPathOnly {
-		return false
-	}
-	return isAllowedOneHopSupplyChainAnchorPath(targetCanonicalPath)
-}
-
-func buildOneHopOptionsForDirectedExploration(targetCanonicalPath string) horizonsupplychain.OneHopDownstreamOptions {
-	return horizonsupplychain.NormalizeOptions(horizonsupplychain.OneHopDownstreamOptions{
-		AnchorRef:             strings.TrimSpace(targetCanonicalPath),
-		AnchorType:            oneHopAnchorTypeForPath(targetCanonicalPath),
-		MaxBranchesPerProduct: 12,
-		IncludeInputsContext:  true,
-		AllowOrgFallback:      true,
-		AllowLLMFallback:      true,
-	})
-}

@@ -86,3 +86,35 @@ func TestFragmentToGeoItem_ConflictLinkedInfraIsExposedToMap(t *testing.T) {
 		t.Fatalf("unexpected threat class %q", item.ThreatClass)
 	}
 }
+
+func TestReadZoneActivitySnapshot_FallsBackToSignalLandingQualifiers(t *testing.T) {
+	now := time.Date(2026, 4, 7, 12, 30, 0, 0, time.UTC)
+	lastMatched := now.Add(-2 * time.Hour)
+	fragment := &models.HorizonFragment{
+		ID:            "zone-kharg",
+		CanonicalPath: "/zone/ir/military_conflict/kharg-island-crude-oil-export-terminal",
+		Type:          models.FragmentTypeAffectedZone,
+		Coordinates:   &models.Coordinates{Lat: 29.25, Lon: 50.32},
+		RadiusKm:      12,
+		Qualifiers: map[string]interface{}{
+			"signalLandingGenerated": true,
+			"conditionType":          "military_conflict",
+			"signalLandingUpdatedAt": lastMatched.Format(time.RFC3339),
+		},
+		UpdatedAt: lastMatched,
+	}
+
+	score, indicator, status, matchedAt := readZoneActivitySnapshot(fragment, now)
+	if score <= 0 {
+		t.Fatalf("expected positive fallback score, got %.2f", score)
+	}
+	if indicator <= 0 {
+		t.Fatalf("expected positive hype indicator, got %d", indicator)
+	}
+	if status != "active" && status != "hot" && status != "watch" {
+		t.Fatalf("expected visible activity status, got %q", status)
+	}
+	if matchedAt == nil || !matchedAt.Equal(lastMatched) {
+		t.Fatalf("expected fallback lastMatchedAt %s, got %+v", lastMatched.Format(time.RFC3339), matchedAt)
+	}
+}

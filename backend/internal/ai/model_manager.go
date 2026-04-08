@@ -409,16 +409,16 @@ func (mm *AIModelManager) initializeModels() {
 	// Pricing is not yet split out separately on the public pricing page, so we mirror the current Flash-Lite envelope
 	// until Google publishes dedicated preview pricing.
 	mm.models["gemini-3.1-flash-lite-preview"] = AIModelCapabilities{
-		Name:                "gemini-3.1-flash-lite-preview",
-		ContextWindow:       1000000,
-		OutputTokens:        65536,
-		PricePerInputToken:  0.00000010,
-		PricePerOutputToken: 0.00000041,
-		Provider:            AIProviderGemini,
-		MaxTokensPerMinute:  6000000,
-		MaxTokensPerDay:     12000000,
-		NearlyRealTime:      true,
-		CapabilityScore:     8,
+		Name:                          "gemini-3.1-flash-lite-preview",
+		ContextWindow:                 1000000,
+		OutputTokens:                  65536,
+		PricePerInputToken:            0.00000010,
+		PricePerOutputToken:           0.00000041,
+		Provider:                      AIProviderGemini,
+		MaxTokensPerMinute:            6000000,
+		MaxTokensPerDay:               12000000,
+		NearlyRealTime:                true,
+		CapabilityScore:               8,
 		ImageGenerationCapability:     false,
 		EmbeddingGenerationCapability: false,
 		TextGenerationCapability:      true,
@@ -728,6 +728,16 @@ func (mm *AIModelManager) SelectModel(requirements AIRequirements, inputTokens i
 		}
 	}
 
+	// If an explicit fallback chain is configured, treat it as an allowlist and preserve its order.
+	if explicit := mm.selectExplicitFallbackModel(requirements, inputTokens, excludeModels, preferNearlyRealTime); explicit != "" {
+		log.Printf("AIModelManager: using explicit fallback model %s", explicit)
+		return explicit
+	}
+	if len(compactUniqueModelNames(requirements.FallbackModels)) > 0 {
+		log.Printf("AIModelManager: explicit fallback chain exhausted without suitable model")
+		return ""
+	}
+
 	// Минимально необходимый размер контекстного окна
 	requiredContextWindow := max(requirements.MinContextWindow, inputTokens)
 
@@ -873,6 +883,12 @@ func (mm *AIModelManager) SelectModelForProviders(requirements AIRequirements, i
 	if len(providers) == 0 {
 		return ""
 	}
+	if explicit := mm.selectExplicitFallbackModelForProviders(requirements, inputTokens, excludeModels, providers); explicit != "" {
+		return explicit
+	}
+	if len(compactUniqueModelNames(requirements.FallbackModels)) > 0 {
+		return ""
+	}
 	providerSet := make(map[AIProvider]bool)
 	for p := range providers {
 		providerSet[p] = true
@@ -922,6 +938,98 @@ func (mm *AIModelManager) SelectModelForProviders(requirements AIRequirements, i
 		return capableModels[i].model.PricePerOutputToken < capableModels[j].model.PricePerOutputToken
 	})
 	return capableModels[0].name
+}
+
+func compactUniqueModelNames(models []string) []string {
+	if len(models) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		if _, ok := seen[model]; ok {
+			continue
+		}
+		seen[model] = struct{}{}
+		out = append(out, model)
+	}
+	return out
+}
+
+func (mm *AIModelManager) selectExplicitFallbackModel(requirements AIRequirements, inputTokens int, excludeModels []string, preferNearlyRealTime bool) string {
+	for _, name := range compactUniqueModelNames(requirements.FallbackModels) {
+		if contains(excludeModels, name) {
+			continue
+		}
+		if mm.modelMeetsRequirements(name, requirements, inputTokens, preferNearlyRealTime, nil) {
+			return name
+		}
+	}
+	return ""
+}
+
+func (mm *AIModelManager) selectExplicitFallbackModelForProviders(requirements AIRequirements, inputTokens int, excludeModels []string, providers map[AIProvider]struct{}) string {
+	for _, name := range compactUniqueModelNames(requirements.FallbackModels) {
+		if contains(excludeModels, name) {
+			continue
+		}
+		if mm.modelMeetsRequirements(name, requirements, inputTokens, false, providers) {
+			return name
+		}
+	}
+	return ""
+}
+
+func (mm *AIModelManager) modelMeetsRequirements(name string, requirements AIRequirements, inputTokens int, preferNearlyRealTime bool, providers map[AIProvider]struct{}) bool {
+	m, ok := mm.models[name]
+	if !ok {
+		return false
+	}
+	if len(providers) > 0 {
+		if _, ok := providers[m.Provider]; !ok {
+			return false
+		}
+	}
+	requiredContextWindow := max(requirements.MinContextWindow, inputTokens)
+	searchRequired := requirements.BuiltInSearchCapability
+	groundingRequired := requirements.SearchGroundingCapability
+	internalGroundingRequired := requirements.InternalDataGroundingCapability
+
+	if m.ContextWindow < requiredContextWindow {
+		return false
+	}
+	if preferNearlyRealTime && !m.NearlyRealTime {
+		return false
+	}
+	if m.CapabilityScore < requirements.MinCapabilityScore {
+		return false
+	}
+	if requirements.TextGenerationCapability && !m.TextGenerationCapability {
+		return false
+	}
+	if requirements.ImageGenerationCapability && !m.ImageGenerationCapability {
+		return false
+	}
+	if requirements.EmbeddingGenerationCapability && !m.EmbeddingGenerationCapability {
+		return false
+	}
+	if requirements.ImageAnalysisCapability && !m.ImageAnalysisCapability {
+		return false
+	}
+	if (searchRequired && !m.BuiltInSearchCapability) || (!searchRequired && m.BuiltInSearchCapability) {
+		return false
+	}
+	if groundingRequired && !m.SearchGroundingCapability {
+		return false
+	}
+	if internalGroundingRequired && !m.InternalDataGroundingCapability {
+		return false
+	}
+	return true
 }
 
 // SelectToolCallingModel выбирает оптимальную модель с поддержкой tool-calling

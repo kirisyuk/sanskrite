@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonsignallanding "github.com/igorkirisyuk/sanskrite/internal/horizon/signallanding"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
+	"github.com/igorkirisyuk/sanskrite/internal/ontology"
 )
 
 func TestNormalizeHorizonMonitorIngestMode(t *testing.T) {
@@ -691,6 +693,36 @@ func TestInferAffectedZoneCoordinates_GeoPrecision(t *testing.T) {
 	if !hasCoord2 || precision2 != "approximate_country" {
 		t.Fatalf("expected approximate country geo fallback, got hasCoord=%v precision=%q", hasCoord2, precision2)
 	}
+}
+
+func TestGeocodeAffectedZoneCoordinates_UsesGeocoderFallback(t *testing.T) {
+	pipeline := (&HorizonMonitorPipeline{}).WithGeocodingClient(mockZoneGeocoder{
+		byQuery: map[string]ontology.GeocodingResult{
+			"Al Ahmadi, KW": {Lat: 29.0769, Lon: 48.0839},
+		},
+	})
+	lat, lon, precision, ok := geocodeAffectedZoneCoordinates(context.Background(), pipeline, "Al Ahmadi", "KW", "none")
+	if !ok {
+		t.Fatalf("expected geocode fallback to resolve coordinates")
+	}
+	if !horizonmodels.IsRealGeoCoordinate(lat, lon) {
+		t.Fatalf("expected valid coordinates, got %.4f, %.4f", lat, lon)
+	}
+	if precision != "precise" {
+		t.Fatalf("expected precise precision, got %q", precision)
+	}
+}
+
+type mockZoneGeocoder struct {
+	byQuery map[string]ontology.GeocodingResult
+}
+
+func (m mockZoneGeocoder) Geocode(_ context.Context, address string) (*ontology.GeocodingResult, error) {
+	if result, ok := m.byQuery[address]; ok {
+		copy := result
+		return &copy, nil
+	}
+	return nil, nil
 }
 
 func TestInferAffectedZoneCandidate_SuppressesOpinionAndStaleDrift(t *testing.T) {

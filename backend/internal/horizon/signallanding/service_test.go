@@ -2,11 +2,14 @@ package signallanding
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
+	"github.com/igorkirisyuk/sanskrite/internal/ontology"
 )
 
 func TestLandEventRequiresPreciseZoneForShockSignals(t *testing.T) {
@@ -201,4 +204,81 @@ func TestRetroAttachScoreMatchesMissingCandidateAndCountry(t *testing.T) {
 	if len(reasons) == 0 {
 		t.Fatalf("expected non-empty attach reasons")
 	}
+}
+
+func TestBackfillAffectedZoneCoordinatesUsesGeocoding(t *testing.T) {
+	svc := (&Service{}).WithGeocodingClient(mockGeocoder{
+		byQuery: map[string]ontology.GeocodingResult{
+			"Strait of Hormuz": {Lat: 26.5667, Lon: 56.2500},
+		},
+	})
+	zone := &horizonmodels.HorizonFragment{
+		Type:          horizonmodels.FragmentTypeAffectedZone,
+		CanonicalPath: "/zone/int/military_conflict/strait-of-hormuz",
+		Labels:        map[string]string{"en": "Strait of Hormuz (armed tension)"},
+		Qualifiers: map[string]interface{}{
+			"geoPrecision": "region",
+		},
+	}
+	changed, err := svc.BackfillAffectedZoneCoordinates(context.Background(), zone)
+	if err != nil {
+		t.Fatalf("BackfillAffectedZoneCoordinates returned error: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected coordinates to be hydrated")
+	}
+	if zone.Coordinates == nil || !horizonmodels.IsRealGeoCoordinate(zone.Coordinates.Lat, zone.Coordinates.Lon) {
+		t.Fatalf("expected valid coordinates, got %+v", zone.Coordinates)
+	}
+	if zone.HomeLocation == nil || zone.HomeLocation.ISO6709 == nil || *zone.HomeLocation.ISO6709 == "" {
+		t.Fatalf("expected ISO6709 to be filled, got %+v", zone.HomeLocation)
+	}
+}
+
+func TestApplySignalLandingZoneActivityMarksZoneVisible(t *testing.T) {
+	now := time.Now().UTC()
+	session := &horizonmodels.SignalLandingSession{
+		ID:        "sess-1",
+		TenantID:  "global",
+		UpdatedAt: now,
+	}
+	claim := &horizonmodels.SignalImpactClaim{
+		Severity:   0.82,
+		Confidence: 0.88,
+		Axis:       "conflict/escalation",
+		Mechanism:  "missile_strike",
+		UpdatedAt:  now,
+	}
+	zone := &horizonmodels.HorizonFragment{
+		Type:          horizonmodels.FragmentTypeAffectedZone,
+		CanonicalPath: "/zone/ir/military_conflict/kharg-island-crude-oil-export-terminal",
+		Qualifiers:    map[string]interface{}{},
+	}
+
+	applySignalLandingZoneActivity(zone, session, claim, now)
+
+	if zone.State == nil {
+		t.Fatalf("expected zone state to be initialized")
+	}
+	if mv, ok := zone.State[signalLandingZoneMetricHypeScore]; !ok || mv.Value < 26 {
+		t.Fatalf("expected visible hype score, got %+v", zone.State[signalLandingZoneMetricHypeScore])
+	}
+	if got := strings.TrimSpace(fmt.Sprint(zone.Qualifiers["hypeStatus"])); got == "" || got == "inactive" {
+		t.Fatalf("expected visible hypeStatus, got %q", got)
+	}
+	if got := strings.TrimSpace(fmt.Sprint(zone.Qualifiers["lastMatchedAt"])); got == "" {
+		t.Fatalf("expected lastMatchedAt qualifier to be written")
+	}
+}
+
+type mockGeocoder struct {
+	byQuery map[string]ontology.GeocodingResult
+}
+
+func (m mockGeocoder) Geocode(_ context.Context, address string) (*ontology.GeocodingResult, error) {
+	if result, ok := m.byQuery[address]; ok {
+		copy := result
+		return &copy, nil
+	}
+	return nil, nil
 }
