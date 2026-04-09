@@ -475,6 +475,28 @@ func (mm *AIModelManager) initializeModels() {
 		ToolUseProtocol:               ToolUseProtocolGemini,
 	}
 
+	mm.models["gemini-3.1-pro-preview"] = AIModelCapabilities{
+		Name:                          "gemini-3.1-pro-preview",
+		ContextWindow:                 1048576,
+		OutputTokens:                  65536,
+		PricePerInputToken:            0.00000200,
+		PricePerOutputToken:           0.00001200,
+		Provider:                      AIProviderGemini,
+		MaxTokensPerMinute:            4000000,
+		MaxTokensPerDay:               10000000,
+		NearlyRealTime:                false,
+		CapabilityScore:               10,
+		ImageGenerationCapability:     false,
+		EmbeddingGenerationCapability: false,
+		TextGenerationCapability:      true,
+		ImageAnalysisCapability:       true,
+		BuiltInSearchCapability:       false,
+		SearchGroundingCapability:     true,
+		SupportsToolCalling:           true,
+		SupportsMcp:                   true,
+		ToolUseProtocol:               ToolUseProtocolGemini,
+	}
+
 	// Gemini 3 Flash Preview (official Gemini API pricing: $0.50 input (text/image/video), $3.00 output per 1M tokens).
 	// Source: https://ai.google.dev/gemini-api/docs/pricing
 	mm.models["gemini-3-flash-preview"] = AIModelCapabilities{
@@ -535,6 +557,28 @@ func (mm *AIModelManager) initializeModels() {
 		MaxTokensPerDay:                 10000000,
 		NearlyRealTime:                  false,
 		CapabilityScore:                 9,
+		ImageGenerationCapability:       false,
+		EmbeddingGenerationCapability:   false,
+		TextGenerationCapability:        true,
+		ImageAnalysisCapability:         true,
+		BuiltInSearchCapability:         false,
+		SearchGroundingCapability:       true,
+		InternalDataGroundingCapability: true,
+		SupportsToolCalling:             true,
+		SupportsMcp:                     true,
+		ToolUseProtocol:                 ToolUseProtocolGemini,
+	}
+	mm.models["vertex-gemini-3.1-pro-preview"] = AIModelCapabilities{
+		Name:                            "vertex-gemini-3.1-pro-preview",
+		ContextWindow:                   1048576,
+		OutputTokens:                    65536,
+		PricePerInputToken:              0.00000200,
+		PricePerOutputToken:             0.00001200,
+		Provider:                        AIProviderVertexAI,
+		MaxTokensPerMinute:              4000000,
+		MaxTokensPerDay:                 10000000,
+		NearlyRealTime:                  false,
+		CapabilityScore:                 10,
 		ImageGenerationCapability:       false,
 		EmbeddingGenerationCapability:   false,
 		TextGenerationCapability:        true,

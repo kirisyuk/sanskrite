@@ -15,14 +15,18 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/agentmesh/registry"
 	agentmeshrepo "github.com/igorkirisyuk/sanskrite/internal/agentmesh/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/agentmesh/runtime"
+	agentmeshscout "github.com/igorkirisyuk/sanskrite/internal/agentmesh/scout"
 	agentmeshsimulation "github.com/igorkirisyuk/sanskrite/internal/agentmesh/simulation"
 	"github.com/igorkirisyuk/sanskrite/internal/agentmesh/tasks"
 	meshtrace "github.com/igorkirisyuk/sanskrite/internal/agentmesh/trace"
 	"github.com/igorkirisyuk/sanskrite/internal/agentmesh/transport/a2a"
 	"github.com/igorkirisyuk/sanskrite/internal/agentmesh/transport/mcp"
 	"github.com/igorkirisyuk/sanskrite/internal/agentmesh/vertex"
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	gcp "github.com/igorkirisyuk/sanskrite/internal/gcp"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 	"google.golang.org/api/idtoken"
 )
 
@@ -84,6 +88,8 @@ func main() {
 		log.Fatalf("vertex service: %v", err)
 	}
 	traceSvc := meshtrace.NewService(store, logger)
+	vertexSearchClient := ai.NewVertexAISearchClient(*projectID, envOr("VERTEX_SEARCH_LOCATION", "global"), strings.TrimSpace(os.Getenv("VERTEX_SEARCH_DATA_STORE_ID")), "")
+	productDictionary := productdict.NewRuntime(fs.Client()).WithTenantID("global")
 	simulationProcessor := agentmeshsimulation.NewProcessor(
 		horizonrepo.NewSimulationRunsRepository(fs.Client()),
 		horizonrepo.NewSimulationWorldsRepository(fs.Client()),
@@ -91,6 +97,16 @@ func main() {
 		horizonrepo.NewSimulationEventsRepository(fs.Client()),
 		horizonrepo.NewSimulationArtifactsRepository(fs.Client()),
 		nil,
+		logger,
+	)
+	scoutProcessor := agentmeshscout.NewProcessor(
+		corerepo.NewAgentJobsRepository(fs.Client()),
+		horizonrepo.NewScoutingJobsRepository(corerepo.NewAgentJobsRepository(fs.Client())),
+		horizonrepo.NewHorizonFragmentsRepository(fs.Client()),
+		horizonrepo.NewDependencyEdgesRepository(fs.Client()),
+		horizonrepo.NewMaterializedArtifactsRepository(fs.Client()),
+		productDictionary,
+		vertexSearchClient,
 		logger,
 	)
 
@@ -124,7 +140,7 @@ func main() {
 		dispatcher,
 		envOr("AGENTMESH_ARTIFACT_BUCKET", *projectID+"-agentmesh-artifacts"),
 		logger,
-	).WithProcessor(simulationProcessor)
+	).WithProcessor(simulationProcessor).WithProcessor(scoutProcessor)
 	if err := store.SavePolicySnapshot(ctx, "default", map[string]any{
 		"vertexSubstrate": "enabled",
 		"a2aVersion":      "1.0.0",

@@ -237,6 +237,30 @@ func (s *Store) UpdateTaskRuntimeState(ctx context.Context, taskID, leaseOwner, 
 	})
 }
 
+func (s *Store) UpdateTaskCheckpoint(ctx context.Context, taskID, leaseOwner string, output map[string]any) error {
+	if s == nil {
+		return fmt.Errorf("store is nil")
+	}
+	now := time.Now().UTC()
+	return s.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		ref := s.tasks.Doc(strings.TrimSpace(taskID))
+		snap, err := tx.Get(ref)
+		if err != nil {
+			return err
+		}
+		var task contracts.MeshTask
+		if err := snap.DataTo(&task); err != nil {
+			return err
+		}
+		if strings.TrimSpace(task.Lease.Owner) != strings.TrimSpace(leaseOwner) {
+			return fmt.Errorf("lease owner mismatch")
+		}
+		task.Output = output
+		task.UpdatedAt = now
+		return tx.Set(ref, task)
+	})
+}
+
 func (s *Store) UpdateTaskUsage(ctx context.Context, taskID, leaseOwner string, usage contracts.UsageCounters) error {
 	if s == nil {
 		return fmt.Errorf("store is nil")

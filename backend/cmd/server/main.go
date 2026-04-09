@@ -86,6 +86,7 @@ import (
 	horizonscopeagent "github.com/igorkirisyuk/sanskrite/internal/horizon/scopeagent"
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	horizonagents "github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	horizonscoutbridge "github.com/igorkirisyuk/sanskrite/internal/horizon/scoutbridge"
 	horizonsignallanding "github.com/igorkirisyuk/sanskrite/internal/horizon/signallanding"
 	horizonsignals "github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
 	horizonsimulation "github.com/igorkirisyuk/sanskrite/internal/horizon/simulation"
@@ -408,8 +409,11 @@ func main() {
 	logger := log.New(os.Stdout, "[sanskrite] ", log.LstdFlags|log.Lshortfile)
 
 	var horizonSimulationSubmitter *agentmeshsubmitter.Service
+	var horizonAgentMeshSubmitter *agentmeshsubmitter.Service
+	var horizonAgentMeshStore *agentmeshrepo.Store
 	{
 		meshStore := agentmeshrepo.NewStore(fsClient.Client(), gcsClient)
+		horizonAgentMeshStore = meshStore
 		baseURL := strings.TrimRight(strings.TrimSpace(getEnv("AGENTMESH_PUBLIC_BASE_URL", "")), "/")
 		if baseURL == "" {
 			baseURL = strings.TrimRight(strings.TrimSpace(getEnv("CLOUD_RUN_URL", "")), "/")
@@ -450,6 +454,7 @@ func main() {
 				logger,
 			)
 			horizonSimulationSubmitter = agentmeshsubmitter.NewService(meshRuntime)
+			horizonAgentMeshSubmitter = horizonSimulationSubmitter
 		}
 	}
 
@@ -525,6 +530,7 @@ func main() {
 	var profileScheduler *horizonprofile.Scheduler
 	var enforcementHandlers *horizonhttp.EnforcementHandlers
 	var scoutEngine *horizonscout.ScoutEngine
+	var scoutRuntimeExecutor *horizonscoutbridge.Executor
 	var riskPipeline *horizonrisk.Pipeline
 	var riskJobsRepo *horizonrepo.RiskJobsRepository
 	var horizonTelemetryRepo *horizonrepo.HorizonTelemetryRepository
@@ -2923,6 +2929,18 @@ func main() {
 				pub,
 				exec,
 			)
+			if horizonAgentMeshSubmitter != nil && horizonAgentMeshStore != nil {
+				agenticScoutService := horizonscoutbridge.NewAgenticService(
+					horizonAgentMeshSubmitter,
+					horizonAgentMeshStore,
+					agentJobsRepo,
+					horizonScoutingJobsRepo,
+					logger,
+				)
+				scoutRuntimeExecutor = horizonscoutbridge.NewExecutor(scoutEngine, agenticScoutService, logger)
+			} else {
+				scoutRuntimeExecutor = horizonscoutbridge.NewExecutor(scoutEngine, nil, logger)
+			}
 			scoutEngine.
 				WithWorkingProductScopesRepository(horizonWorkingProductScopesRepo).
 				WithCapabilityProfilesRepository(horizonCapabilityProfilesRepo).
@@ -3303,7 +3321,12 @@ func main() {
 									execCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 									defer cancel()
 									logger.Printf("Scout Worker executing job %s for %s", j.ID, j.TargetCanonicalPath)
-									if err := scoutEngine.ExecuteScoutingJob(execCtx, j); err != nil {
+									executor := scoutRuntimeExecutor
+									if executor == nil {
+										logger.Printf("Scout Worker cannot execute job %s: scout runtime executor is not configured", j.ID)
+										return
+									}
+									if err := executor.ExecuteScoutingJob(execCtx, j); err != nil {
 										logger.Printf("Scout Job %s failed: %v", j.ID, err)
 									} else {
 										logger.Printf("Scout Job %s completed", j.ID)
@@ -3356,6 +3379,7 @@ func main() {
 			// Create HTTP handlers
 			horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService).
 				WithLensItemsHandler(horizonLensItemsHandler).
+				WithScoutRuntimeExecutor(scoutRuntimeExecutor).
 				WithMergeFragmentsRepo(horizonFragmentsMergeRepo).
 				WithMaterializedArtifactsRepo(horizonMaterializedArtifactsRepo).
 				WithAnalyticalPrimitivesRepo(horizonAnalyticalPrimitivesRepo).
@@ -3747,7 +3771,12 @@ func main() {
 				execErr = oneHopDownstreamService.ExecuteJob(execCtx, job)
 			}
 		} else {
-			execErr = scoutEngine.ExecuteScoutingJob(execCtx, job)
+			executor := scoutRuntimeExecutor
+			if executor == nil {
+				execErr = fmt.Errorf("scout runtime executor is not configured")
+			} else {
+				execErr = executor.ExecuteScoutingJob(execCtx, job)
+			}
 		}
 		if err := execErr; err != nil {
 			logger.Printf("ERROR: Scout job execution failed: jobId=%s, canonicalPath=%s, error=%v", jobID, job.TargetCanonicalPath, err)

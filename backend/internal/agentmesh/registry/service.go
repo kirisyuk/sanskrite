@@ -132,6 +132,8 @@ func systemAgents(baseURL string) []contracts.AgentSpec {
 				{Name: "mesh.plan", Description: "Plan execution strategy and budgets."},
 				{Name: "sim.plan", Description: "Plan simulation ensemble execution and world fan-out."},
 				{Name: "sim.aggregate", Description: "Aggregate world outputs into a simulation bundle."},
+				{Name: "scout.plan", Description: "Plan and orchestrate one agentic scouting investigation."},
+				{Name: "scout.aggregate", Description: "Aggregate one agentic scouting investigation for operator consumption."},
 			},
 			Policy: contracts.InvocationPolicy{
 				AllowedCallers:         []string{"internal", "mesh.supervisor", "mesh.worker", "mesh.reviewer"},
@@ -154,6 +156,10 @@ func systemAgents(baseURL string) []contracts.AgentSpec {
 				{Name: "sim.world.bootstrap", Description: "Bootstrap one simulation world and execute its ticks."},
 				{Name: "sim.population.generate", Description: "Generate normalized simulation population archetypes."},
 				{Name: "sim.world.step", Description: "Generate normalized actions for one simulation world step."},
+				{Name: "scout.research", Description: "Run one grounded research branch for an agentic scouting investigation."},
+				{Name: "scout.critic", Description: "Review research outputs and decide on path/materialization actions."},
+				{Name: "scout.path", Description: "Run deterministic target-scoped supply-chain path synthesis and landing."},
+				{Name: "scout.materialize", Description: "Persist agentic scouting outputs and deterministic artifact references."},
 			},
 			Policy: contracts.InvocationPolicy{
 				AllowedCallers:         []string{"internal", "mesh.supervisor"},
@@ -174,6 +180,7 @@ func systemAgents(baseURL string) []contracts.AgentSpec {
 			Capabilities: []contracts.CapabilitySpec{
 				{Name: "mesh.review", Description: "Review output and decide acceptance/rejection."},
 				{Name: "sim.review", Description: "Review simulation bundle consistency and grounding coverage."},
+				{Name: "scout.review", Description: "Review final agentic scouting output before success."},
 			},
 			Policy: contracts.InvocationPolicy{
 				AllowedCallers:         []string{"internal", "mesh.supervisor", "mesh.worker"},

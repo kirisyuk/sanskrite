@@ -1088,7 +1088,12 @@ func (h *HorizonHandlers) RefreshFragment(w http.ResponseWriter, r *http.Request
 	go func() {
 		ctx := context.Background()
 		scoutingJob.ID = jobID
-		if err := scoutEngine.ExecuteScoutingJob(ctx, scoutingJob); err != nil {
+		executor := h.scoutExecutor
+		if executor == nil {
+			log.Default().Printf("horizon fragment scout launch skipped: scout runtime executor is not configured job=%s path=%s", jobID, fragment.CanonicalPath)
+			return
+		}
+		if err := executor.ExecuteScoutingJob(ctx, scoutingJob); err != nil {
 			// Логируем ошибку, но не блокируем ответ
 			_ = err
 		}

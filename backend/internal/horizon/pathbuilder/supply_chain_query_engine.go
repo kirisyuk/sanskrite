@@ -187,6 +187,11 @@ type supplyChainQuerySnapshot struct {
 	ProductUpstream   map[string]map[string]struct{}
 }
 
+const (
+	maxCandidateStartLinksToExplore = 24
+	maxCandidateNextLinksPerHop     = 12
+)
+
 func normalizeSupplyChainQueryOptions(opts SupplyChainQueryOptions) SupplyChainQueryOptions {
 	if opts.MaxDepth <= 0 {
 		opts.MaxDepth = 6
@@ -735,6 +740,9 @@ func (e *SupplyChainQueryEngine) buildCandidatePaths(
 	sort.SliceStable(startLinks, func(i, j int) bool {
 		return startLinks[i].Confidence > startLinks[j].Confidence
 	})
+	if limit := maxInt(opts.MaxPaths*4, maxCandidateStartLinksToExplore); len(startLinks) > limit {
+		startLinks = startLinks[:limit]
+	}
 
 	results := make([]*SupplyChainPath, 0, minInt(len(startLinks), opts.MaxPaths))
 	seen := make(map[string]struct{}, opts.MaxPaths)
@@ -869,6 +877,9 @@ func (e *SupplyChainQueryEngine) walkCandidatePaths(
 	sort.SliceStable(nextLinks, func(i, j int) bool {
 		return nextLinks[i].Confidence > nextLinks[j].Confidence
 	})
+	if len(nextLinks) > maxCandidateNextLinksPerHop {
+		nextLinks = nextLinks[:maxCandidateNextLinksPerHop]
+	}
 	if len(nextLinks) == 0 {
 		appendCandidatePath(segments, confidence, opts.MaxDepth, results, seen)
 		return
@@ -1158,6 +1169,13 @@ func overlapExists(left []string, right []string) bool {
 
 func minInt(a int, b int) int {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a int, b int) int {
+	if a > b {
 		return a
 	}
 	return b

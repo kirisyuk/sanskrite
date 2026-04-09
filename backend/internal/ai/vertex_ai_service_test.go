@@ -161,6 +161,12 @@ func TestSelectVertexLocationForModel(t *testing.T) {
 			want:     "global",
 		},
 		{
+			name:     "gemini3.1 preview forced to global",
+			location: "us-central1",
+			model:    "gemini-3.1-flash-lite-preview",
+			want:     "global",
+		},
+		{
 			name:     "gemini2 keeps configured location",
 			location: "us-central1",
 			model:    "gemini-2.5-pro",

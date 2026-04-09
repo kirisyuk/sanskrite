@@ -121,9 +121,9 @@ func selectVertexLocationForModel(configuredLocation, vertexModel string) string
 	if loc == "" {
 		loc = "us-central1"
 	}
-	// Gemini 3 preview models are currently served from global endpoint in Vertex.
+	// Gemini 3 / 3.1 preview models are currently served from global endpoint in Vertex.
 	normalized := strings.ToLower(strings.TrimSpace(vertexModel))
-	if strings.HasPrefix(normalized, "gemini-3-") {
+	if strings.HasPrefix(normalized, "gemini-3") {
 		return "global"
 	}
 	return loc

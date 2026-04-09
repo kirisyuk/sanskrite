@@ -12,6 +12,7 @@ import (
 	horizonqa "github.com/igorkirisyuk/sanskrite/internal/horizon/qa"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
+	horizonscoutbridge "github.com/igorkirisyuk/sanskrite/internal/horizon/scoutbridge"
 	horizonsupplychain "github.com/igorkirisyuk/sanskrite/internal/horizon/supplychain"
 	horizonwatch "github.com/igorkirisyuk/sanskrite/internal/horizon/watch"
 	horizonwatchruntime "github.com/igorkirisyuk/sanskrite/internal/horizon/watchruntime"
@@ -21,33 +22,33 @@ import (
 
 // HorizonHandlers содержит все HTTP handlers для Horizon API
 type HorizonHandlers struct {
-	service                   *horizon.HorizonService
-	lensItemsHandler          *LensItemsHandler
-	genAIHandler              *httputil.GenAIHandler
-	profilesHandler           *ProfilesHandler
-	docsRepo                  *corerepo.DocumentsRepository
-	usersRepo                 *corerepo.UsersRepository
-	coreDocsRepo              *corerepo.CoreDocsRepo
-	shareTokensRepo           *corerepo.ShareTokensRepository
-	interactions              *corerepo.InteractionsRepository
-	factsRepo                 *corerepo.OntologyFactsRepository
-	exposurePathsRepo         *horizonrepo.ExposurePathsRepository
-	riskJobsRepo              *horizonrepo.RiskJobsRepository
-	propagationProfileLookup  *horizonprop.ProfileLookup
-	signalPipeline            *horizonscout.SignalPipeline
-	mergeFragmentsRepo        *horizonrepo.FragmentsMergeRepository
-	materializedArtifactsRepo *horizonrepo.MaterializedArtifactsRepository
-	analyticalPrimitivesRepo  *horizonrepo.AnalyticalPrimitivesRepository
-	analyticalAggregatesRepo  *horizonrepo.AnalyticalAggregatesRepository
+	service                    *horizon.HorizonService
+	lensItemsHandler           *LensItemsHandler
+	genAIHandler               *httputil.GenAIHandler
+	profilesHandler            *ProfilesHandler
+	docsRepo                   *corerepo.DocumentsRepository
+	usersRepo                  *corerepo.UsersRepository
+	coreDocsRepo               *corerepo.CoreDocsRepo
+	shareTokensRepo            *corerepo.ShareTokensRepository
+	interactions               *corerepo.InteractionsRepository
+	factsRepo                  *corerepo.OntologyFactsRepository
+	exposurePathsRepo          *horizonrepo.ExposurePathsRepository
+	riskJobsRepo               *horizonrepo.RiskJobsRepository
+	propagationProfileLookup   *horizonprop.ProfileLookup
+	signalPipeline             *horizonscout.SignalPipeline
+	mergeFragmentsRepo         *horizonrepo.FragmentsMergeRepository
+	materializedArtifactsRepo  *horizonrepo.MaterializedArtifactsRepository
+	analyticalPrimitivesRepo   *horizonrepo.AnalyticalPrimitivesRepository
+	analyticalAggregatesRepo   *horizonrepo.AnalyticalAggregatesRepository
 	signalLandingSummariesRepo *horizonrepo.SignalLandingSummariesRepository
-	newsByFragmentsCanvas     *discovery.NewsByFragmentsCanvas
-	identifyStressesCanvas    *IdentifyStressesCanvas
-	completeSubstrateCanvas   *CompleteSubstrateCanvas
-	recoverMetricsCanvas      *RecoverMetricsCanvas
-	oneHopDownstreamService   *horizonsupplychain.OneHopDownstreamService
-	candidateChainService     *horizonsupplychain.CandidateChainCompletionService
-	productDictionary         *horizonproductdict.Runtime
-	gcsClient                 *gcp.GCSClient
+	newsByFragmentsCanvas      *discovery.NewsByFragmentsCanvas
+	identifyStressesCanvas     *IdentifyStressesCanvas
+	completeSubstrateCanvas    *CompleteSubstrateCanvas
+	recoverMetricsCanvas       *RecoverMetricsCanvas
+	oneHopDownstreamService    *horizonsupplychain.OneHopDownstreamService
+	candidateChainService      *horizonsupplychain.CandidateChainCompletionService
+	productDictionary          *horizonproductdict.Runtime
+	gcsClient                  *gcp.GCSClient
 
 	// Lens Q&A (Analysis view)
 	qaEngine                *horizonqa.Engine
@@ -64,6 +65,7 @@ type HorizonHandlers struct {
 	jobTelemetryRepo *horizonrepo.JobTelemetryRepository
 	watchService     *horizonwatch.Service
 	watchRuntime     *horizonwatchruntime.Service
+	scoutExecutor    *horizonscoutbridge.Executor
 }
 
 // NewHorizonHandlers создает новые handlers
@@ -88,6 +90,11 @@ func (h *HorizonHandlers) WithGenAIHandler(handler *httputil.GenAIHandler) *Hori
 // WithProfilesHandler добавляет ProfilesHandler
 func (h *HorizonHandlers) WithProfilesHandler(handler *ProfilesHandler) *HorizonHandlers {
 	h.profilesHandler = handler
+	return h
+}
+
+func (h *HorizonHandlers) WithScoutRuntimeExecutor(executor *horizonscoutbridge.Executor) *HorizonHandlers {
+	h.scoutExecutor = executor
 	return h
 }
 

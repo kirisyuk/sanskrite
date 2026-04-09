@@ -152,18 +152,20 @@ func (s *Service) ExecuteTask(ctx context.Context, taskID, leaseOwner string) er
 			}
 			artifactIDs = append(artifactIDs, artifactID)
 		}
-		output := map[string]any{}
+		output := cloneObjectMap(nil)
 		if result != nil && result.Output != nil {
-			output = result.Output
+			output = cloneObjectMap(result.Output)
 		}
+		reviewOutput := cloneObjectMap(nil)
 		if result != nil && result.ReviewOutput != nil {
-			task.ReviewOutput = result.ReviewOutput
+			reviewOutput = cloneObjectMap(result.ReviewOutput)
+			task.ReviewOutput = reviewOutput
 		}
 		if result != nil && result.ReviewAccepted != nil {
 			task.ReviewAccepted = result.ReviewAccepted
 		}
-		if result != nil && result.ReviewOutput != nil {
-			output["review"] = result.ReviewOutput
+		if len(reviewOutput) > 0 {
+			output["review"] = reviewOutput
 		}
 		if result != nil && result.ReviewAccepted != nil {
 			output["reviewAccepted"] = *result.ReviewAccepted
@@ -450,4 +452,27 @@ func (s *Service) processorFor(task *contracts.MeshTask) TaskProcessor {
 func stringify(v any) string {
 	raw, _ := json.MarshalIndent(v, "", "  ")
 	return string(raw)
+}
+
+func cloneObjectMap(input map[string]any) map[string]any {
+	if len(input) == 0 {
+		return map[string]any{}
+	}
+	raw, err := json.Marshal(input)
+	if err != nil {
+		out := make(map[string]any, len(input))
+		for key, value := range input {
+			out[key] = value
+		}
+		return out
+	}
+	out := map[string]any{}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		fallback := make(map[string]any, len(input))
+		for key, value := range input {
+			fallback[key] = value
+		}
+		return fallback
+	}
+	return out
 }

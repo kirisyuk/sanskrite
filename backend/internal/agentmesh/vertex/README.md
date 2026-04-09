@@ -19,12 +19,19 @@ Files:
 - `AGENTMESH_VERTEX_REASONING_ENGINE`
 - `AGENTMESH_VERTEX_LOCATION`
 - `AGENTMESH_MODEL_FLASH`
+- `AGENTMESH_MODEL_FLASH_REASONING`
 - `AGENTMESH_MODEL_PRO`
 
 Optional:
 
 - `VERTEX_SEARCH_DATA_STORE_ID`
 - `AGENTMESH_VERTEX_SESSION_TTL`
+
+Capability routing defaults:
+
+- `scout.plan`, `scout.bridge`, `scout.critic` -> `AGENTMESH_MODEL_FLASH_REASONING` (default `gemini-3-flash-preview`)
+- simple non-review tasks -> `AGENTMESH_MODEL_FLASH` (default `gemini-3.1-flash-lite-preview`)
+- review tasks -> `AGENTMESH_MODEL_PRO` (default `gemini-3.1-pro-preview`)
 
 ## Why This Layer Exists
 
