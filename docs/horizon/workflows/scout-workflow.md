@@ -1,5 +1,37 @@
 # Рабочий процесс: Сбор и верификация данных агентом Scout
 
+## Актуальный runtime (Vertex-native cutover)
+
+Ниже описан текущий целевой поток после перехода на session-centric execution:
+
+```mermaid
+flowchart TD
+    planBootstrap[scout.plan bootstrap] --> orchestrate[scout.orchestrate]
+    orchestrate --> sessionState[Vertex sessionState]
+    orchestrate --> research[scout.research]
+    orchestrate --> bridge[scout.bridge]
+    orchestrate --> critic[scout.critic]
+    orchestrate --> pathStep[scout.path]
+    orchestrate --> materialize[scout.materialize]
+    research --> sessionState
+    bridge --> sessionState
+    critic --> sessionState
+    pathStep --> sessionState
+    materialize --> sessionState
+    orchestrate --> aggregate[scout.aggregate]
+    orchestrate --> review[scout.review]
+```
+
+Ключевые отличия от legacy pipeline:
+
+- `sessionState` является source of truth для loop `choose -> execute -> interpret -> bound -> loop/stop`.
+- `scout.plan` больше не держит центральный loop; он только bootstrap-вход.
+- Host-контур в AgentMesh отвечает за lifecycle/retry/checkpoint/policy, но не за принятие исследовательских решений.
+
+## Legacy reference
+
+Следующие разделы сохраняются как историческая справка по раннему stage-based workflow.
+
 ## Обзор
 
 Данный документ описывает автоматизированный рабочий процесс по созданию и верификации информационных единиц (HorizonFragment) в системе. Процесс инициируется запросом от модуля Lens и выполняется полностью автономной системой агентов «Scout» без вмешательства человека.

@@ -82,7 +82,9 @@ func (p *Processor) CanHandle(task *contracts.MeshTask) bool {
 func (p *Processor) Process(ctx context.Context, rt *agentmeshruntime.Service, task *contracts.MeshTask, leaseOwner string) (*agentmeshruntime.ProcessResult, error) {
 	switch strings.TrimSpace(task.Capability) {
 	case "scout.plan":
-		return p.processPlan(ctx, rt, task, leaseOwner)
+		return p.processPlanBootstrap(ctx, rt, task, leaseOwner)
+	case "scout.orchestrate":
+		return p.processOrchestrate(ctx, rt, task, leaseOwner)
 	case "scout.decide":
 		return p.processDecide(ctx, rt, task)
 	case "scout.research":
@@ -108,8 +110,56 @@ func (p *Processor) Process(ctx context.Context, rt *agentmeshruntime.Service, t
 	}
 }
 
+func (p *Processor) processPlanBootstrap(ctx context.Context, rt *agentmeshruntime.Service, task *contracts.MeshTask, leaseOwner string) (*agentmeshruntime.ProcessResult, error) {
+	if task == nil {
+		return &agentmeshruntime.ProcessResult{
+			Status:     contracts.TaskStatusFailed,
+			RetryClass: contracts.RetryClassPermanent,
+			LastError:  "task is nil",
+		}, nil
+	}
+	p.ensureInvestigationSession(ctx, rt, task, leaseOwner)
+	orchestrateInput := enrichScoutModelInput(modelTaskInput(task), task)
+	child, output, err := p.runChildTask(ctx, rt, task, "scout.orchestrate", task.ID+":orchestrate", orchestrateInput)
+	if err != nil {
+		retryClass := contracts.RetryClassPermanent
+		if isRetryableSystemError(err) {
+			retryClass = contracts.RetryClassTransient
+		}
+		return &agentmeshruntime.ProcessResult{
+			Status:     contracts.TaskStatusFailed,
+			RetryClass: retryClass,
+			LastError:  err.Error(),
+		}, nil
+	}
+	status := contracts.TaskStatusSucceeded
+	if child != nil && child.Status == contracts.TaskStatusDegraded {
+		status = contracts.TaskStatusDegraded
+	}
+	review := mapValue(output["review"])
+	result := &agentmeshruntime.ProcessResult{
+		Status:          status,
+		Output:          output,
+		ArtifactPayload: output,
+	}
+	if len(review) > 0 {
+		result.ReviewOutput = review
+	}
+	if accepted, ok := output["reviewAccepted"].(bool); ok {
+		result.ReviewAccepted = boolPtr(accepted)
+	}
+	if rationale := strings.TrimSpace(stringValue(review, "rationale")); rationale != "" {
+		result.LastError = rationale
+	}
+	return result, nil
+}
+
 func (p *Processor) processDecide(ctx context.Context, rt *agentmeshruntime.Service, task *contracts.MeshTask) (*agentmeshruntime.ProcessResult, error) {
 	input := modelTaskInput(task)
+	sessionState, invalid := requireSessionStateInput(input, "scout.decide")
+	if invalid != nil {
+		return invalid, nil
+	}
 	req := decodeRequest(input["request"])
 	plan := decodePlan(input["plan"])
 	goal := compactGoalFrame(req.Goal)
@@ -135,7 +185,7 @@ func (p *Processor) processDecide(ctx context.Context, rt *agentmeshruntime.Serv
 		"role":               role,
 		"completeness":       completeness,
 		"plan":               compactPlanForModel(plan),
-		"investigationState": input["investigationState"],
+		"sessionState":       input["sessionState"],
 		"latestOutcome":      input["latestOutcome"],
 		"recentOutcomes":     input["recentOutcomes"],
 		"activeFrontier":     input["activeFrontier"],
@@ -144,6 +194,13 @@ func (p *Processor) processDecide(ctx context.Context, rt *agentmeshruntime.Serv
 		"parentSessionRef":   strings.TrimSpace(task.SessionRef),
 	}, task)
 	parsed := p.runModelObject(ctx, rt, task, modelIn)
+	if runtimeErr := modelRuntimeError(parsed); runtimeErr != "" {
+		return &agentmeshruntime.ProcessResult{
+			Status:     contracts.TaskStatusFailed,
+			RetryClass: modelRetryClass(runtimeErr),
+			LastError:  runtimeErr,
+		}, nil
+	}
 	if len(parsed) == 0 {
 		return &agentmeshruntime.ProcessResult{
 			Status:    contracts.TaskStatusFailed,
@@ -159,6 +216,23 @@ func (p *Processor) processDecide(ctx context.Context, rt *agentmeshruntime.Serv
 	}
 	decision = normalizeDecisionResult(decision)
 	output := decisionMap(decision)
+	output["stateDelta"] = map[string]any{
+		"kind":              "decision",
+		"chosenAction":      decision.ChosenAction,
+		"branchId":          decision.BranchID,
+		"executedAction":    decision.ExecutedAction,
+		"executedBranchId":  decision.ExecutedBranchID,
+		"validationStatus":  decision.ValidationStatus,
+		"validationReason":  decision.ValidationReason,
+		"expectedInfoGain":  decision.ExpectedInformationGain,
+		"decisionEvidence":  decision.EvidenceUsed,
+		"stopCriteria":      decision.StopCriteria,
+		"stateSummary":      decision.StateSummary,
+		"whyChosen":         decision.WhyChosen,
+		"recommendedAction": compactActionRecommendation(stateToRecommendedAction(decision)),
+	}
+	applyDecisionToState(sessionState, decision)
+	output["sessionState"] = sessionState
 	return &agentmeshruntime.ProcessResult{
 		Status:          contracts.TaskStatusSucceeded,
 		Output:          output,
@@ -166,7 +240,12 @@ func (p *Processor) processDecide(ctx context.Context, rt *agentmeshruntime.Serv
 	}, nil
 }
 
+// processPlan is kept as a compatibility alias for legacy tests and callers.
 func (p *Processor) processPlan(ctx context.Context, rt *agentmeshruntime.Service, task *contracts.MeshTask, leaseOwner string) (*agentmeshruntime.ProcessResult, error) {
+	return p.processOrchestrate(ctx, rt, task, leaseOwner)
+}
+
+func (p *Processor) processOrchestrate(ctx context.Context, rt *agentmeshruntime.Service, task *contracts.MeshTask, leaseOwner string) (*agentmeshruntime.ProcessResult, error) {
 	req, job, err := p.resolveRequest(ctx, task)
 	if err != nil {
 		return nil, err
@@ -177,28 +256,72 @@ func (p *Processor) processPlan(ctx context.Context, rt *agentmeshruntime.Servic
 
 	p.ensureInvestigationSession(ctx, rt, task, leaseOwner)
 
+	input := modelTaskInput(task)
+	seedState := decodeSessionState(input["sessionState"])
 	graphCtx := p.buildPlanningContext(ctx, req)
-	req = withRuntimeFrames(req, graphCtx)
-	plan := p.buildPlan(ctx, rt, task, req, graphCtx, nil)
-	if err := validateMissionRole(plan); err != nil {
-		return &agentmeshruntime.ProcessResult{
-			Status:     contracts.TaskStatusFailed,
-			RetryClass: contracts.RetryClassPermanent,
-			LastError:  err.Error(),
-		}, nil
+	var state *InvestigationState
+	if seedState != nil {
+		mergedReq := mergeInvestigationRequests(seedState.Request, req)
+		mergedReq = withRuntimeFrames(mergedReq, graphCtx)
+		seedState.Request = mergedReq
+		seedState.Goal = mergeGoalFrames(seedState.Goal, mergedReq.Goal)
+		seedState.Environment = mergeEnvironmentFrames(seedState.Environment, mergedReq.Environment)
+		seedState.Role = mergeRoleFrames(seedState.Role, mergedReq.Role)
+		seedState.Completeness = mergeCompletenessFrames(seedState.Completeness, mergedReq.Completeness)
+		seedState.SessionRef = strings.TrimSpace(task.SessionRef)
+		if seedState.Plan.MaxResearchRounds <= 0 {
+			seedState.Plan.MaxResearchRounds = 2
+		}
+		if seedState.MaxTurns <= 0 {
+			seedState.MaxTurns = max(seedState.Plan.MaxResearchRounds*max(len(seedState.Plan.Branches), 1)+8, 8)
+		}
+		if seedState.Branches == nil {
+			seedState.Branches = map[string]*BranchRuntimeState{}
+		}
+		if seedState.Hypotheses == nil {
+			seedState.Hypotheses = map[string]*InvestigationHypothesis{}
+		}
+		if len(seedState.BranchOrder) == 0 && len(seedState.Plan.Branches) > 0 {
+			for _, branch := range seedState.Plan.Branches {
+				branchID := strings.TrimSpace(branch.ID)
+				if branchID != "" {
+					seedState.BranchOrder = append(seedState.BranchOrder, branchID)
+				}
+			}
+		}
+		req = mergedReq
+		state = seedState
+		p.appendInvestigationEvent(ctx, rt, task, "session_resume", map[string]any{
+			"turn":        state.Turn,
+			"planVersion": state.Plan.PlanVersion,
+			"branchCount": len(state.BranchOrder),
+		})
+	} else {
+		req = withRuntimeFrames(req, graphCtx)
+		plan := p.buildPlan(ctx, rt, task, req, graphCtx, nil)
+		if err := validateMissionRole(plan); err != nil {
+			return &agentmeshruntime.ProcessResult{
+				Status:     contracts.TaskStatusFailed,
+				RetryClass: contracts.RetryClassPermanent,
+				LastError:  err.Error(),
+			}, nil
+		}
+		req.Role = mergeRoleFrames(req.Role, plan.MissionRole)
+		if len(plan.Branches) == 0 {
+			plan.Branches = fallbackBranches(req, plan)
+		}
+		plan = ensurePlanRoleAndCompleteness(req, plan)
+		state = newInvestigationState(req, plan)
+		state.SessionRef = strings.TrimSpace(task.SessionRef)
+		appendReasoningBeat(state, explainRequestUnderstanding(req))
+		appendReasoningBeat(state, explainEnvironmentUnderstanding(state))
+		appendReasoningBeat(state, explainPlanShape(state))
+		p.appendInvestigationEvent(ctx, rt, task, "input", map[string]any{
+			"request":         req,
+			"planningContext": compactPlanningContext(graphCtx),
+		})
+		p.appendInvestigationEvent(ctx, rt, task, "framing", map[string]any{"planVersion": state.Plan.PlanVersion, "branchCount": len(state.BranchOrder)})
 	}
-	req.Role = mergeRoleFrames(req.Role, plan.MissionRole)
-	if len(plan.Branches) == 0 {
-		plan.Branches = fallbackBranches(req, plan)
-	}
-	plan = ensurePlanRoleAndCompleteness(req, plan)
-
-	state := newInvestigationState(req, plan)
-	state.SessionRef = strings.TrimSpace(task.SessionRef)
-	appendReasoningBeat(state, explainRequestUnderstanding(req))
-	appendReasoningBeat(state, explainEnvironmentUnderstanding(state))
-	appendReasoningBeat(state, explainPlanShape(state))
-	p.appendInvestigationEvent(ctx, rt, task, "framing", map[string]any{"planVersion": state.Plan.PlanVersion, "branchCount": len(state.BranchOrder)})
 	taskRefs := map[string]any{
 		"decide":      []string{},
 		"research":    []string{},
@@ -212,18 +335,11 @@ func (p *Processor) processPlan(ctx context.Context, rt *agentmeshruntime.Servic
 		state.Turn++
 		state.CurrentBottleneck = string(detectCurrentBottleneck(state))
 		decisionTaskID := ""
-		action, branchID := chooseNextAction(state)
-		if child, decision, decidedAction, decidedBranchID, err := p.decideNextAction(ctx, rt, task, req, graphCtx, state); err != nil {
+		decision, action, branchID, err := p.orchestrateNextActionVertex(ctx, rt, task, req, graphCtx, state)
+		if err != nil {
 			return nil, err
-		} else {
-			action = decidedAction
-			branchID = decidedBranchID
-			if child != nil {
-				decisionTaskID = child.ID
-				taskRefs["decide"] = append(taskRefs["decide"].([]string), child.ID)
-			}
-			appendReasoningBeat(state, explainDecisionOutcome(state, decision))
 		}
+		appendReasoningBeat(state, explainDecisionOutcome(state, decision))
 		if action == "stop" {
 			appendReasoningBeat(state, explainStopReason(state))
 			break
@@ -231,6 +347,7 @@ func (p *Processor) processPlan(ctx context.Context, rt *agentmeshruntime.Servic
 		activeSnapshot := buildActiveFrontierSnapshot(state)
 		var childTaskID string
 		var childOutput map[string]any
+		appliedAuthoritativeState := false
 		switch action {
 		case "research":
 			branchState := state.Branches[branchID]
@@ -249,6 +366,7 @@ func (p *Processor) processPlan(ctx context.Context, rt *agentmeshruntime.Servic
 				"role":             compactRoleFrame(state.Role),
 				"completeness":     compactCompletenessFrame(state.Completeness),
 				"plan":             compactPlanForModel(state.Plan),
+				"sessionState":     state,
 				"branch":           branchState.Branch,
 				"planningContext":  compactPlanningContext(graphCtx),
 				"activeFrontier":   activeSnapshot,
@@ -270,9 +388,16 @@ func (p *Processor) processPlan(ctx context.Context, rt *agentmeshruntime.Servic
 			childOutput = result
 			taskRefs["research"] = append(taskRefs["research"].([]string), child.ID)
 			research := decodeResearchResult(result)
-			applyResearchToState(state, branchID, research)
+			appliedAuthoritativeState = applyAuthoritativeSessionState(state, result["sessionState"])
+			if !appliedAuthoritativeState {
+				return nil, fmt.Errorf("invalid child output: action %s did not return sessionState", action)
+			}
 			clearSystemErrorTracking(state)
-			recordActionOutcome(state, outcomeFromResearch(state, branchID, research))
+			researchOutcome := outcomeFromResearch(state, branchID, research)
+			if retObj := mapValue(result["retrieval"]); len(retObj) > 0 {
+				researchOutcome.RetrievalHitCount = int(floatValue(retObj, "hitCount", 0))
+			}
+			recordActionOutcome(state, researchOutcome)
 			appendReasoningBeat(state, explainResearchOutcome(state, branchID, research))
 
 			// AUTO-PAIRED CRITIC: every research is immediately followed by critical evaluation.
@@ -285,8 +410,8 @@ func (p *Processor) processPlan(ctx context.Context, rt *agentmeshruntime.Servic
 					"role":               compactRoleFrame(state.Role),
 					"completeness":       compactCompletenessFrame(state.Completeness),
 					"plan":               compactPlanForModel(state.Plan),
+					"sessionState":       state,
 					"researchDeltas":     compactResearchDeltas(state.ResearchResults, criticSnapshot.TopBranches),
-					"investigationState": compactInvestigationSnapshot(state),
 					"activeFrontier":     criticSnapshot,
 					"pendingGraphOps":    state.PendingGraphOps,
 					"parentSessionRef":   strings.TrimSpace(task.SessionRef),
@@ -302,15 +427,12 @@ func (p *Processor) processPlan(ctx context.Context, rt *agentmeshruntime.Servic
 				childTaskID = criticChild.ID
 				childOutput = criticResult
 				critic := decodeCriticResult(criticResult)
-				applyCriticToState(state, critic)
-				clearSystemErrorTracking(state)
-				verdicts := critic.GraphOpVerdicts
-				if len(verdicts) == 0 {
-					verdicts = synthesizeGraphOpVerdicts(state, critic)
-					critic.GraphOpVerdicts = verdicts
-					state.LatestCritic.GraphOpVerdicts = verdicts
+				appliedSession := applyAuthoritativeSessionState(state, criticResult["sessionState"])
+				if !appliedSession {
+					return nil, fmt.Errorf("invalid child output: action %s did not return sessionState", "critic")
 				}
-				applyGraphOpVerdicts(state, verdicts)
+				appliedAuthoritativeState = appliedAuthoritativeState || appliedSession
+				clearSystemErrorTracking(state)
 				recordActionOutcome(state, outcomeFromCritic(state, branchID, critic))
 				appendReasoningBeat(state, explainCriticOutcome(state, critic))
 			}
@@ -329,6 +451,7 @@ func (p *Processor) processPlan(ctx context.Context, rt *agentmeshruntime.Servic
 				"role":             compactRoleFrame(state.Role),
 				"completeness":     compactCompletenessFrame(state.Completeness),
 				"plan":             compactPlanForModel(state.Plan),
+				"sessionState":     state,
 				"branch":           branchState.Branch,
 				"bridgeContext":    bridgeContext,
 				"activeFrontier":   activeSnapshot,
@@ -346,7 +469,10 @@ func (p *Processor) processPlan(ctx context.Context, rt *agentmeshruntime.Servic
 			childOutput = result
 			taskRefs["bridge"] = append(taskRefs["bridge"].([]string), child.ID)
 			bridge := decodeBridgeResult(result)
-			applyBridgeToState(state, branchID, bridge)
+			appliedAuthoritativeState = applyAuthoritativeSessionState(state, result["sessionState"])
+			if !appliedAuthoritativeState {
+				return nil, fmt.Errorf("invalid child output: action %s did not return sessionState", action)
+			}
 			clearSystemErrorTracking(state)
 			recordActionOutcome(state, outcomeFromBridge(state, branchID, bridge))
 			appendReasoningBeat(state, explainBridgeOutcome(state, branchID, bridge))
@@ -358,8 +484,8 @@ func (p *Processor) processPlan(ctx context.Context, rt *agentmeshruntime.Servic
 				"role":               compactRoleFrame(state.Role),
 				"completeness":       compactCompletenessFrame(state.Completeness),
 				"plan":               compactPlanForModel(state.Plan),
+				"sessionState":       state,
 				"researchDeltas":     compactResearchDeltas(state.ResearchResults, activeSnapshot.TopBranches),
-				"investigationState": compactInvestigationSnapshot(state),
 				"activeFrontier":     activeSnapshot,
 				"pendingGraphOps":    state.PendingGraphOps,
 				"parentSessionRef":   strings.TrimSpace(task.SessionRef),
@@ -375,15 +501,12 @@ func (p *Processor) processPlan(ctx context.Context, rt *agentmeshruntime.Servic
 			childOutput = result
 			taskRefs["critic"] = append(taskRefs["critic"].([]string), child.ID)
 			critic := decodeCriticResult(result)
-			applyCriticToState(state, critic)
-			clearSystemErrorTracking(state)
-			verdicts := critic.GraphOpVerdicts
-			if len(verdicts) == 0 {
-				verdicts = synthesizeGraphOpVerdicts(state, critic)
-				critic.GraphOpVerdicts = verdicts
-				state.LatestCritic.GraphOpVerdicts = verdicts
+			appliedSession := applyAuthoritativeSessionState(state, result["sessionState"])
+			if !appliedSession {
+				return nil, fmt.Errorf("invalid child output: action %s did not return sessionState", action)
 			}
-			applyGraphOpVerdicts(state, verdicts)
+			appliedAuthoritativeState = appliedAuthoritativeState || appliedSession
+			clearSystemErrorTracking(state)
 			recordActionOutcome(state, outcomeFromCritic(state, branchID, critic))
 			appendReasoningBeat(state, explainCriticOutcome(state, critic))
 		case "path":
@@ -395,6 +518,7 @@ func (p *Processor) processPlan(ctx context.Context, rt *agentmeshruntime.Servic
 				"role":                     compactRoleFrame(state.Role),
 				"completeness":             compactCompletenessFrame(state.Completeness),
 				"plan":                     compactPlanForModel(state.Plan),
+				"sessionState":             state,
 				"researchDeltas":           compactResearchDeltas(state.ResearchResults, activeSnapshot.TopBranches),
 				"critic":                   state.LatestCritic,
 				"activeFrontier":           activeSnapshot,
@@ -415,9 +539,12 @@ func (p *Processor) processPlan(ctx context.Context, rt *agentmeshruntime.Servic
 			childOutput = result
 			taskRefs["path"] = append(taskRefs["path"].([]string), child.ID)
 			pathResult := decodePathResult(result)
-			applyPathToState(state, pathResult)
+			appliedSession := applyAuthoritativeSessionState(state, result["sessionState"])
+			if !appliedSession {
+				return nil, fmt.Errorf("invalid child output: action %s did not return sessionState", action)
+			}
+			appliedAuthoritativeState = appliedAuthoritativeState || appliedSession
 			clearSystemErrorTracking(state)
-			markVerifiedOpsFromPath(state, pathResult)
 			recordActionOutcome(state, outcomeFromPath(state, pathResult))
 			appendReasoningBeat(state, explainPathOutcome(state, pathResult))
 		case "materialize":
@@ -428,6 +555,7 @@ func (p *Processor) processPlan(ctx context.Context, rt *agentmeshruntime.Servic
 				"role":             compactRoleFrame(state.Role),
 				"completeness":     compactCompletenessFrame(state.Completeness),
 				"plan":             compactPlanForModel(state.Plan),
+				"sessionState":     state,
 				"critic":           state.LatestCritic,
 				"path":             state.PathResult,
 				"activeFrontier":   activeSnapshot,
@@ -445,9 +573,12 @@ func (p *Processor) processPlan(ctx context.Context, rt *agentmeshruntime.Servic
 			childOutput = result
 			taskRefs["materialize"] = append(taskRefs["materialize"].([]string), child.ID)
 			materialize := decodeMaterializeResult(result)
-			applyMaterializeToState(state, materialize)
+			appliedSession := applyAuthoritativeSessionState(state, result["sessionState"])
+			if !appliedSession {
+				return nil, fmt.Errorf("invalid child output: action %s did not return sessionState", action)
+			}
+			appliedAuthoritativeState = appliedAuthoritativeState || appliedSession
 			clearSystemErrorTracking(state)
-			markLandedOps(state, materialize)
 			recordActionOutcome(state, outcomeFromMaterialize(state, materialize))
 			appendReasoningBeat(state, explainMaterializeOutcome(state, materialize))
 		case "replan":
@@ -458,6 +589,10 @@ func (p *Processor) processPlan(ctx context.Context, rt *agentmeshruntime.Servic
 		p.appendInvestigationEvent(ctx, rt, task, "turn", map[string]any{
 			"turn": state.Turn, "action": action, "branchId": branchID, "stopReason": state.StopReason, "decisionTaskId": decisionTaskID,
 		})
+		if childOutput != nil && requiresAuthoritativeSessionStateForAction(action) && !appliedAuthoritativeState {
+			return nil, fmt.Errorf("invalid child output: action %s did not return sessionState", action)
+		}
+		p.appendInvestigationEvent(ctx, rt, task, "state_snapshot", compactCheckpointState(state))
 		p.persistCheckpoint(ctx, rt, task, leaseOwner, req, state, taskRefs, action, branchID, childTaskID, childOutput)
 		compactStateForTurn(state, action)
 	}
@@ -469,6 +604,7 @@ func (p *Processor) processPlan(ctx context.Context, rt *agentmeshruntime.Servic
 		"role":             compactRoleFrame(state.Role),
 		"completeness":     compactCompletenessFrame(state.Completeness),
 		"plan":             compactPlanForModel(state.Plan),
+		"sessionState":     state,
 		"researchDeltas":   compactResearchDeltas(state.ResearchResults, buildActiveFrontierSnapshot(state).TopBranches),
 		"bridge":           state.LatestBridge,
 		"critic":           state.LatestCritic,
@@ -489,6 +625,7 @@ func (p *Processor) processPlan(ctx context.Context, rt *agentmeshruntime.Servic
 		"environment":      compactEnvironmentFrame(state.Environment),
 		"role":             compactRoleFrame(state.Role),
 		"completeness":     compactCompletenessFrame(state.Completeness),
+		"sessionState":     state,
 		"aggregate":        aggregateResult,
 		"bridge":           state.LatestBridge,
 		"critic":           state.LatestCritic,
@@ -533,6 +670,9 @@ func (p *Processor) processPlan(ctx context.Context, rt *agentmeshruntime.Servic
 	if err := p.persistFinalResult(ctx, req, job, output, reviewResult); err != nil && p.logger != nil {
 		p.logger.Printf("[agentmesh.scout] final persist failed job=%s err=%v", req.ScoutingJobID, err)
 	}
+	if rt != nil && rt.Vertex() != nil && strings.TrimSpace(task.SessionRef) != "" {
+		_ = rt.Vertex().GenerateMemoriesFromSession(ctx, task)
+	}
 
 	status := contracts.TaskStatusSucceeded
 	if !reviewResult.Accepted {
@@ -550,6 +690,10 @@ func (p *Processor) processPlan(ctx context.Context, rt *agentmeshruntime.Servic
 
 func (p *Processor) processResearch(ctx context.Context, rt *agentmeshruntime.Service, task *contracts.MeshTask) (*agentmeshruntime.ProcessResult, error) {
 	inputRaw := modelTaskInput(task)
+	sessionState, invalid := requireSessionStateInput(inputRaw, "scout.research")
+	if invalid != nil {
+		return invalid, nil
+	}
 	req := decodeRequest(inputRaw["request"])
 	branch := decodeBranch(inputRaw["branch"])
 	plan := decodePlan(inputRaw["plan"])
@@ -571,28 +715,56 @@ func (p *Processor) processResearch(ctx context.Context, rt *agentmeshruntime.Se
 		completeness = raw
 	}
 
-	query := strings.TrimSpace(branch.Question)
-	if query == "" {
-		query = strings.TrimSpace(req.Query)
+	rawQuery := strings.TrimSpace(branch.Question)
+	if rawQuery == "" {
+		rawQuery = strings.TrimSpace(req.Query)
 	}
+	query := humanizeSearchQuery(rawQuery)
 	knowledgeHits := maybeSearchKnowledgeBase(ctx, p.knowledgeBase, req.TenantID, query, 6)
+	retrieval := map[string]any{
+		"mode":     "internal_datastore_retrieval",
+		"source":   "vertex_ai_search",
+		"query":    query,
+		"rawQuery": rawQuery,
+		"hitCount": len(knowledgeHits),
+		"hits":     knowledgeHits,
+	}
 	productRefs := p.resolveProductRefs(ctx, req.TenantID, append(append([]string{}, branch.ProductHints...), plan.FocusProducts...))
 
+	dataAvailability := map[string]any{
+		"internalKBHits":           len(knowledgeHits),
+		"consecutiveZeroHitTurns":  sessionState.ConsecutiveZeroHitTurns,
+		"totalRetrievalHits":       sessionState.TotalRetrievalHits,
+		"webSearchGroundingActive": true,
+	}
+	if len(knowledgeHits) == 0 {
+		dataAvailability["guidance"] = "Internal knowledge base returned ZERO results for this query. Your web search grounding (Google Search) is the only external evidence source. If web grounding also provides nothing useful, acknowledge the data gap honestly rather than fabricating claims."
+	}
 	input := enrichScoutModelInput(map[string]any{
-		"request":         req,
-		"goal":            goal,
-		"environment":     environment,
-		"role":            role,
-		"completeness":    completeness,
-		"branch":          branch,
-		"plan":            plan,
-		"planningContext": planningContext,
-		"knowledgeHits":   knowledgeHits,
-		"productRefs":     productRefs,
-		"activeFrontier":  inputRaw["activeFrontier"],
-		"pendingGraphOps": inputRaw["pendingGraphOps"],
+		"request":          req,
+		"goal":             goal,
+		"environment":      environment,
+		"role":             role,
+		"completeness":     completeness,
+		"branch":           branch,
+		"plan":             plan,
+		"sessionState":     inputRaw["sessionState"],
+		"planningContext":  planningContext,
+		"knowledgeHits":    knowledgeHits,
+		"retrieval":        retrieval,
+		"dataAvailability": dataAvailability,
+		"productRefs":      productRefs,
+		"activeFrontier":   inputRaw["activeFrontier"],
+		"pendingGraphOps":  inputRaw["pendingGraphOps"],
 	}, task)
 	parsed := p.runModelObject(ctx, rt, task, input)
+	if runtimeErr := modelRuntimeError(parsed); runtimeErr != "" {
+		return &agentmeshruntime.ProcessResult{
+			Status:     contracts.TaskStatusFailed,
+			RetryClass: modelRetryClass(runtimeErr),
+			LastError:  runtimeErr,
+		}, nil
+	}
 	if len(parsed) == 0 {
 		return &agentmeshruntime.ProcessResult{
 			Status:    contracts.TaskStatusFailed,
@@ -614,6 +786,22 @@ func (p *Processor) processResearch(ctx context.Context, rt *agentmeshruntime.Se
 	research.RecommendedAction = normalizeActionRecommendation(research.RecommendedAction)
 	research.GapDiagnosis = fillGapDiagnosisFromResearch(branch, research)
 	research.RecommendedAction = fillRecommendedActionFromGapDiagnosis(research.RecommendedAction, research.GapDiagnosis)
+	if len(knowledgeHits) == 0 {
+		research.OpenQuestions = compactStrings(append(research.OpenQuestions, "No internal retrieval hits for this branch query."))
+		if len(compactStrings(research.EvidencePoints)) == 0 && len(compactStrings(append(research.CanonicalRefs, research.ProductRefs...))) == 0 {
+			if research.Confidence == 0 || research.Confidence > 0.3 {
+				research.Confidence = 0.3
+			}
+			research.GapDiagnosis.Kind = firstNonEmpty(research.GapDiagnosis.Kind, "missing_substrate")
+			research.GapDiagnosis.NextAction = firstNonEmpty(research.GapDiagnosis.NextAction, "bridge")
+			research.GapDiagnosis.Summary = firstNonEmpty(research.GapDiagnosis.Summary, "Internal retrieval returned no evidence. Web grounding may have provided some context but the internal knowledge base lacks this data.")
+			research.GapDiagnosis.Why = firstNonEmpty(research.GapDiagnosis.Why, "Zero internal hits means repeating internal search will not help. Either try web-grounded bridge/path or stop this branch.")
+		}
+		sessionState.ConsecutiveZeroHitTurns++
+	} else {
+		sessionState.ConsecutiveZeroHitTurns = 0
+		sessionState.TotalRetrievalHits += len(knowledgeHits)
+	}
 	if research.RecommendedAction.BranchID == "" && (research.RecommendedAction.Action == "research" || research.RecommendedAction.Action == "bridge") {
 		research.RecommendedAction.BranchID = research.BranchID
 	}
@@ -621,6 +809,18 @@ func (p *Processor) processResearch(ctx context.Context, rt *agentmeshruntime.Se
 		research.Confidence = 0.55
 	}
 	output := researchMap(research)
+	output["stateDelta"] = map[string]any{
+		"kind":              "research",
+		"branchId":          research.BranchID,
+		"gapDiagnosis":      compactGapDiagnosis(research.GapDiagnosis),
+		"recommendedAction": compactActionRecommendation(research.RecommendedAction),
+		"openQuestions":     research.OpenQuestions,
+		"confidence":        research.Confidence,
+		"retrievalHitCount": len(knowledgeHits),
+	}
+	output["retrieval"] = retrieval
+	applyResearchToState(sessionState, research.BranchID, research)
+	output["sessionState"] = sessionState
 	return &agentmeshruntime.ProcessResult{
 		Status:          contracts.TaskStatusSucceeded,
 		Output:          output,
@@ -630,6 +830,10 @@ func (p *Processor) processResearch(ctx context.Context, rt *agentmeshruntime.Se
 
 func (p *Processor) processBridge(ctx context.Context, rt *agentmeshruntime.Service, task *contracts.MeshTask) (*agentmeshruntime.ProcessResult, error) {
 	inputRaw := modelTaskInput(task)
+	sessionState, invalid := requireSessionStateInput(inputRaw, "scout.bridge")
+	if invalid != nil {
+		return invalid, nil
+	}
 	req := decodeRequest(inputRaw["request"])
 	branch := decodeBranch(inputRaw["branch"])
 	plan := decodePlan(inputRaw["plan"])
@@ -651,8 +855,17 @@ func (p *Processor) processBridge(ctx context.Context, rt *agentmeshruntime.Serv
 		completeness = raw
 	}
 
-	query := firstNonEmpty(stringValue(bridgeContext, "bridgeQuestion"), strings.TrimSpace(branch.Question), strings.TrimSpace(req.Query))
+	rawQuery := firstNonEmpty(stringValue(bridgeContext, "bridgeQuestion"), strings.TrimSpace(branch.Question), strings.TrimSpace(req.Query))
+	query := humanizeSearchQuery(rawQuery)
 	knowledgeHits := maybeSearchKnowledgeBase(ctx, p.knowledgeBase, req.TenantID, query, 6)
+	retrieval := map[string]any{
+		"mode":     "internal_datastore_retrieval",
+		"source":   "vertex_ai_search",
+		"query":    query,
+		"rawQuery": rawQuery,
+		"hitCount": len(knowledgeHits),
+		"hits":     knowledgeHits,
+	}
 	productRefs := p.resolveProductRefs(ctx, req.TenantID, append(stringSliceValue(bridgeContext["knownProducts"]), plan.FocusProducts...))
 
 	input := enrichScoutModelInput(map[string]any{
@@ -663,13 +876,22 @@ func (p *Processor) processBridge(ctx context.Context, rt *agentmeshruntime.Serv
 		"completeness":    completeness,
 		"branch":          branch,
 		"plan":            plan,
+		"sessionState":    inputRaw["sessionState"],
 		"bridgeContext":   bridgeContext,
 		"knowledgeHits":   knowledgeHits,
+		"retrieval":       retrieval,
 		"productRefs":     productRefs,
 		"activeFrontier":  inputRaw["activeFrontier"],
 		"pendingGraphOps": inputRaw["pendingGraphOps"],
 	}, task)
 	parsed := p.runModelObject(ctx, rt, task, input)
+	if runtimeErr := modelRuntimeError(parsed); runtimeErr != "" {
+		return &agentmeshruntime.ProcessResult{
+			Status:     contracts.TaskStatusFailed,
+			RetryClass: modelRetryClass(runtimeErr),
+			LastError:  runtimeErr,
+		}, nil
+	}
 	if len(parsed) == 0 {
 		return &agentmeshruntime.ProcessResult{
 			Status:    contracts.TaskStatusFailed,
@@ -719,6 +941,17 @@ func (p *Processor) processBridge(ctx context.Context, rt *agentmeshruntime.Serv
 		}
 	}
 	output := bridgeMap(bridge)
+	output["stateDelta"] = map[string]any{
+		"kind":              "bridge",
+		"branchId":          bridge.BranchID,
+		"gapDiagnosis":      compactGapDiagnosis(bridge.GapDiagnosis),
+		"recommendedAction": compactActionRecommendation(bridge.RecommendedAction),
+		"openQuestions":     bridge.OpenQuestions,
+		"confidence":        bridge.Confidence,
+	}
+	output["retrieval"] = retrieval
+	applyBridgeToState(sessionState, bridge.BranchID, bridge)
+	output["sessionState"] = sessionState
 	return &agentmeshruntime.ProcessResult{
 		Status:          contracts.TaskStatusSucceeded,
 		Output:          output,
@@ -728,6 +961,10 @@ func (p *Processor) processBridge(ctx context.Context, rt *agentmeshruntime.Serv
 
 func (p *Processor) processCritic(ctx context.Context, rt *agentmeshruntime.Service, task *contracts.MeshTask) (*agentmeshruntime.ProcessResult, error) {
 	input := modelTaskInput(task)
+	sessionState, invalid := requireSessionStateInput(input, "scout.critic")
+	if invalid != nil {
+		return invalid, nil
+	}
 	req := decodeRequest(input["request"])
 	plan := decodePlan(input["plan"])
 	research := decodeResearchResults(input["research"])
@@ -742,11 +979,18 @@ func (p *Processor) processCritic(ctx context.Context, rt *agentmeshruntime.Serv
 		"role":               compactRoleFrame(req.Role),
 		"completeness":       compactCompletenessFrame(req.Completeness),
 		"plan":               plan,
+		"sessionState":       input["sessionState"],
 		"researchDeltas":     encodeResearchDeltas(research),
-		"investigationState": input["investigationState"],
 		"activeFrontier":     input["activeFrontier"],
 	}, task)
 	parsed := p.runModelObject(ctx, rt, task, modelIn)
+	if runtimeErr := modelRuntimeError(parsed); runtimeErr != "" {
+		return &agentmeshruntime.ProcessResult{
+			Status:     contracts.TaskStatusFailed,
+			RetryClass: modelRetryClass(runtimeErr),
+			LastError:  runtimeErr,
+		}, nil
+	}
 	if len(parsed) == 0 {
 		return &agentmeshruntime.ProcessResult{
 			Status:    contracts.TaskStatusFailed,
@@ -766,6 +1010,26 @@ func (p *Processor) processCritic(ctx context.Context, rt *agentmeshruntime.Serv
 	critic.GapDiagnosis = fillGapDiagnosisFromCritic(plan, critic)
 	critic.RecommendedAction = fillRecommendedActionFromGapDiagnosis(critic.RecommendedAction, critic.GapDiagnosis)
 	output := criticMap(critic)
+	output["stateDelta"] = map[string]any{
+		"kind":                     "critic",
+		"gapDiagnosis":             compactGapDiagnosis(critic.GapDiagnosis),
+		"recommendedAction":        compactActionRecommendation(critic.RecommendedAction),
+		"withholdPath":             critic.WithholdPath,
+		"withholdMaterialization":  critic.WithholdMaterialization,
+		"killBranchIds":            critic.KillBranchIDs,
+		"reprioritizeBranchIds":    critic.ReprioritizeBranchIDs,
+		"riskTargetBranchIds":      critic.RiskTargetBranchIDs,
+		"openQuestions":            critic.OpenQuestions,
+		"goodEnoughAssessment":     compactGoodEnoughAssessment(critic.GoodEnoughAssessment),
+		"completenessAssessment":   map[string]any{"status": critic.CompletenessAssessment.Status, "reason": critic.CompletenessAssessment.Reason, "broadScanCompleted": critic.CompletenessAssessment.BroadScanCompleted, "noMaterialAlternatives": critic.CompletenessAssessment.NoMaterialAlternatives},
+	}
+	applyCriticToState(sessionState, critic)
+	verdicts := critic.GraphOpVerdicts
+	if len(verdicts) == 0 {
+		verdicts = synthesizeGraphOpVerdicts(sessionState, critic)
+	}
+	applyGraphOpVerdicts(sessionState, verdicts)
+	output["sessionState"] = sessionState
 	return &agentmeshruntime.ProcessResult{
 		Status:          contracts.TaskStatusSucceeded,
 		Output:          output,
@@ -775,6 +1039,10 @@ func (p *Processor) processCritic(ctx context.Context, rt *agentmeshruntime.Serv
 
 func (p *Processor) processPath(ctx context.Context, _ *agentmeshruntime.Service, task *contracts.MeshTask) (*agentmeshruntime.ProcessResult, error) {
 	input := modelTaskInput(task)
+	sessionState, invalid := requireSessionStateInput(input, "scout.path")
+	if invalid != nil {
+		return invalid, nil
+	}
 	req := decodeRequest(input["request"])
 	plan := decodePlan(input["plan"])
 	research := decodeResearchResults(input["research"])
@@ -932,6 +1200,17 @@ func (p *Processor) processPath(ctx context.Context, _ *agentmeshruntime.Service
 	result.RecommendedAction = derivePathRecommendedAction(result)
 	result.RecommendedAction = fillRecommendedActionFromGapDiagnosis(result.RecommendedAction, result.GapDiagnosis)
 	output := pathMap(result)
+	output["stateDelta"] = map[string]any{
+		"kind":              "path",
+		"gapDiagnosis":      compactGapDiagnosis(result.GapDiagnosis),
+		"recommendedAction": compactActionRecommendation(result.RecommendedAction),
+		"continuityStatus":  result.ContinuityStatus,
+		"openGaps":          result.OpenGaps,
+		"sourceBranchIds":   result.SourceBranchIDs,
+	}
+	applyPathToState(sessionState, result)
+	markVerifiedOpsFromPath(sessionState, result)
+	output["sessionState"] = sessionState
 	return &agentmeshruntime.ProcessResult{
 		Status:          contracts.TaskStatusSucceeded,
 		Output:          output,
@@ -941,6 +1220,10 @@ func (p *Processor) processPath(ctx context.Context, _ *agentmeshruntime.Service
 
 func (p *Processor) processMaterialize(ctx context.Context, rt *agentmeshruntime.Service, task *contracts.MeshTask) (*agentmeshruntime.ProcessResult, error) {
 	input := modelTaskInput(task)
+	sessionState, invalid := requireSessionStateInput(input, "scout.materialize")
+	if invalid != nil {
+		return invalid, nil
+	}
 	req := decodeRequest(input["request"])
 	path := decodePathResult(input["path"])
 	critic := decodeCriticResult(input["critic"])
@@ -991,11 +1274,11 @@ func (p *Processor) processMaterialize(ctx context.Context, rt *agentmeshruntime
 		"role":               compactRoleFrame(req.Role),
 		"completeness":       compactCompletenessFrame(req.Completeness),
 		"plan":               plan,
+		"sessionState":       input["sessionState"],
 		"critic":             critic,
 		"path":               path,
 		"materializePreview": result,
 		"activeFrontier":     input["activeFrontier"],
-		"investigationState": input["state"],
 	}, task))
 	if parsed == nil {
 		parsed = map[string]any{}
@@ -1016,6 +1299,19 @@ func (p *Processor) processMaterialize(ctx context.Context, rt *agentmeshruntime
 	}
 
 	output := materializeMap(result)
+	output["stateDelta"] = map[string]any{
+		"kind":               "materialize",
+		"summary":            result.Summary,
+		"persisted":          result.Persisted,
+		"landedBranchIds":    result.LandedBranchIDs,
+		"rejectedBranchIds":  result.RejectedBranchIDs,
+		"skipped":            result.Skipped,
+		"downgraded":         result.Downgraded,
+		"rejected":           result.Rejected,
+	}
+	applyMaterializeToState(sessionState, result)
+	markLandedOps(sessionState, result)
+	output["sessionState"] = sessionState
 	return &agentmeshruntime.ProcessResult{
 		Status:          contracts.TaskStatusSucceeded,
 		Output:          output,
@@ -1217,6 +1513,8 @@ func (p *Processor) buildPlanningContext(ctx context.Context, req InvestigationR
 }
 
 func (p *Processor) buildPlan(ctx context.Context, rt *agentmeshruntime.Service, task *contracts.MeshTask, req InvestigationRequest, planningContext map[string]any, prior *InvestigationState) InvestigationPlan {
+	planQuery := firstNonEmpty(req.Query, req.TargetCanonicalPath)
+	knowledgeHits := maybeSearchKnowledgeBase(ctx, p.knowledgeBase, req.TenantID, planQuery, 6)
 	input := map[string]any{
 		"request":         req,
 		"goal":            compactGoalFrame(req.Goal),
@@ -1224,16 +1522,29 @@ func (p *Processor) buildPlan(ctx context.Context, rt *agentmeshruntime.Service,
 		"role":            compactRoleFrame(req.Role),
 		"completeness":    compactCompletenessFrame(req.Completeness),
 		"planningContext": planningContext,
-		"knowledgeHits":   maybeSearchKnowledgeBase(ctx, p.knowledgeBase, req.TenantID, firstNonEmpty(req.Query, req.TargetCanonicalPath), 6),
+		"knowledgeHits":   knowledgeHits,
+		"retrieval": map[string]any{
+			"mode":     "internal_datastore_retrieval",
+			"source":   "vertex_ai_search",
+			"query":    planQuery,
+			"hitCount": len(knowledgeHits),
+			"hits":     knowledgeHits,
+		},
 	}
 	if prior != nil {
 		input["priorPlan"] = prior.Plan
-		input["investigationState"] = compactInvestigationSnapshot(prior)
+		input["sessionState"] = prior
 		input["replanReason"] = strings.TrimSpace(prior.ReplanReason)
 	}
 	input = enrichScoutModelInput(input, task)
 	plan := fallbackPlan(req)
-	if parsed := p.runModelObject(ctx, rt, task, input); len(parsed) > 0 {
+	planTask := task
+	if task != nil && strings.TrimSpace(task.Capability) != "scout.plan" {
+		copyTask := *task
+		copyTask.Capability = "scout.plan"
+		planTask = &copyTask
+	}
+	if parsed := p.runModelObject(ctx, rt, planTask, input); len(parsed) > 0 {
 		plan = mergePlan(plan, parsed)
 	}
 	plan.MissionRole = mergeRoleFrames(req.Role, plan.MissionRole)
@@ -1321,6 +1632,24 @@ func chooseNextAction(state *InvestigationState) (string, string) {
 	}
 	if state.StalledTurns >= 2 || state.Turn >= state.MaxTurns {
 		state.StopReason = firstNonEmpty(state.StopReason, "bounded_iteration_stop")
+		return "stop", ""
+	}
+	if state.ConsecutiveZeroGainTurns >= 3 {
+		state.StopReason = firstNonEmpty(state.StopReason, "no_information_gain")
+		state.RuntimeDiagnosis = append(state.RuntimeDiagnosis, RuntimeDiagnosis{
+			Code:     "information_gain_exhausted",
+			Severity: "info",
+			Message:  fmt.Sprintf("Stopping: %d consecutive turns produced no new information (qualityDelta=none). Further queries are unlikely to help.", state.ConsecutiveZeroGainTurns),
+		})
+		return "stop", ""
+	}
+	if state.ConsecutiveZeroHitTurns >= 2 && state.TotalRetrievalHits == 0 {
+		state.StopReason = firstNonEmpty(state.StopReason, "no_data_available")
+		state.RuntimeDiagnosis = append(state.RuntimeDiagnosis, RuntimeDiagnosis{
+			Code:     "knowledge_base_empty",
+			Severity: "info",
+			Message:  fmt.Sprintf("Stopping: %d consecutive retrieval turns with 0 hits and no total hits in this investigation. The knowledge base lacks data for this topic.", state.ConsecutiveZeroHitTurns),
+		})
 		return "stop", ""
 	}
 	if id := selectBroadScanBranch(state); id != "" {
@@ -1444,23 +1773,117 @@ func chooseNextAction(state *InvestigationState) (string, string) {
 	return "stop", ""
 }
 
+// orchestrateNextActionVertex makes Vertex the primary decision core for next action
+// selection. Host-side chooseNextAction remains deterministic fallback only.
+func (p *Processor) orchestrateNextActionVertex(ctx context.Context, rt *agentmeshruntime.Service, task *contracts.MeshTask, req InvestigationRequest, graphCtx map[string]any, state *InvestigationState) (DecisionResult, string, string, error) {
+	candidates := buildDecisionCandidates(state)
+	fallbackAction, fallbackBranchID := chooseNextAction(state)
+	fallbackDecision := buildFallbackDecision(state, fallbackAction, fallbackBranchID, candidates)
+	if state == nil || task == nil {
+		applyDecisionToState(state, fallbackDecision)
+		return fallbackDecision, fallbackAction, fallbackBranchID, nil
+	}
+	activeSnapshot := buildActiveFrontierSnapshot(state)
+	modelIn := enrichScoutModelInput(map[string]any{
+		"request":          req,
+		"goal":             compactGoalFrame(state.Goal),
+		"environment":      compactEnvironmentFrame(state.Environment),
+		"role":             compactRoleFrame(state.Role),
+		"completeness":     compactCompletenessFrame(state.Completeness),
+		"plan":             compactPlanForModel(state.Plan),
+		"planningContext":  compactPlanningContext(graphCtx),
+		"sessionState":     state,
+		"latestOutcome":    compactActionOutcome(state.LatestOutcome),
+		"recentOutcomes":   compactActionOutcomes(state.Outcomes),
+		"activeFrontier":   activeSnapshot,
+		"candidateActions": compactDecisionCandidates(candidates),
+		"decisionContext": map[string]any{
+			"runtimePurpose":           "Populate and improve the graph with useful chain/path structure; do not polish like a courtroom brief.",
+			"consecutiveZeroGainTurns": state.ConsecutiveZeroGainTurns,
+			"consecutiveZeroHitTurns":  state.ConsecutiveZeroHitTurns,
+			"totalRetrievalHits":       state.TotalRetrievalHits,
+			"informationGainWarning":   informationGainWarning(state),
+			"stopCriteria": []map[string]any{
+				{"criterion": "current_best_chain_is_useful_for_graph_fill", "description": "Stop or persist when the current chain is already structurally useful enough for graph/path purposes."},
+				{"criterion": "materially_different_routes_have_been_scanned_enough", "description": "Do not stop too early if materially different alternatives remain unexamined."},
+				{"criterion": "remaining_gaps_are_non_blocking_or_low_value", "description": "If remaining gaps are not worth this runtime tier, say so explicitly."},
+				{"criterion": "next_tool_call_is_likely_to_improve_quality", "description": "If another turn is chosen, explain why it is still likely to improve graph quality materially."},
+				{"criterion": "information_gain_is_positive", "description": "If the last 2+ turns produced no new information (qualityDelta=none), the system MUST stop or radically change strategy."},
+			},
+		},
+		"parentSessionRef": strings.TrimSpace(task.SessionRef),
+	}, task)
+	parsed := p.runModelObject(ctx, rt, task, modelIn)
+	if runtimeErr := modelRuntimeError(parsed); runtimeErr != "" {
+		fallbackDecision.WhyChosen = "Deterministic fallback: scout.orchestrate model decision failed."
+		fallbackDecision.ValidationStatus = "fallback"
+		fallbackDecision.ValidationReason = runtimeErr
+		applyDecisionToState(state, fallbackDecision)
+		state.RuntimeDiagnosis = append(state.RuntimeDiagnosis, RuntimeDiagnosis{
+			Code:     "orchestrate_model_failed",
+			Severity: "warning",
+			Message:  runtimeErr,
+		})
+		return fallbackDecision, fallbackAction, fallbackBranchID, nil
+	}
+	if len(parsed) == 0 {
+		fallbackDecision.WhyChosen = "Deterministic fallback: scout.orchestrate returned empty payload."
+		fallbackDecision.ValidationStatus = "fallback"
+		fallbackDecision.ValidationReason = "empty decision payload"
+		applyDecisionToState(state, fallbackDecision)
+		state.RuntimeDiagnosis = append(state.RuntimeDiagnosis, RuntimeDiagnosis{
+			Code:     "orchestrate_payload_empty",
+			Severity: "warning",
+			Message:  "scout.orchestrate returned an empty decision payload",
+		})
+		return fallbackDecision, fallbackAction, fallbackBranchID, nil
+	}
+	decision := decodeDecisionResult(parsed)
+	decision = normalizeDecisionResult(decision)
+	if isEmptyDecisionResult(decision) {
+		fallbackDecision.WhyChosen = "Deterministic fallback: scout.orchestrate returned schema-empty payload."
+		fallbackDecision.ValidationStatus = "fallback"
+		fallbackDecision.ValidationReason = "schema-empty decision payload"
+		applyDecisionToState(state, fallbackDecision)
+		state.RuntimeDiagnosis = append(state.RuntimeDiagnosis, RuntimeDiagnosis{
+			Code:     "orchestrate_payload_empty",
+			Severity: "warning",
+			Message:  "scout.orchestrate returned schema-empty decision payload",
+		})
+		return fallbackDecision, fallbackAction, fallbackBranchID, nil
+	}
+	decision.StateSummary = firstNonEmpty(decision.StateSummary, summarizeDecisionState(state))
+	decision.Candidates = candidates
+	action, branchID, validationStatus, validationReason := validateDecisionChoice(state, decision, candidates)
+	if action == "" {
+		action = fallbackAction
+		branchID = fallbackBranchID
+		validationStatus = "fallback"
+		validationReason = firstNonEmpty(validationReason, "orchestrate_decision_did_not_resolve_to_a_feasible_candidate")
+	}
+	decision.ExecutedAction = action
+	decision.ExecutedBranchID = branchID
+	decision.ValidationStatus = validationStatus
+	decision.ValidationReason = validationReason
+	if validationStatus == "fallback" {
+		state.RuntimeDiagnosis = append(state.RuntimeDiagnosis, RuntimeDiagnosis{
+			Code:     "orchestrate_decision_fallback",
+			Severity: "warning",
+			Message:  validationReason,
+		})
+	}
+	populateDecisionAlternatives(&decision, candidates)
+	applyDecisionToState(state, decision)
+	return decision, action, branchID, nil
+}
+
 func (p *Processor) decideNextAction(ctx context.Context, rt *agentmeshruntime.Service, task *contracts.MeshTask, req InvestigationRequest, graphCtx map[string]any, state *InvestigationState) (*contracts.MeshTask, DecisionResult, string, string, error) {
 	candidates := buildDecisionCandidates(state)
 	fallbackAction, fallbackBranchID := chooseNextAction(state)
-	decision := DecisionResult{
-		StateSummary:     summarizeDecisionState(state),
-		ChosenAction:     fallbackAction,
-		BranchID:         fallbackBranchID,
-		WhyChosen:        "Fallback deterministic selector was used because no explicit orchestration decision was available.",
-		Candidates:       candidates,
-		ExecutedAction:   fallbackAction,
-		ExecutedBranchID: fallbackBranchID,
-		ValidationStatus: "fallback",
-		ValidationReason: "no_decision_task_run",
-	}
+	fallbackDecision := buildFallbackDecision(state, fallbackAction, fallbackBranchID, candidates)
 	if state == nil || task == nil {
-		applyDecisionToState(state, decision)
-		return nil, decision, fallbackAction, fallbackBranchID, nil
+		applyDecisionToState(state, fallbackDecision)
+		return nil, fallbackDecision, fallbackAction, fallbackBranchID, nil
 	}
 	activeSnapshot := buildActiveFrontierSnapshot(state)
 	child, result, err := p.runChildTask(ctx, rt, task, "scout.decide", fmt.Sprintf("%s:decide:%d", task.ID, state.Turn), map[string]any{
@@ -1471,55 +1894,52 @@ func (p *Processor) decideNextAction(ctx context.Context, rt *agentmeshruntime.S
 		"completeness":       compactCompletenessFrame(state.Completeness),
 		"plan":               compactPlanForModel(state.Plan),
 		"planningContext":    compactPlanningContext(graphCtx),
-		"investigationState": compactInvestigationSnapshot(state),
+		"sessionState":       state,
 		"latestOutcome":      compactActionOutcome(state.LatestOutcome),
 		"recentOutcomes":     compactActionOutcomes(state.Outcomes),
 		"activeFrontier":     activeSnapshot,
 		"candidateActions":   compactDecisionCandidates(candidates),
 		"decisionContext": map[string]any{
-			"runtimePurpose": "Populate and improve the graph with useful chain/path structure; do not polish like a courtroom brief.",
+			"runtimePurpose":           "Populate and improve the graph with useful chain/path structure; do not polish like a courtroom brief.",
+			"consecutiveZeroGainTurns": state.ConsecutiveZeroGainTurns,
+			"consecutiveZeroHitTurns":  state.ConsecutiveZeroHitTurns,
+			"totalRetrievalHits":       state.TotalRetrievalHits,
+			"informationGainWarning":   informationGainWarning(state),
 			"stopCriteria": []map[string]any{
 				{"criterion": "current_best_chain_is_useful_for_graph_fill", "description": "Stop or persist when the current chain is already structurally useful enough for graph/path purposes."},
 				{"criterion": "materially_different_routes_have_been_scanned_enough", "description": "Do not stop too early if materially different alternatives remain unexamined."},
 				{"criterion": "remaining_gaps_are_non_blocking_or_low_value", "description": "If remaining gaps are not worth this runtime tier, say so explicitly."},
 				{"criterion": "next_tool_call_is_likely_to_improve_quality", "description": "If another turn is chosen, explain why it is still likely to improve graph quality materially."},
+				{"criterion": "information_gain_is_positive", "description": "If the last 2+ turns produced no new information (qualityDelta=none), the system MUST stop or radically change strategy."},
 			},
 		},
 		"parentSessionRef": strings.TrimSpace(task.SessionRef),
 	})
 	if err != nil {
-		decision.WhyChosen = "Deterministic fallback was used because scout.decide failed."
-		decision.ValidationStatus = "fallback"
-		decision.ValidationReason = err.Error()
-		applyDecisionToState(state, decision)
+		fallbackDecision.WhyChosen = "Deterministic fallback: scout.decide failed."
+		fallbackDecision.ValidationStatus = "fallback"
+		fallbackDecision.ValidationReason = err.Error()
+		applyDecisionToState(state, fallbackDecision)
 		state.RuntimeDiagnosis = append(state.RuntimeDiagnosis, RuntimeDiagnosis{
 			Code:     "decision_task_failed",
 			Severity: "warning",
 			Message:  err.Error(),
 		})
-		return nil, decision, fallbackAction, fallbackBranchID, nil
+		return nil, fallbackDecision, fallbackAction, fallbackBranchID, nil
 	}
-	decision = decodeDecisionResult(result)
+	decision := decodeDecisionResult(result)
 	decision = normalizeDecisionResult(decision)
 	if isEmptyDecisionResult(decision) {
-		decision = DecisionResult{
-			StateSummary:     summarizeDecisionState(state),
-			ChosenAction:     fallbackAction,
-			BranchID:         fallbackBranchID,
-			WhyChosen:        "Deterministic fallback was used because scout.decide returned an empty decision payload.",
-			Candidates:       candidates,
-			ExecutedAction:   fallbackAction,
-			ExecutedBranchID: fallbackBranchID,
-			ValidationStatus: "fallback",
-			ValidationReason: "empty decision payload",
-		}
-		applyDecisionToState(state, decision)
+		fallbackDecision.WhyChosen = "Deterministic fallback: scout.decide returned empty payload."
+		fallbackDecision.ValidationStatus = "fallback"
+		fallbackDecision.ValidationReason = "empty decision payload"
+		applyDecisionToState(state, fallbackDecision)
 		state.RuntimeDiagnosis = append(state.RuntimeDiagnosis, RuntimeDiagnosis{
 			Code:     "decision_payload_empty",
 			Severity: "warning",
 			Message:  "scout.decide returned an empty decision payload",
 		})
-		return child, decision, fallbackAction, fallbackBranchID, nil
+		return child, fallbackDecision, fallbackAction, fallbackBranchID, nil
 	}
 	decision.StateSummary = firstNonEmpty(decision.StateSummary, summarizeDecisionState(state))
 	decision.Candidates = candidates
@@ -1543,6 +1963,142 @@ func (p *Processor) decideNextAction(ctx context.Context, rt *agentmeshruntime.S
 	}
 	applyDecisionToState(state, decision)
 	return child, decision, action, branchID, nil
+}
+
+func buildFallbackDecision(state *InvestigationState, action, branchID string, candidates []DecisionCandidate) DecisionResult {
+	decision := DecisionResult{
+		StateSummary:     summarizeDecisionState(state),
+		ChosenAction:     action,
+		BranchID:         branchID,
+		WhyChosen:        explainDerivedDecisionWhy(state, action, branchID),
+		Candidates:       candidates,
+		ExecutedAction:   action,
+		ExecutedBranchID: branchID,
+		ValidationStatus: "fallback",
+		ValidationReason: "deterministic_selector",
+		StopCriteria:     evaluateStopCriteria(state),
+		EvidenceUsed:     decisionEvidenceUsed(state),
+	}
+	populateDecisionAlternatives(&decision, candidates)
+	return decision
+}
+
+func explainDerivedDecisionWhy(state *InvestigationState, action, branchID string) string {
+	if state == nil {
+		return explainDecisionWhy(nil, action, branchID)
+	}
+	if recAction, recBranchID := selectRecommendedAction(state); recAction == action && firstNonEmpty(recBranchID, branchID) == firstNonEmpty(branchID, recBranchID) {
+		rec := normalizeActionRecommendation(state.LatestRecommendedAction)
+		return firstNonEmpty(rec.Reason, explainDecisionWhy(state, action, branchID))
+	}
+	if diagAction, diagBranchID := selectDiagnosedAction(state); diagAction == action && firstNonEmpty(diagBranchID, branchID) == firstNonEmpty(branchID, diagBranchID) {
+		diag := normalizeGapDiagnosis(state.LatestGapDiagnosis)
+		return firstNonEmpty(diag.Why, diag.Summary, explainDecisionWhy(state, action, branchID))
+	}
+	if action == "path" && shouldPersistGoodEnoughPath(state) {
+		item := normalizeGoodEnoughAssessment(state.LatestCritic.GoodEnoughAssessment)
+		return firstNonEmpty(item.Reason, "Current chain is already good enough for this runtime tier; persist or verify it instead of polishing further.")
+	}
+	return explainDecisionWhy(state, action, branchID)
+}
+
+func populateDecisionAlternatives(decision *DecisionResult, candidates []DecisionCandidate) {
+	if decision == nil {
+		return
+	}
+	decision.WhyNotStop = decisionAlternativeReason(decision, candidates, "stop")
+	decision.WhyNotPath = decisionAlternativeReason(decision, candidates, "path")
+	decision.WhyNotBridge = decisionAlternativeReason(decision, candidates, "bridge")
+	decision.WhyNotResearch = decisionAlternativeReason(decision, candidates, "research")
+	decision.WhyNotCritic = decisionAlternativeReason(decision, candidates, "critic")
+	decision.WhyNotMaterialize = decisionAlternativeReason(decision, candidates, "materialize")
+	decision.WhyNotReplan = decisionAlternativeReason(decision, candidates, "replan")
+}
+
+func decisionAlternativeReason(decision *DecisionResult, candidates []DecisionCandidate, action string) string {
+	if decision == nil {
+		return ""
+	}
+	if decision.ExecutedAction == action || decision.ChosenAction == action {
+		return strings.Title(action) + " is the chosen action."
+	}
+	for _, candidate := range candidates {
+		if candidate.Action != action {
+			continue
+		}
+		if candidate.Available {
+			return firstNonEmpty(candidate.Reason, "Another action was judged higher value right now.")
+		}
+		return firstNonEmpty(candidate.Reason, "This action is not currently feasible.")
+	}
+	return "This action was not a valid candidate in the current state."
+}
+
+func decisionEvidenceUsed(state *InvestigationState) []string {
+	if state == nil {
+		return nil
+	}
+	out := []string{}
+	if summary := strings.TrimSpace(state.LatestOutcome.Summary); summary != "" {
+		out = append(out, "latest_outcome:"+summary)
+	}
+	if diag := normalizeGapDiagnosis(state.LatestGapDiagnosis); diag.Kind != "" {
+		out = append(out, "gap:"+diag.Kind)
+	}
+	if rec := normalizeActionRecommendation(state.LatestRecommendedAction); rec.Action != "" {
+		out = append(out, "recommended:"+rec.Action)
+	}
+	if strings.TrimSpace(state.CurrentBottleneck) != "" {
+		out = append(out, "bottleneck:"+strings.TrimSpace(state.CurrentBottleneck))
+	}
+	return compactStrings(out)
+}
+
+func evaluateStopCriteria(state *InvestigationState) []StopCriterionEvaluation {
+	if state == nil {
+		return nil
+	}
+	currentChainUseful := shouldPersistGoodEnoughPath(state) || goodEnoughAllowsStop(state)
+	alternativesScanned := completenessAllowsStop(state)
+	remainingLowValue := false
+	if item := normalizeGoodEnoughAssessment(state.LatestCritic.GoodEnoughAssessment); item.Status != "" {
+		remainingLowValue = item.FurtherWorkLowValue
+	}
+	nextLikelyImproves := !goodEnoughAllowsStop(state) && detectCurrentBottleneck(state) != BottleneckNoHighValueAction && state.ConsecutiveZeroGainTurns < 2
+	infoGainPositive := state.ConsecutiveZeroGainTurns < 2
+	dataAvailable := state.ConsecutiveZeroHitTurns < 2 || state.TotalRetrievalHits > 0
+	return []StopCriterionEvaluation{
+		{
+			Criterion: "current_best_chain_is_useful_for_graph_fill",
+			Satisfied: currentChainUseful,
+			Why:       ternary(currentChainUseful, "Current chain is already structurally useful enough to persist or answer the question at this runtime tier.", "Current chain still lacks enough structural value for graph fill or business answer."),
+		},
+		{
+			Criterion: "materially_different_routes_have_been_scanned_enough",
+			Satisfied: alternativesScanned,
+			Why:       ternary(alternativesScanned, "Broad scan and route completeness are sufficient for this tier.", "Materially different routes may still remain unexamined."),
+		},
+		{
+			Criterion: "remaining_gaps_are_non_blocking_or_low_value",
+			Satisfied: remainingLowValue,
+			Why:       ternary(remainingLowValue, "Remaining gaps are low-value or non-blocking for this runtime tier.", "Remaining gaps are still blocking or potentially high-value."),
+		},
+		{
+			Criterion: "next_tool_call_is_likely_to_improve_quality",
+			Satisfied: nextLikelyImproves,
+			Why:       ternary(nextLikelyImproves, "Another turn is still likely to improve graph quality materially.", "Another turn is unlikely to improve graph quality materially."),
+		},
+		{
+			Criterion: "information_gain_is_positive",
+			Satisfied: infoGainPositive,
+			Why:       ternary(infoGainPositive, "Recent turns have produced new information.", fmt.Sprintf("Last %d consecutive turns produced no new information (qualityDelta=none).", state.ConsecutiveZeroGainTurns)),
+		},
+		{
+			Criterion: "data_sources_have_content",
+			Satisfied: dataAvailable,
+			Why:       ternary(dataAvailable, "Knowledge base has returned some useful content.", fmt.Sprintf("Knowledge base returned 0 hits for %d consecutive queries (total hits=%d).", state.ConsecutiveZeroHitTurns, state.TotalRetrievalHits)),
+		},
+	}
 }
 
 func isRetryableSystemError(err error) bool {
@@ -1628,6 +2184,35 @@ func recordActionOutcome(state *InvestigationState, outcome ActionOutcome) {
 	}
 	state.LatestOutcome = outcome
 	state.Outcomes = append(state.Outcomes, outcome)
+	trackInformationGain(state, outcome)
+}
+
+func trackInformationGain(state *InvestigationState, outcome ActionOutcome) {
+	if state == nil {
+		return
+	}
+	if outcome.QualityDelta == "none" || outcome.QualityDelta == "" {
+		state.ConsecutiveZeroGainTurns++
+	} else {
+		state.ConsecutiveZeroGainTurns = 0
+	}
+}
+
+func informationGainWarning(state *InvestigationState) string {
+	if state == nil {
+		return ""
+	}
+	parts := []string{}
+	if state.ConsecutiveZeroGainTurns >= 2 {
+		parts = append(parts, fmt.Sprintf("WARNING: %d consecutive turns with no information gain. Repeating similar queries is wasteful — stop or try a fundamentally different approach.", state.ConsecutiveZeroGainTurns))
+	}
+	if state.ConsecutiveZeroHitTurns >= 2 {
+		parts = append(parts, fmt.Sprintf("WARNING: %d consecutive retrieval turns with 0 knowledge base hits. The internal KB lacks data on this topic.", state.ConsecutiveZeroHitTurns))
+	}
+	if state.TotalRetrievalHits == 0 && state.Turn > 2 {
+		parts = append(parts, "WARNING: Zero total retrieval hits across all turns. The knowledge base has no data for this investigation.")
+	}
+	return strings.Join(parts, " ")
 }
 
 func shouldCountAsReformulation(bottleneck string) bool {
@@ -1720,17 +2305,33 @@ func buildDecisionCandidates(state *InvestigationState) []DecisionCandidate {
 			Question:  branchQuestion(branch),
 		})
 	}
-	if id := selectResearchBranchByScore(state); id != "" {
-		branch := state.Branches[id]
-		available := branch != nil
-		reason := describeCandidateReason(state, "research", id)
-		if branch != nil && shouldCountAsReformulation(state.CurrentBottleneck) && branch.ResearchRounds > 0 && branch.MarginalGainStreak >= 1 && branch.ReformulationCount >= 1 {
+	for _, branchID := range state.BranchOrder {
+		branch := state.Branches[branchID]
+		if branch == nil || !branchDependenciesSatisfied(state, branch) {
+			continue
+		}
+		available := branchNeedsMoreResearch(state, branch)
+		reason := describeCandidateReason(state, "research", branchID)
+		if !available {
+			switch branch.Status {
+			case BranchStatusDone, BranchStatusRejected:
+				reason = "Branch is " + string(branch.Status) + "; no further research is warranted."
+			case BranchStatusBlocked:
+				reason = "Branch is blocked; resolve blocking condition first."
+			default:
+				if branch.MarginalGainStreak >= 2 {
+					reason = "Marginal gain streak indicates diminishing returns."
+				} else if branch.Status == BranchStatusSupported && branch.LastConfidence >= 0.75 {
+					reason = "Branch already has strong support; further research is low-value."
+				}
+			}
+		} else if shouldCountAsReformulation(state.CurrentBottleneck) && branch.ResearchRounds > 0 && branch.MarginalGainStreak >= 1 && branch.ReformulationCount >= 1 {
 			available = false
 			reason = "This branch already consumed its one additional reformulation after low-gain evidence. Another research pass is unlikely to improve quality materially."
 		}
 		add(DecisionCandidate{
 			Action:       "research",
-			BranchID:     id,
+			BranchID:     branchID,
 			Available:    available,
 			Reason:       reason,
 			Question:     branchQuestion(branch),
@@ -3856,7 +4457,7 @@ func applyBridgeToState(state *InvestigationState, branchID string, result Bridg
 	applyGapDiagnosisToState(state, "bridge", branchID, result.GapDiagnosis)
 	applyActionRecommendationToState(state, "bridge", branchID, result.RecommendedAction)
 	refreshBranchPursuitState(state, branchID, state.LatestCritic)
-	if result.BridgeExists && hypothesis != nil {
+	if result.BridgeExists {
 		hypothesis.PursuitDecision = BranchPursuitPress
 		hypothesis.PursuitReason = "Bridge scan produced a plausible missing-middle continuation worth pursuing."
 	}
@@ -6687,12 +7288,60 @@ func compactStateForTurn(state *InvestigationState, action string) {
 	if state == nil {
 		return
 	}
-	if state.Turn-state.LastCompactedTurn < 3 && action != "materialize" && action != "review" {
+	if state.Turn-state.LastCompactedTurn < 2 && action != "materialize" && action != "review" {
 		return
 	}
 	compactCompletedBranches(state)
-	state.OpenQuestions = compactStrings(dedupAndPruneOpenQuestions(state.OpenQuestions, 8))
+	state.OpenQuestions = compactStrings(dedupAndPruneOpenQuestions(state.OpenQuestions, 6))
+	compactOutcomes(state)
+	compactDecisions(state)
+	compactResearchResults(state)
 	state.LastCompactedTurn = state.Turn
+}
+
+func compactOutcomes(state *InvestigationState) {
+	if state == nil || len(state.Outcomes) <= 4 {
+		return
+	}
+	state.Outcomes = state.Outcomes[len(state.Outcomes)-4:]
+}
+
+func compactDecisions(state *InvestigationState) {
+	if state == nil || len(state.Decisions) <= 3 {
+		return
+	}
+	state.Decisions = state.Decisions[len(state.Decisions)-3:]
+}
+
+func compactResearchResults(state *InvestigationState) {
+	if state == nil || len(state.ResearchResults) <= 4 {
+		return
+	}
+	kept := state.ResearchResults[len(state.ResearchResults)-4:]
+	for i := range kept {
+		if len(kept[i].EvidencePoints) > 3 {
+			kept[i].EvidencePoints = kept[i].EvidencePoints[:3]
+		}
+		if len(kept[i].OpenQuestions) > 3 {
+			kept[i].OpenQuestions = kept[i].OpenQuestions[:3]
+		}
+	}
+	state.ResearchResults = kept
+	if len(state.BridgeResults) > 3 {
+		state.BridgeResults = state.BridgeResults[len(state.BridgeResults)-3:]
+	}
+	if len(state.GapDiagnoses) > 4 {
+		state.GapDiagnoses = state.GapDiagnoses[len(state.GapDiagnoses)-4:]
+	}
+	if len(state.RecommendedActions) > 3 {
+		state.RecommendedActions = state.RecommendedActions[len(state.RecommendedActions)-3:]
+	}
+	if len(state.ReasoningTrace) > 8 {
+		state.ReasoningTrace = state.ReasoningTrace[len(state.ReasoningTrace)-8:]
+	}
+	if len(state.RuntimeDiagnosis) > 6 {
+		state.RuntimeDiagnosis = state.RuntimeDiagnosis[len(state.RuntimeDiagnosis)-6:]
+	}
 }
 
 func compactCompletedBranches(state *InvestigationState) {
@@ -6788,9 +7437,65 @@ func (p *Processor) runModelObject(ctx context.Context, rt *agentmeshruntime.Ser
 		if p.logger != nil {
 			p.logger.Printf("[agentmesh.scout] model execution failed capability=%s err=%v", task.Capability, err)
 		}
-		return nil
+		return map[string]any{
+			"_runtimeError": err.Error(),
+		}
 	}
-	return parseContentObject(body)
+	parsed := parseContentObject(body)
+	if len(parsed) > 0 {
+		return parsed
+	}
+	// Self-repair retry: tell the model the previous response was invalid/truncated JSON.
+	finishReason := strings.TrimSpace(stringValue(body, "finishReason"))
+	previousContent := strings.TrimSpace(stringValue(body, "content"))
+	if len(previousContent) > 1600 {
+		previousContent = previousContent[:1600]
+	}
+	repairInput := map[string]any{}
+	for key, value := range input {
+		repairInput[key] = value
+	}
+	repairInput["_repair"] = map[string]any{
+		"phase":                 "json_repair_retry",
+		"previousFinishReason":  finishReason,
+		"previousOutputSnippet": previousContent,
+		"error":                 "previous model output was not a valid JSON object",
+		"instruction":           "Retry once. Return ONLY valid compact JSON object that matches capability schema. Omit optional verbose arrays first.",
+	}
+	repairTask := &contracts.MeshTask{
+		ID:         task.ID + ":" + strings.TrimSpace(task.Capability) + ":repair1",
+		TenantID:   task.TenantID,
+		Capability: task.Capability,
+		Input:      repairInput,
+		SessionRef: sessionRef,
+	}
+	repairBody, _, repairErr := rt.Vertex().ExecuteTask(ctx, repairTask, false)
+	if repairErr != nil {
+		if p.logger != nil {
+			p.logger.Printf("[agentmesh.scout] model repair failed capability=%s err=%v", task.Capability, repairErr)
+		}
+		return map[string]any{
+			"_runtimeError": fmt.Sprintf("model output parse failed (finishReason=%s) and repair call failed: %v", finishReason, repairErr),
+		}
+	}
+	if repaired := parseContentObject(repairBody); len(repaired) > 0 {
+		return repaired
+	}
+	repairFinishReason := strings.TrimSpace(stringValue(repairBody, "finishReason"))
+	return map[string]any{
+		"_runtimeError": fmt.Sprintf("model returned invalid JSON after repair attempt (finishReason=%s, repairFinishReason=%s)", finishReason, repairFinishReason),
+	}
+}
+
+func modelRuntimeError(parsed map[string]any) string {
+	return strings.TrimSpace(stringValue(parsed, "_runtimeError"))
+}
+
+func modelRetryClass(errText string) contracts.RetryClass {
+	if isRetryableSystemError(fmt.Errorf("%s", strings.TrimSpace(errText))) {
+		return contracts.RetryClassTransient
+	}
+	return contracts.RetryClassPermanent
 }
 
 func (p *Processor) resolveProductRefs(ctx context.Context, tenantID string, values []string) []string {
@@ -7286,6 +7991,209 @@ func decodePlan(raw any) InvestigationPlan {
 		return plan
 	default:
 		return InvestigationPlan{}
+	}
+}
+
+func decodeSessionState(raw any) *InvestigationState {
+	switch typed := raw.(type) {
+	case *InvestigationState:
+		if typed == nil {
+			return nil
+		}
+		return typed
+	case InvestigationState:
+		copyState := typed
+		return &copyState
+	case map[string]any:
+		rawJSON, _ := json.Marshal(typed)
+		var state InvestigationState
+		if err := json.Unmarshal(rawJSON, &state); err != nil {
+			return nil
+		}
+		return &state
+	default:
+		return nil
+	}
+}
+
+func mergeInvestigationRequests(base InvestigationRequest, overlay InvestigationRequest) InvestigationRequest {
+	base = normalizeRequest(base)
+	overlay = normalizeRequest(overlay)
+	base.TenantID = firstNonEmpty(overlay.TenantID, base.TenantID)
+	base.ProjectID = firstNonEmpty(overlay.ProjectID, base.ProjectID)
+	base.LensID = firstNonEmpty(overlay.LensID, base.LensID)
+	base.ScoutingJobID = firstNonEmpty(overlay.ScoutingJobID, base.ScoutingJobID)
+	base.Query = firstNonEmpty(overlay.Query, base.Query)
+	base.TargetCanonicalPath = firstNonEmpty(overlay.TargetCanonicalPath, base.TargetCanonicalPath)
+	base.CompareOnly = base.CompareOnly || overlay.CompareOnly
+	base.AllowWrites = base.AllowWrites || overlay.AllowWrites
+	if base.Metadata == nil {
+		base.Metadata = map[string]any{}
+	}
+	for k, v := range overlay.Metadata {
+		base.Metadata[k] = v
+	}
+	base.Goal = mergeGoalFrames(base.Goal, overlay.Goal)
+	base.Environment = mergeEnvironmentFrames(base.Environment, overlay.Environment)
+	base.Role = mergeRoleFrames(base.Role, overlay.Role)
+	base.Completeness = mergeCompletenessFrames(base.Completeness, overlay.Completeness)
+	return normalizeRequest(base)
+}
+
+func mergeGoalFrames(base GoalFrame, overlay GoalFrame) GoalFrame {
+	base = normalizeGoalFrame(base)
+	overlay = normalizeGoalFrame(overlay)
+	base.Objective = firstNonEmpty(overlay.Objective, base.Objective)
+	base.PrimaryQuestion = firstNonEmpty(overlay.PrimaryQuestion, base.PrimaryQuestion)
+	base.UserIntent = firstNonEmpty(overlay.UserIntent, base.UserIntent)
+	base.TargetCanonicalPath = firstNonEmpty(overlay.TargetCanonicalPath, base.TargetCanonicalPath)
+	base.WriteDisposition = firstNonEmpty(overlay.WriteDisposition, base.WriteDisposition)
+	base.OutputContract = compactStrings(append(base.OutputContract, overlay.OutputContract...))
+	base.SuccessCriteria = compactStrings(append(base.SuccessCriteria, overlay.SuccessCriteria...))
+	base.StopConditions = compactStrings(append(base.StopConditions, overlay.StopConditions...))
+	return normalizeGoalFrame(base)
+}
+
+func mergeEnvironmentFrames(base EnvironmentFrame, overlay EnvironmentFrame) EnvironmentFrame {
+	base = normalizeEnvironmentFrame(base)
+	overlay = normalizeEnvironmentFrame(overlay)
+	base.WorkspaceKind = firstNonEmpty(overlay.WorkspaceKind, base.WorkspaceKind)
+	base.UnitOfWork = firstNonEmpty(overlay.UnitOfWork, base.UnitOfWork)
+	base.PrimaryObjects = compactStrings(append(base.PrimaryObjects, overlay.PrimaryObjects...))
+	base.EntitySemantics = compactStrings(append(base.EntitySemantics, overlay.EntitySemantics...))
+	base.EdgeSemantics = compactStrings(append(base.EdgeSemantics, overlay.EdgeSemantics...))
+	base.ArtifactSemantics = compactStrings(append(base.ArtifactSemantics, overlay.ArtifactSemantics...))
+	base.AvailableActions = compactStrings(append(base.AvailableActions, overlay.AvailableActions...))
+	base.KnownContextRefs = compactStrings(append(base.KnownContextRefs, overlay.KnownContextRefs...))
+	base.MetadataFields = compactStrings(append(base.MetadataFields, overlay.MetadataFields...))
+	if base.TargetEntity == nil {
+		base.TargetEntity = map[string]any{}
+	}
+	for k, v := range overlay.TargetEntity {
+		base.TargetEntity[k] = v
+	}
+	base.ObservedRelations = append(base.ObservedRelations, overlay.ObservedRelations...)
+	return normalizeEnvironmentFrame(base)
+}
+
+func mergeCompletenessFrames(base CompletenessFrame, overlay CompletenessFrame) CompletenessFrame {
+	base = normalizeCompletenessFrame(base)
+	overlay = normalizeCompletenessFrame(overlay)
+	base.BroadScanRequired = base.BroadScanRequired || overlay.BroadScanRequired
+	base.BroadScanQuestion = firstNonEmpty(overlay.BroadScanQuestion, base.BroadScanQuestion)
+	base.BroadScanCompleted = base.BroadScanCompleted || overlay.BroadScanCompleted
+	base.ExplorationStatus = firstNonEmpty(overlay.ExplorationStatus, base.ExplorationStatus)
+	base.KnownAlternativeRoutes = compactStrings(append(base.KnownAlternativeRoutes, overlay.KnownAlternativeRoutes...))
+	base.MissingAngles = compactStrings(append(base.MissingAngles, overlay.MissingAngles...))
+	base.NoMaterialAlternatives = base.NoMaterialAlternatives || overlay.NoMaterialAlternatives
+	base.CompletionRationale = firstNonEmpty(overlay.CompletionRationale, base.CompletionRationale)
+	return normalizeCompletenessFrame(base)
+}
+
+func stateToRecommendedAction(decision DecisionResult) ActionRecommendation {
+	decision = normalizeDecisionResult(decision)
+	return normalizeActionRecommendation(ActionRecommendation{
+		Action:   firstNonEmpty(decision.ExecutedAction, decision.ChosenAction),
+		BranchID: firstNonEmpty(decision.ExecutedBranchID, decision.BranchID),
+		Reason:   firstNonEmpty(decision.WhyChosen, decision.StateSummary),
+	})
+}
+
+func applyStateDelta(state *InvestigationState, raw any) {
+	if state == nil {
+		return
+	}
+	delta := mapValue(raw)
+	if len(delta) == 0 {
+		return
+	}
+	if diag := decodeGapDiagnosis(delta["gapDiagnosis"]); diag.Kind != "" {
+		state.LatestGapDiagnosis = diag
+		state.GapDiagnoses = append(state.GapDiagnoses, diag)
+	}
+	if rec := decodeActionRecommendation(delta["recommendedAction"]); rec.Action != "" {
+		state.LatestRecommendedAction = rec
+		state.RecommendedActions = append(state.RecommendedActions, rec)
+	}
+	for _, q := range stringSliceValue(delta["openQuestions"]) {
+		if strings.TrimSpace(q) == "" {
+			continue
+		}
+		state.OpenQuestions = compactStrings(append(state.OpenQuestions, q))
+	}
+	switch strings.TrimSpace(stringValue(delta, "kind")) {
+	case "decision":
+		if rec := stateToRecommendedAction(DecisionResult{
+			ChosenAction:     stringValue(delta, "chosenAction"),
+			BranchID:         stringValue(delta, "branchId"),
+			ExecutedAction:   stringValue(delta, "executedAction"),
+			ExecutedBranchID: stringValue(delta, "executedBranchId"),
+			WhyChosen:        stringValue(delta, "whyChosen"),
+			StateSummary:     stringValue(delta, "stateSummary"),
+		}); rec.Action != "" {
+			state.LatestRecommendedAction = rec
+			state.RecommendedActions = append(state.RecommendedActions, rec)
+		}
+	case "path":
+		if continuity := strings.TrimSpace(stringValue(delta, "continuityStatus")); continuity != "" {
+			state.PathResult.ContinuityStatus = continuity
+		}
+	case "materialize":
+		for _, id := range stringSliceValue(delta["landedBranchIds"]) {
+			if b := state.Branches[id]; b != nil {
+				b.Status = BranchStatusDone
+			}
+		}
+	}
+}
+
+func applyAuthoritativeSessionState(state *InvestigationState, raw any) bool {
+	if state == nil {
+		return false
+	}
+	next := decodeSessionState(raw)
+	if next == nil {
+		return false
+	}
+	if next.Branches == nil {
+		next.Branches = map[string]*BranchRuntimeState{}
+	}
+	if next.Hypotheses == nil {
+		next.Hypotheses = map[string]*InvestigationHypothesis{}
+	}
+	if next.ReasoningTrace == nil {
+		next.ReasoningTrace = []ReasoningBeat{}
+	}
+	if next.RuntimeDiagnosis == nil {
+		next.RuntimeDiagnosis = []RuntimeDiagnosis{}
+	}
+	if next.ActionLog == nil {
+		next.ActionLog = []string{}
+	}
+	if next.SessionRef == "" {
+		next.SessionRef = state.SessionRef
+	}
+	*state = *next
+	return true
+}
+
+func requiresAuthoritativeSessionStateForAction(action string) bool {
+	switch strings.TrimSpace(strings.ToLower(action)) {
+	case "research", "bridge", "critic", "path", "materialize":
+		return true
+	default:
+		return false
+	}
+}
+
+func requireSessionStateInput(input map[string]any, capability string) (*InvestigationState, *agentmeshruntime.ProcessResult) {
+	sessionState := decodeSessionState(input["sessionState"])
+	if sessionState != nil {
+		return sessionState, nil
+	}
+	return nil, &agentmeshruntime.ProcessResult{
+		Status:    contracts.TaskStatusFailed,
+		LastError: fmt.Sprintf("invalid sessionState: %s requires authoritative sessionState input", strings.TrimSpace(capability)),
 	}
 }
 

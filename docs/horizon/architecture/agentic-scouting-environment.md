@@ -11,6 +11,22 @@ The canonical control plane (product identity, transforms, synonyms, path valida
 schema enforcement) is **not** part of this replacement — it stays as **tools** that
 agents call.
 
+## Implementation Status (Current Runtime)
+
+The runtime has moved to a **Vertex-native orchestrator path**:
+
+- `scout.plan` is a bootstrap capability.
+- `scout.orchestrate` owns the central investigation loop and session-first decision flow.
+- `sessionState` is treated as authoritative investigation memory across `scout.*` actions.
+- AgentMesh host code remains as control-plane and safety boundary:
+  - task lifecycle / retries / lease checkpoints,
+  - policy-safe stop and deterministic guardrails,
+  - artifact persistence and review routing.
+
+Practical implication: the reasoning loop no longer depends on the legacy single-entry
+host route. Host state projections are now checkpoint views over a session-centric
+runtime, not the source of truth.
+
 ## Core Objectives
 
 1. **Improve graph quality**

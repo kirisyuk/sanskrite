@@ -304,6 +304,15 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 		ProcessingTime:    elapsed,
 		GroundingEvidence: evidence,
 	}
+	// Preserve model finish reason (e.g. MAX_TOKENS) so callers can repair/retry deterministically.
+	var finishProbe struct {
+		Candidates []struct {
+			FinishReason string `json:"finishReason"`
+		} `json:"candidates"`
+	}
+	if err := json.Unmarshal(body, &finishProbe); err == nil && len(finishProbe.Candidates) > 0 {
+		taskResult.FinishReason = strings.TrimSpace(finishProbe.Candidates[0].FinishReason)
+	}
 	// Parse real token counts from usageMetadata
 	var usageMeta struct {
 		UsageMetadata struct {

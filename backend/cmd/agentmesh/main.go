@@ -90,6 +90,35 @@ func main() {
 	traceSvc := meshtrace.NewService(store, logger)
 	vertexSearchClient := ai.NewVertexAISearchClient(*projectID, envOr("VERTEX_SEARCH_LOCATION", "global"), strings.TrimSpace(os.Getenv("VERTEX_SEARCH_DATA_STORE_ID")), "")
 	productDictionary := productdict.NewRuntime(fs.Client()).WithTenantID("global")
+
+	modelManager := ai.NewAIModelManager()
+	{
+		aiServices := []ai.AIService{vertexSvc.AIService()}
+		geminiKey := strings.TrimSpace(gcp.GetEnvOrSecret(ctx, *projectID, "GEMINI_API_KEY", "gemini_api_key"))
+		if geminiKey != "" {
+			if os.Getenv("GEMINI_API_KEY") == "" {
+				_ = os.Setenv("GEMINI_API_KEY", geminiKey)
+			}
+			aiServices = append(aiServices, ai.NewGeminiService(geminiKey, modelManager))
+		}
+		if k := strings.TrimSpace(gcp.GetEnvOrSecret(ctx, *projectID, "OPENAI_API_KEY", "openai_api_key")); k != "" {
+			if os.Getenv("OPENAI_API_KEY") == "" {
+				_ = os.Setenv("OPENAI_API_KEY", k)
+			}
+			aiServices = append(aiServices, ai.NewOpenAIService(k, modelManager))
+		}
+		if k := strings.TrimSpace(gcp.GetEnvOrSecret(ctx, *projectID, "GROK_API_KEY", "grok_api_key")); k != "" {
+			if os.Getenv("GROK_API_KEY") == "" {
+				_ = os.Setenv("GROK_API_KEY", k)
+			}
+			aiServices = append(aiServices, ai.NewGrokService(k, modelManager))
+		}
+		vertexSvc.WithAIExecutor(
+			ai.NewAITaskExecutor(aiServices, modelManager).
+				WithCircuitBreaker(ai.NewCircuitBreaker()),
+		)
+	}
+
 	simulationProcessor := agentmeshsimulation.NewProcessor(
 		horizonrepo.NewSimulationRunsRepository(fs.Client()),
 		horizonrepo.NewSimulationWorldsRepository(fs.Client()),

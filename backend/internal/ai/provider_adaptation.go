@@ -237,10 +237,10 @@ func (e *AITaskExecutor) selectFallbackModelAdaptive(req AIRequirements, inputTo
 		return ""
 	}
 	adaptedExcludes, blockedAdded := e.applyProviderPressureExclusions(triedModels)
-	model := e.modelManager.SelectFallbackModel(req, inputTokens, adaptedExcludes)
+	model := e.selectFallbackModelWithProviderDiversification(req, inputTokens, triedModels, adaptedExcludes)
 	if model == "" && blockedAdded > 0 {
 		// Fail-open: if all providers are temporarily blocked, allow one best-effort attempt.
-		model = e.modelManager.SelectFallbackModel(req, inputTokens, triedModels)
+		model = e.selectFallbackModelWithProviderDiversification(req, inputTokens, triedModels, triedModels)
 		if model != "" {
 			log.Printf("[AITaskExecutor] fail-open provider selection used model=%s despite pressure blocks", model)
 		}
@@ -258,6 +258,38 @@ func (e *AITaskExecutor) selectFallbackModelAdaptive(req AIRequirements, inputTo
 		}
 	}
 	return model
+}
+
+func (e *AITaskExecutor) selectFallbackModelWithProviderDiversification(req AIRequirements, inputTokens int, triedModels []string, excludes []string) string {
+	if e == nil || e.modelManager == nil {
+		return ""
+	}
+	// Horizontal fallback first: when there is at least one failed model, prefer switching provider.
+	if len(triedModels) > 0 {
+		last := strings.TrimSpace(triedModels[len(triedModels)-1])
+		if lastCaps, err := e.modelManager.GetModelCapabilities(last); err == nil {
+			crossProviderExcludes := make([]string, 0, len(excludes)+8)
+			crossProviderExcludes = append(crossProviderExcludes, excludes...)
+			seen := map[string]struct{}{}
+			for _, item := range crossProviderExcludes {
+				seen[strings.TrimSpace(item)] = struct{}{}
+			}
+			for modelName, caps := range e.modelManager.models {
+				if caps.Provider != lastCaps.Provider {
+					continue
+				}
+				if _, ok := seen[modelName]; ok {
+					continue
+				}
+				crossProviderExcludes = append(crossProviderExcludes, modelName)
+			}
+			if model := e.modelManager.SelectFallbackModel(req, inputTokens, dedupeModelExcludes(crossProviderExcludes)); model != "" {
+				return model
+			}
+		}
+	}
+	// If horizontal switch is not possible, continue with normal fallback.
+	return e.modelManager.SelectFallbackModel(req, inputTokens, excludes)
 }
 
 func (e *AITaskExecutor) selectFallbackToolModelAdaptive(req AIRequirements, inputTokens int, triedModels []string) string {

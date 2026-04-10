@@ -133,6 +133,7 @@ func systemAgents(baseURL string) []contracts.AgentSpec {
 				{Name: "sim.plan", Description: "Plan simulation ensemble execution and world fan-out."},
 				{Name: "sim.aggregate", Description: "Aggregate world outputs into a simulation bundle."},
 				{Name: "scout.plan", Description: "Plan and orchestrate one agentic scouting investigation."},
+				{Name: "scout.orchestrate", Description: "Run the session-centric orchestrator loop for one agentic scouting investigation."},
 				{Name: "scout.aggregate", Description: "Aggregate one agentic scouting investigation for operator consumption."},
 			},
 			Policy: contracts.InvocationPolicy{
@@ -156,10 +157,13 @@ func systemAgents(baseURL string) []contracts.AgentSpec {
 				{Name: "sim.world.bootstrap", Description: "Bootstrap one simulation world and execute its ticks."},
 				{Name: "sim.population.generate", Description: "Generate normalized simulation population archetypes."},
 				{Name: "sim.world.step", Description: "Generate normalized actions for one simulation world step."},
+				{Name: "scout.decide", Description: "Choose the next best action from session-centric scouting state."},
 				{Name: "scout.research", Description: "Run one grounded research branch for an agentic scouting investigation."},
+				{Name: "scout.bridge", Description: "Resolve missing-middle structure between known scouting endpoints."},
 				{Name: "scout.critic", Description: "Review research outputs and decide on path/materialization actions."},
 				{Name: "scout.path", Description: "Run deterministic target-scoped supply-chain path synthesis and landing."},
 				{Name: "scout.materialize", Description: "Persist agentic scouting outputs and deterministic artifact references."},
+				{Name: "scout.aggregate", Description: "Aggregate one agentic scouting investigation for operator consumption."},
 			},
 			Policy: contracts.InvocationPolicy{
 				AllowedCallers:         []string{"internal", "mesh.supervisor"},

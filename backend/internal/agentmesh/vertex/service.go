@@ -27,6 +27,7 @@ type ModelAliases struct {
 
 type Service struct {
 	vertexAI        *ai.VertexAIService
+	aiExecutor      *ai.AITaskExecutor
 	models          ModelAliases
 	httpClient      *http.Client
 	tokenSource     oauth2.TokenSource
@@ -67,6 +68,15 @@ func NewService(projectID, location, dataStoreID string) (*Service, error) {
 	}, nil
 }
 
+func (s *Service) WithAIExecutor(exec *ai.AITaskExecutor) *Service {
+	s.aiExecutor = exec
+	return s
+}
+
+func (s *Service) AIService() ai.AIService {
+	return s.vertexAI
+}
+
 func (s *Service) ModelAlias(review bool) string {
 	if review {
 		return "pro"
@@ -88,7 +98,10 @@ func (s *Service) ModelNameForCapability(capability string, review bool) string 
 	switch strings.TrimSpace(strings.ToLower(capability)) {
 	case "scout.review":
 		return s.models.Pro
-	case "scout.plan", "scout.decide", "scout.bridge", "scout.critic":
+	case "scout.research", "scout.bridge":
+		// Grounded retrieval-heavy steps should start on Vertex-native grounding models.
+		return "vertex-gemini-3-flash-preview"
+	case "scout.plan", "scout.orchestrate", "scout.decide", "scout.critic":
 		return s.models.FlashReasoning
 	default:
 		return s.models.FlashLite
@@ -201,7 +214,9 @@ func (s *Service) ExecuteTask(ctx context.Context, task *contracts.MeshTask, rev
 		taskType = ai.TaskTypeStrategicValidation
 	}
 	searchGrounding, internalGrounding := capabilityGrounding(task.Capability, review)
-	req := &ai.AITask{
+	minCapabilityScore := capabilityMinScore(task.Capability, review)
+	maxOutputSize := capabilityMaxOutput(task.Capability, review)
+	aiTask := &ai.AITask{
 		TaskType:     taskType,
 		InputContent: buildPrompt(task, review, string(inputJSON)),
 		AIRequirements: ai.AIRequirements{
@@ -209,15 +224,49 @@ func (s *Service) ExecuteTask(ctx context.Context, task *contracts.MeshTask, rev
 			TextGenerationCapability:        true,
 			SearchGroundingCapability:       searchGrounding,
 			InternalDataGroundingCapability: internalGrounding,
-			MaxOutputSize:                   8192,
+			MaxOutputSize:                   maxOutputSize,
+			MinCapabilityScore:              minCapabilityScore,
 		},
 		TenantID:  task.TenantID,
 		SessionID: task.SessionRef,
 		TraceID:   task.ID,
 		UseCase:   "agentmesh",
 	}
-	modelName := s.ModelNameForCapability(task.Capability, review)
-	result, err := s.vertexAI.ExecuteTask(ctx, req, modelName)
+
+	if s.aiExecutor != nil {
+		return s.executeViaTaskExecutor(ctx, aiTask, review)
+	}
+	return s.executeDirectVertex(ctx, aiTask, review)
+}
+
+func (s *Service) executeViaTaskExecutor(ctx context.Context, aiTask *ai.AITask, review bool) (map[string]any, *contracts.CostAttribution, error) {
+	result, err := s.aiExecutor.ExecuteTask(ctx, aiTask)
+	if err != nil {
+		return nil, nil, err
+	}
+	if result.Status != ai.AITaskStatusCompleted {
+		return nil, nil, fmt.Errorf("AI task executor: status=%s content=%s", result.Status, result.Content)
+	}
+	body := map[string]any{
+		"content":    result.Content,
+		"model":      result.Model,
+		"citations":  result.Citations,
+		"grounding":  result.GroundingEvidence,
+		"finishReason": result.FinishReason,
+		"reviewMode": review,
+	}
+	cost := &contracts.CostAttribution{
+		Model:            result.Model,
+		PromptTokens:     result.InputTokens,
+		CompletionTokens: result.OutputTokens,
+		EstimatedUSD:     result.ProcessingCost,
+	}
+	return body, cost, nil
+}
+
+func (s *Service) executeDirectVertex(ctx context.Context, aiTask *ai.AITask, review bool) (map[string]any, *contracts.CostAttribution, error) {
+	modelName := aiTask.AIRequirements.PreferredModel
+	result, err := s.vertexAI.ExecuteTask(ctx, aiTask, modelName)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -226,6 +275,7 @@ func (s *Service) ExecuteTask(ctx context.Context, task *contracts.MeshTask, rev
 		"model":      result.Model,
 		"citations":  result.Citations,
 		"grounding":  result.GroundingEvidence,
+		"finishReason": result.FinishReason,
 		"reviewMode": review,
 	}
 	cost := &contracts.CostAttribution{
@@ -251,72 +301,121 @@ func capabilityGrounding(capability string, review bool) (bool, bool) {
 	}
 }
 
+func capabilityMinScore(capability string, review bool) int {
+	if review {
+		return 9
+	}
+	switch strings.TrimSpace(strings.ToLower(capability)) {
+	case "scout.plan", "scout.orchestrate", "scout.decide", "scout.research", "scout.bridge", "scout.critic":
+		return 8
+	case "scout.path", "scout.materialize", "scout.aggregate":
+		return 7
+	default:
+		return 7
+	}
+}
+
+func capabilityMaxOutput(capability string, review bool) int {
+	if review {
+		return 8192
+	}
+	switch strings.TrimSpace(strings.ToLower(capability)) {
+	case "scout.bridge":
+		return 16384
+	case "scout.research", "scout.critic", "scout.orchestrate", "scout.decide":
+		return 12288
+	default:
+		return 8192
+	}
+}
+
 func buildPrompt(task *contracts.MeshTask, review bool, inputJSON string) string {
 	if !review {
 		switch strings.TrimSpace(task.Capability) {
 		case "scout.plan":
-			return scoutWorkspacePromptPrefix() + "\n\nReturn JSON only. Build or refine an investigation plan with keys goal, missionRole, focusProducts, focusGeos, focusActors, wantsPathMaterialize, maxResearchRounds, planningRationale, existingGraphPriorities, planVersion, materializationStrategy, branchDependencies, branches. Use goal + environment + role + completeness as explicit contracts for what the investigation is trying to learn, what kind of graph workspace it operates in, which top-grade professional lens should dominate, and whether a broad scan is required before route narrowing. You MUST determine the professional role from the task itself rather than selecting from a fixed catalog. If the incoming role object is empty or weak, ignore it and define the role yourself. missionRole must contain domain, primaryRole, supportingRoles, professionalQualityBar, investigationPosture, roleRationale. Each branch item must contain id, question, role, productHints, geoHints, actorHints, requiresPath, dependsOn (branch ids), broadScan, testCriteria, expectedInfoGain. Include at least one broad-scan branch when completeness says broadScanRequired=true unless such a branch already exists. Each branchDependencies item must contain fromBranchId and toBranchId meaning toBranchId depends on fromBranchId. When investigationState or replanReason is present, reshape the plan (add/split/kill branches, update strategy) rather than repeating the prior plan.\n\nInput:\n" + inputJSON
+			return scoutWorkspacePromptPrefix() + "\n\nReturn JSON only. Build or refine an investigation plan.\n" +
+				"Keys: goal, missionRole, focusProducts, focusGeos, focusActors, wantsPathMaterialize, maxResearchRounds, planningRationale, existingGraphPriorities, planVersion, materializationStrategy, branchDependencies, branches.\n" +
+				"You MUST determine the professional role from the task itself — do not use a fixed catalog. missionRole must contain domain, primaryRole, supportingRoles, professionalQualityBar, investigationPosture, roleRationale.\n" +
+				"Each branch is a concrete question you would ask a human analyst. Write it in natural language, e.g. 'Who are the main lithium carbonate exporters in Chile and how does their product reach European converters?' — NOT 'what sits between /product/x and /product/y'.\n" +
+				"Each branch must contain id, question, role, productHints, geoHints, actorHints, requiresPath, dependsOn, broadScan, testCriteria, expectedInfoGain.\n" +
+				"Include at least one broad-scan branch when completeness says broadScanRequired=true.\n" +
+				"When investigationState or replanReason is present, reshape the plan (add/split/kill branches, update strategy) rather than repeating the prior plan.\n\nInput:\n" + inputJSON
+		case "scout.orchestrate":
+			return scoutWorkspacePromptPrefix() + "\n\nReturn JSON only with keys stateSummary, chosenAction, branchId, whyChosen, evidenceUsed, stopCriteriaEvaluation, expectedInformationGain, confidence.\n" +
+				"You are the orchestrator. sessionState is your authoritative memory.\n" +
+				"Choose exactly one next action: research|bridge|critic|path|materialize|replan|stop.\n" +
+				"CRITICAL decision rules:\n" +
+				"- If the last 2+ actions produced no new information (qualityDelta=none), do NOT repeat the same kind of action on the same branch. Either switch strategy or stop.\n" +
+				"- If internal search returned 0 hits, the next research on the same branch should use web search (grounding), not the same internal query.\n" +
+				"- Stop when further work is unlikely to add useful structure to the graph. A partial but honest result is better than an expensive loop.\n" +
+				"- Explain your choice in plain language: why this action, why not the alternatives.\n\nInput:\n" + inputJSON
 		case "scout.decide":
-			return scoutWorkspacePromptPrefix() + "\n\nReturn JSON only with keys stateSummary, chosenAction, branchId, whyChosen, whyNotStop, whyNotPath, whyNotBridge, whyNotResearch, whyNotCritic, whyNotMaterialize, whyNotReplan, evidenceUsed, stopCriteriaEvaluation, expectedInformationGain, confidence. " +
-				"You are the orchestration decider for a graph-filling swarm. Your job is to choose the next method, not to do the research yourself. " +
-				"IMPORTANT: this runtime is for filling and improving the graph with useful chain/path structure, not for writing a courtroom-perfect proof. If the current chain is already good enough to persist and more tool use is unlikely to improve graph quality materially, choose path or stop accordingly. " +
-				"You must choose exactly one action from the supplied candidateActions where available=true. If none are available, choose stop and explain why. " +
-				"Use latestOutcome/recentOutcomes as the primary truth about what the previous attempts actually produced. Do not guess progress from prose if latestOutcome already tells you whether the last step materially improved graph quality, failed systemically, or produced a path-worthy bridge. " +
-				"Use the candidateActions plus investigationState/activeFrontier/latestOutcome to decide whether the next best move is research, bridge, path, critic, materialize, replan, or stop. " +
-				"Distinguish clearly between: opening the space (research), connecting known endpoints (bridge), verifying a concrete chain (path), adjudicating conflicting claims (critic), landing artifacts (materialize), changing strategy (replan), and stopping because the result is already good enough. " +
-				"If latestOutcome says systemError=true and retryable=true, treat that as a failed tool call rather than a knowledge gap. Retry only if the same move is still the best option and the retry budget is not exhausted. " +
-				"If latestOutcome says qualityDelta=none and the same gap remains, do not keep repeating the same action unless one reformulation/retry is still clearly justified. " +
-				"If you choose research after a bridge/path failure, explain specifically why another research turn is still likely to improve graph quality more than bridge/path/stop. " +
-				"If you do NOT choose stop, explain why the current evidence does not yet satisfy the stop criteria. If you do NOT choose path, explain why the current chain is not yet the right one to persist. " +
-				"stopCriteriaEvaluation is REQUIRED. It must be an array of objects {criterion, satisfied, why}. Evaluate at least: current_best_chain_is_useful_for_graph_fill, materially_different_routes_have_been_scanned_enough, remaining_gaps_are_non_blocking_or_low_value, next_tool_call_is_likely_to_improve_quality. " +
-				"evidenceUsed should cite the concrete state elements that drove the decision, such as latestOutcome summary/delta, latest bridge summary, path continuity status, latest critic goodEnoughAssessment, or branch assessments. " +
-				"chosenAction must be one of: research, bridge, path, critic, materialize, replan, stop.\n\nInput:\n" + inputJSON
+			return scoutWorkspacePromptPrefix() + "\n\nReturn JSON only with keys stateSummary, chosenAction, branchId, whyChosen, whyNotStop, whyNotPath, whyNotBridge, whyNotResearch, whyNotCritic, whyNotMaterialize, whyNotReplan, evidenceUsed, stopCriteriaEvaluation, expectedInformationGain, confidence.\n" +
+				"You are the decision-maker. Choose the single best next action from candidateActions (where available=true). If none available, choose stop.\n" +
+				"chosenAction must be one of: research, bridge, path, critic, materialize, replan, stop.\n\n" +
+				"HARD RULES — violating these wastes time and money:\n" +
+				"1. INFORMATION GAIN CHECK: Look at recentOutcomes. If the last 2+ actions had qualityDelta=none or the same gap persists, you MUST NOT repeat the same action on the same branch. Either try a fundamentally different approach (different branch, different action type, web search instead of internal) or stop.\n" +
+				"2. ZERO-HIT AWARENESS: If the latest research outcome says retrievalHitCount=0, repeating research with similar wording will produce the same nothing. Either reformulate radically, switch to bridge/path, or stop.\n" +
+				"3. STOP IS A VALID ANSWER: A partial honest result is better than an expensive loop. If you have some useful graph structure but further queries keep returning empty, stop and let the system report what it found.\n" +
+				"4. THINK LIKE A HUMAN: Explain in plain language why you chose this action and why the alternatives are worse right now.\n\n" +
+				"Use latestOutcome/recentOutcomes as ground truth about what previous steps actually produced.\n" +
+				"stopCriteriaEvaluation is REQUIRED: array of {criterion, satisfied, why}.\n" +
+				"evidenceUsed should cite concrete state elements that drove the decision.\n\nInput:\n" + inputJSON
 		case "scout.research":
-			return scoutWorkspacePromptPrefix() + "\n\nReturn JSON only with keys summary, evidencePoints, canonicalRefs, productRefs, geoRefs, actorRefs, recommendedPathProducts, openQuestions, confidence, proposedGraphOps, gapDiagnosis, recommendedAction. " +
-				"CRITICAL: produce DOMAIN THESES, not a paraphrase of the query. " +
-				"Honor the supplied professional role: reason like that investigator would, using the role to tighten what evidence matters and what gaps are unacceptable. " +
-				"Each thesis must be an explicit claim about the world that can be true/false and should be grounded by evidencePoints. " +
-				"summary must be a concise synthesis of strongest thesis, not the original user question. Treat entities, typed edges, and metadata as the primary objects of reasoning. " +
-				"proposedGraphOps is the PRIMARY output: each major thesis must map to at least one graph operation. " +
-				"Each op has: kind (create_fragment|create_edge|confirm_edge|mark_gap), subjectPath (canonical path), objectPath (for edge), edgeType (domain-appropriate relation), rationale (why this op follows from evidence). " +
-				"Boundary of research: use research only to gather or broaden substrate, enumerate route classes, or test factual claims. Research is for opening the space, not for stitching already-known endpoints together. If you already have endpoints or route fragments but cannot connect them, that is NOT a research gap; diagnose missing_middle or a more specific middle-layer gap and recommend bridge. If deterministic tracing now has enough scoped products/entities, diagnose missing_verification and recommend path. If the main issue is adjudicating competing claims, diagnose missing_adjudication and recommend critic. If one route is found but you still need to know whether materially different alternatives remain, diagnose missing_completeness and recommend research or critic accordingly. " +
-				"When the branch is broadScan=true, do not rush into one route. First enumerate materially different plausible routes or say explicitly that none remain. Those findings belong in summary/openQuestions even if they are not yet graph-landable. " +
-				"If evidence is weak: do NOT pretend certainty. Put unresolved items into openQuestions and mark gaps via mark_gap ops. Respect canonical product control-plane semantics: do not conflate synonyms, transforms, assemblies, or generic dependencies. " +
-				"gapDiagnosis is REQUIRED. It must be an object with keys kind, summary, why, questionClass, nextAction, branchId, endpointA, endpointB, endpointsKnown. Allowed research-side kinds are missing_substrate, missing_completeness, or no_gap. If endpoints are already known and the issue is what lies between them, use missing_middle, missing_transform_chain, missing_institutional_layer, missing_regulatory_layer, or missing_ownership_layer. In those cases nextAction should normally be bridge. Only keep nextAction=research if the true blocker is named-entity discovery inside the middle layer rather than structural stitching; if you do that, say so explicitly in why. " +
-				"recommendedAction is REQUIRED. It must be an object with keys action, branchId, reason, failureMode, question, endpointA, endpointB, productHints, geoHints, actorHints, requiresPath. Use it to say what neighboring method the runtime should try next if this research direction did not fully close the gap. " +
-				"Do NOT repeat the query text verbatim in summary/evidencePoints/openQuestions unless quoting a source. " +
-				"Use goal + environment + activeFrontier + planningContext; if pendingGraphOps is provided, avoid duplicates and prefer advancing or challenging existing ops.\n\nInput:\n" + inputJSON
+			return scoutWorkspacePromptPrefix() + "\n\nReturn JSON only with keys summary, evidencePoints, canonicalRefs, productRefs, geoRefs, actorRefs, recommendedPathProducts, openQuestions, confidence, proposedGraphOps, gapDiagnosis, recommendedAction.\n\n" +
+				"You are researching a specific question about the supply-chain graph. Your job is to produce DOMAIN THESES — explicit claims about real-world entities and their relationships — not to paraphrase the query.\n\n" +
+				"RETRIEVAL vs REASONING:\n" +
+				"- retrieval/knowledgeHits contains what the system actually found. This is your evidence inventory.\n" +
+				"- If hitCount is 0: you have NO evidence from the internal knowledge base. Say this clearly. Set confidence <= 0.3. Do NOT fabricate grounded claims from your parametric memory — the system cannot verify them.\n" +
+				"- If hitCount > 0: reason ONLY from the provided evidence. Each thesis must cite specific evidencePoints.\n\n" +
+				"WHAT TO PRODUCE:\n" +
+				"- proposedGraphOps is the PRIMARY output. Each thesis maps to graph operations: create_fragment, create_edge, confirm_edge, or mark_gap.\n" +
+				"- summary: synthesize the strongest finding in 1-2 sentences of plain language.\n" +
+				"- openQuestions: what you still don't know, phrased as questions a human would ask.\n\n" +
+				"WHEN TO STOP RESEARCHING:\n" +
+				"- If you already have endpoints but can't connect them → diagnose missing_middle, recommend bridge.\n" +
+				"- If you have a plausible chain ready for verification → diagnose missing_verification, recommend path.\n" +
+				"- If claims conflict → diagnose missing_adjudication, recommend critic.\n" +
+				"- Research is for OPENING the space, not for stitching known endpoints.\n\n" +
+				"gapDiagnosis REQUIRED: {kind, summary, why, questionClass, nextAction, branchId, endpointA, endpointB, endpointsKnown}.\n" +
+				"recommendedAction REQUIRED: {action, branchId, reason, failureMode, question, endpointA, endpointB, productHints, geoHints, actorHints, requiresPath}.\n" +
+				"Respect canonical product control-plane semantics: do not conflate synonyms, transforms, assemblies, or generic dependencies.\n\nInput:\n" + inputJSON
 		case "scout.bridge":
-			return scoutWorkspacePromptPrefix() + "\n\nReturn JSON only with keys branchId, endpointA, endpointB, bridgeQuestion, summary, bridgeExists, bridgeKind, missingMiddleTypes, intermediateNodes, intermediateRelationTypes, bridgeSteps, routeSketches, openQuestions, confidence, proposedGraphOps, suggestedSubscans, gapDiagnosis, recommendedAction. " +
-				"This is a missing-middle task: you already have plausible endpoints or route fragments, but the runtime cannot connect them. Answer the human question 'what is between them?' in graph-native form. " +
-				"Bridge is the universal contract for structural connection questions: what is between A and B, how A transforms into B, which institutional/distributor/ownership/regulatory layer sits between the endpoints, and whether a viable bridge exists at all. " +
-				"bridgeExists should be true only if a plausible real-world bridge likely exists. bridgeKind should describe the route class such as refining, trader bridge, logistics corridor, port chain, toll conversion, distributor, customs route, or contract chain. " +
-				"missingMiddleTypes should name the types of intermediate layers required. intermediateNodes should list concrete or canonical intermediate nodes when known. intermediateRelationTypes should name the typed links that would connect the route. routeSketches should summarize materially different bridge variants. " +
-				"bridgeSteps is REQUIRED when bridgeExists=true or when you can articulate the route. It is the systematic write-out of the answer. Each bridgeSteps item should describe one row in the implied chain with: index, stepClass, nodeRef, nodeLabel, nodeKind, fromRef, toRef, relationType, productRef, actorRef, geoRef, whyNeeded, evidenceHints, operationalStatus. Use it even if some refs are still unknown. " +
-				"Think like a human analyst writing the missing middle into a table: A -> A1 -> A2 -> B, with typed links and notes about what each step does. proposedGraphOps must turn the bridge hypothesis into graph-native candidate artifacts using canonical paths where possible. If proposedGraphOps is incomplete, bridgeSteps must still be detailed enough for the runtime to derive artifacts. If the current route is not viable, say so explicitly and use suggestedSubscans to point the runtime toward a better continuation. " +
-				"Boundary of bridge: use bridge when the endpoints or route fragments are already plausible but the missing middle is unknown. Do NOT use bridge to do a broad scan of the whole space. If the route is not viable, diagnose the failure explicitly and recommend targeted research or a pivot branch. If the bridge is now concrete enough for deterministic verification, diagnose missing_verification and recommend path. If bridge findings only need validation against competing claims, diagnose missing_adjudication and recommend critic. " +
-				"Each suggestedSubscans item must follow the normal branch shape: id, question, role, productHints, geoHints, actorHints, requiresPath, dependsOn, broadScan, testCriteria, expectedInfoGain. " +
-				"gapDiagnosis is REQUIRED. It must be an object with keys kind, summary, why, questionClass, nextAction, branchId, endpointA, endpointB, endpointsKnown. Bridge-side kinds should usually be missing_middle, missing_transform_chain, missing_institutional_layer, missing_regulatory_layer, missing_ownership_layer, missing_verification, or no_gap. If bridge still cannot name the middle entities but has clarified the route class, keep kind in the missing-middle family and set nextAction=research only when the next task is entity discovery inside that middle layer; explain that explicitly in why. " +
-				"recommendedAction is REQUIRED. It must be an object with keys action, branchId, reason, failureMode, question, endpointA, endpointB, productHints, geoHints, actorHints, requiresPath. This is where you tell the runtime which neighboring method should run next after the bridge analysis. " +
-				"Do not collapse synonyms into transforms or transforms into generic dependencies. Respect canonical product control-plane semantics.\n\nInput:\n" + inputJSON
+			return scoutWorkspacePromptPrefix() + "\n\nReturn JSON only with keys branchId, endpointA, endpointB, bridgeQuestion, summary, bridgeExists, bridgeKind, missingMiddleTypes, intermediateNodes, intermediateRelationTypes, bridgeSteps, routeSketches, openQuestions, confidence, proposedGraphOps, suggestedSubscans, gapDiagnosis, recommendedAction.\n\n" +
+				"This is a MISSING-MIDDLE task. You have plausible endpoints but the runtime cannot connect them. Your job: figure out what sits between A and B.\n\n" +
+				"Think like a human analyst filling in a table: A → A1 → A2 → B. Name concrete entities (companies, ports, facilities, products) at each step. If you don't know the exact entity, say what TYPE of entity belongs there.\n\n" +
+				"EVIDENCE RULES:\n" +
+				"- retrieval packets are your evidence. If retrieval is empty, your bridge claims are HYPOTHESES, not facts. Mark them as such and list explicit open questions.\n" +
+				"- bridgeExists=true ONLY if a plausible real-world connection likely exists.\n\n" +
+				"bridgeSteps REQUIRED when you can articulate any part of the route. Each step: index, stepClass, nodeRef, nodeLabel, nodeKind, fromRef, toRef, relationType, productRef, actorRef, geoRef, whyNeeded, evidenceHints, operationalStatus.\n" +
+				"proposedGraphOps must turn the bridge into graph operations.\n" +
+				"suggestedSubscans: follow-up questions as natural-language branch definitions.\n\n" +
+				"WHEN TO HAND OFF:\n" +
+				"- Bridge is concrete enough to verify → recommend path.\n" +
+				"- Claims conflict → recommend critic.\n" +
+				"- Route not viable → say so explicitly, recommend research on a different angle.\n\n" +
+				"gapDiagnosis REQUIRED: {kind, summary, why, questionClass, nextAction, branchId, endpointA, endpointB, endpointsKnown}.\n" +
+				"recommendedAction REQUIRED: {action, branchId, reason, failureMode, question, endpointA, endpointB, productHints, geoHints, actorHints, requiresPath}.\n" +
+				"Respect canonical product control-plane semantics.\n\nInput:\n" + inputJSON
 		case "scout.critic":
-			return scoutWorkspacePromptPrefix() + "\n\nReturn JSON only with keys acceptedFindings, riskyClaims, openQuestions, materializePath, pathProducts, focusActors, focusGeos, confidence, withholdPath, withholdMaterialization, forceReplan, killBranchIds, newBranches (same shape as plan branches), reprioritizeBranchIds (ordered highest-first), riskTargetBranchIds, graphOpVerdicts, branchAssessments, completenessAssessment, gapDiagnosis, recommendedAction. " +
-				"Act as a thesis validator, not a stylistic reviewer. acceptedFindings should contain only grounded theses. riskyClaims should contain explicit contradictory/weak theses. " +
-				"Do NOT rubber-stamp query restatements as accepted findings. " +
-				"Boundary of critic: critic decides whether the current graph-native findings are safe, premature, contradictory, or incomplete, and must name the next best method when the current one did not close the task. Do not do fresh broad research inside critic; instead route the runtime toward research, bridge, path, materialize, replan, or stop. Critic should distinguish between missing_verification, missing_adjudication, missing_completeness, and missing_middle rather than collapsing everything into 'needs more research'. " +
-				"This runtime is a graph-filling swarm, not a courtroom brief. Good enough matters. If the chain is already sufficiently useful for graph/path purposes, say so explicitly instead of polishing forever. " +
-				"goodEnoughAssessment is REQUIRED. It must contain status, closureLevel, stopNow, persistWorkingPath, furtherWorkLowValue, reason, openNonBlockingGaps, targetBranchIds. Use it to answer: is the current result already good enough for this runtime's graph-filling purpose, should the system persist a working path now, and are the remaining gaps too low-value to justify more turns? " +
-				"Set persistWorkingPath=true when the route or branch is already structurally useful enough that a deterministic path attempt should fix the current best chain in graph artifacts, even if some commercial details remain open. " +
-				"Set stopNow=true only when the current result is already useful enough for this mission and the remaining gaps are non-blocking or low-value for this runtime tier. If the tools have stopped meaningfully improving quality, say that in furtherWorkLowValue/reason. " +
-				"graphOpVerdicts is REQUIRED when pendingGraphOps is provided: for each pending op index return {opIndex, verdict (accepted_local|accepted_target|rejected|needs_research|needs_target_binding), reason}. " +
-				"Use accepted_local when a graph fact is locally strong and worth fixing even though the end-to-end target path is unresolved. Use accepted_target when the op is good and sufficiently bound to the user objective. Use needs_target_binding when the local fact is plausible but still lacks target linkage. Rejected is for contradicted/unverifiable claims. needs_research is for missing substrate. " +
-				"branchAssessments is strongly preferred when branches are present: each item should contain branchId, targetRelevance (0..1), pursuitDecision (press|pivot|park|drop), pursuitReason, routeHypothesis, alternativeRoute, suggestedBranchIds. Use press when this branch is still a strong route to the objective, pivot when local facts are useful but the route should shift, park when the branch is locally valid but currently low-value to the objective, and drop when the branch is both weak and low-value. " +
-				"completenessAssessment should contain status (pending|in_progress|needs_follow_on|satisfied), reason, alternativeRoutes, missingAngles, broadScanCompleted, noMaterialAlternatives. Use it to answer whether the investigation has already scanned for major alternative routes or should keep going. " +
-				"gapDiagnosis is REQUIRED. It must be an object with keys kind, summary, why, questionClass, nextAction, branchId, endpointA, endpointB, endpointsKnown. Critic-side kinds should usually be missing_adjudication, missing_verification, missing_completeness, missing_middle, or no_gap. If critic diagnoses a missing-middle kind and endpoints are already known, nextAction should usually be bridge. Use nextAction=research only if the best next move is explicit entity discovery within the already-known middle layer, and explain that in why. " +
-				"recommendedAction is REQUIRED. It must be an object with keys action, branchId, reason, failureMode, question, endpointA, endpointB, productHints, geoHints, actorHints, requiresPath. Use it to state the next best runtime move after validation. " +
-				"If riskyClaims non-empty and targets are clear, include riskTargetBranchIds; if unclear, leave targets empty and set withholdMaterialization=true. Critique graph-native claims and operations, not prose quality.\n\nInput:\n" + inputJSON
+			return scoutWorkspacePromptPrefix() + "\n\nReturn JSON only with keys acceptedFindings, riskyClaims, openQuestions, materializePath, pathProducts, focusActors, focusGeos, confidence, withholdPath, withholdMaterialization, forceReplan, killBranchIds, newBranches, reprioritizeBranchIds, riskTargetBranchIds, graphOpVerdicts, branchAssessments, completenessAssessment, gapDiagnosis, recommendedAction.\n\n" +
+				"You are a thesis validator, not a prose reviewer. Your job: is the evidence strong enough to act on?\n\n" +
+				"CRITICAL RULES:\n" +
+				"1. Only accept findings that are grounded in actual evidence (from retrieval hits, not from parametric memory).\n" +
+				"2. Do NOT rubber-stamp query restatements as accepted findings.\n" +
+				"3. 'Good enough for the graph' IS the quality bar. If the chain is structurally useful, say so and recommend landing it. Do not endlessly polish.\n" +
+				"4. If the investigation has been looping (same gaps, same actions, no new evidence), set stopNow=true and explain that further work is low-value.\n\n" +
+				"goodEnoughAssessment REQUIRED: {status, closureLevel, stopNow, persistWorkingPath, furtherWorkLowValue, reason, openNonBlockingGaps, targetBranchIds}.\n" +
+				"- persistWorkingPath=true when the chain is useful enough to persist, even with open details.\n" +
+				"- stopNow=true when remaining gaps are non-blocking or further queries keep returning empty.\n" +
+				"- furtherWorkLowValue=true when tools have stopped meaningfully improving quality.\n\n" +
+				"graphOpVerdicts REQUIRED when pendingGraphOps present: {opIndex, verdict, reason}.\n" +
+				"branchAssessments preferred: {branchId, targetRelevance, pursuitDecision (press|pivot|park|drop), pursuitReason, routeHypothesis}.\n" +
+				"completenessAssessment: {status, reason, alternativeRoutes, broadScanCompleted, noMaterialAlternatives}.\n" +
+				"gapDiagnosis REQUIRED: {kind, summary, why, questionClass, nextAction, branchId, endpointA, endpointB, endpointsKnown}.\n" +
+				"recommendedAction REQUIRED: {action, branchId, reason, failureMode, question, endpointA, endpointB, productHints, geoHints, actorHints, requiresPath}.\n\nInput:\n" + inputJSON
 		case "scout.materialize":
-			return scoutWorkspacePromptPrefix() + "\n\nReturn JSON only with keys summary, skipped, downgraded, rejected, landedBranchIds (branch ids whose hypotheses were actually landed in this step), rejectedBranchIds (branches explicitly not landed), corrections. Keep landedBranchIds narrow: include only branches that this materialize step clearly landed (typically from path/source scope), not all supported branches. corrections is an array of objects: action (replace_existing | deprecate_existing | contradict_existing), artifactId, rationale, newPathStatus (optional), patchLabels (optional object of string values). Only reference artifactIds that appear in the path/materializePreview input. Do not invent artifact ids. Treat landing as a graph artifact decision, not a writing exercise. It is valid to preserve locally good graph substrate while withholding target-level conclusions.\n\nInput:\n" + inputJSON
+			return scoutWorkspacePromptPrefix() + "\n\nReturn JSON only with keys summary, skipped, downgraded, rejected, landedBranchIds (branch ids whose hypotheses were actually landed in this step), rejectedBranchIds (branches explicitly not landed), corrections. Keep landedBranchIds narrow: include only branches that this materialize step clearly landed (typically from path/source scope), not all supported branches. corrections is an array of objects: action (replace_existing | deprecate_existing | contradict_existing), artifactId, rationale, newPathStatus (optional), patchLabels (optional object of string values). Only reference artifactIds that appear in the path/materializePreview input. Do not invent artifact ids. Treat landing as a graph artifact decision, not a writing exercise. It is valid to preserve locally good graph substrate while withholding target-level conclusions. When sessionState is present, use it as the authoritative branch/hypothesis lifecycle snapshot.\n\nInput:\n" + inputJSON
 		case "scout.aggregate":
 			return scoutWorkspacePromptPrefix() + "\n\nReturn JSON only with keys summary, findings, openQuestions, artifactIds, candidateProducts, recommendedNextStep. Use compact activeFrontier and researchDeltas to produce operator-level synthesis about graph state, path coverage, and unresolved gaps; avoid replaying full transcripts.\n\nInput:\n" + inputJSON
 		case "scout.review":
@@ -336,7 +435,19 @@ func buildPrompt(task *contracts.MeshTask, review bool, inputJSON string) string
 }
 
 func scoutWorkspacePromptPrefix() string {
-	return "You are operating inside the Horizon graph workspace, not a file/code workspace. The environment is a graph of canonical entities, typed relations, metadata-bearing fragments, candidate gaps, and materialized supply-chain artifacts. Treat canonical paths as stable identities. Use the provided goal, environment, role, and completeness objects as the first-class mission and workspace contract. If the role object is absent or weak, determine the strongest professional lens yourself from the task. Produce graph-native reasoning and decisions: what entities/relations are supported, what graph operations should happen next, what paths can be verified, what broad-scan alternatives exist, and what gaps must remain unresolved."
+	return `You are a supply-chain intelligence analyst operating a knowledge graph.
+
+Your workspace is not files or code — it is a live graph of companies, products, trade routes, facilities, ports, regulatory bodies, and the typed relationships between them (PRODUCES, TRANSFORMS_INTO, SUPPLY_LINK, ASSEMBLES_INTO, DEPENDS_ON, etc.). You can read what is already in the graph, propose new nodes and edges, search for evidence, and verify or reject hypotheses about how real-world supply chains connect.
+
+How you think and communicate:
+- Reason in plain language as a domain expert would. When you mention a product, say "lithium carbonate" not "/product/component/chemical/refining/lithium-carbonate". Canonical paths are internal identifiers — never use them in search queries, questions, or reasoning text.
+- When you search for information, write queries the way a human analyst would type into Google: "Who are the main lithium carbonate exporters in Chile?", "What is the shipping route from Antofagasta to Rotterdam?", "Does AMG Lithium operate a conversion plant in Germany?"
+- When the internal knowledge base returns nothing useful, say so honestly. Do not fabricate evidence or pretend confidence you do not have. Zero hits means you lack data, not that the data is negative.
+- When you have exhausted a line of inquiry (2+ attempts with no new information), stop that line and either try a different angle or declare the gap honestly.
+
+Your job is to build and improve the graph — add useful structure (nodes, edges, paths) that reflect real supply-chain relationships. You are not writing a report or a legal brief. "Good enough for the graph" is the quality bar: a structurally useful chain is better than an endlessly polished hypothesis.
+
+Use the provided goal, environment, role, and completeness objects as your mission contract. If the role object is absent, determine the strongest professional lens from the task itself.`
 }
 
 func contractsToActionVocabulary() []string {

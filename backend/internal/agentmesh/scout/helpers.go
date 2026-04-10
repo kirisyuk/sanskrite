@@ -289,6 +289,36 @@ type knowledgeBaseSearcher interface {
 	Search(ctx context.Context, tenantID, query string, pageSize int) ([]map[string]any, error)
 }
 
+// humanizeSearchQuery strips canonical paths and system-internal syntax from a
+// query so that it reads like a question a human analyst would type into Google.
+func humanizeSearchQuery(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	// Replace canonical path fragments (e.g. /product/component/chemical/refining/lithium-carbonate)
+	// with the human-readable tail token.
+	parts := strings.Fields(raw)
+	var out []string
+	for _, part := range parts {
+		if strings.HasPrefix(part, "/") && strings.Count(part, "/") >= 2 {
+			segments := strings.Split(strings.Trim(part, "/"), "/")
+			tail := segments[len(segments)-1]
+			tail = strings.ReplaceAll(tail, "-", " ")
+			tail = strings.ReplaceAll(tail, "_", " ")
+			out = append(out, tail)
+		} else {
+			out = append(out, part)
+		}
+	}
+	result := strings.Join(out, " ")
+	result = strings.TrimSpace(result)
+	if result == "" {
+		return raw
+	}
+	return result
+}
+
 func summarizeTraceDigest(path map[string]any) string {
 	product, _ := path["productRef"].(string)
 	suppliers := stringSliceValue(path["suppliers"])

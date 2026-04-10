@@ -307,6 +307,14 @@ type InvestigationState struct {
 	SessionRef string `json:"sessionRef,omitempty"`
 	// CurrentBottleneck is a single dominant blocker for the next decision turn.
 	CurrentBottleneck string `json:"currentBottleneck,omitempty"`
+	// ConsecutiveZeroGainTurns counts sequential turns where qualityDelta=none.
+	ConsecutiveZeroGainTurns int `json:"consecutiveZeroGainTurns,omitempty"`
+	// ConsecutiveZeroHitTurns counts sequential retrieval turns with hitCount=0.
+	ConsecutiveZeroHitTurns int `json:"consecutiveZeroHitTurns,omitempty"`
+	// TotalRetrievalHits accumulates total KB hits across all research/bridge turns.
+	TotalRetrievalHits int `json:"totalRetrievalHits,omitempty"`
+	// WebSearchUsed indicates whether external (Google Search) grounding was triggered.
+	WebSearchUsed bool `json:"webSearchUsed,omitempty"`
 	// LastCompactedTurn tracks when active-state compaction was last applied.
 	LastCompactedTurn int `json:"lastCompactedTurn,omitempty"`
 	// PendingGraphOps accumulates all proposed graph operations across turns.
@@ -475,6 +483,7 @@ type ActionOutcome struct {
 	GapDiagnosis         GapDiagnosis         `json:"gapDiagnosis,omitempty"`
 	RecommendedAction    ActionRecommendation `json:"recommendedAction,omitempty"`
 	GoodEnoughAssessment GoodEnoughAssessment `json:"goodEnoughAssessment,omitempty"`
+	RetrievalHitCount    int                  `json:"retrievalHitCount,omitempty"`
 }
 
 type StopCriterionEvaluation struct {

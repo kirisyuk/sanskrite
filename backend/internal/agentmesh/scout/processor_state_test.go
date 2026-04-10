@@ -1593,6 +1593,26 @@ func TestProcessBridgeSynthesizesArtifactsFromBridgeSteps(t *testing.T) {
 			"request": map[string]any{"tenantId": "global", "query": "Trace lithium route"},
 			"branch":  map[string]any{"id": "b1", "question": "What sits between SQM and BASF?", "role": "Supply Chain Graph Architect"},
 			"plan":    map[string]any{},
+			"sessionState": map[string]any{
+				"request": map[string]any{"query": "Trace lithium route"},
+				"goal":    map[string]any{"primaryQuestion": "Trace lithium route"},
+				"plan": map[string]any{
+					"goal":              "Trace lithium route",
+					"maxResearchRounds": float64(2),
+					"branches": []any{
+						map[string]any{"id": "b1", "question": "What sits between SQM and BASF?"},
+					},
+				},
+				"branches": map[string]any{
+					"b1": map[string]any{
+						"branch": map[string]any{"id": "b1", "question": "What sits between SQM and BASF?"},
+						"status": "active",
+					},
+				},
+				"hypotheses": map[string]any{
+					"b1": map[string]any{"id": "hypothesis:b1", "branchId": "b1", "status": "unknown"},
+				},
+			},
 			"bridgeContext": map[string]any{
 				"bridgeQuestion": "What sits between SQM and BASF?",
 				"endpointA":      "/org/cl/sqm",

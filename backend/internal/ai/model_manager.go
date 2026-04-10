@@ -842,8 +842,19 @@ func (mm *AIModelManager) SelectModel(requirements AIRequirements, inputTokens i
 		capableModels = append(capableModels, modelCandidate{name: name, model: m})
 	}
 
-	// Отдаём приоритет более дешёвым моделям
+	// Fallback safety: after at least one failed attempt (excludeModels non-empty),
+	// keep capability floor priority and only then optimize by price.
+	capabilityFirst := len(excludeModels) > 0
 	sort.Slice(capableModels, func(i, j int) bool {
+		if capabilityFirst {
+			if capableModels[i].model.CapabilityScore == capableModels[j].model.CapabilityScore {
+				if capableModels[i].model.PricePerOutputToken == capableModels[j].model.PricePerOutputToken {
+					return capableModels[i].name < capableModels[j].name
+				}
+				return capableModels[i].model.PricePerOutputToken < capableModels[j].model.PricePerOutputToken
+			}
+			return capableModels[i].model.CapabilityScore > capableModels[j].model.CapabilityScore
+		}
 		if capableModels[i].model.PricePerOutputToken == capableModels[j].model.PricePerOutputToken {
 			if capableModels[i].model.CapabilityScore == capableModels[j].model.CapabilityScore {
 				return capableModels[i].name < capableModels[j].name
@@ -972,7 +983,17 @@ func (mm *AIModelManager) SelectModelForProviders(requirements AIRequirements, i
 	if len(capableModels) == 0 {
 		return ""
 	}
+	capabilityFirstForProviders := len(excludeModels) > 0
 	sort.Slice(capableModels, func(i, j int) bool {
+		if capabilityFirstForProviders {
+			if capableModels[i].model.CapabilityScore == capableModels[j].model.CapabilityScore {
+				if capableModels[i].model.PricePerOutputToken == capableModels[j].model.PricePerOutputToken {
+					return capableModels[i].name < capableModels[j].name
+				}
+				return capableModels[i].model.PricePerOutputToken < capableModels[j].model.PricePerOutputToken
+			}
+			return capableModels[i].model.CapabilityScore > capableModels[j].model.CapabilityScore
+		}
 		if capableModels[i].model.PricePerOutputToken == capableModels[j].model.PricePerOutputToken {
 			if capableModels[i].model.CapabilityScore == capableModels[j].model.CapabilityScore {
 				return capableModels[i].name < capableModels[j].name

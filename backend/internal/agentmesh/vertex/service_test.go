@@ -23,9 +23,9 @@ func TestModelNameForCapabilityRoutesScoutReasoningTasks(t *testing.T) {
 	}{
 		{capability: "scout.plan", want: "gemini-3-flash-preview"},
 		{capability: "scout.decide", want: "gemini-3-flash-preview"},
-		{capability: "scout.bridge", want: "gemini-3-flash-preview"},
+		{capability: "scout.bridge", want: "vertex-gemini-3-flash-preview"},
 		{capability: "scout.critic", want: "gemini-3-flash-preview"},
-		{capability: "scout.research", want: "gemini-3.1-flash-lite-preview"},
+		{capability: "scout.research", want: "vertex-gemini-3-flash-preview"},
 		{capability: "scout.aggregate", want: "gemini-3.1-flash-lite-preview"},
 		{capability: "scout.review", want: "gemini-3.1-pro-preview"},
 		{capability: "scout.review", review: true, want: "gemini-3.1-pro-preview"},
@@ -64,10 +64,13 @@ func TestCapabilityGroundingUsesSearchOnlyWhereUseful(t *testing.T) {
 
 func TestScoutDecidePromptUsesLatestOutcomeAsPrimaryTruth(t *testing.T) {
 	prompt := buildPrompt(&contracts.MeshTask{Capability: "scout.decide"}, false, "{}")
-	if !strings.Contains(prompt, "latestOutcome/recentOutcomes as the primary truth") {
+	if !strings.Contains(prompt, "latestOutcome/recentOutcomes") {
 		t.Fatalf("expected decide prompt to mention latestOutcome/recentOutcomes, got %q", prompt)
 	}
-	if !strings.Contains(prompt, "systemError=true") {
-		t.Fatalf("expected decide prompt to mention retryable system errors, got %q", prompt)
+	if !strings.Contains(prompt, "INFORMATION GAIN CHECK") {
+		t.Fatalf("expected decide prompt to mention information gain check, got %q", prompt)
+	}
+	if !strings.Contains(prompt, "ZERO-HIT AWARENESS") {
+		t.Fatalf("expected decide prompt to mention zero-hit awareness, got %q", prompt)
 	}
 }

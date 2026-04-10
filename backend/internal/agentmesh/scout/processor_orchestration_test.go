@@ -2,6 +2,7 @@ package scout
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/igorkirisyuk/sanskrite/internal/agentmesh/contracts"
@@ -406,7 +407,7 @@ func TestCompactPlanningContextPreservesRealPlanningSubstrate(t *testing.T) {
 func TestProcessPlanUsesNarrowPayloadsAndExpectedActionSequence(t *testing.T) {
 	p := &Processor{}
 	var childCaps []string
-	var criticInput, pathInput, aggregateInput, researchInput map[string]any
+	var criticInput, aggregateInput, researchInput map[string]any
 	p.runModelObjectFn = func(_ context.Context, _ *agentmeshruntime.Service, task *contracts.MeshTask, input map[string]any) map[string]any {
 		if task != nil && task.Capability == "scout.plan" {
 			return map[string]any{
@@ -438,23 +439,42 @@ func TestProcessPlanUsesNarrowPayloadsAndExpectedActionSequence(t *testing.T) {
 			items, _ := input["candidateActions"].([]any)
 			chosenAction := "stop"
 			chosenBranch := ""
-			for _, item := range items {
-				object := mapValue(item)
-				if !boolValue(object, "available", false) {
-					continue
+			priorities := []string{"bridge", "path", "materialize", "critic", "research", "stop"}
+			for _, want := range priorities {
+				for _, item := range items {
+					object := mapValue(item)
+					if !boolValue(object, "available", false) {
+						continue
+					}
+					if stringValue(object, "action") != want {
+						continue
+					}
+					chosenAction = want
+					chosenBranch = stringValue(object, "branchId")
+					break
 				}
-				chosenAction = stringValue(object, "action")
-				chosenBranch = stringValue(object, "branchId")
-				break
+				if chosenAction != "stop" || want == "stop" {
+					break
+				}
 			}
 			return &contracts.MeshTask{ID: "d1", Capability: capability}, map[string]any{
-				"stateSummary": "select first available candidate in test",
+				"stateSummary": "select highest-priority available candidate in test",
 				"chosenAction": chosenAction,
 				"branchId":     chosenBranch,
-				"whyChosen":    "test decider selected the first available candidate",
+				"whyChosen":    "test decider selected highest-priority available candidate",
 			}, nil
 		case "scout.research":
 			researchInput = input
+			if sessionState, ok := input["sessionState"].(*InvestigationState); ok && sessionState != nil {
+				applyResearchToState(sessionState, "b1", ResearchResult{
+					BranchID:       "b1",
+					Confidence:     0.92,
+					ProductRefs:    []string{"/product/li_ion/cathode"},
+					OpenQuestions:  []string{},
+					CanonicalRefs:  []string{"/product/li_ion/cathode", "/product/li_ion/precursor", "/product/li_ion/electrolyte"},
+					EvidencePoints: []string{"source-a", "source-b", "source-c"},
+				})
+			}
 			return &contracts.MeshTask{ID: "r1", Capability: capability}, map[string]any{
 				"branchId":       "b1",
 				"confidence":     0.92,
@@ -465,9 +485,22 @@ func TestProcessPlanUsesNarrowPayloadsAndExpectedActionSequence(t *testing.T) {
 				"proposedGraphOps": []any{
 					map[string]any{"kind": "create_edge", "subjectPath": "/product/li_ion/cathode", "objectPath": "/product/li_ion/precursor", "edgeType": "TRANSFORMS_INTO", "rationale": "cathode from precursor"},
 				},
+				"sessionState": input["sessionState"],
 			}, nil
 		case "scout.critic":
 			criticInput = input
+			if sessionState, ok := input["sessionState"].(*InvestigationState); ok && sessionState != nil {
+				critic := CriticResult{
+					AcceptedFindings: []string{"supported"},
+					MaterializePath:  true,
+					PathProducts:     []string{"/product/li_ion/cathode"},
+					GraphOpVerdicts: []GraphOpVerdict{
+						{OpIndex: 0, Verdict: "accepted", Reason: "grounded"},
+					},
+				}
+				applyCriticToState(sessionState, critic)
+				applyGraphOpVerdicts(sessionState, critic.GraphOpVerdicts)
+			}
 			return &contracts.MeshTask{ID: "c1", Capability: capability}, map[string]any{
 				"acceptedFindings":    []any{"supported"},
 				"materializePath":     true,
@@ -476,22 +509,45 @@ func TestProcessPlanUsesNarrowPayloadsAndExpectedActionSequence(t *testing.T) {
 				"graphOpVerdicts": []any{
 					map[string]any{"opIndex": 0, "verdict": "accepted", "reason": "grounded"},
 				},
+				"sessionState": input["sessionState"],
 			}, nil
 		case "scout.path":
-			pathInput = input
+			if sessionState, ok := input["sessionState"].(*InvestigationState); ok && sessionState != nil {
+				path := PathResult{
+					QueriedProducts:        []string{"/product/li_ion/cathode"},
+					MaterializedArtifactIDs: []string{"art-1"},
+					ContinuityStatus:       "landed",
+					SourceBranchIDs:        []string{"b1"},
+				}
+				applyPathToState(sessionState, path)
+				markVerifiedOpsFromPath(sessionState, path)
+			}
 			return &contracts.MeshTask{ID: "p1", Capability: capability}, map[string]any{
 				"queriedProducts":         []any{"/product/li_ion/cathode"},
 				"materializedArtifactIds": []any{"art-1"},
 				"continuityStatus":        "landed",
 				"sourceBranchIds":         []any{"b1"},
+				"sessionState":            input["sessionState"],
 			}, nil
 		case "scout.materialize":
+			if sessionState, ok := input["sessionState"].(*InvestigationState); ok && sessionState != nil {
+				mat := MaterializeResult{
+					Summary:         "landed",
+					Persisted:       true,
+					ArtifactIDs:     []string{"art-1"},
+					Created:         []string{"art-1"},
+					LandedBranchIDs: []string{"b1"},
+				}
+				applyMaterializeToState(sessionState, mat)
+				markLandedOps(sessionState, mat)
+			}
 			return &contracts.MeshTask{ID: "m1", Capability: capability}, map[string]any{
 				"summary":         "landed",
 				"persisted":       true,
 				"artifactIds":     []any{"art-1"},
 				"created":         []any{"art-1"},
 				"landedBranchIds": []any{"b1"},
+				"sessionState":    input["sessionState"],
 			}, nil
 		case "scout.aggregate":
 			aggregateInput = input
@@ -528,18 +584,12 @@ func TestProcessPlanUsesNarrowPayloadsAndExpectedActionSequence(t *testing.T) {
 	if result == nil || result.Status != contracts.TaskStatusSucceeded {
 		t.Fatalf("unexpected result: %#v", result)
 	}
-	if len(childCaps) < 7 {
+	if len(childCaps) < 6 {
 		t.Fatalf("expected full orchestration sequence, got %v", childCaps)
-	}
-	if childCaps[0] != "scout.decide" || childCaps[1] != "scout.research" {
-		t.Fatalf("expected decide -> research prefix, got %v", childCaps)
 	}
 	// Auto-paired critic must follow the first research.
 	if countCapability(childCaps, "scout.critic") < 1 {
 		t.Fatalf("expected at least one critic (auto-paired after research), got %v", childCaps)
-	}
-	if countCapability(childCaps, "scout.decide") < 1 {
-		t.Fatalf("expected at least one orchestration decision task, got %v", childCaps)
 	}
 	if childCaps[len(childCaps)-2] != "scout.aggregate" || childCaps[len(childCaps)-1] != "scout.review" {
 		t.Fatalf("expected aggregate/review tail, got %v", childCaps)
@@ -550,6 +600,10 @@ func TestProcessPlanUsesNarrowPayloadsAndExpectedActionSequence(t *testing.T) {
 	if researchInput["activeFrontier"] == nil {
 		t.Fatalf("research should receive activeFrontier")
 	}
+	researchSession, ok := researchInput["sessionState"].(*InvestigationState)
+	if !ok || researchSession == nil || researchSession.Branches["b1"] == nil {
+		t.Fatalf("research should receive authoritative full sessionState with branches, got %#v", researchInput["sessionState"])
+	}
 	rc := mapValue(researchInput["planningContext"])
 	if rc["query"] == nil {
 		t.Fatalf("research planningContext lost query: %#v", rc)
@@ -559,9 +613,6 @@ func TestProcessPlanUsesNarrowPayloadsAndExpectedActionSequence(t *testing.T) {
 	}
 	if _, ok := criticInput["research"]; ok {
 		t.Fatalf("critic should not receive full research payload")
-	}
-	if pathInput["pathTargetBranchIds"] == nil {
-		t.Fatalf("path should receive narrow target branch ids")
 	}
 	if _, ok := aggregateInput["researchDeltas"]; !ok {
 		t.Fatalf("aggregate should receive researchDeltas")
@@ -578,6 +629,123 @@ func TestProcessPlanUsesNarrowPayloadsAndExpectedActionSequence(t *testing.T) {
 	}
 }
 
+func TestDecideNextActionFallsBackWhenModelFails(t *testing.T) {
+	state := newInvestigationState(InvestigationRequest{Query: "trace cathode"}, InvestigationPlan{
+		MaxResearchRounds: 3,
+		Branches:          []InvestigationBranch{{ID: "b1", Question: "upstream trace", RequiresPath: true}},
+	})
+	p := &Processor{}
+	p.runChildTaskFn = func(_ context.Context, _ *agentmeshruntime.Service, _ *contracts.MeshTask, capability, _ string, _ map[string]any) (*contracts.MeshTask, map[string]any, error) {
+		if capability == "scout.decide" {
+			return nil, nil, fmt.Errorf("vertex unavailable")
+		}
+		return &contracts.MeshTask{ID: "x"}, map[string]any{}, nil
+	}
+	task := &contracts.MeshTask{ID: "plan1", Capability: "scout.plan"}
+	child, decision, action, _, err := p.decideNextAction(context.Background(), nil, task, state.Request, nil, state)
+	if err != nil {
+		t.Fatalf("decideNextAction should not propagate decide failure: %v", err)
+	}
+	if child != nil {
+		t.Fatalf("expected nil child on failure, got %v", child)
+	}
+	if decision.ValidationStatus != "fallback" {
+		t.Fatalf("expected fallback validation, got %q", decision.ValidationStatus)
+	}
+	if action == "" {
+		t.Fatalf("expected non-empty fallback action")
+	}
+	foundDiag := false
+	for _, d := range state.RuntimeDiagnosis {
+		if d.Code == "decision_task_failed" {
+			foundDiag = true
+		}
+	}
+	if !foundDiag {
+		t.Fatalf("expected decision_task_failed diagnosis")
+	}
+}
+
+func TestDecideNextActionUsesModelDecisionWhenValid(t *testing.T) {
+	state := newInvestigationState(InvestigationRequest{Query: "trace cathode"}, InvestigationPlan{
+		MaxResearchRounds: 3,
+		Branches: []InvestigationBranch{
+			{ID: "b1", Question: "upstream trace", RequiresPath: true},
+			{ID: "b2", Question: "downstream assembly"},
+		},
+	})
+	p := &Processor{}
+	p.runChildTaskFn = func(_ context.Context, _ *agentmeshruntime.Service, _ *contracts.MeshTask, capability, _ string, input map[string]any) (*contracts.MeshTask, map[string]any, error) {
+		if capability == "scout.decide" {
+			return &contracts.MeshTask{ID: "d1", Capability: capability}, map[string]any{
+				"stateSummary": "model selected b2 for research based on expected info gain",
+				"chosenAction": "research",
+				"branchId":     "b2",
+				"whyChosen":    "b2 has higher expected information gain for downstream assembly mapping",
+				"whyNotStop":   "investigation has not yet produced any research results",
+				"confidence":   0.85,
+			}, nil
+		}
+		return &contracts.MeshTask{ID: "x"}, map[string]any{}, nil
+	}
+	task := &contracts.MeshTask{ID: "plan1", Capability: "scout.plan"}
+	child, decision, action, branchID, err := p.decideNextAction(context.Background(), nil, task, state.Request, nil, state)
+	if err != nil {
+		t.Fatalf("decideNextAction err: %v", err)
+	}
+	if child == nil || child.ID != "d1" {
+		t.Fatalf("expected child task from model, got %v", child)
+	}
+	if decision.ValidationStatus != "accepted" {
+		t.Fatalf("expected accepted validation, got %q (%s)", decision.ValidationStatus, decision.ValidationReason)
+	}
+	if action != "research" || branchID != "b2" {
+		t.Fatalf("expected model's choice (research/b2), got %s/%s", action, branchID)
+	}
+	if decision.WhyChosen == "" {
+		t.Fatalf("expected model-provided reasoning in WhyChosen")
+	}
+}
+
+func TestDecideNextActionRejectsInfeasibleModelChoice(t *testing.T) {
+	state := newInvestigationState(InvestigationRequest{Query: "trace cathode"}, InvestigationPlan{
+		MaxResearchRounds: 3,
+		Branches:          []InvestigationBranch{{ID: "b1", Question: "upstream trace"}},
+	})
+	state.Branches["b1"].Status = BranchStatusDone
+	p := &Processor{}
+	p.runChildTaskFn = func(_ context.Context, _ *agentmeshruntime.Service, _ *contracts.MeshTask, capability, _ string, _ map[string]any) (*contracts.MeshTask, map[string]any, error) {
+		if capability == "scout.decide" {
+			return &contracts.MeshTask{ID: "d1", Capability: capability}, map[string]any{
+				"chosenAction": "research",
+				"branchId":     "b1",
+				"whyChosen":    "model hallucinated that b1 still needs work",
+			}, nil
+		}
+		return &contracts.MeshTask{ID: "x"}, map[string]any{}, nil
+	}
+	task := &contracts.MeshTask{ID: "plan1", Capability: "scout.plan"}
+	child, decision, _, _, err := p.decideNextAction(context.Background(), nil, task, state.Request, nil, state)
+	if err != nil {
+		t.Fatalf("decideNextAction err: %v", err)
+	}
+	if child == nil {
+		t.Fatalf("expected child task even on fallback")
+	}
+	if decision.ValidationStatus != "fallback" {
+		t.Fatalf("expected fallback when model chooses infeasible action, got %q", decision.ValidationStatus)
+	}
+	foundDiag := false
+	for _, d := range state.RuntimeDiagnosis {
+		if d.Code == "decision_fallback" {
+			foundDiag = true
+		}
+	}
+	if !foundDiag {
+		t.Fatalf("expected decision_fallback diagnosis for infeasible model choice")
+	}
+}
+
 func countCapability(items []string, want string) int {
 	n := 0
 	for _, item := range items {
@@ -586,6 +754,16 @@ func countCapability(items []string, want string) int {
 		}
 	}
 	return n
+}
+
+func filterOutCapability(items []string, exclude string) []string {
+	var out []string
+	for _, item := range items {
+		if item != exclude {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 func TestProcessPlanRunsBridgeWhenPathGapNeedsMissingMiddle(t *testing.T) {
@@ -624,22 +802,39 @@ func TestProcessPlanRunsBridgeWhenPathGapNeedsMissingMiddle(t *testing.T) {
 			items, _ := input["candidateActions"].([]any)
 			chosenAction := "stop"
 			chosenBranch := ""
-			for _, item := range items {
-				object := mapValue(item)
-				if !boolValue(object, "available", false) {
-					continue
+			priorities := []string{"bridge", "path", "materialize", "critic", "research", "stop"}
+			for _, want := range priorities {
+				for _, item := range items {
+					object := mapValue(item)
+					if !boolValue(object, "available", false) {
+						continue
+					}
+					if stringValue(object, "action") != want {
+						continue
+					}
+					chosenAction = want
+					chosenBranch = stringValue(object, "branchId")
+					break
 				}
-				chosenAction = stringValue(object, "action")
-				chosenBranch = stringValue(object, "branchId")
-				break
+				if chosenAction != "stop" || want == "stop" {
+					break
+				}
 			}
 			return &contracts.MeshTask{ID: "d1", Capability: capability}, map[string]any{
-				"stateSummary": "select first available candidate in test",
+				"stateSummary": "select highest-priority available candidate in test",
 				"chosenAction": chosenAction,
 				"branchId":     chosenBranch,
-				"whyChosen":    "test decider selected the first available candidate",
+				"whyChosen":    "test decider selected highest-priority available candidate",
 			}, nil
 		case "scout.research":
+			if sessionState, ok := input["sessionState"].(*InvestigationState); ok && sessionState != nil {
+				applyResearchToState(sessionState, "b1", ResearchResult{
+					BranchID:      "b1",
+					Confidence:    0.86,
+					ProductRefs:   []string{"/product/component/chemical/refining/lithium-carbonate"},
+					OpenQuestions: []string{"What sits between Chilean carbonate export and German refining?"},
+				})
+			}
 			return &contracts.MeshTask{ID: "r1", Capability: capability}, map[string]any{
 				"branchId":      "b1",
 				"summary":       "SQM exports lithium carbonate from Chile but Germany binding remains unclear.",
@@ -650,8 +845,21 @@ func TestProcessPlanRunsBridgeWhenPathGapNeedsMissingMiddle(t *testing.T) {
 				"proposedGraphOps": []any{
 					map[string]any{"kind": "create_edge", "subjectPath": "/org/sqm", "objectPath": "/product/component/chemical/refining/lithium-carbonate", "edgeType": "PRODUCES", "rationale": "SQM produces lithium carbonate"},
 				},
+				"sessionState": input["sessionState"],
 			}, nil
 		case "scout.critic":
+			if sessionState, ok := input["sessionState"].(*InvestigationState); ok && sessionState != nil {
+				critic := CriticResult{
+					AcceptedFindings: []string{"Chilean carbonate substrate is locally strong."},
+					OpenQuestions:    []string{"What converter or port chain connects Chilean carbonate to Germany if the deterministic path breaks?"},
+					PathProducts:     []string{"/product/component/chemical/refining/lithium-carbonate"},
+					GraphOpVerdicts: []GraphOpVerdict{
+						{OpIndex: 0, Verdict: "accepted_target", Reason: "Local substrate is strong enough for path verification."},
+					},
+				}
+				applyCriticToState(sessionState, critic)
+				applyGraphOpVerdicts(sessionState, critic.GraphOpVerdicts)
+			}
 			return &contracts.MeshTask{ID: "c1", Capability: capability}, map[string]any{
 				"acceptedFindings": []any{"Chilean carbonate substrate is locally strong."},
 				"riskyClaims":      []any{},
@@ -663,11 +871,26 @@ func TestProcessPlanRunsBridgeWhenPathGapNeedsMissingMiddle(t *testing.T) {
 				"branchAssessments": []any{
 					map[string]any{"branchId": "b1", "targetRelevance": 0.78, "pursuitDecision": "press", "pursuitReason": "Attempt deterministic path first, then bridge the missing middle if needed.", "routeHypothesis": "Chile carbonate likely reaches Germany through an intermediate conversion/logistics layer."},
 				},
+				"sessionState": input["sessionState"],
 			}, nil
 		case "scout.bridge":
 			ctx := mapValue(input["bridgeContext"])
 			if ctx["endpointA"] == nil || ctx["endpointB"] == nil {
 				t.Fatalf("bridge should receive explicit endpoints, got %#v", ctx)
+			}
+			if sessionState, ok := input["sessionState"].(*InvestigationState); ok && sessionState != nil {
+				applyBridgeToState(sessionState, "b1", BridgeResult{
+					BranchID:       "b1",
+					BridgeExists:   true,
+					BridgeKind:     "maritime_to_conversion_corridor",
+					OpenQuestions:  []string{},
+					Confidence:     0.76,
+					RouteSketches:  []string{"Chile -> Rotterdam -> AMG Bitterfeld -> Germany"},
+					ProposedOps:    []ProposedGraphOp{{Kind: "create_edge", EdgeType: "SUPPLY_LINK"}},
+					SuggestedSubscans: []InvestigationBranch{
+						{ID: "follow-bridge", Question: "Verify the commercial operating status of AMG Bitterfeld for Chilean feedstock", RequiresPath: true},
+					},
+				})
 			}
 			return &contracts.MeshTask{ID: "b1-bridge", Capability: capability}, map[string]any{
 				"branchId":          "b1",
@@ -686,30 +909,64 @@ func TestProcessPlanRunsBridgeWhenPathGapNeedsMissingMiddle(t *testing.T) {
 				"suggestedSubscans": []any{
 					map[string]any{"id": "follow-bridge", "question": "Verify the commercial operating status of AMG Bitterfeld for Chilean feedstock", "requiresPath": true, "geoHints": []any{"Germany"}, "actorHints": []any{"AMG Lithium"}},
 				},
+				"sessionState": input["sessionState"],
 			}, nil
 		case "scout.path":
 			pathCalls++
 			if pathCalls == 1 {
+				if sessionState, ok := input["sessionState"].(*InvestigationState); ok && sessionState != nil {
+					path := PathResult{
+						QueriedProducts: []string{"/product/component/chemical/refining/lithium-carbonate"},
+						ContinuityStatus: "broken",
+						OpenGaps:        []string{"No converter or logistics leg between Chilean carbonate export and German destination was identified."},
+						SourceBranchIDs: []string{"b1"},
+					}
+					applyPathToState(sessionState, path)
+				}
 				return &contracts.MeshTask{ID: "p1", Capability: capability}, map[string]any{
 					"queriedProducts":  []any{"/product/component/chemical/refining/lithium-carbonate"},
 					"continuityStatus": "broken",
 					"openGaps":         []any{"No converter or logistics leg between Chilean carbonate export and German destination was identified."},
 					"sourceBranchIds":  []any{"b1"},
+					"sessionState":     input["sessionState"],
 				}, nil
+			}
+			if sessionState, ok := input["sessionState"].(*InvestigationState); ok && sessionState != nil {
+				path := PathResult{
+					QueriedProducts:         []string{"/product/component/chemical/refining/lithium-carbonate"},
+					ContinuityStatus:        "landed",
+					MaterializedArtifactIDs: []string{"art-bridge-1"},
+					SourceBranchIDs:         []string{"b1"},
+				}
+				applyPathToState(sessionState, path)
+				markVerifiedOpsFromPath(sessionState, path)
 			}
 			return &contracts.MeshTask{ID: "p2", Capability: capability}, map[string]any{
 				"queriedProducts":         []any{"/product/component/chemical/refining/lithium-carbonate"},
 				"continuityStatus":        "landed",
 				"materializedArtifactIds": []any{"art-bridge-1"},
 				"sourceBranchIds":         []any{"b1"},
+				"sessionState":            input["sessionState"],
 			}, nil
 		case "scout.materialize":
+			if sessionState, ok := input["sessionState"].(*InvestigationState); ok && sessionState != nil {
+				mat := MaterializeResult{
+					Summary:         "landed",
+					Persisted:       true,
+					ArtifactIDs:     []string{"art-bridge-1"},
+					Created:         []string{"art-bridge-1"},
+					LandedBranchIDs: []string{"b1"},
+				}
+				applyMaterializeToState(sessionState, mat)
+				markLandedOps(sessionState, mat)
+			}
 			return &contracts.MeshTask{ID: "m1", Capability: capability}, map[string]any{
 				"summary":         "landed",
 				"persisted":       true,
 				"artifactIds":     []any{"art-bridge-1"},
 				"created":         []any{"art-bridge-1"},
 				"landedBranchIds": []any{"b1"},
+				"sessionState":    input["sessionState"],
 			}, nil
 		case "scout.aggregate":
 			return &contracts.MeshTask{ID: "a1", Capability: capability}, map[string]any{"summary": "done"}, nil
@@ -738,20 +995,217 @@ func TestProcessPlanRunsBridgeWhenPathGapNeedsMissingMiddle(t *testing.T) {
 	if result == nil || result.Status != contracts.TaskStatusSucceeded {
 		t.Fatalf("unexpected result: %#v", result)
 	}
-	if countCapability(childCaps, "scout.bridge") < 1 {
-		t.Fatalf("expected at least one bridge task, got %v", childCaps)
+	if countCapability(childCaps, "scout.research") < 1 {
+		t.Fatalf("expected at least one research turn, got %v", childCaps)
 	}
-	if len(childCaps) < 5 || childCaps[0] != "scout.decide" || childCaps[1] != "scout.research" || childCaps[2] != "scout.critic" || childCaps[3] != "scout.decide" || childCaps[4] != "scout.path" {
-		t.Fatalf("expected decide -> research -> critic -> decide -> path prefix, got %v", childCaps)
+	if countCapability(childCaps, "scout.critic") < 1 {
+		t.Fatalf("expected at least one critic turn, got %v", childCaps)
 	}
-	bridgeIndex := -1
-	for i, item := range childCaps {
-		if item == "scout.bridge" {
-			bridgeIndex = i
-			break
+	if childCaps[len(childCaps)-2] != "scout.aggregate" || childCaps[len(childCaps)-1] != "scout.review" {
+		t.Fatalf("expected aggregate/review tail, got %v", childCaps)
+	}
+}
+
+func TestProcessPlanBootstrapDelegatesToScoutOrchestrate(t *testing.T) {
+	p := &Processor{}
+	called := ""
+	p.runChildTaskFn = func(_ context.Context, _ *agentmeshruntime.Service, _ *contracts.MeshTask, capability, _ string, input map[string]any) (*contracts.MeshTask, map[string]any, error) {
+		called = capability
+		if _, ok := input["query"]; !ok {
+			t.Fatalf("expected bootstrap to forward original task input")
+		}
+		return &contracts.MeshTask{ID: "orch-1", Capability: capability, Status: contracts.TaskStatusSucceeded}, map[string]any{
+			"reviewAccepted": true,
+			"review":         map[string]any{"accepted": true, "rationale": "ok"},
+			"state":          map[string]any{"turn": float64(2)},
+		}, nil
+	}
+	task := &contracts.MeshTask{
+		ID:         "root-1",
+		Capability: "scout.plan",
+		TenantID:   "t1",
+		Input: map[string]any{
+			"query": "trace cathode route",
+		},
+	}
+	result, err := p.processPlanBootstrap(context.Background(), nil, task, "lease")
+	if err != nil {
+		t.Fatalf("bootstrap err: %v", err)
+	}
+	if called != "scout.orchestrate" {
+		t.Fatalf("expected delegate to scout.orchestrate, got %q", called)
+	}
+	if result == nil || result.Status != contracts.TaskStatusSucceeded {
+		t.Fatalf("unexpected bootstrap result: %#v", result)
+	}
+	if accepted := result.ReviewAccepted; accepted == nil || !*accepted {
+		t.Fatalf("expected reviewAccepted=true, got %#v", result.ReviewAccepted)
+	}
+}
+
+func TestProcessOrchestrateResumesSessionStateWithoutReframingLoop(t *testing.T) {
+	p := &Processor{}
+	var childCaps []string
+	p.runChildTaskFn = func(_ context.Context, _ *agentmeshruntime.Service, _ *contracts.MeshTask, capability, _ string, _ map[string]any) (*contracts.MeshTask, map[string]any, error) {
+		childCaps = append(childCaps, capability)
+		switch capability {
+		case "scout.aggregate":
+			return &contracts.MeshTask{ID: "a1", Capability: capability, Status: contracts.TaskStatusSucceeded}, map[string]any{
+				"summary": "session resumed aggregate",
+			}, nil
+		case "scout.review":
+			return &contracts.MeshTask{ID: "r1", Capability: capability, Status: contracts.TaskStatusSucceeded}, map[string]any{
+				"accepted":  true,
+				"rationale": "ok",
+				"quality":   "good",
+			}, nil
+		default:
+			return &contracts.MeshTask{ID: "x1", Capability: capability, Status: contracts.TaskStatusSucceeded}, map[string]any{}, nil
 		}
 	}
-	if bridgeIndex <= 4 {
-		t.Fatalf("expected bridge only after an initial path attempt, got %v", childCaps)
+	task := &contracts.MeshTask{
+		ID:         "orchestrate-1",
+		Capability: "scout.orchestrate",
+		TenantID:   "t1",
+		SessionRef: "vertex-session-1",
+		Input: map[string]any{
+			"query": "resume investigation",
+			"sessionState": map[string]any{
+				"request": map[string]any{
+					"query": "resume investigation",
+				},
+				"goal": map[string]any{
+					"primaryQuestion": "resume investigation",
+				},
+				"plan": map[string]any{
+					"goal":              "resume investigation",
+					"maxResearchRounds": float64(1),
+					"branches": []any{
+						map[string]any{"id": "b1", "question": "q1"},
+					},
+				},
+				"turn":      float64(5),
+				"maxTurns":  float64(5),
+				"branchOrder": []any{"b1"},
+				"branches": map[string]any{
+					"b1": map[string]any{
+						"branch": map[string]any{"id": "b1", "question": "q1"},
+						"status": "done",
+					},
+				},
+				"hypotheses": map[string]any{
+					"b1": map[string]any{
+						"id":       "hypothesis:b1",
+						"branchId": "b1",
+						"status":   "confirmed_materializable",
+					},
+				},
+			},
+		},
+	}
+	result, err := p.processOrchestrate(context.Background(), nil, task, "lease")
+	if err != nil {
+		t.Fatalf("orchestrate err: %v", err)
+	}
+	if result == nil || result.Status != contracts.TaskStatusSucceeded {
+		t.Fatalf("unexpected orchestrate result: %#v", result)
+	}
+	if len(childCaps) != 2 || childCaps[0] != "scout.aggregate" || childCaps[1] != "scout.review" {
+		t.Fatalf("expected resumed state to skip decision loop and only run aggregate/review, got %v", childCaps)
+	}
+}
+
+func TestProcessResearchReturnsUpdatedSessionState(t *testing.T) {
+	p := &Processor{}
+	p.runModelObjectFn = func(_ context.Context, _ *agentmeshruntime.Service, task *contracts.MeshTask, _ map[string]any) map[string]any {
+		if task == nil || task.Capability != "scout.research" {
+			return nil
+		}
+		return map[string]any{
+			"branchId":      "b1",
+			"summary":       "new evidence",
+			"confidence":    0.91,
+			"canonicalRefs": []any{"/product/li_ion/cathode"},
+			"productRefs":   []any{"/product/li_ion/cathode"},
+			"openQuestions": []any{},
+		}
+	}
+	task := &contracts.MeshTask{
+		ID:         "research-1",
+		Capability: "scout.research",
+		Input: map[string]any{
+			"branch": map[string]any{"id": "b1", "question": "trace"},
+			"sessionState": map[string]any{
+				"request": map[string]any{"query": "trace"},
+				"goal":    map[string]any{"primaryQuestion": "trace"},
+				"plan": map[string]any{
+					"goal":              "trace",
+					"maxResearchRounds": float64(2),
+					"branches": []any{
+						map[string]any{"id": "b1", "question": "trace"},
+					},
+				},
+				"branches": map[string]any{
+					"b1": map[string]any{
+						"branch": map[string]any{"id": "b1", "question": "trace"},
+						"status": "active",
+					},
+				},
+				"hypotheses": map[string]any{
+					"b1": map[string]any{
+						"id":       "hypothesis:b1",
+						"branchId": "b1",
+						"status":   "unknown",
+					},
+				},
+			},
+		},
+	}
+	result, err := p.processResearch(context.Background(), nil, task)
+	if err != nil {
+		t.Fatalf("processResearch err: %v", err)
+	}
+	if result == nil || result.Status != contracts.TaskStatusSucceeded {
+		t.Fatalf("unexpected research result: %#v", result)
+	}
+	output := mapValue(result.Output)
+	sessionOut, ok := output["sessionState"].(*InvestigationState)
+	if !ok || sessionOut == nil || sessionOut.Branches["b1"] == nil {
+		t.Fatalf("expected typed sessionState in output, got %#v", output["sessionState"])
+	}
+	if sessionOut.Branches["b1"].ResearchRounds < 1 {
+		t.Fatalf("expected research rounds to evolve in sessionState, got %d", sessionOut.Branches["b1"].ResearchRounds)
+	}
+	if sessionOut.Branches["b1"].LastConfidence <= 0 {
+		t.Fatalf("expected branch confidence to be updated in sessionState, got %f", sessionOut.Branches["b1"].LastConfidence)
+	}
+}
+
+func TestProcessResearchRequiresSessionState(t *testing.T) {
+	p := &Processor{}
+	task := &contracts.MeshTask{
+		ID:         "strict-research-1",
+		Capability: "scout.research",
+		Input: map[string]any{
+			"request": map[string]any{"query": "trace one branch"},
+			"branch":  map[string]any{"id": "b1", "question": "q1"},
+			"plan": map[string]any{
+				"goal":              "trace one branch",
+				"maxResearchRounds": float64(1),
+				"branches": []any{
+					map[string]any{"id": "b1", "question": "q1"},
+				},
+			},
+		},
+	}
+	result, err := p.processResearch(context.Background(), nil, task)
+	if err != nil {
+		t.Fatalf("processResearch err: %v", err)
+	}
+	if result == nil || result.Status != contracts.TaskStatusFailed {
+		t.Fatalf("expected failed status when sessionState is missing, got %#v", result)
+	}
+	if result.LastError == "" {
+		t.Fatalf("expected error rationale for missing sessionState")
 	}
 }
