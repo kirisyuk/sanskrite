@@ -3,6 +3,7 @@ package ai
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,17 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
+
+const vertexToolSessionPrefix = "vts1."
+
+// vertexToolChatSession carries enough history for the next Vertex generateContent
+// request after a model turn that emitted functionCall parts. Vertex rejects role "tool";
+// tool outputs must be sent as role "user" with functionResponse parts.
+type vertexToolChatSession struct {
+	V        int             `json:"v"`
+	Tools    json.RawMessage `json:"tools,omitempty"`
+	Contents json.RawMessage `json:"contents"`
+}
 
 // VertexAIService — клиент для Vertex AI Platform (aiplatform.googleapis.com).
 //
@@ -57,7 +69,9 @@ func NewVertexAIService(projectID, location string, modelManager *AIModelManager
 		return nil, fmt.Errorf("failed to initialize Application Default Credentials: %w", err)
 	}
 
-	log.Printf("[VertexAI] Initialized: project=%s location=%s", projectID, location)
+	if aiDebugLogEnabled() {
+		log.Printf("[VertexAI] Initialized: project=%s location=%s", projectID, location)
+	}
 
 	return &VertexAIService{
 		BaseAIService: NewBaseAIService(modelManager),
@@ -82,14 +96,16 @@ func (s *VertexAIService) WithDataStore(dataStoreID string) *VertexAIService {
 		"projects/%s/locations/global/collections/default_collection/dataStores/%s",
 		s.projectID, dataStoreID,
 	)
-	log.Printf("[VertexAI] DataStore configured: %s", s.dataStorePath)
+	if aiDebugLogEnabled() {
+		log.Printf("[VertexAI] DataStore configured: %s", s.dataStorePath)
+	}
 	return s
 }
 
 // WithDataStorePath configures the full Vertex AI Search datastore path for grounding.
 func (s *VertexAIService) WithDataStorePath(fullPath string) *VertexAIService {
 	s.dataStorePath = strings.TrimSpace(fullPath)
-	if s.dataStorePath != "" {
+	if s.dataStorePath != "" && aiDebugLogEnabled() {
 		log.Printf("[VertexAI] DataStore path configured: %s", s.dataStorePath)
 	}
 	return s
@@ -186,9 +202,11 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 		return nil, fmt.Errorf("task cannot be nil")
 	}
 
-	log.Printf("[VertexAI] ExecuteTask: %s, model=%s, grounding=%v, dataStore=%v",
-		task.TaskType, model, task.AIRequirements.SearchGroundingCapability, s.dataStorePath != "")
 	debug := aiDebugLogEnabled()
+	if debug {
+		log.Printf("[VertexAI] ExecuteTask: %s, model=%s, grounding=%v, dataStore=%v",
+			task.TaskType, model, task.AIRequirements.SearchGroundingCapability, s.dataStorePath != "")
+	}
 
 	requestBody := map[string]interface{}{
 		"contents": []map[string]interface{}{
@@ -220,10 +238,12 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 		groundingTools := s.buildGroundingTools(task.AIRequirements.SearchGroundingCapability)
 		if len(groundingTools) > 0 {
 			requestBody["tools"] = groundingTools
-			if s.dataStorePath != "" {
-				log.Printf("[VertexAI] Grounding: VertexAISearch datastore + googleSearch=%v", task.AIRequirements.SearchGroundingCapability)
-			} else {
-				log.Printf("[VertexAI] Grounding: googleSearch only")
+			if debug {
+				if s.dataStorePath != "" {
+					log.Printf("[VertexAI] Grounding: VertexAISearch datastore + googleSearch=%v", task.AIRequirements.SearchGroundingCapability)
+				} else {
+					log.Printf("[VertexAI] Grounding: googleSearch only")
+				}
 			}
 		}
 	}
@@ -290,7 +310,7 @@ func (s *VertexAIService) ExecuteTask(ctx context.Context, task *AITask, model s
 		if evidence.HasWebResults {
 			sources = append(sources, fmt.Sprintf("GoogleSearch(%d sources)", len(evidence.WebSources)))
 		}
-		if len(sources) > 0 {
+		if len(sources) > 0 && aiDebugLogEnabled() {
 			log.Printf("[VertexAI] Grounding evidence: %s", strings.Join(sources, " + "))
 		}
 	}
@@ -454,7 +474,7 @@ func (s *VertexAIService) parseResponse(body []byte, expectGrounding bool) (stri
 					queries = append(queries, qs)
 				}
 			}
-			if len(queries) > 0 {
+			if len(queries) > 0 && aiDebugLogEnabled() {
 				log.Printf("[VertexAI] Retrieval queries: %v", queries)
 			}
 		}
@@ -467,17 +487,19 @@ func (s *VertexAIService) parseResponse(body []byte, expectGrounding bool) (stri
 					queries = append(queries, qs)
 				}
 			}
-			if len(queries) > 0 {
+			if len(queries) > 0 && aiDebugLogEnabled() {
 				log.Printf("[VertexAI] Web search queries: %v", queries)
 			}
 		}
 	} else if expectGrounding {
-		keys := make([]string, 0, len(candidate))
-		for k := range candidate {
-			keys = append(keys, k)
+		if aiDebugLogEnabled() {
+			keys := make([]string, 0, len(candidate))
+			for k := range candidate {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			log.Printf("[VertexAI] GroundingMetadata NOT present in response (candidate keys=%v). Grounding may have been skipped.", keys)
 		}
-		sort.Strings(keys)
-		log.Printf("[VertexAI] GroundingMetadata NOT present in response (candidate keys=%v). Grounding may have been skipped.", keys)
 	}
 
 	return content, citations, evidence
@@ -536,6 +558,80 @@ func (s *VertexAIService) ExecuteEmbeddingTask(ctx context.Context, inputText st
 // ExecuteImageAnalysisByLinkTask — анализ изображений не поддерживается через Vertex AI в данной реализации.
 func (s *VertexAIService) ExecuteImageAnalysisByLinkTask(ctx context.Context, inputText string, imageLink string, modelName string) (*AITaskResult, error) {
 	return nil, fmt.Errorf("VertexAIService does not support image analysis in this implementation")
+}
+
+func encodeVertexToolSession(sess vertexToolChatSession) (string, error) {
+	sess.V = 1
+	raw, err := json.Marshal(sess)
+	if err != nil {
+		return "", err
+	}
+	return vertexToolSessionPrefix + base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+func decodeVertexToolSession(sessionID string) (vertexToolChatSession, error) {
+	var out vertexToolChatSession
+	if !strings.HasPrefix(sessionID, vertexToolSessionPrefix) {
+		return out, fmt.Errorf("vertex tool session: missing prefix %q", vertexToolSessionPrefix)
+	}
+	b, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(sessionID, vertexToolSessionPrefix))
+	if err != nil {
+		return out, fmt.Errorf("vertex tool session: decode: %w", err)
+	}
+	if err := json.Unmarshal(b, &out); err != nil {
+		return out, fmt.Errorf("vertex tool session: json: %w", err)
+	}
+	if out.V != 1 || len(out.Contents) == 0 {
+		return out, fmt.Errorf("vertex tool session: invalid payload")
+	}
+	return out, nil
+}
+
+func extractVertexModelContent(body []byte) (map[string]interface{}, error) {
+	var root map[string]interface{}
+	if err := json.Unmarshal(body, &root); err != nil {
+		return nil, err
+	}
+	candidates, _ := root["candidates"].([]interface{})
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("vertex tool chat: no candidates in response")
+	}
+	cand0, _ := candidates[0].(map[string]interface{})
+	content, _ := cand0["content"].(map[string]interface{})
+	if len(content) == 0 {
+		return nil, fmt.Errorf("vertex tool chat: empty model content")
+	}
+	if role, _ := content["role"].(string); strings.TrimSpace(role) == "" {
+		content["role"] = "model"
+	}
+	return content, nil
+}
+
+func vertexFunctionResponseParts(toolResults []ToolExecutionResult) ([]map[string]interface{}, error) {
+	parts := make([]map[string]interface{}, 0, len(toolResults))
+	for _, r := range toolResults {
+		name := strings.TrimSpace(r.ToolName)
+		if name == "" {
+			return nil, fmt.Errorf("vertex tool chat: empty tool name in execution result")
+		}
+		var respObj interface{}
+		if strings.TrimSpace(r.ResultJSON) == "" {
+			respObj = map[string]interface{}{"result": ""}
+		} else if err := json.Unmarshal([]byte(r.ResultJSON), &respObj); err != nil {
+			respObj = map[string]interface{}{"result": r.ResultJSON}
+		}
+		fr := map[string]interface{}{
+			"name":     name,
+			"response": respObj,
+		}
+		if id := strings.TrimSpace(r.CallID); id != "" {
+			fr["id"] = id
+		}
+		parts = append(parts, map[string]interface{}{
+			"functionResponse": fr,
+		})
+	}
+	return parts, nil
 }
 
 // BeginChatWithTools начинает диалог с поддержкой tool-calling через Vertex AI Platform.
@@ -609,23 +705,71 @@ func (s *VertexAIService) BeginChatWithTools(ctx context.Context, task *AITask, 
 		return nil, fmt.Errorf("Vertex AI tool chat error %d: %s", resp.StatusCode, string(body))
 	}
 
-	return s.parseToolChatResponse(body, fmt.Sprintf("vertexai-session-%d", time.Now().UnixNano()))
+	step, err := s.parseToolChatResponse(body, "")
+	if err != nil {
+		return nil, err
+	}
+	if !step.IsFinal && len(step.ToolCalls) > 0 {
+		modelContent, err := extractVertexModelContent(body)
+		if err != nil {
+			return nil, err
+		}
+		var hist []interface{}
+		if ic, ok := requestBody["contents"]; ok {
+			seed, _ := json.Marshal(ic)
+			_ = json.Unmarshal(seed, &hist)
+		}
+		hist = append(hist, modelContent)
+		toolsJSON, err := json.Marshal(requestBody["tools"])
+		if err != nil {
+			return nil, fmt.Errorf("marshal tools for session: %w", err)
+		}
+		contentsJSON, err := json.Marshal(hist)
+		if err != nil {
+			return nil, fmt.Errorf("marshal contents for session: %w", err)
+		}
+		sid, err := encodeVertexToolSession(vertexToolChatSession{
+			Tools:    toolsJSON,
+			Contents: contentsJSON,
+		})
+		if err != nil {
+			return nil, err
+		}
+		step.SessionID = sid
+	} else {
+		step.SessionID = fmt.Sprintf("vertexai-session-%d", time.Now().UnixNano())
+	}
+	return step, nil
 }
 
 // ContinueWithToolResults продолжает диалог с результатами выполнения инструментов.
 func (s *VertexAIService) ContinueWithToolResults(ctx context.Context, sessionID string, model string, toolResults []ToolExecutionResult) (*ToolChatStep, error) {
-	toolMsgs := make([]map[string]interface{}, 0, len(toolResults))
-	for _, r := range toolResults {
-		toolMsgs = append(toolMsgs, map[string]interface{}{
-			"role": "tool",
-			"parts": []map[string]interface{}{
-				{"text": r.ResultJSON},
-			},
-		})
+	sess, err := decodeVertexToolSession(sessionID)
+	if err != nil {
+		return nil, err
 	}
+	var history []interface{}
+	if err := json.Unmarshal(sess.Contents, &history); err != nil {
+		return nil, fmt.Errorf("vertex tool session: unmarshal contents: %w", err)
+	}
+	funcParts, err := vertexFunctionResponseParts(toolResults)
+	if err != nil {
+		return nil, err
+	}
+	history = append(history, map[string]interface{}{
+		"role":  "user",
+		"parts": funcParts,
+	})
 
 	requestBody := map[string]interface{}{
-		"contents": toolMsgs,
+		"contents": history,
+	}
+	if len(sess.Tools) > 0 {
+		var toolsObj interface{}
+		if err := json.Unmarshal(sess.Tools, &toolsObj); err != nil {
+			return nil, fmt.Errorf("vertex tool session: unmarshal tools: %w", err)
+		}
+		requestBody["tools"] = toolsObj
 	}
 
 	bodyJSON, err := json.Marshal(requestBody)
@@ -657,7 +801,32 @@ func (s *VertexAIService) ContinueWithToolResults(ctx context.Context, sessionID
 		return nil, fmt.Errorf("Vertex AI tool continue error %d: %s", resp.StatusCode, string(body))
 	}
 
-	return s.parseToolChatResponse(body, sessionID)
+	step, err := s.parseToolChatResponse(body, "")
+	if err != nil {
+		return nil, err
+	}
+	if !step.IsFinal && len(step.ToolCalls) > 0 {
+		modelContent, err := extractVertexModelContent(body)
+		if err != nil {
+			return nil, err
+		}
+		nextHist := append(history, modelContent)
+		contentsJSON, err := json.Marshal(nextHist)
+		if err != nil {
+			return nil, err
+		}
+		sid, err := encodeVertexToolSession(vertexToolChatSession{
+			Tools:    sess.Tools,
+			Contents: contentsJSON,
+		})
+		if err != nil {
+			return nil, err
+		}
+		step.SessionID = sid
+	} else {
+		step.SessionID = fmt.Sprintf("vertexai-session-%d", time.Now().UnixNano())
+	}
+	return step, nil
 }
 
 // parseToolChatResponse extracts tool calls and text from a Vertex AI response.
@@ -711,8 +880,12 @@ func (s *VertexAIService) parseToolChatResponse(body []byte, sessionID string) (
 				argsBytes, _ := json.Marshal(args)
 				argsJSON = string(argsBytes)
 			}
+			callID := ""
+			if id, ok := fc["id"].(string); ok {
+				callID = strings.TrimSpace(id)
+			}
 			step.ToolCalls = append(step.ToolCalls, ToolCallRequest{
-				CallID:        fmt.Sprintf("call-%d", len(step.ToolCalls)+1),
+				CallID:        callID,
 				ToolName:      name,
 				ArgumentsJSON: argsJSON,
 			})

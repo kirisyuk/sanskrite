@@ -320,6 +320,8 @@ type InvestigationState struct {
 	// PendingGraphOps accumulates all proposed graph operations across turns.
 	// Status lifecycle: proposed -> accepted -> verified -> landed | rejected.
 	PendingGraphOps []ProposedGraphOp `json:"pendingGraphOps,omitempty"`
+	// Patches accumulates all graph diffs across investigation turns.
+	Patches []GraphPatch `json:"patches,omitempty"`
 	// ReasoningTrace is operator-facing explainable reasoning trail (not raw CoT).
 	ReasoningTrace []ReasoningBeat `json:"reasoningTrace,omitempty"`
 	// RuntimeDiagnosis captures architecture/runtime issues diagnosed during execution.
@@ -447,16 +449,17 @@ type ActionRecommendation struct {
 }
 
 type DecisionCandidate struct {
-	Action       string   `json:"action,omitempty"` // research|bridge|path|critic|materialize|replan|stop
-	BranchID     string   `json:"branchId,omitempty"`
-	Available    bool     `json:"available,omitempty"`
-	Reason       string   `json:"reason,omitempty"`
-	Question     string   `json:"question,omitempty"`
-	EndpointA    string   `json:"endpointA,omitempty"`
-	EndpointB    string   `json:"endpointB,omitempty"`
-	ProductHints []string `json:"productHints,omitempty"`
-	GeoHints     []string `json:"geoHints,omitempty"`
-	ActorHints   []string `json:"actorHints,omitempty"`
+	Action          string   `json:"action,omitempty"` // research|bridge|path|critic|materialize|replan|stop
+	BranchID        string   `json:"branchId,omitempty"`
+	Available       bool     `json:"available,omitempty"`
+	Reason          string   `json:"reason,omitempty"`
+	Question        string   `json:"question,omitempty"`
+	EndpointA       string   `json:"endpointA,omitempty"`
+	EndpointB       string   `json:"endpointB,omitempty"`
+	ProductHints    []string `json:"productHints,omitempty"`
+	GeoHints        []string `json:"geoHints,omitempty"`
+	ActorHints      []string `json:"actorHints,omitempty"`
+	DataSourceHint  string   `json:"dataSourceHint,omitempty"` // describes what data sources this action uses; helps orchestrator reason about expected return
 }
 
 // ActionOutcome is the single source-of-truth packet describing what the last
@@ -484,6 +487,14 @@ type ActionOutcome struct {
 	RecommendedAction    ActionRecommendation `json:"recommendedAction,omitempty"`
 	GoodEnoughAssessment GoodEnoughAssessment `json:"goodEnoughAssessment,omitempty"`
 	RetrievalHitCount    int                  `json:"retrievalHitCount,omitempty"`
+	ToolCallCount        int                  `json:"toolCallCount,omitempty"`
+	// DataSourceSignal is a machine-readable signal describing what happened at the data layer.
+	// internal_empty  — internal KB returned zero hits; external search is the only option.
+	// internal_partial — internal KB returned hits but evidence was weak or ungrounded.
+	// internal_grounded — internal KB returned hits with strong grounding evidence.
+	// external_only — action used only web-grounded reasoning (e.g. bridge), internal KB not queried.
+	// no_data — no useful data from any source.
+	DataSourceSignal string `json:"dataSourceSignal,omitempty"`
 }
 
 type StopCriterionEvaluation struct {
@@ -556,6 +567,7 @@ type ResearchResult struct {
 	ProposedOps             []ProposedGraphOp    `json:"proposedGraphOps,omitempty"`
 	GapDiagnosis            GapDiagnosis         `json:"gapDiagnosis,omitempty"`
 	RecommendedAction       ActionRecommendation `json:"recommendedAction,omitempty"`
+	DataSourceSignal        string               `json:"dataSourceSignal,omitempty"` // model's own assessment: internal_empty|internal_partial|internal_grounded|no_data
 }
 
 type BridgeResult struct {
@@ -577,6 +589,7 @@ type BridgeResult struct {
 	SuggestedSubscans         []InvestigationBranch `json:"suggestedSubscans,omitempty"`
 	GapDiagnosis              GapDiagnosis          `json:"gapDiagnosis,omitempty"`
 	RecommendedAction         ActionRecommendation  `json:"recommendedAction,omitempty"`
+	DataSourceSignal          string                `json:"dataSourceSignal,omitempty"` // model's own assessment: external_only|internal_partial|internal_grounded|no_data
 }
 
 // BridgeStep is the articulation layer between a textual missing-middle answer
@@ -710,4 +723,35 @@ type ReviewResult struct {
 	Rationale string   `json:"rationale,omitempty"`
 	Quality   string   `json:"quality,omitempty"`
 	Issues    []string `json:"issues,omitempty"`
+}
+
+// ToolResponse is the uniform envelope every scout tool returns.
+// The model always sees the same shape: a machine-readable status,
+// a natural-language explanation, and tool-specific structured data.
+type ToolResponse struct {
+	Status      string `json:"status"`      // found | not_found | partial | error
+	Explanation string `json:"explanation"`  // deterministic NL summary of what happened and what to do next
+	Data        any    `json:"data"`         // tool-specific payload
+}
+
+// GraphPatch is the uniform "diff" envelope wrapping proposed graph operations.
+// Regardless of which step produced it (research, bridge, path), the patch
+// has the same shape: ops + human-readable summary + unresolved identities.
+type GraphPatch struct {
+	BranchID   string            `json:"branchId"`
+	SourceStep string            `json:"sourceStep"` // research | bridge | path | materialize
+	Turn       int               `json:"turn"`
+	Ops        []ProposedGraphOp `json:"ops"`
+	Summary    string            `json:"summary"`    // NL description of what this patch does to the graph
+	Confidence float64           `json:"confidence"`
+	Unresolved []string          `json:"unresolved"` // products/relations needing candidate registration
+}
+
+// ToolCallLog records a single tool invocation for stats and debugging.
+type ToolCallLog struct {
+	ToolName   string `json:"toolName"`
+	Args       string `json:"args,omitempty"`
+	Status     string `json:"status"`
+	DurationMs int64  `json:"durationMs,omitempty"`
+	HitCount   int    `json:"hitCount,omitempty"`
 }

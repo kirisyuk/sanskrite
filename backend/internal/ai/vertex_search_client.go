@@ -77,7 +77,9 @@ func NewVertexAISearchClient(projectID, location, dataStoreID, apiKey string) *V
 		ts, err := google.DefaultTokenSource(ctx, "https://www.googleapis.com/auth/cloud-platform")
 		if err == nil {
 			client.tokenSource = ts
-			log.Printf("[VertexAISearch] Using Application Default Credentials for authentication")
+			if aiDebugLogEnabled() {
+				log.Printf("[VertexAISearch] Using Application Default Credentials for authentication")
+			}
 		} else {
 			log.Printf("[VertexAISearch] Warning: failed to initialize ADC: %v", err)
 		}
@@ -218,7 +220,9 @@ func (c *VertexAISearchClient) Search(ctx context.Context, req *SearchRequest) (
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	log.Printf("[VertexAISearch] Searching: query=%s, pageSize=%d", req.Query, req.PageSize)
+	if aiDebugLogEnabled() {
+		log.Printf("[VertexAISearch] Searching: query=%s, pageSize=%d", req.Query, req.PageSize)
+	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -235,8 +239,7 @@ func (c *VertexAISearchClient) Search(ctx context.Context, req *SearchRequest) (
 		return nil, fmt.Errorf("vertex AI search API error %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Логируем сырой ответ для отладки (первые 2000 символов)
-	if len(body) > 0 {
+	if aiDebugLogEnabled() && len(body) > 0 {
 		bodyPreview := string(body)
 		if len(bodyPreview) > 2000 {
 			bodyPreview = bodyPreview[:2000] + "..."
@@ -264,32 +267,30 @@ func (c *VertexAISearchClient) Search(ctx context.Context, req *SearchRequest) (
 		}
 	}
 
-	log.Printf("[VertexAISearch] Found %d results", len(searchResp.Results))
-
-	// Логируем структуру первого результата для отладки
-	if len(searchResp.Results) > 0 {
-		firstResult := searchResp.Results[0]
-		log.Printf("[VertexAISearch] Sample result: ID=%s, URI=%s, Title=%s", firstResult.ID, firstResult.Document.URI, firstResult.Document.Title)
-		if firstResult.Document.StructData != nil {
-			log.Printf("[VertexAISearch] Sample structData keys: %v", getMapKeys(firstResult.Document.StructData))
-			// Логируем первые несколько ключей-значений
-			count := 0
-			for k, v := range firstResult.Document.StructData {
-				if count < 5 {
-					log.Printf("[VertexAISearch] structData[%s] = %v", k, v)
-					count++
+	if aiDebugLogEnabled() {
+		log.Printf("[VertexAISearch] Found %d results", len(searchResp.Results))
+		if len(searchResp.Results) > 0 {
+			firstResult := searchResp.Results[0]
+			log.Printf("[VertexAISearch] Sample result: ID=%s, URI=%s, Title=%s", firstResult.ID, firstResult.Document.URI, firstResult.Document.Title)
+			if firstResult.Document.StructData != nil {
+				log.Printf("[VertexAISearch] Sample structData keys: %v", getMapKeys(firstResult.Document.StructData))
+				count := 0
+				for k, v := range firstResult.Document.StructData {
+					if count < 5 {
+						log.Printf("[VertexAISearch] structData[%s] = %v", k, v)
+						count++
+					}
 				}
+			} else {
+				log.Printf("[VertexAISearch] Sample result has no structData")
 			}
-		} else {
-			log.Printf("[VertexAISearch] Sample result has no structData")
-		}
-		// Логируем полный JSON первого результата для отладки (первые 500 символов)
-		if resultJSON, err := json.Marshal(firstResult); err == nil {
-			resultStr := string(resultJSON)
-			if len(resultStr) > 500 {
-				resultStr = resultStr[:500] + "..."
+			if resultJSON, err := json.Marshal(firstResult); err == nil {
+				resultStr := string(resultJSON)
+				if len(resultStr) > 500 {
+					resultStr = resultStr[:500] + "..."
+				}
+				log.Printf("[VertexAISearch] Sample result JSON: %s", resultStr)
 			}
-			log.Printf("[VertexAISearch] Sample result JSON: %s", resultStr)
 		}
 	}
 

@@ -7,7 +7,8 @@ import (
 	"strings"
 )
 
-// aiDebugLogEnabled enables verbose AI request/response logging.
+// aiDebugLogEnabled enables verbose AI request/response logging (Vertex, Vertex AI Search,
+// request sizes, raw search previews, grounding query lists, etc.).
 // It MUST be opt-in because logs may contain user content / model outputs.
 func aiDebugLogEnabled() bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("AI_DEBUG_LOG")))

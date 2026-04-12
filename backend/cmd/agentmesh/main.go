@@ -181,7 +181,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	a2a.NewHandler(registrySvc, runtimeSvc, store).Register(mux)
-	mcp.NewHandler(registrySvc, policySvc, runtimeSvc, store, envOr("AGENTMESH_RUNTIME_LEASE_OWNER", "agentmesh-runtime")).Register(mux)
+	mcp.NewHandler(registrySvc, policySvc, runtimeSvc, store, envOr("AGENTMESH_RUNTIME_LEASE_OWNER", "agentmesh-runtime"), scoutProcessor).Register(mux)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})

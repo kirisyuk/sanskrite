@@ -175,13 +175,37 @@ func (s *Service) ExecuteTask(ctx context.Context, taskID, leaseOwner string) er
 		case contracts.TaskStatusSucceeded:
 			_ = s.traces.FinishSpan(ctx, span, "succeeded", nil, map[string]any{"artifacts": artifactIDs})
 			return s.store.CompleteTask(ctx, task.ID, leaseOwner, status, output, artifactIDs)
+		case contracts.TaskStatusAwaitingReview:
+			accepted := false
+			if result != nil && result.ReviewAccepted != nil {
+				accepted = *result.ReviewAccepted
+			}
+			rationale := ""
+			if result != nil {
+				rationale = strings.TrimSpace(result.LastError)
+			}
+			_ = s.traces.FinishSpan(ctx, span, "awaiting_review", nil, map[string]any{"artifacts": artifactIDs, "rationale": rationale})
+			return s.store.AwaitReview(ctx, task.ID, leaseOwner, output, reviewOutput, accepted, artifactIDs, true, rationale, usage)
 		case contracts.TaskStatusDegraded:
 			rationale := ""
 			if result != nil {
 				rationale = strings.TrimSpace(result.LastError)
 			}
+			if rationale != "" {
+				output["degradedReason"] = rationale
+			}
 			_ = s.traces.FinishSpan(ctx, span, "degraded", nil, map[string]any{"artifacts": artifactIDs, "rationale": rationale})
-			return s.store.FailTask(ctx, task.ID, leaseOwner, contracts.RetryClassPermanent, rationale, true)
+			return s.store.CompleteTask(ctx, task.ID, leaseOwner, status, output, artifactIDs)
+		case contracts.TaskStatusFailed:
+			lastError := "processor failed"
+			if result != nil && strings.TrimSpace(result.LastError) != "" {
+				lastError = strings.TrimSpace(result.LastError)
+			}
+			if strings.TrimSpace(lastError) != "" {
+				output["failureReason"] = lastError
+			}
+			_ = s.traces.FinishSpan(ctx, span, "failed", nil, map[string]any{"artifacts": artifactIDs, "error": lastError})
+			return s.store.CompleteTask(ctx, task.ID, leaseOwner, status, output, artifactIDs)
 		default:
 			retryClass := contracts.RetryClassPermanent
 			lastError := "processor failed"
@@ -298,11 +322,6 @@ func (s *Service) ExecuteTask(ctx context.Context, taskID, leaseOwner string) er
 		_ = s.traces.FinishSpan(ctx, span, "failed", cost, map[string]any{"error": err.Error()})
 		return s.retryOrFail(ctx, task, leaseOwner, contracts.RetryClassTransient, err, usage)
 	}
-	if err := s.vertex.GenerateMemoriesFromSession(ctx, task); err != nil {
-		_ = s.traces.FinishSpan(ctx, span, "failed", cost, map[string]any{"error": err.Error()})
-		return s.retryOrFail(ctx, task, leaseOwner, contracts.RetryClassTransient, err, usage)
-	}
-
 	finalOutput := map[string]any{
 		"result":          output,
 		"artifactId":      artifactID,
@@ -312,6 +331,14 @@ func (s *Service) ExecuteTask(ctx context.Context, taskID, leaseOwner string) er
 		"reviewAccepted":  accepted,
 		"reviewRationale": rationale,
 		"usage":           usage,
+	}
+	generatedMemories, err := s.vertex.GenerateAndFetchMemoriesFromSession(ctx, task, stringify(finalOutput))
+	if err != nil {
+		_ = s.traces.FinishSpan(ctx, span, "failed", cost, map[string]any{"error": err.Error()})
+		return s.retryOrFail(ctx, task, leaseOwner, contracts.RetryClassTransient, err, usage)
+	}
+	if len(generatedMemories) > 0 {
+		finalOutput["generatedMemoryRefs"] = generatedMemories
 	}
 	task.ReviewOutput = reviewOutput
 	task.Output = finalOutput

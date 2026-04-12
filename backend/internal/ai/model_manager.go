@@ -19,7 +19,6 @@ func NewAIModelManager() *AIModelManager {
 		models: make(map[string]AIModelCapabilities),
 	}
 	mm.initializeModels()
-	log.Printf("Initialized AIModelManager with %d models", len(mm.models))
 	return mm
 }
 
@@ -748,9 +747,6 @@ func (mm *AIModelManager) SelectModel(requirements AIRequirements, inputTokens i
 	// Нормализация взаимоисключающих флагов
 	mm.normalizeCapabilities(&requirements)
 
-	log.Printf("AIModelManager SelectModel called with requirements: MinContextWindow=%d, InputTokens=%d, PreferNearlyRealTime=%v, MinCapabilityScore=%d, PreferredModel=%s, SearchGrounding=%v, InternalDataGrounding=%v",
-		requirements.MinContextWindow, inputTokens, preferNearlyRealTime, requirements.MinCapabilityScore, requirements.PreferredModel, requirements.SearchGroundingCapability, requirements.InternalDataGroundingCapability)
-
 	if excludeModels == nil {
 		excludeModels = []string{}
 	}
@@ -763,18 +759,13 @@ func (mm *AIModelManager) SelectModel(requirements AIRequirements, inputTokens i
 				(!requirements.BuiltInSearchCapability || m.BuiltInSearchCapability) &&
 				(!requirements.SearchGroundingCapability || m.SearchGroundingCapability) &&
 				(!requirements.InternalDataGroundingCapability || m.InternalDataGroundingCapability) {
-				log.Printf("AIModelManager: using PreferredModel %s", pm)
 				return pm
 			}
-			log.Printf("AIModelManager: PreferredModel %s does not meet capability requirements, falling back", pm)
-		} else {
-			log.Printf("AIModelManager: PreferredModel %s not found in model registry, falling back", pm)
 		}
 	}
 
 	// If an explicit fallback chain is configured, treat it as an allowlist and preserve its order.
 	if explicit := mm.selectExplicitFallbackModel(requirements, inputTokens, excludeModels, preferNearlyRealTime); explicit != "" {
-		log.Printf("AIModelManager: using explicit fallback model %s", explicit)
 		return explicit
 	}
 	if len(compactUniqueModelNames(requirements.FallbackModels)) > 0 {
@@ -865,9 +856,7 @@ func (mm *AIModelManager) SelectModel(requirements AIRequirements, inputTokens i
 	})
 
 	if len(capableModels) > 0 {
-		selected := capableModels[0].name
-		log.Printf("AIModelManager selected model: %s", selected)
-		return selected
+		return capableModels[0].name
 	}
 
 	// Если ничего не найдено, пробуем найти модель с самым большим окном, игнорируя размер входа
@@ -913,7 +902,6 @@ func (mm *AIModelManager) SelectModel(requirements AIRequirements, inputTokens i
 	}
 
 	if largestModel != nil {
-		log.Printf("No model can handle full input. Selected largest model: %s", largestModel.name)
 		return largestModel.name
 	}
 
@@ -1163,9 +1151,7 @@ func (mm *AIModelManager) SelectToolCallingModel(requirements AIRequirements, in
 	})
 
 	if len(capableModels) > 0 {
-		selected := capableModels[0].name
-		log.Printf("AIModelManager selected tool-calling model: %s", selected)
-		return selected
+		return capableModels[0].name
 	}
 
 	// Fallback к наибольшей модели с tool-calling
@@ -1214,7 +1200,6 @@ func (mm *AIModelManager) SelectToolCallingModel(requirements AIRequirements, in
 	}
 
 	if largestModel != nil {
-		log.Printf("No tool-calling model can handle full input. Selected largest tool-calling model: %s", largestModel.name)
 		return largestModel.name
 	}
 

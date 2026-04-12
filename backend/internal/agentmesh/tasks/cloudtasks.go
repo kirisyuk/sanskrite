@@ -10,6 +10,8 @@ import (
 
 	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
 	taskspb "cloud.google.com/go/cloudtasks/apiv2/cloudtaskspb"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -72,6 +74,7 @@ func (d *Dispatcher) EnqueueTask(ctx context.Context, taskID string) error {
 		Headers:    map[string]string{"Content-Type": "application/json"},
 		Body:       body,
 	}
+	otel.GetTextMapPropagator().Inject(ctx, propagation.MapCarrier(httpRequest.Headers))
 	if strings.TrimSpace(d.saEmail) != "" {
 		httpRequest.AuthorizationHeader = &taskspb.HttpRequest_OidcToken{
 			OidcToken: &taskspb.OidcToken{
@@ -83,7 +86,7 @@ func (d *Dispatcher) EnqueueTask(ctx context.Context, taskID string) error {
 	_, err = d.client.CreateTask(ctx, &taskspb.CreateTaskRequest{
 		Parent: parent,
 		Task: &taskspb.Task{
-			MessageType: &taskspb.Task_HttpRequest{HttpRequest: httpRequest},
+			MessageType:  &taskspb.Task_HttpRequest{HttpRequest: httpRequest},
 			ScheduleTime: timestamppb.New(time.Now().UTC()),
 		},
 	})

@@ -5,7 +5,6 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -229,19 +228,6 @@ func enrichScoutModelInput(input map[string]any, task *contracts.MeshTask) map[s
 	return out
 }
 
-func stringSliceContains(slice []string, value string) bool {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return false
-	}
-	for _, item := range slice {
-		if strings.TrimSpace(item) == value {
-			return true
-		}
-	}
-	return false
-}
-
 func makeDeterministicKey(parts ...string) string {
 	normalized := make([]string, 0, len(parts))
 	for _, part := range parts {
@@ -266,11 +252,6 @@ func nowRFC3339() string {
 	return time.Now().UTC().Format(time.RFC3339)
 }
 
-func marshalForPrompt(v any) string {
-	raw, _ := json.MarshalIndent(v, "", "  ")
-	return string(raw)
-}
-
 func maybeSearchKnowledgeBase(ctx context.Context, vertexSearch knowledgeBaseSearcher, tenantID, query string, pageSize int) []map[string]any {
 	if vertexSearch == nil || strings.TrimSpace(query) == "" {
 		return nil
@@ -287,42 +268,4 @@ func maybeSearchKnowledgeBase(ctx context.Context, vertexSearch knowledgeBaseSea
 
 type knowledgeBaseSearcher interface {
 	Search(ctx context.Context, tenantID, query string, pageSize int) ([]map[string]any, error)
-}
-
-// humanizeSearchQuery strips canonical paths and system-internal syntax from a
-// query so that it reads like a question a human analyst would type into Google.
-func humanizeSearchQuery(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	// Replace canonical path fragments (e.g. /product/component/chemical/refining/lithium-carbonate)
-	// with the human-readable tail token.
-	parts := strings.Fields(raw)
-	var out []string
-	for _, part := range parts {
-		if strings.HasPrefix(part, "/") && strings.Count(part, "/") >= 2 {
-			segments := strings.Split(strings.Trim(part, "/"), "/")
-			tail := segments[len(segments)-1]
-			tail = strings.ReplaceAll(tail, "-", " ")
-			tail = strings.ReplaceAll(tail, "_", " ")
-			out = append(out, tail)
-		} else {
-			out = append(out, part)
-		}
-	}
-	result := strings.Join(out, " ")
-	result = strings.TrimSpace(result)
-	if result == "" {
-		return raw
-	}
-	return result
-}
-
-func summarizeTraceDigest(path map[string]any) string {
-	product, _ := path["productRef"].(string)
-	suppliers := stringSliceValue(path["suppliers"])
-	customers := stringSliceValue(path["customers"])
-	legs := int(floatValue(path, "pathCount", 0))
-	return fmt.Sprintf("product=%s suppliers=%d customers=%d paths=%d", strings.TrimSpace(product), len(suppliers), len(customers), legs)
 }

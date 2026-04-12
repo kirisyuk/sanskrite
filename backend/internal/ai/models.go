@@ -127,6 +127,11 @@ type AIRequirements struct {
 
 	// InternalDataGroundingCapability требуется модель с поддержкой grounding по internal datastore (Vertex AI Search).
 	InternalDataGroundingCapability bool `json:"internalDataGroundingCapability"`
+
+	// ResponseMimeType optional output MIME hint for providers that support constrained generation (e.g. application/json).
+	ResponseMimeType string `json:"responseMimeType,omitempty"`
+	// ResponseSchema optional JSON Schema for structured output when the provider supports it.
+	ResponseSchema map[string]any `json:"responseSchema,omitempty"`
 }
 
 // AIModelCapabilities описывает технические и коммерческие характеристики конкретной AI-модели

@@ -21,6 +21,7 @@ Files:
 - `mesh.supervisor`
 - `mesh.worker`
 - `mesh.reviewer`
+- `mesh.scout-orchestrator`
 
 Each built-in agent defines:
 
@@ -29,6 +30,7 @@ Each built-in agent defines:
 - capabilities
 - invocation policy
 - A2A version and endpoint
+- signed invocation policy, including tool allowlists for MCP callers
 
 ## Signing Model
 

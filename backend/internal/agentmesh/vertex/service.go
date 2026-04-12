@@ -1,9 +1,11 @@
 package vertex
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -26,14 +28,15 @@ type ModelAliases struct {
 }
 
 type Service struct {
-	vertexAI        *ai.VertexAIService
-	aiExecutor      *ai.AITaskExecutor
-	models          ModelAliases
-	httpClient      *http.Client
-	tokenSource     oauth2.TokenSource
-	projectID       string
-	location        string
-	reasoningEngine string
+	vertexAI         *ai.VertexAIService
+	aiExecutor       *ai.AITaskExecutor
+	models           ModelAliases
+	httpClient       *http.Client
+	tokenSource      oauth2.TokenSource
+	projectID        string
+	location         string
+	reasoningEngine  string
+	scoutAgentEngine string
 }
 
 func NewService(projectID, location, dataStoreID string) (*Service, error) {
@@ -53,19 +56,24 @@ func NewService(projectID, location, dataStoreID string) (*Service, error) {
 	if engine == "" {
 		return nil, fmt.Errorf("AGENTMESH_VERTEX_REASONING_ENGINE is required")
 	}
-	return &Service{
+	svc := &Service{
 		vertexAI: vertexSvc,
 		models: ModelAliases{
-			FlashLite:      defaultModel("AGENTMESH_MODEL_FLASH", "gemini-3.1-flash-lite-preview"),
-			FlashReasoning: defaultModel("AGENTMESH_MODEL_FLASH_REASONING", "gemini-3-flash-preview"),
-			Pro:            defaultModel("AGENTMESH_MODEL_PRO", "gemini-3.1-pro-preview"),
+			FlashLite:      defaultModel("AGENTMESH_MODEL_FLASH", "vertex-gemini-3.1-flash-lite-preview"),
+			FlashReasoning: defaultModel("AGENTMESH_MODEL_FLASH_REASONING", "vertex-gemini-3-flash-preview"),
+			Pro:            defaultModel("AGENTMESH_MODEL_PRO", "vertex-gemini-3.1-pro-preview"),
 		},
-		httpClient:      &http.Client{Timeout: 45 * time.Second},
-		tokenSource:     ts,
-		projectID:       strings.TrimSpace(projectID),
-		location:        strings.TrimSpace(location),
-		reasoningEngine: engine,
-	}, nil
+		httpClient:       &http.Client{Timeout: 45 * time.Second},
+		tokenSource:      ts,
+		projectID:        strings.TrimSpace(projectID),
+		location:         strings.TrimSpace(location),
+		reasoningEngine:  engine,
+		scoutAgentEngine: strings.TrimSpace(os.Getenv("AGENTMESH_SCOUT_AGENT_ENGINE")),
+	}
+	if err := validateVertexModelAliases(mm, svc.models); err != nil {
+		return nil, err
+	}
+	return svc, nil
 }
 
 func (s *Service) WithAIExecutor(exec *ai.AITaskExecutor) *Service {
@@ -99,12 +107,23 @@ func (s *Service) ModelNameForCapability(capability string, review bool) string 
 	case "scout.review":
 		return s.models.Pro
 	case "scout.research", "scout.bridge":
-		// Grounded retrieval-heavy steps should start on Vertex-native grounding models.
-		return "vertex-gemini-3-flash-preview"
+		return s.models.FlashReasoning
 	case "scout.plan", "scout.orchestrate", "scout.decide", "scout.critic":
 		return s.models.FlashReasoning
 	default:
 		return s.models.FlashLite
+	}
+}
+
+func (s *Service) FallbackModelsForCapability(capability string, review bool) []string {
+	if review || strings.EqualFold(strings.TrimSpace(capability), "scout.review") {
+		return nil
+	}
+	switch strings.TrimSpace(strings.ToLower(capability)) {
+	case "scout.plan", "scout.orchestrate", "scout.decide", "scout.research", "scout.bridge", "scout.critic":
+		return compactModelFallbacks(s.models.FlashReasoning, s.models.Pro)
+	default:
+		return compactModelFallbacks(s.models.FlashLite, s.models.FlashReasoning, s.models.Pro)
 	}
 }
 
@@ -115,8 +134,18 @@ func (s *Service) Readiness(ctx context.Context) error {
 	if strings.TrimSpace(s.reasoningEngine) == "" {
 		return fmt.Errorf("reasoning engine is not configured")
 	}
-	_, err := s.doVertexJSON(ctx, http.MethodGet, resourceURL(s.reasoningEngine), nil)
-	return err
+	if _, err := s.doVertexJSON(ctx, http.MethodGet, resourceURL(s.reasoningEngine), nil); err != nil {
+		return err
+	}
+	if !strings.EqualFold(strings.TrimSpace(os.Getenv("AGENTMESH_SCOUT_ORCHESTRATOR_MODE")), "local") {
+		if strings.TrimSpace(s.scoutAgentEngine) == "" {
+			return fmt.Errorf("scout agent engine is not configured")
+		}
+		if _, err := s.doVertexJSON(ctx, http.MethodGet, resourceURL(s.scoutAgentEngine), nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) EnsureSession(ctx context.Context, task *contracts.MeshTask) (string, error) {
@@ -155,16 +184,6 @@ func (s *Service) EnsureSession(ctx context.Context, task *contracts.MeshTask) (
 	return "", fmt.Errorf("vertex sessions.create did not return a session name")
 }
 
-func (s *Service) EnsureMemoryBank(_ context.Context, task *contracts.MeshTask) (string, error) {
-	if task == nil {
-		return "", fmt.Errorf("task is nil")
-	}
-	if strings.TrimSpace(task.MemoryBankRef) != "" {
-		return task.MemoryBankRef, nil
-	}
-	return s.reasoningEngine + "/memories", nil
-}
-
 func (s *Service) AppendSessionEvent(ctx context.Context, sessionRef, author, role, text string, metadata map[string]any) error {
 	sessionRef = strings.TrimSpace(sessionRef)
 	if sessionRef == "" {
@@ -185,23 +204,36 @@ func (s *Service) AppendSessionEvent(ctx context.Context, sessionRef, author, ro
 	return err
 }
 
-func (s *Service) GenerateMemoriesFromSession(ctx context.Context, task *contracts.MeshTask) error {
-	if task == nil || strings.TrimSpace(task.SessionRef) == "" {
-		return fmt.Errorf("task with sessionRef is required")
+func (s *Service) BeginChatWithTools(ctx context.Context, task *contracts.MeshTask, tools []ai.ToolSchema) (*ai.ToolChatStep, error) {
+	if s == nil || s.vertexAI == nil {
+		return nil, fmt.Errorf("vertex service is not configured")
 	}
-	_, err := s.doVertexJSON(ctx, http.MethodPost, resourceURL(s.reasoningEngine)+"/memories:generate", map[string]any{
-		"vertexSessionSource": map[string]any{
-			"session": task.SessionRef,
+	inputJSON, _ := json.MarshalIndent(task.Input, "", "  ")
+	model := s.ModelNameForCapability(task.Capability, false)
+	aiTask := &ai.AITask{
+		TaskType:     ai.TaskTypeContentGeneration,
+		InputContent: buildPrompt(task, false, string(inputJSON)),
+		AIRequirements: ai.AIRequirements{
+			PreferredModel:             model,
+			TextGenerationCapability:   true,
+			MaxOutputSize:              capabilityMaxOutput(task.Capability, false),
+			MinCapabilityScore:         capabilityMinScore(task.Capability, false),
+			SearchGroundingCapability:  false,
 		},
-		"scope": map[string]string{
-			"tenant": task.TenantID,
-		},
-		"metadata": map[string]string{
-			"capability": task.Capability,
-			"taskId":     task.ID,
-		},
-	})
-	return err
+		TenantID:  task.TenantID,
+		SessionID: task.SessionRef,
+		TraceID:   task.ID,
+		UseCase:   "agentmesh",
+	}
+	return s.vertexAI.BeginChatWithTools(ctx, aiTask, model, tools)
+}
+
+func (s *Service) ContinueWithToolResults(ctx context.Context, sessionID string, task *contracts.MeshTask, results []ai.ToolExecutionResult) (*ai.ToolChatStep, error) {
+	if s == nil || s.vertexAI == nil {
+		return nil, fmt.Errorf("vertex service is not configured")
+	}
+	model := s.ModelNameForCapability(task.Capability, false)
+	return s.vertexAI.ContinueWithToolResults(ctx, sessionID, model, results)
 }
 
 func (s *Service) ExecuteTask(ctx context.Context, task *contracts.MeshTask, review bool) (map[string]any, *contracts.CostAttribution, error) {
@@ -216,11 +248,19 @@ func (s *Service) ExecuteTask(ctx context.Context, task *contracts.MeshTask, rev
 	searchGrounding, internalGrounding := capabilityGrounding(task.Capability, review)
 	minCapabilityScore := capabilityMinScore(task.Capability, review)
 	maxOutputSize := capabilityMaxOutput(task.Capability, review)
+	responseSchema := responseSchemaForCapability(task.Capability, review)
+	responseMimeType := ""
+	if len(responseSchema) > 0 {
+		responseMimeType = "application/json"
+	}
 	aiTask := &ai.AITask{
 		TaskType:     taskType,
 		InputContent: buildPrompt(task, review, string(inputJSON)),
 		AIRequirements: ai.AIRequirements{
 			PreferredModel:                  s.ModelNameForCapability(task.Capability, review),
+			FallbackModels:                  s.FallbackModelsForCapability(task.Capability, review),
+			ResponseMimeType:                responseMimeType,
+			ResponseSchema:                  responseSchema,
 			TextGenerationCapability:        true,
 			SearchGroundingCapability:       searchGrounding,
 			InternalDataGroundingCapability: internalGrounding,
@@ -248,12 +288,12 @@ func (s *Service) executeViaTaskExecutor(ctx context.Context, aiTask *ai.AITask,
 		return nil, nil, fmt.Errorf("AI task executor: status=%s content=%s", result.Status, result.Content)
 	}
 	body := map[string]any{
-		"content":    result.Content,
-		"model":      result.Model,
-		"citations":  result.Citations,
-		"grounding":  result.GroundingEvidence,
+		"content":      result.Content,
+		"model":        result.Model,
+		"citations":    result.Citations,
+		"grounding":    result.GroundingEvidence,
 		"finishReason": result.FinishReason,
-		"reviewMode": review,
+		"reviewMode":   review,
 	}
 	cost := &contracts.CostAttribution{
 		Model:            result.Model,
@@ -271,12 +311,12 @@ func (s *Service) executeDirectVertex(ctx context.Context, aiTask *ai.AITask, re
 		return nil, nil, err
 	}
 	body := map[string]any{
-		"content":    result.Content,
-		"model":      result.Model,
-		"citations":  result.Citations,
-		"grounding":  result.GroundingEvidence,
+		"content":      result.Content,
+		"model":        result.Model,
+		"citations":    result.Citations,
+		"grounding":    result.GroundingEvidence,
 		"finishReason": result.FinishReason,
-		"reviewMode": review,
+		"reviewMode":   review,
 	}
 	cost := &contracts.CostAttribution{
 		Model:            result.Model,
@@ -362,16 +402,20 @@ func buildPrompt(task *contracts.MeshTask, review bool, inputJSON string) string
 				"stopCriteriaEvaluation is REQUIRED: array of {criterion, satisfied, why}.\n" +
 				"evidenceUsed should cite concrete state elements that drove the decision.\n\nInput:\n" + inputJSON
 		case "scout.research":
-			return scoutWorkspacePromptPrefix() + "\n\nReturn JSON only with keys summary, evidencePoints, canonicalRefs, productRefs, geoRefs, actorRefs, recommendedPathProducts, openQuestions, confidence, proposedGraphOps, gapDiagnosis, recommendedAction.\n\n" +
+			return scoutWorkspacePromptPrefix() + "\n\nReturn JSON only with keys summary, evidencePoints, canonicalRefs, productRefs, geoRefs, actorRefs, recommendedPathProducts, openQuestions, confidence, proposedGraphOps, gapDiagnosis, recommendedAction, dataSourceSignal.\n\n" +
 				"You are researching a specific question about the supply-chain graph. Your job is to produce DOMAIN THESES — explicit claims about real-world entities and their relationships — not to paraphrase the query.\n\n" +
-				"RETRIEVAL vs REASONING:\n" +
-				"- retrieval/knowledgeHits contains what the system actually found. This is your evidence inventory.\n" +
-				"- If hitCount is 0: you have NO evidence from the internal knowledge base. Say this clearly. Set confidence <= 0.3. Do NOT fabricate grounded claims from your parametric memory — the system cannot verify them.\n" +
-				"- If hitCount > 0: reason ONLY from the provided evidence. Each thesis must cite specific evidencePoints.\n\n" +
+				"TOOLS:\n" +
+				"You have 4 tools. Use them iteratively like an analyst:\n" +
+				"1. search_knowledge — check internal knowledge base first. Short, specific queries.\n" +
+				"2. web_search — search the web when internal KB has no data. Targeted queries, not full question restatements.\n" +
+				"3. resolve_product — resolve product names to canonical paths BEFORE proposing graph operations.\n" +
+				"4. lookup_transform — verify if a product-to-product transform is already known BEFORE proposing edges.\n\n" +
+				"WORKFLOW: search_knowledge first → if not_found, use web_search → resolve_product for every product → lookup_transform for every relation → then produce your final JSON.\n\n" +
 				"WHAT TO PRODUCE:\n" +
-				"- proposedGraphOps is the PRIMARY output. Each thesis maps to graph operations: create_fragment, create_edge, confirm_edge, or mark_gap.\n" +
+				"- proposedGraphOps is the PRIMARY output. Each thesis maps to graph operations: create_fragment, create_edge, confirm_edge, or mark_gap. Use ONLY canonical paths from resolve_product.\n" +
 				"- summary: synthesize the strongest finding in 1-2 sentences of plain language.\n" +
-				"- openQuestions: what you still don't know, phrased as questions a human would ask.\n\n" +
+				"- openQuestions: what you still don't know, phrased as questions a human would ask.\n" +
+				"- dataSourceSignal: internal_grounded|internal_partial|internal_empty|no_data — be honest about where evidence came from.\n\n" +
 				"WHEN TO STOP RESEARCHING:\n" +
 				"- If you already have endpoints but can't connect them → diagnose missing_middle, recommend bridge.\n" +
 				"- If you have a plausible chain ready for verification → diagnose missing_verification, recommend path.\n" +
@@ -381,15 +425,19 @@ func buildPrompt(task *contracts.MeshTask, review bool, inputJSON string) string
 				"recommendedAction REQUIRED: {action, branchId, reason, failureMode, question, endpointA, endpointB, productHints, geoHints, actorHints, requiresPath}.\n" +
 				"Respect canonical product control-plane semantics: do not conflate synonyms, transforms, assemblies, or generic dependencies.\n\nInput:\n" + inputJSON
 		case "scout.bridge":
-			return scoutWorkspacePromptPrefix() + "\n\nReturn JSON only with keys branchId, endpointA, endpointB, bridgeQuestion, summary, bridgeExists, bridgeKind, missingMiddleTypes, intermediateNodes, intermediateRelationTypes, bridgeSteps, routeSketches, openQuestions, confidence, proposedGraphOps, suggestedSubscans, gapDiagnosis, recommendedAction.\n\n" +
+			return scoutWorkspacePromptPrefix() + "\n\nReturn JSON only with keys branchId, endpointA, endpointB, bridgeQuestion, summary, bridgeExists, bridgeKind, missingMiddleTypes, intermediateNodes, intermediateRelationTypes, bridgeSteps, routeSketches, openQuestions, confidence, proposedGraphOps, suggestedSubscans, gapDiagnosis, recommendedAction, dataSourceSignal.\n\n" +
 				"This is a MISSING-MIDDLE task. You have plausible endpoints but the runtime cannot connect them. Your job: figure out what sits between A and B.\n\n" +
-				"Think like a human analyst filling in a table: A → A1 → A2 → B. Name concrete entities (companies, ports, facilities, products) at each step. If you don't know the exact entity, say what TYPE of entity belongs there.\n\n" +
-				"EVIDENCE RULES:\n" +
-				"- retrieval packets are your evidence. If retrieval is empty, your bridge claims are HYPOTHESES, not facts. Mark them as such and list explicit open questions.\n" +
-				"- bridgeExists=true ONLY if a plausible real-world connection likely exists.\n\n" +
+				"TOOLS:\n" +
+				"You have 4 tools. Use them to find the intermediate steps:\n" +
+				"1. search_knowledge — check internal KB for known entities between A and B.\n" +
+				"2. web_search — search the web for real-world supply chain connections, ports, facilities, companies.\n" +
+				"3. resolve_product — resolve every product to its canonical path before proposing graph ops.\n" +
+				"4. lookup_transform — check if product-to-product transforms are already known.\n\n" +
+				"Think like a human analyst filling in a table: A → A1 → A2 → B. Name concrete entities (companies, ports, facilities, products) at each step. Use tools to find them — do not guess.\n\n" +
 				"bridgeSteps REQUIRED when you can articulate any part of the route. Each step: index, stepClass, nodeRef, nodeLabel, nodeKind, fromRef, toRef, relationType, productRef, actorRef, geoRef, whyNeeded, evidenceHints, operationalStatus.\n" +
-				"proposedGraphOps must turn the bridge into graph operations.\n" +
-				"suggestedSubscans: follow-up questions as natural-language branch definitions.\n\n" +
+				"proposedGraphOps must turn the bridge into graph operations. Use ONLY canonical paths from resolve_product.\n" +
+				"suggestedSubscans: follow-up questions as natural-language branch definitions.\n" +
+				"dataSourceSignal: external_only|internal_grounded|internal_partial|no_data — be honest.\n\n" +
 				"WHEN TO HAND OFF:\n" +
 				"- Bridge is concrete enough to verify → recommend path.\n" +
 				"- Claims conflict → recommend critic.\n" +
@@ -444,6 +492,7 @@ How you think and communicate:
 - When you search for information, write queries the way a human analyst would type into Google: "Who are the main lithium carbonate exporters in Chile?", "What is the shipping route from Antofagasta to Rotterdam?", "Does AMG Lithium operate a conversion plant in Germany?"
 - When the internal knowledge base returns nothing useful, say so honestly. Do not fabricate evidence or pretend confidence you do not have. Zero hits means you lack data, not that the data is negative.
 - When you have exhausted a line of inquiry (2+ attempts with no new information), stop that line and either try a different angle or declare the gap honestly.
+- Memory context is hint-only. It can suggest where to look next, but it is never evidence. Do not materialize graph facts from memory unless fresh grounded evidence in the current run supports them.
 
 Your job is to build and improve the graph — add useful structure (nodes, edges, paths) that reflect real supply-chain relationships. You are not writing a report or a legal brief. "Good enough for the graph" is the quality bar: a structurally useful chain is better than an endlessly polished hypothesis.
 
@@ -501,6 +550,94 @@ func (s *Service) doVertexJSON(ctx context.Context, method, rawURL string, paylo
 		return nil, fmt.Errorf("vertex endpoint %s returned %d: %v", rawURL, resp.StatusCode, out)
 	}
 	return out, nil
+}
+
+func (s *Service) doVertexSSE(ctx context.Context, method, rawURL string, payload map[string]any) ([]any, error) {
+	var bodyReader *strings.Reader
+	if payload != nil {
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		bodyReader = strings.NewReader(string(body))
+	} else {
+		bodyReader = strings.NewReader("")
+	}
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, bodyReader)
+	if err != nil {
+		return nil, err
+	}
+	token, err := s.tokenSource.Token()
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token.AccessToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		raw, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, fmt.Errorf("vertex endpoint %s returned %d: %v", rawURL, resp.StatusCode, readErr)
+		}
+		var out map[string]any
+		if err := json.Unmarshal(raw, &out); err == nil {
+			return nil, fmt.Errorf("vertex endpoint %s returned %d: %v", rawURL, resp.StatusCode, out)
+		}
+		return nil, fmt.Errorf("vertex endpoint %s returned %d: %s", rawURL, resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	events := make([]any, 0, 8)
+	dataLines := make([]string, 0, 4)
+	flush := func() error {
+		if len(dataLines) == 0 {
+			return nil
+		}
+		data := strings.TrimSpace(strings.Join(dataLines, "\n"))
+		dataLines = dataLines[:0]
+		if data == "" || data == "[DONE]" {
+			return nil
+		}
+		var event any
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			return fmt.Errorf("vertex stream event decode failed: %w", err)
+		}
+		events = append(events, event)
+		return nil
+	}
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			if err := flush(); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "data:") {
+			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+			continue
+		}
+		// Agent Engine may return NDJSON-style event lines even when alt=sse is requested.
+		if err := flush(); err != nil {
+			return nil, err
+		}
+		dataLines = append(dataLines, line)
+		if err := flush(); err != nil {
+			return nil, err
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	if err := flush(); err != nil {
+		return nil, err
+	}
+	return events, nil
 }
 
 func (s *Service) waitForOperation(ctx context.Context, operation map[string]any) (map[string]any, error) {
@@ -587,6 +724,45 @@ func defaultModel(envName, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func validateVertexModelAliases(mm *ai.AIModelManager, aliases ModelAliases) error {
+	values := map[string]string{
+		"AGENTMESH_MODEL_FLASH":           aliases.FlashLite,
+		"AGENTMESH_MODEL_FLASH_REASONING": aliases.FlashReasoning,
+		"AGENTMESH_MODEL_PRO":             aliases.Pro,
+	}
+	for envName, modelName := range values {
+		modelName = strings.TrimSpace(modelName)
+		if !strings.HasPrefix(modelName, "vertex-") {
+			return fmt.Errorf("%s must be a Vertex model alias, got %q", envName, modelName)
+		}
+		caps, err := mm.GetModelCapabilities(modelName)
+		if err != nil {
+			return fmt.Errorf("%s model %q is not registered: %w", envName, modelName, err)
+		}
+		if caps.Provider != ai.AIProviderVertexAI {
+			return fmt.Errorf("%s model %q resolves to provider %s, want %s", envName, modelName, caps.Provider, ai.AIProviderVertexAI)
+		}
+	}
+	return nil
+}
+
+func compactModelFallbacks(models ...string) []string {
+	out := make([]string, 0, len(models))
+	seen := map[string]struct{}{}
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		if _, ok := seen[model]; ok {
+			continue
+		}
+		seen[model] = struct{}{}
+		out = append(out, model)
+	}
+	return out
 }
 
 func envOr(name, fallback string) string {

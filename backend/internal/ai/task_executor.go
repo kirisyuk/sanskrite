@@ -37,8 +37,6 @@ type AITaskExecutor struct {
 
 // NewAITaskExecutor создает новый экземпляр AITaskExecutor
 func NewAITaskExecutor(aiServices []AIService, modelManager *AIModelManager) *AITaskExecutor {
-	log.Printf("Initializing AITaskExecutor")
-
 	if len(aiServices) == 0 {
 		log.Printf("WARNING: aiServices is empty in AITaskExecutor constructor")
 	}
@@ -47,8 +45,6 @@ func NewAITaskExecutor(aiServices []AIService, modelManager *AIModelManager) *AI
 	for _, svc := range aiServices {
 		servicesMap[svc.Provider()] = svc
 	}
-
-	log.Printf("AITaskExecutor initialized successfully with %d AI services", len(servicesMap))
 
 	return &AITaskExecutor{
 		aiServices:       servicesMap,
@@ -89,7 +85,6 @@ func (e *AITaskExecutor) WithCircuitBreaker(cb *CircuitBreaker) *AITaskExecutor 
 
 // ExecuteTask выполняет общую текстовую задачу с автоматическим выбором модели и отказоустойчивостью
 func (e *AITaskExecutor) ExecuteTask(ctx context.Context, task *AITask) (*AITaskResult, error) {
-	log.Printf("ExecuteTask called with task type: %s", task.TaskType)
 	inputTokens := len(task.InputContent) / 4
 
 	inputHash := e.computeInputHash(task)
@@ -132,7 +127,6 @@ func (e *AITaskExecutor) ExecuteTask(ctx context.Context, task *AITask) (*AITask
 			}
 		}
 
-		log.Printf("Executing task using %s with model %s", modelCapabilities.Provider, currentModel)
 		result, err := aiService.ExecuteTask(ctx, task, currentModel)
 		if err != nil {
 			e.recordProviderFailure(modelCapabilities.Provider, currentModel, err)
@@ -200,7 +194,6 @@ func (e *AITaskExecutor) ExecuteStructuredTaskWithModel(ctx context.Context, tas
 // executeStructuredTaskInternal is the core implementation for structured task execution.
 // Returns: parsed result, full AITaskResult (with GroundingEvidence), model used, error.
 func (e *AITaskExecutor) executeStructuredTaskInternal(ctx context.Context, task *AITask) (interface{}, *AITaskResult, string, error) {
-	log.Printf("ExecuteStructuredTask called with task type: %s", task.TaskType)
 	inputChars := len(task.InputContent)
 	inputTokens := inputChars / 4 // Approximate token count (4 chars per token)
 	startedAt := time.Now()
@@ -219,7 +212,7 @@ func (e *AITaskExecutor) executeStructuredTaskInternal(ctx context.Context, task
 
 		currentModel := e.selectFallbackModelAdaptive(activeTask.AIRequirements, inputTokens, triedModels)
 		if currentModel == "" {
-			if !geminiSearchGroundingFallbackApplied && e.enableGeminiSearchGroundingFallback(&activeTask, inputChars) {
+			if !geminiSearchGroundingFallbackApplied && e.enableGeminiSearchGroundingFallback(&activeTask) {
 				geminiSearchGroundingFallbackApplied = true
 				triedModels = nil // New fallback phase: restart attempts with downgraded requirements.
 				continue
@@ -258,9 +251,6 @@ func (e *AITaskExecutor) executeStructuredTaskInternal(ctx context.Context, task
 			}
 		}
 
-		log.Printf("[%s] Executing structured task with model %s (attempt=%d input: %d chars, %d tokens est, ctxDeadline=%s, remaining=%s)",
-			modelCapabilities.Provider, currentModel, attempt, inputChars, inputTokens, deadlineStr, remainingStr)
-
 		attemptStartedAt := time.Now()
 		result, err := aiService.ExecuteTask(ctx, &activeTask, currentModel)
 		if err != nil {
@@ -279,7 +269,6 @@ func (e *AITaskExecutor) executeStructuredTaskInternal(ctx context.Context, task
 					ctx.Err(), deadlineStr, remainingStr)
 			}
 
-			log.Printf("WARNING: Error executing task with model %s. Message: %v. Attempting fallback.", currentModel, err)
 			triedModels = append(triedModels, currentModel)
 			continue
 		}
@@ -298,18 +287,6 @@ func (e *AITaskExecutor) executeStructuredTaskInternal(ctx context.Context, task
 			e.admissionController.RecordUsage(ctx, modelCapabilities.Provider, tenantID, cascadeID, tokens)
 		}
 
-		if debug && result != nil {
-			out := strings.TrimSpace(result.Content)
-			log.Printf("[AI DEBUG] Structured task raw response received (task=%s provider=%s model=%s outputChars=%d sha=%s)\n%s",
-				task.TaskType,
-				modelCapabilities.Provider,
-				currentModel,
-				len(out),
-				shortHash(out),
-				truncateForLog(out, 6000),
-			)
-		}
-
 		// Extract strict JSON in case provider wrapped it (markdown/code fences, preambles)
 		cleanJSON, err := e.extractValidJSON(result.Content)
 		if err != nil {
@@ -320,7 +297,6 @@ func (e *AITaskExecutor) executeStructuredTaskInternal(ctx context.Context, task
 				log.Printf("WARNING: LLM response failed JSON extraction (task=%s provider=%s model=%s outputChars=%d sha=%s): %v",
 					task.TaskType, modelCapabilities.Provider, currentModel, len(result.Content), shortHash(result.Content), err)
 			}
-			log.Printf("WARNING: Failed to extract JSON from response with model %s. Message: %v. Attempting fallback.", currentModel, err)
 			triedModels = append(triedModels, currentModel)
 			continue
 		}
@@ -334,7 +310,6 @@ func (e *AITaskExecutor) executeStructuredTaskInternal(ctx context.Context, task
 				log.Printf("WARNING: LLM response failed verification (task=%s provider=%s model=%s outputChars=%d sha=%s): %v",
 					task.TaskType, modelCapabilities.Provider, currentModel, len(result.Content), shortHash(result.Content), err)
 			}
-			log.Printf("WARNING: Failed to verify result with model %s. Message: %v. Attempting fallback.", currentModel, err)
 			triedModels = append(triedModels, currentModel)
 			continue
 		}
@@ -365,7 +340,7 @@ func (e *AITaskExecutor) executeStructuredTaskInternal(ctx context.Context, task
 
 // enableGeminiSearchGroundingFallback downgrades strict internal-grounding tasks to
 // external search grounding on Gemini when all internal-grounding models are exhausted.
-func (e *AITaskExecutor) enableGeminiSearchGroundingFallback(task *AITask, inputChars int) bool {
+func (e *AITaskExecutor) enableGeminiSearchGroundingFallback(task *AITask) bool {
 	if task == nil {
 		return false
 	}
@@ -374,8 +349,6 @@ func (e *AITaskExecutor) enableGeminiSearchGroundingFallback(task *AITask, input
 		return false
 	}
 	if _, ok := e.aiServices[AIProviderGemini]; !ok {
-		log.Printf("WARNING: Gemini search-grounding fallback skipped for task '%s': Gemini provider is not registered",
-			task.TaskType)
 		return false
 	}
 
@@ -387,8 +360,6 @@ func (e *AITaskExecutor) enableGeminiSearchGroundingFallback(task *AITask, input
 	}
 	task.AIRequirements = req
 
-	log.Printf("WARNING: Applying Gemini fallback for structured task '%s': downgraded capabilities to search grounding (windowChars=%d, preferredModel=%s)",
-		task.TaskType, inputChars, task.AIRequirements.PreferredModel)
 	return true
 }
 
@@ -420,7 +391,6 @@ func (e *AITaskExecutor) ExecuteEmbeddingCalculationTask(ctx context.Context, ta
 		}
 
 		if !modelCapabilities.EmbeddingGenerationCapability {
-			log.Printf("Model %s does not support embedding generation. Skipping.", currentModel)
 			triedModels = append(triedModels, currentModel)
 			continue
 		}
@@ -446,7 +416,6 @@ func (e *AITaskExecutor) ExecuteEmbeddingCalculationTask(ctx context.Context, ta
 
 // ExecuteImageAnalysisTask выполняет задачу по анализу изображения
 func (e *AITaskExecutor) ExecuteImageAnalysisTask(ctx context.Context, task *AITask) (*AITaskResult, error) {
-	log.Printf("ExecuteImageAnalysisTask called")
 	if task.TaskType != TaskTypeImageAnalysis {
 		log.Printf("TaskType is not ImageAnalysis. This may not work as expected.")
 	}
@@ -487,7 +456,6 @@ func (e *AITaskExecutor) ExecuteImageAnalysisTask(ctx context.Context, task *AIT
 		}
 
 		if !modelCapabilities.ImageAnalysisCapability {
-			log.Printf("Model %s does not support image analysis. Skipping.", currentModel)
 			triedModels = append(triedModels, currentModel)
 			continue
 		}
@@ -499,7 +467,6 @@ func (e *AITaskExecutor) ExecuteImageAnalysisTask(ctx context.Context, task *AIT
 			continue
 		}
 
-		log.Printf("Executing image analysis using %s with model %s", modelCapabilities.Provider, currentModel)
 		result, err := aiService.ExecuteImageAnalysisByLinkTask(ctx, inputData.UserQuery, inputData.ImageLink, currentModel)
 		if err != nil {
 			log.Printf("Error executing image analysis with model %s. Message: %v. Attempting fallback.", currentModel, err)
@@ -514,7 +481,6 @@ func (e *AITaskExecutor) ExecuteImageAnalysisTask(ctx context.Context, task *AIT
 
 // ExecuteSearch выполняет поисковый запрос
 func (e *AITaskExecutor) ExecuteSearch(ctx context.Context, task *AITask) (*AITaskResult, error) {
-	log.Printf("ExecuteSearch called")
 	inputTokens := len(task.InputContent) / 4
 
 	inputHash := e.computeInputHash(task)
@@ -543,7 +509,6 @@ func (e *AITaskExecutor) ExecuteSearch(ctx context.Context, task *AITask) (*AITa
 		}
 
 		if !modelCapabilities.BuiltInSearchCapability {
-			log.Printf("Model %s does not support built-in search. Skipping.", currentModel)
 			triedModels = append(triedModels, currentModel)
 			continue
 		}
@@ -555,7 +520,6 @@ func (e *AITaskExecutor) ExecuteSearch(ctx context.Context, task *AITask) (*AITa
 			continue
 		}
 
-		log.Printf("Executing search using %s with model %s", modelCapabilities.Provider, currentModel)
 		result, err := aiService.ExecuteSearch(ctx, task.InputContent, currentModel)
 		if err != nil {
 			log.Printf("Error executing search with model %s. Message: %v. Attempting fallback.", currentModel, err)
@@ -563,7 +527,6 @@ func (e *AITaskExecutor) ExecuteSearch(ctx context.Context, task *AITask) (*AITa
 			continue
 		}
 
-		log.Printf("Search completed. Found %d citations.", len(result.Citations))
 		result.ProcessingTime = time.Since(startedAt)
 		return result, nil
 	}
@@ -593,7 +556,6 @@ func (e *AITaskExecutor) ExecuteTaskWithTools(ctx context.Context, task *AITask,
 		}
 
 		if !caps.SupportsToolCalling {
-			log.Printf("Model %s does not support tool-calling. Trying fallback.", currentModel)
 			triedModels = append(triedModels, currentModel)
 			continue
 		}
@@ -627,7 +589,6 @@ func (e *AITaskExecutor) ExecuteTaskWithTools(ctx context.Context, task *AITask,
 		for step != nil && !step.IsFinal && safeguard < 8 {
 			safeguard++
 			if len(step.ToolCalls) == 0 {
-				log.Printf("Tool-calling loop: no toolCalls returned, breaking.")
 				break
 			}
 

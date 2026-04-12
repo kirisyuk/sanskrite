@@ -1,0 +1,88 @@
+{
+  "question": "Map the likely lithium supply chain from Chile to a German battery manufacturer, identify ownership influence, and surface the strongest regulatory pressure points.",
+  "corpusDocuments": [
+    {
+      "documentId": "doc-1",
+      "title": "SQM ships lithium chemicals from Chile",
+      "text": "SQM produces lithium carbonate in Chile from Salar de Atacama brine operations. The note says SQM ships lithium carbonate to Asian and European cathode supply chains through port logistics.",
+      "sourceUri": "synthetic://doc-1",
+      "sourceType": "synthetic_note",
+      "tags": [
+        "supply_chain",
+        "lithium",
+        "chile"
+      ],
+      "metadata": {
+        "region": "Chile"
+      }
+    },
+    {
+      "documentId": "doc-2",
+      "title": "Tianqi exposure to SQM",
+      "text": "An ownership brief says Tianqi Lithium holds a significant minority stake in SQM, creating board-level influence concerns even though SQM remains a Chilean operator.",
+      "sourceUri": "synthetic://doc-2",
+      "sourceType": "synthetic_note",
+      "tags": [
+        "ownership"
+      ],
+      "metadata": {
+        "theme": "influence"
+      }
+    },
+    {
+      "documentId": "doc-3",
+      "title": "German cathode and cell demand",
+      "text": "A German battery manufacturing brief says local producers depend on imported lithium chemicals or processed cathode materials because domestic upstream refining remains limited.",
+      "sourceUri": "synthetic://doc-3",
+      "sourceType": "synthetic_note",
+      "tags": [
+        "germany",
+        "demand"
+      ],
+      "metadata": {
+        "region": "Germany"
+      }
+    },
+    {
+      "documentId": "doc-4",
+      "title": "Midstream concentration risk",
+      "text": "A midstream risk memo states that lithium conversion capacity is concentrated in China, creating an intermediate choke point between Chilean raw or semi-processed output and European downstream manufacturing.",
+      "sourceUri": "synthetic://doc-4",
+      "sourceType": "synthetic_note",
+      "tags": [
+        "midstream",
+        "china"
+      ],
+      "metadata": {
+        "theme": "concentration"
+      }
+    },
+    {
+      "documentId": "doc-5",
+      "title": "EU battery regulation pressure points",
+      "text": "An EU regulatory summary highlights battery due diligence, carbon footprint disclosure, and traceability requirements as likely pressure points for imported battery materials entering Germany.",
+      "sourceUri": "synthetic://doc-5",
+      "sourceType": "synthetic_note",
+      "tags": [
+        "regulatory",
+        "eu"
+      ],
+      "metadata": {
+        "theme": "compliance"
+      }
+    },
+    {
+      "documentId": "doc-6",
+      "title": "Open gap on exact converter identity",
+      "text": "A gap note says the supplied corpus does not identify a specific Chinese or European converter handling the Chilean lithium before it reaches Germany.",
+      "sourceUri": "synthetic://doc-6",
+      "sourceType": "synthetic_note",
+      "tags": [
+        "gap"
+      ],
+      "metadata": {
+        "theme": "missing_middle"
+      }
+    }
+  ]
+}

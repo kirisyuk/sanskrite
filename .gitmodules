@@ -4,3 +4,6 @@
 [submodule "temp-repos/MiroFish"]
 	path = temp-repos/MiroFish
 	url = https://github.com/666ghj/MiroFish
+[submodule "temp-repos/langgraph"]
+	path = temp-repos/langgraph
+	url = https://github.com/langchain-ai/langgraph.git

@@ -36,6 +36,7 @@ Required env:
 
 - `GCP_PROJECT_ID`
 - `AGENTMESH_VERTEX_REASONING_ENGINE`
+- `AGENTMESH_SCOUT_AGENT_ENGINE` unless `AGENTMESH_SCOUT_ORCHESTRATOR_MODE=local`
 - `AGENTMESH_AGENT_CARD_KMS_KEY_VERSION`
 
 Operational env usually supplied by deploy:
@@ -46,11 +47,21 @@ Operational env usually supplied by deploy:
 - `AGENTMESH_TASKS_QUEUE`
 - `AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT`
 - `AGENTMESH_TASKS_OIDC_AUDIENCE`
+- `AGENTMESH_TASKS_DISABLE_OIDC=0`
 - `AGENTMESH_RUNTIME_LEASE_OWNER`
 - `AGENTMESH_ARTIFACT_BUCKET`
-- `AGENTMESH_MODEL_FLASH`
-- `AGENTMESH_MODEL_PRO`
+- `AGENTMESH_SCOUT_ORCHESTRATOR_MODE=vertex`
+- `AGENTMESH_ALLOW_UNAUTH_INTERNAL_TASKS=0`
+- `AGENTMESH_MODEL_FLASH=vertex-gemini-3.1-flash-lite-preview`
+- `AGENTMESH_MODEL_FLASH_REASONING=vertex-gemini-3-flash-preview`
+- `AGENTMESH_MODEL_PRO=vertex-gemini-3.1-pro-preview`
+- `AGENTMESH_OTEL_ENABLED=1`
+- `AGENTMESH_EVAL_GCS_PREFIX`
 - `VERTEX_SEARCH_DATA_STORE_ID`
+
+`AGENTMESH_TASKS_DISABLE_OIDC=1` and
+`AGENTMESH_ALLOW_UNAUTH_INTERNAL_TASKS=1` are accepted only with the matching
+`AGENTMESH_DEV_*` override flags for explicit local/dev runs.
 
 ## Deployment
 
@@ -69,5 +80,7 @@ The deploy path ensures:
 - Cloud Tasks queue
 - artifact bucket
 - Vertex Reasoning Engine
+- Vertex Scout Agent Engine resource configuration
 - Cloud Run service
+- authenticated internal task endpoint
 - readiness smoke check

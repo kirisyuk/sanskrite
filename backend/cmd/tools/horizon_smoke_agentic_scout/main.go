@@ -26,14 +26,20 @@ import (
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 )
 
+// defaultSmokeQuery is English because retrieval and tool calls run in English internally.
+const defaultSmokeQuery = "Trace the supply chain of lithium-ion cathode active materials into Germany: map inward flows (imports, cathode/cell value chain in Germany, OEM demand signals) upstream through CAM and precursors to primary raw materials (lithium salts, nickel, cobalt, manganese sources) and their countries of origin. Prefer concrete companies, sites, trade lanes, and mass-balance hints. Use English for all internal search queries and tool calls."
+
 func main() {
+	if strings.TrimSpace(os.Getenv("AGENTMESH_SCOUT_REASONING_LOG")) == "" {
+		_ = os.Setenv("AGENTMESH_SCOUT_REASONING_LOG", "1")
+	}
 	var (
 		projectID   = flag.String("project", envOr("GCP_PROJECT_ID", "nv-horizon"), "GCP project ID")
 		location    = flag.String("location", envOr("AGENTMESH_VERTEX_LOCATION", "global"), "Vertex model location")
-		query       = flag.String("query", "", "Natural-language scouting query")
+		query       = flag.String("query", defaultSmokeQuery, "Natural-language scouting query (English recommended; internal search/tools use English)")
 		target      = flag.String("target", "", "Optional canonical target path")
 		tenantID    = flag.String("tenant", "global", "Tenant ID")
-		projectRef  = flag.String("project-ref", "nv-horizon-test", "Logical Horizon project ID")
+		projectRef  = flag.String("project-ref", envOr("HORIZON_PROJECT_ID", envOr("GCP_PROJECT_ID", "nv-horizon")), "Logical Horizon project ID (defaults to HORIZON_PROJECT_ID, else GCP_PROJECT_ID, else nv-horizon)")
 		lensID      = flag.String("lens", "", "Optional lens ID")
 		allowWrites = flag.Bool("allow-writes", true, "Allow deterministic artifact writes")
 		compareOnly = flag.Bool("compare-only", false, "Run in compare-only mode without graph landing semantics")

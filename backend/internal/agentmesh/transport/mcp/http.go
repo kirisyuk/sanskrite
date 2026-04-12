@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/agentmesh/contracts"
@@ -11,12 +12,23 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/agentmesh/registry"
 	"github.com/igorkirisyuk/sanskrite/internal/agentmesh/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/agentmesh/runtime"
+	"github.com/igorkirisyuk/sanskrite/internal/agentmesh/scout"
 )
 
 type Tool interface {
 	Name() string
 	Description() string
+	InputSchema() map[string]any
+	OutputSchema() map[string]any
 	Call(ctx context.Context, caller contracts.AgentSpec, params map[string]any) (map[string]any, error)
+}
+
+type ScoutToolService interface {
+	SearchKnowledge(ctx context.Context, tenantID, query string, limit int) (scout.ToolResponse, error)
+	ResolveProductCanonical(ctx context.Context, tenantID, productLabel string) (scout.ToolResponse, error)
+	LookupProductTransform(ctx context.Context, tenantID, fromProduct, toProduct string) (scout.ToolResponse, error)
+	PreviewPath(ctx context.Context, meta map[string]any, payload map[string]any) (map[string]any, error)
+	MaterializePath(ctx context.Context, meta map[string]any, payload map[string]any) (map[string]any, error)
 }
 
 type Handler struct {
@@ -28,7 +40,7 @@ type Handler struct {
 	leaseOwner string
 }
 
-func NewHandler(registrySvc *registry.Service, policySvc *policy.Service, runtimeSvc *runtime.Service, store *repo.Store, leaseOwner string) *Handler {
+func NewHandler(registrySvc *registry.Service, policySvc *policy.Service, runtimeSvc *runtime.Service, store *repo.Store, leaseOwner string, scoutSvc ScoutToolService) *Handler {
 	h := &Handler{
 		tools:      map[string]Tool{},
 		registry:   registrySvc,
@@ -39,6 +51,16 @@ func NewHandler(registrySvc *registry.Service, policySvc *policy.Service, runtim
 	}
 	h.registerTool(taskGetTool{store: store})
 	h.registerTool(vertexGenerateTool{runtime: runtimeSvc, store: store, leaseOwner: h.leaseOwner})
+	if scoutSvc != nil {
+		h.registerTool(searchKnowledgeTool{svc: scoutSvc})
+		h.registerTool(resolveProductCanonicalTool{svc: scoutSvc})
+		h.registerTool(lookupProductTransformTool{svc: scoutSvc})
+		h.registerTool(pathPreviewTool{svc: scoutSvc})
+		h.registerTool(materializePathTool{svc: scoutSvc})
+		h.registerTool(scoutChildTaskTool{name: "agentmesh.scout.critic", description: "Run governed Scout critic evaluation as a child AgentMesh task.", capability: "scout.critic", runtime: runtimeSvc, store: store, leaseOwner: h.leaseOwner})
+		h.registerTool(scoutChildTaskTool{name: "agentmesh.scout.aggregate", description: "Run governed Scout aggregation as a child AgentMesh task.", capability: "scout.aggregate", runtime: runtimeSvc, store: store, leaseOwner: h.leaseOwner})
+		h.registerTool(scoutChildTaskTool{name: "agentmesh.scout.review", description: "Run governed Scout review as a child AgentMesh task.", capability: "scout.review", runtime: runtimeSvc, store: store, leaseOwner: h.leaseOwner})
+	}
 	return h
 }
 
@@ -84,12 +106,20 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 
 	switch req.Method {
 	case "tools/list":
-		tools := make([]map[string]any, 0, len(h.tools))
-		for _, tool := range h.tools {
+		names := make([]string, 0, len(h.tools))
+		for name := range h.tools {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		tools := make([]map[string]any, 0, len(names))
+		for _, name := range names {
+			tool := h.tools[name]
 			if err := h.policy.EvaluateToolInvocation(*caller, tool.Name()); err == nil {
 				tools = append(tools, map[string]any{
-					"name":        tool.Name(),
-					"description": tool.Description(),
+					"name":         tool.Name(),
+					"description":  tool.Description(),
+					"inputSchema":  tool.InputSchema(),
+					"outputSchema": tool.OutputSchema(),
 				})
 			}
 		}
@@ -129,6 +159,10 @@ type taskGetTool struct{ store *repo.Store }
 
 func (t taskGetTool) Name() string        { return "agentmesh.task.get" }
 func (t taskGetTool) Description() string { return "Fetch an AgentMesh task by ID." }
+func (t taskGetTool) InputSchema() map[string]any {
+	return objectSchema([]string{"taskId"}, map[string]any{"taskId": stringSchema()})
+}
+func (t taskGetTool) OutputSchema() map[string]any { return anyObjectSchema() }
 func (t taskGetTool) Call(ctx context.Context, _ contracts.AgentSpec, params map[string]any) (map[string]any, error) {
 	taskID, _ := params["taskId"].(string)
 	task, err := t.store.GetTask(ctx, taskID)
@@ -156,6 +190,16 @@ func (t vertexGenerateTool) Name() string { return "vertex.generate" }
 func (t vertexGenerateTool) Description() string {
 	return "Generate structured output using Vertex-hosted Gemini through AgentMesh governance."
 }
+func (t vertexGenerateTool) InputSchema() map[string]any {
+	return objectSchema([]string{"capability", "tenantId", "input"}, map[string]any{
+		"capability":       stringSchema(),
+		"tenantId":         stringSchema(),
+		"dedupKey":         stringSchema(),
+		"approvalRequired": boolSchema(),
+		"input":            anyObjectSchema(),
+	})
+}
+func (t vertexGenerateTool) OutputSchema() map[string]any { return anyObjectSchema() }
 
 func (t vertexGenerateTool) Call(ctx context.Context, caller contracts.AgentSpec, params map[string]any) (map[string]any, error) {
 	input, _ := params["input"].(map[string]any)

@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/agentmesh/contracts"
@@ -133,10 +135,11 @@ func (p *Processor) processPlanBootstrap(ctx context.Context, rt *agentmeshrunti
 		}, nil
 	}
 	status := contracts.TaskStatusSucceeded
-	if child != nil && child.Status == contracts.TaskStatusDegraded {
-		status = contracts.TaskStatusDegraded
+	if child != nil && child.Status != "" {
+		status = child.Status
 	}
 	review := mapValue(output["review"])
+	reviewAccepted := deriveScoutReviewAccepted(output, status)
 	result := &agentmeshruntime.ProcessResult{
 		Status:          status,
 		Output:          output,
@@ -145,10 +148,10 @@ func (p *Processor) processPlanBootstrap(ctx context.Context, rt *agentmeshrunti
 	if len(review) > 0 {
 		result.ReviewOutput = review
 	}
-	if accepted, ok := output["reviewAccepted"].(bool); ok {
-		result.ReviewAccepted = boolPtr(accepted)
+	if reviewAccepted != nil {
+		result.ReviewAccepted = reviewAccepted
 	}
-	if rationale := strings.TrimSpace(stringValue(review, "rationale")); rationale != "" {
+	if rationale := deriveScoutTaskRationale(output); rationale != "" {
 		result.LastError = rationale
 	}
 	return result, nil
@@ -179,19 +182,19 @@ func (p *Processor) processDecide(ctx context.Context, rt *agentmeshruntime.Serv
 		completeness = raw
 	}
 	modelIn := enrichScoutModelInput(map[string]any{
-		"request":            req,
-		"goal":               goal,
-		"environment":        environment,
-		"role":               role,
-		"completeness":       completeness,
-		"plan":               compactPlanForModel(plan),
-		"sessionState":       input["sessionState"],
-		"latestOutcome":      input["latestOutcome"],
-		"recentOutcomes":     input["recentOutcomes"],
-		"activeFrontier":     input["activeFrontier"],
-		"candidateActions":   input["candidateActions"],
-		"decisionContext":    input["decisionContext"],
-		"parentSessionRef":   strings.TrimSpace(task.SessionRef),
+		"request":          req,
+		"goal":             goal,
+		"environment":      environment,
+		"role":             role,
+		"completeness":     completeness,
+		"plan":             compactPlanForModel(plan),
+		"sessionState":     input["sessionState"],
+		"latestOutcome":    input["latestOutcome"],
+		"recentOutcomes":   input["recentOutcomes"],
+		"activeFrontier":   input["activeFrontier"],
+		"candidateActions": input["candidateActions"],
+		"decisionContext":  input["decisionContext"],
+		"parentSessionRef": strings.TrimSpace(task.SessionRef),
 	}, task)
 	parsed := p.runModelObject(ctx, rt, task, modelIn)
 	if runtimeErr := modelRuntimeError(parsed); runtimeErr != "" {
@@ -240,9 +243,85 @@ func (p *Processor) processDecide(ctx context.Context, rt *agentmeshruntime.Serv
 	}, nil
 }
 
-// processPlan is kept as a compatibility alias for legacy tests and callers.
-func (p *Processor) processPlan(ctx context.Context, rt *agentmeshruntime.Service, task *contracts.MeshTask, leaseOwner string) (*agentmeshruntime.ProcessResult, error) {
-	return p.processOrchestrate(ctx, rt, task, leaseOwner)
+func shouldUseHostedScoutOrchestrator(rt *agentmeshruntime.Service) bool {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("AGENTMESH_SCOUT_ORCHESTRATOR_MODE")))
+	if mode == "local" {
+		return false
+	}
+	return rt != nil && rt.Vertex() != nil
+}
+
+func scoutMemoryQuery(req InvestigationRequest, input map[string]any) string {
+	parts := []string{
+		req.ScoutingJobID,
+		req.TargetCanonicalPath,
+		stringValue(input, "focus"),
+		stringValue(input, "query"),
+	}
+	if goal := compactGoalFrame(req.Goal); len(goal) > 0 {
+		raw, _ := json.Marshal(goal)
+		parts = append(parts, string(raw))
+	}
+	return strings.Join(compactStrings(parts), "\n")
+}
+
+func deriveHostedScoutTaskResult(output map[string]any) (contracts.TaskStatus, *bool, string) {
+	status, rationale := deriveHostedScoutTaskStatus(output)
+	return status, deriveScoutReviewAccepted(output, status), firstNonEmpty(rationale, deriveScoutTaskRationale(output))
+}
+
+func deriveHostedScoutTaskStatus(output map[string]any) (contracts.TaskStatus, string) {
+	state := mapValue(output["state"])
+	action := mapValue(output["action"])
+	stateStatus := strings.ToLower(strings.TrimSpace(stringValue(state, "status")))
+	actionType := strings.ToLower(strings.TrimSpace(stringValue(action, "type")))
+	terminal, _ := action["terminal"].(bool)
+	reason := firstNonEmpty(strings.TrimSpace(stringValue(action, "reason")), strings.TrimSpace(stringValue(state, "stopReason")))
+	switch stateStatus {
+	case "completed":
+		return contracts.TaskStatusSucceeded, reason
+	case "awaiting_review":
+		return contracts.TaskStatusAwaitingReview, reason
+	case "degraded":
+		return contracts.TaskStatusDegraded, reason
+	case "failed":
+		return contracts.TaskStatusFailed, reason
+	case "running", "blocked":
+		return contracts.TaskStatusDegraded, firstNonEmpty(reason, fmt.Sprintf("hosted scout returned non-terminal snapshot: state=%s action=%s terminal=%t", firstNonEmpty(stateStatus, "unknown"), firstNonEmpty(actionType, "unknown"), terminal))
+	default:
+		return contracts.TaskStatusDegraded, firstNonEmpty(reason, fmt.Sprintf("hosted scout returned unsupported lifecycle: state=%s action=%s terminal=%t", firstNonEmpty(stateStatus, "unknown"), firstNonEmpty(actionType, "unknown"), terminal))
+	}
+}
+
+func deriveScoutTaskRationale(output map[string]any) string {
+	review := mapValue(output["review"])
+	action := mapValue(output["action"])
+	state := mapValue(output["state"])
+	return firstNonEmpty(
+		strings.TrimSpace(stringValue(action, "reason")),
+		strings.TrimSpace(stringValue(review, "rationale")),
+		strings.TrimSpace(stringValue(state, "stopReason")),
+	)
+}
+
+func deriveScoutReviewAccepted(output map[string]any, status contracts.TaskStatus) *bool {
+	if accepted, ok := output["reviewAccepted"].(bool); ok {
+		return boolPtr(accepted)
+	}
+	review := mapValue(output["review"])
+	if accepted, ok := review["accepted"].(bool); ok {
+		if strings.TrimSpace(stringValue(review, "rationale")) != "" || len(review) > 1 {
+			return boolPtr(accepted)
+		}
+	}
+	switch status {
+	case contracts.TaskStatusSucceeded:
+		return boolPtr(true)
+	case contracts.TaskStatusAwaitingReview, contracts.TaskStatusDegraded, contracts.TaskStatusFailed:
+		return boolPtr(false)
+	default:
+		return nil
+	}
 }
 
 func (p *Processor) processOrchestrate(ctx context.Context, rt *agentmeshruntime.Service, task *contracts.MeshTask, leaseOwner string) (*agentmeshruntime.ProcessResult, error) {
@@ -257,8 +336,87 @@ func (p *Processor) processOrchestrate(ctx context.Context, rt *agentmeshruntime
 	p.ensureInvestigationSession(ctx, rt, task, leaseOwner)
 
 	input := modelTaskInput(task)
-	seedState := decodeSessionState(input["sessionState"])
 	graphCtx := p.buildPlanningContext(ctx, req)
+	if shouldUseHostedScoutOrchestrator(rt) {
+		hostedInput := enrichScoutModelInput(map[string]any{
+			"request":          req,
+			"taskInput":        input,
+			"planningContext":  compactPlanningContext(graphCtx),
+			"parentSessionRef": strings.TrimSpace(task.SessionRef),
+		}, task)
+		memories, memErr := rt.Vertex().FetchMemories(ctx, task, scoutMemoryQuery(req, input))
+		if memErr != nil && p.logger != nil {
+			p.logger.Printf("[agentmesh.scout] memory fetch failed task=%s err=%v", task.ID, memErr)
+		}
+		output, cost, err := rt.Vertex().RunScoutOrchestrator(ctx, task, hostedInput, memories)
+		if err != nil {
+			review := map[string]any{
+				"accepted":  false,
+				"rationale": err.Error(),
+				"quality":   "degraded",
+				"issues":    []string{"hosted_orchestrator_failure"},
+			}
+			degraded := map[string]any{
+				"plan":           map[string]any{"goal": firstNonEmpty(req.Query, req.TargetCanonicalPath)},
+				"state":          map[string]any{"status": "degraded", "stopReason": "hosted_orchestrator_failure"},
+				"action":         map[string]any{"type": "degrade", "terminal": true, "reason": err.Error()},
+				"reasoningTrace": []any{},
+				"runtimeDiagnosis": []any{
+					map[string]any{"code": "hosted_orchestrator_failure", "severity": "error", "message": err.Error()},
+				},
+				"review":         review,
+				"taskRefs":       map[string]any{},
+				"sessionRef":     strings.TrimSpace(task.SessionRef),
+				"memoryBankRef":  strings.TrimSpace(task.MemoryBankRef),
+				"reviewAccepted": false,
+				"evidenceLedger": []any{},
+				"uncertaintyLedger": []any{
+					map[string]any{"id": "runtime_failure", "topic": "hosted_orchestrator", "summary": err.Error(), "impact": "hosted_orchestrator_unavailable", "nextCheck": "retry_with_vertex"},
+				},
+				"decisionLedger":   []any{},
+				"reasoningSummary": "Hosted Scout orchestrator failed before producing a valid task snapshot.",
+				"vertexOrchestrator": map[string]any{
+					"agentEngine": rt.Vertex().ScoutAgentEngine(),
+					"mode":        "vertex",
+					"error":       err.Error(),
+				},
+			}
+			return &agentmeshruntime.ProcessResult{
+				Status:          contracts.TaskStatusDegraded,
+				Output:          degraded,
+				ArtifactPayload: degraded,
+				ReviewOutput:    review,
+				ReviewAccepted:  boolPtr(false),
+				LastError:       err.Error(),
+			}, nil
+		}
+		if rt != nil && rt.Vertex() != nil && strings.TrimSpace(task.SessionRef) != "" {
+			if generated, genErr := rt.Vertex().GenerateAndFetchMemoriesFromSession(ctx, task, scoutMemoryQuery(req, output)); genErr == nil && len(generated) > 0 {
+				output["generatedMemoryRefs"] = generated
+			} else if genErr != nil && p.logger != nil {
+				p.logger.Printf("[agentmesh.scout] memory generation failed task=%s err=%v", task.ID, genErr)
+			}
+		}
+		output["vertexOrchestrator"] = map[string]any{
+			"agentEngine": rt.Vertex().ScoutAgentEngine(),
+			"mode":        "vertex",
+			"cost":        cost,
+		}
+		review := mapValue(output["review"])
+		status, reviewAccepted, rationale := deriveHostedScoutTaskResult(output)
+		result := &agentmeshruntime.ProcessResult{
+			Status:          status,
+			Output:          output,
+			ArtifactPayload: output,
+			ReviewOutput:    review,
+			LastError:       rationale,
+		}
+		if reviewAccepted != nil {
+			result.ReviewAccepted = reviewAccepted
+		}
+		return result, nil
+	}
+	seedState := decodeSessionState(input["sessionState"])
 	var state *InvestigationState
 	if seedState != nil {
 		mergedReq := mergeInvestigationRequests(seedState.Request, req)
@@ -331,13 +489,38 @@ func (p *Processor) processOrchestrate(ctx context.Context, rt *agentmeshruntime
 		"materialize": []string{},
 	}
 	p.persistCheckpoint(ctx, rt, task, leaseOwner, req, state, taskRefs, "framing", "", "", nil)
+
+	// --- PARALLEL FAN-OUT: run research for all ready branches concurrently in the first round ---
+	p.fanOutInitialResearch(ctx, rt, task, leaseOwner, req, graphCtx, state, taskRefs)
+
 	for state.Turn < state.MaxTurns {
 		state.Turn++
 		state.CurrentBottleneck = string(detectCurrentBottleneck(state))
 		decisionTaskID := ""
-		decision, action, branchID, err := p.orchestrateNextActionVertex(ctx, rt, task, req, graphCtx, state)
-		if err != nil {
-			return nil, err
+
+		// --- INLINE DECISION: if the last child returned a clear recommendedAction, trust it ---
+		action, branchID, skipOrchestrate := inferNextActionFromOutcome(state)
+		var decision DecisionResult
+		if skipOrchestrate {
+			scoutReasoningLogf("orchestrate_skipped_model inferred_action=%s branch=%s child_recommended=%s dataSource=%s",
+				action, branchID, state.LatestOutcome.RecommendedAction.Action, state.LatestOutcome.DataSourceSignal)
+			decision = DecisionResult{
+				StateSummary:     summarizeDecisionState(state),
+				ChosenAction:     action,
+				BranchID:         branchID,
+				WhyChosen:        fmt.Sprintf("Inferred from child's recommendedAction=%s (dataSourceSignal=%s); no separate orchestrate call needed.", state.LatestOutcome.RecommendedAction.Action, state.LatestOutcome.DataSourceSignal),
+				ExecutedAction:   action,
+				ExecutedBranchID: branchID,
+				ValidationStatus: "inferred",
+				Candidates:       buildDecisionCandidates(state),
+			}
+			applyDecisionToState(state, decision)
+		} else {
+			var err error
+			decision, action, branchID, err = p.orchestrateNextActionVertex(ctx, rt, task, req, graphCtx, state)
+			if err != nil {
+				return nil, err
+			}
 		}
 		appendReasoningBeat(state, explainDecisionOutcome(state, decision))
 		if action == "stop" {
@@ -396,46 +579,12 @@ func (p *Processor) processOrchestrate(ctx context.Context, rt *agentmeshruntime
 			researchOutcome := outcomeFromResearch(state, branchID, research)
 			if retObj := mapValue(result["retrieval"]); len(retObj) > 0 {
 				researchOutcome.RetrievalHitCount = int(floatValue(retObj, "hitCount", 0))
+				researchOutcome.ToolCallCount = int(floatValue(retObj, "toolCallCount", 0))
 			}
+			researchOutcome.DataSourceSignal = resolveDataSourceSignal(research.DataSourceSignal, researchOutcome)
 			recordActionOutcome(state, researchOutcome)
 			appendReasoningBeat(state, explainResearchOutcome(state, branchID, research))
 
-			// AUTO-PAIRED CRITIC: every research is immediately followed by critical evaluation.
-			if canRunCriticAfterResearch(state) {
-				criticSnapshot := buildActiveFrontierSnapshot(state)
-				criticChild, criticResult, criticErr := p.runChildTask(ctx, rt, task, "scout.critic", fmt.Sprintf("%s:critic:%d", task.ID, state.Turn), map[string]any{
-					"request":            req,
-					"goal":               compactGoalFrame(state.Goal),
-					"environment":        compactEnvironmentFrame(state.Environment),
-					"role":               compactRoleFrame(state.Role),
-					"completeness":       compactCompletenessFrame(state.Completeness),
-					"plan":               compactPlanForModel(state.Plan),
-					"sessionState":       state,
-					"researchDeltas":     compactResearchDeltas(state.ResearchResults, criticSnapshot.TopBranches),
-					"activeFrontier":     criticSnapshot,
-					"pendingGraphOps":    state.PendingGraphOps,
-					"parentSessionRef":   strings.TrimSpace(task.SessionRef),
-				})
-				if criticErr != nil {
-					if handleRetryableChildFailure(state, "critic", branchID, criticErr) {
-						p.persistCheckpoint(ctx, rt, task, leaseOwner, req, state, taskRefs, "critic", branchID, "", nil)
-						continue
-					}
-					return nil, criticErr
-				}
-				taskRefs["critic"] = append(taskRefs["critic"].([]string), criticChild.ID)
-				childTaskID = criticChild.ID
-				childOutput = criticResult
-				critic := decodeCriticResult(criticResult)
-				appliedSession := applyAuthoritativeSessionState(state, criticResult["sessionState"])
-				if !appliedSession {
-					return nil, fmt.Errorf("invalid child output: action %s did not return sessionState", "critic")
-				}
-				appliedAuthoritativeState = appliedAuthoritativeState || appliedSession
-				clearSystemErrorTracking(state)
-				recordActionOutcome(state, outcomeFromCritic(state, branchID, critic))
-				appendReasoningBeat(state, explainCriticOutcome(state, critic))
-			}
 		case "bridge":
 			branchState := state.Branches[branchID]
 			if branchState == nil {
@@ -474,21 +623,29 @@ func (p *Processor) processOrchestrate(ctx context.Context, rt *agentmeshruntime
 				return nil, fmt.Errorf("invalid child output: action %s did not return sessionState", action)
 			}
 			clearSystemErrorTracking(state)
-			recordActionOutcome(state, outcomeFromBridge(state, branchID, bridge))
+			bridgeOutcome := outcomeFromBridge(state, branchID, bridge)
+			if retObj := mapValue(result["retrieval"]); len(retObj) > 0 {
+				bridgeOutcome.RetrievalHitCount = int(floatValue(retObj, "hitCount", 0))
+				bridgeOutcome.ToolCallCount = int(floatValue(retObj, "toolCallCount", 0))
+			}
+			if sig := strings.TrimSpace(bridge.DataSourceSignal); sig != "" {
+				bridgeOutcome.DataSourceSignal = sig
+			}
+			recordActionOutcome(state, bridgeOutcome)
 			appendReasoningBeat(state, explainBridgeOutcome(state, branchID, bridge))
 		case "critic":
 			child, result, runErr := p.runChildTask(ctx, rt, task, "scout.critic", fmt.Sprintf("%s:critic:%d", task.ID, state.Turn), map[string]any{
-				"request":            req,
-				"goal":               compactGoalFrame(state.Goal),
-				"environment":        compactEnvironmentFrame(state.Environment),
-				"role":               compactRoleFrame(state.Role),
-				"completeness":       compactCompletenessFrame(state.Completeness),
-				"plan":               compactPlanForModel(state.Plan),
-				"sessionState":       state,
-				"researchDeltas":     compactResearchDeltas(state.ResearchResults, activeSnapshot.TopBranches),
-				"activeFrontier":     activeSnapshot,
-				"pendingGraphOps":    state.PendingGraphOps,
-				"parentSessionRef":   strings.TrimSpace(task.SessionRef),
+				"request":          req,
+				"goal":             compactGoalFrame(state.Goal),
+				"environment":      compactEnvironmentFrame(state.Environment),
+				"role":             compactRoleFrame(state.Role),
+				"completeness":     compactCompletenessFrame(state.Completeness),
+				"plan":             compactPlanForModel(state.Plan),
+				"sessionState":     state,
+				"researchDeltas":   compactResearchDeltas(state.ResearchResults, activeSnapshot.TopBranches),
+				"activeFrontier":   activeSnapshot,
+				"pendingGraphOps":  state.PendingGraphOps,
+				"parentSessionRef": strings.TrimSpace(task.SessionRef),
 			})
 			if runErr != nil {
 				if handleRetryableChildFailure(state, "critic", branchID, runErr) {
@@ -671,7 +828,9 @@ func (p *Processor) processOrchestrate(ctx context.Context, rt *agentmeshruntime
 		p.logger.Printf("[agentmesh.scout] final persist failed job=%s err=%v", req.ScoutingJobID, err)
 	}
 	if rt != nil && rt.Vertex() != nil && strings.TrimSpace(task.SessionRef) != "" {
-		_ = rt.Vertex().GenerateMemoriesFromSession(ctx, task)
+		if generated, err := rt.Vertex().GenerateAndFetchMemoriesFromSession(ctx, task, scoutMemoryQuery(req, output)); err == nil && len(generated) > 0 {
+			output["generatedMemoryRefs"] = generated
+		}
 	}
 
 	status := contracts.TaskStatusSucceeded
@@ -715,49 +874,24 @@ func (p *Processor) processResearch(ctx context.Context, rt *agentmeshruntime.Se
 		completeness = raw
 	}
 
-	rawQuery := strings.TrimSpace(branch.Question)
-	if rawQuery == "" {
-		rawQuery = strings.TrimSpace(req.Query)
-	}
-	query := humanizeSearchQuery(rawQuery)
-	knowledgeHits := maybeSearchKnowledgeBase(ctx, p.knowledgeBase, req.TenantID, query, 6)
-	retrieval := map[string]any{
-		"mode":     "internal_datastore_retrieval",
-		"source":   "vertex_ai_search",
-		"query":    query,
-		"rawQuery": rawQuery,
-		"hitCount": len(knowledgeHits),
-		"hits":     knowledgeHits,
-	}
-	productRefs := p.resolveProductRefs(ctx, req.TenantID, append(append([]string{}, branch.ProductHints...), plan.FocusProducts...))
-
-	dataAvailability := map[string]any{
-		"internalKBHits":           len(knowledgeHits),
-		"consecutiveZeroHitTurns":  sessionState.ConsecutiveZeroHitTurns,
-		"totalRetrievalHits":       sessionState.TotalRetrievalHits,
-		"webSearchGroundingActive": true,
-	}
-	if len(knowledgeHits) == 0 {
-		dataAvailability["guidance"] = "Internal knowledge base returned ZERO results for this query. Your web search grounding (Google Search) is the only external evidence source. If web grounding also provides nothing useful, acknowledge the data gap honestly rather than fabricating claims."
-	}
 	input := enrichScoutModelInput(map[string]any{
-		"request":          req,
-		"goal":             goal,
-		"environment":      environment,
-		"role":             role,
-		"completeness":     completeness,
-		"branch":           branch,
-		"plan":             plan,
-		"sessionState":     inputRaw["sessionState"],
-		"planningContext":  planningContext,
-		"knowledgeHits":    knowledgeHits,
-		"retrieval":        retrieval,
-		"dataAvailability": dataAvailability,
-		"productRefs":      productRefs,
-		"activeFrontier":   inputRaw["activeFrontier"],
-		"pendingGraphOps":  inputRaw["pendingGraphOps"],
+		"request":         req,
+		"goal":            goal,
+		"environment":     environment,
+		"role":            role,
+		"completeness":    completeness,
+		"branch":          branch,
+		"plan":            plan,
+		"sessionState":    inputRaw["sessionState"],
+		"planningContext": planningContext,
+		"activeFrontier":  inputRaw["activeFrontier"],
+		"pendingGraphOps": inputRaw["pendingGraphOps"],
+		"toolInstructions": "You have 4 tools: search_knowledge (internal KB), web_search (Google), resolve_product (canonical path), lookup_transform (known relations). " +
+			"Use them iteratively: check internal KB first, then web if needed, resolve products before proposing graph ops. " +
+			"When done investigating, return your final JSON with all required fields. " +
+			"You MUST include a dataSourceSignal field: internal_grounded, internal_partial, internal_empty, or no_data.",
 	}, task)
-	parsed := p.runModelObject(ctx, rt, task, input)
+	parsed, toolLogs := p.runModelWithTools(ctx, rt, task, input, req.TenantID)
 	if runtimeErr := modelRuntimeError(parsed); runtimeErr != "" {
 		return &agentmeshruntime.ProcessResult{
 			Status:     contracts.TaskStatusFailed,
@@ -780,27 +914,29 @@ func (p *Processor) processResearch(ctx context.Context, rt *agentmeshruntime.Se
 	}
 	research := mergeResearchDeltaIntoResult(ResearchResult{}, delta)
 	research.BranchID = firstNonEmpty(branch.ID, research.BranchID)
-	research.ProductRefs = compactStrings(append(research.ProductRefs, productRefs...))
 	research.RecommendedPathProducts = compactStrings(append(research.RecommendedPathProducts, research.ProductRefs...))
 	research.GapDiagnosis = normalizeGapDiagnosis(research.GapDiagnosis)
 	research.RecommendedAction = normalizeActionRecommendation(research.RecommendedAction)
 	research.GapDiagnosis = fillGapDiagnosisFromResearch(branch, research)
 	research.RecommendedAction = fillRecommendedActionFromGapDiagnosis(research.RecommendedAction, research.GapDiagnosis)
-	if len(knowledgeHits) == 0 {
-		research.OpenQuestions = compactStrings(append(research.OpenQuestions, "No internal retrieval hits for this branch query."))
-		if len(compactStrings(research.EvidencePoints)) == 0 && len(compactStrings(append(research.CanonicalRefs, research.ProductRefs...))) == 0 {
-			if research.Confidence == 0 || research.Confidence > 0.3 {
-				research.Confidence = 0.3
-			}
-			research.GapDiagnosis.Kind = firstNonEmpty(research.GapDiagnosis.Kind, "missing_substrate")
-			research.GapDiagnosis.NextAction = firstNonEmpty(research.GapDiagnosis.NextAction, "bridge")
-			research.GapDiagnosis.Summary = firstNonEmpty(research.GapDiagnosis.Summary, "Internal retrieval returned no evidence. Web grounding may have provided some context but the internal knowledge base lacks this data.")
-			research.GapDiagnosis.Why = firstNonEmpty(research.GapDiagnosis.Why, "Zero internal hits means repeating internal search will not help. Either try web-grounded bridge/path or stop this branch.")
+	totalToolCalls, totalToolHits := toolCallStats(toolLogs)
+	if scoutReasoningLogEnabled() {
+		scoutReasoningLogf("research_branch_done task=%s branch=%s tools=%d hits=%d confidence=%.2f next_action=%s gap=%s",
+			task.ID, research.BranchID, totalToolCalls, totalToolHits, research.Confidence,
+			research.RecommendedAction.Action, scoutReasoningSingleLine(research.GapDiagnosis.Summary, 280))
+	}
+	if totalToolHits == 0 && len(compactStrings(research.EvidencePoints)) == 0 && len(compactStrings(append(research.CanonicalRefs, research.ProductRefs...))) == 0 {
+		if research.Confidence == 0 || research.Confidence > 0.3 {
+			research.Confidence = 0.3
 		}
+		research.GapDiagnosis.Kind = firstNonEmpty(research.GapDiagnosis.Kind, "missing_substrate")
+		research.GapDiagnosis.NextAction = firstNonEmpty(research.GapDiagnosis.NextAction, "bridge")
+		research.GapDiagnosis.Summary = firstNonEmpty(research.GapDiagnosis.Summary, "Tools returned no useful evidence. The knowledge base and web search did not yield data for this question.")
+		research.GapDiagnosis.Why = firstNonEmpty(research.GapDiagnosis.Why, "Zero evidence from all sources means repeating will not help. Switch strategy or stop.")
 		sessionState.ConsecutiveZeroHitTurns++
 	} else {
 		sessionState.ConsecutiveZeroHitTurns = 0
-		sessionState.TotalRetrievalHits += len(knowledgeHits)
+		sessionState.TotalRetrievalHits += totalToolHits
 	}
 	if research.RecommendedAction.BranchID == "" && (research.RecommendedAction.Action == "research" || research.RecommendedAction.Action == "bridge") {
 		research.RecommendedAction.BranchID = research.BranchID
@@ -808,6 +944,15 @@ func (p *Processor) processResearch(ctx context.Context, rt *agentmeshruntime.Se
 	if research.Confidence == 0 {
 		research.Confidence = 0.55
 	}
+	patch := GraphPatch{
+		BranchID:   research.BranchID,
+		SourceStep: "research",
+		Turn:       sessionState.Turn,
+		Ops:        research.ProposedOps,
+		Summary:    research.Summary,
+		Confidence: research.Confidence,
+	}
+	sessionState.Patches = append(sessionState.Patches, patch)
 	output := researchMap(research)
 	output["stateDelta"] = map[string]any{
 		"kind":              "research",
@@ -816,9 +961,15 @@ func (p *Processor) processResearch(ctx context.Context, rt *agentmeshruntime.Se
 		"recommendedAction": compactActionRecommendation(research.RecommendedAction),
 		"openQuestions":     research.OpenQuestions,
 		"confidence":        research.Confidence,
-		"retrievalHitCount": len(knowledgeHits),
+		"retrievalHitCount": totalToolHits,
+		"toolCallCount":     totalToolCalls,
 	}
-	output["retrieval"] = retrieval
+	output["retrieval"] = map[string]any{
+		"mode":          "tool_calling",
+		"toolCallCount": totalToolCalls,
+		"totalHits":     totalToolHits,
+		"toolCallLog":   toolLogs,
+	}
 	applyResearchToState(sessionState, research.BranchID, research)
 	output["sessionState"] = sessionState
 	return &agentmeshruntime.ProcessResult{
@@ -855,19 +1006,6 @@ func (p *Processor) processBridge(ctx context.Context, rt *agentmeshruntime.Serv
 		completeness = raw
 	}
 
-	rawQuery := firstNonEmpty(stringValue(bridgeContext, "bridgeQuestion"), strings.TrimSpace(branch.Question), strings.TrimSpace(req.Query))
-	query := humanizeSearchQuery(rawQuery)
-	knowledgeHits := maybeSearchKnowledgeBase(ctx, p.knowledgeBase, req.TenantID, query, 6)
-	retrieval := map[string]any{
-		"mode":     "internal_datastore_retrieval",
-		"source":   "vertex_ai_search",
-		"query":    query,
-		"rawQuery": rawQuery,
-		"hitCount": len(knowledgeHits),
-		"hits":     knowledgeHits,
-	}
-	productRefs := p.resolveProductRefs(ctx, req.TenantID, append(stringSliceValue(bridgeContext["knownProducts"]), plan.FocusProducts...))
-
 	input := enrichScoutModelInput(map[string]any{
 		"request":         req,
 		"goal":            goal,
@@ -878,13 +1016,15 @@ func (p *Processor) processBridge(ctx context.Context, rt *agentmeshruntime.Serv
 		"plan":            plan,
 		"sessionState":    inputRaw["sessionState"],
 		"bridgeContext":   bridgeContext,
-		"knowledgeHits":   knowledgeHits,
-		"retrieval":       retrieval,
-		"productRefs":     productRefs,
 		"activeFrontier":  inputRaw["activeFrontier"],
 		"pendingGraphOps": inputRaw["pendingGraphOps"],
+		"toolInstructions": "You have 4 tools: search_knowledge (internal KB), web_search (Google), resolve_product (canonical path), lookup_transform (known relations). " +
+			"Use them to find what sits between endpoint A and B. Check internal KB first, then web for missing data. " +
+			"Resolve products and verify transforms before proposing graph ops. " +
+			"When done, return your final JSON with all required bridge fields. " +
+			"You MUST include a dataSourceSignal field: external_only, internal_grounded, internal_partial, or no_data.",
 	}, task)
-	parsed := p.runModelObject(ctx, rt, task, input)
+	parsed, toolLogs := p.runModelWithTools(ctx, rt, task, input, req.TenantID)
 	if runtimeErr := modelRuntimeError(parsed); runtimeErr != "" {
 		return &agentmeshruntime.ProcessResult{
 			Status:     contracts.TaskStatusFailed,
@@ -906,7 +1046,8 @@ func (p *Processor) processBridge(ctx context.Context, rt *agentmeshruntime.Serv
 		}, nil
 	}
 	bridge.BranchID = firstNonEmpty(branch.ID, bridge.BranchID)
-	bridge.BridgeQuestion = firstNonEmpty(bridge.BridgeQuestion, query)
+	bridgeQuery := firstNonEmpty(stringValue(bridgeContext, "bridgeQuestion"), strings.TrimSpace(branch.Question), strings.TrimSpace(req.Query))
+	bridge.BridgeQuestion = firstNonEmpty(bridge.BridgeQuestion, bridgeQuery)
 	bridge.BridgeSteps = normalizeBridgeSteps(bridge.BridgeSteps)
 	bridge.GapDiagnosis = normalizeGapDiagnosis(bridge.GapDiagnosis)
 	bridge.RecommendedAction = normalizeActionRecommendation(bridge.RecommendedAction)
@@ -940,6 +1081,16 @@ func (p *Processor) processBridge(ctx context.Context, rt *agentmeshruntime.Serv
 			bridge.ProposedOps[i].Confidence = computeGraphOpConfidence(bridge.ProposedOps[i])
 		}
 	}
+	totalToolCalls, totalToolHits := toolCallStats(toolLogs)
+	patch := GraphPatch{
+		BranchID:   bridge.BranchID,
+		SourceStep: "bridge",
+		Turn:       sessionState.Turn,
+		Ops:        bridge.ProposedOps,
+		Summary:    bridge.Summary,
+		Confidence: bridge.Confidence,
+	}
+	sessionState.Patches = append(sessionState.Patches, patch)
 	output := bridgeMap(bridge)
 	output["stateDelta"] = map[string]any{
 		"kind":              "bridge",
@@ -948,8 +1099,15 @@ func (p *Processor) processBridge(ctx context.Context, rt *agentmeshruntime.Serv
 		"recommendedAction": compactActionRecommendation(bridge.RecommendedAction),
 		"openQuestions":     bridge.OpenQuestions,
 		"confidence":        bridge.Confidence,
+		"retrievalHitCount": totalToolHits,
+		"toolCallCount":     totalToolCalls,
 	}
-	output["retrieval"] = retrieval
+	output["retrieval"] = map[string]any{
+		"mode":          "tool_calling",
+		"toolCallCount": totalToolCalls,
+		"totalHits":     totalToolHits,
+		"toolCallLog":   toolLogs,
+	}
 	applyBridgeToState(sessionState, bridge.BranchID, bridge)
 	output["sessionState"] = sessionState
 	return &agentmeshruntime.ProcessResult{
@@ -973,15 +1131,15 @@ func (p *Processor) processCritic(ctx context.Context, rt *agentmeshruntime.Serv
 	}
 
 	modelIn := enrichScoutModelInput(map[string]any{
-		"request":            req,
-		"goal":               compactGoalFrame(req.Goal),
-		"environment":        compactEnvironmentFrame(req.Environment),
-		"role":               compactRoleFrame(req.Role),
-		"completeness":       compactCompletenessFrame(req.Completeness),
-		"plan":               plan,
-		"sessionState":       input["sessionState"],
-		"researchDeltas":     encodeResearchDeltas(research),
-		"activeFrontier":     input["activeFrontier"],
+		"request":        req,
+		"goal":           compactGoalFrame(req.Goal),
+		"environment":    compactEnvironmentFrame(req.Environment),
+		"role":           compactRoleFrame(req.Role),
+		"completeness":   compactCompletenessFrame(req.Completeness),
+		"plan":           plan,
+		"sessionState":   input["sessionState"],
+		"researchDeltas": encodeResearchDeltas(research),
+		"activeFrontier": input["activeFrontier"],
 	}, task)
 	parsed := p.runModelObject(ctx, rt, task, modelIn)
 	if runtimeErr := modelRuntimeError(parsed); runtimeErr != "" {
@@ -1011,17 +1169,17 @@ func (p *Processor) processCritic(ctx context.Context, rt *agentmeshruntime.Serv
 	critic.RecommendedAction = fillRecommendedActionFromGapDiagnosis(critic.RecommendedAction, critic.GapDiagnosis)
 	output := criticMap(critic)
 	output["stateDelta"] = map[string]any{
-		"kind":                     "critic",
-		"gapDiagnosis":             compactGapDiagnosis(critic.GapDiagnosis),
-		"recommendedAction":        compactActionRecommendation(critic.RecommendedAction),
-		"withholdPath":             critic.WithholdPath,
-		"withholdMaterialization":  critic.WithholdMaterialization,
-		"killBranchIds":            critic.KillBranchIDs,
-		"reprioritizeBranchIds":    critic.ReprioritizeBranchIDs,
-		"riskTargetBranchIds":      critic.RiskTargetBranchIDs,
-		"openQuestions":            critic.OpenQuestions,
-		"goodEnoughAssessment":     compactGoodEnoughAssessment(critic.GoodEnoughAssessment),
-		"completenessAssessment":   map[string]any{"status": critic.CompletenessAssessment.Status, "reason": critic.CompletenessAssessment.Reason, "broadScanCompleted": critic.CompletenessAssessment.BroadScanCompleted, "noMaterialAlternatives": critic.CompletenessAssessment.NoMaterialAlternatives},
+		"kind":                    "critic",
+		"gapDiagnosis":            compactGapDiagnosis(critic.GapDiagnosis),
+		"recommendedAction":       compactActionRecommendation(critic.RecommendedAction),
+		"withholdPath":            critic.WithholdPath,
+		"withholdMaterialization": critic.WithholdMaterialization,
+		"killBranchIds":           critic.KillBranchIDs,
+		"reprioritizeBranchIds":   critic.ReprioritizeBranchIDs,
+		"riskTargetBranchIds":     critic.RiskTargetBranchIDs,
+		"openQuestions":           critic.OpenQuestions,
+		"goodEnoughAssessment":    compactGoodEnoughAssessment(critic.GoodEnoughAssessment),
+		"completenessAssessment":  map[string]any{"status": critic.CompletenessAssessment.Status, "reason": critic.CompletenessAssessment.Reason, "broadScanCompleted": critic.CompletenessAssessment.BroadScanCompleted, "noMaterialAlternatives": critic.CompletenessAssessment.NoMaterialAlternatives},
 	}
 	applyCriticToState(sessionState, critic)
 	verdicts := critic.GraphOpVerdicts
@@ -1300,14 +1458,14 @@ func (p *Processor) processMaterialize(ctx context.Context, rt *agentmeshruntime
 
 	output := materializeMap(result)
 	output["stateDelta"] = map[string]any{
-		"kind":               "materialize",
-		"summary":            result.Summary,
-		"persisted":          result.Persisted,
-		"landedBranchIds":    result.LandedBranchIDs,
-		"rejectedBranchIds":  result.RejectedBranchIDs,
-		"skipped":            result.Skipped,
-		"downgraded":         result.Downgraded,
-		"rejected":           result.Rejected,
+		"kind":              "materialize",
+		"summary":           result.Summary,
+		"persisted":         result.Persisted,
+		"landedBranchIds":   result.LandedBranchIDs,
+		"rejectedBranchIds": result.RejectedBranchIDs,
+		"skipped":           result.Skipped,
+		"downgraded":        result.Downgraded,
+		"rejected":          result.Rejected,
 	}
 	applyMaterializeToState(sessionState, result)
 	markLandedOps(sessionState, result)
@@ -1557,7 +1715,107 @@ func (p *Processor) buildPlan(ctx context.Context, rt *agentmeshruntime.Service,
 	if plan.PlanVersion <= 0 {
 		plan.PlanVersion = 1
 	}
+	plan.Branches = deduplicateBranches(plan.Branches)
+	if scoutReasoningLogEnabled() {
+		scoutReasoningLogf("plan_ready goal=%s maxRounds=%d branch_count=%d rationale_lines=%d",
+			scoutReasoningSingleLine(plan.Goal, 320), plan.MaxResearchRounds, len(plan.Branches), len(plan.PlanningRationale))
+		for _, b := range plan.Branches {
+			scoutReasoningLogf("plan_branch id=%s broadScan=%v question=%s hints_products=%v hints_geos=%v",
+				strings.TrimSpace(b.ID), b.BroadScan, scoutReasoningSingleLine(b.Question, 360), b.ProductHints, b.GeoHints)
+		}
+	}
 	return plan
+}
+
+// deduplicateBranches merges branches whose questions, product hints, and geo hints
+// overlap significantly. The planner often generates "broad_scan" + a more specific branch
+// that asks the same question in different words. Dedup keeps the more specific one and
+// absorbs the other's hints.
+func deduplicateBranches(branches []InvestigationBranch) []InvestigationBranch {
+	if len(branches) <= 1 {
+		return branches
+	}
+	type normalizedBranch struct {
+		branch   InvestigationBranch
+		words    map[string]bool
+		products map[string]bool
+		geos     map[string]bool
+	}
+	normalize := func(b InvestigationBranch) normalizedBranch {
+		words := map[string]bool{}
+		for _, w := range strings.Fields(strings.ToLower(b.Question)) {
+			if len(w) > 3 { // skip articles, prepositions
+				words[w] = true
+			}
+		}
+		products := map[string]bool{}
+		for _, p := range b.ProductHints {
+			products[strings.ToLower(strings.TrimSpace(p))] = true
+		}
+		geos := map[string]bool{}
+		for _, g := range b.GeoHints {
+			geos[strings.ToLower(strings.TrimSpace(g))] = true
+		}
+		return normalizedBranch{branch: b, words: words, products: products, geos: geos}
+	}
+	overlapRatio := func(a, b map[string]bool) float64 {
+		if len(a) == 0 && len(b) == 0 {
+			return 0
+		}
+		common := 0
+		for k := range a {
+			if b[k] {
+				common++
+			}
+		}
+		return float64(common) / float64(max(len(a), len(b)))
+	}
+
+	normalized := make([]normalizedBranch, len(branches))
+	for i, b := range branches {
+		normalized[i] = normalize(b)
+	}
+	dropped := make([]bool, len(branches))
+	for i := 0; i < len(normalized); i++ {
+		if dropped[i] {
+			continue
+		}
+		for j := i + 1; j < len(normalized); j++ {
+			if dropped[j] {
+				continue
+			}
+			wordOverlap := overlapRatio(normalized[i].words, normalized[j].words)
+			if wordOverlap < 0.5 {
+				continue
+			}
+			// High word overlap — merge the less specific one into the more specific
+			keep, drop := i, j
+			if len(normalized[j].words) > len(normalized[i].words) {
+				keep, drop = j, i
+			}
+			// Absorb hints from the dropped branch
+			for _, p := range normalized[drop].branch.ProductHints {
+				normalized[keep].branch.ProductHints = append(normalized[keep].branch.ProductHints, p)
+			}
+			for _, g := range normalized[drop].branch.GeoHints {
+				normalized[keep].branch.GeoHints = append(normalized[keep].branch.GeoHints, g)
+			}
+			for _, a := range normalized[drop].branch.ActorHints {
+				normalized[keep].branch.ActorHints = append(normalized[keep].branch.ActorHints, a)
+			}
+			normalized[keep].branch.ProductHints = compactStrings(normalized[keep].branch.ProductHints)
+			normalized[keep].branch.GeoHints = compactStrings(normalized[keep].branch.GeoHints)
+			normalized[keep].branch.ActorHints = compactStrings(normalized[keep].branch.ActorHints)
+			dropped[drop] = true
+		}
+	}
+	out := make([]InvestigationBranch, 0, len(branches))
+	for i, nb := range normalized {
+		if !dropped[i] {
+			out = append(out, nb.branch)
+		}
+	}
+	return out
 }
 
 func newInvestigationState(req InvestigationRequest, plan InvestigationPlan) *InvestigationState {
@@ -1797,24 +2055,12 @@ func (p *Processor) orchestrateNextActionVertex(ctx context.Context, rt *agentme
 		"recentOutcomes":   compactActionOutcomes(state.Outcomes),
 		"activeFrontier":   activeSnapshot,
 		"candidateActions": compactDecisionCandidates(candidates),
-		"decisionContext": map[string]any{
-			"runtimePurpose":           "Populate and improve the graph with useful chain/path structure; do not polish like a courtroom brief.",
-			"consecutiveZeroGainTurns": state.ConsecutiveZeroGainTurns,
-			"consecutiveZeroHitTurns":  state.ConsecutiveZeroHitTurns,
-			"totalRetrievalHits":       state.TotalRetrievalHits,
-			"informationGainWarning":   informationGainWarning(state),
-			"stopCriteria": []map[string]any{
-				{"criterion": "current_best_chain_is_useful_for_graph_fill", "description": "Stop or persist when the current chain is already structurally useful enough for graph/path purposes."},
-				{"criterion": "materially_different_routes_have_been_scanned_enough", "description": "Do not stop too early if materially different alternatives remain unexamined."},
-				{"criterion": "remaining_gaps_are_non_blocking_or_low_value", "description": "If remaining gaps are not worth this runtime tier, say so explicitly."},
-				{"criterion": "next_tool_call_is_likely_to_improve_quality", "description": "If another turn is chosen, explain why it is still likely to improve graph quality materially."},
-				{"criterion": "information_gain_is_positive", "description": "If the last 2+ turns produced no new information (qualityDelta=none), the system MUST stop or radically change strategy."},
-			},
-		},
+		"decisionContext":  buildDecisionContext(state),
 		"parentSessionRef": strings.TrimSpace(task.SessionRef),
 	}, task)
 	parsed := p.runModelObject(ctx, rt, task, modelIn)
 	if runtimeErr := modelRuntimeError(parsed); runtimeErr != "" {
+		scoutReasoningLogf("orchestrate fallback reason=model_error using=%s branch=%s err=%s", fallbackAction, fallbackBranchID, scoutReasoningSingleLine(runtimeErr, 200))
 		fallbackDecision.WhyChosen = "Deterministic fallback: scout.orchestrate model decision failed."
 		fallbackDecision.ValidationStatus = "fallback"
 		fallbackDecision.ValidationReason = runtimeErr
@@ -1827,6 +2073,7 @@ func (p *Processor) orchestrateNextActionVertex(ctx context.Context, rt *agentme
 		return fallbackDecision, fallbackAction, fallbackBranchID, nil
 	}
 	if len(parsed) == 0 {
+		scoutReasoningLogf("orchestrate fallback reason=empty_payload using=%s branch=%s", fallbackAction, fallbackBranchID)
 		fallbackDecision.WhyChosen = "Deterministic fallback: scout.orchestrate returned empty payload."
 		fallbackDecision.ValidationStatus = "fallback"
 		fallbackDecision.ValidationReason = "empty decision payload"
@@ -1841,6 +2088,7 @@ func (p *Processor) orchestrateNextActionVertex(ctx context.Context, rt *agentme
 	decision := decodeDecisionResult(parsed)
 	decision = normalizeDecisionResult(decision)
 	if isEmptyDecisionResult(decision) {
+		scoutReasoningLogf("orchestrate fallback reason=schema_empty using=%s branch=%s", fallbackAction, fallbackBranchID)
 		fallbackDecision.WhyChosen = "Deterministic fallback: scout.orchestrate returned schema-empty payload."
 		fallbackDecision.ValidationStatus = "fallback"
 		fallbackDecision.ValidationReason = "schema-empty decision payload"
@@ -1854,7 +2102,7 @@ func (p *Processor) orchestrateNextActionVertex(ctx context.Context, rt *agentme
 	}
 	decision.StateSummary = firstNonEmpty(decision.StateSummary, summarizeDecisionState(state))
 	decision.Candidates = candidates
-	action, branchID, validationStatus, validationReason := validateDecisionChoice(state, decision, candidates)
+	action, branchID, validationStatus, validationReason := validateDecisionChoice(decision, candidates)
 	if action == "" {
 		action = fallbackAction
 		branchID = fallbackBranchID
@@ -1874,95 +2122,185 @@ func (p *Processor) orchestrateNextActionVertex(ctx context.Context, rt *agentme
 	}
 	populateDecisionAlternatives(&decision, candidates)
 	applyDecisionToState(state, decision)
+	scoutReasoningLogf("orchestrate decision action=%s branch=%s chosen=%s validation=%s why=%s state=%s",
+		decision.ExecutedAction, decision.ExecutedBranchID, decision.ChosenAction,
+		decision.ValidationStatus,
+		scoutReasoningSingleLine(decision.WhyChosen, 420),
+		scoutReasoningSingleLine(decision.StateSummary, 260),
+	)
 	return decision, action, branchID, nil
 }
 
-func (p *Processor) decideNextAction(ctx context.Context, rt *agentmeshruntime.Service, task *contracts.MeshTask, req InvestigationRequest, graphCtx map[string]any, state *InvestigationState) (*contracts.MeshTask, DecisionResult, string, string, error) {
-	candidates := buildDecisionCandidates(state)
-	fallbackAction, fallbackBranchID := chooseNextAction(state)
-	fallbackDecision := buildFallbackDecision(state, fallbackAction, fallbackBranchID, candidates)
-	if state == nil || task == nil {
-		applyDecisionToState(state, fallbackDecision)
-		return nil, fallbackDecision, fallbackAction, fallbackBranchID, nil
+// fanOutInitialResearch runs research for all ready branches concurrently in the first round.
+// This avoids the sequential decide→research→decide→research pattern and produces initial
+// data in parallel, just as a human analyst would issue multiple searches at once.
+func (p *Processor) fanOutInitialResearch(ctx context.Context, rt *agentmeshruntime.Service, task *contracts.MeshTask, leaseOwner string, req InvestigationRequest, graphCtx map[string]any, state *InvestigationState, taskRefs map[string]any) {
+	if state == nil || len(state.BranchOrder) == 0 {
+		return
 	}
+	var readyBranches []string
+	for _, branchID := range state.BranchOrder {
+		branch := state.Branches[branchID]
+		if branch == nil {
+			continue
+		}
+		if !branchDependenciesSatisfied(state, branch) {
+			continue
+		}
+		if branch.ResearchRounds > 0 {
+			continue
+		}
+		readyBranches = append(readyBranches, branchID)
+	}
+	if len(readyBranches) <= 1 {
+		return // only one or zero branches — the normal loop handles this fine
+	}
+
+	if scoutReasoningLogEnabled() {
+		scoutReasoningLogf("fanout_research_parallel count=%d parent_task=%s", len(readyBranches), task.ID)
+		for _, bid := range readyBranches {
+			q := ""
+			if bs := state.Branches[bid]; bs != nil {
+				q = bs.Branch.Question
+			}
+			scoutReasoningLogf("fanout_research_start branch=%s question=%s", bid, scoutReasoningSingleLine(q, 360))
+		}
+	}
+
+	type fanOutResult struct {
+		branchID string
+		child    *contracts.MeshTask
+		result   map[string]any
+		err      error
+	}
+
+	results := make([]fanOutResult, len(readyBranches))
 	activeSnapshot := buildActiveFrontierSnapshot(state)
-	child, result, err := p.runChildTask(ctx, rt, task, "scout.decide", fmt.Sprintf("%s:decide:%d", task.ID, state.Turn), map[string]any{
-		"request":            req,
-		"goal":               compactGoalFrame(state.Goal),
-		"environment":        compactEnvironmentFrame(state.Environment),
-		"role":               compactRoleFrame(state.Role),
-		"completeness":       compactCompletenessFrame(state.Completeness),
-		"plan":               compactPlanForModel(state.Plan),
-		"planningContext":    compactPlanningContext(graphCtx),
-		"sessionState":       state,
-		"latestOutcome":      compactActionOutcome(state.LatestOutcome),
-		"recentOutcomes":     compactActionOutcomes(state.Outcomes),
-		"activeFrontier":     activeSnapshot,
-		"candidateActions":   compactDecisionCandidates(candidates),
-		"decisionContext": map[string]any{
-			"runtimePurpose":           "Populate and improve the graph with useful chain/path structure; do not polish like a courtroom brief.",
-			"consecutiveZeroGainTurns": state.ConsecutiveZeroGainTurns,
-			"consecutiveZeroHitTurns":  state.ConsecutiveZeroHitTurns,
-			"totalRetrievalHits":       state.TotalRetrievalHits,
-			"informationGainWarning":   informationGainWarning(state),
-			"stopCriteria": []map[string]any{
-				{"criterion": "current_best_chain_is_useful_for_graph_fill", "description": "Stop or persist when the current chain is already structurally useful enough for graph/path purposes."},
-				{"criterion": "materially_different_routes_have_been_scanned_enough", "description": "Do not stop too early if materially different alternatives remain unexamined."},
-				{"criterion": "remaining_gaps_are_non_blocking_or_low_value", "description": "If remaining gaps are not worth this runtime tier, say so explicitly."},
-				{"criterion": "next_tool_call_is_likely_to_improve_quality", "description": "If another turn is chosen, explain why it is still likely to improve graph quality materially."},
-				{"criterion": "information_gain_is_positive", "description": "If the last 2+ turns produced no new information (qualityDelta=none), the system MUST stop or radically change strategy."},
-			},
+
+	var wg sync.WaitGroup
+	for i, branchID := range readyBranches {
+		wg.Add(1)
+		go func(idx int, bid string) {
+			defer wg.Done()
+			branchState := state.Branches[bid]
+			if branchState == nil {
+				return
+			}
+			child, result, err := p.runChildTask(ctx, rt, task, "scout.research",
+				fmt.Sprintf("%s:research:%s:%d", task.ID, bid, 0),
+				map[string]any{
+					"request":          req,
+					"goal":             compactGoalFrame(state.Goal),
+					"environment":      compactEnvironmentFrame(state.Environment),
+					"role":             compactRoleFrame(state.Role),
+					"completeness":     compactCompletenessFrame(state.Completeness),
+					"plan":             compactPlanForModel(state.Plan),
+					"sessionState":     state,
+					"branch":           branchState.Branch,
+					"planningContext":  compactPlanningContext(graphCtx),
+					"activeFrontier":   activeSnapshot,
+					"pendingGraphOps":  compactPendingOps(state.PendingGraphOps, bid),
+					"branchIndex":      idx,
+					"submittedAt":      nowRFC3339(),
+					"turn":             state.Turn + idx + 1,
+					"parentSessionRef": strings.TrimSpace(task.SessionRef),
+				})
+			results[idx] = fanOutResult{branchID: bid, child: child, result: result, err: err}
+		}(i, branchID)
+	}
+	wg.Wait()
+
+	for _, r := range results {
+		if r.err != nil {
+			handleRetryableChildFailure(state, "research", r.branchID, r.err)
+			continue
+		}
+		if r.child == nil {
+			continue
+		}
+		state.Turn++
+		taskRefs["research"] = append(taskRefs["research"].([]string), r.child.ID)
+		research := decodeResearchResult(r.result)
+		applyAuthoritativeSessionState(state, r.result["sessionState"])
+		researchOutcome := outcomeFromResearch(state, r.branchID, research)
+		if retObj := mapValue(r.result["retrieval"]); len(retObj) > 0 {
+			researchOutcome.RetrievalHitCount = int(floatValue(retObj, "hitCount", 0))
+			researchOutcome.ToolCallCount = int(floatValue(retObj, "toolCallCount", 0))
+		}
+		researchOutcome.DataSourceSignal = resolveDataSourceSignal(research.DataSourceSignal, researchOutcome)
+		recordActionOutcome(state, researchOutcome)
+		appendReasoningBeat(state, explainResearchOutcome(state, r.branchID, research))
+	}
+	p.persistCheckpoint(ctx, rt, task, leaseOwner, req, state, taskRefs, "fan_out_research", "", "", nil)
+}
+
+// inferNextActionFromOutcome checks whether the last child returned a clear, unambiguous
+// recommendedAction. If so, the orchestrator model call is skipped — the child model that
+// actually saw the data is trusted to know what should happen next.
+// Returns (action, branchID, shouldSkipOrchestrate).
+func inferNextActionFromOutcome(state *InvestigationState) (string, string, bool) {
+	if state == nil || state.Turn <= 1 {
+		return "", "", false
+	}
+	outcome := normalizeActionOutcome(state.LatestOutcome)
+	rec := normalizeActionRecommendation(outcome.RecommendedAction)
+	if rec.Action == "" {
+		return "", "", false
+	}
+	signal := strings.TrimSpace(outcome.DataSourceSignal)
+
+	// Strong signals where the child's recommendation is unambiguous:
+	switch {
+	// research returned nothing from internal KB → child says bridge → trust it
+	case outcome.Action == "research" && signal == "internal_empty" && rec.Action == "bridge":
+		branchID := firstNonEmpty(rec.BranchID, outcome.BranchID)
+		return "bridge", branchID, true
+
+	// research returned nothing at all → child says stop → trust it
+	case outcome.Action == "research" && (signal == "internal_empty" || signal == "no_data") && rec.Action == "stop":
+		return "stop", "", true
+
+	// bridge produced material result → child says path or materialize → trust it
+	case outcome.Action == "bridge" && outcome.QualityDelta == "material" && (rec.Action == "path" || rec.Action == "materialize"):
+		return rec.Action, firstNonEmpty(rec.BranchID, outcome.BranchID), true
+
+	// any action says stop with good-enough assessment → trust it
+	case rec.Action == "stop" && outcome.GoodEnoughAssessment.StopNow:
+		return "stop", "", true
+	}
+
+	return "", "", false
+}
+
+// buildDecisionContext constructs the machine-readable context block sent to the orchestrator model.
+// It carries runtime counters and stop criteria. The model reasons about tool selection from
+// candidate dataSourceHints and outcome dataSourceSignals — no lookup table needed.
+func buildDecisionContext(state *InvestigationState) map[string]any {
+	latestSignal := ""
+	if state != nil {
+		latestSignal = strings.TrimSpace(state.LatestOutcome.DataSourceSignal)
+	}
+	ctx := map[string]any{
+		"runtimePurpose":           "Populate and improve the graph with useful chain/path structure; do not polish like a courtroom brief.",
+		"consecutiveZeroGainTurns": 0,
+		"consecutiveZeroHitTurns":  0,
+		"totalRetrievalHits":       0,
+		"latestDataSourceSignal":   latestSignal,
+		"stopCriteria": []map[string]any{
+			{"criterion": "current_best_chain_is_useful_for_graph_fill", "description": "Stop or persist when the current chain is already structurally useful enough for graph/path purposes."},
+			{"criterion": "materially_different_routes_have_been_scanned_enough", "description": "Do not stop too early if materially different alternatives remain unexamined."},
+			{"criterion": "remaining_gaps_are_non_blocking_or_low_value", "description": "If remaining gaps are not worth this runtime tier, say so explicitly."},
+			{"criterion": "next_tool_call_is_likely_to_improve_quality", "description": "If another turn is chosen, explain why it is still likely to improve graph quality materially."},
+			{"criterion": "information_gain_is_positive", "description": "If the last 2+ turns produced no new information (qualityDelta=none), the system MUST stop or radically change strategy."},
 		},
-		"parentSessionRef": strings.TrimSpace(task.SessionRef),
-	})
-	if err != nil {
-		fallbackDecision.WhyChosen = "Deterministic fallback: scout.decide failed."
-		fallbackDecision.ValidationStatus = "fallback"
-		fallbackDecision.ValidationReason = err.Error()
-		applyDecisionToState(state, fallbackDecision)
-		state.RuntimeDiagnosis = append(state.RuntimeDiagnosis, RuntimeDiagnosis{
-			Code:     "decision_task_failed",
-			Severity: "warning",
-			Message:  err.Error(),
-		})
-		return nil, fallbackDecision, fallbackAction, fallbackBranchID, nil
 	}
-	decision := decodeDecisionResult(result)
-	decision = normalizeDecisionResult(decision)
-	if isEmptyDecisionResult(decision) {
-		fallbackDecision.WhyChosen = "Deterministic fallback: scout.decide returned empty payload."
-		fallbackDecision.ValidationStatus = "fallback"
-		fallbackDecision.ValidationReason = "empty decision payload"
-		applyDecisionToState(state, fallbackDecision)
-		state.RuntimeDiagnosis = append(state.RuntimeDiagnosis, RuntimeDiagnosis{
-			Code:     "decision_payload_empty",
-			Severity: "warning",
-			Message:  "scout.decide returned an empty decision payload",
-		})
-		return child, fallbackDecision, fallbackAction, fallbackBranchID, nil
+	if state != nil {
+		ctx["consecutiveZeroGainTurns"] = state.ConsecutiveZeroGainTurns
+		ctx["consecutiveZeroHitTurns"] = state.ConsecutiveZeroHitTurns
+		ctx["totalRetrievalHits"] = state.TotalRetrievalHits
+		ctx["informationGainWarning"] = informationGainWarning(state)
 	}
-	decision.StateSummary = firstNonEmpty(decision.StateSummary, summarizeDecisionState(state))
-	decision.Candidates = candidates
-	action, branchID, validationStatus, validationReason := validateDecisionChoice(state, decision, candidates)
-	if action == "" {
-		action = fallbackAction
-		branchID = fallbackBranchID
-		validationStatus = "fallback"
-		validationReason = firstNonEmpty(validationReason, "decision_did_not_resolve_to_a_feasible_candidate")
-	}
-	decision.ExecutedAction = action
-	decision.ExecutedBranchID = branchID
-	decision.ValidationStatus = validationStatus
-	decision.ValidationReason = validationReason
-	if validationStatus == "fallback" {
-		state.RuntimeDiagnosis = append(state.RuntimeDiagnosis, RuntimeDiagnosis{
-			Code:     "decision_fallback",
-			Severity: "warning",
-			Message:  validationReason,
-		})
-	}
-	applyDecisionToState(state, decision)
-	return child, decision, action, branchID, nil
+	return ctx
 }
 
 func buildFallbackDecision(state *InvestigationState, action, branchID string, candidates []DecisionCandidate) DecisionResult {
@@ -2392,7 +2730,7 @@ func buildDecisionCandidates(state *InvestigationState) []DecisionCandidate {
 	return candidates
 }
 
-func validateDecisionChoice(state *InvestigationState, decision DecisionResult, candidates []DecisionCandidate) (string, string, string, string) {
+func validateDecisionChoice(decision DecisionResult, candidates []DecisionCandidate) (string, string, string, string) {
 	decision = normalizeDecisionResult(decision)
 	if decision.ChosenAction == "" {
 		return "", "", "fallback", "decision returned no chosenAction"
@@ -2435,7 +2773,35 @@ func normalizeDecisionCandidate(item DecisionCandidate) DecisionCandidate {
 	item.ProductHints = compactStrings(item.ProductHints)
 	item.GeoHints = compactStrings(item.GeoHints)
 	item.ActorHints = compactStrings(item.ActorHints)
+	item.DataSourceHint = strings.TrimSpace(item.DataSourceHint)
+	if item.DataSourceHint == "" {
+		item.DataSourceHint = defaultDataSourceHint(item.Action)
+	}
 	return item
+}
+
+// defaultDataSourceHint returns a static description of what data sources an action uses.
+// This helps the orchestrator reason about expected returns before executing a tool,
+// preventing fruitless loops when a source is known to be empty.
+func defaultDataSourceHint(action string) string {
+	switch action {
+	case "research":
+		return "Queries internal knowledge base (Vertex AI Search). Returns zero results when the internal KB has no data for this product or supply chain. If internal KB is empty, repeated research calls are wasteful — use bridge instead."
+	case "bridge":
+		return "Uses web-grounded reasoning only. Does NOT query the internal knowledge base. Always returns an external perspective. Prefer bridge when research returned internal_empty or internal_partial."
+	case "path":
+		return "Reads from the local graph database (materialized artifacts). Does not perform external retrieval."
+	case "critic":
+		return "Evaluates quality of current findings using reasoning only. No external retrieval."
+	case "materialize":
+		return "Writes accepted pending graph operations to persistent store. No external retrieval."
+	case "replan":
+		return "Updates the investigation plan based on current findings. No external retrieval."
+	case "stop":
+		return "Terminates the session and commits current findings."
+	default:
+		return ""
+	}
 }
 
 func normalizeDecisionResult(item DecisionResult) DecisionResult {
@@ -2483,6 +2849,7 @@ func normalizeActionOutcome(item ActionOutcome) ActionOutcome {
 	item.GapDiagnosis = normalizeGapDiagnosis(item.GapDiagnosis)
 	item.RecommendedAction = normalizeActionRecommendation(item.RecommendedAction)
 	item.GoodEnoughAssessment = normalizeGoodEnoughAssessment(item.GoodEnoughAssessment)
+	item.DataSourceSignal = strings.TrimSpace(strings.ToLower(item.DataSourceSignal))
 	return item
 }
 
@@ -2512,6 +2879,26 @@ func outcomeFromResearch(state *InvestigationState, branchID string, result Rese
 	return normalizeActionOutcome(outcome)
 }
 
+// resolveDataSourceSignal returns the model's own data-source assessment when available,
+// falling back to a conservative host-side inference only if the model didn't return one.
+// The model is trusted to evaluate what it saw; the fallback exists purely as a safety net
+// for older model versions or prompt failures.
+func resolveDataSourceSignal(modelSignal string, outcome ActionOutcome) string {
+	if sig := strings.TrimSpace(modelSignal); sig != "" {
+		return sig
+	}
+	switch {
+	case outcome.RetrievalHitCount == 0 && !outcome.GraphUseful:
+		return "internal_empty"
+	case outcome.RetrievalHitCount > 0 && outcome.GraphUseful && outcome.QualityDelta == "material":
+		return "internal_grounded"
+	case outcome.RetrievalHitCount > 0 || outcome.GraphUseful:
+		return "internal_partial"
+	default:
+		return "no_data"
+	}
+}
+
 func outcomeFromBridge(state *InvestigationState, branchID string, result BridgeResult) ActionOutcome {
 	evidence := compactStrings(append(append([]string{}, result.IntermediateNodes...), result.RouteSketches...))
 	outcome := ActionOutcome{
@@ -2528,6 +2915,7 @@ func outcomeFromBridge(state *InvestigationState, branchID string, result Bridge
 		EvidenceRefs:      evidence,
 		GapDiagnosis:      result.GapDiagnosis,
 		RecommendedAction: result.RecommendedAction,
+		DataSourceSignal:  "external_only", // default; overridden below if model returns its own assessment
 	}
 	switch {
 	case result.BridgeExists || len(result.BridgeSteps) >= 2 || len(result.ProposedOps) > 0:
@@ -3049,13 +3437,6 @@ func shouldRunCritic(state *InvestigationState) bool {
 	return true
 }
 
-// canRunCriticAfterResearch determines if an auto-paired critic should run
-// after a research step. Unlike shouldRunCritic, this doesn't check ActionLog
-// (because research just ran).
-func canRunCriticAfterResearch(state *InvestigationState) bool {
-	return state != nil && len(state.ResearchResults) > 0
-}
-
 // compactPendingOps returns a branch-scoped view of pending ops for research context.
 func compactPendingOps(ops []ProposedGraphOp, branchID string) []map[string]any {
 	if len(ops) == 0 {
@@ -3294,9 +3675,10 @@ func selectPathScope(state *InvestigationState) pathScopeSelection {
 		if b.Branch.RequiresPath {
 			score += 3
 		}
-		if b.Status == BranchStatusSupported {
+		switch b.Status {
+		case BranchStatusSupported:
 			score += 4
-		} else if b.Status == BranchStatusActive {
+		case BranchStatusActive:
 			score += 2
 		}
 		if h := state.Hypotheses[id]; h != nil {
@@ -3801,11 +4183,12 @@ func fillGapDiagnosisFromCritic(plan InvestigationPlan, result CriticResult) Gap
 		diag.NextAction = firstNonEmpty(result.RecommendedAction.Action, defaultActionForGapKind(diag.Kind))
 	}
 	if diag.Summary == "" {
-		if diag.Kind == "missing_completeness" {
+		switch diag.Kind {
+		case "missing_completeness":
 			diag.Summary = "Critic believes the investigation has not yet ruled out materially different alternatives."
-		} else if diag.Kind == "missing_adjudication" {
+		case "missing_adjudication":
 			diag.Summary = "Critic found unresolved contradictions or risky claims."
-		} else {
+		default:
 			diag.Summary = "Critic identified the dominant unresolved gap."
 		}
 	}
@@ -4839,7 +5222,7 @@ func branchRouteHypothesis(state *InvestigationState, branchID string, critic Cr
 	return strings.TrimSpace(branch.Branch.Question)
 }
 
-func branchAlternativeRoute(state *InvestigationState, branchID string, suggested []string) string {
+func branchAlternativeRoute(state *InvestigationState, _ string, suggested []string) string {
 	if state == nil || len(suggested) == 0 {
 		return ""
 	}
@@ -5479,6 +5862,7 @@ func appendReasoningBeat(state *InvestigationState, beat ReasoningBeat) {
 	if len(beat.Diagnostics) > 0 {
 		state.RuntimeDiagnosis = append(state.RuntimeDiagnosis, beat.Diagnostics...)
 	}
+	logAppendedReasoningBeat(beat)
 }
 
 func summarizeReasoningTrace(beats []ReasoningBeat) string {
@@ -5865,7 +6249,7 @@ func inferCriticDecision(critic CriticResult) string {
 	}
 }
 
-func inferCriticDecisionWhy(state *InvestigationState, critic CriticResult) string {
+func inferCriticDecisionWhy(_ *InvestigationState, critic CriticResult) string {
 	if critic.GoodEnoughAssessment.StopNow {
 		return firstNonEmpty(strings.TrimSpace(critic.GoodEnoughAssessment.Reason), "Current branch/result is already good enough for this runtime tier and further work is low-value.")
 	}
@@ -6105,7 +6489,7 @@ func buildCheckpointOutput(req InvestigationRequest, state *InvestigationState, 
 			"bottleneck":   strings.TrimSpace(state.CurrentBottleneck),
 			"updatedAt":    nowRFC3339(),
 		},
-		"executionJournal": buildExecutionJournal(state, taskRefs),
+		"executionJournal": buildExecutionJournal(state),
 	}
 	if latest := compactLatestStepOutput(action, childOutput); len(latest) > 0 {
 		out["latestStep"] = latest
@@ -6273,6 +6657,9 @@ func compactActionOutcome(item ActionOutcome) map[string]any {
 		"gapDiagnosis":         compactGapDiagnosis(item.GapDiagnosis),
 		"recommendedAction":    compactActionRecommendation(item.RecommendedAction),
 		"goodEnoughAssessment": compactGoodEnoughAssessment(item.GoodEnoughAssessment),
+		"dataSourceSignal":     item.DataSourceSignal,
+		"retrievalHitCount":    item.RetrievalHitCount,
+		"toolCallCount":        item.ToolCallCount,
 	}
 }
 
@@ -6304,16 +6691,17 @@ func compactDecisionCandidates(items []DecisionCandidate) []map[string]any {
 			continue
 		}
 		out = append(out, map[string]any{
-			"action":       item.Action,
-			"branchId":     item.BranchID,
-			"available":    item.Available,
-			"reason":       item.Reason,
-			"question":     item.Question,
-			"endpointA":    item.EndpointA,
-			"endpointB":    item.EndpointB,
-			"productHints": limitStrings(item.ProductHints, 6),
-			"geoHints":     limitStrings(item.GeoHints, 6),
-			"actorHints":   limitStrings(item.ActorHints, 6),
+			"action":         item.Action,
+			"branchId":       item.BranchID,
+			"available":      item.Available,
+			"reason":         item.Reason,
+			"question":       item.Question,
+			"endpointA":      item.EndpointA,
+			"endpointB":      item.EndpointB,
+			"productHints":   limitStrings(item.ProductHints, 6),
+			"geoHints":       limitStrings(item.GeoHints, 6),
+			"actorHints":     limitStrings(item.ActorHints, 6),
+			"dataSourceHint": item.DataSourceHint,
 		})
 	}
 	if len(out) == 0 {
@@ -6702,7 +7090,7 @@ func compactResearchSummaries(items []ResearchResult) []map[string]any {
 	return out
 }
 
-func buildExecutionJournal(state *InvestigationState, taskRefs map[string]any) []map[string]any {
+func buildExecutionJournal(state *InvestigationState) []map[string]any {
 	if state == nil || len(state.ActionLog) == 0 {
 		return nil
 	}
@@ -7063,18 +7451,6 @@ func buildCompletenessFrame(req InvestigationRequest) CompletenessFrame {
 	return normalizeCompletenessFrame(frame)
 }
 
-func inferOpenEndedDomain(query string) string {
-	query = strings.TrimSpace(strings.ToLower(query))
-	if query == "" {
-		return "domain_investigation"
-	}
-	words := strings.Fields(query)
-	if len(words) > 4 {
-		words = words[:4]
-	}
-	return strings.Join(words, "_")
-}
-
 func appendObservedRelations(base []map[string]any, raw any, direction string) []map[string]any {
 	switch typed := raw.(type) {
 	case []map[string]any:
@@ -7244,7 +7620,7 @@ func selectBridgeEndpointA(state *InvestigationState, branchID string, knownNode
 	return ""
 }
 
-func selectBridgeEndpointB(state *InvestigationState, branchID string, knownProducts, knownActors, knownGeos []string) string {
+func selectBridgeEndpointB(state *InvestigationState, _ string, knownProducts, knownActors, knownGeos []string) string {
 	if state == nil {
 		return ""
 	}
@@ -7441,6 +7817,11 @@ func (p *Processor) runModelObject(ctx context.Context, rt *agentmeshruntime.Ser
 			"_runtimeError": err.Error(),
 		}
 	}
+	if scoutReasoningLogEnabled() && body != nil {
+		scoutReasoningLogf("scout_llm_response task=%s capability=%s finish=%s text=%s",
+			task.ID, task.Capability, strings.TrimSpace(stringValue(body, "finishReason")),
+			scoutReasoningSingleLine(stringValue(body, "content"), 900))
+	}
 	parsed := parseContentObject(body)
 	if len(parsed) > 0 {
 		return parsed
@@ -7477,6 +7858,11 @@ func (p *Processor) runModelObject(ctx context.Context, rt *agentmeshruntime.Ser
 		return map[string]any{
 			"_runtimeError": fmt.Sprintf("model output parse failed (finishReason=%s) and repair call failed: %v", finishReason, repairErr),
 		}
+	}
+	if scoutReasoningLogEnabled() && repairBody != nil {
+		scoutReasoningLogf("scout_llm_repair task=%s capability=%s finish=%s text=%s",
+			task.ID, task.Capability, strings.TrimSpace(stringValue(repairBody, "finishReason")),
+			scoutReasoningSingleLine(stringValue(repairBody, "content"), 900))
 	}
 	if repaired := parseContentObject(repairBody); len(repaired) > 0 {
 		return repaired
@@ -8097,54 +8483,6 @@ func stateToRecommendedAction(decision DecisionResult) ActionRecommendation {
 		BranchID: firstNonEmpty(decision.ExecutedBranchID, decision.BranchID),
 		Reason:   firstNonEmpty(decision.WhyChosen, decision.StateSummary),
 	})
-}
-
-func applyStateDelta(state *InvestigationState, raw any) {
-	if state == nil {
-		return
-	}
-	delta := mapValue(raw)
-	if len(delta) == 0 {
-		return
-	}
-	if diag := decodeGapDiagnosis(delta["gapDiagnosis"]); diag.Kind != "" {
-		state.LatestGapDiagnosis = diag
-		state.GapDiagnoses = append(state.GapDiagnoses, diag)
-	}
-	if rec := decodeActionRecommendation(delta["recommendedAction"]); rec.Action != "" {
-		state.LatestRecommendedAction = rec
-		state.RecommendedActions = append(state.RecommendedActions, rec)
-	}
-	for _, q := range stringSliceValue(delta["openQuestions"]) {
-		if strings.TrimSpace(q) == "" {
-			continue
-		}
-		state.OpenQuestions = compactStrings(append(state.OpenQuestions, q))
-	}
-	switch strings.TrimSpace(stringValue(delta, "kind")) {
-	case "decision":
-		if rec := stateToRecommendedAction(DecisionResult{
-			ChosenAction:     stringValue(delta, "chosenAction"),
-			BranchID:         stringValue(delta, "branchId"),
-			ExecutedAction:   stringValue(delta, "executedAction"),
-			ExecutedBranchID: stringValue(delta, "executedBranchId"),
-			WhyChosen:        stringValue(delta, "whyChosen"),
-			StateSummary:     stringValue(delta, "stateSummary"),
-		}); rec.Action != "" {
-			state.LatestRecommendedAction = rec
-			state.RecommendedActions = append(state.RecommendedActions, rec)
-		}
-	case "path":
-		if continuity := strings.TrimSpace(stringValue(delta, "continuityStatus")); continuity != "" {
-			state.PathResult.ContinuityStatus = continuity
-		}
-	case "materialize":
-		for _, id := range stringSliceValue(delta["landedBranchIds"]) {
-			if b := state.Branches[id]; b != nil {
-				b.Status = BranchStatusDone
-			}
-		}
-	}
 }
 
 func applyAuthoritativeSessionState(state *InvestigationState, raw any) bool {
@@ -9045,13 +9383,6 @@ func ternaryBridgeConfidence(exists bool) float64 {
 	return 0.4
 }
 
-func planMap(plan InvestigationPlan) map[string]any {
-	raw, _ := json.Marshal(plan)
-	out := map[string]any{}
-	_ = json.Unmarshal(raw, &out)
-	return out
-}
-
 func researchMap(result ResearchResult) map[string]any {
 	raw, _ := json.Marshal(result)
 	out := map[string]any{}
@@ -9196,39 +9527,6 @@ func newBroadScanBranch(req InvestigationRequest, plan InvestigationPlan) Invest
 	}
 }
 
-func fallbackResearch(req InvestigationRequest, branch InvestigationBranch, productRefs []string, hits []map[string]any) ResearchResult {
-	evidence := make([]string, 0, len(hits))
-	for _, hit := range hits[:min(len(hits), 4)] {
-		title, _ := hit["title"].(string)
-		uri, _ := hit["uri"].(string)
-		evidence = append(evidence, strings.TrimSpace(firstNonEmpty(title, uri)))
-	}
-	question := firstNonEmpty(branch.Question, req.Query, req.TargetCanonicalPath)
-	summary := "Insufficient grounded evidence yet; collecting substrate for domain theses."
-	if len(evidence) > 0 {
-		summary = "Initial grounded signals collected; deriving testable domain theses."
-	}
-	return ResearchResult{
-		BranchID:                branch.ID,
-		Summary:                 summary,
-		EvidencePoints:          compactStrings(evidence),
-		ProductRefs:             compactStrings(productRefs),
-		GeoRefs:                 compactStrings(branch.GeoHints),
-		ActorRefs:               compactStrings(branch.ActorHints),
-		RecommendedPathProducts: compactStrings(productRefs),
-		OpenQuestions:           compactStrings([]string{question}),
-		Confidence:              0.5,
-		GapDiagnosis: GapDiagnosis{
-			Kind:          ternary(branch.BroadScan, "missing_completeness", "missing_substrate"),
-			Summary:       "Fallback research still needs more substrate before the route can be closed.",
-			Why:           "The model did not provide a stronger grounded answer.",
-			QuestionClass: ternary(branch.BroadScan, "completeness_scan", "space_scan"),
-			NextAction:    "research",
-			BranchID:      branch.ID,
-		},
-	}
-}
-
 func mergeResearchDeltaIntoResult(base ResearchResult, delta ResearchDelta) ResearchResult {
 	base.Summary = firstNonEmpty(strings.TrimSpace(delta.NextImplication), base.Summary)
 	base.EvidencePoints = compactStrings(append(base.EvidencePoints, delta.EvidencePoints...))
@@ -9239,52 +9537,6 @@ func mergeResearchDeltaIntoResult(base ResearchResult, delta ResearchDelta) Rese
 	base.GapDiagnosis = mergeGapDiagnosis(base.GapDiagnosis, delta.GapDiagnosis)
 	base.RecommendedAction = mergeActionRecommendation(base.RecommendedAction, delta.RecommendedAction)
 	return base
-}
-
-func fallbackCritic(plan InvestigationPlan, research []ResearchResult) CriticResult {
-	findings := make([]string, 0, len(research))
-	pathProducts := compactStrings(append([]string{}, plan.FocusProducts...))
-	for _, item := range research {
-		if strings.TrimSpace(item.Summary) != "" && !strings.Contains(strings.ToLower(item.Summary), "insufficient grounded evidence") {
-			findings = append(findings, item.Summary)
-		}
-		pathProducts = append(pathProducts, item.RecommendedPathProducts...)
-	}
-	risky := []string{}
-	if len(findings) == 0 && len(research) > 0 {
-		risky = append(risky, "No grounded domain thesis survived critic fallback gate.")
-	}
-	return CriticResult{
-		AcceptedFindings: compactStrings(findings),
-		RiskyClaims:      compactStrings(risky),
-		OpenQuestions:    collectResearchQuestions(research),
-		MaterializePath:  len(pathProducts) > 0 || plan.WantsPathMaterialize,
-		PathProducts:     compactStrings(pathProducts),
-		FocusGeos:        compactStrings(plan.FocusGeos),
-		FocusActors:      compactStrings(plan.FocusActors),
-		Confidence:       0.6,
-		CompletenessAssessment: CompletenessAssessment{
-			Status:                 ternary(len(research) > 0, "in_progress", "pending"),
-			Reason:                 "Fallback critic cannot certify completeness without explicit route scan.",
-			BroadScanCompleted:     len(research) > 0,
-			NoMaterialAlternatives: false,
-		},
-		GoodEnoughAssessment: GoodEnoughAssessment{
-			Status:              "insufficient",
-			ClosureLevel:        "insufficient",
-			StopNow:             false,
-			PersistWorkingPath:  false,
-			FurtherWorkLowValue: false,
-			Reason:              "Fallback critic cannot assert good-enough closure without explicit route judgment.",
-		},
-		GapDiagnosis: GapDiagnosis{
-			Kind:          "missing_completeness",
-			Summary:       "Fallback critic cannot certify completeness yet.",
-			Why:           "Without explicit route comparison, critic keeps the investigation open.",
-			QuestionClass: "completeness_scan",
-			NextAction:    "research",
-		},
-	}
 }
 
 func mergeCriticDelta(base CriticResult, delta CriticDelta) CriticResult {

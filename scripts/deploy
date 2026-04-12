@@ -1939,7 +1939,7 @@ deploy_api() {
     env_vars="$env_vars,ENTITY_EXTRACT_SERVICE_URL=$entity_extract_url,ENTITY_EXTRACT_MODE=${resolved_entity_extract_mode}"
   fi
   if [[ -n "$agentmesh_url" ]]; then
-    env_vars="$env_vars,AGENTMESH_PUBLIC_BASE_URL=$agentmesh_url,AGENTMESH_TASK_TARGET_URL=${agentmesh_url}/api/v1/internal/tasks/agentmesh/run,AGENTMESH_TASKS_LOCATION=${AGENTMESH_TASKS_LOCATION:-$REGION},AGENTMESH_TASKS_QUEUE=${AGENTMESH_TASKS_QUEUE:-nv-horizon-agentmesh},AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,AGENTMESH_TASKS_OIDC_AUDIENCE=$agentmesh_url,AGENTMESH_TASKS_DISABLE_OIDC=${AGENTMESH_TASKS_DISABLE_OIDC:-1},AGENTMESH_ARTIFACT_BUCKET=${PROJECT_ID}-agentmesh-artifacts"
+    env_vars="$env_vars,AGENTMESH_PUBLIC_BASE_URL=$agentmesh_url,AGENTMESH_TASK_TARGET_URL=${agentmesh_url}/api/v1/internal/tasks/agentmesh/run,AGENTMESH_TASKS_LOCATION=${AGENTMESH_TASKS_LOCATION:-$REGION},AGENTMESH_TASKS_QUEUE=${AGENTMESH_TASKS_QUEUE:-nv-horizon-agentmesh},AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,AGENTMESH_TASKS_OIDC_AUDIENCE=$agentmesh_url,AGENTMESH_TASKS_DISABLE_OIDC=${AGENTMESH_TASKS_DISABLE_OIDC:-0},AGENTMESH_ARTIFACT_BUCKET=${PROJECT_ID}-agentmesh-artifacts"
   fi
 
   local api_vpc_network="${API_VPC_NETWORK:-default}"
@@ -2010,7 +2010,7 @@ deploy_api() {
     post_deploy_env_vars+=("AGENTMESH_TASKS_QUEUE=${AGENTMESH_TASKS_QUEUE:-nv-horizon-agentmesh}")
     post_deploy_env_vars+=("AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND")
     post_deploy_env_vars+=("AGENTMESH_TASKS_OIDC_AUDIENCE=$agentmesh_url")
-    post_deploy_env_vars+=("AGENTMESH_TASKS_DISABLE_OIDC=${AGENTMESH_TASKS_DISABLE_OIDC:-1}")
+    post_deploy_env_vars+=("AGENTMESH_TASKS_DISABLE_OIDC=${AGENTMESH_TASKS_DISABLE_OIDC:-0}")
     post_deploy_env_vars+=("AGENTMESH_ARTIFACT_BUCKET=${PROJECT_ID}-agentmesh-artifacts")
   fi
   if [[ ${#post_deploy_env_vars[@]} -gt 0 ]]; then
@@ -2799,7 +2799,16 @@ smoke_agentmesh_deploy() {
   fi
   echo -e "${BLUE}[agentmesh] Running post-deploy smoke check...${NC}"
   local token=""
-  token=$(gcloud auth print-identity-token --audiences="$AGENTMESH_URL" --project "$PROJECT_ID" 2>/dev/null || true)
+  local backend_token=""
+  backend_token=$(gcloud auth print-identity-token \
+    --audiences="$AGENTMESH_URL" \
+    --impersonate-service-account="$SA_BACKEND" \
+    --include-email \
+    --project "$PROJECT_ID" 2>/dev/null || true)
+  token="$backend_token"
+  if [[ -z "$token" ]]; then
+    token=$(gcloud auth print-identity-token --audiences="$AGENTMESH_URL" --project "$PROJECT_ID" 2>/dev/null || true)
+  fi
   if [[ -z "$token" ]]; then
     echo -e "${YELLOW}[agentmesh] Skipping authenticated readiness probe: unable to mint identity token${NC}"
     return 0
@@ -2814,6 +2823,29 @@ PY
   then
     echo -e "${RED}[agentmesh] Readiness probe failed:${NC} $response" >&2
     exit 1
+  fi
+  local unauth_status
+  unauth_status=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+    -H "Content-Type: application/json" \
+    -d '{"taskId":"smoke-deny"}' \
+    "${AGENTMESH_URL}/api/v1/internal/tasks/agentmesh/run" || true)
+  if [[ "$unauth_status" != "401" && "$unauth_status" != "403" ]]; then
+    echo -e "${RED}[agentmesh] Unauthenticated task probe returned ${unauth_status}, expected 401/403${NC}" >&2
+    exit 1
+  fi
+  if [[ -n "$backend_token" ]]; then
+    local oidc_status
+    oidc_status=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+      -H "Authorization: Bearer ${backend_token}" \
+      -H "Content-Type: application/json" \
+      -d '{' \
+      "${AGENTMESH_URL}/api/v1/internal/tasks/agentmesh/run" || true)
+    if [[ "$oidc_status" != "400" ]]; then
+      echo -e "${RED}[agentmesh] Backend-SA OIDC task probe returned ${oidc_status}, expected 400 after auth${NC}" >&2
+      exit 1
+    fi
+  else
+    echo -e "${YELLOW}[agentmesh] Skipping backend-SA OIDC task probe: unable to mint impersonated identity token${NC}"
   fi
   echo -e "${GREEN}[agentmesh] Smoke check passed${NC}"
 }
@@ -2965,7 +2997,14 @@ deploy_agentmesh() {
   fi
   # Reasoning Engine is created in AGENTMESH_VERTEX_LOCATION or REGION (see ensure_agentmesh_reasoning_engine); keep defaults aligned.
   local agentmesh_vertex_loc="${AGENTMESH_VERTEX_LOCATION:-$REGION}"
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,AGENTMESH_VERTEX_LOCATION=${agentmesh_vertex_loc},AGENTMESH_VERTEX_REASONING_ENGINE=${AGENTMESH_REASONING_ENGINE},AGENTMESH_PUBLIC_BASE_URL=${public_base_url},AGENTMESH_TASK_TARGET_URL=${target_url},AGENTMESH_TASKS_LOCATION=${AGENTMESH_TASKS_LOCATION:-$REGION},AGENTMESH_TASKS_QUEUE=${AGENTMESH_TASKS_QUEUE:-nv-horizon-agentmesh},AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,AGENTMESH_TASKS_OIDC_AUDIENCE=${oidc_audience},AGENTMESH_TASKS_DISABLE_OIDC=${AGENTMESH_TASKS_DISABLE_OIDC:-1},AGENTMESH_ALLOW_UNAUTH_INTERNAL_TASKS=${AGENTMESH_ALLOW_UNAUTH_INTERNAL_TASKS:-1},AGENTMESH_RUNTIME_LEASE_OWNER=${AGENTMESH_RUNTIME_LEASE_OWNER:-${service}},AGENTMESH_ARTIFACT_BUCKET=${PROJECT_ID}-agentmesh-artifacts,AGENTMESH_AGENT_CARD_KMS_KEY_VERSION=${AGENTMESH_AGENT_CARD_KMS_KEY_VERSION},AGENTMESH_AGENT_CARD_KEY_ID=${AGENTMESH_AGENT_CARD_KMS_KEY_VERSION},AGENTMESH_MODEL_FLASH=${AGENTMESH_MODEL_FLASH:-gemini-3.1-flash-lite-preview},AGENTMESH_MODEL_PRO=${AGENTMESH_MODEL_PRO:-gemini-3-pro-preview},VERTEX_SEARCH_DATA_STORE_ID=${VERTEX_SEARCH_DATA_STORE_ID:-rag-documents-store},AGENTMESH_VERTEX_SESSION_TTL=${AGENTMESH_VERTEX_SESSION_TTL:-86400s}"
+  local scout_orchestrator_mode="${AGENTMESH_SCOUT_ORCHESTRATOR_MODE:-vertex}"
+  local scout_agent_engine="${AGENTMESH_SCOUT_AGENT_ENGINE:-}"
+  if [[ "$scout_orchestrator_mode" != "local" && -z "$scout_agent_engine" ]]; then
+    echo -e "${RED}[agentmesh] AGENTMESH_SCOUT_AGENT_ENGINE is required when AGENTMESH_SCOUT_ORCHESTRATOR_MODE=${scout_orchestrator_mode}${NC}" >&2
+    echo -e "${YELLOW}[agentmesh] Deploy agents/vertex/agentmesh_scout_orchestrator first, then export the printed resource name.${NC}" >&2
+    exit 1
+  fi
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,AGENTMESH_VERTEX_LOCATION=${agentmesh_vertex_loc},AGENTMESH_VERTEX_REASONING_ENGINE=${AGENTMESH_REASONING_ENGINE},AGENTMESH_SCOUT_AGENT_ENGINE=${scout_agent_engine},AGENTMESH_SCOUT_ORCHESTRATOR_MODE=${scout_orchestrator_mode},AGENTMESH_PUBLIC_BASE_URL=${public_base_url},AGENTMESH_TASK_TARGET_URL=${target_url},AGENTMESH_TASKS_LOCATION=${AGENTMESH_TASKS_LOCATION:-$REGION},AGENTMESH_TASKS_QUEUE=${AGENTMESH_TASKS_QUEUE:-nv-horizon-agentmesh},AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,AGENTMESH_TASKS_OIDC_AUDIENCE=${oidc_audience},AGENTMESH_TASKS_DISABLE_OIDC=${AGENTMESH_TASKS_DISABLE_OIDC:-0},AGENTMESH_ALLOW_UNAUTH_INTERNAL_TASKS=${AGENTMESH_ALLOW_UNAUTH_INTERNAL_TASKS:-0},AGENTMESH_RUNTIME_LEASE_OWNER=${AGENTMESH_RUNTIME_LEASE_OWNER:-${service}},AGENTMESH_ARTIFACT_BUCKET=${PROJECT_ID}-agentmesh-artifacts,AGENTMESH_AGENT_CARD_KMS_KEY_VERSION=${AGENTMESH_AGENT_CARD_KMS_KEY_VERSION},AGENTMESH_AGENT_CARD_KEY_ID=${AGENTMESH_AGENT_CARD_KMS_KEY_VERSION},AGENTMESH_MODEL_FLASH=${AGENTMESH_MODEL_FLASH:-vertex-gemini-3.1-flash-lite-preview},AGENTMESH_MODEL_FLASH_REASONING=${AGENTMESH_MODEL_FLASH_REASONING:-vertex-gemini-3-flash-preview},AGENTMESH_MODEL_PRO=${AGENTMESH_MODEL_PRO:-vertex-gemini-3.1-pro-preview},AGENTMESH_OTEL_ENABLED=${AGENTMESH_OTEL_ENABLED:-1},AGENTMESH_EVAL_GCS_PREFIX=${AGENTMESH_EVAL_GCS_PREFIX:-gs://${PROJECT_ID}-agentmesh-artifacts/agentmesh/evals},VERTEX_SEARCH_DATA_STORE_ID=${VERTEX_SEARCH_DATA_STORE_ID:-rag-documents-store},AGENTMESH_VERTEX_SESSION_TTL=${AGENTMESH_VERTEX_SESSION_TTL:-86400s}"
 
   echo -e "${BLUE}[agentmesh] Deploying to Cloud Run...${NC}"
   gcloud run deploy "$service" \
@@ -2978,6 +3017,7 @@ deploy_agentmesh() {
     --cpu="${AGENTMESH_CLOUD_RUN_CPU:-1}" \
     --memory="${AGENTMESH_CLOUD_RUN_MEMORY:-1Gi}" \
     --timeout=3600 \
+    --no-allow-unauthenticated \
     --set-env-vars "$env_vars" \
     --project "$PROJECT_ID" \
     --quiet
