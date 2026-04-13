@@ -58,15 +58,22 @@ def build_internal_brief(
 ) -> InternalBrief:
     rr = reachability_report or {}
     health = str(rr.get("healthSummary") or "").strip()
-    broken = rr.get("brokenChains") or []
-    broken_n = len(broken) if isinstance(broken, list) else 0
-    complete_count = rr.get("completeChainCount")
+    partial = rr.get("partialChains") or []
+    partial_n = len(partial) if isinstance(partial, list) else 0
+    complete_count = rr.get("groundedCompleteChainCount")
     if complete_count is None:
-        complete_count = len(rr.get("completeChains") or [])
+        complete_count = len(rr.get("groundedCompleteChains") or [])
     try:
         complete_int = int(complete_count)
     except (TypeError, ValueError):
         complete_int = 0
+    structural_count = rr.get("structuralCompleteChainCount")
+    if structural_count is None:
+        structural_count = len(rr.get("structurallyCompleteChains") or [])
+    try:
+        structural_int = int(structural_count)
+    except (TypeError, ValueError):
+        structural_int = 0
 
     bridge_short: list[str] = []
     for item in rr.get("bridgeCandidates") or []:
@@ -166,6 +173,10 @@ def build_internal_brief(
     caveats: list[str] = []
     if complete_int == 0 and health:
         caveats.append("No fully grounded end-to-end operational chain was confirmed in the working graph.")
+    if structural_int > 0 and complete_int == 0:
+        caveats.append(
+            "Structurally complete chain(s) exist (terminal reachability) but rely on hypothesis or weak evidence, not full document grounding."
+        )
     hypo_obs = sum(1 for o in working_graph if o.support_type == "hypothesis")
     if hypo_obs > 0:
         caveats.append("Some edges rely on hypothesis-level or model knowledge and are not document-grounded.")
@@ -184,15 +195,18 @@ def build_internal_brief(
     reach_parts: list[str] = []
     if health:
         reach_parts.append(health)
-    reach_parts.append(f"completeChains~{complete_int}")
-    if broken_n:
-        reach_parts.append(f"brokenChainReports~{broken_n}")
+    reach_parts.append(f"groundedCompleteChains~{complete_int}")
+    if structural_int:
+        reach_parts.append(f"structurallyCompleteChains~{structural_int}")
+    if partial_n:
+        reach_parts.append(f"partialChainReports~{partial_n}")
 
     return InternalBrief(
         questionOneLiner=_truncate(question, 400),
         selectedRoles=role_literals,
         reachabilityOneLiner=_truncate("; ".join(reach_parts), 500),
         completeChainCount=complete_int,
+        structuralChainCount=structural_int,
         bridgeCandidatesShort=_dedupe_preserve_order(bridge_short)[:8],
         supplyChainNarrativeBullets=_dedupe_preserve_order(supply_bullets)[:max_bullets_per_axis],
         governanceBullets=_dedupe_preserve_order(gov_bullets)[:max_bullets_per_axis],

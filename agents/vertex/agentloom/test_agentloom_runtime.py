@@ -1856,7 +1856,7 @@ class AgentLoomRuntimeTest(unittest.TestCase):
         self.assertEqual(candidates[0].supporting_branch_ids, ["root", "sink"])
         self.assertEqual(candidates[0].end_node, "BASF Schwarzheide")
 
-    def test_reachability_treats_terminal_supply_sink_as_provisional_chain(self) -> None:
+    def test_reachability_treats_terminal_supply_sink_as_structurally_complete_chain(self) -> None:
         report = _graph_reachability_report(
             {
                 "working_graph": [
@@ -1869,11 +1869,12 @@ class AgentLoomRuntimeTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual(len(report["brokenChains"]), 0)
-        self.assertEqual(len(report["provisionalChains"]), 1)
-        self.assertEqual(report["provisionalChains"][0]["sink"], "BASF Schwarzheide")
+        self.assertEqual(len(report["partialChains"]), 0)
+        self.assertEqual(len(report["groundedCompleteChains"]), 0)
+        self.assertEqual(len(report["structurallyCompleteChains"]), 1)
+        self.assertEqual(report["structurallyCompleteChains"][0]["sink"], "BASF Schwarzheide")
 
-    def test_reachability_break_reason_for_terminal_sink_mentions_weak_edges_not_missing_outgoing(self) -> None:
+    def test_reachability_hypothesis_terminal_sink_is_structurally_complete_not_partial(self) -> None:
         report = _graph_reachability_report(
             {
                 "working_graph": [
@@ -1885,8 +1886,9 @@ class AgentLoomRuntimeTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual(len(report["brokenChains"]), 1)
-        self.assertIn("valid terminal sink", report["brokenChains"][0]["breakReason"])
+        self.assertEqual(len(report["partialChains"]), 0)
+        self.assertEqual(len(report["structurallyCompleteChains"]), 1)
+        self.assertIn("hypothesis", report["structurallyCompleteChains"][0]["structuralReason"].lower())
 
     def test_hypotheses_preserve_parent_and_independence_metadata(self) -> None:
         hypotheses = _derive_hypotheses(
@@ -2003,6 +2005,44 @@ class AgentLoomRuntimeTest(unittest.TestCase):
         decision = SupervisorDecision.model_validate(fixed)
         self.assertEqual(decision.mission.assigned_roles, [ROLE_SUPPLY_CHAIN])
 
+    def test_supervisor_coercion_overwrites_wrong_cycle(self) -> None:
+        raw = {
+            "cycle": 99,
+            "assessment": "Continue supply.",
+            "rationale": ["LLM repeated an old cycle number."],
+            "nextAgent": "supply_chain_investigator_agent",
+            "mission": {
+                "missionId": "m1",
+                "objective": "Close one hop.",
+                "assignedRoles": [ROLE_SUPPLY_CHAIN],
+                "groundingMode": "mixed",
+            },
+        }
+        fixed = _coerce_supervisor_decision_payload(
+            raw,
+            selected_role_literals=[ROLE_SUPPLY_CHAIN],
+            cycle=7,
+            user_question="Q?",
+        )
+        decision = SupervisorDecision.model_validate(fixed)
+        self.assertEqual(decision.cycle, 7)
+
+    def test_supervisor_coercion_stamps_cycle_for_compose(self) -> None:
+        raw = {
+            "cycle": 5,
+            "assessment": "Ready.",
+            "rationale": ["Critic ok."],
+            "nextAgent": "compose",
+        }
+        fixed = _coerce_supervisor_decision_payload(
+            raw,
+            selected_role_literals=[ROLE_SUPPLY_CHAIN],
+            cycle=12,
+            user_question="Q?",
+        )
+        decision = SupervisorDecision.model_validate(fixed)
+        self.assertEqual(decision.cycle, 12)
+
     def test_reachability_does_not_treat_hypothesis_chain_as_complete(self) -> None:
         state = {
             "working_graph": [
@@ -2047,9 +2087,9 @@ class AgentLoomRuntimeTest(unittest.TestCase):
 
         report = _graph_reachability_report(state)
 
-        self.assertEqual(report["completeChains"], [])
-        self.assertTrue(report["brokenChains"] or report["provisionalChains"])
-        self.assertIn("No grounded complete chain", report["healthSummary"])
+        self.assertEqual(report["groundedCompleteChains"], [])
+        self.assertTrue(report["structurallyCompleteChains"] or report["partialChains"])
+        self.assertIn("No document-grounded complete chain", report["healthSummary"])
 
     def test_vertex_partial_can_reroute_to_web(self) -> None:
         plan = BranchPlan(

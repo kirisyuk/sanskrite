@@ -119,12 +119,16 @@ class NarrativePipelineTest(unittest.TestCase):
                 )
             ],
             open_gap_texts=["nickel sulfate contract visibility"],
-            reachability_report={"healthSummary": "No grounded complete chain", "completeChainCount": 0, "brokenChains": [{"x": 1}]},
+            reachability_report={
+                "healthSummary": "No document-grounded complete chain",
+                "groundedCompleteChainCount": 0,
+                "partialChains": [{"x": 1}],
+            },
         )
         self.assertTrue(brief.supply_chain_narrative_bullets)
         self.assertTrue(brief.learned_findings_digest)
         self.assertTrue(brief.clustered_gaps)
-        self.assertIn("brokenChainReports", brief.reachability_one_liner)
+        self.assertIn("partialChainReports", brief.reachability_one_liner)
 
     def test_validate_narrative_coverage_pass_and_fail(self) -> None:
         rubric = build_question_rubric("alternative ownership path and regulatory choke", ["supply_chain"])
@@ -170,7 +174,7 @@ class NarrativePipelineTest(unittest.TestCase):
         internal = InternalBrief(
             questionOneLiner="How does material X reach the sink?",
             selectedRoles=["supply_chain"],
-            reachabilityOneLiner="No grounded end-to-end flow in the working graph.; completeChains~0",
+            reachabilityOneLiner="No grounded end-to-end flow in the working graph.; groundedCompleteChains~0",
             completeChainCount=0,
             epistemicCaveats=["Some edges in the working graph are hypothesis-level and not document-grounded."],
         )

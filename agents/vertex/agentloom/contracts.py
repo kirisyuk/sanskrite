@@ -575,6 +575,7 @@ class InternalBrief(StrictModel):
     selected_roles: list[InvestigationRole] = Field(alias="selectedRoles")
     reachability_one_liner: str = Field(default="", alias="reachabilityOneLiner")
     complete_chain_count: int = Field(default=0, alias="completeChainCount")
+    structural_complete_chain_count: int = Field(default=0, alias="structuralChainCount")
     bridge_candidates_short: list[str] = Field(default_factory=list, alias="bridgeCandidatesShort")
     supply_chain_narrative_bullets: list[str] = Field(default_factory=list, alias="supplyChainNarrativeBullets")
     governance_bullets: list[str] = Field(default_factory=list, alias="governanceBullets")

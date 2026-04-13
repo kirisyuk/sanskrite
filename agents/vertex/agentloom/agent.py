@@ -506,11 +506,13 @@ def _coerce_supervisor_decision_payload(
     """
     if not raw:
         return raw
-    next_agent = raw.get("nextAgent") or raw.get("next_agent")
+    out = dict(raw)
+    # LLM-returned cycle is unreliable; always stamp the real supervisor cycle for logs and logicTrace.
+    out["cycle"] = cycle
+    next_agent = out.get("nextAgent") or out.get("next_agent")
     if next_agent not in _SUPERVISOR_DELEGATE_AGENTS:
-        return raw
+        return out
 
-    out = {**raw}
     mission_raw = out.get("mission")
     mission: dict[str, Any] = {**(mission_raw if isinstance(mission_raw, dict) else {})}
     out["mission"] = mission
@@ -1643,17 +1645,19 @@ Question-coverage rule:
 
 1. Graph is empty: your first mission must ask for one complete hypothesis-level answer to the user's question as a connected graph. Not pieces. Not layers. The whole thing, even if rough. The graph shape can be anything — chain, tree, star, network — whatever fits the question. Mission phrasing must say: "Answer the question as one connected hypothesis graph. Every uncertain edge should have low confidence and supportType=hypothesis."
 2. Graph has a hypothesis skeleton: look at `state.frontierSummary` and find the weakest joints — edges with lowest confidence, hypothesis supportType, or missing actors. Your next missions must target those specific weak spots. Do not decompose by domain layer ("do upstream, then midstream, then downstream"). Decompose by confidence gradient: what is weakest in the current graph? Phrasing: "Verify or improve these specific weak edges: [list them]."
+   **Mission-focus discipline (anti-bloat):** after the initial hypothesis-building mission, **each** next mission must have **one** primary purpose: either (a) **one** concrete break-point from `reachability.partialChainBreakPoints` / weakest hop on a structural chain, or (b) **one** `openGaps` item you can operationalize with new endpoints or relation class—**not** a second full-chain restatement that re-bundles ownership + policy + end-to-end flow like the first mission. If the last mission was already multi-theme, the next mission must be **narrower** (single role, single bridge, or single gap class).
 3. Hypothesis falsified: if after a verification cycle the synthesizer reports more contradicted edges than verified ones, do not keep patching. Keep verified pieces as standalone facts. Either (a) formulate an alternative hypothesis if the synthesizer suggested one, or (b) accept that the connection could not be established — possibly due to secrecy, obfuscation, or a wrong hypothesis — and move to compose.
 4. Frame shift: after the main verification loop or after falsification, ask: "Is there a completely different angle to approach this question?" If the synthesizer or critic suggested an alternative frame, explore it as one more investigation cycle. If not, move on.
 5. REACHABILITY HEALTH CHECK (mandatory from cycle 2 onward): read `state.reachability` before choosing your next focus. This field shows:
-   - `completeChains`: grounded end-to-end flow paths from source to terminal. Count these as complete only when the path does not rely on `supportType=hypothesis` or weak low-confidence flow edges.
-   - `provisionalChains`: end-to-end paths that structurally connect but still rely on `hypothesis`, `model_knowledge`, or other weak flow edges. These are useful skeletons, not proof of a complete operational backbone.
-   - `brokenChains`: partial paths that stop at a dead end. Each broken chain names the break point — the entity where the flow path ends prematurely. These break points are the highest-priority structural gaps.
+   - `groundedCompleteChains` (and `completeChainCount`): document-grounded end-to-end flow paths to a valid terminal sink (no hypothesis-only hops in that chain class).
+   - `structurallyCompleteChains` (and `structuralChainCount`): end-to-end paths to a valid terminal sink that are **connected** but **not** fully document-grounded (hypothesis, model_knowledge, or mixed strength). Useful skeletons; not proof of a grounded operational backbone.
+   - `partialChains`: paths that stop short of a valid terminal sink (dead end or non-terminal stop). Break points here are the usual structural-gap anchors.
    - `bridgeCandidates`: entities that exist in governance/policy layers but are not connected to any flow chain. They need a flow edge (SUPPLIES_TO, PRODUCES, EXTRACTS_FROM) to become useful.
    - `healthSummary`: one-line assessment.
-   If the reachability report shows broken chains or no grounded complete chains, your next mission MUST target the break points. A provisional chain is not enough to declare structural success. Do NOT switch to governance/policy/ownership investigation until at least one grounded complete flow chain exists, unless the only remaining uncertainty is clearly detail-level and further grounding is unavailable. Name the specific break point entities in the mission focus. Example: "Connect [upstream entity] to [downstream entity] via a SUPPLIES_TO or PRODUCES edge."
+   If the reachability report shows **partial chains** (dead ends) or **no grounded complete chains** (`completeChainCount` == 0), your next mission MUST target those break points with `supply_chain_investigator_agent` or `gap_bridge_agent`. A **structurally complete** weak chain alone is not proof of a **grounded** backbone. **While `completeChainCount` == 0 and `state.progress.stagnationCount` < 2, you must NOT** choose `governance_and_control_investigator_agent` or `policy_impact_investigator_agent` as the next delegate—ownership and regulatory overlays must wait until there is at least one **grounded** complete chain **or** until the exception below fires. Name specific break-point entities in the mission. Example: "Connect [upstream entity] to [downstream entity] via a SUPPLIES_TO or PRODUCES edge."
+   **Exception (stalled flow tools only):** if `stagnationCount` >= 2 **and** the last **two** completed delegates were each `supply_chain_investigator_agent` or `gap_bridge_agent` **and** neither run added any new **flow** observation with `supportType` in `document` or `mixed`, you may send **one** narrow `governance_and_control_investigator_agent` **or** `policy_impact_investigator_agent` mission tied to an explicit `openGaps` item—then the following cycle must return to flow break-point work unless the critic endorses composition.
    **Narrow exception (same cycle only as a detour, not a substitute):** you may dispatch **one** concise `supply_chain_investigator_agent` mission whose **only** purpose is **adjacent-frame** context or an explicit **market-shape prior**—recorded strictly as `learnedFindings` and/or `hypothesis` / `model_knowledge` observations with **low confidence**, never presented as document-grounded flow. Use this **sparingly** when repeated break-point missions are not adding typed edges but omitting the adjacent context would mislead the user about decision-relevant neighborhood. The **next** cycle must return priority to break-point closure until the critic endorses compose with an honest indirect or prior-heavy answer. This exception does **not** waive the rule against treating governance/policy work as a replacement for missing operational edges.
-6. Weak spots addressed, main line explored — dimension coverage check: before sending to critic, explicitly compare the user's question against the selectedRoles and the current graph. Also check `graphPreviewByRole`: if a role has zero or very few sample edges, it is undercovered. Send one more targeted investigation pass for each undercovered dimension. Do not send to critic until every selectedRole has at least a minimal overlay on the connected graph. When you do delegate, if the dimension is about publicly verifiable facts (corporate ownership, facility details, current regulations), prefer `web_search`; if it is about internal evidence already available to the system, prefer `retrieve`.
+6. Dimension coverage vs flow closure: before sending to critic, compare the user's question against `selectedRoles` and the graph. **Do not** use sparse `graphPreviewByRole` governance or policy rows to justify skipping flow work while `completeChainCount` == 0—close or honestly stall **grounded** flow first per step 5. Once `completeChainCount` >= 1 (or the step-5 exception already fired and you returned to flow), if a role dimension is still clearly under-covered relative to the user question, send **one** targeted pass for that role. Do not send to critic until each selected role has minimal overlay **subject to** reachability-first ordering above. For publicly verifiable ownership or regulation facts, prefer `web_search`; for internal evidence, prefer `retrieve`.
 7. Frontier hygiene: before deciding, scan `openGaps` and `frontierSummary.remainingFrontier` for questions that were generated but never dispatched. If any structural frontier question has been sitting for 2+ cycles without a branch assigned to it, either dispatch it now or explicitly deprioritize it in your rationale. Do not let structural questions silently accumulate.
 8. Coverage sufficient or no further progress: send to critic, then compose.
 
@@ -1664,6 +1668,7 @@ Question-coverage rule:
 - Child-hypothesis saturation rule: if a parent hypothesis already has multiple dependent follow-up branches and they keep returning `still_open` with the same break point entities, do not keep spawning sibling refinements under that parent forever. Escalate to `critic_agent` unless a genuinely new relation family or endpoint set appeared in `state.hypothesisFrontiers.discoveredFrontier`.
 - If `state.failureCount` is rising and failures mention invalid JSON or truncation, do **not** repeat the same broad mission: narrow to one bridge question and prefer `web_search` for public facts.
 - Mission wording: do **not** restate questions that already appear verbatim or paraphrased in `openGaps` / `lastAgentResult.nextQuestions`. If the investigator must revisit a theme, change endpoints or relation class so the mission is not a duplicate pass.
+- **Anti-double-tap:** do not immediately follow `gap_bridge_agent` with `supply_chain_investigator_agent` when both missions target the **same** unresolved hop (same product stage / facility pair class). Either wait for the gap-bridge outcome to change the frontier, or if stagnation is already high, prefer `critic_agent` instead of a second similar supply mission.
 - Delegate substantive discovery only to the role-specialized investigators:
   - `supply_chain_investigator_agent`
   - `governance_and_control_investigator_agent`
@@ -1812,16 +1817,17 @@ Rules:
 
 1. Reachability analysis (USE `reachability` FIELD FIRST):
 The context includes a `reachability` field computed from the full working graph. It contains:
-- `completeChains`: paths that traverse multiple flow hops from source to terminal
-- `brokenChains`: partial paths that stop at a dead end (entity with no outgoing flow edge)
+- `groundedCompleteChains`: document-grounded paths to a valid terminal sink
+- `structurallyCompleteChains`: terminal-reachable paths that remain weak or hypothetical on at least one hop
+- `partialChains`: paths that stop before a valid terminal sink
 - `bridgeCandidates`: entities present in governance/policy layer but not connected to any flow chain
 - `healthSummary`: one-line assessment
-Read this field first. If there are broken chains, the break point is the highest-priority structural gap. If bridgeCandidates lists entities known to governance but not to flow, those need a SUPPLIES_TO, PRODUCES, or EXTRACTS_FROM edge.
-Report the reachability health in `crossBranchAssessment`. If no complete chain exists, say so explicitly and name the break point(s).
+Read this field first. If there are **partial chains**, their break point is the highest-priority structural gap. If **structurally complete** chains exist but **grounded** chains do not, say that the skeleton is terminal-connected but not document-grounded. If bridgeCandidates lists entities known to governance but not to flow, those need a SUPPLIES_TO, PRODUCES, or EXTRACTS_FROM edge.
+Report the reachability health in `crossBranchAssessment`. If no **grounded** complete chain exists, say so explicitly and name the break point(s) on partial chains (or the weakest hop on a structural chain).
 When interpreting branch results, remember that replacement patches are already applied to the working graph before synthesis. If one branch replaced a placeholder node or an old fragment, synthesize against the replacement graph and do not keep both versions alive conceptually unless the state still explicitly contains both.
 
 2. Bridge analysis — can we fill between X and Y?
-For each broken chain and each bridge candidate, ask: "Do any of the branch results contain information that could fill the gap between X and Y?" If yes, add the connection to `connectedPairs`. If no, formulate a concrete bridge question in `bridgeQuestions` specifying both endpoints: "What connects X to Y?" or "Who supplies [product] from [facility X] to [facility Y]?"
+For each **partial chain** and each bridge candidate, ask: "Do any of the branch results contain information that could fill the gap between X and Y?" If yes, add the connection to `connectedPairs`. If no, formulate a concrete bridge question in `bridgeQuestions` specifying both endpoints: "What connects X to Y?" or "Who supplies [product] from [facility X] to [facility Y]?"
 Also apply bridge analysis to `disconnectedPairs`: look at where one branch's graph ends and whether another branch's graph begins nearby but no typed edge exists between them.
 Dedup: read `reasoningDedupHints` and `openGaps`. Do **not** emit a `bridgeQuestion` that repeats or lightly rephrases an item already listed there unless you widen scope (e.g. name a different facility pair or product stage).
 
@@ -1854,7 +1860,7 @@ Output fields:
 - `bridgeGaps`: only STRUCTURAL gaps where a typed connection is entirely missing. Prioritize: (1) flow chain break points from reachability, (2) bridge candidates, (3) other structural disconnects.
 - `bridgeQuestions`: for each structural bridge gap, one concrete question. For flow break points, the question MUST name both the upstream entity and the downstream entity that need connecting. Example: "Who supplies [upstream product stage] from [named upstream facility] to [named downstream facility]?" Do NOT write questions that only seek quantitative detail.
 - `crossBranchAssessment`: must start with reachability health, then connectivity between branches, then hypothesis status.
-- `synthesisSummary`: one sentence. If no complete chain exists, lead with that.
+- `synthesisSummary`: one sentence. If no **grounded** complete chain exists, lead with that.
 - Keep compact. At most 6 bridgeGaps, 6 bridgeQuestions, 6 connectedPairs, 6 disconnectedPairs, 6 addressedGapTexts.
 - Do not invent new graph observations or facts.
 
@@ -1979,12 +1985,12 @@ When evaluating `openGaps`, classify each: does the graph already contain a type
 
 Reachability check (USE `reachability` FIELD):
 The context includes a `reachability` field. Read it before making your assessment.
-- If `completeChains` is empty, the graph has no grounded end-to-end flow backbone. This is a serious structural deficit.
-- If `provisionalChains` is non-empty, the graph may be structurally connected but still relies on weak or hypothesis-level flow edges. Treat that as incomplete unless further grounding is clearly impossible.
-- If `brokenChains` lists break points, those are specific structural gaps that could be addressed.
+- If `groundedCompleteChains` / `completeChainCount` is empty or zero, there is no document-grounded end-to-end flow backbone. That is a serious structural deficit **unless** further grounding is clearly impossible.
+- If `structurallyCompleteChains` / `structuralChainCount` is non-empty, the graph has **terminal-connected** weak skeletons (hypothesis/model_knowledge). Treat them as **not** grounded proof, but do not ignore them when prioritizing which hop to verify next.
+- If `partialChains` lists break points, those are incomplete routes (dead ends) that still need bridging work.
 - If `bridgeCandidates` lists entities in governance but not in flow, those are partially useful — they exist but are disconnected.
-- If `healthSummary` says "No grounded complete chain", do NOT recommend composition unless investigation has stagnated and further progress is implausible.
-- When `completeChains` is empty but stagnation rules already justify ending investigation, you may recommend composition **only if** the final composed answer will explicitly separate (a) document-supported fragments, (b) best-supported indirect structure, and (c) adjacent-frame or market-prior context carried as hypothesis or learned findings—not as grounded end-to-end flow. State that requirement in your recommendation rationale.
+- If `healthSummary` indicates **no document-grounded complete chain** (or equivalent), do NOT recommend composition unless investigation has stagnated and further progress is implausible.
+- When `groundedCompleteChains` / `completeChainCount` is empty but stagnation rules already justify ending investigation, you may recommend composition **only if** the final composed answer will explicitly separate (a) document-supported fragments, (b) structurally complete weak chains / best-supported indirect structure, and (c) adjacent-frame or market-prior context carried as hypothesis or learned findings—not as grounded end-to-end flow. State that requirement in your recommendation rationale.
 
 Rules:
 - Do not invent new research facts.
@@ -2031,7 +2037,7 @@ Rules:
   - axis_alternative_paths -> alternativePaths
 - `honestLimits` must reflect epistemicCaveats and limits implied by the brief (missing public contracts, hypothesis-level edges, etc.).
 - `prioritizedOpenQuestions` should list 3–5 short questions distilled from clusteredGaps labels/members when available; otherwise brief honest limits.
-- Read `internalBrief.completeChainCount` / `completeChainCount` and `internalBrief.reachabilityOneLiner` / `reachabilityOneLiner` when present. If there is **no** grounded end-to-end operational chain (`completeChainCount` is 0 or the reachability line states no complete flow), then **`chainStructure` and `executiveSummary` must each open** with one or two sentences that state that fact **before** any "most likely" or default-industry storyline.
+- Read `internalBrief.completeChainCount` / `completeChainCount`, `internalBrief.structuralChainCount` / `structuralChainCount`, and `internalBrief.reachabilityOneLiner` / `reachabilityOneLiner` when present. If there is **no** grounded end-to-end operational chain (`completeChainCount` is 0 or the reachability line states no document-grounded complete flow), then **`chainStructure` and `executiveSummary` must each open** with one or two sentences that state that fact **before** any "most likely" or default-industry storyline. If `structuralChainCount` > 0 while `completeChainCount` is 0, you may briefly note that a structurally complete weak chain exists—without implying it is document-grounded.
 - After that lead, you may use cautious market-prior language ("likely", "typically", "often observed") **only** for material already reflected in `internalBrief` bullets, `keyEntities`, `learnedFindingsDigest`, or reachability text—never invent new proper names or contracts.
 - `executiveSummary` must be 2–4 sentences and readable standalone **while honoring** the reachability-first lead above.
 - If `repairHint` is non-empty, prioritize fixing the issues it lists before anything else.
@@ -3450,20 +3456,24 @@ def _graph_reachability_report(state: dict[str, Any]) -> dict[str, Any]:
     """Analyze end-to-end reachability of the working graph using taxonomy flow edges.
 
     Returns a compact report with:
-    - completeChains: grounded paths from source to sink that traverse at least 3 flow hops
-    - provisionalChains: structurally connected paths that still rely on weak or hypothesis-level flow edges
-    - brokenChains: partial paths that stop at a dead end (no outgoing flow edge)
-    - bridgeCandidates: pairs (X, Y) both in the graph but not flow-connected
+    - groundedCompleteChains: document/mixed-backed paths to a valid terminal sink (every flow hop grounded)
+    - structurallyCompleteChains: paths to a valid terminal sink with ≥2 hops that are connected but **not**
+      fully document-grounded (hypothesis, model_knowledge, or mixed strength)
+    - partialChains: paths that stop short of a valid terminal sink (dead end, invalid terminal relation, etc.)
+    - bridgeCandidates: entities visible in governance but not in any flow chain
     - healthSummary: one-line assessment for the supervisor
     """
     obs_raw = state.get(STATE_WORKING_GRAPH) or []
     if not obs_raw:
         return {
-            "completeChains": [],
-            "provisionalChains": [],
-            "brokenChains": [],
+            "groundedCompleteChains": [],
+            "structurallyCompleteChains": [],
+            "partialChains": [],
             "bridgeCandidates": [],
             "healthSummary": "Graph is empty.",
+            "groundedCompleteChainCount": 0,
+            "structuralCompleteChainCount": 0,
+            "partialChainCount": 0,
         }
 
     supply_contract = ROLE_CONTRACTS.get(ROLE_SUPPLY_CHAIN)
@@ -3516,11 +3526,6 @@ def _graph_reachability_report(state: dict[str, Any]) -> dict[str, Any]:
     def _is_grounded_flow_edge(confidence: float, support_type: str) -> bool:
         return support_type in {"document", "mixed"} and confidence >= 0.5
 
-    def _is_provisional_flow_edge(confidence: float, support_type: str) -> bool:
-        if support_type == "hypothesis":
-            return False
-        return confidence >= 0.25
-
     def _bfs_chains(start: str, max_depth: int = 15) -> list[list[tuple[str, str, str, float, str]]]:
         chains: list[list[tuple[str, str, str, float, str]]] = []
         queue: list[tuple[str, list[tuple[str, str, str, float, str]], set[str]]] = [(start, [], {start})]
@@ -3542,9 +3547,9 @@ def _graph_reachability_report(state: dict[str, Any]) -> dict[str, Any]:
                 chains.append(path)
         return chains
 
-    complete_chains: list[dict[str, Any]] = []
-    provisional_chains: list[dict[str, Any]] = []
-    broken_chains: list[dict[str, Any]] = []
+    grounded_complete: list[dict[str, Any]] = []
+    structurally_complete: list[dict[str, Any]] = []
+    partial_chains: list[dict[str, Any]] = []
     terminal_sink_rels = {"SUPPLIES_TO", "USED_IN", "ASSEMBLES_INTO"}
 
     def _is_valid_terminal_sink(chain: list[tuple[str, str, str, float, str]], end_type: str) -> bool:
@@ -3561,7 +3566,7 @@ def _graph_reachability_report(state: dict[str, Any]) -> dict[str, Any]:
                 str(entry.get("source", "")),
                 str(entry.get("sink", "")),
                 tuple(entry.get("path", [])),
-                str(entry.get("breakReason", entry.get("provisionalReason", ""))),
+                str(entry.get("breakReason", entry.get("structuralReason", ""))),
             )
             if key in seen:
                 continue
@@ -3576,7 +3581,6 @@ def _graph_reachability_report(state: dict[str, Any]) -> dict[str, Any]:
             end_type = all_entities.get(end_node, "")
             steps = [f"{s} --{r}--> {o}" for s, r, o, _conf, _support_type in chain]
             grounded_edge_count = sum(1 for _s, _r, _o, edge_conf, edge_support_type in chain if _is_grounded_flow_edge(edge_conf, edge_support_type))
-            provisional_edge_count = sum(1 for _s, _r, _o, edge_conf, edge_support_type in chain if _is_provisional_flow_edge(edge_conf, edge_support_type))
             weak_edge_count = len(chain) - grounded_edge_count
             entry = {
                 "source": src,
@@ -3585,25 +3589,30 @@ def _graph_reachability_report(state: dict[str, Any]) -> dict[str, Any]:
                 "hops": len(chain),
                 "path": steps[:8],
                 "groundedEdgeCount": grounded_edge_count,
-                "provisionalEdgeCount": provisional_edge_count,
                 "weakEdgeCount": weak_edge_count,
             }
             terminal_sink = end_node not in has_outgoing and _is_valid_terminal_sink(chain, end_type)
-            if terminal_sink and len(chain) >= 3 and grounded_edge_count == len(chain):
-                complete_chains.append(entry)
-            elif terminal_sink and len(chain) >= 3 and provisional_edge_count == len(chain):
-                entry["provisionalReason"] = "Path reaches a valid terminal sink but still relies on weak or model-based flow edges."
-                provisional_chains.append(entry)
-            elif terminal_sink and len(chain) >= 2:
-                entry["breakReason"] = (
-                    f"{end_node} [{end_type}] is a valid terminal sink, but the path still depends on unsupported or hypothesis-level flow edges"
-                )
-                broken_chains.append(entry)
+            all_grounded = len(chain) > 0 and grounded_edge_count == len(chain)
+            has_hypothesis = any(st == "hypothesis" for _s, _r, _o, _c, st in chain)
+
+            if terminal_sink and len(chain) >= 2 and all_grounded:
+                grounded_complete.append(entry)
+            elif terminal_sink and len(chain) >= 2 and not all_grounded:
+                if has_hypothesis and grounded_edge_count > 0:
+                    sr = "Mix of document-grounded and hypothesis-level flow edges (structurally complete, not fully grounded)."
+                elif has_hypothesis:
+                    sr = "End-to-end path relies on hypothesis-level flow edges (structurally complete, not document-grounded)."
+                elif grounded_edge_count == 0:
+                    sr = "End-to-end path uses only weak or model-knowledge flow edges (structurally complete, not document-grounded)."
+                else:
+                    sr = "End-to-end path reaches a valid terminal sink without full document grounding on every hop."
+                entry["structuralReason"] = sr
+                structurally_complete.append(entry)
             elif len(chain) >= 2 and end_node in has_outgoing:
                 pass
             elif len(chain) >= 2:
                 entry["breakReason"] = f"{end_node} [{end_type}] has no outgoing flow edge"
-                broken_chains.append(entry)
+                partial_chains.append(entry)
 
     bridge_candidates: list[dict[str, str]] = []
     flow_connected: set[str] = set()
@@ -3629,42 +3638,51 @@ def _graph_reachability_report(state: dict[str, Any]) -> dict[str, Any]:
                     "issue": f"Known in governance layer but not connected to any supply flow chain",
                 })
 
-    complete_chains = _dedupe_chain_entries(complete_chains)
-    provisional_chains = _dedupe_chain_entries(provisional_chains)
-    broken_chains = _dedupe_chain_entries(broken_chains)
+    grounded_complete = _dedupe_chain_entries(grounded_complete)
+    structurally_complete = _dedupe_chain_entries(structurally_complete)
+    partial_chains = _dedupe_chain_entries(partial_chains)
 
-    complete_chains.sort(key=lambda c: -c["hops"])
-    provisional_chains.sort(key=lambda c: -c["hops"])
-    broken_chains.sort(key=lambda c: -c["hops"])
+    grounded_complete.sort(key=lambda c: -c["hops"])
+    structurally_complete.sort(key=lambda c: -c["hops"])
+    partial_chains.sort(key=lambda c: -c["hops"])
 
-    if not complete_chains and not provisional_chains and not broken_chains:
+    g_n, s_n, p_n = len(grounded_complete), len(structurally_complete), len(partial_chains)
+
+    if not grounded_complete and not structurally_complete and not partial_chains:
         health = "No flow paths found. Graph has observations but no supply chain connectivity."
-    elif not complete_chains and provisional_chains:
-        longest = provisional_chains[0]
+    elif g_n == 0 and s_n > 0:
+        longest = structurally_complete[0]
         health = (
-            f"No grounded complete chain. {len(provisional_chains)} provisional chain(s), "
+            f"No document-grounded complete chain. {s_n} structurally complete chain(s), "
             f"longest {longest['source']} → {longest['sink']} ({longest['hops']} hops)."
         )
-    elif not complete_chains:
-        longest = broken_chains[0]
-        health = f"No grounded complete chain. Longest partial: {longest['source']} → {longest['sink']} ({longest['hops']} hops, breaks at {longest['sink']})"
+        if p_n:
+            health += f" {p_n} partial path(s) (non-terminal or dead end)."
+    elif g_n == 0:
+        longest = partial_chains[0]
+        health = (
+            f"No grounded or structurally complete terminal chain. Longest partial: "
+            f"{longest['source']} → {longest['sink']} ({longest['hops']} hops, breaks at {longest['sink']})"
+        )
     else:
-        longest = complete_chains[0]
-        n_complete = len(complete_chains)
-        n_broken = len(broken_chains)
-        n_provisional = len(provisional_chains)
-        health = f"{n_complete} grounded complete chain(s), longest {longest['hops']} hops. {n_broken} broken chain(s)."
-        if n_provisional:
-            health += f" {n_provisional} provisional chain(s)."
+        longest = grounded_complete[0]
+        health = f"{g_n} grounded complete chain(s), longest {longest['hops']} hops."
+        if s_n:
+            health += f" {s_n} structurally complete (weak) chain(s)."
+        if p_n:
+            health += f" {p_n} partial path(s)."
         if bridge_candidates:
             health += f" {len(bridge_candidates)} entity(s) in governance but not in flow."
 
     return {
-        "completeChains": complete_chains[:4],
-        "provisionalChains": provisional_chains[:4],
-        "brokenChains": broken_chains[:4],
+        "groundedCompleteChains": grounded_complete[:4],
+        "structurallyCompleteChains": structurally_complete[:4],
+        "partialChains": partial_chains[:4],
         "bridgeCandidates": bridge_candidates[:6],
         "healthSummary": health,
+        "groundedCompleteChainCount": g_n,
+        "structuralCompleteChainCount": s_n,
+        "partialChainCount": p_n,
     }
 
 
@@ -6418,23 +6436,25 @@ class SupervisorAgent(BaseAgent):
                 {"id": b.branch_id, "status": b.status, "remaining": b.remaining_frontier[:2]}
                 for b in branches[-4:]
             ]
-        if cycle >= 2 and len(graph) >= 10:
+        # Reachability must be visible early (small graphs too); supervisors were choosing governance without seeing chain counts.
+        if cycle >= 2 and len(graph) >= 1:
             full_reach = _graph_reachability_report(ctx.session.state)
             snapshot["reachability"] = {
                 "healthSummary": full_reach["healthSummary"],
-                "completeChainCount": len(full_reach["completeChains"]),
-                "provisionalChainCount": len(full_reach.get("provisionalChains") or []),
+                "completeChainCount": len(full_reach.get("groundedCompleteChains") or []),
+                "structuralChainCount": len(full_reach.get("structurallyCompleteChains") or []),
+                "partialChainCount": len(full_reach.get("partialChains") or []),
                 "completeChainEndpoints": [
                     f"{c['source']} → {c['sink']} ({c['hops']} hops)"
-                    for c in full_reach["completeChains"][:3]
+                    for c in (full_reach.get("groundedCompleteChains") or [])[:3]
                 ],
-                "provisionalChainEndpoints": [
+                "structuralChainEndpoints": [
                     f"{c['source']} → {c['sink']} ({c['hops']} hops)"
-                    for c in (full_reach.get("provisionalChains") or [])[:3]
+                    for c in (full_reach.get("structurallyCompleteChains") or [])[:3]
                 ],
-                "brokenChainBreakPoints": [
+                "partialChainBreakPoints": [
                     f"{c['sink']} [{c['sinkType']}]: {c.get('breakReason', '')}"
-                    for c in full_reach["brokenChains"][:4]
+                    for c in (full_reach.get("partialChains") or [])[:4]
                 ],
                 "bridgeCandidates": [
                     f"{b['entity']} [{b['type']}]"
