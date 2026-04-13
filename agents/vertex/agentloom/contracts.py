@@ -459,6 +459,18 @@ class AgentContract(StrictModel):
 
 
 class SupervisorDecision(StrictModel):
+    """
+    Control-plane decision for the next ADK step.
+
+    **Why validation alone is not enough:** the LLM emits one flat JSON object; Gemini's structured
+    output schema marks `mission` as optional at the JSON-schema level because `compose`/`stop` omit it.
+    Models sometimes return `nextAgent=critic_agent` (or another delegate) with a null/empty `mission`.
+    The runtime applies deterministic `_coerce_supervisor_decision_payload` in `agent.py` inside
+    `StructuredOutputAgent._finalize_parsed_output` (before the first `model_validate`) and again
+    when the supervisor reads state, so missing `mission` / `assignedRoles` from the LLM do not
+    abort the ADK run when they can be recovered from `selectedRoles` and `nextAgent`.
+    """
+
     cycle: int
     assessment: str
     rationale: list[str]
@@ -518,6 +530,74 @@ class RuntimeLogEntry(StrictModel):
     result: dict[str, Any] = Field(default_factory=dict)
 
 
+class GapCluster(StrictModel):
+    """Grouped unresolved gaps for narrative synthesis (heuristic clustering)."""
+
+    cluster_id: str = Field(alias="clusterId")
+    label: str
+    member_gap_texts: list[str] = Field(alias="memberGapTexts")
+    severity: str = ""
+
+
+class RubricItem(StrictModel):
+    """One coverage slot derived from selected roles and/or question text."""
+
+    rubric_id: str = Field(alias="rubricId")
+    title: str
+    source: Literal["from_role", "from_question_axis"]
+    required: bool = True
+    role: InvestigationRole | None = None
+
+
+class QuestionRubric(StrictModel):
+    items: list[RubricItem] = Field(default_factory=list)
+
+
+class RubricLLMExtras(StrictModel):
+    """Additional rubric slots proposed by LLM (merged with heuristic rubric, deduped by rubricId)."""
+
+    additional_items: list[RubricItem] = Field(default_factory=list, alias="additionalItems")
+
+
+NarrativeSynthesisStatus = Literal[
+    "ok",
+    "disabled",
+    "deterministic_only",
+    "validation_failed",
+    "llm_invalid",
+]
+
+
+class InternalBrief(StrictModel):
+    """Compressed, LLM-safe digest of investigation state for narrative composition."""
+
+    question_one_liner: str = Field(alias="questionOneLiner")
+    selected_roles: list[InvestigationRole] = Field(alias="selectedRoles")
+    reachability_one_liner: str = Field(default="", alias="reachabilityOneLiner")
+    complete_chain_count: int = Field(default=0, alias="completeChainCount")
+    bridge_candidates_short: list[str] = Field(default_factory=list, alias="bridgeCandidatesShort")
+    supply_chain_narrative_bullets: list[str] = Field(default_factory=list, alias="supplyChainNarrativeBullets")
+    governance_bullets: list[str] = Field(default_factory=list, alias="governanceBullets")
+    policy_bullets: list[str] = Field(default_factory=list, alias="policyBullets")
+    alternative_route_families: list[str] = Field(default_factory=list, alias="alternativeRouteFamilies")
+    key_entities: list[str] = Field(default_factory=list, alias="keyEntities")
+    clustered_gaps: list[GapCluster] = Field(default_factory=list, alias="clusteredGaps")
+    learned_findings_digest: list[str] = Field(default_factory=list, alias="learnedFindingsDigest")
+    epistemic_caveats: list[str] = Field(default_factory=list, alias="epistemicCaveats")
+
+
+class StructuredNarrativeAnswer(StrictModel):
+    """Sectioned user-facing answer; must align with QuestionRubric coverage rules."""
+
+    chain_structure: str = Field(alias="chainStructure")
+    alternative_paths: str = Field(alias="alternativePaths")
+    ownership_leverage: str = Field(alias="ownershipLeverage")
+    regulatory_choke_points: str = Field(alias="regulatoryChokePoints")
+    honest_limits: str = Field(alias="honestLimits")
+    prioritized_open_questions: list[str] = Field(default_factory=list, alias="prioritizedOpenQuestions")
+    executive_summary: str = Field(alias="executiveSummary")
+
+
 class ChainSummary(StrictModel):
     label: str
     steps: list[str]
@@ -526,9 +606,25 @@ class ChainSummary(StrictModel):
 
 
 class FinalChainSummary(StrictModel):
+    """
+    Terminal investigation artifact. `narrativeSynthesisStatus` + `narrativeSynthesisDetail` tell you
+    whether `structuredNarrative` is real LLM output (`ok`), intentionally absent (`disabled` /
+    `deterministic_only`), or an explicit failure diagnostic (`validation_failed` / `llm_invalid`).
+    Prefer `structuredNarrative` for sectioned UI when status is `ok`. `fullNarrativeText` is populated
+    only for successful synthesis (joined sections).
+    """
+
     question: str
     selected_roles: list[InvestigationRole] = Field(alias="selectedRoles")
     concise_answer: str = Field(alias="conciseAnswer")
+    narrative_synthesis_status: NarrativeSynthesisStatus = Field(
+        default="deterministic_only",
+        alias="narrativeSynthesisStatus",
+    )
+    narrative_synthesis_detail: str = Field(default="", alias="narrativeSynthesisDetail")
+    internal_brief: InternalBrief | None = Field(default=None, alias="internalBrief")
+    structured_narrative: StructuredNarrativeAnswer | None = Field(default=None, alias="structuredNarrative")
+    full_narrative_text: str = Field(default="", alias="fullNarrativeText")
     hypotheses: list[HypothesisState] = Field(default_factory=list)
     candidate_paths: list[CandidatePath] = Field(default_factory=list, alias="candidatePaths")
     learned_findings: list[LearnedFinding] = Field(default_factory=list, alias="learnedFindings")

@@ -7,6 +7,7 @@ import json
 import os
 import re
 import asyncio
+from functools import partial
 from collections import deque
 from collections.abc import AsyncGenerator
 from typing import Any, Literal
@@ -19,6 +20,14 @@ import pydantic
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from agentloom.composer import build_final_chain_summary
+from agentloom.internal_brief import build_internal_brief
+from agentloom.narrative_coverage import (
+    build_repair_hint,
+    explicit_narrative_synthesis_failure,
+    roles_mentioned_in_narrative,
+    validate_narrative_coverage,
+)
+from agentloom.question_rubric import build_question_rubric, merge_rubric_with_llm_extras
 from agentloom.contracts import (
     AgentContract,
     AgentLoomRequest,
@@ -39,7 +48,10 @@ from agentloom.contracts import (
     LogicTraceEntry,
     RoleContract,
     RoleSelection,
+    NarrativeSynthesisStatus,
+    RubricLLMExtras,
     RuntimeLogEntry,
+    StructuredNarrativeAnswer,
     SupervisorDecision,
     ToolAction,
     ToolActionResult,
@@ -98,6 +110,11 @@ STATE_POLICY_INVESTIGATOR_RESULT = "policy_impact_investigator_agent_result"
 STATE_INVESTIGATOR_SYNTHESIS = "investigator_synthesis"
 STATE_INVESTIGATOR_SYNTHESIS_CONTEXT = "investigator_synthesis_context"
 STATE_CRITIC_RESULT = "critic_agent_result"
+STATE_INTERNAL_BRIEF = "internal_brief"
+STATE_NARRATIVE_CONTEXT = "narrative_composer_context"
+STATE_STRUCTURED_NARRATIVE = "structured_narrative"
+STATE_RUBRIC_LLM_CONTEXT = "rubric_llm_context"
+STATE_RUBRIC_LLM_RESULT = "rubric_llm_extras"
 
 RESULT_KEY_BY_AGENT = {
     "supply_chain_investigator_agent": STATE_SUPPLY_CHAIN_INVESTIGATOR_RESULT,
@@ -156,8 +173,8 @@ _NEGATIVE_PATH_SIGNALS = re.compile(
     re.IGNORECASE,
 )
 _INDIRECT_PATH_SIGNALS = re.compile(
-    r"\b(indirect|intermediar|through|via|processed through|china-linked|chinese-controlled|european intermediary|"
-    r"off-take|joint venture|midstream)\b",
+    r"\b(indirect|intermediar|through|via|processed through|off-take|joint venture|midstream|trading hub|"
+    r"third[- ]party)\b",
     re.IGNORECASE,
 )
 _PROCUREMENT_SIGNALS = re.compile(
@@ -166,7 +183,8 @@ _PROCUREMENT_SIGNALS = re.compile(
     re.IGNORECASE,
 )
 _STABLE_POLICY_BACKGROUND_SIGNALS = re.compile(
-    r"\b(eu battery regulation|critical raw materials act|reach|due diligence|battery passport|traceability)\b",
+    r"\b(traceability|due diligence|compliance framework|permitting|certification|import restriction|export restriction|"
+    r"carbon accounting)\b",
     re.IGNORECASE,
 )
 _DETAIL_FRONTIER_SIGNALS = re.compile(
@@ -175,14 +193,14 @@ _DETAIL_FRONTIER_SIGNALS = re.compile(
     re.IGNORECASE,
 )
 _PLACEHOLDER_LABEL_PATTERNS = [
-    re.compile(r"\bgerman battery(?: manufacturing)? plant\b", re.IGNORECASE),
-    re.compile(r"\bgerman battery(?: manufacturing)? facility\b", re.IGNORECASE),
-    re.compile(r"\bindonesian mining facility\b", re.IGNORECASE),
-    re.compile(r"\bindonesian nickel producer\b", re.IGNORECASE),
-    re.compile(r"\bnickel refinery in europe\b", re.IGNORECASE),
+    # Broad sink pattern: any leading token + "battery manufacturing plant/facility" (common LLM placeholder shape).
+    re.compile(r"\b\w+\s+battery\s+manufacturing\s+(?:plant|facility)\b", re.IGNORECASE),
+    re.compile(r"\b(?:sink-side|downstream)\s+battery(?:\s+manufacturing)?\s+(?:plant|facility)\b", re.IGNORECASE),
+    re.compile(r"\b(?:upstream|source-side)\s+mining\s+facility\b", re.IGNORECASE),
+    re.compile(r"\bregional\s+(?:mining|processing|refining)\s+(?:facility|plant|producer|operator)\b", re.IGNORECASE),
     re.compile(
-        r"\b(?:indonesian|german|european|canadian|australian|global)\s+"
-        r"(?:mining|battery|nickel|processing|refining|manufacturing)\s+"
+        r"\b(?:domestic|regional|global|upstream|downstream)\s+"
+        r"(?:mining|battery|processing|refining|manufacturing)\s+"
         r"(?:facility|plant|producer|manufacturer|refinery|operator)\b",
         re.IGNORECASE,
     ),
@@ -287,6 +305,25 @@ class StructuredOutputAgent(BaseAgent):
                 used_resource_fallback = True
                 model = fallback_model
 
+    def _finalize_parsed_output(self, ctx: InvocationContext, payload: Any) -> BaseModel:
+        """Apply schema-specific repair before strict Pydantic validation."""
+        if self._output_schema is SupervisorDecision:
+            if isinstance(payload, dict):
+                d = dict(payload)
+            elif isinstance(payload, BaseModel):
+                d = payload.model_dump(mode="json", by_alias=True)
+            else:
+                d = {}
+            request_obj = AgentLoomRequest.model_validate(ctx.session.state.get(STATE_REQUEST) or {})
+            d = _coerce_supervisor_decision_payload(
+                d,
+                selected_role_literals=list(ctx.session.state.get(STATE_SELECTED_ROLES) or []),
+                cycle=int(ctx.session.state.get(STATE_SUPERVISOR_CYCLE, 0) or 0),
+                user_question=request_obj.question,
+            )
+            return SupervisorDecision.model_validate(d)
+        return self._output_schema.model_validate(payload)
+
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         prompt = self._render_instruction(ctx.session.state)
         max_attempts = 3
@@ -297,9 +334,13 @@ class StructuredOutputAgent(BaseAgent):
                 response = self._generate_with_retry(contents=prompt, config_obj=self._response_config())
                 parsed = getattr(response, "parsed", None)
                 if parsed is not None:
-                    result = self._output_schema.model_validate(parsed)
+                    result = self._finalize_parsed_output(ctx, parsed)
                 else:
-                    result = self._output_schema.model_validate_json(_extract_json_object(_response_json_text(response)))
+                    json_text = _extract_json_object(_response_json_text(response))
+                    if self._output_schema is SupervisorDecision:
+                        result = self._finalize_parsed_output(ctx, json.loads(json_text))
+                    else:
+                        result = self._output_schema.model_validate_json(json_text)
                 break
             except (pydantic.ValidationError, json.JSONDecodeError, ValueError) as exc:
                 last_exc = exc
@@ -407,6 +448,7 @@ CRITIC_MODEL = _resolve_model(
     os.getenv("AGENTMESH_MODEL_PRO", ""),
     fallback="gemini-2.5-pro",
 )
+COMPOSER_MODEL = _resolve_model(os.getenv("AGENTLOOM_COMPOSER_MODEL", ""), fallback=CRITIC_MODEL)
 GROUNDING_MODEL = _resolve_model(os.getenv("AGENTLOOM_GROUNDING_MODEL", ""), fallback="gemini-3.1-flash-lite-preview")
 # Used on 429 / quota for **all** generate_content retries (supervisor, tools, etc.)
 RESOURCE_EXHAUSTION_FALLBACK_MODEL = os.getenv(
@@ -414,6 +456,16 @@ RESOURCE_EXHAUSTION_FALLBACK_MODEL = os.getenv(
     "gemini-2.5-flash-lite",
 ).strip()
 MAX_SUPERVISOR_CYCLES = int(os.getenv("AGENTLOOM_MAX_SUPERVISOR_CYCLES", "10"))
+
+
+def _narrative_synthesis_enabled() -> bool:
+    return os.getenv("AGENTLOOM_NARRATIVE_SYNTHESIS", "on").strip().lower() not in {"off", "0", "false", "no"}
+
+
+def _rubric_llm_enabled() -> bool:
+    return os.getenv("AGENTLOOM_RUBRIC_LLM", "").strip().lower() in {"1", "true", "on", "yes"}
+
+
 ROLE_CONTRACTS: dict[InvestigationRole, RoleContract] = ROLE_CONTRACTS_BY_ROLE
 SPECIALIZED_INVESTIGATOR_AGENTS = set(SPECIALIZED_INVESTIGATOR_BY_ROLE.values())
 
@@ -427,6 +479,82 @@ def _specialized_role_from_agent_name(agent_name: str) -> InvestigationRole | No
         if specialized_agent == agent_name:
             return role
     return None
+
+
+_SUPERVISOR_DELEGATE_AGENTS = frozenset(
+    {
+        "supply_chain_investigator_agent",
+        "governance_and_control_investigator_agent",
+        "policy_impact_investigator_agent",
+        "gap_bridge_agent",
+        "critic_agent",
+    }
+)
+
+
+def _coerce_supervisor_decision_payload(
+    raw: dict[str, Any],
+    *,
+    selected_role_literals: list[str],
+    cycle: int,
+    user_question: str,
+) -> dict[str, Any]:
+    """
+    Repair common LLM omissions so SupervisorDecision can validate without silently changing intent:
+    missing `mission`, empty `assignedRoles`, missing missionId/objective/groundingMode.
+    Specialized investigators always get exactly their role in assignedRoles.
+    """
+    if not raw:
+        return raw
+    next_agent = raw.get("nextAgent") or raw.get("next_agent")
+    if next_agent not in _SUPERVISOR_DELEGATE_AGENTS:
+        return raw
+
+    out = {**raw}
+    mission_raw = out.get("mission")
+    mission: dict[str, Any] = {**(mission_raw if isinstance(mission_raw, dict) else {})}
+    out["mission"] = mission
+
+    valid_roles = [
+        r
+        for r in selected_role_literals
+        if r in ("supply_chain", "governance_and_control", "policy_impact")
+    ]
+    if not valid_roles:
+        valid_roles = ["supply_chain"]
+
+    spec = _specialized_role_from_agent_name(str(next_agent))
+    if spec is not None:
+        mission["assignedRoles"] = [spec]
+    else:
+        existing = mission.get("assignedRoles") or mission.get("assigned_roles")
+        if not existing:
+            mission["assignedRoles"] = list(valid_roles)
+
+    if not str(mission.get("missionId") or mission.get("mission_id") or "").strip():
+        mission["missionId"] = f"supervisor-cycle-{cycle}-{next_agent}"
+
+    objective = str(mission.get("objective") or "").strip()
+    if not objective:
+        q = (user_question or "").strip()[:400]
+        if next_agent == "critic_agent":
+            mission["objective"] = (
+                "Assess whether the current graph is sufficient for an honest composed answer, "
+                f"given reachability and role coverage, for: {q}"
+            )
+        elif next_agent == "gap_bridge_agent":
+            mission["objective"] = (
+                "Propose bridging hypotheses or targeted next questions to connect partial graph "
+                f"structure for: {q}"
+            )
+        else:
+            mission["objective"] = f"Advance investigation via {next_agent} for: {q}"
+
+    gm = mission.get("groundingMode") or mission.get("grounding_mode")
+    if gm not in ("knowledge_only", "mixed", "corpus_required"):
+        mission["groundingMode"] = "mixed"
+
+    return out
 
 
 def _role_contract(role: InvestigationRole) -> RoleContract:
@@ -499,6 +627,16 @@ CRITIC_CONFIG = genai_types.GenerateContentConfig(
     temperature=0,
     response_mime_type="application/json",
 )
+NARRATIVE_COMPOSER_CONFIG = genai_types.GenerateContentConfig(
+    max_output_tokens=int(os.getenv("AGENTLOOM_NARRATIVE_MAX_OUTPUT_TOKENS", "8192")),
+    temperature=0,
+    response_mime_type="application/json",
+)
+RUBRIC_LLM_CONFIG = genai_types.GenerateContentConfig(
+    max_output_tokens=int(os.getenv("AGENTLOOM_RUBRIC_LLM_MAX_OUTPUT_TOKENS", "2048")),
+    temperature=0,
+    response_mime_type="application/json",
+)
 
 TOOL_MAX_OUTPUT_TOKENS = int(os.getenv("AGENTLOOM_TOOL_MAX_OUTPUT_TOKENS", "16384"))
 RETRIEVAL_MAX_OUTPUT_TOKENS = int(os.getenv("AGENTLOOM_RETRIEVAL_MAX_OUTPUT_TOKENS", "8192"))
@@ -506,7 +644,7 @@ RETRIEVAL_MAX_OUTPUT_TOKENS = int(os.getenv("AGENTLOOM_RETRIEVAL_MAX_OUTPUT_TOKE
 GRAPH_OBSERVATION_CONTRACT = """
 GraphObservation contract:
 - observationId: string. Stable within the tool result.
-- subjectId: string. Stable node id such as "company:tsingshan-group" or "product:nickel-sulfate".
+- subjectId: string. Stable node id such as "organization:example-operator" or "product:example-intermediate".
 - subject: string. Human-readable node label.
 - subjectType: string. Must be one of the entity types allowed by the active role contracts.
 - relation: string. Must be one of the allowedEdgeTypes from the active role contracts.
@@ -551,6 +689,7 @@ If you are unsure of the direction, think: "who is the actor/source?" That entit
 
 SUPPLY_CHAIN_GRAPH_RULES = """
 Supply-chain graph rules:
+- Colloquial commodity, element, or material names in the user question are not operational nodes. Treat them as intent to map the relevant traded or processed product-stage ladder for that use-case. Illustrative examples of stage classes only (non-exhaustive, adapt to the sector in the question): ores and concentrates, intermediate chemicals or salts, alloys, precursor stages toward downstream goods—encode each real stage as a PRODUCT node with lawful edges; do not treat the list as mandatory coverage or as domain-specific canon.
 - Do not model countries or regions as if they directly produce, transform, supply, or assemble products.
 - Geography belongs in overlay edges such as LOCATED_IN or OPERATES_IN.
 - Deposits are geological sources. Use EXTRACTS_FROM from a FACILITY or ORGANIZATION to a DEPOSIT.
@@ -558,9 +697,10 @@ Supply-chain graph rules:
 - Product transformation steps must be PRODUCT --TRANSFORMS_INTO--> PRODUCT.
 - Product usage or assembly steps must not terminate in a country or region.
 - End-of-chain geography must be represented as FACILITY/ORGANIZATION --LOCATED_IN--> GEO_REGION, not PRODUCT --ASSEMBLES_INTO--> GEO_REGION.
-- Prefer concrete typed nodes over abstract placeholders. "Indonesian Mining Facility", "German Battery Plant", "Nickel Refinery in Europe", "Indonesian Nickel Producer", or an over-broad product-stage node are provisional placeholders, not satisfactory closure when the taxonomy implies a more concrete ORG/FACILITY/DEPOSIT/PRODUCT node should exist.
+- Prefer concrete typed nodes over abstract placeholders. Labels such as "Regional Mining Facility", "Downstream Battery Plant", or a vague regional producer or refiner acting as a single anonymous stand-in are provisional placeholders, not satisfactory closure when a concrete ORG/FACILITY/DEPOSIT/PRODUCT should exist.
 - If you only know a broad placeholder now, keep it with low confidence or supportType=hypothesis, then expose a frontier question or a replacement patch that asks what concrete ORG, FACILITY, DEPOSIT, PRODUCT, or other role-valid typed node should replace it.
-- Multiple facilities may legitimately produce or supply the same product. Do not collapse them into one fake node. Return several nodes and edges when the evidence supports several parallel suppliers, receivers, or alternative paths.
+- Multiple facilities may legitimately produce or supply the same product. Do not collapse them into one fake node. Return several nodes and edges when the evidence supports several parallel suppliers, receivers, or alternative paths. Expect multiple plausible route families unless the question explicitly narrows to one; use alternativeGroupId and parallel fragments instead of forcing a single winner when evidence supports multiplicity.
+- Adjacent-frame context (regional processing near the sink, alternate supplier class, market-pool effects) may appear as separate `alternative_chain` fragments, `learnedFindings`, or low-confidence hypotheses when it informs the user's decision but does not justify a fake direct flow edge between the user's named anchors.
 - Structural connectivity matters more than quantitative detail. A typed edge with unknown tonnage is still far more valuable than a tonnage estimate with no typed edge.
 """
 
@@ -620,7 +760,7 @@ GraphFragment contract:
 
 Patch semantics:
 - Use replacement when the current graph contains a broad placeholder and you now know the concrete ORG/FACILITY/DEPOSIT/PRODUCT node or fragment that should stand in its place.
-- Replacement may expand one node into a multi-hop fragment. Example: replacing "German Battery Plant" with "BASF Schwarzheide -> cathode material -> ACC Kaiserslautern". Another valid example: replacing "Indonesian Mining Facility" with "Weda Bay Mine -> Weda Bay Deposit -> Nickel Laterite Ore".
+- Replacement may expand one node into a multi-hop fragment. Example: replacing a broad downstream battery plant placeholder with a short chain of named FACILITY and PRODUCT stages. Another valid example: replacing a broad upstream mining facility with a concrete mine, deposit, and first salable product output linked by lawful edges.
 - Replacement is graph-safe and does not imply that the old node was useless; it means the new fragment is a better structural representation.
 - Replacement is a real graph mutation, not decorative metadata. After a valid `replace_node` or `replace_fragment`, the runtime updates shared memory so later reasoning sees the replacement graph, not the superseded placeholder graph.
 - Therefore, when you issue a replacement patch, make the new fragment structurally self-sufficient enough to occupy the old slot in the chain, ownership tree, star, or network that is being improved.
@@ -679,28 +819,28 @@ Valid success example:
   "pathAssessment": "still_open",
   "pathAssessmentNote": "The upstream path is grounded, but the downstream named converter and receiver are still missing.",
   "status": "success",
-  "humanSummary": "Found a grounded supply-chain fragment from Indonesian nickel mining through HPAL processing into battery-grade nickel sulfate.",
+  "humanSummary": "Found a grounded supply-chain fragment from extraction through hydrometallurgical conversion into a downstream battery-input product stage.",
   "closureStatus": "advanced",
   "resolvedFrontier": [
-    "Confirmed a facility-aware laterite-to-MHP path."
+    "Confirmed a facility-aware path from deposit through mined ore into a soluble intermediate."
   ],
   "remainingFrontier": [
-    "Identify the facility or organization that converts MHP into nickel sulfate."
+    "Identify the facility or organization that converts the mixed intermediate into the declared battery-input product stage."
   ],
   "discoveredFrontier": [
-    "Determine whether the downstream receiver is in Germany or an intermediate European facility."
+    "Determine whether the downstream receiver sits in the destination market region or behind an intermediate toll processor."
   ],
   "graphFragments": [
     {
       "fragmentId": "branch-1-f1",
       "fragmentType": "chain_fragment",
-      "title": "Indonesia laterite to nickel sulfate",
-      "humanQuestion": "What sits between Indonesian laterite mining and battery-grade nickel sulfate?",
-      "humanSummary": "The main grounded path runs from laterite ore through HPAL to mixed hydroxide precipitate and then to nickel sulfate.",
+      "title": "Laterite ore to battery-input salt",
+      "humanQuestion": "What sits between laterite mining and the declared downstream battery-input product stage?",
+      "humanSummary": "The grounded path runs from laterite ore through pressure-leach style conversion into a mixed intermediate, then toward a named sulfate-class battery input.",
       "branchId": "branch-1",
-      "alternativeGroupId": "laterite_routes",
-      "startNodeId": "deposit:morowali-laterite-deposit",
-      "endNodeId": "product:nickel-sulfate",
+      "alternativeGroupId": "route_family_a",
+      "startNodeId": "deposit:example-laterite-deposit",
+      "endNodeId": "product:example-battery-input-salt",
       "patchMode": "append",
       "oldId": "",
       "oldIds": [],
@@ -708,29 +848,29 @@ Valid success example:
       "observations": [
         {
           "observationId": "branch-1-f1-o1",
-          "subjectId": "facility:morowali-mining-complex",
-          "subject": "Morowali mining complex",
+          "subjectId": "facility:example-extraction-complex",
+          "subject": "Example extraction complex",
           "subjectType": "FACILITY",
           "relation": "EXTRACTS_FROM",
-          "objectId": "deposit:morowali-laterite-deposit",
-          "object": "Morowali laterite deposit",
+          "objectId": "deposit:example-laterite-deposit",
+          "object": "Example laterite deposit",
           "objectType": "DEPOSIT",
-          "qualifiers": ["nickel laterite"],
+          "qualifiers": ["laterite ore body"],
           "confidence": 0.79,
           "supportType": "document",
           "provenance": ["gs://source/doc-1"],
           "supportNote": "Retrieved evidence ties the mining facility to the laterite deposit.",
           "branchId": "branch-1",
-          "alternativeGroupId": "laterite_routes"
+          "alternativeGroupId": "route_family_a"
         },
         {
           "observationId": "branch-1-f1-o2",
-          "subjectId": "facility:morowali-mining-complex",
-          "subject": "Morowali mining complex",
+          "subjectId": "facility:example-extraction-complex",
+          "subject": "Example extraction complex",
           "subjectType": "FACILITY",
           "relation": "PRODUCES",
-          "objectId": "product:nickel-laterite-ore",
-          "object": "Nickel laterite ore",
+          "objectId": "product:example-laterite-ore",
+          "object": "Example laterite ore",
           "objectType": "PRODUCT",
           "qualifiers": [],
           "confidence": 0.77,
@@ -738,24 +878,24 @@ Valid success example:
           "provenance": ["gs://source/doc-1"],
           "supportNote": "Retrieved evidence identifies mined laterite output.",
           "branchId": "branch-1",
-          "alternativeGroupId": "laterite_routes"
+          "alternativeGroupId": "route_family_a"
         },
         {
           "observationId": "branch-1-f1-o3",
-          "subjectId": "product:nickel-laterite-ore",
-          "subject": "Nickel laterite ore",
+          "subjectId": "product:example-laterite-ore",
+          "subject": "Example laterite ore",
           "subjectType": "PRODUCT",
           "relation": "TRANSFORMS_INTO",
-          "objectId": "product:mixed-hydroxide-precipitate",
-          "object": "Mixed hydroxide precipitate",
+          "objectId": "product:example-mixed-intermediate",
+          "object": "Example mixed hydroxide intermediate",
           "objectType": "PRODUCT",
-          "qualifiers": ["HPAL"],
+          "qualifiers": ["hydrometallurgical conversion"],
           "confidence": 0.74,
           "supportType": "document",
           "provenance": ["gs://source/doc-1"],
-          "supportNote": "Evidence explicitly describes HPAL conversion into MHP.",
+          "supportNote": "Evidence describes leach conversion into the mixed intermediate.",
           "branchId": "branch-1",
-          "alternativeGroupId": "laterite_routes"
+          "alternativeGroupId": "route_family_a"
         }
       ],
       "completeness": "partial",
@@ -763,7 +903,7 @@ Valid success example:
     }
   ],
   "uncoveredQuestions": [
-    "Which named converter produces the nickel sulfate in this path?"
+    "Which named converter produces the battery-input salt in this path?"
   ],
   "sourceDocuments": ["gs://source/doc-1"],
   "failure": null
@@ -818,47 +958,47 @@ Valid replacement example:
   "branchId": "branch-3",
   "toolName": "web_search",
   "pathAssessment": "confirmed",
-  "pathAssessmentNote": "The broad German sink node can now be replaced with concrete receiving facilities.",
+  "pathAssessmentNote": "The broad sink-side geographic placeholder can now be replaced with concrete receiving facilities.",
   "status": "success",
-  "humanSummary": "Replaced the broad German sink with named receiving facilities.",
+  "humanSummary": "Replaced the broad sink anchor with named receiving facilities.",
   "closureStatus": "closed",
   "resolvedFrontier": [
-    "Replace the broad downstream anchor with concrete German facilities."
+    "Replace the broad downstream anchor with concrete facilities in the destination market."
   ],
   "remainingFrontier": [],
   "discoveredFrontier": [
-    "Which supplier or intermediary connects nickel sulfate to these named facilities?"
+    "Which supplier or intermediary connects the battery-input product stage to these named facilities?"
   ],
   "graphFragments": [
     {
       "fragmentId": "branch-3-f2",
       "fragmentType": "chain_fragment",
-      "title": "Concrete German receiving facilities",
-      "humanQuestion": "Which concrete facilities should replace the current broad German sink node?",
+      "title": "Concrete downstream receiving facilities",
+      "humanQuestion": "Which concrete facilities should replace the current broad sink-side placeholder node?",
       "humanSummary": "The broad sink is better represented by specific receiving facilities.",
       "branchId": "branch-3",
       "alternativeGroupId": "",
-      "startNodeId": "product:nickel-sulfate",
-      "endNodeId": "facility:acc-kaiserslautern",
+      "startNodeId": "product:example-battery-input-salt",
+      "endNodeId": "facility:example-cathode-input-plant",
       "patchMode": "replace_node",
-      "oldId": "facility:german-battery-plant",
+      "oldId": "facility:placeholder-downstream-battery-plant",
       "oldIds": [],
       "patchRationale": "The prior sink node was only a geographic placeholder. The new fragment inserts concrete facilities that should occupy that position in the path.",
       "observations": [
         {
           "observationId": "branch-3-f2-o1",
-          "subjectId": "product:nickel-sulfate",
-          "subject": "Nickel sulfate",
+          "subjectId": "product:example-battery-input-salt",
+          "subject": "Example battery-input salt",
           "subjectType": "PRODUCT",
           "relation": "SUPPLIES_TO",
-          "objectId": "facility:acc-kaiserslautern",
-          "object": "ACC Kaiserslautern Facility",
+          "objectId": "facility:example-cathode-input-plant",
+          "object": "Example cathode-input plant",
           "objectType": "FACILITY",
           "qualifiers": [],
           "confidence": 0.72,
           "supportType": "document",
           "provenance": ["gs://source/doc-9"],
-          "supportNote": "Named public evidence ties the downstream facility to nickel battery-material intake.",
+          "supportNote": "Named public evidence ties the downstream facility to battery-material intake.",
           "branchId": "branch-3",
           "alternativeGroupId": ""
         }
@@ -873,17 +1013,17 @@ Valid replacement example:
       "hypothesisId": "branch-3",
       "branchId": "branch-3",
       "role": "supply_chain",
-      "questionAsked": "Which concrete facilities should replace the current broad German sink node?",
+      "questionAsked": "Which concrete facilities should replace the current broad sink-side placeholder node?",
       "findingKind": "operational_flow",
-      "summary": "ACC Kaiserslautern Facility is a concrete downstream receiving node that replaces the broad German sink placeholder.",
+      "summary": "Example cathode-input plant is a concrete downstream receiving node that replaces the broad sink placeholder.",
       "evidenceStatus": "verified",
       "confidence": 0.72,
-      "relatedEntities": ["Nickel sulfate", "ACC Kaiserslautern Facility"],
+      "relatedEntities": ["Example battery-input salt", "Example cathode-input plant"],
       "sourceDocuments": ["gs://source/doc-9"]
     }
   ],
   "uncoveredQuestions": [
-    "Which supplier or intermediary connects nickel sulfate to ACC Kaiserslautern Facility?"
+    "Which supplier or intermediary connects the battery-input product stage to the named cathode-input plant?"
   ],
   "sourceDocuments": ["gs://source/doc-9"],
   "failure": null
@@ -930,7 +1070,7 @@ Example 1 — whole-hypothesis branch on empty graph:
       "spawnReason": "The graph is empty and needs one broad starting hypothesis.",
       "independenceBasis": "This is the root hypothesis for the whole investigation.",
       "pathKind": "overview",
-      "humanQuestion": "What is the complete picture of how nickel reaches German EV battery manufacturing, as one connected graph from source to end product?",
+      "humanQuestion": "What is the complete picture of how the investigated material's relevant product stages reach the named downstream battery use-case, as one connected graph from source geology or import to end product?",
       "humanAction": "Build a whole hypothesis-level graph answering the question end-to-end using model knowledge.",
       "closureTarget": "One connected graph from source to destination covering the full question scope, with hypothesis-level edges where specific evidence is missing.",
       "knownContext": [
@@ -941,7 +1081,7 @@ Example 1 — whole-hypothesis branch on empty graph:
       ],
       "assignedRoles": ["supply_chain"],
       "preferredTools": ["reason"],
-      "targetEntities": ["nickel", "Germany", "EV battery"],
+      "targetEntities": ["user material phrase", "destination scope", "downstream use-case"],
       "fragmentType": "overview_chain",
       "parallelGroup": "initial",
       "stopAfterNoImprovement": 1
@@ -960,18 +1100,18 @@ Example 2 — weak-spot verification on populated graph:
   "branchPlans": [
     {
       "branchId": "verify_refining_link",
-      "hypothesis": "The hypothesis edge from Indonesian nickel ore to nickel sulfate refining can be grounded with real facility data.",
+      "hypothesis": "The hypothesis edge from mined ore to a downstream battery-input product stage can be grounded with real facility data.",
       "parentHypothesisId": "full_hypothesis",
       "hypothesisRelation": "dependent_followup",
       "spawnReason": "The overview hypothesis exposed an ungrounded refining hop that blocks closure.",
       "independenceBasis": "This branch refines a weak edge inside the current overview hypothesis and should merge back into it.",
       "pathKind": "direct",
-      "humanQuestion": "Which specific facilities refine Indonesian nickel ore into battery-grade nickel sulfate? The current graph hypothesizes this link but has no grounded evidence.",
+      "humanQuestion": "Which specific facilities refine the documented ore or concentrate into the declared battery-input product stage? The current graph hypothesizes this link but has no grounded evidence.",
       "humanAction": "Verify the hypothesis refining link with grounded facility-level evidence.",
-      "closureTarget": "Replace the hypothesis edge between Indonesian nickel ore extraction and nickel sulfate production with a grounded, facility-level connection.",
+      "closureTarget": "Replace the hypothesis edge between upstream extraction output and the downstream battery-input product with a grounded, facility-level connection.",
       "knownContext": [
-        "The graph already contains a hypothesis edge: Indonesian Nickel Ore --TRANSFORMS_INTO--> Nickel Sulfate (confidence 0.3, supportType=hypothesis).",
-        "Upstream extraction and downstream battery manufacturing are already in the graph at higher confidence."
+        "The graph already contains a hypothesis edge: Example Ore --TRANSFORMS_INTO--> Example Battery-Input Product (confidence 0.3, supportType=hypothesis).",
+        "Upstream extraction and downstream cell or pack manufacturing are already in the graph at higher confidence."
       ],
       "frontier": [
         "Identify specific refining facility or organization.",
@@ -979,7 +1119,7 @@ Example 2 — weak-spot verification on populated graph:
       ],
       "assignedRoles": ["supply_chain"],
       "preferredTools": ["retrieve", "reason"],
-      "targetEntities": ["nickel sulfate", "Indonesia", "refining"],
+      "targetEntities": ["battery-input product stage", "source-side scope", "refining"],
       "fragmentType": "chain_fragment",
       "parallelGroup": "verify",
       "stopAfterNoImprovement": 2
@@ -1005,31 +1145,31 @@ Example 3 — one hypothesis spawns parallel follow-ups and an independent child
       "spawnReason": "The parent hypothesis already reaches the destination market but the sink is still broad.",
       "independenceBasis": "This branch refines the existing parent hypothesis and must merge back into it.",
       "pathKind": "direct",
-      "humanQuestion": "Which concrete facilities should replace the current broad German sink node?",
+      "humanQuestion": "Which concrete facilities should replace the current broad sink-side placeholder node?",
       "humanAction": "Resolve the sink-side facilities inside the current path hypothesis.",
       "closureTarget": "Replace the broad sink node with concrete receiving facilities.",
       "knownContext": [
-        "The parent hypothesis already reaches Germany but still uses a broad sink node."
+        "The parent hypothesis already reaches the destination market region but still uses a broad sink node."
       ],
       "frontier": [
-        "Name the concrete German receiving facilities."
+        "Name the concrete receiving facilities in the destination scope."
       ],
       "assignedRoles": ["supply_chain"],
       "preferredTools": ["retrieve", "web_search"],
-      "targetEntities": ["Germany", "battery facilities"],
+      "targetEntities": ["destination scope", "battery facilities"],
       "fragmentType": "chain_fragment",
       "parallelGroup": "parent_h1_refine",
       "stopAfterNoImprovement": 2
     },
     {
       "branchId": "map_parent_ownership",
-      "hypothesis": "The parent path likely runs through a named intermediary layer between the current nickel product stage and the sink.",
+      "hypothesis": "The parent path likely runs through a named intermediary layer between the current product stage and the sink.",
       "parentHypothesisId": "full_hypothesis",
       "hypothesisRelation": "dependent_followup",
       "spawnReason": "The parent hypothesis reaches a downstream sink but still lacks the immediate operational intermediary layer.",
       "independenceBasis": "This branch fills an operational bridge inside the same parent supply-chain graph and must merge back into it.",
       "pathKind": "bridge",
-      "humanQuestion": "Which intermediary facility or processor sits between the current nickel product stage and the named downstream sink?",
+      "humanQuestion": "Which intermediary facility or processor sits between the current product stage and the named downstream sink?",
       "humanAction": "Resolve the missing intermediary layer inside the current parent path.",
       "closureTarget": "Insert the operational intermediary layer between the known product stage and the downstream sink.",
       "knownContext": [
@@ -1040,7 +1180,7 @@ Example 3 — one hypothesis spawns parallel follow-ups and an independent child
       ],
       "assignedRoles": ["supply_chain"],
       "preferredTools": ["retrieve", "web_search"],
-      "targetEntities": ["nickel intermediate", "intermediary", "downstream sink"],
+      "targetEntities": ["intermediate product stage", "intermediary", "downstream sink"],
       "fragmentType": "chain_fragment",
       "parallelGroup": "parent_h1_refine",
       "stopAfterNoImprovement": 2
@@ -1111,7 +1251,7 @@ These are not mandatory workflow steps. They are investigation options that shou
 3. Endpoint-resolution mode
 - When it is useful:
   - the current path starts or ends at broad anchors like countries, sectors, or markets;
-  - the path contains placeholders such as "German battery plant" or "Indonesian mine";
+  - the path contains placeholders such as a generic downstream battery plant or a generic regional mine;
   - a path cannot be closed because the true sender or receiver node is unknown.
 - What to ask:
   - ask who or what the actual source, operator, facility, organization, deposit, product-stage, or receiving node is for the investigated material or its derivative;
@@ -1120,7 +1260,7 @@ These are not mandatory workflow steps. They are investigation options that shou
 - What the result should look like:
   - one or more `chain_fragment` or overlay fragments that replace broad anchors with concrete typed nodes;
   - the new fragment should explicitly connect the resolved endpoint back into the existing path;
-  - if the current graph contains a fake anchor like "Indonesian Mining Facility" or "German Battery Plant", use patch semantics to replace it with concrete facilities, organizations, deposits, products, or receiving nodes.
+  - if the current graph contains a fake anchor like a regional mining facility or a downstream battery plant placeholder, use patch semantics to replace it with concrete facilities, organizations, deposits, products, or receiving nodes.
 
 4. Bridge mode
 - When it is useful:
@@ -1134,6 +1274,15 @@ These are not mandatory workflow steps. They are investigation options that shou
 - What the result should look like:
   - one `bridge` or `chain_fragment` result that explicitly names the missing intermediary layer or states that no supported bridge was found.
 
+5. Adjacent-frame mode
+- When it is useful:
+  - the user question implies a narrow geographic or trade corridor, but decision-relevant context lives in **neighboring** processing, sourcing pools, or regional conversion that is **not** coextensive with a direct A-to-B flow edge;
+  - omitting that neighborhood would make the final answer misleading even though evidence does not support faking `SUPPLIES_TO` between the named anchors.
+- What to ask:
+  - capture adjacent context as its own `alternative_chain` / `chain_fragment` family with a distinct `alternativeGroupId`, or as explicit `learnedFindings`, or as clearly labeled low-confidence hypotheses—never as `document`-backed flow pretending to close the user's narrow corridor.
+- What the result should look like:
+  - fragments or findings that a downstream critic and composer can separate from grounded reachability; parallel to—not instead of—endpoint resolution and bridge work on the primary path.
+
 Frontier-generation discipline for broad reasoning:
 - When the action is broad (`pathKind=overview`, `fragmentType=overview_chain`, or the question asks for the whole picture), you are not finished after drawing one plausible path.
 - Use `resolvedFrontier` for what the current broad picture now explains.
@@ -1144,7 +1293,7 @@ Frontier-generation discipline for broad reasoning:
 - If your broad picture contains one workable hot path and the user explicitly asked for alternatives, `discoveredFrontier` should usually include at least one materially different route-family question.
 - If your broad picture already mixes more than one materially different route family (for example different jurisdictions, technologies, or intermediary classes), surface that explicitly. Name the currently visible families and ask for the missing or less-developed family as a separate next investigation.
 - If source-side or sink-side endpoints are still broad geographic or market anchors, surface explicit endpoint-resolution questions in `discoveredFrontier` or `remainingFrontier`.
-- A good discovered-frontier question is concrete and graph-shaped. Example: "What materially different sulfide-based route reaches German EV battery manufacturing compared with the current HPAL-based path?" Example: "Which concrete Indonesian mines, deposits, or operators should replace the current broad source anchor?" Example: "Which concrete German receiving facilities should replace the current broad downstream anchor?"
+- A good discovered-frontier question is concrete and graph-shaped. Example: "What materially different processing-family route reaches the same downstream battery sink compared with the current hydrometallurgical route?" Example: "Which concrete mines, deposits, or operators in the source-side scope should replace the current broad source anchor?" Example: "Which concrete receiving facilities in the destination scope should replace the current broad downstream anchor?"
 - Do not leave alternatives buried inside `humanSummary`. If an alternative route family is visible or likely relevant to the user question, expose it as a frontier question.
 """
 
@@ -1454,6 +1603,9 @@ Hard rules:
 - The environment epistemic mode is always `mixed`.
 - Selected roles define the scope. Every mission `assignedRoles` must be a non-empty subset of `selectedRoles`.
 - Use role contracts to decide what relations, entities, and gaps matter.
+- Colloquial commodity, element, or material phrases in the user question are shorthand for a **product-stage ladder** and operational flow, not permission to treat the phrase itself as a satisfactory source or sink node. Missions should deepen **PRODUCT** transforms and facility-backed edges, not stop at an abstract material label.
+- Country or region names in the user question are **geographic or market scope**, not operational actors. Missions should resolve them into **FACILITY/ORG/DEPOSIT/PRODUCT** nodes plus lawful geography overlays; never treat a region as if it produced, shipped, or consumed material without named typed nodes.
+- **Multiplicity is normal**: keep several parallel suppliers, receivers, or route families in play when the graph or question supports them. Prefer deepening the best-supported route family over silently collapsing alternatives unless the critic or reachability picture justifies closure.
 
 Gap quality principle — structural vs detail:
 Gaps come in two kinds. A STRUCTURAL gap means a connection is missing from the graph entirely — an entity has no typed edge to another entity where one should exist. A DETAIL gap means a connection exists but a quantitative attribute is unknown (exact percentage, volume, tonnage, cost, specific contract terms). Structural gaps are what drive investigation. Detail gaps are recorded but do NOT justify further investigation cycles. If you see only detail gaps remaining, that is sufficient for composition. When assessing `openGaps`, mentally classify each: does the graph already contain the typed edge? If yes, the gap is detail-level. Do not send another investigation pass for detail gaps.
@@ -1500,6 +1652,7 @@ Question-coverage rule:
    - `bridgeCandidates`: entities that exist in governance/policy layers but are not connected to any flow chain. They need a flow edge (SUPPLIES_TO, PRODUCES, EXTRACTS_FROM) to become useful.
    - `healthSummary`: one-line assessment.
    If the reachability report shows broken chains or no grounded complete chains, your next mission MUST target the break points. A provisional chain is not enough to declare structural success. Do NOT switch to governance/policy/ownership investigation until at least one grounded complete flow chain exists, unless the only remaining uncertainty is clearly detail-level and further grounding is unavailable. Name the specific break point entities in the mission focus. Example: "Connect [upstream entity] to [downstream entity] via a SUPPLIES_TO or PRODUCES edge."
+   **Narrow exception (same cycle only as a detour, not a substitute):** you may dispatch **one** concise `supply_chain_investigator_agent` mission whose **only** purpose is **adjacent-frame** context or an explicit **market-shape prior**—recorded strictly as `learnedFindings` and/or `hypothesis` / `model_knowledge` observations with **low confidence**, never presented as document-grounded flow. Use this **sparingly** when repeated break-point missions are not adding typed edges but omitting the adjacent context would mislead the user about decision-relevant neighborhood. The **next** cycle must return priority to break-point closure until the critic endorses compose with an honest indirect or prior-heavy answer. This exception does **not** waive the rule against treating governance/policy work as a replacement for missing operational edges.
 6. Weak spots addressed, main line explored — dimension coverage check: before sending to critic, explicitly compare the user's question against the selectedRoles and the current graph. Also check `graphPreviewByRole`: if a role has zero or very few sample edges, it is undercovered. Send one more targeted investigation pass for each undercovered dimension. Do not send to critic until every selectedRole has at least a minimal overlay on the connected graph. When you do delegate, if the dimension is about publicly verifiable facts (corporate ownership, facility details, current regulations), prefer `web_search`; if it is about internal evidence already available to the system, prefer `retrieve`.
 7. Frontier hygiene: before deciding, scan `openGaps` and `frontierSummary.remainingFrontier` for questions that were generated but never dispatched. If any structural frontier question has been sitting for 2+ cycles without a branch assigned to it, either dispatch it now or explicitly deprioritize it in your rationale. Do not let structural questions silently accumulate.
 8. Coverage sufficient or no further progress: send to critic, then compose.
@@ -1520,6 +1673,11 @@ Question-coverage rule:
 - For a role-specialized investigator mission, `assignedRoles` must contain exactly one role, and it must match the specialization of the selected investigator agent.
 - Cross-role coverage happens through multiple investigator missions over time, not through one multi-role specialized-investigator mission.
 - When `nextAgent` is a role-specialized investigator, `gap_bridge_agent`, or `critic_agent`, `mission` is mandatory. It must never be null.
+- **JSON checklist (the parser enforces this):** if `nextAgent` is not `compose` or `stop`, you MUST include a `mission` object with:
+  - `missionId` (string),
+  - `objective` (non-empty string),
+  - `groundingMode` (one of `knowledge_only`, `mixed`, `corpus_required` — use `mixed`),
+  - `assignedRoles` (non-empty string array; subset of `selectedRoles`; for a role-specialized investigator agent, exactly one role matching that agent).
 - A `critic_agent` mission must explicitly ask whether the current graph is sufficient to compose honestly, given reachability, role coverage, and unresolved structural gaps.
 - Choose `compose` only after the critic explicitly recommends composition.
 - Choose `stop` only when the real tool set and current memory make further progress impossible.
@@ -1582,14 +1740,15 @@ Investigation-shape guidance:
 - When a broad picture already contains more than one materially different route, consider `route-family split mode`: turn each independently investigable route family into its own hypothesis branch instead of keeping all routes embedded in one overview fragment.
 - When countries, sectors, markets, or broad placeholders are acting as fake endpoints, consider `endpoint-resolution mode`: ask who or what the real source-side or sink-side typed entities are for the investigated material or derivative.
 - When two islands exist but do not connect, consider `bridge mode`: ask what actor, facility, converter, or intermediary layer sits between A and B.
+- When the question's literal corridor is too narrow but adjacent market or processing context is material, consider **`adjacent-frame mode`** (see REASONING_MODES_GUIDANCE section 5): record neighborhood context without fabricating direct flow edges.
 - These modes may coexist. Example: once a primary full-path hypothesis exists, you may keep refining it with dependent source/sink/bridge branches while also spawning an `independent_child` alternative-path branch if the user question still asks for alternatives.
 - If you choose one of these modes, encode that choice in the branch question, branch action, closure target, known context, and frontier. Do not say "full path" or "alternative" in the abstract; specify what the graph result should contain.
-- A good branch question should already imply the expected graph shape. Example: "What is the most plausible end-to-end path from Indonesian laterite extraction to a named German battery-material or battery-manufacturing facility, returning the full multi-hop path even if some hops remain hypothesis-level?"
-- Another example: "What genuinely different route exists from sulfide nickel to German EV battery manufacturing compared with the current HPAL-based path? Return the alternative as a separate chain."
-- Another example: "Germany is only a geographic anchor in the current graph. Which concrete receiving facilities or organizations should replace it as the sink nodes for battery-grade nickel or its derivatives?"
-- Another endpoint example: "Indonesia is only a geographic source anchor in the current graph. Which concrete mines, deposits, operators, refining facilities, or product-stage nodes should replace it as the true source-side nodes for this path?"
-- Another example of an independent child hypothesis: "The current HPAL-based route is now clear enough to study a separate alternative path. What materially different sulfide-based route reaches the same downstream market through different companies or jurisdictions?"
-- Another split example: "The current overview contains both an Indonesian HPAL route and a Canadian sulfide route. The Canadian route is already investigable on its own. Spawn it as an independent child hypothesis and map its specific downstream bridge separately."
+- A good branch question should already imply the expected graph shape. Example: "What is the most plausible end-to-end path from the documented source-side geology or import through each product stage to a named downstream battery-material or cell-manufacturing facility, returning the full multi-hop path even if some hops remain hypothesis-level?"
+- Another example: "What genuinely different processing-family or jurisdiction route reaches the same downstream sink compared with the current primary route? Return the alternative as a separate chain."
+- Another example: "The destination region is only a geographic anchor in the current graph. Which concrete receiving facilities or organizations should replace it as the sink nodes for the relevant battery-input product stages?"
+- Another endpoint example: "The source-side region is only a geographic anchor in the current graph. Which concrete mines, deposits, operators, refining facilities, or product-stage nodes should replace it as the true source-side nodes for this path?"
+- Another example of an independent child hypothesis: "The current primary processing route is now clear enough to study a separate alternative path. What materially different route family reaches the same downstream market through different companies or jurisdictions?"
+- Another split example: "The current overview contains two materially different route families. The secondary family is already investigable on its own. Spawn it as an independent child hypothesis and map its specific downstream bridge separately."
 
 Dedup and breadth (mandatory):
 - Read `sharedMemory.reasoningDedupHints`. Do **not** set a branch `humanQuestion` that repeats the same intent as any string in `openStructuralGapTexts`, `recentlyAnsweredQuestions`, `lastAgentNextQuestions`, or `recentBranchHumanQuestions` unless you are targeting a **different** typed link (different subject/object or relation).
@@ -1607,7 +1766,7 @@ Rules:
 - `frontier` must name the next missing links, missing actors, or missing layers that keep the graph from becoming more connected or more decision-useful.
 - STRUCTURAL vs DETAIL: branch questions must target missing typed edges (structural gaps), not quantitative attributes of edges that already exist. Do not create a branch to find "exact percentage" or "specific tonnage" if the connection itself is already in the graph. If a connection exists at any confidence level, the branch should verify or upgrade it, not seek numeric detail.
 - Do not confuse operational supply-chain closure with procurement model or sourcing strategy. Contractual procurement findings are useful, but they do not replace a missing operational edge and usually belong in learned findings or a contractual layer, not in a fake supply-chain branch.
-- Do not spend a branch on stable background facts that a competent model already knows, such as well-established EU regulatory frameworks, unless the mission explicitly needs a current amendment, enforcement update, or company-specific response.
+- Do not spend a branch on stable background facts that a competent model already knows, such as well-established jurisdiction-wide regulatory frameworks, unless the mission explicitly needs a current amendment, enforcement update, or company-specific response.
 - Prefer concrete typed entities over abstract placeholders. If the graph contains broad anchors such as a country, market, or fake ORG/FACILITY/DEPOSIT/PRODUCT node acting as source, sink, operator, or intermediary, plan a branch that resolves or replaces that placeholder.
 - Preserve multiplicity. If several facilities could validly occupy the same layer or supply the same downstream product, the branch may return multiple facilities or multiple parallel path fragments. Do not force a single actor when the evidence supports several.
 - Use `reason` for structural first-pass branches when the graph is still empty or when the system needs a hypothesis/synthesis step.
@@ -1693,7 +1852,7 @@ Be aggressive about closure.
 
 Output fields:
 - `bridgeGaps`: only STRUCTURAL gaps where a typed connection is entirely missing. Prioritize: (1) flow chain break points from reachability, (2) bridge candidates, (3) other structural disconnects.
-- `bridgeQuestions`: for each structural bridge gap, one concrete question. For flow break points, the question MUST name both the upstream entity and the downstream entity that need connecting. Example: "Who supplies nickel sulfate from Harjavalta Refinery to BASF Schwarzheide Plant?" Do NOT write questions that only seek quantitative detail.
+- `bridgeQuestions`: for each structural bridge gap, one concrete question. For flow break points, the question MUST name both the upstream entity and the downstream entity that need connecting. Example: "Who supplies [upstream product stage] from [named upstream facility] to [named downstream facility]?" Do NOT write questions that only seek quantitative detail.
 - `crossBranchAssessment`: must start with reachability health, then connectivity between branches, then hypothesis status.
 - `synthesisSummary`: one sentence. If no complete chain exists, lead with that.
 - Keep compact. At most 6 bridgeGaps, 6 bridgeQuestions, 6 connectedPairs, 6 disconnectedPairs, 6 addressedGapTexts.
@@ -1741,7 +1900,7 @@ Hard rules:
 - Parallel follow-ups are allowed only when the subject is already clear and the branches will merge back into the same hypothesis graph.
 - If the latest result was a useful negative answer, treat that as progress. Close or redirect the hypothesis instead of re-asking the same question.
 - Do not confuse operational flow with contractual procurement. Procurement model, offtake, sourcing strategy, localization, or recycling strategy may be saved as findings, but they do not by themselves close a missing operational edge.
-- Do not spend a turn on stable background facts that a competent model already knows, such as well-established EU regulatory frameworks, unless the missing link is specifically about current change, implementation timing, enforcement, or named company response.
+- Do not spend a turn on stable background facts that a competent model already knows, such as well-established jurisdiction-wide regulatory frameworks, unless the missing link is specifically about current change, implementation timing, enforcement, or named company response.
 - Prefer qualitative structural gain over quantitative detail. If a typed edge already exists and the only missing information is amount, share, tonnage, exact percentage, or pricing, do not spawn a new hypothesis or follow-up branch for that. Accept or stall the current hypothesis unless a new typed edge can still be added.
 - Do not accept a hypothesis while the hypothesis graph still contains broad placeholders or fake typed anchors such as generic mine/facility/plant/producer nodes that should be replaced by concrete nodes.
 - Do not accept a root or `overview` hypothesis while structural frontier remains open from earlier turns. Remaining source-endpoint, sink-endpoint, intermediary, or transform-ladder gaps are not "detail".
@@ -1825,11 +1984,12 @@ The context includes a `reachability` field. Read it before making your assessme
 - If `brokenChains` lists break points, those are specific structural gaps that could be addressed.
 - If `bridgeCandidates` lists entities in governance but not in flow, those are partially useful — they exist but are disconnected.
 - If `healthSummary` says "No grounded complete chain", do NOT recommend composition unless investigation has stagnated and further progress is implausible.
+- When `completeChains` is empty but stagnation rules already justify ending investigation, you may recommend composition **only if** the final composed answer will explicitly separate (a) document-supported fragments, (b) best-supported indirect structure, and (c) adjacent-frame or market-prior context carried as hypothesis or learned findings—not as grounded end-to-end flow. State that requirement in your recommendation rationale.
 
 Rules:
 - Do not invent new research facts.
 - Evaluate sufficiency, honesty, and role coverage against the selected role contracts.
-- Treat broad placeholders and fake typed anchors as unresolved structural issues when a concrete ORG/FACILITY/DEPOSIT/PRODUCT node should exist there. A graph with "Indonesian Mining Facility", "German Battery Plant", "Indonesian Nickel Producer", or an over-broad product placeholder is not structurally complete if the investigation already has enough context to ask for the concrete replacement.
+- Treat broad placeholders and fake typed anchors as unresolved structural issues when a concrete ORG/FACILITY/DEPOSIT/PRODUCT node should exist there. A graph that still relies on regional mining placeholders, generic downstream battery plants, unnamed regional producers, or over-broad product labels is not structurally complete if the investigation already has enough context to ask for the concrete replacement.
 - Read the graph after mutation, not before it. If recent branch results used `replace_node` or `replace_fragment`, judge sufficiency against the replacement graph now in shared memory rather than against the superseded placeholder graph.
 - Use `sharedMemory.candidatePaths` and `reachability` together. If the direct path is rejected but one indirect path is already the best supported explanation, do not ask for more broad discovery; either ask for the remaining unresolved hop on that indirect route or recommend composition with an explicit indirect-path answer.
 - In mixed mode with no grounding, assess whether the graph is still useful and explicit about its limits.
@@ -1849,6 +2009,52 @@ Return exactly one JSON object matching AgentResult.
 
 Critic context:
 {critic_context}
+"""
+
+NARRATIVE_COMPOSER_INSTRUCTION = """
+You are `narrative_composer`.
+
+Use only the JSON in `narrative_composer_context`: `question`, `internalBrief`, `questionRubric`, and optional `repairHint`.
+You must write a structured answer for the end user without inventing named entities, contracts, or routes that are not present in `internalBrief`.
+General epistemic caveats without new proper names are allowed.
+
+Rules:
+- If the question uses colloquial commodity or element wording, narrate using **product stages and flow** reflected in `internalBrief`, not as if the elemental label were itself an operational actor unless the brief explicitly anchors it that way.
+- If the question names countries or regions, treat them as **scope**; narrate **named facilities, organizations, and deposits** from the brief as the operational actors, and geography only as context unless the graph ties a policy to a region without a finer node.
+- Treat bullet lists in the brief as hypotheses or working-graph summaries, not as verified journalism.
+- For every `questionRubric.items` entry with `required=true`, fill the matching section in StructuredNarrativeAnswer, OR use a short explicit insufficiency phrase such as
+  "Insufficient structured data in the current graph for this axis."
+- Map rubricId to fields as follows:
+  - supply_chain_structure -> chainStructure
+  - governance_ownership or axis_ownership_leverage -> ownershipLeverage
+  - policy_regulatory or axis_regulatory_choke -> regulatoryChokePoints
+  - axis_alternative_paths -> alternativePaths
+- `honestLimits` must reflect epistemicCaveats and limits implied by the brief (missing public contracts, hypothesis-level edges, etc.).
+- `prioritizedOpenQuestions` should list 3–5 short questions distilled from clusteredGaps labels/members when available; otherwise brief honest limits.
+- Read `internalBrief.completeChainCount` / `completeChainCount` and `internalBrief.reachabilityOneLiner` / `reachabilityOneLiner` when present. If there is **no** grounded end-to-end operational chain (`completeChainCount` is 0 or the reachability line states no complete flow), then **`chainStructure` and `executiveSummary` must each open** with one or two sentences that state that fact **before** any "most likely" or default-industry storyline.
+- After that lead, you may use cautious market-prior language ("likely", "typically", "often observed") **only** for material already reflected in `internalBrief` bullets, `keyEntities`, `learnedFindingsDigest`, or reachability text—never invent new proper names or contracts.
+- `executiveSummary` must be 2–4 sentences and readable standalone **while honoring** the reachability-first lead above.
+- If `repairHint` is non-empty, prioritize fixing the issues it lists before anything else.
+
+Return exactly one JSON object matching StructuredNarrativeAnswer.
+
+Composer context:
+{narrative_composer_context}
+"""
+
+RUBRIC_LLM_INSTRUCTION = """
+You are `rubric_llm_expander`.
+
+Use only `rubric_llm_context`: `question`, `selectedRoles`, and `heuristicRubric` (already computed).
+Emit ONLY genuinely new checklist axes as `additionalItems` (RubricItem): unique `rubricId` (snake_case),
+`title`, `source` = `from_question_axis`, `required`, optional `role`.
+Do not duplicate any rubricId already listed in heuristicRubric.items.
+If the heuristic rubric already covers the question, return `additionalItems`: [].
+At most 4 additional items.
+
+Return exactly one JSON object matching RubricLLMExtras.
+
+{rubric_llm_context}
 """
 
 
@@ -3981,7 +4187,7 @@ def _tool_prompt(
         "The action belongs to a candidate path class (`pathKind`). You must return `pathAssessment` saying whether that path is confirmed, rejected, still open, or currently best-supported as an indirect route.\n"
         "Preserve useful but uncertain nodes and edges by lowering confidence or using supportType=hypothesis instead of deleting them.\n"
         "Do not confuse operational supply-chain flow with contractual procurement. Procurement model, sourcing strategy, offtake, localization, recycling strategy, or vertical integration without a concrete facility-to-facility or product-stage edge belongs in learnedFindings and frontier, not in fake SUPPLIES_TO or TRANSFORMS_INTO edges.\n"
-        "Do not spend a web-grounded turn on stable background facts that a competent model already knows, such as well-established EU regulatory frameworks, unless the action explicitly asks for current changes, enforcement, or company-specific response.\n"
+        "Do not spend a web-grounded turn on stable background facts that a competent model already knows, such as well-established jurisdiction-wide regulatory frameworks, unless the action explicitly asks for current changes, enforcement, or company-specific response.\n"
         "Use the action's closureTarget, knownContext, and frontier to understand what the system already knows and what exact graph closure is being attempted.\n"
         "The working graph is mutable shared memory. If you return `patchMode=replace_node` or `replace_fragment`, the runtime will apply that patch before later reasoning steps. Treat replacement as a real graph mutation, not as commentary.\n"
         "When replacing a broad node or old fragment, make the new fragment structurally able to occupy that old slot in the graph. Later agents will reason from the replacement graph now stored in shared memory.\n"
@@ -4495,7 +4701,34 @@ def _merge_branch_states(existing: list[BranchState], incoming: list[BranchState
 
 class DeterministicComposerAgent(BaseAgent):
     def __init__(self) -> None:
-        super().__init__(name="compose")
+        rubric_llm = StructuredOutputAgent(
+            model=INVESTIGATOR_MODEL,
+            name="rubric_llm_expander",
+            description="Optionally adds rubric axes beyond deterministic heuristics (AGENTLOOM_RUBRIC_LLM).",
+            instruction=RUBRIC_LLM_INSTRUCTION,
+            generate_content_config=RUBRIC_LLM_CONFIG,
+            output_schema=RubricLLMExtras,
+            output_key=STATE_RUBRIC_LLM_RESULT,
+            context_key=STATE_RUBRIC_LLM_CONTEXT,
+        )
+        narrative = StructuredOutputAgent(
+            model=COMPOSER_MODEL,
+            name="narrative_composer",
+            description="Synthesizes a rubric-aligned structured narrative from InternalBrief only.",
+            instruction=NARRATIVE_COMPOSER_INSTRUCTION,
+            generate_content_config=NARRATIVE_COMPOSER_CONFIG,
+            output_schema=StructuredNarrativeAnswer,
+            output_key=STATE_STRUCTURED_NARRATIVE,
+            context_key=STATE_NARRATIVE_CONTEXT,
+        )
+        super().__init__(name="compose", sub_agents=[rubric_llm, narrative])
+
+    async def _run_named_subagent(self, ctx: InvocationContext, agent_name: str) -> AsyncGenerator[Event, None]:
+        agent = self.find_sub_agent(agent_name)
+        if agent is None:
+            raise ValueError(f"DeterministicComposerAgent cannot find sub-agent {agent_name!r}")
+        async for event in agent.run_async(ctx):
+            yield event
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         request = AgentLoomRequest.model_validate(ctx.session.state.get(STATE_REQUEST) or {})
@@ -4508,6 +4741,126 @@ class DeterministicComposerAgent(BaseAgent):
         logic_trace = [LogicTraceEntry.model_validate(item) for item in (ctx.session.state.get(STATE_LOGIC_TRACE) or [])]
         runtime_logs = [RuntimeLogEntry.model_validate(item) for item in (ctx.session.state.get(STATE_RUNTIME_LOG) or [])]
         candidate_paths = _derive_candidate_paths(ctx.session.state)
+        open_gaps = _open_gap_texts(ctx.session.state)
+        reachability_report = _graph_reachability_report(ctx.session.state)
+
+        brief_partial = partial(
+            build_internal_brief,
+            request.question,
+            selected_roles,
+            working_graph,
+            graph_fragments,
+            branches,
+            hypotheses,
+            candidate_paths,
+            learned_findings,
+            open_gaps,
+            reachability_report,
+        )
+        internal, rubric = await asyncio.gather(
+            asyncio.to_thread(brief_partial),
+            asyncio.to_thread(build_question_rubric, request.question, selected_roles),
+        )
+        internal_dump = internal.model_dump(mode="json", by_alias=True)
+        ctx.session.state[STATE_INTERNAL_BRIEF] = internal_dump
+
+        rubric_llm_note = ""
+        if _rubric_llm_enabled():
+            ctx.session.state[STATE_RUBRIC_LLM_CONTEXT] = {
+                "question": request.question,
+                "selectedRoles": selected_roles,
+                "heuristicRubric": rubric.model_dump(mode="json", by_alias=True),
+            }
+            yield _runtime_log_event(
+                ctx.session.state,
+                actor="rubric_llm_expander",
+                phase="llm_request",
+                message="Optional rubric LLM expansion is running.",
+                model=INVESTIGATOR_MODEL,
+                basis={"heuristicItemCount": len(rubric.items)},
+            )
+            async for event in self._run_named_subagent(ctx, "rubric_llm_expander"):
+                yield event
+            raw_ex = ctx.session.state.get(STATE_RUBRIC_LLM_RESULT) or {}
+            try:
+                extras = RubricLLMExtras.model_validate(raw_ex)
+                rubric = merge_rubric_with_llm_extras(rubric, extras)
+            except pydantic.ValidationError as exc:
+                rubric_llm_note = f"AGENTLOOM_RUBRIC_LLM output invalid JSON/schema: {exc}"
+
+        rubric_dump = rubric.model_dump(mode="json", by_alias=True)
+
+        structured: StructuredNarrativeAnswer | None = None
+        coverage_pass = False
+        narrative_status: NarrativeSynthesisStatus = "deterministic_only"
+        narrative_detail = rubric_llm_note
+        max_extra = max(0, int(os.getenv("AGENTLOOM_NARRATIVE_MAX_RETRIES", "1")))
+
+        if _narrative_synthesis_enabled():
+            repair_hint = ""
+            saw_parsed_candidate = False
+            last_failed_ids: list[str] = []
+            last_role_miss: list[str] = []
+            for attempt in range(1 + max_extra):
+                ctx.session.state[STATE_NARRATIVE_CONTEXT] = {
+                    "question": request.question,
+                    "internalBrief": internal_dump,
+                    "questionRubric": rubric_dump,
+                    "repairHint": repair_hint,
+                }
+                yield _runtime_log_event(
+                    ctx.session.state,
+                    actor="narrative_composer",
+                    phase="llm_request",
+                    message="Narrative composer is generating a rubric-aligned structured answer from InternalBrief.",
+                    model=COMPOSER_MODEL,
+                    basis={"attempt": attempt, "rubricItemCount": len(rubric.items)},
+                    request={"hasRepairHint": bool(repair_hint)},
+                )
+                async for event in self._run_named_subagent(ctx, "narrative_composer"):
+                    yield event
+                raw = ctx.session.state.get(STATE_STRUCTURED_NARRATIVE) or {}
+                try:
+                    candidate = StructuredNarrativeAnswer.model_validate(raw)
+                except pydantic.ValidationError:
+                    candidate = None
+                if candidate is None:
+                    last_failed_ids = ["__llm_invalid_json__"]
+                    break
+                saw_parsed_candidate = True
+                ok_cov, failed_ids = validate_narrative_coverage(candidate, rubric)
+                ok_roles, role_miss = roles_mentioned_in_narrative(candidate, selected_roles)
+                last_failed_ids = list(failed_ids)
+                last_role_miss = list(role_miss)
+                if ok_cov and ok_roles:
+                    structured = candidate
+                    coverage_pass = True
+                    narrative_status = "ok"
+                    narrative_detail = rubric_llm_note or ""
+                    break
+                if attempt < max_extra:
+                    repair_hint = build_repair_hint(failed_ids, role_miss)
+
+            if structured is None:
+                narrative_status = "validation_failed" if saw_parsed_candidate else "llm_invalid"
+                fail_detail = build_repair_hint(last_failed_ids, last_role_miss) if saw_parsed_candidate else (
+                    "Model output was missing or did not match StructuredNarrativeAnswer."
+                )
+                if rubric_llm_note:
+                    fail_detail = f"{fail_detail} | {rubric_llm_note}"
+                structured = explicit_narrative_synthesis_failure(
+                    reason_code=narrative_status,
+                    detail=fail_detail,
+                    failed_rubric_ids=last_failed_ids,
+                )
+                narrative_detail = fail_detail
+                coverage_pass = False
+        else:
+            structured = None
+            narrative_status = "disabled"
+            extra = "AGENTLOOM_NARRATIVE_SYNTHESIS is off (deterministic conciseAnswer only)."
+            narrative_detail = f"{extra} {rubric_llm_note}".strip()
+
         yield _runtime_log_event(
             ctx.session.state,
             actor=self.name,
@@ -4521,6 +4874,12 @@ class DeterministicComposerAgent(BaseAgent):
                 "branchCount": len(branches),
                 "logicTraceCount": len(logic_trace),
                 "runtimeLogCount": len(runtime_logs),
+                "internalBriefKeys": len(internal_dump),
+                "clusteredGapCount": len(internal.clustered_gaps),
+                "narrativeSynthesis": _narrative_synthesis_enabled(),
+                "narrativeSynthesisStatus": narrative_status,
+                "coveragePass": coverage_pass,
+                "rubricItemCount": len(rubric.items),
             },
         )
         final_summary = build_final_chain_summary(
@@ -4534,8 +4893,12 @@ class DeterministicComposerAgent(BaseAgent):
             learned_findings,
             logic_trace,
             runtime_logs,
-            open_gap_texts=_open_gap_texts(ctx.session.state),
-            reachability_report=_graph_reachability_report(ctx.session.state),
+            open_gap_texts=open_gaps,
+            reachability_report=reachability_report,
+            structured_narrative=structured,
+            internal_brief=internal,
+            narrative_synthesis_status=narrative_status,
+            narrative_synthesis_detail=narrative_detail,
         )
         payload = final_summary.model_dump(mode="json", by_alias=True)
         yield Event(
@@ -5598,6 +5961,23 @@ class SupervisorAgent(BaseAgent):
             )
             async for event in self._run_named_subagent(ctx, "supervisor_reasoner"):
                 yield event
+            request_obj = AgentLoomRequest.model_validate(ctx.session.state.get(STATE_REQUEST) or {})
+            raw_supervisor = dict(ctx.session.state.get(STATE_SUPERVISOR_DECISION) or {})
+            coerced = _coerce_supervisor_decision_payload(
+                raw_supervisor,
+                selected_role_literals=list(ctx.session.state.get(STATE_SELECTED_ROLES) or []),
+                cycle=cycle,
+                user_question=request_obj.question,
+            )
+            if coerced != raw_supervisor:
+                ctx.session.state[STATE_SUPERVISOR_DECISION] = coerced
+                yield _runtime_log_event(
+                    ctx.session.state,
+                    actor=self.name,
+                    phase="decision",
+                    message="Supervisor JSON was coerced to satisfy mission contract (missing mission or assignedRoles).",
+                    basis={"cycle": cycle, "coercedFields": True},
+                )
             decision = SupervisorDecision.model_validate(ctx.session.state.get(STATE_SUPERVISOR_DECISION) or {})
             yield _runtime_log_event(
                 ctx.session.state,

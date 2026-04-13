@@ -14,6 +14,7 @@ from agentloom.agent import (
     SUPERVISOR_CONFIG,
     RETRIEVAL_MAX_OUTPUT_TOKENS,
     TOOL_MAX_OUTPUT_TOKENS,
+    _coerce_supervisor_decision_payload,
     _branch_progress_delta,
     _apply_graph_fragment_mutations,
     _derive_candidate_paths,
@@ -78,6 +79,9 @@ class AgentLoomRuntimeTest(unittest.TestCase):
         self.assertTrue(
             any("stable" in item.lower() and "policy" in item.lower() for item in ROLE_CONTRACTS[ROLE_POLICY].investigation_playbook)
         )
+        sc_playbook = "\n".join(ROLE_CONTRACTS[ROLE_SUPPLY_CHAIN].investigation_playbook)
+        self.assertIn("Illustrative only", sc_playbook)
+        self.assertIn("Adjacent-frame expansion", sc_playbook)
 
     def test_specialized_investigator_keeps_private_role_state(self) -> None:
         agent = RoleSpecializedInvestigatorAgent(ROLE_SUPPLY_CHAIN)
@@ -1366,6 +1370,7 @@ class AgentLoomRuntimeTest(unittest.TestCase):
         self.assertEqual(summary.learned_findings[0].finding_id, "finding-1")
         self.assertEqual(summary.chain_summaries[0].steps[0], "Mine --PRODUCES--> Nickel Ore")
         self.assertIn("Needs source verification.", summary.open_verification_needs)
+        self.assertEqual(summary.narrative_synthesis_status, "deterministic_only")
 
     def test_concise_answer_does_not_repeat_question_when_paths_exist(self) -> None:
         summary = build_final_chain_summary(
@@ -1438,7 +1443,13 @@ class AgentLoomRuntimeTest(unittest.TestCase):
 
         self.assertFalse(summary.concise_answer.startswith("How does the nickel chain reach German facilities?"))
         self.assertIn("Direct public route rejected", summary.concise_answer)
-        self.assertIn("Remaining unresolved structural gaps: 1.", summary.concise_answer)
+        self.assertTrue(
+            "Remaining unresolved structural gaps: 1." in summary.concise_answer
+            or "Unresolved gap themes (clustered): 1." in summary.concise_answer
+        )
+        self.assertIsNotNone(summary.internal_brief)
+        self.assertEqual(summary.narrative_synthesis_status, "deterministic_only")
+        self.assertIsNone(summary.structured_narrative)
 
     def test_candidate_paths_keep_rejected_direct_and_surviving_indirect_routes(self) -> None:
         indirect_fragment = GraphFragment(
@@ -1950,6 +1961,47 @@ class AgentLoomRuntimeTest(unittest.TestCase):
                 nextAgent="critic_agent",
                 mission=None,
             )
+
+    def test_supervisor_coercion_fills_missing_critic_mission(self) -> None:
+        raw = {
+            "cycle": 5,
+            "assessment": "Send to critic.",
+            "rationale": ["Coverage check."],
+            "nextAgent": "critic_agent",
+        }
+        fixed = _coerce_supervisor_decision_payload(
+            raw,
+            selected_role_literals=[ROLE_SUPPLY_CHAIN, ROLE_GOVERNANCE],
+            cycle=5,
+            user_question="Trace lithium to Germany?",
+        )
+        decision = SupervisorDecision.model_validate(fixed)
+        self.assertIsNotNone(decision.mission)
+        self.assertEqual(set(decision.mission.assigned_roles), {ROLE_SUPPLY_CHAIN, ROLE_GOVERNANCE})
+        self.assertTrue(decision.mission.objective.strip())
+        self.assertEqual(decision.mission.grounding_mode, "mixed")
+
+    def test_supervisor_coercion_forces_single_role_for_specialized_investigator(self) -> None:
+        raw = {
+            "cycle": 2,
+            "assessment": "Supply work.",
+            "rationale": ["Need flow edges."],
+            "nextAgent": "supply_chain_investigator_agent",
+            "mission": {
+                "missionId": "bad",
+                "objective": "x",
+                "assignedRoles": [ROLE_GOVERNANCE, ROLE_SUPPLY_CHAIN],
+                "groundingMode": "mixed",
+            },
+        }
+        fixed = _coerce_supervisor_decision_payload(
+            raw,
+            selected_role_literals=[ROLE_SUPPLY_CHAIN, ROLE_GOVERNANCE],
+            cycle=2,
+            user_question="Q?",
+        )
+        decision = SupervisorDecision.model_validate(fixed)
+        self.assertEqual(decision.mission.assigned_roles, [ROLE_SUPPLY_CHAIN])
 
     def test_reachability_does_not_treat_hypothesis_chain_as_complete(self) -> None:
         state = {
