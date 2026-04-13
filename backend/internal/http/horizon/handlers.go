@@ -309,6 +309,7 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 	mux.Handle("/api/horizon/products/producers", authMiddleware(http.HandlerFunc(h.GetProductProducers)))
 	mux.Handle("/api/horizon/geo-objects", authMiddleware(http.HandlerFunc(h.ListGeoObjects)))
 	mux.Handle("/api/horizon/geo-objects/by-paths", authMiddleware(http.HandlerFunc(h.ListGeoObjectsByPaths)))
+	mux.Handle("/api/horizon/geo/context-image", authMiddleware(http.HandlerFunc(h.GetGeoContextImage)))
 	mux.Handle("/api/horizon/map-activity", authMiddleware(http.HandlerFunc(h.ListMapActivity)))
 
 	// Fragment profiles (direct access by profile ID)
@@ -646,6 +647,16 @@ func (h *HorizonHandlers) HandleFragmentRoutes(w http.ResponseWriter, r *http.Re
 	fragmentID := strings.TrimSpace(parts[0])
 	if fragmentID == "" {
 		http.Error(w, "Fragment ID required", http.StatusBadRequest)
+		return
+	}
+
+	if len(parts) >= 2 && parts[1] == "context-image" {
+		switch r.Method {
+		case http.MethodGet:
+			h.GetFragmentContextImage(w, r, fragmentID)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
 		return
 	}
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 
 class StrictModel(BaseModel):
@@ -21,6 +21,18 @@ class CorpusDocument(StrictModel):
 
 
 InvestigationRole = Literal["supply_chain", "governance_and_control", "policy_impact"]
+SpecializedInvestigatorAgentName = Literal[
+    "supply_chain_investigator_agent",
+    "governance_and_control_investigator_agent",
+    "policy_impact_investigator_agent",
+]
+DelegatedAgentName = Literal[
+    "supply_chain_investigator_agent",
+    "governance_and_control_investigator_agent",
+    "policy_impact_investigator_agent",
+    "gap_bridge_agent",
+    "critic_agent",
+]
 
 
 class AgentLoomRequest(StrictModel):
@@ -75,9 +87,44 @@ class GraphFragment(StrictModel):
     alternative_group_id: str = Field(default="", alias="alternativeGroupId")
     start_node_id: str = Field(default="", alias="startNodeId")
     end_node_id: str = Field(default="", alias="endNodeId")
+    patch_mode: Literal["append", "replace_node", "replace_fragment"] = Field(default="append", alias="patchMode")
+    old_id: str = Field(default="", alias="oldId")
+    old_ids: list[str] = Field(default_factory=list, alias="oldIds")
+    patch_rationale: str = Field(default="", alias="patchRationale")
     observations: list[GraphObservation] = Field(default_factory=list)
     completeness: Literal["partial", "complete", "hypothesis"] = "partial"
     quality_score: float = Field(default=0.0, alias="qualityScore")
+
+    @model_validator(mode="after")
+    def validate_patch_contract(self) -> "GraphFragment":
+        if self.patch_mode == "append":
+            return self
+        if not self.old_id and not self.old_ids:
+            raise ValueError("replace_node/replace_fragment requires oldId or oldIds")
+        if not self.patch_rationale:
+            raise ValueError("replace_node/replace_fragment requires patchRationale")
+        return self
+
+
+class LearnedFinding(StrictModel):
+    finding_id: str = Field(alias="findingId")
+    hypothesis_id: str = Field(alias="hypothesisId")
+    branch_id: str = Field(alias="branchId")
+    role: InvestigationRole
+    question_asked: str = Field(alias="questionAsked")
+    finding_kind: Literal[
+        "operational_flow",
+        "contractual_procurement",
+        "governance_overlay",
+        "policy_overlay",
+        "negative_result",
+        "context",
+    ] = Field(alias="findingKind")
+    summary: str
+    evidence_status: Literal["verified", "reasoned", "mixed", "hypothesis"] = Field(alias="evidenceStatus")
+    confidence: float
+    related_entities: list[str] = Field(default_factory=list, alias="relatedEntities")
+    source_documents: list[str] = Field(default_factory=list, alias="sourceDocuments")
 
 
 class FailureRecord(StrictModel):
@@ -104,6 +151,9 @@ class RoleContract(StrictModel):
     path_carried_edges: list[str] = Field(default_factory=list, alias="pathCarriedEdges")
     overlay_edges: list[str] = Field(default_factory=list, alias="overlayEdges")
     missing_info_prompts: list[str] = Field(default_factory=list, alias="missingInfoPrompts")
+    investigation_playbook: list[str] = Field(default_factory=list, alias="investigationPlaybook")
+    tool_use_guidance: dict[str, str] = Field(default_factory=dict, alias="toolUseGuidance")
+    structural_closure_criteria: list[str] = Field(default_factory=list, alias="structuralClosureCriteria")
 
 
 class RoleSelection(StrictModel):
@@ -123,6 +173,17 @@ class InvestigationMission(StrictModel):
 class BranchPlan(StrictModel):
     branch_id: str = Field(alias="branchId")
     hypothesis: str
+    parent_hypothesis_id: str = Field(default="", alias="parentHypothesisId")
+    hypothesis_relation: Literal["root", "dependent_followup", "independent_child"] = Field(
+        default="root",
+        alias="hypothesisRelation",
+    )
+    spawn_reason: str = Field(default="", alias="spawnReason")
+    independence_basis: str = Field(default="", alias="independenceBasis")
+    path_kind: Literal["overview", "direct", "indirect", "alternative", "bridge"] = Field(
+        default="overview",
+        alias="pathKind",
+    )
     human_question: str = Field(alias="humanQuestion")
     human_action: str = Field(alias="humanAction")
     closure_target: str = Field(alias="closureTarget")
@@ -131,10 +192,9 @@ class BranchPlan(StrictModel):
     assigned_roles: list[InvestigationRole] = Field(default_factory=list, alias="assignedRoles")
     preferred_tools: list[
         Literal[
-            "memory_question_to_graph",
-            "model_question_to_graph",
-            "corpus_question_to_graph",
-            "vertex_question_to_graph",
+            "retrieve",
+            "reason",
+            "web_search",
         ]
     ] = Field(default_factory=list, alias="preferredTools")
     target_entities: list[str] = Field(default_factory=list, alias="targetEntities")
@@ -153,11 +213,14 @@ class BranchPlan(StrictModel):
 class ToolAction(StrictModel):
     action_id: str = Field(alias="actionId")
     branch_id: str = Field(alias="branchId")
+    path_kind: Literal["overview", "direct", "indirect", "alternative", "bridge"] = Field(
+        default="overview",
+        alias="pathKind",
+    )
     tool_name: Literal[
-        "memory_question_to_graph",
-        "model_question_to_graph",
-        "corpus_question_to_graph",
-        "vertex_question_to_graph",
+        "retrieve",
+        "reason",
+        "web_search",
     ] = Field(alias="toolName")
     human_question: str = Field(alias="humanQuestion")
     human_action: str = Field(alias="humanAction")
@@ -175,6 +238,10 @@ class ToolActionResult(StrictModel):
     action_id: str = Field(alias="actionId")
     branch_id: str = Field(alias="branchId")
     tool_name: str = Field(alias="toolName")
+    path_assessment: Literal["confirmed", "best_supported_indirect", "rejected", "still_open", "not_applicable"] = (
+        Field(default="still_open", alias="pathAssessment")
+    )
+    path_assessment_note: str = Field(default="", alias="pathAssessmentNote")
     status: Literal["success", "partial", "blocked", "failed"]
     human_summary: str = Field(alias="humanSummary")
     closure_status: Literal["advanced", "closed", "unchanged", "redirected"] = Field(alias="closureStatus")
@@ -182,6 +249,7 @@ class ToolActionResult(StrictModel):
     remaining_frontier: list[str] = Field(default_factory=list, alias="remainingFrontier")
     discovered_frontier: list[str] = Field(default_factory=list, alias="discoveredFrontier")
     graph_fragments: list[GraphFragment] = Field(default_factory=list, alias="graphFragments")
+    learned_findings: list[LearnedFinding] = Field(default_factory=list, alias="learnedFindings")
     uncovered_questions: list[str] = Field(default_factory=list, alias="uncoveredQuestions")
     source_documents: list[str] = Field(default_factory=list, alias="sourceDocuments")
     failure: FailureRecord | None = None
@@ -190,6 +258,21 @@ class ToolActionResult(StrictModel):
 class BranchState(StrictModel):
     branch_id: str = Field(alias="branchId")
     hypothesis: str
+    parent_hypothesis_id: str = Field(default="", alias="parentHypothesisId")
+    hypothesis_relation: Literal["root", "dependent_followup", "independent_child"] = Field(
+        default="root",
+        alias="hypothesisRelation",
+    )
+    spawn_reason: str = Field(default="", alias="spawnReason")
+    independence_basis: str = Field(default="", alias="independenceBasis")
+    path_kind: Literal["overview", "direct", "indirect", "alternative", "bridge"] = Field(
+        default="overview",
+        alias="pathKind",
+    )
+    path_assessment: Literal["confirmed", "best_supported_indirect", "rejected", "still_open", "not_applicable"] = (
+        Field(default="still_open", alias="pathAssessment")
+    )
+    path_assessment_note: str = Field(default="", alias="pathAssessmentNote")
     human_question: str = Field(alias="humanQuestion")
     human_summary: str = Field(default="", alias="humanSummary")
     closure_target: str = Field(alias="closureTarget")
@@ -201,14 +284,149 @@ class BranchState(StrictModel):
     stop_reason: str = Field(default="", alias="stopReason")
     resolved_frontier: list[str] = Field(default_factory=list, alias="resolvedFrontier")
     remaining_frontier: list[str] = Field(default_factory=list, alias="remainingFrontier")
+    discovered_frontier: list[str] = Field(default_factory=list, alias="discoveredFrontier")
     open_questions: list[str] = Field(default_factory=list, alias="openQuestions")
     tool_actions: list[ToolAction] = Field(default_factory=list, alias="toolActions")
     tool_results: list[ToolActionResult] = Field(default_factory=list, alias="toolResults")
     graph_fragments: list[GraphFragment] = Field(default_factory=list, alias="graphFragments")
+    learned_findings: list[LearnedFinding] = Field(default_factory=list, alias="learnedFindings")
+    hypothesis_turns: list["HypothesisTurn"] = Field(default_factory=list, alias="hypothesisTurns")
+
+
+class HypothesisTurnPlan(StrictModel):
+    path_kind: Literal["overview", "direct", "indirect", "alternative", "bridge"] = Field(
+        default="overview",
+        alias="pathKind",
+    )
+    tool_name: Literal["retrieve", "reason", "web_search"] = Field(alias="toolName")
+    human_question: str = Field(alias="humanQuestion")
+    human_action: str = Field(alias="humanAction")
+    why_now: str = Field(alias="whyNow")
+    closure_target: str = Field(alias="closureTarget")
+    known_context: list[str] = Field(default_factory=list, alias="knownContext")
+    frontier: list[str] = Field(default_factory=list)
+    target_entities: list[str] = Field(default_factory=list, alias="targetEntities")
+    fragment_type: Literal[
+        "overview_chain",
+        "chain_fragment",
+        "alternative_chain",
+        "ownership_overlay",
+        "policy_overlay",
+        "hypothesis",
+    ] = Field(alias="fragmentType")
+
+
+class HypothesisTurn(StrictModel):
+    turn_id: str = Field(alias="turnId")
+    hypothesis_id: str = Field(alias="hypothesisId")
+    turn_index: int = Field(alias="turnIndex")
+    path_kind: Literal["overview", "direct", "indirect", "alternative", "bridge"] = Field(alias="pathKind")
+    tool_name: Literal["retrieve", "reason", "web_search"] = Field(alias="toolName")
+    human_question: str = Field(alias="humanQuestion")
+    human_action: str = Field(alias="humanAction")
+    why_now: str = Field(alias="whyNow")
+    result_summary: str = Field(alias="resultSummary")
+    path_assessment: Literal["confirmed", "best_supported_indirect", "rejected", "still_open", "not_applicable"] = (
+        Field(alias="pathAssessment")
+    )
+    closure_status: Literal["advanced", "closed", "unchanged", "redirected"] = Field(alias="closureStatus")
+    graph_patch_modes: list[Literal["append", "replace_node", "replace_fragment"]] = Field(
+        default_factory=list,
+        alias="graphPatchModes",
+    )
+    graph_fragment_ids: list[str] = Field(default_factory=list, alias="graphFragmentIds")
+    learned_finding_ids: list[str] = Field(default_factory=list, alias="learnedFindingIds")
+    resolved_frontier: list[str] = Field(default_factory=list, alias="resolvedFrontier")
+    remaining_frontier: list[str] = Field(default_factory=list, alias="remainingFrontier")
+    discovered_frontier: list[str] = Field(default_factory=list, alias="discoveredFrontier")
+    decision_after_result: str = Field(default="", alias="decisionAfterResult")
+
+
+class HypothesisTurnDecision(StrictModel):
+    assessment: str
+    rationale: list[str]
+    decision: Literal[
+        "ask_next_question_same_hypothesis",
+        "run_parallel_followups",
+        "spawn_independent_child_hypothesis",
+        "accept_hypothesis",
+        "reject_hypothesis",
+        "stall_hypothesis",
+    ]
+    decision_note: str = Field(alias="decisionNote")
+    hypothesis_status: Literal["active", "accepted", "rejected", "stalled", "deferred"] = Field(
+        default="active",
+        alias="hypothesisStatus",
+    )
+    next_turn: HypothesisTurnPlan | None = Field(default=None, alias="nextTurn")
+    followup_branches: list[BranchPlan] = Field(default_factory=list, alias="followupBranches")
+
+    @model_validator(mode="after")
+    def validate_decision_contract(self) -> "HypothesisTurnDecision":
+        if self.decision == "ask_next_question_same_hypothesis":
+            if self.next_turn is None:
+                raise ValueError("ask_next_question_same_hypothesis requires nextTurn")
+            if self.followup_branches:
+                raise ValueError("ask_next_question_same_hypothesis must not emit followupBranches")
+        elif self.decision in {"run_parallel_followups", "spawn_independent_child_hypothesis"}:
+            if not self.followup_branches:
+                raise ValueError(f"{self.decision} requires followupBranches")
+        else:
+            if self.next_turn is not None:
+                raise ValueError(f"{self.decision} must not emit nextTurn")
+        return self
+
+
+class CandidatePath(StrictModel):
+    path_id: str = Field(alias="pathId")
+    path_kind: Literal["overview", "direct", "indirect", "alternative", "bridge"] = Field(alias="pathKind")
+    status: Literal["confirmed", "best_supported_indirect", "rejected", "still_open"] = "still_open"
+    title: str
+    summary: str
+    start_node: str = Field(default="", alias="startNode")
+    end_node: str = Field(default="", alias="endNode")
+    via_nodes: list[str] = Field(default_factory=list, alias="viaNodes")
+    supporting_branch_ids: list[str] = Field(default_factory=list, alias="supportingBranchIds")
+    supporting_fragment_ids: list[str] = Field(default_factory=list, alias="supportingFragmentIds")
+    evidence_status: Literal["verified", "reasoned", "mixed", "hypothesis"] = Field(alias="evidenceStatus")
+    confidence: float
+    unresolved_hops: list[str] = Field(default_factory=list, alias="unresolvedHops")
+
+
+class HypothesisState(StrictModel):
+    hypothesis_id: str = Field(alias="hypothesisId")
+    statement: str
+    parent_hypothesis_id: str = Field(default="", alias="parentHypothesisId")
+    root_hypothesis_id: str = Field(default="", alias="rootHypothesisId")
+    hypothesis_relation: Literal["root", "dependent_followup", "independent_child"] = Field(
+        default="root",
+        alias="hypothesisRelation",
+    )
+    spawn_reason: str = Field(default="", alias="spawnReason")
+    independence_basis: str = Field(default="", alias="independenceBasis")
+    path_kind: Literal["overview", "direct", "indirect", "alternative", "bridge"] = Field(alias="pathKind")
+    status: Literal["active", "accepted", "rejected", "stalled", "deferred"] = "active"
+    summary: str
+    human_question: str = Field(alias="humanQuestion")
+    closure_target: str = Field(alias="closureTarget")
+    active_roles: list[InvestigationRole] = Field(default_factory=list, alias="activeRoles")
+    source_branch_ids: list[str] = Field(default_factory=list, alias="sourceBranchIds")
+    source_fragment_ids: list[str] = Field(default_factory=list, alias="sourceFragmentIds")
+    broad_picture_fragment_ids: list[str] = Field(default_factory=list, alias="broadPictureFragmentIds")
+    evidence_status: Literal["verified", "reasoned", "mixed", "hypothesis"] = Field(alias="evidenceStatus")
+    confidence: float
+    resolved_frontier: list[str] = Field(default_factory=list, alias="resolvedFrontier")
+    remaining_frontier: list[str] = Field(default_factory=list, alias="remainingFrontier")
+    discovered_frontier: list[str] = Field(default_factory=list, alias="discoveredFrontier")
+    open_questions: list[str] = Field(default_factory=list, alias="openQuestions")
+    finding_ids: list[str] = Field(default_factory=list, alias="findingIds")
+    loop_count: int = Field(default=0, alias="loopCount")
+    last_updated_cycle: int = Field(default=0, alias="lastUpdatedCycle")
+    turn_ids: list[str] = Field(default_factory=list, alias="turnIds")
 
 
 class AgentResult(StrictModel):
-    agent_name: Literal["investigator_agent", "gap_bridge_agent", "critic_agent"] = Field(alias="agentName")
+    agent_name: DelegatedAgentName = Field(alias="agentName")
     mission_id: str = Field(alias="missionId")
     status: Literal["success", "partial", "blocked", "failed"]
     summary: str
@@ -231,7 +449,7 @@ class ToolContract(StrictModel):
 
 
 class AgentContract(StrictModel):
-    name: Literal["investigator_agent", "gap_bridge_agent", "critic_agent"]
+    name: DelegatedAgentName
     role: str
     mission_contract: str = Field(alias="missionContract")
     result_contract: str = Field(alias="resultContract")
@@ -244,9 +462,27 @@ class SupervisorDecision(StrictModel):
     cycle: int
     assessment: str
     rationale: list[str]
-    next_agent: Literal["investigator_agent", "gap_bridge_agent", "critic_agent", "compose", "stop"] = Field(alias="nextAgent")
+    next_agent: Literal[
+        "supply_chain_investigator_agent",
+        "governance_and_control_investigator_agent",
+        "policy_impact_investigator_agent",
+        "gap_bridge_agent",
+        "critic_agent",
+        "compose",
+        "stop",
+    ] = Field(alias="nextAgent")
     mission: InvestigationMission | None = None
     completion_rationale: str = Field(default="", alias="completionRationale")
+
+    @model_validator(mode="after")
+    def validate_control_contract(self) -> "SupervisorDecision":
+        if self.next_agent in {"compose", "stop"}:
+            return self
+        if self.mission is None:
+            raise ValueError(f"mission is required when nextAgent={self.next_agent}")
+        if not self.mission.assigned_roles:
+            raise ValueError(f"assignedRoles are required when nextAgent={self.next_agent}")
+        return self
 
 
 class LogicTraceEntry(StrictModel):
@@ -293,6 +529,9 @@ class FinalChainSummary(StrictModel):
     question: str
     selected_roles: list[InvestigationRole] = Field(alias="selectedRoles")
     concise_answer: str = Field(alias="conciseAnswer")
+    hypotheses: list[HypothesisState] = Field(default_factory=list)
+    candidate_paths: list[CandidatePath] = Field(default_factory=list, alias="candidatePaths")
+    learned_findings: list[LearnedFinding] = Field(default_factory=list, alias="learnedFindings")
     graph_observations: list[GraphObservation] = Field(alias="graphObservations")
     graph_fragments: list[GraphFragment] = Field(default_factory=list, alias="graphFragments")
     branches: list[BranchState] = Field(default_factory=list)
@@ -300,5 +539,6 @@ class FinalChainSummary(StrictModel):
     unresolved_gaps: list[str] = Field(alias="unresolvedGaps")
     open_verification_needs: list[str] = Field(alias="openVerificationNeeds")
     source_documents: list[str] = Field(alias="sourceDocuments")
+    reachability_report: dict[str, Any] = Field(default_factory=dict, alias="reachabilityReport")
     logic_trace: list[LogicTraceEntry] = Field(alias="logicTrace")
     runtime_logs: list[RuntimeLogEntry] = Field(default_factory=list, alias="runtimeLogs")
