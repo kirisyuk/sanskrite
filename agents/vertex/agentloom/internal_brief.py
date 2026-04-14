@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from typing import cast
 
 from agentloom.contracts import (
@@ -55,6 +56,7 @@ def build_internal_brief(
     max_bullets_per_axis: int = 8,
     max_finding_digest: int = 6,
     max_entities: int = 24,
+    extra_epistemic_caveats: Sequence[str] | None = None,
 ) -> InternalBrief:
     rr = reachability_report or {}
     health = str(rr.get("healthSummary") or "").strip()
@@ -182,6 +184,11 @@ def build_internal_brief(
         caveats.append("Some edges rely on hypothesis-level or model knowledge and are not document-grounded.")
     if open_gap_texts:
         caveats.append("Public procurement and direct supplier-to-plant links may be absent from open sources.")
+    if extra_epistemic_caveats:
+        for raw in extra_epistemic_caveats:
+            t = (raw or "").strip()
+            if t:
+                caveats.append(t)
 
     use_emb = os.getenv("AGENTLOOM_GAP_CLUSTER_EMBEDDINGS", "").strip().lower() in ("1", "true", "on", "yes")
     clustered = cluster_gap_texts(open_gap_texts, prefer_embedding_clustering=use_emb)

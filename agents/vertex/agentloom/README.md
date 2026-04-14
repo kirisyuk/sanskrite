@@ -6,11 +6,31 @@ outside `AgentMesh`.
 Current scope:
 
 - separate from `AgentMesh` and `scout.*`
-- no canonicalization
-- no graph writes
+- hypothesis-local entity registry (`hypothesis_entity_registry` in session state) tracks merges after `replace_node` / `replace_fragment`; this is **not** the Horizon product canonical control plane (synonym/transform layers stay in Scout / backend only).
+- no Scout `/product/...` canonicalization inside AgentLoom unless you add an **explicit** optional bridge later: if that bridge exists, it must be a dedicated tool or step with clear consent flags so synonym resolution and transform dictionaries are never mixed silently into hypothesis graph reasoning.
+- working-graph updates are session-local only (no AgentMesh materialization writes from this package).
 - no materialization
 - strict JSON contracts between agents
 - deterministic final composer without LLM
+
+## Deterministic runtime vs LLM judgment
+
+| Concern | Mostly deterministic (code paths) | Mostly LLM (structured output) |
+| --- | --- | --- |
+| Graph merge / dedup | Observation merge by edge key, confidence, support type; working-graph size cap with explicit failure | — |
+| Reachability and progress snapshots | `_graph_reachability_report`, unified progress / stagnation counters, budget pressure | Narrative in `assessment` / `rationale` |
+| Orchestration guardrails | Compose gate vs `STATE_LAST_CRITIC_VERDICT`, flow-first `_delegate_constraints`, stagnation / repeated-gap escalation | Supervisor `nextAgent` + `mission` JSON |
+| Normalization / limits | `limits.py` caps, truncation flags on `AgentResult` | Wording inside agent outputs |
+| Final user payload | `composer` assembles JSON from state and trace | — |
+
+### Supervisor snapshot and session budget
+
+- Every supervisor cycle exposes `state.snapshotIntegrityNote`: the JSON in `supervisor_context.state` is **still lossy** (trimmed strings, capped lists) for token safety. Prefer `unifiedProgress`, `reachability`, `openGaps`, and `investigationBudget` for structural truth; do not treat omitted previews as proof that data does not exist in full session memory.
+- `investigationBudget` tracks `supervisorCyclesUsed` / `maxSupervisorCycles` (token and tool-call estimates are reserved for future wiring).
+- `budgetPressure` is `none` | `soft` | `hard` relative to `AGENTLOOM_MAX_SUPERVISOR_CYCLES`. In the **soft** zone the supervisor payload includes `runtimeBudgetNote` nudging toward critic or honest exit.
+- **Cycle limit policy:** `AGENTLOOM_LIMIT_EXHAUSTED_STRATEGY` is `stop` (default) or `compose_with_caveats`. When the supervisor for-loop ends without `compose`/`stop`, the runtime either records the existing blocking failure (`stop`) or, if the critic compose-gate passes, runs **one** deterministic `compose` pass with extra epistemic caveats and sets `stoppedBySupervisorCycleLimit` on `FinalChainSummary`.
+- **Merge policy:** `AGENTLOOM_MERGE_CONFIDENCE_EPSILON` controls tie-breaking when observation confidences are nearly equal (stronger `supportType` wins first).
+- **Retrieve cache:** identical `retrieve` tool queries in one session may be served from `retrieve_tool_session_cache` until any graph merge clears the cache.
 
 Current agent lineup:
 

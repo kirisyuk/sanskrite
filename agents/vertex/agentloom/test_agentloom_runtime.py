@@ -1,9 +1,27 @@
 from __future__ import annotations
 
+import json
+import os
 import unittest
 from pydantic import ValidationError
 
+import agentloom.agent as agentloom_agent_module
+
 from agentloom.agent import (
+    STATE_FINAL,
+    STATE_GRAPH_MUTATION_LOG,
+    STATE_BRANCH_STATES,
+    STATE_HYPOTHESIS_ENTITY_REGISTRY,
+    STATE_INVESTIGATION_EPOCH,
+    STATE_LAST_GAP_FINGERPRINT,
+    STATE_LAST_CRITIC_VERDICT,
+    STATE_LOGIC_TRACE,
+    STATE_OPEN_GAPS,
+    STATE_OPEN_GAP_STREAK,
+    STATE_GLOBAL_STAGNATION,
+    STATE_PROGRESS_HISTORY,
+    STATE_SELECTED_ROLES,
+    STATE_WORKING_GRAPH,
     CRITIC_CONFIG,
     GAP_BRIDGE_CONFIG,
     INVESTIGATOR_PLANNER_CONFIG,
@@ -28,12 +46,34 @@ from agentloom.agent import (
     _tool_prompt,
     _tool_result_requires_reroute,
     _acceptance_block_reason,
+    _detect_slot_endpoint_conflicts,
+    _placeholder_resolution_hints,
     _update_branch_state,
+    _delegate_constraints,
+    _merge_observation,
+    _orchestration_policy_allow_compose,
+    _unified_progress_report,
 )
 from agentloom.composer import build_final_chain_summary
-from agentloom.contracts import AgentResult, BranchPlan, BranchState, CandidatePath, FailureRecord, GraphFragment, GraphObservation, HypothesisState, InvestigationMission, SupervisorDecision, ToolAction, ToolActionResult
+from agentloom.runner import _trace_reasoning_digest, _working_graph_from_logic_trace
+from agentloom.contracts import (
+    AgentResult,
+    BranchPlan,
+    BranchState,
+    CandidatePath,
+    CriticAgentOutput,
+    FailureRecord,
+    GraphFragment,
+    GraphObservation,
+    HypothesisState,
+    InvestigationMission,
+    SupervisorDecision,
+    ToolAction,
+    ToolActionResult,
+)
 from agentloom.contracts import LearnedFinding
 from agentloom.taxonomy import ROLE_CONTRACTS_BY_ROLE, ROLE_GOVERNANCE, ROLE_POLICY, ROLE_SUPPLY_CHAIN
+import agentloom.limits as agentloom_limits
 
 
 class AgentLoomRuntimeTest(unittest.TestCase):
@@ -461,6 +501,194 @@ class AgentLoomRuntimeTest(unittest.TestCase):
 
         self.assertIn("German Battery Manufacturing Plant", placeholders)
 
+    def test_placeholder_detector_chilean_extraction_placeholder_suffix(self) -> None:
+        placeholders = _placeholder_nodes_from_graph(
+            [
+                GraphObservation(
+                    observationId="o-chile",
+                    subjectId="deposit:atacama",
+                    subject="Atacama brine pool",
+                    subjectType="DEPOSIT",
+                    relation="EXTRACTS_FROM",
+                    objectId="facility:chilean-extraction",
+                    object="Chilean extraction facility (placeholder)",
+                    objectType="FACILITY",
+                    confidence=0.35,
+                    supportType="hypothesis",
+                    provenance=[],
+                    supportNote="",
+                    branchId="root",
+                )
+            ]
+        )
+        self.assertIn("Chilean extraction facility (placeholder)", placeholders)
+
+    def test_placeholder_detector_hypothesis_tbd_label(self) -> None:
+        placeholders = _placeholder_nodes_from_graph(
+            [
+                GraphObservation(
+                    observationId="o-tbd",
+                    subjectId="product:spodumene",
+                    subject="Spodumene concentrate",
+                    subjectType="PRODUCT",
+                    relation="SUPPLIES_TO",
+                    objectId="facility:tbd-plant",
+                    object="TBD conversion plant",
+                    objectType="FACILITY",
+                    confidence=0.2,
+                    supportType="hypothesis",
+                    provenance=[],
+                    supportNote="",
+                    branchId="root",
+                )
+            ]
+        )
+        self.assertIn("TBD conversion plant", placeholders)
+
+    def test_acceptance_blocked_for_dependent_direct_when_placeholders_present(self) -> None:
+        plan = BranchPlan(
+            branchId="dep-b1",
+            hypothesis="Dependent refinement",
+            pathKind="direct",
+            humanQuestion="Verify hop?",
+            humanAction="Check edge.",
+            closureTarget="Concrete endpoints.",
+            knownContext=[],
+            frontier=[],
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            preferredTools=["reason"],
+            targetEntities=["lithium"],
+            fragmentType="chain_fragment",
+            hypothesisRelation="dependent_followup",
+            parentHypothesisId="root",
+            spawnReason="Resolve slot",
+            independenceBasis="",
+        )
+        branch_state = BranchState(
+            branchId="dep-b1",
+            hypothesis="Dependent refinement",
+            pathKind="direct",
+            humanQuestion="Verify hop?",
+            humanSummary="Still broad sink.",
+            closureTarget="Concrete endpoints.",
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            status="completed",
+            qualityScore=0.7,
+            remainingFrontier=[],
+            openQuestions=[],
+            hypothesisRelation="dependent_followup",
+            parentHypothesisId="root",
+        )
+        local_state = {
+            "working_graph": [
+                GraphObservation(
+                    observationId="o1",
+                    subjectId="product:nickel-sulfate",
+                    subject="Nickel Sulfate",
+                    subjectType="PRODUCT",
+                    relation="SUPPLIES_TO",
+                    objectId="facility:german-battery-manufacturing-plant",
+                    object="German Battery Manufacturing Plant",
+                    objectType="FACILITY",
+                    confidence=0.3,
+                    supportType="hypothesis",
+                    provenance=[],
+                    supportNote="",
+                    branchId="dep-b1",
+                ).model_dump(mode="json", by_alias=True)
+            ]
+        }
+        reason = _acceptance_block_reason(plan, branch_state, local_state)
+        self.assertIn("Broad placeholders remain", reason)
+
+    def test_placeholder_resolution_hints_are_deterministic(self) -> None:
+        obs = GraphObservation(
+            observationId="o1",
+            subjectId="product:nickel-sulfate",
+            subject="Nickel Sulfate",
+            subjectType="PRODUCT",
+            relation="SUPPLIES_TO",
+            objectId="facility:german-battery-manufacturing-plant",
+            object="German Battery Manufacturing Plant",
+            objectType="FACILITY",
+            confidence=0.3,
+            supportType="hypothesis",
+            provenance=[],
+            supportNote="",
+            branchId="root",
+        )
+        hints = _placeholder_resolution_hints([obs])
+        self.assertTrue(hints)
+        self.assertIn("replace_node", hints[0])
+        self.assertIn("facility:german-battery-manufacturing-plant", hints[0])
+
+    def test_working_graph_from_logic_trace_last_write_wins(self) -> None:
+        o1 = GraphObservation(
+            observationId="o1",
+            subjectId="product:a",
+            subject="Product A",
+            subjectType="PRODUCT",
+            relation="SUPPLIES_TO",
+            objectId="facility:x",
+            object="Facility X",
+            objectType="FACILITY",
+            confidence=0.2,
+            supportType="hypothesis",
+            provenance=[],
+            supportNote="",
+            branchId="root",
+        )
+        o2 = o1.model_copy(update={"confidence": 0.9})
+        lt = [
+            {"agentResult": {"graphDelta": [o1.model_dump(mode="json", by_alias=True)]}},
+            {"agentResult": {"graphDelta": [o2.model_dump(mode="json", by_alias=True)]}},
+        ]
+        merged = _working_graph_from_logic_trace(lt)
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0].get("confidence"), 0.9)
+
+    def test_trace_reasoning_digest_includes_placeholder_digest_keys(self) -> None:
+        obs = GraphObservation(
+            observationId="o1",
+            subjectId="product:a",
+            subject="Product A",
+            subjectType="PRODUCT",
+            relation="SUPPLIES_TO",
+            objectId="facility:german-battery-manufacturing-plant",
+            object="German Battery Manufacturing Plant",
+            objectType="FACILITY",
+            confidence=0.3,
+            supportType="hypothesis",
+            provenance=[],
+            supportNote="",
+            branchId="root",
+        )
+        st = {
+            "logic_trace": [
+                {
+                    "cycle": 2,
+                    "decision": {},
+                    "stateSeen": {
+                        "graphObservationCount": 1,
+                        "openGaps": [],
+                        "progress": {},
+                        "placeholderNodes": ["German Battery Manufacturing Plant"],
+                        "placeholderResolutionHints": ["hint-one"],
+                    },
+                    "mission": {},
+                    "agentResult": {"graphDelta": [obs.model_dump(mode="json", by_alias=True)], "gaps": [], "status": "success"},
+                }
+            ],
+            "working_graph": [],
+        }
+        raw = _trace_reasoning_digest(st)
+        digest = json.loads(raw)
+        self.assertIn("placeholderFromTrace", digest)
+        self.assertEqual(digest["placeholderFromTrace"]["placeholderNodes"], ["German Battery Manufacturing Plant"])
+        self.assertIn("structurallyCompleteChainsDigest", digest)
+        row0 = digest["reasoningTrace"][0]
+        self.assertEqual(row0["stateSeen"]["placeholderNodes"], ["German Battery Manufacturing Plant"])
+
     def test_root_overview_acceptance_is_blocked_by_placeholder_and_structural_frontier(self) -> None:
         plan = BranchPlan(
             branchId="root",
@@ -695,6 +923,259 @@ class AgentLoomRuntimeTest(unittest.TestCase):
         synced_branches = [BranchState.model_validate(item) for item in state["branch_states"]]
         overview_branch = next(item for item in synced_branches if item.branch_id == "overview")
         self.assertEqual(overview_branch.graph_fragments, [])
+
+        self.assertIn("removalZoneSize", result)
+        self.assertGreaterEqual(result.get("removalZoneSize", 0), 1)
+        self.assertIn(STATE_GRAPH_MUTATION_LOG, state)
+        self.assertTrue(state[STATE_GRAPH_MUTATION_LOG])
+
+    def test_hypothesis_entity_registry_lineage_after_replace_node(self) -> None:
+        placeholder_fragment = GraphFragment(
+            fragmentId="overview-f1",
+            fragmentType="overview_chain",
+            title="Broad sink placeholder",
+            humanQuestion="What is the broad chain?",
+            humanSummary="A broad sink placeholder was used.",
+            branchId="overview",
+            observations=[
+                GraphObservation(
+                    observationId="o1",
+                    subjectId="product:nickel-sulfate",
+                    subject="Nickel sulfate",
+                    subjectType="PRODUCT",
+                    relation="SUPPLIES_TO",
+                    objectId="facility:german-battery-plant",
+                    object="German Battery Plant",
+                    objectType="FACILITY",
+                    confidence=0.4,
+                    supportType="hypothesis",
+                    provenance=[],
+                    supportNote="",
+                    branchId="overview",
+                )
+            ],
+            completeness="hypothesis",
+            qualityScore=0.3,
+        )
+        replacement_fragment = GraphFragment(
+            fragmentId="sink-f1",
+            fragmentType="chain_fragment",
+            title="Concrete sink",
+            humanQuestion="Replace sink?",
+            humanSummary="Concrete sink.",
+            branchId="sink",
+            patchMode="replace_node",
+            oldId="facility:german-battery-plant",
+            patchRationale="Replace broad sink with concrete facility.",
+            observations=[
+                GraphObservation(
+                    observationId="o4",
+                    subjectId="product:nickel-sulfate",
+                    subject="Nickel sulfate",
+                    subjectType="PRODUCT",
+                    relation="SUPPLIES_TO",
+                    objectId="facility:acc-kaiserslautern",
+                    object="ACC Kaiserslautern Facility",
+                    objectType="FACILITY",
+                    confidence=0.82,
+                    supportType="document",
+                    provenance=["doc-2"],
+                    supportNote="",
+                    branchId="sink",
+                )
+            ],
+            completeness="partial",
+            qualityScore=0.8,
+        )
+        state: dict = {
+            "working_graph": [item.model_dump(mode="json", by_alias=True) for item in placeholder_fragment.observations],
+            "graph_fragments": [placeholder_fragment.model_dump(mode="json", by_alias=True)],
+            "branch_states": [],
+        }
+        _apply_graph_fragment_mutations(state, [replacement_fragment])
+        reg = state.get(STATE_HYPOTHESIS_ENTITY_REGISTRY) or {}
+        events = reg.get("lineageEvents") or []
+        self.assertTrue(events)
+        last = events[-1]
+        self.assertEqual(last.get("patchMode"), "replace_node")
+        self.assertIn("facility:german-battery-plant", last.get("fromIds") or [])
+        self.assertIn("facility:acc-kaiserslautern", last.get("toIds") or [])
+        id_map = ((reg.get("byBranch") or {}).get("sink") or {}).get("idToCanonical") or {}
+        self.assertEqual(id_map.get("facility:german-battery-plant"), id_map.get("facility:acc-kaiserslautern"))
+        self.assertNotEqual(id_map.get("product:nickel-sulfate"), id_map.get("facility:acc-kaiserslautern"))
+
+    def test_detect_slot_endpoint_conflict(self) -> None:
+        g = [
+            GraphObservation(
+                observationId="a",
+                subject="X",
+                subjectType="PRODUCT",
+                relation="SUPPLIES_TO",
+                object="Plant A",
+                objectType="FACILITY",
+                confidence=0.5,
+                supportType="hypothesis",
+                slotId="sink:de:battery_consumer",
+                branchId="b1",
+            ),
+            GraphObservation(
+                observationId="b",
+                subject="X",
+                subjectType="PRODUCT",
+                relation="SUPPLIES_TO",
+                object="Plant B",
+                objectType="FACILITY",
+                confidence=0.5,
+                supportType="hypothesis",
+                slotId="sink:de:battery_consumer",
+                branchId="b1",
+            ),
+        ]
+        conflicts = _detect_slot_endpoint_conflicts(g)
+        self.assertEqual(len(conflicts), 1)
+
+    def test_apply_graph_fragment_records_slot_contract_gap(self) -> None:
+        frag = GraphFragment(
+            fragmentId="slot-frag",
+            fragmentType="chain_fragment",
+            title="Dup slot",
+            humanQuestion="?",
+            humanSummary="?",
+            branchId="b-slot",
+            patchMode="append",
+            patchRationale="",
+            observations=[
+                GraphObservation(
+                    observationId="a",
+                    subject="X",
+                    subjectType="PRODUCT",
+                    relation="SUPPLIES_TO",
+                    object="Plant A",
+                    objectType="FACILITY",
+                    confidence=0.5,
+                    supportType="hypothesis",
+                    slotId="sink:de:test",
+                    branchId="b-slot",
+                ),
+                GraphObservation(
+                    observationId="b",
+                    subject="X",
+                    subjectType="PRODUCT",
+                    relation="SUPPLIES_TO",
+                    object="Plant B",
+                    objectType="FACILITY",
+                    confidence=0.5,
+                    supportType="hypothesis",
+                    slotId="sink:de:test",
+                    branchId="b-slot",
+                ),
+            ],
+            completeness="partial",
+            qualityScore=0.5,
+        )
+        state: dict = {
+            "working_graph": [],
+            "graph_fragments": [],
+            "open_gaps": [],
+            "supervisor_cycle": 0,
+        }
+        _apply_graph_fragment_mutations(state, [frag])
+        gaps_raw = state.get(STATE_OPEN_GAPS) or []
+        texts: list[str] = []
+        for item in gaps_raw:
+            if isinstance(item, str):
+                texts.append(item)
+            elif isinstance(item, dict) and item.get("text"):
+                texts.append(str(item["text"]))
+        self.assertTrue(any("Slot contract conflict" in t for t in texts))
+
+    def test_replace_node_removes_residual_edges_matching_label_slug_not_only_explicit_id(self) -> None:
+        """Residual-only duplicate of the same sink via slug-derived id must be pruned with the explicit oldId."""
+        placeholder_fragment = GraphFragment(
+            fragmentId="overview-f1",
+            fragmentType="overview_chain",
+            title="Broad sink",
+            humanQuestion="What is the broad chain?",
+            humanSummary="Placeholder chain.",
+            branchId="overview",
+            observations=[
+                GraphObservation(
+                    observationId="o1",
+                    subjectId="product:nickel-sulfate",
+                    subject="Nickel sulfate",
+                    subjectType="PRODUCT",
+                    relation="SUPPLIES_TO",
+                    objectId="facility:german-battery-plant",
+                    object="German Battery Plant",
+                    objectType="FACILITY",
+                    confidence=0.4,
+                    supportType="hypothesis",
+                    provenance=[],
+                    supportNote="",
+                    branchId="overview",
+                )
+            ],
+            completeness="hypothesis",
+            qualityScore=0.3,
+        )
+        residual_slug_dup = GraphObservation(
+            observationId="o-residual-dup",
+            subjectId="product:nickel-sulfate",
+            subject="Nickel sulfate",
+            subjectType="PRODUCT",
+            relation="DEPENDS_ON",
+            objectId="",
+            object="German Battery Plant",
+            objectType="FACILITY",
+            confidence=0.2,
+            supportType="hypothesis",
+            provenance=[],
+            supportNote="Residual duplicate of same sink label without explicit objectId.",
+            branchId="residual-only",
+        )
+        replacement_fragment = GraphFragment(
+            fragmentId="sink-f1",
+            fragmentType="chain_fragment",
+            title="Concrete sink",
+            humanQuestion="Replace sink?",
+            humanSummary="Concrete sink.",
+            branchId="sink",
+            patchMode="replace_node",
+            oldId="facility:german-battery-plant",
+            patchRationale="Replace broad sink with concrete facility.",
+            observations=[
+                GraphObservation(
+                    observationId="o4",
+                    subjectId="product:nickel-sulfate",
+                    subject="Nickel sulfate",
+                    subjectType="PRODUCT",
+                    relation="SUPPLIES_TO",
+                    objectId="facility:acc-kaiserslautern",
+                    object="ACC Kaiserslautern Facility",
+                    objectType="FACILITY",
+                    confidence=0.82,
+                    supportType="document",
+                    provenance=["doc-2"],
+                    supportNote="",
+                    branchId="sink",
+                )
+            ],
+            completeness="partial",
+            qualityScore=0.8,
+        )
+        state = {
+            "working_graph": [
+                item.model_dump(mode="json", by_alias=True)
+                for item in [*placeholder_fragment.observations, residual_slug_dup]
+            ],
+            "graph_fragments": [placeholder_fragment.model_dump(mode="json", by_alias=True)],
+            "branch_states": [],
+        }
+        result = _apply_graph_fragment_mutations(state, [replacement_fragment])
+        mutated = [GraphObservation.model_validate(item) for item in state["working_graph"]]
+        self.assertFalse(any("German Battery Plant" == obs.object for obs in mutated))
+        self.assertTrue(any(obs.object_id == "facility:acc-kaiserslautern" for obs in mutated))
+        self.assertIn("orphanFlowHints", result)
 
     def test_replace_fragment_patch_supersedes_old_fragment_and_rebuilds_graph(self) -> None:
         old_fragment = GraphFragment(
@@ -2156,6 +2637,264 @@ class AgentLoomRuntimeTest(unittest.TestCase):
 
         self.assertEqual(reroute[:1], ["web_search"])
         self.assertIn("switching", reason.lower())
+
+    def test_trace_reasoning_digest_counts_graph_delta_camel_or_snake(self) -> None:
+        from agentloom.runner import _trace_reasoning_digest
+
+        base_entry = {
+            "cycle": 2,
+            "stateSeen": {
+                "graphObservationCount": 8,
+                "openGaps": ["bridge Chile conversion"],
+                "progress": {"stagnationCount": 1},
+                "reachability": {"completeChainCount": 0, "healthSummary": "no document-grounded chain"},
+            },
+            "decision": {
+                "cycle": 2,
+                "nextAgent": "supply_chain_investigator_agent",
+                "assessment": "Still no grounded backbone.",
+                "rationale": ["completeChainCount remains 0; deepen flow."],
+            },
+            "mission": {
+                "missionId": "m1",
+                "objective": "Add one SUPPLIES_TO hop on the weakest partial chain.",
+                "assignedRoles": ["supply_chain"],
+                "groundingMode": "mixed",
+            },
+            "nextStepLogic": "Delegated supply_chain and merged graph deltas.",
+        }
+        camel = {**base_entry, "agentResult": {"status": "completed", "graphDelta": [{"x": 1}], "gaps": ["g1"]}}
+        snake = {**base_entry, "agentResult": {"status": "completed", "graph_delta": [{"x": 1}, {"x": 2}], "gaps": []}}
+        for entry, expected_delta in ((camel, 1), (snake, 2)):
+            payload = json.loads(
+                _trace_reasoning_digest({STATE_LOGIC_TRACE: [entry], STATE_FINAL: {}})
+            )
+            self.assertEqual(payload["logicTraceEntries"], 1)
+            row = payload["reasoningTrace"][0]
+            self.assertEqual(row["decisionCycle"], 2)
+            self.assertEqual(row["stateSeen"]["reachability"]["completeChainCount"], 0)
+            self.assertEqual(row["agentResultBrief"]["graphDeltaCount"], expected_delta)
+
+    def test_compose_gate_rejects_stale_critic_epoch(self) -> None:
+        st = {
+            STATE_LAST_CRITIC_VERDICT: {
+                "investigationEpoch": 1,
+                "compositionRecommendation": "recommend",
+                "compositionConditions": [],
+            },
+            STATE_INVESTIGATION_EPOCH: 2,
+        }
+        ok, msg = _orchestration_policy_allow_compose(st)
+        self.assertFalse(ok)
+        self.assertIn("stale", msg)
+
+    def test_compose_gate_accepts_matching_epoch(self) -> None:
+        st = {
+            STATE_LAST_CRITIC_VERDICT: {
+                "investigationEpoch": 2,
+                "compositionRecommendation": "recommend",
+                "compositionConditions": [],
+            },
+            STATE_INVESTIGATION_EPOCH: 2,
+        }
+        ok, msg = _orchestration_policy_allow_compose(st)
+        self.assertTrue(ok)
+        self.assertEqual(msg, "ok")
+
+    def test_compose_gate_requires_nonempty_conditions_for_conditional(self) -> None:
+        st = {
+            STATE_LAST_CRITIC_VERDICT: {
+                "investigationEpoch": 1,
+                "compositionRecommendation": "conditional",
+                "compositionConditions": [],
+            },
+            STATE_INVESTIGATION_EPOCH: 1,
+        }
+        ok, msg = _orchestration_policy_allow_compose(st)
+        self.assertFalse(ok)
+        self.assertIn("conditional_requires", msg)
+
+    def test_compose_gate_accepts_conditional_with_conditions(self) -> None:
+        st = {
+            STATE_LAST_CRITIC_VERDICT: {
+                "investigationEpoch": 1,
+                "compositionRecommendation": "conditional",
+                "compositionConditions": ["Answer must label all hypothesis edges explicitly."],
+            },
+            STATE_INVESTIGATION_EPOCH: 1,
+        }
+        ok, msg = _orchestration_policy_allow_compose(st)
+        self.assertTrue(ok)
+        self.assertEqual(msg, "ok")
+
+    def test_delegate_constraints_redirects_governance_without_grounded_chain(self) -> None:
+        mission = InvestigationMission(
+            missionId="m",
+            objective="gov overlay",
+            assignedRoles=[ROLE_GOVERNANCE],
+            groundingMode="mixed",
+        )
+        dec = SupervisorDecision(
+            cycle=3,
+            assessment="x",
+            rationale=["y"],
+            nextAgent="governance_and_control_investigator_agent",
+            mission=mission,
+        )
+        st = {
+            STATE_GLOBAL_STAGNATION: 0,
+            STATE_LOGIC_TRACE: [],
+            STATE_SELECTED_ROLES: [ROLE_SUPPLY_CHAIN, ROLE_GOVERNANCE],
+            STATE_WORKING_GRAPH: [],
+        }
+        out, pc = _delegate_constraints(st, dec, cycle=3, user_question="Who owns the mine?")
+        self.assertIsNotNone(pc)
+        self.assertEqual(out.next_agent, "supply_chain_investigator_agent")
+        self.assertIsNotNone(out.mission)
+        self.assertEqual(out.mission.assigned_roles, [ROLE_SUPPLY_CHAIN])
+
+    def test_merge_observation_prefers_document_over_model_knowledge(self) -> None:
+        a = GraphObservation(
+            observationId="1",
+            subject="A",
+            relation="R",
+            object="B",
+            confidence=0.8,
+            supportType="model_knowledge",
+        )
+        b = GraphObservation(
+            observationId="2",
+            subject="A",
+            relation="R",
+            object="B",
+            confidence=0.8,
+            supportType="document",
+            provenance=["https://example.com"],
+        )
+        m, gap = _merge_observation(a, b)
+        self.assertIsNone(gap)
+        self.assertEqual(m.support_type, "document")
+
+    def test_critic_agent_output_requires_conditions_for_conditional(self) -> None:
+        with self.assertRaises(ValidationError):
+            CriticAgentOutput(
+                agentName="critic_agent",
+                missionId="m",
+                status="success",
+                summary="s",
+                compositionRecommendation="conditional",
+                compositionConditions=[],
+            )
+
+    def test_merge_observation_epsilon_prefers_stronger_support_type(self) -> None:
+        """Within MERGE_CONFIDENCE_EPSILON, document should beat mixed even if mixed has slightly higher confidence."""
+        doc = GraphObservation(
+            observationId="1",
+            subject="A",
+            relation="PRODUCES",
+            object="B",
+            confidence=0.905,
+            supportType="document",
+        )
+        mixed = GraphObservation(
+            observationId="2",
+            subject="A",
+            relation="PRODUCES",
+            object="B",
+            confidence=0.90,
+            supportType="mixed",
+        )
+        merged, gap = _merge_observation(mixed, doc)
+        self.assertEqual(merged.support_type, "document")
+        self.assertIsNone(gap)
+
+    def test_unified_progress_report_material_progress_last_step(self) -> None:
+        st = {
+            STATE_PROGRESS_HISTORY: [
+                {
+                    "agentName": "supply_chain_investigator_agent",
+                    "missionId": "m-1",
+                    "materialProgress": True,
+                    "stagnationCount": 0,
+                    "openGapCount": 2,
+                }
+            ],
+            STATE_GLOBAL_STAGNATION: 0,
+            STATE_BRANCH_STATES: [],
+            STATE_INVESTIGATION_EPOCH: 0,
+            STATE_OPEN_GAP_STREAK: 0,
+        }
+        rep = _unified_progress_report(st)
+        self.assertIn("materialProgressLastStep", rep)
+        self.assertIn("supply_chain_investigator_agent", rep["materialProgressLastStep"])
+
+    def test_normalize_marks_truncation_when_graph_delta_capped(self) -> None:
+        prev = agentloom_agent_module.MAX_GRAPH_DELTA_OBSERVATIONS
+        agentloom_agent_module.MAX_GRAPH_DELTA_OBSERVATIONS = 4
+        try:
+            mission = InvestigationMission(
+                missionId="m",
+                objective="o",
+                assignedRoles=[ROLE_SUPPLY_CHAIN],
+                groundingMode="mixed",
+            )
+            obs = [
+                GraphObservation(
+                    observationId=f"id-{i}",
+                    subject="S",
+                    relation="PRODUCES",
+                    object=f"O{i}",
+                    confidence=0.7,
+                    supportType="model_knowledge",
+                )
+                for i in range(8)
+            ]
+            raw = AgentResult(
+                agentName="supply_chain_investigator_agent",
+                missionId="m",
+                status="success",
+                summary="s",
+                graphDelta=obs,
+            )
+            normalized = _normalize_agent_result(raw, mission, [ROLE_SUPPLY_CHAIN])
+            self.assertTrue(normalized.truncation)
+            self.assertIn("capped", (normalized.truncation_detail or "").lower())
+            self.assertEqual(len(normalized.graph_delta), 4)
+        finally:
+            agentloom_agent_module.MAX_GRAPH_DELTA_OBSERVATIONS = prev
+
+    def test_delegate_constraints_stagnation_escalates_to_critic(self) -> None:
+        mission = InvestigationMission(
+            missionId="m",
+            objective="dig",
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            groundingMode="mixed",
+        )
+        dec = SupervisorDecision(
+            cycle=5,
+            assessment="x",
+            rationale=["y"],
+            nextAgent="supply_chain_investigator_agent",
+            mission=mission,
+        )
+        st = {
+            STATE_GLOBAL_STAGNATION: agentloom_limits.STAGNATION_FORCE_CRITIC_CYCLES,
+            STATE_LOGIC_TRACE: [],
+            STATE_SELECTED_ROLES: [ROLE_SUPPLY_CHAIN],
+            STATE_WORKING_GRAPH: [],
+            STATE_OPEN_GAP_STREAK: 0,
+            STATE_LAST_GAP_FINGERPRINT: "",
+        }
+        out, pc = _delegate_constraints(st, dec, cycle=5, user_question="q?")
+        self.assertIsNotNone(pc)
+        self.assertEqual(out.next_agent, "critic_agent")
+
+    def test_golden_fixture_unified_progress_keys(self) -> None:
+        path = os.path.join(os.path.dirname(__file__), "fixtures", "unified_progress_golden.json")
+        with open(path, encoding="utf-8") as f:
+            fixture = json.load(f)
+        rep = _unified_progress_report(fixture["state"])
+        self.assertEqual(rep["materialProgressLastStep"], fixture["expected"]["materialProgressLastStep"])
 
 
 if __name__ == "__main__":

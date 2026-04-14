@@ -3,10 +3,12 @@ from __future__ import annotations
 # Optional Vertex ADK / GenAI SDKs are usually installed in the dedicated venv.
 # pyright: reportMissingImports=false
 
+import hashlib
 import json
 import os
 import re
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from collections import deque
 from collections.abc import AsyncGenerator
@@ -35,6 +37,7 @@ from agentloom.contracts import (
     BranchPlan,
     BranchState,
     CandidatePath,
+    CriticAgentOutput,
     FailureRecord,
     GraphFragment,
     GraphObservation,
@@ -46,6 +49,7 @@ from agentloom.contracts import (
     InvestigationRole,
     LearnedFinding,
     LogicTraceEntry,
+    PolicyCorrection,
     RoleContract,
     RoleSelection,
     NarrativeSynthesisStatus,
@@ -56,6 +60,32 @@ from agentloom.contracts import (
     ToolAction,
     ToolActionResult,
     ToolContract,
+    critic_agent_output_to_agent_result,
+)
+from agentloom.prompt_fragments import (
+    PROMPT_UNTRUSTED_USER_CORPUS,
+    SUPERVISOR_RULES_ANTI_BLOAT,
+    SUPERVISOR_RULES_CORE,
+    SUPERVISOR_RULES_REACHABILITY,
+    SUPERVISOR_RUNTIME_NOTE,
+)
+from agentloom.limits import (
+    BUDGET_SOFT_FRACTION,
+    DELEGATE_FLOW_FIRST_STAGNATION_EXCEPTION,
+    LIMIT_EXHAUSTED_STRATEGY,
+    MAX_GRAPH_DELTA_OBSERVATIONS,
+    MAX_GAPS,
+    MAX_HANDOFF_RECOMMENDATIONS,
+    MAX_NEXT_QUESTIONS,
+    MAX_WORKING_GRAPH_OBSERVATIONS,
+    MAX_ANSWERED_QUESTIONS,
+    MERGE_CONFIDENCE_EPSILON,
+    REPEATED_GAP_THRESHOLD,
+    STAGNATION_FORCE_CRITIC_CYCLES,
+    SUPERVISOR_SNAPSHOT_FRONTIER_MAX_ITEMS,
+    SUPERVISOR_SNAPSHOT_FRONTIER_STRING_CHARS,
+    SUPERVISOR_SNAPSHOT_LAST_RESULT_SUMMARY_CHARS,
+    SUPERVISOR_SNAPSHOT_OPEN_GAPS_MAX,
 )
 from agentloom.taxonomy import (
     ROLE_CONTRACTS_BY_ROLE,
@@ -79,6 +109,8 @@ STATE_CURRENT_MISSION = "current_mission"
 STATE_WORKING_GRAPH = "working_graph"
 STATE_GRAPH_FRAGMENTS = "graph_fragments"
 STATE_REPLACED_NODE_IDS = "replaced_node_ids"
+STATE_GRAPH_MUTATION_LOG = "graph_mutation_log"
+STATE_HYPOTHESIS_ENTITY_REGISTRY = "hypothesis_entity_registry"
 STATE_BRANCH_STATES = "branch_states"
 STATE_OPEN_GAPS = "open_gaps"
 STATE_ANSWERED_QUESTIONS = "answered_questions"
@@ -115,6 +147,14 @@ STATE_NARRATIVE_CONTEXT = "narrative_composer_context"
 STATE_STRUCTURED_NARRATIVE = "structured_narrative"
 STATE_RUBRIC_LLM_CONTEXT = "rubric_llm_context"
 STATE_RUBRIC_LLM_RESULT = "rubric_llm_extras"
+STATE_LAST_CRITIC_VERDICT = "last_critic_verdict"
+STATE_INVESTIGATION_EPOCH = "investigation_epoch"
+STATE_OPEN_GAP_STREAK = "open_gap_streak"
+STATE_LAST_GAP_FINGERPRINT = "last_gap_fingerprint"
+STATE_INVESTIGATION_BUDGET = "investigation_budget"
+STATE_COMPOSER_EXTRA_EPISTEMIC_CAVEATS = "composer_extra_epistemic_caveats"
+STATE_SUPERVISOR_CYCLE_LIMIT_COMPOSE = "supervisor_cycle_limit_compose"
+STATE_RETRIEVAL_CACHE = "retrieve_tool_session_cache"
 
 RESULT_KEY_BY_AGENT = {
     "supply_chain_investigator_agent": STATE_SUPPLY_CHAIN_INVESTIGATOR_RESULT,
@@ -123,6 +163,8 @@ RESULT_KEY_BY_AGENT = {
     "gap_bridge_agent": STATE_GAP_BRIDGE_RESULT,
     "critic_agent": STATE_CRITIC_RESULT,
 }
+
+INVESTIGATION_ROLES_LITERALS = frozenset({"supply_chain", "governance_and_control", "policy_impact"})
 
 _MODEL_ALIASES = {
     "vertex-gemini-3-flash-preview": "gemini-3-flash-preview",
@@ -204,7 +246,26 @@ _PLACEHOLDER_LABEL_PATTERNS = [
         r"(?:facility|plant|producer|manufacturer|refinery|operator)\b",
         re.IGNORECASE,
     ),
+    # Explicit placeholder markers and schedule-style stubs.
+    re.compile(r"\(placeholder\)", re.IGNORECASE),
+    re.compile(r"\bplaceholder\s+(?:facility|plant|node|entity|operator)\b", re.IGNORECASE),
+    re.compile(r"\btbd\b", re.IGNORECASE),
+    re.compile(r"\bto\s+be\s+determined\b", re.IGNORECASE),
+    # Generic / unknown operational shells (narrow: requires generic|unknown + operational noun).
+    re.compile(
+        r"\b(?:generic|unknown)\s+(?:\w+\s+){0,4}(?:extraction|mining|processing|refining|battery)\s+(?:facility|plant|operator|producer)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bunknown\s+(?:\w+\s+){0,3}facility\b",
+        re.IGNORECASE,
+    ),
 ]
+# Extra cues applied only to hypothesis-supported edges to avoid false positives on document-grounded labels.
+_PLACEHOLDER_HYPOTHESIS_LABEL_HINTS = re.compile(
+    r"(?:\(placeholder\)|\bplaceholder\b|\btbd\b|\bto\s+be\s+determined\b|\bgeneric\s+\w+|\bunknown\s+\w+)",
+    re.IGNORECASE,
+)
 
 
 class _StateToolContext:
@@ -322,6 +383,12 @@ class StructuredOutputAgent(BaseAgent):
                 user_question=request_obj.question,
             )
             return SupervisorDecision.model_validate(d)
+        if self._output_schema is CriticAgentOutput:
+            if isinstance(payload, dict):
+                return CriticAgentOutput.model_validate(payload)
+            if isinstance(payload, BaseModel):
+                return CriticAgentOutput.model_validate(payload.model_dump(mode="json", by_alias=True))
+            return CriticAgentOutput.model_validate(payload)
         return self._output_schema.model_validate(payload)
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
@@ -338,6 +405,8 @@ class StructuredOutputAgent(BaseAgent):
                 else:
                     json_text = _extract_json_object(_response_json_text(response))
                     if self._output_schema is SupervisorDecision:
+                        result = self._finalize_parsed_output(ctx, json.loads(json_text))
+                    elif self._output_schema is CriticAgentOutput:
                         result = self._finalize_parsed_output(ctx, json.loads(json_text))
                     else:
                         result = self._output_schema.model_validate_json(json_text)
@@ -1593,7 +1662,8 @@ Current role selection context:
 {role_selector_context}
 """
 
-SUPERVISOR_INSTRUCTION = """
+SUPERVISOR_INSTRUCTION = (
+    """
 You are the AgentLoom supervisor.
 
 You orchestrate a Google ADK multi-agent investigation through shared session memory.
@@ -1602,98 +1672,18 @@ You operate inside a graph system specialized in meaningful connected chains of 
 Read only `supervisor_context`.
 
 Hard rules:
-- The environment epistemic mode is always `mixed`.
-- Selected roles define the scope. Every mission `assignedRoles` must be a non-empty subset of `selectedRoles`.
-- Use role contracts to decide what relations, entities, and gaps matter.
-- Colloquial commodity, element, or material phrases in the user question are shorthand for a **product-stage ladder** and operational flow, not permission to treat the phrase itself as a satisfactory source or sink node. Missions should deepen **PRODUCT** transforms and facility-backed edges, not stop at an abstract material label.
-- Country or region names in the user question are **geographic or market scope**, not operational actors. Missions should resolve them into **FACILITY/ORG/DEPOSIT/PRODUCT** nodes plus lawful geography overlays; never treat a region as if it produced, shipped, or consumed material without named typed nodes.
-- **Multiplicity is normal**: keep several parallel suppliers, receivers, or route families in play when the graph or question supports them. Prefer deepening the best-supported route family over silently collapsing alternatives unless the critic or reachability picture justifies closure.
-
-Gap quality principle — structural vs detail:
-Gaps come in two kinds. A STRUCTURAL gap means a connection is missing from the graph entirely — an entity has no typed edge to another entity where one should exist. A DETAIL gap means a connection exists but a quantitative attribute is unknown (exact percentage, volume, tonnage, cost, specific contract terms). Structural gaps are what drive investigation. Detail gaps are recorded but do NOT justify further investigation cycles. If you see only detail gaps remaining, that is sufficient for composition. When assessing `openGaps`, mentally classify each: does the graph already contain the typed edge? If yes, the gap is detail-level. Do not send another investigation pass for detail gaps.
-
-Stopping rule for a question:
-If questions about a topic are not yielding new typed edges (only refining attributes of known edges), and there are no other ways to find out (other questions, data, tools), stop investigating that topic. Accept the connection at the qualitative level.
-
-Reasoning pattern — decide what to do next based on the state of the graph:
-
-Candidate-path rule:
-- Read `state.candidatePaths` every cycle. Treat them as the current hypothesis space.
-- A `direct` path may be rejected while an `indirect` or `alternative` path remains viable. Rejected direct paths do NOT end the investigation if other candidate paths remain.
-- Do not reopen a candidate path already marked `rejected` unless a genuinely different source or relation family is now available.
-- If the best surviving path is `best_supported_indirect`, the next mission must deepen that indirect route instead of restating the failed direct route.
-
-Hypothesis loop rule:
-- Read `state.hypotheses` every cycle. Each hypothesis has its own status, frontier, and loop count.
-- Read `state.hypothesisFrontiers` every cycle. These are the freshest frontier signals discovered inside active hypotheses, including new route families, endpoint-resolution tasks, and bridge ideas.
-- Treat a hypothesis as a unit of investigation: first broad picture, then refinement, then judgment.
-- If a hypothesis is `active`, your next mission should usually continue that same hypothesis unless another hypothesis is clearly more central to the user question.
-- If a hypothesis is `accepted`, move on unless the user question still explicitly requires alternatives or a missing complementary hypothesis.
-- If a hypothesis is `rejected`, do not reopen it unless the next mission would test a genuinely different route, endpoint set, or relation family.
-- If a hypothesis is `stalled` or `deferred`, only revisit it if a newly available tool/source or another hypothesis result gives it a new angle.
-- New hypotheses are allowed only when the current graph or question makes them relevant. Do not invent sibling hypotheses by default. When one plausible route is accepted but the question still asks for alternatives, it is appropriate to open a new `alternative` hypothesis.
-- Shared memory is mutable. If an earlier branch returned `replace_node` or `replace_fragment`, assume the runtime already applied that patch to the working graph before this cycle. Reason from the replacement graph now present in state, not from the superseded placeholder graph.
-- Dependent follow-up branches are not separate hypothesis graphs. They are refinements that mutate or extend the current hypothesis graph and then merge back into it. Treat them as slot-filling or layer-refining work unless they clearly reveal a materially different route family.
-
-Question-coverage rule:
-- Every cycle, compare the original user question against the current graph and hypothesis set. A structurally good graph is still incomplete if an explicit ask from the user question remains uncovered.
-- Typical uncovered asks include: alternative routes, real source endpoints, real sink endpoints, ownership/control overlay, policy or workaround paths.
-- If one route is already usable but the user explicitly asked for alternatives, it is often correct to open an `independent_child` alternative hypothesis even while dependent follow-up branches continue refining the current route.
-- If countries, markets, sectors, or broad placeholder nodes are still acting as fake endpoints or fake intermediaries, prefer a mission that resolves real source-side or sink-side entities before declaring the graph sufficiently covered.
-- If the current broad hypothesis already contains two or more materially different route families (different jurisdictions, technologies, intermediary classes, or workaround patterns), do not leave them buried inside one overview forever. Once each route family is investigable on its own, it is often correct to split them into separate hypotheses: keep one hot path in refinement and spawn the others as `independent_child` hypotheses.
-- If an active hypothesis recently surfaced an alternative route or frame-shift question in `state.hypothesisFrontiers.discoveredFrontier`, do not silently ignore it. Either dispatch it, or explain in your rationale why a different structural gap is more urgent first.
-
-1. Graph is empty: your first mission must ask for one complete hypothesis-level answer to the user's question as a connected graph. Not pieces. Not layers. The whole thing, even if rough. The graph shape can be anything — chain, tree, star, network — whatever fits the question. Mission phrasing must say: "Answer the question as one connected hypothesis graph. Every uncertain edge should have low confidence and supportType=hypothesis."
-2. Graph has a hypothesis skeleton: look at `state.frontierSummary` and find the weakest joints — edges with lowest confidence, hypothesis supportType, or missing actors. Your next missions must target those specific weak spots. Do not decompose by domain layer ("do upstream, then midstream, then downstream"). Decompose by confidence gradient: what is weakest in the current graph? Phrasing: "Verify or improve these specific weak edges: [list them]."
-   **Mission-focus discipline (anti-bloat):** after the initial hypothesis-building mission, **each** next mission must have **one** primary purpose: either (a) **one** concrete break-point from `reachability.partialChainBreakPoints` / weakest hop on a structural chain, or (b) **one** `openGaps` item you can operationalize with new endpoints or relation class—**not** a second full-chain restatement that re-bundles ownership + policy + end-to-end flow like the first mission. If the last mission was already multi-theme, the next mission must be **narrower** (single role, single bridge, or single gap class).
-3. Hypothesis falsified: if after a verification cycle the synthesizer reports more contradicted edges than verified ones, do not keep patching. Keep verified pieces as standalone facts. Either (a) formulate an alternative hypothesis if the synthesizer suggested one, or (b) accept that the connection could not be established — possibly due to secrecy, obfuscation, or a wrong hypothesis — and move to compose.
-4. Frame shift: after the main verification loop or after falsification, ask: "Is there a completely different angle to approach this question?" If the synthesizer or critic suggested an alternative frame, explore it as one more investigation cycle. If not, move on.
-5. REACHABILITY HEALTH CHECK (mandatory from cycle 2 onward): read `state.reachability` before choosing your next focus. This field shows:
-   - `groundedCompleteChains` (and `completeChainCount`): document-grounded end-to-end flow paths to a valid terminal sink (no hypothesis-only hops in that chain class).
-   - `structurallyCompleteChains` (and `structuralChainCount`): end-to-end paths to a valid terminal sink that are **connected** but **not** fully document-grounded (hypothesis, model_knowledge, or mixed strength). Useful skeletons; not proof of a grounded operational backbone.
-   - `partialChains`: paths that stop short of a valid terminal sink (dead end or non-terminal stop). Break points here are the usual structural-gap anchors.
-   - `bridgeCandidates`: entities that exist in governance/policy layers but are not connected to any flow chain. They need a flow edge (SUPPLIES_TO, PRODUCES, EXTRACTS_FROM) to become useful.
-   - `healthSummary`: one-line assessment.
-   If the reachability report shows **partial chains** (dead ends) or **no grounded complete chains** (`completeChainCount` == 0), your next mission MUST target those break points with `supply_chain_investigator_agent` or `gap_bridge_agent`. A **structurally complete** weak chain alone is not proof of a **grounded** backbone. **While `completeChainCount` == 0 and `state.progress.stagnationCount` < 2, you must NOT** choose `governance_and_control_investigator_agent` or `policy_impact_investigator_agent` as the next delegate—ownership and regulatory overlays must wait until there is at least one **grounded** complete chain **or** until the exception below fires. Name specific break-point entities in the mission. Example: "Connect [upstream entity] to [downstream entity] via a SUPPLIES_TO or PRODUCES edge."
-   **Exception (stalled flow tools only):** if `stagnationCount` >= 2 **and** the last **two** completed delegates were each `supply_chain_investigator_agent` or `gap_bridge_agent` **and** neither run added any new **flow** observation with `supportType` in `document` or `mixed`, you may send **one** narrow `governance_and_control_investigator_agent` **or** `policy_impact_investigator_agent` mission tied to an explicit `openGaps` item—then the following cycle must return to flow break-point work unless the critic endorses composition.
-   **Narrow exception (same cycle only as a detour, not a substitute):** you may dispatch **one** concise `supply_chain_investigator_agent` mission whose **only** purpose is **adjacent-frame** context or an explicit **market-shape prior**—recorded strictly as `learnedFindings` and/or `hypothesis` / `model_knowledge` observations with **low confidence**, never presented as document-grounded flow. Use this **sparingly** when repeated break-point missions are not adding typed edges but omitting the adjacent context would mislead the user about decision-relevant neighborhood. The **next** cycle must return priority to break-point closure until the critic endorses compose with an honest indirect or prior-heavy answer. This exception does **not** waive the rule against treating governance/policy work as a replacement for missing operational edges.
-6. Dimension coverage vs flow closure: before sending to critic, compare the user's question against `selectedRoles` and the graph. **Do not** use sparse `graphPreviewByRole` governance or policy rows to justify skipping flow work while `completeChainCount` == 0—close or honestly stall **grounded** flow first per step 5. Once `completeChainCount` >= 1 (or the step-5 exception already fired and you returned to flow), if a role dimension is still clearly under-covered relative to the user question, send **one** targeted pass for that role. Do not send to critic until each selected role has minimal overlay **subject to** reachability-first ordering above. For publicly verifiable ownership or regulation facts, prefer `web_search`; for internal evidence, prefer `retrieve`.
-7. Frontier hygiene: before deciding, scan `openGaps` and `frontierSummary.remainingFrontier` for questions that were generated but never dispatched. If any structural frontier question has been sitting for 2+ cycles without a branch assigned to it, either dispatch it now or explicitly deprioritize it in your rationale. Do not let structural questions silently accumulate.
-8. Coverage sufficient or no further progress: send to critic, then compose.
-
-- Use `state.progress` and `state.frontierSummary` to judge whether recent investigation passes are materially improving graph quality, source coverage, and gap closure.
-- Treat fake typed anchors as structural weakness, not as acceptable closure. If the graph still relies on broad placeholders where concrete ORG/FACILITY/DEPOSIT/PRODUCT or other role-valid nodes should exist, the graph is not yet structurally healthy.
-- Stagnation / tool hygiene: if `state.progress.stagnationCount` is **3 or higher**, prefer `critic_agent` over another specialized-investigator pass unless the last completed investigator run added **at least 6 new** `graphObservationCount` with grounded support (`document` or `mixed`).
-- Repeated-gap rule: if the same structural gap or same bridge question has survived across 2+ recent cycles, and the newest missions only rename or narrow the same unresolved bridge without replacing at least one weak flow edge by a grounded one, stop opening more refinement branches of that class. Send the current graph to `critic_agent` and ask whether the honest answer is now "best-supported indirect route plus explicit missing direct evidence".
-- Child-hypothesis saturation rule: if a parent hypothesis already has multiple dependent follow-up branches and they keep returning `still_open` with the same break point entities, do not keep spawning sibling refinements under that parent forever. Escalate to `critic_agent` unless a genuinely new relation family or endpoint set appeared in `state.hypothesisFrontiers.discoveredFrontier`.
-- If `state.failureCount` is rising and failures mention invalid JSON or truncation, do **not** repeat the same broad mission: narrow to one bridge question and prefer `web_search` for public facts.
-- Mission wording: do **not** restate questions that already appear verbatim or paraphrased in `openGaps` / `lastAgentResult.nextQuestions`. If the investigator must revisit a theme, change endpoints or relation class so the mission is not a duplicate pass.
-- **Anti-double-tap:** do not immediately follow `gap_bridge_agent` with `supply_chain_investigator_agent` when both missions target the **same** unresolved hop (same product stage / facility pair class). Either wait for the gap-bridge outcome to change the frontier, or if stagnation is already high, prefer `critic_agent` instead of a second similar supply mission.
-- Delegate substantive discovery only to the role-specialized investigators:
-  - `supply_chain_investigator_agent`
-  - `governance_and_control_investigator_agent`
-  - `policy_impact_investigator_agent`
-- Delegate bridging only to `gap_bridge_agent`, and only when the graph already has partial structure plus unresolved gaps that need connection.
-- Delegate sufficiency and honesty assessment only to `critic_agent`.
-- For a role-specialized investigator mission, `assignedRoles` must contain exactly one role, and it must match the specialization of the selected investigator agent.
-- Cross-role coverage happens through multiple investigator missions over time, not through one multi-role specialized-investigator mission.
-- When `nextAgent` is a role-specialized investigator, `gap_bridge_agent`, or `critic_agent`, `mission` is mandatory. It must never be null.
-- **JSON checklist (the parser enforces this):** if `nextAgent` is not `compose` or `stop`, you MUST include a `mission` object with:
-  - `missionId` (string),
-  - `objective` (non-empty string),
-  - `groundingMode` (one of `knowledge_only`, `mixed`, `corpus_required` — use `mixed`),
-  - `assignedRoles` (non-empty string array; subset of `selectedRoles`; for a role-specialized investigator agent, exactly one role matching that agent).
-- A `critic_agent` mission must explicitly ask whether the current graph is sufficient to compose honestly, given reachability, role coverage, and unresolved structural gaps.
-- Choose `compose` only after the critic explicitly recommends composition.
-- Choose `stop` only when the real tool set and current memory make further progress impossible.
-- If recent progress has flattened, prefer asking `critic_agent` whether the current graph should be composed honestly rather than sending another broad investigation pass.
-- Do not invent hidden branch runners, hidden corpora, hidden search, or capabilities that are not in `toolContracts` or `toolAvailability`.
-
+"""
+    + SUPERVISOR_RUNTIME_NOTE
+    + SUPERVISOR_RULES_CORE
+    + SUPERVISOR_RULES_REACHABILITY
+    + SUPERVISOR_RULES_ANTI_BLOAT
+    + """
 Return exactly one JSON object matching SupervisorDecision.
 
 Current supervisor context:
 {supervisor_context}
 """
+)
 
 INVESTIGATOR_PLANNER_INSTRUCTION = """
 You are the internal mission planner for one role-specialized investigator agent.
@@ -1721,6 +1711,7 @@ Branching strategy — decide based on graph state, not domain:
 
 Hypothesis loop guidance:
 - Read `sharedMemory.hypotheses` before planning branches.
+- Read `sharedMemory.entityRegistrySummary` before planning branches: it lists recent hypothesis-local entity merges (lineage after `replace_node` / `replace_fragment`) and the largest equivalence classes—do not re-open a graph slot that already merged into a canonical endpoint unless you are widening evidence, not re-adding a duplicate node.
 - Read `sharedMemory.hypothesisFrontiers` before planning branches. This is the clearest feed of what the currently active hypotheses just discovered versus what they still need to refine.
 - If there is one `active` hypothesis with an existing broad picture and unresolved frontier, prefer refining that same hypothesis over inventing a new one.
 - If an `accepted` hypothesis answers only one route and the user explicitly asked for alternatives, you may create a sibling `alternative` hypothesis branch.
@@ -1757,6 +1748,8 @@ Investigation-shape guidance:
 
 Dedup and breadth (mandatory):
 - Read `sharedMemory.reasoningDedupHints`. Do **not** set a branch `humanQuestion` that repeats the same intent as any string in `openStructuralGapTexts`, `recentlyAnsweredQuestions`, `lastAgentNextQuestions`, or `recentBranchHumanQuestions` unless you are targeting a **different** typed link (different subject/object or relation).
+- **Placeholder branches:** if `sharedMemory.placeholderNodes` is non-empty, include **at least one** branch whose `knownContext` names a specific placeholder label or `oldId` from the graph and asks for resolution or a mergeable fragment that can drive `replace_node` / `replace_fragment`.
+- **Dedup vs targets:** repeating the same *question template* is **not** a duplicate if the **target node** changes (different subject/object endpoint, different `oldId`, or a different entry from `placeholderNodes`).
 - If the working graph still lacks a multi-hop **operational backbone**, prefer **one** branch that asks for a **coarse end-to-end or parallel-route chain** (multiple hops in one answer) over several branches that each chase overlapping micro-hops.
 - Defer narrow legal/importer micro-questions until at least one plausible supplier→customer flow path exists; those are detail-heavy and duplicate easily.
 
@@ -1782,6 +1775,7 @@ Rules:
 - Multiple branches may belong to the same parent hypothesis and still run in parallel. They should share a `parallelGroup` when they are sibling dependent follow-ups that merge back into the same hypothesis loop.
 - If a branch is meant to replace a broad placeholder with a concrete node or fragment, plan it so the returned fragment can occupy that old slot in the graph after mutation. Think in terms of graph replacement, not side commentary.
 - If several branch ideas would all land on the same source layer, sink layer, intermediary layer, or ownership layer of the same hypothesis graph, prefer a small number of dependent branches that return mergeable graph fragments. Do not create multiple pseudo-independent chains just because several candidate nodes might fill the same slot.
+- **Slots (`slotId` / `slotRole` on observations):** when refining the same sink/source layer, reuse the same `slotId` on new flow edges so the runtime can treat updates as one slot. Only use a new `slotId` when the graph position is genuinely a different role. If two concrete candidates are alternatives, separate them with `alternativeGroupId`, not duplicate `slotId` values with unrelated endpoints.
 - The `humanQuestion` must be the exact question that will later be shown to the user in the frontend.
 - The `humanAction` must be the exact action sentence that will later be shown to the user in the frontend.
 - A follow-up branch question must mention what is already known and what exact gap remains.
@@ -1821,6 +1815,7 @@ The context includes a `reachability` field computed from the full working graph
 - `structurallyCompleteChains`: terminal-reachable paths that remain weak or hypothetical on at least one hop
 - `partialChains`: paths that stop before a valid terminal sink
 - `bridgeCandidates`: entities present in governance/policy layer but not connected to any flow chain
+- `routeFamilies`: deduplicated route fingerprints with `multiplicity` (near-duplicate paths collapse here); treat high multiplicity with `narrativeDuplicate=true` as one route family, not many independent discoveries
 - `healthSummary`: one-line assessment
 Read this field first. If there are **partial chains**, their break point is the highest-priority structural gap. If **structurally complete** chains exist but **grounded** chains do not, say that the skeleton is terminal-connected but not document-grounded. If bridgeCandidates lists entities known to governance but not to flow, those need a SUPPLIES_TO, PRODUCES, or EXTRACTS_FROM edge.
 Report the reachability health in `crossBranchAssessment`. If no **grounded** complete chain exists, say so explicitly and name the break point(s) on partial chains (or the weakest hop on a structural chain).
@@ -1882,7 +1877,10 @@ The unit of reasoning is "what graph mutation or graph-closing action should hap
 Hard rules:
 - The original user question still governs the hypothesis. Do not forget it.
 - Read the current hypothesis graph, recent turn history, remainingFrontier, discoveredFrontier, and parallel branch summaries before deciding.
+- If `hypothesisGraph.placeholderNodes` is non-empty, prioritize `nextTurn` / `followupBranches` that **resolve or replace** those placeholders (concrete nodes or `replace_node`/`replace_fragment` design) over `accept_hypothesis` until the list is cleared or explicitly replaced.
 - Treat the hypothesis graph as mutable shared state for this hypothesis. Recent patch fragments already changed the graph you are looking at.
+- Read `entityRegistrySummary` for this hypothesis: it shows which node ids merged after replacements—do not plan a turn that reintroduces a tombstoned id or duplicates a slot already merged unless you are splitting alternatives with `alternativeGroupId`.
+- **Slot discipline:** when emitting `replace_node` for a graph slot, keep the same `slotId` on the replacement edges that fill that slot (object endpoint). Use `alternativeGroupId` when two real endpoints are meant to coexist as alternatives.
 - Every useful result is still a result. Reuse learned findings, including negative results and contractual context, instead of re-asking the same thing.
 - Use one of these outcomes only:
   - `ask_next_question_same_hypothesis`
@@ -1950,7 +1948,8 @@ Current turn context:
 {hypothesis_turn_context}
 """
 
-GAP_BRIDGE_INSTRUCTION = """
+GAP_BRIDGE_INSTRUCTION = (
+    """
 You are `gap_bridge_agent`.
 
 Use only `gap_bridge_context`.
@@ -1962,7 +1961,17 @@ Rules:
 - `activeRoles` must match the mission assignedRoles.
 - Only produce relations allowed by the active role contracts.
 - Only propose new graph observations when they are explicit hypotheses or bridge candidates. Use `supportType=hypothesis`.
-- Keep the response compact enough to fit one strict JSON object: at most 18 graph observations, 6 answeredQuestions, 8 gaps, 6 nextQuestions, and 4 handoffRecommendations.
+- Keep the response compact enough to fit one strict JSON object: at most """
+    + str(MAX_GRAPH_DELTA_OBSERVATIONS)
+    + """ graph observations, """
+    + str(MAX_ANSWERED_QUESTIONS)
+    + """ answeredQuestions, """
+    + str(MAX_GAPS)
+    + """ gaps, """
+    + str(MAX_NEXT_QUESTIONS)
+    + """ nextQuestions, and """
+    + str(MAX_HANDOFF_RECOMMENDATIONS)
+    + """ handoffRecommendations.
 - Do not restate the graph. Add only bridging hypotheses or targeted nextQuestions.
 - Name the frontier you are trying to connect or clarify.
 - If no useful bridge is possible, say so and hand off to `critic_agent` or the appropriate role-specialized investigator agent.
@@ -1973,12 +1982,22 @@ Return exactly one JSON object matching AgentResult.
 Gap bridge context:
 {gap_bridge_context}
 """
+)
 
-CRITIC_INSTRUCTION = """
+CRITIC_INSTRUCTION = (
+    """
 You are `critic_agent`.
 
 Use only `critic_context`.
 You operate inside a graph system and judge whether the current graph is connected and decision-useful enough for the question asked.
+
+"""
+    + PROMPT_UNTRUSTED_USER_CORPUS
+    + """
+
+Required JSON fields (in addition to AgentResult fields such as agentName, missionId, status, summary, graphDelta, gaps):
+- compositionRecommendation: one of "recommend" | "do_not_recommend" | "conditional"
+- compositionConditions: string array; MUST be non-empty when compositionRecommendation is "conditional" (epistemic caveats the composer must honor)
 
 Gap quality principle — structural vs detail:
 When evaluating `openGaps`, classify each: does the graph already contain a typed edge for this connection? If yes, the gap is about quantitative detail (percentage, volume, cost) — it is a DETAIL gap and does NOT block composition. Only gaps where a typed connection is entirely absent are STRUCTURAL gaps. If only detail gaps remain, recommend composition.
@@ -1999,7 +2018,17 @@ Rules:
 - Read the graph after mutation, not before it. If recent branch results used `replace_node` or `replace_fragment`, judge sufficiency against the replacement graph now in shared memory rather than against the superseded placeholder graph.
 - Use `sharedMemory.candidatePaths` and `reachability` together. If the direct path is rejected but one indirect path is already the best supported explanation, do not ask for more broad discovery; either ask for the remaining unresolved hop on that indirect route or recommend composition with an explicit indirect-path answer.
 - In mixed mode with no grounding, assess whether the graph is still useful and explicit about its limits.
-- Keep the response compact enough to fit one strict JSON object: at most 18 graph observations, 6 answeredQuestions, 8 gaps, 6 nextQuestions, and 4 handoffRecommendations.
+- Keep the response compact enough to fit one strict JSON object: at most """
+    + str(MAX_GRAPH_DELTA_OBSERVATIONS)
+    + """ graph observations, """
+    + str(MAX_ANSWERED_QUESTIONS)
+    + """ answeredQuestions, """
+    + str(MAX_GAPS)
+    + """ gaps, """
+    + str(MAX_NEXT_QUESTIONS)
+    + """ nextQuestions, and """
+    + str(MAX_HANDOFF_RECOMMENDATIONS)
+    + """ handoffRecommendations.
 - If the current graph is sufficient for an honest answer AND has at least one grounded complete flow chain, recommend composition explicitly.
 - If recent investigation passes are no longer materially improving graph quality or source coverage, recommend composition explicitly even if unresolved gaps remain; the final answer must then surface those gaps honestly.
 - If only detail gaps remain (quantitative attributes of known connections), recommend composition. The graph is structurally complete.
@@ -2009,13 +2038,16 @@ Rules:
 - For supply-chain analysis, use the ideal supply-chain profile below as a diagnostic frame: identify which profile layers are still missing and whether re-query should be holistic or targeted.
 - Use `failure` only when you truly cannot assess the state you were given.
 
-""" + SUPPLY_CHAIN_PROFILE_CONTRACT + """
+"""
+    + SUPPLY_CHAIN_PROFILE_CONTRACT
+    + """
 
-Return exactly one JSON object matching AgentResult.
+Return exactly one JSON object matching CriticAgentOutput (AgentResult-compatible fields plus compositionRecommendation and compositionConditions).
 
 Critic context:
 {critic_context}
 """
+)
 
 NARRATIVE_COMPOSER_INSTRUCTION = """
 You are `narrative_composer`.
@@ -2079,6 +2111,7 @@ def read_shared_memory(tool_context) -> dict[str, Any]:
     turns = [HypothesisTurn.model_validate(item) for item in (tool_context.state.get(STATE_HYPOTHESIS_TURNS) or [])]
     findings = _load_learned_findings(tool_context.state)
     return {
+        "securityNote": PROMPT_UNTRUSTED_USER_CORPUS,
         "question": request.question,
         "requestedRoles": request.requested_roles,
         "selectedRoles": selected_roles,
@@ -2137,6 +2170,7 @@ def read_corpus_document(document_id: str, tool_context) -> dict[str, Any]:
         if doc.document_id == document_id:
             return {
                 "ok": True,
+                "securityNote": PROMPT_UNTRUSTED_USER_CORPUS,
                 "document": {
                     "documentId": doc.document_id,
                     "title": doc.title,
@@ -2485,6 +2519,120 @@ def _observation_references_ids(observation: GraphObservation, ids: set[str]) ->
     return bool(ids) and ((observation.subject_id or "") in ids or (observation.object_id or "") in ids)
 
 
+def _graph_endpoint_identity_pair(node_id: str, entity_type: str, label: str) -> set[str]:
+    """Explicit id plus deterministic label slug id (same rule as _observation_ids)."""
+    pair: set[str] = set()
+    if node_id and str(node_id).strip():
+        pair.add(str(node_id).strip())
+    slug_id = f"{_slug(entity_type or 'entity')}:{_slug(label)}"
+    if slug_id and slug_id.strip():
+        pair.add(slug_id.strip())
+    return pair
+
+
+def _graph_endpoint_identity_tokens(observation: GraphObservation) -> set[str]:
+    o = _observation_ids(observation)
+    out: set[str] = set()
+    out |= _graph_endpoint_identity_pair(o.subject_id, o.subject_type, o.subject)
+    out |= _graph_endpoint_identity_pair(o.object_id, o.object_type, o.object)
+    out.discard("")
+    return out
+
+
+def _removal_id_closure(all_observations: list[GraphObservation], seed_ids: set[str]) -> set[str]:
+    """Expand explicit tombstone ids with label-derived ids for endpoints that already touch the seed.
+
+    Only endpoints whose (id ∪ synthetic) intersects the closure are merged in — not the other
+    endpoint of the same edge — so we do not walk the whole graph and delete unrelated edges.
+    """
+    closure: set[str] = {x.strip() for x in seed_ids if isinstance(x, str) and x.strip()}
+    if not closure:
+        return set()
+
+    normalized: list[GraphObservation] = []
+    for raw in all_observations:
+        try:
+            if isinstance(raw, GraphObservation):
+                normalized.append(_observation_ids(raw))
+            else:
+                normalized.append(_observation_ids(GraphObservation.model_validate(raw)))
+        except Exception:
+            continue
+
+    for _ in range(64):
+        changed = False
+        for o in normalized:
+            delta: set[str] = set()
+            for nid, typ, lab in (
+                (o.subject_id, o.subject_type, o.subject),
+                (o.object_id, o.object_type, o.object),
+            ):
+                pair = _graph_endpoint_identity_pair(str(nid or ""), typ, lab)
+                if pair & closure:
+                    delta |= pair
+            if delta - closure:
+                closure |= delta
+                changed = True
+        if not changed:
+            break
+    return closure
+
+
+def _observation_touches_removal_zone(observation: GraphObservation, zone: set[str]) -> bool:
+    if not zone:
+        return False
+    return bool(_graph_endpoint_identity_tokens(observation) & zone)
+
+
+_FLOW_EDGE_RELATIONS = {
+    "PRODUCES",
+    "SUPPLIES_TO",
+    "TRANSFORMS_INTO",
+    "ASSEMBLES_INTO",
+    "USED_IN",
+    "EXTRACTS_FROM",
+}
+
+
+def _flow_orphan_hints_after_patch(
+    graph: list[GraphObservation],
+    focus_observations: list[GraphObservation],
+) -> list[str]:
+    """Heuristic: new/changed endpoints with missing in- or out-degree on flow relations only."""
+    g = [_observation_ids(o) for o in graph]
+    focus_nodes: set[str] = set()
+    for raw in focus_observations:
+        try:
+            oo = _observation_ids(GraphObservation.model_validate(raw) if not isinstance(raw, GraphObservation) else raw)
+        except Exception:
+            continue
+        for n in (oo.subject, oo.object):
+            if n and str(n).strip():
+                focus_nodes.add(str(n).strip())
+    if not focus_nodes:
+        return []
+
+    out_deg: dict[str, int] = {}
+    in_deg: dict[str, int] = {}
+    for o in g:
+        if o.relation not in _FLOW_EDGE_RELATIONS:
+            continue
+        s, t = o.subject, o.object
+        if s and t:
+            out_deg[s] = out_deg.get(s, 0) + 1
+            in_deg[t] = in_deg.get(t, 0) + 1
+
+    hints: list[str] = []
+    for n in sorted(focus_nodes)[:24]:
+        ins = in_deg.get(n, 0)
+        outs = out_deg.get(n, 0)
+        if ins == 0 and outs > 0:
+            hints.append(f"{n}: no incoming flow edge among {sorted(_FLOW_EDGE_RELATIONS)} (possible upstream orphan)")
+        elif outs == 0 and ins > 0:
+            hints.append(f"{n}: no outgoing flow edge among {sorted(_FLOW_EDGE_RELATIONS)} (possible downstream orphan)")
+    return hints[:8]
+
+
 def _fragment_with_recomputed_boundaries(fragment: GraphFragment, observations: list[GraphObservation]) -> GraphFragment | None:
     if not observations:
         return None
@@ -2522,6 +2670,7 @@ def _apply_graph_fragment_mutations(
         _observation_ids(GraphObservation.model_validate(item))
         for item in (state.get(STATE_WORKING_GRAPH) or [])
     ]
+    pre_merge_observation_count = len(existing_graph)
     existing_fragments = [
         _fragment_with_recomputed_boundaries(GraphFragment.model_validate(item), GraphFragment.model_validate(item).observations)
         for item in (state.get(STATE_GRAPH_FRAGMENTS) or [])
@@ -2547,6 +2696,9 @@ def _apply_graph_fragment_mutations(
 
     replaced_fragment_ids: set[str] = set()
     replaced_node_ids: set[str] = set()
+    session_removal_zone: set[str] = set()
+    patch_summaries: list[dict[str, Any]] = []
+    last_incoming_observations: list[GraphObservation] = []
 
     for fragment in incoming_fragments:
         normalized_fragment = _fragment_with_recomputed_boundaries(fragment, fragment.observations)
@@ -2561,26 +2713,75 @@ def _apply_graph_fragment_mutations(
                 continue
         target_ids = _patch_target_ids(normalized_fragment)
         if normalized_fragment.patch_mode == "replace_fragment":
+            pre_merge_flat = _flatten_fragments(merged_fragments)
+            removed_frags = [item for item in merged_fragments if item.fragment_id in target_ids]
+            removed_flat = _flatten_fragments(removed_frags)
+            frag_seed: set[str] = set()
+            for o in removed_flat:
+                frag_seed |= _graph_endpoint_identity_tokens(o)
+            ambient_f = [*residual_graph, *pre_merge_flat, *normalized_fragment.observations]
+            zone_f = _removal_id_closure(ambient_f, frag_seed)
+            session_removal_zone |= zone_f
             replaced_fragment_ids.update(target_ids)
             merged_fragments = [item for item in merged_fragments if item.fragment_id not in target_ids]
+            patch_summaries.append(
+                {
+                    "fragmentId": normalized_fragment.fragment_id,
+                    "patchMode": "replace_fragment",
+                    "targetFragmentIds": sorted(target_ids),
+                    "removalZoneSize": len(zone_f),
+                }
+            )
+            _registry_record_patch(
+                state,
+                branch_id=normalized_fragment.branch_id,
+                fragment_id=normalized_fragment.fragment_id,
+                patch_mode="replace_fragment",
+                removal_zone=zone_f,
+                incoming_observations=list(normalized_fragment.observations),
+                explicit_seeds=set(),
+            )
         elif normalized_fragment.patch_mode == "replace_node":
-            replaced_node_ids.update(target_ids)
-            tombstoned_node_ids.update(target_ids)
+            seed = set(target_ids)
+            ambient_n = [*residual_graph, *_flatten_fragments(merged_fragments), *normalized_fragment.observations]
+            removal_zone = _removal_id_closure(ambient_n, seed)
+            session_removal_zone |= removal_zone
+            replaced_node_ids.update(seed)
+            tombstoned_node_ids.update(seed)
             patched_fragments: list[GraphFragment] = []
             for existing_fragment in merged_fragments:
                 kept_observations = [
-                    obs for obs in existing_fragment.observations if not _observation_references_ids(obs, target_ids)
+                    obs for obs in existing_fragment.observations if not _observation_touches_removal_zone(obs, removal_zone)
                 ]
                 updated_fragment = _fragment_with_recomputed_boundaries(existing_fragment, kept_observations)
                 if updated_fragment is not None:
                     patched_fragments.append(updated_fragment)
             merged_fragments = patched_fragments
+            patch_summaries.append(
+                {
+                    "fragmentId": normalized_fragment.fragment_id,
+                    "patchMode": "replace_node",
+                    "explicitOldIds": sorted(seed),
+                    "removalZoneSize": len(removal_zone),
+                }
+            )
+            _registry_record_patch(
+                state,
+                branch_id=normalized_fragment.branch_id,
+                fragment_id=normalized_fragment.fragment_id,
+                patch_mode="replace_node",
+                removal_zone=removal_zone,
+                incoming_observations=list(normalized_fragment.observations),
+                explicit_seeds=set(seed),
+            )
 
         merged_fragments = [item for item in merged_fragments if item.fragment_id != normalized_fragment.fragment_id]
         merged_fragments.append(normalized_fragment)
+        if normalized_fragment.observations:
+            last_incoming_observations = list(normalized_fragment.observations)
 
-    if replaced_node_ids:
-        residual_graph = [item for item in residual_graph if not _observation_references_ids(item, replaced_node_ids)]
+    if session_removal_zone:
+        residual_graph = [item for item in residual_graph if not _observation_touches_removal_zone(item, session_removal_zone)]
 
     fragment_graph, merge_result = _merge_graph_observation_lists(residual_graph, _flatten_fragments(merged_fragments))
     state[STATE_GRAPH_FRAGMENTS] = [item.model_dump(mode="json", by_alias=True) for item in merged_fragments]
@@ -2600,6 +2801,37 @@ def _apply_graph_fragment_mutations(
     if replaced_node_ids:
         result["replacedNodeIds"] = sorted(replaced_node_ids)
     result["graphFragmentCount"] = len(merged_fragments)
+    result["removalZoneSize"] = len(session_removal_zone)
+    result["removalZoneSample"] = sorted(session_removal_zone)[:24]
+    result["workingGraphObservationDelta"] = len(fragment_graph) - pre_merge_observation_count
+
+    orphan_hints = _flow_orphan_hints_after_patch(fragment_graph, last_incoming_observations)
+    result["orphanFlowHints"] = orphan_hints
+
+    slot_gaps = _detect_slot_endpoint_conflicts(fragment_graph)
+    if slot_gaps:
+        record_open_gaps(
+            slot_gaps,
+            _StateToolContext(state),
+            origin="slotContract",
+            cycle=int(state.get(STATE_SUPERVISOR_CYCLE, 0) or 0),
+        )
+
+    log_entry: dict[str, Any] = {
+        "patchSummaries": patch_summaries,
+        "explicitReplacedNodeIds": sorted(replaced_node_ids),
+        "replacedFragmentIds": sorted(replaced_fragment_ids),
+        "removalZoneSize": len(session_removal_zone),
+        "removalZoneSample": sorted(session_removal_zone)[:24],
+        "workingGraphObservationsBefore": pre_merge_observation_count,
+        "workingGraphObservationsAfter": len(fragment_graph),
+        "mergeResult": {k: merge_result[k] for k in sorted(merge_result.keys()) if k in {"appended", "graphObservationCount", "reversedEdges", "droppedInvalidEdges"}},
+        "orphanFlowHints": orphan_hints,
+    }
+    history = [item for item in (state.get(STATE_GRAPH_MUTATION_LOG) or []) if isinstance(item, dict)]
+    history.append(log_entry)
+    state[STATE_GRAPH_MUTATION_LOG] = history[-24:]
+
     return result
 
 
@@ -2865,6 +3097,262 @@ def _observation_ids(observation: GraphObservation) -> GraphObservation:
             "object_id": observation.object_id or f"{_slug(observation.object_type or 'entity')}:{_slug(observation.object)}",
         }
     )
+
+
+def _synthetic_id_for_endpoint(entity_type: str, label: str) -> str:
+    return f"{_slug(entity_type or 'entity')}:{_slug(label)}"
+
+
+def _label_looks_like_placeholder(label: str) -> bool:
+    text = label or ""
+    for pat in _PLACEHOLDER_LABEL_PATTERNS:
+        if pat.search(text):
+            return True
+    return bool(_PLACEHOLDER_HYPOTHESIS_LABEL_HINTS.search(text))
+
+
+def _canonical_entity_key(node_id: str, entity_type: str, label: str) -> str:
+    """Hypothesis-local identity key: type slug + label slug, or id:<slug(id)> when id is explicit and not the synthetic slug id."""
+    nid = (node_id or "").strip()
+    synthetic = _synthetic_id_for_endpoint(entity_type, label)
+    if nid and nid != synthetic and not _label_looks_like_placeholder(label):
+        return f"id:{_slug(nid)}"
+    return synthetic
+
+
+def _load_hypothesis_entity_registry(state: dict[str, Any]) -> dict[str, Any]:
+    raw = state.get(STATE_HYPOTHESIS_ENTITY_REGISTRY)
+    if isinstance(raw, dict):
+        return raw
+    return {"byBranch": {}, "lineageEvents": []}
+
+
+def _save_hypothesis_entity_registry(state: dict[str, Any], registry: dict[str, Any]) -> None:
+    state[STATE_HYPOTHESIS_ENTITY_REGISTRY] = registry
+
+
+def _registry_rebuild_classes(branch: dict[str, Any]) -> None:
+    id_map: dict[str, str] = branch.get("idToCanonical") or {}
+    classes: dict[str, list[str]] = {}
+    for nid, canon in id_map.items():
+        classes.setdefault(canon, []).append(nid)
+    for key in classes:
+        classes[key] = sorted(set(classes[key]))
+    branch["classes"] = classes
+
+
+def _registry_merge_equivalence(reg: dict[str, Any], branch_id: str, canon: str, touched_ids: set[str]) -> None:
+    """Point every id that shares an old class with touched_ids at canon (hypothesis-local merge)."""
+    by_branch = reg.setdefault("byBranch", {})
+    branch = by_branch.setdefault(branch_id, {"idToCanonical": {}, "classes": {}})
+    id_map: dict[str, str] = branch["idToCanonical"]
+    keys: set[str] = {canon}
+    for tid in touched_ids:
+        if tid in id_map:
+            keys.add(id_map[tid])
+    merged_ids: set[str] = set(touched_ids)
+    for key in keys:
+        for nid, mapped in id_map.items():
+            if mapped == key:
+                merged_ids.add(nid)
+    for nid in merged_ids:
+        id_map[nid] = canon
+    _registry_rebuild_classes(branch)
+
+
+def _all_endpoint_ids_from_observations(observations: list[GraphObservation]) -> set[str]:
+    out: set[str] = set()
+    for raw in observations:
+        o = _observation_ids(raw) if isinstance(raw, GraphObservation) else _observation_ids(GraphObservation.model_validate(raw))
+        for nid, typ, lab in ((o.subject_id, o.subject_type, o.subject), (o.object_id, o.object_type, o.object)):
+            out |= _graph_endpoint_identity_pair(str(nid or ""), typ, lab)
+    out.discard("")
+    return out
+
+
+def _replacement_anchor_canonical_key(observations: list[GraphObservation], removal_zone: set[str]) -> str:
+    """Pick the canonical key of the first replacement-side endpoint (reverse scan: usually the new sink)."""
+    endpoints: list[tuple[str, str, str]] = []
+    for raw in observations:
+        o = _observation_ids(raw) if isinstance(raw, GraphObservation) else _observation_ids(GraphObservation.model_validate(raw))
+        endpoints.append((o.subject_id, o.subject_type, o.subject))
+        endpoints.append((o.object_id, o.object_type, o.object))
+    for nid, typ, lab in reversed(endpoints):
+        pair = _graph_endpoint_identity_pair(str(nid or ""), typ, lab)
+        if not pair:
+            continue
+        if not (pair & removal_zone):
+            return _canonical_entity_key(str(nid or ""), typ, lab)
+    nid, typ, lab = endpoints[-1]
+    return _canonical_entity_key(str(nid or ""), typ, lab)
+
+
+def _replacement_anchor_identity_ids(observations: list[GraphObservation], removal_zone: set[str]) -> set[str]:
+    """Graph identity tokens for the replacement anchor endpoint only (not upstream neighbors on the same edge)."""
+    endpoints: list[tuple[str, str, str]] = []
+    for raw in observations:
+        o = _observation_ids(raw) if isinstance(raw, GraphObservation) else _observation_ids(GraphObservation.model_validate(raw))
+        endpoints.append((o.subject_id, o.subject_type, o.subject))
+        endpoints.append((o.object_id, o.object_type, o.object))
+    for nid, typ, lab in reversed(endpoints):
+        pair = _graph_endpoint_identity_pair(str(nid or ""), typ, lab)
+        if not pair:
+            continue
+        if not (pair & removal_zone):
+            return set(pair)
+    nid, typ, lab = endpoints[-1]
+    return _graph_endpoint_identity_pair(str(nid or ""), typ, lab)
+
+
+def _registry_id_matches_anchor_kind(node_id: str, anchor_canon: str) -> bool:
+    """Keep removal-zone ids that plausibly refer to the same endpoint *kind* as the anchor (avoid merging PRODUCT into FACILITY)."""
+    nid = (node_id or "").strip()
+    if not nid:
+        return False
+    if anchor_canon.startswith("id:"):
+        return True
+    if ":" not in anchor_canon:
+        return True
+    prefix = anchor_canon.split(":", 1)[0]
+    if nid.startswith(f"{prefix}:"):
+        return True
+    if nid.startswith("id:"):
+        return True
+    return False
+
+
+def _registry_record_patch(
+    state: dict[str, Any],
+    *,
+    branch_id: str,
+    fragment_id: str,
+    patch_mode: str,
+    removal_zone: set[str],
+    incoming_observations: list[GraphObservation],
+    explicit_seeds: set[str],
+) -> None:
+    reg = _load_hypothesis_entity_registry(state)
+    from_ids = set(removal_zone) | set(explicit_seeds)
+    to_ids = _all_endpoint_ids_from_observations(incoming_observations)
+    canon = _replacement_anchor_canonical_key(incoming_observations, removal_zone)
+    old_for_merge = set(explicit_seeds) | {n for n in removal_zone if _registry_id_matches_anchor_kind(n, canon)}
+    anchor_ids = _replacement_anchor_identity_ids(incoming_observations, removal_zone)
+    touched = old_for_merge | anchor_ids
+    _registry_merge_equivalence(reg, branch_id, canon, touched)
+    events = reg.setdefault("lineageEvents", [])
+    cycle = int(state.get(STATE_SUPERVISOR_CYCLE, 0) or 0)
+    events.append(
+        {
+            "branchId": branch_id,
+            "fragmentId": fragment_id,
+            "patchMode": patch_mode,
+            "canonicalEntityKey": canon,
+            "fromIds": sorted(from_ids)[:64],
+            "toIds": sorted(to_ids)[:64],
+            "cycle": cycle,
+        }
+    )
+    events[:] = events[-64:]
+    _save_hypothesis_entity_registry(state, reg)
+
+
+def _entity_registry_summary_for_branch(state: dict[str, Any], branch_id: str) -> dict[str, Any]:
+    reg = _load_hypothesis_entity_registry(state)
+    branch = (reg.get("byBranch") or {}).get(branch_id) or {}
+    classes: dict[str, Any] = branch.get("classes") or {}
+    ranked = sorted(classes.items(), key=lambda kv: (-len(kv[1]), str(kv[0])))[:8]
+    top_classes = [{"canonicalEntityKey": k, "memberCount": len(v), "memberSample": v[:6]} for k, v in ranked]
+    lineage = [e for e in (reg.get("lineageEvents") or []) if isinstance(e, dict) and e.get("branchId") == branch_id][-8:]
+    return {"branchId": branch_id, "topEquivalenceClasses": top_classes, "recentLineage": lineage}
+
+
+def _entity_registry_summary_global(state: dict[str, Any], *, class_limit: int = 6, event_limit: int = 10) -> dict[str, Any]:
+    reg = _load_hypothesis_entity_registry(state)
+    flat: list[tuple[str, str, int]] = []
+    for bid, branch in (reg.get("byBranch") or {}).items():
+        for canon, members in (branch.get("classes") or {}).items():
+            flat.append((str(bid), str(canon), len(members)))
+    flat.sort(key=lambda t: (-t[2], t[0], t[1]))
+    events = [e for e in (reg.get("lineageEvents") or []) if isinstance(e, dict)][-event_limit:]
+    return {
+        "topEquivalenceClasses": [
+            {"branchId": bid, "canonicalEntityKey": canon, "memberCount": n} for bid, canon, n in flat[:class_limit]
+        ],
+        "recentLineage": events,
+    }
+
+
+def _canonical_for_reachability_step(
+    state: dict[str, Any],
+    branch_id: str,
+    node_id: str,
+    entity_type: str,
+    label: str,
+) -> str:
+    reg = _load_hypothesis_entity_registry(state)
+    branch = (reg.get("byBranch") or {}).get(branch_id) or {}
+    id_map = branch.get("idToCanonical") or {}
+    nid = (node_id or "").strip()
+    if nid and nid in id_map:
+        return str(id_map[nid])
+    return _canonical_entity_key(nid, entity_type, label)
+
+
+def _route_fingerprint_tuple(
+    state: dict[str, Any],
+    path_steps: list[dict[str, Any]],
+) -> tuple[tuple[str, str, str], ...]:
+    out: list[tuple[str, str, str]] = []
+    for step in path_steps:
+        br = str(step.get("branchId") or "")
+        cs = _canonical_for_reachability_step(
+            state,
+            br,
+            str(step.get("subjectId") or ""),
+            str(step.get("subjectType") or ""),
+            str(step.get("from") or ""),
+        )
+        co = _canonical_for_reachability_step(
+            state,
+            br,
+            str(step.get("objectId") or ""),
+            str(step.get("objectType") or ""),
+            str(step.get("to") or ""),
+        )
+        out.append((cs, str(step.get("rel") or ""), co))
+    return tuple(out)
+
+
+def _detect_slot_endpoint_conflicts(graph: list[GraphObservation]) -> list[str]:
+    """slotId marks the object endpoint; same slotId with different canonical sinks and no alternativeGroupId => gap."""
+    buckets: dict[tuple[str, str], dict[str, list[str]]] = {}
+    for raw in graph:
+        try:
+            o = _observation_ids(GraphObservation.model_validate(raw) if not isinstance(raw, GraphObservation) else raw)
+        except Exception:
+            continue
+        sid = (o.slot_id or "").strip()
+        if not sid:
+            continue
+        alt = (o.alternative_group_id or "").strip()
+        canon = _canonical_entity_key(o.object_id, o.object_type, o.object)
+        key = (sid, alt)
+        buckets.setdefault(key, {}).setdefault(canon, []).append(o.object)
+    gaps: list[str] = []
+    for (slot_id, alt), canon_map in sorted(buckets.items()):
+        if alt:
+            continue
+        distinct = [c for c, labs in canon_map.items() if labs]
+        if len(distinct) <= 1:
+            continue
+        sample = ", ".join(f"{c}→{canon_map[c][0][:48]}" for c in distinct[:4])
+        gaps.append(
+            f"Slot contract conflict for slotId={slot_id!r}: multiple canonical endpoints without alternativeGroupId separation ({sample})."
+        )
+    return gaps
+
+
+_ROUTE_FAMILY_LIMIT = 6
 
 
 def _normalize_fragment(
@@ -3474,6 +3962,7 @@ def _graph_reachability_report(state: dict[str, Any]) -> dict[str, Any]:
             "groundedCompleteChainCount": 0,
             "structuralCompleteChainCount": 0,
             "partialChainCount": 0,
+            "routeFamilies": [],
         }
 
     supply_contract = ROLE_CONTRACTS.get(ROLE_SUPPLY_CHAIN)
@@ -3483,7 +3972,7 @@ def _graph_reachability_report(state: dict[str, Any]) -> dict[str, Any]:
     governance_contract = ROLE_CONTRACTS.get(ROLE_GOVERNANCE)
     governance_rels: set[str] = set(governance_contract.allowed_edge_types) if governance_contract else set()
 
-    adj: dict[str, list[tuple[str, str, float, str]]] = {}
+    adj: dict[str, list[dict[str, Any]]] = {}
     all_entities: dict[str, str] = {}
     extract_sources: set[str] = set()
     facility_entities: set[str] = set()
@@ -3510,7 +3999,21 @@ def _graph_reachability_report(state: dict[str, Any]) -> dict[str, Any]:
             deposit_entities.add(subj if subj_type == "DEPOSIT" else obj)
         if rel not in flow_rels:
             continue
-        adj.setdefault(subj, []).append((rel, obj, conf, support_type))
+        sid = (o.get("subjectId") or "").strip() or _synthetic_id_for_endpoint(str(subj_type), str(subj))
+        oid = (o.get("objectId") or "").strip() or _synthetic_id_for_endpoint(str(obj_type), str(obj))
+        adj.setdefault(subj, []).append(
+            {
+                "rel": rel,
+                "to": obj,
+                "conf": conf,
+                "supportType": support_type,
+                "subjectId": sid,
+                "objectId": oid,
+                "subjectType": subj_type,
+                "objectType": obj_type,
+                "branchId": (o.get("branchId") or "").strip(),
+            }
+        )
         if rel == "EXTRACTS_FROM":
             extract_sources.add(subj)
 
@@ -3526,9 +4029,9 @@ def _graph_reachability_report(state: dict[str, Any]) -> dict[str, Any]:
     def _is_grounded_flow_edge(confidence: float, support_type: str) -> bool:
         return support_type in {"document", "mixed"} and confidence >= 0.5
 
-    def _bfs_chains(start: str, max_depth: int = 15) -> list[list[tuple[str, str, str, float, str]]]:
-        chains: list[list[tuple[str, str, str, float, str]]] = []
-        queue: list[tuple[str, list[tuple[str, str, str, float, str]], set[str]]] = [(start, [], {start})]
+    def _bfs_chains(start: str, max_depth: int = 15) -> list[list[dict[str, Any]]]:
+        chains: list[list[dict[str, Any]]] = []
+        queue: list[tuple[str, list[dict[str, Any]], set[str]]] = [(start, [], {start})]
         while queue:
             node, path, visited = queue.pop(0)
             if node not in adj:
@@ -3536,16 +4039,25 @@ def _graph_reachability_report(state: dict[str, Any]) -> dict[str, Any]:
                     chains.append(path)
                 continue
             extended = False
-            for rel, target, edge_conf, edge_support_type in adj[node]:
+            for edge in adj[node]:
+                target = str(edge["to"])
                 if target in visited or len(path) >= max_depth:
                     continue
                 extended = True
-                new_path = path + [(node, rel, target, edge_conf, edge_support_type)]
+                step = dict(edge)
+                step["from"] = node
+                new_path = path + [step]
                 new_visited = visited | {target}
                 queue.append((target, new_path, new_visited))
             if not extended and len(path) >= 1:
                 chains.append(path)
         return chains
+
+    def _chain_path_legacy(chain_steps: list[dict[str, Any]]) -> list[tuple[str, str, str, float, str]]:
+        return [
+            (str(s["from"]), str(s["rel"]), str(s["to"]), float(s["conf"]), str(s["supportType"]))
+            for s in chain_steps
+        ]
 
     grounded_complete: list[dict[str, Any]] = []
     structurally_complete: list[dict[str, Any]] = []
@@ -3576,12 +4088,16 @@ def _graph_reachability_report(state: dict[str, Any]) -> dict[str, Any]:
 
     for src in sorted(sources)[:8]:
         chains = _bfs_chains(src)
-        for chain in chains:
+        for chain_steps in chains:
+            chain = _chain_path_legacy(chain_steps)
             end_node = chain[-1][2]
             end_type = all_entities.get(end_node, "")
             steps = [f"{s} --{r}--> {o}" for s, r, o, _conf, _support_type in chain]
-            grounded_edge_count = sum(1 for _s, _r, _o, edge_conf, edge_support_type in chain if _is_grounded_flow_edge(edge_conf, edge_support_type))
+            grounded_edge_count = sum(
+                1 for _s, _r, _o, edge_conf, edge_support_type in chain if _is_grounded_flow_edge(edge_conf, edge_support_type)
+            )
             weak_edge_count = len(chain) - grounded_edge_count
+            fp_tuple = _route_fingerprint_tuple(state, chain_steps)
             entry = {
                 "source": src,
                 "sink": end_node,
@@ -3590,6 +4106,7 @@ def _graph_reachability_report(state: dict[str, Any]) -> dict[str, Any]:
                 "path": steps[:8],
                 "groundedEdgeCount": grounded_edge_count,
                 "weakEdgeCount": weak_edge_count,
+                "routeFingerprint": [list(h) for h in fp_tuple],
             }
             terminal_sink = end_node not in has_outgoing and _is_valid_terminal_sink(chain, end_type)
             all_grounded = len(chain) > 0 and grounded_edge_count == len(chain)
@@ -3618,10 +4135,10 @@ def _graph_reachability_report(state: dict[str, Any]) -> dict[str, Any]:
     flow_connected: set[str] = set()
     for src in sources:
         chains = _bfs_chains(src, max_depth=15)
-        for chain in chains:
-            for s, _r, o, _edge_conf, _edge_support_type in chain:
-                flow_connected.add(s)
-                flow_connected.add(o)
+        for chain_steps in chains:
+            for step in chain_steps:
+                flow_connected.add(str(step["from"]))
+                flow_connected.add(str(step["to"]))
 
     for entity, etype in all_entities.items():
         if etype in ("FACILITY", "PRODUCT") and entity not in flow_connected and entity not in deposit_entities:
@@ -3674,6 +4191,37 @@ def _graph_reachability_report(state: dict[str, Any]) -> dict[str, Any]:
         if bridge_candidates:
             health += f" {len(bridge_candidates)} entity(s) in governance but not in flow."
 
+    def _route_families_from(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        groups: dict[tuple[tuple[str, str, str], ...], list[dict[str, Any]]] = {}
+        for e in entries:
+            raw_fp = e.get("routeFingerprint") or []
+            fp_key = tuple(tuple(str(x) for x in h) for h in raw_fp if isinstance(h, (list, tuple)) and len(h) == 3)
+            groups.setdefault(fp_key, []).append(e)
+        ranked = sorted(
+            groups.items(),
+            key=lambda kv: (-len(kv[1]), -max((m.get("hops") or 0) for m in kv[1]), str(kv[0])),
+        )
+        out: list[dict[str, Any]] = []
+        for fp_key, members in ranked[:_ROUTE_FAMILY_LIMIT]:
+            mult = len(members)
+            hops0 = int(members[0].get("hops") or 0)
+            grounded_counts = [int(m.get("groundedEdgeCount") or 0) for m in members]
+            narrative_duplicate = mult > 1 and max(grounded_counts) < hops0
+            first = members[0]
+            out.append(
+                {
+                    "fingerprint": [list(h) for h in fp_key],
+                    "multiplicity": mult,
+                    "narrativeDuplicate": narrative_duplicate,
+                    "sampleSource": first.get("source"),
+                    "sampleSink": first.get("sink"),
+                    "sampleHops": first.get("hops"),
+                }
+            )
+        return out
+
+    route_families = _route_families_from(grounded_complete + structurally_complete + partial_chains)
+
     return {
         "groundedCompleteChains": grounded_complete[:4],
         "structurallyCompleteChains": structurally_complete[:4],
@@ -3683,6 +4231,7 @@ def _graph_reachability_report(state: dict[str, Any]) -> dict[str, Any]:
         "groundedCompleteChainCount": g_n,
         "structuralCompleteChainCount": s_n,
         "partialChainCount": p_n,
+        "routeFamilies": route_families,
     }
 
 
@@ -4564,32 +5113,92 @@ def _web_search_question_to_graph(action: ToolAction, tool_context) -> ToolActio
     )
 
 
+def _retrieve_cache_key(action: ToolAction) -> str:
+    payload = json.dumps(
+        {
+            "queryText": (action.query_text or "").strip(),
+            "humanQuestion": (action.human_question or "").strip(),
+            "branchId": action.branch_id,
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _store_retrieve_cache(state: dict[str, Any], action: ToolAction, result: ToolActionResult) -> None:
+    """Session-local LRU-ish cache invalidated on any graph merge (plan H)."""
+    if not isinstance(state.get(STATE_RETRIEVAL_CACHE), dict):
+        state[STATE_RETRIEVAL_CACHE] = {}
+    cache = state[STATE_RETRIEVAL_CACHE]
+    if not isinstance(cache, dict):
+        state[STATE_RETRIEVAL_CACHE] = {}
+        cache = state[STATE_RETRIEVAL_CACHE]
+    key = _retrieve_cache_key(action)
+    try:
+        cache[key] = result.model_dump(mode="json", by_alias=True)
+    except Exception:
+        return
+    while len(cache) > 48:
+        cache.pop(next(iter(cache)))
+
+
 def retrieve(action: ToolAction, tool_context) -> ToolActionResult:
+    state = tool_context.state
+    cache_raw = state.get(STATE_RETRIEVAL_CACHE)
+    if isinstance(cache_raw, dict):
+        cached = cache_raw.get(_retrieve_cache_key(action))
+        if isinstance(cached, dict):
+            try:
+                hit = ToolActionResult.model_validate(cached)
+                return hit.model_copy(update={"tool_name": "retrieve"})
+            except pydantic.ValidationError:
+                pass
+
     memory_result = _memory_question_to_graph(action, tool_context)
     best_result = memory_result
     if memory_result.status == "success" and memory_result.graph_fragments:
         if memory_result.closure_status == "closed" or not memory_result.remaining_frontier:
-            return memory_result.model_copy(update={"tool_name": "retrieve"})
+            out = memory_result.model_copy(update={"tool_name": "retrieve"})
+            _store_retrieve_cache(state, action, out)
+            return out
         best_result = memory_result
 
     request = AgentLoomRequest.model_validate(tool_context.state.get(STATE_REQUEST) or {})
-    if request.corpus_documents:
+    if request.corpus_documents and _vertex_grounding_config().get("available"):
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            fut_c = pool.submit(_corpus_question_to_graph, action, tool_context)
+            fut_v = pool.submit(_vertex_question_to_graph, action, tool_context)
+            corpus_result = fut_c.result()
+            vertex_result = fut_v.result()
+        for cand in (corpus_result, vertex_result):
+            if cand.status in {"success", "partial"} and (cand.graph_fragments or cand.source_documents):
+                out = cand.model_copy(update={"tool_name": "retrieve"})
+                _store_retrieve_cache(state, action, out)
+                return out
+        best_result = corpus_result if corpus_result.status != "failed" else vertex_result
+    elif request.corpus_documents:
         corpus_result = _corpus_question_to_graph(action, tool_context)
         if corpus_result.status in {"success", "partial"} and (
             corpus_result.graph_fragments or corpus_result.source_documents
         ):
-            return corpus_result.model_copy(update={"tool_name": "retrieve"})
+            out = corpus_result.model_copy(update={"tool_name": "retrieve"})
+            _store_retrieve_cache(state, action, out)
+            return out
         best_result = corpus_result
-
-    if _vertex_grounding_config().get("available"):
+    elif _vertex_grounding_config().get("available"):
         vertex_result = _vertex_question_to_graph(action, tool_context)
         if vertex_result.status in {"success", "partial"} and (
             vertex_result.graph_fragments or vertex_result.source_documents
         ):
-            return vertex_result.model_copy(update={"tool_name": "retrieve"})
+            out = vertex_result.model_copy(update={"tool_name": "retrieve"})
+            _store_retrieve_cache(state, action, out)
+            return out
         best_result = vertex_result
 
-    return best_result.model_copy(update={"tool_name": "retrieve"})
+    out = best_result.model_copy(update={"tool_name": "retrieve"})
+    _store_retrieve_cache(state, action, out)
+    return out
 
 
 def reason(action: ToolAction, tool_context) -> ToolActionResult:
@@ -4779,6 +5388,24 @@ class DeterministicComposerAgent(BaseAgent):
             asyncio.to_thread(brief_partial),
             asyncio.to_thread(build_question_rubric, request.question, selected_roles),
         )
+        raw_composer_extra = ctx.session.state.pop(STATE_COMPOSER_EXTRA_EPISTEMIC_CAVEATS, None)
+        composer_extras: list[str] = []
+        if isinstance(raw_composer_extra, list):
+            composer_extras.extend(str(x).strip() for x in raw_composer_extra if str(x).strip())
+        verdict_for_compose = ctx.session.state.get(STATE_LAST_CRITIC_VERDICT)
+        if isinstance(verdict_for_compose, dict):
+            rec_v = str(verdict_for_compose.get("compositionRecommendation") or verdict_for_compose.get("composition_recommendation") or "")
+            if rec_v in ("recommend", "conditional"):
+                for c in verdict_for_compose.get("compositionConditions") or verdict_for_compose.get("composition_conditions") or []:
+                    t = str(c).strip()
+                    if t:
+                        line = f"Critic-stated composition condition: {t}"
+                        if line not in composer_extras:
+                            composer_extras.append(line)
+        stopped_by_cycle_limit = bool(ctx.session.state.pop(STATE_SUPERVISOR_CYCLE_LIMIT_COMPOSE, None))
+        if composer_extras:
+            merged_caveats = _dedupe_preserve_order(list(internal.epistemic_caveats) + composer_extras)
+            internal = internal.model_copy(update={"epistemic_caveats": merged_caveats})
         internal_dump = internal.model_dump(mode="json", by_alias=True)
         ctx.session.state[STATE_INTERNAL_BRIEF] = internal_dump
 
@@ -4917,6 +5544,8 @@ class DeterministicComposerAgent(BaseAgent):
             internal_brief=internal,
             narrative_synthesis_status=narrative_status,
             narrative_synthesis_detail=narrative_detail,
+            extra_epistemic_caveats=None,
+            stopped_by_supervisor_cycle_limit=stopped_by_cycle_limit,
         )
         payload = final_summary.model_dump(mode="json", by_alias=True)
         yield Event(
@@ -5846,9 +6475,20 @@ class CriticAgent(BaseAgent):
         )
         async for event in self._run_named_subagent(ctx, "critic_reasoner"):
             yield event
-        raw_result = AgentResult.model_validate(ctx.session.state.get(STATE_CRITIC_RESULT) or {})
-        result = _normalize_agent_result(raw_result, mission, mission.assigned_roles or selected_roles)
+        raw_payload = ctx.session.state.get(STATE_CRITIC_RESULT) or {}
+        if not isinstance(raw_payload, dict):
+            raw_payload = {}
+        if "compositionRecommendation" not in raw_payload and "composition_recommendation" not in raw_payload:
+            raw_payload = {**raw_payload, "compositionRecommendation": "do_not_recommend", "compositionConditions": []}
+        critic_full = CriticAgentOutput.model_validate(raw_payload)
+        raw_ar = critic_agent_output_to_agent_result(critic_full)
+        result = _normalize_agent_result(raw_ar, mission, mission.assigned_roles or selected_roles)
         ctx.session.state[STATE_CRITIC_RESULT] = result.model_dump(mode="json", by_alias=True)
+        ctx.session.state[STATE_LAST_CRITIC_VERDICT] = {
+            "investigationEpoch": int(ctx.session.state.get(STATE_INVESTIGATION_EPOCH, 0) or 0),
+            "compositionRecommendation": critic_full.composition_recommendation,
+            "compositionConditions": list(critic_full.composition_conditions),
+        }
         yield _runtime_log_event(
             ctx.session.state,
             actor=self.name,
@@ -5916,6 +6556,12 @@ class SupervisorAgent(BaseAgent):
                         STATE_LOGIC_TRACE: [],
                         STATE_RUNTIME_LOG: [],
                         STATE_SUPERVISOR_CYCLE: 0,
+                        STATE_LAST_CRITIC_VERDICT: {},
+                        STATE_INVESTIGATION_EPOCH: 0,
+                        STATE_OPEN_GAP_STREAK: 0,
+                        STATE_LAST_GAP_FINGERPRINT: "",
+                        STATE_RETRIEVAL_CACHE: {},
+                        STATE_INVESTIGATION_BUDGET: {},
                     }
                 ),
             )
@@ -5949,10 +6595,17 @@ class SupervisorAgent(BaseAgent):
         for _ in range(MAX_SUPERVISOR_CYCLES):
             cycle = int(ctx.session.state.get(STATE_SUPERVISOR_CYCLE, 0) or 0) + 1
             yield Event(author=self.name, actions=EventActions(state_delta={STATE_SUPERVISOR_CYCLE: cycle}))
+            _refresh_investigation_budget(ctx.session.state, cycle)
             state_seen = self._state_snapshot(ctx)
-            supervisor_context = {
+            supervisor_context: dict[str, Any] = {
                 "state": state_seen,
             }
+            bp = _supervisor_budget_pressure(cycle, MAX_SUPERVISOR_CYCLES)
+            if bp == "soft":
+                supervisor_context["runtimeBudgetNote"] = (
+                    "Cycle budget is in the soft zone: prefer critic_agent or an honest compose/stop "
+                    "over launching another broad multi-theme investigation."
+                )
             if cycle <= 1:
                 supervisor_context["selectedRoleContracts"] = _selected_role_contract_payload(ctx.session.state.get(STATE_SELECTED_ROLES, []) or [])
                 supervisor_context["agentContracts"] = ctx.session.state.get(STATE_AGENT_CONTRACTS, []) or []
@@ -5997,13 +6650,66 @@ class SupervisorAgent(BaseAgent):
                     basis={"cycle": cycle, "coercedFields": True},
                 )
             decision = SupervisorDecision.model_validate(ctx.session.state.get(STATE_SUPERVISOR_DECISION) or {})
+            policy_trace: PolicyCorrection | None = None
+            policy_parts: list[PolicyCorrection] = []
+
+            dec2, pc_dc = _delegate_constraints(
+                ctx.session.state, decision, cycle=cycle, user_question=request_obj.question
+            )
+            if pc_dc is not None:
+                policy_parts.append(pc_dc)
+                decision = dec2
+                ctx.session.state[STATE_SUPERVISOR_DECISION] = decision.model_dump(mode="json", by_alias=True)
+
+            if _supervisor_budget_pressure(cycle, MAX_SUPERVISOR_CYCLES) == "hard" and decision.next_agent not in (
+                "compose",
+                "stop",
+                "critic_agent",
+            ):
+                policy_parts.append(PolicyCorrection(kind="delegate_constraint", detail="budget_hard_escalate_critic"))
+                roles_fb = list(ctx.session.state.get(STATE_SELECTED_ROLES) or [ROLE_SUPPLY_CHAIN])[:3]
+                decision = SupervisorDecision(
+                    cycle=cycle,
+                    assessment="Supervisor cycle budget nearly exhausted; runtime escalates to critic.",
+                    rationale=["runtime_budget_hard"],
+                    nextAgent="critic_agent",
+                    mission=InvestigationMission(
+                        missionId=f"runtime-budget-{cycle}",
+                        objective=(
+                            "Cycle budget is nearly exhausted. Assess whether the graph warrants honest composition "
+                            f"with explicit caveats, or recommend stop. Question: {request_obj.question[:400]}"
+                        ),
+                        assignedRoles=roles_fb,
+                        groundingMode="mixed",
+                    ),
+                    completionRationale="",
+                )
+                ctx.session.state[STATE_SUPERVISOR_DECISION] = decision.model_dump(mode="json", by_alias=True)
+
+            if decision.next_agent == "compose":
+                ok_comp, why = _orchestration_policy_allow_compose(ctx.session.state)
+                if not ok_comp:
+                    policy_parts.append(PolicyCorrection(kind="compose_gate", detail=why))
+                    decision = _decision_force_critic_for_compose_gate(
+                        cycle=cycle,
+                        user_question=request_obj.question,
+                        selected_roles=list(ctx.session.state.get(STATE_SELECTED_ROLES) or []),
+                    )
+                    ctx.session.state[STATE_SUPERVISOR_DECISION] = decision.model_dump(mode="json", by_alias=True)
+
+            if policy_parts:
+                policy_trace = PolicyCorrection(
+                    kind=policy_parts[0].kind,
+                    detail=" | ".join(f"{p.kind}:{p.detail}" for p in policy_parts),
+                )
+
             yield _runtime_log_event(
                 ctx.session.state,
                 actor=self.name,
                 phase="decision",
-                message="Supervisor produced the next control decision.",
+                message="Supervisor produced the next control decision (after runtime policy pass).",
                 model=SUPERVISOR_MODEL,
-                basis={"cycle": cycle, "stateSeen": state_seen},
+                basis={"cycle": cycle, "stateSeen": state_seen, "policyCorrection": policy_trace.model_dump(mode="json", by_alias=True) if policy_trace else {}},
                 result=decision,
             )
 
@@ -6029,6 +6735,7 @@ class SupervisorAgent(BaseAgent):
                     agentResult=None,
                     resultingState=self._state_snapshot(ctx),
                     nextStepLogic=self._next_step_logic(decision, None),
+                    policyCorrection=policy_trace,
                 )
                 yield Event(
                     author=self.name,
@@ -6054,6 +6761,7 @@ class SupervisorAgent(BaseAgent):
                     agentResult=None,
                     resultingState=self._state_snapshot(ctx),
                     nextStepLogic=self._next_step_logic(decision, None),
+                    policyCorrection=policy_trace,
                 )
                 yield Event(
                     author=self.name,
@@ -6099,11 +6807,73 @@ class SupervisorAgent(BaseAgent):
                 agentResult=agent_result,
                 resultingState=self._state_snapshot(ctx),
                 nextStepLogic=self._next_step_logic(decision, agent_result),
+                policyCorrection=policy_trace,
             )
             yield Event(
                 author=self.name,
                 actions=EventActions(state_delta={STATE_LOGIC_TRACE: self._append_logic_entry(ctx, logic_entry)}),
             )
+
+        if LIMIT_EXHAUSTED_STRATEGY == "compose_with_caveats":
+            ok_comp, gate_detail = _orchestration_policy_allow_compose(ctx.session.state)
+            if ok_comp:
+                request_lim = AgentLoomRequest.model_validate(ctx.session.state.get(STATE_REQUEST) or {})
+                extras: list[str] = [
+                    "Final composition was invoked after the supervisor cycle budget was exhausted "
+                    f"(AGENTLOOM_LIMIT_EXHAUSTED_STRATEGY=compose_with_caveats; compose_gate={gate_detail}).",
+                    "This answer may reflect fewer investigation rounds than ideal; treat unresolved structural gaps seriously.",
+                ]
+                verdict_lim = ctx.session.state.get(STATE_LAST_CRITIC_VERDICT)
+                if isinstance(verdict_lim, dict):
+                    for c in verdict_lim.get("compositionConditions") or []:
+                        cs = str(c).strip()
+                        if cs:
+                            extras.append(f"Critic composition condition (must remain visible to the user): {cs}")
+                ctx.session.state[STATE_COMPOSER_EXTRA_EPISTEMIC_CAVEATS] = extras
+                ctx.session.state[STATE_SUPERVISOR_CYCLE_LIMIT_COMPOSE] = True
+                cycle_lim = int(ctx.session.state.get(STATE_SUPERVISOR_CYCLE, 0) or 0)
+                state_seen_lim = self._state_snapshot(ctx)
+                pc_lim = PolicyCorrection(
+                    kind="delegate_constraint",
+                    detail=f"limit_exhausted_compose_with_caveats|compose_gate={gate_detail}",
+                )
+                decision_lim = SupervisorDecision(
+                    cycle=cycle_lim,
+                    assessment="Runtime invoked deterministic composition after supervisor cycle budget exhaustion.",
+                    rationale=[
+                        "supervisor_cycle_limit_exhausted",
+                        "limit_exhausted_strategy=compose_with_caveats",
+                    ],
+                    nextAgent="compose",
+                    mission=None,
+                    completionRationale="",
+                )
+                ctx.session.state[STATE_SUPERVISOR_DECISION] = decision_lim.model_dump(mode="json", by_alias=True)
+                logic_lim = LogicTraceEntry(
+                    cycle=cycle_lim,
+                    stateSeen=state_seen_lim,
+                    decision=decision_lim,
+                    mission=None,
+                    agentResult=None,
+                    resultingState=state_seen_lim,
+                    nextStepLogic="Runtime policy: one-shot compose after supervisor cycle budget exhaustion (compose_with_caveats).",
+                    policyCorrection=pc_lim,
+                )
+                yield Event(
+                    author=self.name,
+                    actions=EventActions(state_delta={STATE_LOGIC_TRACE: self._append_logic_entry(ctx, logic_lim)}),
+                )
+                yield _runtime_log_event(
+                    ctx.session.state,
+                    actor=self.name,
+                    phase="decision",
+                    message="Cycle budget exhausted; running one-shot compose with explicit epistemic caveats.",
+                    basis={"cycle": cycle_lim, "limitStrategy": "compose_with_caveats", "question": request_lim.question[:200]},
+                    result=decision_lim,
+                )
+                async for event in self._run_named_subagent(ctx, "compose"):
+                    yield event
+                return
 
         cycle_limit_failure = FailureRecord(
             code="blocked_by_capability",
@@ -6282,18 +7052,42 @@ class SupervisorAgent(BaseAgent):
         )
 
     def _merge_agent_result(self, ctx: InvocationContext, result: AgentResult) -> None:
+        ctx.session.state[STATE_RETRIEVAL_CACHE] = {}
         previous_progress = _investigation_progress_snapshot(ctx.session.state)
-        current_graph = [GraphObservation.model_validate(item) for item in (ctx.session.state.get(STATE_WORKING_GRAPH) or [])]
-        existing_graph = {(item.subject, item.relation, item.object, tuple(item.qualifiers)) for item in current_graph}
+        keyed: list[tuple[tuple[str, str, str, tuple[str, ...]], GraphObservation]] = []
+        for item in [GraphObservation.model_validate(x) for x in (ctx.session.state.get(STATE_WORKING_GRAPH) or [])]:
+            k = (item.subject, item.relation, item.object, tuple(item.qualifiers))
+            keyed.append((k, item))
+        merge_gaps: list[str] = []
         for observation in result.graph_delta:
-            key = (observation.subject, observation.relation, observation.object, tuple(observation.qualifiers))
-            if key in existing_graph:
-                continue
-            existing_graph.add(key)
-            current_graph.append(observation)
+            k = (observation.subject, observation.relation, observation.object, tuple(observation.qualifiers))
+            replaced = False
+            for i, (kk, ob) in enumerate(keyed):
+                if kk == k:
+                    merged_obs, gap_note = _merge_observation(ob, observation)
+                    keyed[i] = (k, merged_obs)
+                    if gap_note:
+                        merge_gaps.append(gap_note)
+                    replaced = True
+                    break
+            if not replaced:
+                keyed.append((k, observation))
+        current_graph = [pair[1] for pair in keyed]
+        if len(current_graph) > MAX_WORKING_GRAPH_OBSERVATIONS:
+            current_graph = current_graph[:MAX_WORKING_GRAPH_OBSERVATIONS]
+            tool_context_pre = _StateToolContext(ctx.session.state)
+            record_failure(
+                "blocked_by_capability",
+                f"Working graph capped at {MAX_WORKING_GRAPH_OBSERVATIONS} observations; older nodes dropped.",
+                True,
+                tool_context_pre,
+                missing_inputs=["graph_size_limit"],
+            )
 
         cycle = int(ctx.session.state.get(STATE_SUPERVISOR_CYCLE, 0) or 0)
         tool_context = _StateToolContext(ctx.session.state)
+        if merge_gaps:
+            record_open_gaps(merge_gaps, tool_context, origin="runtime_merge", cycle=cycle)
         if result.gaps:
             record_open_gaps(result.gaps, tool_context, origin=result.agent_name, cycle=cycle)
         if result.answered_questions:
@@ -6343,12 +7137,29 @@ class SupervisorAgent(BaseAgent):
         ctx.session.state[STATE_PROGRESS_HISTORY] = progress_history[-12:]
         ctx.session.state[STATE_GLOBAL_STAGNATION] = stagnation
 
+        if result.agent_name != "critic_agent":
+            ctx.session.state[STATE_INVESTIGATION_EPOCH] = int(ctx.session.state.get(STATE_INVESTIGATION_EPOCH, 0) or 0) + 1
+
+        new_fp = _open_gap_fingerprint(ctx.session.state)
+        old_fp = str(ctx.session.state.get(STATE_LAST_GAP_FINGERPRINT) or "")
+        if new_fp and new_fp == old_fp:
+            ctx.session.state[STATE_OPEN_GAP_STREAK] = int(ctx.session.state.get(STATE_OPEN_GAP_STREAK, 0) or 0) + 1
+        else:
+            ctx.session.state[STATE_OPEN_GAP_STREAK] = 0
+        ctx.session.state[STATE_LAST_GAP_FINGERPRINT] = new_fp
+
     def _append_logic_entry(self, ctx: InvocationContext, entry: LogicTraceEntry) -> list[dict[str, Any]]:
         trace = [LogicTraceEntry.model_validate(item) for item in (ctx.session.state.get(STATE_LOGIC_TRACE) or [])]
         trace.append(entry)
         return [item.model_dump(mode="json", by_alias=True) for item in trace]
 
     def _state_snapshot(self, ctx: InvocationContext) -> dict[str, Any]:
+        def _trim_field(text: str, limit: int) -> str:
+            t = (text or "").strip()
+            if len(t) <= limit:
+                return t
+            return t[: max(0, limit - 1)] + "…"
+
         request = AgentLoomRequest.model_validate(ctx.session.state.get(STATE_REQUEST) or {})
         graph = [GraphObservation.model_validate(item) for item in (ctx.session.state.get(STATE_WORKING_GRAPH) or [])]
         fragments = [GraphFragment.model_validate(item) for item in (ctx.session.state.get(STATE_GRAPH_FRAGMENTS) or [])]
@@ -6369,26 +7180,31 @@ class SupervisorAgent(BaseAgent):
                 "agentName": last_result.agent_name,
                 "missionId": last_result.mission_id,
                 "status": last_result.status,
-                "summary": last_result.summary,
+                "summary": _trim_field(last_result.summary, SUPERVISOR_SNAPSHOT_LAST_RESULT_SUMMARY_CHARS),
                 "activeRoles": last_result.active_roles,
-                "gaps": last_result.gaps[:6],
-                "nextQuestions": last_result.next_questions[:4],
-                "handoffRecommendations": last_result.handoff_recommendations,
+                "gaps": [_trim_field(g, 360) for g in last_result.gaps[:8]],
+                "nextQuestions": [_trim_field(q, 280) for q in last_result.next_questions[:6]],
+                "handoffRecommendations": last_result.handoff_recommendations[:MAX_HANDOFF_RECOMMENDATIONS],
             }
 
         compact_frontier: list[dict[str, Any]]
         if cycle <= 2:
-            compact_frontier = frontier_summary[:6]
+            compact_frontier = frontier_summary[:SUPERVISOR_SNAPSHOT_FRONTIER_MAX_ITEMS]
         else:
             compact_frontier = []
-            for fs in frontier_summary[:4]:
+            for fs in frontier_summary[:SUPERVISOR_SNAPSHOT_FRONTIER_MAX_ITEMS]:
+                rf_raw = fs.get("remainingFrontier") or []
+                if isinstance(rf_raw, list):
+                    trimmed_rf = [_trim_field(str(x), SUPERVISOR_SNAPSHOT_FRONTIER_STRING_CHARS) for x in rf_raw[:8]]
+                else:
+                    trimmed_rf = []
                 compact_frontier.append({
                     "branchId": fs.get("branchId", ""),
                     "pathKind": fs.get("pathKind", ""),
-                    "pathAssessment": fs.get("pathAssessment", ""),
+                    "pathAssessment": _trim_field(str(fs.get("pathAssessment", "")), 320),
                     "status": fs.get("status", ""),
-                    "remainingFrontier": fs.get("remainingFrontier", [])[:2],
-                    "stopReason": fs.get("stopReason", ""),
+                    "remainingFrontier": trimmed_rf,
+                    "stopReason": _trim_field(str(fs.get("stopReason", "")), 280),
                 })
 
         snapshot: dict[str, Any] = {
@@ -6398,7 +7214,9 @@ class SupervisorAgent(BaseAgent):
             "graphObservationCount": len(graph),
             "graphFragmentCount": len(fragments),
             "branchCount": len(branches),
-            "openGaps": _open_gap_texts(ctx.session.state)[:8],
+            "openGaps": [
+                _trim_field(g, 400) for g in _open_gap_texts(ctx.session.state)[:SUPERVISOR_SNAPSHOT_OPEN_GAPS_MAX]
+            ],
             "failureCount": len(failures),
             "lastAgentResult": last_result_compact,
             "frontierSummary": compact_frontier,
@@ -6410,6 +7228,14 @@ class SupervisorAgent(BaseAgent):
                 "stagnationCount": int(ctx.session.state.get(STATE_GLOBAL_STAGNATION, 0) or 0),
                 "history": list(ctx.session.state.get(STATE_PROGRESS_HISTORY) or [])[-3:],
             },
+            "unifiedProgress": _unified_progress_report(ctx.session.state),
+            "budgetPressure": _supervisor_budget_pressure(cycle, MAX_SUPERVISOR_CYCLES),
+            "investigationBudget": ctx.session.state.get(STATE_INVESTIGATION_BUDGET) or {},
+            "snapshotIntegrityNote": (
+                "Supervisor snapshot is intentionally lossy: long strings are trimmed and lists are capped "
+                "for JSON/token safety. Treat `unifiedProgress`, `reachability`, and `openGaps` as authoritative "
+                "structural signals; do not infer absence of data from omitted preview fields alone."
+            ),
         }
         if cycle <= 1:
             snapshot["requestedRoles"] = request.requested_roles
@@ -6438,12 +7264,24 @@ class SupervisorAgent(BaseAgent):
             ]
         # Reachability must be visible early (small graphs too); supervisors were choosing governance without seeing chain counts.
         if cycle >= 2 and len(graph) >= 1:
+            snapshot["placeholderNodes"] = _placeholder_nodes_from_graph(graph)
+            snapshot["placeholderResolutionHints"] = _placeholder_resolution_hints(graph)
             full_reach = _graph_reachability_report(ctx.session.state)
+            # Counts must match healthSummary / internalBrief: lists are truncated to [:4] in the report dict.
+            def _int_or_len(key: str, lst_key: str) -> int:
+                raw = full_reach.get(key)
+                if raw is not None:
+                    try:
+                        return int(raw)
+                    except (TypeError, ValueError):
+                        pass
+                return len(full_reach.get(lst_key) or [])
+
             snapshot["reachability"] = {
                 "healthSummary": full_reach["healthSummary"],
-                "completeChainCount": len(full_reach.get("groundedCompleteChains") or []),
-                "structuralChainCount": len(full_reach.get("structurallyCompleteChains") or []),
-                "partialChainCount": len(full_reach.get("partialChains") or []),
+                "completeChainCount": _int_or_len("groundedCompleteChainCount", "groundedCompleteChains"),
+                "structuralChainCount": _int_or_len("structuralCompleteChainCount", "structurallyCompleteChains"),
+                "partialChainCount": _int_or_len("partialChainCount", "partialChains"),
                 "completeChainEndpoints": [
                     f"{c['source']} → {c['sink']} ({c['hops']} hops)"
                     for c in (full_reach.get("groundedCompleteChains") or [])[:3]
@@ -6460,7 +7298,12 @@ class SupervisorAgent(BaseAgent):
                     f"{b['entity']} [{b['type']}]"
                     for b in full_reach["bridgeCandidates"][:4]
                 ],
+                "routeFamilies": full_reach.get("routeFamilies") or [],
             }
+            snapshot["entityRegistrySummary"] = _entity_registry_summary_global(ctx.session.state)
+            mut_log = ctx.session.state.get(STATE_GRAPH_MUTATION_LOG) or []
+            if isinstance(mut_log, list) and mut_log:
+                snapshot["lastGraphMutation"] = mut_log[-1]
         return snapshot
 
     def _next_step_logic(self, decision: SupervisorDecision, agent_result: AgentResult | None) -> str:
@@ -6509,11 +7352,29 @@ def _normalize_agent_result(
                 missingInputs=["role-valid relations"],
             )
 
-    valid_graph = valid_graph[:18]
-    answered_questions = list(result.answered_questions)[:6]
-    gaps = _dedupe_preserve_order(gaps)[:8]
-    next_questions = list(result.next_questions)[:6]
-    handoff_recommendations = list(result.handoff_recommendations)[:4]
+    trunc = False
+    trunc_detail = ""
+    raw_len = len(result.graph_delta)
+    if len(valid_graph) < raw_len:
+        trunc = True
+        trunc_detail = (
+            f"graph_delta: {raw_len - len(valid_graph)} observations dropped (relation not allowed for active roles)"
+        )
+    answered_questions = list(result.answered_questions)
+    next_questions = list(result.next_questions)
+    handoff_recommendations = list(result.handoff_recommendations)
+    if len(valid_graph) > MAX_GRAPH_DELTA_OBSERVATIONS:
+        trunc = True
+        extra = len(valid_graph) - MAX_GRAPH_DELTA_OBSERVATIONS
+        trunc_detail = (trunc_detail + "; " if trunc_detail else "") + f"capped to {MAX_GRAPH_DELTA_OBSERVATIONS} observations ({extra} dropped)"
+        valid_graph = valid_graph[:MAX_GRAPH_DELTA_OBSERVATIONS]
+    if len(result.answered_questions) > MAX_ANSWERED_QUESTIONS or len(result.gaps) > MAX_GAPS or len(result.next_questions) > MAX_NEXT_QUESTIONS:
+        trunc = True
+        trunc_detail = (trunc_detail + "; " if trunc_detail else "") + "list fields capped (answeredQuestions/gaps/nextQuestions)"
+    answered_questions = answered_questions[:MAX_ANSWERED_QUESTIONS]
+    gaps = _dedupe_preserve_order(gaps)[:MAX_GAPS]
+    next_questions = next_questions[:MAX_NEXT_QUESTIONS]
+    handoff_recommendations = handoff_recommendations[:MAX_HANDOFF_RECOMMENDATIONS]
 
     return AgentResult(
         agentName=result.agent_name,
@@ -6527,6 +7388,325 @@ def _normalize_agent_result(
         nextQuestions=next_questions,
         handoffRecommendations=handoff_recommendations,
         failure=failure,
+        truncation=trunc,
+        truncationDetail=trunc_detail,
+    )
+
+
+def _support_type_rank(support: str) -> int:
+    order = ("hypothesis", "model_knowledge", "mixed", "document")
+    try:
+        return order.index(support)
+    except ValueError:
+        return 0
+
+
+def _merge_observation(existing: GraphObservation, incoming: GraphObservation) -> tuple[GraphObservation, str | None]:
+    """Prefer stronger evidence and higher confidence when the same edge key appears twice.
+
+    When confidences are within ``MERGE_CONFIDENCE_EPSILON``, prefer the stronger ``supportType``
+    (document > mixed > model_knowledge > hypothesis) before using confidence as a tie-breaker.
+
+    If two different ``supportType`` strings map to the **same** rank (unknown labels), merge cannot pick
+    a strict winner: downgrade to ``hypothesis`` and emit a gap for human review.
+
+    Returns ``(merged_observation, optional_gap_text)``.
+    """
+    gap: str | None = None
+    eps = MERGE_CONFIDENCE_EPSILON
+    ci, ce = float(incoming.confidence), float(existing.confidence)
+    if abs(ci - ce) > eps:
+        if ci > ce:
+            chosen, other = incoming, existing
+        else:
+            chosen, other = existing, incoming
+    else:
+        ri, re = _support_type_rank(incoming.support_type), _support_type_rank(existing.support_type)
+        if ri != re:
+            chosen, other = (incoming, existing) if ri > re else (existing, incoming)
+        elif ci >= ce:
+            chosen, other = incoming, existing
+        else:
+            chosen, other = existing, incoming
+    prov = _dedupe_preserve_order(list(chosen.provenance) + list(other.provenance))
+    note = chosen.support_note or other.support_note
+    if other.support_note and other.support_note not in (note or ""):
+        note = f"{note} | merged: {other.support_note}" if note else other.support_note
+    merged = chosen.model_copy(
+        update={
+            "confidence": max(float(existing.confidence), float(incoming.confidence)),
+            "provenance": prov[:24],
+            "support_note": note[:2000] if note else "",
+        }
+    )
+    if (
+        existing.support_type != incoming.support_type
+        and _support_type_rank(existing.support_type) == _support_type_rank(incoming.support_type)
+    ):
+        merged = merged.model_copy(
+            update={
+                "support_type": "hypothesis",
+                "confidence": min(float(merged.confidence), 0.85),
+                "support_note": (
+                    (merged.support_note or "").strip()
+                    + " [runtime_merge_conflict: supportType labels disagree at equal rank; downgraded to hypothesis.]"
+                ).strip()[:2000],
+            }
+        )
+        gap = (
+            "[runtime_merge_conflict] Same-edge observations used inconsistent supportType labels that map to the same "
+            "evidence rank; merged as hypothesis pending human review."
+        )
+    return merged, gap
+
+
+def _orchestration_policy_allow_compose(state: dict[str, Any]) -> tuple[bool, str]:
+    if os.environ.get("AGENTLOOM_TESTING", "").strip() in ("1", "true", "yes"):
+        return True, "testing_bypass"
+    verdict = state.get(STATE_LAST_CRITIC_VERDICT)
+    if not isinstance(verdict, dict):
+        return False, "no_critic_verdict"
+    rec = str(verdict.get("compositionRecommendation") or verdict.get("composition_recommendation") or "")
+    if rec == "do_not_recommend":
+        return False, "critic_do_not_recommend"
+    if rec not in ("recommend", "conditional"):
+        return False, f"invalid_or_missing_composition_recommendation:{rec!r}"
+    if rec == "conditional":
+        conds = verdict.get("compositionConditions") or verdict.get("composition_conditions") or []
+        if not isinstance(conds, list) or not any(str(x).strip() for x in conds):
+            return False, "conditional_requires_non_empty_composition_conditions"
+    epoch_v = int(verdict.get("investigationEpoch", -1))
+    epoch_cur = int(state.get(STATE_INVESTIGATION_EPOCH, 0) or 0)
+    if epoch_v != epoch_cur:
+        return False, f"stale_critic_verdict_epoch_verdict={epoch_v}_current={epoch_cur}"
+    return True, "ok"
+
+
+def _open_gap_fingerprint(state: dict[str, Any]) -> str:
+    texts = _open_gap_texts(state)[:12]
+    return "|".join(texts)
+
+
+def _unified_progress_report(state: dict[str, Any]) -> dict[str, Any]:
+    snap = _investigation_progress_snapshot(state)
+    branches = [BranchState.model_validate(item) for item in (state.get(STATE_BRANCH_STATES) or [])]
+    stag_vals = [b.stagnation_count for b in branches if b.status in {"active", "needs_followup", "blocked"}]
+    hist = list(state.get(STATE_PROGRESS_HISTORY) or [])
+    last = hist[-1] if hist else {}
+    if isinstance(last, dict) and last:
+        material_progress_last_step = (
+            f"lastDelegate={last.get('agentName')!s} missionId={last.get('missionId')!s} "
+            f"materialProgress={last.get('materialProgress')!s} stagnationAfter={last.get('stagnationCount')!s} "
+            f"openGapCount={last.get('openGapCount')!s}"
+        )
+    else:
+        material_progress_last_step = "no_progress_history_yet"
+    return {
+        "progressSnapshot": snap,
+        "globalStagnation": int(state.get(STATE_GLOBAL_STAGNATION, 0) or 0),
+        "branchStagnationMax": max(stag_vals) if stag_vals else 0,
+        "branchStagnationMean": sum(stag_vals) / len(stag_vals) if stag_vals else 0.0,
+        "openGapStreak": int(state.get(STATE_OPEN_GAP_STREAK, 0) or 0),
+        "investigationEpoch": int(state.get(STATE_INVESTIGATION_EPOCH, 0) or 0),
+        "materialProgressLastStep": material_progress_last_step,
+    }
+
+
+def _refresh_investigation_budget(state: dict[str, Any], cycle: int) -> None:
+    """Single session object for supervisor budget (plan C2); token/tool approximations reserved for future wiring."""
+    state[STATE_INVESTIGATION_BUDGET] = {
+        "supervisorCyclesUsed": int(cycle),
+        "maxSupervisorCycles": int(MAX_SUPERVISOR_CYCLES),
+        "estimatedTokenBudget": None,
+        "toolCallsApprox": None,
+    }
+
+
+def _supervisor_budget_pressure(cycle: int, max_cycles: int) -> Literal["none", "soft", "hard"]:
+    if max_cycles <= 0:
+        return "hard"
+    remaining = max_cycles - cycle + 1
+    if remaining <= 1:
+        return "hard"
+    if remaining / max_cycles <= BUDGET_SOFT_FRACTION:
+        return "soft"
+    return "none"
+
+
+def _last_delegate_agent_names_from_trace(state: dict[str, Any], n: int = 2) -> list[str]:
+    lt = state.get(STATE_LOGIC_TRACE) or []
+    names: list[str] = []
+    for entry in reversed(lt):
+        if not isinstance(entry, dict):
+            continue
+        d = entry.get("decision") or {}
+        na = d.get("nextAgent") or d.get("next_agent")
+        if na in _SUPERVISOR_DELEGATE_AGENTS and na != "critic_agent":
+            names.append(str(na))
+            if len(names) >= n:
+                break
+    return names
+
+
+def _last_flow_grounding_gain_from_trace(state: dict[str, Any], n: int = 2) -> bool:
+    """True if any of the last n non-critic delegate results added document/mixed flow observations."""
+    lt = state.get(STATE_LOGIC_TRACE) or []
+    flow_edges = frozenset()
+    sc = ROLE_CONTRACTS.get(ROLE_SUPPLY_CHAIN)
+    if sc is not None:
+        flow_edges = frozenset(sc.path_carried_edges or []) | frozenset(sc.allowed_edge_types or [])
+    count = 0
+    for entry in reversed(lt):
+        if not isinstance(entry, dict):
+            continue
+        d = entry.get("decision") or {}
+        na = d.get("nextAgent") or d.get("next_agent")
+        if na not in (
+            "supply_chain_investigator_agent",
+            "gap_bridge_agent",
+        ):
+            continue
+        ar = entry.get("agentResult") or entry.get("agent_result")
+        if not isinstance(ar, dict):
+            continue
+        gd = ar.get("graphDelta") or ar.get("graph_delta") or []
+        for raw in gd:
+            if not isinstance(raw, dict):
+                continue
+            st = raw.get("supportType") or raw.get("support_type")
+            rel = raw.get("relation") or ""
+            if st in ("document", "mixed") and rel in flow_edges:
+                return True
+        count += 1
+        if count >= n:
+            break
+    return False
+
+
+def _delegate_constraints(
+    state: dict[str, Any],
+    decision: SupervisorDecision,
+    *,
+    cycle: int,
+    user_question: str,
+) -> tuple[SupervisorDecision, PolicyCorrection | None]:
+    """Enforce flow-first delegation; return possibly rewritten decision + correction."""
+    if decision.next_agent in {"compose", "stop"}:
+        return decision, None
+    reach = _graph_reachability_report(state)
+    complete = int(reach.get("groundedCompleteChainCount") or 0)
+    if not complete:
+        complete = len(reach.get("groundedCompleteChains") or [])
+    stagnation = int(state.get(STATE_GLOBAL_STAGNATION, 0) or 0)
+    next_a = decision.next_agent
+    if next_a in ("governance_and_control_investigator_agent", "policy_impact_investigator_agent") and complete == 0:
+        last_two = _last_delegate_agent_names_from_trace(state, 2)
+        exception_allowed = (
+            stagnation >= DELEGATE_FLOW_FIRST_STAGNATION_EXCEPTION
+            and len(last_two) >= 2
+            and all(x in ("supply_chain_investigator_agent", "gap_bridge_agent") for x in last_two[:2])
+            and not _last_flow_grounding_gain_from_trace(state, 2)
+        )
+        if not exception_allowed:
+            nd = decision.model_copy(
+                update={
+                    "next_agent": "supply_chain_investigator_agent",
+                    "rationale": list(decision.rationale)
+                    + [
+                        "runtime_delegate_constraint: no grounded complete chain; governance/policy deferred until "
+                        "flow backbone exists (see stagnation exception in code)."
+                    ],
+                }
+            )
+            mission = decision.mission
+            if mission is not None:
+                m = mission.model_dump(mode="json", by_alias=True)
+                m["assignedRoles"] = [ROLE_SUPPLY_CHAIN]
+                m["missionId"] = f"runtime-flow-first-{cycle}"
+                m["objective"] = (
+                    "Establish at least one document- or mixed-grounded operational chain segment toward the "
+                    "question; prioritize reachability break points before governance/policy overlays."
+                )
+                m["groundingMode"] = "mixed"
+                nd = nd.model_copy(update={"mission": InvestigationMission.model_validate(m)})
+            detail = "flow_first_redirect_governance_policy_to_supply_chain"
+            return nd, PolicyCorrection(kind="delegate_constraint", detail=detail)
+    gap_streak = int(state.get(STATE_OPEN_GAP_STREAK, 0) or 0)
+    if (
+        gap_streak >= REPEATED_GAP_THRESHOLD
+        and next_a in SPECIALIZED_INVESTIGATOR_BY_ROLE.values()
+        and next_a != "critic_agent"
+    ):
+        nd = decision.model_copy(
+            update={
+                "next_agent": "critic_agent",
+                "rationale": list(decision.rationale)
+                + [f"runtime: openGap streak {gap_streak} >= {REPEATED_GAP_THRESHOLD}; escalated to critic_agent."],
+            }
+        )
+        m = {
+            "missionId": f"runtime-repeated-gap-{cycle}",
+            "objective": (
+                "Open gaps have not changed materially across recent cycles. Assess whether an honest composed "
+                f"answer is appropriate now, or name the single smallest structural next step. Question: {user_question[:400]}"
+            ),
+            "assignedRoles": list(state.get(STATE_SELECTED_ROLES) or [ROLE_SUPPLY_CHAIN])[:3],
+            "groundingMode": "mixed",
+            "focus": [],
+            "successCriteria": [],
+        }
+        nd = nd.model_copy(update={"mission": InvestigationMission.model_validate(m)})
+        return nd, PolicyCorrection(kind="delegate_constraint", detail="repeated_open_gap_escalation")
+    if stagnation >= STAGNATION_FORCE_CRITIC_CYCLES and next_a in SPECIALIZED_INVESTIGATOR_BY_ROLE.values():
+        nd = decision.model_copy(
+            update={
+                "next_agent": "critic_agent",
+                "rationale": list(decision.rationale)
+                + [
+                    f"runtime: global stagnation {stagnation} >= {STAGNATION_FORCE_CRITIC_CYCLES}; "
+                    "forced critic_agent for honest exit assessment."
+                ],
+            }
+        )
+        m = {
+            "missionId": f"runtime-stagnation-{cycle}",
+            "objective": (
+                "Material progress has stalled. Decide whether the graph is sufficient for an honest composed answer "
+                f"(with epistemic caveats) or name one minimal structural follow-up. Question: {user_question[:400]}"
+            ),
+            "assignedRoles": list(state.get(STATE_SELECTED_ROLES) or [ROLE_SUPPLY_CHAIN])[:3],
+            "groundingMode": "mixed",
+            "focus": [],
+            "successCriteria": [],
+        }
+        nd = nd.model_copy(update={"mission": InvestigationMission.model_validate(m)})
+        return nd, PolicyCorrection(kind="delegate_constraint", detail="stagnation_force_critic")
+    return decision, None
+
+
+def _decision_force_critic_for_compose_gate(
+    *,
+    cycle: int,
+    user_question: str,
+    selected_roles: list[str],
+) -> SupervisorDecision:
+    m = InvestigationMission(
+        missionId=f"runtime-compose-gate-{cycle}",
+        objective=(
+            "Supervisor requested composition but the last critic verdict is missing or stale. "
+            f"Assess sufficiency for composition now. Question: {user_question[:400]}"
+        ),
+        assignedRoles=_dedupe_preserve_order([r for r in selected_roles if r in INVESTIGATION_ROLES_LITERALS])[:3]
+        or [ROLE_SUPPLY_CHAIN],
+        groundingMode="mixed",
+    )
+    return SupervisorDecision(
+        cycle=cycle,
+        assessment="Compose blocked until critic endorses composition.",
+        rationale=["runtime_compose_gate"],
+        nextAgent="critic_agent",
+        mission=m,
+        completionRationale="",
     )
 
 
@@ -6565,6 +7745,7 @@ def _reasoning_dedup_hints(state: dict[str, Any]) -> dict[str, Any]:
 
 def _planner_memory_snapshot(state: dict[str, Any]) -> dict[str, Any]:
     shared = read_shared_memory(_StateToolContext(state))
+    graph = [GraphObservation.model_validate(item) for item in (state.get(STATE_WORKING_GRAPH) or [])]
     return {
         "question": shared["question"],
         "selectedRoles": shared["selectedRoles"],
@@ -6587,6 +7768,8 @@ def _planner_memory_snapshot(state: dict[str, Any]) -> dict[str, Any]:
         "hypothesisTurns": shared["hypothesisTurns"][-12:],
         "hypothesisFrontiers": _hypothesis_frontier_signals(state),
         "reasoningDedupHints": _reasoning_dedup_hints(state),
+        "placeholderNodes": _placeholder_nodes_from_graph(graph),
+        "entityRegistrySummary": _entity_registry_summary_global(state),
     }
 
 
@@ -6697,21 +7880,47 @@ def _hypothesis_local_state(
     }
 
 
-def _is_placeholder_node(node_id: str, label: str) -> bool:
+def _is_placeholder_node(node_id: str, label: str, *, support_type: str = "") -> bool:
     text = f"{node_id} {label}".strip()
-    return any(pattern.search(text) for pattern in _PLACEHOLDER_LABEL_PATTERNS)
+    if any(pattern.search(text) for pattern in _PLACEHOLDER_LABEL_PATTERNS):
+        return True
+    if support_type == "hypothesis" and label and _PLACEHOLDER_HYPOTHESIS_LABEL_HINTS.search(label):
+        return True
+    return False
 
 
 def _placeholder_nodes_from_graph(graph: list[GraphObservation]) -> list[str]:
     placeholders: list[str] = []
     for observation in graph:
+        st = observation.support_type
         for node_id, label in (
             (observation.subject_id, observation.subject),
             (observation.object_id, observation.object),
         ):
-            if _is_placeholder_node(node_id, label):
+            if _is_placeholder_node(node_id, label, support_type=st):
                 placeholders.append(label or node_id)
     return _dedupe_preserve_order(placeholders)[:8]
+
+
+def _placeholder_resolution_hints(graph: list[GraphObservation]) -> list[str]:
+    """Deterministic, graph-only hints for resolving placeholder endpoints (no invented names)."""
+    hints: list[str] = []
+    for observation in graph:
+        st = observation.support_type
+        for node_id, label, role in (
+            (observation.subject_id, observation.subject, "subject"),
+            (observation.object_id, observation.object, "object"),
+        ):
+            if not _is_placeholder_node(node_id, label, support_type=st):
+                continue
+            disp = (label or node_id or "").strip() or "unnamed"
+            oid = (node_id or "").strip()
+            old_part = f'patchMode replace_node/replace_fragment with oldId "{oid}"' if oid else "patchMode replace_node/replace_fragment using the observation's subjectId/objectId as oldId"
+            hints.append(
+                f'Resolve {role} label "{disp}" as a concrete ORG/FACILITY/DEPOSIT/PRODUCT allowed by role contracts; '
+                f"consider {old_part} when the graph already references that slot."
+            )
+    return _dedupe_preserve_order(hints)[:8]
 
 
 def _is_detail_frontier_text(text: str) -> bool:
@@ -6727,12 +7936,12 @@ def _acceptance_block_reason(
     branch_state: BranchState,
     local_state: dict[str, Any],
 ) -> str:
-    if plan.hypothesis_relation != "root" and plan.path_kind != "overview":
-        return ""
     graph = [GraphObservation.model_validate(item) for item in (local_state.get(STATE_WORKING_GRAPH) or [])]
     placeholders = _placeholder_nodes_from_graph(graph)
     if placeholders:
         return f"Broad placeholders remain in the hypothesis graph: {', '.join(placeholders[:3])}."
+    if plan.hypothesis_relation != "root" and plan.path_kind != "overview":
+        return ""
     structural_frontier = _structural_frontier_items(
         list(branch_state.remaining_frontier) + list(branch_state.open_questions)
     )
@@ -6907,6 +8116,7 @@ def _hypothesis_turn_context(
         "parallelBranchSummaries": _hypothesis_parallel_branch_summaries(state, plan),
         "reasoningDedupHints": _reasoning_dedup_hints(state),
         "toolAvailability": read_shared_memory(_StateToolContext(state))["toolAvailability"],
+        "entityRegistrySummary": _entity_registry_summary_for_branch(state, plan.branch_id),
     }
 
 
@@ -7060,7 +8270,7 @@ critic_reasoner = StructuredOutputAgent(
     description="Assesses sufficiency and honesty of the current role-scoped graph state.",
     instruction=CRITIC_INSTRUCTION,
     generate_content_config=CRITIC_CONFIG,
-    output_schema=AgentResult,
+    output_schema=CriticAgentOutput,
     output_key=STATE_CRITIC_RESULT,
     context_key=STATE_CRITIC_CONTEXT,
 )

@@ -68,6 +68,8 @@ class GraphObservation(StrictModel):
     support_note: str = Field(default="", alias="supportNote")
     branch_id: str = Field(default="", alias="branchId")
     alternative_group_id: str = Field(default="", alias="alternativeGroupId")
+    slot_id: str = Field(default="", alias="slotId")
+    slot_role: str = Field(default="", alias="slotRole")
 
 
 class GraphFragment(StrictModel):
@@ -437,6 +439,38 @@ class AgentResult(StrictModel):
     next_questions: list[str] = Field(default_factory=list, alias="nextQuestions")
     handoff_recommendations: list[str] = Field(default_factory=list, alias="handoffRecommendations")
     failure: FailureRecord | None = None
+    truncation: bool = False
+    truncation_detail: str = Field(default="", alias="truncationDetail")
+
+
+class CriticAgentOutput(AgentResult):
+    """Structured critic LLM output: AgentResult fields plus mandatory composition verdict."""
+
+    composition_recommendation: Literal["recommend", "do_not_recommend", "conditional"] = Field(
+        alias="compositionRecommendation"
+    )
+    composition_conditions: list[str] = Field(default_factory=list, alias="compositionConditions")
+
+    @model_validator(mode="after")
+    def validate_conditional(self) -> "CriticAgentOutput":
+        if self.composition_recommendation == "conditional" and not self.composition_conditions:
+            raise ValueError("compositionConditions must be non-empty when compositionRecommendation is conditional")
+        return self
+
+
+def critic_agent_output_to_agent_result(o: CriticAgentOutput) -> AgentResult:
+    """Strip critic-only verdict fields for shared AgentResult storage."""
+    payload = o.model_dump(mode="json", by_alias=True)
+    payload.pop("compositionRecommendation", None)
+    payload.pop("compositionConditions", None)
+    return AgentResult.model_validate(payload)
+
+
+class PolicyCorrection(StrictModel):
+    """Runtime override of supervisor intent (audit trail)."""
+
+    kind: Literal["compose_gate", "delegate_constraint"]
+    detail: str
 
 
 class ToolContract(StrictModel):
@@ -505,6 +539,7 @@ class LogicTraceEntry(StrictModel):
     agent_result: AgentResult | None = Field(default=None, alias="agentResult")
     resulting_state: dict[str, Any] = Field(alias="resultingState")
     next_step_logic: str = Field(alias="nextStepLogic")
+    policy_correction: PolicyCorrection | None = Field(default=None, alias="policyCorrection")
 
 
 class RuntimeLogEntry(StrictModel):
@@ -639,3 +674,4 @@ class FinalChainSummary(StrictModel):
     reachability_report: dict[str, Any] = Field(default_factory=dict, alias="reachabilityReport")
     logic_trace: list[LogicTraceEntry] = Field(alias="logicTrace")
     runtime_logs: list[RuntimeLogEntry] = Field(default_factory=list, alias="runtimeLogs")
+    stopped_by_supervisor_cycle_limit: bool = Field(default=False, alias="stoppedBySupervisorCycleLimit")

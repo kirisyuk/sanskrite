@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from collections.abc import Sequence
 
 from agentloom.contracts import (
     BranchState,
@@ -70,6 +71,8 @@ def build_final_chain_summary(
     internal_brief: InternalBrief | None = None,
     narrative_synthesis_status: NarrativeSynthesisStatus = "deterministic_only",
     narrative_synthesis_detail: str = "",
+    extra_epistemic_caveats: Sequence[str] | None = None,
+    stopped_by_supervisor_cycle_limit: bool = False,
 ) -> FinalChainSummary:
     source_index = OrderedDict()
     open_verification_needs: list[str] = []
@@ -121,7 +124,13 @@ def build_final_chain_summary(
             learned_findings,
             unresolved_gaps,
             reachability_report,
+            extra_epistemic_caveats=extra_epistemic_caveats,
         )
+    elif extra_epistemic_caveats:
+        extra_lines = [str(x).strip() for x in extra_epistemic_caveats if str(x).strip()]
+        if extra_lines:
+            merged_c = _dedupe_preserve_order(list(internal_brief.epistemic_caveats) + extra_lines)
+            internal_brief = internal_brief.model_copy(update={"epistemic_caveats": merged_c})
     structured = structured_narrative
     caveats = list(internal_brief.epistemic_caveats)
     chain_summaries = _build_chain_summaries(graph_fragments, working_graph, candidate_paths)
@@ -184,6 +193,7 @@ def build_final_chain_summary(
         reachability_report=reachability_report or {},
         logic_trace=logic_trace,
         runtime_logs=runtime_logs,
+        stoppedBySupervisorCycleLimit=stopped_by_supervisor_cycle_limit,
     )
 
 
