@@ -5,12 +5,11 @@ import os
 import unittest
 from pydantic import ValidationError
 
-import agentloom.agent as agentloom_agent_module
-
 from agentloom.agent import (
     STATE_FINAL,
     STATE_GRAPH_MUTATION_LOG,
     STATE_BRANCH_STATES,
+    STATE_CURRENT_MISSION,
     STATE_HYPOTHESIS_ENTITY_REGISTRY,
     STATE_INVESTIGATION_EPOCH,
     STATE_LAST_GAP_FINGERPRINT,
@@ -38,8 +37,11 @@ from agentloom.agent import (
     _derive_candidate_paths,
     _derive_hypotheses,
     _graph_reachability_report,
+    _host_local_process_gap_candidates,
+    InvestigatorPlan,
     _normalize_agent_result,
     _normalize_followup_branch_plan,
+    _normalize_investigator_plan,
     _placeholder_nodes_from_graph,
     _parse_tool_result_payload,
     _planned_tool_sequence,
@@ -62,18 +64,26 @@ from agentloom.contracts import (
     BranchState,
     CandidatePath,
     CriticAgentOutput,
+    EntityNode,
     FailureRecord,
+    FlowLeg,
     GraphFragment,
     GraphObservation,
     HypothesisState,
     InvestigationMission,
+    ProcessStep,
     SupervisorDecision,
     ToolAction,
     ToolActionResult,
 )
 from agentloom.contracts import LearnedFinding
+from agentloom.operational_graph import graph_counts, graph_state_from_raw, observation_projection
 from agentloom.taxonomy import ROLE_CONTRACTS_BY_ROLE, ROLE_GOVERNANCE, ROLE_POLICY, ROLE_SUPPLY_CHAIN
 import agentloom.limits as agentloom_limits
+
+
+def _working_graph_projection(state: dict) -> list[GraphObservation]:
+    return observation_projection(graph_state_from_raw(state.get("working_graph") or []))
 
 
 class AgentLoomRuntimeTest(unittest.TestCase):
@@ -281,9 +291,357 @@ class AgentLoomRuntimeTest(unittest.TestCase):
 
         parsed = _parse_tool_result_payload(raw, action, {"SUPPLIES_TO"}, "document")
 
-        self.assertEqual(parsed.graph_fragments[0].patch_mode, "replace_node")
+        self.assertEqual(parsed.graph_fragments[0].patch_mode, "replace_entity")
         self.assertEqual(parsed.graph_fragments[0].old_id, "facility:german-battery-plant")
         self.assertIn("placeholder", parsed.graph_fragments[0].patch_rationale.lower())
+
+    def test_tool_payload_parser_accepts_operational_primitives_fragment(self) -> None:
+        action = ToolAction(
+            actionId="branch-op-a1",
+            branchId="branch-op",
+            toolName="reason",
+            humanQuestion="How does spodumene reach a battery-grade precursor plant?",
+            humanAction="Build an operational supply-chain fragment.",
+            whyThisQuestion="The runtime should use flow legs and process steps instead of a fake edge-only chain.",
+            closureTarget="Recover one operational route with named product legs and node-local conversion.",
+            knownContext=["A placeholder downstream precursor plant exists in the graph."],
+            frontier=["Identify the material leg.", "Identify the local conversion step."],
+            queryText="How does spodumene reach a battery-grade precursor plant?",
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            targetEntities=["spodumene", "precursor plant"],
+            expectedFragmentType="operational_flow",
+        )
+        raw = """
+        {
+          "status": "success",
+          "humanSummary": "Recovered an operational route with a local transformation step.",
+          "closureStatus": "advanced",
+          "graphFragments": [
+            {
+              "fragmentType": "operational_flow",
+              "title": "Spodumene conversion route",
+              "humanQuestion": "How does spodumene reach a battery-grade precursor plant?",
+              "humanSummary": "Mine concentrate moves to a conversion plant and is transformed there.",
+              "branchId": "branch-op",
+              "entityNodes": [
+                {"nodeId": "facility:mine", "label": "Mine Concentrator", "entityType": "FACILITY", "confidence": 0.6, "supportType": "model_knowledge"},
+                {"nodeId": "facility:converter", "label": "Lithium Conversion Plant", "entityType": "FACILITY", "confidence": 0.6, "supportType": "model_knowledge"},
+                {"nodeId": "product:spodumene", "label": "Spodumene concentrate", "entityType": "PRODUCT", "confidence": 0.6, "supportType": "model_knowledge"},
+                {"nodeId": "product:lithium-carbonate", "label": "Lithium carbonate", "entityType": "PRODUCT", "confidence": 0.6, "supportType": "model_knowledge"}
+              ],
+              "flowLegs": [
+                {
+                  "legId": "leg-1",
+                  "supplierNodeId": "facility:mine",
+                  "customerNodeId": "facility:converter",
+                  "productNodeId": "product:spodumene",
+                  "confidence": 0.55,
+                  "supportType": "model_knowledge",
+                  "provenance": [],
+                  "supportNote": "Typical concentrate shipment leg.",
+                  "branchId": "branch-op"
+                }
+              ],
+              "processSteps": [
+                {
+                  "stepId": "step-1",
+                  "hostNodeId": "facility:converter",
+                  "processKind": "transformation",
+                  "inputNodeIds": ["product:spodumene"],
+                  "outputNodeIds": ["product:lithium-carbonate"],
+                  "confidence": 0.55,
+                  "supportType": "model_knowledge",
+                  "provenance": [],
+                  "supportNote": "Typical local conversion step.",
+                  "branchId": "branch-op"
+                }
+              ],
+              "overlayEdges": [],
+              "qualityScore": 0.58
+            }
+          ]
+        }
+        """
+
+        parsed = _parse_tool_result_payload(
+            raw,
+            action,
+            {"SUPPLIES_TO", "PRODUCES", "TRANSFORMS_INTO"},
+            "model_knowledge",
+        )
+
+        fragment = parsed.graph_fragments[0]
+        self.assertEqual(fragment.fragment_type, "operational_flow")
+        self.assertEqual(len(fragment.entity_nodes), 4)
+        self.assertEqual(len(fragment.flow_legs), 1)
+        self.assertEqual(len(fragment.process_steps), 1)
+        self.assertTrue(any(obs.relation == "SUPPLIES_TO" for obs in fragment.observations))
+        self.assertTrue(any(obs.relation == "TRANSFORMS_INTO" for obs in fragment.observations))
+
+    def test_tool_payload_parser_downgrades_empty_graph_fragments_to_partial(self) -> None:
+        action = ToolAction(
+            actionId="branch-empty-a1",
+            branchId="branch-empty",
+            toolName="reason",
+            humanQuestion="Return a structural fragment.",
+            humanAction="Build a graph fragment.",
+            whyThisQuestion="A typed graph fragment is required.",
+            closureTarget="Return at least one typed graph payload.",
+            knownContext=["The graph needs a structural fragment."],
+            frontier=["Return typed graph payload."],
+            queryText="Return a structural fragment.",
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            targetEntities=["lithium"],
+            expectedFragmentType="operational_flow",
+        )
+        raw = """
+        {
+          "status": "success",
+          "humanSummary": "Returned a fragment shell.",
+          "closureStatus": "closed",
+          "graphFragments": [
+            {
+              "fragmentId": "branch-empty-f1",
+              "fragmentType": "operational_flow",
+              "title": "Empty shell",
+              "humanQuestion": "Return a structural fragment.",
+              "humanSummary": "This fragment carries no payload.",
+              "branchId": "branch-empty",
+              "entityNodes": [],
+              "flowLegs": [],
+              "processSteps": [],
+              "overlayEdges": [],
+              "qualityScore": 0.2
+            }
+          ]
+        }
+        """
+
+        parsed = _parse_tool_result_payload(raw, action, {"SUPPLIES_TO", "TRANSFORMS_INTO"}, "model_knowledge")
+
+        self.assertEqual(parsed.status, "partial")
+        self.assertEqual(parsed.graph_fragments, [])
+        self.assertIsNotNone(parsed.failure)
+        self.assertIn("typed_graph_fragment", parsed.failure.missing_inputs)
+
+    def test_native_fragment_discards_conflicting_raw_observations(self) -> None:
+        fragment = GraphFragment(
+            fragmentId="native-f1",
+            fragmentType="operational_flow",
+            title="Native fragment",
+            humanQuestion="How does product A move to plant B?",
+            humanSummary="A native flow leg should override any raw observation lane.",
+            branchId="branch-native",
+            entityNodes=[
+                EntityNode(nodeId="facility:a", label="Facility A", entityType="FACILITY", confidence=0.6, supportType="model_knowledge"),
+                EntityNode(nodeId="facility:b", label="Facility B", entityType="FACILITY", confidence=0.6, supportType="model_knowledge"),
+                EntityNode(nodeId="product:a", label="Product A", entityType="PRODUCT", confidence=0.6, supportType="model_knowledge"),
+            ],
+            flowLegs=[
+                FlowLeg(
+                    legId="leg-1",
+                    supplierNodeId="facility:a",
+                    customerNodeId="facility:b",
+                    productNodeId="product:a",
+                    confidence=0.6,
+                    supportType="model_knowledge",
+                )
+            ],
+            observations=[
+                GraphObservation(
+                    observationId="legacy-1",
+                    subjectId="product:a",
+                    subject="Product A",
+                    subjectType="PRODUCT",
+                    relation="SUPPLIES_TO",
+                    objectId="facility:b",
+                    object="Facility B",
+                    objectType="FACILITY",
+                    confidence=0.2,
+                    supportType="hypothesis",
+                )
+            ],
+            completeness="partial",
+            qualityScore=0.5,
+        )
+
+        self.assertEqual(len(fragment.flow_legs), 1)
+        self.assertFalse(any(obs.subject_type == "PRODUCT" and obs.relation == "SUPPLIES_TO" for obs in fragment.observations))
+        projected = [obs for obs in fragment.observations if obs.relation == "SUPPLIES_TO"]
+        self.assertEqual(len(projected), 1)
+        self.assertEqual(projected[0].subject_id, "facility:a")
+
+    def test_graph_fragment_preserves_full_derived_projection_without_truncation(self) -> None:
+        nodes = [
+            EntityNode(nodeId="facility:converter", label="Converter", entityType="FACILITY", confidence=0.5, supportType="model_knowledge")
+        ]
+        steps: list[ProcessStep] = []
+        for idx in range(25):
+            input_id = f"product:stage-{idx}"
+            output_id = f"product:stage-{idx + 1}"
+            nodes.append(EntityNode(nodeId=input_id, label=f"Stage {idx}", entityType="PRODUCT", confidence=0.5, supportType="model_knowledge"))
+            nodes.append(EntityNode(nodeId=output_id, label=f"Stage {idx + 1}", entityType="PRODUCT", confidence=0.5, supportType="model_knowledge"))
+            steps.append(
+                ProcessStep(
+                    stepId=f"step-{idx}",
+                    hostNodeId="facility:converter",
+                    processKind="transformation",
+                    inputNodeIds=[input_id],
+                    outputNodeIds=[output_id],
+                    confidence=0.5,
+                    supportType="model_knowledge",
+                )
+            )
+        fragment = GraphFragment(
+            fragmentId="long-f1",
+            fragmentType="operational_flow",
+            title="Long projection",
+            humanQuestion="How does the long conversion chain work?",
+            humanSummary="The fragment contains many native process steps.",
+            branchId="branch-long",
+            entityNodes=nodes,
+            processSteps=steps,
+            completeness="partial",
+            qualityScore=0.4,
+        )
+
+        self.assertEqual(len(fragment.process_steps), 25)
+        self.assertEqual(len(fragment.observations), 50)
+
+    def test_graph_fragment_rejects_invalid_native_flow_leg_endpoint_types(self) -> None:
+        with self.assertRaises(ValidationError):
+            GraphFragment(
+                fragmentId="bad-leg",
+                fragmentType="operational_flow",
+                title="Invalid leg",
+                humanQuestion="Invalid native leg?",
+                humanSummary="Product endpoints are not valid flow-leg operators.",
+                branchId="branch-invalid",
+                entityNodes=[
+                    EntityNode(nodeId="product:ore", label="Ore", entityType="PRODUCT", confidence=0.4, supportType="hypothesis"),
+                    EntityNode(nodeId="facility:plant", label="Plant", entityType="FACILITY", confidence=0.4, supportType="hypothesis"),
+                ],
+                flowLegs=[
+                    FlowLeg(
+                        legId="leg-invalid",
+                        supplierNodeId="product:ore",
+                        customerNodeId="facility:plant",
+                        productNodeId="product:ore",
+                        confidence=0.4,
+                        supportType="hypothesis",
+                    )
+                ],
+                completeness="hypothesis",
+                qualityScore=0.1,
+            )
+
+    def test_host_local_process_gap_candidates_detect_missing_hosted_assembly(self) -> None:
+        graph_state = graph_state_from_raw(
+            {
+                "entityNodes": [
+                    {"nodeId": "facility:sqm", "label": "SQM Salar de Atacama", "entityType": "FACILITY", "confidence": 0.8, "supportType": "document"},
+                    {"nodeId": "facility:harjavalta", "label": "BASF Harjavalta pCAM Plant", "entityType": "FACILITY", "confidence": 0.8, "supportType": "document"},
+                    {"nodeId": "facility:schwarzheide", "label": "BASF Schwarzheide", "entityType": "FACILITY", "confidence": 0.8, "supportType": "document"},
+                    {"nodeId": "organization:catl", "label": "CATL", "entityType": "ORGANIZATION", "confidence": 0.8, "supportType": "document"},
+                    {"nodeId": "product:lithium-carbonate", "label": "Lithium Carbonate", "entityType": "PRODUCT", "confidence": 0.8, "supportType": "document"},
+                    {"nodeId": "product:pcam", "label": "pCAM", "entityType": "PRODUCT", "confidence": 0.8, "supportType": "document"},
+                    {"nodeId": "product:cam", "label": "Cathode Active Materials", "entityType": "PRODUCT", "confidence": 0.8, "supportType": "document"}
+                ],
+                "flowLegs": [
+                    {"legId": "leg-1", "supplierNodeId": "facility:sqm", "customerNodeId": "facility:schwarzheide", "productNodeId": "product:lithium-carbonate", "confidence": 0.8, "supportType": "document"},
+                    {"legId": "leg-2", "supplierNodeId": "facility:harjavalta", "customerNodeId": "facility:schwarzheide", "productNodeId": "product:pcam", "confidence": 0.8, "supportType": "document"},
+                    {"legId": "leg-3", "supplierNodeId": "facility:schwarzheide", "customerNodeId": "organization:catl", "productNodeId": "product:cam", "confidence": 0.8, "supportType": "document"}
+                ],
+                "processSteps": [],
+                "overlayEdges": []
+            }
+        )
+
+        candidates = _host_local_process_gap_candidates(graph_state)
+
+        self.assertTrue(candidates)
+        first = candidates[0]
+        self.assertEqual(first["host"], "BASF Schwarzheide")
+        self.assertEqual(first["processKind"], "assembly")
+        self.assertIn("Lithium Carbonate", first["inputProducts"])
+        self.assertIn("pCAM", first["inputProducts"])
+        self.assertEqual(first["outputProduct"], "Cathode Active Materials")
+
+    def test_normalize_investigator_plan_injects_process_gap_branch(self) -> None:
+        mission = InvestigationMission(
+            missionId="mission-1",
+            objective="Repair the missing structural gap in the chain.",
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            groundingMode="mixed",
+        )
+        state = {
+            "input_request": {
+                "question": "Map the likely lithium supply chain from Chile to a German battery manufacturer.",
+                "corpusDocuments": [],
+            },
+            STATE_CURRENT_MISSION: mission.model_dump(mode="json", by_alias=True),
+            STATE_SELECTED_ROLES: [ROLE_SUPPLY_CHAIN],
+            STATE_WORKING_GRAPH: {
+                "entityNodes": [
+                    {"nodeId": "facility:sqm", "label": "SQM Salar de Atacama", "entityType": "FACILITY", "confidence": 0.8, "supportType": "document"},
+                    {"nodeId": "facility:harjavalta", "label": "BASF Harjavalta pCAM Plant", "entityType": "FACILITY", "confidence": 0.8, "supportType": "document"},
+                    {"nodeId": "facility:schwarzheide", "label": "BASF Schwarzheide", "entityType": "FACILITY", "confidence": 0.8, "supportType": "document"},
+                    {"nodeId": "organization:catl", "label": "CATL", "entityType": "ORGANIZATION", "confidence": 0.8, "supportType": "document"},
+                    {"nodeId": "product:lithium-carbonate", "label": "Lithium Carbonate", "entityType": "PRODUCT", "confidence": 0.8, "supportType": "document"},
+                    {"nodeId": "product:pcam", "label": "pCAM", "entityType": "PRODUCT", "confidence": 0.8, "supportType": "document"},
+                    {"nodeId": "product:cam", "label": "Cathode Active Materials", "entityType": "PRODUCT", "confidence": 0.8, "supportType": "document"}
+                ],
+                "flowLegs": [
+                    {"legId": "leg-1", "supplierNodeId": "facility:sqm", "customerNodeId": "facility:schwarzheide", "productNodeId": "product:lithium-carbonate", "confidence": 0.8, "supportType": "document"},
+                    {"legId": "leg-2", "supplierNodeId": "facility:harjavalta", "customerNodeId": "facility:schwarzheide", "productNodeId": "product:pcam", "confidence": 0.8, "supportType": "document"},
+                    {"legId": "leg-3", "supplierNodeId": "facility:schwarzheide", "customerNodeId": "organization:catl", "productNodeId": "product:cam", "confidence": 0.8, "supportType": "document"}
+                ],
+                "processSteps": [],
+                "overlayEdges": []
+            },
+        }
+        weak_plan = InvestigatorPlan(
+            assessment="Need more downstream detail.",
+            rationale=["The downstream side looks incomplete."],
+            branchPlans=[
+                BranchPlan(
+                    branchId="downstream_only",
+                    hypothesis="Downstream consumers need more detail.",
+                    parentHypothesisId="root-chain",
+                    hypothesisRelation="dependent_followup",
+                    spawnReason="Focus on the downstream side.",
+                    independenceBasis="This branch refines the downstream side.",
+                    pathKind="direct",
+                    humanQuestion="Which OEM receives cathode materials?",
+                    humanAction="Map downstream consumers.",
+                    closureTarget="Identify downstream consumers.",
+                    knownContext=["BASF Schwarzheide already ships cathode materials downstream."],
+                    frontier=["Identify downstream consumers."],
+                    assignedRoles=[ROLE_SUPPLY_CHAIN],
+                    preferredTools=["web_search"],
+                    targetEntities=["CATL"],
+                    fragmentType="chain_fragment",
+                    parallelGroup="downstream",
+                    stopAfterNoImprovement=2,
+                )
+            ],
+            blockingFailure=None,
+        )
+
+        normalized = _normalize_investigator_plan(
+            state,
+            mission,
+            ROLE_SUPPLY_CHAIN,
+            weak_plan,
+            initial_pass=False,
+            user_question="Map the likely lithium supply chain from Chile to a German battery manufacturer.",
+            corpus_document_count=0,
+        )
+
+        self.assertGreaterEqual(len(normalized.branch_plans), 1)
+        self.assertEqual(normalized.branch_plans[0].path_kind, "bridge")
+        self.assertIn("BASF Schwarzheide", normalized.branch_plans[0].human_question)
+        self.assertIn("process", normalized.branch_plans[0].closure_target.lower())
 
     def test_tool_prompt_declares_single_graph_protocol_for_skeleton_and_mutation(self) -> None:
         action = ToolAction(
@@ -501,6 +859,50 @@ class AgentLoomRuntimeTest(unittest.TestCase):
 
         self.assertIn("German Battery Manufacturing Plant", placeholders)
 
+    def test_placeholder_detector_catches_geographic_processing_facility_rollups(self) -> None:
+        placeholders = _placeholder_nodes_from_graph(
+            [
+                GraphObservation(
+                    observationId="o-cn-proc",
+                    subjectId="product:li2co3",
+                    subject="Lithium Carbonate",
+                    subjectType="PRODUCT",
+                    relation="SUPPLIES_TO",
+                    objectId="facility:chinese-processing-facility",
+                    object="Chinese Processing Facility",
+                    objectType="FACILITY",
+                    confidence=0.8,
+                    supportType="document",
+                    provenance=[],
+                    supportNote="Roll-up stand-in.",
+                    branchId="root",
+                )
+            ]
+        )
+        self.assertIn("Chinese Processing Facility", placeholders)
+
+    def test_placeholder_detector_catches_geographic_battery_manufacturing_hub(self) -> None:
+        placeholders = _placeholder_nodes_from_graph(
+            [
+                GraphObservation(
+                    observationId="o-asian-hub",
+                    subjectId="facility:chinese-processing-facility",
+                    subject="Chinese Processing Facility",
+                    subjectType="FACILITY",
+                    relation="SUPPLIES_TO",
+                    objectId="facility:asian-battery-hub",
+                    object="Asian Battery Cell Manufacturing Hub",
+                    objectType="FACILITY",
+                    confidence=0.5,
+                    supportType="hypothesis",
+                    provenance=[],
+                    supportNote="Aggregate hub.",
+                    branchId="root",
+                )
+            ]
+        )
+        self.assertIn("Asian Battery Cell Manufacturing Hub", placeholders)
+
     def test_placeholder_detector_chilean_extraction_placeholder_suffix(self) -> None:
         placeholders = _placeholder_nodes_from_graph(
             [
@@ -619,19 +1021,20 @@ class AgentLoomRuntimeTest(unittest.TestCase):
         )
         hints = _placeholder_resolution_hints([obs])
         self.assertTrue(hints)
-        self.assertIn("replace_node", hints[0])
+        self.assertIn("replace_entity", hints[0])
         self.assertIn("facility:german-battery-manufacturing-plant", hints[0])
 
     def test_working_graph_from_logic_trace_last_write_wins(self) -> None:
         o1 = GraphObservation(
             observationId="o1",
-            subjectId="product:a",
-            subject="Product A",
-            subjectType="PRODUCT",
+            subjectId="facility:supplier-a",
+            subject="Supplier A",
+            subjectType="FACILITY",
             relation="SUPPLIES_TO",
             objectId="facility:x",
             object="Facility X",
             objectType="FACILITY",
+            qualifiers=["product:Product A"],
             confidence=0.2,
             supportType="hypothesis",
             provenance=[],
@@ -644,8 +1047,10 @@ class AgentLoomRuntimeTest(unittest.TestCase):
             {"agentResult": {"graphDelta": [o2.model_dump(mode="json", by_alias=True)]}},
         ]
         merged = _working_graph_from_logic_trace(lt)
-        self.assertEqual(len(merged), 1)
-        self.assertEqual(merged[0].get("confidence"), 0.9)
+        self.assertEqual(graph_counts(graph_state_from_raw(merged))["flowLegCount"], 1)
+        projected = observation_projection(graph_state_from_raw(merged))
+        self.assertEqual(len(projected), 1)
+        self.assertEqual(projected[0].confidence, 0.9)
 
     def test_trace_reasoning_digest_includes_placeholder_digest_keys(self) -> None:
         obs = GraphObservation(
@@ -756,7 +1161,7 @@ class AgentLoomRuntimeTest(unittest.TestCase):
                 qualityScore=0.3,
             )
 
-    def test_replace_node_patch_mutates_working_graph_and_syncs_branch_fragments(self) -> None:
+    def test_replace_entity_patch_mutates_working_graph_and_syncs_branch_fragments(self) -> None:
         placeholder_fragment = GraphFragment(
             fragmentId="overview-f1",
             fragmentType="overview_chain",
@@ -906,7 +1311,7 @@ class AgentLoomRuntimeTest(unittest.TestCase):
 
         result = _apply_graph_fragment_mutations(state, [replacement_fragment])
 
-        mutated_graph = [GraphObservation.model_validate(item) for item in state["working_graph"]]
+        mutated_graph = _working_graph_projection(state)
         self.assertIn("facility:german-battery-plant", result["replacedNodeIds"])
         self.assertFalse(any(obs.object_id == "facility:german-battery-plant" for obs in mutated_graph))
         self.assertTrue(any(obs.object_id == "facility:acc-kaiserslautern" for obs in mutated_graph))
@@ -929,7 +1334,7 @@ class AgentLoomRuntimeTest(unittest.TestCase):
         self.assertIn(STATE_GRAPH_MUTATION_LOG, state)
         self.assertTrue(state[STATE_GRAPH_MUTATION_LOG])
 
-    def test_hypothesis_entity_registry_lineage_after_replace_node(self) -> None:
+    def test_hypothesis_entity_registry_lineage_after_replace_entity(self) -> None:
         placeholder_fragment = GraphFragment(
             fragmentId="overview-f1",
             fragmentType="overview_chain",
@@ -997,7 +1402,7 @@ class AgentLoomRuntimeTest(unittest.TestCase):
         events = reg.get("lineageEvents") or []
         self.assertTrue(events)
         last = events[-1]
-        self.assertEqual(last.get("patchMode"), "replace_node")
+        self.assertEqual(last.get("patchMode"), "replace_entity")
         self.assertIn("facility:german-battery-plant", last.get("fromIds") or [])
         self.assertIn("facility:acc-kaiserslautern", last.get("toIds") or [])
         id_map = ((reg.get("byBranch") or {}).get("sink") or {}).get("idToCanonical") or {}
@@ -1089,7 +1494,7 @@ class AgentLoomRuntimeTest(unittest.TestCase):
                 texts.append(str(item["text"]))
         self.assertTrue(any("Slot contract conflict" in t for t in texts))
 
-    def test_replace_node_removes_residual_edges_matching_label_slug_not_only_explicit_id(self) -> None:
+    def test_replace_entity_removes_residual_edges_matching_label_slug_not_only_explicit_id(self) -> None:
         """Residual-only duplicate of the same sink via slug-derived id must be pruned with the explicit oldId."""
         placeholder_fragment = GraphFragment(
             fragmentId="overview-f1",
@@ -1172,10 +1577,155 @@ class AgentLoomRuntimeTest(unittest.TestCase):
             "branch_states": [],
         }
         result = _apply_graph_fragment_mutations(state, [replacement_fragment])
-        mutated = [GraphObservation.model_validate(item) for item in state["working_graph"]]
+        mutated = _working_graph_projection(state)
         self.assertFalse(any("German Battery Plant" == obs.object for obs in mutated))
         self.assertTrue(any(obs.object_id == "facility:acc-kaiserslautern" for obs in mutated))
         self.assertIn("orphanFlowHints", result)
+
+    def test_replace_entity_patch_is_rejected_when_it_collapses_route_depth(self) -> None:
+        overview_fragment = GraphFragment(
+            fragmentId="overview-route",
+            fragmentType="overview_chain",
+            title="Long route",
+            humanQuestion="What is the long route?",
+            humanSummary="A business-complete route exists through a placeholder midstream plant.",
+            branchId="overview",
+            observations=[
+                GraphObservation(
+                    observationId="o1",
+                    subjectId="facility:mine",
+                    subject="Mine",
+                    subjectType="FACILITY",
+                    relation="EXTRACTS_FROM",
+                    objectId="deposit:ore-body",
+                    object="Ore Body",
+                    objectType="DEPOSIT",
+                    confidence=0.9,
+                    supportType="document",
+                    branchId="overview",
+                ),
+                GraphObservation(
+                    observationId="o2",
+                    subjectId="facility:mine",
+                    subject="Mine",
+                    subjectType="FACILITY",
+                    relation="PRODUCES",
+                    objectId="product:ore",
+                    object="Ore",
+                    objectType="PRODUCT",
+                    confidence=0.9,
+                    supportType="document",
+                    branchId="overview",
+                ),
+                GraphObservation(
+                    observationId="o3",
+                    subjectId="facility:mine",
+                    subject="Mine",
+                    subjectType="FACILITY",
+                    relation="SUPPLIES_TO",
+                    objectId="facility:placeholder-converter",
+                    object="Placeholder Converter",
+                    objectType="FACILITY",
+                    qualifiers=["product:Ore"],
+                    confidence=0.7,
+                    supportType="mixed",
+                    branchId="overview",
+                ),
+                GraphObservation(
+                    observationId="o4",
+                    subjectId="facility:placeholder-converter",
+                    subject="Placeholder Converter",
+                    subjectType="FACILITY",
+                    relation="PRODUCES",
+                    objectId="product:refined-salt",
+                    object="Refined Salt",
+                    objectType="PRODUCT",
+                    confidence=0.6,
+                    supportType="model_knowledge",
+                    branchId="overview",
+                ),
+                GraphObservation(
+                    observationId="o5",
+                    subjectId="product:ore",
+                    subject="Ore",
+                    subjectType="PRODUCT",
+                    relation="TRANSFORMS_INTO",
+                    objectId="product:refined-salt",
+                    object="Refined Salt",
+                    objectType="PRODUCT",
+                    qualifiers=["host:Placeholder Converter"],
+                    confidence=0.6,
+                    supportType="model_knowledge",
+                    branchId="overview",
+                ),
+                GraphObservation(
+                    observationId="o6",
+                    subjectId="facility:placeholder-converter",
+                    subject="Placeholder Converter",
+                    subjectType="FACILITY",
+                    relation="SUPPLIES_TO",
+                    objectId="facility:cell-plant",
+                    object="Cell Plant",
+                    objectType="FACILITY",
+                    qualifiers=["product:Refined Salt"],
+                    confidence=0.7,
+                    supportType="mixed",
+                    branchId="overview",
+                ),
+            ],
+            completeness="partial",
+            qualityScore=0.7,
+        )
+        replacement_fragment = GraphFragment(
+            fragmentId="replace-midstream",
+            fragmentType="chain_fragment",
+            title="Concrete but incomplete converter",
+            humanQuestion="Which concrete converter replaces the placeholder?",
+            humanSummary="A concrete converter name is known, but downstream continuity is still missing.",
+            branchId="replace-midstream",
+            patchMode="replace_entity",
+            oldId="facility:placeholder-converter",
+            patchRationale="Replace the placeholder converter with a named facility.",
+            observations=[
+                GraphObservation(
+                    observationId="r1",
+                    subjectId="facility:mine",
+                    subject="Mine",
+                    subjectType="FACILITY",
+                    relation="SUPPLIES_TO",
+                    objectId="facility:named-converter",
+                    object="Named Converter",
+                    objectType="FACILITY",
+                    qualifiers=["product:Ore"],
+                    confidence=0.8,
+                    supportType="document",
+                    branchId="replace-midstream",
+                )
+            ],
+            completeness="partial",
+            qualityScore=0.6,
+        )
+        state = {
+            "working_graph": [item.model_dump(mode="json", by_alias=True) for item in overview_fragment.observations],
+            "graph_fragments": [overview_fragment.model_dump(mode="json", by_alias=True)],
+            "open_gaps": [],
+            "supervisor_cycle": 2,
+        }
+
+        result = _apply_graph_fragment_mutations(state, [replacement_fragment])
+        mutated = _working_graph_projection(state)
+        texts = []
+        for raw in state.get(STATE_OPEN_GAPS) or []:
+            if isinstance(raw, str):
+                texts.append(raw)
+            elif isinstance(raw, dict) and raw.get("text"):
+                texts.append(str(raw["text"]))
+        last_mutation = (state.get(STATE_GRAPH_MUTATION_LOG) or [])[-1]
+
+        self.assertFalse(any(obs.object_id == "facility:named-converter" for obs in mutated))
+        self.assertTrue(any(obs.object_id == "facility:placeholder-converter" for obs in mutated))
+        self.assertTrue(any("Replacement patch replace-midstream was rejected" in text for text in texts))
+        self.assertTrue(any(item.get("rejectedReason") for item in last_mutation.get("patchSummaries", [])))
 
     def test_replace_fragment_patch_supersedes_old_fragment_and_rebuilds_graph(self) -> None:
         old_fragment = GraphFragment(
@@ -1279,7 +1829,7 @@ class AgentLoomRuntimeTest(unittest.TestCase):
         self.assertIn("frag-old", result["replacedFragmentIds"])
         mutated_fragments = [GraphFragment.model_validate(item) for item in state["graph_fragments"]]
         self.assertEqual({item.fragment_id for item in mutated_fragments}, {"frag-new", "frag-other"})
-        mutated_graph = [GraphObservation.model_validate(item) for item in state["working_graph"]]
+        mutated_graph = _working_graph_projection(state)
         self.assertFalse(any(obs.object_id == "facility:broad-sink" for obs in mutated_graph))
         self.assertTrue(any(obs.object_id == "facility:acc-kaiserslautern" for obs in mutated_graph))
         self.assertTrue(any(obs.object_id == "facility:plant" for obs in mutated_graph))
@@ -1361,7 +1911,7 @@ class AgentLoomRuntimeTest(unittest.TestCase):
 
         _apply_graph_fragment_mutations(state, [replacement_fragment, stale_policy_fragment])
 
-        mutated_graph = [GraphObservation.model_validate(item) for item in state["working_graph"]]
+        mutated_graph = _working_graph_projection(state)
         self.assertFalse(any(obs.object_id == "facility:german-battery-plant" for obs in mutated_graph))
         self.assertTrue(any(obs.object_id == "facility:acc-kaiserslautern" for obs in mutated_graph))
         self.assertTrue(any(obs.object_id == "product:nickel-sulfate" and obs.relation == "IMPOSES_CONDITION" for obs in mutated_graph))
@@ -2156,9 +2706,28 @@ class AgentLoomRuntimeTest(unittest.TestCase):
             humanQuestion="Which supplier reaches ACC?",
             humanSummary="ACC is a downstream sink.",
             branchId="acc-branch",
-            observations=[
+            entityNodes=[
+                EntityNode(nodeId="organization:nickel-distributor", label="Nickel Distributor", entityType="ORGANIZATION", confidence=0.6, supportType="mixed"),
+                EntityNode(nodeId="facility:acc-kaiserslautern", label="ACC Kaiserslautern Facility", entityType="FACILITY", confidence=0.9, supportType="document"),
+                EntityNode(nodeId="product:nickel-sulfate", label="Nickel Sulfate", entityType="PRODUCT", confidence=0.6, supportType="mixed"),
+            ],
+            flowLegs=[
+                FlowLeg(
+                    legId="flow-1",
+                    supplierNodeId="organization:nickel-distributor",
+                    customerNodeId="facility:acc-kaiserslautern",
+                    productNodeId="product:nickel-sulfate",
+                    confidence=0.6,
+                    supportType="mixed",
+                    provenance=["doc-2"],
+                    supportNote="Supply leg.",
+                    branchId="acc-branch",
+                )
+            ],
+            overlayEdges=[
                 GraphObservation(
                     observationId="loc-1",
+                    subjectId="facility:acc-kaiserslautern",
                     subject="ACC Kaiserslautern Facility",
                     subjectType="FACILITY",
                     relation="LOCATED_IN",
@@ -2169,20 +2738,7 @@ class AgentLoomRuntimeTest(unittest.TestCase):
                     provenance=["doc-1"],
                     supportNote="Location.",
                     branchId="acc-branch",
-                ),
-                GraphObservation(
-                    observationId="flow-1",
-                    subject="Nickel Sulfate",
-                    subjectType="PRODUCT",
-                    relation="SUPPLIES_TO",
-                    object="ACC Kaiserslautern Facility",
-                    objectType="FACILITY",
-                    confidence=0.6,
-                    supportType="mixed",
-                    provenance=["doc-2"],
-                    supportNote="Supply edge.",
-                    branchId="acc-branch",
-                ),
+                )
             ],
             completeness="partial",
             qualityScore=0.7,
@@ -2217,7 +2773,7 @@ class AgentLoomRuntimeTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual(candidates[0].start_node, "Nickel Sulfate")
+        self.assertEqual(candidates[0].start_node, "Nickel Distributor")
         self.assertEqual(candidates[0].end_node, "ACC Kaiserslautern Facility")
 
     def test_candidate_paths_collapse_dependent_followups_into_parent_hypothesis(self) -> None:
@@ -2332,21 +2888,115 @@ class AgentLoomRuntimeTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual(len(candidates), 1)
-        self.assertEqual(candidates[0].path_id, "root")
-        self.assertEqual(candidates[0].supporting_branch_ids, ["root", "sink"])
-        self.assertEqual(candidates[0].end_node, "BASF Schwarzheide")
+        root_candidate = next(item for item in candidates if item.path_id == "root")
+        self.assertEqual(root_candidate.supporting_branch_ids, ["root", "sink"])
+        self.assertEqual(root_candidate.end_node, "BASF Schwarzheide")
+
+    def test_reachability_bfs_seeds_midstream_facilities_when_extract_sources_exist(self) -> None:
+        """Enterprise-anchored chains must be discoverable even if they do not extend from the same extract site."""
+        report = _graph_reachability_report(
+            {
+                "working_graph": {
+                    "entityNodes": [
+                        {"nodeId": "deposit:remote-dep", "label": "RemoteDep", "entityType": "DEPOSIT", "confidence": 0.9, "supportType": "document"},
+                        {"nodeId": "facility:remote-mine", "label": "RemoteMine", "entityType": "FACILITY", "confidence": 0.9, "supportType": "document"},
+                        {"nodeId": "facility:mid-plant", "label": "MidPlant", "entityType": "FACILITY", "confidence": 0.9, "supportType": "document"},
+                        {"nodeId": "facility:vw", "label": "VW", "entityType": "FACILITY", "confidence": 0.9, "supportType": "document"},
+                        {"nodeId": "product:remote-ore", "label": "RemoteOre", "entityType": "PRODUCT", "confidence": 0.9, "supportType": "document"},
+                        {"nodeId": "product:li-salt", "label": "LiSalt", "entityType": "PRODUCT", "confidence": 0.9, "supportType": "document"},
+                    ],
+                    "flowLegs": [
+                        {
+                            "legId": "leg-1",
+                            "supplierNodeId": "facility:mid-plant",
+                            "customerNodeId": "facility:vw",
+                            "productNodeId": "product:li-salt",
+                            "confidence": 0.9,
+                            "supportType": "document",
+                        }
+                    ],
+                    "processSteps": [
+                        {
+                            "stepId": "step-1",
+                            "hostNodeId": "facility:remote-mine",
+                            "processKind": "extraction",
+                            "inputNodeIds": ["deposit:remote-dep"],
+                            "outputNodeIds": ["product:remote-ore"],
+                            "confidence": 0.9,
+                            "supportType": "document",
+                        },
+                        {
+                            "stepId": "step-2",
+                            "hostNodeId": "facility:mid-plant",
+                            "processKind": "transformation",
+                            "inputNodeIds": [],
+                            "outputNodeIds": ["product:li-salt"],
+                            "confidence": 0.9,
+                            "supportType": "document",
+                        }
+                    ],
+                    "overlayEdges": [],
+                }
+            }
+        )
+        self.assertEqual(len(report["groundedCompleteChains"]), 0)
+        self.assertTrue(report["partialChains"])
+        self.assertEqual(report["partialChains"][0]["source"], "MidPlant")
+        self.assertEqual(report["partialChains"][0]["sink"], "VW")
+        self.assertIn("business-complete", report["partialChains"][0]["breakReason"])
 
     def test_reachability_treats_terminal_supply_sink_as_structurally_complete_chain(self) -> None:
         report = _graph_reachability_report(
             {
-                "working_graph": [
-                    {"subject": "Deposit", "subjectType": "DEPOSIT", "relation": "EXTRACTS_FROM", "object": "Mine", "objectType": "FACILITY", "confidence": 0.8, "supportType": "document"},
-                    {"subject": "Mine", "subjectType": "FACILITY", "relation": "PRODUCES", "object": "Nickel Ore", "objectType": "PRODUCT", "confidence": 0.8, "supportType": "document"},
-                    {"subject": "Nickel Ore", "subjectType": "PRODUCT", "relation": "TRANSFORMS_INTO", "object": "Nickel Sulfate", "objectType": "PRODUCT", "confidence": 0.4, "supportType": "model_knowledge"},
-                    {"subject": "Nickel Sulfate", "subjectType": "PRODUCT", "relation": "SUPPLIES_TO", "object": "BASF Schwarzheide", "objectType": "FACILITY", "confidence": 0.4, "supportType": "model_knowledge"},
-                    {"subject": "Nickel Sulfate", "subjectType": "PRODUCT", "relation": "SUPPLIES_TO", "object": "BASF Schwarzheide", "objectType": "FACILITY", "confidence": 0.4, "supportType": "model_knowledge"},
-                ]
+                "working_graph": {
+                    "entityNodes": [
+                        {"nodeId": "deposit:mine-deposit", "label": "Deposit", "entityType": "DEPOSIT", "confidence": 0.8, "supportType": "document"},
+                        {"nodeId": "facility:mine", "label": "Mine", "entityType": "FACILITY", "confidence": 0.8, "supportType": "document"},
+                        {"nodeId": "facility:refinery", "label": "Refinery", "entityType": "FACILITY", "confidence": 0.4, "supportType": "model_knowledge"},
+                        {"nodeId": "facility:basf", "label": "BASF Schwarzheide", "entityType": "FACILITY", "confidence": 0.4, "supportType": "model_knowledge"},
+                        {"nodeId": "product:nickel-ore", "label": "Nickel Ore", "entityType": "PRODUCT", "confidence": 0.8, "supportType": "document"},
+                        {"nodeId": "product:nickel-sulfate", "label": "Nickel Sulfate", "entityType": "PRODUCT", "confidence": 0.4, "supportType": "model_knowledge"},
+                    ],
+                    "flowLegs": [
+                        {
+                            "legId": "leg-ore",
+                            "supplierNodeId": "facility:mine",
+                            "customerNodeId": "facility:refinery",
+                            "productNodeId": "product:nickel-ore",
+                            "confidence": 0.8,
+                            "supportType": "document",
+                        },
+                        {
+                            "legId": "leg-1",
+                            "supplierNodeId": "facility:refinery",
+                            "customerNodeId": "facility:basf",
+                            "productNodeId": "product:nickel-sulfate",
+                            "confidence": 0.4,
+                            "supportType": "model_knowledge",
+                        }
+                    ],
+                    "processSteps": [
+                        {
+                            "stepId": "step-1",
+                            "hostNodeId": "facility:mine",
+                            "processKind": "extraction",
+                            "inputNodeIds": ["deposit:mine-deposit"],
+                            "outputNodeIds": ["product:nickel-ore"],
+                            "confidence": 0.8,
+                            "supportType": "document",
+                        },
+                        {
+                            "stepId": "step-2",
+                            "hostNodeId": "facility:refinery",
+                            "processKind": "transformation",
+                            "inputNodeIds": ["product:nickel-ore"],
+                            "outputNodeIds": ["product:nickel-sulfate"],
+                            "confidence": 0.4,
+                            "supportType": "model_knowledge",
+                        }
+                    ],
+                    "overlayEdges": [],
+                }
             }
         )
 
@@ -2358,12 +3008,55 @@ class AgentLoomRuntimeTest(unittest.TestCase):
     def test_reachability_hypothesis_terminal_sink_is_structurally_complete_not_partial(self) -> None:
         report = _graph_reachability_report(
             {
-                "working_graph": [
-                    {"subject": "Deposit", "subjectType": "DEPOSIT", "relation": "EXTRACTS_FROM", "object": "Mine", "objectType": "FACILITY", "confidence": 0.8, "supportType": "document"},
-                    {"subject": "Mine", "subjectType": "FACILITY", "relation": "PRODUCES", "object": "Nickel Ore", "objectType": "PRODUCT", "confidence": 0.8, "supportType": "document"},
-                    {"subject": "Nickel Ore", "subjectType": "PRODUCT", "relation": "TRANSFORMS_INTO", "object": "Nickel Sulfate", "objectType": "PRODUCT", "confidence": 0.2, "supportType": "hypothesis"},
-                    {"subject": "Nickel Sulfate", "subjectType": "PRODUCT", "relation": "SUPPLIES_TO", "object": "BASF Schwarzheide", "objectType": "FACILITY", "confidence": 0.4, "supportType": "model_knowledge"},
-                ]
+                "working_graph": {
+                    "entityNodes": [
+                        {"nodeId": "deposit:mine-deposit", "label": "Deposit", "entityType": "DEPOSIT", "confidence": 0.8, "supportType": "document"},
+                        {"nodeId": "facility:mine", "label": "Mine", "entityType": "FACILITY", "confidence": 0.8, "supportType": "document"},
+                        {"nodeId": "facility:refinery", "label": "Refinery", "entityType": "FACILITY", "confidence": 0.2, "supportType": "hypothesis"},
+                        {"nodeId": "facility:basf", "label": "BASF Schwarzheide", "entityType": "FACILITY", "confidence": 0.4, "supportType": "model_knowledge"},
+                        {"nodeId": "product:nickel-ore", "label": "Nickel Ore", "entityType": "PRODUCT", "confidence": 0.8, "supportType": "document"},
+                        {"nodeId": "product:nickel-sulfate", "label": "Nickel Sulfate", "entityType": "PRODUCT", "confidence": 0.2, "supportType": "hypothesis"},
+                    ],
+                    "flowLegs": [
+                        {
+                            "legId": "leg-ore",
+                            "supplierNodeId": "facility:mine",
+                            "customerNodeId": "facility:refinery",
+                            "productNodeId": "product:nickel-ore",
+                            "confidence": 0.8,
+                            "supportType": "document",
+                        },
+                        {
+                            "legId": "leg-1",
+                            "supplierNodeId": "facility:refinery",
+                            "customerNodeId": "facility:basf",
+                            "productNodeId": "product:nickel-sulfate",
+                            "confidence": 0.4,
+                            "supportType": "model_knowledge",
+                        }
+                    ],
+                    "processSteps": [
+                        {
+                            "stepId": "step-1",
+                            "hostNodeId": "facility:mine",
+                            "processKind": "extraction",
+                            "inputNodeIds": ["deposit:mine-deposit"],
+                            "outputNodeIds": ["product:nickel-ore"],
+                            "confidence": 0.8,
+                            "supportType": "document",
+                        },
+                        {
+                            "stepId": "step-2",
+                            "hostNodeId": "facility:refinery",
+                            "processKind": "transformation",
+                            "inputNodeIds": ["product:nickel-ore"],
+                            "outputNodeIds": ["product:nickel-sulfate"],
+                            "confidence": 0.2,
+                            "supportType": "hypothesis",
+                        }
+                    ],
+                    "overlayEdges": [],
+                }
             }
         )
 
@@ -2570,7 +3263,7 @@ class AgentLoomRuntimeTest(unittest.TestCase):
 
         self.assertEqual(report["groundedCompleteChains"], [])
         self.assertTrue(report["structurallyCompleteChains"] or report["partialChains"])
-        self.assertIn("No document-grounded complete chain", report["healthSummary"])
+        self.assertIn("No document-grounded business-complete chain", report["healthSummary"])
 
     def test_vertex_partial_can_reroute_to_web(self) -> None:
         plan = BranchPlan(
@@ -2828,40 +3521,34 @@ class AgentLoomRuntimeTest(unittest.TestCase):
         self.assertIn("materialProgressLastStep", rep)
         self.assertIn("supply_chain_investigator_agent", rep["materialProgressLastStep"])
 
-    def test_normalize_marks_truncation_when_graph_delta_capped(self) -> None:
-        prev = agentloom_agent_module.MAX_GRAPH_DELTA_OBSERVATIONS
-        agentloom_agent_module.MAX_GRAPH_DELTA_OBSERVATIONS = 4
-        try:
-            mission = InvestigationMission(
-                missionId="m",
-                objective="o",
-                assignedRoles=[ROLE_SUPPLY_CHAIN],
-                groundingMode="mixed",
+    def test_normalize_preserves_graph_delta_without_runtime_cap(self) -> None:
+        mission = InvestigationMission(
+            missionId="m",
+            objective="o",
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            groundingMode="mixed",
+        )
+        obs = [
+            GraphObservation(
+                observationId=f"id-{i}",
+                subject="S",
+                relation="PRODUCES",
+                object=f"O{i}",
+                confidence=0.7,
+                supportType="model_knowledge",
             )
-            obs = [
-                GraphObservation(
-                    observationId=f"id-{i}",
-                    subject="S",
-                    relation="PRODUCES",
-                    object=f"O{i}",
-                    confidence=0.7,
-                    supportType="model_knowledge",
-                )
-                for i in range(8)
-            ]
-            raw = AgentResult(
-                agentName="supply_chain_investigator_agent",
-                missionId="m",
-                status="success",
-                summary="s",
-                graphDelta=obs,
-            )
-            normalized = _normalize_agent_result(raw, mission, [ROLE_SUPPLY_CHAIN])
-            self.assertTrue(normalized.truncation)
-            self.assertIn("capped", (normalized.truncation_detail or "").lower())
-            self.assertEqual(len(normalized.graph_delta), 4)
-        finally:
-            agentloom_agent_module.MAX_GRAPH_DELTA_OBSERVATIONS = prev
+            for i in range(8)
+        ]
+        raw = AgentResult(
+            agentName="supply_chain_investigator_agent",
+            missionId="m",
+            status="success",
+            summary="s",
+            graphDelta=obs,
+        )
+        normalized = _normalize_agent_result(raw, mission, [ROLE_SUPPLY_CHAIN])
+        self.assertFalse(normalized.truncation)
+        self.assertEqual(len(normalized.graph_delta), 8)
 
     def test_delegate_constraints_stagnation_escalates_to_critic(self) -> None:
         mission = InvestigationMission(
@@ -2881,13 +3568,119 @@ class AgentLoomRuntimeTest(unittest.TestCase):
             STATE_GLOBAL_STAGNATION: agentloom_limits.STAGNATION_FORCE_CRITIC_CYCLES,
             STATE_LOGIC_TRACE: [],
             STATE_SELECTED_ROLES: [ROLE_SUPPLY_CHAIN],
-            STATE_WORKING_GRAPH: [],
+            STATE_WORKING_GRAPH: {
+                "entityNodes": [
+                    {"nodeId": "deposit:mine-deposit", "label": "Deposit", "entityType": "DEPOSIT", "confidence": 0.9, "supportType": "document"},
+                    {"nodeId": "facility:mine", "label": "Mine", "entityType": "FACILITY", "confidence": 0.9, "supportType": "document"},
+                    {"nodeId": "facility:refinery", "label": "Refinery", "entityType": "FACILITY", "confidence": 0.9, "supportType": "document"},
+                    {"nodeId": "facility:cell-plant", "label": "Cell Plant", "entityType": "FACILITY", "confidence": 0.9, "supportType": "document"},
+                    {"nodeId": "product:ore", "label": "Ore", "entityType": "PRODUCT", "confidence": 0.9, "supportType": "document"},
+                    {"nodeId": "product:salt", "label": "Salt", "entityType": "PRODUCT", "confidence": 0.9, "supportType": "document"},
+                ],
+                "flowLegs": [
+                    {
+                        "legId": "leg-ore",
+                        "supplierNodeId": "facility:mine",
+                        "customerNodeId": "facility:refinery",
+                        "productNodeId": "product:ore",
+                        "confidence": 0.9,
+                        "supportType": "document",
+                    },
+                    {
+                        "legId": "leg-salt",
+                        "supplierNodeId": "facility:refinery",
+                        "customerNodeId": "facility:cell-plant",
+                        "productNodeId": "product:salt",
+                        "confidence": 0.9,
+                        "supportType": "document",
+                    },
+                ],
+                "processSteps": [
+                    {
+                        "stepId": "step-1",
+                        "hostNodeId": "facility:mine",
+                        "processKind": "extraction",
+                        "inputNodeIds": ["deposit:mine-deposit"],
+                        "outputNodeIds": ["product:ore"],
+                        "confidence": 0.9,
+                        "supportType": "document",
+                    },
+                    {
+                        "stepId": "step-2",
+                        "hostNodeId": "facility:refinery",
+                        "processKind": "transformation",
+                        "inputNodeIds": ["product:ore"],
+                        "outputNodeIds": ["product:salt"],
+                        "confidence": 0.9,
+                        "supportType": "document",
+                    },
+                ],
+                "overlayEdges": [],
+            },
             STATE_OPEN_GAP_STREAK: 0,
             STATE_LAST_GAP_FINGERPRINT: "",
         }
         out, pc = _delegate_constraints(st, dec, cycle=5, user_question="q?")
         self.assertIsNotNone(pc)
         self.assertEqual(out.next_agent, "critic_agent")
+
+    def test_delegate_constraints_defers_critic_without_business_complete_chain(self) -> None:
+        mission = InvestigationMission(
+            missionId="m",
+            objective="decide whether to stop",
+            assignedRoles=[ROLE_SUPPLY_CHAIN, ROLE_GOVERNANCE],
+            groundingMode="mixed",
+        )
+        dec = SupervisorDecision(
+            cycle=4,
+            assessment="Need an honest exit assessment.",
+            rationale=["Progress stalled."],
+            nextAgent="critic_agent",
+            mission=mission,
+        )
+        st = {
+            STATE_GLOBAL_STAGNATION: agentloom_limits.STAGNATION_FORCE_CRITIC_CYCLES,
+            STATE_LOGIC_TRACE: [],
+            STATE_SELECTED_ROLES: [ROLE_SUPPLY_CHAIN, ROLE_GOVERNANCE],
+            STATE_WORKING_GRAPH: {
+                "entityNodes": [
+                    {"nodeId": "deposit:mine-deposit", "label": "Deposit", "entityType": "DEPOSIT", "confidence": 0.9, "supportType": "document"},
+                    {"nodeId": "facility:mine", "label": "Mine", "entityType": "FACILITY", "confidence": 0.9, "supportType": "document"},
+                    {"nodeId": "facility:placeholder-sink", "label": "Placeholder Sink", "entityType": "FACILITY", "confidence": 0.3, "supportType": "hypothesis"},
+                    {"nodeId": "product:ore", "label": "Ore", "entityType": "PRODUCT", "confidence": 0.9, "supportType": "document"},
+                ],
+                "flowLegs": [
+                    {
+                        "legId": "leg-1",
+                        "supplierNodeId": "facility:mine",
+                        "customerNodeId": "facility:placeholder-sink",
+                        "productNodeId": "product:ore",
+                        "confidence": 0.4,
+                        "supportType": "hypothesis",
+                    }
+                ],
+                "processSteps": [
+                    {
+                        "stepId": "step-1",
+                        "hostNodeId": "facility:mine",
+                        "processKind": "extraction",
+                        "inputNodeIds": ["deposit:mine-deposit"],
+                        "outputNodeIds": ["product:ore"],
+                        "confidence": 0.9,
+                        "supportType": "document",
+                    }
+                ],
+                "overlayEdges": [],
+            },
+            STATE_OPEN_GAP_STREAK: agentloom_limits.REPEATED_GAP_THRESHOLD,
+            STATE_LAST_GAP_FINGERPRINT: "gap-1",
+        }
+
+        out, pc = _delegate_constraints(st, dec, cycle=4, user_question="q?")
+
+        self.assertIsNotNone(pc)
+        self.assertEqual(out.next_agent, "supply_chain_investigator_agent")
+        self.assertEqual(out.mission.assigned_roles, [ROLE_SUPPLY_CHAIN])
 
     def test_golden_fixture_unified_progress_keys(self) -> None:
         path = os.path.join(os.path.dirname(__file__), "fixtures", "unified_progress_golden.json")

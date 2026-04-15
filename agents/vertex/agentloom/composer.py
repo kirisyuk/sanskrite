@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from collections.abc import Sequence
+from typing import Any
 
 from agentloom.contracts import (
     BranchState,
@@ -9,17 +10,26 @@ from agentloom.contracts import (
     ChainSummary,
     FinalChainSummary,
     GraphFragment,
-    GraphObservation,
     HypothesisState,
     InternalBrief,
     LearnedFinding,
     LogicTraceEntry,
     NarrativeSynthesisStatus,
+    OperationalGraphState,
     RuntimeLogEntry,
     StructuredNarrativeAnswer,
 )
 from agentloom.internal_brief import build_internal_brief
 from agentloom.narrative_coverage import full_narrative_text_from_answer
+from agentloom.operational_graph import (
+    fragment_operational_graph,
+    graph_context_lines,
+    graph_counts,
+    graph_state_from_observations,
+    graph_state_from_raw,
+    observation_projection,
+    support_types_for_graph,
+)
 
 
 def _epistemic_lead_for_concise_answer(internal_brief: InternalBrief, executive_body: str) -> str:
@@ -53,10 +63,22 @@ def _epistemic_lead_for_concise_answer(internal_brief: InternalBrief, executive_
     return merged[:4000]
 
 
+def _coerce_graph_state(graph: OperationalGraphState | list[Any] | dict[str, Any]) -> OperationalGraphState:
+    if isinstance(graph, OperationalGraphState):
+        return graph
+    if isinstance(graph, dict):
+        return graph_state_from_raw(graph)
+    return graph_state_from_observations(list(graph))
+
+
+def _graph_components(graph: OperationalGraphState) -> list[Any]:
+    return [*graph.entity_nodes, *graph.flow_legs, *graph.process_steps, *graph.overlay_edges]
+
+
 def build_final_chain_summary(
     question: str,
     selected_roles: list[str],
-    working_graph: list[GraphObservation],
+    working_graph: OperationalGraphState | list[Any] | dict[str, Any],
     graph_fragments: list[GraphFragment],
     branches: list[BranchState],
     hypotheses: list[HypothesisState],
@@ -74,21 +96,23 @@ def build_final_chain_summary(
     extra_epistemic_caveats: Sequence[str] | None = None,
     stopped_by_supervisor_cycle_limit: bool = False,
 ) -> FinalChainSummary:
+    normalized_graph = _coerce_graph_state(working_graph)
+    projected_graph = observation_projection(normalized_graph)
     source_index = OrderedDict()
     open_verification_needs: list[str] = []
 
-    for observation in working_graph:
-        for provenance in observation.provenance:
+    for component in _graph_components(normalized_graph):
+        for provenance in component.provenance:
             source_index[provenance] = provenance
-        if observation.support_type in {"model_knowledge", "hypothesis"} and observation.support_note:
-            open_verification_needs.append(observation.support_note)
+        if component.support_type in {"model_knowledge", "hypothesis"} and component.support_note:
+            open_verification_needs.append(component.support_note)
 
     for fragment in graph_fragments:
-        for observation in fragment.observations:
-            for provenance in observation.provenance:
+        for component in _graph_components(fragment_operational_graph(fragment)):
+            for provenance in component.provenance:
                 source_index[provenance] = provenance
-            if observation.support_type in {"model_knowledge", "hypothesis"} and observation.support_note:
-                open_verification_needs.append(observation.support_note)
+            if component.support_type in {"model_knowledge", "hypothesis"} and component.support_note:
+                open_verification_needs.append(component.support_note)
 
     if open_gap_texts is not None:
         unresolved_gaps: list[str] = list(open_gap_texts)
@@ -116,7 +140,7 @@ def build_final_chain_summary(
         internal_brief = build_internal_brief(
             question,
             selected_roles,
-            working_graph,
+            normalized_graph,
             graph_fragments,
             branches,
             hypotheses,
@@ -133,7 +157,7 @@ def build_final_chain_summary(
             internal_brief = internal_brief.model_copy(update={"epistemic_caveats": merged_c})
     structured = structured_narrative
     caveats = list(internal_brief.epistemic_caveats)
-    chain_summaries = _build_chain_summaries(graph_fragments, working_graph, candidate_paths)
+    chain_summaries = _build_chain_summaries(graph_fragments, normalized_graph, candidate_paths)
     gap_n = len(internal_brief.clustered_gaps)
 
     full_narrative = ""
@@ -183,7 +207,9 @@ def build_final_chain_summary(
         hypotheses=hypotheses,
         candidate_paths=candidate_paths,
         learned_findings=learned_findings,
-        graph_observations=working_graph,
+        operationalGraph=normalized_graph,
+        operationalCounts=graph_counts(normalized_graph),
+        graph_observations=projected_graph,
         graph_fragments=graph_fragments,
         branches=branches,
         chain_summaries=chain_summaries,
@@ -200,7 +226,7 @@ def build_final_chain_summary(
 def build_final_chain_summary_sync(
     question: str,
     selected_roles: list[str],
-    working_graph: list[GraphObservation],
+    working_graph: OperationalGraphState | list[Any] | dict[str, Any],
     graph_fragments: list[GraphFragment],
     branches: list[BranchState],
     hypotheses: list[HypothesisState],
@@ -236,9 +262,10 @@ def build_final_chain_summary_sync(
 
 def _build_chain_summaries(
     graph_fragments: list[GraphFragment],
-    working_graph: list[GraphObservation],
+    working_graph: OperationalGraphState | list[Any] | dict[str, Any],
     candidate_paths: list[CandidatePath],
 ) -> list[ChainSummary]:
+    normalized_graph = _coerce_graph_state(working_graph)
     path_by_fragment_id: dict[str, CandidatePath] = {}
     for path in candidate_paths:
         for fragment_id in path.supporting_fragment_ids:
@@ -268,38 +295,60 @@ def _build_chain_summaries(
             ),
         )
         for fragment in ranked_fragments:
-            signature = (fragment.title, tuple(item.observation_id for item in fragment.observations))
+            fragment_graph = fragment_operational_graph(fragment)
+            if fragment.observations and not any(
+                (fragment.entity_nodes, fragment.flow_legs, fragment.process_steps, fragment.overlay_edges)
+            ):
+                lines = [f"{item.subject} --{item.relation}--> {item.object}" for item in fragment.observations[:8]]
+                support_types = {item.support_type for item in fragment.observations}
+                confidence = round(
+                    sum(float(item.confidence) for item in fragment.observations) / max(len(fragment.observations), 1),
+                    3,
+                )
+            else:
+                lines = graph_context_lines(fragment_graph, limit=8)
+                components = _graph_components(fragment_graph)
+                support_types = {item.support_type for item in components}
+                confidence = round(
+                    sum(float(item.confidence) for item in components) / max(len(components), 1),
+                    3,
+                )
+            signature = (fragment.title, tuple(lines))
             if signature in seen_signatures:
                 continue
             seen_signatures.add(signature)
             summaries.append(
                 ChainSummary(
                     label=fragment.title,
-                    steps=[f"{item.subject} --{item.relation}--> {item.object}" for item in fragment.observations[:8]],
-                    evidenceStatus=_evidence_status_for_support_types({item.support_type for item in fragment.observations}),
-                    confidence=round(sum(item.confidence for item in fragment.observations) / max(len(fragment.observations), 1), 3),
+                    steps=lines,
+                    evidenceStatus=_evidence_status_for_support_types(support_types),
+                    confidence=confidence,
                 )
             )
         if summaries:
             return summaries[:12]
 
-    grouped: dict[str, list[GraphObservation]] = OrderedDict()
-    for item in working_graph:
-        grouped.setdefault(item.subject, []).append(item)
-
+    context_lines = graph_context_lines(normalized_graph, limit=24)
+    support_types = support_types_for_graph(normalized_graph)
+    components = _graph_components(normalized_graph)
+    if not context_lines:
+        return []
     summaries = []
-    for subject, observations in list(grouped.items())[:10]:
-        steps = [f"{item.subject} --{item.relation}--> {item.object}" for item in observations[:6]]
-        support_types = {item.support_type for item in observations}
+    for idx in range(0, len(context_lines), 6):
+        chunk = context_lines[idx : idx + 6]
+        label = "Operational graph" if idx == 0 else f"Operational graph {idx // 6 + 1}"
         summaries.append(
             ChainSummary(
-                label=subject,
-                steps=steps,
+                label=label,
+                steps=chunk,
                 evidenceStatus=_evidence_status_for_support_types(support_types),
-                confidence=round(sum(item.confidence for item in observations) / len(observations), 3),
+                confidence=round(
+                    sum(float(item.confidence) for item in components) / max(len(components), 1),
+                    3,
+                ),
             )
         )
-    return summaries
+    return summaries[:12]
 
 
 def _policy_dense_path(path: CandidatePath) -> bool:

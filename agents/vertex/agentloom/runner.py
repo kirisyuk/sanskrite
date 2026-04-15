@@ -106,12 +106,13 @@ def _print_runtime_log_event(event, quiet: bool) -> None:
             _stderr("  result: " + json.dumps(result, ensure_ascii=False))
 
 
-def _working_graph_from_logic_trace(lt: list) -> list[dict]:
-    """Replay graphDelta observations from logic_trace in order; last observation per structural key wins."""
+def _working_graph_from_logic_trace(lt: list) -> dict[str, Any]:
+    """Replay graphDelta observations from logic_trace into an operational graph payload."""
     from agentloom.agent import _observation_key
     from agentloom.contracts import GraphObservation
+    from agentloom.operational_graph import graph_state_from_observations, graph_state_to_payload
 
-    merged: dict[tuple, dict] = {}
+    merged: dict[tuple, GraphObservation] = {}
     for entry in lt:
         if not isinstance(entry, dict):
             continue
@@ -126,9 +127,12 @@ def _working_graph_from_logic_trace(lt: list) -> list[dict]:
                 obs = GraphObservation.model_validate(raw)
             except Exception:
                 continue
-            merged[_observation_key(obs)] = obs.model_dump(mode="json", by_alias=True)
+            merged[_observation_key(obs)] = obs
     keys = sorted(merged.keys(), key=lambda k: (str(k[0]), str(k[1]), str(k[2]), str(k[3]), str(k[4])))
-    return [merged[k] for k in keys]
+    observations = [merged[k] for k in keys]
+    if not observations:
+        return {}
+    return graph_state_to_payload(graph_state_from_observations(observations))
 
 
 def _trace_reasoning_digest(session_state: dict) -> str:
@@ -138,8 +142,10 @@ def _trace_reasoning_digest(session_state: dict) -> str:
         STATE_HYPOTHESIS_ENTITY_REGISTRY,
         STATE_LOGIC_TRACE,
         STATE_WORKING_GRAPH,
+        _load_operational_graph_state,
         _graph_reachability_report,
     )
+    from agentloom.operational_graph import graph_counts
 
     lt = session_state.get(STATE_LOGIC_TRACE) or []
     last_placeholder_nodes: list = []
@@ -157,9 +163,9 @@ def _trace_reasoning_digest(session_state: dict) -> str:
             last_placeholder_hints = list(hints)[:8] if isinstance(hints, list) else []
             break
 
-    working = session_state.get(STATE_WORKING_GRAPH) or []
+    working = session_state.get(STATE_WORKING_GRAPH) or {}
     reach_state: dict = session_state
-    if not working:
+    if graph_counts(_load_operational_graph_state(session_state))["graphObservationCount"] == 0:
         replayed = _working_graph_from_logic_trace(lt)
         if replayed:
             reach_state = {**session_state, STATE_WORKING_GRAPH: replayed}
@@ -167,7 +173,7 @@ def _trace_reasoning_digest(session_state: dict) -> str:
     structural_chains_digest: list[dict[str, Any]] = []
     route_families_digest: list[dict[str, Any]] = []
     reachability_headline: dict[str, Any] = {}
-    if reach_state.get(STATE_WORKING_GRAPH):
+    if graph_counts(_load_operational_graph_state(reach_state))["graphObservationCount"] > 0:
         full_reach = _graph_reachability_report(reach_state)
         reachability_headline = {
             "healthSummary": full_reach.get("healthSummary"),

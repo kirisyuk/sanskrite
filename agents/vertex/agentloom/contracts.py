@@ -72,12 +72,72 @@ class GraphObservation(StrictModel):
     slot_role: str = Field(default="", alias="slotRole")
 
 
+class EntityNode(StrictModel):
+    node_id: str = Field(default="", alias="nodeId")
+    label: str
+    entity_type: str = Field(default="", alias="entityType")
+    canonical_ref: str = Field(default="", alias="canonicalRef")
+    qualifiers: list[str] = Field(default_factory=list)
+    confidence: float = 0.0
+    support_type: Literal["document", "model_knowledge", "mixed", "hypothesis"] = Field(
+        default="hypothesis",
+        alias="supportType",
+    )
+    provenance: list[str] = Field(default_factory=list)
+    support_note: str = Field(default="", alias="supportNote")
+    branch_id: str = Field(default="", alias="branchId")
+    alternative_group_id: str = Field(default="", alias="alternativeGroupId")
+    slot_id: str = Field(default="", alias="slotId")
+    slot_role: str = Field(default="", alias="slotRole")
+
+
+class FlowLeg(StrictModel):
+    leg_id: str = Field(default="", alias="legId")
+    supplier_node_id: str = Field(alias="supplierNodeId")
+    customer_node_id: str = Field(alias="customerNodeId")
+    product_node_id: str = Field(alias="productNodeId")
+    route_node_ids: list[str] = Field(default_factory=list, alias="routeNodeIds")
+    qualifiers: list[str] = Field(default_factory=list)
+    confidence: float
+    support_type: Literal["document", "model_knowledge", "mixed", "hypothesis"] = Field(alias="supportType")
+    provenance: list[str] = Field(default_factory=list)
+    support_note: str = Field(default="", alias="supportNote")
+    branch_id: str = Field(default="", alias="branchId")
+    alternative_group_id: str = Field(default="", alias="alternativeGroupId")
+    slot_id: str = Field(default="", alias="slotId")
+    slot_role: str = Field(default="", alias="slotRole")
+
+
+class ProcessStep(StrictModel):
+    step_id: str = Field(default="", alias="stepId")
+    host_node_id: str = Field(alias="hostNodeId")
+    process_kind: Literal["extraction", "transformation", "assembly"] = Field(alias="processKind")
+    input_node_ids: list[str] = Field(default_factory=list, alias="inputNodeIds")
+    output_node_ids: list[str] = Field(default_factory=list, alias="outputNodeIds")
+    qualifiers: list[str] = Field(default_factory=list)
+    confidence: float
+    support_type: Literal["document", "model_knowledge", "mixed", "hypothesis"] = Field(alias="supportType")
+    provenance: list[str] = Field(default_factory=list)
+    support_note: str = Field(default="", alias="supportNote")
+    branch_id: str = Field(default="", alias="branchId")
+    alternative_group_id: str = Field(default="", alias="alternativeGroupId")
+    slot_id: str = Field(default="", alias="slotId")
+    slot_role: str = Field(default="", alias="slotRole")
+
+
+def _derive_fragment_observations(fragment: "GraphFragment") -> list[GraphObservation]:
+    from agentloom.operational_graph import fragment_observation_projection
+
+    return fragment_observation_projection(fragment)
+
+
 class GraphFragment(StrictModel):
     fragment_id: str = Field(alias="fragmentId")
     fragment_type: Literal[
         "overview_chain",
         "chain_fragment",
         "alternative_chain",
+        "operational_flow",
         "ownership_overlay",
         "policy_overlay",
         "hypothesis",
@@ -89,23 +149,70 @@ class GraphFragment(StrictModel):
     alternative_group_id: str = Field(default="", alias="alternativeGroupId")
     start_node_id: str = Field(default="", alias="startNodeId")
     end_node_id: str = Field(default="", alias="endNodeId")
-    patch_mode: Literal["append", "replace_node", "replace_fragment"] = Field(default="append", alias="patchMode")
+    patch_mode: Literal["append", "replace_entity", "replace_fragment"] = Field(
+        default="append",
+        alias="patchMode",
+    )
     old_id: str = Field(default="", alias="oldId")
     old_ids: list[str] = Field(default_factory=list, alias="oldIds")
     patch_rationale: str = Field(default="", alias="patchRationale")
+    entity_nodes: list[EntityNode] = Field(default_factory=list, alias="entityNodes")
+    flow_legs: list[FlowLeg] = Field(default_factory=list, alias="flowLegs")
+    process_steps: list[ProcessStep] = Field(default_factory=list, alias="processSteps")
+    overlay_edges: list[GraphObservation] = Field(default_factory=list, alias="overlayEdges")
     observations: list[GraphObservation] = Field(default_factory=list)
     completeness: Literal["partial", "complete", "hypothesis"] = "partial"
     quality_score: float = Field(default=0.0, alias="qualityScore")
 
+    @model_validator(mode="before")
+    @classmethod
+    def canonicalize_patch_mode(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        patch_mode = payload.get("patchMode", payload.get("patch_mode"))
+        if patch_mode == "replace_node":
+            payload["patchMode"] = "replace_entity"
+        return payload
+
     @model_validator(mode="after")
     def validate_patch_contract(self) -> "GraphFragment":
         if self.patch_mode == "append":
-            return self
-        if not self.old_id and not self.old_ids:
-            raise ValueError("replace_node/replace_fragment requires oldId or oldIds")
-        if not self.patch_rationale:
-            raise ValueError("replace_node/replace_fragment requires patchRationale")
+            pass
+        elif not self.old_id and not self.old_ids:
+            raise ValueError("replace_entity/replace_fragment requires oldId or oldIds")
+        elif not self.patch_rationale:
+            raise ValueError("replace_entity/replace_fragment requires patchRationale")
+
+        if self.flow_legs or self.process_steps:
+            from agentloom.operational_graph import fragment_operational_graph
+
+            fragment_operational_graph(self)
+
+        derived_observations = _derive_fragment_observations(self)
+        self.observations = derived_observations
+        if not self.start_node_id:
+            if self.flow_legs:
+                self.start_node_id = self.flow_legs[0].supplier_node_id
+            elif self.process_steps:
+                self.start_node_id = self.process_steps[0].host_node_id
+            elif self.observations:
+                self.start_node_id = self.observations[0].subject_id
+        if not self.end_node_id:
+            if self.flow_legs:
+                self.end_node_id = self.flow_legs[-1].customer_node_id
+            elif self.process_steps and self.process_steps[-1].output_node_ids:
+                self.end_node_id = self.process_steps[-1].output_node_ids[-1]
+            elif self.observations:
+                self.end_node_id = self.observations[-1].object_id
         return self
+
+
+class OperationalGraphState(StrictModel):
+    entity_nodes: list[EntityNode] = Field(default_factory=list, alias="entityNodes")
+    flow_legs: list[FlowLeg] = Field(default_factory=list, alias="flowLegs")
+    process_steps: list[ProcessStep] = Field(default_factory=list, alias="processSteps")
+    overlay_edges: list[GraphObservation] = Field(default_factory=list, alias="overlayEdges")
 
 
 class LearnedFinding(StrictModel):
@@ -204,6 +311,7 @@ class BranchPlan(StrictModel):
         "overview_chain",
         "chain_fragment",
         "alternative_chain",
+        "operational_flow",
         "ownership_overlay",
         "policy_overlay",
         "hypothesis",
@@ -312,6 +420,7 @@ class HypothesisTurnPlan(StrictModel):
         "overview_chain",
         "chain_fragment",
         "alternative_chain",
+        "operational_flow",
         "ownership_overlay",
         "policy_overlay",
         "hypothesis",
@@ -332,7 +441,7 @@ class HypothesisTurn(StrictModel):
         Field(alias="pathAssessment")
     )
     closure_status: Literal["advanced", "closed", "unchanged", "redirected"] = Field(alias="closureStatus")
-    graph_patch_modes: list[Literal["append", "replace_node", "replace_fragment"]] = Field(
+    graph_patch_modes: list[Literal["append", "replace_entity", "replace_fragment"]] = Field(
         default_factory=list,
         alias="graphPatchModes",
     )
@@ -342,6 +451,20 @@ class HypothesisTurn(StrictModel):
     remaining_frontier: list[str] = Field(default_factory=list, alias="remainingFrontier")
     discovered_frontier: list[str] = Field(default_factory=list, alias="discoveredFrontier")
     decision_after_result: str = Field(default="", alias="decisionAfterResult")
+
+    @model_validator(mode="before")
+    @classmethod
+    def canonicalize_graph_patch_modes(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        patch_modes = payload.get("graphPatchModes", payload.get("graph_patch_modes"))
+        if isinstance(patch_modes, list):
+            payload["graphPatchModes"] = [
+                "replace_entity" if item == "replace_node" else item
+                for item in patch_modes
+            ]
+        return payload
 
 
 class HypothesisTurnDecision(StrictModel):
@@ -664,6 +787,11 @@ class FinalChainSummary(StrictModel):
     hypotheses: list[HypothesisState] = Field(default_factory=list)
     candidate_paths: list[CandidatePath] = Field(default_factory=list, alias="candidatePaths")
     learned_findings: list[LearnedFinding] = Field(default_factory=list, alias="learnedFindings")
+    operational_graph: OperationalGraphState = Field(
+        default_factory=OperationalGraphState,
+        alias="operationalGraph",
+    )
+    operational_counts: dict[str, int] = Field(default_factory=dict, alias="operationalCounts")
     graph_observations: list[GraphObservation] = Field(alias="graphObservations")
     graph_fragments: list[GraphFragment] = Field(default_factory=list, alias="graphFragments")
     branches: list[BranchState] = Field(default_factory=list)

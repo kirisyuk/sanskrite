@@ -2,19 +2,28 @@ from __future__ import annotations
 
 import os
 from collections.abc import Sequence
-from typing import cast
+from typing import Any, cast
 
 from agentloom.contracts import (
     BranchState,
     CandidatePath,
     GraphFragment,
-    GraphObservation,
     HypothesisState,
     InternalBrief,
     InvestigationRole,
     LearnedFinding,
+    OperationalGraphState,
 )
 from agentloom.gap_clustering import cluster_gap_texts
+from agentloom.operational_graph import (
+    fragment_operational_graph,
+    graph_counts,
+    graph_context_lines,
+    graph_entity_labels,
+    graph_state_from_observations,
+    graph_state_from_raw,
+    support_types_for_graph,
+)
 
 
 def _truncate(s: str, limit: int = 280) -> str:
@@ -41,10 +50,21 @@ def _evidence_rank(h: HypothesisState) -> tuple[int, float]:
     return (order.get(h.evidence_status, 9), -h.confidence)
 
 
+def _coerce_graph_state(graph: OperationalGraphState | list[Any] | dict[str, Any]) -> OperationalGraphState:
+    if isinstance(graph, OperationalGraphState):
+        return graph
+    if isinstance(graph, dict):
+        return graph_state_from_raw(graph)
+    observations = []
+    for item in graph:
+        observations.append(item)
+    return graph_state_from_observations(observations)
+
+
 def build_internal_brief(
     question: str,
     selected_roles: list[str],
-    working_graph: list[GraphObservation],
+    working_graph: OperationalGraphState | list[Any] | dict[str, Any],
     graph_fragments: list[GraphFragment],
     branches: list[BranchState],
     hypotheses: list[HypothesisState],
@@ -58,6 +78,7 @@ def build_internal_brief(
     max_entities: int = 24,
     extra_epistemic_caveats: Sequence[str] | None = None,
 ) -> InternalBrief:
+    normalized_graph = _coerce_graph_state(working_graph)
     rr = reachability_report or {}
     health = str(rr.get("healthSummary") or "").strip()
     partial = rr.get("partialChains") or []
@@ -145,21 +166,14 @@ def build_internal_brief(
                 supply_bullets.append(line)
 
     # Key entities from graph
-    entities: list[str] = []
-    for obs in working_graph[:200]:
-        for part in (obs.subject, obs.object):
-            if part and part not in entities:
-                entities.append(part)
-        if len(entities) >= max_entities:
-            break
+    entities: list[str] = graph_entity_labels(normalized_graph, limit=max_entities)
     if len(entities) < max_entities:
         for frag in graph_fragments:
-            for obs in frag.observations[:50]:
-                for part in (obs.subject, obs.object):
-                    if part and part not in entities:
-                        entities.append(part)
-                    if len(entities) >= max_entities:
-                        break
+            for label in graph_entity_labels(fragment_operational_graph(frag), limit=max_entities):
+                if label and label not in entities:
+                    entities.append(label)
+                if len(entities) >= max_entities:
+                    break
 
     finding_digest: list[str] = []
     ranked_findings = sorted(
@@ -179,8 +193,7 @@ def build_internal_brief(
         caveats.append(
             "Structurally complete chain(s) exist (terminal reachability) but rely on hypothesis or weak evidence, not full document grounding."
         )
-    hypo_obs = sum(1 for o in working_graph if o.support_type == "hypothesis")
-    if hypo_obs > 0:
+    if "hypothesis" in support_types_for_graph(normalized_graph):
         caveats.append("Some edges rely on hypothesis-level or model knowledge and are not document-grounded.")
     if open_gap_texts:
         caveats.append("Public procurement and direct supplier-to-plant links may be absent from open sources.")
@@ -207,6 +220,13 @@ def build_internal_brief(
         reach_parts.append(f"structurallyCompleteChains~{structural_int}")
     if partial_n:
         reach_parts.append(f"partialChainReports~{partial_n}")
+    max_hops = rr.get("maxOperationalRouteHops")
+    try:
+        max_hops_int = int(max_hops)
+    except (TypeError, ValueError):
+        max_hops_int = 0
+    if max_hops_int:
+        reach_parts.append(f"maxOperationalRouteHops~{max_hops_int}")
 
     return InternalBrief(
         questionOneLiner=_truncate(question, 400),

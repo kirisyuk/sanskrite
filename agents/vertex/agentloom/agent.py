@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from collections import deque
 from collections.abc import AsyncGenerator
-from typing import Any, Literal
+from typing import Any, Iterable, Literal
 
 from google.adk.agents import BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
@@ -37,8 +37,11 @@ from agentloom.contracts import (
     BranchPlan,
     BranchState,
     CandidatePath,
+    CorpusDocument,
     CriticAgentOutput,
+    EntityNode,
     FailureRecord,
+    FlowLeg,
     GraphFragment,
     GraphObservation,
     HypothesisTurn,
@@ -49,7 +52,9 @@ from agentloom.contracts import (
     InvestigationRole,
     LearnedFinding,
     LogicTraceEntry,
+    OperationalGraphState,
     PolicyCorrection,
+    ProcessStep,
     RoleContract,
     RoleSelection,
     NarrativeSynthesisStatus,
@@ -61,6 +66,27 @@ from agentloom.contracts import (
     ToolActionResult,
     ToolContract,
     critic_agent_output_to_agent_result,
+)
+from agentloom.operational_graph import (
+    empty_graph_state,
+    evidence_status_for_graph,
+    fragment_operational_graph,
+    graph_context_lines,
+    graph_counts,
+    graph_entity_labels,
+    graph_state_from_fragments,
+    graph_state_from_observations,
+    graph_state_from_raw,
+    graph_state_to_payload,
+    node_label as _graph_node_label,
+    node_map as _graph_node_map,
+    node_type as _graph_node_type,
+    observation_projection,
+    process_step_line,
+    flow_leg_line,
+    overlay_edge_line,
+    synthetic_id as _graph_synthetic_id,
+    support_types_for_graph,
 )
 from agentloom.prompt_fragments import (
     PROMPT_UNTRUSTED_USER_CORPUS,
@@ -164,6 +190,27 @@ RESULT_KEY_BY_AGENT = {
     "critic_agent": STATE_CRITIC_RESULT,
 }
 
+
+def _load_operational_graph_state(state: dict[str, Any]) -> OperationalGraphState:
+    raw = state.get(STATE_WORKING_GRAPH)
+    if isinstance(raw, dict):
+        return graph_state_from_raw(raw)
+    if isinstance(raw, list):
+        return graph_state_from_raw(raw)
+    return empty_graph_state()
+
+
+def _save_operational_graph_state(state: dict[str, Any], graph: OperationalGraphState) -> None:
+    state[STATE_WORKING_GRAPH] = graph_state_to_payload(graph)
+
+
+def _working_graph_observations(state: dict[str, Any]) -> list[GraphObservation]:
+    return observation_projection(_load_operational_graph_state(state))
+
+
+def _working_graph_counts(state: dict[str, Any]) -> dict[str, int]:
+    return graph_counts(_load_operational_graph_state(state))
+
 INVESTIGATION_ROLES_LITERALS = frozenset({"supply_chain", "governance_and_control", "policy_impact"})
 
 _MODEL_ALIASES = {
@@ -258,6 +305,22 @@ _PLACEHOLDER_LABEL_PATTERNS = [
     ),
     re.compile(
         r"\bunknown\s+(?:\w+\s+){0,3}facility\b",
+        re.IGNORECASE,
+    ),
+    # Geographic / regional roll-ups that LLMs use as fake FACILITY anchors (not tied to one legal entity).
+    re.compile(
+        r"\b(?:Chinese|Asian|European|Indian|Latin\s+American|Middle\s+Eastern|Southeast\s+Asian|South\s+Korean|North\s+American)\s+"
+        r"Processing\s+Facility\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:Chinese|Asian|European|Indian|Latin\s+American|Southeast\s+Asian|South\s+Korean)\s+"
+        r"Battery(?:\s+Cell)?\s+Manufacturing\s+Hub\b",
+        re.IGNORECASE,
+    ),
+    # "National champion" style processing stand-ins.
+    re.compile(
+        r"\b(?:Chinese|Asian|European)\s+(?:Chemical\s+)?Processing\s+Hub\b",
         re.IGNORECASE,
     ),
 ]
@@ -713,7 +776,7 @@ TOOL_MAX_OUTPUT_TOKENS = int(os.getenv("AGENTLOOM_TOOL_MAX_OUTPUT_TOKENS", "1638
 RETRIEVAL_MAX_OUTPUT_TOKENS = int(os.getenv("AGENTLOOM_RETRIEVAL_MAX_OUTPUT_TOKENS", "8192"))
 
 GRAPH_OBSERVATION_CONTRACT = """
-GraphObservation contract:
+OverlayEdge / derived GraphObservation contract:
 - observationId: string. Stable within the tool result.
 - subjectId: string. Stable node id such as "organization:example-operator" or "product:example-intermediate".
 - subject: string. Human-readable node label.
@@ -729,6 +792,39 @@ GraphObservation contract:
 - supportNote: short explanation of why this edge is supported or still uncertain.
 - branchId: string. Must match the branch being answered.
 - alternativeGroupId: string. Use the same id when several alternative paths belong to the same alternative family.
+
+For supply-chain work, `observations` are a derived compatibility projection only.
+Primary operational truth should be emitted through:
+- entityNodes
+- flowLegs
+- processSteps
+- overlayEdges
+Use direct observations only for overlays or as a last resort when the fragment cannot yet be expressed cleanly through the operational primitives.
+"""
+
+OPERATIONAL_PRIMITIVES_CONTRACT = """
+Operational fragment primitives:
+- entityNodes: array of EntityNode.
+  - nodeId: stable node id.
+  - label: human-readable label.
+  - entityType: one of the allowed entity types.
+  - canonicalRef: optional canonical path or stable ref.
+  - qualifiers / confidence / supportType / provenance / supportNote / branchId / alternativeGroupId / slotId / slotRole follow the same semantics as observations.
+- flowLegs: array of FlowLeg.
+  - legId: stable id within the tool result.
+  - supplierNodeId: upstream actor or facility node id.
+  - customerNodeId: downstream actor or facility node id.
+  - productNodeId: the material/product carried on this leg. The product belongs on the leg, not as the leg endpoint.
+  - routeNodeIds: optional logistics or transit nodes carried as route qualifiers.
+  - qualifiers / confidence / supportType / provenance / supportNote / branchId / alternativeGroupId / slotId / slotRole follow the same semantics as observations.
+- processSteps: array of ProcessStep.
+  - stepId: stable id within the tool result.
+  - hostNodeId: facility or organization where the step happens.
+  - processKind: one of ["extraction", "transformation", "assembly"].
+  - inputNodeIds: upstream deposits or product-stage nodes consumed by the step.
+  - outputNodeIds: downstream product-stage nodes produced by the step.
+  - qualifiers / confidence / supportType / provenance / supportNote / branchId / alternativeGroupId / slotId / slotRole follow the same semantics as observations.
+- overlayEdges: array of GraphObservation. Use this for ownership, control, geography, and policy overlays that are not flow legs or process steps.
 """
 
 CONFIDENCE_CALIBRATION = """
@@ -741,13 +837,15 @@ When source_mode is "model", any edge whose specific actors or evidence you cann
 """
 
 EDGE_DIRECTION_RULES = """
-Edge direction contract (mandatory — edges violating these rules are auto-reversed or dropped):
+Direction contract for compatibility observations and overlay edges:
+- Author operational supply-chain flow in `flowLegs` and `processSteps`, not as raw observations.
+- The observation relations below are compatibility projections the runtime may derive from native primitives, or overlay relations when they are explicitly returned.
 - PRODUCES: ORGANIZATION/FACILITY → PRODUCT. Never product→facility.
-- SUPPLIES_TO: ORGANIZATION/FACILITY/PRODUCT → ORGANIZATION/FACILITY. Supplier→customer. Never to GEO_REGION or PRODUCT.
-- TRANSFORMS_INTO: PRODUCT → PRODUCT only. Never facility→product.
-- ASSEMBLES_INTO: PRODUCT → PRODUCT only.
-- USED_IN: PRODUCT → PRODUCT only.
-- EXTRACTS_FROM: FACILITY → DEPOSIT only.
+- SUPPLIES_TO: ORGANIZATION/FACILITY → ORGANIZATION/FACILITY. Supplier→customer. Product identity belongs on the flow leg via `productNodeId`.
+- TRANSFORMS_INTO: PRODUCT → PRODUCT only. Derived from `processSteps(processKind=transformation)`.
+- ASSEMBLES_INTO: PRODUCT → PRODUCT only. Derived from `processSteps(processKind=assembly)`.
+- USED_IN: PRODUCT → PRODUCT only. Avoid this as primary authoring format for supply-chain flow.
+- EXTRACTS_FROM: FACILITY/ORGANIZATION → DEPOSIT only. Derived from `processSteps(processKind=extraction)`.
 - LOCATED_IN: any entity → GEO_REGION. Never geo→entity.
 - OWNS: ORGANIZATION/PERSON → ORGANIZATION/FACILITY/PRODUCT/DEPOSIT. Owner→asset.
 - CONTROLS: ORGANIZATION/PERSON → ORGANIZATION/FACILITY/PRODUCT. Controller→entity.
@@ -763,9 +861,9 @@ Supply-chain graph rules:
 - Colloquial commodity, element, or material names in the user question are not operational nodes. Treat them as intent to map the relevant traded or processed product-stage ladder for that use-case. Illustrative examples of stage classes only (non-exhaustive, adapt to the sector in the question): ores and concentrates, intermediate chemicals or salts, alloys, precursor stages toward downstream goods—encode each real stage as a PRODUCT node with lawful edges; do not treat the list as mandatory coverage or as domain-specific canon.
 - Do not model countries or regions as if they directly produce, transform, supply, or assemble products.
 - Geography belongs in overlay edges such as LOCATED_IN or OPERATES_IN.
-- Deposits are geological sources. Use EXTRACTS_FROM from a FACILITY or ORGANIZATION to a DEPOSIT.
-- Facilities or organizations produce and supply products. Use PRODUCES or SUPPLIES_TO from FACILITY/ORGANIZATION to PRODUCT or another operational node.
-- Product transformation steps must be PRODUCT --TRANSFORMS_INTO--> PRODUCT.
+- Deposits are geological sources. Represent extraction as a processStep hosted at a FACILITY/ORGANIZATION, with the deposit in inputNodeIds and the extracted product in outputNodeIds.
+- Facilities or organizations move material through flowLegs; the material lives on the leg via productNodeId, not as the leg endpoint.
+- Product transformation and assembly belong in processSteps on the host node, not as the primary operational path language.
 - Product usage or assembly steps must not terminate in a country or region.
 - End-of-chain geography must be represented as FACILITY/ORGANIZATION --LOCATED_IN--> GEO_REGION, not PRODUCT --ASSEMBLES_INTO--> GEO_REGION.
 - Prefer concrete typed nodes over abstract placeholders. Labels such as "Regional Mining Facility", "Downstream Battery Plant", or a vague regional producer or refiner acting as a single anonymous stand-in are provisional placeholders, not satisfactory closure when a concrete ORG/FACILITY/DEPOSIT/PRODUCT should exist.
@@ -778,10 +876,11 @@ Supply-chain graph rules:
 SUPPLY_CHAIN_PROFILE_CONTRACT = """
 Ideal supply-chain profile for one or several alternative chains:
 - source geology: one or more DEPOSIT nodes
-- extraction layer: FACILITY and/or ORGANIZATION nodes that extract from deposits
-- primary output layer: PRODUCTS produced by mining or initial processing facilities
-- transformation layer: one or more PRODUCT --TRANSFORMS_INTO--> PRODUCT steps
+- extraction layer: FACILITY and/or ORGANIZATION nodes hosting extraction processSteps
+- primary output layer: PRODUCTS emitted by extraction or initial processing processSteps
+- transformation layer: one or more processSteps that convert one product stage into another at a named host
 - operating facility layer: FACILITY nodes that produce, refine, convert, or assemble along the path
+- transport layer: flowLegs carrying a named product from supplier to customer
 - ownership/control overlay: ORGANIZATION nodes that own, control, invest in, or manage key facilities
 - downstream manufacturing layer: FACILITY and ORGANIZATION nodes that consume battery materials and produce downstream products
 - geography overlay: GEO_REGION nodes connected through LOCATED_IN or OPERATES_IN
@@ -810,7 +909,7 @@ GraphFragment contract:
 - There is no separate "overview answer format" versus "mutation answer format". The runtime always consumes GraphFragment objects and mutates the same shared graph state under one protocol.
 - Therefore, when you answer a broad root question, do not invent a different structure. Return ordinary graphFragments that can later be appended to, replaced, or refined by the same rules.
 - fragmentId: string. Stable within the branch.
-- fragmentType: one of ["overview_chain", "chain_fragment", "alternative_chain", "ownership_overlay", "policy_overlay", "hypothesis"].
+- fragmentType: one of ["overview_chain", "chain_fragment", "alternative_chain", "operational_flow", "ownership_overlay", "policy_overlay", "hypothesis"].
 - title: short human-readable title.
 - humanQuestion: the exact human-readable question this fragment answers.
 - humanSummary: short human-readable summary of what was found.
@@ -818,14 +917,15 @@ GraphFragment contract:
 - alternativeGroupId: string. Use when multiple fragments belong to one alternative-path family.
 - startNodeId: optional string. The fragment entry node when known.
 - endNodeId: optional string. The fragment exit node when known.
-- patchMode: one of ["append", "replace_node", "replace_fragment"].
+- patchMode: one of ["append", "replace_entity", "replace_fragment"].
   - append = add a new fragment without replacing any prior placeholder.
-  - replace_node = the fragment replaces one broad or fake typed node with a more concrete graph fragment.
+  - replace_entity = the fragment replaces one broad or fake typed node with a more concrete graph fragment.
   - replace_fragment = the fragment supersedes one or more earlier fragments because the new graph is structurally better.
 - oldId: optional string. The single node or fragment id being replaced.
 - oldIds: optional string array. Use when replacing several prior placeholders/fragments at once.
-- patchRationale: required for replace_node/replace_fragment. Explain why the old node/fragment was too broad, wrong, or structurally weaker than the new one.
-- observations: array of GraphObservation.
+- patchRationale: required for replace_entity/replace_fragment. Explain why the old node/fragment was too broad, wrong, or structurally weaker than the new one.
+- entityNodes / flowLegs / processSteps / overlayEdges: primary operational payload.
+- observations: optional derived compatibility projection. Do not treat it as the primary supply-chain authoring format.
 - completeness: one of ["partial", "complete", "hypothesis"].
 - qualityScore: number between 0 and 1.
 
@@ -833,11 +933,11 @@ Patch semantics:
 - Use replacement when the current graph contains a broad placeholder and you now know the concrete ORG/FACILITY/DEPOSIT/PRODUCT node or fragment that should stand in its place.
 - Replacement may expand one node into a multi-hop fragment. Example: replacing a broad downstream battery plant placeholder with a short chain of named FACILITY and PRODUCT stages. Another valid example: replacing a broad upstream mining facility with a concrete mine, deposit, and first salable product output linked by lawful edges.
 - Replacement is graph-safe and does not imply that the old node was useless; it means the new fragment is a better structural representation.
-- Replacement is a real graph mutation, not decorative metadata. After a valid `replace_node` or `replace_fragment`, the runtime updates shared memory so later reasoning sees the replacement graph, not the superseded placeholder graph.
+- Replacement is a real graph mutation, not decorative metadata. After a valid `replace_entity` or `replace_fragment`, the runtime updates shared memory so later reasoning sees the replacement graph, not the superseded placeholder graph.
 - Therefore, when you issue a replacement patch, make the new fragment structurally self-sufficient enough to occupy the old slot in the chain, ownership tree, star, or network that is being improved.
 - Think of `patchMode` as the only mutation verb:
   - `append` = extend the current graph;
-  - `replace_node` = replace a broad or wrong node with a better fragment;
+  - `replace_entity` = replace a broad or wrong node with a better fragment;
   - `replace_fragment` = replace a weaker prior fragment with a stronger one.
 - The graph inside one hypothesis is always created and mutated by these same rules.
 """
@@ -916,34 +1016,33 @@ Valid success example:
       "oldId": "",
       "oldIds": [],
       "patchRationale": "",
-      "observations": [
+      "entityNodes": [
         {
-          "observationId": "branch-1-f1-o1",
-          "subjectId": "facility:example-extraction-complex",
-          "subject": "Example extraction complex",
-          "subjectType": "FACILITY",
-          "relation": "EXTRACTS_FROM",
-          "objectId": "deposit:example-laterite-deposit",
-          "object": "Example laterite deposit",
-          "objectType": "DEPOSIT",
-          "qualifiers": ["laterite ore body"],
+          "nodeId": "deposit:example-laterite-deposit",
+          "label": "Example laterite deposit",
+          "entityType": "DEPOSIT",
           "confidence": 0.79,
           "supportType": "document",
           "provenance": ["gs://source/doc-1"],
-          "supportNote": "Retrieved evidence ties the mining facility to the laterite deposit.",
+          "supportNote": "Retrieved evidence names the laterite deposit.",
           "branchId": "branch-1",
           "alternativeGroupId": "route_family_a"
         },
         {
-          "observationId": "branch-1-f1-o2",
-          "subjectId": "facility:example-extraction-complex",
-          "subject": "Example extraction complex",
-          "subjectType": "FACILITY",
-          "relation": "PRODUCES",
-          "objectId": "product:example-laterite-ore",
-          "object": "Example laterite ore",
-          "objectType": "PRODUCT",
-          "qualifiers": [],
+          "nodeId": "facility:example-extraction-complex",
+          "label": "Example extraction complex",
+          "entityType": "FACILITY",
+          "confidence": 0.77,
+          "supportType": "document",
+          "provenance": ["gs://source/doc-1"],
+          "supportNote": "Retrieved evidence ties the facility to the extraction and conversion steps.",
+          "branchId": "branch-1",
+          "alternativeGroupId": "route_family_a"
+        },
+        {
+          "nodeId": "product:example-laterite-ore",
+          "label": "Example laterite ore",
+          "entityType": "PRODUCT",
           "confidence": 0.77,
           "supportType": "document",
           "provenance": ["gs://source/doc-1"],
@@ -952,14 +1051,50 @@ Valid success example:
           "alternativeGroupId": "route_family_a"
         },
         {
-          "observationId": "branch-1-f1-o3",
-          "subjectId": "product:example-laterite-ore",
-          "subject": "Example laterite ore",
-          "subjectType": "PRODUCT",
-          "relation": "TRANSFORMS_INTO",
-          "objectId": "product:example-mixed-intermediate",
-          "object": "Example mixed hydroxide intermediate",
-          "objectType": "PRODUCT",
+          "nodeId": "product:example-mixed-intermediate",
+          "label": "Example mixed hydroxide intermediate",
+          "entityType": "PRODUCT",
+          "confidence": 0.74,
+          "supportType": "document",
+          "provenance": ["gs://source/doc-1"],
+          "supportNote": "Evidence describes leach conversion into the mixed intermediate.",
+          "branchId": "branch-1",
+          "alternativeGroupId": "route_family_a"
+        },
+        {
+          "nodeId": "product:example-battery-input-salt",
+          "label": "Example battery-input salt",
+          "entityType": "PRODUCT",
+          "confidence": 0.71,
+          "supportType": "document",
+          "provenance": ["gs://source/doc-1"],
+          "supportNote": "Evidence identifies the sulfate-class downstream battery input.",
+          "branchId": "branch-1",
+          "alternativeGroupId": "route_family_a"
+        }
+      ],
+      "flowLegs": [],
+      "processSteps": [
+        {
+          "stepId": "branch-1-f1-s1",
+          "hostNodeId": "facility:example-extraction-complex",
+          "processKind": "extraction",
+          "inputNodeIds": ["deposit:example-laterite-deposit"],
+          "outputNodeIds": ["product:example-laterite-ore"],
+          "qualifiers": ["laterite ore body"],
+          "confidence": 0.79,
+          "supportType": "document",
+          "provenance": ["gs://source/doc-1"],
+          "supportNote": "Retrieved evidence ties the mining facility to the deposit and ore output.",
+          "branchId": "branch-1",
+          "alternativeGroupId": "route_family_a"
+        },
+        {
+          "stepId": "branch-1-f1-s2",
+          "hostNodeId": "facility:example-extraction-complex",
+          "processKind": "transformation",
+          "inputNodeIds": ["product:example-laterite-ore"],
+          "outputNodeIds": ["product:example-mixed-intermediate"],
           "qualifiers": ["hydrometallurgical conversion"],
           "confidence": 0.74,
           "supportType": "document",
@@ -967,8 +1102,23 @@ Valid success example:
           "supportNote": "Evidence describes leach conversion into the mixed intermediate.",
           "branchId": "branch-1",
           "alternativeGroupId": "route_family_a"
+        },
+        {
+          "stepId": "branch-1-f1-s3",
+          "hostNodeId": "facility:example-extraction-complex",
+          "processKind": "transformation",
+          "inputNodeIds": ["product:example-mixed-intermediate"],
+          "outputNodeIds": ["product:example-battery-input-salt"],
+          "qualifiers": ["downstream crystallization"],
+          "confidence": 0.71,
+          "supportType": "document",
+          "provenance": ["gs://source/doc-1"],
+          "supportNote": "The grounded path continues into the sulfate-class battery input.",
+          "branchId": "branch-1",
+          "alternativeGroupId": "route_family_a"
         }
       ],
+      "overlayEdges": [],
       "completeness": "partial",
       "qualityScore": 0.72
     }
@@ -1051,29 +1201,63 @@ Valid replacement example:
       "alternativeGroupId": "",
       "startNodeId": "product:example-battery-input-salt",
       "endNodeId": "facility:example-cathode-input-plant",
-      "patchMode": "replace_node",
+      "patchMode": "replace_entity",
       "oldId": "facility:placeholder-downstream-battery-plant",
       "oldIds": [],
       "patchRationale": "The prior sink node was only a geographic placeholder. The new fragment inserts concrete facilities that should occupy that position in the path.",
-      "observations": [
+      "entityNodes": [
         {
-          "observationId": "branch-3-f2-o1",
-          "subjectId": "product:example-battery-input-salt",
-          "subject": "Example battery-input salt",
-          "subjectType": "PRODUCT",
-          "relation": "SUPPLIES_TO",
-          "objectId": "facility:example-cathode-input-plant",
-          "object": "Example cathode-input plant",
-          "objectType": "FACILITY",
-          "qualifiers": [],
+          "nodeId": "product:example-battery-input-salt",
+          "label": "Example battery-input salt",
+          "entityType": "PRODUCT",
           "confidence": 0.72,
           "supportType": "document",
           "provenance": ["gs://source/doc-9"],
-          "supportNote": "Named public evidence ties the downstream facility to battery-material intake.",
+          "supportNote": "Named public evidence identifies the battery-input product stage.",
+          "branchId": "branch-3",
+          "alternativeGroupId": ""
+        },
+        {
+          "nodeId": "organization:example-materials-distributor",
+          "label": "Example materials distributor",
+          "entityType": "ORGANIZATION",
+          "confidence": 0.69,
+          "supportType": "document",
+          "provenance": ["gs://source/doc-9"],
+          "supportNote": "Public evidence names the intermediary handling the battery-input salt.",
+          "branchId": "branch-3",
+          "alternativeGroupId": ""
+        },
+        {
+          "nodeId": "facility:example-cathode-input-plant",
+          "label": "Example cathode-input plant",
+          "entityType": "FACILITY",
+          "confidence": 0.72,
+          "supportType": "document",
+          "provenance": ["gs://source/doc-9"],
+          "supportNote": "Named public evidence identifies the receiving plant.",
           "branchId": "branch-3",
           "alternativeGroupId": ""
         }
       ],
+      "flowLegs": [
+        {
+          "legId": "branch-3-f2-l1",
+          "supplierNodeId": "organization:example-materials-distributor",
+          "customerNodeId": "facility:example-cathode-input-plant",
+          "productNodeId": "product:example-battery-input-salt",
+          "routeNodeIds": [],
+          "qualifiers": [],
+          "confidence": 0.72,
+          "supportType": "document",
+          "provenance": ["gs://source/doc-9"],
+          "supportNote": "Named public evidence ties the distributor to battery-material intake at the receiving plant.",
+          "branchId": "branch-3",
+          "alternativeGroupId": ""
+        }
+      ],
+      "processSteps": [],
+      "overlayEdges": [],
       "completeness": "partial",
       "qualityScore": 0.84
     }
@@ -1181,7 +1365,7 @@ Example 2 — weak-spot verification on populated graph:
       "humanAction": "Verify the hypothesis refining link with grounded facility-level evidence.",
       "closureTarget": "Replace the hypothesis edge between upstream extraction output and the downstream battery-input product with a grounded, facility-level connection.",
       "knownContext": [
-        "The graph already contains a hypothesis edge: Example Ore --TRANSFORMS_INTO--> Example Battery-Input Product (confidence 0.3, supportType=hypothesis).",
+        "The graph already contains a hypothesis process step: Example placeholder converter transforms Example Ore into Example Battery-Input Product (confidence 0.3, supportType=hypothesis).",
         "Upstream extraction and downstream cell or pack manufacturing are already in the graph at higher confidence."
       ],
       "frontier": [
@@ -1299,10 +1483,10 @@ These are not mandatory workflow steps. They are investigation options that shou
   - explicitly allow hypothesis-level edges where evidence is not yet grounded;
   - ask for named source, intermediate, and receiving entities if they can be inferred.
 - What the result should look like:
-  - one `overview_chain` or `chain_fragment` with a long observation array;
+  - one `overview_chain` or `chain_fragment` with a connected operational payload (`entityNodes`, `flowLegs`, `processSteps`, `overlayEdges`);
   - it should prefer a connected multi-hop path over isolated facts;
   - if endpoints are still broad, mark them as provisional and expose the missing endpoint-resolution questions in `remainingFrontier`;
-  - if a later step finds concrete typed nodes or operators, return a replacement fragment with `patchMode=replace_node` or `replace_fragment` instead of silently leaving the placeholder beside the better graph.
+- if a later step finds concrete typed nodes or operators, return a replacement fragment with `patchMode=replace_entity` or `replace_fragment` instead of silently leaving the placeholder beside the better graph.
   - this is not a special root-only format: the result must still be a normal GraphFragment payload that will later be mutated by append/replace under the same shared-graph contract.
 
 2. Alternative-path mode
@@ -1711,7 +1895,7 @@ Branching strategy — decide based on graph state, not domain:
 
 Hypothesis loop guidance:
 - Read `sharedMemory.hypotheses` before planning branches.
-- Read `sharedMemory.entityRegistrySummary` before planning branches: it lists recent hypothesis-local entity merges (lineage after `replace_node` / `replace_fragment`) and the largest equivalence classes—do not re-open a graph slot that already merged into a canonical endpoint unless you are widening evidence, not re-adding a duplicate node.
+- Read `sharedMemory.entityRegistrySummary` before planning branches: it lists recent hypothesis-local entity merges (lineage after `replace_entity` / `replace_fragment`) and the largest equivalence classes—do not re-open a graph slot that already merged into a canonical endpoint unless you are widening evidence, not re-adding a duplicate node.
 - Read `sharedMemory.hypothesisFrontiers` before planning branches. This is the clearest feed of what the currently active hypotheses just discovered versus what they still need to refine.
 - If there is one `active` hypothesis with an existing broad picture and unresolved frontier, prefer refining that same hypothesis over inventing a new one.
 - If an `accepted` hypothesis answers only one route and the user explicitly asked for alternatives, you may create a sibling `alternative` hypothesis branch.
@@ -1748,9 +1932,12 @@ Investigation-shape guidance:
 
 Dedup and breadth (mandatory):
 - Read `sharedMemory.reasoningDedupHints`. Do **not** set a branch `humanQuestion` that repeats the same intent as any string in `openStructuralGapTexts`, `recentlyAnsweredQuestions`, `lastAgentNextQuestions`, or `recentBranchHumanQuestions` unless you are targeting a **different** typed link (different subject/object or relation).
-- **Placeholder branches:** if `sharedMemory.placeholderNodes` is non-empty, include **at least one** branch whose `knownContext` names a specific placeholder label or `oldId` from the graph and asks for resolution or a mergeable fragment that can drive `replace_node` / `replace_fragment`.
+- Read `sharedMemory.requestedCorridor` and `sharedMemory.commercialBridgeCandidates`. If the user question names a source-to-sink corridor and the graph still does not connect that corridor, prioritize the top commercial bridge candidate that connects the relevant islands before accepting an unrelated complete route.
+- Read `sharedMemory.processGapCandidates`. If a named host already has inbound material legs and outbound product legs but lacks a hosted processStep linking them, prioritize that host-local transform/assembly gap before inventing a remote intermediary.
+- **Placeholder branches:** if `sharedMemory.placeholderNodes` is non-empty, include **at least one** branch whose `knownContext` names a specific placeholder label or `oldId` from the graph and asks for resolution or a mergeable fragment that can drive `replace_entity` / `replace_fragment`.
 - **Dedup vs targets:** repeating the same *question template* is **not** a duplicate if the **target node** changes (different subject/object endpoint, different `oldId`, or a different entry from `placeholderNodes`).
 - If the working graph still lacks a multi-hop **operational backbone**, prefer **one** branch that asks for a **coarse end-to-end or parallel-route chain** (multiple hops in one answer) over several branches that each chase overlapping micro-hops.
+- Treat "multi-hop backbone" as a business chain, not a token path: prefer source-anchored routes with multiple flow legs, at least one midstream transform/assembly host, multiple product stages, and a concrete downstream sink. A 1-hop or 2-hop terminal segment is still structural debt.
 - Defer narrow legal/importer micro-questions until at least one plausible supplier→customer flow path exists; those are detail-heavy and duplicate easily.
 
 Rules:
@@ -1877,10 +2064,13 @@ The unit of reasoning is "what graph mutation or graph-closing action should hap
 Hard rules:
 - The original user question still governs the hypothesis. Do not forget it.
 - Read the current hypothesis graph, recent turn history, remainingFrontier, discoveredFrontier, and parallel branch summaries before deciding.
-- If `hypothesisGraph.placeholderNodes` is non-empty, prioritize `nextTurn` / `followupBranches` that **resolve or replace** those placeholders (concrete nodes or `replace_node`/`replace_fragment` design) over `accept_hypothesis` until the list is cleared or explicitly replaced.
+- Read `hypothesisGraph.requestedCorridor` and `hypothesisGraph.commercialBridgeCandidates`. If the requested corridor is still disconnected and a commercial bridge candidate exists, that bridge is a top-priority structural follow-up.
+- Read `hypothesisGraph.processGapCandidates`. If a named host already receives product legs and ships a downstream product but the hosted transform/assembly step is missing, treat that host-local process gap as a top-priority structural follow-up.
+- If `hypothesisGraph.placeholderNodes` is non-empty, prioritize `nextTurn` / `followupBranches` that **resolve or replace** those placeholders (concrete nodes or `replace_entity`/`replace_fragment` design) over `accept_hypothesis` until the list is cleared or explicitly replaced.
 - Treat the hypothesis graph as mutable shared state for this hypothesis. Recent patch fragments already changed the graph you are looking at.
 - Read `entityRegistrySummary` for this hypothesis: it shows which node ids merged after replacements—do not plan a turn that reintroduces a tombstoned id or duplicates a slot already merged unless you are splitting alternatives with `alternativeGroupId`.
-- **Slot discipline:** when emitting `replace_node` for a graph slot, keep the same `slotId` on the replacement edges that fill that slot (object endpoint). Use `alternativeGroupId` when two real endpoints are meant to coexist as alternatives.
+- **Slot discipline:** when emitting `replace_entity` for a graph slot, keep the same `slotId` on the replacement edges that fill that slot (object endpoint). Use `alternativeGroupId` when two real endpoints are meant to coexist as alternatives.
+- A replacement that names a better node but drops the route's upstream or downstream attachment is not good enough. When replacing a midstream slot, reconnect both boundaries or keep the hypothesis open.
 - Every useful result is still a result. Reuse learned findings, including negative results and contractual context, instead of re-asking the same thing.
 - Use one of these outcomes only:
   - `ask_next_question_same_hypothesis`
@@ -2004,18 +2194,25 @@ When evaluating `openGaps`, classify each: does the graph already contain a type
 
 Reachability check (USE `reachability` FIELD):
 The context includes a `reachability` field. Read it before making your assessment.
-- If `groundedCompleteChains` / `completeChainCount` is empty or zero, there is no document-grounded end-to-end flow backbone. That is a serious structural deficit **unless** further grounding is clearly impossible.
-- If `structurallyCompleteChains` / `structuralChainCount` is non-empty, the graph has **terminal-connected** weak skeletons (hypothesis/model_knowledge). Treat them as **not** grounded proof, but do not ignore them when prioritizing which hop to verify next.
+- If `groundedCompleteChains` / `completeChainCount` is empty or zero, there is no document-grounded **business-complete** end-to-end flow backbone. That is a serious structural deficit **unless** further grounding is clearly impossible.
+- If `structurallyCompleteChains` / `structuralChainCount` is non-empty, the graph has **business-complete but weak** skeletons (hypothesis/model_knowledge on at least one hop). Treat them as **not** grounded proof, but do not ignore them when prioritizing which hop to verify next.
 - If `partialChains` lists break points, those are incomplete routes (dead ends) that still need bridging work.
 - If `bridgeCandidates` lists entities in governance but not in flow, those are partially useful — they exist but are disconnected.
 - If `healthSummary` indicates **no document-grounded complete chain** (or equivalent), do NOT recommend composition unless investigation has stagnated and further progress is implausible.
 - When `groundedCompleteChains` / `completeChainCount` is empty but stagnation rules already justify ending investigation, you may recommend composition **only if** the final composed answer will explicitly separate (a) document-supported fragments, (b) structurally complete weak chains / best-supported indirect structure, and (c) adjacent-frame or market-prior context carried as hypothesis or learned findings—not as grounded end-to-end flow. State that requirement in your recommendation rationale.
+- Reachability may count chains whose **source** is a typed FACILITY/ORGANIZATION midstream anchor, not only an upstream extract site. When you narrate industry defaults (e.g. naming OEMs), you must still reconcile them with **actual graph node labels**; do not treat narrative substitutes as evidence that broad graph nodes were replaced.
+
+Broad-node / placeholder debt (USE `sharedMemory.placeholderNodes` and `sharedMemory.placeholderResolutionHints`):
+- These lists are **runtime-detected** broad anchors on flow observations. When either is non-empty, you must treat them as **structural debt**, not as satisfactory named endpoints.
+- Your `summary` must **name each** placeholder label (or cite the list) and state that the graph still carries aggregate stand-ins.
+- Put at least one **actionable** item into `nextQuestions` or `gaps` per placeholder: e.g. dispatch `supply_chain_investigator_agent` (or the role that owns the hop) to return a `replace_entity` / `replace_fragment` patch with a concrete ORG/FACILITY and `oldId`, or to split into parallel named entities when multiplicity is real.
+- While placeholders remain, prefer `compositionRecommendation` = `do_not_recommend` or `conditional` with explicit compositionConditions requiring the composer to label those nodes as **unresolved aggregates** until replaced—**unless** stagnation is extreme and you document that replacement is implausible with available tools.
 
 Rules:
 - Do not invent new research facts.
 - Evaluate sufficiency, honesty, and role coverage against the selected role contracts.
 - Treat broad placeholders and fake typed anchors as unresolved structural issues when a concrete ORG/FACILITY/DEPOSIT/PRODUCT node should exist there. A graph that still relies on regional mining placeholders, generic downstream battery plants, unnamed regional producers, or over-broad product labels is not structurally complete if the investigation already has enough context to ask for the concrete replacement.
-- Read the graph after mutation, not before it. If recent branch results used `replace_node` or `replace_fragment`, judge sufficiency against the replacement graph now in shared memory rather than against the superseded placeholder graph.
+- Read the graph after mutation, not before it. If recent branch results used `replace_entity` or `replace_fragment`, judge sufficiency against the replacement graph now in shared memory rather than against the superseded placeholder graph.
 - Use `sharedMemory.candidatePaths` and `reachability` together. If the direct path is rejected but one indirect path is already the best supported explanation, do not ask for more broad discovery; either ask for the remaining unresolved hop on that indirect route or recommend composition with an explicit indirect-path answer.
 - In mixed mode with no grounding, assess whether the graph is still useful and explicit about its limits.
 - Keep the response compact enough to fit one strict JSON object: at most """
@@ -2098,7 +2295,11 @@ Return exactly one JSON object matching RubricLLMExtras.
 
 def read_shared_memory(tool_context) -> dict[str, Any]:
     request = AgentLoomRequest.model_validate(tool_context.state.get(STATE_REQUEST) or {})
-    graph = [GraphObservation.model_validate(item) for item in (tool_context.state.get(STATE_WORKING_GRAPH) or [])]
+    graph_state = _load_operational_graph_state(tool_context.state)
+    graph = observation_projection(graph_state)
+    reachability = _graph_reachability_report_for_graph(graph_state, state=tool_context.state)
+    commercial_bridge_candidates = _commercial_bridge_candidates(graph_state, state=tool_context.state)
+    process_gap_candidates = _host_local_process_gap_candidates(graph_state)
     fragments = [GraphFragment.model_validate(item) for item in (tool_context.state.get(STATE_GRAPH_FRAGMENTS) or [])]
     branches = [BranchState.model_validate(item) for item in (tool_context.state.get(STATE_BRANCH_STATES) or [])]
     failures = [FailureRecord.model_validate(item) for item in (tool_context.state.get(STATE_FAILURES) or [])]
@@ -2125,6 +2326,12 @@ def read_shared_memory(tool_context) -> dict[str, Any]:
         "roleContracts": _selected_role_contract_payload(selected_roles),
         "graphObservationCount": len(graph),
         "graphObservations": [item.model_dump(mode="json", by_alias=True) for item in graph[-24:]],
+        "operationalGraph": graph_state.model_dump(mode="json", by_alias=True),
+        "operationalCounts": graph_counts(graph_state),
+        "reachability": reachability,
+        "requestedCorridor": reachability.get("requestedCorridor") or {},
+        "commercialBridgeCandidates": commercial_bridge_candidates,
+        "processGapCandidates": process_gap_candidates,
         "graphFragmentCount": len(fragments),
         "graphFragments": [item.model_dump(mode="json", by_alias=True) for item in fragments[-10:]],
         "branchCount": len(branches),
@@ -2139,6 +2346,10 @@ def read_shared_memory(tool_context) -> dict[str, Any]:
         "hypothesisTurns": [item.model_dump(mode="json", by_alias=True) for item in turns[-16:]],
         "learnedFindingCount": len(findings),
         "learnedFindings": [item.model_dump(mode="json", by_alias=True) for item in findings[-20:]],
+        "placeholderNodes": _placeholder_nodes_from_graph(graph_state),
+        "placeholderResolutionHints": _placeholder_resolution_hints(graph_state),
+        "entityRegistrySummary": _entity_registry_summary_global(tool_context.state),
+        "reasoningDedupHints": _reasoning_dedup_hints(tool_context.state),
         "progress": {
             "current": current_progress,
             "stagnationCount": int(tool_context.state.get(STATE_GLOBAL_STAGNATION, 0) or 0),
@@ -2459,56 +2670,70 @@ def _validate_edge_direction(
 
 
 def append_graph_observations(observations: list[dict[str, Any]], tool_context) -> dict[str, Any]:
-    current = [_observation_ids(GraphObservation.model_validate(item)) for item in (tool_context.state.get(STATE_WORKING_GRAPH) or [])]
-    current, result = _merge_graph_observation_lists(
-        current,
-        [_observation_ids(GraphObservation.model_validate(item)) for item in observations],
-    )
-    tool_context.state[STATE_WORKING_GRAPH] = [item.model_dump(mode="json", by_alias=True) for item in current]
-    return result
-
-
-def _merge_graph_observation_lists(
-    existing_observations: list[GraphObservation],
-    incoming_observations: list[GraphObservation],
-) -> tuple[list[GraphObservation], dict[str, Any]]:
-    current = [_observation_ids(item) for item in existing_observations]
-    existing = {(item.subject, item.relation, item.object, tuple(item.qualifiers)) for item in current}
-    appended = 0
+    normalized: list[GraphObservation] = []
     reversed_count = 0
     dropped_count = 0
     rejected: list[dict[str, Any]] = []
-    for idx, observation in enumerate(incoming_observations):
+    for idx, raw in enumerate(observations):
         try:
-            observation = _observation_ids(GraphObservation.model_validate(observation.model_dump(mode="json", by_alias=True)))
+            observation = _observation_ids(
+                raw if isinstance(raw, GraphObservation) else GraphObservation.model_validate(raw)
+            )
         except Exception as exc:
             rejected.append({"index": idx, "error": str(exc)})
             continue
 
         valid, should_reverse = _validate_edge_direction(
-            observation.relation, observation.subject_type, observation.object_type
+            observation.relation,
+            observation.subject_type,
+            observation.object_type,
         )
         if not valid and should_reverse:
-            observation.subject, observation.object = observation.object, observation.subject
-            observation.subject_type, observation.object_type = observation.object_type, observation.subject_type
-            observation.subject_id, observation.object_id = observation.object_id, observation.subject_id
+            observation = observation.model_copy(
+                update={
+                    "subject": observation.object,
+                    "subject_type": observation.object_type,
+                    "subject_id": observation.object_id,
+                    "object": observation.subject,
+                    "object_type": observation.subject_type,
+                    "object_id": observation.subject_id,
+                }
+            )
             reversed_count += 1
         elif not valid:
             dropped_count += 1
             continue
+        normalized.append(observation)
 
-        key = (observation.subject, observation.relation, observation.object, tuple(observation.qualifiers))
-        if key in existing:
-            continue
-        existing.add(key)
-        current.append(observation)
-        appended += 1
-    result: dict[str, Any] = {"appended": appended, "graphObservationCount": len(current), "rejected": rejected}
+    if not normalized:
+        return {
+            "appended": 0,
+            "graphObservationCount": _working_graph_counts(tool_context.state)["graphObservationCount"],
+            "rejected": rejected,
+            **({"reversedEdges": reversed_count} if reversed_count else {}),
+            **({"droppedInvalidEdges": dropped_count} if dropped_count else {}),
+        }
+
+    branch_id = next((item.branch_id for item in normalized if item.branch_id), "runtime")
+    fragment = GraphFragment(
+        fragmentId=f"runtime-append-{len(tool_context.state.get(STATE_GRAPH_FRAGMENTS) or []) + 1}",
+        fragmentType="operational_flow",
+        title="Runtime appended observations",
+        humanQuestion="",
+        humanSummary=f"Runtime appended {len(normalized)} derived observations.",
+        branchId=branch_id,
+        observations=normalized,
+        completeness="partial",
+        qualityScore=0.2,
+    )
+    result = _apply_graph_fragment_mutations(tool_context.state, [fragment])
+    result["appended"] = len(normalized)
+    result["rejected"] = rejected
     if reversed_count:
         result["reversedEdges"] = reversed_count
     if dropped_count:
         result["droppedInvalidEdges"] = dropped_count
-    return current, result
+    return result
 
 
 def _patch_target_ids(fragment: GraphFragment) -> set[str]:
@@ -2633,17 +2858,117 @@ def _flow_orphan_hints_after_patch(
     return hints[:8]
 
 
-def _fragment_with_recomputed_boundaries(fragment: GraphFragment, observations: list[GraphObservation]) -> GraphFragment | None:
-    if not observations:
+def _replacement_patch_regression_reason(
+    before_graph: OperationalGraphState,
+    after_graph: OperationalGraphState,
+) -> str:
+    before_report = _graph_reachability_report_for_graph(before_graph)
+    after_report = _graph_reachability_report_for_graph(after_graph)
+    before_complete = sum(_reachability_complete_counts(before_report))
+    after_complete = sum(_reachability_complete_counts(after_report))
+    before_hops = int(before_report.get("maxOperationalRouteHops") or _max_route_hops_from_report(before_report))
+    after_hops = int(after_report.get("maxOperationalRouteHops") or _max_route_hops_from_report(after_report))
+
+    if before_complete > after_complete:
+        return (
+            "replacement would remove an already reachable business-complete chain "
+            f"({before_complete} -> {after_complete})"
+        )
+    if before_hops >= 4 and after_hops + 1 < before_hops:
+        after_partial = after_report.get("partialChains") or []
+        reason = str(after_partial[0].get("breakReason") or "").strip() if after_partial else ""
+        if reason:
+            return (
+                f"replacement would shrink the best reachable route from {before_hops} to {after_hops} hops; "
+                f"post-patch break: {reason}"
+            )
+        return f"replacement would shrink the best reachable route from {before_hops} to {after_hops} hops"
+    return ""
+
+
+def _fragment_referenced_ids(fragment: GraphFragment) -> set[str]:
+    refs: set[str] = set()
+    for node in fragment.entity_nodes:
+        if node.node_id:
+            refs.add(node.node_id)
+    for leg in fragment.flow_legs:
+        refs.update([leg.supplier_node_id, leg.customer_node_id, leg.product_node_id, *leg.route_node_ids])
+    for step in fragment.process_steps:
+        refs.update([step.host_node_id, *step.input_node_ids, *step.output_node_ids])
+    for edge in [*fragment.overlay_edges, *fragment.observations]:
+        if edge.subject_id:
+            refs.add(edge.subject_id)
+        if edge.object_id:
+            refs.add(edge.object_id)
+    refs.discard("")
+    return refs
+
+
+def _fragment_touches_removal_zone(fragment: GraphFragment, zone: set[str]) -> bool:
+    if not zone:
+        return False
+    return bool(_fragment_referenced_ids(fragment) & zone)
+
+
+def _strip_fragment_removal_zone(fragment: GraphFragment, zone: set[str]) -> GraphFragment | None:
+    if not zone:
+        return fragment
+    payload = fragment.model_dump(mode="json", by_alias=True)
+    payload["entityNodes"] = [
+        item for item in payload.get("entityNodes", [])
+        if str(item.get("nodeId") or "").strip() not in zone
+    ]
+    payload["flowLegs"] = [
+        item
+        for item in payload.get("flowLegs", [])
+        if str(item.get("supplierNodeId") or "").strip() not in zone
+        and str(item.get("customerNodeId") or "").strip() not in zone
+        and str(item.get("productNodeId") or "").strip() not in zone
+        and not any(str(route_id or "").strip() in zone for route_id in (item.get("routeNodeIds") or []))
+    ]
+    payload["processSteps"] = [
+        item
+        for item in payload.get("processSteps", [])
+        if str(item.get("hostNodeId") or "").strip() not in zone
+        and not any(str(node_id or "").strip() in zone for node_id in (item.get("inputNodeIds") or []))
+        and not any(str(node_id or "").strip() in zone for node_id in (item.get("outputNodeIds") or []))
+    ]
+    payload["overlayEdges"] = [
+        item
+        for item in payload.get("overlayEdges", [])
+        if str(item.get("subjectId") or "").strip() not in zone
+        and str(item.get("objectId") or "").strip() not in zone
+    ]
+    payload["observations"] = [
+        item
+        for item in payload.get("observations", [])
+        if str(item.get("subjectId") or "").strip() not in zone
+        and str(item.get("objectId") or "").strip() not in zone
+    ]
+    if not any(
+        payload.get(key)
+        for key in ("entityNodes", "flowLegs", "processSteps", "overlayEdges", "observations")
+    ):
         return None
-    normalized = [_observation_ids(item) for item in observations]
-    return fragment.model_copy(
-        update={
-            "start_node_id": normalized[0].subject_id,
-            "end_node_id": normalized[-1].object_id,
-            "observations": normalized,
-        }
-    )
+    return GraphFragment.model_validate(payload)
+
+
+def _fragment_with_recomputed_boundaries(fragment: GraphFragment, observations: list[GraphObservation] | None = None) -> GraphFragment | None:
+    payload = fragment.model_dump(mode="json", by_alias=True)
+    if observations is not None:
+        payload["observations"] = [item.model_dump(mode="json", by_alias=True) for item in observations]
+    rebuilt = GraphFragment.model_validate(payload)
+    if not any(
+        (
+            rebuilt.entity_nodes,
+            rebuilt.flow_legs,
+            rebuilt.process_steps,
+            rebuilt.overlay_edges,
+            rebuilt.observations,
+        )
+    ):
+        return None
+    return rebuilt
 
 
 def _sync_branch_graph_fragments(
@@ -2662,37 +2987,56 @@ def _sync_branch_graph_fragments(
     return synced
 
 
+def _branch_graph_fragments_from_state(state: dict[str, Any], branch_id: str) -> list[GraphFragment]:
+    return [
+        GraphFragment.model_validate(item)
+        for item in (state.get(STATE_GRAPH_FRAGMENTS) or [])
+        if isinstance(item, dict) and item.get("branchId") == branch_id
+    ]
+
+
 def _apply_graph_fragment_mutations(
     state: dict[str, Any],
     incoming_fragments: list[GraphFragment],
 ) -> dict[str, Any]:
-    existing_graph = [
-        _observation_ids(GraphObservation.model_validate(item))
-        for item in (state.get(STATE_WORKING_GRAPH) or [])
-    ]
-    pre_merge_observation_count = len(existing_graph)
+    pre_merge_graph = _load_operational_graph_state(state)
+    pre_merge_counts = graph_counts(pre_merge_graph)
     existing_fragments = [
-        _fragment_with_recomputed_boundaries(GraphFragment.model_validate(item), GraphFragment.model_validate(item).observations)
+        _fragment_with_recomputed_boundaries(GraphFragment.model_validate(item))
         for item in (state.get(STATE_GRAPH_FRAGMENTS) or [])
     ]
     merged_fragments = [item for item in existing_fragments if item is not None]
+    legacy_observations = _working_graph_observations(state)
+    if legacy_observations:
+        existing_keys = {_observation_key(item) for item in _flatten_fragments(merged_fragments)}
+        residual_legacy = [item for item in legacy_observations if _observation_key(item) not in existing_keys]
+        if residual_legacy:
+            merged_fragments = [
+                item for item in merged_fragments
+                if item.fragment_id != "__legacy_working_graph__"
+            ]
+            merged_fragments.append(
+                GraphFragment(
+                    fragmentId="__legacy_working_graph__",
+                    fragmentType="operational_flow",
+                    title="Legacy working graph residual",
+                    humanQuestion="",
+                    humanSummary="Residual working-graph observations preserved during graph mutation.",
+                    branchId="runtime",
+                    observations=residual_legacy,
+                    completeness="partial",
+                    qualityScore=0.0,
+                )
+            )
     tombstoned_node_ids = {item for item in (state.get(STATE_REPLACED_NODE_IDS) or []) if item}
 
     if tombstoned_node_ids:
         cleaned_fragments: list[GraphFragment] = []
         for fragment in merged_fragments:
-            kept_observations = [
-                obs for obs in fragment.observations if not _observation_references_ids(obs, tombstoned_node_ids)
-            ]
-            updated_fragment = _fragment_with_recomputed_boundaries(fragment, kept_observations)
+            updated_fragment = _strip_fragment_removal_zone(fragment, tombstoned_node_ids)
             if updated_fragment is not None:
                 cleaned_fragments.append(updated_fragment)
         merged_fragments = cleaned_fragments
-
-    prior_fragment_keys = {_observation_key(item) for item in _flatten_fragments(merged_fragments)}
-    residual_graph = [item for item in existing_graph if _observation_key(item) not in prior_fragment_keys]
-    if tombstoned_node_ids:
-        residual_graph = [item for item in residual_graph if not _observation_references_ids(item, tombstoned_node_ids)]
 
     replaced_fragment_ids: set[str] = set()
     replaced_node_ids: set[str] = set()
@@ -2705,23 +3049,12 @@ def _apply_graph_fragment_mutations(
         if normalized_fragment is None:
             continue
         if tombstoned_node_ids:
-            kept_observations = [
-                obs for obs in normalized_fragment.observations if not _observation_references_ids(obs, tombstoned_node_ids)
-            ]
-            normalized_fragment = _fragment_with_recomputed_boundaries(normalized_fragment, kept_observations)
+            normalized_fragment = _strip_fragment_removal_zone(normalized_fragment, tombstoned_node_ids)
             if normalized_fragment is None:
                 continue
+        fragment_already_applied = False
         target_ids = _patch_target_ids(normalized_fragment)
         if normalized_fragment.patch_mode == "replace_fragment":
-            pre_merge_flat = _flatten_fragments(merged_fragments)
-            removed_frags = [item for item in merged_fragments if item.fragment_id in target_ids]
-            removed_flat = _flatten_fragments(removed_frags)
-            frag_seed: set[str] = set()
-            for o in removed_flat:
-                frag_seed |= _graph_endpoint_identity_tokens(o)
-            ambient_f = [*residual_graph, *pre_merge_flat, *normalized_fragment.observations]
-            zone_f = _removal_id_closure(ambient_f, frag_seed)
-            session_removal_zone |= zone_f
             replaced_fragment_ids.update(target_ids)
             merged_fragments = [item for item in merged_fragments if item.fragment_id not in target_ids]
             patch_summaries.append(
@@ -2729,7 +3062,7 @@ def _apply_graph_fragment_mutations(
                     "fragmentId": normalized_fragment.fragment_id,
                     "patchMode": "replace_fragment",
                     "targetFragmentIds": sorted(target_ids),
-                    "removalZoneSize": len(zone_f),
+                    "removalZoneSize": 0,
                 }
             )
             _registry_record_patch(
@@ -2737,30 +3070,58 @@ def _apply_graph_fragment_mutations(
                 branch_id=normalized_fragment.branch_id,
                 fragment_id=normalized_fragment.fragment_id,
                 patch_mode="replace_fragment",
-                removal_zone=zone_f,
+                removal_zone=set(),
                 incoming_observations=list(normalized_fragment.observations),
+                incoming_fragment=normalized_fragment,
                 explicit_seeds=set(),
             )
-        elif normalized_fragment.patch_mode == "replace_node":
+        elif normalized_fragment.patch_mode == "replace_entity":
+            before_patch_graph = graph_state_from_fragments(merged_fragments)
             seed = set(target_ids)
-            ambient_n = [*residual_graph, *_flatten_fragments(merged_fragments), *normalized_fragment.observations]
+            ambient_n = [
+                *[obs for existing_fragment in merged_fragments for obs in existing_fragment.observations],
+                *normalized_fragment.observations,
+            ]
             removal_zone = _removal_id_closure(ambient_n, seed)
+            candidate_fragments: list[GraphFragment] = []
+            for existing_fragment in merged_fragments:
+                updated_fragment = _strip_fragment_removal_zone(existing_fragment, removal_zone)
+                if updated_fragment is not None:
+                    candidate_fragments.append(updated_fragment)
+            candidate_fragments = [item for item in candidate_fragments if item.fragment_id != normalized_fragment.fragment_id]
+            candidate_fragments.append(normalized_fragment)
+            regression_reason = _replacement_patch_regression_reason(
+                before_patch_graph,
+                graph_state_from_fragments(candidate_fragments),
+            )
+            if regression_reason:
+                patch_summaries.append(
+                    {
+                        "fragmentId": normalized_fragment.fragment_id,
+                        "patchMode": "replace_entity",
+                        "explicitOldIds": sorted(seed),
+                        "removalZoneSize": len(removal_zone),
+                        "rejectedReason": regression_reason,
+                    }
+                )
+                record_open_gaps(
+                    [
+                        f"Replacement patch {normalized_fragment.fragment_id} was rejected because {regression_reason}."
+                    ],
+                    _StateToolContext(state),
+                    origin="replaceEntityAudit",
+                    cycle=int(state.get(STATE_SUPERVISOR_CYCLE, 0) or 0),
+                )
+                continue
             session_removal_zone |= removal_zone
             replaced_node_ids.update(seed)
             tombstoned_node_ids.update(seed)
-            patched_fragments: list[GraphFragment] = []
-            for existing_fragment in merged_fragments:
-                kept_observations = [
-                    obs for obs in existing_fragment.observations if not _observation_touches_removal_zone(obs, removal_zone)
-                ]
-                updated_fragment = _fragment_with_recomputed_boundaries(existing_fragment, kept_observations)
-                if updated_fragment is not None:
-                    patched_fragments.append(updated_fragment)
-            merged_fragments = patched_fragments
+            merged_fragments = candidate_fragments
+            fragment_already_applied = True
             patch_summaries.append(
                 {
                     "fragmentId": normalized_fragment.fragment_id,
-                    "patchMode": "replace_node",
+                    "patchMode": "replace_entity",
                     "explicitOldIds": sorted(seed),
                     "removalZoneSize": len(removal_zone),
                 }
@@ -2769,23 +3130,31 @@ def _apply_graph_fragment_mutations(
                 state,
                 branch_id=normalized_fragment.branch_id,
                 fragment_id=normalized_fragment.fragment_id,
-                patch_mode="replace_node",
+                patch_mode="replace_entity",
                 removal_zone=removal_zone,
                 incoming_observations=list(normalized_fragment.observations),
+                incoming_fragment=normalized_fragment,
                 explicit_seeds=set(seed),
             )
 
-        merged_fragments = [item for item in merged_fragments if item.fragment_id != normalized_fragment.fragment_id]
-        merged_fragments.append(normalized_fragment)
+        if not fragment_already_applied:
+            merged_fragments = [item for item in merged_fragments if item.fragment_id != normalized_fragment.fragment_id]
+            merged_fragments.append(normalized_fragment)
         if normalized_fragment.observations:
             last_incoming_observations = list(normalized_fragment.observations)
 
     if session_removal_zone:
-        residual_graph = [item for item in residual_graph if not _observation_touches_removal_zone(item, session_removal_zone)]
+        cleaned_fragments = []
+        for fragment in merged_fragments:
+            updated_fragment = _strip_fragment_removal_zone(fragment, session_removal_zone)
+            if updated_fragment is not None:
+                cleaned_fragments.append(updated_fragment)
+        merged_fragments = cleaned_fragments
 
-    fragment_graph, merge_result = _merge_graph_observation_lists(residual_graph, _flatten_fragments(merged_fragments))
+    graph_state = graph_state_from_fragments(merged_fragments)
+    fragment_graph = observation_projection(graph_state)
     state[STATE_GRAPH_FRAGMENTS] = [item.model_dump(mode="json", by_alias=True) for item in merged_fragments]
-    state[STATE_WORKING_GRAPH] = [item.model_dump(mode="json", by_alias=True) for item in fragment_graph]
+    _save_operational_graph_state(state, graph_state)
     state[STATE_REPLACED_NODE_IDS] = sorted(tombstoned_node_ids)
 
     if STATE_BRANCH_STATES in state:
@@ -2795,7 +3164,14 @@ def _apply_graph_fragment_mutations(
         )
         state[STATE_BRANCH_STATES] = [item.model_dump(mode="json", by_alias=True) for item in synced]
 
-    result = dict(merge_result)
+    post_counts = graph_counts(graph_state)
+    result = {
+        "graphObservationCount": post_counts["graphObservationCount"],
+        "entityNodeCount": post_counts["entityNodeCount"],
+        "flowLegCount": post_counts["flowLegCount"],
+        "processStepCount": post_counts["processStepCount"],
+        "overlayEdgeCount": post_counts["overlayEdgeCount"],
+    }
     if replaced_fragment_ids:
         result["replacedFragmentIds"] = sorted(replaced_fragment_ids)
     if replaced_node_ids:
@@ -2803,7 +3179,10 @@ def _apply_graph_fragment_mutations(
     result["graphFragmentCount"] = len(merged_fragments)
     result["removalZoneSize"] = len(session_removal_zone)
     result["removalZoneSample"] = sorted(session_removal_zone)[:24]
-    result["workingGraphObservationDelta"] = len(fragment_graph) - pre_merge_observation_count
+    result["workingGraphObservationDelta"] = post_counts["graphObservationCount"] - pre_merge_counts["graphObservationCount"]
+    result["workingGraphNodeDelta"] = post_counts["entityNodeCount"] - pre_merge_counts["entityNodeCount"]
+    result["workingGraphLegDelta"] = post_counts["flowLegCount"] - pre_merge_counts["flowLegCount"]
+    result["workingGraphStepDelta"] = post_counts["processStepCount"] - pre_merge_counts["processStepCount"]
 
     orphan_hints = _flow_orphan_hints_after_patch(fragment_graph, last_incoming_observations)
     result["orphanFlowHints"] = orphan_hints
@@ -2823,9 +3202,14 @@ def _apply_graph_fragment_mutations(
         "replacedFragmentIds": sorted(replaced_fragment_ids),
         "removalZoneSize": len(session_removal_zone),
         "removalZoneSample": sorted(session_removal_zone)[:24],
-        "workingGraphObservationsBefore": pre_merge_observation_count,
-        "workingGraphObservationsAfter": len(fragment_graph),
-        "mergeResult": {k: merge_result[k] for k in sorted(merge_result.keys()) if k in {"appended", "graphObservationCount", "reversedEdges", "droppedInvalidEdges"}},
+        "workingGraphObservationsBefore": pre_merge_counts["graphObservationCount"],
+        "workingGraphObservationsAfter": post_counts["graphObservationCount"],
+        "workingGraphNodesBefore": pre_merge_counts["entityNodeCount"],
+        "workingGraphNodesAfter": post_counts["entityNodeCount"],
+        "workingGraphLegsBefore": pre_merge_counts["flowLegCount"],
+        "workingGraphLegsAfter": post_counts["flowLegCount"],
+        "workingGraphStepsBefore": pre_merge_counts["processStepCount"],
+        "workingGraphStepsAfter": post_counts["processStepCount"],
         "orphanFlowHints": orphan_hints,
     }
     history = [item for item in (state.get(STATE_GRAPH_MUTATION_LOG) or []) if isinstance(item, dict)]
@@ -3031,18 +3415,7 @@ def _auto_resolve_detail_gaps(state: dict[str, Any], *, addressed_by: str = "aut
     """Close open detail gaps automatically. Also close gaps whose subject entities
     already appear in the working graph with at least one typed edge."""
     entries = _load_gap_entries(state)
-    graph_obs = state.get(STATE_WORKING_GRAPH) or []
-    graph_subjects = set()
-    graph_objects = set()
-    for obs in graph_obs:
-        if isinstance(obs, dict):
-            subj = (obs.get("subject") or "").lower().strip()
-            obj = (obs.get("object") or "").lower().strip()
-            if subj:
-                graph_subjects.add(subj)
-            if obj:
-                graph_objects.add(obj)
-    graph_entities = graph_subjects | graph_objects
+    graph_entities = {label.lower().strip() for label in graph_entity_labels(_load_operational_graph_state(state), limit=128)}
     resolved_count = 0
     for entry in entries:
         if entry.status != "open":
@@ -3101,6 +3474,320 @@ def _observation_ids(observation: GraphObservation) -> GraphObservation:
 
 def _synthetic_id_for_endpoint(entity_type: str, label: str) -> str:
     return f"{_slug(entity_type or 'entity')}:{_slug(label)}"
+
+
+_SCOPE_TOKEN_STOPWORDS = {
+    "the",
+    "a",
+    "an",
+    "is",
+    "are",
+    "of",
+    "in",
+    "to",
+    "for",
+    "and",
+    "or",
+    "from",
+    "by",
+    "with",
+    "on",
+    "at",
+    "what",
+    "which",
+    "how",
+    "that",
+    "this",
+    "it",
+    "its",
+    "map",
+    "identify",
+    "surface",
+    "likely",
+    "strongest",
+    "pressure",
+    "points",
+    "supply",
+    "chain",
+}
+
+
+def _normalize_scope_token(token: str) -> str:
+    text = re.sub(r"[^a-z0-9]+", "", (token or "").lower())
+    for suffix in ("ing", "ers", "ies", "ers", "es", "s", "ed", "or", "ion", "al", "an"):
+        if len(text) > len(suffix) + 3 and text.endswith(suffix):
+            text = text[: -len(suffix)]
+            break
+    return text
+
+
+def _scope_tokens(text: str) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in re.findall(r"[A-Za-z0-9]+", (text or "").lower()):
+        if raw in _SCOPE_TOKEN_STOPWORDS or len(raw) <= 2:
+            continue
+        normalized = _normalize_scope_token(raw)
+        if len(normalized) <= 2 or normalized in _SCOPE_TOKEN_STOPWORDS or normalized in seen:
+            continue
+        seen.add(normalized)
+        out.append(normalized)
+    return out
+
+
+def _scope_tokens_compatible(left: str, right: str) -> bool:
+    a = _normalize_scope_token(left)
+    b = _normalize_scope_token(right)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return len(a) >= 4 and len(b) >= 4 and (a.startswith(b) or b.startswith(a))
+
+
+def _scope_matches_text(blob: str, scope_text: str) -> bool:
+    scope = " ".join((scope_text or "").strip().lower().split())
+    if not scope:
+        return False
+    blob_l = " ".join((blob or "").strip().lower().split())
+    if scope and scope in blob_l:
+        return True
+    scope_tokens = _scope_tokens(scope)
+    blob_tokens = _scope_tokens(blob_l)
+    if not scope_tokens or not blob_tokens:
+        return False
+    matched = 0
+    for needle in scope_tokens:
+        if any(_scope_tokens_compatible(needle, token) for token in blob_tokens):
+            matched += 1
+    threshold = 1 if len(scope_tokens) <= 2 else min(len(scope_tokens), max(2, len(scope_tokens) - 1))
+    return matched >= threshold
+
+
+def _strip_scope_phrase(text: str) -> str:
+    cleaned = re.sub(
+        r"\b(?:identify|surface|show|map|trace|assess|find|describe|explain)\b.*$",
+        "",
+        (text or "").strip(),
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"^[\s,;:.-]+|[\s,;:.-]+$", "", cleaned)
+    cleaned = re.sub(r"^(?:a|an|the)\s+", "", cleaned, flags=re.IGNORECASE)
+    return " ".join(cleaned.split())
+
+
+def _requested_operational_corridor(request: AgentLoomRequest) -> dict[str, Any]:
+    question = (request.question or "").strip()
+    if not question:
+        return {
+            "active": False,
+            "sourceScope": "",
+            "sinkScope": "",
+            "sourceTokens": [],
+            "sinkTokens": [],
+        }
+    source_scope = ""
+    sink_scope = ""
+    match = re.search(
+        r"\bfrom\s+(?P<source>.+?)\s+to\s+(?P<sink>.+?)(?=(?:,|;|\.|\?|\band\s+(?:identify|surface|show|map|trace|assess|find|describe|explain)\b|$))",
+        question,
+        re.IGNORECASE,
+    )
+    if match:
+        source_scope = _strip_scope_phrase(match.group("source"))
+        sink_scope = _strip_scope_phrase(match.group("sink"))
+    return {
+        "active": bool(source_scope or sink_scope),
+        "sourceScope": source_scope,
+        "sinkScope": sink_scope,
+        "sourceTokens": _scope_tokens(source_scope),
+        "sinkTokens": _scope_tokens(sink_scope),
+    }
+
+
+def _request_document_index(request: AgentLoomRequest) -> dict[str, CorpusDocument]:
+    index: dict[str, CorpusDocument] = {}
+    for doc in request.corpus_documents:
+        for key in {doc.document_id, doc.source_uri}:
+            value = str(key or "").strip()
+            if value:
+                index[value] = doc
+    return index
+
+
+def _provenance_text_fragments(request: AgentLoomRequest, provenance: Iterable[str]) -> list[str]:
+    doc_index = _request_document_index(request)
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in provenance:
+        key = str(raw or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        doc = doc_index.get(key)
+        if doc is None:
+            continue
+        out.append(doc.title)
+        out.append(doc.text[:600])
+        if doc.tags:
+            out.append(" ".join(doc.tags))
+        if doc.metadata:
+            out.append(" ".join(f"{k} {v}" for k, v in sorted(doc.metadata.items()) if str(v).strip()))
+    return out
+
+
+def _node_supporting_text(
+    node_id: str,
+    node_index: dict[str, EntityNode],
+    graph_state: OperationalGraphState,
+    request: AgentLoomRequest,
+) -> str:
+    node = node_index.get(node_id)
+    parts: list[str] = []
+    if node is not None:
+        parts.extend(
+            [
+                node.label,
+                node.canonical_ref,
+                " ".join(node.qualifiers),
+                node.support_note,
+                *node.provenance,
+                *_provenance_text_fragments(request, node.provenance),
+            ]
+        )
+    for leg in graph_state.flow_legs:
+        if node_id not in {leg.supplier_node_id, leg.customer_node_id, leg.product_node_id, *leg.route_node_ids}:
+            continue
+        parts.extend([leg.support_note, *leg.qualifiers, *leg.provenance, *_provenance_text_fragments(request, leg.provenance)])
+    for step in graph_state.process_steps:
+        if node_id not in {step.host_node_id, *step.input_node_ids, *step.output_node_ids}:
+            continue
+        parts.extend([step.support_note, *step.qualifiers, *step.provenance, *_provenance_text_fragments(request, step.provenance)])
+    return " ".join(part for part in parts if str(part or "").strip())
+
+
+def _record_touched_node_ids(record: dict[str, Any]) -> list[str]:
+    out: list[str] = []
+    for op in record.get("ops") or []:
+        for node_id in (
+            op.get("fromHostId"),
+            op.get("toHostId"),
+            op.get("hostId"),
+            op.get("productId"),
+            op.get("outputId"),
+            *list(op.get("inputIds") or []),
+        ):
+            nid = str(node_id or "").strip()
+            if nid and nid not in out:
+                out.append(nid)
+    return out
+
+
+def _requested_corridor_profile_for_record(
+    *,
+    record: dict[str, Any],
+    host_id: str,
+    product_id: str,
+    sink_label: str,
+    node_index: dict[str, EntityNode],
+    graph_state: OperationalGraphState,
+    request: AgentLoomRequest,
+    corridor: dict[str, Any],
+) -> dict[str, Any]:
+    if not corridor.get("active"):
+        return {
+            "active": False,
+            "sourceScope": "",
+            "sinkScope": "",
+            "matchesSourceScope": True,
+            "matchesSinkScope": True,
+            "missingCriteria": [],
+            "isSatisfied": True,
+        }
+    source_scope = str(corridor.get("sourceScope") or "").strip()
+    sink_scope = str(corridor.get("sinkScope") or "").strip()
+    touched_nodes = _record_touched_node_ids(record)
+    if host_id and host_id not in touched_nodes:
+        touched_nodes.append(host_id)
+    if product_id and product_id not in touched_nodes:
+        touched_nodes.append(product_id)
+    touched_blobs = [
+        _node_supporting_text(node_id, node_index, graph_state, request)
+        for node_id in touched_nodes
+        if node_id
+    ]
+    source_matches = True
+    sink_matches = True
+    if source_scope:
+        source_matches = any(
+            _scope_matches_text(blob, source_scope)
+            for blob in [record.get("sourceLabel") or "", *touched_blobs]
+        )
+    if sink_scope:
+        sink_blob = _node_supporting_text(host_id, node_index, graph_state, request) if host_id else sink_label
+        sink_matches = any(
+            _scope_matches_text(blob, sink_scope)
+            for blob in [sink_label, sink_blob, *touched_blobs]
+        )
+    missing: list[str] = []
+    if source_scope and not source_matches:
+        missing.append(f"route does not yet connect the requested source side: {source_scope}")
+    if sink_scope and not sink_matches:
+        missing.append(f"route does not yet connect the requested sink side: {sink_scope}")
+    return {
+        "active": True,
+        "sourceScope": source_scope,
+        "sinkScope": sink_scope,
+        "matchesSourceScope": source_matches,
+        "matchesSinkScope": sink_matches,
+        "missingCriteria": missing,
+        "isSatisfied": not missing,
+    }
+
+
+def _operational_component_index(graph_state: OperationalGraphState) -> dict[str, str]:
+    adjacency: dict[str, set[str]] = {}
+
+    def _connect(left: str, right: str) -> None:
+        if not left or not right:
+            return
+        adjacency.setdefault(left, set()).add(right)
+        adjacency.setdefault(right, set()).add(left)
+
+    for leg in graph_state.flow_legs:
+        _connect(leg.supplier_node_id, leg.customer_node_id)
+        _connect(leg.supplier_node_id, leg.product_node_id)
+        _connect(leg.customer_node_id, leg.product_node_id)
+    for step in graph_state.process_steps:
+        for node_id in [*step.input_node_ids, *step.output_node_ids]:
+            _connect(step.host_node_id, node_id)
+
+    component_by_node: dict[str, str] = {}
+    counter = 0
+    for seed in sorted(adjacency):
+        if seed in component_by_node:
+            continue
+        counter += 1
+        component_id = f"component-{counter}"
+        queue = deque([seed])
+        component_by_node[seed] = component_id
+        while queue:
+            current = queue.popleft()
+            for neighbor in adjacency.get(current, ()):
+                if neighbor in component_by_node:
+                    continue
+                component_by_node[neighbor] = component_id
+                queue.append(neighbor)
+    return component_by_node
+
+
+def _product_identity_key(node_index: dict[str, EntityNode], product_id: str) -> str:
+    node = node_index.get(product_id)
+    if node is not None and str(node.canonical_ref or "").strip():
+        return f"canonical:{node.canonical_ref.strip().lower()}"
+    label = _graph_node_label(node_index, product_id)
+    tokens = _scope_tokens(label)
+    return f"label:{' '.join(tokens) or _slug(label or product_id)}"
 
 
 def _label_looks_like_placeholder(label: str) -> bool:
@@ -3170,6 +3857,55 @@ def _all_endpoint_ids_from_observations(observations: list[GraphObservation]) ->
     return out
 
 
+def _fragment_endpoint_records(fragment: GraphFragment) -> list[tuple[str, str, str]]:
+    node_lookup: dict[str, tuple[str, str]] = {}
+    for node in fragment.entity_nodes:
+        node_lookup[node.node_id] = (node.entity_type, node.label)
+
+    records: list[tuple[str, str, str]] = []
+    if fragment.observations:
+        for raw in fragment.observations:
+            o = _observation_ids(raw) if isinstance(raw, GraphObservation) else _observation_ids(GraphObservation.model_validate(raw))
+            records.append((o.subject_id, o.subject_type, o.subject))
+            records.append((o.object_id, o.object_type, o.object))
+        return records
+
+    for raw in fragment.overlay_edges:
+        o = _observation_ids(raw) if isinstance(raw, GraphObservation) else _observation_ids(GraphObservation.model_validate(raw))
+        records.append((o.subject_id, o.subject_type, o.subject))
+        records.append((o.object_id, o.object_type, o.object))
+    for step in fragment.process_steps:
+        host_type, host_label = node_lookup.get(step.host_node_id, ("", step.host_node_id))
+        records.append((step.host_node_id, host_type, host_label))
+        for node_id in step.input_node_ids:
+            typ, lab = node_lookup.get(node_id, ("", node_id))
+            records.append((node_id, typ, lab))
+        for node_id in step.output_node_ids:
+            typ, lab = node_lookup.get(node_id, ("", node_id))
+            records.append((node_id, typ, lab))
+    for leg in fragment.flow_legs:
+        supplier_type, supplier_label = node_lookup.get(leg.supplier_node_id, ("", leg.supplier_node_id))
+        customer_type, customer_label = node_lookup.get(leg.customer_node_id, ("", leg.customer_node_id))
+        product_type, product_label = node_lookup.get(leg.product_node_id, ("", leg.product_node_id))
+        records.append((leg.supplier_node_id, supplier_type, supplier_label))
+        records.append((leg.product_node_id, product_type, product_label))
+        records.append((leg.customer_node_id, customer_type, customer_label))
+        for node_id in leg.route_node_ids:
+            typ, lab = node_lookup.get(node_id, ("", node_id))
+            records.append((node_id, typ, lab))
+    for node in fragment.entity_nodes:
+        records.append((node.node_id, node.entity_type, node.label))
+    return records
+
+
+def _all_endpoint_ids_from_fragment(fragment: GraphFragment) -> set[str]:
+    out: set[str] = set()
+    for nid, typ, lab in _fragment_endpoint_records(fragment):
+        out |= _graph_endpoint_identity_pair(str(nid or ""), typ, lab)
+    out.discard("")
+    return out
+
+
 def _replacement_anchor_canonical_key(observations: list[GraphObservation], removal_zone: set[str]) -> str:
     """Pick the canonical key of the first replacement-side endpoint (reverse scan: usually the new sink)."""
     endpoints: list[tuple[str, str, str]] = []
@@ -3187,6 +3923,20 @@ def _replacement_anchor_canonical_key(observations: list[GraphObservation], remo
     return _canonical_entity_key(str(nid or ""), typ, lab)
 
 
+def _replacement_anchor_canonical_key_from_fragment(fragment: GraphFragment, removal_zone: set[str]) -> str:
+    endpoints = _fragment_endpoint_records(fragment)
+    for nid, typ, lab in reversed(endpoints):
+        pair = _graph_endpoint_identity_pair(str(nid or ""), typ, lab)
+        if not pair:
+            continue
+        if not (pair & removal_zone):
+            return _canonical_entity_key(str(nid or ""), typ, lab)
+    if not endpoints:
+        return "entity:replacement"
+    nid, typ, lab = endpoints[-1]
+    return _canonical_entity_key(str(nid or ""), typ, lab)
+
+
 def _replacement_anchor_identity_ids(observations: list[GraphObservation], removal_zone: set[str]) -> set[str]:
     """Graph identity tokens for the replacement anchor endpoint only (not upstream neighbors on the same edge)."""
     endpoints: list[tuple[str, str, str]] = []
@@ -3200,6 +3950,20 @@ def _replacement_anchor_identity_ids(observations: list[GraphObservation], remov
             continue
         if not (pair & removal_zone):
             return set(pair)
+    nid, typ, lab = endpoints[-1]
+    return _graph_endpoint_identity_pair(str(nid or ""), typ, lab)
+
+
+def _replacement_anchor_identity_ids_from_fragment(fragment: GraphFragment, removal_zone: set[str]) -> set[str]:
+    endpoints = _fragment_endpoint_records(fragment)
+    for nid, typ, lab in reversed(endpoints):
+        pair = _graph_endpoint_identity_pair(str(nid or ""), typ, lab)
+        if not pair:
+            continue
+        if not (pair & removal_zone):
+            return set(pair)
+    if not endpoints:
+        return set()
     nid, typ, lab = endpoints[-1]
     return _graph_endpoint_identity_pair(str(nid or ""), typ, lab)
 
@@ -3229,14 +3993,24 @@ def _registry_record_patch(
     patch_mode: str,
     removal_zone: set[str],
     incoming_observations: list[GraphObservation],
+    incoming_fragment: GraphFragment | None = None,
     explicit_seeds: set[str],
 ) -> None:
     reg = _load_hypothesis_entity_registry(state)
     from_ids = set(removal_zone) | set(explicit_seeds)
-    to_ids = _all_endpoint_ids_from_observations(incoming_observations)
-    canon = _replacement_anchor_canonical_key(incoming_observations, removal_zone)
+    if incoming_observations:
+        to_ids = _all_endpoint_ids_from_observations(incoming_observations)
+        canon = _replacement_anchor_canonical_key(incoming_observations, removal_zone)
+        anchor_ids = _replacement_anchor_identity_ids(incoming_observations, removal_zone)
+    elif incoming_fragment is not None:
+        to_ids = _all_endpoint_ids_from_fragment(incoming_fragment)
+        canon = _replacement_anchor_canonical_key_from_fragment(incoming_fragment, removal_zone)
+        anchor_ids = _replacement_anchor_identity_ids_from_fragment(incoming_fragment, removal_zone)
+    else:
+        to_ids = set()
+        canon = "entity:replacement"
+        anchor_ids = set()
     old_for_merge = set(explicit_seeds) | {n for n in removal_zone if _registry_id_matches_anchor_kind(n, canon)}
-    anchor_ids = _replacement_anchor_identity_ids(incoming_observations, removal_zone)
     touched = old_for_merge | anchor_ids
     _registry_merge_equivalence(reg, branch_id, canon, touched)
     events = reg.setdefault("lineageEvents", [])
@@ -3361,28 +4135,90 @@ def _normalize_fragment(
     allowed_edges: set[str],
     default_support_type: str,
 ) -> GraphFragment:
+    entity_nodes: list[EntityNode] = []
+    for idx, raw in enumerate(fragment.entity_nodes[:32], start=1):
+        node_id = (raw.node_id or "").strip() or _synthetic_id_for_endpoint(raw.entity_type, raw.label)
+        entity_nodes.append(
+            raw.model_copy(
+                update={
+                    "node_id": node_id or f"{action.branch_id}-node-{idx}",
+                    "branch_id": raw.branch_id or action.branch_id,
+                    "alternative_group_id": raw.alternative_group_id or fragment.alternative_group_id,
+                    "support_type": raw.support_type or default_support_type,
+                }
+            )
+        )
+
+    flow_legs: list[FlowLeg] = []
+    for idx, raw in enumerate(fragment.flow_legs[:24], start=1):
+        flow_legs.append(
+            raw.model_copy(
+                update={
+                    "leg_id": (raw.leg_id or "").strip() or f"{action.branch_id}-leg-{idx}",
+                    "branch_id": raw.branch_id or action.branch_id,
+                    "alternative_group_id": raw.alternative_group_id or fragment.alternative_group_id,
+                    "support_type": raw.support_type or default_support_type,
+                }
+            )
+        )
+
+    process_steps: list[ProcessStep] = []
+    for idx, raw in enumerate(fragment.process_steps[:24], start=1):
+        process_steps.append(
+            raw.model_copy(
+                update={
+                    "step_id": (raw.step_id or "").strip() or f"{action.branch_id}-step-{idx}",
+                    "branch_id": raw.branch_id or action.branch_id,
+                    "alternative_group_id": raw.alternative_group_id or fragment.alternative_group_id,
+                    "support_type": raw.support_type or default_support_type,
+                }
+            )
+        )
+
+    overlay_edges: list[GraphObservation] = []
+    for raw in fragment.overlay_edges:
+        if allowed_edges and raw.relation not in allowed_edges:
+            continue
+        overlay_edges.append(
+            _observation_ids(raw).model_copy(
+                update={
+                    "branch_id": raw.branch_id or action.branch_id,
+                    "alternative_group_id": raw.alternative_group_id or fragment.alternative_group_id,
+                    "support_type": raw.support_type or default_support_type,
+                }
+            )
+        )
+
     observations: list[GraphObservation] = []
     for raw in fragment.observations:
         if allowed_edges and raw.relation not in allowed_edges:
             continue
-        observation = _observation_ids(raw).model_copy(
-            update={
-                "branch_id": raw.branch_id or action.branch_id,
-                "alternative_group_id": raw.alternative_group_id or fragment.alternative_group_id,
-                "support_type": raw.support_type or default_support_type,
-            }
+        observations.append(
+            _observation_ids(raw).model_copy(
+                update={
+                    "branch_id": raw.branch_id or action.branch_id,
+                    "alternative_group_id": raw.alternative_group_id or fragment.alternative_group_id,
+                    "support_type": raw.support_type or default_support_type,
+                }
+            )
         )
-        observations.append(observation)
-    return fragment.model_copy(
+
+    native_operational_primitives = bool(flow_legs or process_steps)
+    normalized = fragment.model_copy(
         update={
             "branch_id": fragment.branch_id or action.branch_id,
             "human_question": fragment.human_question or action.human_question,
             "human_summary": fragment.human_summary or fragment.title,
             "alternative_group_id": fragment.alternative_group_id or "",
-            "observations": observations[:18],
+            "entity_nodes": entity_nodes,
+            "flow_legs": flow_legs,
+            "process_steps": process_steps,
+            "overlay_edges": overlay_edges,
+            "observations": [] if native_operational_primitives else observations,
             "quality_score": max(0.0, min(1.0, fragment.quality_score)),
         }
     )
+    return GraphFragment.model_validate(normalized.model_dump(mode="json", by_alias=True))
 
 
 def _finding_evidence_status_from_result(result: ToolActionResult) -> Literal["verified", "reasoned", "mixed", "hypothesis"]:
@@ -3522,7 +4358,7 @@ def _ensure_learned_findings(action: ToolAction, result: ToolActionResult) -> To
 def _flatten_fragments(fragments: list[GraphFragment]) -> list[GraphObservation]:
     flattened: list[GraphObservation] = []
     for fragment in fragments:
-        flattened.extend(fragment.observations)
+        flattened.extend(observation_projection(fragment_operational_graph(fragment)))
     return flattened
 
 
@@ -3610,6 +4446,18 @@ def _model_with_resource_fallback(primary_model: str, *, used_fallback: bool) ->
     return primary_model
 
 
+def _fragment_has_graph_payload(fragment: GraphFragment) -> bool:
+    return any(
+        (
+            fragment.entity_nodes,
+            fragment.flow_legs,
+            fragment.process_steps,
+            fragment.overlay_edges,
+            fragment.observations,
+        )
+    )
+
+
 def _parse_tool_result_payload(
     text: str,
     action: ToolAction,
@@ -3620,6 +4468,23 @@ def _parse_tool_result_payload(
     fragments_raw = payload.get("graphFragments") or payload.get("fragments") or []
     normalized_fragments: list[GraphFragment] = []
     for idx, fragment_raw in enumerate(fragments_raw[:4], start=1):
+        process_steps_raw = []
+        for raw_step in (fragment_raw.get("processSteps") or fragment_raw.get("steps") or []):
+            if not isinstance(raw_step, dict):
+                continue
+            process_steps_raw.append(
+                {
+                    **raw_step,
+                    "inputNodeIds": raw_step.get("inputNodeIds")
+                    or raw_step.get("inputProductNodeIds")
+                    or raw_step.get("inputNodes")
+                    or [],
+                    "outputNodeIds": raw_step.get("outputNodeIds")
+                    or raw_step.get("outputProductNodeIds")
+                    or raw_step.get("outputNodes")
+                    or [],
+                }
+            )
         fragment_payload = {
             "fragmentId": fragment_raw.get("fragmentId") or f"{action.branch_id}-f{idx}",
             "fragmentType": fragment_raw.get("fragmentType") or action.expected_fragment_type,
@@ -3638,12 +4503,17 @@ def _parse_tool_result_payload(
             "oldId": fragment_raw.get("oldId") or "",
             "oldIds": fragment_raw.get("oldIds") or [],
             "patchRationale": fragment_raw.get("patchRationale") or "",
+            "entityNodes": fragment_raw.get("entityNodes") or fragment_raw.get("nodes") or [],
+            "flowLegs": fragment_raw.get("flowLegs") or fragment_raw.get("legs") or [],
+            "processSteps": process_steps_raw,
+            "overlayEdges": fragment_raw.get("overlayEdges") or [],
             "observations": fragment_raw.get("observations") or fragment_raw.get("graphDelta") or [],
             "completeness": fragment_raw.get("completeness") or ("complete" if fragment_raw.get("observations") else "partial"),
             "qualityScore": fragment_raw.get("qualityScore") or payload.get("qualityScore") or 0.4,
         }
         fragment = GraphFragment.model_validate(fragment_payload)
         normalized_fragments.append(_normalize_fragment(fragment, action, allowed_edges, default_support_type))
+    normalized_fragments = [fragment for fragment in normalized_fragments if _fragment_has_graph_payload(fragment)]
     status = payload.get("status") or ("success" if normalized_fragments else "partial")
     result_payload = {
         "actionId": payload.get("actionId") or action.action_id,
@@ -3667,6 +4537,23 @@ def _parse_tool_result_payload(
         "failure": payload.get("failure"),
     }
     result = ToolActionResult.model_validate(result_payload)
+    if fragments_raw and not normalized_fragments and result.status == "success":
+        msg = "Tool returned graphFragments but none contained typed graph payload."
+        result = result.model_copy(
+            update={
+                "status": "partial",
+                "closure_status": "unchanged" if result.closure_status == "closed" else result.closure_status,
+                "human_summary": ((result.human_summary.rstrip(".") + ". ") if result.human_summary else "") + msg,
+                "remaining_frontier": list(result.remaining_frontier) or list(action.frontier) or [action.closure_target],
+                "failure": result.failure
+                or FailureRecord(
+                    code="agent_failed",
+                    message=msg,
+                    blocking=False,
+                    missingInputs=["typed_graph_fragment"],
+                ),
+            }
+        )
     normalized_findings = _normalize_learned_findings_payload(payload.get("learnedFindings") or [], action, result)
     result = result.model_copy(update={"learned_findings": normalized_findings})
     result = _ensure_learned_findings(action, result)
@@ -3847,15 +4734,16 @@ def _tool_model_name(tool_name: str) -> str:
 
 
 def _branch_progress_delta(previous: BranchState | None, result: ToolActionResult) -> float:
-    current_observations = _flatten_fragments(result.graph_fragments)
-    current_keys = {_observation_key(item) for item in current_observations}
-    previous_keys: set[tuple[str, str, str, str, tuple[str, ...]]] = set()
+    current_graph = graph_state_from_fragments(result.graph_fragments)
+    current_counts = graph_counts(current_graph)
+    current_keys = set(graph_context_lines(current_graph, limit=64))
+    previous_keys: set[str] = set()
     previous_sources: set[str] = set()
     previous_findings: set[str] = set()
     previous_open_questions: set[str] = set()
     previous_frontier: set[str] = set()
     if previous is not None:
-        previous_keys = {_observation_key(item) for item in _flatten_fragments(previous.graph_fragments)}
+        previous_keys = set(graph_context_lines(graph_state_from_fragments(previous.graph_fragments), limit=64))
         previous_sources = set(previous_source for tool_result in previous.tool_results for previous_source in tool_result.source_documents)
         previous_findings = {item.finding_id for item in previous.learned_findings}
         previous_open_questions = set(previous.open_questions)
@@ -3867,6 +4755,8 @@ def _branch_progress_delta(previous: BranchState | None, result: ToolActionResul
     frontier_gain = max(0, len(previous_frontier) - len(set(result.remaining_frontier)))
     delta = (
         (new_observation_count * 0.12)
+        + (current_counts["flowLegCount"] * 0.02)
+        + (current_counts["processStepCount"] * 0.02)
         + (new_source_count * 0.08)
         + (new_finding_count * 0.05)
         + (coverage_gain * 0.04)
@@ -3876,19 +4766,28 @@ def _branch_progress_delta(previous: BranchState | None, result: ToolActionResul
 
 
 def _investigation_progress_snapshot(state: dict[str, Any]) -> dict[str, int]:
-    graph = [GraphObservation.model_validate(item) for item in (state.get(STATE_WORKING_GRAPH) or [])]
+    graph_state = _load_operational_graph_state(state)
+    projection = observation_projection(graph_state)
+    counts = graph_counts(graph_state)
+    reachability = _graph_reachability_report_for_graph(graph_state, state=state)
     fragments = [GraphFragment.model_validate(item) for item in (state.get(STATE_GRAPH_FRAGMENTS) or [])]
     branches = [BranchState.model_validate(item) for item in (state.get(STATE_BRANCH_STATES) or [])]
     unique_sources = {
         source
-        for observation in graph
+        for observation in projection
         for source in observation.provenance
         if source
     }
     return {
-        "graphObservationCount": len(graph),
-        "documentObservationCount": sum(1 for item in graph if item.support_type == "document"),
-        "mixedObservationCount": sum(1 for item in graph if item.support_type == "mixed"),
+        "graphObservationCount": counts["graphObservationCount"],
+        "entityNodeCount": counts["entityNodeCount"],
+        "flowLegCount": counts["flowLegCount"],
+        "processStepCount": counts["processStepCount"],
+        "overlayEdgeCount": counts["overlayEdgeCount"],
+        "documentObservationCount": counts["documentObservationCount"],
+        "mixedObservationCount": counts["mixedObservationCount"],
+        "groundedFlowLegCount": counts["groundedFlowLegCount"],
+        "groundedProcessStepCount": counts["groundedProcessStepCount"],
         "fragmentCount": len(fragments),
         "completeFragmentCount": sum(1 for item in fragments if item.completeness == "complete"),
         "answeredQuestionCount": len(state.get(STATE_ANSWERED_QUESTIONS) or []),
@@ -3896,20 +4795,32 @@ def _investigation_progress_snapshot(state: dict[str, Any]) -> dict[str, int]:
         "branchCount": len(branches),
         "unresolvedBranchCount": sum(1 for item in branches if item.status in {"needs_followup", "blocked"}),
         "uniqueSourceCount": len(unique_sources),
+        "groundedCompleteChainCount": _int_or_len_report(reachability, "groundedCompleteChainCount", "groundedCompleteChains"),
+        "structuralCompleteChainCount": _int_or_len_report(reachability, "structuralCompleteChainCount", "structurallyCompleteChains"),
+        "maxOperationalRouteHops": int(reachability.get("maxOperationalRouteHops") or _max_route_hops_from_report(reachability)),
     }
 
 
 def _progress_delta(previous: dict[str, int], current: dict[str, int]) -> dict[str, int]:
     return {
         "newGraphObservations": current["graphObservationCount"] - previous["graphObservationCount"],
+        "newEntityNodes": current["entityNodeCount"] - previous["entityNodeCount"],
+        "newFlowLegs": current["flowLegCount"] - previous["flowLegCount"],
+        "newProcessSteps": current["processStepCount"] - previous["processStepCount"],
+        "newOverlayEdges": current["overlayEdgeCount"] - previous["overlayEdgeCount"],
         "newDocumentObservations": current["documentObservationCount"] - previous["documentObservationCount"],
         "newMixedObservations": current["mixedObservationCount"] - previous["mixedObservationCount"],
+        "newGroundedFlowLegs": current["groundedFlowLegCount"] - previous["groundedFlowLegCount"],
+        "newGroundedProcessSteps": current["groundedProcessStepCount"] - previous["groundedProcessStepCount"],
         "newFragments": current["fragmentCount"] - previous["fragmentCount"],
         "newCompleteFragments": current["completeFragmentCount"] - previous["completeFragmentCount"],
         "newAnsweredQuestions": current["answeredQuestionCount"] - previous["answeredQuestionCount"],
         "gapReduction": previous["openGapCount"] - current["openGapCount"],
         "newSources": current["uniqueSourceCount"] - previous["uniqueSourceCount"],
         "newUnresolvedBranches": current["unresolvedBranchCount"] - previous["unresolvedBranchCount"],
+        "newGroundedCompleteChains": current["groundedCompleteChainCount"] - previous["groundedCompleteChainCount"],
+        "newStructuralCompleteChains": current["structuralCompleteChainCount"] - previous["structuralCompleteChainCount"],
+        "maxOperationalRouteHopGain": current["maxOperationalRouteHops"] - previous["maxOperationalRouteHops"],
     }
 
 
@@ -3918,13 +4829,36 @@ def _material_progress(delta: dict[str, int]) -> bool:
         (
             delta["newDocumentObservations"] >= 2,
             delta["newMixedObservations"] >= 2,
+            delta["newGroundedFlowLegs"] >= 1,
+            delta["newGroundedProcessSteps"] >= 1,
             delta["newSources"] >= 1,
             delta["newCompleteFragments"] >= 1,
+            delta["newFlowLegs"] >= 2,
+            delta["newProcessSteps"] >= 1,
             delta["newGraphObservations"] >= 6,
             delta["newAnsweredQuestions"] >= 2 and delta["gapReduction"] >= 1,
             delta["gapReduction"] >= 2,
+            delta["newGroundedCompleteChains"] >= 1,
+            delta["newStructuralCompleteChains"] >= 1,
+            delta["maxOperationalRouteHopGain"] >= 2,
         )
     )
+
+
+def _flow_reachable_from(seeds: Iterable[str], adj: dict[str, list[dict[str, Any]]]) -> set[str]:
+    """Forward closure along flow edges from seed node labels (used to de-duplicate BFS sources)."""
+    seen: set[str] = set()
+    q = deque(s for s in seeds if s)
+    while q:
+        n = q.popleft()
+        if n in seen:
+            continue
+        seen.add(n)
+        for edge in adj.get(n, []):
+            t = str(edge.get("to", "") or "")
+            if t and t not in seen:
+                q.append(t)
+    return seen
 
 
 def _evidence_status_for_observations(observations: list[GraphObservation]) -> str:
@@ -3940,19 +4874,153 @@ def _evidence_status_for_observations(observations: list[GraphObservation]) -> s
     return "reasoned"
 
 
-def _graph_reachability_report(state: dict[str, Any]) -> dict[str, Any]:
-    """Analyze end-to-end reachability of the working graph using taxonomy flow edges.
+def _int_or_len_report(report: dict[str, Any], count_key: str, list_key: str) -> int:
+    raw = report.get(count_key)
+    if raw is not None:
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            pass
+    return len(report.get(list_key) or [])
 
-    Returns a compact report with:
-    - groundedCompleteChains: document/mixed-backed paths to a valid terminal sink (every flow hop grounded)
-    - structurallyCompleteChains: paths to a valid terminal sink with ≥2 hops that are connected but **not**
-      fully document-grounded (hypothesis, model_knowledge, or mixed strength)
-    - partialChains: paths that stop short of a valid terminal sink (dead end, invalid terminal relation, etc.)
-    - bridgeCandidates: entities visible in governance but not in any flow chain
-    - healthSummary: one-line assessment for the supervisor
-    """
-    obs_raw = state.get(STATE_WORKING_GRAPH) or []
-    if not obs_raw:
+
+def _max_route_hops_from_report(report: dict[str, Any]) -> int:
+    max_hops = 0
+    for key in ("groundedCompleteChains", "structurallyCompleteChains", "partialChains"):
+        for entry in report.get(key) or []:
+            try:
+                max_hops = max(max_hops, int(entry.get("hops") or 0))
+            except Exception:
+                continue
+    return max_hops
+
+
+def _business_chain_profile(
+    *,
+    record: dict[str, Any],
+    host_id: str,
+    product_id: str,
+    sink_label: str,
+    node_index: dict[str, EntityNode],
+) -> dict[str, Any]:
+    flow_count = 0
+    transform_count = 0
+    assembly_count = 0
+    extraction_count = 0
+    host_ids: set[str] = set()
+    product_ids: set[str] = set()
+    placeholder_labels: list[str] = []
+
+    def _remember_placeholder(node_id: str) -> None:
+        if not node_id:
+            return
+        label = _graph_node_label(node_index, node_id)
+        if not label:
+            return
+        if _is_placeholder_node(node_id, label):
+            placeholder_labels.append(label)
+
+    for op in record["ops"]:
+        kind = str(op.get("kind") or "")
+        if kind == "flow":
+            flow_count += 1
+            from_host = str(op.get("fromHostId") or "")
+            to_host = str(op.get("toHostId") or "")
+            prod = str(op.get("productId") or "")
+            if from_host:
+                host_ids.add(from_host)
+                _remember_placeholder(from_host)
+            if to_host:
+                host_ids.add(to_host)
+                _remember_placeholder(to_host)
+            if prod:
+                product_ids.add(prod)
+        else:
+            if kind == "transformation":
+                transform_count += 1
+            elif kind == "assembly":
+                assembly_count += 1
+            elif kind == "extraction":
+                extraction_count += 1
+            host = str(op.get("hostId") or "")
+            if host:
+                host_ids.add(host)
+                _remember_placeholder(host)
+            for input_id in op.get("inputIds") or []:
+                if input_id:
+                    product_ids.add(str(input_id))
+            output_id = str(op.get("outputId") or "")
+            if output_id:
+                product_ids.add(output_id)
+
+    if host_id and host_id in node_index:
+        host_ids.add(host_id)
+        _remember_placeholder(host_id)
+    if product_id:
+        product_ids.add(product_id)
+
+    sink_type = node_index.get(host_id).entity_type if node_index.get(host_id) is not None else ""
+    source_is_anchored = record["sourceType"] == "DEPOSIT" or extraction_count > 0
+    transform_like_count = transform_count + assembly_count
+    concrete_sink = sink_type in {"FACILITY", "ORGANIZATION"} and not _is_placeholder_node(host_id, sink_label)
+
+    criteria = {
+        "sourceAnchored": source_is_anchored,
+        "hasMultipleFlows": flow_count >= 2,
+        "hasTransformLikeStep": transform_like_count >= 1,
+        "hasOperationalDepth": int(record["hops"]) >= 4,
+        "hasMultipleHosts": len(host_ids) >= 3,
+        "hasMultipleProductStages": len(product_ids) >= 2,
+        "concreteSink": concrete_sink,
+        "placeholderFree": not placeholder_labels,
+    }
+    missing: list[str] = []
+    if not criteria["sourceAnchored"]:
+        missing.append("missing a deposit-anchored or extraction-anchored upstream source")
+    if not criteria["hasMultipleFlows"]:
+        missing.append("needs at least two material flow legs")
+    if not criteria["hasTransformLikeStep"]:
+        missing.append("needs a real transformation or assembly step on a host node")
+    if not criteria["hasOperationalDepth"]:
+        missing.append("needs a longer multi-stage operational ladder")
+    if not criteria["hasMultipleHosts"]:
+        missing.append("needs more distinct operating hosts across the chain")
+    if not criteria["hasMultipleProductStages"]:
+        missing.append("needs multiple product stages instead of one material state")
+    if not criteria["concreteSink"]:
+        missing.append("sink is not yet a concrete downstream facility or organization")
+    if not criteria["placeholderFree"]:
+        missing.append(f"placeholder nodes remain: {', '.join(_dedupe_preserve_order(placeholder_labels)[:3])}")
+
+    return {
+        "flowLegCount": flow_count,
+        "transformationCount": transform_count,
+        "assemblyCount": assembly_count,
+        "extractionCount": extraction_count,
+        "distinctHostCount": len(host_ids),
+        "distinctProductStageCount": len(product_ids),
+        "missingCriteria": missing,
+        "criteria": criteria,
+        "businessScore": sum(1 for value in criteria.values() if value),
+        "isBusinessComplete": not missing,
+    }
+
+
+def _business_chain_break_reason(profile: dict[str, Any]) -> str:
+    missing = [str(item).strip() for item in profile.get("missingCriteria") or [] if str(item).strip()]
+    if not missing:
+        return "Terminal route is not business-complete yet."
+    return "Terminal route is not business-complete yet: " + "; ".join(missing[:3]) + "."
+
+
+def _graph_reachability_report_for_graph(
+    graph_state: OperationalGraphState,
+    *,
+    state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Analyze end-to-end reachability using operational flow legs and process steps."""
+    counts = graph_counts(graph_state)
+    if not any((counts["entityNodeCount"], counts["flowLegCount"], counts["processStepCount"], counts["overlayEdgeCount"])):
         return {
             "groundedCompleteChains": [],
             "structurallyCompleteChains": [],
@@ -3963,256 +5031,504 @@ def _graph_reachability_report(state: dict[str, Any]) -> dict[str, Any]:
             "structuralCompleteChainCount": 0,
             "partialChainCount": 0,
             "routeFamilies": [],
+            "maxOperationalRouteHops": 0,
         }
 
-    supply_contract = ROLE_CONTRACTS.get(ROLE_SUPPLY_CHAIN)
-    flow_rels: set[str] = set(supply_contract.path_carried_edges) if supply_contract else {
-        "PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "USED_IN", "EXTRACTS_FROM",
-    }
-    governance_contract = ROLE_CONTRACTS.get(ROLE_GOVERNANCE)
-    governance_rels: set[str] = set(governance_contract.allowed_edge_types) if governance_contract else set()
+    node_index = _graph_node_map(graph_state)
+    flow_legs = list(graph_state.flow_legs)
+    process_steps = list(graph_state.process_steps)
+    overlay_edges = list(graph_state.overlay_edges)
+    request = AgentLoomRequest.model_validate((state or {}).get(STATE_REQUEST) or {})
+    requested_corridor = _requested_operational_corridor(request)
 
-    adj: dict[str, list[dict[str, Any]]] = {}
-    all_entities: dict[str, str] = {}
-    extract_sources: set[str] = set()
-    facility_entities: set[str] = set()
-    deposit_entities: set[str] = set()
+    def _node_type(node_id: str) -> str:
+        node = node_index.get(node_id)
+        return node.entity_type if node is not None else ""
 
-    for raw in obs_raw:
-        o = raw if isinstance(raw, dict) else raw.model_dump(mode="json", by_alias=True) if hasattr(raw, "model_dump") else {}
-        rel = o.get("relation", "")
-        subj = o.get("subject", "")
-        obj = o.get("object", "")
-        conf = o.get("confidence", 0.0)
-        support_type = o.get("supportType", "")
-        subj_type = o.get("subjectType", "")
-        obj_type = o.get("objectType", "")
-        if subj:
-            all_entities[subj] = subj_type
-        if obj:
-            all_entities[obj] = obj_type
-        if subj_type == "FACILITY":
-            facility_entities.add(subj)
-        if obj_type == "FACILITY":
-            facility_entities.add(obj)
-        if subj_type == "DEPOSIT" or obj_type == "DEPOSIT":
-            deposit_entities.add(subj if subj_type == "DEPOSIT" else obj)
-        if rel not in flow_rels:
-            continue
-        sid = (o.get("subjectId") or "").strip() or _synthetic_id_for_endpoint(str(subj_type), str(subj))
-        oid = (o.get("objectId") or "").strip() or _synthetic_id_for_endpoint(str(obj_type), str(obj))
-        adj.setdefault(subj, []).append(
-            {
-                "rel": rel,
-                "to": obj,
-                "conf": conf,
-                "supportType": support_type,
-                "subjectId": sid,
-                "objectId": oid,
-                "subjectType": subj_type,
-                "objectType": obj_type,
-                "branchId": (o.get("branchId") or "").strip(),
-            }
-        )
-        if rel == "EXTRACTS_FROM":
-            extract_sources.add(subj)
+    def _node_text(node_id: str) -> str:
+        return _graph_node_label(node_index, node_id)
 
-    sources = extract_sources or facility_entities & {
-        e for e, t in all_entities.items() if t in ("FACILITY", "DEPOSIT")
-    }
-    if not sources:
-        sources = {e for e, t in all_entities.items() if t == "DEPOSIT"}
+    def _state_label(host_id: str, product_id: str) -> str:
+        return f"{_node_text(host_id)} [{_node_text(product_id)}]"
 
-    has_outgoing = set(adj.keys())
-    terminal_types = {"PRODUCT", "FACILITY", "ORGANIZATION"}
+    def _canonical(node_id: str, branch_id: str = "") -> str:
+        node = node_index.get(node_id)
+        if node is None:
+            return _graph_synthetic_id("", node_id)
+        if state is not None:
+            return _canonical_for_reachability_step(
+                state,
+                branch_id,
+                node.node_id,
+                node.entity_type,
+                node.label or node.canonical_ref or node.node_id,
+            )
+        return _canonical_entity_key(node.node_id, node.entity_type, node.label or node.canonical_ref or node.node_id)
 
-    def _is_grounded_flow_edge(confidence: float, support_type: str) -> bool:
+    def _is_grounded(confidence: float, support_type: str) -> bool:
         return support_type in {"document", "mixed"} and confidence >= 0.5
 
-    def _bfs_chains(start: str, max_depth: int = 15) -> list[list[dict[str, Any]]]:
-        chains: list[list[dict[str, Any]]] = []
-        queue: list[tuple[str, list[dict[str, Any]], set[str]]] = [(start, [], {start})]
-        while queue:
-            node, path, visited = queue.pop(0)
-            if node not in adj:
-                if len(path) >= 1:
-                    chains.append(path)
-                continue
-            extended = False
-            for edge in adj[node]:
-                target = str(edge["to"])
-                if target in visited or len(path) >= max_depth:
-                    continue
-                extended = True
-                step = dict(edge)
-                step["from"] = node
-                new_path = path + [step]
-                new_visited = visited | {target}
-                queue.append((target, new_path, new_visited))
-            if not extended and len(path) >= 1:
-                chains.append(path)
-        return chains
+    def _op_key(op: dict[str, Any]) -> str:
+        return str(op.get("key") or "")
 
-    def _chain_path_legacy(chain_steps: list[dict[str, Any]]) -> list[tuple[str, str, str, float, str]]:
-        return [
-            (str(s["from"]), str(s["rel"]), str(s["to"]), float(s["conf"]), str(s["supportType"]))
-            for s in chain_steps
-        ]
+    def _dedupe_ops(ops: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        seen: set[str] = set()
+        out: list[dict[str, Any]] = []
+        for op in ops:
+            key = _op_key(op)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(op)
+        return out
+
+    def _line_for_flow(leg: FlowLeg) -> str:
+        return flow_leg_line(leg, node_index)
+
+    def _line_for_step(step: ProcessStep) -> str:
+        return process_step_line(step, node_index)
+
+    def _flow_op(leg: FlowLeg) -> dict[str, Any]:
+        product_key = _canonical(leg.product_node_id, leg.branch_id)
+        return {
+            "key": f"flow:{leg.leg_id}",
+            "kind": "flow",
+            "line": _line_for_flow(leg),
+            "grounded": _is_grounded(float(leg.confidence), leg.support_type),
+            "confidence": float(leg.confidence),
+            "supportType": leg.support_type,
+            "branchId": leg.branch_id,
+            "fingerprint": [
+                _canonical(leg.supplier_node_id, leg.branch_id),
+                f"FLOW[{product_key}]",
+                _canonical(leg.customer_node_id, leg.branch_id),
+            ],
+            "fromHostId": leg.supplier_node_id,
+            "toHostId": leg.customer_node_id,
+            "productId": leg.product_node_id,
+        }
+
+    def _step_op(step: ProcessStep, output_id: str) -> dict[str, Any]:
+        input_keys = [_canonical(node_id, step.branch_id) for node_id in step.input_node_ids[:6]]
+        return {
+            "key": f"step:{step.step_id}:{output_id}",
+            "kind": step.process_kind,
+            "line": _line_for_step(step),
+            "grounded": _is_grounded(float(step.confidence), step.support_type),
+            "confidence": float(step.confidence),
+            "supportType": step.support_type,
+            "branchId": step.branch_id,
+            "fingerprint": [
+                _canonical(step.host_node_id, step.branch_id),
+                f"{step.process_kind.upper()}[{'+'.join(input_keys) or 'none'}]",
+                _canonical(output_id, step.branch_id),
+            ],
+            "hostId": step.host_node_id,
+            "inputIds": list(step.input_node_ids),
+            "outputId": output_id,
+        }
+
+    def _record_from_ops(
+        *,
+        host_id: str,
+        product_id: str,
+        ops: list[dict[str, Any]],
+        source_label: str,
+        source_type: str,
+    ) -> dict[str, Any]:
+        deduped_ops = _dedupe_ops(ops)
+        grounded = sum(1 for op in deduped_ops if op.get("grounded"))
+        return {
+            "hostId": host_id,
+            "productId": product_id,
+            "sourceLabel": source_label or _state_label(host_id, product_id),
+            "sourceType": source_type,
+            "ops": deduped_ops,
+            "path": [str(op.get("line") or "") for op in deduped_ops if str(op.get("line") or "").strip()],
+            "hops": len(deduped_ops),
+            "groundedEdgeCount": grounded,
+            "weakEdgeCount": len(deduped_ops) - grounded,
+            "confidenceScore": round(sum(float(op.get("confidence") or 0.0) for op in deduped_ops), 6),
+        }
+
+    def _better(existing: dict[str, Any] | None, incoming: dict[str, Any]) -> bool:
+        if existing is None:
+            return True
+        current_tuple = (
+            int(existing["groundedEdgeCount"]),
+            -int(existing["weakEdgeCount"]),
+            int(existing["hops"]),
+            float(existing["confidenceScore"]),
+        )
+        incoming_tuple = (
+            int(incoming["groundedEdgeCount"]),
+            -int(incoming["weakEdgeCount"]),
+            int(incoming["hops"]),
+            float(incoming["confidenceScore"]),
+        )
+        return incoming_tuple > current_tuple
+
+    flow_out: dict[tuple[str, str], list[FlowLeg]] = {}
+    flow_in: dict[tuple[str, str], list[FlowLeg]] = {}
+    for leg in flow_legs:
+        flow_out.setdefault((leg.supplier_node_id, leg.product_node_id), []).append(leg)
+        flow_in.setdefault((leg.customer_node_id, leg.product_node_id), []).append(leg)
+
+    steps_by_host: dict[str, list[ProcessStep]] = {}
+    outputs_by_host_product: dict[tuple[str, str], list[ProcessStep]] = {}
+    consumers_by_host_product: dict[tuple[str, str], list[ProcessStep]] = {}
+    for step in process_steps:
+        steps_by_host.setdefault(step.host_node_id, []).append(step)
+        for output_id in step.output_node_ids:
+            outputs_by_host_product.setdefault((step.host_node_id, output_id), []).append(step)
+        for input_id in step.input_node_ids:
+            consumers_by_host_product.setdefault((step.host_node_id, input_id), []).append(step)
+
+    reachable: dict[tuple[str, str], dict[str, Any]] = {}
+    partial_chains: list[dict[str, Any]] = []
+
+    def _upsert_state(host_id: str, product_id: str, record: dict[str, Any]) -> bool:
+        key = (host_id, product_id)
+        changed = False
+        if _better(reachable.get(key), record):
+            reachable[key] = record
+            changed = True
+        if product_id and _node_type(product_id) == "PRODUCT" and host_id != product_id:
+            mirror_key = (product_id, product_id)
+            mirror_record = {
+                **record,
+                "hostId": product_id,
+                "productId": product_id,
+            }
+            if _better(reachable.get(mirror_key), mirror_record):
+                reachable[mirror_key] = mirror_record
+                changed = True
+        return changed
+
+    for step in process_steps:
+        if step.process_kind == "extraction":
+            deposit_labels = [_node_text(node_id) for node_id in step.input_node_ids[:4] if node_id]
+            source_label = ", ".join(deposit_labels) if deposit_labels else _node_text(step.host_node_id)
+            source_type = "DEPOSIT" if deposit_labels else _node_type(step.host_node_id)
+            for output_id in step.output_node_ids:
+                _upsert_state(
+                    step.host_node_id,
+                    output_id,
+                    _record_from_ops(
+                        host_id=step.host_node_id,
+                        product_id=output_id,
+                        ops=[_step_op(step, output_id)],
+                        source_label=source_label,
+                        source_type=source_type,
+                    ),
+                )
+
+    for step in process_steps:
+        if step.process_kind != "extraction" and not step.input_node_ids:
+            for output_id in step.output_node_ids:
+                _upsert_state(
+                    step.host_node_id,
+                    output_id,
+                    _record_from_ops(
+                        host_id=step.host_node_id,
+                        product_id=output_id,
+                        ops=[_step_op(step, output_id)],
+                        source_label=_node_text(step.host_node_id),
+                        source_type=_node_type(step.host_node_id),
+                    ),
+                )
+
+    for leg in flow_legs:
+        key = (leg.supplier_node_id, leg.product_node_id)
+        if key in reachable:
+            continue
+        if flow_in.get(key):
+            continue
+        if outputs_by_host_product.get(key):
+            continue
+        _upsert_state(
+            leg.supplier_node_id,
+            leg.product_node_id,
+            _record_from_ops(
+                host_id=leg.supplier_node_id,
+                product_id=leg.product_node_id,
+                ops=[],
+                source_label=_state_label(leg.supplier_node_id, leg.product_node_id),
+                source_type=_node_type(leg.supplier_node_id),
+            ),
+        )
+
+    max_passes = 24
+    for _ in range(max_passes):
+        changed = False
+        for (supplier_id, product_id), legs in list(flow_out.items()):
+            source_record = reachable.get((supplier_id, product_id))
+            if source_record is None:
+                continue
+            for leg in legs:
+                changed |= _upsert_state(
+                    leg.customer_node_id,
+                    leg.product_node_id,
+                    _record_from_ops(
+                        host_id=leg.customer_node_id,
+                        product_id=leg.product_node_id,
+                        ops=[*source_record["ops"], _flow_op(leg)],
+                        source_label=source_record["sourceLabel"],
+                        source_type=source_record["sourceType"],
+                    ),
+                )
+
+        for step in process_steps:
+            if step.process_kind == "extraction":
+                continue
+            input_records = [reachable.get((step.host_node_id, node_id)) for node_id in step.input_node_ids]
+            reachable_inputs = [record for record in input_records if record is not None]
+            if step.input_node_ids and len(reachable_inputs) != len(step.input_node_ids):
+                if reachable_inputs:
+                    missing_inputs = [
+                        _node_text(node_id)
+                        for node_id, record in zip(step.input_node_ids, input_records)
+                        if record is None
+                    ]
+                    anchor = max(reachable_inputs, key=lambda item: (item["groundedEdgeCount"], item["hops"], item["confidenceScore"]))
+                    partial_chains.append(
+                        {
+                            "source": anchor["sourceLabel"],
+                            "sink": _state_label(step.host_node_id, step.output_node_ids[0] if step.output_node_ids else step.host_node_id),
+                            "sinkType": _node_type(step.host_node_id),
+                            "hops": anchor["hops"],
+                            "path": anchor["path"][:8],
+                            "groundedEdgeCount": anchor["groundedEdgeCount"],
+                            "weakEdgeCount": anchor["weakEdgeCount"],
+                            "breakReason": f"Process step at {_node_text(step.host_node_id)} is missing input(s): {', '.join(missing_inputs[:4])}",
+                            "routeFingerprint": [list(op["fingerprint"]) for op in anchor["ops"][:8] if isinstance(op.get("fingerprint"), list)],
+                        }
+                    )
+                continue
+
+            if not reachable_inputs and step.input_node_ids:
+                continue
+
+            combined_ops: list[dict[str, Any]] = []
+            source_label = ""
+            source_type = ""
+            for record in reachable_inputs:
+                combined_ops.extend(record["ops"])
+                if not source_label:
+                    source_label = record["sourceLabel"]
+                    source_type = record["sourceType"]
+            if not source_label:
+                source_label = _node_text(step.host_node_id)
+                source_type = _node_type(step.host_node_id)
+            for output_id in step.output_node_ids:
+                changed |= _upsert_state(
+                    step.host_node_id,
+                    output_id,
+                    _record_from_ops(
+                        host_id=step.host_node_id,
+                        product_id=output_id,
+                        ops=[*combined_ops, _step_op(step, output_id)],
+                        source_label=source_label,
+                        source_type=source_type,
+                    ),
+                )
+        if not changed:
+            break
 
     grounded_complete: list[dict[str, Any]] = []
     structurally_complete: list[dict[str, Any]] = []
-    partial_chains: list[dict[str, Any]] = []
-    terminal_sink_rels = {"SUPPLIES_TO", "USED_IN", "ASSEMBLES_INTO"}
+    grounded_requested_corridor: list[dict[str, Any]] = []
+    structural_requested_corridor: list[dict[str, Any]] = []
+    flow_connected_nodes: set[str] = set()
+    for (host_id, product_id), record in reachable.items():
+        if host_id == product_id and _node_type(product_id) == "PRODUCT":
+            continue
+        terminal = not flow_out.get((host_id, product_id)) and not consumers_by_host_product.get((host_id, product_id))
+        if host_id != product_id and _node_type(product_id) == "PRODUCT":
+            legacy_product_flows = flow_out.get((product_id, product_id)) or []
+            legacy_product_consumers = consumers_by_host_product.get((product_id, product_id)) or []
+            if any(leg.customer_node_id != host_id for leg in legacy_product_flows) or legacy_product_consumers:
+                terminal = False
+        sink_label = _node_text(host_id) if _node_type(host_id) and _node_type(host_id) != "PRODUCT" else _state_label(host_id, product_id)
+        entry = {
+            "source": record["sourceLabel"],
+            "sink": sink_label,
+            "sinkType": _node_type(host_id) or _node_type(product_id),
+            "hops": record["hops"],
+            "path": record["path"][:8],
+            "groundedEdgeCount": record["groundedEdgeCount"],
+            "weakEdgeCount": record["weakEdgeCount"],
+            "routeFingerprint": [list(op["fingerprint"]) for op in record["ops"][:8] if isinstance(op.get("fingerprint"), list)],
+        }
+        profile = _business_chain_profile(
+            record=record,
+            host_id=host_id,
+            product_id=product_id,
+            sink_label=sink_label,
+            node_index=node_index,
+        )
+        corridor_profile = _requested_corridor_profile_for_record(
+            record=record,
+            host_id=host_id,
+            product_id=product_id,
+            sink_label=sink_label,
+            node_index=node_index,
+            graph_state=graph_state,
+            request=request,
+            corridor=requested_corridor,
+        )
+        if corridor_profile["active"]:
+            profile = {
+                **profile,
+                "criteria": {
+                    **profile["criteria"],
+                    "matchesRequestedSourceScope": corridor_profile["matchesSourceScope"],
+                    "matchesRequestedSinkScope": corridor_profile["matchesSinkScope"],
+                },
+                "missingCriteria": [*profile["missingCriteria"], *corridor_profile["missingCriteria"]],
+                "businessScore": profile["businessScore"]
+                + int(corridor_profile["matchesSourceScope"])
+                + int(corridor_profile["matchesSinkScope"]),
+                "isBusinessComplete": profile["isBusinessComplete"] and corridor_profile["isSatisfied"],
+            }
+        entry["businessProfile"] = profile
+        entry["requestedCorridor"] = corridor_profile
+        for op in record["ops"]:
+            if op.get("kind") == "flow":
+                if op.get("fromHostId"):
+                    flow_connected_nodes.add(str(op["fromHostId"]))
+                if op.get("toHostId"):
+                    flow_connected_nodes.add(str(op["toHostId"]))
+            elif op.get("hostId"):
+                flow_connected_nodes.add(str(op["hostId"]))
+        if not terminal:
+            continue
+        if not profile["isBusinessComplete"]:
+            entry["breakReason"] = _business_chain_break_reason(profile)
+            partial_chains.append(entry)
+            continue
+        all_grounded = record["weakEdgeCount"] == 0
+        if all_grounded:
+            grounded_complete.append(entry)
+            if corridor_profile["isSatisfied"]:
+                grounded_requested_corridor.append(entry)
+        else:
+            entry["structuralReason"] = (
+                "Business-complete end-to-end operational route exists, but at least one leg or process step is hypothesis/model-knowledge level."
+            )
+            structurally_complete.append(entry)
+            if corridor_profile["isSatisfied"]:
+                structural_requested_corridor.append(entry)
 
-    def _is_valid_terminal_sink(chain: list[tuple[str, str, str, float, str]], end_type: str) -> bool:
-        if not chain:
-            return False
-        last_rel = chain[-1][1]
-        return end_type in {"FACILITY", "ORGANIZATION", "PRODUCT"} and last_rel in terminal_sink_rels
+    governance_contract = ROLE_CONTRACTS.get(ROLE_GOVERNANCE)
+    governance_rels: set[str] = set(governance_contract.allowed_edge_types) if governance_contract else set()
+    bridge_candidates: list[dict[str, str]] = []
+    for edge in overlay_edges:
+        if edge.relation not in governance_rels:
+            continue
+        for node_id, entity_type, label in (
+            (edge.subject_id, edge.subject_type, edge.subject),
+            (edge.object_id, edge.object_type, edge.object),
+        ):
+            if node_id and entity_type in {"FACILITY", "PRODUCT", "ORGANIZATION"} and node_id not in flow_connected_nodes:
+                bridge_candidates.append(
+                    {
+                        "entity": label or node_id,
+                        "type": entity_type,
+                        "issue": "Known in overlay/governance layer but not connected to any operational flow state",
+                    }
+                )
 
-    def _dedupe_chain_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _dedupe_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         seen: set[tuple[str, str, tuple[str, ...], str]] = set()
-        deduped: list[dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for entry in entries:
             key = (
-                str(entry.get("source", "")),
-                str(entry.get("sink", "")),
-                tuple(entry.get("path", [])),
-                str(entry.get("breakReason", entry.get("structuralReason", ""))),
+                str(entry.get("source") or ""),
+                str(entry.get("sink") or ""),
+                tuple(entry.get("path") or []),
+                str(entry.get("breakReason") or entry.get("structuralReason") or ""),
             )
             if key in seen:
                 continue
             seen.add(key)
-            deduped.append(entry)
-        return deduped
+            out.append(entry)
+        return out
 
-    for src in sorted(sources)[:8]:
-        chains = _bfs_chains(src)
-        for chain_steps in chains:
-            chain = _chain_path_legacy(chain_steps)
-            end_node = chain[-1][2]
-            end_type = all_entities.get(end_node, "")
-            steps = [f"{s} --{r}--> {o}" for s, r, o, _conf, _support_type in chain]
-            grounded_edge_count = sum(
-                1 for _s, _r, _o, edge_conf, edge_support_type in chain if _is_grounded_flow_edge(edge_conf, edge_support_type)
-            )
-            weak_edge_count = len(chain) - grounded_edge_count
-            fp_tuple = _route_fingerprint_tuple(state, chain_steps)
-            entry = {
-                "source": src,
-                "sink": end_node,
-                "sinkType": end_type,
-                "hops": len(chain),
-                "path": steps[:8],
-                "groundedEdgeCount": grounded_edge_count,
-                "weakEdgeCount": weak_edge_count,
-                "routeFingerprint": [list(h) for h in fp_tuple],
-            }
-            terminal_sink = end_node not in has_outgoing and _is_valid_terminal_sink(chain, end_type)
-            all_grounded = len(chain) > 0 and grounded_edge_count == len(chain)
-            has_hypothesis = any(st == "hypothesis" for _s, _r, _o, _c, st in chain)
-
-            if terminal_sink and len(chain) >= 2 and all_grounded:
-                grounded_complete.append(entry)
-            elif terminal_sink and len(chain) >= 2 and not all_grounded:
-                if has_hypothesis and grounded_edge_count > 0:
-                    sr = "Mix of document-grounded and hypothesis-level flow edges (structurally complete, not fully grounded)."
-                elif has_hypothesis:
-                    sr = "End-to-end path relies on hypothesis-level flow edges (structurally complete, not document-grounded)."
-                elif grounded_edge_count == 0:
-                    sr = "End-to-end path uses only weak or model-knowledge flow edges (structurally complete, not document-grounded)."
-                else:
-                    sr = "End-to-end path reaches a valid terminal sink without full document grounding on every hop."
-                entry["structuralReason"] = sr
-                structurally_complete.append(entry)
-            elif len(chain) >= 2 and end_node in has_outgoing:
-                pass
-            elif len(chain) >= 2:
-                entry["breakReason"] = f"{end_node} [{end_type}] has no outgoing flow edge"
-                partial_chains.append(entry)
-
-    bridge_candidates: list[dict[str, str]] = []
-    flow_connected: set[str] = set()
-    for src in sources:
-        chains = _bfs_chains(src, max_depth=15)
-        for chain_steps in chains:
-            for step in chain_steps:
-                flow_connected.add(str(step["from"]))
-                flow_connected.add(str(step["to"]))
-
-    for entity, etype in all_entities.items():
-        if etype in ("FACILITY", "PRODUCT") and entity not in flow_connected and entity not in deposit_entities:
-            in_governance = any(
-                (raw if isinstance(raw, dict) else {}).get("subject") == entity or
-                (raw if isinstance(raw, dict) else {}).get("object") == entity
-                for raw in obs_raw
-                if (raw if isinstance(raw, dict) else {}).get("relation", "") in governance_rels
-            )
-            if in_governance:
-                bridge_candidates.append({
-                    "entity": entity,
-                    "type": etype,
-                    "issue": f"Known in governance layer but not connected to any supply flow chain",
-                })
-
-    grounded_complete = _dedupe_chain_entries(grounded_complete)
-    structurally_complete = _dedupe_chain_entries(structurally_complete)
-    partial_chains = _dedupe_chain_entries(partial_chains)
-
-    grounded_complete.sort(key=lambda c: -c["hops"])
-    structurally_complete.sort(key=lambda c: -c["hops"])
-    partial_chains.sort(key=lambda c: -c["hops"])
+    grounded_complete = sorted(_dedupe_entries(grounded_complete), key=lambda item: (-int(item.get("hops") or 0), str(item.get("sink") or "")))
+    structurally_complete = sorted(_dedupe_entries(structurally_complete), key=lambda item: (-int(item.get("hops") or 0), str(item.get("sink") or "")))
+    grounded_requested_corridor = sorted(
+        _dedupe_entries(grounded_requested_corridor),
+        key=lambda item: (-int(item.get("hops") or 0), str(item.get("sink") or "")),
+    )
+    structural_requested_corridor = sorted(
+        _dedupe_entries(structural_requested_corridor),
+        key=lambda item: (-int(item.get("hops") or 0), str(item.get("sink") or "")),
+    )
+    partial_chains = sorted(_dedupe_entries(partial_chains), key=lambda item: (-int(item.get("hops") or 0), str(item.get("sink") or "")))
 
     g_n, s_n, p_n = len(grounded_complete), len(structurally_complete), len(partial_chains)
-
+    corridor_g_n = len(grounded_requested_corridor)
+    corridor_s_n = len(structural_requested_corridor)
     if not grounded_complete and not structurally_complete and not partial_chains:
-        health = "No flow paths found. Graph has observations but no supply chain connectivity."
+        health = "No operational routes found. Graph contains nodes but no usable flow-leg/process-step connectivity."
     elif g_n == 0 and s_n > 0:
         longest = structurally_complete[0]
         health = (
-            f"No document-grounded complete chain. {s_n} structurally complete chain(s), "
-            f"longest {longest['source']} → {longest['sink']} ({longest['hops']} hops)."
+            f"No document-grounded business-complete chain. {s_n} structurally complete business chain(s), "
+            f"longest {longest['source']} -> {longest['sink']} ({longest['hops']} hops)."
         )
         if p_n:
-            health += f" {p_n} partial path(s) (non-terminal or dead end)."
+            health += f" {p_n} partial path(s)."
     elif g_n == 0:
         longest = partial_chains[0]
         health = (
-            f"No grounded or structurally complete terminal chain. Longest partial: "
-            f"{longest['source']} → {longest['sink']} ({longest['hops']} hops, breaks at {longest['sink']})"
+            f"No document-grounded business-complete chain. No structurally complete business chain. Longest partial: "
+            f"{longest['source']} -> {longest['sink']} ({longest['hops']} hops)."
         )
     else:
         longest = grounded_complete[0]
-        health = f"{g_n} grounded complete chain(s), longest {longest['hops']} hops."
+        health = f"{g_n} grounded business-complete chain(s), longest {longest['hops']} hops."
         if s_n:
-            health += f" {s_n} structurally complete (weak) chain(s)."
+            health += f" {s_n} structurally complete (weak) business chain(s)."
         if p_n:
             health += f" {p_n} partial path(s)."
         if bridge_candidates:
             health += f" {len(bridge_candidates)} entity(s) in governance but not in flow."
+    if requested_corridor["active"]:
+        if corridor_g_n + corridor_s_n == 0:
+            corridor_bits = [
+                item for item in [requested_corridor.get("sourceScope"), requested_corridor.get("sinkScope")] if str(item or "").strip()
+            ]
+            if corridor_bits:
+                health += f" Requested corridor still unresolved: {' -> '.join(corridor_bits)}."
+        else:
+            health += (
+                f" Requested corridor covered by {corridor_g_n} grounded and {corridor_s_n} structural complete chain(s)."
+            )
 
     def _route_families_from(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         groups: dict[tuple[tuple[str, str, str], ...], list[dict[str, Any]]] = {}
-        for e in entries:
-            raw_fp = e.get("routeFingerprint") or []
-            fp_key = tuple(tuple(str(x) for x in h) for h in raw_fp if isinstance(h, (list, tuple)) and len(h) == 3)
-            groups.setdefault(fp_key, []).append(e)
+        for entry in entries:
+            raw_fp = entry.get("routeFingerprint") or []
+            key = tuple(
+                tuple(str(item) for item in step)
+                for step in raw_fp
+                if isinstance(step, (list, tuple)) and len(step) == 3
+            )
+            groups.setdefault(key, []).append(entry)
         ranked = sorted(
             groups.items(),
-            key=lambda kv: (-len(kv[1]), -max((m.get("hops") or 0) for m in kv[1]), str(kv[0])),
+            key=lambda item: (-len(item[1]), -max(int(member.get("hops") or 0) for member in item[1]), str(item[0])),
         )
         out: list[dict[str, Any]] = []
-        for fp_key, members in ranked[:_ROUTE_FAMILY_LIMIT]:
-            mult = len(members)
-            hops0 = int(members[0].get("hops") or 0)
-            grounded_counts = [int(m.get("groundedEdgeCount") or 0) for m in members]
-            narrative_duplicate = mult > 1 and max(grounded_counts) < hops0
+        for fingerprint, members in ranked[:_ROUTE_FAMILY_LIMIT]:
             first = members[0]
             out.append(
                 {
-                    "fingerprint": [list(h) for h in fp_key],
-                    "multiplicity": mult,
-                    "narrativeDuplicate": narrative_duplicate,
+                    "fingerprint": [list(step) for step in fingerprint],
+                    "multiplicity": len(members),
+                    "narrativeDuplicate": len(members) > 1,
                     "sampleSource": first.get("source"),
                     "sampleSink": first.get("sink"),
                     "sampleHops": first.get("hops"),
@@ -4231,8 +5547,829 @@ def _graph_reachability_report(state: dict[str, Any]) -> dict[str, Any]:
         "groundedCompleteChainCount": g_n,
         "structuralCompleteChainCount": s_n,
         "partialChainCount": p_n,
+        "requestedCorridor": requested_corridor,
+        "groundedRequestedCorridorChains": grounded_requested_corridor[:4],
+        "structuralRequestedCorridorChains": structural_requested_corridor[:4],
+        "groundedRequestedCorridorChainCount": corridor_g_n,
+        "structuralRequestedCorridorChainCount": corridor_s_n,
+        "requestedCorridorSatisfied": (not requested_corridor["active"]) or (corridor_g_n + corridor_s_n > 0),
         "routeFamilies": route_families,
+        "maxOperationalRouteHops": _max_route_hops_from_report(
+            {
+                "groundedCompleteChains": grounded_complete,
+                "structurallyCompleteChains": structurally_complete,
+                "partialChains": partial_chains,
+            }
+        ),
     }
+
+
+def _graph_reachability_report(state: dict[str, Any]) -> dict[str, Any]:
+    return _graph_reachability_report_for_graph(_load_operational_graph_state(state), state=state)
+
+
+def _host_local_process_gap_candidates(
+    graph_state: OperationalGraphState,
+) -> list[dict[str, Any]]:
+    """Detect likely missing host-local transform/assembly steps from converging flow legs."""
+    node_index = _graph_node_map(graph_state)
+    inbound_by_host: dict[str, list[FlowLeg]] = {}
+    outbound_by_host: dict[str, list[FlowLeg]] = {}
+    steps_by_host: dict[str, list[ProcessStep]] = {}
+    for leg in graph_state.flow_legs:
+        if leg.customer_node_id:
+            inbound_by_host.setdefault(leg.customer_node_id, []).append(leg)
+        if leg.supplier_node_id:
+            outbound_by_host.setdefault(leg.supplier_node_id, []).append(leg)
+    for step in graph_state.process_steps:
+        if step.host_node_id:
+            steps_by_host.setdefault(step.host_node_id, []).append(step)
+
+    candidates: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, tuple[str, ...], str]] = set()
+    for host_id in sorted(set(inbound_by_host) & set(outbound_by_host)):
+        host_type = _graph_node_type(node_index, host_id)
+        if host_type not in {"FACILITY", "ORGANIZATION"}:
+            continue
+        host_label = _graph_node_label(node_index, host_id)
+        if not host_label or _is_placeholder_node(host_id, host_label):
+            continue
+        inbound_legs = inbound_by_host.get(host_id) or []
+        outbound_legs = outbound_by_host.get(host_id) or []
+        inbound_products = _dedupe_preserve_order(
+            [
+                leg.product_node_id
+                for leg in inbound_legs
+                if leg.product_node_id and _graph_node_type(node_index, leg.product_node_id) == "PRODUCT"
+            ]
+        )
+        outbound_products = _dedupe_preserve_order(
+            [
+                leg.product_node_id
+                for leg in outbound_legs
+                if leg.product_node_id and _graph_node_type(node_index, leg.product_node_id) == "PRODUCT"
+            ]
+        )
+        if not inbound_products or not outbound_products:
+            continue
+        hosted_steps = steps_by_host.get(host_id) or []
+        for output_product_id in outbound_products:
+            candidate_inputs = [pid for pid in inbound_products if pid != output_product_id]
+            if not candidate_inputs:
+                continue
+            matching_steps = [step for step in hosted_steps if output_product_id in step.output_node_ids]
+            if any(set(candidate_inputs).issubset(set(step.input_node_ids)) for step in matching_steps):
+                continue
+            process_kind = "assembly" if len(candidate_inputs) >= 2 else "transformation"
+            key = (host_id, output_product_id, tuple(candidate_inputs), process_kind)
+            if key in seen:
+                continue
+            seen.add(key)
+            inbound_labels = [_graph_node_label(node_index, pid) for pid in candidate_inputs if _graph_node_label(node_index, pid)]
+            outbound_label = _graph_node_label(node_index, output_product_id)
+            support_score = (
+                sum(float(leg.confidence) for leg in [*inbound_legs, *outbound_legs])
+                / max(len(inbound_legs) + len(outbound_legs), 1)
+            )
+            candidates.append(
+                {
+                    "hostId": host_id,
+                    "host": host_label,
+                    "processKind": process_kind,
+                    "inputProductIds": candidate_inputs[:4],
+                    "inputProducts": inbound_labels[:4],
+                    "outputProductId": output_product_id,
+                    "outputProduct": outbound_label,
+                    "reason": (
+                        f"{host_label} already receives {', '.join(inbound_labels[:3])} and ships {outbound_label}. "
+                        f"The graph is missing a hosted {process_kind} step that turns inbound materials into the outbound product."
+                    ),
+                    "supportingLegs": _dedupe_preserve_order(
+                        [flow_leg_line(leg, node_index) for leg in inbound_legs[:3]]
+                        + [flow_leg_line(leg, node_index) for leg in outbound_legs[:3]]
+                    )[:6],
+                    "confidence": round(min(0.98, max(0.25, support_score)), 3),
+                }
+            )
+    candidates.sort(
+        key=lambda item: (
+            0 if item.get("processKind") == "assembly" else 1,
+            -len(item.get("inputProductIds") or []),
+            -float(item.get("confidence") or 0.0),
+            str(item.get("host") or ""),
+        )
+    )
+    return candidates[:6]
+
+
+def _commercial_bridge_candidates(
+    graph_state: OperationalGraphState,
+    *,
+    state: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    request = AgentLoomRequest.model_validate((state or {}).get(STATE_REQUEST) or {})
+    requested_corridor = _requested_operational_corridor(request)
+    node_index = _graph_node_map(graph_state)
+    component_by_node = _operational_component_index(graph_state)
+    if not component_by_node:
+        return []
+
+    component_nodes: dict[str, set[str]] = {}
+    for node_id, component_id in component_by_node.items():
+        component_nodes.setdefault(component_id, set()).add(node_id)
+
+    extraction_components = {
+        component_by_node[step.host_node_id]
+        for step in graph_state.process_steps
+        if step.process_kind == "extraction" and step.host_node_id in component_by_node
+    }
+    source_components: set[str] = set(extraction_components)
+    sink_components: set[str] = set()
+    for component_id, node_ids in component_nodes.items():
+        component_blob = " ".join(
+            _node_supporting_text(node_id, node_index, graph_state, request)
+            for node_id in node_ids
+            if node_id in node_index
+        )
+        if requested_corridor.get("sourceScope") and _scope_matches_text(component_blob, str(requested_corridor["sourceScope"])):
+            source_components.add(component_id)
+        if requested_corridor.get("sinkScope") and _scope_matches_text(component_blob, str(requested_corridor["sinkScope"])):
+            sink_components.add(component_id)
+    if not source_components:
+        return []
+
+    downstream_components = sink_components or {component_id for component_id in component_nodes if component_id not in source_components}
+    if not downstream_components:
+        return []
+
+    source_supply: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    downstream_demand: dict[tuple[str, str], list[dict[str, Any]]] = {}
+
+    for leg in graph_state.flow_legs:
+        product_key = _product_identity_key(node_index, leg.product_node_id)
+        supplier_component = component_by_node.get(leg.supplier_node_id)
+        customer_component = component_by_node.get(leg.customer_node_id)
+        if supplier_component in source_components:
+            source_supply.setdefault((supplier_component, product_key), []).append(
+                {
+                    "hostId": leg.supplier_node_id,
+                    "host": _graph_node_label(node_index, leg.supplier_node_id),
+                    "productId": leg.product_node_id,
+                    "product": _graph_node_label(node_index, leg.product_node_id),
+                    "line": flow_leg_line(leg, node_index),
+                    "confidence": float(leg.confidence),
+                }
+            )
+        if customer_component in downstream_components:
+            downstream_demand.setdefault((customer_component, product_key), []).append(
+                {
+                    "hostId": leg.customer_node_id,
+                    "host": _graph_node_label(node_index, leg.customer_node_id),
+                    "productId": leg.product_node_id,
+                    "product": _graph_node_label(node_index, leg.product_node_id),
+                    "line": flow_leg_line(leg, node_index),
+                    "confidence": float(leg.confidence),
+                }
+            )
+
+    for step in graph_state.process_steps:
+        component_id = component_by_node.get(step.host_node_id)
+        if not component_id:
+            continue
+        if component_id in source_components:
+            for output_id in step.output_node_ids:
+                product_key = _product_identity_key(node_index, output_id)
+                source_supply.setdefault((component_id, product_key), []).append(
+                    {
+                        "hostId": step.host_node_id,
+                        "host": _graph_node_label(node_index, step.host_node_id),
+                        "productId": output_id,
+                        "product": _graph_node_label(node_index, output_id),
+                        "line": process_step_line(step, node_index),
+                        "confidence": float(step.confidence),
+                    }
+                )
+        if component_id in downstream_components:
+            for input_id in step.input_node_ids:
+                product_key = _product_identity_key(node_index, input_id)
+                downstream_demand.setdefault((component_id, product_key), []).append(
+                    {
+                        "hostId": step.host_node_id,
+                        "host": _graph_node_label(node_index, step.host_node_id),
+                        "productId": input_id,
+                        "product": _graph_node_label(node_index, input_id),
+                        "line": process_step_line(step, node_index),
+                        "confidence": float(step.confidence),
+                    }
+                )
+
+    candidates: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for (source_component, product_key), supplies in source_supply.items():
+        for downstream_component in downstream_components:
+            if downstream_component == source_component:
+                continue
+            demands = downstream_demand.get((downstream_component, product_key)) or []
+            if not demands:
+                continue
+            upstream = max(supplies, key=lambda item: (float(item["confidence"]), item["host"], item["product"]))
+            downstream = max(demands, key=lambda item: (float(item["confidence"]), item["host"], item["product"]))
+            if not upstream["host"] or not downstream["host"]:
+                continue
+            if _is_placeholder_node(str(upstream["hostId"]), str(upstream["host"])) or _is_placeholder_node(
+                str(downstream["hostId"]),
+                str(downstream["host"]),
+            ):
+                continue
+            candidate_key = (str(upstream["hostId"]), str(downstream["hostId"]), str(upstream["productId"]))
+            if candidate_key in seen:
+                continue
+            seen.add(candidate_key)
+            candidates.append(
+                {
+                    "bridgeKind": "commercial_flow_bridge",
+                    "upstreamHostId": upstream["hostId"],
+                    "upstreamHost": upstream["host"],
+                    "downstreamHostId": downstream["hostId"],
+                    "downstreamHost": downstream["host"],
+                    "productId": upstream["productId"],
+                    "product": upstream["product"],
+                    "sourceComponentId": source_component,
+                    "downstreamComponentId": downstream_component,
+                    "sinkScopeMatched": downstream_component in sink_components,
+                    "reason": (
+                        f"The graph has a source-side island around {upstream['host']} and a downstream island around "
+                        f"{downstream['host']} that both touch {upstream['product']}, but no commercial bridge yet explains "
+                        "who moves that product between them or through which intermediary jurisdiction or operator."
+                    ),
+                    "supportingLines": [upstream["line"], downstream["line"]],
+                    "confidence": round(
+                        min(
+                            0.98,
+                            max(0.25, (float(upstream["confidence"]) + float(downstream["confidence"])) / 2.0),
+                        ),
+                        3,
+                    ),
+                }
+            )
+    candidates.sort(
+        key=lambda item: (
+            0 if item.get("sinkScopeMatched") else 1,
+            -float(item.get("confidence") or 0.0),
+            str(item.get("upstreamHost") or ""),
+            str(item.get("downstreamHost") or ""),
+        )
+    )
+    return candidates[:6]
+
+
+def _branch_text_blob(plan: BranchPlan) -> str:
+    return " ".join(
+        [
+            plan.human_question,
+            plan.human_action,
+            plan.closure_target,
+            " ".join(plan.known_context),
+            " ".join(plan.frontier),
+            " ".join(plan.target_entities),
+        ]
+    ).lower()
+
+
+def _branch_addresses_commercial_bridge(plan: BranchPlan, candidate: dict[str, Any]) -> bool:
+    blob = _branch_text_blob(plan)
+    needles = [
+        str(candidate.get("upstreamHost") or "").strip().lower(),
+        str(candidate.get("downstreamHost") or "").strip().lower(),
+        str(candidate.get("product") or "").strip().lower(),
+    ]
+    needles = [item for item in needles if item]
+    if not needles:
+        return False
+    return sum(1 for item in needles if item in blob) >= 2
+
+
+def _branch_addresses_process_gap(plan: BranchPlan, candidate: dict[str, Any]) -> bool:
+    blob = _branch_text_blob(plan)
+    needles = [
+        str(candidate.get("host") or "").strip().lower(),
+        str(candidate.get("outputProduct") or "").strip().lower(),
+        *[str(item).strip().lower() for item in (candidate.get("inputProducts") or [])[:2]],
+    ]
+    needles = [item for item in needles if item]
+    if not needles:
+        return False
+    return sum(1 for item in needles if item in blob) >= 2
+
+
+def _branch_addresses_partial_chain(plan: BranchPlan, partial: dict[str, Any]) -> bool:
+    blob = _branch_text_blob(plan)
+    source = str(partial.get("source") or "").strip().lower()
+    sink = str(partial.get("sink") or "").strip().lower()
+    if source and source in blob and sink and sink in blob:
+        return True
+    break_reason = str(partial.get("breakReason") or "").strip().lower()
+    return bool(break_reason and break_reason[:80] in blob)
+
+
+def _make_supply_chain_initial_overview_branch(
+    mission: InvestigationMission,
+    *,
+    user_question: str,
+    branch_id: str,
+) -> BranchPlan:
+    return BranchPlan(
+        branchId=branch_id,
+        hypothesis="A business-complete operational chain can be reconstructed as one connected route family.",
+        parentHypothesisId="",
+        hypothesisRelation="root",
+        spawnReason="Initial pass must create one end-to-end business-complete supply-chain hypothesis, not a local terminal segment.",
+        independenceBasis="This is the root hypothesis for the whole investigation.",
+        pathKind="overview",
+        humanQuestion=(
+            "What is the most plausible business-complete operational chain answering the user question as one connected graph, "
+            "from concrete source deposit or extraction through named intermediate product stages and host-local processing steps "
+            "to a concrete downstream battery manufacturer?"
+        ),
+        humanAction=(
+            "Build one end-to-end operational chain with source anchoring, multiple product-carrying flow legs, "
+            "at least one named transformation or assembly host, and a concrete downstream battery-manufacturing sink."
+        ),
+        closureTarget=(
+            "Produce one business-complete operational chain with deposit/extraction source, multiple flow legs, "
+            "a real midstream processing layer, multiple product stages, and a concrete downstream battery-manufacturing sink."
+        ),
+        knownContext=[
+            "The graph is empty or structurally insufficient for the user question.",
+            f"Original question: {user_question[:280]}",
+        ],
+        frontier=[
+            "Anchor the route in a concrete source deposit or extraction host.",
+            "Insert the named midstream processing host(s) that convert one product stage into the next.",
+            "Reach a concrete downstream battery-manufacturing facility or organization, not only an intermediate materials plant.",
+        ],
+        assignedRoles=list(mission.assigned_roles) or [ROLE_SUPPLY_CHAIN],
+        preferredTools=["reason"],
+        targetEntities=["source deposit", "midstream processor", "downstream battery manufacturer"],
+        fragmentType="overview_chain",
+        parallelGroup="initial_business_chain",
+        stopAfterNoImprovement=1,
+    )
+
+
+def _make_supply_chain_initial_grounding_branch(
+    mission: InvestigationMission,
+    *,
+    user_question: str,
+    branch_id: str,
+) -> BranchPlan:
+    return BranchPlan(
+        branchId=branch_id,
+        hypothesis="Request corpus and internal retrieval can ground the broad source, midstream, and sink layers for the first route family.",
+        parentHypothesisId="",
+        hypothesisRelation="dependent_followup",
+        spawnReason="The initial hypothesis should be grounded against supplied corpus and internal retrieval as early as possible.",
+        independenceBasis="This branch grounds the same root route family and must merge back into it.",
+        pathKind="bridge",
+        humanQuestion=(
+            "Using the supplied corpus and internal retrieval, which concrete source-side nodes, midstream conversion layer, "
+            "and downstream battery-manufacturing recipients are already supported for the route implied by the user question?"
+        ),
+        humanAction=(
+            "Ground the first route family against supplied corpus and internal retrieval, focusing on named source, "
+            "midstream, and downstream entities instead of short terminal segments."
+        ),
+        closureTarget=(
+            "Ground at least one source-side node, one midstream processing layer, and one downstream battery-manufacturing sink "
+            "for the initial business-complete route family."
+        ),
+        knownContext=[
+            f"Original question: {user_question[:280]}",
+            "The initial route family still needs grounded source, midstream, and sink anchors.",
+        ],
+        frontier=[
+            "Which concrete source-side nodes are supported by supplied evidence?",
+            "Which midstream conversion or assembly layer is supported by supplied evidence?",
+            "Which downstream battery-manufacturing recipient is supported by supplied evidence?",
+        ],
+        assignedRoles=list(mission.assigned_roles) or [ROLE_SUPPLY_CHAIN],
+        preferredTools=["retrieve", "web_search"],
+        targetEntities=["source anchor", "midstream layer", "downstream battery manufacturer"],
+        fragmentType="chain_fragment",
+        parallelGroup="initial_business_chain",
+        stopAfterNoImprovement=2,
+    )
+
+
+def _make_supply_chain_commercial_bridge_branch(
+    mission: InvestigationMission,
+    candidate: dict[str, Any],
+    *,
+    branch_id: str,
+    parent_hypothesis_id: str,
+    relation: Literal["dependent_followup", "root"] = "dependent_followup",
+) -> BranchPlan:
+    upstream_host = str(candidate.get("upstreamHost") or "").strip()
+    downstream_host = str(candidate.get("downstreamHost") or "").strip()
+    product = str(candidate.get("product") or "").strip()
+    return BranchPlan(
+        branchId=branch_id,
+        hypothesis=f"A concrete commercial bridge connects {upstream_host} to {downstream_host} for {product}.",
+        parentHypothesisId=parent_hypothesis_id,
+        hypothesisRelation=relation,
+        spawnReason="The graph already contains upstream and downstream islands touching the same product stage but still lacks the commercial bridge between them.",
+        independenceBasis="This branch connects two already-relevant islands in the same corridor instead of accepting an unrelated complete route.",
+        pathKind="bridge",
+        humanQuestion=(
+            f"What concrete commercial bridge connects {upstream_host} to {downstream_host} for {product}, "
+            "including any intermediary converter, trader, toll processor, third-country route, or adjacent-jurisdiction handoff if the path is indirect?"
+        ),
+        humanAction=(
+            f"Recover the missing commercial bridge from {upstream_host} to {downstream_host} for {product} as typed flow legs and process steps, "
+            "preferring real intermediary operators or jurisdictions over a fake direct hop."
+        ),
+        closureTarget=(
+            f"Connect {upstream_host} to {downstream_host} for {product} with a real commercial bridge layer or an honest negative result explaining why no such bridge is supportable."
+        ),
+        knownContext=[
+            str(candidate.get("reason") or "").strip(),
+            *[str(item).strip() for item in (candidate.get("supportingLines") or [])[:4] if str(item).strip()],
+        ],
+        frontier=[
+            f"Identify the intermediary operator, converter, trader, or route that moves {product} from {upstream_host} toward {downstream_host}.",
+            "If no direct bridge is supported, search adjacent regions and third-country routing without fabricating a direct supply leg.",
+        ],
+        assignedRoles=list(mission.assigned_roles) or [ROLE_SUPPLY_CHAIN],
+        preferredTools=["retrieve", "web_search", "reason"],
+        targetEntities=[upstream_host, downstream_host, product],
+        fragmentType="chain_fragment",
+        parallelGroup="commercial_bridge",
+        stopAfterNoImprovement=2,
+    )
+
+
+def _make_supply_chain_process_gap_branch(
+    mission: InvestigationMission,
+    candidate: dict[str, Any],
+    *,
+    branch_id: str,
+    parent_hypothesis_id: str,
+    relation: Literal["dependent_followup", "root"] = "dependent_followup",
+) -> BranchPlan:
+    host = str(candidate.get("host") or "").strip()
+    output_product = str(candidate.get("outputProduct") or "").strip()
+    input_products = [str(item).strip() for item in (candidate.get("inputProducts") or []) if str(item).strip()]
+    process_kind = str(candidate.get("processKind") or "transformation")
+    return BranchPlan(
+        branchId=branch_id,
+        hypothesis=f"A concrete host-local {process_kind} step at {host} closes the current structural gap.",
+        parentHypothesisId=parent_hypothesis_id,
+        hypothesisRelation=relation,
+        spawnReason="The graph already shows inbound and outbound product flows at the same host but lacks the hosted process step that connects them.",
+        independenceBasis="This branch fills a missing operational process layer inside the current hypothesis graph and must merge back into it.",
+        pathKind="bridge",
+        humanQuestion=(
+            f"What hosted {process_kind} step occurs at {host} that turns "
+            f"{', '.join(input_products[:3])} into {output_product}, and what typed processStep should encode it?"
+        ),
+        humanAction=(
+            f"Verify the host-local {process_kind} process step at {host} and return a typed processStep plus the supporting inbound/outbound flow context."
+        ),
+        closureTarget=(
+            f"Add a hosted {process_kind} process step at {host} linking inbound product stages "
+            f"{', '.join(input_products[:3])} to outbound {output_product}."
+        ),
+        knownContext=[
+            str(candidate.get("reason") or "").strip(),
+            *[str(item).strip() for item in (candidate.get("supportingLegs") or [])[:4] if str(item).strip()],
+        ],
+        frontier=[
+            f"Confirm the hosted {process_kind} step at {host}.",
+            f"Return explicit input product nodes {', '.join(input_products[:3])} and output product node {output_product}.",
+        ],
+        assignedRoles=list(mission.assigned_roles) or [ROLE_SUPPLY_CHAIN],
+        preferredTools=["retrieve", "web_search"],
+        targetEntities=[host, *input_products[:3], output_product],
+        fragmentType="chain_fragment",
+        parallelGroup="structural_process_gap",
+        stopAfterNoImprovement=2,
+    )
+
+
+def _make_supply_chain_partial_bridge_branch(
+    mission: InvestigationMission,
+    partial: dict[str, Any],
+    *,
+    branch_id: str,
+    parent_hypothesis_id: str,
+    relation: Literal["dependent_followup", "root"] = "dependent_followup",
+) -> BranchPlan:
+    source = str(partial.get("source") or "").strip()
+    sink = str(partial.get("sink") or "").strip()
+    break_reason = str(partial.get("breakReason") or "").strip()
+    return BranchPlan(
+        branchId=branch_id,
+        hypothesis=f"The partial route from {source} to {sink} can be extended into a business-complete chain by closing its next structural hop.",
+        parentHypothesisId=parent_hypothesis_id,
+        hypothesisRelation=relation,
+        spawnReason="Reachability shows the current route is still partial and names the exact business-chain criteria it is missing.",
+        independenceBasis="This branch closes the next structural gap inside the same hypothesis graph and must merge back into it.",
+        pathKind="bridge",
+        humanQuestion=(
+            f"What concrete structural bridge extends the current partial route from {source} to {sink} into a business-complete operational chain, "
+            f"specifically closing: {break_reason}"
+        ),
+        humanAction=(
+            f"Close the next structural hop on the partial route from {source} to {sink} with named facilities, host-local process steps, and product-carrying flow legs."
+        ),
+        closureTarget=(
+            f"Extend the partial route from {source} to {sink} into a longer business-complete chain with the missing structural hop grounded."
+        ),
+        knownContext=[
+            f"Current partial route source: {source}",
+            f"Current partial route sink: {sink}",
+            break_reason,
+            *[str(item).strip() for item in (partial.get("path") or [])[:4] if str(item).strip()],
+        ],
+        frontier=[
+            break_reason or f"Identify the missing structural hop between {source} and {sink}.",
+            "Prefer real host-local processing or intermediary operators over short terminal segments.",
+        ],
+        assignedRoles=list(mission.assigned_roles) or [ROLE_SUPPLY_CHAIN],
+        preferredTools=["retrieve", "reason", "web_search"],
+        targetEntities=[source, sink],
+        fragmentType="chain_fragment",
+        parallelGroup="structural_bridge",
+        stopAfterNoImprovement=2,
+    )
+
+
+def _normalize_investigator_plan(
+    state: dict[str, Any],
+    mission: InvestigationMission,
+    specialized_role: InvestigationRole,
+    plan: InvestigatorPlan,
+    *,
+    initial_pass: bool,
+    user_question: str,
+    corpus_document_count: int,
+) -> InvestigatorPlan:
+    if specialized_role != ROLE_SUPPLY_CHAIN:
+        return plan
+    graph_state = _load_operational_graph_state(state)
+    reachability = _graph_reachability_report_for_graph(graph_state, state=state)
+    commercial_bridge_candidates = _commercial_bridge_candidates(graph_state, state=state)
+    process_gap_candidates = _host_local_process_gap_candidates(graph_state)
+    business_complete = sum(_reachability_complete_counts(reachability)) > 0
+    normalized_branches = list(plan.branch_plans)
+
+    if initial_pass:
+        overview_idx = next(
+            (
+                idx
+                for idx, item in enumerate(normalized_branches)
+                if item.path_kind == "overview" or item.hypothesis_relation == "root"
+            ),
+            None,
+        )
+        overview_branch = _make_supply_chain_initial_overview_branch(
+            mission,
+            user_question=user_question,
+            branch_id=normalized_branches[overview_idx].branch_id if overview_idx is not None else "full_business_chain",
+        )
+        if overview_idx is None:
+            normalized_branches.insert(0, overview_branch)
+        else:
+            normalized_branches[overview_idx] = overview_branch
+        if corpus_document_count > 0 and not any("retrieve" in item.preferred_tools for item in normalized_branches):
+            normalized_branches.append(
+                _make_supply_chain_initial_grounding_branch(
+                    mission,
+                    user_question=user_question,
+                    branch_id="ground_initial_business_chain",
+                )
+            )
+
+    if not business_complete:
+        primary_bridge = commercial_bridge_candidates[0] if commercial_bridge_candidates else None
+        primary_process_gap = process_gap_candidates[0] if process_gap_candidates else None
+        primary_partial = (reachability.get("partialChains") or [None])[0]
+        if primary_bridge and not any(_branch_addresses_commercial_bridge(item, primary_bridge) for item in normalized_branches):
+            normalized_branches.insert(
+                0,
+                _make_supply_chain_commercial_bridge_branch(
+                    mission,
+                    primary_bridge,
+                    branch_id=(
+                        f"bridge_{_slug(str(primary_bridge.get('upstreamHost') or 'upstream'))}"
+                        f"_to_{_slug(str(primary_bridge.get('downstreamHost') or 'downstream'))}"
+                    ),
+                    parent_hypothesis_id="root_business_chain" if initial_pass else "root_lithium_chain",
+                    relation="root" if initial_pass and not normalized_branches else "dependent_followup",
+                ),
+            )
+        elif primary_process_gap and not any(_branch_addresses_process_gap(item, primary_process_gap) for item in normalized_branches):
+            normalized_branches.insert(
+                0,
+                _make_supply_chain_process_gap_branch(
+                    mission,
+                    primary_process_gap,
+                    branch_id=f"close_process_gap_{_slug(str(primary_process_gap.get('host') or 'host'))}",
+                    parent_hypothesis_id="root_business_chain" if initial_pass else "root_lithium_chain",
+                    relation="root" if initial_pass and not normalized_branches else "dependent_followup",
+                ),
+            )
+        elif isinstance(primary_partial, dict) and not any(_branch_addresses_partial_chain(item, primary_partial) for item in normalized_branches):
+            normalized_branches.insert(
+                0,
+                _make_supply_chain_partial_bridge_branch(
+                    mission,
+                    primary_partial,
+                    branch_id=f"extend_partial_{_slug(str(primary_partial.get('sink') or 'route'))}",
+                    parent_hypothesis_id="root_business_chain" if initial_pass else "root_lithium_chain",
+                    relation="root" if initial_pass and not normalized_branches else "dependent_followup",
+                ),
+            )
+
+    prioritized = sorted(
+        normalized_branches,
+        key=lambda item: (
+            0 if any(tool == "reason" for tool in item.preferred_tools[:1]) and item.path_kind == "overview" else 1,
+            0 if item.parallel_group in {"commercial_bridge", "structural_process_gap", "structural_bridge", "initial_business_chain"} else 1,
+            0 if item.path_kind in {"overview", "bridge"} else 1,
+            item.stop_after_no_improvement,
+            item.branch_id,
+        ),
+    )
+    deduped: dict[str, BranchPlan] = {}
+    for item in prioritized:
+        deduped[item.branch_id] = item
+    return plan.model_copy(update={"branch_plans": list(deduped.values())[:4]})
+
+
+def _normalize_hypothesis_turn_decision(
+    state: dict[str, Any],
+    branch_plan: BranchPlan,
+    branch_state: BranchState,
+    local_state: dict[str, Any],
+    latest_result: ToolActionResult,
+    decision: HypothesisTurnDecision,
+) -> HypothesisTurnDecision:
+    if branch_plan.assigned_roles != [ROLE_SUPPLY_CHAIN]:
+        return decision
+    graph_state = _load_operational_graph_state(local_state)
+    reachability = _graph_reachability_report_for_graph(graph_state, state=local_state)
+    if sum(_reachability_complete_counts(reachability)) > 0:
+        return decision
+    commercial_bridge_candidates = _commercial_bridge_candidates(graph_state, state=local_state)
+    process_gap_candidates = _host_local_process_gap_candidates(graph_state)
+    primary_bridge = commercial_bridge_candidates[0] if commercial_bridge_candidates else None
+    primary_process_gap = process_gap_candidates[0] if process_gap_candidates else None
+    primary_partial = (reachability.get("partialChains") or [None])[0]
+    if primary_bridge is None and primary_process_gap is None and not isinstance(primary_partial, dict):
+        return decision
+    if primary_bridge is not None:
+        structural_branch = _make_supply_chain_commercial_bridge_branch(
+            InvestigationMission.model_validate(state.get(STATE_CURRENT_MISSION) or {}),
+            primary_bridge,
+            branch_id=f"{branch_plan.branch_id}-commercial-bridge",
+            parent_hypothesis_id=branch_plan.branch_id,
+        )
+        structural_turn = HypothesisTurnPlan(
+            pathKind="bridge",
+            toolName="retrieve",
+            humanQuestion=structural_branch.human_question,
+            humanAction=structural_branch.human_action,
+            whyNow="The graph still does not connect the requested corridor and shows disconnected islands touching the same product stage.",
+            closureTarget=structural_branch.closure_target,
+            knownContext=list(structural_branch.known_context),
+            frontier=list(structural_branch.frontier),
+            targetEntities=list(structural_branch.target_entities),
+            fragmentType=structural_branch.fragment_type,
+        )
+        needs_override = decision.decision in {"accept_hypothesis", "stall_hypothesis"} or (
+            decision.decision == "ask_next_question_same_hypothesis"
+            and decision.next_turn is not None
+            and not _branch_addresses_commercial_bridge(
+                BranchPlan(
+                    branchId=branch_plan.branch_id,
+                    hypothesis=branch_plan.hypothesis,
+                    parentHypothesisId=branch_plan.parent_hypothesis_id,
+                    hypothesisRelation=branch_plan.hypothesis_relation,
+                    spawnReason=branch_plan.spawn_reason,
+                    independenceBasis=branch_plan.independence_basis,
+                    pathKind=decision.next_turn.path_kind,
+                    humanQuestion=decision.next_turn.human_question,
+                    humanAction=decision.next_turn.human_action,
+                    closureTarget=decision.next_turn.closure_target,
+                    knownContext=decision.next_turn.known_context,
+                    frontier=decision.next_turn.frontier,
+                    assignedRoles=branch_plan.assigned_roles,
+                    preferredTools=[decision.next_turn.tool_name],
+                    targetEntities=decision.next_turn.target_entities,
+                    fragmentType=decision.next_turn.fragment_type,
+                    stopAfterNoImprovement=1,
+                ),
+                primary_bridge,
+            )
+        )
+        if needs_override:
+            return decision.model_copy(
+                update={
+                    "decision": "ask_next_question_same_hypothesis",
+                    "decision_note": (
+                        "Runtime redirected the hypothesis to a commercial bridge because the requested corridor is still disconnected."
+                    ),
+                    "next_turn": structural_turn,
+                    "followup_branches": [],
+                }
+            )
+        return decision
+    if primary_process_gap is not None:
+        structural_branch = _make_supply_chain_process_gap_branch(
+            InvestigationMission.model_validate(state.get(STATE_CURRENT_MISSION) or {}),
+            primary_process_gap,
+            branch_id=f"{branch_plan.branch_id}-close-process-gap",
+            parent_hypothesis_id=branch_plan.branch_id,
+        )
+        structural_turn = HypothesisTurnPlan(
+            pathKind="bridge",
+            toolName="retrieve",
+            humanQuestion=structural_branch.human_question,
+            humanAction=structural_branch.human_action,
+            whyNow="The graph shows inbound and outbound flows at the same host but lacks the hosted process step that connects them.",
+            closureTarget=structural_branch.closure_target,
+            knownContext=list(structural_branch.known_context),
+            frontier=list(structural_branch.frontier),
+            targetEntities=list(structural_branch.target_entities),
+            fragmentType=structural_branch.fragment_type,
+        )
+        needs_override = decision.decision in {"accept_hypothesis", "stall_hypothesis"} or (
+            decision.decision == "ask_next_question_same_hypothesis"
+            and decision.next_turn is not None
+            and not _branch_addresses_process_gap(
+                BranchPlan(
+                    branchId=branch_plan.branch_id,
+                    hypothesis=branch_plan.hypothesis,
+                    parentHypothesisId=branch_plan.parent_hypothesis_id,
+                    hypothesisRelation=branch_plan.hypothesis_relation,
+                    spawnReason=branch_plan.spawn_reason,
+                    independenceBasis=branch_plan.independence_basis,
+                    pathKind=decision.next_turn.path_kind,
+                    humanQuestion=decision.next_turn.human_question,
+                    humanAction=decision.next_turn.human_action,
+                    closureTarget=decision.next_turn.closure_target,
+                    knownContext=decision.next_turn.known_context,
+                    frontier=decision.next_turn.frontier,
+                    assignedRoles=branch_plan.assigned_roles,
+                    preferredTools=[decision.next_turn.tool_name],
+                    targetEntities=decision.next_turn.target_entities,
+                    fragmentType=decision.next_turn.fragment_type,
+                    stopAfterNoImprovement=1,
+                ),
+                primary_process_gap,
+            )
+        )
+        if needs_override:
+            return decision.model_copy(
+                update={
+                    "decision": "ask_next_question_same_hypothesis",
+                    "decision_note": (
+                        "Runtime redirected the hypothesis to a host-local process gap because the graph still lacks a business-complete chain."
+                    ),
+                    "next_turn": structural_turn,
+                    "followup_branches": [],
+                }
+            )
+        return decision
+    structural_branch = _make_supply_chain_partial_bridge_branch(
+        InvestigationMission.model_validate(state.get(STATE_CURRENT_MISSION) or {}),
+        primary_partial,
+        branch_id=f"{branch_plan.branch_id}-extend-partial-chain",
+        parent_hypothesis_id=branch_plan.branch_id,
+    )
+    structural_turn = HypothesisTurnPlan(
+        pathKind="bridge",
+        toolName="retrieve",
+        humanQuestion=structural_branch.human_question,
+        humanAction=structural_branch.human_action,
+        whyNow="Reachability still shows a partial chain whose next structural hop is unresolved.",
+        closureTarget=structural_branch.closure_target,
+        knownContext=list(structural_branch.known_context),
+        frontier=list(structural_branch.frontier),
+        targetEntities=list(structural_branch.target_entities),
+        fragmentType=structural_branch.fragment_type,
+    )
+    if decision.decision in {"accept_hypothesis", "stall_hypothesis"}:
+        return decision.model_copy(
+            update={
+                "decision": "ask_next_question_same_hypothesis",
+                "decision_note": "Runtime redirected the hypothesis to the highest-priority partial-chain break point.",
+                "next_turn": structural_turn,
+                "followup_branches": [],
+            }
+        )
+    return decision
 
 
 def _branch_path_assessment(
@@ -4285,6 +6422,90 @@ def _dependent_descendant_branch_ids(
     return descendants
 
 
+def _candidate_path_signature(path: CandidatePath) -> tuple[str, str, str, str]:
+    return (
+        path.start_node.strip().lower(),
+        path.end_node.strip().lower(),
+        path.path_kind,
+        path.status,
+    )
+
+
+def _reachability_candidate_paths(state: dict[str, Any]) -> list[CandidatePath]:
+    reach = _graph_reachability_report(state)
+    candidates: list[CandidatePath] = []
+
+    def _build(
+        *,
+        bucket: str,
+        status: Literal["confirmed", "best_supported_indirect", "still_open"],
+        path_kind: Literal["overview", "indirect", "bridge"],
+        entries: list[dict[str, Any]],
+    ) -> None:
+        for idx, entry in enumerate(entries[:3], start=1):
+            title = f"{entry.get('source', '')} -> {entry.get('sink', '')}".strip(" ->")
+            path_lines = [str(item).strip() for item in (entry.get("path") or []) if str(item).strip()]
+            summary_parts: list[str] = []
+            if path_lines:
+                summary_parts.append(" | ".join(path_lines[:4]))
+            if status == "still_open":
+                summary_parts.append(str(entry.get("breakReason") or "").strip())
+            elif status == "best_supported_indirect":
+                summary_parts.append(str(entry.get("structuralReason") or "").strip())
+            summary = " ".join(part for part in summary_parts if part).strip()
+            confidence = 0.0
+            hops = max(1, int(entry.get("hops") or 0))
+            grounded_edges = max(0, int(entry.get("groundedEdgeCount") or 0))
+            weak_edges = max(0, int(entry.get("weakEdgeCount") or 0))
+            confidence = round(min(0.98, max(0.2, (grounded_edges + 0.5 * weak_edges) / hops)), 3)
+            unresolved = []
+            if status == "still_open":
+                unresolved_reason = str(entry.get("breakReason") or "").strip()
+                if unresolved_reason:
+                    unresolved.append(unresolved_reason)
+            candidates.append(
+                CandidatePath(
+                    pathId=f"reach-{bucket}-{idx}",
+                    pathKind=path_kind,
+                    status=status,
+                    title=title or f"Reachability {bucket} route {idx}",
+                    summary=summary or title or f"Reachability-derived {bucket} route.",
+                    startNode=str(entry.get("source") or ""),
+                    endNode=str(entry.get("sink") or ""),
+                    viaNodes=path_lines[:6],
+                    supportingBranchIds=[],
+                    supportingFragmentIds=[],
+                    evidenceStatus=(
+                        "verified"
+                        if status == "confirmed"
+                        else ("mixed" if status == "best_supported_indirect" else "reasoned")
+                    ),
+                    confidence=confidence,
+                    unresolvedHops=unresolved[:4],
+                )
+            )
+
+    _build(
+        bucket="grounded",
+        status="confirmed",
+        path_kind="overview",
+        entries=list(reach.get("groundedCompleteChains") or []),
+    )
+    _build(
+        bucket="structural",
+        status="best_supported_indirect",
+        path_kind="indirect",
+        entries=list(reach.get("structurallyCompleteChains") or []),
+    )
+    _build(
+        bucket="partial",
+        status="still_open",
+        path_kind="bridge",
+        entries=list(reach.get("partialChains") or []),
+    )
+    return candidates
+
+
 def _derive_candidate_paths(state: dict[str, Any]) -> list[CandidatePath]:
     branches = [BranchState.model_validate(item) for item in (state.get(STATE_BRANCH_STATES) or [])]
     fragments = [GraphFragment.model_validate(item) for item in (state.get(STATE_GRAPH_FRAGMENTS) or [])]
@@ -4312,22 +6533,55 @@ def _derive_candidate_paths(state: dict[str, Any]) -> list[CandidatePath]:
         branch_fragments: list[GraphFragment] = []
         for family_branch in family_branches:
             branch_fragments.extend(fragment_by_branch.get(family_branch.branch_id, []) or family_branch.graph_fragments)
-        observations = [obs for fragment in branch_fragments for obs in fragment.observations]
-        flow_observations = [obs for obs in observations if obs.relation in flow_rels]
-        path_subjects = [obs.subject for obs in flow_observations if obs.subject]
-        path_objects = [obs.object for obs in flow_observations if obs.object]
-        via_nodes = _dedupe_preserve_order([node for node in path_objects[:-1] if node])[:6]
-        start_node = path_subjects[0] if path_subjects else ""
-        end_node = path_objects[-1] if path_objects else ""
-        if not start_node and branch_fragments:
-            start_node = branch_fragments[0].start_node_id or (branch_fragments[0].observations[0].subject if branch_fragments[0].observations else "")
-        if not end_node and branch_fragments:
+        family_graph = graph_state_from_fragments(branch_fragments)
+        family_nodes = _graph_node_map(family_graph)
+        context_lines = graph_context_lines(family_graph, limit=24)
+        branch_flow_lines = [flow_leg_line(leg, family_nodes) for leg in family_graph.flow_legs]
+        branch_step_lines = [process_step_line(step, family_nodes) for step in family_graph.process_steps]
+        via_nodes = _dedupe_preserve_order(
+            [
+                *[_graph_node_label(family_nodes, leg.product_node_id) for leg in family_graph.flow_legs if leg.product_node_id],
+                *[_graph_node_label(family_nodes, step.host_node_id) for step in family_graph.process_steps if step.host_node_id],
+            ]
+        )[:6]
+
+        start_node = ""
+        end_node = ""
+        if branch_fragments:
+            first_fragment = branch_fragments[0]
             last_fragment = branch_fragments[-1]
-            end_node = last_fragment.end_node_id or (last_fragment.observations[-1].object if last_fragment.observations else "")
-        evidence_status = _evidence_status_for_observations(observations)
+            start_node = _graph_node_label(family_nodes, first_fragment.start_node_id) if first_fragment.start_node_id else ""
+            end_node = _graph_node_label(family_nodes, last_fragment.end_node_id) if last_fragment.end_node_id else ""
+        if not start_node and family_graph.process_steps:
+            first_step = family_graph.process_steps[0]
+            if first_step.process_kind == "extraction" and first_step.input_node_ids:
+                start_node = _graph_node_label(family_nodes, first_step.input_node_ids[0])
+            else:
+                start_node = _graph_node_label(family_nodes, first_step.host_node_id)
+        if not start_node and family_graph.flow_legs:
+            start_node = _graph_node_label(family_nodes, family_graph.flow_legs[0].supplier_node_id)
+        if not end_node and family_graph.flow_legs:
+            last_leg = family_graph.flow_legs[-1]
+            end_node = _graph_node_label(family_nodes, last_leg.customer_node_id)
+        if not end_node and family_graph.process_steps:
+            last_step = family_graph.process_steps[-1]
+            if last_step.output_node_ids:
+                end_node = _graph_node_label(family_nodes, last_step.output_node_ids[-1])
+            else:
+                end_node = _graph_node_label(family_nodes, last_step.host_node_id)
+        if not start_node and branch_fragments and branch_fragments[0].observations:
+            start_node = branch_fragments[0].observations[0].subject
+        if not end_node and branch_fragments and branch_fragments[-1].observations:
+            end_node = branch_fragments[-1].observations[-1].object
+
+        evidence_status = evidence_status_for_graph(family_graph)  # type: ignore[arg-type]
         confidence = (
-            round(sum(item.confidence for item in observations) / len(observations), 3)
-            if observations
+            round(
+                sum(float(item.confidence) for item in [*family_graph.flow_legs, *family_graph.process_steps, *family_graph.overlay_edges])
+                / max(len(family_graph.flow_legs) + len(family_graph.process_steps) + len(family_graph.overlay_edges), 1),
+                3,
+            )
+            if any((family_graph.flow_legs, family_graph.process_steps, family_graph.overlay_edges))
             else round(branch.quality_score, 3)
         )
         status: Literal["confirmed", "best_supported_indirect", "rejected", "still_open"] = "still_open"
@@ -4335,7 +6589,12 @@ def _derive_candidate_paths(state: dict[str, Any]) -> list[CandidatePath]:
             status = branch.path_assessment
         elif branch.status == "completed" and branch_fragments:
             status = "confirmed"
-        summary = branch.path_assessment_note or branch.human_summary or branch.hypothesis
+        summary_bits = [branch.path_assessment_note or branch.human_summary or branch.hypothesis]
+        if branch_step_lines:
+            summary_bits.append(branch_step_lines[0])
+        if branch_flow_lines:
+            summary_bits.append(branch_flow_lines[0])
+        summary = " ".join(bit.strip().rstrip(".") + "." for bit in summary_bits if bit and bit.strip())
         unresolved_hops = _dedupe_preserve_order(
             [item for family_branch in family_branches for item in (family_branch.remaining_frontier + family_branch.open_questions)]
         )[:6]
@@ -4348,7 +6607,7 @@ def _derive_candidate_paths(state: dict[str, Any]) -> list[CandidatePath]:
                 summary=summary,
                 startNode=start_node,
                 endNode=end_node,
-                viaNodes=via_nodes,
+                viaNodes=via_nodes or context_lines[:6],
                 supportingBranchIds=family_branch_ids[:8],
                 supportingFragmentIds=[fragment.fragment_id for fragment in branch_fragments[:6]],
                 evidenceStatus=evidence_status,  # type: ignore[arg-type]
@@ -4356,6 +6615,13 @@ def _derive_candidate_paths(state: dict[str, Any]) -> list[CandidatePath]:
                 unresolvedHops=unresolved_hops,
             )
         )
+    seen_signatures = {_candidate_path_signature(item) for item in candidates}
+    for extra in _reachability_candidate_paths(state):
+        sig = _candidate_path_signature(extra)
+        if sig in seen_signatures:
+            continue
+        seen_signatures.add(sig)
+        candidates.append(extra)
     candidates.sort(
         key=lambda item: (
             {"confirmed": 0, "best_supported_indirect": 1, "still_open": 2, "rejected": 3}.get(item.status, 9),
@@ -4502,7 +6768,7 @@ def _derive_hypotheses(state: dict[str, Any]) -> list[HypothesisState]:
 
 def _role_coverage_preview(state: dict[str, Any]) -> dict[str, list[str]]:
     """Sample 3 edges per role for the supervisor, so every role is visible."""
-    obs_raw = state.get(STATE_WORKING_GRAPH) or []
+    observations = observation_projection(_load_operational_graph_state(state))
     supply_contract = ROLE_CONTRACTS.get(ROLE_SUPPLY_CHAIN)
     governance_contract = ROLE_CONTRACTS.get(ROLE_GOVERNANCE)
     policy_contract = ROLE_CONTRACTS.get(ROLE_POLICY)
@@ -4512,14 +6778,12 @@ def _role_coverage_preview(state: dict[str, Any]) -> dict[str, list[str]]:
     policy_rels = set(policy_contract.allowed_edge_types) if policy_contract else set()
 
     buckets: dict[str, list[str]] = {"supply_chain": [], "governance": [], "policy": [], "other": []}
-    for raw in obs_raw:
-        o = raw if isinstance(raw, dict) else {}
-        rel = o.get("relation", "")
-        subj = o.get("subject", "")
-        obj = o.get("object", "")
-        conf = o.get("confidence", 0.0)
-        st = o.get("supportType", "")
-        edge_str = f"{subj} --{rel}--> {obj} [{st} {conf}]"
+    for observation in observations:
+        rel = observation.relation
+        edge_str = (
+            f"{observation.subject} --{rel}--> {observation.object} "
+            f"[{observation.support_type} {observation.confidence}]"
+        )
         if rel in supply_rels:
             buckets["supply_chain"].append(edge_str)
         elif rel in governance_rels:
@@ -4641,16 +6905,22 @@ def _relevant_graph_context(
     branch_question: str,
     limit: int = 6,
 ) -> list[str]:
-    observations = [GraphObservation.model_validate(item) for item in (state.get(STATE_WORKING_GRAPH) or [])]
+    graph_state = _load_operational_graph_state(state)
     tokens = {
         token.lower()
         for token in _TOKEN_RE.findall(" ".join(target_entities + [branch_question]))
         if token
     }
-    if not observations:
+    if not any(graph_counts(graph_state).values()):
         return []
     scored: list[tuple[int, str]] = []
-    for observation in observations:
+    for line in graph_context_lines(graph_state, limit=48):
+        haystack = line.lower()
+        score = sum(1 for token in tokens if token in haystack)
+        if score <= 0:
+            continue
+        scored.append((score, line))
+    for observation in observation_projection(graph_state):
         haystack = " ".join(
             [
                 observation.subject,
@@ -4667,7 +6937,7 @@ def _relevant_graph_context(
             continue
         scored.append((score, f"{observation.subject} --{observation.relation}--> {observation.object}"))
     scored.sort(key=lambda item: (-item[0], item[1]))
-    return [item[1] for item in scored[:limit]]
+    return _dedupe_preserve_order([item[1] for item in scored])[:limit]
 
 
 def _contextual_query_text(
@@ -4747,17 +7017,18 @@ def _tool_prompt(
         "The JSON must match ToolActionResult exactly.\n"
         "There is one graph protocol only: the same ToolActionResult -> GraphFragment format is used for the first skeleton, later enrichment, and graph mutation.\n"
         "Do not invent a special answer shape for overview questions. Even the first whole-picture answer must be ordinary graphFragments that the runtime will later append to or replace under the same rules.\n"
-        "Every factual answer must be carried by graphFragments -> observations.\n"
+        "Every factual answer must be carried by graphFragments. For supply-chain work, prefer entityNodes + flowLegs + processSteps + overlayEdges; observations are only a derived compatibility projection.\n"
         "Every useful non-graph answer must also be carried by learnedFindings. Negative answers, procurement-model findings, and stable contextual knowledge are still reusable results.\n"
-        "A broad question may require multiple graph fragments and a long typed observation array; do not collapse it into one entity-relation-entity pair.\n"
-        "Every observation must be typed as subjectType --relation--> objectType using only relations allowed by the supplied role contracts.\n"
+        "A broad question may require multiple graph fragments and a long operational payload; do not collapse it into one entity-relation-entity pair.\n"
+        "Every overlay edge must be typed as subjectType --relation--> objectType using only relations allowed by the supplied role contracts.\n"
         "The action belongs to a candidate path class (`pathKind`). You must return `pathAssessment` saying whether that path is confirmed, rejected, still open, or currently best-supported as an indirect route.\n"
         "Preserve useful but uncertain nodes and edges by lowering confidence or using supportType=hypothesis instead of deleting them.\n"
-        "Do not confuse operational supply-chain flow with contractual procurement. Procurement model, sourcing strategy, offtake, localization, recycling strategy, or vertical integration without a concrete facility-to-facility or product-stage edge belongs in learnedFindings and frontier, not in fake SUPPLIES_TO or TRANSFORMS_INTO edges.\n"
+        "Do not confuse operational supply-chain flow with contractual procurement. Procurement model, sourcing strategy, offtake, localization, recycling strategy, or vertical integration without a concrete flowLeg or processStep belongs in learnedFindings and frontier, not in fake operational structure.\n"
         "Do not spend a web-grounded turn on stable background facts that a competent model already knows, such as well-established jurisdiction-wide regulatory frameworks, unless the action explicitly asks for current changes, enforcement, or company-specific response.\n"
         "Use the action's closureTarget, knownContext, and frontier to understand what the system already knows and what exact graph closure is being attempted.\n"
-        "The working graph is mutable shared memory. If you return `patchMode=replace_node` or `replace_fragment`, the runtime will apply that patch before later reasoning steps. Treat replacement as a real graph mutation, not as commentary.\n"
+        "The working graph is mutable shared memory. If you return `patchMode=replace_entity` or `replace_fragment`, the runtime will apply that patch before later reasoning steps. Treat replacement as a real graph mutation, not as commentary.\n"
         "When replacing a broad node or old fragment, make the new fragment structurally able to occupy that old slot in the graph. Later agents will reason from the replacement graph now stored in shared memory.\n"
+        "Do not return a replacement that collapses a longer chain into a short terminal segment. If the replaced slot sits in the middle of an operational route, preserve both upstream and downstream interfaces in the new fragment.\n"
         "Interpret broad request styles explicitly.\n"
         "- If the question asks for a full path or whole picture, return a connected multi-hop graph fragment, not disconnected facts.\n"
         "- If the question asks for alternatives, return separate fragments or fragment families for materially different routes and use alternativeGroupId when relevant.\n"
@@ -4773,6 +7044,8 @@ def _tool_prompt(
         + CONFIDENCE_CALIBRATION
         + "\n"
         + EDGE_DIRECTION_RULES
+        + "\n"
+        + OPERATIONAL_PRIMITIVES_CONTRACT
         + "\n"
         + GRAPH_OBSERVATION_CONTRACT
         + "\n"
@@ -4793,47 +7066,120 @@ def _tool_prompt(
 
 
 def _memory_question_to_graph(action: ToolAction, tool_context) -> ToolActionResult:
-    graph = [GraphObservation.model_validate(item) for item in (tool_context.state.get(STATE_WORKING_GRAPH) or [])]
-    if not graph:
+    graph_state = _load_operational_graph_state(tool_context.state)
+    if not any(graph_counts(graph_state).values()):
         return _tool_failure_result(
             action,
             "blocked",
             "Shared graph memory does not yet contain typed observations relevant to this question.",
             missing_inputs=["working_graph"],
         )
-    query_tokens = {token.lower() for token in _TOKEN_RE.findall(action.query_text)}
+    node_map = _graph_node_map(graph_state)
+    query_tokens = {token.lower() for token in _TOKEN_RE.findall(action.query_text or "")}
     target_tokens = {token.lower() for token in _TOKEN_RE.findall(" ".join(action.target_entities))}
-    matched: list[GraphObservation] = []
-    for observation in graph:
-        haystack = " ".join(
+    all_tokens = query_tokens | target_tokens
+
+    def _score(parts: list[str]) -> int:
+        haystack = " ".join(part for part in parts if part).lower()
+        if not haystack:
+            return 0
+        if not all_tokens:
+            return 1
+        return sum(1 for token in all_tokens if token in haystack)
+
+    matched_legs: list[FlowLeg] = []
+    matched_steps: list[ProcessStep] = []
+    matched_overlays: list[GraphObservation] = []
+    matched_node_ids: set[str] = set()
+    required_node_ids: set[str] = set()
+
+    for node in graph_state.entity_nodes:
+        score = _score([node.label, node.entity_type, node.canonical_ref, " ".join(node.qualifiers), node.support_note])
+        if score > 0 and node.node_id:
+            matched_node_ids.add(node.node_id)
+
+    for leg in graph_state.flow_legs:
+        score = _score(
             [
-                observation.subject,
-                observation.subject_type,
-                observation.relation,
-                observation.object,
-                observation.object_type,
-                " ".join(observation.qualifiers),
-                observation.support_note,
+                _graph_node_label(node_map, leg.supplier_node_id),
+                _graph_node_label(node_map, leg.customer_node_id),
+                _graph_node_label(node_map, leg.product_node_id),
+                " ".join(_graph_node_label(node_map, node_id) for node_id in leg.route_node_ids),
+                " ".join(leg.qualifiers),
+                leg.support_note,
             ]
-        ).lower()
-        if query_tokens and not any(token in haystack for token in query_tokens | target_tokens):
+        )
+        if score <= 0:
             continue
-        matched.append(observation)
-    if not matched:
+        matched_legs.append(leg)
+        required_node_ids.update([leg.supplier_node_id, leg.customer_node_id, leg.product_node_id, *leg.route_node_ids])
+
+    for step in graph_state.process_steps:
+        score = _score(
+            [
+                _graph_node_label(node_map, step.host_node_id),
+                step.process_kind,
+                " ".join(_graph_node_label(node_map, node_id) for node_id in step.input_node_ids),
+                " ".join(_graph_node_label(node_map, node_id) for node_id in step.output_node_ids),
+                " ".join(step.qualifiers),
+                step.support_note,
+            ]
+        )
+        if score <= 0:
+            continue
+        matched_steps.append(step)
+        required_node_ids.update([step.host_node_id, *step.input_node_ids, *step.output_node_ids])
+
+    for edge in graph_state.overlay_edges:
+        score = _score(
+            [
+                edge.subject,
+                edge.subject_type,
+                edge.relation,
+                edge.object,
+                edge.object_type,
+                " ".join(edge.qualifiers),
+                edge.support_note,
+            ]
+        )
+        if score <= 0:
+            continue
+        matched_overlays.append(edge)
+        if edge.subject_id:
+            required_node_ids.add(edge.subject_id)
+        if edge.object_id:
+            required_node_ids.add(edge.object_id)
+
+    required_node_ids |= matched_node_ids
+    if not any((matched_legs, matched_steps, matched_overlays)):
         return _tool_failure_result(
             action,
             "blocked",
             "Shared graph memory does not answer this question yet.",
             missing_inputs=["relevant_graph_fragment"],
         )
+    entity_nodes = [
+        node.model_copy(update={"branch_id": node.branch_id or action.branch_id})
+        for node in graph_state.entity_nodes
+        if node.node_id in required_node_ids
+    ][:24]
     fragment = GraphFragment(
         fragmentId=f"{action.branch_id}-memory",
         fragmentType=action.expected_fragment_type,  # type: ignore[arg-type]
         title=f"Memory answer for {action.branch_id}",
         humanQuestion=action.human_question,
-        humanSummary=f"Recovered {len(matched[:10])} relevant typed observations from shared memory.",
+        humanSummary=(
+            f"Recovered {len(matched_legs[:8])} flow leg(s), {len(matched_steps[:8])} process step(s), "
+            f"and {len(matched_overlays[:8])} overlay edge(s) from shared memory."
+        ),
         branchId=action.branch_id,
-        observations=[item.model_copy(update={"branch_id": action.branch_id}) for item in matched[:10]],
+        entityNodes=entity_nodes,
+        flowLegs=[item.model_copy(update={"branch_id": item.branch_id or action.branch_id}) for item in matched_legs[:8]],
+        processSteps=[item.model_copy(update={"branch_id": item.branch_id or action.branch_id}) for item in matched_steps[:8]],
+        overlayEdges=[
+            item.model_copy(update={"branch_id": item.branch_id or action.branch_id})
+            for item in matched_overlays[:8]
+        ],
         completeness="partial",
         qualityScore=0.4,
     )
@@ -5000,16 +7346,25 @@ def _run_question_to_graph_llm(
             support_label,
         )
 
-    json_retry_suffix = (
-        "\n\nYour previous structured JSON failed validation or was truncated. "
-        "Return ONLY valid JSON matching ToolActionResult. "
-        "Use at most 2 graphFragments and at most 12 observations in total across all fragments. "
-        "Keep strings short; escape double quotes inside JSON strings."
-    )
-
     try:
         result = _parse_structured(response)
     except Exception as first_exc:
+        first_exc_text = str(first_exc)
+        json_retry_suffix = (
+            "\n\nYour previous structured JSON failed validation or was truncated. "
+            "Return ONLY valid JSON matching ToolActionResult. "
+            "Use at most 2 graphFragments and at most 12 observations in total across all fragments. "
+            "Keep strings short; escape double quotes inside JSON strings."
+        )
+        if "outputNodeId" in first_exc_text or "outputNodeIds" in first_exc_text:
+            json_retry_suffix += (
+                " Every processStep MUST include at least one outputNodeIds value. "
+                "If you cannot name the output product, drop that processStep and move the clue into learnedFindings or remainingFrontier."
+            )
+        if "supplierNodeId" in first_exc_text or "customerNodeId" in first_exc_text:
+            json_retry_suffix += (
+                " Every flowLeg MUST include supplierNodeId, customerNodeId, and productNodeId, and the leg endpoints must be facilities or organizations."
+            )
         try:
             response2 = _generate_with_retry(
                 model=structured_model,
@@ -5215,6 +7570,7 @@ def _update_branch_state(
     action: ToolAction,
     result: ToolActionResult,
     *,
+    graph_fragments_override: list[GraphFragment] | None = None,
     turn: HypothesisTurn | None = None,
     explicit_status: Literal["active", "needs_followup", "blocked", "completed"] | None = None,
     explicit_stop_reason: str | None = None,
@@ -5248,6 +7604,11 @@ def _update_branch_state(
     ]
     unresolved_questions = [item for item in unresolved_questions if item not in resolved_frontier]
     path_assessment, path_assessment_note = _branch_path_assessment(plan, result)
+    branch_fragments = (
+        list(graph_fragments_override)
+        if graph_fragments_override is not None
+        else ((previous.graph_fragments if previous else []) + result.graph_fragments)
+    )
     known_context = _dedupe_preserve_order(
         list(plan.known_context)
         + list(previous.known_context if previous else [])
@@ -5306,7 +7667,7 @@ def _update_branch_state(
         openQuestions=unresolved_questions,
         toolActions=((previous.tool_actions if previous else []) + [action]),
         toolResults=((previous.tool_results if previous else []) + [result]),
-        graphFragments=((previous.graph_fragments if previous else []) + result.graph_fragments),
+        graphFragments=branch_fragments,
         learnedFindings=((previous.learned_findings if previous else []) + result.learned_findings),
         hypothesisTurns=((previous.hypothesis_turns if previous else []) + ([turn] if turn is not None else [])),
     )
@@ -5360,7 +7721,8 @@ class DeterministicComposerAgent(BaseAgent):
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         request = AgentLoomRequest.model_validate(ctx.session.state.get(STATE_REQUEST) or {})
         selected_roles = list(ctx.session.state.get(STATE_SELECTED_ROLES) or [])
-        working_graph = [GraphObservation.model_validate(item) for item in (ctx.session.state.get(STATE_WORKING_GRAPH) or [])]
+        working_graph = _load_operational_graph_state(ctx.session.state)
+        working_counts = graph_counts(working_graph)
         graph_fragments = [GraphFragment.model_validate(item) for item in (ctx.session.state.get(STATE_GRAPH_FRAGMENTS) or [])]
         branches = [BranchState.model_validate(item) for item in (ctx.session.state.get(STATE_BRANCH_STATES) or [])]
         hypotheses = [HypothesisState.model_validate(item) for item in (ctx.session.state.get(STATE_HYPOTHESES) or [])]
@@ -5514,7 +7876,10 @@ class DeterministicComposerAgent(BaseAgent):
             basis={
                 "question": request.question,
                 "selectedRoles": selected_roles,
-                "graphObservationCount": len(working_graph),
+                "graphObservationCount": working_counts["graphObservationCount"],
+                "entityNodeCount": working_counts["entityNodeCount"],
+                "flowLegCount": working_counts["flowLegCount"],
+                "processStepCount": working_counts["processStepCount"],
                 "graphFragmentCount": len(graph_fragments),
                 "branchCount": len(branches),
                 "logicTraceCount": len(logic_trace),
@@ -5653,7 +8018,7 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
             return
         role_contract = _role_contract(self._specialization_role)
         role_contracts = [role_contract.model_dump(mode="json", by_alias=True)]
-        initial_pass = not bool(ctx.session.state.get(STATE_WORKING_GRAPH))
+        initial_pass = _working_graph_counts(ctx.session.state)["graphObservationCount"] == 0
         yield _runtime_log_event(
             ctx.session.state,
             actor=self.name,
@@ -5664,7 +8029,7 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
                 "mission": mission,
                 "selectedRoles": selected_roles,
                 "initialPass": initial_pass,
-                "graphObservationCount": len(ctx.session.state.get(STATE_WORKING_GRAPH) or []),
+                "graphObservationCount": _working_graph_counts(ctx.session.state)["graphObservationCount"],
                 "openGapCount": _open_gap_count(ctx.session.state),
             },
         )
@@ -5703,6 +8068,16 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
         async for event in self._run_named_subagent(ctx, self._planner_name):
             yield event
         plan = InvestigatorPlan.model_validate(ctx.session.state.get(STATE_INVESTIGATOR_PLAN) or {})
+        plan = _normalize_investigator_plan(
+            ctx.session.state,
+            mission,
+            self._specialization_role,
+            plan,
+            initial_pass=initial_pass,
+            user_question=AgentLoomRequest.model_validate(ctx.session.state.get(STATE_REQUEST) or {}).question,
+            corpus_document_count=investigator_context["corpusIndex"]["documentCount"],
+        )
+        ctx.session.state[STATE_INVESTIGATOR_PLAN] = plan.model_dump(mode="json", by_alias=True)
         yield _runtime_log_event(
             ctx.session.state,
             actor=self._planner_name,
@@ -5882,7 +8257,7 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
                 + synthesis_note
             ),
             activeRoles=mission.assigned_roles or selected_roles,
-            graphDelta=graph_delta[:18],
+            graphDelta=graph_delta,
             answeredQuestions=answered_questions[:6],
             gaps=gaps[:8],
             nextQuestions=next_questions,
@@ -6077,6 +8452,15 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
                 _apply_event_state_delta_to_session(ctx, event)
                 await runtime_queue.put(event)
             decision = HypothesisTurnDecision.model_validate(ctx.session.state.get(STATE_HYPOTHESIS_TURN_DECISION) or {})
+            decision = _normalize_hypothesis_turn_decision(
+                ctx.session.state,
+                branch_plan,
+                branch_state,
+                local_state,
+                latest_result,
+                decision,
+            )
+            ctx.session.state[STATE_HYPOTHESIS_TURN_DECISION] = decision.model_dump(mode="json", by_alias=True)
             await self._emit_runtime_log(
                 ctx,
                 runtime_queue,
@@ -6177,8 +8561,15 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
                 _record_learned_findings(local_state, tool_result.learned_findings)
             if tool_result.graph_fragments:
                 _apply_graph_fragment_mutations(local_state, tool_result.graph_fragments)
+            local_branch_fragments = _branch_graph_fragments_from_state(local_state, branch_plan.branch_id)
 
-            provisional_state = _update_branch_state(state, branch_plan, action, tool_result)
+            provisional_state = _update_branch_state(
+                state,
+                branch_plan,
+                action,
+                tool_result,
+                graph_fragments_override=local_branch_fragments,
+            )
             decision = await self._run_hypothesis_turn_reasoner(
                 ctx,
                 runtime_queue,
@@ -6201,6 +8592,7 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
                     branch_plan,
                     action,
                     tool_result,
+                    graph_fragments_override=local_branch_fragments,
                     turn=turn,
                     explicit_status="needs_followup",
                     explicit_stop_reason=decision.decision_note,
@@ -6226,6 +8618,7 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
                     branch_plan,
                     action,
                     tool_result,
+                    graph_fragments_override=local_branch_fragments,
                     turn=turn,
                     explicit_status="needs_followup",
                     explicit_stop_reason=decision.decision_note,
@@ -6240,6 +8633,7 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
                         branch_plan,
                         action,
                         tool_result,
+                        graph_fragments_override=local_branch_fragments,
                         turn=turn,
                         explicit_status="needs_followup",
                         explicit_stop_reason=(
@@ -6253,6 +8647,7 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
                     branch_plan,
                     action,
                     tool_result,
+                    graph_fragments_override=local_branch_fragments,
                     turn=turn,
                     explicit_status="completed",
                     explicit_stop_reason=decision.decision_note,
@@ -6265,6 +8660,7 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
                     branch_plan,
                     action,
                     tool_result,
+                    graph_fragments_override=local_branch_fragments,
                     turn=turn,
                     explicit_status="completed",
                     explicit_stop_reason=decision.decision_note,
@@ -6276,16 +8672,17 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
                 )
                 break
 
-            state = _update_branch_state(
-                state,
-                branch_plan,
-                action,
-                tool_result,
-                turn=turn,
-                explicit_status="needs_followup",
-                explicit_stop_reason=decision.decision_note or "Branch exhausted its current useful improvement window without closing the frontier.",
-            )
-            break
+                state = _update_branch_state(
+                    state,
+                    branch_plan,
+                    action,
+                    tool_result,
+                    graph_fragments_override=local_branch_fragments,
+                    turn=turn,
+                    explicit_status="needs_followup",
+                    explicit_stop_reason=decision.decision_note or "Branch exhausted its current useful improvement window without closing the frontier.",
+                )
+                break
         if state is None:
             state = BranchState(
                 branchId=branch_plan.branch_id,
@@ -6362,7 +8759,7 @@ class GapBridgeAgent(BaseAgent):
                 "mission": mission,
                 "selectedRoles": selected_roles,
                 "openGapCount": _open_gap_count(ctx.session.state),
-                "graphObservationCount": len(ctx.session.state.get(STATE_WORKING_GRAPH) or []),
+                "graphObservationCount": _working_graph_counts(ctx.session.state)["graphObservationCount"],
             },
         )
         gap_bridge_context = {
@@ -6449,7 +8846,7 @@ class CriticAgent(BaseAgent):
                 "mission": mission,
                 "selectedRoles": selected_roles,
                 "openGapCount": _open_gap_count(ctx.session.state),
-                "graphObservationCount": len(ctx.session.state.get(STATE_WORKING_GRAPH) or []),
+                "graphObservationCount": _working_graph_counts(ctx.session.state)["graphObservationCount"],
             },
         )
         critic_context = {
@@ -6536,7 +8933,7 @@ class SupervisorAgent(BaseAgent):
                         STATE_ROLE_CONTRACTS: _all_role_contract_payload(),
                         STATE_TOOL_CONTRACTS: [item.model_dump(mode="json", by_alias=True) for item in TOOL_CONTRACTS],
                         STATE_AGENT_CONTRACTS: [item.model_dump(mode="json", by_alias=True) for item in AGENT_CONTRACTS],
-                        STATE_WORKING_GRAPH: [],
+                        STATE_WORKING_GRAPH: {},
                         STATE_GRAPH_FRAGMENTS: [],
                         STATE_BRANCH_STATES: [],
                         STATE_HYPOTHESES: [],
@@ -7054,40 +9451,8 @@ class SupervisorAgent(BaseAgent):
     def _merge_agent_result(self, ctx: InvocationContext, result: AgentResult) -> None:
         ctx.session.state[STATE_RETRIEVAL_CACHE] = {}
         previous_progress = _investigation_progress_snapshot(ctx.session.state)
-        keyed: list[tuple[tuple[str, str, str, tuple[str, ...]], GraphObservation]] = []
-        for item in [GraphObservation.model_validate(x) for x in (ctx.session.state.get(STATE_WORKING_GRAPH) or [])]:
-            k = (item.subject, item.relation, item.object, tuple(item.qualifiers))
-            keyed.append((k, item))
-        merge_gaps: list[str] = []
-        for observation in result.graph_delta:
-            k = (observation.subject, observation.relation, observation.object, tuple(observation.qualifiers))
-            replaced = False
-            for i, (kk, ob) in enumerate(keyed):
-                if kk == k:
-                    merged_obs, gap_note = _merge_observation(ob, observation)
-                    keyed[i] = (k, merged_obs)
-                    if gap_note:
-                        merge_gaps.append(gap_note)
-                    replaced = True
-                    break
-            if not replaced:
-                keyed.append((k, observation))
-        current_graph = [pair[1] for pair in keyed]
-        if len(current_graph) > MAX_WORKING_GRAPH_OBSERVATIONS:
-            current_graph = current_graph[:MAX_WORKING_GRAPH_OBSERVATIONS]
-            tool_context_pre = _StateToolContext(ctx.session.state)
-            record_failure(
-                "blocked_by_capability",
-                f"Working graph capped at {MAX_WORKING_GRAPH_OBSERVATIONS} observations; older nodes dropped.",
-                True,
-                tool_context_pre,
-                missing_inputs=["graph_size_limit"],
-            )
-
         cycle = int(ctx.session.state.get(STATE_SUPERVISOR_CYCLE, 0) or 0)
         tool_context = _StateToolContext(ctx.session.state)
-        if merge_gaps:
-            record_open_gaps(merge_gaps, tool_context, origin="runtime_merge", cycle=cycle)
         if result.gaps:
             record_open_gaps(result.gaps, tool_context, origin=result.agent_name, cycle=cycle)
         if result.answered_questions:
@@ -7108,7 +9473,6 @@ class SupervisorAgent(BaseAgent):
         history = list(ctx.session.state.get(STATE_AGENT_RESULT_HISTORY) or [])
         history.append(result.model_dump(mode="json", by_alias=True))
 
-        ctx.session.state[STATE_WORKING_GRAPH] = [item.model_dump(mode="json", by_alias=True) for item in current_graph]
         ctx.session.state[STATE_ANSWERED_QUESTIONS] = answered
         ctx.session.state[STATE_FAILURES] = [item.model_dump(mode="json", by_alias=True) for item in failures]
         ctx.session.state[STATE_LAST_AGENT_RESULT] = result.model_dump(mode="json", by_alias=True)
@@ -7161,7 +9525,9 @@ class SupervisorAgent(BaseAgent):
             return t[: max(0, limit - 1)] + "…"
 
         request = AgentLoomRequest.model_validate(ctx.session.state.get(STATE_REQUEST) or {})
-        graph = [GraphObservation.model_validate(item) for item in (ctx.session.state.get(STATE_WORKING_GRAPH) or [])]
+        graph_state = _load_operational_graph_state(ctx.session.state)
+        graph = observation_projection(graph_state)
+        graph_count_snapshot = graph_counts(graph_state)
         fragments = [GraphFragment.model_validate(item) for item in (ctx.session.state.get(STATE_GRAPH_FRAGMENTS) or [])]
         branches = [BranchState.model_validate(item) for item in (ctx.session.state.get(STATE_BRANCH_STATES) or [])]
         failures = [FailureRecord.model_validate(item) for item in (ctx.session.state.get(STATE_FAILURES) or [])]
@@ -7211,7 +9577,10 @@ class SupervisorAgent(BaseAgent):
             "question": request.question,
             "selectedRoles": selected_roles,
             "defaultEpistemicMode": "mixed",
-            "graphObservationCount": len(graph),
+            "graphObservationCount": graph_count_snapshot["graphObservationCount"],
+            "entityNodeCount": graph_count_snapshot["entityNodeCount"],
+            "flowLegCount": graph_count_snapshot["flowLegCount"],
+            "processStepCount": graph_count_snapshot["processStepCount"],
             "graphFragmentCount": len(fragments),
             "branchCount": len(branches),
             "openGaps": [
@@ -7249,6 +9618,7 @@ class SupervisorAgent(BaseAgent):
         if cycle <= 1:
             snapshot["selectedRoleContracts"] = _selected_role_contract_payload(selected_roles)
             snapshot["graphPreview"] = [item.model_dump(mode="json", by_alias=True) for item in graph[-10:]]
+            snapshot["operationalGraph"] = graph_state.model_dump(mode="json", by_alias=True)
             snapshot["graphFragments"] = [item.model_dump(mode="json", by_alias=True) for item in fragments[-6:]]
             snapshot["branches"] = [item.model_dump(mode="json", by_alias=True) for item in branches[-4:]]
             snapshot["failures"] = [item.model_dump(mode="json", by_alias=True) for item in failures[-5:]]
@@ -7263,25 +9633,29 @@ class SupervisorAgent(BaseAgent):
                 for b in branches[-4:]
             ]
         # Reachability must be visible early (small graphs too); supervisors were choosing governance without seeing chain counts.
-        if cycle >= 2 and len(graph) >= 1:
-            snapshot["placeholderNodes"] = _placeholder_nodes_from_graph(graph)
-            snapshot["placeholderResolutionHints"] = _placeholder_resolution_hints(graph)
+        if cycle >= 2 and graph_count_snapshot["graphObservationCount"] >= 1:
+            snapshot["placeholderNodes"] = _placeholder_nodes_from_graph(graph_state)
+            snapshot["placeholderResolutionHints"] = _placeholder_resolution_hints(graph_state)
+            snapshot["commercialBridgeCandidates"] = _commercial_bridge_candidates(graph_state, state=ctx.session.state)[:4]
+            snapshot["processGapCandidates"] = _host_local_process_gap_candidates(graph_state)[:4]
             full_reach = _graph_reachability_report(ctx.session.state)
-            # Counts must match healthSummary / internalBrief: lists are truncated to [:4] in the report dict.
-            def _int_or_len(key: str, lst_key: str) -> int:
-                raw = full_reach.get(key)
-                if raw is not None:
-                    try:
-                        return int(raw)
-                    except (TypeError, ValueError):
-                        pass
-                return len(full_reach.get(lst_key) or [])
-
             snapshot["reachability"] = {
                 "healthSummary": full_reach["healthSummary"],
-                "completeChainCount": _int_or_len("groundedCompleteChainCount", "groundedCompleteChains"),
-                "structuralChainCount": _int_or_len("structuralCompleteChainCount", "structurallyCompleteChains"),
-                "partialChainCount": _int_or_len("partialChainCount", "partialChains"),
+                "completeChainCount": _int_or_len_report(full_reach, "groundedCompleteChainCount", "groundedCompleteChains"),
+                "structuralChainCount": _int_or_len_report(full_reach, "structuralCompleteChainCount", "structurallyCompleteChains"),
+                "requestedCorridorCompleteChainCount": _int_or_len_report(
+                    full_reach,
+                    "groundedRequestedCorridorChainCount",
+                    "groundedRequestedCorridorChains",
+                ),
+                "requestedCorridorStructuralChainCount": _int_or_len_report(
+                    full_reach,
+                    "structuralRequestedCorridorChainCount",
+                    "structuralRequestedCorridorChains",
+                ),
+                "partialChainCount": _int_or_len_report(full_reach, "partialChainCount", "partialChains"),
+                "maxOperationalRouteHops": int(full_reach.get("maxOperationalRouteHops") or _max_route_hops_from_report(full_reach)),
+                "requestedCorridor": full_reach.get("requestedCorridor") or {},
                 "completeChainEndpoints": [
                     f"{c['source']} → {c['sink']} ({c['hops']} hops)"
                     for c in (full_reach.get("groundedCompleteChains") or [])[:3]
@@ -7363,11 +9737,6 @@ def _normalize_agent_result(
     answered_questions = list(result.answered_questions)
     next_questions = list(result.next_questions)
     handoff_recommendations = list(result.handoff_recommendations)
-    if len(valid_graph) > MAX_GRAPH_DELTA_OBSERVATIONS:
-        trunc = True
-        extra = len(valid_graph) - MAX_GRAPH_DELTA_OBSERVATIONS
-        trunc_detail = (trunc_detail + "; " if trunc_detail else "") + f"capped to {MAX_GRAPH_DELTA_OBSERVATIONS} observations ({extra} dropped)"
-        valid_graph = valid_graph[:MAX_GRAPH_DELTA_OBSERVATIONS]
     if len(result.answered_questions) > MAX_ANSWERED_QUESTIONS or len(result.gaps) > MAX_GAPS or len(result.next_questions) > MAX_NEXT_QUESTIONS:
         trunc = True
         trunc_detail = (trunc_detail + "; " if trunc_detail else "") + "list fields capped (answeredQuestions/gaps/nextQuestions)"
@@ -7583,6 +9952,44 @@ def _last_flow_grounding_gain_from_trace(state: dict[str, Any], n: int = 2) -> b
     return False
 
 
+def _reachability_complete_counts(report: dict[str, Any]) -> tuple[int, int]:
+    grounded = _int_or_len_report(report, "groundedCompleteChainCount", "groundedCompleteChains")
+    structural = _int_or_len_report(report, "structuralCompleteChainCount", "structurallyCompleteChains")
+    return grounded, structural
+
+
+def _force_supply_chain_investigation_decision(
+    decision: SupervisorDecision,
+    *,
+    cycle: int,
+    objective: str,
+    rationale_line: str,
+) -> SupervisorDecision:
+    updated = decision.model_copy(
+        update={
+            "next_agent": "supply_chain_investigator_agent",
+            "rationale": list(decision.rationale) + [rationale_line],
+        }
+    )
+    mission_payload = (
+        decision.mission.model_dump(mode="json", by_alias=True)
+        if decision.mission is not None
+        else {
+            "missionId": f"runtime-supply-chain-{cycle}",
+            "objective": objective,
+            "assignedRoles": [ROLE_SUPPLY_CHAIN],
+            "groundingMode": "mixed",
+            "focus": [],
+            "successCriteria": [],
+        }
+    )
+    mission_payload["assignedRoles"] = [ROLE_SUPPLY_CHAIN]
+    mission_payload["missionId"] = mission_payload.get("missionId") or f"runtime-supply-chain-{cycle}"
+    mission_payload["objective"] = objective
+    mission_payload["groundingMode"] = "mixed"
+    return updated.model_copy(update={"mission": InvestigationMission.model_validate(mission_payload)})
+
+
 def _delegate_constraints(
     state: dict[str, Any],
     decision: SupervisorDecision,
@@ -7594,11 +10001,25 @@ def _delegate_constraints(
     if decision.next_agent in {"compose", "stop"}:
         return decision, None
     reach = _graph_reachability_report(state)
-    complete = int(reach.get("groundedCompleteChainCount") or 0)
-    if not complete:
-        complete = len(reach.get("groundedCompleteChains") or [])
+    complete, structural_complete = _reachability_complete_counts(reach)
+    has_business_complete_chain = (complete + structural_complete) > 0
     stagnation = int(state.get(STATE_GLOBAL_STAGNATION, 0) or 0)
     next_a = decision.next_agent
+    hard_budget = _supervisor_budget_pressure(cycle, MAX_SUPERVISOR_CYCLES) == "hard"
+    allow_critic_without_business_chain = hard_budget and cycle >= MAX_SUPERVISOR_CYCLES
+    if next_a == "critic_agent" and not has_business_complete_chain and not allow_critic_without_business_chain:
+        nd = _force_supply_chain_investigation_decision(
+            decision,
+            cycle=cycle,
+            objective=(
+                "Do not exit yet. Build at least one business-complete operational chain with a real upstream source, "
+                "midstream process step, and concrete downstream sink. Prioritize the break point named by reachability."
+            ),
+            rationale_line=(
+                "runtime_delegate_constraint: critic deferred because the graph still lacks a business-complete operational chain."
+            ),
+        )
+        return nd, PolicyCorrection(kind="delegate_constraint", detail="critic_deferred_until_business_complete_chain")
     if next_a in ("governance_and_control_investigator_agent", "policy_impact_investigator_agent") and complete == 0:
         last_two = _last_delegate_agent_names_from_trace(state, 2)
         exception_allowed = (
@@ -7608,27 +10029,18 @@ def _delegate_constraints(
             and not _last_flow_grounding_gain_from_trace(state, 2)
         )
         if not exception_allowed:
-            nd = decision.model_copy(
-                update={
-                    "next_agent": "supply_chain_investigator_agent",
-                    "rationale": list(decision.rationale)
-                    + [
-                        "runtime_delegate_constraint: no grounded complete chain; governance/policy deferred until "
-                        "flow backbone exists (see stagnation exception in code)."
-                    ],
-                }
-            )
-            mission = decision.mission
-            if mission is not None:
-                m = mission.model_dump(mode="json", by_alias=True)
-                m["assignedRoles"] = [ROLE_SUPPLY_CHAIN]
-                m["missionId"] = f"runtime-flow-first-{cycle}"
-                m["objective"] = (
+            nd = _force_supply_chain_investigation_decision(
+                decision,
+                cycle=cycle,
+                objective=(
                     "Establish at least one document- or mixed-grounded operational chain segment toward the "
                     "question; prioritize reachability break points before governance/policy overlays."
-                )
-                m["groundingMode"] = "mixed"
-                nd = nd.model_copy(update={"mission": InvestigationMission.model_validate(m)})
+                ),
+                rationale_line=(
+                    "runtime_delegate_constraint: no grounded complete chain; governance/policy deferred until "
+                    "flow backbone exists (see stagnation exception in code)."
+                ),
+            )
             detail = "flow_first_redirect_governance_policy_to_supply_chain"
             return nd, PolicyCorrection(kind="delegate_constraint", detail=detail)
     gap_streak = int(state.get(STATE_OPEN_GAP_STREAK, 0) or 0)
@@ -7637,6 +10049,19 @@ def _delegate_constraints(
         and next_a in SPECIALIZED_INVESTIGATOR_BY_ROLE.values()
         and next_a != "critic_agent"
     ):
+        if not has_business_complete_chain and not allow_critic_without_business_chain:
+            nd = _force_supply_chain_investigation_decision(
+                decision,
+                cycle=cycle,
+                objective=(
+                    "Open gaps are repeating. Instead of exiting, close one structural flow break so the graph reaches "
+                    "a business-complete chain with concrete source, midstream, and sink."
+                ),
+                rationale_line=(
+                    f"runtime_delegate_constraint: repeated gaps ({gap_streak}) but critic is blocked until a business-complete chain exists."
+                ),
+            )
+            return nd, PolicyCorrection(kind="delegate_constraint", detail="repeated_gap_redirect_to_supply_chain")
         nd = decision.model_copy(
             update={
                 "next_agent": "critic_agent",
@@ -7658,6 +10083,19 @@ def _delegate_constraints(
         nd = nd.model_copy(update={"mission": InvestigationMission.model_validate(m)})
         return nd, PolicyCorrection(kind="delegate_constraint", detail="repeated_open_gap_escalation")
     if stagnation >= STAGNATION_FORCE_CRITIC_CYCLES and next_a in SPECIALIZED_INVESTIGATOR_BY_ROLE.values():
+        if not has_business_complete_chain and not allow_critic_without_business_chain:
+            nd = _force_supply_chain_investigation_decision(
+                decision,
+                cycle=cycle,
+                objective=(
+                    "Material progress has stalled, but the graph still lacks any business-complete chain. "
+                    "Use the next pass to repair source-side, midstream, or sink-side structure instead of exiting."
+                ),
+                rationale_line=(
+                    f"runtime_delegate_constraint: global stagnation {stagnation} but critic is blocked until a business-complete chain exists."
+                ),
+            )
+            return nd, PolicyCorrection(kind="delegate_constraint", detail="stagnation_redirect_to_supply_chain")
         nd = decision.model_copy(
             update={
                 "next_agent": "critic_agent",
@@ -7745,7 +10183,10 @@ def _reasoning_dedup_hints(state: dict[str, Any]) -> dict[str, Any]:
 
 def _planner_memory_snapshot(state: dict[str, Any]) -> dict[str, Any]:
     shared = read_shared_memory(_StateToolContext(state))
-    graph = [GraphObservation.model_validate(item) for item in (state.get(STATE_WORKING_GRAPH) or [])]
+    graph_state = _load_operational_graph_state(state)
+    reachability = _graph_reachability_report_for_graph(graph_state, state=state)
+    commercial_bridge_candidates = _commercial_bridge_candidates(graph_state, state=state)
+    process_gap_candidates = _host_local_process_gap_candidates(graph_state)
     return {
         "question": shared["question"],
         "selectedRoles": shared["selectedRoles"],
@@ -7768,7 +10209,13 @@ def _planner_memory_snapshot(state: dict[str, Any]) -> dict[str, Any]:
         "hypothesisTurns": shared["hypothesisTurns"][-12:],
         "hypothesisFrontiers": _hypothesis_frontier_signals(state),
         "reasoningDedupHints": _reasoning_dedup_hints(state),
-        "placeholderNodes": _placeholder_nodes_from_graph(graph),
+        "placeholderNodes": _placeholder_nodes_from_graph(graph_state),
+        "reachability": reachability,
+        "requestedCorridor": reachability.get("requestedCorridor") or {},
+        "commercialBridgeCandidates": commercial_bridge_candidates,
+        "processGapCandidates": process_gap_candidates,
+        "operationalGraph": shared["operationalGraph"],
+        "operationalCounts": shared["operationalCounts"],
         "entityRegistrySummary": _entity_registry_summary_global(state),
     }
 
@@ -7873,7 +10320,7 @@ def _hypothesis_local_state(
     ]
     return {
         STATE_GRAPH_FRAGMENTS: [item.model_dump(mode="json", by_alias=True) for item in graph_fragments],
-        STATE_WORKING_GRAPH: [item.model_dump(mode="json", by_alias=True) for item in _flatten_fragments(graph_fragments)],
+        STATE_WORKING_GRAPH: graph_state_to_payload(graph_state_from_fragments(graph_fragments)),
         STATE_BRANCH_STATES: [item.model_dump(mode="json", by_alias=True) for item in branch_states],
         STATE_REPLACED_NODE_IDS: list(state.get(STATE_REPLACED_NODE_IDS) or []),
         STATE_LEARNED_FINDINGS: [item.model_dump(mode="json", by_alias=True) for item in findings],
@@ -7889,37 +10336,37 @@ def _is_placeholder_node(node_id: str, label: str, *, support_type: str = "") ->
     return False
 
 
-def _placeholder_nodes_from_graph(graph: list[GraphObservation]) -> list[str]:
+def _placeholder_nodes_from_graph(graph: OperationalGraphState | list[GraphObservation] | dict[str, Any]) -> list[str]:
+    graph_state = graph_state_from_raw(graph) if isinstance(graph, dict) else (
+        graph if isinstance(graph, OperationalGraphState) else graph_state_from_observations(graph)
+    )
     placeholders: list[str] = []
-    for observation in graph:
-        st = observation.support_type
-        for node_id, label in (
-            (observation.subject_id, observation.subject),
-            (observation.object_id, observation.object),
-        ):
-            if _is_placeholder_node(node_id, label, support_type=st):
-                placeholders.append(label or node_id)
+    for node in graph_state.entity_nodes:
+        if _is_placeholder_node(node.node_id, node.label, support_type=node.support_type):
+            placeholders.append(node.label or node.node_id)
     return _dedupe_preserve_order(placeholders)[:8]
 
 
-def _placeholder_resolution_hints(graph: list[GraphObservation]) -> list[str]:
+def _placeholder_resolution_hints(graph: OperationalGraphState | list[GraphObservation] | dict[str, Any]) -> list[str]:
     """Deterministic, graph-only hints for resolving placeholder endpoints (no invented names)."""
+    graph_state = graph_state_from_raw(graph) if isinstance(graph, dict) else (
+        graph if isinstance(graph, OperationalGraphState) else graph_state_from_observations(graph)
+    )
     hints: list[str] = []
-    for observation in graph:
-        st = observation.support_type
-        for node_id, label, role in (
-            (observation.subject_id, observation.subject, "subject"),
-            (observation.object_id, observation.object, "object"),
-        ):
-            if not _is_placeholder_node(node_id, label, support_type=st):
-                continue
-            disp = (label or node_id or "").strip() or "unnamed"
-            oid = (node_id or "").strip()
-            old_part = f'patchMode replace_node/replace_fragment with oldId "{oid}"' if oid else "patchMode replace_node/replace_fragment using the observation's subjectId/objectId as oldId"
-            hints.append(
-                f'Resolve {role} label "{disp}" as a concrete ORG/FACILITY/DEPOSIT/PRODUCT allowed by role contracts; '
-                f"consider {old_part} when the graph already references that slot."
-            )
+    for node in graph_state.entity_nodes:
+        if not _is_placeholder_node(node.node_id, node.label, support_type=node.support_type):
+            continue
+        disp = (node.label or node.node_id or "").strip() or "unnamed"
+        oid = (node.node_id or "").strip()
+        old_part = (
+            f'patchMode replace_entity/replace_fragment with oldId "{oid}"'
+            if oid else
+            "patchMode replace_entity/replace_fragment using the nodeId as oldId"
+        )
+        hints.append(
+            f'Resolve placeholder node "{disp}" as a concrete ORG/FACILITY/DEPOSIT/PRODUCT allowed by role contracts; '
+            f"consider {old_part} when the graph already references that slot."
+        )
     return _dedupe_preserve_order(hints)[:8]
 
 
@@ -7936,12 +10383,23 @@ def _acceptance_block_reason(
     branch_state: BranchState,
     local_state: dict[str, Any],
 ) -> str:
-    graph = [GraphObservation.model_validate(item) for item in (local_state.get(STATE_WORKING_GRAPH) or [])]
-    placeholders = _placeholder_nodes_from_graph(graph)
+    graph_state = _load_operational_graph_state(local_state)
+    reachability = _graph_reachability_report_for_graph(graph_state, state=local_state)
+    placeholders = _placeholder_nodes_from_graph(graph_state)
     if placeholders:
         return f"Broad placeholders remain in the hypothesis graph: {', '.join(placeholders[:3])}."
     if plan.hypothesis_relation != "root" and plan.path_kind != "overview":
         return ""
+    complete_count, structural_count = _reachability_complete_counts(reachability)
+    if complete_count + structural_count <= 0:
+        partial = reachability.get("partialChains") or []
+        if partial:
+            first = partial[0]
+            return (
+                "No business-complete operational chain exists yet. "
+                + str(first.get("breakReason") or reachability.get("healthSummary") or "").strip()
+            )
+        return "No business-complete operational chain exists yet."
     structural_frontier = _structural_frontier_items(
         list(branch_state.remaining_frontier) + list(branch_state.open_questions)
     )
@@ -8074,7 +10532,11 @@ def _hypothesis_turn_context(
     local_state: dict[str, Any],
     latest_result: ToolActionResult,
 ) -> dict[str, Any]:
-    graph = [GraphObservation.model_validate(item) for item in (local_state.get(STATE_WORKING_GRAPH) or [])]
+    graph_state = _load_operational_graph_state(local_state)
+    graph = observation_projection(graph_state)
+    reachability = _graph_reachability_report_for_graph(graph_state, state=local_state)
+    commercial_bridge_candidates = _commercial_bridge_candidates(graph_state, state=local_state)
+    process_gap_candidates = _host_local_process_gap_candidates(graph_state)
     fragments = [GraphFragment.model_validate(item) for item in (local_state.get(STATE_GRAPH_FRAGMENTS) or [])]
     findings = [LearnedFinding.model_validate(item) for item in (local_state.get(STATE_LEARNED_FINDINGS) or [])]
     turns = list(branch_state.hypothesis_turns if branch_state is not None else [])
@@ -8099,11 +10561,17 @@ def _hypothesis_turn_context(
             "pathAssessment": branch_state.path_assessment if branch_state is not None else "still_open",
         },
         "hypothesisGraph": {
-            "graphObservationCount": len(graph),
+            "graphObservationCount": graph_counts(graph_state)["graphObservationCount"],
+            "operationalCounts": graph_counts(graph_state),
+            "operationalGraph": graph_state.model_dump(mode="json", by_alias=True),
             "graphObservations": [item.model_dump(mode="json", by_alias=True) for item in graph[-18:]],
             "graphFragmentCount": len(fragments),
             "graphFragments": [item.model_dump(mode="json", by_alias=True) for item in fragments[-8:]],
-            "placeholderNodes": _placeholder_nodes_from_graph(graph),
+            "placeholderNodes": _placeholder_nodes_from_graph(graph_state),
+            "reachability": reachability,
+            "requestedCorridor": reachability.get("requestedCorridor") or {},
+            "commercialBridgeCandidates": commercial_bridge_candidates,
+            "processGapCandidates": process_gap_candidates,
         },
         "learnedFindings": [item.model_dump(mode="json", by_alias=True) for item in findings[-10:]],
         "turnHistory": [item.model_dump(mode="json", by_alias=True) for item in turns[-8:]],
