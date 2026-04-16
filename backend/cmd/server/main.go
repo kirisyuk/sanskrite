@@ -596,6 +596,12 @@ func main() {
 		if k := os.Getenv("OPENAI_API_KEY"); k != "" {
 			aiServices = append(aiServices, ai.NewOpenAIService(k, modelManager))
 		}
+		if k := strings.TrimSpace(gcp.GetEnvOrSecret(ctx, vertexProjectID, "OPENROUTER_API_KEY", "openrouter_api_key")); k != "" {
+			if os.Getenv("OPENROUTER_API_KEY") == "" {
+				_ = os.Setenv("OPENROUTER_API_KEY", k)
+			}
+			aiServices = append(aiServices, ai.NewOpenRouterService(k, modelManager))
+		}
 		if k := os.Getenv("ANTHROPIC_API_KEY"); k != "" {
 			aiServices = append(aiServices, ai.NewClaudeService(k, modelManager))
 		}

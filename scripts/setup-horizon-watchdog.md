@@ -122,7 +122,7 @@ gcloud functions deploy horizon-watchdog-trigger \
   --trigger-event-filters="type=document.update" \
   --trigger-event-filters="database=(default)" \
   --trigger-resource="projects/nv-horizon/databases/(default)/documents/horizon_watchdog_configs/{configId}" \
-  --service-account=backend@sanskrite.iam.gserviceaccount.com
+  --service-account=backend@inquire-data-84889.iam.gserviceaccount.com
 ```
 
 **Преимущества триггеров:**

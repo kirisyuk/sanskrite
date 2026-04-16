@@ -733,9 +733,9 @@ go run ./cmd/tools/horizon_qa_e2e \
 **Демо (локально, без Firestore):**
 ```bash
 # Ключи из Secret Manager (gcloud auth application-default login)
-go run ./cmd/tools/horizon_qa_e2e -demo -project=sanskrite
+go run ./cmd/tools/horizon_qa_e2e -demo -project=inquire-data-84889
 # или с другим вопросом:
-go run ./cmd/tools/horizon_qa_e2e -demo -project=sanskrite -question="What are the main supply chain risks for nickel?"
+go run ./cmd/tools/horizon_qa_e2e -demo -project=inquire-data-84889 -question="What are the main supply chain risks for nickel?"
 ```
 
 Демо использует stub-данные цепочки Indonesia nickel → EV battery. Ключи: Secret Manager (gemini_api_key) или Vertex AI при `-project`. Полный пайплайн: Decompose → Interpret (humanization at finish) → Synthesize → Business relevance.

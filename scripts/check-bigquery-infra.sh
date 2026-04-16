@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Проверка инфраструктуры BigQuery/Vertex AI для проекта sanskrite
+# Проверка инфраструктуры BigQuery/Vertex AI для проекта inquire-data-84889
 
 set -euo pipefail
 
@@ -129,8 +129,8 @@ fi
 echo ""
 
 # 6. Проверка прав service account
-echo "6. Проверка прав service account backend@sanskrite.iam.gserviceaccount.com..."
-SA_ROLES=$(gcloud projects get-iam-policy "$PROJECT_ID" --flatten="bindings[].members" --filter="bindings.members:backend@sanskrite.iam.gserviceaccount.com" --format="value(bindings.role)" 2>/dev/null || echo "")
+echo "6. Проверка прав service account backend@inquire-data-84889.iam.gserviceaccount.com..."
+SA_ROLES=$(gcloud projects get-iam-policy "$PROJECT_ID" --flatten="bindings[].members" --filter="bindings.members:backend@inquire-data-84889.iam.gserviceaccount.com" --format="value(bindings.role)" 2>/dev/null || echo "")
 
 if echo "$SA_ROLES" | grep -q "roles/bigquery"; then
   echo "  ✅ Service account имеет права BigQuery"

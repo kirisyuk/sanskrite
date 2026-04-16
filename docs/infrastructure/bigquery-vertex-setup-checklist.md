@@ -1,6 +1,6 @@
 # BigQuery/Vertex AI Infrastructure Setup Checklist
 
-## Текущий статус инфраструктуры (проект: sanskrite)
+## Текущий статус инфраструктуры (проект: inquire-data-84889)
 
 ### ✅ Что уже настроено:
 
@@ -31,7 +31,7 @@
    - ✅ `sanskrite-core-docs` существует
 
 6. **Service Account права:**
-   - ✅ `backend@sanskrite.iam.gserviceaccount.com` имеет:
+   - ✅ `backend@inquire-data-84889.iam.gserviceaccount.com` имеет:
      - ✅ `roles/storage.objectAdmin` на бакеты
      - ✅ `roles/storage.objectViewer` на бакеты
      - ✅ `roles/secretmanager.secretAccessor`
@@ -64,7 +64,7 @@
 
 ```bash
 # Обязательные
-GCP_PROJECT_ID=sanskrite
+GCP_PROJECT_ID=inquire-data-84889
 GOOGLE_CLOUD_PROJECT=nv-horizon
 GEMINI_API_KEY=<из Secret Manager>
 

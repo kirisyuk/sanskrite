@@ -68,8 +68,9 @@ const (
 	AIProviderClaude   AIProvider = "Claude"
 	AIProviderGemini   AIProvider = "Gemini"   // Google AI (generativelanguage.googleapis.com) — API key auth
 	AIProviderVertexAI AIProvider = "VertexAI" // Vertex AI Platform (aiplatform.googleapis.com) — OAuth2, supports Vertex AI Search grounding
-	AIProviderDeepSeek AIProvider = "DeepSeek"
-	AIProviderGrok     AIProvider = "Grok"
+	AIProviderDeepSeek   AIProvider = "DeepSeek"
+	AIProviderGrok       AIProvider = "Grok"
+	AIProviderOpenRouter AIProvider = "OpenRouter" // OpenRouter API (OpenAI-compatible chat)
 )
 
 // AITaskStatus статус выполнения AI-задачи

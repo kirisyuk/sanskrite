@@ -107,6 +107,12 @@ func main() {
 			}
 			aiServices = append(aiServices, ai.NewOpenAIService(k, modelManager))
 		}
+		if k := strings.TrimSpace(gcp.GetEnvOrSecret(ctx, *projectID, "OPENROUTER_API_KEY", "openrouter_api_key")); k != "" {
+			if os.Getenv("OPENROUTER_API_KEY") == "" {
+				_ = os.Setenv("OPENROUTER_API_KEY", k)
+			}
+			aiServices = append(aiServices, ai.NewOpenRouterService(k, modelManager))
+		}
 		if k := strings.TrimSpace(gcp.GetEnvOrSecret(ctx, *projectID, "GROK_API_KEY", "grok_api_key")); k != "" {
 			if os.Getenv("GROK_API_KEY") == "" {
 				_ = os.Setenv("GROK_API_KEY", k)

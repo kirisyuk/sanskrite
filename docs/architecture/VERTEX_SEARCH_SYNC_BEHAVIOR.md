@@ -130,7 +130,7 @@ gcloud discovery-engine operations list \
 ### Проверка индексированных документов
 
 ```bash
-./scripts/test-vertex-search.sh -p sanskrite
+./scripts/test-vertex-search.sh -p inquire-data-84889
 ```
 
 ## Best Practices

@@ -6,7 +6,7 @@ outside `AgentMesh`.
 Current scope:
 
 - separate from `AgentMesh` and `scout.*`
-- hypothesis-local entity registry (`hypothesis_entity_registry` in session state) tracks merges after `replace_node` / `replace_fragment`; this is **not** the Horizon product canonical control plane (synonym/transform layers stay in Scout / backend only).
+- hypothesis-local entity registry (`hypothesis_entity_registry` in session state) tracks merges after `replace_entity` / `replace_fragment`; this is **not** the Horizon product canonical control plane (synonym/transform layers stay in Scout / backend only).
 - no Scout `/product/...` canonicalization inside AgentLoom unless you add an **explicit** optional bridge later: if that bridge exists, it must be a dedicated tool or step with clear consent flags so synonym resolution and transform dictionaries are never mixed silently into hypothesis graph reasoning.
 - working-graph updates are session-local only (no AgentMesh materialization writes from this package).
 - no materialization
@@ -113,7 +113,10 @@ Run the full local ADK workflow:
 
 ```bash
 export GOOGLE_GENAI_USE_VERTEXAI=True
-export GOOGLE_CLOUD_PROJECT="$GCP_PROJECT_ID"
+# Optional: omit GOOGLE_CLOUD_PROJECT if ADC already has a default project (typical after
+# `gcloud auth application-default login` with `gcloud config set project <id>` — same as
+# `gcloud config get-value project`).
+export GOOGLE_CLOUD_PROJECT="${GOOGLE_CLOUD_PROJECT:-$GCP_PROJECT_ID}"
 export GOOGLE_CLOUD_LOCATION="${AGENTLOOM_VERTEX_LOCATION:-global}"
 
 PYTHONPATH=/Users/kirisyuk/cursor/sanskrite/agents/vertex \

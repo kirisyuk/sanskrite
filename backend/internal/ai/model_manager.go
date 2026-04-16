@@ -740,6 +740,93 @@ func (mm *AIModelManager) initializeModels() {
 		ImageAnalysisCapability:       false,
 		BuiltInSearchCapability:       true,
 	}
+
+	// ------------------------- OpenRouter — NVIDIA Nemotron (paid routes, not :free) -------------------------
+	// Prices from OpenRouter model pages (list pricing; routing may use other upstream tariffs).
+	mm.models["nvidia/nemotron-3-nano-30b-a3b"] = AIModelCapabilities{
+		Name:                          "nvidia/nemotron-3-nano-30b-a3b",
+		ContextWindow:                 262144,
+		OutputTokens:                  262144,
+		PricePerInputToken:            0.00000005, // $0.05 / 1M
+		PricePerOutputToken:           0.00000020, // $0.20 / 1M
+		Provider:                      AIProviderOpenRouter,
+		MaxTokensPerMinute:            0,
+		MaxTokensPerDay:               0,
+		NearlyRealTime:                true,
+		CapabilityScore:               5, // mid-tier open MoE; strong efficiency, weaker vs top instruct models on agents
+		ImageGenerationCapability:     false,
+		EmbeddingGenerationCapability: false,
+		TextGenerationCapability:      true,
+		ImageAnalysisCapability:       false,
+		BuiltInSearchCapability:       false,
+		SupportsToolCalling:           true,
+		SupportsMcp:                   true,
+		ToolUseProtocol:               ToolUseProtocolOpenAI,
+	}
+
+	mm.models["nvidia/nemotron-3-super-120b-a12b"] = AIModelCapabilities{
+		Name:                          "nvidia/nemotron-3-super-120b-a12b",
+		ContextWindow:                 262144,
+		OutputTokens:                  262144,
+		PricePerInputToken:            0.00000010, // $0.10 / 1M (DeepInfra-class list; other routes e.g. $0.30/$0.90)
+		PricePerOutputToken:           0.00000050, // $0.50 / 1M
+		Provider:                      AIProviderOpenRouter,
+		MaxTokensPerMinute:            0,
+		MaxTokensPerDay:               0,
+		NearlyRealTime:                false,
+		CapabilityScore:               8, // flagship open Nemotron; near top-tier open models on coding/agentic leaderboards
+		ImageGenerationCapability:     false,
+		EmbeddingGenerationCapability: false,
+		TextGenerationCapability:      true,
+		ImageAnalysisCapability:       false,
+		BuiltInSearchCapability:       false,
+		SupportsToolCalling:           true,
+		SupportsMcp:                   true,
+		ToolUseProtocol:               ToolUseProtocolOpenAI,
+	}
+
+	// OpenRouter :free — $0/M, prompts may be logged; not for production sensitive data.
+	mm.models["nvidia/nemotron-3-nano-30b-a3b:free"] = AIModelCapabilities{
+		Name:                          "nvidia/nemotron-3-nano-30b-a3b:free",
+		ContextWindow:                 262144,
+		OutputTokens:                  262144,
+		PricePerInputToken:            0,
+		PricePerOutputToken:           0,
+		Provider:                      AIProviderOpenRouter,
+		MaxTokensPerMinute:            0,
+		MaxTokensPerDay:               0,
+		NearlyRealTime:                true,
+		CapabilityScore:               5,
+		ImageGenerationCapability:     false,
+		EmbeddingGenerationCapability: false,
+		TextGenerationCapability:      true,
+		ImageAnalysisCapability:       false,
+		BuiltInSearchCapability:       false,
+		SupportsToolCalling:           true,
+		SupportsMcp:                   true,
+		ToolUseProtocol:               ToolUseProtocolOpenAI,
+	}
+
+	mm.models["nvidia/nemotron-3-super-120b-a12b:free"] = AIModelCapabilities{
+		Name:                          "nvidia/nemotron-3-super-120b-a12b:free",
+		ContextWindow:                 262144,
+		OutputTokens:                  262144,
+		PricePerInputToken:            0,
+		PricePerOutputToken:           0,
+		Provider:                      AIProviderOpenRouter,
+		MaxTokensPerMinute:            0,
+		MaxTokensPerDay:               0,
+		NearlyRealTime:                false,
+		CapabilityScore:               8,
+		ImageGenerationCapability:     false,
+		EmbeddingGenerationCapability: false,
+		TextGenerationCapability:      true,
+		ImageAnalysisCapability:       false,
+		BuiltInSearchCapability:       false,
+		SupportsToolCalling:           true,
+		SupportsMcp:                   true,
+		ToolUseProtocol:               ToolUseProtocolOpenAI,
+	}
 }
 
 // SelectModel выбирает оптимальную модель на основе требований

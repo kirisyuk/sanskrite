@@ -18,7 +18,7 @@ gcloud run deploy nv-horizon-api \
   --region us-central1 \
   --platform managed \
   --allow-unauthenticated \
-  --set-env-vars="PROJECT_ID=sanskrite"
+  --set-env-vars="PROJECT_ID=inquire-data-84889"
 
 # Note: This will rebuild the container image and deploy
 ```
@@ -58,7 +58,7 @@ gcloud run deploy nv-horizon-api `
   --region us-central1 `
   --platform managed `
   --allow-unauthenticated `
-  --set-env-vars="PROJECT_ID=sanskrite"
+  --set-env-vars="PROJECT_ID=inquire-data-84889"
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Backend deployment failed!" -ForegroundColor Red
@@ -141,7 +141,7 @@ gcloud run services update-traffic nv-horizon-api \
 
 Make sure these are set in Cloud Run:
 ```
-PROJECT_ID=sanskrite
+PROJECT_ID=inquire-data-84889
 FIRESTORE_EMULATOR_HOST= (not set for production)
 ```
 

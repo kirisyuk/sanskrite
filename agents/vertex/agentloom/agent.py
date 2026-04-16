@@ -7,6 +7,8 @@ import hashlib
 import json
 import os
 import re
+import time
+import uuid
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
@@ -30,6 +32,20 @@ from agentloom.narrative_coverage import (
     validate_narrative_coverage,
 )
 from agentloom.question_rubric import build_question_rubric, merge_rubric_with_llm_extras
+from agentloom.question_intent import extract_question_intent_bundle, intent_to_operational_corridor_dict, regex_operational_corridor_dict
+from agentloom.preflight import (
+    normalize_investigation_preflight,
+    preflight_requires_red_team_pass,
+    red_team_frame_eligible,
+)
+from agentloom.investigation_todos import (
+    apply_investigation_todo_updates_from_agent,
+    merge_todos_after_graph_progress,
+    required_todos_satisfied,
+    seed_investigation_todos,
+    todos_compact_for_critic,
+)
+from agentloom.context_helpers import pack_critic_bundle
 from agentloom.contracts import (
     AgentContract,
     AgentLoomRequest,
@@ -58,14 +74,21 @@ from agentloom.contracts import (
     RoleContract,
     RoleSelection,
     NarrativeSynthesisStatus,
+    QuestionIntent,
     RubricLLMExtras,
     RuntimeLogEntry,
     StructuredNarrativeAnswer,
     SupervisorDecision,
+    EvidenceLedgerEntry,
+    SupplyGraphPatchApply,
+    SupplyQAResponse,
     ToolAction,
     ToolActionResult,
     ToolContract,
     critic_agent_output_to_agent_result,
+    InvestigationPreflight,
+    RedTeamAgentOutput,
+    red_team_agent_output_to_agent_result,
 )
 from agentloom.operational_graph import (
     empty_graph_state,
@@ -88,30 +111,54 @@ from agentloom.operational_graph import (
     synthetic_id as _graph_synthetic_id,
     support_types_for_graph,
 )
+from agentloom.reachability_tiers import compute_typed_operational_backbone_entries
 from agentloom.prompt_fragments import (
+    JSON_WIRE_CONTRACT_V1,
+    SUPPLY_GRAPH_PATCH_APPLY_QUERYTEXT_GUIDANCE,
+    SUPPLY_GRAPH_PATCH_APPLY_TOOL_CAPABILITY,
+    SUPPLYQA_WIRE_EXAMPLE,
     PROMPT_UNTRUSTED_USER_CORPUS,
+    SUPERVISOR_CANON_OF_TERMS,
     SUPERVISOR_RULES_ANTI_BLOAT,
     SUPERVISOR_RULES_CORE,
     SUPERVISOR_RULES_REACHABILITY,
+    SUPERVISOR_RULES_RED_TEAM,
     SUPERVISOR_RUNTIME_NOTE,
+    INVESTIGATOR_PREFLIGHT_BREADTH_RULE,
+    RED_TEAM_INSTRUCTION,
+    TOOLACTIONRESULT_WIRE_EXAMPLE,
+)
+from agentloom.wire_unmarshal import (
+    assert_wire_schema_version,
+    parse_wire_json,
+    recover_wire_json_text,
+    unmarshal_wire_model,
 )
 from agentloom.limits import (
     BUDGET_SOFT_FRACTION,
+    COMPOSE_ALLOW_WITH_TYPED_BACKBONE,
     DELEGATE_FLOW_FIRST_STAGNATION_EXCEPTION,
+    DISABLE_REPLACE_HOP_REGRESSION,
+    HYPOTHESIS_RUNTIME_STEER,
+    HYPOTHESIS_RUNTIME_STEER_MODE,
     LIMIT_EXHAUSTED_STRATEGY,
     MAX_GRAPH_DELTA_OBSERVATIONS,
     MAX_GAPS,
     MAX_HANDOFF_RECOMMENDATIONS,
     MAX_NEXT_QUESTIONS,
+    MAX_SUPERVISOR_CYCLES,
     MAX_WORKING_GRAPH_OBSERVATIONS,
     MAX_ANSWERED_QUESTIONS,
     MERGE_CONFIDENCE_EPSILON,
     REPEATED_GAP_THRESHOLD,
-    STAGNATION_FORCE_CRITIC_CYCLES,
     SUPERVISOR_SNAPSHOT_FRONTIER_MAX_ITEMS,
     SUPERVISOR_SNAPSHOT_FRONTIER_STRING_CHARS,
     SUPERVISOR_SNAPSHOT_LAST_RESULT_SUMMARY_CHARS,
     SUPERVISOR_SNAPSHOT_OPEN_GAPS_MAX,
+    COMPOSE_REQUIRES_TODOS_SATISFIED,
+    SUPERVISOR_REACHABILITY_LIST_CAP,
+    ALLOW_COMPOSE_WITHOUT_RED_TEAM,
+    RED_TEAM_REQUIRED_FOR_BREADTH,
 )
 from agentloom.taxonomy import (
     ROLE_CONTRACTS_BY_ROLE,
@@ -136,6 +183,7 @@ STATE_WORKING_GRAPH = "working_graph"
 STATE_GRAPH_FRAGMENTS = "graph_fragments"
 STATE_REPLACED_NODE_IDS = "replaced_node_ids"
 STATE_GRAPH_MUTATION_LOG = "graph_mutation_log"
+STATE_EMPTY_TYPED_PAYLOAD_STREAK = "empty_typed_graph_payload_streak"
 STATE_HYPOTHESIS_ENTITY_REGISTRY = "hypothesis_entity_registry"
 STATE_BRANCH_STATES = "branch_states"
 STATE_OPEN_GAPS = "open_gaps"
@@ -168,6 +216,13 @@ STATE_POLICY_INVESTIGATOR_RESULT = "policy_impact_investigator_agent_result"
 STATE_INVESTIGATOR_SYNTHESIS = "investigator_synthesis"
 STATE_INVESTIGATOR_SYNTHESIS_CONTEXT = "investigator_synthesis_context"
 STATE_CRITIC_RESULT = "critic_agent_result"
+STATE_RED_TEAM_CONTEXT = "red_team_context"
+STATE_RED_TEAM_LLM_PAYLOAD = "red_team_llm_payload"
+STATE_RED_TEAM_RESULT = "red_team_agent_result"
+STATE_RED_TEAM_ARTIFACT = "red_team_artifact"
+STATE_RED_TEAM_SATISFIED = "red_team_satisfied"
+STATE_RED_TEAM_COMPOSE_WAIVED = "red_team_compose_waived"
+STATE_INVESTIGATION_PREFLIGHT = "investigation_preflight"
 STATE_INTERNAL_BRIEF = "internal_brief"
 STATE_NARRATIVE_CONTEXT = "narrative_composer_context"
 STATE_STRUCTURED_NARRATIVE = "structured_narrative"
@@ -181,6 +236,14 @@ STATE_INVESTIGATION_BUDGET = "investigation_budget"
 STATE_COMPOSER_EXTRA_EPISTEMIC_CAVEATS = "composer_extra_epistemic_caveats"
 STATE_SUPERVISOR_CYCLE_LIMIT_COMPOSE = "supervisor_cycle_limit_compose"
 STATE_RETRIEVAL_CACHE = "retrieve_tool_session_cache"
+STATE_QUESTION_INTENT = "question_intent"
+STATE_INTENT_META = "intent_extraction_meta"
+STATE_INVESTIGATION_TODOS = "investigation_todos"
+STATE_TOOL_IDLE_STREAK = "tool_idle_streak"
+STATE_EVIDENCE_LEDGER = "evidence_ledger"
+STATE_APPLIED_SUPPLY_PATCH_KEYS = "applied_supply_patch_keys"
+STATE_HYPOTHESIS_STEER_HINT = "hypothesis_steer_hints"
+STATE_LAST_HYPOTHESIS_RUNTIME_TELEMETRY = "hypothesis_runtime_normalize_telemetry"
 
 RESULT_KEY_BY_AGENT = {
     "supply_chain_investigator_agent": STATE_SUPPLY_CHAIN_INVESTIGATOR_RESULT,
@@ -188,7 +251,15 @@ RESULT_KEY_BY_AGENT = {
     "policy_impact_investigator_agent": STATE_POLICY_INVESTIGATOR_RESULT,
     "gap_bridge_agent": STATE_GAP_BRIDGE_RESULT,
     "critic_agent": STATE_CRITIC_RESULT,
+    "red_team_agent": STATE_RED_TEAM_RESULT,
 }
+
+
+def _request_from_state(state: dict[str, Any] | None) -> AgentLoomRequest:
+    raw = (state or {}).get(STATE_REQUEST)
+    if isinstance(raw, dict) and raw.get("question"):
+        return AgentLoomRequest.model_validate(raw)
+    return AgentLoomRequest(question="", corpusDocuments=[], requestedRoles=[])
 
 
 def _load_operational_graph_state(state: dict[str, Any]) -> OperationalGraphState:
@@ -229,6 +300,7 @@ class LocalModel(BaseModel):
 
 
 class InvestigatorPlan(LocalModel):
+    schema_version: int = Field(default=1, alias="schemaVersion", ge=1, le=1)
     assessment: str
     rationale: list[str]
     branch_plans: list[BranchPlan] = Field(default_factory=list, alias="branchPlans")
@@ -246,6 +318,7 @@ class GapEntry(LocalModel):
 
 
 class InvestigatorSynthesis(LocalModel):
+    schema_version: int = Field(default=1, alias="schemaVersion", ge=1, le=1)
     cross_branch_assessment: str = Field(alias="crossBranchAssessment")
     connected_pairs: list[str] = Field(default_factory=list, alias="connectedPairs")
     disconnected_pairs: list[str] = Field(default_factory=list, alias="disconnectedPairs")
@@ -296,6 +369,10 @@ _PLACEHOLDER_LABEL_PATTERNS = [
     # Explicit placeholder markers and schedule-style stubs.
     re.compile(r"\(placeholder\)", re.IGNORECASE),
     re.compile(r"\bplaceholder\s+(?:facility|plant|node|entity|operator)\b", re.IGNORECASE),
+    re.compile(
+        r"\bunnamed\s+(?:\w+\s+){0,5}(?:facility|plant|manufacturer|operator|producer|converter|processor|refinery|hub)\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"\btbd\b", re.IGNORECASE),
     re.compile(r"\bto\s+be\s+determined\b", re.IGNORECASE),
     # Generic / unknown operational shells (narrow: requires generic|unknown + operational noun).
@@ -323,17 +400,48 @@ _PLACEHOLDER_LABEL_PATTERNS = [
         r"\b(?:Chinese|Asian|European)\s+(?:Chemical\s+)?Processing\s+Hub\b",
         re.IGNORECASE,
     ),
+    re.compile(
+        r"(?:^|\s)(?:chilean|german|european|asian|global|regional|midstream|upstream|downstream|domestic|international)\s+"
+        r"(?:\w+\s+){0,4}(?:facility|plant|processor|converter|manufacturer|producer|deposit)$",
+        re.IGNORECASE,
+    ),
 ]
-# Extra cues applied only to hypothesis-supported edges to avoid false positives on document-grounded labels.
-_PLACEHOLDER_HYPOTHESIS_LABEL_HINTS = re.compile(
-    r"(?:\(placeholder\)|\bplaceholder\b|\btbd\b|\bto\s+be\s+determined\b|\bgeneric\s+\w+|\bunknown\s+\w+)",
+_GENERIC_PLACEHOLDER_NODE_ID_PATTERN = re.compile(
+    r"^(?:facility|organization|deposit):"
+    r"(?:placeholder|unknown|unnamed|generic|refinery|converter|processor|manufacturer|plant|facility|"
+    r"operator|producer|hub|port|evaporation-pond)$",
     re.IGNORECASE,
 )
+# Extra cues applied only to hypothesis-supported edges to avoid false positives on document-grounded labels.
+_PLACEHOLDER_HYPOTHESIS_LABEL_HINTS = re.compile(
+    r"(?:\(placeholder\)|\bplaceholder\b|\btbd\b|\bto\s+be\s+determined\b|\bgeneric\s+\w+|\bunknown\s+\w+|\bunnamed\b)",
+    re.IGNORECASE,
+)
+_AGGREGATE_INTERMEDIARY_LABEL_PATTERNS = [
+    re.compile(
+        r"\b(?:global|regional|international|merchant|spot)\s+(?:market|trading)\s+(?:pool|hub)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:global|regional|international|third[- ]party|generic|unnamed|unspecified)\s+"
+        r"(?:converter|processor|trader|merchant|toll processor)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:market|trading)\s+pool\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:cathode|battery|chemical|conversion)\s+(?:production|processing|manufacturing)\s+facility\s*\((?:e\.g\.|eg|for example)\b",
+        re.IGNORECASE,
+    ),
+]
 
 
 class _StateToolContext:
     def __init__(self, state: dict[str, Any]) -> None:
         self.state = state
+        self.last_evidence_ledger_entry: EvidenceLedgerEntry | None = None
 
 
 def _truncate_text(value: str, limit: int = 320) -> str:
@@ -415,19 +523,14 @@ class StructuredOutputAgent(BaseAgent):
             project=os.getenv("GOOGLE_CLOUD_PROJECT") or _vertex_grounding_config().get("project"),
             location=os.getenv("GOOGLE_CLOUD_LOCATION", "global") or _vertex_grounding_config().get("location"),
         )
-        used_resource_fallback = False
-        model = self._model
-        while True:
-            try:
-                return client.models.generate_content(model=model, contents=contents, config=config_obj)
-            except Exception as exc:
-                if not _is_resource_exhausted_error(exc):
-                    raise
-                fallback_model = _model_with_resource_fallback(model, used_fallback=used_resource_fallback)
-                if fallback_model == model:
-                    raise
-                used_resource_fallback = True
-                model = fallback_model
+        return _vertex_generate_content_resilient(
+            client,
+            model=self._model,
+            contents=contents,
+            config=config_obj,
+            allow_quota_model_fallback=True,
+            used_resource_fallback_holder=[False],
+        )
 
     def _finalize_parsed_output(self, ctx: InvocationContext, payload: Any) -> BaseModel:
         """Apply schema-specific repair before strict Pydantic validation."""
@@ -438,7 +541,7 @@ class StructuredOutputAgent(BaseAgent):
                 d = payload.model_dump(mode="json", by_alias=True)
             else:
                 d = {}
-            request_obj = AgentLoomRequest.model_validate(ctx.session.state.get(STATE_REQUEST) or {})
+            request_obj = _request_from_state(ctx.session.state)
             d = _coerce_supervisor_decision_payload(
                 d,
                 selected_role_literals=list(ctx.session.state.get(STATE_SELECTED_ROLES) or []),
@@ -452,6 +555,12 @@ class StructuredOutputAgent(BaseAgent):
             if isinstance(payload, BaseModel):
                 return CriticAgentOutput.model_validate(payload.model_dump(mode="json", by_alias=True))
             return CriticAgentOutput.model_validate(payload)
+        if self._output_schema is RedTeamAgentOutput:
+            if isinstance(payload, dict):
+                return RedTeamAgentOutput.model_validate(payload)
+            if isinstance(payload, BaseModel):
+                return RedTeamAgentOutput.model_validate(payload.model_dump(mode="json", by_alias=True))
+            return RedTeamAgentOutput.model_validate(payload)
         return self._output_schema.model_validate(payload)
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
@@ -466,10 +575,12 @@ class StructuredOutputAgent(BaseAgent):
                 if parsed is not None:
                     result = self._finalize_parsed_output(ctx, parsed)
                 else:
-                    json_text = _extract_json_object(_response_json_text(response))
+                    json_text = recover_wire_json_text(_response_json_text(response))
                     if self._output_schema is SupervisorDecision:
                         result = self._finalize_parsed_output(ctx, json.loads(json_text))
                     elif self._output_schema is CriticAgentOutput:
+                        result = self._finalize_parsed_output(ctx, json.loads(json_text))
+                    elif self._output_schema is RedTeamAgentOutput:
                         result = self._finalize_parsed_output(ctx, json.loads(json_text))
                     else:
                         result = self._output_schema.model_validate_json(json_text)
@@ -577,17 +688,19 @@ SUPERVISOR_MODEL = _resolve_model(os.getenv("AGENTLOOM_SUPERVISOR_MODEL", ""), f
 INVESTIGATOR_MODEL = _resolve_model(os.getenv("AGENTLOOM_WORKER_MODEL", ""), fallback="gemini-3.1-flash-lite-preview")
 CRITIC_MODEL = _resolve_model(
     os.getenv("AGENTLOOM_CRITIC_MODEL", ""),
-    os.getenv("AGENTMESH_MODEL_PRO", ""),
-    fallback="gemini-2.5-pro",
+    fallback=_resolve_model(os.getenv("AGENTLOOM_WORKER_MODEL", ""), fallback="gemini-3.1-flash-lite-preview"),
+)
+RED_TEAM_MODEL = _resolve_model(
+    os.getenv("AGENTLOOM_RED_TEAM_MODEL", ""),
+    fallback=INVESTIGATOR_MODEL,
 )
 COMPOSER_MODEL = _resolve_model(os.getenv("AGENTLOOM_COMPOSER_MODEL", ""), fallback=CRITIC_MODEL)
 GROUNDING_MODEL = _resolve_model(os.getenv("AGENTLOOM_GROUNDING_MODEL", ""), fallback="gemini-3.1-flash-lite-preview")
-# Used on 429 / quota for **all** generate_content retries (supervisor, tools, etc.)
+# Quota / 429: optional fallback model inside `_vertex_generate_content_resilient` (tools, question_intent, etc.).
 RESOURCE_EXHAUSTION_FALLBACK_MODEL = os.getenv(
     "AGENTLOOM_RESOURCE_EXHAUSTION_FALLBACK_MODEL",
     "gemini-2.5-flash-lite",
 ).strip()
-MAX_SUPERVISOR_CYCLES = int(os.getenv("AGENTLOOM_MAX_SUPERVISOR_CYCLES", "10"))
 
 
 def _narrative_synthesis_enabled() -> bool:
@@ -620,6 +733,7 @@ _SUPERVISOR_DELEGATE_AGENTS = frozenset(
         "policy_impact_investigator_agent",
         "gap_bridge_agent",
         "critic_agent",
+        "red_team_agent",
     }
 )
 
@@ -675,6 +789,12 @@ def _coerce_supervisor_decision_payload(
             mission["objective"] = (
                 "Assess whether the current graph is sufficient for an honest composed answer, "
                 f"given reachability and role coverage, for: {q}"
+            )
+        elif next_agent == "red_team_agent":
+            mission["objective"] = (
+                "Propose alternative route families, jurisdictions, processing modalities, transport/geopolitical "
+                f"angles, adjacent regions, other sources/sinks, and epistemic counterviews grounded in the current "
+                f"working graph (do not invent document facts). Frame-broadening pass for: {q}"
             )
         elif next_agent == "gap_bridge_agent":
             mission["objective"] = (
@@ -757,7 +877,12 @@ GAP_BRIDGE_CONFIG = genai_types.GenerateContentConfig(
     response_mime_type="application/json",
 )
 CRITIC_CONFIG = genai_types.GenerateContentConfig(
-    max_output_tokens=int(os.getenv("AGENTLOOM_CRITIC_MAX_OUTPUT_TOKENS", "16384")),
+    max_output_tokens=int(os.getenv("AGENTLOOM_CRITIC_MAX_OUTPUT_TOKENS", "4096")),
+    temperature=0,
+    response_mime_type="application/json",
+)
+RED_TEAM_CONFIG = genai_types.GenerateContentConfig(
+    max_output_tokens=int(os.getenv("AGENTLOOM_RED_TEAM_MAX_OUTPUT_TOKENS", "8192")),
     temperature=0,
     response_mime_type="application/json",
 )
@@ -869,6 +994,7 @@ Supply-chain graph rules:
 - Prefer concrete typed nodes over abstract placeholders. Labels such as "Regional Mining Facility", "Downstream Battery Plant", or a vague regional producer or refiner acting as a single anonymous stand-in are provisional placeholders, not satisfactory closure when a concrete ORG/FACILITY/DEPOSIT/PRODUCT should exist.
 - If you only know a broad placeholder now, keep it with low confidence or supportType=hypothesis, then expose a frontier question or a replacement patch that asks what concrete ORG, FACILITY, DEPOSIT, PRODUCT, or other role-valid typed node should replace it.
 - Multiple facilities may legitimately produce or supply the same product. Do not collapse them into one fake node. Return several nodes and edges when the evidence supports several parallel suppliers, receivers, or alternative paths. Expect multiple plausible route families unless the question explicitly narrows to one; use alternativeGroupId and parallel fragments instead of forcing a single winner when evidence supports multiplicity.
+- When using `web_search` or corpus-backed `retrieve` for operational facts, each cited supply or transform claim should appear as a typed `flowLeg` or hosted `processStep` with `supportType` (`mixed` or `document` when evidence supports it), `confidence`, and `provenance` / document ids — not only natural-language branch summaries without graph primitives.
 - Adjacent-frame context (regional processing near the sink, alternate supplier class, market-pool effects) may appear as separate `alternative_chain` fragments, `learnedFindings`, or low-confidence hypotheses when it informs the user's decision but does not justify a fake direct flow edge between the user's named anchors.
 - Structural connectivity matters more than quantitative detail. A typed edge with unknown tonnage is still far more valuable than a tonnage estimate with no typed edge.
 """
@@ -892,6 +1018,9 @@ Use this profile diagnostically:
 - if a layer is missing, say so in uncoveredQuestions
 - if only a holistic re-query makes sense, ask one whole-chain uncovered question
 - if multiple alternatives exist but only one is known, ask for the missing alternative path explicitly
+- if you identified only a converter family, jurisdiction, or commercial pattern without a typed flowLeg/processStep or replacement patch, keep the route open; that is context, not operational closure
+- do not mark an upstream-midstream-downstream bridge as resolved merely because you named possible converter families or said the market is concentrated elsewhere
+- if a direct corridor is unsupported but the business route is still plausible, explicitly ask for an adjacent-country, third-country, or alternative operator-family route rather than stopping at a generic indirect explanation
 - if a stable background regulation is only contextual and not the missing operational edge, keep it as context or learned finding instead of spending a grounded turn on it
 - distinguish qualitative structural closure from quantitative detail:
   - qualitative = do we have the right typed nodes and typed links?
@@ -1653,6 +1782,22 @@ TOOL_CONTRACTS = [
         ],
     ),
     ToolContract(
+        name="supply_qa",
+        category="grounding",
+        capability="Structured supply-chain Q&A (answer + citations + entity candidates) without committing graph primitives.",
+        requiredInputs=["action"],
+        outputShape="JSON matching SupplyQAResponse (answer, citations, mentionedEntityCandidates); runtime maps to ToolActionResult with empty graphFragments.",
+        failureModes=["returns failed when the model cannot produce valid JSON"],
+    ),
+    ToolContract(
+        name="apply_supply_graph_patch",
+        category="graph",
+        capability=SUPPLY_GRAPH_PATCH_APPLY_TOOL_CAPABILITY,
+        requiredInputs=["action.queryText JSON patch"],
+        outputShape="ToolActionResult with merged graphFragments or blocked when evidenceRefIds are missing from the session ledger.",
+        failureModes=["rejects invalid JSON", "blocks when evidence ids are not in evidence_ledger"],
+    ),
+    ToolContract(
         name="append_graph_observations",
         category="graph",
         capability="Append subject-relation-object observations into shared graph memory.",
@@ -1677,6 +1822,14 @@ TOOL_CONTRACTS = [
         failureModes=["rejects malformed failure payload"],
     ),
 ]
+
+
+def _specialized_investigator_tool_names(*, include_apply_patch: bool) -> list[str]:
+    names = [contract.name for contract in TOOL_CONTRACTS]
+    if not include_apply_patch:
+        names = [n for n in names if n != "apply_supply_graph_patch"]
+    return names
+
 
 AGENT_CONTRACTS = [
     AgentContract(
@@ -1705,7 +1858,7 @@ AGENT_CONTRACTS = [
             STATE_LAST_AGENT_RESULT,
             STATE_AGENT_RESULT_HISTORY,
         ],
-        availableTools=[contract.name for contract in TOOL_CONTRACTS],
+        availableTools=_specialized_investigator_tool_names(include_apply_patch=True),
     ),
     AgentContract(
         name="governance_and_control_investigator_agent",
@@ -1733,7 +1886,7 @@ AGENT_CONTRACTS = [
             STATE_LAST_AGENT_RESULT,
             STATE_AGENT_RESULT_HISTORY,
         ],
-        availableTools=[contract.name for contract in TOOL_CONTRACTS],
+        availableTools=_specialized_investigator_tool_names(include_apply_patch=False),
     ),
     AgentContract(
         name="policy_impact_investigator_agent",
@@ -1761,7 +1914,7 @@ AGENT_CONTRACTS = [
             STATE_LAST_AGENT_RESULT,
             STATE_AGENT_RESULT_HISTORY,
         ],
-        availableTools=[contract.name for contract in TOOL_CONTRACTS],
+        availableTools=_specialized_investigator_tool_names(include_apply_patch=False),
     ),
     AgentContract(
         name="gap_bridge_agent",
@@ -1791,6 +1944,7 @@ AGENT_CONTRACTS = [
             "retrieve",
             "reason",
             "web_search",
+            "supply_qa",
             "record_open_gaps",
             "record_failure",
         ],
@@ -1824,9 +1978,47 @@ AGENT_CONTRACTS = [
             "record_failure",
         ],
     ),
+    AgentContract(
+        name="red_team_agent",
+        role="Adversarial breadth agent that proposes alternative route families, epistemic counterviews, and next questions without directly mutating the working graph.",
+        missionContract="Requires a concrete InvestigationMission; output is proposal-only (RedTeamAgentOutput) stored as artifacts for supervisor and subsequent investigator missions.",
+        resultContract="Returns AgentResult-compatible payload derived from RedTeamAgentOutput; graphDelta should be empty; downstream supply_chain missions may merge proposed branches.",
+        sharedMemoryReads=[
+            STATE_REQUEST,
+            STATE_SELECTED_ROLES,
+            STATE_ROLE_CONTRACTS,
+            STATE_CURRENT_MISSION,
+            STATE_WORKING_GRAPH,
+            STATE_OPEN_GAPS,
+            STATE_FAILURES,
+            STATE_LAST_AGENT_RESULT,
+            STATE_INVESTIGATION_PREFLIGHT,
+            STATE_TOOL_CONTRACTS,
+            STATE_AGENT_CONTRACTS,
+        ],
+        sharedMemoryWrites=[
+            STATE_OPEN_GAPS,
+            STATE_FAILURES,
+            STATE_LAST_AGENT_RESULT,
+            STATE_AGENT_RESULT_HISTORY,
+            STATE_RED_TEAM_ARTIFACT,
+            STATE_RED_TEAM_RESULT,
+            STATE_RED_TEAM_SATISFIED,
+        ],
+        availableTools=[
+            "read_shared_memory",
+            "read_corpus_index",
+            "retrieve",
+            "record_open_gaps",
+            "record_failure",
+        ],
+    ),
 ]
 
-ROLE_SELECTOR_INSTRUCTION = """
+ROLE_SELECTOR_INSTRUCTION = (
+    JSON_WIRE_CONTRACT_V1
+    + "\n\n"
+    + """
 You are the AgentLoom role selector.
 
 Select one or more roles from this exact set:
@@ -1845,9 +2037,12 @@ Return exactly one JSON object matching RoleSelection.
 Current role selection context:
 {role_selector_context}
 """
+)
 
 SUPERVISOR_INSTRUCTION = (
-    """
+    JSON_WIRE_CONTRACT_V1
+    + "\n\n"
+    + """
 You are the AgentLoom supervisor.
 
 You orchestrate a Google ADK multi-agent investigation through shared session memory.
@@ -1858,9 +2053,11 @@ Read only `supervisor_context`.
 Hard rules:
 """
     + SUPERVISOR_RUNTIME_NOTE
+    + SUPERVISOR_CANON_OF_TERMS
     + SUPERVISOR_RULES_CORE
     + SUPERVISOR_RULES_REACHABILITY
     + SUPERVISOR_RULES_ANTI_BLOAT
+    + SUPERVISOR_RULES_RED_TEAM
     + """
 Return exactly one JSON object matching SupervisorDecision.
 
@@ -1869,7 +2066,10 @@ Current supervisor context:
 """
 )
 
-INVESTIGATOR_PLANNER_INSTRUCTION = """
+INVESTIGATOR_PLANNER_INSTRUCTION = (
+    JSON_WIRE_CONTRACT_V1
+    + "\n\n"
+    + """
 You are the internal mission planner for one role-specialized investigator agent.
 
 Use `investigator_context` only.
@@ -1882,6 +2082,9 @@ Branching strategy — decide based on graph state, not domain:
 1. Graph is empty (initialPass=true): create exactly one branch with `fragmentType=overview_chain` that answers the mission question as one connected graph — whatever shape fits (chain, tree, star, network). Tool: `reason`. The question should rephrase the user's question as "give me the whole picture as a connected graph". Optionally add 1-2 parallel grounding branches if internal retrieval is available, but the overview branch is mandatory.
 2. Graph already has structure: find edges with `supportType=hypothesis` or `confidence < 0.5` or branches with `remainingFrontier`. Create branches that target those specific weak edges. Each branch question must reference what is already known and what specific gap it closes. Do not re-ask what is already in the graph at high confidence.
 3. Supervisor signals frame shift: create 1-2 exploratory branches with a different angle on the same question. A frame-shift branch might ask "is there an intermediary or alternative route?" or "what if the connection works differently than assumed?"
+"""
+    + INVESTIGATOR_PREFLIGHT_BREADTH_RULE
+    + """
 4. Always: a branch question is never "tell me about X domain". It is "verify this specific connection" or "who specifically sits between A and B" or "is this hypothesis edge real" or "is there a different way to look at this".
 5. Candidate paths: use `pathKind` explicitly.
    - `overview`: build or repair the overall graph skeleton.
@@ -1897,6 +2100,7 @@ Hypothesis loop guidance:
 - Read `sharedMemory.hypotheses` before planning branches.
 - Read `sharedMemory.entityRegistrySummary` before planning branches: it lists recent hypothesis-local entity merges (lineage after `replace_entity` / `replace_fragment`) and the largest equivalence classes—do not re-open a graph slot that already merged into a canonical endpoint unless you are widening evidence, not re-adding a duplicate node.
 - Read `sharedMemory.hypothesisFrontiers` before planning branches. This is the clearest feed of what the currently active hypotheses just discovered versus what they still need to refine.
+- Read `sharedMemory.evidenceLedgerCompact` for algorithmically trimmed evidence tails (ids + short previews) and per-branch eligible id counts; full ledger rows remain in session state for `apply_supply_graph_patch` validation.
 - If there is one `active` hypothesis with an existing broad picture and unresolved frontier, prefer refining that same hypothesis over inventing a new one.
 - If an `accepted` hypothesis answers only one route and the user explicitly asked for alternatives, you may create a sibling `alternative` hypothesis branch.
 - If a hypothesis was `rejected`, do not create another branch that restates it. Only create a new branch if it tests a different route, endpoint set, or bridge idea.
@@ -1932,7 +2136,7 @@ Investigation-shape guidance:
 
 Dedup and breadth (mandatory):
 - Read `sharedMemory.reasoningDedupHints`. Do **not** set a branch `humanQuestion` that repeats the same intent as any string in `openStructuralGapTexts`, `recentlyAnsweredQuestions`, `lastAgentNextQuestions`, or `recentBranchHumanQuestions` unless you are targeting a **different** typed link (different subject/object or relation).
-- Read `sharedMemory.requestedCorridor` and `sharedMemory.commercialBridgeCandidates`. If the user question names a source-to-sink corridor and the graph still does not connect that corridor, prioritize the top commercial bridge candidate that connects the relevant islands before accepting an unrelated complete route.
+- Read `sharedMemory.requestedCorridor`, `sharedMemory.commercialBridgeCandidates`, `sharedMemory.aggregateIntermediaryNodes`, and `sharedMemory.alternativeRouteFamilyCandidates`. If the graph still relies on aggregate intermediaries or a narrow bridge was rejected, prioritize either the top commercial bridge candidate or a materially different alternative route family before accepting an unrelated complete route.
 - Read `sharedMemory.processGapCandidates`. If a named host already has inbound material legs and outbound product legs but lacks a hosted processStep linking them, prioritize that host-local transform/assembly gap before inventing a remote intermediary.
 - **Placeholder branches:** if `sharedMemory.placeholderNodes` is non-empty, include **at least one** branch whose `knownContext` names a specific placeholder label or `oldId` from the graph and asks for resolution or a mergeable fragment that can drive `replace_entity` / `replace_fragment`.
 - **Dedup vs targets:** repeating the same *question template* is **not** a duplicate if the **target node** changes (different subject/object endpoint, different `oldId`, or a different entry from `placeholderNodes`).
@@ -1943,6 +2147,7 @@ Dedup and breadth (mandatory):
 Rules:
 - Respect the mission assignedRoles and their role contracts.
 - Inside one role-specialized investigator, every emitted branch must keep exactly the current specialized role. Do not emit cross-role follow-up branches here. If another role becomes relevant at an intersection, surface it as frontier or rationale for supervisor instead of delegating across roles inside this plan.
+- If the specialized role is `supply_chain` and no business-complete chain exists yet, keep the plan on operational closure. Do not spend a supply-chain branch on ownership, policy, procurement, or market-background work until the graph contains at least one business-complete route or the operational search is clearly exhausted.
 - Return 1 to 4 `branchPlans`.
 - Every branch plan must contain one human-readable question and one human-readable action sentence.
 - Every branch plan must conform to the exact BranchPlan contract shown below.
@@ -1957,6 +2162,10 @@ Rules:
 - Use `reason` for structural first-pass branches when the graph is still empty or when the system needs a hypothesis/synthesis step.
 - Use `retrieve` for internal knowledge lookup from shared memory, request corpus, and Vertex internal knowledge using a natural-language query. Think of it as internal grep + read.
 - Use `web_search` when public web evidence is needed or when `retrieve` did not return enough relevant evidence.
+- For supply-chain graph mutation, use `supply_qa` first for discovery (it appends to the evidence ledger), then `apply_supply_graph_patch` only with `evidenceRefIds` that appear in that ledger for this branch or its hypothesis ancestors. Never emit `apply_supply_graph_patch` as the first tool on a branch with an empty ledger.
+"""
+    + SUPPLY_GRAPH_PATCH_APPLY_QUERYTEXT_GUIDANCE
+    + """
 - When the graph is empty, do not start all branches with external grounding. At least one branch must start with `reason`, and no more than one branch may use `retrieve` or `web_search` as its first tool.
 - Branches that can be pursued independently may share a `parallelGroup`.
 - Multiple branches may belong to the same parent hypothesis and still run in parallel. They should share a `parallelGroup` when they are sibling dependent follow-ups that merge back into the same hypothesis loop.
@@ -1984,8 +2193,12 @@ Return exactly one JSON object matching InvestigatorPlan.
 Current investigator context:
 {investigator_context}
 """
+)
 
-INVESTIGATOR_SYNTHESIZER_INSTRUCTION = """
+INVESTIGATOR_SYNTHESIZER_INSTRUCTION = (
+    JSON_WIRE_CONTRACT_V1
+    + "\n\n"
+    + """
 You are the cross-branch synthesizer inside one role-specialized investigator agent.
 
 Use only `investigator_synthesis_context`.
@@ -1999,12 +2212,13 @@ Rules:
 1. Reachability analysis (USE `reachability` FIELD FIRST):
 The context includes a `reachability` field computed from the full working graph. It contains:
 - `groundedCompleteChains`: document-grounded paths to a valid terminal sink
-- `structurallyCompleteChains`: terminal-reachable paths that remain weak or hypothetical on at least one hop
+- `structurallyCompleteChains`: terminal-reachable business-complete paths that remain weak or hypothetical on at least one hop
+- `typedBackboneChains`: typed operational backbone (flow + substantive process + hosts + product) without full business-complete classification
 - `partialChains`: paths that stop before a valid terminal sink
 - `bridgeCandidates`: entities present in governance/policy layer but not connected to any flow chain
 - `routeFamilies`: deduplicated route fingerprints with `multiplicity` (near-duplicate paths collapse here); treat high multiplicity with `narrativeDuplicate=true` as one route family, not many independent discoveries
 - `healthSummary`: one-line assessment
-Read this field first. If there are **partial chains**, their break point is the highest-priority structural gap. If **structurally complete** chains exist but **grounded** chains do not, say that the skeleton is terminal-connected but not document-grounded. If bridgeCandidates lists entities known to governance but not to flow, those need a SUPPLIES_TO, PRODUCES, or EXTRACTS_FROM edge.
+Read this field first. If there are **partial chains**, their break point is the highest-priority structural gap. If **structurally complete** chains exist but **grounded** chains do not, say that the skeleton is terminal-connected but not document-grounded. If bridgeCandidates lists entities known to governance but not to flow, those need a product-carrying `flowLeg`, hosted `processStep`, or replacement patch that inserts those primitives.
 Report the reachability health in `crossBranchAssessment`. If no **grounded** complete chain exists, say so explicitly and name the break point(s) on partial chains (or the weakest hop on a structural chain).
 When interpreting branch results, remember that replacement patches are already applied to the working graph before synthesis. If one branch replaced a placeholder node or an old fragment, synthesize against the replacement graph and do not keep both versions alive conceptually unless the state still explicitly contains both.
 
@@ -2051,8 +2265,12 @@ Return exactly one JSON object matching InvestigatorSynthesis.
 Current synthesis context:
 {investigator_synthesis_context}
 """
+)
 
-HYPOTHESIS_TURN_REASONER_INSTRUCTION = """
+HYPOTHESIS_TURN_REASONER_INSTRUCTION = (
+    JSON_WIRE_CONTRACT_V1
+    + "\n\n"
+    + """
 You are the hypothesis turn reasoner inside one role-specialized investigator agent.
 
 Use only `hypothesis_turn_context`.
@@ -2064,7 +2282,7 @@ The unit of reasoning is "what graph mutation or graph-closing action should hap
 Hard rules:
 - The original user question still governs the hypothesis. Do not forget it.
 - Read the current hypothesis graph, recent turn history, remainingFrontier, discoveredFrontier, and parallel branch summaries before deciding.
-- Read `hypothesisGraph.requestedCorridor` and `hypothesisGraph.commercialBridgeCandidates`. If the requested corridor is still disconnected and a commercial bridge candidate exists, that bridge is a top-priority structural follow-up.
+- Read `hypothesisGraph.requestedCorridor`, `hypothesisGraph.commercialBridgeCandidates`, `hypothesisGraph.aggregateIntermediaryNodes`, and `hypothesisGraph.alternativeRouteFamilyCandidates`. If the current bridge remains generic or rejected, use an alternative route-family follow-up instead of re-asking the same narrow bridge.
 - Read `hypothesisGraph.processGapCandidates`. If a named host already receives product legs and ships a downstream product but the hosted transform/assembly step is missing, treat that host-local process gap as a top-priority structural follow-up.
 - If `hypothesisGraph.placeholderNodes` is non-empty, prioritize `nextTurn` / `followupBranches` that **resolve or replace** those placeholders (concrete nodes or `replace_entity`/`replace_fragment` design) over `accept_hypothesis` until the list is cleared or explicitly replaced.
 - Treat the hypothesis graph as mutable shared state for this hypothesis. Recent patch fragments already changed the graph you are looking at.
@@ -2098,6 +2316,8 @@ Hard rules:
 - Prefer qualitative structural gain over quantitative detail. If a typed edge already exists and the only missing information is amount, share, tonnage, exact percentage, or pricing, do not spawn a new hypothesis or follow-up branch for that. Accept or stall the current hypothesis unless a new typed edge can still be added.
 - Do not accept a hypothesis while the hypothesis graph still contains broad placeholders or fake typed anchors such as generic mine/facility/plant/producer nodes that should be replaced by concrete nodes.
 - Do not accept a root or `overview` hypothesis while structural frontier remains open from earlier turns. Remaining source-endpoint, sink-endpoint, intermediary, or transform-ladder gaps are not "detail".
+- If `hypothesisGraph.reachability` still has no grounded or structural business-complete chain, stay on operational closure **unless** `typedBackboneChainCount` is already > 0 and the remaining work is clearly overlay/detail—then you may accept or stall with explicit caveats instead of infinite operational retries. Do not pivot a supply-chain hypothesis into ownership, policy, procurement, or market-background turns until the chain is business-complete, a typed backbone exists with honest limits, or runtime evidence shows that no better operational follow-up remains.
+- Naming converter families, stating that supply is global, or describing an integrated commercial model is not enough by itself. Unless the turn added a typed flow leg, process step, or replacement patch, treat the route as still structurally open.
 - When you emit a follow-up branch, make it executable as a standalone branch inside the same hypothesis family: carry enough `knownContext`, `frontier`, and `assignedRoles` so the next turn starts inside the right graph context rather than from scratch.
 
 Decision contract:
@@ -2137,9 +2357,12 @@ Return exactly one JSON object matching HypothesisTurnDecision.
 Current turn context:
 {hypothesis_turn_context}
 """
+)
 
 GAP_BRIDGE_INSTRUCTION = (
-    """
+    JSON_WIRE_CONTRACT_V1
+    + "\n\n"
+    + """
 You are `gap_bridge_agent`.
 
 Use only `gap_bridge_context`.
@@ -2150,6 +2373,7 @@ Your job is to bridge partial graphs and unresolved gaps using the selected role
 Rules:
 - `activeRoles` must match the mission assignedRoles.
 - Only produce relations allowed by the active role contracts.
+- Read JSON field `gap_bridge_context.allowedGraphDeltaRelations` (sorted list). Every `graphDelta[].relation` MUST be one of those strings. Do not emit governance-only relations (for example OPERATES) unless that literal appears in `allowedGraphDeltaRelations` because governance roles are active.
 - Only propose new graph observations when they are explicit hypotheses or bridge candidates. Use `supportType=hypothesis`.
 - Keep the response compact enough to fit one strict JSON object: at most """
     + str(MAX_GRAPH_DELTA_OBSERVATIONS)
@@ -2175,7 +2399,9 @@ Gap bridge context:
 )
 
 CRITIC_INSTRUCTION = (
-    """
+    JSON_WIRE_CONTRACT_V1
+    + "\n\n"
+    + """
 You are `critic_agent`.
 
 Use only `critic_context`.
@@ -2201,6 +2427,10 @@ The context includes a `reachability` field. Read it before making your assessme
 - If `healthSummary` indicates **no document-grounded complete chain** (or equivalent), do NOT recommend composition unless investigation has stagnated and further progress is implausible.
 - When `groundedCompleteChains` / `completeChainCount` is empty but stagnation rules already justify ending investigation, you may recommend composition **only if** the final composed answer will explicitly separate (a) document-supported fragments, (b) structurally complete weak chains / best-supported indirect structure, and (c) adjacent-frame or market-prior context carried as hypothesis or learned findings—not as grounded end-to-end flow. State that requirement in your recommendation rationale.
 - Reachability may count chains whose **source** is a typed FACILITY/ORGANIZATION midstream anchor, not only an upstream extract site. When you narrate industry defaults (e.g. naming OEMs), you must still reconcile them with **actual graph node labels**; do not treat narrative substitutes as evidence that broad graph nodes were replaced.
+
+Breadth / multiplicity / red team (USE `investigationPreflight`, `redTeamArtifact`, `redTeamSatisfied`):
+- When `investigationPreflight` signals high breadth or requires alternative route families / counterviews / adjacent regions, the composed answer must not read like a single-route story if the graph or red-team artifact contains materially distinct route families or competing honest interpretations.
+- If `redTeamSatisfied` is true and `redTeamArtifact` lists epistemic challenges or proposed branches, reflect that multiplicity in your summary and composition conditions unless those proposals were fully merged into the graph in later investigation passes.
 
 Broad-node / placeholder debt (USE `sharedMemory.placeholderNodes` and `sharedMemory.placeholderResolutionHints`):
 - These lists are **runtime-detected** broad anchors on flow observations. When either is non-empty, you must treat them as **structural debt**, not as satisfactory named endpoints.
@@ -2246,7 +2476,10 @@ Critic context:
 """
 )
 
-NARRATIVE_COMPOSER_INSTRUCTION = """
+NARRATIVE_COMPOSER_INSTRUCTION = (
+    JSON_WIRE_CONTRACT_V1
+    + "\n\n"
+    + """
 You are `narrative_composer`.
 
 Use only the JSON in `narrative_composer_context`: `question`, `internalBrief`, `questionRubric`, and optional `repairHint`.
@@ -2276,8 +2509,12 @@ Return exactly one JSON object matching StructuredNarrativeAnswer.
 Composer context:
 {narrative_composer_context}
 """
+)
 
-RUBRIC_LLM_INSTRUCTION = """
+RUBRIC_LLM_INSTRUCTION = (
+    JSON_WIRE_CONTRACT_V1
+    + "\n\n"
+    + """
 You are `rubric_llm_expander`.
 
 Use only `rubric_llm_context`: `question`, `selectedRoles`, and `heuristicRubric` (already computed).
@@ -2291,15 +2528,18 @@ Return exactly one JSON object matching RubricLLMExtras.
 
 {rubric_llm_context}
 """
+)
 
 
 def read_shared_memory(tool_context) -> dict[str, Any]:
-    request = AgentLoomRequest.model_validate(tool_context.state.get(STATE_REQUEST) or {})
+    request = _request_from_state(tool_context.state)
     graph_state = _load_operational_graph_state(tool_context.state)
     graph = observation_projection(graph_state)
     reachability = _graph_reachability_report_for_graph(graph_state, state=tool_context.state)
     commercial_bridge_candidates = _commercial_bridge_candidates(graph_state, state=tool_context.state)
     process_gap_candidates = _host_local_process_gap_candidates(graph_state)
+    aggregate_intermediary_nodes = _aggregate_intermediary_nodes_from_graph(graph_state)
+    alternative_route_family_candidates = _alternative_route_family_candidates(tool_context.state, graph_state)
     fragments = [GraphFragment.model_validate(item) for item in (tool_context.state.get(STATE_GRAPH_FRAGMENTS) or [])]
     branches = [BranchState.model_validate(item) for item in (tool_context.state.get(STATE_BRANCH_STATES) or [])]
     failures = [FailureRecord.model_validate(item) for item in (tool_context.state.get(STATE_FAILURES) or [])]
@@ -2332,10 +2572,13 @@ def read_shared_memory(tool_context) -> dict[str, Any]:
         "requestedCorridor": reachability.get("requestedCorridor") or {},
         "commercialBridgeCandidates": commercial_bridge_candidates,
         "processGapCandidates": process_gap_candidates,
+        "aggregateIntermediaryNodes": aggregate_intermediary_nodes,
+        "alternativeRouteFamilyCandidates": alternative_route_family_candidates,
         "graphFragmentCount": len(fragments),
         "graphFragments": [item.model_dump(mode="json", by_alias=True) for item in fragments[-10:]],
         "branchCount": len(branches),
-        "branches": [item.model_dump(mode="json", by_alias=True) for item in branches[-6:]],
+        "branches": [_branch_state_for_shared_memory(item) for item in branches[-6:]],
+        "evidenceLedgerCompact": _build_evidence_ledger_compact(tool_context.state),
         "openGaps": _open_gap_texts(tool_context.state),
         "answeredQuestions": list(tool_context.state.get(STATE_ANSWERED_QUESTIONS) or []),
         "failures": [item.model_dump(mode="json", by_alias=True) for item in failures[-10:]],
@@ -2355,11 +2598,65 @@ def read_shared_memory(tool_context) -> dict[str, Any]:
             "stagnationCount": int(tool_context.state.get(STATE_GLOBAL_STAGNATION, 0) or 0),
             "history": list(tool_context.state.get(STATE_PROGRESS_HISTORY) or [])[-6:],
         },
+        "questionIntent": tool_context.state.get(STATE_QUESTION_INTENT) or {},
+        "intentExtractionMeta": tool_context.state.get(STATE_INTENT_META) or {},
+        "investigationTodos": list(tool_context.state.get(STATE_INVESTIGATION_TODOS) or []),
+    }
+
+
+def _compact_shared_memory_for_critic(mem: dict[str, Any]) -> dict[str, Any]:
+    """Narrow shared memory for critic prompts (counts + short previews; not full read_shared_memory)."""
+    reach = mem.get("reachability") if isinstance(mem.get("reachability"), dict) else {}
+    cap = SUPERVISOR_REACHABILITY_LIST_CAP if SUPERVISOR_REACHABILITY_LIST_CAP > 0 else 4
+
+    def _clip(key: str) -> list[Any]:
+        v = reach.get(key)
+        return v[:cap] if isinstance(v, list) else []
+
+    partial = _clip("partialChains")
+    partial_preview: list[dict[str, Any]] = []
+    for c in partial:
+        if isinstance(c, dict):
+            partial_preview.append(
+                {
+                    "sink": (str(c.get("sink") or ""))[:200],
+                    "breakReason": (str(c.get("breakReason") or ""))[:320],
+                }
+            )
+    return {
+        "question": str(mem.get("question") or "")[:4000],
+        "selectedRoles": mem.get("selectedRoles") or [],
+        "currentMission": mem.get("currentMission") or {},
+        "openGaps": (mem.get("openGaps") or [])[:16],
+        "progress": mem.get("progress") or {},
+        "operationalCounts": mem.get("operationalCounts") or {},
+        "graphObservationCount": mem.get("graphObservationCount"),
+        "reachability": {
+            "healthSummary": reach.get("healthSummary"),
+            "groundedCompleteChainCount": reach.get("groundedCompleteChainCount"),
+            "structuralCompleteChainCount": reach.get("structuralCompleteChainCount"),
+            "partialChainCount": reach.get("partialChainCount"),
+            "typedBackboneChainCount": reach.get("typedBackboneChainCount"),
+            "requestedCorridor": reach.get("requestedCorridor"),
+            "requestedCorridorSatisfied": reach.get("requestedCorridorSatisfied"),
+            "weakFlowComponentsCount": reach.get("weakFlowComponentsCount"),
+            "groundedCompleteChains": _clip("groundedCompleteChains"),
+            "structurallyCompleteChains": _clip("structurallyCompleteChains"),
+            "typedBackboneChains": _clip("typedBackboneChains"),
+            "partialChainBreakPoints": partial_preview[:cap],
+        },
+        "hypothesisCount": len(mem.get("hypotheses") or []),
+        "hypothesesPreview": [h for h in (mem.get("hypotheses") or [])[:4] if isinstance(h, dict)],
+        "learnedFindingCount": mem.get("learnedFindingCount"),
+        "learnedFindingsPreview": [x for x in (mem.get("learnedFindings") or [])[:5] if isinstance(x, dict)],
+        "placeholderNodes": mem.get("placeholderNodes") or [],
+        "placeholderResolutionHints": mem.get("placeholderResolutionHints") or [],
+        "candidatePaths": (mem.get("candidatePaths") or [])[:10],
     }
 
 
 def read_corpus_index(tool_context) -> dict[str, Any]:
-    request = AgentLoomRequest.model_validate(tool_context.state.get(STATE_REQUEST) or {})
+    request = _request_from_state(tool_context.state)
     return {
         "documentCount": len(request.corpus_documents),
         "documents": [
@@ -2376,7 +2673,7 @@ def read_corpus_index(tool_context) -> dict[str, Any]:
 
 
 def read_corpus_document(document_id: str, tool_context) -> dict[str, Any]:
-    request = AgentLoomRequest.model_validate(tool_context.state.get(STATE_REQUEST) or {})
+    request = _request_from_state(tool_context.state)
     for doc in request.corpus_documents:
         if doc.document_id == document_id:
             return {
@@ -2400,7 +2697,7 @@ def read_corpus_document(document_id: str, tool_context) -> dict[str, Any]:
 
 
 def search_corpus(query: str, tool_context, max_results: int = 5) -> dict[str, Any]:
-    request = AgentLoomRequest.model_validate(tool_context.state.get(STATE_REQUEST) or {})
+    request = _request_from_state(tool_context.state)
     terms = [term.lower() for term in _TOKEN_RE.findall(query) if len(term) >= 3]
     if not request.corpus_documents or not terms:
         return {"query": query, "matches": []}
@@ -2459,7 +2756,8 @@ def vertex_grounded_search(query: str, tool_context, max_results: int = 5) -> di
 
     try:
         client = Client(vertexai=True, project=config["project"], location=config["location"])
-        response = client.models.generate_content(
+        response = _vertex_generate_content_resilient(
+            client,
             model=GROUNDING_MODEL,
             contents=prompt,
             config=live_types.GenerateContentConfig(
@@ -2476,6 +2774,8 @@ def vertex_grounded_search(query: str, tool_context, max_results: int = 5) -> di
                     )
                 ],
             ),
+            allow_quota_model_fallback=True,
+            used_resource_fallback_holder=[False],
         )
     except Exception as exc:
         return {
@@ -2874,6 +3174,8 @@ def _replacement_patch_regression_reason(
             "replacement would remove an already reachable business-complete chain "
             f"({before_complete} -> {after_complete})"
         )
+    if DISABLE_REPLACE_HOP_REGRESSION:
+        return ""
     if before_hops >= 4 and after_hops + 1 < before_hops:
         after_partial = after_report.get("partialChains") or []
         reason = str(after_partial[0].get("breakReason") or "").strip() if after_partial else ""
@@ -2999,6 +3301,12 @@ def _apply_graph_fragment_mutations(
     state: dict[str, Any],
     incoming_fragments: list[GraphFragment],
 ) -> dict[str, Any]:
+    if incoming_fragments:
+        has_ops = any(bool(f.flow_legs or f.process_steps) for f in incoming_fragments)
+        if not has_ops:
+            state[STATE_EMPTY_TYPED_PAYLOAD_STREAK] = int(state.get(STATE_EMPTY_TYPED_PAYLOAD_STREAK) or 0) + 1
+        else:
+            state[STATE_EMPTY_TYPED_PAYLOAD_STREAK] = 0
     pre_merge_graph = _load_operational_graph_state(state)
     pre_merge_counts = graph_counts(pre_merge_graph)
     existing_fragments = [
@@ -3095,6 +3403,7 @@ def _apply_graph_fragment_mutations(
                 graph_state_from_fragments(candidate_fragments),
             )
             if regression_reason:
+                reject_code = "hop_regression" if "shrink" in regression_reason else "chain_regression"
                 patch_summaries.append(
                     {
                         "fragmentId": normalized_fragment.fragment_id,
@@ -3102,6 +3411,7 @@ def _apply_graph_fragment_mutations(
                         "explicitOldIds": sorted(seed),
                         "removalZoneSize": len(removal_zone),
                         "rejectedReason": regression_reason,
+                        "rejectCode": reject_code,
                     }
                 )
                 record_open_gaps(
@@ -3577,32 +3887,59 @@ def _strip_scope_phrase(text: str) -> str:
 
 
 def _requested_operational_corridor(request: AgentLoomRequest) -> dict[str, Any]:
-    question = (request.question or "").strip()
-    if not question:
+    """Regex-only corridor (legacy); prefer `_operational_corridor_from_state` when session has QuestionIntent."""
+    return regex_operational_corridor_dict(request.question)
+
+
+def _operational_corridor_from_state(state: dict[str, Any]) -> dict[str, Any]:
+    raw = state.get(STATE_QUESTION_INTENT)
+    if raw:
+        try:
+            return intent_to_operational_corridor_dict(QuestionIntent.model_validate(raw))
+        except Exception:
+            pass
+    return _requested_operational_corridor(_request_from_state(state))
+
+
+def _requested_corridor_intent_debug(state: dict[str, Any] | None) -> dict[str, Any]:
+    """Surface whether QuestionIntent drove corridor (for supervisor / reachability JSON)."""
+    if not state:
+        return {"usedQuestionIntent": False}
+    raw = state.get(STATE_QUESTION_INTENT)
+    if not isinstance(raw, dict):
+        return {"usedQuestionIntent": False}
+    try:
+        qi = QuestionIntent.model_validate(raw)
         return {
-            "active": False,
-            "sourceScope": "",
-            "sinkScope": "",
-            "sourceTokens": [],
-            "sinkTokens": [],
+            "usedQuestionIntent": True,
+            "intentSchemaVersion": qi.intent_schema_version,
+            "corridorActive": qi.corridor_active,
+            "hasSourceSinkText": bool((qi.source_scope or "").strip() or (qi.sink_scope or "").strip()),
         }
-    source_scope = ""
-    sink_scope = ""
-    match = re.search(
-        r"\bfrom\s+(?P<source>.+?)\s+to\s+(?P<sink>.+?)(?=(?:,|;|\.|\?|\band\s+(?:identify|surface|show|map|trace|assess|find|describe|explain)\b|$))",
-        question,
-        re.IGNORECASE,
-    )
-    if match:
-        source_scope = _strip_scope_phrase(match.group("source"))
-        sink_scope = _strip_scope_phrase(match.group("sink"))
+    except Exception:
+        return {"usedQuestionIntent": False, "intentParseFailed": True}
+
+
+def _investigation_reachability_ops_bundle(
+    state: dict[str, Any],
+    graph_state: OperationalGraphState | None = None,
+) -> dict[str, Any]:
+    """Reachability + operational extras shared by planner, hypothesis graph, and similar contexts."""
+    gs = graph_state or _load_operational_graph_state(state)
+    reach = _graph_reachability_report_for_graph(gs, state=state)
     return {
-        "active": bool(source_scope or sink_scope),
-        "sourceScope": source_scope,
-        "sinkScope": sink_scope,
-        "sourceTokens": _scope_tokens(source_scope),
-        "sinkTokens": _scope_tokens(sink_scope),
+        "reachability": reach,
+        "requestedCorridor": reach.get("requestedCorridor") or {},
+        "commercialBridgeCandidates": _commercial_bridge_candidates(gs, state=state),
+        "processGapCandidates": _host_local_process_gap_candidates(gs),
+        "aggregateIntermediaryNodes": _aggregate_intermediary_nodes_from_graph(gs),
+        "alternativeRouteFamilyCandidates": _alternative_route_family_candidates(state, gs),
     }
+
+
+def _weak_flow_component_count(graph_state: OperationalGraphState) -> int:
+    comp = _operational_component_index(graph_state)
+    return len({v for v in comp.values()}) if comp else 0
 
 
 def _request_document_index(request: AgentLoomRequest) -> dict[str, CorpusDocument]:
@@ -3756,11 +4093,12 @@ def _operational_component_index(graph_state: OperationalGraphState) -> dict[str
 
     for leg in graph_state.flow_legs:
         _connect(leg.supplier_node_id, leg.customer_node_id)
-        _connect(leg.supplier_node_id, leg.product_node_id)
-        _connect(leg.customer_node_id, leg.product_node_id)
     for step in graph_state.process_steps:
-        for node_id in [*step.input_node_ids, *step.output_node_ids]:
-            _connect(step.host_node_id, node_id)
+        if step.process_kind == "extraction":
+            for node_id in step.input_node_ids:
+                _connect(step.host_node_id, node_id)
+        else:
+            adjacency.setdefault(step.host_node_id, set())
 
     component_by_node: dict[str, str] = {}
     counter = 0
@@ -4355,6 +4693,296 @@ def _ensure_learned_findings(action: ToolAction, result: ToolActionResult) -> To
     return result.model_copy(update={"learned_findings": findings[:6]})
 
 
+def _logic_trace_extras(
+    ctx: InvocationContext,
+    *,
+    supervisor_raw_next: str,
+    policy_parts: list[PolicyCorrection],
+    decision: SupervisorDecision,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    hyp_snap = ctx.session.state.pop(STATE_LAST_HYPOTHESIS_RUNTIME_TELEMETRY, None)
+    lt_hypothesis: dict[str, Any] | None = None
+    if isinstance(hyp_snap, dict) and hyp_snap.get("applied"):
+        lt_hypothesis = {
+            "applied": True,
+            "decisionNote": hyp_snap.get("decisionNote", ""),
+            "branchId": hyp_snap.get("branchId", ""),
+        }
+    lt_delegate = {
+        "supervisorNextAgentRaw": supervisor_raw_next,
+        "delegatePolicyDetails": [p.detail for p in policy_parts],
+        "nextAgent": decision.next_agent,
+        "runtimeRewroteNextAgent": supervisor_raw_next != decision.next_agent,
+    }
+    return lt_hypothesis, lt_delegate
+
+
+def _append_evidence_ledger(
+    state: dict[str, Any], action: ToolAction, result: ToolActionResult
+) -> EvidenceLedgerEntry | None:
+    if result.status not in {"success", "partial"}:
+        return None
+    if action.tool_name not in {"retrieve", "reason", "web_search", "supply_qa"}:
+        return None
+    ledger_raw = state.get(STATE_EVIDENCE_LEDGER)
+    ledger: list[dict[str, Any]] = list(ledger_raw) if isinstance(ledger_raw, list) else []
+    entry_id = f"ev_{uuid.uuid4().hex[:14]}"
+    entry = EvidenceLedgerEntry(
+        id=entry_id,
+        tool=action.tool_name,
+        branchId=action.branch_id,
+        summary=(result.human_summary or "")[:480],
+        sourceDocuments=list(result.source_documents)[:6],
+    )
+    ledger.append(entry.model_dump(mode="json", by_alias=True))
+    state[STATE_EVIDENCE_LEDGER] = ledger[-240:]
+    return entry
+
+
+def _branches_by_id(state: dict[str, Any]) -> dict[str, BranchState]:
+    out: dict[str, BranchState] = {}
+    for raw in state.get(STATE_BRANCH_STATES) or []:
+        try:
+            b = BranchState.model_validate(raw)
+        except Exception:
+            continue
+        out[b.branch_id] = b
+    return out
+
+
+def _branch_ancestor_ids(state: dict[str, Any], branch_id: str) -> list[str]:
+    branches = _branches_by_id(state)
+    chain: list[str] = [branch_id]
+    seen: set[str] = {branch_id}
+    bid = branch_id
+    for _ in range(32):
+        b = branches.get(bid)
+        if b is None:
+            break
+        pid = (b.parent_hypothesis_id or "").strip()
+        if not pid or pid in seen:
+            break
+        seen.add(pid)
+        chain.append(pid)
+        bid = pid
+    return chain
+
+
+def _eligible_evidence_ledger_entry_ids(state: dict[str, Any], branch_id: str) -> set[str]:
+    """Evidence ids from session ledger + this branch's append-only ledger and ancestor branches."""
+    ids: set[str] = set()
+    chain = _branch_ancestor_ids(state, branch_id)
+    chain_set = set(chain)
+    for raw in state.get(STATE_EVIDENCE_LEDGER) or []:
+        if not isinstance(raw, dict):
+            continue
+        eid = str(raw.get("id") or "").strip()
+        bid = str(raw.get("branchId") or "").strip()
+        if eid and bid in chain_set:
+            ids.add(eid)
+    branches = _branches_by_id(state)
+    for bid in chain:
+        br = branches.get(bid)
+        if br is None:
+            continue
+        for row in br.hypothesis_evidence_ledger:
+            if row.id:
+                ids.add(row.id)
+        for row in br.parent_ledger_snapshot:
+            if row.id:
+                ids.add(row.id)
+    return ids
+
+
+_LEDGER_COMPACT_SUMMARY_CHARS = 96
+_LEDGER_COMPACT_SESSION_TAIL = 20
+_LEDGER_COMPACT_BRANCH_TAIL = 6
+_LEDGER_COMPACT_PARENT_SNAPSHOT_TAIL = 4
+_LEDGER_COMPACT_PLANNER_BY_BRANCH = 8
+
+
+def _compact_evidence_ledger_row(entry: EvidenceLedgerEntry | dict[str, Any]) -> dict[str, Any]:
+    """Algorithmic compaction for prompts: stable ids + short preview (full rows stay in session state)."""
+    if isinstance(entry, dict):
+        sid = str(entry.get("id") or "").strip()
+        docs = entry.get("sourceDocuments") or entry.get("source_documents") or []
+        doc_n = len(docs) if isinstance(docs, list) else 0
+        summ = str(entry.get("summary") or "")
+        return {
+            "id": sid,
+            "tool": str(entry.get("tool") or "").strip(),
+            "branchId": str(entry.get("branchId") or entry.get("branch_id") or "").strip(),
+            "summaryPreview": _truncate_text(summ, _LEDGER_COMPACT_SUMMARY_CHARS),
+            "sourceDocumentCount": doc_n,
+        }
+    return {
+        "id": entry.id,
+        "tool": entry.tool,
+        "branchId": entry.branch_id,
+        "summaryPreview": _truncate_text(entry.summary or "", _LEDGER_COMPACT_SUMMARY_CHARS),
+        "sourceDocumentCount": len(entry.source_documents),
+    }
+
+
+def _build_evidence_ledger_compact(state: dict[str, Any]) -> dict[str, Any]:
+    """Cross-branch ledger digest derived from full session + branch ledgers (no manual curation)."""
+    ledger_raw = state.get(STATE_EVIDENCE_LEDGER)
+    session_list = list(ledger_raw) if isinstance(ledger_raw, list) else []
+    session_tail_src = [x for x in session_list[-_LEDGER_COMPACT_SESSION_TAIL:] if isinstance(x, dict)]
+    session_tail = [_compact_evidence_ledger_row(e) for e in session_tail_src]
+    branches: list[BranchState] = []
+    for raw in state.get(STATE_BRANCH_STATES) or []:
+        try:
+            branches.append(BranchState.model_validate(raw))
+        except Exception:
+            continue
+    by_branch: list[dict[str, Any]] = []
+    for b in branches[-12:]:
+        eligible = _eligible_evidence_ledger_entry_ids(state, b.branch_id)
+        by_branch.append(
+            {
+                "branchId": b.branch_id,
+                "parentHypothesisId": b.parent_hypothesis_id,
+                "hypothesisRelation": b.hypothesis_relation,
+                "ledgerDigest": b.ledger_digest,
+                "branchLedgerTotal": len(b.hypothesis_evidence_ledger),
+                "branchLedgerTail": [
+                    _compact_evidence_ledger_row(e) for e in b.hypothesis_evidence_ledger[-_LEDGER_COMPACT_BRANCH_TAIL:]
+                ],
+                "parentSnapshotTotal": len(b.parent_ledger_snapshot),
+                "parentSnapshotTail": [
+                    _compact_evidence_ledger_row(e)
+                    for e in b.parent_ledger_snapshot[-_LEDGER_COMPACT_PARENT_SNAPSHOT_TAIL:]
+                ],
+                "eligibleEvidenceIdCount": len(eligible),
+            }
+        )
+    hints_raw = state.get(STATE_HYPOTHESIS_STEER_HINT)
+    steer_tail = list(hints_raw[-4:]) if isinstance(hints_raw, list) else []
+    return {
+        "sessionEntryTotal": len(session_list),
+        "sessionTail": session_tail,
+        "byBranch": by_branch,
+        "steerHintsTail": steer_tail,
+    }
+
+
+def _branch_state_for_shared_memory(branch: BranchState) -> dict[str, Any]:
+    """Branch JSON for prompts: ledger arrays are tails + totals (full lists remain in state)."""
+    d = branch.model_dump(mode="json", by_alias=True)
+    d["hypothesisEvidenceLedger"] = [
+        _compact_evidence_ledger_row(e) for e in branch.hypothesis_evidence_ledger[-_LEDGER_COMPACT_BRANCH_TAIL:]
+    ]
+    d["hypothesisEvidenceLedgerTotal"] = len(branch.hypothesis_evidence_ledger)
+    d["parentLedgerSnapshot"] = [
+        _compact_evidence_ledger_row(e) for e in branch.parent_ledger_snapshot[-_LEDGER_COMPACT_PARENT_SNAPSHOT_TAIL:]
+    ]
+    d["parentLedgerSnapshotTotal"] = len(branch.parent_ledger_snapshot)
+    return d
+
+
+def _is_supply_chain_action(action: ToolAction) -> bool:
+    return ROLE_SUPPLY_CHAIN in action.assigned_roles
+
+
+def _fragment_has_supply_chain_operational_progress(fragment: GraphFragment) -> bool:
+    if fragment.flow_legs or fragment.process_steps:
+        return True
+    if fragment.patch_mode in {"replace_entity", "replace_fragment"} and (
+        fragment.entity_nodes or fragment.flow_legs or fragment.process_steps
+    ):
+        return True
+    return False
+
+
+def _result_has_supply_chain_operational_progress(action: ToolAction, result: ToolActionResult) -> bool:
+    if not _is_supply_chain_action(action):
+        return True
+    if result.path_assessment == "rejected":
+        return True
+    return any(_fragment_has_supply_chain_operational_progress(fragment) for fragment in result.graph_fragments)
+
+
+def _normalize_supply_chain_result(action: ToolAction, result: ToolActionResult) -> ToolActionResult:
+    if action.tool_name == "supply_qa":
+        return result
+    if not _is_supply_chain_action(action):
+        return result
+    if result.path_assessment == "rejected":
+        return result
+    if _result_has_supply_chain_operational_progress(action, result):
+        return result
+    note = (
+        "This turn surfaced contextual or commercial clues but did not add flow legs, process steps, or a replacement patch, "
+        "so the operational chain remains open."
+    )
+    remaining_frontier = _dedupe_preserve_order(
+        list(result.remaining_frontier)
+        + list(result.resolved_frontier)
+        + list(result.uncovered_questions)
+        + list(action.frontier)
+        + [action.closure_target]
+    )[:8]
+    discovered_frontier = _dedupe_preserve_order(
+        list(result.discovered_frontier)
+        + list(result.resolved_frontier)
+        + list(result.uncovered_questions)
+    )[:8]
+    human_summary = ((result.human_summary.rstrip(".") + ". ") if result.human_summary else "") + note
+    return result.model_copy(
+        update={
+            "path_assessment": "still_open",
+            "path_assessment_note": note,
+            "closure_status": "unchanged" if result.closure_status in {"advanced", "closed"} else result.closure_status,
+            "human_summary": human_summary,
+            "resolved_frontier": [],
+            "remaining_frontier": remaining_frontier,
+            "discovered_frontier": discovered_frontier,
+        }
+    )
+
+
+def _needs_supply_chain_structural_retry(action: ToolAction, result: ToolActionResult) -> bool:
+    if not _is_supply_chain_action(action):
+        return False
+    if result.status in {"blocked", "failed"}:
+        return False
+    if result.path_assessment == "rejected":
+        return False
+    return not _result_has_supply_chain_operational_progress(action, result)
+
+
+def _supply_chain_structural_retry_suffix(
+    action: ToolAction,
+    result: ToolActionResult,
+    shared_memory: dict[str, Any],
+) -> str:
+    placeholder_hints = [
+        str(item).strip()
+        for item in (shared_memory.get("placeholderResolutionHints") or [])[:2]
+        if str(item).strip()
+    ]
+    frontier = [str(item).strip() for item in list(action.frontier)[:4] if str(item).strip()]
+    discovered = [str(item).strip() for item in list(result.discovered_frontier)[:3] if str(item).strip()]
+    return (
+        "\n\nStructural repair required. Your previous answer did not add a usable operational supply-chain payload.\n"
+        "Retry and return ONLY valid ToolActionResult JSON.\n"
+        "Requirements for this retry:\n"
+        "- Return 1-2 graphFragments with at least one real `flowLeg`, `processStep`, or a `replace_entity` / `replace_fragment` patch that resolves a current graph slot.\n"
+        "- Do not return decorative fragments with only high-level context or entityNodes unless they are part of a replacement patch with `oldId` / `oldIds`.\n"
+        "- If the corridor is indirect, encode the best-supported named intermediary hosts, named route-family handoff, and concrete product stages, even when confidence is low and supportType is hypothesis/model_knowledge.\n"
+        "- If the action is broad or overview, the payload must be a connected operational chain fragment, not disconnected facts.\n"
+        "- If you still cannot support a concrete operational primitive from this source, return `status=blocked` or `partial` with `graphFragments=[]` and explicit unresolved endpoints/operators/products in `uncoveredQuestions`.\n"
+        + (f"- Current closure target: {action.closure_target}\n" if action.closure_target else "")
+        + (f"- Frontier to close first: {' | '.join(frontier)}\n" if frontier else "")
+        + (f"- Newly exposed gaps from the prior answer: {' | '.join(discovered)}\n" if discovered else "")
+        + (
+            "- Placeholder repair hints: " + " | ".join(placeholder_hints) + "\n"
+            if placeholder_hints else ""
+        )
+    )
+
+
 def _flatten_fragments(fragments: list[GraphFragment]) -> list[GraphObservation]:
     flattened: list[GraphObservation] = []
     for fragment in fragments:
@@ -4394,23 +5022,6 @@ def _tool_failure_result(
     )
 
 
-def _strip_json_fence(text: str) -> str:
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
-        stripped = re.sub(r"\s*```$", "", stripped)
-    return stripped.strip()
-
-
-def _extract_json_object(text: str) -> str:
-    stripped = _strip_json_fence(text)
-    start = stripped.find("{")
-    end = stripped.rfind("}")
-    if start >= 0 and end > start:
-        return stripped[start : end + 1]
-    return stripped
-
-
 def _response_json_text(response: Any) -> str:
     parsed = getattr(response, "parsed", None)
     if parsed is not None:
@@ -4446,6 +5057,62 @@ def _model_with_resource_fallback(primary_model: str, *, used_fallback: bool) ->
     return primary_model
 
 
+def _genai_server_error_retry_max() -> int:
+    raw = (os.getenv("AGENTLOOM_GENAI_SERVER_ERROR_RETRIES", "4") or "4").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        n = 4
+    return max(1, min(n, 12))
+
+
+def _is_genai_transient_server_error(exc: BaseException) -> bool:
+    """True for Vertex/Gemini 5xx from google.genai (opaque INTERNAL, etc.)."""
+    try:
+        from google.genai import errors as genai_errors
+
+        if isinstance(exc, genai_errors.ServerError):
+            return True
+        if isinstance(exc, genai_errors.APIError):
+            code = int(getattr(exc, "code", 0) or 0)
+            return 500 <= code < 600
+    except Exception:
+        pass
+    return False
+
+
+def _vertex_generate_content_resilient(
+    client: Any,
+    *,
+    model: str,
+    contents: str,
+    config: Any,
+    allow_quota_model_fallback: bool,
+    used_resource_fallback_holder: list[bool],
+) -> Any:
+    """Retry generate_content on transient 5xx; optional one-step quota model fallback (429-style)."""
+    max_srv = _genai_server_error_retry_max()
+    srv_rix = 0
+    cur_model = model
+    while True:
+        try:
+            return client.models.generate_content(model=cur_model, contents=contents, config=config)
+        except Exception as exc:
+            if _is_genai_transient_server_error(exc) and srv_rix < max_srv - 1:
+                srv_rix += 1
+                time.sleep(min(0.25 * (2 ** (srv_rix - 1)), 12.0))
+                continue
+            if allow_quota_model_fallback and _is_resource_exhausted_error(exc):
+                srv_rix = 0
+                used_fb = bool(used_resource_fallback_holder[0])
+                nxt = _model_with_resource_fallback(cur_model, used_fallback=used_fb)
+                if nxt != cur_model:
+                    used_resource_fallback_holder[0] = True
+                    cur_model = nxt
+                    continue
+            raise
+
+
 def _fragment_has_graph_payload(fragment: GraphFragment) -> bool:
     return any(
         (
@@ -4458,86 +5125,46 @@ def _fragment_has_graph_payload(fragment: GraphFragment) -> bool:
     )
 
 
+def _enrich_tool_action_result_wire_dict(data: dict[str, Any], action: ToolAction) -> None:
+    """Fill tool/fragment identity omitted in model output; strict Pydantic still applies after this."""
+    if not data.get("actionId"):
+        data["actionId"] = action.action_id
+    if not data.get("branchId"):
+        data["branchId"] = action.branch_id
+    if not data.get("toolName"):
+        data["toolName"] = action.tool_name
+    gfs = data.get("graphFragments")
+    if not isinstance(gfs, list):
+        return
+    for i, item in enumerate(gfs):
+        if not isinstance(item, dict):
+            continue
+        if not item.get("fragmentId"):
+            item["fragmentId"] = f"{action.branch_id}-f{i + 1}"
+
+
 def _parse_tool_result_payload(
     text: str,
     action: ToolAction,
     allowed_edges: set[str],
     default_support_type: str,
 ) -> ToolActionResult:
-    payload = json.loads(_extract_json_object(text))
-    fragments_raw = payload.get("graphFragments") or payload.get("fragments") or []
+    try:
+        data = parse_wire_json(text)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(f"ToolActionResult: invalid JSON (graph tool): {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"ToolActionResult: expected JSON object, got {type(data).__name__} (graph tool)")
+    _enrich_tool_action_result_wire_dict(data, action)
+    assert_wire_schema_version(data, model_name="ToolActionResult")
+    base = ToolActionResult.model_validate(data)
+    incoming_fragment_count = len(base.graph_fragments)
     normalized_fragments: list[GraphFragment] = []
-    for idx, fragment_raw in enumerate(fragments_raw[:4], start=1):
-        process_steps_raw = []
-        for raw_step in (fragment_raw.get("processSteps") or fragment_raw.get("steps") or []):
-            if not isinstance(raw_step, dict):
-                continue
-            process_steps_raw.append(
-                {
-                    **raw_step,
-                    "inputNodeIds": raw_step.get("inputNodeIds")
-                    or raw_step.get("inputProductNodeIds")
-                    or raw_step.get("inputNodes")
-                    or [],
-                    "outputNodeIds": raw_step.get("outputNodeIds")
-                    or raw_step.get("outputProductNodeIds")
-                    or raw_step.get("outputNodes")
-                    or [],
-                }
-            )
-        fragment_payload = {
-            "fragmentId": fragment_raw.get("fragmentId") or f"{action.branch_id}-f{idx}",
-            "fragmentType": fragment_raw.get("fragmentType") or action.expected_fragment_type,
-            "title": fragment_raw.get("title") or f"{action.branch_id} fragment {idx}",
-            "humanQuestion": fragment_raw.get("humanQuestion") or action.human_question,
-            "humanSummary": fragment_raw.get("humanSummary")
-            or fragment_raw.get("summary")
-            or payload.get("humanSummary")
-            or payload.get("summary")
-            or action.human_action,
-            "branchId": fragment_raw.get("branchId") or action.branch_id,
-            "alternativeGroupId": fragment_raw.get("alternativeGroupId") or "",
-            "startNodeId": fragment_raw.get("startNodeId") or "",
-            "endNodeId": fragment_raw.get("endNodeId") or "",
-            "patchMode": fragment_raw.get("patchMode") or "append",
-            "oldId": fragment_raw.get("oldId") or "",
-            "oldIds": fragment_raw.get("oldIds") or [],
-            "patchRationale": fragment_raw.get("patchRationale") or "",
-            "entityNodes": fragment_raw.get("entityNodes") or fragment_raw.get("nodes") or [],
-            "flowLegs": fragment_raw.get("flowLegs") or fragment_raw.get("legs") or [],
-            "processSteps": process_steps_raw,
-            "overlayEdges": fragment_raw.get("overlayEdges") or [],
-            "observations": fragment_raw.get("observations") or fragment_raw.get("graphDelta") or [],
-            "completeness": fragment_raw.get("completeness") or ("complete" if fragment_raw.get("observations") else "partial"),
-            "qualityScore": fragment_raw.get("qualityScore") or payload.get("qualityScore") or 0.4,
-        }
-        fragment = GraphFragment.model_validate(fragment_payload)
-        normalized_fragments.append(_normalize_fragment(fragment, action, allowed_edges, default_support_type))
-    normalized_fragments = [fragment for fragment in normalized_fragments if _fragment_has_graph_payload(fragment)]
-    status = payload.get("status") or ("success" if normalized_fragments else "partial")
-    result_payload = {
-        "actionId": payload.get("actionId") or action.action_id,
-        "branchId": payload.get("branchId") or action.branch_id,
-        "toolName": payload.get("toolName") or action.tool_name,
-        "pathAssessment": payload.get("pathAssessment") or "still_open",
-        "pathAssessmentNote": payload.get("pathAssessmentNote") or "",
-        "status": status,
-        "humanSummary": payload.get("humanSummary")
-        or payload.get("summary")
-        or (normalized_fragments[0].human_summary if normalized_fragments else action.human_action),
-        "closureStatus": payload.get("closureStatus")
-        or ("closed" if normalized_fragments and not (payload.get("remainingFrontier") or payload.get("uncoveredQuestions")) else "advanced" if normalized_fragments else "unchanged"),
-        "resolvedFrontier": payload.get("resolvedFrontier") or [],
-        "remainingFrontier": payload.get("remainingFrontier") or payload.get("uncoveredQuestions") or list(action.frontier),
-        "discoveredFrontier": payload.get("discoveredFrontier") or [],
-        "graphFragments": [item.model_dump(mode="json", by_alias=True) for item in normalized_fragments],
-        "learnedFindings": payload.get("learnedFindings") or [],
-        "uncoveredQuestions": payload.get("uncoveredQuestions") or payload.get("nextQuestions") or [],
-        "sourceDocuments": payload.get("sourceDocuments") or payload.get("sources") or [],
-        "failure": payload.get("failure"),
-    }
-    result = ToolActionResult.model_validate(result_payload)
-    if fragments_raw and not normalized_fragments and result.status == "success":
+    for frag in list(base.graph_fragments)[:4]:
+        normalized_fragments.append(_normalize_fragment(frag, action, allowed_edges, default_support_type))
+    normalized_fragments = [f for f in normalized_fragments if _fragment_has_graph_payload(f)]
+    result = base.model_copy(update={"graph_fragments": normalized_fragments})
+    if incoming_fragment_count and not normalized_fragments and result.status == "success":
         msg = "Tool returned graphFragments but none contained typed graph payload."
         result = result.model_copy(
             update={
@@ -4550,11 +5177,12 @@ def _parse_tool_result_payload(
                     code="agent_failed",
                     message=msg,
                     blocking=False,
-                    missingInputs=["typed_graph_fragment"],
+                    missing_inputs=["typed_graph_fragment"],
                 ),
             }
         )
-    normalized_findings = _normalize_learned_findings_payload(payload.get("learnedFindings") or [], action, result)
+    raw_findings = [lf.model_dump(mode="json", by_alias=True) for lf in result.learned_findings]
+    normalized_findings = _normalize_learned_findings_payload(raw_findings, action, result)
     result = result.model_copy(update={"learned_findings": normalized_findings})
     result = _ensure_learned_findings(action, result)
     return result.model_copy(
@@ -4600,6 +5228,19 @@ def _tool_is_available(tool_name: str, state: dict[str, Any]) -> bool:
         return True
     if tool_name == "web_search":
         return bool(_web_search_available().get("available"))
+    if tool_name == "supply_qa":
+        return bool(os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCP_PROJECT_ID"))
+    if tool_name == "apply_supply_graph_patch":
+        if isinstance(state.get(STATE_EVIDENCE_LEDGER), list) and len(state.get(STATE_EVIDENCE_LEDGER) or []) > 0:
+            return True
+        for raw in state.get(STATE_BRANCH_STATES) or []:
+            try:
+                b = BranchState.model_validate(raw)
+            except Exception:
+                continue
+            if b.hypothesis_evidence_ledger or b.parent_ledger_snapshot:
+                return True
+        return False
     return True
 
 
@@ -4656,7 +5297,7 @@ def _planned_tool_sequence(branch_plan: BranchPlan, state: dict[str, Any]) -> li
 
     # Respect the LLM's explicit tool order. Runtime may append fallbacks,
     # but it must not override the chosen first tool before any result exists.
-    for fallback in ("retrieve", "web_search", "reason"):
+    for fallback in ("retrieve", "web_search", "reason", "supply_qa"):
         add(fallback)
 
     return ordered[:5]
@@ -4797,6 +5438,7 @@ def _investigation_progress_snapshot(state: dict[str, Any]) -> dict[str, int]:
         "uniqueSourceCount": len(unique_sources),
         "groundedCompleteChainCount": _int_or_len_report(reachability, "groundedCompleteChainCount", "groundedCompleteChains"),
         "structuralCompleteChainCount": _int_or_len_report(reachability, "structuralCompleteChainCount", "structurallyCompleteChains"),
+        "typedBackboneChainCount": _int_or_len_report(reachability, "typedBackboneChainCount", "typedBackboneChains"),
         "maxOperationalRouteHops": int(reachability.get("maxOperationalRouteHops") or _max_route_hops_from_report(reachability)),
     }
 
@@ -4820,6 +5462,7 @@ def _progress_delta(previous: dict[str, int], current: dict[str, int]) -> dict[s
         "newUnresolvedBranches": current["unresolvedBranchCount"] - previous["unresolvedBranchCount"],
         "newGroundedCompleteChains": current["groundedCompleteChainCount"] - previous["groundedCompleteChainCount"],
         "newStructuralCompleteChains": current["structuralCompleteChainCount"] - previous["structuralCompleteChainCount"],
+        "newTypedBackboneChains": current["typedBackboneChainCount"] - previous.get("typedBackboneChainCount", 0),
         "maxOperationalRouteHopGain": current["maxOperationalRouteHops"] - previous["maxOperationalRouteHops"],
     }
 
@@ -4840,6 +5483,7 @@ def _material_progress(delta: dict[str, int]) -> bool:
             delta["gapReduction"] >= 2,
             delta["newGroundedCompleteChains"] >= 1,
             delta["newStructuralCompleteChains"] >= 1,
+            delta.get("newTypedBackboneChains", 0) >= 1,
             delta["maxOperationalRouteHopGain"] >= 2,
         )
     )
@@ -4886,7 +5530,7 @@ def _int_or_len_report(report: dict[str, Any], count_key: str, list_key: str) ->
 
 def _max_route_hops_from_report(report: dict[str, Any]) -> int:
     max_hops = 0
-    for key in ("groundedCompleteChains", "structurallyCompleteChains", "partialChains"):
+    for key in ("groundedCompleteChains", "structurallyCompleteChains", "partialChains", "typedBackboneChains"):
         for entry in report.get(key) or []:
             try:
                 max_hops = max(max_hops, int(entry.get("hops") or 0))
@@ -4910,6 +5554,7 @@ def _business_chain_profile(
     host_ids: set[str] = set()
     product_ids: set[str] = set()
     placeholder_labels: list[str] = []
+    aggregate_labels: list[str] = []
 
     def _remember_placeholder(node_id: str) -> None:
         if not node_id:
@@ -4919,6 +5564,20 @@ def _business_chain_profile(
             return
         if _is_placeholder_node(node_id, label):
             placeholder_labels.append(label)
+
+    def _remember_aggregate(node_id: str) -> None:
+        if not node_id:
+            return
+        node = node_index.get(node_id)
+        if node is None:
+            return
+        if _is_unresolved_aggregate_node(
+            node.node_id,
+            node.label,
+            entity_type=node.entity_type,
+            support_type=node.support_type,
+        ):
+            aggregate_labels.append(node.label or node.node_id)
 
     for op in record["ops"]:
         kind = str(op.get("kind") or "")
@@ -4930,9 +5589,11 @@ def _business_chain_profile(
             if from_host:
                 host_ids.add(from_host)
                 _remember_placeholder(from_host)
+                _remember_aggregate(from_host)
             if to_host:
                 host_ids.add(to_host)
                 _remember_placeholder(to_host)
+                _remember_aggregate(to_host)
             if prod:
                 product_ids.add(prod)
         else:
@@ -4946,6 +5607,7 @@ def _business_chain_profile(
             if host:
                 host_ids.add(host)
                 _remember_placeholder(host)
+                _remember_aggregate(host)
             for input_id in op.get("inputIds") or []:
                 if input_id:
                     product_ids.add(str(input_id))
@@ -4956,6 +5618,7 @@ def _business_chain_profile(
     if host_id and host_id in node_index:
         host_ids.add(host_id)
         _remember_placeholder(host_id)
+        _remember_aggregate(host_id)
     if product_id:
         product_ids.add(product_id)
 
@@ -4973,6 +5636,7 @@ def _business_chain_profile(
         "hasMultipleProductStages": len(product_ids) >= 2,
         "concreteSink": concrete_sink,
         "placeholderFree": not placeholder_labels,
+        "aggregateIntermediaryFree": not aggregate_labels,
     }
     missing: list[str] = []
     if not criteria["sourceAnchored"]:
@@ -4991,6 +5655,10 @@ def _business_chain_profile(
         missing.append("sink is not yet a concrete downstream facility or organization")
     if not criteria["placeholderFree"]:
         missing.append(f"placeholder nodes remain: {', '.join(_dedupe_preserve_order(placeholder_labels)[:3])}")
+    if not criteria["aggregateIntermediaryFree"]:
+        missing.append(
+            f"aggregate intermediary nodes remain: {', '.join(_dedupe_preserve_order(aggregate_labels)[:3])}"
+        )
 
     return {
         "flowLegCount": flow_count,
@@ -4999,6 +5667,7 @@ def _business_chain_profile(
         "extractionCount": extraction_count,
         "distinctHostCount": len(host_ids),
         "distinctProductStageCount": len(product_ids),
+        "aggregateIntermediaryCount": len(_dedupe_preserve_order(aggregate_labels)),
         "missingCriteria": missing,
         "criteria": criteria,
         "businessScore": sum(1 for value in criteria.values() if value),
@@ -5021,25 +5690,40 @@ def _graph_reachability_report_for_graph(
     """Analyze end-to-end reachability using operational flow legs and process steps."""
     counts = graph_counts(graph_state)
     if not any((counts["entityNodeCount"], counts["flowLegCount"], counts["processStepCount"], counts["overlayEdgeCount"])):
+        req_c = _operational_corridor_from_state(state) if state is not None else {}
         return {
             "groundedCompleteChains": [],
             "structurallyCompleteChains": [],
             "partialChains": [],
+            "typedBackboneChains": [],
             "bridgeCandidates": [],
             "healthSummary": "Graph is empty.",
             "groundedCompleteChainCount": 0,
             "structuralCompleteChainCount": 0,
             "partialChainCount": 0,
+            "typedBackboneChainCount": 0,
             "routeFamilies": [],
             "maxOperationalRouteHops": 0,
+            "weakFlowComponentsCount": 0,
+            "requestedCorridorIntentDebug": _requested_corridor_intent_debug(state),
+            "requestedCorridor": req_c,
+            "groundedRequestedCorridorChains": [],
+            "structuralRequestedCorridorChains": [],
+            "groundedRequestedCorridorChainCount": 0,
+            "structuralRequestedCorridorChainCount": 0,
+            "requestedCorridorSatisfied": (not req_c.get("active")) if isinstance(req_c, dict) else True,
         }
+
+    _rch_list_cap = SUPERVISOR_REACHABILITY_LIST_CAP if SUPERVISOR_REACHABILITY_LIST_CAP > 0 else 9999
 
     node_index = _graph_node_map(graph_state)
     flow_legs = list(graph_state.flow_legs)
     process_steps = list(graph_state.process_steps)
     overlay_edges = list(graph_state.overlay_edges)
-    request = AgentLoomRequest.model_validate((state or {}).get(STATE_REQUEST) or {})
-    requested_corridor = _requested_operational_corridor(request)
+    request = _request_from_state(state)
+    requested_corridor = (
+        _operational_corridor_from_state(state) if state is not None else _requested_operational_corridor(request)
+    )
 
     def _node_type(node_id: str) -> str:
         node = node_index.get(node_id)
@@ -5467,10 +6151,14 @@ def _graph_reachability_report_for_graph(
     )
     partial_chains = sorted(_dedupe_entries(partial_chains), key=lambda item: (-int(item.get("hops") or 0), str(item.get("sink") or "")))
 
+    typed_backbone_entries = compute_typed_operational_backbone_entries(graph_state, node_index)
+    typed_backbone_entries = typed_backbone_entries[:_rch_list_cap]
+    tb_n = len(typed_backbone_entries)
+
     g_n, s_n, p_n = len(grounded_complete), len(structurally_complete), len(partial_chains)
     corridor_g_n = len(grounded_requested_corridor)
     corridor_s_n = len(structural_requested_corridor)
-    if not grounded_complete and not structurally_complete and not partial_chains:
+    if not grounded_complete and not structurally_complete and not partial_chains and not typed_backbone_entries:
         health = "No operational routes found. Graph contains nodes but no usable flow-leg/process-step connectivity."
     elif g_n == 0 and s_n > 0:
         longest = structurally_complete[0]
@@ -5480,11 +6168,23 @@ def _graph_reachability_report_for_graph(
         )
         if p_n:
             health += f" {p_n} partial path(s)."
-    elif g_n == 0:
+    elif g_n == 0 and p_n > 0:
         longest = partial_chains[0]
         health = (
             f"No document-grounded business-complete chain. No structurally complete business chain. Longest partial: "
             f"{longest['source']} -> {longest['sink']} ({longest['hops']} hops)."
+        )
+    elif g_n == 0 and tb_n > 0:
+        t0 = typed_backbone_entries[0]
+        health = (
+            "No document-grounded business-complete chain. No structurally complete business chain. "
+            f"Typed operational backbone: {t0.get('source')} -> {t0.get('sink')} ({int(t0.get('hops') or 0)} hops); "
+            "not classified as business-complete or audit-grounded."
+        )
+    elif g_n == 0:
+        health = (
+            "No document-grounded business-complete chain. No structurally complete business chain. "
+            "No partial or typed-backbone route summaries."
         )
     else:
         longest = grounded_complete[0]
@@ -5536,20 +6236,24 @@ def _graph_reachability_report_for_graph(
             )
         return out
 
-    route_families = _route_families_from(grounded_complete + structurally_complete + partial_chains)
+    route_families = _route_families_from(
+        grounded_complete + structurally_complete + partial_chains + typed_backbone_entries
+    )
 
     return {
-        "groundedCompleteChains": grounded_complete[:4],
-        "structurallyCompleteChains": structurally_complete[:4],
-        "partialChains": partial_chains[:4],
+        "groundedCompleteChains": grounded_complete[:_rch_list_cap],
+        "structurallyCompleteChains": structurally_complete[:_rch_list_cap],
+        "partialChains": partial_chains[:_rch_list_cap],
+        "typedBackboneChains": typed_backbone_entries,
         "bridgeCandidates": bridge_candidates[:6],
         "healthSummary": health,
         "groundedCompleteChainCount": g_n,
         "structuralCompleteChainCount": s_n,
         "partialChainCount": p_n,
+        "typedBackboneChainCount": tb_n,
         "requestedCorridor": requested_corridor,
-        "groundedRequestedCorridorChains": grounded_requested_corridor[:4],
-        "structuralRequestedCorridorChains": structural_requested_corridor[:4],
+        "groundedRequestedCorridorChains": grounded_requested_corridor[:_rch_list_cap],
+        "structuralRequestedCorridorChains": structural_requested_corridor[:_rch_list_cap],
         "groundedRequestedCorridorChainCount": corridor_g_n,
         "structuralRequestedCorridorChainCount": corridor_s_n,
         "requestedCorridorSatisfied": (not requested_corridor["active"]) or (corridor_g_n + corridor_s_n > 0),
@@ -5559,13 +6263,81 @@ def _graph_reachability_report_for_graph(
                 "groundedCompleteChains": grounded_complete,
                 "structurallyCompleteChains": structurally_complete,
                 "partialChains": partial_chains,
+                "typedBackboneChains": typed_backbone_entries,
             }
         ),
+        "weakFlowComponentsCount": _weak_flow_component_count(graph_state),
+        "requestedCorridorIntentDebug": _requested_corridor_intent_debug(state),
     }
 
 
 def _graph_reachability_report(state: dict[str, Any]) -> dict[str, Any]:
     return _graph_reachability_report_for_graph(_load_operational_graph_state(state), state=state)
+
+
+def _investigation_reachability_counts_bundle(state: dict[str, Any]) -> dict[str, Any]:
+    """Single reachability read for policy/todos (keeps counts aligned)."""
+    reach = _graph_reachability_report(state)
+    return {
+        "reachability": reach,
+        "groundedCompleteChainCount": int(reach.get("groundedCompleteChainCount") or 0),
+        "structuralCompleteChainCount": int(reach.get("structuralCompleteChainCount") or 0),
+        "partialChainCount": int(reach.get("partialChainCount") or 0),
+        "typedBackboneChainCount": int(reach.get("typedBackboneChainCount") or 0),
+        "requestedCorridorSatisfied": bool(reach.get("requestedCorridorSatisfied")),
+    }
+
+
+def _supervisor_preflight_context(state: dict[str, Any]) -> dict[str, Any]:
+    """Preflight profile + red-team scheduling hints for the supervisor (deterministic)."""
+    raw_pf = state.get(STATE_INVESTIGATION_PREFLIGHT) or {}
+    try:
+        pf = InvestigationPreflight.model_validate(raw_pf)
+    except Exception:
+        pf = InvestigationPreflight()
+    rb = _investigation_reachability_counts_bundle(state)
+    reach = rb.get("reachability") or {}
+    req_rt = preflight_requires_red_team_pass(pf)
+    eligible = red_team_frame_eligible(reach)
+    satisfied = bool(state.get(STATE_RED_TEAM_SATISFIED))
+    cycle = int(state.get(STATE_SUPERVISOR_CYCLE, 0) or 0)
+    if ALLOW_COMPOSE_WITHOUT_RED_TEAM:
+        status = "satisfied"
+    elif not req_rt:
+        status = "not_required"
+    elif satisfied:
+        status = "satisfied"
+    elif eligible:
+        if _supervisor_budget_pressure(cycle, MAX_SUPERVISOR_CYCLES) == "hard" and req_rt and not satisfied:
+            status = "blocked_by_budget"
+        else:
+            status = "pending"
+    else:
+        status = "waiting_frame"
+    rf = reach.get("routeFamilies") or []
+    rfn = len(rf) if isinstance(rf, list) else 0
+    todos_raw = list(state.get(STATE_INVESTIGATION_TODOS) or [])
+    alt_item = next((x for x in todos_raw if isinstance(x, dict) and x.get("phase") == "alternatives"), None)
+    alternatives_status = (alt_item or {}).get("status") if alt_item else None
+    gc = int(rb.get("groundedCompleteChainCount") or 0)
+    sc = int(rb.get("structuralCompleteChainCount") or 0)
+    multiplicity_shortfall = max(0, 2 - rfn) if req_rt else 0
+    breadth_debt = {
+        "routeFamilyCount": rfn,
+        "groundedCompleteChainCount": gc,
+        "structuralCompleteChainCount": sc,
+        "alternativesTodoStatus": alternatives_status,
+        "preflightRequiresBreadthPass": req_rt,
+        "multiplicityShortfall": multiplicity_shortfall,
+    }
+    return {
+        "investigationPreflight": pf.model_dump(mode="json", by_alias=True),
+        "preflightRequiresRedTeamPass": req_rt,
+        "redTeamFrameEligible": eligible,
+        "redTeamStatus": status,
+        "routeFamilyCount": rfn,
+        "breadthDebt": breadth_debt,
+    }
 
 
 def _host_local_process_gap_candidates(
@@ -5667,7 +6439,7 @@ def _commercial_bridge_candidates(
     *,
     state: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    request = AgentLoomRequest.model_validate((state or {}).get(STATE_REQUEST) or {})
+    request = _request_from_state(state)
     requested_corridor = _requested_operational_corridor(request)
     node_index = _graph_node_map(graph_state)
     component_by_node = _operational_component_index(graph_state)
@@ -5776,9 +6548,14 @@ def _commercial_bridge_candidates(
             downstream = max(demands, key=lambda item: (float(item["confidence"]), item["host"], item["product"]))
             if not upstream["host"] or not downstream["host"]:
                 continue
-            if _is_placeholder_node(str(upstream["hostId"]), str(upstream["host"])) or _is_placeholder_node(
+            if _is_unresolved_aggregate_node(
+                str(upstream["hostId"]),
+                str(upstream["host"]),
+                entity_type="FACILITY",
+            ) or _is_unresolved_aggregate_node(
                 str(downstream["hostId"]),
                 str(downstream["host"]),
+                entity_type="FACILITY",
             ):
                 continue
             candidate_key = (str(upstream["hostId"]), str(downstream["hostId"]), str(upstream["productId"]))
@@ -5821,6 +6598,444 @@ def _commercial_bridge_candidates(
         )
     )
     return candidates[:6]
+
+
+def _operational_node_ids(graph_state: OperationalGraphState) -> set[str]:
+    node_ids: set[str] = set()
+    for node in graph_state.entity_nodes:
+        if node.node_id:
+            node_ids.add(node.node_id)
+    for leg in graph_state.flow_legs:
+        node_ids.update(
+            node_id
+            for node_id in [leg.supplier_node_id, leg.customer_node_id, leg.product_node_id, *leg.route_node_ids]
+            if node_id
+        )
+    for step in graph_state.process_steps:
+        node_ids.update(
+            node_id
+            for node_id in [step.host_node_id, *step.input_node_ids, *step.output_node_ids]
+            if node_id
+        )
+    for edge in graph_state.overlay_edges:
+        node_ids.update(node_id for node_id in [edge.subject_id, edge.object_id] if node_id)
+    return node_ids
+
+
+def _fragment_node_ids(fragments: list[GraphFragment]) -> set[str]:
+    if not fragments:
+        return set()
+    return _operational_node_ids(graph_state_from_fragments(fragments))
+
+
+def _branch_touches_commercial_bridge_candidate(branch: BranchState, candidate: dict[str, Any]) -> bool:
+    candidate_ids = {
+        str(candidate.get("upstreamHostId") or "").strip(),
+        str(candidate.get("downstreamHostId") or "").strip(),
+        str(candidate.get("productId") or "").strip(),
+    }
+    candidate_ids.discard("")
+    fragment_ids = _fragment_node_ids(branch.graph_fragments)
+    if fragment_ids and (candidate_ids & fragment_ids):
+        return True
+    blob = " ".join(
+        [
+            branch.human_question,
+            branch.human_summary,
+            branch.path_assessment_note,
+            " ".join(branch.known_context),
+            " ".join(branch.resolved_frontier),
+            " ".join(branch.remaining_frontier),
+            " ".join(branch.discovered_frontier),
+            " ".join(branch.open_questions),
+        ]
+    ).lower()
+    names = [
+        str(candidate.get("upstreamHost") or "").strip().lower(),
+        str(candidate.get("downstreamHost") or "").strip().lower(),
+        str(candidate.get("product") or "").strip().lower(),
+    ]
+    names = [item for item in names if item]
+    return sum(1 for item in names if item in blob) >= 2
+
+
+def _alternative_route_family_branch_id(candidate: dict[str, Any]) -> str:
+    return (
+        f"alt_family_{_slug(str(candidate.get('upstreamHost') or 'upstream'))}"
+        f"_{_slug(str(candidate.get('product') or 'product'))}"
+        f"_to_{_slug(str(candidate.get('downstreamHost') or 'downstream'))}"
+    )
+
+
+def _alternative_route_family_candidates(
+    state: dict[str, Any],
+    graph_state: OperationalGraphState,
+) -> list[dict[str, Any]]:
+    bridge_candidates = _commercial_bridge_candidates(graph_state, state=state)
+    if not bridge_candidates:
+        return []
+    aggregate_nodes = _aggregate_intermediary_nodes_from_graph(graph_state)
+    aggregate_labels = [
+        str(item.get("label") or item.get("nodeId") or "").strip()
+        for item in aggregate_nodes
+        if str(item.get("label") or item.get("nodeId") or "").strip()
+    ]
+    branches = [BranchState.model_validate(item) for item in (state.get(STATE_BRANCH_STATES) or [])]
+    existing_alternative_ids = {
+        branch.branch_id
+        for branch in branches
+        if branch.hypothesis_relation == "independent_child" and branch.path_kind == "alternative"
+    }
+    candidates: list[dict[str, Any]] = []
+    for bridge in bridge_candidates:
+        touching = [branch for branch in branches if _branch_touches_commercial_bridge_candidate(branch, bridge)]
+        if not touching:
+            continue
+        rejected_branch_ids = [branch.branch_id for branch in touching if branch.path_assessment == "rejected"]
+        indirect_branch_ids = [branch.branch_id for branch in touching if branch.path_assessment == "best_supported_indirect"]
+        stagnated_branch_ids = [
+            branch.branch_id
+            for branch in touching
+            if branch.path_kind == "bridge" and branch.stagnation_count >= 1
+        ]
+        if not (rejected_branch_ids or indirect_branch_ids or stagnated_branch_ids):
+            continue
+        branch_id = _alternative_route_family_branch_id(bridge)
+        if branch_id in existing_alternative_ids:
+            continue
+        if not rejected_branch_ids and not aggregate_labels and not indirect_branch_ids:
+            continue
+        candidates.append(
+            {
+                **bridge,
+                "candidateKind": "alternative_route_family",
+                "branchId": branch_id,
+                "rejectedBranchIds": rejected_branch_ids[:4],
+                "indirectBranchIds": indirect_branch_ids[:4],
+                "stagnatedBranchIds": stagnated_branch_ids[:4],
+                "aggregateIntermediaryLabels": aggregate_labels[:4],
+                "reason": (
+                    f"The narrow bridge around {bridge['upstreamHost']} -> {bridge['downstreamHost']} for {bridge['product']} "
+                    "was rejected or remained only a generic indirect market explanation. The next valid move is a materially different "
+                    "route family through another jurisdiction, operator family, or intermediary layer."
+                ),
+            }
+        )
+    candidates.sort(
+        key=lambda item: (
+            0 if item.get("rejectedBranchIds") else 1,
+            0 if item.get("sinkScopeMatched") else 1,
+            0 if item.get("aggregateIntermediaryLabels") else 1,
+            -float(item.get("confidence") or 0.0),
+            str(item.get("upstreamHost") or ""),
+            str(item.get("downstreamHost") or ""),
+        )
+    )
+    return candidates[:6]
+
+
+def _placeholder_resolution_candidates(
+    state: dict[str, Any],
+    graph_state: OperationalGraphState,
+) -> list[dict[str, Any]]:
+    node_index = _graph_node_map(graph_state)
+    reachability = _graph_reachability_report_for_graph(graph_state, state=state)
+    requested = reachability.get("requestedCorridor") or {}
+    source_tokens = {
+        str(token).strip().lower()
+        for token in (requested.get("sourceTokens") or [])
+        if str(token).strip()
+    }
+    sink_tokens = {
+        str(token).strip().lower()
+        for token in (requested.get("sinkTokens") or [])
+        if str(token).strip()
+    }
+    candidates: list[dict[str, Any]] = []
+    for node in graph_state.entity_nodes:
+        if not _is_placeholder_node(node.node_id, node.label, support_type=node.support_type):
+            continue
+        node_id = str(node.node_id or "").strip()
+        label = str(node.label or node.node_id or "").strip()
+        if not node_id and not label:
+            continue
+        supporting_lines: list[str] = []
+        branch_ids: list[str] = []
+        connected_node_ids: set[str] = set()
+        product_labels: list[str] = []
+        flow_hits = 0
+        process_hits = 0
+        overlay_hits = 0
+        sink_role_hits = 0
+        source_role_hits = 0
+        for leg in graph_state.flow_legs:
+            touches = node_id in {leg.supplier_node_id, leg.customer_node_id, *leg.route_node_ids}
+            if not touches:
+                continue
+            flow_hits += 1
+            supporting_lines.append(flow_leg_line(leg, node_index))
+            if leg.branch_id:
+                branch_ids.append(leg.branch_id)
+            connected_node_ids.update(
+                value
+                for value in [leg.supplier_node_id, leg.customer_node_id, leg.product_node_id, *leg.route_node_ids]
+                if value
+            )
+            if leg.product_node_id:
+                product_label = _graph_node_label(node_index, leg.product_node_id)
+                if product_label:
+                    product_labels.append(product_label)
+            if node_id == leg.customer_node_id:
+                sink_role_hits += 1
+            if node_id == leg.supplier_node_id:
+                source_role_hits += 1
+        for step in graph_state.process_steps:
+            touches = node_id == step.host_node_id or node_id in step.input_node_ids or node_id in step.output_node_ids
+            if not touches:
+                continue
+            process_hits += 1
+            supporting_lines.append(process_step_line(step, node_index))
+            if step.branch_id:
+                branch_ids.append(step.branch_id)
+            connected_node_ids.update(
+                value
+                for value in [step.host_node_id, *step.input_node_ids, *step.output_node_ids]
+                if value
+            )
+            for product_id in [*step.input_node_ids, *step.output_node_ids]:
+                if product_id == node_id:
+                    continue
+                product_label = _graph_node_label(node_index, product_id)
+                if product_label:
+                    product_labels.append(product_label)
+        for edge in graph_state.overlay_edges:
+            if node_id not in {edge.subject_id, edge.object_id}:
+                continue
+            overlay_hits += 1
+            supporting_lines.append(f"{edge.subject} --{edge.relation}--> {edge.object}")
+            if edge.branch_id:
+                branch_ids.append(edge.branch_id)
+            connected_node_ids.update(value for value in [edge.subject_id, edge.object_id] if value)
+        if not supporting_lines:
+            supporting_lines.append(f"{label} is still a broad placeholder endpoint in the operational graph.")
+        support_blob = " ".join(supporting_lines).lower()
+        source_scope_matched = bool(source_tokens and any(token in support_blob for token in source_tokens))
+        sink_scope_matched = bool(sink_tokens and any(token in support_blob for token in sink_tokens))
+        score = (flow_hits * 5) + (process_hits * 4) + overlay_hits + (sink_role_hits * 2) + source_role_hits
+        score += min(len(_dedupe_preserve_order(product_labels)), 3)
+        candidates.append(
+            {
+                "candidateKind": "placeholder_resolution",
+                "nodeId": node_id,
+                "label": label,
+                "entityType": node.entity_type,
+                "oldId": node_id,
+                "reason": (
+                    f"The graph still depends on placeholder node {label}. "
+                    "Resolve it with a concrete named entity or split it into real alternative route-family endpoints."
+                ),
+                "supportingLines": _dedupe_preserve_order(supporting_lines)[:6],
+                "connectedBranchIds": _dedupe_preserve_order(branch_ids)[:6],
+                "connectedNodeIds": _dedupe_preserve_order(list(connected_node_ids))[:10],
+                "productLabels": _dedupe_preserve_order(product_labels)[:4],
+                "sourceScopeMatched": source_scope_matched,
+                "sinkScopeMatched": sink_scope_matched,
+                "score": score,
+                "confidence": round(float(node.confidence), 3),
+            }
+        )
+    candidates.sort(
+        key=lambda item: (
+            0 if item.get("sinkScopeMatched") else 1,
+            0 if item.get("sourceScopeMatched") else 1,
+            -int(item.get("score") or 0),
+            -float(item.get("confidence") or 0.0),
+            str(item.get("label") or ""),
+        )
+    )
+    return candidates[:6]
+
+
+def _branch_addresses_placeholder_resolution(plan: BranchPlan, candidate: dict[str, Any]) -> bool:
+    if plan.branch_id == str(candidate.get("branchId") or ""):
+        return True
+    if plan.parallel_group == "placeholder_resolution":
+        return True
+    blob = _branch_text_blob(plan)
+    needles = [
+        str(candidate.get("label") or "").strip().lower(),
+        str(candidate.get("nodeId") or "").strip().lower(),
+        str(candidate.get("oldId") or "").strip().lower(),
+    ]
+    needles.extend(str(item).strip().lower() for item in (candidate.get("productLabels") or [])[:2] if str(item).strip())
+    needles = [item for item in needles if item]
+    if not needles:
+        return False
+    has_resolution_intent = any(
+        token in blob for token in ("replace", "resolve placeholder", "patchmode", "oldid", "concrete named")
+    )
+    return has_resolution_intent and any(item in blob for item in needles)
+
+
+def _branch_touches_placeholder_resolution_candidate(branch: BranchState, candidate: dict[str, Any]) -> bool:
+    candidate_ids = {
+        str(candidate.get("nodeId") or "").strip(),
+        *[str(item).strip() for item in (candidate.get("connectedNodeIds") or []) if str(item).strip()],
+    }
+    candidate_ids.discard("")
+    fragment_ids = _fragment_node_ids(branch.graph_fragments)
+    if fragment_ids and (candidate_ids & fragment_ids):
+        return True
+    blob = " ".join(
+        [
+            branch.human_question,
+            branch.human_summary,
+            branch.path_assessment_note,
+            " ".join(branch.known_context),
+            " ".join(branch.resolved_frontier),
+            " ".join(branch.remaining_frontier),
+            " ".join(branch.discovered_frontier),
+            " ".join(branch.open_questions),
+        ]
+    ).lower()
+    needles = [
+        str(candidate.get("label") or "").strip().lower(),
+        str(candidate.get("nodeId") or "").strip().lower(),
+    ]
+    needles.extend(str(item).strip().lower() for item in (candidate.get("productLabels") or [])[:2] if str(item).strip())
+    needles = [item for item in needles if item]
+    return any(item in blob for item in needles)
+
+
+def _branch_addresses_alternative_route_family(plan: BranchPlan, candidate: dict[str, Any]) -> bool:
+    if plan.branch_id == str(candidate.get("branchId") or ""):
+        return True
+    if plan.path_kind != "alternative":
+        return False
+    blob = _branch_text_blob(plan)
+    needles = [
+        str(candidate.get("upstreamHost") or "").strip().lower(),
+        str(candidate.get("downstreamHost") or "").strip().lower(),
+        str(candidate.get("product") or "").strip().lower(),
+    ]
+    needles = [item for item in needles if item]
+    return sum(1 for item in needles if item in blob) >= 2
+
+
+def _make_supply_chain_alternative_route_family_branch(
+    mission: InvestigationMission,
+    candidate: dict[str, Any],
+    *,
+    branch_id: str,
+    parent_hypothesis_id: str,
+) -> BranchPlan:
+    upstream_host = str(candidate.get("upstreamHost") or "").strip()
+    downstream_host = str(candidate.get("downstreamHost") or "").strip()
+    product = str(candidate.get("product") or "").strip()
+    aggregate_labels = [str(item).strip() for item in (candidate.get("aggregateIntermediaryLabels") or []) if str(item).strip()]
+    return BranchPlan(
+        branchId=branch_id,
+        hypothesis=(
+            f"A materially different route family can carry {product} from {upstream_host} into the downstream market "
+            f"currently represented by {downstream_host} through another jurisdiction or intermediary layer."
+        ),
+        parentHypothesisId=parent_hypothesis_id,
+        hypothesisRelation="independent_child",
+        spawnReason=(
+            "The current narrow bridge was rejected or remained only a generic market-pool explanation; "
+            "a distinct route family must now be tested instead of re-asking the same bridge."
+        ),
+        independenceBasis=(
+            "This alternative route family can stand on its own and does not depend on the rejected or over-generic parent bridge."
+        ),
+        pathKind="alternative",
+        humanQuestion=(
+            f"What materially different route family carries {product} from {upstream_host} into the downstream market "
+            f"currently represented by {downstream_host}, through another jurisdiction, converter family, or intermediary operator?"
+        ),
+        humanAction=(
+            f"Find a separate route family for {product} leaving {upstream_host}, using adjacent-country or third-country conversion "
+            "when that is commercially plausible, and return named facilities/process steps instead of a generic market pool."
+        ),
+        closureTarget=(
+            f"Produce a separate alternative route family from {upstream_host} toward {downstream_host} for {product} with real "
+            "intermediary hosts, product-carrying flow legs, and a concrete downstream recipient or feeder into one."
+        ),
+        knownContext=[
+            str(candidate.get("reason") or "").strip(),
+            *[str(item).strip() for item in (candidate.get("supportingLines") or [])[:4] if str(item).strip()],
+            *[
+                f"Aggregate intermediary still unresolved: {label}"
+                for label in aggregate_labels[:2]
+            ],
+        ],
+        frontier=[
+            "Do not restate the rejected or generic direct bridge; search a materially different operator/jurisdiction family.",
+            "Prefer adjacent jurisdictions, third-country converters, or alternative CAM/cell feeder routes when they are the commercially plausible bridge.",
+            "Return named facilities and hosted process steps, not only a narrative about global market pools.",
+        ],
+        assignedRoles=list(mission.assigned_roles) or [ROLE_SUPPLY_CHAIN],
+        preferredTools=["web_search", "retrieve", "reason"],
+        targetEntities=[upstream_host, downstream_host, product],
+        fragmentType="alternative_chain",
+        parallelGroup="alternative_route_family",
+        stopAfterNoImprovement=2,
+    )
+
+
+def _make_supply_chain_placeholder_resolution_branch(
+    mission: InvestigationMission,
+    candidate: dict[str, Any],
+    *,
+    branch_id: str,
+    parent_hypothesis_id: str,
+    relation: Literal["dependent_followup", "root"] = "dependent_followup",
+) -> BranchPlan:
+    label = str(candidate.get("label") or candidate.get("nodeId") or "placeholder").strip()
+    old_id = str(candidate.get("oldId") or candidate.get("nodeId") or "").strip()
+    product_labels = [str(item).strip() for item in (candidate.get("productLabels") or []) if str(item).strip()]
+    product_clause = (
+        f" while preserving the current product interfaces ({', '.join(product_labels[:3])})"
+        if product_labels else ""
+    )
+    old_id_clause = f" Use oldId {old_id}." if old_id else ""
+    return BranchPlan(
+        branchId=branch_id,
+        hypothesis=f"The placeholder endpoint {label} can be replaced by concrete named entities without breaking the current route family.",
+        parentHypothesisId=parent_hypothesis_id,
+        hypothesisRelation=relation,
+        spawnReason="The working graph still carries a placeholder endpoint; it must be resolved before the route can be business-complete.",
+        independenceBasis="This branch preserves the existing route family while replacing an aggregate stand-in with a concrete operational endpoint.",
+        pathKind="bridge",
+        humanQuestion=(
+            f"Which concrete named entity or entities should replace placeholder node {label}{product_clause}, "
+            "and what replace_entity fragment should occupy that exact graph slot?"
+        ),
+        humanAction=(
+            f"Resolve placeholder node {label} with a replace_entity or replace_fragment patch that preserves upstream/downstream interfaces{product_clause}. "
+            "If multiplicity is real, split the slot into concrete named alternatives instead of leaving one aggregate stand-in."
+            + old_id_clause
+        ),
+        closureTarget=(
+            f"Replace placeholder node {label} with concrete named ORG/FACILITY nodes and preserved operational interfaces."
+        ),
+        knownContext=[
+            str(candidate.get("reason") or "").strip(),
+            *[str(item).strip() for item in (candidate.get("supportingLines") or [])[:4] if str(item).strip()],
+            *([f"Replacement oldId: {old_id}"] if old_id else []),
+        ],
+        frontier=[
+            f"Return patchMode=replace_entity or replace_fragment for {label}.",
+            "Preserve the existing product-carrying interfaces when replacing the placeholder slot.",
+            "If several concrete downstream entities are real alternatives, represent them as named alternative route families instead of one aggregate endpoint.",
+        ],
+        assignedRoles=list(mission.assigned_roles) or [ROLE_SUPPLY_CHAIN],
+        preferredTools=["web_search", "retrieve", "reason"],
+        targetEntities=[label, *product_labels[:3]],
+        fragmentType="chain_fragment",
+        parallelGroup="placeholder_resolution",
+        stopAfterNoImprovement=2,
+    )
 
 
 def _branch_text_blob(plan: BranchPlan) -> str:
@@ -6062,11 +7277,13 @@ def _make_supply_chain_partial_bridge_branch(
     *,
     branch_id: str,
     parent_hypothesis_id: str,
+    closure_hint: str = "",
     relation: Literal["dependent_followup", "root"] = "dependent_followup",
 ) -> BranchPlan:
     source = str(partial.get("source") or "").strip()
     sink = str(partial.get("sink") or "").strip()
     break_reason = str(partial.get("breakReason") or "").strip()
+    closure_clause = f" toward the larger target '{closure_hint.strip()}'" if closure_hint.strip() else ""
     return BranchPlan(
         branchId=branch_id,
         hypothesis=f"The partial route from {source} to {sink} can be extended into a business-complete chain by closing its next structural hop.",
@@ -6076,27 +7293,30 @@ def _make_supply_chain_partial_bridge_branch(
         independenceBasis="This branch closes the next structural gap inside the same hypothesis graph and must merge back into it.",
         pathKind="bridge",
         humanQuestion=(
-            f"What concrete structural bridge extends the current partial route from {source} to {sink} into a business-complete operational chain, "
+            f"What concrete structural bridge extends the current partial route from {source} to {sink}{closure_clause} into a business-complete operational chain, "
             f"specifically closing: {break_reason}"
         ),
         humanAction=(
-            f"Close the next structural hop on the partial route from {source} to {sink} with named facilities, host-local process steps, and product-carrying flow legs."
+            f"Close the next structural hop on the partial route from {source} to {sink}{closure_clause} with named facilities, host-local process steps, and product-carrying flow legs. "
+            "If the literal direct bridge is unsupported, search for an adjacent-country, third-country, or alternative operator-family route that still preserves the business chain."
         ),
         closureTarget=(
-            f"Extend the partial route from {source} to {sink} into a longer business-complete chain with the missing structural hop grounded."
+            f"Extend the partial route from {source} to {sink}{closure_clause} into a longer business-complete chain with the missing structural hop grounded."
         ),
         knownContext=[
             f"Current partial route source: {source}",
             f"Current partial route sink: {sink}",
+            *([f"Higher-level target: {closure_hint.strip()}"] if closure_hint.strip() else []),
             break_reason,
             *[str(item).strip() for item in (partial.get("path") or [])[:4] if str(item).strip()],
         ],
         frontier=[
             break_reason or f"Identify the missing structural hop between {source} and {sink}.",
             "Prefer real host-local processing or intermediary operators over short terminal segments.",
+            "If the direct corridor is weak, look for a materially different route family through adjacent jurisdictions or third-country intermediaries.",
         ],
         assignedRoles=list(mission.assigned_roles) or [ROLE_SUPPLY_CHAIN],
-        preferredTools=["retrieve", "reason", "web_search"],
+        preferredTools=["reason", "web_search", "retrieve"],
         targetEntities=[source, sink],
         fragmentType="chain_fragment",
         parallelGroup="structural_bridge",
@@ -6120,6 +7340,8 @@ def _normalize_investigator_plan(
     reachability = _graph_reachability_report_for_graph(graph_state, state=state)
     commercial_bridge_candidates = _commercial_bridge_candidates(graph_state, state=state)
     process_gap_candidates = _host_local_process_gap_candidates(graph_state)
+    alternative_route_family_candidates = _alternative_route_family_candidates(state, graph_state)
+    placeholder_resolution_candidates = _placeholder_resolution_candidates(state, graph_state)
     business_complete = sum(_reachability_complete_counts(reachability)) > 0
     normalized_branches = list(plan.branch_plans)
 
@@ -6151,10 +7373,39 @@ def _normalize_investigator_plan(
             )
 
     if not business_complete:
+        primary_placeholder = placeholder_resolution_candidates[0] if placeholder_resolution_candidates else None
+        primary_alternative = alternative_route_family_candidates[0] if alternative_route_family_candidates else None
         primary_bridge = commercial_bridge_candidates[0] if commercial_bridge_candidates else None
         primary_process_gap = process_gap_candidates[0] if process_gap_candidates else None
         primary_partial = (reachability.get("partialChains") or [None])[0]
-        if primary_bridge and not any(_branch_addresses_commercial_bridge(item, primary_bridge) for item in normalized_branches):
+        if primary_placeholder and not any(
+            _branch_addresses_placeholder_resolution(item, primary_placeholder) for item in normalized_branches
+        ):
+            normalized_branches.insert(
+                0,
+                _make_supply_chain_placeholder_resolution_branch(
+                    mission,
+                    primary_placeholder,
+                    branch_id=(
+                        f"resolve_placeholder_{_slug(str(primary_placeholder.get('label') or primary_placeholder.get('nodeId') or 'node'))}"
+                    ),
+                    parent_hypothesis_id="root_business_chain" if initial_pass else "root_lithium_chain",
+                    relation="root" if initial_pass and not normalized_branches else "dependent_followup",
+                ),
+            )
+        elif primary_alternative and not any(
+            _branch_addresses_alternative_route_family(item, primary_alternative) for item in normalized_branches
+        ):
+            normalized_branches.insert(
+                0,
+                _make_supply_chain_alternative_route_family_branch(
+                    mission,
+                    primary_alternative,
+                    branch_id=str(primary_alternative.get("branchId") or _alternative_route_family_branch_id(primary_alternative)),
+                    parent_hypothesis_id="root_business_chain" if initial_pass else "root_lithium_chain",
+                ),
+            )
+        elif primary_bridge and not any(_branch_addresses_commercial_bridge(item, primary_bridge) for item in normalized_branches):
             normalized_branches.insert(
                 0,
                 _make_supply_chain_commercial_bridge_branch(
@@ -6187,6 +7438,7 @@ def _normalize_investigator_plan(
                     primary_partial,
                     branch_id=f"extend_partial_{_slug(str(primary_partial.get('sink') or 'route'))}",
                     parent_hypothesis_id="root_business_chain" if initial_pass else "root_lithium_chain",
+                    closure_hint=mission.objective,
                     relation="root" if initial_pass and not normalized_branches else "dependent_followup",
                 ),
             )
@@ -6195,8 +7447,8 @@ def _normalize_investigator_plan(
         normalized_branches,
         key=lambda item: (
             0 if any(tool == "reason" for tool in item.preferred_tools[:1]) and item.path_kind == "overview" else 1,
-            0 if item.parallel_group in {"commercial_bridge", "structural_process_gap", "structural_bridge", "initial_business_chain"} else 1,
-            0 if item.path_kind in {"overview", "bridge"} else 1,
+            0 if item.parallel_group in {"placeholder_resolution", "alternative_route_family", "commercial_bridge", "structural_process_gap", "structural_bridge", "initial_business_chain"} else 1,
+            0 if item.path_kind in {"overview", "alternative", "bridge"} else 1,
             item.stop_after_no_improvement,
             item.branch_id,
         ),
@@ -6207,6 +7459,60 @@ def _normalize_investigator_plan(
     return plan.model_copy(update={"branch_plans": list(deduped.values())[:4]})
 
 
+def _supply_chain_plan_is_overlay_shift(plan: BranchPlan) -> bool:
+    if plan.fragment_type in {"ownership_overlay", "policy_overlay"}:
+        return True
+    blob = " ".join(
+        [
+            plan.human_question,
+            plan.human_action,
+            plan.closure_target,
+            " ".join(plan.frontier),
+        ]
+    ).lower()
+    overlay_signals = (
+        "ownership",
+        "owner",
+        "shareholder",
+        "board",
+        "investor",
+        "policy",
+        "regulatory",
+        "regulation",
+        "due diligence",
+        "carbon footprint",
+        "traceability",
+    )
+    return any(signal in blob for signal in overlay_signals)
+
+
+def _temporary_branch_plan_from_turn(
+    branch_plan: BranchPlan,
+    turn: HypothesisTurnPlan | None,
+) -> BranchPlan | None:
+    if turn is None:
+        return None
+    return BranchPlan(
+        branchId=branch_plan.branch_id,
+        hypothesis=branch_plan.hypothesis,
+        parentHypothesisId=branch_plan.parent_hypothesis_id,
+        hypothesisRelation=branch_plan.hypothesis_relation,
+        spawnReason=branch_plan.spawn_reason,
+        independenceBasis=branch_plan.independence_basis,
+        pathKind=turn.path_kind,
+        humanQuestion=turn.human_question,
+        humanAction=turn.human_action,
+        closureTarget=turn.closure_target,
+        knownContext=turn.known_context,
+        frontier=turn.frontier,
+        assignedRoles=branch_plan.assigned_roles,
+        preferredTools=[turn.tool_name],
+        targetEntities=turn.target_entities,
+        fragmentType=turn.fragment_type,
+        stopAfterNoImprovement=1,
+    )
+
+
 def _normalize_hypothesis_turn_decision(
     state: dict[str, Any],
     branch_plan: BranchPlan,
@@ -6215,29 +7521,158 @@ def _normalize_hypothesis_turn_decision(
     latest_result: ToolActionResult,
     decision: HypothesisTurnDecision,
 ) -> HypothesisTurnDecision:
+    if not HYPOTHESIS_RUNTIME_STEER or HYPOTHESIS_RUNTIME_STEER_MODE == "off":
+        return decision
     if branch_plan.assigned_roles != [ROLE_SUPPLY_CHAIN]:
         return decision
     graph_state = _load_operational_graph_state(local_state)
     reachability = _graph_reachability_report_for_graph(graph_state, state=local_state)
     if sum(_reachability_complete_counts(reachability)) > 0:
         return decision
+    mission = InvestigationMission.model_validate(state.get(STATE_CURRENT_MISSION) or {})
     commercial_bridge_candidates = _commercial_bridge_candidates(graph_state, state=local_state)
     process_gap_candidates = _host_local_process_gap_candidates(graph_state)
+    alternative_route_family_candidates = _alternative_route_family_candidates(local_state, graph_state)
+    placeholder_resolution_candidates = _placeholder_resolution_candidates(local_state, graph_state)
+    aggregate_intermediary_nodes = _aggregate_intermediary_nodes_from_graph(graph_state)
     primary_bridge = commercial_bridge_candidates[0] if commercial_bridge_candidates else None
     primary_process_gap = process_gap_candidates[0] if process_gap_candidates else None
     primary_partial = (reachability.get("partialChains") or [None])[0]
+    relevant_placeholders = [
+        candidate
+        for candidate in placeholder_resolution_candidates
+        if _branch_touches_placeholder_resolution_candidate(branch_state, candidate)
+        or _branch_addresses_placeholder_resolution(branch_plan, candidate)
+    ]
+    primary_placeholder = (
+        relevant_placeholders[0]
+        if relevant_placeholders else (
+            placeholder_resolution_candidates[0]
+            if placeholder_resolution_candidates and branch_plan.path_kind == "overview"
+            else None
+        )
+    )
+    relevant_alternatives = [
+        candidate
+        for candidate in alternative_route_family_candidates
+        if _branch_touches_commercial_bridge_candidate(branch_state, candidate)
+        or _branch_addresses_commercial_bridge(branch_plan, candidate)
+        or _branch_addresses_alternative_route_family(branch_plan, candidate)
+    ]
+    primary_alternative = relevant_alternatives[0] if relevant_alternatives else None
+    if (
+        primary_alternative is None
+        and primary_bridge is not None
+        and (
+            _branch_touches_commercial_bridge_candidate(branch_state, primary_bridge)
+            or _branch_addresses_commercial_bridge(branch_plan, primary_bridge)
+        )
+    ):
+        primary_alternative = {
+            **primary_bridge,
+            "candidateKind": "alternative_route_family",
+            "branchId": _alternative_route_family_branch_id(primary_bridge),
+            "aggregateIntermediaryLabels": [
+                str(item.get("label") or item.get("nodeId") or "").strip()
+                for item in aggregate_intermediary_nodes
+                if str(item.get("label") or item.get("nodeId") or "").strip()
+            ][:4],
+            "reason": (
+                f"The current bridge around {primary_bridge['upstreamHost']} -> {primary_bridge['downstreamHost']} for "
+                f"{primary_bridge['product']} needs a materially different route family if the narrow bridge fails."
+            ),
+        }
+    next_turn_branch = _temporary_branch_plan_from_turn(branch_plan, decision.next_turn)
+    followup_handles_placeholder = any(
+        _branch_addresses_placeholder_resolution(item, primary_placeholder)
+        for item in decision.followup_branches
+    ) if primary_placeholder is not None else False
+    if (
+        primary_placeholder is not None
+        and decision.decision != "reject_hypothesis"
+        and not followup_handles_placeholder
+        and not (
+            next_turn_branch is not None
+            and _branch_addresses_placeholder_resolution(next_turn_branch, primary_placeholder)
+        )
+    ):
+        placeholder_branch = _make_supply_chain_placeholder_resolution_branch(
+            mission,
+            primary_placeholder,
+            branch_id=f"{branch_plan.branch_id}-resolve-{_slug(str(primary_placeholder.get('label') or primary_placeholder.get('nodeId') or 'placeholder'))}",
+            parent_hypothesis_id=branch_plan.branch_id,
+        )
+        placeholder_turn = HypothesisTurnPlan(
+            pathKind="bridge",
+            toolName=placeholder_branch.preferred_tools[0] if placeholder_branch.preferred_tools else "web_search",
+            humanQuestion=placeholder_branch.human_question,
+            humanAction=placeholder_branch.human_action,
+            whyNow="The active hypothesis still depends on a placeholder endpoint that blocks a business-complete chain.",
+            closureTarget=placeholder_branch.closure_target,
+            knownContext=list(placeholder_branch.known_context),
+            frontier=list(placeholder_branch.frontier),
+            targetEntities=list(placeholder_branch.target_entities),
+            fragmentType=placeholder_branch.fragment_type,
+        )
+        return decision.model_copy(
+            update={
+                "decision": "ask_next_question_same_hypothesis",
+                "decision_note": (
+                    "Runtime redirected the hypothesis to replace a placeholder endpoint because the operational chain "
+                    "still depends on an aggregate stand-in."
+                ),
+                "hypothesis_status": "active",
+                "next_turn": placeholder_turn,
+                "followup_branches": [],
+            }
+        )
+    if (
+        primary_alternative is not None
+        and branch_plan.path_kind != "alternative"
+        and (
+            latest_result.path_assessment == "rejected"
+            or (
+                latest_result.path_assessment == "best_supported_indirect"
+                and (aggregate_intermediary_nodes or branch_state.stagnation_count >= 1 or latest_result.closure_status == "closed")
+            )
+        )
+    ):
+        alternative_branch = _make_supply_chain_alternative_route_family_branch(
+            mission,
+            primary_alternative,
+            branch_id=str(primary_alternative.get("branchId") or _alternative_route_family_branch_id(primary_alternative)),
+            parent_hypothesis_id=branch_plan.branch_id,
+        )
+        merged_followups = [
+            item
+            for item in decision.followup_branches
+            if not _branch_addresses_alternative_route_family(item, primary_alternative)
+        ]
+        merged_followups = [alternative_branch, *merged_followups][:3]
+        return decision.model_copy(
+            update={
+                "decision": "spawn_independent_child_hypothesis",
+                "decision_note": (
+                    "Runtime escalated the current branch into a materially different alternative route family because "
+                    "the narrow bridge was rejected or remained only a generic indirect market explanation."
+                ),
+                "hypothesis_status": "rejected" if latest_result.path_assessment == "rejected" else "accepted",
+                "next_turn": None,
+                "followup_branches": merged_followups,
+            }
+        )
     if primary_bridge is None and primary_process_gap is None and not isinstance(primary_partial, dict):
         return decision
     if primary_bridge is not None:
         structural_branch = _make_supply_chain_commercial_bridge_branch(
-            InvestigationMission.model_validate(state.get(STATE_CURRENT_MISSION) or {}),
+            mission,
             primary_bridge,
             branch_id=f"{branch_plan.branch_id}-commercial-bridge",
             parent_hypothesis_id=branch_plan.branch_id,
         )
         structural_turn = HypothesisTurnPlan(
             pathKind="bridge",
-            toolName="retrieve",
+            toolName=structural_branch.preferred_tools[0] if structural_branch.preferred_tools else "retrieve",
             humanQuestion=structural_branch.human_question,
             humanAction=structural_branch.human_action,
             whyNow="The graph still does not connect the requested corridor and shows disconnected islands touching the same product stage.",
@@ -6287,14 +7722,14 @@ def _normalize_hypothesis_turn_decision(
         return decision
     if primary_process_gap is not None:
         structural_branch = _make_supply_chain_process_gap_branch(
-            InvestigationMission.model_validate(state.get(STATE_CURRENT_MISSION) or {}),
+            mission,
             primary_process_gap,
             branch_id=f"{branch_plan.branch_id}-close-process-gap",
             parent_hypothesis_id=branch_plan.branch_id,
         )
         structural_turn = HypothesisTurnPlan(
             pathKind="bridge",
-            toolName="retrieve",
+            toolName=structural_branch.preferred_tools[0] if structural_branch.preferred_tools else "retrieve",
             humanQuestion=structural_branch.human_question,
             humanAction=structural_branch.human_action,
             whyNow="The graph shows inbound and outbound flows at the same host but lacks the hosted process step that connects them.",
@@ -6343,14 +7778,15 @@ def _normalize_hypothesis_turn_decision(
             )
         return decision
     structural_branch = _make_supply_chain_partial_bridge_branch(
-        InvestigationMission.model_validate(state.get(STATE_CURRENT_MISSION) or {}),
+        mission,
         primary_partial,
         branch_id=f"{branch_plan.branch_id}-extend-partial-chain",
         parent_hypothesis_id=branch_plan.branch_id,
+        closure_hint=branch_plan.closure_target,
     )
     structural_turn = HypothesisTurnPlan(
         pathKind="bridge",
-        toolName="retrieve",
+        toolName=structural_branch.preferred_tools[0] if structural_branch.preferred_tools else "retrieve",
         humanQuestion=structural_branch.human_question,
         humanAction=structural_branch.human_action,
         whyNow="Reachability still shows a partial chain whose next structural hop is unresolved.",
@@ -6360,11 +7796,30 @@ def _normalize_hypothesis_turn_decision(
         targetEntities=list(structural_branch.target_entities),
         fragmentType=structural_branch.fragment_type,
     )
-    if decision.decision in {"accept_hypothesis", "stall_hypothesis"}:
+    needs_override = decision.decision in {"accept_hypothesis", "stall_hypothesis"} or (
+        decision.decision == "ask_next_question_same_hypothesis"
+        and next_turn_branch is not None
+        and (
+            _supply_chain_plan_is_overlay_shift(next_turn_branch)
+            or not _branch_addresses_partial_chain(next_turn_branch, primary_partial)
+        )
+    )
+    if (
+        decision.decision == "ask_next_question_same_hypothesis"
+        and next_turn_branch is not None
+        and isinstance(primary_partial, dict)
+        and _branch_addresses_partial_chain(next_turn_branch, primary_partial)
+        and not _supply_chain_plan_is_overlay_shift(next_turn_branch)
+    ):
+        needs_override = False
+    if needs_override:
         return decision.model_copy(
             update={
                 "decision": "ask_next_question_same_hypothesis",
-                "decision_note": "Runtime redirected the hypothesis to the highest-priority partial-chain break point.",
+                "decision_note": (
+                    "Runtime redirected the hypothesis to the highest-priority partial-chain break point because the "
+                    "operational chain is still incomplete."
+                ),
                 "next_turn": structural_turn,
                 "followup_branches": [],
             }
@@ -6502,6 +7957,12 @@ def _reachability_candidate_paths(state: dict[str, Any]) -> list[CandidatePath]:
         status="still_open",
         path_kind="bridge",
         entries=list(reach.get("partialChains") or []),
+    )
+    _build(
+        bucket="typed_backbone",
+        status="best_supported_indirect",
+        path_kind="overview",
+        entries=list(reach.get("typedBackboneChains") or []),
     )
     return candidates
 
@@ -6891,11 +8352,7 @@ def _frontier_summary(state: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _requires_supply_chain_profile(action: ToolAction) -> bool:
-    return "supply_chain" in action.assigned_roles and action.expected_fragment_type in {
-        "overview_chain",
-        "chain_fragment",
-        "alternative_chain",
-    }
+    return _is_supply_chain_action(action)
 
 
 def _relevant_graph_context(
@@ -7008,13 +8465,17 @@ def _tool_prompt(
         role = action.assigned_roles[0]
         role_playbook = _role_playbook_text(role) + "\n\n"
     prompt = (
-        "You are a graph-native investigation tool inside AgentLoom.\n"
+        JSON_WIRE_CONTRACT_V1
+        + "\n\nMinimal ToolActionResult wire skeleton (extend with real graphFragments):\n"
+        + TOOLACTIONRESULT_WIRE_EXAMPLE
+        + "\n\n"
+        + "You are a graph-native investigation tool inside AgentLoom.\n"
         "You are operating inside a graph system specialized in meaningful connected chains of typed entities and typed relations.\n"
         + role_playbook
         + "Return exactly one JSON object and nothing else.\n"
         "Do not wrap the JSON in markdown fences.\n"
         "Do not add commentary before or after the JSON.\n"
-        "The JSON must match ToolActionResult exactly.\n"
+        "The JSON must match ToolActionResult exactly (including schemaVersion).\n"
         "There is one graph protocol only: the same ToolActionResult -> GraphFragment format is used for the first skeleton, later enrichment, and graph mutation.\n"
         "Do not invent a special answer shape for overview questions. Even the first whole-picture answer must be ordinary graphFragments that the runtime will later append to or replace under the same rules.\n"
         "Every factual answer must be carried by graphFragments. For supply-chain work, prefer entityNodes + flowLegs + processSteps + overlayEdges; observations are only a derived compatibility projection.\n"
@@ -7024,6 +8485,8 @@ def _tool_prompt(
         "The action belongs to a candidate path class (`pathKind`). You must return `pathAssessment` saying whether that path is confirmed, rejected, still open, or currently best-supported as an indirect route.\n"
         "Preserve useful but uncertain nodes and edges by lowering confidence or using supportType=hypothesis instead of deleting them.\n"
         "Do not confuse operational supply-chain flow with contractual procurement. Procurement model, sourcing strategy, offtake, localization, recycling strategy, or vertical integration without a concrete flowLeg or processStep belongs in learnedFindings and frontier, not in fake operational structure.\n"
+        "Aggregate stand-ins such as a global market pool, generic trader, unnamed converter, or broad intermediary hub do not close the route. If they are the best current explanation, keep them as unresolved structural frontier and search for a named route family or jurisdictional handoff.\n"
+        "If you identified only converter families, likely jurisdictions, or contractual patterns but did not add a flowLeg, processStep, or replacement patch, do not mark the route as closed or resolved. Keep it open in remainingFrontier/discoveredFrontier.\n"
         "Do not spend a web-grounded turn on stable background facts that a competent model already knows, such as well-established jurisdiction-wide regulatory frameworks, unless the action explicitly asks for current changes, enforcement, or company-specific response.\n"
         "Use the action's closureTarget, knownContext, and frontier to understand what the system already knows and what exact graph closure is being attempted.\n"
         "The working graph is mutable shared memory. If you return `patchMode=replace_entity` or `replace_fragment`, the runtime will apply that patch before later reasoning steps. Treat replacement as a real graph mutation, not as commentary.\n"
@@ -7183,7 +8646,9 @@ def _memory_question_to_graph(action: ToolAction, tool_context) -> ToolActionRes
         completeness="partial",
         qualityScore=0.4,
     )
-    return ToolActionResult(
+    return _normalize_supply_chain_result(
+        action,
+        ToolActionResult(
         actionId=action.action_id,
         branchId=action.branch_id,
         toolName=action.tool_name,
@@ -7199,6 +8664,7 @@ def _memory_question_to_graph(action: ToolAction, tool_context) -> ToolActionRes
         uncoveredQuestions=[],
         sourceDocuments=[],
         failure=None,
+        ),
     )
 
 
@@ -7222,20 +8688,17 @@ def _run_question_to_graph_llm(
         return _tool_failure_result(action, "failed", str(exc), code="agent_failed")
 
     config = _vertex_grounding_config()
-    used_resource_fallback = False
+    used_resource_fallback_holder = [False]
 
     def _generate_with_retry(*, model: str, contents: str, config_obj: Any) -> Any:
-        nonlocal used_resource_fallback
-        try:
-            return client.models.generate_content(model=model, contents=contents, config=config_obj)
-        except Exception as exc:
-            if not _is_resource_exhausted_error(exc):
-                raise
-            fallback_model = _model_with_resource_fallback(model, used_fallback=used_resource_fallback)
-            if fallback_model == model:
-                raise
-            used_resource_fallback = True
-            return client.models.generate_content(model=fallback_model, contents=contents, config=config_obj)
+        return _vertex_generate_content_resilient(
+            client,
+            model=model,
+            contents=contents,
+            config=config_obj,
+            allow_quota_model_fallback=True,
+            used_resource_fallback_holder=used_resource_fallback_holder,
+        )
 
     retrieved_sources: list[dict[str, Any]] = []
     extraction_prompt = prompt
@@ -7382,6 +8845,32 @@ def _run_question_to_graph_llm(
                 action, "failed", f"Invalid tool JSON: {first_exc}", code="agent_failed"
             )
 
+    if _needs_supply_chain_structural_retry(action, result):
+        structural_retry_suffix = _supply_chain_structural_retry_suffix(action, result, shared_memory)
+        try:
+            response3 = _generate_with_retry(
+                model=structured_model,
+                contents=extraction_prompt + structural_retry_suffix,
+                config_obj=live_types.GenerateContentConfig(
+                    temperature=0,
+                    response_mime_type="application/json",
+                    response_schema=ToolActionResult,
+                    max_output_tokens=TOOL_MAX_OUTPUT_TOKENS,
+                ),
+            )
+            repaired_result = _parse_structured(response3)
+            if _result_has_supply_chain_operational_progress(action, repaired_result) or (
+                repaired_result.status in {"blocked", "partial"}
+                and not repaired_result.graph_fragments
+                and (
+                    len(repaired_result.uncovered_questions) > len(result.uncovered_questions)
+                    or len(repaired_result.remaining_frontier) > len(result.remaining_frontier)
+                )
+            ):
+                result = repaired_result
+        except Exception:
+            pass
+
     source_docs = list(result.source_documents)
     if retrieval:
         source_docs.extend(
@@ -7389,7 +8878,8 @@ def _run_question_to_graph_llm(
             for value in _dedupe_sources(retrieved_sources)
             if value.get("uri", "")
         )
-    return result.model_copy(update={"source_documents": _dedupe_preserve_order(source_docs)[:10]})
+    result = result.model_copy(update={"source_documents": _dedupe_preserve_order(source_docs)[:10]})
+    return _normalize_supply_chain_result(action, result)
 
 
 def _reason_question_to_graph(action: ToolAction, tool_context) -> ToolActionResult:
@@ -7416,7 +8906,8 @@ def _corpus_question_to_graph(action: ToolAction, tool_context) -> ToolActionRes
     try:
         from google.genai import Client, types as live_types
         client = Client(vertexai=True, project=os.getenv("GOOGLE_CLOUD_PROJECT"), location=os.getenv("GOOGLE_CLOUD_LOCATION", "global"))
-        response = client.models.generate_content(
+        response = _vertex_generate_content_resilient(
+            client,
             model=INVESTIGATOR_MODEL,
             contents=prompt,
             config=live_types.GenerateContentConfig(
@@ -7425,6 +8916,8 @@ def _corpus_question_to_graph(action: ToolAction, tool_context) -> ToolActionRes
                 response_schema=ToolActionResult,
                 max_output_tokens=TOOL_MAX_OUTPUT_TOKENS,
             ),
+            allow_quota_model_fallback=True,
+            used_resource_fallback_holder=[False],
         )
         result = _parse_tool_result_payload(
             _response_json_text(response),
@@ -7433,7 +8926,8 @@ def _corpus_question_to_graph(action: ToolAction, tool_context) -> ToolActionRes
             "document",
         )
         source_docs = [item.get("sourceUri", "") for item in snippets if item.get("sourceUri")]
-        return result.model_copy(update={"source_documents": _dedupe_preserve_order(source_docs)[:10]})
+        result = result.model_copy(update={"source_documents": _dedupe_preserve_order(source_docs)[:10]})
+        return _normalize_supply_chain_result(action, result)
     except Exception as exc:
         return _tool_failure_result(action, "failed", str(exc), code="agent_failed")
 
@@ -7519,7 +9013,7 @@ def retrieve(action: ToolAction, tool_context) -> ToolActionResult:
             return out
         best_result = memory_result
 
-    request = AgentLoomRequest.model_validate(tool_context.state.get(STATE_REQUEST) or {})
+    request = _request_from_state(tool_context.state)
     if request.corpus_documents and _vertex_grounding_config().get("available"):
         with ThreadPoolExecutor(max_workers=2) as pool:
             fut_c = pool.submit(_corpus_question_to_graph, action, tool_context)
@@ -7560,8 +9054,147 @@ def reason(action: ToolAction, tool_context) -> ToolActionResult:
     return _reason_question_to_graph(action, tool_context).model_copy(update={"tool_name": "reason"})
 
 
+def supply_qa(action: ToolAction, tool_context) -> ToolActionResult:
+    role_contracts = _selected_role_contract_payload(action.assigned_roles)
+    shared_memory = read_shared_memory(tool_context)
+    prompt = (
+        _tool_prompt(action, role_contracts, shared_memory, "model")
+        + "\n\n--- supply_qa only (overrides ToolActionResult shape above): emit SupplyQAResponse JSON, no graph primitives. ---\n"
+        + JSON_WIRE_CONTRACT_V1
+        + "\nMinimal SupplyQAResponse wire skeleton:\n"
+        + SUPPLYQA_WIRE_EXAMPLE
+        + "\n\nReturn exactly one JSON object matching SupplyQAResponse (answer, citations, mentionedEntityCandidates)."
+    )
+    try:
+        from google.genai import Client, types as live_types
+
+        client = Client(
+            vertexai=True,
+            project=os.getenv("GOOGLE_CLOUD_PROJECT"),
+            location=os.getenv("GOOGLE_CLOUD_LOCATION", "global"),
+        )
+        response = _vertex_generate_content_resilient(
+            client,
+            model=INVESTIGATOR_MODEL,
+            contents=prompt,
+            config=live_types.GenerateContentConfig(
+                temperature=0,
+                response_mime_type="application/json",
+                response_schema=SupplyQAResponse,
+                max_output_tokens=min(TOOL_MAX_OUTPUT_TOKENS, 4096),
+            ),
+            allow_quota_model_fallback=True,
+            used_resource_fallback_holder=[False],
+        )
+        parsed = getattr(response, "parsed", None)
+        if isinstance(parsed, SupplyQAResponse):
+            qa = parsed
+        elif isinstance(parsed, dict):
+            qa = SupplyQAResponse.model_validate(parsed)
+        else:
+            raw_qa = recover_wire_json_text(_response_json_text(response))
+            qa = SupplyQAResponse.model_validate_json(raw_qa)
+    except Exception as exc:
+        return _tool_failure_result(action, "failed", str(exc), code="agent_failed")
+    cites = [str(c).strip() for c in qa.citations if str(c).strip()][:10]
+    return ToolActionResult(
+        action_id=action.action_id,
+        branch_id=action.branch_id,
+        tool_name="supply_qa",
+        status="success",
+        path_assessment="still_open",
+        path_assessment_note="supply_qa_discovery",
+        human_summary=qa.answer,
+        closure_status="unchanged",
+        resolved_frontier=[],
+        remaining_frontier=list(action.frontier),
+        discovered_frontier=[],
+        graph_fragments=[],
+        learned_findings=[],
+        uncovered_questions=[str(x).strip() for x in qa.mentioned_entity_candidates if str(x).strip()][:8],
+        source_documents=cites,
+        failure=None,
+    )
+
+
+def apply_supply_graph_patch(action: ToolAction, tool_context) -> ToolActionResult:
+    state = tool_context.state
+    raw = (action.query_text or "").strip() or (action.human_question or "").strip()
+    try:
+        patch = unmarshal_wire_model(SupplyGraphPatchApply, raw, context=" (apply_supply_graph_patch)")
+    except Exception as exc:
+        return _tool_failure_result(action, "failed", f"Invalid SupplyGraphPatchApply JSON: {exc}", code="agent_failed")
+    if patch.branch_id != action.branch_id:
+        return _tool_failure_result(
+            action,
+            "blocked",
+            f"patch branchId {patch.branch_id!r} does not match action branch {action.branch_id!r}",
+            missingInputs=["branchId"],
+        )
+    patch_key = f"{action.branch_id}:{patch.patch_id}"
+    applied_keys_raw = state.get(STATE_APPLIED_SUPPLY_PATCH_KEYS)
+    applied_keys: list[str] = list(applied_keys_raw) if isinstance(applied_keys_raw, list) else []
+    if patch_key in applied_keys:
+        return ToolActionResult(
+            action_id=action.action_id,
+            branch_id=action.branch_id,
+            tool_name="apply_supply_graph_patch",
+            status="success",
+            path_assessment="still_open",
+            path_assessment_note=f"patch {patch.patch_id} already applied",
+            human_summary=f"Patch {patch.patch_id} was already applied for this branch (idempotent).",
+            closure_status="unchanged",
+            resolved_frontier=[],
+            remaining_frontier=list(action.frontier),
+            discovered_frontier=[],
+            graph_fragments=[],
+            learned_findings=[],
+            uncovered_questions=[],
+            source_documents=[],
+            failure=None,
+        )
+    valid_ids = _eligible_evidence_ledger_entry_ids(state, action.branch_id)
+    missing = [eid for eid in patch.evidence_ref_ids if eid not in valid_ids]
+    if missing:
+        return _tool_failure_result(
+            action,
+            "blocked",
+            f"evidenceRefIds not eligible for this branch (session + branch/ancestor ledgers): {missing[:6]}",
+            missingInputs=["evidenceRefIds"],
+        )
+    frags = list(patch.graph_fragments)
+    try:
+        _apply_graph_fragment_mutations(state, frags)
+    except Exception as exc:
+        return _tool_failure_result(action, "failed", str(exc), code="agent_failed")
+    if patch_key not in applied_keys:
+        applied_keys.append(patch_key)
+    state[STATE_APPLIED_SUPPLY_PATCH_KEYS] = applied_keys[-400:]
+    return ToolActionResult(
+        action_id=action.action_id,
+        branch_id=action.branch_id,
+        tool_name="apply_supply_graph_patch",
+        status="success",
+        path_assessment="still_open",
+        path_assessment_note=f"patch {patch.patch_id} applied",
+        human_summary=f"Applied patch {patch.patch_id} with {len(frags)} graph fragment(s).",
+        closure_status="advanced",
+        resolved_frontier=[],
+        remaining_frontier=list(action.frontier),
+        discovered_frontier=[],
+        graph_fragments=frags,
+        learned_findings=[],
+        uncovered_questions=[],
+        source_documents=[],
+        failure=None,
+    )
+
+
 def web_search(action: ToolAction, tool_context) -> ToolActionResult:
     return _web_search_question_to_graph(action, tool_context).model_copy(update={"tool_name": "web_search"})
+
+
+_BRANCH_LEDGER_CAP = 120
 
 
 def _update_branch_state(
@@ -7574,6 +9207,8 @@ def _update_branch_state(
     turn: HypothesisTurn | None = None,
     explicit_status: Literal["active", "needs_followup", "blocked", "completed"] | None = None,
     explicit_stop_reason: str | None = None,
+    seed_hypothesis_ledger: list[EvidenceLedgerEntry] | None = None,
+    ledger_entry: EvidenceLedgerEntry | None = None,
 ) -> BranchState:
     previous_quality = previous.quality_score if previous is not None else 0.0
     progress_delta = _branch_progress_delta(previous, result)
@@ -7642,6 +9277,29 @@ def _update_branch_state(
         stop_reason = "Branch exhausted its current useful improvement window without closing the frontier."
     elif result.graph_fragments or remaining_frontier:
         status = "needs_followup"
+    branch_ledger: list[EvidenceLedgerEntry] = list(previous.hypothesis_evidence_ledger) if previous else []
+    if previous is None and seed_hypothesis_ledger:
+        branch_ledger = list(seed_hypothesis_ledger)
+    parent_snap: list[EvidenceLedgerEntry] = (
+        list(previous.parent_ledger_snapshot)
+        if previous
+        else (
+            list(seed_hypothesis_ledger)
+            if seed_hypothesis_ledger and plan.hypothesis_relation == "independent_child"
+            else []
+        )
+    )
+    if ledger_entry is not None:
+        branch_ledger = (branch_ledger + [ledger_entry])[-_BRANCH_LEDGER_CAP:]
+    ledger_digest = ",".join(e.id for e in branch_ledger[-8:])
+    applied_patch_ids = list(previous.applied_supply_patch_ids if previous else [])
+    if result.tool_name == "apply_supply_graph_patch" and result.status == "success":
+        note = (result.path_assessment_note or "").strip()
+        if note.startswith("patch ") and " applied" in note:
+            pid = note[len("patch ") : note.index(" applied")].strip()
+            if pid and pid not in applied_patch_ids:
+                applied_patch_ids.append(pid)
+        applied_patch_ids = applied_patch_ids[-40:]
     return BranchState(
         branchId=plan.branch_id,
         hypothesis=plan.hypothesis,
@@ -7670,6 +9328,10 @@ def _update_branch_state(
         graphFragments=branch_fragments,
         learnedFindings=((previous.learned_findings if previous else []) + result.learned_findings),
         hypothesisTurns=((previous.hypothesis_turns if previous else []) + ([turn] if turn is not None else [])),
+        hypothesisEvidenceLedger=branch_ledger,
+        parentLedgerSnapshot=parent_snap,
+        ledgerDigest=ledger_digest,
+        appliedSupplyPatchIds=applied_patch_ids,
     )
 
 
@@ -7719,7 +9381,7 @@ class DeterministicComposerAgent(BaseAgent):
             yield event
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
-        request = AgentLoomRequest.model_validate(ctx.session.state.get(STATE_REQUEST) or {})
+        request = _request_from_state(ctx.session.state)
         selected_roles = list(ctx.session.state.get(STATE_SELECTED_ROLES) or [])
         working_graph = _load_operational_graph_state(ctx.session.state)
         working_counts = graph_counts(working_graph)
@@ -8033,6 +9695,12 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
                 "openGapCount": _open_gap_count(ctx.session.state),
             },
         )
+        raw_pf_inv = ctx.session.state.get(STATE_INVESTIGATION_PREFLIGHT) or {}
+        try:
+            pf_inv = InvestigationPreflight.model_validate(raw_pf_inv)
+            preflight_dump = pf_inv.model_dump(mode="json", by_alias=True)
+        except Exception:
+            preflight_dump = InvestigationPreflight().model_dump(mode="json", by_alias=True)
         investigator_context = {
             "mission": mission.model_dump(mode="json", by_alias=True),
             "initialPass": initial_pass,
@@ -8042,6 +9710,7 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
             "rolePlaybook": role_contract.investigation_playbook,
             "toolUseGuidance": role_contract.tool_use_guidance,
             "structuralClosureCriteria": role_contract.structural_closure_criteria,
+            "investigationPreflight": preflight_dump,
             "sharedMemory": _planner_memory_snapshot(ctx.session.state),
             "corpusIndex": read_corpus_index(tool_context),
             "toolContracts": ctx.session.state.get(STATE_TOOL_CONTRACTS, []) or [],
@@ -8074,7 +9743,7 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
             self._specialization_role,
             plan,
             initial_pass=initial_pass,
-            user_question=AgentLoomRequest.model_validate(ctx.session.state.get(STATE_REQUEST) or {}).question,
+            user_question=_request_from_state(ctx.session.state).question,
             corpus_document_count=investigator_context["corpusIndex"]["documentCount"],
         )
         ctx.session.state[STATE_INVESTIGATOR_PLAN] = plan.model_dump(mode="json", by_alias=True)
@@ -8451,15 +10120,53 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
             async for event in self._run_named_subagent(ctx, self._turn_reasoner_name):
                 _apply_event_state_delta_to_session(ctx, event)
                 await runtime_queue.put(event)
-            decision = HypothesisTurnDecision.model_validate(ctx.session.state.get(STATE_HYPOTHESIS_TURN_DECISION) or {})
-            decision = _normalize_hypothesis_turn_decision(
-                ctx.session.state,
-                branch_plan,
-                branch_state,
-                local_state,
-                latest_result,
-                decision,
+            raw_decision = HypothesisTurnDecision.model_validate(ctx.session.state.get(STATE_HYPOTHESIS_TURN_DECISION) or {})
+            raw_decision_dump = json.dumps(
+                raw_decision.model_dump(mode="json", by_alias=True),
+                sort_keys=True,
+                ensure_ascii=False,
             )
+            if HYPOTHESIS_RUNTIME_STEER and HYPOTHESIS_RUNTIME_STEER_MODE not in ("off",):
+                normalized = _normalize_hypothesis_turn_decision(
+                    ctx.session.state,
+                    branch_plan,
+                    branch_state,
+                    local_state,
+                    latest_result,
+                    raw_decision,
+                )
+            else:
+                normalized = raw_decision
+            norm_dump = json.dumps(
+                normalized.model_dump(mode="json", by_alias=True),
+                sort_keys=True,
+                ensure_ascii=False,
+            )
+            if raw_decision_dump != norm_dump:
+                mode = HYPOTHESIS_RUNTIME_STEER_MODE if HYPOTHESIS_RUNTIME_STEER else "off"
+                ctx.session.state[STATE_LAST_HYPOTHESIS_RUNTIME_TELEMETRY] = {
+                    "applied": bool(HYPOTHESIS_RUNTIME_STEER and mode == "override"),
+                    "advisoryOnly": bool(HYPOTHESIS_RUNTIME_STEER and mode == "advisory"),
+                    "decisionNote": (normalized.decision_note or "")[:500],
+                    "branchId": branch_plan.branch_id,
+                }
+            if HYPOTHESIS_RUNTIME_STEER and HYPOTHESIS_RUNTIME_STEER_MODE == "advisory":
+                if raw_decision_dump != norm_dump:
+                    hints = list(ctx.session.state.get(STATE_HYPOTHESIS_STEER_HINT) or [])
+                    hints.append(
+                        {
+                            "branchId": branch_plan.branch_id,
+                            "llmDecision": raw_decision.decision,
+                            "suggestedDecision": normalized.decision,
+                            "suggestedNote": (normalized.decision_note or "")[:800],
+                        }
+                    )
+                    ctx.session.state[STATE_HYPOTHESIS_STEER_HINT] = hints[-32:]
+                decision = raw_decision
+            elif HYPOTHESIS_RUNTIME_STEER and HYPOTHESIS_RUNTIME_STEER_MODE not in ("off",):
+                decision = normalized
+            else:
+                decision = raw_decision
             ctx.session.state[STATE_HYPOTHESIS_TURN_DECISION] = decision.model_dump(mode="json", by_alias=True)
             await self._emit_runtime_log(
                 ctx,
@@ -8492,6 +10199,32 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
         turn_plan = _initial_turn_plan(branch_plan)
         turn_index = len(previous_state.hypothesis_turns) if previous_state is not None else 0
         max_turns = 6
+        seed_hypothesis_ledger: list[EvidenceLedgerEntry] = []
+        if (
+            previous_state is None
+            and branch_plan.hypothesis_relation == "independent_child"
+            and (branch_plan.parent_hypothesis_id or "").strip()
+        ):
+            parent_id = (branch_plan.parent_hypothesis_id or "").strip()
+            for raw in tool_context.state.get(STATE_BRANCH_STATES) or []:
+                try:
+                    par = BranchState.model_validate(raw)
+                except Exception:
+                    continue
+                if par.branch_id == parent_id:
+                    seed_hypothesis_ledger = list(par.hypothesis_evidence_ledger)[-80:]
+                    if not seed_hypothesis_ledger:
+                        for row in tool_context.state.get(STATE_EVIDENCE_LEDGER) or []:
+                            if not isinstance(row, dict):
+                                continue
+                            if str(row.get("branchId") or "").strip() != parent_id:
+                                continue
+                            try:
+                                seed_hypothesis_ledger.append(EvidenceLedgerEntry.model_validate(row))
+                            except Exception:
+                                continue
+                        seed_hypothesis_ledger = seed_hypothesis_ledger[-80:]
+                    break
 
         while turn_plan is not None and turn_index < max_turns:
             turn_index += 1
@@ -8545,6 +10278,7 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
                 request=action,
             )
             tool_result = await asyncio.to_thread(self._run_tool_action, action, tool_context)
+            ledger_entry = tool_context.last_evidence_ledger_entry
             tool_results.append(tool_result)
             await self._emit_runtime_log(
                 ctx,
@@ -8569,6 +10303,8 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
                 action,
                 tool_result,
                 graph_fragments_override=local_branch_fragments,
+                seed_hypothesis_ledger=seed_hypothesis_ledger if state is None else None,
+                ledger_entry=ledger_entry,
             )
             decision = await self._run_hypothesis_turn_reasoner(
                 ctx,
@@ -8596,6 +10332,8 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
                     turn=turn,
                     explicit_status="needs_followup",
                     explicit_stop_reason=decision.decision_note,
+                    seed_hypothesis_ledger=seed_hypothesis_ledger if state is None else None,
+                    ledger_entry=ledger_entry,
                 )
                 turn_plan = decision.next_turn
                 continue
@@ -8613,6 +10351,16 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
                         for item in decision.followup_branches[:3]
                     ]
                 )
+                explicit_status: Literal["active", "needs_followup", "blocked", "completed"] = "needs_followup"
+                explicit_stop_reason = decision.decision_note
+                post_update: dict[str, Any] = {}
+                if decision.hypothesis_status in {"accepted", "rejected"}:
+                    explicit_status = "completed"
+                if decision.hypothesis_status == "rejected":
+                    post_update = {
+                        "path_assessment": "rejected",
+                        "path_assessment_note": decision.decision_note,
+                    }
                 state = _update_branch_state(
                     state,
                     branch_plan,
@@ -8620,9 +10368,13 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
                     tool_result,
                     graph_fragments_override=local_branch_fragments,
                     turn=turn,
-                    explicit_status="needs_followup",
-                    explicit_stop_reason=decision.decision_note,
+                    explicit_status=explicit_status,
+                    explicit_stop_reason=explicit_stop_reason,
+                    seed_hypothesis_ledger=seed_hypothesis_ledger if state is None else None,
+                    ledger_entry=ledger_entry,
                 )
+                if post_update:
+                    state = state.model_copy(update=post_update)
                 break
 
             if decision.decision == "accept_hypothesis":
@@ -8640,6 +10392,8 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
                             f"Acceptance blocked because the hypothesis is not structurally closed yet. "
                             f"{acceptance_block_reason}"
                         ),
+                        seed_hypothesis_ledger=seed_hypothesis_ledger if state is None else None,
+                        ledger_entry=ledger_entry,
                     )
                     break
                 state = _update_branch_state(
@@ -8651,6 +10405,8 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
                     turn=turn,
                     explicit_status="completed",
                     explicit_stop_reason=decision.decision_note,
+                    seed_hypothesis_ledger=seed_hypothesis_ledger if state is None else None,
+                    ledger_entry=ledger_entry,
                 )
                 break
 
@@ -8664,23 +10420,13 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
                     turn=turn,
                     explicit_status="completed",
                     explicit_stop_reason=decision.decision_note,
+                    seed_hypothesis_ledger=seed_hypothesis_ledger if state is None else None,
+                    ledger_entry=ledger_entry,
                 ).model_copy(
                     update={
                         "path_assessment": "rejected",
                         "path_assessment_note": decision.decision_note,
                     }
-                )
-                break
-
-                state = _update_branch_state(
-                    state,
-                    branch_plan,
-                    action,
-                    tool_result,
-                    graph_fragments_override=local_branch_fragments,
-                    turn=turn,
-                    explicit_status="needs_followup",
-                    explicit_stop_reason=decision.decision_note or "Branch exhausted its current useful improvement window without closing the frontier.",
                 )
                 break
         if state is None:
@@ -8729,16 +10475,110 @@ class RoleSpecializedInvestigatorAgent(BaseAgent):
         return state, tool_results, spawned_plans
 
     def _run_tool_action(self, action: ToolAction, tool_context: _StateToolContext) -> ToolActionResult:
+        tool_context.last_evidence_ledger_entry = None
+
+        def _finalize(result: ToolActionResult) -> ToolActionResult:
+            out = _ensure_learned_findings(action, result)
+            tool_context.last_evidence_ledger_entry = _append_evidence_ledger(tool_context.state, action, out)
+            return out
+
         if action.tool_name == "retrieve":
-            return _ensure_learned_findings(action, retrieve(action, tool_context))
+            return _finalize(retrieve(action, tool_context))
         if action.tool_name == "reason":
-            return _ensure_learned_findings(action, reason(action, tool_context))
+            return _finalize(reason(action, tool_context))
         if action.tool_name == "web_search":
-            return _ensure_learned_findings(action, web_search(action, tool_context))
-        return _ensure_learned_findings(
-            action,
+            return _finalize(web_search(action, tool_context))
+        if action.tool_name == "supply_qa":
+            return _finalize(supply_qa(action, tool_context))
+        if action.tool_name == "apply_supply_graph_patch":
+            return apply_supply_graph_patch(action, tool_context)
+        return _finalize(
             _tool_failure_result(action, "failed", f"Unsupported tool {action.tool_name}", code="agent_failed"),
         )
+
+
+def _pack_red_team_bundle(state: dict[str, Any], mission: InvestigationMission) -> dict[str, Any]:
+    rb = _investigation_reachability_counts_bundle(state)
+    pf_raw = state.get(STATE_INVESTIGATION_PREFLIGHT) or {}
+    try:
+        preflight = InvestigationPreflight.model_validate(pf_raw)
+    except Exception:
+        preflight = InvestigationPreflight()
+    last = state.get(STATE_LAST_AGENT_RESULT) or {}
+    summary = ""
+    if isinstance(last, dict):
+        summary = str(last.get("summary") or "")[:800]
+    wc = _working_graph_counts(state)
+    return {
+        "mission": mission.model_dump(mode="json", by_alias=True),
+        "investigationPreflight": preflight.model_dump(mode="json", by_alias=True),
+        "reachability": rb.get("reachability"),
+        "reachabilityCounts": {
+            "groundedCompleteChainCount": rb.get("groundedCompleteChainCount"),
+            "structuralCompleteChainCount": rb.get("structuralCompleteChainCount"),
+            "partialChainCount": rb.get("partialChainCount"),
+            "typedBackboneChainCount": rb.get("typedBackboneChainCount"),
+            "requestedCorridorSatisfied": rb.get("requestedCorridorSatisfied"),
+        },
+        "lastAgentResultSummary": summary,
+        "graphObservationCount": wc.get("graphObservationCount", 0),
+    }
+
+
+class RedTeamAgent(BaseAgent):
+    def __init__(self) -> None:
+        super().__init__(name="red_team_agent", sub_agents=[red_team_reasoner])
+
+    async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
+        mission = InvestigationMission.model_validate(ctx.session.state.get(STATE_CURRENT_MISSION) or {})
+        selected_roles = list(ctx.session.state.get(STATE_SELECTED_ROLES) or [])
+        rt_ctx = _pack_red_team_bundle(ctx.session.state, mission)
+        yield Event(
+            author=self.name,
+            actions=EventActions(state_delta={STATE_RED_TEAM_CONTEXT: rt_ctx}),
+        )
+        yield _runtime_log_event(
+            ctx.session.state,
+            actor="red_team_reasoner",
+            phase="llm_request",
+            message="Red team is proposing alternative frames and epistemic counterviews.",
+            model=RED_TEAM_MODEL,
+            basis={"missionId": mission.mission_id},
+            request=rt_ctx,
+        )
+        async for event in self._run_named_subagent(ctx, "red_team_reasoner"):
+            yield event
+        raw_payload = ctx.session.state.get(STATE_RED_TEAM_LLM_PAYLOAD) or {}
+        if not isinstance(raw_payload, dict):
+            raw_payload = {}
+        if not str(raw_payload.get("agentName") or raw_payload.get("agent_name") or "").strip():
+            raw_payload = {**raw_payload, "agentName": "red_team_agent", "missionId": mission.mission_id}
+        rt_full = RedTeamAgentOutput.model_validate(raw_payload)
+        raw_ar = red_team_agent_output_to_agent_result(rt_full)
+        result = _normalize_agent_result(raw_ar, mission, mission.assigned_roles or selected_roles)
+        ctx.session.state[STATE_RED_TEAM_ARTIFACT] = rt_full.model_dump(mode="json", by_alias=True)
+        ctx.session.state[STATE_RED_TEAM_RESULT] = result.model_dump(mode="json", by_alias=True)
+        ctx.session.state[STATE_RED_TEAM_SATISFIED] = True
+        yield _runtime_log_event(
+            ctx.session.state,
+            actor=self.name,
+            phase="agent_result",
+            message="Red team returned frame-broadening proposals (graph not mutated here).",
+            model=RED_TEAM_MODEL,
+            basis={"mission": mission.mission_id},
+            result={
+                "status": result.status,
+                "summary": result.summary,
+                "proposedBranchCount": len(rt_full.proposed_branches),
+            },
+        )
+
+    async def _run_named_subagent(self, ctx: InvocationContext, agent_name: str) -> AsyncGenerator[Event, None]:
+        agent = self.find_sub_agent(agent_name)
+        if agent is None:
+            raise ValueError(f"RedTeamAgent cannot find sub-agent {agent_name!r}")
+        async for event in agent.run_async(ctx):
+            yield event
 
 
 class GapBridgeAgent(BaseAgent):
@@ -8762,11 +10602,13 @@ class GapBridgeAgent(BaseAgent):
                 "graphObservationCount": _working_graph_counts(ctx.session.state)["graphObservationCount"],
             },
         )
+        role_edges = _allowed_edges_for_roles(mission.assigned_roles or selected_roles)
         gap_bridge_context = {
             "mission": mission.model_dump(mode="json", by_alias=True),
             "selectedRoles": selected_roles,
             "activeRoleContracts": _selected_role_contract_payload(mission.assigned_roles or selected_roles),
-            "sharedMemory": read_shared_memory(tool_context),
+            "allowedGraphDeltaRelations": sorted(role_edges),
+            "sharedMemory": _planner_memory_snapshot(ctx.session.state),
             "corpusIndex": read_corpus_index(tool_context),
         }
         yield Event(
@@ -8849,14 +10691,34 @@ class CriticAgent(BaseAgent):
                 "graphObservationCount": _working_graph_counts(ctx.session.state)["graphObservationCount"],
             },
         )
-        critic_context = {
-            "mission": mission.model_dump(mode="json", by_alias=True),
-            "selectedRoles": selected_roles,
-            "activeRoleContracts": _selected_role_contract_payload(mission.assigned_roles or selected_roles),
-            "sharedMemory": read_shared_memory(tool_context),
-            "corpusIndex": read_corpus_index(tool_context),
-            "reachability": _graph_reachability_report(ctx.session.state),
-        }
+        full_mem = read_shared_memory(tool_context)
+        reach_snap = _investigation_reachability_counts_bundle(ctx.session.state)["reachability"]
+        q_int_raw = ctx.session.state.get(STATE_QUESTION_INTENT)
+        meta_raw = ctx.session.state.get(STATE_INTENT_META)
+        todos_raw = list(ctx.session.state.get(STATE_INVESTIGATION_TODOS) or [])
+        raw_pf_c = ctx.session.state.get(STATE_INVESTIGATION_PREFLIGHT) or {}
+        try:
+            pf_c = InvestigationPreflight.model_validate(raw_pf_c)
+            pf_c_dump = pf_c.model_dump(mode="json", by_alias=True)
+        except Exception:
+            pf_c_dump = InvestigationPreflight().model_dump(mode="json", by_alias=True)
+        rt_art = ctx.session.state.get(STATE_RED_TEAM_ARTIFACT)
+        rt_art_dump = rt_art if isinstance(rt_art, dict) else {}
+        critic_context = pack_critic_bundle(
+            mission.model_dump(mode="json", by_alias=True),
+            [str(r) for r in selected_roles],
+            _selected_role_contract_payload(mission.assigned_roles or selected_roles),
+            read_corpus_index(tool_context),
+            reach_snap,
+            question_intent=q_int_raw if isinstance(q_int_raw, dict) else {},
+            intent_meta=meta_raw if isinstance(meta_raw, dict) else {},
+            investigation_todos_compact=todos_compact_for_critic(todos_raw),
+            shared_memory_compact=_compact_shared_memory_for_critic(full_mem),
+            investigation_preflight=pf_c_dump,
+            red_team_artifact=rt_art_dump,
+            red_team_satisfied=bool(ctx.session.state.get(STATE_RED_TEAM_SATISFIED)),
+        )
+        critic_context_bytes = len(json.dumps(critic_context, ensure_ascii=False, default=str))
         yield Event(
             author=self.name,
             actions=EventActions(state_delta={STATE_CRITIC_CONTEXT: critic_context}),
@@ -8867,11 +10729,21 @@ class CriticAgent(BaseAgent):
             phase="llm_request",
             message="Critic is evaluating whether the current graph is sufficient for an honest answer.",
             model=CRITIC_MODEL,
-            basis={"mission": mission},
+            basis={"mission": mission, "criticContextBytes": critic_context_bytes},
             request=critic_context,
         )
+        _critic_t0 = time.perf_counter()
         async for event in self._run_named_subagent(ctx, "critic_reasoner"):
             yield event
+        _critic_ms = round((time.perf_counter() - _critic_t0) * 1000.0, 3)
+        yield _runtime_log_event(
+            ctx.session.state,
+            actor="critic_reasoner",
+            phase="llm_complete",
+            message="Critic LLM call finished.",
+            model=CRITIC_MODEL,
+            basis={"criticLatencyMs": _critic_ms, "criticContextBytes": critic_context_bytes},
+        )
         raw_payload = ctx.session.state.get(STATE_CRITIC_RESULT) or {}
         if not isinstance(raw_payload, dict):
             raw_payload = {}
@@ -8944,12 +10816,23 @@ class SupervisorAgent(BaseAgent):
                         STATE_POLICY_INVESTIGATOR_RESULT: {},
                         STATE_GAP_BRIDGE_RESULT: {},
                         STATE_CRITIC_RESULT: {},
+                        STATE_RED_TEAM_RESULT: {},
+                        STATE_RED_TEAM_ARTIFACT: {},
+                        STATE_RED_TEAM_LLM_PAYLOAD: {},
+                        STATE_RED_TEAM_CONTEXT: {},
+                        STATE_INVESTIGATION_PREFLIGHT: InvestigationPreflight().model_dump(mode="json", by_alias=True),
+                        STATE_RED_TEAM_SATISFIED: False,
+                        STATE_RED_TEAM_COMPOSE_WAIVED: False,
                         STATE_OPEN_GAPS: [],
                         STATE_ANSWERED_QUESTIONS: [],
                         STATE_FAILURES: [],
                         STATE_AGENT_RESULT_HISTORY: [],
                         STATE_PROGRESS_HISTORY: [],
                         STATE_GLOBAL_STAGNATION: 0,
+                        STATE_TOOL_IDLE_STREAK: 0,
+                        STATE_EVIDENCE_LEDGER: [],
+                        STATE_APPLIED_SUPPLY_PATCH_KEYS: [],
+                        STATE_HYPOTHESIS_STEER_HINT: [],
                         STATE_LOGIC_TRACE: [],
                         STATE_RUNTIME_LOG: [],
                         STATE_SUPERVISOR_CYCLE: 0,
@@ -8989,6 +10872,41 @@ class SupervisorAgent(BaseAgent):
             async for event in self._select_roles(ctx):
                 yield event
 
+        if not ctx.session.state.get(STATE_QUESTION_INTENT):
+            req_obj = _request_from_state(ctx.session.state)
+            roles_sel = list(ctx.session.state.get(STATE_SELECTED_ROLES) or [])
+            intent_obj, meta_obj = extract_question_intent_bundle(req_obj, roles_sel)
+            preflight_obj = normalize_investigation_preflight(req_obj, intent_obj)
+            todo_seed = seed_investigation_todos(intent_obj, roles_sel, preflight_obj)
+            yield Event(
+                author=self.name,
+                actions=EventActions(
+                    state_delta={
+                        STATE_QUESTION_INTENT: intent_obj.model_dump(mode="json", by_alias=True),
+                        STATE_INTENT_META: meta_obj.model_dump(mode="json", by_alias=True),
+                        STATE_INVESTIGATION_TODOS: todo_seed,
+                        STATE_INVESTIGATION_PREFLIGHT: preflight_obj.model_dump(mode="json", by_alias=True),
+                        STATE_RED_TEAM_SATISFIED: False,
+                        STATE_RED_TEAM_COMPOSE_WAIVED: False,
+                    }
+                ),
+            )
+            meta_dump = meta_obj.model_dump(mode="json", by_alias=True)
+            yield _runtime_log_event(
+                ctx.session.state,
+                actor=self.name,
+                phase="intent_bootstrap",
+                message="QuestionIntent and investigation todos initialized.",
+                basis={
+                    "intentSource": meta_dump.get("intentSource"),
+                    "intentLatencyMs": meta_dump.get("intentLatencyMs"),
+                    "intentFallbackReason": meta_dump.get("intentFallbackReason"),
+                    "intentModel": meta_dump.get("intentModel"),
+                    "investigationTodoCount": len(todo_seed),
+                    "corridorActive": intent_obj.corridor_active,
+                },
+            )
+
         for _ in range(MAX_SUPERVISOR_CYCLES):
             cycle = int(ctx.session.state.get(STATE_SUPERVISOR_CYCLE, 0) or 0) + 1
             yield Event(author=self.name, actions=EventActions(state_delta={STATE_SUPERVISOR_CYCLE: cycle}))
@@ -8996,6 +10914,7 @@ class SupervisorAgent(BaseAgent):
             state_seen = self._state_snapshot(ctx)
             supervisor_context: dict[str, Any] = {
                 "state": state_seen,
+                "investigationControl": _supervisor_preflight_context(ctx.session.state),
             }
             bp = _supervisor_budget_pressure(cycle, MAX_SUPERVISOR_CYCLES)
             if bp == "soft":
@@ -9029,7 +10948,7 @@ class SupervisorAgent(BaseAgent):
             )
             async for event in self._run_named_subagent(ctx, "supervisor_reasoner"):
                 yield event
-            request_obj = AgentLoomRequest.model_validate(ctx.session.state.get(STATE_REQUEST) or {})
+            request_obj = _request_from_state(ctx.session.state)
             raw_supervisor = dict(ctx.session.state.get(STATE_SUPERVISOR_DECISION) or {})
             coerced = _coerce_supervisor_decision_payload(
                 raw_supervisor,
@@ -9047,15 +10966,17 @@ class SupervisorAgent(BaseAgent):
                     basis={"cycle": cycle, "coercedFields": True},
                 )
             decision = SupervisorDecision.model_validate(ctx.session.state.get(STATE_SUPERVISOR_DECISION) or {})
+            supervisor_raw_next = decision.next_agent
             policy_trace: PolicyCorrection | None = None
             policy_parts: list[PolicyCorrection] = []
 
-            dec2, pc_dc = _delegate_constraints(
+            dec2, pc_list = _delegate_constraints(
                 ctx.session.state, decision, cycle=cycle, user_question=request_obj.question
             )
-            if pc_dc is not None:
+            for pc_dc in pc_list:
                 policy_parts.append(pc_dc)
-                decision = dec2
+            decision = dec2
+            if pc_list:
                 ctx.session.state[STATE_SUPERVISOR_DECISION] = decision.model_dump(mode="json", by_alias=True)
 
             if _supervisor_budget_pressure(cycle, MAX_SUPERVISOR_CYCLES) == "hard" and decision.next_agent not in (
@@ -9087,11 +11008,18 @@ class SupervisorAgent(BaseAgent):
                 ok_comp, why = _orchestration_policy_allow_compose(ctx.session.state)
                 if not ok_comp:
                     policy_parts.append(PolicyCorrection(kind="compose_gate", detail=why))
-                    decision = _decision_force_critic_for_compose_gate(
-                        cycle=cycle,
-                        user_question=request_obj.question,
-                        selected_roles=list(ctx.session.state.get(STATE_SELECTED_ROLES) or []),
-                    )
+                    if why == "red_team_required_not_satisfied":
+                        decision = _decision_force_red_team_for_compose_gate(
+                            cycle=cycle,
+                            user_question=request_obj.question,
+                            selected_roles=list(ctx.session.state.get(STATE_SELECTED_ROLES) or []),
+                        )
+                    else:
+                        decision = _decision_force_critic_for_compose_gate(
+                            cycle=cycle,
+                            user_question=request_obj.question,
+                            selected_roles=list(ctx.session.state.get(STATE_SELECTED_ROLES) or []),
+                        )
                     ctx.session.state[STATE_SUPERVISOR_DECISION] = decision.model_dump(mode="json", by_alias=True)
 
             if policy_parts:
@@ -9124,6 +11052,12 @@ class SupervisorAgent(BaseAgent):
                 )
                 self._merge_agent_result(ctx, agent_result)
             elif decision.next_agent == "compose":
+                lt_h, lt_d = _logic_trace_extras(
+                    ctx,
+                    supervisor_raw_next=supervisor_raw_next,
+                    policy_parts=policy_parts,
+                    decision=decision,
+                )
                 logic_entry = LogicTraceEntry(
                     cycle=cycle,
                     stateSeen=state_seen,
@@ -9133,6 +11067,9 @@ class SupervisorAgent(BaseAgent):
                     resultingState=self._state_snapshot(ctx),
                     nextStepLogic=self._next_step_logic(decision, None),
                     policyCorrection=policy_trace,
+                    supervisorNextAgentRaw=supervisor_raw_next,
+                    delegatePolicyOutcome=lt_d,
+                    hypothesisRestructure=lt_h,
                 )
                 yield Event(
                     author=self.name,
@@ -9150,6 +11087,12 @@ class SupervisorAgent(BaseAgent):
                     basis={"cycle": cycle, "completionRationale": decision.completion_rationale},
                     result=decision,
                 )
+                lt_h, lt_d = _logic_trace_extras(
+                    ctx,
+                    supervisor_raw_next=supervisor_raw_next,
+                    policy_parts=policy_parts,
+                    decision=decision,
+                )
                 logic_entry = LogicTraceEntry(
                     cycle=cycle,
                     stateSeen=state_seen,
@@ -9159,6 +11102,9 @@ class SupervisorAgent(BaseAgent):
                     resultingState=self._state_snapshot(ctx),
                     nextStepLogic=self._next_step_logic(decision, None),
                     policyCorrection=policy_trace,
+                    supervisorNextAgentRaw=supervisor_raw_next,
+                    delegatePolicyOutcome=lt_d,
+                    hypothesisRestructure=lt_h,
                 )
                 yield Event(
                     author=self.name,
@@ -9196,30 +11142,53 @@ class SupervisorAgent(BaseAgent):
                     result=agent_result,
                 )
 
-            logic_entry = LogicTraceEntry(
-                cycle=cycle,
-                stateSeen=state_seen,
-                decision=decision,
-                mission=decision.mission,
-                agentResult=agent_result,
-                resultingState=self._state_snapshot(ctx),
-                nextStepLogic=self._next_step_logic(decision, agent_result),
-                policyCorrection=policy_trace,
-            )
-            yield Event(
-                author=self.name,
-                actions=EventActions(state_delta={STATE_LOGIC_TRACE: self._append_logic_entry(ctx, logic_entry)}),
-            )
+                lt_h, lt_d = _logic_trace_extras(
+                    ctx,
+                    supervisor_raw_next=supervisor_raw_next,
+                    policy_parts=policy_parts,
+                    decision=decision,
+                )
+                logic_entry = LogicTraceEntry(
+                    cycle=cycle,
+                    stateSeen=state_seen,
+                    decision=decision,
+                    mission=decision.mission,
+                    agentResult=agent_result,
+                    resultingState=self._state_snapshot(ctx),
+                    nextStepLogic=self._next_step_logic(decision, agent_result),
+                    policyCorrection=policy_trace,
+                    supervisorNextAgentRaw=supervisor_raw_next,
+                    delegatePolicyOutcome=lt_d,
+                    hypothesisRestructure=lt_h,
+                )
+                yield Event(
+                    author=self.name,
+                    actions=EventActions(state_delta={STATE_LOGIC_TRACE: self._append_logic_entry(ctx, logic_entry)}),
+                )
 
         if LIMIT_EXHAUSTED_STRATEGY == "compose_with_caveats":
             ok_comp, gate_detail = _orchestration_policy_allow_compose(ctx.session.state)
+            red_waived_for_limit = False
+            if (
+                not ok_comp
+                and gate_detail == "red_team_required_not_satisfied"
+                and RED_TEAM_REQUIRED_FOR_BREADTH
+                and not ALLOW_COMPOSE_WITHOUT_RED_TEAM
+            ):
+                ctx.session.state[STATE_RED_TEAM_COMPOSE_WAIVED] = True
+                ok_comp, gate_detail = _orchestration_policy_allow_compose(ctx.session.state)
+                red_waived_for_limit = ok_comp
             if ok_comp:
-                request_lim = AgentLoomRequest.model_validate(ctx.session.state.get(STATE_REQUEST) or {})
+                request_lim = _request_from_state(ctx.session.state)
                 extras: list[str] = [
                     "Final composition was invoked after the supervisor cycle budget was exhausted "
                     f"(AGENTLOOM_LIMIT_EXHAUSTED_STRATEGY=compose_with_caveats; compose_gate={gate_detail}).",
                     "This answer may reflect fewer investigation rounds than ideal; treat unresolved structural gaps seriously.",
                 ]
+                if red_waived_for_limit:
+                    extras.append(
+                        "Preflight required a red-team breadth pass, but cycle budget was exhausted; compose proceeds with this caveat."
+                    )
                 verdict_lim = ctx.session.state.get(STATE_LAST_CRITIC_VERDICT)
                 if isinstance(verdict_lim, dict):
                     for c in verdict_lim.get("compositionConditions") or []:
@@ -9230,6 +11199,9 @@ class SupervisorAgent(BaseAgent):
                 ctx.session.state[STATE_SUPERVISOR_CYCLE_LIMIT_COMPOSE] = True
                 cycle_lim = int(ctx.session.state.get(STATE_SUPERVISOR_CYCLE, 0) or 0)
                 state_seen_lim = self._state_snapshot(ctx)
+                waivers_lim = ["supervisor_cycle_budget"]
+                if red_waived_for_limit:
+                    waivers_lim.append("red_team_compose")
                 pc_lim = PolicyCorrection(
                     kind="delegate_constraint",
                     detail=f"limit_exhausted_compose_with_caveats|compose_gate={gate_detail}",
@@ -9246,6 +11218,12 @@ class SupervisorAgent(BaseAgent):
                     completionRationale="",
                 )
                 ctx.session.state[STATE_SUPERVISOR_DECISION] = decision_lim.model_dump(mode="json", by_alias=True)
+                lt_h_lim, lt_d_lim = _logic_trace_extras(
+                    ctx,
+                    supervisor_raw_next=decision_lim.next_agent,
+                    policy_parts=[pc_lim],
+                    decision=decision_lim,
+                )
                 logic_lim = LogicTraceEntry(
                     cycle=cycle_lim,
                     stateSeen=state_seen_lim,
@@ -9255,6 +11233,10 @@ class SupervisorAgent(BaseAgent):
                     resultingState=state_seen_lim,
                     nextStepLogic="Runtime policy: one-shot compose after supervisor cycle budget exhaustion (compose_with_caveats).",
                     policyCorrection=pc_lim,
+                    supervisorNextAgentRaw=decision_lim.next_agent,
+                    delegatePolicyOutcome=lt_d_lim,
+                    hypothesisRestructure=lt_h_lim,
+                    composePolicyWaivers=waivers_lim,
                 )
                 yield Event(
                     author=self.name,
@@ -9304,7 +11286,7 @@ class SupervisorAgent(BaseAgent):
         )
 
     async def _select_roles(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
-        request = AgentLoomRequest.model_validate(ctx.session.state.get(STATE_REQUEST) or {})
+        request = _request_from_state(ctx.session.state)
         if request.requested_roles:
             selection = RoleSelection(
                 selectedRoles=_dedupe_preserve_order(request.requested_roles)[:3],
@@ -9501,7 +11483,21 @@ class SupervisorAgent(BaseAgent):
         ctx.session.state[STATE_PROGRESS_HISTORY] = progress_history[-12:]
         ctx.session.state[STATE_GLOBAL_STAGNATION] = stagnation
 
-        if result.agent_name != "critic_agent":
+        spec_investigators = {
+            "supply_chain_investigator_agent",
+            "governance_and_control_investigator_agent",
+            "policy_impact_investigator_agent",
+        }
+        has_nonempty_graph_delta = isinstance(result.graph_delta, list) and len(result.graph_delta) > 0
+        if result.agent_name in spec_investigators:
+            if material or has_nonempty_graph_delta:
+                ctx.session.state[STATE_TOOL_IDLE_STREAK] = 0
+            else:
+                ctx.session.state[STATE_TOOL_IDLE_STREAK] = int(ctx.session.state.get(STATE_TOOL_IDLE_STREAK, 0) or 0) + 1
+        elif material:
+            ctx.session.state[STATE_TOOL_IDLE_STREAK] = 0
+
+        if result.agent_name not in ("critic_agent", "red_team_agent"):
             ctx.session.state[STATE_INVESTIGATION_EPOCH] = int(ctx.session.state.get(STATE_INVESTIGATION_EPOCH, 0) or 0) + 1
 
         new_fp = _open_gap_fingerprint(ctx.session.state)
@@ -9511,6 +11507,21 @@ class SupervisorAgent(BaseAgent):
         else:
             ctx.session.state[STATE_OPEN_GAP_STREAK] = 0
         ctx.session.state[STATE_LAST_GAP_FINGERPRINT] = new_fp
+
+        rb = _investigation_reachability_counts_bundle(ctx.session.state)
+        merged_todos = merge_todos_after_graph_progress(
+            ctx.session.state,
+            todos_key=STATE_INVESTIGATION_TODOS,
+            grounded_complete_chains=rb["groundedCompleteChainCount"],
+            structural_complete_chains=rb["structuralCompleteChainCount"],
+            partial_chains=rb["partialChainCount"],
+            typed_backbone_chains=rb["typedBackboneChainCount"],
+            requested_corridor_satisfied=rb["requestedCorridorSatisfied"],
+        )
+        todo_updates = [u.model_dump(mode="json", by_alias=True) for u in (result.investigation_todo_updates or [])]
+        if todo_updates:
+            merged_todos = apply_investigation_todo_updates_from_agent(merged_todos, todo_updates)
+        ctx.session.state[STATE_INVESTIGATION_TODOS] = merged_todos
 
     def _append_logic_entry(self, ctx: InvocationContext, entry: LogicTraceEntry) -> list[dict[str, Any]]:
         trace = [LogicTraceEntry.model_validate(item) for item in (ctx.session.state.get(STATE_LOGIC_TRACE) or [])]
@@ -9524,7 +11535,7 @@ class SupervisorAgent(BaseAgent):
                 return t
             return t[: max(0, limit - 1)] + "…"
 
-        request = AgentLoomRequest.model_validate(ctx.session.state.get(STATE_REQUEST) or {})
+        request = _request_from_state(ctx.session.state)
         graph_state = _load_operational_graph_state(ctx.session.state)
         graph = observation_projection(graph_state)
         graph_count_snapshot = graph_counts(graph_state)
@@ -9575,6 +11586,9 @@ class SupervisorAgent(BaseAgent):
 
         snapshot: dict[str, Any] = {
             "question": request.question,
+            "questionIntent": ctx.session.state.get(STATE_QUESTION_INTENT) or {},
+            "intentExtractionMeta": ctx.session.state.get(STATE_INTENT_META) or {},
+            "investigationTodos": list(ctx.session.state.get(STATE_INVESTIGATION_TODOS) or [])[:24],
             "selectedRoles": selected_roles,
             "defaultEpistemicMode": "mixed",
             "graphObservationCount": graph_count_snapshot["graphObservationCount"],
@@ -9595,9 +11609,11 @@ class SupervisorAgent(BaseAgent):
             "progress": {
                 "current": current_progress,
                 "stagnationCount": int(ctx.session.state.get(STATE_GLOBAL_STAGNATION, 0) or 0),
+                "toolIdleStreak": int(ctx.session.state.get(STATE_TOOL_IDLE_STREAK, 0) or 0),
                 "history": list(ctx.session.state.get(STATE_PROGRESS_HISTORY) or [])[-3:],
             },
             "unifiedProgress": _unified_progress_report(ctx.session.state),
+            "emptyTypedPayloadStreak": int(ctx.session.state.get(STATE_EMPTY_TYPED_PAYLOAD_STREAK) or 0),
             "budgetPressure": _supervisor_budget_pressure(cycle, MAX_SUPERVISOR_CYCLES),
             "investigationBudget": ctx.session.state.get(STATE_INVESTIGATION_BUDGET) or {},
             "snapshotIntegrityNote": (
@@ -9605,7 +11621,19 @@ class SupervisorAgent(BaseAgent):
                 "for JSON/token safety. Treat `unifiedProgress`, `reachability`, and `openGaps` as authoritative "
                 "structural signals; do not infer absence of data from omitted preview fields alone."
             ),
+            "evidenceLedgerCompact": _planner_evidence_ledger_compact_slice(
+                _build_evidence_ledger_compact(ctx.session.state)
+            ),
         }
+        meta_raw = ctx.session.state.get(STATE_INTENT_META) or {}
+        if isinstance(meta_raw, dict):
+            snapshot["intentSource"] = meta_raw.get("intentSource", "")
+            snapshot["intentFallbackReason"] = meta_raw.get("intentFallbackReason", "")
+        try:
+            qi = QuestionIntent.model_validate(ctx.session.state.get(STATE_QUESTION_INTENT) or {})
+            snapshot["normalizedOperationalCorridor"] = intent_to_operational_corridor_dict(qi)
+        except Exception:
+            snapshot["normalizedOperationalCorridor"] = {}
         if cycle <= 1:
             snapshot["requestedRoles"] = request.requested_roles
             snapshot["toolAvailability"] = {
@@ -9620,7 +11648,7 @@ class SupervisorAgent(BaseAgent):
             snapshot["graphPreview"] = [item.model_dump(mode="json", by_alias=True) for item in graph[-10:]]
             snapshot["operationalGraph"] = graph_state.model_dump(mode="json", by_alias=True)
             snapshot["graphFragments"] = [item.model_dump(mode="json", by_alias=True) for item in fragments[-6:]]
-            snapshot["branches"] = [item.model_dump(mode="json", by_alias=True) for item in branches[-4:]]
+            snapshot["branches"] = [_branch_state_for_shared_memory(item) for item in branches[-4:]]
             snapshot["failures"] = [item.model_dump(mode="json", by_alias=True) for item in failures[-5:]]
         else:
             snapshot["graphPreviewByRole"] = _role_coverage_preview(ctx.session.state)
@@ -9634,6 +11662,7 @@ class SupervisorAgent(BaseAgent):
             ]
         # Reachability must be visible early (small graphs too); supervisors were choosing governance without seeing chain counts.
         if cycle >= 2 and graph_count_snapshot["graphObservationCount"] >= 1:
+            _sr_list_cap = SUPERVISOR_REACHABILITY_LIST_CAP if SUPERVISOR_REACHABILITY_LIST_CAP > 0 else 4
             snapshot["placeholderNodes"] = _placeholder_nodes_from_graph(graph_state)
             snapshot["placeholderResolutionHints"] = _placeholder_resolution_hints(graph_state)
             snapshot["commercialBridgeCandidates"] = _commercial_bridge_candidates(graph_state, state=ctx.session.state)[:4]
@@ -9642,7 +11671,10 @@ class SupervisorAgent(BaseAgent):
             snapshot["reachability"] = {
                 "healthSummary": full_reach["healthSummary"],
                 "completeChainCount": _int_or_len_report(full_reach, "groundedCompleteChainCount", "groundedCompleteChains"),
+                "groundedCompleteChainCount": _int_or_len_report(full_reach, "groundedCompleteChainCount", "groundedCompleteChains"),
                 "structuralChainCount": _int_or_len_report(full_reach, "structuralCompleteChainCount", "structurallyCompleteChains"),
+                "structuralCompleteChainCount": _int_or_len_report(full_reach, "structuralCompleteChainCount", "structurallyCompleteChains"),
+                "weakFlowComponentsCount": int(full_reach.get("weakFlowComponentsCount") or 0),
                 "requestedCorridorCompleteChainCount": _int_or_len_report(
                     full_reach,
                     "groundedRequestedCorridorChainCount",
@@ -9654,25 +11686,34 @@ class SupervisorAgent(BaseAgent):
                     "structuralRequestedCorridorChains",
                 ),
                 "partialChainCount": _int_or_len_report(full_reach, "partialChainCount", "partialChains"),
+                "typedBackboneChainCount": _int_or_len_report(
+                    full_reach, "typedBackboneChainCount", "typedBackboneChains"
+                ),
                 "maxOperationalRouteHops": int(full_reach.get("maxOperationalRouteHops") or _max_route_hops_from_report(full_reach)),
                 "requestedCorridor": full_reach.get("requestedCorridor") or {},
+                "requestedCorridorSatisfied": bool(full_reach.get("requestedCorridorSatisfied")),
                 "completeChainEndpoints": [
                     f"{c['source']} → {c['sink']} ({c['hops']} hops)"
-                    for c in (full_reach.get("groundedCompleteChains") or [])[:3]
+                    for c in (full_reach.get("groundedCompleteChains") or [])[:_sr_list_cap]
                 ],
                 "structuralChainEndpoints": [
                     f"{c['source']} → {c['sink']} ({c['hops']} hops)"
-                    for c in (full_reach.get("structurallyCompleteChains") or [])[:3]
+                    for c in (full_reach.get("structurallyCompleteChains") or [])[:_sr_list_cap]
                 ],
                 "partialChainBreakPoints": [
                     f"{c['sink']} [{c['sinkType']}]: {c.get('breakReason', '')}"
-                    for c in (full_reach.get("partialChains") or [])[:4]
+                    for c in (full_reach.get("partialChains") or [])[:_sr_list_cap]
+                ],
+                "typedBackboneEndpoints": [
+                    f"{c.get('source', '')} → {c.get('sink', '')} ({c.get('hops', 0)} hops)"
+                    for c in (full_reach.get("typedBackboneChains") or [])[:_sr_list_cap]
                 ],
                 "bridgeCandidates": [
                     f"{b['entity']} [{b['type']}]"
-                    for b in full_reach["bridgeCandidates"][:4]
+                    for b in full_reach["bridgeCandidates"][:_sr_list_cap]
                 ],
                 "routeFamilies": full_reach.get("routeFamilies") or [],
+                "requestedCorridorIntentDebug": full_reach.get("requestedCorridorIntentDebug") or {},
             }
             snapshot["entityRegistrySummary"] = _entity_registry_summary_global(ctx.session.state)
             mut_log = ctx.session.state.get(STATE_GRAPH_MUTATION_LOG) or []
@@ -9713,9 +11754,18 @@ def _normalize_agent_result(
     gaps = list(result.gaps)
     failure = result.failure
     if invalid_relations:
+        allowed_hint = ""
+        if allowed_edges:
+            rels = sorted(allowed_edges)
+            cap = 48
+            head = ", ".join(rels[:cap])
+            if len(rels) > cap:
+                head += f", … (+{len(rels) - cap} more)"
+            allowed_hint = f" Allowed relation types for active roles: {head}."
         message = (
             "Agent returned observations with relations outside the active role contracts: "
             + ", ".join(_dedupe_preserve_order(invalid_relations))
+            + allowed_hint
         )
         gaps.append(message)
         if failure is None:
@@ -9745,6 +11795,8 @@ def _normalize_agent_result(
     next_questions = next_questions[:MAX_NEXT_QUESTIONS]
     handoff_recommendations = handoff_recommendations[:MAX_HANDOFF_RECOMMENDATIONS]
 
+    todo_updates = list(result.investigation_todo_updates or [])[:16]
+
     return AgentResult(
         agentName=result.agent_name,
         missionId=result.mission_id or mission.mission_id,
@@ -9759,6 +11811,7 @@ def _normalize_agent_result(
         failure=failure,
         truncation=trunc,
         truncationDetail=trunc_detail,
+        investigationTodoUpdates=todo_updates,
     )
 
 
@@ -9829,9 +11882,49 @@ def _merge_observation(existing: GraphObservation, incoming: GraphObservation) -
     return merged, gap
 
 
+def _logic_trace_has_red_team_compose_waiver(state: dict[str, Any]) -> bool:
+    """True if logic_trace records an explicit compose waiver for red-team (audit path)."""
+    for raw in state.get(STATE_LOGIC_TRACE) or []:
+        if not isinstance(raw, dict):
+            continue
+        waivers = raw.get("composePolicyWaivers") or raw.get("compose_policy_waivers") or []
+        if not isinstance(waivers, list):
+            continue
+        if any(str(x).strip() == "red_team_compose" for x in waivers):
+            return True
+    return False
+
+
 def _orchestration_policy_allow_compose(state: dict[str, Any]) -> tuple[bool, str]:
     if os.environ.get("AGENTLOOM_TESTING", "").strip() in ("1", "true", "yes"):
         return True, "testing_bypass"
+    if not ALLOW_COMPOSE_WITHOUT_RED_TEAM:
+        waive_rt = bool(state.get(STATE_RED_TEAM_COMPOSE_WAIVED)) or _logic_trace_has_red_team_compose_waiver(state)
+        if not waive_rt:
+            raw_pf = state.get(STATE_INVESTIGATION_PREFLIGHT) or {}
+            try:
+                pf = InvestigationPreflight.model_validate(raw_pf)
+            except Exception:
+                pf = InvestigationPreflight()
+            rb = _investigation_reachability_counts_bundle(state)
+            reach = rb.get("reachability") or {}
+            if (
+                preflight_requires_red_team_pass(pf)
+                and red_team_frame_eligible(reach)
+                and not bool(state.get(STATE_RED_TEAM_SATISFIED))
+            ):
+                return False, "red_team_required_not_satisfied"
+    if COMPOSE_REQUIRES_TODOS_SATISFIED:
+        todos = list(state.get(STATE_INVESTIGATION_TODOS) or [])
+        if todos and not required_todos_satisfied(todos):
+            if COMPOSE_ALLOW_WITH_TYPED_BACKBONE:
+                reach = _graph_reachability_report(state)
+                if int(reach.get("typedBackboneChainCount") or 0) >= 1:
+                    pass
+                else:
+                    return False, "investigation_todos_not_satisfied"
+            else:
+                return False, "investigation_todos_not_satisfied"
     verdict = state.get(STATE_LAST_CRITIC_VERDICT)
     if not isinstance(verdict, dict):
         return False, "no_critic_verdict"
@@ -9917,6 +12010,39 @@ def _last_delegate_agent_names_from_trace(state: dict[str, Any], n: int = 2) -> 
     return names
 
 
+_SUPERVISOR_TRACE_DELEGATES = frozenset(
+    {
+        "supply_chain_investigator_agent",
+        "governance_and_control_investigator_agent",
+        "policy_impact_investigator_agent",
+        "gap_bridge_agent",
+        "critic_agent",
+        "red_team_agent",
+    }
+)
+
+
+def _recent_supervisor_delegate_streak(state: dict[str, Any], agent_name: str, n: int) -> bool:
+    """True when the last n logic_trace delegations (newest first) each used agent_name."""
+    lt = state.get(STATE_LOGIC_TRACE) or []
+    seq: list[str] = []
+    for entry in reversed(lt):
+        if not isinstance(entry, dict):
+            continue
+        d = entry.get("decision") or {}
+        na = str(d.get("nextAgent") or d.get("next_agent") or "")
+        if na not in _SUPERVISOR_TRACE_DELEGATES:
+            continue
+        seq.append(na)
+        if len(seq) >= n:
+            break
+    return len(seq) >= n and all(x == agent_name for x in seq)
+
+
+def _graph_has_placeholder_debt(state: dict[str, Any]) -> bool:
+    return bool(_placeholder_nodes_from_graph(_load_operational_graph_state(state)))
+
+
 def _last_flow_grounding_gain_from_trace(state: dict[str, Any], n: int = 2) -> bool:
     """True if any of the last n non-critic delegate results added document/mixed flow observations."""
     lt = state.get(STATE_LOGIC_TRACE) or []
@@ -9996,130 +12122,11 @@ def _delegate_constraints(
     *,
     cycle: int,
     user_question: str,
-) -> tuple[SupervisorDecision, PolicyCorrection | None]:
-    """Enforce flow-first delegation; return possibly rewritten decision + correction."""
-    if decision.next_agent in {"compose", "stop"}:
-        return decision, None
-    reach = _graph_reachability_report(state)
-    complete, structural_complete = _reachability_complete_counts(reach)
-    has_business_complete_chain = (complete + structural_complete) > 0
-    stagnation = int(state.get(STATE_GLOBAL_STAGNATION, 0) or 0)
-    next_a = decision.next_agent
-    hard_budget = _supervisor_budget_pressure(cycle, MAX_SUPERVISOR_CYCLES) == "hard"
-    allow_critic_without_business_chain = hard_budget and cycle >= MAX_SUPERVISOR_CYCLES
-    if next_a == "critic_agent" and not has_business_complete_chain and not allow_critic_without_business_chain:
-        nd = _force_supply_chain_investigation_decision(
-            decision,
-            cycle=cycle,
-            objective=(
-                "Do not exit yet. Build at least one business-complete operational chain with a real upstream source, "
-                "midstream process step, and concrete downstream sink. Prioritize the break point named by reachability."
-            ),
-            rationale_line=(
-                "runtime_delegate_constraint: critic deferred because the graph still lacks a business-complete operational chain."
-            ),
-        )
-        return nd, PolicyCorrection(kind="delegate_constraint", detail="critic_deferred_until_business_complete_chain")
-    if next_a in ("governance_and_control_investigator_agent", "policy_impact_investigator_agent") and complete == 0:
-        last_two = _last_delegate_agent_names_from_trace(state, 2)
-        exception_allowed = (
-            stagnation >= DELEGATE_FLOW_FIRST_STAGNATION_EXCEPTION
-            and len(last_two) >= 2
-            and all(x in ("supply_chain_investigator_agent", "gap_bridge_agent") for x in last_two[:2])
-            and not _last_flow_grounding_gain_from_trace(state, 2)
-        )
-        if not exception_allowed:
-            nd = _force_supply_chain_investigation_decision(
-                decision,
-                cycle=cycle,
-                objective=(
-                    "Establish at least one document- or mixed-grounded operational chain segment toward the "
-                    "question; prioritize reachability break points before governance/policy overlays."
-                ),
-                rationale_line=(
-                    "runtime_delegate_constraint: no grounded complete chain; governance/policy deferred until "
-                    "flow backbone exists (see stagnation exception in code)."
-                ),
-            )
-            detail = "flow_first_redirect_governance_policy_to_supply_chain"
-            return nd, PolicyCorrection(kind="delegate_constraint", detail=detail)
-    gap_streak = int(state.get(STATE_OPEN_GAP_STREAK, 0) or 0)
-    if (
-        gap_streak >= REPEATED_GAP_THRESHOLD
-        and next_a in SPECIALIZED_INVESTIGATOR_BY_ROLE.values()
-        and next_a != "critic_agent"
-    ):
-        if not has_business_complete_chain and not allow_critic_without_business_chain:
-            nd = _force_supply_chain_investigation_decision(
-                decision,
-                cycle=cycle,
-                objective=(
-                    "Open gaps are repeating. Instead of exiting, close one structural flow break so the graph reaches "
-                    "a business-complete chain with concrete source, midstream, and sink."
-                ),
-                rationale_line=(
-                    f"runtime_delegate_constraint: repeated gaps ({gap_streak}) but critic is blocked until a business-complete chain exists."
-                ),
-            )
-            return nd, PolicyCorrection(kind="delegate_constraint", detail="repeated_gap_redirect_to_supply_chain")
-        nd = decision.model_copy(
-            update={
-                "next_agent": "critic_agent",
-                "rationale": list(decision.rationale)
-                + [f"runtime: openGap streak {gap_streak} >= {REPEATED_GAP_THRESHOLD}; escalated to critic_agent."],
-            }
-        )
-        m = {
-            "missionId": f"runtime-repeated-gap-{cycle}",
-            "objective": (
-                "Open gaps have not changed materially across recent cycles. Assess whether an honest composed "
-                f"answer is appropriate now, or name the single smallest structural next step. Question: {user_question[:400]}"
-            ),
-            "assignedRoles": list(state.get(STATE_SELECTED_ROLES) or [ROLE_SUPPLY_CHAIN])[:3],
-            "groundingMode": "mixed",
-            "focus": [],
-            "successCriteria": [],
-        }
-        nd = nd.model_copy(update={"mission": InvestigationMission.model_validate(m)})
-        return nd, PolicyCorrection(kind="delegate_constraint", detail="repeated_open_gap_escalation")
-    if stagnation >= STAGNATION_FORCE_CRITIC_CYCLES and next_a in SPECIALIZED_INVESTIGATOR_BY_ROLE.values():
-        if not has_business_complete_chain and not allow_critic_without_business_chain:
-            nd = _force_supply_chain_investigation_decision(
-                decision,
-                cycle=cycle,
-                objective=(
-                    "Material progress has stalled, but the graph still lacks any business-complete chain. "
-                    "Use the next pass to repair source-side, midstream, or sink-side structure instead of exiting."
-                ),
-                rationale_line=(
-                    f"runtime_delegate_constraint: global stagnation {stagnation} but critic is blocked until a business-complete chain exists."
-                ),
-            )
-            return nd, PolicyCorrection(kind="delegate_constraint", detail="stagnation_redirect_to_supply_chain")
-        nd = decision.model_copy(
-            update={
-                "next_agent": "critic_agent",
-                "rationale": list(decision.rationale)
-                + [
-                    f"runtime: global stagnation {stagnation} >= {STAGNATION_FORCE_CRITIC_CYCLES}; "
-                    "forced critic_agent for honest exit assessment."
-                ],
-            }
-        )
-        m = {
-            "missionId": f"runtime-stagnation-{cycle}",
-            "objective": (
-                "Material progress has stalled. Decide whether the graph is sufficient for an honest composed answer "
-                f"(with epistemic caveats) or name one minimal structural follow-up. Question: {user_question[:400]}"
-            ),
-            "assignedRoles": list(state.get(STATE_SELECTED_ROLES) or [ROLE_SUPPLY_CHAIN])[:3],
-            "groundingMode": "mixed",
-            "focus": [],
-            "successCriteria": [],
-        }
-        nd = nd.model_copy(update={"mission": InvestigationMission.model_validate(m)})
-        return nd, PolicyCorrection(kind="delegate_constraint", detail="stagnation_force_critic")
-    return decision, None
+) -> tuple[SupervisorDecision, list[PolicyCorrection]]:
+    """Enforce flow-first delegation; return possibly rewritten decision + policy corrections."""
+    from agentloom.delegation_policy import apply_delegate_constraints
+
+    return apply_delegate_constraints(state, decision, cycle=cycle, user_question=user_question)
 
 
 def _decision_force_critic_for_compose_gate(
@@ -10143,6 +12150,34 @@ def _decision_force_critic_for_compose_gate(
         assessment="Compose blocked until critic endorses composition.",
         rationale=["runtime_compose_gate"],
         nextAgent="critic_agent",
+        mission=m,
+        completionRationale="",
+    )
+
+
+def _decision_force_red_team_for_compose_gate(
+    *,
+    cycle: int,
+    user_question: str,
+    selected_roles: list[str],
+) -> SupervisorDecision:
+    m = InvestigationMission(
+        missionId=f"runtime-compose-gate-redteam-{cycle}",
+        objective=(
+            "Composition was requested but investigation preflight requires a red-team breadth pass before compose. "
+            "Propose alternative route families, jurisdictions, modalities, other sources/sinks, adjacent regions, and "
+            f"epistemic counterviews consistent with the current working graph (proposal-only; no silent graph merge). "
+            f"Question: {user_question[:400]}"
+        ),
+        assignedRoles=_dedupe_preserve_order([r for r in selected_roles if r in INVESTIGATION_ROLES_LITERALS])[:3]
+        or [ROLE_SUPPLY_CHAIN],
+        groundingMode="mixed",
+    )
+    return SupervisorDecision(
+        cycle=cycle,
+        assessment="Compose blocked until red_team_agent runs for breadth preflight.",
+        rationale=["runtime_compose_gate_red_team"],
+        nextAgent="red_team_agent",
         mission=m,
         completionRationale="",
     )
@@ -10184,11 +12219,12 @@ def _reasoning_dedup_hints(state: dict[str, Any]) -> dict[str, Any]:
 def _planner_memory_snapshot(state: dict[str, Any]) -> dict[str, Any]:
     shared = read_shared_memory(_StateToolContext(state))
     graph_state = _load_operational_graph_state(state)
-    reachability = _graph_reachability_report_for_graph(graph_state, state=state)
-    commercial_bridge_candidates = _commercial_bridge_candidates(graph_state, state=state)
-    process_gap_candidates = _host_local_process_gap_candidates(graph_state)
+    ops = _investigation_reachability_ops_bundle(state, graph_state)
     return {
         "question": shared["question"],
+        "questionIntent": shared.get("questionIntent") or {},
+        "intentExtractionMeta": shared.get("intentExtractionMeta") or {},
+        "investigationTodos": shared.get("investigationTodos") or [],
         "selectedRoles": shared["selectedRoles"],
         "defaultEpistemicMode": shared["defaultEpistemicMode"],
         "toolAvailability": shared["toolAvailability"],
@@ -10210,14 +12246,22 @@ def _planner_memory_snapshot(state: dict[str, Any]) -> dict[str, Any]:
         "hypothesisFrontiers": _hypothesis_frontier_signals(state),
         "reasoningDedupHints": _reasoning_dedup_hints(state),
         "placeholderNodes": _placeholder_nodes_from_graph(graph_state),
-        "reachability": reachability,
-        "requestedCorridor": reachability.get("requestedCorridor") or {},
-        "commercialBridgeCandidates": commercial_bridge_candidates,
-        "processGapCandidates": process_gap_candidates,
+        **ops,
         "operationalGraph": shared["operationalGraph"],
         "operationalCounts": shared["operationalCounts"],
         "entityRegistrySummary": _entity_registry_summary_global(state),
+        "evidenceLedgerCompact": _planner_evidence_ledger_compact_slice(shared.get("evidenceLedgerCompact")),
     }
+
+
+def _planner_evidence_ledger_compact_slice(compact: Any) -> dict[str, Any]:
+    if not isinstance(compact, dict):
+        return {}
+    out = dict(compact)
+    bb = out.get("byBranch")
+    if isinstance(bb, list) and len(bb) > _LEDGER_COMPACT_PLANNER_BY_BRANCH:
+        out["byBranch"] = bb[-_LEDGER_COMPACT_PLANNER_BY_BRANCH :]
+    return out
 
 
 def _hypothesis_frontier_signals(state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -10328,12 +12372,39 @@ def _hypothesis_local_state(
 
 
 def _is_placeholder_node(node_id: str, label: str, *, support_type: str = "") -> bool:
-    text = f"{node_id} {label}".strip()
+    node_id_text = (node_id or "").strip()
+    label_text = (label or "").strip()
+    text = f"{node_id_text} {label_text}".strip()
     if any(pattern.search(text) for pattern in _PLACEHOLDER_LABEL_PATTERNS):
         return True
+    if node_id_text and _GENERIC_PLACEHOLDER_NODE_ID_PATTERN.search(node_id_text):
+        if not label_text or label_text.lower() == node_id_text.lower() or _label_looks_like_placeholder(label_text):
+            return True
     if support_type == "hypothesis" and label and _PLACEHOLDER_HYPOTHESIS_LABEL_HINTS.search(label):
         return True
     return False
+
+
+def _is_unresolved_aggregate_node(
+    node_id: str,
+    label: str,
+    *,
+    entity_type: str = "",
+    support_type: str = "",
+) -> bool:
+    if _is_placeholder_node(node_id, label, support_type=support_type):
+        return True
+    if entity_type not in {"FACILITY", "ORGANIZATION"}:
+        return False
+    text = f"{node_id} {label}".strip()
+    if any(pattern.search(text) for pattern in _AGGREGATE_INTERMEDIARY_LABEL_PATTERNS):
+        return True
+    if support_type not in {"model_knowledge", "hypothesis"}:
+        return False
+    return bool(
+        re.search(r"\b(?:global|regional|international|third[- ]party|merchant|spot|generic)\b", text, re.IGNORECASE)
+        and re.search(r"\b(?:market|pool|hub|converter|processor|trader|merchant)\b", text, re.IGNORECASE)
+    )
 
 
 def _placeholder_nodes_from_graph(graph: OperationalGraphState | list[GraphObservation] | dict[str, Any]) -> list[str]:
@@ -10370,6 +12441,38 @@ def _placeholder_resolution_hints(graph: OperationalGraphState | list[GraphObser
     return _dedupe_preserve_order(hints)[:8]
 
 
+def _aggregate_intermediary_nodes_from_graph(
+    graph: OperationalGraphState | list[GraphObservation] | dict[str, Any],
+) -> list[dict[str, str]]:
+    graph_state = graph_state_from_raw(graph) if isinstance(graph, dict) else (
+        graph if isinstance(graph, OperationalGraphState) else graph_state_from_observations(graph)
+    )
+    unresolved: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for node in graph_state.entity_nodes:
+        if not _is_unresolved_aggregate_node(
+            node.node_id,
+            node.label,
+            entity_type=node.entity_type,
+            support_type=node.support_type,
+        ):
+            continue
+        key = node.node_id or node.label
+        if key in seen:
+            continue
+        seen.add(key)
+        unresolved.append(
+            {
+                "nodeId": node.node_id,
+                "label": node.label or node.node_id,
+                "entityType": node.entity_type,
+                "supportType": node.support_type,
+                "reason": "Aggregate intermediary stands in for a real operator, facility, trader, or jurisdictional handoff.",
+            }
+        )
+    return unresolved[:8]
+
+
 def _is_detail_frontier_text(text: str) -> bool:
     return bool(_DETAIL_FRONTIER_SIGNALS.search(text or ""))
 
@@ -10388,6 +12491,12 @@ def _acceptance_block_reason(
     placeholders = _placeholder_nodes_from_graph(graph_state)
     if placeholders:
         return f"Broad placeholders remain in the hypothesis graph: {', '.join(placeholders[:3])}."
+    aggregate_nodes = _aggregate_intermediary_nodes_from_graph(graph_state)
+    if aggregate_nodes:
+        labels = [str(item.get("label") or item.get("nodeId") or "").strip() for item in aggregate_nodes]
+        labels = [item for item in labels if item]
+        if labels:
+            return f"Unresolved aggregate intermediaries remain in the hypothesis graph: {', '.join(labels[:3])}."
     if plan.hypothesis_relation != "root" and plan.path_kind != "overview":
         return ""
     complete_count, structural_count = _reachability_complete_counts(reachability)
@@ -10534,16 +12643,15 @@ def _hypothesis_turn_context(
 ) -> dict[str, Any]:
     graph_state = _load_operational_graph_state(local_state)
     graph = observation_projection(graph_state)
-    reachability = _graph_reachability_report_for_graph(graph_state, state=local_state)
-    commercial_bridge_candidates = _commercial_bridge_candidates(graph_state, state=local_state)
-    process_gap_candidates = _host_local_process_gap_candidates(graph_state)
+    ops = _investigation_reachability_ops_bundle(local_state, graph_state)
+    reachability = ops["reachability"]
     fragments = [GraphFragment.model_validate(item) for item in (local_state.get(STATE_GRAPH_FRAGMENTS) or [])]
     findings = [LearnedFinding.model_validate(item) for item in (local_state.get(STATE_LEARNED_FINDINGS) or [])]
     turns = list(branch_state.hypothesis_turns if branch_state is not None else [])
     active_role = plan.assigned_roles[0] if len(plan.assigned_roles) == 1 else None
     role_contract = _role_contract(active_role) if active_role is not None else None
     return {
-        "originalQuestion": AgentLoomRequest.model_validate(state.get(STATE_REQUEST) or {}).question,
+        "originalQuestion": _request_from_state(state).question,
         "currentMission": state.get(STATE_CURRENT_MISSION, {}) or {},
         "specializedRole": active_role or "",
         "rolePlaybook": list(role_contract.investigation_playbook) if role_contract is not None else [],
@@ -10569,9 +12677,11 @@ def _hypothesis_turn_context(
             "graphFragments": [item.model_dump(mode="json", by_alias=True) for item in fragments[-8:]],
             "placeholderNodes": _placeholder_nodes_from_graph(graph_state),
             "reachability": reachability,
-            "requestedCorridor": reachability.get("requestedCorridor") or {},
-            "commercialBridgeCandidates": commercial_bridge_candidates,
-            "processGapCandidates": process_gap_candidates,
+            "requestedCorridor": ops.get("requestedCorridor") or {},
+            "commercialBridgeCandidates": ops.get("commercialBridgeCandidates") or [],
+            "processGapCandidates": ops.get("processGapCandidates") or [],
+            "aggregateIntermediaryNodes": ops.get("aggregateIntermediaryNodes") or [],
+            "alternativeRouteFamilyCandidates": ops.get("alternativeRouteFamilyCandidates") or [],
         },
         "learnedFindings": [item.model_dump(mode="json", by_alias=True) for item in findings[-10:]],
         "turnHistory": [item.model_dump(mode="json", by_alias=True) for item in turns[-8:]],
@@ -10743,6 +12853,17 @@ critic_reasoner = StructuredOutputAgent(
     context_key=STATE_CRITIC_CONTEXT,
 )
 
+red_team_reasoner = StructuredOutputAgent(
+    model=RED_TEAM_MODEL,
+    name="red_team_reasoner",
+    description="Proposes alternative frames, route families, and epistemic counterviews without mutating the graph.",
+    instruction=RED_TEAM_INSTRUCTION,
+    generate_content_config=RED_TEAM_CONFIG,
+    output_schema=RedTeamAgentOutput,
+    output_key=STATE_RED_TEAM_LLM_PAYLOAD,
+    context_key=STATE_RED_TEAM_CONTEXT,
+)
+
 root_agent = SupervisorAgent(
     name="agentloom_supervisor",
     description="Google ADK-compatible multi-agent investigation runtime with role selection, shared session memory, explicit agent/tool contracts, and graph-native results.",
@@ -10754,6 +12875,7 @@ root_agent = SupervisorAgent(
         RoleSpecializedInvestigatorAgent(ROLE_POLICY),
         GapBridgeAgent(),
         CriticAgent(),
+        RedTeamAgent(),
         DeterministicComposerAgent(),
     ],
 )

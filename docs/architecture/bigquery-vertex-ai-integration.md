@@ -157,7 +157,7 @@ ORDER BY toxicity_weighted_sales DESC
 ```bash
 # Создать connection для Object Tables
 bq mk --connection --location=US --connection_type=GCS \
-  --project_id=sanskrite gcs-connection
+  --project_id=inquire-data-84889 gcs-connection
 
 # Создать Object Table для RAG документов (текстовые файлы)
 bq query --use_legacy_sql=false <<EOF
@@ -205,7 +205,7 @@ EOF
 ```bash
 # Создать connection для Vertex AI
 bq mk --connection --location=US --connection_type=CLOUD_RESOURCE \
-  --project_id=sanskrite vertex-ai-connection
+  --project_id=inquire-data-84889 vertex-ai-connection
 
 # Создать remote model
 bq query --use_legacy_sql=false <<EOF

@@ -600,7 +600,7 @@ sectorPath := "/Technology/Semiconductors/Manufacturing" // Упрощенная
 
 2) **Проверить наличие ресурсов**
 - `gcloud storage buckets describe gs://nv-horizon-fragments`
-- `ACCESS_TOKEN=$(gcloud auth print-access-token) && curl -s -H "Authorization: Bearer $ACCESS_TOKEN" -H "X-Goog-User-Project: sanskrite" "https://discoveryengine.googleapis.com/v1beta/projects/nv-horizon/locations/global/dataStores" | grep horizon-fragments-store`
+- `ACCESS_TOKEN=$(gcloud auth print-access-token) && curl -s -H "Authorization: Bearer $ACCESS_TOKEN" -H "X-Goog-User-Project: inquire-data-84889" "https://discoveryengine.googleapis.com/v1beta/projects/nv-horizon/locations/global/dataStores" | grep horizon-fragments-store`
 
 3) **Деплой API**
 - `bash scripts/deploy --api`

@@ -834,6 +834,8 @@ func (e *AITaskExecutor) saveUsageMetric(ctx context.Context, task *AITask, mode
 			provider = "grok"
 		case AIProviderDeepSeek:
 			provider = "deepseek"
+		case AIProviderOpenRouter:
+			provider = "openrouter"
 		}
 	}
 

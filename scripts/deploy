@@ -1796,6 +1796,11 @@ deploy_api() {
     paypal_secrets="$paypal_secrets,AISSTREAM_API_KEY=aisstream_api_key:latest"
   fi
 
+  # OpenRouter (optional — LLM gateway)
+  if gcloud secrets describe openrouter_api_key --project="$PROJECT_ID" >/dev/null 2>&1; then
+    paypal_secrets="$paypal_secrets,OPENROUTER_API_KEY=openrouter_api_key:latest"
+  fi
+
   # Build and push to Artifact Registry
   local cloud_build_args=()
   if [[ -n "${CLOUD_BUILD_TIMEOUT:-}" ]]; then

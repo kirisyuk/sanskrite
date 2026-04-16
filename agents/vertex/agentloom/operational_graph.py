@@ -104,6 +104,46 @@ def _pick_stronger(
     return incoming if _support_rank(incoming_support) >= _support_rank(existing_support) else existing
 
 
+def _audit_grounded_support(support_type: str, confidence: float) -> bool:
+    """True when reachability-style grounding should treat the edge as document/mixed-backed."""
+    return str(support_type or "") in {"document", "mixed"} and float(confidence or 0.0) >= 0.5
+
+
+def _pick_flow_leg_evidence_merge(existing: FlowLeg, incoming: FlowLeg) -> FlowLeg:
+    """Prefer audit-tier (document/mixed, conf>=0.5) over hypothesis/model_knowledge regardless of raw confidence tie."""
+    ex_ok = _audit_grounded_support(str(existing.support_type), float(existing.confidence))
+    in_ok = _audit_grounded_support(str(incoming.support_type), float(incoming.confidence))
+    if ex_ok and not in_ok:
+        return existing
+    if in_ok and not ex_ok:
+        return incoming
+    return _pick_stronger(
+        existing,
+        incoming,
+        str(existing.support_type),
+        str(incoming.support_type),
+        float(existing.confidence),
+        float(incoming.confidence),
+    )
+
+
+def _pick_process_step_evidence_merge(existing: ProcessStep, incoming: ProcessStep) -> ProcessStep:
+    ex_ok = _audit_grounded_support(str(existing.support_type), float(existing.confidence))
+    in_ok = _audit_grounded_support(str(incoming.support_type), float(incoming.confidence))
+    if ex_ok and not in_ok:
+        return existing
+    if in_ok and not ex_ok:
+        return incoming
+    return _pick_stronger(
+        existing,
+        incoming,
+        str(existing.support_type),
+        str(incoming.support_type),
+        float(existing.confidence),
+        float(incoming.confidence),
+    )
+
+
 def _normalize_node(node: EntityNode) -> EntityNode:
     node_id = (node.node_id or "").strip() or synthetic_id(node.entity_type, node.label)
     return node.model_copy(update={"node_id": node_id})
@@ -163,14 +203,7 @@ def _flow_leg_key(leg: FlowLeg) -> tuple[str, str, str, tuple[str, ...], str, st
 
 
 def _merge_flow_leg(existing: FlowLeg, incoming: FlowLeg) -> FlowLeg:
-    chosen = _pick_stronger(
-        existing,
-        incoming,
-        existing.support_type,
-        incoming.support_type,
-        float(existing.confidence),
-        float(incoming.confidence),
-    )
+    chosen = _pick_flow_leg_evidence_merge(existing, incoming)
     other = incoming if chosen is existing else existing
     return chosen.model_copy(
         update={
@@ -198,14 +231,7 @@ def _process_step_key(step: ProcessStep) -> tuple[str, str, tuple[str, ...], tup
 
 
 def _merge_process_step(existing: ProcessStep, incoming: ProcessStep) -> ProcessStep:
-    chosen = _pick_stronger(
-        existing,
-        incoming,
-        existing.support_type,
-        incoming.support_type,
-        float(existing.confidence),
-        float(incoming.confidence),
-    )
+    chosen = _pick_process_step_evidence_merge(existing, incoming)
     other = incoming if chosen is existing else existing
     return chosen.model_copy(
         update={

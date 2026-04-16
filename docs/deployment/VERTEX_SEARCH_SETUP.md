@@ -91,13 +91,13 @@ gcloud run services update nv-horizon-api \
 ### 2. Выдать роль discoveryengine.editor:
 
 ```bash
-gcloud projects add-iam-policy-binding sanskrite \
-  --member="serviceAccount:backend@sanskrite.iam.gserviceaccount.com" \
+gcloud projects add-iam-policy-binding inquire-data-84889 \
+  --member="serviceAccount:backend@inquire-data-84889.iam.gserviceaccount.com" \
   --role="roles/discoveryengine.editor"
 ```
 
 ### 3. Проверить что все работает:
 
 ```bash
-./scripts/check-vertex-search-infra.sh -p sanskrite
+./scripts/check-vertex-search-infra.sh -p inquire-data-84889
 ```

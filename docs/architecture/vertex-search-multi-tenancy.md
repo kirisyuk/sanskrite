@@ -222,7 +222,7 @@ Backend will automatically:
 ### 2. Verify Setup
 
 ```bash
-./scripts/test-vertex-search.sh -p sanskrite
+./scripts/test-vertex-search.sh -p inquire-data-84889
 ```
 
 Expected output:
@@ -274,7 +274,7 @@ gcloud discovery-engine operations list \
 
 2. Verify import operations:
    ```bash
-   ./scripts/test-vertex-search.sh -p sanskrite
+   ./scripts/test-vertex-search.sh -p inquire-data-84889
    ```
 
 3. Manual re-import:

@@ -230,7 +230,7 @@ wsl bash scripts/deploy
 | Cloud Run Services | `lowercase-dash` | `nv-horizon-api` |
 | Pub/Sub Topics | `lowercase.dot` | `discovery.status` |
 | Firestore Collections | `lowercase_underscore` | `core_projects` |
-| Service Accounts | `name@project.iam.gserviceaccount.com` | `backend@sanskrite.iam.gserviceaccount.com` |
+| Service Accounts | `name@project.iam.gserviceaccount.com` | `backend@inquire-data-84889.iam.gserviceaccount.com` |
 
 ---
 

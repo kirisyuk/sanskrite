@@ -1,0 +1,9 @@
+{
+  "request": {
+    "question": "Trace material flows from Chile to Germany and name pressure points.",
+    "corpusDocuments": [],
+    "requestedRoles": ["supply_chain"]
+  },
+  "selectedRoles": ["supply_chain"],
+  "expectedPhases": ["corridor", "flow_backbone", "compose_prep"]
+}

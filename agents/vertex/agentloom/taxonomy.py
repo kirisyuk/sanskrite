@@ -147,7 +147,7 @@ def _supply_chain_tool_guidance() -> dict[str, str]:
     return {
         "reason": "Use for the first broad path, transform-ladder design, path-family comparison, placeholder replacement design, graph synthesis when the next missing step is structural, and stable background facts that a well-trained model should already know without web lookup.",
         "retrieve": "Use for internal memory, request corpus, and Vertex internal evidence when you need named facilities, product stages, deposits, or previously discovered graph context.",
-        "web_search": "Use for public facility facts, current plant status, named intermediary identification, public route evidence, time-sensitive company disclosures, and current regulatory updates. Do not use it just to re-ask stable background regulation or generic procurement concepts.",
+        "web_search": "Use for public facility facts, current plant status, named intermediary identification, public route evidence, time-sensitive company disclosures, and current regulatory updates. When search results support a supply or transform hop, materialize it as `flowLeg` / `processStep` with `supportType` mixed or document and provenance—not prose alone. Do not use it just to re-ask stable background regulation or generic procurement concepts.",
     }
 
 

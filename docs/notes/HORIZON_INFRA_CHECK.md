@@ -1,7 +1,7 @@
 # Отчет о проверке инфраструктуры GCP для Horizon
 
 **Дата проверки:** $(date)  
-**Проект:** sanskrite
+**Проект:** inquire-data-84889
 
 ## Результаты проверки
 
@@ -33,7 +33,7 @@
    - ✓ `anthropic_api_key` - существует
 
 6. **IAM роли для Service Account**
-   - ✓ Service Account: `backend@sanskrite.iam.gserviceaccount.com`
+   - ✓ Service Account: `backend@inquire-data-84889.iam.gserviceaccount.com`
    - ✓ `roles/datastore.user`
    - ✓ `roles/secretmanager.secretAccessor`
    - ✓ `roles/pubsub.admin`

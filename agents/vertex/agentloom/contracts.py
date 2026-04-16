@@ -10,6 +10,16 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
+AGENTLOOM_WIRE_SCHEMA_VERSION = 1
+
+
+class WireSchemaV1(StrictModel):
+    """Explicit wire JSON version on LLM root envelopes (forward evolution via adapters)."""
+
+    # Integer range (not Literal[1]): Vertex JSON-schema conversion rejects non-string Literal values.
+    schema_version: int = Field(default=1, alias="schemaVersion", ge=1, le=1)
+
+
 class CorpusDocument(StrictModel):
     document_id: str = Field(alias="documentId")
     title: str
@@ -32,13 +42,138 @@ DelegatedAgentName = Literal[
     "policy_impact_investigator_agent",
     "gap_bridge_agent",
     "critic_agent",
+    "red_team_agent",
 ]
+
+
+IntentSource = Literal["llm", "fallback", "unspecified", "explicit_corridor"]
+
+
+class QuestionIntent(StrictModel):
+    """Structured understanding of the user question (LLM and/or heuristics)."""
+
+    source_scope: str = Field(default="", alias="sourceScope")
+    sink_scope: str = Field(default="", alias="sinkScope")
+    corridor_active: bool = Field(default=False, alias="corridorActive")
+    wants_alternatives: bool = Field(default=False, alias="wantsAlternatives")
+    wants_ownership: bool = Field(default=False, alias="wantsOwnership")
+    wants_policy: bool = Field(default=False, alias="wantsPolicy")
+    wants_adjacent_regions: bool = Field(
+        default=False,
+        alias="wantsAdjacentRegions",
+        description="User asks for regional context, neighboring markets, or balanced geographic scope.",
+    )
+    wants_counter_narrative: bool = Field(
+        default=False,
+        alias="wantsCounterNarrative",
+        description="User asks for competing interpretations, other views, or epistemic alternatives.",
+    )
+    stresses_geopolitical_risk: bool = Field(
+        default=False,
+        alias="stressesGeopoliticalRisk",
+        description="Sanctions, export controls, geopolitical choke points, or jurisdiction risk are central.",
+    )
+    intent_schema_version: int = Field(default=1, alias="intentSchemaVersion")
+    extraction_notes: str = Field(default="", alias="extractionNotes")
+    extraction_confidence: float = Field(
+        default=0.0,
+        alias="extractionConfidence",
+        ge=0.0,
+        le=1.0,
+        description="0..1 when produced by LLM; heuristics leave 0 unless set.",
+    )
+
+
+class IntentExtractionMeta(StrictModel):
+    intent_source: IntentSource = Field(default="unspecified", alias="intentSource")
+    intent_latency_ms: float = Field(default=0.0, alias="intentLatencyMs")
+    intent_fallback_reason: str = Field(default="", alias="intentFallbackReason")
+    intent_model: str = Field(default="", alias="intentModel")
+
+
+class SupplyQAResponse(WireSchemaV1):
+    """Structured discovery output without graph mutation (plan phase 7)."""
+
+    answer: str
+    citations: list[str] = Field(default_factory=list)
+    mentioned_entity_candidates: list[str] = Field(default_factory=list, alias="mentionedEntityCandidates")
+
+
+class EvidenceLedgerEntry(StrictModel):
+    id: str
+    tool: str
+    branch_id: str = Field(alias="branchId")
+    summary: str
+    source_documents: list[str] = Field(default_factory=list, alias="sourceDocuments")
+
+
+InvestigationTodoPhase = Literal[
+    "corridor",
+    "flow_backbone",
+    "alternatives",
+    "governance_overlay",
+    "policy_overlay",
+    "compose_prep",
+]
+
+InvestigationTodoStatus = Literal["pending", "in_progress", "done", "blocked", "cancelled"]
+
+
+class InvestigationTodoUpdateItem(StrictModel):
+    """Deterministic merge hook: agents may advance investigation todos without rewriting the full list."""
+
+    todo_id: str = Field(alias="todoId")
+    status: InvestigationTodoStatus
+    blocked_reason: str = Field(default="", alias="blockedReason")
+
+
+class InvestigationTodoItem(StrictModel):
+    todo_id: str = Field(alias="todoId")
+    title: str
+    phase: InvestigationTodoPhase
+    status: InvestigationTodoStatus = "pending"
+    blocked_reason: str = Field(default="", alias="blockedReason")
+    related_hypothesis_id: str = Field(default="", alias="relatedHypothesisId")
+    related_role: str = Field(default="", alias="relatedRole")
+
+
+class OperationalCorridorOverride(StrictModel):
+    """Explicit corridor for reachability when regex/LLM intent is wrong or ambiguous."""
+
+    source_scope: str = Field(default="", alias="sourceScope")
+    sink_scope: str = Field(default="", alias="sinkScope")
+    corridor_active: bool = Field(default=True, alias="corridorActive")
+
+
+BreadthProfile = Literal["routine", "standard", "deep_breadth", "corridor_stress"]
+
+
+class InvestigationPreflight(StrictModel):
+    """Explicit investigation breadth / scenario-stress profile (request-level; merged with intent at runtime)."""
+
+    breadth_profile: BreadthProfile = Field(default="standard", alias="breadthProfile")
+    breadth_weight: float = Field(
+        default=0.5,
+        alias="breadthWeight",
+        ge=0.0,
+        le=1.0,
+        description="0=narrow routine answer; 1=explore alternatives, jurisdictions, and counter-narratives aggressively.",
+    )
+    require_alternative_route_families: bool = Field(default=False, alias="requireAlternativeRouteFamilies")
+    require_epistemic_counterview: bool = Field(default=False, alias="requireEpistemicCounterview")
+    require_other_sources_sinks: bool = Field(default=False, alias="requireOtherSourcesSinks")
+    require_adjacent_regions_balance: bool = Field(default=False, alias="requireAdjacentRegionsBalance")
 
 
 class AgentLoomRequest(StrictModel):
     question: str
     corpus_documents: list[CorpusDocument] = Field(default_factory=list, alias="corpusDocuments")
     requested_roles: list[InvestigationRole] = Field(default_factory=list, alias="requestedRoles")
+    operational_corridor: OperationalCorridorOverride | None = Field(default=None, alias="operationalCorridor")
+    corridor_source_scope: str = Field(default="", alias="corridorSourceScope")
+    corridor_sink_scope: str = Field(default="", alias="corridorSinkScope")
+    corridor_active: bool | None = Field(default=None, alias="corridorActive")
+    investigation_preflight: InvestigationPreflight | None = Field(default=None, alias="investigationPreflight")
 
     @classmethod
     def from_json_text(cls, text: str) -> "AgentLoomRequest":
@@ -170,9 +305,6 @@ class GraphFragment(StrictModel):
         if not isinstance(data, dict):
             return data
         payload = dict(data)
-        patch_mode = payload.get("patchMode", payload.get("patch_mode"))
-        if patch_mode == "replace_node":
-            payload["patchMode"] = "replace_entity"
         return payload
 
     @model_validator(mode="after")
@@ -206,6 +338,15 @@ class GraphFragment(StrictModel):
             elif self.observations:
                 self.end_node_id = self.observations[-1].object_id
         return self
+
+
+class SupplyGraphPatchApply(WireSchemaV1):
+    """Validated apply payload: evidence refs + graph fragments (adapter to existing merge)."""
+
+    patch_id: str = Field(alias="patchId")
+    branch_id: str = Field(alias="branchId")
+    evidence_ref_ids: list[str] = Field(alias="evidenceRefIds", min_length=1)
+    graph_fragments: list[GraphFragment] = Field(alias="graphFragments", min_length=1)
 
 
 class OperationalGraphState(StrictModel):
@@ -265,12 +406,12 @@ class RoleContract(StrictModel):
     structural_closure_criteria: list[str] = Field(default_factory=list, alias="structuralClosureCriteria")
 
 
-class RoleSelection(StrictModel):
+class RoleSelection(WireSchemaV1):
     selected_roles: list[InvestigationRole] = Field(alias="selectedRoles")
     rationale: list[str]
 
 
-class InvestigationMission(StrictModel):
+class InvestigationMission(WireSchemaV1):
     mission_id: str = Field(alias="missionId")
     objective: str
     focus: list[str] = Field(default_factory=list)
@@ -279,7 +420,7 @@ class InvestigationMission(StrictModel):
     success_criteria: list[str] = Field(default_factory=list, alias="successCriteria")
 
 
-class BranchPlan(StrictModel):
+class BranchPlan(WireSchemaV1):
     branch_id: str = Field(alias="branchId")
     hypothesis: str
     parent_hypothesis_id: str = Field(default="", alias="parentHypothesisId")
@@ -331,6 +472,8 @@ class ToolAction(StrictModel):
         "retrieve",
         "reason",
         "web_search",
+        "supply_qa",
+        "apply_supply_graph_patch",
     ] = Field(alias="toolName")
     human_question: str = Field(alias="humanQuestion")
     human_action: str = Field(alias="humanAction")
@@ -344,7 +487,7 @@ class ToolAction(StrictModel):
     expected_fragment_type: str = Field(alias="expectedFragmentType")
 
 
-class ToolActionResult(StrictModel):
+class ToolActionResult(WireSchemaV1):
     action_id: str = Field(alias="actionId")
     branch_id: str = Field(alias="branchId")
     tool_name: str = Field(alias="toolName")
@@ -401,14 +544,30 @@ class BranchState(StrictModel):
     graph_fragments: list[GraphFragment] = Field(default_factory=list, alias="graphFragments")
     learned_findings: list[LearnedFinding] = Field(default_factory=list, alias="learnedFindings")
     hypothesis_turns: list["HypothesisTurn"] = Field(default_factory=list, alias="hypothesisTurns")
+    hypothesis_evidence_ledger: list[EvidenceLedgerEntry] = Field(
+        default_factory=list,
+        alias="hypothesisEvidenceLedger",
+    )
+    parent_ledger_snapshot: list[EvidenceLedgerEntry] = Field(
+        default_factory=list,
+        alias="parentLedgerSnapshot",
+    )
+    ledger_digest: str = Field(default="", alias="ledgerDigest")
+    applied_supply_patch_ids: list[str] = Field(default_factory=list, alias="appliedSupplyPatchIds")
 
 
-class HypothesisTurnPlan(StrictModel):
+class HypothesisTurnPlan(WireSchemaV1):
     path_kind: Literal["overview", "direct", "indirect", "alternative", "bridge"] = Field(
         default="overview",
         alias="pathKind",
     )
-    tool_name: Literal["retrieve", "reason", "web_search"] = Field(alias="toolName")
+    tool_name: Literal[
+        "retrieve",
+        "reason",
+        "web_search",
+        "supply_qa",
+        "apply_supply_graph_patch",
+    ] = Field(alias="toolName")
     human_question: str = Field(alias="humanQuestion")
     human_action: str = Field(alias="humanAction")
     why_now: str = Field(alias="whyNow")
@@ -427,12 +586,18 @@ class HypothesisTurnPlan(StrictModel):
     ] = Field(alias="fragmentType")
 
 
-class HypothesisTurn(StrictModel):
+class HypothesisTurn(WireSchemaV1):
     turn_id: str = Field(alias="turnId")
     hypothesis_id: str = Field(alias="hypothesisId")
     turn_index: int = Field(alias="turnIndex")
     path_kind: Literal["overview", "direct", "indirect", "alternative", "bridge"] = Field(alias="pathKind")
-    tool_name: Literal["retrieve", "reason", "web_search"] = Field(alias="toolName")
+    tool_name: Literal[
+        "retrieve",
+        "reason",
+        "web_search",
+        "supply_qa",
+        "apply_supply_graph_patch",
+    ] = Field(alias="toolName")
     human_question: str = Field(alias="humanQuestion")
     human_action: str = Field(alias="humanAction")
     why_now: str = Field(alias="whyNow")
@@ -452,22 +617,8 @@ class HypothesisTurn(StrictModel):
     discovered_frontier: list[str] = Field(default_factory=list, alias="discoveredFrontier")
     decision_after_result: str = Field(default="", alias="decisionAfterResult")
 
-    @model_validator(mode="before")
-    @classmethod
-    def canonicalize_graph_patch_modes(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        payload = dict(data)
-        patch_modes = payload.get("graphPatchModes", payload.get("graph_patch_modes"))
-        if isinstance(patch_modes, list):
-            payload["graphPatchModes"] = [
-                "replace_entity" if item == "replace_node" else item
-                for item in patch_modes
-            ]
-        return payload
 
-
-class HypothesisTurnDecision(StrictModel):
+class HypothesisTurnDecision(WireSchemaV1):
     assessment: str
     rationale: list[str]
     decision: Literal[
@@ -550,7 +701,7 @@ class HypothesisState(StrictModel):
     turn_ids: list[str] = Field(default_factory=list, alias="turnIds")
 
 
-class AgentResult(StrictModel):
+class AgentResult(WireSchemaV1):
     agent_name: DelegatedAgentName = Field(alias="agentName")
     mission_id: str = Field(alias="missionId")
     status: Literal["success", "partial", "blocked", "failed"]
@@ -564,6 +715,10 @@ class AgentResult(StrictModel):
     failure: FailureRecord | None = None
     truncation: bool = False
     truncation_detail: str = Field(default="", alias="truncationDetail")
+    investigation_todo_updates: list[InvestigationTodoUpdateItem] = Field(
+        default_factory=list,
+        alias="investigationTodoUpdates",
+    )
 
 
 class CriticAgentOutput(AgentResult):
@@ -579,6 +734,68 @@ class CriticAgentOutput(AgentResult):
         if self.composition_recommendation == "conditional" and not self.composition_conditions:
             raise ValueError("compositionConditions must be non-empty when compositionRecommendation is conditional")
         return self
+
+
+class BreadthCoverageAxes(StrictModel):
+    """What scenario axes the red-team pass claims to have covered (audit for prompts, not graph truth)."""
+
+    jurisdiction_shift: bool = Field(default=False, alias="jurisdictionShift")
+    processing_modality: bool = Field(default=False, alias="processingModality")
+    geopolitical_transport: bool = Field(default=False, alias="geopoliticalTransport")
+    adjacent_regions: bool = Field(default=False, alias="adjacentRegions")
+    other_sources_sinks: bool = Field(default=False, alias="otherSourcesSinks")
+    epistemic_counterview: bool = Field(default=False, alias="epistemicCounterview")
+
+
+class RedTeamBranchProposal(StrictModel):
+    """Proposal only: merged into supply_chain missions separately; not a full BranchPlan."""
+
+    proposal_id: str = Field(alias="proposalId")
+    title: str
+    hypothesis: str
+    path_kind: Literal["overview", "direct", "indirect", "alternative", "bridge"] = Field(default="alternative", alias="pathKind")
+    human_question: str = Field(alias="humanQuestion")
+    rationale: str
+    axis_tags: list[str] = Field(default_factory=list, alias="axisTags")
+
+
+class RedTeamAgentOutput(AgentResult):
+    """Red team: proposals and challenges without mutating the working graph in this agent."""
+
+    breadth_coverage: BreadthCoverageAxes = Field(default_factory=BreadthCoverageAxes, alias="breadthCoverage")
+    proposed_branches: list[RedTeamBranchProposal] = Field(default_factory=list, alias="proposedBranches")
+    suggested_next_questions: list[str] = Field(default_factory=list, alias="suggestedNextQuestions")
+    epistemic_challenges: list[str] = Field(default_factory=list, alias="epistemicChallenges")
+    summary_counterpoints: str = Field(default="", alias="summaryCounterpoints")
+
+
+def red_team_agent_output_to_agent_result(o: RedTeamAgentOutput) -> AgentResult:
+    """Strip red-team-only fields for shared AgentResult storage and merge hooks."""
+    payload = o.model_dump(mode="json", by_alias=True)
+    payload.pop("breadthCoverage", None)
+    payload.pop("breadth_coverage", None)
+    payload.pop("proposedBranches", None)
+    payload.pop("proposed_branches", None)
+    sug = list(payload.pop("suggestedNextQuestions", None) or payload.pop("suggested_next_questions", None) or [])
+    payload.pop("epistemicChallenges", None)
+    payload.pop("epistemic_challenges", None)
+    payload.pop("summaryCounterpoints", None)
+    payload.pop("summary_counterpoints", None)
+    ar = AgentResult.model_validate(payload)
+    if sug:
+        merged_nq = _dedupe_str_list(list(ar.next_questions) + [str(x).strip() for x in sug if str(x).strip()])
+        ar = ar.model_copy(update={"next_questions": merged_nq})
+    return ar
+
+
+def _dedupe_str_list(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for x in items:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
 
 
 def critic_agent_output_to_agent_result(o: CriticAgentOutput) -> AgentResult:
@@ -615,7 +832,7 @@ class AgentContract(StrictModel):
     available_tools: list[str] = Field(default_factory=list, alias="availableTools")
 
 
-class SupervisorDecision(StrictModel):
+class SupervisorDecision(WireSchemaV1):
     """
     Control-plane decision for the next ADK step.
 
@@ -637,6 +854,7 @@ class SupervisorDecision(StrictModel):
         "policy_impact_investigator_agent",
         "gap_bridge_agent",
         "critic_agent",
+        "red_team_agent",
         "compose",
         "stop",
     ] = Field(alias="nextAgent")
@@ -663,6 +881,26 @@ class LogicTraceEntry(StrictModel):
     resulting_state: dict[str, Any] = Field(alias="resultingState")
     next_step_logic: str = Field(alias="nextStepLogic")
     policy_correction: PolicyCorrection | None = Field(default=None, alias="policyCorrection")
+    supervisor_next_agent_raw: str | None = Field(
+        default=None,
+        alias="supervisorNextAgentRaw",
+        description="Supervisor-chosen nextAgent before apply_delegate_constraints.",
+    )
+    delegate_policy_outcome: dict[str, Any] | None = Field(
+        default=None,
+        alias="delegatePolicyOutcome",
+        description="Policy correction details and final nextAgent after delegation constraints.",
+    )
+    hypothesis_restructure: dict[str, Any] | None = Field(
+        default=None,
+        alias="hypothesisRestructure",
+        description="When supply-chain hypothesis runtime normalizes the turn decision away from raw LLM output.",
+    )
+    compose_policy_waivers: list[str] = Field(
+        default_factory=list,
+        alias="composePolicyWaivers",
+        description="Runtime-issued compose gate waivers (e.g. red_team_compose after budget exhaustion).",
+    )
 
 
 class RuntimeLogEntry(StrictModel):
@@ -670,15 +908,18 @@ class RuntimeLogEntry(StrictModel):
     actor: str
     phase: Literal[
         "session_init",
+        "intent_bootstrap",
         "role_selection",
         "llm_request",
         "llm_result",
+        "llm_complete",
         "decision",
         "delegation",
         "tool_call",
         "tool_result",
         "agent_result",
         "composition",
+        "graph_merge",
         "failure",
     ]
     message: str
@@ -711,7 +952,7 @@ class QuestionRubric(StrictModel):
     items: list[RubricItem] = Field(default_factory=list)
 
 
-class RubricLLMExtras(StrictModel):
+class RubricLLMExtras(WireSchemaV1):
     """Additional rubric slots proposed by LLM (merged with heuristic rubric, deduped by rubricId)."""
 
     additional_items: list[RubricItem] = Field(default_factory=list, alias="additionalItems")
@@ -734,6 +975,11 @@ class InternalBrief(StrictModel):
     reachability_one_liner: str = Field(default="", alias="reachabilityOneLiner")
     complete_chain_count: int = Field(default=0, alias="completeChainCount")
     structural_complete_chain_count: int = Field(default=0, alias="structuralChainCount")
+    typed_backbone_chain_count: int = Field(
+        default=0,
+        alias="typedBackboneChainCount",
+        description="Typed operational backbone (non-audit): flow+process+hosts+product, not business-complete.",
+    )
     bridge_candidates_short: list[str] = Field(default_factory=list, alias="bridgeCandidatesShort")
     supply_chain_narrative_bullets: list[str] = Field(default_factory=list, alias="supplyChainNarrativeBullets")
     governance_bullets: list[str] = Field(default_factory=list, alias="governanceBullets")
@@ -745,7 +991,7 @@ class InternalBrief(StrictModel):
     epistemic_caveats: list[str] = Field(default_factory=list, alias="epistemicCaveats")
 
 
-class StructuredNarrativeAnswer(StrictModel):
+class StructuredNarrativeAnswer(WireSchemaV1):
     """Sectioned user-facing answer; must align with QuestionRubric coverage rules."""
 
     chain_structure: str = Field(alias="chainStructure")

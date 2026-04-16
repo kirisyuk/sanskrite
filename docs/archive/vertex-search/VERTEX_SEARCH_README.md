@@ -13,7 +13,7 @@ Backend automatically sets up sync - no manual setup needed!
 
 ### 2. Test Search
 ```bash
-./scripts/test-vertex-search.sh -p sanskrite
+./scripts/test-vertex-search.sh -p inquire-data-84889
 ```
 
 ### 3. Use in Application

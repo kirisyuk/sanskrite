@@ -97,6 +97,13 @@ def build_internal_brief(
         structural_int = int(structural_count)
     except (TypeError, ValueError):
         structural_int = 0
+    tb_count = rr.get("typedBackboneChainCount")
+    if tb_count is None:
+        tb_count = len(rr.get("typedBackboneChains") or [])
+    try:
+        typed_backbone_int = int(tb_count)
+    except (TypeError, ValueError):
+        typed_backbone_int = 0
 
     bridge_short: list[str] = []
     for item in rr.get("bridgeCandidates") or []:
@@ -193,6 +200,10 @@ def build_internal_brief(
         caveats.append(
             "Structurally complete chain(s) exist (terminal reachability) but rely on hypothesis or weak evidence, not full document grounding."
         )
+    if typed_backbone_int > 0 and complete_int == 0 and structural_int == 0:
+        caveats.append(
+            "A typed operational backbone (flow + process + hosts + product) is present but does not meet business-complete or audit-grounded reachability tiers."
+        )
     if "hypothesis" in support_types_for_graph(normalized_graph):
         caveats.append("Some edges rely on hypothesis-level or model knowledge and are not document-grounded.")
     if open_gap_texts:
@@ -218,6 +229,8 @@ def build_internal_brief(
     reach_parts.append(f"groundedCompleteChains~{complete_int}")
     if structural_int:
         reach_parts.append(f"structurallyCompleteChains~{structural_int}")
+    if typed_backbone_int:
+        reach_parts.append(f"typedBackboneChains~{typed_backbone_int}")
     if partial_n:
         reach_parts.append(f"partialChainReports~{partial_n}")
     max_hops = rr.get("maxOperationalRouteHops")
@@ -234,6 +247,7 @@ def build_internal_brief(
         reachabilityOneLiner=_truncate("; ".join(reach_parts), 500),
         completeChainCount=complete_int,
         structuralChainCount=structural_int,
+        typedBackboneChainCount=typed_backbone_int,
         bridgeCandidatesShort=_dedupe_preserve_order(bridge_short)[:8],
         supplyChainNarrativeBullets=_dedupe_preserve_order(supply_bullets)[:max_bullets_per_axis],
         governanceBullets=_dedupe_preserve_order(gov_bullets)[:max_bullets_per_axis],

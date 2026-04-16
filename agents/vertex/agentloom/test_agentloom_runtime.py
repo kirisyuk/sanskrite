@@ -12,6 +12,7 @@ from agentloom.agent import (
     STATE_CURRENT_MISSION,
     STATE_HYPOTHESIS_ENTITY_REGISTRY,
     STATE_INVESTIGATION_EPOCH,
+    STATE_INVESTIGATION_TODOS,
     STATE_LAST_GAP_FINGERPRINT,
     STATE_LAST_CRITIC_VERDICT,
     STATE_LOGIC_TRACE,
@@ -37,6 +38,7 @@ from agentloom.agent import (
     _derive_candidate_paths,
     _derive_hypotheses,
     _graph_reachability_report,
+    _commercial_bridge_candidates,
     _host_local_process_gap_candidates,
     InvestigatorPlan,
     _normalize_agent_result,
@@ -45,21 +47,36 @@ from agentloom.agent import (
     _placeholder_nodes_from_graph,
     _parse_tool_result_payload,
     _planned_tool_sequence,
+    _normalize_supply_chain_result,
     _tool_prompt,
     _tool_result_requires_reroute,
     _acceptance_block_reason,
+    _aggregate_intermediary_nodes_from_graph,
+    _alternative_route_family_candidates,
     _detect_slot_endpoint_conflicts,
+    _eligible_evidence_ledger_entry_ids,
+    _normalize_hypothesis_turn_decision,
+    _replacement_patch_regression_reason,
     _placeholder_resolution_hints,
+    STATE_APPLIED_SUPPLY_PATCH_KEYS,
+    STATE_EVIDENCE_LEDGER,
+    STATE_GRAPH_FRAGMENTS,
+    _StateToolContext,
+    apply_supply_graph_patch,
+    read_shared_memory,
     _update_branch_state,
     _delegate_constraints,
     _merge_observation,
     _orchestration_policy_allow_compose,
     _unified_progress_report,
+    _compact_shared_memory_for_critic,
 )
 from agentloom.composer import build_final_chain_summary
 from agentloom.runner import _trace_reasoning_digest, _working_graph_from_logic_trace
 from agentloom.contracts import (
+    AgentLoomRequest,
     AgentResult,
+    InvestigationTodoUpdateItem,
     BranchPlan,
     BranchState,
     CandidatePath,
@@ -70,16 +87,26 @@ from agentloom.contracts import (
     GraphFragment,
     GraphObservation,
     HypothesisState,
+    HypothesisTurnDecision,
     InvestigationMission,
     ProcessStep,
     SupervisorDecision,
     ToolAction,
     ToolActionResult,
 )
-from agentloom.contracts import LearnedFinding
+from agentloom.contracts import EvidenceLedgerEntry, LearnedFinding, QuestionIntent
 from agentloom.operational_graph import graph_counts, graph_state_from_raw, observation_projection
 from agentloom.taxonomy import ROLE_CONTRACTS_BY_ROLE, ROLE_GOVERNANCE, ROLE_POLICY, ROLE_SUPPLY_CHAIN
 import agentloom.limits as agentloom_limits
+from agentloom.investigation_todos import (
+    apply_investigation_todo_updates_from_agent,
+    merge_todos_after_graph_progress,
+    required_todos_satisfied,
+    seed_investigation_todos,
+)
+from agentloom.question_intent import extract_question_intent_bundle, regex_operational_corridor_dict
+import agentloom.delegation_policy as delegation_policy
+import unittest.mock as mock
 
 
 def _working_graph_projection(state: dict) -> list[GraphObservation]:
@@ -259,7 +286,7 @@ class AgentLoomRuntimeTest(unittest.TestCase):
               "humanQuestion": "Which concrete facilities should replace the broad German sink?",
               "humanSummary": "ACC Kaiserslautern replaces the broad sink placeholder.",
               "branchId": "branch-2",
-              "patchMode": "replace_node",
+              "patchMode": "replace_entity",
               "oldId": "facility:german-battery-plant",
               "patchRationale": "The prior node was only a broad placeholder and should be replaced by a concrete facility.",
               "observations": [
@@ -294,6 +321,148 @@ class AgentLoomRuntimeTest(unittest.TestCase):
         self.assertEqual(parsed.graph_fragments[0].patch_mode, "replace_entity")
         self.assertEqual(parsed.graph_fragments[0].old_id, "facility:german-battery-plant")
         self.assertIn("placeholder", parsed.graph_fragments[0].patch_rationale.lower())
+
+    def test_supply_chain_result_with_context_only_does_not_close_operational_frontier(self) -> None:
+        action = ToolAction(
+            actionId="bridge-ctx-a1",
+            branchId="bridge-ctx",
+            toolName="web_search",
+            humanQuestion="Which specific converter bridges SQM to German battery manufacturing?",
+            humanAction="Identify the bridge layer.",
+            whyThisQuestion="The chain still lacks a midstream bridge.",
+            closureTarget="Recover a named operational bridge with typed legs or process steps.",
+            knownContext=["SQM produces lithium chemicals in Chile."],
+            frontier=["Recover the midstream bridge."],
+            queryText="Which specific converter bridges SQM to German battery manufacturing?",
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            targetEntities=["SQM", "Germany", "Lithium Carbonate"],
+            expectedFragmentType="chain_fragment",
+        )
+        result = ToolActionResult(
+            actionId="bridge-ctx-a1",
+            branchId="bridge-ctx",
+            toolName="web_search",
+            pathAssessment="best_supported_indirect",
+            pathAssessmentNote="A global merchant bridge looks plausible.",
+            status="success",
+            humanSummary="Named converter families and a likely commercial pattern, but not a typed bridge.",
+            closureStatus="closed",
+            resolvedFrontier=["Identified likely converter families."],
+            remainingFrontier=[],
+            discoveredFrontier=["Investigate named facilities behind the converter family."],
+            graphFragments=[
+                GraphFragment(
+                    fragmentId="ctx-only",
+                    fragmentType="chain_fragment",
+                    title="Context only",
+                    humanQuestion=action.human_question,
+                    humanSummary="Likely converter families but no typed operational bridge yet.",
+                    branchId="bridge-ctx",
+                    entityNodes=[
+                        EntityNode(
+                            nodeId="organization:umicore",
+                            label="Umicore",
+                            entityType="ORGANIZATION",
+                            confidence=0.7,
+                            supportType="mixed",
+                        )
+                    ],
+                    overlayEdges=[
+                        GraphObservation(
+                            observationId="ov-1",
+                            subjectId="organization:umicore",
+                            subject="Umicore",
+                            subjectType="ORGANIZATION",
+                            relation="OPERATES_IN",
+                            objectId="geo:europe",
+                            object="Europe",
+                            objectType="GEO_REGION",
+                            confidence=0.7,
+                            supportType="mixed",
+                            provenance=[],
+                        )
+                    ],
+                    completeness="partial",
+                    qualityScore=0.5,
+                )
+            ],
+            learnedFindings=[],
+            uncoveredQuestions=[],
+            sourceDocuments=[],
+            failure=None,
+        )
+
+        normalized = _normalize_supply_chain_result(action, result)
+
+        self.assertEqual(normalized.path_assessment, "still_open")
+        self.assertEqual(normalized.closure_status, "unchanged")
+        self.assertFalse(normalized.resolved_frontier)
+        self.assertIn("Recover the midstream bridge.", normalized.remaining_frontier)
+        self.assertIn("Identified likely converter families.", normalized.discovered_frontier)
+        self.assertIn("operational chain remains open", normalized.human_summary)
+
+    def test_supply_chain_result_preserves_replace_entity_progress(self) -> None:
+        action = ToolAction(
+            actionId="sink-a1",
+            branchId="sink",
+            toolName="web_search",
+            humanQuestion="Which concrete German battery facility should replace the placeholder sink?",
+            humanAction="Replace the placeholder sink with a concrete facility.",
+            whyThisQuestion="The sink is still broad.",
+            closureTarget="Replace the broad sink with a concrete facility.",
+            knownContext=["The graph currently ends at a broad sink placeholder."],
+            frontier=["Resolve the concrete sink."],
+            queryText="Which concrete German battery facility should replace the placeholder sink?",
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            targetEntities=["German battery plant placeholder"],
+            expectedFragmentType="chain_fragment",
+        )
+        result = ToolActionResult(
+            actionId="sink-a1",
+            branchId="sink",
+            toolName="web_search",
+            pathAssessment="still_open",
+            pathAssessmentNote="",
+            status="success",
+            humanSummary="Replaced the broad sink with a concrete facility.",
+            closureStatus="advanced",
+            resolvedFrontier=["Resolved the concrete sink."],
+            remainingFrontier=["Map the upstream bridge."],
+            discoveredFrontier=[],
+            graphFragments=[
+                GraphFragment(
+                    fragmentId="sink-frag",
+                    fragmentType="chain_fragment",
+                    title="Concrete sink",
+                    humanQuestion=action.human_question,
+                    humanSummary="PowerCo Salzgitter replaces the broad sink placeholder.",
+                    branchId="sink",
+                    patchMode="replace_entity",
+                    oldId="facility:german-battery-plant-placeholder",
+                    patchRationale="Concrete facility available.",
+                    entityNodes=[
+                        EntityNode(
+                            nodeId="facility:powerco-salzgitter",
+                            label="PowerCo Salzgitter Cell Plant",
+                            entityType="FACILITY",
+                            confidence=0.85,
+                            supportType="mixed",
+                        )
+                    ],
+                    completeness="partial",
+                    qualityScore=0.7,
+                )
+            ],
+            learnedFindings=[],
+            uncoveredQuestions=[],
+            sourceDocuments=[],
+            failure=None,
+        )
+
+        normalized = _normalize_supply_chain_result(action, result)
+
+        self.assertEqual(normalized.closure_status, "advanced")
+        self.assertEqual(normalized.resolved_frontier, ["Resolved the concrete sink."])
 
     def test_tool_payload_parser_accepts_operational_primitives_fragment(self) -> None:
         action = ToolAction(
@@ -566,6 +735,698 @@ class AgentLoomRuntimeTest(unittest.TestCase):
         self.assertIn("Lithium Carbonate", first["inputProducts"])
         self.assertIn("pCAM", first["inputProducts"])
         self.assertEqual(first["outputProduct"], "Cathode Active Materials")
+
+    def test_commercial_bridge_candidates_detect_disconnected_same_product_islands(self) -> None:
+        state = {
+            "input_request": {
+                "question": "Map the likely lithium supply chain from Chile to a German battery manufacturer.",
+                "corpusDocuments": [],
+            }
+        }
+        graph_state = graph_state_from_raw(
+            {
+                "entityNodes": [
+                    {"nodeId": "deposit:atacama", "label": "Salar de Atacama", "entityType": "DEPOSIT", "confidence": 0.9, "supportType": "document"},
+                    {"nodeId": "facility:sqm", "label": "SQM Salar de Atacama", "entityType": "FACILITY", "confidence": 0.9, "supportType": "document"},
+                    {"nodeId": "facility:converter", "label": "Bitterfeld Conversion Plant", "entityType": "FACILITY", "confidence": 0.7, "supportType": "hypothesis"},
+                    {"nodeId": "facility:battery-plant", "label": "Kaiserslautern Cell Plant", "entityType": "FACILITY", "confidence": 0.7, "supportType": "hypothesis"},
+                    {"nodeId": "product:lithium-carbonate", "label": "Lithium Carbonate", "entityType": "PRODUCT", "confidence": 0.9, "supportType": "document"},
+                    {"nodeId": "product:lithium-hydroxide", "label": "Battery-Grade Lithium Hydroxide", "entityType": "PRODUCT", "confidence": 0.7, "supportType": "hypothesis"},
+                ],
+                "flowLegs": [
+                    {
+                        "legId": "leg-hydroxide",
+                        "supplierNodeId": "facility:converter",
+                        "customerNodeId": "facility:battery-plant",
+                        "productNodeId": "product:lithium-hydroxide",
+                        "confidence": 0.6,
+                        "supportType": "hypothesis",
+                    }
+                ],
+                "processSteps": [
+                    {
+                        "stepId": "step-extract",
+                        "hostNodeId": "facility:sqm",
+                        "processKind": "extraction",
+                        "inputNodeIds": ["deposit:atacama"],
+                        "outputNodeIds": ["product:lithium-carbonate"],
+                        "confidence": 0.9,
+                        "supportType": "document",
+                    },
+                    {
+                        "stepId": "step-convert",
+                        "hostNodeId": "facility:converter",
+                        "processKind": "transformation",
+                        "inputNodeIds": ["product:lithium-carbonate"],
+                        "outputNodeIds": ["product:lithium-hydroxide"],
+                        "confidence": 0.6,
+                        "supportType": "hypothesis",
+                    },
+                ],
+                "overlayEdges": [],
+            }
+        )
+
+        candidates = _commercial_bridge_candidates(graph_state, state=state)
+
+        self.assertTrue(candidates)
+        first = candidates[0]
+        self.assertEqual(first["upstreamHost"], "SQM Salar de Atacama")
+        self.assertEqual(first["downstreamHost"], "Bitterfeld Conversion Plant")
+        self.assertEqual(first["product"], "Lithium Carbonate")
+        self.assertIn("intermediary jurisdiction", first["reason"])
+
+    def test_commercial_bridge_candidates_skip_placeholder_aggregate_endpoints(self) -> None:
+        state = {
+            "input_request": {
+                "question": "Map the likely lithium supply chain from Chile to a German battery manufacturer.",
+                "corpusDocuments": [],
+            }
+        }
+        graph_state = graph_state_from_raw(
+            {
+                "entityNodes": [
+                    {"nodeId": "deposit:atacama", "label": "Salar de Atacama", "entityType": "DEPOSIT", "confidence": 0.9, "supportType": "document"},
+                    {"nodeId": "facility:sqm", "label": "SQM Salar de Atacama", "entityType": "FACILITY", "confidence": 0.9, "supportType": "document"},
+                    {"nodeId": "organization:unnamed-asian-battery-manufacturer", "label": "Unnamed Asian Battery Manufacturer", "entityType": "ORGANIZATION", "confidence": 0.5, "supportType": "hypothesis"},
+                    {"nodeId": "product:lithium-carbonate", "label": "Lithium Carbonate", "entityType": "PRODUCT", "confidence": 0.9, "supportType": "document"},
+                    {"nodeId": "product:cam", "label": "Cathode Active Material", "entityType": "PRODUCT", "confidence": 0.5, "supportType": "hypothesis"},
+                ],
+                "flowLegs": [],
+                "processSteps": [
+                    {
+                        "stepId": "step-extract",
+                        "hostNodeId": "facility:sqm",
+                        "processKind": "extraction",
+                        "inputNodeIds": ["deposit:atacama"],
+                        "outputNodeIds": ["product:lithium-carbonate"],
+                        "confidence": 0.9,
+                        "supportType": "document",
+                    },
+                    {
+                        "stepId": "step-aggregate-demand",
+                        "hostNodeId": "organization:unnamed-asian-battery-manufacturer",
+                        "processKind": "assembly",
+                        "inputNodeIds": ["product:lithium-carbonate"],
+                        "outputNodeIds": ["product:cam"],
+                        "confidence": 0.5,
+                        "supportType": "hypothesis",
+                    },
+                ],
+                "overlayEdges": [],
+            }
+        )
+
+        candidates = _commercial_bridge_candidates(graph_state, state=state)
+
+        self.assertEqual(candidates, [])
+
+    def test_normalize_investigator_plan_injects_commercial_bridge_branch(self) -> None:
+        mission = InvestigationMission(
+            missionId="mission-bridge",
+            objective="Connect the disconnected operational islands.",
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            groundingMode="mixed",
+        )
+        state = {
+            "input_request": {
+                "question": "Map the likely lithium supply chain from Chile to a German battery manufacturer.",
+                "corpusDocuments": [],
+            },
+            STATE_CURRENT_MISSION: mission.model_dump(mode="json", by_alias=True),
+            STATE_SELECTED_ROLES: [ROLE_SUPPLY_CHAIN],
+            STATE_WORKING_GRAPH: {
+                "entityNodes": [
+                    {"nodeId": "deposit:atacama", "label": "Salar de Atacama", "entityType": "DEPOSIT", "confidence": 0.9, "supportType": "document"},
+                    {"nodeId": "facility:sqm", "label": "SQM Salar de Atacama", "entityType": "FACILITY", "confidence": 0.9, "supportType": "document"},
+                    {"nodeId": "facility:converter", "label": "Bitterfeld Conversion Plant", "entityType": "FACILITY", "confidence": 0.7, "supportType": "hypothesis"},
+                    {"nodeId": "facility:battery-plant", "label": "Kaiserslautern Cell Plant", "entityType": "FACILITY", "confidence": 0.7, "supportType": "hypothesis"},
+                    {"nodeId": "product:lithium-carbonate", "label": "Lithium Carbonate", "entityType": "PRODUCT", "confidence": 0.9, "supportType": "document"},
+                    {"nodeId": "product:lithium-hydroxide", "label": "Battery-Grade Lithium Hydroxide", "entityType": "PRODUCT", "confidence": 0.7, "supportType": "hypothesis"},
+                ],
+                "flowLegs": [
+                    {
+                        "legId": "leg-hydroxide",
+                        "supplierNodeId": "facility:converter",
+                        "customerNodeId": "facility:battery-plant",
+                        "productNodeId": "product:lithium-hydroxide",
+                        "confidence": 0.6,
+                        "supportType": "hypothesis",
+                    }
+                ],
+                "processSteps": [
+                    {
+                        "stepId": "step-extract",
+                        "hostNodeId": "facility:sqm",
+                        "processKind": "extraction",
+                        "inputNodeIds": ["deposit:atacama"],
+                        "outputNodeIds": ["product:lithium-carbonate"],
+                        "confidence": 0.9,
+                        "supportType": "document",
+                    },
+                    {
+                        "stepId": "step-convert",
+                        "hostNodeId": "facility:converter",
+                        "processKind": "transformation",
+                        "inputNodeIds": ["product:lithium-carbonate"],
+                        "outputNodeIds": ["product:lithium-hydroxide"],
+                        "confidence": 0.6,
+                        "supportType": "hypothesis",
+                    },
+                ],
+                "overlayEdges": [],
+            },
+        }
+        weak_plan = InvestigatorPlan(
+            assessment="Need more detail on the converter.",
+            rationale=["The route is still disconnected."],
+            branchPlans=[
+                BranchPlan(
+                    branchId="downstream_only",
+                    hypothesis="Downstream side needs more detail.",
+                    parentHypothesisId="root-chain",
+                    hypothesisRelation="dependent_followup",
+                    spawnReason="Refine the converter.",
+                    independenceBasis="This branch refines the downstream side only.",
+                    pathKind="direct",
+                    humanQuestion="Which battery plant receives lithium hydroxide?",
+                    humanAction="Identify the sink.",
+                    closureTarget="Identify the downstream plant.",
+                    knownContext=["A European converter ships battery-grade lithium hydroxide downstream."],
+                    frontier=["Identify the sink."],
+                    assignedRoles=[ROLE_SUPPLY_CHAIN],
+                    preferredTools=["web_search"],
+                    targetEntities=["Battery Cell Plant"],
+                    fragmentType="chain_fragment",
+                    parallelGroup="downstream",
+                    stopAfterNoImprovement=2,
+                )
+            ],
+            blockingFailure=None,
+        )
+
+        normalized = _normalize_investigator_plan(
+            state,
+            mission,
+            ROLE_SUPPLY_CHAIN,
+            weak_plan,
+            initial_pass=False,
+            user_question="Map the likely lithium supply chain from Chile to a German battery manufacturer.",
+            corpus_document_count=0,
+        )
+
+        self.assertGreaterEqual(len(normalized.branch_plans), 1)
+        self.assertEqual(normalized.branch_plans[0].path_kind, "bridge")
+        self.assertIn("commercial bridge", normalized.branch_plans[0].human_question.lower())
+        self.assertIn("SQM Salar de Atacama", normalized.branch_plans[0].human_question)
+        self.assertIn("Bitterfeld Conversion Plant", normalized.branch_plans[0].human_question)
+
+    def test_normalize_investigator_plan_injects_placeholder_resolution_branch(self) -> None:
+        mission = InvestigationMission(
+            missionId="mission-placeholder",
+            objective="Resolve placeholder endpoints before accepting the route.",
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            groundingMode="mixed",
+        )
+        state = {
+            "input_request": {
+                "question": "Map the likely lithium supply chain from Chile to a German battery manufacturer.",
+                "corpusDocuments": [],
+            },
+            STATE_CURRENT_MISSION: mission.model_dump(mode="json", by_alias=True),
+            STATE_SELECTED_ROLES: [ROLE_SUPPLY_CHAIN],
+            STATE_WORKING_GRAPH: {
+                "entityNodes": [
+                    {"nodeId": "facility:la-negra", "label": "La Negra Chemical Plant", "entityType": "FACILITY", "confidence": 0.9, "supportType": "document"},
+                    {"nodeId": "organization:unnamed-asian-battery-manufacturer", "label": "Unnamed Asian Battery Manufacturer", "entityType": "ORGANIZATION", "confidence": 0.5, "supportType": "hypothesis"},
+                    {"nodeId": "product:lithium-carbonate", "label": "Lithium Carbonate", "entityType": "PRODUCT", "confidence": 0.9, "supportType": "document"},
+                ],
+                "flowLegs": [
+                    {
+                        "legId": "leg-placeholder",
+                        "supplierNodeId": "facility:la-negra",
+                        "customerNodeId": "organization:unnamed-asian-battery-manufacturer",
+                        "productNodeId": "product:lithium-carbonate",
+                        "confidence": 0.5,
+                        "supportType": "hypothesis",
+                    }
+                ],
+                "processSteps": [],
+                "overlayEdges": [],
+            },
+        }
+        weak_plan = InvestigatorPlan(
+            assessment="Need to inspect the route family further.",
+            rationale=["The downstream side remains broad."],
+            branchPlans=[
+                BranchPlan(
+                    branchId="generic_followup",
+                    hypothesis="A generic follow-up can close the route.",
+                    parentHypothesisId="root-chain",
+                    hypothesisRelation="dependent_followup",
+                    spawnReason="Refine downstream route family.",
+                    independenceBasis="This branch keeps exploring the same route.",
+                    pathKind="bridge",
+                    humanQuestion="Which converter family handles the next hop?",
+                    humanAction="Look for a general intermediary.",
+                    closureTarget="Identify any intermediary.",
+                    knownContext=["The downstream node is still broad."],
+                    frontier=["Find the missing bridge."],
+                    assignedRoles=[ROLE_SUPPLY_CHAIN],
+                    preferredTools=["web_search"],
+                    targetEntities=["Unnamed Asian Battery Manufacturer"],
+                    fragmentType="chain_fragment",
+                    parallelGroup="bridge",
+                    stopAfterNoImprovement=2,
+                )
+            ],
+            blockingFailure=None,
+        )
+
+        normalized = _normalize_investigator_plan(
+            state,
+            mission,
+            ROLE_SUPPLY_CHAIN,
+            weak_plan,
+            initial_pass=False,
+            user_question="Map the likely lithium supply chain from Chile to a German battery manufacturer.",
+            corpus_document_count=0,
+        )
+
+        self.assertGreaterEqual(len(normalized.branch_plans), 1)
+        self.assertEqual(normalized.branch_plans[0].parallel_group, "placeholder_resolution")
+        self.assertIn("resolve placeholder node", normalized.branch_plans[0].human_action.lower())
+        self.assertIn("replace_entity", normalized.branch_plans[0].human_action.lower())
+        self.assertIn("Unnamed Asian Battery Manufacturer", normalized.branch_plans[0].human_question)
+
+    def test_alternative_route_family_candidates_arise_from_rejected_bridge(self) -> None:
+        mission = InvestigationMission(
+            missionId="mission-alt-family",
+            objective="Recover a business-complete route family.",
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            groundingMode="mixed",
+        )
+        branch_fragment = GraphFragment(
+            fragmentId="bridge-frag",
+            fragmentType="chain_fragment",
+            title="Rejected narrow bridge",
+            humanQuestion="What bridge connects SQM to BASF Schwarzheide?",
+            humanSummary="The narrow bridge remains unsupported.",
+            branchId="bridge_basf",
+            entityNodes=[
+                EntityNode(nodeId="facility:sqm", label="SQM Salar Processing Plant", entityType="FACILITY", confidence=0.8, supportType="document"),
+                EntityNode(nodeId="facility:basf-schwarzheide", label="BASF Schwarzheide Facility", entityType="FACILITY", confidence=0.8, supportType="document"),
+                EntityNode(nodeId="product:lithium-carbonate", label="Lithium Carbonate", entityType="PRODUCT", confidence=0.8, supportType="document"),
+            ],
+            completeness="partial",
+            qualityScore=0.4,
+        )
+        branch_state = BranchState(
+            branchId="bridge_basf",
+            hypothesis="A narrow bridge connects SQM to BASF Schwarzheide.",
+            pathKind="bridge",
+            pathAssessment="rejected",
+            pathAssessmentNote="No direct or narrow bridge is supportable.",
+            humanQuestion="What bridge connects SQM to BASF Schwarzheide?",
+            humanSummary="The narrow bridge was rejected.",
+            closureTarget="Recover the bridge.",
+            knownContext=["SQM supplies lithium carbonate upstream."],
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            status="completed",
+            qualityScore=0.4,
+            stagnationCount=1,
+            stopReason="Rejected narrow bridge.",
+            resolvedFrontier=[],
+            remainingFrontier=["Find a different route family."],
+            openQuestions=[],
+            toolActions=[],
+            toolResults=[],
+            graphFragments=[branch_fragment],
+        )
+        state = {
+            "input_request": {
+                "question": "Map the likely lithium supply chain from Chile to a German battery manufacturer.",
+                "corpusDocuments": [],
+            },
+            STATE_CURRENT_MISSION: mission.model_dump(mode="json", by_alias=True),
+            STATE_WORKING_GRAPH: {
+                "entityNodes": [
+                    {"nodeId": "deposit:atacama", "label": "Salar de Atacama", "entityType": "DEPOSIT", "confidence": 0.9, "supportType": "document"},
+                    {"nodeId": "facility:sqm", "label": "SQM Salar Processing Plant", "entityType": "FACILITY", "confidence": 0.9, "supportType": "document"},
+                    {"nodeId": "facility:basf-schwarzheide", "label": "BASF Schwarzheide Facility", "entityType": "FACILITY", "confidence": 0.9, "supportType": "document"},
+                    {"nodeId": "product:lithium-carbonate", "label": "Lithium Carbonate", "entityType": "PRODUCT", "confidence": 0.9, "supportType": "document"},
+                    {"nodeId": "product:cam", "label": "Cathode Active Material", "entityType": "PRODUCT", "confidence": 0.7, "supportType": "hypothesis"},
+                ],
+                "processSteps": [
+                    {
+                        "stepId": "step-extract",
+                        "hostNodeId": "facility:sqm",
+                        "processKind": "extraction",
+                        "inputNodeIds": ["deposit:atacama"],
+                        "outputNodeIds": ["product:lithium-carbonate"],
+                        "confidence": 0.9,
+                        "supportType": "document",
+                    },
+                    {
+                        "stepId": "step-basf-cam",
+                        "hostNodeId": "facility:basf-schwarzheide",
+                        "processKind": "transformation",
+                        "inputNodeIds": ["product:lithium-carbonate"],
+                        "outputNodeIds": ["product:cam"],
+                        "confidence": 0.7,
+                        "supportType": "hypothesis",
+                    },
+                ],
+                "flowLegs": [],
+                "overlayEdges": [],
+            },
+            STATE_BRANCH_STATES: [branch_state.model_dump(mode="json", by_alias=True)],
+        }
+
+        candidates = _alternative_route_family_candidates(state, graph_state_from_raw(state[STATE_WORKING_GRAPH]))
+
+        self.assertTrue(candidates)
+        first = candidates[0]
+        self.assertEqual(first["candidateKind"], "alternative_route_family")
+        self.assertEqual(first["upstreamHost"], "SQM Salar Processing Plant")
+        self.assertEqual(first["downstreamHost"], "BASF Schwarzheide Facility")
+        self.assertIn("bridge_basf", first["rejectedBranchIds"])
+        self.assertTrue(str(first["branchId"]).startswith("alt_family_"))
+
+    def test_normalize_hypothesis_turn_decision_spawns_alternative_route_family_after_rejected_bridge(self) -> None:
+        mission = InvestigationMission(
+            missionId="mission-alt-turn",
+            objective="Recover a business-complete route family.",
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            groundingMode="mixed",
+        )
+        branch_fragment = GraphFragment(
+            fragmentId="bridge-frag",
+            fragmentType="chain_fragment",
+            title="Rejected narrow bridge",
+            humanQuestion="What bridge connects SQM to BASF Schwarzheide?",
+            humanSummary="The narrow bridge remains unsupported.",
+            branchId="bridge_basf",
+            entityNodes=[
+                EntityNode(nodeId="facility:sqm", label="SQM Salar Processing Plant", entityType="FACILITY", confidence=0.8, supportType="document"),
+                EntityNode(nodeId="facility:basf-schwarzheide", label="BASF Schwarzheide Facility", entityType="FACILITY", confidence=0.8, supportType="document"),
+                EntityNode(nodeId="product:lithium-carbonate", label="Lithium Carbonate", entityType="PRODUCT", confidence=0.8, supportType="document"),
+            ],
+            completeness="partial",
+            qualityScore=0.4,
+        )
+        branch_state = BranchState(
+            branchId="bridge_basf",
+            hypothesis="A narrow bridge connects SQM to BASF Schwarzheide.",
+            pathKind="bridge",
+            pathAssessment="still_open",
+            pathAssessmentNote="The narrow bridge is still open.",
+            humanQuestion="What bridge connects SQM to BASF Schwarzheide?",
+            humanSummary="The narrow bridge is still being tested.",
+            closureTarget="Recover the bridge.",
+            knownContext=["SQM supplies lithium carbonate upstream."],
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            status="needs_followup",
+            qualityScore=0.4,
+            stagnationCount=1,
+            stopReason="",
+            resolvedFrontier=[],
+            remainingFrontier=["Find a different route family."],
+            openQuestions=[],
+            toolActions=[],
+            toolResults=[],
+            graphFragments=[branch_fragment],
+        )
+        latest_result = ToolActionResult(
+            actionId="bridge_basf-a2",
+            branchId="bridge_basf",
+            toolName="web_search",
+            pathAssessment="rejected",
+            pathAssessmentNote="No direct or narrow bridge is supportable.",
+            status="success",
+            humanSummary="No direct or narrow bridge is supportable.",
+            closureStatus="closed",
+            resolvedFrontier=["Rejected the narrow bridge."],
+            remainingFrontier=["Search a materially different route family."],
+            discoveredFrontier=["Investigate a different intermediary jurisdiction or operator family."],
+            graphFragments=[branch_fragment],
+            learnedFindings=[],
+            uncoveredQuestions=[],
+            sourceDocuments=[],
+            failure=None,
+        )
+        decision = _normalize_hypothesis_turn_decision(
+            {
+                "input_request": {
+                    "question": "Map the likely lithium supply chain from Chile to a German battery manufacturer.",
+                    "corpusDocuments": [],
+                },
+                STATE_CURRENT_MISSION: mission.model_dump(mode="json", by_alias=True),
+                STATE_WORKING_GRAPH: {
+                    "entityNodes": [
+                        {"nodeId": "deposit:atacama", "label": "Salar de Atacama", "entityType": "DEPOSIT", "confidence": 0.9, "supportType": "document"},
+                        {"nodeId": "facility:sqm", "label": "SQM Salar Processing Plant", "entityType": "FACILITY", "confidence": 0.9, "supportType": "document"},
+                        {"nodeId": "facility:basf-schwarzheide", "label": "BASF Schwarzheide Facility", "entityType": "FACILITY", "confidence": 0.9, "supportType": "document"},
+                        {"nodeId": "product:lithium-carbonate", "label": "Lithium Carbonate", "entityType": "PRODUCT", "confidence": 0.9, "supportType": "document"},
+                        {"nodeId": "product:cam", "label": "Cathode Active Material", "entityType": "PRODUCT", "confidence": 0.7, "supportType": "hypothesis"},
+                    ],
+                    "processSteps": [
+                        {
+                            "stepId": "step-extract",
+                            "hostNodeId": "facility:sqm",
+                            "processKind": "extraction",
+                            "inputNodeIds": ["deposit:atacama"],
+                            "outputNodeIds": ["product:lithium-carbonate"],
+                            "confidence": 0.9,
+                            "supportType": "document",
+                        },
+                        {
+                            "stepId": "step-basf-cam",
+                            "hostNodeId": "facility:basf-schwarzheide",
+                            "processKind": "transformation",
+                            "inputNodeIds": ["product:lithium-carbonate"],
+                            "outputNodeIds": ["product:cam"],
+                            "confidence": 0.7,
+                            "supportType": "hypothesis",
+                        },
+                    ],
+                    "flowLegs": [],
+                    "overlayEdges": [],
+                },
+                STATE_BRANCH_STATES: [branch_state.model_dump(mode="json", by_alias=True)],
+            },
+            BranchPlan(
+                branchId="bridge_basf",
+                hypothesis="A narrow bridge connects SQM to BASF Schwarzheide.",
+                parentHypothesisId="root_chain",
+                hypothesisRelation="dependent_followup",
+                spawnReason="Recover the missing bridge.",
+                independenceBasis="This branch works inside the main route.",
+                pathKind="bridge",
+                humanQuestion="What bridge connects SQM to BASF Schwarzheide?",
+                humanAction="Recover the commercial bridge.",
+                closureTarget="Connect SQM to BASF Schwarzheide.",
+                knownContext=["SQM upstream and BASF downstream already exist."],
+                frontier=["Recover the bridge."],
+                assignedRoles=[ROLE_SUPPLY_CHAIN],
+                preferredTools=["web_search"],
+                targetEntities=["SQM Salar Processing Plant", "BASF Schwarzheide Facility", "Lithium Carbonate"],
+                fragmentType="chain_fragment",
+            ),
+            branch_state,
+            {
+                "input_request": {
+                    "question": "Map the likely lithium supply chain from Chile to a German battery manufacturer.",
+                    "corpusDocuments": [],
+                },
+                STATE_CURRENT_MISSION: mission.model_dump(mode="json", by_alias=True),
+                STATE_WORKING_GRAPH: {
+                    "entityNodes": [
+                        {"nodeId": "deposit:atacama", "label": "Salar de Atacama", "entityType": "DEPOSIT", "confidence": 0.9, "supportType": "document"},
+                        {"nodeId": "facility:sqm", "label": "SQM Salar Processing Plant", "entityType": "FACILITY", "confidence": 0.9, "supportType": "document"},
+                        {"nodeId": "facility:basf-schwarzheide", "label": "BASF Schwarzheide Facility", "entityType": "FACILITY", "confidence": 0.9, "supportType": "document"},
+                        {"nodeId": "product:lithium-carbonate", "label": "Lithium Carbonate", "entityType": "PRODUCT", "confidence": 0.9, "supportType": "document"},
+                        {"nodeId": "product:cam", "label": "Cathode Active Material", "entityType": "PRODUCT", "confidence": 0.7, "supportType": "hypothesis"},
+                    ],
+                    "processSteps": [
+                        {
+                            "stepId": "step-extract",
+                            "hostNodeId": "facility:sqm",
+                            "processKind": "extraction",
+                            "inputNodeIds": ["deposit:atacama"],
+                            "outputNodeIds": ["product:lithium-carbonate"],
+                            "confidence": 0.9,
+                            "supportType": "document",
+                        },
+                        {
+                            "stepId": "step-basf-cam",
+                            "hostNodeId": "facility:basf-schwarzheide",
+                            "processKind": "transformation",
+                            "inputNodeIds": ["product:lithium-carbonate"],
+                            "outputNodeIds": ["product:cam"],
+                            "confidence": 0.7,
+                            "supportType": "hypothesis",
+                        },
+                    ],
+                    "flowLegs": [],
+                    "overlayEdges": [],
+                },
+                STATE_BRANCH_STATES: [branch_state.model_dump(mode="json", by_alias=True)],
+            },
+            latest_result,
+            HypothesisTurnDecision(
+                assessment="The current narrow bridge was rejected.",
+                rationale=["No direct or narrow bridge is supportable."],
+                decision="reject_hypothesis",
+                decisionNote="Reject the narrow bridge.",
+                hypothesisStatus="rejected",
+            ),
+        )
+
+        self.assertEqual(decision.decision, "spawn_independent_child_hypothesis")
+        self.assertEqual(decision.hypothesis_status, "rejected")
+        self.assertTrue(decision.followup_branches)
+        child = decision.followup_branches[0]
+        self.assertEqual(child.hypothesis_relation, "independent_child")
+        self.assertEqual(child.path_kind, "alternative")
+        self.assertEqual(child.fragment_type, "alternative_chain")
+        self.assertIn("third-country", child.human_action.lower())
+        self.assertTrue(child.branch_id.startswith("alt_family_"))
+
+    def test_normalize_hypothesis_turn_decision_blocks_overlay_pivot_while_chain_is_partial(self) -> None:
+        mission = InvestigationMission(
+            missionId="mission-overlay-pivot",
+            objective="Recover a business-complete route family before overlays.",
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            groundingMode="mixed",
+        )
+        branch_plan = BranchPlan(
+            branchId="resolve-midstream",
+            hypothesis="A concrete midstream bridge can connect the Chilean source to the German sink.",
+            parentHypothesisId="root_chain",
+            hypothesisRelation="dependent_followup",
+            spawnReason="Recover the missing bridge.",
+            independenceBasis="This branch works inside the main route.",
+            pathKind="bridge",
+            humanQuestion="What bridge connects SQM to the German battery sink?",
+            humanAction="Recover the commercial bridge.",
+            closureTarget="Connect the Chilean source to the German sink with a business-complete chain.",
+            knownContext=["SQM and the German sink are already named."],
+            frontier=["Recover the missing bridge."],
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            preferredTools=["web_search"],
+            targetEntities=["SQM", "Germany", "Lithium Carbonate"],
+            fragmentType="chain_fragment",
+        )
+        branch_state = BranchState(
+            branchId="resolve-midstream",
+            hypothesis=branch_plan.hypothesis,
+            parentHypothesisId="root_chain",
+            hypothesisRelation="dependent_followup",
+            spawnReason="Recover the missing bridge.",
+            independenceBasis="This branch works inside the main route.",
+            pathKind="bridge",
+            pathAssessment="still_open",
+            pathAssessmentNote="The bridge is still open.",
+            humanQuestion=branch_plan.human_question,
+            humanSummary="Named downstream anchors exist, but the bridge is still missing.",
+            closureTarget=branch_plan.closure_target,
+            knownContext=["SQM and the German sink are already named."],
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            status="needs_followup",
+            qualityScore=0.5,
+            stagnationCount=0,
+            stopReason="",
+            resolvedFrontier=[],
+            remainingFrontier=["Recover the missing bridge."],
+            openQuestions=[],
+            toolActions=[],
+            toolResults=[],
+            graphFragments=[],
+        )
+        graph_state = {
+            "entityNodes": [
+                {"nodeId": "deposit:atacama", "label": "Salar de Atacama", "entityType": "DEPOSIT", "confidence": 0.9, "supportType": "document"},
+                {"nodeId": "facility:sqm-salar", "label": "SQM Salar de Atacama Operations", "entityType": "FACILITY", "confidence": 0.9, "supportType": "document"},
+                {"nodeId": "facility:powerco-salzgitter", "label": "PowerCo Salzgitter Cell Plant", "entityType": "FACILITY", "confidence": 0.9, "supportType": "document"},
+                {"nodeId": "product:lithium-carbonate", "label": "Lithium Carbonate", "entityType": "PRODUCT", "confidence": 0.9, "supportType": "document"},
+            ],
+            "processSteps": [
+                {
+                    "stepId": "step-extract",
+                    "hostNodeId": "facility:sqm-salar",
+                    "processKind": "extraction",
+                    "inputNodeIds": ["deposit:atacama"],
+                    "outputNodeIds": ["product:lithium-carbonate"],
+                    "confidence": 0.9,
+                    "supportType": "document",
+                }
+            ],
+            "flowLegs": [],
+            "overlayEdges": [],
+        }
+        state = {
+            "input_request": {
+                "question": "Map the likely lithium supply chain from Chile to a German battery manufacturer.",
+                "corpusDocuments": [],
+            },
+            STATE_CURRENT_MISSION: mission.model_dump(mode="json", by_alias=True),
+            STATE_WORKING_GRAPH: graph_state,
+            STATE_BRANCH_STATES: [branch_state.model_dump(mode="json", by_alias=True)],
+        }
+        latest_result = ToolActionResult(
+            actionId="resolve-midstream-a2",
+            branchId="resolve-midstream",
+            toolName="web_search",
+            pathAssessment="still_open",
+            pathAssessmentNote="The bridge remains open.",
+            status="success",
+            humanSummary="Named likely converter families, but no typed bridge yet.",
+            closureStatus="unchanged",
+            resolvedFrontier=[],
+            remainingFrontier=["Recover the missing bridge."],
+            discoveredFrontier=["Investigate a named midstream route family."],
+            graphFragments=[],
+            learnedFindings=[],
+            uncoveredQuestions=[],
+            sourceDocuments=[],
+            failure=None,
+        )
+        decision = _normalize_hypothesis_turn_decision(
+            state,
+            branch_plan,
+            branch_state,
+            state,
+            latest_result,
+            HypothesisTurnDecision(
+                assessment="The source and sink are clear enough to move to overlays.",
+                rationale=["The operational picture is sufficiently anchored."],
+                decision="ask_next_question_same_hypothesis",
+                decisionNote="Move to ownership and regulatory overlay work.",
+                hypothesisStatus="active",
+                nextTurn={
+                    "pathKind": "overview",
+                    "toolName": "web_search",
+                    "humanQuestion": "What are the ownership and regulatory pressure points for this route?",
+                    "humanAction": "Map ownership influence and regulation.",
+                    "whyNow": "The chain is supposedly clear enough.",
+                    "closureTarget": "Add ownership and policy overlays.",
+                    "knownContext": [],
+                    "frontier": [],
+                    "targetEntities": [],
+                    "fragmentType": "policy_overlay",
+                },
+                followupBranches=[],
+            ),
+        )
+
+        self.assertEqual(decision.decision, "ask_next_question_same_hypothesis")
+        self.assertIsNotNone(decision.next_turn)
+        self.assertEqual(decision.next_turn.fragment_type, "chain_fragment")
+        self.assertEqual(decision.next_turn.path_kind, "bridge")
+        self.assertIn("partial-chain", decision.decision_note.lower())
+        self.assertIn("german sink", decision.next_turn.human_question.lower())
+        self.assertIn("adjacent-country", decision.next_turn.human_action.lower())
 
     def test_normalize_investigator_plan_injects_process_gap_branch(self) -> None:
         mission = InvestigationMission(
@@ -903,6 +1764,29 @@ class AgentLoomRuntimeTest(unittest.TestCase):
         )
         self.assertIn("Asian Battery Cell Manufacturing Hub", placeholders)
 
+    def test_placeholder_detector_catches_unnamed_asian_battery_manufacturer(self) -> None:
+        placeholders = _placeholder_nodes_from_graph(
+            [
+                GraphObservation(
+                    observationId="o-unnamed-asian",
+                    subjectId="facility:la-negra",
+                    subject="La Negra Chemical Plant",
+                    subjectType="FACILITY",
+                    relation="SUPPLIES_TO",
+                    objectId="organization:unnamed-asian-battery-manufacturer",
+                    object="Unnamed Asian Battery Manufacturer",
+                    objectType="ORGANIZATION",
+                    confidence=0.4,
+                    supportType="hypothesis",
+                    provenance=[],
+                    supportNote="Aggregate sink stand-in.",
+                    branchId="root",
+                )
+            ]
+        )
+
+        self.assertIn("Unnamed Asian Battery Manufacturer", placeholders)
+
     def test_placeholder_detector_chilean_extraction_placeholder_suffix(self) -> None:
         placeholders = _placeholder_nodes_from_graph(
             [
@@ -946,6 +1830,46 @@ class AgentLoomRuntimeTest(unittest.TestCase):
             ]
         )
         self.assertIn("TBD conversion plant", placeholders)
+
+    def test_placeholder_detector_catches_generic_operational_operator_labels(self) -> None:
+        placeholders = _placeholder_nodes_from_graph(
+            [
+                GraphObservation(
+                    observationId="o-generic-1",
+                    subjectId="facility:chilean-extraction-facility",
+                    subject="Chilean Lithium Extraction Facility",
+                    subjectType="FACILITY",
+                    relation="SUPPLIES_TO",
+                    objectId="facility:midstream-lithium-processor",
+                    object="Midstream Lithium Processor",
+                    objectType="FACILITY",
+                    confidence=0.3,
+                    supportType="hypothesis",
+                    provenance=[],
+                    supportNote="Generic upstream and midstream stand-ins.",
+                    branchId="root",
+                ),
+                GraphObservation(
+                    observationId="o-generic-2",
+                    subjectId="facility:midstream-lithium-processor",
+                    subject="Midstream Lithium Processor",
+                    subjectType="FACILITY",
+                    relation="SUPPLIES_TO",
+                    objectId="facility:german-battery-manufacturer",
+                    object="German Battery Manufacturer",
+                    objectType="FACILITY",
+                    confidence=0.3,
+                    supportType="hypothesis",
+                    provenance=[],
+                    supportNote="Generic sink stand-in.",
+                    branchId="root",
+                ),
+            ]
+        )
+
+        self.assertIn("Chilean Lithium Extraction Facility", placeholders)
+        self.assertIn("Midstream Lithium Processor", placeholders)
+        self.assertIn("German Battery Manufacturer", placeholders)
 
     def test_acceptance_blocked_for_dependent_direct_when_placeholders_present(self) -> None:
         plan = BranchPlan(
@@ -1094,6 +2018,168 @@ class AgentLoomRuntimeTest(unittest.TestCase):
         row0 = digest["reasoningTrace"][0]
         self.assertEqual(row0["stateSeen"]["placeholderNodes"], ["German Battery Manufacturing Plant"])
 
+    def test_normalize_hypothesis_turn_decision_redirects_to_placeholder_resolution(self) -> None:
+        mission = InvestigationMission(
+            missionId="mission-placeholder-turn",
+            objective="Resolve placeholder endpoints before exploring alternatives.",
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            groundingMode="mixed",
+        )
+        placeholder_fragment = GraphFragment(
+            fragmentId="placeholder-frag",
+            fragmentType="chain_fragment",
+            title="Placeholder downstream sink",
+            humanQuestion="Which downstream entity receives lithium carbonate?",
+            humanSummary="The route currently ends at a broad downstream placeholder.",
+            branchId="bridge_placeholder",
+            entityNodes=[
+                EntityNode(nodeId="facility:la-negra", label="La Negra Chemical Plant", entityType="FACILITY", confidence=0.9, supportType="document"),
+                EntityNode(nodeId="organization:unnamed-asian-battery-manufacturer", label="Unnamed Asian Battery Manufacturer", entityType="ORGANIZATION", confidence=0.4, supportType="hypothesis"),
+                EntityNode(nodeId="product:lithium-carbonate", label="Lithium Carbonate", entityType="PRODUCT", confidence=0.9, supportType="document"),
+            ],
+            flowLegs=[
+                FlowLeg(
+                    legId="leg-placeholder",
+                    supplierNodeId="facility:la-negra",
+                    customerNodeId="organization:unnamed-asian-battery-manufacturer",
+                    productNodeId="product:lithium-carbonate",
+                    confidence=0.4,
+                    supportType="hypothesis",
+                )
+            ],
+            completeness="partial",
+            qualityScore=0.5,
+        )
+        branch_plan = BranchPlan(
+            branchId="bridge_placeholder",
+            hypothesis="A downstream intermediary receives Chilean lithium output.",
+            parentHypothesisId="root_lithium_chain",
+            hypothesisRelation="dependent_followup",
+            spawnReason="Recover the missing downstream intermediary.",
+            independenceBasis="This branch closes the same route family.",
+            pathKind="bridge",
+            humanQuestion="Which downstream entity receives lithium carbonate?",
+            humanAction="Recover the downstream intermediary.",
+            closureTarget="Recover the downstream route family.",
+            knownContext=["La Negra Chemical Plant ships lithium carbonate downstream."],
+            frontier=["Resolve the downstream endpoint."],
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            preferredTools=["reason"],
+            targetEntities=["La Negra Chemical Plant", "Unnamed Asian Battery Manufacturer"],
+            fragmentType="chain_fragment",
+        )
+        branch_state = BranchState(
+            branchId="bridge_placeholder",
+            hypothesis="A downstream intermediary receives Chilean lithium output.",
+            parentHypothesisId="root_lithium_chain",
+            hypothesisRelation="dependent_followup",
+            pathKind="bridge",
+            pathAssessment="best_supported_indirect",
+            pathAssessmentNote="The current downstream endpoint is still an aggregate placeholder.",
+            humanQuestion="Which downstream entity receives lithium carbonate?",
+            humanSummary="A placeholder downstream endpoint remains.",
+            closureTarget="Recover the downstream route family.",
+            knownContext=["La Negra Chemical Plant ships lithium carbonate downstream."],
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            status="needs_followup",
+            qualityScore=0.5,
+            stagnationCount=1,
+            stopReason="",
+            resolvedFrontier=[],
+            remainingFrontier=["Resolve the placeholder downstream endpoint."],
+            openQuestions=[],
+            toolActions=[],
+            toolResults=[],
+            graphFragments=[placeholder_fragment],
+        )
+        latest_result = ToolActionResult(
+            actionId="bridge_placeholder-a2",
+            branchId="bridge_placeholder",
+            toolName="reason",
+            pathAssessment="best_supported_indirect",
+            pathAssessmentNote="The route is indirect, but the downstream endpoint remains unnamed.",
+            status="success",
+            humanSummary="The downstream route likely passes through an unnamed Asian battery manufacturer.",
+            closureStatus="advanced",
+            resolvedFrontier=["Confirmed the route is indirect."],
+            remainingFrontier=["Resolve the unnamed downstream endpoint."],
+            discoveredFrontier=["Identify the named intermediary or split into alternative route families."],
+            graphFragments=[placeholder_fragment],
+            learnedFindings=[],
+            uncoveredQuestions=[],
+            sourceDocuments=[],
+            failure=None,
+        )
+        graph_payload = {
+            "entityNodes": [
+                {"nodeId": "facility:la-negra", "label": "La Negra Chemical Plant", "entityType": "FACILITY", "confidence": 0.9, "supportType": "document"},
+                {"nodeId": "organization:unnamed-asian-battery-manufacturer", "label": "Unnamed Asian Battery Manufacturer", "entityType": "ORGANIZATION", "confidence": 0.4, "supportType": "hypothesis"},
+                {"nodeId": "product:lithium-carbonate", "label": "Lithium Carbonate", "entityType": "PRODUCT", "confidence": 0.9, "supportType": "document"},
+            ],
+            "flowLegs": [
+                {
+                    "legId": "leg-placeholder",
+                    "supplierNodeId": "facility:la-negra",
+                    "customerNodeId": "organization:unnamed-asian-battery-manufacturer",
+                    "productNodeId": "product:lithium-carbonate",
+                    "confidence": 0.4,
+                    "supportType": "hypothesis",
+                }
+            ],
+            "processSteps": [],
+            "overlayEdges": [],
+        }
+        decision = _normalize_hypothesis_turn_decision(
+            {
+                "input_request": {
+                    "question": "Map the likely lithium supply chain from Chile to a German battery manufacturer.",
+                    "corpusDocuments": [],
+                },
+                STATE_CURRENT_MISSION: mission.model_dump(mode="json", by_alias=True),
+                STATE_WORKING_GRAPH: graph_payload,
+            },
+            branch_plan,
+            branch_state,
+            {
+                STATE_CURRENT_MISSION: mission.model_dump(mode="json", by_alias=True),
+                STATE_WORKING_GRAPH: graph_payload,
+            },
+            latest_result,
+            HypothesisTurnDecision(
+                assessment="The route is indirect; try a different route family next.",
+                rationale=["The downstream endpoint remains weak."],
+                decision="spawn_independent_child_hypothesis",
+                decisionNote="Try an alternative route family.",
+                hypothesisStatus="active",
+                nextTurn=None,
+                followupBranches=[
+                    BranchPlan(
+                        branchId="alt-placeholder",
+                        hypothesis="A different route family may bypass the weak downstream endpoint.",
+                        parentHypothesisId="bridge_placeholder",
+                        hypothesisRelation="independent_child",
+                        spawnReason="Try another family.",
+                        independenceBasis="Alternative family.",
+                        pathKind="alternative",
+                        humanQuestion="What alternative route family bypasses the current downstream market?",
+                        humanAction="Find an alternative route family.",
+                        closureTarget="Recover an alternative family.",
+                        knownContext=[],
+                        frontier=[],
+                        assignedRoles=[ROLE_SUPPLY_CHAIN],
+                        preferredTools=["web_search"],
+                        targetEntities=["La Negra Chemical Plant"],
+                        fragmentType="alternative_chain",
+                    )
+                ],
+            ),
+        )
+
+        self.assertEqual(decision.decision, "ask_next_question_same_hypothesis")
+        self.assertIsNotNone(decision.next_turn)
+        self.assertIn("replace", decision.next_turn.human_action.lower())
+        self.assertIn("placeholder", decision.decision_note.lower())
+
     def test_root_overview_acceptance_is_blocked_by_placeholder_and_structural_frontier(self) -> None:
         plan = BranchPlan(
             branchId="root",
@@ -1155,7 +2241,7 @@ class AgentLoomRuntimeTest(unittest.TestCase):
                 humanQuestion="What replaces the broad sink?",
                 humanSummary="Replacement without a target.",
                 branchId="branch-3",
-                patchMode="replace_node",
+                patchMode="replace_entity",
                 observations=[],
                 completeness="partial",
                 qualityScore=0.3,
@@ -1238,7 +2324,7 @@ class AgentLoomRuntimeTest(unittest.TestCase):
             humanQuestion="Which concrete German facility should replace the broad sink?",
             humanSummary="ACC Kaiserslautern replaces the broad sink placeholder.",
             branchId="sink",
-            patchMode="replace_node",
+            patchMode="replace_entity",
             oldId="facility:german-battery-plant",
             patchRationale="The broad sink placeholder must be replaced by a concrete facility node.",
             observations=[
@@ -1369,7 +2455,7 @@ class AgentLoomRuntimeTest(unittest.TestCase):
             humanQuestion="Replace sink?",
             humanSummary="Concrete sink.",
             branchId="sink",
-            patchMode="replace_node",
+            patchMode="replace_entity",
             oldId="facility:german-battery-plant",
             patchRationale="Replace broad sink with concrete facility.",
             observations=[
@@ -1545,7 +2631,7 @@ class AgentLoomRuntimeTest(unittest.TestCase):
             humanQuestion="Replace sink?",
             humanSummary="Concrete sink.",
             branchId="sink",
-            patchMode="replace_node",
+            patchMode="replace_entity",
             oldId="facility:german-battery-plant",
             patchRationale="Replace broad sink with concrete facility.",
             observations=[
@@ -1842,7 +2928,7 @@ class AgentLoomRuntimeTest(unittest.TestCase):
             humanQuestion="Which concrete facility replaces the broad sink?",
             humanSummary="ACC replaces the broad sink placeholder.",
             branchId="sink",
-            patchMode="replace_node",
+            patchMode="replace_entity",
             oldId="facility:german-battery-plant",
             patchRationale="The broad sink placeholder must be removed from the operational graph.",
             observations=[
@@ -2206,6 +3292,33 @@ class AgentLoomRuntimeTest(unittest.TestCase):
         self.assertIsNotNone(normalized.failure)
         self.assertEqual(normalized.failure.code, "agent_failed")
         self.assertTrue(any("outside the active role contracts" in gap for gap in normalized.gaps))
+        self.assertTrue(any("Allowed relation types for active roles" in gap for gap in normalized.gaps))
+
+    def test_merge_flow_leg_prefers_document_over_high_confidence_hypothesis(self) -> None:
+        from agentloom.contracts import FlowLeg, OperationalGraphState
+        from agentloom.operational_graph import normalize_graph_state
+
+        leg_doc = FlowLeg(
+            legId="l-doc",
+            supplierNodeId="facility:a",
+            customerNodeId="facility:b",
+            productNodeId="product:p",
+            confidence=0.55,
+            supportType="document",
+        )
+        leg_hyp = FlowLeg(
+            legId="l-hyp",
+            supplierNodeId="facility:a",
+            customerNodeId="facility:b",
+            productNodeId="product:p",
+            confidence=0.99,
+            supportType="hypothesis",
+        )
+        graph = OperationalGraphState(entityNodes=[], flowLegs=[leg_doc, leg_hyp], processSteps=[], overlayEdges=[])
+        norm = normalize_graph_state(graph)
+        self.assertEqual(len(norm.flow_legs), 1)
+        self.assertEqual(norm.flow_legs[0].support_type, "document")
+        self.assertGreaterEqual(float(norm.flow_legs[0].confidence), 0.55)
 
     def test_branch_does_not_converge_while_open_questions_remain(self) -> None:
         plan = BranchPlan(
@@ -2809,7 +3922,7 @@ class AgentLoomRuntimeTest(unittest.TestCase):
             humanQuestion="Which concrete sink replaces the placeholder?",
             humanSummary="BASF Schwarzheide replaces the broad sink.",
             branchId="sink",
-            patchMode="replace_node",
+            patchMode="replace_entity",
             oldId="facility:german-battery-plant",
             patchRationale="The broad sink is replaced by a concrete facility.",
             observations=[
@@ -3004,6 +4117,131 @@ class AgentLoomRuntimeTest(unittest.TestCase):
         self.assertEqual(len(report["groundedCompleteChains"]), 0)
         self.assertEqual(len(report["structurallyCompleteChains"]), 1)
         self.assertEqual(report["structurallyCompleteChains"][0]["sink"], "BASF Schwarzheide")
+
+    def test_reachability_keeps_aggregate_market_pool_route_partial(self) -> None:
+        report = _graph_reachability_report(
+            {
+                "working_graph": {
+                    "entityNodes": [
+                        {"nodeId": "deposit:atacama", "label": "Salar de Atacama", "entityType": "DEPOSIT", "confidence": 0.9, "supportType": "document"},
+                        {"nodeId": "facility:sqm", "label": "SQM Salar Processing Plant", "entityType": "FACILITY", "confidence": 0.9, "supportType": "document"},
+                        {"nodeId": "organization:global-market-pool", "label": "Global Market Pool", "entityType": "ORGANIZATION", "confidence": 0.6, "supportType": "hypothesis"},
+                        {"nodeId": "facility:basf", "label": "BASF Schwarzheide", "entityType": "FACILITY", "confidence": 0.7, "supportType": "hypothesis"},
+                        {"nodeId": "facility:cell-plant", "label": "German Cell Plant", "entityType": "FACILITY", "confidence": 0.7, "supportType": "hypothesis"},
+                        {"nodeId": "product:lithium-carbonate", "label": "Lithium Carbonate", "entityType": "PRODUCT", "confidence": 0.9, "supportType": "document"},
+                        {"nodeId": "product:cam", "label": "Cathode Active Material", "entityType": "PRODUCT", "confidence": 0.7, "supportType": "hypothesis"},
+                    ],
+                    "flowLegs": [
+                        {
+                            "legId": "leg-1",
+                            "supplierNodeId": "facility:sqm",
+                            "customerNodeId": "organization:global-market-pool",
+                            "productNodeId": "product:lithium-carbonate",
+                            "confidence": 0.8,
+                            "supportType": "document",
+                        },
+                        {
+                            "legId": "leg-2",
+                            "supplierNodeId": "organization:global-market-pool",
+                            "customerNodeId": "facility:basf",
+                            "productNodeId": "product:lithium-carbonate",
+                            "confidence": 0.6,
+                            "supportType": "hypothesis",
+                        },
+                        {
+                            "legId": "leg-3",
+                            "supplierNodeId": "facility:basf",
+                            "customerNodeId": "facility:cell-plant",
+                            "productNodeId": "product:cam",
+                            "confidence": 0.6,
+                            "supportType": "hypothesis",
+                        },
+                    ],
+                    "processSteps": [
+                        {
+                            "stepId": "step-extract",
+                            "hostNodeId": "facility:sqm",
+                            "processKind": "extraction",
+                            "inputNodeIds": ["deposit:atacama"],
+                            "outputNodeIds": ["product:lithium-carbonate"],
+                            "confidence": 0.9,
+                            "supportType": "document",
+                        },
+                        {
+                            "stepId": "step-cam",
+                            "hostNodeId": "facility:basf",
+                            "processKind": "transformation",
+                            "inputNodeIds": ["product:lithium-carbonate"],
+                            "outputNodeIds": ["product:cam"],
+                            "confidence": 0.6,
+                            "supportType": "hypothesis",
+                        },
+                    ],
+                    "overlayEdges": [],
+                }
+            }
+        )
+
+        self.assertEqual(len(report["structurallyCompleteChains"]), 0)
+        self.assertTrue(report["partialChains"])
+        self.assertIn("aggregate intermediary", report["partialChains"][0]["breakReason"])
+
+    def test_acceptance_block_reason_flags_aggregate_intermediaries(self) -> None:
+        graph_state = {
+            "entityNodes": [
+                {"nodeId": "organization:global-market-pool", "label": "Global Market Pool", "entityType": "ORGANIZATION", "confidence": 0.6, "supportType": "hypothesis"},
+            ],
+            "flowLegs": [],
+            "processSteps": [],
+            "overlayEdges": [],
+        }
+        aggregates = _aggregate_intermediary_nodes_from_graph(graph_state_from_raw(graph_state))
+
+        self.assertEqual(len(aggregates), 1)
+        self.assertEqual(aggregates[0]["label"], "Global Market Pool")
+
+        block_reason = _acceptance_block_reason(
+            BranchPlan(
+                branchId="root_chain",
+                hypothesis="A root chain exists.",
+                hypothesisRelation="root",
+                pathKind="overview",
+                humanQuestion="What is the end-to-end chain?",
+                humanAction="Build the chain.",
+                closureTarget="Produce a business-complete chain.",
+                knownContext=[],
+                frontier=[],
+                assignedRoles=[ROLE_SUPPLY_CHAIN],
+                preferredTools=["reason"],
+                targetEntities=[],
+                fragmentType="overview_chain",
+            ),
+            BranchState(
+                branchId="root_chain",
+                hypothesis="A root chain exists.",
+                pathKind="overview",
+                pathAssessment="still_open",
+                pathAssessmentNote="Still open.",
+                humanQuestion="What is the end-to-end chain?",
+                humanSummary="Still open.",
+                closureTarget="Produce a business-complete chain.",
+                knownContext=[],
+                assignedRoles=[ROLE_SUPPLY_CHAIN],
+                status="needs_followup",
+                qualityScore=0.3,
+                stagnationCount=0,
+                stopReason="",
+                resolvedFrontier=[],
+                remainingFrontier=[],
+                openQuestions=[],
+                toolActions=[],
+                toolResults=[],
+                graphFragments=[],
+            ),
+            {STATE_WORKING_GRAPH: graph_state},
+        )
+
+        self.assertIn("aggregate intermediaries", block_reason.lower())
 
     def test_reachability_hypothesis_terminal_sink_is_structurally_complete_not_partial(self) -> None:
         report = _graph_reachability_report(
@@ -3440,8 +4678,8 @@ class AgentLoomRuntimeTest(unittest.TestCase):
             STATE_SELECTED_ROLES: [ROLE_SUPPLY_CHAIN, ROLE_GOVERNANCE],
             STATE_WORKING_GRAPH: [],
         }
-        out, pc = _delegate_constraints(st, dec, cycle=3, user_question="Who owns the mine?")
-        self.assertIsNotNone(pc)
+        out, pcs = _delegate_constraints(st, dec, cycle=3, user_question="Who owns the mine?")
+        self.assertTrue(pcs)
         self.assertEqual(out.next_agent, "supply_chain_investigator_agent")
         self.assertIsNotNone(out.mission)
         self.assertEqual(out.mission.assigned_roles, [ROLE_SUPPLY_CHAIN])
@@ -3550,6 +4788,69 @@ class AgentLoomRuntimeTest(unittest.TestCase):
         self.assertFalse(normalized.truncation)
         self.assertEqual(len(normalized.graph_delta), 8)
 
+    def test_normalize_preserves_investigation_todo_updates(self) -> None:
+        mission = InvestigationMission(
+            missionId="m",
+            objective="o",
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            groundingMode="mixed",
+        )
+        raw = AgentResult(
+            agentName="supply_chain_investigator_agent",
+            missionId="m",
+            status="success",
+            summary="s",
+            investigationTodoUpdates=[
+                InvestigationTodoUpdateItem(todoId="flow-abc", status="in_progress", blockedReason=""),
+            ],
+        )
+        normalized = _normalize_agent_result(raw, mission, [ROLE_SUPPLY_CHAIN])
+        self.assertEqual(len(normalized.investigation_todo_updates), 1)
+        self.assertEqual(normalized.investigation_todo_updates[0].todo_id, "flow-abc")
+
+    def test_apply_investigation_todo_updates_from_agent(self) -> None:
+        todos = [
+            {"todoId": "a1", "phase": "flow_backbone", "status": "pending", "title": "t"},
+        ]
+        out = apply_investigation_todo_updates_from_agent(
+            todos,
+            [{"todoId": "a1", "status": "done", "blockedReason": ""}],
+        )
+        self.assertEqual(out[0]["status"], "done")
+
+    def test_trajectory_fixture_intent_seed_phases(self) -> None:
+        path = os.path.join(os.path.dirname(__file__), "fixtures", "trajectory_intent_bootstrap.json")
+        with open(path, encoding="utf-8") as f:
+            fx = json.load(f)
+        req = AgentLoomRequest.model_validate(fx["request"])
+        roles = fx["selectedRoles"]
+        intent, _meta = extract_question_intent_bundle(req, roles)
+        seeded = seed_investigation_todos(intent, roles)
+        phases = [x.get("phase") for x in seeded]
+        self.assertEqual(phases, fx["expectedPhases"])
+
+    def test_graph_reachability_includes_intent_debug(self) -> None:
+        from agentloom.agent import STATE_QUESTION_INTENT, STATE_REQUEST, STATE_WORKING_GRAPH, _graph_reachability_report
+
+        st = {
+            STATE_REQUEST: {"question": "from X to Y", "corpusDocuments": [], "requestedRoles": []},
+            STATE_QUESTION_INTENT: {
+                "sourceScope": "X",
+                "sinkScope": "Y",
+                "corridorActive": True,
+                "wantsAlternatives": False,
+                "wantsOwnership": False,
+                "wantsPolicy": False,
+                "intentSchemaVersion": 1,
+                "extractionNotes": "",
+                "extractionConfidence": 0.0,
+            },
+            STATE_WORKING_GRAPH: {"entityNodes": [], "flowLegs": [], "processSteps": [], "overlayEdges": []},
+        }
+        r = _graph_reachability_report(st)
+        dbg = r.get("requestedCorridorIntentDebug") or {}
+        self.assertTrue(dbg.get("usedQuestionIntent"))
+
     def test_delegate_constraints_stagnation_escalates_to_critic(self) -> None:
         mission = InvestigationMission(
             missionId="m",
@@ -3565,7 +4866,7 @@ class AgentLoomRuntimeTest(unittest.TestCase):
             mission=mission,
         )
         st = {
-            STATE_GLOBAL_STAGNATION: agentloom_limits.STAGNATION_FORCE_CRITIC_CYCLES,
+            STATE_GLOBAL_STAGNATION: agentloom_limits.STAGNATION_IDLE_INVESTIGATOR_REDIRECT_CYCLES,
             STATE_LOGIC_TRACE: [],
             STATE_SELECTED_ROLES: [ROLE_SUPPLY_CHAIN],
             STATE_WORKING_GRAPH: {
@@ -3620,8 +4921,8 @@ class AgentLoomRuntimeTest(unittest.TestCase):
             STATE_OPEN_GAP_STREAK: 0,
             STATE_LAST_GAP_FINGERPRINT: "",
         }
-        out, pc = _delegate_constraints(st, dec, cycle=5, user_question="q?")
-        self.assertIsNotNone(pc)
+        out, pcs = _delegate_constraints(st, dec, cycle=5, user_question="q?")
+        self.assertTrue(pcs)
         self.assertEqual(out.next_agent, "critic_agent")
 
     def test_delegate_constraints_defers_critic_without_business_complete_chain(self) -> None:
@@ -3639,7 +4940,7 @@ class AgentLoomRuntimeTest(unittest.TestCase):
             mission=mission,
         )
         st = {
-            STATE_GLOBAL_STAGNATION: agentloom_limits.STAGNATION_FORCE_CRITIC_CYCLES,
+            STATE_GLOBAL_STAGNATION: agentloom_limits.STAGNATION_IDLE_INVESTIGATOR_REDIRECT_CYCLES,
             STATE_LOGIC_TRACE: [],
             STATE_SELECTED_ROLES: [ROLE_SUPPLY_CHAIN, ROLE_GOVERNANCE],
             STATE_WORKING_GRAPH: {
@@ -3676,9 +4977,9 @@ class AgentLoomRuntimeTest(unittest.TestCase):
             STATE_LAST_GAP_FINGERPRINT: "gap-1",
         }
 
-        out, pc = _delegate_constraints(st, dec, cycle=4, user_question="q?")
+        out, pcs = _delegate_constraints(st, dec, cycle=4, user_question="q?")
 
-        self.assertIsNotNone(pc)
+        self.assertTrue(pcs)
         self.assertEqual(out.next_agent, "supply_chain_investigator_agent")
         self.assertEqual(out.mission.assigned_roles, [ROLE_SUPPLY_CHAIN])
 
@@ -3688,6 +4989,409 @@ class AgentLoomRuntimeTest(unittest.TestCase):
             fixture = json.load(f)
         rep = _unified_progress_report(fixture["state"])
         self.assertEqual(rep["materialProgressLastStep"], fixture["expected"]["materialProgressLastStep"])
+
+    def test_regex_corridor_and_heuristic_intent(self) -> None:
+        q = "Map flows from Chile brine to Germany battery cell plants."
+        corridor = regex_operational_corridor_dict(q)
+        self.assertTrue(corridor.get("active"))
+        req = AgentLoomRequest(question=q, corpusDocuments=[], requestedRoles=[])
+        intent, meta = extract_question_intent_bundle(req, [ROLE_SUPPLY_CHAIN])
+        self.assertEqual(meta.intent_source, "fallback")
+        self.assertGreaterEqual(meta.intent_latency_ms, 0.0)
+        self.assertTrue(intent.corridor_active)
+
+    def test_investigation_todos_merge_and_required_gate(self) -> None:
+        intent = QuestionIntent(
+            sourceScope="A",
+            sinkScope="B",
+            corridorActive=True,
+            wantsAlternatives=False,
+            wantsOwnership=False,
+            wantsPolicy=False,
+        )
+        todos = seed_investigation_todos(intent, [ROLE_SUPPLY_CHAIN])
+        st: dict = {STATE_INVESTIGATION_TODOS: todos}
+        merged = merge_todos_after_graph_progress(
+            st,
+            todos_key=STATE_INVESTIGATION_TODOS,
+            grounded_complete_chains=1,
+            structural_complete_chains=0,
+            partial_chains=0,
+            requested_corridor_satisfied=True,
+        )
+        self.assertTrue(required_todos_satisfied(merged))
+        phases_done = {x.get("phase") for x in merged if x.get("status") == "done"}
+        self.assertIn("flow_backbone", phases_done)
+        self.assertIn("compose_prep", phases_done)
+
+    def test_orchestration_compose_blocked_when_todos_required(self) -> None:
+        state = {
+            STATE_LAST_CRITIC_VERDICT: {
+                "compositionRecommendation": "recommend",
+                "investigationEpoch": 3,
+            },
+            STATE_INVESTIGATION_EPOCH: 3,
+            STATE_INVESTIGATION_TODOS: [
+                {"phase": "corridor", "status": "pending", "todoId": "t1", "title": "c"},
+            ],
+        }
+        with mock.patch("agentloom.agent.COMPOSE_REQUIRES_TODOS_SATISFIED", True):
+            ok, detail = _orchestration_policy_allow_compose(state)
+        self.assertFalse(ok)
+        self.assertEqual(detail, "investigation_todos_not_satisfied")
+
+    def test_delegate_constraints_respects_min_grounded_chains(self) -> None:
+        mission = InvestigationMission(
+            missionId="m",
+            objective="critic pass",
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            groundingMode="mixed",
+        )
+        dec = SupervisorDecision(
+            cycle=2,
+            assessment="",
+            rationale=["to critic"],
+            nextAgent="critic_agent",
+            mission=mission,
+        )
+        st = {
+            STATE_GLOBAL_STAGNATION: 0,
+            STATE_LOGIC_TRACE: [],
+            STATE_SELECTED_ROLES: [ROLE_SUPPLY_CHAIN],
+            STATE_WORKING_GRAPH: {"entityNodes": [], "flowLegs": [], "processSteps": [], "overlayEdges": []},
+            STATE_OPEN_GAP_STREAK: 0,
+        }
+        fake_reach = {
+            "groundedCompleteChainCount": 0,
+            "structuralCompleteChainCount": 2,
+            "groundedCompleteChains": [],
+            "structurallyCompleteChains": [{"x": 1}],
+            "partialChains": [],
+        }
+        with mock.patch("agentloom.agent._graph_reachability_report", return_value=fake_reach):
+            with mock.patch.object(delegation_policy, "CRITIC_MIN_GROUNDED_CHAINS", 1):
+                out, pcs = _delegate_constraints(st, dec, cycle=2, user_question="q?")
+        self.assertTrue(pcs)
+        self.assertEqual(out.next_agent, "supply_chain_investigator_agent")
+
+    def test_pack_critic_bundle_has_stable_keys(self) -> None:
+        from agentloom.context_helpers import pack_critic_bundle
+
+        b = pack_critic_bundle(
+            {"missionId": "m1"},
+            ["supply_chain"],
+            [],
+            {"documentCount": 0, "documents": []},
+            {"groundedCompleteChainCount": 0},
+            question_intent={"corridorActive": False},
+            intent_meta={"intentSource": "fallback"},
+            investigation_todos_compact=[{"todoId": "x", "title": "t", "phase": "corridor", "status": "pending"}],
+            shared_memory_compact={"question": "q"},
+        )
+        for key in (
+            "mission",
+            "reachability",
+            "questionIntent",
+            "intentExtractionMeta",
+            "investigationTodos",
+            "sharedMemory",
+            "investigationPreflight",
+            "redTeamArtifact",
+            "redTeamSatisfied",
+        ):
+            self.assertIn(key, b)
+
+    def test_compact_shared_memory_for_critic_is_smaller_than_full(self) -> None:
+        mem = {
+            "question": "x" * 8000,
+            "openGaps": [f"g{i}" for i in range(40)],
+            "hypotheses": [{"id": i} for i in range(20)],
+            "learnedFindings": [{"f": i} for i in range(30)],
+            "reachability": {
+                "healthSummary": "ok",
+                "groundedCompleteChainCount": 1,
+                "structuralCompleteChainCount": 0,
+                "partialChainCount": 2,
+                "partialChains": [{"sink": "s", "sinkType": "X", "breakReason": "b"}] * 15,
+                "groundedCompleteChains": [{"hops": 3}] * 10,
+            },
+            "progress": {},
+            "operationalCounts": {},
+            "graphObservationCount": 5,
+        }
+        compact = _compact_shared_memory_for_critic(mem)
+        self.assertLess(len(json.dumps(compact)), len(json.dumps(mem)))
+
+    def test_eligible_evidence_ledger_includes_ancestor_branch_entries(self) -> None:
+        e_parent = EvidenceLedgerEntry(
+            id="ev_parent_1",
+            tool="retrieve",
+            branchId="par",
+            summary="p",
+            sourceDocuments=["d1"],
+        )
+        e_child_only = EvidenceLedgerEntry(
+            id="ev_child_1",
+            tool="supply_qa",
+            branchId="child",
+            summary="c",
+            sourceDocuments=[],
+        )
+        parent_bs = BranchState(
+            branchId="par",
+            hypothesis="h",
+            humanQuestion="q",
+            humanSummary="",
+            closureTarget="t",
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            hypothesisEvidenceLedger=[e_parent],
+        ).model_dump(mode="json", by_alias=True)
+        child_bs = BranchState(
+            branchId="child",
+            hypothesis="h2",
+            parentHypothesisId="par",
+            hypothesisRelation="dependent_followup",
+            humanQuestion="q2",
+            humanSummary="",
+            closureTarget="t2",
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            hypothesisEvidenceLedger=[e_child_only],
+        ).model_dump(mode="json", by_alias=True)
+        state = {
+            STATE_BRANCH_STATES: [parent_bs, child_bs],
+            STATE_EVIDENCE_LEDGER: [
+                {"id": "sess_x", "tool": "retrieve", "branchId": "par", "summary": "sx", "sourceDocuments": []},
+            ],
+        }
+        ids = _eligible_evidence_ledger_entry_ids(state, "child")
+        self.assertEqual({"ev_parent_1", "ev_child_1", "sess_x"}, ids)
+
+    def test_update_branch_state_seeds_parent_ledger_for_independent_child(self) -> None:
+        seed = [
+            EvidenceLedgerEntry(
+                id="snap1",
+                tool="retrieve",
+                branchId="par",
+                summary="s",
+                sourceDocuments=[],
+            )
+        ]
+        plan = BranchPlan(
+            branchId="newchild",
+            hypothesis="alt",
+            parentHypothesisId="par",
+            hypothesisRelation="independent_child",
+            spawnReason="spawn",
+            independenceBasis="basis",
+            humanQuestion="hq",
+            humanAction="ha",
+            closureTarget="ct",
+            knownContext=[],
+            frontier=["f"],
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            fragmentType="alternative_chain",
+        )
+        action = ToolAction(
+            actionId="a1",
+            branchId="newchild",
+            pathKind="alternative",
+            toolName="supply_qa",
+            humanQuestion="hq",
+            humanAction="ha",
+            whyThisQuestion="w",
+            closureTarget="ct",
+            knownContext=[],
+            frontier=["f"],
+            queryText="{}",
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            targetEntities=[],
+            expectedFragmentType="chain_fragment",
+        )
+        result = ToolActionResult(
+            actionId="a1",
+            branchId="newchild",
+            toolName="supply_qa",
+            pathAssessment="still_open",
+            pathAssessmentNote="n",
+            status="success",
+            humanSummary="ans",
+            closureStatus="unchanged",
+            resolvedFrontier=[],
+            remainingFrontier=["f"],
+            discoveredFrontier=[],
+            graphFragments=[],
+            learnedFindings=[],
+            uncoveredQuestions=[],
+            sourceDocuments=["cite"],
+            failure=None,
+        )
+        entry = EvidenceLedgerEntry(
+            id="ev_new",
+            tool="supply_qa",
+            branchId="newchild",
+            summary="ans",
+            sourceDocuments=["cite"],
+        )
+        updated = _update_branch_state(
+            None,
+            plan,
+            action,
+            result,
+            seed_hypothesis_ledger=seed,
+            ledger_entry=entry,
+        )
+        self.assertEqual([e.id for e in updated.parent_ledger_snapshot], ["snap1"])
+        ledger_ids = [e.id for e in updated.hypothesis_evidence_ledger]
+        self.assertIn("snap1", ledger_ids)
+        self.assertIn("ev_new", ledger_ids)
+
+    def test_replacement_patch_hop_regression_suppressed_when_flag_on(self) -> None:
+        from agentloom.operational_graph import empty_graph_state
+
+        g = empty_graph_state()
+        with mock.patch("agentloom.agent.DISABLE_REPLACE_HOP_REGRESSION", True):
+            with mock.patch(
+                "agentloom.agent._graph_reachability_report_for_graph",
+                side_effect=[
+                    {
+                        "groundedCompleteChainCount": 0,
+                        "structuralCompleteChainCount": 1,
+                        "maxOperationalRouteHops": 6,
+                        "partialChains": [{"breakReason": "gap"}],
+                    },
+                    {
+                        "groundedCompleteChainCount": 0,
+                        "structuralCompleteChainCount": 1,
+                        "maxOperationalRouteHops": 2,
+                        "partialChains": [{"breakReason": "gap"}],
+                    },
+                ],
+            ):
+                reason = _replacement_patch_regression_reason(g, g)
+        self.assertEqual(reason, "")
+
+    def test_supply_graph_patch_apply_prompt_wire_example_unmarshals(self) -> None:
+        from agentloom.contracts import SupplyGraphPatchApply
+        from agentloom.prompt_fragments import SUPPLY_GRAPH_PATCH_APPLY_WIRE_EXAMPLE
+        from agentloom.wire_unmarshal import unmarshal_wire_model
+
+        patch = unmarshal_wire_model(
+            SupplyGraphPatchApply,
+            SUPPLY_GRAPH_PATCH_APPLY_WIRE_EXAMPLE,
+            context=" (shared prompt example)",
+        )
+        self.assertEqual(patch.schema_version, 1)
+        self.assertEqual(patch.patch_id, "patch-example-unique-per-branch")
+        self.assertTrue(patch.graph_fragments)
+
+    def test_apply_supply_graph_patch_idempotent_skips_second_mutation(self) -> None:
+        frag = GraphFragment(
+            fragmentId="f-ap",
+            fragmentType="chain_fragment",
+            title="t",
+            humanQuestion="q",
+            humanSummary="s",
+            branchId="b1",
+            observations=[],
+            completeness="partial",
+            qualityScore=0.5,
+        )
+        payload = {
+            "patchId": "p1",
+            "branchId": "b1",
+            "evidenceRefIds": ["e1"],
+            "graphFragments": [frag.model_dump(mode="json", by_alias=True)],
+        }
+        state = {
+            STATE_EVIDENCE_LEDGER: [
+                {"id": "e1", "tool": "supply_qa", "branchId": "b1", "summary": "x", "sourceDocuments": []}
+            ],
+            STATE_WORKING_GRAPH: {"entityNodes": [], "flowLegs": [], "processSteps": [], "overlayEdges": []},
+            STATE_GRAPH_FRAGMENTS: [],
+            STATE_BRANCH_STATES: [],
+        }
+        ctx = _StateToolContext(state)
+        action = ToolAction(
+            actionId="x",
+            branchId="b1",
+            pathKind="direct",
+            toolName="apply_supply_graph_patch",
+            humanQuestion="q",
+            humanAction="a",
+            whyThisQuestion="w",
+            closureTarget="c",
+            knownContext=[],
+            frontier=[],
+            queryText=json.dumps(payload),
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            targetEntities=[],
+            expectedFragmentType="chain_fragment",
+        )
+        with mock.patch("agentloom.agent._apply_graph_fragment_mutations") as m:
+            r1 = apply_supply_graph_patch(action, ctx)
+            r2 = apply_supply_graph_patch(action, ctx)
+        self.assertEqual(r1.status, "success")
+        self.assertEqual(r2.status, "success")
+        self.assertEqual(len(m.mock_calls), 1)
+        self.assertIn("b1:p1", state.get(STATE_APPLIED_SUPPLY_PATCH_KEYS) or [])
+
+    def test_read_shared_memory_evidence_ledger_compact_and_slim_branch_ledgers(self) -> None:
+        many = [
+            EvidenceLedgerEntry(
+                id=f"ev{i}",
+                tool="retrieve",
+                branchId="br1",
+                summary="x" * 200,
+                sourceDocuments=[f"d{i}"] if i % 2 == 0 else [],
+            )
+            for i in range(12)
+        ]
+        br = BranchState(
+            branchId="br1",
+            hypothesis="h",
+            humanQuestion="q",
+            humanSummary="",
+            closureTarget="t",
+            assignedRoles=[ROLE_SUPPLY_CHAIN],
+            hypothesisEvidenceLedger=many,
+            parentLedgerSnapshot=many[:3],
+        ).model_dump(mode="json", by_alias=True)
+        state = {
+            "working_graph": {"entityNodes": [], "flowLegs": [], "processSteps": [], "overlayEdges": []},
+            "selected_roles": [ROLE_SUPPLY_CHAIN],
+            "input_request": AgentLoomRequest(
+                question="q", corpusDocuments=[], requestedRoles=[]
+            ).model_dump(mode="json", by_alias=True),
+            "current_mission": {},
+            "graph_fragments": [],
+            "branch_states": [br],
+            "evidence_ledger": [
+                {"id": "s1", "tool": "supply_qa", "branchId": "br1", "summary": "y" * 120, "sourceDocuments": ["c"]}
+            ],
+            "hypothesis_turns": [],
+            "hypotheses": [],
+            "failures": [],
+            "answered_questions": [],
+            "open_gaps": [],
+            "learned_findings": [],
+            "agent_result_history": [],
+            "last_agent_result": {},
+            "investigation_todos": [],
+            "question_intent": {},
+            "intent_extraction_meta": {},
+            "global_stagnation_count": 0,
+            "progress_history": [],
+        }
+        mem = read_shared_memory(_StateToolContext(state))
+        compact = mem.get("evidenceLedgerCompact") or {}
+        self.assertEqual(compact.get("sessionEntryTotal"), 1)
+        self.assertEqual(len(compact.get("sessionTail") or []), 1)
+        self.assertEqual((compact.get("sessionTail") or [{}])[0].get("id"), "s1")
+        self.assertLessEqual(len((compact.get("sessionTail") or [{}])[0].get("summaryPreview") or ""), 99)
+        b0 = (mem.get("branches") or [{}])[0]
+        self.assertEqual(b0.get("hypothesisEvidenceLedgerTotal"), 12)
+        self.assertLessEqual(len(b0.get("hypothesisEvidenceLedger") or []), 6)
+        self.assertEqual(b0.get("parentLedgerSnapshotTotal"), 3)
 
 
 if __name__ == "__main__":

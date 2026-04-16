@@ -30,7 +30,7 @@ tenantFilter := fmt.Sprintf("tenantId:\"%s\" OR tenantId:\"global\"", auth.Tenan
 
 **Использование**:
 ```bash
-./scripts/setup-vertex-search-sync.sh -p sanskrite
+./scripts/setup-vertex-search-sync.sh -p inquire-data-84889
 ```
 
 ### 3. Поддержка глобальных документов
@@ -96,10 +96,10 @@ Response
 ### 1. Настройка (один раз)
 ```bash
 # Настроить автоматическую синхронизацию
-./scripts/setup-vertex-search-sync.sh -p sanskrite
+./scripts/setup-vertex-search-sync.sh -p inquire-data-84889
 
 # Проверить работу
-./scripts/test-vertex-search.sh -p sanskrite
+./scripts/test-vertex-search.sh -p inquire-data-84889
 ```
 
 ### 2. Загрузка документов
@@ -153,7 +153,7 @@ err := docsRepo.Upsert(ctx, globalDoc)
 
 ### Тест 1: Базовая работоспособность
 ```bash
-./scripts/test-vertex-search.sh -p sanskrite
+./scripts/test-vertex-search.sh -p inquire-data-84889
 
 # Ожидаемый результат:
 # ✅ Data Store exists
@@ -198,19 +198,19 @@ gcloud discovery-engine operations list \
 
 ### Количество документов
 ```bash
-./scripts/test-vertex-search.sh -p sanskrite | grep "indexed documents"
+./scripts/test-vertex-search.sh -p inquire-data-84889 | grep "indexed documents"
 ```
 
 ## Next Steps
 
 1. **Запустить setup скрипт**:
    ```bash
-   ./scripts/setup-vertex-search-sync.sh -p sanskrite
+   ./scripts/setup-vertex-search-sync.sh -p inquire-data-84889
    ```
 
 2. **Проверить работу**:
    ```bash
-   ./scripts/test-vertex-search.sh -p sanskrite
+   ./scripts/test-vertex-search.sh -p inquire-data-84889
    ```
 
 3. **Создать тестовые документы** для разных тенантов и проверить изоляцию

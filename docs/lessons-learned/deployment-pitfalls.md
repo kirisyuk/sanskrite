@@ -99,7 +99,7 @@ done
 **Что делали**:
 ```bash
 # Deploy #1
-gcloud run deploy --set-env-vars "GCP_PROJECT_ID=sanskrite,VAR1=val1"
+gcloud run deploy --set-env-vars "GCP_PROJECT_ID=inquire-data-84889,VAR1=val1"
 
 # Deploy #2 (добавляем VAR2)
 gcloud run services update --update-env-vars "VAR2=val2"
