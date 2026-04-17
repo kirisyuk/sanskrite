@@ -33,4 +33,11 @@ fi
 
 echo "AgentHorde lithium smoke: project=$GOOGLE_CLOUD_PROJECT cycles=$AGENTHORDE_MAX_SUPERVISOR_CYCLES input=$INPUT" >&2
 
-exec python3 "$ROOT/runner_cli.py" --input-file "$INPUT"
+OUT="$(python3 "$ROOT/runner_cli.py" --input-file "$INPUT")"
+printf '%s\n' "$OUT"
+
+if command -v jq >/dev/null 2>&1; then
+  echo "$OUT" | jq -e '.canonicalGraph != null' >/dev/null
+  echo "$OUT" | jq -e '(.canonicalGraph.graph.fragments | type) == "array" and (.canonicalGraph.graph.edges | type) == "array"' >/dev/null
+  echo "$OUT" | jq -e '(.canonicalGraph.evidenceArchive.sources | type) == "array" and (.canonicalGraph.evidenceArchive.links | type) == "array"' >/dev/null
+fi

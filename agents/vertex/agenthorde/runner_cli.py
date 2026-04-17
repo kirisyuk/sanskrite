@@ -27,8 +27,11 @@ from agenthorde.config import (  # noqa: E402
     APP_NAME,
     SESSION_ID,
     USER_ID,
+    STATE_ANALYZER_OUTPUT_KEY,
     STATE_FINAL_ANSWER_KEY,
+    STATE_GOVERNANCE_OUTPUT_KEY,
     STATE_PACK_KEY,
+    STATE_TOOL_LEDGER_KEY,
 )
 from agenthorde.agents.supervisor import root_agent  # noqa: E402
 
@@ -79,6 +82,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Parse and print normalized input JSON then exit (no Vertex calls).",
     )
+    p.add_argument(
+        "--skip-canonicalizer",
+        action="store_true",
+        help="Skip post-run canonicalizer (no extra LLM / Firestore for dictionaries).",
+    )
     return p.parse_args()
 
 
@@ -103,7 +111,7 @@ def _normalize_input_text(raw: str) -> str:
     return json.dumps({"question": raw}, ensure_ascii=False)
 
 
-async def _run_async(user_text: str) -> dict[str, Any]:
+async def _run_async(user_text: str, *, skip_canonicalizer: bool = False) -> dict[str, Any]:
     session_service = InMemorySessionService()
     await session_service.create_session(app_name=APP_NAME, user_id=USER_ID, session_id=SESSION_ID)
     runner = Runner(agent=root_agent, app_name=APP_NAME, session_service=session_service)
@@ -114,16 +122,33 @@ async def _run_async(user_text: str) -> dict[str, Any]:
     if session is None:
         raise RuntimeError("Session not found after run")
     st = dict(session.state or {})
-    return {
+    out: dict[str, Any] = {
         "finalAnswer": st.get(STATE_FINAL_ANSWER_KEY, ""),
         "pack": st.get(STATE_PACK_KEY, {}),
         "supervisorDecision": st.get("ah_supervisor_decision", {}),
-        "analyzerOutput": st.get("ah_analyzer_output", {}),
-        "governanceOutput": st.get("ah_governance_output", {}),
+        "analyzerOutput": st.get(STATE_ANALYZER_OUTPUT_KEY, {}),
+        "governanceOutput": st.get(STATE_GOVERNANCE_OUTPUT_KEY, {}),
         "criticOutput": st.get("ah_critic_output", {}),
         "redTeamOutput": st.get("ah_red_team_output", {}),
-        "toolLedger": st.get("ah_tool_ledger", []),
+        "toolLedger": st.get(STATE_TOOL_LEDGER_KEY, []),
     }
+    if not skip_canonicalizer:
+        from agenthorde.canonicalizer import canonicalize
+        from agenthorde.canonicalizer.schemas import CanonicalizerInput
+
+        cin = CanonicalizerInput(
+            pack=out.get("pack") or {},
+            analyzer_output=out.get("analyzerOutput") or {},
+            governance_output=out.get("governanceOutput") or {},
+            tool_ledger=out.get("toolLedger") or [],
+            final_answer=out.get("finalAnswer") or "",
+            run_id=SESSION_ID,
+        )
+        cg = await canonicalize(cin)
+        out["canonicalGraph"] = cg.model_dump(mode="json", by_alias=True)
+    else:
+        out["canonicalGraph"] = None
+    return out
 
 
 def main() -> None:
@@ -135,7 +160,7 @@ def main() -> None:
         return
     project, location = _configure_vertex_oauth_runtime()
     print(f"AgentHorde: Vertex project={project} location={location}", file=sys.stderr)
-    out = asyncio.run(_run_async(normalized))
+    out = asyncio.run(_run_async(normalized, skip_canonicalizer=args.skip_canonicalizer))
     print(json.dumps(out, ensure_ascii=False, indent=2))
 
 

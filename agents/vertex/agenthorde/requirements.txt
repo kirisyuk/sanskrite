@@ -1,3 +1,6 @@
 google-adk
 google-genai
 pydantic
+google-cloud-firestore
+rapidfuzz
+unidecode

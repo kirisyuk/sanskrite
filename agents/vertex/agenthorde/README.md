@@ -185,9 +185,10 @@ Greenfield **Vertex AI** + **Google ADK** (`google.adk`) experiment: one supervi
 
 - **`natural_person` / ключевое физлицо:** UBO, председатель, номинальный контролёр (пример прогона: фигура в роли UBO и chair)
 - **`legal_person` (каркас) и типичные подтипы:** `private_holdco`, `listed_issuer`, `operating_subsidiary`, `spv` / `restricted_scope_company` (RSC), `sovereign_wealth_fund`, `private_equity_firm`, `strategic_corporate_investor`, `family_office`, `private_conglomerate`, `state_linked_operating_company` (примеры: холдинг группы, дочки облака/данных, листинги на ADX, SPV владения, Mubadala, Silver Lake, Microsoft, семейный офис, Royal Group-тип)
-- **`fund` / инвестиционная программа:** подтипы вроде `state_backed_ai_fund`, `divestment_or_transition_fund` (пример: совместный ИИ-фонд, фонд в сюжете реструктуризации портфеля)
-- **`asset_manager` / allocator:** когда в тексте важен именно **менеджер** активов после передачи фонда (пример сюжета: переход управления с одной структуры на другую при том же UBO-контуре)
-- **`listing_venue` + `security`:** биржа/площадка и торгуемый инструмент (тикер) — отдельно от «компании как эмитента»; **free zone / financial_center:** субнациональная зона права (пример: ADGM как юрисдикция инкорпорации холдинга)
+- **`fund` / инвестиционная программа** — подтип `/org` (`fund`): вроде `state_backed_ai_fund`, `divestment_or_transition_fund` (пример: совместный ИИ-фонд, фонд в сюжете реструктуризации портфеля)
+- **`asset_manager` / allocator** — подтип `/org` (`asset_manager`): когда в тексте важен именно **менеджер** активов после передачи фонда (пример сюжета: переход управления с одной структуры на другую при том же UBO-контуре)
+- **`listing_venue`** — подтип `/org` (`exchange`); **`security` / тикер** → `/market/ticker/{exchange}/{symbol}` — отдельно от «компании как эмитента»
+- **`financial_center_freezone`** — подтип `/geo` (`freezone`): субнациональная зона права (пример: ADGM как юрисдикция инкорпорации холдинга)
 - **Совместные предприятия:** по умолчанию моделировать как **два (или более) `legal_person` + ребро** `joint_venture_with` с долями и датой на ребре; отдельный узел «JV» — только если нужен якорь для нескольких связанных событий
 - **Сделки и раунды:** сумма инвестиции, выкуп миноритария, слияние — чаще **`corporate_transaction`** как узел-событие с рёбрами к участникам *или* атрибутированное ребро `invested_in` / `acquired_stake` между юрлицами (не дублировать и то и другое без нужды)
 
@@ -209,199 +210,593 @@ Greenfield **Vertex AI** + **Google ADK** (`google.adk`) experiment: one supervi
 
 ### Сводная таблица классов (каркас + домен прогона)
 
-| Базовый класс | Типичные подтипы (примеры) | Домен | Примеры из прогонов |
-|-----------------|----------------------------|--------|----------------------|
-| Strait / waterway | — | supply | Malacca, Lombok, Sunda, Hormuz, Red Sea, SOMS, SCS |
-| Canal / cape | — | supply | Suez, Cape of Good Hope |
-| Country / city-state | — | supply / governance | CN, JP, Gulf states, UAE … |
-| Port / hub | `container`, `bulk`, `lng` | supply | Singapore, Port Klang, Tanjung Pelepas, Dumai |
-| Strategic geography | — | supply | Andaman & Nicobar |
-| Legal person | `oil_trader`, `shipping_line`, `miner`, `noc_major` | supply | Unipec, Shell, MSC, Rio Tinto, … |
-| Legal person | `private_holdco`, `listed_issuer`, `operating_subsidiary`, `spv`, `swf`, `pe_firm`, `strategic_investor`, `family_office`, `private_conglomerate` | governance | G42 holdco, Core42, Presight, Mubadala, Silver Lake, Microsoft, … |
-| Natural person | `ubo`, `chair`, `director` | governance | UBO / chair в сюжете владения |
-| Fund / programme | `state_backed_ai_fund`, `transition_fund` | governance | совместный ИИ-фонд, фонд в сюжете дайвеста |
-| Asset manager | — | governance | менеджер после передачи фонда (сюжет реструктуризации) |
-| Listing venue + security | `exchange`, `ticker` | governance | ADX, PRESIGHT, SPACE42 |
-| Subnational jurisdiction | `financial_center_freezone` | governance | ADGM |
-| Vessel class | — | supply | VLCC, Capesize, ULCS, … |
-| Commodity | — | supply | crude, iron ore, containers, … |
-| Trade lane | — | supply | Asia–Europe, Intra-Asia |
-| Infrastructure project | — | supply | CPEC, Thai Land Bridge, … |
-| Risk / policy concept | — | supply | Malacca dilemma, JWC, piracy, … |
-| Market / traffic metric | — | supply | bpd, TEU, transits, SCFI, hull % |
-| Institution / alliance | — | supply | OPEC, joint patrols |
-| Evidence | по домену см. выше | оба | домены из `web_search` grounding |
+Столбец **Канон. путь** — первый сегмент из замкнутого enum (11 классов; полный реестр — в разделе «Канонический путь» ниже). **Подтип** передаётся вторым сегментом или атрибутом узла, **не** отдельным первым сегментом.
+
+| Канон. путь | Подтипы (примеры) | Домен | Примеры из прогонов |
+|-------------|-------------------|--------|----------------------|
+| `/org` | `oil_trader`, `shipping_line`, `miner`, `noc_major` | supply | Unipec, Shell, MSC, Rio Tinto, … |
+| `/org` | `private_holdco`, `listed_issuer`, `operating_subsidiary`, `spv`, `swf`, `pe_firm`, `strategic_investor`, `family_office`, `asset_manager` | governance | G42 holdco, Core42, Presight, Mubadala, Silver Lake, Microsoft, … |
+| `/org` | `gov_body` | supply / governance | регуляторы, министерства |
+| `/org` | `fund` (`state_backed_ai_fund`, `transition_fund`) | governance | совместный ИИ-фонд, фонд в сюжете дайвеста |
+| `/org` | `exchange` | governance | ADX, LSE, NASDAQ |
+| `/person` | `ubo`, `chair`, `director` | governance | UBO / chair в сюжете владения |
+| `/geo` | `strait`, `sea`, `ocean` | supply | Malacca, Lombok, Sunda, Hormuz, Red Sea, SOMS, SCS |
+| `/geo` | `canal`, `cape` | supply | Suez, Cape of Good Hope |
+| `/geo` | `country`, `city_state` | supply / governance | CN, JP, Gulf states, UAE … |
+| `/geo` | `archipelago`, `isle` | supply | Andaman & Nicobar |
+| `/geo` | `freezone`, `financial_center` | governance | ADGM, DIFC |
+| `/site` | `port` (`container`, `bulk`, `lng`, `mixed`) | supply | Singapore, Port Klang, Tanjung Pelepas, Dumai |
+| `/site` | `facility` (`refinery`, `smelter`, `terminal`) | supply | — |
+| `/site` | `deposit` | supply | — |
+| `/product` | `commodity`, `material`, `intermediate` | supply | crude, iron ore, LNG, containers, … |
+| `/vessel_class` | `tanker`, `bulker`, `container`, `lng_carrier` | supply | VLCC, Capesize, ULCS, … |
+| `/route` | `corridor` | supply | Asia–Europe, Intra-Asia |
+| `/route` | `leg` (`sea`, `rail`, `road`, `pipeline`) | supply | — |
+| `/market` | `index`, `benchmark` | supply | bpd, TEU, SCFI, hull % |
+| `/market` | `ticker` | governance | PRESIGHT, SPACE42 |
+| `/regime` | `regulatory` | supply | JWC, EU CBAM, санкционный список |
+| `/regime` | `risk` | supply | Malacca dilemma, piracy, war_risk |
+| `/regime` | `incoterm` | supply | FOB, CIF, … |
+| `/project` | `infrastructure` | supply | CPEC, Thai Land Bridge, … |
+| `/project` | `programme` | supply / governance | BRI, нац. стратегии |
+| `/project` | `operation` | supply | совместные патрули ID–MY–SG |
+| `/evidence` | `source` | оба | домены из `web_search` grounding |
+| `/evidence` | `claim` | оба | реифицированные утверждения |
 
 ## Канонический путь (экспериментальная таксономия)
 
-Отдельно от продуктового канона репозитория: **канонический путь** — это многосегментный идентификатор. **Первый сегмент** задаёт **класс объекта**. **Второй и далее** — уточнение (часто **ISO2** для «привязанных к земле» сущностей; для продуктов — **стадия передела / подвид / спецификация**, а не страна как «вторая буква»).
+**Канонический путь** — многосегментный идентификатор сущности. **Первый сегмент** задаёт **класс объекта** (замкнутый enum — полный реестр ниже, он же используется в столбце «Канон. путь» сводной таблицы классов выше). **Второй и далее** — уточнение (часто **ISO2** для «привязанных к земле» сущностей; для продуктов — **стадия передела / подвид / спецификация**, а не страна как «вторая буква»).
 
-### Базовые классы (уже заданные)
+### Полный реестр первых сегментов (замкнутый enum — 11 классов)
 
-| Префикс | Смысл |
-|---------|--------|
-| `/org` | Организация как юридическое лицо |
-| `/gov` | Государственный орган |
-| `/fac` | Предприятие / завод / объект эксплуатации на суше |
-| `/deposit` | Месторождение / рудное тело / солончак и т.п. |
-| `/product` | Продукт / материал / номенклатура |
+Если объект не ложится ни на один из 11 — это кандидат на расширение enum, а не повод вкладывать его ad hoc в существующий путь.
 
-**Второй сегмент:** для `/org`, `/gov`, `/fac` — обычно **ISO2** (HQ, юрисдикция регистрации, страна площадки / филиала). Для `/product` — **стадия цепи или подвид** (не «страна продукта» во втором сегменте); страна появляется **ребром** (`produced_in`, `shipped_from`) к `/geo` или `/port`.
+| # | Префикс | Что покрывает | 2-й сегмент (типичный) | Примеры подтипов |
+|---|---------|---------------|------------------------|------------------|
+| 1 | `/org` | Любое юрлицо, госорган, фонд, биржа | ISO2 юрисдикции / HQ | `private_holdco`, `listed_issuer`, `spv`, `swf`, `pe_firm`, `family_office`, `noc`, `shipping_line`, `miner`, `gov_body`, `fund`, `exchange`, `asset_manager` |
+| 2 | `/person` | Физическое лицо (UBO, director, chair) | ISO2 гражданства / резидентства | `ubo`, `chair`, `director`, `nominee` |
+| 3 | `/geo` | География: страна, пролив, море, канал, мыс, freezone | ISO2 или нормализованный slug | `country`, `city_state`, `strait`, `sea`, `ocean`, `canal`, `cape`, `archipelago`, `isle`, `region`, `freezone`, `financial_center` |
+| 4 | `/site` | Физическая точка: порт, завод, месторождение | ISO2 → город-slug или LOCODE | `port` (`container`, `bulk`, `lng`, `mixed`), `facility` (`refinery`, `smelter`, `terminal`), `deposit` |
+| 5 | `/product` | Товар / материал / номенклатура | `{family}/{slug}` | см. схему ниже |
+| 6 | `/vessel_class` | Класс судна | контролируемый словарь / IMO | `tanker`, `bulker`, `container`, `lng_carrier` |
+| 7 | `/route` | Маршрут, коридор, нога перевозки | режим или slug коридора | `corridor`, `leg` (`sea`, `rail`, `road`, `air`, `pipeline`) |
+| 8 | `/market` | Рыночный инструмент, индекс, тикер | провайдер + код | `index`, `benchmark`, `ticker` |
+| 9 | `/regime` | Нормативная рамка: режим, риск, инкотерм | юрисдикция → код | `regulatory`, `risk`, `incoterm` |
+| 10 | `/project` | Инициатива: проект, программа, операция | `transnational` или ISO2 → slug | `infrastructure`, `programme`, `operation` |
+| 11 | `/evidence` | Мета-слой: источник, утверждение | домен / hash | `source`, `claim` |
 
-### Расширения под географию, логистику и рынки
+#### Зачем `/site` отдельно от `/geo`
 
-| Префикс | Смысл | Идея сегментов после класса |
-|---------|--------|-----------------------------|
-| `/geo` | Географическая единица (не предприятие) | подтип: `country`, `region`, `strait`, `isle`, `archipelago`, `sea`, `ocean`, `canal`, `cape` → далее ISO2 или нормализованный slug |
-| `/port` | Порт / морской терминал как узел логистики | ISO2 → город-slug или LOCODE; подвид: `container`, `bulk`, `lng`, `mixed` |
-| `/route` | Именованный маршрут / коридор | например `/route/maritime/asia-europe`, `/route/maritime/intra-asia` |
-| `/leg` | Нога перевозки (абстракция «от узла к узлу») | режим: `sea`, `rail`, `road`, `air`, `pipeline` → при необходимости индекс или стабильный хэш пары узлов |
-
-**Зачем `/port` отдельно от `/fac`:** у порта часто несколько операторов и юрлиц; инфраструктурный узел ≠ завод на берегу.
-
-### Суда, рынки, режимы, события
-
-| Префикс | Смысл | Сегменты |
-|---------|--------|----------|
-| `/vessel_class` | Класс судна (VLCC, Capesize, …) | контролируемый словарь или группа IMO |
-| `/market` | Рынок / инструмент (индекс фрахта, Brent front, …) | провайдер + код индекса |
-| `/regime` | Регуляторный или нормативный режим (JWC listing, EU CBAM, санкционный список) | юрисдикция → короткий код режима |
-| `/risk` | Тип риска (piracy, war_risk, choke_point_dependency) | привязка к узлам — **ребром**, не обязательно в пути |
-| `/incoterm` | Инкотерм как концепт | версия ICC + код, напр. `/incoterm/2020/fob` |
-
-### Проекты, программы, операции
-
-| Префикс | Смысл | Сегменты |
-|---------|--------|----------|
-| `/project` | Крупный инфраструктурный проект (CPEC, Thai Land Bridge) | `transnational` или ведущая ISO2 → slug |
-| `/program` | Госпрограмма / инициатива (рамка вроде BRI) | код программы; связь с `/gov` — ребром |
-| `/patrol` | Совместная операция (напр. трёхсторонний патруль) | ISO2 участников в фиксированном порядке |
-
-### Доказательность и знание
-
-| Префикс | Смысл | Сегменты |
-|---------|--------|----------|
-| `/source` | Источник утверждения | домен → id материала или стабильный хэш URL |
-| `/claim` | Нормализованное утверждение (если реифицируете) | GUID или хэш содержимого |
+`/geo` — абстрактная география (страна, пролив, море). `/site` — конкретная физическая точка эксплуатации (порт, завод, месторождение). У одного `/site` может быть несколько операторов (`/org`), а один `/geo` может содержать множество `/site`. Связь между ними — ребро `located_in`.
 
 ### Схема для `/product`
 
-Предлагаемая нарезка после `/product`:
+`/product/{family}/{slug}`
 
-`/product/{stage}/{family}/{grade-or-spec}`
+- **`family`:** `lithium`, `crude`, `coal`, `battery`, `semiconductor`, `steel`, …  
+- **`slug`:** конкретный продукт: `spodumene-concentrate`, `lithium-carbonate`, `battery-cell`, `thermal-coal`, …
 
-- **`stage`:** `raw`, `concentrate`, `chemical_intermediate`, `battery_grade`, `scrap`, …  
-- **`family`:** `lithium_compound`, `crude`, `thermal_coal`, …  
-- **`grade-or-spec`:** HS-подобный код, внутренний SKU или `unspecified`.
-
-Географию цепи к продукту вешать **ребрами**, а не смешивать с классом продукта.
+Стадия передела (raw → intermediate → finished) **не кодируется в пути** — она выводится из позиции продукта в цепочке площадок (см. «Продуктовые трансформации: site-centric модель»). Географию цепи к продукту вешать **ребрами**, а не смешивать с классом продукта.
 
 ### Правила целостности пути
 
-1. **Первый сегмент** — из **замкнутого enum** классов.  
-2. **Второй сегмент** — чаще всего **уточнитель класса** (ISO2 для привязанных к территории сущностей; **код подвида** для «без страны»).  
-3. **Дальше** — только **сужение** (город, slug, код, стадия). Юрлицо не вкладывать в путь `/port` — только ребро `operated_by` → `/org/...`.
+1. **Первый сегмент** — строго из **enum выше** (11 классов).  
+2. **Второй сегмент** — **подтип или уточнитель**: ISO2 для привязанных к территории; код подвида для остальных.  
+3. **Дальше** — только **сужение** (город, slug, код, стадия).  
+4. **Не вкладывать** одну сущность в путь другой: юрлицо не в `/site`, физлицо не в `/org` — только **ребро** (`operated_by`, `beneficially_owns`, …).
 
-Так покрываются проливы, порты, коридоры, индексы, режимы, проекты и доказательности без смешения с `/org` и `/fac`.
+## Типы связей (6 слоёв)
 
-## Типы связей в модели (supply chain + governance)
+Связи — **направленные рёбра** между узлами из 11 классов выше. Инверсную связь отдельно не именуем: `subsidiary_of` A→B — это и есть «B parent of A» (направление хранится на ребре). **Доли, суммы, даты, source** — атрибуты ребра, а не отдельные узлы.
 
-Не про формат лога AgentHorde, а про **семейства отношений** между объектами онтологии выше: что к чему относится и в каком смысле. Одна и та же пара сущностей без типа связи неоднозначна (например «Сингапур — VLCC» vs «инвестор A — 42 % эмитента B»). Имеет смысл **разделять слои**: материальный граф, **капитал и контроль**, контрактный, ограничения, риск, доказательность.
+### Атрибут `layer` на ребре
 
-Разделы **1–2** в основном про **supply chain**; **3** частично пересекается с governance (владение/операции); **9** — то, что **прямо просится** из прогонов в духе **G42** (иерархия юрлиц, доли, СП, совет, листинг, реструктуризация). **Доли, суммы сделок, даты, voting vs economic** — атрибуты **ребра**, а не новые классы узлов.
+Одна и та же связь (например `supplies`) может описывать разные уровни реальности. Вместо отдельных графов — **один граф**, но каждое ребро несёт атрибут **`layer`**:
 
-### 1. Продукт и материальный поток
+| `layer` | Что означает | Темп изменений | Пример |
+|---------|-------------|----------------|--------|
+| `structural` | Возможность / топология: маршрут существует, порт способен принять, компания в принципе торгует | месяцы–годы | `leg_connects` SG→Rotterdam, `operates` PSA→Singapore port |
+| `contractual` | Обязательство: offtake, charter party, долгосрочный контракт | недели–годы | `supplies` Trafigura→Sinopec (5-year offtake, 2M t/y) |
+| `flow` | Факт: конкретная отгрузка, рейс, инцидент | однократно | `supplies` Trafigura→Sinopec (март 2025, 80k t, VLCC «Xxx») |
 
-| Связь (идея) | Смысл |
-|----------------|--------|
-| `flows_as` / `is_instance_of_flow` | Конкретная партия или поток относится к классу груса |
-| `originates_at` | Где для данного scope начинается отслеживаемый поток |
-| `terminates_at` / `consumed_at` | Где поток заканчивается в рамках анализа |
-| `transforms_into` / `processes_into` | Переход по переделу (отдельно от «тот же SKU в другом узле») |
-| `bundled_with` / `co_shipped` | Совместная перевозка или одна сделка, разные SKU |
+Если `layer` не указан, ребро считается `structural`. Аналогия с governance: `subsidiary_of` = `structural`, корпоративное событие (`invested_in`) = `flow`.
 
-### 2. Топология: узлы и ноги
+### 1. Материальный поток и топология
 
-| Связь | Смысл |
-|--------|--------|
-| `adjacent_in_chain` | Соседство «до / после» без детализации режима |
-| `leg_connects` | Нога между двумя узлами (режим: море, ж/д, авто, труба и т.д.; направление; при необходимости перевозчик) |
-| `transshipment_at` | Смена судна или режима в хабе |
-| `uses_corridor` / `passes_through` | Поток или рейс через именованный коридор или choke point |
-| `alternate_route_to` | Сценарная альтернатива тому же origin–destination |
+Физическое движение товара от `/site` к `/site` через `/route`. Трансформация продукта — **свойство узла `/site`**, а не ребро между `/product` (см. раздел «Продуктовые трансформации: site-centric модель»).
 
-### 3. Акторы и роли
+| Связь | A → B | Смысл | Допустимые `layer` | Типичные атрибуты ребра |
+|--------|-------|--------|-------------------|-------------------------|
+| `supplies` | `/site` → `/site` | Поставка **одного** продукта между площадками (атомарное ребро); несколько товаров между той же парой — **несколько** `supplies` | structural, contractual, flow | Обязательно: `product` (путь) и после канонизации `product_fragment_id` → id узла `/product`. Опционально: `incoterm` ∈ Incoterms 2020 (`FOB`, `CIF`, `CFR`, `FCA`, `DAP`, ...). Тот же `incoterm`-атрибут допустим на `charters` |
+| `leg_connects` | `/site` → `/site` \| `/route` \| `/geo` или `/route` → `/site` \| `/geo` | Нога перевозки: две площадки, площадка ↔ коридор, коридор ↔ площадка/регион | structural, flow | `mode`, `carrier` → `/org`, `direction` |
+| `transships_at` | `/route` → `/site` или `/route` → `/geo` | Смена судна или режима в хабе | structural, flow | — |
+| `passes_through` | `/route` → `/geo` \| `/site` \| `/route` или `/vessel_class` → `/route` \| `/site` \| `/geo` | Маршрут или класс судна проходит через пролив, канал, choke point, или другой route-узел | structural | — |
+| `alternate_to` | `/route` → `/route` или `/site` → `/site` | Сценарная альтернатива (тот же O–D, другой путь / узел) | structural | `delta_cost`, `delta_days` |
+| ~~`co_shipped`~~ *(удалено)* | — | Совместная перевозка: несколько атомарных `supplies` между той же парой site с разным `product` / `product_fragment_id` | flow | — |
 
-| Связь | Смысл |
-|--------|--------|
-| `owns` / `operates` | В supply chain: актив или услуга (терминал, флот, доля в хабе). В governance: см. также **9** — там разведение **экономического пакета**, **голоса** и **совета** |
-| `charters` / `contracts_transport` | Кто заказывает перевозку |
-| `offtakes` / `supplies` / `sells_to` | Контрактная цепочка объёмов |
-| `regulates` / `inspects_at` | Государство или администрация к зоне или узлу |
+Связи `originates_at` / `terminates_at` / `transforms_into` **убраны**: начало и конец цепочки определяются крайними `/site` в графе; transform — атрибут узла `/site`.
 
-Роли вешать **ребром с типом**, а не смешивать организацию с путём порта или пролива.
+#### Проекции supply-chain (`kind`-лейблы)
 
-### 4. Коммерция и распределение риска
+Одна relation из закрытого словаря может жить на **разных уровнях абстракции** — physical, commercial, actor-level, aggregate. Канонизатор не скрывает и не сливает эти уровни: каждому признанному `(from_class, to_class)` срезу соответствует явный семантический `kind`-лейбл, который стемпится в `CanonicalEdge.attributes.kind` в phase 4.
 
-| Связь | Смысл |
-|--------|--------|
-| `priced_or_risk_allocated_under` | Сделка или нога под инкотермом или типовой схемой |
-| `pays_for` / `insures` | Кто платит фрахт, кто держит полис |
-| `benchmarked_to` | Поток или ставка привязана к рыночному индексу |
+Пример для `supplies`:
 
-### 5. Физика, ёмкость, совместимость
+| endpoint-пара | `kind` | что это значит |
+|---------------|--------|----------------|
+| `/site` → `/site` | `physical_leg` | физическая нога цепочки (Ras Tanura → Qingdao) |
+| `/org` → `/org` | `commercial` | контракт seller→buyer (Saudi Aramco → Unipec) |
+| `/org` → `/geo` | `actor_to_region` | актор на рынок региона (Saudi Aramco → China) |
+| `/org` → `/route` | `actor_via_corridor` | актор оперирует через коридор (Unipec via Malacca) |
+| `/geo` → `/geo` | `trade_flow` | макро-поток между регионами (Australia → China iron ore) |
 
-| Связь | Смысл |
-|--------|--------|
-| `constrained_by` | Узел или класс судна ограничен осадкой, габаритом, правилами пролива |
-| `requires_handling_capability` | Тип груза требует терминала или береговой линии |
-| `competes_for` | Общий лимит (очередь у причала, пропускная способность узкого места) |
+Полный каталог проекций для всех relation закрытого словаря и blacklist нонсенсных пар — в [docs/horizon/architecture/supply-chain-relation-endpoint-kinds.md](../../../docs/horizon/architecture/supply-chain-relation-endpoint-kinds.md).
 
-### 6. Регуляторика и комплаенс
+**Трёх-уровневая endpoint-валидация:**
 
-| Связь | Смысл |
-|--------|--------|
-| `subject_to_regime` | Узел, сделка или поток под нормативным режимом |
-| `requires_evidence_for` | Требование due diligence / ESG привязано к звену или продукту |
+- **recognized** — пара в каталоге → ребро с `attributes.kind = <label>`.
+- **unspecified** — пара **не** в каталоге и **не** в blacklist → ребро с `attributes.kind = "unspecified"` + запись в `candidates.unknown_relations` (reason `endpoint_pair_not_in_catalog`) + soft warning в `validationReport.relationKindWarnings`. Downstream видит факт, не теряя информации; каталог может быть расширен post-hoc.
+- **forbidden** — пара в blacklist → ребро **не** строится, запись в `candidates.unknown_relations` (reason `forbidden_endpoint_pair`) + hard error в `validationReport.relationErrors` (code `relation_endpoints_forbidden`).
 
-### 7. Риски и сценарии
+Агентские промпты ничего не знают об этой системе — весь type-матчинг живёт в канонизаторе (separation principle: «agent reasons — canonicalizer types»).
 
-| Связь | Смысл |
-|--------|--------|
-| `exposes_to_risk` | Звено цепи подвержено риску |
-| `mitigated_by` | Мера или альтернативный маршрут снижает риск |
-| `under_hypothesis` | Утверждение или ветка держится на сценарии |
+### 2. Акторы и операции
 
-### 8. Доказательность (отдельный слой)
+Кто что делает на цепочке. Субъект — всегда `/org` (или `/org/gov_body`). Ребро `supplies` между площадками (§1) описывает **что** течёт; связи ниже — **кто** стоит за площадкой.
 
-| Связь | Смысл |
-|--------|--------|
-| `asserted_by` / `supported_by_source` | Утверждение о цепи к источнику |
-| `contradicts` / `supersedes` | Конкурирующие факты; более свежий источник |
+| Связь | A → B | Смысл | Допустимые `layer` | Типичные атрибуты |
+|--------|-------|--------|-------------------|-------------------|
+| `operates` | `/org` → `/site` | Оператор порта, завода, месторождения | structural | `role` (`terminal_operator`, `concessionaire`, …) |
+| `charters` | `/org` → `/vessel_class` | Заказчик фрахтует тоннаж | contractual, flow | `charter_type` (`time`, `voyage`, `coa`), `period` |
+| `regulates` | `/org` → `/geo` или `/site` | Госорган к зоне или объекту | structural | `regime` → `/regime` |
 
-### 9. Корпоративное владение, капитал и управление (governance, G42-style)
+### 3. Ограничения, режимы и риски
 
-Связи между **`legal_person`**, **`natural_person`**, **`fund`**, **`listing_venue`**, **`security`**, зоной права (`financial_center_freezone`). Типичные атрибуты ребра: `pct`, `economic_pct`, `voting_pct`, `amount`, `currency`, `as_of`, `round`, `source`, `disclosed_vs_inferred`.
+Всё, что лимитирует, обуславливает или угрожает звеньям цепочки. Почти всегда `structural` — ограничения и режимы меняются медленно.
 
-| Связь | Смысл |
-|--------|--------|
-| `subsidiary_of` / `parent_of` | Иерархия холдинга (операционная дочка или SPV над эмитентом) |
-| `majority_controls` / `minority_invests` | Контрольный vs миноритарный пакет (проценты на ребре; при необходимости два ребра, если economic ≠ voting) |
-| `beneficially_owns` / `is_ubo_of` | Физлицо или конечный бенефициар к объекту владения / к холдингу |
-| `controls_via` | Де-факто контроль с указанием механизма: `board_chair`, `veto`, `shareholder_agreement`, `golden_share`, … |
-| `holds_board_seat` / `nominates_director` | Место в совете или номинация (Microsoft / Silver Lake в сюжете стратегических инвесторов) |
-| `joint_venture_with` | СП между двумя юрлицами; доли **на ребре** или симметричная пара рёбер |
-| `invested_in` / `funding_round` | Денежный раунд или стратегическая инвестиция (сумма, дата, оценка доли в тексте) |
-| `acquired_stake_from` | Выкуп доли у третьего лица (сюжет «мажоритарий выкупил миноритария») |
-| `asset_swap_or_contribution` | Вклад активов в обмен на долю (сюжет SWF + передача дочерних IT-активов) |
-| `merged_into` / `spun_out_from` | Слияние дочерних платформ, выделение листинга |
-| `listed_on` | Эмитент к площадке; тикер и класс бумаги — атрибуты связи к **`security`** |
-| `incorporated_in` | Юрлицо к субнациональной зоне права (ADGM и т.п.) |
-| `managed_by` | Фонд или программа к **`asset_manager`** |
-| `divested_to` / `transferred_management_to` | Передача портфеля или мандата управления другой структуре (сюжет фонда и смены менеджера при том же UBO-контуре) |
-| `same_control_cluster_as` | Осторожно: «общий контур контроля» между юрлицами без доказанного единого каптейбла — только с флагом уверенности |
+| Связь | A → B | Смысл | Допустимые `layer` | Типичные атрибуты |
+|--------|-------|--------|-------------------|-------------------|
+| `constrained_by` | `/site` \| `/vessel_class` \| `/route` → `/geo` \| `/route` \| `/site` | Осадка, габарит, правила пролива, пропускная способность choke point | structural | `parameter`, `limit_value` |
+| `requires_capability` | `/product` → `/site` | Тип груза требует оборудования терминала | structural | `capability` (`lng_regas`, `deep_draft`, …) |
+| `subject_to` | любой → `/regime` | Узел, сделка или поток под нормативным режимом | structural, flow | `since`, `status` |
+| `exposes_to` | любой → `/regime/risk` | Звено подвержено риску | structural | `severity`, `probability` |
+| `mitigated_by` | `/regime/risk` → `/route` или `/org` | Мера или альтернатива снижает риск | structural | `residual_risk` |
+| `priced_under` | `/route` или leg → `/regime/incoterm` | Сделка / нога под инкотермом | contractual, flow | — |
+| `benchmarked_to` | `/product` или leg → `/market` | Поток привязан к индексу | contractual | — |
 
-**Принцип:** не смешивать «плывёт через» с «подтверждено источником»; в governance — не смешивать **`minority_invests`** без даты/источника с **`beneficially_owns`**; не подменять **трансформацию продукта** синонимией или **сборкой** обычной зависимостью — в духе канонического control plane продукта в репозитории.
+### 4. Владение и контроль
+
+Кто кем владеет, кто контролирует, где зарегистрирован. Субъекты: `/org`, `/person`. Объекты: `/org`, `/geo/freezone`, `/market/ticker`. По умолчанию `structural`; события — `flow`.
+
+| Связь | A → B | Смысл | Допустимые `layer` | Типичные атрибуты |
+|--------|-------|--------|-------------------|-------------------|
+| `subsidiary_of` | `/org` → `/org` | Дочка → материнская (холдинг, SPV) | structural | `pct`, `economic_pct`, `voting_pct` |
+| `beneficially_owns` | `/person` → `/org` | UBO / конечный бенефициар | structural | `pct`, `mechanism` |
+| `controls_via` | `/person` или `/org` → `/org` | Де-факто контроль: `board_chair`, `veto`, `golden_share`, `shareholder_agreement` | structural | `mechanism`, `source` |
+| `holds_board_seat` | `/org` или `/person` → `/org` | Место в совете / номинация директора | structural | `role` (`chair`, `independent`, `nominee`) |
+| `joint_venture_with` | `/org` → `/org` | СП; доли на ребре | structural | `pct`, `as_of` |
+| `listed_on` | `/org` → `/market/ticker` | Эмитент → тикер на площадке | structural | `exchange`, `instrument_class` |
+| `incorporated_in` | `/org` → `/geo` | Юрлицо → юрисдикция регистрации | structural | `zone` (`freezone`, `onshore`) |
+| `managed_by` | `/org` → `/org` | Фонд / программа → управляющий | structural | — |
+
+**Каталог (слой `layer_section: catalog`):**
+
+| Связь | A → B | Смысл | `layer` | Примечание |
+|--------|-------|--------|---------|------------|
+| `produces` | `/org` → `/product` | Организация выпускает линейку продукта (class-level, не SKU) | structural | Отдельный разрез от supply-chain; тот же узел `/product` используется в `supplies` как cargo |
+
+#### Корпоративные события (`layer: flow`, порождают / меняют structural-рёбра §4)
+
+Моделируются как ребро с `layer: flow` и `event_type` + `as_of`, либо как узел-событие `/evidence/claim` kind `corporate_event`.
+
+| Событие (`event_type`) | Смысл | Что порождает / меняет |
+|---------|--------|---------------|
+| `invested_in` | Денежный раунд / стратегическая инвестиция | `subsidiary_of` с `pct` |
+| `acquired_stake_from` | Выкуп доли у третьего лица | изменение `pct` на `subsidiary_of` |
+| `asset_contribution` | Вклад активов в обмен на долю | новый `subsidiary_of` |
+| `merged_into` | Слияние дочерних платформ | удаление одного `/org`, перенос рёбер |
+| `spun_out` | Выделение / IPO | новый `/org` + `listed_on` |
+| `divested_to` | Передача портфеля / мандата | смена `managed_by` или `subsidiary_of` |
+
+### 5. Доказательность
+
+Мета-слой выведен **из графа** в `EvidenceArchive` (см. «Evidence archive» ниже). В `graph.edges` **нет** больше `asserted_by` / `supported_by` / `contradicts` / `under_hypothesis`, и в `graph.fragments` нет `/evidence/claim`, `/evidence/counter`, `/evidence/hypothesis` анкоров.
+
+Связь claim ↔ бизнес-ребро сохраняется через `CanonicalEdge.sourceClaimIds` (список `n*` id). Связь claim ↔ источник, counter ↔ claim, claim ↔ hypothesis — живут в `evidenceArchive.links` / `evidenceArchive.counters[*].contradicts_claim_id` / `evidenceArchive.claims[*].hypothesis_id`. Имена отношений `asserted_by`, `supported_by`, `contradicts`, `under_hypothesis` остаются в словаре ради обратной совместимости, но phase 7 их не эмитит.
+
+### Сводка
+
+| | Supply chain | Governance | Типичный `layer` |
+|-|-------------|------------|------------------|
+| §1 Поток и топология | основной | — | structural + flow |
+| §2 Акторы и операции | основной | частично (`operates`) | structural + contractual + flow |
+| §3 Ограничения и режимы | основной | частично (`subject_to` / санкции) | structural |
+| §4 Владение и контроль | частично (концессии) | основной | structural; события = flow |
+| §5 Доказательность | оба | оба | — (мета) |
+
+**Принцип:** не смешивать `passes_through` (физика) с `asserted_by` (мета); `structural` ребро и `flow` ребро с одним и тем же именем — это разные утверждения о мире; в governance — не подменять `subsidiary_of` (`structural`) событием `invested_in` (`flow`) без разделения; transform — свойство `/site`, а не ребро между `/product` (canonical transform dictionary — constraint, не элемент графа).
+
+## Архитектура: агенты рассуждают, канонизатор строит граф
+
+### Принцип разделения фаз
+
+AgentHorde работает в **две фазы**, и они не смешиваются.
+
+**Фаза 1 — исследование (агенты).** Supervisor гоняет worker-агентов (`supply_chain_analyzer`, `governance_control_analyzer`, critic, red team). Агенты ищут данные через `web_search` (grounded в Vertex), рассуждают, выдвигают гипотезы, проверяют их. Результат — `reasoningGraph` из свободных `claim` / `hypothesis_anchor` / `question` / `tool_evidence` нод. Агенты **не фокусируются на таксономии**: их цель — рассуждать, а не расставлять canonical paths. «G42», «Group 42», «G42 Ltd» могут появляться как разные упоминания — это нормально.
+
+**Фаза 2 — канонизация (один проход после `finalize`).** Канонизатор получает полный `reasoningGraph` + `finalAnswer` и за один проход:
+
+1. **Дедуплицирует** сущности (G42 = Group 42 = G42 Ltd → один `/org/ae/g42`)
+2. **Типизирует** — из свободного текста claim выделяет узлы с canonical paths из 11 классов
+3. **Строит граф связей** — из текста «Mubadala owns majority stake in G42» делает `subsidiary_of` ребро с `pct`, `layer: structural`, `source`
+4. **Привязывает transform** к `/site` — проверяет по canonical transform dictionary
+5. **Структурирует метрики** — «42% stake» → structured metric с confidence и provenance
+6. **Валидирует** — canonical paths, relation types, product slugs
+
+Канонизатор — **гибрид LLM + детерминированный код**: LLM для NER и relation extraction из свободного текста (код не поймёт из контекста, что «Sheikh Tahnoon» — UBO); код для дедупликации, canonical path resolution, lookup в словарях синонимов/трансформов и финальной валидации.
+
+### Почему не на лету
+
+- **Полный контекст.** Канонизатор видит весь результат целиком — может дедуплицировать по-настоящему, а не по одному claim.
+- **Агент не теряет фокус.** Каждый токен на каноническое форматирование — это токен, не потраченный на рассуждение.
+- **Нет петли.** На лету канонизация ×N циклов = N × латентность. Один проход в конце = 1 × латентность.
+- **Нет конфликта имён.** Если канонизатор на лету переименовал сущность, а агент в следующем цикле ищет по старому имени — хаос.
+- **Отладка.** Сырой output агента и канонизированный граф — две отдельные вещи. Можно сравнить, найти потери.
+
+### Что на выходе канонизатора
+
+Структурированный граф, готовый к записи в ядро: узлы с canonical paths, типизированные рёбра с атрибутами и `layer`, structured metrics с provenance. Это то, что раньше строил детерминированный пайплайн ядра — теперь строит агентская среда + канонизатор.
+
+### Pre-structured relations от аналитика (`proposedRelations`)
+
+Помимо `proposedNodes`, `supply_chain_analyzer` и `governance_control_analyzer` обязаны эмитить **`proposedRelations`** — структурные рёбра между теми же поверхностными метками, которые упомянуты в `proposedNodes[*].text`. Это закрывает проблему «`workingGraph.edges = []` при том, что `finalAnswer` буквально напичкан связями».
+
+Форма строки:
+
+```json
+{
+  "src": "Tesla, Inc.",
+  "dst": "Model S",
+  "relation": "produces",
+  "attributes": { "as_of": "2024-01-01" },
+  "sourceClaimIds": ["n1"]
+}
+```
+
+- `relation` — закрытый список AH (`supplies`, `produces`, `operates`, `transships_at`, `passes_through`, `listed_on`, `subsidiary_of`, `beneficially_owns`, ...).
+- Для `supplies` обязателен `attributes.product` (surface cargo) и опционален `attributes.incoterm` (Incoterms 2020).
+- Несколько cargo между одной парой site — **несколько** `supplies`-строк (multi-edge, не массив).
+
+Путь данных:
+
+1. `_merge_analyzer_into_pack` (supervisor) кладёт их в `SessionPack.proposedRelations` с дедупом по `(src, dst, relation)`.
+2. Phase 0 канонизатора собирает их из pack + текущих analyzer/governance outputs в `WorkingState.analyzer_relations`.
+3. Phase 4 делает **pre-pass**: surface → entity через `normalize_surface`/`slugify`, прогоняет через тот же synonym/swap/endpoint/supplies-cargo pipeline, что и LLM-output. Результат передаётся LLM как `known_edges` в payload, чтобы не дублировать. Финал = union(pre_pass, llm_extended) с дедупом по `(src_id, dst_id, relation, layer_section)` (+ `product_fragment_id` для `supplies`, чтобы multi-cargo не схлопывался).
+
+Pre-pass-рёбра маркируются `qualifiers.origin = "analyzer_proposed"` для аудита.
+
+### Evidence archive: вне графа
+
+`EvidenceArchive` — аудит-слой, отдельный от `CanonicalGraph`. Содержит пять списков:
+
+- `sources` — `EvidenceSource` по одной записи на URL (`sha16(url)`).
+- `links` — `EvidenceLink`: `claim_id → source_id` (`asserted_by` top-1, `supported_by` fan-out с рангом и score).
+- `claims` — `EvidenceClaim` (id / text / hypothesis_id) для всех claim-ов, которые где-то использованы (в `edge.sourceClaimIds`, в `metric.provenance.claim_ids` или просто присутствуют в reasoning graph).
+- `hypotheses` — `EvidenceHypothesis` (id / text) по всем уникальным `hypothesis_id`.
+- `counters` — `EvidenceCounter` (id / text / `contradicts_claim_id`), где `contradicts_claim_id` — ближайший предшествующий claim в порядке `reasoningGraph.nodes`.
+
+Правила связывания claim → source в `links`:
+
+1. Каждый `proposedNodes[i].evidenceRefs` должен содержать URL-ы из `toolLedger[*].payload.sources[*].url` (или уже готовые 16-hex id). Значение `"prior_knowledge"` — явный маркер «чистое prior knowledge, источники не нужны».
+2. Если `evidence_refs` непуст и хоть один URL/id резолвится в `archive.sources` — создаём прямые `EvidenceLink` со `score=100` (первый — `asserted_by`, остальные — `supported_by`).
+3. Если `evidence_refs` непуст, но ни один не резолвится — **не** подмешиваем fuzzy: уважаем декларацию аналитика.
+4. Если `evidence_refs` пуст — fallback в fuzzy. Для первичного matching'а порог `CANONICALIZER_EVIDENCE_FANOUT_MIN_SCORE`; для supported_by fan-out при отсутствии первичного хита — более мягкий `CANONICALIZER_EVIDENCE_FALLBACK_MIN_SCORE` (по умолчанию 45).
+
+Ни один `/evidence/*` фрагмент и ни одно `asserted_by`/`supported_by`/`contradicts`/`under_hypothesis` ребро в `graph` больше не появляются. Это сжимает `graph.edges` до чисто структурной топологии (как правило, в 1.5–2× на реалистичных прогонах) и делает apply в property graph тривиальным: archive маппится в GCS (raw контент) + metadata-store (BigQuery / Firestore) с пятью таблицами.
+
+### Supervisor: pre-finalize gates и trace
+
+Перед `finalize` supervisor проверяет три инварианта. Каждый гейт даёт **один** retry (guard через `pack.gatesRetried`), после чего пишет `gate_action = "skip"` и всё равно финализирует (честный отчёт с gap'ом).
+
+| Gate | Условие retry | Retry agent | Директива |
+|------|---------------|-------------|-----------|
+| `structural` | `last_intent ∈ {supply_chain, governance}` **и** `len(pack.proposedRelations) == 0` | соответствующий analyzer | `STRUCTURAL GAP: emit explicit proposedRelations using AH vocabulary` |
+| `evidence` | хотя бы один `proposedNodes[i].evidenceRefs = []` **и** `toolLedger` содержит `web_search.sources` | тот же analyzer | `EVIDENCE GAP: attach source URLs from toolLedger to evidenceRefs` |
+| `open_questions` | `analyzerOutput.openQuestions != []` **и** `cycle < cap - 1` | тот же analyzer | `OPEN QUESTIONS: run targeted web_search on <top-3>` |
+
+Каждое решение роутера **и** каждое срабатывание гейта пишет `SupervisorTraceEntry` в `pack.supervisorTrace`. Поле `pack.lastIntent` (`"supply_chain"` / `"governance"` / `""`) фиксирует последнего «домен-аналитика» и используется гейтами, чтобы retry попадал в нужного воркера.
+
+### Реализация канонизатора (код)
+
+В репозитории реализован **9-фазный stateless пайплайн** в пакете [`agenthorde/canonicalizer/`](agenthorde/canonicalizer/):
+
+| Фаза | Модуль | Движок | Назначение |
+|------|--------|--------|------------|
+| 0 | `phases/phase0_input.py` | код | Сборка `WorkingState` из `pack`, `analyzerOutput` / `governanceOutput`, `finalAnswer`, `workingGraph` |
+| 1 | `phases/phase1_entities.py` + `prompts/phase1_entities.txt` | LLM | NER / типизация по 11 классам AH |
+| 2 | `phases/phase2_dedup.py` | код + Firestore product/gov synonyms | Нормализация поверхности, fuzzy (`rapidfuzz`), словарные merge |
+| 3 | `phases/phase3_paths.py` + `slug.py` | код | Canonical path + ISO2 из контекста, коллизии slug |
+| 4 | `phases/phase4_relations.py` + `prompts/phase4_relations.txt` | LLM | Связи между `entity_id` (до маппинга во fragment UUID) |
+| 5 | `phases/phase5_transforms.py` + `dictionaries.py` | код + `horizon_product_transform_pairs` (read-only) | Site-centric transform на узлах `/site`; неизвестные пары только в JSON `candidates.unknownTransforms` |
+| 6 | `phases/phase6_metrics.py` + `prompts/phase6_metrics.txt` | LLM + код | Метрики на фрагментах / рёбрах |
+| 7 | `phases/phase7_evidence.py` | код | `/evidence/source` из `toolLedger`, `/evidence/claim`, `asserted_by` / `supported_by` |
+| 8 | `phases/phase8_validate.py` + `validation.py` | код | Пути, endpoints связей, `layer`, unknown transforms → отчёт |
+| 9 | `phases/phase9_output.py` + `confidence.py` | код | Noisy-OR confidence по рёбрам, сборка `CanonicalizerResult` |
+
+Публичный API: `from agenthorde.canonicalizer import canonicalize, CanonicalizerInput, CANONICALIZER_VERSION`. Вызов **после** прогона агентов встроен в [`runner_cli.py`](runner_cli.py): в ответ добавляется поле `canonicalGraph` (JSON). Флаг CLI `--skip-canonicalizer` отключает пост-обработку.
+
+**Форма графа:** узлы — [`CanonicalFragment`](agenthorde/canonicalizer/schemas.py) (поля в духе `HorizonFragment`: `canonicalPath`, `fragmentClass`, `metrics`, `provenance`, `validFrom`/`validTo`, `siteTransforms` для site-centric transform). Рёбра — [`CanonicalEdge`](agenthorde/canonicalizer/schemas.py) (поля в духе `DependencyEdge`: `sourceFragmentId`, `targetFragmentId`, `relation`, `qualifiers` с `layer` / `layerSection`, `attributes`, `metrics`, `provenance`). Таксономия на этом этапе **только AH**; маппинг enum → ядро — отдельный слой позже.
+
+**Словари:** чтение из Firestore (`horizon_product_synonym_pairs`, `horizon_product_transform_pairs`, `horizon_gov_synonym_pairs`), проект по умолчанию из `HORIZON_FIRESTORE_PROJECT` или `GOOGLE_CLOUD_PROJECT`. Переменные моделей: `AGENTHORDE_CANONICALIZER_ENTITY_MODEL`, `_RELATION_MODEL`, `_METRIC_MODEL`, порог fuzzy `AGENTHORDE_CANONICALIZER_FUZZY_THRESHOLD`.
+
+### Этапы:
+
+- **Этап 1 (текущий):** канонизатор stateless. Каждый прогон — изолированный, один вход → один канонизированный граф. Детерминированно, воспроизводимо, легко отлаживать.
+- **Этап 2 (см. ниже):** долгосрочная память через Vertex AI субстраты знаний.
+
+---
+
+## Roadmap: долгосрочная память через Vertex AI субстраты знаний
+
+После того как канонизатор стабилизируется (Этап 1), его выходы начинают не просто возвращаться пользователю, а **записываться в долгосрочную память** — структурированные индексированные субстраты в GCS + Vertex AI Search. Это превращает AH из «stateless исследовательского цикла» в «систему, которая копит и переиспользует знания между прогонами».
+
+### Принцип: дедупликация на записи, не на чтении
+
+Сейчас `ah_knowledge_search` — заглушка, потому что нет базы знаний. С субстратами он становится **реальным первым шагом любого агентского цикла**: «что мы уже знаем?» перед «пойдём искать новое». Когда агент делает `knowledge_search("G42 ownership")`, Vertex возвращает **уже канонизированную** сущность с `/org/ae/g42`, canonical name, всеми известными связями. Агенту не нужно догадываться, что он нашёл — результат уже несёт штамп канонизатора.
+
+Если в следующем прогоне тот же агент через `web_search` находит «Group 42», он может сразу проверить через `knowledge_search` и увидеть, что это та же сущность. **Дедупликация между прогонами получается автоматически** — она произошла на фазе записи канонизатором, а не при каждом чтении.
+
+### Четыре типа субстратов (разные гранулярности запроса)
+
+Канонизатор пишет результаты прогона в **четыре параллельных субстрата** — каждый оптимизирован под свой тип запроса:
+
+| Субстрат | Что индексируется | Оптимален для запроса |
+|----------|-------------------|----------------------|
+| **Сущности** | canonical path + canonical name + subtype + attributes (sector_path, domains, метрики) | «Кто такой G42?», «Какие площадки под оператором PSA?» |
+| **Сущности со связями** | entity-centric подграф на 1–2 ребра: узел + непосредственные структурные связи + атрибуты рёбер | «Что Mubadala владеет?», «С кем G42 в JV?» |
+| **Цепочки со смыслами** | полная цепочка site→site с transforms, ключевыми режимами, narrative summary | «Как литий добирается от Atacama до CATL?», «Путь нефти через Малаккский пролив» |
+| **Наблюдения** | отдельные claims с provenance, `as_of`, `confidence`, source refs | «Что говорили о санкциях на X в октябре?», «Какие оценки доли Silver Lake в G42?» |
+
+Каждый субстрат — это отдельный **Vertex AI Search data store** в своей GCS bucket'е со своей схемой метаданных. Один и тот же факт может попасть в несколько субстратов в разных разрезах (например, ребро `subsidiary_of` → в «сущности со связями» как атрибут подграфа и в «наблюдения» как отдельный claim с датой).
+
+### Схема метаданных
+
+Помимо семантического эмбеддинга, каждая запись несёт **структурированные фильтры** для точных запросов:
+
+- `canonical_path` — точный lookup по пути
+- `subtype` — фильтр по подтипу (`swf`, `port`, `gov_body`, …)
+- `domains` — массив доменов (`governance`, `logistics`, …)
+- `sector_path` — GICS-подобный сектор
+- `layer` — для рёбер и цепочек (structural / contractual / flow)
+- `as_of` / `observed_at` — временной диапазон
+- `confidence` — порог достоверности
+- `run_id` + `canonicalizer_version` — провенанс записи
+
+Это позволяет агенту спрашивать не только «что известно про G42», а «какие **контрактные** связи `/org/ae/g42` известны **на 2025 год** с confidence > 0.7».
+
+### Канонизатор — единственный writer
+
+**Жёсткое правило:** в субстраты пишет **только канонизатор**. Не агент напрямую, не side-channel, не какая-то внешняя система. Это гарантирует, что всё в памяти прошло через:
+
+1. Entity extraction с типизацией по 11 классам
+2. Дедупликацию с lookup в operational dictionaries
+3. Canonical path resolution
+4. Relation extraction по 6 слоям связей
+5. Transform attachment с валидацией по canonical dictionary
+6. Metric structuring с provenance
+7. Финальную валидацию схемы
+
+Если писать в субстрат мимо канонизатора — память начнёт деградировать: появятся alias'ы, противоречивые типы, non-canonical paths. Это тот же принцип, что «канонизатор — единственное место enforcement онтологии», только расширенный на долгосрочную память.
+
+### Конфликты и противоречия
+
+Два прогона могут записать **конфликтующие факты** о G42 (разные доли, разные UBO в разное время). Субстрат не должен их «решать» — он должен **хранить оба** с provenance и `as_of`. Следующий агент сам прочитает оба и примет решение:
+
+- «Последнее раскрытие эмитента (2024-Q4) вытеснило предыдущее (2023-Q2)» — использует свежий факт
+- «Есть два независимых источника с разными оценками, confidence 0.6 и 0.8» — формирует гипотезы по обоим
+
+Это естественно ложится на **observations substrate** — каждая запись помечена `observed_at` и `source`; несогласие становится видимым, а не скрытым в процессе merge.
+
+### Почему Vertex AI Search
+
+- **Не нужно городить свой векторный индекс** — Vertex AI Search предоставляет data store + semantic search + structured filters из коробки
+- **GCS как bucket** для JSONL записей — дёшево, version-able, легко переиндексировать
+- **Метаданные как фильтры** — не нужен отдельный SQL для точных запросов, всё в одном слое
+- **Индексация автоматическая** — канонизатор пишет в bucket, Vertex переиндексирует data store
+- **Инфраструктура production-ready** — эта архитектура стандартна для RAG-систем в GCP
+
+### Как меняется агентский цикл
+
+С субстратами цикл каждого worker-агента начинается с:
+
+```
+1. knowledge_search(query)         # сначала спроси, что система знает
+2. анализ результатов              # что известно, что нет, где пробелы
+3. web_search(...)                 # идёт искать только то, чего не знает
+4. ah_apply(...)                   # дополняет reasoningGraph новым
+```
+
+Это **резко сокращает** количество `web_search` вызовов и latency прогонов для повторяющихся сущностей. G42 упомянут в 5 прогонах подряд — его canonical entity и его ownership подграф уже в памяти, web-поиск нужен только для уточнений.
+
+### Что НЕ делаем на Этапе 2
+
+- **Не делаем subscription / listeners** на субстрат (кто-то внешний — нет, только канонизатор пишет)
+- **Не делаем automatic rewrite** — старые записи не перезаписываются при новом прогоне; конфликты хранятся как отдельные observations с разными датами
+- **Не делаем cross-run reasoning внутри канонизатора** — каждый прогон stateless, память читается только агентами через `knowledge_search`, канонизатор с ней не сверяется
+- **Не делаем ручного pruning** в MVP — мусор копится, следим за объёмом; автоматическая очистка — отдельная задача позже
+
+---
+
+## Roadmap: канонизатор — доработать позже
+
+Текущая реализация канонизатора сознательно упрощена; ниже — что вынести в следующие итерации (после стабилизации JSON-выхода и агентского контура).
+
+| Область | Сейчас (MVP) | Сделать позже |
+|---------|----------------|---------------|
+| **Доказательность (фаза 7)** | Для `asserted_by` все claim’ы привязываются к **одному** источнику из `toolLedger`; нет маппинга **claim → URL** из grounding по каждому claim; нет рёбер `contradicts` (counter) и `under_hypothesis` (hypothesis_anchor) | Построить связь claim↔источник(и) по шагам агента / фрагментам grounding; добавить `contradicts` и `under_hypothesis` по правилам README §5 |
+| **Метрики (фаза 6)** | Нет физических **конверсий единиц** (kcf→mcf, баррели→тонны и т.д.); слабая привязка **к конкретному ребру** (эвристика «первое ownership-ребро» для pct) | Словарь/код нормализации единиц; явная привязка метрики к ребру/узлу из LLM + пост-валидация |
+| **Словари** | Read-only Firestore **опционально**; без проекта — fuzzy + LLM, граф всё равно в JSON | При необходимости: локальный снапшот словарей, явная политика «нет проекта → предупреждение в отчёте», расширение org/person aliases в ядре |
+| **Вызовы LLM (фазы 1, 4, 6)** | Пустой ответ → пустые mentions / relations / metrics **без** fallback из текста; нет ретраев и жёстких таймаутов | Ретраи + таймаут; лёгкие детерминированные fallback’и (например NER-заготовки из claim-текста) при `AGENTHORDE_CANONICALIZER_SKIP` / сбое модели |
+
+---
+
+## Продуктовые трансформации: site-centric модель
+
+### Проблема текущей модели
+
+В ядре (и в ранней AH-онтологии) transform — это абстрактное ребро между двумя `/product`: `spodumene-concentrate` →`transforms_into`→ `lithium-carbonate`. Но:
+
+- Превращение не происходит само по себе — оно происходит **на конкретной площадке**. Реферинг-завод **и есть** transform.
+- Стадия в product path (`/product/{stage}/{family}/{grade}`) не используется для фильтрации — никто не ищет «все продукты стадии `chemical_intermediate`». Ищут конкретный продукт или конкретную цепочку.
+- Абстрактный граф трансформаций (product→product) и физический граф (site→site) живут отдельно, и их нужно мысленно сшивать.
+
+### Целевая модель: transform — свойство `/site`, а не ребро между `/product`
+
+Цепочка поставок — это **граф площадок**, связанных ребром `supplies` с продуктом на ребре. Трансформация — свойство принимающего узла.
+
+```
+/site/cl/mine-atacama
+   ——supplies(product: /product/spodumene-concentrate)——→
+/site/cn/refinery-ganfeng
+   [transform: spodumene-concentrate → lithium-carbonate]
+   ——supplies(product: /product/lithium-carbonate)——→
+/site/de/battery-plant-catl
+   [transform: [lithium-carbonate, cathode-material, anode, electrolyte, casing] → battery-cell]
+   ——supplies(product: /product/battery-cell)——→
+/site/de/assembly-plant
+```
+
+### Что меняется
+
+**1. Product path упрощается.**
+
+Стадия **выводится** из позиции в цепочке, а не кодируется в пути. Достаточно:
+
+`/product/{family}/{slug}`
+
+Примеры: `/product/lithium/spodumene-concentrate`, `/product/lithium/lithium-carbonate`, `/product/battery/battery-cell`.
+
+**2. `transforms_into` уходит из связей между продуктами.**
+
+Вместо абстрактного ребра `/product/A` →`transforms_into`→ `/product/B` — атрибут на узле `/site`:
+
+```
+transform:
+  inputs: ["/product/lithium/spodumene-concentrate"]
+  output: "/product/lithium/lithium-carbonate"
+  kind: transformation      # или assembly для multi-input
+```
+
+**3. `supplies` становится единственной связью, двигающей продукт по цепи.**
+
+| Ребро | A → B | Атрибуты |
+|-------|-------|----------|
+| `supplies` | `/site` → `/site` | `product` → `/product`, `volume`, `layer`, `carrier` → `/org`, ... |
+
+Всё, что течёт между площадками, — одно ребро `supplies` с продуктом на нём. Одна связь вместо двух (`supplies` + `transforms_into`).
+
+**4. Multi-input transform (сборка) ложится естественно.**
+
+Батарейный завод принимает катодный материал, анодный, электролит, корпус — несколько `supplies` рёбер с разными `product` входят в один `/site`. На узле — assembly transform с массивом `inputs` и одним `output`.
+
+**5. Canonical transform dictionary меняет роль.**
+
+Словарь 405 эталонных пар (canonical control plane) не исчезает, а становится **constraint / validation**: если `/site` заявляет transform `X→Y`, словарь проверяет, известна ли такая пара. Неизвестные пары уходят в candidate queue — как и раньше, но проверка привязана к площадке, а не к абстрактному графу.
+
+### Что это даёт
+
+- **Цепочка читается линейно**: site → site → site, как маршрутный лист. Не нужно сшивать два параллельных графа.
+- **«Что будет, если завод встанет?»** — сразу видно, какой transform пропадает. Не нужно ходить из физического графа в продуктовый и обратно.
+- **«Какие площадки делают этот передел?»** — запрос к графу, а не к абстрактному словарю.
+- **Product path компактнее**: 2 сегмента вместо 3–4; стадия не дублирует то, что и так видно по графу.
+
+### Совместимость с ядром
+
+Ядро сейчас хранит transform pairs как абстрактные `from→to`. Site-centric модель **не ломает** этот словарь — она переиспользует его как constraint. Для ядра это значит:
+
+- `TRANSFORMS_INTO` / `ASSEMBLES_INTO` ребро между продуктами можно заменить на атрибут `/site` (или `/fac` в терминах ядра)
+- Supply links, которые сейчас — отдельный fragment type, становятся просто `supplies` рёбрами с продуктом
+- Product canonical path теряет `{stage}` сегмент — это breaking change для ядра, но эволюционный для AH
+
+Приземлять после стабилизации агентской среды вместе с упрощением таксономии ядра.
+
+## Что планируется заимствовать из ядра (до стабилизации агентской среды не приземляется)
+
+Онтология AgentHorde — экспериментальная, намеренно изолирована от runtime taxonomy ядра (`horizon_taxonomy`). Ядро несёт 20+ namespaces, 4-уровневые product paths, industry aliases, supply-link fragments и прочую инфраструктуру, которая AH-агентам избыточна. Ниже — **только то, что имеет смысл взять**, с указанием формы адаптации.
+
+### 1. Метрики (из ядра: `MetricValue` + `MetricDefinition`)
+
+**Зачем:** сейчас AH не умеет структурированно выразить «доля 42 %, confidence 0.8, раскрытие эмитента, март 2025». Всё ложится в свободный текст `claim`. Без метрик governance-агент не отличает подтверждённую долю от газетной оценки.
+
+**Что берём:**
+- Двойка типов: **magnitude** (0..1) и **directional** (−1..1)
+- На каждом значении: `value`, `confidence` (0..1), `observed_at`, `provenance` (source ref → `/evidence/source`)
+- Опционально: `unit`, `error_margin`
+
+**Чего не берём:** полный каталог стандартизированных метрик ядра (operational_health, water_intensity, …). AH определит свой минимальный набор по мере прогонов.
+
+### 2. Домены (из ядра: sphere paths + domain modes → один тег-слой)
+
+**Зачем:** AH нуждается в кросс-доменной разметке — «это про логистику», «это про геополитику», «это про корпоративное управление». Сейчас такой разметки нет.
+
+**Что берём:** плоский или двухуровневый тег `domain`, объединяющий то, что в ядре разнесено по `/sphere/{L1}/{L2}` и `domainMode`. Примерный начальный список:
+
+- `logistics` / `logistics/maritime`
+- `geopolitics`
+- `governance`
+- `energy` / `energy/markets`
+- `finance`
+- `policy` / `policy/sanctions`
+- `technology`
+
+Формат: массив тегов на узле или ребре (как `spherePaths` в ядре, но без вложенности глубже двух уровней).
+
+### 3. Секторальная таксономия (из ядра: sector taxonomy → лёгкая двухуровневая нарезка)
+
+**Зачем:** когда агент находит Mubadala, Shell, TSMC — полезно иметь сектор для классификации и фильтрации, а не только подтип `/org`.
+
+**Что берём:** GICS-подобная **двухуровневая** схема (sector → industry group). Примеры:
+
+- `Energy/Upstream`, `Energy/Midstream`, `Energy/Downstream`
+- `Materials/Mining`, `Materials/Chemicals`
+- `Technology/Semiconductors`, `Technology/Software`
+- `Financials/Asset_Management`, `Financials/Banking`
+- `Industrials/Transportation/Marine`
+
+Поле `sector_path` на узлах `/org`. **Не берём** 4-уровневый NAICS-подобный каталог ядра.
+
+### 4. Модальность ребра: `projected` (из ядра: `edgeModality`)
+
+**Зачем:** `layer` (structural / contractual / flow) не различает «маршрут существует» и «маршрут планируется». Это встречается в обоих доменах: Thai Land Bridge (projected), обсуждаемая сделка Microsoft–G42 (projected).
+
+**Что берём:** одно опциональное поле `status` на structural-ребре со значениями:
+
+- `actual` (default, можно не указывать)
+- `projected` (планируется, строится, обсуждается)
+
+**Чего не берём:** полный enum ядра (`historical`, `potential`) — `historical` покрывается отсутствием ребра или корпоративным событием; `potential` слишком размыт.
+
+### Чего НЕ берём из ядра
+
+| Концепция ядра | Почему не берём |
+|----------------|-----------------|
+| 20+ first-segment namespaces (`/industry`, `/domain`, `/community`, `/segment`, `/media`, `/decision`, `/mechanism`, `/zone`, `/track`, `/supply-link`, …) | AH достаточно 11 классов; остальные служат инфраструктуре ядра |
+| `/gov` как отдельный namespace | AH моделирует как подтип `/org/gov_body`; менять обратно — ломать консолидацию |
+| 4-уровневый product path (`/product/{category}/{type}/{stage}/{slug}`) | AH-шный 3-уровневый (`{stage}/{family}/{grade}`) проще и ближе к supply chain реальности |
+| Lifecycle stages (`concept` → `operational` → `closed`) | Полезно, но это атрибут узла, а не таксономия; агент и так может записать это в claim |
+| `ValidFrom` / `ValidTo` на рёбрах | AH использует `as_of` на атрибутах + корпоративные события; полная темпоральная валидность — overhead для экспериментальной среды |
+| `LOCATED_IN` как отдельный тип связи | ISO2 в каноническом пути + `incorporated_in` уже покрывают географию; третий способ — избыточен |
+| Industry taxonomy aliases, eventTypeSynonyms, signalTypes | Инфраструктура нормализации ядра; AH работает с LLM-выводом, а не с incoming pipeline |
+| Полный каталог `allowedEdgeMetrics`, `allowedMetricUnits` | AH определит свой минимальный набор |
+
+### Направление влияния: AH → ядро, не наоборот
+
+AH — не клиент ядра, которому нужен маппинг. AH — эксперимент, который должен **упростить** ядро, заменив монструозный пайплайн агентским подходом и показав, что 11 классов, 6 слоёв связей и компактная секторальная таксономия достаточны для тех же задач, которые ядро решает 20+ namespaces.
+
+Когда AH стабилизируется, ожидаемый результат:
+- Таксономия ядра **сжимается** в сторону AH-шной (меньше namespaces, консолидация `/gov`→`/org`, `/fac`+`/deposit`→`/site`, `/loc`→`/geo`)
+- Relation types ядра **чистятся** (убираются дублирующие, вводится `layer` вместо нагромождения edge modalities)
+- Метрики, домены и секторы из ядра **переходят в AH как есть** (это то немногое, что ядро делает лучше)
 
 ## Setup
 

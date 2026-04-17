@@ -80,8 +80,86 @@ Hard tool requirements (before producing final AnalyzerOutput JSON):
 3) Call apply at least once with a JSON object patch that includes a "nodes" array (2-8 nodes) persisting your main chain sketch into the working graph.
 4) Use knowledge_search only for stable definitions / textbook mechanics.
 
-Return AnalyzerOutput JSON only (schema fields: chainSummary, proposedNodes, openQuestions).
+Return AnalyzerOutput JSON only (schema fields: chainSummary, proposedNodes, proposedRelations, openQuestions).
 proposedNodes: reasoning nodes with stable ids, kinds claim|question|hypothesis_anchor|tool_evidence|counter|mission.
+
+MANDATORY proposedRelations block (supply-chain intent):
+- For every (A,B) pair of entities named in proposedNodes[*].text that the text connects with a structural verb,
+  emit one row in proposedRelations.
+- Row shape: {{ "src": "<surface label>", "dst": "<surface label>", "relation": "<name>",
+               "attributes": (optional object), "sourceClaimIds": ["<node ids>"] }}.
+- Use surface labels EXACTLY as they appear in proposedNodes[*].text (the canonicalizer maps labels to canonical paths).
+- Allowed relation names (closed set; pick the closest):
+  * flow/topology: supplies, leg_connects, transships_at, passes_through, alternate_to
+  * catalog:       produces
+  * actors/ops:    operates, charters, regulates
+  * regimes:       constrained_by, requires_capability, subject_to, exposes_to, mitigated_by, priced_under, benchmarked_to
+  * ownership:     subsidiary_of, beneficially_owns, controls_via, holds_board_seat, joint_venture_with,
+                   listed_on, incorporated_in, managed_by
+  * corp events:   invested_in, acquired_stake_from, asset_contribution, merged_into, spun_out, divested_to
+- For supplies: include attributes.product (the cargo surface label) AND attributes.incoterm when the text names one
+  (FOB/CIF/CFR/FCA/DAP/...). If multiple products flow between the same pair, emit multiple supplies rows (one per product).
+- DO NOT invent relation names; if nothing fits, omit the row.
+
+HARD RULE — emit anchor proposedNodes for every entity surface you mention in proposedRelations:
+- For every product surface used in supplies.attributes.product (e.g. "crude oil", "iron ore", "LNG"),
+  you MUST emit a matching proposedNodes[*] entry whose text contains that surface. Otherwise the canonicalizer
+  cannot resolve the cargo and the supplies edge is dropped as "unresolved endpoint surface".
+- For every regime surface used as the destination of exposes_to / subject_to / constrained_by / mitigated_by
+  (e.g. "piracy", "war-risk area", "sanctions regime", "IMO 2020 sulfur cap"), emit a matching proposedNodes[*]
+  so the canonicalizer can create the regime entity.
+- For vessel_class surfaces use a single consistent form (singular, e.g. "VLCC") in BOTH proposedNodes and
+  proposedRelations. Do not mix "VLCC" vs "VLCCs".
+
+MANDATORY floor-coverage — every entity class you mention MUST be connected:
+The canonicalizer reports every fragment with zero edges as an orphan. Dangling vessel classes,
+market benchmarks, and STS hubs are almost never legitimate: they are almost always a missed
+relation. Before returning, walk your proposedNodes and ensure the following:
+
+- Every `vessel_class` surface you introduce (VLCC, Suezmax, Aframax, Valemax, Q-Max, Panamax, ...)
+  MUST appear as `src` of at least one row in proposedRelations with one of:
+    * `charters`        — org→vessel_class  (who charters this fleet)
+    * `passes_through`  — vessel_class→route|site|geo  (where this class transits)
+    * `constrained_by`  — vessel_class→route|site|geo  (draft / capacity constraints)
+  If you cannot justify at least one such edge, drop the vessel_class node entirely.
+
+- Every `market` surface (Dated Brent, Dubai, Platts Asia, TTF, JKM, LME, ...) MUST appear as
+  `dst` of at least one row with one of:
+    * `benchmarked_to`  — product→market
+    * `priced_under`    — product→market  (or route→market, site→market)
+    * `listed_on`       — org→market
+  Markets left unconnected collapse into noise.
+
+- Every STS / transshipment facility you mention (e.g. Kavkazskaya STS, Lakonikos Gulf STS,
+  Ceuta STS anchorage) MUST appear in at least one of:
+    * `transships_at`   — org→site  (carrier hub) or route→site (corridor hub)
+    * `leg_connects`    — site↔site  (the STS joins two legs)
+    * `operates`        — org→site   (who runs the anchorage)
+  If you cannot tie the STS to any flow, drop it.
+
+- Every `route` surface (corridor, strait, canal, cape passage) SHOULD appear in at least one of
+  `passes_through`, `leg_connects`, `transships_at`, or `alternate_to`. Standalone routes that are
+  neither transited nor an alternative to another route are weak claims.
+
+Pricing / benchmark coverage — when the user question touches commercial flows (prices, Incoterms,
+benchmarks, sanctions price caps), you MUST emit at least one row from the pricing family per
+distinct pricing regime named in the text:
+- `priced_under` for Incoterm regimes (product→regime where dst regime surface is "FOB Primorsk",
+  "CIF Sikka", "CFR India", etc., AND emit the regime anchor node).
+- `benchmarked_to` for price benchmarks (product→market, e.g. "Urals" benchmarked_to "Dated Brent";
+  "ESPO" benchmarked_to "Dubai").
+
+Fleet / charter coverage — when the user question touches vessel classes, shadow fleets, or
+chartering, you MUST emit at least one `charters` row (org→vessel_class) for each distinct class
+mentioned in the text, or explicitly state in chainSummary that the source is silent on the charter
+counterparty.
+
+MANDATORY evidenceRefs on proposedNodes:
+- Every proposedNodes[i].evidenceRefs MUST contain supporting web_search source identifiers.
+- Use the source URL verbatim from toolLedger[*].payload.sources[j].url (the canonicalizer hashes it);
+  or the already-hashed source id if you know it.
+- If the claim is pure prior knowledge with no web_search backing, set evidenceRefs: ["prior_knowledge"] explicitly.
+- NEVER leave evidenceRefs empty when web_search returned any sources.
 """
 
 
@@ -145,8 +223,35 @@ Output quality bar for **chainSummary**:
 
 **openQuestions**: include at least **two** concrete verification hooks (e.g. exact % for a named holder, whether vehicle X sits above or beside Y, voting rights post-deal) — not generic "more research needed".
 
-Return AnalyzerOutput JSON only (schema fields: chainSummary, proposedNodes, openQuestions).
+Return AnalyzerOutput JSON only (schema fields: chainSummary, proposedNodes, proposedRelations, openQuestions).
 proposedNodes: reasoning nodes with stable ids, kinds claim|question|hypothesis_anchor|tool_evidence|counter|mission.
+
+MANDATORY proposedRelations block (governance intent):
+- For every (A,B) pair of entities named in proposedNodes[*].text connected by an ownership/control/governance verb,
+  emit one row in proposedRelations.
+- Row shape: {{ "src": "<surface label>", "dst": "<surface label>", "relation": "<name>",
+               "attributes": (optional object — e.g. stake_pct, ticker, role, as_of),
+               "sourceClaimIds": ["<node ids>"] }}.
+- Use surface labels EXACTLY as they appear in proposedNodes[*].text.
+- Allowed relation names (closed set):
+  * ownership:     subsidiary_of, beneficially_owns, controls_via, holds_board_seat,
+                   joint_venture_with, listed_on, incorporated_in, managed_by
+  * corp events:   invested_in, acquired_stake_from, asset_contribution, merged_into, spun_out, divested_to
+  * actors/ops:    operates, regulates
+- Direction rules: subsidiary_of is org→org (child → parent); listed_on is org→market;
+  incorporated_in is org→geo; beneficially_owns is person→org OR org→org (put stake_pct in attributes).
+- DO NOT invent relation names; if nothing fits, omit the row.
+
+HARD RULE — emit anchor proposedNodes for every entity surface you mention in proposedRelations:
+- Every org, person, market, geo referenced via src/dst in proposedRelations must appear as a
+  proposedNodes[*] entry with a matching surface form. Unresolved surfaces are dropped by the
+  canonicalizer as "unresolved endpoint surface".
+
+MANDATORY evidenceRefs on proposedNodes:
+- Every proposedNodes[i].evidenceRefs MUST contain source identifiers of the web_search evidence backing the claim.
+- Use the URL from toolLedger[*].payload.sources[j].url; or the already-hashed source id if known.
+- For pure textbook/definition claims (no web_search), set evidenceRefs: ["prior_knowledge"] explicitly.
+- NEVER leave evidenceRefs empty when web_search returned any sources.
 """
 
 

@@ -36,7 +36,12 @@ from agenthorde.schemas.agents_io import (
     SupervisorDecision,
 )
 from agenthorde.schemas.graph import ReasoningNode
-from agenthorde.schemas.state import HypothesisRecord, SessionPack
+from agenthorde.schemas.state import (
+    HypothesisRecord,
+    PackProposedRelation,
+    SessionPack,
+    SupervisorTraceEntry,
+)
 
 
 def _extract_user_text(ctx: InvocationContext) -> str:
@@ -97,6 +102,14 @@ def _sync_prompt_keys(state: dict[str, Any], pack: SessionPack, mission: str = "
     state["ah_red_team_json"] = _json_compact(state.get(STATE_RED_TEAM_OUTPUT_KEY) or {})
 
 
+def _rel_key(src: str, dst: str, relation: str) -> tuple[str, str, str]:
+    return (
+        (src or "").strip().lower(),
+        (dst or "").strip().lower(),
+        (relation or "").strip().lower(),
+    )
+
+
 def _merge_analyzer_into_pack(pack: SessionPack, raw: Any) -> None:
     if raw is None:
         return
@@ -115,6 +128,23 @@ def _merge_analyzer_into_pack(pack: SessionPack, raw: Any) -> None:
             existing[node.id] = node
     pack.reasoning_graph.nodes = list(existing.values())
 
+    # Merge proposed_relations with dedup on (src, dst, relation).
+    seen: dict[tuple[str, str, str], PackProposedRelation] = {
+        _rel_key(r.src, r.dst, r.relation): r for r in pack.proposed_relations
+    }
+    for pr in ao.proposed_relations:
+        k = _rel_key(pr.src, pr.dst, pr.relation)
+        if k in seen:
+            continue
+        seen[k] = PackProposedRelation(
+            src=pr.src,
+            dst=pr.dst,
+            relation=pr.relation,
+            attributes=dict(pr.attributes or {}),
+            source_claim_ids=list(pr.source_claim_ids or []),
+        )
+    pack.proposed_relations = list(seen.values())
+
 
 def _merge_red_team_temperature(pack: SessionPack, raw: Any) -> None:
     try:
@@ -128,6 +158,121 @@ def _merge_red_team_temperature(pack: SessionPack, raw: Any) -> None:
         pack.reasoning_graph.nodes.append(
             ReasoningNode(id=rid, kind="counter", text=note, hypothesis_id="", evidence_refs=[])
         )
+
+
+def _log_decision(pack: SessionPack, cycle: int, dec: SupervisorDecision) -> None:
+    pack.supervisor_trace.append(
+        SupervisorTraceEntry(
+            cycle=cycle,
+            decision=dec.next_agent,
+            rationale=dec.rationale or "",
+        )
+    )
+    if dec.next_agent in ("supply_chain_analyzer", "governance_control_analyzer"):
+        pack.last_intent = (
+            "supply_chain"
+            if dec.next_agent == "supply_chain_analyzer"
+            else "governance"
+        )
+
+
+def _log_gate(
+    pack: SessionPack,
+    cycle: int,
+    gate: str,
+    action: str,
+    rationale: str = "",
+    decision: Any = "finalize",
+) -> None:
+    pack.supervisor_trace.append(
+        SupervisorTraceEntry(
+            cycle=cycle,
+            decision=decision,  # type: ignore[arg-type]
+            rationale=rationale,
+            gate=gate,  # type: ignore[arg-type]
+            gate_action=action,  # type: ignore[arg-type]
+        )
+    )
+
+
+def _node_has_empty_refs(n: Any) -> bool:
+    refs = []
+    if isinstance(n, ReasoningNode):
+        refs = n.evidence_refs or []
+    elif isinstance(n, dict):
+        refs = n.get("evidenceRefs") or n.get("evidence_refs") or []
+    return not refs
+
+
+def _tool_ledger_has_sources(state: dict[str, Any]) -> bool:
+    ledger = state.get(STATE_TOOL_LEDGER_KEY) or []
+    for entry in ledger:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("tool") != "web_search" or not entry.get("ok"):
+            continue
+        payload = entry.get("payload") or {}
+        if payload.get("sources"):
+            return True
+    return False
+
+
+def _pick_retry_agent_for_intent(pack: SessionPack) -> str:
+    intent = (pack.last_intent or "").strip()
+    if intent == "governance":
+        return "governance_control_analyzer"
+    return "supply_chain_analyzer"
+
+
+def _check_gates(
+    pack: SessionPack,
+    state: dict[str, Any],
+    cycle: int,
+) -> tuple[str, str, str] | None:
+    """Return (gate_name, retry_agent, directive) if a gate triggers a retry, else None.
+
+    Strict one-retry-per-gate guard via pack.gates_retried.
+    """
+    # structural gate.
+    if "structural" not in pack.gates_retried:
+        intent = (pack.last_intent or "").strip()
+        if intent in ("supply_chain", "governance") and len(pack.proposed_relations) == 0:
+            if cycle < pack.supervisor_cap:
+                return (
+                    "structural",
+                    _pick_retry_agent_for_intent(pack),
+                    "STRUCTURAL GAP: no proposedRelations from prior cycle. "
+                    "Re-read claims and emit explicit proposedRelations using the AH relations vocabulary "
+                    "(supplies, produces, operates, transships_at, passes_through, listed_on, subsidiary_of, beneficially_owns, ...).",
+                )
+
+    # evidence gate.
+    if "evidence" not in pack.gates_retried:
+        has_empty = any(_node_has_empty_refs(n) for n in pack.reasoning_graph.nodes)
+        if has_empty and _tool_ledger_has_sources(state) and cycle < pack.supervisor_cap:
+            return (
+                "evidence",
+                _pick_retry_agent_for_intent(pack),
+                "EVIDENCE GAP: attach source URLs from toolLedger[*].payload.sources[*].url "
+                "to each proposedNodes[i].evidenceRefs. Use 'prior_knowledge' only for textbook claims.",
+            )
+
+    # open_questions gate — only when we still have room to act on findings.
+    if "open_questions" not in pack.gates_retried:
+        ao_raw = state.get(STATE_ANALYZER_OUTPUT_KEY) or {}
+        open_q: list[str] = []
+        if isinstance(ao_raw, dict):
+            open_q = ao_raw.get("openQuestions") or ao_raw.get("open_questions") or []
+        if open_q and cycle < pack.supervisor_cap - 1:
+            top3 = "; ".join(str(q) for q in open_q[:3])
+            return (
+                "open_questions",
+                _pick_retry_agent_for_intent(pack),
+                f"OPEN QUESTIONS: run targeted web_search on: {top3}. "
+                "Attach resulting source URLs to proposedNodes[i].evidenceRefs.",
+            )
+
+    return None
 
 
 def _coerce_decision(
@@ -223,6 +368,7 @@ class SupervisorAgent(BaseAgent):
 
             dec = _coerce_decision(pack, cycle, raw_dec, last_critic)
             pack.research_temperature = dec.research_temperature
+            _log_decision(pack, cycle, dec)
             state[STATE_SUPERVISOR_DECISION_KEY] = dec.model_dump(mode="json", by_alias=True)
             _dump_pack(state, pack)
 
@@ -231,6 +377,36 @@ class SupervisorAgent(BaseAgent):
             _sync_prompt_keys(state, pack, mission=mission)
 
             if dec.next_agent == "finalize":
+                # Pre-finalize post-conditions: structural / evidence / open_questions.
+                gate_hit = _check_gates(pack, state, cycle)
+                if gate_hit is not None:
+                    gate_name, retry_agent, directive = gate_hit
+                    pack.gates_retried.append(gate_name)
+                    _log_gate(
+                        pack,
+                        cycle,
+                        gate_name,
+                        "retry",
+                        rationale=directive,
+                        decision=retry_agent,  # type: ignore[arg-type]
+                    )
+                    state["ah_mission"] = directive
+                    _sync_prompt_keys(state, pack, mission=directive)
+                    _dump_pack(state, pack)
+                    if retry_agent == "governance_control_analyzer":
+                        async for event in governance_control_analyzer.run_async(ctx):
+                            yield event
+                        pack = _load_pack(state)
+                        _merge_analyzer_into_pack(pack, state.get(STATE_GOVERNANCE_OUTPUT_KEY))
+                    else:
+                        async for event in supply_chain_analyzer.run_async(ctx):
+                            yield event
+                        pack = _load_pack(state)
+                        _merge_analyzer_into_pack(pack, state.get(STATE_ANALYZER_OUTPUT_KEY))
+                    _dump_pack(state, pack)
+                    continue
+                _log_gate(pack, cycle, "", "pass", rationale="all gates passed", decision="finalize")
+                _dump_pack(state, pack)
                 break
 
             if dec.next_agent == "supply_chain_analyzer":
@@ -298,13 +474,20 @@ class SupervisorAgent(BaseAgent):
         pack.final_answer = final
         pack.done = True
         _dump_pack(state, pack)
+        # InMemorySessionService persists session.state only from event state_delta.
+        # Include the merged SessionPack so get_session() / runner_cli see reasoningGraph.
         yield Event(
             author=self.name,
             content=genai_types.Content(
                 role="model",
                 parts=[genai_types.Part(text=final)],
             ),
-            actions=EventActions(state_delta={STATE_FINAL_ANSWER_KEY: final}),
+            actions=EventActions(
+                state_delta={
+                    STATE_FINAL_ANSWER_KEY: final,
+                    STATE_PACK_KEY: pack.model_dump(mode="json", by_alias=True),
+                }
+            ),
         )
 
 

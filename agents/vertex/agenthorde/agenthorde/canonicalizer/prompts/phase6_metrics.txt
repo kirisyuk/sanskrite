@@ -1,0 +1,7 @@
+Extract numeric metrics from claims. Output JSON:
+{ "metrics": [ { "entity_id": "e1|null", "edge_key": null, "metric_name": "stake_pct|investment_usd|capacity_mtpa|...",
+  "value": number, "unit": "percent|usd|mtpa|...", "directional": false, "claim_ids": ["c1"], "confidence": 0-1 } ] }
+
+Rules:
+- Prefer attaching ownership percentages to the relevant org-org edge (use edge_key null and entity_id for holder).
+- Use metric_name in snake_case.
