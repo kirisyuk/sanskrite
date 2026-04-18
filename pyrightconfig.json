@@ -1,0 +1,15 @@
+{
+  "pythonVersion": "3.11",
+  "extraPaths": [
+    "agents/shared/agenthorde_common",
+    "agents/vertex/agenthorde",
+    "agents/azure/agenthorde_azure"
+  ],
+  "exclude": [
+    "temp-repos",
+    "**/node_modules",
+    "**/.venv*",
+    "**/venv",
+    "agents/vertex/agentloom"
+  ]
+}

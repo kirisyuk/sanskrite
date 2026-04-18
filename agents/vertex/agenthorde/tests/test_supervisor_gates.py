@@ -13,9 +13,9 @@ from agenthorde.config import (
     STATE_ANALYZER_OUTPUT_KEY,
     STATE_TOOL_LEDGER_KEY,
 )
-from agenthorde.schemas.agents_io import SupervisorDecision
-from agenthorde.schemas.graph import ReasoningNode
-from agenthorde.schemas.state import (
+from agenthorde_common.schemas.agents_io import SupervisorDecision
+from agenthorde_common.schemas.graph import ReasoningNode
+from agenthorde_common.schemas.state import (
     PackProposedRelation,
     SessionPack,
 )
@@ -44,7 +44,7 @@ def test_structural_gate_fires_when_no_relations_after_supply_chain() -> None:
 def test_structural_gate_skipped_when_relations_present() -> None:
     pack = _make_pack(last_intent="supply_chain")
     pack.proposed_relations = [
-        PackProposedRelation(src="A", dst="B", relation="supplies")
+        PackProposedRelation(src_id="analyzer:e1", dst_id="analyzer:e2", relation="supplies")
     ]
     state: dict[str, object] = {STATE_TOOL_LEDGER_KEY: []}
     # evidence gate wouldn't fire (no sources), open_questions wouldn't (empty ao).
@@ -55,7 +55,7 @@ def test_structural_gate_skipped_when_relations_present() -> None:
 def test_evidence_gate_fires_when_refs_missing_and_sources_exist() -> None:
     pack = _make_pack(last_intent="governance")
     pack.proposed_relations = [
-        PackProposedRelation(src="A", dst="B", relation="subsidiary_of")
+        PackProposedRelation(src_id="analyzer:e1", dst_id="analyzer:e2", relation="subsidiary_of")
     ]
     pack.reasoning_graph.nodes = [
         ReasoningNode(id="n1", kind="claim", text="x", evidence_refs=[])
@@ -85,7 +85,7 @@ def test_evidence_gate_fires_when_refs_missing_and_sources_exist() -> None:
 def test_evidence_gate_not_fired_when_all_refs_filled() -> None:
     pack = _make_pack(last_intent="supply_chain")
     pack.proposed_relations = [
-        PackProposedRelation(src="A", dst="B", relation="supplies")
+        PackProposedRelation(src_id="analyzer:e1", dst_id="analyzer:e2", relation="supplies")
     ]
     pack.reasoning_graph.nodes = [
         ReasoningNode(
@@ -114,7 +114,7 @@ def test_evidence_gate_not_fired_when_all_refs_filled() -> None:
 def test_open_questions_gate_fires_when_room_in_budget() -> None:
     pack = _make_pack(last_intent="supply_chain", supervisor_cap=8)
     pack.proposed_relations = [
-        PackProposedRelation(src="A", dst="B", relation="supplies")
+        PackProposedRelation(src_id="analyzer:e1", dst_id="analyzer:e2", relation="supplies")
     ]
     pack.reasoning_graph.nodes = [
         ReasoningNode(
@@ -139,7 +139,7 @@ def test_open_questions_gate_fires_when_room_in_budget() -> None:
 def test_open_questions_gate_skipped_near_budget_cap() -> None:
     pack = _make_pack(last_intent="supply_chain", supervisor_cap=8)
     pack.proposed_relations = [
-        PackProposedRelation(src="A", dst="B", relation="supplies")
+        PackProposedRelation(src_id="analyzer:e1", dst_id="analyzer:e2", relation="supplies")
     ]
     pack.reasoning_graph.nodes = [
         ReasoningNode(id="n1", kind="claim", text="x", evidence_refs=["prior_knowledge"])
@@ -202,6 +202,7 @@ def test_session_pack_backward_compat_empty_fields() -> None:
     }
     pack = SessionPack.model_validate(legacy)
     assert pack.proposed_relations == []
+    assert pack.proposed_entities == []
     assert pack.supervisor_trace == []
     assert pack.last_intent == ""
     assert pack.gates_retried == []
@@ -211,26 +212,42 @@ def test_merge_analyzer_fills_proposed_relations_with_dedup() -> None:
     pack = _make_pack()
     ao1 = {
         "chainSummary": "",
+        "proposedEntities": [
+            {"id": "e1", "label": "A"},
+            {"id": "e2", "label": "B"},
+            {"id": "e3", "label": "C"},
+            {"id": "e4", "label": "D"},
+        ],
         "proposedNodes": [],
         "proposedRelations": [
-            {"src": "A", "dst": "B", "relation": "supplies"},
-            {"src": "C", "dst": "D", "relation": "produces"},
+            {"srcId": "e1", "dstId": "e2", "relation": "supplies"},
+            {"srcId": "e3", "dstId": "e4", "relation": "produces"},
         ],
         "openQuestions": [],
     }
     ao2 = {
         "chainSummary": "",
+        "proposedEntities": [
+            {"id": "e1", "label": "A"},
+            {"id": "e2", "label": "B"},
+            {"id": "e5", "label": "E"},
+            {"id": "e6", "label": "F"},
+        ],
         "proposedNodes": [],
         "proposedRelations": [
-            {"src": "A", "dst": "B", "relation": "supplies"},  # dup
-            {"src": "E", "dst": "F", "relation": "operates"},
+            {"srcId": "e1", "dstId": "e2", "relation": "supplies"},  # dup
+            {"srcId": "e5", "dstId": "e6", "relation": "operates"},
         ],
         "openQuestions": [],
     }
-    _merge_analyzer_into_pack(pack, ao1)
-    _merge_analyzer_into_pack(pack, ao2)
-    keys = {(r.src, r.dst, r.relation) for r in pack.proposed_relations}
-    assert keys == {("A", "B", "supplies"), ("C", "D", "produces"), ("E", "F", "operates")}
+    _merge_analyzer_into_pack(pack, ao1, "analyzer")
+    _merge_analyzer_into_pack(pack, ao2, "analyzer")
+    keys = {(r.src_id, r.dst_id, r.relation) for r in pack.proposed_relations}
+    assert keys == {
+        ("analyzer:e1", "analyzer:e2", "supplies"),
+        ("analyzer:e3", "analyzer:e4", "produces"),
+        ("analyzer:e5", "analyzer:e6", "operates"),
+    }
 
 
 def test_coerce_decision_fallback_is_logged_when_called_from_outer_loop() -> None:

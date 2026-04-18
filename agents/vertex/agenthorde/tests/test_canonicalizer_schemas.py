@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from agenthorde.schemas.agents_io import AnalyzerOutput, ProposedRelation
-from agenthorde.canonicalizer.schemas import (
+from agenthorde_common.schemas.agents_io import AnalyzerOutput, ProposedRelation
+from agenthorde_common.canonicalizer.schemas import (
     CanonicalEdge,
     CanonicalFragment,
     CanonicalGraph,
@@ -15,7 +15,7 @@ from agenthorde.canonicalizer.schemas import (
     SiteTransform,
     ValidationReport,
 )
-from agenthorde.canonicalizer.version import CANONICALIZER_VERSION
+from agenthorde_common.canonicalizer.version import CANONICALIZER_VERSION
 
 
 def test_canonicalizer_input_roundtrip() -> None:
@@ -84,36 +84,40 @@ def test_canonicalizer_result_dump() -> None:
 
 def test_proposed_relation_roundtrip() -> None:
     pr = ProposedRelation(
-        src="Tesla, Inc.",
-        dst="Model S",
+        src_id="e1",
+        dst_id="e2",
         relation="produces",
         attributes={"as_of": "2024-01-01"},
         source_claim_ids=["n1"],
     )
     d = pr.model_dump(mode="json", by_alias=True)
-    assert d["src"] == "Tesla, Inc."
+    assert d["srcId"] == "e1"
     assert d["sourceClaimIds"] == ["n1"]
     pr2 = ProposedRelation.model_validate(
         {
-            "src": "Port A",
-            "dst": "Port B",
+            "srcId": "e1",
+            "dstId": "e2",
             "relation": "supplies",
             "attributes": {"product": "LNG", "incoterm": "FOB"},
             "sourceClaimIds": ["n2"],
         }
     )
-    assert pr2.attributes["incoterm"] == "FOB"
+    assert pr2.attributes_as_dict()["incoterm"] == "FOB"
     assert pr2.source_claim_ids == ["n2"]
 
 
 def test_analyzer_output_with_proposed_relations_roundtrip() -> None:
     raw = {
         "chainSummary": "sc",
+        "proposedEntities": [
+            {"id": "e1", "label": "Tesla"},
+            {"id": "e2", "label": "Model S"},
+        ],
         "proposedNodes": [],
         "proposedRelations": [
             {
-                "src": "Tesla",
-                "dst": "Model S",
+                "srcId": "e1",
+                "dstId": "e2",
                 "relation": "produces",
                 "sourceClaimIds": ["n1"],
             }
@@ -124,4 +128,4 @@ def test_analyzer_output_with_proposed_relations_roundtrip() -> None:
     assert len(ao.proposed_relations) == 1
     assert ao.proposed_relations[0].relation == "produces"
     d = ao.model_dump(mode="json", by_alias=True)
-    assert d["proposedRelations"][0]["src"] == "Tesla"
+    assert d["proposedRelations"][0]["srcId"] == "e1"

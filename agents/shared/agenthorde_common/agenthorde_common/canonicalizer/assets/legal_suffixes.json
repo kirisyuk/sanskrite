@@ -1,0 +1,27 @@
+{
+  "_note": "Mirror of backend/internal/horizon/naming/policy.go LegalSuffixesToRemove and LegalPrefixesToRemove. Keep in sync. Shorter tokens (sa, ag, co, nv, bv) are intentionally kept only in the suffix slot after a space to avoid matching common words.",
+  "suffixes": [
+    "jsc", "pjsc", "cjsc", "ojsc",
+    "llc", "pllc", "inc", "ltd", "co", "corp", "corporation",
+    "group", "holdings", "limited", "company", "pty ltd",
+    "sa", "ag", "se", "gmbh", "ab", "oy", "as", "spa",
+    "nv", "bv", "sarl", "srl", "plc", "lp", "llp",
+    "pte ltd", "pte limited",
+    "kk", "k.k.",
+    "sdn bhd", "bhd",
+    "sas",
+    "a.g.", "s.a.", "s.p.a.", "n.v.", "b.v.", "p.l.c.",
+    "p.j.s.c.", "c.j.s.c."
+  ],
+  "prefixes": [
+    "joint stock company", "public joint stock company", "closed joint stock company",
+    "jsc", "pjsc", "cjsc", "ojsc",
+    "ao", "oao", "zao",
+    "llc", "inc", "ltd", "corp", "plc",
+    "gmbh", "sarl", "srl"
+  ],
+  "parenthetical_patterns": [
+    "formerly", "previously", "ex", "ex-", "now", "fka", "dba", "aka",
+    "trading as", "prev.", "prev", "f/k/a", "d/b/a", "a/k/a"
+  ]
+}

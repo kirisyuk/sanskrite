@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from agenthorde.canonicalizer.phases.phase8_validate import run_phase8
-from agenthorde.canonicalizer.schemas import CanonicalEdge, CanonicalFragment
+from agenthorde_common.canonicalizer.phases.phase8_validate import run_phase8
+from agenthorde_common.canonicalizer.schemas import CanonicalEdge, CanonicalFragment
 
 
 def test_unspecified_pair_lands_as_warning_not_error() -> None:

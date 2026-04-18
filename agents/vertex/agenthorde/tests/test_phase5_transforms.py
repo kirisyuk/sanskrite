@@ -1,8 +1,8 @@
 import uuid
 
-from agenthorde.canonicalizer.dictionaries import DictionaryRuntime
-from agenthorde.canonicalizer.phases.phase5_transforms import run_phase5
-from agenthorde.canonicalizer.schemas import Candidates, CanonicalEdge, CanonicalFragment
+from agenthorde_common.canonicalizer.dictionaries import DictionaryRuntime
+from agenthorde_common.canonicalizer.phases.phase5_transforms import run_phase5
+from agenthorde_common.canonicalizer.schemas import Candidates, CanonicalEdge, CanonicalFragment
 
 _NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 

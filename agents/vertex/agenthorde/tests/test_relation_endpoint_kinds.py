@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from agenthorde.canonicalizer.taxonomy import (
+from agenthorde_common.canonicalizer.taxonomy import (
     RELATION_ENDPOINT_KINDS,
     is_forbidden_endpoint_pair,
     relation_kind_for_endpoints,
@@ -38,6 +38,7 @@ from agenthorde.canonicalizer.taxonomy import (
         ("mitigated_by", "regime", "route", "regime_mitigated_by_route"),
         ("priced_under", "product", "market", "product_benchmark"),
         ("benchmarked_to", "product", "market", "product_benchmark"),
+        ("publishes_benchmark", "org", "market", "price_reference_publisher"),
         ("beneficially_owns", "org", "org", "institutional_stake"),
         ("beneficially_owns", "person", "org", "ubo_stake"),
         ("listed_on", "org", "market", "listed"),
@@ -99,6 +100,15 @@ def test_benchmarked_to_requires_market_target() -> None:
     assert not is_forbidden_endpoint_pair("benchmarked_to", "product", "market")
 
 
+def test_publishes_benchmark_requires_org_to_market() -> None:
+    """PRA -> market is the only recognized shape for publishes_benchmark."""
+    assert not is_forbidden_endpoint_pair("publishes_benchmark", "org", "market")
+    assert is_forbidden_endpoint_pair("publishes_benchmark", "product", "market")
+    assert is_forbidden_endpoint_pair("publishes_benchmark", "org", "product")
+    assert is_forbidden_endpoint_pair("publishes_benchmark", "site", "market")
+    assert is_forbidden_endpoint_pair("publishes_benchmark", "person", "market")
+
+
 def test_kinds_are_snake_case_short_identifiers() -> None:
     """Labels must be short snake_case — downstream queries rely on them."""
     import re
@@ -113,7 +123,7 @@ def test_kinds_are_snake_case_short_identifiers() -> None:
 
 def test_kinds_and_blacklist_dont_overlap() -> None:
     """A pair cannot simultaneously be recognized and blacklisted."""
-    from agenthorde.canonicalizer.taxonomy import RELATION_ENDPOINT_BLACKLIST
+    from agenthorde_common.canonicalizer.taxonomy import RELATION_ENDPOINT_BLACKLIST
 
     for relation, kinds in RELATION_ENDPOINT_KINDS.items():
         bl = RELATION_ENDPOINT_BLACKLIST.get(relation, frozenset())

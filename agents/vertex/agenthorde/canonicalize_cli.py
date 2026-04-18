@@ -41,8 +41,8 @@ def _load_input(path: str) -> dict[str, Any]:
 
 
 async def _run(path: str) -> dict[str, Any]:
-    from agenthorde.canonicalizer import canonicalize
-    from agenthorde.canonicalizer.schemas import CanonicalizerInput
+    from agenthorde_common.canonicalizer import canonicalize
+    from agenthorde_common.canonicalizer.schemas import CanonicalizerInput
 
     blob = _load_input(path)
     cin = CanonicalizerInput.model_validate(blob)

@@ -1,6 +1,6 @@
 # Supply-chain relation endpoint kinds
 
-Онтологический контракт канонизатора AgentHorde: **каждая признаваемая пара endpoint-классов для каждой relation имеет явный семантический лейбл `kind`**. Этот документ — источник правды для таблицы `RELATION_ENDPOINT_KINDS` в [agents/vertex/agenthorde/agenthorde/canonicalizer/taxonomy.py](../../../agents/vertex/agenthorde/agenthorde/canonicalizer/taxonomy.py).
+Онтологический контракт канонизатора AgentHorde: **каждая признаваемая пара endpoint-классов для каждой relation имеет явный семантический лейбл `kind`**. Этот документ — источник правды для таблицы `RELATION_ENDPOINT_KINDS` в [agents/shared/agenthorde_common/agenthorde_common/canonicalizer/taxonomy.py](../../../agents/shared/agenthorde_common/agenthorde_common/canonicalizer/taxonomy.py).
 
 ## Зачем это
 
@@ -236,6 +236,16 @@ Blacklist: `org→*` (актор не «priced_under» — это атрибут
 | `site → market` | `site_benchmark` | площадка к индексу |
 
 Blacklist: остальное.
+
+#### `publishes_benchmark`
+
+| from → to | kind | значение |
+|-----------|------|----------|
+| `org → market` | `price_reference_publisher` | Price Reporting Agency (Platts, Argus, OPIS, ICIS, FastMarkets, Bloomberg, Reuters/Refinitiv и т.д.) публикует референсную оценку для рынка/бенчмарка. Каталог-level fact: «кто печатает цифру, на которую другие contract'ы ссылаются через `benchmarked_to`». |
+
+Blacklist: всё остальное (`from` обязан быть `org`, `to` обязан быть `market`).
+
+Связь с `benchmarked_to`: пара «Urals `benchmarked_to` Dated Brent» и «Platts `publishes_benchmark` Dated Brent» вместе формируют полный pricing-anchor: *что* бенчмарк и *кто* его публикует. В рабочем графе оба ребра обычно присутствуют одновременно.
 
 ### §5. Ownership
 

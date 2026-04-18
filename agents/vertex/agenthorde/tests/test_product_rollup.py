@@ -1,4 +1,4 @@
-from agenthorde.canonicalizer.product_rollup import rollup_product_surface
+from agenthorde_common.canonicalizer.product_rollup import rollup_product_surface
 
 
 def test_rollup_strips_plaid_suffix() -> None:

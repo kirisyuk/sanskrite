@@ -2,7 +2,7 @@ from __future__ import annotations
 
 # pyright: reportMissingImports=false
 
-import json
+import asyncio
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -14,34 +14,45 @@ from google.genai import types as genai_types
 from agenthorde.agents.workers import (
     critic_agent,
     governance_control_analyzer,
+    question_planner,
     red_team_agent,
+    sanctions_analyzer,
     supervisor_router,
     supply_chain_analyzer,
 )
-from agenthorde.config import (
-    MAX_SUPERVISOR_CYCLES,
+from agenthorde.config import MAX_SUPERVISOR_CYCLES, STATE_FINAL_ANSWER_KEY
+from agenthorde.critic import run_critic_with_fallback
+from agenthorde_common.orchestration.supervisor_core import (
+    _ANALYZER_OUTPUT_KEY_FOR_AGENT,
+    _apply_extend_cap,
+    _check_gates,
+    _dump_pack,
+    _escalation_hints_from_raw,
+    _load_pack,
+    _log_decision,
+    _log_gate,
+    _merge_analyzer_into_pack,
+    _merge_red_team_temperature,
+    _safe_critic,
+    _sync_prompt_keys,
+    build_final_answer_text,
+    coerce_supervisor_decision,
+    extract_user_text_from_payload,
+    seed_session_state,
+)
+from agenthorde_common.runtime.state_keys import (
     STATE_ANALYZER_OUTPUT_KEY,
-    STATE_GOVERNANCE_OUTPUT_KEY,
     STATE_CRITIC_OUTPUT_KEY,
-    STATE_FINAL_ANSWER_KEY,
+    STATE_GOVERNANCE_OUTPUT_KEY,
     STATE_PACK_KEY,
+    STATE_QUESTION_PLAN_KEY,
     STATE_RED_TEAM_OUTPUT_KEY,
+    STATE_SANCTIONS_OUTPUT_KEY,
     STATE_SUPERVISOR_DECISION_KEY,
     STATE_TOOL_LEDGER_KEY,
 )
-from agenthorde.schemas.agents_io import (
-    AnalyzerOutput,
-    CriticVerdict,
-    RedTeamOutput,
-    SupervisorDecision,
-)
-from agenthorde.schemas.graph import ReasoningNode
-from agenthorde.schemas.state import (
-    HypothesisRecord,
-    PackProposedRelation,
-    SessionPack,
-    SupervisorTraceEntry,
-)
+from agenthorde_common.schemas.agents_io import CriticVerdict, EscalationHint, SupervisorDecision
+from agenthorde_common.schemas.state import SessionPack
 
 
 def _extract_user_text(ctx: InvocationContext) -> str:
@@ -51,228 +62,7 @@ def _extract_user_text(ctx: InvocationContext) -> str:
             t = getattr(p, "text", None) or ""
             if t:
                 parts.append(t)
-    raw = "\n".join(parts).strip()
-    if raw.startswith("{") and '"question"' in raw:
-        try:
-            obj = json.loads(raw)
-            if isinstance(obj, dict) and obj.get("question"):
-                return str(obj["question"]).strip()
-        except json.JSONDecodeError:
-            pass
-    return raw
-
-
-def _safe_critic(raw: Any) -> CriticVerdict | None:
-    if not raw:
-        return None
-    try:
-        return CriticVerdict.model_validate(raw)
-    except Exception:
-        return None
-
-
-def _json_compact(data: Any, limit: int = 14000) -> str:
-    try:
-        s = json.dumps(data, ensure_ascii=False, default=str)
-    except TypeError:
-        s = str(data)
-    if len(s) > limit:
-        return s[: limit - 20] + "\n... [truncated]"
-    return s
-
-
-def _load_pack(state: dict[str, Any]) -> SessionPack:
-    raw = state.get(STATE_PACK_KEY) or {}
-    if isinstance(raw, SessionPack):
-        return raw
-    return SessionPack.model_validate(raw)
-
-
-def _dump_pack(state: dict[str, Any], pack: SessionPack) -> None:
-    state[STATE_PACK_KEY] = pack.model_dump(mode="json", by_alias=True)
-
-
-def _sync_prompt_keys(state: dict[str, Any], pack: SessionPack, mission: str = "") -> None:
-    state["ah_user_question"] = pack.user_question
-    state["ah_pack_json"] = _json_compact(pack.model_dump(mode="json", by_alias=True))
-    state["ah_mission"] = mission
-    state["ah_critic_json"] = _json_compact(state.get(STATE_CRITIC_OUTPUT_KEY) or {})
-    state["ah_analyzer_json"] = _json_compact(state.get(STATE_ANALYZER_OUTPUT_KEY) or {})
-    state["ah_governance_json"] = _json_compact(state.get(STATE_GOVERNANCE_OUTPUT_KEY) or {})
-    state["ah_red_team_json"] = _json_compact(state.get(STATE_RED_TEAM_OUTPUT_KEY) or {})
-
-
-def _rel_key(src: str, dst: str, relation: str) -> tuple[str, str, str]:
-    return (
-        (src or "").strip().lower(),
-        (dst or "").strip().lower(),
-        (relation or "").strip().lower(),
-    )
-
-
-def _merge_analyzer_into_pack(pack: SessionPack, raw: Any) -> None:
-    if raw is None:
-        return
-    if hasattr(raw, "model_dump"):
-        raw = raw.model_dump(mode="json", by_alias=True)
-    try:
-        ao = AnalyzerOutput.model_validate(raw)
-    except Exception:
-        return
-    existing = {n.id: n for n in pack.reasoning_graph.nodes}
-    for n in ao.proposed_nodes:
-        if isinstance(n, ReasoningNode):
-            existing[n.id] = n
-        else:
-            node = ReasoningNode.model_validate(n)
-            existing[node.id] = node
-    pack.reasoning_graph.nodes = list(existing.values())
-
-    # Merge proposed_relations with dedup on (src, dst, relation).
-    seen: dict[tuple[str, str, str], PackProposedRelation] = {
-        _rel_key(r.src, r.dst, r.relation): r for r in pack.proposed_relations
-    }
-    for pr in ao.proposed_relations:
-        k = _rel_key(pr.src, pr.dst, pr.relation)
-        if k in seen:
-            continue
-        seen[k] = PackProposedRelation(
-            src=pr.src,
-            dst=pr.dst,
-            relation=pr.relation,
-            attributes=dict(pr.attributes or {}),
-            source_claim_ids=list(pr.source_claim_ids or []),
-        )
-    pack.proposed_relations = list(seen.values())
-
-
-def _merge_red_team_temperature(pack: SessionPack, raw: Any) -> None:
-    try:
-        rt = RedTeamOutput.model_validate(raw)
-    except Exception:
-        return
-    pack.research_temperature = max(0.0, min(1.0, pack.research_temperature + rt.suggested_temperature_delta))
-    note = (rt.reframe_notes or "").strip()
-    if note:
-        rid = f"rt-{len(pack.reasoning_graph.nodes)}"
-        pack.reasoning_graph.nodes.append(
-            ReasoningNode(id=rid, kind="counter", text=note, hypothesis_id="", evidence_refs=[])
-        )
-
-
-def _log_decision(pack: SessionPack, cycle: int, dec: SupervisorDecision) -> None:
-    pack.supervisor_trace.append(
-        SupervisorTraceEntry(
-            cycle=cycle,
-            decision=dec.next_agent,
-            rationale=dec.rationale or "",
-        )
-    )
-    if dec.next_agent in ("supply_chain_analyzer", "governance_control_analyzer"):
-        pack.last_intent = (
-            "supply_chain"
-            if dec.next_agent == "supply_chain_analyzer"
-            else "governance"
-        )
-
-
-def _log_gate(
-    pack: SessionPack,
-    cycle: int,
-    gate: str,
-    action: str,
-    rationale: str = "",
-    decision: Any = "finalize",
-) -> None:
-    pack.supervisor_trace.append(
-        SupervisorTraceEntry(
-            cycle=cycle,
-            decision=decision,  # type: ignore[arg-type]
-            rationale=rationale,
-            gate=gate,  # type: ignore[arg-type]
-            gate_action=action,  # type: ignore[arg-type]
-        )
-    )
-
-
-def _node_has_empty_refs(n: Any) -> bool:
-    refs = []
-    if isinstance(n, ReasoningNode):
-        refs = n.evidence_refs or []
-    elif isinstance(n, dict):
-        refs = n.get("evidenceRefs") or n.get("evidence_refs") or []
-    return not refs
-
-
-def _tool_ledger_has_sources(state: dict[str, Any]) -> bool:
-    ledger = state.get(STATE_TOOL_LEDGER_KEY) or []
-    for entry in ledger:
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("tool") != "web_search" or not entry.get("ok"):
-            continue
-        payload = entry.get("payload") or {}
-        if payload.get("sources"):
-            return True
-    return False
-
-
-def _pick_retry_agent_for_intent(pack: SessionPack) -> str:
-    intent = (pack.last_intent or "").strip()
-    if intent == "governance":
-        return "governance_control_analyzer"
-    return "supply_chain_analyzer"
-
-
-def _check_gates(
-    pack: SessionPack,
-    state: dict[str, Any],
-    cycle: int,
-) -> tuple[str, str, str] | None:
-    """Return (gate_name, retry_agent, directive) if a gate triggers a retry, else None.
-
-    Strict one-retry-per-gate guard via pack.gates_retried.
-    """
-    # structural gate.
-    if "structural" not in pack.gates_retried:
-        intent = (pack.last_intent or "").strip()
-        if intent in ("supply_chain", "governance") and len(pack.proposed_relations) == 0:
-            if cycle < pack.supervisor_cap:
-                return (
-                    "structural",
-                    _pick_retry_agent_for_intent(pack),
-                    "STRUCTURAL GAP: no proposedRelations from prior cycle. "
-                    "Re-read claims and emit explicit proposedRelations using the AH relations vocabulary "
-                    "(supplies, produces, operates, transships_at, passes_through, listed_on, subsidiary_of, beneficially_owns, ...).",
-                )
-
-    # evidence gate.
-    if "evidence" not in pack.gates_retried:
-        has_empty = any(_node_has_empty_refs(n) for n in pack.reasoning_graph.nodes)
-        if has_empty and _tool_ledger_has_sources(state) and cycle < pack.supervisor_cap:
-            return (
-                "evidence",
-                _pick_retry_agent_for_intent(pack),
-                "EVIDENCE GAP: attach source URLs from toolLedger[*].payload.sources[*].url "
-                "to each proposedNodes[i].evidenceRefs. Use 'prior_knowledge' only for textbook claims.",
-            )
-
-    # open_questions gate — only when we still have room to act on findings.
-    if "open_questions" not in pack.gates_retried:
-        ao_raw = state.get(STATE_ANALYZER_OUTPUT_KEY) or {}
-        open_q: list[str] = []
-        if isinstance(ao_raw, dict):
-            open_q = ao_raw.get("openQuestions") or ao_raw.get("open_questions") or []
-        if open_q and cycle < pack.supervisor_cap - 1:
-            top3 = "; ".join(str(q) for q in open_q[:3])
-            return (
-                "open_questions",
-                _pick_retry_agent_for_intent(pack),
-                f"OPEN QUESTIONS: run targeted web_search on: {top3}. "
-                "Attach resulting source URLs to proposedNodes[i].evidenceRefs.",
-            )
-
-    return None
+    return extract_user_text_from_payload("\n".join(parts))
 
 
 def _coerce_decision(
@@ -280,68 +70,66 @@ def _coerce_decision(
     cycle: int,
     raw: Any,
     last_critic: CriticVerdict | None,
+    last_hints: list[EscalationHint] | None = None,
 ) -> SupervisorDecision:
-    try:
-        dec = SupervisorDecision.model_validate(raw)
-    except Exception:
-        dec = SupervisorDecision(
-            next_agent="supply_chain_analyzer",
-            mission="Initial supply-chain pass from user question.",
-            research_temperature=pack.research_temperature,
-            rationale="Fallback: invalid supervisor JSON.",
-        )
-    if not pack.reasoning_graph.nodes and dec.next_agent == "finalize":
-        # Do not pick supply vs governance here — only the supervisor router (LLM) decides.
-        # This branch only blocks a premature finalize; next cycle the router chooses the worker.
-        dec = SupervisorDecision(
-            next_agent="supply_chain_analyzer",
-            mission=dec.mission or "Build an initial chain sketch before finalize.",
-            research_temperature=dec.research_temperature,
-            rationale="Coerced: cannot finalize with empty reasoning graph.",
-        )
-    if cycle >= MAX_SUPERVISOR_CYCLES - 1 and dec.next_agent not in (
-        "critic_agent",
-        "finalize",
-    ):
-        dec = SupervisorDecision(
-            next_agent="critic_agent",
-            mission="Budget nearly exhausted: strict sufficiency check.",
-            research_temperature=pack.research_temperature,
-            rationale="Coerced: hard budget pressure toward critic or finalize.",
-        )
-    if last_critic and last_critic.sufficient and dec.next_agent not in ("finalize", "red_team_agent"):
-        dec = SupervisorDecision(
-            next_agent="finalize",
-            mission="",
-            research_temperature=pack.research_temperature,
-            rationale="Coerced: critic already marked sufficient.",
-        )
-    return dec
+    """Tests and ADK code use this name; delegates to shared ``coerce_supervisor_decision``."""
+    return coerce_supervisor_decision(
+        pack,
+        cycle,
+        raw,
+        last_critic,
+        last_hints,
+        max_supervisor_cycles=MAX_SUPERVISOR_CYCLES,
+    )
 
 
 class SupervisorAgent(BaseAgent):
     """Single supervisor loop with ADK sub-agents and typed SessionPack."""
 
+    def _agent_for_name(self, name: str):
+        if name == "supply_chain_analyzer":
+            return supply_chain_analyzer
+        if name == "governance_control_analyzer":
+            return governance_control_analyzer
+        if name == "sanctions_analyzer":
+            return sanctions_analyzer
+        if name == "red_team_agent":
+            return red_team_agent
+        if name == "critic_agent":
+            return critic_agent
+        return None
+
+    async def _run_analyzer_and_merge(
+        self,
+        ctx: InvocationContext,
+        agent_name: str,
+    ) -> AsyncGenerator[Event, None]:
+        agent = self._agent_for_name(agent_name)
+        if agent is None:
+            return
+        async for event in agent.run_async(ctx):
+            yield event
+        output_key = _ANALYZER_OUTPUT_KEY_FOR_AGENT.get(agent_name)
+        if not output_key:
+            return
+        pack = _load_pack(ctx.session.state)
+        origin = (
+            "analyzer"
+            if agent_name == "supply_chain_analyzer"
+            else "governance"
+            if agent_name == "governance_control_analyzer"
+            else "sanctions"
+        )
+        _merge_analyzer_into_pack(pack, ctx.session.state.get(output_key), origin)
+        _dump_pack(ctx.session.state, pack)
+
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
         state = ctx.session.state
         if not state.get(STATE_PACK_KEY):
             question = _extract_user_text(ctx)
-            pack = SessionPack(
-                user_question=question,
-                supervisor_cap=MAX_SUPERVISOR_CYCLES,
-                success_criteria_notes="Answer the user with explicit chain logic and stated uncertainty.",
-                success_checklist=[
-                    "Named key entities or product scopes where possible",
-                    "Separated stable facts vs time-sensitive claims",
-                    "Noted missing evidence or graph gaps",
-                ],
-                hypotheses={
-                    "H0": HypothesisRecord(hypothesis_id="H0", title="Primary interpretation", status="active")
-                },
+            pack = seed_session_state(
+                state, question, max_supervisor_cycles=MAX_SUPERVISOR_CYCLES
             )
-            _dump_pack(state, pack)
-            if state.get(STATE_TOOL_LEDGER_KEY) is None:
-                state[STATE_TOOL_LEDGER_KEY] = []
             yield Event(
                 author=self.name,
                 actions=EventActions(
@@ -353,20 +141,46 @@ class SupervisorAgent(BaseAgent):
             )
             _sync_prompt_keys(state, pack, mission="")
 
-        for cycle in range(1, MAX_SUPERVISOR_CYCLES + 1):
+        # Cycle-0: question_planner runs once per session, before any analyzer
+        # or supervisor decision. Provides the structured QuestionPlan that
+        # downstream roles consume via {ah_question_plan_json}. Failure here is
+        # non-fatal — downstream prompts treat empty plan as "use heuristics".
+        if not state.get(STATE_QUESTION_PLAN_KEY):
+            try:
+                async for event in question_planner.run_async(ctx):
+                    yield event
+                _sync_prompt_keys(state, _load_pack(state), mission=str(state.get("ah_mission") or ""))
+            except Exception:  # noqa: BLE001 - best-effort, planner is optional scaffolding
+                pass
+
+        while True:
             pack = _load_pack(state)
+            cycle = int(pack.cycle_index or 0) + 1
+            cap = max(int(pack.supervisor_cap or MAX_SUPERVISOR_CYCLES), MAX_SUPERVISOR_CYCLES)
+            if cycle > cap:
+                break
             pack.cycle_index = cycle
             _dump_pack(state, pack)
             _sync_prompt_keys(state, pack, mission=str(state.get("ah_mission") or ""))
 
             last_critic = _safe_critic(state.get(STATE_CRITIC_OUTPUT_KEY))
+            # Collect hints from the most recent analyzer output (whichever wrote last).
+            last_hints: list[EscalationHint] = []
+            for key in (
+                STATE_ANALYZER_OUTPUT_KEY,
+                STATE_GOVERNANCE_OUTPUT_KEY,
+                STATE_SANCTIONS_OUTPUT_KEY,
+            ):
+                hints = _escalation_hints_from_raw(state.get(key))
+                if hints:
+                    last_hints.extend(hints)
 
             async for event in supervisor_router.run_async(ctx):
                 yield event
 
             raw_dec = state.get(STATE_SUPERVISOR_DECISION_KEY)
 
-            dec = _coerce_decision(pack, cycle, raw_dec, last_critic)
+            dec = _coerce_decision(pack, cycle, raw_dec, last_critic, last_hints)
             pack.research_temperature = dec.research_temperature
             _log_decision(pack, cycle, dec)
             state[STATE_SUPERVISOR_DECISION_KEY] = dec.model_dump(mode="json", by_alias=True)
@@ -397,12 +211,17 @@ class SupervisorAgent(BaseAgent):
                         async for event in governance_control_analyzer.run_async(ctx):
                             yield event
                         pack = _load_pack(state)
-                        _merge_analyzer_into_pack(pack, state.get(STATE_GOVERNANCE_OUTPUT_KEY))
+                        _merge_analyzer_into_pack(pack, state.get(STATE_GOVERNANCE_OUTPUT_KEY), "governance")
+                    elif retry_agent == "sanctions_analyzer":
+                        async for event in sanctions_analyzer.run_async(ctx):
+                            yield event
+                        pack = _load_pack(state)
+                        _merge_analyzer_into_pack(pack, state.get(STATE_SANCTIONS_OUTPUT_KEY), "sanctions")
                     else:
                         async for event in supply_chain_analyzer.run_async(ctx):
                             yield event
                         pack = _load_pack(state)
-                        _merge_analyzer_into_pack(pack, state.get(STATE_ANALYZER_OUTPUT_KEY))
+                        _merge_analyzer_into_pack(pack, state.get(STATE_ANALYZER_OUTPUT_KEY), "analyzer")
                     _dump_pack(state, pack)
                     continue
                 _log_gate(pack, cycle, "", "pass", rationale="all gates passed", decision="finalize")
@@ -410,25 +229,55 @@ class SupervisorAgent(BaseAgent):
                 break
 
             if dec.next_agent == "supply_chain_analyzer":
-                async for event in supply_chain_analyzer.run_async(ctx):
+                async for event in self._run_analyzer_and_merge(ctx, "supply_chain_analyzer"):
                     yield event
-                pack = _load_pack(state)
-                _merge_analyzer_into_pack(pack, state.get(STATE_ANALYZER_OUTPUT_KEY))
-                _dump_pack(state, pack)
             elif dec.next_agent == "governance_control_analyzer":
-                async for event in governance_control_analyzer.run_async(ctx):
+                async for event in self._run_analyzer_and_merge(ctx, "governance_control_analyzer"):
                     yield event
-                pack = _load_pack(state)
-                _merge_analyzer_into_pack(pack, state.get(STATE_GOVERNANCE_OUTPUT_KEY))
-                _dump_pack(state, pack)
+            elif dec.next_agent == "sanctions_analyzer":
+                async for event in self._run_analyzer_and_merge(ctx, "sanctions_analyzer"):
+                    yield event
+            elif dec.next_agent == "parallel_fanout":
+                # ADK agents are not guaranteed thread-safe per-context, but each
+                # run_async is an async generator tied to the shared context.
+                # We fan out the *drains* concurrently and forward events to the
+                # outer stream in completion order. If any sub-agent is missing,
+                # we silently skip it.
+                names = [n for n in (dec.parallel_agents or []) if self._agent_for_name(n)]
+                if not names:
+                    continue
+                queue: asyncio.Queue[tuple[Event | None, str]] = asyncio.Queue()
+
+                async def _drain(name: str) -> None:
+                    try:
+                        async for event in self._run_analyzer_and_merge(ctx, name):
+                            await queue.put((event, name))
+                    finally:
+                        await queue.put((None, name))
+
+                tasks = [asyncio.create_task(_drain(n)) for n in names]
+                done_count = 0
+                while done_count < len(names):
+                    event, _name = await queue.get()
+                    if event is None:
+                        done_count += 1
+                        continue
+                    yield event
+                await asyncio.gather(*tasks, return_exceptions=True)
             elif dec.next_agent == "critic_agent":
-                async for event in critic_agent.run_async(ctx):
+                async for event in run_critic_with_fallback(
+                    ctx,
+                    vertex_critic_agent=critic_agent,
+                    cycle=cycle,
+                    session_id=str(getattr(ctx.session, "id", "") or ""),
+                ):
                     yield event
                 try:
                     last_critic = CriticVerdict.model_validate(state.get(STATE_CRITIC_OUTPUT_KEY))
                 except Exception:
                     last_critic = None
                 if last_critic and last_critic.sufficient:
+                    pack = _load_pack(state)
                     pack.done = True
                     _dump_pack(state, pack)
                     break
@@ -437,6 +286,9 @@ class SupervisorAgent(BaseAgent):
                     yield event
                 pack = _load_pack(state)
                 _merge_red_team_temperature(pack, state.get(STATE_RED_TEAM_OUTPUT_KEY))
+                # Consume the red-team gate when an extension was pending.
+                if pack.extensions_pending_red_team:
+                    pack.extensions_pending_red_team = False
                 _dump_pack(state, pack)
 
             pack = _load_pack(state)
@@ -444,32 +296,9 @@ class SupervisorAgent(BaseAgent):
 
         # Deterministic finalize text
         pack = _load_pack(state)
-        # Ensure reasoning_graph reflects last analyzer nodes (session merges may lag behind).
-        _merge_analyzer_into_pack(pack, state.get(STATE_ANALYZER_OUTPUT_KEY))
-        _merge_analyzer_into_pack(pack, state.get(STATE_GOVERNANCE_OUTPUT_KEY))
-        _dump_pack(state, pack)
-        ao_raw = state.get(STATE_ANALYZER_OUTPUT_KEY) or {}
-        go_raw = state.get(STATE_GOVERNANCE_OUTPUT_KEY) or {}
-        summary_sc = ""
-        summary_gov = ""
-        try:
-            summary_sc = AnalyzerOutput.model_validate(ao_raw).chain_summary
-        except Exception:
-            summary_sc = str(ao_raw) if ao_raw else ""
-        try:
-            summary_gov = AnalyzerOutput.model_validate(go_raw).chain_summary
-        except Exception:
-            summary_gov = str(go_raw) if go_raw else ""
-        parts: list[str] = []
-        if (summary_sc or "").strip():
-            parts.append(summary_sc.strip())
-        if (summary_gov or "").strip():
-            parts.append("Governance & control:\n" + summary_gov.strip())
-        summary = "\n\n".join(parts) if parts else "(no analyzer summary)"
-        caveat = ""
-        if pack.cycle_index >= MAX_SUPERVISOR_CYCLES and not pack.done:
-            caveat = "\n\n[Stopped: supervisor cycle cap reached.]"
-        final = summary + caveat
+        final = build_final_answer_text(
+            state, pack, max_supervisor_cycles=MAX_SUPERVISOR_CYCLES
+        )
         state[STATE_FINAL_ANSWER_KEY] = final
         pack.final_answer = final
         pack.done = True
@@ -493,11 +322,13 @@ class SupervisorAgent(BaseAgent):
 
 root_agent = SupervisorAgent(
     name="agenthorde_supervisor",
-    description="Supervisor-led supply chain and governance/control reasoning with analyzers, critic, and red team.",
+    description="Supervisor-led supply chain, governance/control, and sanctions reasoning with analyzers, critic, and red team.",
     sub_agents=[
+        question_planner,
         supervisor_router,
         supply_chain_analyzer,
         governance_control_analyzer,
+        sanctions_analyzer,
         critic_agent,
         red_team_agent,
     ],

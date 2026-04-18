@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from agenthorde.canonicalizer.phases.phase4_relations import _build_edge_from_raw
-from agenthorde.canonicalizer.schemas import CanonicalEntity, Candidates
+from agenthorde_common.canonicalizer.phases.phase4_relations import _build_edge_from_raw
+from agenthorde_common.canonicalizer.schemas import CanonicalEntity, Candidates
 
 
 def _build(relation: str, fromt: str, tot: str, *, attrs=None):

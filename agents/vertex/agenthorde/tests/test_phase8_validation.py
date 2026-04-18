@@ -1,6 +1,6 @@
-from agenthorde.canonicalizer.phases.phase8_validate import run_phase8
-from agenthorde.canonicalizer.schemas import CanonicalEdge, CanonicalFragment, SiteTransform
-from agenthorde.canonicalizer.taxonomy import RELATION_NAMES
+from agenthorde_common.canonicalizer.phases.phase8_validate import run_phase8
+from agenthorde_common.canonicalizer.schemas import CanonicalEdge, CanonicalFragment, SiteTransform
+from agenthorde_common.canonicalizer.taxonomy import RELATION_NAMES
 
 
 def test_phase8_reports_bad_relation_endpoints() -> None:

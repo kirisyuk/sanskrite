@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 import unittest
 
-from agenthorde.schemas.agents_io import AnalyzerOutput, CriticVerdict, SupervisorDecision
-from agenthorde.schemas.graph import ReasoningGraph, ReasoningNode
-from agenthorde.schemas.state import ApplyPatchRecord, HypothesisRecord, SessionPack
-from agenthorde.schemas.tools_io import ApplyToolInput, ToolEnvelope
+from agenthorde_common.schemas.agents_io import AnalyzerOutput, CriticVerdict, SupervisorDecision
+from agenthorde_common.schemas.graph import ReasoningGraph, ReasoningNode
+from agenthorde_common.schemas.state import ApplyPatchRecord, HypothesisRecord, SessionPack
+from agenthorde_common.schemas.tools_io import ApplyToolInput, ToolEnvelope
 
 
 class SchemaRoundtripTests(unittest.TestCase):
@@ -57,7 +57,11 @@ class SchemaRoundtripTests(unittest.TestCase):
         AnalyzerOutput.model_validate(ao.model_dump(mode="json", by_alias=True))
 
     def test_critic_verdict(self) -> None:
-        cv = CriticVerdict(sufficient=False, blockers=["b"])
+        cv = CriticVerdict(
+            sufficient=False,
+            blockers=[{"summary": "missing tier-2 supplier", "refs": ["sc_e1"]}],
+            composition_recommendation="conditional",
+        )
         CriticVerdict.model_validate(cv.model_dump(mode="json", by_alias=True))
 
     def test_apply_tool_input(self) -> None:

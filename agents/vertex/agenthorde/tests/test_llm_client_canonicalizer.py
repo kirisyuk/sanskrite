@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from agenthorde.canonicalizer.llm_client import LLMPhaseClient
+from agenthorde_common.canonicalizer.llm_client import LLMPhaseClient
 
 
 def test_canonicalizer_skip_env_alias(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,5 +1,5 @@
-from agenthorde.canonicalizer.confidence import aggregate_edge_confidence, noisy_or
-from agenthorde.canonicalizer.schemas import CanonicalEdge, SourceRef
+from agenthorde_common.canonicalizer.confidence import aggregate_edge_confidence, noisy_or
+from agenthorde_common.canonicalizer.schemas import CanonicalEdge, SourceRef
 
 
 def test_noisy_or_saturates_with_independent_sources() -> None:

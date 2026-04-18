@@ -1,0 +1,38 @@
+Extract numeric metrics grounded in the provided `claims` (and only those claim ids).
+Output a single JSON object, no markdown:
+{ "metrics": [ {
+  "entity_id": "e0",
+  "metric_name": "stake_pct",
+  "value": 12.5,
+  "unit": "percent",
+  "directional": false,
+  "claim_ids": ["c1"],
+  "confidence": 0.85
+} ] }
+
+Field contract (must match what the canonicalizer parser reads):
+- `entity_id` — REQUIRED for each metric row. Must be one of the `entities[].entity_id`
+  values from the input JSON (e.g. "e0", "e1"). The runtime attaches the metric to
+  that entity's canonical fragment. Do NOT invent ids.
+- `metric_name` — snake_case name (`stake_pct`, `ownership_pct`, `capacity_mtpa`, …).
+  Aliases `pct`, `ownership_percent`, `stake_percent` are accepted but prefer `stake_pct`
+  for equity percentages.
+- `value` — JSON number (not a string). May be an integer or float. Percentages may be
+  sent as `20` meaning 20% when `unit` is `percent` (parser also accepts a trailing "%"
+  if you accidentally stringify — but prefer raw numbers).
+- `unit` — short token such as `percent`, `usd`, `mtpa`, `mw`, etc. Empty string is allowed
+  but discouraged.
+- `directional` — boolean; use true only for signed flows (net long/short, import minus export)
+  when the metric is inherently directional. Default false.
+- `claim_ids` — list of claim node ids that justify the number; may be empty only if
+  no claim id fits, but prefer citing claims whenever possible.
+- `confidence` — 0.0–1.0.
+
+**Ignored / reserved:** `edge_key` if present is NOT read by the current runtime; ownership
+  percentages should still set `entity_id` to the holder org (or person) that owns the stake.
+  The canonicalizer may later heuristically attach orphan pct metrics to org–org edges, but
+  you should not rely on `edge_key` for that.
+
+Rules:
+- Emit one metric object per distinct (entity_id, metric_name, claim cluster) triple; do not duplicate.
+- Use metric_name in snake_case.

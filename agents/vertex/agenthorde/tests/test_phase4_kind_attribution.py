@@ -6,8 +6,8 @@ import uuid
 
 import pytest
 
-from agenthorde.canonicalizer.phases.phase4_relations import _build_edge_from_raw
-from agenthorde.canonicalizer.schemas import CanonicalEntity, Candidates
+from agenthorde_common.canonicalizer.phases.phase4_relations import _build_edge_from_raw
+from agenthorde_common.canonicalizer.schemas import CanonicalEntity, Candidates
 
 
 def _mk_entity(entity_id: str, t: str, surface: str, path: str) -> CanonicalEntity:
@@ -178,6 +178,31 @@ def test_charters_layer_clamped_from_bogus_value() -> None:
     edge = _build_edge_from_raw(row, ents, eids, etype, cand, run_id="t", version="t")
     assert edge is not None
     assert edge.layer in ("contractual", "flow")
+
+
+def test_publishes_benchmark_price_reference_publisher_kind() -> None:
+    """Platts -> Dated Brent lands as `price_reference_publisher` on structural
+    layer under the regimes_risks section."""
+    pra = _mk_entity("e1", "org", "S&P Global Platts", "/org/us/platts")
+    mkt = _mk_entity("e2", "market", "Dated Brent", "/market/na/dated-brent")
+    edge, cand = _build("publishes_benchmark", src=pra, dst=mkt)
+    assert edge is not None
+    assert edge.attributes.get("kind") == "price_reference_publisher"
+    assert edge.layer == "structural"
+    assert edge.layer_section == "regimes_risks"
+    assert not any(
+        c.reason in ("forbidden_endpoint_pair", "endpoint_pair_not_in_catalog")
+        for c in cand.unknown_relations
+    )
+
+
+def test_publishes_benchmark_wrong_endpoints_dropped() -> None:
+    """Non-org source or non-market target is forbidden and edge is dropped."""
+    prod = _mk_entity("e1", "product", "Urals", "/product/hydrocarbon/urals-crude")
+    mkt = _mk_entity("e2", "market", "Dated Brent", "/market/na/dated-brent")
+    edge, cand = _build("publishes_benchmark", src=prod, dst=mkt)
+    assert edge is None
+    assert any(c.reason == "forbidden_endpoint_pair" for c in cand.unknown_relations)
 
 
 def test_valid_layer_is_preserved() -> None:

@@ -1,0 +1,201 @@
+Extract entity mentions from the research text. Output JSON:
+{ "mentions": [ { "surface": "...", "type": "org"|"person"|"geo"|"site"|"product"|"vessel_class"|"route"|"market"|"regime"|"project"|"evidence"|"community"|null,
+  "agentId": "analyzer:e1|null",
+  "subtype": "string or null", "claim_refs": ["id1"], "context_hints": { "iso2Hint": "tw|null", "sectorHint": "...", "asOfHint": "..." },
+  "per_claim_confidence": 0.0-1.0 } ],
+  "skippedRegistryIds": [] }
+
+- `agentId` — when this mention corresponds to one row from input `analyzer_entities`, set it to
+  that row's **exact** `agentId` string (namespaced, e.g. `analyzer:e1`). Otherwise `null`.
+- `skippedRegistryIds` — optional; list any `analyzer_entities[].agentId` you intentionally skip
+  (e.g. label is only an Incoterm). May be [] or omitted.
+
+Rules:
+- Use only the listed type values or null if no fit.
+- claim_refs must reference provided claim node ids only.
+- Do not invent new type strings.
+
+SUBTYPE SEMANTICS — READ CAREFULLY:
+subtype is **identity-carrying** for three types and **metadata only** for the rest.
+  - Identity-carrying (it becomes a hard segment of the canonical path, so the same
+    concept with different subtypes becomes different fragments — pick from the
+    closed lists below, do NOT invent variants):
+      * product   → `/product/{family}/{slug}`, family from the PRODUCT FAMILIES list.
+      * community → `/community/{iso2}/{subtype}/{slug}`, subtype from the
+        COMMUNITY SUBTYPES list.
+      * evidence  → `/evidence/{iso2}/{subtype}-{slug}`, subtype from the EVIDENCE
+        SUBTYPES list.
+  - Metadata only (never reaches the path; used for classification hints and
+    downstream prompts): org, person, geo, site, vessel_class, route, market, regime,
+    project. For these a short snake_case hint is fine (e.g. `private_holdco`, `port`,
+    `ubo`, `strait`, `sanctions`).
+  - If nothing fits the closed list for an identity-carrying type, leave subtype null;
+    the canonicalizer will fall back to the catch-all (`general` for product,
+    `key-community` for community, `entity` for evidence). Do NOT invent a new family.
+
+INPUT FIELDS:
+- `claims`, `hypothesis_anchors`, `counters`, `chain_summaries`, `final_answer_excerpt`,
+  `working_graph_excerpt` — narrative / prose to mine for entity mentions.
+- `analyzer_entities` — `[{{ "agentId": "analyzer:e1", "label": "TSMC" }}, ...]` from upstream
+  analyzers' **proposedEntities** (stable registry). By default the canonicalizer sends the **full**
+  list in one bound call; optionally it may split into parallel chunks (env-tunable). Each bound
+  call is told via system text to cover exactly the rows in that call; the **prose pass** uses
+  `analyzer_entities` = [] and emits only mentions with `agentId=null`. **COVERAGE** is applied
+  per call: for every row in the current slice, emit exactly one mention whose `surface` equals
+  `label` verbatim and set `agentId` to that row's `agentId`. If the label is an Incoterm /
+  non-entity per rules below, put its `agentId` in `skippedRegistryIds` instead.
+
+JURISDICTION HINT (context_hints.iso2Hint) — **MANDATORY** for jurisdiction-bound types:
+  regime | project | site | geo | person | org | community | market
+
+  For every mention whose `type` is one of the above, you MUST set
+  `context_hints.iso2Hint` to a **non-null** string whenever you can justify it
+  from **any** field in the current request: `claims`, `hypothesis_anchors`,
+  `counters`, `chain_summaries`, `final_answer_excerpt`, `working_graph_excerpt`,
+  or reasonable disambiguation from the mention's own `surface` / registry `label`.
+
+  Allowed tokens: ISO2 lowercase country codes ("us", "cn", "kr", "tw", "jp",
+  "nl", "de", "gb", …) OR regional tokens ("eu", "gcc", "asean", …) OR "int" for
+  explicitly multilateral / UN-scale bodies with no single host state.
+
+  **Hard requirement:** do NOT leave `iso2Hint` null for these types if the
+  narrative names an issuer, host country, headquarters, listing venue,
+  nationality, site location, project's host geography, or regime jurisdiction.
+  Parse aggressively from context — downstream dedup treats this hint as a
+  discriminator (especially `regime`: "EU Chips Act" → "eu"; "US CHIPS Act" /
+  "BIS Entity List" → "us"; "EU 14th sanctions package" → "eu").
+
+  **Narrow null exception:** `iso2Hint` may be null ONLY when the supplied text
+  truly contains zero geographic or jurisdictional anchor for that specific
+  mention AND guessing would be pure speculation. In that rare case, null is
+  acceptable; otherwise you are under-filling the contract.
+
+  **Conventional venue shorthand (still evidence-based, not wild guessing):**
+  when a `market` is a well-known exchange/benchmark named in the label and the
+  request text does not contradict it, map the venue to its primary listing
+  jurisdiction (e.g. "Nasdaq" → "us", "LME" → "gb", "TSE" / "Tokyo Stock
+  Exchange" → "jp"). If ambiguous (multiple countries use the same acronym),
+  prefer null over a wrong country unless the text resolves it.
+
+  **Abstract / synthetic `market` rows (DRAM spot, wafer ASP, "Market NAND"):**
+  when the label names a commodity or price index but not an exchange, bind
+  `iso2Hint` to the **dominant commercial geography** repeated in the excerpt
+  (Taiwan / TSMC / Hsinchu / Kaohsiung / "TW fabs" → `tw`; Korea / Samsung / SK
+  hynix narrative → `kr`; US CHIPS / US BIS / US export control narrative → `us`).
+  Only use `int` when the text is explicitly global with no regional anchor.
+
+  **Org rows with zero in-text country tokens:** if the registry label alone is
+  insufficient but the organization is an **industry-standard** multinational whose
+  headquarters jurisdiction is unambiguous (e.g. Carl Zeiss / Zeiss SMT → `de`,
+  TRUMPF → `de`, ASML → `nl`, Tower Semiconductor → `il`), you MUST still emit
+  that ISO2 — the hint is required for dedup, not optional trivia. If the HQ
+  could credibly be multiple countries, prefer the jurisdiction named anywhere in
+  the request payload; if still ambiguous, use `int` rather than null.
+
+COVERAGE RULES (you MUST emit a mention for each of these when the text names them — not only named orgs):
+
+product — class-level commodity or product line:
+  - any commodity named on a supply route (e.g. "crude oil", "iron ore", "LNG", "coal",
+    "copper concentrate", "refined tin", "palm oil", "wheat", "containerized goods"),
+  - any product line in a catalog sense (e.g. "Model S", "Megapack", "iPhone"),
+  - prefer class-level surface (strip SKU qualifiers like "Plaid", "Long Range", "Pro Max",
+    years); put the raw variant in claim_refs text (the canonicalizer tracks variants).
+  PRODUCT FAMILIES (closed list — pick EXACTLY one, or null for fallback `general`):
+    hydrocarbon   — crude oil, LNG, LPG, refined fuels, gas
+    ore           — iron ore, copper concentrate, raw mined ores
+    refined_metal — refined copper/tin/aluminium, billet, cathode, bars
+    bulk_dry      — coal, bauxite, dry bulk cargo that is not grain/ore
+    bulk_liquid   — chemical tanker cargo, molasses, vegetable oil cargo
+    container     — containerized goods, boxed finished products
+    grain         — wheat, corn, soybeans, rice, barley
+    chemical      — industrial chemicals, acids, polymers, solvents
+    fertilizer    — urea, potash, ammonia, phosphate fertilizer
+    chip          — semiconductors, DRAM, NAND, logic chips, wafers
+    equipment     — lithography tools, industrial machinery, scanners
+    vehicle       — cars, trucks, EVs, automotive finished goods
+    battery       — lithium-ion cells, battery packs, megapack
+    component     — optics, lasers, sub-assemblies, parts
+    agriculture   — palm oil, soy oil, non-grain agri products
+    textile       — cotton, apparel, finished textile goods
+    pharmaceutical— drugs, APIs, medical supplies
+    energy        — electricity, hydrogen, power as a commodity
+    general       — catch-all when the family is truly ambiguous
+
+regime — normative / risk / governance regime that actors or sites are subject to or exposed to:
+  - piracy zones ("Malacca piracy surge"),
+  - war-risk areas ("war-risk premium area", "listed war-risk zone"),
+  - sanctions / export-control regimes ("US OFAC sanctions", "EU 14th package",
+    "UK trade sanctions", "export control regime on GaN"),
+  - emission / environmental regimes ("IMO 2020 sulfur cap", "CII rating", "EU ETS for shipping"),
+  - insurance / price regimes ("P&I club rules", "Brent benchmark", "FOB pricing regime"),
+  - legal / jurisdictional regimes ("FCPA", "DOJ consent decree", "ADGM Court regime").
+  subtype examples: piracy, war_risk_area, sanctions, export_control, emission, insurance, benchmark.
+
+vessel_class — use SINGULAR surface where possible (e.g. "VLCC" not "VLCCs", "Valemax" not "Valemaxes").
+  subtype examples: vlcc, vloc, suezmax, malaccamax, capesize, panamax, ulcv, feeder.
+
+route — corridor / strait / canal / lane as a whole (distinct from a specific site).
+  subtype examples: strait, canal, corridor, lane, rail_corridor, pipeline.
+
+site — a specific named port/terminal/plant/mine/warehouse (e.g. "Port Klang", "Tuas Mega Port",
+  "Phillip Channel" if modeled as a chokepoint site). Prefer site over route when the text
+  talks about a specific terminal rather than the whole corridor.
+
+market — exchange / benchmark venue ("Nasdaq", "LME", "Shanghai Futures Exchange", "TTF hub").
+
+org — includes regulators (OFAC, IMO, MARAD), exchanges as legal entities (NYSE Group),
+  liner alliances ("Ocean Alliance", "Gemini Cooperation"), miners, shippers, charterers.
+  For regulators set subtype=regulator.
+
+community — informal social entity WITHOUT legal registration (the social entity, not
+  any holdco it uses).
+  COMMUNITY SUBTYPES (closed list — pick EXACTLY one, or null for fallback `key-community`):
+    dynasty              — family dynasties, chaebol families, royal houses
+                           ("Lee family", "House of Saud", "Ambani family",
+                           "Wallenberg family", "Murdoch family"). Keep the
+                           family-controlled holdco ("Samsung C&T", "Reliance
+                           Industries") as a separate `org` mention; the
+                           dynasty CONTROLS the holdco.
+    tribe                — tribes / clans / kin groups in a governance or
+                           control context ("Pashtun tribal elders",
+                           "Al-Said dynasty council")
+    industry-association — trade body / industry association without a single
+                           legal org ("SEMI", "Global Chip Design Forum")
+    representatives      — lobby groups, delegations, representative bodies
+    activist             — activist collectives, NGOs acting as a movement
+    professional         — professional networks, guilds
+    religious            — religious congregations, church bodies
+    criminal             — criminal networks, cartels, syndicates
+    ethnic               — ethnic diasporas, transnational ethnic groups
+    interest             — generic interest groups not covered above
+    trade                — cross-border trade communities (rare; prefer
+                           industry-association unless text is explicit)
+  Distinction reminder:
+    * Has legal registration (LLC, Inc., Ltd, JSC, agency) → use `org`.
+    * Single named individual → use `person`.
+    * Multi-individual social entity that USES orgs/channels → use `community`.
+
+evidence — external source citation promoted to an entity (rare; use only when a
+  specific document, filing, or statement is being referenced as a fact-bearing
+  artifact rather than just quoted).
+  EVIDENCE SUBTYPES (closed list — pick EXACTLY one, or null for fallback `entity`):
+    quote          — named news article, interview, comment, opinion piece
+    report         — analyst report, NGO report, annual report, research paper
+    filing         — regulatory filing (SEC 10-K/10-Q, court filing, license)
+    statement      — official statement / testimony / press conference remarks
+    press_release  — press release / corporate or government PR
+    dataset        — dataset, database, table, CSV referenced as source
+    other          — anything else; also used when the fallback kicks in
+
+HARD RULE — no orphan attribute labels:
+  If the text names a commodity in a supply context (e.g. "tankers carrying crude oil",
+  "iron ore flows to China") you MUST emit a product mention. Same for regimes
+  (piracy, war-risk, sanctions, emission caps). Omitting these strands downstream graph build.
+
+HARD RULE — Incoterm codes are NEVER entities:
+  The Incoterm codes CIF, FOB, CFR, FCA, DAP, EXW, DDP, DPU, FAS, CIP, CPT
+  (including variants like "CIF China", "FOB Singapore") are NOT regime, NOT market,
+  NOT product, NOT anything. They are edge-attribute values on supplies/charters
+  (attributes.incoterm). DO NOT emit them as standalone mentions under any type.
+  If you encounter one, silently skip it — the downstream layer will attach it to
+  the relevant edge from the surrounding narrative.

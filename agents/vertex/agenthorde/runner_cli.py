@@ -87,7 +87,51 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip post-run canonicalizer (no extra LLM / Firestore for dictionaries).",
     )
+    p.add_argument(
+        "--followup-from",
+        default="",
+        help=(
+            "Path to a prior run's JSON output. Its canonicalGraph.followUpPlan is "
+            "injected into the next question as {knownAnchors, deferredResearch, "
+            "aggregateMentions} so analyzers skip rediscovery and focus on gaps."
+        ),
+    )
     return p.parse_args()
+
+
+def _load_followup_plan(path: str) -> dict[str, Any]:
+    """Extract followUpPlan + knownAnchors from a prior --run output JSON."""
+    if not path:
+        return {}
+    with open(path, encoding="utf-8") as f:
+        raw = json.load(f)
+    if not isinstance(raw, dict):
+        return {}
+    cg = raw.get("canonicalGraph") or {}
+    if not isinstance(cg, dict):
+        return {}
+    plan = cg.get("followUpPlan")
+    if not isinstance(plan, dict):
+        return {}
+    return plan
+
+
+def _merge_followup_into_question(normalized: str, plan: dict[str, Any]) -> str:
+    if not plan:
+        return normalized
+    try:
+        obj = json.loads(normalized)
+    except json.JSONDecodeError:
+        obj = {"question": normalized.strip()}
+    if not isinstance(obj, dict):
+        obj = {"question": str(obj)}
+    obj["priorFollowUpPlan"] = {
+        "knownAnchors": plan.get("knownAnchors", [])[:64],
+        "deferredResearch": plan.get("deferredResearch", [])[:32],
+        "aggregateMentions": plan.get("aggregateMentions", [])[:32],
+        "counters": plan.get("counters", {}),
+    }
+    return json.dumps(obj, ensure_ascii=False)
 
 
 def _load_user_payload(args: argparse.Namespace) -> str:
@@ -133,8 +177,8 @@ async def _run_async(user_text: str, *, skip_canonicalizer: bool = False) -> dic
         "toolLedger": st.get(STATE_TOOL_LEDGER_KEY, []),
     }
     if not skip_canonicalizer:
-        from agenthorde.canonicalizer import canonicalize
-        from agenthorde.canonicalizer.schemas import CanonicalizerInput
+        from agenthorde_common.canonicalizer import canonicalize
+        from agenthorde_common.canonicalizer.schemas import CanonicalizerInput
 
         cin = CanonicalizerInput(
             pack=out.get("pack") or {},
@@ -155,6 +199,16 @@ def main() -> None:
     args = parse_args()
     raw = _load_user_payload(args)
     normalized = _normalize_input_text(raw)
+    if args.followup_from:
+        plan = _load_followup_plan(args.followup_from)
+        if plan:
+            normalized = _merge_followup_into_question(normalized, plan)
+            print(
+                f"AgentHorde: injected priorFollowUpPlan from {args.followup_from} "
+                f"({len(plan.get('knownAnchors') or [])} anchors, "
+                f"{len(plan.get('deferredResearch') or [])} deferred items)",
+                file=sys.stderr,
+            )
     if args.validate_only:
         print(normalized)
         return

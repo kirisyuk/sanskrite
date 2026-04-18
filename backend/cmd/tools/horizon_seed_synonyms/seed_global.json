@@ -1,0 +1,42 @@
+[
+  {"aliasSurface": "TSMC", "canonicalPath": "/org/tw/taiwan-semiconductor-manufacturing-company"},
+  {"aliasSurface": "Taiwan Semiconductor Manufacturing Company", "canonicalPath": "/org/tw/taiwan-semiconductor-manufacturing-company"},
+  {"aliasSurface": "Taiwan Semiconductor Manufacturing Co", "canonicalPath": "/org/tw/taiwan-semiconductor-manufacturing-company"},
+  {"aliasSurface": "Taiwan Semiconductor", "canonicalPath": "/org/tw/taiwan-semiconductor-manufacturing-company"},
+
+  {"aliasSurface": "ASML", "canonicalPath": "/org/nl/asml-holding"},
+  {"aliasSurface": "ASML Holding", "canonicalPath": "/org/nl/asml-holding"},
+
+  {"aliasSurface": "Intel", "canonicalPath": "/org/us/intel"},
+  {"aliasSurface": "Intel Corporation", "canonicalPath": "/org/us/intel"},
+
+  {"aliasSurface": "Samsung", "canonicalPath": "/org/kr/samsung-electronics"},
+  {"aliasSurface": "Samsung Electronics", "canonicalPath": "/org/kr/samsung-electronics"},
+
+  {"aliasSurface": "SMIC", "canonicalPath": "/org/cn/semiconductor-manufacturing-international"},
+  {"aliasSurface": "Semiconductor Manufacturing International Corporation", "canonicalPath": "/org/cn/semiconductor-manufacturing-international"},
+
+  {"aliasSurface": "GlobalFoundries", "canonicalPath": "/org/us/globalfoundries"},
+  {"aliasSurface": "Global Foundries", "canonicalPath": "/org/us/globalfoundries"},
+
+  {"aliasSurface": "NVIDIA", "canonicalPath": "/org/us/nvidia"},
+  {"aliasSurface": "Nvidia Corporation", "canonicalPath": "/org/us/nvidia"},
+  {"aliasSurface": "AMD", "canonicalPath": "/org/us/advanced-micro-devices"},
+  {"aliasSurface": "Advanced Micro Devices", "canonicalPath": "/org/us/advanced-micro-devices"},
+
+  {"aliasSurface": "Platts", "canonicalPath": "/org/us/s-and-p-global-platts"},
+  {"aliasSurface": "S&P Global Platts", "canonicalPath": "/org/us/s-and-p-global-platts"},
+
+  {"aliasSurface": "Argus", "canonicalPath": "/org/uk/argus-media"},
+  {"aliasSurface": "Argus Media", "canonicalPath": "/org/uk/argus-media"},
+
+  {"aliasSurface": "OPIS", "canonicalPath": "/org/us/opis"},
+  {"aliasSurface": "ICIS", "canonicalPath": "/org/uk/icis"},
+  {"aliasSurface": "Fastmarkets", "canonicalPath": "/org/uk/fastmarkets"},
+
+  {"aliasSurface": "Tesla", "canonicalPath": "/org/us/tesla"},
+  {"aliasSurface": "Tesla Inc", "canonicalPath": "/org/us/tesla"},
+
+  {"aliasSurface": "Saudi Aramco", "canonicalPath": "/org/sa/saudi-aramco"},
+  {"aliasSurface": "Aramco", "canonicalPath": "/org/sa/saudi-aramco"}
+]

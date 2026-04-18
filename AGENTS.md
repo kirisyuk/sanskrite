@@ -32,6 +32,13 @@
 - Если product-to-product pair известна в transform dictionary, нужно использовать canonical relation и `relationKind`.
 - Если новый продукт или новая product pair не найдены в словарях, их нельзя молча терять или плодить ad hoc словари. Их нужно писать в candidate collections.
 
+## AgentHorde: агент vs канонизатор
+
+- **Агент** — исследование и фиксация фактов в prose + **реестр сущностей** (`proposedEntities`: стабильный `id` + дословный `label` из своего же текста) + **связи по id** (`proposedRelations`: `srcId`/`dstId` только из этого реестра). Он не задаёт онтологический тип сущности и не эмитит внутренние коды режимов каталога — только читаемые имена.
+- **Канонизатор** — приземление на системные сущности (NER/типизация, canonical paths, дедуп по jurisdiction gate, словари). Контракт стабильных id → mention → fragment обеспечивает симметрию с агентом без «третьего написания» endpoint'а.
+
+Канонизатор и общие схемы — пакет `agenthorde_common` (`agents/shared/agenthorde_common/`); Vertex (ADK) и Azure (OpenAI) — отдельные рантаймы. См. [/Users/kirisyuk/cursor/sanskrite/docs/agents/agenthorde-runtimes.md](/Users/kirisyuk/cursor/sanskrite/docs/agents/agenthorde-runtimes.md).
+
 ## Чего нельзя делать
 
 Агент не должен:

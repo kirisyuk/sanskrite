@@ -1,7 +1,7 @@
 """Surface resolver: singular/plural fallback for vessel_class and the like."""
 
-from agenthorde.canonicalizer.phases.phase4_relations import _resolve_surface_to_entity
-from agenthorde.canonicalizer.schemas import CanonicalEntity
+from agenthorde_common.canonicalizer.phases.phase4_relations import _resolve_surface_to_entity
+from agenthorde_common.canonicalizer.schemas import CanonicalEntity
 
 
 def _mk(entity_id: str, t: str, surface: str, path: str) -> CanonicalEntity:
@@ -42,3 +42,45 @@ def test_resolver_canonical_path_lookup() -> None:
 def test_resolver_returns_none_for_unknown_surface() -> None:
     e = _mk("e1", "org", "Acme", "/org/na/acme")
     assert _resolve_surface_to_entity("Globex", [e]) is None
+
+
+def test_resolver_token_set_fallback_strips_snake_case_prefix() -> None:
+    """Analyzer emits ``pra_trendforce`` as endpoint id; entity surface is ``TrendForce``.
+
+    This is the TSMC-cycle bug: snake_case ad-hoc identifiers with a type
+    prefix (``pra_``) blow past exact + legal-suffix + synonym lookup. The
+    token_set fallback over normalized surfaces (``pra trendforce`` vs
+    ``trendforce``) rescues the match.
+    """
+
+    e = _mk("e1", "org", "TrendForce", "/org/tw/trendforce")
+    assert _resolve_surface_to_entity("pra_trendforce", [e]) is e
+
+
+def test_resolver_token_set_fallback_resolves_multi_token_descriptor() -> None:
+    """``tsmc_taiwan_fab`` should match ``Taiwan Semiconductor Manufacturing Company``."""
+
+    e = _mk(
+        "e1",
+        "org",
+        "Taiwan Semiconductor Manufacturing Company",
+        "/org/tw/taiwan-semiconductor-manufacturing",
+    )
+    # token_set_ratio({"taiwan","semiconductor","manufacturing","company"},
+    #                 {"tsmc","taiwan","fab"}) — overlap "taiwan" alone is too thin;
+    # we expect this NOT to match (good — false positives must stay rare).
+    assert _resolve_surface_to_entity("tsmc_taiwan_fab", [e]) is None
+
+
+def test_resolver_token_set_fallback_picks_higher_intersection_winner() -> None:
+    """When two entities share a token with the query, prefer the one with MORE shared tokens.
+
+    ``apple_daily_hk`` against {Apple Inc, Apple Daily}: both score 100 on
+    token_set_ratio, but Apple Daily shares 2 tokens with the query and Apple
+    Inc shares only 1. The resolver must pick Apple Daily.
+    """
+
+    apple_inc = _mk("e1", "org", "Apple Inc", "/org/us/apple-inc")
+    apple_daily = _mk("e2", "org", "Apple Daily", "/org/hk/apple-daily")
+    out = _resolve_surface_to_entity("apple_daily_hk", [apple_inc, apple_daily])
+    assert out is apple_daily

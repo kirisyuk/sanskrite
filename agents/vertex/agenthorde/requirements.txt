@@ -1,6 +1,8 @@
+-e ../../shared/agenthorde_common
 google-adk
 google-genai
 pydantic
 google-cloud-firestore
 rapidfuzz
 unidecode
+httpx

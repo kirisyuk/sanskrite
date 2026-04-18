@@ -1,8 +1,37 @@
-"""AgentHorde caps and model ids (env-tunable; no hidden Vertex model aliasing)."""
+"""AgentHorde Vertex/ADK runtime: models, session keys, critic fallback (env-tunable)."""
 
 from __future__ import annotations
 
 import os
+
+from agenthorde_common.config import (
+    CANONICALIZER_ENTITY_MODEL,
+    CANONICALIZER_EVIDENCE_FALLBACK_MIN_SCORE,
+    CANONICALIZER_EVIDENCE_FANOUT_MAX,
+    CANONICALIZER_EVIDENCE_FANOUT_MIN_SCORE,
+    CANONICALIZER_FUZZY_THRESHOLD,
+    CANONICALIZER_LLM_MAX_RETRIES,
+    CANONICALIZER_LLM_TIMEOUT_SEC,
+    CANONICALIZER_MERGE_CANDIDATE_LO,
+    CANONICALIZER_METRIC_MODEL,
+    CANONICALIZER_PATH_COLLISION_MERGE_THRESHOLD,
+    CANONICALIZER_PHASE1_CHUNK_MAX,
+    CANONICALIZER_PHASE1_MAX_DEPTH,
+    CANONICALIZER_RELATION_MODEL,
+    HORIZON_FIRESTORE_PROJECT,
+)
+from agenthorde_common.runtime.state_keys import (
+    DEFAULT_MAX_SUPERVISOR_CYCLES,
+    STATE_ANALYZER_OUTPUT_KEY,
+    STATE_CRITIC_OUTPUT_KEY,
+    STATE_FINAL_ANSWER_KEY,
+    STATE_GOVERNANCE_OUTPUT_KEY,
+    STATE_PACK_KEY,
+    STATE_RED_TEAM_OUTPUT_KEY,
+    STATE_SANCTIONS_OUTPUT_KEY,
+    STATE_SUPERVISOR_DECISION_KEY,
+    STATE_TOOL_LEDGER_KEY,
+)
 
 # Align with ADK heuristic when the root agent lives under .../agenthorde/agents/ (avoids app-name mismatch warning).
 APP_NAME = os.getenv("AGENTHORDE_APP_NAME", "agents")
@@ -13,64 +42,30 @@ SUPERVISOR_MODEL = os.getenv("AGENTHORDE_SUPERVISOR_MODEL", "gemini-3-flash-prev
 WORKER_MODEL = os.getenv("AGENTHORDE_WORKER_MODEL", "gemini-3-flash-preview")
 CRITIC_MODEL = os.getenv("AGENTHORDE_CRITIC_MODEL", "gemini-3.1-pro-preview")
 
-MAX_SUPERVISOR_CYCLES = int(os.getenv("AGENTHORDE_MAX_SUPERVISOR_CYCLES", "8"))
+MAX_SUPERVISOR_CYCLES = int(
+    os.getenv("AGENTHORDE_MAX_SUPERVISOR_CYCLES", str(DEFAULT_MAX_SUPERVISOR_CYCLES))
+)
 
-# Canonicalizer (post-run)
-CANONICALIZER_ENTITY_MODEL = os.getenv("AGENTHORDE_CANONICALIZER_ENTITY_MODEL", "gemini-3.1-pro-preview")
-CANONICALIZER_RELATION_MODEL = os.getenv("AGENTHORDE_CANONICALIZER_RELATION_MODEL", "gemini-3.1-pro-preview")
-CANONICALIZER_METRIC_MODEL = os.getenv("AGENTHORDE_CANONICALIZER_METRIC_MODEL", "gemini-3-flash-preview")
-CANONICALIZER_FUZZY_THRESHOLD = int(os.getenv("AGENTHORDE_CANONICALIZER_FUZZY_THRESHOLD", "85"))
-CANONICALIZER_MERGE_CANDIDATE_LO = int(os.getenv("AGENTHORDE_CANONICALIZER_MERGE_CANDIDATE_LO", "80"))
-# Path collision merge in phase 3 (same-type fuzzy on slug surfaces); defaults to entity dedup fuzzy threshold.
-CANONICALIZER_PATH_COLLISION_MERGE_THRESHOLD = int(
-    os.getenv("AGENTHORDE_CANONICALIZER_PATH_COLLISION_MERGE_THRESHOLD")
-    or os.getenv("CANONICALIZER_PATH_COLLISION_MERGE_THRESHOLD")
-    or str(CANONICALIZER_FUZZY_THRESHOLD)
-)
-CANONICALIZER_LLM_MAX_RETRIES = int(
-    os.getenv(
-        "AGENTHORDE_CANONICALIZER_LLM_MAX_RETRIES",
-        os.getenv("CANONICALIZER_LLM_MAX_RETRIES", "3"),
-    )
-)
-CANONICALIZER_LLM_TIMEOUT_SEC = float(
-    os.getenv(
-        "AGENTHORDE_CANONICALIZER_LLM_TIMEOUT_SEC",
-        os.getenv("CANONICALIZER_LLM_TIMEOUT_SEC", "120"),
-    )
-)
-# Phase 7 evidence fan-out: link each claim to additional corroborating sources beyond top-1.
-# Max supported_by edges added from one claim fragment to source fragments.
-CANONICALIZER_EVIDENCE_FANOUT_MAX = int(
-    os.getenv(
-        "AGENTHORDE_CANONICALIZER_EVIDENCE_FANOUT_MAX",
-        os.getenv("CANONICALIZER_EVIDENCE_FANOUT_MAX", "8"),
-    )
-)
-# Fuzzy-match score (0..100) required on web_search.answer vs claim text to count as supporting source.
-CANONICALIZER_EVIDENCE_FANOUT_MIN_SCORE = int(
-    os.getenv(
-        "AGENTHORDE_CANONICALIZER_EVIDENCE_FANOUT_MIN_SCORE",
-        os.getenv("CANONICALIZER_EVIDENCE_FANOUT_MIN_SCORE", "55"),
-    )
-)
-# Looser threshold used ONLY when the claim has no direct evidence_refs at all; keeps
-# Malacca-like prose-heavy runs from losing all retrieved sources.
-CANONICALIZER_EVIDENCE_FALLBACK_MIN_SCORE = int(
-    os.getenv(
-        "AGENTHORDE_CANONICALIZER_EVIDENCE_FALLBACK_MIN_SCORE",
-        os.getenv("CANONICALIZER_EVIDENCE_FALLBACK_MIN_SCORE", "45"),
-    )
-)
-_hp = os.getenv("HORIZON_FIRESTORE_PROJECT", "").strip()
-_gp = os.getenv("GOOGLE_CLOUD_PROJECT", "").strip()
-HORIZON_FIRESTORE_PROJECT = _hp or _gp or None
 
-STATE_PACK_KEY = "ah_pack"
-STATE_SUPERVISOR_DECISION_KEY = "ah_supervisor_decision"
-STATE_ANALYZER_OUTPUT_KEY = "ah_analyzer_output"
-STATE_GOVERNANCE_OUTPUT_KEY = "ah_governance_output"
-STATE_CRITIC_OUTPUT_KEY = "ah_critic_output"
-STATE_RED_TEAM_OUTPUT_KEY = "ah_red_team_output"
-STATE_FINAL_ANSWER_KEY = "ah_final_answer"
-STATE_TOOL_LEDGER_KEY = "ah_tool_ledger"
+def _parse_csv_env(name: str, default: str) -> list[str]:
+    raw = os.getenv(name, default)
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+# ---- Critic OpenRouter fallback (temporary in-Python path; roadmap: backend /api/v1/ai/critic). ----
+CRITIC_FALLBACK_MODELS: list[str] = _parse_csv_env(
+    "AGENTHORDE_CRITIC_FALLBACKS",
+    "openai/o4-mini,z-ai/glm-5.1,deepseek/deepseek-chat-v3.1,nvidia/nemotron-3-super-120b-a12b",
+)
+CRITIC_OR_STRICT: bool = os.getenv("AGENTHORDE_CRITIC_OR_STRICT", "1") not in ("0", "false", "False")
+CRITIC_OR_MAX_OUTPUT_TOKENS: int = int(os.getenv("AGENTHORDE_CRITIC_OR_MAX_OUTPUT_TOKENS", "6144"))
+CRITIC_OR_MODEL_OVERRIDES: dict[str, dict] = {
+    "openai/o4-mini": {
+        "temperature": None,
+        "extra_body": {"reasoning": {"effort": "low"}},
+    },
+}
+CRITIC_AB_LOG_PATH: str = os.getenv(
+    "AGENTHORDE_CRITIC_AB_LOG",
+    "/tmp/agenthorde_smoke/critic_ab.jsonl",
+)

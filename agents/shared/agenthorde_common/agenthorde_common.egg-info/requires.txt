@@ -1,0 +1,7 @@
+pydantic>=2
+google-cloud-firestore
+rapidfuzz
+unidecode
+httpx
+google-genai
+openai>=1.69.0

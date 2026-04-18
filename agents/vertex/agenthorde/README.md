@@ -1,6 +1,23 @@
 # AgentHorde
 
-Greenfield **Vertex AI** + **Google ADK** (`google.adk`) experiment: one supervisor loop (cycle cap), workers `supply_chain_analyzer`, `governance_control_analyzer` (ownership and corporate control chains), `critic_agent`, `red_team_agent`, typed session pack and tool envelopes. `apply` accumulates JSON patches into session state (no production graph runtime).
+Общий канонизатор и схемы вынесены в пакет [`agenthorde_common`](../../shared/agenthorde_common/); см. [два рантайма](../../../docs/agents/agenthorde-runtimes.md).
+
+Greenfield **Vertex AI** + **Google ADK** (`google.adk`) experiment: one supervisor loop (cycle cap), workers `supply_chain_analyzer`, `governance_control_analyzer` (ownership and corporate control chains), `sanctions_analyzer`, `critic_agent`, `red_team_agent`, typed session pack and tool envelopes. `apply` accumulates JSON patches into session state (no production graph runtime).
+
+## Текущее состояние (schema v2)
+
+Короткая сводка для агентов/ревьюеров, чтобы не копать по всему файлу:
+
+- **Канонический слой синонимов**: в ядре есть общий словарь `horizon_synonym_pairs` (Go runtime `synonymdict`, Python `DictionaryRuntime.resolve_generic_synonym`). Canonicalizer умеет `strip_legal_suffix` / `strip_parenthetical_alias` (см. `../../shared/agenthorde_common/agenthorde_common/canonicalizer/slug.py` + `assets/legal_suffixes.json`) и гасит внутренние id-шники `eNN` в `_resolve_surface_to_entity`.
+- **Санкционный слой**: таксономия несёт `SANCTIONS_REGIMES_CATALOG` (OFAC SDN, EU restrictive measures, EAR/BIS, G7 price cap, CAATSA, …). Phase 3 нормализует `regime` entities к каноническим путям вида `/regime/ofac/sdn`. Специализированный `sanctions_analyzer` (см. `agenthorde/agents/workers.py`) поднимается по `escalationHints` из supply-chain аналитика или supervisor policy.
+- **EscalationHint**: `AnalyzerOutput.escalationHints: list[EscalationHint{reason, suggestedAgent, confidence}]`. supervisor router читает подсказки и при `confidence >= 0.6` перенаправляет поток на `sanctions_analyzer` / `governance_control_analyzer` / `red_team_agent` и т.д.
+- **Person floor-coverage**: `governance_control_analyzer` обязан для каждого `person` эмитить минимум один из `member_of / directs / owns / controls / incorporated_in`, а в pre-return sanity sweep — удалять persons без структурной привязки.
+- **Динамический cycle cap**: supervisor может ставить `extendCapBy` (1–3 раза) в `SupervisorDecision` либо вызвать tool `extend_cycle_cap(reason, uncoveredFamilies)`. Каждое расширение добавляет `ceil(initial_cap * 0.1)` итераций и взводит `extensions_pending_red_team` — следующий цикл принудительно уходит в `red_team_agent`, чтобы расширение бюджета «оплачивалось» критикой.
+- **Budget telemetry**: в `SessionPack` появились `initial_supervisor_cap`, `extensions_used`, `extensions_pending_red_team`, `token_spend`, `web_search_calls_used`, `cost_so_far_usd`.
+- **Parallel fan-out**: `SupervisorDecision{nextAgent: "parallel_fanout", parallelAgents: [...]}` запускает несколько аналитиков в `asyncio.gather`. Мердж в `reasoning_graph`/`proposed_relations` идемпотентен — при коллизиях побеждает узел с большим числом evidence_refs / более длинным текстом.
+- **Canonicalizer follow-up plan**: `CanonicalizerResult.followUpPlan` содержит `aggregateMentions` (orphan-фрагменты), `deferredResearch` (unknown products/relations/transforms/synonyms + dictionary warnings) и `knownAnchors` (топ-фрагменты по инцидентности). `runner_cli.py --followup-from PRIOR.json` вшивает это в следующий запрос как `question.priorFollowUpPlan`, и аналитики используют `knownAnchors` вместо повторного discovery.
+- **Schema versioning**: `CanonicalizerResult.schemaVersion=2` и `SessionPack.schema_version=2`; старые блобы без новых полей валидируются (тест `test_session_pack_backward_compat_empty_fields`).
+- **Critic OpenRouter fallback** (временный, см. Roadmap ниже): критик пробует Vertex первым, при 429 / невалидном JSON проваливается в OpenRouter-цепочку `openai/o4-mini (reasoning.effort=low) → z-ai/glm-5.1 → deepseek/deepseek-chat-v3.1 → nvidia/nemotron-3-super-120b-a12b` (env `AGENTHORDE_CRITIC_FALLBACKS`). Порядок закреплён бенчем `scripts/bench_critic_models.py` на апрель 2026: o4-mini лидирует по скорости (≈6s), цене (~$0.003/вызов) и строгости schema. Каждая попытка логируется построчно в `AGENTHORDE_CRITIC_AB_LOG` (JSONL) для A/B-сравнения моделей на одном запросе.
 
 ## Бизнес-смыслы: какие артефакты цепочек поставок находит система
 
@@ -247,9 +264,9 @@ Greenfield **Vertex AI** + **Google ADK** (`google.adk`) experiment: one supervi
 
 **Канонический путь** — многосегментный идентификатор сущности. **Первый сегмент** задаёт **класс объекта** (замкнутый enum — полный реестр ниже, он же используется в столбце «Канон. путь» сводной таблицы классов выше). **Второй и далее** — уточнение (часто **ISO2** для «привязанных к земле» сущностей; для продуктов — **стадия передела / подвид / спецификация**, а не страна как «вторая буква»).
 
-### Полный реестр первых сегментов (замкнутый enum — 11 классов)
+### Полный реестр первых сегментов (замкнутый enum — 12 классов)
 
-Если объект не ложится ни на один из 11 — это кандидат на расширение enum, а не повод вкладывать его ad hoc в существующий путь.
+Если объект не ложится ни на один из 12 — это кандидат на расширение enum, а не повод вкладывать его ad hoc в существующий путь.
 
 | # | Префикс | Что покрывает | 2-й сегмент (типичный) | Примеры подтипов |
 |---|---------|---------------|------------------------|------------------|
@@ -264,6 +281,13 @@ Greenfield **Vertex AI** + **Google ADK** (`google.adk`) experiment: one supervi
 | 9 | `/regime` | Нормативная рамка: режим, риск, инкотерм | юрисдикция → код | `regulatory`, `risk`, `incoterm` |
 | 10 | `/project` | Инициатива: проект, программа, операция | `transnational` или ISO2 → slug | `infrastructure`, `programme`, `operation` |
 | 11 | `/evidence` | Мета-слой: источник, утверждение | домен / hash | `source`, `claim` |
+| 12 | `/community` | Неформальная социальная сущность без юр.регистрации | ISO2 → подтип → slug | `dynasty` (chaebol-семьи, royal houses), `tribe` (кланы, племена), `industry-association`, `representatives`, `activist`, `professional`, `religious`, `criminal`, `ethnic`, `interest`, `trade`, `key-community` |
+
+#### Зачем `/community` отдельно от `/org` и `/person`
+
+`/org` — юр.лицо с регистрацией (LLC, Inc., Ltd., JSC, агентство). `/person` — один названный человек. `/community` — мульти-индивидная социальная сущность без юр.регистрации, которая *использует* организации и каналы, но сама не является юр.вехилом. Канонический пример: семья Lee коллективно контролирует чеболь Samsung через серию холдингов — `/community/kr/dynasty/lee-family` `controls_via` → `/org/kr/samsung-c-and-t`. Holdco остаётся отдельной `/org`, семья как сущность — `/community/dynasty`. Зеркалирует core canonical control plane (`backend/internal/horizon/scout/canonicalizer.go` slot ordering и `entity_semantics.EntityTypeCommunityDynasty / Tribe`).
+
+Путь `/community/{geo}/{subtype}/{slug}` — три семантических слота после класса. Подтип — это **отдельный сегмент**, не префикс slug.
 
 #### Зачем `/site` отдельно от `/geo`
 
@@ -447,16 +471,21 @@ AgentHorde работает в **две фазы**, и они не смешив�
 
 Структурированный граф, готовый к записи в ядро: узлы с canonical paths, типизированные рёбра с атрибутами и `layer`, structured metrics с provenance. Это то, что раньше строил детерминированный пайплайн ядра — теперь строит агентская среда + канонизатор.
 
-### Pre-structured relations от аналитика (`proposedRelations`)
+### Agent contract: `proposedEntities` + `proposedRelations` (по id)
 
-Помимо `proposedNodes`, `supply_chain_analyzer` и `governance_control_analyzer` обязаны эмитить **`proposedRelations`** — структурные рёбра между теми же поверхностными метками, которые упомянуты в `proposedNodes[*].text`. Это закрывает проблему «`workingGraph.edges = []` при том, что `finalAnswer` буквально напичкан связями».
+Помимо `proposedNodes` (только reasoning: claim / question / …), каждый analyzer эмитит:
 
-Форма строки:
+1. **`proposedEntities`** — реестр объектов: `{ "id": "e1", "label": "…" }`.  
+   `label` — **дословная** строка из `chainSummary` или `proposedNodes[].text` (одно и то же написание везде). Типы сущностей агент **не** задаёт — их выводит канонизатор (phase 1) из narrative.
+2. **`proposedRelations`** — рёбра **только между id из реестра**: `{ "srcId": "e1", "dstId": "e2", "relation": "produces", … }`.  
+   Никаких natural-language строк в `srcId`/`dstId`. Supervisor при мерже префиксует id как `analyzer:e1`, `governance:e1`, `sanctions:e1`, чтобы `parallel_fanout` не коллидировал.
+
+Пример строки relation:
 
 ```json
 {
-  "src": "Tesla, Inc.",
-  "dst": "Model S",
+  "srcId": "e1",
+  "dstId": "e2",
   "relation": "produces",
   "attributes": { "as_of": "2024-01-01" },
   "sourceClaimIds": ["n1"]
@@ -469,9 +498,10 @@ AgentHorde работает в **две фазы**, и они не смешив�
 
 Путь данных:
 
-1. `_merge_analyzer_into_pack` (supervisor) кладёт их в `SessionPack.proposedRelations` с дедупом по `(src, dst, relation)`.
-2. Phase 0 канонизатора собирает их из pack + текущих analyzer/governance outputs в `WorkingState.analyzer_relations`.
-3. Phase 4 делает **pre-pass**: surface → entity через `normalize_surface`/`slugify`, прогоняет через тот же synonym/swap/endpoint/supplies-cargo pipeline, что и LLM-output. Результат передаётся LLM как `known_edges` в payload, чтобы не дублировать. Финал = union(pre_pass, llm_extended) с дедупом по `(src_id, dst_id, relation, layer_section)` (+ `product_fragment_id` для `supplies`, чтобы multi-cargo не схлопывался).
+1. `_merge_analyzer_into_pack` кладёт `proposedEntities` и `proposedRelations` в `SessionPack` с дедупом relations по `(srcId, dstId, relation)` (ids уже namespaced).
+2. Phase 0 собирает реестр и relations в `WorkingState.analyzer_entities` / `analyzer_relations`; битые ссылки (`srcId` не из реестра) → `input_issues` с кодом `entity_id_not_in_registry`.
+3. Phase 1 получает `analyzer_entities` в payload и для каждой строки реестра эмитит mention с тем же `surface` и полем `agentId` = namespaced id. По умолчанию (`AGENTHORDE_CANONICALIZER_PHASE1_CHUNK_MAX=0`) весь реестр уходит **одним** bound-вызовом LLM (без adaptive halving); при `CHUNK_MAX >= 1` список режется на чанки этого размера и обрабатывается **параллельно**, а пустой ответ чанка делится пополам до `AGENTHORDE_CANONICALIZER_PHASE1_MAX_DEPTH` (обход таймаутов Vertex flash). Дополнительно всегда идёт prose-pass (`analyzer_entities=[]`). Модель phase 1 по умолчанию — `openai/o4-mini` через OpenRouter (`OPENROUTER_API_KEY`); для Vertex задайте `AGENTHORDE_CANONICALIZER_ENTITY_MODEL=gemini-3-flash-preview` и положительный `CHUNK_MAX`.
+4. После phase 2 pipeline строит `agent_registry_id_to_entity_id`. Phase 4 **pre-pass** резолвит рёбра по этому маппингу (основной путь); fallback — fuzzy `label` → entity только если маппинг не сработал. Неуспех → `candidates.unknownRelations` с `reason: entity_not_resolved_by_canonicalizer`. Финал = union(pre_pass, llm_extended) с дедупом по `(sourceFragmentId, targetFragmentId, relation, layer_section)` (+ `product_fragment_id` для `supplies`).
 
 Pre-pass-рёбра маркируются `qualifiers.origin = "analyzer_proposed"` для аудита.
 
@@ -500,21 +530,21 @@ Pre-pass-рёбра маркируются `qualifiers.origin = "analyzer_propos
 
 | Gate | Условие retry | Retry agent | Директива |
 |------|---------------|-------------|-----------|
-| `structural` | `last_intent ∈ {supply_chain, governance}` **и** `len(pack.proposedRelations) == 0` | соответствующий analyzer | `STRUCTURAL GAP: emit explicit proposedRelations using AH vocabulary` |
+| `structural` | `last_intent ∈ {supply_chain, governance, sanctions}` **и** `len(pack.proposedRelations) == 0` | соответствующий analyzer | `STRUCTURAL GAP: emit explicit proposedRelations using AH vocabulary` |
 | `evidence` | хотя бы один `proposedNodes[i].evidenceRefs = []` **и** `toolLedger` содержит `web_search.sources` | тот же analyzer | `EVIDENCE GAP: attach source URLs from toolLedger to evidenceRefs` |
 | `open_questions` | `analyzerOutput.openQuestions != []` **и** `cycle < cap - 1` | тот же analyzer | `OPEN QUESTIONS: run targeted web_search on <top-3>` |
 
-Каждое решение роутера **и** каждое срабатывание гейта пишет `SupervisorTraceEntry` в `pack.supervisorTrace`. Поле `pack.lastIntent` (`"supply_chain"` / `"governance"` / `""`) фиксирует последнего «домен-аналитика» и используется гейтами, чтобы retry попадал в нужного воркера.
+Каждое решение роутера **и** каждое срабатывание гейта пишет `SupervisorTraceEntry` в `pack.supervisorTrace`. Поле `pack.lastIntent` (`"supply_chain"` / `"governance"` / `"sanctions"` / `""`) фиксирует последнего «домен-аналитика» и используется гейтами, чтобы retry попадал в нужного воркера.
 
 ### Реализация канонизатора (код)
 
-В репозитории реализован **9-фазный stateless пайплайн** в пакете [`agenthorde/canonicalizer/`](agenthorde/canonicalizer/):
+В репозитории реализован **9-фазный stateless пайплайн** в пакете [`agenthorde_common/canonicalizer/`](../../shared/agenthorde_common/agenthorde_common/canonicalizer/):
 
 | Фаза | Модуль | Движок | Назначение |
 |------|--------|--------|------------|
 | 0 | `phases/phase0_input.py` | код | Сборка `WorkingState` из `pack`, `analyzerOutput` / `governanceOutput`, `finalAnswer`, `workingGraph` |
 | 1 | `phases/phase1_entities.py` + `prompts/phase1_entities.txt` | LLM | NER / типизация по 11 классам AH |
-| 2 | `phases/phase2_dedup.py` | код + Firestore product/gov synonyms | Нормализация поверхности, fuzzy (`rapidfuzz`), словарные merge |
+| 2 | `phases/phase2_dedup.py` | код + Firestore product/gov synonyms | Нормализация поверхности, fuzzy (`rapidfuzz`), словарные merge, **jurisdiction identity gate** |
 | 3 | `phases/phase3_paths.py` + `slug.py` | код | Canonical path + ISO2 из контекста, коллизии slug |
 | 4 | `phases/phase4_relations.py` + `prompts/phase4_relations.txt` | LLM | Связи между `entity_id` (до маппинга во fragment UUID) |
 | 5 | `phases/phase5_transforms.py` + `dictionaries.py` | код + `horizon_product_transform_pairs` (read-only) | Site-centric transform на узлах `/site`; неизвестные пары только в JSON `candidates.unknownTransforms` |
@@ -523,11 +553,43 @@ Pre-pass-рёбра маркируются `qualifiers.origin = "analyzer_propos
 | 8 | `phases/phase8_validate.py` + `validation.py` | код | Пути, endpoints связей, `layer`, unknown transforms → отчёт |
 | 9 | `phases/phase9_output.py` + `confidence.py` | код | Noisy-OR confidence по рёбрам, сборка `CanonicalizerResult` |
 
-Публичный API: `from agenthorde.canonicalizer import canonicalize, CanonicalizerInput, CANONICALIZER_VERSION`. Вызов **после** прогона агентов встроен в [`runner_cli.py`](runner_cli.py): в ответ добавляется поле `canonicalGraph` (JSON). Флаг CLI `--skip-canonicalizer` отключает пост-обработку.
+Публичный API: `from agenthorde_common.canonicalizer import canonicalize, CanonicalizerInput, CANONICALIZER_VERSION`. Вызов **после** прогона агентов встроен в [`runner_cli.py`](runner_cli.py): в ответ добавляется поле `canonicalGraph` (JSON). Флаг CLI `--skip-canonicalizer` отключает пост-обработку.
 
-**Форма графа:** узлы — [`CanonicalFragment`](agenthorde/canonicalizer/schemas.py) (поля в духе `HorizonFragment`: `canonicalPath`, `fragmentClass`, `metrics`, `provenance`, `validFrom`/`validTo`, `siteTransforms` для site-centric transform). Рёбра — [`CanonicalEdge`](agenthorde/canonicalizer/schemas.py) (поля в духе `DependencyEdge`: `sourceFragmentId`, `targetFragmentId`, `relation`, `qualifiers` с `layer` / `layerSection`, `attributes`, `metrics`, `provenance`). Таксономия на этом этапе **только AH**; маппинг enum → ядро — отдельный слой позже.
+**Форма графа:** узлы — [`CanonicalFragment`](../../shared/agenthorde_common/agenthorde_common/canonicalizer/schemas.py) (поля в духе `HorizonFragment`: `canonicalPath`, `fragmentClass`, `metrics`, `provenance`, `validFrom`/`validTo`, `siteTransforms` для site-centric transform). Рёбра — [`CanonicalEdge`](../../shared/agenthorde_common/agenthorde_common/canonicalizer/schemas.py) (поля в духе `DependencyEdge`: `sourceFragmentId`, `targetFragmentId`, `relation`, `qualifiers` с `layer` / `layerSection`, `attributes`, `metrics`, `provenance`). Таксономия на этом этапе **только AH**; маппинг enum → ядро — отдельный слой позже.
 
 **Словари:** чтение из Firestore (`horizon_product_synonym_pairs`, `horizon_product_transform_pairs`, `horizon_gov_synonym_pairs`), проект по умолчанию из `HORIZON_FIRESTORE_PROJECT` или `GOOGLE_CLOUD_PROJECT`. Переменные моделей: `AGENTHORDE_CANONICALIZER_ENTITY_MODEL`, `_RELATION_MODEL`, `_METRIC_MODEL`, порог fuzzy `AGENTHORDE_CANONICALIZER_FUZZY_THRESHOLD`.
+
+#### Jurisdiction-as-identity (phase 2 hard gate)
+
+Идентичность фрагмента определяется **полным каноническим путём**, а не сырой поверхностью. Префикс юрисдикции (`/regime/eu/...` vs `/regime/us/...`, `/org/us/apple` vs `/org/hk/apple-daily`) — **онтологический инвариант**: два фрагмента из разных юрисдикций — разные сущности, как бы похожи ни были их названия.
+
+Реализация в [`phases/phase2_dedup.py`](../../shared/agenthorde_common/agenthorde_common/canonicalizer/phases/phase2_dedup.py): для классов, чья идентичность intrinsically привязана к юрисдикции (`regime`, `program`, `project`, `site`, `geo`, `person`, `org`, `community`, `market`), при попытке merge двух mention'ов с **известными и различающимися** `iso2_hint` — merge отвергается **без** оглядки на surface-similarity. Гэп фиксируется в `candidates.mergeCandidates` с `reason=namespace_conflict:{iso_a}_vs_{iso_b}`, чтобы critic / следующий цикл это видели.
+
+ISO2 для гейта берётся из `context_hints.iso2_hint` (если LLM поставил), иначе извлекается из самой поверхности через `extract_iso2_from_text` + `iso2_from_country_names` ([`geo_iso.py`](../../shared/agenthorde_common/agenthorde_common/canonicalizer/geo_iso.py), включая региональные токены `eu` / `gcc` / `int`).
+
+Что это автоматически чинит:
+- `EU Chips Act` ≠ `US CHIPS Act` (одинаковые токены, разные регуляторные режимы)
+- `Apple Inc.` ≠ `Apple Daily` (один surface "Apple", разные страны + типы)
+- `Lee` (US senator) ≠ `Lee family` (KR chaebol dynasty) — тут ещё и тип разный, но gate работает поверх type-фильтра
+- Любые `Ministry of Industry` из разных стран
+
+Принцип расширяет AGENTS.md-инвариант для product (`canonical product path` как identity) на ВСЕ jurisdiction-bound классы. Без хардкодов конкретных пар: единственный список — какие классы юрисдикционно-связанные.
+
+#### Endpoint resolution: registry id → entity, затем fuzzy fallback
+
+Pre-pass phase 4 сначала маппит `proposedRelations[].srcId` / `dstId` (namespaced registry id) в `entity_id` через `agent_registry_id_to_entity_id`, построенный после phase 2 из `mentions[].agentRegistryId`.
+
+Если маппинг не сработал, для endpoint'а подставляется `label` из `WorkingState.analyzer_entity_label_by_ns` и вызывается [`_resolve_surface_to_entity`](../../shared/agenthorde_common/agenthorde_common/canonicalizer/phases/phase4_relations.py) — каскад:
+
+1. Reject известные internal-id паттерны (`^e\d+$`).
+2. Exact canonical path match (`/org/...`).
+3. Exact normalized surface (underscore→space).
+4. Singular/plural inflection fallback (vessel_class drift: VLCC ↔ VLCCs).
+5. Strip legal suffix + parenthetical alias на обеих сторонах.
+6. Generic synonym dictionary (Firestore `horizon_gov_synonym_pairs`).
+7. **token_set_ratio fuzzy fallback** ≥ 92, tiebreak по размеру пересечения токенов.
+
+Полный провал → `candidates.unknownRelations` с `reason: entity_not_resolved_by_canonicalizer`.
 
 ### Этапы:
 
@@ -637,6 +699,129 @@ Pre-pass-рёбра маркируются `qualifiers.origin = "analyzer_propos
 | **Метрики (фаза 6)** | Нет физических **конверсий единиц** (kcf→mcf, баррели→тонны и т.д.); слабая привязка **к конкретному ребру** (эвристика «первое ownership-ребро» для pct) | Словарь/код нормализации единиц; явная привязка метрики к ребру/узлу из LLM + пост-валидация |
 | **Словари** | Read-only Firestore **опционально**; без проекта — fuzzy + LLM, граф всё равно в JSON | При необходимости: локальный снапшот словарей, явная политика «нет проекта → предупреждение в отчёте», расширение org/person aliases в ядре |
 | **Вызовы LLM (фазы 1, 4, 6)** | Пустой ответ → пустые mentions / relations / metrics **без** fallback из текста; нет ретраев и жёстких таймаутов | Ретраи + таймаут; лёгкие детерминированные fallback’и (например NER-заготовки из claim-текста) при `AGENTHORDE_CANONICALIZER_SKIP` / сбое модели |
+
+---
+
+## Roadmap: перенос критика на backend `/api/v1/ai/critic`
+
+### Контекст
+
+После серии прогонов `gemini-3.1-pro-preview` (наша текущая `CRITIC_MODEL`) регулярно ловит `429 RESOURCE_EXHAUSTED` на поздних циклах супервайзера — именно на критике, потому что он делает тяжёлые структурированные вызовы и проходит поверх уже прогретого пакета с несколькими сотнями узлов.
+
+В репозитории уже есть готовый канал на не-Vertex провайдеров:
+- `backend/internal/ai/openrouter_service.go` — OpenAI-совместимый клиент, поддерживает `response_format: json_schema + strict`.
+- `backend/internal/ai/model_manager.go` — реестр моделей с OpenRouter-слагами и fallback-логикой.
+- `backend/internal/ai/task_executor.go` — выбирает модель по `AIRequirements` и прогоняет через нужный сервис.
+- `scripts/deploy` + `scripts/update-openrouter-secret.sh` — `OPENROUTER_API_KEY` уже пробрасывается в Cloud Run из Secret Manager.
+- `backend/internal/http/ai_exec.go` — endpoint `POST /api/v1/ai/structured` над `AITaskExecutor` (сейчас с фиксированным task-type и без проброса `PreferredModel`/`ResponseSchema`).
+
+### Временное решение (реализовано в `agenthorde/critic/`)
+
+Критик теперь пробует Vertex первым, а при ошибке или невалидном JSON по очереди ходит в OpenRouter-цепочку моделей напрямую из Python. Порядок зафиксирован после прогона `scripts/bench_critic_models.py` (апрель 2026, промпт TSMC/ASML/CHIPS):
+- `openai/o4-mini` (reasoning.effort=low) → `z-ai/glm-5.1` → `deepseek/deepseek-chat-v3.1` → `nvidia/nemotron-3-super-120b-a12b`
+- порядок настраивается env: `AGENTHORDE_CRITIC_FALLBACKS`
+- per-model overrides (например, `reasoning.effort=low` для o4-mini и `temperature=None` для OpenAI reasoning-моделей) — в `CRITIC_OR_MODEL_OVERRIDES` из `config.py`
+- `AGENTHORDE_CRITIC_OR_MAX_OUTPUT_TOKENS` по умолчанию `6144` — headroom под продовые вердикты
+- `OPENROUTER_API_KEY` читается из env (тот же ключ, что и в Go-бэкенде)
+- каждая попытка (Vertex + каждый OR-rung) пишется в `/tmp/agenthorde_smoke/critic_ab.jsonl` (path в `AGENTHORDE_CRITIC_AB_LOG`) — чтобы одной командой сравнить вердикты разных моделей на одном и том же запросе
+- `response_format: json_schema` строится из `CriticVerdict.model_json_schema()` + нормализатор `to_openai_strict_schema` (инлайнит `$ref`, убирает `default`/`pattern`/`minLength`, делает все поля `required`)
+- `strict: true` по умолчанию, можно отключить `AGENTHORDE_CRITIC_OR_STRICT=0`
+- критик в OR-режиме вызывается без tool-calling (web_search / retrieve) — ему это и не нужно, все доказательства уже в session pack
+
+Почему именно такой порядок (из бенча):
+- **o4-mini** — ≈6.2s, ~$0.0026/вызов, 4 blockers + чёткий `missionHint` на 319 output-токенах, strict schema держится идеально. Дешевле и быстрее всех прочих при сопоставимом качестве.
+- **GLM 5.1** — второй слой на случай квоты OpenAI; диверсификация провайдеров (Z.ai).
+- **DeepSeek chat v3.1** — самый дешёвый reliable рунг (~8s, $0.0004).
+- **Nemotron 3 Super** — emergency final (копейки, 60s, 5 blockers — жёсткий).
+
+Дропнуты: DeepSeek R1 (заменён o4-mini), Qwen 3.5 397B (121s слишком медленно), Qwen 3.5 Plus (провайдер Alibaba не enforcит strict json_schema), Nemotron 3 Nano (DeepInfra не держит json_schema вообще).
+
+Это сознательно временное решение: дублирует часть логики AITaskExecutor (retries, cost tracking, telemetry), обходит централизованный биллинг и ходит в OpenRouter напрямую, не через `/api/v1/ai/structured`.
+
+### Целевое состояние
+
+1. **Расширить `/api/v1/ai/structured`** (или ввести парный `/api/v1/ai/critic`), чтобы принимать `preferredModel`, `fallbackModels`, `responseSchema` и возвращать фактически использованную модель + usage. Экзекутор уже всё это умеет внутри — нужно только пробросить через handler.
+2. **Добавить в `model_manager.go`** записи OpenRouter-слагов для не-Nemotron моделей: `z-ai/glm-5.1`, `deepseek/deepseek-r1`, `deepseek/deepseek-chat-v3.1`. Провайдер — `AIProviderOpenRouter`, НЕ `AIProviderDeepSeek` (в `backend/internal/ai/` нет `NewDeepSeekService`, эти DeepSeek-модели в реестре на сегодня мёртвые записи).
+3. **В Python-стороне** заменить прямой OpenRouter-клиент в `agenthorde/critic/openrouter_client.py` на HTTP-клиент к backend-endpoint. Получаем: единую телеметрию (usage_metrics + horizon_spend_sink), централизованный retry/circuit-breaker, общий rate-limit budgeting.
+4. **Ретрофитить AB-логирование** — переключить источник данных с локального JSONL на Horizon spend ledger + usage_metrics (уже есть в экзекуторе).
+
+Когда эти четыре пункта закрыты, модуль `agenthorde/critic/` сжимается до одного тонкого клиента backend-endpoint-а, а настройка моделей критика перемещается в Go-конфиг.
+
+---
+
+## Roadmap: aggregate mentions и followUpPlan
+
+### Проблема
+
+После запуска канонизатора часть фрагментов стабильно остаётся без рёбер (orphan nodes). Разбор реального прогона показывает, что это **не баг**, а три разные корзины:
+
+1. **Aggregate mention** — сущность упомянута как контекст, но источники (web_search-результаты данного прогона) не дали явного relation. Пример: в запросе про Russian seaborne crude «всплывают» Malta / Egypt как транзитная география, Yulong Petrochemical как китайский refinery, Radiating World как shadow-fleet vehicle — без конкретного `supplies` / `operates` / `owns` в пределах нашего исследования. Это **легитимный deferred-факт**.
+2. **Analyzer gap** — в исходном тексте есть явный relation, но LLM-агент его не эмитнул (например, Suezmax явно чартерится в тексте, но `charters` не попал в `proposedRelations`). Это баг extraction-слоя.
+3. **Vocabulary gap** — relation концептуально нужен, но не входит в закрытый словарь канонизатора. Пример: Argus / Platts публикуют price reference — у нас до этого PR не было relation «org publishes market benchmark». Это дыра в онтологии, закрывается отдельной правкой.
+
+Текущая валидация проходит по всем трём корзинам одинаково (просто пишет `orphan_nodes`). Это неточно и мешает видеть реальные пробелы.
+
+### Целевая модель
+
+**Orphan-корзина «aggregate mention» становится first-class артефактом** — с маркером на фрагменте и планом follow-up исследования.
+
+#### На фрагменте
+
+Добавить:
+
+```python
+attributes.aggregation_status: "concrete" | "aggregate_mention"
+attributes.aggregation_reason: "no_rel_emitted_in_this_run"
+```
+
+`concrete` — фрагмент участвует хотя бы в одном ребре. `aggregate_mention` — упомянут, рёбер нет, но мы **сознательно** сохраняем его как anchor для последующих прогонов. Будущие follow-up запросы, приземляющие concrete-рёбра к существующему каноническому пути, автоматически переведут фрагмент в `concrete` без ручного merge.
+
+#### На canonicalGraph — followUpPlan
+
+Новое поле `canonicalGraph.followUpPlan: list[FollowUpItem]`:
+
+```jsonc
+{
+  "id": "fup-eg-01",
+  "entityPath": "/geo/eg/egypt",
+  "fragmentClass": "geo",
+  "contextFromRun": "Transit geography in Russian crude rerouting (Suez Canal, SUMED)",
+  "suggestedQuestion": "What is Egypt's concrete role in Russian seaborne crude flows post-2022: Suez transit volumes, SUMED pipeline usage, domestic Egyptian receivers, STS around Ceuta/Lakonikos on the Mediterranean leg?",
+  "suggestedAgent": "supply_chain_analyzer",
+  "priority": "medium",
+  "parentRunId": "<this run>"
+}
+```
+
+Приоритет выводим из `mention_count` + centrality-proxy (сколько соседних concrete-фрагментов упоминают эту сущность в claim-тексте).
+
+#### Трёхуровневая корзинизация
+
+Канонизатор v1 по умолчанию пишет всех orphan'ов в `aggregate_mention`. Отдельная постаудит-фаза (V2, позже) может переклассифицировать:
+
+| корзина | где хранится | что с этим делать |
+|---|---|---|
+| `aggregate_mention` | `fragment.attributes.aggregation_status` + `followUpPlan` | показывать как deferred, предлагать follow-up |
+| `analyzer_gap` (V2) | `ValidationReport.analyzer_gaps` | метрика качества extraction; триггер для промт-retune |
+| `vocabulary_gap` (V2) | `ValidationReport.vocabulary_gaps` + `candidates.unknown_relations` | триггер для расширения taxonomy |
+
+Различение `aggregate_mention` vs `analyzer_gap` требует пост-LLM-аудита (маленький вызов, который смотрит на orphan + исходный текст и решает: «в тексте был relation?»). Для MVP-v1 всех orphan'ов считаем `aggregate_mention` — self-correcting: если follow-up стабильно пуст, это был шум либо vocabulary_gap; если приносит рёбра — классификация была верной.
+
+### Почему это ценно
+
+- **Эпистемическая честность**: граф перестаёт терять «упомянули, но не раскопали». Рамка исследователя, не код-валидатора.
+- **Идемпотентные follow-up'ы**: повторный запрос с drill-down на конкретный aggregate просто приземляет новые рёбра к существующему canonical path. Никаких merge-конфликтов.
+- **Self-correcting quality signal**: стабильно пустые follow-up'ы → vocabulary_gap или шум; наполняющиеся → корректный aggregate.
+- **Разгружает валидацию**: `orphan_nodes` перестаёт быть универсальной «плохой метрикой» и разделяется на точные категории.
+
+### Scope первой итерации
+
+1. Схемы: `aggregation_status` на `CanonicalFragment.attributes`, `FollowUpItem` pydantic-модель, `canonicalGraph.followUpPlan`.
+2. Phase 9 (или новая phase 10): по `orphan_nodes` генерит `FollowUpItem` с простой эвристикой приоритета и готовым question-шаблоном.
+3. Обновить `ValidationReport`: `orphan_nodes` остаётся как техническая метрика, но UI/downstream-слой читает `aggregate_mentions` из фрагментов.
+4. Unit-тест + один live-прогон с follow-up по одному из aggregate'ов, убеждаемся что новые concrete-рёбра приземляются к тому же фрагменту.
+
+Вне первой итерации: LLM-аудит классификации (V2), автоматический prompt-retune на основе `analyzer_gaps`, automatic vocabulary extension.
 
 ---
 

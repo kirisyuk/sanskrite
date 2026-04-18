@@ -1,7 +1,7 @@
-from agenthorde.canonicalizer.phases.phase0_input import WorkingState
-from agenthorde.canonicalizer.phases.phase7_evidence import run_phase7
-from agenthorde.canonicalizer.schemas import CanonicalEdge, CanonicalFragment
-from agenthorde.schemas.graph import ReasoningNode
+from agenthorde_common.canonicalizer.phases.phase0_input import WorkingState
+from agenthorde_common.canonicalizer.phases.phase7_evidence import run_phase7
+from agenthorde_common.canonicalizer.schemas import CanonicalEdge, CanonicalFragment
+from agenthorde_common.schemas.graph import ReasoningNode
 
 
 def test_phase7_sources_go_to_archive_not_graph() -> None:

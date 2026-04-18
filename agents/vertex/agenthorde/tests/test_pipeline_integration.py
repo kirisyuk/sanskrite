@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 
-from agenthorde.canonicalizer.dictionaries import DictionaryRuntime
-from agenthorde.canonicalizer.llm_client import LLMPhaseClient
-from agenthorde.canonicalizer.pipeline import run_pipeline
-from agenthorde.canonicalizer.schemas import CanonicalizerInput
+from agenthorde_common.canonicalizer.dictionaries import DictionaryRuntime
+from agenthorde_common.canonicalizer.llm_client import LLMPhaseClient
+from agenthorde_common.canonicalizer.pipeline import run_pipeline
+from agenthorde_common.canonicalizer.schemas import CanonicalizerInput
 
 
 def test_pipeline_mock_llm_produces_subsidiary_edge() -> None:
@@ -314,14 +314,14 @@ def test_site_supplies_chain_mock() -> None:
                     {
                         "surface": "Spodumene concentrate",
                         "type": "product",
-                        "subtype": "lithium",
+                        "subtype": "ore",
                         "claim_refs": ["n1"],
                         "per_claim_confidence": 0.85,
                     },
                     {
                         "surface": "Lithium carbonate",
                         "type": "product",
-                        "subtype": "lithium",
+                        "subtype": "chemical",
                         "claim_refs": ["n1"],
                         "per_claim_confidence": 0.85,
                     },
@@ -335,7 +335,7 @@ def test_site_supplies_chain_mock() -> None:
                         "layer": "flow",
                         "from_id": "e0",
                         "to_id": "e1",
-                        "attributes": {"product": "/product/lithium/spodumene-concentrate"},
+                        "attributes": {"product": "/product/ore/spodumene-concentrate"},
                         "source_claim_ids": ["n1"],
                         "per_claim_confidence": 0.8,
                     },
@@ -345,7 +345,7 @@ def test_site_supplies_chain_mock() -> None:
                         "layer": "flow",
                         "from_id": "e1",
                         "to_id": "e2",
-                        "attributes": {"product": "/product/lithium/lithium-carbonate"},
+                        "attributes": {"product": "/product/chemical/lithium-carbonate"},
                         "source_claim_ids": ["n1"],
                         "per_claim_confidence": 0.8,
                     },
@@ -525,14 +525,14 @@ def test_pipeline_mine_two_products_two_supplies_edges() -> None:
                     {
                         "surface": "Spodumene",
                         "type": "product",
-                        "subtype": "lithium",
+                        "subtype": "ore",
                         "claim_refs": ["n1"],
                         "per_claim_confidence": 0.85,
                     },
                     {
                         "surface": "Lepidolite",
                         "type": "product",
-                        "subtype": "lithium",
+                        "subtype": "ore",
                         "claim_refs": ["n1"],
                         "per_claim_confidence": 0.85,
                     },
@@ -546,7 +546,7 @@ def test_pipeline_mine_two_products_two_supplies_edges() -> None:
                         "layer": "flow",
                         "from_id": "e0",
                         "to_id": "e1",
-                        "attributes": {"product": "/product/lithium/spodumene"},
+                        "attributes": {"product": "/product/ore/spodumene"},
                         "source_claim_ids": ["n1"],
                         "per_claim_confidence": 0.8,
                     },
@@ -556,7 +556,7 @@ def test_pipeline_mine_two_products_two_supplies_edges() -> None:
                         "layer": "flow",
                         "from_id": "e0",
                         "to_id": "e1",
-                        "attributes": {"product": "/product/lithium/lepidolite"},
+                        "attributes": {"product": "/product/ore/lepidolite"},
                         "source_claim_ids": ["n1"],
                         "per_claim_confidence": 0.8,
                     },
@@ -590,8 +590,8 @@ def test_pipeline_mine_two_products_two_supplies_edges() -> None:
         supplies = [e for e in res.graph.edges if e.relation == "supplies"]
         assert len(supplies) == 2
         cargos = {(e.attributes or {}).get("product") for e in supplies}
-        assert "/product/lithium/spodumene" in cargos
-        assert "/product/lithium/lepidolite" in cargos
+        assert "/product/ore/spodumene" in cargos
+        assert "/product/ore/lepidolite" in cargos
         assert not any(x.code == "supply_missing_cargo" for x in res.validation_report.relation_errors)
 
     asyncio.run(_go())
@@ -839,6 +839,7 @@ def test_pipeline_consumes_analyzer_proposed_relations() -> None:
                         "surface": "Tesla, Inc.",
                         "type": "org",
                         "subtype": "listed_issuer",
+                        "agentId": "analyzer:e1",
                         "claim_refs": ["n1"],
                         "context_hints": {"iso2Hint": "us"},
                         "per_claim_confidence": 0.9,
@@ -847,6 +848,7 @@ def test_pipeline_consumes_analyzer_proposed_relations() -> None:
                         "surface": "Model S",
                         "type": "product",
                         "subtype": "ev",
+                        "agentId": "analyzer:e2",
                         "claim_refs": ["n1"],
                         "per_claim_confidence": 0.9,
                     },
@@ -864,12 +866,16 @@ def test_pipeline_consumes_analyzer_proposed_relations() -> None:
             }
         },
         analyzer_output={
-            "chainSummary": "",
+            "chainSummary": "Tesla produces the Model S.",
+            "proposedEntities": [
+                {"id": "e1", "label": "Tesla, Inc."},
+                {"id": "e2", "label": "Model S"},
+            ],
             "proposedNodes": [],
             "proposedRelations": [
                 {
-                    "src": "Tesla, Inc.",
-                    "dst": "Model S",
+                    "srcId": "e1",
+                    "dstId": "e2",
                     "relation": "produces",
                     "sourceClaimIds": ["n1"],
                 }
@@ -902,6 +908,7 @@ def test_pipeline_proposed_relation_union_with_llm() -> None:
                         "surface": "Tesla, Inc.",
                         "type": "org",
                         "subtype": "listed_issuer",
+                        "agentId": "analyzer:e1",
                         "claim_refs": ["n1"],
                         "context_hints": {"iso2Hint": "us"},
                         "per_claim_confidence": 0.9,
@@ -910,6 +917,7 @@ def test_pipeline_proposed_relation_union_with_llm() -> None:
                         "surface": "Model S",
                         "type": "product",
                         "subtype": "ev",
+                        "agentId": "analyzer:e2",
                         "claim_refs": ["n1"],
                         "per_claim_confidence": 0.9,
                     },
@@ -917,6 +925,7 @@ def test_pipeline_proposed_relation_union_with_llm() -> None:
                         "surface": "NASDAQ",
                         "type": "market",
                         "subtype": "exchange",
+                        "agentId": "analyzer:e3",
                         "claim_refs": ["n1"],
                         "per_claim_confidence": 0.9,
                     },
@@ -952,12 +961,17 @@ def test_pipeline_proposed_relation_union_with_llm() -> None:
             }
         },
         analyzer_output={
-            "chainSummary": "",
+            "chainSummary": "Tesla produces the Model S and is listed on NASDAQ.",
+            "proposedEntities": [
+                {"id": "e1", "label": "Tesla, Inc."},
+                {"id": "e2", "label": "Model S"},
+                {"id": "e3", "label": "NASDAQ"},
+            ],
             "proposedNodes": [],
             "proposedRelations": [
                 {
-                    "src": "Tesla, Inc.",
-                    "dst": "Model S",
+                    "srcId": "e1",
+                    "dstId": "e2",
                     "relation": "produces",
                     "sourceClaimIds": ["n1"],
                 }
@@ -993,6 +1007,7 @@ def test_pipeline_proposed_relation_dedup_with_llm() -> None:
                         "surface": "Tesla, Inc.",
                         "type": "org",
                         "subtype": "listed_issuer",
+                        "agentId": "analyzer:e1",
                         "claim_refs": ["n1"],
                         "context_hints": {"iso2Hint": "us"},
                         "per_claim_confidence": 0.9,
@@ -1001,6 +1016,7 @@ def test_pipeline_proposed_relation_dedup_with_llm() -> None:
                         "surface": "Model S",
                         "type": "product",
                         "subtype": "ev",
+                        "agentId": "analyzer:e2",
                         "claim_refs": ["n1"],
                         "per_claim_confidence": 0.9,
                     },
@@ -1030,12 +1046,16 @@ def test_pipeline_proposed_relation_dedup_with_llm() -> None:
             }
         },
         analyzer_output={
-            "chainSummary": "",
+            "chainSummary": "Tesla produces the Model S.",
+            "proposedEntities": [
+                {"id": "e1", "label": "Tesla, Inc."},
+                {"id": "e2", "label": "Model S"},
+            ],
             "proposedNodes": [],
             "proposedRelations": [
                 {
-                    "src": "Tesla, Inc.",
-                    "dst": "Model S",
+                    "srcId": "e1",
+                    "dstId": "e2",
                     "relation": "produces",
                     "sourceClaimIds": ["n1"],
                 }
@@ -1069,6 +1089,7 @@ def test_pipeline_actor_level_supplies_and_carrier_hub_land_with_kinds() -> None
                         "surface": "Saudi Aramco",
                         "type": "org",
                         "subtype": "oil_major",
+                        "agentId": "analyzer:e1",
                         "claim_refs": ["n1"],
                         "context_hints": {"iso2Hint": "sa"},
                         "per_claim_confidence": 0.9,
@@ -1077,6 +1098,7 @@ def test_pipeline_actor_level_supplies_and_carrier_hub_land_with_kinds() -> None
                         "surface": "China",
                         "type": "geo",
                         "subtype": "country",
+                        "agentId": "analyzer:e2",
                         "claim_refs": ["n1"],
                         "context_hints": {"iso2Hint": "cn"},
                         "per_claim_confidence": 0.9,
@@ -1085,6 +1107,7 @@ def test_pipeline_actor_level_supplies_and_carrier_hub_land_with_kinds() -> None
                         "surface": "Maersk",
                         "type": "org",
                         "subtype": "carrier",
+                        "agentId": "analyzer:e3",
                         "claim_refs": ["n1"],
                         "context_hints": {"iso2Hint": "dk"},
                         "per_claim_confidence": 0.9,
@@ -1093,6 +1116,7 @@ def test_pipeline_actor_level_supplies_and_carrier_hub_land_with_kinds() -> None
                         "surface": "Singapore",
                         "type": "site",
                         "subtype": "port",
+                        "agentId": "analyzer:e4",
                         "claim_refs": ["n1"],
                         "context_hints": {"iso2Hint": "sg"},
                         "per_claim_confidence": 0.9,
@@ -1127,19 +1151,27 @@ def test_pipeline_actor_level_supplies_and_carrier_hub_land_with_kinds() -> None
             }
         },
         analyzer_output={
-            "chainSummary": "",
+            "chainSummary": (
+                "Saudi Aramco supplies crude oil to China; Maersk transships at Singapore."
+            ),
+            "proposedEntities": [
+                {"id": "e1", "label": "Saudi Aramco"},
+                {"id": "e2", "label": "China"},
+                {"id": "e3", "label": "Maersk"},
+                {"id": "e4", "label": "Singapore"},
+            ],
             "proposedNodes": [],
             "proposedRelations": [
                 {
-                    "src": "Saudi Aramco",
-                    "dst": "China",
+                    "srcId": "e1",
+                    "dstId": "e2",
                     "relation": "supplies",
                     "attributes": {"product": "crude oil"},
                     "sourceClaimIds": ["n1"],
                 },
                 {
-                    "src": "Maersk",
-                    "dst": "Singapore",
+                    "srcId": "e3",
+                    "dstId": "e4",
                     "relation": "transships_at",
                     "sourceClaimIds": ["n1"],
                 },

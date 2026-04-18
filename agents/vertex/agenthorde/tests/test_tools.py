@@ -4,18 +4,14 @@ import json
 import unittest
 
 from agenthorde.config import STATE_PACK_KEY, STATE_TOOL_LEDGER_KEY
-from agenthorde.schemas.state import SessionPack
+from agenthorde_common.schemas.state import SessionPack
+from agenthorde_common.tools.tool_context import MutableStateToolContext
 from agenthorde.tools.builtins import ah_apply, ah_knowledge_search, ah_retrieve
-
-
-class _TC:
-    def __init__(self) -> None:
-        self.state: dict = {}
 
 
 class ToolTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.ctx = _TC()
+        self.ctx = MutableStateToolContext(state={})
         pack = SessionPack(user_question="hello")
         self.ctx.state[STATE_PACK_KEY] = pack.model_dump(mode="json", by_alias=True)
         self.ctx.state[STATE_TOOL_LEDGER_KEY] = []

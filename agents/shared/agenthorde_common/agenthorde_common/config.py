@@ -1,0 +1,64 @@
+"""Shared AgentHorde settings: canonicalizer + Horizon dictionary project (Vertex and Azure runtimes)."""
+
+from __future__ import annotations
+
+import os
+
+# Canonicalizer (post-run) — same env vars for all runtimes.
+# Default phase-1 model: OpenRouter o4-mini (single full-registry call; set
+# AGENTHORDE_CANONICALIZER_PHASE1_CHUNK_MAX>0 to re-enable chunking for Vertex).
+CANONICALIZER_ENTITY_MODEL = os.getenv("AGENTHORDE_CANONICALIZER_ENTITY_MODEL", "openai/o4-mini")
+CANONICALIZER_RELATION_MODEL = os.getenv("AGENTHORDE_CANONICALIZER_RELATION_MODEL", "gemini-3.1-pro-preview")
+CANONICALIZER_METRIC_MODEL = os.getenv("AGENTHORDE_CANONICALIZER_METRIC_MODEL", "gemini-3-flash-preview")
+CANONICALIZER_FUZZY_THRESHOLD = int(os.getenv("AGENTHORDE_CANONICALIZER_FUZZY_THRESHOLD", "85"))
+CANONICALIZER_MERGE_CANDIDATE_LO = int(os.getenv("AGENTHORDE_CANONICALIZER_MERGE_CANDIDATE_LO", "80"))
+CANONICALIZER_PATH_COLLISION_MERGE_THRESHOLD = int(
+    os.getenv("AGENTHORDE_CANONICALIZER_PATH_COLLISION_MERGE_THRESHOLD")
+    or os.getenv("CANONICALIZER_PATH_COLLISION_MERGE_THRESHOLD")
+    or str(CANONICALIZER_FUZZY_THRESHOLD)
+)
+CANONICALIZER_LLM_MAX_RETRIES = int(
+    os.getenv(
+        "AGENTHORDE_CANONICALIZER_LLM_MAX_RETRIES",
+        os.getenv("CANONICALIZER_LLM_MAX_RETRIES", "3"),
+    )
+)
+CANONICALIZER_LLM_TIMEOUT_SEC = float(
+    os.getenv(
+        "AGENTHORDE_CANONICALIZER_LLM_TIMEOUT_SEC",
+        os.getenv("CANONICALIZER_LLM_TIMEOUT_SEC", "120"),
+    )
+)
+CANONICALIZER_PHASE1_CHUNK_MAX = int(
+    os.getenv(
+        "AGENTHORDE_CANONICALIZER_PHASE1_CHUNK_MAX",
+        os.getenv("CANONICALIZER_PHASE1_CHUNK_MAX", "0"),
+    )
+)
+CANONICALIZER_PHASE1_MAX_DEPTH = int(
+    os.getenv(
+        "AGENTHORDE_CANONICALIZER_PHASE1_MAX_DEPTH",
+        os.getenv("CANONICALIZER_PHASE1_MAX_DEPTH", "3"),
+    )
+)
+CANONICALIZER_EVIDENCE_FANOUT_MAX = int(
+    os.getenv(
+        "AGENTHORDE_CANONICALIZER_EVIDENCE_FANOUT_MAX",
+        os.getenv("CANONICALIZER_EVIDENCE_FANOUT_MAX", "8"),
+    )
+)
+CANONICALIZER_EVIDENCE_FANOUT_MIN_SCORE = int(
+    os.getenv(
+        "AGENTHORDE_CANONICALIZER_EVIDENCE_FANOUT_MIN_SCORE",
+        os.getenv("CANONICALIZER_EVIDENCE_FANOUT_MIN_SCORE", "55"),
+    )
+)
+CANONICALIZER_EVIDENCE_FALLBACK_MIN_SCORE = int(
+    os.getenv(
+        "AGENTHORDE_CANONICALIZER_EVIDENCE_FALLBACK_MIN_SCORE",
+        os.getenv("CANONICALIZER_EVIDENCE_FALLBACK_MIN_SCORE", "45"),
+    )
+)
+_hp = os.getenv("HORIZON_FIRESTORE_PROJECT", "").strip()
+_gp = os.getenv("GOOGLE_CLOUD_PROJECT", "").strip()
+HORIZON_FIRESTORE_PROJECT = _hp or _gp or None
