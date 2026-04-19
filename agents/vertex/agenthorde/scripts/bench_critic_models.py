@@ -170,7 +170,9 @@ def _ref_stats(verdict: dict | None, registry: set[str]) -> dict:
 
     if not verdict:
         return {"refs_total": 0, "refs_valid": 0, "refs_invalid": 0, "refs_with_any": 0, "items": 0}
-    items = list(verdict.get("blockers") or []) + list(verdict.get("nonBlockers") or [])
+    items = list(verdict.get("criticalFindings") or []) + list(
+        verdict.get("advisoryFindings") or []
+    )
     total = 0
     valid = 0
     invalid: list[str] = []
@@ -295,7 +297,7 @@ async def _main() -> None:
     print(f"models={args.models}\n")
     print(
         f"{'model':<40} {'ok':<4} {'lat_ms':>7} {'in_tok':>7} {'out_tok':>7} "
-        f"{'suff':<5} {'comp':<11} {'blk':>3} {'nblk':>4} {'refs':>10}  notes"
+        f"{'suff':<5} {'comp':<11} {'crit':>4} {'adv':>4} {'refs':>10}  notes"
     )
     print("-" * 145)
 
@@ -322,8 +324,8 @@ async def _main() -> None:
             v = row["verdict"] or {}
             suff = str(v.get("sufficient"))
             comp = str(v.get("compositionRecommendation", ""))
-            blk = len(v.get("blockers") or [])
-            nblk = len(v.get("nonBlockers") or [])
+            blk = len(v.get("criticalFindings") or [])
+            nblk = len(v.get("advisoryFindings") or [])
             hint = _summarize_text(str(v.get("missionHint") or ""), 80)
             note = f"mission_hint={hint}"
             refs_col = f"{rs['refs_valid']}/{rs['refs_total']}"

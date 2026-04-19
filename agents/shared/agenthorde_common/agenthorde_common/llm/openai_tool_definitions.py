@@ -61,6 +61,42 @@ WORKER_OPENAI_TOOLS: list[dict[str, object]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "domain_priors_lookup",
+            "description": (
+                "Look up industrial dependency-depth priors for a domain. Use when the analysis "
+                "names a Tier-1 surface (e.g. ASML, TSMC, a strait, an API maker) and you want to "
+                "know the typical deeper dependency that tends to be the actual chokepoint. "
+                "Available domains: semiconductors, critical_minerals, energy_seaborne, "
+                "shipping_governance, pharma_api, price_reporting. Returns hint blocks; do not "
+                "treat as authoritative — verify with web_search before claiming current facts."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "domain": {
+                        "type": "string",
+                        "description": (
+                            "Domain key. Use one of: semiconductors, critical_minerals, "
+                            "energy_seaborne, shipping_governance, pharma_api, price_reporting."
+                        ),
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "Optional surface entity / phenomenon name to filter hints "
+                            "(e.g. 'ASML EUV', 'rare earths', 'Russian crude'). "
+                            "Empty string returns all hints in the domain."
+                        ),
+                        "default": "",
+                    },
+                },
+                "required": ["domain"],
+            },
+        },
+    },
 ]
 
 CRITIC_OPENAI_TOOLS: list[dict[str, object]] = WORKER_OPENAI_TOOLS

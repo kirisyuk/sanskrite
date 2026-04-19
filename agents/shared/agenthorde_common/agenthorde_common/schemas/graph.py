@@ -23,6 +23,16 @@ class ReasoningNode(BaseModel):
     text: str
     hypothesis_id: str = Field(default="", alias="hypothesisId")
     evidence_refs: list[str] = Field(default_factory=list, alias="evidenceRefs")
+    added_at_cycle: int = Field(
+        default=0,
+        alias="addedAtCycle",
+        ge=0,
+        description=(
+            "Cycle index at which this node was first added to the pack. Populated by "
+            "the merge layer on first insertion; preserved on subsequent merges. "
+            "Default 0 means 'pre-cycle-tracking' (legacy or fresh node from analyzer)."
+        ),
+    )
 
 
 class ReasoningEdge(BaseModel):

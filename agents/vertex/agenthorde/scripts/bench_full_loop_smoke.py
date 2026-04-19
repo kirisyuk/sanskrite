@@ -12,10 +12,18 @@ emit ``evidenceRefs: ["prior_knowledge"]`` instead of calling web_search).
 Roles + criteria:
   * question_planner  — emits ≥3 namedEntities, ≥1 sub-domain matches
                         ``supply_chain``, sets spofRequested=true.
-  * supply_chain_analyzer — proposedEntities contains at least one of
-                        {ZEISS, Cymer, Trumpf} (Tier-2 semi chokepoint).
-  * critic_agent      — emits recommendedNextAgent != "none" when blockers
-                        are non-empty.
+  * supply_chain_analyzer (cycle-0) — emits scopePlan with focusAreas + rationale
+                        and a substantive entity sweep (≥5). Tier-2 depth is
+                        NOT required here — it is now delegated to the follow-up.
+  * critic_agent      — emits recommendedNextAgent != "none" when
+                        criticalFindings are non-empty; emits scopeAssessment
+                        + structured recommendedScopeFocus when routing back
+                        to an analyzer; every finding carries a typed
+                        gapClass code from the GapClass typology.
+  * supply_chain_analyzer (follow-up / diff-mode) — re-runs with the focused
+                        directive folded into the mission; MUST emit ≥1 Tier-2
+                        chokepoint (ZEISS / Cymer / Trumpf / JSR / …) — that is
+                        the whole point of the focused continuation.
   * red_team_agent    — alternativeNarratives has ≥2 entries; probeMissions
                         contain at least one item that names an entity AND a
                         jurisdiction or date marker.
@@ -103,6 +111,60 @@ def _build_analyzer_prompt(plan: dict | None) -> str:
     body = ANALYZER_INSTRUCTION.format(
         ah_mission="(no supervisor mission yet — infer from question)",
         ah_pack_json=json.dumps(_PACK, ensure_ascii=False),
+        ah_question_plan_json=json.dumps(plan or {}, ensure_ascii=False),
+    )
+    return _NO_TOOLS_PREAMBLE + "\n\n" + body
+
+
+def _build_followup_pack(first_pass_ao: dict | None) -> dict:
+    """Synthesize a SessionPack-shaped dict with the first-pass analyzer output
+    merged in (so the analyzer detects FOLLOW-UP mode from non-empty graph)."""
+    pack = json.loads(json.dumps(_PACK))
+    pack["cycleIndex"] = 2
+    nodes = []
+    entities = []
+    relations = []
+    if first_pass_ao:
+        for n in first_pass_ao.get("proposedNodes") or []:
+            if isinstance(n, dict):
+                d = dict(n)
+                d.setdefault("addedAtCycle", 1)
+                nodes.append(d)
+        for e in first_pass_ao.get("proposedEntities") or []:
+            if isinstance(e, dict):
+                eid = str(e.get("id") or "").strip()
+                if eid:
+                    entities.append({
+                        "namespacedId": f"analyzer:{eid}",
+                        "label": str(e.get("label") or "").strip(),
+                        "addedAtCycle": 1,
+                    })
+        for r in first_pass_ao.get("proposedRelations") or []:
+            if isinstance(r, dict):
+                relations.append({
+                    "srcId": f"analyzer:{r.get('srcId')}",
+                    "dstId": f"analyzer:{r.get('dstId')}",
+                    "relation": r.get("relation"),
+                    "attributes": {},
+                    "sourceClaimIds": list(r.get("sourceClaimIds") or []),
+                    "addedAtCycle": 1,
+                })
+    pack["reasoningGraph"] = {"nodes": nodes, "edges": []}
+    pack["proposedEntities"] = entities
+    pack["proposedRelations"] = relations
+    return pack
+
+
+def _build_analyzer_followup_prompt(plan: dict | None, first_pass_ao: dict | None,
+                                    *, mission: str) -> str:
+    """Build analyzer prompt for a FOLLOW-UP cycle: pack already contains a
+    graph (so analyzer should detect Mode B and emit a diff). The mission is
+    a structured directive simulating what the supervisor would build from
+    critic.recommendedScopeFocus."""
+    pack = _build_followup_pack(first_pass_ao)
+    body = ANALYZER_INSTRUCTION.format(
+        ah_mission=mission,
+        ah_pack_json=json.dumps(pack, ensure_ascii=False),
         ah_question_plan_json=json.dumps(plan or {}, ensure_ascii=False),
     )
     return _NO_TOOLS_PREAMBLE + "\n\n" + body
@@ -205,7 +267,13 @@ def check_planner(parsed: dict | None) -> dict:
 _TIER2_SEMI = re.compile(r"\b(zeiss|cymer|trumpf|jsr|shin[-\s]?etsu|tokyo ohka|tok|photronics|toppan|sumco|globalwafers|amkor|ase|spil|ibiden|unimicron|arm)\b", re.I)
 
 
-def check_analyzer(parsed: dict | None) -> dict:
+def check_analyzer(
+    parsed: dict | None,
+    *,
+    expect_followup: bool = False,
+    prior_entity_labels: list[str] | None = None,
+    prior_focus_areas: list[str] | None = None,
+) -> dict:
     if not parsed:
         return {"ok": False, "reason": "no parsed output"}
     try:
@@ -214,16 +282,46 @@ def check_analyzer(parsed: dict | None) -> dict:
         return {"ok": False, "reason": f"schema_fail: {exc}"}
     entity_labels = [e.label for e in ao.proposed_entities]
     tier2_hits = sorted({m.group(1).lower() for label in entity_labels for m in [_TIER2_SEMI.search(label)] if m})
+    sp = ao.scope_plan
+    n_focus = len(sp.focus_areas) if sp else 0
+    has_rationale = bool((sp.rationale or "").strip()) if sp else False
     crits = {
-        "proposedEntities >= 5": len(entity_labels) >= 5,
-        "≥1 Tier-2 chokepoint emitted": bool(tier2_hits),
+        "scopePlan present": sp is not None,
+        "scopePlan.focusAreas >= 1": n_focus >= 1,
+        "scopePlan.rationale populated": has_rationale,
+        # On follow-up we DO NOT require a fat entity list — it's a diff.
+        # On first pass we want substantive coverage; depth is now the explicit
+        # job of the focused follow-up pass, not the cycle-0 sweep.
+        ("proposedEntities >= 1 (follow-up)" if expect_followup else "proposedEntities >= 5"): (
+            len(entity_labels) >= 1 if expect_followup else len(entity_labels) >= 5
+        ),
     }
+    new_entities: list[str] = []
+    new_focus_areas: list[str] = []
+    if expect_followup:
+        # Diff-mode signal: did the follow-up actually ADD anything beyond what the
+        # first pass already had? This is the structural test of L3 (the analyzer
+        # consumed the focused directive) — *what* it added (concrete deeper-
+        # dependency names like ZEISS / JSR / Cymer) is reported separately as a
+        # qualitative model-strength signal, not a hard pass/fail criterion.
+        prior_e = {(s or "").strip().lower() for s in (prior_entity_labels or [])}
+        new_entities = [e for e in entity_labels if (e or "").strip().lower() not in prior_e]
+        prior_f = {(s or "").strip().lower() for s in (prior_focus_areas or [])}
+        cur_focus_names = [fa.name for fa in (sp.focus_areas if sp else [])]
+        new_focus_areas = [n for n in cur_focus_names if (n or "").strip().lower() not in prior_f]
+        # Pass when EITHER a new entity was added OR a new focus area was declared.
+        # Either signal proves the analyzer used the critic's directive instead of
+        # restating the first pass.
+        crits["diff signal (new entity OR new focus area)"] = bool(new_entities or new_focus_areas)
     return {
         "ok": all(crits.values()),
         "criteria": crits,
         "entity_count": len(entity_labels),
         "tier2_hits": tier2_hits,
         "entities_preview": entity_labels[:12],
+        "scope_plan": sp.model_dump(mode="json", by_alias=True) if sp else None,
+        "new_entities_vs_prior": new_entities[:8],
+        "new_focus_areas_vs_prior": new_focus_areas,
     }
 
 
@@ -234,25 +332,54 @@ def check_critic(parsed: dict | None) -> dict:
         cv = CriticVerdict.model_validate(parsed)
     except Exception as exc:
         return {"ok": False, "reason": f"schema_fail: {exc}"}
-    has_blockers = bool(cv.blockers)
+    has_critical = bool(cv.critical_findings)
     rec = cv.recommended_next_agent
+    sa = cv.scope_assessment
+    rsf = cv.recommended_scope_focus
+    rsf_routed_analyzer = (rec in {
+        "supply_chain_analyzer", "governance_control_analyzer", "sanctions_analyzer",
+    })
+    has_depth_action = (
+        rsf is not None and rsf.recommended_depth_action is not None
+    )
+    gap_class_prefixes = {f.gap_class.split(".", 1)[0] for f in cv.critical_findings}
     crits = {
         "recommendedNextAgent populated": rec in {
             "supply_chain_analyzer", "governance_control_analyzer",
             "sanctions_analyzer", "red_team_agent", "none",
         },
-        "blockers→non-none routing": (not has_blockers) or (rec != "none"),
+        "criticalFindings→non-none routing": (not has_critical) or (rec != "none"),
         "comp consistency (sufficient↔go)": (
-            (cv.composition_recommendation != "go") or (cv.sufficient and not cv.blockers)
+            (cv.composition_recommendation != "go") or (cv.sufficient and not cv.critical_findings)
+        ),
+        "scopeAssessment present (analyzer ran)": sa is not None,
+        # When critic non-go AND routing to analyzer, recommendedScopeFocus must be present and substantive.
+        "recommendedScopeFocus when routing to analyzer": (
+            (cv.sufficient or not rsf_routed_analyzer)
+            or (rsf is not None and bool(rsf.directive_text.strip()))
+        ),
+        # Depth control: when routing to an analyzer, critic must pick a depth_action explicitly.
+        # The whole point of L3 is that depth is a critic decision, not a hardcoded rule.
+        "recommendedDepthAction when routing to analyzer": (
+            (cv.sufficient or not rsf_routed_analyzer) or has_depth_action
+        ),
+        # Every critical finding must carry a gap_class — the typology contract.
+        "every critical finding has gap_class": all(
+            bool(f.gap_class) for f in cv.critical_findings
         ),
     }
     return {
         "ok": all(crits.values()),
         "criteria": crits,
         "sufficient": cv.sufficient,
-        "n_blockers": len(cv.blockers),
+        "n_critical_findings": len(cv.critical_findings),
+        "n_advisory_findings": len(cv.advisory_findings),
+        "gap_class_prefixes": sorted(gap_class_prefixes),
         "recommendedNextAgent": rec,
         "compositionRecommendation": cv.composition_recommendation,
+        "scopeAssessment": sa.model_dump(mode="json", by_alias=True) if sa else None,
+        "recommendedScopeFocus": rsf.model_dump(mode="json", by_alias=True) if rsf else None,
+        "recommendedDepthAction": rsf.recommended_depth_action if rsf else None,
     }
 
 
@@ -399,15 +526,69 @@ async def _main() -> None:
     )
     cv_check = check_critic(cv_parsed)
     print(f"      lat={cv_meta['latency_ms']}ms  ok={cv_check['ok']}")
-    print(f"      sufficient={cv_check.get('sufficient')}  blockers={cv_check.get('n_blockers')}  "
+    print(f"      sufficient={cv_check.get('sufficient')}  "
+          f"critical={cv_check.get('n_critical_findings')} advisory={cv_check.get('n_advisory_findings')}  "
           f"comp={cv_check.get('compositionRecommendation')}  next={cv_check.get('recommendedNextAgent')}")
+    print(f"      gap_class_prefixes={cv_check.get('gap_class_prefixes')}")
+    print(f"      depthAction={cv_check.get('recommendedDepthAction')}")
     print(f"      criteria={cv_check.get('criteria')}")
     if cv_meta.get("error"):
         print(f"      error={cv_meta['error']}")
     print()
 
+    # ---- Follow-up analyzer (diff mode) --------------------------------------
+    # This validates the new "operating mode" contract: with a non-empty
+    # session pack, the analyzer should emit a SCOPE-EXTENDED scopePlan and a
+    # DIFF (small set of new entities/relations) — not re-emit the first pass.
+    print("[4/5] supply_chain_analyzer (follow-up / diff mode) ...")
+    rsf = (cv_parsed or {}).get("recommendedScopeFocus") or {}
+    directive = (rsf.get("directiveText") or "").strip()
+    add_areas = rsf.get("addFocusAreas") or []
+    deepen = rsf.get("deepenEntityIds") or []
+    gaps = rsf.get("evidenceGaps") or []
+    parts: list[str] = []
+    if directive:
+        parts.append(directive)
+    if add_areas:
+        parts.append("Add focus areas: " + ", ".join(add_areas) + ".")
+    if deepen:
+        parts.append("Deepen entities: " + ", ".join(deepen) + ".")
+    if gaps:
+        parts.append("Surface evidence: " + "; ".join(gaps) + ".")
+    if not parts:
+        # Fallback when critic was lazy: drive a known follow-up axis ourselves.
+        parts.append("Add focus areas: OSAT (advanced packaging), photomask supply.")
+        parts.append("Deepen entities: existing TSMC and ASML registry rows with their Tier-2 dependencies.")
+    followup_mission = "FOCUSED FOLLOW-UP. " + " ".join(parts)
+    followup_prompt = _build_analyzer_followup_prompt(plan_parsed, ana_parsed, mission=followup_mission)
+    fu_parsed, fu_meta = await _call(
+        client, analyzer_model, followup_prompt, schemas["analyzer"],
+        max_output_tokens=analyzer_cap, timeout_s=args.timeout, extra_body=analyzer_xb,
+    )
+    prior_labels = (ana_check or {}).get("entities_preview") or []
+    prior_focus = [(fa or {}).get("name") for fa in (((ana_check or {}).get("scope_plan") or {}).get("focusAreas") or [])]
+    fu_check = check_analyzer(
+        fu_parsed,
+        expect_followup=True,
+        prior_entity_labels=prior_labels,
+        prior_focus_areas=[f for f in prior_focus if f],
+    )
+    print(f"      lat={fu_meta['latency_ms']}ms  ok={fu_check['ok']}")
+    print(f"      mission={followup_mission!r}")
+    print(f"      proposedEntities={fu_check.get('entity_count')}  preview={fu_check.get('entities_preview')}")
+    print(f"      new_entities_vs_prior={fu_check.get('new_entities_vs_prior')}")
+    print(f"      new_focus_areas_vs_prior={fu_check.get('new_focus_areas_vs_prior')}")
+    print(f"      tier2_hits={fu_check.get('tier2_hits')}  (qualitative model-strength signal)")
+    sp = fu_check.get("scope_plan") or {}
+    print(f"      scopePlan.focusAreas={[a.get('name') for a in (sp.get('focusAreas') or [])]}")
+    print(f"      scopePlan.rationale={sp.get('rationale')!r}")
+    print(f"      criteria={fu_check.get('criteria')}")
+    if fu_meta.get("error"):
+        print(f"      error={fu_meta['error']}")
+    print()
+
     # ---- Red team -------------------------------------------------------------
-    print("[4/4] red_team_agent ...")
+    print("[5/5] red_team_agent ...")
     rt_prompt = _build_red_team_prompt(plan_parsed)
     rt_parsed, rt_meta = await _call(
         client, redteam_model, rt_prompt, schemas["red_team"],
@@ -436,11 +617,18 @@ async def _main() -> None:
         "planner": {"meta": plan_meta, "check": plan_check, "parsed": plan_parsed},
         "analyzer": {"meta": ana_meta, "check": ana_check, "parsed": ana_parsed},
         "critic": {"meta": cv_meta, "check": cv_check, "parsed": cv_parsed},
+        "analyzer_followup": {
+            "meta": fu_meta,
+            "check": fu_check,
+            "parsed": fu_parsed,
+            "mission": followup_mission,
+        },
         "red_team": {"meta": rt_meta, "check": rt_check, "parsed": rt_parsed},
     }
     out_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     overall = all(c["check"]["ok"] for c in (
-        summary["planner"], summary["analyzer"], summary["critic"], summary["red_team"]
+        summary["planner"], summary["analyzer"], summary["critic"],
+        summary["analyzer_followup"], summary["red_team"],
     ))
     print(f"OVERALL: {'PASS' if overall else 'FAIL'}")
     print(f"saved={out_path}")

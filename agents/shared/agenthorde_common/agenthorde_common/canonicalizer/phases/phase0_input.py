@@ -11,16 +11,38 @@ from pydantic import ValidationError
 from agenthorde_common.schemas.agents_io import decode_wire_relation_attributes
 from agenthorde_common.schemas.graph import ReasoningGraph, ReasoningNode
 from agenthorde_common.schemas.state import SessionPack
+import re
+
 from agenthorde_common.canonicalizer.schemas import ValidationIssue
 
 
+# Pack-fragment id pattern (reasoningGraph.nodes[].id) — analyzers in follow-up
+# mode may emit relations whose endpoint refers to a pack node. These are NOT
+# in the analyzer registry; phase4 cannot resolve them to canonical entities.
+# We let agents_io accept the shape but here we record them as candidates and
+# drop them from the relation list rather than raising entity_id_not_in_registry.
+_PACK_FRAGMENT_ID_RE = re.compile(r"^n\d+$")
+
+
 def _namespace_entity_id(origin: str, local_id: str) -> str:
+    """Normalize an entity-id reference into a namespaced (or pack-fragment) form.
+
+    Already-namespaced ids (``analyzer:e1``, ``governance:e3``, ``sanctions:e7``,
+    ``pack:n12``) pass through unchanged. Pack reasoning-graph node ids
+    (``n12`` — ``n`` followed by digits) are preserved verbatim because
+    ``AnalyzerOutput`` explicitly accepts those as cross-document references; the
+    canonicalizer records them as a distinct candidate (``relation_endpoint_pack_fragment_ref``)
+    rather than pretending they live in the per-blob namespace.
+    """
+
     lid = (local_id or "").strip()
     if not lid:
         return ""
     for prefix in ("analyzer:", "governance:", "sanctions:", "pack:"):
         if lid.startswith(prefix):
             return lid
+    if lid.startswith("n") and lid[1:].isdigit():
+        return lid
     return f"{origin}:{lid}"
 
 
@@ -47,6 +69,15 @@ class WorkingState:
     skipped_registry_ids: frozenset[str] = field(default_factory=frozenset)
     # Registry ids without a kept phase1 mention (excluding skipped): missing mention or unknown type.
     registry_ids_phase1_coverage_gap: frozenset[str] = field(default_factory=frozenset)
+    # Provenance from supervisor merge layer: namespaced id -> cycle index when first added.
+    # Only populated for entities that come through pack.proposedEntities (the merged registry
+    # the supervisor maintains). Entities seen only in the per-agent blob default to 0.
+    entity_added_at_cycle: dict[str, int] = field(default_factory=dict)
+    # Same provenance for relations, keyed by (srcId, dstId, relation) lowercased.
+    relation_added_at_cycle: dict[tuple[str, str, str], int] = field(default_factory=dict)
+    # Run-level cycle index from pack.cycleIndex; used as default when an entity / relation
+    # was emitted only in the per-agent blob (no merge yet) — best-effort provenance anchor.
+    pack_cycle_index: int = 0
 
 
 def _blob_nonempty(blob: Any) -> bool:
@@ -63,26 +94,30 @@ def validate_phase0_input(
     ws: WorkingState,
     analyzer_output: dict[str, Any],
     governance_output: dict[str, Any],
+    sanctions_output: dict[str, Any] | None = None,
 ) -> list[ValidationIssue]:
     """
     Hard gate: need at least one of:
     - non-empty reasoning graph (any nodes), or
     - non-empty analyzer output (summary / proposed nodes / questions), or
-    - non-empty governance output (same).
+    - non-empty governance output (same), or
+    - non-empty sanctions output (same).
     """
     issues: list[ValidationIssue] = []
     graph_ok = len(ws.all_nodes) > 0
     analyzer_ok = _blob_nonempty(analyzer_output)
     gov_ok = _blob_nonempty(governance_output)
-    if not graph_ok and not analyzer_ok and not gov_ok:
+    san_ok = _blob_nonempty(sanctions_output or {})
+    if not graph_ok and not analyzer_ok and not gov_ok and not san_ok:
         issues.append(
             ValidationIssue(
                 code="invalid_input",
-                message="Canonicalizer input is empty: no reasoningGraph nodes and no analyzer/governance payload",
+                message="Canonicalizer input is empty: no reasoningGraph nodes and no analyzer/governance/sanctions payload",
                 detail={
                     "graphNodeCount": len(ws.all_nodes),
                     "hasAnalyzer": bool(analyzer_output),
                     "hasGovernance": bool(governance_output),
+                    "hasSanctions": bool(sanctions_output),
                 },
             )
         )
@@ -138,6 +173,7 @@ def run_phase0(
     analyzer_output: dict[str, Any],
     governance_output: dict[str, Any],
     final_answer: str,
+    sanctions_output: dict[str, Any] | None = None,
 ) -> WorkingState:
     ws = WorkingState(final_answer=final_answer or "")
     try:
@@ -171,6 +207,7 @@ def run_phase0(
     for _key, blob, origin in (
         ("analyzer", analyzer_output, "analyzer"),
         ("governance", governance_output, "governance"),
+        ("sanctions", sanctions_output or {}, "sanctions"),
     ):
         if isinstance(blob, dict) and blob.get("chainSummary"):
             ws.chain_summaries.append(str(blob["chainSummary"]))
@@ -180,6 +217,11 @@ def run_phase0(
         ws.analyzer_relations.extend(_collect_relations(blob, origin))
 
     # Pack-level merge (supervisor already namespaced ids in proposedEntities / proposedRelations).
+    try:
+        ws.pack_cycle_index = int((pack or {}).get("cycleIndex") or (pack or {}).get("cycle_index") or 0)
+    except (TypeError, ValueError):
+        ws.pack_cycle_index = 0
+
     pack_entities = (pack or {}).get("proposedEntities") or (pack or {}).get("proposed_entities") or []
     if isinstance(pack_entities, list):
         for row in pack_entities:
@@ -191,6 +233,12 @@ def run_phase0(
             label = str(row.get("label") or "").strip()
             origin = str(row.get("origin") or "pack").strip() or "pack"
             _merge_entities([{"namespacedId": ns, "label": label, "origin": origin}])
+            try:
+                aac = int(row.get("addedAtCycle") or row.get("added_at_cycle") or 0)
+            except (TypeError, ValueError):
+                aac = 0
+            if aac > 0 and (ns not in ws.entity_added_at_cycle or aac < ws.entity_added_at_cycle[ns]):
+                ws.entity_added_at_cycle[ns] = aac
 
     pack_rels = (pack or {}).get("proposedRelations") or (pack or {}).get("proposed_relations") or []
     if isinstance(pack_rels, list):
@@ -212,13 +260,30 @@ def run_phase0(
                     "_origin": "pack",
                 }
             )
+            try:
+                aac = int(r.get("addedAtCycle") or r.get("added_at_cycle") or 0)
+            except (TypeError, ValueError):
+                aac = 0
+            if aac > 0:
+                key = (sid.lower(), did.lower(), rel.lower())
+                if key not in ws.relation_added_at_cycle or aac < ws.relation_added_at_cycle[key]:
+                    ws.relation_added_at_cycle[key] = aac
 
     reg_ids = {e["namespacedId"] for e in entity_by_ns.values()}
     ws.analyzer_entity_label_by_ns = {e["namespacedId"]: e.get("label") or "" for e in entity_by_ns.values()}
 
-    ws.input_issues = validate_phase0_input(ws, analyzer_output, governance_output)
+    ws.input_issues = validate_phase0_input(ws, analyzer_output, governance_output, sanctions_output)
 
     # Validate relation endpoints; drop invalid rows with input_issues.
+    # Three categories of "not in registry" we distinguish:
+    #   * pack-fragment ref (n12)  — accepted by agents_io as a cross-doc reference
+    #     to pack.reasoningGraph.nodes; not resolvable by canonicalizer phases
+    #     (they don't become entities). Recorded with the dedicated code so
+    #     downstream tooling can stitch later if needed.
+    #   * stale namespaced ref (analyzer:e6 not in this batch's merged registry)
+    #     — happens when follow-up analyzer points at an entity that was in the
+    #     pack's prior cycles but not re-emitted; record but drop.
+    #   * unknown id  — likely a bug or hallucination.
     valid_rels: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     for r in ws.analyzer_relations:
@@ -226,10 +291,30 @@ def run_phase0(
         did = str(r.get("dstId") or "").strip()
         rel = str(r.get("relation") or "").strip().lower()
         if sid not in reg_ids or did not in reg_ids:
+            sid_pack = bool(_PACK_FRAGMENT_ID_RE.match(sid))
+            did_pack = bool(_PACK_FRAGMENT_ID_RE.match(did))
+            sid_ns = ":" in sid
+            did_ns = ":" in did
+            if sid_pack or did_pack:
+                code = "relation_endpoint_pack_fragment_ref"
+                msg = (
+                    "proposedRelations endpoint references pack.reasoningGraph node id; "
+                    "canonicalizer cannot resolve pack-fragment refs to canonical entities"
+                )
+            elif sid_ns or did_ns:
+                code = "relation_endpoint_stale_namespaced_id"
+                msg = (
+                    "proposedRelations endpoint is a namespaced id not present in the "
+                    "current merged registry (likely an entity from a prior cycle that "
+                    "was not re-emitted)"
+                )
+            else:
+                code = "entity_id_not_in_registry"
+                msg = "proposedRelations endpoint not found in proposedEntities registry"
             ws.input_issues.append(
                 ValidationIssue(
-                    code="entity_id_not_in_registry",
-                    message="proposedRelations endpoint not found in proposedEntities registry",
+                    code=code,
+                    message=msg,
                     detail={"srcId": sid, "dstId": did, "relation": r.get("relation")},
                 )
             )
@@ -238,7 +323,6 @@ def run_phase0(
         if k in seen:
             continue
         seen.add(k)
-        # Strip internal _origin before phase4
         row = {k2: v2 for k2, v2 in r.items() if not str(k2).startswith("_")}
         valid_rels.append(row)
     ws.analyzer_relations = valid_rels

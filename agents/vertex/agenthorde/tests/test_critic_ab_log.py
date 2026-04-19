@@ -21,8 +21,8 @@ class TestCriticABLog:
             output_tokens=50,
             verdict_sufficient=True,
             verdict_composition="go",
-            blockers_count=0,
-            non_blockers_count=2,
+            critical_findings_count=0,
+            advisory_findings_count=2,
             session_id="sess-abc",
         )
         append_ab_log(log_path, entry)

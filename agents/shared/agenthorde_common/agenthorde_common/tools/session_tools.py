@@ -10,6 +10,10 @@ from typing import Any, MutableMapping
 
 from pydantic import ValidationError
 
+from agenthorde_common.knowledge.domain_priors import (
+    available_domains as _domain_priors_available,
+    lookup as _domain_priors_lookup,
+)
 from agenthorde_common.runtime.state_keys import STATE_PACK_KEY
 from agenthorde_common.schemas.state import ApplyPatchRecord, SessionPack
 from agenthorde_common.schemas.tools_io import (
@@ -153,6 +157,44 @@ def ah_apply(
         working_graph_node_count=len(pack.working_graph.get("nodes") or []) if isinstance(pack.working_graph, dict) else 0,
     )
     env = ToolEnvelope(ok=True, tool="apply", payload=out.model_dump(mode="json", by_alias=True))
+    append_tool_ledger(state, env.model_dump(mode="json", by_alias=True))
+    return env.model_dump(mode="json", by_alias=True)
+
+
+def ah_domain_priors_lookup(
+    domain: str,
+    query: str = "",
+    *,
+    state: MutableMapping[str, Any],
+) -> dict[str, Any]:
+    """Industrial dependency-depth hints for a domain (callable analyst tool).
+
+    See :mod:`agenthorde_common.knowledge.domain_priors` for the underlying
+    dictionary. Returns the lookup result wrapped in a :class:`ToolEnvelope`
+    and persisted into the session tool ledger so the critic can audit which
+    priors the analyzer actually consulted.
+
+    The tool is intentionally **opt-in**: the analyzer decides when (and
+    whether) it needs an industrial hint, so unrelated questions do not pay
+    the token cost of the priors block. Unknown ``domain`` returns an empty
+    hint list plus the available domain catalog as a self-correction signal.
+    """
+
+    dom = (domain or "").strip()
+    if not dom:
+        env = ToolEnvelope(
+            ok=False,
+            tool="domain_priors_lookup",
+            status="validation_error",
+            message="empty domain (call with one of: " + ", ".join(_domain_priors_available()) + ")",
+            payload={"available_domains": _domain_priors_available()},
+        )
+        append_tool_ledger(state, env.model_dump(mode="json", by_alias=True))
+        return env.model_dump(mode="json", by_alias=True)
+
+    payload = _domain_priors_lookup(dom, query)
+    ok = bool(payload.get("hints")) or "available_domains" not in payload
+    env = ToolEnvelope(ok=ok, tool="domain_priors_lookup", payload=payload)
     append_tool_ledger(state, env.model_dump(mode="json", by_alias=True))
     return env.model_dump(mode="json", by_alias=True)
 

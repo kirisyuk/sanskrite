@@ -32,6 +32,10 @@ def test_phase0_collects_entities_and_relations_from_analyzer() -> None:
 
 
 def test_phase0_drops_relation_when_endpoint_missing_from_registry() -> None:
+    """Local id ``e2`` (no namespace prefix) is namespaced to ``analyzer:e2`` and
+    falls into the *stale namespaced id* bucket (the per-blob namespace is the
+    canonicalizer's notion of "would have lived in this batch")."""
+
     ws = run_phase0(
         pack={"reasoningGraph": {"nodes": [], "edges": []}},
         analyzer_output={
@@ -48,7 +52,34 @@ def test_phase0_drops_relation_when_endpoint_missing_from_registry() -> None:
     )
     assert ws.analyzer_relations == []
     codes = [i.code for i in ws.input_issues]
-    assert "entity_id_not_in_registry" in codes
+    assert "relation_endpoint_stale_namespaced_id" in codes
+
+
+def test_phase0_distinguishes_pack_fragment_relation_endpoint() -> None:
+    """Pack reasoning-graph node ids (``n12``) get the dedicated diagnostic
+    rather than being silently rewritten as ``analyzer:n12``."""
+
+    ws = run_phase0(
+        pack={
+            "reasoningGraph": {
+                "nodes": [{"id": "n12", "kind": "claim", "text": "prior cycle claim"}],
+                "edges": [],
+            }
+        },
+        analyzer_output={
+            "chainSummary": "x",
+            "proposedEntities": [{"id": "e1", "label": "Acme"}],
+            "proposedNodes": [],
+            "proposedRelations": [
+                {"srcId": "e1", "dstId": "n12", "relation": "depends_on"},
+            ],
+            "openQuestions": [],
+        },
+        governance_output={},
+        final_answer="",
+    )
+    codes = [i.code for i in ws.input_issues]
+    assert "relation_endpoint_pack_fragment_ref" in codes
 
 
 def test_phase0_pack_entities_merge_without_duplicating_namespaced_id() -> None:

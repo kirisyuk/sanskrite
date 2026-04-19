@@ -55,8 +55,8 @@ class _FakeVertexAgent:
         if self.behavior == "ok":
             ctx.session.state[STATE_CRITIC_OUTPUT_KEY] = {
                 "sufficient": True,
-                "blockers": [],
-                "nonBlockers": [],
+                "criticalFindings": [],
+                "advisoryFindings": [],
                 "missionHint": "",
                 "compositionRecommendation": "go",
             }
@@ -155,8 +155,14 @@ class TestCriticFallback:
         verdict_json = json.dumps(
             {
                 "sufficient": False,
-                "blockers": [{"summary": "missing node", "refs": []}],
-                "nonBlockers": [],
+                "criticalFindings": [
+                    {
+                        "summary": "dominant narrative not challenged",
+                        "refs": [],
+                        "gapClass": "methodology.framing_bias",
+                    }
+                ],
+                "advisoryFindings": [],
                 "missionHint": "probe X",
                 "compositionRecommendation": "conditional",
             }
@@ -193,7 +199,13 @@ class TestCriticFallback:
         assert captured[0]["body"]["model"] == "z-ai/glm-5.1"
         stored = ctx.session.state[STATE_CRITIC_OUTPUT_KEY]
         assert stored["sufficient"] is False
-        assert stored["blockers"] == [{"summary": "missing node", "refs": []}]
+        assert stored["criticalFindings"] == [
+            {
+                "summary": "dominant narrative not challenged",
+                "refs": [],
+                "gapClass": "methodology.framing_bias",
+            }
+        ]
         assert stored["compositionRecommendation"] == "conditional"
         assert len(events) == 1
 
@@ -220,8 +232,8 @@ class TestCriticFallback:
         verdict_json = json.dumps(
             {
                 "sufficient": True,
-                "blockers": [],
-                "nonBlockers": [],
+                "criticalFindings": [],
+                "advisoryFindings": [],
                 "missionHint": "",
                 "compositionRecommendation": "go",
             }
@@ -349,8 +361,8 @@ class TestCriticFallback:
         verdict_json = json.dumps(
             {
                 "sufficient": True,
-                "blockers": [],
-                "nonBlockers": [],
+                "criticalFindings": [],
+                "advisoryFindings": [],
                 "missionHint": "",
                 "compositionRecommendation": "go",
             }

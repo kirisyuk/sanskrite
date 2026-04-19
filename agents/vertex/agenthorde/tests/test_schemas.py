@@ -59,10 +59,76 @@ class SchemaRoundtripTests(unittest.TestCase):
     def test_critic_verdict(self) -> None:
         cv = CriticVerdict(
             sufficient=False,
-            blockers=[{"summary": "missing tier-2 supplier", "refs": ["sc_e1"]}],
+            critical_findings=[
+                {
+                    "summary": "missing tier-2 supplier",
+                    "refs": ["sc_e1"],
+                    "gapClass": "supply_chain.tier_resolution",
+                }
+            ],
             composition_recommendation="conditional",
         )
         CriticVerdict.model_validate(cv.model_dump(mode="json", by_alias=True))
+
+    def test_critic_finding_requires_gap_class(self) -> None:
+        from pydantic import ValidationError
+
+        from agenthorde_common.schemas.agents_io import CriticFinding
+
+        with self.assertRaises(ValidationError):
+            CriticFinding.model_validate({"summary": "x", "refs": ["sc_e1"]})
+
+    def test_critic_finding_methodology_allows_empty_refs(self) -> None:
+        from agenthorde_common.schemas.agents_io import CriticFinding
+
+        f = CriticFinding(
+            summary="dominant narrative not challenged",
+            refs=[],
+            gap_class="methodology.framing_bias",
+        )
+        self.assertEqual(f.gap_class, "methodology.framing_bias")
+
+    def test_critic_finding_object_class_rejects_empty_refs(self) -> None:
+        from pydantic import ValidationError
+
+        from agenthorde_common.schemas.agents_io import CriticFinding
+
+        with self.assertRaises(ValidationError):
+            CriticFinding(
+                summary="missing layer",
+                refs=[],
+                gap_class="supply_chain.tier_resolution",
+            )
+
+    def test_critic_finding_alias_round_trip(self) -> None:
+        from agenthorde_common.schemas.agents_io import CriticFinding
+
+        f = CriticFinding.model_validate(
+            {
+                "summary": "edge between A and B not written",
+                "refs": ["sc_e1", "sc_e2"],
+                "gapClass": "generic.edge_existence",
+            }
+        )
+        dumped = f.model_dump(mode="json", by_alias=True)
+        self.assertEqual(dumped["gapClass"], "generic.edge_existence")
+        self.assertNotIn("gap_class", dumped)
+
+    def test_critic_verdict_go_with_critical_findings_rejected(self) -> None:
+        from pydantic import ValidationError
+
+        with self.assertRaises(ValidationError):
+            CriticVerdict(
+                sufficient=True,
+                critical_findings=[
+                    {
+                        "summary": "x",
+                        "refs": ["sc_e1"],
+                        "gapClass": "supply_chain.tier_resolution",
+                    }
+                ],
+                composition_recommendation="go",
+            )
 
     def test_apply_tool_input(self) -> None:
         ApplyToolInput(patch={"nodes": [{"id": "a", "label": "L"}]}, hypothesis_id="H0")

@@ -1,6 +1,8 @@
 from agenthorde_common.schemas.agents_io import (
     AnalyzerOutput,
+    CriticFinding,
     CriticVerdict,
+    GapClass,
     RedTeamOutput,
     SupervisorDecision,
 )
@@ -27,6 +29,8 @@ __all__ = [
     "ApplyPatchRecord",
     "ApplyToolInput",
     "ApplyToolOutput",
+    "CriticFinding",
+    "GapClass",
     "HypothesisRecord",
     "KnowledgeSearchInput",
     "KnowledgeSearchOutput",

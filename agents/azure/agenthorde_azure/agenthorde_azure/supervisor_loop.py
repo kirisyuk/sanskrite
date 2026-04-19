@@ -295,7 +295,8 @@ async def run_supervisor_session_azure(
         "supervisorDecision": state.get(STATE_SUPERVISOR_DECISION_KEY, {}),
         "analyzerOutput": state.get(STATE_ANALYZER_OUTPUT_KEY, {}),
         "governanceOutput": state.get(STATE_GOVERNANCE_OUTPUT_KEY, {}),
+        "sanctionsOutput": state.get(STATE_SANCTIONS_OUTPUT_KEY, {}),
         "criticOutput": state.get(STATE_CRITIC_OUTPUT_KEY, {}),
-        "redTeamOutput": state.get("ah_red_team_output", {}),
+        "redTeamOutput": state.get(STATE_RED_TEAM_OUTPUT_KEY, {}),
         "toolLedger": state.get(STATE_TOOL_LEDGER_KEY, []),
     }

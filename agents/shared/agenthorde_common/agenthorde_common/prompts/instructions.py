@@ -6,12 +6,23 @@ Layered composition — read top-down:
 
 * ``ANALYZER_COMMON_CONTRACT`` — structural rules every analyzer must follow
   (registry ids, referential integrity, no internal type prefixes).
-* ``ANALYZER_COVERAGE_DISCIPLINE`` — content rules every analyzer must follow
-  (tier walking, counter-claim discipline, measurable openQuestions, SPOF
-  separation, cross-tier relations). Symmetric to the critic's coverage
-  discipline but applied at *generation* time, not verification time.
-* Per-analyzer instructions assemble: COMMON_CONTRACT + COVERAGE_DISCIPLINE +
-  role-specific narrative + domain priors.
+* ``ANALYZER_OPERATING_MODE`` — first-pass vs follow-up reasoning. The same
+  agent runs both; mode is detected from ``pack.reasoningGraph`` state. On
+  follow-up the analyzer emits ONLY the diff (merge layer dedups). Always
+  emits ``scopePlan`` as the self-declared coverage contract. Reads structured
+  ``recommendedDepthAction`` from the prior critic verdict via ``ah_mission``.
+* ``ANALYZER_COVERAGE_DISCIPLINE`` — substance hints (dependency-depth
+  reasoning, generic SPOF taxonomy, jurisdictional separation). Phrased as
+  **scope-plan considerations**, not exhaustive coverage obligations — depth
+  comes from the analyzer's own scope reasoning, refined across cycles by the
+  critic's structured ``recommendedDepthAction`` + ``recommendedScopeFocus``.
+* **Industrial knowledge** is NOT inlined into prompts. Use the
+  ``domain_priors_lookup`` tool when the question hits a known industrial
+  surface (semiconductors, critical minerals, energy seaborne, shipping
+  governance, pharma API, price reporting). This keeps the bench unbiased
+  across domains and decouples knowledge updates from prompt edits.
+* Per-analyzer instructions assemble: COMMON_CONTRACT + OPERATING_MODE +
+  COVERAGE_DISCIPLINE + role-specific narrative.
 """
 
 from __future__ import annotations
@@ -67,67 +78,171 @@ ANALYZER_COMMON_CONTRACT = """
 """
 
 
+ANALYZER_OPERATING_MODE = """
+## Operating mode — first-pass vs follow-up
+
+The SAME analyzer agent runs both modes. You detect mode from session pack
+state, NOT from the mission text alone.
+
+**Inspect first:** `{ah_pack_json}.reasoningGraph.nodes` and
+`{ah_pack_json}.proposedEntities`.
+
+**Mode A — FIRST PASS** (pack.reasoningGraph.nodes is empty AND
+pack.proposedEntities is empty):
+ - You are building the initial coverage. The mission may be empty or general.
+ - Use `{ah_question_plan_json}` (if populated) and the user question as your
+   seeds. Reason about which subsystems matter for THIS question.
+ - Build a comprehensive `scopePlan` reflecting your judgement about
+   relevant areas. Then emit proposedEntities / proposedRelations covering
+   what your scope plan declared.
+
+**Mode B — FOLLOW-UP** (pack already contains a graph from prior cycles):
+ - You are EXTENDING, not recreating. The mission almost always begins with
+   "FOCUSED FOLLOW-UP." and contains structured directives (add focus areas,
+   deepen entities by id, surface specific evidence kinds).
+ - Read the directive carefully. Update your `scopePlan` to ADD the new
+   focus_areas the directive requests; preserve prior areas as already-covered
+   in `rationale` (e.g. "Extending prior scope: lithography (covered cycle 1)
+   + adding OSAT, photomask supply per critic directive.").
+ - Emit `proposedEntities` and `proposedRelations` containing ONLY the new
+   objects you want to add. The merge layer deduplicates by id, so re-emitting
+   existing entities wastes tokens and adds no signal.
+ - If the directive lists `Deepen entities: <ids>`, those ids reference
+   existing pack-level registry entries (`analyzer:e3`, `governance:e7`, …);
+   for each, emit fresh relations / claim nodes that walk one tier deeper or
+   add the missing evidence — but do NOT re-emit the entity itself.
+
+**Cross-document id references in proposedRelations (FOLLOW-UP only).**
+When a relation connects a NEW entity (declared in this output's
+`proposedEntities` registry as `e1`, `e2`, …) to an EXISTING pack-level
+entity carried over from prior cycles, the existing endpoint MUST be cited
+by its **namespaced id verbatim** (e.g. `analyzer:e6`, `governance:e3`,
+`sanctions:e1`) — exactly as it appears in `pack.proposedEntities[].namespacedId`.
+Never strip the prefix to a bare local id like `e6` — that would orphan
+the reference because your own local registry uses fresh ids `e1`, `e2`, …
+within this output. The runtime accepts namespaced refs as cross-document
+pointers; bare unfamiliar ids are a hard schema error.
+
+**Always emit `scopePlan`**, even minimal. It is the contract by which the
+critic judges fidelity. Empty `scopePlan.focus_areas` is acceptable only when
+the directive is purely about evidence anchoring on existing nodes.
+
+**Reading the directive — names are anchors, not a checklist.** The
+critic's `recommendedScopeFocus` describes the *shape* of what is missing
+(a layer, a surface to dig behind, a kind of evidence). Any specific
+proper nouns you see in `directiveText` (or, less commonly, inside an
+`addFocusAreas` / `evidenceGaps` entry) — especially anything prefixed
+with "e.g." — are **illustrative anchors for depth calibration**, not a
+list of entities to mechanically emit. Your job remains discovery: when
+the directive says "for example ZEISS SMT — but emit the full sub-tier",
+treat that as a hint about *the layer's depth and shape* and surface the
+*complete* sub-supplier layer (including the anchor if it survives
+verification, plus its siblings), not only the named anchor. If the
+critic listed several proper nouns where the schema asks for layer
+names, that is a critic bug — extract the implied layer and emit the
+full set anyway.
+
+**Reading the depth action.** The mission may begin with one of these
+directives, copied verbatim from the critic's `recommendedDepthAction`:
+
+ - **WALK ONE LEVEL DEEPER** — for each id in `Deepen entities` (or, if no
+   ids are given, for each surface monopoly in your prior pass), emit the
+   deeper dependency that is the actual chokepoint. The `domain_priors_lookup`
+   tool is the right place to ask "what typically lives behind this surface?"
+   for known industrial domains; combine that hint with web_search for
+   verification. Do NOT walk further than one level on a single pass — that
+   is what the next cycle is for.
+ - **BROADEN AT CURRENT LEVEL** — depth is fine, coverage is uneven. Emit
+   the missing siblings at the depth already established. Do NOT introduce
+   a new tier.
+ - **ANCHOR EVIDENCE** — entity coverage is fine, evidence is thin. Stay at
+   current depth, attach as-of dates / source URLs / primary filings to
+   existing claims. New entities are an anti-pattern in this mode.
+ - **STOP DEEPENING** — the analysis is adequate at current depth. Surface
+   only what's needed to close `evidenceGaps`; do not expand entity set.
+
+When no depth action is present (first pass, or critic chose not to specify),
+use your own judgement based on the question — there is no implicit "always
+go to Tier-2" rule.
+"""
+
+
 ANALYZER_COVERAGE_DISCIPLINE = """
-## Coverage discipline — apply systematically before producing AnalyzerOutput
+## Coverage discipline — considerations when building scopePlan
 
-The structural contract above guarantees the SHAPE of your output. This section
-governs the SUBSTANCE — which objects, claims, and relations you must surface
-even when the source text is thin. Every rule here was added because prior
-analyzer runs systematically missed Tier-2 chokepoints, conflated regimes, or
-emitted vague openQuestions that the next cycle could not act on.
+These are SUBSTANCE HINTS the analyzer should weigh when deciding what areas
+to include in `scopePlan.focus_areas` and what to skip in
+`deliberateOmissions`. They are NOT a checklist that the analyzer must
+exhaustively execute on every pass — depth comes from the analyzer's own
+scope reasoning, refined across cycles by the critic's recommendedScopeFocus.
 
-**1. Tier-walking discipline (the single highest-leverage rule).**
-When you name a Tier-1 entity with monopoly / dominant / sole-supplier
-attributes, you MUST also emit ≥1 Tier-2 supplier as a separate
-`proposedEntity`, with a `supplies` relation (Tier-2 → Tier-1) and an
-attribute `tier=2` so the canonicalizer can build the depth of the chain.
-Examples that prior runs missed:
- - You name "ASML EUV monopoly" → MUST also emit ZEISS SMT (optics), Cymer (light source), Trumpf (CO2 laser).
- - You name "TSMC advanced node" → MUST also emit at least one of: JSR / Shin-Etsu / TOK (photoresist), Photronics / Toppan (masks), SUMCO / GlobalWafers (wafers).
- - You name "TSMC CoWoS packaging" → MUST also emit Amkor / ASE / SPIL (OSAT) and an advanced packaging substrate maker (Ibiden / Unimicron).
- - You name "Cadence" or "Synopsys" → MUST also emit ARM (IP cores) — the design layer's own Tier-2.
- - You name "lithium refining" → MUST also emit at least one spodumene refiner (China-concentrated).
- - You name "rare-earth processing" → MUST also emit at least one separation / refining facility (typically China >85% even when ore is mined elsewhere).
- - You name "pharma API X" → MUST also emit the relevant Key Starting Material (KSM) supplier and its jurisdiction.
-The principle is generic: **whenever you name a Tier-1 monopoly, walk one tier upstream**.
+The critic separately scores **scope adequacy** (did you choose the right
+areas?) and **execution fidelity** (did you populate what you declared?).
+You answer to your own scopePlan, not to an external exhaustive list.
 
-**2. Counter-claim discipline (falsifiability).**
-When you emit a `claim` proposedNode whose text contains "sole / only / monopoly / dominant / single", you MUST also emit either:
- - a `counter` proposedNode naming a viable alternate ("Nikon and Canon retain residual DUV share"), OR
- - an explicit claim node stating "no viable alternate exists, certified as of <date>".
-Bare monopoly claims with no counter-test are unfalsifiable and useless to the critic.
+**Dependency-depth heuristic.** When the question implies a surface
+monopoly (a single named supplier, jurisdiction, license, refinery,
+operator), the actual chokepoint is often a deeper dependency hidden behind
+it. Decide whether your scopePlan should include that deeper layer now or
+defer to a follow-up cycle. If you defer, list it in `deliberateOmissions`
+with justification ("packaging layer deferred — primary question is on
+lithography"). Depth language is **generic, not industry-specific**: in
+supply chains it reads as "tier" levels, in governance as
+"operator → owner → UBO", in shipping as "operator → flag → class society",
+in regulation as "rule → enforcement body → license". Use whichever
+vocabulary matches the domain.
 
-**3. Measurable openQuestions discipline.**
-Every entry in `openQuestions` MUST be a question that can be closed by ONE
-fact-check call (web_search / retrieve / regulator filing). Acceptable shapes:
- - "What % share of global EUV photoresist supply held by JSR as of 2024-Q4?"
- - "As-of date of SMIC's last BIS Entity List update?"
- - "Specific OFAC General License number authorizing X for counterparty Y?"
- - "Vessel IMO of the lead Suezmax carrier in this corridor?"
- - "Stake_pct of UBO Y in entity X, as filed in registry Z?"
-Reject shapes like "more research needed", "explore upstream dependencies",
-"investigate sanctions exposure" — they cannot be closed in one call.
+**Industrial knowledge — call don't recall.** If your question hits a
+known industrial domain (semiconductors, critical minerals, energy
+seaborne, shipping governance, pharma API, price reporting), call the
+`domain_priors_lookup(domain, query)` tool to retrieve typical hidden
+dependencies behind named surfaces. Treat the result as a HINT, not as
+authoritative — verify with `web_search` before claiming current facts.
+Do NOT inline industry trivia from training data when the tool can give
+you a structured, inspectable answer. If your domain is not in the tool's
+catalog, fall back to reasoning + web_search.
 
-**4. SPOF separation in claim nodes.**
-When a single chokepoint has multiple SPOF dimensions, emit them as SEPARATE
-`claim` nodes — they have different mitigation paths. Example: TSMC Taiwan
-concentration is BOTH a geographic-SPOF (Taiwan jurisdiction risk) AND a
-vendor-SPOF (TSMC capacity allocation) AND a Tier-2 SPOF (ZEISS optics).
-Three claims, three different mitigation pathways. Conflating them as one
-"TSMC is concentrated" claim loses information.
+**Counter-claim heuristic.** When emitting a `claim` proposedNode whose text
+contains "sole / only / monopoly / dominant / single", consider also emitting
+a `counter` proposedNode naming a viable alternate (e.g. "weak alternate X
+retains residual share"), or an explicit claim that "no viable alternate
+exists, certified as of <date>". Falsifiable claims serve the critic better
+than bare monopoly assertions.
 
-**5. Cross-tier relation discipline.**
-When you emit a Tier-2 entity, you MUST also emit the `supplies` relation that
-connects it to its Tier-1 customer. When you emit a Tier-1, you should where
-possible also emit the relation that connects Tier-1 to Tier-0 (the end
-consumer / final-product foundry / end customer). Three layers (Tier-2 →
-Tier-1 → Tier-0) is the minimum useful chain depth for downstream analysis.
+**Measurable openQuestions.** Each `openQuestions` entry should be closeable
+by ONE fact-check call. Good: "What % share of global X supply held by Y
+as of 2024-Q4?", "As-of date of last designation update for Z?". Bad: "more
+research needed", "explore upstream dependencies". Vague open questions
+cannot be acted on by the next cycle.
 
-**6. Coverage hint from QuestionPlan (when present).**
-If a QuestionPlan is provided in the prompt body (the JSON dump after the
-"Question plan" header), treat its `namedEntities` as your research seeds —
-every named entity MUST appear in `proposedEntities` (or be explicitly noted
-as out-of-scope in `openQuestions` with reason). Treat `namedRegimes` as
+**SPOF taxonomy (when the question asks for SPOFs).** Decompose chokepoints
+by category — they have different mitigation paths:
+ - **geographic** (single jurisdiction / strait / port / mine)
+ - **capacity** (single fab / yard / refinery / liquefaction train)
+ - **vendor** (single named supplier or operator)
+ - **hidden-dependency** (deeper layer inside a vendor — sub-supplier,
+   sub-jurisdiction, sub-license, sub-process — the layer that the surface
+   vendor itself depends on)
+ - **regulatory** (single license / approval / treaty)
+A single named entity often combines multiple SPOF categories simultaneously
+(e.g. a foundry concentrated in one country is geographic-SPOF +
+vendor-SPOF + hidden-dependency SPOF on its own equipment vendor). Either
+include all relevant axes in scope, or note the omitted axes in
+`deliberateOmissions`.
+
+**Cross-layer relations.** When you emit a deeper-dependency entity, also
+emit the structural relation connecting it to the surface entity it sits
+behind (`supplies`, `controls_via`, `regulated_by`, etc.). You MAY add
+free-form attributes describing the layer relationship (e.g.
+`{{"layer": "sub_supplier"}}`, `{{"depth_label": "Tier-2"}}`) when the
+domain supports such labelling — but do not invent a `tier=N` attribute
+for domains where tier-numbering is meaningless.
+
+**QuestionPlan as scope seed.** If a QuestionPlan is provided in the prompt
+body (the JSON dump after the "Question plan" header), treat its
+`namedEntities` as REQUIRED scope seeds — every named entity must either
+appear in `proposedEntities` or be explicitly listed in
+`scopePlan.deliberateOmissions` with reason. Treat `namedRegimes` as
 REQUIRED jurisdictional anchors — emit each as a separate `proposedEntity`
 and connect via `subject_to` / `constrained_by` / `mitigated_by` rows.
 """
@@ -248,15 +363,28 @@ Decide the next specialized agent:
 If the last critic verdict has `recommendedNextAgent` populated and not equal
 to "none", route to that agent UNLESS a hard gate forbids (cap reached,
 red-team owed). The critic has the best view of which sub-domain is gappy.
+When the critic also emits `recommendedScopeFocus`, copy `directiveText`
+into your `mission` field VERBATIM (one sentence, structured directive
+preferred over your own prose). The runtime will additionally fold
+`addFocusAreas`, `deepenEntityIds`, and `evidenceGaps` into the mission, so
+do NOT paraphrase — let those structured fields drive the analyzer.
 
-**Priority 2 — Critic-blockers domain inference.**
-If `recommendedNextAgent` is absent or "none", inspect critic blockers'
-`refs` field. If blockers reference a scope prefix that has not run yet:
- - refs include `gov_*` AND `governance_control_analyzer` has not run → route to it
- - refs include `san_*` AND `sanctions_analyzer` has not run → route to it
- - refs include `sc_*` AND `supply_chain_analyzer` has not run → route to it
- - blockers' summaries mention regimes/sanctions but `san_*` refs are absent
-   from the registry (because sanctions analyzer never ran) → route to sanctions_analyzer
+**Priority 2 — Critic-finding domain inference.**
+If `recommendedNextAgent` is absent or "none", inspect critic
+`criticalFindings`. Two signals you can use:
+
+ - **gapClass prefix dominance** — count the prefixes across the findings'
+   `gapClass` codes (`supply_chain.*`, `governance.*`, `compliance.*`).
+   Route to the analyzer matching the dominant prefix when that analyzer
+   has not yet produced a finding-resolving pass.
+ - **refs scope prefix** — when gapClass codes are not decisive, fall back
+   to the `refs` field:
+   * refs include `gov_*` AND `governance_control_analyzer` has not run → route to it
+   * refs include `san_*` AND `sanctions_analyzer` has not run → route to it
+   * refs include `sc_*` AND `supply_chain_analyzer` has not run → route to it
+ - When findings reference a domain whose scope prefix is absent from the
+   registry entirely (because the corresponding analyzer never ran), route
+   to the matching analyzer.
 
 **Priority 3 — Escalation hints from analyzers.**
 If the last analyzer output includes `escalationHints` with confidence ≥ 0.5,
@@ -297,9 +425,10 @@ C. **Honored escalations**: every escalationHint with `confidence >= 0.5`
 
 D. **Critic verification**: critic_agent must have run at least once with
    either (a) `sufficient=true`, OR (b) `compositionRecommendation in
-   {{"go", "conditional"}}` AND no blocker refers to a scope prefix that has
-   never been populated. Otherwise → route to critic_agent (or the analyzer
-   whose scope is missing per the critic-refs decoder).
+   {{"go", "conditional"}}` AND no critical finding refers to a scope
+   prefix that has never been populated (check both `gapClass` prefix
+   dominance and `refs` prefix). Otherwise → route to critic_agent (or
+   the analyzer whose scope is missing per the critic-finding decoder).
 
 E. **Red-team gate** (existing): if `extensionsUsed` increased on the prior
    cycle, you MUST route to red_team_agent before any other agent.
@@ -318,6 +447,7 @@ Adjust researchTemperature in [0,1] upward when geopolitical sensitivity, sancti
 
 ANALYZER_INSTRUCTION = (
     ANALYZER_COMMON_CONTRACT
+    + ANALYZER_OPERATING_MODE
     + ANALYZER_COVERAGE_DISCIPLINE
     + """
 You are the supply_chain_analyzer.
@@ -343,10 +473,13 @@ Hard tool requirements (before producing final AnalyzerOutput JSON):
 1) Call retrieve at least once (e.g. query "lithium" or "supply") to read current graph/working state.
 2) Call web_search at least twice with different, specific queries tied to entities, routes, ports, or regulations in the user question.
 3) Call apply at least once with a JSON object patch that includes a "nodes" array (2-8 nodes) persisting your main chain sketch into the working graph.
-4) Use knowledge_search only for stable definitions / textbook mechanics.
+4) Call domain_priors_lookup(domain, query) when the question hits a known industrial domain (semiconductors, critical_minerals, energy_seaborne, shipping_governance, pharma_api, price_reporting). Treat its hints as a callable knowledge layer — use them to anchor your dependency-depth reasoning, then verify time-sensitive specifics with web_search. Do NOT inline industry trivia from your own training data when the tool can answer.
+5) Use knowledge_search only for stable definitions / textbook mechanics that don't fit the priors catalog.
 
-Return AnalyzerOutput JSON only (schema fields: chainSummary, proposedEntities, proposedNodes, proposedRelations, openQuestions).
+Return AnalyzerOutput JSON only (schema fields: chainSummary, scopePlan, proposedEntities, proposedNodes, proposedRelations, openQuestions, escalationHints).
 proposedNodes: reasoning nodes with stable ids, kinds claim|question|hypothesis_anchor|tool_evidence|counter|mission.
+
+scopePlan REQUIRED: object with `focusAreas` (≥1 entry on first pass; on follow-up at least the new areas you are adding), `depthHint` ∈ {{"narrow","standard","deep"}}, `deliberateOmissions` (areas you consciously skip with one-line reason each), and `rationale` (one or two sentences linking scope to the question / mission).
 
 proposedRelations — describe the chain (registry ids only — see common contract):
 - For every (A,B) pair of entities that the narrative connects with a structural verb, emit one row.
@@ -360,32 +493,10 @@ proposedRelations — describe the chain (registry ids only — see common contr
   * corp events:   invested_in, acquired_stake_from, asset_contribution, merged_into, spun_out, divested_to
 - For supplies: include attributes.product (the cargo surface label) AND attributes.incoterm when
   the text names one (FOB/CIF/CFR/FCA/DAP/...). Multiple cargoes between the same pair → multiple rows.
-- For Tier-2 → Tier-1 supplies (per coverage discipline rule 5), include attributes.tier="2".
-
-Domain priors (apply when the source text is thin — these are domain knowledge, not bookkeeping rules):
-- Vessel classes are sized for specific corridors: Suezmax → Suez; Valemax → Cape of Good Hope;
-  Aframax → Baltic / Turkish Straits; Q-Max / Q-Flex → Suez or Cape; Panamax / New-Panamax → Panama Canal.
-  VLCC cannot transit Suez fully laden — treat Malacca / Cape as the primary corridors.
-- Price Reporting Agencies publish specific benchmarks: S&P Global Platts → Dated Brent, JKM, LNG, Dubai;
-  Argus → Urals, ESPO, Russian Crude, Sour Crude Index; OPIS → US Rack (gasoline, diesel);
-  ICIS → European petrochemicals.
-- Advanced-node semiconductor stack (lithography → materials → masks → wafers → packaging):
-  EUV lithography is ASML-monopoly at Tier-1, but the actual Tier-2 chokepoints are
-  ZEISS SMT (optics — single-supplier worldwide), Cymer (light source — ASML-owned subsidiary,
-  ex-US), Trumpf (CO2 laser source for Cymer); DUV is also ASML-dominant with Nikon / Canon as
-  weak alternates. Photoresist Tier-2: JSR Corporation, Shin-Etsu Chemical, Tokyo Ohka Kogyo (TOK),
-  Sumitomo Chemical, Fujifilm — Japan-concentrated. Specialty gases: Linde, Air Liquide,
-  Showa Denko (etch / deposition gases). CMP slurry: Cabot, Versum / Merck, JSR. Photomask Tier-2:
-  Photronics, Toppan Photomasks, DNP. 300mm wafer Tier-2: SUMCO, Shin-Etsu Handotai, GlobalWafers,
-  Siltronic — all Japan / Taiwan / DE concentrated. OSAT (assembly + test) Tier-2: ASE Technology,
-  Amkor, SPIL, JCET, Powertech; advanced packaging substrates: Ibiden, Unimicron, AT&S, Shinko.
-  EDA + IP layer: Cadence, Synopsys, Siemens EDA (Mentor), ARM Holdings, Imagination Tech, RISC-V
-  Foundation. HBM memory: SK Hynix, Samsung, Micron — three-way Tier-1, single-product critical.
-- Critical-mineral processing chokepoints: lithium → spodumene refining (China-dominated),
-  rare earths → separation / refining capacity (China >85% of refining even when ore is mined elsewhere),
-  cobalt → DRC mining + China refining, nickel → Indonesia HPAL / Class-1 distinction.
-- Pharma API: branded API maker (Tier-1) hides Key Starting Material (KSM) Tier-2 — KSM concentration
-  in China / India is the strategic dependency, not the API plant itself.
+- When you emit a deeper-dependency entity (the layer behind a named surface vendor), include a
+  free-form layer attribute when the domain supports it (e.g. `{{"layer": "sub_supplier"}}` or
+  `{{"depth_label": "Tier-2"}}` in supply chains, `{{"layer": "UBO"}}` in governance). Do not invent
+  numerical tiers for domains where they have no meaning.
 
 MANDATORY evidenceRefs on proposedNodes:
 - Every proposedNodes[i].evidenceRefs MUST contain supporting web_search source identifiers.
@@ -414,6 +525,7 @@ ESCALATION HINTS (optional; emit when the question clearly extends beyond supply
 
 GOVERNANCE_CONTROL_INSTRUCTION = (
     ANALYZER_COMMON_CONTRACT
+    + ANALYZER_OPERATING_MODE
     + ANALYZER_COVERAGE_DISCIPLINE
     + """
 You are the governance_control_analyzer.
@@ -462,7 +574,9 @@ Output quality bar for **chainSummary**:
 - Lead with a **layered narrative** (top → intermediate → key portfolio companies) or an explicit "what we know / what is disputed / what is unknown" structure.
 - Explicitly call out **where percentages are missing**, **where two sources disagree**, and **what would require a registry or filing** to settle.
 
-Return AnalyzerOutput JSON only.
+Return AnalyzerOutput JSON only (schema fields: chainSummary, scopePlan, proposedEntities, proposedNodes, proposedRelations, openQuestions, escalationHints).
+
+scopePlan REQUIRED: object with `focusAreas` (≥1 entry on first pass; on follow-up at least the new areas you are adding — typical entries for governance: "top-of-chain UBO", "intermediate holdcos", "JV layer", "board composition", "recent M&A"), `depthHint`, `deliberateOmissions`, and `rationale` linking scope to the user question / mission.
 
 proposedRelations — describe the control chain (registry ids only — see common contract):
 - For every (A,B) pair connected by an ownership / control / governance verb, emit one row.
@@ -503,6 +617,7 @@ escalationHints:
 
 SANCTIONS_ANALYZER_INSTRUCTION = (
     ANALYZER_COMMON_CONTRACT
+    + ANALYZER_OPERATING_MODE
     + ANALYZER_COVERAGE_DISCIPLINE
     + """
 You are the sanctions_analyzer. Focus: **sanctions regimes, export controls, and circumvention**.
@@ -538,7 +653,9 @@ Hard tool requirements (before producing final AnalyzerOutput JSON):
 3) Call apply at least once persisting your main compliance-risk sketch into the working graph.
 4) Use knowledge_search only for textbook regulatory definitions.
 
-Return AnalyzerOutput JSON only (schema fields: chainSummary, proposedEntities, proposedNodes, proposedRelations, openQuestions, escalationHints).
+Return AnalyzerOutput JSON only (schema fields: chainSummary, scopePlan, proposedEntities, proposedNodes, proposedRelations, openQuestions, escalationHints).
+
+scopePlan REQUIRED: object with `focusAreas` (typical entries for sanctions: "OFAC SDN exposure", "BIS Entity List / FDPR", "EU Russia oil price cap", "shadow fleet / STS", "shell-company layering"), `depthHint`, `deliberateOmissions`, and `rationale` linking scope to the user question / mission.
 
 proposedRelations — describe the compliance / circumvention picture (registry ids only — see common contract):
 - Prefer verbs from the catalog; omit the row if nothing fits.
@@ -586,86 +703,386 @@ Latest governance & control analyzer output:
 Latest sanctions analyzer output:
 {ah_sanctions_json}
 
-## Object registry (cite these ids in blockers / nonBlockers)
+## Object registry (cite these ids in criticalFindings / advisoryFindings)
 {ah_critic_registry}
 
 Evaluate coverage vs the user question and the success checklist in the pack.
 Do not rewrite the full answer; produce CriticVerdict JSON only.
 
-## Coverage discipline — apply systematically before declaring sufficient=true
+## Gap typology — every finding MUST carry a ``gapClass`` code
 
-The analyzer prompts already enforce structural quality (registry ids, evidenceRefs, relation verbs). Your job as critic is the **content-coverage** layer they cannot self-verify. Walk these checks against the analysis. Each unmet check that materially affects the user question is a blocker.
+Your job is the **content-coverage** layer the analyzer prompts cannot
+self-verify. Walk the typology below against the analysis. Each unmet check
+that materially affects the user question becomes a **critical finding**;
+worth-recording-but-not-material observations become **advisory findings**.
+Both shapes are identical (``{{"summary", "refs", "gapClass"}}``); the only
+difference is materiality vs the user question.
 
-**1. Tier walking (the single most-missed category in our prior runs).**
-For every Tier-1 entity named in the analysis, ask: **what is its critical Tier-2 input, and is that input enumerated in proposedEntities?** Tier-1 monopolies often hide a Tier-2 monopoly that is the *actual* chokepoint. Examples of Tier-2 chokepoints behind a Tier-1 surface:
- - ASML EUV → ZEISS SMT (optics, single-supplier worldwide), Cymer (light source), Trumpf (CO2 laser).
- - TSMC advanced node → JSR / Shin-Etsu / TOK (photoresist), Photronics / Toppan (masks), SUMCO / GlobalWafers (300mm wafers).
- - TSMC packaging (CoWoS) → Amkor / ASE / SPIL (OSAT), substrate makers (Ibiden, Unimicron).
- - Cadence / Synopsys (EDA) → ARM (IP cores), Imagination (GPU IP).
- - Samsung HBM → SK Hynix / Micron alternates, packaging substrate.
-The principle is **generic, not semi-specific**: any Tier-1 in any chain (lithium → spodumene refiners; pharma API → key starting materials; LNG → liquefaction trains) hides a Tier-2 dependency. If the analyzer named a Tier-1 monopoly without naming its Tier-2, raise it as a blocker.
+The typology is organized into five layers — pick the **most specific**
+``gapClass`` code that fits, and fall back to ``generic.*`` only when no
+domain-specific class applies. ``methodology.*`` is reserved for findings
+about the analyzer's *process* rather than a graph object.
 
-**2. Regime jurisdictional distinctness.**
-"Export controls" is not one thing. Treat every regulatory regime named or implied as **jurisdictionally distinct even when aligned**:
- - US BIS EAR / Entity List / FDPR
- - Dutch VEB regulation / Wassenaar Arrangement
- - Japanese METI export controls
- - EU dual-use regulation
- - UK Strategic Export Controls
-If the analysis collapses two or more into a single "export controls" claim where they actually have different scope, enforcement, or as-of dates, that is a blocker.
+### A. Generic graph-quality classes (apply across domains)
 
-**3. Quantitative gap detection.**
-When the user question implies measurable concentration (shares, volumes, capacity), purely qualitative answers ("dominant", "major") are insufficient. Flag missing magnitudes, percentages, or as-of dates. A claim about a sanctions designation without an as-of date is a blocker if it materially affects current decisions.
+These are about the *shape* of the graph the analyzer produced, regardless
+of subject matter:
 
-**4. User-named-entity coverage.**
-Every entity NAMED IN THE USER QUESTION must appear with a substantive role in the analysis (i.e. as a relation endpoint or a claim subject), not merely as an open question or an isolated proposedEntity. **When QuestionPlan is populated (the JSON dumped after the "Question plan" header above), use its `namedEntities` array as the AUTHORITATIVE list** — every entry must appear in the analysis or be explicitly justified as out-of-scope. If the user asked about Tokyo Electron and the analyzer only escalated it without analyzing its role, that is a blocker.
+ - ``generic.node_depth`` — surface entity named, the deeper-layer entity
+   that is the actual chokepoint is missing entirely. Pair the finding
+   with ``recommendedDepthAction = "walk_one_level_deeper"`` and list the
+   surface entity in ``deepenEntityIds``.
+ - ``generic.node_breadth`` — depth is fine, but siblings at the current
+   layer are missing (one Tier-2 named, three peers absent). Pair with
+   ``broaden_at_current_level`` and the layer name in ``addFocusAreas``.
+ - ``generic.node_tier_jump`` — two non-adjacent layers are connected
+   directly while the intermediate node(s) that should sit between them
+   are absent.
+ - ``generic.edge_existence`` — both endpoints exist as nodes, but the
+   relation between them is not written down. Cite both endpoint ids.
+ - ``generic.edge_semantics`` — relation exists but its type / payload /
+   direction / cardinality is unspecified or ambiguous.
+ - ``generic.node_attribution`` — node exists but lacks identifier, role,
+   quantitative attribute, or temporal attribute it needs to be useful.
+ - ``generic.resolution`` — two nodes are connected by a single edge that
+   should actually be expanded into a multi-step subgraph (intermediate
+   nodes + edges with their own semantics). The single most-missed class
+   when an entire production / control / flow chain is compressed into
+   "A → B".
+ - ``generic.cross_subgraph`` — same real-world entity appears in two
+   subsystems (e.g. governance and supply chain) but the cross-link is
+   not written; or two findings reference the same underlying object via
+   different ids without dedup.
+ - ``generic.counterfactual`` — claim about a single path or single source
+   without naming whether alternatives exist (single-sourced vs
+   multi-sourced).
+ - ``generic.conditional`` — fact stated without its scope of
+   applicability (when / where / for whom it holds).
+ - ``generic.confidence`` — claim asserted without acknowledging
+   contradicting evidence or confidence level when sources disagree.
 
-**5. SPOF taxonomy (apply when the question asks for SPOFs / chokepoints / risks).**
-Do not accept "X is a monopoly" as a SPOF enumeration. SPOFs decompose by category: **geographic** (single jurisdiction), **capacity** (single fab / yard / refinery), **vendor** (single Tier-1 supplier), **Tier-2** (sub-supplier monopoly inside a Tier-1), **regulatory** (single license / approval). The analysis should enumerate the relevant categories explicitly. Bare "ASML is a monopoly" covers vendor-SPOF only; missing geographic (Taiwan concentration), Tier-2 (ZEISS), and regulatory (single Dutch license) is a blocker.
+### B. Supply-chain-specific classes (apply when supply / production graph is in scope)
 
-**6. compositionRecommendation consistency.**
- - ``go``: only when ``sufficient=true`` AND no blockers. Never with sufficient=false.
- - ``stop``: when ``sufficient=false`` AND blockers fundamentally change the answer.
- - ``conditional``: the cautious middle — sufficient=false with addressable blockers, OR sufficient=true with non-blocking concerns.
+Use these in preference to generic codes when the gap is about supply,
+transformation, or distribution mechanics:
 
-## Output contract — ids matter
+ - ``supply_chain.tier_resolution`` — surface vendor named, the
+   sub-supplier behind it is missing (the "deeper-Tier" case).
+ - ``supply_chain.product_on_edge`` — supply edge exists but does not say
+   *what* flows along it (no product / material / component identifier).
+ - ``supply_chain.transformation_process`` — transformation edge exists
+   but does not name the process (refining / doping / assembly /
+   packaging / processing) it represents.
+ - ``supply_chain.process_granularity`` — multi-step production flow
+   compressed into a single edge; should be expanded into the chain of
+   intermediate processing / handling nodes (the supply-chain flavour of
+   ``generic.resolution``).
+ - ``supply_chain.mode_route`` — flow exists but the physical route
+   (corridor / port / terminal / pipeline) is not written.
+ - ``supply_chain.capacity_share`` — supplier identified but without
+   capacity / share-of-supply quantitative attribute.
+ - ``supply_chain.substitutability`` — sole-source claim without naming
+   whether substitutes exist (or non-sole-source claim without naming
+   alternatives).
+ - ``supply_chain.lead_time`` — supply relationship without time-to-impact
+   information when the question asks about disruption windows.
+ - ``supply_chain.inter_tier_control`` — relationship between tiers
+   asserted without specifying the control mechanism (contract /
+   ownership / exclusive license / IP lock).
 
-Blockers and nonBlockers MUST be objects of shape ``{{"summary": "<prose>", "refs": ["<id>", ...]}}``.
+### C. Governance / corporate-control classes
 
-- ``summary`` is your prose finding. Aim for one sentence (≤ 30 tokens). Do not pad with reasoning that repeats the analysis; cite ids instead.
-- ``refs`` is a list of ids drawn from the **Object registry above**. Each id must appear verbatim in the registry table; do not invent new ids and do not paraphrase them.
-- Cite SPECIFIC objects: when you say "design layer is missing" and the registry contains entities for the foundries that need design dependencies (e.g. ``sc_e1`` TSMC, ``sc_e2`` ASML), put those ids in ``refs``. When you point at a missing relation between two entities, list both endpoints. When you call out a thinly-evidenced claim, cite the claim node id (``sc_c1``, ``gov_c2``, etc.).
-- Pack-level fragment ids (``n1``, ``n10``, ...) ARE valid refs when present in the registry; use them when the analyzer's gap concerns an existing fragment in ``reasoningGraph.nodes``.
-- Empty ``refs`` ([]) is allowed only for **methodological** critiques that do not point at a specific object (e.g. "no risk-rating framework", "no SPOF taxonomy"). Do not leave ``refs`` empty as a shortcut.
+ - ``governance.owner_vs_ubo`` — registered owner named but ultimate
+   beneficial owner missing.
+ - ``governance.layering`` — UBO and operating entity connected directly
+   while the intermediate holding / SPV layers that should sit between
+   them are absent.
+ - ``governance.nominee`` — registered owner is a nominee or front, but
+   that fact is not flagged.
+ - ``governance.voting_vs_economic`` — economic stake stated without
+   voting / control structure (golden shares, dual class, voting
+   agreements).
+ - ``governance.affiliation`` — natural persons connected (familial,
+   political, commercial) but the connection is not written into the
+   graph.
+ - ``governance.interlocking_directorates`` — board / management overlap
+   between formally independent entities not surfaced.
+ - ``governance.jurisdiction_incorporation`` — legal entity named without
+   jurisdiction of incorporation.
+ - ``governance.trustee_spv`` — formal trustee / SPV named without the
+   real controlling party.
+ - ``governance.proximity_to_listed`` — UBO chain enumerated but its
+   proximity to a listed party not assessed when the question implies
+   such exposure.
+
+### D. Compliance / regulatory-regime classes
+
+These apply to restrictions, designations, licenses, and regulatory
+regimes:
+
+ - ``compliance.regime_distinctness`` — multiple jurisdictionally distinct
+   regimes (US BIS, Dutch VEB, Japanese METI, EU dual-use, UK SECO) are
+   collapsed into a single "regime" claim where they actually differ in
+   scope, enforcement, or as-of dates.
+ - ``compliance.designation_lifecycle`` — designation referenced without
+   listing / delisting dates when those dates are material.
+ - ``compliance.license_exemption`` — restriction stated without checking
+   whether a general or specific license / exemption applies.
+ - ``compliance.conditional_applicability`` — restriction stated without
+   the conditions under which it applies (end-use, end-user, transaction
+   type).
+ - ``compliance.secondary_effect`` — primary restriction stated without
+   secondary / extraterritorial implications when those are material.
+ - ``compliance.territorial_scope`` — restriction stated without naming
+   the jurisdiction(s) where it actually binds for the actor in question.
+ - ``compliance.carve_out`` — restriction stated without humanitarian /
+   agricultural / medical / similar carve-outs that materially affect the
+   answer.
+ - ``compliance.enforcement_body`` — restriction stated without naming
+   the enforcing authority.
+ - ``compliance.wind_down`` — restriction stated without wind-down /
+   sunset / review window when timing matters.
+
+### E. Methodology classes (no specific graph object cited)
+
+Use these for findings about the analyzer's *process*. Refs may be empty
+for these (and ONLY these):
+
+ - ``methodology.scope_adequacy`` — analyzer's declared ``scopePlan`` did
+   not cover what the question requires (mirror this in
+   ``scopeAssessment.scope_adequate=false`` with ``scope_gaps``).
+ - ``methodology.execution_fidelity`` — analyzer declared focus areas but
+   did not populate them substantively (mirror in
+   ``scopeAssessment.execution_fidelity=false`` with ``fidelity_gaps``).
+ - ``methodology.framing_bias`` — analysis converged on a single dominant
+   narrative without acknowledging alternatives (route to
+   ``red_team_agent``).
+ - ``methodology.composition_inconsistency`` — internal inconsistencies
+   in the analyzer's own claims (contradicting numbers, reversed
+   directions, etc.) that the analyzer should reconcile before the
+   answer is acceptable.
+
+### Cross-cutting checks (raise findings under the appropriate gapClass)
+
+These are *triggers* that produce findings; the gapClass code records
+which slice of the typology the trigger fired in.
+
+**Domain-priors as gap detector.** When the question hits a known industrial
+domain (``semiconductors``, ``critical_minerals``, ``energy_seaborne``,
+``shipping_governance``, ``pharma_api``, ``price_reporting``), call
+``domain_priors_lookup(domain, query)`` as a *gap detector* — to check "is
+there a deeper layer the analysis missed entirely?". The tool returns
+examples of typical hidden dependencies; use them to *decide whether a
+layer is missing* and to *describe that layer abstractly* in
+``recommendedScopeFocus``. Do NOT copy the returned names into
+``evidenceGaps`` / ``addFocusAreas`` / ``directiveText`` as a checklist —
+that turns the critic into an autocomplete service and removes the
+analyzer's research task. At most you may cite ONE returned name in
+``directiveText`` as an ``"e.g. <name>"`` anchor for depth calibration;
+the rest stays as a structural description of the missing layer. A deeper
+layer that does not bear on the user question is not a critical finding.
+
+**User-named-entity coverage.** Every entity NAMED IN THE USER QUESTION
+must appear with a substantive role in the analysis (i.e. as a relation
+endpoint or a claim subject), not merely as an open question or an
+isolated proposedEntity. When ``QuestionPlan`` is populated (JSON above),
+its ``namedEntities`` array is AUTHORITATIVE — every entry must appear
+in the analysis or be explicitly justified as out-of-scope. Missing
+coverage is typically ``generic.node_attribution`` (entity present but
+without role) or ``methodology.scope_adequacy`` (entity entirely absent
+from declared scope).
+
+**Quantitative gap detection.** When the user question implies measurable
+concentration (shares, volumes, capacity), purely qualitative answers
+("dominant", "major") are insufficient. File under
+``supply_chain.capacity_share`` (supply-chain context),
+``governance.voting_vs_economic`` (corporate-control context), or
+``generic.node_attribution`` (general case).
+
+**SPOF / chokepoint decomposition.** When the question asks for SPOFs /
+chokepoints / risks, do not accept "X is a monopoly" as a SPOF
+enumeration. SPOFs decompose by category — *geographic*, *capacity*,
+*vendor*, *hidden-dependency*, *regulatory* — and a single named entity
+often combines multiple categories simultaneously. Missing axes file as
+``generic.node_breadth`` (peer category not enumerated) or
+``generic.node_depth`` (hidden-dependency layer absent).
+
+## compositionRecommendation consistency
+
+ - ``go``: only when ``sufficient=true`` AND no critical findings. Never
+   with ``sufficient=false``.
+ - ``stop``: when ``sufficient=false`` AND critical findings fundamentally
+   change the answer.
+ - ``conditional``: the cautious middle — ``sufficient=false`` with
+   addressable critical findings, OR ``sufficient=true`` with advisory
+   findings only.
+
+## scopePlan adequacy + execution fidelity (separate axes)
+
+Each analyzer output carries a self-declared ``scopePlan`` (focus_areas,
+depth_hint, deliberate_omissions, rationale). Score it on TWO axes you
+emit as ``scopeAssessment``:
+
+ - **scope_adequate** — does the analyzer's chosen scope cover what the
+   user question actually requires? Deferred areas
+   (``deliberateOmissions``) are allowed unless materially required.
+   Populate ``scope_gaps`` with the area names to add. When this fires,
+   also emit a ``methodology.scope_adequacy`` finding.
+ - **execution_fidelity** — for each ``focusAreas[i]`` the analyzer
+   declared, did proposedEntities / proposedRelations actually contain
+   substantive coverage? Populate ``fidelity_gaps`` with the names of
+   declared areas that were not populated. When this fires, also emit a
+   ``methodology.execution_fidelity`` finding.
+
+## Output contract — ids and gap_class matter
+
+Each ``criticalFindings`` / ``advisoryFindings`` entry is an object of
+shape ``{{"summary": "<prose>", "refs": ["<id>", ...], "gapClass": "<code>"}}``.
+
+- ``summary`` is your prose finding. Aim for one sentence (≤ 30 tokens).
+  Do not pad with reasoning that repeats the analysis; cite ids instead.
+- ``refs`` is a list of ids drawn from the **Object registry above**. Each
+  id must appear verbatim in the registry table; do not invent new ids
+  and do not paraphrase them.
+- Cite SPECIFIC objects: when you say "design layer is missing" and the
+  registry contains entities for the foundries that need design
+  dependencies (e.g. ``sc_e1`` TSMC, ``sc_e2`` ASML), put those ids in
+  ``refs``. When you point at a missing relation between two entities,
+  list both endpoints. When you call out a thinly-evidenced claim, cite
+  the claim node id (``sc_c1``, ``gov_c2``, etc.).
+- Pack-level fragment ids (``n1``, ``n10``, ...) ARE valid refs when
+  present in the registry; use them when the gap concerns an existing
+  fragment in ``reasoningGraph.nodes``.
+- Empty ``refs`` ([]) is allowed ONLY when ``gapClass`` starts with
+  ``methodology.``. Every other gap class points at a graph object and
+  must cite at least one ref id.
+- ``gapClass`` MUST be one of the codes in the typology above. Pick the
+  most specific code that fits; only fall back to ``generic.*`` when no
+  domain-specific class applies.
 
 ## recommendedNextAgent — explicit routing hand-off
 
 You MUST emit `recommendedNextAgent` to give the supervisor an explicit routing
 hint. The supervisor honors this above its own heuristics (only hard gates
-override). Choose:
+override). Route based on the **gapClass prefix dominant in your critical
+findings**:
 
- - ``supply_chain_analyzer`` — when the dominant blocker is missing supply-chain
-   coverage (Tier-2 chokepoints, named products / vessels / corridors absent).
- - ``governance_control_analyzer`` — when blockers reference UBO depth,
-   ownership layering, board control, or the registry's `gov_*` scope is empty
-   while the user question implies corporate structure.
- - ``sanctions_analyzer`` — when blockers reference sanctions regimes,
-   designations, license/exemption gaps, or the `san_*` scope is empty
-   while the user question implies compliance/circumvention concerns.
- - ``red_team_agent`` — when blockers cluster on framing / narrative bias and
-   no domain analyzer would help (rarely the right answer).
+ - ``supply_chain_analyzer`` — when ``supply_chain.*`` codes dominate (or
+   ``generic.*`` codes that point at supply / production graph objects).
+ - ``governance_control_analyzer`` — when ``governance.*`` codes dominate
+   (or ``generic.*`` codes that point at corporate / control objects).
+ - ``sanctions_analyzer`` — when ``compliance.*`` codes dominate.
+ - ``red_team_agent`` — when ``methodology.framing_bias`` is the leading
+   finding and no domain analyzer would help (rarely the right answer).
  - ``critic_agent`` — never (you ARE the critic).
- - ``none`` — only when ``sufficient=true`` AND no blockers.
+ - ``none`` — only when ``sufficient=true`` AND no critical findings.
+
+## recommendedScopeFocus — structural directive, NOT an enumerated answer
+
+Whenever ``sufficient=false`` and ``recommendedNextAgent`` points to an
+analyzer (not ``none``, not ``red_team_agent``), you MUST emit
+``recommendedScopeFocus`` as a structured directive the supervisor will fold
+into the next analyzer's mission. Do NOT rely on prose alone — the analyzer
+reads structured fields more reliably than natural language.
+
+**Hard separation of roles.** You describe the *shape* of what is missing.
+The analyzer is responsible for *discovering* the actual entities. If you
+already know the names of every vendor / owner / license that should be
+added, you are doing the analyzer's job and the analyzer will become a
+mechanical expansion of your list rather than a researcher. Concretely:
+
+ - **DO** name the *layer* that needs work
+   (``"OSAT advanced packaging"``, ``"photomask supply layer behind TSMC"``,
+   ``"UBO-of-record beyond the registered owner"``).
+ - **DO** point at the *surface entity* the analyzer must dig behind
+   (``deepenEntityIds: ["analyzer:e3"]``).
+ - **DO** name the *kind* of evidence that is missing
+   (``"as-of date for sanctions designations"``,
+   ``"vendor identifiers in the photomask layer"``).
+ - **DO** allow yourself **at most ONE illustrative example** in
+   ``directiveText`` to anchor the depth or kind, prefixed verbatim with
+   ``"e.g."`` so the analyzer reads it as anchor, not checklist
+   (``"… for example ZEISS SMT — but emit the full sub-tier, not only
+   that one name."``).
+ - **DO NOT** enumerate the entities you expect the analyzer to surface.
+   ``addFocusAreas: ["ZEISS", "Cymer", "Trumpf"]`` is wrong — those are
+   vendors, not layers; the right value is ``["lithography sub-supplier
+   layer behind ASML"]``. ``evidenceGaps: ["confirmation that ZEISS SMT
+   makes the lenses"]`` is wrong — the right value is
+   ``["vendor identifiers + as-of dates for the lithography sub-supplier
+   layer"]``.
+ - **DO NOT** treat ``domain_priors_lookup`` results as a list to copy into
+   ``evidenceGaps`` or ``addFocusAreas``. The tool exists so you can
+   *detect* whether a hidden layer is missing; once detected, describe the
+   layer abstractly and let the analyzer + web_search find the actual
+   members. Copying a domain-priors entry verbatim into your output turns
+   you into an autocomplete service.
+
+Required fields:
+
+ - ``targetAgent`` — same value as ``recommendedNextAgent`` (mirrored for
+   schema clarity; leave ``"none"`` when no follow-up is needed).
+ - ``addFocusAreas`` — names of *layers / subsystems* the next pass must
+   cover (e.g. ``["OSAT", "photomask supply", "UBO chain"]``). Each entry
+   is a *category of analysis*, not a vendor / person / regime name. If you
+   catch yourself writing a proper noun here, replace it with the layer
+   name and move the proper noun (if useful) to ``deepenEntityIds`` or
+   ``directiveText``-as-anchor.
+ - ``deepenEntityIds`` — pack-level registry ids (``analyzer:e3``,
+   ``governance:e7``, …) of *surface entities the analyzer ALREADY named*
+   that need a deeper dependency walk. This field exists precisely so you
+   can point ("dig behind THIS one") without having to name the deeper
+   thing yourself. Use registry ids verbatim from the Object registry
+   above; do not invent ids for entities the analyzer has not yet emitted.
+ - ``evidenceGaps`` — *kinds* of evidence missing (categories of artifacts:
+   ``"as-of date"``, ``"primary filing URL"``, ``"vendor identifier"``,
+   ``"OFAC SDN match"``), optionally narrowed to a layer
+   (``"as-of date for sanctions designations against named foundries"``).
+   NOT specific facts the analyzer should emit verbatim.
+ - ``recommendedDepthAction`` — REQUIRED when routing to an analyzer. You
+   choose the depth mode for the next pass from the user question + the
+   current pack state, not from a hardcoded ladder. Pick exactly one:
+     * ``walk_one_level_deeper`` — surface monopoly named, deeper
+       dependency missing AND material to the question. Pair with
+       ``deepenEntityIds``.
+     * ``broaden_at_current_level`` — depth fine, missing siblings at
+       current depth. Pair with ``addFocusAreas``.
+     * ``anchor_evidence`` — entity coverage adequate, evidence thin. Pair
+       with ``evidenceGaps``.
+     * ``stop_deepening`` — adequate at current depth; close evidence gaps
+       only. Use to cap runaway depth-walking when further depth would not
+       change the answer.
+ - ``directiveText`` — ONE self-contained sentence the supervisor stitches
+   into ``ah_mission`` for the next analyzer call. Must read as a
+   standalone *structural* imperative naming the layer + the surface
+   entity to dig behind, optionally with a single ``"e.g. <name>"`` anchor.
+   Good: ``"Walk the photomask and lithography sub-supplier layers behind
+   TSMC and ASML — for example surface a sub-supplier such as the EUV
+   optics provider — and surface the full layer with as-of dates."``
+   Bad (prescribes the answer): ``"Add ZEISS SMT, Cymer, Trumpf, JSR,
+   Tokyo Ohka and confirm their roles."``
+
+This replaces the prior prose-only ``missionHint`` as the primary mechanism
+to drive the next cycle. Keep ``missionHint`` brief; the structured fields
+do the heavy lifting. The supervisor folds ``recommendedDepthAction`` into
+the analyzer's mission as a verbatim depth directive — choose deliberately;
+the analyzer reads it as authoritative.
 
 ## Required JSON fields (also enforced by response_format)
 
 Produce a single JSON object with EXACTLY these field names — no others:
  - ``sufficient``: boolean
- - ``blockers``: array of ``{{"summary", "refs"}}`` objects
- - ``nonBlockers``: array of ``{{"summary", "refs"}}`` objects
+ - ``criticalFindings``: array of ``{{"summary", "refs", "gapClass"}}`` objects (material to the user question)
+ - ``advisoryFindings``: array of ``{{"summary", "refs", "gapClass"}}`` objects (worth recording but not material)
  - ``missionHint``: string (one short imperative for the supervisor)
  - ``compositionRecommendation``: one of "go" | "conditional" | "stop"
  - ``recommendedNextAgent``: one of "supply_chain_analyzer" | "governance_control_analyzer" | "sanctions_analyzer" | "red_team_agent" | "critic_agent" | "none"
+ - ``scopeAssessment``: object with ``scopeAdequate`` (bool), ``scopeGaps`` (list), ``executionFidelity`` (bool), ``fidelityGaps`` (list). Emit when the analyzer output included a ``scopePlan``; ``null`` is acceptable when no analyzer ran yet.
+ - ``recommendedScopeFocus``: object with ``targetAgent``, ``addFocusAreas``, ``deepenEntityIds``, ``evidenceGaps``, ``recommendedDepthAction``, ``directiveText``. REQUIRED when ``sufficient=false`` and ``recommendedNextAgent`` is an analyzer. ``null`` when ``sufficient=true``. ``recommendedDepthAction`` is REQUIRED inside this object when present, picked from the four-value enum above.
+
+The ``gapClass`` field on every finding MUST be one of the codes from the
+typology above (sections A–E). The runtime rejects findings without a valid
+``gapClass``, so do not omit it and do not invent new codes.
 
 Do not invent alternative field names (no ``verdict`` / ``reasoning`` / ``missingInformation``). Do not wrap the JSON in markdown fences. Do not include thinking traces.
 

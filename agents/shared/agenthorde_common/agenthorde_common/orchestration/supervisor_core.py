@@ -21,7 +21,9 @@ from agenthorde_common.schemas.agents_io import (
     AnalyzerOutput,
     CriticVerdict,
     EscalationHint,
+    RecommendedScopeFocus,  # noqa: F401  -- re-exported for runtime convenience
     RedTeamOutput,
+    ScopeAssessment,  # noqa: F401  -- re-exported for runtime convenience
     SupervisorDecision,
 )
 from agenthorde_common.schemas.graph import ReasoningNode
@@ -151,6 +153,12 @@ def _sync_prompt_keys(state: dict[str, Any], pack: SessionPack, mission: str = "
     state["ah_sanctions_json"] = _json_compact(state.get(STATE_SANCTIONS_OUTPUT_KEY) or {})
     state["ah_red_team_json"] = _json_compact(state.get(STATE_RED_TEAM_OUTPUT_KEY) or {})
     state["ah_question_plan_json"] = _json_compact(state.get(STATE_QUESTION_PLAN_KEY) or {})
+    from agenthorde_common.critic.prompt import (
+        _build_registry_block,
+        _domain_focus_block,
+    )
+    state["ah_critic_registry"] = _build_registry_block(state)
+    state["ah_critic_domain_focus"] = _domain_focus_block(state)
 
 
 def _rel_key_ids(src_id: str, dst_id: str, relation: str) -> tuple[str, str, str]:
@@ -181,7 +189,14 @@ def _node_richness(n: ReasoningNode) -> tuple[int, int]:
 
 def _merge_analyzer_into_pack(pack: SessionPack, raw: Any, origin: str) -> None:
     """Idempotent merge: repeated calls with the same output must not dup nodes
-    or edges, and richer nodes (more evidence / longer text) win tie-breaks."""
+    or edges, and richer nodes (more evidence / longer text) win tie-breaks.
+
+    Provenance: every newly inserted entity / relation / node is tagged with
+    ``pack.cycle_index`` as ``added_at_cycle``. Pre-existing rows keep their
+    original ``added_at_cycle`` (i.e. on update we never bump the provenance).
+    This lets the critic and bench tooling distinguish "added this cycle"
+    from "carried over". See ``PackProposedEntity.added_at_cycle``.
+    """
     if raw is None:
         return
     if hasattr(raw, "model_dump"):
@@ -190,11 +205,21 @@ def _merge_analyzer_into_pack(pack: SessionPack, raw: Any, origin: str) -> None:
         ao = AnalyzerOutput.model_validate(raw)
     except Exception:
         return
+    current_cycle = int(getattr(pack, "cycle_index", 0) or 0)
+
     existing = {n.id: n for n in pack.reasoning_graph.nodes}
     for n in ao.proposed_nodes:
         node = n if isinstance(n, ReasoningNode) else ReasoningNode.model_validate(n)
         prev = existing.get(node.id)
-        if prev is None or _node_richness(node) > _node_richness(prev):
+        if prev is None:
+            # New node: stamp provenance with current cycle.
+            if not getattr(node, "added_at_cycle", 0):
+                node.added_at_cycle = current_cycle
+            existing[node.id] = node
+        elif _node_richness(node) > _node_richness(prev):
+            # Richer version replaces, but we KEEP the original provenance.
+            preserved = int(getattr(prev, "added_at_cycle", 0) or 0)
+            node.added_at_cycle = preserved or current_cycle
             existing[node.id] = node
     pack.reasoning_graph.nodes = list(existing.values())
 
@@ -204,9 +229,18 @@ def _merge_analyzer_into_pack(pack: SessionPack, raw: Any, origin: str) -> None:
         nid = _namespace_entity_id(origin, pe.id)
         if not nid:
             continue
-        prev = ent_seen.get(nid)
-        if prev is None or len((pe.label or "").strip()) > len((prev.label or "").strip()):
-            ent_seen[nid] = PackProposedEntity(namespaced_id=nid, label=str(pe.label or "").strip())
+        prev_e = ent_seen.get(nid)
+        new_label = str(pe.label or "").strip()
+        if prev_e is None:
+            ent_seen[nid] = PackProposedEntity(
+                namespaced_id=nid, label=new_label, added_at_cycle=current_cycle
+            )
+        elif len(new_label) > len((prev_e.label or "").strip()):
+            ent_seen[nid] = PackProposedEntity(
+                namespaced_id=nid,
+                label=new_label,
+                added_at_cycle=int(getattr(prev_e, "added_at_cycle", 0) or 0) or current_cycle,
+            )
     pack.proposed_entities = list(ent_seen.values())
 
     # Merge proposed_relations with dedup on (srcId, dstId, relation).
@@ -229,6 +263,7 @@ def _merge_analyzer_into_pack(pack: SessionPack, raw: Any, origin: str) -> None:
                     relation=pr.relation,
                     attributes=dict(pr.attributes_as_dict()),
                     source_claim_ids=list(pr.source_claim_ids or []),
+                    added_at_cycle=int(getattr(cur, "added_at_cycle", 0) or 0) or current_cycle,
                 )
             continue
         seen[k] = PackProposedRelation(
@@ -237,6 +272,7 @@ def _merge_analyzer_into_pack(pack: SessionPack, raw: Any, origin: str) -> None:
             relation=pr.relation,
             attributes=dict(pr.attributes_as_dict()),
             source_claim_ids=list(pr.source_claim_ids or []),
+            added_at_cycle=current_cycle,
         )
     pack.proposed_relations = list(seen.values())
 
@@ -497,6 +533,66 @@ def coerce_supervisor_decision(
             research_temperature=dec.research_temperature,
             rationale="Coerced: parallel_fanout requested without parallelAgents.",
         )
+
+    # Honor critic's structured RecommendedScopeFocus when routing back to an analyzer.
+    # If the router emitted a vague / empty mission but the critic prepared a precise
+    # focused directive, fold that directive into the mission so the analyzer reads
+    # structured intent rather than re-interpreting prose. Router prose wins when present
+    # and substantive — we only fill the gap.
+    if (
+        last_critic is not None
+        and last_critic.recommended_scope_focus is not None
+        and dec.next_agent in (
+            "supply_chain_analyzer",
+            "governance_control_analyzer",
+            "sanctions_analyzer",
+        )
+    ):
+        rsf = last_critic.recommended_scope_focus
+        directive_parts: list[str] = []
+        if rsf.directive_text.strip():
+            directive_parts.append(rsf.directive_text.strip())
+        # Depth action goes early so the analyzer reads the mode before the verbs.
+        # Critic chose this depth from the user question + current pack state, not
+        # from a hardcoded ladder; the analyzer should treat it as authoritative.
+        depth_lines = {
+            "walk_one_level_deeper": (
+                "Depth action: WALK ONE LEVEL DEEPER. For each entity in 'Deepen entities' (or "
+                "for any surface monopoly named in your prior pass), identify and emit the deeper "
+                "dependency that is the actual chokepoint."
+            ),
+            "broaden_at_current_level": (
+                "Depth action: BROADEN AT CURRENT LEVEL. Do NOT walk deeper; surface the missing "
+                "siblings at the depth already established."
+            ),
+            "anchor_evidence": (
+                "Depth action: ANCHOR EVIDENCE. Stay at current depth; attach as-of dates, source "
+                "URLs and primary filings to existing claims rather than expanding the entity set."
+            ),
+            "stop_deepening": (
+                "Depth action: STOP DEEPENING. Evidence horizon reached or further depth does not "
+                "change the answer; finalize coverage at current depth."
+            ),
+        }
+        if rsf.recommended_depth_action and rsf.recommended_depth_action in depth_lines:
+            directive_parts.append(depth_lines[rsf.recommended_depth_action])
+        if rsf.add_focus_areas:
+            directive_parts.append("Add focus areas: " + ", ".join(rsf.add_focus_areas) + ".")
+        if rsf.deepen_entity_ids:
+            directive_parts.append("Deepen entities: " + ", ".join(rsf.deepen_entity_ids) + ".")
+        if rsf.evidence_gaps:
+            directive_parts.append("Surface evidence: " + "; ".join(rsf.evidence_gaps) + ".")
+        focused_directive = " ".join(directive_parts).strip()
+        # Compose mission only if the router did not set a substantive mission already.
+        if focused_directive and len(dec.mission.strip()) < 40:
+            dec = SupervisorDecision(
+                next_agent=dec.next_agent,
+                mission=("FOCUSED FOLLOW-UP. " + focused_directive),
+                research_temperature=dec.research_temperature,
+                rationale=(dec.rationale or "") + " | Folded critic.recommendedScopeFocus into mission.",
+                parallel_agents=list(dec.parallel_agents),
+                extend_cap_by=int(getattr(dec, "extend_cap_by", 0) or 0),
+            )
     return dec
 
 

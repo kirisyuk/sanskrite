@@ -50,12 +50,25 @@ class SupervisorTraceEntry(BaseModel):
 
 
 class PackProposedEntity(BaseModel):
-    """Merged entity registry row on SessionPack (namespaced id + label)."""
+    """Merged entity registry row on SessionPack (namespaced id + label).
+
+    ``added_at_cycle`` is populated by the merge layer on first insertion and
+    NEVER updated thereafter — it serves as provenance so the critic and
+    bench tooling can distinguish "this entity is new this cycle" from
+    "this entity has been here for several cycles". Default 0 means
+    "added before cycle tracking was introduced" (pre-existing data).
+    """
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     namespaced_id: str = Field(alias="namespacedId")
     label: str = ""
+    added_at_cycle: int = Field(
+        default=0,
+        alias="addedAtCycle",
+        ge=0,
+        description="Cycle index at which this entity was first added to the pack (provenance).",
+    )
 
 
 class PackProposedRelation(BaseModel):
@@ -64,6 +77,8 @@ class PackProposedRelation(BaseModel):
     Declared locally to avoid a circular import (agents_io imports from state).
     The canonicalizer reads pack.proposedRelations as plain dicts, so the exact
     class identity is not required downstream.
+
+    See ``PackProposedEntity.added_at_cycle`` for provenance semantics.
     """
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
@@ -73,6 +88,12 @@ class PackProposedRelation(BaseModel):
     relation: str
     attributes: dict[str, Any] = Field(default_factory=dict)
     source_claim_ids: list[str] = Field(default_factory=list, alias="sourceClaimIds")
+    added_at_cycle: int = Field(
+        default=0,
+        alias="addedAtCycle",
+        ge=0,
+        description="Cycle index at which this relation was first added to the pack (provenance).",
+    )
 
 
 class SessionPack(BaseModel):

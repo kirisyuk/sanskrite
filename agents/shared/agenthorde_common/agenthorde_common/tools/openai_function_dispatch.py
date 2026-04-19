@@ -6,7 +6,12 @@ from collections.abc import Awaitable, Callable, MutableMapping
 from typing import Any
 
 from agenthorde_common.schemas.tools_io import ToolEnvelope
-from agenthorde_common.tools.session_tools import ah_apply, ah_knowledge_search, ah_retrieve
+from agenthorde_common.tools.session_tools import (
+    ah_apply,
+    ah_domain_priors_lookup,
+    ah_knowledge_search,
+    ah_retrieve,
+)
 
 ToolDispatch = Callable[[str, dict[str, Any], MutableMapping[str, Any]], Awaitable[Any]]
 
@@ -37,6 +42,12 @@ def build_standard_openai_tool_dispatch(
             return ah_apply(
                 str(args.get("patch_json") or ""),
                 str(args.get("hypothesis_id") or ""),
+                state=state,
+            )
+        if name == "domain_priors_lookup":
+            return ah_domain_priors_lookup(
+                str(args.get("domain") or ""),
+                str(args.get("query") or ""),
                 state=state,
             )
         return ToolEnvelope(ok=False, tool=name, status="internal_error", message="unknown_tool").model_dump(

@@ -19,6 +19,7 @@ from agenthorde.quiet_vertex_logs import install_known_vertex_noise_filters  # n
 install_known_vertex_noise_filters()
 
 import google.auth
+from google.adk.agents.run_config import RunConfig
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types as genai_types
@@ -31,6 +32,7 @@ from agenthorde.config import (  # noqa: E402
     STATE_FINAL_ANSWER_KEY,
     STATE_GOVERNANCE_OUTPUT_KEY,
     STATE_PACK_KEY,
+    STATE_SANCTIONS_OUTPUT_KEY,
     STATE_TOOL_LEDGER_KEY,
 )
 from agenthorde.agents.supervisor import root_agent  # noqa: E402
@@ -160,7 +162,14 @@ async def _run_async(user_text: str, *, skip_canonicalizer: bool = False) -> dic
     await session_service.create_session(app_name=APP_NAME, user_id=USER_ID, session_id=SESSION_ID)
     runner = Runner(agent=root_agent, app_name=APP_NAME, session_service=session_service)
     content = genai_types.Content(role="user", parts=[genai_types.Part(text=user_text)])
-    async for _event in runner.run_async(user_id=USER_ID, session_id=SESSION_ID, new_message=content):
+    max_llm_calls = int(os.getenv("AGENTHORDE_MAX_LLM_CALLS", "2500"))
+    run_config = RunConfig(max_llm_calls=max_llm_calls)
+    async for _event in runner.run_async(
+        user_id=USER_ID,
+        session_id=SESSION_ID,
+        new_message=content,
+        run_config=run_config,
+    ):
         pass
     session = await session_service.get_session(app_name=APP_NAME, user_id=USER_ID, session_id=SESSION_ID)
     if session is None:
@@ -172,6 +181,7 @@ async def _run_async(user_text: str, *, skip_canonicalizer: bool = False) -> dic
         "supervisorDecision": st.get("ah_supervisor_decision", {}),
         "analyzerOutput": st.get(STATE_ANALYZER_OUTPUT_KEY, {}),
         "governanceOutput": st.get(STATE_GOVERNANCE_OUTPUT_KEY, {}),
+        "sanctionsOutput": st.get(STATE_SANCTIONS_OUTPUT_KEY, {}),
         "criticOutput": st.get("ah_critic_output", {}),
         "redTeamOutput": st.get("ah_red_team_output", {}),
         "toolLedger": st.get(STATE_TOOL_LEDGER_KEY, []),
@@ -184,6 +194,7 @@ async def _run_async(user_text: str, *, skip_canonicalizer: bool = False) -> dic
             pack=out.get("pack") or {},
             analyzer_output=out.get("analyzerOutput") or {},
             governance_output=out.get("governanceOutput") or {},
+            sanctions_output=out.get("sanctionsOutput") or {},
             tool_ledger=out.get("toolLedger") or [],
             final_answer=out.get("finalAnswer") or "",
             run_id=SESSION_ID,

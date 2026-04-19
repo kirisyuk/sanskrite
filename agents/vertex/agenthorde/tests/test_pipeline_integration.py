@@ -1359,3 +1359,217 @@ def test_pipeline_supplies_incoterm_invalid_warns() -> None:
         )
 
     asyncio.run(_go())
+
+
+# ---------------------------------------------------------------------------
+# Adaptation tests for L1+L2+L3 agent changes:
+#   * sanctions_output is a first-class blob (not just merged via pack)
+#   * pack.proposedEntities[].addedAtCycle propagates to fragment provenance
+#   * cross-doc relation refs (n12, analyzer:e3 stale) are recorded distinctly
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_sanctions_output_flows_through() -> None:
+    """sanctions_output (chainSummary + proposedEntities + proposedRelations) reaches phase4.
+
+    Previously phase0 only looked at analyzer_output / governance_output, so anything
+    coming from sanctions_analyzer was silently dropped (only entities that survived
+    the supervisor pack-merge made it through). Now sanctions_output is a peer blob.
+    """
+
+    mock = LLMPhaseClient(
+        mock_responses={
+            "1": {
+                "mentions": [
+                    {
+                        "surface": "SMIC",
+                        "type": "org",
+                        "subtype": "listed_issuer",
+                        "claim_refs": ["sanctions:c1"],
+                        "context_hints": {"iso2Hint": "cn"},
+                        "per_claim_confidence": 0.9,
+                        "agentId": "sanctions:e1",
+                    },
+                    {
+                        "surface": "OFAC SDN",
+                        "type": "regime",
+                        "subtype": "sanctions_list",
+                        "claim_refs": ["sanctions:c1"],
+                        "per_claim_confidence": 0.9,
+                        "agentId": "sanctions:e2",
+                    },
+                ]
+            },
+            "4": {"relations": []},
+            "6": {"metrics": []},
+        }
+    )
+    inp = CanonicalizerInput(
+        pack={"reasoningGraph": {"nodes": [], "edges": []}},
+        analyzer_output={"chainSummary": "", "proposedNodes": [], "openQuestions": []},
+        governance_output={"chainSummary": "", "proposedNodes": [], "openQuestions": []},
+        sanctions_output={
+            "chainSummary": "SMIC is sanctioned under the OFAC SDN list.",
+            "proposedEntities": [
+                {"id": "e1", "label": "SMIC"},
+                {"id": "e2", "label": "OFAC SDN"},
+            ],
+            "proposedRelations": [
+                {"srcId": "e1", "dstId": "e2", "relation": "designated_under"},
+            ],
+            "proposedNodes": [],
+            "openQuestions": [],
+        },
+        tool_ledger=[],
+        final_answer="",
+        run_id="t-sanctions",
+    )
+
+    async def _go() -> None:
+        res = await run_pipeline(inp, llm=mock, dict_runtime=DictionaryRuntime(None))
+        assert not any(x.code == "invalid_input" for x in res.validation_report.input_errors)
+        assert len(res.graph.fragments) >= 2
+        # SMIC and OFAC SDN must both materialize as canonical fragments.
+        labels = {sf for f in res.graph.fragments for sf in f.surface_forms}
+        assert "SMIC" in labels
+        assert "OFAC SDN" in labels
+
+    asyncio.run(_go())
+
+
+def test_pipeline_added_at_cycle_propagates_from_pack() -> None:
+    """pack.proposedEntities[].addedAtCycle reaches CanonicalFragment.attributes.addedAtCycle.
+
+    Provenance signal so downstream consumers can distinguish entities added on
+    cycle 1 vs cycle 7 of the same supervisor session.
+    """
+
+    mock = LLMPhaseClient(
+        mock_responses={
+            "1": {
+                "mentions": [
+                    {
+                        "surface": "TSMC",
+                        "type": "org",
+                        "subtype": "listed_issuer",
+                        "claim_refs": ["analyzer:c1"],
+                        "context_hints": {"iso2Hint": "tw"},
+                        "per_claim_confidence": 0.95,
+                        "agentId": "analyzer:e1",
+                    },
+                    {
+                        "surface": "ASML",
+                        "type": "org",
+                        "subtype": "listed_issuer",
+                        "claim_refs": ["analyzer:c2"],
+                        "context_hints": {"iso2Hint": "nl"},
+                        "per_claim_confidence": 0.95,
+                        "agentId": "analyzer:e2",
+                    },
+                ]
+            },
+            "4": {"relations": []},
+            "6": {"metrics": []},
+        }
+    )
+    inp = CanonicalizerInput(
+        pack={
+            "cycleIndex": 7,
+            "reasoningGraph": {"nodes": [], "edges": []},
+            "proposedEntities": [
+                {"namespacedId": "analyzer:e1", "label": "TSMC", "addedAtCycle": 1},
+                {"namespacedId": "analyzer:e2", "label": "ASML", "addedAtCycle": 5},
+            ],
+        },
+        analyzer_output={
+            "chainSummary": "TSMC depends on ASML EUV.",
+            "proposedEntities": [
+                {"id": "e1", "label": "TSMC"},
+                {"id": "e2", "label": "ASML"},
+            ],
+            "proposedNodes": [],
+            "openQuestions": [],
+        },
+        governance_output={"chainSummary": "", "proposedNodes": [], "openQuestions": []},
+        tool_ledger=[],
+        final_answer="",
+        run_id="t-provenance",
+    )
+
+    async def _go() -> None:
+        res = await run_pipeline(inp, llm=mock, dict_runtime=DictionaryRuntime(None))
+        by_surface = {sf: f for f in res.graph.fragments for sf in f.surface_forms}
+        tsmc = by_surface.get("TSMC")
+        asml = by_surface.get("ASML")
+        assert tsmc is not None and asml is not None
+        assert int((tsmc.attributes or {}).get("addedAtCycle") or 0) == 1
+        assert int((asml.attributes or {}).get("addedAtCycle") or 0) == 5
+        # Provenance.extra also carries it for downstream consumers reading the provenance block.
+        tsmc_prov = tsmc.provenance.model_dump(mode="json", by_alias=True)
+        assert tsmc_prov.get("agentFirstCycle") == 1
+
+    asyncio.run(_go())
+
+
+def test_pipeline_pack_fragment_relation_ref_recorded_distinctly() -> None:
+    """Cross-doc refs to pack.reasoningGraph fragment ids (n12) get a dedicated input issue.
+
+    Agents in follow-up mode are allowed by ``AnalyzerOutput`` to emit relations whose
+    endpoints are pack reasoning-graph node ids. The canonicalizer cannot resolve those
+    to canonical entities (they don't go through phase1), but the failure should be
+    distinguishable from "unknown id" or "stale namespaced ref" so downstream tooling
+    can decide whether to stitch the pack-fragment in later.
+    """
+
+    mock = LLMPhaseClient(
+        mock_responses={
+            "1": {
+                "mentions": [
+                    {
+                        "surface": "Acme",
+                        "type": "org",
+                        "subtype": "listed_issuer",
+                        "claim_refs": ["analyzer:c1"],
+                        "context_hints": {"iso2Hint": "us"},
+                        "per_claim_confidence": 0.9,
+                        "agentId": "analyzer:e1",
+                    },
+                ]
+            },
+            "4": {"relations": []},
+            "6": {"metrics": []},
+        }
+    )
+    inp = CanonicalizerInput(
+        pack={
+            "reasoningGraph": {
+                "nodes": [{"id": "n12", "kind": "claim", "text": "Pre-existing claim about something."}],
+                "edges": [],
+            }
+        },
+        analyzer_output={
+            "chainSummary": "Acme depends on the n12-anchored claim.",
+            "proposedEntities": [{"id": "e1", "label": "Acme"}],
+            "proposedRelations": [
+                {"srcId": "e1", "dstId": "n12", "relation": "depends_on"},
+                {"srcId": "e1", "dstId": "analyzer:e99", "relation": "depends_on"},
+            ],
+            "proposedNodes": [],
+            "openQuestions": [],
+        },
+        governance_output={"chainSummary": "", "proposedNodes": [], "openQuestions": []},
+        tool_ledger=[],
+        final_answer="",
+        run_id="t-crossdoc",
+    )
+
+    async def _go() -> None:
+        res = await run_pipeline(inp, llm=mock, dict_runtime=DictionaryRuntime(None))
+        codes = [x.code for x in res.validation_report.input_errors]
+        assert "relation_endpoint_pack_fragment_ref" in codes
+        assert "relation_endpoint_stale_namespaced_id" in codes
+        # No fallback into the silent-drop bucket: every unresolved endpoint
+        # picks up one of the two new dedicated codes.
+        assert "entity_id_not_in_registry" not in codes
+
+    asyncio.run(_go())

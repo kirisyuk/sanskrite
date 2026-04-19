@@ -45,13 +45,52 @@ from agenthorde_common.config import (
 def _build_fragments(
     entities: list[CanonicalEntity],
     run_id: str,
+    *,
+    entity_added_at_cycle: dict[str, int] | None = None,
+    agent_registry_id_to_entity_id: dict[str, str] | None = None,
+    pack_cycle_index: int = 0,
 ) -> tuple[list[CanonicalFragment], dict[str, str]]:
+    """Build CanonicalFragment list, propagating ``addedAtCycle`` provenance from the pack.
+
+    For each entity we look up every namespaced agent id that resolved into it
+    (analyzer:e3 → e_42, governance:e7 → e_42, …) and pick the *earliest*
+    ``addedAtCycle`` recorded by the supervisor merge. Falls back to the
+    pack-level ``cycleIndex`` when the entity exists only in the per-agent blob
+    (newly emitted this cycle but not yet persisted into pack via the merge).
+    """
+
     namespace = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
     fragments: list[CanonicalFragment] = []
     ent_to_frag: dict[str, str] = {}
+
+    eid_to_ns: dict[str, list[str]] = {}
+    if agent_registry_id_to_entity_id:
+        for ns, eid in agent_registry_id_to_entity_id.items():
+            if not eid:
+                continue
+            eid_to_ns.setdefault(eid, []).append(ns)
+
     for ent in entities:
         fid = str(uuid.uuid5(namespace, ent.canonical_path))
         ent_to_frag[ent.entity_id] = fid
+        added_at_cycle = 0
+        for ns_id in eid_to_ns.get(ent.entity_id, []):
+            cyc = (entity_added_at_cycle or {}).get(ns_id, 0)
+            if cyc and (added_at_cycle == 0 or cyc < added_at_cycle):
+                added_at_cycle = cyc
+        if added_at_cycle == 0 and pack_cycle_index > 0:
+            added_at_cycle = pack_cycle_index
+        attrs = dict(ent.attributes) if ent.attributes else {}
+        if added_at_cycle > 0:
+            attrs.setdefault("addedAtCycle", added_at_cycle)
+        prov_extras: dict[str, Any] = {}
+        if added_at_cycle > 0:
+            prov_extras["agentFirstCycle"] = added_at_cycle
+        provenance = Provenance(
+            run_id=run_id,
+            canonicalizer_version=CANONICALIZER_VERSION,
+            **prov_extras,
+        )
         fragments.append(
             CanonicalFragment(
                 id=fid,
@@ -60,29 +99,47 @@ def _build_fragments(
                 subtype=ent.subtype or "",
                 surface_forms=list(ent.surface_forms),
                 mention_count=ent.mention_count,
-                attributes=dict(ent.attributes) if ent.attributes else {},
-                provenance=Provenance(run_id=run_id, canonicalizer_version=CANONICALIZER_VERSION),
+                attributes=attrs,
+                provenance=provenance,
                 confidence=float(ent.per_claim_confidence or 0.7),
             )
         )
     return fragments, ent_to_frag
 
 
-def _remap_edges(edges_raw: list[CanonicalEdge], ent_to_frag: dict[str, str]) -> list[CanonicalEdge]:
+def _remap_edges(
+    edges_raw: list[CanonicalEdge],
+    ent_to_frag: dict[str, str],
+    *,
+    fragment_added_at_cycle: dict[str, int] | None = None,
+) -> list[CanonicalEdge]:
+    """Remap entity ids to fragment ids and stamp ``addedAtCycle`` on the edge.
+
+    Edge provenance follows the *latest* of its endpoints' ``addedAtCycle``
+    values (the edge cannot pre-date the entity it connects). Without an
+    endpoint cycle, defaults to no stamp.
+    """
+
     out: list[CanonicalEdge] = []
+    fragment_added_at_cycle = fragment_added_at_cycle or {}
     for e in edges_raw:
         sf = ent_to_frag.get(e.source_fragment_id)
         tf = ent_to_frag.get(e.target_fragment_id)
         if not sf or not tf:
             continue
-        out.append(
-            e.model_copy(
-                update={
-                    "source_fragment_id": sf,
-                    "target_fragment_id": tf,
-                }
-            )
+        added_at_cycle = max(
+            fragment_added_at_cycle.get(sf, 0),
+            fragment_added_at_cycle.get(tf, 0),
         )
+        update: dict[str, Any] = {
+            "source_fragment_id": sf,
+            "target_fragment_id": tf,
+        }
+        if added_at_cycle > 0:
+            attrs = dict(e.attributes or {})
+            attrs.setdefault("addedAtCycle", added_at_cycle)
+            update["attributes"] = attrs
+        out.append(e.model_copy(update=update))
     return out
 
 
@@ -103,7 +160,13 @@ async def run_pipeline(
     candidates = Candidates()
     run_id = inp.run_id or "unknown-run"
 
-    ws = run_phase0(inp.pack, inp.analyzer_output, inp.governance_output, inp.final_answer)
+    ws = run_phase0(
+        inp.pack,
+        inp.analyzer_output,
+        inp.governance_output,
+        inp.final_answer,
+        sanctions_output=inp.sanctions_output,
+    )
     timings["phase0_ms"] = (time.perf_counter() - t0) * 1000
 
     llm = llm or LLMPhaseClient()
@@ -148,7 +211,13 @@ async def run_pipeline(
     )
     timings["phase3_ms"] = (time.perf_counter() - t3) * 1000
 
-    fragments, ent_to_frag = _build_fragments(entities, run_id)
+    fragments, ent_to_frag = _build_fragments(
+        entities,
+        run_id,
+        entity_added_at_cycle=ws.entity_added_at_cycle,
+        agent_registry_id_to_entity_id=ws.agent_registry_id_to_entity_id,
+        pack_cycle_index=ws.pack_cycle_index,
+    )
 
     t4 = time.perf_counter()
     edges_raw = await run_phase4(
@@ -163,7 +232,10 @@ async def run_pipeline(
     )
     timings["phase4_ms"] = (time.perf_counter() - t4) * 1000
 
-    edges = _remap_edges(edges_raw, ent_to_frag)
+    fragment_added_at_cycle = {
+        f.id: int((f.attributes or {}).get("addedAtCycle") or 0) for f in fragments
+    }
+    edges = _remap_edges(edges_raw, ent_to_frag, fragment_added_at_cycle=fragment_added_at_cycle)
     _remap_unknown_product_candidates(ent_to_frag, candidates)
 
     t5 = time.perf_counter()

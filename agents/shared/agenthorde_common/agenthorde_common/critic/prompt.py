@@ -3,11 +3,12 @@
 The critic prompt has two responsibilities:
 
 1. Surface the latest analyzer outputs and the session pack to the model.
-2. Hand the model an explicit **object registry** with stable ids so blocker
-   and non-blocker entries can cite specific entities, claims, and pack
-   fragments instead of producing free-form prose. The registry is built in
-   Python from already-validated state — the model never assigns ids itself
-   for cross-document scope, only references the ids we hand it.
+2. Hand the model an explicit **object registry** with stable ids so
+   critical / advisory finding entries can cite specific entities, claims,
+   and pack fragments instead of producing free-form prose. The registry
+   is built in Python from already-validated state — the model never
+   assigns ids itself for cross-document scope, only references the ids
+   we hand it.
 """
 
 from __future__ import annotations
@@ -158,7 +159,7 @@ def _build_registry_block(state: dict[str, Any]) -> str:
     if not rows:
         return (
             "(empty — no analyzer entities or pack fragments were available; "
-            "blockers may use refs: [] for methodological critiques only)"
+            "findings may use refs: [] only when gapClass starts with methodology.*)"
         )
 
     seen: set[str] = set()
@@ -198,11 +199,13 @@ _DOMAIN_HINTS = {
     "governance": (
         "**Governance & control analyzer ran.** Beyond the generic discipline above, walk these:\n"
         " - UBO depth: is the chain followed from operating entity → intermediate holdcos → ultimate "
-        "controller (individual / sovereign / family pact)? Bare \"X owns Y\" without the layers above is a blocker.\n"
+        "controller (individual / sovereign / family pact)? Bare \"X owns Y\" without the layers above is a "
+        "`governance.layering` critical finding.\n"
         " - Jurisdiction layering separation: are **incorporation**, **listing**, **tax residency**, and "
         "**operating footprint** kept distinct, or collapsed into a single \"based in\" claim?\n"
         " - As-of dates on stakes: every percentage in attributes (`stake_pct`) needs an as-of date or deal "
-        "context. Numbers without provenance are blockers when the question implies a current cap table.\n"
+        "context. Numbers without provenance are critical findings (`governance.voting_vs_economic`) when the "
+        "question implies a current cap table.\n"
         " - Sub-vehicle enumeration: SPVs, JVs, mergers-of-equals, listed shells, SPACs — did the analyzer "
         "treat related-party / circular structures as first-class, or skip them?\n"
         " - Legal vs de-facto control: disclosed shareholding vs board seats, golden shares, voting "

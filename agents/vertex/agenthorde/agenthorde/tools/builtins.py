@@ -11,6 +11,7 @@ from agenthorde_common.schemas.tools_io import ToolEnvelope
 from agenthorde_common.tools.grounded_web_common import format_grounded_web_fetcher_prompt
 from agenthorde_common.tools.session_tools import (
     ah_apply as _ah_apply,
+    ah_domain_priors_lookup as _ah_domain_priors_lookup,
     ah_knowledge_search as _ah_knowledge_search,
     ah_retrieve as _ah_retrieve,
     extend_cycle_cap as _extend_cycle_cap,
@@ -151,9 +152,32 @@ def extend_cycle_cap(
     return _extend_cycle_cap(reason, uncovered_families, state=state)
 
 
+def domain_priors_lookup(
+    domain: str,
+    query: str = "",
+    tool_context: AgentHordeToolContext | None = None,
+) -> dict[str, Any]:
+    """Industrial dependency-depth priors callable from analyzers / critic.
+
+    Available domains: ``semiconductors``, ``critical_minerals``,
+    ``energy_seaborne``, ``shipping_governance``, ``pharma_api``,
+    ``price_reporting``. Empty ``query`` returns all hints in the domain.
+    """
+
+    state = tool_state_from_context(tool_context)
+    if state is None:
+        return ToolEnvelope(
+            ok=False,
+            tool="domain_priors_lookup",
+            status="internal_error",
+            message="missing tool_context",
+        ).model_dump(mode="json", by_alias=True)
+    return _ah_domain_priors_lookup(domain, query, state=state)
+
+
 def worker_tools() -> list:
     """Tools for analyzer / red_team — all plain callables so ADK AFC stays enabled."""
-    return [web_search, ah_knowledge_search, ah_retrieve, ah_apply]
+    return [web_search, ah_knowledge_search, ah_retrieve, ah_apply, domain_priors_lookup]
 
 
 def supervisor_tools() -> list:

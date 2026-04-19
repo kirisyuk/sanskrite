@@ -26,6 +26,7 @@ from agenthorde_common.schemas.agents_io import (
 from agenthorde.tools.builtins import (
     ah_knowledge_search,
     ah_retrieve,
+    domain_priors_lookup,
     web_search,
     worker_tools,
 )
@@ -89,7 +90,7 @@ critic_agent = LlmAgent(
     description="Strict sufficiency and mission-shaping review.",
     planner=_THINKING,
     instruction=CRITIC_INSTRUCTION,
-    tools=[web_search, ah_knowledge_search, ah_retrieve],
+    tools=[web_search, ah_knowledge_search, ah_retrieve, domain_priors_lookup],
     output_schema=CriticVerdict,
     disallow_transfer_to_parent=True,
     disallow_transfer_to_peers=True,

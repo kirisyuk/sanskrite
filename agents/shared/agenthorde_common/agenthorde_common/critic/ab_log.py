@@ -29,8 +29,8 @@ class CriticAttemptLog:
     output_tokens: int = 0
     verdict_sufficient: bool | None = None
     verdict_composition: str | None = None
-    blockers_count: int = 0
-    non_blockers_count: int = 0
+    critical_findings_count: int = 0
+    advisory_findings_count: int = 0
     error: str | None = None
     session_id: str = ""
     extra: dict[str, Any] = field(default_factory=dict)

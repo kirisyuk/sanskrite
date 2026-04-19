@@ -86,8 +86,8 @@ async def run_critic_azure_then_openrouter(
             latency_ms=primary_latency_ms,
             verdict_sufficient=(bool(primary_verdict.sufficient) if primary_verdict else None),
             verdict_composition=(str(primary_verdict.composition_recommendation) if primary_verdict else None),
-            blockers_count=len(primary_verdict.blockers) if primary_verdict else 0,
-            non_blockers_count=len(primary_verdict.non_blockers) if primary_verdict else 0,
+            critical_findings_count=len(primary_verdict.critical_findings) if primary_verdict else 0,
+            advisory_findings_count=len(primary_verdict.advisory_findings) if primary_verdict else 0,
             error=primary_error or (None if primary_verdict else "no_valid_verdict_in_state"),
             session_id=session_id,
         ),
@@ -155,8 +155,10 @@ async def run_critic_azure_then_openrouter(
                 output_tokens=outcome.output_tokens,
                 verdict_sufficient=(bool(outcome.verdict.sufficient) if outcome.verdict else None),
                 verdict_composition=(str(outcome.verdict.composition_recommendation) if outcome.verdict else None),
-                blockers_count=len(outcome.verdict.blockers) if outcome.verdict else 0,
-                non_blockers_count=(len(outcome.verdict.non_blockers) if outcome.verdict else 0),
+                critical_findings_count=len(outcome.verdict.critical_findings) if outcome.verdict else 0,
+                advisory_findings_count=(
+                    len(outcome.verdict.advisory_findings) if outcome.verdict else 0
+                ),
                 error=outcome.error,
                 session_id=session_id,
             ),
