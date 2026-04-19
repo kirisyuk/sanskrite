@@ -19,6 +19,7 @@ from typing import Any
 from agenthorde_common.prompts.instructions import CRITIC_INSTRUCTION
 from agenthorde_common.runtime.state_keys import (
     STATE_ANALYZER_OUTPUT_KEY,
+    STATE_DECISION_INFLUENCE_OUTPUT_KEY,
     STATE_GOVERNANCE_OUTPUT_KEY,
     STATE_PACK_KEY,
     STATE_QUESTION_PLAN_KEY,
@@ -143,18 +144,23 @@ def _build_registry_block(state: dict[str, Any]) -> str:
       * supply_chain analyzer → ``sc_<id>``
       * governance analyzer  → ``gov_<id>``
       * sanctions analyzer   → ``san_<id>``
+      * decision_influence analyzer → ``dec_<id>``
     """
 
     pack = _maybe_parse(state.get("ah_pack_json")) or _maybe_parse(state.get(STATE_PACK_KEY))
     sc = _maybe_parse(state.get("ah_analyzer_json")) or _maybe_parse(state.get(STATE_ANALYZER_OUTPUT_KEY))
     gov = _maybe_parse(state.get("ah_governance_json")) or _maybe_parse(state.get(STATE_GOVERNANCE_OUTPUT_KEY))
     san = _maybe_parse(state.get("ah_sanctions_json")) or _maybe_parse(state.get(STATE_SANCTIONS_OUTPUT_KEY))
+    di = _maybe_parse(state.get("ah_decision_influence_json")) or _maybe_parse(
+        state.get(STATE_DECISION_INFLUENCE_OUTPUT_KEY)
+    )
 
     rows: list[tuple[str, str, str]] = []
     rows.extend(_registry_rows_from_pack(pack))
     rows.extend(_registry_rows_from_analyzer(sc, scope="sc"))
     rows.extend(_registry_rows_from_analyzer(gov, scope="gov"))
     rows.extend(_registry_rows_from_analyzer(san, scope="san"))
+    rows.extend(_registry_rows_from_analyzer(di, scope="dec"))
 
     if not rows:
         return (
@@ -211,6 +217,26 @@ _DOMAIN_HINTS = {
         " - Legal vs de-facto control: disclosed shareholding vs board seats, golden shares, voting "
         "agreements, nominee layers — these should be separate claims, not conflated."
     ),
+    "decision_influence": (
+        "**Decision & influence analyzer ran.** Beyond the generic discipline above, walk these:\n"
+        " - Decision-maker enumeration: for each `decision` fragment, is the **formal authority** named "
+        "(specific agency / court / board / committee / minister / regulator), with **jurisdiction** and "
+        "**legal basis** distinct from the operating entity it constrains?\n"
+        " - Mechanism specificity: every `mechanism` fragment must have `mechanismCategory` (sanction, "
+        "license, permit, court_order, tariff, quota, subsidy, advisory, lobbying, signaling, ...) and a "
+        "named **issuing authority**. Bare \"the rules\" or \"policy\" is a `decision.opacity` finding.\n"
+        " - Hard gates vs soft shaping: are `gatekeeps` (block / approve) and `wields` (controls a "
+        "mechanism) kept distinct from `influences` (informal shaping with `influenceKind`)? "
+        "Lobbying ≠ regulation; advisory ≠ enforcement; signaling ≠ rule-making.\n"
+        " - `enacted_via` chain: when a decision exists, is the `mechanism` that **operationalises** it "
+        "named, and is `imposes` (mechanism → constrained target) emitted? Decisions without mechanisms "
+        "or mechanisms without targets are critical findings (`decision.dangling`).\n"
+        " - Informal-influence completeness: think tanks, family offices, dynasties, ex-officials, "
+        "diaspora networks, peer-pressure clubs (G7, OPEC+, BRICS) — were the relevant non-state "
+        "influencers covered, or only the formal regulator?\n"
+        " - Lifecycle dating: every decision needs `decidedAt` / `effectiveAt` / `expiresAt` where "
+        "available; otherwise emit a `decision.timing` advisory finding."
+    ),
     "sanctions": (
         "**Sanctions analyzer ran.** Beyond the generic discipline above, walk these:\n"
         " - Designation completeness: for each sanctioned entity, is the **specific list** named "
@@ -238,6 +264,9 @@ def _domain_focus_block(state: dict[str, Any]) -> str:
     sc = _maybe_parse(state.get("ah_analyzer_json")) or _maybe_parse(state.get(STATE_ANALYZER_OUTPUT_KEY))
     gov = _maybe_parse(state.get("ah_governance_json")) or _maybe_parse(state.get(STATE_GOVERNANCE_OUTPUT_KEY))
     san = _maybe_parse(state.get("ah_sanctions_json")) or _maybe_parse(state.get(STATE_SANCTIONS_OUTPUT_KEY))
+    di = _maybe_parse(state.get("ah_decision_influence_json")) or _maybe_parse(
+        state.get(STATE_DECISION_INFLUENCE_OUTPUT_KEY)
+    )
 
     def _populated(out: dict[str, Any] | None) -> bool:
         if not out:
@@ -253,6 +282,8 @@ def _domain_focus_block(state: dict[str, Any]) -> str:
         blocks.append(_DOMAIN_HINTS["governance"])
     if _populated(san):
         blocks.append(_DOMAIN_HINTS["sanctions"])
+    if _populated(di):
+        blocks.append(_DOMAIN_HINTS["decision_influence"])
 
     if not blocks:
         return (
@@ -270,6 +301,10 @@ def render_critic_prompt(state: dict[str, Any], *, tools_disabled: bool = True) 
         ah_analyzer_json=str(state.get("ah_analyzer_json") or _compact(state.get(STATE_ANALYZER_OUTPUT_KEY))),
         ah_governance_json=str(state.get("ah_governance_json") or _compact(state.get(STATE_GOVERNANCE_OUTPUT_KEY))),
         ah_sanctions_json=str(state.get("ah_sanctions_json") or _compact(state.get(STATE_SANCTIONS_OUTPUT_KEY))),
+        ah_decision_influence_json=str(
+            state.get("ah_decision_influence_json")
+            or _compact(state.get(STATE_DECISION_INFLUENCE_OUTPUT_KEY))
+        ),
         ah_question_plan_json=str(
             state.get("ah_question_plan_json") or _compact(state.get(STATE_QUESTION_PLAN_KEY))
         ),

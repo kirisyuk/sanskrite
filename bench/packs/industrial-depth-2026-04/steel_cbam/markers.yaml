@@ -1,0 +1,186 @@
+vertical: steel_cbam
+description: |
+  Knowledge depth markers for the steel + CBAM probe.
+
+tier1:
+  - Vale
+  - BHP
+  - Rio Tinto
+  - FMG
+  - Fortescue
+  - Simandou
+  - CBAM
+  - ETS
+  - HYBRIT
+  - SSAB
+  - ArcelorMittal
+  - thyssenkrupp
+  - Salzgitter
+  - POSCO
+  - Nippon Steel
+  - JFE
+  - Baosteel
+  - Tata Steel
+  - Cleveland-Cliffs
+  - DRI
+  - HBI
+  - EAF
+  - blast furnace
+  - GOES
+  - electrical steel
+  - stainless steel
+  - "304"
+  - "316"
+  - Outokumpu
+
+tier2:
+  - DSO
+  - direct shipping ore
+  - pellet feed
+  - lump ore
+  - iron ore concentrate
+  - Carajas
+  - S11D
+  - Pilbara
+  - Yandi
+  - Mining Area C
+  - Western Range
+  - Sino Iron
+  - Iron Bridge
+  - Eliwana
+  - Wabush
+  - SimFer
+  - Winning Consortium Simandou
+  - WCS
+  - CIOH
+  - Chinalco
+  - Baowu
+  - Conakry
+  - TransGuinean
+  - H2 Green Steel
+  - Stegra
+  - Boden
+  - LKAB
+  - Vattenfall
+  - tkH2Steel
+  - Sestao
+  - Hamburg DRI
+  - Hisarna
+  - SALCOS
+  - Boston Metal
+  - MOE
+  - Molten Oxide Electrolysis
+  - Cogent
+  - VIZ-Steel
+  - VIZ
+  - Stalprodukt
+  - NLMK
+  - Aperam
+  - Acerinox
+  - Tsingshan
+  - North American Stainless
+  - NAS
+  - Yieh United
+  - Yieh Phui
+  - Carbon Border Adjustment Mechanism
+  - Carbon Border Adjustment
+  - definitive period
+  - transitional period
+  - "1 January 2026"
+  - "January 2026"
+  - "October 2023"
+  - "October 1, 2023"
+  - default value
+  - default emission
+  - embedded emissions
+  - MRV
+  - declarant
+  - authorised CBAM declarant
+  - Authorised CBAM
+  - CBAM certificate
+  - CBAM register
+  - Pacific Aluminium
+  - Aluminium of America
+  - hydrogen DRI
+  - H2-DRI
+  - shaft furnace
+  - Energiron
+  - Midrex
+
+tier3:
+  - "230 Mt"
+  - "260 Mt"
+  - "280 Mt"
+  - "320 Mt"
+  - "200 Mt"
+  - "190 Mt"
+  - "65 Mt"
+  - "65 Mt iron ore"
+  - "100 Mt"
+  - "120 Mtpa"
+  - "5 Mtpa"
+  - "2.5 Mtpa"
+  - "2.5 million tonnes"
+  - "5 million tonnes"
+  - "2.1 Mt steel"
+  - "0.20 mm"
+  - "0.18 mm"
+  - "0.23 mm"
+  - "0.27 mm"
+  - "27Q120"
+  - "23M3"
+  - "23P090"
+  - laser scribed
+  - laser-scribed
+  - domain refinement
+  - phase-out
+  - phase out
+  - "2026 phase-out"
+  - "2034 phase-out"
+  - "2034"
+  - "97.5 percent"
+  - "linear factor"
+  - LRF
+  - cement
+  - aluminium
+  - aluminum
+  - electricity
+  - hydrogen
+  - downstream goods
+  - precursor
+  - "2.5 Mtpa H2-DRI"
+  - "850 km rail"
+  - "650 km rail"
+  - "550 km rail"
+  - Morebaya
+  - Forecariah
+  - Boke
+  - GTC consortium
+  - Banji port
+  - Kindia
+  - Boffa
+  - SinoSteel
+  - Boao
+  - China Baowu
+  - Hesteel
+  - Hesteel HBIS
+  - HBIS
+  - Eviosys
+  - Henrik Adam
+  - Free allowance
+  - free allocation
+  - Sectoral expansion
+  - ETS2
+  - "2027 ETS2"
+  - building heating
+  - road transport
+  - maritime ETS
+  - "2024 maritime"
+  - "Tata Steel UK"
+  - Port Talbot
+  - Scunthorpe
+  - British Steel
+  - Jingye
+  - "Niedersachsenwerft"
+  - thyssenkrupp Steel Europe
+  - tkSE

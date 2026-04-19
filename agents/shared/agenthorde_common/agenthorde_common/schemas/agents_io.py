@@ -112,6 +112,7 @@ class EscalationHint(BaseModel):
     suggested_agent: Literal[
         "sanctions_analyzer",
         "governance_control_analyzer",
+        "decision_influence_analyzer",
         "red_team_agent",
     ] = Field(alias="suggestedAgent")
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -428,6 +429,7 @@ CriticRecommendedNextAgent = Literal[
     "supply_chain_analyzer",
     "governance_control_analyzer",
     "sanctions_analyzer",
+    "decision_influence_analyzer",
     "red_team_agent",
     "critic_agent",
     "none",

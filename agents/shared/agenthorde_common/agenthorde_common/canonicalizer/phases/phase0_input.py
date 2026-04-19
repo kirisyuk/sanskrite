@@ -95,29 +95,36 @@ def validate_phase0_input(
     analyzer_output: dict[str, Any],
     governance_output: dict[str, Any],
     sanctions_output: dict[str, Any] | None = None,
+    decision_influence_output: dict[str, Any] | None = None,
 ) -> list[ValidationIssue]:
     """
     Hard gate: need at least one of:
     - non-empty reasoning graph (any nodes), or
     - non-empty analyzer output (summary / proposed nodes / questions), or
     - non-empty governance output (same), or
-    - non-empty sanctions output (same).
+    - non-empty sanctions output (same), or
+    - non-empty decision_influence output (same).
     """
     issues: list[ValidationIssue] = []
     graph_ok = len(ws.all_nodes) > 0
     analyzer_ok = _blob_nonempty(analyzer_output)
     gov_ok = _blob_nonempty(governance_output)
     san_ok = _blob_nonempty(sanctions_output or {})
-    if not graph_ok and not analyzer_ok and not gov_ok and not san_ok:
+    dec_ok = _blob_nonempty(decision_influence_output or {})
+    if not graph_ok and not analyzer_ok and not gov_ok and not san_ok and not dec_ok:
         issues.append(
             ValidationIssue(
                 code="invalid_input",
-                message="Canonicalizer input is empty: no reasoningGraph nodes and no analyzer/governance/sanctions payload",
+                message=(
+                    "Canonicalizer input is empty: no reasoningGraph nodes and no "
+                    "analyzer/governance/sanctions/decision_influence payload"
+                ),
                 detail={
                     "graphNodeCount": len(ws.all_nodes),
                     "hasAnalyzer": bool(analyzer_output),
                     "hasGovernance": bool(governance_output),
                     "hasSanctions": bool(sanctions_output),
+                    "hasDecisionInfluence": bool(decision_influence_output),
                 },
             )
         )
@@ -174,6 +181,7 @@ def run_phase0(
     governance_output: dict[str, Any],
     final_answer: str,
     sanctions_output: dict[str, Any] | None = None,
+    decision_influence_output: dict[str, Any] | None = None,
 ) -> WorkingState:
     ws = WorkingState(final_answer=final_answer or "")
     try:
@@ -208,6 +216,7 @@ def run_phase0(
         ("analyzer", analyzer_output, "analyzer"),
         ("governance", governance_output, "governance"),
         ("sanctions", sanctions_output or {}, "sanctions"),
+        ("decision_influence", decision_influence_output or {}, "decision_influence"),
     ):
         if isinstance(blob, dict) and blob.get("chainSummary"):
             ws.chain_summaries.append(str(blob["chainSummary"]))
@@ -272,7 +281,9 @@ def run_phase0(
     reg_ids = {e["namespacedId"] for e in entity_by_ns.values()}
     ws.analyzer_entity_label_by_ns = {e["namespacedId"]: e.get("label") or "" for e in entity_by_ns.values()}
 
-    ws.input_issues = validate_phase0_input(ws, analyzer_output, governance_output, sanctions_output)
+    ws.input_issues = validate_phase0_input(
+        ws, analyzer_output, governance_output, sanctions_output, decision_influence_output
+    )
 
     # Validate relation endpoints; drop invalid rows with input_issues.
     # Three categories of "not in registry" we distinguish:

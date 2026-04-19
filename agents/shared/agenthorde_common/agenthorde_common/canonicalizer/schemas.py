@@ -319,6 +319,16 @@ class CanonicalizerInput(BaseModel):
             "sanctions analysis (only pack-merged ones survive)."
         ),
     )
+    decision_influence_output: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="decisionInfluenceOutput",
+        description=(
+            "Decision & influence analyzer output blob. Same shape as the other analyzer outputs. "
+            "Carries decision/mechanism fragments and gatekeeps/wields/enacted_via/imposes/influences "
+            "relations. Without this field, the canonicalizer drops everything that came from the "
+            "decision_influence_analyzer (only pack-merged copies survive)."
+        ),
+    )
     tool_ledger: list[dict[str, Any]] = Field(default_factory=list, alias="toolLedger")
     final_answer: str = Field(default="", alias="finalAnswer")
     run_id: str = Field(default="", alias="runId")

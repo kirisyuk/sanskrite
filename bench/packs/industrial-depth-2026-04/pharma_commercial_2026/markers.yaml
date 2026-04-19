@@ -1,0 +1,200 @@
+vertical: pharma_commercial_2026
+description: |
+  Knowledge depth markers for the commercial pharma 2026 strategy probe (CEO / Head of Commercial level).
+  Tier 1 = baseline regulator, payer, and product literacy.
+  Tier 2 = competent IRA / GLP-1 / biosimilar / 340B / PBM knowledge.
+  Tier 3 = expert / 2024-2026 specifics: Selected Drug names, biosimilar brand names, court cases, dates, quantities.
+
+tier1:
+  - IRA
+  - Inflation Reduction Act
+  - Medicare
+  - CMS
+  - Part D
+  - Part B
+  - GLP-1
+  - semaglutide
+  - tirzepatide
+  - Ozempic
+  - Wegovy
+  - Mounjaro
+  - Zepbound
+  - Novo Nordisk
+  - Eli Lilly
+  - biosimilar
+  - Humira
+  - Stelara
+  - Keytruda
+  - 340B
+  - HRSA
+  - PBM
+  - CVS
+  - Walgreens
+  - Express Scripts
+  - OptumRx
+  - Caremark
+  - FDA
+  - BIOSECURE
+  - WuXi
+  - China
+  - India
+
+tier2:
+  - Maximum Fair Price
+  - MFP
+  - Selected Drug
+  - Selected Drugs
+  - Initial Price Applicability Date
+  - IPAD
+  - small biotech
+  - small-biotech exception
+  - pill penalty
+  - small molecule
+  - small-molecule
+  - shortage list
+  - FDA shortage
+  - removed from shortage
+  - 503A
+  - 503B
+  - compounding
+  - compounding pharmacy
+  - bioequivalence
+  - Catalent
+  - Thermo Fisher
+  - Hovione
+  - PCI Pharma
+  - Novo Holdings
+  - ustekinumab
+  - adalimumab
+  - aflibercept
+  - rebate
+  - rebate compression
+  - rebate trap
+  - take-private
+  - Sycamore
+  - Chapter 22
+  - second bankruptcy
+  - Section 5
+  - administrative complaint
+  - interim report
+  - contract pharmacy
+  - rebate model
+  - rebate-replace
+  - replacement model
+  - DC Circuit
+  - 3rd Circuit
+  - 7th Circuit
+  - HR 8333
+  - WuXi Biologics
+  - WuXi AppTec
+  - WuXi STA
+  - WuXi XDC
+  - KSM
+  - active pharmaceutical ingredient
+  - API sourcing
+  - inspection backlog
+  - FDA inspections
+
+tier3:
+  - "10 drugs"
+  - "15 drugs"
+  - "20 drugs"
+  - "January 1 2026"
+  - "Jan 1 2026"
+  - "January 1, 2026"
+  - "CY 2026"
+  - "CY 2027"
+  - "CY 2028"
+  - Eliquis
+  - Jardiance
+  - Xarelto
+  - Januvia
+  - Farxiga
+  - Entresto
+  - Enbrel
+  - Imbruvica
+  - NovoLog
+  - Fiasp
+  - "$50 billion"
+  - "$60 billion"
+  - "$100 billion"
+  - obesity market
+  - cardio-metabolic
+  - Wezlana
+  - Selarsdi
+  - Pyzchiva
+  - Yesintek
+  - Steqeyma
+  - Imuldosa
+  - Otulfi
+  - Yusimry
+  - Cyltezo
+  - Hadlima
+  - Hyrimoz
+  - Adimab
+  - Yesafili
+  - Opuviz
+  - Pavblu
+  - Eylea biosimilar
+  - aflibercept biosimilar
+  - "60% erosion"
+  - "70% erosion"
+  - "80% erosion"
+  - "$10 billion"
+  - "$10B take-private"
+  - October 2024
+  - Sycamore Partners
+  - Walgreens take-private
+  - May 2025
+  - Rite Aid 2025
+  - Rite Aid Chapter 22
+  - "second Chapter 11"
+  - June 2024
+  - September 2024
+  - administrative complaint September 2024
+  - PBM Big Three
+  - "80% Rx"
+  - "80% prescriptions"
+  - Lilly v. HHS
+  - J&J v. HRSA
+  - Novartis v. HRSA
+  - Bristol Myers v. HRSA
+  - rebate replace
+  - rebate-replacement
+  - Arkansas Act
+  - Arkansas 1103
+  - Louisiana 254
+  - Mississippi 1034
+  - West Virginia
+  - HR 8333
+  - "Sept 2024"
+  - "September 2024 House"
+  - January 1 2032
+  - "Jan 1 2032"
+  - 2032 deadline
+  - 8-year transition
+  - 2032 transition
+  - "60% below 2019"
+  - "70% below 2019"
+  - inspection 2019
+  - "40% API"
+  - "30% API"
+  - China KSM
+  - Indian generic
+  - February 21 2025
+  - "Feb 21 2025"
+  - February 2025
+  - December 2024
+  - "Dec 2024"
+  - small biotech 2026
+  - Subpart 500
+  - "$2,000 cap"
+  - "$2000 OOP cap"
+  - smoothing program
+  - January 2026 cap
+  - Manufacturer Discount Program
+  - Coverage Gap Discount Program
+  - CGDP
+  - inflation rebate
+  - inflation rebates
+  - Vifor Pharma

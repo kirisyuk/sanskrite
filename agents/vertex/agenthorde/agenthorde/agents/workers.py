@@ -10,6 +10,7 @@ from agenthorde.config import CRITIC_MODEL, SUPERVISOR_MODEL, WORKER_MODEL
 from agenthorde_common.prompts.instructions import (
     ANALYZER_INSTRUCTION,
     CRITIC_INSTRUCTION,
+    DECISION_INFLUENCE_INSTRUCTION,
     GOVERNANCE_CONTROL_INSTRUCTION,
     QUESTION_PLANNER_INSTRUCTION,
     RED_TEAM_INSTRUCTION,
@@ -82,6 +83,23 @@ sanctions_analyzer = LlmAgent(
     disallow_transfer_to_parent=True,
     disallow_transfer_to_peers=True,
     output_key="ah_sanctions_output",
+)
+
+decision_influence_analyzer = LlmAgent(
+    model=WORKER_MODEL,
+    name="decision_influence_analyzer",
+    description=(
+        "Maps formal decision-makers and informal influencers around a topic. "
+        "Emits decision and mechanism fragments plus gatekeeps/wields/enacted_via/imposes/influences relations. "
+        "Distinguishes hard gates (sanctions, permits, court orders) from soft shaping (lobbying, advisory, signaling)."
+    ),
+    planner=_THINKING,
+    instruction=DECISION_INFLUENCE_INSTRUCTION,
+    tools=worker_tools(),
+    output_schema=AnalyzerOutput,
+    disallow_transfer_to_parent=True,
+    disallow_transfer_to_peers=True,
+    output_key="ah_decision_influence_output",
 )
 
 critic_agent = LlmAgent(

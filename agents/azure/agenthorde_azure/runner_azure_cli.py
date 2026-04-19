@@ -161,6 +161,7 @@ async def _run_full(user_text: str, *, skip_canonicalizer: bool) -> dict[str, An
             analyzer_output=out.get("analyzerOutput") or {},
             governance_output=out.get("governanceOutput") or {},
             sanctions_output=out.get("sanctionsOutput") or {},
+            decision_influence_output=out.get("decisionInfluenceOutput") or {},
             tool_ledger=out.get("toolLedger") or [],
             final_answer=out.get("finalAnswer") or "",
             run_id="azure-cli",

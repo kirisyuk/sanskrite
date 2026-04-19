@@ -1,0 +1,982 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Industrial depth on a free tier: one model survives the day | Horde.Vision Insights</title>
+    <meta
+      id="meta-description"
+      name="description"
+      content="We ran 15 free OpenRouter models across four industrial verticals. Most disappear after ~30 calls when the daily free quota fires. Then we ran the one survivor — openrouter/elephant-alpha, labelled provider 'Stealth' — across 12 industrial verticals. Field report on cost, latency and depth at $0."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Sora:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="../styles.css" />
+  </head>
+  <body data-page="insights-industrial-depth-elephant-2026-04">
+    <div class="site-shell">
+      <header class="subpage-hero subpage-hero--insight" id="top">
+        <nav class="topbar" aria-label="Primary" data-i18n-aria-label="nav.aria.primary">
+          <a class="brand" href="../index.html">Horde.Vision</a>
+          <div class="topbar-controls">
+            <div
+              class="language-switcher"
+              aria-label="Language selector"
+              data-i18n-aria-label="nav.aria.languageSelector"
+            >
+              <button
+                class="language-button is-active"
+                type="button"
+                data-lang="en"
+                aria-label="Switch to English"
+                data-i18n-aria-label="nav.aria.switchEnglish"
+              >
+                EN
+              </button>
+              <button
+                class="language-button"
+                type="button"
+                data-lang="ru"
+                aria-label="Переключить на русский"
+                data-i18n-aria-label="nav.aria.switchRussian"
+              >
+                RU
+              </button>
+              <button
+                class="language-button"
+                type="button"
+                data-lang="kz"
+                aria-label="Қазақ тіліне ауыстыру"
+                data-i18n-aria-label="nav.aria.switchKazakh"
+              >
+                KZ
+              </button>
+            </div>
+            <button
+              class="nav-toggle"
+              type="button"
+              aria-expanded="false"
+              aria-controls="site-nav"
+              data-i18n="nav.menu"
+            >
+              Menu
+            </button>
+            <div class="nav-links" id="site-nav">
+              <a href="../index.html#about" data-i18n="nav.about">About</a>
+              <a href="../index.html#services" data-i18n="nav.services">Services</a>
+              <a href="../index.html#platform" data-i18n="nav.platform">Platforms</a>
+              <a href="../insights.html" class="is-active" data-i18n="nav.insights">Insights</a>
+              <a href="../index.html#contact" data-i18n="nav.contact">Contact</a>
+            </div>
+          </div>
+        </nav>
+
+        <div class="subpage-hero__inner">
+          <div class="subpage-hero__copy">
+            <p class="eyebrow" data-i18n="industrialDepthElephant.eyebrow">
+              Field Report · Industrial Depth · 2026-04-19
+            </p>
+            <h1 data-i18n="industrialDepthElephant.title">
+              Industrial depth on a free tier: 30 calls, then one model survives the day.
+            </h1>
+            <p class="hero-text" data-i18n="industrialDepthElephant.lead">
+              Fifteen free OpenRouter models, four industrial verticals,
+              open-ended prose answers. Most models disappear after the
+              daily free quota fires. We then ran the one survivor —
+              <code>openrouter/elephant-alpha</code>, branded by OpenRouter
+              under the literal provider name <code>Stealth</code> — across
+              twelve industrial verticals. This is what we found.
+            </p>
+            <div class="insight-meta-bar">
+              <span class="insight-meta-bar__chip">
+                <span>Verticals</span><strong>12</strong>
+              </span>
+              <span class="insight-meta-bar__chip">
+                <span>Models tried</span><strong>15</strong>
+              </span>
+              <span class="insight-meta-bar__chip">
+                <span>Total calls</span><strong>80</strong>
+              </span>
+              <span class="insight-meta-bar__chip">
+                <span>Wall time</span><strong>≈ 32 min</strong>
+              </span>
+              <span class="insight-meta-bar__chip">
+                <span>Total cost</span><strong>$0</strong>
+              </span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <article class="insight-article">
+          <section class="insight-section">
+            <div class="insight-preamble">
+              <div class="insight-preamble__grid">
+                <div class="insight-preamble__column">
+                  <span class="insight-preamble__label" data-i18n="preamble.label.about">What this report is</span>
+                  <p data-i18n="industrialDepthElephant.preamble.about">
+                    Report <strong>#2</strong> of our Horde.Vision
+                    Insights series. We ran fifteen free models on
+                    OpenRouter against four industrial packs
+                    (battery, pharma biologics, nuclear, aerospace).
+                    After about thirty calls a global daily quota
+                    fired and fourteen of fifteen went dark — one
+                    survived, so we extended it to twelve verticals.
+                    This is a field report on what a free tier
+                    actually buys you, where it breaks, and where one
+                    non-labeled stealth slot holds up.
+                  </p>
+                </div>
+                <div class="insight-preamble__column">
+                  <span class="insight-preamble__label" data-i18n="preamble.label.read">How to read this</span>
+                  <ul class="insight-preamble__speeds">
+                    <li><strong data-i18n="preamble.speed.fast">2 min</strong><span data-i18n="industrialDepthElephant.preamble.speed.fast">hero + TL;DR</span></li>
+                    <li><strong data-i18n="preamble.speed.mid">10 min</strong><span data-i18n="industrialDepthElephant.preamble.speed.mid">+ the cliff chart, the 12-vertical depth table, variance probe</span></li>
+                    <li><strong data-i18n="preamble.speed.full">30 min</strong><span data-i18n="industrialDepthElephant.preamble.speed.full">+ methodology, reproduction, bundle on request</span></li>
+                  </ul>
+                </div>
+              </div>
+              <p class="insight-preamble__footer" data-i18n="preamble.footer">
+                New reader? Start with
+                <a href="./how-to-read.html">How to read these reports</a>
+                — 3-minute primer, glossary of terms used across the
+                series (tier-1/2/3, pack, marker, rubric, stealth,
+                frontier), and the order the reports were written in.
+              </p>
+            </div>
+
+            <div class="insight-tldr">
+              <span class="insight-tldr__label">TL;DR</span>
+              <ul>
+                <li><strong>The cliff is real.</strong> 15 free models × 4 industrial packs = 60 cells. Only 17 succeeded. After ~30 calls, the OpenRouter "free-models-per-day" quota fires globally on the API key, taking down 14 of 15 models for the rest of the day.</li>
+                <li><strong>One model survives the day.</strong> <code>openrouter/elephant-alpha</code> has no <code>:free</code> suffix and lives in a different rate-limit bucket. It is the only model to complete all four packs.</li>
+                <li><strong>Industrial depth at $0.</strong> Across twelve verticals — battery, pharma, nuclear, aerospace, advanced semiconductor, defense munitions, maritime chokepoints, steel + CBAM, fertilizer + ag inputs, subsea cables, space access, grid + transformers — Elephant hit 84.9% of tier-1 markers, 34.8% of tier-2, 10.3% of tier-3, at a mean latency of 8.4 seconds. Total wall time across all 12 verticals: 96 seconds. Total spend: $0.</li>
+                <li><strong>Provider literally <code>Stealth</code>.</strong> The OpenRouter response field <code>provider</code> returns the string <code>"Stealth"</code> on every call. Combined with the routing-alias finding from <a href="./elephant-routing-alias-2026-04.html">our previous report</a>, this is a packaged product, not a model: you buy a brand, you do not learn who answered.</li>
+                <li><strong>Variance is small but real.</strong> Five replicates on <code>steel_cbam</code> produced t3 hits of {13, 13, 14, 13, 15}. Five on <code>pharma_biologics</code> produced {8, 11, 9, 11, 8}. Openings of the responses were bit-for-bit identical 4 of 5 on steel and 5 of 5 on pharma. Either the routing is sticky per key, or partial response caching is in play; we cannot distinguish from the API surface.</li>
+              </ul>
+            </div>
+          </section>
+
+          <section class="insight-section">
+            <h2>Act I — The field, on the first two packs</h2>
+
+            <p>
+              We picked four Tier-1 industrial verticals — battery + critical
+              minerals, pharma + biologics, nuclear fuel cycle + heavy
+              turbines, aerospace titanium + superalloys — and wrote a short
+              scenario plus six escalating questions for each. Open-ended
+              prose, no schema, no function calling, <code>temperature=0.2</code>,
+              <code>max_tokens=4096</code>. The opposite of the strict-JSON
+              critic contract from the
+              <a href="./elephant-routing-alias-2026-04.html">previous report</a>:
+              this batch measures industrial knowledge, not contract
+              compliance.
+            </p>
+
+            <p>
+              On the first two packs the field was alive. Eight free models
+              answered the battery pack; seven answered the pharma pack.
+              Scoring is by case-insensitive substring match against a
+              tiered marker rubric written ahead of the run; the model never
+              sees the rubric.
+            </p>
+
+            <div class="insight-table-wrap">
+              <table class="insight-table">
+                <thead>
+                  <tr>
+                    <th colspan="6"><code>battery_critical_minerals</code> — depth ranking, successful only</th>
+                  </tr>
+                  <tr>
+                    <th>Model</th>
+                    <th class="num">tier1</th>
+                    <th class="num">tier2</th>
+                    <th class="num">tier3</th>
+                    <th class="num">latency</th>
+                    <th class="num">out tok</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td><code>nvidia/nemotron-3-super-120b-a12b:free</code></td><td class="num">18 / 22</td><td class="num">9 / 34</td><td class="num"><strong>10 / 56</strong></td><td class="num">117.3s</td><td class="num">4 096</td></tr>
+                  <tr><td><code>z-ai/glm-4.5-air:free</code></td><td class="num">17 / 22</td><td class="num">7 / 34</td><td class="num"><strong>10 / 56</strong></td><td class="num">137.3s</td><td class="num">2 608</td></tr>
+                  <tr><td><code>openai/gpt-oss-120b:free</code></td><td class="num">17 / 22</td><td class="num">8 / 34</td><td class="num">9 / 56</td><td class="num">119.5s</td><td class="num">5 465</td></tr>
+                  <tr><td><code>arcee-ai/trinity-large-preview:free</code></td><td class="num">15 / 22</td><td class="num">4 / 34</td><td class="num">7 / 56</td><td class="num">29.4s</td><td class="num">570</td></tr>
+                  <tr><td><code>nvidia/nemotron-nano-12b-v2-vl:free</code></td><td class="num">13 / 22</td><td class="num">3 / 34</td><td class="num">6 / 56</td><td class="num">40.8s</td><td class="num">2 070</td></tr>
+                  <tr><td><code>openrouter/elephant-alpha</code></td><td class="num">13 / 22</td><td class="num">8 / 34</td><td class="num">5 / 56</td><td class="num"><strong>5.5s</strong></td><td class="num">931</td></tr>
+                  <tr><td><code>openai/gpt-oss-20b:free</code></td><td class="num">16 / 22</td><td class="num">3 / 34</td><td class="num">4 / 56</td><td class="num">83.1s</td><td class="num">2 125</td></tr>
+                  <tr><td><code>nvidia/nemotron-nano-9b-v2:free</code></td><td class="num">12 / 22</td><td class="num">2 / 34</td><td class="num">2 / 56</td><td class="num">41.6s</td><td class="num">2 063</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="insight-table-wrap">
+              <table class="insight-table">
+                <thead>
+                  <tr>
+                    <th colspan="6"><code>pharma_biologics</code> — depth ranking, successful only</th>
+                  </tr>
+                  <tr>
+                    <th>Model</th>
+                    <th class="num">tier1</th>
+                    <th class="num">tier2</th>
+                    <th class="num">tier3</th>
+                    <th class="num">latency</th>
+                    <th class="num">out tok</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td><code>z-ai/glm-4.5-air:free</code></td><td class="num">19 / 25</td><td class="num">10 / 35</td><td class="num"><strong>11 / 51</strong></td><td class="num">176.0s</td><td class="num">2 946</td></tr>
+                  <tr><td><code>openrouter/elephant-alpha</code></td><td class="num">20 / 25</td><td class="num">9 / 35</td><td class="num"><strong>11 / 51</strong></td><td class="num"><strong>7.1s</strong></td><td class="num">1 266</td></tr>
+                  <tr><td><code>arcee-ai/trinity-large-preview:free</code></td><td class="num">21 / 25</td><td class="num">11 / 35</td><td class="num">10 / 51</td><td class="num">70.1s</td><td class="num">1 000</td></tr>
+                  <tr><td><code>nvidia/nemotron-nano-12b-v2-vl:free</code></td><td class="num">20 / 25</td><td class="num">6 / 35</td><td class="num">6 / 51</td><td class="num">77.6s</td><td class="num">2 234</td></tr>
+                  <tr><td><code>nvidia/nemotron-nano-9b-v2:free</code></td><td class="num">19 / 25</td><td class="num">6 / 35</td><td class="num">5 / 51</td><td class="num">111.2s</td><td class="num">2 053</td></tr>
+                  <tr><td><code>nvidia/nemotron-3-super-120b-a12b:free</code></td><td class="num">10 / 25</td><td class="num">6 / 35</td><td class="num">3 / 51</td><td class="num">106.1s</td><td class="num">4 096</td></tr>
+                  <tr><td><code>nvidia/nemotron-3-nano-30b-a3b:free</code></td><td class="num">9 / 25</td><td class="num">3 / 35</td><td class="num">3 / 51</td><td class="num">27.2s</td><td class="num">4 096</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3>Two findings worth flagging before the cliff</h3>
+
+            <p>
+              <strong>GLM-4.5-air recovered.</strong> In the strict-JSON
+              critic bench, this model spent 285 seconds in hidden thinking
+              and never returned a valid contract. With the contract removed,
+              it lands at the very top of the depth ranking on both packs.
+              That is a clean argument that schema-drop under thinking
+              pressure is a contract-environment failure, not a knowledge
+              failure.
+            </p>
+
+            <p>
+              <strong>Elephant matched the depth ceiling 24× faster.</strong>
+              On <code>pharma_biologics</code>, Elephant tied <code>glm-4.5-air</code>
+              at 11 / 51 tier-3 hits — at 7.1 seconds versus 176. That is not
+              a Pareto trade-off; that is Pareto domination. On the battery
+              pack the picture is a normal trade-off (Elephant produces
+              fewer tier-3 hits but ten times faster than the heaviest
+              models). On pharma the trade-off vanishes entirely.
+            </p>
+
+            <p>
+              <strong>One vertical-style flip stood out.</strong> <code>nemotron-3-super-120b</code>
+              led the battery pack at t3 = 10 and collapsed to t3 = 3 on
+              pharma — same model, same key, same prompt template, three
+              minutes apart. A 3.3× drop in vertical depth on a single
+              vendor's flagship is a strong argument for per-vertical
+              benchmarking and against any "universal industrial model"
+              ranking.
+            </p>
+          </section>
+
+          <section class="insight-section">
+            <h2>Act II — The cliff</h2>
+
+            <p>
+              We then ran the same fifteen models on packs three and four:
+              <code>nuclear_energy</code> and <code>aerospace_titanium</code>.
+              The picture changed completely. From eight successful models
+              on pack one and seven on pack two, packs three and four each
+              had exactly one survivor.
+            </p>
+
+            <div class="insight-chart">
+              <p class="insight-chart__title">Models that returned a usable answer, per pack</p>
+              <p class="insight-chart__caption">15 models attempted; bar length = number that succeeded. Same API key, same harness, same day, four sequential packs.</p>
+              <svg viewBox="0 0 760 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Per-pack survival count: battery 8/15, pharma 7/15, nuclear 1/15, aerospace 1/15">
+                <g font-family="Manrope, sans-serif" font-size="12" fill="#5c6672">
+                  <text x="20" y="48"><tspan font-weight="600">battery</tspan></text>
+                  <text x="20" y="62" font-size="10" opacity="0.7">pack 1</text>
+                  <text x="20" y="98"><tspan font-weight="600">pharma</tspan></text>
+                  <text x="20" y="112" font-size="10" opacity="0.7">pack 2</text>
+                  <text x="20" y="148"><tspan font-weight="600">nuclear</tspan></text>
+                  <text x="20" y="162" font-size="10" opacity="0.7">pack 3</text>
+                  <text x="20" y="198"><tspan font-weight="600">aerospace</tspan></text>
+                  <text x="20" y="212" font-size="10" opacity="0.7">pack 4</text>
+                </g>
+
+                <g>
+                  <rect x="120" y="36" width="600" height="36" rx="6" fill="rgba(15,19,25,0.06)" stroke="rgba(15,19,25,0.12)" stroke-width="1"/>
+                  <rect x="120" y="36" width="320" height="36" rx="6" fill="rgba(126,201,142,0.32)" stroke="rgba(42,106,59,0.45)" stroke-width="1"/>
+                  <text x="280" y="60" font-family="Manrope, sans-serif" font-size="13" fill="#2a6a3b" text-anchor="middle" font-weight="600">8 of 15 succeeded</text>
+                </g>
+
+                <g>
+                  <rect x="120" y="86" width="600" height="36" rx="6" fill="rgba(15,19,25,0.06)" stroke="rgba(15,19,25,0.12)" stroke-width="1"/>
+                  <rect x="120" y="86" width="280" height="36" rx="6" fill="rgba(126,201,142,0.32)" stroke="rgba(42,106,59,0.45)" stroke-width="1"/>
+                  <text x="260" y="110" font-family="Manrope, sans-serif" font-size="13" fill="#2a6a3b" text-anchor="middle" font-weight="600">7 of 15 succeeded</text>
+                </g>
+
+                <g>
+                  <rect x="120" y="136" width="600" height="36" rx="6" fill="rgba(15,19,25,0.06)" stroke="rgba(15,19,25,0.12)" stroke-width="1"/>
+                  <rect x="120" y="136" width="40" height="36" rx="6" fill="rgba(126,201,142,0.32)" stroke="rgba(42,106,59,0.45)" stroke-width="1"/>
+                  <text x="180" y="160" font-family="Manrope, sans-serif" font-size="13" fill="#b73838" text-anchor="start" font-weight="600">1 of 15 — only Elephant</text>
+                </g>
+
+                <g>
+                  <rect x="120" y="186" width="600" height="36" rx="6" fill="rgba(15,19,25,0.06)" stroke="rgba(15,19,25,0.12)" stroke-width="1"/>
+                  <rect x="120" y="186" width="40" height="36" rx="6" fill="rgba(126,201,142,0.32)" stroke="rgba(42,106,59,0.45)" stroke-width="1"/>
+                  <text x="180" y="210" font-family="Manrope, sans-serif" font-size="13" fill="#b73838" text-anchor="start" font-weight="600">1 of 15 — only Elephant</text>
+                </g>
+              </svg>
+            </div>
+
+            <h3>Why the cliff happens</h3>
+
+            <p>
+              OpenRouter's free tier is not "every <code>:free</code> model
+              is free in unlimited quantity." It is a <em>shared daily
+              budget</em> across all models that carry the <code>:free</code>
+              suffix on a given API key. After roughly 30 successful calls
+              against any combination of <code>:free</code> models, the
+              provider returns:
+            </p>
+
+            <pre class="insight-reproduce">{
+  "error": {
+    "code": 429,
+    "message": "Rate limit exceeded: free-models-per-day"
+  }
+}</pre>
+
+            <p>
+              This is global to the key. It does not matter which
+              <code>:free</code> model you call next — they all share the
+              same bucket. By the time pack three started, every
+              <code>:free</code> model on the list had been disqualified for
+              the rest of the day.
+            </p>
+
+            <p>
+              <code>openrouter/elephant-alpha</code> has no <code>:free</code>
+              suffix. It is, in OpenRouter's pricing taxonomy, a separate
+              free product hosted under a different rate-limit bucket. That
+              is the entire reason it survives where the other fourteen do
+              not. There is no judgment about quality embedded in this fact.
+              The cliff is purely a contractual / billing artifact.
+            </p>
+
+            <h3>Failure-class inventory across all four packs</h3>
+
+            <div class="insight-table-wrap">
+              <table class="insight-table">
+                <thead>
+                  <tr>
+                    <th>Failure class</th>
+                    <th>Affected models</th>
+                    <th>Symptom</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td><strong>Daily free quota</strong></td><td>10 <code>:free</code> models, packs 3–4</td><td><code>429 — Rate limit exceeded: free-models-per-day</code> — global to API key</td></tr>
+                  <tr><td><strong>Provider rate-limited upstream</strong></td><td>Venice (qwen3, llama-3.3), Google AI Studio (gemma-4)</td><td><code>429 — Provider returned error</code> — chronic on free tier, observed every pack</td></tr>
+                  <tr><td><strong>Hidden-thinking truncation</strong></td><td><code>nemotron-3-nano-30b</code> on pack 1</td><td><code>finish_reason=length</code> with <code>empty_content</code> — burned 4 096 tokens internally before any visible output</td></tr>
+                  <tr><td><strong>Provider 400</strong></td><td><code>minimax/minimax-m2.5</code> on pack 1</td><td><code>400 — provider input validation</code> — likely free-tier prompt-length cap</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="insight-callout">
+              <p>
+                <strong>Practical implication.</strong> If you are designing
+                a free-tier production system on OpenRouter, your effective
+                model pool past the first ~30 calls per day is one model.
+                Any architecture that assumes graceful degradation across a
+                pool of <code>:free</code> alternatives is an illusion.
+                Either upgrade to paid, or build around <code>elephant-alpha</code>
+                explicitly — knowing it is a routing alias to backends you
+                cannot name.
+              </p>
+            </div>
+          </section>
+
+          <section class="insight-section">
+            <h2>Act III — The stealth player across twelve verticals</h2>
+
+            <p>
+              We then took the survivor and pushed harder. Eight new
+              industrial packs, each with a six-question scenario at the
+              same depth as the first four:
+            </p>
+
+            <ul>
+              <li><code>semiconductor_advanced_node</code> — CoWoS / HBM4 / EUV pellicle / EDA under export controls / CHIPS Act disbursement</li>
+              <li><code>defense_munitions</code> — 155 mm shell production, PAC-3 MSE, propellant, hypersonics, F-35 sustainment, NATO 2 % replenishment</li>
+              <li><code>maritime_chokepoints</code> — Red Sea, Suez, Panama drought, dual-fuel methanol orderbook, NSR, port congestion</li>
+              <li><code>steel_cbam</code> — Vale / BHP / Rio / Simandou, HBI-DRI-EAF (Stegra / HYBRIT / SALCOS), CBAM mechanics, GOES, ETS reform</li>
+              <li><code>fertilizer_ag_inputs</code> — Yara / CF / OCI nitrogen, OCP phosphate, Nutrien / Mosaic potash, China P export licensing, Belaruskali sanctions</li>
+              <li><code>subsea_cables</code> — Prysmian / Sumitomo / NKT / HMN Tech, Subcom / ASN, repair vessel scarcity, Red Sea cuts, hyperscaler cables</li>
+              <li><code>space_access</code> — Falcon 9 / Starship cadence, Vulcan / BE-4, Neutron / New Glenn, Ariane 6, Starlink Gen 3 / Kuiper</li>
+              <li><code>grid_transformers</code> — HV transformer 3-4 year lead times, GOES steel mills, HVDC converter, interconnection queue, SF6 phase-out</li>
+            </ul>
+
+            <p>
+              All twelve packs (the four original plus the eight new) were
+              run against <code>openrouter/elephant-alpha</code> at
+              <code>temperature=0.2</code>, <code>max_tokens=4096</code>.
+              Total wall time across all twelve verticals: 96 seconds. Total
+              cost: $0.
+            </p>
+
+            <div class="insight-chart">
+              <p class="insight-chart__title">Elephant depth across 12 industrial verticals</p>
+              <p class="insight-chart__caption">Each row is one vertical. Bars are tier-1 / tier-2 / tier-3 marker hit rates. Sorted by tier-3 absolute count.</p>
+              <svg viewBox="0 0 760 560" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Stacked bar chart of marker hit fractions for each of 12 verticals">
+                <defs>
+                  <linearGradient id="t1grad" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0" stop-color="#7ec98e" stop-opacity="0.6"/>
+                    <stop offset="1" stop-color="#7ec98e" stop-opacity="0.45"/>
+                  </linearGradient>
+                  <linearGradient id="t2grad" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0" stop-color="#669eff" stop-opacity="0.55"/>
+                    <stop offset="1" stop-color="#669eff" stop-opacity="0.4"/>
+                  </linearGradient>
+                  <linearGradient id="t3grad" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0" stop-color="#ffaa3b" stop-opacity="0.7"/>
+                    <stop offset="1" stop-color="#ffaa3b" stop-opacity="0.55"/>
+                  </linearGradient>
+                </defs>
+
+                <g font-family="Manrope, sans-serif" font-size="11" fill="#5c6672" text-anchor="end">
+                  <text x="200" y="48">steel_cbam</text>
+                  <text x="200" y="88">semiconductor_advanced_node</text>
+                  <text x="200" y="128">pharma_biologics</text>
+                  <text x="200" y="168">space_access</text>
+                  <text x="200" y="208">subsea_cables</text>
+                  <text x="200" y="248">defense_munitions</text>
+                  <text x="200" y="288">grid_transformers</text>
+                  <text x="200" y="328">nuclear_energy</text>
+                  <text x="200" y="368">maritime_chokepoints</text>
+                  <text x="200" y="408">battery_critical_minerals</text>
+                  <text x="200" y="448">aerospace_titanium</text>
+                  <text x="200" y="488">fertilizer_ag_inputs</text>
+                </g>
+
+                <g>
+                  <!-- steel_cbam: t1 26/29=0.897, t2 33/72=0.458, t3 16/76=0.211 -->
+                  <rect x="220" y="36" width="448" height="9" fill="url(#t1grad)"/>
+                  <rect x="220" y="46" width="229" height="9" fill="url(#t2grad)"/>
+                  <rect x="220" y="56" width="105" height="9" fill="url(#t3grad)"/>
+                  <text x="676" y="44" font-family="Manrope, sans-serif" font-size="10" fill="#2a6a3b">t1 26/29</text>
+                  <text x="676" y="54" font-family="Manrope, sans-serif" font-size="10" fill="#244c8c">t2 33/72</text>
+                  <text x="676" y="64" font-family="Manrope, sans-serif" font-size="10" fill="#8a5713">t3 16/76</text>
+
+                  <!-- semiconductor_advanced_node: t1 19/22=0.864, t2 23/45=0.511, t3 14/74=0.189 -->
+                  <rect x="220" y="76" width="432" height="9" fill="url(#t1grad)"/>
+                  <rect x="220" y="86" width="255" height="9" fill="url(#t2grad)"/>
+                  <rect x="220" y="96" width="95" height="9" fill="url(#t3grad)"/>
+                  <text x="676" y="84" font-family="Manrope, sans-serif" font-size="10" fill="#2a6a3b">t1 19/22</text>
+                  <text x="676" y="94" font-family="Manrope, sans-serif" font-size="10" fill="#244c8c">t2 23/45</text>
+                  <text x="676" y="104" font-family="Manrope, sans-serif" font-size="10" fill="#8a5713">t3 14/74</text>
+
+                  <!-- pharma_biologics: t1 20/25=0.800, t2 9/35=0.257, t3 11/51=0.216 -->
+                  <rect x="220" y="116" width="400" height="9" fill="url(#t1grad)"/>
+                  <rect x="220" y="126" width="129" height="9" fill="url(#t2grad)"/>
+                  <rect x="220" y="136" width="108" height="9" fill="url(#t3grad)"/>
+                  <text x="676" y="124" font-family="Manrope, sans-serif" font-size="10" fill="#2a6a3b">t1 20/25</text>
+                  <text x="676" y="134" font-family="Manrope, sans-serif" font-size="10" fill="#244c8c">t2 9/35</text>
+                  <text x="676" y="144" font-family="Manrope, sans-serif" font-size="10" fill="#8a5713">t3 11/51</text>
+
+                  <!-- space_access: t1 18/19=0.947, t2 31/83=0.373, t3 9/85=0.106 -->
+                  <rect x="220" y="156" width="473" height="9" fill="url(#t1grad)"/>
+                  <rect x="220" y="166" width="187" height="9" fill="url(#t2grad)"/>
+                  <rect x="220" y="176" width="53" height="9" fill="url(#t3grad)"/>
+                  <text x="676" y="164" font-family="Manrope, sans-serif" font-size="10" fill="#2a6a3b">t1 18/19</text>
+                  <text x="676" y="174" font-family="Manrope, sans-serif" font-size="10" fill="#244c8c">t2 31/83</text>
+                  <text x="676" y="184" font-family="Manrope, sans-serif" font-size="10" fill="#8a5713">t3 9/85</text>
+
+                  <!-- subsea_cables: t1 20/21=0.952, t2 31/66=0.470, t3 8/81=0.099 -->
+                  <rect x="220" y="196" width="476" height="9" fill="url(#t1grad)"/>
+                  <rect x="220" y="206" width="235" height="9" fill="url(#t2grad)"/>
+                  <rect x="220" y="216" width="49" height="9" fill="url(#t3grad)"/>
+                  <text x="676" y="204" font-family="Manrope, sans-serif" font-size="10" fill="#2a6a3b">t1 20/21</text>
+                  <text x="676" y="214" font-family="Manrope, sans-serif" font-size="10" fill="#244c8c">t2 31/66</text>
+                  <text x="676" y="224" font-family="Manrope, sans-serif" font-size="10" fill="#8a5713">t3 8/81</text>
+
+                  <!-- defense_munitions: t1 15/21=0.714, t2 26/61=0.426, t3 7/60=0.117 -->
+                  <rect x="220" y="236" width="357" height="9" fill="url(#t1grad)"/>
+                  <rect x="220" y="246" width="213" height="9" fill="url(#t2grad)"/>
+                  <rect x="220" y="256" width="58" height="9" fill="url(#t3grad)"/>
+                  <text x="676" y="244" font-family="Manrope, sans-serif" font-size="10" fill="#2a6a3b">t1 15/21</text>
+                  <text x="676" y="254" font-family="Manrope, sans-serif" font-size="10" fill="#244c8c">t2 26/61</text>
+                  <text x="676" y="264" font-family="Manrope, sans-serif" font-size="10" fill="#8a5713">t3 7/60</text>
+
+                  <!-- grid_transformers: t1 24/29=0.828, t2 40/87=0.460, t3 7/89=0.079 -->
+                  <rect x="220" y="276" width="414" height="9" fill="url(#t1grad)"/>
+                  <rect x="220" y="286" width="230" height="9" fill="url(#t2grad)"/>
+                  <rect x="220" y="296" width="40" height="9" fill="url(#t3grad)"/>
+                  <text x="676" y="284" font-family="Manrope, sans-serif" font-size="10" fill="#2a6a3b">t1 24/29</text>
+                  <text x="676" y="294" font-family="Manrope, sans-serif" font-size="10" fill="#244c8c">t2 40/87</text>
+                  <text x="676" y="304" font-family="Manrope, sans-serif" font-size="10" fill="#8a5713">t3 7/89</text>
+
+                  <!-- nuclear_energy: t1 23/25=0.920, t2 18/79=0.228, t3 6/70=0.086 -->
+                  <rect x="220" y="316" width="460" height="9" fill="url(#t1grad)"/>
+                  <rect x="220" y="326" width="114" height="9" fill="url(#t2grad)"/>
+                  <rect x="220" y="336" width="43" height="9" fill="url(#t3grad)"/>
+                  <text x="676" y="324" font-family="Manrope, sans-serif" font-size="10" fill="#2a6a3b">t1 23/25</text>
+                  <text x="676" y="334" font-family="Manrope, sans-serif" font-size="10" fill="#244c8c">t2 18/79</text>
+                  <text x="676" y="344" font-family="Manrope, sans-serif" font-size="10" fill="#8a5713">t3 6/70</text>
+
+                  <!-- maritime_chokepoints: t1 19/24=0.792, t2 15/55=0.273, t3 6/61=0.098 -->
+                  <rect x="220" y="356" width="396" height="9" fill="url(#t1grad)"/>
+                  <rect x="220" y="366" width="136" height="9" fill="url(#t2grad)"/>
+                  <rect x="220" y="376" width="49" height="9" fill="url(#t3grad)"/>
+                  <text x="676" y="364" font-family="Manrope, sans-serif" font-size="10" fill="#2a6a3b">t1 19/24</text>
+                  <text x="676" y="374" font-family="Manrope, sans-serif" font-size="10" fill="#244c8c">t2 15/55</text>
+                  <text x="676" y="384" font-family="Manrope, sans-serif" font-size="10" fill="#8a5713">t3 6/61</text>
+
+                  <!-- battery_critical_minerals: t1 13/22=0.591, t2 8/34=0.235, t3 5/56=0.089 -->
+                  <rect x="220" y="396" width="295" height="9" fill="url(#t1grad)"/>
+                  <rect x="220" y="406" width="118" height="9" fill="url(#t2grad)"/>
+                  <rect x="220" y="416" width="44" height="9" fill="url(#t3grad)"/>
+                  <text x="676" y="404" font-family="Manrope, sans-serif" font-size="10" fill="#2a6a3b">t1 13/22</text>
+                  <text x="676" y="414" font-family="Manrope, sans-serif" font-size="10" fill="#244c8c">t2 8/34</text>
+                  <text x="676" y="424" font-family="Manrope, sans-serif" font-size="10" fill="#8a5713">t3 5/56</text>
+
+                  <!-- aerospace_titanium: t1 24/27=0.889, t2 16/80=0.200, t3 5/90=0.056 -->
+                  <rect x="220" y="436" width="444" height="9" fill="url(#t1grad)"/>
+                  <rect x="220" y="446" width="100" height="9" fill="url(#t2grad)"/>
+                  <rect x="220" y="456" width="28" height="9" fill="url(#t3grad)"/>
+                  <text x="676" y="444" font-family="Manrope, sans-serif" font-size="10" fill="#2a6a3b">t1 24/27</text>
+                  <text x="676" y="454" font-family="Manrope, sans-serif" font-size="10" fill="#244c8c">t2 16/80</text>
+                  <text x="676" y="464" font-family="Manrope, sans-serif" font-size="10" fill="#8a5713">t3 5/90</text>
+
+                  <!-- fertilizer_ag_inputs: t1 26/27=0.963, t2 30/76=0.395, t3 3/67=0.045 -->
+                  <rect x="220" y="476" width="481" height="9" fill="url(#t1grad)"/>
+                  <rect x="220" y="486" width="197" height="9" fill="url(#t2grad)"/>
+                  <rect x="220" y="496" width="22" height="9" fill="url(#t3grad)"/>
+                  <text x="676" y="484" font-family="Manrope, sans-serif" font-size="10" fill="#2a6a3b">t1 26/27</text>
+                  <text x="676" y="494" font-family="Manrope, sans-serif" font-size="10" fill="#244c8c">t2 30/76</text>
+                  <text x="676" y="504" font-family="Manrope, sans-serif" font-size="10" fill="#8a5713">t3 3/67</text>
+                </g>
+
+                <g font-family="Manrope, sans-serif" font-size="10" fill="#5c6672">
+                  <text x="220" y="538">0%</text>
+                  <text x="492" y="538" text-anchor="middle">50%</text>
+                  <text x="720" y="538" text-anchor="end">100%</text>
+                </g>
+                <g stroke="rgba(15,19,25,0.08)" stroke-width="1">
+                  <line x1="220" y1="30" x2="220" y2="525"/>
+                  <line x1="492" y1="30" x2="492" y2="525"/>
+                  <line x1="720" y1="30" x2="720" y2="525"/>
+                </g>
+              </svg>
+              <div class="insight-chart__legend">
+                <span><i style="background:#7ec98e"></i>Tier 1 — generally expected of any large LLM</span>
+                <span><i style="background:#669eff"></i>Tier 2 — competent supply-chain knowledge</span>
+                <span><i style="background:#ffaa3b"></i>Tier 3 — expert / 2024–2026 specifics</span>
+              </div>
+            </div>
+
+            <h3>What Elephant knows well</h3>
+            <p>
+              On <code>steel_cbam</code> Elephant surfaces Vale's S11D, the
+              Simandou JV structure (Winning + SimFer), Stegra and HYBRIT,
+              Boston Metal MOE, Cogent / Tata as a GOES mill, the laser-scribed
+              0.20–0.23 mm strip grade, CBAM's default emission factors, and
+              the 2026–2034 phase-out of free ETS allowances. That is real
+              supply-chain literacy, not surface tagging.
+            </p>
+            <p>
+              On <code>semiconductor_advanced_node</code> it distinguishes
+              CoWoS-S / L / R, names ASML's High-NA EXE:5000 and the EUV
+              pellicle / mask-blank suppliers (Mitsui, HOYA, Asahi),
+              correctly places HBM3E at SK Hynix and Micron's 2024 entry,
+              and discusses Synopsys / Cadence export-control specifics
+              along with Empyrean as the Chinese alternative. Twelve months
+              ago that profile was paid-tier territory.
+            </p>
+
+            <h3>Where Elephant is shallow</h3>
+            <p>
+              On <code>fertilizer_ag_inputs</code> Elephant scores 26 of 27
+              tier-1 markers — essentially everyone obvious — but only 3 of
+              67 tier-3 markers. It does not surface Klaipeda port-denial
+              mechanics for Belaruskali, OFAC General License numbers,
+              Hubei Xingfa or Yunnan Yuntianhua as Chinese P producers,
+              specific OCP Khouribga / Jorf Lasfar tonnages. The mid-tier
+              picture is fine; the second-supplier-and-deep-policy layer is
+              missing.
+            </p>
+            <p>
+              On <code>aerospace_titanium</code> the same shape: 24 of 27
+              tier-1, only 5 of 90 tier-3. Elephant knows Boeing, Airbus,
+              CFM, P&amp;W, Rolls-Royce, PCC, Howmet, ATI — but does not
+              quantify VSMPO's pre-2022 share, does not name the GTF disc
+              powder-metal contamination story, does not give shop-visit
+              interval numbers. Knowledge is wide; quantitative recency is
+              thin.
+            </p>
+
+            <p>
+              Some of this is marker calibration noise — the tier-3 lists
+              are deliberately aggressive — but the directional signal is
+              clean: Elephant is production-ready for industrial
+              orientation, not for industrial forensics. The next post will
+              compare these same packs against frontier paid models to
+              calibrate the ceiling.
+            </p>
+          </section>
+
+          <section class="insight-section">
+            <h2>Variance — five replicates, two packs</h2>
+
+            <p>
+              We then ran Elephant five times each on the deepest vertical
+              (<code>steel_cbam</code>) and a moderately deep one
+              (<code>pharma_biologics</code>), with no other parameter
+              changed. The point was to test the routing-alias hypothesis
+              from the previous report: if Elephant routes to multiple
+              backends, the variance should be visible across replicates.
+            </p>
+
+            <div class="insight-chart">
+              <p class="insight-chart__title">Tier-3 hits across five replicates</p>
+              <p class="insight-chart__caption">Each dot is one replicate. Same prompt, same model alias, same key, same temperature.</p>
+              <svg viewBox="0 0 760 220" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Variance strip plots: steel_cbam tier-3 hits 13,13,14,13,15; pharma_biologics 8,11,9,11,8">
+                <g font-family="Manrope, sans-serif" font-size="12" fill="#5c6672">
+                  <text x="20" y="60"><tspan font-weight="600">steel_cbam</tspan></text>
+                  <text x="20" y="76" font-size="10" opacity="0.7">5 replicates</text>
+                  <text x="20" y="155"><tspan font-weight="600">pharma_biologics</tspan></text>
+                  <text x="20" y="171" font-size="10" opacity="0.7">5 replicates</text>
+                </g>
+
+                <line x1="180" y1="65" x2="700" y2="65" stroke="rgba(15,19,25,0.12)" stroke-width="1"/>
+                <line x1="180" y1="160" x2="700" y2="160" stroke="rgba(15,19,25,0.12)" stroke-width="1"/>
+
+                <g font-family="Manrope, sans-serif" font-size="10" fill="#5c6672">
+                  <text x="180" y="85">0</text>
+                  <text x="280" y="85">5</text>
+                  <text x="380" y="85">10</text>
+                  <text x="480" y="85">15</text>
+                  <text x="580" y="85">20</text>
+                  <text x="680" y="85">25</text>
+                  <text x="180" y="180">0</text>
+                  <text x="280" y="180">5</text>
+                  <text x="380" y="180">10</text>
+                  <text x="480" y="180">15</text>
+                  <text x="580" y="180">20</text>
+                  <text x="680" y="180">25</text>
+                </g>
+
+                <!-- steel: 13, 13, 14, 13, 15 — strip plot at row y=60-->
+                <g>
+                  <circle cx="440" cy="56" r="7" fill="#ffaa3b" opacity="0.85"/>
+                  <circle cx="440" cy="60" r="7" fill="#ffaa3b" opacity="0.85"/>
+                  <circle cx="440" cy="64" r="7" fill="#ffaa3b" opacity="0.85"/>
+                  <circle cx="460" cy="60" r="7" fill="#ffaa3b" opacity="0.85"/>
+                  <circle cx="500" cy="60" r="7" fill="#ffaa3b" opacity="0.85"/>
+                </g>
+                <text x="440" y="38" font-family="Manrope, sans-serif" font-size="11" fill="#5c6672" text-anchor="middle">3× t3=13</text>
+                <text x="460" y="38" font-family="Manrope, sans-serif" font-size="11" fill="#5c6672" text-anchor="middle"> </text>
+                <text x="500" y="38" font-family="Manrope, sans-serif" font-size="11" fill="#5c6672" text-anchor="middle">t3=15</text>
+
+                <!-- pharma: 8, 11, 9, 11, 8 — strip plot at row y=155 -->
+                <g>
+                  <circle cx="340" cy="151" r="7" fill="#ffaa3b" opacity="0.85"/>
+                  <circle cx="340" cy="159" r="7" fill="#ffaa3b" opacity="0.85"/>
+                  <circle cx="360" cy="155" r="7" fill="#ffaa3b" opacity="0.85"/>
+                  <circle cx="400" cy="151" r="7" fill="#ffaa3b" opacity="0.85"/>
+                  <circle cx="400" cy="159" r="7" fill="#ffaa3b" opacity="0.85"/>
+                </g>
+                <text x="340" y="133" font-family="Manrope, sans-serif" font-size="11" fill="#5c6672" text-anchor="middle">2× t3=8</text>
+                <text x="360" y="133" font-family="Manrope, sans-serif" font-size="11" fill="#5c6672" text-anchor="middle">t3=9</text>
+                <text x="400" y="133" font-family="Manrope, sans-serif" font-size="11" fill="#5c6672" text-anchor="middle">2× t3=11</text>
+              </svg>
+            </div>
+
+            <div class="insight-table-wrap">
+              <table class="insight-table">
+                <thead>
+                  <tr>
+                    <th>Pack</th>
+                    <th class="num">t3 hits per run</th>
+                    <th class="num">σ (t3)</th>
+                    <th class="num">latency range</th>
+                    <th class="num">out tok range</th>
+                    <th>Provider</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td><code>steel_cbam</code></td><td class="num">13, 13, 14, 13, 15</td><td class="num">0.8</td><td class="num">8.4s — 11.3s</td><td class="num">1 605 — 2 218</td><td><code>"Stealth"</code></td></tr>
+                  <tr><td><code>pharma_biologics</code></td><td class="num">8, 11, 9, 11, 8</td><td class="num">1.5</td><td class="num">5.8s — 7.0s</td><td class="num">1 017 — 1 247</td><td><code>"Stealth"</code></td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h3>Two unexpected things</h3>
+
+            <p>
+              <strong>Variance is small.</strong> On the strict-JSON critic
+              variance series in the prior report, Elephant produced two
+              structurally distinct output styles ("snake_case" vs prose)
+              and a 15× latency spread. On open-ended industrial prose at
+              <code>temperature=0.2</code>, the same model produced
+              tier-3-hit variance of σ ≈ 1 marker and a latency range
+              under 3 seconds. The bimodal output style is gone. Either the
+              router resolves more deterministically when the request shape
+              is "free-form prose, no schema, no tools," or temperature
+              dampens visible style-switching enough to hide it under prose.
+            </p>
+
+            <p>
+              <strong>Openings are bit-for-bit identical.</strong> Across
+              the five <code>pharma_biologics</code> replicates, all five
+              responses began with the exact same first sentence:
+              <em>"1. The BIOSECURE Act of 2024 focuses on supply chain
+              resilience for certain a…"</em> — character for character. On
+              <code>steel_cbam</code>, four of five start with
+              <em>"1. Iron ore: top 4 producers and their principal
+              products"</em>; the fifth uses an alternate phrasing. At
+              <code>temperature=0.2</code>, identical openings five times
+              in a row are extremely rare unless one of the following
+              holds: the underlying provider is doing partial response
+              caching, or the routing is sticky per-prompt-hash for a given
+              key, or temperature is being clamped lower upstream than the
+              client requested.
+            </p>
+
+            <div class="insight-callout insight-callout--cool">
+              <p>
+                <strong>The provider field literally returns
+                <code>"Stealth"</code></strong> on every one of the ten
+                variance calls. OpenRouter exposes the upstream provider
+                name through its API; for Elephant, the upstream provider
+                is <em>not named</em>. It is branded. Combined with the
+                multi-backend finding from
+                <a href="./elephant-routing-alias-2026-04.html">our previous report</a>
+                (under strict-JSON, Elephant produced two distinct output
+                styles), the picture is now complete: <code>elephant-alpha</code>
+                is a packaged product that fronts a pool of underlying
+                models, sold under the brand <em>Stealth</em>, at $0 to the
+                caller. You are buying a brand. You do not learn who
+                answered.
+              </p>
+            </div>
+          </section>
+
+          <section class="insight-section">
+            <h2>Why this matters</h2>
+
+            <h3>For anyone building on the OpenRouter free tier</h3>
+            <p>
+              The cliff is not a quirk; it is the design. If you architect
+              a system that assumes "free tier = pool of models I can
+              degrade across," your effective pool past the first 30
+              requests of the day is one model: <code>elephant-alpha</code>.
+              Plan for it explicitly. Either pay, or build the system
+              around <code>elephant-alpha</code> with eyes open about what
+              that means — a routing alias under the brand <em>Stealth</em>,
+              answering in 5–13 seconds, hitting 85 % of obvious
+              industrial entities and 10 % of expert-tier specifics.
+            </p>
+
+            <h3>For Insights as a product</h3>
+            <p>
+              <code>elephant-alpha</code> is a viable backbone for
+              first-pass industrial orientation across many verticals on
+              zero budget. It is not a replacement for forensic-grade
+              reasoning, where the next post will quantify the ceiling
+              with frontier paid flagships on the same twelve packs. But
+              for the question <em>"what does the field look like in this
+              vertical, and what should I read next,"</em> the data above
+              says it works.
+            </p>
+
+            <h3>For LLM benchmarking culture</h3>
+            <p>
+              Public leaderboards record per-call performance: speed,
+              quality, cost. They do not record provider-side rate-limit
+              budgets, daily quota cliffs, sticky routing, or the
+              difference between a named model and a brand-fronted routing
+              alias. Each of those is a load-bearing fact for production
+              systems. None of them shows up on Artificial Analysis or
+              LMSYS leaderboards. We expect this gap to widen as more
+              "free" model offerings appear and as routing aliases become
+              a standard provider product.
+            </p>
+          </section>
+
+          <section class="insight-section">
+            <h2>Methodology</h2>
+
+            <dl class="insight-method">
+              <dt>Packs</dt>
+              <dd>12 packs total. Each is a 3–5 sentence industrial scenario plus 6 escalating questions in plain English — no schema, no function calling, no tools. Every pack is a single <code>prompt.md</code> file paired with its rubric. <a href="./how-to-read.html#artifacts">Available on request</a>.</dd>
+              <dt>Marker rubric</dt>
+              <dd>For each pack, a sibling <code>markers.yaml</code> lists tier-1 / tier-2 / tier-3 knowledge markers, written ahead of the run. The model never sees this file. Scoring is case-insensitive substring match. Conservative on purpose — no LLM-as-judge in v0. (See <a href="./how-to-read.html#terms">the glossary</a> for tier definitions.)</dd>
+              <dt>Models</dt>
+              <dd>Four-pack comparative batch: 15 free-tier OpenRouter models, identical to the strict-JSON bench from the April report, minus models that have churned. Twelve-pack stealth-player batch: <code>openrouter/elephant-alpha</code> only. Variance batch: <code>openrouter/elephant-alpha</code> at n=5 on two packs.</dd>
+              <dt>Sampling</dt>
+              <dd><code>temperature=0.2</code>, <code>max_tokens=4096</code>, <code>timeout=240s</code>, single retry on 429 / 5xx with 4-second backoff.</dd>
+              <dt>Harness</dt>
+              <dd>A single-purpose Python script that takes a list of models and a list of packs, sends the prompts, and writes one JSONL row per response. Captures per call: latency, input / output tokens, finish reason, OpenRouter provider field, raw response text, and tier-1 / 2 / 3 marker hit counts and examples. Available on request.</dd>
+              <dt>Cost &amp; wall time</dt>
+              <dd>Four-pack 15-model run: 29 minutes, $0. Eight-pack Elephant solo: 73 seconds, $0. Variance probe (10 calls): 86 seconds, $0. Total: ≈ 32 minutes, $0.</dd>
+              <dt>Interpreter</dt>
+              <dd>Human-written from the raw run summaries. v1 will move this to a fixed model + fixed prompt with a published SHA per the Insights vision document §7.</dd>
+            </dl>
+
+            <h3>What we did <em>not</em> measure</h3>
+            <ul>
+              <li>Hallucination rate. Marker hits show what was named; they do not check whether the named entities were named correctly. Spot-checks suggest most named entities are real, but a systematic factual-claim audit is future work.</li>
+              <li>Head-to-head with paid frontier models on the same twelve packs. Deferred to the next report; the cliff would not even appear there because paid models have separate billing.</li>
+              <li>Variance on more than two packs. The twelve-vertical depth is n=1 per pack. Variance σ on the two probed packs is ≈ 1 marker; we assume the others sit in the same regime, but have not measured.</li>
+              <li>Role-fit benchmarks. This batch is "knowledge probe" only. Critic / canonicalizer / supervisor role-fit lives in a separate program; see the Insights vision document.</li>
+              <li>Hallucination patterns specific to <code>fertilizer_ag_inputs</code>, where the tier-3 collapse may indicate either knowledge gap or marker calibration issue. We have not yet split the two.</li>
+            </ul>
+          </section>
+
+          <section class="insight-section">
+            <h2>Reproduction</h2>
+
+            <p>
+              The three commands, in shape. The harness
+              (<code>bench_industrial_depth.py</code>), the twelve
+              packs, the rubrics, and the raw JSONL outputs from our
+              runs live in a private research repo. They aren't
+              public — we send them on request. See <em>Artifacts</em>
+              below.
+            </p>
+
+            <p>Four-pack comparative batch (15 free models — expect the cliff at pack 3):</p>
+            <pre class="insight-reproduce"># inside the research repo root:
+python scripts/bench_industrial_depth.py \
+  --all-packs \
+  --jsonl-out-dir results/industrial-depth-free-tier-2026-04 \
+  --max-tokens 4096 --temperature 0.2 --timeout 240 \
+  --retries 1 --backoff 4</pre>
+
+            <p>Twelve-vertical Elephant solo run:</p>
+            <pre class="insight-reproduce">for pack in semiconductor_advanced_node defense_munitions \
+            maritime_chokepoints steel_cbam fertilizer_ag_inputs \
+            subsea_cables space_access grid_transformers; do
+  python scripts/bench_industrial_depth.py \
+    --pack "$pack" \
+    --models openrouter/elephant-alpha \
+    --jsonl-out "results/industrial-depth-free-tier-2026-04/${pack}.jsonl" \
+    --max-tokens 4096 --temperature 0.2 --timeout 240
+done</pre>
+
+            <p>Variance probe (n=5 on two packs):</p>
+            <pre class="insight-reproduce">for pack in steel_cbam pharma_biologics; do
+  python scripts/bench_industrial_depth.py \
+    --pack "$pack" \
+    --models openrouter/elephant-alpha \
+    --runs 5 \
+    --jsonl-out "results/industrial-depth-elephant-variance-2026-04/${pack}_n5.jsonl"
+done</pre>
+
+            <p>
+              Expected behavior: cliff at the third pack of the four-pack
+              run. Twelve-vertical solo run completes in roughly 90
+              seconds. Variance probe shows σ ≈ 1 tier-3 marker per pack
+              and provider field <code>"Stealth"</code> on every call.
+              If your rerun shows a different cliff timing or a
+              different provider field, OpenRouter's quota structure
+              or routing has changed since we published.
+            </p>
+
+            <p>
+              <strong>Want to run this yourself?</strong> Write us at
+              <a href="mailto:hello@horde.vision">hello@horde.vision</a>
+              and we'll send a tarball with packs, rubrics, harness,
+              and the JSONL files — or run the same matrix against
+              your own prompts and model shortlist as a custom
+              engagement. See
+              <a href="./how-to-read.html#artifacts">How to read &rarr; artifacts and reproduction</a>.
+            </p>
+          </section>
+
+          <section class="insight-section">
+            <h2>Artifacts</h2>
+            <p>
+              The report is backed by all twelve packs, their rubrics,
+              and the raw JSONL from every call — including the
+              failed ones. We send them on request to operators who
+              want to rerun or adapt to their own stack.
+            </p>
+            <ul>
+              <li><strong>Twelve pack definitions</strong> — <code>prompt.md</code> + <code>markers.yaml</code> per vertical, written ahead of the runs.</li>
+              <li><strong>Four-pack comparative raw runs</strong> — 60 JSONL rows, one per (model × pack), including the 43 failed cells.</li>
+              <li><strong>Eight-pack Elephant solo run</strong> — one JSONL per extended vertical.</li>
+              <li><strong>Variance probe</strong> — 10 JSONL rows from <code>n=5</code> reruns on two packs.</li>
+              <li><strong>Harness</strong> — the single Python script that produced all of the above.</li>
+              <li>Companion report (provenance): <a href="./elephant-routing-alias-2026-04.html">A stealth model is a routing alias</a></li>
+            </ul>
+            <p>
+              Request the bundle at
+              <a href="mailto:hello@horde.vision">hello@horde.vision</a>,
+              or see
+              <a href="./how-to-read.html#artifacts">how to read &rarr; artifacts and reproduction</a>
+              for what's in it and how custom runs work.
+            </p>
+
+            <a class="insight-back" href="../insights.html" data-i18n="industrialDepthElephant.back">← Back to Insights</a>
+          </section>
+
+          <section class="insight-cta">
+            <div class="insight-cta__copy">
+              <h2 data-i18n="industrialDepthElephant.cta.title">
+                Same harness, your vertical.
+              </h2>
+              <p data-i18n="industrialDepthElephant.cta.text">
+                If your operations sit in any of the verticals above — or in
+                an adjacent one — and you are weighing free-tier or
+                stealth-aliased models for first-pass industrial
+                orientation, we can run this same harness against your
+                prompts on your model pool. Reproducibility is the whole
+                product.
+              </p>
+            </div>
+            <a class="platform-link" href="../index.html#contact" data-i18n="industrialDepthElephant.cta.button">
+              Request a custom run
+            </a>
+          </section>
+        </article>
+      </main>
+
+      <footer class="footer section reveal" id="contact">
+        <div class="footer-brand">
+          <div class="section-label" data-i18n="footer.label">Horde.Vision</div>
+          <p class="footer-title" data-i18n="footer.title">Built for leadership under uncertainty.</p>
+          <p class="footer-note" data-i18n="footer.note">
+            Structured decision intelligence, grounded research, and governed simulation for complex operating environments.
+          </p>
+        </div>
+
+        <div class="footer-columns">
+          <div>
+            <h4 data-i18n="footer.location.title">Location</h4>
+            <p data-i18n="footer.location.line1">Dostyk, 16</p>
+            <p data-i18n="footer.location.line2">Astana, Kazakhstan</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.contact.title">Contact</h4>
+            <p data-i18n="footer.contact.line1">hello@horde.vision</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.availability.title">Availability</h4>
+            <p data-i18n="footer.availability.line1">Meetings by request</p>
+            <p data-i18n="footer.availability.line2">Additional details coming soon</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.legal.title">Legal</h4>
+            <div class="footer-links">
+              <a href="../privacy" data-i18n="footer.legal.privacy">Privacy Notice</a>
+              <a href="../terms" data-i18n="footer.legal.terms">Terms of Usage</a>
+              <a href="../technical-disclosure" data-i18n="footer.legal.technical">Technical Disclosure</a>
+            </div>
+          </div>
+        </div>
+      </footer>
+    </div>
+
+    <script src="../script.js"></script>
+  </body>
+</html>

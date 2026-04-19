@@ -1,0 +1,184 @@
+vertical: banking_basel_2026
+description: |
+  Knowledge depth markers for the European universal bank 2026 capital + supervision probe.
+  Tier 1 = baseline regulator and acronym literacy.
+  Tier 2 = competent capital / supervision / resolution knowledge.
+  Tier 3 = expert / 2024-2026 specifics on rule numbers, dates, quantities, named events.
+
+tier1:
+  - Basel III
+  - Basel
+  - CRR
+  - CRD
+  - ECB
+  - EBA
+  - BoE
+  - PRA
+  - Federal Reserve
+  - FDIC
+  - OCC
+  - SREP
+  - CCAR
+  - DFAST
+  - stress test
+  - MREL
+  - TLAC
+  - BRRD
+  - AT1
+  - Tier 2
+  - capital ratio
+  - CET1
+  - RWA
+  - leverage ratio
+  - LCR
+  - NSFR
+  - AMLA
+  - AML
+  - OFAC
+  - sanctions
+  - FinCEN
+  - climate stress test
+
+tier2:
+  - CRR3
+  - CRD VI
+  - output floor
+  - "72.5%"
+  - "50%"
+  - SA-CR
+  - SA-OR
+  - IRB
+  - FRTB
+  - SA-CCR
+  - operational risk
+  - Business Indicator
+  - Internal Loss Multiplier
+  - ILM
+  - MDA
+  - Maximum Distributable Amount
+  - P2R
+  - P2G
+  - capital conservation buffer
+  - countercyclical buffer
+  - O-SII buffer
+  - G-SIB
+  - O-SII
+  - Pillar 2
+  - Pillar 3
+  - SVB
+  - Silicon Valley Bank
+  - Signature Bank
+  - First Republic
+  - Credit Suisse
+  - AT1 write-down
+  - contingent convertible
+  - CoCo
+  - special assessment
+  - senior non-preferred
+  - resolution
+  - bail-in
+  - AMLR
+  - AMLD6
+  - Beneficial Ownership
+  - Corporate Transparency Act
+  - CTA
+  - 14th sanctions
+  - General License
+  - GL
+  - NZBA
+  - Net-Zero Banking Alliance
+  - CSRD
+  - ESRS
+  - SEC climate
+  - EBA Pillar 3
+  - climate Pillar 2
+
+tier3:
+  - January 2025
+  - "1 January 2025"
+  - "2025-2030"
+  - phase-in 2025
+  - phase-in 2030
+  - "50% to 72.5%"
+  - 50 to 72.5
+  - PRA delay
+  - 2027 PRA
+  - July 2025
+  - January 2027
+  - re-proposed
+  - September 2024 NPR
+  - retracted NPR
+  - Barr proposal
+  - Vice Chair Barr
+  - Vice Chair Bowman
+  - Bowman proposal
+  - "9% RWA uplift"
+  - "16% RWA"
+  - "20% RWA uplift"
+  - "25% RWA"
+  - severely adverse
+  - severely-adverse
+  - 2024 CCAR
+  - 2025 CCAR
+  - 2025 EU-wide
+  - EU-wide stress test 2025
+  - SREP 2026
+  - SREP 2025
+  - countercyclical 1%
+  - "1.5% CET1"
+  - 2.5% CCB
+  - SVB run
+  - "March 2023"
+  - $17 billion
+  - $16 billion
+  - AT1 priority
+  - FINMA write-down
+  - UBS Credit Suisse
+  - special assessment FDIC
+  - $15.8 billion
+  - "€1 billion"
+  - "€30 billion"
+  - "€30B"
+  - "€1B"
+  - bucket 1
+  - bucket 2
+  - bucket 3
+  - ILM 1
+  - ILM equals 1
+  - opt out ILM
+  - AMLA Frankfurt
+  - Frankfurt AMLA
+  - AMLA launch
+  - June 2025
+  - 2026 launch
+  - 5th Circuit
+  - Texas Top Cop
+  - National Small Business United
+  - injunction December
+  - injunction 2024
+  - Garcia Marquez
+  - 14th package
+  - 13th package
+  - Russia oil price cap
+  - $60 cap
+  - LSEG fine
+  - climate stress 2024
+  - ECB climate stress
+  - Omnibus 2025
+  - Omnibus simplification
+  - CSRD scope
+  - ESRS reduction
+  - JPMorgan NZBA
+  - Wells Fargo NZBA
+  - Morgan Stanley NZBA
+  - Bank of America NZBA
+  - Goldman NZBA
+  - SEC stay
+  - SEC vacatur
+  - 8th Circuit climate
+  - SAB 122
+  - SAB 121 rescinded
+  - Daniel Tarullo
+  - Michael Barr
+  - Andrea Enria
+  - Claudia Buch

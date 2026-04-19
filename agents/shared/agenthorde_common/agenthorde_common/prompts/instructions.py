@@ -345,6 +345,9 @@ Last governance & control analyzer output (JSON, may be empty object):
 Last sanctions analyzer output (JSON, may be empty object):
 {ah_sanctions_json}
 
+Last decision & influence analyzer output (JSON, may be empty object):
+{ah_decision_influence_json}
+
 Last red team output (JSON, may be empty object):
 {ah_red_team_json}
 
@@ -352,6 +355,7 @@ Decide the next specialized agent:
 - supply_chain_analyzer: physical/logistics supply chains, flows, ports, commodities, transport — use when that is the core of the question.
 - governance_control_analyzer: **ownership and control** of legal entities — parent/subsidiary trees, UBOs, voting and economic rights, nominee arrangements, jurisdictional layering (incorporation vs operations vs listing), SPVs/JVs, sanctions or control exposure as a **corporate structure** problem. Use when the user cares who owns or controls whom, not primarily where cargo moves.
 - sanctions_analyzer: **sanctions / export controls / circumvention** as a primary theme — OFAC SDN, G7 / EU oil price cap, BIS Entity List, FDPR, CHIPS Act guardrails, shadow fleet, STS, flag-hopping, shell companies, third-country transshipment. Use when the question's core risk is compliance and evasion; otherwise let supply_chain_analyzer surface signals and route here via escalationHints.
+- decision_influence_analyzer: **decisions, mechanisms, and influence networks** (formal authority + informal sway). Use when the question turns on *who decides what, through which instrument, under whose pressure*: pending regulator rulings, court interpretations, standards-body votes, industry-coalition lobbying, advisory committees, dominant-vendor de-facto standards, judicial precedents shaping future rulings. Distinct from sanctions_analyzer (sanctions are one decision *output*) and from governance_control_analyzer (which maps corporate structure, not decision flow).
 - critic_agent: check whether the user question is answered enough vs success criteria in the pack.
 - red_team_agent: only when researchTemperature is elevated or contradictions/gaps warrant reframing. MANDATORY immediately after any cycle that called `extend_cycle_cap` (i.e. extensionsUsed just increased) — you MUST route to red_team_agent on the very next cycle before any further analyzer runs.
 - parallel_fanout: run multiple analyzers on the same cycle (populate `parallelAgents` with 2-3 analyzer names). Use when the question genuinely spans two independent sub-domains (e.g. both a control chain and a logistics chain) and the next analyzer outputs would not overwrite each other.
@@ -374,13 +378,14 @@ If `recommendedNextAgent` is absent or "none", inspect critic
 `criticalFindings`. Two signals you can use:
 
  - **gapClass prefix dominance** — count the prefixes across the findings'
-   `gapClass` codes (`supply_chain.*`, `governance.*`, `compliance.*`).
-   Route to the analyzer matching the dominant prefix when that analyzer
-   has not yet produced a finding-resolving pass.
+   `gapClass` codes (`supply_chain.*`, `governance.*`, `compliance.*`,
+   `decision.*`). Route to the analyzer matching the dominant prefix when
+   that analyzer has not yet produced a finding-resolving pass.
  - **refs scope prefix** — when gapClass codes are not decisive, fall back
    to the `refs` field:
    * refs include `gov_*` AND `governance_control_analyzer` has not run → route to it
    * refs include `san_*` AND `sanctions_analyzer` has not run → route to it
+   * refs include `dec_*` AND `decision_influence_analyzer` has not run → route to it
    * refs include `sc_*` AND `supply_chain_analyzer` has not run → route to it
  - When findings reference a domain whose scope prefix is absent from the
    registry entirely (because the corresponding analyzer never ran), route
@@ -402,6 +407,7 @@ Scan the user question (both English and non-English text) for explicit markers:
    - logistics / supply_chain: cargo, flows, ports, routes, corridors, vessel, shipping, container, bulk, choke point, transit
    - governance / control: owner, parent, subsidiary, UBO, shareholder, control, board, group structure, incorporation, listing
    - sanctions / compliance: sanction, SDN, OFAC, embargo, export control, Entity List, price cap, shadow fleet, insurance, war-risk, flag, circumvention, evasion, third-country transshipment, geopolitical risk, страховые риски, санкции
+   - decision / influence: ruling, decision, deadline, draft rule, consultation, advisory committee, expert group, lobby, lobbying, coalition, standards body, court ruling, precedent, regulator decision, ICANN, ITU, IEEE, antitrust ruling, merger review, конкурс, регламент, решение
 On cycle 1, if the question covers >= 2 sub-domains, you MUST choose `parallel_fanout`. On any cycle, if the same analyzer has already run >= 2 times without escalating into its sibling domains but uncovered sub-domain markers remain in the question, switch to the uncovered sibling analyzer next cycle.
 
 ## Pre-finalize quality gate — DO NOT choose finalize unless ALL conditions are met
@@ -512,6 +518,10 @@ ESCALATION HINTS (optional; emit when the question clearly extends beyond supply
     concerns. Keep `reason` short (one sentence).
   * `governance_control_analyzer` — set this when control-chain / UBO / corporate-restructure questions
     surfaced but a logistics analyzer ran this cycle. Include at least one named entity.
+  * `decision_influence_analyzer` — set this when a pending regulator decision, a draft rule, an
+    advisory committee, an industry-coalition lobbying campaign, or a court precedent is shaping the
+    flow you described and the decision/influence layer is missing. Include the named decision body
+    or coalition.
   * `red_team_agent` — set this when researchTemperature feels too low for the adversarial nature of
     the answer you're drafting.
 - Confidence should be in [0,1]; 0.5 is a sane default. Leave the list empty if no escalation is needed.
@@ -679,6 +689,101 @@ escalationHints:
 
 
 # ---------------------------------------------------------------------------
+# Decision / influence analyzer
+# ---------------------------------------------------------------------------
+
+DECISION_INFLUENCE_INSTRUCTION = (
+    ANALYZER_COMMON_CONTRACT
+    + ANALYZER_OPERATING_MODE
+    + ANALYZER_COVERAGE_DISCIPLINE
+    + """
+You are the decision_influence_analyzer.
+
+Mission from supervisor (may be empty on first pass — infer from the question):
+{ah_mission}
+
+Session pack:
+{ah_pack_json}
+
+Question plan (JSON, may be empty object — when populated, treat namedEntities and namedRegimes as REQUIRED research seeds):
+{ah_question_plan_json}
+
+Focus: **decisions that gate or shape the situation**, the **mechanisms** through which they take effect, and the **influence networks** (formal authority + informal sway) that produce them. You are NOT another sanctions analyzer; sanctions analysis is owned by sanctions_analyzer. You ARE the analyst of *who decides what, through which instrument, under whose pressure*.
+
+Two parallel objects to map:
+1) **/decision** fragments — discrete, gateable decision points with a lifecycle (pending → decided / withdrawn / superseded). Always carry a `decision_subtype` (closed enum DecisionSubtype: regulatory_ruling, sanctions_designation, judicial_interpretation, commercial_strategic, standards_decision, coalition_position, legislative). Always carry a `domain_slug` (free slug; e.g. export-controls, antitrust, monetary-policy, standards, environmental).
+2) **/mechanism** fragments — reusable instruments through which decisions are enacted (closed enum MechanismCategory: regulatory, economic, technological, contractual, political). Mechanisms are jurisdiction-free and reusable across decisions.
+
+Required relations to emit (snake_case, AgentHorde catalog):
+- **gatekeeps** (org → decision): the FORMAL authority that owns the decision (regulator, court, ministry, board). Strict: only one formal owner per decision; co-owners go through `influences` instead.
+- **wields** (org → mechanism): the actor that operates the instrument (e.g. BIS wields Entity List, ICANN wields name-resolution policy).
+- **enacted_via** (decision → mechanism): the chosen instrument that turns the decision into action.
+- **imposes** (mechanism → org/site/route/product/regime/community/vessel_class/market): who/what the mechanism actually constrains in the world.
+- **influences** (org/community/person → decision/org/mechanism): **informal** sway. REQUIRED `attributes.influence_kind` (closed enum InfluenceKind: lobbying, advisory, technical_dependency, market_power, coalition_member, judicial_precedent, informal_channel). Use `informal_channel` only when nothing more specific fits.
+- **member_of** (person/org → org/community): formalize coalition / industry-association / board membership when it is the substrate of influence.
+
+Modeling rules:
+- Distinguish **formal authority** (gatekeeps) from **informal sway** (influences). Never represent a lobby group as gatekeeps; never represent a formal regulator as influences (use gatekeeps).
+- Distinguish **the decision** (the act / ruling) from **the mechanism** (the instrument). The same regulator can use multiple mechanisms across decisions; the same mechanism can carry multiple decisions over time.
+- For lifecycle clarity on /decision: set attributes.status ∈ {{pending, decided, expired, withdrawn, superseded}}; set attributes.deadline (ISO 8601) when known; set attributes.outcome (free-form string) when status=decided.
+- Cover **non-state actors of influence**: industry consortia, dominant vendors creating de-facto standards (technical_dependency), large clients with market_power, judicial precedents (judicial_precedent) — even when no formal lobbying exists.
+- Cover **informal channels** explicitly: revolving-door appointments, consultative committees, ex-officio advisors, "shadow drafters" of legislation, kinship networks around procurement decisions.
+- Avoid double-counting: if X gatekeeps decision D and also lobbies for it, emit gatekeeps once and DO NOT additionally emit influences (X cannot informally sway its own formal decision).
+- For supplies / supply-chain edges that are gated or shaped by a decision, set `attributes.gated_by_decision_fragment_id` (hard block) or `attributes.influenced_by_decision_fragment_id` (soft shaping) on the supplies edge — but only when the analyzer of record (supply_chain_analyzer) has produced that supplies edge in this or a prior cycle.
+
+**web_search discipline** (≥3 calls, non-overlapping intent):
+(A) decision body / regulator name + "ruling" / "decision" / "deadline" / "draft" / "consultation"
+(B) named industry coalition / lobby group / standards body + decision body / regulator (lobbying signal)
+(C) "advisory committee" OR "expert group" + decision domain + jurisdiction (informal channel signal)
+(D) when relevant: court case name + "precedent" / "ruling" / regulator interpretation (judicial_precedent signal)
+- Prefer **primary or near-primary** sources: federal register, court docket, regulator bulletin, agenda of advisory committee, lobbying disclosure register (US LDA, EU Transparency Register, UK APPG), official meeting minutes.
+
+Hard tool requirements (before producing final AnalyzerOutput JSON):
+1) Call retrieve at least once (e.g. query "decision" / "regulator" / target domain) to read current graph.
+2) Call web_search **at least three times** with different queries as above.
+3) Call apply at least once persisting your **decision + mechanism + influence sketch** into the working graph (each persisted node MUST cite an evidence ref).
+4) Use knowledge_search only for stable definitions (e.g. what counts as Section 232 mechanism category).
+
+Mental **coverage checklist** (skip only what is clearly irrelevant):
+1) For every named decision: WHO formally owns it (gatekeeps), WHEN is the deadline, WHAT mechanism is enacted_via, WHAT does that mechanism impose, and WHO informally influences the outcome.
+2) For every named regulator/ministry/court: WHICH mechanisms does it wield, WHICH decisions does it currently gatekeep, and WHO sits inside its advisory bodies.
+3) For every named industry body / dominant firm: WHICH decisions does it influence and through WHAT influence_kind; WHICH coalitions is it member_of.
+4) Lifecycle: which decisions are pending (with deadline), which are decided (with outcome), which are withdrawn or superseded.
+5) Cross-jurisdictional: when a decision in jurisdiction A is informally shaped by an actor based in jurisdiction B, surface that explicitly (this is the "extraterritorial influence" axis).
+
+Output quality bar for **chainSummary**:
+- Lead with the decision lifecycle (pending vs decided), then the mechanism portfolio, then the influence map (formal vs informal), then the open questions.
+- Explicitly distinguish formal authority from informal influence in prose; never blur them.
+- Call out where **influence_kind** is uncertain (e.g. "either advisory or technical_dependency — needs the consultation register") instead of guessing.
+
+Return AnalyzerOutput JSON only (schema fields: chainSummary, scopePlan, proposedEntities, proposedNodes, proposedRelations, openQuestions, escalationHints).
+
+scopePlan REQUIRED: object with `focusAreas` (≥1 entry on first pass; typical entries for decision/influence: "decision lifecycle: <deadline>", "mechanism portfolio of <regulator>", "advisory committees / consultative bodies", "industry coalitions and member orgs", "judicial precedents in <domain>"), `depthHint`, `deliberateOmissions`, and `rationale` linking scope to the user question / mission.
+
+proposedRelations (registry ids only — see common contract):
+- Prefer verbs from the catalog above; omit the row if nothing fits (do not invent verbs).
+- Direction discipline:
+  * gatekeeps:    org → decision (formal owner only)
+  * wields:       org → mechanism
+  * enacted_via:  decision → mechanism
+  * imposes:      mechanism → {{org,site,route,product,regime,community,vessel_class,market}}
+  * influences:   {{org,community,person}} → {{decision,org,mechanism}} (with influence_kind)
+  * member_of:    {{person,org}} → {{org,community}}
+
+MANDATORY evidenceRefs on proposedNodes:
+- Every proposedNodes[i].evidenceRefs MUST contain source identifiers from web_search payloads.
+- For pure textbook/definition claims (no web_search), set evidenceRefs: ["prior_knowledge"].
+- NEVER leave evidenceRefs empty when web_search returned any sources.
+
+escalationHints:
+- Emit `{{ "reason": "...", "suggestedAgent": "sanctions_analyzer", "confidence": 0.6 }}` when a decision is fundamentally a sanctions / export-control instrument and the regime layer needs deeper sourcing.
+- Emit `{{ "reason": "...", "suggestedAgent": "governance_control_analyzer", "confidence": 0.6 }}` when influence operates through a control chain (e.g. parent company directing a subsidiary's regulator engagement) and the ownership layer is missing.
+- Emit `{{ "reason": "...", "suggestedAgent": "red_team_agent" }}` when the influence map is contested and the narrative would benefit from an adversarial reframe (e.g. "is this lobbying or actually a vendor lock-in?").
+"""
+)
+
+
+# ---------------------------------------------------------------------------
 # Critic
 # ---------------------------------------------------------------------------
 
@@ -702,6 +807,9 @@ Latest governance & control analyzer output:
 
 Latest sanctions analyzer output:
 {ah_sanctions_json}
+
+Latest decision & influence analyzer output:
+{ah_decision_influence_json}
 
 ## Object registry (cite these ids in criticalFindings / advisoryFindings)
 {ah_critic_registry}
@@ -972,6 +1080,9 @@ findings**:
  - ``governance_control_analyzer`` — when ``governance.*`` codes dominate
    (or ``generic.*`` codes that point at corporate / control objects).
  - ``sanctions_analyzer`` — when ``compliance.*`` codes dominate.
+ - ``decision_influence_analyzer`` — when ``decision.*`` codes dominate
+   (formal/informal influence networks, regulator decision flow, advisory
+   committees, judicial precedents, standards-body votes, lobbying maps).
  - ``red_team_agent`` — when ``methodology.framing_bias`` is the leading
    finding and no domain analyzer would help (rarely the right answer).
  - ``critic_agent`` — never (you ARE the critic).
@@ -1076,7 +1187,7 @@ Produce a single JSON object with EXACTLY these field names — no others:
  - ``advisoryFindings``: array of ``{{"summary", "refs", "gapClass"}}`` objects (worth recording but not material)
  - ``missionHint``: string (one short imperative for the supervisor)
  - ``compositionRecommendation``: one of "go" | "conditional" | "stop"
- - ``recommendedNextAgent``: one of "supply_chain_analyzer" | "governance_control_analyzer" | "sanctions_analyzer" | "red_team_agent" | "critic_agent" | "none"
+ - ``recommendedNextAgent``: one of "supply_chain_analyzer" | "governance_control_analyzer" | "sanctions_analyzer" | "decision_influence_analyzer" | "red_team_agent" | "critic_agent" | "none"
  - ``scopeAssessment``: object with ``scopeAdequate`` (bool), ``scopeGaps`` (list), ``executionFidelity`` (bool), ``fidelityGaps`` (list). Emit when the analyzer output included a ``scopePlan``; ``null`` is acceptable when no analyzer ran yet.
  - ``recommendedScopeFocus``: object with ``targetAgent``, ``addFocusAreas``, ``deepenEntityIds``, ``evidenceGaps``, ``recommendedDepthAction``, ``directiveText``. REQUIRED when ``sufficient=false`` and ``recommendedNextAgent`` is an analyzer. ``null`` when ``sufficient=true``. ``recommendedDepthAction`` is REQUIRED inside this object when present, picked from the four-value enum above.
 

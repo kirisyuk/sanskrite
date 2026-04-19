@@ -6,9 +6,14 @@ import re
 
 from agenthorde_common.canonicalizer.schemas import CanonicalEdge, CanonicalFragment, ValidationIssue, ValidationReport
 from agenthorde_common.canonicalizer.taxonomy import (
+    ASSURANCE_TYPES,
     COMMUNITY_SUBTYPES,
+    DISRUPTION_KINDS,
     FRAGMENT_CLASSES,
     INCOTERMS_2020,
+    INFLUENCE_KINDS,
+    MECHANISM_CATEGORIES,
+    MOBILE_ASSET_KINDS,
     RELATION_ALLOWED_LAYERS,
     is_forbidden_endpoint_pair,
     path_fragment_class,
@@ -81,6 +86,56 @@ def validate_canonical_path(path: str) -> list[ValidationIssue]:
                     code="path_community_bad_subtype",
                     message=f"Unknown community subtype: {segs[2]}",
                     detail={"path": path, "subtype": segs[2]},
+                )
+            )
+    if cls == "decision":
+        # /decision/{domain-slug}/{slug}: 3 segments. domain-slug is a free
+        # slug (no closed catalog yet) but it must obey slug regex below.
+        if len(segs) < 3:
+            issues.append(
+                ValidationIssue(
+                    code="path_decision_shallow",
+                    message="/decision/{domain-slug}/{slug} requires 3 segments",
+                    detail={"path": path},
+                )
+            )
+    if cls == "mechanism":
+        # /mechanism/{category}/{slug}: 3 segments; category must be in
+        # MECHANISM_CATEGORIES (closed enum).
+        if len(segs) < 3:
+            issues.append(
+                ValidationIssue(
+                    code="path_mechanism_shallow",
+                    message="/mechanism/{category}/{slug} requires 3 segments",
+                    detail={"path": path},
+                )
+            )
+        elif segs[1] not in MECHANISM_CATEGORIES:
+            issues.append(
+                ValidationIssue(
+                    code="path_mechanism_bad_category",
+                    message=f"Unknown mechanism category: {segs[1]}",
+                    detail={"path": path, "category": segs[1]},
+                )
+            )
+    if cls == "mobile_asset":
+        # /mobile_asset/{kind}/{geo}/{slug}-{id8}: 4 segments; kind must be in
+        # MOBILE_ASSET_KINDS (closed enum). The trailing -{id8} is folded into
+        # the slug segment so segment count stays at 4.
+        if len(segs) < 4:
+            issues.append(
+                ValidationIssue(
+                    code="path_mobile_asset_shallow",
+                    message="/mobile_asset/{kind}/{geo}/{slug}-{id8} requires 4 segments",
+                    detail={"path": path},
+                )
+            )
+        elif segs[1] not in MOBILE_ASSET_KINDS:
+            issues.append(
+                ValidationIssue(
+                    code="path_mobile_asset_bad_kind",
+                    message=f"Unknown mobile_asset kind: {segs[1]}",
+                    detail={"path": path, "kind": segs[1]},
                 )
             )
     slug_re = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
@@ -207,6 +262,51 @@ def validate_graph(
                     report.dictionary_warnings.append(
                         f"bad_incoterm: edgeId={e.id} relation={e.relation} incoterm={inc!r}"
                     )
+
+        if e.relation == "influences":
+            kind = (e.attributes or {}).get("influence_kind")
+            if not isinstance(kind, str) or not kind.strip():
+                report.relation_errors.append(
+                    ValidationIssue(
+                        code="influences_missing_kind",
+                        message="influences edge must carry attributes.influence_kind (closed enum InfluenceKind)",
+                        detail={"edgeId": e.id},
+                    )
+                )
+            elif kind not in INFLUENCE_KINDS:
+                report.dictionary_warnings.append(
+                    f"unknown_influence_kind: edgeId={e.id} influence_kind={kind!r}"
+                )
+
+        if e.relation == "assures":
+            atype = (e.attributes or {}).get("assurance_type")
+            if not isinstance(atype, str) or not atype.strip():
+                report.relation_errors.append(
+                    ValidationIssue(
+                        code="assures_missing_type",
+                        message="assures edge must carry attributes.assurance_type (closed enum AssuranceType)",
+                        detail={"edgeId": e.id},
+                    )
+                )
+            elif atype not in ASSURANCE_TYPES:
+                report.dictionary_warnings.append(
+                    f"unknown_assurance_type: edgeId={e.id} assurance_type={atype!r}"
+                )
+
+        if e.relation == "disrupts":
+            dkind = (e.attributes or {}).get("disruption_kind")
+            if not isinstance(dkind, str) or not dkind.strip():
+                report.relation_errors.append(
+                    ValidationIssue(
+                        code="disrupts_missing_kind",
+                        message="disrupts edge must carry attributes.disruption_kind (closed enum DisruptionKind)",
+                        detail={"edgeId": e.id},
+                    )
+                )
+            elif dkind not in DISRUPTION_KINDS:
+                report.dictionary_warnings.append(
+                    f"unknown_disruption_kind: edgeId={e.id} disruption_kind={dkind!r}"
+                )
 
     product_paths_lower = {f.canonical_path.lower() for f in fragments if f.fragment_class == "product"}
     for f in fragments:

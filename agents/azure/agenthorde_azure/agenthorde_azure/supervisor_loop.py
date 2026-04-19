@@ -9,7 +9,12 @@ from typing import Any, MutableMapping
 _LOG = logging.getLogger("agenthorde_azure.supervisor_loop")
 
 _PARALLEL_OK = frozenset(
-    {"supply_chain_analyzer", "governance_control_analyzer", "sanctions_analyzer"}
+    {
+        "supply_chain_analyzer",
+        "governance_control_analyzer",
+        "sanctions_analyzer",
+        "decision_influence_analyzer",
+    }
 )
 
 from agenthorde_common.orchestration.supervisor_core import (
@@ -31,6 +36,7 @@ from agenthorde_common.orchestration.supervisor_core import (
 from agenthorde_common.runtime.state_keys import (
     STATE_ANALYZER_OUTPUT_KEY,
     STATE_CRITIC_OUTPUT_KEY,
+    STATE_DECISION_INFLUENCE_OUTPUT_KEY,
     STATE_FINAL_ANSWER_KEY,
     STATE_GOVERNANCE_OUTPUT_KEY,
     STATE_PACK_KEY,
@@ -104,7 +110,12 @@ async def run_supervisor_session_azure(
 
         last_critic = _safe_critic(state.get(STATE_CRITIC_OUTPUT_KEY))
         last_hints: list[EscalationHint] = []
-        for key in (STATE_ANALYZER_OUTPUT_KEY, STATE_GOVERNANCE_OUTPUT_KEY, STATE_SANCTIONS_OUTPUT_KEY):
+        for key in (
+            STATE_ANALYZER_OUTPUT_KEY,
+            STATE_GOVERNANCE_OUTPUT_KEY,
+            STATE_SANCTIONS_OUTPUT_KEY,
+            STATE_DECISION_INFLUENCE_OUTPUT_KEY,
+        ):
             hints = _escalation_hints_from_raw(state.get(key))
             if hints:
                 last_hints.extend(hints)
@@ -176,12 +187,15 @@ async def run_supervisor_session_azure(
                 out_key = {
                     "governance_control_analyzer": STATE_GOVERNANCE_OUTPUT_KEY,
                     "sanctions_analyzer": STATE_SANCTIONS_OUTPUT_KEY,
+                    "decision_influence_analyzer": STATE_DECISION_INFLUENCE_OUTPUT_KEY,
                 }.get(retry_agent, STATE_ANALYZER_OUTPUT_KEY)
                 origin = (
                     "governance"
                     if retry_agent == "governance_control_analyzer"
                     else "sanctions"
                     if retry_agent == "sanctions_analyzer"
+                    else "decision_influence"
+                    if retry_agent == "decision_influence_analyzer"
                     else "analyzer"
                 )
                 _merge_analyzer_into_pack(pack, state.get(out_key), origin)
@@ -196,6 +210,7 @@ async def run_supervisor_session_azure(
             "supply_chain_analyzer": (STATE_ANALYZER_OUTPUT_KEY, "analyzer"),
             "governance_control_analyzer": (STATE_GOVERNANCE_OUTPUT_KEY, "governance"),
             "sanctions_analyzer": (STATE_SANCTIONS_OUTPUT_KEY, "sanctions"),
+            "decision_influence_analyzer": (STATE_DECISION_INFLUENCE_OUTPUT_KEY, "decision_influence"),
         }
         if dec.next_agent in worker_map:
             out_key, origin = worker_map[dec.next_agent]
@@ -233,6 +248,8 @@ async def run_supervisor_session_azure(
                     _merge_analyzer_into_pack(pack, state.get(STATE_GOVERNANCE_OUTPUT_KEY), "governance")
                 elif n == "sanctions_analyzer":
                     _merge_analyzer_into_pack(pack, state.get(STATE_SANCTIONS_OUTPUT_KEY), "sanctions")
+                elif n == "decision_influence_analyzer":
+                    _merge_analyzer_into_pack(pack, state.get(STATE_DECISION_INFLUENCE_OUTPUT_KEY), "decision_influence")
                 _dump_pack(state, pack)
         elif dec.next_agent == "critic_agent":
             t0 = time.perf_counter()
@@ -296,6 +313,7 @@ async def run_supervisor_session_azure(
         "analyzerOutput": state.get(STATE_ANALYZER_OUTPUT_KEY, {}),
         "governanceOutput": state.get(STATE_GOVERNANCE_OUTPUT_KEY, {}),
         "sanctionsOutput": state.get(STATE_SANCTIONS_OUTPUT_KEY, {}),
+        "decisionInfluenceOutput": state.get(STATE_DECISION_INFLUENCE_OUTPUT_KEY, {}),
         "criticOutput": state.get(STATE_CRITIC_OUTPUT_KEY, {}),
         "redTeamOutput": state.get(STATE_RED_TEAM_OUTPUT_KEY, {}),
         "toolLedger": state.get(STATE_TOOL_LEDGER_KEY, []),

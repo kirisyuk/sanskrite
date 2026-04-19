@@ -1,0 +1,125 @@
+vertical: battery_critical_minerals
+description: |
+  Knowledge depth markers for the battery / critical minerals probe.
+  Tier 1 = generally expected of any large LLM with industrial coverage.
+  Tier 2 = competent supply-chain knowledge, reaches second-tier suppliers.
+  Tier 3 = expert / recent-event awareness, reaches third-tier or 2024-2026 specifics.
+  Markers are matched as case-insensitive substrings unless `regex: true`.
+
+tier1:
+  - Albemarle
+  - SQM
+  - Ganfeng
+  - Tianqi
+  - Pilbara
+  - Atacama
+  - Greenbushes
+  - IRA
+  - FEOC
+  - Glencore
+  - Bayan Obo
+  - NdPr
+  - Lynas
+  - MP Materials
+  - lithium hydroxide
+  - lithium carbonate
+  - NMC
+  - LFP
+  - cobalt
+  - DRC
+  - Indonesia
+  - HPAL
+
+tier2:
+  - Sociedad Quimica
+  - Mt Holland
+  - Kwinana
+  - Allkem
+  - Arcadium
+  - Liontown
+  - Wodgina
+  - Salar de Atacama
+  - Salar del Hombre Muerto
+  - Sulawesi
+  - Halmahera
+  - Morowali
+  - Weda Bay
+  - Tsingshan
+  - GEM Co
+  - CMOC
+  - Tenke Fungurume
+  - Kolwezi
+  - Kamoto
+  - Kisanfu
+  - PMSM
+  - permanent magnet
+  - neodymium-iron-boron
+  - NdFeB
+  - dysprosium
+  - terbium
+  - Iluka
+  - Solvay
+  - Mountain Pass
+  - rare earth oxide
+  - REO
+  - calcined petroleum
+  - synthetic graphite
+  - natural graphite
+
+tier3:
+  - Pilbara Minerals Pilgangoora
+  - Greenbushes Talison
+  - Mt Marion
+  - Wodgina Mineral Resources
+  - Hancock Liontown
+  - Kwinana lithium hydroxide refinery
+  - Bald Hill
+  - Manono
+  - Sigma Lithium Grota do Cirilo
+  - Quebec lithium
+  - Nemaska
+  - Sayona
+  - Whabouchi
+  - PT Halmahera Persada Lygend
+  - HPL
+  - Sorowako
+  - PT Vale Indonesia
+  - Sumitomo Pomalaa
+  - QMB New Energy Materials
+  - Huayou Cobalt
+  - Eramet
+  - Centenario Ratones
+  - Section 30D
+  - Section 45X
+  - Section 13401
+  - 30 percent FEOC
+  - 25 percent FEOC
+  - "August 2023"
+  - "December 2023"
+  - "January 2024"
+  - export licensing
+  - export control
+  - dual-use
+  - Iluka Eneabba
+  - Vacuumschmelze
+  - Neo Performance Materials
+  - Less Common Metals
+  - Stage 2
+  - Stage 3
+  - Mountain Pass Stage
+  - heavy rare earths
+  - NdPr oxide
+  - praseodymium oxide
+  - Critical Raw Materials Act
+  - CRMA
+  - strategic project
+  - Section 4
+  - DOE 2023 critical materials
+  - DOE Critical Materials List
+  - silicon metal
+  - aluminum
+  - bauxite
+  - coking coal
+  - phosphate rock
+  - copper
+  - helium

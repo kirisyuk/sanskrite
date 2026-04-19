@@ -1,0 +1,779 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FMCG, banking, pharma: same six models, three different leaders, one comes last on pharma | Horde.Vision Insights</title>
+    <meta
+      id="meta-description"
+      name="description"
+      content="Six models on three industries you actually live in: FMCG, European banking under Basel III endgame, and US commercial pharma 2026. Three different leaders. Opus is first on FMCG and last on pharma. The free elephant takes third place on pharma, beating GPT-5.4 and Opus. Single-flagship model procurement does not work across business-relevant verticals."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Sora:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="../styles.css" />
+  </head>
+  <body data-page="insights-three-verticals-2026-04">
+    <div class="site-shell">
+      <header class="subpage-hero subpage-hero--insight" id="top">
+        <nav class="topbar" aria-label="Primary" data-i18n-aria-label="nav.aria.primary">
+          <a class="brand" href="../index.html">Horde.Vision</a>
+          <div class="topbar-controls">
+            <div
+              class="language-switcher"
+              aria-label="Language selector"
+              data-i18n-aria-label="nav.aria.languageSelector"
+            >
+              <button class="language-button is-active" type="button" data-lang="en" aria-label="Switch to English" data-i18n-aria-label="nav.aria.switchEnglish">EN</button>
+              <button class="language-button" type="button" data-lang="ru" aria-label="Переключить на русский" data-i18n-aria-label="nav.aria.switchRussian">RU</button>
+              <button class="language-button" type="button" data-lang="kz" aria-label="Қазақ тіліне ауыстыру" data-i18n-aria-label="nav.aria.switchKazakh">KZ</button>
+            </div>
+            <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" data-i18n="nav.menu">Menu</button>
+            <div class="nav-links" id="site-nav">
+              <a href="../index.html#about" data-i18n="nav.about">About</a>
+              <a href="../index.html#services" data-i18n="nav.services">Services</a>
+              <a href="../index.html#platform" data-i18n="nav.platform">Platforms</a>
+              <a href="../insights.html" class="is-active" data-i18n="nav.insights">Insights</a>
+              <a href="../index.html#contact" data-i18n="nav.contact">Contact</a>
+            </div>
+          </div>
+        </nav>
+
+        <div class="subpage-hero__inner">
+          <div class="subpage-hero__copy">
+            <p class="eyebrow" data-i18n="threeVerticals.eyebrow">
+              Field Report · Three Verticals You Actually Live In · 2026-04-19
+            </p>
+            <h1 data-i18n="threeVerticals.title">
+              Three industries, same six models, three different leaders. Opus comes first on FMCG and last on pharma.
+            </h1>
+            <p class="hero-text" data-i18n="threeVerticals.lead">
+              FMCG procurement under EU PPWR. A European universal bank
+              preparing for Basel III endgame. A top-15 pharma planning
+              2027 commercial under Medicare price negotiation. Same six
+              models, same harness, same 8 192-token budget. The leader
+              changes on every vertical. <code>claude-opus-4.7</code>
+              wins FMCG and finishes <em>last</em> on pharma. The free
+              <code>openrouter/elephant-alpha</code> takes
+              <strong>third place</strong> on pharma at $0, beating
+              GPT-5.4 and Opus. This is what "no best LLM, best model
+              for the role in the vertical" looks like in three
+              recognizable industries.
+            </p>
+            <div class="insight-meta-bar">
+              <span class="insight-meta-bar__chip"><span>Verticals</span><strong>3</strong></span>
+              <span class="insight-meta-bar__chip"><span>Models</span><strong>6</strong></span>
+              <span class="insight-meta-bar__chip"><span>Calls</span><strong>18</strong></span>
+              <span class="insight-meta-bar__chip"><span>Wall time</span><strong>30 min</strong></span>
+              <span class="insight-meta-bar__chip"><span>Total cost</span><strong>$1.58</strong></span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <article class="insight-article">
+          <section class="insight-section">
+            <div class="insight-preamble">
+              <div class="insight-preamble__grid">
+                <div class="insight-preamble__column">
+                  <span class="insight-preamble__label" data-i18n="preamble.label.about">What this report is</span>
+                  <p data-i18n="threeVerticals.preamble.about">
+                    Report <strong>#4</strong> of our Horde.Vision
+                    Insights series. Same six models as the previous
+                    report — Claude Opus 4.7, GPT-5.4, Gemini 3.1
+                    Pro, GLM-5.1, Kimi K2.5, and the free stealth
+                    slot <code>elephant-alpha</code> — across three
+                    industries the reader actually lives in: FMCG
+                    procurement under EU PPWR, a European bank under
+                    Basel III endgame, and a top-15 pharma planning
+                    its 2027 commercial strategy under the IRA. Core
+                    finding: three different leaders across three
+                    verticals. Opus leads FMCG and comes
+                    <em>last</em> on pharma. The free slot takes
+                    third on pharma at $0. No model owns the field.
+                  </p>
+                </div>
+                <div class="insight-preamble__column">
+                  <span class="insight-preamble__label" data-i18n="preamble.label.read">How to read this</span>
+                  <ul class="insight-preamble__speeds">
+                    <li><strong data-i18n="preamble.speed.fast">2 min</strong><span data-i18n="threeVerticals.preamble.speed.fast">hero + TL;DR</span></li>
+                    <li><strong data-i18n="preamble.speed.mid">10 min</strong><span data-i18n="threeVerticals.preamble.speed.mid">+ rank inversion table, coverage ceiling, cost-per-marker spread</span></li>
+                    <li><strong data-i18n="preamble.speed.full">30 min</strong><span data-i18n="threeVerticals.preamble.speed.full">+ methodology, reproduction, bundle on request</span></li>
+                  </ul>
+                </div>
+              </div>
+              <p class="insight-preamble__footer" data-i18n="preamble.footer">
+                New reader? Start with
+                <a href="./how-to-read.html">How to read these reports</a>
+                — 3-minute primer, glossary of terms used across the
+                series (tier-1/2/3, pack, marker, rubric, stealth,
+                frontier), and the order the reports were written in.
+              </p>
+            </div>
+
+            <div class="insight-tldr">
+              <span class="insight-tldr__label">TL;DR</span>
+              <ul>
+                <li><strong>Three different leaders across three verticals.</strong> <code>claude-opus-4.7</code> leads FMCG (t3=20). <code>openai/gpt-5.4</code> leads banking (t3=18). <code>moonshotai/kimi-k2.5</code> leads pharma (t3=43). No model wins twice.</li>
+                <li><strong>Opus is first on FMCG and last on pharma.</strong> Same model, same prompt format, $0.42 per call. The most expensive model in the pool finishes #1 on one vertical and #6 on another.</li>
+                <li><strong>The free elephant takes third place on pharma at $0.</strong> <code>openrouter/elephant-alpha</code> finishes pharma at t3=40, ahead of <code>gpt-5.4</code> (38) and <code>claude-opus-4.7</code> (32). It does this in 18 seconds while Opus takes 60 seconds and costs $0.41. Pharma is the vertical where free is competitive.</li>
+                <li><strong>Banking is where elephant collapses</strong> — t3=8 vs leader's 18, a 56% gap. Basel mechanics, AMLA architecture, and recent supervisor names are not in elephant's depth band.</li>
+                <li><strong>Cost-per-tier-3 marker on pharma: 53× spread.</strong> <code>z-ai/glm-5.1</code> at $0.00024 / marker; <code>claude-opus-4.7</code> at $0.01284 / marker. The most expensive model is the most expensive way to buy industrial depth, not the deepest.</li>
+                <li><strong>Pharma is the highest-coverage vertical for everyone.</strong> The union of all 5 paid frontiers reaches 48% of the pharma rubric vs 32% on banking and 39% on FMCG. When a topic has been hot in news, all models know it. When it is technical and specialist (Basel SA-OR, AMLA), depth drops sharply for everyone.</li>
+                <li><strong>$1.58 total spend, $1.24 of it on Opus alone (78%).</strong> Same pattern as the previous report. Cost asymmetry is structural.</li>
+              </ul>
+            </div>
+          </section>
+
+          <section class="insight-section">
+            <h2>Setup — three industries you actually recognize</h2>
+
+            <p>
+              Two earlier reports in this series ran the same harness on
+              <code>steel_cbam</code> and
+              <code>fertilizer_ag_inputs</code> — heavy industrial
+              verticals that are decision-relevant for a small slice of
+              the operator population. This report deliberately picks
+              three verticals where most senior business operators see
+              themselves: <strong>FMCG procurement</strong>,
+              <strong>European banking under Basel III endgame</strong>,
+              and <strong>commercial pharma 2026</strong>.
+            </p>
+
+            <p>
+              Each pack is a 3-paragraph scenario plus six escalating
+              questions in plain prose. Models receive the scenario, no
+              schema, no function calling, no rubric, and 8 192 output
+              tokens. <code>temperature=0.2</code>,
+              <code>timeout=600s</code>, single shot per (model × pack).
+              The same harness, the same OpenRouter routing, the same
+              budget that we used in
+              <a href="./frontier-vs-elephant-2026-04.html">the previous
+              report</a>.
+            </p>
+
+            <ul>
+              <li><code>fmcg_consumer_goods</code> — €18B FMCG company preparing 2027 procurement, packaging, channel; EU PPWR 2030/2040 targets, North American retailer concentration (Walmart, Costco, Kroger, Target, Albertsons), tariff exposure under Trump 2025-2026, soft commodities (cocoa rally, coffee, palm oil EUDR), retail media networks (Walmart Connect, Amazon DSP, Roundel, 84.51°). 87 tier-3 markers in the rubric.</li>
+              <li><code>banking_basel_2026</code> — €750B European universal bank facing Basel III endgame implementation, SREP 2026 cycle, MREL/TLAC under BRRD3, the new SA-OR for operational risk, AMLA Frankfurt launch, climate Pillar 2. 88 tier-3 markers in the rubric.</li>
+              <li><code>pharma_commercial_2026</code> — Top-15 pharma company facing IRA Medicare price negotiation (CY 2026/2027/2028 selected drug schedules), GLP-1 supply, biosimilar wave (Stelara launches 2025, Humira post-2023, Eylea 2024-2025), retail pharmacy collapse (Walgreens take-private, Rite Aid Chapter 22), 340B reform (rebate-replace litigation), BIOSECURE Act and China API decoupling. 102 tier-3 markers — the deepest pack in the rubric.</li>
+            </ul>
+
+            <div class="insight-callout">
+              <p>
+                <strong>Why three verticals, not one.</strong> A single
+                vertical produces one ranking. Three verticals produce
+                three rankings — and that is the point. The interesting
+                signal is not "model X is better." It is "leadership
+                inverts by vertical." That signal is invisible from any
+                single benchmark.
+              </p>
+            </div>
+          </section>
+
+          <section class="insight-section">
+            <h2>Finding 1 — Three verticals, three different leaders. Opus comes first on FMCG and last on pharma.</h2>
+
+            <p>
+              Three of the six models (<code>opus-4.7</code>,
+              <code>kimi-k2.5</code>, <code>elephant-alpha</code>) move
+              from a top-3 finish on one vertical to a last-place
+              finish on another. The same model, the same prompt
+              format, the same routing, the same budget. The vertical
+              decides:
+            </p>
+
+            <div class="insight-chart">
+              <p class="insight-chart__title">Tier-3 marker hits per model on each vertical</p>
+              <p class="insight-chart__caption">Same prompt format, same max output budget. Higher = deeper recall against a tier-3 rubric written ahead of the run. Pack rubrics differ in size (87 / 88 / 102 markers), so absolute counts are comparable within a pack only.</p>
+              <svg viewBox="0 0 800 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Three-panel bar chart of tier-3 marker hits per model on FMCG, Banking, and Pharma packs">
+                <!-- model labels in left margin -->
+                <g font-family="Manrope, sans-serif" font-size="11" fill="#5c6672" text-anchor="end">
+                  <text x="170" y="68"><tspan font-weight="600">anthropic/claude-opus-4.7</tspan></text>
+                  <text x="170" y="124"><tspan font-weight="600">openai/gpt-5.4</tspan></text>
+                  <text x="170" y="180"><tspan font-weight="600">z-ai/glm-5.1</tspan></text>
+                  <text x="170" y="236"><tspan font-weight="600">google/gemini-3.1-pro</tspan></text>
+                  <text x="170" y="292"><tspan font-weight="600">openrouter/elephant-alpha</tspan></text>
+                  <text x="170" y="348"><tspan font-weight="600">moonshotai/kimi-k2.5</tspan></text>
+                </g>
+
+                <!-- 3 series, color per pack: orange=FMCG, teal=banking, purple=pharma. Scale 12px per marker, max ~43 = 516px -->
+                <!-- Y rows: opus=60, gpt=116, glm=172, gemini=228, elephant=284, kimi=340; each row holds 3 stacked thin bars -->
+
+                <!-- vertical reference grid -->
+                <g stroke="rgba(15,19,25,0.08)" stroke-width="1">
+                  <line x1="190" y1="40" x2="190" y2="380"/>
+                  <line x1="310" y1="40" x2="310" y2="380"/>
+                  <line x1="430" y1="40" x2="430" y2="380"/>
+                  <line x1="550" y1="40" x2="550" y2="380"/>
+                  <line x1="670" y1="40" x2="670" y2="380"/>
+                </g>
+                <g font-family="Manrope, sans-serif" font-size="10" fill="#5c6672" text-anchor="middle">
+                  <text x="190" y="395">0</text>
+                  <text x="310" y="395">10</text>
+                  <text x="430" y="395">20</text>
+                  <text x="550" y="395">30</text>
+                  <text x="670" y="395">40</text>
+                </g>
+
+                <!-- bar function: x_end = 190 + value*12. height of each thin bar = 11. row top = base - 18 then +14 then +14 -->
+                <!-- Opus row top=49: FMCG 20=240px, Banking 15=180px, Pharma 32=384px -->
+                <g>
+                  <rect x="190" y="49" width="240" height="11" fill="rgba(255,170,59,0.62)" stroke="rgba(138,87,19,0.55)" stroke-width="0.8"/><text x="436" y="58" font-family="Manrope, sans-serif" font-size="10" fill="#8a5713">20</text>
+                  <rect x="190" y="62" width="180" height="11" fill="rgba(70,170,170,0.62)" stroke="rgba(31,91,91,0.55)" stroke-width="0.8"/><text x="376" y="71" font-family="Manrope, sans-serif" font-size="10" fill="#1f5b5b">15</text>
+                  <rect x="190" y="75" width="384" height="11" fill="rgba(170,140,255,0.62)" stroke="rgba(90,56,149,0.55)" stroke-width="0.8"/><text x="580" y="84" font-family="Manrope, sans-serif" font-size="10" fill="#5a3895">32 ← LAST on pharma</text>
+                </g>
+                <!-- GPT-5.4 row top=105: FMCG 19=228, Banking 18=216, Pharma 38=456 -->
+                <g>
+                  <rect x="190" y="105" width="228" height="11" fill="rgba(255,170,59,0.62)" stroke="rgba(138,87,19,0.55)" stroke-width="0.8"/><text x="424" y="114" font-family="Manrope, sans-serif" font-size="10" fill="#8a5713">19</text>
+                  <rect x="190" y="118" width="216" height="11" fill="rgba(70,170,170,0.62)" stroke="rgba(31,91,91,0.55)" stroke-width="0.8"/><text x="412" y="127" font-family="Manrope, sans-serif" font-size="10" fill="#1f5b5b">18 ← #1 banking</text>
+                  <rect x="190" y="131" width="456" height="11" fill="rgba(170,140,255,0.62)" stroke="rgba(90,56,149,0.55)" stroke-width="0.8"/><text x="652" y="140" font-family="Manrope, sans-serif" font-size="10" fill="#5a3895">38</text>
+                </g>
+                <!-- GLM row top=161: FMCG 19=228, Banking 12=144, Pharma 41=492 -->
+                <g>
+                  <rect x="190" y="161" width="228" height="11" fill="rgba(255,170,59,0.62)" stroke="rgba(138,87,19,0.55)" stroke-width="0.8"/><text x="424" y="170" font-family="Manrope, sans-serif" font-size="10" fill="#8a5713">19</text>
+                  <rect x="190" y="174" width="144" height="11" fill="rgba(70,170,170,0.62)" stroke="rgba(31,91,91,0.55)" stroke-width="0.8"/><text x="340" y="183" font-family="Manrope, sans-serif" font-size="10" fill="#1f5b5b">12</text>
+                  <rect x="190" y="187" width="492" height="11" fill="rgba(170,140,255,0.62)" stroke="rgba(90,56,149,0.55)" stroke-width="0.8"/><text x="688" y="196" font-family="Manrope, sans-serif" font-size="10" fill="#5a3895">41</text>
+                </g>
+                <!-- Gemini row top=217: FMCG 18=216, Banking 11=132, Pharma 40=480 -->
+                <g>
+                  <rect x="190" y="217" width="216" height="11" fill="rgba(255,170,59,0.62)" stroke="rgba(138,87,19,0.55)" stroke-width="0.8"/><text x="412" y="226" font-family="Manrope, sans-serif" font-size="10" fill="#8a5713">18</text>
+                  <rect x="190" y="230" width="132" height="11" fill="rgba(70,170,170,0.62)" stroke="rgba(31,91,91,0.55)" stroke-width="0.8"/><text x="328" y="239" font-family="Manrope, sans-serif" font-size="10" fill="#1f5b5b">11</text>
+                  <rect x="190" y="243" width="480" height="11" fill="rgba(170,140,255,0.62)" stroke="rgba(90,56,149,0.55)" stroke-width="0.8"/><text x="676" y="252" font-family="Manrope, sans-serif" font-size="10" fill="#5a3895">40</text>
+                </g>
+                <!-- Elephant row top=273: FMCG 17=204, Banking 8=96, Pharma 40=480 -->
+                <g>
+                  <rect x="190" y="273" width="204" height="11" fill="rgba(126,201,142,0.62)" stroke="rgba(42,106,59,0.55)" stroke-width="0.8"/><text x="400" y="282" font-family="Manrope, sans-serif" font-size="10" fill="#2a6a3b">17 (free)</text>
+                  <rect x="190" y="286" width="96" height="11" fill="rgba(126,201,142,0.62)" stroke="rgba(42,106,59,0.55)" stroke-width="0.8"/><text x="292" y="295" font-family="Manrope, sans-serif" font-size="10" fill="#2a6a3b">8 (free)</text>
+                  <rect x="190" y="299" width="480" height="11" fill="rgba(126,201,142,0.62)" stroke="rgba(42,106,59,0.55)" stroke-width="0.8"/><text x="676" y="308" font-family="Manrope, sans-serif" font-size="10" fill="#2a6a3b">40 (free) ← #3 pharma</text>
+                </g>
+                <!-- Kimi row top=329: FMCG 15=180, Banking 13=156, Pharma 43=516 -->
+                <g>
+                  <rect x="190" y="329" width="180" height="11" fill="rgba(255,170,59,0.62)" stroke="rgba(138,87,19,0.55)" stroke-width="0.8"/><text x="376" y="338" font-family="Manrope, sans-serif" font-size="10" fill="#8a5713">15 ← LAST on FMCG</text>
+                  <rect x="190" y="342" width="156" height="11" fill="rgba(70,170,170,0.62)" stroke="rgba(31,91,91,0.55)" stroke-width="0.8"/><text x="352" y="351" font-family="Manrope, sans-serif" font-size="10" fill="#1f5b5b">13</text>
+                  <rect x="190" y="355" width="516" height="11" fill="rgba(170,140,255,0.62)" stroke="rgba(90,56,149,0.55)" stroke-width="0.8"/><text x="712" y="364" font-family="Manrope, sans-serif" font-size="10" fill="#5a3895">43 ← #1 pharma</text>
+                </g>
+
+                <!-- legend -->
+                <g font-family="Manrope, sans-serif" font-size="11" fill="#5c6672">
+                  <rect x="190" y="425" width="14" height="11" fill="rgba(255,170,59,0.62)" stroke="rgba(138,87,19,0.55)"/><text x="210" y="435">FMCG</text>
+                  <rect x="270" y="425" width="14" height="11" fill="rgba(70,170,170,0.62)" stroke="rgba(31,91,91,0.55)"/><text x="290" y="435">Banking</text>
+                  <rect x="370" y="425" width="14" height="11" fill="rgba(170,140,255,0.62)" stroke="rgba(90,56,149,0.55)"/><text x="390" y="435">Pharma</text>
+                  <rect x="470" y="425" width="14" height="11" fill="rgba(126,201,142,0.62)" stroke="rgba(42,106,59,0.55)"/><text x="490" y="435">Elephant ($0) overlay</text>
+                </g>
+              </svg>
+            </div>
+
+            <h3>Reading the chart</h3>
+
+            <div class="insight-table-wrap">
+              <table class="insight-table">
+                <thead>
+                  <tr>
+                    <th>Model</th>
+                    <th class="num">FMCG rank</th>
+                    <th class="num">Banking rank</th>
+                    <th class="num">Pharma rank</th>
+                    <th>Spread</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td><code>anthropic/claude-opus-4.7</code></td><td class="num"><strong>1</strong></td><td class="num">2</td><td class="num"><strong>6 (last)</strong></td><td>1 → 6</td></tr>
+                  <tr><td><code>openai/gpt-5.4</code></td><td class="num">2</td><td class="num"><strong>1</strong></td><td class="num">5</td><td>1 → 5</td></tr>
+                  <tr><td><code>z-ai/glm-5.1</code></td><td class="num">2</td><td class="num">4</td><td class="num">2</td><td>2 → 4</td></tr>
+                  <tr><td><code>google/gemini-3.1-pro</code></td><td class="num">4</td><td class="num">5</td><td class="num">3</td><td>3 → 5</td></tr>
+                  <tr><td><code>openrouter/elephant-alpha</code></td><td class="num">5</td><td class="num"><strong>6 (last)</strong></td><td class="num"><strong>3</strong></td><td>3 → 6</td></tr>
+                  <tr><td><code>moonshotai/kimi-k2.5</code></td><td class="num"><strong>6 (last)</strong></td><td class="num">3</td><td class="num"><strong>1</strong></td><td>1 → 6</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <p>
+              Three of the six models swing from first place on one
+              vertical to last (or near-last) on another. There is no
+              "best frontier model" here. There is "best frontier model
+              <em>for this vertical</em>", and the answer changes by
+              industry.
+            </p>
+
+            <div class="insight-callout insight-callout--cool">
+              <p>
+                The procurement implication is the entire point of this
+                report. If you stand up an internal AI program by buying
+                a single flagship model "because it is the best one",
+                you have made the assumption that one model dominates
+                across the verticals you operate in. The data above
+                says you are statistically wrong on that assumption — at
+                a 50% rate across just three verticals.
+              </p>
+            </div>
+          </section>
+
+          <section class="insight-section">
+            <h2>Finding 2 — Pharma is the surprise. The free elephant takes third place. Opus is last.</h2>
+
+            <p>
+              The pharma pack is the most decision-relevant of the
+              three for a US healthcare commercial team in 2026: IRA
+              Medicare price negotiation timing, the GLP-1 supply
+              dynamic, the Stelara biosimilar launches in 2025, the
+              Walgreens take-private and Rite Aid second bankruptcy,
+              340B rebate-replace litigation, BIOSECURE Act
+              transition. It is also the vertical where the cost-quality
+              ranking inverts most sharply.
+            </p>
+
+            <div class="insight-table-wrap">
+              <table class="insight-table">
+                <thead>
+                  <tr>
+                    <th class="num">Rank</th>
+                    <th>Model</th>
+                    <th class="num">tier-3 / 102</th>
+                    <th class="num">latency</th>
+                    <th class="num">USD</th>
+                    <th class="num">USD / tier-3</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td class="num"><strong>1</strong></td><td><code>moonshotai/kimi-k2.5</code></td><td class="num">43</td><td class="num">141.7s</td><td class="num">0.0132</td><td class="num">$0.00031</td></tr>
+                  <tr><td class="num">2</td><td><code>z-ai/glm-5.1</code></td><td class="num">41</td><td class="num">82.8s</td><td class="num">0.0098</td><td class="num"><strong>$0.00024</strong></td></tr>
+                  <tr><td class="num"><strong>3</strong></td><td><code>openrouter/elephant-alpha</code></td><td class="num">40</td><td class="num"><strong>17.7s</strong></td><td class="num"><strong>$0</strong></td><td class="num">$0</td></tr>
+                  <tr><td class="num">3</td><td><code>google/gemini-3.1-pro-preview</code></td><td class="num">40</td><td class="num">52.6s</td><td class="num">0.0343</td><td class="num">$0.00086</td></tr>
+                  <tr><td class="num">5</td><td><code>openai/gpt-5.4</code></td><td class="num">38</td><td class="num">115.1s</td><td class="num">0.0546</td><td class="num">$0.00144</td></tr>
+                  <tr><td class="num"><strong>6</strong></td><td><code>anthropic/claude-opus-4.7</code></td><td class="num">32</td><td class="num">59.8s</td><td class="num"><strong>0.4110</strong></td><td class="num"><strong>$0.01284</strong></td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <p>
+              <code>opus-4.7</code> finishes <strong>last</strong> on
+              pharma at $0.41 per call.
+              <code>elephant-alpha</code> finishes <strong>tied for third</strong>
+              at $0 per call, in 18 seconds. <code>glm-5.1</code> bought
+              its tier-3 markers at <strong>$0.00024 each</strong>;
+              <code>opus-4.7</code> bought them at $0.01284 each — a
+              <strong>53× spread</strong> between the cheapest and most
+              expensive paid model on the same prompt.
+            </p>
+
+            <h3>What does Opus actually look like on the pharma prompt?</h3>
+
+            <p>
+              Opus is not bad on pharma. It is precise where it speaks.
+              The opening of the response cites
+              <em>"CMS published MFPs on Aug 15, 2024. Discounts vs. 2023
+              list price ranged 38% (Imbruvica) to 79% (Januvia), with a
+              weighted average of roughly 22% off the 2023 net Part D
+              price"</em> — both endpoints and the weighted average are
+              correct. It also self-corrects the prompt itself:
+              <em>"Note: the user's prompt states 15/20/20 for
+              2027/2028/2029 — the statute is 15/15/20. Worth correcting
+              in the CEO memo."</em> No other model in the batch flagged
+              the prompt's factual error rather than silently propagate
+              it.
+            </p>
+
+            <p>
+              The reason Opus finishes last is not lower precision. It
+              is shorter coverage. The Opus pharma response is 5 163
+              tokens vs <code>kimi-k2.5</code>'s 7 456 — and Kimi spent
+              those tokens hitting more rubric items: Wezlana, Selarsdi,
+              Pyzchiva, Yesintek, Steqeyma, Imuldosa, Otulfi (every
+              single ustekinumab biosimilar brand name); Yesafili,
+              Opuviz, Pavblu (every single aflibercept biosimilar
+              launched 2024-2025); the $100 billion obesity TAM by 2030
+              (a unique catch). Opus traded breadth for editorial
+              control.
+            </p>
+
+            <h3>What does Elephant actually look like on the pharma prompt?</h3>
+
+            <p>
+              Elephant gives the full Selected Drug list (Eliquis,
+              Jardiance, Xarelto, Januvia, Farxiga, Entresto, Enbrel,
+              Imbruvica, Stelara) with the correct IPAD date of January
+              1, 2026, the CY 2026 / 2027 / 2028 schedule, and the
+              outline of the small-biotech and pill-penalty debate.
+              Where it falls short: it estimates the average MFP
+              discount as <em>"approximately a 40-50% reduction"</em> —
+              the actual published number is 22% on a weighted
+              net-price basis. So elephant is wide and approximately
+              right; Opus is narrow and precisely right; Kimi is wide
+              and precisely right and finishes #1 at 1/30th the cost
+              of Opus.
+            </p>
+
+            <div class="insight-callout">
+              <p>
+                Pharma is the vertical with the most public news
+                density of the last 18 months — IRA, GLP-1, Stelara
+                wave, Walgreens, BIOSECURE. Every model's training
+                corpus has been saturated with these stories. That is
+                why the union-of-five-frontiers coverage on pharma
+                reaches 48% of the rubric (vs 32% on banking) and why
+                a free model can crack the top three. <strong>When the
+                vertical is hot in news, free is competitive. When
+                the vertical is technical-specialist (Basel, AMLA),
+                paid still wins.</strong>
+              </p>
+            </div>
+          </section>
+
+          <section class="insight-section">
+            <h2>Finding 3 — Coverage ceiling rises with news density. Even pooled, no model owns a vertical.</h2>
+
+            <p>
+              We computed the union of tier-3 markers caught by the five
+              paid frontier responses on each pack, against the size of
+              the rubric:
+            </p>
+
+            <div class="insight-chart">
+              <p class="insight-chart__title">Coverage ceiling — union of 5 paid frontiers, with elephant's solo coverage overlaid</p>
+              <p class="insight-chart__caption">Green bar = elephant alone. Stacked teal extension = additional tier-3 markers caught by at least one paid frontier model that elephant missed. Grey background = total rubric.</p>
+              <svg viewBox="0 0 800 280" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Coverage ceiling stacked chart by pack">
+                <g font-family="Manrope, sans-serif" font-size="12" fill="#5c6672" text-anchor="end">
+                  <text x="200" y="68"><tspan font-weight="600">FMCG</tspan></text>
+                  <text x="200" y="84" font-size="10" opacity="0.7">87 tier-3 markers</text>
+                  <text x="200" y="148"><tspan font-weight="600">Banking</tspan></text>
+                  <text x="200" y="164" font-size="10" opacity="0.7">88 tier-3 markers</text>
+                  <text x="200" y="228"><tspan font-weight="600">Pharma 2026</tspan></text>
+                  <text x="200" y="244" font-size="10" opacity="0.7">102 tier-3 markers</text>
+                </g>
+
+                <!-- background bars (grey, max width = 540px representing full rubric size, scaled per row by rubric/102) -->
+                <!-- Use absolute scale: 5px per marker -->
+                <!-- FMCG: rubric 87 = 435px ; elephant 17 = 85px ; union 34 = 170px -->
+                <g>
+                  <rect x="220" y="50" width="435" height="40" fill="rgba(15,19,25,0.06)" stroke="rgba(15,19,25,0.12)"/>
+                  <rect x="220" y="50" width="85" height="40" fill="rgba(126,201,142,0.55)" stroke="rgba(42,106,59,0.55)"/>
+                  <rect x="305" y="50" width="85" height="40" fill="rgba(70,170,170,0.45)" stroke="rgba(31,91,91,0.55)"/>
+                  <text x="262" y="74" font-family="Manrope, sans-serif" font-size="11" fill="#2a6a3b" text-anchor="middle" font-weight="600">elephant 17</text>
+                  <text x="347" y="74" font-family="Manrope, sans-serif" font-size="11" fill="#1f5b5b" text-anchor="middle" font-weight="600">+17 paid</text>
+                  <text x="660" y="74" font-family="Manrope, sans-serif" font-size="11" fill="#5c6672" text-anchor="end">39% union · 53 markers no model touched</text>
+                </g>
+                <!-- Banking: rubric 88 = 440px ; elephant 8 = 40px ; union 28 = 140px -->
+                <g>
+                  <rect x="220" y="130" width="440" height="40" fill="rgba(15,19,25,0.06)" stroke="rgba(15,19,25,0.12)"/>
+                  <rect x="220" y="130" width="40" height="40" fill="rgba(126,201,142,0.55)" stroke="rgba(42,106,59,0.55)"/>
+                  <rect x="260" y="130" width="100" height="40" fill="rgba(70,170,170,0.45)" stroke="rgba(31,91,91,0.55)"/>
+                  <text x="240" y="154" font-family="Manrope, sans-serif" font-size="11" fill="#2a6a3b" text-anchor="middle" font-weight="600">8</text>
+                  <text x="310" y="154" font-family="Manrope, sans-serif" font-size="11" fill="#1f5b5b" text-anchor="middle" font-weight="600">+20 paid</text>
+                  <text x="660" y="154" font-family="Manrope, sans-serif" font-size="11" fill="#5c6672" text-anchor="end">32% union · 60 markers no model touched</text>
+                </g>
+                <!-- Pharma: rubric 102 = 510px ; elephant 40 = 200px ; union 49 = 245px -->
+                <g>
+                  <rect x="220" y="210" width="510" height="40" fill="rgba(15,19,25,0.06)" stroke="rgba(15,19,25,0.12)"/>
+                  <rect x="220" y="210" width="200" height="40" fill="rgba(126,201,142,0.55)" stroke="rgba(42,106,59,0.55)"/>
+                  <rect x="420" y="210" width="45" height="40" fill="rgba(70,170,170,0.45)" stroke="rgba(31,91,91,0.55)"/>
+                  <text x="320" y="234" font-family="Manrope, sans-serif" font-size="11" fill="#2a6a3b" text-anchor="middle" font-weight="600">elephant 40 (free!)</text>
+                  <text x="442" y="234" font-family="Manrope, sans-serif" font-size="11" fill="#1f5b5b" text-anchor="middle" font-weight="600">+9</text>
+                  <text x="730" y="234" font-family="Manrope, sans-serif" font-size="11" fill="#5c6672" text-anchor="end">48% union · 53 markers no model touched</text>
+                </g>
+              </svg>
+            </div>
+
+            <p>
+              Three observations:
+            </p>
+
+            <ol>
+              <li><strong>Coverage ceiling rises with news density.</strong> Banking 32% → FMCG 39% → Pharma 48%. The more a vertical has been in headline news 2024-2026, the deeper every model goes. This is not a feature of the verticals as bodies of knowledge; it is a feature of training-data composition.</li>
+              <li><strong>Elephant's solo coverage tracks news density even harder.</strong> Banking 9% → FMCG 20% → Pharma <strong>39%</strong>. On pharma, free elephant alone reaches the same depth slice that the union of five paid frontiers does on banking. Same model, different vertical, 4× difference in absolute coverage.</li>
+              <li><strong>Even pooled, no vertical is "owned".</strong> The most-saturated vertical (pharma) leaves 53 of 102 tier-3 markers untouched by any model in the pool. The least-saturated (banking) leaves 60 of 88. <strong>Single-flagship procurement</strong> for industrial reasoning <strong>misses 50-70% of the rubric.</strong> Multi-model pooling reduces the gap; it does not close it.</li>
+            </ol>
+          </section>
+
+          <section class="insight-section">
+            <h2>Finding 4 — The cost asymmetry is structural, not coincidental.</h2>
+
+            <p>
+              For the third batch in a row, <code>anthropic/claude-opus-4.7</code>
+              consumed roughly 80% of the spend (78% here, 83% on the
+              previous report). It led one of three packs, finished
+              second on one, and last on one. The cost ledger:
+            </p>
+
+            <div class="insight-table-wrap">
+              <table class="insight-table">
+                <thead>
+                  <tr><th>Model</th><th class="num">batch USD</th><th class="num">share</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td><code>anthropic/claude-opus-4.7</code></td><td class="num">$1.237</td><td class="num"><strong>78%</strong></td></tr>
+                  <tr><td><code>openai/gpt-5.4</code></td><td class="num">$0.173</td><td class="num">11%</td></tr>
+                  <tr><td><code>google/gemini-3.1-pro-preview</code></td><td class="num">$0.095</td><td class="num">6%</td></tr>
+                  <tr><td><code>moonshotai/kimi-k2.5</code></td><td class="num">$0.042</td><td class="num">3%</td></tr>
+                  <tr><td><code>z-ai/glm-5.1</code></td><td class="num">$0.037</td><td class="num">2%</td></tr>
+                  <tr><td><code>openrouter/elephant-alpha</code></td><td class="num">$0</td><td class="num">0%</td></tr>
+                  <tr><td><strong>Total</strong></td><td class="num"><strong>$1.583</strong></td><td class="num">100%</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <p>
+              Per-pack cost is remarkably stable across three completely
+              different verticals at $0.515-0.546. The model mix is
+              what drives total. <strong>If you removed Opus from the
+              pool entirely, the same three packs would cost $0.35
+              total instead of $1.58 — a 78% saving — and you would
+              lose only one first-place finish</strong> (Opus on FMCG,
+              by 1 marker over GPT-5.4 and GLM-5.1). The pareto
+              question is not "should I pay for the most expensive
+              model"; it is "can I tolerate one lost #1 finish to save
+              78%?"
+            </p>
+          </section>
+
+          <section class="insight-section">
+            <h2>Where each model uniquely contributed</h2>
+
+            <p>
+              We computed, per pack, which tier-3 markers were caught
+              by exactly one model and missed by all five others.
+              These "uniques" are what each model brought to the
+              union — the markers you would lose if you dropped that
+              model from the pool.
+            </p>
+
+            <div class="insight-table-wrap">
+              <table class="insight-table">
+                <thead>
+                  <tr><th>Model</th><th>FMCG uniques</th><th>Banking uniques</th><th>Pharma uniques</th></tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><code>anthropic/claude-opus-4.7</code></td>
+                    <td><code>liberation day</code>, <code>reciprocal tariff</code>, <code>article 7</code>, <code>reuse target</code></td>
+                    <td><code>csrd scope</code>, <code>vice chair barr</code></td>
+                    <td><code>walgreens take-private</code></td>
+                  </tr>
+                  <tr>
+                    <td><code>openai/gpt-5.4</code></td>
+                    <td><code>dollar general</code></td>
+                    <td><code>14th sanctions package</code>, <code>50% to 72.5%</code>, <code>pra delay</code></td>
+                    <td><code>obesity market</code></td>
+                  </tr>
+                  <tr>
+                    <td><code>z-ai/glm-5.1</code></td>
+                    <td>—</td>
+                    <td><code>srep 2026</code>, <code>texas top cop</code></td>
+                    <td>—</td>
+                  </tr>
+                  <tr>
+                    <td><code>google/gemini-3.1-pro-preview</code></td>
+                    <td><code>2030 recyclability</code></td>
+                    <td><code>2024 ccar</code>, <code>michael barr</code></td>
+                    <td>—</td>
+                  </tr>
+                  <tr>
+                    <td><code>moonshotai/kimi-k2.5</code></td>
+                    <td><code>$54 billion</code> retail media</td>
+                    <td><code>june 2025 amla</code></td>
+                    <td><code>$100 billion</code> obesity TAM</td>
+                  </tr>
+                  <tr>
+                    <td><code>openrouter/elephant-alpha</code></td>
+                    <td>—</td>
+                    <td>—</td>
+                    <td>—</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <p>
+              Two notes on this:
+            </p>
+
+            <ol>
+              <li><strong>Elephant has zero uniques across all three packs.</strong> Everything elephant catches is also caught by at least one paid frontier model. Elephant complements the floor; it does not extend the ceiling. This is the empirical version of "free is a credible first pass on hot verticals; it is not the marginal contributor to deep coverage".</li>
+              <li><strong>Each paid model has a different uniqueness profile.</strong> Opus owns the regulatory-event corner (Liberation Day, Vice Chair Barr); GPT-5.4 owns the precise-quantity corner (50% to 72.5%, the EU 14th sanctions package); Kimi owns the dollar-figure corner ($54B retail media, $100B obesity TAM); Gemini owns the named-supervisor corner (Michael Barr, 2024 CCAR). <strong>This is why a multi-model pool extends coverage: the models do not duplicate each other on the uniques.</strong></li>
+            </ol>
+          </section>
+
+          <section class="insight-section">
+            <h2>Notable behaviors</h2>
+
+            <ul>
+              <li><strong>Opus self-corrected the prompt</strong> on pharma: <em>"Note: the user's prompt states 15/20/20 for 2027/2028/2029 — the statute is 15/15/20. Worth correcting in the CEO memo."</em> No other model in the batch flagged the deliberate factual error in the prompt; they all silently propagated 15/20/20. For audit-trail use, this single behavior is worth a non-trivial premium.</li>
+              <li><strong>Elephant left an honest empty slot</strong> on banking: <em>"Commission Implementing Regulation (EU) 2023/xxxx laid out the technical standards"</em>. It declined to invent a regulation number and used a literal placeholder. Frontier models on the same prompt either invented a number or omitted the reference. For procurement-team consumption, "I do not know the number" is a better answer than confident fabrication.</li>
+              <li><strong>GPT-5.4 leads banking</strong> with deep SA-OR mechanics by name (<em>"Interest, Lease and Dividend Component (ILDC)"</em>) and the 2023 SVB → US LTD requirement causal chain.</li>
+              <li><strong>Kimi K2.5 leads pharma</strong> with comprehensive biosimilar brand coverage (Wezlana, Selarsdi, Pyzchiva, Yesintek, Steqeyma, Imuldosa, Otulfi for ustekinumab; Yesafili, Opuviz, Pavblu for aflibercept) and quantified Medicare savings ($6B first year).</li>
+              <li><strong>GLM-5.1 wrote in executive-memo register</strong> on every pack (<em>"Memorandum to the Executive Committee. Subject: Regulatory Strategy Brief"</em>), a noticeable stylistic preference.</li>
+              <li><strong>Elephant is fastest on every pack</strong>: 9.3s, 9.9s, 17.7s vs frontier 53-464s. The latency advantage is structural, not noise.</li>
+            </ul>
+          </section>
+
+          <section class="insight-section">
+            <h2>Methodology</h2>
+
+            <dl class="insight-method">
+              <dt>Packs</dt>
+              <dd>Three new packs written for this report: <code>fmcg_consumer_goods</code> (global FMCG company preparing 2027 strategy under EU PPWR, North American retailer concentration, soft-commodity volatility, and retail media), <code>banking_basel_2026</code> (€750B European universal bank under Basel III endgame, SREP 2026, MREL/TLAC, AMLA, and climate Pillar 2), <code>pharma_commercial_2026</code> (top-15 pharma planning 2027 commercial under IRA Medicare price negotiation, GLP-1 supply, the biosimilar wave, retail pharmacy collapse, 340B reform, and China API decoupling). Each is a 3-paragraph scenario plus 6 escalating questions in plain prose, no schema. <a href="./how-to-read.html#artifacts">Available on request</a>.</dd>
+              <dt>Models</dt>
+              <dd>Same six as the prior report: <code>openrouter/elephant-alpha</code> (free, provider <code>Stealth</code>), <code>anthropic/claude-opus-4.7</code>, <code>openai/gpt-5.4</code>, <code>google/gemini-3.1-pro-preview</code>, <code>z-ai/glm-5.1</code>, <code>moonshotai/kimi-k2.5</code>.</dd>
+              <dt>Sampling</dt>
+              <dd><code>temperature=0.2</code>, <code>max_tokens=8 192</code>, <code>timeout=600 s</code>, single attempt per cell, single retry on 429 / 5xx with 8s backoff. No system prompt. Single user message containing the verbatim pack text.</dd>
+              <dt>Scoring rubric</dt>
+              <dd>Sibling <code>markers.yaml</code> per pack with tier-1 / tier-2 / tier-3 lists written ahead of the run. Conservative case-insensitive substring match. The model never sees the rubric. Total tier-3 markers per pack: FMCG 87, Banking 88, Pharma 102. Total tier-1: 29 / 32 / 32.</dd>
+              <dt>Coverage ceiling</dt>
+              <dd>Computed as the union of tier-3 markers caught by the 5 paid frontier responses on each pack, expressed as a fraction of total tier-3 markers in the rubric. Elephant's solo coverage is computed independently.</dd>
+              <dt>Cost calculation</dt>
+              <dd>OpenRouter list pricing as of 2026-04-19: Opus $15 / $75 per Mtok, GPT-5.4 $1.25 / $10, Gemini 3.1 Pro $1.25 / $5, GLM-5.1 $0.6 / $2.2, Kimi K2.5 $0.38 / $1.72, elephant-alpha $0 / $0.</dd>
+              <dt>Total spend</dt>
+              <dd>$1.583 across 18 OK calls (3 packs × 6 models, no failures).</dd>
+              <dt>Wall time</dt>
+              <dd>30 minutes total. Slowest single call: <code>kimi-k2.5 · fmcg_consumer_goods</code> at 464s. Fastest: <code>elephant-alpha · fmcg_consumer_goods</code> at 9.3s.</dd>
+              <dt>Prompt error baked in (intentional?)</dt>
+              <dd>The pharma prompt asks about a 15/20/20 schedule for CY 2027/2028/2029. The statutory schedule is 15/15/20. Only Opus flagged this as an error in its response. Treat as informal robustness probe.</dd>
+            </dl>
+
+            <h3>What we did <em>not</em> measure</h3>
+            <ul>
+              <li><strong>Hallucination rate.</strong> Marker hits show what was named. Spot-checks support the named entities being mostly real, but a systematic factual-claim audit is a separate report.</li>
+              <li><strong>Variance.</strong> Single shot per cell. Variance σ on similar packs in earlier work is ~1 tier-3 marker for elephant; we assume frontier models sit in a similar regime.</li>
+              <li><strong>Reasoning-effort knobs.</strong> Default reasoning settings per provider.</li>
+              <li><strong>Multi-turn or tool-use.</strong> Single-shot prose only.</li>
+            </ul>
+          </section>
+
+          <section class="insight-section">
+            <h2>Reproduction</h2>
+
+            <p>
+              The command we ran, in shape. The harness
+              (<code>bench_industrial_depth.py</code>), the three
+              pack directories, their rubrics, and the raw JSONL
+              outputs referenced in every chart and table above live
+              in a private research repo. They aren't public — we
+              send them on request. See <em>Artifacts</em> below.
+            </p>
+
+            <p>Full batch (18 calls, ~$1.58, ~30 min wall time):</p>
+            <pre class="insight-reproduce"># inside the research repo root:
+MODELS=(openrouter/elephant-alpha anthropic/claude-opus-4.7 \
+        openai/gpt-5.4 google/gemini-3.1-pro-preview \
+        z-ai/glm-5.1 moonshotai/kimi-k2.5)
+for pack in fmcg_consumer_goods banking_basel_2026 pharma_commercial_2026; do
+  python scripts/bench_industrial_depth.py \
+    --pack "$pack" \
+    --models "${MODELS[@]}" \
+    --max-tokens 8192 --temperature 0.2 --timeout 600 \
+    --jsonl-out "results/${pack}_frontier6_8k.jsonl"
+done</pre>
+
+            <p>
+              Expected behavior: total spend ≈ $1.58, wall time ≈ 30
+              minutes (Kimi dominates the tail again), no failed
+              cells, three different leaders across the three packs.
+              The full cost-ledger and coverage-ceiling calculation
+              ships in the reproduction bundle.
+            </p>
+
+            <p>
+              <strong>Want to run this yourself?</strong> Write us at
+              <a href="mailto:hello@horde.vision">hello@horde.vision</a>
+              and we'll send a tarball with all three packs, their
+              rubrics, the harness, the JSONL from our runs, and the
+              full cost / coverage scripts — or run the same matrix
+              against your own prompts and model shortlist as a
+              custom engagement. See
+              <a href="./how-to-read.html#artifacts">How to read &rarr; artifacts and reproduction</a>.
+            </p>
+          </section>
+
+          <section class="insight-section">
+            <h2>Artifacts</h2>
+            <p>
+              The report is backed by three packs, their rubrics, the
+              raw JSONL from every call, and a cost / coverage script.
+              They aren't public — we send them on request to
+              operators who want to rerun the same matrix on their own
+              stack or adapt it to their own verticals.
+            </p>
+            <ul>
+              <li><strong>Three pack definitions</strong> — <code>prompt.md</code> + <code>markers.yaml</code> for FMCG, banking, pharma, written ahead of the run.</li>
+              <li><strong>Raw JSONL</strong> — 18 rows total, one per (model × pack), no failures in this batch.</li>
+              <li><strong>Summary</strong> — per-model tier-1 / tier-2 / tier-3 counts, latency, tokens, cost, rank per pack, coverage ceiling, and per-model unique tier-3 hits.</li>
+              <li><strong>Harness</strong> — the single Python script that produced all of the above.</li>
+              <li>Companion reports: <a href="./frontier-vs-elephant-2026-04.html">$1.20 vs $0 — paid frontier vs free elephant on industrial depth</a>, <a href="./industrial-depth-elephant-2026-04.html">Industrial depth on a free tier</a>, <a href="./elephant-routing-alias-2026-04.html">A stealth model is a routing alias</a>.</li>
+            </ul>
+            <p>
+              Request the bundle at
+              <a href="mailto:hello@horde.vision">hello@horde.vision</a>,
+              or see
+              <a href="./how-to-read.html#artifacts">how to read &rarr; artifacts and reproduction</a>
+              for what's in it and how custom runs work.
+            </p>
+
+            <a class="insight-back" href="../insights.html" data-i18n="threeVerticals.back">← Back to Insights</a>
+          </section>
+
+          <section class="insight-cta">
+            <div class="insight-cta__copy">
+              <h2 data-i18n="threeVerticals.cta.title">
+                Your vertical, your model pool, your prompts.
+              </h2>
+              <p data-i18n="threeVerticals.cta.text">
+                If you are standing up an internal AI program and
+                deciding which model to put against your real
+                operating reality — across the verticals you actually
+                live in — we can run this same matrix on your prompts
+                and your shortlist. The 78% Opus cost share, the
+                pharma rank inversion, the 53× cost-per-marker spread:
+                each of those is a starting point. Your vertical will
+                produce its own.
+              </p>
+            </div>
+            <a class="platform-link" href="../index.html#contact" data-i18n="threeVerticals.cta.button">
+              Request a custom run
+            </a>
+          </section>
+        </article>
+      </main>
+
+      <footer class="footer section reveal" id="contact">
+        <div class="footer-brand">
+          <div class="section-label" data-i18n="footer.label">Horde.Vision</div>
+          <p class="footer-title" data-i18n="footer.title">Built for leadership under uncertainty.</p>
+          <p class="footer-note" data-i18n="footer.note">
+            Structured decision intelligence, grounded research, and governed simulation for complex operating environments.
+          </p>
+        </div>
+
+        <div class="footer-columns">
+          <div>
+            <h4 data-i18n="footer.location.title">Location</h4>
+            <p data-i18n="footer.location.line1">Dostyk, 16</p>
+            <p data-i18n="footer.location.line2">Astana, Kazakhstan</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.contact.title">Contact</h4>
+            <p data-i18n="footer.contact.line1">hello@horde.vision</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.availability.title">Availability</h4>
+            <p data-i18n="footer.availability.line1">Meetings by request</p>
+            <p data-i18n="footer.availability.line2">Additional details coming soon</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.legal.title">Legal</h4>
+            <div class="footer-links">
+              <a href="../privacy" data-i18n="footer.legal.privacy">Privacy Notice</a>
+              <a href="../terms" data-i18n="footer.legal.terms">Terms of Usage</a>
+              <a href="../technical-disclosure" data-i18n="footer.legal.technical">Technical Disclosure</a>
+            </div>
+          </div>
+        </div>
+      </footer>
+    </div>
+
+    <script src="../script.js"></script>
+  </body>
+</html>

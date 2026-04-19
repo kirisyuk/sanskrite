@@ -1,0 +1,209 @@
+vertical: aerospace_titanium
+description: |
+  Knowledge depth markers for the aerospace materials probe.
+  Tier 1 = generally expected of any large LLM with aerospace coverage.
+  Tier 2 = competent supply-chain knowledge.
+  Tier 3 = expert / 2023-2026 fleet-grounding and JV-specific awareness.
+
+tier1:
+  - Boeing
+  - Airbus
+  - COMAC
+  - C919
+  - 777X
+  - A321XLR
+  - "787"
+  - A350
+  - CFM
+  - LEAP
+  - Pratt
+  - Whitney
+  - GTF
+  - Rolls-Royce
+  - Trent
+  - GE9X
+  - VSMPO
+  - VSMPO-Avisma
+  - titanium sponge
+  - PCC
+  - Precision Castparts
+  - Howmet
+  - Doncasters
+  - ATI
+  - powder metal
+  - Honeywell
+  - Liebherr
+
+tier2:
+  - Toho Titanium
+  - Osaka Titanium
+  - OSAKA Titanium Technologies
+  - TIMET
+  - TIMET Henderson
+  - Allegheny Technologies
+  - Perryman
+  - Arconic
+  - Rio Tinto sponge
+  - Kazakhstan UKTMP
+  - Ust-Kamenogorsk
+  - Toho Wakayama
+  - Dynamet
+  - "Kroll process"
+  - sponge to ingot
+  - VAR
+  - vacuum arc remelt
+  - Henderson Nevada
+  - Henderson, Nevada
+  - high-pressure turbine
+  - HPT
+  - low-pressure turbine
+  - LPT
+  - blade casting
+  - single crystal
+  - directionally solidified
+  - DS blade
+  - SX blade
+  - powder metallurgy disc
+  - PM disc
+  - turbine disc
+  - Inconel 718
+  - Rene 88
+  - Rene N5
+  - RR1000
+  - PWA1484
+  - "PW1100G"
+  - "PW1500G"
+  - "PW1900G"
+  - PW1000G family
+  - GTF Advantage
+  - LEAP-1A
+  - LEAP-1B
+  - LEAP-1C
+  - Trent XWB
+  - Trent 7000
+  - GEnx
+  - CFM International
+  - Snecma
+  - Safran Aircraft Engines
+  - Safran Landing Systems
+  - Liebherr-Aerospace
+  - Honeywell APU
+  - APS5000
+  - APS3200
+  - Parker Aerospace
+  - Parker Hannifin
+  - Collins Aerospace
+  - Collins Aerospace Wheels and Brakes
+  - Goodrich
+  - UTAS
+  - JR-1000
+  - JL-1000
+  - C919 ARJ21
+  - ACAE
+  - CJ-1000A
+  - AECC
+  - WS-15
+  - WS-10
+  - HSL-2000
+  - Hexcel
+  - Toray
+  - Solvay Composite
+  - Cytec
+  - prepreg
+  - carbon fiber
+  - T800
+  - T1100
+  - IM7
+  - IM10
+
+tier3:
+  - "35 percent"
+  - "25 percent"
+  - "30 percent"
+  - VSMPO share
+  - Verkhnyaya Salda
+  - Boeing JV VSMPO
+  - Ural Boeing Manufacturing
+  - UBM
+  - severance JV
+  - "March 2022"
+  - sanctions exemption
+  - Title III DPA
+  - Defense Production Act
+  - "Section 232 titanium"
+  - IperionX
+  - Hammer process
+  - HAMR
+  - Continuum Powders
+  - Carpenter Technology
+  - Haynes International
+  - "powder metal contamination"
+  - "rare condition contamination"
+  - GTF disc
+  - rare gas
+  - inclusion
+  - Carpenter PM
+  - ATI Specialty Alloys
+  - inspection
+  - early disc removal
+  - "shop visit"
+  - shop visit interval
+  - SVI
+  - "350 aircraft grounded"
+  - "650 aircraft"
+  - "150 aircraft"
+  - aircraft on ground
+  - AOG
+  - quick-turn shop
+  - aftermarket constraint
+  - "wing spar"
+  - "wing skin"
+  - wing rib
+  - Spirit AeroSystems
+  - Spirit AeroSystems acquisition
+  - Boeing acquires Spirit
+  - Airbus acquires Spirit
+  - 787 fuselage section
+  - center wing box
+  - composite wing
+  - CFRP wing
+  - CFRP fuselage
+  - GKN Aerospace
+  - Mitsubishi Heavy
+  - MHI
+  - KAI Korea
+  - Kawasaki Heavy
+  - Subaru
+  - SubAero
+  - ShinMaywa
+  - Tianjin
+  - Pudong
+  - C919 Pudong
+  - C909
+  - ARJ21
+  - C929
+  - CR929
+  - Russian withdrawal C929
+  - Boeing 787-10
+  - second source
+  - dual source
+  - dual sourcing
+  - reshoring
+  - friend-shoring
+  - friendshoring
+  - stockpile
+  - strategic stockpile
+  - National Defense Stockpile
+  - DLA Strategic Materials
+  - tantalum
+  - rhenium
+  - hafnium
+  - tungsten carbide
+  - cobalt superalloy
+  - chromium
+  - cesium
+  - rhenium superalloy
+  - rhenium-bearing
+  - ITAR
+  - EAR99
+  - Wassenaar

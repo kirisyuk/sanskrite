@@ -1,0 +1,149 @@
+vertical: maritime_chokepoints
+description: |
+  Knowledge depth markers for the maritime chokepoints probe.
+
+tier1:
+  - Houthi
+  - Red Sea
+  - Suez
+  - Panama Canal
+  - Cape of Good Hope
+  - Bab al-Mandab
+  - Bab el-Mandeb
+  - Strait of Hormuz
+  - Strait of Malacca
+  - Maersk
+  - MSC
+  - CMA CGM
+  - COSCO
+  - Hapag-Lloyd
+  - Evergreen
+  - ZIM
+  - HMM
+  - Yang Ming
+  - ONE
+  - Ocean Network Express
+  - methanol
+  - LNG
+  - dual-fuel
+  - dual fuel
+
+tier2:
+  - Bab-el-Mandeb
+  - Lake Gatun
+  - Gatun Lake
+  - draft restriction
+  - "44 feet"
+  - "13.4 m"
+  - "13.41 m"
+  - Neopanamax
+  - Panamax
+  - "24 transits"
+  - "27 transits"
+  - "30 transits"
+  - "32 transits"
+  - "36 transits"
+  - "38 transits"
+  - "20 transits"
+  - "24,000 TEU"
+  - "23,756 TEU"
+  - "24,346 TEU"
+  - "EEE class"
+  - "EEE-class"
+  - Triple-E
+  - Megamax
+  - Megamax-24
+  - 24,500 TEU
+  - 23,000 TEU
+  - 18,000 TEU
+  - Laura Maersk
+  - Ane Maersk
+  - LNG bunkering
+  - methanol bunkering
+  - X-Press Feeders
+  - Methanex
+  - Proman
+  - OCI
+  - green methanol
+  - bio-methanol
+  - e-methanol
+  - war risk
+  - war-risk premium
+  - "0.5 percent"
+  - "0.7 percent"
+  - "1 percent"
+  - "1.5 percent"
+  - additional war-risk
+  - JWC
+  - Joint War Committee
+  - listed area
+  - Northern Sea Route
+  - NSR
+  - Sovcomflot
+  - Atomflot
+  - icebreaker escort
+  - Yamal LNG
+  - Arctic LNG-2
+
+tier3:
+  - "60 percent diversion"
+  - "70 percent diversion"
+  - "80 percent diversion"
+  - "90 percent traffic"
+  - container insurance
+  - K&R
+  - kidnap and ransom
+  - hull insurance
+  - P&I club
+  - "April 2024"
+  - "May 2024"
+  - "June 2024"
+  - "March 2024"
+  - "October 2024"
+  - "November 2024"
+  - "January 2025"
+  - "March 2025"
+  - "May 2025"
+  - "September 2024"
+  - Ansar Allah
+  - drone attack
+  - sea drone
+  - USV
+  - Galaxy Leader
+  - Tutor
+  - Verbena
+  - Sounion
+  - True Confidence
+  - Rubymar
+  - Long Beach
+  - Los Angeles
+  - LA/LB
+  - Rotterdam
+  - Hamburg
+  - Singapore
+  - Shanghai
+  - Yangshan
+  - Antwerp
+  - Antwerp-Bruges
+  - Felixstowe
+  - Vancouver
+  - Halifax
+  - Norfolk
+  - dwell time
+  - port dwell
+  - vessel turnaround
+  - ILA strike
+  - International Longshoremen
+  - October ILA
+  - "Oct 2024 ILA"
+  - "ILA 2024 strike"
+  - East Coast strike
+  - Hamburger Hafen
+  - HHLA
+  - SCFI
+  - Shanghai Containerized Freight
+  - WCI
+  - Drewry WCI
+  - SHEIN
+  - Temu
+  - de minimis

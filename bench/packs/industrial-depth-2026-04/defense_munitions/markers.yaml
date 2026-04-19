@@ -1,0 +1,151 @@
+vertical: defense_munitions
+description: |
+  Knowledge depth markers for the defense munitions probe.
+
+tier1:
+  - "155 mm"
+  - "155mm"
+  - PAC-3
+  - Patriot
+  - Stinger
+  - Javelin
+  - HIMARS
+  - F-35
+  - Lockheed Martin
+  - Northrop Grumman
+  - Raytheon
+  - RTX
+  - General Dynamics
+  - BAE Systems
+  - Boeing
+  - Rheinmetall
+  - hypersonic
+  - Bayraktar
+  - Switchblade
+  - Shahed
+  - NATO
+
+tier2:
+  - General Dynamics OTS
+  - Scranton
+  - Mesquite Texas
+  - Pine Bluff
+  - Holston
+  - Radford
+  - IMX-101
+  - IMX-104
+  - RDX
+  - HMX
+  - TNT
+  - Eurenco
+  - Nammo
+  - NEXTER
+  - KNDS
+  - Hanwha Aerospace
+  - Hanwha
+  - Krauss-Maffei
+  - GMLRS
+  - ATACMS
+  - PrSM
+  - Precision Strike Missile
+  - JASSM
+  - LRASM
+  - Tomahawk
+  - SM-6
+  - SM-3
+  - Iron Dome
+  - Tamir
+  - SkyCeptor
+  - David's Sling
+  - Stunner
+  - Camden Arkansas
+  - Troy Alabama
+  - Pratt Whitney
+  - F135
+  - Engine Core Upgrade
+  - ECU
+  - ALIS
+  - ODIN
+  - Anduril
+  - Roadrunner
+  - Bolt-M
+  - Barracuda
+  - AeroVironment
+  - LRHW
+  - Dark Eagle
+  - ARRW
+  - HACM
+  - CPS
+  - Conventional Prompt Strike
+  - Avangard
+  - Zircon
+  - Tsirkon
+  - DF-17
+  - DF-26
+  - Hwasong-8
+  - Hwasong-12
+  - propellant
+  - shell case
+  - brass case
+
+tier3:
+  - "60,000 rounds"
+  - "85,000 rounds"
+  - "90,000 rounds"
+  - "100,000 rounds"
+  - "150,000 rounds"
+  - "240,000 rounds"
+  - "1.2 million"
+  - "monthly production"
+  - "per month"
+  - "550 PAC-3"
+  - "650 PAC-3"
+  - "700 PAC-3"
+  - "Lot 41"
+  - "Lot 42"
+  - Lockheed Camden
+  - LMK Camden
+  - Camden Lockheed
+  - Mesquite GD
+  - Forging Industries
+  - Scranton Army Ammunition Plant
+  - SCAAP
+  - LCAAP
+  - Lake City
+  - Holston Army
+  - Radford Army
+  - Iowa Army Ammunition
+  - PSCAAP
+  - bismaleimide
+  - graphite phenolic
+  - thermal protection
+  - HTPB
+  - HTPE
+  - ammonium perchlorate
+  - APC
+  - Aerojet Rocketdyne
+  - L3Harris
+  - L3 Harris
+  - F135 ECU
+  - ECU module
+  - ECU upgrade
+  - Block 4
+  - TR-3
+  - GD OTS
+  - General Dynamics Ordnance and Tactical Systems
+  - JV Anduril Lockheed
+  - Anduril Lattice
+  - Project Maven
+  - Replicator
+  - Replicator initiative
+  - DIU
+  - Defense Innovation Unit
+  - "Section 1244"
+  - DPA Title III
+  - Defense Production Act
+  - DPAS
+  - "Senate Armed Services"
+  - Stinger restart
+  - Stinger Block 2
+  - "FY2025 NDAA"
+  - "FY2026 NDAA"

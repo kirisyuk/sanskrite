@@ -1,0 +1,910 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>$1.20 vs $0: where free elephant meets paid frontier on industrial depth | Horde.Vision Insights</title>
+    <meta
+      id="meta-description"
+      name="description"
+      content="Five paid frontier models — Opus 4.7, GPT-5.4, Gemini 3.1 Pro, GLM-5.1, Kimi K2.5 — against the free openrouter/elephant-alpha on two industrial depth packs. Total spend: $1.20. Result: leadership flips by vertical, Opus uses 83% of budget without leading anywhere, and even all five frontier responses combined cover only 41% of the steel rubric and 24% of the fertilizer rubric."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Sora:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="../styles.css" />
+  </head>
+  <body data-page="insights-frontier-vs-elephant-2026-04">
+    <div class="site-shell">
+      <header class="subpage-hero subpage-hero--insight" id="top">
+        <nav class="topbar" aria-label="Primary" data-i18n-aria-label="nav.aria.primary">
+          <a class="brand" href="../index.html">Horde.Vision</a>
+          <div class="topbar-controls">
+            <div
+              class="language-switcher"
+              aria-label="Language selector"
+              data-i18n-aria-label="nav.aria.languageSelector"
+            >
+              <button
+                class="language-button is-active"
+                type="button"
+                data-lang="en"
+                aria-label="Switch to English"
+                data-i18n-aria-label="nav.aria.switchEnglish"
+              >
+                EN
+              </button>
+              <button
+                class="language-button"
+                type="button"
+                data-lang="ru"
+                aria-label="Переключить на русский"
+                data-i18n-aria-label="nav.aria.switchRussian"
+              >
+                RU
+              </button>
+              <button
+                class="language-button"
+                type="button"
+                data-lang="kz"
+                aria-label="Қазақ тіліне ауыстыру"
+                data-i18n-aria-label="nav.aria.switchKazakh"
+              >
+                KZ
+              </button>
+            </div>
+            <button
+              class="nav-toggle"
+              type="button"
+              aria-expanded="false"
+              aria-controls="site-nav"
+              data-i18n="nav.menu"
+            >
+              Menu
+            </button>
+            <div class="nav-links" id="site-nav">
+              <a href="../index.html#about" data-i18n="nav.about">About</a>
+              <a href="../index.html#services" data-i18n="nav.services">Services</a>
+              <a href="../index.html#platform" data-i18n="nav.platform">Platforms</a>
+              <a href="../insights.html" class="is-active" data-i18n="nav.insights">Insights</a>
+              <a href="../index.html#contact" data-i18n="nav.contact">Contact</a>
+            </div>
+          </div>
+        </nav>
+
+        <div class="subpage-hero__inner">
+          <div class="subpage-hero__copy">
+            <p class="eyebrow" data-i18n="frontierVsElephant.eyebrow">
+              Field Report · Frontier Ceiling · 2026-04-19
+            </p>
+            <h1 data-i18n="frontierVsElephant.title">
+              $1.20 vs $0. Frontier flagships versus a free stealth model on industrial depth.
+            </h1>
+            <p class="hero-text" data-i18n="frontierVsElephant.lead">
+              Six models on the same two industrial packs:
+              <code>openrouter/elephant-alpha</code> (free, provider
+              <code>Stealth</code>) against five paid frontier flagships —
+              <code>claude-opus-4.7</code>, <code>gpt-5.4</code>,
+              <code>gemini-3.1-pro</code>, <code>glm-5.1</code>,
+              <code>kimi-k2.5</code>. Total spend: $1.20. Total wall time:
+              23 minutes. Three findings worth publishing — and one
+              benchmarking trap that almost killed two of the five paid
+              models.
+            </p>
+            <div class="insight-meta-bar">
+              <span class="insight-meta-bar__chip">
+                <span>Models</span><strong>6</strong>
+              </span>
+              <span class="insight-meta-bar__chip">
+                <span>Packs</span><strong>2</strong>
+              </span>
+              <span class="insight-meta-bar__chip">
+                <span>Calls</span><strong>12</strong>
+              </span>
+              <span class="insight-meta-bar__chip">
+                <span>Wall time</span><strong>23 min</strong>
+              </span>
+              <span class="insight-meta-bar__chip">
+                <span>Total cost</span><strong>$1.20</strong>
+              </span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <article class="insight-article">
+          <section class="insight-section">
+            <div class="insight-preamble">
+              <div class="insight-preamble__grid">
+                <div class="insight-preamble__column">
+                  <span class="insight-preamble__label" data-i18n="preamble.label.about">What this report is</span>
+                  <p data-i18n="frontierVsElephant.preamble.about">
+                    Report <strong>#3</strong> of our Horde.Vision
+                    Insights series. Six models — Claude Opus 4.7,
+                    GPT-5.4, Gemini 3.1 Pro, GLM-5.1, Kimi K2.5, and
+                    the free stealth slot <code>elephant-alpha</code> —
+                    run the same prompt harness against two heavy
+                    industrial packs (EU steel under CBAM, and
+                    fertilizer / ag-inputs under sanctions and export
+                    controls). Total bill for the paid models: $1.20.
+                    Core finding: no model leads both verticals, and
+                    paid flagships do not clearly dominate the free
+                    slot on knowledge depth.
+                  </p>
+                </div>
+                <div class="insight-preamble__column">
+                  <span class="insight-preamble__label" data-i18n="preamble.label.read">How to read this</span>
+                  <ul class="insight-preamble__speeds">
+                    <li><strong data-i18n="preamble.speed.fast">2 min</strong><span data-i18n="frontierVsElephant.preamble.speed.fast">hero + TL;DR</span></li>
+                    <li><strong data-i18n="preamble.speed.mid">10 min</strong><span data-i18n="frontierVsElephant.preamble.speed.mid">+ tier-3 chart, cost ledger, per-vertical ranks</span></li>
+                    <li><strong data-i18n="preamble.speed.full">30 min</strong><span data-i18n="frontierVsElephant.preamble.speed.full">+ methodology, reproduction, bundle on request</span></li>
+                  </ul>
+                </div>
+              </div>
+              <p class="insight-preamble__footer" data-i18n="preamble.footer">
+                New reader? Start with
+                <a href="./how-to-read.html">How to read these reports</a>
+                — 3-minute primer, glossary of terms used across the
+                series (tier-1/2/3, pack, marker, rubric, stealth,
+                frontier), and the order the reports were written in.
+              </p>
+            </div>
+
+            <div class="insight-tldr">
+              <span class="insight-tldr__label">TL;DR</span>
+              <ul>
+                <li><strong>Frontier leadership flips by vertical.</strong> <code>glm-5.1</code> took the steel-CBAM crown at tier-3 = 22 / 76. <code>gpt-5.4</code> took the fertilizer crown at tier-3 = 15 / 67. There is no single "best frontier model" across both verticals.</li>
+                <li><strong>Opus = 83% of budget, leader on neither pack.</strong> <code>claude-opus-4.7</code> consumed $0.99 of the $1.20 batch and finished third on steel and second on fertilizer. The "expensive = deeper" intuition does not survive the data.</li>
+                <li><strong>GLM-5.1 was 30× more efficient per tier-3 marker than Opus on steel</strong> ($0.0007 vs $0.022 per marker). Cost-per-depth and absolute depth are different rankings.</li>
+                <li><strong>Even all 5 paid frontiers <em>combined</em> covered only 41% of the steel rubric and 24% of the fertilizer rubric.</strong> No model — frontier or otherwise — owns a vertical. The single-flagship procurement story is broken.</li>
+                <li><strong>Elephant held the lower band of frontier on steel</strong> (tier-3 = 14, ~64% of the leader, in 11 seconds at $0). On fertilizer it collapsed to tier-3 = 2, a 7× gap to the leader. Free is a viable first pass on some verticals; on others it is not.</li>
+                <li><strong>One benchmarking trap.</strong> Run this same matrix at <code>max_tokens=2048</code> and <code>glm-5.1</code> + <code>kimi-k2.5</code> both return <code>empty_content (finish=length)</code> — entire budget is consumed by hidden reasoning, zero visible tokens. The 8 192-token cap is load-bearing.</li>
+              </ul>
+            </div>
+          </section>
+
+          <section class="insight-section">
+            <h2>Setup</h2>
+
+            <p>
+              We took two industrial depth packs from the
+              <a href="./industrial-depth-elephant-2026-04.html">previous
+              Insights report</a> and ran them against six models in a
+              clean apple-to-apples cell:
+            </p>
+
+            <ul>
+              <li><code>steel_cbam</code> — European integrated steelmaker preparing for full CBAM enforcement in 2026; HBI-DRI-EAF transition, low-CO2 offtake, iron-ore renegotiation, GOES, ETS reform. Pack covers 76 tier-3 markers ranging from "<code>Morebaya</code>" (Simandou port) and "<code>120 Mtpa</code>" (Simandou plateau capacity) to "<code>0.18 mm</code>" (laser-scribed GOES) and "<code>maritime ETS 2024</code>".</li>
+              <li><code>fertilizer_ag_inputs</code> — Brazilian agribusiness conglomerate locking 2027 contracts under Russian / Belarusian sanctions and China P export curbs. Pack covers 67 tier-3 markers including "<code>Berezniki</code>" (Uralkali site), "<code>Hubei Xingfa</code>" (Chinese P), "<code>OFAC General License</code>", and "<code>SCR / DEF</code>" (urea downstream).</li>
+            </ul>
+
+            <p>
+              Each model received the same scenario plus six escalating
+              questions in plain prose, no schema, no function calling,
+              <code>temperature=0.2</code>, <code>max_tokens=8 192</code>,
+              <code>timeout=600s</code>. Single attempt per cell. Scoring
+              is the same conservative case-insensitive substring match
+              against a tier-1 / tier-2 / tier-3 rubric written ahead of
+              the run; the model never sees the rubric.
+            </p>
+
+            <div class="insight-callout">
+              <p>
+                <strong>Why this is a fair test.</strong> All six models
+                see the same prompt. All six have the same maximum output
+                budget. Routing is OpenRouter's, identical across the
+                batch. The only intentional asymmetry is price: elephant
+                is free, the rest are paid. Every model has the same
+                opportunity to hit every marker.
+              </p>
+            </div>
+          </section>
+
+          <section class="insight-section">
+            <h2>Finding 1 — Leadership flips by vertical. There is no "best frontier".</h2>
+
+            <p>
+              On <code>steel_cbam</code>, <code>glm-5.1</code> won
+              decisively at tier-3 = 22 / 76. On
+              <code>fertilizer_ag_inputs</code>, the same model dropped to
+              tier-3 = 8 / 67 and <code>gpt-5.4</code> took the lead at
+              15 / 67. The leaders trade places by vertical. A buyer who
+              picks "the best frontier model" will pick the wrong one half
+              the time.
+            </p>
+
+            <div class="insight-chart">
+              <p class="insight-chart__title">Tier-3 marker hits by model and pack</p>
+              <p class="insight-chart__caption">Same prompt, same max output budget, single shot. Higher = deeper industrial recall. Note that pack rubrics are different sizes (76 vs 67 markers), so absolute counts are comparable within a pack only.</p>
+              <svg viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Grouped bar chart of tier-3 hits per model on steel_cbam and fertilizer_ag_inputs">
+                <g font-family="Manrope, sans-serif" font-size="11" fill="#5c6672" text-anchor="end">
+                  <text x="170" y="48"><tspan font-weight="600">z-ai/glm-5.1</tspan></text>
+                  <text x="170" y="92"><tspan font-weight="600">openai/gpt-5.4</tspan></text>
+                  <text x="170" y="136"><tspan font-weight="600">anthropic/claude-opus-4.7</tspan></text>
+                  <text x="170" y="180"><tspan font-weight="600">moonshotai/kimi-k2.5</tspan></text>
+                  <text x="170" y="224"><tspan font-weight="600">google/gemini-3.1-pro-preview</tspan></text>
+                  <text x="170" y="268"><tspan font-weight="600">openrouter/elephant-alpha</tspan></text>
+                </g>
+
+                <g stroke="rgba(15,19,25,0.08)" stroke-width="1">
+                  <line x1="190" y1="30" x2="190" y2="290"/>
+                  <line x1="320" y1="30" x2="320" y2="290"/>
+                  <line x1="450" y1="30" x2="450" y2="290"/>
+                  <line x1="580" y1="30" x2="580" y2="290"/>
+                  <line x1="710" y1="30" x2="710" y2="290"/>
+                </g>
+                <g font-family="Manrope, sans-serif" font-size="10" fill="#5c6672">
+                  <text x="190" y="306">0</text>
+                  <text x="320" y="306">5</text>
+                  <text x="450" y="306">10</text>
+                  <text x="580" y="306">15</text>
+                  <text x="710" y="306">20</text>
+                </g>
+
+                <!-- bars: scale 26px / unit (5 markers = 130px); y-offset row top = anchor-15 -->
+                <!-- glm row 33-58: steel=22 (572px length=572-too long; recompute scale 26 -> 22*26=572 too wide). Use scale 24px/unit -->
+
+                <!-- redo with scale 24px per marker -->
+                <!-- steel bars (orange/yellow tone): -->
+                <g>
+                  <rect x="190" y="36" width="528" height="14" fill="rgba(255,170,59,0.55)" stroke="rgba(138,87,19,0.45)" stroke-width="1"/>
+                  <text x="724" y="48" font-family="Manrope, sans-serif" font-size="11" fill="#8a5713">22</text>
+                  <rect x="190" y="80" width="480" height="14" fill="rgba(255,170,59,0.55)" stroke="rgba(138,87,19,0.45)" stroke-width="1"/>
+                  <text x="676" y="92" font-family="Manrope, sans-serif" font-size="11" fill="#8a5713">20</text>
+                  <rect x="190" y="124" width="456" height="14" fill="rgba(255,170,59,0.55)" stroke="rgba(138,87,19,0.45)" stroke-width="1"/>
+                  <text x="652" y="136" font-family="Manrope, sans-serif" font-size="11" fill="#8a5713">19</text>
+                  <rect x="190" y="168" width="456" height="14" fill="rgba(255,170,59,0.55)" stroke="rgba(138,87,19,0.45)" stroke-width="1"/>
+                  <text x="652" y="180" font-family="Manrope, sans-serif" font-size="11" fill="#8a5713">19</text>
+                  <rect x="190" y="212" width="408" height="14" fill="rgba(255,170,59,0.55)" stroke="rgba(138,87,19,0.45)" stroke-width="1"/>
+                  <text x="604" y="224" font-family="Manrope, sans-serif" font-size="11" fill="#8a5713">17</text>
+                  <rect x="190" y="256" width="336" height="14" fill="rgba(255,170,59,0.55)" stroke="rgba(138,87,19,0.45)" stroke-width="1"/>
+                  <text x="532" y="268" font-family="Manrope, sans-serif" font-size="11" fill="#8a5713">14</text>
+                </g>
+
+                <!-- fertilizer bars (blue tone), thinner and offset down -->
+                <g>
+                  <rect x="190" y="52" width="192" height="10" fill="rgba(102,158,255,0.55)" stroke="rgba(36,76,140,0.45)" stroke-width="1"/>
+                  <text x="388" y="61" font-family="Manrope, sans-serif" font-size="11" fill="#244c8c">8</text>
+                  <rect x="190" y="96" width="360" height="10" fill="rgba(102,158,255,0.55)" stroke="rgba(36,76,140,0.45)" stroke-width="1"/>
+                  <text x="556" y="105" font-family="Manrope, sans-serif" font-size="11" fill="#244c8c">15</text>
+                  <rect x="190" y="140" width="336" height="10" fill="rgba(102,158,255,0.55)" stroke="rgba(36,76,140,0.45)" stroke-width="1"/>
+                  <text x="532" y="149" font-family="Manrope, sans-serif" font-size="11" fill="#244c8c">14</text>
+                  <rect x="190" y="184" width="0" height="10" fill="rgba(239,107,107,0.18)" stroke="rgba(183,56,56,0.45)" stroke-width="1"/>
+                  <text x="194" y="193" font-family="Manrope, sans-serif" font-size="11" fill="#b73838">FAIL</text>
+                  <rect x="190" y="228" width="216" height="10" fill="rgba(102,158,255,0.55)" stroke="rgba(36,76,140,0.45)" stroke-width="1"/>
+                  <text x="412" y="237" font-family="Manrope, sans-serif" font-size="11" fill="#244c8c">9</text>
+                  <rect x="190" y="272" width="48" height="10" fill="rgba(102,158,255,0.55)" stroke="rgba(36,76,140,0.45)" stroke-width="1"/>
+                  <text x="244" y="281" font-family="Manrope, sans-serif" font-size="11" fill="#244c8c">2</text>
+                </g>
+              </svg>
+              <div class="insight-chart__legend">
+                <span><i style="background:#ffaa3b"></i><code>steel_cbam</code> tier-3 hits / 76 markers</span>
+                <span><i style="background:#669eff"></i><code>fertilizer_ag_inputs</code> tier-3 hits / 67 markers</span>
+              </div>
+            </div>
+
+            <h3>What "leadership flip" actually looks like in the text</h3>
+
+            <p>
+              On steel, <code>glm-5.1</code> reaches the rubric's deepest
+              quantitative tier (the "<code>200 Mt</code>" Simandou
+              capacity ramp, the "<code>650 km rail</code>"
+              TransGuinéen). On fertilizer the same model produces roughly
+              the same length of advisory but only catches the
+              policy-architecture tier — names "<code>OFAC</code>",
+              "<code>General License</code>", "<code>Cory</code>",
+              "<code>Vanscoy</code>", but misses the next-tier specifics
+              like "<code>Berezniki</code>" or "<code>Solikamsk</code>"
+              that the procurement team actually needs to call.
+            </p>
+
+            <p>
+              <code>gpt-5.4</code> is the inverse. On steel it lands tier-3
+              = 20 with strong policy coverage but does not reach
+              <code>glm-5.1</code>'s deeper quantitative layer. On
+              fertilizer it surfaces "<code>Hubei Xingfa</code>",
+              "<code>Patience Lake</code>", "<code>Berezniki</code>",
+              "<code>SCR</code>", "<code>DEF</code>" — exactly the
+              second-supplier and downstream-application detail a 2027
+              contracting team needs.
+            </p>
+
+            <p>
+              <code>gemini-3.1-pro-preview</code> is uniformly smaller in
+              output and wins on no axis except cost-efficiency on
+              fertilizer (tier-3 = 9 at $0.025). It produces
+              roughly Opus-quality structure at 1/16th the price, but
+              never reaches the leader's depth.
+            </p>
+
+            <p>
+              <code>kimi-k2.5</code> matched the steel leaders at tier-3 =
+              19 in 7 minutes of wall clock, but on fertilizer the
+              upstream provider (<code>AtlasCloud</code>) returned
+              <code>empty_content</code> with no <code>finish_reason</code>
+              after 65 seconds — a provider-side failure, not a model
+              failure. Routing matters.
+            </p>
+          </section>
+
+          <section class="insight-section">
+            <h2>Finding 2 — Opus is 83% of the bill, leader on neither pack.</h2>
+
+            <p>
+              The cost ledger is the single most surprising number in the
+              batch. Of the $1.203 spent across 12 calls,
+              <code>claude-opus-4.7</code> alone consumed $0.992 — 83 %
+              of the budget. And it finished <em>third</em> on steel
+              tier-3 (19 vs 22 / 20 above) and <em>second</em> on
+              fertilizer tier-3 (14 vs 15 above).
+            </p>
+
+            <div class="insight-chart">
+              <p class="insight-chart__title">Cost vs depth: same packs, six models</p>
+              <p class="insight-chart__caption">Each marker is one model on one pack. X = USD spent on this single call (log scale). Y = tier-3 markers hit on that pack. The Pareto frontier is bottom-left; everything northwest of a model is strictly worse on cost and depth.</p>
+              <svg viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Scatter plot of cost in USD versus tier-3 marker hits per model per pack">
+                <!-- log scale: x=120 = $0 (placed left), x=170 ≈ $0.001, x=290 ≈ $0.01, x=410 ≈ $0.1, x=530 ≈ $1.0 -->
+                <g stroke="rgba(15,19,25,0.08)" stroke-width="1">
+                  <line x1="170" y1="40" x2="170" y2="290"/>
+                  <line x1="290" y1="40" x2="290" y2="290"/>
+                  <line x1="410" y1="40" x2="410" y2="290"/>
+                  <line x1="530" y1="40" x2="530" y2="290"/>
+                </g>
+                <line x1="120" y1="290" x2="710" y2="290" stroke="rgba(15,19,25,0.18)" stroke-width="1"/>
+
+                <!-- y axis 0 at y=290, 25 at y=40 → 10px per marker -->
+                <g font-family="Manrope, sans-serif" font-size="10" fill="#5c6672" text-anchor="end">
+                  <text x="115" y="293">0</text>
+                  <text x="115" y="243">5</text>
+                  <text x="115" y="193">10</text>
+                  <text x="115" y="143">15</text>
+                  <text x="115" y="93">20</text>
+                  <text x="115" y="43">25</text>
+                </g>
+                <text x="60" y="170" font-family="Manrope, sans-serif" font-size="11" fill="#5c6672" transform="rotate(-90 60 170)">tier-3 hits</text>
+
+                <g font-family="Manrope, sans-serif" font-size="10" fill="#5c6672" text-anchor="middle">
+                  <text x="120" y="308">$0</text>
+                  <text x="170" y="308">$0.001</text>
+                  <text x="290" y="308">$0.01</text>
+                  <text x="410" y="308">$0.10</text>
+                  <text x="530" y="308">$1.00</text>
+                </g>
+                <text x="410" y="335" font-family="Manrope, sans-serif" font-size="11" fill="#5c6672" text-anchor="middle">USD per call (log)</text>
+
+                <!-- elephant points (cost = $0, plotted at left edge) -->
+                <g>
+                  <circle cx="120" cy="150" r="9" fill="rgba(126,201,142,0.7)" stroke="#2a6a3b" stroke-width="2"/>
+                  <text x="120" y="135" font-family="Manrope, sans-serif" font-size="9" fill="#2a6a3b" text-anchor="middle">elephant·steel</text>
+                  <circle cx="120" cy="270" r="9" fill="rgba(126,201,142,0.7)" stroke="#2a6a3b" stroke-width="2"/>
+                  <text x="120" y="285" font-family="Manrope, sans-serif" font-size="9" fill="#2a6a3b" text-anchor="middle">elephant·fert</text>
+                </g>
+
+                <!-- glm-5.1: $0.0147 / $0.0131 (steel/fert), t3 22/8 -->
+                <g>
+                  <circle cx="307" cy="70" r="8" fill="rgba(102,158,255,0.7)" stroke="#244c8c" stroke-width="2"/>
+                  <text x="307" y="55" font-family="Manrope, sans-serif" font-size="9" fill="#244c8c" text-anchor="middle">glm·steel</text>
+                  <circle cx="304" cy="210" r="8" fill="rgba(102,158,255,0.7)" stroke="#244c8c" stroke-width="2"/>
+                  <text x="304" y="225" font-family="Manrope, sans-serif" font-size="9" fill="#244c8c" text-anchor="middle">glm·fert</text>
+                </g>
+
+                <!-- kimi: $0.0143 / FAIL, t3 19 -->
+                <g>
+                  <circle cx="306" cy="100" r="8" fill="rgba(255,170,59,0.7)" stroke="#8a5713" stroke-width="2"/>
+                  <text x="306" y="118" font-family="Manrope, sans-serif" font-size="9" fill="#8a5713" text-anchor="middle">kimi·steel</text>
+                </g>
+
+                <!-- gemini: $0.0256 / $0.0245, t3 17/9 -->
+                <g>
+                  <circle cx="350" cy="120" r="8" fill="rgba(170,140,255,0.7)" stroke="#5a3895" stroke-width="2"/>
+                  <text x="370" y="118" font-family="Manrope, sans-serif" font-size="9" fill="#5a3895">gemini·steel</text>
+                  <circle cx="348" cy="200" r="8" fill="rgba(170,140,255,0.7)" stroke="#5a3895" stroke-width="2"/>
+                  <text x="370" y="200" font-family="Manrope, sans-serif" font-size="9" fill="#5a3895">gemini·fert</text>
+                </g>
+
+                <!-- gpt-5.4: $0.0579 / $0.0613, t3 20/15 -->
+                <g>
+                  <circle cx="395" cy="90" r="8" fill="rgba(70,170,170,0.7)" stroke="#1f5b5b" stroke-width="2"/>
+                  <text x="415" y="88" font-family="Manrope, sans-serif" font-size="9" fill="#1f5b5b">gpt-5.4·steel</text>
+                  <circle cx="397" cy="140" r="8" fill="rgba(70,170,170,0.7)" stroke="#1f5b5b" stroke-width="2"/>
+                  <text x="417" y="138" font-family="Manrope, sans-serif" font-size="9" fill="#1f5b5b">gpt-5.4·fert</text>
+                </g>
+
+                <!-- opus: $0.4232 / $0.5687, t3 19/14 -->
+                <g>
+                  <circle cx="490" cy="100" r="9" fill="rgba(239,107,107,0.7)" stroke="#b73838" stroke-width="2"/>
+                  <text x="510" y="98" font-family="Manrope, sans-serif" font-size="9" fill="#b73838">opus·steel</text>
+                  <circle cx="503" cy="150" r="9" fill="rgba(239,107,107,0.7)" stroke="#b73838" stroke-width="2"/>
+                  <text x="523" y="148" font-family="Manrope, sans-serif" font-size="9" fill="#b73838">opus·fert</text>
+                </g>
+
+                <!-- pareto frontier hint -->
+                <g stroke="rgba(126,201,142,0.4)" stroke-width="2" stroke-dasharray="4 4" fill="none">
+                  <path d="M 120 150 L 120 270 L 304 210 L 307 70" />
+                </g>
+                <text x="155" y="252" font-family="Manrope, sans-serif" font-size="10" fill="#2a6a3b" font-style="italic">Pareto frontier: elephant + glm-5.1</text>
+              </svg>
+              <div class="insight-chart__legend">
+                <span><i style="background:#7ec98e"></i>elephant ($0)</span>
+                <span><i style="background:#669eff"></i>glm-5.1</span>
+                <span><i style="background:#ffaa3b"></i>kimi-k2.5</span>
+                <span><i style="background:#aa8cff"></i>gemini-3.1-pro</span>
+                <span><i style="background:#46aaaa"></i>gpt-5.4</span>
+                <span><i style="background:#ef6b6b"></i>opus-4.7</span>
+              </div>
+            </div>
+
+            <p>
+              <code>opus-4.7</code> sits in the upper-right quadrant on
+              both packs — the "expensive without leading" zone. The
+              actual Pareto frontier is the dashed green line: elephant
+              for the cheapest possible answer, <code>glm-5.1</code> for
+              the deepest paid one. <code>gpt-5.4</code> sits just off
+              the frontier, defensible if you also need fertilizer
+              leadership in the same batch.
+            </p>
+
+            <h3>Cost per tier-3 marker</h3>
+            <p>
+              Same numbers, normalized:
+            </p>
+
+            <div class="insight-table-wrap">
+              <table class="insight-table">
+                <thead>
+                  <tr>
+                    <th>Pack</th>
+                    <th>Model</th>
+                    <th class="num">USD</th>
+                    <th class="num">tier-3 hits</th>
+                    <th class="num">USD / marker</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td><code>steel_cbam</code></td><td><code>glm-5.1</code></td><td class="num">0.0147</td><td class="num">22</td><td class="num"><strong>$0.0007</strong></td></tr>
+                  <tr><td></td><td><code>kimi-k2.5</code></td><td class="num">0.0143</td><td class="num">19</td><td class="num">$0.0008</td></tr>
+                  <tr><td></td><td><code>gemini-3.1-pro</code></td><td class="num">0.0256</td><td class="num">17</td><td class="num">$0.0015</td></tr>
+                  <tr><td></td><td><code>gpt-5.4</code></td><td class="num">0.0579</td><td class="num">20</td><td class="num">$0.0029</td></tr>
+                  <tr><td></td><td><code>opus-4.7</code></td><td class="num">0.4232</td><td class="num">19</td><td class="num"><strong>$0.0223</strong></td></tr>
+                  <tr><td></td><td><code>elephant-alpha</code></td><td class="num">0</td><td class="num">14</td><td class="num">$0.0000</td></tr>
+                  <tr><td><code>fertilizer_ag_inputs</code></td><td><code>glm-5.1</code></td><td class="num">0.0131</td><td class="num">8</td><td class="num">$0.0016</td></tr>
+                  <tr><td></td><td><code>gemini-3.1-pro</code></td><td class="num">0.0245</td><td class="num">9</td><td class="num">$0.0027</td></tr>
+                  <tr><td></td><td><code>gpt-5.4</code></td><td class="num">0.0613</td><td class="num">15</td><td class="num">$0.0041</td></tr>
+                  <tr><td></td><td><code>opus-4.7</code></td><td class="num">0.5687</td><td class="num">14</td><td class="num"><strong>$0.0406</strong></td></tr>
+                  <tr><td></td><td><code>elephant-alpha</code></td><td class="num">0</td><td class="num">2</td><td class="num">$0.0000</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <p>
+              On steel, <code>glm-5.1</code> delivered tier-3 markers at
+              <strong>$0.0007 each</strong>. <code>opus-4.7</code>
+              delivered them at <strong>$0.0223</strong> — 30 × more
+              expensive per unit of industrial recall on the same
+              question, with worse absolute coverage. On fertilizer the
+              gap widens further: <code>gpt-5.4</code> at $0.0041 vs
+              <code>opus-4.7</code> at $0.0406, an order of magnitude.
+            </p>
+
+            <div class="insight-callout insight-callout--cool">
+              <p>
+                The "always pick the most expensive frontier model" prior
+                is materially wrong on this kind of work. On industrial
+                depth tasks, output volume is the dominant cost driver,
+                and Opus's higher per-token price compounds with its
+                tendency to write longer answers — without a matching
+                gain in unique depth. <code>glm-5.1</code> is roughly
+                30 × more efficient on steel; <code>gemini-3.1-pro</code>
+                is the best paid choice when you need tier-3 within a
+                tight per-call budget.
+              </p>
+            </div>
+          </section>
+
+          <section class="insight-section">
+            <h2>Finding 3 — Even all five paid frontiers <em>combined</em> miss most of the rubric.</h2>
+
+            <p>
+              We computed the union of tier-3 markers caught by the five
+              paid models (each running the same prompt independently).
+              The result is the "frontier ceiling" — the best you can do
+              on this rubric by paying for five top-tier flagships and
+              merging their answers.
+            </p>
+
+            <div class="insight-chart">
+              <p class="insight-chart__title">Coverage ceiling — union of all 5 paid frontier responses vs full rubric</p>
+              <p class="insight-chart__caption">Even if you pool every paid frontier response on the same prompt, the rubric is mostly uncaptured.</p>
+              <svg viewBox="0 0 760 220" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Coverage ceiling: union of 5 paid frontiers covers 41 percent of steel rubric and 24 percent of fertilizer rubric">
+                <g font-family="Manrope, sans-serif" font-size="12" fill="#5c6672" text-anchor="end">
+                  <text x="180" y="68"><tspan font-weight="600">steel_cbam</tspan></text>
+                  <text x="180" y="84" font-size="10" opacity="0.7">76 tier-3 markers</text>
+                  <text x="180" y="148"><tspan font-weight="600">fertilizer_ag_inputs</tspan></text>
+                  <text x="180" y="164" font-size="10" opacity="0.7">67 tier-3 markers</text>
+                </g>
+
+                <g>
+                  <rect x="200" y="50" width="500" height="40" fill="rgba(15,19,25,0.06)" stroke="rgba(15,19,25,0.12)" stroke-width="1"/>
+                  <rect x="200" y="50" width="204" height="40" fill="rgba(126,201,142,0.45)" stroke="rgba(42,106,59,0.55)" stroke-width="1"/>
+                  <text x="302" y="74" font-family="Manrope, sans-serif" font-size="12" fill="#2a6a3b" text-anchor="middle" font-weight="600">31 / 76 = 41%</text>
+                  <text x="552" y="74" font-family="Manrope, sans-serif" font-size="12" fill="#5c6672" text-anchor="middle" font-style="italic">45 markers no frontier model touched</text>
+                </g>
+
+                <g>
+                  <rect x="200" y="130" width="500" height="40" fill="rgba(15,19,25,0.06)" stroke="rgba(15,19,25,0.12)" stroke-width="1"/>
+                  <rect x="200" y="130" width="119" height="40" fill="rgba(126,201,142,0.45)" stroke="rgba(42,106,59,0.55)" stroke-width="1"/>
+                  <text x="259" y="154" font-family="Manrope, sans-serif" font-size="12" fill="#2a6a3b" text-anchor="middle" font-weight="600">16 / 67 = 24%</text>
+                  <text x="510" y="154" font-family="Manrope, sans-serif" font-size="12" fill="#5c6672" text-anchor="middle" font-style="italic">51 markers no frontier model touched</text>
+                </g>
+              </svg>
+            </div>
+
+            <p>
+              On steel, paying for five top-tier flagships and pooling
+              their responses captured 31 of 76 tier-3 markers — 41 % of
+              the rubric. On fertilizer, the same five-model pool captured
+              16 of 67 — 24 %.
+            </p>
+
+            <p>
+              The interpretation is not "the rubric is too hard". The
+              rubric is the depth a domain expert would actually need —
+              the second-tier supplier names, the specific site IDs, the
+              regulatory mechanisms, the 2024–2026 quantities. The
+              interpretation is: <strong>frontier LLMs in 2026 do not
+              own industrial verticals at expert depth, even when you
+              pay for five of them at once.</strong> They are excellent
+              orientation tools and uneven depth tools. The
+              "single-flagship buy and you are done" procurement story
+              for industrial reasoning does not match the data.
+            </p>
+
+            <div class="insight-callout">
+              <p>
+                <strong>Practical implication.</strong> If your
+                multi-agent system depends on a single frontier model to
+                "know the vertical", you are leaving 60–75 % of the
+                rubric on the table. The same money rebalanced across
+                two complementary frontiers (e.g., <code>glm-5.1</code>
+                + <code>gpt-5.4</code> on steel) plus a free fast-pass
+                from <code>elephant-alpha</code> as a first responder
+                gets you a meaningfully larger slice of the
+                vertical — at lower latency on the easy answers and
+                lower cost overall.
+              </p>
+            </div>
+          </section>
+
+          <section class="insight-section">
+            <h2>Where elephant works, where it does not</h2>
+
+            <p>
+              The two packs were chosen deliberately:
+              <code>steel_cbam</code> is where <code>elephant-alpha</code>
+              was strongest on the prior 12-pack solo run;
+              <code>fertilizer_ag_inputs</code> is where it was weakest.
+              The frontier comparison sharpens that picture.
+            </p>
+
+            <div class="insight-table-wrap">
+              <table class="insight-table">
+                <thead>
+                  <tr>
+                    <th>Pack</th>
+                    <th class="num">elephant tier-3</th>
+                    <th class="num">leader tier-3</th>
+                    <th class="num">elephant fraction of leader</th>
+                    <th class="num">latency advantage</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td><code>steel_cbam</code></td><td class="num">14 / 76</td><td class="num">22 / 76 (glm-5.1)</td><td class="num"><strong>64%</strong></td><td class="num">11.5s vs 65–435s (6–38×)</td></tr>
+                  <tr><td><code>fertilizer_ag_inputs</code></td><td class="num">2 / 67</td><td class="num">15 / 67 (gpt-5.4)</td><td class="num"><strong>13%</strong></td><td class="num">7.2s vs 42–152s (6–21×)</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <p>
+              On steel, elephant captured 64 % of the deepest frontier
+              answer, in 11.5 seconds, at $0. Specifically, it caught the
+              regulatory mechanics tier ("<code>ETS2</code>",
+              "<code>2034</code>", "<code>phase out</code>",
+              "<code>laser-scribed</code>", "<code>0.20 mm</code>",
+              "<code>0.23 mm</code>", "<code>cement</code>",
+              "<code>aluminum</code>", "<code>electricity</code>"
+              hydrogen-DRI references). What it missed and the frontier
+              caught: the deeper quantities ("<code>120 Mtpa</code>",
+              "<code>2.5 Mtpa</code>", "<code>5 Mtpa</code>"), the
+              Simandou physical infrastructure ("<code>Morebaya</code>"
+              port), the fine-gauge GOES grade ("<code>0.18 mm</code>"),
+              the maritime ETS specifics, and the British spelling
+              "<code>aluminium</code>" — which was the actual marker.
+            </p>
+
+            <p>
+              On fertilizer, elephant captured only 13 % of the deepest
+              frontier answer. The misses are decision-relevant: it did
+              not surface "<code>OFAC</code>" or
+              "<code>General License</code>" (the actual sanctions
+              architecture), did not name "<code>Berezniki</code>" or
+              "<code>Solikamsk</code>" (Uralkali sites), did not mention
+              "<code>Hubei Xingfa</code>" (Chinese phosphate), did not
+              connect urea to "<code>SCR / DEF</code>" downstream. These
+              are the specifics a procurement team would need to actually
+              call. <strong>For Brazilian agribusiness, free elephant is
+              not a viable first pass; for European steel under CBAM, it
+              is.</strong>
+            </p>
+
+            <p>
+              The asymmetry is a feature, not a bug. The earlier
+              12-vertical solo run on elephant showed exactly this shape:
+              wide tier-1 coverage everywhere, deep tier-3 coverage
+              concentrated on industrial verticals where the entity
+              vocabulary is well-documented in public training data
+              (steel, semiconductors, subsea cables). Verticals heavy on
+              regulatory specifics, second-tier suppliers, and 2024–2026
+              quantities (fertilizer, aerospace titanium specifics) are
+              where the gap to paid frontier opens up.
+            </p>
+          </section>
+
+          <section class="insight-section">
+            <h2>The benchmarking trap that almost killed two paid models</h2>
+
+            <p>
+              On the first attempt at this matrix we set
+              <code>max_tokens=2048</code>, the default we had been using
+              for the free-tier solo runs in the
+              <a href="./industrial-depth-elephant-2026-04.html">previous
+              report</a>. Four models came back clean.
+              <code>z-ai/glm-5.1</code> and <code>moonshotai/kimi-k2.5</code>
+              both returned <code>empty_content (finish=length)</code>
+              — zero visible output despite 45–58 seconds of
+              upstream wall time and full token budget consumed.
+            </p>
+
+            <p>
+              The mechanism is straightforward in hindsight: both models
+              run hidden chain-of-thought as part of their default
+              behavior. With a 2 048-token cap, the entire budget is
+              consumed by the reasoning trace, leaving zero tokens for
+              the visible answer. The provider returns the message with
+              <code>finish_reason=length</code> and an empty
+              <code>content</code> field. A naïve harness reads this as
+              "model failed".
+            </p>
+
+            <p>
+              At <code>max_tokens=8 192</code> the same two models became
+              the leader on steel (<code>glm-5.1</code> at tier-3 = 22)
+              and a top-three contender (<code>kimi-k2.5</code> at
+              tier-3 = 19) — using 6 545 and 8 192 visible output tokens
+              respectively. The 4 × budget bump fixed it; the model
+              capability never changed.
+            </p>
+
+            <div class="insight-callout">
+              <p>
+                <strong>If you are benchmarking thinking-class models on
+                open-ended industrial prose, the visible-output budget
+                must be at least 6 000–8 000 tokens.</strong> Anything
+                lower silently filters out the strongest reasoners and
+                rewards the most visually-verbose ones. Public
+                leaderboards that cap output low — or report
+                <code>finish=length</code> failures as "model error"
+                — overstate Opus / GPT-5 / Gemini relative to thinking
+                models like <code>glm-5.1</code> and <code>kimi-k2.5</code>.
+                The 2 048-token run on the same prompts in this batch
+                would have ranked <code>opus-4.7</code> top and reported
+                <code>glm-5.1</code> as broken. The 8 192-token run
+                ranks <code>opus-4.7</code> third and
+                <code>glm-5.1</code> first.
+              </p>
+            </div>
+          </section>
+
+          <section class="insight-section">
+            <h2>Notable per-model behavior</h2>
+
+            <p>
+              Beyond the leaderboard, a few stylistic observations from
+              reading the responses end-to-end:
+            </p>
+
+            <ul>
+              <li><strong>Opus 4.7 is the only model that admitted uncertainty in line.</strong> On the GOES section of the steel pack, after listing global producers, the response read: <em>"Cogent Power (Tata Steel UK, Newport / Orb) — the Orb works closed in 2020; Cogent remains a processor but UK GOES melting ceased. I may be confusing details here — verify."</em> No other model in the batch flagged its own potential confusion. For audit-trail use, that is a behavior worth paying for, even at $0.42 per call.</li>
+              <li><strong>GPT-5.4 produced the most verbose answers</strong> (26 446 / 27 690 chars) with frequent calibrated hedges (<em>"I am precise where I am confident; where figures or status are uncertain or moving, I say so explicitly"</em>). Tier-3 leader on fertilizer.</li>
+              <li><strong>GLM-5.1 wrote in executive-memo register</strong> — fertilizer response opened literally with <em>"To the Executive Board, As you evaluate your 2027 contract strategy…"</em>. Style fits the role; depth on steel was the leader.</li>
+              <li><strong>Gemini 3.1 Pro produced the most compact answers</strong> (4 761–4 973 out tokens) at roughly Opus-quality structure for 1/16th the cost. The defensible "second-pick frontier" for cost-sensitive industrial reasoning.</li>
+              <li><strong>Kimi K2.5 is verbose like GPT-5.4 and as slow as 305–435 s</strong> on these prompts. One provider-side failure on fertilizer (<code>AtlasCloud</code>, <code>empty_content</code> with no <code>finish_reason</code>) — not the model, the routing, but it does happen.</li>
+              <li><strong>Elephant is fastest on every cell</strong> (7.2 s and 11.5 s) and produces the most compact answers (1 120 and 2 170 out tokens). Provider field still returns <code>"Stealth"</code> on every call.</li>
+            </ul>
+          </section>
+
+          <section class="insight-section">
+            <h2>Methodology</h2>
+
+            <dl class="insight-method">
+              <dt>Packs</dt>
+              <dd>Two industrial depth packs: <code>steel_cbam</code> (European steel industry under the EU CBAM, Green Deal Industrial Plan, and post-Safeguard tariff regime) and <code>fertilizer_ag_inputs</code> (global nitrogen / phosphate / potash under sanctions and export controls). Each pack is a 3–5 sentence scenario plus 6 escalating questions in plain prose. <a href="./how-to-read.html#artifacts">Available on request</a>.</dd>
+              <dt>Models</dt>
+              <dd><code>openrouter/elephant-alpha</code> (free, provider <code>Stealth</code>), <code>anthropic/claude-opus-4.7</code>, <code>openai/gpt-5.4</code>, <code>google/gemini-3.1-pro-preview</code>, <code>z-ai/glm-5.1</code>, <code>moonshotai/kimi-k2.5</code>.</dd>
+              <dt>Sampling</dt>
+              <dd><code>temperature=0.2</code>, <code>max_tokens=8 192</code>, <code>timeout=600 s</code>, single attempt per cell, single retry on 429 / 5xx with 8-second backoff. No system prompt. Single user message containing the verbatim pack text.</dd>
+              <dt>Scoring rubric</dt>
+              <dd>Sibling <code>markers.yaml</code> per pack with tier-1 / tier-2 / tier-3 lists written ahead of the run. The model never sees the rubric. Scoring is conservative case-insensitive substring match (no LLM-as-judge in v0).</dd>
+              <dt>Coverage ceiling</dt>
+              <dd>Computed as the union of tier-3 markers hit by the 5 paid frontier responses on the same pack, expressed as a fraction of total tier-3 markers in the rubric.</dd>
+              <dt>Cost calculation</dt>
+              <dd>Per-call USD = <code>input_tokens × in_price + output_tokens × out_price</code>, using OpenRouter list pricing as of 2026-04-19: Opus $15 / $75 per Mtok, GPT-5.4 $1.25 / $10, Gemini 3.1 Pro $1.25 / $5, GLM-5.1 $0.6 / $2.2, Kimi K2.5 $0.38 / $1.72, elephant-alpha $0 / $0.</dd>
+              <dt>Total batch spend</dt>
+              <dd>$1.203 across 11 successful + 1 failed (Kimi · fertilizer) calls. Failed calls do not bill.</dd>
+              <dt>Wall time</dt>
+              <dd>23 minutes total. Slowest single call: <code>kimi-k2.5 · steel_cbam</code> at 435 seconds. Fastest: <code>elephant-alpha · fertilizer_ag_inputs</code> at 7.2 seconds.</dd>
+            </dl>
+
+            <h3>What we did <em>not</em> measure</h3>
+            <ul>
+              <li><strong>Hallucination rate.</strong> Marker hits show what was named; they do not check whether each named entity was named correctly. Spot-checks suggest the named entities are mostly real, but a systematic factual-claim audit is a separate report.</li>
+              <li><strong>Variance.</strong> Single shot per cell. The Elephant variance probe in the prior report showed σ ≈ 1 tier-3 marker on these packs; we assume the frontier models sit in a similar regime, but have not measured.</li>
+              <li><strong>More than two packs.</strong> Two packs were chosen as a deliberate floor / ceiling for elephant; running the full 12-vertical battery on five paid frontiers would cost ~$7 and is not necessary to make the points in this report.</li>
+              <li><strong>Reasoning-effort knobs.</strong> Default reasoning settings per provider. We did not tune <code>reasoning.effort</code> or vendor-specific thinking budgets. Different settings would shift the cost / depth Pareto.</li>
+              <li><strong>Multi-turn or tool-use.</strong> Single-shot prose only. Critic / canonicalizer / supervisor role-fit lives in a separate program.</li>
+            </ul>
+          </section>
+
+          <section class="insight-section">
+            <h2>Reproduction</h2>
+
+            <p>
+              The command we ran, in shape. The harness
+              (<code>bench_industrial_depth.py</code>), the two pack
+              directories (<code>steel_cbam</code> and
+              <code>fertilizer_ag_inputs</code>), and the raw JSONL
+              files referenced in every chart and table above live in
+              a private research repo. They aren't public — we send
+              them on request. See <em>Artifacts</em> below.
+            </p>
+
+            <p>Full batch (12 calls, ≈ $1.20, ≈ 23 min wall time):</p>
+            <pre class="insight-reproduce"># inside the research repo root:
+MODELS=(openrouter/elephant-alpha anthropic/claude-opus-4.7 \
+        openai/gpt-5.4 google/gemini-3.1-pro-preview \
+        z-ai/glm-5.1 moonshotai/kimi-k2.5)
+for pack in steel_cbam fertilizer_ag_inputs; do
+  python scripts/bench_industrial_depth.py \
+    --pack "$pack" \
+    --models "${MODELS[@]}" \
+    --max-tokens 8192 --temperature 0.2 --timeout 600 \
+    --jsonl-out "results/${pack}_frontier6_8k.jsonl"
+done</pre>
+
+            <p>Cost ledger from the JSONL (conceptual):</p>
+            <pre class="insight-reproduce"># For each JSONL row with ok=true, cost per call is
+#   input_tokens/1M * input_price + output_tokens/1M * output_price
+#
+# OpenRouter list prices at 2026-04-19 ($ per Mtok, in / out):
+#   anthropic/claude-opus-4.7       15.00 / 75.00
+#   openai/gpt-5.4                   1.25 / 10.00
+#   google/gemini-3.1-pro-preview    1.25 /  5.00
+#   z-ai/glm-5.1                     0.60 /  2.20
+#   moonshotai/kimi-k2.5             0.38 /  1.72
+#   openrouter/elephant-alpha        0.00 /  0.00
+#
+# Summed across the 11 successful calls, the batch total is $1.203.
+# Full computation script ships in the reproduction bundle.</pre>
+
+            <p>
+              Expected behavior: total spend ≈ $1.20, batch wall time
+              ≈ 23 minutes (Kimi dominates the tail). At
+              <code>max_tokens=2048</code> instead of 8 192,
+              <code>glm-5.1</code> and <code>kimi-k2.5</code> will both
+              return <code>empty_content (finish=length)</code> and the
+              ranking inverts — this is the trap discussed in the
+              methodology. If your rerun shows a different ranking, it
+              is almost always because the output budget is too tight.
+            </p>
+
+            <p>
+              <strong>Want to run this yourself?</strong> Write us at
+              <a href="mailto:hello@horde.vision">hello@horde.vision</a>
+              and we'll send a tarball with both packs, their rubrics,
+              the harness, the JSONL outputs, and the full cost-ledger
+              script — or run the same matrix against your own prompts
+              and model shortlist as a custom engagement. See
+              <a href="./how-to-read.html#artifacts">How to read &rarr; artifacts and reproduction</a>.
+            </p>
+          </section>
+
+          <section class="insight-section">
+            <h2>Artifacts</h2>
+            <p>
+              The report is backed by two packs, their rubrics, the
+              raw JSONL from every call, and a cost ledger script.
+              They aren't public — we send them on request to
+              operators who want to rerun the same matrix on their own
+              stack or adapt it to their own verticals.
+            </p>
+            <ul>
+              <li><strong>Pack definitions</strong> — <code>prompt.md</code> + <code>markers.yaml</code> for <code>steel_cbam</code> and <code>fertilizer_ag_inputs</code>, written ahead of the run.</li>
+              <li><strong>Raw JSONL</strong> — 12 rows total, one per (model × pack), including the Kimi · fertilizer provider failure cited in Finding 2.</li>
+              <li><strong>Summary</strong> — tier-3 ranks, per-model cost, batch wall time, and coverage-ceiling calculations per pack.</li>
+              <li><strong>Harness</strong> — the single Python script that produced all of the above.</li>
+              <li>Companion reports: <a href="./industrial-depth-elephant-2026-04.html">Industrial depth on a free tier</a>, <a href="./elephant-routing-alias-2026-04.html">Elephant alpha is a routing alias</a>.</li>
+            </ul>
+            <p>
+              Request the bundle at
+              <a href="mailto:hello@horde.vision">hello@horde.vision</a>,
+              or see
+              <a href="./how-to-read.html#artifacts">how to read &rarr; artifacts and reproduction</a>
+              for what's in it and how custom runs work.
+            </p>
+
+            <a class="insight-back" href="../insights.html" data-i18n="frontierVsElephant.back">← Back to Insights</a>
+          </section>
+
+          <section class="insight-cta">
+            <div class="insight-cta__copy">
+              <h2 data-i18n="frontierVsElephant.cta.title">
+                Same harness, your vertical, your model pool.
+              </h2>
+              <p data-i18n="frontierVsElephant.cta.text">
+                If you are weighing a single-flagship procurement
+                decision against a multi-model strategy in your operating
+                vertical, we can run this same matrix against your
+                prompts on your shortlist. The 41 % / 24 % coverage
+                ceiling shown here is a starting point — your vertical
+                will have its own.
+              </p>
+            </div>
+            <a class="platform-link" href="../index.html#contact" data-i18n="frontierVsElephant.cta.button">
+              Request a custom run
+            </a>
+          </section>
+        </article>
+      </main>
+
+      <footer class="footer section reveal" id="contact">
+        <div class="footer-brand">
+          <div class="section-label" data-i18n="footer.label">Horde.Vision</div>
+          <p class="footer-title" data-i18n="footer.title">Built for leadership under uncertainty.</p>
+          <p class="footer-note" data-i18n="footer.note">
+            Structured decision intelligence, grounded research, and governed simulation for complex operating environments.
+          </p>
+        </div>
+
+        <div class="footer-columns">
+          <div>
+            <h4 data-i18n="footer.location.title">Location</h4>
+            <p data-i18n="footer.location.line1">Dostyk, 16</p>
+            <p data-i18n="footer.location.line2">Astana, Kazakhstan</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.contact.title">Contact</h4>
+            <p data-i18n="footer.contact.line1">hello@horde.vision</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.availability.title">Availability</h4>
+            <p data-i18n="footer.availability.line1">Meetings by request</p>
+            <p data-i18n="footer.availability.line2">Additional details coming soon</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.legal.title">Legal</h4>
+            <div class="footer-links">
+              <a href="../privacy" data-i18n="footer.legal.privacy">Privacy Notice</a>
+              <a href="../terms" data-i18n="footer.legal.terms">Terms of Usage</a>
+              <a href="../technical-disclosure" data-i18n="footer.legal.technical">Technical Disclosure</a>
+            </div>
+          </div>
+        </div>
+      </footer>
+    </div>
+
+    <script src="../script.js"></script>
+  </body>
+</html>

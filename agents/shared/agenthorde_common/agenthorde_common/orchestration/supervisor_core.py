@@ -9,6 +9,7 @@ from typing import Any
 from agenthorde_common.runtime.state_keys import (
     STATE_ANALYZER_OUTPUT_KEY,
     STATE_CRITIC_OUTPUT_KEY,
+    STATE_DECISION_INFLUENCE_OUTPUT_KEY,
     STATE_GOVERNANCE_OUTPUT_KEY,
     STATE_PACK_KEY,
     STATE_QUESTION_PLAN_KEY,
@@ -80,13 +81,16 @@ def build_final_answer_text(state: dict[str, Any], pack: SessionPack, *, max_sup
     _merge_analyzer_into_pack(pack, state.get(STATE_ANALYZER_OUTPUT_KEY), "analyzer")
     _merge_analyzer_into_pack(pack, state.get(STATE_GOVERNANCE_OUTPUT_KEY), "governance")
     _merge_analyzer_into_pack(pack, state.get(STATE_SANCTIONS_OUTPUT_KEY), "sanctions")
+    _merge_analyzer_into_pack(pack, state.get(STATE_DECISION_INFLUENCE_OUTPUT_KEY), "decision_influence")
     _dump_pack(state, pack)
     ao_raw = state.get(STATE_ANALYZER_OUTPUT_KEY) or {}
     go_raw = state.get(STATE_GOVERNANCE_OUTPUT_KEY) or {}
     sx_raw = state.get(STATE_SANCTIONS_OUTPUT_KEY) or {}
+    di_raw = state.get(STATE_DECISION_INFLUENCE_OUTPUT_KEY) or {}
     summary_sc = ""
     summary_gov = ""
     summary_sanc = ""
+    summary_di = ""
     try:
         summary_sc = AnalyzerOutput.model_validate(ao_raw).chain_summary
     except Exception:
@@ -99,6 +103,10 @@ def build_final_answer_text(state: dict[str, Any], pack: SessionPack, *, max_sup
         summary_sanc = AnalyzerOutput.model_validate(sx_raw).chain_summary
     except Exception:
         summary_sanc = str(sx_raw) if sx_raw else ""
+    try:
+        summary_di = AnalyzerOutput.model_validate(di_raw).chain_summary
+    except Exception:
+        summary_di = str(di_raw) if di_raw else ""
     parts: list[str] = []
     if (summary_sc or "").strip():
         parts.append(summary_sc.strip())
@@ -106,6 +114,8 @@ def build_final_answer_text(state: dict[str, Any], pack: SessionPack, *, max_sup
         parts.append("Governance & control:\n" + summary_gov.strip())
     if (summary_sanc or "").strip():
         parts.append("Sanctions & controls:\n" + summary_sanc.strip())
+    if (summary_di or "").strip():
+        parts.append("Decisions & influence:\n" + summary_di.strip())
     summary = "\n\n".join(parts) if parts else "(no analyzer summary)"
     caveat = ""
     if pack.cycle_index >= max_supervisor_cycles and not pack.done:
@@ -151,6 +161,7 @@ def _sync_prompt_keys(state: dict[str, Any], pack: SessionPack, mission: str = "
     state["ah_analyzer_json"] = _json_compact(state.get(STATE_ANALYZER_OUTPUT_KEY) or {})
     state["ah_governance_json"] = _json_compact(state.get(STATE_GOVERNANCE_OUTPUT_KEY) or {})
     state["ah_sanctions_json"] = _json_compact(state.get(STATE_SANCTIONS_OUTPUT_KEY) or {})
+    state["ah_decision_influence_json"] = _json_compact(state.get(STATE_DECISION_INFLUENCE_OUTPUT_KEY) or {})
     state["ah_red_team_json"] = _json_compact(state.get(STATE_RED_TEAM_OUTPUT_KEY) or {})
     state["ah_question_plan_json"] = _json_compact(state.get(STATE_QUESTION_PLAN_KEY) or {})
     from agenthorde_common.critic.prompt import (
@@ -315,6 +326,7 @@ def _log_decision(pack: SessionPack, cycle: int, dec: SupervisorDecision) -> Non
         "supply_chain_analyzer",
         "governance_control_analyzer",
         "sanctions_analyzer",
+        "decision_influence_analyzer",
     ):
         pack.last_intent = (
             "supply_chain"
@@ -322,6 +334,8 @@ def _log_decision(pack: SessionPack, cycle: int, dec: SupervisorDecision) -> Non
             else "governance"
             if dec.next_agent == "governance_control_analyzer"
             else "sanctions"
+            if dec.next_agent == "sanctions_analyzer"
+            else "decision_influence"
         )
 
 
@@ -372,6 +386,8 @@ def _pick_retry_agent_for_intent(pack: SessionPack) -> str:
         return "governance_control_analyzer"
     if intent == "sanctions":
         return "sanctions_analyzer"
+    if intent == "decision_influence":
+        return "decision_influence_analyzer"
     return "supply_chain_analyzer"
 
 
@@ -387,7 +403,7 @@ def _check_gates(
     # structural gate.
     if "structural" not in pack.gates_retried:
         intent = (pack.last_intent or "").strip()
-        if intent in ("supply_chain", "governance", "sanctions") and len(pack.proposed_relations) == 0:
+        if intent in ("supply_chain", "governance", "sanctions", "decision_influence") and len(pack.proposed_relations) == 0:
             if cycle < pack.supervisor_cap:
                 return (
                     "structural",
@@ -485,7 +501,12 @@ def coerce_supervisor_decision(
     # already chosen a better path this cycle.
     if (
         last_hints
-        and dec.next_agent in ("supply_chain_analyzer", "governance_control_analyzer")
+        and dec.next_agent in (
+            "supply_chain_analyzer",
+            "governance_control_analyzer",
+            "sanctions_analyzer",
+            "decision_influence_analyzer",
+        )
         and not pack.extensions_pending_red_team
     ):
         top = max(last_hints, key=lambda h: float(h.confidence or 0.0))
@@ -546,6 +567,7 @@ def coerce_supervisor_decision(
             "supply_chain_analyzer",
             "governance_control_analyzer",
             "sanctions_analyzer",
+            "decision_influence_analyzer",
         )
     ):
         rsf = last_critic.recommended_scope_focus
@@ -600,6 +622,7 @@ _ANALYZER_OUTPUT_KEY_FOR_AGENT: dict[str, str] = {
     "supply_chain_analyzer": STATE_ANALYZER_OUTPUT_KEY,
     "governance_control_analyzer": STATE_GOVERNANCE_OUTPUT_KEY,
     "sanctions_analyzer": STATE_SANCTIONS_OUTPUT_KEY,
+    "decision_influence_analyzer": STATE_DECISION_INFLUENCE_OUTPUT_KEY,
 }
 
 

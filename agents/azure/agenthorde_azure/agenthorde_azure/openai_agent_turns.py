@@ -13,6 +13,7 @@ from agenthorde_common.llm.openai_tool_loop import parse_structured_only, run_to
 from agenthorde_common.orchestration.supervisor_core import _ANALYZER_OUTPUT_KEY_FOR_AGENT
 from agenthorde_common.prompts.instructions import (
     ANALYZER_INSTRUCTION,
+    DECISION_INFLUENCE_INSTRUCTION,
     GOVERNANCE_CONTROL_INSTRUCTION,
     QUESTION_PLANNER_INSTRUCTION,
     RED_TEAM_INSTRUCTION,
@@ -102,6 +103,7 @@ async def run_supervisor_router_turn(
         ah_analyzer_json=str(state.get("ah_analyzer_json") or "{}"),
         ah_governance_json=str(state.get("ah_governance_json") or "{}"),
         ah_sanctions_json=str(state.get("ah_sanctions_json") or "{}"),
+        ah_decision_influence_json=str(state.get("ah_decision_influence_json") or "{}"),
         ah_red_team_json=str(state.get("ah_red_team_json") or "{}"),
     )
     t0 = time.perf_counter()
@@ -154,6 +156,7 @@ async def run_named_worker_turn(
         "supply_chain_analyzer": ANALYZER_INSTRUCTION,
         "governance_control_analyzer": GOVERNANCE_CONTROL_INSTRUCTION,
         "sanctions_analyzer": SANCTIONS_ANALYZER_INSTRUCTION,
+        "decision_influence_analyzer": DECISION_INFLUENCE_INSTRUCTION,
     }
     tmpl = templates.get(agent_name)
     if tmpl is None:

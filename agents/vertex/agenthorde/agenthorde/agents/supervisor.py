@@ -13,6 +13,7 @@ from google.genai import types as genai_types
 
 from agenthorde.agents.workers import (
     critic_agent,
+    decision_influence_analyzer,
     governance_control_analyzer,
     question_planner,
     red_team_agent,
@@ -43,6 +44,7 @@ from agenthorde_common.orchestration.supervisor_core import (
 from agenthorde_common.runtime.state_keys import (
     STATE_ANALYZER_OUTPUT_KEY,
     STATE_CRITIC_OUTPUT_KEY,
+    STATE_DECISION_INFLUENCE_OUTPUT_KEY,
     STATE_GOVERNANCE_OUTPUT_KEY,
     STATE_PACK_KEY,
     STATE_QUESTION_PLAN_KEY,
@@ -93,6 +95,8 @@ class SupervisorAgent(BaseAgent):
             return governance_control_analyzer
         if name == "sanctions_analyzer":
             return sanctions_analyzer
+        if name == "decision_influence_analyzer":
+            return decision_influence_analyzer
         if name == "red_team_agent":
             return red_team_agent
         if name == "critic_agent":
@@ -119,6 +123,8 @@ class SupervisorAgent(BaseAgent):
             else "governance"
             if agent_name == "governance_control_analyzer"
             else "sanctions"
+            if agent_name == "sanctions_analyzer"
+            else "decision_influence"
         )
         _merge_analyzer_into_pack(pack, ctx.session.state.get(output_key), origin)
         _dump_pack(ctx.session.state, pack)
@@ -170,6 +176,7 @@ class SupervisorAgent(BaseAgent):
                 STATE_ANALYZER_OUTPUT_KEY,
                 STATE_GOVERNANCE_OUTPUT_KEY,
                 STATE_SANCTIONS_OUTPUT_KEY,
+                STATE_DECISION_INFLUENCE_OUTPUT_KEY,
             ):
                 hints = _escalation_hints_from_raw(state.get(key))
                 if hints:
@@ -217,6 +224,11 @@ class SupervisorAgent(BaseAgent):
                             yield event
                         pack = _load_pack(state)
                         _merge_analyzer_into_pack(pack, state.get(STATE_SANCTIONS_OUTPUT_KEY), "sanctions")
+                    elif retry_agent == "decision_influence_analyzer":
+                        async for event in decision_influence_analyzer.run_async(ctx):
+                            yield event
+                        pack = _load_pack(state)
+                        _merge_analyzer_into_pack(pack, state.get(STATE_DECISION_INFLUENCE_OUTPUT_KEY), "decision_influence")
                     else:
                         async for event in supply_chain_analyzer.run_async(ctx):
                             yield event
@@ -236,6 +248,9 @@ class SupervisorAgent(BaseAgent):
                     yield event
             elif dec.next_agent == "sanctions_analyzer":
                 async for event in self._run_analyzer_and_merge(ctx, "sanctions_analyzer"):
+                    yield event
+            elif dec.next_agent == "decision_influence_analyzer":
+                async for event in self._run_analyzer_and_merge(ctx, "decision_influence_analyzer"):
                     yield event
             elif dec.next_agent == "parallel_fanout":
                 # ADK agents are not guaranteed thread-safe per-context, but each
@@ -329,6 +344,7 @@ root_agent = SupervisorAgent(
         supply_chain_analyzer,
         governance_control_analyzer,
         sanctions_analyzer,
+        decision_influence_analyzer,
         critic_agent,
         red_team_agent,
     ],

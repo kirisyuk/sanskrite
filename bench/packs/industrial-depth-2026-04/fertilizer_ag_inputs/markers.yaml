@@ -1,0 +1,179 @@
+vertical: fertilizer_ag_inputs
+description: |
+  Knowledge depth markers for the fertilizer / ag inputs probe.
+
+tier1:
+  - Yara
+  - CF Industries
+  - Nutrien
+  - Mosaic
+  - OCI
+  - OCP
+  - K+S
+  - Belaruskali
+  - Uralkali
+  - EuroChem
+  - Acron
+  - urea
+  - ammonia
+  - DAP
+  - MAP
+  - MOP
+  - SOP
+  - phosphate
+  - potash
+  - glyphosate
+  - Bayer
+  - Monsanto
+  - Syngenta
+  - Corteva
+  - BASF
+  - Roundup
+  - sanctions
+
+tier2:
+  - Yara Porsgrunn
+  - Yara Sluiskil
+  - Yara Brunsbuttel
+  - CF Industries Donaldsonville
+  - CF Industries Yazoo City
+  - Nutrien Borger
+  - Nutrien Geismar
+  - Nutrien Aurora
+  - Nutrien Carlsbad
+  - Nutrien Allan
+  - Nutrien Lanigan
+  - Nutrien Rocanville
+  - Mosaic Esterhazy
+  - Mosaic K1
+  - Mosaic K2
+  - Mosaic K3
+  - Mosaic Belle Plaine
+  - Mosaic Florida
+  - OCP Khouribga
+  - OCP Jorf Lasfar
+  - OCP Benguerir
+  - OCP Boucraa
+  - Phosboucraa
+  - ICL Negev
+  - ICL Sodom
+  - ICL Dead Sea
+  - ICL Rotem
+  - K+S Werra
+  - K+S Bethune
+  - K+S Sigmundshall
+  - Klaipeda
+  - Klaipedos
+  - Lithuanian Railways
+  - Lietuvos Gelezinkeliai
+  - Murmansk
+  - Antwerp Eurochem
+  - Onega
+  - Acron Onega
+  - SAFCO
+  - Ma'aden
+  - Maaden
+  - Phosphorit
+  - Henry Hub
+  - TTF
+  - "TTF Henry Hub spread"
+  - PetroChina
+  - Sinochem
+  - Sinopec
+  - Wynca
+  - Wengfu
+  - Hubei Yihua
+  - Hubei
+  - Anhui Sierte
+  - Sichuan Lomon
+  - Lomon Billions
+  - Fuhua
+  - Rainbow
+  - SinoFert
+  - China Phosphate
+  - DAP MAP licensing
+  - "Phosphate export"
+  - Roundup Ready
+  - Roundup Ready 2 Xtend
+  - SmartStax
+  - VT4PRO
+  - Bollgard
+  - PowerCore Enlist
+  - Vorceed Enlist
+  - Agrisure Viptera
+  - Duracade
+  - Xitavo
+  - Zidua
+  - Crop Protection
+  - Crop Science
+  - dicamba
+  - "2,4-D"
+
+tier3:
+  - "30 percent"
+  - "31 percent"
+  - "33 percent"
+  - "35 percent"
+  - "global P"
+  - "phosphate trade"
+  - "global potash"
+  - global potash trade
+  - "26 Mt"
+  - "20 Mt"
+  - "18 Mt"
+  - "16 Mt"
+  - Belarus potash exports
+  - Belarus rail
+  - rail transit
+  - Cargill JV
+  - WilmarNutrien
+  - Sinochem JV
+  - Saskatchewan
+  - Saskatoon
+  - Cory mine
+  - Patience Lake
+  - Vanscoy
+  - Cory
+  - Ekaterinburg
+  - Solikamsk
+  - Berezniki
+  - Berezniki potash
+  - Solikamsk Magnesium
+  - K+S Werra closure
+  - Werra restructuring
+  - Werra REKS
+  - REKS
+  - DPB-PCS
+  - PCS Cory
+  - "Hubei Xingfa"
+  - Xingfa
+  - "Yunnan Yuntianhua"
+  - Yuntianhua
+  - "Belarus rail closure"
+  - "March 2022 sanctions"
+  - "May 2024"
+  - "August 2024"
+  - "October 2024"
+  - "January 2025"
+  - "February 2025"
+  - SDN list
+  - Specially Designated Nationals
+  - General License
+  - GL 6
+  - GL 6A
+  - OFAC
+  - phosphate licensing
+  - "AdBlue"
+  - DEF
+  - diesel exhaust fluid
+  - Yara AdBlue
+  - SCR
+  - selective catalytic reduction
+  - Cumulus arbitration
+  - Hague arbitration
+  - PCA
+  - ICSID
+  - Cargill Brazil
+  - SLC Agricola
+  - Agribrasil
+  - BR Cerrado

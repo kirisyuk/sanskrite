@@ -10,6 +10,7 @@ SupervisorNextAgent = Literal[
     "supply_chain_analyzer",
     "governance_control_analyzer",
     "sanctions_analyzer",
+    "decision_influence_analyzer",
     "critic_agent",
     "red_team_agent",
     "parallel_fanout",

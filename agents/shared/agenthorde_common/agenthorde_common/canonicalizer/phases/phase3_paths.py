@@ -18,6 +18,8 @@ from agenthorde_common.canonicalizer.taxonomy import (
     INCOTERMS_2020,
     normalize_community_subtype,
     normalize_evidence_subtype,
+    normalize_mechanism_category,
+    normalize_mobile_asset_kind,
     normalize_product_family,
     sanctions_regime_canonical_path,
     sanctions_regime_code_for_alias,
@@ -108,6 +110,26 @@ def build_canonical_path(ent: CanonicalEntity, ws: WorkingState, narrative_iso2:
         path = f"/product/{fam}/{slug}"
     elif t == "vessel_class":
         path = f"/vessel_class/{iso2}/{slug}"
+    elif t == "mobile_asset":
+        # /mobile_asset/{kind}/{geo}/{slug}-{id8} — `kind` is closed enum
+        # MobileAssetKind. The trailing -{id8} disambiguates two assets that
+        # share the same surface name (e.g. multiple "Pacific Star" vessels);
+        # we lift it from the agent-supplied identifier when available, else
+        # derive from the entity_id hash to keep paths stable across reruns.
+        kind = normalize_mobile_asset_kind(ent.subtype)
+        ident = ""
+        if ent.attributes:
+            ident_val = (
+                ent.attributes.get("imo")
+                or ent.attributes.get("mmsi")
+                or ent.attributes.get("tail_number")
+                or ent.attributes.get("identifier")
+            )
+            if ident_val is not None:
+                ident = slugify(str(ident_val))[:8]
+        if not ident:
+            ident = (slugify(ent.entity_id or "") or slug)[:8]
+        path = f"/mobile_asset/{kind}/{iso2}/{slug}-{ident}"
     elif t == "route":
         path = f"/route/{iso2}/{slug}"
     elif t == "market":
@@ -124,6 +146,20 @@ def build_canonical_path(ent: CanonicalEntity, ws: WorkingState, narrative_iso2:
         # not collapsed into the slug. Mirrors core canonicalizer slot order.
         community_subtype = normalize_community_subtype(ent.subtype)
         path = f"/community/{iso2}/{community_subtype}/{slug}"
+    elif t == "decision":
+        # /decision/{domain-slug}/{slug} — domain-slug captures which strategic
+        # domain the decision belongs to (export_controls, antitrust,
+        # standards, monetary_policy, etc.). When the agent fails to emit a
+        # domain hint, we fall back to "general" so the path remains valid.
+        domain = (ent.attributes.get("domain_slug") if ent.attributes else None) or "general"
+        domain_seg = normalize_surface(str(domain)).replace(" ", "-") or "general"
+        path = f"/decision/{domain_seg}/{slug}"
+    elif t == "mechanism":
+        # /mechanism/{category}/{slug} — category is closed enum
+        # MechanismCategory; mechanisms are reusable and not jurisdiction-bound,
+        # so iso2 does NOT appear in the path.
+        mech_cat = normalize_mechanism_category(ent.subtype)
+        path = f"/mechanism/{mech_cat}/{slug}"
     else:
         path = f"/org/na/{slug}"
     return path

@@ -1,0 +1,196 @@
+vertical: space_access
+description: |
+  Knowledge depth markers for the space access / launch + constellations probe.
+
+tier1:
+  - SpaceX
+  - Falcon 9
+  - Falcon Heavy
+  - Starship
+  - ULA
+  - Vulcan
+  - Blue Origin
+  - New Glenn
+  - Rocket Lab
+  - Neutron
+  - Ariane 6
+  - Long March
+  - Starlink
+  - Kuiper
+  - OneWeb
+  - Eutelsat
+  - GPS III
+  - GLONASS
+  - Beidou
+
+tier2:
+  - BE-4
+  - BE-3U
+  - Raptor
+  - Raptor 2
+  - Raptor 3
+  - Merlin 1D
+  - RL10
+  - RL10C
+  - Centaur V
+  - GEM-63XL
+  - GEM 63XL
+  - Northrop Grumman GEM
+  - hot-staging
+  - hot staging
+  - Boca Chica
+  - Starbase
+  - LC-39A
+  - LC-40
+  - LC-36
+  - Wallops
+  - Mahia
+  - Cape Canaveral
+  - Vandenberg
+  - SLC-4
+  - Kourou
+  - Centre Spatial Guyanais
+  - CSG
+  - P120C
+  - P120
+  - Vega C
+  - Vega-C
+  - Vinci
+  - Avio
+  - ArianeGroup
+  - Isar Aerospace
+  - Spectrum
+  - RFA One
+  - Rocket Factory Augsburg
+  - MaiaSpace
+  - PLD Space
+  - Miura 1
+  - Miura 5
+  - HyImpulse
+  - "Long March 5B"
+  - "Long March 7A"
+  - "Long March 8"
+  - "Long March 8A"
+  - "Long March 9"
+  - LM-9
+  - YF-130
+  - YF-100
+  - YF-77
+  - YF-90
+  - "CZ-5"
+  - "CZ-7"
+  - "CZ-8"
+  - "CZ-9"
+  - CASIC
+  - Kuaizhou
+  - "KZ-1A"
+  - "KZ-11"
+  - iSpace
+  - Hyperbola
+  - "Hyperbola-2"
+  - LandSpace
+  - "Zhuque-2"
+  - "Zhuque-3"
+  - methalox
+  - Galactic Energy
+  - "Ceres-1"
+  - "Pallas-1"
+  - Orienspace
+  - "Gravity-1"
+  - Stoke Space
+  - Stoke Nova
+  - Relativity Space
+  - Terran R
+  - Firefly Alpha
+  - Firefly MLV
+  - Eclipse
+  - "Stratolaunch"
+  - "Talon-A"
+  - Talon A
+
+tier3:
+  - "96 launches"
+  - "98 launches"
+  - "134 launches"
+  - "138 launches"
+  - "144 launches"
+  - "150 launches"
+  - "200 launches"
+  - "180 launches"
+  - "Falcon 9 cadence"
+  - launch cadence
+  - per year
+  - "B1062"
+  - "B1058"
+  - "B1067"
+  - "B1077"
+  - "B1080"
+  - "B1083"
+  - booster reuse
+  - "20 flights"
+  - "23 flights"
+  - "25 flights"
+  - "10 flights"
+  - "12 flights"
+  - "15 flights"
+  - 30 reuses
+  - "Ship 30"
+  - "Ship 31"
+  - "Ship 32"
+  - "Ship 33"
+  - "Ship 34"
+  - "Booster 12"
+  - "Booster 13"
+  - "Booster 14"
+  - "Booster 15"
+  - hot stage ring
+  - chopstick catch
+  - Mechazilla
+  - Mechazilla catch
+  - flame trench
+  - water deluge
+  - V2 Mini
+  - V2 Mini Starlink
+  - V3 Starlink
+  - laser inter-satellite
+  - inter-satellite link
+  - ISL
+  - "Direct to Cell"
+  - direct-to-cell
+  - DTC Starlink
+  - LSAT
+  - "Project Kuiper KA-01"
+  - "Project Kuiper KA-02"
+  - "Atlas V Kuiper"
+  - "Atlas Kuiper"
+  - Vulcan Cert-1
+  - Vulcan Cert-2
+  - VC1
+  - VC2
+  - "Cert-1"
+  - "Cert-2"
+  - Vulcan Centaur Heavy
+  - VC2L
+  - Phase 3 NSSL
+  - Lane 1
+  - Lane 2
+  - National Security Space Launch
+  - NSSL Phase 2
+  - NSSL Phase 3
+  - "USSF-106"
+  - "USSF-87"
+  - GSLV Mk III
+  - LVM3
+  - PSLV
+  - SSLV
+  - ISRO
+  - ISRO Chandrayaan
+  - Skyroot
+  - Vikram
+  - Agnikul
+  - Agnibaan
+  - GTO
+  - geosynchronous transfer
+  - LEO
+  - SSO
+  - sun-synchronous

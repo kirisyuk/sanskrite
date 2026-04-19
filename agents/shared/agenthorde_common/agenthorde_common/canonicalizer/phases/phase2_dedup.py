@@ -35,10 +35,26 @@ from agenthorde_common.canonicalizer.slug import extract_iso2_from_text, merge_i
 # Fragment classes whose identity is intrinsically jurisdiction-scoped.
 # A mention's iso2_hint, if known, becomes a hard discriminator for these
 # classes during dedup. Other classes (vessel_class, route, evidence,
-# product) are global by construction or use a different namespace
-# (product family) and are not subject to the gate.
+# product, mechanism) are global by construction or use a different namespace
+# (product family / mechanism category) and are not subject to the gate.
+#
+# `program` (legacy) is now an `org` subtype rather than a standalone class —
+# jurisdiction is enforced via the org canonical path slot.
+# `decision` is jurisdiction-scoped because the same domain slug can host
+# different decisions in different jurisdictions; mechanisms are reusable
+# instruments and intentionally global.
 _JURISDICTION_BOUND_TYPES: frozenset[str] = frozenset(
-    {"regime", "program", "project", "site", "geo", "person", "org", "community", "market"}
+    {
+        "regime",
+        "project",
+        "site",
+        "geo",
+        "person",
+        "org",
+        "community",
+        "market",
+        "decision",
+    }
 )
 
 

@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>How to read these reports | Horde.Vision Insights</title>
+    <meta
+      id="meta-description"
+      name="description"
+      content="Reader's guide to the Horde.Vision Insights series — terminology, reading speeds, the chronological arc of published reports, and how to request the reproduction bundle."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Sora:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="../styles.css" />
+  </head>
+  <body data-page="insights-how-to-read">
+    <div class="site-shell">
+      <header class="subpage-hero subpage-hero--insight" id="top">
+        <nav class="topbar" aria-label="Primary" data-i18n-aria-label="nav.aria.primary">
+          <a class="brand" href="../index.html">Horde.Vision</a>
+          <div class="topbar-controls">
+            <div
+              class="language-switcher"
+              aria-label="Language selector"
+              data-i18n-aria-label="nav.aria.languageSelector"
+            >
+              <button class="language-button is-active" type="button" data-lang="en" aria-label="Switch to English" data-i18n-aria-label="nav.aria.switchEnglish">EN</button>
+              <button class="language-button" type="button" data-lang="ru" aria-label="Переключить на русский" data-i18n-aria-label="nav.aria.switchRussian">RU</button>
+              <button class="language-button" type="button" data-lang="kz" aria-label="Қазақ тіліне ауыстыру" data-i18n-aria-label="nav.aria.switchKazakh">KZ</button>
+            </div>
+            <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" data-i18n="nav.menu">Menu</button>
+            <div class="nav-links" id="site-nav">
+              <a href="../index.html#about" data-i18n="nav.about">About</a>
+              <a href="../index.html#services" data-i18n="nav.services">Services</a>
+              <a href="../index.html#platform" data-i18n="nav.platform">Platforms</a>
+              <a href="../insights.html" class="is-active" data-i18n="nav.insights">Insights</a>
+              <a href="../index.html#contact" data-i18n="nav.contact">Contact</a>
+            </div>
+          </div>
+        </nav>
+
+        <div class="subpage-hero__inner">
+          <div class="subpage-hero__copy">
+            <p class="eyebrow" data-i18n="howToRead.eyebrow">
+              Reader's guide · Start here
+            </p>
+            <h1 data-i18n="howToRead.title">
+              How to read these reports.
+            </h1>
+            <p class="hero-text" data-i18n="howToRead.lead">
+              This page is a 3-minute primer for the Horde.Vision
+              Insights series. It explains what we publish, the
+              vocabulary we use, the order in which the reports were
+              written, and how to get the raw artifacts if you want to
+              reproduce anything. Read this once and the rest of the
+              series becomes much easier to navigate.
+            </p>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <article class="insight-article">
+          <section class="insight-section">
+            <h2 data-i18n="howToRead.series.heading">What this series is</h2>
+            <p data-i18n="howToRead.series.p1">
+              Horde.Vision is a decision-intelligence company. We
+              build a multi-agent operating layer for institutional
+              and industrial reasoning — the kind of work where a
+              single LLM call is never the whole answer, and where
+              "which model is best?" is the wrong question. The right
+              question is "which model, in which role, on which
+              vertical, and where does it break?"
+            </p>
+            <p data-i18n="howToRead.series.p2">
+              These reports come out of the same harness we run
+              internally to evaluate the models we put into
+              production. When an evaluation produces a finding we
+              think operators outside our team would care about, we
+              write it up and publish it here — with the scoring
+              rubric, the cost numbers, the raw outputs, and
+              reproduction instructions. No synthetic benchmarks. No
+              leaderboards. No "model X scored 87%." Real industrial
+              scenarios, real cost ledgers, real failure modes.
+            </p>
+            <p data-i18n="howToRead.series.p3">
+              The intended reader is an operator: a head of strategy,
+              a CIO, a procurement lead, a chief of staff, a
+              research director. Someone who has to make a decision
+              next quarter about which models to put into their
+              workflows and cannot rely on headline benchmark scores
+              to make it. These reports are written to that reader.
+            </p>
+          </section>
+
+          <section class="insight-section">
+            <h2 data-i18n="howToRead.speeds.heading">How to read a report at three speeds</h2>
+            <p data-i18n="howToRead.speeds.intro">
+              Each report is structured so you can extract the
+              headline in two minutes or the full methodology in
+              thirty. Pick your speed up front.
+            </p>
+
+            <div class="insight-speeds">
+              <div class="insight-speeds__card">
+                <span class="insight-speeds__time" data-i18n="howToRead.speeds.two.time">2 minutes</span>
+                <h3 data-i18n="howToRead.speeds.two.title">The headline</h3>
+                <p data-i18n="howToRead.speeds.two.body">
+                  Read the hero block at the top of the page (eyebrow, title, lead) and the TL;DR box right under it. That is the full argument of the report in bullet form. If the TL;DR doesn't surprise you, you can stop here — the body is the evidence, not the thesis.
+                </p>
+              </div>
+              <div class="insight-speeds__card">
+                <span class="insight-speeds__time" data-i18n="howToRead.speeds.ten.time">10 minutes</span>
+                <h3 data-i18n="howToRead.speeds.ten.title">The findings</h3>
+                <p data-i18n="howToRead.speeds.ten.body">
+                  Add the "Finding 1 / 2 / 3" sections and the charts. These show how we got each bullet in the TL;DR — the rank tables, the cost ledger, the coverage-ceiling calculation. At this speed you should leave with both the headline and the evidence for it.
+                </p>
+              </div>
+              <div class="insight-speeds__card">
+                <span class="insight-speeds__time" data-i18n="howToRead.speeds.thirty.time">30 minutes</span>
+                <h3 data-i18n="howToRead.speeds.thirty.title">The methodology</h3>
+                <p data-i18n="howToRead.speeds.thirty.body">
+                  Add the Methodology, Reproduction, and Artifacts sections at the bottom. These tell you exactly how the run was configured, what we did and did not measure, and how to get the reproduction bundle if you want to rerun the same matrix on your own prompts or model shortlist.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section class="insight-section">
+            <h2 data-i18n="howToRead.terms.heading">Terminology</h2>
+            <p data-i18n="howToRead.terms.intro">
+              Twelve terms show up across the series. If one of them
+              is unfamiliar in a report, come back here.
+            </p>
+
+            <dl class="insight-method insight-glossary">
+              <dt data-i18n="howToRead.terms.pack.term">Pack</dt>
+              <dd data-i18n="howToRead.terms.pack.def">
+                A self-contained industrial scenario we send to a
+                model. Usually a 3-paragraph setup (a fictional company,
+                a real regulatory and market context, and a 2027
+                decision to prepare for) plus six escalating questions
+                in plain prose. No schema, no system prompt, no tools.
+                Every pack lives in a directory with a <code>prompt.md</code>
+                and a <code>markers.yaml</code>.
+              </dd>
+
+              <dt data-i18n="howToRead.terms.rubric.term">Rubric</dt>
+              <dd data-i18n="howToRead.terms.rubric.def">
+                The full set of things we expect a "deep" answer to
+                name or quantify — company names, regulation numbers,
+                dates, prices, sites, people. Written <em>before</em>
+                the run, never shown to the model, stored as
+                <code>markers.yaml</code> alongside the pack.
+              </dd>
+
+              <dt data-i18n="howToRead.terms.marker.term">Marker</dt>
+              <dd data-i18n="howToRead.terms.marker.def">
+                A single item in the rubric — e.g.
+                <code>"Kalundborg"</code>,
+                <code>"72.5%"</code>,
+                <code>"Article 22"</code>,
+                <code>"Wezlana"</code>. Scoring is a conservative
+                case-insensitive substring match: the marker is either
+                present in the response or not.
+              </dd>
+
+              <dt data-i18n="howToRead.terms.tiers.term">Tier 1 / Tier 2 / Tier 3</dt>
+              <dd data-i18n="howToRead.terms.tiers.def">
+                Difficulty bands inside a rubric.
+                <strong>Tier 1</strong> — things any large LLM with
+                general coverage of the vertical should know.
+                <strong>Tier 2</strong> — competent practitioner
+                knowledge. <strong>Tier 3</strong> — expert, recent, or
+                event-specific knowledge (2024-2026 regulatory dates,
+                specific brand names of 2025 biosimilar launches,
+                quantified discount ranges, named supervisors). Tier 3
+                is where the gap between models shows up.
+              </dd>
+
+              <dt data-i18n="howToRead.terms.harness.term">Harness</dt>
+              <dd data-i18n="howToRead.terms.harness.def">
+                The Python script we run to execute a pack against a
+                list of models. Sends the prompt, records wall
+                latency, captures input/output tokens from the
+                provider, preserves the raw text, and scores it
+                against the rubric. Deliberately boring — no judging
+                LLM, no subjective scoring.
+              </dd>
+
+              <dt data-i18n="howToRead.terms.frontier.term">Frontier model</dt>
+              <dd data-i18n="howToRead.terms.frontier.def">
+                The current top-tier paid flagships from the big labs.
+                In this series that means
+                <code>claude-opus-4.7</code>,
+                <code>gpt-5.4</code>,
+                <code>gemini-3.1-pro-preview</code>,
+                <code>glm-5.1</code>, and
+                <code>kimi-k2.5</code>. The pool changes as new
+                generations release.
+              </dd>
+
+              <dt data-i18n="howToRead.terms.stealth.term">Stealth model · Elephant-alpha</dt>
+              <dd data-i18n="howToRead.terms.stealth.def">
+                OpenRouter periodically runs anonymized early-preview
+                slots under names like
+                <code>openrouter/elephant-alpha</code> and the
+                literal provider label <code>Stealth</code>. The
+                model behind the alias is deliberately not disclosed.
+                <code>elephant-alpha</code> is the slot we have been
+                probing across this series; as report #1 shows, it is
+                actually a routing alias over multiple backends, not a
+                single model.
+              </dd>
+
+              <dt data-i18n="howToRead.terms.roles.term">Role (explorer / critic / canonicalizer / supervisor)</dt>
+              <dd data-i18n="howToRead.terms.roles.def">
+                Roles inside our own multi-agent system. An
+                <strong>explorer</strong> drafts free-form prose and
+                enumerates entities; a <strong>critic</strong>
+                evaluates a draft against a strict contract; a
+                <strong>canonicalizer</strong> maps findings to our
+                system's entity types; a <strong>supervisor</strong>
+                routes work between roles. Most published reports
+                focus on explorer or critic fitness.
+              </dd>
+
+              <dt data-i18n="howToRead.terms.contract.term">Strict-JSON contract</dt>
+              <dd data-i18n="howToRead.terms.contract.def">
+                A rigid output schema enforced on a role (e.g. the
+                critic role). Contract-fidelity reports measure how
+                often a model returns output that is both valid JSON
+                and conforms to the expected fields — a separate axis
+                from prose depth.
+              </dd>
+
+              <dt data-i18n="howToRead.terms.coverage.term">Coverage ceiling</dt>
+              <dd data-i18n="howToRead.terms.coverage.def">
+                The union of tier-3 markers caught by <em>any</em>
+                model in the pool, divided by the size of the rubric.
+                A useful upper bound: "pool all these models and the
+                best you can do is this fraction of the rubric." In
+                our reports so far it sits at 32-48% on real
+                industrial verticals — most of the rubric goes
+                uncaught by everyone.
+              </dd>
+
+              <dt data-i18n="howToRead.terms.costmarker.term">Cost-per-marker</dt>
+              <dd data-i18n="howToRead.terms.costmarker.def">
+                Total USD spent on a model's response divided by the
+                number of tier-3 markers it caught. Produces
+                apples-to-apples comparisons across models with very
+                different price sheets. A 53× spread between the
+                cheapest and most expensive paid model on the same
+                prompt is not unusual.
+              </dd>
+
+              <dt data-i18n="howToRead.terms.inversion.term">Leadership inversion</dt>
+              <dd data-i18n="howToRead.terms.inversion.def">
+                A single model moving from first place on one
+                vertical to last on another, with the same prompt
+                format and the same budget. The core finding of
+                report #4: three of six models in the pool do this
+                across just three verticals. No single "best model"
+                exists across business-relevant industries.
+              </dd>
+            </dl>
+          </section>
+
+          <section class="insight-section">
+            <h2 data-i18n="howToRead.arc.heading">The reports, in order</h2>
+            <p data-i18n="howToRead.arc.intro">
+              Each report in the series stands on its own, but they
+              were written in this order and each one leans slightly
+              on the last. If you read them in sequence the arc is:
+              <em>what is this free model?</em> →
+              <em>does free tier hold at all?</em> →
+              <em>do paid flagships beat it?</em> →
+              <em>does any of this hold across verticals you actually live in?</em>
+            </p>
+
+            <ol class="insight-arc">
+              <li>
+                <div>
+                  <h3 data-i18n="howToRead.arc.r1.title">A stealth model is a routing alias. And at frontier scale, models diverge.</h3>
+                  <p data-i18n="howToRead.arc.r1.body">
+                    Eleven models on the same semiconductor / CHIPS Act
+                    session pack, under a strict-JSON critic contract.
+                    Two findings: <code>elephant-alpha</code> is a
+                    routing alias over multiple backends, not a single
+                    model; and at frontier scale, models
+                    <em>diverge</em> in judgment, they do not
+                    converge on consensus truth.
+                  </p>
+                  <a href="./elephant-routing-alias-2026-04.html" data-i18n="howToRead.arc.r1.link">Read #1 →</a>
+                </div>
+              </li>
+              <li>
+                <div>
+                  <h3 data-i18n="howToRead.arc.r2.title">Industrial depth on a free tier: 30 calls, then one model holds the day.</h3>
+                  <p data-i18n="howToRead.arc.r2.body">
+                    Fifteen free OpenRouter models against four
+                    industrial packs. After about thirty calls a
+                    global daily quota fires and fourteen of fifteen
+                    models go dark. The one survivor —
+                    <code>elephant-alpha</code> — gets extended to
+                    twelve verticals. Field report on what you can
+                    extract from a free tier when everything else
+                    breaks.
+                  </p>
+                  <a href="./industrial-depth-elephant-2026-04.html" data-i18n="howToRead.arc.r2.link">Read #2 →</a>
+                </div>
+              </li>
+              <li>
+                <div>
+                  <h3 data-i18n="howToRead.arc.r3.title">$1.20 vs $0 — paid frontier vs free elephant on industrial depth.</h3>
+                  <p data-i18n="howToRead.arc.r3.body">
+                    Six models, two heavy industrial packs (steel &
+                    CBAM, fertilizers & ag inputs), $1.20 total. The
+                    leader changes by vertical. Opus burns 83% of the
+                    budget and leads neither pack. The union of all
+                    five paid frontiers covers only 41% of the steel
+                    rubric and 24% of the fertilizer rubric — no
+                    model owns a vertical.
+                  </p>
+                  <a href="./frontier-vs-elephant-2026-04.html" data-i18n="howToRead.arc.r3.link">Read #3 →</a>
+                </div>
+              </li>
+              <li>
+                <div>
+                  <h3 data-i18n="howToRead.arc.r4.title">FMCG, banking, pharma. Same six models, three different leaders.</h3>
+                  <p data-i18n="howToRead.arc.r4.body">
+                    Three industries the reader actually lives in:
+                    FMCG procurement under EU PPWR, a European bank
+                    under Basel III endgame, a top-15 pharma planning
+                    2027 commercial under the IRA. Opus is first on
+                    FMCG and <em>last</em> on pharma. The free
+                    elephant takes third place on pharma at $0,
+                    beating GPT-5.4 and Opus. This is leadership
+                    inversion across three recognizable verticals.
+                  </p>
+                  <a href="./three-verticals-2026-04.html" data-i18n="howToRead.arc.r4.link">Read #4 →</a>
+                </div>
+              </li>
+            </ol>
+
+            <p class="insight-arc__next" data-i18n="howToRead.arc.next">
+              Next in the queue: a critic-role contract-fidelity
+              head-to-head on the same model pool, then explorer-role
+              fitness across three new verticals.
+            </p>
+          </section>
+
+          <section class="insight-section">
+            <h2 data-i18n="howToRead.artifacts.heading">Artifacts and reproduction</h2>
+            <p data-i18n="howToRead.artifacts.p1">
+              Every report ends with a Reproduction block showing the
+              exact command we ran. The packs, rubrics, harness, and
+              raw JSONL outputs live in a private research repo we do
+              not publish publicly — partly because they change every
+              week as new models come out, partly because they
+              include pricing structures and ranking choices that are
+              genuinely a product.
+            </p>
+            <p data-i18n="howToRead.artifacts.p2">
+              We are happy to share them on request. Two flavors:
+            </p>
+            <ul>
+              <li data-i18n="howToRead.artifacts.li1">
+                <strong>Reproduction bundle</strong> — a tarball with
+                the <code>prompt.md</code> and
+                <code>markers.yaml</code> files for every pack cited
+                in a given report, the raw JSONL from the run, the
+                harness script, and a one-line command. Enough to
+                rerun the same matrix yourself. Free, sent by email
+                to a real operator address.
+              </li>
+              <li data-i18n="howToRead.artifacts.li2">
+                <strong>Custom run</strong> — we design packs for
+                <em>your</em> verticals, point the harness at
+                <em>your</em> model shortlist (including anything
+                you cannot easily test in public — internal
+                fine-tunes, VPC endpoints, rate-limited previews),
+                and deliver the full rubric, charts, cost ledger, and
+                interpretation memo. This is a paid engagement; a
+                typical run is a week.
+              </li>
+            </ul>
+            <p data-i18n="howToRead.artifacts.p3">
+              Write us at <a href="mailto:hello@horde.vision">hello@horde.vision</a>
+              and tell us which report you read and what you want to
+              do with it — that is usually enough for us to know what
+              to send back.
+            </p>
+          </section>
+
+          <section class="insight-section">
+            <h2 data-i18n="howToRead.conventions.heading">Conventions</h2>
+            <ul>
+              <li data-i18n="howToRead.conventions.li1"><strong>Single shot per cell</strong> unless we explicitly label a report as a variance probe. One (model × pack) run in, one JSONL row out. We note in methodology when we repeat.</li>
+              <li data-i18n="howToRead.conventions.li2"><strong>Open-ended prose</strong> unless we explicitly label the report as strict-JSON. Most reports are free-form; contract-fidelity reports use a separate axis.</li>
+              <li data-i18n="howToRead.conventions.li3"><strong>Cost numbers are batch-observed.</strong> We record the exact <code>input_tokens</code> and <code>output_tokens</code> returned by the provider and multiply by the list price at publication date. We show the ledger so you can recompute with your own pricing.</li>
+              <li data-i18n="howToRead.conventions.li4"><strong>Rubric scoring is conservative.</strong> Case-insensitive substring match only — no fuzzy match, no synonym expansion, no LLM judge. False negatives are therefore slightly inflated and false positives are very rare. We note this tradeoff when it matters.</li>
+              <li data-i18n="howToRead.conventions.li5"><strong>We do not hide failed runs.</strong> Every <code>FAIL</code> or <code>empty_content</code> in a published table is a real outcome. Some of the most interesting findings are about failure modes.</li>
+            </ul>
+          </section>
+
+          <section class="insight-cta">
+            <div class="insight-cta__copy">
+              <h2 data-i18n="howToRead.cta.title">
+                Now you are ready to read any report in the series.
+              </h2>
+              <p data-i18n="howToRead.cta.text">
+                Go to the Insights index and pick a report — or jump
+                straight to #4 if you want the most recent field
+                test, to #1 if you want the methodology origin, or to
+                the most relevant vertical for your operation.
+              </p>
+            </div>
+            <a class="platform-link" href="../insights.html" data-i18n="howToRead.cta.button">
+              See all reports
+            </a>
+          </section>
+        </article>
+      </main>
+
+      <footer class="footer section reveal" id="contact">
+        <div class="footer-brand">
+          <div class="section-label" data-i18n="footer.label">Horde.Vision</div>
+          <p class="footer-title" data-i18n="footer.title">Built for leadership under uncertainty.</p>
+          <p class="footer-note" data-i18n="footer.note">
+            Structured decision intelligence, grounded research, and governed simulation for complex operating environments.
+          </p>
+        </div>
+
+        <div class="footer-columns">
+          <div>
+            <h4 data-i18n="footer.location.title">Location</h4>
+            <p data-i18n="footer.location.line1">Dostyk, 16</p>
+            <p data-i18n="footer.location.line2">Astana, Kazakhstan</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.contact.title">Contact</h4>
+            <p data-i18n="footer.contact.line1">hello@horde.vision</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.availability.title">Availability</h4>
+            <p data-i18n="footer.availability.line1">Meetings by request</p>
+            <p data-i18n="footer.availability.line2">Additional details coming soon</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.legal.title">Legal</h4>
+            <div class="footer-links">
+              <a href="../privacy" data-i18n="footer.legal.privacy">Privacy Notice</a>
+              <a href="../terms" data-i18n="footer.legal.terms">Terms of Usage</a>
+              <a href="../technical-disclosure" data-i18n="footer.legal.technical">Technical Disclosure</a>
+            </div>
+          </div>
+        </div>
+      </footer>
+    </div>
+
+    <script src="../script.js"></script>
+  </body>
+</html>

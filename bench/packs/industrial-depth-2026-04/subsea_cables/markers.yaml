@@ -1,0 +1,177 @@
+vertical: subsea_cables
+description: |
+  Knowledge depth markers for the subsea cable infrastructure probe.
+
+tier1:
+  - subsea cable
+  - submarine cable
+  - Prysmian
+  - Sumitomo
+  - NKT
+  - HMN Tech
+  - Huawei Marine
+  - Corning
+  - Subcom
+  - Alcatel Submarine Networks
+  - ASN
+  - NEC
+  - Google
+  - Meta
+  - Facebook
+  - Microsoft
+  - Amazon
+  - "2Africa"
+  - MAREA
+  - Equiano
+  - Dunant
+
+tier2:
+  - ZTT
+  - Hengtong
+  - YOFC
+  - OFS
+  - Furukawa
+  - Fujikura
+  - Lumentum
+  - II-VI
+  - Coherent Corp
+  - Finisar
+  - Cisco Acacia
+  - EDFA
+  - erbium-doped fiber amplifier
+  - pump laser
+  - pump diode
+  - 980 nm
+  - 1480 nm
+  - "ASE noise"
+  - amplified spontaneous emission
+  - Curie
+  - Topaz
+  - Firmina
+  - Anjana
+  - Amitie
+  - Amitié
+  - Anjana
+  - AEC
+  - "Apollo North"
+  - "Apollo South"
+  - "TGN-Atlantic"
+  - "TGN-Pacific"
+  - Tata Communications
+  - "AAE-1"
+  - Asia-Africa-Europe-1
+  - "EIG"
+  - Europe India Gateway
+  - Seacom
+  - SEA-ME-WE-3
+  - SEA-ME-WE-4
+  - SEA-ME-WE-5
+  - SEA-ME-WE-6
+  - "IMEWE"
+  - "I-ME-WE"
+  - "BICS"
+  - "PEACE"
+  - PEACE cable
+  - Pakistan East Africa Connecting Europe
+  - "PLCN"
+  - Pacific Light Cable Network
+  - Bifrost
+  - Echo
+  - Apricot
+  - Pacific Connect
+  - Cable Landing Station
+  - CLS
+  - Marseille CLS
+  - Genoa CLS
+  - Mumbai CLS
+  - Chennai CLS
+  - Cable Repair
+  - cable repair
+  - cable cut
+  - cable cuts
+  - "Houthi"
+  - Yemen
+  - "Red Sea"
+
+tier3:
+  - "22 ships"
+  - "20 ships"
+  - "26 ships"
+  - "60 ships"
+  - "55 ships"
+  - "50 ships"
+  - "60 cable ships"
+  - "global cable ship fleet"
+  - "global fleet"
+  - cable ship shortage
+  - shortage of cable ships
+  - "CS Niwa"
+  - "CS Ile d'Aix"
+  - CS Ile d Aix
+  - "CS Pierre de Fermat"
+  - CS Sovereign
+  - "CS Lodbrog"
+  - "CS Cable Innovator"
+  - "CS Resolute"
+  - "CS Decisive"
+  - "CS Dependable"
+  - "CS Reliance"
+  - "CS Responder"
+  - Global Marine
+  - Orange Marine
+  - Elettra
+  - Mediterranean Marine
+  - "S B Submarine Systems"
+  - "SB Submarine"
+  - YIT Sub
+  - "ASEAN Cableship Pool"
+  - "ACMA"
+  - "ACMA Maintenance"
+  - North Atlantic Maintenance
+  - Atlantic Cable Maintenance
+  - ACMA agreement
+  - "ITU-R G.654"
+  - G.654.E
+  - "G.654.B"
+  - "spectral efficiency"
+  - "200 Tbps"
+  - "300 Tbps"
+  - "400 Tbps"
+  - "12 fiber pair"
+  - "16 fiber pair"
+  - "24 fiber pair"
+  - "spatial division multiplexing"
+  - SDM
+  - SDM submarine
+  - "WaveLogic"
+  - Ciena WaveLogic
+  - Infinera ICE
+  - Marvell Inphi
+  - Inphi
+  - Marseille
+  - Bay of Bengal
+  - Andaman Sea
+  - Ras Ghareb
+  - Suez landing
+  - Sicily Catania
+  - Catania
+  - Bude UK
+  - Bude
+  - Halifax NS
+  - Atlantic Crossing
+  - "AC-1"
+  - "AC-2"
+  - "AC-3"
+  - "Yemen civil war"
+  - Houthi vessels
+  - Galaxy Leader
+  - Rubymar
+  - Rubymar anchor
+  - dragging anchor
+  - vessel anchor
+  - Open RAN
+  - Quad ICT
+  - Quad partnership
+  - "Subsea Cable Resilience"
+  - "Resilience Working"
+  - Australia Subsea

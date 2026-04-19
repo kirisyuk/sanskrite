@@ -1,0 +1,172 @@
+vertical: fmcg_consumer_goods
+description: |
+  Knowledge depth markers for the FMCG / consumer goods 2026 strategy probe.
+  Tier 1 = baseline brand and channel literacy expected of any LLM.
+  Tier 2 = competent FMCG procurement / packaging / regulatory knowledge.
+  Tier 3 = expert / 2024-2026 specifics: PPWR articles, retail media network names,
+           commodity prices, recent merger / tariff events.
+
+tier1:
+  - PPWR
+  - EU
+  - Walmart
+  - Costco
+  - Kroger
+  - Target
+  - Albertsons
+  - Amazon
+  - Coca-Cola
+  - PepsiCo
+  - Unilever
+  - Nestle
+  - Procter & Gamble
+  - P&G
+  - L'Oreal
+  - Colgate
+  - cocoa
+  - coffee
+  - palm oil
+  - sugar
+  - private label
+  - PET
+  - HDPE
+  - aluminum
+  - glass
+  - tariff
+  - China
+  - Mexico
+  - Vietnam
+
+tier2:
+  - recycled content
+  - recyclability
+  - EUDR
+  - USMCA
+  - Section 321
+  - de minimis
+  - Walmart Connect
+  - Amazon DSP
+  - Roundel
+  - 84.51
+  - Albertsons Media
+  - Costco Media
+  - retail media network
+  - FTC
+  - Kroger-Albertsons merger
+  - blocked
+  - Ball Corporation
+  - Crown Holdings
+  - Ardagh
+  - Owens-Illinois
+  - O-I Glass
+  - Verallia
+  - Vidrala
+  - slotting
+  - trade promotion
+  - shopper marketing
+  - ICCO
+  - arabica
+  - robusta
+  - DMO
+  - MSPO
+  - ISCC
+  - 503B
+  - extended producer responsibility
+  - EPR
+  - 30% recycled
+  - 25% recycled
+  - 65% recyclable
+  - mono-material
+  - blocked merger
+  - Aldi
+  - Lidl
+  - hard discount
+
+tier3:
+  - Article 22
+  - Annex V
+  - Article 7
+  - Article 6
+  - PPWR Article
+  - 2030 recyclability
+  - 2040 recyclability
+  - 50% recycled
+  - 35% recycled
+  - 10% PCR
+  - "30%"
+  - "65%"
+  - "70%"
+  - PET 30%
+  - design for recycling
+  - reuse target
+  - Côte d'Ivoire
+  - Cote d'Ivoire
+  - Ivory Coast
+  - Ghana cocoa
+  - Cocobod
+  - black pod
+  - swollen shoot
+  - "10,000"
+  - "11,000"
+  - "12,000"
+  - $10,000
+  - $11,000
+  - $12,000
+  - cocoa rally
+  - Indonesia DMO
+  - B40
+  - B35
+  - palm oil DMO
+  - Brazilian frost
+  - Vietnam robusta
+  - Indian sugar export ban
+  - center-south crush
+  - $700 billion
+  - $800 billion
+  - $50 billion
+  - $54 billion
+  - retail media $50
+  - retail media $60
+  - retail media spend
+  - 84.51 degrees
+  - Kroger Precision Marketing
+  - Walmart Connect 2024
+  - Amazon DSP 2025
+  - de minimis closure 2024
+  - Section 321 closure
+  - 25% tariff
+  - 10% tariff
+  - 60% China
+  - reciprocal tariff
+  - April 2025 tariff
+  - Liberation Day
+  - Vietnam transshipment
+  - Tariff Stacking
+  - rules of origin
+  - Newell Brands
+  - Kraft Heinz
+  - Mondelez
+  - General Mills
+  - Reckitt
+  - Henkel
+  - Beiersdorf
+  - Estée Lauder
+  - Edgewell
+  - Church & Dwight
+  - Conagra
+  - Tim Hortons
+  - Pacific Coast Producers
+  - Treasury Wine
+  - Constellation Brands
+  - Diageo
+  - Dollar General
+  - Five Below
+  - Family Dollar
+  - private label 25
+  - private label 30
+  - Aldi expansion
+  - Lidl Texas
+  - shrinkflation
+  - skimpflation
+  - "December 2024"
+  - "January 2026"

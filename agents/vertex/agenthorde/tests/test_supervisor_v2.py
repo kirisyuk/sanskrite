@@ -12,6 +12,7 @@ from agenthorde.agents.supervisor import (
 )
 from agenthorde.config import (
     STATE_ANALYZER_OUTPUT_KEY,
+    STATE_DECISION_INFLUENCE_OUTPUT_KEY,
     STATE_GOVERNANCE_OUTPUT_KEY,
     STATE_SANCTIONS_OUTPUT_KEY,
 )
@@ -224,6 +225,7 @@ def test_dispatch_map_covers_three_analyzers() -> None:
         "supply_chain_analyzer": STATE_ANALYZER_OUTPUT_KEY,
         "governance_control_analyzer": STATE_GOVERNANCE_OUTPUT_KEY,
         "sanctions_analyzer": STATE_SANCTIONS_OUTPUT_KEY,
+        "decision_influence_analyzer": STATE_DECISION_INFLUENCE_OUTPUT_KEY,
     }
 
 

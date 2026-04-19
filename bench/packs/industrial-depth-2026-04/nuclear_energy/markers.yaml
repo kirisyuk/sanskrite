@@ -1,0 +1,186 @@
+vertical: nuclear_energy
+description: |
+  Knowledge depth markers for the nuclear fuel cycle + heavy turbines + LNG probe.
+  Tier 1 = generally expected of any large LLM with energy coverage.
+  Tier 2 = competent fuel-cycle and turbine-market knowledge.
+  Tier 3 = expert / 2024-2026 supply-deal awareness.
+
+tier1:
+  - uranium
+  - U3O8
+  - yellowcake
+  - UF6
+  - conversion
+  - enrichment
+  - HALEU
+  - LEU
+  - LWR
+  - SMR
+  - VVER
+  - Rosatom
+  - Westinghouse
+  - Cameco
+  - Orano
+  - Urenco
+  - GE
+  - Siemens
+  - Mitsubishi
+  - LNG
+  - Cheniere
+  - QatarEnergy
+  - GE Vernova
+  - Siemens Energy
+  - Mitsubishi Power
+
+tier2:
+  - Tenex
+  - TENEX
+  - TVEL
+  - ConverDyn
+  - Honeywell Metropolis
+  - Port Hope
+  - Pierrelatte
+  - Tricastin
+  - Eurodif
+  - Almelo
+  - Capenhurst
+  - Gronau
+  - centrifuge cascade
+  - SWU
+  - separative work units
+  - Kazatomprom
+  - inkai
+  - Inkai
+  - In-Situ Recovery
+  - ISR
+  - TVS-WR
+  - TVSA
+  - VVER-1000
+  - VVER-440
+  - VVER-1200
+  - Temelin
+  - Loviisa
+  - Kozloduy
+  - Olkiluoto
+  - Mochovce
+  - Krsko
+  - X-energy
+  - NuScale
+  - TerraPower
+  - Natrium
+  - BWRX-300
+  - Rolls-Royce SMR
+  - Holtec
+  - Kairos
+  - Westinghouse AP300
+  - SMR-300
+  - eVinci
+  - Last Energy
+  - HTR-PM
+  - 9HA
+  - 9HA.02
+  - 7HA
+  - SGT-9000
+  - SGT-8000
+  - M501JAC
+  - M701JAC
+  - JAC
+  - combined cycle
+  - Hudong-Zhonghua
+  - Hudong Zhonghua
+  - Hyundai Heavy
+  - Hanwha Ocean
+  - DSME
+  - Samsung Heavy
+  - GTT
+  - membrane technology
+  - Mark III
+  - NO96
+  - moss type
+  - moss-type
+  - Sabine Pass
+  - Corpus Christi
+  - Plaquemines
+  - Calcasieu
+  - Rio Grande LNG
+  - Port Arthur
+  - Ras Laffan
+  - Yamal
+  - Arctic LNG-2
+  - Novatek
+  - Mozambique LNG
+  - Coral South
+  - Tortue Ahmeyim
+  - Greater Tortue
+
+tier3:
+  - "20 percent enrichment"
+  - "19.75 percent enrichment"
+  - "less than 20 percent"
+  - "5 percent enrichment"
+  - HALEU Availability Program
+  - HAP
+  - Inflation Reduction Act
+  - "Section 50173"
+  - DOE HALEU
+  - American Centrifuge
+  - Centrus
+  - Piketon
+  - "Section 232"
+  - Rosatom prohibition
+  - Russian uranium ban
+  - "May 2024 ban"
+  - PRA Russia
+  - Section 3155
+  - tail assays
+  - underfeeding
+  - overfeeding
+  - dual-use cascade
+  - waiver
+  - Stockholm
+  - Loviisa Fortum
+  - Energoatom
+  - South Ukraine
+  - Khmelnitsky
+  - Rivne
+  - lead test assembly
+  - LTA
+  - Skoda JS
+  - Skoda Plzen
+  - hexagonal assembly
+  - 6-corner fuel
+  - rod cladding
+  - ZIRLO
+  - M5
+  - debris filter
+  - "10 to 15 year"
+  - "lead time"
+  - "2030 slot"
+  - "2028 slot"
+  - "Microsoft Three Mile"
+  - hyperscaler nuclear
+  - Constellation Energy
+  - Vistra
+  - Talen
+  - Crane Clean Energy Center
+  - Three Mile Island
+  - Susquehanna Cumulus
+  - data center
+  - 24/7 carbon-free
+  - 24/7 CFE
+  - Saudi Aramco LNG
+  - Daewoo Shipbuilding
+  - GTT NO96 Super Plus
+  - GTT Mark III Flex
+  - TFEU
+  - Cumulus Data
+  - Constellation Calvert
+  - "5,000 km"
+  - new-build slot
+  - 2027 delivery
+  - 2028 delivery
+  - Crystal River
+  - Sequoyah
+  - Browns Ferry
+  - Enefit
+  - Fennovoima

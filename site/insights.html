@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Insights | Horde.Vision</title>
+    <meta
+      id="meta-description"
+      name="description"
+      content="Open-lab field reports and benchmarks from Horde.Vision: how frontier and stealth models behave in real industrial reasoning roles."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Sora:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body data-page="insights">
+    <div class="site-shell">
+      <header class="subpage-hero subpage-hero--insights" id="top">
+        <nav class="topbar" aria-label="Primary" data-i18n-aria-label="nav.aria.primary">
+          <a class="brand" href="./index.html">Horde.Vision</a>
+          <div class="topbar-controls">
+            <div
+              class="language-switcher"
+              aria-label="Language selector"
+              data-i18n-aria-label="nav.aria.languageSelector"
+            >
+              <button
+                class="language-button is-active"
+                type="button"
+                data-lang="en"
+                aria-label="Switch to English"
+                data-i18n-aria-label="nav.aria.switchEnglish"
+              >
+                EN
+              </button>
+              <button
+                class="language-button"
+                type="button"
+                data-lang="ru"
+                aria-label="Переключить на русский"
+                data-i18n-aria-label="nav.aria.switchRussian"
+              >
+                RU
+              </button>
+              <button
+                class="language-button"
+                type="button"
+                data-lang="kz"
+                aria-label="Қазақ тіліне ауыстыру"
+                data-i18n-aria-label="nav.aria.switchKazakh"
+              >
+                KZ
+              </button>
+            </div>
+            <button
+              class="nav-toggle"
+              type="button"
+              aria-expanded="false"
+              aria-controls="site-nav"
+              data-i18n="nav.menu"
+            >
+              Menu
+            </button>
+            <div class="nav-links" id="site-nav">
+              <a href="./index.html#about" data-i18n="nav.about">About</a>
+              <a href="./index.html#services" data-i18n="nav.services">Services</a>
+              <a href="./index.html#platform" data-i18n="nav.platform">Platforms</a>
+              <a href="./insights.html" class="is-active" data-i18n="nav.insights">Insights</a>
+              <a href="./index.html#contact" data-i18n="nav.contact">Contact</a>
+            </div>
+          </div>
+        </nav>
+
+        <div class="subpage-hero__inner">
+          <div class="subpage-hero__copy">
+            <p class="eyebrow" data-i18n="insightsPage.eyebrow">Open Lab · Field Reports</p>
+            <h1 data-i18n="insightsPage.title">
+              No best LLM. Best model for the role, in a vertical.
+            </h1>
+            <p class="hero-text" data-i18n="insightsPage.lead">
+              Reproducible benchmarks and field notes from a working multi-agent
+              decision-intelligence system. Not a leaderboard. Not synthetic
+              tests. Real industrial reasoning packs, real role contracts,
+              published artifacts.
+            </p>
+            <div class="insight-meta-bar">
+              <span class="insight-meta-bar__chip">
+                <span data-i18n="insightsPage.chip.cadence">Cadence</span>
+                <strong data-i18n="insightsPage.chip.cadenceValue">Quarterly + ad-hoc</strong>
+              </span>
+              <span class="insight-meta-bar__chip">
+                <span data-i18n="insightsPage.chip.scope">Scope</span>
+                <strong data-i18n="insightsPage.chip.scopeValue">Role × Vertical × Multi-agent</strong>
+              </span>
+              <span class="insight-meta-bar__chip">
+                <span data-i18n="insightsPage.chip.published">Published</span>
+                <strong>4</strong>
+              </span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <section class="insights section reveal">
+          <div class="services-heading">
+            <div class="section-label" data-i18n="insightsPage.intro.label">Why this section exists</div>
+          </div>
+          <div class="insights-intro">
+            <h2 data-i18n="insightsPage.intro.title">
+              Public benchmarks answer "which model is smarter." We answer "which model in which role on which vertical, and where it breaks."
+            </h2>
+            <div class="insights-intro__copy">
+              <p data-i18n="insightsPage.intro.p1">
+                Every report here is a short field test. We pick a
+                real industrial scenario, write it out as a plain
+                prompt plus a rubric of things a deep answer should
+                name, and run the same prompt across a shortlist of
+                paid and free LLMs. Then we publish the scores, the
+                cost per call, the raw outputs, and a note on what
+                broke. No synthetic benchmarks, no leaderboards, no
+                "we think" — only "data shows / data does not show".
+              </p>
+              <p data-i18n="insightsPage.intro.p2">
+                <strong>New reader?</strong> Start with
+                <a href="./insights/how-to-read.html" data-i18n="insightsPage.intro.howToReadLink">How to read these reports</a>
+                — a 3-minute primer with the glossary (tier-1/2/3,
+                pack, marker, rubric, stealth, frontier), the order
+                the reports were written in, and how to request the
+                reproduction bundle. Everything below assumes that
+                shared vocabulary.
+              </p>
+            </div>
+          </div>
+
+          <div class="insight-grid">
+            <a class="insight-card reveal-card" href="./insights/three-verticals-2026-04.html">
+              <span class="insight-card__category" data-i18n="insightsPage.card.threeVerticals.category">
+                Report #4 · Three Recognizable Verticals
+              </span>
+              <h3 class="insight-card__title" data-i18n="insightsPage.card.threeVerticals.title">
+                FMCG, banking, pharma. Same six models, three different leaders. Opus is first on FMCG and last on pharma.
+              </h3>
+              <p class="insight-card__lead" data-i18n="insightsPage.card.threeVerticals.lead">
+                Three industries you actually live in: FMCG procurement
+                under EU PPWR, a European bank facing Basel III endgame,
+                a top-15 pharma planning 2027 commercial under IRA. Same
+                six models, $1.58 total. Three different leaders. Free
+                <code>elephant-alpha</code> takes <strong>third place
+                on pharma</strong> at $0, beating GPT-5.4 and Opus.
+                Opus comes <strong>last on pharma</strong> at $0.41.
+              </p>
+              <div class="insight-card__meta">
+                <span data-i18n="insightsPage.card.threeVerticals.metaDate">2026 · April</span>
+                <span data-i18n="insightsPage.card.threeVerticals.metaVertical">Verticals: 3 (FMCG, banking, pharma)</span>
+                <span data-i18n="insightsPage.card.threeVerticals.metaRole">Open-ended prose</span>
+                <span data-i18n="insightsPage.card.threeVerticals.metaModels">6 models · $1.58 total</span>
+              </div>
+              <span class="insight-card__cta" data-i18n="insightsPage.card.cta">Read the report →</span>
+            </a>
+
+            <a class="insight-card reveal-card" href="./insights/frontier-vs-elephant-2026-04.html">
+              <span class="insight-card__category" data-i18n="insightsPage.card.frontierVsElephant.category">
+                Report #3 · Frontier Ceiling
+              </span>
+              <h3 class="insight-card__title" data-i18n="insightsPage.card.frontierVsElephant.title">
+                $1.20 vs $0. Five paid frontier models against one free elephant on industrial depth.
+              </h3>
+              <p class="insight-card__lead" data-i18n="insightsPage.card.frontierVsElephant.lead">
+                Six models, two industrial packs, $1.20 total. Leadership flips
+                by vertical (<code>glm-5.1</code> on steel,
+                <code>gpt-5.4</code> on fertilizer). Opus burns 83% of budget
+                without leading either. And even the union of all five paid
+                frontiers covers only 41% of the steel rubric and 24% of the
+                fertilizer rubric — no model owns a vertical.
+              </p>
+              <div class="insight-card__meta">
+                <span data-i18n="insightsPage.card.frontierVsElephant.metaDate">2026 · April</span>
+                <span data-i18n="insightsPage.card.frontierVsElephant.metaVertical">Verticals: 2 (steel, fertilizer)</span>
+                <span data-i18n="insightsPage.card.frontierVsElephant.metaRole">Open-ended prose</span>
+                <span data-i18n="insightsPage.card.frontierVsElephant.metaModels">6 models · $1.20 total</span>
+              </div>
+              <span class="insight-card__cta" data-i18n="insightsPage.card.cta">Read the report →</span>
+            </a>
+
+            <a class="insight-card reveal-card" href="./insights/industrial-depth-elephant-2026-04.html">
+              <span class="insight-card__category" data-i18n="insightsPage.card.industrialDepthElephant.category">
+                Report #2 · Industrial Depth on a Free Tier
+              </span>
+              <h3 class="insight-card__title" data-i18n="insightsPage.card.industrialDepthElephant.title">
+                Industrial depth on a free tier: 30 calls, then one model survives the day.
+              </h3>
+              <p class="insight-card__lead" data-i18n="insightsPage.card.industrialDepthElephant.lead">
+                15 free OpenRouter models × 4 industrial packs = 60 cells.
+                Only 17 succeeded. After ~30 calls a global daily quota fires
+                and 14 of 15 models go dark. We then ran the survivor —
+                <code>openrouter/elephant-alpha</code>, branded by OpenRouter
+                as provider <code>Stealth</code> — across 12 industrial
+                verticals. 32 minutes, $0.
+              </p>
+              <div class="insight-card__meta">
+                <span data-i18n="insightsPage.card.industrialDepthElephant.metaDate">2026 · April</span>
+                <span data-i18n="insightsPage.card.industrialDepthElephant.metaVertical">Verticals: 12</span>
+                <span data-i18n="insightsPage.card.industrialDepthElephant.metaRole">Open-ended prose</span>
+                <span data-i18n="insightsPage.card.industrialDepthElephant.metaModels">15 models tried</span>
+              </div>
+              <span class="insight-card__cta" data-i18n="insightsPage.card.cta">Read the report →</span>
+            </a>
+
+            <a class="insight-card reveal-card" href="./insights/elephant-routing-alias-2026-04.html">
+              <span class="insight-card__category" data-i18n="insightsPage.card.elephantAlias.category">
+                Report #1 · Model Provenance
+              </span>
+              <h3 class="insight-card__title" data-i18n="insightsPage.card.elephantAlias.title">
+                A "stealth" OpenRouter model is actually a routing alias over multiple backends.
+              </h3>
+              <p class="insight-card__lead" data-i18n="insightsPage.card.elephantAlias.lead">
+                Seven runs of the same prompt, one stealth alias. Latency
+                ranges 15× across runs (2.0s → 30.3s). Composition flips
+                between stop, conditional, and go. Two structurally different
+                output styles. And the larger story: at frontier scale, models
+                diverge in judgment, they do not converge.
+              </p>
+              <div class="insight-card__meta">
+                <span data-i18n="insightsPage.card.elephantAlias.metaDate">2026 · April</span>
+                <span data-i18n="insightsPage.card.elephantAlias.metaVertical">Vertical: semiconductor</span>
+                <span data-i18n="insightsPage.card.elephantAlias.metaRole">Role: critic</span>
+                <span data-i18n="insightsPage.card.elephantAlias.metaModels">11 models</span>
+              </div>
+              <span class="insight-card__cta" data-i18n="insightsPage.card.cta">Read the report →</span>
+            </a>
+
+            <div class="insights-empty reveal-card" data-i18n="insightsPage.empty">
+              More reports land here every quarter. Next batch:
+              critic-role contract fidelity head-to-head on the same
+              model pool, then explorer-role fitness across three new
+              verticals.
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer section reveal" id="contact">
+        <div class="footer-brand">
+          <div class="section-label" data-i18n="footer.label">Horde.Vision</div>
+          <p class="footer-title" data-i18n="footer.title">Built for leadership under uncertainty.</p>
+          <p class="footer-note" data-i18n="footer.note">
+            Structured decision intelligence, grounded research, and governed simulation for complex operating environments.
+          </p>
+        </div>
+
+        <div class="footer-columns">
+          <div>
+            <h4 data-i18n="footer.location.title">Location</h4>
+            <p data-i18n="footer.location.line1">Dostyk, 16</p>
+            <p data-i18n="footer.location.line2">Astana, Kazakhstan</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.contact.title">Contact</h4>
+            <p data-i18n="footer.contact.line1">hello@horde.vision</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.availability.title">Availability</h4>
+            <p data-i18n="footer.availability.line1">Meetings by request</p>
+            <p data-i18n="footer.availability.line2">Additional details coming soon</p>
+          </div>
+          <div>
+            <h4 data-i18n="footer.legal.title">Legal</h4>
+            <div class="footer-links">
+              <a href="./privacy" data-i18n="footer.legal.privacy">Privacy Notice</a>
+              <a href="./terms" data-i18n="footer.legal.terms">Terms of Usage</a>
+              <a href="./technical-disclosure" data-i18n="footer.legal.technical">Technical Disclosure</a>
+            </div>
+          </div>
+        </div>
+      </footer>
+    </div>
+
+    <script src="./script.js"></script>
+  </body>
+</html>

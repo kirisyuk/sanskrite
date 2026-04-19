@@ -1,0 +1,123 @@
+vertical: pharma_biologics
+description: |
+  Knowledge depth markers for the pharma / biologics probe.
+  Tier 1 = generally expected of any large LLM with pharma coverage.
+  Tier 2 = competent CDMO / supply-chain knowledge.
+  Tier 3 = expert / 2024-2026 regulatory and IP-specific awareness.
+
+tier1:
+  - BIOSECURE
+  - WuXi Biologics
+  - WuXi AppTec
+  - Lonza
+  - Samsung Biologics
+  - CDMO
+  - mAb
+  - monoclonal antibody
+  - mRNA
+  - ionizable lipid
+  - LNP
+  - lipid nanoparticle
+  - GLP-1
+  - semaglutide
+  - tirzepatide
+  - Novo Nordisk
+  - Eli Lilly
+  - CSL
+  - Grifols
+  - Takeda
+  - Octapharma
+  - IVIG
+  - plasma
+  - FDA
+  - BLA
+
+tier2:
+  - BGI Group
+  - MGI
+  - Complete Genomics
+  - Innomar
+  - Catalent
+  - Boehringer Ingelheim
+  - Fujifilm Diosynth
+  - AGC Biologics
+  - Celltrion
+  - Bioxcel
+  - Patheon
+  - WuXi XDC
+  - WuXi STA
+  - Section 2
+  - Acuitas
+  - Genevant
+  - Arbutus
+  - Moderna IP
+  - BioNTech
+  - Polymun
+  - Evonik
+  - Croda
+  - CordenPharma
+  - Recipharm
+  - Singota
+  - PCI Pharma
+  - Pfizer Andover
+  - Kalundborg
+  - Catalent Bloomington
+  - Kindeva
+  - Ajinomoto Bio-Pharma
+  - Q5A
+  - adventitious agent
+  - cell line
+  - viral clearance
+
+tier3:
+  - "5,000 L"
+  - "2,000 L"
+  - "20,000 L"
+  - bioreactor scale
+  - single-use bioreactor
+  - SUB
+  - perfusion
+  - fed-batch
+  - MC3
+  - DLin-MC3-DMA
+  - ALC-0315
+  - SM-102
+  - DSPC
+  - PEG-lipid
+  - cholesterol
+  - sphingosine
+  - DOTAP
+  - microfluidic mixing
+  - tangential flow filtration
+  - TFF
+  - Pfizer / BioNTech license
+  - Acuitas Therapeutics
+  - GenScript
+  - Kalundborg expansion
+  - Bagsvaerd
+  - Hillerod
+  - Catalent Indiana
+  - Catalent Brussels
+  - Lonza Visp
+  - Lonza Portsmouth
+  - Lilly Concord
+  - Lilly Indianapolis
+  - 503A
+  - 503B
+  - compounding outsourcing
+  - shortage list
+  - removed from shortage
+  - Q5A(R2)
+  - advanced therapy medicinal product
+  - ATMP
+  - viral safety
+  - NGS-based
+  - next-generation sequencing
+  - Charles River
+  - Eurofins
+  - SGS Vitrology
+  - Nelson Labs
+  - Sartorius
+  - draft guidance
+  - 2024 guidance
+  - 2025 guidance

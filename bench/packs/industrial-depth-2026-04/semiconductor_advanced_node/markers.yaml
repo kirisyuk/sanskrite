@@ -1,0 +1,150 @@
+vertical: semiconductor_advanced_node
+description: |
+  Knowledge depth markers for the advanced-node semiconductor probe.
+
+tier1:
+  - TSMC
+  - Samsung
+  - Intel
+  - ASML
+  - EUV
+  - HBM
+  - HBM3
+  - HBM4
+  - SK Hynix
+  - Micron
+  - NVIDIA
+  - AMD
+  - Synopsys
+  - Cadence
+  - Siemens EDA
+  - CHIPS Act
+  - export controls
+  - BIS
+  - 3 nm
+  - 3nm
+  - "2 nm"
+  - "2nm"
+
+tier2:
+  - CoWoS
+  - CoWoS-S
+  - CoWoS-L
+  - CoWoS-R
+  - InFO
+  - SoIC
+  - Foveros
+  - EMIB
+  - I-Cube
+  - X-Cube
+  - HBM3E
+  - high-NA
+  - High-NA
+  - low-NA
+  - low NA
+  - NXE:3800
+  - NXE 3800
+  - EXE:5000
+  - EXE 5000
+  - EXE:5200
+  - pellicle
+  - mask blank
+  - photoresist
+  - JSR
+  - TOK
+  - Inpria
+  - Shin-Etsu
+  - HOYA
+  - Asahi
+  - Mitsui Chemicals
+  - Hexagon Tech
+  - Empyrean
+  - Primarius
+  - X-Epic
+  - Huada
+  - HEDA
+  - Cleveland-Cliffs
+  - Air Products
+  - Linde
+  - Versum
+  - Merck
+  - Tokyo Electron
+  - Lam Research
+  - Applied Materials
+  - KLA
+
+tier3:
+  - "60,000 wafers"
+  - "75,000 wafers"
+  - "100,000 wafers"
+  - "30,000 wafers"
+  - "55,000 wafers"
+  - "80,000 wafers"
+  - "120,000 wafers"
+  - "150,000 wafers"
+  - CoWoS capacity
+  - SK Hynix bit share
+  - Samsung HBM yield
+  - HBM yield
+  - "12-high"
+  - "16-high"
+  - 12-Hi
+  - 16-Hi
+  - GB200
+  - GB300
+  - B200
+  - B300
+  - Rubin
+  - MI325X
+  - MI350
+  - MI400
+  - HGX
+  - NVL72
+  - Spruce Pine
+  - The Quartz Corp
+  - Sibelco
+  - Norsk Mineral
+  - Iota Quartz
+  - hexachlorodisilane
+  - HCDS
+  - NF3
+  - WF6
+  - tungsten hexafluoride
+  - SK Materials
+  - Mitsubishi Gas Chemical
+  - photoresist precursor
+  - PFAS
+  - "Section 1224"
+  - guardrail
+  - "Section 13502"
+  - foreign entity of concern
+  - FEOC
+  - clawback
+  - milestone
+  - Direct Funding Agreement
+  - DFA
+  - Arizona Fab 21
+  - Phoenix Fab 21
+  - Fab 52
+  - Fab 62
+  - Taylor Texas
+  - New Albany Ohio
+  - Sherman Texas
+  - Ocotillo
+  - Malta New York
+  - Wolfspeed Mohawk Valley
+  - Senstar
+  - Empyrean Auriga
+  - Synopsys 2024 license
+  - "October 7"
+  - "October 17"
+  - "October 2023"
+  - "December 2024"
+  - "May 2025"
+  - High Bandwidth Memory
+  - Hybrid Bonding
+  - hybrid bonding
+  - SoIC-X
+  - SoIC-P
+  - chip-on-wafer-on-substrate
+  - chip on wafer on substrate

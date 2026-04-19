@@ -1,0 +1,214 @@
+vertical: grid_transformers
+description: |
+  Knowledge depth markers for the grid + transformers + GOES + HVDC probe.
+
+tier1:
+  - GE Vernova
+  - Hitachi Energy
+  - Siemens Energy
+  - Hyundai Heavy Electric
+  - Hyundai Electric
+  - Hyosung
+  - Toshiba
+  - WEG
+  - Mitsubishi Electric
+  - Prolec
+  - HVDC
+  - "765 kV"
+  - "765kV"
+  - "500 kV"
+  - "345 kV"
+  - GOES
+  - electrical steel
+  - PJM
+  - MISO
+  - CAISO
+  - ERCOT
+  - interconnection queue
+  - SF6
+  - switchgear
+  - Southwire
+  - Nexans
+  - Prysmian
+  - reconductor
+  - reconductoring
+
+tier2:
+  - Ludvika
+  - Berlin Siemens
+  - Erlangen
+  - Stafford
+  - VSC
+  - LCC
+  - voltage source converter
+  - line commutated converter
+  - SunZia
+  - TransWest Express
+  - North Sea Link
+  - NeuConnect
+  - Champlain Hudson
+  - Champlain Hudson Power Express
+  - CHPE
+  - Greenlink
+  - EuroAsia
+  - EuroAsia Interconnector
+  - Xlinks
+  - Western Spirit
+  - Cross-Sound Cable
+  - Cross Sound Cable
+  - North Plains Connector
+  - Grain Belt Express
+  - Pattern Energy
+  - Invenergy
+  - Hudson Transmission
+  - "Cleveland-Cliffs Butler"
+  - Cleveland Cliffs Butler
+  - Butler Works
+  - "AK Steel Butler"
+  - NLMK
+  - VIZ-Steel
+  - VIZ
+  - Stalprodukt
+  - Cogent
+  - Tata Cogent
+  - Newport
+  - Baosteel
+  - Wuhan Iron and Steel
+  - WISCO
+  - "Nippon Steel Yawata"
+  - Nippon Steel
+  - JFE Steel
+  - POSCO
+  - laser scribed
+  - laser-scribed
+  - "0.18 mm"
+  - "0.20 mm"
+  - "0.23 mm"
+  - "27Q120"
+  - "23M3"
+  - "23P090"
+  - high permeability
+  - HiB
+  - high-permeability
+  - thin-gauge
+  - HiB grade
+  - amorphous metal
+  - amorphous core
+  - PowerCore
+  - "ACCC"
+  - "ACSS"
+  - "ACFR"
+  - "HTLS"
+  - high temperature low sag
+  - High Temperature Low Sag
+  - CTC
+  - composite core
+  - carbon fiber core
+  - aluminum conductor composite
+  - "g3"
+  - "NOVEC 4710"
+  - NOVEC4710
+  - "C5 PFK"
+  - perfluoroketone
+  - AirPlus
+  - "fluoronitrile"
+  - dry air switchgear
+  - clean air
+  - dead tank breaker
+  - GIS
+  - gas insulated switchgear
+  - vacuum interrupter
+  - vacuum circuit breaker
+  - VCB
+  - distribution transformer
+
+tier3:
+  - "3 to 4 year"
+  - "3-4 year"
+  - "3 year lead"
+  - "4 year lead"
+  - "5 year lead"
+  - "180 weeks"
+  - "200 weeks"
+  - "210 weeks"
+  - "120 weeks"
+  - "140 weeks"
+  - lead time
+  - "Prolec GE"
+  - "GE-Prolec"
+  - Monterrey Prolec
+  - Apodaca
+  - Hitachi Bland
+  - Bland Virginia
+  - "Hyundai Montgomery"
+  - Montgomery Alabama
+  - "Memphis WEG"
+  - WEG Memphis
+  - Wautoma
+  - Pittsburg Kansas
+  - Crystal Lake
+  - Holland Michigan
+  - GIS substation
+  - "Inflation Reduction Act"
+  - "Section 50121"
+  - "Section 50122"
+  - "Section 50145"
+  - HVDC IRA
+  - LPO
+  - Loan Programs Office
+  - Title 17
+  - "Section 1703"
+  - "Section 1706"
+  - DOE LPO
+  - GETR
+  - Grid Enhancing Technologies
+  - GETs
+  - Dynamic Line Rating
+  - DLR
+  - Topology Optimization
+  - LineVision
+  - Smart Wires
+  - SmartValve
+  - "FERC Order 1920"
+  - "FERC Order 2023"
+  - "Order 1920"
+  - "Order 2023"
+  - cluster study
+  - readiness deposit
+  - LGIA
+  - large generator interconnection
+  - withdrawn
+  - withdrawal rate
+  - "70 percent withdrawal"
+  - "75 percent withdrawal"
+  - "80 percent withdrawal"
+  - "85 percent withdrawal"
+  - F-gas regulation
+  - F-gas Regulation
+  - "F-gas 2024"
+  - "Regulation 2024/573"
+  - "EU 517/2014"
+  - "EU 2024/573"
+  - "EU F-gas 2024"
+  - phase-down
+  - phase down
+  - SF6 ban
+  - "1 January 2026"
+  - "January 2030"
+  - distribution transformer DOE rule
+  - DOE 4 percent
+  - DOE TR rule
+  - "10 CFR 431"
+  - "10 CFR 431.196"
+  - amorphous core preference
+  - "Section 462"
+  - "Department of Energy 2027"
+  - data center load
+  - hyperscaler load
+  - "5 GW"
+  - "10 GW"
+  - "20 GW"
+  - "30 GW"
+  - "50 GW"
+  - "load growth"
+  - load forecast

@@ -166,6 +166,7 @@ async def run_pipeline(
         inp.governance_output,
         inp.final_answer,
         sanctions_output=inp.sanctions_output,
+        decision_influence_output=inp.decision_influence_output,
     )
     timings["phase0_ms"] = (time.perf_counter() - t0) * 1000
 

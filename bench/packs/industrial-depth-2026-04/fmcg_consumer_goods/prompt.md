@@ -1,0 +1,15 @@
+You are advising a global FMCG (consumer packaged goods) company preparing 2027 procurement, packaging, and channel strategy. The company runs €18B revenue across premium personal care, food & beverage, and household care brands, with material exposure to EU plastics regulation, North American retailer concentration, ocean freight risk, and the deflationary push from private-label penetration.
+
+Answer the questions below in prose. Name specific companies, sites, regulations, and quantities where you know them. Be precise. If you do not know an answer, say so explicitly rather than inventing one.
+
+1. EU PPWR (Packaging and Packaging Waste Regulation): list the binding 2030 and 2040 recyclability and recycled-content targets by material (PET, HDPE, PP, glass, aluminum, paper-based composites). Identify which categories of packaging are restricted or banned outright (Article 22 / Annex V single-use restrictions). State the in-force date and the principal MRV obligation on producers.
+
+2. Aluminum and glass packaging: name the main suppliers — Ball, Crown Holdings, Ardagh Metal Packaging, Owens-Illinois (O-I Glass), Verallia, Vidrala — and quantify the EU vs North American can market share top three. Explain how EU ETS phase-3 carbon costs and the post-2024 Chinese aluminum export curbs are flowing into per-unit can pricing for FMCG converters.
+
+3. North American retailer concentration: quantify Walmart, Costco, Kroger, Target, Albertsons share of US grocery / general merchandise. State the current status of the Kroger-Albertsons merger (blocked December 2024 by FTC and Washington / Colorado state courts) and what it means for slotting fees, promotional dollars, and private-label trade. Quantify private-label dollar share trajectory 2022 → 2026.
+
+4. Tariff and trade exposure: explain USMCA rules of origin for personal care and food formulations, the closure of the Section 321 de minimis exemption and its effect on Temu / Shein-class direct shipments. Detail the Trump 2025-2026 tariff escalation against China (10% across-the-board, 25% on selected categories, 60% threats) and the Vietnam vs India vs Mexico sourcing trade-offs for personal care manufacturing.
+
+5. Soft commodities: state the situation as of 2026 for cocoa (Côte d'Ivoire / Ghana harvest collapse 2023-2024, ICCO price ~$10,000-12,000 / mt peak), coffee (arabica vs robusta differential, Brazilian frost / drought, Vietnam supply), palm oil (Indonesia DMO and B40, Malaysia MSPO, EUDR enforcement Dec 2025), and sugar (Indian export bans, Brazilian center-south crush). Identify how each has entered procurement contracts for 2027.
+
+6. Retail media and channel economics: name the major retail media networks — Walmart Connect, Amazon Ads / DSP, Target Roundel, Kroger Precision Marketing (84.51°), Albertsons Media Collective, Costco Media — and quantify combined US retail media spend in 2025-2026. Explain how this is reshaping shopper-marketing budgets that historically went to slotting and trade promotion. Name two FMCG companies that have publicly restructured trade-marketing teams around retail media.
